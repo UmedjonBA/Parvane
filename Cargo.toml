@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "shared/parvane-types",
+    "shards/identity",
+    "shards/messenger",
+    "shards/cloud",
+    "shards/notes",
+    "shards/calendar",
+]
+
+[workspace.dependencies]
+# async
+tokio = { version = "1", features = ["full"] }
+async-nats = "0.37"
+
+# serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# db
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "migrate", "uuid"] }
+
+# auth
+jsonwebtoken = "9"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+
+# ids
+uuid = { version = "1", features = ["v7", "serde"] }
+
+# streams
+futures = "0.3"
+
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# errors
+thiserror = "2"
+anyhow = "1"
+
+# config
+dotenvy = "0.15"

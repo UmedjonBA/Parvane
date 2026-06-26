@@ -1,0 +1,22 @@
+[package]
+name = "messenger"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "messenger"
+path = "src/main.rs"
+
+[dependencies]
+parvane-types = { path = "../../shared/parvane-types" }
+tokio = { workspace = true }
+async-nats = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
