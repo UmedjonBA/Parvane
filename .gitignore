@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target
+
+# SQLite базы (создаются шардами при запуске)
+*.db
+*.db-shm
+*.db-wal
+
+# Конфиги окружения
+.env
