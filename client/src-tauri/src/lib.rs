@@ -4,11 +4,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use parvane_types::{
-    CalDeletePayload, CalEventSnapshot, CalSetPayload, CallHistoryRequest, CallHistoryResponse,
-    FileListPayload, FileListResponse, IssueRequest, IssueResponse, MessageContent,
-    NoteCreatePayload, NoteDeletePayload, NoteOp, NoteSnapshot, NoteSyncRequestPayload,
-    NoteSyncResponsePayload, NoteUpdatePayload, OpId, ParvaneEvent, SendPayload, Stamp,
-    StoredMessage, SyncRequestPayload, SyncResponsePayload,
+    content_checksum, event_checksum, CalDeletePayload, CalEventSnapshot, CalSetPayload,
+    CallHistoryRequest,
+    CallHistoryResponse, FileListPayload, FileListResponse, IssueRequest, IssueResponse,
+    MessageContent, NoteCreatePayload, NoteDeletePayload, NoteOp, NoteSnapshot,
+    NoteSyncRequestPayload, NoteSyncResponsePayload, NoteUpdatePayload, ParvaneEvent, SendPayload,
+    Stamp, StoredMessage, SyncRequestPayload, SyncResponsePayload,
     topics::{
         CAL_CREATE, CAL_DELETE, CAL_SYNC_REQUEST, CAL_UPDATE, CALL_HISTORY_REQUEST,
         FILE_LIST_REQUEST, IDENTITY_ISSUE, MSG_SEND, MSG_SYNC_REQUEST, NOTE_CREATE, NOTE_DELETE,
@@ -27,18 +28,115 @@ struct AppState {
     nats: Option<async_nats::Client>,
     token: Option<String>,
     user: Option<String>,
-    // messenger: cursor для sync
-    last_msg_id: String,
-    // notes: кеш снапшотов для вычисления diff при сохранении
-    note_seq: u64,
+    // notes: локальный кеш (local-first), переживает рестарт через диск
     notes: HashMap<Uuid, NoteSnapshot>,
-    // calendar: кеш событий
+    // calendar: локальный кеш событий (local-first)
     events: HashMap<Uuid, CalEventSnapshot>,
+    // messenger: локальный кеш сообщений (append-only, курсор = max id)
+    messages: Vec<StoredMessage>,
+    // каталог для персистентного кеша (app_data_dir)
+    cache_dir: Option<std::path::PathBuf>,
 }
 
 type Shared = Arc<Mutex<AppState>>;
 
 fn e2s<E: std::fmt::Display>(e: E) -> String { e.to_string() }
+
+// ── локальный кеш заметок на диске (local-first) ───────────────────────────────
+
+/// Имя файла безопасное из user (alice@host → alice_host).
+fn sanitize_user(user: &str) -> String {
+    user.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
+
+fn notes_cache_path(s: &AppState) -> Option<std::path::PathBuf> {
+    let dir = s.cache_dir.as_ref()?;
+    let user = s.user.as_ref()?;
+    Some(dir.join(format!("notes-{}.json", sanitize_user(user))))
+}
+
+/// Записать текущий кеш заметок на диск. Тихо игнорирует ошибки IO.
+fn persist_notes(s: &AppState) {
+    if let Some(path) = notes_cache_path(s) {
+        let all: Vec<&NoteSnapshot> = s.notes.values().collect();
+        if let Ok(json) = serde_json::to_vec(&all) {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
+/// Загрузить кеш заметок с диска в state (новое устройство → файла нет → пусто).
+fn load_notes(s: &mut AppState) {
+    if let Some(path) = notes_cache_path(s) {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(v) = serde_json::from_slice::<Vec<NoteSnapshot>>(&bytes) {
+                s.notes.clear();
+                for mut n in v {
+                    if n.checksum == 0 {
+                        n.checksum = content_checksum(&n.title, &n.text);
+                    }
+                    s.notes.insert(n.note_id, n);
+                }
+            }
+        }
+    }
+}
+
+// ── локальный кеш событий календаря ────────────────────────────────────────────
+
+fn cache_path(s: &AppState, prefix: &str) -> Option<std::path::PathBuf> {
+    let dir = s.cache_dir.as_ref()?;
+    let user = s.user.as_ref()?;
+    Some(dir.join(format!("{}-{}.json", prefix, sanitize_user(user))))
+}
+
+fn persist_events(s: &AppState) {
+    if let Some(path) = cache_path(s, "events") {
+        let all: Vec<&CalEventSnapshot> = s.events.values().collect();
+        if let Ok(json) = serde_json::to_vec(&all) {
+            if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
+fn load_events(s: &mut AppState) {
+    if let Some(path) = cache_path(s, "events") {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(v) = serde_json::from_slice::<Vec<CalEventSnapshot>>(&bytes) {
+                s.events.clear();
+                for mut e in v {
+                    if e.checksum == 0 { e.checksum = event_checksum(&e); }
+                    s.events.insert(e.event_id, e);
+                }
+            }
+        }
+    }
+}
+
+// ── локальный кеш сообщений (append-only) ──────────────────────────────────────
+
+fn persist_messages(s: &AppState) {
+    if let Some(path) = cache_path(s, "messages") {
+        if let Ok(json) = serde_json::to_vec(&s.messages) {
+            if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
+fn load_messages(s: &mut AppState) {
+    if let Some(path) = cache_path(s, "messages") {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(v) = serde_json::from_slice::<Vec<StoredMessage>>(&bytes) {
+                s.messages = v;
+            }
+        }
+    }
+}
 
 fn now_ts() -> i64 {
     std::time::SystemTime::now()
@@ -75,7 +173,10 @@ async fn login(user: String, password: String, state: State<'_, Shared>) -> Resu
         let mut s = state.lock().await;
         s.token = Some(token.clone());
         s.user = Some(user);
-        s.last_msg_id = "00000000-0000-0000-0000-000000000000".to_string();
+        // Поднимаем локальные кеши этого пользователя с диска (local-first).
+        load_notes(&mut s);
+        load_events(&mut s);
+        load_messages(&mut s);
         Ok(token)
     } else {
         Err(resp.error.unwrap_or_else(|| "ошибка логина".into()))
@@ -87,9 +188,9 @@ async fn logout(state: State<'_, Shared>) -> Result<(), String> {
     let mut s = state.lock().await;
     s.token = None;
     s.user = None;
-    s.last_msg_id = "00000000-0000-0000-0000-000000000000".to_string();
     s.notes.clear();
     s.events.clear();
+    s.messages.clear();
     Ok(())
 }
 
@@ -183,14 +284,28 @@ async fn send_text(to: String, text: String, state: State<'_, Shared>) -> Result
     Ok(id.to_string())
 }
 
-/// Внутренняя: тянет ВСЕ сообщения адресованные мне с самого начала.
+/// Внутренняя: local-first инкрементальная синхронизация сообщений.
+/// Держит кеш на диске, у сервера запрашивает только то, что новее курсора
+/// (max id в кеше) — append-only лог, поэтому контрольные суммы не нужны.
 async fn do_sync_all(state: State<'_, Shared>) -> Result<Vec<StoredMessage>, String> {
-    let (client, token, from) = {
-        let s = state.lock().await;
+    // Поднимаем кеш с диска, если ещё не подняли, и вычисляем курсор.
+    let (client, token, from, cursor) = {
+        let mut s = state.lock().await;
+        if s.messages.is_empty() {
+            load_messages(&mut s);
+        }
+        let cursor = s
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .max()
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| "00000000-0000-0000-0000-000000000000".to_string());
         (
             s.nats.clone().ok_or("NATS не подключён")?,
             s.token.clone().ok_or("не залогинен")?,
             s.user.clone().ok_or("не залогинен")?,
+            cursor,
         )
     };
     let ev = ParvaneEvent {
@@ -198,9 +313,7 @@ async fn do_sync_all(state: State<'_, Shared>) -> Result<Vec<StoredMessage>, Str
         from,
         ts: now_ts(),
         token,
-        payload: SyncRequestPayload {
-            last_seen_id: "00000000-0000-0000-0000-000000000000".to_string(),
-        },
+        payload: SyncRequestPayload { last_seen_id: cursor },
     };
     let reply = client
         .request(MSG_SYNC_REQUEST, serde_json::to_vec(&ev).map_err(e2s)?.into())
@@ -208,7 +321,20 @@ async fn do_sync_all(state: State<'_, Shared>) -> Result<Vec<StoredMessage>, Str
         .map_err(e2s)?;
     let resp: ParvaneEvent<SyncResponsePayload> =
         serde_json::from_slice(&reply.payload).map_err(e2s)?;
-    Ok(resp.payload.messages)
+
+    // Дописываем только новое (дедуп по id), сортируем по id, сохраняем на диск.
+    let mut s = state.lock().await;
+    if !resp.payload.messages.is_empty() {
+        let existing: std::collections::HashSet<Uuid> = s.messages.iter().map(|m| m.id).collect();
+        for m in resp.payload.messages {
+            if !existing.contains(&m.id) {
+                s.messages.push(m);
+            }
+        }
+        s.messages.sort_by(|a, b| a.id.cmp(&b.id));
+        persist_messages(&s);
+    }
+    Ok(s.messages.clone())
 }
 
 /// Sync новых сообщений с момента last_seen (для поллинга live-чата).
@@ -244,12 +370,26 @@ async fn sync_messages(since: String, state: State<'_, Shared>) -> Result<Vec<St
 #[tauri::command]
 async fn list_notes(state: State<'_, Shared>) -> Result<Vec<NoteSnapshot>, String> {
     eprintln!("[bridge] list_notes");
-    let (client, token, from) = {
-        let s = state.lock().await;
+    // Манифест того, что уже есть локально: note_id → checksum. Шард вернёт
+    // только разошедшееся (diff-синхронизация), а не весь список целиком.
+    let (client, token, from, known) = {
+        let mut s = state.lock().await;
+        if s.notes.is_empty() {
+            load_notes(&mut s);
+        }
+        let known: std::collections::BTreeMap<String, u64> = s
+            .notes
+            .iter()
+            .map(|(id, n)| {
+                let cs = if n.checksum == 0 { content_checksum(&n.title, &n.text) } else { n.checksum };
+                (id.to_string(), cs)
+            })
+            .collect();
         (
             s.nats.clone().ok_or("NATS не подключён")?,
             s.token.clone().ok_or("не залогинен")?,
             s.user.clone().ok_or("не залогинен")?,
+            known,
         )
     };
     let ev = ParvaneEvent {
@@ -257,7 +397,7 @@ async fn list_notes(state: State<'_, Shared>) -> Result<Vec<NoteSnapshot>, Strin
         from,
         ts: now_ts(),
         token,
-        payload: NoteSyncRequestPayload {},
+        payload: NoteSyncRequestPayload { known },
     };
     let reply = client
         .request(NOTE_SYNC_REQUEST, serde_json::to_vec(&ev).map_err(e2s)?.into())
@@ -265,14 +405,22 @@ async fn list_notes(state: State<'_, Shared>) -> Result<Vec<NoteSnapshot>, Strin
         .map_err(e2s)?;
     let resp: ParvaneEvent<NoteSyncResponsePayload> =
         serde_json::from_slice(&reply.payload).map_err(e2s)?;
-    // Кешируем снапшоты для последующего diff при сохранении
-    {
-        let mut s = state.lock().await;
-        for note in &resp.payload.notes {
-            s.notes.insert(note.note_id, note.clone());
+    // Сливаем дельту в локальный кеш: tombstone'ы удаляем, изменённые
+    // апдейтим. Неизменившиеся шард не прислал — они остаются как были.
+    let mut s = state.lock().await;
+    for note in resp.payload.notes {
+        if note.deleted {
+            s.notes.remove(&note.note_id);
+        } else {
+            let mut n = note;
+            if n.checksum == 0 {
+                n.checksum = content_checksum(&n.title, &n.text);
+            }
+            s.notes.insert(n.note_id, n);
         }
     }
-    Ok(resp.payload.notes.into_iter().filter(|n| !n.deleted).collect())
+    persist_notes(&s);
+    Ok(s.notes.values().filter(|n| !n.deleted).cloned().collect())
 }
 
 #[tauri::command]
@@ -296,20 +444,24 @@ async fn create_note(title: String, state: State<'_, Shared>) -> Result<String, 
     };
     client.publish(NOTE_CREATE, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
     client.flush().await.map_err(e2s)?;
-    // Добавляем пустой снапшот в кеш
-    state.lock().await.notes.insert(note_id, NoteSnapshot {
+    // Добавляем пустой снапшот в кеш и сохраняем на диск.
+    let cs = content_checksum(&title, "");
+    let mut s = state.lock().await;
+    s.notes.insert(note_id, NoteSnapshot {
         note_id,
         title,
         text: String::new(),
         elements: vec![],
         deleted: false,
+        checksum: cs,
     });
+    persist_notes(&s);
     Ok(note_id.to_string())
 }
 
-/// Сохраняет заметку: вычисляет diff old_text→new_text, шлёт RGA-ops.
-/// Алгоритм: delete все существующие символы + insert новые (replace-all).
-/// Для прототипа с небольшими заметками достаточно.
+/// Сохраняет заметку. Local-first: клиент — источник истины для тела, шлёт
+/// весь текст одной операцией `Replace`, шард атомарно пересобирает заметку.
+/// Никакого отслеживания RGA-узлов на клиенте → задвоение текста исключено.
 #[tauri::command]
 async fn save_note(
     id: String,
@@ -319,58 +471,58 @@ async fn save_note(
 ) -> Result<(), String> {
     eprintln!("[bridge] save_note({id})");
     let nid = Uuid::parse_str(&id).map_err(e2s)?;
-    let (client, token, from, old_elements, mut seq) = {
+
+    // Если относительно кеша ничего не изменилось — не шлём ничего (это и есть
+    // «синхронизация по расхождению, а не перезаливка»: открытие заметки или
+    // тик автосейва без правок не порождает трафика).
+    let (client, token, from) = {
         let s = state.lock().await;
-        let old = s.notes.get(&nid).map(|n| n.elements.clone()).unwrap_or_default();
+        if let Some(n) = s.notes.get(&nid) {
+            if n.text == body && n.title == title {
+                return Ok(());
+            }
+        }
         (
             s.nats.clone().ok_or("NATS не подключён")?,
             s.token.clone().ok_or("не залогинен")?,
             s.user.clone().ok_or("не залогинен")?,
-            old,
-            s.note_seq,
         )
     };
-
-    let mut ops: Vec<NoteOp> = Vec::new();
-
-    // Delete all existing non-deleted nodes
-    for el in &old_elements {
-        if !el.deleted {
-            ops.push(NoteOp::Delete { target: el.id.clone() });
-        }
-    }
-
-    // Insert all new characters in sequence
-    let mut prev: Option<OpId> = None;
-    for ch in body.chars() {
-        seq += 1;
-        let id = OpId { seq, site: from.clone() };
-        ops.push(NoteOp::Insert { id: id.clone(), after: prev.clone(), ch });
-        prev = Some(id);
-    }
-
-    // Save updated seq
-    state.lock().await.note_seq = seq;
-
-    if ops.is_empty() {
-        return Ok(());
-    }
 
     let ev = ParvaneEvent {
         id: Uuid::now_v7(),
         from,
         ts: now_ts(),
         token,
-        payload: NoteUpdatePayload { note_id: nid, ops },
+        payload: NoteUpdatePayload {
+            note_id: nid,
+            ops: vec![NoteOp::Replace { text: body.clone() }],
+            title: Some(title.clone()),
+        },
     };
     client.publish(NOTE_UPDATE, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
     client.flush().await.map_err(e2s)?;
 
-    // Обновляем кеш
-    state.lock().await.notes.entry(nid).and_modify(|n| {
-        n.title = title.clone();
-        n.text = body.clone();
-    });
+    // Обновляем локальный кеш и пишем на диск.
+    let cs = content_checksum(&title, &body);
+    let mut s = state.lock().await;
+    s.notes
+        .entry(nid)
+        .and_modify(|n| {
+            n.title = title.clone();
+            n.text = body.clone();
+            n.checksum = cs;
+            n.elements = vec![];
+        })
+        .or_insert(NoteSnapshot {
+            note_id: nid,
+            title,
+            text: body,
+            elements: vec![],
+            deleted: false,
+            checksum: cs,
+        });
+    persist_notes(&s);
     Ok(())
 }
 
@@ -395,7 +547,9 @@ async fn delete_note(id: String, state: State<'_, Shared>) -> Result<(), String>
     };
     client.publish(NOTE_DELETE, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
     client.flush().await.map_err(e2s)?;
-    state.lock().await.notes.remove(&nid);
+    let mut s = state.lock().await;
+    s.notes.remove(&nid);
+    persist_notes(&s);
     Ok(())
 }
 
@@ -404,21 +558,34 @@ async fn delete_note(id: String, state: State<'_, Shared>) -> Result<(), String>
 #[tauri::command]
 async fn list_events(state: State<'_, Shared>) -> Result<Vec<CalEventSnapshot>, String> {
     eprintln!("[bridge] list_events");
-    let (client, token, from) = {
-        let s = state.lock().await;
+    use parvane_types::{CalSyncRequestPayload, CalSyncResponsePayload};
+    // Манифест {event_id → checksum}: шард вернёт только расхождения и tombstone'ы.
+    let (client, token, from, known) = {
+        let mut s = state.lock().await;
+        if s.events.is_empty() {
+            load_events(&mut s);
+        }
+        let known: std::collections::BTreeMap<String, u64> = s
+            .events
+            .iter()
+            .map(|(id, e)| {
+                let cs = if e.checksum == 0 { event_checksum(e) } else { e.checksum };
+                (id.to_string(), cs)
+            })
+            .collect();
         (
             s.nats.clone().ok_or("NATS не подключён")?,
             s.token.clone().ok_or("не залогинен")?,
             s.user.clone().ok_or("не залогинен")?,
+            known,
         )
     };
-    use parvane_types::{CalSyncRequestPayload, CalSyncResponsePayload};
     let ev = ParvaneEvent {
         id: Uuid::now_v7(),
         from,
         ts: now_ts(),
         token,
-        payload: CalSyncRequestPayload {},
+        payload: CalSyncRequestPayload { known },
     };
     let reply = client
         .request(CAL_SYNC_REQUEST, serde_json::to_vec(&ev).map_err(e2s)?.into())
@@ -427,10 +594,18 @@ async fn list_events(state: State<'_, Shared>) -> Result<Vec<CalEventSnapshot>, 
     let resp: ParvaneEvent<CalSyncResponsePayload> =
         serde_json::from_slice(&reply.payload).map_err(e2s)?;
     let mut s = state.lock().await;
-    for ev in &resp.payload.events {
-        s.events.insert(ev.event_id, ev.clone());
+    for mut ev in resp.payload.events {
+        if ev.deleted {
+            s.events.remove(&ev.event_id);
+        } else {
+            if ev.checksum == 0 {
+                ev.checksum = event_checksum(&ev);
+            }
+            s.events.insert(ev.event_id, ev);
+        }
     }
-    Ok(resp.payload.events.into_iter().filter(|e| !e.deleted).collect())
+    persist_events(&s);
+    Ok(s.events.values().filter(|e| !e.deleted).cloned().collect())
 }
 
 /// Создать событие. Принимает простые поля — мост сам собирает CalSetPayload.
@@ -519,7 +694,9 @@ async fn delete_event(id: String, state: State<'_, Shared>) -> Result<(), String
     let ev = ParvaneEvent { id: Uuid::now_v7(), from, ts, token, payload };
     client.publish(CAL_DELETE, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
     client.flush().await.map_err(e2s)?;
-    state.lock().await.events.remove(&eid);
+    let mut s = state.lock().await;
+    s.events.remove(&eid);
+    persist_events(&s);
     Ok(())
 }
 
@@ -584,16 +761,19 @@ async fn call_history(state: State<'_, Shared>) -> Result<CallHistoryResponse, S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let state: Shared = Arc::new(Mutex::new(AppState {
-        last_msg_id: "00000000-0000-0000-0000-000000000000".to_string(),
-        ..Default::default()
-    }));
+    let state: Shared = Arc::new(Mutex::new(AppState::default()));
 
     tauri::Builder::default()
         .manage(state.clone())
-        .setup(move |_app| {
+        .setup(move |app| {
+            use tauri::Manager;
+            let cache_dir = app.path().app_data_dir().ok();
             let st = state.clone();
             tauri::async_runtime::spawn(async move {
+                {
+                    let mut s = st.lock().await;
+                    s.cache_dir = cache_dir;
+                }
                 let url = std::env::var("PARVANE_NATS_URL")
                     .unwrap_or_else(|_| "nats://localhost:4222".to_string());
                 match async_nats::connect(&url).await {

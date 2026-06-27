@@ -5,8 +5,9 @@ use anyhow::{Context, Result};
 use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    NoteCreatePayload, NoteDeletePayload, NoteElement, NoteOp, NoteSnapshot,
-    NoteSyncResponsePayload, NoteUpdatePayload, OpId, ParvaneEvent, VerifyRequest, VerifyResponse,
+    content_checksum, NoteCreatePayload, NoteDeletePayload, NoteElement, NoteOp, NoteSnapshot,
+    NoteSyncRequestPayload, NoteSyncResponsePayload, NoteUpdatePayload, OpId, ParvaneEvent,
+    VerifyRequest, VerifyResponse,
     topics::{
         IDENTITY_VERIFY, NOTE_CREATE, NOTE_DELETE, NOTE_SYNC_REQUEST, NOTE_SYNC_RESPONSE,
         NOTE_UPDATE,
@@ -162,7 +163,44 @@ async fn handle_update(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
                     .execute(&mut *tx)
                     .await?;
                 }
+                // Local-first replace: сносим все узлы заметки и пересобираем их
+                // из присланного текста. Делает сохранение идемпотентным и
+                // исключает задвоение — клиенту больше не нужно отслеживать узлы.
+                NoteOp::Replace { text } => {
+                    sqlx::query("DELETE FROM note_elements WHERE note_id = ?")
+                        .bind(&note_id)
+                        .execute(&mut *tx)
+                        .await?;
+                    let mut prev_seq: Option<i64> = None;
+                    let mut seq: i64 = 0;
+                    for ch in text.chars() {
+                        seq += 1;
+                        sqlx::query(
+                            "INSERT INTO note_elements
+                             (note_id, site, seq, after_site, after_seq, ch, deleted)
+                             VALUES (?, ?, ?, ?, ?, ?, 0)",
+                        )
+                        .bind(&note_id)
+                        .bind(&user)
+                        .bind(seq)
+                        .bind(prev_seq.map(|_| user.clone()))
+                        .bind(prev_seq)
+                        .bind(ch.to_string())
+                        .execute(&mut *tx)
+                        .await?;
+                        prev_seq = Some(seq);
+                    }
+                }
             }
+        }
+
+        // Заголовок, если изменился (раньше rename вообще не доходил до шарда).
+        if let Some(title) = &event.payload.title {
+            sqlx::query("UPDATE notes SET title = ? WHERE id = ?")
+                .bind(title)
+                .bind(&note_id)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
 
@@ -216,9 +254,10 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     };
 
     let result = async {
-        let event: ParvaneEvent<serde_json::Value> =
+        let event: ParvaneEvent<NoteSyncRequestPayload> =
             serde_json::from_slice(&msg.payload).context("неверный JSON в note.sync.request")?;
         let user = verify_token(nc, &event.token).await?;
+        let known = &event.payload.known;
 
         // Берём body напрямую из таблицы — не реконструируем из RGA элементов
         let notes_rows: Vec<(String, String, String, i64)> =
@@ -227,15 +266,35 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                 .fetch_all(pool)
                 .await?;
 
+        // Diff-синхронизация по контрольным суммам: отдаём только то, что у
+        // клиента отсутствует или разошлось, плюс tombstone'ы для удалённых
+        // заметок, о которых клиент ещё знает. Неизменившиеся не шлём вовсе.
         let mut notes = Vec::new();
         for (id, title, body, deleted) in notes_rows {
-            notes.push(NoteSnapshot {
-                note_id: id.parse().unwrap_or_default(),
-                title,
-                text: body,
-                elements: vec![],  // элементы не нужны клиенту
-                deleted: deleted != 0,
-            });
+            let cs = content_checksum(&title, &body);
+            if deleted != 0 {
+                if known.contains_key(&id) {
+                    notes.push(NoteSnapshot {
+                        note_id: id.parse().unwrap_or_default(),
+                        title,
+                        text: String::new(),
+                        elements: vec![],
+                        deleted: true,
+                        checksum: cs,
+                    });
+                }
+                continue;
+            }
+            if known.get(&id) != Some(&cs) {
+                notes.push(NoteSnapshot {
+                    note_id: id.parse().unwrap_or_default(),
+                    title,
+                    text: body,
+                    elements: vec![], // элементы не нужны клиенту
+                    deleted: false,
+                    checksum: cs,
+                });
+            }
         }
 
         let count = notes.len();

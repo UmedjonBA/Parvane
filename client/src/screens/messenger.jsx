@@ -1,5 +1,19 @@
 // MESSENGER screen.
 
+// ── локальное состояние (localStorage) ───────────────────────────────────────
+// Прочитанность и группы храним на клиенте: бэкенд про «прочитано» не знает,
+// его unread — это всего лишь общее число полученных от собеседника сообщений.
+function lsLoad(key, fallback) {
+  try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; }
+  catch { return fallback; }
+}
+function lsSave(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+
+const LS_READ    = "pv_chat_read";          // { peer: <baseline кумулятивного unread> }
+const LS_GROUPS  = "pv_chat_groups";        // [{ id, name }]
+const LS_ASSIGN  = "pv_chat_group_assign";  // { peer: groupId }
+const LS_PINNED  = "pv_pinned";             // { peer: { msgId: {id, from, t, text} } }
+
 function MessengerScreen({ me }) {
   const liveAvail = window.PARVANE.available;
 
@@ -34,26 +48,124 @@ function MessengerScreen({ me }) {
   const [newMsg, setNewMsg]     = useState("");
   const [newErr, setNewErr]     = useState("");
 
+  // Прочитанность и группы (клиентское состояние, см. helpers выше)
+  const [readState, setReadState] = useState(() => lsLoad(LS_READ, {}));
+  const [groups, setGroups]       = useState(() => lsLoad(LS_GROUPS, []));
+  const [assign, setAssign]       = useState(() => lsLoad(LS_ASSIGN, {}));
+  const [menu, setMenu]           = useState(null); // {x,y,peer,creating?}
+  const [groupDraft, setGroupDraft] = useState(null); // null=не создаём, строка=ввод имени
+  const [pinned, setPinned]       = useState(() => lsLoad(LS_PINNED, {}));
+  const [msgMenu, setMsgMenu]     = useState(null); // {x,y,msg,el}
+
+  const togglePin = useCallback((peer, msg) => {
+    if (!peer || !msg || msg.id == null) return;
+    setPinned((prev) => {
+      const forPeer = { ...(prev[peer] || {}) };
+      if (forPeer[msg.id]) delete forPeer[msg.id];
+      else forPeer[msg.id] = { id: msg.id, from: msg.from, t: msg.t, text: msg.text };
+      const next = { ...prev, [peer]: forPeer };
+      lsSave(LS_PINNED, next);
+      return next;
+    });
+  }, []);
+
+  const markRead = useCallback((peer, cumulative) => {
+    setReadState((prev) => {
+      if (prev[peer] === cumulative) return prev;
+      const next = { ...prev, [peer]: cumulative };
+      lsSave(LS_READ, next);
+      return next;
+    });
+  }, []);
+
+  const markUnread = useCallback((peer) => {
+    setReadState((prev) => {
+      const next = { ...prev, [peer]: 0 };
+      lsSave(LS_READ, next);
+      return next;
+    });
+  }, []);
+
+  const addGroup = useCallback((name) => {
+    const nm = name.trim();
+    if (!nm) return null;
+    const g = { id: "g" + Date.now().toString(36), name: nm };
+    setGroups((prev) => { const next = [...prev, g]; lsSave(LS_GROUPS, next); return next; });
+    return g.id;
+  }, []);
+
+  const deleteGroup = useCallback((id) => {
+    setGroups((prev) => { const next = prev.filter((g) => g.id !== id); lsSave(LS_GROUPS, next); return next; });
+    setAssign((prev) => {
+      const next = {}; for (const k in prev) if (prev[k] !== id) next[k] = prev[k];
+      lsSave(LS_ASSIGN, next); return next;
+    });
+    setFilter((f) => (f === id ? "all" : f));
+  }, []);
+
+  const assignToGroup = useCallback((peer, groupId) => {
+    setAssign((prev) => {
+      const next = { ...prev };
+      if (groupId) next[peer] = groupId; else delete next[peer];
+      lsSave(LS_ASSIGN, next); return next;
+    });
+  }, []);
+
   // Выбираем первую беседу когда они загружены
   useEffect(() => {
     if (!sel && chatList.length > 0) setSel(chatList[0].id);
   }, [chatList.length]);
 
+  // Открытие чата = прочитано: сдвигаем baseline до текущего кумулятивного
+  // числа полученных. Пока чат выбран, держим его прочитанным при новых письмах.
+  useEffect(() => {
+    if (!sel || !liveAvail) return;
+    const conv = convs.find((c) => c.peer === sel);
+    if (conv) markRead(sel, conv.unread);
+  }, [sel, convs, liveAvail, markRead]);
+
   const activePeer = liveAvail && sel && convs.some((c) => c.peer === sel) ? sel : null;
   const live = window.useLiveChat(me || "", activePeer || "");
 
-  const filtered = chatList.filter((c) => {
+  // Видимое число непрочитанных = кумулятив с бэкенда минус сохранённый baseline.
+  const decorated = chatList.map((c) => ({
+    ...c,
+    unread: Math.max(0, (c.unread || 0) - (readState[c.peer] || 0)),
+    group:  assign[c.peer] || null,
+  }));
+
+  const filtered = decorated.filter((c) => {
+    if (filter === "all")    return true;
     if (filter === "unread") return c.unread > 0;
-    if (filter === "pinned") return c.pinned;
-    return true;
+    return c.group === filter; // filter — это id группы
   });
 
   const selChat = chatList.find((c) => c.id === sel);
   const peer    = sel ? (contacts[sel] || makePeerContact(sel)) : null;
 
+  // Клавиатурная навигация: [n] новый чат, ↑↓ по списку
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { setMenu(null); setMsgMenu(null); setGroupDraft(null); return; }
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.code === "KeyN") { setNewChat(v => !v); return; }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const idx = filtered.findIndex(c => c.id === sel);
+        const next = e.key === "ArrowDown"
+          ? Math.min(idx + 1, filtered.length - 1)
+          : Math.max(idx - 1, 0);
+        if (filtered[next]) setSel(filtered[next].id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [filtered, sel]);
+
   const isLiveChat    = liveAvail && !!activePeer;
   const displayMsgs   = isLiveChat
     ? live.messages.map((m) => ({
+        id:   m.id,
         from: m.from === "me" ? "me" : activePeer,
         t:    m.t,
         text: m.text,
@@ -62,7 +174,7 @@ function MessengerScreen({ me }) {
     : (selChat?.messages || []);
 
   return (
-    <div className="msg-screen">
+    <div className="msg-screen" onClick={() => { if (menu) setMenu(null); if (msgMenu) setMsgMenu(null); }}>
       {/* LEFT */}
       <div className="msg-chats">
         <Panel title="МЕССЕНДЖЕР" sub={chatList.length ? `${chatList.length} бесед` : ""} hint="[/] поиск  [n] новый чат">
@@ -71,11 +183,38 @@ function MessengerScreen({ me }) {
             <input className="form-input" placeholder="поиск…" />
           </div>
           <div className="msg-filter-row">
-            {[["all","все"],["unread","непрочитанные"],["pinned","закреплённые"]].map(([k, label]) => (
+            {[["all","все"],["unread","непрочитанные"]].map(([k, label]) => (
               <button key={k} className={"filter-pill" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>
                 {label}
               </button>
             ))}
+            {groups.map((g) => (
+              <button
+                key={g.id}
+                className={"filter-pill" + (filter === g.id ? " on" : "")}
+                onClick={() => setFilter(g.id)}
+                onContextMenu={(e) => { e.preventDefault(); if (confirm(`Удалить группу «${g.name}»?`)) deleteGroup(g.id); }}
+                title="ПКМ — удалить группу"
+              >
+                {g.name}
+              </button>
+            ))}
+            {groupDraft === null ? (
+              <button className="filter-pill add" onClick={() => setGroupDraft("")} title="новая группа">+ группа</button>
+            ) : (
+              <input
+                className="filter-pill group-input"
+                placeholder="имя группы"
+                value={groupDraft}
+                autoFocus
+                onChange={(e) => setGroupDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { const id = addGroup(groupDraft); if (id) setFilter(id); setGroupDraft(null); }
+                  if (e.key === "Escape") setGroupDraft(null);
+                }}
+                onBlur={() => { if (groupDraft.trim()) addGroup(groupDraft); setGroupDraft(null); }}
+              />
+            )}
           </div>
           <div className="hr" />
           <div className="chat-list">
@@ -83,7 +222,12 @@ function MessengerScreen({ me }) {
               const p      = contacts[c.peer] || makePeerContact(c.peer);
               const isSel  = c.id === sel;
               return (
-                <button key={c.id} className={"chat-row" + (isSel ? " sel" : "")} onClick={() => setSel(c.id)}>
+                <button
+                  key={c.id}
+                  className={"chat-row" + (isSel ? " sel" : "")}
+                  onClick={() => setSel(c.id)}
+                  onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, peer: c.peer }); }}
+                >
                   <div className={"chat-avatar avatar-" + p.color}>
                     <span>{p.init}</span>
                     {p.status === "online" && <span className="online-pip" />}
@@ -96,7 +240,7 @@ function MessengerScreen({ me }) {
                     <div className="chat-bottom">
                       <span className="chat-prev muted">{c.preview}</span>
                       <span className="chat-tag">
-                        {c.pinned && <span className="muted">📌</span>}
+                        {c.group && <span className="group-chip">{(groups.find((g) => g.id === c.group) || {}).name}</span>}
                         {c.unread > 0 && <span className="unread-badge">{c.unread}</span>}
                       </span>
                     </div>
@@ -208,7 +352,14 @@ function MessengerScreen({ me }) {
               </div>
             </div>
             <div className="hr" />
-            <ConversationBody messages={displayMsgs} contacts={contacts} me={me} peer={sel} />
+            <ConversationBody
+              messages={displayMsgs}
+              contacts={contacts}
+              me={me}
+              peer={sel}
+              pinnedIds={pinned[sel] || {}}
+              onMsgMenu={(e, m) => { e.preventDefault(); setMsgMenu({ x: e.clientX, y: e.clientY, msg: m, el: e.currentTarget }); }}
+            />
             <div className="hr" />
             <Composer
               draft={draft}
@@ -234,8 +385,87 @@ function MessengerScreen({ me }) {
       {/* RIGHT */}
       <div className="msg-side col">
         {peer && <ContactPanel peer={peer} peerAddr={sel} />}
-        {selChat && <PinnedMessages messages={displayMsgs} contacts={contacts} />}
+        {selChat && (
+          <PinnedMessages
+            pinned={pinned[sel] ? Object.values(pinned[sel]) : []}
+            contacts={contacts}
+            onUnpin={(m) => togglePin(sel, m)}
+          />
+        )}
       </div>
+
+      {menu && (
+        <ChatMenu
+          menu={menu}
+          setMenu={setMenu}
+          groups={groups}
+          assign={assign}
+          assignToGroup={assignToGroup}
+          addGroup={addGroup}
+          markRead={markRead}
+          markUnread={markUnread}
+          convs={convs}
+          peerName={(contacts[menu.peer] || makePeerContact(menu.peer)).name}
+        />
+      )}
+
+      {msgMenu && (
+        <MsgMenu
+          menu={msgMenu}
+          setMenu={setMsgMenu}
+          peer={sel}
+          togglePin={togglePin}
+          isPinned={!!(pinned[sel] && msgMenu.msg.id != null && pinned[sel][msgMenu.msg.id])}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── контекстное меню чата (ПКМ по строке списка) ─────────────────────────────
+function ChatMenu({ menu, setMenu, groups, assign, assignToGroup, addGroup, markRead, markUnread, convs, peerName }) {
+  const peer    = menu.peer;
+  const current = assign[peer] || null;
+  const conv    = convs.find((c) => c.peer === peer);
+  const close   = () => setMenu(null);
+
+  return (
+    <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+      <div className="ctx-head">{peerName}</div>
+      <button className="ctx-item" onClick={() => { markRead(peer, conv ? conv.unread : 0); close(); }}>
+        Отметить прочитанным
+      </button>
+      <button className="ctx-item" onClick={() => { markUnread(peer); close(); }}>
+        Отметить непрочитанным
+      </button>
+      <div className="ctx-sep" />
+      <div className="ctx-head">ГРУППА</div>
+      {groups.map((g) => (
+        <button key={g.id} className="ctx-item" onClick={() => { assignToGroup(peer, g.id); close(); }}>
+          {current === g.id ? "● " : "○ "}{g.name}
+        </button>
+      ))}
+      {current && (
+        <button className="ctx-item" onClick={() => { assignToGroup(peer, null); close(); }}>
+          ○ Без группы
+        </button>
+      )}
+      {menu.creating ? (
+        <input
+          className="ctx-input"
+          placeholder="имя новой группы"
+          autoFocus
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { const id = addGroup(e.target.value); if (id) assignToGroup(peer, id); close(); }
+            if (e.key === "Escape") setMenu({ ...menu, creating: false });
+          }}
+        />
+      ) : (
+        <button className="ctx-item" onClick={() => setMenu({ ...menu, creating: true })}>
+          ＋ Новая группа…
+        </button>
+      )}
     </div>
   );
 }
@@ -270,7 +500,7 @@ function TypingDots() {
   return <span>{".".repeat(n)}</span>;
 }
 
-function ConversationBody({ messages, contacts, me, peer }) {
+function ConversationBody({ messages, contacts, me, peer, pinnedIds, onMsgMenu }) {
   return (
     <div className="thread-body">
       {messages.length === 0 && (
@@ -281,13 +511,19 @@ function ConversationBody({ messages, contacts, me, peer }) {
       {messages.map((m, i) => {
         const isMe   = m.from === "me";
         const author = contacts[m.from] || makePeerContact(m.from);
+        const isPin  = pinnedIds && m.id != null && pinnedIds[m.id];
         return (
-          <div key={m.id || i} className={"msg" + (isMe ? " me" : "")}>
+          <div
+            key={m.id || i}
+            className={"msg" + (isMe ? " me" : "")}
+            onContextMenu={(e) => onMsgMenu && onMsgMenu(e, m)}
+          >
             <span className={"msg-bar bar-" + author.color} />
             <div className="msg-content">
               <div className="msg-head">
                 <span className={"msg-author author-" + author.color}>{isMe ? "вы" : author.name}</span>
                 <span className="msg-time muted">{m.t}</span>
+                {isPin && <span className="msg-pin" title="закреплено">📌</span>}
                 {isMe && (
                   <span className="msg-read">
                     {m.read
@@ -321,7 +557,6 @@ function Composer({ draft, setDraft, live, error, onSend }) {
       />
       {error && <div style={{ color: "var(--red)", fontSize: 11 }}>✗ {error}</div>}
       <div className="composer-tools">
-        <button className="btn">[a] вложить</button>
         <button className="btn primary" onClick={fire}>[⏎] send</button>
       </div>
     </div>
@@ -352,22 +587,26 @@ function ContactPanel({ peer, peerAddr }) {
   );
 }
 
-function PinnedMessages({ messages, contacts }) {
-  const pinned = messages.filter((m) => m.read).slice(0, 3);
+function PinnedMessages({ pinned, contacts, onUnpin }) {
   return (
     <Panel title="ЗАКРЕПЛЕНО" sub={pinned.length + " сообщений"}>
       {pinned.length === 0 ? (
-        <div className="muted">нет закреплённых</div>
+        <div className="muted" style={{ fontSize: 12 }}>
+          нет закреплённых
+          <div style={{ marginTop: 4, color: "var(--dim)" }}>ПКМ по сообщению → закрепить</div>
+        </div>
       ) : (
         <div className="rowlist">
           {pinned.map((m, i) => {
             const a = contacts[m.from] || makePeerContact(m.from);
             return (
-              <div key={i} className="pinned-row">
+              <div key={m.id || i} className="pinned-row">
                 <span className={"msg-bar bar-" + a.color} style={{ position: "relative" }} />
                 <div style={{ flex: 1, paddingLeft: 8 }}>
-                  <div className="muted" style={{ fontSize: 11 }}>
-                    {m.from === "me" ? "вы" : a.name} · {m.t}
+                  <div className="muted" style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>{m.from === "me" ? "вы" : a.name} · {m.t}</span>
+                    <button className="tag-x" style={{ marginLeft: "auto" }} title="открепить"
+                      onClick={() => onUnpin(m)}>✕</button>
                   </div>
                   <div>{m.text}</div>
                 </div>
@@ -377,6 +616,34 @@ function PinnedMessages({ messages, contacts }) {
         </div>
       )}
     </Panel>
+  );
+}
+
+// ── контекстное меню сообщения (ПКМ по сообщению в треде) ─────────────────────
+function MsgMenu({ menu, setMenu, isPinned, togglePin, peer }) {
+  const m = menu.msg;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(m.text || ""); }
+    catch (e) { console.error("[msg] copy:", e); }
+  };
+  const selectText = () => {
+    const el = menu.el && (menu.el.querySelector(".msg-text") || menu.el);
+    if (!el) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(range);
+  };
+  return (
+    <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+      <button className="ctx-item" onClick={() => { copy(); setMenu(null); }}>Копировать</button>
+      <button className="ctx-item" onClick={() => { selectText(); setMenu(null); }}>Выделить текст</button>
+      <div className="ctx-sep" />
+      <button className="ctx-item" onClick={() => { togglePin(peer, m); setMenu(null); }}>
+        {isPinned ? "📌 Открепить" : "📌 Закрепить"}
+      </button>
+    </div>
   );
 }
 

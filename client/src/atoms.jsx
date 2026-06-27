@@ -2,6 +2,62 @@
 
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
+// Textarea с собственной историей undo/redo. Нативная отмена в управляемом
+// React-textarea ломается (React переустанавливает .value и стирает стек
+// браузера), поэтому ведём свой стек. Ctrl+Z — отмена, Ctrl+Shift+Z / Ctrl+Y —
+// повтор, Ctrl+S — onSaveNow. Историю сбрасываем через key (по id заметки).
+function UndoTextarea({ value, onChange, onSaveNow, onKeyDown: extKeyDown, ...rest }) {
+  const ref  = useRef(null);
+  const hist = useRef(null);
+  if (hist.current === null) hist.current = { stack: [value || ""], idx: 0, t: 0 };
+
+  const apply = (text) => {
+    onChange(text);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { el.focus(); const p = text.length; el.setSelectionRange(p, p); }
+    });
+  };
+
+  const handleChange = (e) => {
+    const next = e.target.value;
+    const h = hist.current;
+    const now = Date.now();
+    const atEnd = h.idx === h.stack.length - 1;
+    // близкие по времени правки сливаем в один шаг отмены
+    if (atEnd && now - h.t < 500) {
+      h.stack[h.idx] = next;
+    } else {
+      h.stack = h.stack.slice(0, h.idx + 1);
+      h.stack.push(next);
+      h.idx = h.stack.length - 1;
+    }
+    h.t = now;
+    onChange(next);
+  };
+
+  const onKeyDown = (e) => {
+    // e.code — физическая клавиша, не зависит от раскладки (рус/англ).
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.code === "KeyS") { e.preventDefault(); onSaveNow && onSaveNow(); return; }
+    if (mod && !e.shiftKey && e.code === "KeyZ") {
+      e.preventDefault();
+      const h = hist.current;
+      if (h.idx > 0) { h.idx -= 1; h.t = 0; apply(h.stack[h.idx]); }
+      return;
+    }
+    if (mod && ((e.shiftKey && e.code === "KeyZ") || e.code === "KeyY")) {
+      e.preventDefault();
+      const h = hist.current;
+      if (h.idx < h.stack.length - 1) { h.idx += 1; h.t = 0; apply(h.stack[h.idx]); }
+      return;
+    }
+    if (extKeyDown) extKeyDown(e);
+  };
+
+  return <textarea ref={ref} value={value} onChange={handleChange} onKeyDown={onKeyDown} {...rest} />;
+}
+
 function Panel({ title, sub, hint, focused, dim, className, style, children, onClick }) {
   return (
     <div
@@ -57,7 +113,7 @@ function ClockBox({ time, date }) {
 }
 
 function useClock() {
-  const [now, setNow] = useState(new Date(2026, 4, 13, 23, 36, 16));
+  const [now, setNow] = useState(new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(n => new Date(n.getTime() + 1000)), 1000);
     return () => clearInterval(id);
@@ -100,13 +156,9 @@ function Footer({ hints, focus }) {
 function Tabs({ active, onChange }) {
   const tabs = [
     { id: "calendar",  num: 1, label: "CALENDAR"  },
-    { id: "diary",     num: 2, label: "DIARY"     },
-    { id: "home",      num: 3, label: "HOME"      },
-    { id: "system",    num: 4, label: "SYSTEM"    },
     { id: "_sep" },
-    { id: "messenger", num: 5, label: "MESSENGER", accent: true },
-    { id: "notes",     num: 6, label: "NOTES",     accent: true },
-    { id: "cloud",     num: 7, label: "CLOUD",     accent: true },
+    { id: "messenger", num: 2, label: "MESSENGER", accent: true },
+    { id: "notes",     num: 3, label: "DIARY",     accent: true },
   ];
   return (
     <div className="tabs">
@@ -127,5 +179,5 @@ function Tabs({ active, onChange }) {
 }
 
 Object.assign(window, {
-  Panel, Dot, Badge, HubStatus, ClockBox, useClock, MonolithLogo, Footer, Tabs,
+  Panel, Dot, Badge, HubStatus, ClockBox, useClock, MonolithLogo, Footer, Tabs, UndoTextarea,
 });

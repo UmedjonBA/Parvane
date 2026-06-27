@@ -8,3 +8,6 @@
 
 # Конфиги окружения
 .env
+
+# Claude Code local artifacts
+.claude/

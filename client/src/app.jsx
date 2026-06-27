@@ -32,7 +32,6 @@ function LoginScreen({ onLogin }) {
     }
   };
 
-  // Enter в любом поле → войти
   const onKey = (e) => { if (e.key === "Enter") submit(); };
 
   return (
@@ -95,20 +94,17 @@ function LoginScreen({ onLogin }) {
 // ── основное приложение ───────────────────────────────────────────────────────
 
 function App() {
-  const [me, setMe]   = useState(null);     // null = не залогинен
+  const [me, setMe]   = useState(null);
   const [tab, setTab] = useState("messenger");
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
-  // Если Tauri не доступен — работаем как статичное демо без логина
   const needLogin = window.PARVANE.available && me === null;
 
-  // Проверяем авто-логин из localStorage при старте
   useEffect(() => {
     if (!window.PARVANE.available) {
       setMe("demo");
       return;
     }
-    // live.jsx уже запустил автологин; проверяем результат
     const stored = localStorage.getItem("parvane_user");
     if (stored) {
       window.PARVANE.currentUser().then((u) => {
@@ -122,15 +118,27 @@ function App() {
     document.body.dataset.density = t.density;
   }, [t.accent, t.density]);
 
-  // глобальные горячие клавиши
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-      const map = { "1":"calendar","2":"diary","3":"home","4":"system","5":"messenger","6":"notes","7":"cloud" };
+      const map = { "1": "calendar", "2": "messenger", "3": "notes" };
       if (map[e.key]) setTab(map[e.key]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Это десктоп-приложение, а не сайт: подавляем нативное контекстное меню
+  // вебвью (reload/inspect/back) везде, кроме полей ввода, где пользователю
+  // нужны cut/copy/paste. Экраны вешают свои onContextMenu для своих действий.
+  useEffect(() => {
+    const onCtx = (e) => {
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) return;
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", onCtx);
+    return () => window.removeEventListener("contextmenu", onCtx);
   }, []);
 
   if (needLogin) {
@@ -139,22 +147,14 @@ function App() {
 
   const screen = {
     calendar:  <CalendarScreen me={me} />,
-    diary:     <DiaryScreen />,
-    home:      <HomeScreen />,
-    system:    <SystemScreen />,
     messenger: <MessengerScreen me={me} />,
-    notes:     <NotesScreen me={me} />,
-    cloud:     <CloudScreen me={me} />,
-  }[tab];
+    notes:     <WorkspaceScreen me={me} />,
+  }[tab] || null;
 
   const footer = {
-    calendar:  <Footer hints={[["↑↓","week"],["←→","day"],["[Enter]","select"],["[a]","add"],["[1-7]","tabs"]]} focus={"CALENDAR · " + (me || "demo")} />,
-    diary:     <Footer hints={[["↑↓","entry"],["[n]","new"],["[1-7]","tabs"]]} focus="DIARY" />,
-    home:      <Footer hints={[["[tab]","panel"],["↑↓","device"],["[Enter]","toggle"],["[1-7]","tabs"]]} focus="HOME" />,
-    system:    <Footer hints={[["[tab]","focus"],["[Enter]","ping"],["[:]","cmd"],["[1-7]","tabs"]]} focus="SYSTEM" />,
-    messenger: <Footer hints={[["↑↓","chat"],["[/]","search"],["[Enter]","send"],["[1-7]","tabs"]]} focus={"MESSENGER · " + (me || "demo")} />,
-    notes:     <Footer hints={[["↑↓","note"],["[Enter]","open"],["[n]","new"],["[1-7]","tabs"]]} focus="NOTES" />,
-    cloud:     <Footer hints={[["↑↓","entry"],["[Enter]","open"],["[d]","delete"],["[1-7]","tabs"]]} focus="CLOUD" />,
+    calendar:  <Footer hints={[["↑↓","неделя"],["←→","день"],["[a]","добавить"],["[1-3]","вкладки"]]} focus={"CALENDAR · " + (me || "")} />,
+    messenger: <Footer hints={[["↑↓","чат"],["[/]","поиск"],["[Enter]","отправить"],["[n]","новый"],["[1-3]","вкладки"]]} focus={"MESSENGER · " + (me || "")} />,
+    notes:     <Footer hints={[["[g]","заметки"],["[j]","журнал"],["↑↓","запись"],["[n]","новая"],["[Ctrl+S]","сохранить"],["[1-3]","вкладки"]]} focus={"DIARY · " + (me || "")} />,
   }[tab];
 
   const onLogout = async () => {
@@ -169,18 +169,17 @@ function App() {
       </Shell>
       {t.showFire && <FireAlert onClose={() => setTweak("showFire", false)} />}
       <TweaksPanel title="MONOLITH · Tweaks">
-        <TweakSection title="Visual">
-          <TweakColor t={t} setTweak={setTweak} k="accent"
-            options={["#fe8019","#fabd2f","#d3869b","#8ec07c","#83a598"]}>
-            Accent
-          </TweakColor>
-          <TweakRadio t={t} setTweak={setTweak} k="density"
-            options={["compact","comfortable"]}>Density</TweakRadio>
-          <TweakRadio t={t} setTweak={setTweak} k="logo"
-            options={["block","line"]}>Logo style</TweakRadio>
+        <TweakSection label="Visual">
+          <TweakColor label="Accent" value={t.accent}
+            options={["#fe8019","#fabd2f","#d3869b","#8ec07c","#83a598"]}
+            onChange={(v) => setTweak("accent", v)} />
+          <TweakRadio label="Density" value={t.density}
+            options={["compact","comfortable"]}
+            onChange={(v) => setTweak("density", v)} />
         </TweakSection>
-        <TweakSection title="Demo">
-          <TweakToggle t={t} setTweak={setTweak} k="showFire">FIRE alert modal</TweakToggle>
+        <TweakSection label="Demo">
+          <TweakToggle label="FIRE alert" value={t.showFire}
+            onChange={(v) => setTweak("showFire", v)} />
         </TweakSection>
       </TweaksPanel>
     </>
@@ -195,7 +194,6 @@ function FireAlert({ onClose }) {
         <p>TIMER fired</p>
         <p className="fire-name">pomodoro_25</p>
         <div className="fire-action">[ Enter ] turn off buzzer</div>
-        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>VERTEX:BUZZ:ON</div>
       </div>
     </div>
   );

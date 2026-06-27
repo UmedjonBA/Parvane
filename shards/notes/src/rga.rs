@@ -60,6 +60,21 @@ impl Rga {
                 }
                 _ => false,
             },
+            // Полная замена: сносим все узлы и пересобираем линейную
+            // последовательность из текста (local-first replace).
+            NoteOp::Replace { text } => {
+                self.nodes.clear();
+                let mut prev: Option<OpId> = None;
+                for (i, ch) in text.chars().enumerate() {
+                    let id = OpId { seq: (i as u64) + 1, site: "replace".to_string() };
+                    self.nodes.insert(
+                        id.clone(),
+                        NoteElement { id: id.clone(), after: prev.clone(), ch, deleted: false },
+                    );
+                    prev = Some(id);
+                }
+                true
+            }
         }
     }
 
