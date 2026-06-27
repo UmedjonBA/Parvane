@@ -3,11 +3,11 @@ use async_nats::Client;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use futures::StreamExt;
 use parvane_types::{
-    DownloadRequest, DownloadResponse, ParvaneEvent, UploadChunkPayload, UploadCompletePayload,
-    UploadCompleteResponse, VerifyRequest, VerifyResponse,
+    DownloadRequest, DownloadResponse, FileEntry, FileListPayload, FileListResponse, ParvaneEvent,
+    UploadChunkPayload, UploadCompletePayload, UploadCompleteResponse, VerifyRequest, VerifyResponse,
     topics::{
-        FILE_DOWNLOAD_REQUEST, FILE_DOWNLOAD_RESPONSE, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE,
-        IDENTITY_VERIFY,
+        FILE_DOWNLOAD_REQUEST, FILE_DOWNLOAD_RESPONSE, FILE_LIST_REQUEST, FILE_UPLOAD_CHUNK,
+        FILE_UPLOAD_COMPLETE, IDENTITY_VERIFY,
     },
 };
 use sqlx::SqlitePool;
@@ -49,23 +49,19 @@ async fn main() -> Result<()> {
     let mut chunk_sub = nc.subscribe(FILE_UPLOAD_CHUNK).await?;
     let mut complete_sub = nc.subscribe(FILE_UPLOAD_COMPLETE).await?;
     let mut download_sub = nc.subscribe(FILE_DOWNLOAD_REQUEST).await?;
+    let mut list_sub = nc.subscribe(FILE_LIST_REQUEST).await?;
 
     info!(
-        "Cloud шард запущен. Слушаю: {}, {}, {}",
-        FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, FILE_DOWNLOAD_REQUEST
+        "Cloud шард запущен. Слушаю: {}, {}, {}, {}",
+        FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST
     );
 
     loop {
         tokio::select! {
-            Some(msg) = chunk_sub.next() => {
-                handle_chunk(&nc, &pool, msg).await;
-            }
-            Some(msg) = complete_sub.next() => {
-                handle_complete(&nc, &pool, msg).await;
-            }
-            Some(msg) = download_sub.next() => {
-                handle_download(&nc, &pool, msg).await;
-            }
+            Some(msg) = chunk_sub.next() => handle_chunk(&nc, &pool, msg).await,
+            Some(msg) = complete_sub.next() => handle_complete(&nc, &pool, msg).await,
+            Some(msg) = download_sub.next() => handle_download(&nc, &pool, msg).await,
+            Some(msg) = list_sub.next() => handle_list(&nc, &pool, msg).await,
         }
     }
 }
@@ -263,6 +259,51 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             error: Some(e.to_string()),
         };
         let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    }
+}
+
+// ── file.list.request ─────────────────────────────────────────────────────────
+
+async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        warn!("file.list.request: нет reply-топика");
+        return;
+    };
+
+    let result = async {
+        let event: ParvaneEvent<FileListPayload> =
+            serde_json::from_slice(&msg.payload).context("неверный JSON в file.list.request")?;
+
+        let owner = verify_token(nc, &event.token).await?;
+
+        let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
+            "SELECT id, filename, mime_type, size_bytes, created_at FROM files WHERE owner = ? ORDER BY created_at DESC",
+        )
+        .bind(&owner)
+        .fetch_all(pool)
+        .await?;
+
+        let files = rows
+            .into_iter()
+            .filter_map(|(id, filename, mime_type, size_bytes, created_at)| {
+                let file_id = uuid::Uuid::parse_str(&id).ok()?;
+                Some(FileEntry { file_id, filename, mime_type, size_bytes, created_at })
+            })
+            .collect();
+
+        let resp = FileListResponse { files };
+        nc.publish(reply, serde_json::to_vec(&resp)?.into()).await?;
+        info!("Список файлов отдан owner={}", owner);
+        anyhow::Ok(())
+    }
+    .await;
+
+    if let Err(e) = result {
+        error!("handle_list: {}", e);
+        if let Some(reply) = msg.reply {
+            let resp = FileListResponse { files: vec![] };
+            let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+        }
     }
 }
 
