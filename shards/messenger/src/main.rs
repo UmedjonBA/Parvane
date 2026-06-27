@@ -102,15 +102,25 @@ fn validate_sender(jwt_sub: &str, claimed_from: &str) -> Result<()> {
 }
 
 /// Сохранить сообщение. Идемпотентно по `id` (INSERT OR IGNORE).
+/// `content` хранится как JSON `MessageContent`, `kind` — для фильтрации.
 async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i64) -> Result<()> {
+    let content_json = serde_json::to_string(&ev.payload.content).context("сериализация content")?;
+    // legacy-колонка `text` объявлена NOT NULL: для Text кладём сам текст, для
+    // медиа — пустую строку (источник истины — `content`).
+    let legacy_text = match &ev.payload.content {
+        parvane_types::MessageContent::Text { text } => text.as_str(),
+        _ => "",
+    };
     sqlx::query(
-        "INSERT OR IGNORE INTO messages (id, from_user, to_user, text, ts, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO messages (id, from_user, to_user, text, kind, content, ts, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(ev.id.to_string())
     .bind(&ev.from)
     .bind(&ev.payload.to)
-    .bind(&ev.payload.text)
+    .bind(legacy_text)
+    .bind(ev.payload.content.kind())
+    .bind(&content_json)
     .bind(ev.ts)
     .bind(now)
     .execute(pool)
@@ -144,8 +154,8 @@ async fn fetch_missed(
     user: &str,
     last_seen_id: &str,
 ) -> Result<Vec<StoredMessage>> {
-    let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
-        "SELECT id, from_user, to_user, text, ts
+    let rows: Vec<(String, String, String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT id, from_user, to_user, content, ts
          FROM messages
          WHERE to_user = ? AND id > ?
          ORDER BY id
@@ -156,16 +166,23 @@ async fn fetch_missed(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|(id, from, to, text, ts)| StoredMessage {
+    let mut messages = Vec::with_capacity(rows.len());
+    for (id, from, to, content_json, ts) in rows {
+        // content может быть NULL только для legacy-строк без миграции данных;
+        // в норме всегда заполнен.
+        let content = match content_json {
+            Some(json) => serde_json::from_str(&json).context("разбор content")?,
+            None => parvane_types::MessageContent::Text { text: String::new() },
+        };
+        messages.push(StoredMessage {
             id: id.parse().unwrap_or(Uuid::nil()),
             from,
             to,
-            text,
+            content,
             ts,
-        })
-        .collect())
+        });
+    }
+    Ok(messages)
 }
 
 // ── msg.chat.send ─────────────────────────────────────────────────────────────
@@ -268,16 +285,35 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parvane_types::SendPayload;
+    use parvane_types::{MessageContent, SendPayload};
     use sqlx::sqlite::SqlitePoolOptions;
 
+    /// Текстовое сообщение.
     fn send_event(id: &str, from: &str, to: &str, text: &str) -> ParvaneEvent<SendPayload> {
+        send_content(id, from, to, MessageContent::Text { text: text.into() })
+    }
+
+    /// Сообщение с произвольным контентом (для медиа-тестов).
+    fn send_content(
+        id: &str,
+        from: &str,
+        to: &str,
+        content: MessageContent,
+    ) -> ParvaneEvent<SendPayload> {
         ParvaneEvent {
             id: id.parse().unwrap(),
             from: from.into(),
             ts: 1_000_000,
             token: "tok".into(),
-            payload: SendPayload { to: to.into(), text: text.into() },
+            payload: SendPayload { to: to.into(), content },
+        }
+    }
+
+    /// Достаёт текст из текстового сообщения (для ассертов).
+    fn text_of(m: &StoredMessage) -> &str {
+        match &m.content {
+            MessageContent::Text { text } => text,
+            other => panic!("ожидался Text, получено {:?}", other),
         }
     }
 
@@ -323,7 +359,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missed.len(), 1);
-        assert_eq!(missed[0].text, "привет");
+        assert_eq!(text_of(&missed[0]), "привет");
         assert_eq!(missed[0].from, "alice@local");
     }
 
@@ -360,7 +396,7 @@ mod tests {
         // last_seen = older → возвращается только newer
         let missed = fetch_missed(&pool, "bob@local", older).await.unwrap();
         assert_eq!(missed.len(), 1);
-        assert_eq!(missed[0].text, "второе");
+        assert_eq!(text_of(&missed[0]), "второе");
     }
 
     #[tokio::test]
@@ -376,7 +412,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missed.len(), 1, "дубликата быть не должно");
-        assert_eq!(missed[0].text, "раз", "первая запись сохраняется");
+        assert_eq!(text_of(&missed[0]), "раз", "первая запись сохраняется");
+    }
+
+    // ── медиа-сообщения ──
+
+    #[tokio::test]
+    async fn store_and_fetch_voice_message() {
+        let pool = test_pool().await;
+        let file_id = uuid::Uuid::now_v7();
+        let ev = send_content(
+            "00000000-0000-7000-8000-0000000000f1",
+            "alice@local",
+            "bob@local",
+            MessageContent::Voice {
+                file_id,
+                duration_secs: 5,
+                mime: "audio/ogg".into(),
+                size_bytes: 4096,
+            },
+        );
+        store_message(&pool, &ev, 1).await.unwrap();
+
+        // kind пишется отдельной колонкой для фильтрации
+        let kind: (String,) = sqlx::query_as("SELECT kind FROM messages WHERE id = ?")
+            .bind("00000000-0000-7000-8000-0000000000f1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kind.0, "voice");
+
+        // content десериализуется обратно в тот же вариант
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000")
+            .await
+            .unwrap();
+        assert_eq!(missed.len(), 1);
+        match &missed[0].content {
+            MessageContent::Voice { file_id: f, duration_secs, size_bytes, .. } => {
+                assert_eq!(*f, file_id);
+                assert_eq!(*duration_secs, 5);
+                assert_eq!(*size_bytes, 4096);
+            }
+            other => panic!("ожидался Voice, получено {:?}", other),
+        }
     }
 
     // ── read receipts ──

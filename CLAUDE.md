@@ -73,12 +73,21 @@ parvane/
 identity.token.issue        ← клиент запрашивает JWT
 identity.token.verify       ← шард проверяет JWT у identity
 
-msg.chat.send               ← клиент отправляет сообщение
+msg.chat.send               ← клиент отправляет сообщение (content: MessageContent)
 msg.chat.delivered          ← messenger подтверждает доставку
 msg.chat.read               ← клиент отмечает прочитанным
 msg.sync.request            ← клиент запрашивает пропущенное после офлайна
 msg.sync.response           ← messenger отвечает батчем пропущенных
+
+call.signal                 ← клиент шлёт WebRTC-сигнал (invite/answer/ice/hangup)
+call.user.<id>              ← call-шард релеит сигнал в инбокс получателя
+call.history.request/response ← история звонков
 ```
+
+`msg.chat.send` несёт `content: MessageContent` — текст или медиа (voice,
+video_note, photo, video, file). Медиа-блоб грузится в шард `cloud`, сообщение
+несёт только `file_id` + метаданные. Звонки: шард `call` релеит сигналинг между
+двумя пирами (сам медиа-поток — P2P WebRTC, мимо шины).
 
 ## Структура события
 

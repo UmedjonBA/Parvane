@@ -29,6 +29,17 @@ pub mod topics {
     pub const CAL_DELETE: &str = "cal.event.delete";
     pub const CAL_SYNC_REQUEST: &str = "cal.sync.request";
     pub const CAL_SYNC_RESPONSE: &str = "cal.sync.response";
+
+    pub const CALL_SIGNAL: &str = "call.signal";
+    pub const CALL_HISTORY_REQUEST: &str = "call.history.request";
+    pub const CALL_HISTORY_RESPONSE: &str = "call.history.response";
+
+    /// Персональный инбокс пользователя для входящих сигналов звонка.
+    /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
+    /// допустим). Например: `call.user.bob@local`.
+    pub fn call_inbox(user: &str) -> String {
+        format!("call.user.{user}")
+    }
 }
 
 // ── обёртка события ──────────────────────────────────────────────────────────
@@ -72,10 +83,73 @@ pub struct VerifyResponse {
 
 // ── messenger payloads ───────────────────────────────────────────────────────
 
+/// Содержимое сообщения. Медиа-варианты несут только ссылку `file_id` на блоб,
+/// загруженный в шард `cloud`, плюс метаданные для отображения. Сам бинарь по
+/// шине не гоняется.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MessageContent {
+    Text {
+        text: String,
+    },
+    /// Голосовое сообщение.
+    Voice {
+        file_id: Uuid,
+        duration_secs: u32,
+        mime: String,
+        size_bytes: u64,
+    },
+    /// Видео-кружочек.
+    VideoNote {
+        file_id: Uuid,
+        duration_secs: u32,
+        mime: String,
+        size_bytes: u64,
+    },
+    Photo {
+        file_id: Uuid,
+        width: u32,
+        height: u32,
+        mime: String,
+        size_bytes: u64,
+        caption: Option<String>,
+    },
+    Video {
+        file_id: Uuid,
+        duration_secs: u32,
+        width: u32,
+        height: u32,
+        mime: String,
+        size_bytes: u64,
+        caption: Option<String>,
+    },
+    File {
+        file_id: Uuid,
+        filename: String,
+        mime: String,
+        size_bytes: u64,
+        caption: Option<String>,
+    },
+}
+
+impl MessageContent {
+    /// Короткое имя варианта — пишется в колонку `kind` для фильтрации.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            MessageContent::Text { .. } => "text",
+            MessageContent::Voice { .. } => "voice",
+            MessageContent::VideoNote { .. } => "video_note",
+            MessageContent::Photo { .. } => "photo",
+            MessageContent::Video { .. } => "video",
+            MessageContent::File { .. } => "file",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendPayload {
     pub to: String,
-    pub text: String,
+    pub content: MessageContent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +177,7 @@ pub struct StoredMessage {
     pub id: Uuid,
     pub from: String,
     pub to: String,
-    pub text: String,
+    pub content: MessageContent,
     pub ts: i64,
 }
 
@@ -285,9 +359,108 @@ pub struct CalEventSnapshot {
     pub deleted_stamp: Option<Stamp>,
 }
 
+// ── звонки (WebRTC-сигналинг) ─────────────────────────────────────────────────
+//
+// Backend только релеит сигналы между двумя пирами и ведёт историю. Сам медиа-
+// поток идёт P2P через WebRTC (нужны STUN/TURN и клиент) — мимо нашей шины.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CallMedia {
+    Audio,
+    Video,
+}
+
+/// Сигнал установления/завершения звонка.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CallSignal {
+    /// Приглашение: SDP-offer вызывающего.
+    Invite { call_id: Uuid, media: CallMedia, sdp: String },
+    /// Ответ: SDP-answer вызываемого.
+    Answer { call_id: Uuid, sdp: String },
+    /// Отклонить вызов.
+    Reject { call_id: Uuid, reason: Option<String> },
+    /// ICE-кандидат (обмен сетевыми путями).
+    Ice { call_id: Uuid, candidate: String },
+    /// Завершить звонок (или отменить до ответа).
+    Hangup { call_id: Uuid },
+}
+
+impl CallSignal {
+    pub fn call_id(&self) -> Uuid {
+        match self {
+            CallSignal::Invite { call_id, .. }
+            | CallSignal::Answer { call_id, .. }
+            | CallSignal::Reject { call_id, .. }
+            | CallSignal::Ice { call_id, .. }
+            | CallSignal::Hangup { call_id, .. } => *call_id,
+        }
+    }
+}
+
+/// Конверт сигнала: кому адресован.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallSignalPayload {
+    pub to: String,
+    pub signal: CallSignal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallRecord {
+    pub call_id: Uuid,
+    pub caller: String,
+    pub callee: String,
+    pub media: CallMedia,
+    /// ringing | answered | ended | missed | rejected
+    pub status: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallHistoryRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallHistoryResponse {
+    pub calls: Vec<CallRecord>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_content_kind_names() {
+        let v = MessageContent::Voice {
+            file_id: Uuid::nil(),
+            duration_secs: 3,
+            mime: "audio/ogg".into(),
+            size_bytes: 100,
+        };
+        assert_eq!(v.kind(), "voice");
+
+        // round-trip через JSON с тегом kind
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(json.contains("\"kind\":\"voice\""));
+        let back: MessageContent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn call_inbox_subject() {
+        assert_eq!(topics::call_inbox("bob@local"), "call.user.bob@local");
+    }
+
+    #[test]
+    fn call_signal_carries_call_id() {
+        let id = Uuid::now_v7();
+        let sig = CallSignal::Ice { call_id: id, candidate: "cand".into() };
+        assert_eq!(sig.call_id(), id);
+        // round-trip
+        let json = serde_json::to_string(&sig).unwrap();
+        assert!(json.contains("\"type\":\"ice\""));
+    }
 
     #[test]
     fn stamp_orders_by_ts_then_site() {
@@ -317,12 +490,15 @@ mod tests {
             from: "alice@local".to_string(),
             ts: 1_000_000,
             token: "tok".to_string(),
-            payload: SendPayload { to: "bob@local".to_string(), text: "hi".to_string() },
+            payload: SendPayload {
+                to: "bob@local".to_string(),
+                content: MessageContent::Text { text: "hi".to_string() },
+            },
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: ParvaneEvent<SendPayload> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.from, "alice@local");
-        assert_eq!(decoded.payload.text, "hi");
+        assert_eq!(decoded.payload.content, MessageContent::Text { text: "hi".to_string() });
     }
 
     #[test]
