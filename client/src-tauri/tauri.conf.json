@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.parvane.monolith",
   "build": {
-    "frontendDist": "../",
-    "beforeBuildCommand": "",
-    "beforeDevCommand": ""
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "node stage-frontend.mjs",
+    "beforeDevCommand": "node stage-frontend.mjs"
   },
   "app": {
     "windows": [
