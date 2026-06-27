@@ -13,8 +13,10 @@
     currentUser: () => (invoke ? invoke("current_user") : Promise.resolve(null)),
     send: (to, text) =>
       invoke ? invoke("send_text", { to, text }) : Promise.reject("нет tauri"),
+    // Tauri v2 конвертирует camelCase JS → snake_case Rust, поэтому ключ
+    // должен быть lastSeenId (а не last_seen_id), иначе аргумент не дойдёт.
     sync: (last_seen_id) =>
-      invoke ? invoke("sync_messages", { last_seen_id }) : Promise.resolve([]),
+      invoke ? invoke("sync_messages", { lastSeenId: last_seen_id }) : Promise.resolve([]),
   };
 })();
 
