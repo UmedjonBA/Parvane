@@ -40,6 +40,7 @@ async fn nats_status(state: State<'_, Shared>) -> Result<bool, String> {
 /// Логин через identity-шард: возвращает JWT, запоминает токен и пользователя.
 #[tauri::command]
 async fn login(user: String, password: String, state: State<'_, Shared>) -> Result<String, String> {
+    eprintln!("[bridge] login({user})");
     let client = state.lock().await.nats.clone().ok_or("NATS не подключён")?;
     let req = serde_json::to_vec(&IssueRequest { user: user.clone(), password }).map_err(e2s)?;
     let reply = client.request(IDENTITY_ISSUE, req.into()).await.map_err(e2s)?;
@@ -64,6 +65,7 @@ async fn current_user(state: State<'_, Shared>) -> Result<Option<String>, String
 /// Отправить текстовое сообщение через messenger-шард. Возвращает id сообщения.
 #[tauri::command]
 async fn send_text(to: String, text: String, state: State<'_, Shared>) -> Result<String, String> {
+    eprintln!("[bridge] send_text(to={to})");
     let (client, token, from) = {
         let s = state.lock().await;
         (
@@ -89,11 +91,15 @@ async fn send_text(to: String, text: String, state: State<'_, Shared>) -> Result
 }
 
 /// Забрать пропущенные сообщения (адресованные текущему пользователю) после id.
+/// Параметр односложный (`since`), чтобы избежать неоднозначностей camel/snake
+/// в Tauri-invoke (многословные имена аргументов конвертируются по-разному).
 #[tauri::command]
 async fn sync_messages(
-    last_seen_id: String,
+    since: String,
     state: State<'_, Shared>,
 ) -> Result<Vec<StoredMessage>, String> {
+    eprintln!("[bridge] sync_messages(since={since})");
+    let last_seen_id = since;
     let (client, token, from) = {
         let s = state.lock().await;
         (

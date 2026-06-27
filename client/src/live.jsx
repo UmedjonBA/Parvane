@@ -13,14 +13,29 @@
     currentUser: () => (invoke ? invoke("current_user") : Promise.resolve(null)),
     send: (to, text) =>
       invoke ? invoke("send_text", { to, text }) : Promise.reject("нет tauri"),
-    // Tauri v2 конвертирует camelCase JS → snake_case Rust, поэтому ключ
-    // должен быть lastSeenId (а не last_seen_id), иначе аргумент не дойдёт.
+    // Односложный ключ `since` — многословные имена аргументов в Tauri-invoke
+    // неоднозначно конвертируются между camelCase/snake_case.
     sync: (last_seen_id) =>
-      invoke ? invoke("sync_messages", { lastSeenId: last_seen_id }) : Promise.resolve([]),
+      invoke ? invoke("sync_messages", { since: last_seen_id }) : Promise.resolve([]),
   };
 })();
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
+
+// Стартовый self-test (только десктоп): прогоняет мост сразу при загрузке,
+// чтобы по stderr-логу Rust было видно, доходят ли команды до бэкенда,
+// без необходимости открывать вкладку мессенджера.
+if (window.PARVANE.available) {
+  (async () => {
+    try {
+      await window.PARVANE.login("app@local", "app");
+      const msgs = await window.PARVANE.sync(ZERO_UUID);
+      console.log("[live] self-test: sync вернул", msgs.length, "сообщений");
+    } catch (e) {
+      console.error("[live] self-test провал:", e);
+    }
+  })();
+}
 
 function liveTextOf(content) {
   if (!content) return "";
