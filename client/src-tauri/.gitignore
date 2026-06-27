@@ -1,0 +1,4 @@
+/target
+/gen
+# Icons are generated locally via `cargo tauri icon` (see README).
+/icons
