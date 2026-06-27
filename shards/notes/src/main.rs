@@ -1,4 +1,5 @@
 mod rga;
+use rga::Rga;
 
 use anyhow::{Context, Result};
 use async_nats::Client;
@@ -11,7 +12,6 @@ use parvane_types::{
         NOTE_UPDATE,
     },
 };
-use rga::Rga;
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
@@ -127,8 +127,9 @@ async fn handle_update(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         let note_id = event.payload.note_id.to_string();
         assert_owner(pool, &note_id, &user).await?;
 
-        // Применяем операции напрямую в БД — INSERT OR IGNORE и UPDATE
-        // идемпотентны, поэтому повторная доставка операций безопасна.
+        // Все операции в одной транзакции — иначе каждый INSERT делает fsync
+        // и вставка 200 символов занимает ~200 секунд.
+        let mut tx = pool.begin().await?;
         for op in &event.payload.ops {
             match op {
                 NoteOp::Insert { id, after, ch } => {
@@ -147,7 +148,7 @@ async fn handle_update(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
                     .bind(after_site)
                     .bind(after_seq)
                     .bind(ch.to_string())
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
                 }
                 NoteOp::Delete { target } => {
@@ -158,14 +159,22 @@ async fn handle_update(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
                     .bind(&note_id)
                     .bind(&target.site)
                     .bind(target.seq as i64)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
                 }
             }
         }
+        tx.commit().await?;
 
+        // Обновляем кешированный body
         let text = render_note(pool, &note_id).await?;
-        info!("Заметка обновлена ({}): {} операций → \"{}\"", note_id, event.payload.ops.len(), text);
+        sqlx::query("UPDATE notes SET body = ? WHERE id = ?")
+            .bind(&text)
+            .bind(&note_id)
+            .execute(pool)
+            .await?;
+
+        info!("Заметка обновлена ({}): {} ops, {} симв.", note_id, event.payload.ops.len(), text.len());
         anyhow::Ok(())
     }
     .await;
@@ -211,21 +220,20 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             serde_json::from_slice(&msg.payload).context("неверный JSON в note.sync.request")?;
         let user = verify_token(nc, &event.token).await?;
 
-        let notes_rows: Vec<(String, String, i64)> =
-            sqlx::query_as("SELECT id, title, deleted FROM notes WHERE owner = ? ORDER BY created_at")
+        // Берём body напрямую из таблицы — не реконструируем из RGA элементов
+        let notes_rows: Vec<(String, String, String, i64)> =
+            sqlx::query_as("SELECT id, title, body, deleted FROM notes WHERE owner = ? ORDER BY created_at")
                 .bind(&user)
                 .fetch_all(pool)
                 .await?;
 
         let mut notes = Vec::new();
-        for (id, title, deleted) in notes_rows {
-            let elements = load_elements(pool, &id).await?;
-            let text = Rga::from_elements(elements.clone()).text();
+        for (id, title, body, deleted) in notes_rows {
             notes.push(NoteSnapshot {
                 note_id: id.parse().unwrap_or_default(),
                 title,
-                text,
-                elements,
+                text: body,
+                elements: vec![],  // элементы не нужны клиенту
                 deleted: deleted != 0,
             });
         }

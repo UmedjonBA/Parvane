@@ -188,16 +188,7 @@ function NotesScreen({ me }) {
           </div>
         </Panel>
 
-        <Panel title="ТЕГИ" sub="…">
-          <div className="tag-cloud">
-            {[
-              ["#project", "orange"],["#wip", "yellow"],["#study", "blue"],
-              ["#idea", "purple"],["#daily", "muted"],
-            ].map(([t, c]) => (
-              <button key={t} className="tag-pill" style={{ color: `var(--${c})` }}>{t}</button>
-            ))}
-          </div>
-        </Panel>
+        <TagsPanel notes={notesList} onFilter={setSearch} />
       </div>
 
       {/* CENTER: редактор */}
@@ -348,15 +339,27 @@ function highlightMd(line) {
 }
 
 function tokenize(text) {
+  // Порядок важен: длинные паттерны должны идти раньше коротких
+  const re = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|\[\[[^\]]+\]\]|\[([^\]]+)\]\(([^)]+)\)|`[^`]+`|#[a-zA-Z0-9_]+)/g;
   const out = [];
-  const re = /(\[\[[^\]]+\]\]|#[a-zA-Z0-9_]+|`[^`]+`)/g;
   let last = 0, m, key = 0;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(<span key={key++}>{text.slice(last, m.index)}</span>);
     const tok = m[0];
-    if (tok.startsWith("[["))     out.push(<span key={key++} style={{ color: "var(--purple)" }}>{tok}</span>);
-    else if (tok.startsWith("#")) out.push(<span key={key++} style={{ color: "var(--orange)" }}>{tok}</span>);
-    else if (tok.startsWith("`")) out.push(<span key={key++} style={{ color: "var(--aqua)" }}>{tok}</span>);
+    if (tok.startsWith("**"))
+      out.push(<strong key={key++} style={{ color: "var(--text-strong)" }}>{tok.slice(2, -2)}</strong>);
+    else if (tok.startsWith("~~"))
+      out.push(<s key={key++} style={{ color: "var(--muted)" }}>{tok.slice(2, -2)}</s>);
+    else if (tok.startsWith("*"))
+      out.push(<em key={key++} style={{ color: "var(--yellow)", fontStyle: "italic" }}>{tok.slice(1, -1)}</em>);
+    else if (tok.startsWith("[") && m[2])
+      out.push(<span key={key++} style={{ color: "var(--blue)", textDecoration: "underline" }}>{m[2]}</span>);
+    else if (tok.startsWith("[["))
+      out.push(<span key={key++} style={{ color: "var(--purple)" }}>{tok}</span>);
+    else if (tok.startsWith("`"))
+      out.push(<code key={key++} style={{ background: "var(--bg2)", color: "var(--aqua)", padding: "0 3px", borderRadius: 2 }}>{tok.slice(1, -1)}</code>);
+    else if (tok.startsWith("#"))
+      out.push(<span key={key++} style={{ color: "var(--orange)" }}>{tok}</span>);
     last = m.index + tok.length;
   }
   if (last < text.length) out.push(<span key={key++}>{text.slice(last)}</span>);
@@ -367,17 +370,37 @@ function NotePreview({ body }) {
   const lines = (body || "").split("\n");
   const out = [];
   let key = 0;
-  lines.forEach((ln) => {
-    if (ln.startsWith("# "))      out.push(<h1 key={key++}>{renderInline(ln.slice(2))}</h1>);
-    else if (ln.startsWith("## ")) out.push(<h2 key={key++}>{renderInline(ln.slice(3))}</h2>);
-    else if (ln.startsWith("> "))  out.push(<blockquote key={key++}>{renderInline(ln.slice(2))}</blockquote>);
-    else if (ln.startsWith("- [x]")) out.push(<div key={key++} className="task done">☑ <s>{renderInline(ln.slice(5))}</s></div>);
-    else if (ln.startsWith("- [ ]")) out.push(<div key={key++} className="task">☐ {renderInline(ln.slice(5))}</div>);
-    else if (ln.startsWith("- "))    out.push(<div key={key++} className="li">• {renderInline(ln.slice(2))}</div>);
-    else if (ln.trim() === "")       out.push(<div key={key++} style={{ height: 6 }} />);
-    else                             out.push(<p key={key++}>{renderInline(ln)}</p>);
-  });
-  return <div className="preview-body">{out}</div>;
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    // Блок кода ```
+    if (ln.startsWith("```")) {
+      const lang = ln.slice(3).trim();
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      out.push(
+        <pre key={key++} style={{ background: "var(--bg2)", padding: "8px", borderRadius: 4, overflowX: "auto", fontSize: 12, margin: "4px 0" }}>
+          <code style={{ color: "var(--aqua)" }}>{codeLines.join("\n")}</code>
+        </pre>
+      );
+    } else if (ln.startsWith("### ")) out.push(<h3 key={key++} style={{ color: "var(--green)", margin: "6px 0 2px" }}>{renderInline(ln.slice(4))}</h3>);
+    else if (ln.startsWith("## "))  out.push(<h2 key={key++} style={{ color: "var(--orange)", margin: "8px 0 2px", borderBottom: "1px solid var(--border)" }}>{renderInline(ln.slice(3))}</h2>);
+    else if (ln.startsWith("# "))   out.push(<h1 key={key++} style={{ color: "var(--yellow)", margin: "10px 0 4px", fontSize: "1.2em" }}>{renderInline(ln.slice(2))}</h1>);
+    else if (ln.startsWith("> "))   out.push(<blockquote key={key++} style={{ borderLeft: "3px solid var(--aqua)", paddingLeft: 10, color: "var(--text-muted)", margin: "2px 0" }}>{renderInline(ln.slice(2))}</blockquote>);
+    else if (ln.match(/^---+$/) || ln.match(/^\*\*\*+$/)) out.push(<hr key={key++} style={{ border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" }} />);
+    else if (ln.startsWith("- [x]")) out.push(<div key={key++} style={{ paddingLeft: 8, color: "var(--muted)" }}>☑ <s>{renderInline(ln.slice(5))}</s></div>);
+    else if (ln.startsWith("- [ ]")) out.push(<div key={key++} style={{ paddingLeft: 8 }}>☐ {renderInline(ln.slice(5))}</div>);
+    else if (ln.startsWith("- "))   out.push(<div key={key++} style={{ paddingLeft: 8 }}>• {renderInline(ln.slice(2))}</div>);
+    else if (ln.match(/^\d+\. /))   out.push(<div key={key++} style={{ paddingLeft: 8 }}>{renderInline(ln)}</div>);
+    else if (ln.trim() === "")      out.push(<div key={key++} style={{ height: 6 }} />);
+    else                            out.push(<p key={key++} style={{ margin: "2px 0" }}>{renderInline(ln)}</p>);
+    i++;
+  }
+  return <div className="preview-body" style={{ lineHeight: 1.6 }}>{out}</div>;
 }
 
 function renderInline(text) { return tokenize(text); }
@@ -454,6 +477,41 @@ function GraphView({ graph, activeId }) {
         })}
       </svg>
     </div>
+  );
+}
+
+// Извлекаем #теги из всех заметок и показываем кликабельно
+function TagsPanel({ notes, onFilter }) {
+  const tagCounts = {};
+  notes.forEach((n) => {
+    const text = (n.title || "") + " " + (n.text || "");
+    const matches = text.match(/#[a-zA-Z0-9_а-яА-Я]+/g) || [];
+    matches.forEach((t) => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
+  });
+  const tags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
+  const colors = ["orange","yellow","blue","purple","green","aqua","red"];
+  return (
+    <Panel title="ТЕГИ" sub={tags.length ? tags.length + " тегов" : "нет тегов"}>
+      {tags.length === 0 ? (
+        <div className="muted" style={{ fontSize: 12 }}>
+          пишите #тег в тексте заметки
+        </div>
+      ) : (
+        <div className="tag-cloud">
+          {tags.map(([tag, count], i) => (
+            <button
+              key={tag}
+              className="tag-pill"
+              style={{ color: `var(--${colors[i % colors.length]})` }}
+              onClick={() => onFilter(tag)}
+              title={count + " заметок"}
+            >
+              {tag} <span style={{ opacity: 0.6, fontSize: 10 }}>{count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </Panel>
   );
 }
 
