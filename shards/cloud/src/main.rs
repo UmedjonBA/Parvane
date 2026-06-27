@@ -13,7 +13,6 @@ use parvane_types::{
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
