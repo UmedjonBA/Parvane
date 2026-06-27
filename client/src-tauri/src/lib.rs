@@ -312,13 +312,13 @@ async fn create_note(title: String, state: State<'_, Shared>) -> Result<String, 
 /// Для прототипа с небольшими заметками достаточно.
 #[tauri::command]
 async fn save_note(
-    note_id: String,
+    id: String,
     title: String,
     body: String,
     state: State<'_, Shared>,
 ) -> Result<(), String> {
-    eprintln!("[bridge] save_note({note_id})");
-    let nid = Uuid::parse_str(&note_id).map_err(e2s)?;
+    eprintln!("[bridge] save_note({id})");
+    let nid = Uuid::parse_str(&id).map_err(e2s)?;
     let (client, token, from, old_elements, mut seq) = {
         let s = state.lock().await;
         let old = s.notes.get(&nid).map(|n| n.elements.clone()).unwrap_or_default();
@@ -375,9 +375,9 @@ async fn save_note(
 }
 
 #[tauri::command]
-async fn delete_note(note_id: String, state: State<'_, Shared>) -> Result<(), String> {
-    eprintln!("[bridge] delete_note({note_id})");
-    let nid = Uuid::parse_str(&note_id).map_err(e2s)?;
+async fn delete_note(id: String, state: State<'_, Shared>) -> Result<(), String> {
+    eprintln!("[bridge] delete_note({id})");
+    let nid = Uuid::parse_str(&id).map_err(e2s)?;
     let (client, token, from) = {
         let s = state.lock().await;
         (
@@ -475,12 +475,12 @@ async fn create_event(fields: EventFields, state: State<'_, Shared>) -> Result<S
 
 #[tauri::command]
 async fn update_event_field(
-    event_id: String,
+    id: String,
     field: String,
     value: String,
     state: State<'_, Shared>,
 ) -> Result<(), String> {
-    let eid = Uuid::parse_str(&event_id).map_err(e2s)?;
+    let eid = Uuid::parse_str(&id).map_err(e2s)?;
     let (client, token, from) = {
         let s = state.lock().await;
         (
@@ -504,8 +504,8 @@ async fn update_event_field(
 }
 
 #[tauri::command]
-async fn delete_event(event_id: String, state: State<'_, Shared>) -> Result<(), String> {
-    let eid = Uuid::parse_str(&event_id).map_err(e2s)?;
+async fn delete_event(id: String, state: State<'_, Shared>) -> Result<(), String> {
+    let eid = Uuid::parse_str(&id).map_err(e2s)?;
     let (client, token, from) = {
         let s = state.lock().await;
         (

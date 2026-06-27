@@ -19,13 +19,13 @@
     // notes
     listNotes:   ()                                    => invoke ? invoke("list_notes")                                    : Promise.resolve([]),
     createNote:  (title)                               => invoke ? invoke("create_note",  { title })                      : Promise.reject("нет tauri"),
-    saveNote:    (note_id, title, body)                => invoke ? invoke("save_note",    { note_id, title, body })        : Promise.resolve(),
-    deleteNote:  (note_id)                             => invoke ? invoke("delete_note",  { note_id })                    : Promise.resolve(),
+    saveNote:    (note_id, title, body)                => invoke ? invoke("save_note",    { id: note_id, title, body })   : Promise.resolve(),
+    deleteNote:  (note_id)                             => invoke ? invoke("delete_note",  { id: note_id })                : Promise.resolve(),
     // calendar
     listEvents:       ()                                           => invoke ? invoke("list_events")                                          : Promise.resolve([]),
     createEvent:      (fields)                                     => invoke ? invoke("create_event",       { fields })                       : Promise.reject("нет tauri"),
-    updateEventField: (event_id, field, value)                     => invoke ? invoke("update_event_field", { event_id, field, value })        : Promise.resolve(),
-    deleteEvent:      (event_id)                                   => invoke ? invoke("delete_event",       { event_id })                     : Promise.resolve(),
+    updateEventField: (event_id, field, value)                     => invoke ? invoke("update_event_field", { id: event_id, field, value })   : Promise.resolve(),
+    deleteEvent:      (event_id)                                   => invoke ? invoke("delete_event",       { id: event_id })                 : Promise.resolve(),
     // cloud
     listFiles: () => invoke ? invoke("list_files") : Promise.resolve({ files: [] }),
     // calls

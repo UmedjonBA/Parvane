@@ -26,9 +26,13 @@ function MessengerScreen({ me }) {
     ? buildLiveContacts(convs)
     : MONO_DATA.contacts;
 
-  const [sel, setSel]     = useState(null);
-  const [draft, setDraft] = useState("");
+  const [sel, setSel]       = useState(null);
+  const [draft, setDraft]   = useState("");
   const [filter, setFilter] = useState("all");
+  const [newChat, setNewChat]   = useState(false);
+  const [newPeer, setNewPeer]   = useState("");
+  const [newMsg, setNewMsg]     = useState("");
+  const [newErr, setNewErr]     = useState("");
 
   // Выбираем первую беседу когда они загружены
   useEffect(() => {
@@ -113,7 +117,64 @@ function MessengerScreen({ me }) {
             )}
           </div>
           <div className="hr" />
+          {newChat && (
+            <div style={{ padding: "4px 0", display: "flex", flexDirection: "column", gap: 6 }}>
+              <input
+                className="form-input"
+                placeholder="адрес: bob@local"
+                value={newPeer}
+                onChange={(e) => { setNewPeer(e.target.value); setNewErr(""); }}
+                autoFocus
+              />
+              <input
+                className="form-input"
+                placeholder="первое сообщение…"
+                value={newMsg}
+                onChange={(e) => setNewMsg(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (e.key === "Enter") {
+                    const peer = newPeer.trim();
+                    const txt  = newMsg.trim();
+                    if (!peer) { setNewErr("введите адрес"); return; }
+                    if (!txt)  { setNewErr("введите сообщение"); return; }
+                    try {
+                      await window.PARVANE.send(peer, txt);
+                      setSel(peer);
+                      setNewChat(false);
+                      setNewPeer("");
+                      setNewMsg("");
+                      refreshConvs();
+                    } catch (ex) {
+                      setNewErr(String(ex));
+                    }
+                  }
+                  if (e.key === "Escape") setNewChat(false);
+                }}
+              />
+              {newErr && <div style={{ color: "var(--red)", fontSize: 11 }}>✗ {newErr}</div>}
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn primary" onClick={async () => {
+                  const peer = newPeer.trim();
+                  const txt  = newMsg.trim();
+                  if (!peer) { setNewErr("введите адрес"); return; }
+                  if (!txt)  { setNewErr("введите сообщение"); return; }
+                  try {
+                    await window.PARVANE.send(peer, txt);
+                    setSel(peer);
+                    setNewChat(false);
+                    setNewPeer("");
+                    setNewMsg("");
+                    refreshConvs();
+                  } catch (ex) {
+                    setNewErr(String(ex));
+                  }
+                }}>[⏎] отправить</button>
+                <button className="btn" onClick={() => setNewChat(false)}>[Esc]</button>
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn primary" onClick={() => { setNewChat(true); setNewErr(""); }}>[n] новый чат</button>
             <button className="btn" onClick={refreshConvs}>[r] обновить</button>
           </div>
         </Panel>
