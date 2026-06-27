@@ -1,66 +1,90 @@
-// MESSENGER screen.
+// MESSENGER screen — реальные беседы через messenger-шард.
 
-// Кого логиним и с кем ведём живой чат через реальный бэкенд.
-const LIVE_ME = "app@local";
-const LIVE_PEER = "bob@local";
-
-function MessengerScreen() {
-  // Живой чат через messenger-шард (в браузере без Tauri — пустой/неактивный).
+function MessengerScreen({ me }) {
   const liveAvail = window.PARVANE.available;
-  const live = window.useLiveChat(LIVE_ME, LIVE_PEER);
 
-  // Подмешиваем живой контакт и чат поверх моков, не ломая остальной экран.
-  const contacts = liveAvail
-    ? {
-        ...MONO_DATA.contacts,
-        live: { id: "live", name: LIVE_PEER, handle: "@bob · LIVE", status: "online", color: "orange", init: "BO" },
-      }
-    : MONO_DATA.contacts;
+  // Список бесед из бэкенда
+  const { convs, refresh: refreshConvs } = liveAvail
+    ? window.useLiveConversations()
+    : { convs: [], refresh: () => {} };
 
-  const liveChat = {
-    id: "live",
-    peer: "live",
-    pinned: true,
-    unread: 0,
-    lastTime: live.ready ? "live" : "…",
-    preview: live.messages.length ? live.messages.at(-1).text : "живой чат через бэкенд Parvane",
-    isLive: true,
-    messages: live.messages.map((m) => ({
-      from: m.from === "me" ? "me" : "live",
-      t: m.t,
-      text: m.text,
-      read: true,
-    })),
-  };
+  // Строим список чатов: живые + мок-данные (мок только если не авторизованы)
+  const liveChats = convs.map((c) => ({
+    id:       c.peer,
+    peer:     c.peer,
+    pinned:   false,
+    unread:   c.unread,
+    lastTime: c.last_ts ? liveHHMM(c.last_ts) : "",
+    preview:  c.last_text || "",
+    isLive:   true,
+    messages: [], // загружаются при выборе беседы
+  }));
 
-  const chats = liveAvail ? [liveChat, ...MONO_DATA.chats] : MONO_DATA.chats;
-  const [sel, setSel] = useState(liveAvail ? "live" : "arseny");
+  const baseChats = liveAvail && liveChats.length > 0 ? liveChats : MONO_DATA.chats;
+  const [sel, setSel]   = useState(null);
   const [draft, setDraft] = useState("");
-  const [filter, setFilter] = useState("all"); // all | unread | pinned | groups | secret
+  const [filter, setFilter] = useState("all");
 
-  const filtered = chats.filter(c => {
-    if (filter === "unread") return c.unread > 0;
-    if (filter === "pinned") return c.pinned;
-    if (filter === "groups") return contacts[c.peer]?.status === "group";
-    if (filter === "secret") return c.secret;
+  // Выбираем первую беседу по умолчанию
+  useEffect(() => {
+    if (!sel && baseChats.length > 0) setSel(baseChats[0].id);
+  }, [baseChats.length]);
+
+  // Живой чат с выбранным собеседником
+  const activePeer = liveAvail && sel && convs.find((c) => c.peer === sel)
+    ? sel
+    : null;
+  const live = window.useLiveChat(me || "demo", activePeer || "");
+
+  // Контакты: реальный peer как объект или берём из MONO_DATA
+  const contacts = { ...MONO_DATA.contacts };
+  convs.forEach((c) => {
+    if (!contacts[c.peer]) {
+      contacts[c.peer] = {
+        id:     c.peer,
+        name:   c.peer.split("@")[0],
+        handle: "@" + c.peer.split("@")[0],
+        status: "online",
+        color:  "blue",
+        init:   c.peer[0].toUpperCase(),
+      };
+    }
+  });
+
+  const filtered = baseChats.filter((c) => {
+    if (filter === "unread")  return c.unread > 0;
+    if (filter === "pinned")  return c.pinned;
+    if (filter === "groups")  return contacts[c.peer]?.status === "group";
+    if (filter === "secret")  return c.secret;
     return true;
   });
 
-  const chat = chats.find(c => c.id === sel);
-  const peer = contacts[chat?.peer];
+  const selChat = baseChats.find((c) => c.id === sel);
+  const peer    = selChat ? (contacts[selChat.peer] || contacts.me) : contacts.me;
+
+  // Сообщения: реальные от useLiveChat или мок из selChat
+  const isLiveChat = liveAvail && activePeer;
+  const displayMessages = isLiveChat
+    ? live.messages.map((m) => ({
+        from: m.from === "me" ? "me" : activePeer,
+        t:    m.t,
+        text: m.text,
+        read: true,
+      }))
+    : (selChat?.messages || []);
 
   return (
     <div className="msg-screen">
-      {/* LEFT: chat list */}
+      {/* LEFT: список чатов */}
       <div className="msg-chats">
         <Panel
           title="MESSENGER"
-          sub={`${chats.length} chats`}
+          sub={`${baseChats.length} бесед`}
           hint="↑↓ select  [/] search"
         >
           <div className="msg-search">
             <span className="muted">[/]</span>
-            <input className="form-input" placeholder="search chats, messages..." />
+            <input className="form-input" placeholder="поиск чатов…" />
           </div>
           <div className="msg-filter-row">
             {[["all","all"],["unread","unread"],["pinned","pin"],["groups","groups"],["secret","🔒"]].map(([k, label]) => (
@@ -71,10 +95,10 @@ function MessengerScreen() {
           </div>
           <div className="hr" />
           <div className="chat-list">
-            {filtered.map(c => {
-              const p = contacts[c.peer];
-              const isSel = c.id === sel;
-              const isGroup = p.status === "group";
+            {filtered.map((c) => {
+              const p      = contacts[c.peer] || contacts.me;
+              const isSel  = c.id === sel;
+              const isGroup= p.status === "group";
               return (
                 <button
                   key={c.id}
@@ -95,7 +119,7 @@ function MessengerScreen() {
                     </div>
                     <div className="chat-bottom">
                       <span className={"chat-prev " + (p.status === "typing" ? "typing" : "muted")}>
-                        {isGroup && c.messages.length > 0 && (
+                        {isGroup && c.messages?.length > 0 && (
                           <span style={{ color: "var(--" + (contacts[c.messages.at(-1).from]?.color || "muted") + ")" }}>
                             {(contacts[c.messages.at(-1).from]?.name || c.messages.at(-1).from) + ": "}
                           </span>
@@ -111,66 +135,83 @@ function MessengerScreen() {
                 </button>
               );
             })}
+            {filtered.length === 0 && (
+              <div className="muted" style={{ padding: "12px 8px", fontSize: 12 }}>
+                {liveAvail ? "нет бесед" : "нет чатов"}
+              </div>
+            )}
           </div>
           <div className="hr" />
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn primary">[n] new chat</button>
-            <button className="btn">[c] contacts</button>
+            <button className="btn primary" onClick={refreshConvs}>[r] обновить</button>
+            <button className="btn">[n] новый чат</button>
           </div>
         </Panel>
       </div>
 
-      {/* CENTER: conversation */}
+      {/* CENTER: переписка */}
       <div className="msg-thread">
-        <Panel
-          title={peer.name.toUpperCase()}
-          sub={peer.status === "group" ? `${peer.members} members` : peer.status === "typing" ? "печатает..." : peer.status}
-          hint="↑↓ scroll  [Enter] send  [r] reply"
-          focused
-          className="thread-panel"
-        >
-          <div className="thread-top">
-            <div className={"chat-avatar avatar-" + peer.color}>
-              <span>{peer.init}</span>
-            </div>
-            <div>
-              <div className="strong">{peer.name}</div>
-              <div className="muted" style={{ fontSize: 11 }}>
-                {peer.handle} ·{" "}
-                {peer.status === "typing"
-                  ? <span style={{ color: "var(--blue)" }}>typing<TypingDots /></span>
-                  : peer.status === "online"
-                  ? <span style={{ color: "var(--green)" }}>● online</span>
-                  : peer.status === "group"
-                  ? <span style={{ color: "var(--aqua)" }}>## {peer.members} members</span>
-                  : peer.status === "secret"
-                  ? <span style={{ color: "var(--red)" }}>🔒 secret · e2e</span>
-                  : <span className="muted">{peer.status}</span>}
+        {selChat ? (
+          <Panel
+            title={peer.name.toUpperCase()}
+            sub={peer.status === "group" ? `${peer.members} участников` : peer.status === "typing" ? "печатает..." : peer.status}
+            hint="↑↓ scroll  [Enter] send  [r] reply"
+            focused
+            className="thread-panel"
+          >
+            <div className="thread-top">
+              <div className={"chat-avatar avatar-" + peer.color}>
+                <span>{peer.init}</span>
+              </div>
+              <div>
+                <div className="strong">{peer.name}</div>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {peer.handle} ·{" "}
+                  {isLiveChat
+                    ? <span style={{ color: "var(--green)" }}>● live · {live.ready ? "подключён" : "загрузка…"}</span>
+                    : peer.status === "typing"
+                    ? <span style={{ color: "var(--blue)" }}>typing<TypingDots /></span>
+                    : peer.status === "online"
+                    ? <span style={{ color: "var(--green)" }}>● online</span>
+                    : peer.status === "group"
+                    ? <span style={{ color: "var(--aqua)" }}>## {peer.members} members</span>
+                    : <span className="muted">{peer.status}</span>}
+                </div>
+              </div>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <button className="btn">[i] инфо</button>
+                <button className="btn">[/] поиск</button>
+                <button className="btn">[m] звук</button>
               </div>
             </div>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-              <button className="btn">[i] info</button>
-              <button className="btn">[/] search</button>
-              <button className="btn">[m] mute</button>
+            <div className="hr" />
+            <ConversationBody messages={displayMessages} contacts={contacts} me={me} />
+            <div className="hr" />
+            <Composer
+              draft={draft}
+              setDraft={setDraft}
+              secret={selChat.secret}
+              live={isLiveChat}
+              error={live.error}
+              onSend={isLiveChat ? live.send : null}
+            />
+          </Panel>
+        ) : (
+          <Panel title="MESSENGER" focused>
+            <div className="thread-empty">
+              <div className="muted" style={{ textAlign: "center", paddingTop: 40 }}>
+                выберите беседу
+              </div>
             </div>
-          </div>
-          <div className="hr" />
-          <ConversationBody chat={chat} contacts={contacts} />
-          <div className="hr" />
-          <Composer
-            draft={draft}
-            setDraft={setDraft}
-            secret={chat.secret}
-            onSend={chat.isLive ? live.send : null}
-          />
-        </Panel>
+          </Panel>
+        )}
       </div>
 
-      {/* RIGHT: contact + utilities */}
+      {/* RIGHT: инфо о собеседнике */}
       <div className="msg-side col">
-        <ContactPanel peer={peer} />
+        {selChat && <ContactPanel peer={peer} />}
         <SharedMedia />
-        <PinnedMessages chat={chat} contacts={contacts} />
+        {selChat && <PinnedMessages messages={displayMessages} contacts={contacts} />}
       </div>
     </div>
   );
@@ -179,56 +220,42 @@ function MessengerScreen() {
 function TypingDots() {
   const [n, setN] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setN(x => (x + 1) % 4), 350);
+    const id = setInterval(() => setN((x) => (x + 1) % 4), 350);
     return () => clearInterval(id);
   }, []);
   return <span>{".".repeat(n)}</span>;
 }
 
-function ConversationBody({ chat, contacts }) {
-  if (chat.secret) {
-    return (
-      <div className="thread-empty">
-        <pre className="ascii" style={{ color: "var(--red)", textAlign: "center", margin: "20px auto" }}>
-{`     ┌─────────┐
-     │  e2e    │
-     │  ▓▓▓▓▓  │
-     │  ▓ ▓▓▓  │
-     └─────────┘`}
-        </pre>
-        <div style={{ textAlign: "center" }}>
-          <div className="strong">SECRET CHAT</div>
-          <div className="muted" style={{ marginTop: 6 }}>
-            messages are end-to-end encrypted. content is not visible
-            in MONOVIEW until you authenticate this device.
-          </div>
-          <button className="btn primary" style={{ marginTop: 14 }}>[Enter] unlock with key</button>
-        </div>
-      </div>
-    );
-  }
+function ConversationBody({ messages, contacts, me }) {
   return (
     <div className="thread-body">
-      <div className="day-sep"><span>13 May · Wednesday</span></div>
-      {chat.messages.map((m, i) => {
-        const isMe = m.from === "me";
-        const author = contacts[m.from] || contacts.me;
+      <div className="day-sep"><span>сегодня</span></div>
+      {messages.length === 0 && (
+        <div className="muted" style={{ textAlign: "center", padding: "20px 0", fontSize: 12 }}>
+          нет сообщений
+        </div>
+      )}
+      {messages.map((m, i) => {
+        const isMe   = m.from === "me";
+        const author = contacts[m.from] || { name: m.from, color: "blue", init: (m.from || "?")[0] };
         return (
           <div key={i} className={"msg" + (isMe ? " me" : "")}>
             <span className={"msg-bar bar-" + author.color} />
             <div className="msg-content">
               <div className="msg-head">
-                <span className={"msg-author author-" + author.color}>{isMe ? "you" : author.name}</span>
+                <span className={"msg-author author-" + author.color}>{isMe ? "вы" : author.name}</span>
                 <span className="msg-time muted">{m.t}</span>
                 {isMe && (
-                  <span className="msg-read">{m.read ? <span style={{ color: "var(--blue)" }}>✓✓</span> : <span className="muted">✓</span>}</span>
+                  <span className="msg-read">
+                    {m.read
+                      ? <span style={{ color: "var(--blue)" }}>✓✓</span>
+                      : <span className="muted">✓</span>}
+                  </span>
                 )}
               </div>
-              {m.typing ? (
-                <div className="muted">печатает<TypingDots /></div>
-              ) : (
-                <div className="msg-text">{m.text}</div>
-              )}
+              {m.typing
+                ? <div className="muted">печатает<TypingDots /></div>
+                : <div className="msg-text">{m.text}</div>}
             </div>
           </div>
         );
@@ -237,9 +264,8 @@ function ConversationBody({ chat, contacts }) {
   );
 }
 
-function Composer({ draft, setDraft, secret, onSend }) {
+function Composer({ draft, setDraft, secret, live, error, onSend }) {
   if (secret) return null;
-  const live = !!onSend;
   const fire = () => {
     if (onSend && draft.trim()) {
       onSend(draft);
@@ -251,15 +277,15 @@ function Composer({ draft, setDraft, secret, onSend }) {
       <span className="composer-prompt" style={{ color: live ? "var(--green)" : "var(--orange)" }}>{">"}</span>
       <input
         className="form-input composer-input"
-        placeholder={live ? "сообщение уйдёт через messenger-шард…" : "напиши сообщение..."}
+        placeholder={live ? "сообщение → messenger-шард…" : "напиши сообщение..."}
         value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); fire(); } }}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); fire(); } }}
       />
+      {error && <div style={{ color: "var(--red)", fontSize: 11, padding: "0 8px" }}>✗ {error}</div>}
       <div className="composer-tools">
-        <button className="btn">[a] attach</button>
-        <button className="btn">[v] voice</button>
-        <button className="btn">[e] emoji</button>
+        <button className="btn">[a] вложить</button>
+        <button className="btn">[v] голос</button>
         <button className="btn primary" onClick={fire}>[⏎] send</button>
       </div>
     </div>
@@ -269,7 +295,7 @@ function Composer({ draft, setDraft, secret, onSend }) {
 function ContactPanel({ peer }) {
   const isGroup = peer.status === "group";
   return (
-    <Panel title={isGroup ? "GROUP" : "CONTACT"} sub={peer.handle}>
+    <Panel title={isGroup ? "ГРУППА" : "КОНТАКТ"} sub={peer.handle}>
       <div className="contact-head">
         <div className={"chat-avatar avatar-" + peer.color} style={{ width: 56, height: 56, fontSize: 18 }}>
           <span>{peer.init}</span>
@@ -291,25 +317,14 @@ function ContactPanel({ peer }) {
       <div className="hr" />
       {!isGroup && (
         <>
-          <div className="form-row"><label>nick</label><span className="v">{peer.handle}</span></div>
-          <div className="form-row"><label>last seen</label><span className="v">сейчас</span></div>
-          <div className="form-row"><label>since</label><span className="v">02 Feb 2024</span></div>
-          <div className="form-row"><label>notifs</label><span className="v">on (all)</span></div>
-        </>
-      )}
-      {isGroup && (
-        <>
-          <div className="form-row"><label>members</label><span className="v">{peer.members}</span></div>
-          <div className="form-row"><label>admin</label><span className="v">arseny, you</span></div>
-          <div className="form-row"><label>created</label><span className="v">12 Jan 2025</span></div>
+          <div className="form-row"><label>адрес</label><span className="v">{peer.handle}</span></div>
+          <div className="form-row"><label>статус</label><span className="v">{peer.status}</span></div>
         </>
       )}
       <div className="hr" />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button className="btn">[m] mute</button>
-        <button className="btn">[p] pin</button>
-        <button className="btn">[/] in chat</button>
-        <button className="btn danger">[d] block</button>
+        <button className="btn">[m] без звука</button>
+        <button className="btn danger">[d] заблокировать</button>
       </div>
     </Panel>
   );
@@ -325,7 +340,7 @@ function SharedMedia() {
     { kind: "img", label: "ascii.txt" },
   ];
   return (
-    <Panel title="SHARED" sub="6 items">
+    <Panel title="МЕДИА" sub="6 вложений">
       <div className="shared-grid">
         {tiles.map((t, i) => (
           <div key={i} className="shared-cell">
@@ -345,27 +360,26 @@ function SharedMedia() {
           </div>
         ))}
       </div>
-      <button className="btn" style={{ marginTop: 6 }}>[Enter] open shared</button>
     </Panel>
   );
 }
 
-function PinnedMessages({ chat, contacts }) {
-  const pinned = chat.messages.filter(m => m.read).slice(0, 2);
+function PinnedMessages({ messages, contacts }) {
+  const pinned = messages.filter((m) => m.read).slice(0, 2);
   return (
-    <Panel title="PINNED" sub={pinned.length + " messages"}>
+    <Panel title="ЗАКРЕПЛЕНО" sub={pinned.length + " сообщений"}>
       {pinned.length === 0 ? (
-        <div className="muted">No pinned messages</div>
+        <div className="muted">нет закреплённых</div>
       ) : (
         <div className="rowlist">
           {pinned.map((m, i) => {
-            const a = contacts[m.from] || contacts.me;
+            const a = contacts[m.from] || { name: m.from, color: "blue" };
             return (
               <div key={i} className="pinned-row">
                 <span className={"msg-bar bar-" + a.color} style={{ position: "relative" }} />
                 <div style={{ flex: 1, paddingLeft: 8 }}>
                   <div className="muted" style={{ fontSize: 11 }}>
-                    {m.from === "me" ? "you" : a.name} · {m.t}
+                    {m.from === "me" ? "вы" : a.name} · {m.t}
                   </div>
                   <div>{m.text}</div>
                 </div>

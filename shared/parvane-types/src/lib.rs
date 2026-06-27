@@ -17,6 +17,8 @@ pub mod topics {
     pub const FILE_UPLOAD_COMPLETE: &str = "file.upload.complete";
     pub const FILE_DOWNLOAD_REQUEST: &str = "file.download.request";
     pub const FILE_DOWNLOAD_RESPONSE: &str = "file.download.response";
+    pub const FILE_LIST_REQUEST: &str = "file.list.request";
+    pub const FILE_LIST_RESPONSE: &str = "file.list.response";
 
     pub const NOTE_CREATE: &str = "note.create";
     pub const NOTE_UPDATE: &str = "note.update";
@@ -224,6 +226,24 @@ pub struct DownloadResponse {
     pub total_chunks: Option<u32>,
     pub data: Option<String>, // base64
     pub error: Option<String>,
+}
+
+/// Один файл в облаке.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub file_id: Uuid,
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileListPayload {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileListResponse {
+    pub files: Vec<FileEntry>,
 }
 
 // ── notes CRDT (RGA) ──────────────────────────────────────────────────────────

@@ -10,84 +10,6 @@ function fmtDate(d) {
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
 }
 
-function MiniCalendar({ selected, onSelect }) {
-  const year  = selected.getFullYear();
-  const month = selected.getMonth();
-  const first = new Date(year, month, 1);
-  const days  = new Date(year, month+1, 0).getDate();
-  // Monday-first index
-  let lead = (first.getDay() + 6) % 7;
-  const cells = [];
-  for (let i = 0; i < lead; i++) cells.push(null);
-  for (let d = 1; d <= days; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  const today = new Date(2026, 4, 13);
-  const eventMap = MONO_DATA.events;
-
-  return (
-    <Panel title="MAY 2026" sub={MONTHS_FULL[month] + " " + year} className="mini-cal">
-      <div className="cal-grid">
-        {WEEK_HEAD.map(w => <div key={w} className="cal-cell head muted">{w}</div>)}
-        {cells.map((d, i) => {
-          if (!d) return <div key={i} className="cal-cell empty" />;
-          const date = new Date(year, month, d);
-          const ds = fmtDate(date);
-          const has = eventMap[ds];
-          const isSel = date.toDateString() === selected.toDateString();
-          const isToday = date.toDateString() === today.toDateString();
-          return (
-            <button
-              key={i}
-              className={"cal-cell" + (isSel ? " sel" : "") + (isToday ? " today" : "") + (has ? " has" : "")}
-              onClick={() => onSelect(date)}
-            >
-              {d}
-            </button>
-          );
-        })}
-      </div>
-    </Panel>
-  );
-}
-
-function EventsList({ date, selectedIdx, onSelect, onOpen, onAdd }) {
-  const ds = fmtDate(date);
-  const list = MONO_DATA.events[ds] || [];
-  const day = date.getDate();
-  const m = MONTHS_FULL[date.getMonth()].slice(0,3);
-  return (
-    <Panel
-      title={`EVENTS: ${day} ${m}`}
-      sub={list.length ? `${list.length} entries` : ""}
-      hint="↑↓ select  [d] del  [a] add"
-    >
-      {list.length === 0 ? (
-        <div className="muted" style={{ paddingTop: 4 }}>No events scheduled</div>
-      ) : (
-        <div className="rowlist">
-          {list.map((e, i) => (
-            <div
-              key={i}
-              className={"row" + (i === selectedIdx ? " selected" : "")}
-              onClick={() => onSelect(i)}
-              onDoubleClick={() => onOpen(i)}
-            >
-              <span className="marker">▶</span>
-              <span className="strong" style={{ width: 56 }}>{e.time}</span>
-              <Dot color={catColor(e.cat)} />
-              <span>{e.title}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="hr" />
-      <button className="btn" onClick={onAdd} style={{ marginTop: 2 }}>
-        <span className="kbd">[a]</span> add event
-      </button>
-    </Panel>
-  );
-}
 
 function catColor(cat) {
   return { work: "blue", personal: "green", deadline: "red", system: "purple" }[cat] || "muted";
@@ -141,10 +63,10 @@ function SchedulePanel({ date }) {
   );
 }
 
-function DayPulse({ date }) {
-  // little ascii day-bar showing hours; events appear as colored cells
-  const ds = fmtDate(date);
-  const events = MONO_DATA.events[ds] || [];
+function DayPulse({ date, eventMap }) {
+  const ds     = fmtDate(date);
+  const evMap  = eventMap || MONO_DATA.events;
+  const events = evMap[ds] || [];
   const dayKey = WEEK_NAMES[date.getDay()];
   const sched = MONO_DATA.schedule[dayKey] || [];
   const hours = [];
@@ -175,93 +97,262 @@ function DayPulse({ date }) {
   );
 }
 
-function EventDetails({ date, idx, onClose }) {
-  const ds = fmtDate(date);
-  const list = MONO_DATA.events[ds] || [];
-  const e = list[idx];
-  if (!e) return (
-    <Panel title="EVENT" sub="—">
-      <div className="muted">No event selected</div>
-    </Panel>
-  );
-  return (
-    <Panel title="EVENT" sub={`#${idx+1} of ${list.length}`} hint="[d] delete  [Esc] close" focused>
-      <div className="form-row"><label>Title</label><span className="v">{e.title}</span></div>
-      <div className="form-row"><label>Date</label><span className="v">{ds}</span></div>
-      <div className="form-row"><label>Time</label><span className="v">{e.time}</span></div>
-      <div className="form-row"><label>Category</label>
-        <span className="v"><Dot color={catColor(e.cat)} /> {e.cat}</span>
-      </div>
-      <div className="form-row"><label>Location</label><span className="v placeholder">—</span></div>
-      <div className="form-row"><label>Notes</label><span className="v placeholder">—</span></div>
-      <div className="hr" />
-      <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn danger">[d] delete</button>
-        <button className="btn" onClick={onClose}>[Esc] close</button>
-      </div>
-    </Panel>
-  );
+// Конвертер живого события (LWW-Map snapshot) в формат, ожидаемый UI.
+function liveEvToDisplay(ev) {
+  const f = (k) => (ev.fields[k] && ev.fields[k].value) || "";
+  const start = f("start");
+  const hhmm  = start ? new Date(parseInt(start, 10) * 1000).toTimeString().slice(0, 5) : "00:00";
+  return {
+    event_id: ev.event_id,
+    title:    f("title") || "Без названия",
+    time:     hhmm,
+    cat:      f("category") || "personal",
+    location: f("location") || "",
+    start:    start,
+    end:      f("end"),
+    isLive:   true,
+  };
 }
 
-function CalendarScreen() {
-  const [date, setDate] = useState(new Date(2026, 4, 13));
-  const [selEvent, setSelEvent] = useState(0);
+function CalendarScreen({ me }) {
+  const liveAvail = window.PARVANE.available;
+  const liveCalendar = liveAvail ? window.useLiveCalendar() : null;
+
+  const [date, setDate]     = useState(new Date());
+  const [selEvent, setSelEvent] = useState(null);
   const [detail, setDetail] = useState(false);
+
+  // Строим eventMap из живых событий: { "YYYY-MM-DD": [event, ...] }
+  const liveEventMap = {};
+  if (liveAvail && liveCalendar) {
+    liveCalendar.events.forEach((ev) => {
+      const start = ev.fields["start"] && ev.fields["start"].value;
+      if (!start) return;
+      const ds = new Date(parseInt(start, 10) * 1000).toISOString().slice(0, 10);
+      if (!liveEventMap[ds]) liveEventMap[ds] = [];
+      liveEventMap[ds].push(liveEvToDisplay(ev));
+    });
+  }
+
+  // Комбинированный eventMap: живые (если есть) или моки
+  const eventMap = (liveAvail && Object.keys(liveEventMap).length > 0)
+    ? liveEventMap
+    : MONO_DATA.events;
+
+  const getEventsForDate = (d) => {
+    const ds = fmtDate(d);
+    return eventMap[ds] || [];
+  };
+
+  const selEvents  = getEventsForDate(date);
+  const selEventObj = selEvent !== null ? selEvents[selEvent] : null;
+
+  const handleDelete = async (ev) => {
+    if (!liveAvail || !ev?.isLive) return;
+    if (!confirm("Удалить событие «" + ev.title + "»?")) return;
+    try {
+      await liveCalendar.remove(ev.event_id);
+      setSelEvent(null);
+      setDetail(false);
+    } catch (e) {
+      console.error("[cal] delete:", e);
+    }
+  };
 
   return (
     <div className="cal-screen">
       <div className="cal-left col">
-        <MiniCalendar selected={date} onSelect={setDate} />
-        <EventsList
+        <MiniCalendarLive selected={date} onSelect={setDate} eventMap={eventMap} />
+        <EventsListLive
           date={date}
+          events={selEvents}
           selectedIdx={selEvent}
           onSelect={setSelEvent}
           onOpen={() => setDetail(true)}
-          onAdd={() => setDetail("add")}
+          onAdd={() => { setDetail("add"); setSelEvent(null); }}
         />
         <DeadlinesPanel />
       </div>
       <div className="cal-mid col">
         <SchedulePanel date={date} />
-        <DayPulse date={date} />
+        <DayPulse date={date} eventMap={eventMap} />
       </div>
       <div className="cal-right col">
         {detail === "add"
-          ? <AddEventPanel onClose={() => setDetail(false)} date={date} />
-          : <EventDetails date={date} idx={selEvent} onClose={() => setDetail(false)} />}
-        <WeekAhead today={date} onPick={setDate} />
+          ? <AddEventPanel
+              onClose={() => setDetail(false)}
+              date={date}
+              liveCalendar={liveCalendar}
+            />
+          : <EventDetailsLive
+              date={date}
+              event={selEventObj}
+              idx={selEvent}
+              total={selEvents.length}
+              onClose={() => setDetail(false)}
+              onDelete={() => handleDelete(selEventObj)}
+            />}
+        <WeekAhead today={date} onPick={setDate} eventMap={eventMap} />
       </div>
     </div>
   );
 }
 
-function AddEventPanel({ onClose, date }) {
+function MiniCalendarLive({ selected, onSelect, eventMap }) {
+  const year  = selected.getFullYear();
+  const month = selected.getMonth();
+  const first = new Date(year, month, 1);
+  const days  = new Date(year, month + 1, 0).getDate();
+  let lead = (first.getDay() + 6) % 7;
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const today = new Date();
+
   return (
-    <Panel title="ADD EVENT" sub="new" hint="[Enter] submit  [Esc] cancel" focused>
-      <div className="form-row"><label>Title</label><input className="form-input" defaultValue="" placeholder="..." /></div>
-      <div className="form-row"><label>Date</label><input className="form-input" defaultValue={fmtDate(date)} /></div>
-      <div className="form-row"><label>Time (HH:MM)</label><input className="form-input" defaultValue="18:00" /></div>
-      <div className="form-row"><label>Location</label><input className="form-input" defaultValue="" placeholder="@ ..." /></div>
-      <div className="form-row"><label>Notes</label>
-        <textarea className="form-input" rows="3" defaultValue="" />
-      </div>
-      <div className="form-row"><label>Category</label>
-        <span className="v">
-          {["work","personal","deadline","system"].map(c => (
-            <span key={c} style={{ marginRight: 10 }}><Dot color={catColor(c)} /> {c}</span>
-          ))}
-        </span>
-      </div>
-      <div className="hr" />
-      <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn primary">[Enter] submit</button>
-        <button className="btn" onClick={onClose}>[Esc] cancel</button>
+    <Panel title={`${MONTHS_FULL[month].toUpperCase()} ${year}`} sub={MONTHS_FULL[month] + " " + year} className="mini-cal">
+      <div className="cal-grid">
+        {WEEK_HEAD.map((w) => <div key={w} className="cal-cell head muted">{w}</div>)}
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} className="cal-cell empty" />;
+          const date  = new Date(year, month, d);
+          const ds    = fmtDate(date);
+          const has   = (eventMap[ds] || []).length > 0;
+          const isSel = date.toDateString() === selected.toDateString();
+          const isToday = date.toDateString() === today.toDateString();
+          return (
+            <button
+              key={i}
+              className={"cal-cell" + (isSel ? " sel" : "") + (isToday ? " today" : "") + (has ? " has" : "")}
+              onClick={() => onSelect(date)}
+            >
+              {d}
+            </button>
+          );
+        })}
       </div>
     </Panel>
   );
 }
 
-function WeekAhead({ today, onPick }) {
+function EventsListLive({ date, events, selectedIdx, onSelect, onOpen, onAdd }) {
+  const day = date.getDate();
+  const m   = MONTHS_FULL[date.getMonth()].slice(0, 3);
+  return (
+    <Panel
+      title={`СОБЫТИЯ: ${day} ${m}`}
+      sub={events.length ? `${events.length} событий` : ""}
+      hint="↑↓ select  [d] del  [a] add"
+    >
+      {events.length === 0 ? (
+        <div className="muted" style={{ paddingTop: 4 }}>Нет событий</div>
+      ) : (
+        <div className="rowlist">
+          {events.map((e, i) => (
+            <div
+              key={e.event_id || i}
+              className={"row" + (i === selectedIdx ? " selected" : "")}
+              onClick={() => onSelect(i)}
+              onDoubleClick={() => onOpen(i)}
+            >
+              <span className="marker">▶</span>
+              <span className="strong" style={{ width: 56 }}>{e.time}</span>
+              <Dot color={catColor(e.cat)} />
+              <span>{e.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="hr" />
+      <button className="btn" onClick={onAdd} style={{ marginTop: 2 }}>
+        <span className="kbd">[a]</span> добавить
+      </button>
+    </Panel>
+  );
+}
+
+function EventDetailsLive({ date, event, idx, total, onClose, onDelete }) {
+  if (!event) return (
+    <Panel title="СОБЫТИЕ" sub="—">
+      <div className="muted">Нет выбранного события</div>
+    </Panel>
+  );
+  const ds = fmtDate(date);
+  return (
+    <Panel title="СОБЫТИЕ" sub={`#${(idx||0)+1} из ${total}`} hint="[d] удалить  [Esc] закрыть" focused>
+      <div className="form-row"><label>Название</label><span className="v">{event.title}</span></div>
+      <div className="form-row"><label>Дата</label><span className="v">{ds}</span></div>
+      <div className="form-row"><label>Время</label><span className="v">{event.time}</span></div>
+      <div className="form-row"><label>Категория</label>
+        <span className="v"><Dot color={catColor(event.cat)} /> {event.cat}</span>
+      </div>
+      {event.location && <div className="form-row"><label>Место</label><span className="v">{event.location}</span></div>}
+      <div className="hr" />
+      <div style={{ display: "flex", gap: 8 }}>
+        {event.isLive && <button className="btn danger" onClick={onDelete}>[d] удалить</button>}
+        <button className="btn" onClick={onClose}>[Esc] закрыть</button>
+      </div>
+    </Panel>
+  );
+}
+
+function AddEventPanel({ onClose, date, liveCalendar }) {
+  const [title, setTitle]   = useState("");
+  const [time, setTime]     = useState("18:00");
+  const [loc, setLoc]       = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError]   = useState(null);
+
+  const submit = async () => {
+    const t = title.trim();
+    if (!t) { setError("введите название"); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      if (liveCalendar) {
+        // Вычисляем unix timestamp из выбранной даты + времени
+        const [hh, mm] = time.split(":").map(Number);
+        const startDate = new Date(date);
+        startDate.setHours(hh, mm, 0, 0);
+        const startTs = Math.floor(startDate.getTime() / 1000);
+        const endTs   = startTs + 3600; // 1 час по умолчанию
+        await liveCalendar.create(t, startTs, endTs, loc || undefined);
+      }
+      onClose();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Panel title="НОВОЕ СОБЫТИЕ" sub="create" hint="[Enter] создать  [Esc] отмена" focused>
+      <div className="form-row"><label>Название</label>
+        <input className="form-input" value={title} onChange={(e) => setTitle(e.target.value)}
+          placeholder="…" onKeyDown={(e) => e.key === "Enter" && submit()} autoFocus />
+      </div>
+      <div className="form-row"><label>Дата</label><span className="v">{fmtDate(date)}</span></div>
+      <div className="form-row"><label>Время</label>
+        <input className="form-input" value={time} onChange={(e) => setTime(e.target.value)} placeholder="ЧЧ:ММ" />
+      </div>
+      <div className="form-row"><label>Место</label>
+        <input className="form-input" value={loc} onChange={(e) => setLoc(e.target.value)} placeholder="@ …" />
+      </div>
+      {error && <div style={{ color: "var(--red)", fontSize: 12 }}>✗ {error}</div>}
+      <div className="hr" />
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn primary" onClick={submit} disabled={saving}>{saving ? "создаю…" : "[Enter] создать"}</button>
+        <button className="btn" onClick={onClose}>[Esc] отмена</button>
+      </div>
+    </Panel>
+  );
+}
+
+function WeekAhead({ today, onPick, eventMap }) {
+  const evMap = eventMap || MONO_DATA.events;
   const days = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(today);
@@ -269,11 +360,11 @@ function WeekAhead({ today, onPick }) {
     days.push(d);
   }
   return (
-    <Panel title="WEEK AHEAD" sub="7 days">
+    <Panel title="НЕДЕЛЯ" sub="7 дней">
       <div className="week-ahead">
         {days.map((d, i) => {
           const dk = WEEK_NAMES[d.getDay()];
-          const ev = (MONO_DATA.events[fmtDate(d)] || []);
+          const ev = (evMap[fmtDate(d)] || []);
           const sc = MONO_DATA.schedule[dk] || [];
           const totalDots = ev.length + sc.length;
           return (

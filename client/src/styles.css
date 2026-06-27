@@ -361,3 +361,36 @@ main {
   50%     { box-shadow: 0 0 0 14px rgba(251,73,52,0.18); }
 }
 .fire-modal { animation: pulse-red 1.6s ease-in-out infinite; }
+
+/* ── header user chip ─────────────────────────────────────────────────────── */
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+}
+
+/* ── login screen ─────────────────────────────────────────────────────────── */
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg);
+}
+.login-box {
+  width: 560px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  padding: 32px 40px;
+}
+.login-logo { font-size: 6px; line-height: 1.2; white-space: pre; }
+.login-title {
+  text-align: center;
+  color: var(--muted);
+  letter-spacing: 0.3em;
+  font-size: 11px;
+  margin-bottom: 24px;
+}
+.login-form .login-row { grid-template-columns: 60px 1fr; }
+.login-error { font-size: 12px; }

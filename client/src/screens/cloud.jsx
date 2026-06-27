@@ -1,16 +1,48 @@
-// CLOUD screen — distributed personal storage.
+// CLOUD screen — реальные файлы через cloud-шард.
 
-function CloudScreen() {
+function fmtBytes(n) {
+  if (n === undefined || n === null) return "—";
+  if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GB";
+  if (n >= 1048576)    return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024)       return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
+
+function fmtTs(ts) {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" });
+}
+
+function CloudScreen({ me }) {
+  const liveAvail = window.PARVANE.available;
+  const { files, loading, refresh } = liveAvail
+    ? window.useLiveFiles()
+    : { files: [], loading: false, refresh: () => {} };
+
   const c = MONO_DATA.cloud;
-  const [sel, setSel] = useState(c.sel);
-  const [view, setView] = useState("list"); // list | tree
+  const [sel, setSel] = useState(null);
+
+  // Конвертируем живые файлы в формат, удобный для таблицы
+  const liveEntries = files.map((f) => ({
+    file_id:  f.file_id,
+    name:     f.filename,
+    size:     fmtBytes(f.size_bytes),
+    mtime:    fmtTs(f.created_at),
+    mime:     f.mime_type,
+    type:     "file",
+    isLive:   true,
+  }));
+
+  const entries = (liveAvail && liveEntries.length > 0) ? liveEntries : c.entries;
+  const selFile = sel !== null ? entries[sel] : null;
 
   return (
     <div className="cloud-screen">
+      {/* LEFT: узлы и статистика */}
       <div className="cloud-left col">
-        <Panel title="PINNED" sub={c.pinned.length + " paths"}>
+        <Panel title="ЗАКРЕПЛЕНО" sub={c.pinned.length + " путей"}>
           <div className="rowlist">
-            {c.pinned.map(p => (
+            {c.pinned.map((p) => (
               <div key={p.name} className="row">
                 <span className="marker">▌</span>
                 <span style={{ color: "var(--orange)" }}>📌</span>
@@ -21,9 +53,9 @@ function CloudScreen() {
           </div>
         </Panel>
 
-        <Panel title="NODES" sub="4 · shards 3014">
+        <Panel title="УЗЛЫ" sub="шарды">
           <div className="rowlist">
-            {c.nodes.map(n => (
+            {c.nodes.map((n) => (
               <div key={n.id} className="row" style={{ display: "block", padding: "4px 0 4px 8px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className="marker">▌</span>
@@ -34,10 +66,7 @@ function CloudScreen() {
                 </div>
                 <div className="progress" style={{ marginTop: 4, paddingLeft: 24, width: "100%" }}>
                   <span className="bar" style={{ width: "calc(100% - 28px)" }}>
-                    <i style={{
-                      width: (n.used / n.total * 100) + "%",
-                      background: n.status === "online" ? "var(--green)" : "var(--muted)"
-                    }} />
+                    <i style={{ width: (n.used / n.total * 100) + "%", background: n.status === "online" ? "var(--green)" : "var(--muted)" }} />
                   </span>
                 </div>
               </div>
@@ -45,119 +74,82 @@ function CloudScreen() {
           </div>
         </Panel>
 
-        <Panel title="USAGE" sub="distributed pool">
+        <Panel title="ОБЪЁМ" sub="распределённый пул">
           <div className="usage-stats">
-            <div className="usage-cell">
-              <div className="muted">used</div>
-              <div className="strong">{c.stats.used} GB</div>
-            </div>
-            <div className="usage-cell">
-              <div className="muted">total</div>
-              <div className="strong">{c.stats.total} GB</div>
-            </div>
-            <div className="usage-cell">
-              <div className="muted">shards</div>
-              <div className="strong" style={{ color: "var(--green)" }}>{c.stats.healthy}/{c.stats.shards}</div>
-            </div>
-            <div className="usage-cell">
-              <div className="muted">snapshots</div>
-              <div className="strong">{c.stats.snapshots}</div>
-            </div>
+            <div className="usage-cell"><div className="muted">used</div><div className="strong">{c.stats.used} GB</div></div>
+            <div className="usage-cell"><div className="muted">total</div><div className="strong">{c.stats.total} GB</div></div>
+            <div className="usage-cell"><div className="muted">shards</div><div className="strong" style={{ color: "var(--green)" }}>{c.stats.healthy}/{c.stats.shards}</div></div>
+            <div className="usage-cell"><div className="muted">файлов</div><div className="strong">{loading ? "…" : liveEntries.length || c.stats.snapshots}</div></div>
           </div>
           <div className="hr" />
           <UsageRing used={c.stats.used} total={c.stats.total} />
         </Panel>
       </div>
 
+      {/* CENTER: список файлов */}
       <div className="cloud-center col">
         <Panel
-          title="FILES"
-          sub={c.cwd}
-          hint="↑↓ select  [Enter] open  [Space] mark  [d] delete  [/] search"
+          title="ФАЙЛЫ"
+          sub={liveAvail ? `cloud-шард · ${liveEntries.length} файлов` : c.cwd}
+          hint="↑↓ select  [Enter] open  [d] delete  [/] search"
           focused
         >
           <div className="bread">
-            {c.bread.map((b, i) => (
-              <span key={i} className="bread-item">
-                <span style={{ color: i === c.bread.length - 1 ? "var(--yellow)" : "var(--muted)" }}>{b}</span>
-                {i < c.bread.length - 1 && <span className="muted"> / </span>}
-              </span>
-            ))}
+            <span style={{ color: "var(--yellow)" }}>~/cloud</span>
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <button className={"filter-pill" + (view === "list" ? " on" : "")} onClick={() => setView("list")}>list</button>
-              <button className={"filter-pill" + (view === "tree" ? " on" : "")} onClick={() => setView("tree")}>tree</button>
-              <button className="filter-pill">[/] search</button>
+              <button className="btn" onClick={refresh} disabled={loading}>[r] {loading ? "…" : "обновить"}</button>
+              <button className="filter-pill">[/] поиск</button>
             </span>
           </div>
           <div className="hr" />
           <div className="file-table">
             <div className="file-row head">
-              <span className="col-name muted">name</span>
-              <span className="col-size muted">size</span>
-              <span className="col-mtime muted">modified</span>
-              <span className="col-rep muted">replicas</span>
-              <span className="col-flag muted">flags</span>
+              <span className="col-name muted">имя</span>
+              <span className="col-size muted">размер</span>
+              <span className="col-mtime muted">создан</span>
+              <span className="col-flag muted">тип</span>
             </div>
-            {c.entries.map((e, i) => (
+            {entries.length === 0 && (
+              <div className="muted" style={{ padding: "12px 8px", fontSize: 12 }}>
+                {loading ? "загрузка…" : "нет файлов"}
+              </div>
+            )}
+            {entries.map((e, i) => (
               <button
-                key={e.name}
-                className={"file-row" + (i === sel ? " sel" : "") + (e.type === "dir" ? " is-dir" : "")}
+                key={e.file_id || e.name}
+                className={"file-row" + (i === sel ? " sel" : "")}
                 onClick={() => setSel(i)}
               >
                 <span className="col-name">
-                  <span className="file-glyph">
-                    {e.name === ".." ? "↩"
-                      : e.type === "dir" ? "▸"
-                      : e.enc ? "🔒"
-                      : fileGlyph(e.name)}
-                  </span>
-                  <span className={e.type === "dir" ? "strong" : ""} style={{
-                    color: e.type === "dir" ? "var(--yellow)"
-                      : e.enc ? "var(--red)"
-                      : "var(--text)"
-                  }}>{e.name}</span>
+                  <span className="file-glyph">{fileGlyph(e.name)}</span>
+                  <span style={{ color: "var(--text)" }}>{e.name}</span>
                 </span>
-                <span className="col-size muted">{e.size || ""}</span>
-                <span className="col-mtime muted">{e.mtime || ""}</span>
-                <span className="col-rep">
-                  {e.replicas ? (
-                    <span style={{ color: e.replicas >= 3 ? "var(--green)" : e.replicas === 2 ? "var(--yellow)" : "var(--red)" }}>
-                      {"●".repeat(e.replicas) + "○".repeat(Math.max(0, 3 - e.replicas))}
-                    </span>
-                  ) : ""}
-                </span>
-                <span className="col-flag muted">
-                  {e.enc && <span style={{ color: "var(--red)" }}>enc</span>}
-                  {e.warn && <span style={{ color: "var(--yellow)", marginLeft: 6 }}>⚠ {e.warn}</span>}
-                </span>
+                <span className="col-size muted">{e.size || "—"}</span>
+                <span className="col-mtime muted">{e.mtime || "—"}</span>
+                <span className="col-flag muted" style={{ fontSize: 10 }}>{e.mime || e.type || ""}</span>
               </button>
             ))}
           </div>
         </Panel>
 
-        <Panel
-          title="JOBS"
-          sub={c.jobs.filter(j => j.state === "running").length + " running"}
-          hint="[Enter] inspect  [r] retry  [c] cancel"
-        >
+        <Panel title="ЗАДАЧИ" sub={c.jobs.filter((j) => j.state === "running").length + " активных"}>
           <div className="job-list">
-            {c.jobs.map(j => (
+            {c.jobs.map((j) => (
               <div key={j.id} className="job-row">
                 <span className={"job-state " + j.state}>{j.state.toUpperCase().padEnd(7, " ")}</span>
                 <span className="muted" style={{ width: 80 }}>{j.id}</span>
                 <span className="strong job-what">{j.what}</span>
                 <span className="job-pct" style={{ color: j.state === "done" ? "var(--green)" : j.state === "running" ? "var(--yellow)" : "var(--muted)" }}>{j.pct}%</span>
-                <span className="job-bar">
-                  <i className={"job-bar-fill state-" + j.state} style={{ width: j.pct + "%" }} />
-                </span>
+                <span className="job-bar"><i className={"job-bar-fill state-" + j.state} style={{ width: j.pct + "%" }} /></span>
               </div>
             ))}
           </div>
         </Panel>
       </div>
 
+      {/* RIGHT: детали файла */}
       <div className="cloud-right col">
-        <FileDetail file={c.entries[sel]} />
+        <FileDetail file={selFile} />
         <SnapshotPanel />
         <PolicyPanel />
       </div>
@@ -202,43 +194,39 @@ function UsageRing({ used, total }) {
 }
 
 function FileDetail({ file }) {
-  if (!file) return null;
+  if (!file) return (
+    <Panel title="ФАЙЛ" sub="не выбран" focused>
+      <div className="muted">выберите файл в списке</div>
+    </Panel>
+  );
   return (
-    <Panel title={file.type === "dir" ? "DIRECTORY" : "FILE"} sub={file.name} focused>
-      <div className="form-row"><label>name</label><span className="v strong">{file.name}</span></div>
-      <div className="form-row"><label>type</label><span className="v">{file.type}</span></div>
-      <div className="form-row"><label>size</label><span className="v">{file.size}</span></div>
-      <div className="form-row"><label>modified</label><span className="v">{file.mtime}</span></div>
-      <div className="form-row"><label>replicas</label>
-        <span className="v">
-          <span style={{ color: (file.replicas || 0) >= 3 ? "var(--green)" : "var(--yellow)" }}>
-            {file.replicas || 0}
-          </span> / 3
-          {file.warn && <span style={{ color: "var(--yellow)", marginLeft: 8 }}>⚠ {file.warn}</span>}
-        </span>
-      </div>
-      <div className="form-row"><label>encryption</label>
-        <span className="v">{file.enc ? <span style={{ color: "var(--red)" }}>● age, identity v1</span> : <span className="muted">○ none</span>}</span>
-      </div>
-      <div className="form-row"><label>integrity</label><span className="v"><span style={{ color: "var(--green)" }}>● sha256 ok</span></span></div>
-      <div className="form-row"><label>last access</label><span className="v muted">13/05 22:11 from MONOVIEW</span></div>
-      <div className="hr" />
-      {file.type === "file" && (
-        <div className="file-preview">
-          <pre className="ascii dim" style={{ fontSize: 10, lineHeight: 1.1 }}>
-{`▒▒░░  ▓▒░  ░░░░░ ▒▓
-▓▓▒░  ░░▓  ▒░▓ ░ ░░
-░▒▓▒  ▒▒░  ░▓░▒░▒ ░
-▒▒░░  ░░░  ░ ▒ ░░░░`}
-          </pre>
+    <Panel title="ФАЙЛ" sub={file.name} focused>
+      <div className="form-row"><label>имя</label><span className="v strong">{file.name}</span></div>
+      <div className="form-row"><label>размер</label><span className="v">{file.size || "—"}</span></div>
+      <div className="form-row"><label>создан</label><span className="v">{file.mtime || "—"}</span></div>
+      {file.mime && <div className="form-row"><label>MIME</label><span className="v muted">{file.mime}</span></div>}
+      {file.file_id && (
+        <div className="form-row">
+          <label>ID</label>
+          <span className="v muted" style={{ fontSize: 10, wordBreak: "break-all" }}>{file.file_id}</span>
         </div>
       )}
+      {!file.isLive && (
+        <>
+          <div className="form-row"><label>replicas</label>
+            <span className="v">
+              <span style={{ color: (file.replicas || 0) >= 3 ? "var(--green)" : "var(--yellow)" }}>{file.replicas || 0}</span> / 3
+            </span>
+          </div>
+          <div className="form-row"><label>enc</label>
+            <span className="v">{file.enc ? <span style={{ color: "var(--red)" }}>● age</span> : <span className="muted">○ нет</span>}</span>
+          </div>
+        </>
+      )}
+      <div className="hr" />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <button className="btn">[Enter] open</button>
-        <button className="btn">[r] rename</button>
-        <button className="btn">[c] copy</button>
-        <button className="btn">[s] share</button>
-        <button className="btn danger">[d] delete</button>
+        <button className="btn">[Enter] открыть</button>
+        <button className="btn danger">[d] удалить</button>
       </div>
     </Panel>
   );
