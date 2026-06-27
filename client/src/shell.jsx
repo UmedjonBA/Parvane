@@ -3,6 +3,8 @@
 function Shell({ active, onTab, footer, tweaks, children }) {
   const { time, date } = useClock();
   const [pulse, setPulse] = useState({ up: false, down: false });
+  // null = веб/моки (показываем ONLINE как раньше); bool = реальный статус NATS.
+  const liveOnline = window.useLiveStatus();
 
   // tiny pulse animation on hub arrows
   useEffect(() => {
@@ -18,7 +20,7 @@ function Shell({ active, onTab, footer, tweaks, children }) {
       <div className="header">
         <MonolithLogo color={tweaks.dark ? "var(--orange)" : "var(--orange)"} />
         <div className="hud">
-          <HubStatus online up={pulse.up} down={pulse.down} />
+          <HubStatus online={liveOnline !== false} up={pulse.up} down={pulse.down} />
           <ClockBox time={time} date={date} />
         </div>
       </div>

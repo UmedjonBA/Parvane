@@ -1,9 +1,40 @@
 // MESSENGER screen.
 
+// Кого логиним и с кем ведём живой чат через реальный бэкенд.
+const LIVE_ME = "app@local";
+const LIVE_PEER = "bob@local";
+
 function MessengerScreen() {
-  const chats = MONO_DATA.chats;
-  const contacts = MONO_DATA.contacts;
-  const [sel, setSel] = useState("arseny");
+  // Живой чат через messenger-шард (в браузере без Tauri — пустой/неактивный).
+  const liveAvail = window.PARVANE.available;
+  const live = window.useLiveChat(LIVE_ME, LIVE_PEER);
+
+  // Подмешиваем живой контакт и чат поверх моков, не ломая остальной экран.
+  const contacts = liveAvail
+    ? {
+        ...MONO_DATA.contacts,
+        live: { id: "live", name: LIVE_PEER, handle: "@bob · LIVE", status: "online", color: "orange", init: "BO" },
+      }
+    : MONO_DATA.contacts;
+
+  const liveChat = {
+    id: "live",
+    peer: "live",
+    pinned: true,
+    unread: 0,
+    lastTime: live.ready ? "live" : "…",
+    preview: live.messages.length ? live.messages.at(-1).text : "живой чат через бэкенд Parvane",
+    isLive: true,
+    messages: live.messages.map((m) => ({
+      from: m.from === "me" ? "me" : "live",
+      t: m.t,
+      text: m.text,
+      read: true,
+    })),
+  };
+
+  const chats = liveAvail ? [liveChat, ...MONO_DATA.chats] : MONO_DATA.chats;
+  const [sel, setSel] = useState(liveAvail ? "live" : "arseny");
   const [draft, setDraft] = useState("");
   const [filter, setFilter] = useState("all"); // all | unread | pinned | groups | secret
 
@@ -126,7 +157,12 @@ function MessengerScreen() {
           <div className="hr" />
           <ConversationBody chat={chat} contacts={contacts} />
           <div className="hr" />
-          <Composer draft={draft} setDraft={setDraft} secret={chat.secret} />
+          <Composer
+            draft={draft}
+            setDraft={setDraft}
+            secret={chat.secret}
+            onSend={chat.isLive ? live.send : null}
+          />
         </Panel>
       </div>
 
@@ -201,22 +237,30 @@ function ConversationBody({ chat, contacts }) {
   );
 }
 
-function Composer({ draft, setDraft, secret }) {
+function Composer({ draft, setDraft, secret, onSend }) {
   if (secret) return null;
+  const live = !!onSend;
+  const fire = () => {
+    if (onSend && draft.trim()) {
+      onSend(draft);
+      setDraft("");
+    }
+  };
   return (
     <div className="composer">
-      <span className="composer-prompt" style={{ color: "var(--orange)" }}>{">"}</span>
+      <span className="composer-prompt" style={{ color: live ? "var(--green)" : "var(--orange)" }}>{">"}</span>
       <input
         className="form-input composer-input"
-        placeholder="напиши сообщение..."
+        placeholder={live ? "сообщение уйдёт через messenger-шард…" : "напиши сообщение..."}
         value={draft}
         onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); fire(); } }}
       />
       <div className="composer-tools">
         <button className="btn">[a] attach</button>
         <button className="btn">[v] voice</button>
         <button className="btn">[e] emoji</button>
-        <button className="btn primary">[⏎] send</button>
+        <button className="btn primary" onClick={fire}>[⏎] send</button>
       </div>
     </div>
   );
