@@ -152,7 +152,7 @@ Parvane/
 | `sync_messages(since)` | новые сообщения с момента last_seen |
 | `list_notes` | все заметки пользователя (NoteSnapshot) |
 | `create_note(title)` | создать заметку, возвращает note_id |
-| `save_note(note_id, title, body)` | сохранить (RGA diff: delete old + insert new) |
+| `save_note(note_id, title, body)` | сохранить (local-first: одна op `Replace`, шард пересобирает RGA) |
 | `delete_note(note_id)` | удалить заметку |
 | `list_events` | все события календаря (CalEventSnapshot) |
 | `create_event(fields)` | создать событие (title, start, end, location?) |
@@ -239,9 +239,9 @@ cargo tauri build --no-bundle
 | `file.download.request` | `DownloadRequest` → чанки `DownloadResponse` | request/reply |
 | `file.list.request` | `FileListPayload` → `FileListResponse` | request/reply |
 | `note.create` / `note.update` / `note.delete` | `NoteCreate/Update/DeletePayload` | publish |
-| `note.sync.request` | `{}` → `NoteSyncResponsePayload` | request/reply |
+| `note.sync.request` | `NoteSyncRequestPayload { known }` → `NoteSyncResponsePayload` (diff) | request/reply |
 | `cal.event.create` / `cal.event.update` / `cal.event.delete` | `CalSetPayload` / `CalDeletePayload` | publish |
-| `cal.sync.request` | `{}` → `CalSyncResponsePayload` | request/reply |
+| `cal.sync.request` | `CalSyncRequestPayload { known }` → `CalSyncResponsePayload` (diff) | request/reply |
 | `call.signal` | `CallSignalPayload` (invite/answer/reject/ice/hangup) | publish |
 | `call.user.<id>` | `CallSignal` — релей в инбокс получателя | publish (от шарда) |
 | `call.history.request` | `{}` → `CallHistoryResponse` | request/reply |
@@ -292,10 +292,24 @@ HS256, TTL 24 часа.
 
 ## Офлайн-модель и синхронизация
 
-- **messenger**: `last_seen_id` → шард возвращает сообщения с `id > last_seen_id`
-  (UUID v7 лексикографически сортируем по времени).
-- **notes / calendar**: sync отдаёт полное состояние. Корректно, так как merge у
-  CRDT идемпотентен.
+Клиент **local-first**: Rust-мост держит на диске персистентный кеш каждого
+домена (`app_data_dir/{notes,events,messages}-<user>.json`), поднимает его при
+логине и переживает рестарт приложения. С сервером синхронизируется только
+**расхождение**, а не весь набор данных. Новое устройство = пустого кеша нет →
+один полный синк, дальше только дельта.
+
+- **messenger** (append-only): курсор = max `id` в кеше → шард возвращает
+  сообщения с `id > cursor` (UUID v7 лексикографически сортируем по времени).
+  Новое дописывается с дедупом по `id`.
+- **notes / calendar** (изменяемые): diff по **контрольным суммам**. Клиент шлёт
+  манифест `{id → checksum}` (FNV-1a, считается одинаково на шарде и в клиенте —
+  `parvane_types::content_checksum` / `event_checksum`). Шард возвращает только
+  заметки/события, чья сумма разошлась или которых клиент не знает, плюс
+  tombstone'ы удалённых. Неизменившееся не передаётся вовсе.
+
+Сохранение заметки — одна операция `NoteOp::Replace { text }`: клиент источник
+истины для тела, шард атомарно сносит и пересобирает RGA-узлы. Это делает
+сохранение детерминированным независимо от состояния клиентского кеша.
 
 ---
 

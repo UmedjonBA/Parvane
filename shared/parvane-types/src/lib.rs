@@ -274,6 +274,23 @@ pub enum NoteOp {
     },
     /// Пометить узел `target` удалённым (tombstone).
     Delete { target: OpId },
+    /// Заменить весь текст заметки целиком. Клиент — источник истины для тела
+    /// (local-first): шард сносит все существующие RGA-узлы и пересобирает их
+    /// из `text`. Делает сохранение детерминированным независимо от того, что
+    /// у клиента в кеше, и исключает задвоение текста.
+    Replace { text: String },
+}
+
+/// Стабильная контрольная сумма содержимого заметки (FNV-1a, 64 бита).
+/// Считается одинаково на шарде и в клиенте — основа diff-синхронизации: клиент
+/// шлёт манифест `{id → checksum}`, шард возвращает только то, что разошлось.
+pub fn content_checksum(title: &str, body: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in title.bytes().chain(std::iter::once(0u8)).chain(body.bytes()) {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// Узел RGA как он хранится/передаётся (состояние, не операция).
@@ -295,6 +312,9 @@ pub struct NoteCreatePayload {
 pub struct NoteUpdatePayload {
     pub note_id: Uuid,
     pub ops: Vec<NoteOp>,
+    /// Новый заголовок, если изменился. `None` — заголовок не трогаем.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,9 +322,14 @@ pub struct NoteDeletePayload {
     pub note_id: Uuid,
 }
 
-/// Пустой payload — sync возвращает все заметки пользователя.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NoteSyncRequestPayload {}
+/// Манифест клиента: `note_id → checksum` того, что уже есть локально.
+/// Пустой (`known` отсутствует/пуст) — полная синхронизация (новое устройство).
+/// Иначе шард вернёт только разошедшиеся заметки и tombstone'ы удалённых.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NoteSyncRequestPayload {
+    #[serde(default)]
+    pub known: std::collections::BTreeMap<String, u64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSyncResponsePayload {
@@ -320,6 +345,10 @@ pub struct NoteSnapshot {
     pub text: String,
     pub elements: Vec<NoteElement>,
     pub deleted: bool,
+    /// Контрольная сумма `content_checksum(title, text)`. `0` для старых
+    /// снапшотов без поля — клиент пересчитает сам.
+    #[serde(default)]
+    pub checksum: u64,
 }
 
 // ── calendar CRDT (per-field LWW-Map) ─────────────────────────────────────────
@@ -362,8 +391,12 @@ pub struct CalDeletePayload {
     pub stamp: Stamp,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalSyncRequestPayload {}
+/// Манифест клиента для diff-синхронизации календаря (как у заметок).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CalSyncRequestPayload {
+    #[serde(default)]
+    pub known: std::collections::BTreeMap<String, u64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalSyncResponsePayload {
@@ -377,6 +410,30 @@ pub struct CalEventSnapshot {
     pub fields: std::collections::BTreeMap<String, LwwField>,
     pub deleted: bool,
     pub deleted_stamp: Option<Stamp>,
+    /// `event_checksum(...)`. `0` для старых снапшотов — пересчитывается.
+    #[serde(default)]
+    pub checksum: u64,
+}
+
+/// Стабильная контрольная сумма наблюдаемого состояния события (поля + штампы +
+/// флаг удаления). Считается одинаково на шарде и в клиенте.
+pub fn event_checksum(ev: &CalEventSnapshot) -> u64 {
+    let mut buf = String::new();
+    buf.push_str(if ev.deleted { "D1" } else { "D0" });
+    if let Some(s) = &ev.deleted_stamp {
+        buf.push_str(&format!(";{}:{}", s.ts, s.site));
+    }
+    for (k, f) in &ev.fields {
+        buf.push('\u{1}');
+        buf.push_str(k);
+        buf.push('\u{2}');
+        buf.push_str(&f.value);
+        buf.push('\u{3}');
+        buf.push_str(&f.stamp.ts.to_string());
+        buf.push(':');
+        buf.push_str(&f.stamp.site);
+    }
+    content_checksum("", &buf)
 }
 
 // ── звонки (WebRTC-сигналинг) ─────────────────────────────────────────────────

@@ -5,8 +5,8 @@ use async_nats::Client;
 use futures::StreamExt;
 use lww::CalEvent;
 use parvane_types::{
-    CalDeletePayload, CalEventSnapshot, CalSetPayload, CalSyncResponsePayload, LwwField,
-    ParvaneEvent, Stamp, VerifyRequest, VerifyResponse,
+    event_checksum, CalDeletePayload, CalEventSnapshot, CalSetPayload, CalSyncRequestPayload,
+    CalSyncResponsePayload, LwwField, ParvaneEvent, Stamp, VerifyRequest, VerifyResponse,
     topics::{
         CAL_CREATE, CAL_DELETE, CAL_SYNC_REQUEST, CAL_SYNC_RESPONSE, CAL_UPDATE, IDENTITY_VERIFY,
     },
@@ -207,9 +207,10 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     };
 
     let result = async {
-        let event: ParvaneEvent<serde_json::Value> =
+        let event: ParvaneEvent<CalSyncRequestPayload> =
             serde_json::from_slice(&msg.payload).context("неверный JSON в cal.sync.request")?;
         let user = verify_token(nc, &event.token).await?;
+        let known = &event.payload.known;
 
         let ids: Vec<(String,)> =
             sqlx::query_as("SELECT id FROM cal_events WHERE owner = ? ORDER BY created_at")
@@ -217,15 +218,28 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                 .fetch_all(pool)
                 .await?;
 
+        // Diff по контрольным суммам: отдаём только новое/изменённое и
+        // tombstone'ы удалённых, о которых клиент ещё знает.
         let mut events = Vec::new();
         for (id,) in ids {
             let ev = load_event(pool, &id).await?;
-            events.push(CalEventSnapshot {
+            let mut snap = CalEventSnapshot {
                 event_id: id.parse().unwrap_or_default(),
                 fields: ev.fields().clone(),
                 deleted: ev.is_deleted(),
                 deleted_stamp: ev.deleted_stamp().cloned(),
-            });
+                checksum: 0,
+            };
+            snap.checksum = event_checksum(&snap);
+            if snap.deleted {
+                if known.contains_key(&id) {
+                    events.push(snap);
+                }
+                continue;
+            }
+            if known.get(&id) != Some(&snap.checksum) {
+                events.push(snap);
+            }
         }
 
         let count = events.len();

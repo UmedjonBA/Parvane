@@ -146,7 +146,10 @@ async fn store_read_receipt(
     Ok(())
 }
 
-/// Сообщения, адресованные `user`, с `id` строго больше `last_seen_id`.
+/// Сообщения переписки `user` (как входящие `to_user = user`, так и его
+/// собственные исходящие `from_user = user`) с `id` строго больше
+/// `last_seen_id`. Без исходящих клиент после перезахода терял свои
+/// отправленные сообщения.
 /// UUID v7 лексикографически упорядочен по времени, поэтому сравнение строк
 /// эквивалентно сравнению по времени создания.
 async fn fetch_missed(
@@ -157,10 +160,11 @@ async fn fetch_missed(
     let rows: Vec<(String, String, String, Option<String>, i64)> = sqlx::query_as(
         "SELECT id, from_user, to_user, content, ts
          FROM messages
-         WHERE to_user = ? AND id > ?
+         WHERE (to_user = ? OR from_user = ?) AND id > ?
          ORDER BY id
          LIMIT 100",
     )
+    .bind(user)
     .bind(user)
     .bind(last_seen_id)
     .fetch_all(pool)
@@ -379,6 +383,28 @@ mod tests {
             .await
             .unwrap();
         assert!(missed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_missed_includes_own_sent_messages() {
+        // регрессия: после перезахода отправитель должен видеть свои исходящие
+        let pool = test_pool().await;
+        store_message(
+            &pool,
+            &send_event("00000000-0000-7000-8000-000000000001", "alice@local", "bob@local", "моё исходящее"),
+            1,
+        )
+        .await
+        .unwrap();
+
+        // alice — отправитель, должна получить своё же сообщение при ресинке
+        let missed = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000")
+            .await
+            .unwrap();
+        assert_eq!(missed.len(), 1);
+        assert_eq!(text_of(&missed[0]), "моё исходящее");
+        assert_eq!(missed[0].from, "alice@local");
+        assert_eq!(missed[0].to, "bob@local");
     }
 
     #[tokio::test]
