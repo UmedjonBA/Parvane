@@ -19,7 +19,7 @@ function CloudScreen({ me }) {
     ? window.useLiveFiles()
     : { files: [], loading: false, refresh: () => {} };
 
-  const c = MONO_DATA.cloud;
+  const c = liveAvail ? null : MONO_DATA.cloud;
   const [sel, setSel] = useState(null);
 
   // Конвертируем живые файлы в формат, удобный для таблицы
@@ -33,57 +33,72 @@ function CloudScreen({ me }) {
     isLive:   true,
   }));
 
-  const entries = (liveAvail && liveEntries.length > 0) ? liveEntries : c.entries;
+  // В Tauri — только реальные файлы; в браузере — моки
+  const entries = liveAvail ? liveEntries : (c ? c.entries : []);
   const selFile = sel !== null ? entries[sel] : null;
 
   return (
     <div className="cloud-screen">
-      {/* LEFT: узлы и статистика */}
+      {/* LEFT: информация */}
       <div className="cloud-left col">
-        <Panel title="ЗАКРЕПЛЕНО" sub={c.pinned.length + " путей"}>
-          <div className="rowlist">
-            {c.pinned.map((p) => (
-              <div key={p.name} className="row">
-                <span className="marker">▌</span>
-                <span style={{ color: "var(--orange)" }}>📌</span>
-                <span className="strong">{p.name}</span>
-                <span className="muted" style={{ marginLeft: "auto" }}>{p.note}</span>
+        {liveAvail ? (
+          <Panel title="ХРАНИЛИЩЕ" sub="cloud-шард">
+            <div className="usage-stats">
+              <div className="usage-cell"><div className="muted">файлов</div><div className="strong">{loading ? "…" : liveEntries.length}</div></div>
+            </div>
+            <div className="hr" />
+            <div className="muted" style={{ fontSize: 12 }}>
+              <Dot color="green" /> cloud-шард · SQLite
+            </div>
+            <div className="hr" />
+            <button className="btn" onClick={refresh} disabled={loading}>[r] {loading ? "…" : "обновить"}</button>
+          </Panel>
+        ) : (
+          <>
+            <Panel title="ЗАКРЕПЛЕНО" sub={c.pinned.length + " путей"}>
+              <div className="rowlist">
+                {c.pinned.map((p) => (
+                  <div key={p.name} className="row">
+                    <span className="marker">▌</span>
+                    <span style={{ color: "var(--orange)" }}>📌</span>
+                    <span className="strong">{p.name}</span>
+                    <span className="muted" style={{ marginLeft: "auto" }}>{p.note}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="УЗЛЫ" sub="шарды">
-          <div className="rowlist">
-            {c.nodes.map((n) => (
-              <div key={n.id} className="row" style={{ display: "block", padding: "4px 0 4px 8px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="marker">▌</span>
-                  <Dot color={n.status === "online" ? "green" : n.status === "sleep" ? "yellow" : "red"} />
-                  <span className="strong">{n.id}</span>
-                  <span className="muted" style={{ marginLeft: 4 }}>{n.role}</span>
-                  <span className="muted" style={{ marginLeft: "auto" }}>{n.used} / {n.total} GB</span>
-                </div>
-                <div className="progress" style={{ marginTop: 4, paddingLeft: 24, width: "100%" }}>
-                  <span className="bar" style={{ width: "calc(100% - 28px)" }}>
-                    <i style={{ width: (n.used / n.total * 100) + "%", background: n.status === "online" ? "var(--green)" : "var(--muted)" }} />
-                  </span>
-                </div>
+            </Panel>
+            <Panel title="УЗЛЫ" sub="шарды">
+              <div className="rowlist">
+                {c.nodes.map((n) => (
+                  <div key={n.id} className="row" style={{ display: "block", padding: "4px 0 4px 8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="marker">▌</span>
+                      <Dot color={n.status === "online" ? "green" : n.status === "sleep" ? "yellow" : "red"} />
+                      <span className="strong">{n.id}</span>
+                      <span className="muted" style={{ marginLeft: 4 }}>{n.role}</span>
+                      <span className="muted" style={{ marginLeft: "auto" }}>{n.used} / {n.total} GB</span>
+                    </div>
+                    <div className="progress" style={{ marginTop: 4, paddingLeft: 24, width: "100%" }}>
+                      <span className="bar" style={{ width: "calc(100% - 28px)" }}>
+                        <i style={{ width: (n.used / n.total * 100) + "%", background: n.status === "online" ? "var(--green)" : "var(--muted)" }} />
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="ОБЪЁМ" sub="распределённый пул">
-          <div className="usage-stats">
-            <div className="usage-cell"><div className="muted">used</div><div className="strong">{c.stats.used} GB</div></div>
-            <div className="usage-cell"><div className="muted">total</div><div className="strong">{c.stats.total} GB</div></div>
-            <div className="usage-cell"><div className="muted">shards</div><div className="strong" style={{ color: "var(--green)" }}>{c.stats.healthy}/{c.stats.shards}</div></div>
-            <div className="usage-cell"><div className="muted">файлов</div><div className="strong">{loading ? "…" : liveEntries.length || c.stats.snapshots}</div></div>
-          </div>
-          <div className="hr" />
-          <UsageRing used={c.stats.used} total={c.stats.total} />
-        </Panel>
+            </Panel>
+            <Panel title="ОБЪЁМ" sub="распределённый пул">
+              <div className="usage-stats">
+                <div className="usage-cell"><div className="muted">used</div><div className="strong">{c.stats.used} GB</div></div>
+                <div className="usage-cell"><div className="muted">total</div><div className="strong">{c.stats.total} GB</div></div>
+                <div className="usage-cell"><div className="muted">shards</div><div className="strong" style={{ color: "var(--green)" }}>{c.stats.healthy}/{c.stats.shards}</div></div>
+                <div className="usage-cell"><div className="muted">файлов</div><div className="strong">{c.stats.snapshots}</div></div>
+              </div>
+              <div className="hr" />
+              <UsageRing used={c.stats.used} total={c.stats.total} />
+            </Panel>
+          </>
+        )}
       </div>
 
       {/* CENTER: список файлов */}
@@ -132,19 +147,21 @@ function CloudScreen({ me }) {
           </div>
         </Panel>
 
-        <Panel title="ЗАДАЧИ" sub={c.jobs.filter((j) => j.state === "running").length + " активных"}>
-          <div className="job-list">
-            {c.jobs.map((j) => (
-              <div key={j.id} className="job-row">
-                <span className={"job-state " + j.state}>{j.state.toUpperCase().padEnd(7, " ")}</span>
-                <span className="muted" style={{ width: 80 }}>{j.id}</span>
-                <span className="strong job-what">{j.what}</span>
-                <span className="job-pct" style={{ color: j.state === "done" ? "var(--green)" : j.state === "running" ? "var(--yellow)" : "var(--muted)" }}>{j.pct}%</span>
-                <span className="job-bar"><i className={"job-bar-fill state-" + j.state} style={{ width: j.pct + "%" }} /></span>
-              </div>
-            ))}
-          </div>
-        </Panel>
+        {!liveAvail && c && (
+          <Panel title="ЗАДАЧИ" sub={c.jobs.filter((j) => j.state === "running").length + " активных"}>
+            <div className="job-list">
+              {c.jobs.map((j) => (
+                <div key={j.id} className="job-row">
+                  <span className={"job-state " + j.state}>{j.state.toUpperCase().padEnd(7, " ")}</span>
+                  <span className="muted" style={{ width: 80 }}>{j.id}</span>
+                  <span className="strong job-what">{j.what}</span>
+                  <span className="job-pct" style={{ color: j.state === "done" ? "var(--green)" : j.state === "running" ? "var(--yellow)" : "var(--muted)" }}>{j.pct}%</span>
+                  <span className="job-bar"><i className={"job-bar-fill state-" + j.state} style={{ width: j.pct + "%" }} /></span>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
       </div>
 
       {/* RIGHT: детали файла */}

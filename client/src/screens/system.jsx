@@ -41,9 +41,9 @@ function SystemScreen() {
   const [filter, setFilter]     = useState("ALL");
   const { metrics, error: natsErr } = useNatsMetrics();
 
-  const filteredLogs = MONO_DATA.logs.filter((l) => filter === "ALL" || l.lvl === filter);
+  const liveAvail = window.PARVANE.available;
 
-  // Строим живой узел NATS если метрики доступны
+  // В Tauri показываем только реальный узел NATS (или пусто); в браузере — моки
   const liveNode = metrics ? {
     id:     "nats-hub",
     status: "online",
@@ -53,7 +53,12 @@ function SystemScreen() {
     msgs:   metrics.in_msgs || 0,
   } : null;
 
-  const nodes = liveNode ? [liveNode, ...MONO_DATA.nodes.slice(1)] : MONO_DATA.nodes;
+  const nodes = liveAvail
+    ? (liveNode ? [liveNode] : [])
+    : (liveNode ? [liveNode, ...MONO_DATA.nodes.slice(1)] : MONO_DATA.nodes);
+
+  const allLogs  = liveAvail ? [] : MONO_DATA.logs;
+  const filteredLogs = allLogs.filter((l) => filter === "ALL" || l.lvl === filter);
 
   return (
     <div className="sys-screen">
@@ -135,7 +140,7 @@ tx ▁▁▂▃▂▂▂▃▃▄▅▆▅▄▄▃▃▂▂▃▄▅▅▄▃`}
       <div className="sys-right col">
         <Panel
           title="RECENT LOGS"
-          sub={`${filteredLogs.length} of ${MONO_DATA.logs.length}`}
+          sub={liveAvail ? (filteredLogs.length + " записей") : (`${filteredLogs.length} of ${MONO_DATA.logs.length}`)}
           hint={focus === "logs" ? "↑↓ scroll  Tab switch" : ""}
           focused={focus === "logs"}
           onClick={() => setFocus("logs")}
@@ -150,6 +155,11 @@ tx ▁▁▂▃▂▂▂▃▃▄▅▆▅▄▄▃▃▂▂▃▄▅▅▄▃`}
           </div>
           <div className="hr" />
           <div className="log-list">
+            {filteredLogs.length === 0 && (
+              <div className="muted" style={{ padding: "12px 8px", fontSize: 12 }}>
+                {liveAvail ? "логи не поддерживаются в реальном времени" : "нет логов"}
+              </div>
+            )}
             {filteredLogs.map((l, i) => (
               <div key={i} className="log-row">
                 <span className="log-t muted">{l.t}</span>

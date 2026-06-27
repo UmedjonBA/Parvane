@@ -63,12 +63,12 @@ function SchedulePanel({ date }) {
   );
 }
 
-function DayPulse({ date, eventMap }) {
+function DayPulse({ date, eventMap, liveAvail }) {
   const ds     = fmtDate(date);
-  const evMap  = eventMap || MONO_DATA.events;
+  const evMap  = eventMap || {};
   const events = evMap[ds] || [];
   const dayKey = WEEK_NAMES[date.getDay()];
-  const sched = MONO_DATA.schedule[dayKey] || [];
+  const sched  = liveAvail ? [] : (MONO_DATA.schedule[dayKey] || []);
   const hours = [];
   for (let h = 7; h <= 23; h++) {
     let kind = null;
@@ -134,10 +134,8 @@ function CalendarScreen({ me }) {
     });
   }
 
-  // Комбинированный eventMap: живые (если есть) или моки
-  const eventMap = (liveAvail && Object.keys(liveEventMap).length > 0)
-    ? liveEventMap
-    : MONO_DATA.events;
+  // В Tauri — только реальные события (даже если пусто); в браузере — моки
+  const eventMap = liveAvail ? liveEventMap : MONO_DATA.events;
 
   const getEventsForDate = (d) => {
     const ds = fmtDate(d);
@@ -171,11 +169,11 @@ function CalendarScreen({ me }) {
           onOpen={() => setDetail(true)}
           onAdd={() => { setDetail("add"); setSelEvent(null); }}
         />
-        <DeadlinesPanel />
+        {!liveAvail && <DeadlinesPanel />}
       </div>
       <div className="cal-mid col">
-        <SchedulePanel date={date} />
-        <DayPulse date={date} eventMap={eventMap} />
+        {!liveAvail && <SchedulePanel date={date} />}
+        <DayPulse date={date} eventMap={eventMap} liveAvail={liveAvail} />
       </div>
       <div className="cal-right col">
         {detail === "add"
@@ -192,7 +190,7 @@ function CalendarScreen({ me }) {
               onClose={() => setDetail(false)}
               onDelete={() => handleDelete(selEventObj)}
             />}
-        <WeekAhead today={date} onPick={setDate} eventMap={eventMap} />
+        <WeekAhead today={date} onPick={setDate} eventMap={eventMap} liveAvail={liveAvail} />
       </div>
     </div>
   );
@@ -351,8 +349,8 @@ function AddEventPanel({ onClose, date, liveCalendar }) {
   );
 }
 
-function WeekAhead({ today, onPick, eventMap }) {
-  const evMap = eventMap || MONO_DATA.events;
+function WeekAhead({ today, onPick, eventMap, liveAvail }) {
+  const evMap = eventMap || {};
   const days = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(today);
@@ -365,7 +363,7 @@ function WeekAhead({ today, onPick, eventMap }) {
         {days.map((d, i) => {
           const dk = WEEK_NAMES[d.getDay()];
           const ev = (evMap[fmtDate(d)] || []);
-          const sc = MONO_DATA.schedule[dk] || [];
+          const sc = liveAvail ? [] : (MONO_DATA.schedule[dk] || []);
           const totalDots = ev.length + sc.length;
           return (
             <div key={i} className="week-ahead-row" onClick={() => onPick(d)}>

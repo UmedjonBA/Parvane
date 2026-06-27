@@ -107,7 +107,7 @@ function NotesScreen({ me }) {
     (n.text || "").toLowerCase().includes(search.toLowerCase())
   );
 
-  const vault = MONO_DATA.vault;
+  const vault = liveAvail ? { backlinks: [], outgoing: [], graph: { nodes: [], edges: [] } } : MONO_DATA.vault;
 
   return (
     <div className="notes-screen">
