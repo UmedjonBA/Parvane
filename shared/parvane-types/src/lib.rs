@@ -607,6 +607,7 @@ mod tests {
             payload: SendPayload {
                 to: "bob@local".to_string(),
                 content: MessageContent::Text { text: "hi".to_string() },
+                reply_to: None,
             },
         };
         let json = serde_json::to_string(&event).unwrap();
