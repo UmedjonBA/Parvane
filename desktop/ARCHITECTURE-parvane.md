@@ -60,6 +60,24 @@ intro-флоу после успешной авторизации. Для Parvan
 `parvane_core`, glue `SourceFiles/parvane/parvane_client.cpp`), вызов
 `Parvane::LogStartup()` в `Application::run()` — проверка линковки cnats в бинарь.
 
+## Поток intro → сессия (разведка intro_step.cpp v6.9.3)
+
+Все экраны intro сходятся в `Step::finish(MTPauth_Authorization)` →
+`Step::finish(MTPUser self)` (intro_step.cpp:180) → запрос
+`MTPmessages_GetDialogFilters` → `Step::createSession(user,…)` →
+`_account->createSession(user,…)`. ВАЖНО: `finish(MTPUser)` шлёт реальный
+MTP-запрос `messages.getDialogFilters` и только в его `.done()/.fail()` зовёт
+createSession. Значит даже голый логин требует, чтобы `MTP::Instance` **что-то
+ответил** (хотя бы `.fail()`), иначе сессия не создастся. Это подтверждает:
+нужен Parvane-backend на месте `MTP::Instance`, отвечающий на минимальный набор
+bootstrap-TL (getDialogFilters → пустой/fail), плюс синтез `MTPUser` self.
+
+Срез «логин» (порядок): (1) Parvane-intro экран user/password →
+`identity.token.issue` → JWT (хранить в Account); (2) MTP-backend-заглушка,
+дающая `messages.getDialogFilters` → fail, чтобы `createSession` прошёл;
+(3) синтез self `MTPUser` из адреса `user@server`. После — список диалогов
+пуст, но мы внутри главного окна (контрольная точка среза логина).
+
 ## Минимальный набор TL для первого среза (Фаза 2–3)
 
 - авторизация: подменяем intro-флоу на `identity.token.issue` (user/password),
