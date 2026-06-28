@@ -12,10 +12,13 @@
     logout:      ()               => invoke ? invoke("logout")                          : Promise.resolve(),
     currentUser: ()               => invoke ? invoke("current_user")                    : Promise.resolve(null),
     // messenger
-    sync:            (since)     => invoke ? invoke("sync_messages",    { since })         : Promise.resolve([]),
-    getConversations:()          => invoke ? invoke("get_conversations")                   : Promise.resolve([]),
-    getMessages:     (peer)      => invoke ? invoke("get_messages",     { peer })          : Promise.resolve([]),
-    send:            (to, text)  => invoke ? invoke("send_text",        { to, text })      : Promise.reject("нет tauri"),
+    sync:            (since)        => invoke ? invoke("sync_messages",    { since })             : Promise.resolve([]),
+    getConversations:()             => invoke ? invoke("get_conversations")                       : Promise.resolve([]),
+    getMessages:     (peer)         => invoke ? invoke("get_messages",     { peer })              : Promise.resolve([]),
+    send:            (to, text, rep)=> invoke ? invoke("send_text",        { to, text, reply: rep || null }) : Promise.reject("нет tauri"),
+    editMessage:     (id, text)     => invoke ? invoke("edit_message",     { id, text })          : Promise.resolve(),
+    deleteMessage:   (id)           => invoke ? invoke("delete_message",   { id })                : Promise.resolve(),
+    markRead:        (id)           => invoke ? invoke("mark_read",        { id })                : Promise.resolve(),
     // notes
     listNotes:   ()                                    => invoke ? invoke("list_notes")                                    : Promise.resolve([]),
     createNote:  (title)                               => invoke ? invoke("create_note",  { title })                      : Promise.reject("нет tauri"),
@@ -26,12 +29,30 @@
     createEvent:      (fields)                                     => invoke ? invoke("create_event",       { fields })                       : Promise.reject("нет tauri"),
     updateEventField: (event_id, field, value)                     => invoke ? invoke("update_event_field", { id: event_id, field, value })   : Promise.resolve(),
     deleteEvent:      (event_id)                                   => invoke ? invoke("delete_event",       { id: event_id })                 : Promise.resolve(),
-    // cloud
+    // cloud / медиа
     listFiles: () => invoke ? invoke("list_files") : Promise.resolve({ files: [] }),
+    uploadBlob:   (name, mime, data) => invoke ? invoke("upload_blob",   { name, mime, data }) : Promise.reject("нет tauri"),
+    downloadBlob: (id)               => invoke ? invoke("download_blob", { id })               : Promise.reject("нет tauri"),
+    sendMedia:    (meta)             => invoke ? invoke("send_media",    { meta })             : Promise.reject("нет tauri"),
     // calls
     callHistory: () => invoke ? invoke("call_history") : Promise.resolve({ calls: [] }),
+    // диагностика
+    diag: (text) => invoke ? invoke("diag", { text }) : Promise.resolve(),
   };
   window.PARVANE = P;
+
+  // Самотест поддержки записи медиа в вебвью — пишет в лог моста [diag].
+  if (invoke) {
+    try {
+      const hasMR = typeof window.MediaRecorder !== "undefined";
+      const sup = (t) => { try { return hasMR && window.MediaRecorder.isTypeSupported(t); } catch { return false; } };
+      const hasGUM = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      P.diag(`media: MediaRecorder=${hasMR} getUserMedia=${hasGUM} ` +
+        `webm/opus=${sup("audio/webm;codecs=opus")} audio/webm=${sup("audio/webm")} ` +
+        `video/webm=${sup("video/webm")} vp8=${sup("video/webm;codecs=vp8")} ` +
+        `secureContext=${window.isSecureContext}`);
+    } catch (e) { P.diag("media probe error: " + e); }
+  }
 })();
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
@@ -144,26 +165,53 @@ function useLiveConversations() {
 }
 
 // Живой чат с конкретным собеседником, с поллингом входящих.
+// Преобразует StoredMessage из бэкенда в форму для UI, сохраняя поля мутаций
+// (read/edited/deleted/reply_to) — на них держатся галочки, «изменено» и ответы.
+function liveMapMsg(m, me) {
+  return {
+    id:       m.id,
+    from:     m.from === me ? "me" : "peer",
+    text:     m.deleted ? "" : liveTextOf(m.content),
+    content:  m.deleted ? null : (m.content || null), // полный MessageContent — для медиа
+    t:        liveHHMM(m.ts),
+    read:     !!m.read,
+    edited:   !!m.edited,
+    deleted:  !!m.deleted,
+    replyTo:  m.reply_to || null,
+  };
+}
+
 function useLiveChat(me, peer) {
   const [messages, setMessages] = useState([]);
   const [ready, setReady]       = useState(false);
   const [error, setError]       = useState(null);
   const lastSeen                = useRef(ZERO_UUID);
+  const marked                  = useRef(new Set()); // id входящих, уже отмеченных прочитанными
+
+  // Сливает дельту в список по upsert'у (правки/удаления/прочтения заменяют
+  // существующую запись по id), отмечает входящие прочитанными.
+  const upsert = (list, incoming, meName) => {
+    const byId = new Map(list.map((m) => [m.id, m]));
+    for (const raw of incoming) {
+      byId.set(raw.id, liveMapMsg(raw, meName));
+      if (raw.from === peer && !marked.current.has(raw.id)) {
+        marked.current.add(raw.id);
+        window.PARVANE.markRead(raw.id).catch(() => {});
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  };
 
   useEffect(() => {
     if (!window.PARVANE.available || !me || !peer) return;
     let alive = true;
     let timer = null;
+    marked.current = new Set();
 
     const loadAll = async () => {
       const msgs = await window.PARVANE.getMessages(peer);
       if (!alive) return;
-      setMessages(msgs.map((m) => ({
-        id:   m.id,
-        from: m.from === me ? "me" : "peer",
-        text: liveTextOf(m.content),
-        t:    liveHHMM(m.ts),
-      })));
+      setMessages(upsert([], msgs, me));
       if (msgs.length) lastSeen.current = msgs[msgs.length - 1].id;
     };
 
@@ -171,20 +219,8 @@ function useLiveChat(me, peer) {
       try {
         const incoming = await window.PARVANE.sync(lastSeen.current);
         if (!alive || !incoming.length) return;
-        const fromPeer = incoming.filter((m) => m.from === peer || m.to === peer);
-        if (!fromPeer.length) return;
-        setMessages((prev) => {
-          const seen = new Set(prev.map((m) => m.id));
-          const add  = fromPeer
-            .filter((m) => !seen.has(m.id))
-            .map((m) => ({
-              id:   m.id,
-              from: m.from === me ? "me" : "peer",
-              text: liveTextOf(m.content),
-              t:    liveHHMM(m.ts),
-            }));
-          return add.length ? [...prev, ...add] : prev;
-        });
+        const rel = incoming.filter((m) => m.from === peer || m.to === peer);
+        if (rel.length) setMessages((prev) => upsert(prev, rel, me));
         lastSeen.current = incoming[incoming.length - 1].id;
       } catch (e) {
         console.error("[live] sync:", e);
@@ -206,14 +242,15 @@ function useLiveChat(me, peer) {
     return () => { alive = false; if (timer) clearInterval(timer); };
   }, [me, peer]);
 
-  const send = async (text) => {
+  const send = async (text, replyId) => {
     const body = text.trim();
     if (!body) return;
     try {
-      const id = await window.PARVANE.send(peer, body);
+      const id = await window.PARVANE.send(peer, body, replyId || null);
       setMessages((prev) => [
         ...prev,
-        { id, from: "me", text: body, t: liveHHMM(Date.now() / 1000) },
+        { id, from: "me", text: body, t: liveHHMM(Date.now() / 1000),
+          read: false, edited: false, deleted: false, replyTo: replyId || null },
       ]);
     } catch (e) {
       setError(String(e));
@@ -221,7 +258,47 @@ function useLiveChat(me, peer) {
     }
   };
 
-  return { messages, ready, error, send };
+  const editMessage = async (id, text) => {
+    const body = text.trim();
+    if (!body) return;
+    try {
+      await window.PARVANE.editMessage(id, body);
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text: body, edited: true } : m)));
+    } catch (e) {
+      setError(String(e));
+      console.error("[live] edit:", e);
+    }
+  };
+
+  const deleteMessage = async (id) => {
+    try {
+      await window.PARVANE.deleteMessage(id);
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text: "", deleted: true } : m)));
+    } catch (e) {
+      setError(String(e));
+      console.error("[live] delete:", e);
+    }
+  };
+
+  // Отправка медиа: meta уже содержит file_id (из uploadBlob) и метаданные.
+  // content собираем здесь же для оптимистичного показа до синка.
+  const sendMedia = async (meta, content) => {
+    try {
+      const id = await window.PARVANE.sendMedia({ ...meta, to: peer });
+      setMessages((prev) => [
+        ...prev,
+        { id, from: "me", text: liveTextOf(content), content, t: liveHHMM(Date.now() / 1000),
+          read: false, edited: false, deleted: false, replyTo: meta.reply || null },
+      ]);
+      return id;
+    } catch (e) {
+      setError(String(e));
+      console.error("[live] sendMedia:", e);
+      throw e;
+    }
+  };
+
+  return { messages, ready, error, send, editMessage, deleteMessage, sendMedia };
 }
 
 // Заметки: полный CRUD через notes-шард.

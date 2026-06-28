@@ -6,17 +6,45 @@ use std::{collections::HashMap, sync::Arc};
 use parvane_types::{
     content_checksum, event_checksum, CalDeletePayload, CalEventSnapshot, CalSetPayload,
     CallHistoryRequest,
-    CallHistoryResponse, FileListPayload, FileListResponse, IssueRequest, IssueResponse,
+    CallHistoryResponse, DeletePayload, DownloadRequest, DownloadResponse, EditPayload,
+    FileListPayload, FileListResponse,
+    IssueRequest, IssueResponse,
     MessageContent, NoteCreatePayload, NoteDeletePayload, NoteOp, NoteSnapshot,
-    NoteSyncRequestPayload, NoteSyncResponsePayload, NoteUpdatePayload, ParvaneEvent, SendPayload,
+    NoteSyncRequestPayload, NoteSyncResponsePayload, NoteUpdatePayload, ParvaneEvent, ReadPayload,
+    SendPayload,
     Stamp, StoredMessage, SyncRequestPayload, SyncResponsePayload,
+    UploadChunkPayload, UploadCompletePayload, UploadCompleteResponse,
     topics::{
         CAL_CREATE, CAL_DELETE, CAL_SYNC_REQUEST, CAL_UPDATE, CALL_HISTORY_REQUEST,
-        FILE_LIST_REQUEST, IDENTITY_ISSUE, MSG_SEND, MSG_SYNC_REQUEST, NOTE_CREATE, NOTE_DELETE,
-        NOTE_SYNC_REQUEST, NOTE_UPDATE,
+        FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE,
+        IDENTITY_ISSUE, MSG_DELETE, MSG_EDIT, MSG_READ, MSG_SEND,
+        MSG_SYNC_REQUEST, NOTE_CREATE, NOTE_DELETE, NOTE_SYNC_REQUEST, NOTE_UPDATE,
     },
 };
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+
+// ── WebKitGTK runtime feature flags (FFI к уже слинкованной libwebkit2gtk) ────
+// MediaRecorder в WebKitGTK — выключенная по умолчанию runtime-фича. Крейт
+// webkit2gtk-sys 2.0.2 её не биндит, поэтому объявляем символы вручную и
+// включаем все *MediaRecorder*-фичи на settings вебвью.
+#[cfg(target_os = "linux")]
+mod webkit_ffi {
+    use std::os::raw::c_char;
+    #[repr(C)] pub struct FeatureList { _p: [u8; 0] }
+    #[repr(C)] pub struct Feature { _p: [u8; 0] }
+    #[repr(C)] pub struct WkSettings { _p: [u8; 0] }
+    extern "C" {
+        pub fn webkit_settings_get_all_features() -> *mut FeatureList;
+        pub fn webkit_feature_list_get_length(list: *mut FeatureList) -> usize;
+        pub fn webkit_feature_list_get(list: *mut FeatureList, index: usize) -> *mut Feature;
+        pub fn webkit_feature_get_identifier(feature: *mut Feature) -> *const c_char;
+        pub fn webkit_settings_set_feature_enabled(
+            settings: *mut WkSettings, feature: *mut Feature, enabled: i32,
+        );
+    }
+}
 use tauri::State;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -159,6 +187,12 @@ async fn current_user(state: State<'_, Shared>) -> Result<Option<String>, String
     Ok(state.lock().await.user.clone())
 }
 
+/// Диагностика из фронтенда в лог моста (для проверки поддержки медиа в вебвью).
+#[tauri::command]
+fn diag(text: String) {
+    eprintln!("[diag] {text}");
+}
+
 // ── identity ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -259,9 +293,15 @@ async fn get_messages(peer: String, state: State<'_, Shared>) -> Result<Vec<Stor
     Ok(filtered)
 }
 
-/// Отправить текстовое сообщение.
+/// Отправить текстовое сообщение. `reply` — `id` сообщения, на которое отвечаем
+/// (или `null`). Имя параметра однословное — Tauri глотает многословные.
 #[tauri::command]
-async fn send_text(to: String, text: String, state: State<'_, Shared>) -> Result<String, String> {
+async fn send_text(
+    to: String,
+    text: String,
+    reply: Option<String>,
+    state: State<'_, Shared>,
+) -> Result<String, String> {
     eprintln!("[bridge] send_text(to={to})");
     let (client, token, from) = {
         let s = state.lock().await;
@@ -271,41 +311,142 @@ async fn send_text(to: String, text: String, state: State<'_, Shared>) -> Result
             s.user.clone().ok_or("не залогинен")?,
         )
     };
+    let reply_to = reply.and_then(|r| Uuid::parse_str(&r).ok());
     let id = Uuid::now_v7();
     let ev = ParvaneEvent {
         id,
         from,
         ts: now_ts(),
         token,
-        payload: SendPayload { to, content: MessageContent::Text { text } },
+        payload: SendPayload { to, content: MessageContent::Text { text }, reply_to },
     };
     client.publish(MSG_SEND, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
     client.flush().await.map_err(e2s)?;
     Ok(id.to_string())
 }
 
-/// Внутренняя: local-first инкрементальная синхронизация сообщений.
-/// Держит кеш на диске, у сервера запрашивает только то, что новее курсора
-/// (max id в кеше) — append-only лог, поэтому контрольные суммы не нужны.
+/// Редактировать своё текстовое сообщение.
+#[tauri::command]
+async fn edit_message(id: String, text: String, state: State<'_, Shared>) -> Result<(), String> {
+    eprintln!("[bridge] edit_message({id})");
+    let mid = Uuid::parse_str(&id).map_err(e2s)?;
+    let (client, token, from) = creds(&state).await?;
+    let ev = ParvaneEvent {
+        id: Uuid::now_v7(),
+        from,
+        ts: now_ts(),
+        token,
+        payload: EditPayload { message_id: mid, text: text.clone() },
+    };
+    client.publish(MSG_EDIT, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
+    client.flush().await.map_err(e2s)?;
+    // Оптимистично правим кеш, чтобы UI обновился сразу.
+    let mut s = state.lock().await;
+    if let Some(m) = s.messages.iter_mut().find(|m| m.id == mid) {
+        m.content = MessageContent::Text { text };
+        m.edited = true;
+    }
+    persist_messages(&s);
+    Ok(())
+}
+
+/// Удалить своё сообщение «у всех».
+#[tauri::command]
+async fn delete_message(id: String, state: State<'_, Shared>) -> Result<(), String> {
+    eprintln!("[bridge] delete_message({id})");
+    let mid = Uuid::parse_str(&id).map_err(e2s)?;
+    let (client, token, from) = creds(&state).await?;
+    let ev = ParvaneEvent {
+        id: Uuid::now_v7(),
+        from,
+        ts: now_ts(),
+        token,
+        payload: DeletePayload { message_id: mid },
+    };
+    client.publish(MSG_DELETE, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
+    client.flush().await.map_err(e2s)?;
+    let mut s = state.lock().await;
+    if let Some(m) = s.messages.iter_mut().find(|m| m.id == mid) {
+        m.deleted = true;
+        m.content = MessageContent::Text { text: String::new() };
+    }
+    persist_messages(&s);
+    Ok(())
+}
+
+/// Отметить сообщение прочитанным (отправляет read-receipt → автор увидит ✓✓).
+#[tauri::command]
+async fn mark_read(id: String, state: State<'_, Shared>) -> Result<(), String> {
+    let mid = Uuid::parse_str(&id).map_err(e2s)?;
+    let (client, token, from) = creds(&state).await?;
+    let ev = ParvaneEvent {
+        id: Uuid::now_v7(),
+        from,
+        ts: now_ts(),
+        token,
+        payload: ReadPayload { message_id: mid },
+    };
+    client.publish(MSG_READ, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
+    client.flush().await.map_err(e2s)?;
+    Ok(())
+}
+
+/// (client, token, user) либо ошибка «не залогинен».
+async fn creds(state: &State<'_, Shared>) -> Result<(async_nats::Client, String, String), String> {
+    let s = state.lock().await;
+    Ok((
+        s.nats.clone().ok_or("NATS не подключён")?,
+        s.token.clone().ok_or("не залогинен")?,
+        s.user.clone().ok_or("не залогинен")?,
+    ))
+}
+
+/// Слить дельту синка в кеш: upsert по id (правки/удаления/прочтения заменяют
+/// существующую запись), сортировка по id, запись на диск.
+fn merge_messages(s: &mut AppState, delta: Vec<StoredMessage>) {
+    if delta.is_empty() {
+        return;
+    }
+    for m in delta {
+        if let Some(existing) = s.messages.iter_mut().find(|x| x.id == m.id) {
+            *existing = m;
+        } else {
+            s.messages.push(m);
+        }
+    }
+    s.messages.sort_by(|a, b| a.id.cmp(&b.id));
+    persist_messages(s);
+}
+
+/// Два курсора кеша: (max id, max updated_at). Основа синка мутаций.
+fn cursors(s: &AppState) -> (String, i64) {
+    let id = s
+        .messages
+        .iter()
+        .map(|m| m.id)
+        .max()
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "00000000-0000-0000-0000-000000000000".to_string());
+    let upd = s.messages.iter().map(|m| m.updated_at).max().unwrap_or(0);
+    (id, upd)
+}
+
+/// Внутренняя: local-first синхронизация сообщений. Держит кеш на диске, у
+/// сервера запрашивает новое (`id > cursor`) И мутации старого
+/// (`updated_at > since`): правки, удаления, отметки о прочтении.
 async fn do_sync_all(state: State<'_, Shared>) -> Result<Vec<StoredMessage>, String> {
-    // Поднимаем кеш с диска, если ещё не подняли, и вычисляем курсор.
-    let (client, token, from, cursor) = {
+    let (client, token, from, last_seen_id, since_updated) = {
         let mut s = state.lock().await;
         if s.messages.is_empty() {
             load_messages(&mut s);
         }
-        let cursor = s
-            .messages
-            .iter()
-            .map(|m| m.id)
-            .max()
-            .map(|u| u.to_string())
-            .unwrap_or_else(|| "00000000-0000-0000-0000-000000000000".to_string());
+        let (id, upd) = cursors(&s);
         (
             s.nats.clone().ok_or("NATS не подключён")?,
             s.token.clone().ok_or("не залогинен")?,
             s.user.clone().ok_or("не залогинен")?,
-            cursor,
+            id,
+            upd,
         )
     };
     let ev = ParvaneEvent {
@@ -313,7 +454,7 @@ async fn do_sync_all(state: State<'_, Shared>) -> Result<Vec<StoredMessage>, Str
         from,
         ts: now_ts(),
         token,
-        payload: SyncRequestPayload { last_seen_id: cursor },
+        payload: SyncRequestPayload { last_seen_id, since_updated },
     };
     let reply = client
         .request(MSG_SYNC_REQUEST, serde_json::to_vec(&ev).map_err(e2s)?.into())
@@ -322,31 +463,25 @@ async fn do_sync_all(state: State<'_, Shared>) -> Result<Vec<StoredMessage>, Str
     let resp: ParvaneEvent<SyncResponsePayload> =
         serde_json::from_slice(&reply.payload).map_err(e2s)?;
 
-    // Дописываем только новое (дедуп по id), сортируем по id, сохраняем на диск.
     let mut s = state.lock().await;
-    if !resp.payload.messages.is_empty() {
-        let existing: std::collections::HashSet<Uuid> = s.messages.iter().map(|m| m.id).collect();
-        for m in resp.payload.messages {
-            if !existing.contains(&m.id) {
-                s.messages.push(m);
-            }
-        }
-        s.messages.sort_by(|a, b| a.id.cmp(&b.id));
-        persist_messages(&s);
-    }
+    merge_messages(&mut s, resp.payload.messages);
     Ok(s.messages.clone())
 }
 
-/// Sync новых сообщений с момента last_seen (для поллинга live-чата).
+/// Sync для поллинга live-чата. `since` от фронта — это max id, но курсор
+/// мутаций берём из кеша (max updated_at), сливаем дельту в кеш и возвращаем
+/// весь свежий снимок (фронт сам делает upsert по id).
 #[tauri::command]
 async fn sync_messages(since: String, state: State<'_, Shared>) -> Result<Vec<StoredMessage>, String> {
     eprintln!("[bridge] sync_messages(since={since})");
-    let (client, token, from) = {
+    let (client, token, from, since_updated) = {
         let s = state.lock().await;
+        let (_, upd) = cursors(&s);
         (
             s.nats.clone().ok_or("NATS не подключён")?,
             s.token.clone().ok_or("не залогинен")?,
             s.user.clone().ok_or("не залогинен")?,
+            upd,
         )
     };
     let ev = ParvaneEvent {
@@ -354,7 +489,7 @@ async fn sync_messages(since: String, state: State<'_, Shared>) -> Result<Vec<St
         from,
         ts: now_ts(),
         token,
-        payload: SyncRequestPayload { last_seen_id: since },
+        payload: SyncRequestPayload { last_seen_id: since, since_updated },
     };
     let reply = client
         .request(MSG_SYNC_REQUEST, serde_json::to_vec(&ev).map_err(e2s)?.into())
@@ -362,7 +497,10 @@ async fn sync_messages(since: String, state: State<'_, Shared>) -> Result<Vec<St
         .map_err(e2s)?;
     let resp: ParvaneEvent<SyncResponsePayload> =
         serde_json::from_slice(&reply.payload).map_err(e2s)?;
-    Ok(resp.payload.messages)
+    let delta = resp.payload.messages.clone();
+    let mut s = state.lock().await;
+    merge_messages(&mut s, resp.payload.messages);
+    Ok(delta)
 }
 
 // ── notes ─────────────────────────────────────────────────────────────────────
@@ -728,6 +866,261 @@ async fn list_files(state: State<'_, Shared>) -> Result<FileListResponse, String
     Ok(resp)
 }
 
+// ── медиа: загрузка/скачивание блобов через cloud-шард ────────────────────────
+
+/// Размер сырого чанка. base64 раздувает ×4/3 → ~700КБ, плюс JSON-обвязка —
+/// остаёмся под дефолтным лимитом NATS в 1МБ.
+const CHUNK_RAW: usize = 512 * 1024;
+
+#[derive(Serialize)]
+struct UploadResult {
+    file_id: String,
+    size: u64,
+}
+
+#[derive(Serialize)]
+struct BlobData {
+    file_id: String,
+    filename: String,
+    mime: String,
+    /// base64 содержимого файла
+    data: String,
+}
+
+/// Метаданные медиа от фронтенда для `send_media`. Поле команды — одно слово `meta`.
+#[derive(Deserialize)]
+struct MediaMeta {
+    to: String,
+    #[serde(default)]
+    reply: Option<String>,
+    /// photo | video | voice | video_note | file
+    kind: String,
+    /// file_id уже загруженного блоба (результат upload_blob)
+    file: String,
+    filename: String,
+    mime: String,
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+    #[serde(default)]
+    duration: u32,
+    size: u64,
+    #[serde(default)]
+    caption: Option<String>,
+}
+
+/// Каталог дискового кеша блобов (cache_dir/blobs).
+fn blobs_dir(s: &AppState) -> Option<std::path::PathBuf> {
+    let dir = s.cache_dir.as_ref()?.join("blobs");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir)
+}
+
+/// Залить файл в облако: чанкуем, шлём `file.upload.chunk` ×N, затем
+/// `file.upload.complete` (request/reply). Возвращает file_id.
+#[tauri::command]
+async fn upload_blob(
+    name: String,
+    mime: String,
+    data: String, // base64 всего файла
+    state: State<'_, Shared>,
+) -> Result<UploadResult, String> {
+    eprintln!("[bridge] upload_blob(name={name}, mime={mime})");
+    let bytes = B64.decode(&data).map_err(e2s)?;
+    let (client, token, from) = creds(&state).await?;
+    let file_id = Uuid::now_v7();
+    let chunks: Vec<&[u8]> = bytes.chunks(CHUNK_RAW).collect();
+    let total = chunks.len().max(1) as u32;
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let ev = ParvaneEvent {
+            id: Uuid::now_v7(),
+            from: from.clone(),
+            ts: now_ts(),
+            token: token.clone(),
+            payload: UploadChunkPayload {
+                file_id,
+                chunk_index: i as u32,
+                total_chunks: total,
+                data: B64.encode(chunk),
+                filename: name.clone(),
+                mime_type: mime.clone(),
+            },
+        };
+        // request/reply: ждём подтверждения сохранения чанка шардом, чтобы
+        // complete не обогнал запись чанка (гонка chunk/complete в select! шарда).
+        let ack = client
+            .request(FILE_UPLOAD_CHUNK, serde_json::to_vec(&ev).map_err(e2s)?.into())
+            .await
+            .map_err(e2s)?;
+        let av: serde_json::Value = serde_json::from_slice(&ack.payload).map_err(e2s)?;
+        if !av.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return Err(av.get("error").and_then(|v| v.as_str()).unwrap_or("chunk store failed").into());
+        }
+    }
+    client.flush().await.map_err(e2s)?;
+
+    let complete = ParvaneEvent {
+        id: Uuid::now_v7(),
+        from,
+        ts: now_ts(),
+        token,
+        payload: UploadCompletePayload {
+            file_id,
+            filename: name,
+            total_chunks: total,
+            size_bytes: bytes.len() as u64,
+            mime_type: mime,
+        },
+    };
+    let reply = client
+        .request(FILE_UPLOAD_COMPLETE, serde_json::to_vec(&complete).map_err(e2s)?.into())
+        .await
+        .map_err(e2s)?;
+    let resp: UploadCompleteResponse = serde_json::from_slice(&reply.payload).map_err(e2s)?;
+    if !resp.ok {
+        return Err(resp.error.unwrap_or_else(|| "upload failed".into()));
+    }
+    // Кладём в дисковый кеш, чтобы не качать собственный файл обратно.
+    if let Some(dir) = blobs_dir(&*state.lock().await) {
+        let _ = std::fs::write(dir.join(file_id.to_string()), &bytes);
+    }
+    Ok(UploadResult { file_id: file_id.to_string(), size: bytes.len() as u64 })
+}
+
+/// Скачать блоб из облака. Кеш на диске; иначе — подписка на inbox, запрос
+/// `file.download.request`, сбор чанков (шард шлёт их в reply-топик).
+#[tauri::command]
+async fn download_blob(id: String, state: State<'_, Shared>) -> Result<BlobData, String> {
+    eprintln!("[bridge] download_blob({id})");
+    let fid = Uuid::parse_str(&id).map_err(e2s)?;
+    let (client, token, from) = creds(&state).await?;
+
+    // Дисковый кеш: <blobs>/<id> + сайдкар <id>.meta (filename\nmime).
+    let cache = blobs_dir(&*state.lock().await);
+    if let Some(dir) = &cache {
+        if let Ok(bytes) = std::fs::read(dir.join(&id)) {
+            let (filename, mime) = std::fs::read_to_string(dir.join(format!("{id}.meta")))
+                .ok()
+                .and_then(|s| {
+                    let mut it = s.splitn(2, '\n');
+                    Some((it.next()?.to_string(), it.next().unwrap_or("application/octet-stream").to_string()))
+                })
+                .unwrap_or_else(|| (id.clone(), "application/octet-stream".into()));
+            return Ok(BlobData { file_id: id, filename, mime, data: B64.encode(&bytes) });
+        }
+    }
+
+    let inbox = client.new_inbox();
+    let mut sub = client.subscribe(inbox.clone()).await.map_err(e2s)?;
+    let ev = ParvaneEvent {
+        id: Uuid::now_v7(),
+        from,
+        ts: now_ts(),
+        token,
+        payload: DownloadRequest { file_id: fid },
+    };
+    client
+        .publish_with_reply(FILE_DOWNLOAD_REQUEST, inbox, serde_json::to_vec(&ev).map_err(e2s)?.into())
+        .await
+        .map_err(e2s)?;
+    client.flush().await.map_err(e2s)?;
+
+    let mut parts: Vec<Option<Vec<u8>>> = Vec::new();
+    let mut total: Option<u32> = None;
+    let mut got = 0u32;
+    let mut filename = id.clone();
+    let mut mime = "application/octet-stream".to_string();
+
+    loop {
+        let next = tokio::time::timeout(std::time::Duration::from_secs(30), sub.next()).await;
+        let msg = match next {
+            Ok(Some(m)) => m,
+            _ => return Err("download timeout".into()),
+        };
+        let resp: DownloadResponse = match serde_json::from_slice(&msg.payload) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if !resp.ok {
+            return Err(resp.error.unwrap_or_else(|| "download failed".into()));
+        }
+        if let Some(n) = resp.total_chunks {
+            if total.is_none() {
+                total = Some(n);
+                parts = (0..n).map(|_| None).collect();
+            }
+        }
+        if let Some(fname) = resp.filename { filename = fname; }
+        if let Some(mt) = resp.mime_type { mime = mt; }
+        match (resp.chunk_index, resp.data) {
+            (Some(idx), Some(b64)) => {
+                let bytes = B64.decode(&b64).map_err(e2s)?;
+                if (idx as usize) < parts.len() {
+                    if parts[idx as usize].is_none() { got += 1; }
+                    parts[idx as usize] = Some(bytes);
+                }
+            }
+            _ => {}
+        }
+        if let Some(n) = total {
+            if got >= n { break; }
+        }
+    }
+
+    let mut bytes = Vec::new();
+    for p in parts {
+        bytes.extend_from_slice(&p.ok_or("пропущен чанк")?);
+    }
+    if let Some(dir) = &cache {
+        let _ = std::fs::write(dir.join(&id), &bytes);
+        let _ = std::fs::write(dir.join(format!("{id}.meta")), format!("{filename}\n{mime}"));
+    }
+    Ok(BlobData { file_id: id, filename, mime, data: B64.encode(&bytes) })
+}
+
+/// Отправить медиа-сообщение: собрать MessageContent по `kind` и опубликовать
+/// в messenger (как send_text, но с медиа-контентом).
+#[tauri::command]
+async fn send_media(meta: MediaMeta, state: State<'_, Shared>) -> Result<String, String> {
+    eprintln!("[bridge] send_media(kind={}, to={})", meta.kind, meta.to);
+    let file_id = Uuid::parse_str(&meta.file).map_err(e2s)?;
+    let caption = meta.caption.clone();
+    let content = match meta.kind.as_str() {
+        "photo" => MessageContent::Photo {
+            file_id, width: meta.width, height: meta.height,
+            mime: meta.mime, size_bytes: meta.size, caption,
+        },
+        "video" => MessageContent::Video {
+            file_id, duration_secs: meta.duration, width: meta.width, height: meta.height,
+            mime: meta.mime, size_bytes: meta.size, caption,
+        },
+        "voice" => MessageContent::Voice {
+            file_id, duration_secs: meta.duration, mime: meta.mime, size_bytes: meta.size,
+        },
+        "video_note" => MessageContent::VideoNote {
+            file_id, duration_secs: meta.duration, mime: meta.mime, size_bytes: meta.size,
+        },
+        _ => MessageContent::File {
+            file_id, filename: meta.filename, mime: meta.mime, size_bytes: meta.size, caption,
+        },
+    };
+    let (client, token, from) = creds(&state).await?;
+    let reply_to = meta.reply.and_then(|r| Uuid::parse_str(&r).ok());
+    let id = Uuid::now_v7();
+    let ev = ParvaneEvent {
+        id,
+        from,
+        ts: now_ts(),
+        token,
+        payload: SendPayload { to: meta.to, content, reply_to },
+    };
+    client.publish(MSG_SEND, serde_json::to_vec(&ev).map_err(e2s)?.into()).await.map_err(e2s)?;
+    client.flush().await.map_err(e2s)?;
+    Ok(id.to_string())
+}
+
 // ── звонки ────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -761,12 +1154,71 @@ async fn call_history(state: State<'_, Shared>) -> Result<CallHistoryResponse, S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux: добавить пользовательский каталог GStreamer-плагинов
+    // (~/.local/lib/gstreamer-1.0) в GST_PLUGIN_PATH — там лежат vp8/webm/matroska
+    // энкодеры для MediaRecorder, если системный gst-plugins-good не установлен.
+    // Должно выполниться до создания вебвью (WebKit инициализирует GStreamer).
+    #[cfg(target_os = "linux")]
+    if let Some(home) = std::env::var_os("HOME") {
+        let dir = std::path::PathBuf::from(home).join(".local/lib/gstreamer-1.0");
+        if dir.is_dir() {
+            let mut paths: Vec<std::path::PathBuf> = std::env::var_os("GST_PLUGIN_PATH")
+                .map(|v| std::env::split_paths(&v).collect())
+                .unwrap_or_default();
+            if !paths.iter().any(|p| p == &dir) {
+                paths.push(dir);
+                if let Ok(joined) = std::env::join_paths(paths) {
+                    std::env::set_var("GST_PLUGIN_PATH", joined);
+                }
+            }
+        }
+    }
+
     let state: Shared = Arc::new(Mutex::new(AppState::default()));
 
     tauri::Builder::default()
         .manage(state.clone())
         .setup(move |app| {
             use tauri::Manager;
+
+            // Linux/WebKitGTK: включить media-stream и авто-разрешать запросы
+            // доступа к микрофону/камере — иначе getUserMedia сразу падает.
+            #[cfg(target_os = "linux")]
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.with_webview(|webview| {
+                    use webkit2gtk::glib::object::ObjectType;
+                    use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+                    let wv = webview.inner();
+                    if let Some(settings) = WebViewExt::settings(&wv) {
+                        settings.set_enable_media_stream(true);
+                        settings.set_enable_webrtc(true);
+                        // Включаем runtime-фичу MediaRecorder (по умолчанию off).
+                        unsafe {
+                            let sptr = settings.as_ptr() as *mut webkit_ffi::WkSettings;
+                            let list = webkit_ffi::webkit_settings_get_all_features();
+                            if !list.is_null() {
+                                let n = webkit_ffi::webkit_feature_list_get_length(list);
+                                for i in 0..n {
+                                    let f = webkit_ffi::webkit_feature_list_get(list, i);
+                                    if f.is_null() { continue; }
+                                    let idc = webkit_ffi::webkit_feature_get_identifier(f);
+                                    if idc.is_null() { continue; }
+                                    let id = std::ffi::CStr::from_ptr(idc).to_string_lossy();
+                                    if id.contains("MediaRecorder") {
+                                        webkit_ffi::webkit_settings_set_feature_enabled(sptr, f, 1);
+                                        eprintln!("[bridge] webkit feature ON: {id}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    wv.connect_permission_request(|_wv, req| {
+                        req.allow();
+                        true
+                    });
+                });
+            }
+
             let cache_dir = app.path().app_data_dir().ok();
             let st = state.clone();
             tauri::async_runtime::spawn(async move {
@@ -790,6 +1242,7 @@ pub fn run() {
             // system
             nats_status,
             current_user,
+            diag,
             // auth
             login,
             logout,
@@ -798,6 +1251,9 @@ pub fn run() {
             get_conversations,
             get_messages,
             send_text,
+            edit_message,
+            delete_message,
+            mark_read,
             // notes
             list_notes,
             create_note,
@@ -810,6 +1266,9 @@ pub fn run() {
             delete_event,
             // cloud
             list_files,
+            upload_blob,
+            download_blob,
+            send_media,
             // calls
             call_history,
         ])

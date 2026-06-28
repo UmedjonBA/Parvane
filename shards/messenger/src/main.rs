@@ -2,10 +2,12 @@ use anyhow::{Context, Result};
 use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    DeliveredPayload, ParvaneEvent, ReadPayload, SendPayload, StoredMessage, SyncRequestPayload,
-    SyncResponsePayload, VerifyRequest, VerifyResponse,
+    DeletePayload, DeliveredPayload, EditPayload, MessageContent, ParvaneEvent, ReadPayload,
+    SendPayload, StoredMessage, SyncRequestPayload, SyncResponsePayload, VerifyRequest,
+    VerifyResponse,
     topics::{
-        IDENTITY_VERIFY, MSG_DELIVERED, MSG_READ, MSG_SEND, MSG_SYNC_REQUEST, MSG_SYNC_RESPONSE,
+        IDENTITY_VERIFY, MSG_DELETE, MSG_DELIVERED, MSG_EDIT, MSG_READ, MSG_SEND,
+        MSG_SYNC_REQUEST, MSG_SYNC_RESPONSE,
     },
 };
 use sqlx::SqlitePool;
@@ -52,11 +54,13 @@ async fn main() -> Result<()> {
 
     let mut send_sub = nc.subscribe(MSG_SEND).await?;
     let mut read_sub = nc.subscribe(MSG_READ).await?;
+    let mut edit_sub = nc.subscribe(MSG_EDIT).await?;
+    let mut delete_sub = nc.subscribe(MSG_DELETE).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
 
     info!(
-        "Messenger шард запущен. Слушаю: {}, {}, {}",
-        MSG_SEND, MSG_READ, MSG_SYNC_REQUEST
+        "Messenger шард запущен. Слушаю: {}, {}, {}, {}, {}",
+        MSG_SEND, MSG_READ, MSG_EDIT, MSG_DELETE, MSG_SYNC_REQUEST
     );
 
     loop {
@@ -66,6 +70,12 @@ async fn main() -> Result<()> {
             }
             Some(msg) = read_sub.next() => {
                 handle_read(&nc, &pool, msg).await;
+            }
+            Some(msg) = edit_sub.next() => {
+                handle_edit(&nc, &pool, msg).await;
+            }
+            Some(msg) = delete_sub.next() => {
+                handle_delete(&nc, &pool, msg).await;
             }
             Some(msg) = sync_sub.next() => {
                 handle_sync(&nc, &pool, msg).await;
@@ -108,12 +118,14 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
     // legacy-колонка `text` объявлена NOT NULL: для Text кладём сам текст, для
     // медиа — пустую строку (источник истины — `content`).
     let legacy_text = match &ev.payload.content {
-        parvane_types::MessageContent::Text { text } => text.as_str(),
+        MessageContent::Text { text } => text.as_str(),
         _ => "",
     };
+    let reply_to = ev.payload.reply_to.map(|u| u.to_string());
     sqlx::query(
-        "INSERT OR IGNORE INTO messages (id, from_user, to_user, text, kind, content, ts, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO messages
+           (id, from_user, to_user, text, kind, content, ts, created_at, reply_to, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(ev.id.to_string())
     .bind(&ev.from)
@@ -123,10 +135,50 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
     .bind(&content_json)
     .bind(ev.ts)
     .bind(now)
+    .bind(reply_to)
+    .bind(now)
     .execute(pool)
     .await
     .context("сохранение сообщения")?;
     Ok(())
+}
+
+/// Отредактировать текст своего сообщения. Возвращает `true`, если строка
+/// действительно принадлежит автору и была обновлена. Бампает `updated_at`.
+async fn edit_message(pool: &SqlitePool, message_id: &str, author: &str, text: &str, now: i64) -> Result<bool> {
+    let content_json = serde_json::to_string(&MessageContent::Text { text: text.to_string() })?;
+    let res = sqlx::query(
+        "UPDATE messages
+            SET text = ?, kind = 'text', content = ?, edited = 1, updated_at = ?
+          WHERE id = ? AND from_user = ? AND deleted = 0",
+    )
+    .bind(text)
+    .bind(&content_json)
+    .bind(now)
+    .bind(message_id)
+    .bind(author)
+    .execute(pool)
+    .await
+    .context("правка сообщения")?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Удалить своё сообщение «у всех» (tombstone). Содержимое затирается.
+async fn delete_message(pool: &SqlitePool, message_id: &str, author: &str, now: i64) -> Result<bool> {
+    let empty = serde_json::to_string(&MessageContent::Text { text: String::new() })?;
+    let res = sqlx::query(
+        "UPDATE messages
+            SET deleted = 1, text = '', kind = 'text', content = ?, updated_at = ?
+          WHERE id = ? AND from_user = ?",
+    )
+    .bind(&empty)
+    .bind(now)
+    .bind(message_id)
+    .bind(author)
+    .execute(pool)
+    .await
+    .context("удаление сообщения")?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
@@ -143,6 +195,14 @@ async fn store_read_receipt(
         .execute(pool)
         .await
         .context("сохранение read receipt")?;
+    // Бампаем updated_at сообщения, чтобы отправитель увидел прочтение через
+    // курсор синка по мутациям (read-галочка ✓✓).
+    sqlx::query("UPDATE messages SET updated_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .context("бамп updated_at при прочтении")?;
     Ok(())
 }
 
@@ -156,27 +216,48 @@ async fn fetch_missed(
     pool: &SqlitePool,
     user: &str,
     last_seen_id: &str,
+    since_updated: i64,
 ) -> Result<Vec<StoredMessage>> {
-    let rows: Vec<(String, String, String, Option<String>, i64)> = sqlx::query_as(
-        "SELECT id, from_user, to_user, content, ts
-         FROM messages
-         WHERE (to_user = ? OR from_user = ?) AND id > ?
-         ORDER BY id
+    // Два курсора: новые сообщения (`id > last_seen_id`) И мутации старых
+    // (`updated_at > since_updated`: правки, удаления, отметки о прочтении).
+    // `read` считается подзапросом: есть ли receipt от получателя (to_user).
+    type Row = (
+        String,         // id
+        String,         // from_user
+        String,         // to_user
+        Option<String>, // content
+        i64,            // ts
+        Option<String>, // reply_to
+        i64,            // edited
+        i64,            // deleted
+        i64,            // updated_at
+        i64,            // read (0/1)
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT m.id, m.from_user, m.to_user, m.content, m.ts,
+                m.reply_to, m.edited, m.deleted, m.updated_at,
+                EXISTS(SELECT 1 FROM read_receipts r
+                        WHERE r.message_id = m.id AND r.reader = m.to_user) AS read
+         FROM messages m
+         WHERE (m.to_user = ? OR m.from_user = ?)
+           AND (m.id > ? OR m.updated_at > ?)
+         ORDER BY m.updated_at, m.id
          LIMIT 100",
     )
     .bind(user)
     .bind(user)
     .bind(last_seen_id)
+    .bind(since_updated)
     .fetch_all(pool)
     .await?;
 
     let mut messages = Vec::with_capacity(rows.len());
-    for (id, from, to, content_json, ts) in rows {
+    for (id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, read) in rows {
         // content может быть NULL только для legacy-строк без миграции данных;
         // в норме всегда заполнен.
         let content = match content_json {
             Some(json) => serde_json::from_str(&json).context("разбор content")?,
-            None => parvane_types::MessageContent::Text { text: String::new() },
+            None => MessageContent::Text { text: String::new() },
         };
         messages.push(StoredMessage {
             id: id.parse().unwrap_or(Uuid::nil()),
@@ -184,6 +265,11 @@ async fn fetch_missed(
             to,
             content,
             ts,
+            reply_to: reply_to.and_then(|s| s.parse().ok()),
+            edited: edited != 0,
+            deleted: deleted != 0,
+            read: read != 0,
+            updated_at,
         });
     }
     Ok(messages)
@@ -239,6 +325,54 @@ async fn handle_read(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     }
 }
 
+// ── msg.chat.edit ─────────────────────────────────────────────────────────────
+
+async fn handle_edit(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<EditPayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.edit")?;
+        let author = verify_token(nc, &event.token).await?;
+        validate_sender(&author, &event.from)?;
+
+        let ok = edit_message(pool, &event.payload.message_id.to_string(), &author, &event.payload.text, now_unix()).await?;
+        if ok {
+            info!("Сообщение {} отредактировано автором {}", event.payload.message_id, author);
+        } else {
+            warn!("Правка {} отклонена (не автор или удалено)", event.payload.message_id);
+        }
+        anyhow::Ok(())
+    }
+    .await;
+
+    if let Err(e) = result {
+        error!("handle_edit: {}", e);
+    }
+}
+
+// ── msg.chat.delete ───────────────────────────────────────────────────────────
+
+async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<DeletePayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.delete")?;
+        let author = verify_token(nc, &event.token).await?;
+        validate_sender(&author, &event.from)?;
+
+        let ok = delete_message(pool, &event.payload.message_id.to_string(), &author, now_unix()).await?;
+        if ok {
+            info!("Сообщение {} удалено у всех автором {}", event.payload.message_id, author);
+        } else {
+            warn!("Удаление {} отклонено (не автор)", event.payload.message_id);
+        }
+        anyhow::Ok(())
+    }
+    .await;
+
+    if let Err(e) = result {
+        error!("handle_delete: {}", e);
+    }
+}
+
 // ── msg.sync.request ──────────────────────────────────────────────────────────
 
 async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -253,7 +387,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 
         let user = verify_token(nc, &event.token).await?;
         let last_id = &event.payload.last_seen_id;
-        let messages = fetch_missed(pool, &user, last_id).await?;
+        let messages = fetch_missed(pool, &user, last_id, event.payload.since_updated).await?;
 
         let count = messages.len();
         let resp = ParvaneEvent {
@@ -309,7 +443,7 @@ mod tests {
             from: from.into(),
             ts: 1_000_000,
             token: "tok".into(),
-            payload: SendPayload { to: to.into(), content },
+            payload: SendPayload { to: to.into(), content, reply_to: None },
         }
     }
 
@@ -359,7 +493,7 @@ mod tests {
         );
         store_message(&pool, &ev, 1).await.unwrap();
 
-        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000")
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
             .await
             .unwrap();
         assert_eq!(missed.len(), 1);
@@ -379,7 +513,7 @@ mod tests {
         .unwrap();
 
         // получатель carol не должен видеть сообщение для bob
-        let missed = fetch_missed(&pool, "carol@local", "00000000-0000-0000-0000-000000000000")
+        let missed = fetch_missed(&pool, "carol@local", "00000000-0000-0000-0000-000000000000", 0)
             .await
             .unwrap();
         assert!(missed.is_empty());
@@ -398,7 +532,7 @@ mod tests {
         .unwrap();
 
         // alice — отправитель, должна получить своё же сообщение при ресинке
-        let missed = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000")
+        let missed = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000", 0)
             .await
             .unwrap();
         assert_eq!(missed.len(), 1);
@@ -419,10 +553,71 @@ mod tests {
             .await
             .unwrap();
 
-        // last_seen = older → возвращается только newer
-        let missed = fetch_missed(&pool, "bob@local", older).await.unwrap();
+        // Клиент, уже видевший older, держит оба курсора: last_seen=older и
+        // since_updated=updated_at(older)=1. Тогда отдаётся только newer.
+        let missed = fetch_missed(&pool, "bob@local", older, 1).await.unwrap();
         assert_eq!(missed.len(), 1);
         assert_eq!(text_of(&missed[0]), "второе");
+    }
+
+    #[tokio::test]
+    async fn fetch_missed_picks_up_mutations_past_id_cursor() {
+        // Курсор по мутациям ловит правку старого сообщения, даже когда его id
+        // ≤ last_seen_id (инкрементальный синк по id такое пропускал).
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-000000000001";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "до правки"), 1)
+            .await
+            .unwrap();
+        // Клиент уже видел это сообщение (id и updated_at=1).
+        let none = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
+        assert!(none.is_empty());
+        // Автор редактирует — updated_at прыгает на 5.
+        assert!(edit_message(&pool, mid, "alice@local", "после правки", 5).await.unwrap());
+        let missed = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
+        assert_eq!(missed.len(), 1);
+        assert_eq!(text_of(&missed[0]), "после правки");
+        assert!(missed[0].edited);
+    }
+
+    #[tokio::test]
+    async fn read_receipt_surfaces_in_sync() {
+        // Отправитель видит read=true после receipt получателя (галочка ✓✓).
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000bb";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "прочти меня"), 1)
+            .await
+            .unwrap();
+        // До прочтения — read=false.
+        let before = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(before.len(), 1);
+        assert!(!before[0].read);
+        // Получатель прочитал.
+        store_read_receipt(&pool, mid, "bob@local", 7).await.unwrap();
+        let after = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(after[0].read, "read-галочка после receipt");
+    }
+
+    #[tokio::test]
+    async fn delete_message_only_by_author() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000cc";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "секрет"), 1)
+            .await
+            .unwrap();
+        // Чужак не может удалить.
+        assert!(!delete_message(&pool, mid, "bob@local", 3).await.unwrap());
+        // Автор может.
+        assert!(delete_message(&pool, mid, "alice@local", 4).await.unwrap());
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(missed.len(), 1);
+        assert!(missed[0].deleted);
     }
 
     #[tokio::test]
@@ -434,7 +629,7 @@ mod tests {
         let dup = send_event("00000000-0000-7000-8000-000000000001", "alice@local", "bob@local", "два");
         store_message(&pool, &dup, 2).await.unwrap();
 
-        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000")
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
             .await
             .unwrap();
         assert_eq!(missed.len(), 1, "дубликата быть не должно");
@@ -469,7 +664,7 @@ mod tests {
         assert_eq!(kind.0, "voice");
 
         // content десериализуется обратно в тот же вариант
-        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000")
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
             .await
             .unwrap();
         assert_eq!(missed.len(), 1);

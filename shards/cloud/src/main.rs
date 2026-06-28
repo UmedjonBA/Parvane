@@ -112,6 +112,19 @@ async fn handle_chunk(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
     }
     .await;
 
+    // Если клиент прислал чанк как request (с reply-топиком) — подтверждаем
+    // сохранение. Это сериализует загрузку: клиент дожидается записи каждого
+    // чанка до отправки complete, исключая гонку chunk/complete в select!.
+    if let Some(reply) = msg.reply {
+        let ack = match &result {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&ack) {
+            let _ = nc.publish(reply, bytes.into()).await;
+        }
+    }
+
     if let Err(e) = result {
         error!("handle_chunk: {}", e);
     }
