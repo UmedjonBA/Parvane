@@ -47,6 +47,19 @@ JSON-событий Parvane. Это основной объём.
 Предпочтение: **(1)**, вертикальными срезами — сначала минимальный набор TL для
 логина и одного текстового диалога, потом расширять.
 
+## Точка создания сессии (по итогам разведки кода v6.9.3)
+
+`Main::Account::createSession(const MTPUser &user, ...)` (main_account.h:52)
+создаёт `Main::Session` из синтезированного `MTPUser` — это и есть выход
+intro-флоу после успешной авторизации. Для Parvane-логина: получили JWT от
+`identity.token.issue` → синтезируем `MTPUser` себя → `account->createSession(self)`.
+Входящие апдейты вбрасываются через `Account::mtpUpdates()`
+(`rpl::event_stream<MTPUpdates> _mtpUpdates`, main_account.h:104/150).
+
+Статус шага 23a: `parvane-core` подключён к CMake tdesktop (link target
+`parvane_core`, glue `SourceFiles/parvane/parvane_client.cpp`), вызов
+`Parvane::LogStartup()` в `Application::run()` — проверка линковки cnats в бинарь.
+
 ## Минимальный набор TL для первого среза (Фаза 2–3)
 
 - авторизация: подменяем intro-флоу на `identity.token.issue` (user/password),
