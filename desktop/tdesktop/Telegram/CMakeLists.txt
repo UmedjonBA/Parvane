@@ -21,8 +21,19 @@ add_subdirectory(lib_webrtc)
 add_subdirectory(lib_webview)
 add_subdirectory(codegen)
 
+# Parvane fork: переносимая либа транспорта (cnats + nlohmann/json), без Qt.
+# Лежит рядом с tdesktop в desktop/parvane-core; probe/тесты в этой сборке не нужны.
+set(PARVANE_CORE_BUILD_PROBE OFF CACHE INTERNAL "")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../parvane-core parvane-core)
+
 get_filename_component(src_loc SourceFiles REALPATH)
 get_filename_component(res_loc Resources REALPATH)
+
+# Parvane fork: glue-модуль клиента (мост tdesktop ↔ parvane-core).
+target_sources(Telegram PRIVATE
+    ${src_loc}/parvane/parvane_client.cpp
+    ${src_loc}/parvane/parvane_client.h
+)
 
 include(cmake/telegram_options.cmake)
 include(cmake/lib_ffmpeg.cmake)
@@ -88,6 +99,7 @@ PRIVATE
     desktop-app::external_openssl
     desktop-app::external_openal
     desktop-app::external_xxhash
+    parvane_core
 )
 
 if (NOT DESKTOP_APP_DISABLE_SWIFT6)

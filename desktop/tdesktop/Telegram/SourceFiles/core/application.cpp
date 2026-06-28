@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/application.h"
 
+#include "parvane/parvane_client.h" // Parvane fork
 #include "data/data_abstract_structure.h"
 #include "data/data_channel.h"
 #include "data/data_forum.h"
@@ -264,6 +265,8 @@ void Application::run() {
 	// Depends on OpenSSL on macOS, so on ThirdParty::start().
 	// Depends on notifications settings.
 	_notifications = std::make_unique<Window::Notifications::System>();
+
+	Parvane::LogStartup(); // Parvane fork: sanity-check линковки транспорта.
 
 	startLocalStorage();
 
