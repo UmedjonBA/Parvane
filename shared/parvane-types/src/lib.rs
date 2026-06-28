@@ -10,6 +10,8 @@ pub mod topics {
     pub const MSG_SEND: &str = "msg.chat.send";
     pub const MSG_DELIVERED: &str = "msg.chat.delivered";
     pub const MSG_READ: &str = "msg.chat.read";
+    pub const MSG_EDIT: &str = "msg.chat.edit";
+    pub const MSG_DELETE: &str = "msg.chat.delete";
     pub const MSG_SYNC_REQUEST: &str = "msg.sync.request";
     pub const MSG_SYNC_RESPONSE: &str = "msg.sync.response";
 
@@ -152,6 +154,9 @@ impl MessageContent {
 pub struct SendPayload {
     pub to: String,
     pub content: MessageContent,
+    /// Если сообщение — ответ на другое, здесь его `id`. `None` — обычное.
+    #[serde(default)]
+    pub reply_to: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,9 +169,26 @@ pub struct ReadPayload {
     pub message_id: Uuid,
 }
 
+/// Редактирование уже отправленного текстового сообщения. Только автор.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditPayload {
+    pub message_id: Uuid,
+    pub text: String,
+}
+
+/// Удаление сообщения «у всех» (tombstone). Только автор.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletePayload {
+    pub message_id: Uuid,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRequestPayload {
     pub last_seen_id: String,
+    /// Курсор по мутациям: вернуть также сообщения с `updated_at > since_updated`
+    /// (правки, удаления, отметки о прочтении старых сообщений). `0` — отдать всё.
+    #[serde(default)]
+    pub since_updated: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +203,21 @@ pub struct StoredMessage {
     pub to: String,
     pub content: MessageContent,
     pub ts: i64,
+    /// `id` сообщения, на которое это — ответ.
+    #[serde(default)]
+    pub reply_to: Option<Uuid>,
+    /// Текст был отредактирован автором.
+    #[serde(default)]
+    pub edited: bool,
+    /// Удалено «у всех» — клиент рисует плейсхолдер вместо содержимого.
+    #[serde(default)]
+    pub deleted: bool,
+    /// Прочитано получателем (есть read-receipt от `to`). Для галочки ✓✓.
+    #[serde(default)]
+    pub read: bool,
+    /// Время последней мутации (создание/правка/удаление/прочтение). Курсор синка.
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 // ── cloud payloads ───────────────────────────────────────────────────────────
