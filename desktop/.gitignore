@@ -1,0 +1,11 @@
+# Артефакты сборки форка (не коммитим)
+build-probe/
+build/
+out/
+*.log
+
+# Внешние зависимости, собираемые из исходников (не часть форка).
+# tde2e собирается из tdlib/td @ 51743df в локальный sysroot — см. BUILD-parvane.md.
+tde2e-src/
+
+# Локальный sysroot живёт в ~/.local/parvane-sysroot (вне репозитория)

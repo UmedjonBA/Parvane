@@ -1,0 +1,13 @@
+Форк основан на Telegram Desktop (tdesktop).
+
+upstream:  https://github.com/telegramdesktop/tdesktop
+tag:       v6.9.3
+commit:    3887c78b035b47f179ef366e3a8a56c08c44ad0b
+vendored:  2026-06 (Фаза 1 пивота клиента Parvane)
+license:   GPLv3 (с OpenSSL-исключением) — форк остаётся GPLv3
+
+Исходники лежат в desktop/tdesktop/. Сборка против системных библиотек Arch
+(Qt6 6.11, без Docker) — рецепт в desktop/BUILD-parvane.md.
+
+Обновление upstream: см. историю тегов на github, мёржить точечно, сохраняя
+модуль desktop/tdesktop/Telegram/SourceFiles/parvane/ (наш транспорт) и правки шва.
