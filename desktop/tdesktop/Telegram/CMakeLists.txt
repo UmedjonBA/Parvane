@@ -1295,6 +1295,8 @@ PRIVATE
     intro/intro_phone.h
     intro/intro_qr.cpp
     intro/intro_qr.h
+    intro/intro_parvane.cpp
+    intro/intro_parvane.h
     intro/intro_signup.cpp
     intro/intro_signup.h
     intro/intro_start.cpp
