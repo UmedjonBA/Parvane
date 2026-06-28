@@ -12,4 +12,19 @@ namespace Parvane {
 // Application::run() как ранний sanity-check интеграции (соединение не трогает).
 void LogStartup();
 
+// Результат identity.token.issue.
+struct IssueResult {
+	bool ok = false;
+	QString token;
+	QString error;
+};
+
+// БЛОКИРУЮЩИЙ запрос identity.token.issue: коннект к NatsUrl(), запрос, разбор
+// ответа. Сетевой/блокирующий — звать с воркер-потока (crl::async), не с UI.
+[[nodiscard]] IssueResult Issue(const QString &user, const QString &password);
+
+// JWT текущей сессии. Хранится в процессе (позже привяжем к Account).
+void SetToken(const QString &token);
+[[nodiscard]] QString Token();
+
 } // namespace Parvane

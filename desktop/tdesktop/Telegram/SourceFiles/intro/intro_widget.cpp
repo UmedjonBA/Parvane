@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_start.h"
 #include "intro/intro_phone.h"
 #include "intro/intro_qr.h"
+#include "intro/intro_parvane.h" // Parvane fork
 #include "intro/intro_code.h"
 #include "intro/intro_signup.h"
 #include "intro/intro_password_check.h"
@@ -103,19 +104,10 @@ Widget::Widget(
 		crl::on_main(this, [=] { createLanguageLink(); });
 	}, lifetime());
 
-	switch (point) {
-	case EnterPoint::Start:
-		getNearestDC();
-		appendStep(new StartWidget(this, _account, getData()));
-		break;
-	case EnterPoint::Phone:
-		appendStep(new PhoneWidget(this, _account, getData()));
-		break;
-	case EnterPoint::Qr:
-		appendStep(new QrWidget(this, _account, getData()));
-		break;
-	default: Unexpected("Enter point in Intro::Widget::Widget.");
-	}
+	// Parvane fork: единственный стартовый экран — логин через шард identity.
+	// Telegram-флоу (Start/Phone/Qr/EnterPoint) отключён.
+	(void)point;
+	appendStep(new ParvaneWidget(this, _account, getData()));
 
 	setupStep();
 	fixOrder();
