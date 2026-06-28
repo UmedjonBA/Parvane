@@ -37,9 +37,14 @@ target_link_libraries(parvane_core
     PUBLIC nlohmann_json::nlohmann_json
     PRIVATE nats_static)
 
-# ── probe-бинарь (де-риск транспорта) ────────────────────────────────────────
-option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe binary" ON)
+# ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
+option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe + tests" ON)
 if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_probe probe/main.cpp)
     target_link_libraries(parvane_probe PRIVATE parvane_core)
+
+    add_executable(parvane_core_tests tests/transport_tests.cpp)
+    target_link_libraries(parvane_core_tests PRIVATE parvane_core)
+    enable_testing()
+    add_test(NAME transport COMMAND parvane_core_tests)
 endif()
