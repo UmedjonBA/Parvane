@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "apiwrap.h"
 
+#include "parvane/parvane_client.h"
 #include "api/api_authorizations.h"
 #include "api/api_attached_stickers.h"
 #include "api/api_blocked_peers.h"
@@ -4224,6 +4225,11 @@ void ApiWrap::sendMessage(
 		return;
 	}
 	local().saveRecentSentHashtags(textWithTags.text);
+
+	// Parvane fork (Фаза 3b): зеркалим исходящий текст в шину (msg.chat.send)
+	// после прохождения проверок отправки, до построения локального MTP-эха.
+	// Получатель резолвится из реестра пиров по id; неизвестный пир — no-op+лог.
+	Parvane::MirrorOutgoing(peer.get(), textWithTags.text);
 
 	auto sending = TextWithEntities();
 	auto left = TextWithEntities {

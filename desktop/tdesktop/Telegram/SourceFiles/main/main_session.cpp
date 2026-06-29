@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "main/main_session.h"
 
+#include "parvane/parvane_client.h"
 #include "apiwrap.h"
 #include "api/api_peer_colors.h"
 #include "api/api_updates.h"
@@ -262,6 +263,9 @@ Session::Session(
 	) | rpl::on_next([=] {
 		appConfigRefreshed();
 	}, _lifetime);
+
+	// Parvane fork (Фаза 3): сессия готова — post-session хуки (debug-autosend).
+	Parvane::AfterSessionReady(this);
 }
 
 void Session::appConfigRefreshed() {
