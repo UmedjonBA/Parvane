@@ -62,8 +62,14 @@ void StopSession();
 // Неблокирующая: публикация уходит на воркер-поток.
 void MirrorOutgoing(PeerData *peer, const QString &text);
 
-// Вызывается в конце конструктора Main::Session. Точка для post-session хуков
-// (сейчас — debug-autosend PARVANE_AUTOSEND=peer@server:текст для e2e Фазы 3b).
+// Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
+// запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);
+
+// Один цикл приёма (Фаза 3c): sync с шины на воркере → инъекция НОВЫХ входящих
+// сообщений в Data::Session активной сессии (на main). Дедуп по UUID. Безопасно
+// звать с любого потока; если сессии нет — no-op. Триггерится onDelivered и при
+// старте сессии.
+void PumpReceive();
 
 } // namespace Parvane
