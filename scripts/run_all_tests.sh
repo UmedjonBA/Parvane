@@ -4,6 +4,7 @@
 #   1) Rust unit-тесты всех шардов + parvane-types  (cargo test --workspace)
 #   2) e2e-контракт бэкенда identity+messenger       (scripts/e2e_smoke.py)
 #   3) C++ transport-тесты parvane-core              (parvane_core_tests)
+#   4) C++ messenger-тесты parvane-core              (parvane_messenger_tests)
 #
 # Поднимает свои identity+messenger на временных БД; существующий NATS
 # переиспользует, а если его нет — стартует свой и гасит в конце.
@@ -74,6 +75,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
         echo "transport: OK"
     else
         fail "parvane_core_tests"
+    fi
+
+    # ── 4. C++ messenger-тесты parvane-core (send/sync/edit/read/delivered) ────
+    log "4. parvane-core messenger tests (C++)"
+    if PARVANE_NATS_URL="$NATS_URL" "$PC/build/parvane_messenger_tests"; then
+        echo "messenger: OK"
+    else
+        fail "parvane_messenger_tests"
     fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
