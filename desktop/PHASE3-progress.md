@@ -69,11 +69,28 @@ messenger 21/21) — предыдущие уровни не сломаны.
 проверять там. ВАЖНО про бэкенд: для прогона нужны живые identity+messenger
 (иначе `No responders available`); `run_all_tests.sh` поднимает свои на temp-БД.
 
-## 3c — приём входящих ⏳ TODO
+## 3c — приём входящих ✅ СДЕЛАНО
 
-Подписка на delivered → sync → синтез `MTPmessage` → инъекция в History/Data::Session.
-Предпосылка (из Фазы 2): self/пиров надо корректно грузить в Data::Session
-(сейчас варнинг `userIsContactChanged for a not loaded user`).
+`parvane_client`: `PumpReceive()` (воркер: `MessengerClient::sync(self, token,
+zeroCursor, since=0)` → полный список) + `injectOnMain()` на main-потоке:
+- дедуп по UUID (`g_uuidToMsgId`), пропуск своих (`from==self`, есть локальное
+  эхо) и томбстоунов (`deleted`);
+- `ensurePeerUser()` синтезирует/загружает отправителя как `MTPUser`
+  (first_name=адрес) через `processUser` — снимает `not loaded user`;
+- `buildIncoming()` строит входящий `MTPMessage` (out=false, from/peer =
+  отправитель; раскладка полей сверена с `GenerateForwardedItem`);
+- синтетический `MsgId` из возрастающего счётчика (серверный диапазон),
+  `Data::Session::addNewMessage(id, msg, {}, NewMessageType::Unread)`.
+
+Триггеры: `onDelivered` («что-то изменилось» → pump) и первичный pump в
+`AfterSessionReady` (офлайн-бэклог). `g_sessionWeak` — `base::weak_ptr` на
+`Main::Session`, инъекция строго на main.
+
+Проверка e2e: `desktop/verify_phase3c.sh` — alice (autologin), ВНЕШНЯЯ публикация
+`msg.chat.send` bob→alice (полный конверт, UUID v7, JWT bob) → лог alice:
+«получено msg … от bob@local: <text>» + «инъецировано 1 входящих», без падений.
+**4/4 OK.** Регресс `run_all_tests.sh` зелёный (cargo · e2e 10/10 · transport ·
+messenger 21/21).
 
 ## 3d — sync при старте + список диалогов ⏳ TODO
 
