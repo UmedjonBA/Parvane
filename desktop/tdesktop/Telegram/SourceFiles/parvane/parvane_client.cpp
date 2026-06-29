@@ -3,12 +3,14 @@
 
 #include "base/debug_log.h"
 #include "base/weak_ptr.h"
+#include "base/timer.h"
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_types.h"
 #include "data/data_peer_id.h"
 #include "history/history.h"
+#include "history/history_item.h"
 #include "apiwrap.h"
 #include "api/api_common.h"
 
@@ -41,6 +43,9 @@ QHash<quint64, QString> g_idToAddress;
 base::weak_ptr<Main::Session> g_sessionWeak;
 QHash<QString, qint64> g_uuidToMsgId; // UUID сообщения → синтетический MsgId
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
+std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
+
+constexpr auto kPumpIntervalMs = crl::time(3000);
 
 // Публикует текст в шину с воркер-потока (не блокирует UI).
 void sendTextAsync(const QString &toAddress, const QString &text) {
@@ -324,16 +329,27 @@ void injectOnMain(
 		ensurePeerUser(session, senderId, from);
 		const auto msgId = MsgId(g_nextMsgId++);
 		g_uuidToMsgId.insert(uuid, msgId.bare);
-		session->data().addNewMessage(
+		const auto item = session->data().addNewMessage(
 			msgId,
 			buildIncoming(senderId, sm.ts, text),
 			MessageFlags(),
 			NewMessageType::Unread);
 		++added;
-		LOG(("Parvane: получено msg %1 от %2: %3")
-			.arg(uuid)
-			.arg(from)
-			.arg(text));
+		LOG(("Parvane: получено msg %1 от %2: %3").arg(uuid).arg(from).arg(text));
+		if (item) {
+			const auto history = item->history();
+			// Без живого MTProto папка истории остаётся «неизвестной», и
+			// shouldBeInChatList() = false → диалог не появляется в списке.
+			// Помечаем основную папку известной (как applyDialog с folder=null):
+			// это вызывает updateChatListSortPosition и регистрирует диалог.
+			if (!history->folderKnown()) {
+				history->clearFolder();
+			}
+			LOG(("Parvane: диалог %1 — в списке=%2 непрочитано=%3")
+				.arg(from)
+				.arg(history->inChatList() ? 1 : 0)
+				.arg(history->unreadCount()));
+		}
 	}
 	if (added > 0) {
 		LOG(("Parvane: инъецировано %1 входящих").arg(added));
@@ -387,6 +403,14 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		// Первичный приём: подтягиваем то, что уже лежит в шарде (офлайн-бэклог).
 		PumpReceive();
+
+		// Периодический sync (Фаза 3d): ловит сообщения, чей delivered-бродкаст
+		// был пропущен (NATS fire-and-forget) или пришёл, пока клиент был офлайн.
+		if (!g_pumpTimer) {
+			g_pumpTimer = std::make_unique<base::Timer>([] { PumpReceive(); });
+			g_pumpTimer->callEach(kPumpIntervalMs);
+			LOG(("Parvane: периодический sync каждые %1 мс").arg(kPumpIntervalMs));
+		}
 
 		// Debug-autosend для e2e Фазы 3b: PARVANE_AUTOSEND=peer@server:текст.
 		const char *v = std::getenv("PARVANE_AUTOSEND");
