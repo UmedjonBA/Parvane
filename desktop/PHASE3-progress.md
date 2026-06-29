@@ -43,13 +43,31 @@
 Прогон: `bash scripts/run_all_tests.sh` → «ВСЕ УРОВНИ ТЕСТОВ ПРОШЛИ»
 (cargo · e2e · transport 10/10 · messenger 21/21).
 
-## 3b — врезка отправки в tdesktop (msg.chat.send) ⏳ TODO
+## 3b — врезка отправки в tdesktop (msg.chat.send) ✅ СДЕЛАНО
 
-Точка перехвата: `ApiWrap::sendMessage` (`Telegram/SourceFiles/apiwrap.cpp:4199`).
-Строит локальное эхо (`generateLocal=true`) и шлёт `MTPmessages_SendMessage`.
-План: после локального эха публиковать `msg.chat.send` через parvane-core
-(адрес получателя = из peer, текущий self = из логина). JWT — `Parvane::Token()`.
-Контроль: `nats sub msg.chat.send` ловит событие; эхо видно в UI.
+`parvane_client.{h,cpp}` теперь держит персистентную сессию шины
+(`Transport`+`MessengerClient`) после логина, реестр пиров (`address↔id`,
+FNV-1a 48-бит — единый `IdForAddress`, общий с синтезом self в intro) и зеркалит
+исходящие.
+
+Врезки:
+- `ApiWrap::sendMessage` (`apiwrap.cpp`, после проверок отправки/saveRecentSentHashtags):
+  `Parvane::MirrorOutgoing(peer.get(), textWithTags.text)` → резолв адреса пира из
+  реестра по `peerToUser(id).bare` → `MessengerClient::sendText` на воркер-потоке.
+- `intro_parvane.cpp onIssued`: `SetSelf(user,token)` + `crl::async(StartSession)`.
+- `main_session.cpp` (конец ctor): `Parvane::AfterSessionReady(this)` — точка
+  post-session хуков (сейчас debug-autosend `PARVANE_AUTOSEND=peer@server:текст`).
+
+Проверка e2e: `desktop/verify_phase3b.sh` — headless-форк (autologin+autosend) →
+лог `<workdir>/log.txt` показывает login OK · сессия поднята · отправлено · autosend ·
+delivered (ack); подписчик `msg.chat.send` ловит ПОЛНЫЙ конверт с
+`content:{kind:text,text}`, `to`, UUID v7 id, JWT. **6/6 OK.**
+Регресс `scripts/run_all_tests.sh` зелёный (cargo · e2e · transport 10/10 ·
+messenger 21/21) — предыдущие уровни не сломаны.
+
+ВАЖНО про логи: tdesktop пишет `LOG()` в `<workdir>/log.txt`, НЕ в stdout —
+проверять там. ВАЖНО про бэкенд: для прогона нужны живые identity+messenger
+(иначе `No responders available`); `run_all_tests.sh` поднимает свои на temp-БД.
 
 ## 3c — приём входящих ⏳ TODO
 

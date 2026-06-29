@@ -14,23 +14,6 @@
 
 namespace Intro {
 namespace details {
-namespace {
-
-// Стабильный 64-бит UserId из адреса user@server (FNV-1a, 48 бит, ненулевой).
-// Пока identity не выдаёт числовой id — детерминированно выводим из строки,
-// чтобы один и тот же пользователь имел один и тот же id между запусками.
-[[nodiscard]] uint64 StableUserId(const QString &user) {
-	const auto utf8 = user.toUtf8();
-	uint64 h = 1469598103934665603ULL; // FNV offset basis
-	for (const auto c : utf8) {
-		h ^= static_cast<unsigned char>(c);
-		h *= 1099511628211ULL; // FNV prime
-	}
-	h &= ((uint64(1) << 48) - 1); // в безопасный диапазон id
-	return h ? h : 1;
-}
-
-} // namespace
 
 ParvaneWidget::ParvaneWidget(
 	QWidget *parent,
@@ -136,7 +119,11 @@ void ParvaneWidget::onIssued(
 		_password->setFocus();
 		return;
 	}
-	Parvane::SetToken(token);
+	// Запоминаем себя (адрес+JWT) и поднимаем персистентную сессию шины на
+	// воркер-потоке (connect блокирующий, но локальный и быстрый). Сессия нужна
+	// для зеркалирования исходящих (Фаза 3b) и приёма (Фаза 3c).
+	Parvane::SetSelf(user, token);
+	crl::async([] { Parvane::StartSession(); });
 	loginSucceeded(user);
 }
 
@@ -146,7 +133,7 @@ void ParvaneWidget::loginSucceeded(const QString &user) {
 	// живого MTProto). Список диалогов наполнит msg.sync.* в Фазе 3.
 	const auto self = MTP_user(
 		MTP_flags(MTPDuser::Flag::f_self),
-		MTP_long(StableUserId(user)),
+		MTP_long(Parvane::IdForAddress(user)),
 		MTPlong(),           // access_hash
 		MTP_string(user),    // first_name — показываем адрес
 		MTPstring(),         // last_name
