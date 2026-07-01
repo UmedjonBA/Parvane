@@ -39,6 +39,15 @@ public:
     // fire-and-forget публикация (msg.chat.send, call.signal, ...).
     void publish(const std::string &subject, const std::string &payload);
 
+    // Как request, но собирает НЕСКОЛЬКО ответов на приватный inbox: публикует
+    // запрос с reply=inbox и вызывает onReply на каждый ответ. onReply возвращает
+    // true — ждать ещё, false — достаточно (остановиться). Останавливается также
+    // по timeout_ms (общий бюджет). Нужен для file.download.request, где cloud-
+    // шард шлёт файл N чанками на один reply-инбокс. Бросает TransportError.
+    using ReplyHandler = std::function<bool(const std::string &reply)>;
+    void requestMany(const std::string &subject, const std::string &payload,
+                     const ReplyHandler &onReply, std::int64_t timeout_ms = 5000);
+
     // Асинхронная подписка. Хэндлер вызывается на потоке доставки cnats с
     // (subject, payload). Подписка живёт, пока жив Transport.
     using Handler = std::function<void(std::string subject, std::string payload)>;

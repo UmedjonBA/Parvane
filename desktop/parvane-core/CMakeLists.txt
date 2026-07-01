@@ -29,7 +29,10 @@ FetchContent_Declare(cnats
 FetchContent_MakeAvailable(nlohmann_json cnats)
 
 # ── parvane_core ─────────────────────────────────────────────────────────────
-add_library(parvane_core STATIC src/transport.cpp src/messenger_client.cpp)
+add_library(parvane_core STATIC
+    src/transport.cpp
+    src/messenger_client.cpp
+    src/cloud_client.cpp)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${cnats_SOURCE_DIR}/src)
@@ -49,7 +52,11 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_messenger_tests tests/messenger_tests.cpp)
     target_link_libraries(parvane_messenger_tests PRIVATE parvane_core)
 
+    add_executable(parvane_cloud_tests tests/cloud_tests.cpp)
+    target_link_libraries(parvane_cloud_tests PRIVATE parvane_core)
+
     enable_testing()
     add_test(NAME transport COMMAND parvane_core_tests)
     add_test(NAME messenger COMMAND parvane_messenger_tests)
+    add_test(NAME cloud COMMAND parvane_cloud_tests)
 endif()
