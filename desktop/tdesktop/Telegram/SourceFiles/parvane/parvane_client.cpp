@@ -10,6 +10,7 @@
 #include "data/data_document.h"
 #include "data/data_photo.h"
 #include "data/data_types.h"
+#include "data/data_msg_id.h"      // IsClientMsgId
 #include "data/data_peer_id.h"
 #include "core/file_location.h"
 #include "base/unixtime.h"
@@ -32,6 +33,8 @@
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
+#include <rpl/lifetime.h>
+#include <rpl/producer.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -55,6 +58,8 @@ base::weak_ptr<Main::Session> g_sessionWeak;
 QHash<QString, qint64> g_uuidToMsgId; // UUID сообщения → синтетический MsgId
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
+rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
+bool g_finalizeHooked = false;
 
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
@@ -809,6 +814,33 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		RegisterPeer(SelfAddress());
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
+		}
+
+		// Исходящие эхо помечаем «отправленными» (Фаза 4, фикс вечной крутилки):
+		// без MTProto локальное сообщение висит в BeingSent (часики; для медиа мы
+		// ещё и не стартуем uploader). Как только сообщение добавлено — присваиваем
+		// серверный id: setRealId снимает BeingSent|Local → «отправлено».
+		if (!g_finalizeHooked) {
+			g_finalizeHooked = true;
+			session->data().newItemAdded(
+			) | rpl::on_next([](not_null<HistoryItem*> item) {
+				if (!item->out()
+					|| !item->isSending()
+					|| !IsClientMsgId(item->id)) {
+					return;
+				}
+				const auto fullId = item->fullId();
+				crl::on_main([fullId] {
+					const auto session = g_sessionWeak.get();
+					if (!session) {
+						return;
+					}
+					const auto it = session->data().message(fullId);
+					if (it && it->isSending() && IsClientMsgId(it->id)) {
+						it->setRealId(MsgId(g_nextMsgId++));
+					}
+				});
+			}, g_finalizeLifetime);
 		}
 		// Первичный приём: подтягиваем то, что уже лежит в шарде (офлайн-бэклог).
 		PumpReceive();

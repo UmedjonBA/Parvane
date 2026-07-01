@@ -565,12 +565,13 @@ void SendConfirmedFile(
 			file->to.replyTo.topicRootId);
 	}
 
-	session->uploader().upload(newId, file);
-
-	// Parvane fork (Фаза 4): дублируем медиа в шину (cloud + msg.chat.send).
-	// Локальное отображение у отправителя уже обеспечено generateLocal ниже;
-	// штатный MTProto-uploader в форке уходит «в никуда» — реальную доставку
-	// делает эта врезка.
+	// Parvane fork (Фаза 4): НЕ запускаем штатный MTProto-uploader — он грузит
+	// «в никуда» (нет серверов Telegram) и оставляет вечную крутилку загрузки
+	// (media view гейтит радиал по document/photo->uploading()). Вместо него
+	// дублируем медиа в шину (cloud + msg.chat.send); локальное «отправленное»
+	// состояние проставляет наблюдатель newItemAdded (Parvane::AfterSessionReady,
+	// setRealId). Байты файла MirrorOutgoingFile читает синхронно ниже.
+	//   session->uploader().upload(newId, file);  // отключено в форке
 	Parvane::MirrorOutgoingFile(session, file);
 
 	auto action = SendAction(history, file->to.options);
