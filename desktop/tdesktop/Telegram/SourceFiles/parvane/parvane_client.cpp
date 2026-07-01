@@ -17,6 +17,7 @@
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 #include "history/history.h"
 #include "history/history_item.h"
+#include "dialogs/dialogs_main_list.h"
 #include "apiwrap.h"
 #include "api/api_common.h"
 #include "storage/localimageloader.h" // FilePrepareResult, SendMediaType
@@ -871,6 +872,13 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
 		}
+
+		// Без живого MTProto dialogs.getDialogs не завершается → список диалогов
+		// вечно «Loading…» на пустом аккаунте. Помечаем список загруженным. Сам
+		// плейсхолдер пустого списка гейтится по contactsLoaded() (dialogs_inner_
+		// widget.cpp) — ставим и его, тогда вместо «Loading…» обычный пустой вид.
+		session->data().chatsList()->setLoaded();
+		session->data().contactsLoaded() = true;
 
 		// Исходящие эхо помечаем «отправленными» (Фаза 4, фикс вечной крутилки):
 		// без MTProto локальное сообщение висит в BeingSent (часики; для медиа мы
