@@ -73,6 +73,14 @@ void MirrorOutgoingFile(
 	not_null<Main::Session*> session,
 	const std::shared_ptr<FilePrepareResult> &file);
 
+// Привязывает локальный файл к СВОЕМУ (исходящему) медиа, чтобы отправитель
+// видел фото inline / файл как скачанный. Нужно потому, что в форке штатный
+// uploader пропущен (иначе вечная крутилка) и DocumentData/PhotoData остаются
+// без локальных данных. Звать на main после создания локального сообщения.
+void AttachLocalOutgoingMedia(
+	not_null<Main::Session*> session,
+	const std::shared_ptr<FilePrepareResult> &file);
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);

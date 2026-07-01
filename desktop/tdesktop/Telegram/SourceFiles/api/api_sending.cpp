@@ -703,6 +703,12 @@ void SendConfirmedFile(
 		}, caption, media);
 	}
 
+	// Parvane fork: привязываем локальный файл к своему медиа, чтобы отправитель
+	// видел фото inline / файл скачанным (штатный uploader в форке пропущен).
+	if (!isEditing) {
+		Parvane::AttachLocalOutgoingMedia(session, file);
+	}
+
 	if (isEditing) {
 		return;
 	}
