@@ -269,7 +269,9 @@ Main::Session &TopBarWidget::session() const {
 }
 
 void TopBarWidget::updateConnectingState() {
-	const auto state = _controller->session().mtp().dcstate();
+	// Parvane fork: MTProto заглушён — соединение всегда «подключено», не
+	// показываем «connecting…» в шапке треда.
+	const auto state = MTP::ConnectedState;
 	const auto exposed = window()->windowHandle()
 		&& window()->windowHandle()->isExposed();
 	if (state == MTP::ConnectedState || !exposed) {

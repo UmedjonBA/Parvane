@@ -305,6 +305,11 @@ void ConnectionState::setBottomSkip(int skip) {
 }
 
 void ConnectionState::refreshState() {
+	// Parvane fork: MTProto заглушён (клиент ходит в NATS, а не в Telegram) —
+	// состояние соединения всегда «подключено», индикатор «Connecting…» не нужен.
+	applyState({ State::Type::Connected, false, true, false, false });
+	return;
+
 	using Checker = Core::UpdateChecker;
 	const auto state = [&]() -> State {
 		const auto exposed = _parent->window()->windowHandle()
