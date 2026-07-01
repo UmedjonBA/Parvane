@@ -7,8 +7,11 @@
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
+#include "data/data_document.h"
 #include "data/data_types.h"
 #include "data/data_peer_id.h"
+#include "core/file_location.h"
+#include "base/unixtime.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "apiwrap.h"
@@ -22,6 +25,7 @@
 #include <parvane/cloud_client.h>    // parvane-core
 
 #include <QtCore/QFile>
+#include <QtCore/QDir>
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
@@ -378,11 +382,15 @@ not_null<UserData*> ensurePeerUser(
 [[nodiscard]] MTPMessage buildIncoming(
 		std::uint64_t senderId,
 		std::int64_t ts,
-		const QString &text) {
+		const QString &text,
+		const MTPMessageMedia &media = MTPMessageMedia(),
+		bool hasMedia = false) {
 	const auto senderPeer = peerFromUser(UserId(BareId(senderId)));
 	using Flag = MTPDmessage::Flag;
+	const auto flags = Flag::f_from_id
+		| (hasMedia ? Flag::f_media : Flag(0));
 	return MTP_message(
-		MTP_flags(Flag::f_from_id),
+		MTP_flags(flags),
 		MTP_int(0),                 // id (override через addNewMessage)
 		peerToMTP(senderPeer),      // from_id — отправитель
 		MTPint(),                   // from_boosts_applied
@@ -395,8 +403,8 @@ not_null<UserData*> ensurePeerUser(
 		MTPPeer(),                  // guestchat_via_from
 		MTPMessageReplyHeader(),    // reply_to
 		MTP_int(int(ts)),           // date
-		MTP_string(text),           // message
-		MTPMessageMedia(),
+		MTP_string(text),           // message (для медиа — caption)
+		media,
 		MTPReplyMarkup(),
 		MTPVector<MTPMessageEntity>(),
 		MTPint(),                   // views
@@ -419,6 +427,158 @@ not_null<UserData*> ensurePeerUser(
 		MTPRichMessage());
 }
 
+// ── приём медиа (Фаза 4b) ──────────────────────────────────────────────────
+
+// FNV-1a 64 → стабильный локальный DocumentId из file_id (детерминированный,
+// чтобы processDocument дедупил один и тот же файл между pump'ами).
+[[nodiscard]] std::int64_t docIdFromFileId(const QString &fileId) {
+	const auto utf8 = fileId.toUtf8();
+	std::uint64_t h = 1469598103934665603ULL;
+	for (const auto c : utf8) {
+		h ^= static_cast<unsigned char>(c);
+		h *= 1099511628211ULL;
+	}
+	return static_cast<std::int64_t>(h);
+}
+
+// Локальный MTPDocument: без DC-локации (файл лежит на диске, см. setLocation).
+// В MVP любое медиа представляем документом с filename-атрибутом — открывается
+// и сохраняется штатным UI; inline-рендер фото — задача Фазы 4c.
+[[nodiscard]] MTPDocument buildLocalMtpDocument(
+		not_null<Main::Session*> session,
+		std::int64_t docId,
+		const QString &mime,
+		std::int64_t size,
+		const QString &filename,
+		std::int64_t ts) {
+	auto attributes = QVector<MTPDocumentAttribute>();
+	attributes.push_back(MTP_documentAttributeFilename(MTP_string(filename)));
+	return MTP_document(
+		MTP_flags(0),
+		MTP_long(docId),
+		MTP_long(0),                    // access_hash (локальный — не нужен)
+		MTP_bytes(),                    // file_reference
+		MTP_int(int(ts)),               // date
+		MTP_string(mime),
+		MTP_long(size),
+		MTP_vector<MTPPhotoSize>(),     // thumbs — без превью
+		MTPVector<MTPVideoSize>(),
+		MTP_int(session->mainDcId()),
+		MTP_vector<MTPDocumentAttribute>(attributes));
+}
+
+// Инъекция уже СКАЧАННОГО медиа-сообщения (main-поток): документ + локальный
+// файл + сообщение с media. msgId уже зарезервирован в injectOnMain.
+void injectMediaOnMain(
+		not_null<Main::Session*> session,
+		const QString &from,
+		std::uint64_t senderId,
+		std::int64_t ts,
+		MsgId msgId,
+		std::int64_t docId,
+		const QString &localPath,
+		const QString &filename,
+		const QString &mime,
+		std::int64_t size,
+		const QString &caption) {
+	RegisterPeer(from);
+	ensurePeerUser(session, senderId, from);
+
+	const auto mtpDoc = buildLocalMtpDocument(
+		session, docId, mime, size, filename, ts);
+	using Flag = MTPDmessageMediaDocument::Flag;
+	const auto media = MTP_messageMediaDocument(
+		MTP_flags(Flag::f_document),
+		mtpDoc,
+		MTPVector<MTPDocument>(),
+		MTPPhoto(),
+		MTPint(),
+		MTPint());
+
+	const auto item = session->data().addNewMessage(
+		msgId,
+		buildIncoming(senderId, ts, caption, media, /*hasMedia=*/true),
+		MessageFlags(),
+		NewMessageType::Unread);
+
+	// Привязываем локальный файл к документу — тогда UI считает его скачанным.
+	const auto doc = session->data().processDocument(mtpDoc);
+	doc->setLocation(Core::FileLocation(localPath));
+
+	LOG(("Parvane: получено медиа от %1: %2 (%3 байт) → %4")
+		.arg(from).arg(filename).arg(size).arg(localPath));
+	if (item) {
+		const auto history = item->history();
+		if (!history->folderKnown()) {
+			history->clearFolder();
+		}
+		LOG(("Parvane: медиа-диалог %1 — в списке=%2")
+			.arg(from).arg(history->inChatList() ? 1 : 0));
+	}
+}
+
+// Скачивает блоб из cloud на воркере, сохраняет на диск, затем инъецирует на
+// main. Дедуп-резервирование msgId делает вызывающий (injectOnMain).
+void pumpMediaDownload(
+		const QString &from,
+		std::uint64_t senderId,
+		std::int64_t ts,
+		MsgId msgId,
+		const QString &fileId,
+		const QString &filename,
+		const QString &mime,
+		std::int64_t size,
+		const QString &caption) {
+	const auto self = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto fileIdStd = fileId.toStdString();
+	crl::async([=] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		std::string bytes;
+		try {
+			parvane::CloudClient cloud(*t);
+			auto d = cloud.download(self, token, fileIdStd);
+			if (!d.ok) {
+				LOG(("Parvane: скачивание медиа %1 не удалось: %2")
+					.arg(fileId).arg(QString::fromStdString(d.error)));
+				return;
+			}
+			bytes = std::move(d.bytes);
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка скачивания медиа: %1")
+				.arg(QString::fromUtf8(e.what())));
+			return;
+		}
+		const auto dir = QDir::tempPath() + u"/parvane-media"_q;
+		QDir().mkpath(dir);
+		const auto path = dir + u"/"_q + fileId + u"_"_q + filename;
+		{
+			auto f = QFile(path);
+			if (!f.open(QIODevice::WriteOnly)
+				|| f.write(bytes.data(), bytes.size()) != qint64(bytes.size())) {
+				LOG(("Parvane: не записать медиа-файл %1").arg(path));
+				return;
+			}
+		}
+		const auto docId = docIdFromFileId(fileId);
+		crl::on_main([=] {
+			const auto session = g_sessionWeak.get();
+			if (!session) {
+				return;
+			}
+			injectMediaOnMain(session, from, senderId, ts, msgId, docId,
+				path, filename, mime, size, caption);
+		});
+	});
+}
+
 // Инъекция результатов sync в Data::Session. Только main-поток. Дедуп по UUID.
 void injectOnMain(
 		not_null<Main::Session*> session,
@@ -436,7 +596,43 @@ void injectOnMain(
 		}
 		const auto maybeText = sm.text();
 		if (!maybeText) {
-			continue; // не текст — медиа в Фазе 4
+			// Медиа (Фаза 4b): резервируем msgId и уходим качать блоб на воркер;
+			// инъекция сообщения — после скачивания (injectMediaOnMain).
+			const auto &c = sm.content;
+			const auto kind = QString::fromStdString(parvane::contentKind(c));
+			const auto fileId = c.contains("file_id") && c["file_id"].is_string()
+				? QString::fromStdString(c["file_id"].get<std::string>())
+				: QString();
+			if (fileId.isEmpty()) {
+				continue; // неизвестный/битый медиа-контент — пропускаем
+			}
+			auto filename = (c.contains("filename") && c["filename"].is_string())
+				? QString::fromStdString(c["filename"].get<std::string>())
+				: QString();
+			if (filename.isEmpty()) {
+				filename = kind + u"_"_q + fileId.left(8);
+			}
+			const auto mime = (c.contains("mime") && c["mime"].is_string())
+				? QString::fromStdString(c["mime"].get<std::string>())
+				: u"application/octet-stream"_q;
+			const auto size = std::int64_t(
+				c.contains("size_bytes") && c["size_bytes"].is_number()
+					? c["size_bytes"].get<std::int64_t>()
+					: 0);
+			const auto caption = (c.contains("caption") && c["caption"].is_string())
+				? QString::fromStdString(c["caption"].get<std::string>())
+				: QString();
+
+			RegisterPeer(from);
+			const auto senderId = IdForAddress(from);
+			const auto msgId = MsgId(g_nextMsgId++);
+			g_uuidToMsgId.insert(uuid, msgId.bare);
+			pumpMediaDownload(from, senderId, sm.ts, msgId,
+				fileId, filename, mime, size, caption);
+			++added;
+			LOG(("Parvane: медиа %1 от %2 (kind=%3) → скачивание")
+				.arg(uuid).arg(from).arg(kind));
+			continue;
 		}
 		const auto text = QString::fromStdString(*maybeText);
 		RegisterPeer(from);
