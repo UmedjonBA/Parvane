@@ -41,6 +41,8 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <string>
 
 namespace Parvane {
 namespace {
@@ -52,6 +54,10 @@ QString g_selfAddress;
 std::unique_ptr<parvane::Transport> g_transport;
 std::unique_ptr<parvane::MessengerClient> g_messenger;
 QHash<quint64, QString> g_idToAddress;
+// UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
+// задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
+// (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
+std::set<std::string> g_ownSentUuids;
 
 // Состояние приёма (Фаза 3c) — трогается ТОЛЬКО на main-потоке (инъекция и
 // AfterSessionReady идут через crl::on_main), поэтому без мьютекса.
@@ -82,6 +88,10 @@ void sendTextAsync(const QString &toAddress, const QString &text) {
 		}
 		try {
 			const auto id = m->sendText(from, to, body, token);
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_ownSentUuids.insert(id);
+			}
 			LOG(("Parvane: отправлено msg %1 → %2")
 				.arg(QString::fromStdString(id))
 				.arg(QString::fromStdString(to)));
@@ -250,31 +260,57 @@ parvane::json buildMediaContent(
 		const std::string &filename,
 		const std::string &mime,
 		std::uint64_t size,
+		int durationSecs,
+		int width,
+		int height,
 		const std::string &caption) {
 	const parvane::json cap =
 		caption.empty() ? parvane::json(nullptr) : parvane::json(caption);
 	switch (type) {
 	case SendMediaType::Photo:
 		return parvane::json{{"kind", "photo"}, {"file_id", fileId},
-			{"width", 0}, {"height", 0}, {"mime", mime},
+			{"width", width}, {"height", height}, {"mime", mime},
 			{"size_bytes", size}, {"caption", cap}};
 	case SendMediaType::Audio:
 		return parvane::json{{"kind", "voice"}, {"file_id", fileId},
-			{"duration_secs", 0}, {"mime", mime}, {"size_bytes", size}};
+			{"duration_secs", durationSecs}, {"mime", mime}, {"size_bytes", size}};
 	case SendMediaType::Round:
 		return parvane::json{{"kind", "video_note"}, {"file_id", fileId},
-			{"duration_secs", 0}, {"mime", mime}, {"size_bytes", size}};
+			{"duration_secs", durationSecs}, {"width", width}, {"height", height},
+			{"mime", mime}, {"size_bytes", size}};
 	default:
 		// video/* как Video, всё прочее — File.
 		if (mime.rfind("video/", 0) == 0) {
 			return parvane::json{{"kind", "video"}, {"file_id", fileId},
-				{"duration_secs", 0}, {"width", 0}, {"height", 0},
+				{"duration_secs", durationSecs}, {"width", width}, {"height", height},
 				{"mime", mime}, {"size_bytes", size}, {"caption", cap}};
 		}
 		return parvane::json{{"kind", "file"}, {"file_id", fileId},
 			{"filename", filename}, {"mime", mime},
 			{"size_bytes", size}, {"caption", cap}};
 	}
+}
+
+// Извлекает длительность(сек)/ширину/высоту из атрибутов file->document
+// (audio/video) или file->photo — чтобы на приёме собрать плеер/кружок.
+void extractMediaMeta(
+		const std::shared_ptr<FilePrepareResult> &file,
+		int &durationSecs, int &width, int &height) {
+	durationSecs = width = height = 0;
+	file->document.match([&](const MTPDdocument &d) {
+		for (const auto &attr : d.vattributes().v) {
+			attr.match([&](const MTPDdocumentAttributeAudio &a) {
+				durationSecs = a.vduration().v;
+			}, [&](const MTPDdocumentAttributeVideo &v) {
+				durationSecs = int(v.vduration().v);
+				width = v.vw().v;
+				height = v.vh().v;
+			}, [&](const MTPDdocumentAttributeImageSize &s) {
+				width = s.vw().v;
+				height = s.vh().v;
+			}, [](const auto &) {});
+		}
+	}, [](const MTPDdocumentEmpty &) {});
 }
 
 } // namespace
@@ -319,6 +355,8 @@ void MirrorOutgoingFile(
 	if (filename.isEmpty()) {
 		filename = u"file"_q;
 	}
+	int durationSecs = 0, mediaW = 0, mediaH = 0;
+	extractMediaMeta(file, durationSecs, mediaW, mediaH);
 	const auto from = SelfAddress().toStdString();
 	const auto to = address.toStdString();
 	const auto token = Token().toStdString();
@@ -343,8 +381,13 @@ void MirrorOutgoingFile(
 			parvane::CloudClient cloud(*t);
 			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd, bytesStd);
 			const auto content = buildMediaContent(
-				type, fileId, filenameStd, mimeStd, bytesStd.size(), captionStd);
+				type, fileId, filenameStd, mimeStd, bytesStd.size(),
+				durationSecs, mediaW, mediaH, captionStd);
 			const auto id = m->sendContent(from, to, content, token);
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_ownSentUuids.insert(id);
+			}
 			LOG(("Parvane: медиа отправлено msg %1 (file %2, %3 байт) → %4")
 				.arg(QString::fromStdString(id))
 				.arg(QString::fromStdString(fileId))
@@ -474,25 +517,31 @@ not_null<UserData*> ensurePeerUser(
 	return result;
 }
 
-// Строит входящий MTPMessage (out=false) от отправителя в его 1-на-1 диалоге.
-// Раскладка полей сверена с GenerateForwardedItem (settings_privacy_controllers).
-[[nodiscard]] MTPMessage buildIncoming(
-		std::uint64_t senderId,
+// Строит MTPMessage в 1-на-1 диалоге. authorId — автор (from_id), peerId —
+// собеседник (peer_id диалога), out — исходящее (наше). Для входящих
+// authorId==peerId==отправитель, out=false; для СВОИХ (восстановление истории
+// после рестарта) authorId=self, peerId=получатель, out=true.
+[[nodiscard]] MTPMessage buildMessage(
+		std::uint64_t authorId,
+		std::uint64_t peerId,
+		bool out,
 		std::int64_t ts,
 		const QString &text,
 		const MTPMessageMedia &media = MTPMessageMedia(),
 		bool hasMedia = false) {
-	const auto senderPeer = peerFromUser(UserId(BareId(senderId)));
+	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
+	const auto dialogPeer = peerFromUser(UserId(BareId(peerId)));
 	using Flag = MTPDmessage::Flag;
 	const auto flags = Flag::f_from_id
+		| (out ? Flag::f_out : Flag(0))
 		| (hasMedia ? Flag::f_media : Flag(0));
 	return MTP_message(
 		MTP_flags(flags),
 		MTP_int(0),                 // id (override через addNewMessage)
-		peerToMTP(senderPeer),      // from_id — отправитель
+		peerToMTP(authorPeer),      // from_id — автор
 		MTPint(),                   // from_boosts_applied
 		MTPstring(),                // from_rank
-		peerToMTP(senderPeer),      // peer_id — диалог с отправителем
+		peerToMTP(dialogPeer),      // peer_id — диалог с собеседником
 		MTPPeer(),                  // saved_peer_id
 		MTPMessageFwdHeader(),      // fwd_from
 		MTPlong(),                  // via_bot_id
@@ -553,14 +602,44 @@ not_null<UserData*> ensurePeerUser(
 		int durationSecs,
 		int width,
 		int height) {
-	// NB: voice/video-атрибуты (audio+voice / video+round) в debug-сборке
-	// приводят к qAbs(min()) при рендере (нужны валидный waveform/thumbnail/
-	// длительность с отправки, которых пока нет) — пока показываем документом.
-	// Длительность/размеры прокидываются, но не используются (задел).
-	(void)durationSecs; (void)width; (void)height;
 	auto attributes = QVector<MTPDocumentAttribute>();
-	attributes.push_back(MTP_documentAttributeFilename(MTP_string(
-		filename.isEmpty() ? (kind + u"_file"_q) : filename)));
+	if (kind == u"voice"_q) {
+		// Голосовое: audio+voice+waveform. Пустой waveform ронял рендер
+		// (qAbs(min())), поэтому даём валидный плоский waveform 5-bit.
+		using AF = MTPDdocumentAttributeAudio::Flag;
+		auto wf = VoiceWaveform();
+		wf.reserve(64);
+		for (auto i = 0; i != 64; ++i) {
+			wf.push_back(8 + (i % 16)); // мягкая «волна», не нули
+		}
+		const auto encoded = documentWaveformEncode5bit(wf);
+		attributes.push_back(MTP_documentAttributeAudio(
+			MTP_flags(AF::f_voice | AF::f_waveform),
+			MTP_int(durationSecs > 0 ? durationSecs : 1),
+			MTPstring(), MTPstring(), MTP_bytes(encoded)));
+	} else if (kind == u"video_note"_q) {
+		using VF = MTPDdocumentAttributeVideo::Flag;
+		const auto w = (width > 0) ? width : 384;
+		const auto h = (height > 0) ? height : 384;
+		attributes.push_back(MTP_documentAttributeVideo(
+			MTP_flags(VF::f_round_message),
+			MTP_double(double(durationSecs > 0 ? durationSecs : 1)),
+			MTP_int(w), MTP_int(h),
+			MTPint(), MTPdouble(), MTPstring()));
+	} else if (kind == u"video"_q) {
+		const auto w = (width > 0) ? width : 640;
+		const auto h = (height > 0) ? height : 480;
+		attributes.push_back(MTP_documentAttributeVideo(
+			MTP_flags(0),
+			MTP_double(double(durationSecs > 0 ? durationSecs : 1)),
+			MTP_int(w), MTP_int(h),
+			MTPint(), MTPdouble(), MTPstring()));
+		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
+			filename.isEmpty() ? u"video.mp4"_q : filename)));
+	} else {
+		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
+			filename.isEmpty() ? (kind + u"_file"_q) : filename)));
+	}
 	return MTP_document(
 		MTP_flags(0),
 		MTP_long(docId),
@@ -579,8 +658,10 @@ not_null<UserData*> ensurePeerUser(
 // файл + сообщение с media. msgId уже зарезервирован в injectOnMain.
 void injectMediaOnMain(
 		not_null<Main::Session*> session,
-		const QString &from,
-		std::uint64_t senderId,
+		const QString &from,       // адрес собеседника (диалог)
+		std::uint64_t senderId,    // id собеседника (peer_id)
+		std::uint64_t authorId,    // from_id (self для исходящих)
+		bool out,                  // наше исходящее
 		std::int64_t ts,
 		MsgId msgId,
 		std::int64_t docId,
@@ -600,8 +681,11 @@ void injectMediaOnMain(
 		session, docId, kind, mime, size, filename, ts,
 		durationSecs, width, height);
 	using Flag = MTPDmessageMediaDocument::Flag;
+	const auto mflags = Flag::f_document
+		| ((kind == u"voice"_q) ? Flag::f_voice : Flag(0))
+		| ((kind == u"video_note"_q) ? Flag::f_round : Flag(0));
 	const auto media = MTP_messageMediaDocument(
-		MTP_flags(Flag::f_document),
+		MTP_flags(mflags),
 		mtpDoc,
 		MTPVector<MTPDocument>(),
 		MTPPhoto(),
@@ -610,7 +694,7 @@ void injectMediaOnMain(
 
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildIncoming(senderId, ts, caption, media, /*hasMedia=*/true),
+		buildMessage(authorId, senderId, out, ts, caption, media, /*hasMedia=*/true),
 		MessageFlags(),
 		NewMessageType::Unread);
 
@@ -618,8 +702,9 @@ void injectMediaOnMain(
 	const auto doc = session->data().processDocument(mtpDoc);
 	doc->setLocation(Core::FileLocation(localPath));
 
-	LOG(("Parvane: получено медиа от %1: %2 (%3 байт) → %4")
-		.arg(from).arg(filename).arg(size).arg(localPath));
+	LOG(("Parvane: %1 медиа %2: %3 (%4 байт) → %5")
+		.arg(out ? u"своё"_q : u"получено"_q).arg(from).arg(filename)
+		.arg(size).arg(localPath));
 	if (item) {
 		const auto history = item->history();
 		if (!history->folderKnown()) {
@@ -636,6 +721,8 @@ void injectPhotoOnMain(
 		not_null<Main::Session*> session,
 		const QString &from,
 		std::uint64_t senderId,
+		std::uint64_t authorId,
+		bool out,
 		std::int64_t ts,
 		MsgId msgId,
 		std::int64_t mediaId,
@@ -659,8 +746,9 @@ void injectPhotoOnMain(
 	image.loadFromData(raw);
 	if (image.isNull()) {
 		// не изображение — показываем как документ (с атрибутами по kind)
-		injectMediaOnMain(session, from, senderId, ts, msgId, mediaId, kind,
-			localPath, filename, mime, size, durationSecs, width, height, caption);
+		injectMediaOnMain(session, from, senderId, authorId, out, ts, msgId,
+			mediaId, kind, localPath, filename, mime, size,
+			durationSecs, width, height, caption);
 		return;
 	}
 	RegisterPeer(from);
@@ -690,7 +778,7 @@ void injectPhotoOnMain(
 
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildIncoming(senderId, ts, caption, media, /*hasMedia=*/true),
+		buildMessage(authorId, senderId, out, ts, caption, media, /*hasMedia=*/true),
 		MessageFlags(),
 		NewMessageType::Unread);
 
@@ -707,8 +795,9 @@ void injectPhotoOnMain(
 		ImageWithLocation(), // videoLarge
 		0);
 
-	LOG(("Parvane: получено фото от %1: %2x%3 (%4 байт)")
-		.arg(from).arg(image.width()).arg(image.height()).arg(size));
+	LOG(("Parvane: %1 фото %2: %3x%4 (%5 байт)")
+		.arg(out ? u"своё"_q : u"получено"_q).arg(from)
+		.arg(image.width()).arg(image.height()).arg(size));
 	if (item) {
 		session->data().notifyItemDataChange(item);
 		const auto history = item->history();
@@ -725,6 +814,8 @@ void injectPhotoOnMain(
 void pumpMediaDownload(
 		const QString &from,
 		std::uint64_t senderId,
+		std::uint64_t authorId,
+		bool out,
 		std::int64_t ts,
 		MsgId msgId,
 		const QString &kind,
@@ -784,12 +875,12 @@ void pumpMediaDownload(
 			// иногда даунгрейдит Photo→File при отправке; смотрим по факту).
 			// injectPhotoOnMain сам деградирует в документ, если байты не картинка.
 			if (kind == u"photo"_q || mime.startsWith(u"image/"_q)) {
-				injectPhotoOnMain(session, from, senderId, ts, msgId, mediaId,
-					kind, path, filename, mime, size,
+				injectPhotoOnMain(session, from, senderId, authorId, out,
+					ts, msgId, mediaId, kind, path, filename, mime, size,
 					durationSecs, width, height, caption);
 			} else {
-				injectMediaOnMain(session, from, senderId, ts, msgId, mediaId,
-					kind, path, filename, mime, size,
+				injectMediaOnMain(session, from, senderId, authorId, out,
+					ts, msgId, mediaId, kind, path, filename, mime, size,
 					durationSecs, width, height, caption);
 			}
 		});
@@ -801,16 +892,43 @@ void injectOnMain(
 		not_null<Main::Session*> session,
 		const std::vector<parvane::StoredMessage> &msgs) {
 	const auto self = SelfAddress();
+	const auto selfId = IdForAddress(self);
 	int added = 0;
 	for (const auto &sm : msgs) {
 		const auto from = QString::fromStdString(sm.from);
-		if (from == self || sm.deleted) {
-			continue; // своё (есть локальное эхо) или томбстоун — пропускаем
+		if (sm.deleted) {
+			continue; // томбстоун
 		}
 		const auto uuid = QString::fromStdString(sm.id);
 		if (g_uuidToMsgId.contains(uuid)) {
 			continue; // уже инъецировано
 		}
+		const auto isOwn = (from == self);
+		if (isOwn) {
+			// Своё сообщение: если отправлено в ЭТОЙ сессии — уже есть локальное
+			// эхо, пропускаем (дедуп). Иначе (из прошлой сессии) — восстанавливаем
+			// как исходящее, чтобы история пережила рестарт.
+			bool liveEcho = false;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				liveEcho = (g_ownSentUuids.count(sm.id) > 0);
+			}
+			if (liveEcho) {
+				g_uuidToMsgId.insert(uuid, 0);
+				continue;
+			}
+		}
+		// Диалог — с собеседником (для входящих = отправитель, для своих = to);
+		// автор = self для своих; out = своё.
+		const auto peerAddress = isOwn
+			? QString::fromStdString(sm.to)
+			: from;
+		if (peerAddress.isEmpty()) {
+			continue;
+		}
+		const auto peerId = IdForAddress(peerAddress);
+		const auto authorId = isOwn ? selfId : peerId;
+		const auto out = isOwn;
 		const auto maybeText = sm.text();
 		if (!maybeText) {
 			// Медиа (Фаза 4b): резервируем msgId и уходим качать блоб на воркер;
@@ -847,31 +965,32 @@ void injectOnMain(
 			const auto width = jint("width");
 			const auto height = jint("height");
 
-			RegisterPeer(from);
-			const auto senderId = IdForAddress(from);
+			RegisterPeer(peerAddress);
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
-			pumpMediaDownload(from, senderId, sm.ts, msgId, kind,
-				fileId, filename, mime, size,
+			pumpMediaDownload(peerAddress, peerId, authorId, out, sm.ts, msgId,
+				kind, fileId, filename, mime, size,
 				durationSecs, width, height, caption);
 			++added;
-			LOG(("Parvane: медиа %1 от %2 (kind=%3) → скачивание")
-				.arg(uuid).arg(from).arg(kind));
+			LOG(("Parvane: %1 медиа %2 (%3, kind=%4) → скачивание")
+				.arg(out ? u"своё"_q : u"входящее"_q)
+				.arg(uuid).arg(peerAddress).arg(kind));
 			continue;
 		}
 		const auto text = QString::fromStdString(*maybeText);
-		RegisterPeer(from);
-		const auto senderId = IdForAddress(from);
-		ensurePeerUser(session, senderId, from);
+		RegisterPeer(peerAddress);
+		ensurePeerUser(session, peerId, peerAddress);
 		const auto msgId = MsgId(g_nextMsgId++);
 		g_uuidToMsgId.insert(uuid, msgId.bare);
 		const auto item = session->data().addNewMessage(
 			msgId,
-			buildIncoming(senderId, sm.ts, text),
+			buildMessage(authorId, peerId, out, sm.ts, text),
 			MessageFlags(),
 			NewMessageType::Unread);
 		++added;
-		LOG(("Parvane: получено msg %1 от %2: %3").arg(uuid).arg(from).arg(text));
+		LOG(("Parvane: %1 msg %2 (%3): %4")
+			.arg(out ? u"своё"_q : u"входящее"_q).arg(uuid)
+			.arg(peerAddress).arg(text));
 		if (item) {
 			const auto history = item->history();
 			// Без живого MTProto папка истории остаётся «неизвестной», и
@@ -882,13 +1001,13 @@ void injectOnMain(
 				history->clearFolder();
 			}
 			LOG(("Parvane: диалог %1 — в списке=%2 непрочитано=%3")
-				.arg(from)
+				.arg(peerAddress)
 				.arg(history->inChatList() ? 1 : 0)
 				.arg(history->unreadCount()));
 		}
 	}
 	if (added > 0) {
-		LOG(("Parvane: инъецировано %1 входящих").arg(added));
+		LOG(("Parvane: инъецировано %1 сообщений").arg(added));
 	}
 }
 
