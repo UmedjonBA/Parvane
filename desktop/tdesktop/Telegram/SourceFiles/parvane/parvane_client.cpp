@@ -348,6 +348,62 @@ void MirrorOutgoingFile(
 	});
 }
 
+void AttachLocalOutgoingMedia(
+		not_null<Main::Session*> session,
+		const std::shared_ptr<FilePrepareResult> &file) {
+	if (!file) {
+		return;
+	}
+	const auto photoId = file->photo.match(
+		[](const MTPDphoto &p) { return std::uint64_t(p.vid().v); },
+		[](const MTPDphotoEmpty &) { return std::uint64_t(0); });
+	const auto docId = file->document.match(
+		[](const MTPDdocument &d) { return std::uint64_t(d.vid().v); },
+		[](const MTPDdocumentEmpty &) { return std::uint64_t(0); });
+
+	// Байты своего файла: из памяти (content) либо с диска (filepath).
+	auto raw = file->content;
+	if (raw.isEmpty() && !file->filepath.isEmpty()) {
+		auto f = QFile(file->filepath);
+		if (f.open(QIODevice::ReadOnly)) {
+			raw = f.readAll();
+		}
+	}
+	if (raw.isEmpty()) {
+		return;
+	}
+
+	if (photoId) {
+		// Своё фото — заполняем PhotoData картинкой из памяти (inline).
+		auto image = QImage();
+		image.loadFromData(raw);
+		if (image.isNull()) {
+			return;
+		}
+		const auto photo = session->data().photo(photoId);
+		const auto large = Images::FromImageInMemory(image, "JPG", raw);
+		photo->updateImages(
+			QByteArray(), ImageWithLocation(), large, large,
+			ImageWithLocation(), ImageWithLocation(), 0);
+	} else if (docId) {
+		// Свой файл — привязываем локальную копию, чтобы считался скачанным.
+		auto localPath = file->filepath;
+		if (localPath.isEmpty()) {
+			const auto dir = QDir::tempPath() + u"/parvane-media"_q;
+			QDir().mkpath(dir);
+			localPath = dir + u"/out_"_q + QString::number(docId) + u"_"_q
+				+ (file->filename.isEmpty() ? u"file"_q : file->filename);
+			auto f = QFile(localPath);
+			if (!f.open(QIODevice::WriteOnly)
+				|| f.write(raw) != qint64(raw.size())) {
+				return;
+			}
+		}
+		session->data().document(docId)->setLocation(
+			Core::FileLocation(localPath));
+	}
+}
+
 namespace {
 
 // Гарантирует, что пир (отправитель) существует и «загружен» в Data::Session.
