@@ -892,8 +892,19 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						return;
 					}
 					const auto it = session->data().message(fullId);
-					if (it && it->isSending() && IsClientMsgId(it->id)) {
+					if (!it) {
+						return;
+					}
+					if (it->isSending() && IsClientMsgId(it->id)) {
 						it->setRealId(MsgId(g_nextMsgId++));
+					}
+					// Показать диалог отправителя в списке: без живого MTProto
+					// список диалогов вечно «Loading…», а исходящее сообщение не
+					// регистрирует диалог. Помечаем папку известной — как для
+					// входящих (injectOnMain), тогда диалог появляется.
+					const auto history = it->history();
+					if (!history->folderKnown()) {
+						history->clearFolder();
 					}
 				});
 			}, g_finalizeLifetime);
