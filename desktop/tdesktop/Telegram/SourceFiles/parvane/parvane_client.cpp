@@ -439,7 +439,25 @@ not_null<UserData*> ensurePeerUser(
 		MTPint(),            // bot_active_users
 		MTPlong(),           // bot_verification_icon
 		MTPlong());          // send_paid_messages_stars
-	return session->data().processUser(user);
+	const auto result = session->data().processUser(user);
+
+	// Делаем unreadCount диалога ИЗВЕСТНЫМ (=0 при первом касании). Иначе при
+	// входящем tdesktop видит unreadCountKnown()==false и вместо инкремента
+	// бейджа шлёт dialogs.getDialogs в MTProto (заглушён, не вернётся) → бейдж
+	// непрочитанного не появляется. Входящие уже «server-side unread»
+	// (_inboxReadBefore не задан), поэтому после этого бейдж считается штатно.
+	if (address != SelfAddress()) {
+		const auto history = session->data().history(result);
+		// setUnreadCount требует folderKnown() (assert) — сперва помечаем папку
+		// известной (как инъекция входящих), потом делаем счётчик известным.
+		if (!history->folderKnown()) {
+			history->clearFolder();
+		}
+		if (!history->unreadCountKnown()) {
+			history->setUnreadCount(0);
+		}
+	}
+	return result;
 }
 
 // Строит входящий MTPMessage (out=false) от отправителя в его 1-на-1 диалоге.
