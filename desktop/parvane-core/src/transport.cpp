@@ -1,6 +1,7 @@
 // Parvane fork: реализация транспорта поверх cnats. См. transport.h.
 #include "parvane/transport.h"
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -9,6 +10,13 @@
 
 namespace parvane {
 namespace {
+
+// Монотонное время в мс для дедлайна requestMany.
+std::int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 // Замыкание для асинхронной подписки: cnats передаёт void* closure в C-колбэк,
 // мы кладём туда указатель на этот объект (владение — в Impl::subs_).
@@ -99,6 +107,62 @@ void Transport::publish(const std::string &subject,
                                static_cast<int>(payload.size()));
     if (s != NATS_OK)
         fail("nats publish " + subject, s);
+}
+
+void Transport::requestMany(const std::string &subject,
+                            const std::string &payload,
+                            const ReplyHandler &onReply,
+                            std::int64_t timeout_ms) {
+    if (!d_->conn)
+        throw TransportError("requestMany: not connected");
+
+    // Приватный inbox + синхронная подписка ДО публикации запроса, чтобы не
+    // потерять ранние ответы.
+    natsInbox *inbox = nullptr;
+    natsStatus s = natsInbox_Create(&inbox);
+    if (s != NATS_OK)
+        fail("nats inbox create", s);
+
+    natsSubscription *sub = nullptr;
+    s = natsConnection_SubscribeSync(&sub, d_->conn,
+                                     reinterpret_cast<const char *>(inbox));
+    if (s != NATS_OK) {
+        natsInbox_Destroy(inbox);
+        fail("nats subscribeSync " + subject, s);
+    }
+
+    s = natsConnection_PublishRequest(d_->conn, subject.c_str(),
+                                      reinterpret_cast<const char *>(inbox),
+                                      payload.data(),
+                                      static_cast<int>(payload.size()));
+    if (s != NATS_OK) {
+        natsSubscription_Destroy(sub);
+        natsInbox_Destroy(inbox);
+        fail("nats publishRequest " + subject, s);
+    }
+
+    // Общий бюджет времени: NextMsg с остатком до дедлайна.
+    const std::int64_t deadline = nowMs() + timeout_ms;
+    while (true) {
+        const std::int64_t remaining = deadline - nowMs();
+        if (remaining <= 0)
+            break;
+        natsMsg *msg = nullptr;
+        s = natsSubscription_NextMsg(&msg, sub, remaining);
+        if (s == NATS_TIMEOUT)
+            break;
+        if (s != NATS_OK)
+            break;
+        const char *data = natsMsg_GetData(msg);
+        int len = natsMsg_GetDataLength(msg);
+        std::string reply(data ? data : "", data ? len : 0);
+        natsMsg_Destroy(msg);
+        if (!onReply(reply))
+            break; // вызывающий: ответов достаточно
+    }
+
+    natsSubscription_Destroy(sub);
+    natsInbox_Destroy(inbox);
 }
 
 void Transport::subscribe(const std::string &subject, Handler handler) {

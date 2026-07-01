@@ -96,6 +96,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
     else
         fail "parvane_messenger_tests"
     fi
+
+    # ── 5. C++ cloud-тесты parvane-core (upload чанками/download/list) ─────────
+    log "5. parvane-core cloud tests (C++)"
+    if PARVANE_NATS_URL="$NATS_URL" "$PC/build/parvane_cloud_tests"; then
+        echo "cloud: OK"
+    else
+        fail "parvane_cloud_tests"
+    fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
 fi
