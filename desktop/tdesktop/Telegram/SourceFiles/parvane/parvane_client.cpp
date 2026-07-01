@@ -293,12 +293,20 @@ void MirrorOutgoingFile(
 		return;
 	}
 
-	// Байты: из памяти (content) либо читаем с диска (filepath).
+	// Байты: из памяти (content) либо с диска (filepath). ВАЖНО: для ФОТО
+	// tdesktop не кладёт байты в content/filepath — сжатый JPEG уходит в
+	// fileparts (см. Uploader::Entry: Photo → &file->fileparts). Поэтому
+	// если content/filepath пусты — собираем блоб из fileparts.
 	auto bytes = file->content;
 	if (bytes.isEmpty() && !file->filepath.isEmpty()) {
 		auto f = QFile(file->filepath);
 		if (f.open(QIODevice::ReadOnly)) {
 			bytes = f.readAll();
+		}
+	}
+	if (bytes.isEmpty() && !file->fileparts.empty()) {
+		for (const auto &part : file->fileparts) {
+			bytes.append(part);
 		}
 	}
 	if (bytes.isEmpty()) {
@@ -362,12 +370,18 @@ void AttachLocalOutgoingMedia(
 		[](const MTPDdocument &d) { return std::uint64_t(d.vid().v); },
 		[](const MTPDdocumentEmpty &) { return std::uint64_t(0); });
 
-	// Байты своего файла: из памяти (content) либо с диска (filepath).
+	// Байты своего файла: content / filepath / fileparts (для фото из буфера
+	// обмена байты лежат в fileparts, см. MirrorOutgoingFile).
 	auto raw = file->content;
 	if (raw.isEmpty() && !file->filepath.isEmpty()) {
 		auto f = QFile(file->filepath);
 		if (f.open(QIODevice::ReadOnly)) {
 			raw = f.readAll();
+		}
+	}
+	if (raw.isEmpty() && !file->fileparts.empty()) {
+		for (const auto &part : file->fileparts) {
+			raw.append(part);
 		}
 	}
 	if (raw.isEmpty()) {
@@ -525,17 +539,28 @@ not_null<UserData*> ensurePeerUser(
 }
 
 // Локальный MTPDocument: без DC-локации (файл лежит на диске, см. setLocation).
-// В MVP любое медиа представляем документом с filename-атрибутом — открывается
-// и сохраняется штатным UI; inline-рендер фото — задача Фазы 4c.
+// Атрибуты по kind: voice → голосовое (audio+voice), video_note → кружок
+// (video+round), video → видео, иначе filename-документ. Тогда UI рисует плеер/
+// кружок, а не строку-файл. Длительность/размеры — из контента (0 → дефолты).
 [[nodiscard]] MTPDocument buildLocalMtpDocument(
 		not_null<Main::Session*> session,
 		std::int64_t docId,
+		const QString &kind,
 		const QString &mime,
 		std::int64_t size,
 		const QString &filename,
-		std::int64_t ts) {
+		std::int64_t ts,
+		int durationSecs,
+		int width,
+		int height) {
+	// NB: voice/video-атрибуты (audio+voice / video+round) в debug-сборке
+	// приводят к qAbs(min()) при рендере (нужны валидный waveform/thumbnail/
+	// длительность с отправки, которых пока нет) — пока показываем документом.
+	// Длительность/размеры прокидываются, но не используются (задел).
+	(void)durationSecs; (void)width; (void)height;
 	auto attributes = QVector<MTPDocumentAttribute>();
-	attributes.push_back(MTP_documentAttributeFilename(MTP_string(filename)));
+	attributes.push_back(MTP_documentAttributeFilename(MTP_string(
+		filename.isEmpty() ? (kind + u"_file"_q) : filename)));
 	return MTP_document(
 		MTP_flags(0),
 		MTP_long(docId),
@@ -559,16 +584,21 @@ void injectMediaOnMain(
 		std::int64_t ts,
 		MsgId msgId,
 		std::int64_t docId,
+		const QString &kind,
 		const QString &localPath,
 		const QString &filename,
 		const QString &mime,
 		std::int64_t size,
+		int durationSecs,
+		int width,
+		int height,
 		const QString &caption) {
 	RegisterPeer(from);
 	ensurePeerUser(session, senderId, from);
 
 	const auto mtpDoc = buildLocalMtpDocument(
-		session, docId, mime, size, filename, ts);
+		session, docId, kind, mime, size, filename, ts,
+		durationSecs, width, height);
 	using Flag = MTPDmessageMediaDocument::Flag;
 	const auto media = MTP_messageMediaDocument(
 		MTP_flags(Flag::f_document),
@@ -609,10 +639,14 @@ void injectPhotoOnMain(
 		std::int64_t ts,
 		MsgId msgId,
 		std::int64_t mediaId,
+		const QString &kind,
 		const QString &localPath,
 		const QString &filename,
 		const QString &mime,
 		std::int64_t size,
+		int durationSecs,
+		int width,
+		int height,
 		const QString &caption) {
 	auto raw = QByteArray();
 	{
@@ -624,9 +658,9 @@ void injectPhotoOnMain(
 	auto image = QImage();
 	image.loadFromData(raw);
 	if (image.isNull()) {
-		// не изображение — показываем как документ
-		injectMediaOnMain(session, from, senderId, ts, msgId, mediaId,
-			localPath, filename, mime, size, caption);
+		// не изображение — показываем как документ (с атрибутами по kind)
+		injectMediaOnMain(session, from, senderId, ts, msgId, mediaId, kind,
+			localPath, filename, mime, size, durationSecs, width, height, caption);
 		return;
 	}
 	RegisterPeer(from);
@@ -698,6 +732,9 @@ void pumpMediaDownload(
 		const QString &filename,
 		const QString &mime,
 		std::int64_t size,
+		int durationSecs,
+		int width,
+		int height,
 		const QString &caption) {
 	const auto self = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
@@ -748,10 +785,12 @@ void pumpMediaDownload(
 			// injectPhotoOnMain сам деградирует в документ, если байты не картинка.
 			if (kind == u"photo"_q || mime.startsWith(u"image/"_q)) {
 				injectPhotoOnMain(session, from, senderId, ts, msgId, mediaId,
-					path, filename, mime, size, caption);
+					kind, path, filename, mime, size,
+					durationSecs, width, height, caption);
 			} else {
 				injectMediaOnMain(session, from, senderId, ts, msgId, mediaId,
-					path, filename, mime, size, caption);
+					kind, path, filename, mime, size,
+					durationSecs, width, height, caption);
 			}
 		});
 	});
@@ -800,13 +839,21 @@ void injectOnMain(
 			const auto caption = (c.contains("caption") && c["caption"].is_string())
 				? QString::fromStdString(c["caption"].get<std::string>())
 				: QString();
+			const auto jint = [&](const char *k) {
+				return (c.contains(k) && c[k].is_number())
+					? c[k].get<int>() : 0;
+			};
+			const auto durationSecs = jint("duration_secs");
+			const auto width = jint("width");
+			const auto height = jint("height");
 
 			RegisterPeer(from);
 			const auto senderId = IdForAddress(from);
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
 			pumpMediaDownload(from, senderId, sm.ts, msgId, kind,
-				fileId, filename, mime, size, caption);
+				fileId, filename, mime, size,
+				durationSecs, width, height, caption);
 			++added;
 			LOG(("Parvane: медиа %1 от %2 (kind=%3) → скачивание")
 				.arg(uuid).arg(from).arg(kind));

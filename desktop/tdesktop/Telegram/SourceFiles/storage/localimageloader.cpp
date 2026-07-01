@@ -1048,6 +1048,13 @@ void FileLoadTask::finish() {
 	if (!session) {
 		return;
 	}
+	// Parvane fork: диагностика отправки медиа (почему фото не уходит).
+	LOG(("Parvane/send: finish type=%1 filesize=%2 filepath=%3 filename=%4 mime=%5")
+		.arg(int(_type))
+		.arg(_result ? _result->filesize : -1)
+		.arg(_filepath)
+		.arg(_result ? _result->filename : QString())
+		.arg(_result ? _result->filemime : QString()));
 	const auto premium = session->user()->isPremium();
 	if (!_result || !_result->filesize || _result->filesize < 0) {
 		Ui::show(
