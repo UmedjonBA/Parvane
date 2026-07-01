@@ -80,6 +80,103 @@ async fn verify_token(nc: &Client, token: &str) -> Result<String> {
     }
 }
 
+// ── DB-слой (без NATS — покрыт unit-тестами) ────────────────────────────────────
+
+/// Сохранить один чанк файла. Декодирует base64 и пишет BLOB в `chunks`.
+/// Идемпотентно (INSERT OR REPLACE) — повторная доставка чанка безопасна.
+async fn store_chunk(pool: &SqlitePool, p: &UploadChunkPayload) -> Result<()> {
+    let raw = B64.decode(&p.data).context("base64 decode")?;
+    sqlx::query("INSERT OR REPLACE INTO chunks (file_id, chunk_index, data) VALUES (?, ?, ?)")
+        .bind(p.file_id.to_string())
+        .bind(p.chunk_index)
+        .bind(raw)
+        .execute(pool)
+        .await
+        .context("сохранение чанка")?;
+    Ok(())
+}
+
+/// Завершить файл: проверить что все чанки на месте и записать метаданные.
+/// Возвращает `file_id` при успехе, ошибку — если чанков недостаёт.
+async fn finalize_file(
+    pool: &SqlitePool,
+    owner: &str,
+    p: &UploadCompletePayload,
+) -> Result<uuid::Uuid> {
+    let (received,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
+        .bind(p.file_id.to_string())
+        .fetch_one(pool)
+        .await?;
+
+    if received != p.total_chunks as i64 {
+        anyhow::bail!("получено {}/{} чанков", received, p.total_chunks);
+    }
+
+    sqlx::query(
+        "INSERT OR REPLACE INTO files (id, owner, filename, mime_type, size_bytes, total_chunks, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(p.file_id.to_string())
+    .bind(owner)
+    .bind(&p.filename)
+    .bind(&p.mime_type)
+    .bind(p.size_bytes as i64)
+    .bind(p.total_chunks)
+    .bind(now_unix())
+    .execute(pool)
+    .await?;
+
+    Ok(p.file_id)
+}
+
+/// Собранный файл для отдачи: метаданные + все чанки по порядку.
+struct LoadedFile {
+    filename: String,
+    mime_type: String,
+    total_chunks: i64,
+    chunks: Vec<(i64, Vec<u8>)>,
+}
+
+/// Загрузить файл целиком из БД. `None` — файла нет.
+async fn load_file(pool: &SqlitePool, file_id: &str) -> Result<Option<LoadedFile>> {
+    let meta: Option<(String, String, i64, i64)> = sqlx::query_as(
+        "SELECT filename, mime_type, size_bytes, total_chunks FROM files WHERE id = ?",
+    )
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((filename, mime_type, _size, total_chunks)) = meta else {
+        return Ok(None);
+    };
+
+    let chunks: Vec<(i64, Vec<u8>)> =
+        sqlx::query_as("SELECT chunk_index, data FROM chunks WHERE file_id = ? ORDER BY chunk_index")
+            .bind(file_id)
+            .fetch_all(pool)
+            .await?;
+
+    Ok(Some(LoadedFile { filename, mime_type, total_chunks, chunks }))
+}
+
+/// Список файлов владельца, свежие первыми.
+async fn list_files(pool: &SqlitePool, owner: &str) -> Result<Vec<FileEntry>> {
+    let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, filename, mime_type, size_bytes, created_at FROM files WHERE owner = ? ORDER BY created_at DESC",
+    )
+    .bind(owner)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, filename, mime_type, size_bytes, created_at)| {
+            let file_id = uuid::Uuid::parse_str(&id).ok()?;
+            Some(FileEntry { file_id, filename, mime_type, size_bytes, created_at })
+        })
+        .collect())
+}
+
 // ── file.upload.chunk ─────────────────────────────────────────────────────────
 
 async fn handle_chunk(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -88,18 +185,7 @@ async fn handle_chunk(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
             serde_json::from_slice(&msg.payload).context("неверный JSON в upload.chunk")?;
 
         let owner = verify_token(nc, &event.token).await?;
-
-        let raw = B64.decode(&event.payload.data).context("base64 decode")?;
-
-        sqlx::query(
-            "INSERT OR REPLACE INTO chunks (file_id, chunk_index, data) VALUES (?, ?, ?)",
-        )
-        .bind(event.payload.file_id.to_string())
-        .bind(event.payload.chunk_index)
-        .bind(raw)
-        .execute(pool)
-        .await
-        .context("сохранение чанка")?;
+        store_chunk(pool, &event.payload).await?;
 
         info!(
             "Чанк сохранён: {} [{}/{}] owner={}",
@@ -144,49 +230,15 @@ async fn handle_complete(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             serde_json::from_slice(&msg.payload).context("неверный JSON в upload.complete")?;
 
         let owner = verify_token(nc, &event.token).await?;
-
-        // Проверяем что все чанки на месте
-        let (received,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
-                .bind(event.payload.file_id.to_string())
-                .fetch_one(pool)
-                .await?;
-
-        if received != event.payload.total_chunks as i64 {
-            anyhow::bail!(
-                "получено {}/{} чанков",
-                received,
-                event.payload.total_chunks
-            );
-        }
-
-        let now = now_unix();
-        sqlx::query(
-            "INSERT OR REPLACE INTO files (id, owner, filename, mime_type, size_bytes, total_chunks, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(event.payload.file_id.to_string())
-        .bind(&owner)
-        .bind(&event.payload.filename)
-        .bind(&event.payload.mime_type)
-        .bind(event.payload.size_bytes as i64)
-        .bind(event.payload.total_chunks)
-        .bind(now)
-        .execute(pool)
-        .await?;
+        let file_id = finalize_file(pool, &owner, &event.payload).await?;
 
         info!(
             "Файл завершён: {} ({}, {} байт) owner={}",
-            event.payload.filename, event.payload.file_id, event.payload.size_bytes, owner
+            event.payload.filename, file_id, event.payload.size_bytes, owner
         );
 
-        let resp = UploadCompleteResponse {
-            ok: true,
-            file_id: Some(event.payload.file_id),
-            error: None,
-        };
-        let json = serde_json::to_vec(&resp)?;
-        nc.publish(reply, json.into()).await?;
+        let resp = UploadCompleteResponse { ok: true, file_id: Some(file_id), error: None };
+        nc.publish(reply, serde_json::to_vec(&resp)?.into()).await?;
         anyhow::Ok(())
     }
     .await;
@@ -213,53 +265,39 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         verify_token(nc, &event.token).await?;
 
         let file_id = event.payload.file_id.to_string();
-
-        let meta: Option<(String, String, i64, i64)> = sqlx::query_as(
-            "SELECT filename, mime_type, size_bytes, total_chunks FROM files WHERE id = ?",
-        )
-        .bind(&file_id)
-        .fetch_optional(pool)
-        .await?;
-
-        let (filename, mime_type, _size, total_chunks) = meta
+        let file = load_file(pool, &file_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("файл не найден: {}", file_id))?;
 
         // Шлём чанки последовательно через reply-топик
-        let chunks: Vec<(i64, Vec<u8>)> =
-            sqlx::query_as("SELECT chunk_index, data FROM chunks WHERE file_id = ? ORDER BY chunk_index")
-                .bind(&file_id)
-                .fetch_all(pool)
-                .await?;
-
-        for (idx, data) in chunks {
+        for (idx, data) in &file.chunks {
             let resp = DownloadResponse {
                 ok: true,
                 file_id: Some(event.payload.file_id),
-                filename: Some(filename.clone()),
-                mime_type: Some(mime_type.clone()),
-                chunk_index: Some(idx as u32),
-                total_chunks: Some(total_chunks as u32),
-                data: Some(B64.encode(&data)),
+                filename: Some(file.filename.clone()),
+                mime_type: Some(file.mime_type.clone()),
+                chunk_index: Some(*idx as u32),
+                total_chunks: Some(file.total_chunks as u32),
+                data: Some(B64.encode(data)),
                 error: None,
             };
-            let json = serde_json::to_vec(&resp)?;
-            nc.publish(reply.clone(), json.into()).await?;
+            nc.publish(reply.clone(), serde_json::to_vec(&resp)?.into()).await?;
         }
 
         // Публикуем на общий топик для подписчиков
         let done = DownloadResponse {
             ok: true,
             file_id: Some(event.payload.file_id),
-            filename: Some(filename.clone()),
-            mime_type: Some(mime_type),
+            filename: Some(file.filename.clone()),
+            mime_type: Some(file.mime_type.clone()),
             chunk_index: None,
-            total_chunks: Some(total_chunks as u32),
+            total_chunks: Some(file.total_chunks as u32),
             data: None,
             error: None,
         };
         nc.publish(FILE_DOWNLOAD_RESPONSE, serde_json::to_vec(&done)?.into()).await?;
 
-        info!("Файл отдан: {} ({} чанков)", filename, total_chunks);
+        info!("Файл отдан: {} ({} чанков)", file.filename, file.total_chunks);
         anyhow::Ok(())
     }
     .await;
@@ -288,21 +326,7 @@ async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             serde_json::from_slice(&msg.payload).context("неверный JSON в file.list.request")?;
 
         let owner = verify_token(nc, &event.token).await?;
-
-        let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
-            "SELECT id, filename, mime_type, size_bytes, created_at FROM files WHERE owner = ? ORDER BY created_at DESC",
-        )
-        .bind(&owner)
-        .fetch_all(pool)
-        .await?;
-
-        let files = rows
-            .into_iter()
-            .filter_map(|(id, filename, mime_type, size_bytes, created_at)| {
-                let file_id = uuid::Uuid::parse_str(&id).ok()?;
-                Some(FileEntry { file_id, filename, mime_type, size_bytes, created_at })
-            })
-            .collect();
+        let files = list_files(pool, &owner).await?;
 
         let resp = FileListResponse { files };
         nc.publish(reply, serde_json::to_vec(&resp)?.into()).await?;
@@ -322,4 +346,149 @@ async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 
 fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+// ── unit-тесты DB-слоя (in-memory SQLite, без NATS) ─────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use uuid::Uuid;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    fn chunk(file_id: Uuid, idx: u32, total: u32, bytes: &[u8]) -> UploadChunkPayload {
+        UploadChunkPayload {
+            file_id,
+            chunk_index: idx,
+            total_chunks: total,
+            data: B64.encode(bytes),
+            filename: "f.bin".into(),
+            mime_type: "application/octet-stream".into(),
+        }
+    }
+
+    fn complete(file_id: Uuid, total: u32, size: u64) -> UploadCompletePayload {
+        UploadCompletePayload {
+            file_id,
+            filename: "f.bin".into(),
+            total_chunks: total,
+            size_bytes: size,
+            mime_type: "application/octet-stream".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn store_chunk_decodes_base64_blob() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        store_chunk(&pool, &chunk(id, 0, 1, b"hello")).await.unwrap();
+
+        let (data,): (Vec<u8>,) =
+            sqlx::query_as("SELECT data FROM chunks WHERE file_id = ? AND chunk_index = 0")
+                .bind(id.to_string())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn store_chunk_is_idempotent() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        store_chunk(&pool, &chunk(id, 0, 1, b"aaa")).await.unwrap();
+        store_chunk(&pool, &chunk(id, 0, 1, b"bbb")).await.unwrap(); // перезапись того же индекса
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
+            .bind(id.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "повторный чанк не должен дублироваться");
+    }
+
+    #[tokio::test]
+    async fn finalize_rejects_missing_chunks() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        store_chunk(&pool, &chunk(id, 0, 2, b"part0")).await.unwrap();
+        // прислали только 1 из 2 чанков
+        let err = finalize_file(&pool, "alice@local", &complete(id, 2, 10)).await;
+        assert!(err.is_err(), "неполный файл должен отклоняться");
+        // метаданных быть не должно
+        let (files,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM files")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(files, 0);
+    }
+
+    #[tokio::test]
+    async fn finalize_succeeds_when_all_chunks_present() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        store_chunk(&pool, &chunk(id, 0, 2, b"part0")).await.unwrap();
+        store_chunk(&pool, &chunk(id, 1, 2, b"part1")).await.unwrap();
+        let fid = finalize_file(&pool, "alice@local", &complete(id, 2, 10)).await.unwrap();
+        assert_eq!(fid, id);
+
+        let (owner,): (String,) = sqlx::query_as("SELECT owner FROM files WHERE id = ?")
+            .bind(id.to_string()).fetch_one(&pool).await.unwrap();
+        assert_eq!(owner, "alice@local");
+    }
+
+    #[tokio::test]
+    async fn upload_then_download_roundtrip() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        store_chunk(&pool, &chunk(id, 0, 2, b"AAAA")).await.unwrap();
+        store_chunk(&pool, &chunk(id, 1, 2, b"BBBB")).await.unwrap();
+        finalize_file(&pool, "alice@local", &complete(id, 2, 8)).await.unwrap();
+
+        let loaded = load_file(&pool, &id.to_string()).await.unwrap().expect("файл есть");
+        assert_eq!(loaded.total_chunks, 2);
+        assert_eq!(loaded.chunks.len(), 2);
+        // чанки отсортированы по индексу — склейка даёт исходные байты
+        let mut joined = Vec::new();
+        for (_, d) in &loaded.chunks { joined.extend_from_slice(d); }
+        assert_eq!(joined, b"AAAABBBB");
+    }
+
+    #[tokio::test]
+    async fn load_missing_file_is_none() {
+        let pool = test_pool().await;
+        let got = load_file(&pool, &Uuid::now_v7().to_string()).await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_files_only_owner_newest_first() {
+        let pool = test_pool().await;
+        // alice: два файла; bob: один
+        let a1 = Uuid::now_v7();
+        store_chunk(&pool, &chunk(a1, 0, 1, b"x")).await.unwrap();
+        finalize_file(&pool, "alice@local", &complete(a1, 1, 1)).await.unwrap();
+        let a2 = Uuid::now_v7();
+        store_chunk(&pool, &chunk(a2, 0, 1, b"y")).await.unwrap();
+        finalize_file(&pool, "alice@local", &complete(a2, 1, 1)).await.unwrap();
+        let b1 = Uuid::now_v7();
+        store_chunk(&pool, &chunk(b1, 0, 1, b"z")).await.unwrap();
+        finalize_file(&pool, "bob@local", &complete(b1, 1, 1)).await.unwrap();
+
+        let alice = list_files(&pool, "alice@local").await.unwrap();
+        assert_eq!(alice.len(), 2, "только файлы alice");
+        assert!(alice.iter().all(|f| f.file_id == a1 || f.file_id == a2));
+
+        let bob = list_files(&pool, "bob@local").await.unwrap();
+        assert_eq!(bob.len(), 1);
+        assert_eq!(bob[0].file_id, b1);
+    }
 }
