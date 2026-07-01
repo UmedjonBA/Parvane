@@ -223,6 +223,30 @@ int main() {
               m ? (m->read ? "read" : "NOT-read") : "не найдено");
     }
 
+    // B8. sendContent (медиа): photo-content с file_id → sync видит kind=photo
+    //     и сохраняет метаданные (Фаза 4, отправка медиа-сообщения).
+    {
+        const std::string fileId = "019f0000-0000-7000-8000-000000000abc";
+        json photo = {{"kind", "photo"}, {"file_id", fileId},
+                      {"width", 640}, {"height", 480}, {"mime", "image/png"},
+                      {"size_bytes", 12345}, {"caption", "подпись"}};
+        const std::string mid = mc.sendContent(alice, bob, photo, jwtAlice);
+        sleepMs(400);
+        auto msgs = mc.sync(bob, jwtBob, MessengerClient::zeroCursor());
+        auto *m = find(msgs, mid);
+        check(m != nullptr, "sendContent(photo)→sync: сообщение найдено",
+              "id=" + mid.substr(0, 8));
+        if (m) {
+            check(parvane::contentKind(m->content) == "photo"
+                      && m->content.value("file_id", std::string()) == fileId
+                      && m->content.value("width", 0) == 640
+                      && m->content.value("size_bytes", 0) == 12345,
+                  "медиа-контент сохранён (kind/file_id/width/size)",
+                  parvane::contentKind(m->content));
+            check(!m->text().has_value(), "photo-контент: text() == nullopt");
+        }
+    }
+
     std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

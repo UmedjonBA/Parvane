@@ -4,8 +4,10 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 
 class PeerData;
+struct FilePrepareResult; // storage/localimageloader.h
 
 namespace Main {
 class Session;
@@ -61,6 +63,15 @@ void StopSession();
 // — из реестра по userId пира; если неизвестен или нет сессии — no-op (лог).
 // Неблокирующая: публикация уходит на воркер-поток.
 void MirrorOutgoing(PeerData *peer, const QString &text);
+
+// Зеркалит исходящее МЕДИА-сообщение (Фаза 4). Грузит байты файла в cloud-шард
+// (CloudClient, чанками), затем публикует msg.chat.send с медиа-MessageContent
+// (file_id + метаданные). Вызывается из Api::SendConfirmedFile — локальное
+// отображение у отправителя делает штатный tdesktop, мы лишь дублируем в шину.
+// Неблокирующая: upload+publish уходят на воркер-поток. Адрес пира — из реестра.
+void MirrorOutgoingFile(
+	not_null<Main::Session*> session,
+	const std::shared_ptr<FilePrepareResult> &file);
 
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).

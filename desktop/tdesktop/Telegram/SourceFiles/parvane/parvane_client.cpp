@@ -13,11 +13,15 @@
 #include "history/history_item.h"
 #include "apiwrap.h"
 #include "api/api_common.h"
+#include "storage/localimageloader.h" // FilePrepareResult, SendMediaType
 
 #include <parvane/events.h>          // parvane-core
 #include <parvane/topics.h>          // parvane-core
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/messenger_client.h> // parvane-core
+#include <parvane/cloud_client.h>    // parvane-core
+
+#include <QtCore/QFile>
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
@@ -223,6 +227,117 @@ void MirrorOutgoing(PeerData *peer, const QString &text) {
 
 namespace {
 
+// Строит MessageContent JSON (зеркало parvane_types::MessageContent) по типу
+// tdesktop-файла. Размеры/длительность в MVP = 0 (не критично для контракта —
+// шард хранит content как есть; рендер получателя — Фаза 4b). caption=null при
+// пустой подписи (serde Option<String> ← null = None).
+parvane::json buildMediaContent(
+		SendMediaType type,
+		const std::string &fileId,
+		const std::string &filename,
+		const std::string &mime,
+		std::uint64_t size,
+		const std::string &caption) {
+	const parvane::json cap =
+		caption.empty() ? parvane::json(nullptr) : parvane::json(caption);
+	switch (type) {
+	case SendMediaType::Photo:
+		return parvane::json{{"kind", "photo"}, {"file_id", fileId},
+			{"width", 0}, {"height", 0}, {"mime", mime},
+			{"size_bytes", size}, {"caption", cap}};
+	case SendMediaType::Audio:
+		return parvane::json{{"kind", "voice"}, {"file_id", fileId},
+			{"duration_secs", 0}, {"mime", mime}, {"size_bytes", size}};
+	case SendMediaType::Round:
+		return parvane::json{{"kind", "video_note"}, {"file_id", fileId},
+			{"duration_secs", 0}, {"mime", mime}, {"size_bytes", size}};
+	default:
+		// video/* как Video, всё прочее — File.
+		if (mime.rfind("video/", 0) == 0) {
+			return parvane::json{{"kind", "video"}, {"file_id", fileId},
+				{"duration_secs", 0}, {"width", 0}, {"height", 0},
+				{"mime", mime}, {"size_bytes", size}, {"caption", cap}};
+		}
+		return parvane::json{{"kind", "file"}, {"file_id", fileId},
+			{"filename", filename}, {"mime", mime},
+			{"size_bytes", size}, {"caption", cap}};
+	}
+}
+
+} // namespace
+
+void MirrorOutgoingFile(
+		not_null<Main::Session*> session,
+		const std::shared_ptr<FilePrepareResult> &file) {
+	if (!file) {
+		return;
+	}
+	const auto bare = std::uint64_t(peerToUser(file->to.peer).bare);
+	const auto address = AddressForId(bare);
+	if (address.isEmpty()) {
+		LOG(("Parvane: медиа не зеркалится — адрес пира неизвестен (id=%1)")
+			.arg(bare));
+		return;
+	}
+
+	// Байты: из памяти (content) либо читаем с диска (filepath).
+	auto bytes = file->content;
+	if (bytes.isEmpty() && !file->filepath.isEmpty()) {
+		auto f = QFile(file->filepath);
+		if (f.open(QIODevice::ReadOnly)) {
+			bytes = f.readAll();
+		}
+	}
+	if (bytes.isEmpty()) {
+		LOG(("Parvane: медиа не зеркалится — нет байтов (%1)").arg(file->filename));
+		return;
+	}
+
+	const auto type = file->type;
+	auto filename = file->filename;
+	if (filename.isEmpty()) {
+		filename = u"file"_q;
+	}
+	const auto from = SelfAddress().toStdString();
+	const auto to = address.toStdString();
+	const auto token = Token().toStdString();
+	const auto filenameStd = filename.toStdString();
+	const auto mimeStd = file->filemime.toStdString();
+	const auto captionStd = file->caption.text.toStdString();
+	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+
+	crl::async([=] {
+		parvane::Transport *t = nullptr;
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+			m = g_messenger.get();
+		}
+		if (!t || !m) {
+			LOG(("Parvane: медиа-отправка без активной сессии — пропуск"));
+			return;
+		}
+		try {
+			parvane::CloudClient cloud(*t);
+			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd, bytesStd);
+			const auto content = buildMediaContent(
+				type, fileId, filenameStd, mimeStd, bytesStd.size(), captionStd);
+			const auto id = m->sendContent(from, to, content, token);
+			LOG(("Parvane: медиа отправлено msg %1 (file %2, %3 байт) → %4")
+				.arg(QString::fromStdString(id))
+				.arg(QString::fromStdString(fileId))
+				.arg(bytesStd.size())
+				.arg(QString::fromStdString(to)));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка отправки медиа: %1")
+				.arg(QString::fromUtf8(e.what())));
+		}
+	});
+}
+
+namespace {
+
 // Гарантирует, что пир (отправитель) существует и «загружен» в Data::Session.
 // Синтезируем MTPUser с first_name = адрес, чтобы диалог имел имя. Идемпотентно.
 not_null<UserData*> ensurePeerUser(
@@ -410,6 +525,38 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			g_pumpTimer = std::make_unique<base::Timer>([] { PumpReceive(); });
 			g_pumpTimer->callEach(kPumpIntervalMs);
 			LOG(("Parvane: периодический sync каждые %1 мс").arg(kPumpIntervalMs));
+		}
+
+		// Debug-autosendfile для e2e Фазы 4: PARVANE_AUTOSENDFILE=peer@server:/path.
+		// Отправляет файл штатным путём tdesktop (FileLoadTask → SendConfirmedFile
+		// → MirrorOutgoingFile). Тип по расширению: png/jpg → Photo, иначе File.
+		if (const char *fv = std::getenv("PARVANE_AUTOSENDFILE"); fv && *fv) {
+			const auto spec = QString::fromUtf8(fv);
+			const auto sep = spec.indexOf(':');
+			if (sep > 0) {
+				const auto peerAddr = spec.left(sep);
+				const auto path = spec.mid(sep + 1);
+				auto f = QFile(path);
+				if (f.open(QIODevice::ReadOnly)) {
+					const auto bytes = f.readAll();
+					RegisterPeer(peerAddr);
+					const auto fileUser = session->data().user(
+						UserId(BareId(IdForAddress(peerAddr))));
+					const auto fileHistory = session->data().history(fileUser);
+					const auto lower = path.toLower();
+					const auto type = (lower.endsWith(u".png"_q)
+							|| lower.endsWith(u".jpg"_q)
+							|| lower.endsWith(u".jpeg"_q))
+						? SendMediaType::Photo
+						: SendMediaType::File;
+					session->api().sendFile(
+						bytes, type, Api::SendAction(fileHistory));
+					LOG(("Parvane: autosendfile → %1: %2 (%3 байт)")
+						.arg(peerAddr).arg(path).arg(bytes.size()));
+				} else {
+					LOG(("Parvane: autosendfile — не открыть %1").arg(path));
+				}
+			}
 		}
 
 		// Debug-autosend для e2e Фазы 3b: PARVANE_AUTOSEND=peer@server:текст.
