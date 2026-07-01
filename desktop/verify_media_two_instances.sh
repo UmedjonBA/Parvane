@@ -50,7 +50,7 @@ FID=""
 for i in $(seq 1 30); do
     [ -z "$FID" ] && FID=$(grep "Parvane: медиа отправлено" "$A_LOG" 2>/dev/null \
         | tail -1 | sed -n 's/.*(file \([0-9a-f-]\+\).*/\1/p')
-    [ -n "$FID" ] && grep -q "получено медиа от alice@local:.*${FID}" "$B_LOG" 2>/dev/null && break
+    [ -n "$FID" ] && grep -q "получено медиа.*alice@local:.*${FID}" "$B_LOG" 2>/dev/null && break
     sleep 1
 done
 sleep 2
@@ -61,7 +61,7 @@ echo "── BOB (приём) ──"; grep -iE "Parvane: (получено ме
 echo "──────────────────"
 
 grep -q "Parvane: медиа отправлено.*$FID" "$A_LOG" 2>/dev/null && ok "alice отправила медиа (file ${FID:0:8}…)" || bad "alice не отправила медиа"
-grep -q "получено медиа от alice@local:.*$FID" "$B_LOG" 2>/dev/null && ok "bob принял и инъецировал медиа" || bad "bob не принял медиа"
+grep -q "получено медиа.*alice@local:.*$FID" "$B_LOG" 2>/dev/null && ok "bob принял и инъецировал медиа" || bad "bob не принял медиа"
 grep -q "медиа-диалог alice@local — в списке=1" "$B_LOG" 2>/dev/null && ok "у bob диалог alice в списке" || bad "у bob нет медиа-диалога"
 
 # Целостность: файл, который bob записал на диск, == исходному.

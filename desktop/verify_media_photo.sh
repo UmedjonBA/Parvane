@@ -72,12 +72,12 @@ kill "$APID" "$BPID" 2>/dev/null; wait "$APID" "$BPID" 2>/dev/null
 
 AFTER=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || echo 0)
 echo "── BOB (новые фото за прогон: $((AFTER-BEFORE))) ──"
-grep "Parvane: получено фото от alice@local" "$B_LOG" 2>/dev/null | tail -1
+grep "Parvane: получено фото.*alice@local" "$B_LOG" 2>/dev/null | tail -1
 
 SENT=$(grep "Parvane: медиа отправлено" "$A_LOG" 2>/dev/null | tail -1)
 [ -n "$SENT" ] && ok "alice отправила фото" || bad "alice не отправила"
 [ "$AFTER" -gt "$BEFORE" ] && ok "bob инъецировал НОВОЕ фото (photo-путь)" || bad "bob не показал новое фото"
-PHOTO_LINE=$(grep "Parvane: получено фото от alice@local" "$B_LOG" 2>/dev/null | tail -1)
+PHOTO_LINE=$(grep "Parvane: получено фото.*alice@local" "$B_LOG" 2>/dev/null | tail -1)
 echo "$PHOTO_LINE" | grep -q "320x240" && ok "размеры картинки распознаны (320x240)" || bad "размеры не распознаны"
 grep -qiE "Fatal|Unexpected in |ошибка скачивания|не записать" "$A_LOG" "$B_LOG" 2>/dev/null \
     && bad "ошибка в логе" || ok "без фатальных ошибок"
