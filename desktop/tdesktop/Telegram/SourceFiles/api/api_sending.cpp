@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_sending.h"
 
+#include "parvane/parvane_client.h" // Parvane::MirrorOutgoingFile (Фаза 4)
 #include "api/api_text_entities.h"
 #include "base/random.h"
 #include "base/unixtime.h"
@@ -565,6 +566,12 @@ void SendConfirmedFile(
 	}
 
 	session->uploader().upload(newId, file);
+
+	// Parvane fork (Фаза 4): дублируем медиа в шину (cloud + msg.chat.send).
+	// Локальное отображение у отправителя уже обеспечено generateLocal ниже;
+	// штатный MTProto-uploader в форке уходит «в никуда» — реальную доставку
+	// делает эта врезка.
+	Parvane::MirrorOutgoingFile(session, file);
 
 	auto action = SendAction(history, file->to.options);
 	action.clearDraft = false;

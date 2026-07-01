@@ -32,6 +32,18 @@ public:
         const std::string &token,
         const std::optional<std::string> &replyTo = std::nullopt);
 
+    // Как sendText, но content — произвольный MessageContent (медиа, Фаза 4).
+    // contentJson должен быть валидным вариантом MessageContent (tag "kind":
+    // photo/voice/video/video_note/file), иначе messenger-шард отвергнет send.
+    // Возвращает id события/сообщения. Медиа-блоб грузится в cloud ОТДЕЛЬНО
+    // (CloudClient), сюда идёт только file_id + метаданные.
+    std::string sendContent(
+        const std::string &from,
+        const std::string &to,
+        const json &contentJson,
+        const std::string &token,
+        const std::optional<std::string> &replyTo = std::nullopt);
+
     // Опрашивает msg.sync.request (request/reply, полный конверт) и возвращает
     // сообщения после курсоров. lastSeenId — id-курсор (нулевой uuid = с начала),
     // sinceUpdated — курсор мутаций. Бросает TransportError при таймауте/ошибке.
