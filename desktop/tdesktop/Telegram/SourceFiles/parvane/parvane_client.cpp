@@ -8,10 +8,12 @@
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_document.h"
+#include "data/data_photo.h"
 #include "data/data_types.h"
 #include "data/data_peer_id.h"
 #include "core/file_location.h"
 #include "base/unixtime.h"
+#include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 #include "history/history.h"
 #include "history/history_item.h"
 #include "apiwrap.h"
@@ -26,6 +28,7 @@
 
 #include <QtCore/QFile>
 #include <QtCore/QDir>
+#include <QtGui/QImage>
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
@@ -517,6 +520,92 @@ void injectMediaOnMain(
 	}
 }
 
+// Инъекция ФОТО inline (Фаза 4c): картинка из локального файла прямо в ленту.
+// При неудаче декодирования — деградирует в документ (injectMediaOnMain).
+void injectPhotoOnMain(
+		not_null<Main::Session*> session,
+		const QString &from,
+		std::uint64_t senderId,
+		std::int64_t ts,
+		MsgId msgId,
+		std::int64_t mediaId,
+		const QString &localPath,
+		const QString &filename,
+		const QString &mime,
+		std::int64_t size,
+		const QString &caption) {
+	auto raw = QByteArray();
+	{
+		auto f = QFile(localPath);
+		if (f.open(QIODevice::ReadOnly)) {
+			raw = f.readAll();
+		}
+	}
+	auto image = QImage();
+	image.loadFromData(raw);
+	if (image.isNull()) {
+		// не изображение — показываем как документ
+		injectMediaOnMain(session, from, senderId, ts, msgId, mediaId,
+			localPath, filename, mime, size, caption);
+		return;
+	}
+	RegisterPeer(from);
+	ensurePeerUser(session, senderId, from);
+
+	auto sizes = QVector<MTPPhotoSize>();
+	sizes.push_back(MTP_photoSize(
+		MTP_string("y"),
+		MTP_int(image.width()),
+		MTP_int(image.height()),
+		MTP_int(int(raw.size()))));
+	const auto mtpPhoto = MTP_photo(
+		MTP_flags(0),
+		MTP_long(mediaId),
+		MTP_long(0),                    // access_hash
+		MTP_bytes(),                    // file_reference
+		MTP_int(int(ts)),               // date
+		MTP_vector<MTPPhotoSize>(sizes),
+		MTPVector<MTPVideoSize>(),
+		MTP_int(session->mainDcId()));
+	using Flag = MTPDmessageMediaPhoto::Flag;
+	const auto media = MTP_messageMediaPhoto(
+		MTP_flags(Flag::f_photo),
+		mtpPhoto,
+		MTPint(),                       // ttl_seconds
+		MTPDocument());                 // video
+
+	const auto item = session->data().addNewMessage(
+		msgId,
+		buildIncoming(senderId, ts, caption, media, /*hasMedia=*/true),
+		MessageFlags(),
+		NewMessageType::Unread);
+
+	// Заполняем изображение из памяти ПОСЛЕ addNewMessage (иначе MTP-apply
+	// затрёт его пустыми локациями), затем просим перерисовать элемент.
+	const auto photo = session->data().processPhoto(mtpPhoto);
+	const auto large = Images::FromImageInMemory(image, "JPG", raw);
+	photo->updateImages(
+		QByteArray(),        // inlineThumbnailBytes
+		ImageWithLocation(), // small
+		large,               // thumbnail
+		large,               // large
+		ImageWithLocation(), // videoSmall
+		ImageWithLocation(), // videoLarge
+		0);
+
+	LOG(("Parvane: получено фото от %1: %2x%3 (%4 байт)")
+		.arg(from).arg(image.width()).arg(image.height()).arg(size));
+	if (item) {
+		session->data().notifyItemDataChange(item);
+		const auto history = item->history();
+		if (!history->folderKnown()) {
+			history->clearFolder();
+		}
+		LOG(("Parvane: медиа-диалог %1 — в списке=%2")
+			.arg(from).arg(history->inChatList() ? 1 : 0));
+	}
+}
+
 // Скачивает блоб из cloud на воркере, сохраняет на диск, затем инъецирует на
 // main. Дедуп-резервирование msgId делает вызывающий (injectOnMain).
 void pumpMediaDownload(
@@ -524,6 +613,7 @@ void pumpMediaDownload(
 		std::uint64_t senderId,
 		std::int64_t ts,
 		MsgId msgId,
+		const QString &kind,
 		const QString &fileId,
 		const QString &filename,
 		const QString &mime,
@@ -567,14 +657,22 @@ void pumpMediaDownload(
 				return;
 			}
 		}
-		const auto docId = docIdFromFileId(fileId);
+		const auto mediaId = docIdFromFileId(fileId);
 		crl::on_main([=] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
 			}
-			injectMediaOnMain(session, from, senderId, ts, msgId, docId,
-				path, filename, mime, size, caption);
+			// Инлайн-фото, если контент помечен photo ИЛИ mime — image/* (tdesktop
+			// иногда даунгрейдит Photo→File при отправке; смотрим по факту).
+			// injectPhotoOnMain сам деградирует в документ, если байты не картинка.
+			if (kind == u"photo"_q || mime.startsWith(u"image/"_q)) {
+				injectPhotoOnMain(session, from, senderId, ts, msgId, mediaId,
+					path, filename, mime, size, caption);
+			} else {
+				injectMediaOnMain(session, from, senderId, ts, msgId, mediaId,
+					path, filename, mime, size, caption);
+			}
 		});
 	});
 }
@@ -627,7 +725,7 @@ void injectOnMain(
 			const auto senderId = IdForAddress(from);
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
-			pumpMediaDownload(from, senderId, sm.ts, msgId,
+			pumpMediaDownload(from, senderId, sm.ts, msgId, kind,
 				fileId, filename, mime, size, caption);
 			++added;
 			LOG(("Parvane: медиа %1 от %2 (kind=%3) → скачивание")
