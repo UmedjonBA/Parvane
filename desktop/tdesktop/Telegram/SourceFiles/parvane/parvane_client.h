@@ -95,6 +95,10 @@ void MirrorDelete(std::int64_t msgId);
 // Правит текст СВОЕГО сообщения (msg.chat.edit). Аналогично MirrorDelete.
 void MirrorEdit(std::int64_t msgId, const QString &newText);
 
+// Отмечает прочитанными непрочитанные входящие от пира (msg.chat.read → ✓✓ у
+// отправителя). peerId — локальный id пира (bare). Вызывается из readInbox.
+void MirrorRead(std::int64_t peerId);
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);
