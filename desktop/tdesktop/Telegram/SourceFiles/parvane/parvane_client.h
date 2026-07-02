@@ -81,6 +81,10 @@ void AttachLocalOutgoingMedia(
 	not_null<Main::Session*> session,
 	const std::shared_ptr<FilePrepareResult> &file);
 
+// Зеркалит «печатает…» в шину (msg.typing.<id получателя>, fire-and-forget).
+// Вызывается из SendProgressManager при вводе. Адрес пира — из реестра.
+void MirrorTyping(PeerData *peer);
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);

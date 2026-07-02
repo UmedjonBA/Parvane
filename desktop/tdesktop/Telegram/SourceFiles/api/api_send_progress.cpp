@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "data/data_peer_values.h"
 #include "apiwrap.h"
+#include "parvane/parvane_client.h"
 
 namespace Api {
 namespace {
@@ -77,6 +78,11 @@ void SendProgressManager::update(
 	if (updated(key, doing)) {
 		cancel(history, topMsgId, type);
 		if (doing) {
+			// Parvane: зеркалим «печатает…» в шину (эфемерно). Только Typing —
+			// прочие прогресс-действия (upload/record) пока не транслируем.
+			if (type == SendProgressType::Typing) {
+				Parvane::MirrorTyping(peer);
+			}
 			send(key, progress);
 		}
 	}
