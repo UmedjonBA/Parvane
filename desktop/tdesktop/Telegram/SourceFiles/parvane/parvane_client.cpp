@@ -18,6 +18,8 @@
 #include "storage/storage_facade.h"
 #include "storage/storage_shared_media.h"
 #include "data/data_send_action.h"
+#include "data/data_lastseen_status.h"
+#include "data/data_changes.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
@@ -81,6 +83,8 @@ std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (ma
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
 bool g_finalizeHooked = false;
 bool g_typingSubscribed = false;          // подписка на msg.typing.<self> (once)
+bool g_presenceSubscribed = false;        // подписка на presence.* (once)
+std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
 
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
@@ -1088,6 +1092,33 @@ void injectOnMain(
 	}
 }
 
+// Публикует хартбит присутствия на presence.<мой id> (эфемерно). Зовётся с main
+// (таймер). Подписчики ставят пиру OnlineTill(now+90); без нового хартбита за
+// 90с статус сам «протухает» → «был(а) недавно» (offline-таймер не нужен).
+void publishPresenceHeartbeat() {
+	const auto self = SelfAddress();
+	if (self.isEmpty()) {
+		return;
+	}
+	const auto selfStd = self.toStdString();
+	const auto id = IdForAddress(self);
+	crl::async([selfStd, id] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		const parvane::json ev{ { "from", selfStd } };
+		try {
+			t->publish("presence." + std::to_string(id), ev.dump());
+		} catch (const std::exception &) {
+		}
+	});
+}
+
 } // namespace
 
 void PumpReceive() {
@@ -1175,6 +1206,56 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					});
 				LOG(("Parvane: подписка на msg.typing.%1").arg(selfId));
 			}
+		}
+
+		// Присутствие (real online): подписка на presence.* + хартбит своего
+		// присутствия каждые 30с. На приёме ставим пиру OnlineTill(now+90).
+		if (!g_presenceSubscribed) {
+			g_presenceSubscribed = true;
+			parvane::Transport *t = nullptr;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				t = g_transport.get();
+			}
+			if (t) {
+				t->subscribe("presence.*",
+					[](std::string, std::string payload) {
+						std::string from;
+						try {
+							from = parvane::json::parse(payload)
+								.value("from", std::string());
+						} catch (const std::exception &) {
+							return;
+						}
+						if (from.empty()) {
+							return;
+						}
+						const auto fromQ = QString::fromStdString(from);
+						crl::on_main([fromQ] {
+							const auto session = g_sessionWeak.get();
+							if (!session || fromQ == SelfAddress()) {
+								return;
+							}
+							const auto id = IdForAddress(fromQ);
+							const auto user = session->data().userLoaded(
+								UserId(BareId(id)));
+							if (!user) {
+								return; // присутствие незнакомого пира игнорируем
+							}
+							if (user->updateLastseen(
+									Data::LastseenStatus::OnlineTill(
+										base::unixtime::now() + 90))) {
+								session->changes().peerUpdated(user,
+									Data::PeerUpdate::Flag::OnlineStatus);
+							}
+						});
+					});
+				LOG(("Parvane: подписка на presence.*"));
+			}
+			g_presenceTimer = std::make_unique<base::Timer>(
+				[] { publishPresenceHeartbeat(); });
+			g_presenceTimer->callEach(30000);
+			publishPresenceHeartbeat();
 		}
 
 		// Без живого MTProto dialogs.getDialogs не завершается → список диалогов
