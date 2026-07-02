@@ -15,6 +15,8 @@
 #include "core/file_location.h"
 #include "base/unixtime.h"
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
+#include "storage/storage_facade.h"
+#include "storage/storage_shared_media.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
@@ -37,12 +39,16 @@
 #include <rpl/lifetime.h>
 #include <rpl/producer.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace Parvane {
 namespace {
@@ -58,6 +64,12 @@ QHash<quint64, QString> g_idToAddress;
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
 // (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
 std::set<std::string> g_ownSentUuids;
+
+// Общие медиа диалога по типу (msgId'ы) для панели профиля. Без живого MTProto
+// messages.getSearchCounters не отвечает → счётчики/галереи пусты; заполняем
+// сами полным срезом с известным count. Только main-поток.
+std::map<PeerId, std::array<std::vector<MsgId>, Storage::kSharedMediaTypeCount>>
+	g_sharedMedia;
 
 // Состояние приёма (Фаза 3c) — трогается ТОЛЬКО на main-потоке (инъекция и
 // AfterSessionReady идут через crl::on_main), поэтому без мьютекса.
@@ -654,6 +666,34 @@ not_null<UserData*> ensurePeerUser(
 		MTP_vector<MTPDocumentAttribute>(attributes));
 }
 
+// Индексирует медиа-элемент в SharedMedia С ИЗВЕСТНЫМ счётчиком, чтобы панель
+// профиля показывала общие медиа (иначе fullCount неизвестен из-за заглушённого
+// messages.getSearchCounters → секция пуста, как в оригинале не выглядит).
+void indexSharedMediaWithCount(
+		not_null<Main::Session*> session,
+		not_null<HistoryItem*> item) {
+	const auto peerId = item->history()->peer->id;
+	const auto types = item->sharedMediaTypes();
+	auto &perType = g_sharedMedia[peerId];
+	for (auto i = 0; i != Storage::kSharedMediaTypeCount; ++i) {
+		const auto type = static_cast<Storage::SharedMediaType>(i);
+		if (!types.test(type)) {
+			continue;
+		}
+		auto &ids = perType[i];
+		if (std::find(ids.begin(), ids.end(), item->id) == ids.end()) {
+			ids.push_back(item->id);
+			std::sort(ids.begin(), ids.end());
+		}
+		auto copy = ids;
+		session->storage().add(Storage::SharedMediaAddSlice(
+			peerId, MsgId(0), PeerId(0), type,
+			std::move(copy),
+			MsgRange{ MsgId(1), ids.back() },
+			int(ids.size())));
+	}
+}
+
 // Инъекция уже СКАЧАННОГО медиа-сообщения (main-поток): документ + локальный
 // файл + сообщение с media. msgId уже зарезервирован в injectOnMain.
 void injectMediaOnMain(
@@ -706,6 +746,7 @@ void injectMediaOnMain(
 		.arg(out ? u"своё"_q : u"получено"_q).arg(from).arg(filename)
 		.arg(size).arg(localPath));
 	if (item) {
+		indexSharedMediaWithCount(session, item);
 		const auto history = item->history();
 		if (!history->folderKnown()) {
 			history->clearFolder();
@@ -799,6 +840,7 @@ void injectPhotoOnMain(
 		.arg(out ? u"своё"_q : u"получено"_q).arg(from)
 		.arg(image.width()).arg(image.height()).arg(size));
 	if (item) {
+		indexSharedMediaWithCount(session, item);
 		session->data().notifyItemDataChange(item);
 		const auto history = item->history();
 		if (!history->folderKnown()) {
