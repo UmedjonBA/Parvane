@@ -482,7 +482,9 @@ not_null<UserData*> ensurePeerUser(
 		not_null<Main::Session*> session,
 		std::uint64_t id,
 		const QString &address) {
-	auto flags = MTPDuser::Flags();
+	// f_first_name ОБЯЗАТЕЛЕН: без флага processUser читает vfirst_name() как
+	// отсутствующее (value_or_empty) → имя пустое (диалог/шапка/профиль без имени).
+	auto flags = MTPDuser::Flags() | MTPDuser::Flag::f_first_name;
 	if (address == SelfAddress()) {
 		flags |= MTPDuser::Flag::f_self;
 	}
