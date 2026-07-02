@@ -53,6 +53,16 @@ def click(sock, x, y):
     time.sleep(0.05)
 
 
+def rclick(sock, x, y):
+    """ПКМ по (x,y): move → down(mask 4) → up. Для контекстного меню."""
+    _pointer(sock, x, y, 0)
+    time.sleep(0.05)
+    _pointer(sock, x, y, 4)
+    time.sleep(0.08)
+    _pointer(sock, x, y, 0)
+    time.sleep(0.05)
+
+
 def _key(sock, keysym, down):
     sock.sendall(struct.pack('>BBxxI', 4, 1 if down else 0, keysym))
 
@@ -61,7 +71,12 @@ def type_text(sock, text):
     """Печатает text по символам (RFB KeyEvent). '\\n' → Enter (0xff0d).
     Для латиницы/цифр keysym == ord(ch). Нужен сфокусированный инпут (клик)."""
     for ch in text:
-        ks = 0xff0d if ch == '\n' else ord(ch)
+        if ch == '\n':
+            ks = 0xff0d
+        elif ord(ch) < 0x100:
+            ks = ord(ch)  # Latin-1 keysym == codepoint
+        else:
+            ks = 0x01000000 + ord(ch)  # RFB Unicode keysym (кириллица и пр.)
         _key(sock, ks, True)
         time.sleep(0.04)
         _key(sock, ks, False)
@@ -122,9 +137,13 @@ def grab(host, port, out, timeout=30, clicks=None, text=None):
 
     # 6b. опциональные клики (например открыть диалог), затем даём UI отрисоваться
     if clicks:
-        for (cx, cy) in clicks:
-            click(sock, cx, cy)
-        time.sleep(1.2)
+        for c in clicks:
+            if len(c) == 3 and c[2] == 'R':
+                rclick(sock, c[0], c[1])
+            else:
+                click(sock, c[0], c[1])
+            time.sleep(0.4)
+        time.sleep(1.0)
 
     # 6c. опциональный ввод текста (после клика по инпуту) — для проверки
     # «печатает…», reply/edit и т.п. Не шлём Enter, если его нет в тексте.
@@ -187,8 +206,15 @@ if __name__ == '__main__':
     # клики через 5-й аргумент: "x1,y1;x2,y2"
     clicks = None
     if len(sys.argv) > 5 and sys.argv[5]:
-        clicks = [tuple(int(v) for v in pair.split(','))
-                  for pair in sys.argv[5].split(';') if pair]
+        # "x,y" — ЛКМ; "Rx,y" — ПКМ (контекстное меню). Через ';'.
+        clicks = []
+        for pair in sys.argv[5].split(';'):
+            if not pair:
+                continue
+            right = pair.startswith('R')
+            xy = pair[1:] if right else pair
+            x, y = (int(v) for v in xy.split(','))
+            clicks.append((x, y, 'R') if right else (x, y))
     # 6-й аргумент: текст для ввода (после кликов). '\n' в конце → отправка.
     text = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else None
     w, h = grab(host, port, out, timeout, clicks, text)

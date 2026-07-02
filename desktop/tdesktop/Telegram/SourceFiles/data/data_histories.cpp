@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum_topic.h"
 #include "data/data_saved_music.h"
 #include "data/data_saved_sublist.h"
+#include "parvane/parvane_client.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "base/unixtime.h"
@@ -775,6 +776,11 @@ void Histories::deleteMessages(
 		not_null<History*> history,
 		const QVector<MTPint> &ids,
 		bool revoke) {
+	// Parvane: зеркалим удаление СВОИХ сообщений в шину (msg.chat.delete).
+	// Для чужих/неизвестных MirrorDelete — no-op (шард проверяет автора).
+	for (const auto &id : ids) {
+		Parvane::MirrorDelete(id.v);
+	}
 	sendRequest(history, RequestType::Delete, [=](Fn<void()> finish) {
 		const auto done = [=](const MTPmessages_AffectedMessages &result) {
 			session().api().applyAffectedMessages(history->peer, result);

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_editing.h"
 
 #include "apiwrap.h"
+#include "parvane/parvane_client.h"
 #include "api/api_media.h"
 #include "api/api_text_entities.h"
 #include "base/random.h"
@@ -490,6 +491,9 @@ mtpRequestId EditTextMessage(
 		Fn<void(mtpRequestId requestId)> done,
 		Fn<void(const QString &error, mtpRequestId requestId)> fail,
 		bool spoilered) {
+	// Parvane: зеркалим правку СВОЕГО текста в шину (msg.chat.edit). Чужое/
+	// неизвестное — no-op (шард проверяет автора).
+	Parvane::MirrorEdit(item->id.bare, caption.text);
 	const auto media = item->media();
 	if (media
 		&& HistoryView::MediaEditManager::CanBeSpoilered(item)

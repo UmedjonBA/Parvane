@@ -4229,7 +4229,10 @@ void ApiWrap::sendMessage(
 	// Parvane fork (Фаза 3b): зеркалим исходящий текст в шину (msg.chat.send)
 	// после прохождения проверок отправки, до построения локального MTP-эха.
 	// Получатель резолвится из реестра пиров по id; неизвестный пир — no-op+лог.
-	Parvane::MirrorOutgoing(peer.get(), textWithTags.text);
+	Parvane::MirrorOutgoing(
+		peer.get(),
+		textWithTags.text,
+		action.replyTo.messageId.msg.bare);
 
 	auto sending = TextWithEntities();
 	auto left = TextWithEntities {

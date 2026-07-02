@@ -21,16 +21,17 @@ std::string MessengerClient::sendText(
         const std::string &to,
         const std::string &text,
         const std::string &token,
-        const std::optional<std::string> &replyTo) {
+        const std::optional<std::string> &replyTo,
+        const std::optional<std::string> &id) {
     SendPayload payload;
     payload.to = to;
     payload.content = textContent(text);
     payload.reply_to = replyTo;
 
-    const std::string id = uuid4();
-    const json ev = makeEvent(id, from, nowUnix(), token, payload.toJson());
+    const std::string idStr = id.value_or(uuid4());
+    const json ev = makeEvent(idStr, from, nowUnix(), token, payload.toJson());
     _t.publish(topics::MsgSend, ev.dump());
-    return id;
+    return idStr;
 }
 
 std::string MessengerClient::sendContent(
