@@ -53,7 +53,22 @@ def click(sock, x, y):
     time.sleep(0.05)
 
 
-def grab(host, port, out, timeout=30, clicks=None):
+def _key(sock, keysym, down):
+    sock.sendall(struct.pack('>BBxxI', 4, 1 if down else 0, keysym))
+
+
+def type_text(sock, text):
+    """Печатает text по символам (RFB KeyEvent). '\\n' → Enter (0xff0d).
+    Для латиницы/цифр keysym == ord(ch). Нужен сфокусированный инпут (клик)."""
+    for ch in text:
+        ks = 0xff0d if ch == '\n' else ord(ch)
+        _key(sock, ks, True)
+        time.sleep(0.04)
+        _key(sock, ks, False)
+        time.sleep(0.06)
+
+
+def grab(host, port, out, timeout=30, clicks=None, text=None):
     deadline = time.time() + timeout
     sock = None
     while time.time() < deadline:
@@ -110,6 +125,12 @@ def grab(host, port, out, timeout=30, clicks=None):
         for (cx, cy) in clicks:
             click(sock, cx, cy)
         time.sleep(1.2)
+
+    # 6c. опциональный ввод текста (после клика по инпуту) — для проверки
+    # «печатает…», reply/edit и т.п. Не шлём Enter, если его нет в тексте.
+    if text:
+        type_text(sock, text)
+        time.sleep(0.8)
 
     # 7. FramebufferUpdateRequest (полный, non-incremental)
     sock.sendall(struct.pack('>BBHHHH', 3, 0, 0, 0, w, h))
@@ -168,5 +189,7 @@ if __name__ == '__main__':
     if len(sys.argv) > 5 and sys.argv[5]:
         clicks = [tuple(int(v) for v in pair.split(','))
                   for pair in sys.argv[5].split(';') if pair]
-    w, h = grab(host, port, out, timeout, clicks)
+    # 6-й аргумент: текст для ввода (после кликов). '\n' в конце → отправка.
+    text = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else None
+    w, h = grab(host, port, out, timeout, clicks, text)
     print(f"снято {w}x{h} → {out}")

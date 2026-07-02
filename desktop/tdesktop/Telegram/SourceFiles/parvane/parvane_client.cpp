@@ -17,6 +17,7 @@
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 #include "storage/storage_facade.h"
 #include "storage/storage_shared_media.h"
+#include "data/data_send_action.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
@@ -79,6 +80,7 @@ qint64 g_nextMsgId = 1;               // серверный диапазон (0 
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
 bool g_finalizeHooked = false;
+bool g_typingSubscribed = false;          // подписка на msg.typing.<self> (once)
 
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
@@ -258,6 +260,37 @@ void MirrorOutgoing(PeerData *peer, const QString &text) {
 		return;
 	}
 	sendTextAsync(address, text);
+}
+
+void MirrorTyping(PeerData *peer) {
+	if (!peer || !peer->isUser()) {
+		return;
+	}
+	const auto bare = std::uint64_t(peerToUser(peer->id).bare);
+	const auto address = AddressForId(bare);
+	if (address.isEmpty()) {
+		return;
+	}
+	// Эфемерно (fire-and-forget) на msg.typing.<id получателя>; шард не нужен.
+	// id пира == IdForAddress(address) (реестр), поэтому берём bare.
+	const auto self = SelfAddress().toStdString();
+	const auto to = address.toStdString();
+	const auto id = bare;
+	crl::async([=] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		const parvane::json ev{ { "from", self }, { "to", to } };
+		try {
+			t->publish("msg.typing." + std::to_string(id), ev.dump());
+		} catch (const std::exception &) {
+		}
+	});
 }
 
 namespace {
@@ -1099,6 +1132,49 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		RegisterPeer(SelfAddress());
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
+		}
+
+		// Подписка на «печатает…» (эфемерно): msg.typing.<мой id>. Хендлер
+		// приходит с NATS-потока → маршалим на main и показываем действие пира.
+		if (!g_typingSubscribed) {
+			g_typingSubscribed = true;
+			const auto selfId = IdForAddress(SelfAddress());
+			parvane::Transport *t = nullptr;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				t = g_transport.get();
+			}
+			if (t) {
+				t->subscribe("msg.typing." + std::to_string(selfId),
+					[](std::string, std::string payload) {
+						std::string from;
+						try {
+							from = parvane::json::parse(payload)
+								.value("from", std::string());
+						} catch (const std::exception &) {
+							return;
+						}
+						if (from.empty()) {
+							return;
+						}
+						const auto fromQ = QString::fromStdString(from);
+						crl::on_main([fromQ] {
+							const auto session = g_sessionWeak.get();
+							if (!session) {
+								return;
+							}
+							RegisterPeer(fromQ);
+							const auto id = IdForAddress(fromQ);
+							const auto user = ensurePeerUser(session, id, fromQ);
+							const auto history = session->data().history(user);
+							session->data().sendActionManager().registerFor(
+								history, MsgId(0), user,
+								MTP_sendMessageTypingAction(),
+								base::unixtime::now());
+						});
+					});
+				LOG(("Parvane: подписка на msg.typing.%1").arg(selfId));
+			}
 		}
 
 		// Без живого MTProto dialogs.getDialogs не завершается → список диалогов
