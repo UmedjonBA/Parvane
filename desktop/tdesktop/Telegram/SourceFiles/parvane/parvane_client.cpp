@@ -84,6 +84,7 @@ base::weak_ptr<Main::Session> g_sessionWeak;
 QHash<QString, qint64> g_uuidToMsgId; // UUID сообщения → синтетический MsgId
 QHash<qint64, QString> g_msgIdToUuid; // обратная карта (для delete/edit/read своих)
 QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отправок, ждут эха (main)
+QHash<qint64, QVector<QString>> g_unreadIncoming; // peerId → uuid'ы непрочит. входящих
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
@@ -375,6 +376,39 @@ void MirrorEdit(std::int64_t msgId, const QString &newText) {
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка правки: %1").arg(QString::fromUtf8(e.what())));
 		}
+	});
+}
+
+void MirrorRead(std::int64_t peerId) {
+	// Отмечаем прочитанными все непрочитанные входящие от пира (msg.chat.read →
+	// у отправителя ✓✓). Собираем uuid'ы и чистим, чтобы не слать повторно.
+	const auto it = g_unreadIncoming.find(peerId);
+	if (it == g_unreadIncoming.end() || it.value().isEmpty()) {
+		return;
+	}
+	auto ids = std::vector<std::string>();
+	for (const auto &u : it.value()) {
+		ids.push_back(u.toStdString());
+	}
+	it.value().clear();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		for (const auto &id : ids) {
+			try {
+				m->markRead(from, id, token);
+			} catch (const std::exception &) {
+			}
+		}
+		LOG(("Parvane: отмечено прочитанным %1 входящих").arg(int(ids.size())));
 	});
 }
 
@@ -1119,6 +1153,24 @@ void injectOnMain(
 			}
 			// не инъецировано — упадёт в обычную инъекцию ниже (с новым текстом)
 		}
+		if (sm.read && (from == self)) {
+			// Получатель прочитал моё сообщение → ставим ✓✓ на локальном эхо.
+			const auto found = g_uuidToMsgId.find(uuid);
+			if (found != g_uuidToMsgId.end() && found.value() != 0) {
+				const auto pid = IdForAddress(QString::fromStdString(sm.to));
+				const auto full = FullMsgId(
+					peerFromUser(UserId(BareId(pid))),
+					MsgId(found.value()));
+				if (const auto item = session->data().message(full)) {
+					const auto history = item->history();
+					if (history->outboxReadTillId() < item->id) {
+						history->outboxRead(item);
+						LOG(("Parvane: своё прочитано ✓✓ msg %1").arg(uuid));
+					}
+				}
+			}
+			// не continue — ниже contains→continue пропустит уже инъецированное
+		}
 		if (g_uuidToMsgId.contains(uuid)) {
 			continue; // уже инъецировано
 		}
@@ -1187,7 +1239,10 @@ void injectOnMain(
 			RegisterPeer(peerAddress);
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
-		g_msgIdToUuid.insert(msgId.bare, uuid);
+			g_msgIdToUuid.insert(msgId.bare, uuid);
+			if (!out) {
+				g_unreadIncoming[peerId].push_back(uuid);
+			}
 			pumpMediaDownload(peerAddress, peerId, authorId, out, sm.ts, msgId,
 				kind, fileId, filename, mime, size,
 				durationSecs, width, height, caption);
@@ -1212,6 +1267,9 @@ void injectOnMain(
 		const auto msgId = MsgId(g_nextMsgId++);
 		g_uuidToMsgId.insert(uuid, msgId.bare);
 		g_msgIdToUuid.insert(msgId.bare, uuid);
+		if (!out) {
+			g_unreadIncoming[peerId].push_back(uuid);
+		}
 		const auto item = session->data().addNewMessage(
 			msgId,
 			buildMessage(authorId, peerId, out, sm.ts, text,
