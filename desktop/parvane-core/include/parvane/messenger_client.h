@@ -30,7 +30,10 @@ public:
         const std::string &to,
         const std::string &text,
         const std::string &token,
-        const std::optional<std::string> &replyTo = std::nullopt);
+        const std::optional<std::string> &replyTo = std::nullopt,
+        // Если задан — используется как id сообщения (корреляция с локальным эхом
+        // на клиенте для delete/edit/read своих). Иначе генерируется uuid7.
+        const std::optional<std::string> &id = std::nullopt);
 
     // Как sendText, но content — произвольный MessageContent (медиа, Фаза 4).
     // contentJson должен быть валидным вариантом MessageContent (tag "kind":

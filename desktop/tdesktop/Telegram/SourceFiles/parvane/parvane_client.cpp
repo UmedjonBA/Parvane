@@ -20,6 +20,9 @@
 #include "data/data_send_action.h"
 #include "data/data_lastseen_status.h"
 #include "data/data_changes.h"
+#include "data/data_histories.h"
+#include "base/call_delayed.h"
+#include <QtCore/QQueue>
 #include "history/history.h"
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
@@ -32,6 +35,7 @@
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
+#include <parvane/ids.h>             // parvane-core (newUuidV7)
 
 #include <QtCore/QFile>
 #include <QtCore/QDir>
@@ -78,18 +82,25 @@ std::map<PeerId, std::array<std::vector<MsgId>, Storage::kSharedMediaTypeCount>>
 // AfterSessionReady идут через crl::on_main), поэтому без мьютекса.
 base::weak_ptr<Main::Session> g_sessionWeak;
 QHash<QString, qint64> g_uuidToMsgId; // UUID сообщения → синтетический MsgId
+QHash<qint64, QString> g_msgIdToUuid; // обратная карта (для delete/edit/read своих)
+QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отправок, ждут эха (main)
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
 bool g_finalizeHooked = false;
 bool g_typingSubscribed = false;          // подписка на msg.typing.<self> (once)
+FullMsgId g_lastOwnFullId;                 // последнее своё исходящее (debug-хуки)
 bool g_presenceSubscribed = false;        // подписка на presence.* (once)
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
 
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
 // Публикует текст в шину с воркер-потока (не блокирует UI).
-void sendTextAsync(const QString &toAddress, const QString &text) {
+void sendTextAsync(
+		const QString &toAddress,
+		const QString &text,
+		const std::string &preId,
+		const std::optional<std::string> &replyToUuid = std::nullopt) {
 	const auto from = SelfAddress().toStdString();
 	const auto to = toAddress.toStdString();
 	const auto body = text.toStdString();
@@ -105,7 +116,8 @@ void sendTextAsync(const QString &toAddress, const QString &text) {
 			return;
 		}
 		try {
-			const auto id = m->sendText(from, to, body, token);
+			const auto id = m->sendText(from, to, body, token,
+				replyToUuid, preId);
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
@@ -252,7 +264,7 @@ void StopSession() {
 	g_transport.reset();
 }
 
-void MirrorOutgoing(PeerData *peer, const QString &text) {
+void MirrorOutgoing(PeerData *peer, const QString &text, std::int64_t replyToMsgId) {
 	if (!peer || !peer->isUser() || text.isEmpty()) {
 		return;
 	}
@@ -263,7 +275,19 @@ void MirrorOutgoing(PeerData *peer, const QString &text) {
 			.arg(bare));
 		return;
 	}
-	sendTextAsync(address, text);
+	// Ответ: uuid цитируемого сообщения по обратной карте (если известно).
+	auto replyToUuid = std::optional<std::string>();
+	if (replyToMsgId != 0) {
+		const auto it = g_msgIdToUuid.find(replyToMsgId);
+		if (it != g_msgIdToUuid.end()) {
+			replyToUuid = it.value().toStdString();
+		}
+	}
+	// Пред-генерируем id (uuid7) на main и кладём в очередь — finalize-хук
+	// свяжет его с локальным эхом (msgId↔uuid) для delete/edit/read СВОИХ.
+	const auto preId = parvane::newUuidV7();
+	g_pendingOwnUuids.enqueue(QString::fromStdString(preId));
+	sendTextAsync(address, text, preId, replyToUuid);
 }
 
 void MirrorTyping(PeerData *peer) {
@@ -293,6 +317,63 @@ void MirrorTyping(PeerData *peer) {
 		try {
 			t->publish("msg.typing." + std::to_string(id), ev.dump());
 		} catch (const std::exception &) {
+		}
+	});
+}
+
+void MirrorDelete(std::int64_t msgId) {
+	// Удаляем «у всех» только СВОИ сообщения (шард проверяет автора). Ищем uuid
+	// по локальному msgId; неизвестный (чужое/несинхронизированное) — no-op.
+	const auto it = g_msgIdToUuid.find(msgId);
+	if (it == g_msgIdToUuid.end()) {
+		return;
+	}
+	const auto uuid = it.value().toStdString();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		try {
+			m->deleteMessage(from, uuid, token);
+			LOG(("Parvane: удаление своего msg %1").arg(QString::fromStdString(uuid)));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка удаления: %1").arg(QString::fromUtf8(e.what())));
+		}
+	});
+}
+
+void MirrorEdit(std::int64_t msgId, const QString &newText) {
+	// Правим текст только СВОИХ сообщений (шард проверяет автора). uuid — по
+	// обратной карте; неизвестное — no-op.
+	const auto it = g_msgIdToUuid.find(msgId);
+	if (it == g_msgIdToUuid.end()) {
+		return;
+	}
+	const auto uuid = it.value().toStdString();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto text = newText.toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		try {
+			m->editText(from, uuid, text, token);
+			LOG(("Parvane: правка своего msg %1").arg(QString::fromStdString(uuid)));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка правки: %1").arg(QString::fromUtf8(e.what())));
 		}
 	});
 }
@@ -579,13 +660,29 @@ not_null<UserData*> ensurePeerUser(
 		std::int64_t ts,
 		const QString &text,
 		const MTPMessageMedia &media = MTPMessageMedia(),
-		bool hasMedia = false) {
+		bool hasMedia = false,
+		std::int64_t replyToMsgId = 0) {
 	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
 	const auto dialogPeer = peerFromUser(UserId(BareId(peerId)));
 	using Flag = MTPDmessage::Flag;
 	const auto flags = Flag::f_from_id
 		| (out ? Flag::f_out : Flag(0))
-		| (hasMedia ? Flag::f_media : Flag(0));
+		| (hasMedia ? Flag::f_media : Flag(0))
+		| (replyToMsgId ? Flag::f_reply_to : Flag(0));
+	const auto replyHeader = replyToMsgId
+		? MTP_messageReplyHeader(
+			MTP_flags(MTPDmessageReplyHeader::Flag::f_reply_to_msg_id),
+			MTP_int(int(replyToMsgId)),
+			MTPPeer(),                      // reply_to_peer_id
+			MTPMessageFwdHeader(),          // reply_from
+			MTPMessageMedia(),              // reply_media
+			MTPint(),                       // reply_to_top_id
+			MTPstring(),                    // quote_text
+			MTPVector<MTPMessageEntity>(),  // quote_entities
+			MTPint(),                       // quote_offset
+			MTPint(),                       // todo_item_id
+			MTPbytes())                     // poll_option
+		: MTPMessageReplyHeader();
 	return MTP_message(
 		MTP_flags(flags),
 		MTP_int(0),                 // id (override через addNewMessage)
@@ -598,7 +695,7 @@ not_null<UserData*> ensurePeerUser(
 		MTPlong(),                  // via_bot_id
 		MTPlong(),                  // via_business_bot_id
 		MTPPeer(),                  // guestchat_via_from
-		MTPMessageReplyHeader(),    // reply_to
+		replyHeader,                // reply_to
 		MTP_int(int(ts)),           // date
 		MTP_string(text),           // message (для медиа — caption)
 		media,
@@ -977,10 +1074,51 @@ void injectOnMain(
 	int added = 0;
 	for (const auto &sm : msgs) {
 		const auto from = QString::fromStdString(sm.from);
-		if (sm.deleted) {
-			continue; // томбстоун
-		}
 		const auto uuid = QString::fromStdString(sm.id);
+		if (sm.deleted) {
+			// Томбстоун: если сообщение было инъецировано — удаляем локальный item.
+			const auto found = g_uuidToMsgId.find(uuid);
+			if (found != g_uuidToMsgId.end() && found.value() != 0) {
+				const auto isOwn = (from == self);
+				const auto peerAddr = isOwn
+					? QString::fromStdString(sm.to) : from;
+				const auto peerId = IdForAddress(peerAddr);
+				const auto full = FullMsgId(
+					peerFromUser(UserId(BareId(peerId))),
+					MsgId(found.value()));
+				if (const auto item = session->data().message(full)) {
+					item->destroy();
+				}
+				g_msgIdToUuid.remove(found.value());
+			}
+			g_uuidToMsgId.insert(uuid, 0); // помечаем обработанным
+			continue;
+		}
+		if (sm.edited) {
+			// Правка: если уже инъецировано — обновляем текст локального item.
+			const auto found = g_uuidToMsgId.find(uuid);
+			if (found != g_uuidToMsgId.end() && found.value() != 0) {
+				if (const auto maybeText = sm.text()) {
+					const auto isOwn = (from == self);
+					const auto peerAddr = isOwn
+						? QString::fromStdString(sm.to) : from;
+					const auto peerId = IdForAddress(peerAddr);
+					const auto full = FullMsgId(
+						peerFromUser(UserId(BareId(peerId))),
+						MsgId(found.value()));
+					const auto newText = QString::fromStdString(*maybeText);
+					if (const auto item = session->data().message(full)) {
+						if (item->originalText().text != newText) {
+							item->setText({ newText });
+							session->data().requestItemViewRefresh(item);
+							LOG(("Parvane: правка применена msg %1").arg(uuid));
+						}
+					}
+				}
+				continue; // уже инъецировано — только обновили текст
+			}
+			// не инъецировано — упадёт в обычную инъекцию ниже (с новым текстом)
+		}
 		if (g_uuidToMsgId.contains(uuid)) {
 			continue; // уже инъецировано
 		}
@@ -1049,6 +1187,7 @@ void injectOnMain(
 			RegisterPeer(peerAddress);
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
+		g_msgIdToUuid.insert(msgId.bare, uuid);
 			pumpMediaDownload(peerAddress, peerId, authorId, out, sm.ts, msgId,
 				kind, fileId, filename, mime, size,
 				durationSecs, width, height, caption);
@@ -1061,11 +1200,22 @@ void injectOnMain(
 		const auto text = QString::fromStdString(*maybeText);
 		RegisterPeer(peerAddress);
 		ensurePeerUser(session, peerId, peerAddress);
+		// Ответ: uuid цитируемого → локальный msgId (если он уже инъецирован).
+		auto replyToMsgId = std::int64_t(0);
+		if (sm.reply_to) {
+			const auto rq = QString::fromStdString(*sm.reply_to);
+			const auto found = g_uuidToMsgId.value(rq, 0);
+			if (found != 0) {
+				replyToMsgId = found;
+			}
+		}
 		const auto msgId = MsgId(g_nextMsgId++);
 		g_uuidToMsgId.insert(uuid, msgId.bare);
+		g_msgIdToUuid.insert(msgId.bare, uuid);
 		const auto item = session->data().addNewMessage(
 			msgId,
-			buildMessage(authorId, peerId, out, sm.ts, text),
+			buildMessage(authorId, peerId, out, sm.ts, text,
+				MTPMessageMedia(), /*hasMedia=*/false, replyToMsgId),
 			MessageFlags(),
 			NewMessageType::Unread);
 		++added;
@@ -1278,8 +1428,15 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					|| !IsClientMsgId(item->id)) {
 					return;
 				}
+				// Своё ТЕКСТ-эхо: связываем с заранее сгенерённым uuid из очереди
+				// (msgId↔uuid) для delete/edit/read СВОИХ сообщений. Медиа —
+				// не берём (у него нет пред-id в очереди).
+				auto uuid = QString();
+				if (!item->media() && !g_pendingOwnUuids.isEmpty()) {
+					uuid = g_pendingOwnUuids.dequeue();
+				}
 				const auto fullId = item->fullId();
-				crl::on_main([fullId] {
+				crl::on_main([fullId, uuid] {
 					const auto session = g_sessionWeak.get();
 					if (!session) {
 						return;
@@ -1289,7 +1446,13 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						return;
 					}
 					if (it->isSending() && IsClientMsgId(it->id)) {
-						it->setRealId(MsgId(g_nextMsgId++));
+						const auto newId = MsgId(g_nextMsgId++);
+						it->setRealId(newId);
+						if (!uuid.isEmpty()) {
+							g_uuidToMsgId.insert(uuid, newId.bare);
+							g_msgIdToUuid.insert(newId.bare, uuid);
+							g_lastOwnFullId = it->fullId(); // debug AUTODELETE/EDIT
+						}
 					}
 					// Показать диалог отправителя в списке: без живого MTProto
 					// список диалогов вечно «Loading…», а исходящее сообщение не
@@ -1342,6 +1505,46 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				} else {
 					LOG(("Parvane: autosendfile — не открыть %1").arg(path));
 				}
+			}
+		}
+
+		// Debug-autodelete для e2e delete: PARVANE_AUTODELETE=<секунды> — удаляет
+		// своё последнее исходящее штатным путём (deleteMessages → MirrorDelete).
+		if (const char *dv = std::getenv("PARVANE_AUTODELETE"); dv && *dv) {
+			const auto secs = std::max(QString::fromUtf8(dv).toInt(), 1);
+			base::call_delayed(secs * crl::time(1000), [] {
+				const auto session = g_sessionWeak.get();
+				if (!session || !g_lastOwnFullId) {
+					return;
+				}
+				const auto item = session->data().message(g_lastOwnFullId);
+				if (!item) {
+					LOG(("Parvane: autodelete — сообщение не найдено"));
+					return;
+				}
+				session->data().histories().deleteMessages(
+					item->history(),
+					QVector<MTPint>{ MTP_int(g_lastOwnFullId.msg.bare) },
+					true);
+				LOG(("Parvane: autodelete → msgId %1")
+					.arg(g_lastOwnFullId.msg.bare));
+			});
+		}
+
+		// Debug-autoedit для e2e edit: PARVANE_AUTOEDIT=<секунды>:новый текст.
+		if (const char *ev = std::getenv("PARVANE_AUTOEDIT"); ev && *ev) {
+			const auto spec = QString::fromUtf8(ev);
+			const auto sep = spec.indexOf(':');
+			if (sep > 0) {
+				const auto secs = std::max(spec.left(sep).toInt(), 1);
+				const auto newText = spec.mid(sep + 1);
+				base::call_delayed(secs * crl::time(1000), [newText] {
+					if (!g_lastOwnFullId) {
+						return;
+					}
+					MirrorEdit(g_lastOwnFullId.msg.bare, newText);
+					LOG(("Parvane: autoedit → %1").arg(newText));
+				});
 			}
 		}
 

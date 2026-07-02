@@ -62,7 +62,10 @@ void StopSession();
 // Зеркалит исходящее текстовое сообщение в шину (msg.chat.send). Адрес получателя
 // — из реестра по userId пира; если неизвестен или нет сессии — no-op (лог).
 // Неблокирующая: публикация уходит на воркер-поток.
-void MirrorOutgoing(PeerData *peer, const QString &text);
+void MirrorOutgoing(
+	PeerData *peer,
+	const QString &text,
+	std::int64_t replyToMsgId = 0);
 
 // Зеркалит исходящее МЕДИА-сообщение (Фаза 4). Грузит байты файла в cloud-шард
 // (CloudClient, чанками), затем публикует msg.chat.send с медиа-MessageContent
@@ -84,6 +87,13 @@ void AttachLocalOutgoingMedia(
 // Зеркалит «печатает…» в шину (msg.typing.<id получателя>, fire-and-forget).
 // Вызывается из SendProgressManager при вводе. Адрес пира — из реестра.
 void MirrorTyping(PeerData *peer);
+
+// Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
+// синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.
+void MirrorDelete(std::int64_t msgId);
+
+// Правит текст СВОЕГО сообщения (msg.chat.edit). Аналогично MirrorDelete.
+void MirrorEdit(std::int64_t msgId, const QString &newText);
 
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
