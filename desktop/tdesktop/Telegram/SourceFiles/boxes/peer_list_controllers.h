@@ -83,7 +83,9 @@ private:
 
 };
 
-class PeerListGlobalSearchController : public PeerListSearchController {
+class PeerListGlobalSearchController
+	: public PeerListSearchController
+	, public base::has_weak_ptr {
 public:
 	explicit PeerListGlobalSearchController(not_null<Main::Session*> session);
 

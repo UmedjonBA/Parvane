@@ -1557,6 +1557,11 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 							g_lastOwnFullId = it->fullId(); // debug AUTODELETE/EDIT
 						}
 					}
+					// СВОЁ медиа — в общие медиа (профиль отправителя иначе показывает
+					// только входящие; приём — в injectMediaOnMain). Дедуп по msgId.
+					if (it->media()) {
+						indexSharedMediaWithCount(session, it);
+					}
 					// Показать диалог отправителя в списке: без живого MTProto
 					// список диалогов вечно «Loading…», а исходящее сообщение не
 					// регистрирует диалог. Помечаем папку известной — как для
