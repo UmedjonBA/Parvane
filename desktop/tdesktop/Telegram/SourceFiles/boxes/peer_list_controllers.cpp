@@ -32,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat.h"
 #include "data/data_user.h"
 #include "data/data_forum.h"
+#include "parvane/parvane_client.h"
 #include "data/data_forum_topic.h"
 #include "data/data_folder.h"
 #include "data/data_histories.h"
@@ -244,19 +245,20 @@ bool PeerListGlobalSearchController::searchInCache() {
 }
 
 void PeerListGlobalSearchController::searchOnServer() {
-	_requestId = _api.request(MTPcontacts_Search(
-		MTP_flags(0),
-		MTP_string(_query),
-		MTP_int(SearchPeopleLimit)
-	)).done([=](const MTPcontacts_Found &result, mtpRequestId requestId) {
-		searchDone(result, requestId);
-	}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-		if (_requestId == requestId) {
-			_requestId = 0;
-			delegate()->peerListSearchRefreshRows();
+	// Parvane: ищем в каталоге identity (identity.user.search) вместо MTProto
+	// contacts.search — так «New Message»/поиск находит любого юзера по адресу.
+	const auto query = _query;
+	Parvane::SearchUsers(query, crl::guard(this, [=](QStringList addrs) {
+		if (_query != query) {
+			return; // запрос устарел
 		}
-	}).send();
-	_queries.emplace(_requestId, _query);
+		_requestId = 0;
+		for (const auto &address : addrs) {
+			const auto user = Parvane::EnsurePeer(_session, address);
+			delegate()->peerListSearchAddRow(not_null<PeerData*>(user.get()));
+		}
+		delegate()->peerListSearchRefreshRows();
+	}));
 }
 
 void PeerListGlobalSearchController::searchDone(
