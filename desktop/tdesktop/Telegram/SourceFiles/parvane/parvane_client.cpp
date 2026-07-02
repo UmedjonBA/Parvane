@@ -1329,6 +1329,51 @@ void publishPresenceHeartbeat() {
 
 } // namespace
 
+not_null<UserData*> EnsurePeer(
+		not_null<Main::Session*> session,
+		const QString &address) {
+	RegisterPeer(address);
+	return ensurePeerUser(session, IdForAddress(address), address);
+}
+
+void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
+	const auto q = query.trimmed().toStdString();
+	if (q.empty()) {
+		callback({});
+		return;
+	}
+	crl::async([q, callback = std::move(callback)]() mutable {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		auto out = QStringList();
+		if (t) {
+			try {
+				const parvane::json req{ { "query", q } };
+				const auto reply = t->request(
+					"identity.user.search", req.dump(), 3000);
+				const auto j = parvane::json::parse(reply);
+				if (j.contains("users") && j["users"].is_array()) {
+					for (const auto &u : j["users"]) {
+						if (u.is_string()) {
+							out.push_back(QString::fromStdString(
+								u.get<std::string>()));
+						}
+					}
+				}
+			} catch (const std::exception &e) {
+				LOG(("Parvane: поиск пользователей — ошибка: %1")
+					.arg(QString::fromUtf8(e.what())));
+			}
+		}
+		crl::on_main([callback = std::move(callback), out]() mutable {
+			callback(out);
+		});
+	});
+}
+
 void PumpReceive() {
 	crl::async([] {
 		parvane::MessengerClient *m = nullptr;

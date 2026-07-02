@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub mod topics {
     pub const IDENTITY_ISSUE: &str = "identity.token.issue";
     pub const IDENTITY_VERIFY: &str = "identity.token.verify";
+    pub const IDENTITY_SEARCH: &str = "identity.user.search";
 
     pub const MSG_SEND: &str = "msg.chat.send";
     pub const MSG_DELIVERED: &str = "msg.chat.delivered";
@@ -76,6 +77,17 @@ pub struct IssueResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyRequest {
     pub token: String,
+}
+
+/// Поиск пользователей по подстроке имени (каталог = таблица users identity).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchUsersRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchUsersResponse {
+    pub users: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

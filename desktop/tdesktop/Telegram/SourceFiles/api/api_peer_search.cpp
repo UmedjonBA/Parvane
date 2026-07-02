@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "dialogs/ui/chat_search_in.h" // IsHashOrCashtagSearchQuery
 #include "main/main_session.h"
+#include "data/data_user.h"
+#include "parvane/parvane_client.h"
 
 namespace Api {
 namespace {
@@ -41,24 +43,21 @@ void PeerSearch::request(
 		finish(PeerSearchResult{});
 		return;
 	}
-	auto &cache = _cache[_query];
-	if (cache.peersReady && cache.sponsoredReady) {
-		finish(cache.result);
-		return;
-	} else if (type == RequestType::CacheOnly) {
-		_callback = nullptr;
-		return;
-	} else if (cache.requested) {
-		return;
-	}
-	cache.requested = true;
-	cache.result.query = _query;
-	if (_query.size() < kMinSponsoredQueryLength) {
-		cache.sponsoredReady = true;
-	} else if (_type == Type::WithSponsored) {
-		requestSponsored();
-	}
-	requestPeers();
+	// Parvane: ищем в каталоге identity (identity.user.search) вместо MTProto
+	// contacts.search — так можно найти пользователя по имени/адресу и начать чат.
+	const auto session = _session;
+	const auto q = _query;
+	Parvane::SearchUsers(query, [session, q, callback](QStringList addrs) {
+		auto result = PeerSearchResult{};
+		result.query = q;
+		for (const auto &address : addrs) {
+			const auto user = Parvane::EnsurePeer(session, address);
+			result.peers.push_back(not_null<PeerData*>(user.get()));
+		}
+		if (const auto onstack = callback) {
+			onstack(std::move(result));
+		}
+	});
 }
 
 void PeerSearch::requestPeers() {
