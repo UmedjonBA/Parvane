@@ -132,7 +132,7 @@ void ParvaneWidget::loginSucceeded(const QString &user) {
 	// затем создаём сессию НАПРЯМУЮ, минуя messages.getDialogFilters (он требует
 	// живого MTProto). Список диалогов наполнит msg.sync.* в Фазе 3.
 	const auto self = MTP_user(
-		MTP_flags(MTPDuser::Flag::f_self),
+		MTP_flags(MTPDuser::Flag::f_self | MTPDuser::Flag::f_first_name),
 		MTP_long(Parvane::IdForAddress(user)),
 		MTPlong(),           // access_hash
 		MTP_string(user),    // first_name — показываем адрес
