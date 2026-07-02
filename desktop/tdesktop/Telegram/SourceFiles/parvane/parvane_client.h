@@ -7,6 +7,7 @@
 #include <memory>
 
 class PeerData;
+class UserData;
 struct FilePrepareResult; // storage/localimageloader.h
 
 namespace Main {
@@ -98,6 +99,16 @@ void MirrorEdit(std::int64_t msgId, const QString &newText);
 // Отмечает прочитанными непрочитанные входящие от пира (msg.chat.read → ✓✓ у
 // отправителя). peerId — локальный id пира (bare). Вызывается из readInbox.
 void MirrorRead(std::int64_t peerId);
+
+// Синтезирует (идемпотентно) пира по адресу и возвращает его UserData — чтобы
+// начать чат по адресу. Используется в поиске (PeerSearch) вместо MTProto.
+[[nodiscard]] not_null<UserData*> EnsurePeer(
+	not_null<Main::Session*> session,
+	const QString &address);
+
+// Поиск пользователей в каталоге identity (identity.user.search). Асинхронно:
+// запрос на воркере, callback с найденными адресами — на main-потоке.
+void SearchUsers(const QString &query, Fn<void(QStringList)> callback);
 
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).

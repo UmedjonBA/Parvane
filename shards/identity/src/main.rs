@@ -3,8 +3,9 @@ use async_nats::Client;
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
-    IssueRequest, IssueResponse, VerifyRequest, VerifyResponse,
-    topics::{IDENTITY_ISSUE, IDENTITY_VERIFY},
+    IssueRequest, IssueResponse, SearchUsersRequest, SearchUsersResponse, VerifyRequest,
+    VerifyResponse,
+    topics::{IDENTITY_ISSUE, IDENTITY_SEARCH, IDENTITY_VERIFY},
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -75,10 +76,11 @@ async fn main() -> Result<()> {
 
     let mut issue_sub = nc.subscribe(IDENTITY_ISSUE).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
+    let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
 
     info!(
-        "Identity шард запущен. Слушаю: {}, {}",
-        IDENTITY_ISSUE, IDENTITY_VERIFY
+        "Identity шард запущен. Слушаю: {}, {}, {}",
+        IDENTITY_ISSUE, IDENTITY_VERIFY, IDENTITY_SEARCH
     );
 
     loop {
@@ -89,8 +91,55 @@ async fn main() -> Result<()> {
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, msg).await;
             }
+            Some(msg) = search_sub.next() => {
+                handle_search(&nc, &pool, msg).await;
+            }
         }
     }
+}
+
+// Поиск пользователей по подстроке имени (каталог = таблица users). Request/reply.
+async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        error!("search: нет reply-топика, игнорирую");
+        return;
+    };
+    let req: SearchUsersRequest = match serde_json::from_slice(&msg.payload) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("search: неверный JSON: {}", e);
+            let _ = nc
+                .publish(
+                    reply,
+                    serde_json::to_vec(&SearchUsersResponse { users: vec![] })
+                        .unwrap()
+                        .into(),
+                )
+                .await;
+            return;
+        }
+    };
+    let q = req.query.trim();
+    let users: Vec<String> = if q.is_empty() {
+        vec![]
+    } else {
+        let like = format!("%{}%", q);
+        sqlx::query_as::<_, (String,)>(
+            "SELECT username FROM users WHERE username LIKE ? ORDER BY username LIMIT 20",
+        )
+        .bind(like)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(u,)| u)
+        .collect()
+    };
+    info!("search '{}' → {} результатов", q, users.len());
+    let resp = SearchUsersResponse { users };
+    let _ = nc
+        .publish(reply, serde_json::to_vec(&resp).unwrap().into())
+        .await;
 }
 
 // ── secret management ─────────────────────────────────────────────────────────
