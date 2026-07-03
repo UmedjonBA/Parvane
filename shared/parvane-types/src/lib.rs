@@ -7,6 +7,8 @@ pub mod topics {
     pub const IDENTITY_ISSUE: &str = "identity.token.issue";
     pub const IDENTITY_VERIFY: &str = "identity.token.verify";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
+    pub const IDENTITY_SETNAME: &str = "identity.user.setname";
+    pub const IDENTITY_RESOLVE: &str = "identity.user.resolve";
 
     pub const MSG_SEND: &str = "msg.chat.send";
     pub const MSG_DELIVERED: &str = "msg.chat.delivered";
@@ -79,7 +81,16 @@ pub struct VerifyRequest {
     pub token: String,
 }
 
-/// Поиск пользователей по подстроке имени (каталог = таблица users identity).
+/// Публичная карточка пользователя: уникальный `username` (адрес, для поиска)
+/// и отображаемое `display_name` (которое юзер задаёт; по умолчанию — локальная
+/// часть адреса).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInfo {
+    pub username: String,
+    pub display_name: String,
+}
+
+/// Поиск пользователей по подстроке имени/адреса (каталог = таблица users).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchUsersRequest {
     pub query: String,
@@ -87,7 +98,31 @@ pub struct SearchUsersRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchUsersResponse {
-    pub users: Vec<String>,
+    pub users: Vec<UserInfo>,
+}
+
+/// Смена своего отображаемого имени (нужен валидный токен — берём username из sub).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetNameRequest {
+    pub token: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetNameResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Резолв отображаемых имён по известным адресам (для пиров из sync).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveRequest {
+    pub usernames: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveResponse {
+    pub users: Vec<UserInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

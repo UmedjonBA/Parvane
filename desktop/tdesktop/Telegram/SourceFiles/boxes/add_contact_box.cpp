@@ -35,6 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_user.h"
+#include "parvane/parvane_client.h"
 #include "data/data_session.h"
 #include "data/data_changes.h"
 #include "apiwrap.h"
@@ -1645,20 +1646,15 @@ void EditNameBox::save() {
 		last = QString();
 	}
 	_sentName = first;
-	auto flags = MTPaccount_UpdateProfile::Flag::f_first_name
-		| MTPaccount_UpdateProfile::Flag::f_last_name;
-	_requestId = _api.request(MTPaccount_UpdateProfile(
-		MTP_flags(flags),
-		MTP_string(first),
-		MTP_string(last),
-		MTPstring()
-	)).done([=](const MTPUser &user) {
-		_user->owner().processUser(user);
-		closeBox();
-	}).fail([=](const MTP::Error &error) {
-		_requestId = 0;
-		saveSelfFail(error.type());
-	}).send();
+	// Parvane: имя храним в каталоге identity + применяем локально; MTProto-
+	// updateProfile заглушён (зависнет) — не отправляем его.
+	const auto full = last.isEmpty() ? first : (first + ' ' + last);
+	Parvane::SetDisplayName(full);
+	_user->setName(first, last, QString(), _user->username());
+	_user->session().changes().peerUpdated(
+		_user,
+		Data::PeerUpdate::Flag::Name);
+	closeBox();
 }
 
 void EditNameBox::saveSelfFail(const QString &error) {
