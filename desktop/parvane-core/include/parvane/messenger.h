@@ -69,6 +69,12 @@ struct SyncRequestPayload {
 };
 
 // ── StoredMessage (элемент msg.sync.response) ────────────────────────────────
+struct ReactionSummary {
+    std::string emoji;
+    std::int64_t count = 0;
+    bool mine = false;
+};
+
 struct StoredMessage {
     std::string id;
     std::string from;
@@ -80,6 +86,8 @@ struct StoredMessage {
     bool deleted = false;
     bool read = false;
     std::int64_t updated_at = 0;
+    std::vector<ReactionSummary> reactions;
+    bool pinned = false;
 
     static StoredMessage fromJson(const json &j) {
         StoredMessage m;
@@ -95,6 +103,16 @@ struct StoredMessage {
         m.deleted = j.value("deleted", false);
         m.read = j.value("read", false);
         m.updated_at = j.value("updated_at", std::int64_t(0));
+        m.pinned = j.value("pinned", false);
+        if (auto it = j.find("reactions"); it != j.end() && it->is_array()) {
+            for (const auto &r : *it) {
+                ReactionSummary rs;
+                rs.emoji = r.value("emoji", std::string());
+                rs.count = r.value("count", std::int64_t(0));
+                rs.mine = r.value("mine", false);
+                m.reactions.push_back(std::move(rs));
+            }
+        }
         return m;
     }
 
