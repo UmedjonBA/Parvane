@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_key.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "history/view/history_view_element.h"
 #include "history/view/history_view_chat_section.h"
 #include "history/view/history_view_contact_status.h"
 #include "history/view/history_view_group_call_bar.h"
@@ -2635,6 +2636,30 @@ bool Widget::search(bool inCache, SearchRequestDelay delay) {
 		.start = true,
 		.peer = (inPeer != nullptr),
 	};
+	// Parvane: поиск ВНУТРИ чата — локально по загруженным сообщениям (MTProto
+	// messages.search заглушён; всё подтянуто полным ресинком). Ищем подстроку в
+	// тексте, свежие — первыми, и сразу отдаём результат в UI без сети.
+	if (inPeer && !trimmed.isEmpty() && !fromPeer && inTags.empty()) {
+		cancelSearchRequest();
+		const auto history = session().data().history(inPeer);
+		auto found = std::vector<not_null<HistoryItem*>>();
+		for (const auto &block : history->blocks) {
+			for (const auto &view : block->messages) {
+				const auto item = view->data();
+				if (item->originalText().text.contains(
+						trimmed, Qt::CaseInsensitive)) {
+					found.push_back(item);
+				}
+			}
+		}
+		ranges::reverse(found); // свежие первыми
+		const auto count = int(found.size());
+		currentSearchProcess()->full = true;
+		_inner->searchReceived(found, nullptr, fromStartType, count);
+		listScrollUpdated();
+		update();
+		return true;
+	}
 	if (trimmed.isEmpty() && !fromPeer && inTags.empty()) {
 		cancelSearchRequest();
 
