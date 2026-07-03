@@ -120,6 +120,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
     else
         fail "parvane_crypto_tests"
     fi
+
+    # ── 8. C++ call_session-тесты (оркестрация звонка + крипто-гейтинг) ─────────
+    log "8. parvane-core call_session tests (C++)"
+    if "$PC/build/parvane_call_session_tests"; then
+        echo "call_session: OK"
+    else
+        fail "parvane_call_session_tests"
+    fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
 fi

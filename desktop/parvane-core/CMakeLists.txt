@@ -37,7 +37,8 @@ add_library(parvane_core STATIC
     src/messenger_client.cpp
     src/cloud_client.cpp
     src/call_client.cpp
-    src/crypto.cpp)
+    src/crypto.cpp
+    src/call_session.cpp)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${cnats_SOURCE_DIR}/src)
@@ -66,10 +67,14 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_crypto_tests tests/crypto_tests.cpp)
     target_link_libraries(parvane_crypto_tests PRIVATE parvane_core)
 
+    add_executable(parvane_call_session_tests tests/call_session_tests.cpp)
+    target_link_libraries(parvane_call_session_tests PRIVATE parvane_core)
+
     enable_testing()
     add_test(NAME transport COMMAND parvane_core_tests)
     add_test(NAME messenger COMMAND parvane_messenger_tests)
     add_test(NAME cloud COMMAND parvane_cloud_tests)
     add_test(NAME call COMMAND parvane_call_tests)
     add_test(NAME crypto COMMAND parvane_crypto_tests)
+    add_test(NAME call_session COMMAND parvane_call_session_tests)
 endif()
