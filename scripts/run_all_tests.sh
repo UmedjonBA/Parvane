@@ -136,6 +136,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
     else
         fail "parvane_call_manager_tests"
     fi
+
+    # ── 10. C++ group e2e (группы/каналы через живой messenger) ────────────────
+    log "10. parvane-core group tests (C++, live)"
+    if PARVANE_NATS_URL="$NATS_URL" "$PC/build/parvane_group_tests"; then
+        echo "group: OK"
+    else
+        fail "parvane_group_tests"
+    fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
 fi
