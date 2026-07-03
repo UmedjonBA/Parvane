@@ -45,6 +45,13 @@ pub mod topics {
     pub const CALL_HISTORY_REQUEST: &str = "call.history.request";
     pub const CALL_HISTORY_RESPONSE: &str = "call.history.response";
 
+    // Группы и каналы (request/reply на messenger-шард).
+    pub const GROUP_CREATE: &str = "group.create";
+    pub const GROUP_ADD_MEMBER: &str = "group.addmember";
+    pub const GROUP_REMOVE_MEMBER: &str = "group.removemember";
+    pub const GROUP_LIST: &str = "group.list";
+    pub const GROUP_INFO: &str = "group.info";
+
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
     /// допустим). Например: `call.user.bob@local`.
@@ -653,6 +660,92 @@ pub struct CallHistoryRequest {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallHistoryResponse {
     pub calls: Vec<CallRecord>,
+}
+
+// ── группы и каналы ───────────────────────────────────────────────────────────
+
+/// Тип объединения: группа (все участники пишут) или канал (пишут owner/admin).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupKind {
+    Group,
+    Channel,
+}
+
+impl Default for GroupKind {
+    fn default() -> Self {
+        GroupKind::Group
+    }
+}
+
+/// Создать группу/канал. Создатель становится owner; `members` — начальные
+/// участники (создатель добавляется автоматически).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupCreateRequest {
+    pub token: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: GroupKind,
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupCreateResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Добавить/удалить участника (только owner/admin). Для «выйти» — member == себя.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMemberRequest {
+    pub token: String,
+    pub group_id: String,
+    pub member: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupActionResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Сведения о группе: имя, тип, создатель, участники (с ролями).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInfo {
+    pub group_id: String,
+    pub name: String,
+    pub kind: GroupKind,
+    pub created_by: String,
+    pub members: Vec<GroupMember>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMember {
+    pub address: String,
+    pub role: String,
+}
+
+/// Список групп/каналов, где состоит пользователь.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupListRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupListResponse {
+    pub groups: Vec<GroupInfo>,
+}
+
+/// Сведения об одной группе (участники и т.п.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInfoRequest {
+    pub token: String,
+    pub group_id: String,
 }
 
 #[cfg(test)]

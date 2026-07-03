@@ -2,10 +2,13 @@ use anyhow::{Context, Result};
 use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    DeletePayload, DeliveredPayload, EditPayload, MessageContent, ParvaneEvent, PinPayload,
+    DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse, GroupCreateRequest,
+    GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind, GroupListRequest,
+    GroupListResponse, GroupMember, GroupMemberRequest, MessageContent, ParvaneEvent, PinPayload,
     ReactPayload, ReadPayload, SendPayload, StoredMessage, SyncRequestPayload, SyncResponsePayload,
     VerifyRequest, VerifyResponse,
     topics::{
+        GROUP_ADD_MEMBER, GROUP_CREATE, GROUP_INFO, GROUP_LIST, GROUP_REMOVE_MEMBER,
         IDENTITY_VERIFY, MSG_DELETE, MSG_DELIVERED, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT,
         MSG_SEND, MSG_SYNC_REQUEST, MSG_SYNC_RESPONSE,
     },
@@ -58,6 +61,11 @@ async fn main() -> Result<()> {
     let mut delete_sub = nc.subscribe(MSG_DELETE).await?;
     let mut react_sub = nc.subscribe(MSG_REACT).await?;
     let mut pin_sub = nc.subscribe(MSG_PIN).await?;
+    let mut gcreate_sub = nc.subscribe(GROUP_CREATE).await?;
+    let mut gadd_sub = nc.subscribe(GROUP_ADD_MEMBER).await?;
+    let mut gremove_sub = nc.subscribe(GROUP_REMOVE_MEMBER).await?;
+    let mut glist_sub = nc.subscribe(GROUP_LIST).await?;
+    let mut ginfo_sub = nc.subscribe(GROUP_INFO).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
 
     info!(
@@ -84,6 +92,21 @@ async fn main() -> Result<()> {
             }
             Some(msg) = pin_sub.next() => {
                 handle_pin(&nc, &pool, msg).await;
+            }
+            Some(msg) = gcreate_sub.next() => {
+                handle_group_create(&nc, &pool, msg).await;
+            }
+            Some(msg) = gadd_sub.next() => {
+                handle_group_add(&nc, &pool, msg).await;
+            }
+            Some(msg) = gremove_sub.next() => {
+                handle_group_remove(&nc, &pool, msg).await;
+            }
+            Some(msg) = glist_sub.next() => {
+                handle_group_list(&nc, &pool, msg).await;
+            }
+            Some(msg) = ginfo_sub.next() => {
+                handle_group_info(&nc, &pool, msg).await;
             }
             Some(msg) = sync_sub.next() => {
                 handle_sync(&nc, &pool, msg).await;
@@ -240,6 +263,170 @@ async fn set_pinned(pool: &SqlitePool, message_id: &str, pin: bool, now: i64) ->
     Ok(())
 }
 
+// ── группы и каналы ───────────────────────────────────────────────────────────
+
+/// Создать группу/канал: создатель — owner, плюс начальные участники. Возвращает
+/// group_id (адрес переписки: сообщения шлют с to_user = group_id).
+async fn create_group(
+    pool: &SqlitePool,
+    name: &str,
+    kind: GroupKind,
+    creator: &str,
+    members: &[String],
+    now: i64,
+) -> Result<String> {
+    let gid = Uuid::now_v7().to_string();
+    let kind_str = match kind {
+        GroupKind::Channel => "channel",
+        GroupKind::Group => "group",
+    };
+    sqlx::query("INSERT INTO groups (id, name, kind, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(&gid)
+        .bind(name)
+        .bind(kind_str)
+        .bind(creator)
+        .bind(now)
+        .execute(pool)
+        .await
+        .context("создание группы")?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO group_members (group_id, member, role) VALUES (?, ?, 'owner')",
+    )
+    .bind(&gid)
+    .bind(creator)
+    .execute(pool)
+    .await?;
+    for m in members {
+        if m == creator {
+            continue;
+        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO group_members (group_id, member, role) VALUES (?, ?, 'member')",
+        )
+        .bind(&gid)
+        .bind(m)
+        .execute(pool)
+        .await?;
+    }
+    Ok(gid)
+}
+
+/// Роль пользователя в группе (`owner`/`admin`/`member`), None — не участник.
+async fn member_role(pool: &SqlitePool, group_id: &str, member: &str) -> Result<Option<String>> {
+    let r: Option<(String,)> =
+        sqlx::query_as("SELECT role FROM group_members WHERE group_id = ? AND member = ?")
+            .bind(group_id)
+            .bind(member)
+            .fetch_optional(pool)
+            .await?;
+    Ok(r.map(|(role,)| role))
+}
+
+/// Добавить участника (только owner/admin). true — добавлено.
+async fn add_group_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    actor: &str,
+    member: &str,
+) -> Result<bool> {
+    let role = member_role(pool, group_id, actor).await?;
+    if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
+        return Ok(false);
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO group_members (group_id, member, role) VALUES (?, ?, 'member')",
+    )
+    .bind(group_id)
+    .bind(member)
+    .execute(pool)
+    .await?;
+    Ok(true)
+}
+
+/// Удалить участника (owner/admin, либо сам себя = выйти). owner удалить нельзя.
+async fn remove_group_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    actor: &str,
+    member: &str,
+) -> Result<bool> {
+    let actor_role = member_role(pool, group_id, actor).await?;
+    let is_self = actor == member;
+    let can = is_self || matches!(actor_role.as_deref(), Some("owner") | Some("admin"));
+    if !can {
+        return Ok(false);
+    }
+    let res = sqlx::query(
+        "DELETE FROM group_members WHERE group_id = ? AND member = ? AND role != 'owner'",
+    )
+    .bind(group_id)
+    .bind(member)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Сведения о группе + участники. None — группы нет.
+async fn group_info(pool: &SqlitePool, group_id: &str) -> Result<Option<GroupInfo>> {
+    let g: Option<(String, String, String)> =
+        sqlx::query_as("SELECT name, kind, created_by FROM groups WHERE id = ?")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
+    let Some((name, kind, created_by)) = g else {
+        return Ok(None);
+    };
+    let members: Vec<(String, String)> =
+        sqlx::query_as("SELECT member, role FROM group_members WHERE group_id = ? ORDER BY role, member")
+            .bind(group_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(Some(GroupInfo {
+        group_id: group_id.to_string(),
+        name,
+        kind: if kind == "channel" { GroupKind::Channel } else { GroupKind::Group },
+        created_by,
+        members: members
+            .into_iter()
+            .map(|(address, role)| GroupMember { address, role })
+            .collect(),
+    }))
+}
+
+/// Все группы пользователя (со сведениями и участниками).
+async fn list_groups(pool: &SqlitePool, user: &str) -> Result<Vec<GroupInfo>> {
+    let gids: Vec<(String,)> =
+        sqlx::query_as("SELECT group_id FROM group_members WHERE member = ?")
+            .bind(user)
+            .fetch_all(pool)
+            .await?;
+    let mut out = Vec::new();
+    for (gid,) in gids {
+        if let Some(info) = group_info(pool, &gid).await? {
+            out.push(info);
+        }
+    }
+    Ok(out)
+}
+
+/// Может ли `sender` писать в получателя `to`. Для 1-на-1 — всегда. Для группы —
+/// только участник; для канала — только owner/admin. Возвращает Ok(true/false).
+async fn can_post(pool: &SqlitePool, to: &str, sender: &str) -> Result<bool> {
+    let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM groups WHERE id = ?")
+        .bind(to)
+        .fetch_optional(pool)
+        .await?;
+    let Some((kind,)) = kind else {
+        return Ok(true); // не группа → обычный 1-на-1
+    };
+    let role = member_role(pool, to, sender).await?;
+    if kind == "channel" {
+        Ok(matches!(role.as_deref(), Some("owner") | Some("admin")))
+    } else {
+        Ok(role.is_some())
+    }
+}
+
 /// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
 async fn store_read_receipt(
     pool: &SqlitePool,
@@ -300,11 +487,13 @@ async fn fetch_missed(
                         WHERE r.message_id = m.id AND r.reader = m.to_user) AS read,
                 m.pinned
          FROM messages m
-         WHERE (m.to_user = ? OR m.from_user = ?)
+         WHERE (m.to_user = ? OR m.from_user = ?
+                OR m.to_user IN (SELECT group_id FROM group_members WHERE member = ?))
            AND (m.id > ? OR m.updated_at > ?)
          ORDER BY m.updated_at, m.id
          LIMIT 100",
     )
+    .bind(user)
     .bind(user)
     .bind(user)
     .bind(last_seen_id)
@@ -369,6 +558,12 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 
         let sender = verify_token(nc, &event.token).await?;
         validate_sender(&sender, &event.from)?;
+
+        // Для групп/каналов — проверяем право писать (участник / owner-admin канала).
+        if !can_post(pool, &event.payload.to, &sender).await? {
+            warn!("Отклонено: {} не может писать в {}", sender, event.payload.to);
+            return anyhow::Ok(());
+        }
 
         store_message(pool, &event, now_unix()).await?;
         info!("Сообщение сохранено: {} → {} ({})", event.from, event.payload.to, event.id);
@@ -492,6 +687,91 @@ async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     if let Err(e) = result {
         error!("handle_pin: {}", e);
     }
+}
+
+// ── группы и каналы (request/reply) ───────────────────────────────────────────
+
+async fn handle_group_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupCreateRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.create")?;
+        let creator = verify_token(nc, &req.token).await?;
+        let gid = create_group(pool, &req.name, req.kind, &creator, &req.members, now_unix()).await?;
+        info!("Группа '{}' создана: {} ({})", req.name, gid, creator);
+        anyhow::Ok(GroupCreateResponse { ok: true, group_id: Some(gid), error: None })
+    }
+    .await
+    .unwrap_or_else(|e| GroupCreateResponse {
+        ok: false,
+        group_id: None,
+        error: Some(e.to_string()),
+    });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+}
+
+async fn handle_group_add(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupMemberRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.addmember")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = add_group_member(pool, &req.group_id, &actor, &req.member).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("нет прав или группы".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+}
+
+async fn handle_group_remove(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupMemberRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.removemember")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = remove_group_member(pool, &req.group_id, &actor, &req.member).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("нет прав или owner".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+}
+
+async fn handle_group_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupListRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.list")?;
+        let user = verify_token(nc, &req.token).await?;
+        anyhow::Ok(GroupListResponse { groups: list_groups(pool, &user).await? })
+    }
+    .await
+    .unwrap_or_else(|_| GroupListResponse { groups: vec![] });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+}
+
+async fn handle_group_info(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupInfoRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.info")?;
+        let _user = verify_token(nc, &req.token).await?;
+        let groups = match group_info(pool, &req.group_id).await? {
+            Some(info) => vec![info],
+            None => vec![],
+        };
+        anyhow::Ok(GroupListResponse { groups })
+    }
+    .await
+    .unwrap_or_else(|_| GroupListResponse { groups: vec![] });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
 }
 
 // ── msg.sync.request ──────────────────────────────────────────────────────────
@@ -960,5 +1240,127 @@ mod tests {
         let missed = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
         assert_eq!(missed.len(), 1, "закрепление поднялось по курсору");
         assert!(missed[0].pinned);
+    }
+
+    // ── группы и каналы ──
+
+    #[tokio::test]
+    async fn create_group_owner_and_members() {
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "Наша группа", GroupKind::Group, "alice@local",
+            &["bob@local".into(), "carol@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        let info = group_info(&pool, &gid).await.unwrap().unwrap();
+        assert_eq!(info.name, "Наша группа");
+        assert_eq!(info.created_by, "alice@local");
+        assert_eq!(info.members.len(), 3, "owner + 2 участника");
+        let owner = info.members.iter().find(|m| m.address == "alice@local").unwrap();
+        assert_eq!(owner.role, "owner");
+    }
+
+    #[tokio::test]
+    async fn group_message_fans_out_to_members_only() {
+        // Сообщение в группу видят участники, но не посторонние.
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "g", GroupKind::Group, "alice@local", &["bob@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        let mid = "00000000-0000-7000-8000-0000000000a1";
+        // сообщение alice → группе (to_user = gid)
+        store_message(&pool, &send_event(mid, "alice@local", &gid, "всем привет"), 2)
+            .await
+            .unwrap();
+
+        // bob (участник) видит
+        let for_bob = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(for_bob.len(), 1);
+        assert_eq!(for_bob[0].to, gid);
+        assert_eq!(text_of(&for_bob[0]), "всем привет");
+        // alice (отправитель+участник) видит своё
+        let for_alice = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(for_alice.len(), 1);
+        // mallory (не участник) не видит
+        let for_mallory = fetch_missed(&pool, "mallory@evil", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(for_mallory.is_empty(), "посторонний не видит групповые сообщения");
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_members_respect_roles() {
+        let pool = test_pool().await;
+        let gid = create_group(&pool, "g", GroupKind::Group, "alice@local", &[], 1)
+            .await
+            .unwrap();
+        // owner добавляет bob
+        assert!(add_group_member(&pool, &gid, "alice@local", "bob@local").await.unwrap());
+        // не-участник добавить не может
+        assert!(!add_group_member(&pool, &gid, "mallory@evil", "eve@evil").await.unwrap());
+        // обычный участник (bob) добавить не может (не owner/admin)
+        assert!(!add_group_member(&pool, &gid, "bob@local", "eve@evil").await.unwrap());
+        // bob сам выходит
+        assert!(remove_group_member(&pool, &gid, "bob@local", "bob@local").await.unwrap());
+        // owner нельзя удалить
+        assert!(!remove_group_member(&pool, &gid, "alice@local", "alice@local").await.unwrap());
+        let info = group_info(&pool, &gid).await.unwrap().unwrap();
+        assert_eq!(info.members.len(), 1, "остался только owner");
+    }
+
+    #[tokio::test]
+    async fn channel_only_admins_post() {
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "Канал", GroupKind::Channel, "alice@local", &["bob@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        // owner может писать в канал
+        assert!(can_post(&pool, &gid, "alice@local").await.unwrap());
+        // обычный подписчик (bob) — не может
+        assert!(!can_post(&pool, &gid, "bob@local").await.unwrap());
+        // посторонний — не может
+        assert!(!can_post(&pool, &gid, "mallory@evil").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn group_any_member_posts_1on1_always() {
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "g", GroupKind::Group, "alice@local", &["bob@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        assert!(can_post(&pool, &gid, "bob@local").await.unwrap(), "участник группы пишет");
+        assert!(!can_post(&pool, &gid, "mallory@evil").await.unwrap(), "не-участник не пишет");
+        // 1-на-1 (to = обычный адрес, не группа) — всегда можно
+        assert!(can_post(&pool, "bob@local", "alice@local").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_groups_returns_users_groups() {
+        let pool = test_pool().await;
+        let g1 = create_group(&pool, "G1", GroupKind::Group, "alice@local", &["bob@local".into()], 1)
+            .await
+            .unwrap();
+        let _g2 = create_group(&pool, "G2", GroupKind::Group, "carol@local", &[], 1)
+            .await
+            .unwrap();
+        // bob состоит только в G1
+        let bobs = list_groups(&pool, "bob@local").await.unwrap();
+        assert_eq!(bobs.len(), 1);
+        assert_eq!(bobs[0].group_id, g1);
+        // carol — только в своей G2
+        let carols = list_groups(&pool, "carol@local").await.unwrap();
+        assert_eq!(carols.len(), 1);
+        assert_eq!(carols[0].name, "G2");
     }
 }
