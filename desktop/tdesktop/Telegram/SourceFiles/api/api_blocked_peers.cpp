@@ -78,39 +78,17 @@ void BlockedPeers::block(not_null<PeerData*> peer) {
 			peer,
 			Data::PeerUpdate::Flag::IsBlocked);
 		return;
-	} else if (blockAlreadySent(peer, true)) {
-		return;
 	}
-	const auto requestId = _api.request(MTPcontacts_Block(
-		MTP_flags(0),
-		peer->input()
-	)).done([=] {
-		const auto data = _blockRequests.take(peer);
-		peer->setIsBlocked(true);
-		if (_slice) {
-			_slice->list.insert(
-				_slice->list.begin(),
-				{ peer->id, base::unixtime::now() });
-			++_slice->total;
-			_changes.fire_copy(*_slice);
-		}
-		if (data) {
-			for (const auto &callback : data->callbacks) {
-				callback(false);
-			}
-		}
-	}).fail([=] {
-		if (const auto data = _blockRequests.take(peer)) {
-			for (const auto &callback : data->callbacks) {
-				callback(false);
-			}
-		}
-	}).send();
-
-	_blockRequests.emplace(peer, Request{
-		.requestId = requestId,
-		.blocking = true,
-	});
+	// Parvane: блокируем локально — MTProto contacts.block заглушён (завис бы).
+	peer->setIsBlocked(true);
+	if (_slice) {
+		_slice->list.insert(
+			_slice->list.begin(),
+			{ peer->id, base::unixtime::now() });
+		++_slice->total;
+		_changes.fire_copy(*_slice);
+	}
+	_session->changes().peerUpdated(peer, Data::PeerUpdate::Flag::IsBlocked);
 }
 
 void BlockedPeers::unblock(
@@ -122,46 +100,25 @@ void BlockedPeers::unblock(
 			peer,
 			Data::PeerUpdate::Flag::IsBlocked);
 		return;
-	} else if (blockAlreadySent(peer, false, done)) {
-		return;
 	}
-	const auto requestId = _api.request(MTPcontacts_Unblock(
-		MTP_flags(0),
-		peer->input()
-	)).done([=] {
-		const auto data = _blockRequests.take(peer);
-		peer->setIsBlocked(false);
-		if (_slice) {
-			auto &list = _slice->list;
-			for (auto i = list.begin(); i != list.end(); ++i) {
-				if (i->id == peer->id) {
-					list.erase(i);
-					break;
-				}
-			}
-			if (_slice->total > list.size()) {
-				--_slice->total;
-			}
-			_changes.fire_copy(*_slice);
-		}
-		if (data) {
-			for (const auto &callback : data->callbacks) {
-				callback(true);
+	// Parvane: разблокируем локально (MTProto contacts.unblock заглушён).
+	peer->setIsBlocked(false);
+	if (_slice) {
+		auto &list = _slice->list;
+		for (auto i = list.begin(); i != list.end(); ++i) {
+			if (i->id == peer->id) {
+				list.erase(i);
+				break;
 			}
 		}
-	}).fail([=] {
-		if (const auto data = _blockRequests.take(peer)) {
-			for (const auto &callback : data->callbacks) {
-				callback(false);
-			}
+		if (_slice->total > list.size()) {
+			--_slice->total;
 		}
-	}).send();
-	const auto i = _blockRequests.emplace(peer, Request{
-		.requestId = requestId,
-		.blocking = false,
-	}).first;
+		_changes.fire_copy(*_slice);
+	}
+	_session->changes().peerUpdated(peer, Data::PeerUpdate::Flag::IsBlocked);
 	if (done) {
-		i->second.callbacks.push_back(std::move(done));
+		done(true);
 	}
 }
 

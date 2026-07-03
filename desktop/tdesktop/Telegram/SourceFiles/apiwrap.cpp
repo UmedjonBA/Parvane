@@ -3529,6 +3529,14 @@ void ApiWrap::forwardMessages(
 		FnMut<void()> &&successCallback) {
 	Expects(!draft.items.empty());
 
+	// Parvane: пересылаем каждое сообщение получателю через шину (текст/медиа).
+	// Локальное эхо создаёт штатный tdesktop; мы лишь доставляем содержимое.
+	if (const auto peer = action.history ? action.history->peer.get() : nullptr) {
+		for (const auto &item : draft.items) {
+			Parvane::MirrorForward(peer, item);
+		}
+	}
+
 	auto &histories = _session->data().histories();
 
 	for (auto i = begin(draft.items); i != end(draft.items);) {
