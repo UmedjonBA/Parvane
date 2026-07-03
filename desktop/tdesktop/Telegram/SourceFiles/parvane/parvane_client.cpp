@@ -88,6 +88,7 @@ QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отпр�
 QHash<qint64, QVector<QString>> g_unreadIncoming; // peerId → uuid'ы непрочит. входящих
 QHash<QString, QString> g_displayNames; // адрес → отображаемое имя (из каталога)
 QSet<QString> g_resolveRequested;       // адреса, для которых уже запросили имя
+QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для forward)
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
@@ -131,6 +132,34 @@ void sendTextAsync(
 				.arg(QString::fromStdString(to)));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка отправки: %1").arg(QString::fromUtf8(e.what())));
+		}
+	});
+}
+
+// Публикует готовый MessageContent (для пересылки медиа — блоб уже в cloud).
+void sendContentAsync(const QString &toAddress, const std::string &contentJson) {
+	const auto from = SelfAddress().toStdString();
+	const auto to = toAddress.toStdString();
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		try {
+			const auto content = parvane::json::parse(contentJson);
+			const auto id = m->sendContent(from, to, content, token);
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_ownSentUuids.insert(id);
+			}
+			LOG(("Parvane: переслано медиа → %1").arg(toAddress));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка пересылки: %1").arg(QString::fromUtf8(e.what())));
 		}
 	});
 }
@@ -292,6 +321,27 @@ void MirrorOutgoing(PeerData *peer, const QString &text, std::int64_t replyToMsg
 	const auto preId = parvane::newUuidV7();
 	g_pendingOwnUuids.enqueue(QString::fromStdString(preId));
 	sendTextAsync(address, text, preId, replyToUuid);
+}
+
+void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
+	if (!toPeer || !toPeer->isUser()) {
+		return;
+	}
+	const auto bare = std::uint64_t(peerToUser(toPeer->id).bare);
+	const auto address = AddressForId(bare);
+	if (address.isEmpty()) {
+		return;
+	}
+	// Медиа — пересылаем сохранённый content (блоб уже в cloud, без пере-загрузки).
+	const auto found = g_mediaContentByMsgId.constFind(item->id.bare);
+	if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
+		sendContentAsync(address, found.value().toStdString());
+		return;
+	}
+	const auto text = item->originalText().text;
+	if (!text.isEmpty()) {
+		MirrorOutgoing(toPeer, text);
+	}
 }
 
 void MirrorTyping(PeerData *peer) {
@@ -1283,6 +1333,13 @@ void injectOnMain(
 			continue;
 		}
 		const auto peerId = IdForAddress(peerAddress);
+		// От заблокированного пира входящие не принимаем.
+		if (!isOwn) {
+			const auto u = session->data().userLoaded(UserId(BareId(peerId)));
+			if (u && u->isBlocked()) {
+				continue;
+			}
+		}
 		const auto authorId = isOwn ? selfId : peerId;
 		const auto out = isOwn;
 		const auto maybeText = sm.text();
@@ -1325,6 +1382,8 @@ void injectOnMain(
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
 			g_msgIdToUuid.insert(msgId.bare, uuid);
+			g_mediaContentByMsgId.insert(msgId.bare,
+				QString::fromStdString(c.dump())); // для пересылки
 			if (!out) {
 				g_unreadIncoming[peerId].push_back(uuid);
 			}

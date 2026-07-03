@@ -8,6 +8,7 @@
 
 class PeerData;
 class UserData;
+class HistoryItem;
 struct FilePrepareResult; // storage/localimageloader.h
 
 namespace Main {
@@ -88,6 +89,10 @@ void AttachLocalOutgoingMedia(
 // Зеркалит «печатает…» в шину (msg.typing.<id получателя>, fire-and-forget).
 // Вызывается из SendProgressManager при вводе. Адрес пира — из реестра.
 void MirrorTyping(PeerData *peer);
+
+// Пересылает сообщение (текст или медиа) пиру toPeer через шину. Медиа —
+// повторной ссылкой на уже загруженный в cloud блоб (без пере-загрузки).
+void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item);
 
 // Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
 // синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.
