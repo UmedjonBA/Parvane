@@ -17,8 +17,8 @@ std::string callInbox(const std::string &user) {
 
 } // namespace
 
-void CallClient::sendSignal(const std::string &from, const std::string &to,
-                            const std::string &token, const json &signal) {
+void CallClient::send(const std::string &from, const std::string &to,
+                      const std::string &token, const json &signal) {
     const json payload{{"to", to}, {"signal", signal}};
     const json ev = makeEvent(newUuidV7(), from, nowUnix(), token, payload);
     _t.publish(topics::CallSignal, ev.dump());
@@ -27,30 +27,30 @@ void CallClient::sendSignal(const std::string &from, const std::string &to,
 void CallClient::invite(const std::string &from, const std::string &to,
                         const std::string &token, const std::string &callId,
                         const std::string &media, const std::string &sdp) {
-    sendSignal(from, to, token, inviteSignal(callId, media, sdp));
+    send(from, to, token, inviteSignal(callId, media, sdp));
 }
 
 void CallClient::answer(const std::string &from, const std::string &to,
                         const std::string &token, const std::string &callId,
                         const std::string &sdp) {
-    sendSignal(from, to, token, answerSignal(callId, sdp));
+    send(from, to, token, answerSignal(callId, sdp));
 }
 
 void CallClient::reject(const std::string &from, const std::string &to,
                         const std::string &token, const std::string &callId,
                         const std::optional<std::string> &reason) {
-    sendSignal(from, to, token, rejectSignal(callId, reason));
+    send(from, to, token, rejectSignal(callId, reason));
 }
 
 void CallClient::ice(const std::string &from, const std::string &to,
                      const std::string &token, const std::string &callId,
                      const std::string &candidate) {
-    sendSignal(from, to, token, iceSignal(callId, candidate));
+    send(from, to, token, iceSignal(callId, candidate));
 }
 
 void CallClient::hangup(const std::string &from, const std::string &to,
                         const std::string &token, const std::string &callId) {
-    sendSignal(from, to, token, hangupSignal(callId));
+    send(from, to, token, hangupSignal(callId));
 }
 
 void CallClient::onSignal(

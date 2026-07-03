@@ -43,10 +43,11 @@ mod tests {
             call_id: Uuid::nil(),
             media: parvane_types::CallMedia::Audio,
             sdp: "offer".into(),
+            sig: String::new(),
         }
     }
     fn answer() -> CallSignal {
-        CallSignal::Answer { call_id: Uuid::nil(), sdp: "answer".into() }
+        CallSignal::Answer { call_id: Uuid::nil(), sdp: "answer".into(), sig: String::new() }
     }
     fn hangup() -> CallSignal {
         CallSignal::Hangup { call_id: Uuid::nil() }

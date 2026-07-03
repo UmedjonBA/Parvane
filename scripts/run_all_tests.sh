@@ -128,6 +128,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
     else
         fail "parvane_call_session_tests"
     fi
+
+    # ── 9. C++ call_manager e2e (весь путь сигналинга через живой call-шард) ────
+    log "9. parvane-core call_manager tests (C++, live)"
+    if PARVANE_NATS_URL="$NATS_URL" "$PC/build/parvane_call_manager_tests"; then
+        echo "call_manager: OK"
+    else
+        fail "parvane_call_manager_tests"
+    fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
 fi
