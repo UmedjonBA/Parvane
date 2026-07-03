@@ -24,6 +24,7 @@
 #include "base/call_delayed.h"
 #include <QtCore/QQueue>
 #include <QtCore/QSet>
+#include <QtCore/QBuffer>
 #include "history/history.h"
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
@@ -88,6 +89,8 @@ QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отпр�
 QHash<qint64, QVector<QString>> g_unreadIncoming; // peerId → uuid'ы непрочит. входящих
 QHash<QString, QString> g_displayNames; // адрес → отображаемое имя (из каталога)
 QSet<QString> g_resolveRequested;       // адреса, для которых уже запросили имя
+QHash<QString, QString> g_avatarFileIds; // адрес → file_id аватара (cloud)
+QSet<QString> g_avatarDownloaded;        // аватары, уже скачанные/в процессе
 QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для forward)
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
@@ -684,6 +687,19 @@ namespace {
 // Гарантирует, что пир (отправитель) существует и «загружен» в Data::Session.
 // Синтезируем MTPUser с first_name = адрес, чтобы диалог имел имя. Идемпотентно.
 void ResolveNames(const QStringList &addresses); // fwd
+void DownloadAvatar(const QString &address, const QString &fileId); // fwd
+// Сохраняет file_id аватара и запускает загрузку (если ещё не грузили).
+void NoteAvatar(const QString &address, const QString &fileId) {
+	if (fileId.isEmpty() || address == SelfAddress()) {
+		return;
+	}
+	g_avatarFileIds.insert(address, fileId);
+	const auto key = address + '|' + fileId;
+	if (!g_avatarDownloaded.contains(key)) {
+		g_avatarDownloaded.insert(key);
+		DownloadAvatar(address, fileId);
+	}
+}
 
 // Отображаемое имя по адресу: из каталога (g_displayNames) либо локальная часть
 // адреса до '@' по умолчанию.
@@ -781,28 +797,35 @@ void ResolveNames(const QStringList &addresses) {
 			return;
 		}
 		auto names = QHash<QString, QString>();
+		auto avatars = QHash<QString, QString>();
 		try {
 			const auto reply = t->request(
 				"identity.user.resolve", reqStr, 3000);
 			const auto j = parvane::json::parse(reply);
 			if (j.contains("users") && j["users"].is_array()) {
 				for (const auto &u : j["users"]) {
-					if (u.contains("username") && u.contains("display_name")) {
-						names.insert(
-							QString::fromStdString(
-								u["username"].get<std::string>()),
-							QString::fromStdString(
-								u["display_name"].get<std::string>()));
+					if (!u.contains("username")) {
+						continue;
+					}
+					const auto addr = QString::fromStdString(
+						u["username"].get<std::string>());
+					if (u.contains("display_name")) {
+						names.insert(addr, QString::fromStdString(
+							u["display_name"].get<std::string>()));
+					}
+					if (u.contains("avatar") && u["avatar"].is_string()) {
+						avatars.insert(addr, QString::fromStdString(
+							u["avatar"].get<std::string>()));
 					}
 				}
 			}
 		} catch (const std::exception &) {
 			return;
 		}
-		if (names.isEmpty()) {
+		if (names.isEmpty() && avatars.isEmpty()) {
 			return;
 		}
-		crl::on_main([names] {
+		crl::on_main([names, avatars] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
@@ -813,6 +836,9 @@ void ResolveNames(const QStringList &addresses) {
 				if (session->data().userLoaded(UserId(BareId(id)))) {
 					ensurePeerUser(session, id, it.key()); // обновит имя
 				}
+			}
+			for (auto it = avatars.constBegin(); it != avatars.constEnd(); ++it) {
+				NoteAvatar(it.key(), it.value());
 			}
 		});
 	});
@@ -902,6 +928,56 @@ void ResolveNames(const QStringList &addresses) {
 		h *= 1099511628211ULL;
 	}
 	return static_cast<std::int64_t>(h);
+}
+
+// Скачивает аватар из cloud и ставит его пиру (setUserpic из in-memory картинки,
+// как inline-фото). Воркер → main.
+void DownloadAvatar(const QString &address, const QString &fileId) {
+	const auto self = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto fid = fileId.toStdString();
+	const auto id = IdForAddress(address);
+	const auto photoId = docIdFromFileId(fileId);
+	crl::async([=] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		std::string bytes;
+		try {
+			parvane::CloudClient cloud(*t);
+			auto d = cloud.download(self, token, fid);
+			if (!d.ok) {
+				return;
+			}
+			bytes = std::move(d.bytes);
+		} catch (const std::exception &) {
+			return;
+		}
+		crl::on_main([id, bytes, photoId] {
+			const auto session = g_sessionWeak.get();
+			if (!session) {
+				return;
+			}
+			const auto user = session->data().userLoaded(UserId(BareId(id)));
+			if (!user) {
+				return;
+			}
+			const auto qb = QByteArray(bytes.data(), int(bytes.size()));
+			auto image = QImage();
+			if (!image.loadFromData(qb) || image.isNull()) {
+				return;
+			}
+			const auto iwl = Images::FromImageInMemory(image, "JPG", qb);
+			user->setUserpic(photoId, iwl.location, false);
+			session->changes().peerUpdated(
+				user, Data::PeerUpdate::Flag::Photo);
+		});
+	});
 }
 
 // Локальный MTPDocument: без DC-локации (файл лежит на диске, см. setLocation).
@@ -1494,6 +1570,7 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 		}
 		auto out = QStringList();
 		auto names = QHash<QString, QString>();
+		auto avatars = QHash<QString, QString>();
 		if (t) {
 			try {
 				const parvane::json req{ { "query", q } };
@@ -1512,6 +1589,10 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 							names.insert(addr, QString::fromStdString(
 								u["display_name"].get<std::string>()));
 						}
+						if (u.contains("avatar") && u["avatar"].is_string()) {
+							avatars.insert(addr, QString::fromStdString(
+								u["avatar"].get<std::string>()));
+						}
 					}
 				}
 			} catch (const std::exception &e) {
@@ -1519,9 +1600,12 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 					.arg(QString::fromUtf8(e.what())));
 			}
 		}
-		crl::on_main([callback = std::move(callback), out, names]() mutable {
+		crl::on_main([callback = std::move(callback), out, names, avatars]() mutable {
 			for (auto it = names.constBegin(); it != names.constEnd(); ++it) {
 				g_displayNames.insert(it.key(), it.value());
+			}
+			for (auto it = avatars.constBegin(); it != avatars.constEnd(); ++it) {
+				NoteAvatar(it.key(), it.value());
 			}
 			callback(out);
 		});
@@ -1551,6 +1635,62 @@ void SetDisplayName(const QString &name) {
 			LOG(("Parvane: имя обновлено на '%1'").arg(QString::fromStdString(nStd)));
 		} catch (const std::exception &) {
 		}
+	});
+}
+
+void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
+	if (!selfPeer || image.isNull()) {
+		return;
+	}
+	auto bytes = QByteArray();
+	{
+		QBuffer buf(&bytes);
+		buf.open(QIODevice::WriteOnly);
+		image.save(&buf, "JPG", 87);
+	}
+	if (bytes.isEmpty()) {
+		return;
+	}
+	// Локально показываем сразу (photoId — хэш байтов, роль — только идентификатор).
+	const auto self = SelfAddress();
+	const auto iwl = Images::FromImageInMemory(image, "JPG", bytes);
+	const auto photoId = docIdFromFileId(
+		QString::number(qHash(bytes)) + self);
+	selfPeer->setUserpic(photoId, iwl.location, false);
+	selfPeer->session().changes().peerUpdated(
+		selfPeer, Data::PeerUpdate::Flag::Photo);
+	// Грузим в cloud + identity.user.setavatar на воркере.
+	const auto from = self.toStdString();
+	const auto token = Token().toStdString();
+	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+	crl::async([from, token, bytesStd, self] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		std::string fileId;
+		try {
+			parvane::CloudClient cloud(*t);
+			fileId = cloud.upload(from, token, "avatar.jpg", "image/jpeg", bytesStd);
+		} catch (const std::exception &) {
+			return;
+		}
+		if (fileId.empty()) {
+			return;
+		}
+		try {
+			const parvane::json req{ { "token", token }, { "file_id", fileId } };
+			t->request("identity.user.setavatar", req.dump(), 3000);
+			LOG(("Parvane: аватар обновлён (%1)").arg(QString::fromStdString(fileId)));
+		} catch (const std::exception &) {
+		}
+		crl::on_main([self, fileId] {
+			g_avatarFileIds.insert(self, QString::fromStdString(fileId));
+		});
 	});
 }
 

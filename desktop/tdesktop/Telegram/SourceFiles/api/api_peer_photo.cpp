@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_updates.h"
 #include "apiwrap.h"
+#include "parvane/parvane_client.h"
 #include "base/random.h"
 #include "base/unixtime.h"
 #include "data/stickers/data_stickers.h"
@@ -234,6 +235,15 @@ void PeerPhoto::upload(
 		UploadType type,
 		Fn<void()> done) {
 	peer = peer->migrateToOrMe();
+	// Parvane: своё фото профиля — грузим в cloud + identity.user.setavatar и
+	// ставим локально; MTProto photos.uploadProfilePhoto заглушён (завис бы).
+	if (peer->isSelf() && !photo.image.isNull()) {
+		Parvane::SetOwnAvatar(peer, photo.image);
+		if (done) {
+			done();
+		}
+		return;
+	}
 	const auto mtpMarkup = PrepareMtpMarkup(_session, photo);
 
 	const auto fakeId = FullMsgId(

@@ -9,6 +9,7 @@
 class PeerData;
 class UserData;
 class HistoryItem;
+class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
 
 namespace Main {
@@ -117,6 +118,10 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback);
 
 // Задаёт СВОЁ отображаемое имя (identity.user.setname) + кладёт в локальный кэш.
 void SetDisplayName(const QString &name);
+
+// Ставит СВОЙ аватар: грузит фото в cloud + identity.user.setavatar, показывает
+// локально. selfPeer — свой UserData, image — выбранное фото.
+void SetOwnAvatar(PeerData *selfPeer, const QImage &image);
 
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).

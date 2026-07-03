@@ -8,6 +8,7 @@ pub mod topics {
     pub const IDENTITY_VERIFY: &str = "identity.token.verify";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
+    pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
     pub const IDENTITY_RESOLVE: &str = "identity.user.resolve";
 
     pub const MSG_SEND: &str = "msg.chat.send";
@@ -88,6 +89,16 @@ pub struct VerifyRequest {
 pub struct UserInfo {
     pub username: String,
     pub display_name: String,
+    /// file_id аватара в шарде cloud (None — нет фото, показываем инициалы).
+    #[serde(default)]
+    pub avatar: Option<String>,
+}
+
+/// Установка своего аватара: file_id уже загруженного в cloud изображения.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetAvatarRequest {
+    pub token: String,
+    pub file_id: String,
 }
 
 /// Поиск пользователей по подстроке имени/адреса (каталог = таблица users).
