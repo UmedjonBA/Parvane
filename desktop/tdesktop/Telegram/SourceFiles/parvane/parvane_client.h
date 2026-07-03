@@ -130,6 +130,15 @@ void SetDisplayName(const QString &name);
 // локально. selfPeer — свой UserData, image — выбранное фото.
 void SetOwnAvatar(PeerData *selfPeer, const QImage &image);
 
+// ── звонки (Фаза 4) ────────────────────────────────────────────────────────
+// Инициировать звонок пиру (audio/video). Подтягивает pubkey собеседника
+// (для проверки подписи) и публикует подписанный invite в шину.
+void PlaceCall(const QString &peer, bool video);
+// Принять текущий входящий звонок.
+void AcceptCall();
+// Завершить/отклонить текущий звонок.
+void HangupCall();
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);

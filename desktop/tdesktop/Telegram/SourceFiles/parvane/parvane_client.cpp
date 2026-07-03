@@ -38,6 +38,11 @@
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
+#include <parvane/call_client.h>     // parvane-core (сигналинг звонков)
+#include <parvane/call_manager.h>    // parvane-core (оркестрация звонка)
+#include <parvane/stub_media_backend.h> // parvane-core (медиа-заглушка Э4)
+#include <parvane/crypto.h>          // parvane-core (Ed25519 подпись SDP)
+#include "settings.h"                // cWorkingDir() — путь для ключа звонков
 
 #include <QtCore/QFile>
 #include <QtCore/QDir>
@@ -68,6 +73,14 @@ QString g_token;
 QString g_selfAddress;
 std::unique_ptr<parvane::Transport> g_transport;
 std::unique_ptr<parvane::MessengerClient> g_messenger;
+// Звонки (Фаза 4): сигналинг + оркестрация + ключ подписи SDP. Под g_sessionMutex.
+std::unique_ptr<parvane::CallClient> g_callClient;
+std::unique_ptr<parvane::CallManager> g_callManager;
+std::unique_ptr<parvane::crypto::SigningKey> g_callKey;
+// Кэш публичных ключей пиров (адрес → base64) для проверки подписи invite/answer.
+// Читается из потока cnats (peerPubkey-колбэк) → отдельный мьютекс.
+std::mutex g_pubkeyMutex;
+QHash<QString, QString> g_peerPubkeys;
 QHash<quint64, QString> g_idToAddress;
 // UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
@@ -273,6 +286,53 @@ bool SessionActive() {
 	return g_messenger != nullptr;
 }
 
+// Путь к приватному ключу подписи звонков (per-instance, в рабочем каталоге).
+[[nodiscard]] QString CallKeyPath() {
+	return cWorkingDir() + u"tdata/parvane-callkey.txt"_q;
+}
+
+// Человекочитаемое имя состояния звонка (для логов).
+[[nodiscard]] const char *CallStateName(parvane::CallState s) {
+	switch (s) {
+	case parvane::CallState::Idle: return "Idle";
+	case parvane::CallState::Outgoing: return "Outgoing";
+	case parvane::CallState::Incoming: return "Incoming";
+	case parvane::CallState::Connecting: return "Connecting";
+	case parvane::CallState::Active: return "Active";
+	case parvane::CallState::Ended: return "Ended";
+	}
+	return "?";
+}
+
+// Публикует наш публичный ключ звонков в каталоге identity (identity.user.setkey),
+// чтобы собеседник мог проверять подпись SDP. Неблокирующая (worker). Значения
+// передаются аргументами (НЕ лочим g_sessionMutex: зовётся из StartSession,
+// который его уже держит — иначе дедлок).
+void RegisterCallKey(const QString &pub, const QString &token) {
+	if (pub.isEmpty() || token.isEmpty()) {
+		return;
+	}
+	const auto req = parvane::json{
+		{ "token", token.toStdString() },
+		{ "pubkey", pub.toStdString() } }.dump();
+	crl::async([req, pub] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		try {
+			t->request("identity.user.setkey", req, 3000);
+			LOG(("Parvane: зарегистрирован ключ звонков %1…")
+				.arg(pub.left(12)));
+		} catch (const std::exception &) {
+		}
+	});
+}
+
 bool StartSession() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	if (g_messenger) {
@@ -289,6 +349,42 @@ bool StartSession() {
 		});
 		g_transport = std::move(transport);
 		g_messenger = std::move(messenger);
+
+		// ── Звонки: ключ подписи + сигналинг + менеджер ──
+		g_callKey = std::make_unique<parvane::crypto::SigningKey>(
+			parvane::crypto::SigningKey::loadOrCreate(CallKeyPath().toStdString()));
+		g_callClient = std::make_unique<parvane::CallClient>(*g_transport);
+		parvane::CallManager::Callbacks ccb;
+		// Публичный ключ собеседника из кэша (заполняется при resolve). Зовётся
+		// из потока cnats — под g_pubkeyMutex.
+		ccb.peerPubkey = [](std::string peer) -> std::string {
+			std::lock_guard<std::mutex> lk(g_pubkeyMutex);
+			return g_peerPubkeys.value(QString::fromStdString(peer)).toStdString();
+		};
+		// Входящий звонок (прошёл аутентификацию). Пока — лог + опц. авто-приём
+		// (headless e2e). UI-панель — Э4-b2. НЕ звать accept() синхронно (дедлок
+		// мьютекса менеджера) — откладываем на main.
+		ccb.onIncoming = [](std::string peer, std::string media) {
+			LOG(("Parvane: ВХОДЯЩИЙ звонок от %1 (%2)")
+				.arg(QString::fromStdString(peer), QString::fromStdString(media)));
+			if (const char *aa = std::getenv("PARVANE_AUTOACCEPT"); aa && *aa) {
+				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
+			}
+		};
+		ccb.onState = [](parvane::CallState s) {
+			LOG(("Parvane: звонок → %1").arg(CallStateName(s)));
+		};
+		g_callManager = std::make_unique<parvane::CallManager>(
+			*g_callClient, g_selfAddress.toStdString(), g_token.toStdString(),
+			g_callKey.get(),
+			[] {
+				return std::unique_ptr<parvane::MediaBackend>(
+					std::make_unique<parvane::StubMediaBackend>());
+			},
+			std::move(ccb));
+		g_callManager->start();
+		RegisterCallKey(QString::fromStdString(g_callKey->publicB64()), g_token);
+
 		LOG(("Parvane: сессия поднята для %1").arg(g_selfAddress));
 		return true;
 	} catch (const std::exception &e) {
@@ -883,6 +979,14 @@ void ResolveNames(const QStringList &addresses) {
 					if (u.contains("avatar") && u["avatar"].is_string()) {
 						avatars.insert(addr, QString::fromStdString(
 							u["avatar"].get<std::string>()));
+					}
+					// Публичный ключ звонков → кэш для проверки подписи SDP.
+					if (u.contains("pubkey") && u["pubkey"].is_string()) {
+						const auto pk = u["pubkey"].get<std::string>();
+						if (!pk.empty()) {
+							std::lock_guard<std::mutex> lk(g_pubkeyMutex);
+							g_peerPubkeys.insert(addr, QString::fromStdString(pk));
+						}
 					}
 				}
 			}
@@ -1861,6 +1965,39 @@ void PumpReceive() {
 	});
 }
 
+// ── звонки: публичное API (кнопка UI / debug-хуки) ───────────────────────────
+
+void PlaceCall(const QString &peer, bool video) {
+	RegisterPeer(peer);
+	// Подтягиваем pubkey собеседника (для проверки его answer). Асинхронно;
+	// answer приходит позже — к тому моменту кэш заполнен.
+	ResolveNames({ peer });
+	const auto p = peer.toStdString();
+	const auto media = std::string(video ? "video" : "audio");
+	crl::async([p, media] {
+		parvane::CallManager *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_callManager.get();
+		}
+		if (m) {
+			m->placeCall(p, media);
+			LOG(("Parvane: исходящий звонок → %1 (%2)")
+				.arg(QString::fromStdString(p), QString::fromStdString(media)));
+		}
+	});
+}
+
+void AcceptCall() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	if (g_callManager) g_callManager->accept();
+}
+
+void HangupCall() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	if (g_callManager) g_callManager->hangup();
+}
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
@@ -2107,6 +2244,18 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					LOG(("Parvane: autoedit → %1").arg(newText));
 				});
 			}
+		}
+
+		// Debug-autocall для e2e звонков: PARVANE_AUTOCALL=peer@server[:video].
+		// Инициатор через ~4с звонит; принимающий ставит PARVANE_AUTOACCEPT=1.
+		if (const char *cv = std::getenv("PARVANE_AUTOCALL"); cv && *cv) {
+			auto spec = QString::fromUtf8(cv);
+			const auto video = spec.endsWith(u":video"_q);
+			if (video) spec.chop(6);
+			base::call_delayed(4 * crl::time(1000), [spec, video] {
+				LOG(("Parvane: AUTOCALL → %1").arg(spec));
+				PlaceCall(spec, video);
+			});
 		}
 
 		// Debug-autosend для e2e Фазы 3b: PARVANE_AUTOSEND=peer@server:текст.
