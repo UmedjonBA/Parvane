@@ -4,11 +4,11 @@ use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
     IssueRequest, IssueResponse, ResolveRequest, ResolveResponse, SearchUsersRequest,
-    SearchUsersResponse, SetAvatarRequest, SetNameRequest, SetNameResponse, UserInfo,
-    VerifyRequest, VerifyResponse,
+    SearchUsersResponse, SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse,
+    UserInfo, VerifyRequest, VerifyResponse,
     topics::{
-        IDENTITY_ISSUE, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETNAME,
-        IDENTITY_VERIFY,
+        IDENTITY_ISSUE, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
+        IDENTITY_SETNAME, IDENTITY_VERIFY,
     },
 };
 
@@ -87,9 +87,10 @@ async fn main() -> Result<()> {
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
     let mut setavatar_sub = nc.subscribe(IDENTITY_SETAVATAR).await?;
+    let mut setkey_sub = nc.subscribe(IDENTITY_SETKEY).await?;
     let mut resolve_sub = nc.subscribe(IDENTITY_RESOLVE).await?;
 
-    info!("Identity шард запущен. Слушаю: issue/verify/search/setname/setavatar/resolve");
+    info!("Identity шард запущен. Слушаю: issue/verify/search/setname/setavatar/setkey/resolve");
 
     loop {
         tokio::select! {
@@ -107,6 +108,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = setavatar_sub.next() => {
                 handle_setavatar(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = setkey_sub.next() => {
+                handle_setkey(&nc, &pool, &decoding, msg).await;
             }
             Some(msg) = resolve_sub.next() => {
                 handle_resolve(&nc, &pool, msg).await;
@@ -137,8 +141,8 @@ async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         vec![]
     } else {
         let like = format!("%{}%", q);
-        sqlx::query_as::<_, (String, String, String)>(
-            "SELECT username, display_name, avatar_file_id FROM users
+        sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT username, display_name, avatar_file_id, pubkey FROM users
              WHERE username LIKE ? OR display_name LIKE ?
              ORDER BY username LIMIT 20",
         )
@@ -148,10 +152,11 @@ async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(u, d, a)| UserInfo {
+        .map(|(u, d, a, k)| UserInfo {
             display_name: name_or_default(&u, &d),
             username: u,
             avatar: opt(a),
+            pubkey: opt(k),
         })
         .collect()
     };
@@ -228,6 +233,46 @@ async fn handle_setavatar(
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
 }
 
+// Записать публичный ключ пользователя (чистая функция — для тестов).
+async fn store_pubkey(pool: &SqlitePool, username: &str, pubkey: &str) -> Result<()> {
+    sqlx::query("UPDATE users SET pubkey = ? WHERE username = ?")
+        .bind(pubkey)
+        .bind(username)
+        .execute(pool)
+        .await
+        .context("запись pubkey")?;
+    Ok(())
+}
+
+// Регистрация своего публичного Ed25519-ключа (username из проверенного токена).
+async fn handle_setkey(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<SetKeyRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => match store_pubkey(pool, &username, &req.pubkey).await {
+                Ok(()) => {
+                    info!("{} зарегистрировал pubkey ({}…)", username, &req.pubkey.chars().take(12).collect::<String>());
+                    SetNameResponse { ok: true, error: None }
+                }
+                Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+            },
+            Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+}
+
 // Резолв display_name по списку адресов (для пиров из sync).
 async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else { return };
@@ -236,17 +281,19 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
     });
     let mut users = Vec::new();
     for u in req.usernames.iter().take(50) {
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT display_name, avatar_file_id FROM users WHERE username = ?")
-                .bind(u)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-        if let Some((d, a)) = row {
+        let row: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT display_name, avatar_file_id, pubkey FROM users WHERE username = ?",
+        )
+        .bind(u)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        if let Some((d, a, k)) = row {
             users.push(UserInfo {
                 display_name: name_or_default(u, &d),
                 username: u.clone(),
                 avatar: opt(a),
+                pubkey: opt(k),
             });
         }
     }
@@ -431,5 +478,82 @@ mod tests {
     #[test]
     fn password_different_input_different_hash() {
         assert_ne!(hash_password("secret"), hash_password("other"));
+    }
+
+    // ── публичные ключи (для аутентификации сигналинга звонков) ──
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_user(pool: &SqlitePool, username: &str) {
+        sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, '', 0)")
+            .bind(username)
+            .bind(username)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pubkey_defaults_empty_then_stores() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        // По умолчанию ключа нет.
+        let (k0,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+            .bind("alice@local")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(k0, "", "новый пользователь — без pubkey");
+        // Регистрируем ключ.
+        store_pubkey(&pool, "alice@local", "BASE64KEY==").await.unwrap();
+        // Читаем тем же SELECT, что использует resolve (display_name, avatar, pubkey).
+        let row: (String, String, String) = sqlx::query_as(
+            "SELECT display_name, avatar_file_id, pubkey FROM users WHERE username = ?",
+        )
+        .bind("alice@local")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.2, "BASE64KEY==", "resolve-путь отдаёт зарегистрированный ключ");
+    }
+
+    #[tokio::test]
+    async fn pubkey_overwrite_replaces() {
+        // Смена устройства/ключа — новый заменяет старый.
+        let pool = test_pool().await;
+        insert_user(&pool, "bob@local").await;
+        store_pubkey(&pool, "bob@local", "KEY1").await.unwrap();
+        store_pubkey(&pool, "bob@local", "KEY2").await.unwrap();
+        let (k,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+            .bind("bob@local")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(k, "KEY2");
+    }
+
+    #[tokio::test]
+    async fn pubkey_isolated_per_user() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        insert_user(&pool, "bob@local").await;
+        store_pubkey(&pool, "alice@local", "ALICEKEY").await.unwrap();
+        // ключ bob не задан — остаётся пустым, ключ alice не протёк
+        let (ka,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+            .bind("alice@local").fetch_one(&pool).await.unwrap();
+        let (kb,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+            .bind("bob@local").fetch_one(&pool).await.unwrap();
+        assert_eq!(ka, "ALICEKEY");
+        assert_eq!(kb, "", "ключ bob не задан → пусто");
     }
 }

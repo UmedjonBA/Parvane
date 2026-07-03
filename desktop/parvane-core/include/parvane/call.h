@@ -20,14 +20,29 @@ namespace parvane {
 
 using nlohmann::json;
 
-// ── исходящие сигналы (билдеры json для CallSignalPayload::signal) ─────────────
-// media: "audio" | "video".
-inline json inviteSignal(const std::string &callId, const std::string &media,
-                         const std::string &sdp) {
-    return json{{"type", "invite"}, {"call_id", callId}, {"media", media}, {"sdp", sdp}};
+// Канонические байты, которые подписываются ключом идентичности отправителя в
+// invite/answer: call_id и SDP склеены через '\n'. SDP несёт DTLS-отпечаток —
+// подпись над ним не даёт скомпрометированному шарду подменить отпечаток (MITM).
+// call_id связывает подпись с конкретным звонком (защита от replay). Signer и
+// verifier ОБЯЗАНЫ строить эту строку одинаково. См. desktop/CALLS-parvane.md.
+inline std::string callSignedData(const std::string &callId, const std::string &sdp) {
+    return callId + "\n" + sdp;
 }
-inline json answerSignal(const std::string &callId, const std::string &sdp) {
-    return json{{"type", "answer"}, {"call_id", callId}, {"sdp", sdp}};
+
+// ── исходящие сигналы (билдеры json для CallSignalPayload::signal) ─────────────
+// media: "audio" | "video". sig — base64 Ed25519-подпись callSignedData(callId,
+// sdp) приватным ключом отправителя (пусто = без подписи, напр. в тестах/legacy).
+inline json inviteSignal(const std::string &callId, const std::string &media,
+                         const std::string &sdp, const std::string &sig = "") {
+    json j{{"type", "invite"}, {"call_id", callId}, {"media", media}, {"sdp", sdp}};
+    if (!sig.empty()) j["sig"] = sig;
+    return j;
+}
+inline json answerSignal(const std::string &callId, const std::string &sdp,
+                         const std::string &sig = "") {
+    json j{{"type", "answer"}, {"call_id", callId}, {"sdp", sdp}};
+    if (!sig.empty()) j["sig"] = sig;
+    return j;
 }
 inline json rejectSignal(const std::string &callId,
                          const std::optional<std::string> &reason) {
@@ -48,6 +63,7 @@ struct CallSignalIn {
     std::string call_id;
     std::string media;     // invite
     std::string sdp;       // invite|answer
+    std::string sig;       // invite|answer — base64 Ed25519-подпись SDP (может быть пустой)
     std::string candidate; // ice
     std::optional<std::string> reason; // reject
 
@@ -57,10 +73,16 @@ struct CallSignalIn {
         s.call_id = j.value("call_id", std::string());
         s.media = j.value("media", std::string());
         s.sdp = j.value("sdp", std::string());
+        s.sig = j.value("sig", std::string());
         s.candidate = j.value("candidate", std::string());
         if (auto it = j.find("reason"); it != j.end() && !it->is_null())
             s.reason = it->get<std::string>();
         return s;
+    }
+
+    // Байты, над которыми должна проверяться подпись `sig` (см. callSignedData).
+    [[nodiscard]] std::string signedData() const {
+        return callSignedData(call_id, sdp);
     }
 };
 

@@ -9,6 +9,7 @@ pub mod topics {
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
+    pub const IDENTITY_SETKEY: &str = "identity.user.setkey";
     pub const IDENTITY_RESOLVE: &str = "identity.user.resolve";
 
     pub const MSG_SEND: &str = "msg.chat.send";
@@ -94,6 +95,10 @@ pub struct UserInfo {
     /// file_id аватара в шарде cloud (None — нет фото, показываем инициалы).
     #[serde(default)]
     pub avatar: Option<String>,
+    /// Публичный Ed25519-ключ пользователя (base64), для аутентификации
+    /// сигналинга звонков. None — юзер ещё не зарегистрировал ключ.
+    #[serde(default)]
+    pub pubkey: Option<String>,
 }
 
 /// Установка своего аватара: file_id уже загруженного в cloud изображения.
@@ -101,6 +106,14 @@ pub struct UserInfo {
 pub struct SetAvatarRequest {
     pub token: String,
     pub file_id: String,
+}
+
+/// Регистрация СВОЕГО публичного Ed25519-ключа (base64) в каталоге identity.
+/// Приватный ключ остаётся на устройстве. Нужен для подписи SDP в звонках.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetKeyRequest {
+    pub token: String,
+    pub pubkey: String,
 }
 
 /// Поиск пользователей по подстроке имени/адреса (каталог = таблица users).
