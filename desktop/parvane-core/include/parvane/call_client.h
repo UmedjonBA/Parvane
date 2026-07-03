@@ -35,6 +35,11 @@ public:
     void hangup(const std::string &from, const std::string &to, const std::string &token,
                 const std::string &callId);
 
+    // Отправить ПРОИЗВОЛЬНЫЙ сигнал (например, уже подписанный CallSession JSON)
+    // собеседнику to. Инкапсулирует конверт + топик call.signal.
+    void send(const std::string &from, const std::string &to,
+              const std::string &token, const json &signal);
+
     // Подписка на инбокс call.user.<me>. handler(from, signal) на каждый
     // входящий relay-сигнал. me — свой полный адрес (например "bob@local").
     void onSignal(const std::string &me,
@@ -45,8 +50,6 @@ public:
                                     int timeoutMs = 3000);
 
 private:
-    void sendSignal(const std::string &from, const std::string &to,
-                    const std::string &token, const json &signal);
     Transport &_t;
 };
 

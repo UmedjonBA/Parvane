@@ -591,10 +591,23 @@ pub enum CallMedia {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CallSignal {
-    /// Приглашение: SDP-offer вызывающего.
-    Invite { call_id: Uuid, media: CallMedia, sdp: String },
-    /// Ответ: SDP-answer вызываемого.
-    Answer { call_id: Uuid, sdp: String },
+    /// Приглашение: SDP-offer вызывающего. `sig` — base64 Ed25519-подпись SDP
+    /// ключом инициатора (аутентификация против MITM; шард лишь релеит, не
+    /// проверяет). Пусто, если клиент не подписывает.
+    Invite {
+        call_id: Uuid,
+        media: CallMedia,
+        sdp: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        sig: String,
+    },
+    /// Ответ: SDP-answer вызываемого (`sig` — подпись как в Invite).
+    Answer {
+        call_id: Uuid,
+        sdp: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        sig: String,
+    },
     /// Отклонить вызов.
     Reject { call_id: Uuid, reason: Option<String> },
     /// ICE-кандидат (обмен сетевыми путями).

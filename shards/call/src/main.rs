@@ -269,7 +269,12 @@ mod tests {
     }
 
     fn invite(id: Uuid) -> CallSignal {
-        CallSignal::Invite { call_id: id, media: CallMedia::Audio, sdp: "offer".into() }
+        CallSignal::Invite {
+            call_id: id,
+            media: CallMedia::Audio,
+            sdp: "offer".into(),
+            sig: String::new(),
+        }
     }
 
     async fn status_of(pool: &SqlitePool, id: &str) -> String {
@@ -288,7 +293,7 @@ mod tests {
         let ids = id.to_string();
         record_signal(&pool, "alice@local", "bob@local", &invite(id), 1).await.unwrap();
         assert_eq!(status_of(&pool, &ids).await, "ringing");
-        record_signal(&pool, "bob@local", "alice@local", &CallSignal::Answer { call_id: id, sdp: "ans".into() }, 2).await.unwrap();
+        record_signal(&pool, "bob@local", "alice@local", &CallSignal::Answer { call_id: id, sdp: "ans".into(), sig: String::new() }, 2).await.unwrap();
         assert_eq!(status_of(&pool, &ids).await, "answered");
         record_signal(&pool, "alice@local", "bob@local", &CallSignal::Hangup { call_id: id }, 3).await.unwrap();
         assert_eq!(status_of(&pool, &ids).await, "ended");

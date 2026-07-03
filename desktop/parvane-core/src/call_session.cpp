@@ -98,8 +98,10 @@ void CallSession::onSignal(const CallSignalIn &sig) {
             setState(CallState::Ended);
             return;
         }
-        if (media_engine_) media_engine_->setRemoteAnswer(sig.sdp);
+        // Connecting ДО setRemoteAnswer: движок может синхронно сообщить об
+        // установлении соединения (→ Active), и порядок не должен откатить его.
         setState(CallState::Connecting);
+        if (media_engine_) media_engine_->setRemoteAnswer(sig.sdp);
 
     } else if (sig.type == "ice") {
         if (media_engine_ && !sig.candidate.empty()) {
