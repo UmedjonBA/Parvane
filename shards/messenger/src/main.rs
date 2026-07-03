@@ -2,12 +2,12 @@ use anyhow::{Context, Result};
 use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    DeletePayload, DeliveredPayload, EditPayload, MessageContent, ParvaneEvent, ReadPayload,
-    SendPayload, StoredMessage, SyncRequestPayload, SyncResponsePayload, VerifyRequest,
-    VerifyResponse,
+    DeletePayload, DeliveredPayload, EditPayload, MessageContent, ParvaneEvent, PinPayload,
+    ReactPayload, ReadPayload, SendPayload, StoredMessage, SyncRequestPayload, SyncResponsePayload,
+    VerifyRequest, VerifyResponse,
     topics::{
-        IDENTITY_VERIFY, MSG_DELETE, MSG_DELIVERED, MSG_EDIT, MSG_READ, MSG_SEND,
-        MSG_SYNC_REQUEST, MSG_SYNC_RESPONSE,
+        IDENTITY_VERIFY, MSG_DELETE, MSG_DELIVERED, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT,
+        MSG_SEND, MSG_SYNC_REQUEST, MSG_SYNC_RESPONSE,
     },
 };
 use sqlx::SqlitePool;
@@ -56,6 +56,8 @@ async fn main() -> Result<()> {
     let mut read_sub = nc.subscribe(MSG_READ).await?;
     let mut edit_sub = nc.subscribe(MSG_EDIT).await?;
     let mut delete_sub = nc.subscribe(MSG_DELETE).await?;
+    let mut react_sub = nc.subscribe(MSG_REACT).await?;
+    let mut pin_sub = nc.subscribe(MSG_PIN).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
 
     info!(
@@ -76,6 +78,12 @@ async fn main() -> Result<()> {
             }
             Some(msg) = delete_sub.next() => {
                 handle_delete(&nc, &pool, msg).await;
+            }
+            Some(msg) = react_sub.next() => {
+                handle_react(&nc, &pool, msg).await;
+            }
+            Some(msg) = pin_sub.next() => {
+                handle_pin(&nc, &pool, msg).await;
             }
             Some(msg) = sync_sub.next() => {
                 handle_sync(&nc, &pool, msg).await;
@@ -232,12 +240,14 @@ async fn fetch_missed(
         i64,            // deleted
         i64,            // updated_at
         i64,            // read (0/1)
+        i64,            // pinned (0/1)
     );
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT m.id, m.from_user, m.to_user, m.content, m.ts,
                 m.reply_to, m.edited, m.deleted, m.updated_at,
                 EXISTS(SELECT 1 FROM read_receipts r
-                        WHERE r.message_id = m.id AND r.reader = m.to_user) AS read
+                        WHERE r.message_id = m.id AND r.reader = m.to_user) AS read,
+                m.pinned
          FROM messages m
          WHERE (m.to_user = ? OR m.from_user = ?)
            AND (m.id > ? OR m.updated_at > ?)
@@ -252,13 +262,35 @@ async fn fetch_missed(
     .await?;
 
     let mut messages = Vec::with_capacity(rows.len());
-    for (id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, read) in rows {
+    for (id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, read, pinned) in rows {
         // content может быть NULL только для legacy-строк без миграции данных;
         // в норме всегда заполнен.
         let content = match content_json {
             Some(json) => serde_json::from_str(&json).context("разбор content")?,
             None => MessageContent::Text { text: String::new() },
         };
+        // Агрегат реакций: эмодзи → count, mine = реагировал ли запросивший.
+        let react_rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT emoji, COUNT(*) FROM reactions WHERE message_id = ? GROUP BY emoji",
+        )
+        .bind(&id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        let mut reactions = Vec::new();
+        for (emoji, count) in react_rows {
+            let mine: i64 = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM reactions
+                     WHERE message_id = ? AND reactor = ? AND emoji = ?)",
+            )
+            .bind(&id)
+            .bind(user)
+            .bind(&emoji)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+            reactions.push(parvane_types::ReactionCount { emoji, count, mine: mine != 0 });
+        }
         messages.push(StoredMessage {
             id: id.parse().unwrap_or(Uuid::nil()),
             from,
@@ -270,6 +302,8 @@ async fn fetch_missed(
             deleted: deleted != 0,
             read: read != 0,
             updated_at,
+            reactions,
+            pinned: pinned != 0,
         });
     }
     Ok(messages)
@@ -370,6 +404,73 @@ async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
 
     if let Err(e) = result {
         error!("handle_delete: {}", e);
+    }
+}
+
+// ── msg.chat.react ────────────────────────────────────────────────────────────
+
+async fn handle_react(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<ReactPayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.react")?;
+        let reactor = verify_token(nc, &event.token).await?;
+        let mid = event.payload.message_id.to_string();
+        let now = now_unix();
+        if event.payload.emoji.is_empty() {
+            sqlx::query("DELETE FROM reactions WHERE message_id = ? AND reactor = ?")
+                .bind(&mid)
+                .bind(&reactor)
+                .execute(pool)
+                .await?;
+        } else {
+            sqlx::query(
+                "INSERT INTO reactions (message_id, reactor, emoji, ts) VALUES (?, ?, ?, ?)
+                 ON CONFLICT(message_id, reactor)
+                 DO UPDATE SET emoji = excluded.emoji, ts = excluded.ts",
+            )
+            .bind(&mid)
+            .bind(&reactor)
+            .bind(&event.payload.emoji)
+            .bind(now)
+            .execute(pool)
+            .await?;
+        }
+        // Бампаем updated_at сообщения — чтобы sync отдал обновлённые реакции.
+        sqlx::query("UPDATE messages SET updated_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(&mid)
+            .execute(pool)
+            .await?;
+        info!("Реакция '{}' на {} от {}", event.payload.emoji, mid, reactor);
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        error!("handle_react: {}", e);
+    }
+}
+
+// ── msg.chat.pin ──────────────────────────────────────────────────────────────
+
+async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<PinPayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.pin")?;
+        let who = verify_token(nc, &event.token).await?;
+        let mid = event.payload.message_id.to_string();
+        let now = now_unix();
+        sqlx::query("UPDATE messages SET pinned = ?, updated_at = ? WHERE id = ?")
+            .bind(if event.payload.pin { 1 } else { 0 })
+            .bind(now)
+            .bind(&mid)
+            .execute(pool)
+            .await?;
+        info!("Pin={} для {} ({})", event.payload.pin, mid, who);
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        error!("handle_pin: {}", e);
     }
 }
 
