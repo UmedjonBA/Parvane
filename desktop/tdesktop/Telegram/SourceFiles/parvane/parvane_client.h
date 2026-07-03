@@ -110,6 +110,9 @@ void MirrorRead(std::int64_t peerId);
 // запрос на воркере, callback с найденными адресами — на main-потоке.
 void SearchUsers(const QString &query, Fn<void(QStringList)> callback);
 
+// Задаёт СВОЁ отображаемое имя (identity.user.setname) + кладёт в локальный кэш.
+void SetDisplayName(const QString &name);
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);

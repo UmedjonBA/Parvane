@@ -23,6 +23,7 @@
 #include "data/data_histories.h"
 #include "base/call_delayed.h"
 #include <QtCore/QQueue>
+#include <QtCore/QSet>
 #include "history/history.h"
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
@@ -85,6 +86,8 @@ QHash<QString, qint64> g_uuidToMsgId; // UUID сообщения → синте�
 QHash<qint64, QString> g_msgIdToUuid; // обратная карта (для delete/edit/read своих)
 QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отправок, ждут эха (main)
 QHash<qint64, QVector<QString>> g_unreadIncoming; // peerId → uuid'ы непрочит. входящих
+QHash<QString, QString> g_displayNames; // адрес → отображаемое имя (из каталога)
+QSet<QString> g_resolveRequested;       // адреса, для которых уже запросили имя
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
@@ -630,24 +633,48 @@ namespace {
 
 // Гарантирует, что пир (отправитель) существует и «загружен» в Data::Session.
 // Синтезируем MTPUser с first_name = адрес, чтобы диалог имел имя. Идемпотентно.
+void ResolveNames(const QStringList &addresses); // fwd
+
+// Отображаемое имя по адресу: из каталога (g_displayNames) либо локальная часть
+// адреса до '@' по умолчанию.
+[[nodiscard]] QString DisplayNameFor(const QString &address) {
+	const auto it = g_displayNames.constFind(address);
+	if (it != g_displayNames.constEnd() && !it.value().isEmpty()) {
+		return it.value();
+	}
+	const auto at = address.indexOf('@');
+	return (at > 0) ? address.left(at) : address;
+}
+
 not_null<UserData*> ensurePeerUser(
 		not_null<Main::Session*> session,
 		std::uint64_t id,
 		const QString &address) {
-	// f_first_name ОБЯЗАТЕЛЕН: без флага processUser читает vfirst_name() как
-	// отсутствующее (value_or_empty) → имя пустое (диалог/шапка/профиль без имени).
-	auto flags = MTPDuser::Flags() | MTPDuser::Flag::f_first_name;
+	const auto existed = (session->data().userLoaded(
+		UserId(BareId(id))) != nullptr);
+	// Отображаемое имя = display_name (каталог); @username = адрес (уникален).
+	// f_first_name/f_username ОБЯЗАТЕЛЬНЫ: без них processUser игнорирует поля.
+	auto flags = MTPDuser::Flags()
+		| MTPDuser::Flag::f_first_name
+		| MTPDuser::Flag::f_username;
 	if (address == SelfAddress()) {
 		flags |= MTPDuser::Flag::f_self;
+	}
+	// Незнакомое имя — просим каталог его резолвнуть (обновим, когда придёт).
+	if (address != SelfAddress()
+		&& !g_displayNames.contains(address)
+		&& !g_resolveRequested.contains(address)) {
+		g_resolveRequested.insert(address);
+		ResolveNames({ address });
 	}
 	const auto user = MTP_user(
 		MTP_flags(flags),
 		MTP_long(id),
-		MTPlong(),           // access_hash
-		MTP_string(address), // first_name — показываем адрес
-		MTPstring(),         // last_name
-		MTPstring(),         // username
-		MTPstring(),         // phone
+		MTPlong(),                    // access_hash
+		MTP_string(DisplayNameFor(address)), // first_name — отображаемое имя
+		MTPstring(),                  // last_name
+		MTP_string(address),          // username — уникальный адрес (@handle)
+		MTPstring(),                  // phone
 		MTPUserProfilePhoto(),
 		MTPUserStatus(),
 		MTPint(),            // bot_info_version
@@ -669,7 +696,7 @@ not_null<UserData*> ensurePeerUser(
 	// бейджа шлёт dialogs.getDialogs в MTProto (заглушён, не вернётся) → бейдж
 	// непрочитанного не появляется. Входящие уже «server-side unread»
 	// (_inboxReadBefore не задан), поэтому после этого бейдж считается штатно.
-	if (address != SelfAddress()) {
+	if (!existed && address != SelfAddress()) {
 		const auto history = session->data().history(result);
 		// setUnreadCount требует folderKnown() (assert) — сперва помечаем папку
 		// известной (как инъекция входящих), потом делаем счётчик известным.
@@ -681,6 +708,64 @@ not_null<UserData*> ensurePeerUser(
 		}
 	}
 	return result;
+}
+
+// Резолвит отображаемые имена по адресам (identity.user.resolve) и обновляет
+// уже синтезированных юзеров. Воркер → main.
+void ResolveNames(const QStringList &addresses) {
+	if (addresses.isEmpty()) {
+		return;
+	}
+	auto arr = parvane::json::array();
+	for (const auto &a : addresses) {
+		arr.push_back(a.toStdString());
+	}
+	const auto reqStr = parvane::json{ { "usernames", arr } }.dump();
+	crl::async([reqStr] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		auto names = QHash<QString, QString>();
+		try {
+			const auto reply = t->request(
+				"identity.user.resolve", reqStr, 3000);
+			const auto j = parvane::json::parse(reply);
+			if (j.contains("users") && j["users"].is_array()) {
+				for (const auto &u : j["users"]) {
+					if (u.contains("username") && u.contains("display_name")) {
+						names.insert(
+							QString::fromStdString(
+								u["username"].get<std::string>()),
+							QString::fromStdString(
+								u["display_name"].get<std::string>()));
+					}
+				}
+			}
+		} catch (const std::exception &) {
+			return;
+		}
+		if (names.isEmpty()) {
+			return;
+		}
+		crl::on_main([names] {
+			const auto session = g_sessionWeak.get();
+			if (!session) {
+				return;
+			}
+			for (auto it = names.constBegin(); it != names.constEnd(); ++it) {
+				g_displayNames.insert(it.key(), it.value());
+				const auto id = IdForAddress(it.key());
+				if (session->data().userLoaded(UserId(BareId(id)))) {
+					ensurePeerUser(session, id, it.key()); // обновит имя
+				}
+			}
+		});
+	});
 }
 
 // Строит MTPMessage в 1-на-1 диалоге. authorId — автор (from_id), peerId —
@@ -1349,6 +1434,7 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 			t = g_transport.get();
 		}
 		auto out = QStringList();
+		auto names = QHash<QString, QString>();
 		if (t) {
 			try {
 				const parvane::json req{ { "query", q } };
@@ -1357,9 +1443,15 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 				const auto j = parvane::json::parse(reply);
 				if (j.contains("users") && j["users"].is_array()) {
 					for (const auto &u : j["users"]) {
-						if (u.is_string()) {
-							out.push_back(QString::fromStdString(
-								u.get<std::string>()));
+						if (!u.contains("username")) {
+							continue;
+						}
+						const auto addr = QString::fromStdString(
+							u["username"].get<std::string>());
+						out.push_back(addr);
+						if (u.contains("display_name")) {
+							names.insert(addr, QString::fromStdString(
+								u["display_name"].get<std::string>()));
 						}
 					}
 				}
@@ -1368,9 +1460,38 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 					.arg(QString::fromUtf8(e.what())));
 			}
 		}
-		crl::on_main([callback = std::move(callback), out]() mutable {
+		crl::on_main([callback = std::move(callback), out, names]() mutable {
+			for (auto it = names.constBegin(); it != names.constEnd(); ++it) {
+				g_displayNames.insert(it.key(), it.value());
+			}
 			callback(out);
 		});
+	});
+}
+
+void SetDisplayName(const QString &name) {
+	const auto n = name.trimmed();
+	if (n.isEmpty()) {
+		return;
+	}
+	g_displayNames.insert(SelfAddress(), n); // локально сразу
+	const auto nStd = n.toStdString();
+	const auto token = Token().toStdString();
+	crl::async([nStd, token] {
+		parvane::Transport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		const parvane::json req{ { "token", token }, { "display_name", nStd } };
+		try {
+			t->request("identity.user.setname", req.dump(), 3000);
+			LOG(("Parvane: имя обновлено на '%1'").arg(QString::fromStdString(nStd)));
+		} catch (const std::exception &) {
+		}
 	});
 }
 

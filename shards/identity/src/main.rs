@@ -3,9 +3,11 @@ use async_nats::Client;
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
-    IssueRequest, IssueResponse, SearchUsersRequest, SearchUsersResponse, VerifyRequest,
-    VerifyResponse,
-    topics::{IDENTITY_ISSUE, IDENTITY_SEARCH, IDENTITY_VERIFY},
+    IssueRequest, IssueResponse, ResolveRequest, ResolveResponse, SearchUsersRequest,
+    SearchUsersResponse, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
+    topics::{
+        IDENTITY_ISSUE, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETNAME, IDENTITY_VERIFY,
+    },
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -77,11 +79,10 @@ async fn main() -> Result<()> {
     let mut issue_sub = nc.subscribe(IDENTITY_ISSUE).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
+    let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
+    let mut resolve_sub = nc.subscribe(IDENTITY_RESOLVE).await?;
 
-    info!(
-        "Identity шард запущен. Слушаю: {}, {}, {}",
-        IDENTITY_ISSUE, IDENTITY_VERIFY, IDENTITY_SEARCH
-    );
+    info!("Identity шард запущен. Слушаю: issue/verify/search/setname/resolve");
 
     loop {
         tokio::select! {
@@ -94,51 +95,114 @@ async fn main() -> Result<()> {
             Some(msg) = search_sub.next() => {
                 handle_search(&nc, &pool, msg).await;
             }
+            Some(msg) = setname_sub.next() => {
+                handle_setname(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = resolve_sub.next() => {
+                handle_resolve(&nc, &pool, msg).await;
+            }
         }
     }
 }
 
-// Поиск пользователей по подстроке имени (каталог = таблица users). Request/reply.
+// display_name с фолбэком на локальную часть адреса (для старых записей с '').
+fn name_or_default(username: &str, display_name: &str) -> String {
+    if display_name.is_empty() {
+        username.split('@').next().unwrap_or(username).to_string()
+    } else {
+        display_name.to_string()
+    }
+}
+
+// Поиск пользователей по подстроке имени/адреса. Возвращает username+display_name.
 async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else {
         error!("search: нет reply-топика, игнорирую");
         return;
     };
-    let req: SearchUsersRequest = match serde_json::from_slice(&msg.payload) {
-        Ok(r) => r,
-        Err(e) => {
-            error!("search: неверный JSON: {}", e);
-            let _ = nc
-                .publish(
-                    reply,
-                    serde_json::to_vec(&SearchUsersResponse { users: vec![] })
-                        .unwrap()
-                        .into(),
-                )
-                .await;
-            return;
-        }
-    };
-    let q = req.query.trim();
-    let users: Vec<String> = if q.is_empty() {
+    let q = serde_json::from_slice::<SearchUsersRequest>(&msg.payload)
+        .map(|r| r.query.trim().to_string())
+        .unwrap_or_default();
+    let users: Vec<UserInfo> = if q.is_empty() {
         vec![]
     } else {
         let like = format!("%{}%", q);
-        sqlx::query_as::<_, (String,)>(
-            "SELECT username FROM users WHERE username LIKE ? ORDER BY username LIMIT 20",
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT username, display_name FROM users
+             WHERE username LIKE ? OR display_name LIKE ?
+             ORDER BY username LIMIT 20",
         )
-        .bind(like)
+        .bind(&like)
+        .bind(&like)
         .fetch_all(pool)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(u,)| u)
+        .map(|(u, d)| UserInfo { display_name: name_or_default(&u, &d), username: u })
         .collect()
     };
     info!("search '{}' → {} результатов", q, users.len());
-    let resp = SearchUsersResponse { users };
     let _ = nc
-        .publish(reply, serde_json::to_vec(&resp).unwrap().into())
+        .publish(reply, serde_json::to_vec(&SearchUsersResponse { users }).unwrap().into())
+        .await;
+}
+
+// Смена своего display_name (username берём из проверенного токена).
+async fn handle_setname(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<SetNameRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => {
+                let name = req.display_name.trim();
+                if name.is_empty() || name.len() > 64 {
+                    SetNameResponse { ok: false, error: Some("имя пустое/длинное".into()) }
+                } else {
+                    let _ = sqlx::query("UPDATE users SET display_name = ? WHERE username = ?")
+                        .bind(name)
+                        .bind(&username)
+                        .execute(pool)
+                        .await;
+                    info!("{} сменил имя на '{}'", username, name);
+                    SetNameResponse { ok: true, error: None }
+                }
+            }
+            Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+}
+
+// Резолв display_name по списку адресов (для пиров из sync).
+async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let req: ResolveRequest = serde_json::from_slice(&msg.payload).unwrap_or(ResolveRequest {
+        usernames: vec![],
+    });
+    let mut users = Vec::new();
+    for u in req.usernames.iter().take(50) {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT display_name FROM users WHERE username = ?")
+                .bind(u)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+        if let Some((d,)) = row {
+            users.push(UserInfo { display_name: name_or_default(u, &d), username: u.clone() });
+        }
+    }
+    let _ = nc
+        .publish(reply, serde_json::to_vec(&ResolveResponse { users }).unwrap().into())
         .await;
 }
 
@@ -208,16 +272,20 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
     if existing.is_none() {
         let id = Uuid::now_v7().to_string();
         let now = now_unix();
+        // Отображаемое имя по умолчанию — локальная часть адреса (до '@').
+        let default_name = req.user.split('@').next().unwrap_or(&req.user).to_string();
         sqlx::query(
-            "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO users (id, username, password_hash, created_at, display_name)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&req.user)
         .bind(&hash)
         .bind(now)
+        .bind(&default_name)
         .execute(pool)
         .await?;
-        info!("Пользователь создан: {}", req.user);
+        info!("Пользователь создан: {} (имя: {})", req.user, default_name);
     } else {
         let row: (String,) =
             sqlx::query_as("SELECT password_hash FROM users WHERE username = ?")
