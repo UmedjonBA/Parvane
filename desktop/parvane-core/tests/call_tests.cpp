@@ -75,6 +75,24 @@ int main() {
         check(ice["type"] == "ice" && ice["candidate"] == "cand:1", "iceSignal — поля");
     }
     {
+        // Аутентификация сигналинга: подпись переносится в invite/answer.
+        auto inv = parvane::inviteSignal("c1", "audio", "OFFER", "SIG64");
+        check(inv["sdp"] == "OFFER" && inv["sig"] == "SIG64",
+              "inviteSignal(sig) — подпись в поле sig");
+        auto ans = parvane::answerSignal("c1", "ANSWER", "SIG2");
+        check(ans["sig"] == "SIG2", "answerSignal(sig) — подпись в поле sig");
+        // Без подписи поле sig не добавляется (legacy/тесты).
+        auto bare = parvane::inviteSignal("c1", "audio", "OFFER");
+        check(!bare.contains("sig"), "inviteSignal без sig — поля sig нет");
+        // Канонические байты подписи одинаковы у билдера и разбора.
+        auto in = CallSignalIn::fromJson(inv);
+        check(in.sig == "SIG64", "fromJson разбирает sig");
+        check(in.signedData() == parvane::callSignedData("c1", "OFFER"),
+              "signedData() == callSignedData(call_id, sdp) — канон совпадает");
+        check(in.signedData() == std::string("c1\nOFFER"),
+              "callSignedData = call_id '\\n' sdp");
+    }
+    {
         json j = {{"type", "invite"}, {"call_id", "c9"}, {"media", "video"}, {"sdp", "S"}};
         auto s = CallSignalIn::fromJson(j);
         check(s.type == "invite" && s.call_id == "c9" && s.media == "video" && s.sdp == "S",
