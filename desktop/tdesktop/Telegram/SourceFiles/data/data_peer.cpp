@@ -413,6 +413,25 @@ void PeerData::setUserpic(
 	_userpic.set(&session(), ImageWithLocation{ .location = location });
 }
 
+void PeerData::setUserpicInMemory(
+		PhotoId photoId,
+		const ImageWithLocation &data) {
+	_userpicPhotoId = photoId;
+	_userpicHasVideo = 0;
+	// Ставим локацию (InMemory) — теперь userpic не «пустой». Затем СОЗДАЁМ view
+	// и пишем картинку в него НАПРЯМУ: setToActive во время set() теряется (view
+	// ещё не существует), а load() при отрисовке видит непустой view и не
+	// перезагружает. Держим strong-ref в статической карте (иначе weak протухнет).
+	_userpic.set(&session(), ImageWithLocation{ .location = data.location });
+	static base::flat_map<not_null<PeerData*>, std::shared_ptr<QImage>> holds;
+	auto view = _userpic.createView();
+	if (view && !data.preloaded.isNull()) {
+		*view = data.preloaded;
+	}
+	holds[this] = view;
+	session().changes().peerUpdated(this, UpdateFlag::Photo);
+}
+
 void PeerData::setUserpicPhoto(const MTPPhoto &data) {
 	const auto photoId = data.match([&](const MTPDphoto &data) {
 		const auto photo = owner().processPhoto(data);

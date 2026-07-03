@@ -16,6 +16,8 @@ pub mod topics {
     pub const MSG_READ: &str = "msg.chat.read";
     pub const MSG_EDIT: &str = "msg.chat.edit";
     pub const MSG_DELETE: &str = "msg.chat.delete";
+    pub const MSG_REACT: &str = "msg.chat.react";
+    pub const MSG_PIN: &str = "msg.chat.pin";
     pub const MSG_SYNC_REQUEST: &str = "msg.sync.request";
     pub const MSG_SYNC_RESPONSE: &str = "msg.sync.response";
 
@@ -240,6 +242,20 @@ pub struct DeletePayload {
     pub message_id: Uuid,
 }
 
+/// Реакция на сообщение. Пустой `emoji` — снять свою реакцию.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactPayload {
+    pub message_id: Uuid,
+    pub emoji: String,
+}
+
+/// Закрепить/открепить сообщение (только автор диалога-собеседник? — любой из 1-на-1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinPayload {
+    pub message_id: Uuid,
+    pub pin: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRequestPayload {
     pub last_seen_id: String,
@@ -273,9 +289,24 @@ pub struct StoredMessage {
     /// Прочитано получателем (есть read-receipt от `to`). Для галочки ✓✓.
     #[serde(default)]
     pub read: bool,
-    /// Время последней мутации (создание/правка/удаление/прочтение). Курсор синка.
+    /// Время последней мутации (создание/правка/удаление/прочтение/реакция).
     #[serde(default)]
     pub updated_at: i64,
+    /// Реакции на сообщение (агрегат по эмодзи).
+    #[serde(default)]
+    pub reactions: Vec<ReactionCount>,
+    /// Закреплено в диалоге.
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+/// Агрегат реакции: эмодзи, сколько всего, реагировал ли запросивший (`mine`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionCount {
+    pub emoji: String,
+    pub count: i64,
+    #[serde(default)]
+    pub mine: bool,
 }
 
 // ── cloud payloads ───────────────────────────────────────────────────────────

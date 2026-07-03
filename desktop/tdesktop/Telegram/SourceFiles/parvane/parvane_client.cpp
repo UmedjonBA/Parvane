@@ -91,6 +91,9 @@ QHash<QString, QString> g_displayNames; // адрес → отображаемо
 QSet<QString> g_resolveRequested;       // адреса, для которых уже запросили имя
 QHash<QString, QString> g_avatarFileIds; // адрес → file_id аватара (cloud)
 QSet<QString> g_avatarDownloaded;        // аватары, уже скачанные/в процессе
+QHash<QString, QImage> g_avatarImages;   // адрес → скачанная картинка (кэш для
+                                         // повторной установки: ensurePeerUser с
+                                         // пустым фото стирает userpic).
 QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для forward)
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
@@ -712,6 +715,19 @@ void NoteAvatar(const QString &address, const QString &fileId) {
 	return (at > 0) ? address.left(at) : address;
 }
 
+// Ставит пиру закэшированный аватар (если есть). Нужно после каждого processUser
+// с пустым фото (тот стирает userpic) — иначе аватар пропадает.
+void applyAvatar(not_null<PeerData*> peer, const QString &address) {
+	const auto it = g_avatarImages.constFind(address);
+	if (it == g_avatarImages.constEnd() || it.value().isNull()) {
+		return;
+	}
+	const auto photoId = PhotoId(qHash(address)) | 0x2000000000000000ULL;
+	peer->setUserpicInMemory(
+		photoId,
+		Images::FromImageInMemory(it.value(), "JPG", QByteArray()));
+}
+
 not_null<UserData*> ensurePeerUser(
 		not_null<Main::Session*> session,
 		std::uint64_t id,
@@ -773,6 +789,8 @@ not_null<UserData*> ensurePeerUser(
 			history->setUnreadCount(0);
 		}
 	}
+	// processUser выше стёр userpic пустым фото — возвращаем аватар из кэша.
+	applyAvatar(result, address);
 	return result;
 }
 
@@ -958,7 +976,8 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 		} catch (const std::exception &) {
 			return;
 		}
-		crl::on_main([id, bytes, photoId] {
+		const auto addressCopy = address;
+		crl::on_main([id, bytes, photoId, addressCopy] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
@@ -972,10 +991,10 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 			if (!image.loadFromData(qb) || image.isNull()) {
 				return;
 			}
-			const auto iwl = Images::FromImageInMemory(image, "JPG", qb);
-			user->setUserpic(photoId, iwl.location, false);
-			session->changes().peerUpdated(
-				user, Data::PeerUpdate::Flag::Photo);
+			g_avatarImages.insert(addressCopy, image); // кэш для повторной установки
+			user->setUserpicInMemory(photoId,
+				Images::FromImageInMemory(image, "JPG", qb));
+			LOG(("Parvane: аватар применён для %1").arg(addressCopy));
 		});
 	});
 }
@@ -1656,9 +1675,7 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 	const auto iwl = Images::FromImageInMemory(image, "JPG", bytes);
 	const auto photoId = docIdFromFileId(
 		QString::number(qHash(bytes)) + self);
-	selfPeer->setUserpic(photoId, iwl.location, false);
-	selfPeer->session().changes().peerUpdated(
-		selfPeer, Data::PeerUpdate::Flag::Photo);
+	selfPeer->setUserpicInMemory(photoId, iwl);
 	// Грузим в cloud + identity.user.setavatar на воркере.
 	const auto from = self.toStdString();
 	const auto token = Token().toStdString();

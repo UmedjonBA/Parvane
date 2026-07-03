@@ -388,6 +388,9 @@ public:
 		const ImageLocation &location,
 		bool hasVideo);
 	void setUserpicPhoto(const MTPPhoto &data);
+	// Parvane: userpic из готовой (in-memory) картинки — сохраняет .preloaded,
+	// поэтому CloudImage показывает её сразу (без сетевой загрузки).
+	void setUserpicInMemory(PhotoId photoId, const ImageWithLocation &data);
 
 	void paintUserpic(
 		QPainter &p,
