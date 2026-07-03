@@ -67,9 +67,25 @@ def _key(sock, keysym, down):
     sock.sendall(struct.pack('>BBxxI', 4, 1 if down else 0, keysym))
 
 
+def ctrl_combo(sock, keysym):
+    """Ctrl+<key>: Ctrl(0xffe3) down → key down → key up → Ctrl up."""
+    _key(sock, 0xffe3, True)
+    time.sleep(0.03)
+    _key(sock, keysym, True)
+    time.sleep(0.04)
+    _key(sock, keysym, False)
+    time.sleep(0.03)
+    _key(sock, 0xffe3, False)
+    time.sleep(0.1)
+
+
 def type_text(sock, text):
     """Печатает text по символам (RFB KeyEvent). '\\n' → Enter (0xff0d).
-    Для латиницы/цифр keysym == ord(ch). Нужен сфокусированный инпут (клик)."""
+    Токен '<C-f>' в начале → Ctrl+F. Для латиницы keysym == ord(ch)."""
+    if text.startswith("<C-f>"):
+        ctrl_combo(sock, 0x66)  # Ctrl+F
+        time.sleep(0.4)
+        text = text[5:]
     for ch in text:
         if ch == '\n':
             ks = 0xff0d

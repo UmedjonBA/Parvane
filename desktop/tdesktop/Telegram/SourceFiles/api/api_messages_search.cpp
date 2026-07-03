@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "history/view/history_view_element.h"
 #include "main/main_session.h"
 
 namespace Api {
@@ -89,6 +90,25 @@ MessagesSearch::~MessagesSearch() {
 void MessagesSearch::searchMessages(Request request) {
 	_request = std::move(request);
 	_offsetId = {};
+	// Parvane: локальный поиск по загруженным сообщениям диалога (MTProto
+	// messages.search заглушён; у нас всё подтянуто полным ресинком). Ищем
+	// подстроку в тексте, свежие — первыми.
+	if (!_request.query.trimmed().isEmpty()) {
+		const auto q = _request.query.trimmed();
+		auto ids = MessageIdsList();
+		for (const auto &block : _history->blocks) {
+			for (const auto &view : block->messages) {
+				const auto item = view->data();
+				if (item->originalText().text.contains(
+						q, Qt::CaseInsensitive)) {
+					ids.push_back(item->fullId());
+				}
+			}
+		}
+		ranges::reverse(ids); // свежие первыми
+		_messagesFounds.fire({ int(ids.size()), std::move(ids), QString() });
+		return;
+	}
 	searchRequest();
 }
 
