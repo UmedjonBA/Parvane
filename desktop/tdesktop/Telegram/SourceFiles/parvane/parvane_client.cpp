@@ -41,6 +41,7 @@
 #include <parvane/call_client.h>     // parvane-core (сигналинг звонков)
 #include <parvane/call_manager.h>    // parvane-core (оркестрация звонка)
 #include <parvane/stub_media_backend.h> // parvane-core (медиа-заглушка Э4)
+#include "parvane/parvane_webrtc_backend.h" // реальный webrtc-движок (Э3-b)
 #include <parvane/crypto.h>          // parvane-core (Ed25519 подпись SDP)
 #include "settings.h"                // cWorkingDir() — путь для ключа звонков
 
@@ -378,6 +379,17 @@ bool StartSession() {
 			*g_callClient, g_selfAddress.toStdString(), g_token.toStdString(),
 			g_callKey.get(),
 			[] {
+				// PARVANE_REAL_MEDIA=1 → реальный webrtc-звук; иначе заглушка
+				// (для e2e сигналинга без звука). Если webrtc не поднялся —
+				// откат на заглушку.
+				if (const char *rm = std::getenv("PARVANE_REAL_MEDIA");
+						rm && *rm) {
+					if (auto w = Parvane::MakeWebrtcBackend()) {
+						LOG(("Parvane: медиа-движок = webrtc (реальный звук)"));
+						return w;
+					}
+					LOG(("Parvane: webrtc недоступен → заглушка"));
+				}
 				return std::unique_ptr<parvane::MediaBackend>(
 					std::make_unique<parvane::StubMediaBackend>());
 			},

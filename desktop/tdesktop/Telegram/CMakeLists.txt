@@ -33,7 +33,12 @@ get_filename_component(res_loc Resources REALPATH)
 target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_client.cpp
     ${src_loc}/parvane/parvane_client.h
+    ${src_loc}/parvane/parvane_webrtc_backend.cpp
+    ${src_loc}/parvane/parvane_webrtc_backend.h
 )
+# Реальный медиа-движок звонка использует webrtc (tg_owt) напрямую → нужны его
+# заголовки/дефайны/линковка в основном таргете Telegram.
+target_link_libraries(Telegram PRIVATE desktop-app::external_webrtc)
 
 include(cmake/telegram_options.cmake)
 include(cmake/lib_ffmpeg.cmake)
