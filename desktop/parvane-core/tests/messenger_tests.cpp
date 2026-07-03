@@ -88,6 +88,29 @@ int main() {
               "StoredMessage::fromJson разбирает все поля");
     }
     {
+        // reactions[] + pinned из sync-JSON.
+        json j = {{"id", "r1"}, {"from", "a@l"}, {"to", "b@l"},
+                  {"content", {{"kind", "text"}, {"text", "hi"}}},
+                  {"pinned", true},
+                  {"reactions", json::array({
+                      json{{"emoji", "👍"}, {"count", 2}, {"mine", true}},
+                      json{{"emoji", "❤️"}, {"count", 1}, {"mine", false}}})}};
+        auto m = StoredMessage::fromJson(j);
+        check(m.pinned, "fromJson: pinned=true");
+        check(m.reactions.size() == 2, "fromJson: 2 реакции");
+        check(m.reactions[0].emoji == "👍" && m.reactions[0].count == 2
+                  && m.reactions[0].mine,
+              "fromJson: реакция 👍 count=2 mine=true");
+        check(m.reactions[1].emoji == "❤️" && !m.reactions[1].mine,
+              "fromJson: реакция ❤️ mine=false");
+    }
+    {
+        // Отсутствие reactions/pinned → безопасные дефолты.
+        auto m = StoredMessage::fromJson(json{{"id", "r2"}, {"from", "a"}, {"to", "b"}});
+        check(m.reactions.empty() && !m.pinned,
+              "fromJson: без reactions/pinned → пусто/false");
+    }
+    {
         // SyncResponse: полный конверт И голый payload.
         json full = {{"id", "e"}, {"from", "messenger"}, {"ts", 1},
                      {"payload", {{"messages", json::array({json{{"id", "x"}}})}}}};
@@ -245,6 +268,49 @@ int main() {
                   parvane::contentKind(m->content));
             check(!m->text().has_value(), "photo-контент: text() == nullopt");
         }
+    }
+
+    // B9. react→sync: реакция получателя видна как агрегат; mine — по запросившему.
+    {
+        const std::string mid = mc.sendText(alice, bob, "лайкни меня", jwtAlice);
+        sleepMs(400);
+        mc.react(bob, mid, "👍", jwtBob);
+        sleepMs(400);
+        // Для bob (реагировал) — mine=true.
+        auto forBob = mc.sync(bob, jwtBob, MessengerClient::zeroCursor());
+        auto *mb = find(forBob, mid);
+        check(mb && mb->reactions.size() == 1 && mb->reactions[0].emoji == "👍"
+                  && mb->reactions[0].count == 1 && mb->reactions[0].mine,
+              "react→sync: 👍 count=1 mine=true у реагировавшего",
+              mb ? ("reactions=" + std::to_string(mb->reactions.size())) : "нет msg");
+        // Для alice (не реагировала) — mine=false, count тот же.
+        auto forAlice = mc.sync(alice, jwtAlice, MessengerClient::zeroCursor());
+        auto *ma = find(forAlice, mid);
+        check(ma && ma->reactions.size() == 1 && ma->reactions[0].count == 1
+                  && !ma->reactions[0].mine,
+              "react→sync: у нереагировавшего mine=false");
+        // Снятие (пустой emoji) убирает реакцию.
+        mc.react(bob, mid, "", jwtBob);
+        sleepMs(400);
+        auto after = mc.sync(bob, jwtBob, MessengerClient::zeroCursor());
+        auto *mr = find(after, mid);
+        check(mr && mr->reactions.empty(), "react(\"\")→sync: реакция снята");
+    }
+
+    // B10. pin→sync: закрепление/открепление отражается флагом pinned.
+    {
+        const std::string mid = mc.sendText(alice, bob, "закрепи меня", jwtAlice);
+        sleepMs(400);
+        mc.pin(bob, mid, true, jwtBob);
+        sleepMs(400);
+        auto pinned = mc.sync(bob, jwtBob, MessengerClient::zeroCursor());
+        auto *mp = find(pinned, mid);
+        check(mp && mp->pinned, "pin→sync: pinned=true после закрепления");
+        mc.pin(bob, mid, false, jwtBob);
+        sleepMs(400);
+        auto unpinned = mc.sync(bob, jwtBob, MessengerClient::zeroCursor());
+        auto *mu = find(unpinned, mid);
+        check(mu && !mu->pinned, "pin(false)→sync: pinned=false после открепления");
     }
 
     std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);

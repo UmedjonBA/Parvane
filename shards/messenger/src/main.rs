@@ -189,6 +189,57 @@ async fn delete_message(pool: &SqlitePool, message_id: &str, author: &str, now: 
     Ok(res.rows_affected() > 0)
 }
 
+/// Поставить/снять реакцию (одна на пару message_id+reactor). Пустой `emoji` —
+/// снять свою. Бампает `updated_at` сообщения, чтобы sync отдал новое состояние.
+async fn set_reaction(
+    pool: &SqlitePool,
+    message_id: &str,
+    reactor: &str,
+    emoji: &str,
+    now: i64,
+) -> Result<()> {
+    if emoji.is_empty() {
+        sqlx::query("DELETE FROM reactions WHERE message_id = ? AND reactor = ?")
+            .bind(message_id)
+            .bind(reactor)
+            .execute(pool)
+            .await
+            .context("снятие реакции")?;
+    } else {
+        sqlx::query(
+            "INSERT INTO reactions (message_id, reactor, emoji, ts) VALUES (?, ?, ?, ?)
+             ON CONFLICT(message_id, reactor)
+             DO UPDATE SET emoji = excluded.emoji, ts = excluded.ts",
+        )
+        .bind(message_id)
+        .bind(reactor)
+        .bind(emoji)
+        .bind(now)
+        .execute(pool)
+        .await
+        .context("установка реакции")?;
+    }
+    sqlx::query("UPDATE messages SET updated_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .context("бамп updated_at при реакции")?;
+    Ok(())
+}
+
+/// Закрепить/открепить сообщение. Бампает `updated_at` (курсор синка).
+async fn set_pinned(pool: &SqlitePool, message_id: &str, pin: bool, now: i64) -> Result<()> {
+    sqlx::query("UPDATE messages SET pinned = ?, updated_at = ? WHERE id = ?")
+        .bind(if pin { 1 } else { 0 })
+        .bind(now)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .context("закрепление сообщения")?;
+    Ok(())
+}
+
 /// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
 async fn store_read_receipt(
     pool: &SqlitePool,
@@ -415,32 +466,7 @@ async fn handle_react(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
             .context("неверный JSON в msg.chat.react")?;
         let reactor = verify_token(nc, &event.token).await?;
         let mid = event.payload.message_id.to_string();
-        let now = now_unix();
-        if event.payload.emoji.is_empty() {
-            sqlx::query("DELETE FROM reactions WHERE message_id = ? AND reactor = ?")
-                .bind(&mid)
-                .bind(&reactor)
-                .execute(pool)
-                .await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO reactions (message_id, reactor, emoji, ts) VALUES (?, ?, ?, ?)
-                 ON CONFLICT(message_id, reactor)
-                 DO UPDATE SET emoji = excluded.emoji, ts = excluded.ts",
-            )
-            .bind(&mid)
-            .bind(&reactor)
-            .bind(&event.payload.emoji)
-            .bind(now)
-            .execute(pool)
-            .await?;
-        }
-        // Бампаем updated_at сообщения — чтобы sync отдал обновлённые реакции.
-        sqlx::query("UPDATE messages SET updated_at = ? WHERE id = ?")
-            .bind(now)
-            .bind(&mid)
-            .execute(pool)
-            .await?;
+        set_reaction(pool, &mid, &reactor, &event.payload.emoji, now_unix()).await?;
         info!("Реакция '{}' на {} от {}", event.payload.emoji, mid, reactor);
         anyhow::Ok(())
     }
@@ -458,13 +484,7 @@ async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             .context("неверный JSON в msg.chat.pin")?;
         let who = verify_token(nc, &event.token).await?;
         let mid = event.payload.message_id.to_string();
-        let now = now_unix();
-        sqlx::query("UPDATE messages SET pinned = ?, updated_at = ? WHERE id = ?")
-            .bind(if event.payload.pin { 1 } else { 0 })
-            .bind(now)
-            .bind(&mid)
-            .execute(pool)
-            .await?;
+        set_pinned(pool, &mid, event.payload.pin, now_unix()).await?;
         info!("Pin={} для {} ({})", event.payload.pin, mid, who);
         anyhow::Ok(())
     }
@@ -796,5 +816,149 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count.0, 1);
+    }
+
+    // ── реакции ──
+
+    #[tokio::test]
+    async fn reaction_surfaces_in_sync_with_mine_flag() {
+        // Реакция видна в синке как агрегат; mine=true только для реагировавшего.
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000d1";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "лайкни"), 1)
+            .await
+            .unwrap();
+        set_reaction(&pool, mid, "bob@local", "👍", 2).await.unwrap();
+
+        // Для bob (реагировал) mine=true.
+        let for_bob = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(for_bob[0].reactions.len(), 1);
+        assert_eq!(for_bob[0].reactions[0].emoji, "👍");
+        assert_eq!(for_bob[0].reactions[0].count, 1);
+        assert!(for_bob[0].reactions[0].mine, "bob реагировал → mine");
+
+        // Для alice (не реагировала) mine=false, но count тот же.
+        let for_alice = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(for_alice[0].reactions[0].count, 1);
+        assert!(!for_alice[0].reactions[0].mine, "alice не реагировала → не mine");
+    }
+
+    #[tokio::test]
+    async fn reaction_counts_aggregate_across_reactors() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000d2";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "разные реакции"), 1)
+            .await
+            .unwrap();
+        set_reaction(&pool, mid, "bob@local", "👍", 2).await.unwrap();
+        set_reaction(&pool, mid, "carol@local", "👍", 3).await.unwrap();
+        set_reaction(&pool, mid, "dave@local", "❤️", 4).await.unwrap();
+
+        let missed = fetch_missed(&pool, "alice@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        let thumbs = missed[0].reactions.iter().find(|r| r.emoji == "👍").unwrap();
+        let heart = missed[0].reactions.iter().find(|r| r.emoji == "❤️").unwrap();
+        assert_eq!(thumbs.count, 2, "две реакции 👍");
+        assert_eq!(heart.count, 1, "одна ❤️");
+    }
+
+    #[tokio::test]
+    async fn reaction_upsert_one_per_reactor() {
+        // Одна реакция на пользователя: повторная заменяет прежнюю, не плюсует.
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000d3";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "передумал"), 1)
+            .await
+            .unwrap();
+        set_reaction(&pool, mid, "bob@local", "👍", 2).await.unwrap();
+        set_reaction(&pool, mid, "bob@local", "❤️", 3).await.unwrap();
+
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(missed[0].reactions.len(), 1, "у bob ровно одна реакция");
+        assert_eq!(missed[0].reactions[0].emoji, "❤️", "последняя побеждает");
+    }
+
+    #[tokio::test]
+    async fn reaction_empty_emoji_removes() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000d4";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "снять"), 1)
+            .await
+            .unwrap();
+        set_reaction(&pool, mid, "bob@local", "👍", 2).await.unwrap();
+        set_reaction(&pool, mid, "bob@local", "", 3).await.unwrap(); // снятие
+
+        let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(missed[0].reactions.is_empty(), "реакция снята");
+    }
+
+    #[tokio::test]
+    async fn reaction_bumps_mutation_cursor() {
+        // Реакция на старое сообщение поднимает его в синке по updated_at-курсору.
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000d5";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "старое"), 1)
+            .await
+            .unwrap();
+        // Клиент уже видел это (id и updated_at=1) — синк пуст.
+        let none = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
+        assert!(none.is_empty());
+        // Реакция бампает updated_at на 9.
+        set_reaction(&pool, mid, "bob@local", "🔥", 9).await.unwrap();
+        let missed = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
+        assert_eq!(missed.len(), 1, "мутация-реакция поднялась по курсору");
+        assert_eq!(missed[0].reactions[0].emoji, "🔥");
+    }
+
+    // ── закрепление ──
+
+    #[tokio::test]
+    async fn pin_and_unpin_surfaces_in_sync() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000e1";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "закрепи"), 1)
+            .await
+            .unwrap();
+        // По умолчанию не закреплено.
+        let before = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(!before[0].pinned);
+        // Закрепляем.
+        set_pinned(&pool, mid, true, 2).await.unwrap();
+        let pinned = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(pinned[0].pinned, "закреплено");
+        // Открепляем.
+        set_pinned(&pool, mid, false, 3).await.unwrap();
+        let unpinned = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(!unpinned[0].pinned, "откреплено");
+    }
+
+    #[tokio::test]
+    async fn pin_bumps_mutation_cursor() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000e2";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "старое"), 1)
+            .await
+            .unwrap();
+        let none = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
+        assert!(none.is_empty());
+        set_pinned(&pool, mid, true, 8).await.unwrap();
+        let missed = fetch_missed(&pool, "alice@local", mid, 1).await.unwrap();
+        assert_eq!(missed.len(), 1, "закрепление поднялось по курсору");
+        assert!(missed[0].pinned);
     }
 }
