@@ -42,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "window/window_peer_menu.h"
 #include "calls/calls_instance.h"
+#include "parvane/parvane_client.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_peer_values.h"
 #include "data/data_group_call.h" // GroupCall::input.
@@ -304,7 +305,9 @@ void TopBarWidget::call(Calls::StartOutgoingCallArgs args) {
 		return;
 	} else if (const auto peer = _activeChat.key.peer()) {
 		if (const auto user = peer->asUser()) {
-			Core::App().calls().startOutgoingCall(user, std::move(args));
+			// Parvane: звоним через нашу шину (webrtc), а не MTProto. Адрес пира —
+			// его @username (мы кладём туда user@server). video — из args.
+			Parvane::PlaceCall(user->username(), args.video);
 		}
 	}
 }

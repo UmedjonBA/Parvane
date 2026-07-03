@@ -43,6 +43,10 @@
 #include <parvane/stub_media_backend.h> // parvane-core (медиа-заглушка Э4)
 #include "parvane/parvane_webrtc_backend.h" // реальный webrtc-движок (Э3-b)
 #include <parvane/crypto.h>          // parvane-core (Ed25519 подпись SDP)
+#include <parvane/group_client.h>    // parvane-core (группы/каналы)
+#include "data/data_chat.h"          // ChatData (синтез группы)
+#include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
+#include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
 #include "settings.h"                // cWorkingDir() — путь для ключа звонков
 
 #include <QtCore/QFile>
@@ -83,6 +87,12 @@ std::unique_ptr<parvane::crypto::SigningKey> g_callKey;
 std::mutex g_pubkeyMutex;
 QHash<QString, QString> g_peerPubkeys;
 QHash<quint64, QString> g_idToAddress;
+// Группы/каналы: клиент + реестр. g_knownGroups: gid → имя (для роутинга
+// входящих и синтеза чата). g_chatIdToGroupId: chatId(FNV) → gid (для роутинга
+// исходящих из чат-пира). Под g_sessionMutex.
+std::unique_ptr<parvane::GroupClient> g_groupClient;
+QHash<QString, QString> g_knownGroups;
+QHash<quint64, QString> g_chatIdToGroupId;
 // UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
 // (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
@@ -355,6 +365,7 @@ bool StartSession() {
 		g_callKey = std::make_unique<parvane::crypto::SigningKey>(
 			parvane::crypto::SigningKey::loadOrCreate(CallKeyPath().toStdString()));
 		g_callClient = std::make_unique<parvane::CallClient>(*g_transport);
+		g_groupClient = std::make_unique<parvane::GroupClient>(*g_transport);
 		parvane::CallManager::Callbacks ccb;
 		// Публичный ключ собеседника из кэша (заполняется при resolve). Зовётся
 		// из потока cnats — под g_pubkeyMutex.
@@ -368,9 +379,22 @@ bool StartSession() {
 		ccb.onIncoming = [](std::string peer, std::string media) {
 			LOG(("Parvane: ВХОДЯЩИЙ звонок от %1 (%2)")
 				.arg(QString::fromStdString(peer), QString::fromStdString(media)));
+			// Авто-приём (e2e) без UI.
 			if (const char *aa = std::getenv("PARVANE_AUTOACCEPT"); aa && *aa) {
 				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
+				return;
 			}
+			// UI: бокс «принять/отклонить» на main-потоке.
+			const auto peerQ = QString::fromStdString(peer);
+			crl::on_main([peerQ] {
+				Ui::show(Ui::MakeConfirmBox({
+					.text = u"Входящий звонок от "_q + peerQ,
+					.confirmed = [](Fn<void()> &&close) { AcceptCall(); close(); },
+					.cancelled = [](Fn<void()> &&close) { HangupCall(); close(); },
+					.confirmText = u"Принять"_q,
+					.cancelText = u"Отклонить"_q,
+				}));
+			});
 		};
 		ccb.onState = [](parvane::CallState s) {
 			LOG(("Parvane: звонок → %1").arg(CallStateName(s)));
@@ -412,14 +436,21 @@ void StopSession() {
 }
 
 void MirrorOutgoing(PeerData *peer, const QString &text, std::int64_t replyToMsgId) {
-	if (!peer || !peer->isUser() || text.isEmpty()) {
+	if (!peer || text.isEmpty()) {
 		return;
 	}
-	const auto bare = std::uint64_t(peerToUser(peer->id).bare);
-	const auto address = AddressForId(bare);
+	// Адрес получателя: 1-на-1 — адрес юзера; группа — group_id по chatId.
+	QString address;
+	if (peer->isChat()) {
+		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(chatBare);
+	} else if (peer->isUser()) {
+		const auto bare = std::uint64_t(peerToUser(peer->id).bare);
+		address = AddressForId(bare);
+	}
 	if (address.isEmpty()) {
-		LOG(("Parvane: исходящее не зеркалится — адрес пира неизвестен (id=%1)")
-			.arg(bare));
+		LOG(("Parvane: исходящее не зеркалится — адрес пира неизвестен"));
 		return;
 	}
 	// Ответ: uuid цитируемого сообщения по обратной карте (если известно).
@@ -885,6 +916,54 @@ void applyAvatar(not_null<PeerData*> peer, const QString &address) {
 		Images::FromImageInMemory(it.value(), "JPG", QByteArray()));
 }
 
+// Синтезирует (идемпотентно) базовую группу как ChatData, чтобы она появилась в
+// списке диалогов. gid — group_id (адрес переписки), name — заголовок,
+// memberCount — число участников (для «N members»). Регистрирует chatId↔gid.
+ChatData *ensureGroupChat(
+		not_null<Main::Session*> session,
+		const QString &gid,
+		const QString &name,
+		int memberCount) {
+	const auto chatId = IdForAddress(gid);
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_knownGroups.insert(gid, name);
+		g_chatIdToGroupId.insert(chatId, gid);
+	}
+	const auto existing = session->data().chatLoaded(ChatId(BareId(chatId)));
+	const auto title = name.isEmpty() ? gid.left(8) : name;
+	if (existing) {
+		if (!title.isEmpty() && existing->name() != title) {
+			existing->setName(title);
+		}
+		return existing;
+	}
+	const auto chat = MTP_chat(
+		MTP_flags(MTPDchat::Flags()),
+		MTP_long(chatId),
+		MTP_string(title),
+		MTP_chatPhotoEmpty(),
+		MTP_int(memberCount > 0 ? memberCount : 1),
+		MTP_int(int(base::unixtime::now())),
+		MTP_int(1),                            // version
+		MTPInputChannel(),                     // migrated_to
+		MTP_chatAdminRights(MTP_flags(0)),
+		MTP_chatBannedRights(MTP_flags(0), MTP_int(0)));
+	const auto peer = session->data().processChat(chat);
+	const auto result = peer->asChat();
+	if (result) {
+		const auto history = session->data().history(result);
+		if (!history->folderKnown()) {
+			history->clearFolder();
+		}
+		if (!history->unreadCountKnown()) {
+			history->setUnreadCount(0);
+		}
+		LOG(("Parvane: группа синтезирована %1 (%2)").arg(gid, title));
+	}
+	return result;
+}
+
 not_null<UserData*> ensurePeerUser(
 		not_null<Main::Session*> session,
 		std::uint64_t id,
@@ -1039,9 +1118,13 @@ void ResolveNames(const QStringList &addresses) {
 		const QString &text,
 		const MTPMessageMedia &media = MTPMessageMedia(),
 		bool hasMedia = false,
-		std::int64_t replyToMsgId = 0) {
+		std::int64_t replyToMsgId = 0,
+		bool peerIsChat = false) {
 	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
-	const auto dialogPeer = peerFromUser(UserId(BareId(peerId)));
+	// Диалог — 1-на-1 (user) или группа (chat). Для группы peerId = chatId.
+	const auto dialogPeer = peerIsChat
+		? peerFromChat(ChatId(BareId(peerId)))
+		: peerFromUser(UserId(BareId(peerId)));
 	using Flag = MTPDmessage::Flag;
 	const auto flags = Flag::f_from_id
 		| (out ? Flag::f_out : Flag(0))
@@ -1632,6 +1715,48 @@ void injectOnMain(
 		if (g_uuidToMsgId.contains(uuid)) {
 			continue; // уже инъецировано
 		}
+		// Групповое сообщение: to — известная группа → инъекция в историю группы.
+		const auto toStr = QString::fromStdString(sm.to);
+		if (g_knownGroups.contains(toStr)) {
+			const auto gtext = sm.text();
+			if (!gtext) {
+				continue; // медиа в группах — позже
+			}
+			const auto gtextQ = QString::fromStdString(*gtext);
+			const auto gOwn = (from == self);
+			if (gOwn) {
+				bool liveEcho = false;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					liveEcho = (g_ownSentUuids.count(sm.id) > 0);
+				}
+				if (liveEcho) {
+					g_uuidToMsgId.insert(uuid, 0);
+					continue;
+				}
+			}
+			ensureGroupChat(session, toStr, g_knownGroups.value(toStr), 0);
+			const auto gChatId = IdForAddress(toStr);
+			ensurePeerUser(session, IdForAddress(from), from); // автор в группе
+			const auto gMsgId = MsgId(g_nextMsgId++);
+			g_uuidToMsgId.insert(uuid, gMsgId.bare);
+			g_msgIdToUuid.insert(gMsgId.bare, uuid);
+			const auto gItem = session->data().addNewMessage(
+				gMsgId,
+				buildMessage(IdForAddress(from), gChatId, gOwn, sm.ts, gtextQ,
+					MTPMessageMedia(), false, 0, /*peerIsChat=*/true),
+				MessageFlags(), NewMessageType::Unread);
+			if (gItem) {
+				const auto h = gItem->history();
+				if (!h->folderKnown()) {
+					h->clearFolder();
+				}
+				LOG(("Parvane: групповое %1 в %2 от %3: %4")
+					.arg(uuid, toStr, from, gtextQ));
+			}
+			++added;
+			continue;
+		}
 		const auto isOwn = (from == self);
 		if (isOwn) {
 			// Своё сообщение: если отправлено в ЭТОЙ сессии — уже есть локальное
@@ -2010,6 +2135,91 @@ void HangupCall() {
 	if (g_callManager) g_callManager->hangup();
 }
 
+// ── группы: публичное API ────────────────────────────────────────────────────
+
+// Тянет список групп/каналов пользователя (group.list) и синтезирует их как
+// чаты, чтобы появились в списке диалогов. Воркер → main.
+void RefreshGroups() {
+	const auto token = Token().toStdString();
+	if (token.empty()) {
+		return;
+	}
+	crl::async([token] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		if (!g) {
+			return;
+		}
+		std::vector<parvane::GroupInfo> groups;
+		try {
+			groups = g->list(token);
+		} catch (const std::exception &) {
+			return;
+		}
+		crl::on_main([groups] {
+			const auto session = g_sessionWeak.get();
+			if (!session) {
+				return;
+			}
+			for (const auto &gi : groups) {
+				ensureGroupChat(session,
+					QString::fromStdString(gi.group_id),
+					QString::fromStdString(gi.name),
+					int(gi.members.size()));
+			}
+			LOG(("Parvane: групп синхронизировано: %1").arg(int(groups.size())));
+			// Возможно, пришли групповые сообщения до синтеза чата — прогоним sync.
+			PumpReceive();
+		});
+	});
+}
+
+void CreateGroup(const QString &name, const QStringList &members, bool channel) {
+	const auto token = Token().toStdString();
+	if (token.empty() || name.isEmpty()) {
+		return;
+	}
+	std::vector<std::string> mem;
+	for (const auto &m : members) {
+		mem.push_back(m.toStdString());
+	}
+	const auto nameStd = name.toStdString();
+	const auto kind = std::string(channel ? "channel" : "group");
+	crl::async([token, nameStd, kind, mem] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		if (!g) {
+			return;
+		}
+		parvane::GroupCreateResponse resp;
+		try {
+			resp = g->create(token, nameStd, kind, mem);
+		} catch (const std::exception &) {
+			return;
+		}
+		if (!resp.ok) {
+			LOG(("Parvane: создание группы не удалось: %1")
+				.arg(QString::fromStdString(resp.error)));
+			return;
+		}
+		const auto gid = QString::fromStdString(resp.group_id);
+		const auto nameQ = QString::fromStdString(nameStd);
+		LOG(("Parvane: группа '%1' создана: %2").arg(nameQ, gid));
+		crl::on_main([gid, nameQ] {
+			const auto session = g_sessionWeak.get();
+			if (session) {
+				ensureGroupChat(session, gid, nameQ, int(1));
+			}
+		});
+	});
+}
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
@@ -2181,7 +2391,15 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Периодический sync (Фаза 3d): ловит сообщения, чей delivered-бродкаст
 		// был пропущен (NATS fire-and-forget) или пришёл, пока клиент был офлайн.
 		if (!g_pumpTimer) {
-			g_pumpTimer = std::make_unique<base::Timer>([] { PumpReceive(); });
+			g_pumpTimer = std::make_unique<base::Timer>([] {
+				PumpReceive();
+				// Реже (раз в ~10с) обновляем список групп — ловит группы, в
+				// которые нас добавили, и новые каналы.
+				static int tick = 0;
+				if ((++tick % 3) == 0) {
+					RefreshGroups();
+				}
+			});
 			g_pumpTimer->callEach(kPumpIntervalMs);
 			LOG(("Parvane: периодический sync каждые %1 мс").arg(kPumpIntervalMs));
 		}
@@ -2256,6 +2474,25 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					LOG(("Parvane: autoedit → %1").arg(newText));
 				});
 			}
+		}
+
+		// Группы: подтягиваем список пользователя (после StartSession).
+		base::call_delayed(2 * crl::time(1000), [] { RefreshGroups(); });
+
+		// Debug-autogroup для e2e: PARVANE_AUTOGROUP=Имя:member1,member2 (пусто —
+		// без начальных участников). Создаёт группу через ~4с.
+		if (const char *gv = std::getenv("PARVANE_AUTOGROUP"); gv && *gv) {
+			auto spec = QString::fromUtf8(gv);
+			const auto sep = spec.indexOf(':');
+			const auto gname = (sep > 0) ? spec.left(sep) : spec;
+			const auto membersStr = (sep >= 0) ? spec.mid(sep + 1) : QString();
+			const auto members = membersStr.isEmpty()
+				? QStringList()
+				: membersStr.split(',', Qt::SkipEmptyParts);
+			base::call_delayed(4 * crl::time(1000), [gname, members] {
+				LOG(("Parvane: AUTOGROUP создаю '%1'").arg(gname));
+				CreateGroup(gname, members, false);
+			});
 		}
 
 		// Debug-autocall для e2e звонков: PARVANE_AUTOCALL=peer@server[:video].

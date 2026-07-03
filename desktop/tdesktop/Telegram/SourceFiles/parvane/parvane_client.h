@@ -139,6 +139,14 @@ void AcceptCall();
 // Завершить/отклонить текущий звонок.
 void HangupCall();
 
+// ── группы/каналы ────────────────────────────────────────────────────────────
+// Тянет список групп пользователя и синтезирует их как чаты (появляются в
+// списке диалогов). Звать после логина и при обновлениях.
+void RefreshGroups();
+// Создаёт группу (channel=false) или канал (channel=true) с участниками и
+// синтезирует её локально.
+void CreateGroup(const QString &name, const QStringList &members, bool channel);
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);
