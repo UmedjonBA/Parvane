@@ -99,6 +99,9 @@ void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item);
 // Вызывается из HistoryItem::toggleReaction после локального обновления.
 void MirrorReact(not_null<HistoryItem*> item, const QString &emoji);
 
+// Зеркалит закрепление/открепление сообщения (msg.chat.pin).
+void MirrorPin(not_null<HistoryItem*> item, bool pin);
+
 // Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
 // синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.
 void MirrorDelete(std::int64_t msgId);
