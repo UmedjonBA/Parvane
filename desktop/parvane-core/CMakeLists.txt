@@ -28,18 +28,22 @@ FetchContent_Declare(cnats
 
 FetchContent_MakeAvailable(nlohmann_json cnats)
 
+# ── OpenSSL (Ed25519 для аутентификации сигналинга звонков) ───────────────────
+find_package(OpenSSL REQUIRED)
+
 # ── parvane_core ─────────────────────────────────────────────────────────────
 add_library(parvane_core STATIC
     src/transport.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
-    src/call_client.cpp)
+    src/call_client.cpp
+    src/crypto.cpp)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${cnats_SOURCE_DIR}/src)
 target_link_libraries(parvane_core
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE nats_static)
+    PRIVATE nats_static OpenSSL::Crypto)
 
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
 option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe + tests" ON)
@@ -59,9 +63,13 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_call_tests tests/call_tests.cpp)
     target_link_libraries(parvane_call_tests PRIVATE parvane_core)
 
+    add_executable(parvane_crypto_tests tests/crypto_tests.cpp)
+    target_link_libraries(parvane_crypto_tests PRIVATE parvane_core)
+
     enable_testing()
     add_test(NAME transport COMMAND parvane_core_tests)
     add_test(NAME messenger COMMAND parvane_messenger_tests)
     add_test(NAME cloud COMMAND parvane_cloud_tests)
     add_test(NAME call COMMAND parvane_call_tests)
+    add_test(NAME crypto COMMAND parvane_crypto_tests)
 endif()
