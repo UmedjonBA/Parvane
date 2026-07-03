@@ -65,6 +65,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "menu/menu_mute.h"
 #include "menu/menu_ttl_validator.h"
 #include "apiwrap.h"
+#include "parvane/parvane_client.h"
 #include "mainwidget.h"
 #include "api/api_blocked_peers.h"
 #include "api/api_chat_filters.h"
@@ -3659,31 +3660,13 @@ void ToggleMessagePinned(
 	if (!item || !item->canPin()) {
 		return;
 	}
+	// Parvane: закрепляем локально + в шину (MTProto заглушён, диалог не нужен).
+	Parvane::MirrorPin(item, pin);
+	item->setIsPinned(pin);
 	if (pin) {
-		navigation->parentController()->show(
-			Box(PinMessageBox, item),
-			Ui::LayerOption::CloseOther);
-	} else {
-		const auto peer = item->history()->peer;
-		const auto session = &peer->session();
-		const auto callback = crl::guard(session, [=](Fn<void()> &&close) {
-			close();
-			session->api().request(MTPmessages_UpdatePinnedMessage(
-				MTP_flags(MTPmessages_UpdatePinnedMessage::Flag::f_unpin),
-				peer->input(),
-				MTP_int(itemId.msg)
-			)).done([=](const MTPUpdates &result) {
-				session->api().applyUpdates(result);
-			}).send();
-		});
-		navigation->parentController()->show(
-			Ui::MakeConfirmBox({
-				.text = tr::lng_pinned_unpin_sure(),
-				.confirmed = callback,
-				.confirmText = tr::lng_pinned_unpin(),
-			}),
-			Ui::LayerOption::CloseOther);
+		Data::SetTopPinnedMessageId(item->history()->peer, itemId.msg);
 	}
+	item->history()->owner().notifyItemDataChange(item);
 }
 
 void HidePinnedBar(

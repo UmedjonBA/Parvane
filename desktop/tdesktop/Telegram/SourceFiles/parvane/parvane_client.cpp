@@ -375,6 +375,30 @@ void MirrorReact(not_null<HistoryItem*> item, const QString &emoji) {
 	});
 }
 
+void MirrorPin(not_null<HistoryItem*> item, bool pin) {
+	const auto it = g_msgIdToUuid.find(item->id.bare);
+	if (it == g_msgIdToUuid.end()) {
+		return;
+	}
+	const auto uuid = it.value().toStdString();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		try {
+			m->pin(from, uuid, pin, token);
+		} catch (const std::exception &) {
+		}
+	});
+}
+
 void MirrorTyping(PeerData *peer) {
 	if (!peer || !peer->isUser()) {
 		return;
@@ -1124,6 +1148,21 @@ void applyReactions(
 	item->updateReactions(&mtp);
 }
 
+// Применяет флаг закрепления из sync к локальному сообщению.
+void applyPin(
+		not_null<Main::Session*> session,
+		not_null<HistoryItem*> item,
+		bool pinned) {
+	if (item->isPinned() == pinned) {
+		return;
+	}
+	item->setIsPinned(pinned);
+	if (pinned) {
+		Data::SetTopPinnedMessageId(item->history()->peer, item->id);
+	}
+	session->data().notifyItemDataChange(item);
+}
+
 void indexSharedMediaWithCount(
 		not_null<Main::Session*> session,
 		not_null<HistoryItem*> item) {
@@ -1456,8 +1495,8 @@ void injectOnMain(
 			}
 			// не continue — ниже contains→continue пропустит уже инъецированное
 		}
-		if (!sm.reactions.empty()) {
-			// Реакции могли измениться — обновляем на уже инъецированном.
+		if (!sm.reactions.empty() || sm.pinned) {
+			// Реакции/закрепление могли измениться — обновляем инъецированное.
 			const auto found = g_uuidToMsgId.find(uuid);
 			if (found != g_uuidToMsgId.end() && found.value() != 0) {
 				const auto react_own = (from == self);
@@ -1468,6 +1507,9 @@ void injectOnMain(
 					MsgId(found.value()));
 				if (const auto item = session->data().message(full)) {
 					applyReactions(item, sm.reactions);
+					if (sm.pinned) {
+						applyPin(session, item, true);
+					}
 				}
 			}
 		}
@@ -1591,6 +1633,9 @@ void injectOnMain(
 			.arg(peerAddress).arg(text));
 		if (item) {
 			applyReactions(item, sm.reactions);
+			if (sm.pinned) {
+				applyPin(session, item, true);
+			}
 			const auto history = item->history();
 			// Без живого MTProto папка истории остаётся «неизвестной», и
 			// shouldBeInChatList() = false → диалог не появляется в списке.
