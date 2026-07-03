@@ -46,4 +46,11 @@ inline constexpr auto CallSignal = "call.signal";
 inline constexpr auto CallHistoryRequest = "call.history.request";
 inline constexpr auto CallHistoryResponse = "call.history.response";
 
+// группы/каналы (request/reply на messenger)
+inline constexpr auto GroupCreate = "group.create";
+inline constexpr auto GroupAddMember = "group.addmember";
+inline constexpr auto GroupRemoveMember = "group.removemember";
+inline constexpr auto GroupList = "group.list";
+inline constexpr auto GroupInfo = "group.info";
+
 } // namespace parvane::topics
