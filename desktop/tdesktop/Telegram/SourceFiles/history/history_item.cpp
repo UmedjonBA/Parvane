@@ -54,6 +54,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_session.h"
 #include "data/data_message_reactions.h"
+#include "parvane/parvane_client.h"
 #include "data/data_folder.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
@@ -3390,6 +3391,17 @@ void HistoryItem::toggleReaction(
 		_reactions->add(reaction, addToRecent);
 	}
 	_history->owner().notifyItemDataChange(this);
+	// Parvane: зеркалим текущее МОЁ состояние реакции (emoji или пусто = снять).
+	{
+		auto emoji = QString();
+		if (_reactions) {
+			const auto chosen = _reactions->chosen();
+			if (!chosen.empty()) {
+				emoji = chosen.front().emoji();
+			}
+		}
+		Parvane::MirrorReact(this, emoji);
+	}
 }
 
 bool HistoryItem::removeReactionsFromParticipant(

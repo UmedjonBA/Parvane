@@ -350,6 +350,31 @@ void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
 	}
 }
 
+void MirrorReact(not_null<HistoryItem*> item, const QString &emoji) {
+	const auto it = g_msgIdToUuid.find(item->id.bare);
+	if (it == g_msgIdToUuid.end()) {
+		return; // неизвестное сообщение (нет uuid) — не реагируем
+	}
+	const auto uuid = it.value().toStdString();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto emojiStd = emoji.toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		try {
+			m->react(from, uuid, emojiStd, token);
+		} catch (const std::exception &) {
+		}
+	});
+}
+
 void MirrorTyping(PeerData *peer) {
 	if (!peer || !peer->isUser()) {
 		return;
@@ -1069,6 +1094,36 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 // Индексирует медиа-элемент в SharedMedia С ИЗВЕСТНЫМ счётчиком, чтобы панель
 // профиля показывала общие медиа (иначе fullCount неизвестен из-за заглушённого
 // messages.getSearchCounters → секция пуста, как в оригинале не выглядит).
+// Применяет агрегат реакций из sync к локальному сообщению (updateReactions).
+void applyReactions(
+		not_null<HistoryItem*> item,
+		const std::vector<parvane::ReactionSummary> &reactions) {
+	if (reactions.empty()) {
+		return;
+	}
+	auto results = QVector<MTPReactionCount>();
+	for (const auto &r : reactions) {
+		if (r.emoji.empty() || r.count <= 0) {
+			continue;
+		}
+		using RFlag = MTPDreactionCount::Flag;
+		results.push_back(MTP_reactionCount(
+			MTP_flags(r.mine ? RFlag::f_chosen_order : RFlag(0)),
+			MTP_int(0),
+			MTP_reactionEmoji(MTP_string(QString::fromStdString(r.emoji))),
+			MTP_int(int(r.count))));
+	}
+	if (results.isEmpty()) {
+		return;
+	}
+	const MTPMessageReactions mtp = MTP_messageReactions(
+		MTP_flags(0),
+		MTP_vector<MTPReactionCount>(results),
+		MTP_vector<MTPMessagePeerReaction>(),
+		MTP_vector<MTPMessageReactor>());
+	item->updateReactions(&mtp);
+}
+
 void indexSharedMediaWithCount(
 		not_null<Main::Session*> session,
 		not_null<HistoryItem*> item) {
@@ -1401,6 +1456,21 @@ void injectOnMain(
 			}
 			// не continue — ниже contains→continue пропустит уже инъецированное
 		}
+		if (!sm.reactions.empty()) {
+			// Реакции могли измениться — обновляем на уже инъецированном.
+			const auto found = g_uuidToMsgId.find(uuid);
+			if (found != g_uuidToMsgId.end() && found.value() != 0) {
+				const auto react_own = (from == self);
+				const auto pid = IdForAddress(react_own
+					? QString::fromStdString(sm.to) : from);
+				const auto full = FullMsgId(
+					peerFromUser(UserId(BareId(pid))),
+					MsgId(found.value()));
+				if (const auto item = session->data().message(full)) {
+					applyReactions(item, sm.reactions);
+				}
+			}
+		}
 		if (g_uuidToMsgId.contains(uuid)) {
 			continue; // уже инъецировано
 		}
@@ -1520,6 +1590,7 @@ void injectOnMain(
 			.arg(out ? u"своё"_q : u"входящее"_q).arg(uuid)
 			.arg(peerAddress).arg(text));
 		if (item) {
+			applyReactions(item, sm.reactions);
 			const auto history = item->history();
 			// Без живого MTProto папка истории остаётся «неизвестной», и
 			// shouldBeInChatList() = false → диалог не появляется в списке.

@@ -91,6 +91,22 @@ void MessengerClient::markRead(
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
+void MessengerClient::react(
+        const std::string &from, const std::string &messageId,
+        const std::string &emoji, const std::string &token) {
+    const json payload{{"message_id", messageId}, {"emoji", emoji}};
+    _t.publish(topics::MsgReact,
+               makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
+}
+
+void MessengerClient::pin(
+        const std::string &from, const std::string &messageId,
+        bool pinned, const std::string &token) {
+    const json payload{{"message_id", messageId}, {"pin", pinned}};
+    _t.publish(topics::MsgPin,
+               makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
+}
+
 void MessengerClient::onDelivered(std::function<void(std::string)> handler) {
     _t.subscribe(topics::MsgDelivered,
                  [handler = std::move(handler)](std::string, std::string payload) {

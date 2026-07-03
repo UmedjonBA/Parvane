@@ -14,6 +14,8 @@ inline constexpr auto MsgDelivered = "msg.chat.delivered";
 inline constexpr auto MsgRead = "msg.chat.read";
 inline constexpr auto MsgEdit = "msg.chat.edit";
 inline constexpr auto MsgDelete = "msg.chat.delete";
+inline constexpr auto MsgReact = "msg.chat.react";
+inline constexpr auto MsgPin = "msg.chat.pin";
 inline constexpr auto MsgSyncRequest = "msg.sync.request";
 inline constexpr auto MsgSyncResponse = "msg.sync.response";
 

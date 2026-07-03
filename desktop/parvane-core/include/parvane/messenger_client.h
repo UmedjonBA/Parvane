@@ -70,6 +70,14 @@ public:
     void markRead(const std::string &from, const std::string &messageId,
                   const std::string &token);
 
+    // Реакция на сообщение (msg.chat.react). Пустой emoji — снять свою.
+    void react(const std::string &from, const std::string &messageId,
+               const std::string &emoji, const std::string &token);
+
+    // Закрепить/открепить сообщение (msg.chat.pin).
+    void pin(const std::string &from, const std::string &messageId,
+             bool pinned, const std::string &token);
+
     // Подписка на msg.chat.delivered. handler(message_id) зовётся на каждое
     // событие доставки (для всех сообщений шины — фильтрацию делает вызывающий).
     void onDelivered(std::function<void(std::string)> handler);

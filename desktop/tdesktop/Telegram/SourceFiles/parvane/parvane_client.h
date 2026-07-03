@@ -95,6 +95,10 @@ void MirrorTyping(PeerData *peer);
 // повторной ссылкой на уже загруженный в cloud блоб (без пере-загрузки).
 void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item);
 
+// Зеркалит реакцию на сообщение (msg.chat.react). emoji пустой — снять свою.
+// Вызывается из HistoryItem::toggleReaction после локального обновления.
+void MirrorReact(not_null<HistoryItem*> item, const QString &emoji);
+
 // Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
 // синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.
 void MirrorDelete(std::int64_t msgId);
