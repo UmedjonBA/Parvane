@@ -5,16 +5,11 @@
 #include "parvane/parvane_webrtc_backend.h"
 
 #include "base/debug_log.h"
-#include "parvane/parvane_video_window.h"
+#include "parvane/parvane_call_panel.h" // нативный экран звонка (Native*)
 
 #include <vector>
 #include <third_party/libyuv/include/libyuv.h>
 #include <parvane/crypto.h> // parvane-core: SAS (sasEmoji)
-
-namespace Parvane {
-// Определена в parvane_client.cpp — SAS текущего звонка для панели активного звонка.
-void SetCallSas(const std::string &sas);
-} // namespace Parvane
 
 #include <nlohmann/json.hpp>
 
@@ -171,7 +166,7 @@ public:
 			i420->DataU(), i420->StrideU(),
 			i420->DataV(), i420->StrideV(),
 			_argb.data(), w * 4, w, h);
-		Parvane::ShowLocalVideoFrame(w, h, _argb.data());
+		Parvane::NativeCallLocalFrame(w, h, _argb.data());
 	}
 
 protected:
@@ -205,7 +200,7 @@ public:
 			i420->DataU(), i420->StrideU(),
 			i420->DataV(), i420->StrideV(),
 			_argb.data(), w * 4, w, h);
-		Parvane::ShowRemoteVideoFrame(w, h, _argb.data());
+		Parvane::NativeCallRemoteFrame(w, h, _argb.data());
 	}
 	std::atomic<int> _count{ 0 };
 	std::vector<std::uint8_t> _argb;
@@ -265,7 +260,7 @@ public:
 
 	void close() override {
 		if (_remoteVideoSink) {
-			Parvane::CloseVideoWindow();
+			Parvane::CloseNativeCallPanel();
 		}
 		if (_cameraSource) {
 			_cameraSource->stop();
@@ -452,8 +447,7 @@ private:
 		}
 		const auto sas = parvane::crypto::sasEmoji(lf, rf);
 		LOG(("Parvane: SAS звонка: %1").arg(QString::fromStdString(sas)));
-		Parvane::SetCallSas(sas);
-		Parvane::SetCallSasText(sas); // показать в окне звонка
+		Parvane::NativeCallSas(sas);
 	}
 
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _pc;
