@@ -33,7 +33,10 @@ public:
         const std::optional<std::string> &replyTo = std::nullopt,
         // Если задан — используется как id сообщения (корреляция с локальным эхом
         // на клиенте для delete/edit/read своих). Иначе генерируется uuid7.
-        const std::optional<std::string> &id = std::nullopt);
+        const std::optional<std::string> &id = std::nullopt,
+        // Форматирование (жирный/курсив/код/…) — массив entities (offset/length/
+        // type в UTF-16, как в Telegram). Пустой = обычный текст.
+        const json &entities = json::array());
 
     // Как sendText, но content — произвольный MessageContent (медиа, Фаза 4).
     // contentJson должен быть валидным вариантом MessageContent (tag "kind":

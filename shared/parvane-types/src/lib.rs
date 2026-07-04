@@ -177,6 +177,10 @@ pub struct VerifyResponse {
 pub enum MessageContent {
     Text {
         text: String,
+        /// Форматирование (жирный/курсив/код/…). offset/length в UTF-16, как у
+        /// Telegram. Пусто = обычный текст. Клиент кладёт/читает через content.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        entities: Vec<TextEntity>,
     },
     /// Голосовое сообщение.
     Voice {
@@ -216,6 +220,19 @@ pub enum MessageContent {
         size_bytes: u64,
         caption: Option<String>,
     },
+}
+
+/// Один фрагмент форматирования текста (Telegram-совместимо).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextEntity {
+    /// bold/italic/underline/strike/code/pre/blockquote/spoiler/text_url/…
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub offset: i32,
+    pub length: i32,
+    /// URL для text_url, язык для pre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
 }
 
 impl MessageContent {
@@ -827,14 +844,14 @@ mod tests {
             token: "tok".to_string(),
             payload: SendPayload {
                 to: "bob@local".to_string(),
-                content: MessageContent::Text { text: "hi".to_string() },
+                content: MessageContent::Text { text: "hi".to_string(), entities: vec![] },
                 reply_to: None,
             },
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: ParvaneEvent<SendPayload> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.from, "alice@local");
-        assert_eq!(decoded.payload.content, MessageContent::Text { text: "hi".to_string() });
+        assert_eq!(decoded.payload.content, MessageContent::Text { text: "hi".to_string(), entities: vec![] });
     }
 
     #[test]

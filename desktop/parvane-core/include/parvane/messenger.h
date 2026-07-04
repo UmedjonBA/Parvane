@@ -27,8 +27,13 @@ using nlohmann::json;
 // Сериализуется как { "kind": "text", "text": "..." } (serde tag = "kind",
 // snake_case в parvane-types). Помощники не разбирают медиа-варианты, но и не
 // теряют их: храним сырой json в StoredMessage::content.
-inline json textContent(const std::string &text) {
-    return json{{"kind", "text"}, {"text", text}};
+inline json textContent(const std::string &text,
+                        const json &entities = json::array()) {
+    json c{{"kind", "text"}, {"text", text}};
+    if (entities.is_array() && !entities.empty()) {
+        c["entities"] = entities; // форматирование (жирный/курсив/код/…)
+    }
+    return c;
 }
 
 // Если content — текстовый, вернуть строку; иначе nullopt (медиа/удалённое).
@@ -37,6 +42,15 @@ inline std::optional<std::string> contentText(const json &content) {
     const auto kind = content.value("kind", std::string());
     if (kind != "text") return std::nullopt;
     return content.value("text", std::string());
+}
+
+// Entities (форматирование) текстового content — массив (пустой, если нет).
+inline json contentEntities(const json &content) {
+    if (content.is_object() && content.contains("entities")
+            && content["entities"].is_array()) {
+        return content["entities"];
+    }
+    return json::array();
 }
 
 // "kind" контента ("text"/"voice"/"photo"/… или "" если неизвестно).
