@@ -37,6 +37,10 @@ public:
     // Завершить (освободить ресурсы).
     virtual void close() = 0;
 
+    // Включить видео (камера + видео-трансивер). Звать ДО createOffer/acceptOffer.
+    // По умолчанию no-op (аудио-движки/заглушка игнорируют).
+    virtual void setWantVideo(bool /*on*/) {}
+
     // Движок → сессия: локальный ICE-кандидат (переслать собеседнику).
     std::function<void(std::string candidate)> onLocalIce;
     // Движок → сессия: P2P-соединение установлено/разорвано.
