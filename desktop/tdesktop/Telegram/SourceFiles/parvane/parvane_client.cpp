@@ -93,6 +93,10 @@ QHash<quint64, QString> g_idToAddress;
 std::unique_ptr<parvane::GroupClient> g_groupClient;
 QHash<QString, QString> g_knownGroups;
 QHash<quint64, QString> g_chatIdToGroupId;
+// Текущий собеседник по звонку (для панели активного звонка). Под g_sessionMutex.
+// НЕ читать через g_callManager->peer() из onState — там уже держится мьютекс
+// менеджера (дедлок). Пишем при placeCall/incoming, читаем в onState.
+QString g_currentCallPeer;
 // UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
 // (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
@@ -379,6 +383,10 @@ bool StartSession() {
 		ccb.onIncoming = [](std::string peer, std::string media) {
 			LOG(("Parvane: ВХОДЯЩИЙ звонок от %1 (%2)")
 				.arg(QString::fromStdString(peer), QString::fromStdString(media)));
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_currentCallPeer = QString::fromStdString(peer);
+			}
 			// Авто-приём (e2e) без UI.
 			if (const char *aa = std::getenv("PARVANE_AUTOACCEPT"); aa && *aa) {
 				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
@@ -398,6 +406,37 @@ bool StartSession() {
 		};
 		ccb.onState = [](parvane::CallState s) {
 			LOG(("Parvane: звонок → %1").arg(CallStateName(s)));
+			// UI активного звонка: показываем панель с «Завершить» на время
+			// звонка, закрываем при Ended. peer — из g_currentCallPeer (НЕ через
+			// g_callManager->peer(): его мьютекс уже держится в onState → дедлок).
+			QString peer;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				peer = g_currentCallPeer;
+			}
+			crl::on_main([s, peer] {
+				static bool boxShown = false;
+				const auto inCall = (s == parvane::CallState::Outgoing
+					|| s == parvane::CallState::Connecting
+					|| s == parvane::CallState::Active);
+				if (inCall && !boxShown) {
+					boxShown = true;
+					Ui::show(Ui::MakeConfirmBox({
+						.text = (peer.isEmpty()
+							? u"Идёт звонок…"_q
+							: u"Звонок с "_q + peer),
+						.confirmed = [](Fn<void()> &&close) {
+							HangupCall();
+							close();
+						},
+						.confirmText = u"Завершить"_q,
+						.inform = true,
+					}));
+				} else if (s == parvane::CallState::Ended && boxShown) {
+					boxShown = false;
+					Ui::hideLayer();
+				}
+			});
 		};
 		g_callManager = std::make_unique<parvane::CallManager>(
 			*g_callClient, g_selfAddress.toStdString(), g_token.toStdString(),
@@ -2106,6 +2145,10 @@ void PumpReceive() {
 
 void PlaceCall(const QString &peer, bool video) {
 	RegisterPeer(peer);
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_currentCallPeer = peer;
+	}
 	// Подтягиваем pubkey собеседника (для проверки его answer). Асинхронно;
 	// answer приходит позже — к тому моменту кэш заполнен.
 	ResolveNames({ peer });
