@@ -39,14 +39,17 @@ echo "бэкенд на 4222: $(ss -ltn 2>/dev/null | grep -c ':4222')"
 CE=(DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000
 	QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1
 	PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_REAL_MEDIA=1)
-CALLSPEC='bob@local'; [ "$MODE" = "video" ] && CALLSPEC='bob@local:video'
 
-run bob "${CE[@]}" PARVANE_AUTOLOGIN='bob@local:test' PARVANE_AUTOACCEPT=1 \
+# Два окна, залогинены, БЕЗ авто-звонка. Звонок начинаешь сам как в Telegram:
+# в окне alice найди через поиск "bob@local", открой чат, нажми кнопку звонка
+# (📞 в шапке). У bob появится нативный ВХОДЯЩИЙ экран (Ответить/Отклонить).
+run bob "${CE[@]}" PARVANE_AUTOLOGIN='bob@local:test' \
 	"$BIN" -workdir "$W/bob"
-sleep 6
-run alice "${CE[@]}" PARVANE_AUTOLOGIN='alice@local:test' PARVANE_AUTOCALL="$CALLSPEC" \
+sleep 4
+run alice "${CE[@]}" PARVANE_AUTOLOGIN='alice@local:test' \
 	"$BIN" -workdir "$W/alice"
 
-echo "Запущено. Через ~10с alice позвонит bob → нативный экран звонка."
-echo "Отбой в окне звонка НЕ должен закрывать главное окно."
+echo "Запущено: два окна (alice, bob), залогинены, БЕЗ авто-звонка."
+echo "Позвонить: в alice найди 'bob@local' → открой чат → кнопка звонка в шапке."
+echo "Отбой (⛔ или крестик) должен закрывать ТОЛЬКО окно звонка."
 echo "Логи: $W/alice/log.txt , $W/bob/log.txt"
