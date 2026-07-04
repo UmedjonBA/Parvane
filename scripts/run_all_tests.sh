@@ -144,6 +144,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
     else
         fail "parvane_group_tests"
     fi
+
+    # ── 11. C++ group_call e2e (групповой звонок mesh через живой call-шард) ────
+    log "11. parvane-core group_call tests (C++, live)"
+    if PARVANE_NATS_URL="$NATS_URL" "$PC/build/parvane_group_call_tests"; then
+        echo "group_call: OK"
+    else
+        fail "parvane_group_call_tests"
+    fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
 fi

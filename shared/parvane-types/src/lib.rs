@@ -621,6 +621,16 @@ pub enum CallSignal {
     Ice { call_id: Uuid, candidate: String },
     /// Завершить звонок (или отменить до ответа).
     Hangup { call_id: Uuid },
+    /// Приглашение в ГРУППОВОЙ звонок (mesh): id звонка + полный список
+    /// участников. Шард только релеит его каждому; сами P2P-соединения идут
+    /// отдельными Invite/Answer между парами. group_call_id — произвольная строка.
+    GroupInvite {
+        group_call_id: String,
+        #[serde(default)]
+        participants: Vec<String>,
+        #[serde(default)]
+        media: String,
+    },
 }
 
 impl CallSignal {
@@ -631,6 +641,7 @@ impl CallSignal {
             | CallSignal::Reject { call_id, .. }
             | CallSignal::Ice { call_id, .. }
             | CallSignal::Hangup { call_id, .. } => *call_id,
+            CallSignal::GroupInvite { .. } => Uuid::nil(),
         }
     }
 }
