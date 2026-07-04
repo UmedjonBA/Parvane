@@ -95,6 +95,7 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 	base::install_event_filter(win, [](not_null<QEvent*> e) {
 		if (e->type() == QEvent::Close) {
 			Parvane::HangupCall();
+			Parvane::CloseNativeCallPanel();
 		}
 		return base::EventFilterResult::Continue;
 	});
@@ -116,12 +117,19 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 		_muted = !_muted.current();
 		Parvane::ToggleMute(_muted.current());
 	});
-	_hangup.setClickedCallback([] { Parvane::HangupCall(); });
+	// Отбой/отклонение: завершаем звонок И сразу закрываем окно (не ждём Ended —
+	// если звонок так и не соединился, состояние могло застрять). CloseNativeCallPanel
+	// отложен через crl::on_main, поэтому безопасно звать из обработчика кнопки.
+	const auto endAndClose = [] {
+		Parvane::HangupCall();
+		Parvane::CloseNativeCallPanel();
+	};
+	_hangup.setClickedCallback(endAndClose);
+	_decline.setClickedCallback(endAndClose);
 	_answer.setClickedCallback([this] {
 		Parvane::AcceptCall();
 		switchToActive();
 	});
-	_decline.setClickedCallback([] { Parvane::HangupCall(); });
 
 	// Видео — нативный Calls::VideoBubble поверх общих видео-треков звонка (кадры
 	// туда кладёт webrtc-бэкенд). Треки уже созданы в OpenNativeCallPanel.
