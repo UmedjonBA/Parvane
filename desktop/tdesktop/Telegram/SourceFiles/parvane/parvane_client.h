@@ -11,6 +11,7 @@ class UserData;
 class HistoryItem;
 class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
+struct TextWithEntities;   // ui/text/text_entity.h (форматирование)
 
 namespace Main {
 class Session;
@@ -62,12 +63,12 @@ bool StartSession();
 [[nodiscard]] bool SessionActive();
 void StopSession();
 
-// Зеркалит исходящее текстовое сообщение в шину (msg.chat.send). Адрес получателя
-// — из реестра по userId пира; если неизвестен или нет сессии — no-op (лог).
+// Зеркалит исходящее текстовое сообщение (с форматированием) в шину. Адрес
+// получателя — из реестра по userId пира; если неизвестен/нет сессии — no-op.
 // Неблокирующая: публикация уходит на воркер-поток.
 void MirrorOutgoing(
 	PeerData *peer,
-	const QString &text,
+	const TextWithEntities &text,
 	std::int64_t replyToMsgId = 0);
 
 // Зеркалит исходящее МЕДИА-сообщение (Фаза 4). Грузит байты файла в cloud-шард

@@ -4239,7 +4239,9 @@ void ApiWrap::sendMessage(
 	// Получатель резолвится из реестра пиров по id; неизвестный пир — no-op+лог.
 	Parvane::MirrorOutgoing(
 		peer.get(),
-		textWithTags.text,
+		TextWithEntities{
+			textWithTags.text,
+			TextUtilities::ConvertTextTagsToEntities(textWithTags.tags) },
 		action.replyTo.messageId.msg.bare);
 
 	auto sending = TextWithEntities();

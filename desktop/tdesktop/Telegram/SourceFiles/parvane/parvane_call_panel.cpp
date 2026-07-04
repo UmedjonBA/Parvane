@@ -42,6 +42,7 @@ namespace {
 class CallPanel final {
 public:
 	CallPanel(not_null<PeerData*> peer, bool video, bool incoming);
+	~CallPanel() { LOG(("Parvane: экран звонка РАЗРУШЕН")); }
 
 	void setConnected();
 	void setSas(const QString &sas);
@@ -288,6 +289,8 @@ void NativeCallSas(const std::string &sas) {
 
 void CloseNativeCallPanel() {
 	crl::on_main([] {
+		LOG(("Parvane: CloseNativeCallPanel (был экран: %1)")
+			.arg(g_panel ? 1 : 0));
 		g_panel = nullptr;
 		Parvane::ResetCallVideoTracks(); // после панели (VideoBubble уже разрушен)
 	});

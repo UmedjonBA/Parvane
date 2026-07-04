@@ -29,6 +29,8 @@
 #include "history/history_item.h"
 #include "dialogs/dialogs_main_list.h"
 #include "apiwrap.h"
+#include "ui/text/text_entity.h"    // EntityInText/EntityType/EntitiesInText (форматирование)
+#include "api/api_text_entities.h"  // Api::EntitiesToMTP
 #include "api/api_common.h"
 #include "storage/localimageloader.h" // FilePrepareResult, SendMediaType
 
@@ -147,9 +149,13 @@ std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутст
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
 // Публикует текст в шину с воркер-потока (не блокирует UI).
+// EntitiesInText → JSON (определена ниже) — нужна в MirrorOutgoing выше по коду.
+[[nodiscard]] nlohmann::json entitiesToJson(const EntitiesInText &entities);
+
 void sendTextAsync(
 		const QString &toAddress,
 		const QString &text,
+		const nlohmann::json &entities,
 		const std::string &preId,
 		const std::optional<std::string> &replyToUuid = std::nullopt) {
 	const auto from = SelfAddress().toStdString();
@@ -168,7 +174,7 @@ void sendTextAsync(
 		}
 		try {
 			const auto id = m->sendText(from, to, body, token,
-				replyToUuid, preId);
+				replyToUuid, preId, entities);
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
@@ -524,7 +530,11 @@ void StopSession() {
 	g_transport.reset();
 }
 
-void MirrorOutgoing(PeerData *peer, const QString &text, std::int64_t replyToMsgId) {
+void MirrorOutgoing(
+		PeerData *peer,
+		const TextWithEntities &textWithEntities,
+		std::int64_t replyToMsgId) {
+	const auto &text = textWithEntities.text;
 	if (!peer || text.isEmpty()) {
 		return;
 	}
@@ -554,7 +564,8 @@ void MirrorOutgoing(PeerData *peer, const QString &text, std::int64_t replyToMsg
 	// свяжет его с локальным эхом (msgId↔uuid) для delete/edit/read СВОИХ.
 	const auto preId = parvane::newUuidV7();
 	g_pendingOwnUuids.enqueue(QString::fromStdString(preId));
-	sendTextAsync(address, text, preId, replyToUuid);
+	sendTextAsync(address, text, entitiesToJson(textWithEntities.entities),
+		preId, replyToUuid);
 }
 
 void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
@@ -572,9 +583,9 @@ void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
 		sendContentAsync(address, found.value().toStdString());
 		return;
 	}
-	const auto text = item->originalText().text;
-	if (!text.isEmpty()) {
-		MirrorOutgoing(toPeer, text);
+	const auto text = item->originalText();
+	if (!text.text.isEmpty()) {
+		MirrorOutgoing(toPeer, text); // с форматированием (entities сохраняются)
 	}
 }
 
@@ -1205,6 +1216,78 @@ void ResolveNames(const QStringList &addresses) {
 // собеседник (peer_id диалога), out — исходящее (наше). Для входящих
 // authorId==peerId==отправитель, out=false; для СВОИХ (восстановление истории
 // после рестарта) authorId=self, peerId=получатель, out=true.
+// ── Форматирование текста (entities): tdesktop ↔ наш JSON ────────────────────
+// offset/length — в UTF-16 (как у Telegram). Маппим типы имя↔enum; сама
+// конвертация в MTP делается родным Api::EntitiesToMTP (на приёме).
+[[nodiscard]] QString entityKindName(EntityType t) {
+	switch (t) {
+	case EntityType::Bold: return u"bold"_q;
+	case EntityType::Italic: return u"italic"_q;
+	case EntityType::Underline: return u"underline"_q;
+	case EntityType::StrikeOut: return u"strike"_q;
+	case EntityType::Code: return u"code"_q;
+	case EntityType::Pre: return u"pre"_q;
+	case EntityType::Blockquote: return u"blockquote"_q;
+	case EntityType::Spoiler: return u"spoiler"_q;
+	case EntityType::CustomUrl: return u"text_url"_q;
+	default: return QString();
+	}
+}
+[[nodiscard]] EntityType entityKindFromName(const QString &n) {
+	if (n == u"bold"_q) return EntityType::Bold;
+	if (n == u"italic"_q) return EntityType::Italic;
+	if (n == u"underline"_q) return EntityType::Underline;
+	if (n == u"strike"_q) return EntityType::StrikeOut;
+	if (n == u"code"_q) return EntityType::Code;
+	if (n == u"pre"_q) return EntityType::Pre;
+	if (n == u"blockquote"_q) return EntityType::Blockquote;
+	if (n == u"spoiler"_q) return EntityType::Spoiler;
+	if (n == u"text_url"_q) return EntityType::CustomUrl;
+	return EntityType::Invalid;
+}
+// EntitiesInText → JSON-массив (для отправки в content).
+[[nodiscard]] nlohmann::json entitiesToJson(const EntitiesInText &entities) {
+	auto arr = nlohmann::json::array();
+	for (const auto &e : entities) {
+		const auto name = entityKindName(e.type());
+		if (name.isEmpty()) {
+			continue;
+		}
+		nlohmann::json o;
+		o["type"] = name.toStdString();
+		o["offset"] = e.offset();
+		o["length"] = e.length();
+		if (!e.data().isEmpty()) {
+			o["data"] = e.data().toStdString();
+		}
+		arr.push_back(std::move(o));
+	}
+	return arr;
+}
+// JSON-массив → EntitiesInText (для приёма).
+[[nodiscard]] EntitiesInText entitiesFromJson(const nlohmann::json &arr) {
+	auto result = EntitiesInText();
+	if (!arr.is_array()) {
+		return result;
+	}
+	for (const auto &o : arr) {
+		if (!o.is_object()) {
+			continue;
+		}
+		const auto type = entityKindFromName(
+			QString::fromStdString(o.value("type", std::string())));
+		if (type == EntityType::Invalid) {
+			continue;
+		}
+		result.push_back(EntityInText(
+			type,
+			o.value("offset", 0),
+			o.value("length", 0),
+			QString::fromStdString(o.value("data", std::string()))));
+	}
+	return result;
+}
+
 [[nodiscard]] MTPMessage buildMessage(
 		std::uint64_t authorId,
 		std::uint64_t peerId,
@@ -1214,16 +1297,19 @@ void ResolveNames(const QStringList &addresses) {
 		const MTPMessageMedia &media = MTPMessageMedia(),
 		bool hasMedia = false,
 		std::int64_t replyToMsgId = 0,
-		bool peerIsChat = false) {
+		bool peerIsChat = false,
+		const MTPVector<MTPMessageEntity> &entities = MTPVector<MTPMessageEntity>()) {
 	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
 	// Диалог — 1-на-1 (user) или группа (chat). Для группы peerId = chatId.
 	const auto dialogPeer = peerIsChat
 		? peerFromChat(ChatId(BareId(peerId)))
 		: peerFromUser(UserId(BareId(peerId)));
 	using Flag = MTPDmessage::Flag;
+	const auto hasEntities = (entities.v.size() > 0);
 	const auto flags = Flag::f_from_id
 		| (out ? Flag::f_out : Flag(0))
 		| (hasMedia ? Flag::f_media : Flag(0))
+		| (hasEntities ? Flag::f_entities : Flag(0))
 		| (replyToMsgId ? Flag::f_reply_to : Flag(0));
 	const auto replyHeader = replyToMsgId
 		? MTP_messageReplyHeader(
@@ -1256,7 +1342,7 @@ void ResolveNames(const QStringList &addresses) {
 		MTP_string(text),           // message (для медиа — caption)
 		media,
 		MTPReplyMarkup(),
-		MTPVector<MTPMessageEntity>(),
+		entities,                   // форматирование (bold/italic/code/…)
 		MTPint(),                   // views
 		MTPint(),                   // forwards
 		MTPMessageReplies(),
@@ -1910,10 +1996,14 @@ void injectOnMain(
 			const auto gMsgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, gMsgId.bare);
 			g_msgIdToUuid.insert(gMsgId.bare, uuid);
+			const auto gEntities = Api::EntitiesToMTP(
+				session,
+				entitiesFromJson(parvane::contentEntities(sm.content)),
+				Api::ConvertOption::WithLocal);
 			const auto gItem = session->data().addNewMessage(
 				gMsgId,
 				buildMessage(gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
-					MTPMessageMedia(), false, 0, /*peerIsChat=*/true),
+					MTPMessageMedia(), false, 0, /*peerIsChat=*/true, gEntities),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
 				const auto h = gItem->history();
@@ -2031,10 +2121,15 @@ void injectOnMain(
 		if (!out) {
 			g_unreadIncoming[peerId].push_back(uuid);
 		}
+		const auto entities = Api::EntitiesToMTP(
+			session,
+			entitiesFromJson(parvane::contentEntities(sm.content)),
+			Api::ConvertOption::WithLocal);
 		const auto item = session->data().addNewMessage(
 			msgId,
 			buildMessage(authorId, peerId, out, sm.ts, text,
-				MTPMessageMedia(), /*hasMedia=*/false, replyToMsgId),
+				MTPMessageMedia(), /*hasMedia=*/false, replyToMsgId,
+				/*peerIsChat=*/false, entities),
 			MessageFlags(),
 			NewMessageType::Unread);
 		++added;
@@ -2838,6 +2933,15 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			base::call_delayed(4 * crl::time(1000), [spec, video] {
 				LOG(("Parvane: AUTOCALL → %1").arg(spec));
 				PlaceCall(spec, video);
+			});
+		}
+
+		// Debug-autohangup для диагностики закрытия окна: через N сек отбой.
+		if (const char *hv = std::getenv("PARVANE_AUTOHANGUP"); hv && *hv) {
+			const auto secs = std::max(QString::fromUtf8(hv).toInt(), 1);
+			base::call_delayed(secs * crl::time(1000), [] {
+				LOG(("Parvane: AUTOHANGUP"));
+				HangupCall();
 			});
 		}
 
