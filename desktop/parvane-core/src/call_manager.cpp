@@ -78,6 +78,11 @@ void CallManager::hangup() {
     if (session_) session_->hangup();
 }
 
+void CallManager::setMuted(bool muted) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (session_) session_->setMuted(muted);
+}
+
 CallState CallManager::state() {
     std::lock_guard<std::mutex> lk(mutex_);
     return session_ ? session_->state() : CallState::Idle;

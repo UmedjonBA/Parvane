@@ -46,6 +46,7 @@
 #include <parvane/group_client.h>    // parvane-core (группы/каналы)
 #include <parvane/group_call_manager.h> // parvane-core (групповые звонки, mesh)
 #include "data/data_chat.h"          // ChatData (синтез группы)
+#include "parvane/parvane_video_window.h" // окно активного звонка (Open/Close)
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
 #include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
 #include "settings.h"                // cWorkingDir() — путь для ключа звонков
@@ -104,6 +105,8 @@ QString g_currentCallPeer;
 // SAS-код текущего звонка (эмодзи для сверки голосом). Пишет webrtc-движок при
 // установлении соединения, читает панель активного звонка. Под g_sessionMutex.
 QString g_callSas;
+// Текущий звонок — видео? (для размера/self-preview окна). Под g_sessionMutex.
+bool g_currentCallVideo = false;
 // UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
 // (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
@@ -393,6 +396,7 @@ bool StartSession() {
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_currentCallPeer = QString::fromStdString(peer);
+				g_currentCallVideo = (media == "video");
 			}
 			// Авто-приём (e2e) без UI.
 			if (const char *aa = std::getenv("PARVANE_AUTOACCEPT"); aa && *aa) {
@@ -413,60 +417,27 @@ bool StartSession() {
 		};
 		ccb.onState = [](parvane::CallState s) {
 			LOG(("Parvane: звонок → %1").arg(CallStateName(s)));
-			// UI активного звонка: показываем панель с «Завершить» на время
-			// звонка, закрываем при Ended. peer — из g_currentCallPeer (НЕ через
-			// g_callManager->peer(): его мьютекс уже держится в onState → дедлок).
+			// UI активного звонка: окно с таймером/mute/hangup + видео (peer из
+			// g_currentCallPeer — НЕ g_callManager->peer(): его мьютекс держится в
+			// onState → дедлок). OpenCallWindow идемпотентно.
 			QString peer;
+			bool video = false;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				peer = g_currentCallPeer;
+				video = g_currentCallVideo;
 			}
-			crl::on_main([s, peer] {
-				static bool boxShown = false;
-				static bool sasShown = false;
-				QString sas;
-				{
-					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					sas = g_callSas;
-				}
+			const auto peerStd = peer.toStdString();
+			crl::on_main([s, peerStd, video] {
 				const auto inCall = (s == parvane::CallState::Outgoing
 					|| s == parvane::CallState::Connecting
 					|| s == parvane::CallState::Active);
-				// Показываем панель на входе в звонок; когда появился SAS (при
-				// установлении соединения) — переоткрываем с кодом сверки.
-				const auto needShow = inCall
-					&& (!boxShown || (!sasShown && !sas.isEmpty()));
-				if (needShow) {
-					if (boxShown) {
-						Ui::hideLayer();
-					}
-					boxShown = true;
-					if (!sas.isEmpty()) {
-						sasShown = true;
-					}
-					auto text = peer.isEmpty()
-						? u"Идёт звонок…"_q
-						: u"Звонок с "_q + peer;
-					if (!sas.isEmpty()) {
-						text += u"\nКод сверки: "_q + sas + u" (сверьте голосом)"_q;
-					}
-					Ui::show(Ui::MakeConfirmBox({
-						.text = text,
-						.confirmed = [](Fn<void()> &&close) {
-							HangupCall();
-							close();
-						},
-						.confirmText = u"Завершить"_q,
-						.inform = true,
-					}));
-				} else if (s == parvane::CallState::Ended && boxShown) {
-					boxShown = false;
-					sasShown = false;
-					{
-						std::lock_guard<std::mutex> lk(g_sessionMutex);
-						g_callSas.clear();
-					}
-					Ui::hideLayer();
+				if (inCall) {
+					Parvane::OpenCallWindow(peerStd, video);
+				} else if (s == parvane::CallState::Ended) {
+					Parvane::CloseVideoWindow();
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					g_callSas.clear();
 				}
 			});
 		};
@@ -829,11 +800,17 @@ void MirrorOutgoingFile(
 	if (!file) {
 		return;
 	}
-	const auto bare = std::uint64_t(peerToUser(file->to.peer).bare);
-	const auto address = AddressForId(bare);
+	// Адрес получателя: 1-на-1 — адрес юзера; группа — group_id по chatId.
+	QString address;
+	if (peerIsChat(file->to.peer)) {
+		const auto chatBare = std::uint64_t(peerToChat(file->to.peer).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(chatBare);
+	} else {
+		address = AddressForId(std::uint64_t(peerToUser(file->to.peer).bare));
+	}
 	if (address.isEmpty()) {
-		LOG(("Parvane: медиа не зеркалится — адрес пира неизвестен (id=%1)")
-			.arg(bare));
+		LOG(("Parvane: медиа не зеркалится — адрес пира неизвестен"));
 		return;
 	}
 
@@ -1503,9 +1480,19 @@ void injectMediaOnMain(
 		int durationSecs,
 		int width,
 		int height,
-		const QString &caption) {
-	RegisterPeer(from);
-	ensurePeerUser(session, senderId, from);
+		const QString &caption,
+		bool peerIsChat = false,
+		const QString &authorAddr = QString()) {
+	// Диалог: группа (chat) → синтез группы + автор-юзер; иначе 1-на-1 user-пир.
+	if (peerIsChat) {
+		ensureGroupChat(session, from, g_knownGroups.value(from), 0);
+		if (!authorAddr.isEmpty()) {
+			ensurePeerUser(session, authorId, authorAddr);
+		}
+	} else {
+		RegisterPeer(from);
+		ensurePeerUser(session, senderId, from);
+	}
 
 	const auto mtpDoc = buildLocalMtpDocument(
 		session, docId, kind, mime, size, filename, ts,
@@ -1524,7 +1511,8 @@ void injectMediaOnMain(
 
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildMessage(authorId, senderId, out, ts, caption, media, /*hasMedia=*/true),
+		buildMessage(authorId, senderId, out, ts, caption, media,
+			/*hasMedia=*/true, 0, peerIsChat),
 		MessageFlags(),
 		NewMessageType::Unread);
 
@@ -1565,7 +1553,9 @@ void injectPhotoOnMain(
 		int durationSecs,
 		int width,
 		int height,
-		const QString &caption) {
+		const QString &caption,
+		bool peerIsChat = false,
+		const QString &authorAddr = QString()) {
 	auto raw = QByteArray();
 	{
 		auto f = QFile(localPath);
@@ -1579,11 +1569,18 @@ void injectPhotoOnMain(
 		// не изображение — показываем как документ (с атрибутами по kind)
 		injectMediaOnMain(session, from, senderId, authorId, out, ts, msgId,
 			mediaId, kind, localPath, filename, mime, size,
-			durationSecs, width, height, caption);
+			durationSecs, width, height, caption, peerIsChat, authorAddr);
 		return;
 	}
-	RegisterPeer(from);
-	ensurePeerUser(session, senderId, from);
+	if (peerIsChat) {
+		ensureGroupChat(session, from, g_knownGroups.value(from), 0);
+		if (!authorAddr.isEmpty()) {
+			ensurePeerUser(session, authorId, authorAddr);
+		}
+	} else {
+		RegisterPeer(from);
+		ensurePeerUser(session, senderId, from);
+	}
 
 	auto sizes = QVector<MTPPhotoSize>();
 	sizes.push_back(MTP_photoSize(
@@ -1609,7 +1606,8 @@ void injectPhotoOnMain(
 
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildMessage(authorId, senderId, out, ts, caption, media, /*hasMedia=*/true),
+		buildMessage(authorId, senderId, out, ts, caption, media,
+			/*hasMedia=*/true, 0, peerIsChat),
 		MessageFlags(),
 		NewMessageType::Unread);
 
@@ -1658,7 +1656,9 @@ void pumpMediaDownload(
 		int durationSecs,
 		int width,
 		int height,
-		const QString &caption) {
+		const QString &caption,
+		bool peerIsChat = false,
+		const QString &authorAddr = QString()) {
 	const auto self = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	const auto fileIdStd = fileId.toStdString();
@@ -1709,11 +1709,11 @@ void pumpMediaDownload(
 			if (kind == u"photo"_q || mime.startsWith(u"image/"_q)) {
 				injectPhotoOnMain(session, from, senderId, authorId, out,
 					ts, msgId, mediaId, kind, path, filename, mime, size,
-					durationSecs, width, height, caption);
+					durationSecs, width, height, caption, peerIsChat, authorAddr);
 			} else {
 				injectMediaOnMain(session, from, senderId, authorId, out,
 					ts, msgId, mediaId, kind, path, filename, mime, size,
-					durationSecs, width, height, caption);
+					durationSecs, width, height, caption, peerIsChat, authorAddr);
 			}
 		});
 	});
@@ -1793,14 +1793,15 @@ void injectOnMain(
 		}
 		if (!sm.reactions.empty() || sm.pinned) {
 			// Реакции/закрепление могли измениться — обновляем инъецированное.
+			// Диалог: группа → chat-пир, иначе 1-на-1 user-пир.
 			const auto found = g_uuidToMsgId.find(uuid);
 			if (found != g_uuidToMsgId.end() && found.value() != 0) {
-				const auto react_own = (from == self);
-				const auto pid = IdForAddress(react_own
-					? QString::fromStdString(sm.to) : from);
-				const auto full = FullMsgId(
-					peerFromUser(UserId(BareId(pid))),
-					MsgId(found.value()));
+				const auto toR = QString::fromStdString(sm.to);
+				const auto dialogPeer = g_knownGroups.contains(toR)
+					? peerFromChat(ChatId(BareId(IdForAddress(toR))))
+					: peerFromUser(UserId(BareId(IdForAddress(
+						(from == self) ? toR : from))));
+				const auto full = FullMsgId(dialogPeer, MsgId(found.value()));
 				if (const auto item = session->data().message(full)) {
 					applyReactions(item, sm.reactions);
 					if (sm.pinned) {
@@ -1815,11 +1816,6 @@ void injectOnMain(
 		// Групповое сообщение: to — известная группа → инъекция в историю группы.
 		const auto toStr = QString::fromStdString(sm.to);
 		if (g_knownGroups.contains(toStr)) {
-			const auto gtext = sm.text();
-			if (!gtext) {
-				continue; // медиа в группах — позже
-			}
-			const auto gtextQ = QString::fromStdString(*gtext);
 			const auto gOwn = (from == self);
 			if (gOwn) {
 				bool liveEcho = false;
@@ -1834,13 +1830,61 @@ void injectOnMain(
 			}
 			ensureGroupChat(session, toStr, g_knownGroups.value(toStr), 0);
 			const auto gChatId = IdForAddress(toStr);
-			ensurePeerUser(session, IdForAddress(from), from); // автор в группе
+			const auto gAuthorId = IdForAddress(from);
+			const auto gtext = sm.text();
+			if (!gtext) {
+				// Медиа в группе: качаем блоб → инъекция в историю группы (peerIsChat;
+				// автор-юзер синтезируется в inject). Метаданные — как в 1-на-1.
+				const auto &c = sm.content;
+				const auto kind = QString::fromStdString(parvane::contentKind(c));
+				const auto fileId = c.contains("file_id") && c["file_id"].is_string()
+					? QString::fromStdString(c["file_id"].get<std::string>())
+					: QString();
+				if (fileId.isEmpty()) {
+					continue;
+				}
+				auto filename = (c.contains("filename") && c["filename"].is_string())
+					? QString::fromStdString(c["filename"].get<std::string>())
+					: QString();
+				if (filename.isEmpty()) {
+					filename = kind + u"_"_q + fileId.left(8);
+				}
+				const auto mime = (c.contains("mime") && c["mime"].is_string())
+					? QString::fromStdString(c["mime"].get<std::string>())
+					: u"application/octet-stream"_q;
+				const auto size = std::int64_t(
+					c.contains("size_bytes") && c["size_bytes"].is_number()
+						? c["size_bytes"].get<std::int64_t>() : 0);
+				const auto caption = (c.contains("caption")
+						&& c["caption"].is_string())
+					? QString::fromStdString(c["caption"].get<std::string>())
+					: QString();
+				const auto jint = [&](const char *k) {
+					return (c.contains(k) && c[k].is_number())
+						? c[k].get<int>() : 0;
+				};
+				const auto gMsgId = MsgId(g_nextMsgId++);
+				g_uuidToMsgId.insert(uuid, gMsgId.bare);
+				g_msgIdToUuid.insert(gMsgId.bare, uuid);
+				g_mediaContentByMsgId.insert(gMsgId.bare,
+					QString::fromStdString(c.dump()));
+				pumpMediaDownload(toStr, gChatId, gAuthorId, gOwn, sm.ts, gMsgId,
+					kind, fileId, filename, mime, size,
+					jint("duration_secs"), jint("width"), jint("height"), caption,
+					/*peerIsChat=*/true, /*authorAddr=*/from);
+				++added;
+				LOG(("Parvane: групповое медиа %1 в %2 от %3 (kind=%4) → скачивание")
+					.arg(uuid, toStr, from, kind));
+				continue;
+			}
+			const auto gtextQ = QString::fromStdString(*gtext);
+			ensurePeerUser(session, gAuthorId, from); // автор в группе
 			const auto gMsgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, gMsgId.bare);
 			g_msgIdToUuid.insert(gMsgId.bare, uuid);
 			const auto gItem = session->data().addNewMessage(
 				gMsgId,
-				buildMessage(IdForAddress(from), gChatId, gOwn, sm.ts, gtextQ,
+				buildMessage(gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
 					MTPMessageMedia(), false, 0, /*peerIsChat=*/true),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
@@ -2206,6 +2250,7 @@ void PlaceCall(const QString &peer, bool video) {
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_currentCallPeer = peer;
+		g_currentCallVideo = video;
 	}
 	// Подтягиваем pubkey собеседника (для проверки его answer). Асинхронно;
 	// answer приходит позже — к тому моменту кэш заполнен.
@@ -2240,6 +2285,12 @@ void HangupCall() {
 void SetCallSas(const std::string &sas) {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	g_callSas = QString::fromStdString(sas);
+}
+
+// Заглушить/включить свой микрофон (кнопка в окне звонка).
+void ToggleMute(bool muted) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	if (g_callManager) g_callManager->setMuted(muted);
 }
 
 void LeaveGroupCall() {
@@ -2607,10 +2658,20 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				auto f = QFile(path);
 				if (f.open(QIODevice::ReadOnly)) {
 					const auto bytes = f.readAll();
-					RegisterPeer(peerAddr);
-					const auto fileUser = session->data().user(
-						UserId(BareId(IdForAddress(peerAddr))));
-					const auto fileHistory = session->data().history(fileUser);
+					// Цель: группа (chat), если известна, иначе 1-на-1 (user).
+					History *fileHistory = nullptr;
+					if (g_knownGroups.contains(peerAddr)) {
+						ensureGroupChat(session, peerAddr,
+							g_knownGroups.value(peerAddr), 0);
+						const auto chat = session->data().chat(
+							ChatId(BareId(IdForAddress(peerAddr))));
+						fileHistory = session->data().history(chat);
+					} else {
+						RegisterPeer(peerAddr);
+						const auto fileUser = session->data().user(
+							UserId(BareId(IdForAddress(peerAddr))));
+						fileHistory = session->data().history(fileUser);
+					}
 					const auto lower = path.toLower();
 					const auto type = (lower.endsWith(u".png"_q)
 							|| lower.endsWith(u".jpg"_q)
