@@ -46,7 +46,7 @@
 #include <parvane/group_client.h>    // parvane-core (группы/каналы)
 #include <parvane/group_call_manager.h> // parvane-core (групповые звонки, mesh)
 #include "data/data_chat.h"          // ChatData (синтез группы)
-#include "parvane/parvane_video_window.h" // окно активного звонка (Open/Close)
+#include "parvane/parvane_call_panel.h" // нативный экран звонка (Open/Close)
 #include "media/audio/media_audio_track.h" // рингтон звонка
 #include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
 #include "core/file_location.h"       // Core::FileLocation
@@ -460,12 +460,19 @@ bool StartSession() {
 					|| s == parvane::CallState::Connecting
 					|| s == parvane::CallState::Active);
 				if (inCall) {
-					Parvane::OpenCallWindow(peerStd, video);
+					// Нативный экран звонка: пир уже синтезирован при старте звонка
+					// (ResolveNames), берём его как PeerData (аватар/имя).
+					if (const auto session = g_sessionWeak.get()) {
+						const auto addr = QString::fromStdString(peerStd);
+						const auto peer = session->data().user(
+							UserId(BareId(IdForAddress(addr))));
+						Parvane::OpenNativeCallPanel(peer, video);
+					}
 					if (s == parvane::CallState::Active) {
-						Parvane::SetCallConnected();
+						Parvane::NativeCallConnected();
 					}
 				} else if (s == parvane::CallState::Ended) {
-					Parvane::CloseVideoWindow();
+					Parvane::CloseNativeCallPanel();
 					std::lock_guard<std::mutex> lk(g_sessionMutex);
 					g_callSas.clear();
 				}
