@@ -45,4 +45,11 @@ private:
 [[nodiscard]] std::string b64encode(const std::string &raw);
 [[nodiscard]] std::optional<std::string> b64decode(const std::string &b64);
 
+// SAS (Short Authentication String) для сверки звонка «голосом»: детерминированная
+// цепочка из 4 эмодзи из ОТСОРТИРОВАННОЙ пары DTLS-отпечатков (fpA, fpB). Обе
+// стороны знают оба отпечатка (в своих local/remote SDP) → одинаковый SAS; MITM
+// в медиа-пути даёт разные отпечатки на концах → SAS не совпадёт. Порядок
+// аргументов не важен.
+[[nodiscard]] std::string sasEmoji(const std::string &fpA, const std::string &fpB);
+
 } // namespace parvane::crypto

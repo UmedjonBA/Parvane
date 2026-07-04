@@ -163,6 +163,34 @@ std::string SigningKey::sign(const std::string &data) const {
     return sig;
 }
 
+std::string sasEmoji(const std::string &fpA, const std::string &fpB) {
+    // Фиксированный набор эмодзи (степень двойки для равномерного маппинга).
+    static const char *kEmoji[] = {
+        "🐱", "🐶", "🦊", "🐻", "🐼", "🐨", "🦁", "🐯",
+        "🐸", "🐵", "🦉", "🦄", "🐝", "🦋", "🌺", "🌈",
+        "🍎", "🍊", "🍋", "🍉", "🍇", "🍓", "🥝", "🍑",
+        "🎸", "🎹", "🎺", "🥁", "🎨", "🎲", "🚀", "⚓",
+    };
+    constexpr int kN = 32;
+    // Сортируем пару, чтобы обе стороны получили одинаковый вход.
+    std::string a = fpA, b = fpB;
+    if (a > b) std::swap(a, b);
+    const std::string data = a + "|" + b;
+    unsigned char h[EVP_MAX_MD_SIZE];
+    unsigned int hlen = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    std::string out;
+    if (ctx && EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) == 1
+        && EVP_DigestUpdate(ctx, data.data(), data.size()) == 1
+        && EVP_DigestFinal_ex(ctx, h, &hlen) == 1 && hlen >= 4) {
+        for (int i = 0; i < 4; ++i) {
+            out += kEmoji[h[i] % kN];
+        }
+    }
+    if (ctx) EVP_MD_CTX_free(ctx);
+    return out;
+}
+
 bool verify(const std::string &publicB64, const std::string &data,
             const std::string &sigB64) {
     const auto pub = b64decode(publicB64);

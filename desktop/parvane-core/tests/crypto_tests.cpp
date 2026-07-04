@@ -102,6 +102,18 @@ int main() {
               "invite с подменённым SDP → проверка падает (MITM пойман)");
     }
 
+    // SAS-эмодзи: одинаковый у обеих сторон (порядок не важен), 4 эмодзи, разные
+    // отпечатки → обычно разный код.
+    {
+        const std::string fpA = "AA:BB:CC:DD", fpB = "11:22:33:44";
+        const auto s1 = parvane::crypto::sasEmoji(fpA, fpB);
+        const auto s2 = parvane::crypto::sasEmoji(fpB, fpA);
+        check(!s1.empty(), "sasEmoji — непустой");
+        check(s1 == s2, "sasEmoji(A,B) == sasEmoji(B,A) — порядок не важен");
+        const auto s3 = parvane::crypto::sasEmoji("XX:YY", "ZZ:WW");
+        check(s1 != s3, "разные отпечатки → разный SAS");
+    }
+
     std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

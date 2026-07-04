@@ -5,6 +5,16 @@
 #include "parvane/parvane_webrtc_backend.h"
 
 #include "base/debug_log.h"
+#include "parvane/parvane_video_window.h"
+
+#include <vector>
+#include <third_party/libyuv/include/libyuv.h>
+#include <parvane/crypto.h> // parvane-core: SAS (sasEmoji)
+
+namespace Parvane {
+// Определена в parvane_client.cpp — SAS текущего звонка для панели активного звонка.
+void SetCallSas(const std::string &sas);
+} // namespace Parvane
 
 #include <nlohmann/json.hpp>
 
@@ -21,6 +31,7 @@
 #include <modules/audio_device/include/audio_device.h>
 #include <rtc_base/thread.h>
 #include <rtc_base/ref_counted_object.h>
+#include <sstream>
 #include <api/media_stream_interface.h>          // VideoTrackInterface, kVideoKind
 #include <api/video/video_sink_interface.h>
 #include <pc/video_track_source.h>               // webrtc::VideoTrackSource
@@ -159,14 +170,40 @@ private:
 // Приёмник удалённого видео: считает кадры (рендер в окне — Э V2).
 class RemoteVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
-	void OnFrame(const webrtc::VideoFrame & /*frame*/) override {
+	void OnFrame(const webrtc::VideoFrame &frame) override {
 		const int n = ++_count;
 		if (n == 1 || (n % 60) == 0) {
 			LOG(("Parvane: удалённое видео — кадров получено: %1").arg(n));
 		}
+		// I420 → ARGB (libyuv) → окно видео (Qt, на main-потоке).
+		const auto i420 = frame.video_frame_buffer()->ToI420();
+		if (!i420) return;
+		const int w = i420->width(), h = i420->height();
+		if (w <= 0 || h <= 0) return;
+		_argb.resize(std::size_t(w) * h * 4);
+		libyuv::I420ToARGB(
+			i420->DataY(), i420->StrideY(),
+			i420->DataU(), i420->StrideU(),
+			i420->DataV(), i420->StrideV(),
+			_argb.data(), w * 4, w, h);
+		Parvane::ShowRemoteVideoFrame(w, h, _argb.data());
 	}
 	std::atomic<int> _count{ 0 };
+	std::vector<std::uint8_t> _argb;
 };
+
+// Достаёт DTLS-отпечаток (после "a=fingerprint:") из SDP. "" если нет.
+std::string parseFingerprint(const std::string &sdp) {
+	const auto pos = sdp.find("a=fingerprint:");
+	if (pos == std::string::npos) return {};
+	const auto eol = sdp.find('\n', pos);
+	auto line = sdp.substr(pos, (eol == std::string::npos ? sdp.size() : eol) - pos);
+	const auto sp = line.find(' ');
+	if (sp == std::string::npos) return {};
+	auto fp = line.substr(sp + 1);
+	while (!fp.empty() && (fp.back() == '\r' || fp.back() == '\n')) fp.pop_back();
+	return fp;
+}
 
 // ── сам движок одного звонка ──────────────────────────────────────────────────
 class WebrtcMediaBackend final : public parvane::MediaBackend {
@@ -208,6 +245,9 @@ public:
 	void setWantVideo(bool on) override { _wantVideo = on; }
 
 	void close() override {
+		if (_remoteVideoSink) {
+			Parvane::CloseVideoWindow();
+		}
 		if (_cameraSource) {
 			_cameraSource->stop();
 			_cameraSource = nullptr;
@@ -258,6 +298,7 @@ private:
 				webrtc::PeerConnectionInterface::PeerConnectionState s) override {
 			using S = webrtc::PeerConnectionInterface::PeerConnectionState;
 			if (s == S::kConnected) {
+				_b->computeSas(); // SAS доступен — оба SDP уже установлены
 				if (_b->onConnectionChange) _b->onConnectionChange(true);
 			} else if (s == S::kFailed || s == S::kClosed
 					|| s == S::kDisconnected) {
@@ -278,7 +319,30 @@ private:
 		_observer = std::make_unique<PcObserver>(this);
 		webrtc::PeerConnectionInterface::RTCConfiguration config;
 		config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
-		// Localhost/LAN: host-кандидаты; STUN/TURN добавим позже.
+		// ICE-серверы из окружения — обход NAT (иначе только host-кандидаты,
+		// localhost/LAN). PARVANE_STUN=stun:host:port[,...]; PARVANE_TURN=
+		// turn:host:port[?transport=udp] + PARVANE_TURN_USER/PARVANE_TURN_PASS.
+		if (const char *stun = std::getenv("PARVANE_STUN"); stun && *stun) {
+			std::stringstream ss(stun);
+			std::string url;
+			while (std::getline(ss, url, ',')) {
+				if (url.empty()) continue;
+				webrtc::PeerConnectionInterface::IceServer srv;
+				srv.urls.push_back(url);
+				config.servers.push_back(srv);
+			}
+		}
+		if (const char *turn = std::getenv("PARVANE_TURN"); turn && *turn) {
+			webrtc::PeerConnectionInterface::IceServer srv;
+			srv.urls.push_back(std::string(turn));
+			if (const char *u = std::getenv("PARVANE_TURN_USER")) srv.username = u;
+			if (const char *p = std::getenv("PARVANE_TURN_PASS")) srv.password = p;
+			config.servers.push_back(srv);
+		}
+		if (!config.servers.empty()) {
+			LOG(("Parvane: ICE-серверов сконфигурировано: %1")
+				.arg(int(config.servers.size())));
+		}
 		webrtc::PeerConnectionDependencies deps(_observer.get());
 		auto pcOrError = g.factory->CreatePeerConnectionOrError(
 			config, std::move(deps));
@@ -352,6 +416,24 @@ private:
 		auto cb = _pendingLocal;
 		_pendingLocal = nullptr;
 		if (cb) cb(sdp);
+	}
+
+	// SAS для сверки голосом: из ОТСОРТИРОВАННОЙ пары DTLS-отпечатков (local+remote).
+	void computeSas() {
+		if (!_pc || !_pc->local_description() || !_pc->remote_description()) {
+			return;
+		}
+		std::string localSdp, remoteSdp;
+		_pc->local_description()->ToString(&localSdp);
+		_pc->remote_description()->ToString(&remoteSdp);
+		const auto lf = parseFingerprint(localSdp);
+		const auto rf = parseFingerprint(remoteSdp);
+		if (lf.empty() || rf.empty()) {
+			return;
+		}
+		const auto sas = parvane::crypto::sasEmoji(lf, rf);
+		LOG(("Parvane: SAS звонка: %1").arg(QString::fromStdString(sas)));
+		Parvane::SetCallSas(sas);
 	}
 
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _pc;
