@@ -23,10 +23,11 @@ std::string MessengerClient::sendText(
         const std::string &token,
         const std::optional<std::string> &replyTo,
         const std::optional<std::string> &id,
-        const json &entities) {
+        const json &entities,
+        const json &webpage) {
     SendPayload payload;
     payload.to = to;
-    payload.content = textContent(text, entities);
+    payload.content = textContent(text, entities, webpage);
     payload.reply_to = replyTo;
 
     const std::string idStr = id.value_or(uuid4());
