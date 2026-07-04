@@ -7,6 +7,7 @@
 #include "base/debug_log.h"
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Native*)
 #include "parvane/parvane_call_video.h" // сырые кадры → нативный видео-трек
+#include "parvane/parvane_pulse_adm.h"  // свой ADM (PulseAudio) вместо dummy
 
 #include <parvane/crypto.h> // parvane-core: SAS (sasEmoji)
 
@@ -63,10 +64,10 @@ WebrtcGlobal &Global() {
 			g.signaling->SetName("pv_sig", nullptr);
 			g.signaling->Start();
 			g.taskQueue = webrtc::CreateDefaultTaskQueueFactory();
+			// Свой ADM на PulseAudio: прибилженный libtg_owt без ALSA/Pulse даёт
+			// dummy-устройство (тишина в звонках). См. parvane_pulse_adm.
 			g.adm = g.worker->BlockingCall([&] {
-				return webrtc::AudioDeviceModule::Create(
-					webrtc::AudioDeviceModule::kPlatformDefaultAudio,
-					g.taskQueue.get());
+				return Parvane::CreatePulseAudioDeviceModule();
 			});
 			g.factory = webrtc::CreatePeerConnectionFactory(
 				g.network.get(), g.worker.get(), g.signaling.get(),
