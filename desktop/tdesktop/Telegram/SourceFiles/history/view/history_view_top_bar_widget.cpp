@@ -308,6 +308,9 @@ void TopBarWidget::call(Calls::StartOutgoingCallArgs args) {
 			// Parvane: звоним через нашу шину (webrtc), а не MTProto. Адрес пира —
 			// его @username (мы кладём туда user@server). video — из args.
 			Parvane::PlaceCall(user->username(), args.video);
+		} else if (peer->isChat()) {
+			// Групповой звонок со всеми участниками группы.
+			Parvane::StartGroupCallForChat(peer, args.video);
 		}
 	}
 }

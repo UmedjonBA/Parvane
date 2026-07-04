@@ -147,6 +147,13 @@ void RefreshGroups();
 // синтезирует её локально.
 void CreateGroup(const QString &name, const QStringList &members, bool channel);
 
+// Групповой звонок: инициировать mesh со всеми участниками группы groupId.
+void StartGroupCall(const QString &groupId, bool video);
+// Групповой звонок по чат-пиру (для кнопки звонка в шапке группы).
+void StartGroupCallForChat(PeerData *chat, bool video);
+// Выйти из текущего группового звонка.
+void LeaveGroupCall();
+
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);

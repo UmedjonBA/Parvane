@@ -44,6 +44,7 @@
 #include "parvane/parvane_webrtc_backend.h" // реальный webrtc-движок (Э3-b)
 #include <parvane/crypto.h>          // parvane-core (Ed25519 подпись SDP)
 #include <parvane/group_client.h>    // parvane-core (группы/каналы)
+#include <parvane/group_call_manager.h> // parvane-core (групповые звонки, mesh)
 #include "data/data_chat.h"          // ChatData (синтез группы)
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
 #include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
@@ -91,8 +92,11 @@ QHash<quint64, QString> g_idToAddress;
 // входящих и синтеза чата). g_chatIdToGroupId: chatId(FNV) → gid (для роутинга
 // исходящих из чат-пира). Под g_sessionMutex.
 std::unique_ptr<parvane::GroupClient> g_groupClient;
+std::unique_ptr<parvane::GroupCallManager> g_groupCallManager;
 QHash<QString, QString> g_knownGroups;
 QHash<quint64, QString> g_chatIdToGroupId;
+// Участники групп (адреса) — для инициации группового звонка. Под g_sessionMutex.
+QHash<QString, QStringList> g_groupMembers;
 // Текущий собеседник по звонку (для панели активного звонка). Под g_sessionMutex.
 // НЕ читать через g_callManager->peer() из onState — там уже держится мьютекс
 // менеджера (дедлок). Пишем при placeCall/incoming, читаем в onState.
@@ -458,6 +462,32 @@ bool StartSession() {
 			},
 			std::move(ccb));
 		g_callManager->start();
+
+		// Групповые звонки (mesh). Тот же движок-фабрика (webrtc/заглушка) + кэш
+		// pubkey. onPeerState — лог (UI-бокс — в StartGroupCall).
+		const auto makeBackend = [] {
+			if (const char *rm = std::getenv("PARVANE_REAL_MEDIA"); rm && *rm) {
+				if (auto w = Parvane::MakeWebrtcBackend()) {
+					return w;
+				}
+			}
+			return std::unique_ptr<parvane::MediaBackend>(
+				std::make_unique<parvane::StubMediaBackend>());
+		};
+		parvane::GroupCallManager::Callbacks gcb;
+		gcb.peerPubkey = [](std::string peer) -> std::string {
+			std::lock_guard<std::mutex> lk(g_pubkeyMutex);
+			return g_peerPubkeys.value(QString::fromStdString(peer)).toStdString();
+		};
+		gcb.onPeerState = [](std::string peer, parvane::CallState s) {
+			LOG(("Parvane: groupcall %1 → %2")
+				.arg(QString::fromStdString(peer)).arg(CallStateName(s)));
+		};
+		g_groupCallManager = std::make_unique<parvane::GroupCallManager>(
+			*g_callClient, g_selfAddress.toStdString(), g_token.toStdString(),
+			g_callKey.get(), makeBackend, std::move(gcb));
+		g_groupCallManager->start();
+
 		RegisterCallKey(QString::fromStdString(g_callKey->publicB64()), g_token);
 
 		LOG(("Parvane: сессия поднята для %1").arg(g_selfAddress));
@@ -2178,6 +2208,83 @@ void HangupCall() {
 	if (g_callManager) g_callManager->hangup();
 }
 
+void LeaveGroupCall() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	if (g_groupCallManager) g_groupCallManager->leave();
+}
+
+// Начать групповой звонок по чат-пиру (кнопка звонка в шапке группы).
+void StartGroupCallForChat(PeerData *chat, bool video) {
+	if (!chat || !chat->isChat()) {
+		return;
+	}
+	const auto chatBare = std::uint64_t(peerToChat(chat->id).bare);
+	QString gid;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		gid = g_chatIdToGroupId.value(chatBare);
+	}
+	if (!gid.isEmpty()) {
+		StartGroupCall(gid, video);
+	}
+}
+
+void StartGroupCall(const QString &groupId, bool video) {
+	const auto token = Token().toStdString();
+	if (token.empty()) {
+		return;
+	}
+	const auto gidStd = groupId.toStdString();
+	const auto media = std::string(video ? "video" : "audio");
+	crl::async([groupId, gidStd, token, media] {
+		// Участники: из кэша, иначе — запрос group.info.
+		QStringList members;
+		parvane::GroupClient *gc = nullptr;
+		parvane::GroupCallManager *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			members = g_groupMembers.value(groupId);
+			gc = g_groupClient.get();
+			g = g_groupCallManager.get();
+		}
+		if (members.isEmpty() && gc) {
+			try {
+				const auto info = gc->info(token, gidStd);
+				for (const auto &m : info.members) {
+					members.push_back(QString::fromStdString(m.address));
+				}
+			} catch (const std::exception &) {
+			}
+			if (!members.isEmpty()) {
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_groupMembers.insert(groupId, members);
+			}
+		}
+		if (members.isEmpty() || !g) {
+			LOG(("Parvane: групповой звонок — нет участников для %1").arg(groupId));
+			return;
+		}
+		// Подтягиваем pubkey участников (для проверки подписи их SDP).
+		ResolveNames(members);
+		std::vector<std::string> parts;
+		for (const auto &m : members) {
+			parts.push_back(m.toStdString());
+		}
+		g->startCall(parvane::newUuidV7(), parts, media);
+		LOG(("Parvane: групповой звонок начат в %1 (%2 участников)")
+			.arg(groupId).arg(int(parts.size())));
+	});
+	// UI-панель группового звонка.
+	crl::on_main([] {
+		Ui::show(Ui::MakeConfirmBox({
+			.text = u"Групповой звонок"_q,
+			.confirmed = [](Fn<void()> &&close) { LeaveGroupCall(); close(); },
+			.confirmText = u"Завершить"_q,
+			.inform = true,
+		}));
+	});
+}
+
 // ── группы: публичное API ────────────────────────────────────────────────────
 
 // Тянет список групп/каналов пользователя (group.list) и синтезирует их как
@@ -2208,10 +2315,17 @@ void RefreshGroups() {
 				return;
 			}
 			for (const auto &gi : groups) {
-				ensureGroupChat(session,
-					QString::fromStdString(gi.group_id),
+				const auto gid = QString::fromStdString(gi.group_id);
+				ensureGroupChat(session, gid,
 					QString::fromStdString(gi.name),
 					int(gi.members.size()));
+				// Кэшируем участников (для группового звонка).
+				QStringList mem;
+				for (const auto &m : gi.members) {
+					mem.push_back(QString::fromStdString(m.address));
+				}
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_groupMembers.insert(gid, mem);
 			}
 			LOG(("Parvane: групп синхронизировано: %1").arg(int(groups.size())));
 			// Возможно, пришли групповые сообщения до синтеза чата — прогоним sync.
@@ -2535,6 +2649,32 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			base::call_delayed(4 * crl::time(1000), [gname, members] {
 				LOG(("Parvane: AUTOGROUP создаю '%1'").arg(gname));
 				CreateGroup(gname, members, false);
+			});
+		}
+
+		// Debug-autogroupcall для e2e: PARVANE_AUTOGROUPCALL=Имя_группы →
+		// групповой звонок со всеми участниками (через ~9с — дать группе
+		// синхронизироваться).
+		if (const char *gcv = std::getenv("PARVANE_AUTOGROUPCALL"); gcv && *gcv) {
+			const auto gname = QString::fromUtf8(gcv);
+			base::call_delayed(9 * crl::time(1000), [gname] {
+				QString gid;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					for (auto it = g_knownGroups.constBegin();
+							it != g_knownGroups.constEnd(); ++it) {
+						if (it.value() == gname) {
+							gid = it.key();
+							break;
+						}
+					}
+				}
+				if (!gid.isEmpty()) {
+					LOG(("Parvane: AUTOGROUPCALL в '%1' (%2)").arg(gname, gid));
+					StartGroupCall(gid, false);
+				} else {
+					LOG(("Parvane: AUTOGROUPCALL — группа '%1' не найдена").arg(gname));
+				}
 			});
 		}
 
