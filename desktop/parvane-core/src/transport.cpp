@@ -2,6 +2,7 @@
 #include "parvane/transport.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -56,7 +57,25 @@ Transport::~Transport() { close(); }
 
 void Transport::connect(const std::string &url) {
     close();
-    natsStatus s = natsConnection_ConnectTo(&d_->conn, url.c_str());
+    natsOptions *opts = nullptr;
+    natsStatus s = natsOptions_Create(&opts);
+    if (s != NATS_OK) {
+        fail("nats options create", s);
+    }
+    natsOptions_SetURL(opts, url.c_str());
+    // TLS, если в окружении задан CA (PARVANE_NATS_TLS_CA) — шифрование сигналинга.
+    if (const char *ca = std::getenv("PARVANE_NATS_TLS_CA"); ca && *ca) {
+        if ((s = natsOptions_SetSecure(opts, true)) != NATS_OK) {
+            natsOptions_Destroy(opts);
+            fail("nats set secure", s);
+        }
+        if ((s = natsOptions_LoadCATrustedCertificates(opts, ca)) != NATS_OK) {
+            natsOptions_Destroy(opts);
+            fail("nats load CA", s);
+        }
+    }
+    s = natsConnection_Connect(&d_->conn, opts);
+    natsOptions_Destroy(opts);
     if (s != NATS_OK) {
         d_->conn = nullptr;
         fail("nats connect to " + url, s);
