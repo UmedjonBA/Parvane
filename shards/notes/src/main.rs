@@ -352,5 +352,5 @@ async fn render_note(pool: &SqlitePool, note_id: &str) -> Result<String> {
 }
 
 fn now_unix() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }

@@ -246,7 +246,7 @@ async fn handle_complete(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     if let Err(e) = result {
         error!("handle_complete: {}", e);
         let resp = UploadCompleteResponse { ok: false, file_id: None, error: Some(e.to_string()) };
-        let _ = nc.publish(reply_err, serde_json::to_vec(&resp).unwrap().into()).await;
+        let _ = nc.publish(reply_err, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
     }
 }
 
@@ -309,7 +309,7 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             chunk_index: None, total_chunks: None, data: None,
             error: Some(e.to_string()),
         };
-        let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+        let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
     }
 }
 
@@ -339,13 +339,13 @@ async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         error!("handle_list: {}", e);
         if let Some(reply) = msg.reply {
             let resp = FileListResponse { files: vec![] };
-            let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+            let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
         }
     }
 }
 
 fn now_unix() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
 // ── unit-тесты DB-слоя (in-memory SQLite, без NATS) ─────────────────────────────

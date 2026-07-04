@@ -707,7 +707,7 @@ async fn handle_group_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
         group_id: None,
         error: Some(e.to_string()),
     });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 async fn handle_group_add(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -724,7 +724,7 @@ async fn handle_group_add(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
     }
     .await
     .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 async fn handle_group_remove(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -741,7 +741,7 @@ async fn handle_group_remove(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
     }
     .await
     .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 async fn handle_group_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -754,7 +754,7 @@ async fn handle_group_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
     }
     .await
     .unwrap_or_else(|_| GroupListResponse { groups: vec![] });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 async fn handle_group_info(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -771,7 +771,7 @@ async fn handle_group_info(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
     }
     .await
     .unwrap_or_else(|_| GroupListResponse { groups: vec![] });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 // ── msg.sync.request ──────────────────────────────────────────────────────────
@@ -817,7 +817,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64
 }
 

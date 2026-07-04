@@ -31,14 +31,28 @@ struct Claims {
     iat: usize,
 }
 
-// ── password hashing (упрощённый для прототипа) ───────────────────────────────
+// ── password hashing (argon2id, соль на пароль) ───────────────────────────────
 
-fn hash_password(password: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    password.hash(&mut h);
-    format!("{:016x}", h.finish())
+use argon2::password_hash::{rand_core::OsRng, PasswordHash, SaltString};
+use argon2::{Argon2, PasswordHasher, PasswordVerifier};
+
+/// Хэш пароля в PHC-формате (argon2id + случайная соль). Для регистрации.
+fn hash_password(password: &str) -> Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| anyhow::anyhow!("argon2 hash: {e}"))
+}
+
+/// Проверка пароля против хранимого PHC-хэша (константное время внутри argon2).
+fn verify_password(password: &str, stored: &str) -> bool {
+    match PasswordHash::new(stored) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    }
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -162,7 +176,7 @@ async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
     };
     info!("search '{}' → {} результатов", q, users.len());
     let _ = nc
-        .publish(reply, serde_json::to_vec(&SearchUsersResponse { users }).unwrap().into())
+        .publish(reply, serde_json::to_vec(&SearchUsersResponse { users }).unwrap_or_default().into())
         .await;
 }
 
@@ -199,7 +213,7 @@ async fn handle_setname(
         },
         Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
     };
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 // Установка своего avatar_file_id (username из проверенного токена).
@@ -230,7 +244,7 @@ async fn handle_setavatar(
         },
         Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
     };
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 // Записать публичный ключ пользователя (чистая функция — для тестов).
@@ -270,7 +284,7 @@ async fn handle_setkey(
         },
         Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
     };
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap().into()).await;
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 // Резолв display_name по списку адресов (для пиров из sync).
@@ -298,7 +312,7 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
         }
     }
     let _ = nc
-        .publish(reply, serde_json::to_vec(&ResolveResponse { users }).unwrap().into())
+        .publish(reply, serde_json::to_vec(&ResolveResponse { users }).unwrap_or_default().into())
         .await;
 }
 
@@ -347,7 +361,7 @@ async fn handle_issue(
         }
     };
 
-    let json = serde_json::to_vec(&resp).unwrap();
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
         error!("issue: ошибка отправки ответа: {}", e);
     }
@@ -357,8 +371,6 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
     let req: IssueRequest = serde_json::from_slice(payload)
         .context("неверный JSON в IssueRequest")?;
 
-    let hash = hash_password(&req.password);
-
     let existing: Option<(String,)> =
         sqlx::query_as("SELECT id FROM users WHERE username = ?")
             .bind(&req.user)
@@ -366,6 +378,7 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
             .await?;
 
     if existing.is_none() {
+        let hash = hash_password(&req.password)?;
         let id = Uuid::now_v7().to_string();
         let now = now_unix();
         // Отображаемое имя по умолчанию — локальная часть адреса (до '@').
@@ -388,7 +401,7 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
                 .bind(&req.user)
                 .fetch_one(pool)
                 .await?;
-        if row.0 != hash {
+        if !verify_password(&req.password, &row.0) {
             anyhow::bail!("неверный пароль");
         }
     }
@@ -413,7 +426,7 @@ async fn handle_verify(nc: &Client, decoding: &DecodingKey, msg: async_nats::Mes
         Err(e) => VerifyResponse { ok: false, user: None, error: Some(e.to_string()) },
     };
 
-    let json = serde_json::to_vec(&resp).unwrap();
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
         error!("verify: ошибка отправки ответа: {}", e);
     }
@@ -433,7 +446,7 @@ fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<String> {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as i64
 }
 
@@ -471,13 +484,19 @@ mod tests {
     }
 
     #[test]
-    fn password_same_input_same_hash() {
-        assert_eq!(hash_password("secret"), hash_password("secret"));
+    fn password_verifies_correct_and_rejects_wrong() {
+        let h = hash_password("secret").unwrap();
+        assert!(verify_password("secret", &h));
+        assert!(!verify_password("other", &h));
     }
 
     #[test]
-    fn password_different_input_different_hash() {
-        assert_ne!(hash_password("secret"), hash_password("other"));
+    fn password_salted_each_hash_differs() {
+        // argon2 со случайной солью: один пароль → разные хэши (но оба проходят).
+        let a = hash_password("secret").unwrap();
+        let b = hash_password("secret").unwrap();
+        assert_ne!(a, b);
+        assert!(verify_password("secret", &a) && verify_password("secret", &b));
     }
 
     // ── публичные ключи (для аутентификации сигналинга звонков) ──
