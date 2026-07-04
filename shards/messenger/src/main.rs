@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
 
     info!("SQLite готов: {}", db_path);
 
-    let nc = async_nats::connect(&nats_url)
+    let nc = parvane_types::nats::connect(&nats_url)
         .await
         .context("подключение к NATS")?;
 
