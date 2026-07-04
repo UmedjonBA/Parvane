@@ -6,12 +6,18 @@
 #include "parvane/parvane_call_panel.h"
 
 #include "ui/rp_widget.h"
+#include "ui/gl/gl_window.h"          // Ui::GL::Window — независимое окно как у Calls::Panel
+#include "ui/widgets/rp_window.h"     // Ui::RpWindow
 #include "ui/widgets/call_button.h"
 #include "ui/widgets/labels.h"
 #include "calls/calls_userpic.h"
 #include "data/data_peer.h"
 #include "base/debug_log.h"
+#include "base/event_filter.h"        // close → hangup
 #include "styles/style_calls.h"
+
+#include <QtGui/QWindow>
+#include <QtCore/QEvent>
 
 #include <crl/crl_on_main.h>
 #include <rpl/rpl.h>
@@ -43,7 +49,7 @@ private:
 	void paintBody(QPainter &p);
 	void refreshStatus();
 
-	Ui::RpWidget _window;
+	Ui::GL::Window _gl;
 	Ui::FlatLabel _name;
 	Ui::FlatLabel _status;
 	Ui::FlatLabel _fingerprint;
@@ -59,18 +65,28 @@ private:
 };
 
 CallPanel::CallPanel(not_null<PeerData*> peer, bool video)
-: _name(&_window, st::callName)
-, _status(&_window, st::callStatus)
-, _fingerprint(&_window, st::callStatus)
-, _mute(&_window, st::callMicrophoneMute, &st::callMicrophoneUnmute)
-, _hangup(&_window, st::callHangup)
+: _name(_gl.widget(), st::callName)
+, _status(_gl.widget(), st::callStatus)
+, _fingerprint(_gl.widget(), st::callStatus)
+, _mute(_gl.widget(), st::callMicrophoneMute, &st::callMicrophoneUnmute)
+, _hangup(_gl.widget(), st::callHangup)
 , _video(video)
 , _start(QDateTime::currentSecsSinceEpoch()) {
-	_userpic = std::make_unique<Calls::Userpic>(&_window, peer, _muted.value());
+	const auto win = _gl.window();
+	const auto body = _gl.widget();
+	_userpic = std::make_unique<Calls::Userpic>(body, peer, _muted.value());
 
-	_window.setWindowTitle(QString::fromUtf8("Parvane — звонок"));
-	_window.resize(400, _video ? 600 : 460);
-	_window.setMinimumSize(340, 420);
+	win->setTitle(QString::fromUtf8("Parvane — звонок"));
+	// Своё окно звонка — НИКОГДА не гасит приложение при закрытии (иначе закрылось
+	// бы и главное окно). Закрытие крестиком = завершить звонок.
+	win->setAttribute(Qt::WA_QuitOnClose, false);
+	win->resize(400, _video ? 600 : 460);
+	base::install_event_filter(win, [](not_null<QEvent*> e) {
+		if (e->type() == QEvent::Close) {
+			Parvane::HangupCall();
+		}
+		return base::EventFilterResult::Continue;
+	});
 
 	_name.setText(peer->name());
 	_status.setText(QString::fromUtf8("Вызов…"));
@@ -81,37 +97,39 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video)
 	});
 	_hangup.setClickedCallback([] { Parvane::HangupCall(); });
 
-	_window.paintRequest() | rpl::on_next([this](QRect) {
-		QPainter p(&_window);
+	body->paintRequest() | rpl::on_next([this, body](QRect) {
+		QPainter p(body);
 		paintBody(p);
-	}, _window.lifetime());
-	_window.sizeValue() | rpl::on_next([this](QSize) {
+	}, body->lifetime());
+	body->sizeValue() | rpl::on_next([this](QSize) {
 		layout();
-	}, _window.lifetime());
+	}, body->lifetime());
 
 	_timer.callOnTimeout([this] { refreshStatus(); });
 	_timer.start(1000);
 
 	layout();
-	_window.show();
-	_window.raise();
+	win->show();
+	win->raise();
+	win->activateWindow();
 }
 
 void CallPanel::paintBody(QPainter &p) {
-	p.fillRect(_window.rect(), QColor(0x14, 0x16, 0x1c));
+	const auto body = _gl.widget();
+	p.fillRect(body->rect(), QColor(0x14, 0x16, 0x1c));
 	// Видео (если есть удалённый кадр) — на всю верхнюю часть.
 	if (_video && !_remote.isNull()) {
-		p.drawImage(_window.rect(), _remote);
+		p.drawImage(body->rect(), _remote);
 		if (!_local.isNull()) {
-			const int pw = _window.width() / 4, ph = pw * 3 / 4;
-			p.drawImage(QRect(_window.width() - pw - 12, 12, pw, ph), _local);
+			const int pw = body->width() / 4, ph = pw * 3 / 4;
+			p.drawImage(QRect(body->width() - pw - 12, 12, pw, ph), _local);
 		}
 	}
 }
 
 void CallPanel::layout() {
-	const auto w = _window.width();
-	const auto h = _window.height();
+	const auto w = _gl.widget()->width();
+	const auto h = _gl.widget()->height();
 	// Аватар по центру верхней трети.
 	const int ups = 160;
 	_userpic->setGeometry((w - ups) / 2, h / 6, ups);
@@ -134,7 +152,7 @@ void CallPanel::refreshStatus() {
 		const auto secs = QDateTime::currentSecsSinceEpoch() - _start;
 		_status.setText(QString::asprintf("%02lld:%02lld", secs / 60, secs % 60));
 	}
-	_window.update();
+	_gl.widget()->update();
 }
 
 void CallPanel::setConnected() {
@@ -150,12 +168,12 @@ void CallPanel::setSas(const QString &sas) {
 
 void CallPanel::setRemote(QImage img) {
 	_remote = std::move(img);
-	_window.update();
+	_gl.widget()->update();
 }
 
 void CallPanel::setLocal(QImage img) {
 	_local = std::move(img);
-	_window.update();
+	_gl.widget()->update();
 }
 
 std::unique_ptr<CallPanel> g_panel;
