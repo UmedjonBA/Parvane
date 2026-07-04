@@ -293,5 +293,5 @@ async fn load_event(pool: &SqlitePool, event_id: &str) -> Result<CalEvent> {
 }
 
 fn now_unix() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }

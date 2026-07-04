@@ -253,7 +253,7 @@ async fn handle_history(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
 }
 
 fn now_unix() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
 #[cfg(test)]
