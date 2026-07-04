@@ -107,9 +107,6 @@ QHash<QString, QStringList> g_groupMembers;
 // НЕ читать через g_callManager->peer() из onState — там уже держится мьютекс
 // менеджера (дедлок). Пишем при placeCall/incoming, читаем в onState.
 QString g_currentCallPeer;
-// SAS-код текущего звонка (эмодзи для сверки голосом). Пишет webrtc-движок при
-// установлении соединения, читает панель активного звонка. Под g_sessionMutex.
-QString g_callSas;
 // Текущий звонок — видео? (для размера/self-preview окна). Под g_sessionMutex.
 bool g_currentCallVideo = false;
 // UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
@@ -412,27 +409,16 @@ bool StartSession() {
 				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
 				return;
 			}
-			// UI: рингтон + бокс «принять/отклонить» на main-потоке.
+			// UI: рингтон + НАТИВНЫЙ экран входящего звонка (кнопки Ответить/Отклонить).
 			const auto peerQ = QString::fromStdString(peer);
 			const auto isVideo = (media == "video");
 			crl::on_main([peerQ, isVideo] {
 				PlayRingtone(/*outgoing=*/false);
-				Ui::show(Ui::MakeConfirmBox({
-					.text = (isVideo ? u"Входящий видеозвонок от "_q
-						: u"Входящий звонок от "_q) + peerQ,
-					.confirmed = [](Fn<void()> &&close) {
-						StopRingtone();
-						AcceptCall();
-						close();
-					},
-					.cancelled = [](Fn<void()> &&close) {
-						StopRingtone();
-						HangupCall();
-						close();
-					},
-					.confirmText = u"Принять"_q,
-					.cancelText = u"Отклонить"_q,
-				}));
+				if (const auto session = g_sessionWeak.get()) {
+					const auto p = session->data().user(
+						UserId(BareId(IdForAddress(peerQ))));
+					Parvane::OpenNativeCallPanel(p, isVideo, /*incoming=*/true);
+				}
 			});
 		};
 		ccb.onState = [](parvane::CallState s) {
@@ -473,8 +459,6 @@ bool StartSession() {
 					}
 				} else if (s == parvane::CallState::Ended) {
 					Parvane::CloseNativeCallPanel();
-					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					g_callSas.clear();
 				}
 			});
 		};
@@ -2323,12 +2307,6 @@ void AcceptCall() {
 void HangupCall() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	if (g_callManager) g_callManager->hangup();
-}
-
-// Вызывается webrtc-движком при установлении соединения — SAS для сверки голосом.
-void SetCallSas(const std::string &sas) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	g_callSas = QString::fromStdString(sas);
 }
 
 // Заглушить/включить свой микрофон (кнопка в окне звонка).

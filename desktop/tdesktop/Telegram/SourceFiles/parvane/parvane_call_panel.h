@@ -10,7 +10,8 @@ class PeerData;
 namespace Parvane {
 
 // Открыть экран звонка для пира (аватар/имя/статус/кнопки). video — видеозвонок.
-void OpenNativeCallPanel(PeerData *peer, bool video);
+// incoming — входящий (кнопки «Ответить»/«Отклонить») vs исходящий (mute/hangup).
+void OpenNativeCallPanel(PeerData *peer, bool video, bool incoming = false);
 
 // Соединение установлено (Active): статус «Вызов…» → таймер.
 void NativeCallConnected();
@@ -18,11 +19,8 @@ void NativeCallConnected();
 // SAS-код (эмодзи сверки голосом).
 void NativeCallSas(const std::string &sas);
 
-// Кадр удалённого видео / своей камеры (сырой ARGB8888, w*h*4) — рендер в панель.
-void NativeCallRemoteFrame(int width, int height, const unsigned char *argb);
-void NativeCallLocalFrame(int width, int height, const unsigned char *argb);
-
-// Закрыть экран звонка (Ended).
+// Закрыть экран звонка (Ended). Видео рендерится нативным Calls::VideoBubble из
+// общих видео-треков (parvane_call_video.h) — отдельного API кадров не нужно.
 void CloseNativeCallPanel();
 
 } // namespace Parvane
