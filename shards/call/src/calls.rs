@@ -25,6 +25,7 @@ pub fn next_status(current: Option<&str>, signal: &CallSignal) -> Option<&'stati
             }
         }
         CallSignal::Ice { .. } => None,
+        CallSignal::GroupInvite { .. } => None,
     }
 }
 

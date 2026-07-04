@@ -57,6 +57,16 @@ inline json hangupSignal(const std::string &callId) {
     return json{{"type", "hangup"}, {"call_id", callId}};
 }
 
+// Приглашение в ГРУППОВОЙ звонок: id звонка + полный список участников. Каждый
+// участник, получив его, строит mesh — 1-на-1 соединение с каждым другим
+// (оффер инициирует тот, чей адрес лексикографически меньше). media audio|video.
+inline json groupInviteSignal(const std::string &groupCallId,
+                              const std::vector<std::string> &participants,
+                              const std::string &media = "audio") {
+    return json{{"type", "group_invite"}, {"group_call_id", groupCallId},
+                {"participants", participants}, {"media", media}};
+}
+
 // ── входящий сигнал (разбор relay из инбокса) ─────────────────────────────────
 struct CallSignalIn {
     std::string type;      // invite|answer|reject|ice|hangup
@@ -66,6 +76,8 @@ struct CallSignalIn {
     std::string sig;       // invite|answer — base64 Ed25519-подпись SDP (может быть пустой)
     std::string candidate; // ice
     std::optional<std::string> reason; // reject
+    std::string group_call_id;              // group_invite
+    std::vector<std::string> participants;  // group_invite
 
     static CallSignalIn fromJson(const json &j) {
         CallSignalIn s;
@@ -75,6 +87,11 @@ struct CallSignalIn {
         s.sdp = j.value("sdp", std::string());
         s.sig = j.value("sig", std::string());
         s.candidate = j.value("candidate", std::string());
+        s.group_call_id = j.value("group_call_id", std::string());
+        if (auto it = j.find("participants"); it != j.end() && it->is_array()) {
+            for (const auto &p : *it)
+                if (p.is_string()) s.participants.push_back(p.get<std::string>());
+        }
         if (auto it = j.find("reason"); it != j.end() && !it->is_null())
             s.reason = it->get<std::string>();
         return s;

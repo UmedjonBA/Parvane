@@ -87,6 +87,10 @@ async fn record_signal(
     signal: &CallSignal,
     now: i64,
 ) -> Result<()> {
+    // Групповое приглашение — только релеится, записи о звонке не создаёт.
+    if let CallSignal::GroupInvite { .. } = signal {
+        return Ok(());
+    }
     let call_id = signal.call_id().to_string();
 
     if let CallSignal::Invite { media, .. } = signal {
@@ -207,6 +211,7 @@ fn signal_name(s: &CallSignal) -> &'static str {
         CallSignal::Reject { .. } => "reject",
         CallSignal::Ice { .. } => "ice",
         CallSignal::Hangup { .. } => "hangup",
+        CallSignal::GroupInvite { .. } => "group_invite",
     }
 }
 
