@@ -65,6 +65,7 @@ void CallSession::start(const std::string &media) {
     media_ = media.empty() ? "audio" : media;
     callId_ = newUuidV7();
     if (!media_engine_) return;
+    media_engine_->setWantVideo(media_ == "video");
     media_engine_->createOffer([this](std::string sdp) {
         if (state_ == CallState::Ended) return;
         const std::string sig = signSdp(sdp);
@@ -116,6 +117,7 @@ void CallSession::onSignal(const CallSignalIn &sig) {
 
 void CallSession::accept() {
     if (state_ != CallState::Incoming || !media_engine_) return;
+    media_engine_->setWantVideo(media_ == "video");
     media_engine_->acceptOffer(remoteOffer_, [this](std::string answerSdp) {
         if (state_ == CallState::Ended) return;
         const std::string sig = signSdp(answerSdp);

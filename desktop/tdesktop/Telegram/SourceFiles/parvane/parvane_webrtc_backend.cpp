@@ -12,6 +12,8 @@
 #include <api/create_peerconnection_factory.h>
 #include <api/audio_codecs/builtin_audio_encoder_factory.h>
 #include <api/audio_codecs/builtin_audio_decoder_factory.h>
+#include <api/video_codecs/builtin_video_encoder_factory.h>
+#include <api/video_codecs/builtin_video_decoder_factory.h>
 #include <api/audio_options.h>
 #include <api/jsep.h>
 #include <api/rtc_error.h>
@@ -19,6 +21,12 @@
 #include <modules/audio_device/include/audio_device.h>
 #include <rtc_base/thread.h>
 #include <rtc_base/ref_counted_object.h>
+#include <api/media_stream_interface.h>          // VideoTrackInterface, kVideoKind
+#include <api/video/video_sink_interface.h>
+#include <pc/video_track_source.h>               // webrtc::VideoTrackSource
+#include <media/base/video_broadcaster.h>        // rtc::VideoBroadcaster
+#include <modules/video_capture/video_capture_factory.h>
+#include <atomic>
 
 namespace Parvane {
 namespace {
@@ -60,7 +68,9 @@ WebrtcGlobal &Global() {
 				g.adm,
 				webrtc::CreateBuiltinAudioEncoderFactory(),
 				webrtc::CreateBuiltinAudioDecoderFactory(),
-				nullptr, nullptr, nullptr, nullptr);
+				webrtc::CreateBuiltinVideoEncoderFactory(),
+				webrtc::CreateBuiltinVideoDecoderFactory(),
+				nullptr, nullptr);
 			g.ok = (g.factory != nullptr);
 			LOG(("Parvane: webrtc-фабрика создана, ok=%1").arg(g.ok ? 1 : 0));
 		} catch (...) {
@@ -82,6 +92,80 @@ public:
 	void OnSetRemoteDescriptionComplete(webrtc::RTCError e) override { _cb(e); }
 private:
 	std::function<void(webrtc::RTCError)> _cb;
+};
+
+// Источник видео с камеры (V4L2): VideoCaptureModule → VideoBroadcaster. Кадры от
+// камеры считаются (для проверки без дисплея) и раздаются трекам/энкодеру.
+class CameraSource : public webrtc::VideoTrackSource,
+                     public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+public:
+	CameraSource() : webrtc::VideoTrackSource(/*remote=*/false) {}
+	~CameraSource() override { stop(); }
+
+	// Открыть камеру и начать захват (звать на worker-потоке).
+	bool startCapture() {
+		std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> info(
+			webrtc::VideoCaptureFactory::CreateDeviceInfo());
+		if (!info || info->NumberOfDevices() < 1) {
+			return false;
+		}
+		char id[260] = { 0 }, name[260] = { 0 };
+		if (info->GetDeviceName(0, name, sizeof(name), id, sizeof(id)) != 0) {
+			return false;
+		}
+		_vcm = webrtc::VideoCaptureFactory::Create(id);
+		if (!_vcm) {
+			return false;
+		}
+		_vcm->RegisterCaptureDataCallback(this);
+		webrtc::VideoCaptureCapability cap;
+		cap.width = 640;
+		cap.height = 480;
+		cap.maxFPS = 30;
+		cap.videoType = webrtc::VideoType::kI420;
+		if (_vcm->StartCapture(cap) != 0) {
+			_vcm->DeRegisterCaptureDataCallback();
+			_vcm = nullptr;
+			return false;
+		}
+		return true;
+	}
+	void stop() {
+		if (_vcm) {
+			_vcm->StopCapture();
+			_vcm->DeRegisterCaptureDataCallback();
+			_vcm = nullptr;
+		}
+	}
+	void OnFrame(const webrtc::VideoFrame &frame) override {
+		const int n = ++_frames;
+		if (n == 1 || (n % 60) == 0) {
+			LOG(("Parvane: камера — кадров захвачено: %1").arg(n));
+		}
+		_broadcaster.OnFrame(frame);
+	}
+
+protected:
+	rtc::VideoSourceInterface<webrtc::VideoFrame> *source() override {
+		return &_broadcaster;
+	}
+
+private:
+	rtc::VideoBroadcaster _broadcaster;
+	webrtc::scoped_refptr<webrtc::VideoCaptureModule> _vcm;
+	std::atomic<int> _frames{ 0 };
+};
+
+// Приёмник удалённого видео: считает кадры (рендер в окне — Э V2).
+class RemoteVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
+public:
+	void OnFrame(const webrtc::VideoFrame & /*frame*/) override {
+		const int n = ++_count;
+		if (n == 1 || (n % 60) == 0) {
+			LOG(("Parvane: удалённое видео — кадров получено: %1").arg(n));
+		}
+	}
+	std::atomic<int> _count{ 0 };
 };
 
 // ── сам движок одного звонка ──────────────────────────────────────────────────
@@ -121,7 +205,13 @@ public:
 		}
 	}
 
+	void setWantVideo(bool on) override { _wantVideo = on; }
+
 	void close() override {
+		if (_cameraSource) {
+			_cameraSource->stop();
+			_cameraSource = nullptr;
+		}
 		if (_pc) {
 			_pc->Close();
 			_pc = nullptr;
@@ -134,6 +224,20 @@ private:
 	class PcObserver : public webrtc::PeerConnectionObserver {
 	public:
 		explicit PcObserver(WebrtcMediaBackend *b) : _b(b) {}
+		// Удалённый трек (в т.ч. видео) → подключаем счётчик кадров.
+		void OnTrack(
+				webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> t) override {
+			const auto track = t->receiver()->track();
+			if (track && track->kind()
+					== webrtc::MediaStreamTrackInterface::kVideoKind) {
+				auto *v = static_cast<webrtc::VideoTrackInterface *>(track.get());
+				if (_b->_remoteVideoSink) {
+					v->AddOrUpdateSink(_b->_remoteVideoSink.get(),
+						rtc::VideoSinkWants());
+				}
+				LOG(("Parvane: удалённый ВИДЕО-трек подключён"));
+			}
+		}
 		void OnSignalingChange(
 			webrtc::PeerConnectionInterface::SignalingState) override {}
 		void OnDataChannel(
@@ -190,6 +294,26 @@ private:
 		webrtc::RtpTransceiverInit init;
 		init.stream_ids = { "stream0" };
 		_pc->AddTransceiver(_track, init);
+		// Видео (по запросу): камера → видео-трек. Нет камеры → recvonly (всё равно
+		// принимаем удалённое видео). _remoteVideoSink считает входящие кадры.
+		if (_wantVideo) {
+			_remoteVideoSink = std::make_unique<RemoteVideoSink>();
+			auto cam = rtc::make_ref_counted<CameraSource>();
+			const auto ok = g.worker->BlockingCall([&] {
+				return cam->startCapture();
+			});
+			if (ok) {
+				_cameraSource = cam;
+				auto videoTrack = g.factory->CreateVideoTrack(cam, "video0");
+				webrtc::RtpTransceiverInit vinit;
+				vinit.stream_ids = { "stream0" };
+				_pc->AddTransceiver(videoTrack, vinit);
+				LOG(("Parvane: видео-трек добавлен (камера)"));
+			} else {
+				_pc->AddTransceiver(cricket::MediaType::MEDIA_TYPE_VIDEO);
+				LOG(("Parvane: камера недоступна → видео recvonly"));
+			}
+		}
 		return true;
 	}
 
@@ -232,6 +356,9 @@ private:
 
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _pc;
 	webrtc::scoped_refptr<webrtc::AudioTrackInterface> _track;
+	webrtc::scoped_refptr<CameraSource> _cameraSource;
+	std::unique_ptr<RemoteVideoSink> _remoteVideoSink;
+	bool _wantVideo = false;
 	std::unique_ptr<PcObserver> _observer;
 	std::function<void(std::string)> _pendingLocal;
 };
