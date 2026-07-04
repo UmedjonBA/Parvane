@@ -90,7 +90,8 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 	// Своё окно звонка — НИКОГДА не гасит приложение при закрытии (иначе закрылось
 	// бы и главное окно). Закрытие крестиком = завершить звонок.
 	win->setAttribute(Qt::WA_QuitOnClose, false);
-	win->resize(400, _video ? 600 : 460);
+	// Размер как у родной панели звонка Telegram (calls.style).
+	win->resize(st::callWidth, st::callHeight);
 	base::install_event_filter(win, [](not_null<QEvent*> e) {
 		if (e->type() == QEvent::Close) {
 			Parvane::HangupCall();
@@ -158,46 +159,60 @@ void CallPanel::paintBody(QPainter &p) {
 void CallPanel::layout() {
 	const auto w = _gl.widget()->width();
 	const auto h = _gl.widget()->height();
+	// Позиции берём из общего стиля родной панели звонка (calls.style).
+	const auto &body = st::callBodyLayout;
+	// Область кнопок снизу; тело (аватар/имя/статус) центрируем над ней.
+	const int buttonsArea = 128;
+	const int available = std::max(0, h - buttonsArea);
+	const int bodyTop = std::max(0, (available - body.height) / 2);
+
 	// Есть ли реально удалённое видео (иначе — аватар даже в видеозвонке).
 	const auto remoteVideo = _remoteVideo
 		&& Parvane::CallRemoteVideoTrack()
 		&& (Parvane::CallRemoteVideoTrack()->state()
 			!= Webrtc::VideoState::Inactive);
-	// Видео собеседника — на всю область над кнопками; иначе аватар по центру.
 	if (remoteVideo) {
+		// Видео собеседника — на всё окно; элементы поверх.
 		_userpic->setVisible(false);
 		_remoteVideo->updateGeometry(
 			Calls::VideoBubble::DragMode::None,
-			QRect(0, 0, w, h - 100));
+			QRect(0, 0, w, h));
 	} else {
 		_userpic->setVisible(true);
-		const int ups = 160;
-		_userpic->setGeometry((w - ups) / 2, h / 6, ups);
+		_userpic->setGeometry(
+			(w - body.photoSize) / 2,
+			bodyTop + body.photoTop,
+			body.photoSize);
+		_userpic->setMuteLayout(
+			body.mutePosition,
+			body.muteSize,
+			body.muteStroke);
 	}
 	// Своя камера — небольшая врезка снизу справа (self-preview).
 	if (_localVideo) {
-		const int pw = w / 4, ph = pw * 3 / 4;
+		const int pw = w / 5, ph = pw * 3 / 4;
 		_localVideo->updateGeometry(
 			Calls::VideoBubble::DragMode::None,
-			QRect(w - pw - 12, h - 100 - ph - 12, pw, ph));
+			QRect(w - pw - 16, h - buttonsArea - ph - 16, pw, ph));
 	}
-	// Имя + статус (под аватаром / поверх видео сверху).
-	const int textTop = remoteVideo ? 16 : (h / 6 + 160 + 12);
+	// Имя + статус — на тех же вертикалях, что в оригинале (nameTop/statusTop).
 	_name.resizeToWidth(w);
-	_name.move(0, textTop);
+	_name.move(0, bodyTop + body.nameTop);
 	_status.resizeToWidth(w);
-	_status.move(0, textTop + _name.height() + 6);
+	_status.move(0, bodyTop + body.statusTop);
+	// SAS-код (сверка) — верхняя часть панели.
 	_fingerprint.resizeToWidth(w);
-	_fingerprint.move(0, _status.y() + _status.height() + 8);
-	// Кнопки внизу по центру: активные (mute|hangup) или входящие (decline|answer).
+	_fingerprint.move(0, 16);
+	// Кнопки в ряд по центру снизу: активные (mute|hangup) или входящие
+	// (decline|answer) — родные CallButton со стилями calls.style.
 	auto *const left = _incoming
 		? static_cast<Ui::CallButton*>(&_decline)
 		: static_cast<Ui::CallButton*>(&_mute);
 	auto *const right = _incoming
 		? static_cast<Ui::CallButton*>(&_answer)
 		: static_cast<Ui::CallButton*>(&_hangup);
-	const int by = h - right->height() - 32;
-	const int gap = 48;
+	const int by = h - right->height() - 40;
+	const int gap = 56;
 	left->move(w / 2 - left->width() - gap / 2, by);
 	right->move(w / 2 + gap / 2, by);
 }
@@ -231,7 +246,7 @@ void CallPanel::setConnected() {
 }
 
 void CallPanel::setSas(const QString &sas) {
-	_fingerprint.setText(QString::fromUtf8("🔒 ") + sas);
+	_fingerprint.setText(sas); // ряд эмодзи для сверки (как отпечаток в оригинале)
 	layout();
 }
 
