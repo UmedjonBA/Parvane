@@ -39,10 +39,16 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_call_panel.h
     ${src_loc}/parvane/parvane_call_video.cpp
     ${src_loc}/parvane/parvane_call_video.h
+    ${src_loc}/parvane/parvane_pulse_adm.cpp
+    ${src_loc}/parvane/parvane_pulse_adm.h
 )
 # Реальный медиа-движок звонка использует webrtc (tg_owt) напрямую → нужны его
 # заголовки/дефайны/линковка в основном таргете Telegram.
 target_link_libraries(Telegram PRIVATE desktop-app::external_webrtc)
+# Свой ADM звонков на PulseAudio (libtg_owt без аудио-бэкенда → dummy).
+find_library(PARVANE_PULSE_SIMPLE pulse-simple)
+find_library(PARVANE_PULSE pulse)
+target_link_libraries(Telegram PRIVATE ${PARVANE_PULSE_SIMPLE} ${PARVANE_PULSE})
 
 include(cmake/telegram_options.cmake)
 include(cmake/lib_ffmpeg.cmake)
