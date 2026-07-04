@@ -15,9 +15,10 @@ FetchContent_Declare(nlohmann_json
     GIT_TAG v3.12.0
     GIT_SHALLOW TRUE)
 
-# ── cnats (Core NATS C-клиент), без streaming/TLS — минимум зависимостей ──────
+# ── cnats (Core NATS C-клиент). TLS включён (OpenSSL) — шифрование сигналинга;
+# включается на клиенте через PARVANE_NATS_TLS_CA (см. transport.cpp). ──────────
 set(NATS_BUILD_STREAMING OFF CACHE INTERNAL "")
-set(NATS_BUILD_WITH_TLS OFF CACHE INTERNAL "")
+set(NATS_BUILD_WITH_TLS ON CACHE INTERNAL "")
 set(NATS_BUILD_EXAMPLES OFF CACHE INTERNAL "")
 set(NATS_BUILD_LIB_SHARED OFF CACHE INTERNAL "")
 set(NATS_BUILD_LIB_STATIC ON CACHE INTERNAL "")
