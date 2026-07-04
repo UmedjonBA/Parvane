@@ -47,6 +47,11 @@
 #include <parvane/group_call_manager.h> // parvane-core (групповые звонки, mesh)
 #include "data/data_chat.h"          // ChatData (синтез группы)
 #include "parvane/parvane_video_window.h" // окно активного звонка (Open/Close)
+#include "media/audio/media_audio_track.h" // рингтон звонка
+#include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
+#include "core/file_location.h"       // Core::FileLocation
+#include "core/application.h"        // Core::App().settings().getSoundPath
+#include "core/core_settings.h"
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
 #include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
 #include "settings.h"                // cWorkingDir() — путь для ключа звонков
@@ -209,6 +214,10 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 }
 
 } // namespace
+
+// Рингтон звонка (определены ниже) — нужны в onIncoming/onState выше по коду.
+void PlayRingtone(bool outgoing);
+void StopRingtone();
 
 QString NatsUrl() {
 	if (const char *v = std::getenv("PARVANE_NATS_URL"); v && *v) {
@@ -403,13 +412,24 @@ bool StartSession() {
 				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
 				return;
 			}
-			// UI: бокс «принять/отклонить» на main-потоке.
+			// UI: рингтон + бокс «принять/отклонить» на main-потоке.
 			const auto peerQ = QString::fromStdString(peer);
-			crl::on_main([peerQ] {
+			const auto isVideo = (media == "video");
+			crl::on_main([peerQ, isVideo] {
+				PlayRingtone(/*outgoing=*/false);
 				Ui::show(Ui::MakeConfirmBox({
-					.text = u"Входящий звонок от "_q + peerQ,
-					.confirmed = [](Fn<void()> &&close) { AcceptCall(); close(); },
-					.cancelled = [](Fn<void()> &&close) { HangupCall(); close(); },
+					.text = (isVideo ? u"Входящий видеозвонок от "_q
+						: u"Входящий звонок от "_q) + peerQ,
+					.confirmed = [](Fn<void()> &&close) {
+						StopRingtone();
+						AcceptCall();
+						close();
+					},
+					.cancelled = [](Fn<void()> &&close) {
+						StopRingtone();
+						HangupCall();
+						close();
+					},
 					.confirmText = u"Принять"_q,
 					.cancelText = u"Отклонить"_q,
 				}));
@@ -429,11 +449,21 @@ bool StartSession() {
 			}
 			const auto peerStd = peer.toStdString();
 			crl::on_main([s, peerStd, video] {
+				// Рингтон: дозвон (Outgoing) — ringback; глохнет на Active/Ended.
+				if (s == parvane::CallState::Outgoing) {
+					PlayRingtone(/*outgoing=*/true);
+				} else if (s == parvane::CallState::Active
+						|| s == parvane::CallState::Ended) {
+					StopRingtone();
+				}
 				const auto inCall = (s == parvane::CallState::Outgoing
 					|| s == parvane::CallState::Connecting
 					|| s == parvane::CallState::Active);
 				if (inCall) {
 					Parvane::OpenCallWindow(peerStd, video);
+					if (s == parvane::CallState::Active) {
+						Parvane::SetCallConnected();
+					}
 				} else if (s == parvane::CallState::Ended) {
 					Parvane::CloseVideoWindow();
 					std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1335,16 +1365,23 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 		std::int64_t ts,
 		int durationSecs,
 		int width,
-		int height) {
+		int height,
+		const QString &localPath = QString()) {
 	auto attributes = QVector<MTPDocumentAttribute>();
 	if (kind == u"voice"_q) {
-		// Голосовое: audio+voice+waveform. Пустой waveform ронял рендер
-		// (qAbs(min())), поэтому даём валидный плоский waveform 5-bit.
+		// Голосовое: audio+voice+waveform. Реальную волну считаем из файла
+		// (audioCountWaveform); если не вышло — плоский placeholder (пустой ронял
+		// рендер через qAbs(min())).
 		using AF = MTPDdocumentAttributeAudio::Flag;
 		auto wf = VoiceWaveform();
-		wf.reserve(64);
-		for (auto i = 0; i != 64; ++i) {
-			wf.push_back(8 + (i % 16)); // мягкая «волна», не нули
+		if (!localPath.isEmpty()) {
+			wf = audioCountWaveform(Core::FileLocation(localPath), QByteArray());
+		}
+		if (wf.isEmpty()) {
+			wf.reserve(64);
+			for (auto i = 0; i != 64; ++i) {
+				wf.push_back(8 + (i % 16));
+			}
 		}
 		const auto encoded = documentWaveformEncode5bit(wf);
 		attributes.push_back(MTP_documentAttributeAudio(
@@ -1496,7 +1533,7 @@ void injectMediaOnMain(
 
 	const auto mtpDoc = buildLocalMtpDocument(
 		session, docId, kind, mime, size, filename, ts,
-		durationSecs, width, height);
+		durationSecs, width, height, localPath);
 	using Flag = MTPDmessageMediaDocument::Flag;
 	const auto mflags = Flag::f_document
 		| ((kind == u"voice"_q) ? Flag::f_voice : Flag(0))
@@ -2291,6 +2328,25 @@ void SetCallSas(const std::string &sas) {
 void ToggleMute(bool muted) {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	if (g_callManager) g_callManager->setMuted(muted);
+}
+
+// Рингтон звонка (штатные звуки tdesktop call_incoming/call_outgoing, в цикле).
+// Только main-поток. Играет во время дозвона/входящего, глохнет на Active/Ended.
+std::unique_ptr<Media::Audio::Track> g_ringtone;
+
+void PlayRingtone(bool outgoing) {
+	g_ringtone = Media::Audio::Current().createTrack();
+	if (!g_ringtone) {
+		return;
+	}
+	const auto path = Core::App().settings().getSoundPath(
+		outgoing ? u"call_outgoing"_q : u"call_incoming"_q);
+	g_ringtone->fillFromFile(path);
+	g_ringtone->playInLoop();
+}
+
+void StopRingtone() {
+	g_ringtone = nullptr;
 }
 
 void LeaveGroupCall() {
