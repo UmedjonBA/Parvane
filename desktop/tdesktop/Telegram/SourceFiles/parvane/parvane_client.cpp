@@ -2299,20 +2299,35 @@ void PlaceCall(const QString &peer, bool video) {
 	});
 }
 
+// ВАЖНО: не держим g_sessionMutex при вызове менеджера — accept/hangup/setMuted
+// синхронно дёргают onState, а тот берёт g_sessionMutex → self-deadlock (окно
+// зависало). Берём указатель под локом, отпускаем, потом зовём.
 void AcceptCall() {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	if (g_callManager) g_callManager->accept();
+	parvane::CallManager *m = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		m = g_callManager.get();
+	}
+	if (m) m->accept();
 }
 
 void HangupCall() {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	if (g_callManager) g_callManager->hangup();
+	parvane::CallManager *m = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		m = g_callManager.get();
+	}
+	if (m) m->hangup();
 }
 
 // Заглушить/включить свой микрофон (кнопка в окне звонка).
 void ToggleMute(bool muted) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	if (g_callManager) g_callManager->setMuted(muted);
+	parvane::CallManager *m = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		m = g_callManager.get();
+	}
+	if (m) m->setMuted(muted);
 }
 
 // Рингтон звонка (штатные звуки tdesktop call_incoming/call_outgoing, в цикле).
