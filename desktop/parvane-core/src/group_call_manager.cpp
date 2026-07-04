@@ -5,6 +5,14 @@
 
 namespace parvane {
 
+// Префикс адреса для сигналинга ГРУППОВЫХ звонков — чтобы они шли в отдельный
+// инбокс call.user.gcall:<addr> и НЕ пересекались с 1-на-1 CallManager (иначе
+// per-pair инвайты группового звонка вызывали бы ложный «входящий звонок»).
+namespace {
+constexpr auto kGPrefix = "gcall:";
+std::string gAddr(const std::string &a) { return std::string(kGPrefix) + a; }
+} // namespace
+
 GroupCallManager::GroupCallManager(CallClient &calls, std::string selfAddr,
                                    std::string token, const crypto::SigningKey *key,
                                    std::function<std::unique_ptr<MediaBackend>()> makeBackend,
@@ -17,7 +25,10 @@ GroupCallManager::GroupCallManager(CallClient &calls, std::string selfAddr,
       cb_(std::move(cb)) {}
 
 void GroupCallManager::start() {
-    calls_.onSignal(self_, [this](std::string from, CallSignalIn sig) {
+    // Отдельный инбокс call.user.gcall:<self> — не пересекается с 1-на-1. `from`
+    // в relayed-сигнале уже реальный (шард проверяет from == JWT), префикс — лишь
+    // в `to` для маршрутизации.
+    calls_.onSignal(gAddr(self_), [this](std::string from, CallSignalIn sig) {
         handleSignal(from, sig);
     });
 }
@@ -30,7 +41,8 @@ CallSession *GroupCallManager::ensureSession(const std::string &peer,
     }
     CallSession::Callbacks scb;
     scb.sendSignal = [this, peer](json sig) {
-        calls_.send(self_, peer, token_, sig);
+        // from — реальный (шард сверяет с JWT); префикс только в `to` (инбокс).
+        calls_.send(self_, gAddr(peer), token_, sig);
     };
     scb.peerPubkey = [this, peer] {
         return cb_.peerPubkey ? cb_.peerPubkey(peer) : std::string();
@@ -67,10 +79,10 @@ void GroupCallManager::joinMesh(const std::string &gcid,
 void GroupCallManager::startCall(const std::string &groupCallId,
                                  const std::vector<std::string> &participants,
                                  const std::string &media) {
-    // Разослать приглашение всем другим участникам.
+    // Разослать приглашение всем другим участникам (в групповой инбокс).
     for (const auto &peer : participants) {
         if (peer != self_) {
-            calls_.send(self_, peer, token_,
+            calls_.send(self_, gAddr(peer), token_,
                         groupInviteSignal(groupCallId, participants,
                                           media.empty() ? "audio" : media));
         }
