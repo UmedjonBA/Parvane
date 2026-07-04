@@ -181,6 +181,10 @@ pub enum MessageContent {
         /// Telegram. Пусто = обычный текст. Клиент кладёт/читает через content.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         entities: Vec<TextEntity>,
+        /// Превью первой ссылки (OG-метаданные). Генерирует отправитель, чтобы
+        /// шина/получатель не ходили во внешний URL. None — без превью.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        webpage: Option<WebPagePreview>,
     },
     /// Голосовое сообщение.
     Voice {
@@ -220,6 +224,18 @@ pub enum MessageContent {
         size_bytes: u64,
         caption: Option<String>,
     },
+}
+
+/// Превью ссылки (Open Graph). Заполняет отправитель.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WebPagePreview {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Один фрагмент форматирования текста (Telegram-совместимо).
@@ -844,14 +860,14 @@ mod tests {
             token: "tok".to_string(),
             payload: SendPayload {
                 to: "bob@local".to_string(),
-                content: MessageContent::Text { text: "hi".to_string(), entities: vec![] },
+                content: MessageContent::Text { text: "hi".to_string(), entities: vec![], webpage: None },
                 reply_to: None,
             },
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: ParvaneEvent<SendPayload> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.from, "alice@local");
-        assert_eq!(decoded.payload.content, MessageContent::Text { text: "hi".to_string(), entities: vec![] });
+        assert_eq!(decoded.payload.content, MessageContent::Text { text: "hi".to_string(), entities: vec![], webpage: None });
     }
 
     #[test]

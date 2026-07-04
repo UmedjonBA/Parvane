@@ -31,6 +31,12 @@
 #include "apiwrap.h"
 #include "ui/text/text_entity.h"    // EntityInText/EntityType/EntitiesInText (форматирование)
 #include "api/api_text_entities.h"  // Api::EntitiesToMTP
+
+#include <QtNetwork/QNetworkAccessManager> // превью ссылок: OG-fetch отправителем
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QUrl>
 #include "api/api_common.h"
 #include "storage/localimageloader.h" // FilePrepareResult, SendMediaType
 
@@ -152,12 +158,100 @@ constexpr auto kPumpIntervalMs = crl::time(3000);
 // EntitiesInText → JSON (определена ниже) — нужна в MirrorOutgoing выше по коду.
 [[nodiscard]] nlohmann::json entitiesToJson(const EntitiesInText &entities);
 
+// ── Превью ссылок: отправитель тянет OG-метаданные первой ссылки и кладёт их в
+// content.webpage (получатель рендерит без похода во внешний URL). ────────────
+[[nodiscard]] QString firstUrlInText(const QString &text) {
+	static const auto re = QRegularExpression(
+		u"https?://[^\\s<>\"]+"_q, QRegularExpression::CaseInsensitiveOption);
+	auto m = re.match(text);
+	if (!m.hasMatch()) {
+		return QString();
+	}
+	auto url = m.captured(0);
+	while (!url.isEmpty()
+			&& QString(u".,;:!?)]}'\"»"_q).contains(url.back())) {
+		url.chop(1); // хвостовая пунктуация не часть URL
+	}
+	return url;
+}
+
+[[nodiscard]] QString htmlUnescape(QString s) {
+	s.replace(u"&amp;"_q, u"&"_q);
+	s.replace(u"&quot;"_q, u"\""_q);
+	s.replace(u"&#39;"_q, u"'"_q);
+	s.replace(u"&#x27;"_q, u"'"_q);
+	s.replace(u"&lt;"_q, u"<"_q);
+	s.replace(u"&gt;"_q, u">"_q);
+	s.replace(u"&nbsp;"_q, u" "_q);
+	return s.trimmed();
+}
+
+[[nodiscard]] nlohmann::json parseWebpageHtml(
+		const QString &url,
+		const QByteArray &htmlBytes) {
+	const auto html = QString::fromUtf8(htmlBytes);
+	const auto meta = [&](const QString &prop) -> QString {
+		const auto re = QRegularExpression(
+			u"<meta[^>]+(?:property|name)=[\"']"_q
+				+ QRegularExpression::escape(prop)
+				+ u"[\"'][^>]*?content=[\"']([^\"']*)[\"']"_q,
+			QRegularExpression::CaseInsensitiveOption
+				| QRegularExpression::DotMatchesEverythingOption);
+		const auto m = re.match(html);
+		return m.hasMatch() ? htmlUnescape(m.captured(1)) : QString();
+	};
+	auto title = meta(u"og:title"_q);
+	if (title.isEmpty()) {
+		const auto re = QRegularExpression(
+			u"<title[^>]*>([^<]*)</title>"_q,
+			QRegularExpression::CaseInsensitiveOption);
+		const auto m = re.match(html);
+		if (m.hasMatch()) {
+			title = htmlUnescape(m.captured(1));
+		}
+	}
+	const auto site = meta(u"og:site_name"_q);
+	const auto desc = meta(u"og:description"_q);
+	auto wp = nlohmann::json::object();
+	wp["url"] = url.toStdString();
+	if (!site.isEmpty()) wp["site_name"] = site.toStdString();
+	if (!title.isEmpty()) wp["title"] = title.toStdString();
+	if (!desc.isEmpty()) wp["description"] = desc.left(500).toStdString();
+	return wp;
+}
+
+// Асинхронно тянет превью и зовёт done(webpage) на main (пустой json — если нет).
+void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
+	static auto *manager = new QNetworkAccessManager();
+	auto req = QNetworkRequest(QUrl(url));
+	req.setAttribute(
+		QNetworkRequest::RedirectPolicyAttribute,
+		QNetworkRequest::NoLessSafeRedirectPolicy);
+	req.setHeader(
+		QNetworkRequest::UserAgentHeader,
+		QByteArray("Mozilla/5.0 (compatible; ParvaneBot/1.0)"));
+	auto *reply = manager->get(req);
+	auto *timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	QObject::connect(timer, &QTimer::timeout, reply, &QNetworkReply::abort);
+	timer->start(4000);
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		reply->deleteLater();
+		if (reply->error() != QNetworkReply::NoError) {
+			done(nlohmann::json());
+			return;
+		}
+		done(parseWebpageHtml(url, reply->read(256 * 1024)));
+	});
+}
+
 void sendTextAsync(
 		const QString &toAddress,
 		const QString &text,
 		const nlohmann::json &entities,
 		const std::string &preId,
-		const std::optional<std::string> &replyToUuid = std::nullopt) {
+		const std::optional<std::string> &replyToUuid = std::nullopt,
+		const nlohmann::json &webpage = nlohmann::json()) {
 	const auto from = SelfAddress().toStdString();
 	const auto to = toAddress.toStdString();
 	const auto body = text.toStdString();
@@ -174,7 +268,7 @@ void sendTextAsync(
 		}
 		try {
 			const auto id = m->sendText(from, to, body, token,
-				replyToUuid, preId, entities);
+				replyToUuid, preId, entities, webpage);
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
@@ -564,8 +658,18 @@ void MirrorOutgoing(
 	// свяжет его с локальным эхом (msgId↔uuid) для delete/edit/read СВОИХ.
 	const auto preId = parvane::newUuidV7();
 	g_pendingOwnUuids.enqueue(QString::fromStdString(preId));
-	sendTextAsync(address, text, entitiesToJson(textWithEntities.entities),
-		preId, replyToUuid);
+	const auto entitiesJson = entitiesToJson(textWithEntities.entities);
+	const auto url = firstUrlInText(text);
+	if (url.isEmpty()) {
+		sendTextAsync(address, text, entitiesJson, preId, replyToUuid);
+		return;
+	}
+	// Есть ссылка — тянем OG-превью и отправляем ПОСЛЕ (или без превью по ошибке/
+	// таймауту). preId уже в очереди, так что локальное эхо свяжется корректно.
+	const auto textCopy = text;
+	fetchWebpage(url, [=](nlohmann::json wp) {
+		sendTextAsync(address, textCopy, entitiesJson, preId, replyToUuid, wp);
+	});
 }
 
 void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
@@ -1288,6 +1392,52 @@ void ResolveNames(const QStringList &addresses) {
 	return result;
 }
 
+// content.webpage (OG-превью ссылки) → MTP_messageMediaWebPage. Пусто — если нет.
+[[nodiscard]] MTPMessageMedia buildWebpageMedia(const nlohmann::json &wp) {
+	if (!wp.is_object() || !wp.contains("url")) {
+		return MTPMessageMedia();
+	}
+	const auto str = [&](const char *k) {
+		return (wp.contains(k) && wp[k].is_string())
+			? QString::fromStdString(wp[k].get<std::string>())
+			: QString();
+	};
+	const auto url = str("url");
+	const auto siteName = str("site_name");
+	const auto title = str("title");
+	const auto description = str("description");
+	using PageFlag = MTPDwebPage::Flag;
+	const auto pageFlags = PageFlag(0)
+		| (siteName.isEmpty() ? PageFlag(0) : PageFlag::f_site_name)
+		| (title.isEmpty() ? PageFlag(0) : PageFlag::f_title)
+		| (description.isEmpty() ? PageFlag(0) : PageFlag::f_description);
+	const auto id = std::int64_t(
+		std::hash<std::string>{}(url.toStdString()) & 0x7fffffffffffffffULL);
+	const auto page = MTP_webPage(
+		MTP_flags(pageFlags),
+		MTP_long(id),
+		MTP_string(url),          // url
+		MTP_string(url),          // display_url
+		MTP_int(0),               // hash
+		MTPstring(),              // type
+		MTP_string(siteName),     // site_name
+		MTP_string(title),        // title
+		MTP_string(description),  // description
+		MTPPhoto(),               // photo (пока без картинки)
+		MTPstring(),              // embed_url
+		MTPstring(),              // embed_type
+		MTPint(),                 // embed_width
+		MTPint(),                 // embed_height
+		MTPint(),                 // duration
+		MTPstring(),              // author
+		MTPDocument(),            // document
+		MTPPage(),                // cached_page
+		MTP_vector<MTPWebPageAttribute>());
+	return MTP_messageMediaWebPage(
+		MTP_flags(MTPDmessageMediaWebPage::Flags(0)),
+		page);
+}
+
 [[nodiscard]] MTPMessage buildMessage(
 		std::uint64_t authorId,
 		std::uint64_t peerId,
@@ -2000,10 +2150,13 @@ void injectOnMain(
 				session,
 				entitiesFromJson(parvane::contentEntities(sm.content)),
 				Api::ConvertOption::WithLocal);
+			const auto gWpJson = parvane::contentWebpage(sm.content);
+			const auto gHasWp = gWpJson.is_object() && gWpJson.contains("url");
 			const auto gItem = session->data().addNewMessage(
 				gMsgId,
 				buildMessage(gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
-					MTPMessageMedia(), false, 0, /*peerIsChat=*/true, gEntities),
+					gHasWp ? buildWebpageMedia(gWpJson) : MTPMessageMedia(),
+					gHasWp, 0, /*peerIsChat=*/true, gEntities),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
 				const auto h = gItem->history();
@@ -2125,10 +2278,13 @@ void injectOnMain(
 			session,
 			entitiesFromJson(parvane::contentEntities(sm.content)),
 			Api::ConvertOption::WithLocal);
+		const auto wpJson = parvane::contentWebpage(sm.content);
+		const auto hasWp = wpJson.is_object() && wpJson.contains("url");
 		const auto item = session->data().addNewMessage(
 			msgId,
 			buildMessage(authorId, peerId, out, sm.ts, text,
-				MTPMessageMedia(), /*hasMedia=*/false, replyToMsgId,
+				hasWp ? buildWebpageMedia(wpJson) : MTPMessageMedia(),
+				/*hasMedia=*/hasWp, replyToMsgId,
 				/*peerIsChat=*/false, entities),
 			MessageFlags(),
 			NewMessageType::Unread);

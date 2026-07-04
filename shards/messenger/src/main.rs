@@ -177,7 +177,7 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
 /// Отредактировать текст своего сообщения. Возвращает `true`, если строка
 /// действительно принадлежит автору и была обновлена. Бампает `updated_at`.
 async fn edit_message(pool: &SqlitePool, message_id: &str, author: &str, text: &str, now: i64) -> Result<bool> {
-    let content_json = serde_json::to_string(&MessageContent::Text { text: text.to_string(), entities: vec![] })?;
+    let content_json = serde_json::to_string(&MessageContent::Text { text: text.to_string(), entities: vec![], webpage: None })?;
     let res = sqlx::query(
         "UPDATE messages
             SET text = ?, kind = 'text', content = ?, edited = 1, updated_at = ?
@@ -196,7 +196,7 @@ async fn edit_message(pool: &SqlitePool, message_id: &str, author: &str, text: &
 
 /// Удалить своё сообщение «у всех» (tombstone). Содержимое затирается.
 async fn delete_message(pool: &SqlitePool, message_id: &str, author: &str, now: i64) -> Result<bool> {
-    let empty = serde_json::to_string(&MessageContent::Text { text: String::new(), entities: vec![] })?;
+    let empty = serde_json::to_string(&MessageContent::Text { text: String::new(), entities: vec![], webpage: None })?;
     let res = sqlx::query(
         "UPDATE messages
             SET deleted = 1, text = '', kind = 'text', content = ?, updated_at = ?
@@ -507,7 +507,7 @@ async fn fetch_missed(
         // в норме всегда заполнен.
         let content = match content_json {
             Some(json) => serde_json::from_str(&json).context("разбор content")?,
-            None => MessageContent::Text { text: String::new(), entities: vec![] },
+            None => MessageContent::Text { text: String::new(), entities: vec![], webpage: None },
         };
         // Агрегат реакций: эмодзи → count, mine = реагировал ли запросивший.
         let react_rows: Vec<(String, i64)> = sqlx::query_as(
@@ -829,7 +829,7 @@ mod tests {
 
     /// Текстовое сообщение.
     fn send_event(id: &str, from: &str, to: &str, text: &str) -> ParvaneEvent<SendPayload> {
-        send_content(id, from, to, MessageContent::Text { text: text.into(), entities: vec![] })
+        send_content(id, from, to, MessageContent::Text { text: text.into(), entities: vec![], webpage: None })
     }
 
     /// Сообщение с произвольным контентом (для медиа-тестов).

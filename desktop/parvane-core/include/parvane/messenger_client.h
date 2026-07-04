@@ -36,7 +36,10 @@ public:
         const std::optional<std::string> &id = std::nullopt,
         // Форматирование (жирный/курсив/код/…) — массив entities (offset/length/
         // type в UTF-16, как в Telegram). Пустой = обычный текст.
-        const json &entities = json::array());
+        const json &entities = json::array(),
+        // Превью ссылки (OG-метаданные) — объект {url,site_name,title,description}
+        // или null. Кладётся в content.webpage.
+        const json &webpage = json());
 
     // Как sendText, но content — произвольный MessageContent (медиа, Фаза 4).
     // contentJson должен быть валидным вариантом MessageContent (tag "kind":

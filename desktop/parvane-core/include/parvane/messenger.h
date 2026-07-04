@@ -28,10 +28,14 @@ using nlohmann::json;
 // snake_case в parvane-types). Помощники не разбирают медиа-варианты, но и не
 // теряют их: храним сырой json в StoredMessage::content.
 inline json textContent(const std::string &text,
-                        const json &entities = json::array()) {
+                        const json &entities = json::array(),
+                        const json &webpage = json()) {
     json c{{"kind", "text"}, {"text", text}};
     if (entities.is_array() && !entities.empty()) {
         c["entities"] = entities; // форматирование (жирный/курсив/код/…)
+    }
+    if (webpage.is_object() && webpage.contains("url")) {
+        c["webpage"] = webpage; // превью ссылки (OG-метаданные)
     }
     return c;
 }
@@ -51,6 +55,15 @@ inline json contentEntities(const json &content) {
         return content["entities"];
     }
     return json::array();
+}
+
+// Превью ссылки текстового content — объект {url,…} или null, если нет.
+inline json contentWebpage(const json &content) {
+    if (content.is_object() && content.contains("webpage")
+            && content["webpage"].is_object()) {
+        return content["webpage"];
+    }
+    return json();
 }
 
 // "kind" контента ("text"/"voice"/"photo"/… или "" если неизвестно).
