@@ -101,6 +101,9 @@ QHash<QString, QStringList> g_groupMembers;
 // НЕ читать через g_callManager->peer() из onState — там уже держится мьютекс
 // менеджера (дедлок). Пишем при placeCall/incoming, читаем в onState.
 QString g_currentCallPeer;
+// SAS-код текущего звонка (эмодзи для сверки голосом). Пишет webrtc-движок при
+// установлении соединения, читает панель активного звонка. Под g_sessionMutex.
+QString g_callSas;
 // UUID сообщений, которые ОТПРАВИЛИ мы сами в этой сессии — чтобы на sync НЕ
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
 // (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
@@ -420,15 +423,35 @@ bool StartSession() {
 			}
 			crl::on_main([s, peer] {
 				static bool boxShown = false;
+				static bool sasShown = false;
+				QString sas;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					sas = g_callSas;
+				}
 				const auto inCall = (s == parvane::CallState::Outgoing
 					|| s == parvane::CallState::Connecting
 					|| s == parvane::CallState::Active);
-				if (inCall && !boxShown) {
+				// Показываем панель на входе в звонок; когда появился SAS (при
+				// установлении соединения) — переоткрываем с кодом сверки.
+				const auto needShow = inCall
+					&& (!boxShown || (!sasShown && !sas.isEmpty()));
+				if (needShow) {
+					if (boxShown) {
+						Ui::hideLayer();
+					}
 					boxShown = true;
+					if (!sas.isEmpty()) {
+						sasShown = true;
+					}
+					auto text = peer.isEmpty()
+						? u"Идёт звонок…"_q
+						: u"Звонок с "_q + peer;
+					if (!sas.isEmpty()) {
+						text += u"\nКод сверки: "_q + sas + u" (сверьте голосом)"_q;
+					}
 					Ui::show(Ui::MakeConfirmBox({
-						.text = (peer.isEmpty()
-							? u"Идёт звонок…"_q
-							: u"Звонок с "_q + peer),
+						.text = text,
 						.confirmed = [](Fn<void()> &&close) {
 							HangupCall();
 							close();
@@ -438,6 +461,11 @@ bool StartSession() {
 					}));
 				} else if (s == parvane::CallState::Ended && boxShown) {
 					boxShown = false;
+					sasShown = false;
+					{
+						std::lock_guard<std::mutex> lk(g_sessionMutex);
+						g_callSas.clear();
+					}
 					Ui::hideLayer();
 				}
 			});
@@ -2206,6 +2234,12 @@ void AcceptCall() {
 void HangupCall() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	if (g_callManager) g_callManager->hangup();
+}
+
+// Вызывается webrtc-движком при установлении соединения — SAS для сверки голосом.
+void SetCallSas(const std::string &sas) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	g_callSas = QString::fromStdString(sas);
 }
 
 void LeaveGroupCall() {

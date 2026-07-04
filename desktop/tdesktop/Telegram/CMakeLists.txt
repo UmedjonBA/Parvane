@@ -35,6 +35,8 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_client.h
     ${src_loc}/parvane/parvane_webrtc_backend.cpp
     ${src_loc}/parvane/parvane_webrtc_backend.h
+    ${src_loc}/parvane/parvane_video_window.cpp
+    ${src_loc}/parvane/parvane_video_window.h
 )
 # Реальный медиа-движок звонка использует webrtc (tg_owt) напрямую → нужны его
 # заголовки/дефайны/линковка в основном таргете Telegram.
