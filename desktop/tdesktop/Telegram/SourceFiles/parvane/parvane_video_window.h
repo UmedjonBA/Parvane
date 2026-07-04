@@ -20,6 +20,9 @@ void ShowLocalVideoFrame(int width, int height, const unsigned char *argb);
 // Задать SAS-код (эмодзи для сверки голосом) в окне.
 void SetCallSasText(const std::string &sas);
 
+// Соединение установлено (Active): переключить статус «Вызов…» → таймер.
+void SetCallConnected();
+
 // Закрыть окно звонка (на Ended).
 void CloseVideoWindow();
 
