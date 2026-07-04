@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     let encoding = EncodingKey::from_secret(&secret);
     let decoding = DecodingKey::from_secret(&secret);
 
-    let nc = async_nats::connect(&nats_url)
+    let nc = parvane_types::nats::connect(&nats_url)
         .await
         .context("подключение к NATS")?;
 

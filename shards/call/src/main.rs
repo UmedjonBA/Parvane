@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
-    let nc = async_nats::connect(&nats_url).await.context("подключение к NATS")?;
+    let nc = parvane_types::nats::connect(&nats_url).await.context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
 
     let mut signal_sub = nc.subscribe(CALL_SIGNAL).await?;

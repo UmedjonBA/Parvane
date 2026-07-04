@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod nats;
+
 // ── топики ───────────────────────────────────────────────────────────────────
 
 pub mod topics {
