@@ -113,33 +113,39 @@ public:
 	CameraSource() : webrtc::VideoTrackSource(/*remote=*/false) {}
 	~CameraSource() override { stop(); }
 
-	// Открыть камеру и начать захват (звать на worker-потоке).
+	// Открыть камеру и начать захват (звать на worker-потоке). Перебираем все
+	// устройства: если /dev/video0 занят (второй экземпляр на той же машине) —
+	// берём следующую камеру → двунаправленное видео при наличии 2 камер.
 	bool startCapture() {
 		std::unique_ptr<webrtc::VideoCaptureModule::DeviceInfo> info(
 			webrtc::VideoCaptureFactory::CreateDeviceInfo());
-		if (!info || info->NumberOfDevices() < 1) {
+		if (!info) {
 			return false;
 		}
-		char id[260] = { 0 }, name[260] = { 0 };
-		if (info->GetDeviceName(0, name, sizeof(name), id, sizeof(id)) != 0) {
-			return false;
+		const auto count = info->NumberOfDevices();
+		for (std::uint32_t idx = 0; idx < count; ++idx) {
+			char id[260] = { 0 }, name[260] = { 0 };
+			if (info->GetDeviceName(idx, name, sizeof(name), id, sizeof(id)) != 0) {
+				continue;
+			}
+			auto vcm = webrtc::VideoCaptureFactory::Create(id);
+			if (!vcm) {
+				continue;
+			}
+			vcm->RegisterCaptureDataCallback(this);
+			webrtc::VideoCaptureCapability cap;
+			cap.width = 640;
+			cap.height = 480;
+			cap.maxFPS = 30;
+			cap.videoType = webrtc::VideoType::kI420;
+			if (vcm->StartCapture(cap) == 0) {
+				_vcm = vcm;
+				LOG(("Parvane: камера открыта — устройство #%1").arg(idx));
+				return true;
+			}
+			vcm->DeRegisterCaptureDataCallback();
 		}
-		_vcm = webrtc::VideoCaptureFactory::Create(id);
-		if (!_vcm) {
-			return false;
-		}
-		_vcm->RegisterCaptureDataCallback(this);
-		webrtc::VideoCaptureCapability cap;
-		cap.width = 640;
-		cap.height = 480;
-		cap.maxFPS = 30;
-		cap.videoType = webrtc::VideoType::kI420;
-		if (_vcm->StartCapture(cap) != 0) {
-			_vcm->DeRegisterCaptureDataCallback();
-			_vcm = nullptr;
-			return false;
-		}
-		return true;
+		return false;
 	}
 	void stop() {
 		if (_vcm) {
@@ -154,6 +160,18 @@ public:
 			LOG(("Parvane: камера — кадров захвачено: %1").arg(n));
 		}
 		_broadcaster.OnFrame(frame);
+		// Локальное превью своей камеры (self-view) в окне звонка.
+		const auto i420 = frame.video_frame_buffer()->ToI420();
+		if (!i420) return;
+		const int w = i420->width(), h = i420->height();
+		if (w <= 0 || h <= 0) return;
+		_argb.resize(std::size_t(w) * h * 4);
+		libyuv::I420ToARGB(
+			i420->DataY(), i420->StrideY(),
+			i420->DataU(), i420->StrideU(),
+			i420->DataV(), i420->StrideV(),
+			_argb.data(), w * 4, w, h);
+		Parvane::ShowLocalVideoFrame(w, h, _argb.data());
 	}
 
 protected:
@@ -165,6 +183,7 @@ private:
 	rtc::VideoBroadcaster _broadcaster;
 	webrtc::scoped_refptr<webrtc::VideoCaptureModule> _vcm;
 	std::atomic<int> _frames{ 0 };
+	std::vector<std::uint8_t> _argb;
 };
 
 // Приёмник удалённого видео: считает кадры (рендер в окне — Э V2).
@@ -434,6 +453,7 @@ private:
 		const auto sas = parvane::crypto::sasEmoji(lf, rf);
 		LOG(("Parvane: SAS звонка: %1").arg(QString::fromStdString(sas)));
 		Parvane::SetCallSas(sas);
+		Parvane::SetCallSasText(sas); // показать в окне звонка
 	}
 
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _pc;

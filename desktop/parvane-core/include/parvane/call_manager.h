@@ -43,6 +43,8 @@ public:
     void accept();
     // Отбой/отклонение текущего.
     void hangup();
+    // Заглушить/включить свой микрофон в текущем звонке.
+    void setMuted(bool muted);
 
     [[nodiscard]] CallState state();
     [[nodiscard]] PeerAuth peerAuth();

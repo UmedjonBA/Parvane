@@ -41,6 +41,9 @@ public:
     // По умолчанию no-op (аудио-движки/заглушка игнорируют).
     virtual void setWantVideo(bool /*on*/) {}
 
+    // Заглушить/включить свой микрофон (mute). По умолчанию no-op.
+    virtual void setMuted(bool /*muted*/) {}
+
     // Движок → сессия: локальный ICE-кандидат (переслать собеседнику).
     std::function<void(std::string candidate)> onLocalIce;
     // Движок → сессия: P2P-соединение установлено/разорвано.
@@ -88,6 +91,8 @@ public:
     void accept();
     // Завершить/отклонить (шлёт hangup или reject в зависимости от фазы).
     void hangup();
+    // Заглушить/включить свой микрофон.
+    void setMuted(bool muted) { if (media_engine_) media_engine_->setMuted(muted); }
 
     [[nodiscard]] CallState state() const { return state_; }
     [[nodiscard]] PeerAuth peerAuth() const { return peerAuth_; }
