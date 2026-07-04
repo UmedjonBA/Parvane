@@ -6,9 +6,8 @@
 
 #include "base/debug_log.h"
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Native*)
+#include "parvane/parvane_call_video.h" // сырые кадры → нативный видео-трек
 
-#include <vector>
-#include <third_party/libyuv/include/libyuv.h>
 #include <parvane/crypto.h> // parvane-core: SAS (sasEmoji)
 
 #include <nlohmann/json.hpp>
@@ -155,18 +154,8 @@ public:
 			LOG(("Parvane: камера — кадров захвачено: %1").arg(n));
 		}
 		_broadcaster.OnFrame(frame);
-		// Локальное превью своей камеры (self-view) в окне звонка.
-		const auto i420 = frame.video_frame_buffer()->ToI420();
-		if (!i420) return;
-		const int w = i420->width(), h = i420->height();
-		if (w <= 0 || h <= 0) return;
-		_argb.resize(std::size_t(w) * h * 4);
-		libyuv::I420ToARGB(
-			i420->DataY(), i420->StrideY(),
-			i420->DataU(), i420->StrideU(),
-			i420->DataV(), i420->StrideV(),
-			_argb.data(), w * 4, w, h);
-		Parvane::NativeCallLocalFrame(w, h, _argb.data());
+		// Своя камера → нативный видео-трек (self-preview в экране звонка).
+		Parvane::PushLocalVideoFrame(frame);
 	}
 
 protected:
@@ -178,7 +167,6 @@ private:
 	rtc::VideoBroadcaster _broadcaster;
 	webrtc::scoped_refptr<webrtc::VideoCaptureModule> _vcm;
 	std::atomic<int> _frames{ 0 };
-	std::vector<std::uint8_t> _argb;
 };
 
 // Приёмник удалённого видео: считает кадры (рендер в окне — Э V2).
@@ -189,21 +177,10 @@ public:
 		if (n == 1 || (n % 60) == 0) {
 			LOG(("Parvane: удалённое видео — кадров получено: %1").arg(n));
 		}
-		// I420 → ARGB (libyuv) → окно видео (Qt, на main-потоке).
-		const auto i420 = frame.video_frame_buffer()->ToI420();
-		if (!i420) return;
-		const int w = i420->width(), h = i420->height();
-		if (w <= 0 || h <= 0) return;
-		_argb.resize(std::size_t(w) * h * 4);
-		libyuv::I420ToARGB(
-			i420->DataY(), i420->StrideY(),
-			i420->DataU(), i420->StrideU(),
-			i420->DataV(), i420->StrideV(),
-			_argb.data(), w * 4, w, h);
-		Parvane::NativeCallRemoteFrame(w, h, _argb.data());
+		// Сырой кадр → нативный видео-трек (Calls::VideoBubble сам рендерит).
+		Parvane::PushRemoteVideoFrame(frame);
 	}
 	std::atomic<int> _count{ 0 };
-	std::vector<std::uint8_t> _argb;
 };
 
 // Достаёт DTLS-отпечаток (после "a=fingerprint:") из SDP. "" если нет.

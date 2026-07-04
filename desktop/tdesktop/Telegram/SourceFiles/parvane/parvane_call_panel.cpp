@@ -11,6 +11,9 @@
 #include "ui/widgets/call_button.h"
 #include "ui/widgets/labels.h"
 #include "calls/calls_userpic.h"
+#include "calls/calls_video_bubble.h" // нативный рендер видео-трека
+#include "parvane/parvane_call_video.h" // общие видео-треки звонка
+#include "webrtc/webrtc_video_track.h"
 #include "data/data_peer.h"
 #include "base/debug_log.h"
 #include "base/event_filter.h"        // close → hangup
@@ -31,23 +34,23 @@ namespace Parvane {
 
 // Управление текущим звонком из кнопок (определены в parvane_client.cpp).
 void HangupCall();
+void AcceptCall();
 void ToggleMute(bool muted);
 
 namespace {
 
 class CallPanel final {
 public:
-	CallPanel(not_null<PeerData*> peer, bool video);
+	CallPanel(not_null<PeerData*> peer, bool video, bool incoming);
 
 	void setConnected();
 	void setSas(const QString &sas);
-	void setRemote(QImage img);
-	void setLocal(QImage img);
 
 private:
 	void layout();
 	void paintBody(QPainter &p);
 	void refreshStatus();
+	void switchToActive(); // входящий → активный (после «Ответить»/соединения)
 
 	Ui::GL::Window _gl;
 	Ui::FlatLabel _name;
@@ -55,22 +58,29 @@ private:
 	Ui::FlatLabel _fingerprint;
 	Ui::CallButton _mute;
 	Ui::CallButton _hangup;
+	Ui::CallButton _answer;   // входящий: «Ответить» (зелёная)
+	Ui::CallButton _decline;  // входящий: «Отклонить» (красная)
 	std::unique_ptr<Calls::Userpic> _userpic;
+	std::unique_ptr<Calls::VideoBubble> _remoteVideo; // видео собеседника (нативно)
+	std::unique_ptr<Calls::VideoBubble> _localVideo;  // своя камера (self-preview)
 	rpl::variable<bool> _muted = false;
 	QTimer _timer;
 	bool _video = false;
+	bool _incoming = false;
 	bool _connected = false;
 	qint64 _start = 0;
-	QImage _remote, _local;
 };
 
-CallPanel::CallPanel(not_null<PeerData*> peer, bool video)
+CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 : _name(_gl.widget(), st::callName)
 , _status(_gl.widget(), st::callStatus)
 , _fingerprint(_gl.widget(), st::callStatus)
 , _mute(_gl.widget(), st::callMicrophoneMute, &st::callMicrophoneUnmute)
 , _hangup(_gl.widget(), st::callHangup)
+, _answer(_gl.widget(), st::callAnswer)
+, _decline(_gl.widget(), st::callHangup)
 , _video(video)
+, _incoming(incoming)
 , _start(QDateTime::currentSecsSinceEpoch()) {
 	const auto win = _gl.window();
 	const auto body = _gl.widget();
@@ -89,13 +99,39 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video)
 	});
 
 	_name.setText(peer->name());
-	_status.setText(QString::fromUtf8("Вызов…"));
+	_status.setText(_incoming
+		? (_video ? QString::fromUtf8("Входящий видеозвонок")
+			: QString::fromUtf8("Входящий звонок"))
+		: QString::fromUtf8("Вызов…"));
+
+	// Активные кнопки (mute/hangup) и входящие (answer/decline) — показываем нужную
+	// пару по режиму.
+	_mute.setVisible(!_incoming);
+	_hangup.setVisible(!_incoming);
+	_answer.setVisible(_incoming);
+	_decline.setVisible(_incoming);
 
 	_mute.setClickedCallback([this] {
 		_muted = !_muted.current();
 		Parvane::ToggleMute(_muted.current());
 	});
 	_hangup.setClickedCallback([] { Parvane::HangupCall(); });
+	_answer.setClickedCallback([this] {
+		Parvane::AcceptCall();
+		switchToActive();
+	});
+	_decline.setClickedCallback([] { Parvane::HangupCall(); });
+
+	// Видео — нативный Calls::VideoBubble поверх общих видео-треков звонка (кадры
+	// туда кладёт webrtc-бэкенд). Треки уже созданы в OpenNativeCallPanel.
+	if (_video) {
+		if (const auto rt = Parvane::CallRemoteVideoTrack()) {
+			_remoteVideo = std::make_unique<Calls::VideoBubble>(body, rt);
+		}
+		if (const auto lt = Parvane::CallLocalVideoTrack()) {
+			_localVideo = std::make_unique<Calls::VideoBubble>(body, lt);
+		}
+	}
 
 	body->paintRequest() | rpl::on_next([this, body](QRect) {
 		QPainter p(body);
@@ -115,36 +151,68 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video)
 }
 
 void CallPanel::paintBody(QPainter &p) {
-	const auto body = _gl.widget();
-	p.fillRect(body->rect(), QColor(0x14, 0x16, 0x1c));
-	// Видео (если есть удалённый кадр) — на всю верхнюю часть.
-	if (_video && !_remote.isNull()) {
-		p.drawImage(body->rect(), _remote);
-		if (!_local.isNull()) {
-			const int pw = body->width() / 4, ph = pw * 3 / 4;
-			p.drawImage(QRect(body->width() - pw - 12, 12, pw, ph), _local);
-		}
-	}
+	// Фон; аватар и видео (Calls::Userpic/VideoBubble) — самостоятельные виджеты.
+	p.fillRect(_gl.widget()->rect(), QColor(0x14, 0x16, 0x1c));
 }
 
 void CallPanel::layout() {
 	const auto w = _gl.widget()->width();
 	const auto h = _gl.widget()->height();
-	// Аватар по центру верхней трети.
-	const int ups = 160;
-	_userpic->setGeometry((w - ups) / 2, h / 6, ups);
-	// Имя + статус под аватаром.
+	// Есть ли реально удалённое видео (иначе — аватар даже в видеозвонке).
+	const auto remoteVideo = _remoteVideo
+		&& Parvane::CallRemoteVideoTrack()
+		&& (Parvane::CallRemoteVideoTrack()->state()
+			!= Webrtc::VideoState::Inactive);
+	// Видео собеседника — на всю область над кнопками; иначе аватар по центру.
+	if (remoteVideo) {
+		_userpic->setVisible(false);
+		_remoteVideo->updateGeometry(
+			Calls::VideoBubble::DragMode::None,
+			QRect(0, 0, w, h - 100));
+	} else {
+		_userpic->setVisible(true);
+		const int ups = 160;
+		_userpic->setGeometry((w - ups) / 2, h / 6, ups);
+	}
+	// Своя камера — небольшая врезка снизу справа (self-preview).
+	if (_localVideo) {
+		const int pw = w / 4, ph = pw * 3 / 4;
+		_localVideo->updateGeometry(
+			Calls::VideoBubble::DragMode::None,
+			QRect(w - pw - 12, h - 100 - ph - 12, pw, ph));
+	}
+	// Имя + статус (под аватаром / поверх видео сверху).
+	const int textTop = remoteVideo ? 16 : (h / 6 + 160 + 12);
 	_name.resizeToWidth(w);
-	_name.move(0, h / 6 + ups + 12);
+	_name.move(0, textTop);
 	_status.resizeToWidth(w);
-	_status.move(0, h / 6 + ups + 12 + _name.height() + 6);
+	_status.move(0, textTop + _name.height() + 6);
 	_fingerprint.resizeToWidth(w);
 	_fingerprint.move(0, _status.y() + _status.height() + 8);
-	// Кнопки внизу по центру.
-	const int by = h - _hangup.height() - 32;
-	const int gap = 40;
-	_mute.move(w / 2 - _mute.width() - gap / 2, by);
-	_hangup.move(w / 2 + gap / 2, by);
+	// Кнопки внизу по центру: активные (mute|hangup) или входящие (decline|answer).
+	auto *const left = _incoming
+		? static_cast<Ui::CallButton*>(&_decline)
+		: static_cast<Ui::CallButton*>(&_mute);
+	auto *const right = _incoming
+		? static_cast<Ui::CallButton*>(&_answer)
+		: static_cast<Ui::CallButton*>(&_hangup);
+	const int by = h - right->height() - 32;
+	const int gap = 48;
+	left->move(w / 2 - left->width() - gap / 2, by);
+	right->move(w / 2 + gap / 2, by);
+}
+
+void CallPanel::switchToActive() {
+	if (!_incoming) {
+		return;
+	}
+	_incoming = false;
+	_answer.setVisible(false);
+	_decline.setVisible(false);
+	_mute.setVisible(true);
+	_hangup.setVisible(true);
+	_status.setText(QString::fromUtf8("Соединение…"));
+	layout();
 }
 
 void CallPanel::refreshStatus() {
@@ -156,6 +224,7 @@ void CallPanel::refreshStatus() {
 }
 
 void CallPanel::setConnected() {
+	switchToActive();
 	_connected = true;
 	_start = QDateTime::currentSecsSinceEpoch();
 	refreshStatus();
@@ -166,35 +235,21 @@ void CallPanel::setSas(const QString &sas) {
 	layout();
 }
 
-void CallPanel::setRemote(QImage img) {
-	_remote = std::move(img);
-	_gl.widget()->update();
-}
-
-void CallPanel::setLocal(QImage img) {
-	_local = std::move(img);
-	_gl.widget()->update();
-}
-
 std::unique_ptr<CallPanel> g_panel;
-
-QImage frameToImage(int w, int h, const unsigned char *argb) {
-	QImage img(reinterpret_cast<const uchar *>(argb), w, h,
-		w * 4, QImage::Format_ARGB32);
-	return img.copy();
-}
 
 } // namespace
 
-void OpenNativeCallPanel(PeerData *peer, bool video) {
+void OpenNativeCallPanel(PeerData *peer, bool video, bool incoming) {
 	if (!peer) {
 		return;
 	}
 	const auto raw = peer;
-	crl::on_main([raw, video] {
+	crl::on_main([raw, video, incoming] {
 		if (!g_panel) {
-			g_panel = std::make_unique<CallPanel>(raw, video);
-			LOG(("Parvane: нативный экран звонка открыт"));
+			Parvane::CreateCallVideoTracks(); // до панели — VideoBubble берёт треки
+			g_panel = std::make_unique<CallPanel>(raw, video, incoming);
+			LOG(("Parvane: нативный экран звонка открыт (%1)")
+				.arg(incoming ? "входящий" : "исходящий"));
 		}
 	});
 }
@@ -208,28 +263,11 @@ void NativeCallSas(const std::string &sas) {
 	crl::on_main([s] { if (g_panel) g_panel->setSas(s); });
 }
 
-void NativeCallRemoteFrame(int width, int height, const unsigned char *argb) {
-	if (width <= 0 || height <= 0 || !argb) {
-		return;
-	}
-	auto copy = frameToImage(width, height, argb);
-	crl::on_main([copy = std::move(copy)]() mutable {
-		if (g_panel) g_panel->setRemote(std::move(copy));
-	});
-}
-
-void NativeCallLocalFrame(int width, int height, const unsigned char *argb) {
-	if (width <= 0 || height <= 0 || !argb) {
-		return;
-	}
-	auto copy = frameToImage(width, height, argb);
-	crl::on_main([copy = std::move(copy)]() mutable {
-		if (g_panel) g_panel->setLocal(std::move(copy));
-	});
-}
-
 void CloseNativeCallPanel() {
-	crl::on_main([] { g_panel = nullptr; });
+	crl::on_main([] {
+		g_panel = nullptr;
+		Parvane::ResetCallVideoTracks(); // после панели (VideoBubble уже разрушен)
+	});
 }
 
 } // namespace Parvane
