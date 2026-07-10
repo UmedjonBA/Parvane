@@ -12,3 +12,9 @@
 # Claude Code local artifacts
 .claude/
 CLAUDE.md
+
+# Плановые/стратегические доки — локальные, не для публичного репо
+# (уже закоммичены локально; в исключениях, чтобы не уходили в GitHub)
+/ARCHITECTURE.md
+/ROADMAP.md
+/specs/
