@@ -376,6 +376,29 @@ mod tests {
     }
 
     #[test]
+    fn repeated_prekey_decrypts_with_existing_session() {
+        // Пока получатель не ответил, отправитель шлёт PRE-KEY сообщения (ctype=0).
+        // Получатель создаёт inbound на ПЕРВОМ, последующие prekey расшифровывает
+        // ТОЙ ЖЕ сессией (без повторного расхода one-time). Это чинит E2E после
+        // рестарта (msg2 приходит prekey, one-time уже израсходован).
+        let mut bob = E2EAccount::new();
+        let otks = bob.generate_otks(1, 1);
+        let bob_id = bob.identity_b64();
+        let alice = E2EAccount::new();
+        let mut a = alice.outbound(&bob_id, &otks[0].1).unwrap();
+        let (t1, c1) = a.encrypt(b"m1");
+        assert_eq!(t1, 0, "первое — pre-key");
+        let (mut b, pt1) = bob.inbound(&alice.identity_b64(), t1, &c1).unwrap();
+        assert_eq!(pt1, b"m1");
+        // Второе — ТОЖЕ pre-key (bob не ответил).
+        let (t2, c2) = a.encrypt(b"m2");
+        assert_eq!(t2, 0, "второе тоже pre-key");
+        // Расшифровать СУЩЕСТВУЮЩЕЙ сессией (а не новой inbound).
+        let pt2 = b.decrypt(t2, &c2).expect("prekey расшифрован существующей сессией");
+        assert_eq!(pt2, b"m2");
+    }
+
+    #[test]
     fn account_pickle_round_trip() {
         let mut acc = E2EAccount::new();
         let id = acc.identity_b64();

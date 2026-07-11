@@ -32,6 +32,8 @@ kill "$AP" "$BP" 2>/dev/null; wait "$AP" "$BP" 2>/dev/null
 echo "──────── РАН 2 (после рестарта) ────────"
 echo "== BOB ран2 log =="; grep -iE "Parvane: (сессия|login|E2E|входящее|НЕ расшифров|получ)" "$B/log.txt" 2>/dev/null | head -12
 echo "== ALICE ран2 log =="; grep -iE "Parvane: (сессия|login|E2E|отправлено|autosend)" "$A/log.txt" 2>/dev/null | head -8
+echo "== E2E диагностика ALICE ран2 =="; grep "PARVANE-E2E" "$SB/a2.out" 2>/dev/null | tail -8
+echo "== E2E диагностика BOB ран2 =="; grep "PARVANE-E2E" "$SB/b2.out" 2>/dev/null | tail -10
 echo "──────── анализ ────────"
 grep -q "(alice@local): $T2" "$B/log.txt" && ok "E2E ПОСЛЕ рестарта: bob расшифровал НОВОЕ $T2 (сессия/аккаунт сохранены)" || bad "E2E после рестарта НЕ работает (bob не получил $T2)"
 grep -q "сессия поднята для alice@local" "$A/log.txt" && ok "alice: self восстановлен после рестарта" || bad "alice: self ПУСТ после рестарта (Parvane-слой не переинициализирован)"
