@@ -3,12 +3,14 @@ use async_nats::Client;
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
-    IssueRequest, IssueResponse, RegisterRequest, RegisterResponse, ResolveRequest,
-    ResolveResponse, SearchUsersRequest, SearchUsersResponse, SetAvatarRequest, SetKeyRequest,
-    SetNameRequest, SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
+    FetchBundleRequest, FetchBundleResponse, IssueRequest, IssueResponse, PublishPrekeysRequest,
+    PublishPrekeysResponse, RegisterRequest, RegisterResponse, ResolveRequest, ResolveResponse,
+    SearchUsersRequest, SearchUsersResponse, SetAvatarRequest, SetKeyRequest, SetNameRequest,
+    SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
     topics::{
-        IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR,
-        IDENTITY_SETKEY, IDENTITY_SETNAME, IDENTITY_VERIFY,
+        IDENTITY_ISSUE, IDENTITY_PREKEYS_FETCH, IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER,
+        IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME,
+        IDENTITY_VERIFY,
     },
 };
 
@@ -104,8 +106,10 @@ async fn main() -> Result<()> {
     let mut setavatar_sub = nc.subscribe(IDENTITY_SETAVATAR).await?;
     let mut setkey_sub = nc.subscribe(IDENTITY_SETKEY).await?;
     let mut resolve_sub = nc.subscribe(IDENTITY_RESOLVE).await?;
+    let mut pkpub_sub = nc.subscribe(IDENTITY_PREKEYS_PUBLISH).await?;
+    let mut pkfetch_sub = nc.subscribe(IDENTITY_PREKEYS_FETCH).await?;
 
-    info!("Identity шард запущен. Слушаю: issue/register/verify/search/setname/setavatar/setkey/resolve");
+    info!("Identity шард запущен. Слушаю: issue/register/verify/search/setname/setavatar/setkey/resolve/prekeys");
 
     loop {
         tokio::select! {
@@ -132,6 +136,12 @@ async fn main() -> Result<()> {
             }
             Some(msg) = resolve_sub.next() => {
                 handle_resolve(&nc, &pool, msg).await;
+            }
+            Some(msg) = pkpub_sub.next() => {
+                handle_prekeys_publish(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = pkfetch_sub.next() => {
+                handle_prekeys_fetch(&nc, &pool, &decoding, msg).await;
             }
         }
     }
@@ -318,6 +328,179 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
     let _ = nc
         .publish(reply, serde_json::to_vec(&ResolveResponse { users }).unwrap_or_default().into())
         .await;
+}
+
+// ── E2E prekeys (Фаза 2) ──────────────────────────────────────────────────────
+
+/// Сохранить/обновить бандл пользователя: долгоживущие ключи (UPSERT) + пачка
+/// одноразовых (INSERT OR IGNORE — key_id уникален на пользователя).
+async fn store_prekeys(pool: &SqlitePool, username: &str, req: &PublishPrekeysRequest) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO device_keys
+           (username, registration_id, identity_key, signed_prekey_id,
+            signed_prekey, signed_prekey_sig, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(username) DO UPDATE SET
+            registration_id = excluded.registration_id,
+            identity_key = excluded.identity_key,
+            signed_prekey_id = excluded.signed_prekey_id,
+            signed_prekey = excluded.signed_prekey,
+            signed_prekey_sig = excluded.signed_prekey_sig,
+            updated_at = excluded.updated_at",
+    )
+    .bind(username)
+    .bind(req.registration_id)
+    .bind(&req.identity_key)
+    .bind(req.signed_prekey_id)
+    .bind(&req.signed_prekey)
+    .bind(&req.signed_prekey_sig)
+    .bind(now_unix())
+    .execute(pool)
+    .await
+    .context("сохранение device_keys")?;
+    for otp in &req.one_time {
+        sqlx::query(
+            "INSERT OR IGNORE INTO one_time_prekeys (username, key_id, public_key)
+             VALUES (?, ?, ?)",
+        )
+        .bind(username)
+        .bind(otp.key_id)
+        .bind(&otp.public_key)
+        .execute(pool)
+        .await
+        .context("сохранение one_time")?;
+    }
+    Ok(())
+}
+
+/// Бандл собеседника для X3DH. Атомарно снимает одну доступную one-time
+/// (UPDATE … RETURNING — без гонки). Если ключей нет — ok=false; если нет
+/// одноразовых — бандл без них (валидный X3DH-фолбэк).
+async fn fetch_bundle(pool: &SqlitePool, username: &str) -> Result<FetchBundleResponse> {
+    let dk: Option<(i64, String, i64, String, String)> = sqlx::query_as(
+        "SELECT registration_id, identity_key, signed_prekey_id, signed_prekey, signed_prekey_sig
+         FROM device_keys WHERE username = ?",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
+    let Some((reg, ik, spid, sp, sig)) = dk else {
+        return Ok(FetchBundleResponse {
+            ok: false,
+            registration_id: None,
+            identity_key: None,
+            signed_prekey_id: None,
+            signed_prekey: None,
+            signed_prekey_sig: None,
+            one_time_id: None,
+            one_time: None,
+            error: Some("нет ключей пользователя".into()),
+        });
+    };
+    // Атомарно взять и пометить одну доступную one-time.
+    let otp: Option<(i64, String)> = sqlx::query_as(
+        "UPDATE one_time_prekeys SET consumed = 1
+         WHERE rowid = (SELECT rowid FROM one_time_prekeys
+                        WHERE username = ? AND consumed = 0 ORDER BY key_id LIMIT 1)
+         RETURNING key_id, public_key",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    Ok(FetchBundleResponse {
+        ok: true,
+        registration_id: Some(reg),
+        identity_key: Some(ik),
+        signed_prekey_id: Some(spid),
+        signed_prekey: Some(sp),
+        signed_prekey_sig: Some(sig),
+        one_time_id: otp.as_ref().map(|(k, _)| *k),
+        one_time: otp.map(|(_, p)| p),
+        error: None,
+    })
+}
+
+async fn handle_prekeys_publish(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<PublishPrekeysRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => match store_prekeys(pool, &username, &req).await {
+                Ok(()) => {
+                    info!("{} опубликовал prekeys ({} one-time)", username, req.one_time.len());
+                    PublishPrekeysResponse { ok: true, error: None }
+                }
+                Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
+            },
+            Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_prekeys_fetch(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<FetchBundleRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(_requester) => fetch_bundle(pool, &req.user).await.unwrap_or_else(|e| {
+                FetchBundleResponse {
+                    ok: false,
+                    registration_id: None,
+                    identity_key: None,
+                    signed_prekey_id: None,
+                    signed_prekey: None,
+                    signed_prekey_sig: None,
+                    one_time_id: None,
+                    one_time: None,
+                    error: Some(e.to_string()),
+                }
+            }),
+            Err(e) => FetchBundleResponse {
+                ok: false,
+                registration_id: None,
+                identity_key: None,
+                signed_prekey_id: None,
+                signed_prekey: None,
+                signed_prekey_sig: None,
+                one_time_id: None,
+                one_time: None,
+                error: Some(e.to_string()),
+            },
+        },
+        Err(e) => FetchBundleResponse {
+            ok: false,
+            registration_id: None,
+            identity_key: None,
+            signed_prekey_id: None,
+            signed_prekey: None,
+            signed_prekey_sig: None,
+            one_time_id: None,
+            one_time: None,
+            error: Some(e.to_string()),
+        },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 // ── secret management ─────────────────────────────────────────────────────────
@@ -699,6 +882,72 @@ mod tests {
         do_register(&pool, &register_bytes("dup@local", "pw")).await.unwrap();
         let err = do_register(&pool, &register_bytes("dup@local", "other")).await.unwrap_err();
         assert!(err.to_string().contains("занят"));
+    }
+
+    // ── E2E prekey-каталог (Фаза 2) ──
+
+    fn sample_publish(reg: i64, otps: &[(i64, &str)]) -> PublishPrekeysRequest {
+        PublishPrekeysRequest {
+            token: String::new(),
+            registration_id: reg,
+            identity_key: "IK==".into(),
+            signed_prekey_id: 7,
+            signed_prekey: "SPK==".into(),
+            signed_prekey_sig: "SIG==".into(),
+            one_time: otps
+                .iter()
+                .map(|(id, k)| parvane_types::OneTimePrekey { key_id: *id, public_key: (*k).into() })
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn prekeys_publish_then_fetch_consumes_one_time() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        store_prekeys(&pool, "alice@local", &sample_publish(111, &[(1, "OTP1"), (2, "OTP2")]))
+            .await
+            .unwrap();
+
+        // Первый fetch отдаёт бандл + одну one-time, помечает consumed.
+        let b1 = fetch_bundle(&pool, "alice@local").await.unwrap();
+        assert!(b1.ok);
+        assert_eq!(b1.registration_id, Some(111));
+        assert_eq!(b1.identity_key.as_deref(), Some("IK=="));
+        assert!(b1.one_time_id.is_some() && b1.one_time.is_some(), "первая one-time выдана");
+
+        // Второй fetch — другая one-time.
+        let b2 = fetch_bundle(&pool, "alice@local").await.unwrap();
+        assert!(b2.one_time_id.is_some());
+        assert_ne!(b1.one_time_id, b2.one_time_id, "разные one-time");
+
+        // Третий — one-time кончились, бандл без них (валидный фолбэк).
+        let b3 = fetch_bundle(&pool, "alice@local").await.unwrap();
+        assert!(b3.ok);
+        assert!(b3.one_time_id.is_none(), "one-time исчерпаны");
+        assert!(b3.identity_key.is_some(), "долгоживущие ключи всё равно есть");
+    }
+
+    #[tokio::test]
+    async fn fetch_bundle_unknown_user() {
+        let pool = test_pool().await;
+        let b = fetch_bundle(&pool, "ghost@local").await.unwrap();
+        assert!(!b.ok);
+        assert!(b.identity_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn publish_prekeys_upsert_replaces_signed() {
+        let pool = test_pool().await;
+        insert_user(&pool, "bob@local").await;
+        store_prekeys(&pool, "bob@local", &sample_publish(1, &[])).await.unwrap();
+        // повторная публикация с другим registration_id заменяет долгоживущие
+        let mut req = sample_publish(999, &[(5, "NEW")]);
+        req.signed_prekey_id = 42;
+        store_prekeys(&pool, "bob@local", &req).await.unwrap();
+        let b = fetch_bundle(&pool, "bob@local").await.unwrap();
+        assert_eq!(b.registration_id, Some(999));
+        assert_eq!(b.signed_prekey_id, Some(42));
     }
 
     #[tokio::test]

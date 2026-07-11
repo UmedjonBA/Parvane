@@ -402,6 +402,8 @@ fn allowed_req(_user: &str, subject: &str) -> bool {
         "identity.user.setavatar",
         "identity.user.setkey",
         "identity.user.resolve",
+        "identity.prekeys.publish",
+        "identity.prekeys.fetch",
         "msg.sync.request",
         "file.download.request",
         "file.list.request",

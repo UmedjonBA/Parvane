@@ -10,6 +10,10 @@ pub mod topics {
     pub const IDENTITY_VERIFY: &str = "identity.token.verify";
     /// Регистрация аккаунта (отдельно от логина). issue больше не создаёт юзеров.
     pub const IDENTITY_REGISTER: &str = "identity.user.register";
+    /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
+    pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
+    /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
+    pub const IDENTITY_PREKEYS_FETCH: &str = "identity.prekeys.fetch";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
@@ -118,6 +122,59 @@ pub struct RegisterRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub ok: bool,
+    pub error: Option<String>,
+}
+
+// ── E2E prekeys (Фаза 2, X3DH) ────────────────────────────────────────────────
+// Каталог ПУБЛИЧНЫХ ключей для установления E2E-сессии. Приватные части
+// НИКОГДА не покидают устройство. Сервер лишь хранит и раздаёт публичные бандлы.
+
+/// Одна одноразовая (one-time) prekey: пара (id, публичный ключ).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OneTimePrekey {
+    pub key_id: i64,
+    pub public_key: String, // base64
+}
+
+/// Публикация своей пачки prekey-бандлов. `one_time` — пачка одноразовых
+/// (напр. 100); signed prekey и identity — долгоживущие.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishPrekeysRequest {
+    pub token: String,
+    pub registration_id: i64,
+    pub identity_key: String,     // base64 публичный identity-ключ
+    pub signed_prekey_id: i64,
+    pub signed_prekey: String,    // base64 публичный
+    pub signed_prekey_sig: String, // base64 подпись signed prekey identity-ключом
+    #[serde(default)]
+    pub one_time: Vec<OneTimePrekey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishPrekeysResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Запрос бандла собеседника для X3DH.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchBundleRequest {
+    pub token: String,
+    pub user: String,
+}
+
+/// Бандл собеседника. `one_time*` = None, если одноразовые кончились (X3DH без
+/// one-time — стандартный фолбэк, чуть слабее forward secrecy для 1-го сообщения).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchBundleResponse {
+    pub ok: bool,
+    pub registration_id: Option<i64>,
+    pub identity_key: Option<String>,
+    pub signed_prekey_id: Option<i64>,
+    pub signed_prekey: Option<String>,
+    pub signed_prekey_sig: Option<String>,
+    pub one_time_id: Option<i64>,
+    pub one_time: Option<String>,
     pub error: Option<String>,
 }
 
