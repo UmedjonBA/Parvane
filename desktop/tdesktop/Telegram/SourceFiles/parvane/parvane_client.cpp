@@ -44,6 +44,7 @@
 #include <parvane/topics.h>          // parvane-core
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/gateway_transport.h> // parvane-core (доступ через gateway, Фаза 0)
+#include <parvane/e2e.h>             // parvane-core (E2E, Фаза 2)
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -273,24 +274,45 @@ void sendTextAsync(
 	const auto token = Token().toStdString();
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
+		parvane::ITransport *t = nullptr;
+		bool isGroup = false;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			m = g_messenger.get();
+			t = g_transport.get();
+			isGroup = g_knownGroups.contains(QString::fromStdString(to));
 		}
 		if (!m) {
 			LOG(("Parvane: sendText без активной сессии — пропуск"));
 			return;
 		}
 		try {
-			const auto id = m->sendText(from, to, body, token,
-				replyToUuid, preId, entities, webpage);
+			std::string id;
+			// 1-на-1 текст → E2E (Фаза 2): шифруем реальный content, шлём вариант
+			// Encrypted. Группы идут открыто (E2E групп — Фаза 3, sender keys).
+			if (!isGroup && t && parvane::e2e::ready()) {
+				const auto content = parvane::textContent(body, entities, webpage);
+				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
+				if (sealed.empty()) {
+					// Не удалось (нет бандла/one-time) — НЕ слать открытым текстом.
+					LOG(("Parvane: E2E не удался для %1 — сообщение НЕ отправлено")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
+				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
+					replyToUuid, preId);
+			} else {
+				id = m->sendText(from, to, body, token,
+					replyToUuid, preId, entities, webpage);
+			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
 			}
-			LOG(("Parvane: отправлено msg %1 → %2")
+			LOG(("Parvane: отправлено msg %1 → %2%3")
 				.arg(QString::fromStdString(id))
-				.arg(QString::fromStdString(to)));
+				.arg(QString::fromStdString(to))
+				.arg((!isGroup && t && parvane::e2e::ready()) ? u" [E2E]"_q : QString()));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка отправки: %1").arg(QString::fromUtf8(e.what())));
 		}
@@ -573,6 +595,26 @@ void RegisterCallKey(const QString &pub, const QString &token) {
 	});
 }
 
+// E2E (Фаза 2): создать Olm-аккаунт и опубликовать prekeys. На воркере (сетевой
+// request), берёт транспорт/токен под локом и отпускает — НЕ звать под
+// g_sessionMutex напрямую (initDevice блокирующий).
+void InitE2E() {
+	crl::async([] {
+		parvane::ITransport *t = nullptr;
+		std::string self, token;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+			self = g_selfAddress.toStdString();
+			token = g_token.toStdString();
+		}
+		if (t && !token.empty()) {
+			parvane::e2e::initDevice(*t, self, token);
+			LOG(("Parvane: E2E-устройство готово (prekeys опубликованы)"));
+		}
+	});
+}
+
 bool StartSession() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	if (g_messenger) {
@@ -748,6 +790,7 @@ bool StartSession() {
 		g_groupCallManager->start();
 
 		RegisterCallKey(QString::fromStdString(g_callKey->publicB64()), g_token);
+		InitE2E(); // E2E: аккаунт + публикация prekeys (Фаза 2), на воркере
 
 		LOG(("Parvane: сессия поднята для %1").arg(g_selfAddress));
 		return true;
@@ -2128,8 +2171,27 @@ void injectOnMain(
 		const std::vector<parvane::StoredMessage> &msgs) {
 	const auto self = SelfAddress();
 	const auto selfId = IdForAddress(self);
+	const auto selfStd = self.toStdString();
 	int added = 0;
-	for (const auto &sm : msgs) {
+	for (const auto &smOrig : msgs) {
+		auto sm = smOrig; // мутабельная копия — для расшифровки E2E-контента
+		// E2E (Фаза 2): входящий Encrypted-контент → расшифровать в реальный
+		// MessageContent, дальше синтез как обычно. Свои исходящие (from==self)
+		// зашифрованы ДЛЯ собеседника — их не расшифровать, но они идут через
+		// дедуп локального эха. Ошибка расшифровки — плейсхолдер, не краш.
+		if (sm.from != selfStd && parvane::contentKind(sm.content) == "encrypted") {
+			const auto dec = parvane::e2e::open(sm.from, sm.content.dump());
+			if (!dec.empty()) {
+				try {
+					sm.content = nlohmann::json::parse(dec);
+				} catch (const std::exception &) {
+				}
+			} else {
+				LOG(("Parvane: НЕ расшифровано msg %1 от %2")
+					.arg(QString::fromStdString(sm.id))
+					.arg(QString::fromStdString(sm.from)));
+			}
+		}
 		const auto from = QString::fromStdString(sm.from);
 		const auto uuid = QString::fromStdString(sm.id);
 		if (sm.deleted) {

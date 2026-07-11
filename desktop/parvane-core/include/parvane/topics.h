@@ -10,6 +10,8 @@ namespace parvane::topics {
 inline constexpr auto IdentityIssue = "identity.token.issue";
 inline constexpr auto IdentityRegister = "identity.user.register";
 inline constexpr auto IdentityVerify = "identity.token.verify";
+inline constexpr auto IdentityPrekeysPublish = "identity.prekeys.publish";
+inline constexpr auto IdentityPrekeysFetch = "identity.prekeys.fetch";
 
 // messenger
 inline constexpr auto MsgSend = "msg.chat.send";

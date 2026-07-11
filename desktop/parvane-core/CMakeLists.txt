@@ -32,10 +32,23 @@ FetchContent_MakeAvailable(nlohmann_json cnats)
 # ── OpenSSL (Ed25519 для аутентификации сигналинга звонков) ───────────────────
 find_package(OpenSSL REQUIRED)
 
+# ── parvane-e2e (Rust staticlib, vodozemac Olm) — E2E крипта (Фаза 2) ──────────
+# Собираем cargo-крейт и линкуем libparvane_e2e.a. Путь workspace-target —
+# ../../target относительно этого файла (desktop/parvane-core → корень репо).
+set(PARVANE_E2E_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+set(PARVANE_E2E_LIB ${PARVANE_E2E_DIR}/target/debug/libparvane_e2e.a)
+find_program(CARGO_EXE cargo REQUIRED)
+add_custom_target(parvane_e2e_build ALL
+    COMMAND ${CARGO_EXE} build -p parvane-e2e
+    WORKING_DIRECTORY ${PARVANE_E2E_DIR}
+    BYPRODUCTS ${PARVANE_E2E_LIB}
+    COMMENT "cargo build parvane-e2e (vodozemac staticlib)")
+
 # ── parvane_core ─────────────────────────────────────────────────────────────
 add_library(parvane_core STATIC
     src/transport.cpp
     src/gateway_transport.cpp
+    src/e2e.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
     src/call_client.cpp
@@ -44,12 +57,15 @@ add_library(parvane_core STATIC
     src/call_manager.cpp
     src/group_client.cpp
     src/group_call_manager.cpp)
+add_dependencies(parvane_core parvane_e2e_build)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+           ${PARVANE_E2E_DIR}/shared/parvane-e2e/include
     PRIVATE ${cnats_SOURCE_DIR}/src)
 target_link_libraries(parvane_core
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE nats_static OpenSSL::Crypto)
+    PRIVATE nats_static OpenSSL::Crypto
+            ${PARVANE_E2E_LIB} pthread dl m)
 
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
 option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe + tests" ON)

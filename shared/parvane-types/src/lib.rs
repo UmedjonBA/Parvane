@@ -313,6 +313,15 @@ pub enum MessageContent {
         size_bytes: u64,
         caption: Option<String>,
     },
+    /// E2E-зашифрованное содержимое (Фаза 2). Реальный MessageContent
+    /// (текст/медиа) зашифрован Olm-сессией — сервер видит только это.
+    /// `sender_identity` — Curve25519 identity отправителя (нужен получателю для
+    /// установления inbound-сессии). base64 — unpadded (vodozemac).
+    Encrypted {
+        ciphertext: String,
+        ctype: u32,
+        sender_identity: String,
+    },
 }
 
 /// Превью ссылки (Open Graph). Заполняет отправитель.
@@ -350,6 +359,7 @@ impl MessageContent {
             MessageContent::Photo { .. } => "photo",
             MessageContent::Video { .. } => "video",
             MessageContent::File { .. } => "file",
+            MessageContent::Encrypted { .. } => "encrypted",
         }
     }
 }

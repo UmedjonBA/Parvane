@@ -41,16 +41,17 @@ std::string MessengerClient::sendContent(
         const std::string &to,
         const json &contentJson,
         const std::string &token,
-        const std::optional<std::string> &replyTo) {
+        const std::optional<std::string> &replyTo,
+        const std::optional<std::string> &id) {
     SendPayload payload;
     payload.to = to;
     payload.content = contentJson;
     payload.reply_to = replyTo;
 
-    const std::string id = uuid4();
-    const json ev = makeEvent(id, from, nowUnix(), token, payload.toJson());
+    const std::string idStr = id.value_or(uuid4());
+    const json ev = makeEvent(idStr, from, nowUnix(), token, payload.toJson());
     _t.publish(topics::MsgSend, ev.dump());
-    return id;
+    return idStr;
 }
 
 std::vector<StoredMessage> MessengerClient::sync(
