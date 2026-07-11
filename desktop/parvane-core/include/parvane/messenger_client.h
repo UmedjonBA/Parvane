@@ -51,7 +51,10 @@ public:
         const std::string &to,
         const json &contentJson,
         const std::string &token,
-        const std::optional<std::string> &replyTo = std::nullopt);
+        const std::optional<std::string> &replyTo = std::nullopt,
+        // Если задан — используется как id сообщения (корреляция с локальным эхом,
+        // как в sendText). Иначе генерируется uuid7.
+        const std::optional<std::string> &id = std::nullopt);
 
     // Опрашивает msg.sync.request (request/reply, полный конверт) и возвращает
     // сообщения после курсоров. lastSeenId — id-курсор (нулевой uuid = с начала),
