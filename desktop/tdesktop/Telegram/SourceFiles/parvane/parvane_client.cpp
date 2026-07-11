@@ -43,6 +43,7 @@
 #include <parvane/events.h>          // parvane-core
 #include <parvane/topics.h>          // parvane-core
 #include <parvane/transport.h>       // parvane-core
+#include <parvane/gateway_transport.h> // parvane-core (доступ через gateway, Фаза 0)
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -91,7 +92,8 @@ namespace {
 std::mutex g_sessionMutex;
 QString g_token;
 QString g_selfAddress;
-std::unique_ptr<parvane::Transport> g_transport;
+// Транспорт: прямой NATS (dev) либо через gateway (PARVANE_GATEWAY_URL, Фаза 0).
+std::unique_ptr<parvane::ITransport> g_transport;
 std::unique_ptr<parvane::MessengerClient> g_messenger;
 // Звонки (Фаза 4): сигналинг + оркестрация + ключ подписи SDP. Под g_sessionMutex.
 std::unique_ptr<parvane::CallClient> g_callClient;
@@ -152,11 +154,24 @@ FullMsgId g_lastOwnFullId;                 // последнее своё исх
 bool g_presenceSubscribed = false;        // подписка на presence.* (once)
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
 
+// Курсоры инкрементального синка (Фаза 1): двигаются ТОЛЬКО по результатам
+// sync (не по push — иначе можно перескочить невиденное). Оба обязательны:
+// id ловит новые сообщения, updated_at — мутации старых (правки/read/реакции).
+// Доступ под g_sessionMutex; персист — в tdata/parvane-cursors.txt.
+std::string g_lastSeenId;
+std::int64_t g_sinceUpdated = 0;
+
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
 // Публикует текст в шину с воркер-потока (не блокирует UI).
 // EntitiesInText → JSON (определена ниже) — нужна в MirrorOutgoing выше по коду.
 [[nodiscard]] nlohmann::json entitiesToJson(const EntitiesInText &entities);
+
+// Инъекция сообщений в Data::Session (определена ниже) — нужна onInbox-push'у
+// из StartSession (Фаза 1: прямое применение без sync-round-trip).
+void injectOnMain(
+	not_null<Main::Session*> session,
+	const std::vector<parvane::StoredMessage> &msgs);
 
 // ── Превью ссылок: отправитель тянет OG-метаданные первой ссылки и кладёт их в
 // content.webpage (получатель рендерит без похода во внешний URL). ────────────
@@ -323,6 +338,73 @@ QString NatsUrl() {
 	return u"nats://127.0.0.1:4222"_q;
 }
 
+// Адрес gateway (Фаза 0): "host:port" или "tcp://host:port". Пусто — прямой NATS.
+QString GatewayUrl() {
+	if (const char *v = std::getenv("PARVANE_GATEWAY_URL"); v && *v) {
+		return QString::fromUtf8(v);
+	}
+	return QString();
+}
+
+// Создать и подключить транспорт по окружению: gateway (TCP, с authenticate,
+// если задан token) либо прямой NATS (cnats). Бросает при ошибке соединения.
+// token пустой — bootstrap-режим (до логина gateway пускает только issue/register).
+std::unique_ptr<parvane::ITransport> MakeTransport(const QString &token) {
+	const auto gw = GatewayUrl();
+	if (!gw.isEmpty()) {
+		auto url = gw;
+		if (url.startsWith(u"tcp://"_q)) {
+			url = url.mid(6);
+		}
+		const auto colon = url.lastIndexOf(':');
+		const auto host = (colon > 0) ? url.left(colon) : url;
+		const auto port = (colon > 0) ? url.mid(colon + 1).toInt() : 9223;
+		auto t = std::make_unique<parvane::GatewayTransport>();
+		t->connect(host.toStdString(), port > 0 ? port : 9223);
+		if (!token.isEmpty()) {
+			t->authenticate(token.toStdString());
+		}
+		return t;
+	}
+	auto t = std::make_unique<parvane::Transport>();
+	t->connect(NatsUrl().toStdString());
+	return t;
+}
+
+// ── персист курсоров синка (Фаза 1) ─────────────────────────────────────────
+// Формат файла: 2 строки — last_seen_id и since_updated. Потеря файла не
+// страшна: будет одноразовый полный ресинк (дедуп по UUID).
+[[nodiscard]] QString CursorsPath() {
+	return cWorkingDir() + u"tdata/parvane-cursors.txt"_q;
+}
+
+// Звать ПОД g_sessionMutex (например из StartSession) — сама не лочит.
+void LoadCursorsLocked() {
+	QFile f(CursorsPath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	if (lines.size() > 0) {
+		g_lastSeenId = lines[0].trimmed().toStdString();
+	}
+	if (lines.size() > 1) {
+		g_sinceUpdated = lines[1].trimmed().toLongLong();
+	}
+}
+
+// Значения передаются аргументами (зовётся с worker после захвата под локом).
+void SaveCursors(const std::string &lastSeen, std::int64_t sinceUpdated) {
+	QFile f(CursorsPath());
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return;
+	}
+	f.write(QString::fromStdString(lastSeen).toUtf8());
+	f.write("\n");
+	f.write(QString::number(sinceUpdated).toUtf8());
+	f.write("\n");
+}
+
 void LogStartup() {
 	// Конструирование parvane::Transport заставляет линкер втянуть cnats.
 	parvane::Transport transport;
@@ -334,11 +416,11 @@ void LogStartup() {
 IssueResult Issue(const QString &user, const QString &password) {
 	IssueResult out;
 	try {
-		parvane::Transport transport;
-		transport.connect(NatsUrl().toStdString());
+		// bootstrap: без токена (gateway пускает issue/register до auth).
+		auto transport = MakeTransport(QString());
 
 		parvane::IssueRequest req{user.toStdString(), password.toStdString()};
-		const auto raw = transport.request(
+		const auto raw = transport->request(
 			parvane::topics::IdentityIssue,
 			req.toJson().dump(),
 			5000);
@@ -358,6 +440,33 @@ IssueResult Issue(const QString &user, const QString &password) {
 		out.ok = false;
 		out.error = QString::fromUtf8(e.what());
 		LOG(("Parvane: Issue exception: %1").arg(out.error));
+	}
+	return out;
+}
+
+RegisterResult Register(const QString &user, const QString &password) {
+	RegisterResult out;
+	try {
+		// bootstrap: как Issue, до auth (identity.user.register разрешён).
+		auto transport = MakeTransport(QString());
+		const nlohmann::json req = {
+			{"user", user.toStdString()},
+			{"password", password.toStdString()},
+		};
+		const auto raw = transport->request(
+			parvane::topics::IdentityRegister, req.dump(), 5000);
+		const auto resp = nlohmann::json::parse(raw);
+		out.ok = resp.value("ok", false);
+		if (resp.contains("error") && resp["error"].is_string()) {
+			out.error = QString::fromStdString(resp["error"].get<std::string>());
+		}
+		if (!out.ok && out.error.isEmpty()) {
+			out.error = u"identity отклонил регистрацию"_q;
+		}
+	} catch (const std::exception &e) {
+		out.ok = false;
+		out.error = QString::fromUtf8(e.what());
+		LOG(("Parvane: Register exception: %1").arg(out.error));
 	}
 	return out;
 }
@@ -447,7 +556,7 @@ void RegisterCallKey(const QString &pub, const QString &token) {
 		{ "token", token.toStdString() },
 		{ "pubkey", pub.toStdString() } }.dump();
 	crl::async([req, pub] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -470,16 +579,46 @@ bool StartSession() {
 		return true; // идемпотентно
 	}
 	try {
-		auto transport = std::make_unique<parvane::Transport>();
-		transport->connect(NatsUrl().toStdString());
+		// Транспорт по окружению: gateway (PARVANE_GATEWAY_URL, auth по JWT)
+		// либо прямой NATS (dev). Токен уже установлен (SetSelf до StartSession).
+		auto transport = MakeTransport(g_token);
 		auto messenger = std::make_unique<parvane::MessengerClient>(*transport);
-		// delivered = ack/«что-то изменилось» → триггерим цикл приёма (Фаза 3c).
-		messenger->onDelivered([](std::string id) {
+		g_transport = std::move(transport);
+		g_messenger = std::move(messenger);
+		LoadCursorsLocked(); // курсоры инкрементального синка (Фаза 1)
+
+		const auto self = g_selfAddress.toStdString();
+		// delivered (после ack получателя) → пинок синка: обновит ✓-статусы.
+		g_messenger->onDelivered(self, [](std::string id) {
 			LOG(("Parvane: delivered %1 → pump").arg(QString::fromStdString(id)));
 			PumpReceive();
 		});
-		g_transport = std::move(transport);
-		g_messenger = std::move(messenger);
+		// Входящее сообщение (InboxPush) → мгновенная вставка + ack (Фаза 1).
+		// НЕ лочить g_sessionMutex на потоке доставки (close() джойнит его под
+		// этим мьютексом — дедлок) → уходим на worker.
+		g_messenger->onInbox(self, [](parvane::StoredMessage sm) {
+			crl::async([sm = std::move(sm)]() mutable {
+				parvane::MessengerClient *m = nullptr;
+				std::string self, token;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					m = g_messenger.get();
+					self = g_selfAddress.toStdString();
+					token = g_token.toStdString();
+				}
+				if (m) {
+					try {
+						m->ack(self, sm.id, token);
+					} catch (const std::exception &) {
+					}
+				}
+				crl::on_main([sm = std::move(sm)]() mutable {
+					if (const auto session = g_sessionWeak.get()) {
+						injectOnMain(session, {std::move(sm)});
+					}
+				});
+			});
+		});
 
 		// ── Звонки: ключ подписи + сигналинг + менеджер ──
 		g_callKey = std::make_unique<parvane::crypto::SigningKey>(
@@ -757,7 +896,7 @@ void MirrorTyping(PeerData *peer) {
 	const auto to = address.toStdString();
 	const auto id = bare;
 	crl::async([=] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -987,7 +1126,7 @@ void MirrorOutgoingFile(
 	const auto bytesStd = std::string(bytes.constData(), bytes.size());
 
 	crl::async([=] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		parvane::MessengerClient *m = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1252,7 +1391,7 @@ void ResolveNames(const QStringList &addresses) {
 	}
 	const auto reqStr = parvane::json{ { "usernames", arr } }.dump();
 	crl::async([reqStr] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -1536,7 +1675,7 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 	const auto id = IdForAddress(address);
 	const auto photoId = docIdFromFileId(fileId);
 	crl::async([=] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -1927,7 +2066,7 @@ void pumpMediaDownload(
 	const auto token = Token().toStdString();
 	const auto fileIdStd = fileId.toStdString();
 	crl::async([=] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -2327,7 +2466,7 @@ void publishPresenceHeartbeat() {
 	const auto selfStd = self.toStdString();
 	const auto id = IdForAddress(self);
 	crl::async([selfStd, id] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -2359,7 +2498,7 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 		return;
 	}
 	crl::async([q, callback = std::move(callback)]() mutable {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -2417,7 +2556,7 @@ void SetDisplayName(const QString &name) {
 	const auto nStd = n.toStdString();
 	const auto token = Token().toStdString();
 	crl::async([nStd, token] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -2458,7 +2597,7 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 	const auto token = Token().toStdString();
 	const auto bytesStd = std::string(bytes.constData(), bytes.size());
 	crl::async([from, token, bytesStd, self] {
-		parvane::Transport *t = nullptr;
+		parvane::ITransport *t = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
@@ -2501,10 +2640,40 @@ void PumpReceive() {
 		if (!m || self.empty()) {
 			return;
 		}
+		// Инкрементальный синк по двум курсорам (Фаза 1): id — новые сообщения,
+		// updated_at — мутации старых. Пагинация: шард отдаёт ≤100 за раз.
+		std::string cursorId;
+		std::int64_t cursorUpd = 0;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			cursorId = g_lastSeenId;
+			cursorUpd = g_sinceUpdated;
+		}
 		std::vector<parvane::StoredMessage> msgs;
 		try {
-			// Полный ресинк (since=0 → шард отдаёт всё), дедуп по UUID на main.
-			msgs = m->sync(self, token, parvane::MessengerClient::zeroCursor(), 0);
+			for (;;) {
+				auto page = m->sync(self, token, cursorId, cursorUpd);
+				if (page.empty()) {
+					break;
+				}
+				// Продвигаем курсоры по максимумам страницы (uuid7 сравнивается
+				// лексикографически = хронологически).
+				for (const auto &sm : page) {
+					if (sm.id > cursorId) {
+						cursorId = sm.id;
+					}
+					if (sm.updated_at > cursorUpd) {
+						cursorUpd = sm.updated_at;
+					}
+				}
+				const auto lastPage = (page.size() < 100);
+				msgs.insert(msgs.end(),
+					std::make_move_iterator(page.begin()),
+					std::make_move_iterator(page.end()));
+				if (lastPage) {
+					break;
+				}
+			}
 		} catch (const std::exception &e) {
 			LOG(("Parvane: sync ошибка: %1").arg(QString::fromUtf8(e.what())));
 			return;
@@ -2512,6 +2681,12 @@ void PumpReceive() {
 		if (msgs.empty()) {
 			return;
 		}
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_lastSeenId = cursorId;
+			g_sinceUpdated = cursorUpd;
+		}
+		SaveCursors(cursorId, cursorUpd); // персист (worker, вне лока)
 		crl::on_main([msgs = std::move(msgs)]() mutable {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
@@ -2784,7 +2959,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		if (!g_typingSubscribed) {
 			g_typingSubscribed = true;
 			const auto selfId = IdForAddress(SelfAddress());
-			parvane::Transport *t = nullptr;
+			parvane::ITransport *t = nullptr;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				t = g_transport.get();
@@ -2826,7 +3001,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// присутствия каждые 30с. На приёме ставим пиру OnlineTill(now+90).
 		if (!g_presenceSubscribed) {
 			g_presenceSubscribed = true;
-			parvane::Transport *t = nullptr;
+			parvane::ITransport *t = nullptr;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				t = g_transport.get();

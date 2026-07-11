@@ -101,7 +101,18 @@ void ParvaneWidget::submit() {
 
 	const auto weak = base::make_weak(this);
 	crl::async([=] {
+		// Логин. Если аккаунта нет (issue отделён от регистрации, Фаза 0) —
+		// регистрируем и логинимся повторно. Так один экран покрывает и вход, и
+		// регистрацию: новый user@server просто создаётся при первом входе.
 		auto res = Parvane::Issue(user, password);
+		if (!res.ok && res.error.contains(u"нет такого пользователя"_q)) {
+			const auto reg = Parvane::Register(user, password);
+			if (reg.ok) {
+				res = Parvane::Issue(user, password);
+			} else if (!reg.error.isEmpty()) {
+				res.error = reg.error;
+			}
+		}
 		crl::on_main(weak, [=, res = std::move(res)] {
 			onIssued(user, res.ok, res.token, res.error);
 		});
