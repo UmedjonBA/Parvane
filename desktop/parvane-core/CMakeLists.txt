@@ -35,6 +35,7 @@ find_package(OpenSSL REQUIRED)
 # ── parvane_core ─────────────────────────────────────────────────────────────
 add_library(parvane_core STATIC
     src/transport.cpp
+    src/gateway_transport.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
     src/call_client.cpp
@@ -82,6 +83,10 @@ if (PARVANE_CORE_BUILD_PROBE)
 
     add_executable(parvane_group_call_tests tests/group_call_tests.cpp)
     target_link_libraries(parvane_group_call_tests PRIVATE parvane_core)
+
+    # Живой e2e gateway (нужен запущенный стек nats+identity+messenger+gateway).
+    add_executable(parvane_gateway_probe probe/gateway_probe.cpp)
+    target_link_libraries(parvane_gateway_probe PRIVATE parvane_core)
 
     enable_testing()
     add_test(NAME transport COMMAND parvane_core_tests)
