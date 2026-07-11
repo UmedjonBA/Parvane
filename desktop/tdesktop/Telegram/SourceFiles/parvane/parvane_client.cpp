@@ -124,6 +124,11 @@ bool g_currentCallVideo = false;
 // задваивать (у них уже есть локальное эхо). Свои сообщения ВНЕ этого набора
 // (из прошлой сессии) восстанавливаем как исходящие. Под g_sessionMutex.
 std::set<std::string> g_ownSentUuids;
+// Кэш расшифрованного E2E-контента (uuid → inner JSON), персистится на диск.
+// Чтобы на РЕСТАРТЕ/пере-синке НЕ гонять уже виденное сообщение через Olm-ratchet
+// повторно (второй раз ratchet не расшифрует → «НЕ расшифровано» + порча). Под
+// g_sessionMutex.
+QHash<QString, QString> g_decCache;
 
 // Общие медиа диалога по типу (msgId'ы) для панели профиля. Без живого MTProto
 // messages.getSearchCounters не отвечает → счётчики/галереи пусты; заполняем
@@ -470,6 +475,54 @@ bool RestoreSessionCreds() {
 	return true;
 }
 
+// ── кэш расшифрованного E2E (uuid → inner JSON) ──────────────────────────────
+[[nodiscard]] QString DecCachePath() {
+	return cWorkingDir() + u"tdata/parvane-dec-cache.jsonl"_q;
+}
+
+// Загрузить кэш. Звать ПОД g_sessionMutex (из StartSession).
+void LoadDecCacheLocked() {
+	QFile f(DecCachePath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	while (!f.atEnd()) {
+		const auto line = QString::fromUtf8(f.readLine()).trimmed();
+		if (line.isEmpty()) {
+			continue;
+		}
+		try {
+			const auto j = nlohmann::json::parse(line.toStdString());
+			const auto id = QString::fromStdString(j.value("id", std::string()));
+			if (!id.isEmpty()) {
+				g_decCache.insert(id, QString::fromStdString(j.value("inner", std::string())));
+			}
+		} catch (const std::exception &) {
+		}
+	}
+}
+
+// Прочитать из кэша (пусто — нет). Лочит g_sessionMutex.
+[[nodiscard]] QString DecCacheGet(const QString &id) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return g_decCache.value(id);
+}
+
+// Записать расшифрованное (в память + append на диск). Лочит для памяти.
+void DecCachePut(const QString &id, const QString &inner) {
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_decCache.insert(id, inner);
+	}
+	QFile f(DecCachePath());
+	if (!f.open(QIODevice::Append | QIODevice::Text)) {
+		return;
+	}
+	const nlohmann::json j = {{"id", id.toStdString()}, {"inner", inner.toStdString()}};
+	f.write(QString::fromStdString(j.dump()).toUtf8());
+	f.write("\n");
+}
+
 void LogStartup() {
 	// Конструирование parvane::Transport заставляет линкер втянуть cnats.
 	parvane::Transport transport;
@@ -674,7 +727,8 @@ bool StartSession() {
 		auto messenger = std::make_unique<parvane::MessengerClient>(*transport);
 		g_transport = std::move(transport);
 		g_messenger = std::move(messenger);
-		LoadCursorsLocked(); // курсоры инкрементального синка (Фаза 1)
+		LoadCursorsLocked();  // курсоры инкрементального синка (Фаза 1)
+		LoadDecCacheLocked(); // кэш расшифрованного E2E (пережить рестарт/пере-синк)
 
 		const auto self = g_selfAddress.toStdString();
 		// delivered (после ack получателя) → пинок синка: обновит ✓-статусы.
@@ -2213,14 +2267,23 @@ void injectOnMain(
 		// зашифрованы ДЛЯ собеседника — их не расшифровать, но они идут через
 		// дедуп локального эха. Ошибка расшифровки — плейсхолдер, не краш.
 		if (parvane::contentKind(sm.content) == "encrypted") {
-			const auto dec = parvane::e2e::open(sm.from, sm.content.dump());
-			if (dec.empty()) {
-				LOG(("Parvane: НЕ расшифровано msg %1")
-					.arg(QString::fromStdString(sm.id)));
-				continue; // нерасшифрованное не показываем
+			// Кэш: если это сообщение уже расшифровывали — берём результат из
+			// кэша (НЕ гоняем Olm-ratchet повторно; иначе после рестарта/пере-
+			// синка расшифровка ломается). Иначе — расшифровать и запомнить.
+			const auto uuidQ = QString::fromStdString(sm.id);
+			auto innerQ = DecCacheGet(uuidQ);
+			if (innerQ.isEmpty()) {
+				const auto dec = parvane::e2e::open(sm.from, sm.content.dump());
+				if (dec.empty()) {
+					LOG(("Parvane: НЕ расшифровано msg %1")
+						.arg(QString::fromStdString(sm.id)));
+					continue; // нерасшифрованное не показываем
+				}
+				innerQ = QString::fromStdString(dec);
+				DecCachePut(uuidQ, innerQ);
 			}
 			try {
-				auto inner = nlohmann::json::parse(dec);
+				auto inner = nlohmann::json::parse(innerQ.toStdString());
 				if (inner.contains("from") && inner["from"].is_string()) {
 					sm.from = inner["from"].get<std::string>(); // реальный отправитель (sealed)
 				}

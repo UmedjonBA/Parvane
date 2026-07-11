@@ -325,7 +325,17 @@ std::string open(const std::string & /*from_hint*/, const std::string &encrypted
         return {};
     }
     if (ctype == 0) {
-        // pre-key: новая входящая сессия (keyed по identity отправителя).
+        // pre-key: отправитель шлёт prekey, ПОКА не получил ответ. Если сессия с
+        // этим identity уже есть (в т.ч. подгруженная с диска) — расшифровываем
+        // ЕЮ (без повторного расхода one-time — он уже израсходован на 1-м prekey).
+        // Только если сессии нет / не подошла — создаём новую inbound.
+        if (auto *existing = getSession(senderId)) {
+            const auto pt = take(parvane_e2e_decrypt(existing, 0, ct.c_str()));
+            if (!pt.empty()) {
+                persistSession(senderId, existing);
+                return b64d(pt);
+            }
+        }
         char *outPt = nullptr;
         auto *sess = parvane_e2e_inbound(g_account, senderId.c_str(), 0, ct.c_str(), &outPt);
         if (!sess) {
