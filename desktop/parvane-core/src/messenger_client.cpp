@@ -109,16 +109,46 @@ void MessengerClient::pin(
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
-void MessengerClient::onDelivered(std::function<void(std::string)> handler) {
-    _t.subscribe(topics::MsgDelivered,
+void MessengerClient::onDelivered(const std::string &self,
+                                  std::function<void(std::string)> handler) {
+    _t.subscribe(topics::msgInbox(self),
                  [handler = std::move(handler)](std::string, std::string payload) {
                      try {
-                         const auto d = DeliveredPayload::fromJson(json::parse(payload));
-                         if (!d.message_id.empty()) handler(d.message_id);
+                         const auto ev = json::parse(payload);
+                         const auto &p = ev.contains("payload") ? ev["payload"] : ev;
+                         // delivered несёт message_id; InboxPush несёт message —
+                         // не путать (на инбокс приходит и то, и другое).
+                         if (p.contains("message_id") && p["message_id"].is_string()) {
+                             const auto id = p["message_id"].get<std::string>();
+                             if (!id.empty()) handler(id);
+                         }
                      } catch (...) {
-                         // битый delivered — игнор, это не критичный путь.
+                         // битый кадр — игнор, не критичный путь.
                      }
                  });
+}
+
+void MessengerClient::onInbox(const std::string &self,
+                              std::function<void(StoredMessage)> handler) {
+    _t.subscribe(topics::msgInbox(self),
+                 [handler = std::move(handler)](std::string, std::string payload) {
+                     try {
+                         const auto ev = json::parse(payload);
+                         const auto &p = ev.contains("payload") ? ev["payload"] : ev;
+                         if (p.contains("message")) {
+                             handler(StoredMessage::fromJson(p["message"]));
+                         }
+                     } catch (...) {
+                         // битый InboxPush — игнор.
+                     }
+                 });
+}
+
+void MessengerClient::ack(const std::string &from, const std::string &messageId,
+                          const std::string &token) {
+    const json payload{{"message_id", messageId}};
+    _t.publish(topics::MsgAck,
+               makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
 } // namespace parvane

@@ -20,7 +20,7 @@ namespace parvane {
 
 class CallClient {
 public:
-    explicit CallClient(Transport &transport) : _t(transport) {}
+    explicit CallClient(ITransport &transport) : _t(transport) {}
 
     // Сигналы вызова. callId — общий uuid звонка (генерирует инициатор для
     // invite, остальные повторяют его). media: "audio"|"video".
@@ -50,7 +50,7 @@ public:
                                     int timeoutMs = 3000);
 
 private:
-    Transport &_t;
+    ITransport &_t;
 };
 
 } // namespace parvane

@@ -19,7 +19,7 @@ namespace parvane {
 
 class CloudClient {
 public:
-    explicit CloudClient(Transport &transport) : _t(transport) {}
+    explicit CloudClient(ITransport &transport) : _t(transport) {}
 
     // Загружает `bytes` в облако: разбивает на чанки по chunkSize, каждый чанк —
     // request/reply (ждём ack сохранения от шарда), затем file.upload.complete.
@@ -49,7 +49,7 @@ public:
                                 int timeoutMs = 3000);
 
 private:
-    Transport &_t;
+    ITransport &_t;
 };
 
 } // namespace parvane

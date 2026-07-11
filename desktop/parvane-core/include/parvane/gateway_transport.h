@@ -17,6 +17,8 @@
 //   {"op":"err","id"?:..,"error":..}
 #pragma once
 
+#include "parvane/itransport.h"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -36,12 +38,11 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-// Транспорт через gateway. Интерфейс совместим по смыслу с parvane::Transport
-// (request/publish/subscribe/requestMany), плюс явный шаг authenticate().
-class GatewayTransport {
+// Транспорт через gateway (реализует ITransport). Плюс явный шаг authenticate().
+class GatewayTransport : public ITransport {
 public:
     GatewayTransport();
-    ~GatewayTransport();
+    ~GatewayTransport() override;
 
     GatewayTransport(const GatewayTransport &) = delete;
     GatewayTransport &operator=(const GatewayTransport &) = delete;
@@ -59,21 +60,19 @@ public:
 
     // request/reply (один ответ). Бросает GatewayError на таймауте/ошибке.
     std::string request(const std::string &subject, const std::string &payload,
-                        std::int64_t timeoutMs = 3000);
+                        std::int64_t timeoutMs = 3000) override;
 
     // fire-and-forget.
-    void publish(const std::string &subject, const std::string &payload);
+    void publish(const std::string &subject, const std::string &payload) override;
 
     // Много ответов на один запрос (chunked download): onReply на каждый ответ,
     // возвращает true — ждать ещё, false — стоп. Останавливается также по
     // reply_end от gateway и по общему timeout. Бросает GatewayError.
-    using ReplyHandler = std::function<bool(const std::string &reply)>;
     void requestMany(const std::string &subject, const std::string &payload,
-                     const ReplyHandler &onReply, std::int64_t timeoutMs = 5000);
+                     const ReplyHandler &onReply, std::int64_t timeoutMs = 5000) override;
 
     // Асинхронная подписка. handler(subject, payload) зовётся на потоке reader.
-    using Handler = std::function<void(std::string subject, std::string payload)>;
-    void subscribe(const std::string &subject, Handler handler);
+    void subscribe(const std::string &subject, Handler handler) override;
 
 private:
     // Состояние одного pending-запроса (single или many).

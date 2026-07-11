@@ -47,6 +47,7 @@ static void sleepMs(int ms) {
 
 static std::string issue(parvane::Transport &tr, const std::string &user) {
     parvane::IssueRequest req{user, "test"};
+    tr.request(parvane::topics::IdentityRegister, req.toJson().dump()); // регистрируем (идемпотентно)
     auto resp = parvane::IssueResponse::fromJson(
         json::parse(tr.request(parvane::topics::IdentityIssue, req.toJson().dump())));
     return resp.token.value_or("");
