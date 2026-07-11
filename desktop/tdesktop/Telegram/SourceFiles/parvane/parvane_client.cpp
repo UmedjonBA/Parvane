@@ -429,6 +429,47 @@ void SaveCursors(const std::string &lastSeen, std::int64_t sinceUpdated) {
 	f.write("\n");
 }
 
+// ── персист логин-состояния (self+token) ─────────────────────────────────────
+// tdesktop на РЕСТАРТЕ возобновляет кэшированную сессию, минуя экран логина
+// (SetSelf не зовётся). Чтобы Parvane-слой поднялся с той же личностью,
+// сохраняем self+token и восстанавливаем в AfterSessionReady при пустом self.
+[[nodiscard]] QString SessionCredsPath() {
+	return cWorkingDir() + u"tdata/parvane-session.txt"_q;
+}
+
+void SaveSessionCreds(const QString &address, const QString &token) {
+	QFile f(SessionCredsPath());
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return;
+	}
+	f.write(address.toUtf8());
+	f.write("\n");
+	f.write(token.toUtf8());
+	f.write("\n");
+}
+
+// Восстановить self+token с диска (для рестарта). true — восстановлено.
+bool RestoreSessionCreds() {
+	QFile f(SessionCredsPath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return false;
+	}
+	const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	if (lines.size() < 2 || lines[0].trimmed().isEmpty()) {
+		return false;
+	}
+	const auto address = lines[0].trimmed();
+	const auto token = lines[1].trimmed();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_selfAddress = address;
+		g_token = token;
+	}
+	RegisterPeer(address);
+	LOG(("Parvane: логин-состояние восстановлено с диска (%1)").arg(address));
+	return true;
+}
+
 void LogStartup() {
 	// Конструирование parvane::Transport заставляет линкер втянуть cnats.
 	parvane::Transport transport;
@@ -538,6 +579,7 @@ void SetSelf(const QString &address, const QString &token) {
 		g_token = token;
 	}
 	RegisterPeer(address);
+	SaveSessionCreds(address, token); // пережить рестарт (tdesktop минует логин)
 }
 
 QString SelfAddress() {
@@ -3030,6 +3072,13 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
 	crl::on_main(weak, [=] {
 		g_sessionWeak = weak;
+		// Рестарт: tdesktop возобновил кэшированную сессию, минуя экран логина
+		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
+		// диска, иначе Parvane-слой поднимется без личности (отправка/приём/E2E
+		// не работают).
+		if (SelfAddress().isEmpty()) {
+			RestoreSessionCreds();
+		}
 		RegisterPeer(SelfAddress());
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
