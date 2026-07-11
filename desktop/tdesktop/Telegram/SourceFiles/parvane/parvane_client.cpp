@@ -299,8 +299,10 @@ void sendTextAsync(
 						.arg(QString::fromStdString(to)));
 					return;
 				}
-				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
-					replyToUuid, preId);
+				// Sealed sender: from и token ПУСТЫЕ на проводе (отправитель скрыт;
+				// gateway уже аутентифицировал, подлинность — крипто Olm).
+				id = m->sendContent(std::string(), to, nlohmann::json::parse(sealed),
+					std::string(), replyToUuid, preId);
 			} else {
 				id = m->sendText(from, to, body, token,
 					replyToUuid, preId, entities, webpage);
@@ -609,8 +611,11 @@ void InitE2E() {
 			token = g_token.toStdString();
 		}
 		if (t && !token.empty()) {
-			parvane::e2e::initDevice(*t, self, token);
-			LOG(("Parvane: E2E-устройство готово (prekeys опубликованы)"));
+			// Персист E2E — per-self каталог в рабочем каталоге инстанса.
+			const auto dir = (cWorkingDir() + u"tdata/parvane-e2e-"_q
+				+ QString::fromStdString(self)).toStdString();
+			parvane::e2e::initDevice(*t, self, token, dir);
+			LOG(("Parvane: E2E-устройство готово (prekeys опубликованы, персист)"));
 		}
 	});
 }
@@ -639,26 +644,12 @@ bool StartSession() {
 		// НЕ лочить g_sessionMutex на потоке доставки (close() джойнит его под
 		// этим мьютексом — дедлок) → уходим на worker.
 		g_messenger->onInbox(self, [](parvane::StoredMessage sm) {
-			crl::async([sm = std::move(sm)]() mutable {
-				parvane::MessengerClient *m = nullptr;
-				std::string self, token;
-				{
-					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					m = g_messenger.get();
-					self = g_selfAddress.toStdString();
-					token = g_token.toStdString();
+			// Вставка на main; ack (снятие из очереди + delivered) делает
+			// injectOnMain — там уже известен реальный отправитель (sealed).
+			crl::on_main([sm = std::move(sm)]() mutable {
+				if (const auto session = g_sessionWeak.get()) {
+					injectOnMain(session, {std::move(sm)});
 				}
-				if (m) {
-					try {
-						m->ack(self, sm.id, token);
-					} catch (const std::exception &) {
-					}
-				}
-				crl::on_main([sm = std::move(sm)]() mutable {
-					if (const auto session = g_sessionWeak.get()) {
-						injectOnMain(session, {std::move(sm)});
-					}
-				});
 			});
 		});
 
@@ -2179,18 +2170,46 @@ void injectOnMain(
 		// MessageContent, дальше синтез как обычно. Свои исходящие (from==self)
 		// зашифрованы ДЛЯ собеседника — их не расшифровать, но они идут через
 		// дедуп локального эха. Ошибка расшифровки — плейсхолдер, не краш.
-		if (sm.from != selfStd && parvane::contentKind(sm.content) == "encrypted") {
+		if (parvane::contentKind(sm.content) == "encrypted") {
 			const auto dec = parvane::e2e::open(sm.from, sm.content.dump());
-			if (!dec.empty()) {
-				try {
-					sm.content = nlohmann::json::parse(dec);
-				} catch (const std::exception &) {
-				}
-			} else {
-				LOG(("Parvane: НЕ расшифровано msg %1 от %2")
-					.arg(QString::fromStdString(sm.id))
-					.arg(QString::fromStdString(sm.from)));
+			if (dec.empty()) {
+				LOG(("Parvane: НЕ расшифровано msg %1")
+					.arg(QString::fromStdString(sm.id)));
+				continue; // нерасшифрованное не показываем
 			}
+			try {
+				auto inner = nlohmann::json::parse(dec);
+				if (inner.contains("from") && inner["from"].is_string()) {
+					sm.from = inner["from"].get<std::string>(); // реальный отправитель (sealed)
+				}
+				if (inner.contains("content")) {
+					sm.content = inner["content"];
+				}
+			} catch (const std::exception &) {
+				continue;
+			}
+		}
+		// Ack входящего (не своего): снять из очереди + delivered отправителю
+		// (sealed: указываем реального отправителя из конверта). Идемпотентно.
+		if (sm.from != selfStd) {
+			const auto mid = sm.id;
+			const auto sender = sm.from;
+			crl::async([mid, sender] {
+				parvane::MessengerClient *m = nullptr;
+				std::string self, token;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					m = g_messenger.get();
+					self = g_selfAddress.toStdString();
+					token = g_token.toStdString();
+				}
+				if (m) {
+					try {
+						m->ack(self, mid, token, sender);
+					} catch (const std::exception &) {
+					}
+				}
+			});
 		}
 		const auto from = QString::fromStdString(sm.from);
 		const auto uuid = QString::fromStdString(sm.id);

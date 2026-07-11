@@ -723,13 +723,18 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         let event: ParvaneEvent<SendPayload> = serde_json::from_slice(&msg.payload)
             .context("неверный JSON в msg.chat.send")?;
 
-        let sender = verify_token(nc, &event.token).await?;
-        validate_sender(&sender, &event.from)?;
-
-        // Для групп/каналов — проверяем право писать (участник / owner-admin канала).
-        if !can_post(pool, &event.payload.to, &sender).await? {
-            warn!("Отклонено: {} не может писать в {}", sender, event.payload.to);
-            return anyhow::Ok(());
+        // Sealed sender (Фаза 2): пустой `from` — отправитель скрыт от сервера.
+        // Аутентификацию уже сделал gateway (только он публикует msg.chat.send),
+        // подлинность отправителя получатель проверяет криптографически (Olm).
+        // Иначе — обычный путь: верификация токена + антиспуф + право постинга.
+        let sealed = event.from.is_empty();
+        if !sealed {
+            let sender = verify_token(nc, &event.token).await?;
+            validate_sender(&sender, &event.from)?;
+            if !can_post(pool, &event.payload.to, &sender).await? {
+                warn!("Отклонено: {} не может писать в {}", sender, event.payload.to);
+                return anyhow::Ok(());
+            }
         }
 
         let now = now_unix();
@@ -774,12 +779,19 @@ async fn handle_ack(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         // Снять из очереди этого получателя; при первом снятии — уведомить
         // отправителя о доставке (delivered-галочка).
         if ack_delivered(pool, &reader, &mid).await? {
-            let sender: Option<(String,)> =
-                sqlx::query_as("SELECT from_user FROM messages WHERE id = ?")
+            // Sealed sender: у сообщения нет открытого from — получатель, расшифровав,
+            // сам указал отправителя. Иначе берём из БД (обычный путь).
+            let sender: Option<String> = if !event.payload.sender.is_empty() {
+                Some(event.payload.sender.clone())
+            } else {
+                sqlx::query_as::<_, (String,)>("SELECT from_user FROM messages WHERE id = ?")
                     .bind(&mid)
                     .fetch_optional(pool)
-                    .await?;
-            if let Some((sender,)) = sender {
+                    .await?
+                    .map(|(s,)| s)
+                    .filter(|s| !s.is_empty())
+            };
+            if let Some(sender) = sender {
                 let delivered = ParvaneEvent {
                     id: Uuid::now_v7(),
                     from: "messenger".to_string(),
@@ -1617,6 +1629,33 @@ mod tests {
         assert!(ack_delivered(&pool, "bob@local", mid).await.unwrap());
         assert!(!ack_delivered(&pool, "bob@local", mid).await.unwrap());
         assert!(pending_for(&pool, "bob@local", 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sealed_message_hides_sender_but_reaches_recipient() {
+        // Sealed sender (Фаза 2): from пустой. Получатель видит сообщение (from=""),
+        // посторонний — нет, отправитель по from не находит (скрыт).
+        let pool = test_pool().await;
+        let ev = send_event("00000000-0000-7000-8000-0000000000e5", "", "bob@local", "sealed-ct");
+        store_message(&pool, &ev, 1).await.unwrap();
+
+        // получатель bob видит; from скрыт (пустой)
+        let for_bob = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert_eq!(for_bob.len(), 1);
+        assert_eq!(for_bob[0].from, "", "отправитель скрыт");
+        assert_eq!(for_bob[0].to, "bob@local");
+
+        // посторонний carol не видит
+        let for_carol = fetch_missed(&pool, "carol@local", "00000000-0000-0000-0000-000000000000", 0)
+            .await
+            .unwrap();
+        assert!(for_carol.is_empty(), "посторонний не видит sealed-сообщение");
+
+        // resolve_recipients с пустым from → [to]
+        let r = resolve_recipients(&pool, "bob@local", "").await.unwrap();
+        assert_eq!(r, vec!["bob@local".to_string()]);
     }
 
     #[tokio::test]

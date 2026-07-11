@@ -146,8 +146,8 @@ void MessengerClient::onInbox(const std::string &self,
 }
 
 void MessengerClient::ack(const std::string &from, const std::string &messageId,
-                          const std::string &token) {
-    const json payload{{"message_id", messageId}};
+                          const std::string &token, const std::string &sender) {
+    const json payload{{"message_id", messageId}, {"sender", sender}};
     _t.publish(topics::MsgAck,
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }

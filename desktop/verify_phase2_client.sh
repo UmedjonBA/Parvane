@@ -59,6 +59,20 @@ if grep -qa "$B_TEXT" "$SB/messenger.db" 2>/dev/null; then
 else
   ok "плейнтекст bob ОТСУТСТВУЕТ в messenger.db"
 fi
+# SEALED SENDER: у 1-на-1 сообщений from_user пуст (отправитель скрыт от сервера)
+FROMS=$(sqlite3 "$SB/messenger.db" "SELECT DISTINCT from_user FROM messages WHERE kind='encrypted';" 2>/dev/null)
+if [ -z "$FROMS" ]; then
+  ok "sealed sender: from_user пуст у зашифрованных (отправитель скрыт)"
+else
+  bad "from_user НЕ пуст у encrypted: '$FROMS' — sealed sender не работает"
+fi
+# ПЕРСИСТ: файлы E2E-store созданы (account + сессии)
+if ls "$A_WORK"/td/tdata/parvane-e2e-*/account.json >/dev/null 2>&1 \
+   && ls "$A_WORK"/td/tdata/parvane-e2e-*/sess_*.json >/dev/null 2>&1; then
+  ok "персист: account.json + сессии на диске"
+else
+  bad "персист: файлы E2E-store не найдены"
+fi
 grep -qiE "Fatal|Unexpected in " "$A_LOG" "$B_LOG" && bad "фатальная ошибка" || ok "без фатальных"
 
 kill "$GW" "$NATS" 2>/dev/null; pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null
