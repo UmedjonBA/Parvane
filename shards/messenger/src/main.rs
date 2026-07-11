@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse, GroupCreateRequest,
-    GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind, GroupListRequest,
-    GroupListResponse, GroupMember, GroupMemberRequest, MessageContent, ParvaneEvent, PinPayload,
-    ReactPayload, ReadPayload, SendPayload, StoredMessage, SyncRequestPayload, SyncResponsePayload,
-    VerifyRequest, VerifyResponse,
+    AckPayload, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
+    GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
+    GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest, MessageContent,
+    ParvaneEvent, PinPayload, ReactPayload, ReadPayload, SendPayload, StoredMessage,
+    SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
         GROUP_ADD_MEMBER, GROUP_CREATE, GROUP_INFO, GROUP_LIST, GROUP_REMOVE_MEMBER,
-        IDENTITY_VERIFY, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
+        IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
 };
@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
     info!("NATS подключён: {}", nats_url);
 
     let mut send_sub = nc.subscribe(MSG_SEND).await?;
+    let mut ack_sub = nc.subscribe(MSG_ACK).await?;
     let mut read_sub = nc.subscribe(MSG_READ).await?;
     let mut edit_sub = nc.subscribe(MSG_EDIT).await?;
     let mut delete_sub = nc.subscribe(MSG_DELETE).await?;
@@ -69,14 +70,17 @@ async fn main() -> Result<()> {
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
 
     info!(
-        "Messenger шард запущен. Слушаю: {}, {}, {}, {}, {}",
-        MSG_SEND, MSG_READ, MSG_EDIT, MSG_DELETE, MSG_SYNC_REQUEST
+        "Messenger шард запущен. Слушаю: {}, {}, {}, {}, {}, {}",
+        MSG_SEND, MSG_ACK, MSG_READ, MSG_EDIT, MSG_DELETE, MSG_SYNC_REQUEST
     );
 
     loop {
         tokio::select! {
             Some(msg) = send_sub.next() => {
                 handle_send(&nc, &pool, msg).await;
+            }
+            Some(msg) = ack_sub.next() => {
+                handle_ack(&nc, &pool, msg).await;
             }
             Some(msg) = read_sub.next() => {
                 handle_read(&nc, &pool, msg).await;
@@ -510,27 +514,7 @@ async fn fetch_missed(
             None => MessageContent::Text { text: String::new(), entities: vec![], webpage: None },
         };
         // Агрегат реакций: эмодзи → count, mine = реагировал ли запросивший.
-        let react_rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT emoji, COUNT(*) FROM reactions WHERE message_id = ? GROUP BY emoji",
-        )
-        .bind(&id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-        let mut reactions = Vec::new();
-        for (emoji, count) in react_rows {
-            let mine: i64 = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM reactions
-                     WHERE message_id = ? AND reactor = ? AND emoji = ?)",
-            )
-            .bind(&id)
-            .bind(user)
-            .bind(&emoji)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-            reactions.push(parvane_types::ReactionCount { emoji, count, mine: mine != 0 });
-        }
+        let reactions = reactions_for(pool, &id, user).await;
         messages.push(StoredMessage {
             id: id.parse().unwrap_or(Uuid::nil()),
             from,
@@ -549,6 +533,189 @@ async fn fetch_missed(
     Ok(messages)
 }
 
+/// Агрегат реакций сообщения для конкретного зрителя (`mine` — реагировал ли он).
+async fn reactions_for(
+    pool: &SqlitePool,
+    message_id: &str,
+    viewer: &str,
+) -> Vec<parvane_types::ReactionCount> {
+    let react_rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT emoji, COUNT(*) FROM reactions WHERE message_id = ? GROUP BY emoji",
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let mut out = Vec::new();
+    for (emoji, count) in react_rows {
+        let mine: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM reactions
+                 WHERE message_id = ? AND reactor = ? AND emoji = ?)",
+        )
+        .bind(message_id)
+        .bind(viewer)
+        .bind(&emoji)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        out.push(parvane_types::ReactionCount { emoji, count, mine: mine != 0 });
+    }
+    out
+}
+
+/// Одно сообщение по id с точки зрения `viewer` (для догона из очереди). None —
+/// нет такого сообщения.
+async fn fetch_one_message(
+    pool: &SqlitePool,
+    viewer: &str,
+    id: &str,
+) -> Result<Option<StoredMessage>> {
+    let row: Option<(
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        Option<String>,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+    )> = sqlx::query_as(
+        "SELECT m.id, m.from_user, m.to_user, m.content, m.ts, m.reply_to,
+                m.edited, m.deleted, m.updated_at,
+                EXISTS(SELECT 1 FROM read_receipts r
+                        WHERE r.message_id = m.id AND r.reader = m.to_user) AS read,
+                m.pinned
+         FROM messages m WHERE m.id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, read, pinned)) =
+        row
+    else {
+        return Ok(None);
+    };
+    let content = match content_json {
+        Some(json) => serde_json::from_str(&json).context("разбор content")?,
+        None => MessageContent::Text { text: String::new(), entities: vec![], webpage: None },
+    };
+    let reactions = reactions_for(pool, &id, viewer).await;
+    Ok(Some(StoredMessage {
+        id: id.parse().unwrap_or(Uuid::nil()),
+        from,
+        to,
+        content,
+        ts,
+        reply_to: reply_to.and_then(|s| s.parse().ok()),
+        edited: edited != 0,
+        deleted: deleted != 0,
+        read: read != 0,
+        updated_at,
+        reactions,
+        pinned: pinned != 0,
+    }))
+}
+
+/// Получатели сообщения: 1-на-1 → [to]; группа → участники минус отправитель.
+async fn resolve_recipients(pool: &SqlitePool, to: &str, from: &str) -> Result<Vec<String>> {
+    let is_group: Option<(String,)> = sqlx::query_as("SELECT id FROM groups WHERE id = ?")
+        .bind(to)
+        .fetch_optional(pool)
+        .await?;
+    if is_group.is_some() {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT member FROM group_members WHERE group_id = ? AND member != ?",
+        )
+        .bind(to)
+        .bind(from)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows.into_iter().map(|(m,)| m).collect())
+    } else {
+        Ok(vec![to.to_string()])
+    }
+}
+
+/// Поставить сообщение в очередь получателя (идемпотентно по паре).
+async fn enqueue(pool: &SqlitePool, recipient: &str, message_id: &str, now: i64) -> Result<()> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO inbox_queue (recipient, message_id, delivered, queued_at)
+         VALUES (?, ?, 0, ?)",
+    )
+    .bind(recipient)
+    .bind(message_id)
+    .bind(now)
+    .execute(pool)
+    .await
+    .context("enqueue")?;
+    Ok(())
+}
+
+/// Снять доставленное по ack получателя (идемпотентно). true — строка была и снята.
+async fn ack_delivered(pool: &SqlitePool, recipient: &str, message_id: &str) -> Result<bool> {
+    let res = sqlx::query(
+        "UPDATE inbox_queue SET delivered = 1
+         WHERE recipient = ? AND message_id = ? AND delivered = 0",
+    )
+    .bind(recipient)
+    .bind(message_id)
+    .execute(pool)
+    .await
+    .context("ack")?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Неотданные сообщения получателя (по времени постановки).
+async fn pending_for(
+    pool: &SqlitePool,
+    recipient: &str,
+    limit: i64,
+) -> Result<Vec<StoredMessage>> {
+    let ids: Vec<(String,)> = sqlx::query_as(
+        "SELECT message_id FROM inbox_queue
+         WHERE recipient = ? AND delivered = 0 ORDER BY queued_at LIMIT ?",
+    )
+    .bind(recipient)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::new();
+    for (id,) in ids {
+        if let Some(m) = fetch_one_message(pool, recipient, &id).await? {
+            out.push(m);
+        }
+    }
+    Ok(out)
+}
+
+/// Разложить сообщение по инбоксам получателей + офлайн-очередь. Для 1-на-1 —
+/// один получатель; для группы — все участники. Потеря невозможна: пока нет ack,
+/// строка в очереди и заберётся при синке/переотдаче.
+async fn deliver_message(
+    nc: &Client,
+    pool: &SqlitePool,
+    stored: &StoredMessage,
+    now: i64,
+) -> Result<()> {
+    let recipients = resolve_recipients(pool, &stored.to, &stored.from).await?;
+    let ev = ParvaneEvent {
+        id: Uuid::now_v7(),
+        from: "messenger".to_string(),
+        ts: now,
+        token: String::new(),
+        payload: parvane_types::InboxPush { message: stored.clone() },
+    };
+    let bytes = serde_json::to_vec(&ev)?;
+    for r in &recipients {
+        enqueue(pool, r, &stored.id.to_string(), now).await?;
+        nc.publish(msg_inbox(r), bytes.clone().into()).await?;
+    }
+    Ok(())
+}
+
 // ── msg.chat.send ─────────────────────────────────────────────────────────────
 
 async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -565,26 +732,71 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             return anyhow::Ok(());
         }
 
-        store_message(pool, &event, now_unix()).await?;
+        let now = now_unix();
+        store_message(pool, &event, now).await?;
         info!("Сообщение сохранено: {} → {} ({})", event.from, event.payload.to, event.id);
 
-        let delivered = ParvaneEvent {
-            id: Uuid::now_v7(),
-            from: "messenger".to_string(),
-            ts: now_unix(),
-            token: String::new(),
-            payload: DeliveredPayload { message_id: event.id },
+        // Раскладываем по инбоксам получателей + офлайн-очередь (Фаза 1).
+        // delivered-статус отправителю придёт, когда получатель подтвердит (ack),
+        // а не в момент сохранения — это честная семантика «доставлено».
+        let stored = StoredMessage {
+            id: event.id,
+            from: event.from.clone(),
+            to: event.payload.to.clone(),
+            content: event.payload.content.clone(),
+            ts: event.ts,
+            reply_to: event.payload.reply_to,
+            edited: false,
+            deleted: false,
+            read: false,
+            updated_at: now,
+            reactions: vec![],
+            pinned: false,
         };
-        // Ack — в персональный inbox ОТПРАВИТЕЛЯ (он ждёт подтверждение своего
-        // сообщения), а не broadcast'ом в общий MSG_DELIVERED.
-        nc.publish(msg_inbox(&event.from), serde_json::to_vec(&delivered)?.into())
-            .await?;
+        deliver_message(nc, pool, &stored, now).await?;
         anyhow::Ok(())
     }
     .await;
 
     if let Err(e) = result {
         error!("handle_send: {}", e);
+    }
+}
+
+// ── msg.chat.ack ──────────────────────────────────────────────────────────────
+
+async fn handle_ack(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<AckPayload> =
+            serde_json::from_slice(&msg.payload).context("неверный JSON в msg.chat.ack")?;
+        let reader = verify_token(nc, &event.token).await?;
+        let mid = event.payload.message_id.to_string();
+        // Снять из очереди этого получателя; при первом снятии — уведомить
+        // отправителя о доставке (delivered-галочка).
+        if ack_delivered(pool, &reader, &mid).await? {
+            let sender: Option<(String,)> =
+                sqlx::query_as("SELECT from_user FROM messages WHERE id = ?")
+                    .bind(&mid)
+                    .fetch_optional(pool)
+                    .await?;
+            if let Some((sender,)) = sender {
+                let delivered = ParvaneEvent {
+                    id: Uuid::now_v7(),
+                    from: "messenger".to_string(),
+                    ts: now_unix(),
+                    token: String::new(),
+                    payload: DeliveredPayload { message_id: event.payload.message_id },
+                };
+                nc.publish(msg_inbox(&sender), serde_json::to_vec(&delivered)?.into())
+                    .await?;
+            }
+            info!("Ack: {} получил {}", reader, mid);
+        }
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        error!("handle_ack: {}", e);
     }
 }
 
@@ -1367,5 +1579,62 @@ mod tests {
         let carols = list_groups(&pool, "carol@local").await.unwrap();
         assert_eq!(carols.len(), 1);
         assert_eq!(carols[0].name, "G2");
+    }
+
+    // ── Фаза 1: доставка, очередь, ack ──
+
+    #[tokio::test]
+    async fn resolve_recipients_direct_and_group() {
+        let pool = test_pool().await;
+        // 1-на-1 → сам адрес
+        let r = resolve_recipients(&pool, "bob@local", "alice@local").await.unwrap();
+        assert_eq!(r, vec!["bob@local".to_string()]);
+        // группа → участники минус отправитель
+        let gid = create_group(
+            &pool, "g", GroupKind::Group, "alice@local",
+            &["bob@local".into(), "carol@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        let mut g = resolve_recipients(&pool, &gid, "alice@local").await.unwrap();
+        g.sort();
+        assert_eq!(g, vec!["bob@local".to_string(), "carol@local".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn queue_enqueue_ack_pending() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000f7";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "в очередь"), 1)
+            .await
+            .unwrap();
+        enqueue(&pool, "bob@local", mid, 1).await.unwrap();
+        enqueue(&pool, "bob@local", mid, 1).await.unwrap(); // идемпотентно
+        let pend = pending_for(&pool, "bob@local", 10).await.unwrap();
+        assert_eq!(pend.len(), 1);
+        assert_eq!(text_of(&pend[0]), "в очередь");
+        // ack снимает; повторный ack — no-op
+        assert!(ack_delivered(&pool, "bob@local", mid).await.unwrap());
+        assert!(!ack_delivered(&pool, "bob@local", mid).await.unwrap());
+        assert!(pending_for(&pool, "bob@local", 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_one_message_carries_reactions() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000f8";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "с реакцией"), 1)
+            .await
+            .unwrap();
+        set_reaction(&pool, mid, "bob@local", "👍", 2).await.unwrap();
+        let m = fetch_one_message(&pool, "bob@local", mid).await.unwrap().unwrap();
+        assert_eq!(text_of(&m), "с реакцией");
+        assert_eq!(m.reactions.len(), 1);
+        assert!(m.reactions[0].mine, "bob реагировал");
+        // несуществующее сообщение → None
+        assert!(fetch_one_message(&pool, "bob@local", "00000000-0000-7000-8000-000000000fff")
+            .await
+            .unwrap()
+            .is_none());
     }
 }
