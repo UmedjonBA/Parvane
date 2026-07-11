@@ -54,6 +54,9 @@ static const StoredMessage *find(const std::vector<StoredMessage> &v,
 
 static std::string issue(parvane::Transport &tr, const std::string &user) {
     parvane::IssueRequest req{user, "test"};
+    // register отделён от issue: сперва регистрируем (идемпотентно — если занято,
+    // ответ игнорируем), затем логинимся.
+    tr.request(parvane::topics::IdentityRegister, req.toJson().dump());
     auto resp = parvane::IssueResponse::fromJson(
         json::parse(tr.request(parvane::topics::IdentityIssue, req.toJson().dump())));
     return resp.token.value_or("");
@@ -150,10 +153,12 @@ int main() {
 
     MessengerClient mc(tr);
 
-    // B1. onDelivered триггерит на отправку (подписка ДО send).
+    // B1. Фаза 1: delivered приходит на инбокс alice ПОСЛЕ подтверждения
+    //     получателем. Поэтому bob слушает свой инбокс и подтверждает приём (ack).
     std::string deliveredId;
-    mc.onDelivered([&](std::string id) { deliveredId = id; });
-    sleepMs(120); // дать подписке встать
+    mc.onDelivered(alice, [&](std::string id) { deliveredId = id; });
+    mc.onInbox(bob, [&](parvane::StoredMessage m) { mc.ack(bob, m.id, jwtBob); });
+    sleepMs(120); // дать подпискам встать
 
     // B2. sendText alice→bob, sync(bob) от нуля видит сообщение со всеми полями.
     const std::string text1 = "msg-client тест";
@@ -174,8 +179,9 @@ int main() {
         }
     }
 
-    // B3. onDelivered получил id отправленного (ack от messenger).
-    check(deliveredId == id1, "onDelivered сработал на отправленный id",
+    // B3. delivered дошёл до alice после того, как bob подтвердил приём (Фаза 1).
+    sleepMs(300); // дать round-trip ack→delivered завершиться
+    check(deliveredId == id1, "onDelivered сработал после ack получателя",
           "got=" + deliveredId.substr(0, 8) + " want=" + id1.substr(0, 8));
 
     // B4. Двойной курсор. ВАЖНО про контракт: шард фильтрует

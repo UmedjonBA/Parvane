@@ -103,6 +103,7 @@ int main() {
     std::string jwtAlice;
     {
         parvane::IssueRequest req{"alice@local", "test"};
+        tr.request(parvane::topics::IdentityRegister, req.toJson().dump()); // регистрируем (идемпотентно)
         auto resp = parvane::IssueResponse::fromJson(
             json::parse(tr.request(parvane::topics::IdentityIssue, req.toJson().dump())));
         check(resp.ok && resp.token.has_value(), "issue(alice) ok+token",
@@ -127,14 +128,14 @@ int main() {
         check(!resp.ok, "verify(мусор) → ok=false");
     }
 
-    // 7. issue с (предположительно) неверным паролем для НОВОГО юзера: первый
-    //    issue регистрирует; поэтому проверяем повтор с другим паролем → ok=false.
+    // 7. register отделён от issue: регистрируем нового юзера, затем логин с
+    //    ДРУГИМ паролем → ok=false (неверный пароль).
     {
         const std::string u = "carol_" + uuid4().substr(0, 8) + "@local";
         parvane::IssueRequest first{u, "pw-correct"};
         auto r1 = parvane::IssueResponse::fromJson(
-            json::parse(tr.request(parvane::topics::IdentityIssue, first.toJson().dump())));
-        check(r1.ok, "issue(новый carol) регистрирует");
+            json::parse(tr.request(parvane::topics::IdentityRegister, first.toJson().dump())));
+        check(r1.ok, "register(новый carol) ok");
         parvane::IssueRequest wrong{u, "pw-WRONG"};
         auto r2 = parvane::IssueResponse::fromJson(
             json::parse(tr.request(parvane::topics::IdentityIssue, wrong.toJson().dump())));
@@ -146,6 +147,7 @@ int main() {
         std::string jwtBob;
         {
             parvane::IssueRequest req{"bob@local", "test"};
+            tr.request(parvane::topics::IdentityRegister, req.toJson().dump()); // регистрируем
             auto resp = parvane::IssueResponse::fromJson(json::parse(
                 tr.request(parvane::topics::IdentityIssue, req.toJson().dump())));
             jwtBob = resp.token.value_or("");

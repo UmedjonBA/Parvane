@@ -20,7 +20,7 @@ namespace parvane {
 
 class MessengerClient {
 public:
-    explicit MessengerClient(Transport &transport) : _t(transport) {}
+    explicit MessengerClient(ITransport &transport) : _t(transport) {}
 
     // Публикует ПОЛНЫЙ ParvaneEvent<SendPayload> на msg.chat.send.
     // Возвращает сгенерированный id события (= id сообщения для последующего
@@ -84,9 +84,18 @@ public:
     void pin(const std::string &from, const std::string &messageId,
              bool pinned, const std::string &token);
 
-    // Подписка на msg.chat.delivered. handler(message_id) зовётся на каждое
-    // событие доставки (для всех сообщений шины — фильтрацию делает вызывающий).
-    void onDelivered(std::function<void(std::string)> handler);
+    // Подписка на СВОЙ инбокс msg.user.<self> — delivered-подтверждения (Фаза 1:
+    // приходят, когда получатель подтвердил приём). handler(message_id).
+    void onDelivered(const std::string &self, std::function<void(std::string)> handler);
+
+    // Подписка на СВОЙ инбокс — входящие сообщения (InboxPush, Фаза 1). handler
+    // получает готовый StoredMessage; вставку/дедуп и ack делает вызывающий.
+    void onInbox(const std::string &self, std::function<void(StoredMessage)> handler);
+
+    // Подтвердить приём сообщения (msg.chat.ack): снимает из очереди на сервере
+    // и триггерит delivered отправителю.
+    void ack(const std::string &from, const std::string &messageId,
+             const std::string &token);
 
     // Нулевой uuid — курсор "с самого начала" для sync.
     static const char *zeroCursor() {
@@ -94,7 +103,7 @@ public:
     }
 
 private:
-    Transport &_t;
+    ITransport &_t;
 };
 
 } // namespace parvane

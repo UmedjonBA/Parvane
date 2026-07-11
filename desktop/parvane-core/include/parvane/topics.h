@@ -2,10 +2,13 @@
 // Держать один-в-один с Rust-источником. Соглашение: {domain}.{resource}.{action}.
 #pragma once
 
+#include <string>
+
 namespace parvane::topics {
 
 // identity
 inline constexpr auto IdentityIssue = "identity.token.issue";
+inline constexpr auto IdentityRegister = "identity.user.register";
 inline constexpr auto IdentityVerify = "identity.token.verify";
 
 // messenger
@@ -16,6 +19,11 @@ inline constexpr auto MsgEdit = "msg.chat.edit";
 inline constexpr auto MsgDelete = "msg.chat.delete";
 inline constexpr auto MsgReact = "msg.chat.react";
 inline constexpr auto MsgPin = "msg.chat.pin";
+inline constexpr auto MsgAck = "msg.chat.ack";
+
+// Персональный инбокс пользователя (msg.user.<addr>): входящие сообщения
+// (InboxPush) и delivered-подтверждения. Зеркалит msg_inbox() из parvane-types.
+inline std::string msgInbox(const std::string &user) { return "msg.user." + user; }
 inline constexpr auto MsgSyncRequest = "msg.sync.request";
 inline constexpr auto MsgSyncResponse = "msg.sync.response";
 

@@ -12,7 +12,7 @@ namespace parvane {
 
 class GroupClient {
 public:
-    explicit GroupClient(Transport &transport) : _t(transport) {}
+    explicit GroupClient(ITransport &transport) : _t(transport) {}
 
     // Создать группу/канал. kind: "group"|"channel". Возвращает ответ (group_id).
     GroupCreateResponse create(const std::string &token, const std::string &name,
@@ -33,7 +33,7 @@ public:
                                      const std::string &member, int timeoutMs = 3000);
 
 private:
-    Transport &_t;
+    ITransport &_t;
 };
 
 } // namespace parvane

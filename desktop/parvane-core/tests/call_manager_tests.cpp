@@ -34,6 +34,7 @@ static std::string env(const char *n, const std::string &d) {
 }
 static std::string issue(Transport &tr, const std::string &user) {
     IssueRequest req{user, "test"};
+    tr.request(topics::IdentityRegister, req.toJson().dump()); // регистрируем (идемпотентно)
     auto resp = IssueResponse::fromJson(
         json::parse(tr.request(topics::IdentityIssue, req.toJson().dump())));
     return resp.token.value_or("");
