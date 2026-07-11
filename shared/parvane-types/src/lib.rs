@@ -23,6 +23,9 @@ pub mod topics {
     pub const MSG_DELETE: &str = "msg.chat.delete";
     pub const MSG_REACT: &str = "msg.chat.react";
     pub const MSG_PIN: &str = "msg.chat.pin";
+    /// Клиент подтверждает получение сообщения из своего инбокса (Фаза 1):
+    /// снимает его из офлайн-очереди и сообщает отправителю о доставке.
+    pub const MSG_ACK: &str = "msg.chat.ack";
     pub const MSG_SYNC_REQUEST: &str = "msg.sync.request";
     /// deprecated: не публиковать. Ответ sync идёт ТОЛЬКО в reply-inbox
     /// запросившего (иначе любой на шине читал бы чужую переписку). Оставлено,
@@ -305,6 +308,19 @@ pub struct SendPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveredPayload {
+    pub message_id: Uuid,
+}
+
+/// Пуш нового/изменённого сообщения в персональный инбокс получателя (Фаза 1).
+/// Клиент вставляет напрямую (дедуп по id); sync — только догон/фолбэк.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxPush {
+    pub message: StoredMessage,
+}
+
+/// Подтверждение получения сообщения получателем (снимает из офлайн-очереди).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AckPayload {
     pub message_id: Uuid,
 }
 

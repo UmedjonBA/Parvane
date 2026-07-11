@@ -1,7 +1,8 @@
-// Parvane fork: живой e2e gateway (Фаза 0). Проверяет, что:
-//  1) регистрация+логин+auth через gateway работают;
-//  2) ИЗОЛЯЦИЯ: bob НЕ может слушать инбокс alice (gateway отвергает подписку),
-//     а alice свой delivered-ack получает.
+// Parvane fork: живой e2e gateway + доставка Фазы 1. Проверяет:
+//  1) register+login+auth через gateway;
+//  2) ДОСТАВКА: alice→bob, bob получает push в свой инбокс и шлёт ack,
+//     отправитель alice получает delivered после ack;
+//  3) ИЗОЛЯЦИЯ: carol НЕ может слушать инбокс bob (gateway отвергает подписку).
 // Нужен запущенный стек: nats + identity + messenger + gateway (TCP).
 // Использование: parvane_gateway_probe [host] [tcp_port]
 #include "parvane/gateway_transport.h"
@@ -19,7 +20,6 @@ using parvane::GatewayTransport;
 
 static std::string tokenFor(GatewayTransport &t, const std::string &user,
                             const std::string &pass) {
-    // Регистрация (идемпотентно: если занято — просто логинимся). Pre-auth ок.
     try {
         t.request("identity.user.register",
                   json{{"user", user}, {"password", pass}}.dump());
@@ -39,61 +39,78 @@ int main(int argc, char **argv) {
     const int port = argc > 2 ? std::stoi(argv[2]) : 9223;
 
     try {
-        GatewayTransport alice, bob;
+        GatewayTransport alice, bob, carol;
         alice.connect(host, port);
         bob.connect(host, port);
+        carol.connect(host, port);
 
         const auto aliceToken = tokenFor(alice, "alice@local", "pw-alice");
         const auto bobToken = tokenFor(bob, "bob@local", "pw-bob");
+        const auto carolToken = tokenFor(carol, "carol@local", "pw-carol");
         alice.authenticate(aliceToken);
         bob.authenticate(bobToken);
-        std::cout << "[ok] register+login+auth alice & bob\n";
+        carol.authenticate(carolToken);
+        std::cout << "[ok] register+login+auth alice, bob, carol\n";
 
-        std::atomic<bool> aliceGotOwn{false};
-        std::atomic<bool> bobGotAliceInbox{false};
+        std::atomic<bool> bobGotMsg{false};
+        std::atomic<bool> carolGotBobInbox{false};
+        std::atomic<bool> aliceGotDelivered{false};
 
-        // alice слушает СВОЙ инбокс (легально).
-        alice.subscribe("msg.user.alice@local",
-                        [&](std::string, std::string) { aliceGotOwn = true; });
-        // bob (злоумышленник) пытается слушать инбокс alice — gateway обязан
-        // отвергнуть подписку; даже если messenger туда что-то шлёт, bob не увидит.
-        bob.subscribe("msg.user.alice@local",
-                      [&](std::string, std::string) { bobGotAliceInbox = true; });
+        // bob слушает СВОЙ инбокс: на входящее сообщение (InboxPush) шлёт ack.
+        bob.subscribe("msg.user.bob@local", [&](std::string, std::string payload) {
+            auto ev = json::parse(payload, nullptr, false);
+            if (ev.is_discarded() || !ev.contains("payload")) return;
+            const auto &p = ev["payload"];
+            if (p.contains("message")) {
+                bobGotMsg = true;
+                const std::string mid = p["message"].value("id", "");
+                json ack = {{"id", "00000000-0000-7000-8000-000000000ac0"},
+                            {"from", "bob@local"}, {"ts", 1}, {"token", bobToken},
+                            {"payload", {{"message_id", mid}}}};
+                bob.publish("msg.chat.ack", ack.dump());
+            }
+        });
+
+        // carol (злоумышленник) пытается слушать инбокс bob — gateway отвергнет.
+        carol.subscribe("msg.user.bob@local",
+                        [&](std::string, std::string) { carolGotBobInbox = true; });
+
+        // alice слушает свой инбокс: ждёт delivered после ack bob'а.
+        alice.subscribe("msg.user.alice@local", [&](std::string, std::string payload) {
+            auto ev = json::parse(payload, nullptr, false);
+            if (ev.is_discarded() || !ev.contains("payload")) return;
+            if (ev["payload"].contains("message_id")) aliceGotDelivered = true;
+        });
 
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-        // alice шлёт сообщение bob → messenger публикует delivered-ack в
-        // msg.user.alice@local (инбокс отправителя).
+        // alice → bob
         json ev = {
             {"id", "00000000-0000-7000-8000-000000000abc"},
-            {"from", "alice@local"},
-            {"ts", 1},
-            {"token", aliceToken},
-            {"payload",
-             {{"to", "bob@local"},
-              {"content", {{"kind", "text"}, {"text", "изоляция?"}}},
-              {"reply_to", nullptr}}},
+            {"from", "alice@local"}, {"ts", 1}, {"token", aliceToken},
+            {"payload", {{"to", "bob@local"},
+                         {"content", {{"kind", "text"}, {"text", "привет из Фазы 1"}}},
+                         {"reply_to", nullptr}}},
         };
         alice.publish("msg.chat.send", ev.dump());
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        std::this_thread::sleep_for(std::chrono::milliseconds(900));
 
         bool pass = true;
-        if (!aliceGotOwn) {
-            std::cout << "[FAIL] alice не получила delivered на свой инбокс\n";
-            pass = false;
-        } else {
-            std::cout << "[ok] alice получила delivered на свой инбокс\n";
-        }
-        if (bobGotAliceInbox) {
-            std::cout << "[FAIL] bob ПРОЧИТАЛ чужой инбокс — изоляция сломана!\n";
-            pass = false;
-        } else {
-            std::cout << "[ok] bob НЕ получил чужой инбокс (изоляция держится)\n";
-        }
+        auto check = [&](bool cond, const char *okMsg, const char *failMsg) {
+            std::cout << (cond ? "[ok] " : "[FAIL] ") << (cond ? okMsg : failMsg) << "\n";
+            if (!cond) pass = false;
+        };
+        check(bobGotMsg, "bob получил сообщение в свой инбокс (push)",
+              "bob НЕ получил сообщение");
+        check(aliceGotDelivered, "alice получила delivered после ack bob'а",
+              "alice НЕ получила delivered");
+        check(!carolGotBobInbox, "carol НЕ прочитала чужой инбокс (изоляция держится)",
+              "carol ПРОЧИТАЛА чужой инбокс — изоляция сломана!");
 
         alice.close();
         bob.close();
+        carol.close();
         std::cout << (pass ? "PASS\n" : "FAIL\n");
         return pass ? 0 : 1;
     } catch (const std::exception &e) {
