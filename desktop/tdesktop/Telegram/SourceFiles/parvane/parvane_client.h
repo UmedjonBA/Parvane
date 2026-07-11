@@ -35,6 +35,15 @@ struct IssueResult {
 // БЛОКИРУЮЩИЙ запрос identity.token.issue. Звать с воркер-потока (crl::async).
 [[nodiscard]] IssueResult Issue(const QString &user, const QString &password);
 
+// Результат identity.user.register (регистрация отделена от логина, Фаза 0).
+struct RegisterResult {
+	bool ok = false;
+	QString error;
+};
+
+// БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
+[[nodiscard]] RegisterResult Register(const QString &user, const QString &password);
+
 // JWT текущей сессии (хранится в процессе).
 void SetToken(const QString &token);
 [[nodiscard]] QString Token();
