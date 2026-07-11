@@ -1,0 +1,12 @@
+[package]
+name = "parvane-e2e"
+version = "0.1.0"
+edition = "2021"
+
+# staticlib — для линковки в C++ (parvane-core); rlib — чтобы шли #[test].
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+vodozemac = "0.10"
+serde_json = { workspace = true }
