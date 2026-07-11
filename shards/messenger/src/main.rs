@@ -9,8 +9,8 @@ use parvane_types::{
     VerifyRequest, VerifyResponse,
     topics::{
         GROUP_ADD_MEMBER, GROUP_CREATE, GROUP_INFO, GROUP_LIST, GROUP_REMOVE_MEMBER,
-        IDENTITY_VERIFY, MSG_DELETE, MSG_DELIVERED, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT,
-        MSG_SEND, MSG_SYNC_REQUEST, MSG_SYNC_RESPONSE,
+        IDENTITY_VERIFY, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
+        MSG_SYNC_REQUEST, msg_inbox,
     },
 };
 use sqlx::SqlitePool;
@@ -575,7 +575,10 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             token: String::new(),
             payload: DeliveredPayload { message_id: event.id },
         };
-        nc.publish(MSG_DELIVERED, serde_json::to_vec(&delivered)?.into()).await?;
+        // Ack — в персональный inbox ОТПРАВИТЕЛЯ (он ждёт подтверждение своего
+        // сообщения), а не broadcast'ом в общий MSG_DELIVERED.
+        nc.publish(msg_inbox(&event.from), serde_json::to_vec(&delivered)?.into())
+            .await?;
         anyhow::Ok(())
     }
     .await;
@@ -799,9 +802,11 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             payload: SyncResponsePayload { messages },
         };
 
+        // Ответ ТОЛЬКО в reply-inbox запросившего. Раньше был ещё broadcast в
+        // MSG_SYNC_RESPONSE — это утечка: любой на шине читал чужую переписку.
+        // reply клонируется: тот же субъект нужен error-ветке ниже.
         let json = serde_json::to_vec(&resp)?;
-        nc.publish(reply.clone(), json.clone().into()).await?;
-        nc.publish(MSG_SYNC_RESPONSE, json.into()).await?;
+        nc.publish(reply.clone(), json.into()).await?;
 
         info!("Sync для {}: {} сообщений после '{}'", user, count, last_id);
         anyhow::Ok(())

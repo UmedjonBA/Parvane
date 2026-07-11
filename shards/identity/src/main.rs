@@ -3,12 +3,12 @@ use async_nats::Client;
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
-    IssueRequest, IssueResponse, ResolveRequest, ResolveResponse, SearchUsersRequest,
-    SearchUsersResponse, SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse,
-    UserInfo, VerifyRequest, VerifyResponse,
+    IssueRequest, IssueResponse, RegisterRequest, RegisterResponse, ResolveRequest,
+    ResolveResponse, SearchUsersRequest, SearchUsersResponse, SetAvatarRequest, SetKeyRequest,
+    SetNameRequest, SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
     topics::{
-        IDENTITY_ISSUE, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
-        IDENTITY_SETNAME, IDENTITY_VERIFY,
+        IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR,
+        IDENTITY_SETKEY, IDENTITY_SETNAME, IDENTITY_VERIFY,
     },
 };
 
@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
     info!("NATS подключён: {}", nats_url);
 
     let mut issue_sub = nc.subscribe(IDENTITY_ISSUE).await?;
+    let mut register_sub = nc.subscribe(IDENTITY_REGISTER).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
@@ -104,12 +105,15 @@ async fn main() -> Result<()> {
     let mut setkey_sub = nc.subscribe(IDENTITY_SETKEY).await?;
     let mut resolve_sub = nc.subscribe(IDENTITY_RESOLVE).await?;
 
-    info!("Identity шард запущен. Слушаю: issue/verify/search/setname/setavatar/setkey/resolve");
+    info!("Identity шард запущен. Слушаю: issue/register/verify/search/setname/setavatar/setkey/resolve");
 
     loop {
         tokio::select! {
             Some(msg) = issue_sub.next() => {
                 handle_issue(&nc, &pool, &encoding, msg).await;
+            }
+            Some(msg) = register_sub.next() => {
+                handle_register(&nc, &pool, msg).await;
             }
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, msg).await;
@@ -371,39 +375,19 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
     let req: IssueRequest = serde_json::from_slice(payload)
         .context("неверный JSON в IssueRequest")?;
 
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM users WHERE username = ?")
+    // Логин: пользователь ОБЯЗАН существовать. Создание аккаунтов — только через
+    // identity.user.register (раньше issue молча создавал юзера с любым паролем —
+    // это позволяло занять любой адрес первым запросом).
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT password_hash FROM users WHERE username = ?")
             .bind(&req.user)
             .fetch_optional(pool)
             .await?;
-
-    if existing.is_none() {
-        let hash = hash_password(&req.password)?;
-        let id = Uuid::now_v7().to_string();
-        let now = now_unix();
-        // Отображаемое имя по умолчанию — локальная часть адреса (до '@').
-        let default_name = req.user.split('@').next().unwrap_or(&req.user).to_string();
-        sqlx::query(
-            "INSERT INTO users (id, username, password_hash, created_at, display_name)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(&req.user)
-        .bind(&hash)
-        .bind(now)
-        .bind(&default_name)
-        .execute(pool)
-        .await?;
-        info!("Пользователь создан: {} (имя: {})", req.user, default_name);
-    } else {
-        let row: (String,) =
-            sqlx::query_as("SELECT password_hash FROM users WHERE username = ?")
-                .bind(&req.user)
-                .fetch_one(pool)
-                .await?;
-        if !verify_password(&req.password, &row.0) {
-            anyhow::bail!("неверный пароль");
-        }
+    let Some((hash,)) = row else {
+        anyhow::bail!("нет такого пользователя");
+    };
+    if !verify_password(&req.password, &hash) {
+        anyhow::bail!("неверный пароль");
     }
 
     let now = now_unix() as usize;
@@ -413,6 +397,114 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
 
     info!("JWT выдан для: {}", req.user);
     Ok(token)
+}
+
+// ── регистрация (отдельно от логина) ──────────────────────────────────────────
+
+async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        error!("register: нет reply-топика, игнорирую");
+        return;
+    };
+    let resp = match do_register(pool, &msg.payload).await {
+        Ok(()) => RegisterResponse { ok: true, error: None },
+        Err(e) => RegisterResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
+    if let Err(e) = nc.publish(reply, json.into()).await {
+        error!("register: ошибка отправки ответа: {}", e);
+    }
+}
+
+/// Создать аккаунт. Отвергает занятый логин, пустые поля, превышение лимита
+/// попыток и (при PARVANE_INVITE_REQUIRED=1) отсутствие валидного инвайта.
+async fn do_register(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
+    let req: RegisterRequest = serde_json::from_slice(payload)
+        .context("неверный JSON в RegisterRequest")?;
+
+    let user = req.user.trim().to_string();
+    if user.is_empty() || req.password.is_empty() {
+        anyhow::bail!("пустой логин или пароль");
+    }
+    if user.len() > 128 {
+        anyhow::bail!("слишком длинный логин");
+    }
+    if !rate_ok(&user) {
+        anyhow::bail!("слишком много попыток, попробуйте позже");
+    }
+
+    // Инвайт-режим за флагом окружения (закрытый пузырь).
+    if std::env::var("PARVANE_INVITE_REQUIRED").as_deref() == Ok("1")
+        && !consume_invite(pool, &req.invite).await?
+    {
+        anyhow::bail!("нужен валидный инвайт-код");
+    }
+
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM users WHERE username = ?")
+            .bind(&user)
+            .fetch_optional(pool)
+            .await?;
+    if existing.is_some() {
+        anyhow::bail!("логин занят");
+    }
+
+    let hash = hash_password(&req.password)?;
+    let id = Uuid::now_v7().to_string();
+    let now = now_unix();
+    // Отображаемое имя по умолчанию — локальная часть адреса (до '@').
+    let default_name = user.split('@').next().unwrap_or(&user).to_string();
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, created_at, display_name)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&user)
+    .bind(&hash)
+    .bind(now)
+    .bind(&default_name)
+    .execute(pool)
+    .await?;
+    info!("Пользователь зарегистрирован: {} (имя: {})", user, default_name);
+    Ok(())
+}
+
+/// Использовать инвайт-код (одноразовый). true — код существовал и не был
+/// использован (пометили использованным). Только при инвайт-режиме.
+async fn consume_invite(pool: &SqlitePool, code: &str) -> Result<bool> {
+    if code.is_empty() {
+        return Ok(false);
+    }
+    let res = sqlx::query(
+        "UPDATE invites SET used_at = ? WHERE code = ? AND used_at IS NULL",
+    )
+    .bind(now_unix())
+    .bind(code)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Простой лимит попыток регистрации в памяти: не более `PARVANE_REGISTER_RATE`
+/// (по умолчанию 5) на логин за 60 секунд. Защита от массовой саморегистрации.
+fn rate_ok(user: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static LIMITER: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    let limit: usize = std::env::var("PARVANE_REGISTER_RATE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
+    let now = now_unix();
+    let map = LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    let hits = guard.entry(user.to_string()).or_default();
+    hits.retain(|&t| now - t < 60);
+    if hits.len() >= limit {
+        return false;
+    }
+    hits.push(now);
+    true
 }
 
 async fn handle_verify(nc: &Client, decoding: &DecodingKey, msg: async_nats::Message) {
@@ -559,6 +651,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(k, "KEY2");
+    }
+
+    // ── регистрация отделена от логина ──
+
+    fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
+        serde_json::to_vec(&IssueRequest { user: user.into(), password: password.into() }).unwrap()
+    }
+    fn register_bytes(user: &str, password: &str) -> Vec<u8> {
+        serde_json::to_vec(&RegisterRequest {
+            user: user.into(),
+            password: password.into(),
+            invite: String::new(),
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn issue_does_not_create_user() {
+        // Регрессия безопасности: логин несуществующего юзера НЕ создаёт аккаунт.
+        let pool = test_pool().await;
+        let (enc, _) = make_keys();
+        let err = do_issue(&pool, &enc, &issue_bytes("ghost@local", "pw")).await.unwrap_err();
+        assert!(err.to_string().contains("нет такого пользователя"));
+        let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE username = ?")
+            .bind("ghost@local").fetch_one(&pool).await.unwrap();
+        assert_eq!(cnt.0, 0, "аккаунт не должен быть создан логином");
+    }
+
+    #[tokio::test]
+    async fn register_then_login() {
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        // регистрация создаёт аккаунт
+        do_register(&pool, &register_bytes("newbie@local", "pw")).await.unwrap();
+        // теперь логин проходит и выдаёт валидный JWT
+        let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap();
+        let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap();
+        assert_eq!(user, "newbie@local");
+        // неверный пароль — отказ
+        assert!(do_issue(&pool, &enc, &issue_bytes("newbie@local", "wrong")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn register_rejects_duplicate() {
+        let pool = test_pool().await;
+        do_register(&pool, &register_bytes("dup@local", "pw")).await.unwrap();
+        let err = do_register(&pool, &register_bytes("dup@local", "other")).await.unwrap_err();
+        assert!(err.to_string().contains("занят"));
     }
 
     #[tokio::test]

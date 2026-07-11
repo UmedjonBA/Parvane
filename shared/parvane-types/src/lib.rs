@@ -8,6 +8,8 @@ pub mod nats;
 pub mod topics {
     pub const IDENTITY_ISSUE: &str = "identity.token.issue";
     pub const IDENTITY_VERIFY: &str = "identity.token.verify";
+    /// Регистрация аккаунта (отдельно от логина). issue больше не создаёт юзеров.
+    pub const IDENTITY_REGISTER: &str = "identity.user.register";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
@@ -22,6 +24,9 @@ pub mod topics {
     pub const MSG_REACT: &str = "msg.chat.react";
     pub const MSG_PIN: &str = "msg.chat.pin";
     pub const MSG_SYNC_REQUEST: &str = "msg.sync.request";
+    /// deprecated: не публиковать. Ответ sync идёт ТОЛЬКО в reply-inbox
+    /// запросившего (иначе любой на шине читал бы чужую переписку). Оставлено,
+    /// чтобы не ломать импорты.
     pub const MSG_SYNC_RESPONSE: &str = "msg.sync.response";
 
     pub const FILE_UPLOAD_CHUNK: &str = "file.upload.chunk";
@@ -60,6 +65,13 @@ pub mod topics {
     pub fn call_inbox(user: &str) -> String {
         format!("call.user.{user}")
     }
+
+    /// Персональный инбокс пользователя для входящих сообщений и уведомлений
+    /// (delivered/receipts). Получатель подписывается на точный субъект.
+    /// Пример: `msg.user.alice@local`. Изоляция «людей» — на gateway.
+    pub fn msg_inbox(user: &str) -> String {
+        format!("msg.user.{user}")
+    }
 }
 
 // ── обёртка события ──────────────────────────────────────────────────────────
@@ -86,6 +98,23 @@ pub struct IssueRequest {
 pub struct IssueResponse {
     pub ok: bool,
     pub token: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Регистрация нового аккаунта. Отделена от логина (`issue`), чтобы `issue` не
+/// создавал пользователей молча. `invite` — код приглашения для закрытого
+/// пузыря (пусто — открытая регистрация, если не требуется инвайт).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub user: String,
+    pub password: String,
+    #[serde(default)]
+    pub invite: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterResponse {
+    pub ok: bool,
     pub error: Option<String>,
 }
 
