@@ -1,4 +1,8 @@
-// Parvane fork: E2E-слой (Фаза 2). См. e2e.h. MVP: аккаунт+сессии в памяти.
+// Parvane fork: E2E-слой (Фаза 2). См. e2e.h.
+// Sealed sender: реальный отправитель (from) едет ВНУТРИ шифртекста
+// ({from,content}); сервер видит только шифртекст + identity-ключ отправителя.
+// Сессии keyed по IDENTITY-ключу собеседника (адрес скрыт), с кэшем
+// contact→identity. Персист аккаунта/сессий/кэша в storeDir.
 #include "parvane/e2e.h"
 
 #include "parvane_e2e.h" // C-FFI vodozemac (shared/parvane-e2e/include)
@@ -9,6 +13,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <string>
@@ -22,11 +28,12 @@ namespace {
 
 std::mutex g_mu;
 ParvaneE2EAccount *g_account = nullptr;
-std::map<std::string, ParvaneE2ESession *> g_sessions; // контакт → Olm-сессия
-std::string g_identityB64;
-std::int64_t g_otkNext = 1;
+std::map<std::string, ParvaneE2ESession *> g_sessions; // identity собеседника → сессия
+std::map<std::string, std::string> g_contactId;        // адрес контакта → identity
+std::string g_identityB64;                              // свой identity-ключ
+std::string g_self;                                     // свой адрес (для конверта)
+std::string g_storeDir;
 
-// Забрать char* из FFI в std::string и освободить.
 std::string take(char *p) {
     if (!p) {
         return {};
@@ -36,10 +43,8 @@ std::string take(char *p) {
     return s;
 }
 
-// Стандартный base64 БЕЗ padding (как у vodozemac). Encode/decode симметричны
-// с FFI-контрактом parvane_e2e (см. parvane_e2e.h).
+// Стандартный base64 БЕЗ padding (как у vodozemac).
 constexpr char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 std::string b64e(const std::string &in) {
     std::string out;
     int val = 0, bits = -6;
@@ -54,9 +59,8 @@ std::string b64e(const std::string &in) {
     if (bits > -6) {
         out.push_back(kB64[((val << 8) >> (bits + 8)) & 0x3F]);
     }
-    return out; // без '='
+    return out;
 }
-
 std::string b64d(const std::string &in) {
     std::vector<int> t(256, -1);
     for (int i = 0; i < 64; ++i) {
@@ -66,7 +70,7 @@ std::string b64d(const std::string &in) {
     int val = 0, bits = -8;
     for (unsigned char c : in) {
         if (t[c] == -1) {
-            break; // конец/padding/мусор
+            break;
         }
         val = (val << 6) + t[c];
         bits += 6;
@@ -78,30 +82,128 @@ std::string b64d(const std::string &in) {
     return out;
 }
 
+// ── файловый персист (под g_mu) ───────────────────────────────────────────────
+std::string hexName(const std::string &s) {
+    static const char *H = "0123456789abcdef";
+    std::string out;
+    for (unsigned char c : s) {
+        out.push_back(H[c >> 4]);
+        out.push_back(H[c & 0xF]);
+    }
+    return out;
+}
+std::string readFile(const std::string &path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        return {};
+    }
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+void writeFile(const std::string &path, const std::string &data) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (f) {
+        f.write(data.data(), static_cast<std::streamsize>(data.size()));
+    }
+}
+std::string accountPath() { return g_storeDir + "/account.json"; }
+std::string sessionPath(const std::string &idB64) {
+    return g_storeDir + "/sess_" + hexName(idB64) + ".json";
+}
+std::string contactsPath() { return g_storeDir + "/contacts.json"; }
+
+void persistAccount() {
+    if (g_storeDir.empty() || !g_account) {
+        return;
+    }
+    writeFile(accountPath(), take(parvane_e2e_account_pickle(g_account)));
+}
+void persistSession(const std::string &idB64, ParvaneE2ESession *s) {
+    if (g_storeDir.empty() || !s) {
+        return;
+    }
+    writeFile(sessionPath(idB64), take(parvane_e2e_session_pickle(s)));
+}
+void saveContacts() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    json j = json::object();
+    for (const auto &[k, v] : g_contactId) {
+        j[k] = v;
+    }
+    writeFile(contactsPath(), j.dump());
+}
+void loadContacts() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    const auto raw = readFile(contactsPath());
+    if (raw.empty()) {
+        return;
+    }
+    auto j = json::parse(raw, nullptr, false);
+    if (j.is_object()) {
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (it.value().is_string()) {
+                g_contactId[it.key()] = it.value().get<std::string>();
+            }
+        }
+    }
+}
+
+// Сессия по identity собеседника: память → диск.
+ParvaneE2ESession *getSession(const std::string &idB64) {
+    auto it = g_sessions.find(idB64);
+    if (it != g_sessions.end()) {
+        return it->second;
+    }
+    if (!g_storeDir.empty() && !idB64.empty()) {
+        const auto pickle = readFile(sessionPath(idB64));
+        if (!pickle.empty()) {
+            if (auto *s = parvane_e2e_session_from_pickle(pickle.c_str())) {
+                g_sessions[idB64] = s;
+                return s;
+            }
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
-void initDevice(ITransport &t, const std::string & /*self*/, const std::string &token) {
+void initDevice(ITransport &t, const std::string &self, const std::string &token,
+                const std::string &storeDir) {
     std::string identity, otksJson;
     {
         std::lock_guard<std::mutex> lk(g_mu);
         if (g_account) {
-            return; // идемпотентно
+            return; // идемпотентно (в рамках процесса)
         }
-        g_account = parvane_e2e_account_new();
+        g_self = self;
+        g_storeDir = storeDir;
+        if (!g_storeDir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(g_storeDir, ec);
+            const auto pickle = readFile(accountPath());
+            if (!pickle.empty()) {
+                g_account = parvane_e2e_account_from_pickle(pickle.c_str());
+            }
+            loadContacts();
+        }
+        if (!g_account) {
+            g_account = parvane_e2e_account_new();
+        }
         g_identityB64 = take(parvane_e2e_account_identity(g_account));
         identity = g_identityB64;
-        otksJson = take(parvane_e2e_account_gen_otks(g_account, 20, g_otkNext));
-        g_otkNext += 20;
+        otksJson = take(parvane_e2e_account_gen_otks(g_account, 20, 1));
+        persistAccount(); // новый аккаунт ИЛИ приватные one-time
     }
-    // Публикация prekeys — сетевой request, вне лока.
     try {
         json otks = json::parse(otksJson);
         json req = {
             {"token", token},
             {"registration_id", 1},
             {"identity_key", identity},
-            // signed prekey — Olm его не использует; кладём заглушку (поля есть в
-            // каталоге по libsignal-совместимости).
             {"signed_prekey_id", 1},
             {"signed_prekey", identity},
             {"signed_prekey_sig", "olm"},
@@ -119,21 +221,36 @@ bool ready() {
 
 std::string sealFor(const std::string &to, const std::string &contentJson, ITransport &t,
                     const std::string &token) {
-    std::string identity;
-    bool haveSession = false;
+    // Реальный отправитель — ВНУТРЬ шифртекста (sealed sender).
+    json inner;
+    try {
+        inner = {{"from", g_self}, {"content", json::parse(contentJson)}};
+    } catch (const std::exception &) {
+        return {};
+    }
+
+    std::string identity, idB64;
     {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_account) {
             return {};
         }
         identity = g_identityB64;
-        haveSession = g_sessions.count(to) > 0;
+        auto c = g_contactId.find(to);
+        if (c != g_contactId.end()) {
+            idB64 = c->second;
+        }
     }
 
-    // Нет сессии → X3DH: тянем бандл собеседника (вне лока). Ретраим — на старте
-    // собеседник мог ещё не опубликовать prekeys (гонка логинов).
-    std::string peerIdentity, otk;
-    if (!haveSession) {
+    // Нет известной сессии по кэшу → тянем бандл (identity + one-time), ретраим.
+    std::string otk;
+    bool needBundle;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        needBundle = idB64.empty() || getSession(idB64) == nullptr;
+    }
+    if (needBundle) {
+        std::string peerIdentity;
         for (int attempt = 0; attempt < 4; ++attempt) {
             try {
                 json fr = {{"token", token}, {"user", to}};
@@ -152,30 +269,33 @@ std::string sealFor(const std::string &to, const std::string &contentJson, ITran
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
         }
         if (peerIdentity.empty() || otk.empty()) {
-            return {}; // без one-time Olm-сессию не установить
+            return {};
         }
+        idB64 = peerIdentity;
     }
 
     std::lock_guard<std::mutex> lk(g_mu);
-    ParvaneE2ESession *sess = nullptr;
-    auto it = g_sessions.find(to);
-    if (it != g_sessions.end()) {
-        sess = it->second;
-    } else if (!peerIdentity.empty() && !otk.empty()) {
-        sess = parvane_e2e_outbound(g_account, peerIdentity.c_str(), otk.c_str());
+    // Обновляем кэш contact→identity (детект смены ключа — новый safety number).
+    if (g_contactId[to] != idB64) {
+        g_contactId[to] = idB64;
+        saveContacts();
+    }
+    ParvaneE2ESession *sess = getSession(idB64);
+    if (!sess && !otk.empty()) {
+        sess = parvane_e2e_outbound(g_account, idB64.c_str(), otk.c_str());
         if (sess) {
-            g_sessions[to] = sess;
+            g_sessions[idB64] = sess;
         }
     }
     if (!sess) {
         return {};
     }
     std::uint32_t ctype = 0;
-    const std::string ptB64 = b64e(contentJson);
-    const std::string ct = take(parvane_e2e_encrypt(sess, ptB64.c_str(), &ctype));
+    const std::string ct = take(parvane_e2e_encrypt(sess, b64e(inner.dump()).c_str(), &ctype));
     if (ct.empty()) {
         return {};
     }
+    persistSession(idB64, sess);
     json enc = {
         {"kind", "encrypted"},
         {"ciphertext", ct},
@@ -185,7 +305,7 @@ std::string sealFor(const std::string &to, const std::string &contentJson, ITran
     return enc.dump();
 }
 
-std::string open(const std::string &from, const std::string &encryptedJson) {
+std::string open(const std::string & /*from_hint*/, const std::string &encryptedJson) {
     std::string ct, senderId;
     std::uint32_t ctype = 1;
     try {
@@ -196,7 +316,7 @@ std::string open(const std::string &from, const std::string &encryptedJson) {
     } catch (const std::exception &) {
         return {};
     }
-    if (ct.empty()) {
+    if (ct.empty() || senderId.empty()) {
         return {};
     }
 
@@ -205,29 +325,43 @@ std::string open(const std::string &from, const std::string &encryptedJson) {
         return {};
     }
     if (ctype == 0) {
-        // pre-key: новая входящая сессия (заменяет прежнюю от этого контакта).
+        // pre-key: новая входящая сессия (keyed по identity отправителя).
         char *outPt = nullptr;
         auto *sess = parvane_e2e_inbound(g_account, senderId.c_str(), 0, ct.c_str(), &outPt);
         if (!sess) {
             return {};
         }
-        auto it = g_sessions.find(from);
+        auto it = g_sessions.find(senderId);
         if (it != g_sessions.end() && it->second) {
             parvane_e2e_session_free(it->second);
         }
-        g_sessions[from] = sess;
-        return b64d(take(outPt));
+        g_sessions[senderId] = sess;
+        persistAccount(); // inbound израсходовал one-time
+        persistSession(senderId, sess);
+        return b64d(take(outPt)); // inner {from, content}
     }
-    // normal: нужна установленная сессия.
-    auto it = g_sessions.find(from);
-    if (it == g_sessions.end() || !it->second) {
+    ParvaneE2ESession *sess = getSession(senderId);
+    if (!sess) {
         return {};
     }
-    const std::string ptB64 = take(parvane_e2e_decrypt(it->second, ctype, ct.c_str()));
+    const std::string ptB64 = take(parvane_e2e_decrypt(sess, ctype, ct.c_str()));
     if (ptB64.empty()) {
         return {};
     }
+    persistSession(senderId, sess);
     return b64d(ptB64);
+}
+
+std::string safetyNumber(const std::string &contact) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (g_identityB64.empty()) {
+        return {};
+    }
+    auto it = g_contactId.find(contact);
+    if (it == g_contactId.end() || it->second.empty()) {
+        return {};
+    }
+    return take(parvane_e2e_safety_number(g_identityB64.c_str(), it->second.c_str()));
 }
 
 } // namespace parvane::e2e

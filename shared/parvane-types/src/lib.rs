@@ -389,6 +389,11 @@ pub struct InboxPush {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckPayload {
     pub message_id: Uuid,
+    /// Sealed sender: у сообщения нет открытого `from`, поэтому получатель,
+    /// расшифровав, сам указывает адрес отправителя — куда слать delivered.
+    /// Пусто — обычный путь (delivered по messages.from_user).
+    #[serde(default)]
+    pub sender: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

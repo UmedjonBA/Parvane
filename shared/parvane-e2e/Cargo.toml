@@ -10,3 +10,4 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 vodozemac = "0.10"
 serde_json = { workspace = true }
+sha2 = "0.10"

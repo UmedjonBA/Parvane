@@ -18,6 +18,9 @@ typedef struct ParvaneE2ESession ParvaneE2ESession;
 
 void parvane_e2e_string_free(char *s);
 
+/* Safety number пары identity-ключей (base64) — верификация против MITM. */
+char *parvane_e2e_safety_number(const char *identity_a_b64, const char *identity_b_b64);
+
 /* Аккаунт: жизненный цикл + персист (pickle — JSON, хранить 0600). */
 ParvaneE2EAccount *parvane_e2e_account_new(void);
 void parvane_e2e_account_free(ParvaneE2EAccount *acc);
@@ -45,6 +48,10 @@ ParvaneE2ESession *parvane_e2e_inbound(ParvaneE2EAccount *acc,
                                        char **out_plaintext_b64);
 
 void parvane_e2e_session_free(ParvaneE2ESession *sess);
+
+/* Персист сессии (Olm ratchet-состояние) — JSON. Хранить на устройстве 0600. */
+char *parvane_e2e_session_pickle(const ParvaneE2ESession *sess);
+ParvaneE2ESession *parvane_e2e_session_from_pickle(const char *pickle_json);
 
 /* Шифрует plaintext_b64 → шифртекст (base64); *out_type = тип Olm (0/1). */
 char *parvane_e2e_encrypt(ParvaneE2ESession *sess, const char *plaintext_b64,

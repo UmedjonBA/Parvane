@@ -96,9 +96,10 @@ public:
     void onInbox(const std::string &self, std::function<void(StoredMessage)> handler);
 
     // Подтвердить приём сообщения (msg.chat.ack): снимает из очереди на сервере
-    // и триггерит delivered отправителю.
+    // и триггерит delivered отправителю. `sender` — адрес отправителя (для
+    // sealed sender, где у сообщения нет открытого from; пусто — обычный путь).
     void ack(const std::string &from, const std::string &messageId,
-             const std::string &token);
+             const std::string &token, const std::string &sender = std::string());
 
     // Нулевой uuid — курсор "с самого начала" для sync.
     static const char *zeroCursor() {

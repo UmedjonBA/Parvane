@@ -118,6 +118,32 @@ impl E2ESession {
     }
 }
 
+/// Safety number для верификации контакта: детерминированный отпечаток пары
+/// identity-ключей (симметричный — обе стороны получают одинаковый). 6 групп по
+/// 5 цифр. SHA-256 (устойчив к подбору короткого совпадения). Для сверки
+/// «голосом»/скриншотом против MITM.
+pub fn safety_number(id_a: &str, id_b: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let (x, y) = if id_a <= id_b { (id_a, id_b) } else { (id_b, id_a) };
+    let mut h = Sha256::new();
+    h.update(x.as_bytes());
+    h.update(b"|");
+    h.update(y.as_bytes());
+    let digest = h.finalize();
+    let mut out = String::new();
+    for chunk in digest.chunks(5).take(6) {
+        let mut v: u64 = 0;
+        for &b in chunk {
+            v = (v << 8) | b as u64;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("{:05}", v % 100_000));
+    }
+    out
+}
+
 // ── extern "C" (для C++/parvane-core) ─────────────────────────────────────────
 // Строки, возвращаемые наружу — освобождать parvane_e2e_string_free. Указатели
 // аккаунта/сессии — parvane_e2e_*_free.
@@ -140,6 +166,15 @@ pub extern "C" fn parvane_e2e_string_free(p: *mut c_char) {
     if !p.is_null() {
         unsafe { drop(CString::from_raw(p)) };
     }
+}
+
+/// Safety number пары identity-ключей (base64). Освобождать string_free.
+#[no_mangle]
+pub extern "C" fn parvane_e2e_safety_number(a: *const c_char, b: *const c_char) -> *mut c_char {
+    let (Some(a), Some(b)) = (unsafe { cstr(a) }, unsafe { cstr(b) }) else {
+        return std::ptr::null_mut();
+    };
+    to_cstring(safety_number(&a, &b))
 }
 
 #[no_mangle]
@@ -244,6 +279,22 @@ pub extern "C" fn parvane_e2e_session_free(p: *mut E2ESession) {
     }
 }
 
+// Персист сессии (Olm ratchet-состояние) — JSON pickle. Хранить на устройстве.
+#[no_mangle]
+pub extern "C" fn parvane_e2e_session_pickle(p: *const E2ESession) -> *mut c_char {
+    let s = unsafe { p.as_ref() };
+    s.map(|x| to_cstring(x.pickle_json())).unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_session_from_pickle(s: *const c_char) -> *mut E2ESession {
+    let Some(js) = (unsafe { cstr(s) }) else { return std::ptr::null_mut() };
+    match E2ESession::from_pickle_json(&js) {
+        Some(x) => Box::into_raw(Box::new(x)),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// Шифрует plaintext (base64). Пишет тип в out_type, возвращает шифртекст base64.
 #[no_mangle]
 pub extern "C" fn parvane_e2e_encrypt(
@@ -305,6 +356,26 @@ mod tests {
     }
 
     #[test]
+    fn session_pickle_continues_ratchet() {
+        // Сессию можно сохранить и восстановить — ratchet продолжается корректно.
+        let mut bob = E2EAccount::new();
+        let otks = bob.generate_otks(1, 1);
+        let bob_id = bob.identity_b64();
+        let alice = E2EAccount::new();
+        let mut a = alice.outbound(&bob_id, &otks[0].1).unwrap();
+        let (t1, c1) = a.encrypt(b"m1");
+        let (b, _pt) = bob.inbound(&alice.identity_b64(), t1, &c1).unwrap();
+
+        // Сохраняем сессию B и восстанавливаем.
+        let pickle = b.pickle_json();
+        let mut b2 = E2ESession::from_pickle_json(&pickle).expect("restore");
+
+        // Второе сообщение расшифровывается ВОССТАНОВЛЕННОЙ сессией.
+        let (t2, c2) = a.encrypt(b"m2");
+        assert_eq!(b2.decrypt(t2, &c2).unwrap(), b"m2");
+    }
+
+    #[test]
     fn account_pickle_round_trip() {
         let mut acc = E2EAccount::new();
         let id = acc.identity_b64();
@@ -312,6 +383,21 @@ mod tests {
         let pickle = acc.pickle_json();
         let restored = E2EAccount::from_pickle_json(&pickle).expect("unpickle");
         assert_eq!(restored.identity_b64(), id, "identity сохранён после pickle");
+    }
+
+    #[test]
+    fn safety_number_symmetric_and_distinct() {
+        let a = "AAAA_id_alice";
+        let b = "BBBB_id_bob";
+        // симметрично: обе стороны получают одинаковый номер
+        assert_eq!(safety_number(a, b), safety_number(b, a));
+        // формат: 6 групп по 5 цифр
+        let sn = safety_number(a, b);
+        let groups: Vec<&str> = sn.split(' ').collect();
+        assert_eq!(groups.len(), 6);
+        assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+        // другой ключ → другой номер
+        assert_ne!(safety_number(a, b), safety_number(a, "CCCC_id_carol"));
     }
 
     #[test]
