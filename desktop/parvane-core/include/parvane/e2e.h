@@ -7,6 +7,7 @@
 // Потокобезопасно (внутренний мьютекс). Приватные ключи не покидают процесс.
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace parvane {
@@ -49,13 +50,24 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
 // Раздать участникам по 1-на-1 E2E (SKDM). "" при ошибке.
 [[nodiscard]] std::string groupSessionKey(const std::string &groupId);
 
+// Эпоха моей текущей исходящей group-сессии (монотонна, растёт при ротации).
+// Кладётся в SKDM — получатель принимает ключ только если эпоха новее.
+[[nodiscard]] std::uint64_t groupEpoch(const std::string &groupId);
+
+// Ротация своей исходящей сессии группы (после удаления участника): сбрасывает
+// ключ, следующая отправка создаёт новый (с бОльшей эпохой) и раздаёт его только
+// ТЕКУЩИМ участникам — удалённый больше не расшифрует. Forward secrecy группы.
+void groupRotate(const std::string &groupId);
+
 // Зашифровать `contentJson` для группы моей исходящей сессией → JSON
 // {kind:"group_encrypted",ciphertext,group,sender_identity}. "" при ошибке.
 [[nodiscard]] std::string groupSeal(const std::string &groupId, const std::string &contentJson);
 
-// Принять session_key участника (из SKDM) → входящая сессия (group, sender).
+// Принять session_key участника (из SKDM) с эпохой `epoch` → входящая сессия
+// (group, sender). Заменяет старую только если эпоха строго новее (ротация);
+// та же эпоха — дедуп; меньшая — откат отклоняется.
 void groupAcceptKey(const std::string &groupId, const std::string &senderIdentity,
-                    const std::string &sessionKeyB64);
+                    const std::string &sessionKeyB64, std::uint64_t epoch);
 
 // Расшифровать групповое сообщение (ciphertext) отправителя senderIdentity →
 // внутренний конверт {from,content} JSON. "" — нет ключа (ещё не пришёл SKDM)/порча.
