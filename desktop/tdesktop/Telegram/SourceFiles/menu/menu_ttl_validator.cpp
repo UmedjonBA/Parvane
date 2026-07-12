@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "styles/style_chat.h"
 #include "styles/style_menu_icons.h"
+#include "parvane/parvane_client.h" // Parvane: TTL локально, без MTProto
 
 namespace TTLMenu {
 namespace {
@@ -59,32 +60,14 @@ TTLValidator::TTLValidator(
 Args TTLValidator::createArgs() const {
 	const auto peer = _peer;
 	const auto show = _show;
-	struct State {
-		TimeId savingPeriod = 0;
-		mtpRequestId savingRequestId = 0;
-	};
-	const auto state = std::make_shared<State>();
 	auto callback = [=](
 			TimeId period,
 			Fn<void()>) {
-		auto &api = peer->session().api();
-		if (state->savingRequestId) {
-			if (period == state->savingPeriod) {
-				return;
-			}
-			api.request(state->savingRequestId).cancel();
-		}
-		state->savingPeriod = period;
-		state->savingRequestId = api.request(MTPmessages_SetHistoryTTL(
-			peer->input(),
-			MTP_int(period)
-		)).done([=](const MTPUpdates &result) {
-			peer->session().api().applyUpdates(result);
-			ShowAutoDeleteToast(show, peer);
-			state->savingRequestId = 0;
-		}).fail([=] {
-			state->savingRequestId = 0;
-		}).send();
+		// Parvane: MTProto заглушён — ставим TTL ЛОКАЛЬНО (peer->messagesTTL) и
+		// сохраняем у себя; исходящие в этот чат понесут ttl_secs в E2E-content.
+		peer->setMessagesTTL(period);
+		Parvane::OnPeerTtlChanged(peer);
+		ShowAutoDeleteToast(show, peer);
 		show->hideLayer();
 	};
 	auto about1 = peer->isUser()

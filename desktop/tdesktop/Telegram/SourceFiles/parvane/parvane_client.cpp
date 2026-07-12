@@ -116,6 +116,8 @@ QHash<QString, QString> g_knownGroups;
 QHash<quint64, QString> g_chatIdToGroupId;
 // Участники групп (адреса) — для инициации группового звонка. Под g_sessionMutex.
 QHash<QString, QStringList> g_groupMembers;
+// TTL самоуничтожения по адресу собеседника/группы (сек, 0 — выкл). Под g_sessionMutex.
+QHash<QString, int> g_peerTtl;
 // Текущий собеседник по звонку (для панели активного звонка). Под g_sessionMutex.
 // НЕ читать через g_callManager->peer() из onState — там уже держится мьютекс
 // менеджера (дедлок). Пишем при placeCall/incoming, читаем в onState.
@@ -332,6 +334,60 @@ void ReplayHistory() {
 	LOG(("Parvane: история: воспроизведено %1 сообщений из журнала").arg(n));
 }
 
+// ── TTL самоуничтожения по чату (persist в tdata/parvane-ttl.json) ────────────
+[[nodiscard]] QString TtlStorePath() {
+	return cWorkingDir() + u"tdata/parvane-ttl.json"_q;
+}
+[[nodiscard]] int PeerTtl(const QString &address) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return g_peerTtl.value(address, 0);
+}
+void SaveTtlStore() {
+	nlohmann::json j = nlohmann::json::object();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (auto it = g_peerTtl.constBegin(); it != g_peerTtl.constEnd(); ++it) {
+			if (it.value() > 0) {
+				j[it.key().toStdString()] = it.value();
+			}
+		}
+	}
+	QFile f(TtlStorePath());
+	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+		f.write(QString::fromStdString(j.dump()).toUtf8());
+	}
+}
+void LoadTtlStore() {
+	QFile f(TtlStorePath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	try {
+		auto j = nlohmann::json::parse(QString::fromUtf8(f.readAll()).toStdString());
+		if (j.is_object()) {
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			for (auto it = j.begin(); it != j.end(); ++it) {
+				if (it.value().is_number()) {
+					g_peerTtl.insert(QString::fromStdString(it.key()),
+						it.value().get<int>());
+				}
+			}
+		}
+	} catch (const std::exception &) {
+	}
+}
+void SetPeerTtlLocal(const QString &address, int secs) {
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (secs > 0) {
+			g_peerTtl.insert(address, secs);
+		} else {
+			g_peerTtl.remove(address);
+		}
+	}
+	SaveTtlStore();
+}
+
 // Групповое E2E (Megolm/sender keys, Фаза 3): раздаёт SKDM (свой session_key)
 // каждому участнику по 1-на-1 E2E (sealed) и возвращает group_encrypted-конверт
 // для рассылки в группу. "" — E2E не готов/ошибка (тогда шлём открыто). Вызывать
@@ -410,12 +466,18 @@ void sendTextAsync(
 			LOG(("Parvane: sendText без активной сессии — пропуск"));
 			return;
 		}
+		// TTL самоуничтожения по чату (сек): едет ВНУТРИ E2E-content (сервер не
+		// знает), получатель ставит нативный ttl_period → авто-удаление.
+		const int ttl = PeerTtl(toAddress);
 		try {
 			std::string id;
 			// 1-на-1 текст → E2E (Фаза 2): шифруем реальный content, шлём вариант
 			// Encrypted. Группы → E2E Megolm (Фаза 3, sender keys).
 			if (!isGroup && t && parvane::e2e::ready()) {
-				const auto content = parvane::textContent(body, entities, webpage);
+				auto content = parvane::textContent(body, entities, webpage);
+				if (ttl > 0) {
+					content["ttl_secs"] = ttl;
+				}
 				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
 				if (sealed.empty()) {
 					// Не удалось (нет бандла/one-time) — НЕ слать открытым текстом.
@@ -428,7 +490,10 @@ void sendTextAsync(
 				id = m->sendContent(std::string(), to, nlohmann::json::parse(sealed),
 					std::string(), replyToUuid, preId);
 			} else if (isGroup && t && parvane::e2e::ready()) {
-				const auto content = parvane::textContent(body, entities, webpage);
+				auto content = parvane::textContent(body, entities, webpage);
+				if (ttl > 0) {
+					content["ttl_secs"] = ttl;
+				}
 				const auto sealed = sealGroup(m, t, to, content, token);
 				if (sealed.empty()) {
 					LOG(("Parvane: E2E группы не удался для %1 — НЕ отправлено")
@@ -451,9 +516,42 @@ void sendTextAsync(
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
 			}
-			// Своё исходящее — в локальный журнал (плейнтекст), переживёт рестарт/
-			// релогин: свои sealed на сервере как «свои» не лежат, восстановить нечем.
-			if (!id.empty()) {
+			if (!id.empty() && ttl > 0) {
+				// TTL: эфемерное — НЕ журналируем и планируем авто-удаление своего эха
+				// (на wall-clock как у получателя: примерно send_time + ttl).
+				const auto uuidQ = QString::fromStdString(id);
+				const auto peerAddr = toAddress;
+				const auto grp = isGroup;
+				crl::on_main([uuidQ, peerAddr, grp, ttl] {
+					base::call_delayed(ttl * crl::time(1000), [uuidQ, peerAddr, grp] {
+						const auto session = g_sessionWeak.get();
+						if (!session) {
+							return;
+						}
+						std::int64_t bare = 0;
+						{
+							std::lock_guard<std::mutex> lk(g_sessionMutex);
+							const auto it = g_uuidToMsgId.find(uuidQ);
+							if (it != g_uuidToMsgId.end()) {
+								bare = it.value();
+							}
+						}
+						if (!bare) {
+							return;
+						}
+						const auto peerId = grp
+							? peerFromChat(ChatId(BareId(IdForAddress(peerAddr))))
+							: peerFromUser(UserId(BareId(IdForAddress(peerAddr))));
+						if (const auto item = session->data().message(
+								FullMsgId(peerId, MsgId(bare)))) {
+							item->destroy();
+							LOG(("Parvane: ttl — своё %1 самоуничтожено").arg(uuidQ));
+						}
+					});
+				});
+			} else if (!id.empty()) {
+				// Своё исходящее — в локальный журнал (плейнтекст), переживёт рестарт/
+				// релогин: свои sealed на сервере как «свои» не лежат, восстановить нечем.
 				parvane::StoredMessage own;
 				own.id = id;
 				own.from = from;
@@ -1731,6 +1829,10 @@ not_null<UserData*> ensurePeerUser(
 			}
 		}
 	}
+	// TTL самоуничтожения чата (нативное меню показывает таймер по messagesTTL).
+	if (const auto ttl = PeerTtl(address); ttl > 0 && result->messagesTTL() != ttl) {
+		result->setMessagesTTL(TimeId(ttl));
+	}
 	return result;
 }
 
@@ -1932,6 +2034,12 @@ void ResolveNames(const QStringList &addresses) {
 		page);
 }
 
+// TTL (самоуничтожение) сообщения в секундах из content.ttl_secs (0 — нет).
+[[nodiscard]] int TtlFromContent(const parvane::json &c) {
+	return (c.contains("ttl_secs") && c["ttl_secs"].is_number())
+		? c["ttl_secs"].get<int>() : 0;
+}
+
 [[nodiscard]] MTPMessage buildMessage(
 		std::uint64_t authorId,
 		std::uint64_t peerId,
@@ -1942,7 +2050,8 @@ void ResolveNames(const QStringList &addresses) {
 		bool hasMedia = false,
 		std::int64_t replyToMsgId = 0,
 		bool peerIsChat = false,
-		const MTPVector<MTPMessageEntity> &entities = MTPVector<MTPMessageEntity>()) {
+		const MTPVector<MTPMessageEntity> &entities = MTPVector<MTPMessageEntity>(),
+		int ttlSecs = 0) {
 	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
 	// Диалог — 1-на-1 (user) или группа (chat). Для группы peerId = chatId.
 	const auto dialogPeer = peerIsChat
@@ -1954,6 +2063,7 @@ void ResolveNames(const QStringList &addresses) {
 		| (out ? Flag::f_out : Flag(0))
 		| (hasMedia ? Flag::f_media : Flag(0))
 		| (hasEntities ? Flag::f_entities : Flag(0))
+		| (ttlSecs > 0 ? Flag::f_ttl_period : Flag(0)) // самоуничтожение (TTL)
 		| (replyToMsgId ? Flag::f_reply_to : Flag(0));
 	const auto replyHeader = replyToMsgId
 		? MTP_messageReplyHeader(
@@ -1995,7 +2105,7 @@ void ResolveNames(const QStringList &addresses) {
 		MTPlong(),                  // grouped_id
 		MTPMessageReactions(),
 		MTPVector<MTPRestrictionReason>(),
-		MTPint(),                   // ttl_period
+		ttlSecs > 0 ? MTP_int(ttlSecs) : MTPint(), // ttl_period (self-destruct)
 		MTPint(),                   // quick_reply_shortcut_id
 		MTPlong(),                  // effect
 		MTPFactCheck(),
@@ -2685,8 +2795,9 @@ void injectOnMain(
 		}
 		// Новое принятое сообщение (текст/медиа, уже расшифровано) — в локальный
 		// журнал, чтобы пережить рестарт/релогин (инкрем. курсор его не пере-тянет).
-		// При воспроизведении журнала (live=false) НЕ пишем повторно.
-		if (live) {
+		// При воспроизведении журнала (live=false) НЕ пишем повторно. TTL-сообщения
+		// эфемерны — НЕ журналируем (иначе воскреснут при рестарте).
+		if (live && TtlFromContent(sm.content) == 0) {
 			HistoryAppend(sm);
 		}
 		// Групповое сообщение: to — известная группа → инъекция в историю группы.
@@ -2768,7 +2879,8 @@ void injectOnMain(
 				gMsgId,
 				buildMessage(gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
 					gHasWp ? buildWebpageMedia(gWpJson) : MTPMessageMedia(),
-					gHasWp, 0, /*peerIsChat=*/true, gEntities),
+					gHasWp, 0, /*peerIsChat=*/true, gEntities,
+					TtlFromContent(sm.content)),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
 				const auto h = gItem->history();
@@ -2898,14 +3010,19 @@ void injectOnMain(
 			Api::ConvertOption::WithLocal);
 		const auto wpJson = parvane::contentWebpage(sm.content);
 		const auto hasWp = wpJson.is_object() && wpJson.contains("url");
+		const auto ttl = TtlFromContent(sm.content);
 		const auto item = session->data().addNewMessage(
 			msgId,
 			buildMessage(authorId, peerId, out, sm.ts, text,
 				hasWp ? buildWebpageMedia(wpJson) : MTPMessageMedia(),
 				/*hasMedia=*/hasWp, replyToMsgId,
-				/*peerIsChat=*/false, entities),
+				/*peerIsChat=*/false, entities, ttl),
 			MessageFlags(),
 			NewMessageType::Unread);
+		if (ttl > 0) {
+			LOG(("Parvane: ttl-сообщение %1 самоуничтожится через %2с")
+				.arg(uuid).arg(ttl));
+		}
 		++added;
 		LOG(("Parvane: %1 msg %2 (%3): %4")
 			.arg(out ? u"своё"_q : u"входящее"_q).arg(uuid)
@@ -3333,6 +3450,21 @@ void StartGroupCall(const QString &groupId, bool video) {
 
 // ── группы: публичное API ────────────────────────────────────────────────────
 
+void OnPeerTtlChanged(not_null<PeerData*> peer) {
+	QString address;
+	if (peer->isUser()) {
+		address = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	} else if (peer->isChat()) {
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
+	}
+	if (address.isEmpty()) {
+		return;
+	}
+	SetPeerTtlLocal(address, int(peer->messagesTTL()));
+	LOG(("Parvane: TTL чата %1 = %2с").arg(address).arg(int(peer->messagesTTL())));
+}
+
 // Тянет список групп/каналов пользователя (group.list) и синтезирует их как
 // чаты, чтобы появились в списке диалогов. Воркер → main.
 void RefreshGroups() {
@@ -3626,6 +3758,8 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				});
 			}, g_finalizeLifetime);
 		}
+		// TTL-таймеры чатов (самоуничтожение) — восстановить с диска.
+		LoadTtlStore();
 		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
 		// восстанавливает переписку после рестарта/релогина; новые сообщения sync
 		// добавит поверх (дедуп по uuid).
@@ -3774,6 +3908,20 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					LOG(("Parvane: AUTOGROUPCALL — группа '%1' не найдена").arg(gname));
 				}
 			});
+		}
+
+		// Debug-autottl для e2e самоуничтожения: PARVANE_AUTOTTL=peer@server:секунды
+		// → выставить TTL чата (как нативное меню Auto-Delete). Исходящие получат
+		// ttl_secs → у получателя нативный ttl_period (авто-удаление).
+		if (const char *tv = std::getenv("PARVANE_AUTOTTL"); tv && *tv) {
+			auto spec = QString::fromUtf8(tv);
+			const auto sp = spec.lastIndexOf(':');
+			if (sp > 0) {
+				const auto addr = spec.left(sp);
+				const auto secs = spec.mid(sp + 1).toInt();
+				SetPeerTtlLocal(addr, secs);
+				LOG(("Parvane: AUTOTTL — TTL чата %1 = %2с").arg(addr).arg(secs));
+			}
 		}
 
 		// Debug-autogroupsend для e2e групп (Фаза 3, Megolm): PARVANE_AUTOGROUPSEND=
