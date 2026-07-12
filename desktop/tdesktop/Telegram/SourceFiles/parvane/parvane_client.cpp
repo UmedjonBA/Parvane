@@ -2686,16 +2686,20 @@ void injectMediaOnMain(
 		MTPint(),
 		MTPint());
 
+	// Привязываем локальный файл к документу ДО инъекции сообщения: если чат
+	// открыт (tdesktop восстанавливает последний чат при старте), вьюха
+	// кружка/гифки автоплеится сразу при addNewMessage — старт стриминга на
+	// документе без location проваливается и StreamingPlaybackFailed залипает
+	// на всю сессию (кружок навсегда «не скачан»).
+	const auto doc = session->data().processDocument(mtpDoc);
+	doc->setLocation(Core::FileLocation(localPath));
+
 	const auto item = session->data().addNewMessage(
 		msgId,
 		buildMessage(authorId, senderId, out, ts, caption, media,
 			/*hasMedia=*/true, 0, peerIsChat),
 		MessageFlags(),
 		NewMessageType::Unread);
-
-	// Привязываем локальный файл к документу — тогда UI считает его скачанным.
-	const auto doc = session->data().processDocument(mtpDoc);
-	doc->setLocation(Core::FileLocation(localPath));
 
 	LOG(("Parvane: %1 медиа %2: %3 (%4 байт) → %5")
 		.arg(out ? u"своё"_q : u"получено"_q).arg(from).arg(filename)
