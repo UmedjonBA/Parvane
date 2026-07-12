@@ -10,6 +10,7 @@
 class PeerData;
 class UserData;
 class HistoryItem;
+class DocumentData;
 class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
 struct TextWithEntities;   // ui/text/text_entity.h (форматирование)
@@ -170,6 +171,13 @@ void LeaveGroup(const QString &groupId);
 // Адрес нашей группы по peer (Chat) — "" если это не наша группа. Для врезки
 // нативного «выйти из группы» в меню.
 [[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
+
+// ── стикеры/GIF (паритет) ────────────────────────────────────────────────────
+// Зеркалит отправку СУЩЕСТВУЮЩЕГО документа (стикер из панели / GIF из
+// сохранённых): байты локального файла → cloud (E2E-блоб), content kind=
+// sticker/gif. Прочие документы — no-op. Локальное эхо делает штатный
+// SendExistingMedia. Вызывается из Api::SendExistingDocument.
+void MirrorOutgoingSticker(PeerData *peer, DocumentData *document);
 
 // ── опросы (паритет) ─────────────────────────────────────────────────────────
 // Опрос едет ВНУТРИ E2E-контента (kind=poll), голоса — отдельными kind=poll_vote

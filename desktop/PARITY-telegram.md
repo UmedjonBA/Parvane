@@ -76,8 +76,19 @@
   строим Parvane-панель из тех же стилей/виджетов, driven нашим CallManager.
 
 ### Развлекательный слой
-- Стикеры/GIF/кастом-эмодзи — 🔴 (нативная панель `chat_helpers`; нужен свой
-  шард-каталог стикеров + `MTPDocument` со стикер-атрибутами).
+- Стикеры — 🟢 базово (локальные паки `~/.local/share/ParvaneStickers/<Пак>/
+  *.webp|png` или `PARVANE_STICKERS_DIR` → синтез установленных наборов
+  (feedSetFull) → нативная панель chat_helpers; отправка из панели →
+  перехват `SendExistingDocument` → E2E-блоб в cloud (kind=sticker); приём —
+  `documentAttributeSticker`, рендер нативный; Recent работает; e2e —
+  `verify_stickers.sh`). ВАЖНО: загрузка паков отложена (t+3с) — init-чейн
+  storage стирает наборы, если грузить раньше. Пробелы: анимированные
+  tgs/webm, кастом-эмодзи, обмен паками между пользователями (сейчас паки
+  локальные у каждого).
+- GIF — 🟡 (attach .gif едет как kind=gif → нативный автоплей-рендер у
+  получателя; вкладка GIFs наполняется только gifv/mp4 — заполнение Saved
+  GIFs и панель отправки — TODO).
+- Кастом-эмодзи — 🔴.
 - Опросы (poll) — 🟢 (нативный `history_view_poll` + `CreatePollBox`; опрос
   едет в E2E-контенте kind=poll, голоса — kind=poll_vote (сервер не видит),
   агрегация на клиенте (applyResults через updateMessagePoll), закрытие,

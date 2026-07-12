@@ -39,6 +39,7 @@
 #include <QtCore/QRegularExpression>
 #include <QtCore/QUrl>
 #include "api/api_common.h"
+#include "api/api_sending.h"          // Api::SendExistingDocument (autosticker)
 #include "storage/localimageloader.h" // FilePrepareResult, SendMediaType
 
 #include <parvane/events.h>          // parvane-core
@@ -60,6 +61,9 @@
 #include "data/data_chat.h"          // ChatData (синтез группы)
 #include "data/data_poll.h"          // PollData (опросы)
 #include "data/data_media_types.h"   // Data::Media::poll()
+#include "data/stickers/data_stickers.h"     // стикеры: локальные паки → панель
+#include "data/stickers/data_stickers_set.h"
+#include <QtCore/QFileInfo>
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Open/Close)
 #include "media/audio/media_audio_track.h" // рингтон звонка
 #include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
@@ -1555,8 +1559,12 @@ parvane::json buildMediaContent(
 			{"mime", mime}, {"size_bytes", size}};
 		break;
 	default:
-		// video/* как Video, всё прочее — File.
-		if (mime.rfind("video/", 0) == 0) {
+		// image/gif как GIF (анимация), video/* как Video, всё прочее — File.
+		if (mime == "image/gif") {
+			content = parvane::json{{"kind", "gif"}, {"file_id", fileId},
+				{"duration_secs", durationSecs}, {"width", width}, {"height", height},
+				{"mime", mime}, {"size_bytes", size}, {"caption", cap}};
+		} else if (mime.rfind("video/", 0) == 0) {
 			content = parvane::json{{"kind", "video"}, {"file_id", fileId},
 				{"duration_secs", durationSecs}, {"width", width}, {"height", height},
 				{"mime", mime}, {"size_bytes", size}, {"caption", cap}};
@@ -1685,7 +1693,9 @@ void MirrorOutgoingFile(
 				fileNonce = enc.nonceB64;
 			}
 			parvane::CloudClient cloud(*t);
-			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd, uploadBytes);
+			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
+			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd,
+				uploadBytes, 256 * 1024, 20000);
 			const auto content = buildMediaContent(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
 				durationSecs, mediaW, mediaH, captionStd, fileKey, fileNonce);
@@ -1733,6 +1743,139 @@ void MirrorOutgoingFile(
 				.arg(e2e ? u" [E2E]"_q : QString()));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка отправки медиа: %1")
+				.arg(QString::fromUtf8(e.what())));
+		}
+	});
+}
+
+void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
+	if (!peer || !document) {
+		return;
+	}
+	const auto sticker = document->sticker();
+	const auto animated = document->isAnimation();
+	if (!sticker && !animated) {
+		return; // прочие «существующие документы» не наш случай
+	}
+	// Адрес получателя — как в MirrorOutgoing.
+	QString address;
+	if (peer->isChat()) {
+		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(chatBare);
+	} else if (peer->isUser()) {
+		address = peer->isSelf()
+			? SelfAddress()
+			: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	}
+	if (address.isEmpty()) {
+		LOG(("Parvane: стикер не зеркалится — адрес пира неизвестен"));
+		return;
+	}
+	// Байты — из локального файла документа (паки локальные; принятые стикеры
+	// тоже привязаны к файлу при инъекции).
+	const auto path = document->filepath(true);
+	auto bytes = QByteArray();
+	if (!path.isEmpty()) {
+		auto f = QFile(path);
+		if (f.open(QIODevice::ReadOnly)) {
+			bytes = f.readAll();
+		}
+	}
+	if (bytes.isEmpty()) {
+		LOG(("Parvane: стикер без локальных байтов — не отправлен (%1)")
+			.arg(path));
+		return;
+	}
+	const auto kind = sticker ? std::string("sticker") : std::string("gif");
+	const auto alt = (sticker ? sticker->alt : QString()).toStdString();
+	const auto w = document->dimensions.width();
+	const auto h = document->dimensions.height();
+	const auto durationSecs = int(std::max(document->duration(), crl::time(0))
+		/ 1000);
+	const auto from = SelfAddress().toStdString();
+	const auto to = address.toStdString();
+	const auto token = Token().toStdString();
+	const auto mimeStd = document->mimeString().toStdString();
+	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+	crl::async([=] {
+		parvane::ITransport *t = nullptr;
+		parvane::MessengerClient *m = nullptr;
+		bool isGroup = false;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+			m = g_messenger.get();
+			isGroup = g_knownGroups.contains(QString::fromStdString(to));
+		}
+		if (!t || !m || !parvane::e2e::ready()) {
+			LOG(("Parvane: стикер не отправлен (нет сессии/E2E)"));
+			return;
+		}
+		try {
+			auto enc = parvane::blobcrypt::encrypt(bytesStd);
+			if (enc.ciphertext.empty()) {
+				LOG(("Parvane: стикер не зашифрован (блоб) — пропуск"));
+				return;
+			}
+			parvane::CloudClient cloud(*t);
+			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
+			const auto fileId = cloud.upload(
+				from, token, kind + ".bin", mimeStd, enc.ciphertext,
+				256 * 1024, 20000);
+			parvane::json content{
+				{"kind", kind}, {"file_id", fileId},
+				{"width", w}, {"height", h},
+				{"mime", mimeStd}, {"size_bytes", bytesStd.size()},
+				{"file_key", enc.keyB64}, {"file_nonce", enc.nonceB64}};
+			if (kind == "gif") {
+				content["duration_secs"] = durationSecs;
+				content["caption"] = parvane::json(nullptr);
+			}
+			if (!alt.empty()) {
+				// alt-эмодзи → filename (buildLocalMtpDocument кладёт его в
+				// Sticker-атрибут на приёме).
+				content["filename"] = alt;
+			}
+			std::string id;
+			if (!isGroup) {
+				const auto sealed = parvane::e2e::sealFor(
+					to, content.dump(), *t, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E стикера не удался для %1")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
+				id = m->sendContent(std::string(), to,
+					nlohmann::json::parse(sealed), std::string());
+			} else {
+				const auto sealed = sealGroup(m, t, to, content, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E стикера группы не удался для %1")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
+				id = m->sendContent(from, to,
+					nlohmann::json::parse(sealed), token);
+			}
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_ownSentUuids.insert(id);
+			}
+			if (!id.empty()) {
+				parvane::StoredMessage own;
+				own.id = id;
+				own.from = from;
+				own.to = to;
+				own.ts = QDateTime::currentSecsSinceEpoch();
+				own.content = content;
+				HistoryAppend(own);
+			}
+			LOG(("Parvane: %1 отправлен → %2 [E2E]")
+				.arg(QString::fromStdString(kind))
+				.arg(QString::fromStdString(to)));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка отправки стикера: %1")
 				.arg(QString::fromUtf8(e.what())));
 		}
 	});
@@ -2294,7 +2437,7 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 		std::string bytes;
 		try {
 			parvane::CloudClient cloud(*t);
-			auto d = cloud.download(self, token, fid);
+			auto d = cloud.download(self, token, fid, 20000);
 			if (!d.ok) {
 				return;
 			}
@@ -2381,6 +2524,29 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 			MTPint(), MTPdouble(), MTPstring()));
 		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
 			filename.isEmpty() ? u"video.mp4"_q : filename)));
+	} else if (kind == u"sticker"_q) {
+		// Стикер: ImageSize + Sticker-атрибут → нативный рендер стикером.
+		const auto w = (width > 0) ? width : 512;
+		const auto h = (height > 0) ? height : 512;
+		attributes.push_back(MTP_documentAttributeImageSize(
+			MTP_int(w), MTP_int(h)));
+		attributes.push_back(MTP_documentAttributeSticker(
+			MTP_flags(0),
+			MTP_string(filename), // alt-эмодзи кладём в filename при отправке
+			MTP_inputStickerSetEmpty(),
+			MTPMaskCoords()));
+	} else if (kind == u"gif"_q) {
+		// GIF: video+animated → нативный автоплей «гифки».
+		const auto w = (width > 0) ? width : 320;
+		const auto h = (height > 0) ? height : 240;
+		attributes.push_back(MTP_documentAttributeVideo(
+			MTP_flags(0),
+			MTP_double(double(durationSecs > 0 ? durationSecs : 1)),
+			MTP_int(w), MTP_int(h),
+			MTPint(), MTPdouble(), MTPstring()));
+		attributes.push_back(MTP_documentAttributeAnimated());
+		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
+			filename.isEmpty() ? u"animation.gif"_q : filename)));
 	} else {
 		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
 			filename.isEmpty() ? (kind + u"_file"_q) : filename)));
@@ -2689,7 +2855,7 @@ void pumpMediaDownload(
 		std::string bytes;
 		try {
 			parvane::CloudClient cloud(*t);
-			auto d = cloud.download(self, token, fileIdStd);
+			auto d = cloud.download(self, token, fileIdStd, 20000);
 			if (!d.ok) {
 				LOG(("Parvane: скачивание медиа %1 не удалось: %2")
 					.arg(fileId).arg(QString::fromStdString(d.error)));
@@ -2731,7 +2897,8 @@ void pumpMediaDownload(
 			// Инлайн-фото, если контент помечен photo ИЛИ mime — image/* (tdesktop
 			// иногда даунгрейдит Photo→File при отправке; смотрим по факту).
 			// injectPhotoOnMain сам деградирует в документ, если байты не картинка.
-			if (kind == u"photo"_q || mime.startsWith(u"image/"_q)) {
+			if (kind != u"sticker"_q && kind != u"gif"_q
+				&& (kind == u"photo"_q || mime.startsWith(u"image/"_q))) {
 				injectPhotoOnMain(session, from, senderId, authorId, out,
 					ts, msgId, mediaId, kind, path, filename, mime, size,
 					durationSecs, width, height, caption, peerIsChat, authorAddr);
@@ -4324,6 +4491,132 @@ void LoadFolders(not_null<Main::Session*> session) {
 	}
 }
 
+// ── стикеры: локальные паки → нативная панель ────────────────────────────────
+// Каталог паков: PARVANE_STICKERS_DIR или ~/.local/share/ParvaneStickers.
+// Каждая подпапка — пак: <Пак>/*.webp|png. Синтезируем установленный
+// StickersSet (feedSetFull) с документами, привязанными к локальным файлам —
+// нативная панель chat_helpers показывает и шлёт их без MTProto.
+void LoadLocalStickerPacks(not_null<Main::Session*> session) {
+	auto root = QString();
+	if (const char *v = std::getenv("PARVANE_STICKERS_DIR"); v && *v) {
+		root = QString::fromUtf8(v);
+	} else {
+		root = QDir::homePath() + u"/.local/share/ParvaneStickers"_q;
+	}
+	const auto rootDir = QDir(root);
+	if (!rootDir.exists()) {
+		return;
+	}
+	auto loaded = 0;
+	auto &stickers = session->data().stickers();
+	for (const auto &packName : rootDir.entryList(
+			QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+		const auto packDir = QDir(rootDir.filePath(packName));
+		const auto files = packDir.entryList(
+			{ u"*.webp"_q, u"*.png"_q }, QDir::Files, QDir::Name);
+		if (files.isEmpty()) {
+			continue;
+		}
+		const auto setId = std::uint64_t(
+			docIdFromFileId(u"pack:"_q + packName));
+		auto docs = QVector<MTPDocument>();
+		auto paths = QVector<QPair<qint64, QString>>();
+		for (const auto &name : files) {
+			const auto path = packDir.filePath(name);
+			const auto img = QImage(path);
+			if (img.isNull()) {
+				continue;
+			}
+			const auto docId = docIdFromFileId(path);
+			const auto size = QFileInfo(path).size();
+			const auto mime = name.endsWith(u".png"_q, Qt::CaseInsensitive)
+				? u"image/png"_q
+				: u"image/webp"_q;
+			auto attrs = QVector<MTPDocumentAttribute>();
+			attrs.push_back(MTP_documentAttributeImageSize(
+				MTP_int(img.width()), MTP_int(img.height())));
+			attrs.push_back(MTP_documentAttributeSticker(
+				MTP_flags(0),
+				MTP_string(QString::fromUtf8("\xF0\x9F\x99\x82")), // alt 🙂
+				MTP_inputStickerSetID(MTP_long(setId), MTP_long(0)),
+				MTPMaskCoords()));
+			docs.push_back(MTP_document(
+				MTP_flags(0),
+				MTP_long(docId),
+				MTP_long(0),                     // access_hash
+				MTP_bytes(),                     // file_reference
+				MTP_int(int(base::unixtime::now())),
+				MTP_string(mime),
+				MTP_long(size),
+				MTP_vector<MTPPhotoSize>(),
+				MTPVector<MTPVideoSize>(),
+				MTP_int(session->mainDcId()),
+				MTP_vector<MTPDocumentAttribute>(attrs)));
+			paths.push_back({ docId, path });
+		}
+		if (docs.isEmpty()) {
+			continue;
+		}
+		using SFlag = MTPDstickerSet::Flag;
+		const auto set = MTP_stickerSet(
+			MTP_flags(SFlag::f_installed_date),
+			MTP_int(int(base::unixtime::now())), // installed_date
+			MTP_long(setId),
+			MTP_long(0),                         // access_hash
+			MTP_string(packName),
+			MTP_string(packName),                // short_name
+			MTPVector<MTPPhotoSize>(),           // thumbs (flags.4 — нет)
+			MTPint(),                            // thumb_dc_id
+			MTPint(),                            // thumb_version
+			MTPlong(),                           // thumb_document_id (flags.8)
+			MTP_int(docs.size()),
+			MTP_int(0));                         // hash
+		const auto full = MTP_messages_stickerSet(
+			set,
+			MTP_vector<MTPStickerPack>(),
+			MTP_vector<MTPStickerKeyword>(),
+			MTP_vector<MTPDocument>(docs));
+		full.match([&](const MTPDmessages_stickerSet &data) {
+			stickers.feedSetFull(data);
+		}, [](const auto &) {});
+		// Локальные файлы → документы «скачаны» (панель рендерит и шлёт).
+		for (const auto &[docId, path] : paths) {
+			const auto doc = session->data().document(DocumentId(docId));
+			doc->setLocation(Core::FileLocation(path));
+		}
+		auto &order = stickers.setsOrderRef();
+		if (!order.contains(setId)) {
+			order.push_back(setId);
+		}
+		++loaded;
+		LOG(("Parvane: стикер-пак «%1» загружен (%2 шт)")
+			.arg(packName)
+			.arg(docs.size()));
+	}
+	if (loaded > 0) {
+		stickers.notifyUpdated(Data::StickersType::Stickers);
+		// Диагностика: не стёр ли кто-то наши наборы позже (storage-чейн и т.п.).
+		const auto weakS = base::make_weak(session.get());
+		base::call_delayed(30 * crl::time(1000), [weakS] {
+			const auto s = weakS.get();
+			if (!s) {
+				return;
+			}
+			auto total = 0, withStickers = 0;
+			for (const auto &[id, set] : s->data().stickers().sets()) {
+				++total;
+				if (!set->stickers.isEmpty()) {
+					++withStickers;
+				}
+			}
+			LOG(("Parvane: стикеры t+30с: наборов=%1 с контентом=%2 (order=%3)")
+				.arg(total)
+				.arg(withStickers)
+				.arg(s->data().stickers().setsOrder().size()));
+		});
+	}
+}
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
@@ -4510,6 +4803,16 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				}
 			}, g_foldersLifetime);
 		}
+		// Стикеры: локальные паки → нативная панель (chat_helpers). ОТЛОЖЕНО:
+		// init-чейн Main::Session (readInstalledStickers и далее) выполняется
+		// цепочкой on_main ПОСЛЕ этого хука; feedSetFull провоцирует
+		// writeInstalledStickers, чейн читает файл обратно с setsRef().clear()
+		// и спотыкается на нашей синтетике — наборы стирались. Грузим после.
+		base::call_delayed(3 * crl::time(1000), [weak] {
+			if (const auto s = weak.get()) {
+				LoadLocalStickerPacks(s);
+			}
+		});
 		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
 		// восстанавливает переписку после рестарта/релогина; новые сообщения sync
 		// добавит поверх (дедуп по uuid).
@@ -4826,6 +5129,39 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			base::call_delayed(secs * crl::time(1000), [] {
 				LOG(("Parvane: AUTOHANGUP"));
 				HangupCall();
+			});
+		}
+
+		// Debug-autosticker для e2e стикеров: PARVANE_AUTOSTICKER=peer@server —
+		// шлёт первый стикер первого локального пака нативным путём
+		// (SendExistingDocument → врезка MirrorOutgoingSticker). Отложен за
+		// LoadLocalStickerPacks (t+3с) и E2E-инициализацию.
+		if (const char *sv = std::getenv("PARVANE_AUTOSTICKER"); sv && *sv) {
+			const auto peerAddr = QString::fromUtf8(sv);
+			base::call_delayed(6 * crl::time(1000), [weak, peerAddr] {
+				const auto s = weak.get();
+				if (!s) {
+					return;
+				}
+				LoadLocalStickerPacks(s); // идемпотентно (вдруг стёрло)
+				RegisterPeer(peerAddr);
+				const auto user = s->data().user(
+					UserId(BareId(IdForAddress(peerAddr))));
+				const auto history = s->data().history(user);
+				auto sticker = (DocumentData*)nullptr;
+				for (const auto &[id, set] : s->data().stickers().sets()) {
+					if (!set->stickers.isEmpty()) {
+						sticker = set->stickers.front();
+						break;
+					}
+				}
+				if (sticker) {
+					Api::SendExistingDocument(
+						Api::MessageToSend(Api::SendAction(history)), sticker);
+					LOG(("Parvane: autosticker → %1").arg(peerAddr));
+				} else {
+					LOG(("Parvane: autosticker — локальных паков нет"));
+				}
 			});
 		}
 
