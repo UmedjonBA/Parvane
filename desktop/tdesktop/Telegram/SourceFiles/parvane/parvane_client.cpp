@@ -45,6 +45,7 @@
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/gateway_transport.h> // parvane-core (доступ через gateway, Фаза 0)
 #include <parvane/e2e.h>             // parvane-core (E2E, Фаза 2)
+#include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -1147,32 +1148,45 @@ parvane::json buildMediaContent(
 		int durationSecs,
 		int width,
 		int height,
-		const std::string &caption) {
+		const std::string &caption,
+		const std::string &fileKey = {},   // E2E медиа (Фаза 3): ключ+nonce блоба
+		const std::string &fileNonce = {}) {
 	const parvane::json cap =
 		caption.empty() ? parvane::json(nullptr) : parvane::json(caption);
+	parvane::json content;
 	switch (type) {
 	case SendMediaType::Photo:
-		return parvane::json{{"kind", "photo"}, {"file_id", fileId},
+		content = parvane::json{{"kind", "photo"}, {"file_id", fileId},
 			{"width", width}, {"height", height}, {"mime", mime},
 			{"size_bytes", size}, {"caption", cap}};
+		break;
 	case SendMediaType::Audio:
-		return parvane::json{{"kind", "voice"}, {"file_id", fileId},
+		content = parvane::json{{"kind", "voice"}, {"file_id", fileId},
 			{"duration_secs", durationSecs}, {"mime", mime}, {"size_bytes", size}};
+		break;
 	case SendMediaType::Round:
-		return parvane::json{{"kind", "video_note"}, {"file_id", fileId},
+		content = parvane::json{{"kind", "video_note"}, {"file_id", fileId},
 			{"duration_secs", durationSecs}, {"width", width}, {"height", height},
 			{"mime", mime}, {"size_bytes", size}};
+		break;
 	default:
 		// video/* как Video, всё прочее — File.
 		if (mime.rfind("video/", 0) == 0) {
-			return parvane::json{{"kind", "video"}, {"file_id", fileId},
+			content = parvane::json{{"kind", "video"}, {"file_id", fileId},
 				{"duration_secs", durationSecs}, {"width", width}, {"height", height},
 				{"mime", mime}, {"size_bytes", size}, {"caption", cap}};
+		} else {
+			content = parvane::json{{"kind", "file"}, {"file_id", fileId},
+				{"filename", filename}, {"mime", mime},
+				{"size_bytes", size}, {"caption", cap}};
 		}
-		return parvane::json{{"kind", "file"}, {"file_id", fileId},
-			{"filename", filename}, {"mime", mime},
-			{"size_bytes", size}, {"caption", cap}};
+		break;
 	}
+	if (!fileKey.empty()) {
+		content["file_key"] = fileKey;
+		content["file_nonce"] = fileNonce;
+	}
+	return content;
 }
 
 // Извлекает длительность(сек)/ширину/высоту из атрибутов file->document
@@ -1258,31 +1272,61 @@ void MirrorOutgoingFile(
 	crl::async([=] {
 		parvane::ITransport *t = nullptr;
 		parvane::MessengerClient *m = nullptr;
+		bool isGroup = false;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			t = g_transport.get();
 			m = g_messenger.get();
+			isGroup = g_knownGroups.contains(QString::fromStdString(to));
 		}
 		if (!t || !m) {
 			LOG(("Parvane: медиа-отправка без активной сессии — пропуск"));
 			return;
 		}
 		try {
+			// E2E медиа (Фаза 3): 1-на-1 → шифруем БЛОБ (cloud хранит шифртекст),
+			// ключ+nonce кладём в content, а сам content шифруем E2E (sealed).
+			// Группы идут открыто (E2E групп — sender keys, отдельно).
+			const bool e2e = !isGroup && parvane::e2e::ready();
+			std::string uploadBytes = bytesStd, fileKey, fileNonce;
+			if (e2e) {
+				auto enc = parvane::blobcrypt::encrypt(bytesStd);
+				if (enc.ciphertext.empty()) {
+					LOG(("Parvane: медиа не зашифровано (блоб) — пропуск"));
+					return;
+				}
+				uploadBytes = std::move(enc.ciphertext);
+				fileKey = enc.keyB64;
+				fileNonce = enc.nonceB64;
+			}
 			parvane::CloudClient cloud(*t);
-			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd, bytesStd);
+			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd, uploadBytes);
 			const auto content = buildMediaContent(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
-				durationSecs, mediaW, mediaH, captionStd);
-			const auto id = m->sendContent(from, to, content, token);
+				durationSecs, mediaW, mediaH, captionStd, fileKey, fileNonce);
+			std::string id;
+			if (e2e) {
+				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E медиа не удался для %1 — не отправлено")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
+				id = m->sendContent(std::string(), to, nlohmann::json::parse(sealed),
+					std::string());
+			} else {
+				id = m->sendContent(from, to, content, token);
+			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
 			}
-			LOG(("Parvane: медиа отправлено msg %1 (file %2, %3 байт) → %4")
+			LOG(("Parvane: медиа отправлено msg %1 (file %2, %3 байт) → %4%5")
 				.arg(QString::fromStdString(id))
 				.arg(QString::fromStdString(fileId))
 				.arg(bytesStd.size())
-				.arg(QString::fromStdString(to)));
+				.arg(QString::fromStdString(to))
+				.arg(e2e ? u" [E2E]"_q : QString()));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка отправки медиа: %1")
 				.arg(QString::fromUtf8(e.what())));
@@ -2191,10 +2235,14 @@ void pumpMediaDownload(
 		int height,
 		const QString &caption,
 		bool peerIsChat = false,
-		const QString &authorAddr = QString()) {
+		const QString &authorAddr = QString(),
+		const QString &fileKey = QString(),   // E2E медиа (Фаза 3): ключ блоба
+		const QString &fileNonce = QString()) {
 	const auto self = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	const auto fileIdStd = fileId.toStdString();
+	const auto fileKeyStd = fileKey.toStdString();
+	const auto fileNonceStd = fileNonce.toStdString();
 	crl::async([=] {
 		parvane::ITransport *t = nullptr;
 		{
@@ -2218,6 +2266,16 @@ void pumpMediaDownload(
 			LOG(("Parvane: ошибка скачивания медиа: %1")
 				.arg(QString::fromUtf8(e.what())));
 			return;
+		}
+		// E2E медиа (Фаза 3): блоб зашифрован (1-на-1) — расшифровать ключом из
+		// сообщения. Пустой ключ — открытый блоб (группы/legacy).
+		if (!fileKeyStd.empty()) {
+			auto dec = parvane::blobcrypt::decrypt(bytes, fileKeyStd, fileNonceStd);
+			if (!dec) {
+				LOG(("Parvane: медиа %1 — блоб НЕ расшифрован").arg(fileId));
+				return;
+			}
+			bytes = std::move(*dec);
 		}
 		const auto dir = QDir::tempPath() + u"/parvane-media"_q;
 		QDir().mkpath(dir);
@@ -2572,9 +2630,15 @@ void injectOnMain(
 			if (!out) {
 				g_unreadIncoming[peerId].push_back(uuid);
 			}
+			const auto jstr = [&](const char *k) {
+				return (c.contains(k) && c[k].is_string())
+					? QString::fromStdString(c[k].get<std::string>()) : QString();
+			};
 			pumpMediaDownload(peerAddress, peerId, authorId, out, sm.ts, msgId,
 				kind, fileId, filename, mime, size,
-				durationSecs, width, height, caption);
+				durationSecs, width, height, caption,
+				/*peerIsChat=*/false, /*authorAddr=*/QString(),
+				jstr("file_key"), jstr("file_nonce")); // E2E медиа (Фаза 3)
 			++added;
 			LOG(("Parvane: %1 медиа %2 (%3, kind=%4) → скачивание")
 				.arg(out ? u"своё"_q : u"входящее"_q)

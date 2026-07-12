@@ -405,6 +405,9 @@ fn allowed_req(_user: &str, subject: &str) -> bool {
         "identity.prekeys.publish",
         "identity.prekeys.fetch",
         "msg.sync.request",
+        // cloud: CloudClient грузит чанки и complete через request/reply (не pub).
+        "file.upload.chunk",
+        "file.upload.complete",
         "file.download.request",
         "file.list.request",
         "group.create",
