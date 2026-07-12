@@ -20,6 +20,7 @@
 #include "data/data_send_action.h"
 #include "data/data_lastseen_status.h"
 #include "data/data_changes.h"
+#include "data/data_chat_filters.h" // папки (folders): персист + restore
 #include "data/data_histories.h"
 #include "base/call_delayed.h"
 #include <QtCore/QQueue>
@@ -160,6 +161,8 @@ std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (ma
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
 bool g_finalizeHooked = false;
 bool g_typingSubscribed = false;          // подписка на msg.typing.<self> (once)
+bool g_foldersSubscribed = false;         // подписка на изменения папок (once)
+rpl::lifetime g_foldersLifetime;          // время жизни подписки на папки
 FullMsgId g_lastOwnFullId;                 // последнее своё исходящее (debug-хуки)
 bool g_presenceSubscribed = false;        // подписка на presence.* (once)
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
@@ -3698,6 +3701,105 @@ QString GroupIdForChat(not_null<PeerData*> peer) {
 	return g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
 }
 
+// ── Папки (chat filters): персист локально + восстановление на старте ─────────
+// tdesktop создаёт/применяет фильтры ЛОКАЛЬНО (local id + apply), но сохраняет их
+// только в облако (MTProto заглушён) → при рестарте терялись. Сериализуем список
+// фильтров в свой json и восстанавливаем при старте (histories по peer-id).
+[[nodiscard]] QString FoldersPath() {
+	return cWorkingDir() + u"tdata/parvane-folders.json"_q;
+}
+
+void SaveFolders(not_null<Main::Session*> session) {
+	const auto &list = session->data().chatsFilters().list();
+	auto arr = nlohmann::json::array();
+	const auto peers = [](const auto &histories) {
+		auto a = nlohmann::json::array();
+		for (const auto &h : histories) {
+			a.push_back(static_cast<std::uint64_t>(SerializePeerId(h->peer->id)));
+		}
+		return a;
+	};
+	for (const auto &f : list) {
+		if (!f.id()) {
+			continue;
+		}
+		nlohmann::json o;
+		o["id"] = f.id();
+		o["title"] = f.title().text.text.toStdString();
+		o["static"] = f.title().isStatic;
+		o["icon"] = f.iconEmoji().toStdString();
+		o["color"] = f.colorIndex() ? int(*f.colorIndex()) : -1;
+		o["flags"] = static_cast<std::uint32_t>(f.flags().value());
+		o["always"] = peers(f.always());
+		o["never"] = peers(f.never());
+		o["pinned"] = peers(f.pinned());
+		arr.push_back(std::move(o));
+	}
+	QFile file(FoldersPath());
+	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+		file.write(QString::fromStdString(arr.dump()).toUtf8());
+	}
+}
+
+void LoadFolders(not_null<Main::Session*> session) {
+	QFile file(FoldersPath());
+	if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	nlohmann::json arr;
+	try {
+		arr = nlohmann::json::parse(QString::fromUtf8(file.readAll()).toStdString());
+	} catch (const std::exception &) {
+		return;
+	}
+	if (!arr.is_array()) {
+		return;
+	}
+	const auto owner = &session->data();
+	const auto histSet = [&](const nlohmann::json &o, const char *k) {
+		base::flat_set<not_null<History*>> s;
+		if (o.contains(k) && o[k].is_array()) {
+			for (const auto &v : o[k]) {
+				s.emplace(owner->history(
+					DeserializePeerId(v.get<std::uint64_t>())));
+			}
+		}
+		return s;
+	};
+	auto restored = 0;
+	for (const auto &o : arr) {
+		if (!o.is_object() || !o.value("id", 0)) {
+			continue;
+		}
+		std::vector<not_null<History*>> pinned;
+		if (o.contains("pinned") && o["pinned"].is_array()) {
+			for (const auto &v : o["pinned"]) {
+				pinned.push_back(owner->history(
+					DeserializePeerId(v.get<std::uint64_t>())));
+			}
+		}
+		const auto colorRaw = o.value("color", -1);
+		auto title = Data::ChatFilterTitle{
+			TextWithEntities{ QString::fromStdString(o.value("title", std::string())) },
+			o.value("static", false) };
+		auto filter = Data::ChatFilter(
+			FilterId(o.value("id", 0)),
+			std::move(title),
+			QString::fromStdString(o.value("icon", std::string())),
+			(colorRaw >= 0) ? std::optional<uint8>(uint8(colorRaw)) : std::nullopt,
+			Data::ChatFilter::Flags::from_raw(
+				static_cast<ushort>(o.value("flags", 0u))),
+			histSet(o, "always"),
+			std::move(pinned),
+			histSet(o, "never"));
+		session->data().chatsFilters().set(std::move(filter));
+		++restored;
+	}
+	if (restored > 0) {
+		LOG(("Parvane: папки восстановлены: %1").arg(restored));
+	}
+}
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
@@ -3872,6 +3974,18 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		// TTL-таймеры чатов (самоуничтожение) — восстановить с диска.
 		LoadTtlStore();
+		// Папки (chat filters): восстановить с диска, затем персистить при изменениях
+		// (создание/редактирование фильтров облачно у tdesktop, MTProto заглушён).
+		LoadFolders(session);
+		if (!g_foldersSubscribed) {
+			g_foldersSubscribed = true;
+			session->data().chatsFilters().changed(
+			) | rpl::on_next([weak] {
+				if (const auto s = weak.get()) {
+					SaveFolders(s);
+				}
+			}, g_foldersLifetime);
+		}
 		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
 		// восстанавливает переписку после рестарта/релогина; новые сообщения sync
 		// добавит поверх (дедуп по uuid).
@@ -4033,6 +4147,41 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				const auto secs = spec.mid(sp + 1).toInt();
 				SetPeerTtlLocal(addr, secs);
 				LOG(("Parvane: AUTOTTL — TTL чата %1 = %2с").arg(addr).arg(secs));
+			}
+		}
+
+		// Debug-autofolder для папок: PARVANE_AUTOFOLDER=Имя:peer@server → создаёт
+		// папку с этим чатом (нативный ChatFilters::set) через ~6с. Персист свой.
+		if (const char *fv = std::getenv("PARVANE_AUTOFOLDER"); fv && *fv) {
+			auto spec = QString::fromUtf8(fv);
+			const auto c = spec.indexOf(':');
+			if (c > 0) {
+				const auto fname = spec.left(c);
+				const auto peerAddr = spec.mid(c + 1);
+				base::call_delayed(6 * crl::time(1000), [fname, peerAddr] {
+					const auto s = g_sessionWeak.get();
+					if (!s) {
+						return;
+					}
+					RegisterPeer(peerAddr);
+					const auto hist = s->data().history(
+						peerFromUser(UserId(BareId(IdForAddress(peerAddr)))));
+					auto newId = 1;
+					for (const auto &f : s->data().chatsFilters().list()) {
+						if (f.id() >= newId) {
+							newId = f.id() + 1;
+						}
+					}
+					base::flat_set<not_null<History*>> always;
+					always.emplace(hist);
+					s->data().chatsFilters().set(Data::ChatFilter(
+						FilterId(newId),
+						Data::ChatFilterTitle{ TextWithEntities{ fname }, false },
+						QString(), std::nullopt, Data::ChatFilter::Flags(),
+						std::move(always), {}, {}));
+					LOG(("Parvane: AUTOFOLDER создал папку '%1' (id=%2) → %3")
+						.arg(fname, QString::number(newId), peerAddr));
+				});
 			}
 		}
 
