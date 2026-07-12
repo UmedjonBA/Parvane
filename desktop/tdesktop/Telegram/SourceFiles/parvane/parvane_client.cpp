@@ -1561,8 +1561,11 @@ parvane::json buildMediaContent(
 	default:
 		// image/gif как GIF (анимация), video/* как Video, всё прочее — File.
 		if (mime == "image/gif") {
+			// filename с расширением обязателен: enforceNameType(Video) без него
+			// деградирует AnimatedDocument в файл (рендер файлом вместо гифки).
 			content = parvane::json{{"kind", "gif"}, {"file_id", fileId},
-				{"duration_secs", durationSecs}, {"width", width}, {"height", height},
+				{"filename", filename}, {"duration_secs", durationSecs},
+				{"width", width}, {"height", height},
 				{"mime", mime}, {"size_bytes", size}, {"caption", cap}};
 		} else if (mime.rfind("video/", 0) == 0) {
 			content = parvane::json{{"kind", "video"}, {"file_id", fileId},
@@ -1938,8 +1941,13 @@ void AttachLocalOutgoingMedia(
 				return;
 			}
 		}
-		session->data().document(docId)->setLocation(
-			Core::FileLocation(localPath));
+		const auto ownDoc = session->data().document(docId);
+		ownDoc->setLocation(Core::FileLocation(localPath));
+		// Свою гифку — в Saved GIFs (нативный checkSavedGif гейтится по
+		// isGifv = mp4, а наши .gif — image/gif, добавляем сами).
+		if (ownDoc->isAnimation()) {
+			session->data().stickers().addSavedGif(nullptr, ownDoc);
+		}
 	}
 }
 
@@ -2536,7 +2544,9 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 			MTP_inputStickerSetEmpty(),
 			MTPMaskCoords()));
 	} else if (kind == u"gif"_q) {
-		// GIF: video+animated → нативный автоплей «гифки».
+		// GIF: video+animated → нативный автоплей «гифки». Имя ОБЯЗАНО иметь
+		// видео-расширение: enforceNameType(Video) иначе деградирует тип в
+		// FileDocument (рендер файлом).
 		const auto w = (width > 0) ? width : 320;
 		const auto h = (height > 0) ? height : 240;
 		attributes.push_back(MTP_documentAttributeVideo(
@@ -2545,8 +2555,13 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 			MTP_int(w), MTP_int(h),
 			MTPint(), MTPdouble(), MTPstring()));
 		attributes.push_back(MTP_documentAttributeAnimated());
-		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
-			filename.isEmpty() ? u"animation.gif"_q : filename)));
+		const auto gifName = (filename.isEmpty() || !filename.contains(u'.'))
+			? (mime == u"video/mp4"_q
+				? u"animation.mp4"_q
+				: u"animation.gif"_q)
+			: filename;
+		attributes.push_back(MTP_documentAttributeFilename(
+			MTP_string(gifName)));
 	} else {
 		attributes.push_back(MTP_documentAttributeFilename(MTP_string(
 			filename.isEmpty() ? (kind + u"_file"_q) : filename)));
@@ -2693,6 +2708,11 @@ void injectMediaOnMain(
 	// на всю сессию (кружок навсегда «не скачан»).
 	const auto doc = session->data().processDocument(mtpDoc);
 	doc->setLocation(Core::FileLocation(localPath));
+	// Гифки — в Saved GIFs (вкладка GIFs панели): на реплее журнала список
+	// восстанавливается сам, нативный персист не задействуем.
+	if (kind == u"gif"_q) {
+		session->data().stickers().addSavedGif(nullptr, doc);
+	}
 
 	const auto item = session->data().addNewMessage(
 		msgId,
@@ -4517,7 +4537,9 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 			QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
 		const auto packDir = QDir(rootDir.filePath(packName));
 		const auto files = packDir.entryList(
-			{ u"*.webp"_q, u"*.png"_q }, QDir::Files, QDir::Name);
+			{ u"*.webp"_q, u"*.png"_q, u"*.tgs"_q, u"*.webm"_q },
+			QDir::Files,
+			QDir::Name);
 		if (files.isEmpty()) {
 			continue;
 		}
@@ -4527,18 +4549,30 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 		auto paths = QVector<QPair<qint64, QString>>();
 		for (const auto &name : files) {
 			const auto path = packDir.filePath(name);
-			const auto img = QImage(path);
-			if (img.isNull()) {
-				continue;
+			// Анимированные (tgs=lottie, webm) — размер не из QImage.
+			const auto isTgs = name.endsWith(u".tgs"_q, Qt::CaseInsensitive);
+			const auto isWebm = name.endsWith(u".webm"_q, Qt::CaseInsensitive);
+			auto w = 512, h = 512;
+			if (!isTgs && !isWebm) {
+				const auto img = QImage(path);
+				if (img.isNull()) {
+					continue;
+				}
+				w = img.width();
+				h = img.height();
 			}
 			const auto docId = docIdFromFileId(path);
 			const auto size = QFileInfo(path).size();
-			const auto mime = name.endsWith(u".png"_q, Qt::CaseInsensitive)
+			const auto mime = isTgs
+				? u"application/x-tgsticker"_q
+				: isWebm
+				? u"video/webm"_q
+				: name.endsWith(u".png"_q, Qt::CaseInsensitive)
 				? u"image/png"_q
 				: u"image/webp"_q;
 			auto attrs = QVector<MTPDocumentAttribute>();
 			attrs.push_back(MTP_documentAttributeImageSize(
-				MTP_int(img.width()), MTP_int(img.height())));
+				MTP_int(w), MTP_int(h)));
 			attrs.push_back(MTP_documentAttributeSticker(
 				MTP_flags(0),
 				MTP_string(QString::fromUtf8("\xF0\x9F\x99\x82")), // alt 🙂

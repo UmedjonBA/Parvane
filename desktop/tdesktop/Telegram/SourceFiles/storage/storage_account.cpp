@@ -2693,6 +2693,16 @@ void Account::readInstalledCustomEmoji() {
 }
 
 void Account::writeSavedGifs() {
+	// Parvane: Saved GIFs НЕ персистим — список наполняют наши синтетические
+	// документы (addSavedGif при инъекции), их сериализация не переживает
+	// round-trip и битое чтение при старте обрывает init-цепочку storage
+	// (история переставала отображаться). Восстанавливается реплеем журнала.
+	if (_savedGifsKey) {
+		ClearKey(_savedGifsKey, _basePath);
+		_savedGifsKey = 0;
+		writeMapDelayed();
+	}
+	return;
 	const auto &saved = _owner->session().data().stickers().savedGifs();
 	if (saved.isEmpty()) {
 		if (_savedGifsKey) {
