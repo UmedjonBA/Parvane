@@ -157,6 +157,18 @@ void RefreshGroups();
 // синтезирует её локально.
 void CreateGroup(const QString &name, const QStringList &members, bool channel);
 
+// Админка групп: добавить/удалить участника, промоут/демоут (роль admin/member),
+// выйти самому. groupId — адрес группы. Все зовут messenger (owner/admin проверка
+// на бэкенде), потом RefreshGroups. Пустой ответ/нет прав — просто лог.
+void AddMember(const QString &groupId, const QString &member);
+void KickMember(const QString &groupId, const QString &member);
+void SetMemberRole(const QString &groupId, const QString &member, bool admin);
+void LeaveGroup(const QString &groupId);
+
+// Адрес нашей группы по peer (Chat) — "" если это не наша группа. Для врезки
+// нативного «выйти из группы» в меню.
+[[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
+
 // Пользователь задал таймер самоуничтожения (нативное меню Auto-Delete) — сохранить
 // TTL чата у нас (peer->messagesTTL() уже выставлен вызывающим). Исходящие в этот
 // чат получат ttl_secs → у получателя нативный ttl_period (авто-удаление).

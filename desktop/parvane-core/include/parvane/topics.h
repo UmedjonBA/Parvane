@@ -60,6 +60,7 @@ inline constexpr auto CallHistoryResponse = "call.history.response";
 inline constexpr auto GroupCreate = "group.create";
 inline constexpr auto GroupAddMember = "group.addmember";
 inline constexpr auto GroupRemoveMember = "group.removemember";
+inline constexpr auto GroupSetRole = "group.setrole";
 inline constexpr auto GroupList = "group.list";
 inline constexpr auto GroupInfo = "group.info";
 

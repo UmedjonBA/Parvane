@@ -413,6 +413,7 @@ fn allowed_req(_user: &str, subject: &str) -> bool {
         "group.create",
         "group.addmember",
         "group.removemember",
+        "group.setrole",
         "group.list",
         "group.info",
         "call.history.request",
