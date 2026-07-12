@@ -69,6 +69,7 @@
 
 #include <QtCore/QFile>
 #include <QtCore/QDir>
+#include <QtCore/QDateTime>
 #include <QtGui/QImage>
 
 #include <crl/crl_async.h>
@@ -175,10 +176,12 @@ constexpr auto kPumpIntervalMs = crl::time(3000);
 [[nodiscard]] nlohmann::json entitiesToJson(const EntitiesInText &entities);
 
 // Инъекция сообщений в Data::Session (определена ниже) — нужна onInbox-push'у
-// из StartSession (Фаза 1: прямое применение без sync-round-trip).
+// из StartSession (Фаза 1: прямое применение без sync-round-trip). `live=false` —
+// воспроизведение локальной истории при старте (без ack и без пере-записи в журнал).
 void injectOnMain(
 	not_null<Main::Session*> session,
-	const std::vector<parvane::StoredMessage> &msgs);
+	const std::vector<parvane::StoredMessage> &msgs,
+	bool live = true);
 
 // ── Превью ссылок: отправитель тянет OG-метаданные первой ссылки и кладёт их в
 // content.webpage (получатель рендерит без похода во внешний URL). ────────────
@@ -265,6 +268,68 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 		}
 		done(parseWebpageHtml(url, reply->read(256 * 1024)));
 	});
+}
+
+// ── локальный журнал истории (Фаза 2 доводка) ────────────────────────────────
+// Свои исходящие sealed на сервер как «свои» не попадают (from_user=''), а входящие
+// инкрементальный курсор при рестарте не пере-запрашивает → история терялась.
+// Пишем каждое ПОКАЗАННОЕ сообщение (своё при отправке, принятое в injectOnMain) в
+// РАСШИФРОВАННОМ виде в per-self journal и воспроизводим при старте. Переживает
+// и рестарт, и релогин (файл наш, не чистится логаутом tdesktop).
+[[nodiscard]] QString HistoryPath() {
+	auto self = SelfAddress();
+	if (self.isEmpty()) {
+		self = u"anon"_q;
+	}
+	QString safe;
+	for (const auto ch : self) {
+		safe += (ch.isLetterOrNumber() || ch == '@' || ch == '.' || ch == '-')
+			? ch : QChar('_');
+	}
+	return cWorkingDir() + u"tdata/parvane-history-"_q + safe + u".jsonl"_q;
+}
+
+void HistoryAppend(const parvane::StoredMessage &sm) {
+	if (sm.id.empty()) {
+		return;
+	}
+	QFile f(HistoryPath());
+	if (!f.open(QIODevice::Append | QIODevice::Text)) {
+		return;
+	}
+	f.write(QString::fromStdString(sm.toJson().dump()).toUtf8());
+	f.write("\n");
+}
+
+// Воспроизвести локальную историю в UI при старте (до первого sync). Дедуп по
+// uuid делает injectOnMain; live=false → без ack и без пере-записи в журнал.
+void ReplayHistory() {
+	QFile f(HistoryPath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	std::vector<parvane::StoredMessage> msgs;
+	while (!f.atEnd()) {
+		const auto line = QString::fromUtf8(f.readLine()).trimmed();
+		if (line.isEmpty()) {
+			continue;
+		}
+		try {
+			msgs.push_back(parvane::StoredMessage::fromJson(
+				nlohmann::json::parse(line.toStdString())));
+		} catch (const std::exception &) {
+		}
+	}
+	if (msgs.empty()) {
+		return;
+	}
+	const auto n = int(msgs.size());
+	crl::on_main([msgs = std::move(msgs)]() mutable {
+		if (const auto session = g_sessionWeak.get()) {
+			injectOnMain(session, msgs, /*live=*/false);
+		}
+	});
+	LOG(("Parvane: история: воспроизведено %1 сообщений из журнала").arg(n));
 }
 
 // Групповое E2E (Megolm/sender keys, Фаза 3): раздаёт SKDM (свой session_key)
@@ -385,6 +450,20 @@ void sendTextAsync(
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
+			}
+			// Своё исходящее — в локальный журнал (плейнтекст), переживёт рестарт/
+			// релогин: свои sealed на сервере как «свои» не лежат, восстановить нечем.
+			if (!id.empty()) {
+				parvane::StoredMessage own;
+				own.id = id;
+				own.from = from;
+				own.to = to;
+				own.ts = QDateTime::currentSecsSinceEpoch();
+				own.content = parvane::textContent(body, entities, webpage);
+				if (replyToUuid) {
+					own.reply_to = *replyToUuid;
+				}
+				HistoryAppend(own);
 			}
 			LOG(("Parvane: отправлено msg %1 → %2%3")
 				.arg(QString::fromStdString(id))
@@ -1398,6 +1477,17 @@ void MirrorOutgoingFile(
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
 			}
+			// Своё медиа — в журнал (плейнтекст-content с file_key/nonce): при старте
+			// injectOnMain перекачает блоб из cloud и расшифрует. Переживает рестарт.
+			if (!id.empty()) {
+				parvane::StoredMessage own;
+				own.id = id;
+				own.from = from;
+				own.to = to;
+				own.ts = QDateTime::currentSecsSinceEpoch();
+				own.content = content;
+				HistoryAppend(own);
+			}
 			LOG(("Parvane: медиа отправлено msg %1 (file %2, %3 байт) → %4%5")
 				.arg(QString::fromStdString(id))
 				.arg(QString::fromStdString(fileId))
@@ -2404,7 +2494,8 @@ void pumpMediaDownload(
 // Инъекция результатов sync в Data::Session. Только main-поток. Дедуп по UUID.
 void injectOnMain(
 		not_null<Main::Session*> session,
-		const std::vector<parvane::StoredMessage> &msgs) {
+		const std::vector<parvane::StoredMessage> &msgs,
+		bool live) {
 	const auto self = SelfAddress();
 	const auto selfId = IdForAddress(self);
 	const auto selfStd = self.toStdString();
@@ -2474,7 +2565,9 @@ void injectOnMain(
 		}
 		// Ack входящего (не своего): снять из очереди + delivered отправителю
 		// (sealed: указываем реального отправителя из конверта). Идемпотентно.
-		if (sm.from != selfStd) {
+		// При воспроизведении журнала (live=false) НЕ ackаем (сообщение уже давно
+		// обработано; ack сорвал бы офлайн-очередь для реально новых).
+		if (live && sm.from != selfStd) {
 			const auto mid = sm.id;
 			const auto sender = sm.from;
 			crl::async([mid, sender] {
@@ -2589,6 +2682,12 @@ void injectOnMain(
 		}
 		if (g_uuidToMsgId.contains(uuid)) {
 			continue; // уже инъецировано
+		}
+		// Новое принятое сообщение (текст/медиа, уже расшифровано) — в локальный
+		// журнал, чтобы пережить рестарт/релогин (инкрем. курсор его не пере-тянет).
+		// При воспроизведении журнала (live=false) НЕ пишем повторно.
+		if (live) {
+			HistoryAppend(sm);
 		}
 		// Групповое сообщение: to — известная группа → инъекция в историю группы.
 		const auto toStr = QString::fromStdString(sm.to);
@@ -3527,6 +3626,10 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				});
 			}, g_finalizeLifetime);
 		}
+		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
+		// восстанавливает переписку после рестарта/релогина; новые сообщения sync
+		// добавит поверх (дедуп по uuid).
+		ReplayHistory();
 		// Первичный приём: подтягиваем то, что уже лежит в шарде (офлайн-бэклог).
 		PumpReceive();
 
