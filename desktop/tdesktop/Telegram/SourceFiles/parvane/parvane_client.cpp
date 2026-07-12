@@ -58,6 +58,8 @@
 #include <parvane/group_client.h>    // parvane-core (группы/каналы)
 #include <parvane/group_call_manager.h> // parvane-core (групповые звонки, mesh)
 #include "data/data_chat.h"          // ChatData (синтез группы)
+#include "data/data_poll.h"          // PollData (опросы)
+#include "data/data_media_types.h"   // Data::Media::poll()
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Open/Close)
 #include "media/audio/media_audio_track.h" // рингтон звонка
 #include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
@@ -156,6 +158,27 @@ QHash<QString, QImage> g_avatarImages;   // адрес → скачанная к
                                          // повторной установки: ensurePeerUser с
                                          // пустым фото стирает userpic).
 QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для forward)
+// ── опросы (паритет) — только main-поток ─────────────────────────────────────
+// Опрос = обычное сообщение с E2E-контентом kind=poll (uuid сообщения и есть
+// идентификатор опроса). Голоса/закрытие — отдельные kind=poll_vote/poll_close
+// события; сервер их не видит и не считает — агрегирует каждый клиент сам.
+// Журнал истории + дедуп по uuid восстанавливают агрегат после рестарта.
+struct PollState {
+	QString uuid;              // uuid сообщения-опроса
+	std::uint64_t pollId = 0;  // FNV от uuid — PollId для Data::Session
+	QString chatAddress;       // адрес диалога (пир или группа)
+	int answers = 0;           // число вариантов
+	bool quiz = false;
+	QString solution;          // пояснение (quiz)
+	QVector<int> correct;      // индексы правильных (quiz)
+	bool closed = false;
+	QHash<QString, QVector<int>> votes; // голосовавший → индексы вариантов
+};
+QHash<QString, PollState> g_pollsByUuid;   // uuid опроса → состояние
+QHash<quint64, QString> g_pollUuidById;    // PollId → uuid опроса
+// Голоса/закрытия, пришедшие РАНЬШЕ самого опроса (сортировка не гарантирована).
+QHash<QString, QVector<QPair<QString, QVector<int>>>> g_pendingPollVotes;
+QSet<QString> g_pendingPollClose;
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
@@ -641,6 +664,74 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 			LOG(("Parvane: переслано медиа → %1").arg(toAddress));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка пересылки: %1").arg(QString::fromUtf8(e.what())));
+		}
+	});
+}
+
+// Шлёт произвольный inner-контент СТРОГО через E2E (sealed 1-на-1 / Megolm для
+// группы). Для контента, которого сервер не знает (опросы и т.п.): messenger
+// парсит только верхний MessageContent, а sealed/group_encrypted для него
+// непрозрачны. E2E не готов — НЕ отправляем (открытым текстом сервер такой
+// kind всё равно отвергнет). preId — uuid события (сгенерирован на main).
+void sendInnerAsync(
+		const QString &toAddress,
+		const nlohmann::json &content,
+		const std::string &preId) {
+	const auto from = SelfAddress().toStdString();
+	const auto to = toAddress.toStdString();
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		parvane::ITransport *t = nullptr;
+		bool isGroup = false;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+			t = g_transport.get();
+			isGroup = g_knownGroups.contains(QString::fromStdString(to));
+		}
+		if (!m || !t || !parvane::e2e::ready()) {
+			LOG(("Parvane: inner-контент не отправлен (нет сессии/E2E) → %1")
+				.arg(toAddress));
+			return;
+		}
+		try {
+			std::string id;
+			if (!isGroup) {
+				const auto sealed = parvane::e2e::sealFor(
+					to, content.dump(), *t, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E не удался для %1 — inner-контент НЕ отправлен")
+						.arg(toAddress));
+					return;
+				}
+				id = m->sendContent(std::string(), to,
+					nlohmann::json::parse(sealed), std::string(),
+					std::nullopt, preId);
+			} else {
+				const auto sealed = sealGroup(m, t, to, content, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E группы не удался для %1 — НЕ отправлено")
+						.arg(toAddress));
+					return;
+				}
+				const auto pre = preId.empty()
+					? std::optional<std::string>{}
+					: std::optional<std::string>{preId};
+				id = m->sendContent(from, to,
+					nlohmann::json::parse(sealed), token, std::nullopt, pre);
+			}
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_ownSentUuids.insert(id);
+			}
+			LOG(("Parvane: inner-контент %1 → %2 [E2E]")
+				.arg(QString::fromStdString(
+					content.value("kind", std::string())))
+				.arg(toAddress));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: ошибка отправки inner-контента: %1")
+				.arg(QString::fromUtf8(e.what())));
 		}
 	});
 }
@@ -2653,6 +2744,288 @@ void pumpMediaDownload(
 	});
 }
 
+// ── опросы (паритет): синтез и агрегация ─────────────────────────────────────
+
+// MTP_messageMediaPoll из poll-контента. option варианта — его индекс строкой
+// ("0","1",…) — так голос сериализуется без обратного поиска байтов.
+[[nodiscard]] MTPMessageMedia buildPollMedia(
+		const PollState &st,
+		const nlohmann::json &c) {
+	const auto question = QString::fromStdString(
+		c.value("question", std::string()));
+	auto answers = QVector<MTPPollAnswer>();
+	if (c.contains("answers") && c["answers"].is_array()) {
+		auto i = 0;
+		for (const auto &a : c["answers"]) {
+			if (!a.is_string()) {
+				continue;
+			}
+			answers.push_back(MTP_pollAnswer(
+				MTP_flags(MTPDpollAnswer::Flags(0)),
+				MTP_textWithEntities(
+					MTP_string(QString::fromStdString(a.get<std::string>())),
+					MTP_vector<MTPMessageEntity>()),
+				MTP_bytes(QByteArray::number(i)),
+				MTPMessageMedia(),          // media (flags.0 — нет)
+				MTPPeer(),                  // added_by (flags.1 — нет)
+				MTPint()));                 // date (flags.1 — нет)
+			++i;
+		}
+	}
+	using Flag = MTPDpoll::Flag;
+	const auto flags = (st.closed ? Flag::f_closed : Flag(0))
+		| (c.value("multiple", false) ? Flag::f_multiple_choice : Flag(0))
+		| (c.value("quiz", false) ? Flag::f_quiz : Flag(0))
+		| (c.value("public", false) ? Flag::f_public_voters : Flag(0));
+	const auto poll = MTP_poll(
+		MTP_long(st.pollId),
+		MTP_flags(flags),
+		MTP_textWithEntities(
+			MTP_string(question),
+			MTP_vector<MTPMessageEntity>()),
+		MTP_vector<MTPPollAnswer>(answers),
+		MTP_int(0),                 // close_period (flags.4 — нет)
+		MTP_int(0),                 // close_date (flags.5 — нет)
+		MTPVector<MTPstring>(),     // countries_iso2 (flags.12 — нет)
+		MTP_long(0));               // hash
+	const auto results = MTP_pollResults(
+		MTP_flags(MTPDpollResults::Flags(0)),
+		MTPVector<MTPPollAnswerVoters>(),
+		MTPint(),                   // total_voters
+		MTPVector<MTPPeer>(),       // recent_voters
+		MTPstring(),                // solution
+		MTPVector<MTPMessageEntity>(),
+		MTPMessageMedia());         // solution_media
+	return MTP_messageMediaPoll(
+		MTP_flags(MTPDmessageMediaPoll::Flags(0)),
+		poll,
+		results,
+		MTPMessageMedia());         // attached_media
+}
+
+// Применяет агрегат голосов к зарегистрированному PollData (через штатный
+// updateMessagePoll → applyResults) и флаг закрытия. Опрос ещё не инъецирован
+// (нет в _polls) — no-op, вызовется повторно после инъекции.
+void applyPollState(not_null<Main::Session*> session, const PollState &st) {
+	const auto self = SelfAddress();
+	const auto myVote = st.votes.value(self);
+	auto counts = QVector<int>(st.answers, 0);
+	auto total = 0;
+	for (auto i = st.votes.constBegin(); i != st.votes.constEnd(); ++i) {
+		if (i.value().isEmpty()) {
+			continue; // отозванный голос
+		}
+		++total;
+		for (const auto option : i.value()) {
+			if (option >= 0 && option < st.answers) {
+				++counts[option];
+			}
+		}
+	}
+	auto voters = QVector<MTPPollAnswerVoters>();
+	voters.reserve(st.answers);
+	using VFlag = MTPDpollAnswerVoters::Flag;
+	for (auto i = 0; i != st.answers; ++i) {
+		const auto flags = VFlag::f_voters
+			| (myVote.contains(i) ? VFlag::f_chosen : VFlag(0))
+			| ((st.quiz && st.correct.contains(i))
+				? VFlag::f_correct
+				: VFlag(0));
+		voters.push_back(MTP_pollAnswerVoters(
+			MTP_flags(flags),
+			MTP_bytes(QByteArray::number(i)),
+			MTP_int(counts[i]),
+			MTP_vector<MTPPeer>(QVector<MTPPeer>()))); // recent (flags.2 общий)
+	}
+	using RFlag = MTPDpollResults::Flag;
+	const auto hasSolution = st.quiz && !st.solution.isEmpty();
+	const auto rflags = RFlag::f_results
+		| RFlag::f_total_voters
+		| (hasSolution ? RFlag::f_solution : RFlag(0));
+	const auto results = MTP_pollResults(
+		MTP_flags(rflags),
+		MTP_vector<MTPPollAnswerVoters>(voters),
+		MTP_int(total),
+		MTPVector<MTPPeer>(),           // recent_voters (flags.3 — нет)
+		MTP_string(st.solution),
+		MTP_vector<MTPMessageEntity>(QVector<MTPMessageEntity>()),
+		MTPMessageMedia());             // solution_media (flags.5 — нет)
+	const auto update = MTP_updateMessagePoll(
+		MTP_flags(MTPDupdateMessagePoll::Flags(0)),
+		MTPPeer(),                      // peer (flags.1 — нет)
+		MTPint(),                       // msg_id (flags.1 — нет)
+		MTPint(),                       // top_msg_id (flags.2 — нет)
+		MTP_long(st.pollId),
+		MTPPoll(),                      // poll (flags.0 — нет)
+		results);
+	session->data().applyUpdate(update.c_updateMessagePoll());
+	// Закрытие: флаг прямо на PollData (не пересобираем весь MTPPoll).
+	if (st.closed) {
+		if (const auto item = session->data().findItemForPoll(st.pollId)) {
+			const auto media = item->media();
+			if (const auto poll = media ? media->poll() : nullptr) {
+				if (!poll->closed()) {
+					poll->setFlags(poll->flags() | PollData::Flag::Closed);
+					++poll->version;
+					session->data().notifyPollUpdateDelayed(poll);
+				}
+			}
+		}
+	}
+	// Мы вне пайплайна Api::Updates — отложенные уведомления шлём сами, иначе
+	// вью опроса не перерисуется до чужого события.
+	session->data().sendWebPageGamePollTodoListNotifications();
+}
+
+// Голос/закрытие с шины (и свои на воспроизведении журнала). Не отображается
+// как сообщение. Опрос ещё не пришёл — откладываем до его инъекции.
+void handlePollService(
+		not_null<Main::Session*> session,
+		const parvane::StoredMessage &sm,
+		const std::string &kind) {
+	const auto pollUuid = QString::fromStdString(
+		sm.content.value("poll", std::string()));
+	if (pollUuid.isEmpty()) {
+		return;
+	}
+	const auto voter = QString::fromStdString(sm.from);
+	auto options = QVector<int>();
+	if (sm.content.contains("options") && sm.content["options"].is_array()) {
+		for (const auto &o : sm.content["options"]) {
+			if (o.is_number_integer()) {
+				options.push_back(o.get<int>());
+			}
+		}
+	}
+	const auto it = g_pollsByUuid.find(pollUuid);
+	if (it == g_pollsByUuid.end()) {
+		if (kind == "poll_close") {
+			g_pendingPollClose.insert(pollUuid);
+		} else {
+			g_pendingPollVotes[pollUuid].push_back({ voter, options });
+		}
+		return;
+	}
+	if (kind == "poll_close") {
+		it->closed = true;
+	} else if (options.isEmpty()) {
+		it->votes.remove(voter);
+	} else {
+		it->votes.insert(voter, options);
+	}
+	applyPollState(session, *it);
+	LOG(("Parvane: опрос %1 — %2 от %3")
+		.arg(pollUuid)
+		.arg(QString::fromStdString(kind))
+		.arg(voter));
+}
+
+// Инъекция сообщения-опроса (1-на-1 и группа; входящие, свои с другого девайса
+// и свои на воспроизведении журнала). Регистрирует PollState, применяет
+// отложенные голоса.
+void injectPollMessage(
+		not_null<Main::Session*> session,
+		const parvane::StoredMessage &sm) {
+	const auto self = SelfAddress();
+	const auto from = QString::fromStdString(sm.from);
+	const auto uuid = QString::fromStdString(sm.id);
+	const auto toStr = QString::fromStdString(sm.to);
+	const auto isOwn = (from == self);
+	const auto isGroup = g_knownGroups.contains(toStr);
+	auto peerId = std::uint64_t(0);
+	auto authorId = std::uint64_t(0);
+	if (isGroup) {
+		ensureGroupChat(session, toStr, g_knownGroups.value(toStr), 0);
+		peerId = IdForAddress(toStr);
+		authorId = IdForAddress(from);
+		ensurePeerUser(session, authorId, from);
+	} else {
+		const auto peerAddress = isOwn ? toStr : from;
+		if (peerAddress.isEmpty()) {
+			return;
+		}
+		RegisterPeer(peerAddress);
+		peerId = IdForAddress(peerAddress);
+		authorId = isOwn ? IdForAddress(self) : peerId;
+		ensurePeerUser(session, peerId, peerAddress);
+		if (!isOwn) {
+			const auto u = session->data().userLoaded(UserId(BareId(peerId)));
+			if (u && u->isBlocked()) {
+				return;
+			}
+		}
+	}
+	auto &st = g_pollsByUuid[uuid];
+	st.uuid = uuid;
+	st.pollId = std::uint64_t(docIdFromFileId(uuid));
+	st.chatAddress = isGroup ? toStr : (isOwn ? toStr : from);
+	st.quiz = sm.content.value("quiz", false);
+	st.solution = QString::fromStdString(
+		sm.content.value("solution", std::string()));
+	st.answers = (sm.content.contains("answers")
+			&& sm.content["answers"].is_array())
+		? int(sm.content["answers"].size())
+		: 0;
+	st.correct.clear();
+	if (sm.content.contains("correct") && sm.content["correct"].is_array()) {
+		for (const auto &o : sm.content["correct"]) {
+			if (o.is_number_integer()) {
+				st.correct.push_back(o.get<int>());
+			}
+		}
+	}
+	g_pollUuidById.insert(st.pollId, uuid);
+	// Отложенные голоса/закрытие (пришли раньше опроса).
+	for (const auto &[voter, options] : g_pendingPollVotes.take(uuid)) {
+		if (options.isEmpty()) {
+			st.votes.remove(voter);
+		} else {
+			st.votes.insert(voter, options);
+		}
+	}
+	if (g_pendingPollClose.remove(uuid)) {
+		st.closed = true;
+	}
+	const auto msgId = MsgId(g_nextMsgId++);
+	g_uuidToMsgId.insert(uuid, msgId.bare);
+	g_msgIdToUuid.insert(msgId.bare, uuid);
+	if (!isOwn && !isGroup) {
+		g_unreadIncoming[peerId].push_back(uuid);
+	}
+	const auto item = session->data().addNewMessage(
+		msgId,
+		buildMessage(authorId, peerId, isOwn, sm.ts, QString(),
+			buildPollMedia(st, sm.content), /*hasMedia=*/true,
+			/*replyToMsgId=*/0, /*peerIsChat=*/isGroup),
+		MessageFlags(),
+		NewMessageType::Unread);
+	if (item) {
+		const auto history = item->history();
+		if (!history->folderKnown()) {
+			history->clearFolder();
+		}
+	}
+	if (!st.votes.isEmpty() || st.closed) {
+		applyPollState(session, st);
+	}
+	// Debug-autovote для e2e: PARVANE_AUTOVOTE=<индекс> — голосуем во входящем
+	// опросе автоматически (headless-проверка агрегации).
+	if (!isOwn) {
+		if (const char *av = std::getenv("PARVANE_AUTOVOTE"); av && *av) {
+			const auto option = QByteArray(av);
+			const auto pollId = st.pollId;
+			crl::on_main([pollId, option] {
+				MirrorPollVotes(pollId, { option });
+				LOG(("Parvane: autovote — опрос %1, вариант %2")
+					.arg(pollId)
+					.arg(QString::fromUtf8(option)));
+			});
+		}
+	}
+	LOG(("Parvane: опрос %1 (%2) от %3 инъецирован")
+		.arg(uuid, st.chatAddress, from));
+}
+
 // Инъекция результатов sync в Data::Session. Только main-поток. Дедуп по UUID.
 void injectOnMain(
 		not_null<Main::Session*> session,
@@ -2851,6 +3224,18 @@ void injectOnMain(
 		// эфемерны — НЕ журналируем (иначе воскреснут при рестарте).
 		if (live && TtlFromContent(sm.content) == 0) {
 			HistoryAppend(sm);
+		}
+		// Опросы: голос/закрытие — служебные события (в агрегат, не в историю);
+		// сам опрос — отдельная инъекция (медиа-poll, 1-на-1 и группа).
+		const auto pollKind = parvane::contentKind(sm.content);
+		if (pollKind == "poll_vote" || pollKind == "poll_close") {
+			handlePollService(session, sm, pollKind);
+			g_uuidToMsgId.insert(uuid, 0); // обработано, не показываем
+			continue;
+		} else if (pollKind == "poll") {
+			injectPollMessage(session, sm);
+			++added;
+			continue;
 		}
 		// Групповое сообщение: to — известная группа → инъекция в историю группы.
 		const auto toStr = QString::fromStdString(sm.to);
@@ -3141,6 +3526,145 @@ not_null<UserData*> EnsurePeer(
 		const QString &address) {
 	RegisterPeer(address);
 	return ensurePeerUser(session, IdForAddress(address), address);
+}
+
+bool MirrorPollCreate(PeerData *peer, const PollData &data) {
+	const auto session = g_sessionWeak.get();
+	if (!peer || !session || !SessionActive()) {
+		return false;
+	}
+	// Адрес назначения — как в MirrorOutgoing (группа/пир/Saved Messages).
+	QString address;
+	if (peer->isChat()) {
+		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(chatBare);
+	} else if (peer->isUser()) {
+		address = peer->isSelf()
+			? SelfAddress()
+			: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	}
+	if (address.isEmpty()) {
+		LOG(("Parvane: опрос не создан — адрес пира неизвестен"));
+		return false;
+	}
+	auto answers = nlohmann::json::array();
+	auto correct = nlohmann::json::array();
+	auto i = 0;
+	for (const auto &answer : data.answers) {
+		answers.push_back(answer.text.text.toStdString());
+		if (answer.correct) {
+			correct.push_back(i);
+		}
+		++i;
+	}
+	auto content = nlohmann::json{
+		{ "kind", "poll" },
+		{ "question", data.question.text.toStdString() },
+		{ "answers", answers },
+		{ "multiple", data.multiChoice() },
+		{ "quiz", data.quiz() },
+		{ "public", data.publicVotes() },
+	};
+	if (data.quiz()) {
+		content["correct"] = correct;
+		if (!data.solution.text.isEmpty()) {
+			content["solution"] = data.solution.text.toStdString();
+		}
+	}
+	// Локальное эхо + PollState — общий путь инъекции (isOwn по from==self).
+	parvane::StoredMessage own;
+	own.id = parvane::newUuidV7();
+	own.from = SelfAddress().toStdString();
+	own.to = address.toStdString();
+	own.ts = QDateTime::currentSecsSinceEpoch();
+	own.content = content;
+	injectPollMessage(session, own);
+	HistoryAppend(own); // журнал: свой опрос переживёт рестарт/релогин
+	sendInnerAsync(address, content, own.id);
+	LOG(("Parvane: опрос создан → %1").arg(address));
+	return true;
+}
+
+bool MirrorPollVotes(
+		std::uint64_t pollId,
+		const std::vector<QByteArray> &options) {
+	const auto session = g_sessionWeak.get();
+	const auto uuid = g_pollUuidById.value(pollId);
+	if (!session || uuid.isEmpty()) {
+		return false; // не наш опрос — пусть решает нативный путь
+	}
+	const auto it = g_pollsByUuid.find(uuid);
+	if (it == g_pollsByUuid.end()) {
+		return false;
+	}
+	if (it->closed) {
+		return true; // опрос остановлен — голос не принимаем
+	}
+	const auto self = SelfAddress();
+	auto idx = QVector<int>();
+	auto jopts = nlohmann::json::array();
+	for (const auto &option : options) {
+		auto ok = false;
+		const auto v = option.toInt(&ok);
+		if (ok && v >= 0 && v < it->answers) {
+			idx.push_back(v);
+			jopts.push_back(v);
+		}
+	}
+	if (idx.isEmpty()) {
+		it->votes.remove(self); // отзыв голоса
+	} else {
+		it->votes.insert(self, idx);
+	}
+	applyPollState(session, *it);
+	const auto content = nlohmann::json{
+		{ "kind", "poll_vote" },
+		{ "poll", uuid.toStdString() },
+		{ "options", jopts },
+	};
+	parvane::StoredMessage own;
+	own.id = parvane::newUuidV7();
+	own.from = self.toStdString();
+	own.to = it->chatAddress.toStdString();
+	own.ts = QDateTime::currentSecsSinceEpoch();
+	own.content = content;
+	g_uuidToMsgId.insert(QString::fromStdString(own.id), 0); // эхо не показываем
+	HistoryAppend(own); // журнал: свой выбор переживёт рестарт
+	sendInnerAsync(it->chatAddress, content, own.id);
+	LOG(("Parvane: голос в опросе %1 (%2 вариантов)")
+		.arg(uuid)
+		.arg(idx.size()));
+	return true;
+}
+
+bool MirrorPollClose(std::uint64_t pollId) {
+	const auto session = g_sessionWeak.get();
+	const auto uuid = g_pollUuidById.value(pollId);
+	if (!session || uuid.isEmpty()) {
+		return false;
+	}
+	const auto it = g_pollsByUuid.find(uuid);
+	if (it == g_pollsByUuid.end()) {
+		return false;
+	}
+	it->closed = true;
+	applyPollState(session, *it);
+	const auto content = nlohmann::json{
+		{ "kind", "poll_close" },
+		{ "poll", uuid.toStdString() },
+	};
+	parvane::StoredMessage own;
+	own.id = parvane::newUuidV7();
+	own.from = SelfAddress().toStdString();
+	own.to = it->chatAddress.toStdString();
+	own.ts = QDateTime::currentSecsSinceEpoch();
+	own.content = content;
+	g_uuidToMsgId.insert(QString::fromStdString(own.id), 0);
+	HistoryAppend(own);
+	sendInnerAsync(it->chatAddress, content, own.id);
+	LOG(("Parvane: опрос %1 остановлен").arg(uuid));
+	return true;
 }
 
 void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
@@ -4303,6 +4827,27 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				LOG(("Parvane: AUTOHANGUP"));
 				HangupCall();
 			});
+		}
+
+		// Debug-autopoll для e2e опросов: PARVANE_AUTOPOLL=peer@server:Вопрос:а,б,в
+		if (const char *pv = std::getenv("PARVANE_AUTOPOLL"); pv && *pv) {
+			const auto spec = QString::fromUtf8(pv);
+			const auto parts = spec.split(u':');
+			if (parts.size() >= 3) {
+				const auto peerAddr = parts[0];
+				RegisterPeer(peerAddr);
+				const auto user = session->data().user(
+					UserId(BareId(IdForAddress(peerAddr))));
+				auto poll = PollData(&session->data(), 0);
+				poll.question.text = parts[1];
+				for (const auto &optionText : parts[2].split(u',')) {
+					auto answer = PollAnswer();
+					answer.text.text = optionText;
+					poll.answers.push_back(std::move(answer));
+				}
+				MirrorPollCreate(user, poll);
+				LOG(("Parvane: autopoll → %1: %2").arg(peerAddr, parts[1]));
+			}
 		}
 
 		// Debug-autosend для e2e Фазы 3b: PARVANE_AUTOSEND=peer@server:текст.

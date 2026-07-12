@@ -78,7 +78,11 @@
 ### Развлекательный слой
 - Стикеры/GIF/кастом-эмодзи — 🔴 (нативная панель `chat_helpers`; нужен свой
   шард-каталог стикеров + `MTPDocument` со стикер-атрибутами).
-- Опросы (poll) — 🔴 (`poll/`, `MTPPoll`).
+- Опросы (poll) — 🟢 (нативный `history_view_poll` + `CreatePollBox`; опрос
+  едет в E2E-контенте kind=poll, голоса — kind=poll_vote (сервер не видит),
+  агрегация на клиенте (applyResults через updateMessagePoll), закрытие,
+  quiz/multi/анонимность, persist через журнал; e2e — `verify_polls.sh`).
+  Пробелы: «кто голосовал» (public voters список), close_date/period-таймер.
 - Геолокация/live-локация, контакты-вложения — 🔴.
 
 ### Приватность/безопасность

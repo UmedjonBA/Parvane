@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 class PeerData;
 class UserData;
@@ -12,6 +13,7 @@ class HistoryItem;
 class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
 struct TextWithEntities;   // ui/text/text_entity.h (форматирование)
+struct PollData;           // data/data_poll.h (опросы)
 
 namespace Main {
 class Session;
@@ -168,6 +170,22 @@ void LeaveGroup(const QString &groupId);
 // Адрес нашей группы по peer (Chat) — "" если это не наша группа. Для врезки
 // нативного «выйти из группы» в меню.
 [[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
+
+// ── опросы (паритет) ─────────────────────────────────────────────────────────
+// Опрос едет ВНУТРИ E2E-контента (kind=poll), голоса — отдельными kind=poll_vote
+// событиями; сервер их не видит, каждый клиент агрегирует сам. Все три —
+// перехваты Api::Polls (create/sendVotes/close): true = обработано форком,
+// MTProto звать не нужно; false = наш путь неприменим (нет сессии/не наш опрос).
+
+// Создать опрос: шлёт poll-контент через шину и синтезирует локальное эхо.
+bool MirrorPollCreate(PeerData *peer, const PollData &data);
+
+// Проголосовать. options — байты выбранных вариантов ("0","1",…); пусто —
+// отозвать голос. Локально применяется сразу, остальным уходит poll_vote.
+bool MirrorPollVotes(std::uint64_t pollId, const std::vector<QByteArray> &options);
+
+// Остановить опрос (только свой; UI сам гейтит по автору).
+bool MirrorPollClose(std::uint64_t pollId);
 
 // Пользователь задал таймер самоуничтожения (нативное меню Auto-Delete) — сохранить
 // TTL чата у нас (peer->messagesTTL() уже выставлен вызывающим). Исходящие в этот

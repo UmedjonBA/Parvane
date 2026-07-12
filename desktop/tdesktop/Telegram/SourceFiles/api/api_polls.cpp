@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h" // ShouldSendSilent
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
+#include "parvane/parvane_client.h" // Parvane: опросы через шину (E2E)
 #include "styles/style_polls.h"
 #include "ui/toast/toast.h"
 #include "window/window_session_controller.h"
@@ -223,6 +224,11 @@ void Polls::create(
 		SendAction action,
 		Fn<void()> done,
 		Fn<void(bool fileReferenceExpired)> fail) {
+	// Parvane: опрос уходит в шину (E2E) + локальное эхо; MTProto не зовём.
+	if (Parvane::MirrorPollCreate(action.history->peer, data)) {
+		done();
+		return;
+	}
 	_session->api().sendAction(action);
 
 	const auto history = action.history;
@@ -337,6 +343,10 @@ void Polls::sendVotes(
 	const auto media = item ? item->media() : nullptr;
 	const auto poll = media ? media->poll() : nullptr;
 	if (!item) {
+		return;
+	}
+	// Parvane: голос применяется локально и уходит в шину (E2E), без MTProto.
+	if (poll && Parvane::MirrorPollVotes(poll->id, options)) {
 		return;
 	}
 	const auto peer = item->history()->peer;
@@ -474,6 +484,10 @@ void Polls::close(not_null<HistoryItem*> item) {
 	const auto media = item ? item->media() : nullptr;
 	const auto poll = media ? media->poll() : nullptr;
 	if (!poll) {
+		return;
+	}
+	// Parvane: остановка опроса через шину (E2E), без MTProto.
+	if (Parvane::MirrorPollClose(poll->id)) {
 		return;
 	}
 	const auto requestId = _api.request(MTPmessages_EditMessage(
