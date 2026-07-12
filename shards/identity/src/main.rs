@@ -334,7 +334,25 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
 
 /// Сохранить/обновить бандл пользователя: долгоживущие ключи (UPSERT) + пачка
 /// одноразовых (INSERT OR IGNORE — key_id уникален на пользователя).
+///
+/// Смена identity_key = пере-инициализация устройства (новый Olm-аккаунт):
+/// все прежние one-time принадлежат СТАРОМУ устройству и для X3DH с новым
+/// невалидны (а из-за коллизий key_id новые бы игнорировались) — вычищаем.
 async fn store_prekeys(pool: &SqlitePool, username: &str, req: &PublishPrekeysRequest) -> Result<()> {
+    let prev: Option<(String,)> =
+        sqlx::query_as("SELECT identity_key FROM device_keys WHERE username = ?")
+            .bind(username)
+            .fetch_optional(pool)
+            .await
+            .context("чтение прежнего identity_key")?;
+    let device_changed = prev.map(|(k,)| k != req.identity_key).unwrap_or(false);
+    if device_changed {
+        sqlx::query("DELETE FROM one_time_prekeys WHERE username = ?")
+            .bind(username)
+            .execute(pool)
+            .await
+            .context("очистка one_time старого устройства")?;
+    }
     sqlx::query(
         "INSERT INTO device_keys
            (username, registration_id, identity_key, signed_prekey_id,
