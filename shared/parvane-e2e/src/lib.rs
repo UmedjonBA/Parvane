@@ -566,6 +566,30 @@ mod tests {
     }
 
     #[test]
+    fn megolm_rotation_excludes_old_key() {
+        // Модель ротации после удаления участника: отправитель заводит НОВУЮ
+        // исходящую сессию (новый session_key). Оставшийся участник, получив новый
+        // ключ, расшифровывает новые сообщения; СТАРАЯ входящая (у «удалённого») —
+        // нет (другая megolm-сессия). Это и есть forward secrecy группы.
+        let mut a1 = E2EGroupSession::new();
+        let key1 = a1.session_key_b64();
+        let mut old = E2EInboundGroup::from_session_key(&key1).expect("old inbound");
+        let c1 = a1.encrypt("до удаления".as_bytes());
+        assert_eq!(old.decrypt(&c1).unwrap(), "до удаления".as_bytes());
+
+        // Ротация: новая исходящая, новый ключ (раздаётся только оставшимся).
+        let mut a2 = E2EGroupSession::new();
+        let key2 = a2.session_key_b64();
+        assert_ne!(key1, key2, "новый ключ должен отличаться");
+        let mut fresh = E2EInboundGroup::from_session_key(&key2).expect("new inbound");
+        let c2 = a2.encrypt("после удаления".as_bytes());
+        // Оставшийся (новый ключ) — расшифровывает.
+        assert_eq!(fresh.decrypt(&c2).unwrap(), "после удаления".as_bytes());
+        // «Удалённый» со СТАРЫМ ключом — НЕ расшифровывает новое сообщение.
+        assert!(old.decrypt(&c2).is_none(), "старый ключ НЕ должен читать новую сессию");
+    }
+
+    #[test]
     fn safety_number_symmetric_and_distinct() {
         let a = "AAAA_id_alice";
         let b = "BBBB_id_bob";

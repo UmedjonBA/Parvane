@@ -291,11 +291,15 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 		members = g_groupMembers.value(QString::fromStdString(groupId));
 	}
 	const auto self = SelfAddress().toStdString();
+	// Эпоха ключа — получатель принимает только строго новее (ротация после
+	// удаления участника даёт бОльшую эпоху → замена входящей сессии).
+	const auto epoch = parvane::e2e::groupEpoch(groupId);
 	const parvane::json skdm = {
 		{"kind", "skdm"},
 		{"group", groupId},
 		{"session_key", skey},
 		{"sender_identity", myId},
+		{"epoch", epoch},
 	};
 	// SKDM участникам ДО самого сообщения → у получателя ключ раньше шифртекста.
 	for (const auto &mem : members) {
@@ -2496,7 +2500,8 @@ void injectOnMain(
 			parvane::e2e::groupAcceptKey(
 				sm.content.value("group", std::string()),
 				sm.content.value("sender_identity", std::string()),
-				sm.content.value("session_key", std::string()));
+				sm.content.value("session_key", std::string()),
+				sm.content.value("epoch", std::uint64_t(0)));
 			continue;
 		}
 		const auto from = QString::fromStdString(sm.from);
@@ -3266,8 +3271,27 @@ void RefreshGroups() {
 				for (const auto &m : gi.members) {
 					mem.push_back(QString::fromStdString(m.address));
 				}
-				std::lock_guard<std::mutex> lk(g_sessionMutex);
-				g_groupMembers.insert(gid, mem);
+				bool removed = false;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					const auto old = g_groupMembers.value(gid);
+					for (const auto &o : old) {
+						if (!mem.contains(o)) {
+							removed = true;
+							break;
+						}
+					}
+					g_groupMembers.insert(gid, mem);
+				}
+				// Кто-то ВЫБЫЛ из группы → ротация своей исходящей Megolm-сессии:
+				// следующая отправка создаст новый ключ (бОльшая эпоха) и раздаст его
+				// только текущим участникам. Удалённый больше не расшифрует будущее
+				// (forward secrecy группы). Добавление участника ротации НЕ требует —
+				// новичок получит текущий ключ штатной раздачей SKDM.
+				if (removed) {
+					parvane::e2e::groupRotate(gid.toStdString());
+					LOG(("Parvane: участник выбыл из %1 → ротация ключа группы").arg(gid));
+				}
 			}
 			LOG(("Parvane: групп синхронизировано: %1").arg(int(groups.size())));
 			// Возможно, пришли групповые сообщения до синтеза чата — прогоним sync.
@@ -3675,6 +3699,35 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						return;
 					}
 					LOG(("Parvane: AUTOGROUPSEND → '%1' (%2): %3").arg(gname, gid, text));
+					sendTextAsync(gid, text, nlohmann::json::array(), std::string());
+				});
+			}
+		}
+
+		// Debug-autogroupsend2 для e2e ротации: второе групповое сообщение через ~24с
+		// (ПОСЛЕ удаления участника + ротации ключа — проверяет re-key у оставшихся).
+		if (const char *gs2 = std::getenv("PARVANE_AUTOGROUPSEND2"); gs2 && *gs2) {
+			auto spec = QString::fromUtf8(gs2);
+			const auto sp = spec.indexOf(':');
+			if (sp > 0) {
+				const auto gname = spec.left(sp);
+				const auto text = spec.mid(sp + 1);
+				base::call_delayed(24 * crl::time(1000), [gname, text] {
+					QString gid;
+					{
+						std::lock_guard<std::mutex> lk(g_sessionMutex);
+						for (auto it = g_knownGroups.constBegin();
+								it != g_knownGroups.constEnd(); ++it) {
+							if (it.value() == gname) {
+								gid = it.key();
+								break;
+							}
+						}
+					}
+					if (gid.isEmpty()) {
+						return;
+					}
+					LOG(("Parvane: AUTOGROUPSEND2 → '%1' (%2): %3").arg(gname, gid, text));
 					sendTextAsync(gid, text, nlohmann::json::array(), std::string());
 				});
 			}

@@ -32,6 +32,8 @@ std::map<std::string, ParvaneE2ESession *> g_sessions; // identity собесе�
 std::map<std::string, std::string> g_contactId;        // адрес контакта → identity
 std::map<std::string, ParvaneE2EGroupSession *> g_ownGroups;   // groupId → своя исходящая
 std::map<std::string, ParvaneE2EInboundGroup *> g_inGroups;    // "group|senderId" → входящая
+std::map<std::string, std::uint64_t> g_ownGroupEpoch;          // groupId → эпоха своей исходящей
+std::map<std::string, std::uint64_t> g_inGroupEpoch;           // "group|senderId" → эпоха входящей
 std::string g_identityB64;                              // свой identity-ключ
 std::string g_self;                                     // свой адрес (для конверта)
 std::string g_storeDir;
@@ -153,6 +155,54 @@ void loadContacts() {
     }
 }
 
+std::uint64_t nowMs() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
+std::string epochsPath() { return g_storeDir + "/gepoch.json"; }
+void saveEpochs() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    json j;
+    j["own"] = json::object();
+    j["in"] = json::object();
+    for (const auto &[k, v] : g_ownGroupEpoch) {
+        j["own"][k] = v;
+    }
+    for (const auto &[k, v] : g_inGroupEpoch) {
+        j["in"][k] = v;
+    }
+    writeFile(epochsPath(), j.dump());
+}
+void loadEpochs() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    const auto raw = readFile(epochsPath());
+    if (raw.empty()) {
+        return;
+    }
+    auto j = json::parse(raw, nullptr, false);
+    if (!j.is_object()) {
+        return;
+    }
+    if (j.contains("own") && j["own"].is_object()) {
+        for (auto it = j["own"].begin(); it != j["own"].end(); ++it) {
+            if (it.value().is_number_unsigned()) {
+                g_ownGroupEpoch[it.key()] = it.value().get<std::uint64_t>();
+            }
+        }
+    }
+    if (j.contains("in") && j["in"].is_object()) {
+        for (auto it = j["in"].begin(); it != j["in"].end(); ++it) {
+            if (it.value().is_number_unsigned()) {
+                g_inGroupEpoch[it.key()] = it.value().get<std::uint64_t>();
+            }
+        }
+    }
+}
+
 std::string ownGroupPath(const std::string &groupId) {
     return g_storeDir + "/gout_" + hexName(groupId) + ".json";
 }
@@ -246,6 +296,7 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
                 g_account = parvane_e2e_account_from_pickle(pickle.c_str());
             }
             loadContacts();
+            loadEpochs();
         }
         if (!g_account) {
             g_account = parvane_e2e_account_new();
@@ -439,21 +490,69 @@ std::string myIdentity() {
     return g_identityB64;
 }
 
+// (под g_mu) Своя исходящая для группы + её эпоха. Создаёт при отсутствии, выдавая
+// СТРОГО бОльшую эпоху, чем любая прежняя (nowMs, либо old+1 при совпадении) — это
+// делает ротацию монотонной: новый ключ всегда «новее» для получателей.
+ParvaneE2EGroupSession *ensureOwnGroupLocked(const std::string &groupId) {
+    auto *g = getOwnGroup(groupId);
+    if (g) {
+        return g;
+    }
+    g = parvane_e2e_group_new();
+    if (!g) {
+        return nullptr;
+    }
+    g_ownGroups[groupId] = g;
+    std::uint64_t ep = nowMs();
+    auto it = g_ownGroupEpoch.find(groupId);
+    if (it != g_ownGroupEpoch.end() && it->second >= ep) {
+        ep = it->second + 1;
+    }
+    g_ownGroupEpoch[groupId] = ep;
+    persistOwnGroup(groupId, g);
+    saveEpochs();
+    return g;
+}
+
 std::string groupSessionKey(const std::string &groupId) {
     std::lock_guard<std::mutex> lk(g_mu);
     if (!g_account || groupId.empty()) {
         return {};
     }
-    auto *g = getOwnGroup(groupId);
-    if (!g) {
-        g = parvane_e2e_group_new();
-        if (!g) {
-            return {};
-        }
-        g_ownGroups[groupId] = g;
-        persistOwnGroup(groupId, g);
+    auto *g = ensureOwnGroupLocked(groupId);
+    return g ? take(parvane_e2e_group_session_key(g)) : std::string{};
+}
+
+std::uint64_t groupEpoch(const std::string &groupId) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account || groupId.empty()) {
+        return 0;
     }
-    return take(parvane_e2e_group_session_key(g));
+    ensureOwnGroupLocked(groupId); // гарантирует наличие эпохи
+    auto it = g_ownGroupEpoch.find(groupId);
+    return it == g_ownGroupEpoch.end() ? 0 : it->second;
+}
+
+void groupRotate(const std::string &groupId) {
+    if (groupId.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    // Сбрасываем свою исходящую (память + файл) — следующая отправка создаст свежую
+    // сессию с НОВЫМ ключом и бОльшей эпохой; удалённый участник его не получит.
+    auto it = g_ownGroups.find(groupId);
+    if (it != g_ownGroups.end()) {
+        if (it->second) {
+            parvane_e2e_group_free(it->second);
+        }
+        g_ownGroups.erase(it);
+    }
+    if (!g_storeDir.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(ownGroupPath(groupId), ec);
+    }
+    // Эпоху НЕ трогаем: ensureOwnGroupLocked при пересоздании выставит строго
+    // большую (nowMs или old+1), так что новый ключ заведомо новее старого.
 }
 
 std::string groupSeal(const std::string &groupId, const std::string &contentJson) {
@@ -468,13 +567,9 @@ std::string groupSeal(const std::string &groupId, const std::string &contentJson
     if (!g_account || groupId.empty()) {
         return {};
     }
-    auto *g = getOwnGroup(groupId);
+    auto *g = ensureOwnGroupLocked(groupId);
     if (!g) {
-        g = parvane_e2e_group_new();
-        if (!g) {
-            return {};
-        }
-        g_ownGroups[groupId] = g;
+        return {};
     }
     const std::string ct = take(parvane_e2e_group_encrypt(g, b64e(inner.dump()).c_str()));
     if (ct.empty()) {
@@ -491,21 +586,36 @@ std::string groupSeal(const std::string &groupId, const std::string &contentJson
 }
 
 void groupAcceptKey(const std::string &groupId, const std::string &senderIdentity,
-                    const std::string &sessionKeyB64) {
+                    const std::string &sessionKeyB64, std::uint64_t epoch) {
     if (groupId.empty() || senderIdentity.empty() || sessionKeyB64.empty()) {
         return;
     }
     std::lock_guard<std::mutex> lk(g_mu);
     const std::string key = groupId + "|" + senderIdentity;
-    // Первый SKDM выигрывает: пере-приём того же ключа сбросил бы ratchet-индекс и
-    // сломал бы уже расшифрованные сообщения. Есть сессия — ничего не делаем.
+    // Принять, только если сессии ещё нет ЛИБО ключ новее (эпоха строго больше):
+    //  • тот же ключ раз за разом (дедуп на каждой отправке) → эпоха равна → игнор
+    //    (иначе сброс ratchet-индекса сломал бы уже расшифрованное);
+    //  • ротация после удаления участника → эпоха больше → ЗАМЕНА входящей;
+    //  • старый дубль SKDM из очереди → эпоха меньше → игнор (защита от отката).
     if (getInGroup(key)) {
+        auto e = g_inGroupEpoch.find(key);
+        const std::uint64_t have = (e == g_inGroupEpoch.end()) ? 0 : e->second;
+        if (epoch <= have) {
+            return;
+        }
+    }
+    auto *ng = parvane_e2e_inbound_group_from_key(sessionKeyB64.c_str());
+    if (!ng) {
         return;
     }
-    if (auto *g = parvane_e2e_inbound_group_from_key(sessionKeyB64.c_str())) {
-        g_inGroups[key] = g;
-        persistInGroup(key, g);
+    auto old = g_inGroups.find(key);
+    if (old != g_inGroups.end() && old->second) {
+        parvane_e2e_inbound_group_free(old->second);
     }
+    g_inGroups[key] = ng;
+    g_inGroupEpoch[key] = epoch;
+    persistInGroup(key, ng);
+    saveEpochs();
 }
 
 std::string groupOpen(const std::string &groupId, const std::string &senderIdentity,
