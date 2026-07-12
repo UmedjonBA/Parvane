@@ -202,6 +202,47 @@ void injectOnMain(
 	return url;
 }
 
+// @упоминания: находит @user@server в тексте → mention-entities (offset/length в
+// UTF-16, как EntitiesInText). Возвращает json-массив для content.entities.
+[[nodiscard]] nlohmann::json detectMentions(const QString &text) {
+	static const auto re = QRegularExpression(
+		u"@[A-Za-z0-9_.+-]+@[A-Za-z0-9_.-]+"_q);
+	auto arr = nlohmann::json::array();
+	auto it = re.globalMatch(text);
+	while (it.hasNext()) {
+		const auto m = it.next();
+		nlohmann::json o;
+		o["type"] = "mention";
+		o["offset"] = int(m.capturedStart());
+		o["length"] = int(m.capturedLength());
+		arr.push_back(std::move(o));
+	}
+	return arr;
+}
+
+// Упомянут ли `self` (для нативного флага f_mentioned → бейдж «вас упомянули»).
+[[nodiscard]] bool MentionsSelf(
+		const QString &text,
+		const nlohmann::json &entities,
+		const QString &self) {
+	if (self.isEmpty() || !entities.is_array()) {
+		return false;
+	}
+	const auto needle = u"@"_q + self;
+	for (const auto &o : entities) {
+		if (!o.is_object() || o.value("type", std::string()) != "mention") {
+			continue;
+		}
+		const auto off = o.value("offset", 0);
+		const auto len = o.value("length", 0);
+		if (off >= 0 && len > 0 && off + len <= int(text.size())
+				&& text.mid(off, len) == needle) {
+			return true;
+		}
+	}
+	return false;
+}
+
 [[nodiscard]] QString htmlUnescape(QString s) {
 	s.replace(u"&amp;"_q, u"&"_q);
 	s.replace(u"&quot;"_q, u"\""_q);
@@ -1174,7 +1215,11 @@ void MirrorOutgoing(
 	// свяжет его с локальным эхом (msgId↔uuid) для delete/edit/read СВОИХ.
 	const auto preId = parvane::newUuidV7();
 	g_pendingOwnUuids.enqueue(QString::fromStdString(preId));
-	const auto entitiesJson = entitiesToJson(textWithEntities.entities);
+	auto entitiesJson = entitiesToJson(textWithEntities.entities);
+	// @упоминания: авто-детект @user@server → mention-entities (поверх форматирования).
+	for (auto &me : detectMentions(text)) {
+		entitiesJson.push_back(std::move(me));
+	}
 	const auto url = firstUrlInText(text);
 	if (url.isEmpty()) {
 		sendTextAsync(address, text, entitiesJson, preId, replyToUuid);
@@ -1930,6 +1975,7 @@ void ResolveNames(const QStringList &addresses) {
 	case EntityType::Blockquote: return u"blockquote"_q;
 	case EntityType::Spoiler: return u"spoiler"_q;
 	case EntityType::CustomUrl: return u"text_url"_q;
+	case EntityType::Mention: return u"mention"_q;
 	default: return QString();
 	}
 }
@@ -1943,6 +1989,7 @@ void ResolveNames(const QStringList &addresses) {
 	if (n == u"blockquote"_q) return EntityType::Blockquote;
 	if (n == u"spoiler"_q) return EntityType::Spoiler;
 	if (n == u"text_url"_q) return EntityType::CustomUrl;
+	if (n == u"mention"_q) return EntityType::Mention;
 	return EntityType::Invalid;
 }
 // EntitiesInText → JSON-массив (для отправки в content).
@@ -2051,7 +2098,8 @@ void ResolveNames(const QStringList &addresses) {
 		std::int64_t replyToMsgId = 0,
 		bool peerIsChat = false,
 		const MTPVector<MTPMessageEntity> &entities = MTPVector<MTPMessageEntity>(),
-		int ttlSecs = 0) {
+		int ttlSecs = 0,
+		bool mentionsSelf = false) {
 	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
 	// Диалог — 1-на-1 (user) или группа (chat). Для группы peerId = chatId.
 	const auto dialogPeer = peerIsChat
@@ -2064,6 +2112,7 @@ void ResolveNames(const QStringList &addresses) {
 		| (hasMedia ? Flag::f_media : Flag(0))
 		| (hasEntities ? Flag::f_entities : Flag(0))
 		| (ttlSecs > 0 ? Flag::f_ttl_period : Flag(0)) // самоуничтожение (TTL)
+		| (mentionsSelf ? Flag::f_mentioned : Flag(0)) // «вас упомянули»
 		| (replyToMsgId ? Flag::f_reply_to : Flag(0));
 	const auto replyHeader = replyToMsgId
 		? MTP_messageReplyHeader(
@@ -2880,7 +2929,9 @@ void injectOnMain(
 				buildMessage(gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
 					gHasWp ? buildWebpageMedia(gWpJson) : MTPMessageMedia(),
 					gHasWp, 0, /*peerIsChat=*/true, gEntities,
-					TtlFromContent(sm.content)),
+					TtlFromContent(sm.content),
+					/*mentionsSelf=*/!gOwn && MentionsSelf(
+						gtextQ, parvane::contentEntities(sm.content), self)),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
 				const auto h = gItem->history();
@@ -3011,12 +3062,14 @@ void injectOnMain(
 		const auto wpJson = parvane::contentWebpage(sm.content);
 		const auto hasWp = wpJson.is_object() && wpJson.contains("url");
 		const auto ttl = TtlFromContent(sm.content);
+		const auto mentionsSelf = !out && MentionsSelf(
+			text, parvane::contentEntities(sm.content), self);
 		const auto item = session->data().addNewMessage(
 			msgId,
 			buildMessage(authorId, peerId, out, sm.ts, text,
 				hasWp ? buildWebpageMedia(wpJson) : MTPMessageMedia(),
 				/*hasMedia=*/hasWp, replyToMsgId,
-				/*peerIsChat=*/false, entities, ttl),
+				/*peerIsChat=*/false, entities, ttl, mentionsSelf),
 			MessageFlags(),
 			NewMessageType::Unread);
 		if (ttl > 0) {
