@@ -157,6 +157,11 @@ void RefreshGroups();
 // синтезирует её локально.
 void CreateGroup(const QString &name, const QStringList &members, bool channel);
 
+// Пользователь задал таймер самоуничтожения (нативное меню Auto-Delete) — сохранить
+// TTL чата у нас (peer->messagesTTL() уже выставлен вызывающим). Исходящие в этот
+// чат получат ttl_secs → у получателя нативный ttl_period (авто-удаление).
+void OnPeerTtlChanged(not_null<PeerData*> peer);
+
 // Групповой звонок: инициировать mesh со всеми участниками группы groupId.
 void StartGroupCall(const QString &groupId, bool video);
 // Групповой звонок по чат-пиру (для кнопки звонка в шапке группы).
