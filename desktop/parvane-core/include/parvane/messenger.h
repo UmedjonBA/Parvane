@@ -145,6 +145,34 @@ struct StoredMessage {
 
     // Текст сообщения, если контент текстовый (для UI Фазы 3).
     std::optional<std::string> text() const { return contentText(content); }
+
+    // Сериализация (для локального журнала истории — воспроизведение при старте).
+    // Симметрично fromJson; хранит уже РАСШИФРОВАННЫЙ content.
+    json toJson() const {
+        json j = {
+            {"id", id},
+            {"from", from},
+            {"to", to},
+            {"content", content},
+            {"ts", ts},
+            {"edited", edited},
+            {"deleted", deleted},
+            {"read", read},
+            {"updated_at", updated_at},
+            {"pinned", pinned},
+        };
+        if (reply_to) {
+            j["reply_to"] = *reply_to;
+        }
+        if (!reactions.empty()) {
+            json arr = json::array();
+            for (const auto &r : reactions) {
+                arr.push_back({{"emoji", r.emoji}, {"count", r.count}, {"mine", r.mine}});
+            }
+            j["reactions"] = std::move(arr);
+        }
+        return j;
+    }
 };
 
 // ── SyncResponsePayload (msg.sync.response) ──────────────────────────────────
