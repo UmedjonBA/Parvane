@@ -1623,6 +1623,20 @@ not_null<UserData*> ensurePeerUser(
 	}
 	// processUser выше стёр userpic пустым фото — возвращаем аватар из кэша.
 	applyAvatar(result, address);
+	// E2E: код безопасности (Signal-style, симметричный) в bio профиля — ручная
+	// верификация против MITM. Появляется, как только установлена сессия с
+	// контактом (иначе safetyNumber пуст). Нативный профиль рендерит about().
+	if (address != SelfAddress()) {
+		const auto sn = parvane::e2e::safetyNumber(address.toStdString());
+		if (!sn.empty()) {
+			// setAbout вернёт true только при реальном изменении → лог однократно.
+			if (result->setAbout(u"\xF0\x9F\x94\x92 E2E · код безопасности:\n"_q
+					+ QString::fromStdString(sn))) {
+				LOG(("Parvane: код безопасности с %1 в профиле: %2")
+					.arg(address, QString::fromStdString(sn)));
+			}
+		}
+	}
 	return result;
 }
 
