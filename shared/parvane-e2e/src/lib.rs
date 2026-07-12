@@ -6,6 +6,9 @@
 // ключи (Megolm) — Фаза 3. Sealed sender делается слоем выше (настоящий
 // отправитель + подпись внутри шифртекста), сервер роутит по получателю.
 
+use vodozemac::megolm::{
+    GroupSession, InboundGroupSession, MegolmMessage, SessionConfig as MegolmConfig, SessionKey,
+};
 use vodozemac::olm::{Account, OlmMessage, Session, SessionConfig};
 use vodozemac::{base64_decode, base64_encode, Curve25519PublicKey};
 
@@ -118,6 +121,63 @@ impl E2ESession {
     }
 }
 
+// ── Megolm (групповые ключи, Фаза 3) ─────────────────────────────────────────
+// У каждого отправителя в группе — своя ИСХОДЯЩАЯ group session. Её session_key
+// раздаётся участникам по 1-на-1 E2E (SKDM). Участник создаёт ВХОДЯЩУЮ group
+// session из session_key и расшифровывает сообщения этого отправителя. Сам
+// групповой шифртекст фанится сервером, не читая содержимого.
+
+pub struct E2EGroupSession(GroupSession);
+pub struct E2EInboundGroup(InboundGroupSession);
+
+impl E2EGroupSession {
+    pub fn new() -> Self {
+        E2EGroupSession(GroupSession::new(MegolmConfig::version_1()))
+    }
+    /// Ключ для раздачи участникам (base64). По нему они создают inbound.
+    pub fn session_key_b64(&self) -> String {
+        self.0.session_key().to_base64()
+    }
+    /// Зашифровать сообщение группы. Возвращает base64 MegolmMessage.
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> String {
+        base64_encode(self.0.encrypt(plaintext).to_bytes())
+    }
+    pub fn pickle_json(&self) -> String {
+        serde_json::to_string(&self.0.pickle()).unwrap_or_default()
+    }
+    pub fn from_pickle_json(s: &str) -> Option<Self> {
+        let p: vodozemac::megolm::GroupSessionPickle = serde_json::from_str(s).ok()?;
+        Some(E2EGroupSession(GroupSession::from_pickle(p)))
+    }
+}
+
+impl Default for E2EGroupSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl E2EInboundGroup {
+    /// Создать входящую сессию из session_key (base64), полученного по 1-на-1 E2E.
+    pub fn from_session_key(key_b64: &str) -> Option<Self> {
+        let key = SessionKey::from_base64(key_b64).ok()?;
+        Some(E2EInboundGroup(InboundGroupSession::new(&key, MegolmConfig::version_1())))
+    }
+    /// Расшифровать групповое сообщение (base64 MegolmMessage). None — не наша/порча.
+    pub fn decrypt(&mut self, ct_b64: &str) -> Option<Vec<u8>> {
+        let bytes = base64_decode(ct_b64).ok()?;
+        let msg = MegolmMessage::from_bytes(&bytes).ok()?;
+        self.0.decrypt(&msg).ok().map(|d| d.plaintext)
+    }
+    pub fn pickle_json(&self) -> String {
+        serde_json::to_string(&self.0.pickle()).unwrap_or_default()
+    }
+    pub fn from_pickle_json(s: &str) -> Option<Self> {
+        let p: vodozemac::megolm::InboundGroupSessionPickle = serde_json::from_str(s).ok()?;
+        Some(E2EInboundGroup(InboundGroupSession::from_pickle(p)))
+    }
+}
+
 /// Safety number для верификации контакта: детерминированный отпечаток пары
 /// identity-ключей (симметричный — обе стороны получают одинаковый). 6 групп по
 /// 5 цифр. SHA-256 (устойчив к подбору короткого совпадения). Для сверки
@@ -165,6 +225,81 @@ fn to_cstring(s: String) -> *mut c_char {
 pub extern "C" fn parvane_e2e_string_free(p: *mut c_char) {
     if !p.is_null() {
         unsafe { drop(CString::from_raw(p)) };
+    }
+}
+
+// ── Megolm FFI (группы) ───────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_group_new() -> *mut E2EGroupSession {
+    Box::into_raw(Box::new(E2EGroupSession::new()))
+}
+#[no_mangle]
+pub extern "C" fn parvane_e2e_group_free(p: *mut E2EGroupSession) {
+    if !p.is_null() {
+        unsafe { drop(Box::from_raw(p)) };
+    }
+}
+/// session_key для раздачи участникам (base64).
+#[no_mangle]
+pub extern "C" fn parvane_e2e_group_session_key(p: *const E2EGroupSession) -> *mut c_char {
+    unsafe { p.as_ref() }.map(|g| to_cstring(g.session_key_b64())).unwrap_or(std::ptr::null_mut())
+}
+/// Зашифровать (plaintext base64 → ciphertext base64).
+#[no_mangle]
+pub extern "C" fn parvane_e2e_group_encrypt(p: *mut E2EGroupSession, pt_b64: *const c_char) -> *mut c_char {
+    let Some(g) = (unsafe { p.as_mut() }) else { return std::ptr::null_mut() };
+    let Some(b64) = (unsafe { cstr(pt_b64) }) else { return std::ptr::null_mut() };
+    let Ok(pt) = base64_decode(&b64) else { return std::ptr::null_mut() };
+    to_cstring(g.encrypt(&pt))
+}
+#[no_mangle]
+pub extern "C" fn parvane_e2e_group_pickle(p: *const E2EGroupSession) -> *mut c_char {
+    unsafe { p.as_ref() }.map(|g| to_cstring(g.pickle_json())).unwrap_or(std::ptr::null_mut())
+}
+#[no_mangle]
+pub extern "C" fn parvane_e2e_group_from_pickle(s: *const c_char) -> *mut E2EGroupSession {
+    let Some(js) = (unsafe { cstr(s) }) else { return std::ptr::null_mut() };
+    match E2EGroupSession::from_pickle_json(&js) {
+        Some(g) => Box::into_raw(Box::new(g)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_from_key(key_b64: *const c_char) -> *mut E2EInboundGroup {
+    let Some(k) = (unsafe { cstr(key_b64) }) else { return std::ptr::null_mut() };
+    match E2EInboundGroup::from_session_key(&k) {
+        Some(g) => Box::into_raw(Box::new(g)),
+        None => std::ptr::null_mut(),
+    }
+}
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_free(p: *mut E2EInboundGroup) {
+    if !p.is_null() {
+        unsafe { drop(Box::from_raw(p)) };
+    }
+}
+/// Расшифровать (ciphertext base64 → plaintext base64) или NULL.
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_decrypt(p: *mut E2EInboundGroup, ct_b64: *const c_char) -> *mut c_char {
+    let Some(g) = (unsafe { p.as_mut() }) else { return std::ptr::null_mut() };
+    let Some(ct) = (unsafe { cstr(ct_b64) }) else { return std::ptr::null_mut() };
+    match g.decrypt(&ct) {
+        Some(pt) => to_cstring(base64_encode(pt)),
+        None => std::ptr::null_mut(),
+    }
+}
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_pickle(p: *const E2EInboundGroup) -> *mut c_char {
+    unsafe { p.as_ref() }.map(|g| to_cstring(g.pickle_json())).unwrap_or(std::ptr::null_mut())
+}
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_from_pickle(s: *const c_char) -> *mut E2EInboundGroup {
+    let Some(js) = (unsafe { cstr(s) }) else { return std::ptr::null_mut() };
+    match E2EInboundGroup::from_pickle_json(&js) {
+        Some(g) => Box::into_raw(Box::new(g)),
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -406,6 +541,28 @@ mod tests {
         let pickle = acc.pickle_json();
         let restored = E2EAccount::from_pickle_json(&pickle).expect("unpickle");
         assert_eq!(restored.identity_b64(), id, "identity сохранён после pickle");
+    }
+
+    #[test]
+    fn megolm_group_round_trip() {
+        // A создаёт исходящую group session, раздаёт session_key, шифрует.
+        let mut a = E2EGroupSession::new();
+        let key = a.session_key_b64();
+        let c1 = a.encrypt("привет группе".as_bytes());
+        // Участник B создаёт входящую из session_key и расшифровывает.
+        let mut b = E2EInboundGroup::from_session_key(&key).expect("inbound group");
+        assert_eq!(b.decrypt(&c1).unwrap(), "привет группе".as_bytes());
+        // Следующие сообщения.
+        let c2 = a.encrypt("второе".as_bytes());
+        assert_eq!(b.decrypt(&c2).unwrap(), "второе".as_bytes());
+        // Персист входящей сессии — продолжает расшифровывать.
+        let mut b2 = E2EInboundGroup::from_pickle_json(&b.pickle_json()).expect("restore");
+        let c3 = a.encrypt("третье".as_bytes());
+        assert_eq!(b2.decrypt(&c3).unwrap(), "третье".as_bytes());
+        // Исходящая тоже пиклится.
+        let mut a2 = E2EGroupSession::from_pickle_json(&a.pickle_json()).expect("restore out");
+        let c4 = a2.encrypt("четвёртое".as_bytes());
+        assert_eq!(b.decrypt(&c4).unwrap(), "четвёртое".as_bytes());
     }
 
     #[test]
