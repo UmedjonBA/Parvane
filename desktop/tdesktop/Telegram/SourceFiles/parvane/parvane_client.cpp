@@ -3639,6 +3639,65 @@ void CreateGroup(const QString &name, const QStringList &members, bool channel) 
 	});
 }
 
+// ── Админка групп (add/kick/role/leave) ──────────────────────────────────────
+// Общий воркер: зовёт messenger (проверка прав на бэкенде), логирует, обновляет
+// список групп. action: "add"|"remove"|"admin"|"member" (роль) — по имени.
+void groupAdminAction(const QString &groupId, const QString &member, const QString &action) {
+	const auto token = Token().toStdString();
+	const auto gid = groupId.toStdString();
+	const auto mem = member.toStdString();
+	const auto act = action.toStdString();
+	if (token.empty() || gid.empty() || mem.empty()) {
+		return;
+	}
+	crl::async([token, gid, mem, act] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		if (!g) {
+			return;
+		}
+		bool ok = false;
+		try {
+			if (act == "add") {
+				ok = g->addMember(token, gid, mem).ok;
+			} else if (act == "remove") {
+				ok = g->removeMember(token, gid, mem).ok;
+			} else { // "admin" | "member" — смена роли
+				ok = g->setRole(token, gid, mem, act).ok;
+			}
+		} catch (const std::exception &) {
+		}
+		LOG(("Parvane: админ-действие '%1' над %2 в %3: %4")
+			.arg(QString::fromStdString(act), QString::fromStdString(mem),
+				QString::fromStdString(gid), ok ? u"ok"_q : u"отказ"_q));
+		crl::on_main([] { RefreshGroups(); });
+	});
+}
+
+void AddMember(const QString &groupId, const QString &member) {
+	groupAdminAction(groupId, member, u"add"_q);
+}
+void KickMember(const QString &groupId, const QString &member) {
+	groupAdminAction(groupId, member, u"remove"_q);
+}
+void SetMemberRole(const QString &groupId, const QString &member, bool admin) {
+	groupAdminAction(groupId, member, admin ? u"admin"_q : u"member"_q);
+}
+void LeaveGroup(const QString &groupId) {
+	groupAdminAction(groupId, SelfAddress(), u"remove"_q); // сам себя = выйти
+}
+
+QString GroupIdForChat(not_null<PeerData*> peer) {
+	if (!peer->isChat()) {
+		return QString();
+	}
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
+}
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
@@ -3974,6 +4033,45 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				const auto secs = spec.mid(sp + 1).toInt();
 				SetPeerTtlLocal(addr, secs);
 				LOG(("Parvane: AUTOTTL — TTL чата %1 = %2с").arg(addr).arg(secs));
+			}
+		}
+
+		// Debug-autoadmin для админки групп: PARVANE_AUTOADMIN=Имя_группы;act:member;…
+		// act ∈ add|remove|admin|member. Через ~11с (группа синхронизирована)
+		// выполняет действия ЧЕРЕЗ клиент (GroupClient → messenger), стаггер по 3с.
+		if (const char *av = std::getenv("PARVANE_AUTOADMIN"); av && *av) {
+			const auto parts = QString::fromUtf8(av).split(';', Qt::SkipEmptyParts);
+			if (parts.size() >= 2) {
+				const auto gname = parts.first();
+				for (auto i = 1; i < parts.size(); ++i) {
+					const auto pair = parts[i];
+					const auto c = pair.indexOf(':');
+					if (c <= 0) {
+						continue;
+					}
+					const auto act = pair.left(c);
+					const auto mem = pair.mid(c + 1);
+					const auto delayMs = (11 + (i - 1) * 3) * crl::time(1000);
+					base::call_delayed(delayMs, [gname, act, mem] {
+						QString gid;
+						{
+							std::lock_guard<std::mutex> lk(g_sessionMutex);
+							for (auto it = g_knownGroups.constBegin();
+									it != g_knownGroups.constEnd(); ++it) {
+								if (it.value() == gname) {
+									gid = it.key();
+									break;
+								}
+							}
+						}
+						if (gid.isEmpty()) {
+							LOG(("Parvane: AUTOADMIN — группа '%1' не найдена").arg(gname));
+							return;
+						}
+						LOG(("Parvane: AUTOADMIN %1 %2 в '%3'").arg(act, mem, gname));
+						groupAdminAction(gid, mem, act);
+					});
+				}
 			}
 		}
 

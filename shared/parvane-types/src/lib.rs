@@ -63,6 +63,7 @@ pub mod topics {
     pub const GROUP_CREATE: &str = "group.create";
     pub const GROUP_ADD_MEMBER: &str = "group.addmember";
     pub const GROUP_REMOVE_MEMBER: &str = "group.removemember";
+    pub const GROUP_SET_ROLE: &str = "group.setrole";
     pub const GROUP_LIST: &str = "group.list";
     pub const GROUP_INFO: &str = "group.info";
 
@@ -879,6 +880,15 @@ pub struct GroupMemberRequest {
     pub token: String,
     pub group_id: String,
     pub member: String,
+}
+
+/// Сменить роль участника (только owner): `role` = "admin" | "member".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupSetRoleRequest {
+    pub token: String,
+    pub group_id: String,
+    pub member: String,
+    pub role: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

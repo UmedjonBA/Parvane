@@ -43,4 +43,13 @@ GroupActionResponse GroupClient::removeMember(const std::string &token, const st
     return GroupActionResponse::fromJson(json::parse(raw));
 }
 
+GroupActionResponse GroupClient::setRole(const std::string &token, const std::string &groupId,
+                                         const std::string &member, const std::string &role,
+                                         int timeoutMs) {
+    const json req{ { "token", token }, { "group_id", groupId },
+                    { "member", member }, { "role", role } };
+    const std::string raw = _t.request(topics::GroupSetRole, req.dump(), timeoutMs);
+    return GroupActionResponse::fromJson(json::parse(raw));
+}
+
 } // namespace parvane

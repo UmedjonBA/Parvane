@@ -3880,6 +3880,15 @@ Fn<void()> ClearHistoryHandler(
 Fn<void()> DeleteAndLeaveHandler(
 		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer) {
+	// Parvane: наша группа — «выйти» идёт в messenger (group.removemember self),
+	// затем локально убираем чат; без MTProto.
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		const auto session = &peer->session();
+		return [=] {
+			Parvane::LeaveGroup(gid);
+			session->data().deleteConversationLocally(peer);
+		};
+	}
 	const auto isCreator = [&] {
 		if (const auto channel = peer->asChannel()) {
 			return channel->amCreator();

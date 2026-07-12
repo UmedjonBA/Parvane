@@ -4,11 +4,12 @@ use futures::StreamExt;
 use parvane_types::{
     AckPayload, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
     GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
-    GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest, MessageContent,
+    GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest, GroupSetRoleRequest,
+    MessageContent,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, SendPayload, StoredMessage,
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
-        GROUP_ADD_MEMBER, GROUP_CREATE, GROUP_INFO, GROUP_LIST, GROUP_REMOVE_MEMBER,
+        GROUP_ADD_MEMBER, GROUP_CREATE, GROUP_INFO, GROUP_LIST, GROUP_REMOVE_MEMBER, GROUP_SET_ROLE,
         IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
@@ -65,6 +66,7 @@ async fn main() -> Result<()> {
     let mut gcreate_sub = nc.subscribe(GROUP_CREATE).await?;
     let mut gadd_sub = nc.subscribe(GROUP_ADD_MEMBER).await?;
     let mut gremove_sub = nc.subscribe(GROUP_REMOVE_MEMBER).await?;
+    let mut gsetrole_sub = nc.subscribe(GROUP_SET_ROLE).await?;
     let mut glist_sub = nc.subscribe(GROUP_LIST).await?;
     let mut ginfo_sub = nc.subscribe(GROUP_INFO).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
@@ -105,6 +107,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = gremove_sub.next() => {
                 handle_group_remove(&nc, &pool, msg).await;
+            }
+            Some(msg) = gsetrole_sub.next() => {
+                handle_group_setrole(&nc, &pool, msg).await;
             }
             Some(msg) = glist_sub.next() => {
                 handle_group_list(&nc, &pool, msg).await;
@@ -363,6 +368,32 @@ async fn remove_group_member(
     let res = sqlx::query(
         "DELETE FROM group_members WHERE group_id = ? AND member = ? AND role != 'owner'",
     )
+    .bind(group_id)
+    .bind(member)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Сменить роль участника на admin/member (только owner; owner-роль не трогаем).
+async fn set_group_role(
+    pool: &SqlitePool,
+    group_id: &str,
+    actor: &str,
+    member: &str,
+    role: &str,
+) -> Result<bool> {
+    let actor_role = member_role(pool, group_id, actor).await?;
+    if !matches!(actor_role.as_deref(), Some("owner")) {
+        return Ok(false); // только владелец назначает/снимает админов
+    }
+    if !matches!(role, "admin" | "member") {
+        return Ok(false);
+    }
+    let res = sqlx::query(
+        "UPDATE group_members SET role = ? WHERE group_id = ? AND member = ? AND role != 'owner'",
+    )
+    .bind(role)
     .bind(group_id)
     .bind(member)
     .execute(pool)
@@ -964,6 +995,23 @@ async fn handle_group_remove(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("нет прав или owner".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_group_setrole(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupSetRoleRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.setrole")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = set_group_role(pool, &req.group_id, &actor, &req.member, &req.role).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("не owner / нельзя".into()) },
         })
     }
     .await

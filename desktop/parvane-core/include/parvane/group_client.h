@@ -31,6 +31,10 @@ public:
                                   const std::string &member, int timeoutMs = 3000);
     GroupActionResponse removeMember(const std::string &token, const std::string &groupId,
                                      const std::string &member, int timeoutMs = 3000);
+    // Сменить роль участника (только owner): role = "admin" | "member".
+    GroupActionResponse setRole(const std::string &token, const std::string &groupId,
+                                const std::string &member, const std::string &role,
+                                int timeoutMs = 3000);
 
 private:
     ITransport &_t;
