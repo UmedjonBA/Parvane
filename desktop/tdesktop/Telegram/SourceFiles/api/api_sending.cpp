@@ -314,12 +314,17 @@ void SendExistingDocument(
 			MTPint(), // video_timestamp
 			MTPstring()); // query
 	};
+	// Parvane: стикер/GIF из панели → шина (E2E-блоб + kind=sticker/gif).
+	// Локальное эхо делает SendExistingMedia ниже; MTProto-запрос уйдёт в
+	// никуда — контент доставляет наш мост.
+	const auto history = message.action.history;
 	SendExistingMedia(
 		std::move(message),
 		document,
 		inputMedia,
 		document->stickerOrGifOrigin(),
 		std::move(localMessageId));
+	Parvane::MirrorOutgoingSticker(history->peer, document);
 
 	if (document->sticker()) {
 		document->owner().stickers().incrementSticker(document);
