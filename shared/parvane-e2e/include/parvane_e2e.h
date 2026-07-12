@@ -15,6 +15,8 @@ extern "C" {
 
 typedef struct ParvaneE2EAccount ParvaneE2EAccount;
 typedef struct ParvaneE2ESession ParvaneE2ESession;
+typedef struct ParvaneE2EGroupSession ParvaneE2EGroupSession;   /* исходящая (своя) */
+typedef struct ParvaneE2EInboundGroup ParvaneE2EInboundGroup;   /* входящая (по SKDM) */
 
 void parvane_e2e_string_free(char *s);
 
@@ -60,6 +62,20 @@ char *parvane_e2e_encrypt(ParvaneE2ESession *sess, const char *plaintext_b64,
 /* Расшифровывает → plaintext (base64) или NULL. */
 char *parvane_e2e_decrypt(ParvaneE2ESession *sess, uint32_t msg_type,
                           const char *ct_b64);
+
+/* ── Megolm (группы, Фаза 3) ── */
+ParvaneE2EGroupSession *parvane_e2e_group_new(void);
+void parvane_e2e_group_free(ParvaneE2EGroupSession *g);
+char *parvane_e2e_group_session_key(const ParvaneE2EGroupSession *g); /* base64, раздать */
+char *parvane_e2e_group_encrypt(ParvaneE2EGroupSession *g, const char *plaintext_b64);
+char *parvane_e2e_group_pickle(const ParvaneE2EGroupSession *g);
+ParvaneE2EGroupSession *parvane_e2e_group_from_pickle(const char *pickle_json);
+
+ParvaneE2EInboundGroup *parvane_e2e_inbound_group_from_key(const char *session_key_b64);
+void parvane_e2e_inbound_group_free(ParvaneE2EInboundGroup *g);
+char *parvane_e2e_inbound_group_decrypt(ParvaneE2EInboundGroup *g, const char *ct_b64);
+char *parvane_e2e_inbound_group_pickle(const ParvaneE2EInboundGroup *g);
+ParvaneE2EInboundGroup *parvane_e2e_inbound_group_from_pickle(const char *pickle_json);
 
 #ifdef __cplusplus
 }

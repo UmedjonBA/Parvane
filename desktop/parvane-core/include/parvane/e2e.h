@@ -41,4 +41,26 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
 // сессии/идентити контакта.
 [[nodiscard]] std::string safetyNumber(const std::string &contact);
 
+// ── E2E группы (Фаза 3, Megolm/sender keys) ──────────────────────────────────
+// Свой identity-ключ (base64) — для SKDM sender_identity. "" если не инициализ.
+[[nodiscard]] std::string myIdentity();
+
+// Мой session_key для группы (создаёт исходящую Megolm-сессию при нужде).
+// Раздать участникам по 1-на-1 E2E (SKDM). "" при ошибке.
+[[nodiscard]] std::string groupSessionKey(const std::string &groupId);
+
+// Зашифровать `contentJson` для группы моей исходящей сессией → JSON
+// {kind:"group_encrypted",ciphertext,group,sender_identity}. "" при ошибке.
+[[nodiscard]] std::string groupSeal(const std::string &groupId, const std::string &contentJson);
+
+// Принять session_key участника (из SKDM) → входящая сессия (group, sender).
+void groupAcceptKey(const std::string &groupId, const std::string &senderIdentity,
+                    const std::string &sessionKeyB64);
+
+// Расшифровать групповое сообщение (ciphertext) отправителя senderIdentity →
+// внутренний конверт {from,content} JSON. "" — нет ключа (ещё не пришёл SKDM)/порча.
+[[nodiscard]] std::string groupOpen(const std::string &groupId,
+                                    const std::string &senderIdentity,
+                                    const std::string &ciphertext);
+
 } // namespace parvane::e2e

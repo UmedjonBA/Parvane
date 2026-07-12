@@ -30,6 +30,8 @@ std::mutex g_mu;
 ParvaneE2EAccount *g_account = nullptr;
 std::map<std::string, ParvaneE2ESession *> g_sessions; // identity собеседника → сессия
 std::map<std::string, std::string> g_contactId;        // адрес контакта → identity
+std::map<std::string, ParvaneE2EGroupSession *> g_ownGroups;   // groupId → своя исходящая
+std::map<std::string, ParvaneE2EInboundGroup *> g_inGroups;    // "group|senderId" → входящая
 std::string g_identityB64;                              // свой identity-ключ
 std::string g_self;                                     // свой адрес (для конверта)
 std::string g_storeDir;
@@ -151,6 +153,61 @@ void loadContacts() {
     }
 }
 
+std::string ownGroupPath(const std::string &groupId) {
+    return g_storeDir + "/gout_" + hexName(groupId) + ".json";
+}
+std::string inGroupPath(const std::string &key) {
+    return g_storeDir + "/gin_" + hexName(key) + ".json";
+}
+void persistOwnGroup(const std::string &groupId, ParvaneE2EGroupSession *g) {
+    if (g_storeDir.empty() || !g) {
+        return;
+    }
+    writeFile(ownGroupPath(groupId), take(parvane_e2e_group_pickle(g)));
+}
+void persistInGroup(const std::string &key, ParvaneE2EInboundGroup *g) {
+    if (g_storeDir.empty() || !g) {
+        return;
+    }
+    writeFile(inGroupPath(key), take(parvane_e2e_inbound_group_pickle(g)));
+}
+
+// Своя исходящая group-сессия: память → диск (создаётся вызывающим при отсутствии).
+ParvaneE2EGroupSession *getOwnGroup(const std::string &groupId) {
+    auto it = g_ownGroups.find(groupId);
+    if (it != g_ownGroups.end()) {
+        return it->second;
+    }
+    if (!g_storeDir.empty()) {
+        const auto pickle = readFile(ownGroupPath(groupId));
+        if (!pickle.empty()) {
+            if (auto *g = parvane_e2e_group_from_pickle(pickle.c_str())) {
+                g_ownGroups[groupId] = g;
+                return g;
+            }
+        }
+    }
+    return nullptr;
+}
+
+// Входящая group-сессия по ключу "group|senderIdentity": память → диск.
+ParvaneE2EInboundGroup *getInGroup(const std::string &key) {
+    auto it = g_inGroups.find(key);
+    if (it != g_inGroups.end()) {
+        return it->second;
+    }
+    if (!g_storeDir.empty()) {
+        const auto pickle = readFile(inGroupPath(key));
+        if (!pickle.empty()) {
+            if (auto *g = parvane_e2e_inbound_group_from_pickle(pickle.c_str())) {
+                g_inGroups[key] = g;
+                return g;
+            }
+        }
+    }
+    return nullptr;
+}
+
 // Сессия по identity собеседника: память → диск.
 ParvaneE2ESession *getSession(const std::string &idB64) {
     auto it = g_sessions.find(idB64);
@@ -251,7 +308,10 @@ std::string sealFor(const std::string &to, const std::string &contentJson, ITran
     }
     if (needBundle) {
         std::string peerIdentity;
-        for (int attempt = 0; attempt < 4; ++attempt) {
+        // ~6с ретраев: при «холодном старте» обоих (оба только вошли и сразу пишут
+        // друг другу) получатель мог ещё не опубликовать prekeys — короткое окно
+        // приводило к «E2E не удался» на первом контакте. Ждём публикации пира.
+        for (int attempt = 0; attempt < 12; ++attempt) {
             try {
                 json fr = {{"token", token}, {"user", to}};
                 auto resp = json::parse(t.request(topics::IdentityPrekeysFetch, fr.dump(), 5000));
@@ -266,7 +326,7 @@ std::string sealFor(const std::string &to, const std::string &contentJson, ITran
             if (!peerIdentity.empty() && !otk.empty()) {
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         if (peerIdentity.empty() || otk.empty()) {
             return {};
@@ -372,6 +432,99 @@ std::string safetyNumber(const std::string &contact) {
         return {};
     }
     return take(parvane_e2e_safety_number(g_identityB64.c_str(), it->second.c_str()));
+}
+
+std::string myIdentity() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_identityB64;
+}
+
+std::string groupSessionKey(const std::string &groupId) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account || groupId.empty()) {
+        return {};
+    }
+    auto *g = getOwnGroup(groupId);
+    if (!g) {
+        g = parvane_e2e_group_new();
+        if (!g) {
+            return {};
+        }
+        g_ownGroups[groupId] = g;
+        persistOwnGroup(groupId, g);
+    }
+    return take(parvane_e2e_group_session_key(g));
+}
+
+std::string groupSeal(const std::string &groupId, const std::string &contentJson) {
+    // Реальный отправитель — ВНУТРЬ шифртекста (как в 1-на-1), путь inject единый.
+    json inner;
+    try {
+        inner = {{"from", g_self}, {"content", json::parse(contentJson)}};
+    } catch (const std::exception &) {
+        return {};
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account || groupId.empty()) {
+        return {};
+    }
+    auto *g = getOwnGroup(groupId);
+    if (!g) {
+        g = parvane_e2e_group_new();
+        if (!g) {
+            return {};
+        }
+        g_ownGroups[groupId] = g;
+    }
+    const std::string ct = take(parvane_e2e_group_encrypt(g, b64e(inner.dump()).c_str()));
+    if (ct.empty()) {
+        return {};
+    }
+    persistOwnGroup(groupId, g); // ratchet-индекс продвинулся
+    json enc = {
+        {"kind", "group_encrypted"},
+        {"ciphertext", ct},
+        {"group", groupId},
+        {"sender_identity", g_identityB64},
+    };
+    return enc.dump();
+}
+
+void groupAcceptKey(const std::string &groupId, const std::string &senderIdentity,
+                    const std::string &sessionKeyB64) {
+    if (groupId.empty() || senderIdentity.empty() || sessionKeyB64.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    const std::string key = groupId + "|" + senderIdentity;
+    // Первый SKDM выигрывает: пере-приём того же ключа сбросил бы ratchet-индекс и
+    // сломал бы уже расшифрованные сообщения. Есть сессия — ничего не делаем.
+    if (getInGroup(key)) {
+        return;
+    }
+    if (auto *g = parvane_e2e_inbound_group_from_key(sessionKeyB64.c_str())) {
+        g_inGroups[key] = g;
+        persistInGroup(key, g);
+    }
+}
+
+std::string groupOpen(const std::string &groupId, const std::string &senderIdentity,
+                      const std::string &ciphertext) {
+    if (groupId.empty() || senderIdentity.empty() || ciphertext.empty()) {
+        return {};
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    const std::string key = groupId + "|" + senderIdentity;
+    auto *g = getInGroup(key);
+    if (!g) {
+        return {}; // SKDM ещё не пришёл
+    }
+    const std::string ptB64 = take(parvane_e2e_inbound_group_decrypt(g, ciphertext.c_str()));
+    if (ptB64.empty()) {
+        return {};
+    }
+    persistInGroup(key, g);
+    return b64d(ptB64); // inner {from, content}
 }
 
 } // namespace parvane::e2e

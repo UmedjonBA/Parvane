@@ -267,6 +267,55 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 	});
 }
 
+// Групповое E2E (Megolm/sender keys, Фаза 3): раздаёт SKDM (свой session_key)
+// каждому участнику по 1-на-1 E2E (sealed) и возвращает group_encrypted-конверт
+// для рассылки в группу. "" — E2E не готов/ошибка (тогда шлём открыто). Вызывать
+// вне g_sessionMutex (внутри сеть: fetch бандлов участников).
+[[nodiscard]] std::string sealGroup(
+		parvane::MessengerClient *m,
+		parvane::ITransport *t,
+		const std::string &groupId,
+		const parvane::json &content,
+		const std::string &token) {
+	if (!m || !t || !parvane::e2e::ready()) {
+		return {};
+	}
+	const auto skey = parvane::e2e::groupSessionKey(groupId);
+	const auto myId = parvane::e2e::myIdentity();
+	if (skey.empty() || myId.empty()) {
+		return {};
+	}
+	QStringList members;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		members = g_groupMembers.value(QString::fromStdString(groupId));
+	}
+	const auto self = SelfAddress().toStdString();
+	const parvane::json skdm = {
+		{"kind", "skdm"},
+		{"group", groupId},
+		{"session_key", skey},
+		{"sender_identity", myId},
+	};
+	// SKDM участникам ДО самого сообщения → у получателя ключ раньше шифртекста.
+	for (const auto &mem : members) {
+		const auto memStd = mem.toStdString();
+		if (memStd == self || memStd.empty()) {
+			continue;
+		}
+		const auto sealed = parvane::e2e::sealFor(memStd, skdm.dump(), *t, token);
+		if (sealed.empty()) {
+			continue; // нет бандла участника — получит ключ при следующей отправке
+		}
+		try {
+			m->sendContent(std::string(), memStd, parvane::json::parse(sealed),
+				std::string());
+		} catch (const std::exception &) {
+		}
+	}
+	return parvane::e2e::groupSeal(groupId, content.dump());
+}
+
 void sendTextAsync(
 		const QString &toAddress,
 		const QString &text,
@@ -295,7 +344,7 @@ void sendTextAsync(
 		try {
 			std::string id;
 			// 1-на-1 текст → E2E (Фаза 2): шифруем реальный content, шлём вариант
-			// Encrypted. Группы идут открыто (E2E групп — Фаза 3, sender keys).
+			// Encrypted. Группы → E2E Megolm (Фаза 3, sender keys).
 			if (!isGroup && t && parvane::e2e::ready()) {
 				const auto content = parvane::textContent(body, entities, webpage);
 				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
@@ -309,6 +358,22 @@ void sendTextAsync(
 				// gateway уже аутентифицировал, подлинность — крипто Olm).
 				id = m->sendContent(std::string(), to, nlohmann::json::parse(sealed),
 					std::string(), replyToUuid, preId);
+			} else if (isGroup && t && parvane::e2e::ready()) {
+				const auto content = parvane::textContent(body, entities, webpage);
+				const auto sealed = sealGroup(m, t, to, content, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E группы не удался для %1 — НЕ отправлено")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
+				// Групповое: from ВИДЕН (сервер проверяет членство), token есть;
+				// content — group_encrypted (Megolm), непрозрачен для сервера.
+				// Пустой preId → nullopt (иначе event.id="" — невалидный uuid).
+				const auto pre = preId.empty()
+					? std::optional<std::string>{}
+					: std::optional<std::string>{preId};
+				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
+					replyToUuid, pre);
 			} else {
 				id = m->sendText(from, to, body, token,
 					replyToUuid, preId, entities, webpage);
@@ -320,7 +385,7 @@ void sendTextAsync(
 			LOG(("Parvane: отправлено msg %1 → %2%3")
 				.arg(QString::fromStdString(id))
 				.arg(QString::fromStdString(to))
-				.arg((!isGroup && t && parvane::e2e::ready()) ? u" [E2E]"_q : QString()));
+				.arg((t && parvane::e2e::ready()) ? u" [E2E]"_q : QString()));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка отправки: %1").arg(QString::fromUtf8(e.what())));
 		}
@@ -1284,10 +1349,10 @@ void MirrorOutgoingFile(
 			return;
 		}
 		try {
-			// E2E медиа (Фаза 3): 1-на-1 → шифруем БЛОБ (cloud хранит шифртекст),
-			// ключ+nonce кладём в content, а сам content шифруем E2E (sealed).
-			// Группы идут открыто (E2E групп — sender keys, отдельно).
-			const bool e2e = !isGroup && parvane::e2e::ready();
+			// E2E медиа (Фаза 3): шифруем БЛОБ (cloud хранит шифртекст), ключ+nonce
+			// кладём в content, а сам content шифруем E2E. 1-на-1 → sealed (Olm);
+			// группа → Megolm (sender keys) + раздача SKDM.
+			const bool e2e = parvane::e2e::ready();
 			std::string uploadBytes = bytesStd, fileKey, fileNonce;
 			if (e2e) {
 				auto enc = parvane::blobcrypt::encrypt(bytesStd);
@@ -1305,7 +1370,7 @@ void MirrorOutgoingFile(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
 				durationSecs, mediaW, mediaH, captionStd, fileKey, fileNonce);
 			std::string id;
-			if (e2e) {
+			if (e2e && !isGroup) {
 				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
 				if (sealed.empty()) {
 					LOG(("Parvane: E2E медиа не удался для %1 — не отправлено")
@@ -1314,6 +1379,14 @@ void MirrorOutgoingFile(
 				}
 				id = m->sendContent(std::string(), to, nlohmann::json::parse(sealed),
 					std::string());
+			} else if (e2e && isGroup) {
+				const auto sealed = sealGroup(m, t, to, content, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E медиа группы не удался для %1 — не отправлено")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
+				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token);
 			} else {
 				id = m->sendContent(from, to, content, token);
 			}
@@ -2351,6 +2424,35 @@ void injectOnMain(
 			} catch (const std::exception &) {
 				continue;
 			}
+		} else if (parvane::contentKind(sm.content) == "group_encrypted") {
+			// E2E группы (Megolm): расшифровать входящей group-сессией отправителя
+			// (нужен предварительно принятый SKDM). from виден на проводе.
+			const auto uuidQ = QString::fromStdString(sm.id);
+			auto innerQ = DecCacheGet(uuidQ);
+			if (innerQ.isEmpty()) {
+				const auto grp = sm.content.value("group", std::string());
+				const auto sid = sm.content.value("sender_identity", std::string());
+				const auto ctb = sm.content.value("ciphertext", std::string());
+				const auto dec = parvane::e2e::groupOpen(grp, sid, ctb);
+				if (dec.empty()) {
+					LOG(("Parvane: групповое E2E НЕ расшифровано msg %1 (нет SKDM?)")
+						.arg(QString::fromStdString(sm.id)));
+					continue;
+				}
+				innerQ = QString::fromStdString(dec);
+				DecCachePut(uuidQ, innerQ);
+			}
+			try {
+				auto inner = nlohmann::json::parse(innerQ.toStdString());
+				if (inner.contains("from") && inner["from"].is_string()) {
+					sm.from = inner["from"].get<std::string>();
+				}
+				if (inner.contains("content")) {
+					sm.content = inner["content"];
+				}
+			} catch (const std::exception &) {
+				continue;
+			}
 		}
 		// Ack входящего (не своего): снять из очереди + delivered отправителю
 		// (sealed: указываем реального отправителя из конверта). Идемпотентно.
@@ -2373,6 +2475,15 @@ void injectOnMain(
 					}
 				}
 			});
+		}
+		// SKDM (раздача Megolm-ключа участника): принять входящий group-ключ и НЕ
+		// показывать как сообщение (пришёл 1-на-1 sealed, уже расшифрован + ack'нут).
+		if (parvane::contentKind(sm.content) == "skdm") {
+			parvane::e2e::groupAcceptKey(
+				sm.content.value("group", std::string()),
+				sm.content.value("sender_identity", std::string()),
+				sm.content.value("session_key", std::string()));
+			continue;
 		}
 		const auto from = QString::fromStdString(sm.from);
 		const auto uuid = QString::fromStdString(sm.id);
@@ -3185,6 +3296,18 @@ void CreateGroup(const QString &name, const QStringList &members, bool channel) 
 		const auto gid = QString::fromStdString(resp.group_id);
 		const auto nameQ = QString::fromStdString(nameStd);
 		LOG(("Parvane: группа '%1' создана: %2").arg(nameQ, gid));
+		// Создатель знает участников СРАЗУ — фиксируем локально, не дожидаясь
+		// периодического RefreshGroups. Нужно для E2E-групп: первое же сообщение
+		// раздаёт SKDM всем участникам (sealGroup читает g_groupMembers).
+		{
+			QStringList memQ;
+			for (const auto &s : mem) {
+				memQ.push_back(QString::fromStdString(s));
+			}
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_knownGroups.insert(gid, nameQ);
+			g_groupMembers.insert(gid, memQ);
+		}
 		crl::on_main([gid, nameQ] {
 			const auto session = g_sessionWeak.get();
 			if (session) {
@@ -3510,6 +3633,37 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					LOG(("Parvane: AUTOGROUPCALL — группа '%1' не найдена").arg(gname));
 				}
 			});
+		}
+
+		// Debug-autogroupsend для e2e групп (Фаза 3, Megolm): PARVANE_AUTOGROUPSEND=
+		// Имя_группы:текст → через ~9с (дать группе синхронизироваться) отправляет
+		// текст в группу ЧЕРЕЗ E2E-путь клиента (sender keys + раздача SKDM).
+		if (const char *gsv = std::getenv("PARVANE_AUTOGROUPSEND"); gsv && *gsv) {
+			auto spec = QString::fromUtf8(gsv);
+			const auto sp = spec.indexOf(':');
+			if (sp > 0) {
+				const auto gname = spec.left(sp);
+				const auto text = spec.mid(sp + 1);
+				base::call_delayed(9 * crl::time(1000), [gname, text] {
+					QString gid;
+					{
+						std::lock_guard<std::mutex> lk(g_sessionMutex);
+						for (auto it = g_knownGroups.constBegin();
+								it != g_knownGroups.constEnd(); ++it) {
+							if (it.value() == gname) {
+								gid = it.key();
+								break;
+							}
+						}
+					}
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPSEND — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					LOG(("Parvane: AUTOGROUPSEND → '%1' (%2): %3").arg(gname, gid, text));
+					sendTextAsync(gid, text, nlohmann::json::array(), std::string());
+				});
+			}
 		}
 
 		// Debug-autocall для e2e звонков: PARVANE_AUTOCALL=peer@server[:video].

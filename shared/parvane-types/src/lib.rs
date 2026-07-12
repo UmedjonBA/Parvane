@@ -322,6 +322,16 @@ pub enum MessageContent {
         ctype: u32,
         sender_identity: String,
     },
+    /// E2E-зашифрованное групповое сообщение (Фаза 3, Megolm/sender keys).
+    /// Контент зашифрован исходящей group-сессией отправителя; получатель
+    /// расшифровывает входящей сессией, установленной из SKDM. `group` —
+    /// адрес группы, `sender_identity` — Curve25519 отправителя (ключ входящей
+    /// сессии). Раздача session_key идёт отдельно, 1-на-1 (Encrypted, kind=skdm).
+    GroupEncrypted {
+        ciphertext: String,
+        group: String,
+        sender_identity: String,
+    },
 }
 
 /// Превью ссылки (Open Graph). Заполняет отправитель.
@@ -360,6 +370,7 @@ impl MessageContent {
             MessageContent::Video { .. } => "video",
             MessageContent::File { .. } => "file",
             MessageContent::Encrypted { .. } => "encrypted",
+            MessageContent::GroupEncrypted { .. } => "group_encrypted",
         }
     }
 }
