@@ -4573,9 +4573,20 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 			auto attrs = QVector<MTPDocumentAttribute>();
 			attrs.push_back(MTP_documentAttributeImageSize(
 				MTP_int(w), MTP_int(h)));
+			// alt-эмодзи из hex-кода в имени (NN-1f602.png); нет — 🙂.
+			auto alt = QString::fromUtf8("\xF0\x9F\x99\x82");
+			const auto base = QFileInfo(name).completeBaseName();
+			if (const auto dash = base.lastIndexOf(u'-'); dash >= 0) {
+				auto ok = false;
+				const auto code = base.mid(dash + 1).toUInt(&ok, 16);
+				if (ok && code >= 0x80 && code <= 0x10FFFF) {
+					const char32_t c = code;
+					alt = QString::fromUcs4(&c, 1);
+				}
+			}
 			attrs.push_back(MTP_documentAttributeSticker(
 				MTP_flags(0),
-				MTP_string(QString::fromUtf8("\xF0\x9F\x99\x82")), // alt 🙂
+				MTP_string(alt),
 				MTP_inputStickerSetID(MTP_long(setId), MTP_long(0)),
 				MTPMaskCoords()));
 			docs.push_back(MTP_document(
@@ -4652,6 +4663,46 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 				.arg(withStickers)
 				.arg(s->data().stickers().setsOrder().size()));
 		});
+	}
+}
+
+// GIF-посев: локальная папка → Saved GIFs, чтобы вкладка GIFs не была пуста
+// из коробки. PARVANE_GIFS_DIR или ~/.local/share/ParvaneGifs, файлы *.gif.
+// Идемпотентно (docId стабилен от пути); дальше список живёт журналом.
+void LoadLocalSavedGifs(not_null<Main::Session*> session) {
+	auto root = QString();
+	if (const char *v = std::getenv("PARVANE_GIFS_DIR"); v && *v) {
+		root = QString::fromUtf8(v);
+	} else {
+		root = QDir::homePath() + u"/.local/share/ParvaneGifs"_q;
+	}
+	const auto dir = QDir(root);
+	if (!dir.exists()) {
+		return;
+	}
+	auto files = dir.entryList({ u"*.gif"_q }, QDir::Files, QDir::Name);
+	// addSavedGif пушит в начало — идём с конца, чтобы порядок сохранился.
+	std::reverse(files.begin(), files.end());
+	auto loaded = 0;
+	for (const auto &name : files) {
+		const auto path = dir.filePath(name);
+		const auto img = QImage(path);
+		if (img.isNull()) {
+			continue;
+		}
+		const auto docId = docIdFromFileId(path);
+		const auto mtpDoc = buildLocalMtpDocument(
+			session, docId, u"gif"_q, u"image/gif"_q,
+			QFileInfo(path).size(), name,
+			std::int64_t(base::unixtime::now()),
+			/*durationSecs=*/2, img.width(), img.height(), path);
+		const auto doc = session->data().processDocument(mtpDoc);
+		doc->setLocation(Core::FileLocation(path));
+		session->data().stickers().addSavedGif(nullptr, doc);
+		++loaded;
+	}
+	if (loaded > 0) {
+		LOG(("Parvane: гифок в Saved GIFs с диска: %1").arg(loaded));
 	}
 }
 
@@ -4849,6 +4900,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		base::call_delayed(3 * crl::time(1000), [weak] {
 			if (const auto s = weak.get()) {
 				LoadLocalStickerPacks(s);
+				LoadLocalSavedGifs(s);
 			}
 		});
 		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
