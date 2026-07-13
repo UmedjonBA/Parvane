@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_session_controller.h"
 
+#include "parvane/parvane_client.h" // Parvane: локальные результаты опроса
+
 #include "apiwrap.h"
 #include "api/api_cloud_password.h"
 #include "api/api_text_entities.h"
@@ -1490,6 +1492,11 @@ void SessionNavigation::showPollResults(
 		not_null<PollData*> poll,
 		FullMsgId contextId,
 		const SectionShow &params) {
+	// Parvane: результаты нашего опроса — локальный бокс (Info-секция ходит
+	// в MTProto за голосами и осталась бы пустой).
+	if (Parvane::ShowPollResultsBox(poll)) {
+		return;
+	}
 	showSection(std::make_shared<Info::Memento>(poll, contextId), params);
 }
 
