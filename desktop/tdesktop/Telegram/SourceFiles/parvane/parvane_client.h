@@ -203,6 +203,10 @@ bool MirrorPollVotes(std::uint64_t pollId, const std::vector<QByteArray> &option
 // Остановить опрос (только свой; UI сам гейтит по автору).
 bool MirrorPollClose(std::uint64_t pollId);
 
+// «Кто голосовал»: свой бокс результатов вместо нативной Info-секции
+// (та ходит в MTProto). true — показано (наш опрос), false — не наш.
+bool ShowPollResultsBox(PollData *poll);
+
 // Пользователь задал таймер самоуничтожения (нативное меню Auto-Delete) — сохранить
 // TTL чата у нас (peer->messagesTTL() уже выставлен вызывающим). Исходящие в этот
 // чат получат ttl_secs → у получателя нативный ttl_period (авто-удаление).

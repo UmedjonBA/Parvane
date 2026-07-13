@@ -188,6 +188,7 @@ struct PollState {
 	QString solution;          // пояснение (quiz)
 	QVector<int> correct;      // индексы правильных (quiz)
 	bool closed = false;
+	bool publicVoters = false; // публичный опрос — можно показывать голосовавших
 	QHash<QString, QVector<int>> votes; // голосовавший → индексы вариантов
 };
 QHash<QString, PollState> g_pollsByUuid;   // uuid опроса → состояние
@@ -1343,6 +1344,8 @@ void MirrorOutgoing(
 	});
 }
 
+void ForwardPollCopy(const QString &toAddress, const QString &contentJson);
+
 void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
 	if (!toPeer || !toPeer->isUser()) {
 		return;
@@ -1352,8 +1355,14 @@ void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
 	if (address.isEmpty()) {
 		return;
 	}
-	// Медиа — пересылаем сохранённый content (блоб уже в cloud, без пере-загрузки).
 	const auto found = g_mediaContentByMsgId.constFind(item->id.bare);
+	// Опрос: пересылка = независимая копия (новый uuid, голоса с нуля).
+	if (item->media() && item->media()->poll()
+		&& found != g_mediaContentByMsgId.constEnd()) {
+		ForwardPollCopy(address, found.value());
+		return;
+	}
+	// Медиа — пересылаем сохранённый content (блоб уже в cloud, без пере-загрузки).
 	if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
 		sendContentAsync(address, found.value().toStdString());
 		return;
@@ -1669,6 +1678,8 @@ void MirrorOutgoingFile(
 	}
 	int durationSecs = 0, mediaW = 0, mediaH = 0;
 	extractMediaMeta(file, durationSecs, mediaW, mediaH);
+	// TTL самоуничтожения чата — внутри E2E-контента (как для текста).
+	const int ttl = PeerTtl(address);
 	const auto from = SelfAddress().toStdString();
 	const auto to = address.toStdString();
 	const auto token = Token().toStdString();
@@ -1711,9 +1722,12 @@ void MirrorOutgoingFile(
 			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
 			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd,
 				uploadBytes, 256 * 1024, 20000);
-			const auto content = buildMediaContent(
+			auto content = buildMediaContent(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
 				durationSecs, mediaW, mediaH, captionStd, fileKey, fileNonce);
+			if (ttl > 0) {
+				content["ttl_secs"] = ttl;
+			}
 			std::string id;
 			if (e2e && !isGroup) {
 				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
@@ -1741,7 +1755,8 @@ void MirrorOutgoingFile(
 			}
 			// Своё медиа — в журнал (плейнтекст-content с file_key/nonce): при старте
 			// injectOnMain перекачает блоб из cloud и расшифрует. Переживает рестарт.
-			if (!id.empty()) {
+			// TTL-медиа эфемерно — НЕ журналируем (иначе воскреснет).
+			if (!id.empty() && ttl == 0) {
 				parvane::StoredMessage own;
 				own.id = id;
 				own.from = from;
@@ -1933,6 +1948,7 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 	const auto token = Token().toStdString();
 	const auto mimeStd = document->mimeString().toStdString();
 	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+	const int ttl = PeerTtl(address); // TTL чата: стикер/гиф тоже эфемерны
 	// Стикер из НАШЕГО локального пака — приложим pack_ref (набор пакуется в
 	// cloud один раз за сессию), получатель сможет установить весь набор.
 	auto packSetId = quint64(0);
@@ -1982,6 +1998,9 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 				// alt-эмодзи → filename (buildLocalMtpDocument кладёт его в
 				// Sticker-атрибут на приёме).
 				content["filename"] = alt;
+			}
+			if (ttl > 0) {
+				content["ttl_secs"] = ttl;
 			}
 			// pack_ref: архив набора в cloud (кэш на сессию по setId).
 			if (packSetId) {
@@ -2044,7 +2063,7 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
 			}
-			if (!id.empty()) {
+			if (!id.empty() && ttl == 0) { // TTL-эфемерное не журналируем
 				parvane::StoredMessage own;
 				own.id = id;
 				own.from = from;
@@ -2951,7 +2970,8 @@ void injectMediaOnMain(
 		int height,
 		const QString &caption,
 		bool peerIsChat = false,
-		const QString &authorAddr = QString()) {
+		const QString &authorAddr = QString(),
+		int ttlSecs = 0) {
 	// Диалог: группа (chat) → синтез группы + автор-юзер; иначе 1-на-1 user-пир.
 	if (peerIsChat) {
 		ensureGroupChat(session, from, g_knownGroups.value(from), 0);
@@ -2994,7 +3014,8 @@ void injectMediaOnMain(
 	const auto item = session->data().addNewMessage(
 		msgId,
 		buildMessage(authorId, senderId, out, ts, caption, media,
-			/*hasMedia=*/true, 0, peerIsChat),
+			/*hasMedia=*/true, 0, peerIsChat,
+			MTPVector<MTPMessageEntity>(), ttlSecs),
 		MessageFlags(),
 		NewMessageType::Unread);
 
@@ -3033,7 +3054,8 @@ void injectPhotoOnMain(
 		int height,
 		const QString &caption,
 		bool peerIsChat = false,
-		const QString &authorAddr = QString()) {
+		const QString &authorAddr = QString(),
+		int ttlSecs = 0) {
 	auto raw = QByteArray();
 	{
 		auto f = QFile(localPath);
@@ -3085,7 +3107,8 @@ void injectPhotoOnMain(
 	const auto item = session->data().addNewMessage(
 		msgId,
 		buildMessage(authorId, senderId, out, ts, caption, media,
-			/*hasMedia=*/true, 0, peerIsChat),
+			/*hasMedia=*/true, 0, peerIsChat,
+			MTPVector<MTPMessageEntity>(), ttlSecs),
 		MessageFlags(),
 		NewMessageType::Unread);
 
@@ -3138,7 +3161,8 @@ void pumpMediaDownload(
 		bool peerIsChat = false,
 		const QString &authorAddr = QString(),
 		const QString &fileKey = QString(),   // E2E медиа (Фаза 3): ключ блоба
-		const QString &fileNonce = QString()) {
+		const QString &fileNonce = QString(),
+		int ttlSecs = 0) {
 	const auto self = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	const auto fileIdStd = fileId.toStdString();
@@ -3202,11 +3226,13 @@ void pumpMediaDownload(
 				&& (kind == u"photo"_q || mime.startsWith(u"image/"_q))) {
 				injectPhotoOnMain(session, from, senderId, authorId, out,
 					ts, msgId, mediaId, kind, path, filename, mime, size,
-					durationSecs, width, height, caption, peerIsChat, authorAddr);
+					durationSecs, width, height, caption, peerIsChat, authorAddr,
+					ttlSecs);
 			} else {
 				injectMediaOnMain(session, from, senderId, authorId, out,
 					ts, msgId, mediaId, kind, path, filename, mime, size,
-					durationSecs, width, height, caption, peerIsChat, authorAddr);
+					durationSecs, width, height, caption, peerIsChat, authorAddr,
+					ttlSecs);
 			}
 		});
 	});
@@ -3307,14 +3333,29 @@ void applyPollState(not_null<Main::Session*> session, const PollState &st) {
 	}
 	using RFlag = MTPDpollResults::Flag;
 	const auto hasSolution = st.quiz && !st.solution.isEmpty();
+	// Публичный опрос: последние голосовавшие (аватарки у опроса).
+	auto recent = QVector<MTPPeer>();
+	if (st.publicVoters) {
+		for (auto i = st.votes.constBegin();
+				i != st.votes.constEnd() && recent.size() < 3;
+				++i) {
+			if (i.value().isEmpty()) {
+				continue;
+			}
+			const auto vid = IdForAddress(i.key());
+			ensurePeerUser(session, vid, i.key());
+			recent.push_back(MTP_peerUser(MTP_long(qint64(vid))));
+		}
+	}
 	const auto rflags = RFlag::f_results
 		| RFlag::f_total_voters
+		| (recent.isEmpty() ? RFlag(0) : RFlag::f_recent_voters)
 		| (hasSolution ? RFlag::f_solution : RFlag(0));
 	const auto results = MTP_pollResults(
 		MTP_flags(rflags),
 		MTP_vector<MTPPollAnswerVoters>(voters),
 		MTP_int(total),
-		MTPVector<MTPPeer>(),           // recent_voters (flags.3 — нет)
+		MTP_vector<MTPPeer>(recent),    // recent_voters
 		MTP_string(st.solution),
 		MTP_vector<MTPMessageEntity>(QVector<MTPMessageEntity>()),
 		MTPMessageMedia());             // solution_media (flags.5 — нет)
@@ -3428,6 +3469,7 @@ void injectPollMessage(
 	st.pollId = std::uint64_t(docIdFromFileId(uuid));
 	st.chatAddress = isGroup ? toStr : (isOwn ? toStr : from);
 	st.quiz = sm.content.value("quiz", false);
+	st.publicVoters = sm.content.value("public", false);
 	st.solution = QString::fromStdString(
 		sm.content.value("solution", std::string()));
 	st.answers = (sm.content.contains("answers")
@@ -3457,6 +3499,8 @@ void injectPollMessage(
 	const auto msgId = MsgId(g_nextMsgId++);
 	g_uuidToMsgId.insert(uuid, msgId.bare);
 	g_msgIdToUuid.insert(msgId.bare, uuid);
+	g_mediaContentByMsgId.insert(msgId.bare,
+		QString::fromStdString(sm.content.dump())); // для пересылки опроса
 	if (!isOwn && !isGroup) {
 		g_unreadIncoming[peerId].push_back(uuid);
 	}
@@ -3701,6 +3745,18 @@ void injectOnMain(
 			g_uuidToMsgId.insert(uuid, 0); // обработано, не показываем
 			continue;
 		} else if (pollKind == "poll") {
+			if (sm.from == selfStd) {
+				// Своё из этой сессии (создание/пересылка) — эхо уже есть.
+				auto liveEcho = false;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					liveEcho = (g_ownSentUuids.count(sm.id) > 0);
+				}
+				if (liveEcho) {
+					g_uuidToMsgId.insert(uuid, 0);
+					continue;
+				}
+			}
 			injectPollMessage(session, sm);
 			++added;
 			continue;
@@ -3755,6 +3811,11 @@ void injectOnMain(
 					return (c.contains(k) && c[k].is_number())
 						? c[k].get<int>() : 0;
 				};
+				const auto gjstr = [&](const char *k) {
+					return (c.contains(k) && c[k].is_string())
+						? QString::fromStdString(c[k].get<std::string>())
+						: QString();
+				};
 				const auto gMsgId = MsgId(g_nextMsgId++);
 				g_uuidToMsgId.insert(uuid, gMsgId.bare);
 				g_msgIdToUuid.insert(gMsgId.bare, uuid);
@@ -3767,7 +3828,9 @@ void injectOnMain(
 				pumpMediaDownload(toStr, gChatId, gAuthorId, gOwn, sm.ts, gMsgId,
 					kind, fileId, filename, mime, size,
 					jint("duration_secs"), jint("width"), jint("height"), caption,
-					/*peerIsChat=*/true, /*authorAddr=*/from);
+					/*peerIsChat=*/true, /*authorAddr=*/from,
+					gjstr("file_key"), gjstr("file_nonce"),
+					TtlFromContent(sm.content));
 				++added;
 				LOG(("Parvane: групповое медиа %1 в %2 от %3 (kind=%4) → скачивание")
 					.arg(uuid, toStr, from, kind));
@@ -3894,7 +3957,8 @@ void injectOnMain(
 				kind, fileId, filename, mime, size,
 				durationSecs, width, height, caption,
 				/*peerIsChat=*/false, /*authorAddr=*/QString(),
-				jstr("file_key"), jstr("file_nonce")); // E2E медиа (Фаза 3)
+				jstr("file_key"), jstr("file_nonce"),
+				TtlFromContent(sm.content)); // E2E медиа (Фаза 3)
 			++added;
 			LOG(("Parvane: %1 медиа %2 (%3, kind=%4) → скачивание")
 				.arg(out ? u"своё"_q : u"входящее"_q)
@@ -4140,6 +4204,84 @@ bool MirrorPollClose(std::uint64_t pollId) {
 	HistoryAppend(own);
 	sendInnerAsync(it->chatAddress, content, own.id);
 	LOG(("Parvane: опрос %1 остановлен").arg(uuid));
+	return true;
+}
+
+void ForwardPollCopy(const QString &toAddress, const QString &contentJson) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	auto content = nlohmann::json();
+	try {
+		content = nlohmann::json::parse(contentJson.toStdString());
+	} catch (const std::exception &) {
+		return;
+	}
+	if (content.value("kind", std::string()) != "poll") {
+		return;
+	}
+	parvane::StoredMessage own;
+	own.id = parvane::newUuidV7();
+	own.from = SelfAddress().toStdString();
+	own.to = toAddress.toStdString();
+	own.ts = QDateTime::currentSecsSinceEpoch();
+	own.content = content;
+	// Локальное эхо рисует ШТАТНЫЙ форвард (с меткой «Forwarded from»), мы
+	// только регистрируем состояние копии (для голосов получателя) и шлём.
+	const auto uuid = QString::fromStdString(own.id);
+	auto &st = g_pollsByUuid[uuid];
+	st.uuid = uuid;
+	st.pollId = std::uint64_t(docIdFromFileId(uuid));
+	st.chatAddress = toAddress;
+	st.quiz = content.value("quiz", false);
+	st.publicVoters = content.value("public", false);
+	st.solution = QString::fromStdString(
+		content.value("solution", std::string()));
+	st.answers = (content.contains("answers")
+			&& content["answers"].is_array())
+		? int(content["answers"].size())
+		: 0;
+	g_pollUuidById.insert(st.pollId, uuid);
+	HistoryAppend(own); // после рестарта реплей инъецирует копию
+	sendInnerAsync(toAddress, content, own.id);
+	LOG(("Parvane: опрос переслан (копией) → %1").arg(toAddress));
+}
+
+bool ShowPollResultsBox(PollData *poll) {
+	if (!poll) {
+		return false;
+	}
+	const auto uuid = g_pollUuidById.value(poll->id);
+	if (uuid.isEmpty()) {
+		return false; // не наш опрос
+	}
+	const auto it = g_pollsByUuid.constFind(uuid);
+	if (it == g_pollsByUuid.constEnd()) {
+		return false;
+	}
+	auto text = poll->question.text + u"\n"_q;
+	if (!it->publicVoters) {
+		text += u"\nОпрос анонимный — виден только счётчик голосов."_q;
+	} else {
+		// вариант → список голосовавших (имя из каталога или адрес)
+		for (auto i = 0; i != int(poll->answers.size()); ++i) {
+			auto names = QStringList();
+			for (auto v = it->votes.constBegin();
+					v != it->votes.constEnd(); ++v) {
+				if (v.value().contains(i)) {
+					names.push_back(
+						g_displayNames.value(v.key(), v.key()));
+				}
+			}
+			text += u"\n%1 — %2"_q
+				.arg(poll->answers[i].text.text)
+				.arg(names.isEmpty()
+					? u"нет голосов"_q
+					: names.join(u", "_q));
+		}
+	}
+	Ui::show(Ui::MakeInformBox(text));
 	return true;
 }
 
@@ -5552,6 +5694,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				const auto user = session->data().user(
 					UserId(BareId(IdForAddress(peerAddr))));
 				auto poll = PollData(&session->data(), 0);
+				poll.setFlags(PollData::Flag::PublicVotes); // как дефолт UI
 				poll.question.text = parts[1];
 				for (const auto &optionText : parts[2].split(u',')) {
 					auto answer = PollAnswer();
