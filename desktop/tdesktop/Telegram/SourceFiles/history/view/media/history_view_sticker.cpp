@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/options.h"
 #include "boxes/sticker_set_box.h"
+#include "parvane/parvane_client.h" // установка пака по pack_ref (клик)
 #include "history/history.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
@@ -517,6 +518,13 @@ void Sticker::refreshLink() {
 			if (const auto that = weak.get()) {
 				that->emojiStickerClicked();
 			}
+		});
+	} else if (sticker && Parvane::HasStickerPackRef(_data)) {
+		// Parvane: у принятого стикера есть pack_ref — клик предлагает
+		// установить весь набор (как «Add stickers» в Telegram).
+		const auto data = _data;
+		_link = std::make_shared<LambdaClickHandler>([data] {
+			Parvane::InstallStickerPackFromDocument(data);
 		});
 	} else if (sticker && sticker->set) {
 		if (hasPremiumEffect()) {

@@ -179,6 +179,14 @@ void LeaveGroup(const QString &groupId);
 // SendExistingMedia. Вызывается из Api::SendExistingDocument.
 void MirrorOutgoingSticker(PeerData *peer, DocumentData *document);
 
+// Обмен стикер-паками «как в Telegram»: отправляемый стикер несёт pack_ref
+// (весь набор один раз пакуется в cloud E2E-блобом); у получателя клик по
+// стикеру предлагает установить набор.
+// Есть ли у принятого стикера ссылка на пак (для клика в ленте).
+[[nodiscard]] bool HasStickerPackRef(DocumentData *document);
+// Показать конфирм-бокс и установить набор (скачать, распаковать, подхватить).
+void InstallStickerPackFromDocument(DocumentData *document);
+
 // ── опросы (паритет) ─────────────────────────────────────────────────────────
 // Опрос едет ВНУТРИ E2E-контента (kind=poll), голоса — отдельными kind=poll_vote
 // событиями; сервер их не видит, каждый клиент агрегирует сам. Все три —

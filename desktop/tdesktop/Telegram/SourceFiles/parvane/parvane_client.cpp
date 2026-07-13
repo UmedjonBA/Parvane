@@ -162,6 +162,18 @@ QHash<QString, QImage> g_avatarImages;   // адрес → скачанная к
                                          // повторной установки: ensurePeerUser с
                                          // пустым фото стирает userpic).
 QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для forward)
+// ── обмен стикер-паками ──────────────────────────────────────────────────────
+// Отправляемый стикер из локального пака несёт pack_ref = {file_id архива в
+// cloud, name, count, key, nonce}; архив грузится ОДИН раз за сессию на пак.
+struct PackDirInfo {
+	QString dir;   // абсолютный путь локального пака
+	QString name;  // имя (заголовок набора)
+	int count = 0;
+};
+QHash<quint64, PackDirInfo> g_stickerPackDirs; // setId → пак (main)
+QHash<qint64, QString> g_packRefByDocId;       // docId → pack_ref JSON (main)
+QHash<quint64, QString> g_packRefUploaded;     // setId → pack_ref (g_sessionMutex)
+QSet<QString> g_packInstallBusy;               // file_id идущих установок (main)
 // ── опросы (паритет) — только main-поток ─────────────────────────────────────
 // Опрос = обычное сообщение с E2E-контентом kind=poll (uuid сообщения и есть
 // идентификатор опроса). Голоса/закрытие — отдельные kind=poll_vote/poll_close
@@ -1751,6 +1763,126 @@ void MirrorOutgoingFile(
 	});
 }
 
+namespace {
+
+// Корень локальных стикер-паков (тот же, что в LoadLocalStickerPacks).
+[[nodiscard]] QString StickerPacksRoot() {
+	if (const char *v = std::getenv("PARVANE_STICKERS_DIR"); v && *v) {
+		return QString::fromUtf8(v);
+	}
+	return QDir::homePath() + u"/.local/share/ParvaneStickers"_q;
+}
+
+// Имя пака → безопасное имя каталога (без путей/спецсимволов).
+[[nodiscard]] QString SanitizePackName(const QString &name) {
+	auto out = QString();
+	for (const auto &ch : name) {
+		if (ch.isLetterOrNumber() || ch == u' ' || ch == u'-' || ch == u'_') {
+			out.append(ch);
+		}
+	}
+	out = out.trimmed().left(32);
+	return out.isEmpty() ? u"Pack"_q : out;
+}
+
+// Контейнер пака: "PVPK1" + u32-длина JSON-индекса + индекс
+// [{"name","size"}...] + байты файлов подряд. Лимиты: 200 файлов, 20 МБ.
+constexpr auto kPackMagic = "PVPK1";
+constexpr auto kPackMaxBytes = 20 * 1024 * 1024;
+constexpr auto kPackMaxFiles = 200;
+
+[[nodiscard]] std::string BuildPackArchive(const QString &dir) {
+	const auto d = QDir(dir);
+	const auto files = d.entryList(
+		{ u"*.webp"_q, u"*.png"_q, u"*.tgs"_q, u"*.webm"_q },
+		QDir::Files,
+		QDir::Name);
+	auto index = nlohmann::json::array();
+	std::string blob;
+	auto count = 0;
+	for (const auto &name : files) {
+		if (++count > kPackMaxFiles) {
+			break;
+		}
+		auto f = QFile(d.filePath(name));
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto bytes = f.readAll();
+		if (blob.size() + bytes.size() > kPackMaxBytes) {
+			break;
+		}
+		index.push_back({
+			{ "name", name.toStdString() },
+			{ "size", std::size_t(bytes.size()) },
+		});
+		blob.append(bytes.constData(), bytes.size());
+	}
+	if (index.empty()) {
+		return {};
+	}
+	const auto indexStr = index.dump();
+	std::string out(kPackMagic);
+	const auto len = std::uint32_t(indexStr.size());
+	out.append(reinterpret_cast<const char*>(&len), 4);
+	out.append(indexStr);
+	out.append(blob);
+	return out;
+}
+
+// Распаковка с санитизацией: только basename, только знакомые расширения.
+[[nodiscard]] int UnpackPackArchive(
+		const std::string &bytes,
+		const QString &destDir) {
+	if (bytes.size() < 9 || bytes.compare(0, 5, kPackMagic) != 0
+		|| bytes.size() > std::size_t(kPackMaxBytes) + (1 << 20)) {
+		return 0;
+	}
+	std::uint32_t len = 0;
+	memcpy(&len, bytes.data() + 5, 4);
+	if (9 + std::size_t(len) > bytes.size()) {
+		return 0;
+	}
+	auto index = nlohmann::json();
+	try {
+		index = nlohmann::json::parse(bytes.substr(9, len));
+	} catch (const std::exception &) {
+		return 0;
+	}
+	if (!index.is_array() || index.size() > kPackMaxFiles) {
+		return 0;
+	}
+	if (!QDir().mkpath(destDir)) {
+		return 0;
+	}
+	auto offset = std::size_t(9) + len;
+	auto written = 0;
+	for (const auto &e : index) {
+		const auto name = QFileInfo(QString::fromStdString(
+			e.value("name", std::string()))).fileName();
+		const auto size = e.value("size", std::size_t(0));
+		if (offset + size > bytes.size()) {
+			break;
+		}
+		const auto lower = name.toLower();
+		const auto okExt = lower.endsWith(u".webp"_q)
+			|| lower.endsWith(u".png"_q)
+			|| lower.endsWith(u".tgs"_q)
+			|| lower.endsWith(u".webm"_q);
+		if (!name.isEmpty() && okExt && size > 0) {
+			auto f = QFile(QDir(destDir).filePath(name));
+			if (f.open(QIODevice::WriteOnly)) {
+				f.write(bytes.data() + offset, size);
+				++written;
+			}
+		}
+		offset += size;
+	}
+	return written;
+}
+
+} // namespace
+
 void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 	if (!peer || !document) {
 		return;
@@ -1801,6 +1933,17 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 	const auto token = Token().toStdString();
 	const auto mimeStd = document->mimeString().toStdString();
 	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+	// Стикер из НАШЕГО локального пака — приложим pack_ref (набор пакуется в
+	// cloud один раз за сессию), получатель сможет установить весь набор.
+	auto packSetId = quint64(0);
+	auto packInfo = PackDirInfo();
+	if (sticker && sticker->set.id) {
+		const auto it = g_stickerPackDirs.constFind(sticker->set.id);
+		if (it != g_stickerPackDirs.constEnd()) {
+			packSetId = sticker->set.id;
+			packInfo = it.value();
+		}
+	}
 	crl::async([=] {
 		parvane::ITransport *t = nullptr;
 		parvane::MessengerClient *m = nullptr;
@@ -1839,6 +1982,42 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 				// alt-эмодзи → filename (buildLocalMtpDocument кладёт его в
 				// Sticker-атрибут на приёме).
 				content["filename"] = alt;
+			}
+			// pack_ref: архив набора в cloud (кэш на сессию по setId).
+			if (packSetId) {
+				auto refStr = QString();
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					refStr = g_packRefUploaded.value(packSetId);
+				}
+				if (refStr.isEmpty()) {
+					const auto archive = BuildPackArchive(packInfo.dir);
+					if (!archive.empty()) {
+						auto penc = parvane::blobcrypt::encrypt(archive);
+						if (!penc.ciphertext.empty()) {
+							const auto pfid = cloud.upload(
+								from, token, "pack.pvpk",
+								"application/octet-stream",
+								penc.ciphertext, 256 * 1024, 20000);
+							const parvane::json ref{
+								{ "file_id", pfid },
+								{ "name", packInfo.name.toStdString() },
+								{ "count", packInfo.count },
+								{ "key", penc.keyB64 },
+								{ "nonce", penc.nonceB64 }};
+							refStr = QString::fromStdString(ref.dump());
+							std::lock_guard<std::mutex> lk(g_sessionMutex);
+							g_packRefUploaded.insert(packSetId, refStr);
+							LOG(("Parvane: пак «%1» загружен в cloud (%2 байт)")
+								.arg(packInfo.name)
+								.arg(qint64(archive.size())));
+						}
+					}
+				}
+				if (!refStr.isEmpty()) {
+					content["pack_ref"] = parvane::json::parse(
+						refStr.toStdString());
+				}
 			}
 			std::string id;
 			if (!isGroup) {
@@ -1882,6 +2061,104 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 				.arg(QString::fromUtf8(e.what())));
 		}
 	});
+}
+
+void LoadLocalStickerPacks(not_null<Main::Session*> session); // ниже по файлу
+
+bool HasStickerPackRef(DocumentData *document) {
+	return document && g_packRefByDocId.contains(qint64(document->id));
+}
+
+void InstallStickerPackFromDocument(DocumentData *document) {
+	if (!document) {
+		return;
+	}
+	const auto refStr = g_packRefByDocId.value(qint64(document->id));
+	if (refStr.isEmpty()) {
+		return;
+	}
+	auto ref = nlohmann::json();
+	try {
+		ref = nlohmann::json::parse(refStr.toStdString());
+	} catch (const std::exception &) {
+		return;
+	}
+	const auto name = SanitizePackName(
+		QString::fromStdString(ref.value("name", std::string())));
+	const auto count = ref.value("count", 0);
+	const auto fileId = QString::fromStdString(
+		ref.value("file_id", std::string()));
+	if (fileId.isEmpty() || g_packInstallBusy.contains(fileId)) {
+		return;
+	}
+	const auto dest = StickerPacksRoot() + u"/"_q + name;
+	if (QDir(dest).exists()) {
+		Ui::show(Ui::MakeInformBox(
+			u"Набор «%1» уже установлен."_q.arg(name)));
+		return;
+	}
+	const auto key = ref.value("key", std::string());
+	const auto nonce = ref.value("nonce", std::string());
+	Ui::show(Ui::MakeConfirmBox({
+		.text = u"Добавить набор стикеров «%1» (%2 шт.)?"_q
+			.arg(name)
+			.arg(count),
+		.confirmed = [=](Fn<void()> &&close) {
+			close();
+			g_packInstallBusy.insert(fileId);
+			const auto fid = fileId.toStdString();
+			const auto self = SelfAddress().toStdString();
+			const auto token = Token().toStdString();
+			crl::async([=] {
+				parvane::ITransport *t = nullptr;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					t = g_transport.get();
+				}
+				auto unpacked = 0;
+				if (t) {
+					try {
+						parvane::CloudClient cloud(*t);
+						auto d = cloud.download(self, token, fid, 20000);
+						if (d.ok) {
+							auto bytes = std::string();
+							if (key.empty()) {
+								bytes = std::move(d.bytes);
+							} else if (auto dec = parvane::blobcrypt::decrypt(
+									d.bytes, key, nonce)) {
+								bytes = std::move(*dec);
+							}
+							if (!bytes.empty()) {
+								unpacked = UnpackPackArchive(bytes, dest);
+							}
+						}
+					} catch (const std::exception &e) {
+						LOG(("Parvane: установка пака не удалась: %1")
+							.arg(QString::fromUtf8(e.what())));
+					}
+				}
+				crl::on_main([=] {
+					g_packInstallBusy.remove(fileId);
+					if (unpacked > 0) {
+						if (const auto s = g_sessionWeak.get()) {
+							LoadLocalStickerPacks(s);
+						}
+						LOG(("Parvane: пак «%1» установлен (%2 шт)")
+							.arg(name)
+							.arg(unpacked));
+						Ui::show(Ui::MakeInformBox(
+							u"Набор «%1» добавлен (%2 шт.)."_q
+								.arg(name)
+								.arg(unpacked)));
+					} else {
+						Ui::show(Ui::MakeInformBox(
+							u"Не удалось установить набор «%1»."_q.arg(name)));
+					}
+				});
+			});
+		},
+		.confirmText = u"Добавить"_q,
+	}));
 }
 
 void AttachLocalOutgoingMedia(
@@ -3483,6 +3760,10 @@ void injectOnMain(
 				g_msgIdToUuid.insert(gMsgId.bare, uuid);
 				g_mediaContentByMsgId.insert(gMsgId.bare,
 					QString::fromStdString(c.dump()));
+				if (kind == u"sticker"_q && c.contains("pack_ref")) {
+					g_packRefByDocId.insert(docIdFromFileId(fileId),
+						QString::fromStdString(c["pack_ref"].dump()));
+				}
 				pumpMediaDownload(toStr, gChatId, gAuthorId, gOwn, sm.ts, gMsgId,
 					kind, fileId, filename, mime, size,
 					jint("duration_secs"), jint("width"), jint("height"), caption,
@@ -3598,6 +3879,10 @@ void injectOnMain(
 			g_msgIdToUuid.insert(msgId.bare, uuid);
 			g_mediaContentByMsgId.insert(msgId.bare,
 				QString::fromStdString(c.dump())); // для пересылки
+			if (kind == u"sticker"_q && c.contains("pack_ref")) {
+				g_packRefByDocId.insert(docIdFromFileId(fileId),
+					QString::fromStdString(c["pack_ref"].dump()));
+			}
 			if (!out) {
 				g_unreadIncoming[peerId].push_back(uuid);
 			}
@@ -4637,6 +4922,8 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 		if (!order.contains(setId)) {
 			order.push_back(setId);
 		}
+		g_stickerPackDirs.insert(setId, PackDirInfo{
+			packDir.absolutePath(), packName, int(docs.size()) });
 		++loaded;
 		LOG(("Parvane: стикер-пак «%1» загружен (%2 шт)")
 			.arg(packName)
