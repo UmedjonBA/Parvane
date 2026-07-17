@@ -41,6 +41,12 @@ export class GatewayConnection {
 
   private pendingAuth?: { resolve: (user: string) => void; reject: (err: Error) => void };
 
+  private pendingManyById = new Map<string, {
+    onReply: (payload: string) => void;
+    onEnd: () => void;
+    onError: (err: Error) => void;
+  }>();
+
   onClose?: () => void;
 
   connect(url: string) {
@@ -74,6 +80,36 @@ export class GatewayConnection {
       this.pendingById.set(id, { resolve, reject, timer });
       this.sendFrame({
         op: 'req', id, subject, payload, timeout_ms: timeoutMs,
+      });
+    });
+  }
+
+  // Один запрос — много ответов (чанки файла): собираем до reply_end.
+  // ВАЖНО: gateway ждёт `timeout_ms` ТИШИНЫ после последнего ответа, прежде чем
+  // прислать reply_end — интервал должен быть коротким, а общий лимит щедрым
+  requestMany(subject: string, payload: string, silenceMs = 4000, totalMs = 90000) {
+    const id = String(++this.requestSeq);
+    return new Promise<string[]>((resolve, reject) => {
+      const replies: string[] = [];
+      const timer = window.setTimeout(() => {
+        this.pendingManyById.delete(id);
+        reject(new Error(`Таймаут reqmany ${subject}`));
+      }, totalMs);
+      this.pendingManyById.set(id, {
+        onReply: (reply) => replies.push(reply),
+        onEnd: () => {
+          clearTimeout(timer);
+          this.pendingManyById.delete(id);
+          resolve(replies);
+        },
+        onError: (err) => {
+          clearTimeout(timer);
+          this.pendingManyById.delete(id);
+          reject(err);
+        },
+      });
+      this.sendFrame({
+        op: 'reqmany', id, subject, payload, timeout_ms: silenceMs,
       });
     });
   }
@@ -120,6 +156,11 @@ export class GatewayConnection {
         this.pendingAuth = undefined;
         break;
       case 'reply': {
+        const pendingMany = frame.id ? this.pendingManyById.get(frame.id) : undefined;
+        if (pendingMany) {
+          pendingMany.onReply(frame.payload || '');
+          break;
+        }
         const pending = frame.id ? this.pendingById.get(frame.id) : undefined;
         if (pending) {
           clearTimeout(pending.timer);
@@ -128,7 +169,17 @@ export class GatewayConnection {
         }
         break;
       }
+      case 'reply_end': {
+        const pendingMany = frame.id ? this.pendingManyById.get(frame.id) : undefined;
+        pendingMany?.onEnd();
+        break;
+      }
       case 'err': {
+        const pendingMany = frame.id ? this.pendingManyById.get(frame.id) : undefined;
+        if (pendingMany) {
+          pendingMany.onError(new Error(frame.error || 'Ошибка запроса'));
+          break;
+        }
         const pending = frame.id ? this.pendingById.get(frame.id) : undefined;
         if (pending) {
           clearTimeout(pending.timer);
@@ -155,6 +206,8 @@ export class GatewayConnection {
       pending.reject(err);
     });
     this.pendingById.clear();
+    this.pendingManyById.forEach((pending) => pending.onError(err));
+    this.pendingManyById.clear();
     this.pendingAuth?.reject(err);
     this.pendingAuth = undefined;
   }

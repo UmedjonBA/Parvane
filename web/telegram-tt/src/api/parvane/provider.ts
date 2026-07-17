@@ -26,6 +26,9 @@ import { ParvaneStore } from './store';
 import {
   buildMsgInboxTopic,
   buildWireEvent,
+  TOPIC_FILE_DOWNLOAD_REQUEST,
+  TOPIC_FILE_UPLOAD_CHUNK,
+  TOPIC_FILE_UPLOAD_COMPLETE,
   TOPIC_GROUP_LIST,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
@@ -48,6 +51,8 @@ const DELTA_SYNC_INTERVAL_MS = 10000;
 const PRESENCE_INTERVAL_MS = 30000;
 const PRESENCE_TTL_SECS = 90;
 const TYPING_CLEAR_MS = 6000;
+const UPLOAD_CHUNK_BYTES = 192 * 1024;
+const MEDIA_TIMEOUT_MS = 30000;
 
 let onUpdate: OnApiUpdate = () => undefined;
 let connection: GatewayConnection | undefined;
@@ -635,7 +640,7 @@ const methods = {
     const localMessage: ApiMessage = {
       id,
       chatId: chat.id,
-      content: { text: { text: text || '' } },
+      content: buildLocalContent(uuid, params),
       date: Math.floor(Date.now() / 1000),
       isOutgoing: true,
       senderId: selfId(),
@@ -657,7 +662,7 @@ const methods = {
   async sendMessage(params: SendMessageParams, _onProgress?: ApiOnProgress) {
     const localMessage = params.localMessage
       || await methods.sendMessageLocal(params);
-    const { chat } = params;
+    const { chat, attachment } = params;
     if (!localMessage || !chat) return;
 
     const toAddress = store.getAddressForId(chat.id);
@@ -666,6 +671,69 @@ const methods = {
     const uuid = uuidBySentLocalKey.get(`${chat.id}:${localMessage.id}`) || crypto.randomUUID();
     const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
     const replyToUuid = replyToMsgId ? store.getUuidForMessage(chat.id, replyToMsgId) : undefined;
+
+    let wireContent: Record<string, unknown> = { kind: 'text', text: params.text || '' };
+    let sentContent = localMessage.content;
+    if (attachment) {
+      try {
+        const blob: Blob = attachment.blob ?? await fetch(attachment.blobUrl).then((r) => r.blob());
+        const { fileId, size } = await uploadBlobToCloud(blob, attachment.filename, attachment.mimeType);
+        if (isPhotoAttachment(attachment)) {
+          wireContent = {
+            kind: 'photo',
+            file_id: fileId,
+            width: attachment.quick!.width,
+            height: attachment.quick!.height,
+            mime: attachment.mimeType,
+            size_bytes: size,
+            caption: params.text || undefined,
+          };
+          sentContent = {
+            ...(params.text ? { text: { text: params.text } } : {}),
+            photo: {
+              mediaType: 'photo',
+              id: fileId,
+              date: localMessage.date,
+              blobUrl: attachment.blobUrl,
+              sizes: [
+                { type: 'x', width: attachment.quick!.width, height: attachment.quick!.height },
+                { type: 'y', width: attachment.quick!.width, height: attachment.quick!.height },
+              ],
+            },
+          };
+        } else {
+          wireContent = {
+            kind: 'file',
+            file_id: fileId,
+            filename: attachment.filename,
+            mime: attachment.mimeType,
+            size_bytes: size,
+            caption: params.text || undefined,
+          };
+          sentContent = {
+            ...(params.text ? { text: { text: params.text } } : {}),
+            document: {
+              mediaType: 'document',
+              id: fileId,
+              fileName: attachment.filename,
+              size,
+              mimeType: attachment.mimeType,
+              timestamp: localMessage.date,
+            },
+          };
+        }
+      } catch (err) {
+        logDebug(`загрузка вложения не удалась: ${String(err)}`);
+        sendUpdate({
+          '@type': 'updateMessageSendFailed',
+          chatId: chat.id,
+          localId: localMessage.id,
+          error: 'Upload failed',
+        });
+        return;
+      }
+    }
+
     const event = {
       id: uuid,
       from: store.self,
@@ -673,19 +741,44 @@ const methods = {
       token,
       payload: {
         to: toAddress,
-        content: { kind: 'text', text: params.text || '' },
+        content: wireContent,
         reply_to: replyToUuid,
       },
     };
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify(event));
 
-    const sentMessage: ApiMessage = { ...localMessage, sendingState: undefined };
+    const sentMessage: ApiMessage = { ...localMessage, content: sentContent, sendingState: undefined };
     store.putMessage(sentMessage);
     sendUpdate({
       '@type': 'updateMessageSendSucceeded',
       chatId: chat.id,
       localId: localMessage.id,
       message: sentMessage,
+    });
+  },
+
+  downloadMedia(
+    { url, mediaFormat, start, end }: { url: string; mediaFormat: number; start?: number; end?: number },
+    _onProgress?: ApiOnProgress,
+  ) {
+    const match = url.match(MEDIA_URL_REGEX);
+    if (!match) return Promise.resolve(undefined);
+    const fileId = match[1];
+
+    let cached = mediaCacheByFileId.get(fileId);
+    if (!cached) {
+      cached = downloadBlobFromCloud(fileId);
+      mediaCacheByFileId.set(fileId, cached);
+      cached.catch(() => mediaCacheByFileId.delete(fileId));
+    }
+    return cached.then(async (result) => {
+      if (!result) return undefined;
+      if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT) {
+        const buffer = await result.blob.arrayBuffer();
+        const slice = buffer.slice(start || 0, end !== undefined ? end + 1 : undefined);
+        return { arrayBuffer: slice, mimeType: result.mimeType, fullSize: buffer.byteLength };
+      }
+      return { dataBlob: result.blob, mimeType: result.mimeType };
     });
   },
 
@@ -785,6 +878,119 @@ const methods = {
 
 function selfId() {
   return store.getIdForAddress(store.self);
+}
+
+// ── медиа через cloud-шард ───────────────────────────────────────────────────
+
+function encodeBase64(bytes: Uint8Array) {
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+function decodeBase64(data: string) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string) {
+  const fileId = crypto.randomUUID();
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const totalChunks = Math.max(1, Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES));
+  for (let index = 0; index < totalChunks; index++) {
+    const slice = bytes.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
+    const chunkEvent = buildWireEvent(store.self, token, {
+      file_id: fileId,
+      chunk_index: index,
+      total_chunks: totalChunks,
+      data: encodeBase64(slice),
+      filename,
+      mime_type: mimeType,
+    });
+    await connection!.request(TOPIC_FILE_UPLOAD_CHUNK, JSON.stringify(chunkEvent), MEDIA_TIMEOUT_MS);
+  }
+  const completeEvent = buildWireEvent(store.self, token, {
+    file_id: fileId,
+    filename,
+    total_chunks: totalChunks,
+    size_bytes: bytes.length,
+    mime_type: mimeType,
+  });
+  const raw = await connection!.request(TOPIC_FILE_UPLOAD_COMPLETE, JSON.stringify(completeEvent), MEDIA_TIMEOUT_MS);
+  const resp = JSON.parse(raw) as { ok: boolean; error?: string };
+  if (!resp.ok) throw new Error(resp.error || 'upload.complete отказ');
+  return { fileId, size: bytes.length };
+}
+
+type WireDownloadChunk = {
+  ok: boolean;
+  chunk_index?: number;
+  total_chunks?: number;
+  data?: string;
+  mime_type?: string;
+  error?: string;
+};
+
+async function downloadBlobFromCloud(fileId: string): Promise<{ blob: Blob; mimeType: string } | undefined> {
+  const event = buildWireEvent(store.self, token, { file_id: fileId });
+  const replies = await connection!.requestMany(TOPIC_FILE_DOWNLOAD_REQUEST, JSON.stringify(event));
+  const chunks = replies
+    .map((r) => JSON.parse(r) as WireDownloadChunk)
+    .filter((c) => c.ok && c.data !== undefined && c.chunk_index !== undefined)
+    .sort((a, b) => a.chunk_index! - b.chunk_index!);
+  if (!chunks.length) return undefined;
+  const parts = chunks.map((c) => decodeBase64(c.data!));
+  const mimeType = chunks[0].mime_type || 'application/octet-stream';
+  return { blob: new Blob(parts as BlobPart[], { type: mimeType }), mimeType };
+}
+
+const MEDIA_URL_REGEX = /^(?:photo|document)([0-9a-f-]{36})/;
+const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
+const mediaCacheByFileId = new Map<string, Promise<{ blob: Blob; mimeType: string } | undefined>>();
+
+function isPhotoAttachment(attachment: NonNullable<SendMessageParams['attachment']>) {
+  return Boolean(
+    attachment.mimeType.startsWith('image/') && attachment.quick && !attachment.shouldSendAsFile,
+  );
+}
+
+function buildLocalContent(uuid: string, params: SendMessageParams): ApiMessage['content'] {
+  const { attachment, text } = params;
+  const caption = text ? { text: { text } } : {};
+  if (!attachment) {
+    return { text: { text: text || '' } };
+  }
+  if (isPhotoAttachment(attachment)) {
+    return {
+      ...caption,
+      photo: {
+        mediaType: 'photo',
+        id: uuid,
+        date: Math.floor(Date.now() / 1000),
+        blobUrl: attachment.blobUrl,
+        sizes: [
+          { type: 'x', width: attachment.quick!.width, height: attachment.quick!.height },
+          { type: 'y', width: attachment.quick!.width, height: attachment.quick!.height },
+        ],
+      },
+    };
+  }
+  return {
+    ...caption,
+    document: {
+      mediaType: 'document',
+      id: uuid,
+      fileName: attachment.filename,
+      size: attachment.size,
+      mimeType: attachment.mimeType,
+      previewBlobUrl: attachment.previewBlobUrl,
+    },
+  };
 }
 
 function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
