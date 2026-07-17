@@ -30,6 +30,7 @@ import {
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_RESOLVE,
+  TOPIC_IDENTITY_SEARCH,
   TOPIC_MSG_ACK,
   TOPIC_MSG_DELETE,
   TOPIC_MSG_EDIT,
@@ -688,6 +689,30 @@ const methods = {
     });
   },
 
+  async searchChats({ query }: { query: string }) {
+    if (!connection || !query.trim()) {
+      return { accountResultIds: [], globalResultIds: [] };
+    }
+    const raw = await connection.request(TOPIC_IDENTITY_SEARCH, JSON.stringify({ query: query.trim() }));
+    const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
+    const globalResultIds: string[] = [];
+    users.forEach((u) => {
+      if (u.username === store.self) return;
+      store.setDisplayName(u.username, u.display_name || u.username);
+      announcePeer(u.username);
+      globalResultIds.push(store.getIdForAddress(u.username));
+    });
+    return { accountResultIds: [], globalResultIds };
+  },
+
+  searchMessagesGlobal({ query }: { query?: string }) {
+    return Promise.resolve(buildSearchResults(searchLocalMessages(query)));
+  },
+
+  searchMessagesInChat({ peer, query }: { peer: { id: string }; query?: string }) {
+    return Promise.resolve(buildSearchResults(searchLocalMessages(query, peer.id)));
+  },
+
   oldFetchLangPack({ langCode }: { langCode: string }) {
     return Promise.resolve({ langPack: buildOldLangPack(langCode) });
   },
@@ -726,6 +751,16 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
+  async fetchContactList() {
+    await ensureSynced();
+    const users = store.getKnownUserAddresses()
+      .filter((address) => address !== store.self)
+      .map((address) => store.buildApiUser(address));
+    const userStatusesById: Record<string, ApiUserStatus> = {};
+    users.forEach((u) => { userStatusesById[u.id] = RECENT_STATUS; });
+    return { users, userStatusesById };
+  },
+
   fetchCurrentUser() {
     return Promise.resolve(undefined);
   },
@@ -750,6 +785,25 @@ const methods = {
 
 function selfId() {
   return store.getIdForAddress(store.self);
+}
+
+function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
+  const needle = query?.trim().toLowerCase();
+  if (!needle) return [];
+  const chatIds = chatId ? [chatId] : store.getChatIds();
+  return chatIds
+    .flatMap((id) => store.getMessages(id))
+    .filter((m) => m.content.text?.text.toLowerCase().includes(needle))
+    .sort((a, b) => b.date - a.date);
+}
+
+function buildSearchResults(messages: ApiMessage[]) {
+  return {
+    messages,
+    topics: [],
+    userStatusesById: {},
+    totalCount: messages.length,
+  };
 }
 
 function collectUsersFor(messages: ApiMessage[]): ApiUser[] {
