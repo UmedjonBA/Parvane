@@ -15,6 +15,7 @@ const MONTH_KEYS = [
 
 export function buildOldLangPack(langCode: string): ApiOldLangPack {
   const pack: ApiOldLangPack = {
+    UnreadMessages: 'Unread Messages',
     'Weekday.Today': 'Today',
     'Weekday.Yesterday': 'Yesterday',
     formatDateAtTime: '%1$s at %2$s',
