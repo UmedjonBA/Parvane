@@ -36,6 +36,21 @@ public:
                                 const std::string &member, const std::string &role,
                                 int timeoutMs = 3000);
 
+    // Бан/разбан участника (owner/admin; owner небаним).
+    GroupActionResponse ban(const std::string &token, const std::string &groupId,
+                            const std::string &member, bool banned,
+                            int timeoutMs = 3000);
+    // Мьют до unix-времени until (0 — снять). owner/admin; owner немьютим.
+    GroupActionResponse mute(const std::string &token, const std::string &groupId,
+                             const std::string &member, long long until,
+                             int timeoutMs = 3000);
+    // Создать инвайт-токен (owner/admin). Пустая строка при ошибке.
+    std::string inviteCreate(const std::string &token, const std::string &groupId,
+                             int timeoutMs = 3000);
+    // Вступить по инвайт-токену. Возвращает {ok,group_id,name,error} JSON-ом.
+    json join(const std::string &token, const std::string &invite,
+              int timeoutMs = 3000);
+
 private:
     ITransport &_t;
 };

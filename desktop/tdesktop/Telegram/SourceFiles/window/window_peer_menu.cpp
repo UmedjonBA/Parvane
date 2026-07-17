@@ -311,6 +311,7 @@ private:
 	void addManageTopic();
 	void addManageChat();
 	void addCreatePoll();
+	void addParvaneInviteLink();
 	void addCreateTodoList();
 	void addThemeEdit();
 	void addToggleNoForwards();
@@ -1306,6 +1307,18 @@ void Filler::addCreatePoll() {
 		&st::menuIconCreatePoll);
 }
 
+void Filler::addParvaneInviteLink() {
+	// Parvane: инвайт-ссылка нашей группы (бэкенд гейтит права owner/admin).
+	const auto gid = Parvane::GroupIdForChat(_peer);
+	if (gid.isEmpty()) {
+		return;
+	}
+	_addAction(
+		u"Ссылка-приглашение"_q,
+		[gid] { Parvane::CreateInviteLink(gid); },
+		&st::menuIconInvite);
+}
+
 void Filler::addCreateTodoList() {
 	if (skipCreateActions()) {
 		return;
@@ -1776,6 +1789,7 @@ void Filler::fillHistoryActions() {
 	addSupportInfo();
 	addBoostChat();
 	addCreatePoll();
+	addParvaneInviteLink();
 	addCreateTodoList();
 	addThemeEdit();
 	addToggleNoForwards();
@@ -1824,6 +1838,7 @@ void Filler::fillRepliesActions() {
 	}
 	addBoostChat();
 	addCreatePoll();
+	addParvaneInviteLink();
 	addCreateTodoList();
 	addToggleTopicClosed();
 	addDeleteTopic();

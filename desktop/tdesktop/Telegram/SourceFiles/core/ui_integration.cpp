@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/ui_integration.h"
 
+#include "parvane/parvane_client.h" // инвайт-ссылки групп
+
 #include "api/api_text_entities.h"
 #include "core/local_url_handlers.h"
 #include "core/file_utilities.h"
@@ -404,6 +406,10 @@ std::shared_ptr<ClickHandler> UiIntegration::createLinkHandler(
 bool UiIntegration::handleUrlClick(
 		const QString &url,
 		const QVariant &context) {
+	// Parvane: инвайт-ссылка группы — вступление вместо браузера.
+	if (Parvane::JoinByInviteLink(url)) {
+		return true;
+	}
 	const auto local = Core::TryConvertUrlToLocal(url);
 	if (Core::InternalPassportOrOAuthLink(local)) {
 		return true;

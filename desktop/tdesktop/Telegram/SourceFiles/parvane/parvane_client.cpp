@@ -78,6 +78,8 @@
 #include <QtCore/QDir>
 #include <QtCore/QDateTime>
 #include <QtGui/QImage>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QClipboard>
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
@@ -4830,6 +4832,155 @@ void KickMember(const QString &groupId, const QString &member) {
 }
 void SetMemberRole(const QString &groupId, const QString &member, bool admin) {
 	groupAdminAction(groupId, member, admin ? u"admin"_q : u"member"_q);
+}
+
+void BanMember(const QString &groupId, const QString &member, bool ban) {
+	const auto token = Token().toStdString();
+	const auto gid = groupId.toStdString();
+	const auto mem = member.toStdString();
+	crl::async([token, gid, mem, ban] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		if (!g) {
+			return;
+		}
+		try {
+			const auto r = g->ban(token, gid, mem, ban);
+			LOG(("Parvane: %1 %2 в %3 — %4")
+				.arg(ban ? u"бан"_q : u"разбан"_q)
+				.arg(QString::fromStdString(mem))
+				.arg(QString::fromStdString(gid))
+				.arg(r.ok ? u"ok"_q : u"ОТКАЗ"_q));
+		} catch (const std::exception &) {
+		}
+		crl::on_main([] { RefreshGroups(); });
+	});
+}
+
+void MuteMember(const QString &groupId, const QString &member, int minutes) {
+	const auto token = Token().toStdString();
+	const auto gid = groupId.toStdString();
+	const auto mem = member.toStdString();
+	const auto until = (minutes > 0)
+		? (QDateTime::currentSecsSinceEpoch() + qint64(minutes) * 60)
+		: qint64(0);
+	crl::async([token, gid, mem, until] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		if (!g) {
+			return;
+		}
+		try {
+			const auto r = g->mute(token, gid, mem, until);
+			LOG(("Parvane: мьют %1 в %2 до %3 — %4")
+				.arg(QString::fromStdString(mem))
+				.arg(QString::fromStdString(gid))
+				.arg(until)
+				.arg(r.ok ? u"ok"_q : u"ОТКАЗ"_q));
+		} catch (const std::exception &) {
+		}
+	});
+}
+
+void CreateInviteLink(const QString &groupId) {
+	const auto token = Token().toStdString();
+	const auto gid = groupId.toStdString();
+	crl::async([token, gid] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		auto invite = std::string();
+		if (g) {
+			try {
+				invite = g->inviteCreate(token, gid);
+			} catch (const std::exception &) {
+			}
+		}
+		crl::on_main([invite] {
+			if (invite.empty()) {
+				Ui::show(Ui::MakeInformBox(
+					u"Не удалось создать ссылку (нужны права админа)."_q));
+				return;
+			}
+			const auto link = u"https://parvane.invite/"_q
+				+ QString::fromStdString(invite);
+			QGuiApplication::clipboard()->setText(link);
+			LOG(("Parvane: инвайт-ссылка создана: %1").arg(link));
+			Ui::show(Ui::MakeInformBox(
+				u"Ссылка-приглашение скопирована в буфер обмена:\n\n%1"_q
+					.arg(link)));
+		});
+	});
+}
+
+bool JoinByInviteLink(const QString &url) {
+	auto u = url.trimmed();
+	auto token = QString();
+	for (const auto &prefix : {
+			u"https://parvane.invite/"_q,
+			u"http://parvane.invite/"_q,
+			u"parvane.invite/"_q }) {
+		if (u.startsWith(prefix, Qt::CaseInsensitive)) {
+			token = u.mid(prefix.size());
+			break;
+		}
+	}
+	if (token.isEmpty()) {
+		return false; // не наша ссылка
+	}
+	token = token.section(u'/', 0, 0).section(u'?', 0, 0);
+	const auto tokenStd = token.toStdString();
+	Ui::show(Ui::MakeConfirmBox({
+		.text = u"Вступить в группу по приглашению?"_q,
+		.confirmed = [tokenStd](Fn<void()> &&close) {
+			close();
+			const auto jwt = Token().toStdString();
+			crl::async([jwt, tokenStd] {
+				parvane::GroupClient *g = nullptr;
+				{
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					g = g_groupClient.get();
+				}
+				auto ok = false;
+				auto name = QString();
+				auto error = QString();
+				if (g) {
+					try {
+						const auto r = g->join(jwt, tokenStd);
+						ok = r.value("ok", false);
+						name = QString::fromStdString(
+							r.value("name", std::string()));
+						error = QString::fromStdString(
+							r.value("error", std::string()));
+					} catch (const std::exception &e) {
+						error = QString::fromUtf8(e.what());
+					}
+				}
+				crl::on_main([ok, name, error] {
+					if (ok) {
+						RefreshGroups();
+						LOG(("Parvane: вступил в группу «%1» по инвайту")
+							.arg(name));
+						Ui::show(Ui::MakeInformBox(
+							u"Вы вступили в группу «%1»."_q.arg(name)));
+					} else {
+						Ui::show(Ui::MakeInformBox(
+							u"Не удалось вступить: %1"_q.arg(error)));
+					}
+				});
+			});
+		},
+		.confirmText = u"Вступить"_q,
+	}));
+	return true;
 }
 void LeaveGroup(const QString &groupId) {
 	groupAdminAction(groupId, SelfAddress(), u"remove"_q); // сам себя = выйти

@@ -66,6 +66,11 @@ pub mod topics {
     pub const GROUP_SET_ROLE: &str = "group.setrole";
     pub const GROUP_LIST: &str = "group.list";
     pub const GROUP_INFO: &str = "group.info";
+    pub const GROUP_BAN: &str = "group.ban";
+    pub const GROUP_UNBAN: &str = "group.unban";
+    pub const GROUP_MUTE: &str = "group.mute";
+    pub const GROUP_INVITE_CREATE: &str = "group.invite.create";
+    pub const GROUP_JOIN: &str = "group.join";
 
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
@@ -894,6 +899,50 @@ pub struct GroupSetRoleRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupActionResponse {
     pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Замьютить участника до unix-времени `until` (0 — снять мьют).
+/// Только owner/admin; owner мьютить нельзя.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMuteRequest {
+    pub token: String,
+    pub group_id: String,
+    pub member: String,
+    pub until: i64,
+}
+
+/// Создать инвайт-ссылку (owner/admin). Ответ несёт token ссылки.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInviteCreateRequest {
+    pub token: String,
+    pub group_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInviteCreateResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub invite: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Вступить в группу по инвайт-токену.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupJoinRequest {
+    pub token: String,
+    pub invite: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupJoinResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }
