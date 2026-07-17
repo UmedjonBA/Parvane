@@ -71,6 +71,7 @@ export const TOPIC_IDENTITY_REGISTER = 'identity.user.register';
 export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
 export const TOPIC_MSG_SEND = 'msg.chat.send';
 export const TOPIC_MSG_ACK = 'msg.chat.ack';
+export const TOPIC_MSG_READ = 'msg.chat.read';
 export const TOPIC_MSG_SYNC_REQUEST = 'msg.sync.request';
 export const TOPIC_GROUP_LIST = 'group.list';
 

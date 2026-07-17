@@ -2194,6 +2194,8 @@ export interface LangPair {
   'PollModalSettingsTitle': undefined;
   'PollModalAddNoMore': undefined;
   'PollDurationOther': undefined;
+  'ParvaneStartText': undefined;
+  'ParvaneAddress': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

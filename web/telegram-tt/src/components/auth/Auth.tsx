@@ -13,9 +13,8 @@ import useHistoryBack from '../../hooks/useHistoryBack';
 
 import Transition from '../ui/Transition';
 import AuthCode from './AuthCode.async';
+import AuthParvane from './AuthParvane';
 import AuthPassword from './AuthPassword.async';
-import AuthPhoneNumber from './AuthPhoneNumber';
-import AuthQrCode from './AuthQrCode';
 import AuthRegister from './AuthRegister.async';
 
 import './Auth.scss';
@@ -62,11 +61,10 @@ const Auth = ({
       case 'authorizationStateWaitRegistration':
         return <AuthRegister />;
       case 'authorizationStateWaitPhoneNumber':
-        return <AuthPhoneNumber />;
       case 'authorizationStateWaitQrCode':
-        return <AuthQrCode />;
+        return <AuthParvane />;
       default:
-        return isMobile ? <AuthPhoneNumber /> : <AuthQrCode />;
+        return <AuthParvane />;
     }
   }
 

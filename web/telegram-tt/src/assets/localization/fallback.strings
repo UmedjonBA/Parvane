@@ -3015,3 +3015,5 @@
 "PollModalAddMoreText_other" = "You can add {count} more options.";
 "PollModalAddNoMore" = "You have added the maximum number of options.";
 "PollDurationOther" = "Other";
+"ParvaneStartText" = "Enter your Parvane address to sign in or create an account.";
+"ParvaneAddress" = "Address (user@server)";

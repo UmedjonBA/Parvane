@@ -14,13 +14,14 @@ import type {
 } from '../types';
 import { MAIN_THREAD_ID } from '../types';
 import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
-import type { SendMessageParams } from '../../types';
+import type { SendMessageParams, ThreadReadState } from '../../types';
 import type { ApiChat } from '../types';
 import type {
   WireEvent, WireGroupInfo, WireStoredMessage, WireUserInfo,
 } from './wire';
 
 import { GatewayConnection, getGatewayUrl } from './gateway';
+import { buildOldLangPack } from './oldLangPack';
 import { ParvaneStore } from './store';
 import {
   buildMsgInboxTopic,
@@ -30,6 +31,7 @@ import {
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_RESOLVE,
   TOPIC_MSG_ACK,
+  TOPIC_MSG_READ,
   TOPIC_MSG_SEND,
   TOPIC_MSG_SYNC_REQUEST,
 } from './wire';
@@ -37,15 +39,28 @@ import {
 const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
 const SYNC_TIMEOUT_MS = 15000;
+const DELTA_SYNC_INTERVAL_MS = 10000;
 
 let onUpdate: OnApiUpdate = () => undefined;
 let connection: GatewayConnection | undefined;
 let store = new ParvaneStore();
 let token = '';
+let pendingLoginAddress = '';
 let isSynced = false;
 let syncPromise: Promise<void> | undefined;
+let syncTimer: number | undefined;
+// Курсоры дельта-синка (аналог PumpReceive в десктоп-форке): uuid v7
+// лексикографически упорядочен по времени, поэтому max-строка = новейший
+let lastSeenUuid = '';
+let sinceUpdated = 0;
 const uuidBySentLocalKey = new Map<string, string>();
 const reportedMissingMethods = new Set<string>();
+// Снапшот флагов мутаций по uuid — чтобы дельта-синк видел, что изменилось
+const wireFlagsByUuid = new Map<string, { read: boolean; edited: boolean; deleted: boolean }>();
+// Максимальный прочитанный собеседником id исходящего по чату (для ✓✓)
+const readOutboxMaxByChatId = new Map<string, number>();
+// Уже отправленные read-квитанции (не спамить повторно)
+const reportedReadUuids = new Set<string>();
 
 export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialArgs) {
   onUpdate = _onUpdate;
@@ -72,6 +87,7 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
 }
 
 async function connectAndLogin(user: string, password: string) {
+  connection?.close();
   connection = new GatewayConnection();
   await connection.connect(getGatewayUrl());
   logDebug('WS открыт');
@@ -85,6 +101,11 @@ async function connectAndLogin(user: string, password: string) {
   store.self = user;
   isSynced = false;
   syncPromise = undefined;
+  lastSeenUuid = '';
+  sinceUpdated = 0;
+  wireFlagsByUuid.clear();
+  readOutboxMaxByChatId.clear();
+  reportedReadUuids.clear();
 
   connection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
   connection.onClose = () => {
@@ -98,6 +119,9 @@ async function connectAndLogin(user: string, password: string) {
   sendUpdate({ '@type': 'updateCurrentUser', currentUser, currentUserFullInfo: {} });
   sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateReady' });
   sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateReady' });
+
+  window.clearInterval(syncTimer);
+  syncTimer = window.setInterval(() => { void runDeltaSync(); }, DELTA_SYNC_INTERVAL_MS);
 }
 
 function logDebug(message: string) {
@@ -149,7 +173,19 @@ async function runFullSync() {
   messages
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
     .forEach((stored) => {
-      store.putMessage(store.buildApiMessage(stored));
+      trackCursors(stored);
+      wireFlagsByUuid.set(stored.id, {
+        read: Boolean(stored.read), edited: Boolean(stored.edited), deleted: Boolean(stored.deleted),
+      });
+      const message = store.buildApiMessage(stored);
+      store.putMessage(message);
+      if (message.isOutgoing && stored.read) {
+        const current = readOutboxMaxByChatId.get(message.chatId) || 0;
+        if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
+      }
+      if (!message.isOutgoing && stored.read) {
+        reportedReadUuids.add(stored.id);
+      }
     });
 
   const peerAddresses = new Set<string>();
@@ -186,23 +222,92 @@ function handleInboxFrame(payload: string) {
   }
 
   const stored = event.payload?.message;
-  if (!stored) return; // delivered-квитанции подключим со статусами
+  if (!stored) return; // delivered-квитанция; у Telegram нет отдельного статуса
+
+  applyStoredUpdate(stored, true);
+}
+
+// Общий приёмник состояния сообщения — и для инбокс-пуша, и для дельта-синка.
+// Новое → newMessage; мутации known → deleteMessages / updateMessage / ✓✓.
+function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: boolean) {
+  trackCursors(stored);
+  const prevFlags = wireFlagsByUuid.get(stored.id);
+  const flags = {
+    read: Boolean(stored.read), edited: Boolean(stored.edited), deleted: Boolean(stored.deleted),
+  };
+  wireFlagsByUuid.set(stored.id, flags);
 
   const isKnown = store.hasMessage(stored.id);
   const message = store.buildApiMessage(stored);
   store.putMessage(message);
-  sendAck(stored);
-  if (isKnown) return;
 
-  if (!message.isOutgoing && stored.from) {
-    announcePeer(stored.from);
+  if (!message.isOutgoing && shouldAckIncoming) {
+    sendAck(stored);
   }
+
+  if (!isKnown) {
+    if (!message.isOutgoing && stored.from) {
+      announcePeer(stored.from);
+    }
+    sendUpdate({
+      '@type': 'newMessage',
+      chatId: message.chatId,
+      id: message.id,
+      message,
+    });
+    if (flags.read && message.isOutgoing) noteReadOutbox(message);
+    return;
+  }
+
+  if (flags.deleted && !prevFlags?.deleted) {
+    sendUpdate({ '@type': 'deleteMessages', ids: [message.id], chatId: message.chatId });
+    return;
+  }
+  if (flags.edited && !prevFlags?.edited) {
+    sendUpdate({
+      '@type': 'updateMessage', chatId: message.chatId, id: message.id, isFull: true, message,
+    });
+  }
+  if (flags.read && !prevFlags?.read && message.isOutgoing) {
+    noteReadOutbox(message);
+  }
+}
+
+function noteReadOutbox(message: ApiMessage) {
+  const current = readOutboxMaxByChatId.get(message.chatId) || 0;
+  if (message.id <= current) return;
+  readOutboxMaxByChatId.set(message.chatId, message.id);
   sendUpdate({
-    '@type': 'newMessage',
-    chatId: message.chatId,
-    id: message.id,
-    message,
+    '@type': 'updateChat',
+    id: message.chatId,
+    chat: {},
+    readState: { lastReadOutboxMessageId: message.id },
   });
+}
+
+function trackCursors(stored: WireStoredMessage) {
+  if (stored.id > lastSeenUuid) lastSeenUuid = stored.id;
+  const updatedAt = stored.updated_at || 0;
+  if (updatedAt > sinceUpdated) sinceUpdated = updatedAt;
+}
+
+async function runDeltaSync() {
+  if (!connection || !isSynced) return;
+  let messages: WireStoredMessage[];
+  try {
+    const syncEvent = buildWireEvent(store.self, token, {
+      last_seen_id: lastSeenUuid || '0',
+      since_updated: sinceUpdated,
+    });
+    const raw = await connection.request(TOPIC_MSG_SYNC_REQUEST, JSON.stringify(syncEvent), SYNC_TIMEOUT_MS);
+    const parsed = JSON.parse(raw) as WireEvent<{ messages?: WireStoredMessage[] }>;
+    messages = parsed.payload?.messages || [];
+  } catch {
+    return; // сеть моргнула — догоним в следующий тик
+  }
+  messages
+    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+    .forEach((stored) => applyStoredUpdate(stored, true));
 }
 
 function announcePeer(address: string) {
@@ -267,7 +372,7 @@ const methods = {
 
     const messages: ApiMessage[] = [];
     const lastMessageByChatId: Record<string, number> = {};
-    const threadReadStatesById: Record<string, { lastReadInboxMessageId: number; unreadCount: number }> = {};
+    const threadReadStatesById: Record<string, ThreadReadState> = {};
     const threadInfos: ApiThreadInfo[] = [];
     visibleChats.forEach((chat) => {
       const history = store.getMessages(chat.id);
@@ -275,7 +380,28 @@ const methods = {
       if (last) {
         messages.push(last);
         lastMessageByChatId[chat.id] = last.id;
-        threadReadStatesById[chat.id] = { lastReadInboxMessageId: last.id, unreadCount: 0 };
+        // Реальное прочтение: входящее прочитано, только если МЫ уже слали
+        // msg.chat.read (флаг read из синка). Иначе tt не видит непрочитанных
+        // и никогда не зовёт markMessageListRead → ✓✓ у собеседника не будет.
+        let lastReadInbox = 0;
+        let unreadCount = 0;
+        const isSelfChat = chat.id === selfId();
+        history.forEach((message) => {
+          // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем
+          if (message.isOutgoing || isSelfChat || !message.senderId) return;
+          const uuid = store.getUuidForMessage(chat.id, message.id);
+          if (uuid && wireFlagsByUuid.get(uuid)?.read) {
+            if (message.id > lastReadInbox) lastReadInbox = message.id;
+          } else {
+            unreadCount += 1;
+          }
+        });
+        if (isSelfChat) lastReadInbox = last.id;
+        threadReadStatesById[chat.id] = {
+          lastReadInboxMessageId: lastReadInbox,
+          unreadCount,
+          lastReadOutboxMessageId: readOutboxMaxByChatId.get(chat.id),
+        };
       }
       // Без ApiThreadInfo главного треда updateListedIds молча не создаёт тред —
       // лента сообщений навсегда остаётся в спиннере
@@ -319,6 +445,18 @@ const methods = {
   fetchMessagesById({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
     const byId = new Map(store.getMessages(chat.id).map((m) => [m.id, m]));
     return Promise.resolve(messageIds.map((id) => byId.get(id)).filter(Boolean));
+  },
+
+  markMessageListRead({ chat, maxId }: { chat: ApiChat; maxId?: number }) {
+    store.getMessages(chat.id).forEach((message) => {
+      if (message.isOutgoing || (maxId && message.id > maxId)) return;
+      const uuid = store.getUuidForMessage(chat.id, message.id);
+      if (!uuid || reportedReadUuids.has(uuid)) return;
+      reportedReadUuids.add(uuid);
+      const readEvent = buildWireEvent(store.self, token, { message_id: uuid });
+      connection!.publish(TOPIC_MSG_READ, JSON.stringify(readEvent));
+    });
+    return Promise.resolve(undefined);
   },
 
   sendMessageLocal(params: SendMessageParams) {
@@ -380,6 +518,44 @@ const methods = {
     });
   },
 
+  oldFetchLangPack({ langCode }: { langCode: string }) {
+    return Promise.resolve({ langPack: buildOldLangPack(langCode) });
+  },
+
+  // ── логин через штатные Auth-экраны ────────────────────────────────────────
+  // «Телефон» = федеративный адрес user@server; дальше нативный экран пароля
+
+  provideAuthPhoneNumber(address: string) {
+    if (!/^[^@\s]+@[^@\s]+$/.test(address)) {
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorPhoneNumberInvalid' } });
+      return Promise.resolve(undefined);
+    }
+    pendingLoginAddress = address;
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
+    return Promise.resolve(undefined);
+  },
+
+  async provideAuthPassword(password: string) {
+    const user = pendingLoginAddress || readCreds()?.user;
+    if (!user) {
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+      return;
+    }
+    try {
+      await connectAndLogin(user, password);
+      localStorage.setItem(CREDS_STORAGE_KEY, `${user}:${password}`);
+    } catch (err) {
+      logDebug(`логин отклонён: ${String(err)}`);
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorIncorrectPassword' } });
+    }
+  },
+
+  restartAuth() {
+    pendingLoginAddress = '';
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+    return Promise.resolve(undefined);
+  },
+
   fetchCurrentUser() {
     return Promise.resolve(undefined);
   },
@@ -388,9 +564,12 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
-  destroy() {
+  destroy(noSessionClear?: boolean) {
     connection?.close();
     connection = undefined;
+    if (!noSessionClear) {
+      localStorage.removeItem(CREDS_STORAGE_KEY);
+    }
     return Promise.resolve(undefined);
   },
 
