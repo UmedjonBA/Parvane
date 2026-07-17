@@ -288,7 +288,7 @@ function setViteEnv(env: Record<string, string>) {
 function buildCsp(appEnv: string) {
   return `
   default-src 'self';
-  connect-src 'self' wss://*.web.telegram.org blob: http: https: ${appEnv === 'development' ? 'wss: ipc:' : ''};
+  connect-src 'self' wss://*.web.telegram.org blob: http: https: ws: wss: ${appEnv === 'development' ? 'ipc:' : ''};
   script-src 'self' 'wasm-unsafe-eval'
     https://t.me/_websync_ https://telegram.me/_websync_ https://telegram.dog/_websync_;
   worker-src 'self'${appEnv === 'development' ? ' blob:' : ''};

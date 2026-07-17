@@ -1,0 +1,89 @@
+// Wire-типы протокола Parvane (NATS/JSON через gateway). Поля — snake_case,
+// как в `shared/parvane-types`. Контракт бэкенда стабилен, клиент подстраивается.
+
+export type WireTextEntity = {
+  type: string;
+  offset: number;
+  length: number;
+  data?: string;
+};
+
+export type WireMessageContent = {
+  kind: 'text' | 'voice' | 'video_note' | 'photo' | 'video' | 'file'
+    | 'encrypted' | 'group_encrypted' | string;
+  text?: string;
+  entities?: WireTextEntity[];
+  file_id?: string;
+  filename?: string;
+  mime?: string;
+  size_bytes?: number;
+  duration_secs?: number;
+  width?: number;
+  height?: number;
+  caption?: string;
+};
+
+export type WireStoredMessage = {
+  id: string;
+  from: string;
+  to: string;
+  content: WireMessageContent;
+  ts: number;
+  reply_to?: string;
+  edited?: boolean;
+  deleted?: boolean;
+  read?: boolean;
+  updated_at?: number;
+  reactions?: { emoji: string; count: number; mine?: boolean }[];
+  pinned?: boolean;
+};
+
+export type WireGroupMember = {
+  address: string;
+  role: string;
+};
+
+export type WireGroupInfo = {
+  group_id: string;
+  name: string;
+  kind: 'group' | 'channel';
+  created_by: string;
+  members: WireGroupMember[];
+};
+
+export type WireUserInfo = {
+  username: string;
+  display_name: string;
+  avatar?: string;
+  pubkey?: string;
+};
+
+export type WireEvent<T> = {
+  id: string;
+  from: string;
+  ts: number;
+  token: string;
+  payload: T;
+};
+
+export const TOPIC_IDENTITY_ISSUE = 'identity.token.issue';
+export const TOPIC_IDENTITY_REGISTER = 'identity.user.register';
+export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
+export const TOPIC_MSG_SEND = 'msg.chat.send';
+export const TOPIC_MSG_ACK = 'msg.chat.ack';
+export const TOPIC_MSG_SYNC_REQUEST = 'msg.sync.request';
+export const TOPIC_GROUP_LIST = 'group.list';
+
+export function buildMsgInboxTopic(user: string) {
+  return `msg.user.${user}`;
+}
+
+export function buildWireEvent<T>(from: string, token: string, payload: T): WireEvent<T> {
+  return {
+    id: crypto.randomUUID(),
+    from,
+    ts: Math.floor(Date.now() / 1000),
+    token,
+    payload,
+  };
+}

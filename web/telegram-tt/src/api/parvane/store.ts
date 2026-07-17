@@ -1,0 +1,203 @@
+// Локальный реестр Parvane: адреса ↔ телеграм-подобные id, история сообщений,
+// нумерация msgId. Принцип как в десктоп-форке: синтезируем объекты `Api*`
+// из наших NATS-событий и кормим ими нативный UI.
+
+import type {
+  ApiChat, ApiMessage, ApiUser,
+} from '../types';
+import type { WireGroupInfo, WireStoredMessage } from './wire';
+
+type PeerKind = 'user' | 'group' | 'channel';
+
+// FNV-1a 32-бит от адреса → положительный числовой id (стабильный между сессиями)
+function buildHashedId(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return String(hash >>> 1);
+}
+
+export class ParvaneStore {
+  self = '';
+
+  private addressById = new Map<string, string>();
+
+  private kindByAddress = new Map<string, PeerKind>();
+
+  private displayNameByAddress = new Map<string, string>();
+
+  private groupInfoByAddress = new Map<string, WireGroupInfo>();
+
+  private messagesByChatId = new Map<string, ApiMessage[]>();
+
+  private msgKeyByUuid = new Map<string, { chatId: string; id: number }>();
+
+  private uuidByMsgKey = new Map<string, string>();
+
+  private nextMsgIdByChatId = new Map<string, number>();
+
+  getIdForAddress(address: string, kind: PeerKind = 'user'): string {
+    const existingKind = this.kindByAddress.get(address);
+    const actualKind = existingKind || kind;
+    if (!existingKind) this.kindByAddress.set(address, actualKind);
+
+    const raw = buildHashedId(actualKind === 'user' ? address : `group:${address}`);
+    const id = actualKind === 'user' ? raw : `-${raw}`;
+    this.addressById.set(id, address);
+    return id;
+  }
+
+  getAddressForId(id: string) {
+    return this.addressById.get(id);
+  }
+
+  registerGroup(info: WireGroupInfo) {
+    this.kindByAddress.set(info.group_id, info.kind === 'channel' ? 'channel' : 'group');
+    this.groupInfoByAddress.set(info.group_id, info);
+    this.displayNameByAddress.set(info.group_id, info.name);
+  }
+
+  isGroupAddress(address: string) {
+    return this.groupInfoByAddress.has(address);
+  }
+
+  getGroupInfo(address: string) {
+    return this.groupInfoByAddress.get(address);
+  }
+
+  getGroupAddresses() {
+    return Array.from(this.groupInfoByAddress.keys());
+  }
+
+  setDisplayName(address: string, name: string) {
+    this.displayNameByAddress.set(address, name);
+  }
+
+  getDisplayName(address: string) {
+    return this.displayNameByAddress.get(address) || address.split('@')[0];
+  }
+
+  // Куда (в какой чат) кладётся сообщение с точки зрения этого клиента
+  resolveChatAddress(message: WireStoredMessage): string {
+    if (this.isGroupAddress(message.to)) return message.to;
+    if (message.from && message.from !== this.self) return message.from;
+    return message.to;
+  }
+
+  hasMessage(uuid: string) {
+    return this.msgKeyByUuid.has(uuid);
+  }
+
+  getUuidForMessage(chatId: string, id: number) {
+    return this.uuidByMsgKey.get(`${chatId}:${id}`);
+  }
+
+  allocateMessageId(chatId: string, uuid: string): number {
+    const known = this.msgKeyByUuid.get(uuid);
+    if (known) return known.id;
+    const id = this.nextMsgIdByChatId.get(chatId) || 1;
+    this.nextMsgIdByChatId.set(chatId, id + 1);
+    this.msgKeyByUuid.set(uuid, { chatId, id });
+    this.uuidByMsgKey.set(`${chatId}:${id}`, uuid);
+    return id;
+  }
+
+  putMessage(message: ApiMessage) {
+    const list = this.messagesByChatId.get(message.chatId) || [];
+    const index = list.findIndex((m) => m.id === message.id);
+    if (index >= 0) {
+      list[index] = message;
+    } else {
+      list.push(message);
+      list.sort((a, b) => a.id - b.id);
+    }
+    this.messagesByChatId.set(message.chatId, list);
+  }
+
+  getMessages(chatId: string): ApiMessage[] {
+    return this.messagesByChatId.get(chatId) || [];
+  }
+
+  getChatIds() {
+    return Array.from(this.messagesByChatId.keys());
+  }
+
+  getKnownUserAddresses() {
+    return Array.from(this.kindByAddress.entries())
+      .filter(([, kind]) => kind === 'user')
+      .map(([address]) => address);
+  }
+
+  buildApiUser(address: string): ApiUser {
+    const isSelf = address === this.self;
+    return {
+      id: this.getIdForAddress(address),
+      isMin: false,
+      isSelf: isSelf ? true : undefined,
+      isContact: isSelf ? undefined : true,
+      type: 'userTypeRegular',
+      firstName: this.getDisplayName(address),
+      phoneNumber: '',
+      noStatus: true,
+    };
+  }
+
+  buildApiChatForUser(address: string): ApiChat {
+    return {
+      id: this.getIdForAddress(address),
+      type: 'chatTypePrivate',
+      title: this.getDisplayName(address),
+      isListed: true,
+    };
+  }
+
+  buildApiChatForGroup(info: WireGroupInfo): ApiChat {
+    const isChannel = info.kind === 'channel';
+    return {
+      id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
+      type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
+      title: info.name,
+      isListed: true,
+      isCreator: info.created_by === this.self ? true : undefined,
+      membersCount: info.members.length,
+    };
+  }
+
+  buildApiMessage(stored: WireStoredMessage): ApiMessage {
+    const chatAddress = this.resolveChatAddress(stored);
+    const chatKind = this.kindByAddress.get(chatAddress) || 'user';
+    const chatId = this.getIdForAddress(chatAddress, chatKind);
+    const id = this.allocateMessageId(chatId, stored.id);
+    const isOutgoing = stored.from === this.self;
+
+    return {
+      id,
+      chatId,
+      content: buildMessageContent(stored),
+      date: stored.ts,
+      isOutgoing,
+      senderId: stored.from ? this.getIdForAddress(stored.from) : undefined,
+      isEdited: stored.edited ? true : undefined,
+      isPinned: stored.pinned ? true : undefined,
+    };
+  }
+}
+
+function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
+  const { content, deleted } = stored;
+  if (deleted) {
+    return { text: { text: '🗑 Сообщение удалено' } };
+  }
+  switch (content.kind) {
+    case 'text':
+      return { text: { text: content.text || '' } };
+    case 'encrypted':
+    case 'group_encrypted':
+      return { text: { text: '🔒 Зашифрованное сообщение (E2E в вебе ещё не поддержан)' } };
+    default:
+      // Медиа подключим следующим срезом — пока плейсхолдер с метаданными
+      return { text: { text: `📎 ${content.kind}: ${content.filename || content.file_id || ''}` } };
+  }
+}
