@@ -36,6 +36,9 @@ export class GatewayConnection {
 
   private handlersBySubject = new Map<string, (payload: string) => void>();
 
+  // Для NATS-wildcard подписок вида `presence.*` — матчим по префиксу
+  private wildcardHandlers: { prefix: string; handler: (payload: string) => void }[] = [];
+
   private pendingAuth?: { resolve: (user: string) => void; reject: (err: Error) => void };
 
   onClose?: () => void;
@@ -80,7 +83,11 @@ export class GatewayConnection {
   }
 
   subscribe(subject: string, handler: (payload: string) => void) {
-    this.handlersBySubject.set(subject, handler);
+    if (subject.endsWith('.*')) {
+      this.wildcardHandlers.push({ prefix: subject.slice(0, -1), handler });
+    } else {
+      this.handlersBySubject.set(subject, handler);
+    }
     this.sendFrame({ op: 'sub', subject });
   }
 
@@ -131,7 +138,9 @@ export class GatewayConnection {
         break;
       }
       case 'msg': {
-        const handler = frame.subject ? this.handlersBySubject.get(frame.subject) : undefined;
+        const subject = frame.subject || '';
+        const handler = this.handlersBySubject.get(subject)
+          || this.wildcardHandlers.find(({ prefix }) => subject.startsWith(prefix))?.handler;
         handler?.(frame.payload || '');
         break;
       }

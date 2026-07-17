@@ -31,6 +31,10 @@ import {
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_RESOLVE,
   TOPIC_MSG_ACK,
+  TOPIC_MSG_DELETE,
+  TOPIC_MSG_EDIT,
+  TOPIC_MSG_PIN,
+  TOPIC_MSG_REACT,
   TOPIC_MSG_READ,
   TOPIC_MSG_SEND,
   TOPIC_MSG_SYNC_REQUEST,
@@ -40,6 +44,9 @@ const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
 const SYNC_TIMEOUT_MS = 15000;
 const DELTA_SYNC_INTERVAL_MS = 10000;
+const PRESENCE_INTERVAL_MS = 30000;
+const PRESENCE_TTL_SECS = 90;
+const TYPING_CLEAR_MS = 6000;
 
 let onUpdate: OnApiUpdate = () => undefined;
 let connection: GatewayConnection | undefined;
@@ -49,14 +56,26 @@ let pendingLoginAddress = '';
 let isSynced = false;
 let syncPromise: Promise<void> | undefined;
 let syncTimer: number | undefined;
+let presenceTimer: number | undefined;
+const typingClearTimers = new Map<string, number>();
 // Курсоры дельта-синка (аналог PumpReceive в десктоп-форке): uuid v7
 // лексикографически упорядочен по времени, поэтому max-строка = новейший
 let lastSeenUuid = '';
 let sinceUpdated = 0;
 const uuidBySentLocalKey = new Map<string, string>();
 const reportedMissingMethods = new Set<string>();
-// Снапшот флагов мутаций по uuid — чтобы дельта-синк видел, что изменилось
-const wireFlagsByUuid = new Map<string, { read: boolean; edited: boolean; deleted: boolean }>();
+// Снапшот состояния по uuid — чтобы дельта-синк видел, что изменилось
+type WireFlags = { read: boolean; deleted: boolean; pinned: boolean; snapshot: string };
+const wireFlagsByUuid = new Map<string, WireFlags>();
+
+function buildWireFlags(stored: WireStoredMessage): WireFlags {
+  return {
+    read: Boolean(stored.read),
+    deleted: Boolean(stored.deleted),
+    pinned: Boolean(stored.pinned),
+    snapshot: JSON.stringify([stored.content, stored.reactions, stored.pinned, stored.edited]),
+  };
+}
 // Максимальный прочитанный собеседником id исходящего по чату (для ✓✓)
 const readOutboxMaxByChatId = new Map<string, number>();
 // Уже отправленные read-квитанции (не спамить повторно)
@@ -108,6 +127,8 @@ async function connectAndLogin(user: string, password: string) {
   reportedReadUuids.clear();
 
   connection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
+  connection.subscribe(`msg.typing.${selfId()}`, handleTypingFrame);
+  connection.subscribe('presence.*', handlePresenceFrame);
   connection.onClose = () => {
     sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
   };
@@ -122,6 +143,56 @@ async function connectAndLogin(user: string, password: string) {
 
   window.clearInterval(syncTimer);
   syncTimer = window.setInterval(() => { void runDeltaSync(); }, DELTA_SYNC_INTERVAL_MS);
+  window.clearInterval(presenceTimer);
+  presenceTimer = window.setInterval(publishPresence, PRESENCE_INTERVAL_MS);
+  publishPresence();
+}
+
+function publishPresence() {
+  if (!connection) return;
+  connection.publish(`presence.${selfId()}`, JSON.stringify({ from: store.self }));
+}
+
+function handleTypingFrame(payload: string) {
+  let from: string | undefined;
+  try {
+    from = (JSON.parse(payload) as { from?: string }).from;
+  } catch {
+    return;
+  }
+  if (!from || from === store.self) return;
+
+  const chatId = store.getIdForAddress(from);
+  sendUpdate({
+    '@type': 'updateChatTypingStatus',
+    id: chatId,
+    peerId: chatId,
+    typingStatus: { type: 'typing', timestamp: Math.floor(Date.now() / 1000) },
+  });
+
+  // Собеседник шлёт хартбиты пока печатает; без свежего — гасим сами
+  window.clearTimeout(typingClearTimers.get(chatId));
+  typingClearTimers.set(chatId, window.setTimeout(() => {
+    sendUpdate({
+      '@type': 'updateChatTypingStatus', id: chatId, peerId: chatId, typingStatus: undefined,
+    });
+  }, TYPING_CLEAR_MS));
+}
+
+function handlePresenceFrame(payload: string) {
+  let from: string | undefined;
+  try {
+    from = (JSON.parse(payload) as { from?: string }).from;
+  } catch {
+    return;
+  }
+  if (!from || from === store.self) return;
+
+  sendUpdate({
+    '@type': 'updateUserStatus',
+    userId: store.getIdForAddress(from),
+    status: { type: 'userStatusOnline', expires: Math.floor(Date.now() / 1000) + PRESENCE_TTL_SECS },
+  });
 }
 
 function logDebug(message: string) {
@@ -174,9 +245,7 @@ async function runFullSync() {
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
     .forEach((stored) => {
       trackCursors(stored);
-      wireFlagsByUuid.set(stored.id, {
-        read: Boolean(stored.read), edited: Boolean(stored.edited), deleted: Boolean(stored.deleted),
-      });
+      wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
       if (message.isOutgoing && stored.read) {
@@ -232,9 +301,7 @@ function handleInboxFrame(payload: string) {
 function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: boolean) {
   trackCursors(stored);
   const prevFlags = wireFlagsByUuid.get(stored.id);
-  const flags = {
-    read: Boolean(stored.read), edited: Boolean(stored.edited), deleted: Boolean(stored.deleted),
-  };
+  const flags = buildWireFlags(stored);
   wireFlagsByUuid.set(stored.id, flags);
 
   const isKnown = store.hasMessage(stored.id);
@@ -263,9 +330,14 @@ function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: boolean
     sendUpdate({ '@type': 'deleteMessages', ids: [message.id], chatId: message.chatId });
     return;
   }
-  if (flags.edited && !prevFlags?.edited) {
+  if (prevFlags && flags.snapshot !== prevFlags.snapshot && !flags.deleted) {
     sendUpdate({
       '@type': 'updateMessage', chatId: message.chatId, id: message.id, isFull: true, message,
+    });
+  }
+  if (prevFlags && flags.pinned !== prevFlags.pinned) {
+    sendUpdate({
+      '@type': 'updatePinnedIds', chatId: message.chatId, isPinned: flags.pinned, messageIds: [message.id],
     });
   }
   if (flags.read && !prevFlags?.read && message.isOutgoing) {
@@ -447,6 +519,99 @@ const methods = {
     return Promise.resolve(messageIds.map((id) => byId.get(id)).filter(Boolean));
   },
 
+  editMessage({ chat, message, text }: { chat: ApiChat; message: ApiMessage; text: string }) {
+    const uuid = store.getUuidForMessage(chat.id, message.id);
+    if (!uuid || !connection) return Promise.resolve(undefined);
+
+    const event = buildWireEvent(store.self, token, { message_id: uuid, text });
+    connection.publish(TOPIC_MSG_EDIT, JSON.stringify(event));
+
+    // Оптимистичное эхо; каноничное состояние догонит дельта-синк
+    const edited: ApiMessage = {
+      ...message, content: { text: { text } }, isEdited: true,
+    };
+    store.putMessage(edited);
+    sendUpdate({
+      '@type': 'updateMessage', chatId: chat.id, id: message.id, isFull: true, message: edited,
+    });
+    return Promise.resolve(undefined);
+  },
+
+  deleteMessages({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
+    if (!connection) return Promise.resolve(undefined);
+    messageIds.forEach((id) => {
+      const uuid = store.getUuidForMessage(chat.id, id);
+      if (!uuid) return;
+      const event = buildWireEvent(store.self, token, { message_id: uuid });
+      connection!.publish(TOPIC_MSG_DELETE, JSON.stringify(event));
+      const flags = wireFlagsByUuid.get(uuid);
+      if (flags) flags.deleted = true;
+    });
+    sendUpdate({ '@type': 'deleteMessages', ids: messageIds, chatId: chat.id });
+    return Promise.resolve(undefined);
+  },
+
+  sendReaction({ chat, messageId, reactions }: {
+    chat: ApiChat; messageId: number; reactions?: { type: string; emoticon?: string }[];
+  }) {
+    const uuid = store.getUuidForMessage(chat.id, messageId);
+    if (!uuid || !connection) return Promise.resolve(undefined);
+
+    const first = reactions?.find((r) => r.type === 'emoji');
+    const emoji = first?.emoticon || '';
+    const event = buildWireEvent(store.self, token, { message_id: uuid, emoji });
+    connection.publish(TOPIC_MSG_REACT, JSON.stringify(event));
+
+    // Оптимистично: снять свою прежнюю, добавить новую
+    const message = store.getMessages(chat.id).find((m) => m.id === messageId);
+    if (message) {
+      let results = (message.reactions?.results || []).map((r) => {
+        if (r.chosenOrder === undefined) return r;
+        return { ...r, chosenOrder: undefined, count: r.count - 1 };
+      }).filter((r) => r.count > 0);
+      if (emoji) {
+        const existing = results.find(
+          (r) => r.reaction.type === 'emoji' && r.reaction.emoticon === emoji,
+        );
+        results = existing
+          ? results.map((r) => (r === existing ? { ...r, count: r.count + 1, chosenOrder: 0 } : r))
+          : [...results, { count: 1, reaction: { type: 'emoji' as const, emoticon: emoji }, chosenOrder: 0 }];
+      }
+      const updated: ApiMessage = { ...message, reactions: { results } };
+      store.putMessage(updated);
+      sendUpdate({
+        '@type': 'updateMessageReactions', chatId: chat.id, id: messageId, reactions: { results },
+      });
+    }
+    return Promise.resolve(true);
+  },
+
+  pinMessage({ chat, messageId, isUnpin }: { chat: ApiChat; messageId: number; isUnpin: boolean }) {
+    const uuid = store.getUuidForMessage(chat.id, messageId);
+    if (!uuid || !connection) return Promise.resolve(undefined);
+    const event = buildWireEvent(store.self, token, { message_id: uuid, pin: !isUnpin });
+    connection.publish(TOPIC_MSG_PIN, JSON.stringify(event));
+    sendUpdate({
+      '@type': 'updatePinnedIds', chatId: chat.id, isPinned: !isUnpin, messageIds: [messageId],
+    });
+    return Promise.resolve(undefined);
+  },
+
+  fetchPinnedMessages({ chat }: { chat: ApiChat }) {
+    const messages = store.getMessages(chat.id).filter((m) => m.isPinned);
+    return Promise.resolve({
+      messages, users: collectUsersFor(messages), chats: [chat], count: messages.length, topics: [],
+    });
+  },
+
+  sendMessageAction({ peer, action }: { peer: { id: string }; action: { type: string } }) {
+    if (action.type !== 'typing' || !connection) return Promise.resolve(undefined);
+    const toAddress = store.getAddressForId(peer.id);
+    if (!toAddress) return Promise.resolve(undefined);
+    connection.publish(`msg.typing.${peer.id}`, JSON.stringify({ from: store.self, to: toAddress }));
+    return Promise.resolve(undefined);
+  },
+
   markMessageListRead({ chat, maxId }: { chat: ApiChat; maxId?: number }) {
     store.getMessages(chat.id).forEach((message) => {
       if (message.isOutgoing || (maxId && message.id > maxId)) return;
@@ -460,11 +625,12 @@ const methods = {
   },
 
   sendMessageLocal(params: SendMessageParams) {
-    const { chat, text } = params;
+    const { chat, text, replyInfo } = params;
     if (!chat) return Promise.resolve(undefined);
 
     const uuid = crypto.randomUUID();
     const id = store.allocateMessageId(chat.id, uuid);
+    const replyToMsgId = replyInfo?.type === 'message' ? replyInfo.replyToMsgId : undefined;
     const localMessage: ApiMessage = {
       id,
       chatId: chat.id,
@@ -473,6 +639,7 @@ const methods = {
       isOutgoing: true,
       senderId: selfId(),
       sendingState: 'messageSendingStatePending',
+      replyInfo: replyToMsgId ? { type: 'message', replyToMsgId } : undefined,
     };
     uuidBySentLocalKey.set(`${chat.id}:${id}`, uuid);
 
@@ -496,6 +663,8 @@ const methods = {
     if (!toAddress) return;
 
     const uuid = uuidBySentLocalKey.get(`${chat.id}:${localMessage.id}`) || crypto.randomUUID();
+    const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
+    const replyToUuid = replyToMsgId ? store.getUuidForMessage(chat.id, replyToMsgId) : undefined;
     const event = {
       id: uuid,
       from: store.self,
@@ -504,6 +673,7 @@ const methods = {
       payload: {
         to: toAddress,
         content: { kind: 'text', text: params.text || '' },
+        reply_to: replyToUuid,
       },
     };
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify(event));

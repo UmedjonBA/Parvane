@@ -140,7 +140,6 @@ export class ParvaneStore {
       type: 'userTypeRegular',
       firstName: this.getDisplayName(address),
       phoneNumber: '',
-      noStatus: true,
     };
   }
 
@@ -172,6 +171,8 @@ export class ParvaneStore {
     const id = this.allocateMessageId(chatId, stored.id);
     const isOutgoing = stored.from === this.self;
 
+    const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;
+
     return {
       id,
       chatId,
@@ -181,8 +182,24 @@ export class ParvaneStore {
       senderId: stored.from ? this.getIdForAddress(stored.from) : undefined,
       isEdited: stored.edited ? true : undefined,
       isPinned: stored.pinned ? true : undefined,
+      replyInfo: replyKey && replyKey.chatId === chatId
+        ? { type: 'message', replyToMsgId: replyKey.id }
+        : undefined,
+      reactions: buildReactions(stored),
     };
   }
+}
+
+function buildReactions(stored: WireStoredMessage): ApiMessage['reactions'] {
+  const list = stored.reactions;
+  if (!list?.length) return undefined;
+  return {
+    results: list.map((r) => ({
+      count: r.count,
+      reaction: { type: 'emoji', emoticon: r.emoji },
+      chosenOrder: r.mine ? 0 : undefined,
+    })),
+  };
 }
 
 function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
