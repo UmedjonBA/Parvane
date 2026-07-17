@@ -203,18 +203,59 @@ function buildReactions(stored: WireStoredMessage): ApiMessage['reactions'] {
 }
 
 function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
-  const { content, deleted } = stored;
+  const { content, deleted, ts } = stored;
   if (deleted) {
     return { text: { text: '🗑 Сообщение удалено' } };
   }
+  const caption = content.caption ? { text: { text: content.caption } } : {};
   switch (content.kind) {
     case 'text':
       return { text: { text: content.text || '' } };
+    case 'photo':
+      return {
+        ...caption,
+        photo: {
+          mediaType: 'photo',
+          id: content.file_id!,
+          date: ts,
+          sizes: [
+            { type: 'x', width: content.width || 800, height: content.height || 600 },
+            { type: 'y', width: content.width || 800, height: content.height || 600 },
+          ],
+        },
+      };
+    case 'file':
+    case 'video':
+    case 'voice':
+    case 'video_note':
+      // Видео/голос пока отдаются документом (progressive-стриминг — позже)
+      return {
+        ...caption,
+        document: {
+          mediaType: 'document',
+          id: content.file_id!,
+          fileName: content.filename
+            || `${content.kind}-${(content.file_id || '').slice(0, 8)}${extForMime(content.mime)}`,
+          size: content.size_bytes || 0,
+          mimeType: content.mime || 'application/octet-stream',
+          timestamp: ts,
+        },
+      };
     case 'encrypted':
     case 'group_encrypted':
       return { text: { text: '🔒 Зашифрованное сообщение (E2E в вебе ещё не поддержан)' } };
     default:
-      // Медиа подключим следующим срезом — пока плейсхолдер с метаданными
       return { text: { text: `📎 ${content.kind}: ${content.filename || content.file_id || ''}` } };
   }
+}
+
+function extForMime(mime?: string) {
+  if (!mime) return '';
+  const known: Record<string, string> = {
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'audio/ogg': '.ogg',
+    'audio/mpeg': '.mp3',
+  };
+  return known[mime] || '';
 }
