@@ -21,6 +21,9 @@ export type WireMessageContent = {
   width?: number;
   height?: number;
   caption?: string;
+  ciphertext?: string;
+  ctype?: number;
+  sender_identity?: string;
 };
 
 export type WireStoredMessage = {
@@ -70,6 +73,8 @@ export const TOPIC_IDENTITY_ISSUE = 'identity.token.issue';
 export const TOPIC_IDENTITY_REGISTER = 'identity.user.register';
 export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
 export const TOPIC_IDENTITY_SEARCH = 'identity.user.search';
+export const TOPIC_PREKEYS_PUBLISH = 'identity.prekeys.publish';
+export const TOPIC_PREKEYS_FETCH = 'identity.prekeys.fetch';
 export const TOPIC_MSG_SEND = 'msg.chat.send';
 export const TOPIC_MSG_ACK = 'msg.chat.ack';
 export const TOPIC_MSG_READ = 'msg.chat.read';

@@ -17,7 +17,7 @@ import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/type
 import type { SendMessageParams, ThreadReadState } from '../../types';
 import type { ApiChat } from '../types';
 import type {
-  WireEvent, WireGroupInfo, WireStoredMessage, WireUserInfo,
+  WireEvent, WireGroupInfo, WireMessageContent, WireStoredMessage, WireUserInfo,
 } from './wire';
 
 import { GatewayConnection, getGatewayUrl } from './gateway';
@@ -46,7 +46,10 @@ import {
   TOPIC_MSG_READ,
   TOPIC_MSG_SEND,
   TOPIC_MSG_SYNC_REQUEST,
+  TOPIC_PREKEYS_FETCH,
+  TOPIC_PREKEYS_PUBLISH,
 } from './wire';
+import { E2eEngine } from './e2e';
 
 const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
@@ -67,6 +70,7 @@ let isSynced = false;
 let syncPromise: Promise<void> | undefined;
 let syncTimer: number | undefined;
 let presenceTimer: number | undefined;
+let e2e: E2eEngine | undefined;
 const typingClearTimers = new Map<string, number>();
 // Курсоры дельта-синка (аналог PumpReceive в десктоп-форке): uuid v7
 // лексикографически упорядочен по времени, поэтому max-строка = новейший
@@ -135,6 +139,16 @@ async function connectAndLogin(user: string, password: string) {
   wireFlagsByUuid.clear();
   readOutboxMaxByChatId.clear();
   reportedReadUuids.clear();
+
+  try {
+    e2e = await E2eEngine.create(user);
+    const prekeys = e2e.buildPrekeysPayload(token);
+    await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
+    logDebug('E2E готов, прекеи опубликованы');
+  } catch (err) {
+    e2e = undefined;
+    logDebug(`E2E недоступен: ${String(err)}`);
+  }
 
   connection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
   connection.subscribe(`msg.typing.${selfId()}`, handleTypingFrame);
@@ -249,12 +263,18 @@ async function runFullSync() {
     TOPIC_MSG_SYNC_REQUEST, JSON.stringify(syncEvent), SYNC_TIMEOUT_MS,
   );
   const parsed = JSON.parse(syncRaw) as WireEvent<{ messages?: WireStoredMessage[] }>;
-  const messages = parsed.payload?.messages || [];
+  const serverMessages = parsed.payload?.messages || [];
+  serverMessages.forEach(trackCursors);
 
-  messages
+  // Свои sealed приходят только из локального журнала — мержим по ts,
+  // чтобы нумерация msgId сохранила хронологию
+  const knownIds = new Set(serverMessages.map((m) => m.id));
+  const journal = readOwnJournal().filter((m) => !knownIds.has(m.id));
+
+  serverMessages.concat(journal)
     .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
-    .forEach((stored) => {
-      trackCursors(stored);
+    .forEach((rawStored) => {
+      const { stored } = unsealStored(rawStored);
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
@@ -268,7 +288,7 @@ async function runFullSync() {
     });
 
   const peerAddresses = new Set<string>();
-  messages.forEach((m) => {
+  serverMessages.concat(journal).forEach((m) => {
     if (m.from && !store.isGroupAddress(m.from)) peerAddresses.add(m.from);
     if (m.to && !store.isGroupAddress(m.to)) peerAddresses.add(m.to);
   });
@@ -308,6 +328,56 @@ function handleInboxFrame(payload: string) {
 
 // Сообщение в незнакомую группу — сперва подтягиваем свежий список групп,
 // иначе оно ошибочно ляжет в личку отправителя
+// Sealed sender: пробуем расшифровать; удачное — в dec-cache (повторная
+// расшифровка Olm невозможна — ratchet уехал, а веб фулл-синкает при старте)
+function unsealStored(stored: WireStoredMessage): { stored: WireStoredMessage; wasSealed: boolean } {
+  const content = stored.content;
+  if (content.kind !== 'encrypted') return { stored, wasSealed: false };
+
+  const cached = e2e?.getCachedInner(stored.id);
+  if (cached) {
+    return {
+      stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },
+      wasSealed: true,
+    };
+  }
+  if (!e2e || !content.ciphertext || !content.sender_identity) return { stored, wasSealed: false };
+
+  const plain = e2e.decryptFrom(content.sender_identity, content.ctype || 0, content.ciphertext);
+  if (!plain) return { stored, wasSealed: false };
+  try {
+    const inner = JSON.parse(plain) as { from: string; content: WireMessageContent };
+    e2e.cacheInner(stored.id, inner);
+    if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
+    return { stored: { ...stored, from: inner.from, content: inner.content }, wasSealed: true };
+  } catch {
+    return { stored, wasSealed: false };
+  }
+}
+
+async function fetchPrekeyBundle(user: string) {
+  const raw = await connection!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({ token, user }));
+  return JSON.parse(raw) as {
+    ok: boolean; identity_key?: string; signed_prekey?: string; one_time?: string;
+  };
+}
+
+// Журнал СВОИХ sealed-сообщений: сервер хранит их с from='' и не отдаёт
+// отправителю в sync — история своих E2E живёт только локально
+function readOwnJournal(): WireStoredMessage[] {
+  try {
+    return JSON.parse(localStorage.getItem(`parvane:hist:${store.self}`) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function appendOwnJournal(entry: WireStoredMessage) {
+  const list = readOwnJournal();
+  list.push(entry);
+  localStorage.setItem(`parvane:hist:${store.self}`, JSON.stringify(list));
+}
+
 const checkedGroupCandidates = new Set<string>();
 
 async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
@@ -335,9 +405,10 @@ async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
 
 // Общий приёмник состояния сообщения — и для инбокс-пуша, и для дельта-синка.
 // Новое → newMessage; мутации known → deleteMessages / updateMessage / ✓✓.
-async function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: boolean) {
+async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
+  trackCursors(rawStored);
+  const { stored, wasSealed } = unsealStored(rawStored);
   await refreshGroupsIfUnknownChat(stored);
-  trackCursors(stored);
   const prevFlags = wireFlagsByUuid.get(stored.id);
   const flags = buildWireFlags(stored);
   wireFlagsByUuid.set(stored.id, flags);
@@ -347,7 +418,7 @@ async function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: b
   store.putMessage(message);
 
   if (!message.isOutgoing && shouldAckIncoming) {
-    sendAck(stored);
+    sendAck(stored.id, wasSealed ? stored.from : '');
   }
 
   if (!isKnown) {
@@ -429,8 +500,8 @@ function announcePeer(address: string) {
   void resolveDisplayNames([address]);
 }
 
-function sendAck(stored: WireStoredMessage) {
-  const ack = buildWireEvent(store.self, token, { message_id: stored.id, sender: '' });
+function sendAck(messageId: string, sealedSender: string) {
+  const ack = buildWireEvent(store.self, token, { message_id: messageId, sender: sealedSender });
   connection!.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
 }
 
@@ -767,10 +838,35 @@ const methods = {
       }
     }
 
+    // E2E: текст в личку шифруем sealed sender'ом (сервер не видит ни текста,
+    // ни отправителя). Нет бандла у пира — честный плейнтекст (лог в консоли)
+    let isSealed = false;
+    const plainContent = wireContent;
+    if (!attachment && e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self) {
+      try {
+        const innerJson = JSON.stringify({ from: store.self, content: wireContent });
+        const encrypted = await e2e.encryptFor(toAddress, innerJson, fetchPrekeyBundle);
+        if (encrypted) {
+          wireContent = {
+            kind: 'encrypted',
+            ciphertext: encrypted.ciphertext,
+            ctype: encrypted.ctype,
+            sender_identity: encrypted.sender_identity,
+          };
+          isSealed = true;
+        } else {
+          logDebug(`E2E: нет бандла у ${toAddress}, шлю открыто`);
+        }
+      } catch (err) {
+        logDebug(`E2E-шифрование не удалось (${String(err)}), шлю открыто`);
+      }
+    }
+
+    const ts = Math.floor(Date.now() / 1000);
     const event = {
       id: uuid,
-      from: store.self,
-      ts: Math.floor(Date.now() / 1000),
+      from: isSealed ? '' : store.self,
+      ts,
       token,
       payload: {
         to: toAddress,
@@ -779,6 +875,19 @@ const methods = {
       },
     };
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify(event));
+
+    if (isSealed) {
+      // Сервер не отдаст отправителю его sealed — журналим локально
+      appendOwnJournal({
+        id: uuid,
+        from: store.self,
+        to: toAddress,
+        content: plainContent as unknown as WireMessageContent,
+        ts,
+        reply_to: replyToUuid,
+      });
+      e2e!.cacheInner(uuid, { from: store.self, content: plainContent });
+    }
 
     const sentMessage: ApiMessage = { ...localMessage, content: sentContent, sendingState: undefined };
     store.putMessage(sentMessage);

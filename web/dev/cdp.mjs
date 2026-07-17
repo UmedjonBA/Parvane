@@ -38,7 +38,9 @@ for (let i = 0; i < args.length; i += 1) {
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
 const chrome = spawn('chromium', [
-  '--headless', '--disable-gpu', '--window-size=1280,800',
+  // --headless=new персистит localStorage на диск (старый --headless держит
+  // его in-memory и теряет при закрытии — E2E-ключи не переживали рестарт)
+  '--headless=new', '--disable-gpu', '--window-size=1280,800',
   `--user-data-dir=${profile}`, `--remote-debugging-port=${debugPort}`,
   'about:blank',
 ], { stdio: 'ignore' });
@@ -128,13 +130,30 @@ async function main() {
   }
 }
 
+// Штатное закрытие через CDP Browser.close — только оно флашит localStorage
+// leveldb на диск (SIGTERM/SIGKILL теряют несохранённые данные)
+async function gracefulClose() {
+  try {
+    const resp = await fetch(`http://localhost:${debugPort}/json/version`);
+    const info = await resp.json();
+    const browserWs = new WebSocket(info.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => { browserWs.onopen = resolve; browserWs.onerror = reject; });
+    await new Promise((resolve) => {
+      browserWs.onclose = resolve;
+      browserWs.send(JSON.stringify({ id: 99999, method: 'Browser.close' }));
+      setTimeout(resolve, 4000);
+    });
+  } catch {
+    // fallback ниже
+  }
+}
+
 main()
   .catch((err) => { console.error('[cdp] ошибка:', err.message); process.exitCode = 1; })
   .finally(async () => {
-    // Ждём штатного выхода Chromium: SIGKILL/мгновенный exit теряет
-    // несфлашенный localStorage (профиль «забывает» логин)
+    await gracefulClose();
     await new Promise((resolve) => {
-      const guard = setTimeout(() => { chrome.kill('SIGKILL'); resolve(); }, 5000);
+      const guard = setTimeout(() => { chrome.kill('SIGKILL'); resolve(); }, 3000);
       chrome.on('exit', () => { clearTimeout(guard); resolve(); });
       chrome.kill();
     });

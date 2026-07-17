@@ -109,6 +109,7 @@
   },
   "dependencies": {
     "@cryptography/aes": "^0.1.1",
+    "@matrix-org/olm": "^3.2.15",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-process": "^2.3.1",
