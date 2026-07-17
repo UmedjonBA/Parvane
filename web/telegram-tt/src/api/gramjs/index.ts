@@ -1,4 +1,5 @@
-// export { initApi, callApi, cancelApiProgress } from './methods/init';
+// Parvane: API-слой подменён — вместо MTProto (worker/connector) все методы и
+// апдейты обслуживает провайдер шины Parvane (NATS/JSON через gateway).
 export {
   initApi, callApi, cancelApiProgress, cancelApiProgressMaster, callApiLocal,
   handleMethodCallback,
@@ -6,4 +7,4 @@ export {
   updateFullLocalDb,
   updateLocalDb,
   setShouldEnableDebugLog,
-} from './worker/connector';
+} from '../parvane/provider';
