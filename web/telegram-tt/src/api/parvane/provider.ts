@@ -29,7 +29,11 @@ import {
   TOPIC_FILE_DOWNLOAD_REQUEST,
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
+  TOPIC_GROUP_ADD_MEMBER,
+  TOPIC_GROUP_CREATE,
+  TOPIC_GROUP_INFO,
   TOPIC_GROUP_LIST,
+  TOPIC_GROUP_REMOVE_MEMBER,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_RESOLVE,
@@ -299,12 +303,40 @@ function handleInboxFrame(payload: string) {
   const stored = event.payload?.message;
   if (!stored) return; // delivered-квитанция; у Telegram нет отдельного статуса
 
-  applyStoredUpdate(stored, true);
+  void applyStoredUpdate(stored, true);
+}
+
+// Сообщение в незнакомую группу — сперва подтягиваем свежий список групп,
+// иначе оно ошибочно ляжет в личку отправителя
+const checkedGroupCandidates = new Set<string>();
+
+async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
+  // Кандидат в группы: входящее, адресат — не я и не известная группа
+  if (!stored.to || stored.to === store.self || stored.from === store.self
+    || store.isGroupAddress(stored.to) || checkedGroupCandidates.has(stored.to)) {
+    return;
+  }
+  checkedGroupCandidates.add(stored.to);
+  try {
+    const raw = await connection!.request(TOPIC_GROUP_LIST, JSON.stringify({ token }));
+    const groups = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups || [];
+    groups.forEach((info) => {
+      const isNew = !store.isGroupAddress(info.group_id);
+      store.registerGroup(info);
+      if (isNew) {
+        const chat = store.buildApiChatForGroup(info);
+        sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+      }
+    });
+  } catch {
+    // список групп догоним следующим синком
+  }
 }
 
 // Общий приёмник состояния сообщения — и для инбокс-пуша, и для дельта-синка.
 // Новое → newMessage; мутации known → deleteMessages / updateMessage / ✓✓.
-function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: boolean) {
+async function applyStoredUpdate(stored: WireStoredMessage, shouldAckIncoming: boolean) {
+  await refreshGroupsIfUnknownChat(stored);
   trackCursors(stored);
   const prevFlags = wireFlagsByUuid.get(stored.id);
   const flags = buildWireFlags(stored);
@@ -383,9 +415,10 @@ async function runDeltaSync() {
   } catch {
     return; // сеть моргнула — догоним в следующий тик
   }
-  messages
-    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
-    .forEach((stored) => applyStoredUpdate(stored, true));
+  const sorted = messages.sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+  for (const stored of sorted) {
+    await applyStoredUpdate(stored, true);
+  }
 }
 
 function announcePeer(address: string) {
@@ -780,6 +813,94 @@ const methods = {
       }
       return { dataBlob: result.blob, mimeType: result.mimeType };
     });
+  },
+
+  // ── группы ─────────────────────────────────────────────────────────────────
+
+  async createGroupChat({ title, users }: { title: string; users: ApiUser[] }) {
+    if (!connection) return undefined;
+    const members = users
+      .map((u) => store.getAddressForId(u.id))
+      .filter(Boolean);
+    const raw = await connection.request(TOPIC_GROUP_CREATE, JSON.stringify({
+      token, name: title, kind: 'group', members,
+    }));
+    const resp = JSON.parse(raw) as { ok: boolean; group_id?: string; error?: string };
+    if (!resp.ok || !resp.group_id) return undefined;
+
+    const info: WireGroupInfo = {
+      group_id: resp.group_id,
+      name: title,
+      kind: 'group',
+      created_by: store.self,
+      members: [
+        { address: store.self, role: 'owner' },
+        ...members.map((address) => ({ address, role: 'member' })),
+      ],
+    };
+    store.registerGroup(info);
+    const chat = store.buildApiChatForGroup(info);
+    sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+    return { chat, missingUsers: [] };
+  },
+
+  async fetchFullChat(chat: ApiChat) {
+    const address = store.getAddressForId(chat.id);
+    if (!connection || !address) return undefined;
+    if (!store.isGroupAddress(address)) {
+      return {
+        fullInfo: { canViewMembers: false },
+        chats: [],
+        userStatusesById: {},
+      };
+    }
+
+    const raw = await connection.request(TOPIC_GROUP_INFO, JSON.stringify({ token, group_id: address }));
+    const info = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups?.[0];
+    if (!info) return undefined;
+    store.registerGroup(info);
+
+    info.members.forEach((m) => {
+      const user = store.buildApiUser(m.address);
+      sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    });
+    const members = info.members.map((m) => ({
+      userId: store.getIdForAddress(m.address),
+      isOwner: m.role === 'owner' ? true as const : undefined,
+      isAdmin: m.role === 'admin' ? true as const : undefined,
+    }));
+    const adminMembers = members.filter((m) => m.isOwner || m.isAdmin);
+    return {
+      fullInfo: {
+        members,
+        adminMembersById: Object.fromEntries(adminMembers.map((m) => [m.userId, m])),
+        canViewMembers: true,
+      },
+      chats: [store.buildApiChatForGroup(info)],
+      userStatusesById: {},
+      membersCount: members.length,
+    };
+  },
+
+  async addChatMembers(chat: ApiChat, users: ApiUser[]) {
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chat.id);
+    if (!groupId) return undefined;
+    for (const user of users) {
+      const member = store.getAddressForId(user.id);
+      if (!member) continue;
+      await connection.request(TOPIC_GROUP_ADD_MEMBER, JSON.stringify({ token, group_id: groupId, member }));
+    }
+    return true;
+  },
+
+  async deleteChatMember(chat: ApiChat, user: ApiUser) {
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chat.id);
+    const member = store.getAddressForId(user.id);
+    if (!groupId || !member) return undefined;
+    await connection.request(TOPIC_GROUP_REMOVE_MEMBER, JSON.stringify({ token, group_id: groupId, member }));
+    return true;
   },
 
   async searchChats({ query }: { query: string }) {
