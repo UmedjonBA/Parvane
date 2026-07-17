@@ -69,6 +69,7 @@ export type WireEvent<T> = {
 export const TOPIC_IDENTITY_ISSUE = 'identity.token.issue';
 export const TOPIC_IDENTITY_REGISTER = 'identity.user.register';
 export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
+export const TOPIC_IDENTITY_SEARCH = 'identity.user.search';
 export const TOPIC_MSG_SEND = 'msg.chat.send';
 export const TOPIC_MSG_ACK = 'msg.chat.ack';
 export const TOPIC_MSG_READ = 'msg.chat.read';
