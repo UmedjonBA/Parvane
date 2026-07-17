@@ -416,6 +416,11 @@ fn allowed_req(_user: &str, subject: &str) -> bool {
         "group.setrole",
         "group.list",
         "group.info",
+        "group.ban",
+        "group.unban",
+        "group.mute",
+        "group.invite.create",
+        "group.join",
         "call.history.request",
     ];
     OK.contains(&subject)

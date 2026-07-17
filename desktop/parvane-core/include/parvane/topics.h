@@ -62,6 +62,11 @@ inline constexpr auto GroupAddMember = "group.addmember";
 inline constexpr auto GroupRemoveMember = "group.removemember";
 inline constexpr auto GroupSetRole = "group.setrole";
 inline constexpr auto GroupList = "group.list";
+inline constexpr auto GroupBan = "group.ban";
+inline constexpr auto GroupUnban = "group.unban";
+inline constexpr auto GroupMute = "group.mute";
+inline constexpr auto GroupInviteCreate = "group.invite.create";
+inline constexpr auto GroupJoin = "group.join";
 inline constexpr auto GroupInfo = "group.info";
 
 } // namespace parvane::topics

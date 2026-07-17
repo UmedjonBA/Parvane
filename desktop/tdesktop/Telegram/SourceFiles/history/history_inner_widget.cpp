@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history_inner_widget.h"
 
+#include "parvane/parvane_client.h" // модерация групп (бан/мьют)
+
 #include "api/api_polls.h"
 #include "chat_helpers/stickers_emoji_pack.h"
 #include "core/application.h"
@@ -2929,6 +2931,26 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				tr::lng_stats_title(tr::now),
 				std::move(callback),
 				&st::menuIconStats);
+		}
+		// Parvane: модерация в наших группах — бан/мьют автора чужого
+		// сообщения (права проверяет бэкенд: owner/admin).
+		if (!item->out()) {
+			const auto gid = Parvane::GroupIdForChat(item->history()->peer);
+			const auto author = item->from()->asUser();
+			if (!gid.isEmpty() && author) {
+				const auto address = Parvane::AddressForId(
+					std::uint64_t(peerToUser(author->id).bare));
+				if (!address.isEmpty()) {
+					_menu->addAction(
+						u"Замьютить на час"_q,
+						[=] { Parvane::MuteMember(gid, address, 60); },
+						&st::menuIconMute);
+					_menu->addAction(
+						u"Забанить в группе"_q,
+						[=] { Parvane::BanMember(gid, address, true); },
+						&st::menuIconBlock);
+				}
+			}
 		}
 	};
 	const auto addPhotoActions = [&](not_null<PhotoData*> photo, HistoryItem *item) {

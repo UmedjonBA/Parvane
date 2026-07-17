@@ -52,4 +52,36 @@ GroupActionResponse GroupClient::setRole(const std::string &token, const std::st
     return GroupActionResponse::fromJson(json::parse(raw));
 }
 
+GroupActionResponse GroupClient::ban(const std::string &token, const std::string &groupId,
+                                     const std::string &member, bool banned,
+                                     int timeoutMs) {
+    const json req{ { "token", token }, { "group_id", groupId }, { "member", member } };
+    const std::string raw = _t.request(
+        banned ? topics::GroupBan : topics::GroupUnban, req.dump(), timeoutMs);
+    return GroupActionResponse::fromJson(json::parse(raw));
+}
+
+GroupActionResponse GroupClient::mute(const std::string &token, const std::string &groupId,
+                                      const std::string &member, long long until,
+                                      int timeoutMs) {
+    const json req{ { "token", token }, { "group_id", groupId },
+                    { "member", member }, { "until", until } };
+    const std::string raw = _t.request(topics::GroupMute, req.dump(), timeoutMs);
+    return GroupActionResponse::fromJson(json::parse(raw));
+}
+
+std::string GroupClient::inviteCreate(const std::string &token, const std::string &groupId,
+                                      int timeoutMs) {
+    const json req{ { "token", token }, { "group_id", groupId } };
+    const std::string raw = _t.request(topics::GroupInviteCreate, req.dump(), timeoutMs);
+    const auto j = json::parse(raw);
+    return j.value("ok", false) ? j.value("invite", std::string()) : std::string();
+}
+
+json GroupClient::join(const std::string &token, const std::string &invite,
+                       int timeoutMs) {
+    const json req{ { "token", token }, { "invite", invite } };
+    return json::parse(_t.request(topics::GroupJoin, req.dump(), timeoutMs));
+}
+
 } // namespace parvane

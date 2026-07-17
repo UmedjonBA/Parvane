@@ -4,12 +4,14 @@ use futures::StreamExt;
 use parvane_types::{
     AckPayload, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
     GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
-    GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest, GroupSetRoleRequest,
+    GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
+    GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
     MessageContent,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, SendPayload, StoredMessage,
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
-        GROUP_ADD_MEMBER, GROUP_CREATE, GROUP_INFO, GROUP_LIST, GROUP_REMOVE_MEMBER, GROUP_SET_ROLE,
+        GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_INFO, GROUP_INVITE_CREATE, GROUP_JOIN,
+        GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER, GROUP_SET_ROLE, GROUP_UNBAN,
         IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
@@ -67,6 +69,11 @@ async fn main() -> Result<()> {
     let mut gadd_sub = nc.subscribe(GROUP_ADD_MEMBER).await?;
     let mut gremove_sub = nc.subscribe(GROUP_REMOVE_MEMBER).await?;
     let mut gsetrole_sub = nc.subscribe(GROUP_SET_ROLE).await?;
+    let mut gban_sub = nc.subscribe(GROUP_BAN).await?;
+    let mut gunban_sub = nc.subscribe(GROUP_UNBAN).await?;
+    let mut gmute_sub = nc.subscribe(GROUP_MUTE).await?;
+    let mut ginvite_sub = nc.subscribe(GROUP_INVITE_CREATE).await?;
+    let mut gjoin_sub = nc.subscribe(GROUP_JOIN).await?;
     let mut glist_sub = nc.subscribe(GROUP_LIST).await?;
     let mut ginfo_sub = nc.subscribe(GROUP_INFO).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
@@ -110,6 +117,21 @@ async fn main() -> Result<()> {
             }
             Some(msg) = gsetrole_sub.next() => {
                 handle_group_setrole(&nc, &pool, msg).await;
+            }
+            Some(msg) = gban_sub.next() => {
+                handle_group_ban(&nc, &pool, msg, true).await;
+            }
+            Some(msg) = gunban_sub.next() => {
+                handle_group_ban(&nc, &pool, msg, false).await;
+            }
+            Some(msg) = gmute_sub.next() => {
+                handle_group_mute(&nc, &pool, msg).await;
+            }
+            Some(msg) = ginvite_sub.next() => {
+                handle_group_invite_create(&nc, &pool, msg).await;
+            }
+            Some(msg) = gjoin_sub.next() => {
+                handle_group_join(&nc, &pool, msg).await;
             }
             Some(msg) = glist_sub.next() => {
                 handle_group_list(&nc, &pool, msg).await;
@@ -339,6 +361,12 @@ async fn add_group_member(
     member: &str,
 ) -> Result<bool> {
     let role = member_role(pool, group_id, actor).await?;
+    if matches!(
+        member_role(pool, group_id, member).await?.as_deref(),
+        Some("banned")
+    ) {
+        return Ok(false); // забанен — сначала разбанить
+    }
     if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
         return Ok(false);
     }
@@ -391,7 +419,8 @@ async fn set_group_role(
         return Ok(false);
     }
     let res = sqlx::query(
-        "UPDATE group_members SET role = ? WHERE group_id = ? AND member = ? AND role != 'owner'",
+        "UPDATE group_members SET role = ?
+         WHERE group_id = ? AND member = ? AND role NOT IN ('owner', 'banned')",
     )
     .bind(role)
     .bind(group_id)
@@ -455,11 +484,24 @@ async fn can_post(pool: &SqlitePool, to: &str, sender: &str) -> Result<bool> {
         return Ok(true); // не группа → обычный 1-на-1
     };
     let role = member_role(pool, to, sender).await?;
-    if kind == "channel" {
-        Ok(matches!(role.as_deref(), Some("owner") | Some("admin")))
-    } else {
-        Ok(role.is_some())
+    if matches!(role.as_deref(), Some("banned")) {
+        return Ok(false); // забанен — не пишет
     }
+    if kind == "channel" {
+        return Ok(matches!(role.as_deref(), Some("owner") | Some("admin")));
+    }
+    if role.is_none() {
+        return Ok(false);
+    }
+    // Мьют: до muted_until писать нельзя (owner немьютим по построению).
+    let muted: Option<(i64,)> = sqlx::query_as(
+        "SELECT muted_until FROM group_members WHERE group_id = ? AND member = ?",
+    )
+    .bind(to)
+    .bind(sender)
+    .fetch_optional(pool)
+    .await?;
+    Ok(muted.map(|(m,)| m <= now_unix()).unwrap_or(false))
 }
 
 /// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
@@ -523,7 +565,8 @@ async fn fetch_missed(
                 m.pinned
          FROM messages m
          WHERE (m.to_user = ? OR m.from_user = ?
-                OR m.to_user IN (SELECT group_id FROM group_members WHERE member = ?))
+                OR m.to_user IN (SELECT group_id FROM group_members
+                                 WHERE member = ? AND role != 'banned'))
            AND (m.id > ? OR m.updated_at > ?)
          ORDER BY m.updated_at, m.id
          LIMIT 100",
@@ -658,7 +701,8 @@ async fn resolve_recipients(pool: &SqlitePool, to: &str, from: &str) -> Result<V
         .await?;
     if is_group.is_some() {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT member FROM group_members WHERE group_id = ? AND member != ?",
+            "SELECT member FROM group_members
+             WHERE group_id = ? AND member != ? AND role != 'banned'",
         )
         .bind(to)
         .bind(from)
@@ -1019,6 +1063,200 @@ async fn handle_group_setrole(nc: &Client, pool: &SqlitePool, msg: async_nats::M
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
+/// Бан/разбан. Только owner/admin; owner небаним. Бан не-участника создаёт
+/// banned-запись (не вступит по инвайту). Разбан удаляет banned-запись.
+async fn ban_group_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    actor: &str,
+    member: &str,
+    ban: bool,
+) -> Result<bool> {
+    let actor_role = member_role(pool, group_id, actor).await?;
+    if !matches!(actor_role.as_deref(), Some("owner") | Some("admin")) {
+        return Ok(false);
+    }
+    let target = member_role(pool, group_id, member).await?;
+    if matches!(target.as_deref(), Some("owner")) {
+        return Ok(false);
+    }
+    if ban {
+        sqlx::query(
+            "INSERT INTO group_members (group_id, member, role) VALUES (?, ?, 'banned')
+             ON CONFLICT(group_id, member) DO UPDATE SET role = 'banned', muted_until = 0",
+        )
+        .bind(group_id)
+        .bind(member)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM group_members WHERE group_id = ? AND member = ? AND role = 'banned'",
+        )
+        .bind(group_id)
+        .bind(member)
+        .execute(pool)
+        .await?;
+    }
+    Ok(true)
+}
+
+/// Мьют до unix-времени (0 — снять). Только owner/admin; owner немьютим.
+async fn mute_group_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    actor: &str,
+    member: &str,
+    until: i64,
+) -> Result<bool> {
+    let actor_role = member_role(pool, group_id, actor).await?;
+    if !matches!(actor_role.as_deref(), Some("owner") | Some("admin")) {
+        return Ok(false);
+    }
+    let n = sqlx::query(
+        "UPDATE group_members SET muted_until = ?
+         WHERE group_id = ? AND member = ? AND role NOT IN ('owner', 'banned')",
+    )
+    .bind(until)
+    .bind(group_id)
+    .bind(member)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(n > 0)
+}
+
+async fn handle_group_ban(nc: &Client, pool: &SqlitePool, msg: async_nats::Message, ban: bool) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupMemberRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.ban")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = ban_group_member(pool, &req.group_id, &actor, &req.member, ban).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("нет прав / нельзя".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_group_mute(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupMuteRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.mute")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = mute_group_member(pool, &req.group_id, &actor, &req.member, req.until).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("нет прав / нельзя".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupInviteCreateRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.invite.create")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let role = member_role(pool, &req.group_id, &actor).await?;
+        if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
+            return anyhow::Ok(GroupInviteCreateResponse {
+                ok: false,
+                invite: None,
+                error: Some("нет прав".into()),
+            });
+        }
+        let token = Uuid::now_v7().simple().to_string();
+        sqlx::query(
+            "INSERT INTO group_invites (token, group_id, created_by, created_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&token)
+        .bind(&req.group_id)
+        .bind(&actor)
+        .bind(now_unix())
+        .execute(pool)
+        .await?;
+        info!("Инвайт для {} создан ({})", req.group_id, actor);
+        anyhow::Ok(GroupInviteCreateResponse { ok: true, invite: Some(token), error: None })
+    }
+    .await
+    .unwrap_or_else(|e| GroupInviteCreateResponse {
+        ok: false,
+        invite: None,
+        error: Some(e.to_string()),
+    });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupJoinRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.join")?;
+        let user = verify_token(nc, &req.token).await?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT group_id FROM group_invites WHERE token = ? AND revoked = 0",
+        )
+        .bind(&req.invite)
+        .fetch_optional(pool)
+        .await?;
+        let Some((group_id,)) = row else {
+            return anyhow::Ok(GroupJoinResponse {
+                ok: false,
+                group_id: None,
+                name: None,
+                error: Some("ссылка недействительна".into()),
+            });
+        };
+        if matches!(
+            member_role(pool, &group_id, &user).await?.as_deref(),
+            Some("banned")
+        ) {
+            return anyhow::Ok(GroupJoinResponse {
+                ok: false,
+                group_id: None,
+                name: None,
+                error: Some("вы забанены в этой группе".into()),
+            });
+        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO group_members (group_id, member, role) VALUES (?, ?, 'member')",
+        )
+        .bind(&group_id)
+        .bind(&user)
+        .execute(pool)
+        .await?;
+        let name: Option<(String,)> = sqlx::query_as("SELECT name FROM groups WHERE id = ?")
+            .bind(&group_id)
+            .fetch_optional(pool)
+            .await?;
+        info!("{} вступил в {} по инвайту", user, group_id);
+        anyhow::Ok(GroupJoinResponse {
+            ok: true,
+            group_id: Some(group_id),
+            name: name.map(|(n,)| n),
+            error: None,
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupJoinResponse {
+        ok: false,
+        group_id: None,
+        name: None,
+        error: Some(e.to_string()),
+    });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
 async fn handle_group_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else { return };
     let resp = async {
@@ -1131,6 +1369,76 @@ mod tests {
             MessageContent::Text { text, .. } => text,
             other => panic!("ожидался Text, получено {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn ban_blocks_posting_and_membership() {
+        let pool = test_pool().await;
+        let g1 = create_group(&pool, "Тест", GroupKind::Group, "owner@l",
+            &["bob@l".into()], 0).await.unwrap();
+        let g1 = g1.as_str();
+        assert!(can_post(&pool, g1, "bob@l").await.unwrap());
+        // админ не нужен: owner банит
+        assert!(ban_group_member(&pool, g1, "owner@l", "bob@l", true).await.unwrap());
+        assert!(!can_post(&pool, g1, "bob@l").await.unwrap());
+        // банённого нельзя добавить обратно add'ом
+        assert!(!add_group_member(&pool, g1, "owner@l", "bob@l").await.unwrap());
+        // owner небаним, обычный участник банить не может
+        assert!(!ban_group_member(&pool, g1, "bob@l", "owner@l", true).await.unwrap());
+        assert!(!ban_group_member(&pool, g1, "owner@l", "owner@l", true).await.unwrap());
+        // разбан возвращает возможность добавления
+        assert!(ban_group_member(&pool, g1, "owner@l", "bob@l", false).await.unwrap());
+        assert!(add_group_member(&pool, g1, "owner@l", "bob@l").await.unwrap());
+        assert!(can_post(&pool, g1, "bob@l").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mute_blocks_posting_until_deadline() {
+        let pool = test_pool().await;
+        let g2 = create_group(&pool, "Тест", GroupKind::Group, "owner@l",
+            &["bob@l".into()], 0).await.unwrap();
+        let g2 = g2.as_str();
+        let future = now_unix() + 3600;
+        assert!(mute_group_member(&pool, g2, "owner@l", "bob@l", future).await.unwrap());
+        assert!(!can_post(&pool, g2, "bob@l").await.unwrap());
+        // снятие мьюта (until=0 в прошлом)
+        assert!(mute_group_member(&pool, g2, "owner@l", "bob@l", 0).await.unwrap());
+        assert!(can_post(&pool, g2, "bob@l").await.unwrap());
+        // owner немьютим
+        assert!(!mute_group_member(&pool, g2, "owner@l", "owner@l", future).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn invite_join_respects_ban() {
+        let pool = test_pool().await;
+        let g3 = create_group(&pool, "Тест", GroupKind::Group, "owner@l", &[], 0)
+            .await
+            .unwrap();
+        let g3 = g3.as_str();
+        sqlx::query(
+            "INSERT INTO group_invites (token, group_id, created_by, created_at)
+             VALUES ('inv1', ?, 'owner@l', 0)",
+        )
+        .bind(g3)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // banned не вступит по инвайту (проверка как в handle_group_join)
+        assert!(ban_group_member(&pool, g3, "owner@l", "eve@l", true).await.unwrap());
+        assert!(matches!(
+            member_role(&pool, g3, "eve@l").await.unwrap().as_deref(),
+            Some("banned")
+        ));
+        // обычный юзер вступает: имитируем вставку join'а
+        sqlx::query(
+            "INSERT OR IGNORE INTO group_members (group_id, member, role)
+             VALUES (?, 'carol@l', 'member')",
+        )
+        .bind(g3)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(can_post(&pool, g3, "carol@l").await.unwrap());
     }
 
     /// In-memory SQLite с одной живой connection (иначе каждый коннект — своя

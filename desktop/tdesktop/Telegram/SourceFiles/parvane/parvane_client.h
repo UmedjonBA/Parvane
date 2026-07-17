@@ -172,6 +172,17 @@ void LeaveGroup(const QString &groupId);
 // нативного «выйти из группы» в меню.
 [[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
 
+// ── модерация групп и инвайт-ссылки (P2) ─────────────────────────────────────
+// Бан/разбан участника (owner/admin; бэкенд сам гейтит права).
+void BanMember(const QString &groupId, const QString &member, bool ban);
+// Мьют на minutes минут (0 — снять). owner/admin.
+void MuteMember(const QString &groupId, const QString &member, int minutes);
+// Создать инвайт-ссылку: бокс со ссылкой + копия в буфер обмена.
+void CreateInviteLink(const QString &groupId);
+// Перехват клика по ссылке: parvane.invite/<token> → конфирм → вступление.
+// true — ссылка наша (обработана), false — не наша.
+[[nodiscard]] bool JoinByInviteLink(const QString &url);
+
 // ── стикеры/GIF (паритет) ────────────────────────────────────────────────────
 // Зеркалит отправку СУЩЕСТВУЮЩЕГО документа (стикер из панели / GIF из
 // сохранённых): байты локального файла → cloud (E2E-блоб), content kind=
