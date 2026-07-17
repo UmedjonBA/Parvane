@@ -140,15 +140,18 @@ export class ParvaneStore {
       type: 'userTypeRegular',
       firstName: this.getDisplayName(address),
       phoneNumber: '',
+      color: { type: 'regular', color: Number(this.getIdForAddress(address)) % 7 },
     };
   }
 
   buildApiChatForUser(address: string): ApiChat {
+    const id = this.getIdForAddress(address);
     return {
-      id: this.getIdForAddress(address),
+      id,
       type: 'chatTypePrivate',
       title: this.getDisplayName(address),
       isListed: true,
+      color: { type: 'regular', color: Number(id) % 7 },
     };
   }
 

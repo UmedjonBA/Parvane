@@ -130,4 +130,13 @@ async function main() {
 
 main()
   .catch((err) => { console.error('[cdp] ошибка:', err.message); process.exitCode = 1; })
-  .finally(() => { chrome.kill(); setTimeout(() => process.exit(), 500); });
+  .finally(async () => {
+    // Ждём штатного выхода Chromium: SIGKILL/мгновенный exit теряет
+    // несфлашенный localStorage (профиль «забывает» логин)
+    await new Promise((resolve) => {
+      const guard = setTimeout(() => { chrome.kill('SIGKILL'); resolve(); }, 5000);
+      chrome.on('exit', () => { clearTimeout(guard); resolve(); });
+      chrome.kill();
+    });
+    process.exit();
+  });
