@@ -91,7 +91,9 @@ addActionHandler('initApi', (global, actions): ActionReturnType => {
 addActionHandler('setAuthPhoneNumber', (global, actions, payload): ActionReturnType => {
   const { phoneNumber } = payload;
 
-  void callApi('provideAuthPhoneNumber', phoneNumber.replace(/[^\d]/g, ''));
+  // Parvane: федеративный адрес user@server передаётся как есть
+  const adapted = phoneNumber.includes('@') ? phoneNumber : phoneNumber.replace(/[^\d]/g, '');
+  void callApi('provideAuthPhoneNumber', adapted);
 
   return updateAuth(global, {
     isLoading: true,

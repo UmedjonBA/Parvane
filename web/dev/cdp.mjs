@@ -92,6 +92,8 @@ async function main() {
 
   await send('Runtime.enable');
   await send('Page.enable');
+  // Headless-страница без фокуса = background mode в tt (read-квитанции не шлются)
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await send('Page.navigate', { url });
   await sleep(waitMs);
 
