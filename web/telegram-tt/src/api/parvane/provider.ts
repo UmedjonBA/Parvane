@@ -38,6 +38,8 @@ import {
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_RESOLVE,
   TOPIC_IDENTITY_SEARCH,
+  TOPIC_IDENTITY_SETAVATAR,
+  TOPIC_IDENTITY_SETNAME,
   TOPIC_MSG_ACK,
   TOPIC_MSG_DELETE,
   TOPIC_MSG_EDIT,
@@ -320,7 +322,16 @@ async function resolveDisplayNames(addresses: string[]) {
   try {
     const raw = await connection!.request(TOPIC_IDENTITY_RESOLVE, JSON.stringify({ usernames: addresses }));
     const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
-    users.forEach((u) => store.setDisplayName(u.username, u.display_name || u.username));
+    users.forEach((u) => {
+      store.setDisplayName(u.username, u.display_name || u.username);
+      const prevAvatar = store.getAvatar(u.username);
+      store.setAvatar(u.username, u.avatar);
+      // Аватар сменился — переотдаём ApiUser, чтобы UI перекачал
+      if (u.avatar !== prevAvatar && u.username !== store.self) {
+        const user = store.buildApiUser(u.username);
+        sendUpdate({ '@type': 'updateUser', id: user.id, user });
+      }
+    });
   } catch {
     // Имена не критичны — покажем локальную часть адреса
   }
@@ -1057,9 +1068,11 @@ const methods = {
     { url, mediaFormat, start, end }: { url: string; mediaFormat: number; start?: number; end?: number },
     _onProgress?: ApiOnProgress,
   ) {
-    const match = url.match(MEDIA_URL_REGEX);
-    if (!match) return Promise.resolve(undefined);
-    const fileId = match[1];
+    // Аватар/профиль-фото: хэш `avatar<id>?<fileId>` — fileId после '?'
+    const avatarMatch = url.match(/^(?:avatar|profile)[^?]*\?(.+)$/);
+    const mediaMatch = url.match(MEDIA_URL_REGEX);
+    const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
+    if (!fileId) return Promise.resolve(undefined);
 
     let cached = mediaCacheByFileId.get(fileId);
     if (!cached) {
@@ -1236,6 +1249,35 @@ const methods = {
     const userStatusesById: Record<string, ApiUserStatus> = {};
     users.forEach((u) => { userStatusesById[u.id] = RECENT_STATUS; });
     return { users, userStatusesById };
+  },
+
+  async updateProfile({ firstName }: { firstName?: string; lastName?: string; about?: string }) {
+    if (!connection || !firstName) return undefined;
+    await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify({ token, display_name: firstName }));
+    store.setDisplayName(store.self, firstName);
+    const user = store.buildApiUser(store.self);
+    sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });
+    return true;
+  },
+
+  async uploadProfilePhoto(file: File) {
+    if (!connection) return undefined;
+    const { fileId } = await uploadBlobToCloud(file, file.name || 'avatar.jpg', file.type || 'image/jpeg');
+    await connection.request(TOPIC_IDENTITY_SETAVATAR, JSON.stringify({ token, file_id: fileId }));
+    store.setAvatar(store.self, fileId);
+    mediaCacheByFileId.set(fileId, Promise.resolve({ blob: file, mimeType: file.type || 'image/jpeg' }));
+    const user = store.buildApiUser(store.self);
+    sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });
+    return {
+      photo: {
+        mediaType: 'photo' as const,
+        id: fileId,
+        date: Math.floor(Date.now() / 1000),
+        sizes: [{ type: 'x' as const, width: 640, height: 640 }],
+      },
+    };
   },
 
   fetchCurrentUser() {
