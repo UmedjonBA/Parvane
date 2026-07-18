@@ -1599,6 +1599,43 @@ const methods = {
     return undefined;
   },
 
+  // Пересылка = независимая копия content в другой чат с меткой forwarded_from
+  async forwardMessages({ fromChat, toChat, messages: fwdMessages }: {
+    fromChat: ApiChat; toChat: ApiChat; messages: ApiMessage[];
+  }) {
+    const toAddress = store.getAddressForId(toChat.id);
+    if (!toAddress) return undefined;
+    const fromAddress = store.getAddressForId(fromChat.id) || '';
+
+    for (const msg of fwdMessages) {
+      const wireContent = apiMessageToWireContent(msg);
+      if (!wireContent) continue;
+      const origSender = msg.senderId ? store.getAddressForId(msg.senderId) : fromAddress;
+      wireContent.forwarded_from = origSender || fromAddress;
+      wireContent.forwarded_name = origSender ? store.getDisplayName(origSender) : store.getDisplayName(fromAddress);
+
+      const uuid = await publishInner(toAddress, wireContent);
+      const id = store.allocateMessageId(toChat.id, uuid);
+      const localMessage: ApiMessage = {
+        id,
+        chatId: toChat.id,
+        content: msg.content,
+        date: Math.floor(Date.now() / 1000),
+        isOutgoing: true,
+        senderId: selfId(),
+        forwardInfo: {
+          date: msg.date,
+          isChannelPost: false,
+          fromChatId: origSender ? store.getIdForAddress(origSender) : undefined,
+          hiddenUserName: wireContent.forwarded_name as string,
+        },
+      };
+      store.putMessage(localMessage);
+      sendUpdate({ '@type': 'newMessage', chatId: toChat.id, id, message: localMessage });
+    }
+    return true;
+  },
+
   async searchChats({ query }: { query: string }) {
     if (!connection || !query.trim()) {
       return { accountResultIds: [], globalResultIds: [] };
@@ -1951,6 +1988,41 @@ function detectWebPage(text?: string) {
   } catch {
     return undefined;
   }
+}
+
+// Пересобирает wire-content из ApiMessage (для пересылки). Медиа-ключи берём
+// из реестра (file_id → key/nonce), чтобы получатель расшифровал
+function apiMessageToWireContent(msg: ApiMessage): Record<string, unknown> | undefined {
+  const c = msg.content;
+  if (c.text && !c.photo && !c.document && !c.sticker) {
+    return {
+      kind: 'text',
+      text: c.text.text,
+      entities: apiEntitiesToWire(c.text.entities),
+    };
+  }
+  const mediaId = c.photo?.id || c.document?.id || c.sticker?.id;
+  if (!mediaId) return undefined;
+  const keys = mediaKeysByFileId.get(mediaId);
+  const crypto = keys ? { file_key: keys.keyB64, file_nonce: keys.nonceB64 } : {};
+  if (c.sticker) {
+    return {
+      kind: 'sticker', file_id: mediaId, filename: c.sticker.emoji || '⭐', mime: 'image/png', ...crypto,
+    };
+  }
+  if (c.photo) {
+    return {
+      kind: 'photo', file_id: mediaId, width: 0, height: 0, mime: 'image/jpeg', ...crypto,
+    };
+  }
+  return {
+    kind: 'file',
+    file_id: mediaId,
+    filename: c.document!.fileName,
+    mime: c.document!.mimeType,
+    size_bytes: c.document!.size,
+    ...crypto,
+  };
 }
 
 function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
