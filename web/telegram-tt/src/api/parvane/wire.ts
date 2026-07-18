@@ -37,6 +37,7 @@ export type WireMessageContent = {
   group?: string;
   session_key?: string;
   epoch?: number;
+  ttl_secs?: number;
 };
 
 export type WireStoredMessage = {
