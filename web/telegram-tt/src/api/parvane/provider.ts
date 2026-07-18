@@ -1636,6 +1636,24 @@ const methods = {
     return true;
   },
 
+  async parvaneSendLocation({ chat, lat, long }: { chat: ApiChat; lat: number; long: number }) {
+    const toAddress = store.getAddressForId(chat.id);
+    if (!toAddress) return undefined;
+    const uuid = await publishInner(toAddress, { kind: 'location', lat, long });
+    const id = store.allocateMessageId(chat.id, uuid);
+    const message: ApiMessage = {
+      id,
+      chatId: chat.id,
+      content: { location: { mediaType: 'geo', geo: { lat, long, accessHash: '0' } } },
+      date: Math.floor(Date.now() / 1000),
+      isOutgoing: true,
+      senderId: selfId(),
+    };
+    store.putMessage(message);
+    sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
+    return true;
+  },
+
   async searchChats({ query }: { query: string }) {
     if (!connection || !query.trim()) {
       return { accountResultIds: [], globalResultIds: [] };

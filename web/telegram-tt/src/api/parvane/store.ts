@@ -297,6 +297,13 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       };
     case 'poll':
       return { pollId: stored.id };
+    case 'location':
+      return {
+        location: {
+          mediaType: 'geo',
+          geo: { lat: content.lat || 0, long: content.long || 0, accessHash: '0' },
+        },
+      };
     case 'sticker':
       return {
         sticker: {
