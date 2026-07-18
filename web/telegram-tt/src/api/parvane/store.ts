@@ -29,6 +29,8 @@ export class ParvaneStore {
 
   private displayNameByAddress = new Map<string, string>();
 
+  private avatarByAddress = new Map<string, string>();
+
   private groupInfoByAddress = new Map<string, WireGroupInfo>();
 
   private messagesByChatId = new Map<string, ApiMessage[]>();
@@ -78,6 +80,15 @@ export class ParvaneStore {
 
   getDisplayName(address: string) {
     return this.displayNameByAddress.get(address) || address.split('@')[0];
+  }
+
+  setAvatar(address: string, fileId: string | undefined) {
+    if (fileId) this.avatarByAddress.set(address, fileId);
+    else this.avatarByAddress.delete(address);
+  }
+
+  getAvatar(address: string) {
+    return this.avatarByAddress.get(address);
   }
 
   // Куда (в какой чат) кладётся сообщение с точки зрения этого клиента
@@ -133,15 +144,17 @@ export class ParvaneStore {
 
   buildApiUser(address: string): ApiUser {
     const isSelf = address === this.self;
+    const id = this.getIdForAddress(address);
     return {
-      id: this.getIdForAddress(address),
+      id,
       isMin: false,
       isSelf: isSelf ? true : undefined,
       isContact: isSelf ? undefined : true,
       type: 'userTypeRegular',
       firstName: this.getDisplayName(address),
       phoneNumber: '',
-      color: { type: 'regular', color: Number(this.getIdForAddress(address)) % 7 },
+      color: { type: 'regular', color: Number(id) % 7 },
+      avatarPhotoId: this.avatarByAddress.get(address),
     };
   }
 
