@@ -38,6 +38,8 @@ export type WireMessageContent = {
   session_key?: string;
   epoch?: number;
   ttl_secs?: number;
+  forwarded_from?: string;
+  forwarded_name?: string;
 };
 
 export type WireStoredMessage = {

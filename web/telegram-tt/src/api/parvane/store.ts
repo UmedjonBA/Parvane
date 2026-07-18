@@ -208,6 +208,12 @@ export class ParvaneStore {
         ? { type: 'message', replyToMsgId: replyKey.id }
         : undefined,
       reactions: buildReactions(stored),
+      forwardInfo: stored.content.forwarded_from ? {
+        date: stored.ts,
+        isChannelPost: false,
+        fromChatId: this.getIdForAddress(stored.content.forwarded_from),
+        hiddenUserName: stored.content.forwarded_name,
+      } : undefined,
     };
   }
 }
