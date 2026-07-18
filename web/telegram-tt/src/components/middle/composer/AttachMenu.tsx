@@ -2,7 +2,8 @@ import {
   memo, useEffect,
   useMemo,
 } from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
+import { getActions, getGlobal } from '../../../global';
+import { callApi } from '../../../api/gramjs';
 
 import type { ApiAttachMenuPeerType, ApiFormattedText, ApiMessage } from '../../../api/types';
 import type { GlobalState } from '../../../global/types';
@@ -147,6 +148,18 @@ const AttachMenu = ({
     }
   });
 
+  const handleParvaneLocation = useLastCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const chat = getGlobal().chats.byId[chatId];
+      if (chat) {
+        void (callApi as unknown as (n: string, a: unknown) => void)('parvaneSendLocation', {
+          chat, lat: pos.coords.latitude, long: pos.coords.longitude,
+        });
+      }
+    });
+  });
+
   const handleQuickSelect = useLastCallback(() => {
     updateAttachmentSettings({ shouldCompress: true });
     openSystemFilesDialog(
@@ -282,6 +295,9 @@ const AttachMenu = ({
             )}
             {canAttachPolls && !editingMessage && (
               <MenuItem icon="poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
+            )}
+            {!editingMessage && (
+              <MenuItem icon="location" onClick={handleParvaneLocation}>Геопозиция</MenuItem>
             )}
             {canAttachToDoLists && !editingMessage && (
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>

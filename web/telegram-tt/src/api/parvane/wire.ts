@@ -40,6 +40,8 @@ export type WireMessageContent = {
   ttl_secs?: number;
   forwarded_from?: string;
   forwarded_name?: string;
+  lat?: number;
+  long?: number;
 };
 
 export type WireStoredMessage = {
