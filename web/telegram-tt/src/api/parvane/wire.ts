@@ -8,11 +8,19 @@ export type WireTextEntity = {
   data?: string;
 };
 
+export type WireWebPage = {
+  url: string;
+  site_name?: string;
+  title?: string;
+  description?: string;
+};
+
 export type WireMessageContent = {
   kind: 'text' | 'voice' | 'video_note' | 'photo' | 'video' | 'file'
     | 'encrypted' | 'group_encrypted' | string;
   text?: string;
   entities?: WireTextEntity[];
+  webpage?: WireWebPage;
   file_id?: string;
   filename?: string;
   mime?: string;

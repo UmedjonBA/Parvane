@@ -207,6 +207,29 @@ export class ParvaneStore {
   }
 }
 
+// Полная карточка превью для newMessage.webPages (id связан с content.webPage)
+export function buildWebPage(stored: WireStoredMessage) {
+  const wp = stored.content.webpage;
+  if (!wp) return undefined;
+  let displayUrl = wp.url;
+  try {
+    displayUrl = new URL(wp.url).hostname;
+  } catch {
+    // оставляем как есть
+  }
+  return {
+    mediaType: 'webpage' as const,
+    webpageType: 'full' as const,
+    id: `wp${stored.id}`,
+    url: wp.url,
+    hash: 0,
+    displayUrl,
+    siteName: wp.site_name,
+    title: wp.title,
+    description: wp.description,
+  };
+}
+
 function buildReactions(stored: WireStoredMessage): ApiMessage['reactions'] {
   const list = stored.reactions;
   if (!list?.length) return undefined;
@@ -227,7 +250,10 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
   const caption = content.caption ? { text: { text: content.caption } } : {};
   switch (content.kind) {
     case 'text':
-      return { text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) } };
+      return {
+        text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) },
+        webPage: content.webpage ? { id: `wp${stored.id}` } : undefined,
+      };
     case 'photo':
       return {
         ...caption,
