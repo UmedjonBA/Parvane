@@ -2,7 +2,8 @@ import type { FC } from '../../lib/teact/teact';
 import {
   memo, useEffect, useMemo, useState,
 } from '../../lib/teact/teact';
-import { getActions, withGlobal } from '../../global';
+import { getActions, getGlobal, withGlobal } from '../../global';
+import { callApi } from '../../api/gramjs';
 
 import type {
   ApiBotCommand, ApiChat, ApiDisallowedGifts,
@@ -60,6 +61,7 @@ import MuteChatModal from '../left/MuteChatModal.async';
 import Menu from '../ui/Menu';
 import MenuItem from '../ui/MenuItem';
 import MenuSeparator from '../ui/MenuSeparator';
+import NestedMenuItem from '../ui/NestedMenuItem';
 import Portal from '../ui/Portal';
 
 import './HeaderMenuContainer.scss';
@@ -314,6 +316,16 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
       openFrozenAccountModal();
     } else {
       updateChatMutedState({ chatId, mutedUntil: UNMUTE_TIMESTAMP });
+    }
+    closeMenu();
+  });
+
+  const handleAutoDelete = useLastCallback((period: number) => {
+    const chat = getGlobal().chats.byId[chatId];
+    if (chat) {
+      void (callApi as unknown as (n: string, a: unknown) => void)(
+        'setChatMessageAutoDeletePeriod', { chat, period },
+      );
     }
     closeMenu();
   });
@@ -608,6 +620,19 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
               {oldLang('Search')}
             </MenuItem>
           )}
+          <NestedMenuItem
+            icon="schedule"
+            submenu={(
+              <>
+                <MenuItem onClick={() => handleAutoDelete(0)}>Выключить</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(3600)}>1 час</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(86400)}>1 день</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(604800)}>1 неделя</MenuItem>
+              </>
+            )}
+          >
+            Автоудаление
+          </NestedMenuItem>
           {withForumActions && canCreateTopic && (
             <>
               <MenuItem
