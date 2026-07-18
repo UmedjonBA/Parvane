@@ -35,6 +35,12 @@ export class E2eEngine {
 
   private decCache: Record<string, StoredInner> = {};
 
+  // Megolm: своя исходящая group-сессия на группу (+ эпоха для ротации) и
+  // входящие сессии от участников, ключ = `${group}|${senderIdentity}`
+  private groupOut = new Map<string, { session: Olm.OutboundGroupSession; epoch: number }>();
+
+  private groupIn = new Map<string, { session: Olm.InboundGroupSession; epoch: number }>();
+
   private self = '';
 
   identityKey = '';
@@ -75,6 +81,21 @@ export class E2eEngine {
     });
     this.identityByContact = JSON.parse(localStorage.getItem(this.storageKey('contacts')) || '{}');
     this.decCache = JSON.parse(localStorage.getItem(this.storageKey('dec')) || '{}');
+
+    const gout = JSON.parse(localStorage.getItem(this.storageKey('gout')) || '{}') as
+      Record<string, { pickle: string; epoch: number }>;
+    Object.entries(gout).forEach(([group, { pickle, epoch }]) => {
+      const session = new Olm.OutboundGroupSession();
+      session.unpickle(PICKLE_KEY, pickle);
+      this.groupOut.set(group, { session, epoch });
+    });
+    const gin = JSON.parse(localStorage.getItem(this.storageKey('gin')) || '{}') as
+      Record<string, { pickle: string; epoch: number }>;
+    Object.entries(gin).forEach(([key, { pickle, epoch }]) => {
+      const session = new Olm.InboundGroupSession();
+      session.unpickle(PICKLE_KEY, pickle);
+      this.groupIn.set(key, { session, epoch });
+    });
   }
 
   private persistAccount() {
@@ -197,5 +218,80 @@ export class E2eEngine {
     if (this.identityByContact[contact] === identity) return;
     this.identityByContact[contact] = identity;
     this.persistContacts();
+  }
+
+  // ── Megolm (группы) ──────────────────────────────────────────────────────
+
+  private persistGroupOut() {
+    const out: Record<string, { pickle: string; epoch: number }> = {};
+    this.groupOut.forEach(({ session, epoch }, group) => {
+      out[group] = { pickle: session.pickle(PICKLE_KEY), epoch };
+    });
+    localStorage.setItem(this.storageKey('gout'), JSON.stringify(out));
+  }
+
+  private persistGroupIn() {
+    const out: Record<string, { pickle: string; epoch: number }> = {};
+    this.groupIn.forEach(({ session, epoch }, key) => {
+      out[key] = { pickle: session.pickle(PICKLE_KEY), epoch };
+    });
+    localStorage.setItem(this.storageKey('gin'), JSON.stringify(out));
+  }
+
+  // SKDM для раздачи участникам: session_key исходящей + эпоха. Экспорт ключа
+  // делается на index 0 ДО первого encrypt (иначе получатель не расшифрует ранние)
+  getGroupSessionKey(group: string) {
+    let entry = this.groupOut.get(group);
+    if (!entry) {
+      const session = new Olm.OutboundGroupSession();
+      session.create();
+      entry = { session, epoch: Date.now() };
+      this.groupOut.set(group, entry);
+      this.persistGroupOut();
+    }
+    return { sessionKey: entry.session.session_key(), epoch: entry.epoch };
+  }
+
+  groupEncrypt(group: string, plaintext: string) {
+    const entry = this.groupOut.get(group);
+    if (!entry) return undefined;
+    const ciphertext = entry.session.encrypt(plaintext);
+    this.persistGroupOut();
+    return ciphertext;
+  }
+
+  // Ротация: сбрасываем свою исходящую (напр. участник удалён) — следующая
+  // отправка создаст свежую с бОльшей эпохой и раздаст только текущим
+  rotateGroup(group: string) {
+    this.groupOut.delete(group);
+    this.persistGroupOut();
+  }
+
+  // Приём SKDM: принимаем ключ только строго новее известной эпохи (дедуп той
+  // же, анти-откат старой, замена на ротацию)
+  acceptGroupKey(group: string, senderIdentity: string, sessionKey: string, epoch: number) {
+    const key = `${group}|${senderIdentity}`;
+    const existing = this.groupIn.get(key);
+    if (existing && epoch <= existing.epoch) return;
+    try {
+      const session = new Olm.InboundGroupSession();
+      session.create(sessionKey);
+      this.groupIn.set(key, { session, epoch });
+      this.persistGroupIn();
+    } catch {
+      // битый ключ — игнор
+    }
+  }
+
+  groupDecrypt(group: string, senderIdentity: string, ciphertext: string): string | undefined {
+    const entry = this.groupIn.get(`${group}|${senderIdentity}`);
+    if (!entry) return undefined;
+    try {
+      const { plaintext } = entry.session.decrypt(ciphertext);
+      this.persistGroupIn();
+      return plaintext;
+    } catch {
+      return undefined;
+    }
   }
 }

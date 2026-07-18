@@ -272,21 +272,31 @@ async function runFullSync() {
   const knownIds = new Set(serverMessages.map((m) => m.id));
   const journal = readOwnJournal().filter((m) => !knownIds.has(m.id));
 
-  serverMessages.concat(journal)
-    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
-    .forEach((rawStored) => {
-      const { stored } = unsealStored(rawStored);
-      wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
-      const message = store.buildApiMessage(stored);
-      store.putMessage(message);
-      if (message.isOutgoing && stored.read) {
-        const current = readOutboxMaxByChatId.get(message.chatId) || 0;
-        if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
-      }
-      if (!message.isOutgoing && stored.read) {
-        reportedReadUuids.add(stored.id);
-      }
-    });
+  const ordered = serverMessages.concat(journal)
+    .sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+
+  // Проход 1: сперва расшифровываем ВСЕ 1-на-1 (в т.ч. SKDM — импорт групповых
+  // ключей) — иначе group_encrypted мог обработаться раньше своего ключа
+  // (реордер при полном синке). Результат кэшируется, ratchet не гоняется дважды
+  ordered.forEach((rawStored) => {
+    if (rawStored.content.kind === 'encrypted') unsealStored(rawStored);
+  });
+
+  // Проход 2: рендер (group_encrypted теперь имеет ключ; 1-на-1 берут из кэша)
+  ordered.forEach((rawStored) => {
+    const { stored, hidden } = unsealStored(rawStored);
+    if (hidden) return; // SKDM — служебное
+    wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
+    const message = store.buildApiMessage(stored);
+    store.putMessage(message);
+    if (message.isOutgoing && stored.read) {
+      const current = readOutboxMaxByChatId.get(message.chatId) || 0;
+      if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
+    }
+    if (!message.isOutgoing && stored.read) {
+      reportedReadUuids.add(stored.id);
+    }
+  });
 
   const peerAddresses = new Set<string>();
   serverMessages.concat(journal).forEach((m) => {
@@ -331,8 +341,33 @@ function handleInboxFrame(payload: string) {
 // иначе оно ошибочно ляжет в личку отправителя
 // Sealed sender: пробуем расшифровать; удачное — в dec-cache (повторная
 // расшифровка Olm невозможна — ratchet уехал, а веб фулл-синкает при старте)
-function unsealStored(stored: WireStoredMessage): { stored: WireStoredMessage; wasSealed: boolean } {
+type UnsealResult = { stored: WireStoredMessage; wasSealed: boolean; hidden?: boolean };
+
+function unsealStored(stored: WireStoredMessage): UnsealResult {
   const content = stored.content;
+
+  // Групповое E2E (Megolm): расшифровываем входящей group-сессией
+  if (content.kind === 'group_encrypted') {
+    const cachedG = e2e?.getCachedInner(stored.id);
+    if (cachedG) {
+      rememberMediaKeys(cachedG.content as WireMessageContent);
+      return { stored: { ...stored, content: cachedG.content as WireMessageContent }, wasSealed: true };
+    }
+    if (!e2e || !content.ciphertext || !content.group || !content.sender_identity) {
+      return { stored, wasSealed: false };
+    }
+    const plainG = e2e.groupDecrypt(content.group, content.sender_identity, content.ciphertext);
+    if (!plainG) return { stored, wasSealed: false };
+    try {
+      const inner = JSON.parse(plainG) as WireMessageContent;
+      e2e.cacheInner(stored.id, { from: stored.from, content: inner });
+      rememberMediaKeys(inner);
+      return { stored: { ...stored, content: inner }, wasSealed: true };
+    } catch {
+      return { stored, wasSealed: false };
+    }
+  }
+
   if (content.kind !== 'encrypted') return { stored, wasSealed: false };
 
   const cached = e2e?.getCachedInner(stored.id);
@@ -349,13 +384,62 @@ function unsealStored(stored: WireStoredMessage): { stored: WireStoredMessage; w
   if (!plain) return { stored, wasSealed: false };
   try {
     const inner = JSON.parse(plain) as { from: string; content: WireMessageContent };
-    e2e.cacheInner(stored.id, inner);
     if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
+
+    // SKDM (раздача группового ключа) — импортируем, сообщение НЕ показываем
+    if (inner.content?.kind === 'skdm' && inner.content.group && inner.content.session_key) {
+      e2e.acceptGroupKey(
+        inner.content.group, inner.content.sender_identity!, inner.content.session_key, inner.content.epoch || 0,
+      );
+      return { stored, wasSealed: true, hidden: true };
+    }
+
+    e2e.cacheInner(stored.id, inner);
     rememberMediaKeys(inner.content);
     return { stored: { ...stored, from: inner.from, content: inner.content }, wasSealed: true };
   } catch {
     return { stored, wasSealed: false };
   }
+}
+
+// Раздаёт session_key группы каждому участнику 1-на-1 sealed (SKDM). true —
+// хотя бы одному доставлен (иначе шифровать бессмысленно, никто не расшифрует)
+async function distributeGroupKey(group: string, members: string[]): Promise<boolean> {
+  if (!e2e) return false;
+  const { sessionKey, epoch } = e2e.getGroupSessionKey(group);
+  const skdmContent = {
+    kind: 'skdm', group, session_key: sessionKey, sender_identity: e2e.identityKey, epoch,
+  };
+  const innerJson = JSON.stringify({ from: store.self, content: skdmContent });
+
+  let delivered = false;
+  for (const member of members) {
+    if (member === store.self) continue;
+    try {
+      const encrypted = await e2e.encryptFor(member, innerJson, fetchPrekeyBundle);
+      if (!encrypted) continue;
+      const skdmEvent = {
+        id: crypto.randomUUID(),
+        from: '',
+        ts: Math.floor(Date.now() / 1000),
+        token,
+        payload: {
+          to: member,
+          content: {
+            kind: 'encrypted',
+            ciphertext: encrypted.ciphertext,
+            ctype: encrypted.ctype,
+            sender_identity: encrypted.sender_identity,
+          },
+        },
+      };
+      connection!.publish(TOPIC_MSG_SEND, JSON.stringify(skdmEvent));
+      delivered = true;
+    } catch {
+      // нет бандла участника — получит ключ при следующей отправке
+    }
+  }
+  return delivered;
 }
 
 async function fetchPrekeyBundle(user: string) {
@@ -410,7 +494,13 @@ async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
 // Новое → newMessage; мутации known → deleteMessages / updateMessage / ✓✓.
 async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
   trackCursors(rawStored);
-  const { stored, wasSealed } = unsealStored(rawStored);
+  const { stored, wasSealed, hidden } = unsealStored(rawStored);
+  // SKDM (групповой ключ) — служебное, не показываем, но ackّаем чтобы снять
+  // из офлайн-очереди
+  if (hidden) {
+    if (shouldAckIncoming) sendAck(rawStored.id, stored.from);
+    return;
+  }
   await refreshGroupsIfUnknownChat(stored);
   const prevFlags = wireFlagsByUuid.get(stored.id);
   const flags = buildWireFlags(stored);
@@ -848,6 +938,50 @@ const methods = {
         });
         return;
       }
+    }
+
+    // Группа с E2E (Megolm): раздаём SKDM участникам 1-на-1 sealed, ПОТОМ
+    // шлём group_encrypted (from виден серверу для membership-проверки,
+    // content непрозрачен). Без attachment — медиа групп открыто (пока)
+    const groupInfo = e2e && !attachment ? store.getGroupInfo(toAddress) : undefined;
+    if (groupInfo && e2e) {
+      const distributed = await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
+      const ciphertext = distributed
+        ? e2e.groupEncrypt(toAddress, JSON.stringify(wireContent))
+        : undefined;
+      if (ciphertext) {
+        const ts = Math.floor(Date.now() / 1000);
+        const groupEvent = {
+          id: uuid,
+          from: store.self,
+          ts,
+          token,
+          payload: {
+            to: toAddress,
+            content: {
+              kind: 'group_encrypted',
+              ciphertext,
+              group: toAddress,
+              sender_identity: e2e.identityKey,
+            },
+            reply_to: replyToUuid,
+          },
+        };
+        connection!.publish(TOPIC_MSG_SEND, JSON.stringify(groupEvent));
+        // Своё групповое эхо не вернётся расшифрованным (from=self, но
+        // ciphertext) — журналим плейнтекст и кэшируем
+        appendOwnJournal({
+          id: uuid, from: store.self, to: toAddress, content: wireContent as unknown as WireMessageContent, ts, reply_to: replyToUuid,
+        });
+        e2e.cacheInner(uuid, { from: store.self, content: wireContent });
+        const sentMessage: ApiMessage = { ...localMessage, sendingState: undefined };
+        store.putMessage(sentMessage);
+        sendUpdate({
+          '@type': 'updateMessageSendSucceeded', chatId: chat.id, localId: localMessage.id, message: sentMessage,
+        });
+        return;
+      }
+      logDebug(`E2E-группа: не удалось раздать ключ ${toAddress}, шлю открыто`);
     }
 
     // E2E sealed sender: весь content (текст ИЛИ медиа-метаданные с file_key)
