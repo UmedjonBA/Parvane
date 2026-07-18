@@ -6,6 +6,7 @@ import type {
   ApiChat, ApiMessage, ApiUser,
 } from '../types';
 import type { WireGroupInfo, WireStoredMessage } from './wire';
+import { wireEntitiesToApi } from './entities';
 
 type PeerKind = 'user' | 'group' | 'channel';
 
@@ -213,7 +214,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
   const caption = content.caption ? { text: { text: content.caption } } : {};
   switch (content.kind) {
     case 'text':
-      return { text: { text: content.text || '' } };
+      return { text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) } };
     case 'photo':
       return {
         ...caption,
