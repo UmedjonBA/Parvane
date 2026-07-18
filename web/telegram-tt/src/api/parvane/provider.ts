@@ -31,10 +31,15 @@ import {
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
   TOPIC_GROUP_ADD_MEMBER,
+  TOPIC_GROUP_BAN,
   TOPIC_GROUP_CREATE,
   TOPIC_GROUP_INFO,
+  TOPIC_GROUP_INVITE_CREATE,
+  TOPIC_GROUP_JOIN,
   TOPIC_GROUP_LIST,
+  TOPIC_GROUP_MUTE,
   TOPIC_GROUP_REMOVE_MEMBER,
+  TOPIC_GROUP_UNBAN,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_RESOLVE,
@@ -1421,6 +1426,64 @@ const methods = {
     if (!groupId || !member) return undefined;
     await connection.request(TOPIC_GROUP_REMOVE_MEMBER, JSON.stringify({ token, group_id: groupId, member }));
     return true;
+  },
+
+  // Бан/мьют/разбан участника. bannedRights.viewMessages=true → бан;
+  // untilDate (без полного бана) → мьют до времени; пустые права → разбан
+  async updateChatMemberBannedRights(
+    { chat, user, bannedRights, untilDate }:
+    { chat: ApiChat; user: ApiUser; bannedRights: Record<string, unknown>; untilDate?: number },
+  ) {
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chat.id);
+    const member = store.getAddressForId(user.id);
+    if (!groupId || !member) return undefined;
+
+    if (bannedRights.viewMessages) {
+      await connection.request(TOPIC_GROUP_BAN, JSON.stringify({ token, group_id: groupId, member }));
+    } else if (bannedRights.sendMessages) {
+      const until = untilDate || 0;
+      await connection.request(TOPIC_GROUP_MUTE, JSON.stringify({
+        token, group_id: groupId, member, until,
+      }));
+    } else {
+      await connection.request(TOPIC_GROUP_UNBAN, JSON.stringify({ token, group_id: groupId, member }));
+    }
+    return true;
+  },
+
+  async exportChatInvite({ peer }: { peer: ApiChat }) {
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(peer.id);
+    if (!groupId) return undefined;
+    const raw = await connection.request(TOPIC_GROUP_INVITE_CREATE, JSON.stringify({ token, group_id: groupId }));
+    const resp = JSON.parse(raw) as { ok: boolean; invite?: string };
+    if (!resp.ok || !resp.invite) return undefined;
+    return {
+      link: `https://parvane.invite/${resp.invite}`,
+      date: Math.floor(Date.now() / 1000),
+      isPermanent: true,
+      adminId: selfId(),
+    };
+  },
+
+  async importChatInvite({ hash }: { hash: string }) {
+    if (!connection) return undefined;
+    // hash — токен инвайта (последний сегмент ссылки parvane.invite/<token>)
+    const raw = await connection.request(TOPIC_GROUP_JOIN, JSON.stringify({ token, invite: hash }));
+    const resp = JSON.parse(raw) as { ok: boolean; group_id?: string; name?: string };
+    if (!resp.ok || !resp.group_id) return undefined;
+
+    // Подтягиваем инфо новой группы и показываем её
+    const infoRaw = await connection.request(TOPIC_GROUP_INFO, JSON.stringify({ token, group_id: resp.group_id }));
+    const info = (JSON.parse(infoRaw) as { groups?: WireGroupInfo[] }).groups?.[0];
+    if (info) {
+      store.registerGroup(info);
+      const groupChat = store.buildApiChatForGroup(info);
+      sendUpdate({ '@type': 'updateChat', id: groupChat.id, chat: groupChat });
+      return groupChat;
+    }
+    return undefined;
   },
 
   async searchChats({ query }: { query: string }) {
