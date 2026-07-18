@@ -24,6 +24,8 @@ export type WireMessageContent = {
   ciphertext?: string;
   ctype?: number;
   sender_identity?: string;
+  file_key?: string;
+  file_nonce?: string;
 };
 
 export type WireStoredMessage = {

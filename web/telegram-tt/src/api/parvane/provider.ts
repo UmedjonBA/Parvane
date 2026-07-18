@@ -50,6 +50,7 @@ import {
   TOPIC_PREKEYS_PUBLISH,
 } from './wire';
 import { E2eEngine } from './e2e';
+import { decryptBlob, encryptBlob } from './blobcrypt';
 
 const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
@@ -336,6 +337,7 @@ function unsealStored(stored: WireStoredMessage): { stored: WireStoredMessage; w
 
   const cached = e2e?.getCachedInner(stored.id);
   if (cached) {
+    rememberMediaKeys(cached.content as WireMessageContent);
     return {
       stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },
       wasSealed: true,
@@ -349,6 +351,7 @@ function unsealStored(stored: WireStoredMessage): { stored: WireStoredMessage; w
     const inner = JSON.parse(plain) as { from: string; content: WireMessageContent };
     e2e.cacheInner(stored.id, inner);
     if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
+    rememberMediaKeys(inner.content);
     return { stored: { ...stored, from: inner.from, content: inner.content }, wasSealed: true };
   } catch {
     return { stored, wasSealed: false };
@@ -776,12 +779,19 @@ const methods = {
     const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
     const replyToUuid = replyToMsgId ? store.getUuidForMessage(chat.id, replyToMsgId) : undefined;
 
+    // E2E доступен для лички с готовым движком (медиа шифруем блобом, текст —
+    // sealed content); для группы/себя/без движка — открыто
+    const shouldE2e = Boolean(e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self);
+
     let wireContent: Record<string, unknown> = { kind: 'text', text: params.text || '' };
     let sentContent = localMessage.content;
     if (attachment) {
       try {
         const blob: Blob = attachment.blob ?? await fetch(attachment.blobUrl).then((r) => r.blob());
-        const { fileId, size } = await uploadBlobToCloud(blob, attachment.filename, attachment.mimeType);
+        const { fileId, size, mediaKeys } = await uploadBlobToCloud(
+          blob, attachment.filename, attachment.mimeType, shouldE2e,
+        );
+        const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
         if (isPhotoAttachment(attachment)) {
           wireContent = {
             kind: 'photo',
@@ -791,6 +801,7 @@ const methods = {
             mime: attachment.mimeType,
             size_bytes: size,
             caption: params.text || undefined,
+            ...mediaCrypto,
           };
           sentContent = {
             ...(params.text ? { text: { text: params.text } } : {}),
@@ -813,6 +824,7 @@ const methods = {
             mime: attachment.mimeType,
             size_bytes: size,
             caption: params.text || undefined,
+            ...mediaCrypto,
           };
           sentContent = {
             ...(params.text ? { text: { text: params.text } } : {}),
@@ -838,11 +850,12 @@ const methods = {
       }
     }
 
-    // E2E: текст в личку шифруем sealed sender'ом (сервер не видит ни текста,
-    // ни отправителя). Нет бандла у пира — честный плейнтекст (лог в консоли)
+    // E2E sealed sender: весь content (текст ИЛИ медиа-метаданные с file_key)
+    // шифруется Olm — сервер не видит ни содержимого, ни отправителя.
+    // Нет бандла у пира — честный плейнтекст (лог в консоли)
     let isSealed = false;
     const plainContent = wireContent;
-    if (!attachment && e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self) {
+    if (shouldE2e && e2e) {
       try {
         const innerJson = JSON.stringify({ from: store.self, content: wireContent });
         const encrypted = await e2e.encryptFor(toAddress, innerJson, fetchPrekeyBundle);
@@ -1128,9 +1141,18 @@ function decodeBase64(data: string) {
   return bytes;
 }
 
-async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string) {
+async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string, encrypt = false) {
   const fileId = crypto.randomUUID();
-  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bytes: Uint8Array = new Uint8Array(await blob.arrayBuffer());
+  let mediaKeys: { keyB64: string; nonceB64: string } | undefined;
+  if (encrypt) {
+    // Блоб грузится в cloud ШИФРТЕКСТОМ (сервер не видит содержимого);
+    // cloud хранит непрозрачные байты под нейтральным mime
+    const enc = await encryptBlob(bytes);
+    bytes = enc.ciphertext as Uint8Array;
+    mediaKeys = { keyB64: enc.keyB64, nonceB64: enc.nonceB64 };
+  }
+  const cloudMime = encrypt ? 'application/octet-stream' : mimeType;
   const totalChunks = Math.max(1, Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES));
   for (let index = 0; index < totalChunks; index++) {
     const slice = bytes.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
@@ -1140,7 +1162,7 @@ async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string)
       total_chunks: totalChunks,
       data: encodeBase64(slice),
       filename,
-      mime_type: mimeType,
+      mime_type: cloudMime,
     });
     await connection!.request(TOPIC_FILE_UPLOAD_CHUNK, JSON.stringify(chunkEvent), MEDIA_TIMEOUT_MS);
   }
@@ -1149,12 +1171,17 @@ async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string)
     filename,
     total_chunks: totalChunks,
     size_bytes: bytes.length,
-    mime_type: mimeType,
+    mime_type: cloudMime,
   });
   const raw = await connection!.request(TOPIC_FILE_UPLOAD_COMPLETE, JSON.stringify(completeEvent), MEDIA_TIMEOUT_MS);
   const resp = JSON.parse(raw) as { ok: boolean; error?: string };
   if (!resp.ok) throw new Error(resp.error || 'upload.complete отказ');
-  return { fileId, size: bytes.length };
+  // Свой файл кладём в кэш расшифрованным сразу (эхо не качает из cloud заново)
+  if (mediaKeys) {
+    mediaKeysByFileId.set(fileId, mediaKeys);
+    mediaCacheByFileId.set(fileId, Promise.resolve({ blob, mimeType }));
+  }
+  return { fileId, size: blob.size, mediaKeys };
 }
 
 type WireDownloadChunk = {
@@ -1175,13 +1202,43 @@ async function downloadBlobFromCloud(fileId: string): Promise<{ blob: Blob; mime
     .sort((a, b) => a.chunk_index! - b.chunk_index!);
   if (!chunks.length) return undefined;
   const parts = chunks.map((c) => decodeBase64(c.data!));
+
+  const keys = mediaKeysByFileId.get(fileId);
+  if (keys) {
+    // E2E-медиа: cloud отдал шифртекст, расшифровываем ключом из sealed content
+    const cipher = concatBytes(parts);
+    const plain = await decryptBlob(cipher, keys.keyB64, keys.nonceB64);
+    if (!plain) return undefined;
+    const mimeType = mediaMimeByFileId.get(fileId) || 'application/octet-stream';
+    return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
+  }
   const mimeType = chunks[0].mime_type || 'application/octet-stream';
   return { blob: new Blob(parts as BlobPart[], { type: mimeType }), mimeType };
+}
+
+function concatBytes(parts: Uint8Array[]) {
+  const total = parts.reduce((sum, p) => sum + p.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  parts.forEach((p) => { out.set(p, offset); offset += p.length; });
+  return out;
 }
 
 const MEDIA_URL_REGEX = /^(?:photo|document)([0-9a-f-]{36})/;
 const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
 const mediaCacheByFileId = new Map<string, Promise<{ blob: Blob; mimeType: string } | undefined>>();
+// Ключи расшифровки E2E-медиа по file_id (из sealed content) — downloadMedia
+// получает только хэш, ключ ищет здесь
+const mediaKeysByFileId = new Map<string, { keyB64: string; nonceB64: string }>();
+// Реальный mime E2E-медиа по file_id (в cloud он нейтральный octet-stream)
+const mediaMimeByFileId = new Map<string, string>();
+
+function rememberMediaKeys(content: WireMessageContent) {
+  if (content.file_id && content.file_key && content.file_nonce) {
+    mediaKeysByFileId.set(content.file_id, { keyB64: content.file_key, nonceB64: content.file_nonce });
+    if (content.mime) mediaMimeByFileId.set(content.file_id, content.mime);
+  }
+}
 
 function isPhotoAttachment(attachment: NonNullable<SendMessageParams['attachment']>) {
   return Boolean(
