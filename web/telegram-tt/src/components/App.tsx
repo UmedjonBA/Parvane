@@ -26,6 +26,7 @@ import { getIsInBackground } from '../hooks/window/useBackgroundMode';
 
 import Auth from './auth/Auth';
 import Notifications from './common/Notifications';
+import ParvaneCallOverlay from './parvane/ParvaneCallOverlay';
 import UiLoader from './common/UiLoader';
 import AppInactive from './main/AppInactive';
 import LockScreen from './main/LockScreen.async';
@@ -251,6 +252,7 @@ const App = ({
       </Transition>
       {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">Test server</div>}
       <Notifications />
+      <ParvaneCallOverlay />
     </UiLoader>
   );
 };

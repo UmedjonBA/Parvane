@@ -1,0 +1,69 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 2.5rem 3rem;
+  border-radius: 1.5rem;
+  background: var(--color-background, #212121);
+  box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.5);
+  min-width: 20rem;
+}
+
+.avatar {
+  width: 6rem;
+  height: 6rem;
+  border-radius: 50%;
+  background: var(--color-primary, #8774e1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.5rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.name {
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text, #fff);
+}
+
+.status {
+  font-size: 1rem;
+  color: var(--color-text-secondary, #aaa);
+}
+
+.actions {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+
+.accept,
+.hangup {
+  width: 3.5rem;
+  height: 3.5rem;
+
+  i {
+    font-size: 1.5rem;
+  }
+}
+
+.accept {
+  background: #4dcd5e !important;
+}
+
+.hangup {
+  background: #e0492b !important;
+}

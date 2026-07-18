@@ -352,6 +352,14 @@ addActionHandler('loadMoreGroupCallParticipants', (global): ActionReturnType => 
 });
 
 addActionHandler('requestMasterAndRequestCall', (global, actions, payload): ActionReturnType => {
+  // Parvane: свой WebRTC-звонок напрямую, минуя master-tab routing MTProto
+  const chat = selectChat(global, payload.userId);
+  if (chat) {
+    void (callApi as unknown as (n: string, a: unknown) => void)(
+      'parvanePlaceCall', { chat, isVideo: payload.isVideo },
+    );
+    return;
+  }
   actions.requestMasterAndCallAction({
     action: 'requestCall',
     payload,
@@ -361,6 +369,15 @@ addActionHandler('requestMasterAndRequestCall', (global, actions, payload): Acti
 
 addActionHandler('requestCall', (global, actions, payload): ActionReturnType => {
   const { userId, isVideo, tabId = getCurrentTabId() } = payload;
+
+  // Parvane: свой WebRTC-движок вместо MTProto phone call. Оверлей —
+  // ParvaneCallOverlay (слушает событие parvane-call)
+  const chat = selectChat(global, userId);
+  if (chat) {
+    // parvanePlaceCall — кастомный метод провайдера, вне типизированного Methods
+    void (callApi as unknown as (n: string, a: unknown) => void)('parvanePlaceCall', { chat, isVideo });
+    return;
+  }
 
   if (global.phoneCall) {
     actions.toggleGroupCallPanel({ tabId });
