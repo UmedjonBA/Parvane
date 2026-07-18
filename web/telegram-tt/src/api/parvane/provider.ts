@@ -51,6 +51,7 @@ import {
 } from './wire';
 import { E2eEngine } from './e2e';
 import { decryptBlob, encryptBlob } from './blobcrypt';
+import { apiEntitiesToWire } from './entities';
 
 const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
@@ -144,8 +145,12 @@ async function connectAndLogin(user: string, password: string) {
   try {
     e2e = await E2eEngine.create(user);
     const prekeys = e2e.buildPrekeysPayload(token);
-    await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
-    logDebug('E2E готов, прекеи опубликованы');
+    if (prekeys) {
+      await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
+      logDebug('E2E готов, прекеи опубликованы');
+    } else {
+      logDebug('E2E готов (прекеи уже опубликованы ранее)');
+    }
   } catch (err) {
     e2e = undefined;
     logDebug(`E2E недоступен: ${String(err)}`);
@@ -873,7 +878,9 @@ const methods = {
     // sealed content); для группы/себя/без движка — открыто
     const shouldE2e = Boolean(e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self);
 
-    let wireContent: Record<string, unknown> = { kind: 'text', text: params.text || '' };
+    let wireContent: Record<string, unknown> = {
+      kind: 'text', text: params.text || '', entities: apiEntitiesToWire(params.entities),
+    };
     let sentContent = localMessage.content;
     if (attachment) {
       try {
@@ -1381,10 +1388,10 @@ function isPhotoAttachment(attachment: NonNullable<SendMessageParams['attachment
 }
 
 function buildLocalContent(uuid: string, params: SendMessageParams): ApiMessage['content'] {
-  const { attachment, text } = params;
+  const { attachment, text, entities } = params;
   const caption = text ? { text: { text } } : {};
   if (!attachment) {
-    return { text: { text: text || '' } };
+    return { text: { text: text || '', entities } };
   }
   if (isPhotoAttachment(attachment)) {
     return {

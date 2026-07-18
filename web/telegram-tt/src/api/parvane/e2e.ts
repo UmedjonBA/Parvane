@@ -118,22 +118,28 @@ export class E2eEngine {
     localStorage.setItem(this.storageKey('dec'), JSON.stringify(this.decCache));
   }
 
-  // Пачка публичных прекеев для identity-шарда. key_id — свой счётчик (u64)
-  buildPrekeysPayload(token: string) {
+  // Пачка публичных прекеев для identity-шарда. Публикуем ОДИН РАЗ на аккаунт:
+  // повторный generate_one_time_keys+mark_keys_as_published каждый логин
+  // приводил к рассинхрону OTK (BAD_MESSAGE_KEY_ID у получателя). Ключей на
+  // аккаунт (fallback + 20 one-time) хватает; израсходование one-time не делает
+  // сессию невозможной (X3DH-фолбэк на fallback-ключ).
+  buildPrekeysPayload(token: string): unknown | undefined {
+    if (localStorage.getItem(this.storageKey('published'))) return undefined;
+
     this.account.generate_fallback_key();
     const fallback = JSON.parse(this.account.fallback_key()) as { curve25519: Record<string, string> };
     const fallbackKey = Object.values(fallback.curve25519)[0];
 
     this.account.generate_one_time_keys(ONE_TIME_BATCH);
     const oneTime = JSON.parse(this.account.one_time_keys()) as { curve25519: Record<string, string> };
-    let counter = Number(localStorage.getItem(this.storageKey('otk-counter')) || '1');
+    let counter = 1;
     const one_time = Object.values(oneTime.curve25519).map((publicKey) => ({
       key_id: counter++,
       public_key: publicKey,
     }));
-    localStorage.setItem(this.storageKey('otk-counter'), String(counter));
     this.account.mark_keys_as_published();
     this.persistAccount();
+    localStorage.setItem(this.storageKey('published'), '1');
 
     return {
       token,
