@@ -26,6 +26,8 @@ import { buildWebPage, ParvaneStore } from './store';
 import { PollStore } from './polls';
 import { CallEngine } from './callengine';
 import type { CallMedia, WireCallSignal } from './callengine';
+import { buildBuiltinStickerSet, isBuiltinStickerId } from './stickers';
+import type { ApiSticker } from '../types';
 import {
   buildMsgInboxTopic,
   buildWireEvent,
@@ -542,6 +544,46 @@ async function distributeGroupKey(group: string, members: string[]): Promise<boo
 // Публикует произвольный inner-content с тем же E2E-выбором, что sendMessage:
 // группа → SKDM + group_encrypted; личка → sealed; иначе открыто. Для служебных
 // сообщений опросов (poll/poll_vote/poll_close). Возвращает uuid отправленного
+// ── стикеры ──────────────────────────────────────────────────────────────────
+
+async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
+  const toAddress = store.getAddressForId(chat.id);
+  if (!toAddress) return;
+
+  // Берём картинку стикера из media-кэша (встроенный набор) или качаем
+  const cached = await mediaCacheByFileId.get(sticker.id);
+  const blob = cached?.blob;
+  if (!blob) return;
+
+  const shouldEncrypt = Boolean(e2e && (store.isGroupAddress(toAddress) || toAddress !== store.self));
+  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `sticker-${sticker.id}.png`, 'image/png', shouldEncrypt);
+  const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+
+  const wireContent: Record<string, unknown> = {
+    kind: 'sticker',
+    file_id: fileId,
+    filename: sticker.emoji || '⭐',
+    mime: 'image/png',
+    width: sticker.width || 256,
+    height: sticker.height || 256,
+    ...mediaCrypto,
+  };
+  mediaCacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: 'image/png' }));
+
+  const uuid = await publishInner(toAddress, wireContent);
+  const id = store.allocateMessageId(chat.id, uuid);
+  const message: ApiMessage = {
+    id,
+    chatId: chat.id,
+    content: { sticker: { ...sticker, id: fileId } },
+    date: Math.floor(Date.now() / 1000),
+    isOutgoing: true,
+    senderId: selfId(),
+  };
+  store.putMessage(message);
+  sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
+}
+
 // ── опросы ───────────────────────────────────────────────────────────────────
 
 async function sendPoll(chat: ApiChat, newPoll: { summary: { question: { text: string }; answers: { text: { text: string } }[]; isPublic?: true; isMultipleChoice?: true } }) {
@@ -1179,6 +1221,11 @@ const methods = {
       await sendPoll(params.chat, params.poll);
       return;
     }
+    // Стикер: грузим картинку как медиа с kind=sticker (реюз attachment-потока)
+    if (params.sticker && params.chat) {
+      await sendSticker(params.chat, params.sticker);
+      return;
+    }
 
     const localMessage = params.localMessage
       || await methods.sendMessageLocal(params);
@@ -1580,6 +1627,40 @@ const methods = {
     return Promise.resolve({ langPack: buildOldLangPack(langCode) });
   },
 
+  // ── стикеры (встроенный набор) ──────────────────────────────────────────────
+  async fetchStickerSets() {
+    const { set, blobs } = await buildBuiltinStickerSet();
+    // Регистрируем картинки стикеров в media-кэше (хэш document<id>)
+    blobs.forEach((blob, id) => {
+      if (!mediaCacheByFileId.has(id)) {
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'image/png' }));
+      }
+    });
+    return { hash: '1', sets: [{ ...set, stickers: undefined, count: set.count }] };
+  },
+
+  async fetchStickerSet() {
+    const { set } = await buildBuiltinStickerSet();
+    return { set, stickers: set.stickers };
+  },
+
+  async fetchRecentStickers() {
+    const { set } = await buildBuiltinStickerSet();
+    return { hash: '1', stickers: (set.stickers || []).slice(0, 6) };
+  },
+
+  fetchFeaturedStickers() {
+    return Promise.resolve({ hash: '1', sets: [] });
+  },
+
+  fetchCustomEmojiSets() {
+    return Promise.resolve({ hash: '1', sets: [] });
+  },
+
+  fetchSavedGifs() {
+    return Promise.resolve({ hash: '1', gifs: [] });
+  },
+
   // ── звонки (программный API; UI-панель — window.parvaneCalls) ───────────────
   async parvanePlaceCall({ chat, isVideo }: { chat: ApiChat; isVideo?: boolean }) {
     const toAddress = store.getAddressForId(chat.id);
@@ -1799,7 +1880,7 @@ function concatBytes(parts: Uint8Array[]) {
   return out;
 }
 
-const MEDIA_URL_REGEX = /^(?:photo|document)([0-9a-f-]{36})/;
+const MEDIA_URL_REGEX = /^(?:photo|document)([\w-]+?)(?:\?|$)/;
 const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
 const mediaCacheByFileId = new Map<string, Promise<{ blob: Blob; mimeType: string } | undefined>>();
 // Ключи расшифровки E2E-медиа по file_id (из sealed content) — downloadMedia
