@@ -215,15 +215,22 @@ function setupCallEngine() {
   const w = window as unknown as {
     parvaneCall?: {
       state: string; incoming?: { from: string; callId: string; media: string };
-      remoteStream?: MediaStream;
+      remoteStream?: MediaStream; peerName?: string;
     };
   };
   w.parvaneCall = { state: 'ended' };
-  callListeners.onState = (state) => { w.parvaneCall!.state = state; };
-  callListeners.onRemoteStream = (stream) => { w.parvaneCall!.remoteStream = stream; };
+  const emit = () => window.dispatchEvent(new CustomEvent('parvane-call'));
+  callListeners.onState = (state) => {
+    w.parvaneCall!.state = state;
+    if (state === 'ended') w.parvaneCall!.incoming = undefined;
+    emit();
+  };
+  callListeners.onRemoteStream = (stream) => { w.parvaneCall!.remoteStream = stream; emit(); };
   callListeners.onIncoming = (from, callId, media) => {
     w.parvaneCall!.incoming = { from, callId, media };
     w.parvaneCall!.state = 'incoming';
+    w.parvaneCall!.peerName = store.getDisplayName(from);
+    emit();
   };
 
   callEngine = new CallEngine({
@@ -1577,6 +1584,7 @@ const methods = {
   async parvanePlaceCall({ chat, isVideo }: { chat: ApiChat; isVideo?: boolean }) {
     const toAddress = store.getAddressForId(chat.id);
     if (!toAddress || !callEngine || store.isGroupAddress(toAddress)) return undefined;
+    (window as unknown as { parvaneCall?: { peerName?: string } }).parvaneCall!.peerName = store.getDisplayName(toAddress);
     await callEngine.placeCall(toAddress, isVideo ? 'video' : 'audio');
     return true;
   },
