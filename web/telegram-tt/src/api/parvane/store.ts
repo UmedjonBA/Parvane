@@ -132,6 +132,11 @@ export class ParvaneStore {
     return this.messagesByChatId.get(chatId) || [];
   }
 
+  removeMessage(chatId: string, id: number) {
+    const list = this.messagesByChatId.get(chatId);
+    if (list) this.messagesByChatId.set(chatId, list.filter((m) => m.id !== id));
+  }
+
   getChatIds() {
     return Array.from(this.messagesByChatId.keys());
   }

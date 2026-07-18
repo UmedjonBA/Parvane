@@ -303,6 +303,11 @@ async function runFullSync() {
     if (!message.isOutgoing && stored.read) {
       reportedReadUuids.add(stored.id);
     }
+    // TTL с учётом прошедшего времени: осталось = ttl - (сейчас - ts)
+    if (stored.content.ttl_secs) {
+      const remaining = stored.content.ttl_secs - (Math.floor(Date.now() / 1000) - stored.ts);
+      scheduleTtlDeletion(message.chatId, message.id, Math.max(0, remaining));
+    }
   });
 
   const peerAddresses = new Set<string>();
@@ -481,6 +486,28 @@ function appendOwnJournal(entry: WireStoredMessage) {
   localStorage.setItem(`parvane:hist:${store.self}`, JSON.stringify(list));
 }
 
+// TTL самоуничтожения по чату (адрес → секунды), персист localStorage.
+// ttl_secs едет ВНУТРИ E2E-content (сервер не знает); обе стороны заводят
+// таймер локального удаления — эфемерно (не журналим, не кэшируем)
+function loadPeerTtl(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(`parvane:ttl:${store.self}`) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function savePeerTtl(map: Record<string, number>) {
+  localStorage.setItem(`parvane:ttl:${store.self}`, JSON.stringify(map));
+}
+
+function scheduleTtlDeletion(chatId: string, messageId: number, ttlSecs: number) {
+  window.setTimeout(() => {
+    store.removeMessage(chatId, messageId);
+    sendUpdate({ '@type': 'deleteMessages', ids: [messageId], chatId });
+  }, ttlSecs * 1000);
+}
+
 const checkedGroupCandidates = new Set<string>();
 
 async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
@@ -543,6 +570,10 @@ async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming
       webPages: webPage ? [webPage] : undefined,
     });
     if (flags.read && message.isOutgoing) noteReadOutbox(message);
+    // Эфемерное: заводим таймер удаления у получателя
+    if (stored.content.ttl_secs) {
+      scheduleTtlDeletion(message.chatId, message.id, stored.content.ttl_secs);
+    }
     return;
   }
 
@@ -833,6 +864,18 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
+  // Установить/снять TTL самоуничтожения для чата (period=0 — снять). TTL
+  // хранится локально; едет в ttl_secs каждого исходящего сообщения
+  setChatMessageAutoDeletePeriod({ chat, period }: { chat: ApiChat; period: number }) {
+    const address = store.getAddressForId(chat.id);
+    if (!address) return Promise.resolve(undefined);
+    const map = loadPeerTtl();
+    if (period > 0) map[address] = period;
+    else delete map[address];
+    savePeerTtl(map);
+    return Promise.resolve(true);
+  },
+
   markMessageListRead({ chat, maxId }: { chat: ApiChat; maxId?: number }) {
     store.getMessages(chat.id).forEach((message) => {
       if (message.isOutgoing || (maxId && message.id > maxId)) return;
@@ -891,9 +934,11 @@ const methods = {
     // sealed content); для группы/себя/без движка — открыто
     const shouldE2e = Boolean(e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self);
 
+    const ttlSecs = loadPeerTtl()[toAddress];
     let wireContent: Record<string, unknown> = {
       kind: 'text', text: params.text || '', entities: apiEntitiesToWire(params.entities),
       webpage: params.noWebPage ? undefined : detectWebPage(params.text),
+      ttl_secs: ttlSecs || undefined,
     };
     let sentContent = localMessage.content;
     if (attachment) {
@@ -1044,7 +1089,8 @@ const methods = {
     };
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify(event));
 
-    if (isSealed) {
+    // Эфемерное (TTL) не журналим и не кэшируем — исчезает без следа
+    if (isSealed && !ttlSecs) {
       // Сервер не отдаст отправителю его sealed — журналим локально
       appendOwnJournal({
         id: uuid,
@@ -1065,6 +1111,7 @@ const methods = {
       localId: localMessage.id,
       message: sentMessage,
     });
+    if (ttlSecs) scheduleTtlDeletion(chat.id, localMessage.id, ttlSecs);
   },
 
   downloadMedia(
