@@ -22,7 +22,7 @@ import type {
 
 import { GatewayConnection, getGatewayUrl } from './gateway';
 import { buildOldLangPack } from './oldLangPack';
-import { ParvaneStore } from './store';
+import { buildWebPage, ParvaneStore } from './store';
 import {
   buildMsgInboxTopic,
   buildWireEvent,
@@ -534,11 +534,13 @@ async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming
     if (!message.isOutgoing && stored.from) {
       announcePeer(stored.from);
     }
+    const webPage = buildWebPage(stored);
     sendUpdate({
       '@type': 'newMessage',
       chatId: message.chatId,
       id: message.id,
       message,
+      webPages: webPage ? [webPage] : undefined,
     });
     if (flags.read && message.isOutgoing) noteReadOutbox(message);
     return;
@@ -891,6 +893,7 @@ const methods = {
 
     let wireContent: Record<string, unknown> = {
       kind: 'text', text: params.text || '', entities: apiEntitiesToWire(params.entities),
+      webpage: params.noWebPage ? undefined : detectWebPage(params.text),
     };
     let sentContent = localMessage.content;
     if (attachment) {
@@ -1461,6 +1464,23 @@ function buildLocalContent(uuid: string, params: SendMessageParams): ApiMessage[
       previewBlobUrl: attachment.previewBlobUrl,
     },
   };
+}
+
+const URL_REGEX = /https?:\/\/[^\s]+/;
+
+// Минимальный превью первой ссылки: домен как title. Богатые OG-метаданные
+// требуют серверного прокси (браузер не читает cross-origin HTML из-за CORS) —
+// зато превью от desktop-клиента (с полными полями) отобразится как есть
+function detectWebPage(text?: string) {
+  if (!text) return undefined;
+  const match = text.match(URL_REGEX);
+  if (!match) return undefined;
+  const url = match[0];
+  try {
+    return { url, site_name: new URL(url).hostname };
+  } catch {
+    return undefined;
+  }
 }
 
 function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
