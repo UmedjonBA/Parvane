@@ -41,6 +41,8 @@ const chrome = spawn('chromium', [
   // --headless=new персистит localStorage на диск (старый --headless держит
   // его in-memory и теряет при закрытии — E2E-ключи не переживали рестарт)
   '--headless=new', '--disable-gpu', '--window-size=1280,800',
+  // Фейковые медиа-устройства для тестов звонков (нет камеры/микрофона в CI)
+  '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
   `--user-data-dir=${profile}`, `--remote-debugging-port=${debugPort}`,
   'about:blank',
 ], { stdio: 'ignore' });
