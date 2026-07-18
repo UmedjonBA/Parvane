@@ -109,6 +109,11 @@ export const TOPIC_GROUP_UNBAN = 'group.unban';
 export const TOPIC_GROUP_MUTE = 'group.mute';
 export const TOPIC_GROUP_INVITE_CREATE = 'group.invite.create';
 export const TOPIC_GROUP_JOIN = 'group.join';
+export const TOPIC_CALL_SIGNAL = 'call.signal';
+
+export function buildCallInboxTopic(user: string) {
+  return `call.user.${user}`;
+}
 export const TOPIC_FILE_UPLOAD_CHUNK = 'file.upload.chunk';
 export const TOPIC_FILE_UPLOAD_COMPLETE = 'file.upload.complete';
 export const TOPIC_FILE_DOWNLOAD_REQUEST = 'file.download.request';

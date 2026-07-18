@@ -24,6 +24,8 @@ import { GatewayConnection, getGatewayUrl } from './gateway';
 import { buildOldLangPack } from './oldLangPack';
 import { buildWebPage, ParvaneStore } from './store';
 import { PollStore } from './polls';
+import { CallEngine } from './callengine';
+import type { CallMedia, WireCallSignal } from './callengine';
 import {
   buildMsgInboxTopic,
   buildWireEvent,
@@ -56,6 +58,8 @@ import {
   TOPIC_MSG_SYNC_REQUEST,
   TOPIC_PREKEYS_FETCH,
   TOPIC_PREKEYS_PUBLISH,
+  TOPIC_CALL_SIGNAL,
+  buildCallInboxTopic,
 } from './wire';
 import { E2eEngine } from './e2e';
 import { decryptBlob, encryptBlob } from './blobcrypt';
@@ -82,6 +86,15 @@ let syncTimer: number | undefined;
 let presenceTimer: number | undefined;
 let e2e: E2eEngine | undefined;
 const polls = new PollStore();
+let callEngine: CallEngine | undefined;
+// Стримы звонка отдаём в UI-слой через глобальные хуки (nativett-панель не
+// подключаем — она завязана на MTProto phone-протокол)
+const callListeners = {
+  onState: (_s: string) => {},
+  onRemoteStream: (_s: MediaStream) => {},
+  onLocalStream: (_s: MediaStream) => {},
+  onIncoming: (_from: string, _callId: string, _media: CallMedia) => {},
+};
 const typingClearTimers = new Map<string, number>();
 // Курсоры дельта-синка (аналог PumpReceive в десктоп-форке): uuid v7
 // лексикографически упорядочен по времени, поэтому max-строка = новейший
@@ -169,6 +182,8 @@ async function connectAndLogin(user: string, password: string) {
   connection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
   connection.subscribe(`msg.typing.${selfId()}`, handleTypingFrame);
   connection.subscribe('presence.*', handlePresenceFrame);
+  connection.subscribe(buildCallInboxTopic(user), handleCallFrame);
+  setupCallEngine();
   connection.onClose = () => {
     sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
   };
@@ -191,6 +206,50 @@ async function connectAndLogin(user: string, password: string) {
 function publishPresence() {
   if (!connection) return;
   connection.publish(`presence.${selfId()}`, JSON.stringify({ from: store.self }));
+}
+
+// ── звонки ───────────────────────────────────────────────────────────────────
+
+function setupCallEngine() {
+  // Мост в window для UI-слоя/тестов: состояние звонка и входящие
+  const w = window as unknown as {
+    parvaneCall?: {
+      state: string; incoming?: { from: string; callId: string; media: string };
+      remoteStream?: MediaStream;
+    };
+  };
+  w.parvaneCall = { state: 'ended' };
+  callListeners.onState = (state) => { w.parvaneCall!.state = state; };
+  callListeners.onRemoteStream = (stream) => { w.parvaneCall!.remoteStream = stream; };
+  callListeners.onIncoming = (from, callId, media) => {
+    w.parvaneCall!.incoming = { from, callId, media };
+    w.parvaneCall!.state = 'incoming';
+  };
+
+  callEngine = new CallEngine({
+    sendSignal: (to, signal) => {
+      const envelope = buildWireEvent(store.self, token, { to, signal });
+      connection!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
+    },
+    onState: (state) => callListeners.onState(state),
+    onRemoteStream: (stream) => callListeners.onRemoteStream(stream),
+    onIncoming: (from, callId, media) => {
+      callListeners.onIncoming(from, callId, media);
+    },
+  });
+}
+
+function handleCallFrame(payload: string) {
+  // Call-шард релеит сам сигнал в payload (from = инициатор)
+  let event: WireEvent<WireCallSignal>;
+  try {
+    event = JSON.parse(payload);
+  } catch {
+    return;
+  }
+  const signal = event.payload;
+  if (!signal?.type || !callEngine) return;
+  void callEngine.handleSignal(event.from, signal);
 }
 
 function handleTypingFrame(payload: string) {
@@ -1512,6 +1571,24 @@ const methods = {
 
   oldFetchLangPack({ langCode }: { langCode: string }) {
     return Promise.resolve({ langPack: buildOldLangPack(langCode) });
+  },
+
+  // ── звонки (программный API; UI-панель — window.parvaneCalls) ───────────────
+  async parvanePlaceCall({ chat, isVideo }: { chat: ApiChat; isVideo?: boolean }) {
+    const toAddress = store.getAddressForId(chat.id);
+    if (!toAddress || !callEngine || store.isGroupAddress(toAddress)) return undefined;
+    await callEngine.placeCall(toAddress, isVideo ? 'video' : 'audio');
+    return true;
+  },
+
+  async parvaneAcceptCall() {
+    if (!callEngine) return undefined;
+    return callEngine.acceptIncoming();
+  },
+
+  parvaneHangUp() {
+    callEngine?.hangUp();
+    return Promise.resolve(true);
   },
 
   // ── логин через штатные Auth-экраны ────────────────────────────────────────
