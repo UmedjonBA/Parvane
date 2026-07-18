@@ -26,6 +26,9 @@ export type WireMessageContent = {
   sender_identity?: string;
   file_key?: string;
   file_nonce?: string;
+  group?: string;
+  session_key?: string;
+  epoch?: number;
 };
 
 export type WireStoredMessage = {
