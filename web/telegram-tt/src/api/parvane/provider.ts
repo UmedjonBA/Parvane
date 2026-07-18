@@ -23,6 +23,7 @@ import type {
 import { GatewayConnection, getGatewayUrl } from './gateway';
 import { buildOldLangPack } from './oldLangPack';
 import { buildWebPage, ParvaneStore } from './store';
+import { PollStore } from './polls';
 import {
   buildMsgInboxTopic,
   buildWireEvent,
@@ -75,6 +76,7 @@ let syncPromise: Promise<void> | undefined;
 let syncTimer: number | undefined;
 let presenceTimer: number | undefined;
 let e2e: E2eEngine | undefined;
+const polls = new PollStore();
 const typingClearTimers = new Map<string, number>();
 // Курсоры дельта-синка (аналог PumpReceive в десктоп-форке): uuid v7
 // лексикографически упорядочен по времени, поэтому max-строка = новейший
@@ -136,6 +138,7 @@ async function connectAndLogin(user: string, password: string) {
 
   store = new ParvaneStore();
   store.self = user;
+  polls.setSelf(user);
   isSynced = false;
   syncPromise = undefined;
   lastSeenUuid = '';
@@ -293,6 +296,7 @@ async function runFullSync() {
   ordered.forEach((rawStored) => {
     const { stored, hidden } = unsealStored(rawStored);
     if (hidden) return; // SKDM — служебное
+    if (handlePollContent(stored)) return; // голос/закрытие опроса — служебное
     rememberMediaKeys(stored.content); // и для своих journaled медиа
     wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
     const message = store.buildApiMessage(stored);
@@ -464,6 +468,115 @@ async function distributeGroupKey(group: string, members: string[]): Promise<boo
   return delivered;
 }
 
+// Публикует произвольный inner-content с тем же E2E-выбором, что sendMessage:
+// группа → SKDM + group_encrypted; личка → sealed; иначе открыто. Для служебных
+// сообщений опросов (poll/poll_vote/poll_close). Возвращает uuid отправленного
+// ── опросы ───────────────────────────────────────────────────────────────────
+
+async function sendPoll(chat: ApiChat, newPoll: { summary: { question: { text: string }; answers: { text: { text: string } }[]; isPublic?: true; isMultipleChoice?: true } }) {
+  const toAddress = store.getAddressForId(chat.id);
+  if (!toAddress) return;
+  const question = newPoll.summary.question.text;
+  const options = newPoll.summary.answers.map((a) => a.text.text);
+  const uuid = crypto.randomUUID();
+
+  polls.register(uuid, chat.id, question, options, {
+    isPublic: Boolean(newPoll.summary.isPublic),
+    isMultiple: Boolean(newPoll.summary.isMultipleChoice),
+  });
+
+  await publishInner(toAddress, {
+    kind: 'poll',
+    question,
+    options,
+    is_public: newPoll.summary.isPublic || undefined,
+    is_multiple: newPoll.summary.isMultipleChoice || undefined,
+  }, uuid);
+
+  const id = store.allocateMessageId(chat.id, uuid);
+  const message: ApiMessage = {
+    id,
+    chatId: chat.id,
+    content: { pollId: uuid },
+    date: Math.floor(Date.now() / 1000),
+    isOutgoing: true,
+    senderId: selfId(),
+  };
+  store.putMessage(message);
+  sendUpdate({
+    '@type': 'newMessage', chatId: chat.id, id, message, poll: polls.build(uuid),
+  });
+}
+
+// Применяет агрегат опроса к сообщению и перерисовывает
+function refreshPollMessage(uuid: string) {
+  const chatId = polls.getChatId(uuid);
+  if (!chatId) return;
+  const messageId = store.allocateMessageId(chatId, uuid); // идемпотентно
+  const built = polls.build(uuid);
+  const message = store.getMessages(chatId).find((m) => m.id === messageId);
+  if (built && message) {
+    sendUpdate({
+      '@type': 'updateMessage', chatId, id: messageId, isFull: true, message, poll: built,
+    });
+  }
+}
+
+async function publishInner(toAddress: string, wireContent: Record<string, unknown>, uuid = crypto.randomUUID()) {
+  const ts = Math.floor(Date.now() / 1000);
+  const groupInfo = e2e ? store.getGroupInfo(toAddress) : undefined;
+
+  if (groupInfo && e2e) {
+    const distributed = await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
+    const ciphertext = distributed ? e2e.groupEncrypt(toAddress, JSON.stringify(wireContent)) : undefined;
+    if (ciphertext) {
+      connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
+        id: uuid,
+        from: store.self,
+        ts,
+        token,
+        payload: {
+          to: toAddress,
+          content: {
+            kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: e2e.identityKey,
+          },
+        },
+      }));
+      appendOwnJournal({ id: uuid, from: store.self, to: toAddress, content: wireContent as never, ts });
+      e2e.cacheInner(uuid, { from: store.self, content: wireContent });
+      return uuid;
+    }
+  }
+
+  const shouldE2e = Boolean(e2e && !store.isGroupAddress(toAddress) && toAddress !== store.self);
+  if (shouldE2e && e2e) {
+    const inner = JSON.stringify({ from: store.self, content: wireContent });
+    const encrypted = await e2e.encryptFor(toAddress, inner, fetchPrekeyBundle);
+    if (encrypted) {
+      connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
+        id: uuid,
+        from: '',
+        ts,
+        token,
+        payload: {
+          to: toAddress,
+          content: {
+            kind: 'encrypted', ciphertext: encrypted.ciphertext, ctype: encrypted.ctype, sender_identity: encrypted.sender_identity,
+          },
+        },
+      }));
+      appendOwnJournal({ id: uuid, from: store.self, to: toAddress, content: wireContent as never, ts });
+      e2e.cacheInner(uuid, { from: store.self, content: wireContent });
+      return uuid;
+    }
+  }
+
+  connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
+    id: uuid, from: store.self, ts, token, payload: { to: toAddress, content: wireContent },
+  }));
+  return uuid;
+}
+
 async function fetchPrekeyBundle(user: string) {
   const raw = await connection!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({ token, user }));
   return JSON.parse(raw) as {
@@ -509,6 +622,41 @@ function scheduleTtlDeletion(chatId: string, messageId: number, ttlSecs: number)
   }, ttlSecs * 1000);
 }
 
+// Обрабатывает poll-контент. Возвращает true, если это служебное голосование/
+// закрытие (не рендерим как сообщение). poll (создание) рендерится обычным путём
+function handlePollContent(stored: WireStoredMessage): boolean {
+  const c = stored.content;
+  if (c.kind === 'poll') {
+    const chatAddress = store.isGroupAddress(stored.to) ? stored.to
+      : (stored.from && stored.from !== store.self ? stored.from : stored.to);
+    const chatId = store.getIdForAddress(chatAddress, store.isGroupAddress(chatAddress) ? 'group' : 'user');
+    polls.register(stored.id, chatId, (c as { question?: string }).question || '',
+      (c as { options?: string[] }).options || [], {
+        isPublic: Boolean((c as { is_public?: boolean }).is_public),
+        isMultiple: Boolean((c as { is_multiple?: boolean }).is_multiple),
+      });
+    return false; // создание рендерим
+  }
+  if (c.kind === 'poll_vote') {
+    const pollUuid = (c as { poll?: string }).poll;
+    const opts = (c as { options?: number[] }).options || [];
+    if (pollUuid && stored.from) {
+      polls.applyVote(pollUuid, stored.from, opts);
+      refreshPollMessage(pollUuid);
+    }
+    return true;
+  }
+  if (c.kind === 'poll_close') {
+    const pollUuid = (c as { poll?: string }).poll;
+    if (pollUuid) {
+      polls.close(pollUuid);
+      refreshPollMessage(pollUuid);
+    }
+    return true;
+  }
+  return false;
+}
+
 const checkedGroupCandidates = new Set<string>();
 
 async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
@@ -546,6 +694,11 @@ async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming
     return;
   }
   await refreshGroupsIfUnknownChat(stored);
+  // Голоса/закрытие опросов — служебные, не рендерим (ack снимает из очереди)
+  if (handlePollContent(stored)) {
+    if (shouldAckIncoming && stored.from !== store.self) sendAck(rawStored.id, wasSealed ? stored.from : '');
+    return;
+  }
   rememberMediaKeys(stored.content);
   const prevFlags = wireFlagsByUuid.get(stored.id);
   const flags = buildWireFlags(stored);
@@ -570,6 +723,7 @@ async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming
       id: message.id,
       message,
       webPages: webPage ? [webPage] : undefined,
+      poll: stored.content.kind === 'poll' ? polls.build(stored.id) : undefined,
     });
     if (flags.read && message.isOutgoing) noteReadOutbox(message);
     // Эфемерное: заводим таймер удаления у получателя
@@ -759,6 +913,14 @@ const methods = {
     await ensureSynced();
     const history = store.getMessages(chat.id);
     const messages = history.slice(-Math.max(limit, 1) * 2);
+    // Опросы: poll-объект не в content, доотдаём отдельными апдейтами после
+    // того как сообщения окажутся в global (следующий тик)
+    const pollMessages = messages.filter((m) => m.content.pollId);
+    if (pollMessages.length) {
+      window.setTimeout(() => {
+        pollMessages.forEach((m) => m.content.pollId && refreshPollMessage(m.content.pollId));
+      }, 0);
+    }
     return {
       messages,
       users: collectUsersFor(messages),
@@ -866,6 +1028,27 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
+  async sendPollVote({ chat, messageId, options }: { chat: ApiChat; messageId: number; options: string[] }) {
+    const uuid = store.getUuidForMessage(chat.id, messageId);
+    const toAddress = store.getAddressForId(chat.id);
+    if (!uuid || !toAddress) return undefined;
+    const indices = options.map(Number).filter((n) => !Number.isNaN(n));
+    polls.applyVote(uuid, store.self, indices);
+    refreshPollMessage(uuid);
+    await publishInner(toAddress, { kind: 'poll_vote', poll: uuid, options: indices });
+    return true;
+  },
+
+  async closePoll({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+    const uuid = store.getUuidForMessage(chat.id, messageId);
+    const toAddress = store.getAddressForId(chat.id);
+    if (!uuid || !toAddress) return undefined;
+    polls.close(uuid);
+    refreshPollMessage(uuid);
+    await publishInner(toAddress, { kind: 'poll_close', poll: uuid });
+    return true;
+  },
+
   // Установить/снять TTL самоуничтожения для чата (period=0 — снять). TTL
   // хранится локально; едет в ttl_secs каждого исходящего сообщения
   setChatMessageAutoDeletePeriod({ chat, period }: { chat: ApiChat; period: number }) {
@@ -920,6 +1103,12 @@ const methods = {
   },
 
   async sendMessage(params: SendMessageParams, _onProgress?: ApiOnProgress) {
+    // Опрос: отдельный поток (kind=poll едет в E2E; агрегация голосов локальна)
+    if (params.poll && params.chat) {
+      await sendPoll(params.chat, params.poll);
+      return;
+    }
+
     const localMessage = params.localMessage
       || await methods.sendMessageLocal(params);
     const { chat, attachment } = params;

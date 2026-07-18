@@ -289,6 +289,8 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           timestamp: ts,
         },
       };
+    case 'poll':
+      return { pollId: stored.id };
     case 'encrypted':
     case 'group_encrypted':
       return { text: { text: '🔒 Зашифрованное сообщение (E2E в вебе ещё не поддержан)' } };
