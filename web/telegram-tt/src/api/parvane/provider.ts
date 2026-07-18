@@ -293,6 +293,7 @@ async function runFullSync() {
   ordered.forEach((rawStored) => {
     const { stored, hidden } = unsealStored(rawStored);
     if (hidden) return; // SKDM — служебное
+    rememberMediaKeys(stored.content); // и для своих journaled медиа
     wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
@@ -545,6 +546,7 @@ async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming
     return;
   }
   await refreshGroupsIfUnknownChat(stored);
+  rememberMediaKeys(stored.content);
   const prevFlags = wireFlagsByUuid.get(stored.id);
   const flags = buildWireFlags(stored);
   wireFlagsByUuid.set(stored.id, flags);
@@ -933,6 +935,9 @@ const methods = {
     // E2E доступен для лички с готовым движком (медиа шифруем блобом, текст —
     // sealed content); для группы/себя/без движка — открыто
     const shouldE2e = Boolean(e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self);
+    // Медиа в E2E-группе тоже шифруем блобом (file_key едет в group_encrypted)
+    const isE2eGroup = Boolean(e2e && store.isGroupAddress(toAddress));
+    const shouldEncryptMedia = shouldE2e || isE2eGroup;
 
     const ttlSecs = loadPeerTtl()[toAddress];
     let wireContent: Record<string, unknown> = {
@@ -945,7 +950,7 @@ const methods = {
       try {
         const blob: Blob = attachment.blob ?? await fetch(attachment.blobUrl).then((r) => r.blob());
         const { fileId, size, mediaKeys } = await uploadBlobToCloud(
-          blob, attachment.filename, attachment.mimeType, shouldE2e,
+          blob, attachment.filename, attachment.mimeType, shouldEncryptMedia,
         );
         const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
         if (isPhotoAttachment(attachment)) {
@@ -1008,8 +1013,8 @@ const methods = {
 
     // Группа с E2E (Megolm): раздаём SKDM участникам 1-на-1 sealed, ПОТОМ
     // шлём group_encrypted (from виден серверу для membership-проверки,
-    // content непрозрачен). Без attachment — медиа групп открыто (пока)
-    const groupInfo = e2e && !attachment ? store.getGroupInfo(toAddress) : undefined;
+    // content непрозрачен). Медиа-блоб уже зашифрован (file_key в content)
+    const groupInfo = e2e ? store.getGroupInfo(toAddress) : undefined;
     if (groupInfo && e2e) {
       const distributed = await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
       const ciphertext = distributed
