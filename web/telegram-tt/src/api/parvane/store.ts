@@ -291,6 +291,19 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       };
     case 'poll':
       return { pollId: stored.id };
+    case 'sticker':
+      return {
+        sticker: {
+          mediaType: 'sticker',
+          id: content.file_id!,
+          stickerSetInfo: { id: 'parvane-builtin', accessHash: '0' },
+          emoji: content.filename || '⭐',
+          isLottie: false,
+          isVideo: false,
+          width: content.width || 256,
+          height: content.height || 256,
+        },
+      };
     case 'encrypted':
     case 'group_encrypted':
       return { text: { text: '🔒 Зашифрованное сообщение (E2E в вебе ещё не поддержан)' } };
