@@ -338,7 +338,9 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       };
     case 'encrypted':
     case 'group_encrypted':
-      return { text: { text: '🔒 Зашифрованное сообщение (E2E в вебе ещё не поддержан)' } };
+      // Сюда попадают sealed-сообщения без ключа этого устройства (например,
+      // залогинились на новом устройстве — старые E2E прочитать нельзя)
+      return { text: { text: '🔒 Зашифровано для другого устройства' } };
     default:
       return { text: { text: `📎 ${content.kind}: ${content.filename || content.file_id || ''}` } };
   }
