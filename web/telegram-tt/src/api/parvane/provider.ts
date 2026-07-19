@@ -28,7 +28,7 @@ import { GatewayConnection, getGatewayUrl } from './gateway';
 import { buildBuiltinGifs } from './gifs';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
-import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet } from './stickers';
+import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getStickerBlobMime } from './stickers';
 import { buildWebPage, ParvaneStore } from './store';
 import {
   buildCallInboxTopic,
@@ -718,25 +718,27 @@ async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
   const toAddress = store.getAddressForId(chat.id);
   if (!toAddress) return;
 
-  // Берём картинку стикера из media-кэша (встроенный набор) или качаем
+  // Берём картинку/видео стикера из media-кэша (встроенный набор) или качаем
   const cached = await mediaCacheByFileId.get(sticker.id);
   const blob = cached?.blob;
   if (!blob) return;
+  const mime = cached!.mimeType || 'image/png';
+  const ext = mime === 'video/webm' ? 'webm' : 'png';
 
   const shouldEncrypt = Boolean(e2e && (store.isGroupAddress(toAddress) || toAddress !== store.self));
-  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `sticker-${sticker.id}.png`, 'image/png', shouldEncrypt);
+  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `sticker-${sticker.id}.${ext}`, mime, shouldEncrypt);
   const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
 
   const wireContent: Record<string, unknown> = {
     kind: 'sticker',
     file_id: fileId,
     filename: sticker.emoji || '⭐',
-    mime: 'image/png',
+    mime,
     width: sticker.width || 256,
     height: sticker.height || 256,
     ...mediaCrypto,
   };
-  mediaCacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: 'image/png' }));
+  mediaCacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: mime }));
 
   const uuid = await publishInner(toAddress, wireContent);
   const id = store.allocateMessageId(chat.id, uuid);
@@ -1927,10 +1929,10 @@ const methods = {
   // ── стикеры (встроенный набор) ──────────────────────────────────────────────
   async fetchStickerSets() {
     const { set, blobs } = await buildBuiltinStickerSet();
-    // Регистрируем картинки стикеров в media-кэше (хэш document<id>)
+    // Регистрируем картинки/видео стикеров в media-кэше (хэш document<id>)
     blobs.forEach((blob, id) => {
       if (!mediaCacheByFileId.has(id)) {
-        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'image/png' }));
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: getStickerBlobMime(id) }));
       }
     });
     return { hash: '1', sets: [{ ...set, stickers: undefined, count: set.count }] };
@@ -1942,10 +1944,19 @@ const methods = {
     const { set, blobs } = wantsEmoji ? await buildBuiltinCustomEmojiSet() : await buildBuiltinStickerSet();
     blobs.forEach((blob, id) => {
       if (!mediaCacheByFileId.has(id)) {
-        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'image/png' }));
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: getStickerBlobMime(id) }));
       }
     });
     return { set, stickers: set.stickers };
+  },
+
+  async fetchStickers(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {
+    const result = await methods.fetchStickerSet(params);
+    const packs: Record<string, ApiSticker[]> = {};
+    (result.stickers || []).forEach((s) => {
+      if (s.emoji) (packs[s.emoji] ||= []).push(s);
+    });
+    return { set: result.set, stickers: result.stickers || [], packs };
   },
 
   async fetchRecentStickers() {
