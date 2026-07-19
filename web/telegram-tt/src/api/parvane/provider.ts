@@ -1636,6 +1636,27 @@ const methods = {
     return true;
   },
 
+  // ── папки (локальный персист, как в десктоп-форке) ──────────────────────────
+  fetchChatFolders() {
+    const folders = loadFolders();
+    const byId: Record<number, unknown> = {};
+    const orderedIds: number[] = [0]; // 0 = All chats
+    folders.forEach((f) => { byId[f.id] = f; orderedIds.push(f.id); });
+    return Promise.resolve({ byId, orderedIds, recommended: undefined });
+  },
+
+  editChatFolder({ id, folderUpdate }: { id: number; folderUpdate: Record<string, unknown> }) {
+    const folders = loadFolders().filter((f) => f.id !== id);
+    folders.push({ ...folderUpdate, id });
+    saveFolders(folders);
+    return Promise.resolve(true);
+  },
+
+  deleteChatFolder(id: number) {
+    saveFolders(loadFolders().filter((f) => f.id !== id));
+    return Promise.resolve(true);
+  },
+
   async parvaneSendLocation({ chat, lat, long }: { chat: ApiChat; lat: number; long: number }) {
     const toAddress = store.getAddressForId(chat.id);
     if (!toAddress) return undefined;
@@ -2041,6 +2062,19 @@ function apiMessageToWireContent(msg: ApiMessage): Record<string, unknown> | und
     size_bytes: c.document!.size,
     ...crypto,
   };
+}
+
+// Папки хранятся локально (у Parvane нет облачных фильтров)
+function loadFolders(): { id: number; [k: string]: unknown }[] {
+  try {
+    return JSON.parse(localStorage.getItem(`parvane:folders:${store.self}`) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveFolders(folders: { id: number; [k: string]: unknown }[]) {
+  localStorage.setItem(`parvane:folders:${store.self}`, JSON.stringify(folders));
 }
 
 function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
