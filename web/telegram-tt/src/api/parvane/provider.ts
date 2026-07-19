@@ -2,35 +2,39 @@
 // (initApi/callApi + поток ApiUpdate), но вместо MTProto — шина Parvane через
 // gateway (WebSocket, JSON-кадры). Работает в главном потоке, без воркера.
 
+import type { SendMessageParams, ThreadReadState } from '../../types';
+import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
 import type {
-  ApiInitialArgs,
+  ApiChat, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
-  ApiThreadInfo,
+  ApiSticker, ApiThreadInfo,
   ApiUpdate,
   ApiUser,
   ApiUserStatus,
-  OnApiUpdate,
-} from '../types';
-import { MAIN_THREAD_ID } from '../types';
-import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
-import type { SendMessageParams, ThreadReadState } from '../../types';
-import type { ApiChat } from '../types';
+  ApiVideo,
+  OnApiUpdate } from '../types';
+import type { CallMedia, WireCallSignal } from './callengine';
 import type {
   WireEvent, WireGroupInfo, WireMessageContent, WireStoredMessage, WireUserInfo,
 } from './wire';
+import { MAIN_THREAD_ID } from '../types';
 
-import { GatewayConnection, getGatewayUrl } from './gateway';
-import { buildOldLangPack } from './oldLangPack';
-import { buildWebPage, ParvaneStore } from './store';
-import { PollStore } from './polls';
+import { decryptBlob, encryptBlob } from './blobcrypt';
 import { CallEngine } from './callengine';
-import type { CallMedia, WireCallSignal } from './callengine';
-import { buildBuiltinStickerSet, isBuiltinStickerId } from './stickers';
-import type { ApiSticker } from '../types';
+import { E2eEngine } from './e2e';
+import { apiEntitiesToWire } from './entities';
+import { GatewayConnection, getGatewayUrl } from './gateway';
+import { buildBuiltinGifs } from './gifs';
+import { buildOldLangPack } from './oldLangPack';
+import { PollStore } from './polls';
+import { buildBuiltinStickerSet } from './stickers';
+import { buildWebPage, ParvaneStore } from './store';
 import {
+  buildCallInboxTopic,
   buildMsgInboxTopic,
   buildWireEvent,
+  TOPIC_CALL_SIGNAL,
   TOPIC_FILE_DOWNLOAD_REQUEST,
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
@@ -60,12 +64,7 @@ import {
   TOPIC_MSG_SYNC_REQUEST,
   TOPIC_PREKEYS_FETCH,
   TOPIC_PREKEYS_PUBLISH,
-  TOPIC_CALL_SIGNAL,
-  buildCallInboxTopic,
 } from './wire';
-import { E2eEngine } from './e2e';
-import { decryptBlob, encryptBlob } from './blobcrypt';
-import { apiEntitiesToWire } from './entities';
 
 const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
@@ -544,6 +543,54 @@ async function distributeGroupKey(group: string, members: string[]): Promise<boo
 // Публикует произвольный inner-content с тем же E2E-выбором, что sendMessage:
 // группа → SKDM + group_encrypted; личка → sealed; иначе открыто. Для служебных
 // сообщений опросов (poll/poll_vote/poll_close). Возвращает uuid отправленного
+// ── GIF ──────────────────────────────────────────────────────────────────────
+
+const savedGifs: ApiVideo[] = [];
+
+function rememberSavedGif(gif: ApiVideo) {
+  if (!savedGifs.some((g) => g.id === gif.id)) savedGifs.unshift(gif);
+}
+
+async function sendGif(chat: ApiChat, gif: ApiVideo) {
+  const toAddress = store.getAddressForId(chat.id);
+  if (!toAddress) return;
+  const cached = await mediaCacheByFileId.get(gif.id);
+  const blob = cached?.blob || (gif.blobUrl ? await fetch(gif.blobUrl).then((r) => r.blob()) : undefined);
+  if (!blob) return;
+
+  const shouldEncrypt = Boolean(e2e && (store.isGroupAddress(toAddress) || toAddress !== store.self));
+  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `${gif.id}.webm`, 'video/webm', shouldEncrypt);
+  const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+
+  const wireContent: Record<string, unknown> = {
+    kind: 'gif',
+    file_id: fileId,
+    filename: `${gif.id}.webm`,
+    mime: 'video/webm',
+    width: gif.width || 240,
+    height: gif.height || 240,
+    duration_secs: Math.round(gif.duration),
+    size_bytes: blob.size,
+    ...mediaCrypto,
+  };
+  mediaCacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: 'video/webm' }));
+
+  const uuid = await publishInner(toAddress, wireContent);
+  const id = store.allocateMessageId(chat.id, uuid);
+  const sentGif = { ...gif, id: fileId };
+  rememberSavedGif(sentGif);
+  const message: ApiMessage = {
+    id,
+    chatId: chat.id,
+    content: { video: sentGif },
+    date: Math.floor(Date.now() / 1000),
+    isOutgoing: true,
+    senderId: selfId(),
+  };
+  store.putMessage(message);
+  sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
+}
+
 // ── стикеры ──────────────────────────────────────────────────────────────────
 
 async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
@@ -820,6 +867,10 @@ async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming
   const isKnown = store.hasMessage(stored.id);
   const message = store.buildApiMessage(stored);
   store.putMessage(message);
+  // Полученные GIF пополняют Saved GIFs (как в Telegram)
+  if (stored.content.kind === 'gif' && message.content.video) {
+    rememberSavedGif(message.content.video);
+  }
 
   if (!message.isOutgoing && shouldAckIncoming) {
     sendAck(stored.id, wasSealed ? stored.from : '');
@@ -1224,6 +1275,11 @@ const methods = {
     // Стикер: грузим картинку как медиа с kind=sticker (реюз attachment-потока)
     if (params.sticker && params.chat) {
       await sendSticker(params.chat, params.sticker);
+      return;
+    }
+    // GIF (анимированный webm)
+    if (params.gif && params.chat) {
+      await sendGif(params.chat, params.gif);
       return;
     }
 
@@ -1768,8 +1824,14 @@ const methods = {
     return Promise.resolve({ hash: '1', sets: [] });
   },
 
-  fetchSavedGifs() {
-    return Promise.resolve({ hash: '1', gifs: [] });
+  async fetchSavedGifs() {
+    const { gifs, blobs } = await buildBuiltinGifs();
+    blobs.forEach((blob, id) => {
+      if (!mediaCacheByFileId.has(id)) {
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'video/webm' }));
+      }
+    });
+    return { hash: '1', gifs: [...gifs, ...savedGifs] };
   },
 
   // ── звонки (программный API; UI-панель — window.parvaneCalls) ───────────────
@@ -1916,7 +1978,7 @@ async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string,
     // Блоб грузится в cloud ШИФРТЕКСТОМ (сервер не видит содержимого);
     // cloud хранит непрозрачные байты под нейтральным mime
     const enc = await encryptBlob(bytes);
-    bytes = enc.ciphertext as Uint8Array;
+    bytes = enc.ciphertext;
     mediaKeys = { keyB64: enc.keyB64, nonceB64: enc.nonceB64 };
   }
   const cloudMime = encrypt ? 'application/octet-stream' : mimeType;
@@ -1980,7 +2042,7 @@ async function downloadBlobFromCloud(fileId: string): Promise<{ blob: Blob; mime
     return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
   }
   const mimeType = chunks[0].mime_type || 'application/octet-stream';
-  return { blob: new Blob(parts as BlobPart[], { type: mimeType }), mimeType };
+  return { blob: new Blob(parts, { type: mimeType }), mimeType };
 }
 
 function concatBytes(parts: Uint8Array[]) {
@@ -2075,10 +2137,23 @@ function apiMessageToWireContent(msg: ApiMessage): Record<string, unknown> | und
       entities: apiEntitiesToWire(c.text.entities),
     };
   }
-  const mediaId = c.photo?.id || c.document?.id || c.sticker?.id;
+  const mediaId = c.photo?.id || c.document?.id || c.sticker?.id || c.video?.id;
   if (!mediaId) return undefined;
   const keys = mediaKeysByFileId.get(mediaId);
   const crypto = keys ? { file_key: keys.keyB64, file_nonce: keys.nonceB64 } : {};
+  if (c.video?.isGif) {
+    return {
+      kind: 'gif',
+      file_id: mediaId,
+      filename: c.video.fileName,
+      mime: c.video.mimeType,
+      width: c.video.width || 240,
+      height: c.video.height || 240,
+      duration_secs: Math.round(c.video.duration),
+      size_bytes: c.video.size,
+      ...crypto,
+    };
+  }
   if (c.sticker) {
     return {
       kind: 'sticker', file_id: mediaId, filename: c.sticker.emoji || '⭐', mime: 'image/png', ...crypto,
@@ -2182,8 +2257,8 @@ function readCreds(): { user: string; password: string } | undefined {
 export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<T>): MethodResponse<T> {
   const method = (methods as Record<string, AnyFunction>)[fnName as string];
   if (!method) {
-    if (!reportedMissingMethods.has(fnName as string)) {
-      reportedMissingMethods.add(fnName as string);
+    if (!reportedMissingMethods.has(fnName)) {
+      reportedMissingMethods.add(fnName);
       // eslint-disable-next-line no-console
       console.debug(`[parvane] метод не реализован: ${String(fnName)}`);
     }
