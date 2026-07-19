@@ -317,6 +317,22 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           height: content.height || 256,
         },
       };
+    case 'gif':
+      return {
+        video: {
+          mediaType: 'video',
+          id: content.file_id!,
+          mimeType: content.mime || 'video/webm',
+          duration: content.duration_secs || 1,
+          fileName: content.filename || 'animation.webm',
+          width: content.width || 240,
+          height: content.height || 240,
+          isGif: true,
+          supportsStreaming: false,
+          size: content.size_bytes || 0,
+          noSound: true,
+        },
+      };
     case 'encrypted':
     case 'group_encrypted':
       return { text: { text: '🔒 Зашифрованное сообщение (E2E в вебе ещё не поддержан)' } };
