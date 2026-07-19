@@ -591,6 +591,127 @@ async function sendGif(chat: ApiChat, gif: ApiVideo) {
   sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
 }
 
+// ── запланированные сообщения ────────────────────────────────────────────────
+// Очередь живёт у клиента: текстовые записи переживают перезагрузку
+// (localStorage), медиа-записи держим в памяти сессии. По сроку — обычная
+// отправка через sendMessage + перенос из scheduled в чат
+
+type ScheduledEntry = {
+  id: number;
+  chatId: string;
+  scheduledAt: number;
+  text?: string;
+  entities?: SendMessageParams['entities'];
+  replyToMsgId?: number;
+  // Полные параметры (медиа/опрос/стикер) — только на время сессии
+  params?: SendMessageParams;
+};
+
+const SCHEDULED_CHECK_INTERVAL_MS = 5000;
+const SCHEDULED_ID_BASE = 1_000_001;
+
+const scheduledQueue: ScheduledEntry[] = [];
+let isScheduledLoaded = false;
+let scheduledNextId = SCHEDULED_ID_BASE;
+
+function loadScheduledQueue() {
+  if (isScheduledLoaded || !store.self) return;
+  isScheduledLoaded = true;
+  try {
+    const raw = JSON.parse(localStorage.getItem(`parvane:scheduled:${store.self}`) || '[]') as ScheduledEntry[];
+    scheduledQueue.push(...raw);
+    scheduledNextId = Math.max(scheduledNextId, ...raw.map((e) => e.id + 1));
+  } catch { /* пустая очередь */ }
+}
+
+function persistScheduledQueue() {
+  const persistable = scheduledQueue.filter((e) => !e.params);
+  localStorage.setItem(`parvane:scheduled:${store.self}`, JSON.stringify(persistable));
+}
+
+function buildScheduledApiMessage(entry: ScheduledEntry): ApiMessage {
+  const content = entry.params
+    ? buildLocalContent(crypto.randomUUID(), entry.params)
+    : { text: { text: entry.text || '', entities: entry.entities } };
+  return {
+    id: entry.id,
+    chatId: entry.chatId,
+    content,
+    date: entry.scheduledAt,
+    isOutgoing: true,
+    senderId: selfId(),
+    isScheduled: true,
+    replyInfo: entry.replyToMsgId ? { type: 'message', replyToMsgId: entry.replyToMsgId } : undefined,
+  };
+}
+
+function rebuildChatForScheduled(chatId: string): ApiChat | undefined {
+  const address = store.getAddressForId(chatId);
+  if (!address) return undefined;
+  const groupInfo = store.getGroupInfo(address);
+  return groupInfo ? store.buildApiChatForGroup(groupInfo) : store.buildApiChatForUser(address);
+}
+
+function removeScheduled(chatId: string, ids: number[]) {
+  ids.forEach((id) => {
+    const i = scheduledQueue.findIndex((e) => e.id === id && e.chatId === chatId);
+    if (i >= 0) scheduledQueue.splice(i, 1);
+  });
+  persistScheduledQueue();
+  sendUpdate({ '@type': 'deleteScheduledMessages', ids, chatId });
+}
+
+async function fireScheduled(entry: ScheduledEntry) {
+  const chat = entry.params?.chat || rebuildChatForScheduled(entry.chatId);
+  removeScheduled(entry.chatId, [entry.id]);
+  if (!chat) return;
+  const params: SendMessageParams = entry.params
+    ? { ...entry.params, scheduledAt: undefined }
+    : {
+      chat,
+      text: entry.text,
+      entities: entry.entities,
+      replyInfo: entry.replyToMsgId ? { type: 'message', replyToMsgId: entry.replyToMsgId } : undefined,
+    };
+  await methods.sendMessage(params);
+}
+
+function scheduleMessage(params: SendMessageParams) {
+  loadScheduledQueue();
+  const chat = params.chat!;
+  const hasMedia = Boolean(params.attachment || params.sticker || params.gif || params.poll);
+  const entry: ScheduledEntry = {
+    id: scheduledNextId++,
+    chatId: chat.id,
+    scheduledAt: params.scheduledAt!,
+    text: params.text,
+    entities: params.entities,
+    replyToMsgId: params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined,
+    params: hasMedia ? { ...params } : undefined,
+  };
+  scheduledQueue.push(entry);
+  persistScheduledQueue();
+  sendUpdate({
+    '@type': 'newScheduledMessage',
+    chatId: chat.id,
+    id: entry.id,
+    message: buildScheduledApiMessage(entry),
+  });
+}
+
+async function checkDueScheduled() {
+  if (!store.self || !token) return;
+  loadScheduledQueue();
+  const now = Math.floor(Date.now() / 1000);
+  const due = scheduledQueue.filter((e) => e.scheduledAt <= now);
+  for (const entry of due) {
+    // eslint-disable-next-line no-await-in-loop
+    await fireScheduled(entry);
+  }
+}
+
+window.setInterval(() => { void checkDueScheduled(); }, SCHEDULED_CHECK_INTERVAL_MS);
+
 // ── стикеры ──────────────────────────────────────────────────────────────────
 
 async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
@@ -1267,6 +1388,11 @@ const methods = {
   },
 
   async sendMessage(params: SendMessageParams, _onProgress?: ApiOnProgress) {
+    // Запланированное: в локальную очередь, по сроку — обычная отправка
+    if (params.scheduledAt && params.chat) {
+      scheduleMessage(params);
+      return;
+    }
     // Опрос: отдельный поток (kind=poll едет в E2E; агрегация голосов локальна)
     if (params.poll && params.chat) {
       await sendPoll(params.chat, params.poll);
@@ -1832,6 +1958,47 @@ const methods = {
       }
     });
     return { hash: '1', gifs: [...gifs, ...savedGifs] };
+  },
+
+  // ── запланированные сообщения (локальная очередь) ───────────────────────────
+
+  fetchScheduledHistory({ chat }: { chat: ApiChat }) {
+    loadScheduledQueue();
+    const messages = scheduledQueue
+      .filter((e) => e.chatId === chat.id)
+      .sort((a, b) => a.scheduledAt - b.scheduledAt)
+      .map(buildScheduledApiMessage);
+    return Promise.resolve({ messages });
+  },
+
+  deleteScheduledMessages({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
+    loadScheduledQueue();
+    removeScheduled(chat.id, messageIds);
+    return Promise.resolve();
+  },
+
+  async sendScheduledMessages({ chat, ids }: { chat: ApiChat; ids: number[] }) {
+    loadScheduledQueue();
+    for (const id of ids) {
+      const entry = scheduledQueue.find((e) => e.chatId === chat.id && e.id === id);
+      // eslint-disable-next-line no-await-in-loop
+      if (entry) await fireScheduled(entry);
+    }
+  },
+
+  rescheduleMessage({ chat, message, scheduledAt }: { chat: ApiChat; message: ApiMessage; scheduledAt: number }) {
+    loadScheduledQueue();
+    const entry = scheduledQueue.find((e) => e.chatId === chat.id && e.id === message.id);
+    if (!entry) return Promise.resolve();
+    entry.scheduledAt = scheduledAt;
+    persistScheduledQueue();
+    sendUpdate({
+      '@type': 'updateScheduledMessage',
+      chatId: chat.id,
+      id: entry.id,
+      message: buildScheduledApiMessage(entry),
+    });
+    return Promise.resolve();
   },
 
   // ── звонки (программный API; UI-панель — window.parvaneCalls) ───────────────
