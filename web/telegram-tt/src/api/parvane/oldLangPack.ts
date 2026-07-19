@@ -24,6 +24,8 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     'Time.AtDate': '%@',
     'Time.JustNow': 'just now',
     'Time.MinutesAgo': { oneValue: '%@ minute ago', otherValue: '%@ minutes ago' },
+    'StickerPack.AddStickerCount': { oneValue: 'Add %@ Sticker', otherValue: 'Add %@ Stickers' },
+    'StickerPack.RemoveStickerCount': { oneValue: 'Remove %@ Sticker', otherValue: 'Remove %@ Stickers' },
   };
 
   const longWeekday = new Intl.DateTimeFormat(langCode, { weekday: 'long' });
