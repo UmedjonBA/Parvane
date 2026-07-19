@@ -43,7 +43,78 @@ function buildApiSticker(index: number, emoji: string): ApiSticker {
   };
 }
 
-// Строит встроенный набор + карту id→Blob (для регистрации в media-кэше)
+// ── анимированные стикеры (webm) ─────────────────────────────────────────────
+// canvas → MediaRecorder (vp9 с альфой, где поддержан). ApiSticker.isVideo —
+// tt рендерит их штатным видео-путём
+
+const ANIM_EMOJIS = ['🕺', '💃', '🎊'];
+const ANIM_MS = 1200;
+const ANIM_FPS = 30;
+
+function animStickerId(index: number) {
+  return `pvstA${index}`;
+}
+
+function pickStickerWebmMime(): string {
+  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  return candidates.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+}
+
+async function recordAnimatedSticker(emoji: string): Promise<Blob> {
+  const canvas = document.createElement('canvas');
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext('2d')!;
+  const mime = pickStickerWebmMime();
+  const stream = canvas.captureStream(ANIM_FPS);
+  const recorder = new MediaRecorder(stream, { mimeType: mime });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data.size) chunks.push(e.data);
+  };
+
+  const start = performance.now();
+  let raf = 0;
+  const render = () => {
+    const t = ((performance.now() - start) % ANIM_MS) / ANIM_MS;
+    ctx.clearRect(0, 0, SIZE, SIZE);
+    ctx.save();
+    ctx.translate(SIZE / 2, SIZE / 2 + Math.sin(t * Math.PI * 2) * SIZE * 0.08);
+    ctx.rotate(Math.sin(t * Math.PI * 2) * 0.25);
+    ctx.font = `${SIZE * 0.6}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, 0, 0);
+    ctx.restore();
+    raf = requestAnimationFrame(render);
+  };
+  render();
+
+  return new Promise((resolve) => {
+    recorder.onstop = () => {
+      cancelAnimationFrame(raf);
+      resolve(new Blob(chunks, { type: mime }));
+    };
+    recorder.start();
+    setTimeout(() => recorder.stop(), ANIM_MS + 100);
+  });
+}
+
+function buildApiAnimSticker(index: number, emoji: string): ApiSticker {
+  return {
+    mediaType: 'sticker',
+    id: animStickerId(index),
+    stickerSetInfo: { id: SET_ID, accessHash: SET_ACCESS },
+    emoji,
+    isLottie: false,
+    isVideo: true,
+    width: SIZE,
+    height: SIZE,
+  };
+}
+
+// Строит встроенный набор + карту id→Blob (для регистрации в media-кэше).
+// mimes — video/webm для анимированных, остальные image/png
 export async function buildBuiltinStickerSet() {
   if (cachedSet) return cachedSet;
   const stickers: ApiSticker[] = [];
@@ -52,6 +123,11 @@ export async function buildBuiltinStickerSet() {
     stickers.push(buildApiSticker(i, EMOJIS[i]));
     // eslint-disable-next-line no-await-in-loop
     blobs.set(stickerId(i), await renderEmoji(EMOJIS[i]));
+  }
+  for (let i = 0; i < ANIM_EMOJIS.length; i++) {
+    stickers.push(buildApiAnimSticker(i, ANIM_EMOJIS[i]));
+    // eslint-disable-next-line no-await-in-loop
+    blobs.set(animStickerId(i), await recordAnimatedSticker(ANIM_EMOJIS[i]));
   }
   const set: ApiStickerSet = {
     id: SET_ID,
@@ -64,6 +140,10 @@ export async function buildBuiltinStickerSet() {
   };
   cachedSet = { set, blobs };
   return cachedSet;
+}
+
+export function getStickerBlobMime(id: string) {
+  return id.startsWith('pvstA') ? 'video/webm' : 'image/png';
 }
 
 export function getBuiltinSetId() {

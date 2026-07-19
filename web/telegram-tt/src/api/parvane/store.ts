@@ -315,7 +315,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           stickerSetInfo: { id: 'parvane-builtin', accessHash: '0' },
           emoji: content.filename || '⭐',
           isLottie: false,
-          isVideo: false,
+          isVideo: content.mime === 'video/webm',
           width: content.width || 256,
           height: content.height || 256,
         },
