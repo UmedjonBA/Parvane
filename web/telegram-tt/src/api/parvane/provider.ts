@@ -1636,6 +1636,41 @@ const methods = {
     return true;
   },
 
+  // ── блокировка (локальный персист — у Parvane нет серверного блока) ─────────
+  blockUser({ user }: { user: ApiUser }) {
+    const address = store.getAddressForId(user.id);
+    if (address) {
+      const blocked = loadBlocked();
+      if (!blocked.includes(address)) { blocked.push(address); saveBlocked(blocked); }
+    }
+    return Promise.resolve(true);
+  },
+
+  unblockUser({ user }: { user: ApiUser }) {
+    const address = store.getAddressForId(user.id);
+    if (address) saveBlocked(loadBlocked().filter((a) => a !== address));
+    return Promise.resolve(true);
+  },
+
+  fetchBlockedUsers() {
+    const ids = loadBlocked().map((a) => store.getIdForAddress(a));
+    return Promise.resolve({ blockedIds: ids, totalCount: ids.length });
+  },
+
+  // «Кто голосовал» в опросе (публичные): список проголосовавших за вариант
+  loadPollOptionResults({ chat, messageId, option }: {
+    chat: ApiChat; messageId: number; option?: string;
+  }) {
+    const uuid = store.getUuidForMessage(chat.id, messageId);
+    if (!uuid || option === undefined) return Promise.resolve(undefined);
+    const voters = polls.getVoters(uuid, Number(option));
+    const votes = voters.map((address) => ({
+      peerId: store.getIdForAddress(address),
+      date: Math.floor(Date.now() / 1000),
+    }));
+    return Promise.resolve({ count: votes.length, votes, nextOffset: undefined });
+  },
+
   // ── папки (локальный персист, как в десктоп-форке) ──────────────────────────
   fetchChatFolders() {
     const folders = loadFolders();
@@ -2062,6 +2097,19 @@ function apiMessageToWireContent(msg: ApiMessage): Record<string, unknown> | und
     size_bytes: c.document!.size,
     ...crypto,
   };
+}
+
+// Блокировка хранится локально (у Parvane нет серверного блока)
+function loadBlocked(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(`parvane:blocked:${store.self}`) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveBlocked(list: string[]) {
+  localStorage.setItem(`parvane:blocked:${store.self}`, JSON.stringify(list));
 }
 
 // Папки хранятся локально (у Parvane нет облачных фильтров)
