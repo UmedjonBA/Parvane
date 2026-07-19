@@ -58,6 +58,17 @@ export class PollStore {
     if (entry) entry.closed = true;
   }
 
+  // Адреса проголосовавших за конкретный вариант (для «кто голосовал»)
+  getVoters(uuid: string, optionIndex: number): string[] {
+    const entry = this.byUuid.get(uuid);
+    if (!entry) return [];
+    const voters: string[] = [];
+    entry.votes.forEach((choices, voter) => {
+      if (choices.includes(optionIndex)) voters.push(voter);
+    });
+    return voters;
+  }
+
   // ApiMessagePoll из текущего агрегата (pollId = FNV(uuid) как число-строка)
   build(uuid: string): ApiMessagePoll | undefined {
     const entry = this.byUuid.get(uuid);
