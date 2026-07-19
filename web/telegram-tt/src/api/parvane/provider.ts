@@ -28,7 +28,7 @@ import { GatewayConnection, getGatewayUrl } from './gateway';
 import { buildBuiltinGifs } from './gifs';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
-import { buildBuiltinStickerSet } from './stickers';
+import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet } from './stickers';
 import { buildWebPage, ParvaneStore } from './store';
 import {
   buildCallInboxTopic,
@@ -1112,6 +1112,10 @@ const methods = {
       };
     }
     await ensureSynced();
+    // Пинок загрузки наборов стикеров/кастом-эмодзи после маунта Main: штатный
+    // путь гейтится на isAppConfigLoaded (fetchAppConfig у нас нет), а апдейт
+    // updateStickerSets зовёт loadStickerSets напрямую
+    setTimeout(() => sendUpdate({ '@type': 'updateStickerSets' }), 0);
 
     const users: ApiUser[] = [];
     const chats: ApiChat[] = [];
@@ -1932,8 +1936,15 @@ const methods = {
     return { hash: '1', sets: [{ ...set, stickers: undefined, count: set.count }] };
   },
 
-  async fetchStickerSet() {
-    const { set } = await buildBuiltinStickerSet();
+  async fetchStickerSet(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {
+    const wantsEmoji = params?.stickerSetInfo?.id === 'parvane-emoji'
+      || params?.stickerSetInfo?.shortName === 'ParvaneEmoji';
+    const { set, blobs } = wantsEmoji ? await buildBuiltinCustomEmojiSet() : await buildBuiltinStickerSet();
+    blobs.forEach((blob, id) => {
+      if (!mediaCacheByFileId.has(id)) {
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'image/png' }));
+      }
+    });
     return { set, stickers: set.stickers };
   },
 
@@ -1946,8 +1957,26 @@ const methods = {
     return Promise.resolve({ hash: '1', sets: [] });
   },
 
-  fetchCustomEmojiSets() {
-    return Promise.resolve({ hash: '1', sets: [] });
+  // ── кастом-эмодзи (встроенный набор) ────────────────────────────────────────
+
+  async fetchCustomEmojiSets() {
+    const { set, blobs } = await buildBuiltinCustomEmojiSet();
+    blobs.forEach((blob, id) => {
+      if (!mediaCacheByFileId.has(id)) {
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'image/png' }));
+      }
+    });
+    return { hash: '1', sets: [set] };
+  },
+
+  async fetchCustomEmoji({ documentId }: { documentId: string[] }) {
+    const { set, blobs } = await buildBuiltinCustomEmojiSet();
+    blobs.forEach((blob, id) => {
+      if (!mediaCacheByFileId.has(id)) {
+        mediaCacheByFileId.set(id, Promise.resolve({ blob, mimeType: 'image/png' }));
+      }
+    });
+    return (set.stickers || []).filter((s) => documentId.includes(s.id));
   },
 
   async fetchSavedGifs() {

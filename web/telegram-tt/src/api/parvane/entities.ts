@@ -17,6 +17,7 @@ const WIRE_TO_API: Record<string, ApiMessageEntityTypes> = {
   spoiler: ApiMessageEntityTypes.Spoiler,
   text_url: ApiMessageEntityTypes.TextUrl,
   mention: ApiMessageEntityTypes.Mention,
+  custom_emoji: ApiMessageEntityTypes.CustomEmoji,
 };
 
 const API_TO_WIRE: Record<string, string> = Object.fromEntries(
@@ -31,6 +32,10 @@ export function wireEntitiesToApi(entities?: WireTextEntity[]): ApiMessageEntity
     if (!type) return;
     if (type === ApiMessageEntityTypes.TextUrl) {
       result.push({ type, offset: e.offset, length: e.length, url: e.data || '' });
+    } else if (type === ApiMessageEntityTypes.CustomEmoji) {
+      result.push({
+        type, offset: e.offset, length: e.length, documentId: e.data || '',
+      });
     } else if (type === ApiMessageEntityTypes.Pre) {
       result.push({ type, offset: e.offset, length: e.length, language: e.data });
     } else {
@@ -49,6 +54,7 @@ export function apiEntitiesToWire(entities?: ApiMessageEntity[]): WireTextEntity
     const wire: WireTextEntity = { type: wireType, offset: e.offset, length: e.length };
     if (e.type === ApiMessageEntityTypes.TextUrl) wire.data = e.url;
     if (e.type === ApiMessageEntityTypes.Pre && e.language) wire.data = e.language;
+    if (e.type === ApiMessageEntityTypes.CustomEmoji) wire.data = e.documentId;
     result.push(wire);
   });
   return result.length ? result : undefined;
