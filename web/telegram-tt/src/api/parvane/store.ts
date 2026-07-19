@@ -155,6 +155,9 @@ export class ParvaneStore {
       isMin: false,
       isSelf: isSelf ? true : undefined,
       isContact: isSelf ? undefined : true,
+      // Premium-гейт tt (вставка кастом-эмодзи и т.п.) в Parvane снят: свой
+      // юзер всегда premium; чужим не ставим, чтобы не рисовать бейджи
+      isPremium: isSelf ? true : undefined,
       type: 'userTypeRegular',
       firstName: this.getDisplayName(address),
       phoneNumber: '',
