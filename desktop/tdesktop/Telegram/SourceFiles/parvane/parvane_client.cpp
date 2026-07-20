@@ -476,7 +476,8 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 
 // Групповое E2E (Megolm/sender keys, Фаза 3): раздаёт SKDM (свой session_key)
 // каждому участнику по 1-на-1 E2E (sealed) и возвращает group_encrypted-конверт
-// для рассылки в группу. "" — E2E не готов/ошибка (тогда шлём открыто). Вызывать
+// для рассылки в группу. "" — E2E не готов или хотя бы один участник не получил
+// ключ; вызывающий обязан оставить сообщение неотправленным. Вызывать
 // вне g_sessionMutex (внутри сеть: fetch бандлов участников).
 [[nodiscard]] std::string sealGroup(
 		parvane::MessengerClient *m,
@@ -516,12 +517,13 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 		}
 		const auto sealed = parvane::e2e::sealFor(memStd, skdm.dump(), *t, token);
 		if (sealed.empty()) {
-			continue; // нет бандла участника — получит ключ при следующей отправке
+			return {};
 		}
 		try {
 			m->sendContent(std::string(), memStd, parvane::json::parse(sealed),
 				std::string());
 		} catch (const std::exception &) {
+			return {};
 		}
 	}
 	return parvane::e2e::groupSeal(groupId, content.dump());
@@ -595,8 +597,9 @@ void sendTextAsync(
 				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
 					replyToUuid, pre);
 			} else {
-				id = m->sendText(from, to, body, token,
-					replyToUuid, preId, entities, webpage);
+				LOG(("Parvane: E2E недоступен для %1 — сообщение НЕ отправлено")
+					.arg(QString::fromStdString(to)));
+				return;
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -666,16 +669,42 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 	const auto token = Token().toStdString();
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
+		parvane::ITransport *t = nullptr;
+		bool isGroup = false;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			m = g_messenger.get();
+			t = g_transport.get();
+			isGroup = g_knownGroups.contains(QString::fromStdString(to));
 		}
-		if (!m) {
+		if (!m || !t || !parvane::e2e::ready()) {
+			LOG(("Parvane: пересылка не отправлена — E2E недоступен для %1")
+				.arg(toAddress));
 			return;
 		}
 		try {
 			const auto content = parvane::json::parse(contentJson);
-			const auto id = m->sendContent(from, to, content, token);
+			std::string id;
+			if (!isGroup) {
+				const auto sealed = parvane::e2e::sealFor(
+					to, content.dump(), *t, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E пересылки не удался для %1 — не отправлено")
+						.arg(toAddress));
+					return;
+				}
+				id = m->sendContent(std::string(), to,
+					nlohmann::json::parse(sealed), std::string());
+			} else {
+				const auto sealed = sealGroup(m, t, to, content, token);
+				if (sealed.empty()) {
+					LOG(("Parvane: E2E пересылки группы не удался для %1 — не отправлено")
+						.arg(toAddress));
+					return;
+				}
+				id = m->sendContent(from, to,
+					nlohmann::json::parse(sealed), token);
+			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
 				g_ownSentUuids.insert(id);
@@ -1708,18 +1737,20 @@ void MirrorOutgoingFile(
 			// E2E медиа (Фаза 3): шифруем БЛОБ (cloud хранит шифртекст), ключ+nonce
 			// кладём в content, а сам content шифруем E2E. 1-на-1 → sealed (Olm);
 			// группа → Megolm (sender keys) + раздача SKDM.
-			const bool e2e = parvane::e2e::ready();
-			std::string uploadBytes = bytesStd, fileKey, fileNonce;
-			if (e2e) {
-				auto enc = parvane::blobcrypt::encrypt(bytesStd);
-				if (enc.ciphertext.empty()) {
-					LOG(("Parvane: медиа не зашифровано (блоб) — пропуск"));
-					return;
-				}
-				uploadBytes = std::move(enc.ciphertext);
-				fileKey = enc.keyB64;
-				fileNonce = enc.nonceB64;
+			if (!parvane::e2e::ready()) {
+				LOG(("Parvane: E2E медиа недоступен для %1 — не отправлено")
+					.arg(QString::fromStdString(to)));
+				return;
 			}
+			std::string uploadBytes = bytesStd, fileKey, fileNonce;
+			auto enc = parvane::blobcrypt::encrypt(bytesStd);
+			if (enc.ciphertext.empty()) {
+				LOG(("Parvane: медиа не зашифровано (блоб) — пропуск"));
+				return;
+			}
+			uploadBytes = std::move(enc.ciphertext);
+			fileKey = enc.keyB64;
+			fileNonce = enc.nonceB64;
 			parvane::CloudClient cloud(*t);
 			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
 			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd,
@@ -1731,7 +1762,7 @@ void MirrorOutgoingFile(
 				content["ttl_secs"] = ttl;
 			}
 			std::string id;
-			if (e2e && !isGroup) {
+			if (!isGroup) {
 				const auto sealed = parvane::e2e::sealFor(to, content.dump(), *t, token);
 				if (sealed.empty()) {
 					LOG(("Parvane: E2E медиа не удался для %1 — не отправлено")
@@ -1740,7 +1771,7 @@ void MirrorOutgoingFile(
 				}
 				id = m->sendContent(std::string(), to, nlohmann::json::parse(sealed),
 					std::string());
-			} else if (e2e && isGroup) {
+			} else {
 				const auto sealed = sealGroup(m, t, to, content, token);
 				if (sealed.empty()) {
 					LOG(("Parvane: E2E медиа группы не удался для %1 — не отправлено")
@@ -1748,8 +1779,6 @@ void MirrorOutgoingFile(
 					return;
 				}
 				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token);
-			} else {
-				id = m->sendContent(from, to, content, token);
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1772,7 +1801,7 @@ void MirrorOutgoingFile(
 				.arg(QString::fromStdString(fileId))
 				.arg(bytesStd.size())
 				.arg(QString::fromStdString(to))
-				.arg(e2e ? u" [E2E]"_q : QString()));
+				.arg(u" [E2E]"_q));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: ошибка отправки медиа: %1")
 				.arg(QString::fromUtf8(e.what())));

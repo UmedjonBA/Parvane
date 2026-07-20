@@ -115,10 +115,31 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
         from: 'victim@local',
         ts: Math.floor(Date.now() / 1000),
         token: 'forged-victim-token',
-        payload: { to: user, content: { kind: 'text', text: 'spoof-attempt' } },
+        payload: {
+          to: user,
+          content: {
+            kind: 'group_encrypted',
+            ciphertext: 'opaque-spoof-attempt',
+            group: 'security-test',
+            sender_identity: 'forged-curve25519-key',
+          },
+        },
       }),
     }));
     const inboxFrame = await inbox;
+
+    const plaintextFrame = await exchange({
+      op: 'pub',
+      subject: 'msg.chat.send',
+      payload: JSON.stringify({
+        id: crypto.randomUUID(),
+        from: user,
+        ts: Math.floor(Date.now() / 1000),
+        token: issue.token,
+        payload: { to: user, content: { kind: 'text', text: 'must-not-leak' } },
+      }),
+    }, (response) => response.op === 'err');
+    const plaintextError = plaintextFrame.error || '';
 
     const publishRejected = async (subject: string) => {
       const frame = await exchange(
@@ -152,6 +173,7 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
       presenceFrom: presencePayload.from,
       typingFrom: typingPayload.from,
       messageFrom: inboxPayload.payload?.message?.from,
+      plaintextError,
       foreignPresenceError,
       typingWildcardError,
     };
@@ -167,6 +189,7 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
   expect(result.presenceFrom).toBe('mallory-inbox@local');
   expect(result.typingFrom).toBe('mallory-inbox@local');
   expect(result.messageFrom).toBe('mallory-inbox@local');
+  expect(result.plaintextError).toContain('plaintext');
   expect(result.foreignPresenceError).toContain('запрещ');
   expect(result.typingWildcardError).toContain('запрещ');
 });

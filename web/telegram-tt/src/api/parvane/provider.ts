@@ -23,6 +23,12 @@ import { MAIN_THREAD_ID } from '../types';
 import { decryptBlob, encryptBlob } from './blobcrypt';
 import { CallEngine } from './callengine';
 import { E2eEngine } from './e2e';
+import {
+  deliverToEveryGroupMember,
+  E2E_SEND_ERROR,
+  requireE2e,
+  requireEncrypted,
+} from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import { GatewayConnection, getGatewayUrl } from './gateway';
 import { buildBuiltinGifs } from './gifs';
@@ -505,44 +511,38 @@ function unsealStored(stored: WireStoredMessage): UnsealResult {
   }
 }
 
-// Раздаёт session_key группы каждому участнику 1-на-1 sealed (SKDM). true —
-// хотя бы одному доставлен (иначе шифровать бессмысленно, никто не расшифрует)
-async function distributeGroupKey(group: string, members: string[]): Promise<boolean> {
-  if (!e2e) return false;
-  const { sessionKey, epoch } = e2e.getGroupSessionKey(group);
+// Раздаёт session_key группы каждому текущему участнику 1-на-1 sealed (SKDM).
+// Любой недоставленный ключ отменяет всё сообщение: частичная рассылка не
+// должна провоцировать plaintext fallback или нечитаемое групповое сообщение.
+async function distributeGroupKey(group: string, members: string[]) {
+  const engine = requireE2e(e2e);
+  const { sessionKey, epoch } = engine.getGroupSessionKey(group);
   const skdmContent = {
-    kind: 'skdm', group, session_key: sessionKey, sender_identity: e2e.identityKey, epoch,
+    kind: 'skdm', group, session_key: sessionKey, sender_identity: engine.identityKey, epoch,
   };
   const innerJson = JSON.stringify({ from: store.self, content: skdmContent });
 
-  let delivered = false;
-  for (const member of members) {
-    if (member === store.self) continue;
-    try {
-      const encrypted = await e2e.encryptFor(member, innerJson, fetchPrekeyBundle);
-      if (!encrypted) continue;
-      const skdmEvent = {
-        id: crypto.randomUUID(),
-        from: '',
-        ts: Math.floor(Date.now() / 1000),
-        token,
-        payload: {
-          to: member,
-          content: {
-            kind: 'encrypted',
-            ciphertext: encrypted.ciphertext,
-            ctype: encrypted.ctype,
-            sender_identity: encrypted.sender_identity,
-          },
+  await deliverToEveryGroupMember(members, store.self, async (member) => {
+    const encrypted = await engine.encryptFor(member, innerJson, fetchPrekeyBundle);
+    if (!encrypted) return false;
+    const skdmEvent = {
+      id: crypto.randomUUID(),
+      from: '',
+      ts: Math.floor(Date.now() / 1000),
+      token,
+      payload: {
+        to: member,
+        content: {
+          kind: 'encrypted',
+          ciphertext: encrypted.ciphertext,
+          ctype: encrypted.ctype,
+          sender_identity: encrypted.sender_identity,
         },
-      };
-      connection!.publish(TOPIC_MSG_SEND, JSON.stringify(skdmEvent));
-      delivered = true;
-    } catch {
-      // нет бандла участника — получит ключ при следующей отправке
-    }
-  }
-  return delivered;
+      },
+    };
+    connection!.publish(TOPIC_MSG_SEND, JSON.stringify(skdmEvent));
+    return true;
+  });
 }
 
 // Публикует произвольный inner-content с тем же E2E-выбором, что sendMessage:
@@ -559,12 +559,12 @@ function rememberSavedGif(gif: ApiVideo) {
 async function sendGif(chat: ApiChat, gif: ApiVideo) {
   const toAddress = store.getAddressForId(chat.id);
   if (!toAddress) return;
+  requireE2e(e2e);
   const cached = await mediaCacheByFileId.get(gif.id);
   const blob = cached?.blob || (gif.blobUrl ? await fetch(gif.blobUrl).then((r) => r.blob()) : undefined);
   if (!blob) return;
 
-  const shouldEncrypt = Boolean(e2e && (store.isGroupAddress(toAddress) || toAddress !== store.self));
-  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `${gif.id}.webm`, 'video/webm', shouldEncrypt);
+  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `${gif.id}.webm`, 'video/webm', true);
   const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
 
   const wireContent: Record<string, unknown> = {
@@ -723,6 +723,7 @@ window.setInterval(() => {
 async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
   const toAddress = store.getAddressForId(chat.id);
   if (!toAddress) return;
+  requireE2e(e2e);
 
   // Берём картинку/видео стикера из media-кэша (встроенный набор) или качаем
   const cached = await mediaCacheByFileId.get(sticker.id);
@@ -731,8 +732,9 @@ async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
   const mime = cached.mimeType || 'image/png';
   const ext = mime === 'video/webm' ? 'webm' : 'png';
 
-  const shouldEncrypt = Boolean(e2e && (store.isGroupAddress(toAddress) || toAddress !== store.self));
-  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `sticker-${sticker.id}.${ext}`, mime, shouldEncrypt);
+  const { fileId, mediaKeys } = await uploadBlobToCloud(
+    blob, `sticker-${sticker.id}.${ext}`, mime, true,
+  );
   const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
 
   const wireContent: Record<string, unknown> = {
@@ -820,59 +822,54 @@ function refreshPollMessage(uuid: string) {
 
 async function publishInner(toAddress: string, wireContent: Record<string, unknown>, uuid = crypto.randomUUID()) {
   const ts = Math.floor(Date.now() / 1000);
-  const groupInfo = e2e ? store.getGroupInfo(toAddress) : undefined;
+  const engine = requireE2e(e2e);
+  const groupInfo = store.getGroupInfo(toAddress);
 
-  if (groupInfo && e2e) {
-    const distributed = await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
-    const ciphertext = distributed ? e2e.groupEncrypt(toAddress, JSON.stringify(wireContent)) : undefined;
-    if (ciphertext) {
-      connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
-        id: uuid,
-        from: store.self,
-        ts,
-        token,
-        payload: {
-          to: toAddress,
-          content: {
-            kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: e2e.identityKey,
-          },
+  if (groupInfo) {
+    await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
+    const ciphertext = requireEncrypted(
+      engine.groupEncrypt(toAddress, JSON.stringify(wireContent)),
+      `Group encryption failed for ${toAddress}.`,
+    );
+    connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
+      id: uuid,
+      from: store.self,
+      ts,
+      token,
+      payload: {
+        to: toAddress,
+        content: {
+          kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: engine.identityKey,
         },
-      }));
-      appendOwnJournal({ id: uuid, from: store.self, to: toAddress, content: wireContent as never, ts });
-      e2e.cacheInner(uuid, { from: store.self, content: wireContent });
-      return uuid;
-    }
+      },
+    }));
+    appendOwnJournal({ id: uuid, from: store.self, to: toAddress, content: wireContent as never, ts });
+    engine.cacheInner(uuid, { from: store.self, content: wireContent });
+    return uuid;
   }
 
-  const shouldE2e = Boolean(e2e && !store.isGroupAddress(toAddress) && toAddress !== store.self);
-  if (shouldE2e && e2e) {
-    const inner = JSON.stringify({ from: store.self, content: wireContent });
-    const encrypted = await e2e.encryptFor(toAddress, inner, fetchPrekeyBundle);
-    if (encrypted) {
-      connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
-        id: uuid,
-        from: '',
-        ts,
-        token,
-        payload: {
-          to: toAddress,
-          content: {
-            kind: 'encrypted',
-            ciphertext: encrypted.ciphertext,
-            ctype: encrypted.ctype,
-            sender_identity: encrypted.sender_identity,
-          },
-        },
-      }));
-      appendOwnJournal({ id: uuid, from: store.self, to: toAddress, content: wireContent as never, ts });
-      e2e.cacheInner(uuid, { from: store.self, content: wireContent });
-      return uuid;
-    }
-  }
-
+  const inner = JSON.stringify({ from: store.self, content: wireContent });
+  const encrypted = requireEncrypted(
+    await engine.encryptFor(toAddress, inner, fetchPrekeyBundle),
+    `No usable prekey/session for ${toAddress}.`,
+  );
   connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
-    id: uuid, from: store.self, ts, token, payload: { to: toAddress, content: wireContent },
+    id: uuid,
+    from: '',
+    ts,
+    token,
+    payload: {
+      to: toAddress,
+      content: {
+        kind: 'encrypted',
+        ciphertext: encrypted.ciphertext,
+        ctype: encrypted.ctype,
+        sender_identity: encrypted.sender_identity,
+      },
+    },
   }));
+  appendOwnJournal({ id: uuid, from: store.self, to: toAddress, content: wireContent as never, ts });
+  engine.cacheInner(uuid, { from: store.self, content: wireContent });
   return uuid;
 }
 
@@ -1104,6 +1101,17 @@ function announcePeer(address: string) {
 function sendAck(messageId: string, sealedSender: string) {
   const ack = buildWireEvent(store.self, token, { message_id: messageId, sender: sealedSender });
   connection!.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
+}
+
+function reportEncryptionSendFailure(chatId: string, localId: number, detail?: unknown) {
+  const detailMessage = detail instanceof Error ? detail.message : '';
+  logDebug(`${E2E_SEND_ERROR}${detailMessage ? ` ${detailMessage}` : ''}`);
+  sendUpdate({
+    '@type': 'updateMessageSendFailed',
+    chatId,
+    localId,
+    error: E2E_SEND_ERROR,
+  });
 }
 
 // ── методы (подмножество Methods, остальное — заглушки) ──────────────────────
@@ -1439,16 +1447,21 @@ const methods = {
     const toAddress = store.getAddressForId(chat.id);
     if (!toAddress) return;
 
+    let engine: E2eEngine;
+    try {
+      engine = requireE2e(e2e);
+    } catch (err) {
+      reportEncryptionSendFailure(chat.id, localMessage.id, err);
+      return;
+    }
+
     const uuid = uuidBySentLocalKey.get(`${chat.id}:${localMessage.id}`) || crypto.randomUUID();
     const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
     const replyToUuid = replyToMsgId ? store.getUuidForMessage(chat.id, replyToMsgId) : undefined;
 
-    // E2E доступен для лички с готовым движком (медиа шифруем блобом, текст —
-    // sealed content); для группы/себя/без движка — открыто
-    const shouldE2e = Boolean(e2e && chat.type === 'chatTypePrivate' && toAddress !== store.self);
-    // Медиа в E2E-группе тоже шифруем блобом (file_key едет в group_encrypted)
-    const isE2eGroup = Boolean(e2e && store.isGroupAddress(toAddress));
-    const shouldEncryptMedia = shouldE2e || isE2eGroup;
+    // Блоб шифруется всегда. Ошибка E2E выше завершает отправку до upload, так
+    // что cloud никогда не получает plaintext из автоматического fallback.
+    const shouldEncryptMedia = true;
 
     const ttlSecs = loadPeerTtl()[toAddress];
     let wireContent: Record<string, unknown> = {
@@ -1525,13 +1538,14 @@ const methods = {
     // Группа с E2E (Megolm): раздаём SKDM участникам 1-на-1 sealed, ПОТОМ
     // шлём group_encrypted (from виден серверу для membership-проверки,
     // content непрозрачен). Медиа-блоб уже зашифрован (file_key в content)
-    const groupInfo = e2e ? store.getGroupInfo(toAddress) : undefined;
-    if (groupInfo && e2e) {
-      const distributed = await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
-      const ciphertext = distributed
-        ? e2e.groupEncrypt(toAddress, JSON.stringify(wireContent))
-        : undefined;
-      if (ciphertext) {
+    const groupInfo = store.getGroupInfo(toAddress);
+    if (groupInfo) {
+      try {
+        await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
+        const ciphertext = requireEncrypted(
+          engine.groupEncrypt(toAddress, JSON.stringify(wireContent)),
+          `Group encryption failed for ${toAddress}.`,
+        );
         const ts = Math.floor(Date.now() / 1000);
         const groupEvent = {
           id: uuid,
@@ -1544,7 +1558,7 @@ const methods = {
               kind: 'group_encrypted',
               ciphertext,
               group: toAddress,
-              sender_identity: e2e.identityKey,
+              sender_identity: engine.identityKey,
             },
             reply_to: replyToUuid,
           },
@@ -1560,46 +1574,43 @@ const methods = {
           ts,
           reply_to: replyToUuid,
         });
-        e2e.cacheInner(uuid, { from: store.self, content: wireContent });
+        engine.cacheInner(uuid, { from: store.self, content: wireContent });
         const sentMessage: ApiMessage = { ...localMessage, sendingState: undefined };
         store.putMessage(sentMessage);
         sendUpdate({
           '@type': 'updateMessageSendSucceeded', chatId: chat.id, localId: localMessage.id, message: sentMessage,
         });
         return;
+      } catch (err) {
+        reportEncryptionSendFailure(chat.id, localMessage.id, err);
+        return;
       }
-      logDebug(`E2E-группа: не удалось раздать ключ ${toAddress}, шлю открыто`);
     }
 
     // E2E sealed sender: весь content (текст ИЛИ медиа-метаданные с file_key)
     // шифруется Olm — сервер не видит ни содержимого, ни отправителя.
-    // Нет бандла у пира — честный плейнтекст (лог в консоли)
-    let isSealed = false;
     const plainContent = wireContent;
-    if (shouldE2e && e2e) {
-      try {
-        const innerJson = JSON.stringify({ from: store.self, content: wireContent });
-        const encrypted = await e2e.encryptFor(toAddress, innerJson, fetchPrekeyBundle);
-        if (encrypted) {
-          wireContent = {
-            kind: 'encrypted',
-            ciphertext: encrypted.ciphertext,
-            ctype: encrypted.ctype,
-            sender_identity: encrypted.sender_identity,
-          };
-          isSealed = true;
-        } else {
-          logDebug(`E2E: нет бандла у ${toAddress}, шлю открыто`);
-        }
-      } catch (err) {
-        logDebug(`E2E-шифрование не удалось (${String(err)}), шлю открыто`);
-      }
+    try {
+      const innerJson = JSON.stringify({ from: store.self, content: wireContent });
+      const encrypted = requireEncrypted(
+        await engine.encryptFor(toAddress, innerJson, fetchPrekeyBundle),
+        `No usable prekey/session for ${toAddress}.`,
+      );
+      wireContent = {
+        kind: 'encrypted',
+        ciphertext: encrypted.ciphertext,
+        ctype: encrypted.ctype,
+        sender_identity: encrypted.sender_identity,
+      };
+    } catch (err) {
+      reportEncryptionSendFailure(chat.id, localMessage.id, err);
+      return;
     }
 
     const ts = Math.floor(Date.now() / 1000);
     const event = {
       id: uuid,
-      from: isSealed ? '' : store.self,
+      from: '',
       ts,
       token,
       payload: {
@@ -1611,7 +1622,7 @@ const methods = {
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify(event));
 
     // Эфемерное (TTL) не журналим и не кэшируем — исчезает без следа
-    if (isSealed && !ttlSecs) {
+    if (!ttlSecs) {
       // Сервер не отдаст отправителю его sealed — журналим локально
       appendOwnJournal({
         id: uuid,
@@ -1621,7 +1632,7 @@ const methods = {
         ts,
         reply_to: replyToUuid,
       });
-      e2e!.cacheInner(uuid, { from: store.self, content: plainContent });
+      engine.cacheInner(uuid, { from: store.self, content: plainContent });
     }
 
     const sentMessage: ApiMessage = { ...localMessage, content: sentContent, sendingState: undefined };
