@@ -198,7 +198,9 @@ async function connectAndLogin(user: string, password: string) {
   sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateReady' });
 
   window.clearInterval(syncTimer);
-  syncTimer = window.setInterval(() => { void runDeltaSync(); }, DELTA_SYNC_INTERVAL_MS);
+  syncTimer = window.setInterval(() => {
+    void runDeltaSync();
+  }, DELTA_SYNC_INTERVAL_MS);
   window.clearInterval(presenceTimer);
   presenceTimer = window.setInterval(publishPresence, PRESENCE_INTERVAL_MS);
   publishPresence();
@@ -226,7 +228,10 @@ function setupCallEngine() {
     if (state === 'ended') w.parvaneCall!.incoming = undefined;
     emit();
   };
-  callListeners.onRemoteStream = (stream) => { w.parvaneCall!.remoteStream = stream; emit(); };
+  callListeners.onRemoteStream = (stream) => {
+    w.parvaneCall!.remoteStream = stream;
+    emit();
+  };
   callListeners.onIncoming = (from, callId, media) => {
     w.parvaneCall!.incoming = { from, callId, media };
     w.parvaneCall!.state = 'incoming';
@@ -705,12 +710,13 @@ async function checkDueScheduled() {
   const now = Math.floor(Date.now() / 1000);
   const due = scheduledQueue.filter((e) => e.scheduledAt <= now);
   for (const entry of due) {
-    // eslint-disable-next-line no-await-in-loop
     await fireScheduled(entry);
   }
 }
 
-window.setInterval(() => { void checkDueScheduled(); }, SCHEDULED_CHECK_INTERVAL_MS);
+window.setInterval(() => {
+  void checkDueScheduled();
+}, SCHEDULED_CHECK_INTERVAL_MS);
 
 // ── стикеры ──────────────────────────────────────────────────────────────────
 
@@ -722,7 +728,7 @@ async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
   const cached = await mediaCacheByFileId.get(sticker.id);
   const blob = cached?.blob;
   if (!blob) return;
-  const mime = cached!.mimeType || 'image/png';
+  const mime = cached.mimeType || 'image/png';
   const ext = mime === 'video/webm' ? 'webm' : 'png';
 
   const shouldEncrypt = Boolean(e2e && (store.isGroupAddress(toAddress) || toAddress !== store.self));
@@ -756,7 +762,14 @@ async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
 
 // ── опросы ───────────────────────────────────────────────────────────────────
 
-async function sendPoll(chat: ApiChat, newPoll: { summary: { question: { text: string }; answers: { text: { text: string } }[]; isPublic?: true; isMultipleChoice?: true } }) {
+async function sendPoll(chat: ApiChat, newPoll: {
+  summary: {
+    question: { text: string };
+    answers: { text: { text: string } }[];
+    isPublic?: true;
+    isMultipleChoice?: true;
+  };
+}) {
   const toAddress = store.getAddressForId(chat.id);
   if (!toAddress) return;
   const question = newPoll.summary.question.text;
@@ -844,7 +857,10 @@ async function publishInner(toAddress: string, wireContent: Record<string, unkno
         payload: {
           to: toAddress,
           content: {
-            kind: 'encrypted', ciphertext: encrypted.ciphertext, ctype: encrypted.ctype, sender_identity: encrypted.sender_identity,
+            kind: 'encrypted',
+            ciphertext: encrypted.ciphertext,
+            ctype: encrypted.ctype,
+            sender_identity: encrypted.sender_identity,
           },
         },
       }));
@@ -1365,7 +1381,7 @@ const methods = {
   },
 
   sendMessageLocal(params: SendMessageParams) {
-    const { chat, text, replyInfo } = params;
+    const { chat, replyInfo } = params;
     if (!chat) return Promise.resolve(undefined);
 
     const uuid = crypto.randomUUID();
@@ -1537,7 +1553,12 @@ const methods = {
         // Своё групповое эхо не вернётся расшифрованным (from=self, но
         // ciphertext) — журналим плейнтекст и кэшируем
         appendOwnJournal({
-          id: uuid, from: store.self, to: toAddress, content: wireContent as unknown as WireMessageContent, ts, reply_to: replyToUuid,
+          id: uuid,
+          from: store.self,
+          to: toAddress,
+          content: wireContent as unknown as WireMessageContent,
+          ts,
+          reply_to: replyToUuid,
         });
         e2e.cacheInner(uuid, { from: store.self, content: wireContent });
         const sentMessage: ApiMessage = { ...localMessage, sendingState: undefined };
@@ -1829,7 +1850,10 @@ const methods = {
     const address = store.getAddressForId(user.id);
     if (address) {
       const blocked = loadBlocked();
-      if (!blocked.includes(address)) { blocked.push(address); saveBlocked(blocked); }
+      if (!blocked.includes(address)) {
+        blocked.push(address);
+        saveBlocked(blocked);
+      }
     }
     return Promise.resolve(true);
   },
@@ -1864,7 +1888,10 @@ const methods = {
     const folders = loadFolders();
     const byId: Record<number, unknown> = {};
     const orderedIds: number[] = [0]; // 0 = All chats
-    folders.forEach((f) => { byId[f.id] = f; orderedIds.push(f.id); });
+    folders.forEach((folder) => {
+      byId[folder.id] = folder;
+      orderedIds.push(folder.id);
+    });
     return Promise.resolve({ byId, orderedIds, recommended: undefined });
   },
 
@@ -2021,7 +2048,6 @@ const methods = {
     loadScheduledQueue();
     for (const id of ids) {
       const entry = scheduledQueue.find((e) => e.chatId === chat.id && e.id === id);
-      // eslint-disable-next-line no-await-in-loop
       if (entry) await fireScheduled(entry);
     }
   },
@@ -2045,7 +2071,8 @@ const methods = {
   async parvanePlaceCall({ chat, isVideo }: { chat: ApiChat; isVideo?: boolean }) {
     const toAddress = store.getAddressForId(chat.id);
     if (!toAddress || !callEngine || store.isGroupAddress(toAddress)) return undefined;
-    (window as unknown as { parvaneCall?: { peerName?: string } }).parvaneCall!.peerName = store.getDisplayName(toAddress);
+    const callState = (window as unknown as { parvaneCall?: { peerName?: string } }).parvaneCall!;
+    callState.peerName = store.getDisplayName(toAddress);
     await callEngine.placeCall(toAddress, isVideo ? 'video' : 'audio');
     return true;
   },
@@ -2100,7 +2127,9 @@ const methods = {
       .filter((address) => address !== store.self)
       .map((address) => store.buildApiUser(address));
     const userStatusesById: Record<string, ApiUserStatus> = {};
-    users.forEach((u) => { userStatusesById[u.id] = RECENT_STATUS; });
+    users.forEach((user) => {
+      userStatusesById[user.id] = RECENT_STATUS;
+    });
     return { users, userStatusesById };
   },
 
@@ -2256,7 +2285,10 @@ function concatBytes(parts: Uint8Array[]) {
   const total = parts.reduce((sum, p) => sum + p.length, 0);
   const out = new Uint8Array(total);
   let offset = 0;
-  parts.forEach((p) => { out.set(p, offset); offset += p.length; });
+  parts.forEach((part) => {
+    out.set(part, offset);
+    offset += part.length;
+  });
   return out;
 }
 

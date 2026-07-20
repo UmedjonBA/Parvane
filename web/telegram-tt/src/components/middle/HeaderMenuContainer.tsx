@@ -3,7 +3,6 @@ import {
   memo, useEffect, useMemo, useState,
 } from '../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../global';
-import { callApi } from '../../api/gramjs';
 
 import type {
   ApiBotCommand, ApiChat, ApiDisallowedGifts,
@@ -47,6 +46,7 @@ import {
 } from '../../global/selectors';
 import { isUserId } from '../../util/entities/ids';
 import { disableScrolling } from '../../util/scrollLock';
+import { callApi } from '../../api/gramjs';
 
 import useAppLayout from '../../hooks/useAppLayout';
 import useFlag from '../../hooks/useFlag';
@@ -321,10 +321,10 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
   });
 
   const handleAutoDelete = useLastCallback((period: number) => {
-    const chat = getGlobal().chats.byId[chatId];
-    if (chat) {
+    const selectedChat = getGlobal().chats.byId[chatId];
+    if (selectedChat) {
       void (callApi as unknown as (n: string, a: unknown) => void)(
-        'setChatMessageAutoDeletePeriod', { chat, period },
+        'setChatMessageAutoDeletePeriod', { chat: selectedChat, period },
       );
     }
     closeMenu();

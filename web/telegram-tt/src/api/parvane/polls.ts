@@ -79,7 +79,9 @@ export class PollStore {
     const myChoices = entry.votes.get(this.self) || [];
     entry.votes.forEach((choices) => {
       totalVoters += 1;
-      choices.forEach((idx) => { if (countByOption[idx] !== undefined) countByOption[idx] += 1; });
+      choices.forEach((idx) => {
+        if (countByOption[idx] !== undefined) countByOption[idx] += 1;
+      });
     });
 
     const answers = entry.options.map((text, idx) => ({

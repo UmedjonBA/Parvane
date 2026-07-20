@@ -121,12 +121,10 @@ export async function buildBuiltinStickerSet() {
   const blobs = new Map<string, Blob>();
   for (let i = 0; i < EMOJIS.length; i++) {
     stickers.push(buildApiSticker(i, EMOJIS[i]));
-    // eslint-disable-next-line no-await-in-loop
     blobs.set(stickerId(i), await renderEmoji(EMOJIS[i]));
   }
   for (let i = 0; i < ANIM_EMOJIS.length; i++) {
     stickers.push(buildApiAnimSticker(i, ANIM_EMOJIS[i]));
-    // eslint-disable-next-line no-await-in-loop
     blobs.set(animStickerId(i), await recordAnimatedSticker(ANIM_EMOJIS[i]));
   }
   const set: ApiStickerSet = {
@@ -189,7 +187,6 @@ export async function buildBuiltinCustomEmojiSet() {
   const blobs = new Map<string, Blob>();
   for (let i = 0; i < CUSTOM_EMOJIS.length; i++) {
     stickers.push(buildApiCustomEmoji(i, CUSTOM_EMOJIS[i]));
-    // eslint-disable-next-line no-await-in-loop
     blobs.set(customEmojiId(i), await renderEmoji(CUSTOM_EMOJIS[i]));
   }
   const set: ApiStickerSet = {

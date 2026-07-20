@@ -6,6 +6,7 @@ import type {
   ApiChat, ApiMessage, ApiUser,
 } from '../types';
 import type { WireGroupInfo, WireStoredMessage } from './wire';
+
 import { wireEntitiesToApi } from './entities';
 
 type PeerKind = 'user' | 'group' | 'channel';
