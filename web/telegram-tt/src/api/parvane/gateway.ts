@@ -52,15 +52,32 @@ export class GatewayConnection {
   connect(url: string) {
     return new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url);
+      let isSettled = false;
       this.ws = ws;
-      ws.onopen = () => resolve();
-      ws.onerror = () => reject(new Error(`Gateway недоступен: ${url}`));
+      ws.onopen = () => {
+        isSettled = true;
+        resolve();
+      };
+      ws.onerror = () => {
+        if (isSettled) return;
+        isSettled = true;
+        reject(new Error(`Gateway недоступен: ${url}`));
+      };
       ws.onclose = () => {
-        this.failAllPending(new Error('Соединение с gateway закрыто'));
+        const error = new Error('Соединение с gateway закрыто');
+        if (!isSettled) {
+          isSettled = true;
+          reject(error);
+        }
+        this.failAllPending(error);
         this.onClose?.();
       };
       ws.onmessage = (e) => this.handleFrame(String(e.data));
     });
+  }
+
+  get isOpen() {
+    return this.ws?.readyState === WebSocket.OPEN;
   }
 
   authorize(token: string) {

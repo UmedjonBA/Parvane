@@ -171,8 +171,26 @@ env \
 PIDS+=("$!")
 wait_for_log gateway 'Gateway WebSocket' "${PIDS[-1]}"
 
-log "Run browser e2e"
-cd "$WEB_ROOT"
-PARVANE_E2E_GATEWAY_URL="ws://127.0.0.1:$GATEWAY_WS_PORT" \
-PARVANE_E2E_WEB_PORT="$WEB_PORT" \
-npm run test:playwright:run -- "$@"
+if [[ -n "${PARVANE_E2E_EXTERNAL_BROWSER_SCRIPT:-}" ]]; then
+  log "Build and start production Web"
+  cd "$WEB_ROOT"
+  if [[ "${PARVANE_E2E_SKIP_WEB_BUILD:-0}" != "1" ]]; then
+    npm run build:production
+  fi
+  node_modules/.bin/vite preview --host 127.0.0.1 --port "$WEB_PORT" --strictPort \
+    >"$TEMP_ROOT/web.log" 2>&1 &
+  PIDS+=("$!")
+  wait_for_log web "http://127.0.0.1:$WEB_PORT" "${PIDS[-1]}"
+
+  log "Run external browser e2e"
+  cd "$ROOT"
+  PARVANE_E2E_GATEWAY_URL="ws://127.0.0.1:$GATEWAY_WS_PORT" \
+  PARVANE_E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" \
+  node "$PARVANE_E2E_EXTERNAL_BROWSER_SCRIPT"
+else
+  log "Run browser e2e"
+  cd "$WEB_ROOT"
+  PARVANE_E2E_GATEWAY_URL="ws://127.0.0.1:$GATEWAY_WS_PORT" \
+  PARVANE_E2E_WEB_PORT="$WEB_PORT" \
+  npm run test:playwright:run -- "$@"
+fi
