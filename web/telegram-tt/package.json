@@ -32,7 +32,8 @@
     "lang:initial": "tsx ./dev/generateInitialLangFallback.js",
     "icons:build": "tsx ./dev/buildIcons.ts",
     "test": "cross-env APP_ENV=test vitest run --silent",
-    "test:playwright": "playwright test",
+    "test:playwright": "../../scripts/run_web_e2e.sh",
+    "test:playwright:run": "playwright test",
     "test:record": "playwright codegen localhost:1235",
     "postinstall": "node -e \"require('fs').rmSync('.cache', { recursive: true, force: true })\"",
     "postversion": "echo $(node -p \"require('./package.json').version\") > public/version.txt && git commit --amend --no-verify --no-edit public/version.txt"

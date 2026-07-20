@@ -7,7 +7,16 @@
 
 /// Подключиться к NATS. Читает `PARVANE_NATS_TLS_CA` для TLS.
 pub async fn connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
-    let opts = async_nats::ConnectOptions::new();
+    let mut opts = async_nats::ConnectOptions::new();
+    if let (Ok(user), Ok(pass)) = (
+        std::env::var("PARVANE_NATS_USER"),
+        std::env::var("PARVANE_NATS_PASS"),
+    ) {
+        if !user.is_empty() && !pass.is_empty() {
+            opts = opts.user_and_password(user, pass);
+        }
+    }
+
     match std::env::var("PARVANE_NATS_TLS_CA") {
         Ok(ca) if !ca.is_empty() => {
             opts.require_tls(true)
