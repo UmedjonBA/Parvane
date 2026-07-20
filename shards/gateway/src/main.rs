@@ -159,7 +159,7 @@ async fn serve(
     // 1) pre-auth: до авторизации разрешены ТОЛЬКО bootstrap-запросы (логин и
     // регистрация — иначе получить токен через gateway было бы невозможно).
     // Всё остальное — после auth с валидным JWT.
-    let user = loop {
+    let (user, auth_token) = loop {
         let Some(text) = in_rx.recv().await else {
             return; // закрыто до auth
         };
@@ -167,8 +167,9 @@ async fn serve(
         match v["op"].as_str().unwrap_or("") {
             "auth" => match verify_token(&nats, v["token"].as_str().unwrap_or("")).await {
                 Ok(u) => {
+                    let token = v["token"].as_str().unwrap_or("").to_string();
                     let _ = tx.send(json!({"op":"auth_ok","user":u}).to_string());
-                    break u;
+                    break (u, token);
                 }
                 Err(e) => {
                     let _ = tx.send(json!({"op":"auth_err","error":e.to_string()}).to_string());
@@ -211,9 +212,20 @@ async fn serve(
         match v["op"].as_str().unwrap_or("") {
             "pub" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                let payload = v["payload"].as_str().unwrap_or("").to_string();
                 if allowed_pub(&user, &subject) {
-                    let _ = nats.publish(subject, payload.into()).await;
+                    match bind_client_payload(
+                        &user,
+                        &auth_token,
+                        &subject,
+                        v["payload"].as_str().unwrap_or(""),
+                    ) {
+                        Ok(payload) => {
+                            let _ = nats.publish(subject, payload.into()).await;
+                        }
+                        Err(e) => {
+                            let _ = tx.send(err_frame(None, &e.to_string()));
+                        }
+                    }
                 } else {
                     let _ = tx.send(err_frame(None, "publish в этот subject запрещён"));
                 }
@@ -221,12 +233,23 @@ async fn serve(
             "req" => {
                 let id = v["id"].as_str().unwrap_or("").to_string();
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                let payload = v["payload"].as_str().unwrap_or("").to_string();
                 let timeout = v["timeout_ms"].as_u64().unwrap_or(3000);
                 if !allowed_req(&user, &subject) {
                     let _ = tx.send(err_frame(Some(&id), "request запрещён"));
                     continue;
                 }
+                let payload = match bind_client_payload(
+                    &user,
+                    &auth_token,
+                    &subject,
+                    v["payload"].as_str().unwrap_or(""),
+                ) {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        let _ = tx.send(err_frame(Some(&id), &e.to_string()));
+                        continue;
+                    }
+                };
                 spawn_req(nats.clone(), tx.clone(), id, subject, payload, timeout);
             }
             // Множественные ответы на один запрос (chunked download): собираем
@@ -235,12 +258,23 @@ async fn serve(
             "reqmany" => {
                 let id = v["id"].as_str().unwrap_or("").to_string();
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                let payload = v["payload"].as_str().unwrap_or("").to_string();
                 let timeout = v["timeout_ms"].as_u64().unwrap_or(5000);
                 if !allowed_req(&user, &subject) {
                     let _ = tx.send(err_frame(Some(&id), "request запрещён"));
                     continue;
                 }
+                let payload = match bind_client_payload(
+                    &user,
+                    &auth_token,
+                    &subject,
+                    v["payload"].as_str().unwrap_or(""),
+                ) {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        let _ = tx.send(err_frame(Some(&id), &e.to_string()));
+                        continue;
+                    }
+                };
                 let nats2 = nats.clone();
                 let tx2 = tx.clone();
                 tokio::spawn(async move {
@@ -362,17 +396,130 @@ fn err_frame(id: Option<&str>, msg: &str) -> String {
 
 // ── права (изоляция «людей») — чистые функции, покрыты тестами ────────────────
 
+const EVENT_SUBJECTS: &[&str] = &[
+    "msg.chat.send",
+    "msg.chat.read",
+    "msg.chat.edit",
+    "msg.chat.delete",
+    "msg.chat.react",
+    "msg.chat.pin",
+    "msg.chat.ack",
+    "msg.sync.request",
+    "call.signal",
+    "call.history.request",
+    "file.upload.chunk",
+    "file.upload.complete",
+    "file.download.request",
+    "file.list.request",
+];
+
+const TOKEN_REQUEST_SUBJECTS: &[&str] = &[
+    "identity.token.verify",
+    "identity.user.setname",
+    "identity.user.setavatar",
+    "identity.user.setkey",
+    "identity.prekeys.publish",
+    "identity.prekeys.fetch",
+    "group.create",
+    "group.addmember",
+    "group.removemember",
+    "group.setrole",
+    "group.list",
+    "group.info",
+    "group.ban",
+    "group.unban",
+    "group.mute",
+    "group.invite.create",
+    "group.join",
+];
+
+/// Web использует FNV-1a/32 по UTF-16 code units, затем снимает знаковый бит.
+/// Сохраняем этот id на wire, пока Web и desktop не перейдут на адресные topics.
+fn web_user_id(user: &str) -> String {
+    let mut hash = 0x811c9dc5_u32;
+    for unit in user.encode_utf16() {
+        hash ^= u32::from(unit);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    (hash >> 1).to_string()
+}
+
+/// Desktop использует FNV-1a/64 по UTF-8 и оставляет младшие 48 бит.
+fn desktop_user_id(user: &str) -> String {
+    let mut hash = 1_469_598_103_934_665_603_u64;
+    for byte in user.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(1_099_511_628_211);
+    }
+    let id = hash & ((1_u64 << 48) - 1);
+    if id == 0 {
+        "1".to_string()
+    } else {
+        id.to_string()
+    }
+}
+
+fn is_own_ephemeral_subject(user: &str, prefix: &str, subject: &str) -> bool {
+    subject == format!("{prefix}{}", web_user_id(user))
+        || subject == format!("{prefix}{}", desktop_user_id(user))
+}
+
+fn is_concrete_typing_subject(subject: &str) -> bool {
+    subject
+        .strip_prefix("msg.typing.")
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Привязывает actor-поля к уже проверенному WebSocket/TCP соединению. Клиент
+/// может прислать устаревший или поддельный `from`/`token`, но на NATS попадут
+/// только значения текущей авторизованной сессии.
+fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) -> Result<String> {
+    let mut value: Value = serde_json::from_str(payload).context("payload: битый json")?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("payload должен быть JSON-объектом"))?;
+
+    if EVENT_SUBJECTS.contains(&subject) {
+        // В sealed 1-на-1 реальный sender находится внутри Olm ciphertext. Пустой
+        // `from` сохраняем только для этого wire-варианта; plaintext, group и
+        // прочие события получают явного actor из авторизованной сессии.
+        let sealed_direct = subject == "msg.chat.send"
+            && object.get("from").and_then(Value::as_str) == Some("")
+            && object
+                .get("payload")
+                .and_then(|payload| payload.get("content"))
+                .and_then(|content| content.get("kind"))
+                .and_then(Value::as_str)
+                == Some("encrypted")
+            && object
+                .get("payload")
+                .and_then(|payload| payload.get("to"))
+                .and_then(Value::as_str)
+                .is_some_and(|to| to.contains('@'));
+        object.insert("token".into(), Value::String(token.to_string()));
+        if !sealed_direct {
+            object.insert("from".into(), Value::String(user.to_string()));
+        }
+    } else if TOKEN_REQUEST_SUBJECTS.contains(&subject) {
+        object.insert("token".into(), Value::String(token.to_string()));
+    } else if subject.starts_with("msg.typing.") || subject.starts_with("presence.") {
+        object.insert("from".into(), Value::String(user.to_string()));
+    }
+
+    serde_json::to_string(&value).context("payload: не удалось сериализовать")
+}
+
 /// На что можно ПОДПИСАТЬСЯ: только свои пользовательские инбоксы и эфемерные
 /// typing/presence. NATS reply inbox создаёт и обслуживает только gateway.
 fn allowed_sub(user: &str, subject: &str) -> bool {
     subject == msg_inbox(user)
         || subject == call_inbox(user)
-        || subject.starts_with("msg.typing.")
-        || subject.starts_with("presence.")
+        || is_own_ephemeral_subject(user, "msg.typing.", subject)
+        || subject == "presence.*"
 }
 
 /// Что можно ПУБЛИКОВАТЬ (fire-and-forget).
-fn allowed_pub(_user: &str, subject: &str) -> bool {
+fn allowed_pub(user: &str, subject: &str) -> bool {
     const OK: &[&str] = &[
         "msg.chat.send",
         "msg.chat.read",
@@ -386,8 +533,8 @@ fn allowed_pub(_user: &str, subject: &str) -> bool {
         "file.upload.complete",
     ];
     OK.contains(&subject)
-        || subject.starts_with("msg.typing.")
-        || subject.starts_with("presence.")
+        || is_concrete_typing_subject(subject)
+        || is_own_ephemeral_subject(user, "presence.", subject)
 }
 
 /// Что можно запросить (request / reqmany).
@@ -431,10 +578,18 @@ mod tests {
 
     #[test]
     fn sub_allows_only_own_inboxes() {
+        let web_id = web_user_id("alice@local");
+        let desktop_id = desktop_user_id("alice@local");
+        assert_eq!(web_id, "1050889428");
+        assert_eq!(desktop_id, "84775232636990");
         assert!(allowed_sub("alice@local", "msg.user.alice@local"));
         assert!(allowed_sub("alice@local", "call.user.alice@local"));
-        assert!(allowed_sub("alice@local", "msg.typing.999"));
-        assert!(allowed_sub("alice@local", "presence.999"));
+        assert!(allowed_sub("alice@local", &format!("msg.typing.{web_id}")));
+        assert!(allowed_sub(
+            "alice@local",
+            &format!("msg.typing.{desktop_id}")
+        ));
+        assert!(allowed_sub("alice@local", "presence.*"));
     }
 
     #[test]
@@ -451,9 +606,18 @@ mod tests {
             "call.user.bob@local",
             "msg.>",
             "msg.sync.response",
+            "msg.typing.*",
+            "msg.typing.>",
+            "presence.>",
+            "presence.123",
         ] {
             assert!(!allowed_sub("alice@local", subject), "allowed {subject}");
         }
+        let bob_web_id = web_user_id("bob@local");
+        assert!(!allowed_sub(
+            "alice@local",
+            &format!("msg.typing.{bob_web_id}")
+        ));
     }
 
     #[test]
@@ -461,6 +625,21 @@ mod tests {
         assert!(allowed_pub("alice@local", "msg.chat.send"));
         assert!(allowed_pub("alice@local", "call.signal"));
         assert!(allowed_pub("alice@local", "msg.typing.5"));
+        assert!(allowed_pub(
+            "alice@local",
+            &format!("presence.{}", web_user_id("alice@local"))
+        ));
+        assert!(allowed_pub(
+            "alice@local",
+            &format!("presence.{}", desktop_user_id("alice@local"))
+        ));
+        assert!(!allowed_pub("alice@local", "msg.typing.*"));
+        assert!(!allowed_pub("alice@local", "msg.typing.>"));
+        assert!(!allowed_pub("alice@local", "presence.*"));
+        assert!(!allowed_pub(
+            "alice@local",
+            &format!("presence.{}", web_user_id("bob@local"))
+        ));
         assert!(!allowed_pub("alice@local", "msg.user.bob@local"));
         assert!(!allowed_pub("alice@local", "identity.token.issue"));
         assert!(!allowed_pub("alice@local", "anything.else"));
@@ -474,5 +653,75 @@ mod tests {
         assert!(allowed_req("alice@local", "group.create"));
         assert!(!allowed_req("alice@local", "msg.user.bob@local"));
         assert!(!allowed_req("alice@local", "something.random"));
+    }
+
+    #[test]
+    fn payload_actor_and_token_are_bound_to_authenticated_session() {
+        let payload = json!({
+            "id": "00000000-0000-7000-8000-000000000001",
+            "from": "victim@local",
+            "ts": 1,
+            "token": "victim-token",
+            "payload": {"to": "bob@local", "content": {"kind": "text", "text": "hi"}}
+        })
+        .to_string();
+        let bound =
+            bind_client_payload("mallory@local", "mallory-token", "msg.chat.send", &payload)
+                .unwrap();
+        let value: Value = serde_json::from_str(&bound).unwrap();
+        assert_eq!(value["from"], "mallory@local");
+        assert_eq!(value["token"], "mallory-token");
+
+        let group = bind_client_payload(
+            "mallory@local",
+            "mallory-token",
+            "group.create",
+            r#"{"token":"victim-token","name":"x","members":[]}"#,
+        )
+        .unwrap();
+        let group: Value = serde_json::from_str(&group).unwrap();
+        assert_eq!(group["token"], "mallory-token");
+
+        let typing = bind_client_payload(
+            "mallory@local",
+            "mallory-token",
+            "msg.typing.123",
+            r#"{"from":"victim@local","to":"bob@local"}"#,
+        )
+        .unwrap();
+        let typing: Value = serde_json::from_str(&typing).unwrap();
+        assert_eq!(typing["from"], "mallory@local");
+    }
+
+    #[test]
+    fn sealed_sender_is_preserved_only_for_encrypted_direct_messages() {
+        let event = |to: &str, kind: &str| {
+            json!({
+                "id": "00000000-0000-7000-8000-000000000002",
+                "from": "",
+                "ts": 1,
+                "token": "stale",
+                "payload": {"to": to, "content": {"kind": kind, "ciphertext": "x"}}
+            })
+            .to_string()
+        };
+
+        let direct = bind_client_payload(
+            "alice@local",
+            "fresh",
+            "msg.chat.send",
+            &event("bob@local", "encrypted"),
+        )
+        .unwrap();
+        let direct: Value = serde_json::from_str(&direct).unwrap();
+        assert_eq!(direct["from"], "");
+        assert_eq!(direct["token"], "fresh");
+
+        for payload in [event("bob@local", "text"), event("group-uuid", "encrypted")] {
+            let bound =
+                bind_client_payload("alice@local", "fresh", "msg.chat.send", &payload).unwrap();
+            let bound: Value = serde_json::from_str(&bound).unwrap();
+            assert_eq!(bound["from"], "alice@local");
+        }
     }
 }
