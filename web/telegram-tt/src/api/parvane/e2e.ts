@@ -11,8 +11,17 @@ import Olm from '@matrix-org/olm';
 // Vite отдаёт путь к wasm-файлу как URL
 import olmWasmPath from '@matrix-org/olm/olm.wasm?url';
 
-const PICKLE_KEY = 'parvane-web-pickle';
+import { SecureE2eStorage } from './secureStorage';
+
+// Только для одноразового чтения старого localStorage при переходе на v2.
+// Новый state всегда перепикливается уникальным случайным ключом и затем
+// целиком шифруется non-extractable WebCrypto-ключом в IndexedDB.
+const LEGACY_COMMON_PICKLE_KEY = 'parvane-web-pickle';
 const ONE_TIME_BATCH = 20;
+const STORAGE_VERSION = 2;
+const LEGACY_STORAGE_PARTS = [
+  'account', 'sessions', 'contacts', 'dec', 'gout', 'gin', 'grecip', 'published',
+];
 
 function locateOlmWasm() {
   const nodeProcess = (globalThis as {
@@ -33,9 +42,30 @@ type BundleFetcher = (user: string) => Promise<{
 
 type StoredInner = { from: string; content: unknown };
 
+type PersistedE2eState = {
+  version: number;
+  pickleKey: string;
+  account: string;
+  sessions: Record<string, string>;
+  contacts: Record<string, string>;
+  decCache: Record<string, StoredInner>;
+  groupOut: Record<string, { pickle: string; epoch: number }>;
+  groupIn: Record<string, { pickle: string; epoch: number }>;
+  groupRecipients: Record<string, string[]>;
+  published: boolean;
+};
+
 let isOlmReady = false;
 
 export class E2eEngine {
+  private storage!: SecureE2eStorage;
+
+  private pickleKey = '';
+
+  private persistChain = Promise.resolve();
+
+  private storageError: unknown;
+
   private account!: Olm.Account;
 
   private sessionsByIdentity = new Map<string, Olm.Session>();
@@ -54,6 +84,8 @@ export class E2eEngine {
 
   private self = '';
 
+  private published = false;
+
   identityKey = '';
 
   static async create(self: string) {
@@ -65,73 +97,162 @@ export class E2eEngine {
     }
     const engine = new E2eEngine();
     engine.self = self;
-    engine.load();
+    engine.storage = await SecureE2eStorage.open(self);
+    const state = await engine.storage.load<PersistedE2eState>();
+    if (state) {
+      engine.loadState(state, state.pickleKey);
+    } else {
+      engine.loadLegacyState();
+    }
+    await engine.storage.save(engine.buildState());
     return engine;
   }
 
-  private storageKey(part: string) {
+  static async clear(self: string) {
+    E2eEngine.clearLegacyState(self);
+    await SecureE2eStorage.clear(self);
+  }
+
+  private static clearLegacyState(self: string) {
+    LEGACY_STORAGE_PARTS.forEach((part) => {
+      localStorage.removeItem(`parvane:e2e:${self}:${part}`);
+    });
+  }
+
+  private legacyStorageKey(part: string) {
     return `parvane:e2e:${this.self}:${part}`;
   }
 
-  private load() {
-    this.account = new Olm.Account();
-    const accountPickle = localStorage.getItem(this.storageKey('account'));
-    if (accountPickle) {
-      this.account.unpickle(PICKLE_KEY, accountPickle);
-    } else {
-      this.account.create();
-      this.persistAccount();
+  private loadState(state: PersistedE2eState, pickleKey: string) {
+    if (state.version !== STORAGE_VERSION || !pickleKey || !state.account) {
+      throw new Error(`Unsupported E2E state version: ${state.version}.`);
     }
+    this.pickleKey = pickleKey;
+    this.account = new Olm.Account();
+    this.account.unpickle(pickleKey, state.account);
     this.identityKey = (JSON.parse(this.account.identity_keys()) as { curve25519: string }).curve25519;
 
-    const sessions = JSON.parse(localStorage.getItem(this.storageKey('sessions')) || '{}') as Record<string, string>;
-    Object.entries(sessions).forEach(([identity, pickle]) => {
+    Object.entries(state.sessions || {}).forEach(([identity, pickle]) => {
       const session = new Olm.Session();
-      session.unpickle(PICKLE_KEY, pickle);
+      session.unpickle(pickleKey, pickle);
       this.sessionsByIdentity.set(identity, session);
     });
-    this.identityByContact = JSON.parse(localStorage.getItem(this.storageKey('contacts')) || '{}');
-    this.decCache = JSON.parse(localStorage.getItem(this.storageKey('dec')) || '{}');
+    this.identityByContact = state.contacts || {};
+    this.decCache = state.decCache || {};
 
-    const gout = JSON.parse(localStorage.getItem(this.storageKey('gout')) || '{}') as
-      Record<string, { pickle: string; epoch: number }>;
-    Object.entries(gout).forEach(([group, { pickle, epoch }]) => {
+    Object.entries(state.groupOut || {}).forEach(([group, { pickle, epoch }]) => {
       const session = new Olm.OutboundGroupSession();
-      session.unpickle(PICKLE_KEY, pickle);
+      session.unpickle(pickleKey, pickle);
       this.groupOut.set(group, { session, epoch });
     });
-    const gin = JSON.parse(localStorage.getItem(this.storageKey('gin')) || '{}') as
-      Record<string, { pickle: string; epoch: number }>;
-    Object.entries(gin).forEach(([key, { pickle, epoch }]) => {
+    Object.entries(state.groupIn || {}).forEach(([key, { pickle, epoch }]) => {
       const session = new Olm.InboundGroupSession();
-      session.unpickle(PICKLE_KEY, pickle);
+      session.unpickle(pickleKey, pickle);
       this.groupIn.set(key, { session, epoch });
     });
-    const groupRecipients = JSON.parse(localStorage.getItem(this.storageKey('grecip')) || '{}') as
-      Record<string, string[]>;
-    Object.entries(groupRecipients).forEach(([group, recipients]) => {
+    Object.entries(state.groupRecipients || {}).forEach(([group, recipients]) => {
       this.groupRecipients.set(group, recipients);
     });
+    this.published = Boolean(state.published);
+  }
+
+  private loadLegacyState() {
+    const accountPickle = localStorage.getItem(this.legacyStorageKey('account'));
+    this.pickleKey = randomSecret();
+    if (!accountPickle) {
+      this.account = new Olm.Account();
+      this.account.create();
+      this.identityKey = (JSON.parse(this.account.identity_keys()) as { curve25519: string }).curve25519;
+      E2eEngine.clearLegacyState(this.self);
+      return;
+    }
+
+    try {
+      const legacyState: PersistedE2eState = {
+        version: STORAGE_VERSION,
+        pickleKey: LEGACY_COMMON_PICKLE_KEY,
+        account: accountPickle,
+        sessions: this.readLegacyJson('sessions'),
+        contacts: this.readLegacyJson('contacts'),
+        decCache: this.readLegacyJson('dec'),
+        groupOut: this.readLegacyJson('gout'),
+        groupIn: this.readLegacyJson('gin'),
+        groupRecipients: this.readLegacyJson('grecip'),
+        published: localStorage.getItem(this.legacyStorageKey('published')) === '1',
+      };
+      this.loadState(legacyState, LEGACY_COMMON_PICKLE_KEY);
+      this.pickleKey = randomSecret();
+    } finally {
+      // Включая plaintext decrypted cache и общий-key pickles.
+      E2eEngine.clearLegacyState(this.self);
+    }
+  }
+
+  private readLegacyJson<T>(part: string): T {
+    return JSON.parse(localStorage.getItem(this.legacyStorageKey(part)) || '{}') as T;
+  }
+
+  private buildState(): PersistedE2eState {
+    const sessions: Record<string, string> = {};
+    this.sessionsByIdentity.forEach((session, identity) => {
+      sessions[identity] = session.pickle(this.pickleKey);
+    });
+    const groupOut: PersistedE2eState['groupOut'] = {};
+    this.groupOut.forEach(({ session, epoch }, group) => {
+      groupOut[group] = { pickle: session.pickle(this.pickleKey), epoch };
+    });
+    const groupIn: PersistedE2eState['groupIn'] = {};
+    this.groupIn.forEach(({ session, epoch }, key) => {
+      groupIn[key] = { pickle: session.pickle(this.pickleKey), epoch };
+    });
+    return {
+      version: STORAGE_VERSION,
+      pickleKey: this.pickleKey,
+      account: this.account.pickle(this.pickleKey),
+      sessions,
+      contacts: this.identityByContact,
+      decCache: this.decCache,
+      groupOut,
+      groupIn,
+      groupRecipients: Object.fromEntries(this.groupRecipients),
+      published: this.published,
+    };
+  }
+
+  private queuePersist() {
+    const state = this.buildState();
+    this.persistChain = this.persistChain.then(async () => {
+      try {
+        await this.storage.save(state);
+      } catch (err) {
+        this.storageError = err;
+      }
+    });
+  }
+
+  async flushStorage() {
+    await this.persistChain;
+    if (this.storageError) {
+      throw this.storageError instanceof Error
+        ? this.storageError
+        : new Error('Unknown E2E storage failure.');
+    }
   }
 
   private persistAccount() {
-    localStorage.setItem(this.storageKey('account'), this.account.pickle(PICKLE_KEY));
+    this.queuePersist();
   }
 
   private persistSessions() {
-    const out: Record<string, string> = {};
-    this.sessionsByIdentity.forEach((session, identity) => {
-      out[identity] = session.pickle(PICKLE_KEY);
-    });
-    localStorage.setItem(this.storageKey('sessions'), JSON.stringify(out));
+    this.queuePersist();
   }
 
   private persistContacts() {
-    localStorage.setItem(this.storageKey('contacts'), JSON.stringify(this.identityByContact));
+    this.queuePersist();
   }
 
   private persistDecCache() {
-    localStorage.setItem(this.storageKey('dec'), JSON.stringify(this.decCache));
+    this.queuePersist();
   }
 
   // Пачка публичных прекеев для identity-шарда. Публикуем ОДИН РАЗ на аккаунт:
@@ -140,7 +261,7 @@ export class E2eEngine {
   // аккаунт (fallback + 20 one-time) хватает; израсходование one-time не делает
   // сессию невозможной (X3DH-фолбэк на fallback-ключ).
   buildPrekeysPayload(token: string): Record<string, unknown> | undefined {
-    if (localStorage.getItem(this.storageKey('published'))) return undefined;
+    if (this.published) return undefined;
 
     this.account.generate_fallback_key();
     const fallback = JSON.parse(this.account.fallback_key()) as { curve25519: Record<string, string> };
@@ -154,8 +275,8 @@ export class E2eEngine {
       public_key: publicKey,
     }));
     this.account.mark_keys_as_published();
+    this.published = true;
     this.persistAccount();
-    localStorage.setItem(this.storageKey('published'), '1');
 
     return {
       token,
@@ -199,6 +320,7 @@ export class E2eEngine {
 
     const encrypted = session.encrypt(innerJson) as { type: number; body: string };
     this.persistSessions();
+    await this.flushStorage();
     return {
       ciphertext: encrypted.body,
       ctype: encrypted.type,
@@ -245,26 +367,15 @@ export class E2eEngine {
   // ── Megolm (группы) ──────────────────────────────────────────────────────
 
   private persistGroupOut() {
-    const out: Record<string, { pickle: string; epoch: number }> = {};
-    this.groupOut.forEach(({ session, epoch }, group) => {
-      out[group] = { pickle: session.pickle(PICKLE_KEY), epoch };
-    });
-    localStorage.setItem(this.storageKey('gout'), JSON.stringify(out));
+    this.queuePersist();
   }
 
   private persistGroupIn() {
-    const out: Record<string, { pickle: string; epoch: number }> = {};
-    this.groupIn.forEach(({ session, epoch }, key) => {
-      out[key] = { pickle: session.pickle(PICKLE_KEY), epoch };
-    });
-    localStorage.setItem(this.storageKey('gin'), JSON.stringify(out));
+    this.queuePersist();
   }
 
   private persistGroupRecipients() {
-    localStorage.setItem(
-      this.storageKey('grecip'),
-      JSON.stringify(Object.fromEntries(this.groupRecipients)),
-    );
+    this.queuePersist();
   }
 
   syncGroupRecipients(group: string, members: string[], self: string) {
@@ -295,11 +406,12 @@ export class E2eEngine {
     return { sessionKey: entry.session.session_key(), epoch: entry.epoch };
   }
 
-  groupEncrypt(group: string, plaintext: string, expectedEpoch?: number) {
+  async groupEncrypt(group: string, plaintext: string, expectedEpoch?: number) {
     const entry = this.groupOut.get(group);
     if (!entry || (expectedEpoch !== undefined && entry.epoch !== expectedEpoch)) return undefined;
     const ciphertext = entry.session.encrypt(plaintext);
     this.persistGroupOut();
+    await this.flushStorage();
     return ciphertext;
   }
 
@@ -343,4 +455,13 @@ export class E2eEngine {
       return undefined;
     }
   }
+}
+
+function randomSecret() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
 }
