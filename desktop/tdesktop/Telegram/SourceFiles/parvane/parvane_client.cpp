@@ -537,6 +537,30 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 	return parvane::e2e::groupSeal(groupId, content.dump(), epoch);
 }
 
+// Cloud ACL хранит конкретных получателей: для лички это peer, для группы —
+// актуальный активный состав. Владелец файла имеет доступ неявно.
+[[nodiscard]] std::vector<std::string> cloudRecipients(const std::string &to) {
+	auto recipients = std::vector<std::string>();
+	const auto qto = QString::fromStdString(to);
+	const auto self = SelfAddress().toStdString();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (g_knownGroups.contains(qto)) {
+			for (const auto &member : g_groupMembers.value(qto)) {
+				recipients.push_back(member.toStdString());
+			}
+		} else {
+			recipients.push_back(to);
+		}
+	}
+	recipients.erase(std::remove_if(recipients.begin(), recipients.end(), [&](const auto &member) {
+		return member.empty() || member == self;
+	}), recipients.end());
+	std::sort(recipients.begin(), recipients.end());
+	recipients.erase(std::unique(recipients.begin(), recipients.end()), recipients.end());
+	return recipients;
+}
+
 void sendTextAsync(
 		const QString &toAddress,
 		const QString &text,
@@ -1762,7 +1786,7 @@ void MirrorOutgoingFile(
 			parvane::CloudClient cloud(*t);
 			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
 			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd,
-				uploadBytes, 256 * 1024, 20000);
+				uploadBytes, cloudRecipients(to), false, 256 * 1024, 20000);
 			auto content = buildMediaContent(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
 				durationSecs, mediaW, mediaH, captionStd, fileKey, fileNonce);
@@ -2023,7 +2047,7 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
 			const auto fileId = cloud.upload(
 				from, token, kind + ".bin", mimeStd, enc.ciphertext,
-				256 * 1024, 20000);
+				cloudRecipients(to), false, 256 * 1024, 20000);
 			parvane::json content{
 				{"kind", kind}, {"file_id", fileId},
 				{"width", w}, {"height", h},
@@ -2056,7 +2080,8 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 							const auto pfid = cloud.upload(
 								from, token, "pack.pvpk",
 								"application/octet-stream",
-								penc.ciphertext, 256 * 1024, 20000);
+								penc.ciphertext, cloudRecipients(to), false,
+								256 * 1024, 20000);
 							const parvane::json ref{
 								{ "file_id", pfid },
 								{ "name", packInfo.name.toStdString() },
@@ -4441,7 +4466,8 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 		std::string fileId;
 		try {
 			parvane::CloudClient cloud(*t);
-			fileId = cloud.upload(from, token, "avatar.jpg", "image/jpeg", bytesStd);
+			fileId = cloud.upload(
+				from, token, "avatar.jpg", "image/jpeg", bytesStd, {}, true);
 		} catch (const std::exception &) {
 			return;
 		}

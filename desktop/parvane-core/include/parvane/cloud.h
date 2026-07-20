@@ -46,13 +46,17 @@ struct UploadCompletePayload {
     std::uint32_t total_chunks = 0;
     std::uint64_t size_bytes = 0;
     std::string mime_type;
+    std::vector<std::string> recipients;
+    bool public_access = false;
 
     json toJson() const {
         return json{{"file_id", file_id},
                     {"filename", filename},
                     {"total_chunks", total_chunks},
                     {"size_bytes", size_bytes},
-                    {"mime_type", mime_type}};
+                    {"mime_type", mime_type},
+                    {"recipients", recipients},
+                    {"public_access", public_access}};
     }
 };
 

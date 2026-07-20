@@ -517,6 +517,12 @@ pub struct UploadCompletePayload {
     pub total_chunks: u32,
     pub size_bytes: u64,
     pub mime_type: String,
+    /// Пользователи, которым владелец явно выдаёт право скачивания.
+    #[serde(default)]
+    pub recipients: Vec<String>,
+    /// Публичные объекты (например, avatar) доступны любому авторизованному пользователю.
+    #[serde(default)]
+    pub public_access: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1055,6 +1061,21 @@ mod tests {
         let decoded: ParvaneEvent<SendPayload> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.from, "alice@local");
         assert_eq!(decoded.payload.content, MessageContent::Text { text: "hi".to_string(), entities: vec![], webpage: None });
+    }
+
+    #[test]
+    fn upload_complete_acl_fields_default_for_legacy_clients() {
+        let payload: UploadCompletePayload = serde_json::from_value(serde_json::json!({
+            "file_id": Uuid::nil(),
+            "filename": "legacy.bin",
+            "total_chunks": 1,
+            "size_bytes": 4,
+            "mime_type": "application/octet-stream"
+        }))
+        .unwrap();
+
+        assert!(payload.recipients.is_empty());
+        assert!(!payload.public_access);
     }
 
     #[test]

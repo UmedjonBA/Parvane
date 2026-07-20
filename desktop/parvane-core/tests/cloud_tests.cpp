@@ -123,7 +123,7 @@ int main() {
     std::string id2;
     try {
         id2 = cc.upload(alice, jwtAlice, "big.txt", "text/plain", blob2,
-                        /*chunkSize=*/64);
+                        {}, false, /*chunkSize=*/64);
         check(!id2.empty(), "upload(много чанков, chunkSize=64)", id2.substr(0, 8));
     } catch (const std::exception &e) {
         check(false, "upload(много чанков)", e.what());
@@ -163,7 +163,23 @@ int main() {
               "у bob " + std::to_string(files.size()) + " файл(ов)");
     }
 
-    // B5. download несуществующего файла → ok=false с ошибкой.
+    // B5. Знание file_id не даёт скачать чужой файл; явный recipient — даёт.
+    if (!id1.empty()) {
+        auto denied = cc.download(bob, jwtBob, id1, 1500);
+        check(!denied.ok, "IDOR: bob не скачивает owner-only файл alice");
+    }
+    std::string sharedId;
+    try {
+        sharedId = cc.upload(alice, jwtAlice, "shared.bin", "application/octet-stream",
+                             blob1, {bob});
+        auto allowed = cc.download(bob, jwtBob, sharedId);
+        check(allowed.ok && allowed.bytes == blob1,
+              "ACL: явный recipient скачивает файл");
+    } catch (const std::exception &e) {
+        check(false, "ACL recipient round-trip", e.what());
+    }
+
+    // B6. download несуществующего файла → ok=false с ошибкой.
     {
         auto d = cc.download(alice, jwtAlice, "00000000-0000-7000-8000-000000000000",
                              /*timeoutMs=*/1500);
