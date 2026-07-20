@@ -9,7 +9,7 @@ type ServiceResponse = {
   error?: string;
 };
 
-test('Mallory cannot subscribe to gateway-owned NATS reply inboxes', async ({ page }, testInfo) => {
+test('gateway binds Mallory to her session and denies private NATS subjects', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium', 'Gateway authorization is browser-independent');
 
   const gatewayUrl = process.env.PARVANE_E2E_GATEWAY_URL;
@@ -80,6 +80,56 @@ test('Mallory cannot subscribe to gateway-owned NATS reply inboxes', async ({ pa
     ));
     if (auth.op !== 'auth_ok') throw new Error(auth.error || 'Mallory auth failed');
 
+    const webUserId = (address: string) => {
+      let hash = 0x811c9dc5;
+      for (let i = 0; i < address.length; i++) {
+        hash ^= address.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      return String(hash >>> 1);
+    };
+
+    const ownId = webUserId(user);
+    socket.send(JSON.stringify({ op: 'sub', subject: 'presence.*' }));
+    socket.send(JSON.stringify({ op: 'sub', subject: `msg.typing.${ownId}` }));
+    socket.send(JSON.stringify({ op: 'sub', subject: `msg.user.${user}` }));
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+    const receivePublished = async (subject: string, payload: object) => {
+      const incoming = waitForFrame((frame) => frame.op === 'msg' && frame.subject === subject);
+      socket.send(JSON.stringify({ op: 'pub', subject, payload: JSON.stringify(payload) }));
+      return incoming;
+    };
+
+    const presence = await receivePublished(`presence.${ownId}`, { from: 'victim@local' });
+    const typing = await receivePublished(`msg.typing.${ownId}`, {
+      from: 'victim@local', to: user,
+    });
+
+    const inbox = waitForFrame((frame) => frame.op === 'msg' && frame.subject === `msg.user.${user}`);
+    socket.send(JSON.stringify({
+      op: 'pub',
+      subject: 'msg.chat.send',
+      payload: JSON.stringify({
+        id: crypto.randomUUID(),
+        from: 'victim@local',
+        ts: Math.floor(Date.now() / 1000),
+        token: 'forged-victim-token',
+        payload: { to: user, content: { kind: 'text', text: 'spoof-attempt' } },
+      }),
+    }));
+    const inboxFrame = await inbox;
+
+    const publishRejected = async (subject: string) => {
+      const frame = await exchange(
+        { op: 'pub', subject, payload: JSON.stringify({ from: 'victim@local' }) },
+        (response) => response.op === 'err',
+      );
+      return frame.error || '';
+    };
+    const foreignPresenceError = await publishRejected(`presence.${webUserId('victim@local')}`);
+    const typingWildcardError = await publishRejected('msg.typing.>');
+
     const subscribe = async (subject: string) => {
       const frame = await exchange({ op: 'sub', subject }, (response) => response.op === 'err');
       return frame.error || '';
@@ -89,7 +139,22 @@ test('Mallory cannot subscribe to gateway-owned NATS reply inboxes', async ({ pa
     const verify = await request('identity.token.verify', { token: issue.token });
     socket.close();
 
-    return { wildcardError, concreteError, verify };
+    const presencePayload = JSON.parse(presence.payload || '{}') as { from?: string };
+    const typingPayload = JSON.parse(typing.payload || '{}') as { from?: string };
+    const inboxPayload = JSON.parse(inboxFrame.payload || '{}') as {
+      payload?: { message?: { from?: string } };
+    };
+
+    return {
+      wildcardError,
+      concreteError,
+      verify,
+      presenceFrom: presencePayload.from,
+      typingFrom: typingPayload.from,
+      messageFrom: inboxPayload.payload?.message?.from,
+      foreignPresenceError,
+      typingWildcardError,
+    };
   }, {
     url: gatewayUrl,
     user: 'mallory-inbox@local',
@@ -99,4 +164,9 @@ test('Mallory cannot subscribe to gateway-owned NATS reply inboxes', async ({ pa
   expect(result.wildcardError).toContain('запрещ');
   expect(result.concreteError).toContain('запрещ');
   expect(result.verify).toMatchObject({ ok: true, user: 'mallory-inbox@local' });
+  expect(result.presenceFrom).toBe('mallory-inbox@local');
+  expect(result.typingFrom).toBe('mallory-inbox@local');
+  expect(result.messageFrom).toBe('mallory-inbox@local');
+  expect(result.foreignPresenceError).toContain('запрещ');
+  expect(result.typingWildcardError).toContain('запрещ');
 });
