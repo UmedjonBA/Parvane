@@ -488,15 +488,23 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 	if (!m || !t || !parvane::e2e::ready()) {
 		return {};
 	}
-	const auto skey = parvane::e2e::groupSessionKey(groupId);
-	const auto myId = parvane::e2e::myIdentity();
-	if (skey.empty() || myId.empty()) {
-		return {};
-	}
 	QStringList members;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		members = g_groupMembers.value(QString::fromStdString(groupId));
+	}
+	std::vector<std::string> recipients;
+	for (const auto &member : members) {
+		recipients.push_back(member.toStdString());
+	}
+	if (parvane::e2e::groupSyncRecipients(groupId, recipients)) {
+		LOG(("Parvane: состав %1 сократился → ротация ключа группы")
+			.arg(QString::fromStdString(groupId)));
+	}
+	const auto skey = parvane::e2e::groupSessionKey(groupId);
+	const auto myId = parvane::e2e::myIdentity();
+	if (skey.empty() || myId.empty()) {
+		return {};
 	}
 	const auto self = SelfAddress().toStdString();
 	// Эпоха ключа — получатель принимает только строго новее (ротация после
@@ -526,7 +534,7 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 			return {};
 		}
 	}
-	return parvane::e2e::groupSeal(groupId, content.dump());
+	return parvane::e2e::groupSeal(groupId, content.dump(), epoch);
 }
 
 void sendTextAsync(
@@ -4723,33 +4731,24 @@ void RefreshGroups() {
 			}
 			for (const auto &gi : groups) {
 				const auto gid = QString::fromStdString(gi.group_id);
-				ensureGroupChat(session, gid,
-					QString::fromStdString(gi.name),
-					int(gi.members.size()));
-				// Кэшируем участников (для группового звонка).
 				QStringList mem;
 				for (const auto &m : gi.members) {
-					mem.push_back(QString::fromStdString(m.address));
+					if (m.role != "banned") {
+						mem.push_back(QString::fromStdString(m.address));
+					}
 				}
-				bool removed = false;
+				ensureGroupChat(session, gid,
+					QString::fromStdString(gi.name),
+					mem.size());
 				{
 					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					const auto old = g_groupMembers.value(gid);
-					for (const auto &o : old) {
-						if (!mem.contains(o)) {
-							removed = true;
-							break;
-						}
-					}
 					g_groupMembers.insert(gid, mem);
 				}
-				// Кто-то ВЫБЫЛ из группы → ротация своей исходящей Megolm-сессии:
-				// следующая отправка создаст новый ключ (бОльшая эпоха) и раздаст его
-				// только текущим участникам. Удалённый больше не расшифрует будущее
-				// (forward secrecy группы). Добавление участника ротации НЕ требует —
-				// новичок получит текущий ключ штатной раздачей SKDM.
-				if (removed) {
-					parvane::e2e::groupRotate(gid.toStdString());
+				std::vector<std::string> recipients;
+				for (const auto &member : mem) {
+					recipients.push_back(member.toStdString());
+				}
+				if (parvane::e2e::groupSyncRecipients(gid.toStdString(), recipients)) {
 					LOG(("Parvane: участник выбыл из %1 → ротация ключа группы").arg(gid));
 				}
 			}
@@ -4846,6 +4845,23 @@ void groupAdminAction(const QString &groupId, const QString &member, const QStri
 			}
 		} catch (const std::exception &) {
 		}
+		if (ok && act == "remove") {
+			QStringList current;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				current = g_groupMembers.value(QString::fromStdString(gid));
+				current.removeAll(QString::fromStdString(mem));
+				g_groupMembers.insert(QString::fromStdString(gid), current);
+			}
+			std::vector<std::string> recipients;
+			for (const auto &member : current) {
+				recipients.push_back(member.toStdString());
+			}
+			if (parvane::e2e::groupSyncRecipients(gid, recipients)) {
+				LOG(("Parvane: участник удалён из %1 → ротация ключа группы")
+					.arg(QString::fromStdString(gid)));
+			}
+		}
 		LOG(("Parvane: админ-действие '%1' над %2 в %3: %4")
 			.arg(QString::fromStdString(act), QString::fromStdString(mem),
 				QString::fromStdString(gid), ok ? u"ok"_q : u"отказ"_q));
@@ -4876,14 +4892,33 @@ void BanMember(const QString &groupId, const QString &member, bool ban) {
 		if (!g) {
 			return;
 		}
+		bool ok = false;
 		try {
 			const auto r = g->ban(token, gid, mem, ban);
+			ok = r.ok;
 			LOG(("Parvane: %1 %2 в %3 — %4")
 				.arg(ban ? u"бан"_q : u"разбан"_q)
 				.arg(QString::fromStdString(mem))
 				.arg(QString::fromStdString(gid))
 				.arg(r.ok ? u"ok"_q : u"ОТКАЗ"_q));
 		} catch (const std::exception &) {
+		}
+		if (ok && ban) {
+			QStringList current;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				current = g_groupMembers.value(QString::fromStdString(gid));
+				current.removeAll(QString::fromStdString(mem));
+				g_groupMembers.insert(QString::fromStdString(gid), current);
+			}
+			std::vector<std::string> recipients;
+			for (const auto &member : current) {
+				recipients.push_back(member.toStdString());
+			}
+			if (parvane::e2e::groupSyncRecipients(gid, recipients)) {
+				LOG(("Parvane: участник забанен в %1 → ротация ключа группы")
+					.arg(QString::fromStdString(gid)));
+			}
 		}
 		crl::on_main([] { RefreshGroups(); });
 	});

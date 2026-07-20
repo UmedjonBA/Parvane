@@ -17,6 +17,14 @@ export function requireEncrypted<T>(value: T | undefined, detail: string): T {
   return value;
 }
 
+export function getActiveGroupMemberAddresses(
+  members: Array<{ address: string; role: string }>,
+) {
+  return members
+    .filter(({ address, role }) => address && role !== 'banned')
+    .map(({ address }) => address);
+}
+
 export async function deliverToEveryGroupMember(
   members: string[],
   self: string,

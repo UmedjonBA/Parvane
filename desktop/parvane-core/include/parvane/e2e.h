@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace parvane {
 class ITransport;
@@ -54,6 +55,12 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
 // Кладётся в SKDM — получатель принимает ключ только если эпоха новее.
 [[nodiscard]] std::uint64_t groupEpoch(const std::string &groupId);
 
+// Синхронизировать текущих получателей sender key с сохранённым набором.
+// Если кто-то выбыл (в том числе пока клиент был офлайн), ротирует исходящую
+// сессию до следующего шифрования. true — ротация действительно выполнена.
+[[nodiscard]] bool groupSyncRecipients(const std::string &groupId,
+                                       const std::vector<std::string> &members);
+
 // Ротация своей исходящей сессии группы (после удаления участника): сбрасывает
 // ключ, следующая отправка создаёт новый (с бОльшей эпохой) и раздаёт его только
 // ТЕКУЩИМ участникам — удалённый больше не расшифрует. Forward secrecy группы.
@@ -61,7 +68,9 @@ void groupRotate(const std::string &groupId);
 
 // Зашифровать `contentJson` для группы моей исходящей сессией → JSON
 // {kind:"group_encrypted",ciphertext,group,sender_identity}. "" при ошибке.
-[[nodiscard]] std::string groupSeal(const std::string &groupId, const std::string &contentJson);
+[[nodiscard]] std::string groupSeal(const std::string &groupId,
+                                    const std::string &contentJson,
+                                    std::uint64_t expectedEpoch);
 
 // Принять session_key участника (из SKDM) с эпохой `epoch` → входящая сессия
 // (group, sender). Заменяет старую только если эпоха строго новее (ротация);

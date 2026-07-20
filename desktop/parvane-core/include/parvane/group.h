@@ -14,7 +14,7 @@ using nlohmann::json;
 
 struct GroupMember {
     std::string address;
-    std::string role; // owner | admin | member
+    std::string role; // owner | admin | member | banned
 
     static GroupMember fromJson(const json &j) {
         GroupMember m;

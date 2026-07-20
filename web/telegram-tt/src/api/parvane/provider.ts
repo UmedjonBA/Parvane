@@ -26,6 +26,7 @@ import { E2eEngine } from './e2e';
 import {
   deliverToEveryGroupMember,
   E2E_SEND_ERROR,
+  getActiveGroupMemberAddresses,
   requireE2e,
   requireEncrypted,
 } from './e2eSendPolicy';
@@ -93,6 +94,50 @@ let syncTimer: number | undefined;
 let presenceTimer: number | undefined;
 let e2e: E2eEngine | undefined;
 const polls = new PollStore();
+
+function registerGroupInfo(info: WireGroupInfo) {
+  store.registerGroup(info);
+  if (!e2e || !store.self) return;
+  const activeMembers = getActiveGroupMemberAddresses(info.members);
+  if (e2e.syncGroupRecipients(info.group_id, activeMembers, store.self)) {
+    logDebug(`состав ${info.group_id} сократился, групповой ключ ротирован`);
+  }
+}
+
+function registerGroupExclusion(groupId: string, member: string, banned: boolean) {
+  const info = store.getGroupInfo(groupId);
+  if (!info) {
+    e2e?.rotateGroup(groupId);
+    return;
+  }
+  const hasMember = info.members.some(({ address }) => address === member);
+  const members = banned
+    ? info.members.map((entry) => (
+      entry.address === member ? { ...entry, role: 'banned' } : entry
+    ))
+    : info.members.filter(({ address }) => address !== member);
+  if (banned && !hasMember) members.push({ address: member, role: 'banned' });
+  registerGroupInfo({ ...info, members });
+}
+
+async function refreshGroupInfo(groupId: string) {
+  if (!connection) return undefined;
+  const raw = await connection.request(TOPIC_GROUP_INFO, JSON.stringify({ token, group_id: groupId }));
+  const info = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups?.[0];
+  if (info) registerGroupInfo(info);
+  return info;
+}
+
+async function refreshGroupMemberships() {
+  if (!connection) return;
+  try {
+    const raw = await connection.request(TOPIC_GROUP_LIST, JSON.stringify({ token }));
+    const groups = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups || [];
+    groups.forEach(registerGroupInfo);
+  } catch {
+    // Следующий delta-sync повторит membership refresh.
+  }
+}
 let callEngine: CallEngine | undefined;
 // Стримы звонка отдаём в UI-слой через глобальные хуки (nativett-панель не
 // подключаем — она завязана на MTProto phone-протокол)
@@ -350,7 +395,7 @@ function ensureSynced() {
 async function runFullSync() {
   const groupsRaw = await connection!.request(TOPIC_GROUP_LIST, JSON.stringify({ token }));
   const groups = (JSON.parse(groupsRaw) as { groups?: WireGroupInfo[] }).groups || [];
-  groups.forEach((info) => store.registerGroup(info));
+  groups.forEach(registerGroupInfo);
 
   const syncEvent = buildWireEvent(store.self, token, { last_seen_id: '0', since_updated: 0 });
   const syncRaw = await connection!.request(
@@ -516,6 +561,7 @@ function unsealStored(stored: WireStoredMessage): UnsealResult {
 // должна провоцировать plaintext fallback или нечитаемое групповое сообщение.
 async function distributeGroupKey(group: string, members: string[]) {
   const engine = requireE2e(e2e);
+  engine.syncGroupRecipients(group, members, store.self);
   const { sessionKey, epoch } = engine.getGroupSessionKey(group);
   const skdmContent = {
     kind: 'skdm', group, session_key: sessionKey, sender_identity: engine.identityKey, epoch,
@@ -543,6 +589,7 @@ async function distributeGroupKey(group: string, members: string[]) {
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify(skdmEvent));
     return true;
   });
+  return epoch;
 }
 
 // Публикует произвольный inner-content с тем же E2E-выбором, что sendMessage:
@@ -826,9 +873,12 @@ async function publishInner(toAddress: string, wireContent: Record<string, unkno
   const groupInfo = store.getGroupInfo(toAddress);
 
   if (groupInfo) {
-    await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
+    const groupEpoch = await distributeGroupKey(
+      toAddress,
+      getActiveGroupMemberAddresses(groupInfo.members),
+    );
     const ciphertext = requireEncrypted(
-      engine.groupEncrypt(toAddress, JSON.stringify(wireContent)),
+      engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
       `Group encryption failed for ${toAddress}.`,
     );
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
@@ -967,7 +1017,7 @@ async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
     const groups = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups || [];
     groups.forEach((info) => {
       const isNew = !store.isGroupAddress(info.group_id);
-      store.registerGroup(info);
+      registerGroupInfo(info);
       if (isNew) {
         const chat = store.buildApiChatForGroup(info);
         sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
@@ -1072,6 +1122,7 @@ function trackCursors(stored: WireStoredMessage) {
 
 async function runDeltaSync() {
   if (!connection || !isSynced) return;
+  await refreshGroupMemberships();
   let messages: WireStoredMessage[];
   try {
     const syncEvent = buildWireEvent(store.self, token, {
@@ -1541,9 +1592,12 @@ const methods = {
     const groupInfo = store.getGroupInfo(toAddress);
     if (groupInfo) {
       try {
-        await distributeGroupKey(toAddress, groupInfo.members.map((m) => m.address));
+        const groupEpoch = await distributeGroupKey(
+          toAddress,
+          getActiveGroupMemberAddresses(groupInfo.members),
+        );
         const ciphertext = requireEncrypted(
-          engine.groupEncrypt(toAddress, JSON.stringify(wireContent)),
+          engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
           `Group encryption failed for ${toAddress}.`,
         );
         const ts = Math.floor(Date.now() / 1000);
@@ -1696,7 +1750,7 @@ const methods = {
         ...members.map((address) => ({ address, role: 'member' })),
       ],
     };
-    store.registerGroup(info);
+    registerGroupInfo(info);
     const chat = store.buildApiChatForGroup(info);
     sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
     return { chat, missingUsers: [] };
@@ -1716,13 +1770,14 @@ const methods = {
     const raw = await connection.request(TOPIC_GROUP_INFO, JSON.stringify({ token, group_id: address }));
     const info = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups?.[0];
     if (!info) return undefined;
-    store.registerGroup(info);
+    registerGroupInfo(info);
 
-    info.members.forEach((m) => {
+    const activeMembers = info.members.filter(({ role }) => role !== 'banned');
+    activeMembers.forEach((m) => {
       const user = store.buildApiUser(m.address);
       sendUpdate({ '@type': 'updateUser', id: user.id, user });
     });
-    const members = info.members.map((m) => ({
+    const members = activeMembers.map((m) => ({
       userId: store.getIdForAddress(m.address),
       isOwner: m.role === 'owner' ? true as const : undefined,
       isAdmin: m.role === 'admin' ? true as const : undefined,
@@ -1747,8 +1802,13 @@ const methods = {
     for (const user of users) {
       const member = store.getAddressForId(user.id);
       if (!member) continue;
-      await connection.request(TOPIC_GROUP_ADD_MEMBER, JSON.stringify({ token, group_id: groupId, member }));
+      const raw = await connection.request(
+        TOPIC_GROUP_ADD_MEMBER,
+        JSON.stringify({ token, group_id: groupId, member }),
+      );
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     }
+    await refreshGroupInfo(groupId);
     return true;
   },
 
@@ -1757,7 +1817,13 @@ const methods = {
     const groupId = store.getAddressForId(chat.id);
     const member = store.getAddressForId(user.id);
     if (!groupId || !member) return undefined;
-    await connection.request(TOPIC_GROUP_REMOVE_MEMBER, JSON.stringify({ token, group_id: groupId, member }));
+    const raw = await connection.request(
+      TOPIC_GROUP_REMOVE_MEMBER,
+      JSON.stringify({ token, group_id: groupId, member }),
+    );
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    registerGroupExclusion(groupId, member, false);
+    await refreshGroupInfo(groupId);
     return true;
   },
 
@@ -1773,15 +1839,26 @@ const methods = {
     if (!groupId || !member) return undefined;
 
     if (bannedRights.viewMessages) {
-      await connection.request(TOPIC_GROUP_BAN, JSON.stringify({ token, group_id: groupId, member }));
+      const raw = await connection.request(
+        TOPIC_GROUP_BAN,
+        JSON.stringify({ token, group_id: groupId, member }),
+      );
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+      registerGroupExclusion(groupId, member, true);
     } else if (bannedRights.sendMessages) {
       const until = untilDate || 0;
-      await connection.request(TOPIC_GROUP_MUTE, JSON.stringify({
+      const raw = await connection.request(TOPIC_GROUP_MUTE, JSON.stringify({
         token, group_id: groupId, member, until,
       }));
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     } else {
-      await connection.request(TOPIC_GROUP_UNBAN, JSON.stringify({ token, group_id: groupId, member }));
+      const raw = await connection.request(
+        TOPIC_GROUP_UNBAN,
+        JSON.stringify({ token, group_id: groupId, member }),
+      );
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     }
+    await refreshGroupInfo(groupId);
     return true;
   },
 
@@ -1811,7 +1888,7 @@ const methods = {
     const infoRaw = await connection.request(TOPIC_GROUP_INFO, JSON.stringify({ token, group_id: resp.group_id }));
     const info = (JSON.parse(infoRaw) as { groups?: WireGroupInfo[] }).groups?.[0];
     if (info) {
-      store.registerGroup(info);
+      registerGroupInfo(info);
       const groupChat = store.buildApiChatForGroup(info);
       sendUpdate({ '@type': 'updateChat', id: groupChat.id, chat: groupChat });
       return groupChat;

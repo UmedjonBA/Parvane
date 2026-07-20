@@ -14,6 +14,16 @@ import olmWasmPath from '@matrix-org/olm/olm.wasm?url';
 const PICKLE_KEY = 'parvane-web-pickle';
 const ONE_TIME_BATCH = 20;
 
+function locateOlmWasm() {
+  const nodeProcess = (globalThis as {
+    process?: { cwd?: () => string; versions?: { node?: string } };
+  }).process;
+  if (nodeProcess?.versions?.node && nodeProcess.cwd && olmWasmPath.startsWith('/node_modules/')) {
+    return `${nodeProcess.cwd()}${olmWasmPath}`;
+  }
+  return olmWasmPath;
+}
+
 type BundleFetcher = (user: string) => Promise<{
   ok: boolean;
   identity_key?: string;
@@ -40,6 +50,8 @@ export class E2eEngine {
 
   private groupIn = new Map<string, { session: Olm.InboundGroupSession; epoch: number }>();
 
+  private groupRecipients = new Map<string, string[]>();
+
   private self = '';
 
   identityKey = '';
@@ -48,7 +60,7 @@ export class E2eEngine {
     if (!isOlmReady) {
       // Emscripten-сборка olm читает глобаль OLM_OPTIONS и падает без неё
       (globalThis as { OLM_OPTIONS?: object }).OLM_OPTIONS = {};
-      await Olm.init({ locateFile: () => olmWasmPath });
+      await Olm.init({ locateFile: locateOlmWasm });
       isOlmReady = true;
     }
     const engine = new E2eEngine();
@@ -94,6 +106,11 @@ export class E2eEngine {
       const session = new Olm.InboundGroupSession();
       session.unpickle(PICKLE_KEY, pickle);
       this.groupIn.set(key, { session, epoch });
+    });
+    const groupRecipients = JSON.parse(localStorage.getItem(this.storageKey('grecip')) || '{}') as
+      Record<string, string[]>;
+    Object.entries(groupRecipients).forEach(([group, recipients]) => {
+      this.groupRecipients.set(group, recipients);
     });
   }
 
@@ -243,6 +260,27 @@ export class E2eEngine {
     localStorage.setItem(this.storageKey('gin'), JSON.stringify(out));
   }
 
+  private persistGroupRecipients() {
+    localStorage.setItem(
+      this.storageKey('grecip'),
+      JSON.stringify(Object.fromEntries(this.groupRecipients)),
+    );
+  }
+
+  syncGroupRecipients(group: string, members: string[], self: string) {
+    const recipients = Array.from(new Set(members))
+      .filter((member) => member && member !== self)
+      .sort();
+    const previous = this.groupRecipients.get(group);
+    const excludesKnownRecipient = previous?.some((member) => !recipients.includes(member)) || false;
+    const needsSafeMigration = previous === undefined && this.groupOut.has(group);
+    const rotated = excludesKnownRecipient || needsSafeMigration;
+    if (rotated) this.rotateGroup(group);
+    this.groupRecipients.set(group, recipients);
+    this.persistGroupRecipients();
+    return rotated;
+  }
+
   // SKDM для раздачи участникам: session_key исходящей + эпоха. Экспорт ключа
   // делается на index 0 ДО первого encrypt (иначе получатель не расшифрует ранние)
   getGroupSessionKey(group: string) {
@@ -257,18 +295,24 @@ export class E2eEngine {
     return { sessionKey: entry.session.session_key(), epoch: entry.epoch };
   }
 
-  groupEncrypt(group: string, plaintext: string) {
+  groupEncrypt(group: string, plaintext: string, expectedEpoch?: number) {
     const entry = this.groupOut.get(group);
-    if (!entry) return undefined;
+    if (!entry || (expectedEpoch !== undefined && entry.epoch !== expectedEpoch)) return undefined;
     const ciphertext = entry.session.encrypt(plaintext);
     this.persistGroupOut();
     return ciphertext;
   }
 
-  // Ротация: сбрасываем свою исходящую (напр. участник удалён) — следующая
-  // отправка создаст свежую с бОльшей эпохой и раздаст только текущим
+  // Ротация после исключения участника: сразу создаём свежую исходящую сессию
+  // со строго большей эпохой. Это также закрывает совпадение Date.now() при двух
+  // membership changes в одной миллисекунде.
   rotateGroup(group: string) {
-    this.groupOut.delete(group);
+    const previous = this.groupOut.get(group);
+    const session = new Olm.OutboundGroupSession();
+    session.create();
+    const epoch = Math.max(Date.now(), (previous?.epoch || 0) + 1);
+    previous?.session.free();
+    this.groupOut.set(group, { session, epoch });
     this.persistGroupOut();
   }
 

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   deliverToEveryGroupMember,
   E2eSendError,
+  getActiveGroupMemberAddresses,
   requireE2e,
   requireEncrypted,
 } from './e2eSendPolicy';
@@ -32,5 +33,14 @@ describe('E2E send policy', () => {
       'alice@local',
       deliver,
     )).rejects.toThrow('carol@local');
+  });
+
+  it('never distributes a sender key to banned membership records', () => {
+    expect(getActiveGroupMemberAddresses([
+      { address: 'alice@local', role: 'owner' },
+      { address: 'bob@local', role: 'member' },
+      { address: 'mallory@local', role: 'banned' },
+      { address: '', role: 'member' },
+    ])).toEqual(['alice@local', 'bob@local']);
   });
 });
