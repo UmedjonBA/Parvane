@@ -28,6 +28,13 @@ def pub(topic, payload):
 
 def issue(user):
     r = json.loads(req("identity.token.issue", {"user": user, "password": "test"}))
+    if not r.get("ok"):
+        registered = json.loads(req("identity.user.register", {
+            "user": user, "password": "test", "invite": "",
+        }))
+        if not registered.get("ok") and "существ" not in registered.get("error", ""):
+            raise RuntimeError(f"register {user} failed: {registered}")
+        r = json.loads(req("identity.token.issue", {"user": user, "password": "test"}))
     if not (r.get("ok") and r.get("token")):
         raise RuntimeError(f"issue {user} failed: {r}")
     return r["token"]
@@ -57,9 +64,10 @@ def check(name, ok, detail=""):
 
 print("=== Parvane call-шард e2e ===")
 
-alice, bob = "alice@local", "bob@local"
+alice, bob, mallory = "alice@local", "bob@local", "mallory@evil"
 jwt_a = issue(alice)
 jwt_b = issue(bob)
+jwt_m = issue(mallory)
 call_id = newid()
 
 # 1. Подписаться на инбокс bob (в фоне, ждём один сигнал)
@@ -71,7 +79,7 @@ time.sleep(0.6)  # дать подписке установиться
 # 2. alice шлёт invite → call.signal
 print("[2] call.signal: alice → bob (invite)")
 invite = {"to": bob, "signal": {"type": "invite", "call_id": call_id,
-                                 "media": "audio", "sdp": "OFFER-SDP"}}
+                                 "media": "audio", "sdp": "OFFER-SDP", "sig": "SIG-A"}}
 pub("call.signal", envelope(alice, jwt_a, invite))
 
 # 3. дождаться релея в инбоксе bob
@@ -96,10 +104,27 @@ if rec:
     check("caller/callee верны", rec.get("caller") == alice and rec.get("callee") == bob,
           f"{rec.get('caller')}→{rec.get('callee')}")
 
-# 5. полный жизненный цикл: answer → hangup ⇒ ended
-print("[4] answer + hangup ⇒ статус ended")
+# 5. Mallory не может вклинить answer в чужой звонок.
+print("[4] Mallory пытается подменить answer — релея быть не должно")
+alice_sub = subprocess.Popen([NATS, "sub", f"call.user.{alice}", "--count=1"],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+time.sleep(0.3)
+pub("call.signal", envelope(mallory, jwt_m,
+    {"to": alice, "signal": {"type": "answer", "call_id": call_id,
+                               "sdp": "MALLORY-SDP", "sig": "SIG-M"}}))
+try:
+    mallory_out, _ = alice_sub.communicate(timeout=1)
+except subprocess.TimeoutExpired:
+    alice_sub.kill()
+    mallory_out, _ = alice_sub.communicate()
+check("answer третьей стороны не отрелеен", call_id not in mallory_out,
+      f"вывод: {mallory_out[:200]!r}" if call_id in mallory_out else "тишина в inbox")
+
+# 6. полный жизненный цикл: answer → hangup ⇒ ended
+print("[5] answer + hangup ⇒ статус ended")
 pub("call.signal", envelope(bob, jwt_b,
-    {"to": alice, "signal": {"type": "answer", "call_id": call_id, "sdp": "ANSWER-SDP"}}))
+    {"to": alice, "signal": {"type": "answer", "call_id": call_id,
+                               "sdp": "ANSWER-SDP", "sig": "SIG-B"}}))
 time.sleep(0.3)
 pub("call.signal", envelope(alice, jwt_a,
     {"to": bob, "signal": {"type": "hangup", "call_id": call_id}}))

@@ -78,8 +78,13 @@ fn media_str(m: CallMedia) -> &'static str {
     }
 }
 
-/// Обновить запись звонка по сигналу. Invite создаёт запись, остальные сигналы
-/// двигают статус (см. [`next_status`]). ICE ничего не пишет.
+fn route_principal(route: &str) -> &str {
+    route.strip_prefix("gcall:").unwrap_or(route)
+}
+
+/// Проверить, что сигнал идёт между участниками конкретного звонка, и обновить
+/// его состояние. Неизвестные `call_id`, replay и сигналы третьей стороны
+/// отклоняются до публикации в персональный inbox.
 async fn record_signal(
     pool: &SqlitePool,
     from: &str,
@@ -87,20 +92,36 @@ async fn record_signal(
     signal: &CallSignal,
     now: i64,
 ) -> Result<()> {
-    // Групповое приглашение — только релеится, записи о звонке не создаёт.
-    if let CallSignal::GroupInvite { .. } = signal {
+    let target = route_principal(to);
+    if from.is_empty() || target.is_empty() || from == target {
+        anyhow::bail!("некорректные участники звонка");
+    }
+
+    if let CallSignal::GroupInvite { group_call_id, participants, .. } = signal {
+        let unique: std::collections::HashSet<&str> = participants.iter().map(String::as_str).collect();
+        if group_call_id.is_empty() || participants.len() < 2 || participants.len() > 32
+            || unique.len() != participants.len() || !unique.contains(from) || !unique.contains(target)
+        {
+            anyhow::bail!("некорректное групповое приглашение");
+        }
         return Ok(());
+    }
+    if signal.call_id().is_nil() {
+        anyhow::bail!("пустой call_id");
     }
     let call_id = signal.call_id().to_string();
 
-    if let CallSignal::Invite { media, .. } = signal {
+    if let CallSignal::Invite { media, sdp, sig, .. } = signal {
+        if sdp.is_empty() || sig.is_empty() {
+            anyhow::bail!("invite должен содержать подписанный SDP");
+        }
         sqlx::query(
-            "INSERT OR IGNORE INTO calls (id, caller, callee, media, status, started_at)
+            "INSERT INTO calls (id, caller, callee, media, status, started_at)
              VALUES (?, ?, ?, ?, 'ringing', ?)",
         )
         .bind(&call_id)
         .bind(from)
-        .bind(to)
+        .bind(target)
         .bind(media_str(*media))
         .bind(now)
         .execute(pool)
@@ -109,13 +130,40 @@ async fn record_signal(
         return Ok(());
     }
 
-    let current: Option<(String,)> = sqlx::query_as("SELECT status FROM calls WHERE id = ?")
+    let call: Option<(String, String, String)> =
+        sqlx::query_as("SELECT caller, callee, status FROM calls WHERE id = ?")
         .bind(&call_id)
         .fetch_optional(pool)
         .await?;
-    let current = current.as_ref().map(|(s,)| s.as_str());
+    let Some((caller, callee, current)) = call else {
+        anyhow::bail!("неизвестный call_id");
+    };
+    let is_caller = from == caller && target == callee;
+    let is_callee = from == callee && target == caller;
+    if !is_caller && !is_callee {
+        anyhow::bail!("сигнал отправлен не участником звонка или не тому получателю");
+    }
 
-    if let Some(new_status) = next_status(current, signal) {
+    match signal {
+        CallSignal::Answer { sdp, sig, .. } => {
+            if !is_callee || current != "ringing" || sdp.is_empty() || sig.is_empty() {
+                anyhow::bail!("недопустимый answer");
+            }
+        }
+        CallSignal::Reject { .. } => {
+            if !is_callee || current != "ringing" {
+                anyhow::bail!("недопустимый reject");
+            }
+        }
+        CallSignal::Hangup { .. } | CallSignal::Ice { .. } => {
+            if current != "ringing" && current != "answered" {
+                anyhow::bail!("звонок уже завершён");
+            }
+        }
+        CallSignal::Invite { .. } | CallSignal::GroupInvite { .. } => unreachable!(),
+    }
+
+    if let Some(new_status) = next_status(Some(&current), signal) {
         if is_terminal(new_status) {
             sqlx::query("UPDATE calls SET status = ?, ended_at = ? WHERE id = ?")
                 .bind(new_status)
@@ -278,7 +326,7 @@ mod tests {
             call_id: id,
             media: CallMedia::Audio,
             sdp: "offer".into(),
-            sig: String::new(),
+            sig: "signature".into(),
         }
     }
 
@@ -298,7 +346,7 @@ mod tests {
         let ids = id.to_string();
         record_signal(&pool, "alice@local", "bob@local", &invite(id), 1).await.unwrap();
         assert_eq!(status_of(&pool, &ids).await, "ringing");
-        record_signal(&pool, "bob@local", "alice@local", &CallSignal::Answer { call_id: id, sdp: "ans".into(), sig: String::new() }, 2).await.unwrap();
+        record_signal(&pool, "bob@local", "alice@local", &CallSignal::Answer { call_id: id, sdp: "ans".into(), sig: "signature".into() }, 2).await.unwrap();
         assert_eq!(status_of(&pool, &ids).await, "answered");
         record_signal(&pool, "alice@local", "bob@local", &CallSignal::Hangup { call_id: id }, 3).await.unwrap();
         assert_eq!(status_of(&pool, &ids).await, "ended");
@@ -327,9 +375,46 @@ mod tests {
         let pool = test_pool().await;
         let id = Uuid::now_v7();
         // ICE без существующего звонка ничего не создаёт
-        record_signal(&pool, "alice@local", "bob@local", &CallSignal::Ice { call_id: id, candidate: "c".into() }, 1).await.unwrap();
+        assert!(record_signal(&pool, "alice@local", "bob@local", &CallSignal::Ice { call_id: id, candidate: "c".into() }, 1).await.is_err());
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM calls").fetch_one(&pool).await.unwrap();
         assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn signal_requires_original_participants_and_direction() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        record_signal(&pool, "alice@local", "bob@local", &invite(id), 1).await.unwrap();
+        let answer = CallSignal::Answer {
+            call_id: id,
+            sdp: "answer".into(),
+            sig: "signature".into(),
+        };
+
+        assert!(record_signal(&pool, "mallory@evil", "alice@local", &answer, 2).await.is_err());
+        assert!(record_signal(&pool, "alice@local", "bob@local", &answer, 2).await.is_err());
+        assert!(record_signal(&pool, "bob@local", "mallory@evil", &answer, 2).await.is_err());
+        assert_eq!(status_of(&pool, &id.to_string()).await, "ringing");
+    }
+
+    #[tokio::test]
+    async fn replay_and_unsigned_sdp_are_rejected() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        record_signal(&pool, "alice@local", "bob@local", &invite(id), 1).await.unwrap();
+        assert!(record_signal(&pool, "alice@local", "bob@local", &invite(id), 2).await.is_err());
+
+        let mut unsigned_answer = CallSignal::Answer {
+            call_id: id,
+            sdp: "answer".into(),
+            sig: String::new(),
+        };
+        assert!(record_signal(&pool, "bob@local", "alice@local", &unsigned_answer, 3).await.is_err());
+        if let CallSignal::Answer { sig, .. } = &mut unsigned_answer {
+            *sig = "signature".into();
+        }
+        record_signal(&pool, "bob@local", "alice@local", &unsigned_answer, 4).await.unwrap();
+        assert!(record_signal(&pool, "bob@local", "alice@local", &unsigned_answer, 5).await.is_err());
     }
 
     #[tokio::test]

@@ -46,6 +46,20 @@ int main() {
     check(parvane::crypto::verify(k.publicB64(), data, sig),
           "verify(правильный ключ, те же данные) → true");
 
+    // Фиксированный вектор @matrix-org/olm (Web): Olm отдаёт pubkey/signature
+    // без base64-padding, а OpenSSL-клиент desktop обязан принимать их как есть.
+    {
+        const std::string olmData =
+            "018f3c84-7f9a-7c12-a126-112233445566\nv=0\r\n"
+            "a=fingerprint:sha-256 AA:BB\r\n";
+        const std::string olmPub = "eQ+2pwLjybUFN9zGdCYQhSDhaybgurwoeEPsRBiRZtQ";
+        const std::string olmSig =
+            "y5E2zA43lDulSPULTGtSB7W2LoUHKNCgzLhWoetADHU8bwTPUoqHr6alF4zebglm"
+            "U64yxJY5WgAYEbOUxiCDCg";
+        check(parvane::crypto::verify(olmPub, olmData, olmSig),
+              "Olm(Web) Ed25519-вектор проверяется OpenSSL(desktop)");
+    }
+
     // Атаки: подмена данных / ключа / подписи → false.
     check(!parvane::crypto::verify(k.publicB64(), data + "x", sig),
           "verify(изменённые данные) → false (защита от подмены SDP)");
@@ -110,6 +124,7 @@ int main() {
         const auto s2 = parvane::crypto::sasEmoji(fpB, fpA);
         check(!s1.empty(), "sasEmoji — непустой");
         check(s1 == s2, "sasEmoji(A,B) == sasEmoji(B,A) — порядок не важен");
+        check(s1 == "🦄🥁🍊🍉", "SAS совпадает с WebCrypto-вектором");
         const auto s3 = parvane::crypto::sasEmoji("XX:YY", "ZZ:WW");
         check(s1 != s3, "разные отпечатки → разный SAS");
     }

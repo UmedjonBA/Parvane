@@ -25,9 +25,11 @@ public:
     // Сигналы вызова. callId — общий uuid звонка (генерирует инициатор для
     // invite, остальные повторяют его). media: "audio"|"video".
     void invite(const std::string &from, const std::string &to, const std::string &token,
-                const std::string &callId, const std::string &media, const std::string &sdp);
+                const std::string &callId, const std::string &media,
+                const std::string &sdp, const std::string &sig);
     void answer(const std::string &from, const std::string &to, const std::string &token,
-                const std::string &callId, const std::string &sdp);
+                const std::string &callId, const std::string &sdp,
+                const std::string &sig);
     void reject(const std::string &from, const std::string &to, const std::string &token,
                 const std::string &callId, const std::optional<std::string> &reason = std::nullopt);
     void ice(const std::string &from, const std::string &to, const std::string &token,

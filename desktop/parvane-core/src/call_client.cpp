@@ -26,14 +26,15 @@ void CallClient::send(const std::string &from, const std::string &to,
 
 void CallClient::invite(const std::string &from, const std::string &to,
                         const std::string &token, const std::string &callId,
-                        const std::string &media, const std::string &sdp) {
-    send(from, to, token, inviteSignal(callId, media, sdp));
+                        const std::string &media, const std::string &sdp,
+                        const std::string &sig) {
+    send(from, to, token, inviteSignal(callId, media, sdp, sig));
 }
 
 void CallClient::answer(const std::string &from, const std::string &to,
                         const std::string &token, const std::string &callId,
-                        const std::string &sdp) {
-    send(from, to, token, answerSignal(callId, sdp));
+                        const std::string &sdp, const std::string &sig) {
+    send(from, to, token, answerSignal(callId, sdp, sig));
 }
 
 void CallClient::reject(const std::string &from, const std::string &to,

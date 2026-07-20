@@ -894,6 +894,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-nats",
+ "base64",
  "dotenvy",
  "futures",
  "jsonwebtoken",

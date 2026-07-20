@@ -92,6 +92,7 @@ export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
 export const TOPIC_IDENTITY_SEARCH = 'identity.user.search';
 export const TOPIC_IDENTITY_SETNAME = 'identity.user.setname';
 export const TOPIC_IDENTITY_SETAVATAR = 'identity.user.setavatar';
+export const TOPIC_IDENTITY_SETKEY = 'identity.user.setkey';
 export const TOPIC_PREKEYS_PUBLISH = 'identity.prekeys.publish';
 export const TOPIC_PREKEYS_FETCH = 'identity.prekeys.fetch';
 export const TOPIC_MSG_SEND = 'msg.chat.send';

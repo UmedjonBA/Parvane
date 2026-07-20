@@ -31,7 +31,8 @@ inline std::string callSignedData(const std::string &callId, const std::string &
 
 // ── исходящие сигналы (билдеры json для CallSignalPayload::signal) ─────────────
 // media: "audio" | "video". sig — base64 Ed25519-подпись callSignedData(callId,
-// sdp) приватным ключом отправителя (пусто = без подписи, напр. в тестах/legacy).
+// sdp) приватным ключом отправителя. Пустое значение допустимо только для
+// построения негативных тест-векторов: call-шард такой сигнал отклонит.
 inline json inviteSignal(const std::string &callId, const std::string &media,
                          const std::string &sdp, const std::string &sig = "") {
     json j{{"type", "invite"}, {"call_id", callId}, {"media", media}, {"sdp", sdp}};

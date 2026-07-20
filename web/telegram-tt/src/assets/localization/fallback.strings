@@ -246,6 +246,7 @@
 "CallStatusIncoming" = "is calling you...";
 "CallStatusWaiting" = "waiting...";
 "CallStatusExchanging" = "exchanging encryption keys...";
+"ParvaneCallSecurityError" = "Security verification failed. The call was blocked.";
 "CallEmojiKeyTooltip" = "If the emoji on {user}’s screen are the same, this call is 100% secure.";
 "CallMuteAudio" = "Mute";
 "CallUnmuteAudio" = "Unmute";
