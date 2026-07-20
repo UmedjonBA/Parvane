@@ -5,6 +5,7 @@
 #   2) e2e-контракт бэкенда identity+messenger       (scripts/e2e_smoke.py)
 #   3) C++ transport-тесты parvane-core              (parvane_core_tests)
 #   4) C++ messenger-тесты parvane-core              (parvane_messenger_tests)
+#   5) Web lint/unit/build/live browser e2e           (run_web_tests.sh)
 #
 # Поднимает свои identity+messenger на временных БД; существующий NATS
 # переиспользует, а если его нет — стартует свой и гасит в конце.
@@ -154,6 +155,14 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
     fi
 else
     fail "сборка parvane-core (см. $TMP/pc-build.log)"; tail -20 "$TMP/pc-build.log"
+fi
+
+# ── 12. Web quality gate ─────────────────────────────────────────────────────
+log "12. Web quality gate"
+if scripts/run_web_tests.sh; then
+    echo "web: OK"
+else
+    fail "Web quality gate"
 fi
 
 # ── итог ─────────────────────────────────────────────────────────────────────
