@@ -457,10 +457,26 @@ async fn group_info(pool: &SqlitePool, group_id: &str) -> Result<Option<GroupInf
     }))
 }
 
+/// Сведения о группе доступны только её активным участникам. Banned-запись
+/// нужна для запрета повторного join, но не даёт читать состав группы.
+async fn group_info_for_member(
+    pool: &SqlitePool,
+    group_id: &str,
+    user: &str,
+) -> Result<Option<GroupInfo>> {
+    if !matches!(
+        member_role(pool, group_id, user).await?.as_deref(),
+        Some("owner") | Some("admin") | Some("member")
+    ) {
+        return Ok(None);
+    }
+    group_info(pool, group_id).await
+}
+
 /// Все группы пользователя (со сведениями и участниками).
 async fn list_groups(pool: &SqlitePool, user: &str) -> Result<Vec<GroupInfo>> {
     let gids: Vec<(String,)> =
-        sqlx::query_as("SELECT group_id FROM group_members WHERE member = ?")
+        sqlx::query_as("SELECT group_id FROM group_members WHERE member = ? AND role != 'banned'")
             .bind(user)
             .fetch_all(pool)
             .await?;
@@ -1275,8 +1291,8 @@ async fn handle_group_info(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
     let resp = async {
         let req: GroupInfoRequest =
             serde_json::from_slice(&msg.payload).context("JSON group.info")?;
-        let _user = verify_token(nc, &req.token).await?;
-        let groups = match group_info(pool, &req.group_id).await? {
+        let user = verify_token(nc, &req.token).await?;
+        let groups = match group_info_for_member(pool, &req.group_id, &user).await? {
             Some(info) => vec![info],
             None => vec![],
         };
@@ -1381,6 +1397,14 @@ mod tests {
         // админ не нужен: owner банит
         assert!(ban_group_member(&pool, g1, "owner@l", "bob@l", true).await.unwrap());
         assert!(!can_post(&pool, g1, "bob@l").await.unwrap());
+        assert!(list_groups(&pool, "bob@l").await.unwrap().is_empty());
+        assert!(group_info_for_member(&pool, g1, "bob@l").await.unwrap().is_none());
+        assert!(group_info_for_member(&pool, g1, "mallory@l").await.unwrap().is_none());
+        assert!(group_info_for_member(&pool, g1, "owner@l").await.unwrap().is_some());
+        assert!(!resolve_recipients(&pool, g1, "owner@l")
+            .await
+            .unwrap()
+            .contains(&"bob@l".to_string()));
         // банённого нельзя добавить обратно add'ом
         assert!(!add_group_member(&pool, g1, "owner@l", "bob@l").await.unwrap());
         // owner небаним, обычный участник банить не может

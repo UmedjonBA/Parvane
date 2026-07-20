@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -34,6 +35,7 @@ std::map<std::string, ParvaneE2EGroupSession *> g_ownGroups;   // groupId → с
 std::map<std::string, ParvaneE2EInboundGroup *> g_inGroups;    // "group|senderId" → входящая
 std::map<std::string, std::uint64_t> g_ownGroupEpoch;          // groupId → эпоха своей исходящей
 std::map<std::string, std::uint64_t> g_inGroupEpoch;           // "group|senderId" → эпоха входящей
+std::map<std::string, std::vector<std::string>> g_groupRecipients; // groupId → последний набор SKDM
 std::string g_identityB64;                              // свой identity-ключ
 std::string g_self;                                     // свой адрес (для конверта)
 std::string g_storeDir;
@@ -114,6 +116,7 @@ std::string sessionPath(const std::string &idB64) {
     return g_storeDir + "/sess_" + hexName(idB64) + ".json";
 }
 std::string contactsPath() { return g_storeDir + "/contacts.json"; }
+std::string groupRecipientsPath() { return g_storeDir + "/grecip.json"; }
 
 void persistAccount() {
     if (g_storeDir.empty() || !g_account) {
@@ -151,6 +154,36 @@ void loadContacts() {
             if (it.value().is_string()) {
                 g_contactId[it.key()] = it.value().get<std::string>();
             }
+        }
+    }
+}
+
+void saveGroupRecipients() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    json j = json::object();
+    for (const auto &[group, recipients] : g_groupRecipients) {
+        j[group] = recipients;
+    }
+    writeFile(groupRecipientsPath(), j.dump());
+}
+
+void loadGroupRecipients() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    const auto raw = readFile(groupRecipientsPath());
+    if (raw.empty()) {
+        return;
+    }
+    const auto j = json::parse(raw, nullptr, false);
+    if (!j.is_object()) {
+        return;
+    }
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (it.value().is_array()) {
+            g_groupRecipients[it.key()] = it.value().get<std::vector<std::string>>();
         }
     }
 }
@@ -240,6 +273,20 @@ ParvaneE2EGroupSession *getOwnGroup(const std::string &groupId) {
     return nullptr;
 }
 
+void rotateOwnGroupLocked(const std::string &groupId) {
+    auto it = g_ownGroups.find(groupId);
+    if (it != g_ownGroups.end()) {
+        if (it->second) {
+            parvane_e2e_group_free(it->second);
+        }
+        g_ownGroups.erase(it);
+    }
+    if (!g_storeDir.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(ownGroupPath(groupId), ec);
+    }
+}
+
 // Входящая group-сессия по ключу "group|senderIdentity": память → диск.
 ParvaneE2EInboundGroup *getInGroup(const std::string &key) {
     auto it = g_inGroups.find(key);
@@ -297,6 +344,7 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
             }
             loadContacts();
             loadEpochs();
+            loadGroupRecipients();
         }
         if (!g_account) {
             g_account = parvane_e2e_account_new();
@@ -540,22 +588,47 @@ void groupRotate(const std::string &groupId) {
     std::lock_guard<std::mutex> lk(g_mu);
     // Сбрасываем свою исходящую (память + файл) — следующая отправка создаст свежую
     // сессию с НОВЫМ ключом и бОльшей эпохой; удалённый участник его не получит.
-    auto it = g_ownGroups.find(groupId);
-    if (it != g_ownGroups.end()) {
-        if (it->second) {
-            parvane_e2e_group_free(it->second);
-        }
-        g_ownGroups.erase(it);
-    }
-    if (!g_storeDir.empty()) {
-        std::error_code ec;
-        std::filesystem::remove(ownGroupPath(groupId), ec);
-    }
+    rotateOwnGroupLocked(groupId);
     // Эпоху НЕ трогаем: ensureOwnGroupLocked при пересоздании выставит строго
     // большую (nowMs или old+1), так что новый ключ заведомо новее старого.
 }
 
-std::string groupSeal(const std::string &groupId, const std::string &contentJson) {
+bool groupSyncRecipients(const std::string &groupId, const std::vector<std::string> &members) {
+    if (groupId.empty()) {
+        return false;
+    }
+    auto recipients = members;
+    recipients.erase(std::remove_if(recipients.begin(), recipients.end(), [](const auto &member) {
+        return member.empty() || member == g_self;
+    }), recipients.end());
+    std::sort(recipients.begin(), recipients.end());
+    recipients.erase(std::unique(recipients.begin(), recipients.end()), recipients.end());
+
+    std::lock_guard<std::mutex> lk(g_mu);
+    const auto previous = g_groupRecipients.find(groupId);
+    bool rotate = false;
+    if (previous == g_groupRecipients.end()) {
+        // Без сохранённого baseline старый pickle мог быть раздан уже
+        // исключённым участникам: одноразовая безопасная миграция.
+        rotate = getOwnGroup(groupId) != nullptr;
+    } else {
+        rotate = std::any_of(
+            previous->second.begin(),
+            previous->second.end(),
+            [&recipients](const auto &member) {
+                return !std::binary_search(recipients.begin(), recipients.end(), member);
+            });
+    }
+    if (rotate) {
+        rotateOwnGroupLocked(groupId);
+    }
+    g_groupRecipients[groupId] = recipients;
+    saveGroupRecipients();
+    return rotate;
+}
+
+std::string groupSeal(const std::string &groupId, const std::string &contentJson,
+                      std::uint64_t expectedEpoch) {
     // Реальный отправитель — ВНУТРЬ шифртекста (как в 1-на-1), путь inject единый.
     json inner;
     try {
@@ -568,7 +641,8 @@ std::string groupSeal(const std::string &groupId, const std::string &contentJson
         return {};
     }
     auto *g = ensureOwnGroupLocked(groupId);
-    if (!g) {
+    const auto epoch = g_ownGroupEpoch.find(groupId);
+    if (!g || epoch == g_ownGroupEpoch.end() || epoch->second != expectedEpoch) {
         return {};
     }
     const std::string ct = take(parvane_e2e_group_encrypt(g, b64e(inner.dump()).c_str()));
