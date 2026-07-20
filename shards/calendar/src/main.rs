@@ -7,9 +7,7 @@ use lww::CalEvent;
 use parvane_types::{
     event_checksum, CalDeletePayload, CalEventSnapshot, CalSetPayload, CalSyncRequestPayload,
     CalSyncResponsePayload, LwwField, ParvaneEvent, Stamp, VerifyRequest, VerifyResponse,
-    topics::{
-        CAL_CREATE, CAL_DELETE, CAL_SYNC_REQUEST, CAL_SYNC_RESPONSE, CAL_UPDATE, IDENTITY_VERIFY,
-    },
+    topics::{CAL_CREATE, CAL_DELETE, CAL_SYNC_REQUEST, CAL_UPDATE, IDENTITY_VERIFY},
 };
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
@@ -251,8 +249,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             payload: CalSyncResponsePayload { events },
         };
         let json = serde_json::to_vec(&resp)?;
-        nc.publish(reply.clone(), json.clone().into()).await?;
-        nc.publish(CAL_SYNC_RESPONSE, json.into()).await?;
+        nc.publish(reply.clone(), json.into()).await?;
 
         info!("Sync для {}: {} событий", user, count);
         anyhow::Ok(())

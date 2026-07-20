@@ -8,10 +8,7 @@ use parvane_types::{
     content_checksum, NoteCreatePayload, NoteDeletePayload, NoteElement, NoteOp, NoteSnapshot,
     NoteSyncRequestPayload, NoteSyncResponsePayload, NoteUpdatePayload, OpId, ParvaneEvent,
     VerifyRequest, VerifyResponse,
-    topics::{
-        IDENTITY_VERIFY, NOTE_CREATE, NOTE_DELETE, NOTE_SYNC_REQUEST, NOTE_SYNC_RESPONSE,
-        NOTE_UPDATE,
-    },
+    topics::{IDENTITY_VERIFY, NOTE_CREATE, NOTE_DELETE, NOTE_SYNC_REQUEST, NOTE_UPDATE},
 };
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -306,8 +303,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             payload: NoteSyncResponsePayload { notes },
         };
         let json = serde_json::to_vec(&resp)?;
-        nc.publish(reply.clone(), json.clone().into()).await?;
-        nc.publish(NOTE_SYNC_RESPONSE, json.into()).await?;
+        nc.publish(reply.clone(), json.into()).await?;
 
         info!("Sync для {}: {} заметок", user, count);
         anyhow::Ok(())

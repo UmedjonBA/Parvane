@@ -7,7 +7,7 @@ use futures::StreamExt;
 use parvane_types::{
     CallHistoryResponse, CallMedia, CallRecord, CallSignal, CallSignalPayload, ParvaneEvent,
     VerifyRequest, VerifyResponse,
-    topics::{CALL_HISTORY_REQUEST, CALL_HISTORY_RESPONSE, CALL_SIGNAL, call_inbox},
+    topics::{CALL_HISTORY_REQUEST, CALL_SIGNAL, IDENTITY_VERIFY, call_inbox},
 };
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -56,10 +56,7 @@ async fn main() -> Result<()> {
 
 async fn verify_token(nc: &Client, token: &str) -> Result<String> {
     let req = serde_json::to_vec(&VerifyRequest { token: token.to_string() })?;
-    let reply = nc
-        .request("identity.token.verify", req.into())
-        .await
-        .context("запрос к identity")?;
+    let reply = nc.request(IDENTITY_VERIFY, req.into()).await.context("запрос к identity")?;
     let resp: VerifyResponse =
         serde_json::from_slice(&reply.payload).context("ответ identity: неверный JSON")?;
     if resp.ok {
@@ -287,8 +284,7 @@ async fn handle_history(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
             payload: CallHistoryResponse { calls },
         };
         let json = serde_json::to_vec(&resp)?;
-        nc.publish(reply.clone(), json.clone().into()).await?;
-        nc.publish(CALL_HISTORY_RESPONSE, json.into()).await?;
+        nc.publish(reply.clone(), json.into()).await?;
 
         info!("История звонков для {}: {} записей", user, count);
         anyhow::Ok(())
