@@ -30,3 +30,6 @@ npm run build:mocked
 
 log "Live-stack browser e2e"
 npm run test:playwright
+
+log "Two-browser sync and reconnect e2e"
+"$ROOT/scripts/run_web_sync_e2e.sh"

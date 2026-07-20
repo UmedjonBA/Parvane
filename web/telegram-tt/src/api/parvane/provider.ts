@@ -89,6 +89,8 @@ const PRESENCE_TTL_SECS = 90;
 const TYPING_CLEAR_MS = 6000;
 const UPLOAD_CHUNK_BYTES = 192 * 1024;
 const MEDIA_TIMEOUT_MS = 30000;
+const RECONNECT_INITIAL_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 10000;
 
 let onUpdate: OnApiUpdate = () => undefined;
 let startupCredentials = consumeStartupCredentials();
@@ -98,8 +100,12 @@ let token = '';
 let pendingLoginAddress = '';
 let isSynced = false;
 let syncPromise: Promise<void> | undefined;
+let deltaSyncPromise: Promise<void> | undefined;
 let syncTimer: number | undefined;
 let presenceTimer: number | undefined;
+let reconnectTimer: number | undefined;
+let reconnectAttempt = 0;
+let sessionGeneration = 0;
 let e2e: E2eEngine | undefined;
 let isCallIdentityReady = false;
 const polls = new PollStore();
@@ -215,89 +221,168 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
 }
 
 async function connectAndLogin(user: string, password: string) {
+  cancelReconnect();
+  const generation = ++sessionGeneration;
   teardownCallEngine();
   connection?.close();
-  connection = new GatewayConnection();
-  await connection.connect(getGatewayUrl());
-  logDebug('WS открыт');
-
-  token = await issueToken(user, password);
-  logDebug('JWT получен');
-  await connection.authorize(token);
-  logDebug(`авторизован: ${user}`);
-
-  store = new ParvaneStore();
-  store.self = user;
-  polls.setSelf(user);
-  isSynced = false;
-  syncPromise = undefined;
-  lastSeenUuid = '';
-  sinceUpdated = 0;
-  wireFlagsByUuid.clear();
-  readOutboxMaxByChatId.clear();
-  reportedReadUuids.clear();
-
-  isCallIdentityReady = false;
-  try {
-    e2e = await E2eEngine.create(user);
-    const prekeys = e2e.buildPrekeysPayload(token);
-    if (prekeys) {
-      await e2e.flushStorage();
-      await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
-      logDebug('E2E готов, прекеи опубликованы');
-    } else {
-      logDebug('E2E готов (прекеи уже опубликованы ранее)');
-    }
-  } catch (err) {
-    e2e = undefined;
-    logDebug(`E2E недоступен: ${String(err)}`);
-  }
-  if (e2e) {
-    try {
-      const setKeyRaw = await connection.request(TOPIC_IDENTITY_SETKEY, JSON.stringify({
-        token,
-        pubkey: e2e.signingKey,
-      }));
-      const setKeyResponse = JSON.parse(setKeyRaw) as { ok?: boolean; error?: string };
-      if (!setKeyResponse.ok) throw new Error(setKeyResponse.error || 'Call identity key registration failed');
-      isCallIdentityReady = true;
-    } catch (err) {
-      logDebug(`Ключ аутентификации звонков не зарегистрирован: ${String(err)}`);
-    }
-  }
-
-  connection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
-  connection.subscribe(`msg.typing.${selfId()}`, handleTypingFrame);
-  connection.subscribe('presence.*', handlePresenceFrame);
-  connection.subscribe(buildCallInboxTopic(user), handleCallFrame);
-  setupCallEngine();
-  const activeConnection = connection;
-  connection.onClose = () => {
-    if (connection !== activeConnection) return;
-    teardownCallEngine();
-    sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
-  };
-
-  await resolveDisplayNames([user]);
-  logDebug('имена получены, шлю ready-апдейты');
-
-  const currentUser = store.buildApiUser(user);
-  sendUpdate({ '@type': 'updateCurrentUser', currentUser, currentUserFullInfo: {} });
-  sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateReady' });
-  sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateReady' });
-
   window.clearInterval(syncTimer);
-  syncTimer = window.setInterval(() => {
-    void runDeltaSync();
-  }, DELTA_SYNC_INTERVAL_MS);
   window.clearInterval(presenceTimer);
-  presenceTimer = window.setInterval(publishPresence, PRESENCE_INTERVAL_MS);
-  publishPresence();
+  const activeConnection = new GatewayConnection();
+  connection = activeConnection;
+
+  try {
+    await activeConnection.connect(getGatewayUrl());
+    logDebug('WS открыт');
+
+    token = await issueToken(user, password);
+    logDebug('JWT получен');
+    await activeConnection.authorize(token);
+    logDebug(`авторизован: ${user}`);
+
+    store = new ParvaneStore();
+    store.self = user;
+    polls.setSelf(user);
+    isSynced = false;
+    syncPromise = undefined;
+    deltaSyncPromise = undefined;
+    lastSeenUuid = '';
+    sinceUpdated = 0;
+    wireFlagsByUuid.clear();
+    readOutboxMaxByChatId.clear();
+    reportedReadUuids.clear();
+
+    isCallIdentityReady = false;
+    try {
+      e2e = await E2eEngine.create(user);
+      const prekeys = e2e.buildPrekeysPayload(token);
+      if (prekeys) {
+        await e2e.flushStorage();
+        await activeConnection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
+        logDebug('E2E готов, прекеи опубликованы');
+      } else {
+        logDebug('E2E готов (прекеи уже опубликованы ранее)');
+      }
+    } catch (err) {
+      e2e = undefined;
+      logDebug(`E2E недоступен: ${String(err)}`);
+    }
+    if (e2e) {
+      try {
+        const setKeyRaw = await activeConnection.request(TOPIC_IDENTITY_SETKEY, JSON.stringify({
+          token,
+          pubkey: e2e.signingKey,
+        }));
+        const setKeyResponse = JSON.parse(setKeyRaw) as { ok?: boolean; error?: string };
+        if (!setKeyResponse.ok) throw new Error(setKeyResponse.error || 'Call identity key registration failed');
+        isCallIdentityReady = true;
+      } catch (err) {
+        logDebug(`Ключ аутентификации звонков не зарегистрирован: ${String(err)}`);
+      }
+    }
+
+    if (!activeConnection.isOpen) throw new Error('Соединение с gateway закрыто во время входа');
+    activateAuthorizedConnection(activeConnection, user, generation);
+
+    await resolveDisplayNames([user]);
+    logDebug('имена получены, шлю ready-апдейты');
+
+    const currentUser = store.buildApiUser(user);
+    sendUpdate({ '@type': 'updateCurrentUser', currentUser, currentUserFullInfo: {} });
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateReady' });
+    sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateReady' });
+
+    syncTimer = window.setInterval(requestDeltaSync, DELTA_SYNC_INTERVAL_MS);
+    presenceTimer = window.setInterval(publishPresence, PRESENCE_INTERVAL_MS);
+    publishPresence();
+  } catch (err) {
+    if (generation === sessionGeneration && connection === activeConnection) {
+      connection = undefined;
+      token = '';
+    }
+    activeConnection.close();
+    throw err;
+  }
+}
+
+function activateAuthorizedConnection(
+  activeConnection: GatewayConnection,
+  user: string,
+  generation: number,
+) {
+  connection = activeConnection;
+  activeConnection.onClose = () => handleConnectionClose(activeConnection, user, generation);
+  activeConnection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
+  activeConnection.subscribe(`msg.typing.${selfId()}`, handleTypingFrame);
+  activeConnection.subscribe('presence.*', handlePresenceFrame);
+  activeConnection.subscribe(buildCallInboxTopic(user), handleCallFrame);
+  setupCallEngine();
+}
+
+function handleConnectionClose(
+  closedConnection: GatewayConnection,
+  user: string,
+  generation: number,
+) {
+  if (generation !== sessionGeneration || connection !== closedConnection) return;
+  connection = undefined;
+  teardownCallEngine();
+  sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
+  scheduleReconnect(user, generation);
+}
+
+function scheduleReconnect(user: string, generation: number) {
+  if (reconnectTimer || !token || generation !== sessionGeneration) return;
+  const delay = Math.min(
+    RECONNECT_INITIAL_DELAY_MS * (2 ** reconnectAttempt),
+    RECONNECT_MAX_DELAY_MS,
+  );
+  reconnectAttempt = Math.min(reconnectAttempt + 1, 16);
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = undefined;
+    void reconnect(user, generation);
+  }, delay);
+}
+
+async function reconnect(user: string, generation: number) {
+  if (!token || generation !== sessionGeneration || store.self !== user) return;
+  const expectedToken = token;
+  const nextConnection = new GatewayConnection();
+  try {
+    await nextConnection.connect(getGatewayUrl());
+    await nextConnection.authorize(expectedToken);
+    if (generation !== sessionGeneration || token !== expectedToken) {
+      nextConnection.close();
+      return;
+    }
+    if (!nextConnection.isOpen) throw new Error('Соединение с gateway закрыто во время авторизации');
+    activateAuthorizedConnection(nextConnection, user, generation);
+    reconnectAttempt = 0;
+    sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateReady' });
+    publishPresence();
+    if (isSynced) requestDeltaSync();
+    else syncPromise = undefined;
+    logDebug('соединение с gateway восстановлено');
+  } catch (err) {
+    if (connection === nextConnection) connection = undefined;
+    nextConnection.close();
+    logDebug(`повторное подключение не удалось: ${String(err)}`);
+    scheduleReconnect(user, generation);
+  }
+}
+
+function cancelReconnect() {
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  reconnectAttempt = 0;
 }
 
 function publishPresence() {
   if (!connection) return;
-  connection.publish(`presence.${selfId()}`, JSON.stringify({ from: store.self }));
+  try {
+    connection.publish(`presence.${selfId()}`, JSON.stringify({ from: store.self }));
+  } catch {
+    // `onClose` запустит reconnect; presence догоним после нового `auth`.
+  }
 }
 
 // ── звонки ───────────────────────────────────────────────────────────────────
@@ -461,7 +546,12 @@ async function issueToken(user: string, password: string) {
 
 function ensureSynced() {
   if (isSynced) return Promise.resolve();
-  if (!syncPromise) syncPromise = runFullSync();
+  if (!syncPromise) {
+    syncPromise = runFullSync().catch((err) => {
+      syncPromise = undefined;
+      throw err;
+    });
+  }
   return syncPromise;
 }
 
@@ -561,7 +651,9 @@ function handleInboxFrame(payload: string) {
   const stored = event.payload?.message;
   if (!stored) return; // delivered-квитанция; у Telegram нет отдельного статуса
 
-  void applyStoredUpdate(stored, true);
+  void applyStoredUpdate(stored, true).catch((err) => {
+    logDebug(`входящее сообщение не применено: ${String(err)}`);
+  });
 }
 
 // Сообщение в незнакомую группу — сперва подтягиваем свежий список групп,
@@ -1220,6 +1312,15 @@ async function runDeltaSync() {
   }
 }
 
+function requestDeltaSync() {
+  if (deltaSyncPromise) return;
+  deltaSyncPromise = runDeltaSync()
+    .catch((err) => logDebug(`дельта-синк не выполнен: ${String(err)}`))
+    .finally(() => {
+      deltaSyncPromise = undefined;
+    });
+}
+
 function announcePeer(address: string) {
   if (store.isGroupAddress(address)) return;
   const user = store.buildApiUser(address);
@@ -1230,7 +1331,11 @@ function announcePeer(address: string) {
 
 function sendAck(messageId: string, sealedSender: string) {
   const ack = buildWireEvent(store.self, token, { message_id: messageId, sender: sealedSender });
-  connection!.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
+  try {
+    connection?.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
+  } catch {
+    // Без ACK сервер повторит доставку; UUID-дедупликация сделает её безопасной.
+  }
 }
 
 function reportEncryptionSendFailure(chatId: string, localId: number, detail?: unknown) {
@@ -2348,12 +2453,16 @@ const methods = {
   async destroy(noSessionClear?: boolean) {
     const user = store.self || pendingLoginAddress || readLoginAddress();
     const currentE2e = e2e;
+    sessionGeneration += 1;
+    cancelReconnect();
     teardownCallEngine();
     connection?.close();
     connection = undefined;
     token = '';
     e2e = undefined;
     isCallIdentityReady = false;
+    syncPromise = undefined;
+    deltaSyncPromise = undefined;
     window.clearInterval(syncTimer);
     window.clearInterval(presenceTimer);
     mediaCacheByFileId.clear();
