@@ -362,12 +362,11 @@ fn err_frame(id: Option<&str>, msg: &str) -> String {
 
 // ── права (изоляция «людей») — чистые функции, покрыты тестами ────────────────
 
-/// На что можно ПОДПИСАТЬСЯ: только свои инбоксы + свои reply + эфемерные
-/// typing/presence. Чужой `msg.user.*`/`call.user.*` — запрещён.
+/// На что можно ПОДПИСАТЬСЯ: только свои пользовательские инбоксы и эфемерные
+/// typing/presence. NATS reply inbox создаёт и обслуживает только gateway.
 fn allowed_sub(user: &str, subject: &str) -> bool {
     subject == msg_inbox(user)
         || subject == call_inbox(user)
-        || subject.starts_with("_INBOX.")
         || subject.starts_with("msg.typing.")
         || subject.starts_with("presence.")
 }
@@ -434,17 +433,27 @@ mod tests {
     fn sub_allows_only_own_inboxes() {
         assert!(allowed_sub("alice@local", "msg.user.alice@local"));
         assert!(allowed_sub("alice@local", "call.user.alice@local"));
-        assert!(allowed_sub("alice@local", "_INBOX.abc123"));
         assert!(allowed_sub("alice@local", "msg.typing.999"));
         assert!(allowed_sub("alice@local", "presence.999"));
     }
 
     #[test]
-    fn sub_rejects_other_users_inbox() {
-        assert!(!allowed_sub("alice@local", "msg.user.bob@local"));
-        assert!(!allowed_sub("alice@local", "call.user.bob@local"));
-        assert!(!allowed_sub("alice@local", "msg.>"));
-        assert!(!allowed_sub("alice@local", "msg.sync.response"));
+    fn sub_rejects_mallory_wildcards_and_private_inboxes() {
+        for subject in [
+            ">",
+            "*",
+            "_INBOX.>",
+            "_INBOX.abc123",
+            "msg.user.>",
+            "msg.user.*",
+            "msg.user.bob@local",
+            "call.user.*",
+            "call.user.bob@local",
+            "msg.>",
+            "msg.sync.response",
+        ] {
+            assert!(!allowed_sub("alice@local", subject), "allowed {subject}");
+        }
     }
 
     #[test]
