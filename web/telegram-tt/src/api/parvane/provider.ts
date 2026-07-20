@@ -628,7 +628,10 @@ async function sendGif(chat: ApiChat, gif: ApiVideo) {
   const blob = cached?.blob || (gif.blobUrl ? await fetch(gif.blobUrl).then((r) => r.blob()) : undefined);
   if (!blob) return;
 
-  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `${gif.id}.webm`, 'video/webm', true);
+  const { fileId, mediaKeys } = await uploadBlobToCloud(blob, `${gif.id}.webm`, 'video/webm', {
+    encrypt: true,
+    recipients: getCloudRecipients(toAddress),
+  });
   const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
 
   const wireContent: Record<string, unknown> = {
@@ -797,7 +800,10 @@ async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
   const ext = mime === 'video/webm' ? 'webm' : 'png';
 
   const { fileId, mediaKeys } = await uploadBlobToCloud(
-    blob, `sticker-${sticker.id}.${ext}`, mime, true,
+    blob,
+    `sticker-${sticker.id}.${ext}`,
+    mime,
+    { encrypt: true, recipients: getCloudRecipients(toAddress) },
   );
   const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
 
@@ -1542,7 +1548,10 @@ const methods = {
       try {
         const blob: Blob = attachment.blob ?? await fetch(attachment.blobUrl).then((r) => r.blob());
         const { fileId, size, mediaKeys } = await uploadBlobToCloud(
-          blob, attachment.filename, attachment.mimeType, shouldEncryptMedia,
+          blob,
+          attachment.filename,
+          attachment.mimeType,
+          { encrypt: shouldEncryptMedia, recipients: getCloudRecipients(toAddress) },
         );
         const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
         if (isPhotoAttachment(attachment)) {
@@ -2250,7 +2259,12 @@ const methods = {
 
   async uploadProfilePhoto(file: File) {
     if (!connection) return undefined;
-    const { fileId } = await uploadBlobToCloud(file, file.name || 'avatar.jpg', file.type || 'image/jpeg');
+    const { fileId } = await uploadBlobToCloud(
+      file,
+      file.name || 'avatar.jpg',
+      file.type || 'image/jpeg',
+      { publicAccess: true },
+    );
     await connection.request(TOPIC_IDENTITY_SETAVATAR, JSON.stringify({ token, file_id: fileId }));
     store.setAvatar(store.self, fileId);
     mediaCacheByFileId.set(fileId, Promise.resolve({ blob: file, mimeType: file.type || 'image/jpeg' }));
@@ -2327,7 +2341,26 @@ function decodeBase64(data: string) {
   return bytes;
 }
 
-async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string, encrypt = false) {
+type CloudUploadOptions = {
+  encrypt?: boolean;
+  recipients?: string[];
+  publicAccess?: boolean;
+};
+
+function getCloudRecipients(toAddress: string) {
+  const groupInfo = store.getGroupInfo(toAddress);
+  if (!groupInfo) return toAddress === store.self ? [] : [toAddress];
+  return getActiveGroupMemberAddresses(groupInfo.members)
+    .filter((address) => address !== store.self);
+}
+
+async function uploadBlobToCloud(
+  blob: Blob,
+  filename: string,
+  mimeType: string,
+  options: CloudUploadOptions = {},
+) {
+  const { encrypt = false, recipients = [], publicAccess = false } = options;
   const fileId = crypto.randomUUID();
   let bytes: Uint8Array = new Uint8Array(await blob.arrayBuffer());
   let mediaKeys: { keyB64: string; nonceB64: string } | undefined;
@@ -2358,6 +2391,8 @@ async function uploadBlobToCloud(blob: Blob, filename: string, mimeType: string,
     total_chunks: totalChunks,
     size_bytes: bytes.length,
     mime_type: cloudMime,
+    recipients,
+    public_access: publicAccess,
   });
   const raw = await connection!.request(TOPIC_FILE_UPLOAD_COMPLETE, JSON.stringify(completeEvent), MEDIA_TIMEOUT_MS);
   const resp = JSON.parse(raw) as { ok: boolean; error?: string };

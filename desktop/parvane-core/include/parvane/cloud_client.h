@@ -28,6 +28,8 @@ public:
     std::string upload(const std::string &from, const std::string &token,
                        const std::string &filename, const std::string &mime,
                        const std::string &bytes,
+                       const std::vector<std::string> &recipients = {},
+                       bool publicAccess = false,
                        std::size_t chunkSize = 256 * 1024, int timeoutMs = 5000);
 
     // Результат скачивания: собранные байты + метаданные.

@@ -77,8 +77,9 @@ std::string base64Decode(const std::string &in) {
 
 std::string CloudClient::upload(const std::string &from, const std::string &token,
                                 const std::string &filename, const std::string &mime,
-                                const std::string &bytes, std::size_t chunkSize,
-                                int timeoutMs) {
+                                const std::string &bytes,
+                                const std::vector<std::string> &recipients,
+                                bool publicAccess, std::size_t chunkSize, int timeoutMs) {
     if (chunkSize == 0) chunkSize = 256 * 1024;
     const std::string fileId = newUuidV7();
 
@@ -116,6 +117,8 @@ std::string CloudClient::upload(const std::string &from, const std::string &toke
     comp.total_chunks = static_cast<std::uint32_t>(total);
     comp.size_bytes = bytes.size();
     comp.mime_type = mime;
+    comp.recipients = recipients;
+    comp.public_access = publicAccess;
 
     const json ev = makeEvent(newUuidV7(), from, nowUnix(), token, comp.toJson());
     const std::string raw = _t.request(topics::FileUploadComplete, ev.dump(), timeoutMs);
