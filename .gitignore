@@ -9,8 +9,11 @@
 # Конфиги окружения
 .env
 
-# Claude Code local artifacts
+# Local workspace metadata
+.agents/
+.codex/
 .claude/
+AGENTS.md
 CLAUDE.md
 
 # Плановые/стратегические доки — локальные, не для публичного репо
