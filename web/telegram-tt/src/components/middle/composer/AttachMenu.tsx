@@ -3,7 +3,6 @@ import {
   useMemo,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../global';
-import { callApi } from '../../../api/gramjs';
 
 import type { ApiAttachMenuPeerType, ApiFormattedText, ApiMessage } from '../../../api/types';
 import type { GlobalState } from '../../../global/types';
@@ -24,6 +23,7 @@ import buildClassName from '../../../util/buildClassName';
 import { getDebugLogs } from '../../../util/debugConsole';
 import { validateFiles } from '../../../util/files';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
+import { callApi } from '../../../api/gramjs';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';

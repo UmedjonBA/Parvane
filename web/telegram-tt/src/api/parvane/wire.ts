@@ -16,8 +16,7 @@ export type WireWebPage = {
 };
 
 export type WireMessageContent = {
-  kind: 'text' | 'voice' | 'video_note' | 'photo' | 'video' | 'file'
-    | 'encrypted' | 'group_encrypted' | string;
+  kind: string;
   text?: string;
   entities?: WireTextEntity[];
   webpage?: WireWebPage;

@@ -56,7 +56,7 @@ addActionHandler('leaveGroupCall', async (global, actions, payload): Promise<voi
   await callApi('leaveGroupCall', {
     call: groupCall, isPageUnload, source,
   });
-  await callApi('abortRequestGroup', 'call');
+  callApi('abortRequestGroup', 'call');
 
   if (shouldDiscard) {
     await callApi('discardGroupCall', {
@@ -275,7 +275,7 @@ addActionHandler('connectToActivePhoneCall', async (global, actions): Promise<vo
 
   if (!dhConfig) return;
 
-  await callApi('createPhoneCallState', {
+  callApi('createPhoneCallState', {
     isOutgoing: true,
     shouldUseSctp: !phoneCall.customParameters?.network_signaling_nosctp,
   });
@@ -297,12 +297,12 @@ addActionHandler('acceptCall', async (global): Promise<void> => {
   const dhConfig = await callApi('fetchDhConfig');
   if (!dhConfig) return;
 
-  await callApi('createPhoneCallState', {
+  callApi('createPhoneCallState', {
     isOutgoing: false,
     shouldUseSctp: !phoneCall.customParameters?.network_signaling_nosctp,
   });
 
-  const gB = await callApi('acceptPhoneCall', dhConfig);
+  const gB = callApi('acceptPhoneCall', dhConfig);
   await callApi('acceptCall', { call: phoneCall, gB });
 });
 
@@ -321,7 +321,7 @@ addActionHandler('sendSignalingData', (global, actions, payload): ActionReturnTy
       }
 
       await callApi('sendSignalingData', { data: encodedData, call: phoneCall });
-      const pendingPackets = await callApi('drainPhoneCallSignalingData');
+      const pendingPackets = callApi('drainPhoneCallSignalingData');
       if (!pendingPackets) return;
 
       for (const data of pendingPackets) {

@@ -9,7 +9,6 @@
 
 import Olm from '@matrix-org/olm';
 // Vite отдаёт путь к wasm-файлу как URL
-// eslint-disable-next-line import/no-unresolved
 import olmWasmPath from '@matrix-org/olm/olm.wasm?url';
 
 const PICKLE_KEY = 'parvane-web-pickle';
@@ -123,7 +122,7 @@ export class E2eEngine {
   // приводил к рассинхрону OTK (BAD_MESSAGE_KEY_ID у получателя). Ключей на
   // аккаунт (fallback + 20 one-time) хватает; израсходование one-time не делает
   // сессию невозможной (X3DH-фолбэк на fallback-ключ).
-  buildPrekeysPayload(token: string): unknown | undefined {
+  buildPrekeysPayload(token: string): Record<string, unknown> | undefined {
     if (localStorage.getItem(this.storageKey('published'))) return undefined;
 
     this.account.generate_fallback_key();

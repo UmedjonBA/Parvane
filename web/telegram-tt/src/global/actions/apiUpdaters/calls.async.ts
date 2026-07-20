@@ -230,7 +230,7 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
 
             global = getGlobal();
             if (global.phoneCall?.id === call.id) {
-              await callApi('setPhoneCallSctpEnabled', !customParameters.network_signaling_nosctp);
+              callApi('setPhoneCallSctpEnabled', !customParameters.network_signaling_nosctp);
             }
 
             if (isOutgoing) {
@@ -238,7 +238,7 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
                 throw new Error('Missing phone call key fingerprint');
               }
 
-              await callApi('verifyPhoneCallKeyFingerprint', {
+              callApi('verifyPhoneCallKeyFingerprint', {
                 expectedKeyFingerprint: call.keyFingerprint,
               });
             }
@@ -398,7 +398,7 @@ async function processPhoneCallSignalingData(queued: QueuedPhoneCallSignalingDat
   let packetCount = 0;
   if (activeCall) {
     try {
-      const packets = await callApi('drainPhoneCallSignalingData');
+      const packets = callApi('drainPhoneCallSignalingData');
       packetCount = packets?.length || 0;
       if (packets) {
         for (const packetData of packets) {
