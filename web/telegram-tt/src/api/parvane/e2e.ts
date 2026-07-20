@@ -88,6 +88,8 @@ export class E2eEngine {
 
   identityKey = '';
 
+  signingKey = '';
+
   static async create(self: string) {
     if (!isOlmReady) {
       // Emscripten-сборка olm читает глобаль OLM_OPTIONS и падает без неё
@@ -130,7 +132,7 @@ export class E2eEngine {
     this.pickleKey = pickleKey;
     this.account = new Olm.Account();
     this.account.unpickle(pickleKey, state.account);
-    this.identityKey = (JSON.parse(this.account.identity_keys()) as { curve25519: string }).curve25519;
+    this.loadIdentityKeys();
 
     Object.entries(state.sessions || {}).forEach(([identity, pickle]) => {
       const session = new Olm.Session();
@@ -162,7 +164,7 @@ export class E2eEngine {
     if (!accountPickle) {
       this.account = new Olm.Account();
       this.account.create();
-      this.identityKey = (JSON.parse(this.account.identity_keys()) as { curve25519: string }).curve25519;
+      this.loadIdentityKeys();
       E2eEngine.clearLegacyState(this.self);
       return;
     }
@@ -289,6 +291,22 @@ export class E2eEngine {
     };
   }
 
+  signCallData(data: string) {
+    return this.account.sign(data);
+  }
+
+  verifyCallData(publicKey: string, data: string, signature: string) {
+    const utility = new Olm.Utility();
+    try {
+      utility.ed25519_verify(stripBase64Padding(publicKey), data, stripBase64Padding(signature));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      utility.free();
+    }
+  }
+
   getCachedInner(uuid: string): StoredInner | undefined {
     return this.decCache[uuid];
   }
@@ -362,6 +380,12 @@ export class E2eEngine {
     if (this.identityByContact[contact] === identity) return;
     this.identityByContact[contact] = identity;
     this.persistContacts();
+  }
+
+  private loadIdentityKeys() {
+    const keys = JSON.parse(this.account.identity_keys()) as { curve25519: string; ed25519: string };
+    this.identityKey = keys.curve25519;
+    this.signingKey = keys.ed25519;
   }
 
   // ── Megolm (группы) ──────────────────────────────────────────────────────
@@ -455,6 +479,10 @@ export class E2eEngine {
       return undefined;
     }
   }
+}
+
+function stripBase64Padding(value: string) {
+  return value.replace(/=+$/, '');
 }
 
 function randomSecret() {

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_nats::Client;
+use base64::{engine::general_purpose::{STANDARD as B64, STANDARD_NO_PAD as B64_NO_PAD}, Engine};
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
@@ -263,6 +264,11 @@ async fn handle_setavatar(
 
 // Записать публичный ключ пользователя (чистая функция — для тестов).
 async fn store_pubkey(pool: &SqlitePool, username: &str, pubkey: &str) -> Result<()> {
+    let decoded = B64.decode(pubkey).or_else(|_| B64_NO_PAD.decode(pubkey))
+        .context("pubkey должен быть base64")?;
+    if decoded.len() != 32 {
+        anyhow::bail!("pubkey должен быть Ed25519-ключом длиной 32 байта");
+    }
     sqlx::query("UPDATE users SET pubkey = ? WHERE username = ?")
         .bind(pubkey)
         .bind(username)
@@ -827,7 +833,8 @@ mod tests {
             .unwrap();
         assert_eq!(k0, "", "новый пользователь — без pubkey");
         // Регистрируем ключ.
-        store_pubkey(&pool, "alice@local", "BASE64KEY==").await.unwrap();
+        let key = B64.encode([1_u8; 32]);
+        store_pubkey(&pool, "alice@local", &key).await.unwrap();
         // Читаем тем же SELECT, что использует resolve (display_name, avatar, pubkey).
         let row: (String, String, String) = sqlx::query_as(
             "SELECT display_name, avatar_file_id, pubkey FROM users WHERE username = ?",
@@ -836,7 +843,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.2, "BASE64KEY==", "resolve-путь отдаёт зарегистрированный ключ");
+        assert_eq!(row.2, key, "resolve-путь отдаёт зарегистрированный ключ");
     }
 
     #[tokio::test]
@@ -844,14 +851,16 @@ mod tests {
         // Смена устройства/ключа — новый заменяет старый.
         let pool = test_pool().await;
         insert_user(&pool, "bob@local").await;
-        store_pubkey(&pool, "bob@local", "KEY1").await.unwrap();
-        store_pubkey(&pool, "bob@local", "KEY2").await.unwrap();
+        let key1 = B64.encode([1_u8; 32]);
+        let key2 = B64_NO_PAD.encode([2_u8; 32]);
+        store_pubkey(&pool, "bob@local", &key1).await.unwrap();
+        store_pubkey(&pool, "bob@local", &key2).await.unwrap();
         let (k,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
             .bind("bob@local")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(k, "KEY2");
+        assert_eq!(k, key2);
     }
 
     // ── регистрация отделена от логина ──
@@ -973,13 +982,25 @@ mod tests {
         let pool = test_pool().await;
         insert_user(&pool, "alice@local").await;
         insert_user(&pool, "bob@local").await;
-        store_pubkey(&pool, "alice@local", "ALICEKEY").await.unwrap();
+        let alice_key = B64.encode([7_u8; 32]);
+        store_pubkey(&pool, "alice@local", &alice_key).await.unwrap();
         // ключ bob не задан — остаётся пустым, ключ alice не протёк
         let (ka,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
             .bind("alice@local").fetch_one(&pool).await.unwrap();
         let (kb,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
             .bind("bob@local").fetch_one(&pool).await.unwrap();
-        assert_eq!(ka, "ALICEKEY");
+        assert_eq!(ka, alice_key);
         assert_eq!(kb, "", "ключ bob не задан → пусто");
+    }
+
+    #[tokio::test]
+    async fn pubkey_rejects_non_ed25519_values() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+
+        assert!(store_pubkey(&pool, "alice@local", "not-a-key").await.is_err());
+        let (stored,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+            .bind("alice@local").fetch_one(&pool).await.unwrap();
+        assert!(stored.is_empty());
     }
 }

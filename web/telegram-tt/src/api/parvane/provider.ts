@@ -67,6 +67,7 @@ import {
   TOPIC_IDENTITY_RESOLVE,
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
+  TOPIC_IDENTITY_SETKEY,
   TOPIC_IDENTITY_SETNAME,
   TOPIC_MSG_ACK,
   TOPIC_MSG_DELETE,
@@ -100,6 +101,7 @@ let syncPromise: Promise<void> | undefined;
 let syncTimer: number | undefined;
 let presenceTimer: number | undefined;
 let e2e: E2eEngine | undefined;
+let isCallIdentityReady = false;
 const polls = new PollStore();
 
 function registerGroupInfo(info: WireGroupInfo) {
@@ -153,6 +155,7 @@ const callListeners = {
   onRemoteStream: (_s: MediaStream) => {},
   onLocalStream: (_s: MediaStream) => {},
   onIncoming: (_from: string, _callId: string, _media: CallMedia) => {},
+  onSas: (_sas?: string) => {},
 };
 const typingClearTimers = new Map<string, number>();
 // Курсоры дельта-синка (аналог PumpReceive в десктоп-форке): uuid v7
@@ -212,6 +215,7 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
 }
 
 async function connectAndLogin(user: string, password: string) {
+  teardownCallEngine();
   connection?.close();
   connection = new GatewayConnection();
   await connection.connect(getGatewayUrl());
@@ -233,6 +237,7 @@ async function connectAndLogin(user: string, password: string) {
   readOutboxMaxByChatId.clear();
   reportedReadUuids.clear();
 
+  isCallIdentityReady = false;
   try {
     e2e = await E2eEngine.create(user);
     const prekeys = e2e.buildPrekeysPayload(token);
@@ -247,13 +252,29 @@ async function connectAndLogin(user: string, password: string) {
     e2e = undefined;
     logDebug(`E2E недоступен: ${String(err)}`);
   }
+  if (e2e) {
+    try {
+      const setKeyRaw = await connection.request(TOPIC_IDENTITY_SETKEY, JSON.stringify({
+        token,
+        pubkey: e2e.signingKey,
+      }));
+      const setKeyResponse = JSON.parse(setKeyRaw) as { ok?: boolean; error?: string };
+      if (!setKeyResponse.ok) throw new Error(setKeyResponse.error || 'Call identity key registration failed');
+      isCallIdentityReady = true;
+    } catch (err) {
+      logDebug(`Ключ аутентификации звонков не зарегистрирован: ${String(err)}`);
+    }
+  }
 
   connection.subscribe(buildMsgInboxTopic(user), handleInboxFrame);
   connection.subscribe(`msg.typing.${selfId()}`, handleTypingFrame);
   connection.subscribe('presence.*', handlePresenceFrame);
   connection.subscribe(buildCallInboxTopic(user), handleCallFrame);
   setupCallEngine();
+  const activeConnection = connection;
   connection.onClose = () => {
+    if (connection !== activeConnection) return;
+    teardownCallEngine();
     sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
   };
 
@@ -286,14 +307,18 @@ function setupCallEngine() {
   const w = window as unknown as {
     parvaneCall?: {
       state: string; incoming?: { from: string; callId: string; media: string };
-      remoteStream?: MediaStream; peerName?: string;
+      remoteStream?: MediaStream; peerName?: string; sas?: string; hasSecurityError?: boolean;
     };
   };
   w.parvaneCall = { state: 'ended' };
   const emit = () => window.dispatchEvent(new CustomEvent('parvane-call'));
   callListeners.onState = (state) => {
     w.parvaneCall!.state = state;
-    if (state === 'ended') w.parvaneCall!.incoming = undefined;
+    w.parvaneCall!.hasSecurityError = state === 'security_failed';
+    if (state === 'ended' || state === 'security_failed') {
+      w.parvaneCall!.incoming = undefined;
+      w.parvaneCall!.remoteStream = undefined;
+    }
     emit();
   };
   callListeners.onRemoteStream = (stream) => {
@@ -306,18 +331,47 @@ function setupCallEngine() {
     w.parvaneCall!.peerName = store.getDisplayName(from);
     emit();
   };
+  callListeners.onSas = (sas) => {
+    w.parvaneCall!.sas = sas;
+    emit();
+  };
+
+  if (!e2e || !isCallIdentityReady) {
+    callEngine = undefined;
+    return;
+  }
+  const callIdentity = e2e;
 
   callEngine = new CallEngine({
     sendSignal: (to, signal) => {
       const envelope = buildWireEvent(store.self, token, { to, signal });
       connection!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
     },
+    getPeerSigningKey: fetchCallSigningKey,
+    sign: (data) => callIdentity.signCallData(data),
+    verify: (publicKey, data, signature) => callIdentity.verifyCallData(publicKey, data, signature),
     onState: (state) => callListeners.onState(state),
     onRemoteStream: (stream) => callListeners.onRemoteStream(stream),
     onIncoming: (from, callId, media) => {
       callListeners.onIncoming(from, callId, media);
     },
+    onSas: (sas) => callListeners.onSas(sas),
   });
+}
+
+function teardownCallEngine() {
+  try {
+    callEngine?.hangUp();
+  } catch (err) {
+    logDebug(`Ошибка завершения звонка: ${String(err)}`);
+  }
+  callEngine = undefined;
+}
+
+async function fetchCallSigningKey(peer: string) {
+  const raw = await connection!.request(TOPIC_IDENTITY_RESOLVE, JSON.stringify({ usernames: [peer] }));
+  const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
+  return users.find(({ username }) => username === peer)?.pubkey;
 }
 
 function handleCallFrame(payload: string) {
@@ -330,7 +384,9 @@ function handleCallFrame(payload: string) {
   }
   const signal = event.payload;
   if (!signal?.type || !callEngine) return;
-  void callEngine.handleSignal(event.from, signal);
+  void callEngine.handleSignal(event.from, signal).catch((err) => {
+    logDebug(`Ошибка сигналинга звонка: ${String(err)}`);
+  });
 }
 
 function handleTypingFrame(payload: string) {
@@ -2292,10 +2348,12 @@ const methods = {
   async destroy(noSessionClear?: boolean) {
     const user = store.self || pendingLoginAddress || readLoginAddress();
     const currentE2e = e2e;
+    teardownCallEngine();
     connection?.close();
     connection = undefined;
     token = '';
     e2e = undefined;
+    isCallIdentityReady = false;
     window.clearInterval(syncTimer);
     window.clearInterval(presenceTimer);
     mediaCacheByFileId.clear();

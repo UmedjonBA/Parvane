@@ -51,6 +51,18 @@
   color: var(--color-text-secondary, #aaa);
 }
 
+.securityError {
+  max-width: 18rem;
+  color: var(--color-error, #e0492b);
+  text-align: center;
+}
+
+.sas {
+  cursor: help;
+  font-size: 1.75rem;
+  letter-spacing: 0.25rem;
+}
+
 .actions {
   display: flex;
   gap: 2rem;

@@ -211,6 +211,7 @@ export interface LangPair {
   'CallStatusIncoming': undefined;
   'CallStatusWaiting': undefined;
   'CallStatusExchanging': undefined;
+  'ParvaneCallSecurityError': undefined;
   'CallMuteAudio': undefined;
   'CallUnmuteAudio': undefined;
   'CallStopVideo': undefined;

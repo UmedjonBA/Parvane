@@ -3,6 +3,8 @@ import { memo, useEffect, useRef, useState } from '../../lib/teact/teact';
 import buildClassName from '../../util/buildClassName';
 import { callApi } from '../../api/gramjs';
 
+import useOldLang from '../../hooks/useOldLang';
+
 import Button from '../ui/Button';
 
 import styles from './ParvaneCallOverlay.module.scss';
@@ -12,6 +14,8 @@ type CallInfo = {
   peerName?: string;
   incoming?: { from: string; callId: string; media: string };
   remoteStream?: MediaStream;
+  sas?: string;
+  hasSecurityError?: boolean;
 };
 
 function getWinCall(): CallInfo | undefined {
@@ -29,6 +33,7 @@ const ParvaneCallOverlay = () => {
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>();
   const activeSinceRef = useRef<number>();
+  const lang = useOldLang();
 
   useEffect(() => {
     const onCall = () => setCall({ ...getWinCall() } as CallInfo);
@@ -64,7 +69,7 @@ const ParvaneCallOverlay = () => {
   if (!isVisible) return undefined;
 
   const isIncoming = state === 'incoming';
-  const peerName = call?.peerName || call?.incoming?.from || 'Звонок';
+  const peerName = call?.peerName || call?.incoming?.from || lang('Call');
 
   // parvane* — кастомные методы провайдера, вне типизированного Methods
   const anyCallApi = callApi as unknown as (name: string) => void;
@@ -72,24 +77,45 @@ const ParvaneCallOverlay = () => {
   const handleHangup = () => anyCallApi('parvaneHangUp');
 
   let statusText = '';
-  if (state === 'requesting' || state === 'ringing') statusText = 'Вызов…';
-  else if (state === 'incoming') statusText = 'Входящий звонок';
-  else if (state === 'connecting') statusText = 'Соединение…';
+  if (state === 'requesting') statusText = lang('CallStatusRequesting');
+  else if (state === 'ringing') statusText = lang('CallStatusRinging');
+  else if (state === 'incoming') statusText = lang('CallStatusIncoming');
+  else if (state === 'connecting') statusText = lang('CallStatusExchanging');
   else if (state === 'active') statusText = formatDuration(duration);
+  else if (state === 'security_failed') statusText = lang('ParvaneCallSecurityError');
 
   return (
     <div className={styles.overlay}>
       <div className={styles.card}>
         <div className={styles.avatar}>{peerName.charAt(0).toUpperCase()}</div>
         <div className={styles.name}>{peerName}</div>
-        <div className={styles.status}>{statusText}</div>
+        <div className={buildClassName(styles.status, call?.hasSecurityError && styles.securityError)}>
+          {statusText}
+        </div>
+        {call?.sas && (
+          <div className={styles.sas} title={lang('CallEmojiKeyTooltip', peerName)}>
+            {call.sas}
+          </div>
+        )}
         <div className={styles.actions}>
           {isIncoming && (
-            <Button round color="translucent" className={styles.accept} onClick={handleAccept} ariaLabel="Accept">
+            <Button
+              round
+              color="translucent"
+              className={styles.accept}
+              onClick={handleAccept}
+              ariaLabel={lang('CallAccept')}
+            >
               <i className={buildClassName(styles.icon, 'icon icon-phone')} />
             </Button>
           )}
-          <Button round color="translucent" className={styles.hangup} onClick={handleHangup} ariaLabel="Hang up">
+          <Button
+            round
+            color="translucent"
+            className={styles.hangup}
+            onClick={handleHangup}
+            ariaLabel={lang('CallEndCall')}
+          >
             <i className={buildClassName(styles.icon, 'icon icon-phone-discard')} />
           </Button>
         </div>

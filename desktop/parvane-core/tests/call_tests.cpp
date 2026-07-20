@@ -17,6 +17,7 @@
 
 #include "parvane/call.h"
 #include "parvane/call_client.h"
+#include "parvane/crypto.h"
 #include "parvane/events.h"
 #include "parvane/ids.h"
 #include "parvane/topics.h"
@@ -144,6 +145,8 @@ int main() {
     const std::string bob = "bob@local";
     const std::string jwtAlice = issue(tr, alice);
     const std::string jwtBob = issue(tr, bob);
+    const auto keyAlice = parvane::crypto::SigningKey::generate();
+    const auto keyBob = parvane::crypto::SigningKey::generate();
     check(!jwtAlice.empty() && !jwtBob.empty(), "issue alice+bob токены");
 
     CallClient cc(tr);
@@ -158,7 +161,8 @@ int main() {
     sleepMs(150); // дать подписке встать
 
     const std::string callId = parvane::newUuidV7();
-    cc.invite(alice, bob, jwtAlice, callId, "audio", "OFFER-SDP");
+    cc.invite(alice, bob, jwtAlice, callId, "audio", "OFFER-SDP",
+              keyAlice.sign(parvane::callSignedData(callId, "OFFER-SDP")));
     sleepMs(400);
     {
         std::lock_guard<std::mutex> lk(mu);
@@ -182,7 +186,8 @@ int main() {
     }
 
     // B3. answer → hangup ⇒ ended, ended_at проставлен.
-    cc.answer(bob, alice, jwtBob, callId, "ANSWER-SDP");
+    cc.answer(bob, alice, jwtBob, callId, "ANSWER-SDP",
+              keyBob.sign(parvane::callSignedData(callId, "ANSWER-SDP")));
     sleepMs(250);
     cc.hangup(alice, bob, jwtAlice, callId);
     sleepMs(300);
@@ -198,7 +203,8 @@ int main() {
     // B4. reject-поток: новый звонок, bob отклоняет ⇒ rejected.
     {
         const std::string cid = parvane::newUuidV7();
-        cc.invite(alice, bob, jwtAlice, cid, "video", "OFF2");
+        cc.invite(alice, bob, jwtAlice, cid, "video", "OFF2",
+                  keyAlice.sign(parvane::callSignedData(cid, "OFF2")));
         sleepMs(250);
         cc.reject(bob, alice, jwtBob, cid, std::string("занят"));
         sleepMs(300);
