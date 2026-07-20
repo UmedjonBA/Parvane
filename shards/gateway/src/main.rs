@@ -480,6 +480,19 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         .ok_or_else(|| anyhow!("payload должен быть JSON-объектом"))?;
 
     if EVENT_SUBJECTS.contains(&subject) {
+        if subject == "msg.chat.send" {
+            let kind = object
+                .get("payload")
+                .and_then(|payload| payload.get("content"))
+                .and_then(|content| content.get("kind"))
+                .and_then(Value::as_str);
+            if !matches!(kind, Some("encrypted" | "group_encrypted")) {
+                return Err(anyhow!(
+                    "plaintext msg.chat.send запрещён: E2E-сообщение не отправлено"
+                ));
+            }
+        }
+
         // В sealed 1-на-1 реальный sender находится внутри Olm ciphertext. Пустой
         // `from` сохраняем только для этого wire-варианта; plaintext, group и
         // прочие события получают явного actor из авторизованной сессии.
@@ -662,7 +675,15 @@ mod tests {
             "from": "victim@local",
             "ts": 1,
             "token": "victim-token",
-            "payload": {"to": "bob@local", "content": {"kind": "text", "text": "hi"}}
+            "payload": {
+                "to": "group-id",
+                "content": {
+                    "kind": "group_encrypted",
+                    "ciphertext": "ciphertext",
+                    "group": "group-id",
+                    "sender_identity": "curve25519"
+                }
+            }
         })
         .to_string();
         let bound =
@@ -717,11 +738,32 @@ mod tests {
         assert_eq!(direct["from"], "");
         assert_eq!(direct["token"], "fresh");
 
-        for payload in [event("bob@local", "text"), event("group-uuid", "encrypted")] {
-            let bound =
-                bind_client_payload("alice@local", "fresh", "msg.chat.send", &payload).unwrap();
-            let bound: Value = serde_json::from_str(&bound).unwrap();
-            assert_eq!(bound["from"], "alice@local");
+        let group_target = event("group-uuid", "encrypted");
+        let bound =
+            bind_client_payload("alice@local", "fresh", "msg.chat.send", &group_target).unwrap();
+        let bound: Value = serde_json::from_str(&bound).unwrap();
+        assert_eq!(bound["from"], "alice@local");
+    }
+
+    #[test]
+    fn plaintext_messages_are_rejected_fail_closed() {
+        for kind in ["text", "photo", "file", "poll"] {
+            let payload = json!({
+                "id": "00000000-0000-7000-8000-000000000003",
+                "from": "alice@local",
+                "ts": 1,
+                "token": "fresh",
+                "payload": {"to": "bob@local", "content": {"kind": kind, "text": "secret"}}
+            })
+            .to_string();
+            let error = bind_client_payload(
+                "alice@local",
+                "fresh",
+                "msg.chat.send",
+                &payload,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("plaintext"));
         }
     }
 }
