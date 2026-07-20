@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod nats;
+pub mod topic_contract;
 
 // ── топики ───────────────────────────────────────────────────────────────────
 

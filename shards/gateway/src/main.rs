@@ -20,6 +20,10 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{info, warn};
 
 use parvane_types::{
+    topic_contract::{
+        GATEWAY_ALLOWED_PUBLISH, GATEWAY_ALLOWED_REQUEST, GATEWAY_EVENT_SUBJECTS,
+        GATEWAY_TOKEN_REQUEST_SUBJECTS,
+    },
     topics::{call_inbox, msg_inbox, IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_VERIFY},
     VerifyRequest, VerifyResponse,
 };
@@ -396,43 +400,6 @@ fn err_frame(id: Option<&str>, msg: &str) -> String {
 
 // ── права (изоляция «людей») — чистые функции, покрыты тестами ────────────────
 
-const EVENT_SUBJECTS: &[&str] = &[
-    "msg.chat.send",
-    "msg.chat.read",
-    "msg.chat.edit",
-    "msg.chat.delete",
-    "msg.chat.react",
-    "msg.chat.pin",
-    "msg.chat.ack",
-    "msg.sync.request",
-    "call.signal",
-    "call.history.request",
-    "file.upload.chunk",
-    "file.upload.complete",
-    "file.download.request",
-    "file.list.request",
-];
-
-const TOKEN_REQUEST_SUBJECTS: &[&str] = &[
-    "identity.token.verify",
-    "identity.user.setname",
-    "identity.user.setavatar",
-    "identity.user.setkey",
-    "identity.prekeys.publish",
-    "identity.prekeys.fetch",
-    "group.create",
-    "group.addmember",
-    "group.removemember",
-    "group.setrole",
-    "group.list",
-    "group.info",
-    "group.ban",
-    "group.unban",
-    "group.mute",
-    "group.invite.create",
-    "group.join",
-];
-
 /// Web использует FNV-1a/32 по UTF-16 code units, затем снимает знаковый бит.
 /// Сохраняем этот id на wire, пока Web и desktop не перейдут на адресные topics.
 fn web_user_id(user: &str) -> String {
@@ -479,7 +446,7 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         .as_object_mut()
         .ok_or_else(|| anyhow!("payload должен быть JSON-объектом"))?;
 
-    if EVENT_SUBJECTS.contains(&subject) {
+    if GATEWAY_EVENT_SUBJECTS.contains(&subject) {
         if subject == "msg.chat.send" {
             let kind = object
                 .get("payload")
@@ -513,7 +480,7 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         if !sealed_direct {
             object.insert("from".into(), Value::String(user.to_string()));
         }
-    } else if TOKEN_REQUEST_SUBJECTS.contains(&subject) {
+    } else if GATEWAY_TOKEN_REQUEST_SUBJECTS.contains(&subject) {
         object.insert("token".into(), Value::String(token.to_string()));
     } else if subject.starts_with("msg.typing.") || subject.starts_with("presence.") {
         object.insert("from".into(), Value::String(user.to_string()));
@@ -533,56 +500,14 @@ fn allowed_sub(user: &str, subject: &str) -> bool {
 
 /// Что можно ПУБЛИКОВАТЬ (fire-and-forget).
 fn allowed_pub(user: &str, subject: &str) -> bool {
-    const OK: &[&str] = &[
-        "msg.chat.send",
-        "msg.chat.read",
-        "msg.chat.edit",
-        "msg.chat.delete",
-        "msg.chat.react",
-        "msg.chat.pin",
-        "msg.chat.ack",
-        "call.signal",
-        "file.upload.chunk",
-        "file.upload.complete",
-    ];
-    OK.contains(&subject)
+    GATEWAY_ALLOWED_PUBLISH.contains(&subject)
         || is_concrete_typing_subject(subject)
         || is_own_ephemeral_subject(user, "presence.", subject)
 }
 
 /// Что можно запросить (request / reqmany).
 fn allowed_req(_user: &str, subject: &str) -> bool {
-    const OK: &[&str] = &[
-        "identity.token.issue",
-        "identity.user.register",
-        "identity.token.verify",
-        "identity.user.search",
-        "identity.user.setname",
-        "identity.user.setavatar",
-        "identity.user.setkey",
-        "identity.user.resolve",
-        "identity.prekeys.publish",
-        "identity.prekeys.fetch",
-        "msg.sync.request",
-        // cloud: CloudClient грузит чанки и complete через request/reply (не pub).
-        "file.upload.chunk",
-        "file.upload.complete",
-        "file.download.request",
-        "file.list.request",
-        "group.create",
-        "group.addmember",
-        "group.removemember",
-        "group.setrole",
-        "group.list",
-        "group.info",
-        "group.ban",
-        "group.unban",
-        "group.mute",
-        "group.invite.create",
-        "group.join",
-        "call.history.request",
-    ];
-    OK.contains(&subject)
+    GATEWAY_ALLOWED_REQUEST.contains(&subject)
 }
 
 #[cfg(test)]

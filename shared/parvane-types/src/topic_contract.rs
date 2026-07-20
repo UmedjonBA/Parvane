@@ -1,0 +1,211 @@
+//! Единый контракт subjects между Rust-шардами, gateway и NATS ACL.
+//!
+//! Runtime-код gateway использует клиентские allowlist из этого модуля, а
+//! integration test `topic_acl_contract` сверяет эти списки, фактические
+//! подписки шардов и оба NATS-конфига. Поэтому новый subject нельзя добавить
+//! только в одном слое и незаметно получить отказ в production.
+
+use crate::topics::*;
+
+pub const REQUEST_INBOX: &str = "_INBOX.>";
+
+pub const IDENTITY_NATS_SUBSCRIBE: &[&str] = &[
+    IDENTITY_ISSUE,
+    IDENTITY_VERIFY,
+    IDENTITY_REGISTER,
+    IDENTITY_PREKEYS_PUBLISH,
+    IDENTITY_PREKEYS_FETCH,
+    IDENTITY_SEARCH,
+    IDENTITY_SETNAME,
+    IDENTITY_SETAVATAR,
+    IDENTITY_SETKEY,
+    IDENTITY_RESOLVE,
+];
+pub const IDENTITY_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
+
+pub const MESSENGER_NATS_SUBSCRIBE: &[&str] = &[
+    MSG_SEND,
+    MSG_ACK,
+    MSG_READ,
+    MSG_EDIT,
+    MSG_DELETE,
+    MSG_REACT,
+    MSG_PIN,
+    MSG_SYNC_REQUEST,
+    GROUP_CREATE,
+    GROUP_ADD_MEMBER,
+    GROUP_REMOVE_MEMBER,
+    GROUP_SET_ROLE,
+    GROUP_BAN,
+    GROUP_UNBAN,
+    GROUP_MUTE,
+    GROUP_INVITE_CREATE,
+    GROUP_JOIN,
+    GROUP_LIST,
+    GROUP_INFO,
+    REQUEST_INBOX,
+];
+pub const MESSENGER_NATS_PUBLISH: &[&str] = &["msg.user.>", IDENTITY_VERIFY, REQUEST_INBOX];
+
+pub const CLOUD_NATS_SUBSCRIBE: &[&str] = &[
+    FILE_UPLOAD_CHUNK,
+    FILE_UPLOAD_COMPLETE,
+    FILE_DOWNLOAD_REQUEST,
+    FILE_LIST_REQUEST,
+    REQUEST_INBOX,
+];
+pub const CLOUD_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+
+pub const CALL_NATS_SUBSCRIBE: &[&str] = &[CALL_SIGNAL, CALL_HISTORY_REQUEST, REQUEST_INBOX];
+pub const CALL_NATS_PUBLISH: &[&str] = &["call.user.>", IDENTITY_VERIFY, REQUEST_INBOX];
+
+pub const NOTES_NATS_SUBSCRIBE: &[&str] = &[
+    NOTE_CREATE,
+    NOTE_UPDATE,
+    NOTE_DELETE,
+    NOTE_SYNC_REQUEST,
+    REQUEST_INBOX,
+];
+pub const NOTES_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+
+pub const CALENDAR_NATS_SUBSCRIBE: &[&str] = &[
+    CAL_CREATE,
+    CAL_UPDATE,
+    CAL_DELETE,
+    CAL_SYNC_REQUEST,
+    REQUEST_INBOX,
+];
+pub const CALENDAR_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+
+/// Fire-and-forget subjects, доступные авторизованному клиенту через gateway.
+pub const GATEWAY_ALLOWED_PUBLISH: &[&str] = &[
+    MSG_SEND,
+    MSG_READ,
+    MSG_EDIT,
+    MSG_DELETE,
+    MSG_REACT,
+    MSG_PIN,
+    MSG_ACK,
+    CALL_SIGNAL,
+    FILE_UPLOAD_CHUNK,
+    FILE_UPLOAD_COMPLETE,
+];
+
+/// Request/reply subjects, доступные авторизованному клиенту через gateway.
+pub const GATEWAY_ALLOWED_REQUEST: &[&str] = &[
+    IDENTITY_ISSUE,
+    IDENTITY_REGISTER,
+    IDENTITY_VERIFY,
+    IDENTITY_SEARCH,
+    IDENTITY_SETNAME,
+    IDENTITY_SETAVATAR,
+    IDENTITY_SETKEY,
+    IDENTITY_RESOLVE,
+    IDENTITY_PREKEYS_PUBLISH,
+    IDENTITY_PREKEYS_FETCH,
+    MSG_SYNC_REQUEST,
+    FILE_UPLOAD_CHUNK,
+    FILE_UPLOAD_COMPLETE,
+    FILE_DOWNLOAD_REQUEST,
+    FILE_LIST_REQUEST,
+    GROUP_CREATE,
+    GROUP_ADD_MEMBER,
+    GROUP_REMOVE_MEMBER,
+    GROUP_SET_ROLE,
+    GROUP_LIST,
+    GROUP_INFO,
+    GROUP_BAN,
+    GROUP_UNBAN,
+    GROUP_MUTE,
+    GROUP_INVITE_CREATE,
+    GROUP_JOIN,
+    CALL_HISTORY_REQUEST,
+];
+
+/// Subjects с полями actor/token, которые gateway привязывает к сессии.
+pub const GATEWAY_EVENT_SUBJECTS: &[&str] = &[
+    MSG_SEND,
+    MSG_READ,
+    MSG_EDIT,
+    MSG_DELETE,
+    MSG_REACT,
+    MSG_PIN,
+    MSG_ACK,
+    MSG_SYNC_REQUEST,
+    CALL_SIGNAL,
+    CALL_HISTORY_REQUEST,
+    FILE_UPLOAD_CHUNK,
+    FILE_UPLOAD_COMPLETE,
+    FILE_DOWNLOAD_REQUEST,
+    FILE_LIST_REQUEST,
+];
+
+pub const GATEWAY_TOKEN_REQUEST_SUBJECTS: &[&str] = &[
+    IDENTITY_VERIFY,
+    IDENTITY_SETNAME,
+    IDENTITY_SETAVATAR,
+    IDENTITY_SETKEY,
+    IDENTITY_PREKEYS_PUBLISH,
+    IDENTITY_PREKEYS_FETCH,
+    GROUP_CREATE,
+    GROUP_ADD_MEMBER,
+    GROUP_REMOVE_MEMBER,
+    GROUP_SET_ROLE,
+    GROUP_LIST,
+    GROUP_INFO,
+    GROUP_BAN,
+    GROUP_UNBAN,
+    GROUP_MUTE,
+    GROUP_INVITE_CREATE,
+    GROUP_JOIN,
+];
+
+/// Минимальные bus-права доверенного gateway. Runtime allowlist выше остаётся
+/// уже этих прав и дополнительно изолирует конкретных пользователей.
+pub const GATEWAY_NATS_PUBLISH: &[&str] = &[
+    IDENTITY_ISSUE,
+    IDENTITY_VERIFY,
+    IDENTITY_REGISTER,
+    IDENTITY_SEARCH,
+    IDENTITY_SETNAME,
+    IDENTITY_SETAVATAR,
+    IDENTITY_SETKEY,
+    IDENTITY_RESOLVE,
+    IDENTITY_PREKEYS_PUBLISH,
+    IDENTITY_PREKEYS_FETCH,
+    MSG_SEND,
+    MSG_READ,
+    MSG_EDIT,
+    MSG_DELETE,
+    MSG_REACT,
+    MSG_PIN,
+    MSG_ACK,
+    MSG_SYNC_REQUEST,
+    FILE_UPLOAD_CHUNK,
+    FILE_UPLOAD_COMPLETE,
+    FILE_DOWNLOAD_REQUEST,
+    FILE_LIST_REQUEST,
+    CALL_SIGNAL,
+    CALL_HISTORY_REQUEST,
+    GROUP_CREATE,
+    GROUP_ADD_MEMBER,
+    GROUP_REMOVE_MEMBER,
+    GROUP_SET_ROLE,
+    GROUP_BAN,
+    GROUP_UNBAN,
+    GROUP_MUTE,
+    GROUP_INVITE_CREATE,
+    GROUP_JOIN,
+    GROUP_LIST,
+    GROUP_INFO,
+    "msg.typing.>",
+    "presence.>",
+];
+
+pub const GATEWAY_NATS_SUBSCRIBE: &[&str] = &[
+    "msg.user.>",
+    "call.user.>",
+    "msg.typing.>",
+    "presence.>",
+    REQUEST_INBOX,
+];

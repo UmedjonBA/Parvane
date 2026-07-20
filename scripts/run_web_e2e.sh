@@ -43,6 +43,8 @@ allocate_port() {
 IDENTITY_PASS="parvane-e2e-identity"
 MESSENGER_PASS="parvane-e2e-messenger"
 CLOUD_PASS="parvane-e2e-cloud"
+NOTES_PASS="parvane-e2e-notes"
+CALENDAR_PASS="parvane-e2e-calendar"
 CALL_PASS="parvane-e2e-call"
 GATEWAY_PASS="parvane-e2e-gateway"
 
@@ -132,6 +134,8 @@ env \
   PARVANE_IDENTITY_PASS="$IDENTITY_PASS" \
   PARVANE_MESSENGER_PASS="$MESSENGER_PASS" \
   PARVANE_CLOUD_PASS="$CLOUD_PASS" \
+  PARVANE_NOTES_PASS="$NOTES_PASS" \
+  PARVANE_CALENDAR_PASS="$CALENDAR_PASS" \
   PARVANE_CALL_PASS="$CALL_PASS" \
   PARVANE_GATEWAY_PASS="$GATEWAY_PASS" \
   nats-server -c "$ROOT/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
