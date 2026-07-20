@@ -20,6 +20,13 @@ import type {
 } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
+import {
+  clearLoginStorage,
+  consumeLegacyCredentials,
+  parseLoginCredentials,
+  readLoginAddress,
+  saveLoginAddress,
+} from './authStorage';
 import { decryptBlob, encryptBlob } from './blobcrypt';
 import { CallEngine } from './callengine';
 import { E2eEngine } from './e2e';
@@ -73,7 +80,6 @@ import {
   TOPIC_PREKEYS_PUBLISH,
 } from './wire';
 
-const CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_HASH_PREFIX = '#parvane=';
 const SYNC_TIMEOUT_MS = 15000;
 const DELTA_SYNC_INTERVAL_MS = 10000;
@@ -84,6 +90,7 @@ const UPLOAD_CHUNK_BYTES = 192 * 1024;
 const MEDIA_TIMEOUT_MS = 30000;
 
 let onUpdate: OnApiUpdate = () => undefined;
+let startupCredentials = consumeStartupCredentials();
 let connection: GatewayConnection | undefined;
 let store = new ParvaneStore();
 let token = '';
@@ -179,18 +186,27 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
   sendUpdate({ '@type': 'updateApiReady' });
   sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
 
-  const creds = readCreds();
+  const creds = startupCredentials;
+  startupCredentials = undefined;
   if (!creds) {
+    const savedAddress = readLoginAddress();
+    if (savedAddress) {
+      pendingLoginAddress = savedAddress;
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
+      return;
+    }
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
     return;
   }
 
   try {
     await connectAndLogin(creds.user, creds.password);
+    saveLoginAddress(creds.user);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[parvane] логин не удался:', err);
-    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+    pendingLoginAddress = creds.user;
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
     sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
   }
 }
@@ -221,6 +237,7 @@ async function connectAndLogin(user: string, password: string) {
     e2e = await E2eEngine.create(user);
     const prekeys = e2e.buildPrekeysPayload(token);
     if (prekeys) {
+      await e2e.flushStorage();
       await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
       logDebug('E2E готов, прекеи опубликованы');
     } else {
@@ -878,7 +895,7 @@ async function publishInner(toAddress: string, wireContent: Record<string, unkno
       getActiveGroupMemberAddresses(groupInfo.members),
     );
     const ciphertext = requireEncrypted(
-      engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
+      await engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
       `Group encryption failed for ${toAddress}.`,
     );
     connection!.publish(TOPIC_MSG_SEND, JSON.stringify({
@@ -1597,7 +1614,7 @@ const methods = {
           getActiveGroupMemberAddresses(groupInfo.members),
         );
         const ciphertext = requireEncrypted(
-          engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
+          await engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
           `Group encryption failed for ${toAddress}.`,
         );
         const ts = Math.floor(Date.now() / 1000);
@@ -2189,14 +2206,14 @@ const methods = {
   },
 
   async provideAuthPassword(password: string) {
-    const user = pendingLoginAddress || readCreds()?.user;
+    const user = pendingLoginAddress || readLoginAddress();
     if (!user) {
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
       return;
     }
     try {
       await connectAndLogin(user, password);
-      localStorage.setItem(CREDS_STORAGE_KEY, `${user}:${password}`);
+      saveLoginAddress(user);
     } catch (err) {
       logDebug(`логин отклонён: ${String(err)}`);
       sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorIncorrectPassword' } });
@@ -2258,13 +2275,29 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
-  destroy(noSessionClear?: boolean) {
+  async destroy(noSessionClear?: boolean) {
+    const user = store.self || pendingLoginAddress || readLoginAddress();
+    const currentE2e = e2e;
     connection?.close();
     connection = undefined;
+    token = '';
+    e2e = undefined;
+    window.clearInterval(syncTimer);
+    window.clearInterval(presenceTimer);
+    mediaCacheByFileId.clear();
     if (!noSessionClear) {
-      localStorage.removeItem(CREDS_STORAGE_KEY);
+      clearLoginStorage();
+      if (user) {
+        try {
+          await currentE2e?.flushStorage();
+        } catch {
+          // Logout всё равно обязан удалить повреждённое/недоступное хранилище.
+        }
+        clearLocalUserData(user);
+        await E2eEngine.clear(user);
+      }
     }
-    return Promise.resolve(undefined);
+    return undefined;
   },
 
   disconnect() {
@@ -2559,24 +2592,31 @@ function sendUpdate(update: ApiUpdate) {
   onUpdate(update);
 }
 
-// Хэш разбираем при загрузке модуля: telegram-tt сам парсит и чистит
-// location.hash в своём bootstrap'е раньше, чем дойдёт до initApi
-captureCredsFromHash();
-
-function captureCredsFromHash() {
+// Пароль из login-link живёт только в памяти до первого connectAndLogin.
+// Фрагмент удаляется из адресной строки до запуска UI.
+function captureCredentialsFromHash() {
   const { hash } = window.location;
-  if (!hash.startsWith(LOGIN_HASH_PREFIX)) return;
-  const raw = decodeURIComponent(hash.slice(LOGIN_HASH_PREFIX.length));
-  localStorage.setItem(CREDS_STORAGE_KEY, raw);
+  if (!hash.startsWith(LOGIN_HASH_PREFIX)) return undefined;
+  let credentials;
+  try {
+    credentials = parseLoginCredentials(decodeURIComponent(hash.slice(LOGIN_HASH_PREFIX.length)));
+  } catch {
+    credentials = undefined;
+  }
   window.history.replaceState(undefined, '', window.location.pathname);
+  return credentials;
 }
 
-function readCreds(): { user: string; password: string } | undefined {
-  const saved = localStorage.getItem(CREDS_STORAGE_KEY);
-  if (!saved) return undefined;
-  const colonIndex = saved.lastIndexOf(':');
-  if (colonIndex < 0) return undefined;
-  return { user: saved.slice(0, colonIndex), password: saved.slice(colonIndex + 1) };
+function consumeStartupCredentials() {
+  const hashCredentials = captureCredentialsFromHash();
+  const legacyCredentials = consumeLegacyCredentials();
+  return hashCredentials || legacyCredentials;
+}
+
+function clearLocalUserData(user: string) {
+  ['scheduled', 'hist', 'ttl', 'blocked', 'folders'].forEach((part) => {
+    localStorage.removeItem(`parvane:${part}:${user}`);
+  });
 }
 
 // ── интерфейс connector'а ────────────────────────────────────────────────────
