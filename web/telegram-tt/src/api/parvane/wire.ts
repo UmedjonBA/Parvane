@@ -31,6 +31,7 @@ export type WireMessageContent = {
   ciphertext?: string;
   ctype?: number;
   sender_identity?: string;
+  sender_signing_key?: string;
   file_key?: string;
   file_nonce?: string;
   group?: string;

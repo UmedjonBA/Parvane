@@ -85,6 +85,7 @@ export function createMessageController(deps: MessageDependencies) {
             ciphertext: encrypted.ciphertext,
             ctype: encrypted.ctype,
             sender_identity: encrypted.sender_identity,
+            sender_signing_key: engine.signingKey,
           },
         },
       }));
@@ -121,6 +122,7 @@ export function createMessageController(deps: MessageDependencies) {
           to: toAddress,
           content: {
             kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: engine.identityKey,
+            sender_signing_key: engine.signingKey,
           },
         },
       }));
@@ -148,6 +150,7 @@ export function createMessageController(deps: MessageDependencies) {
           ciphertext: encrypted.ciphertext,
           ctype: encrypted.ctype,
           sender_identity: encrypted.sender_identity,
+          sender_signing_key: engine.signingKey,
         },
       },
     }));
@@ -459,6 +462,7 @@ export function createMessageController(deps: MessageDependencies) {
             to: toAddress,
             content: {
               kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: engine.identityKey,
+              sender_signing_key: engine.signingKey,
             },
             reply_to: replyToUuid,
           },
@@ -496,6 +500,7 @@ export function createMessageController(deps: MessageDependencies) {
         ciphertext: encrypted.ciphertext,
         ctype: encrypted.ctype,
         sender_identity: encrypted.sender_identity,
+        sender_signing_key: engine.signingKey,
       };
     } catch (error) {
       reportEncryptionSendFailure(chat.id, localMessage.id, error);
@@ -538,17 +543,55 @@ export function createMessageController(deps: MessageDependencies) {
       return Promise.resolve(messageIds.map((id) => byId.get(id)).filter(Boolean));
     },
 
-    editMessage({ chat, message, text }: { chat: ApiChat; message: ApiMessage; text: string }) {
+    async editMessage({ chat, message, text }: { chat: ApiChat; message: ApiMessage; text: string }) {
       const currentStore = store();
       const uuid = currentStore.getUuidForMessage(chat.id, message.id);
-      if (!uuid || !connection()) return Promise.resolve(undefined);
-      connection()!.publish(TOPIC_MSG_EDIT, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), { message_id: uuid, text }),
+      const activeConnection = connection();
+      const toAddress = currentStore.getAddressForId(chat.id);
+      if (!uuid || !activeConnection || !toAddress) return undefined;
+
+      const engine = requireE2e(deps.getE2e());
+      const plainContent = { kind: 'text', text, entities: [] };
+      let encryptedContent: WireMessageContent;
+      const groupInfo = currentStore.getGroupInfo(toAddress);
+      if (groupInfo) {
+        const epoch = await distributeGroupKey(
+          toAddress,
+          getActiveGroupMemberAddresses(groupInfo.members),
+        );
+        const ciphertext = requireEncrypted(
+          await engine.groupEncrypt(toAddress, JSON.stringify(plainContent), epoch),
+          `Group encryption failed for ${toAddress}.`,
+        );
+        encryptedContent = {
+          kind: 'group_encrypted',
+          ciphertext,
+          group: toAddress,
+          sender_identity: engine.identityKey,
+          sender_signing_key: engine.signingKey,
+        };
+      } else {
+        const inner = JSON.stringify({ from: currentStore.self, content: plainContent });
+        const encrypted = requireEncrypted(
+          await engine.encryptFor(toAddress, inner, fetchPrekeyBundle),
+          `No usable prekey/session for ${toAddress}.`,
+        );
+        encryptedContent = {
+          kind: 'encrypted',
+          ciphertext: encrypted.ciphertext,
+          ctype: encrypted.ctype,
+          sender_identity: encrypted.sender_identity,
+          sender_signing_key: engine.signingKey,
+        };
+      }
+      const signature = engine.signCallData(`edit:${uuid}:${encryptedContent.ciphertext}`);
+      activeConnection.publish(TOPIC_MSG_EDIT, JSON.stringify(
+        buildWireEvent(currentStore.self, token(), { message_id: uuid, content: encryptedContent, signature }),
       ));
       const edited: ApiMessage = { ...message, content: { text: { text } }, isEdited: true };
       currentStore.putMessage(edited);
       deps.sendUpdate({ '@type': 'updateMessage', chatId: chat.id, id: message.id, isFull: true, message: edited });
-      return Promise.resolve(undefined);
+      return undefined;
     },
 
     deleteMessages({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
@@ -557,8 +600,9 @@ export function createMessageController(deps: MessageDependencies) {
       messageIds.forEach((id) => {
         const uuid = currentStore.getUuidForMessage(chat.id, id);
         if (!uuid) return;
+        const signature = requireE2e(deps.getE2e()).signCallData(`delete:${uuid}`);
         connection()!.publish(TOPIC_MSG_DELETE, JSON.stringify(
-          buildWireEvent(currentStore.self, token(), { message_id: uuid }),
+          buildWireEvent(currentStore.self, token(), { message_id: uuid, signature }),
         ));
         deps.sync.markDeleted(uuid);
       });

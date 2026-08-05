@@ -328,6 +328,10 @@ pub enum MessageContent {
         ciphertext: String,
         ctype: u32,
         sender_identity: String,
+        /// Ed25519 identity used only to authorize later mutations without
+        /// revealing the account address in the sealed envelope.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        sender_signing_key: String,
     },
     /// E2E-зашифрованное групповое сообщение (Фаза 3, Megolm/sender keys).
     /// Контент зашифрован исходящей group-сессией отправителя; получатель
@@ -338,6 +342,8 @@ pub enum MessageContent {
         ciphertext: String,
         group: String,
         sender_identity: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        sender_signing_key: String,
     },
 }
 
@@ -423,13 +429,24 @@ pub struct ReadPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditPayload {
     pub message_id: Uuid,
-    pub text: String,
+    /// Legacy non-E2E edit payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Replacement E2E envelope. The server never receives edited plaintext.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
+    /// Ed25519 signature over `edit:<message_id>:<ciphertext>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// Удаление сообщения «у всех» (tombstone). Только автор.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeletePayload {
     pub message_id: Uuid,
+    /// Ed25519 signature over `delete:<message_id>` for sealed messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// Реакция на сообщение. Пустой `emoji` — снять свою реакцию.

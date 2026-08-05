@@ -1109,7 +1109,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "base64",
  "dotenvy",
+ "ed25519-dalek",
  "futures",
  "parvane-types",
  "serde",

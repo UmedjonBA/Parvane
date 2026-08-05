@@ -684,6 +684,17 @@ function collectUsersFor(messages: ApiMessage[]): ApiUser[] {
 }
 
 function sendUpdate(update: ApiUpdate) {
+  if (update['@type'] === 'newMessage') {
+    onUpdate({
+      '@type': 'updateThreadInfo',
+      threadInfo: {
+        isCommentsInfo: false,
+        chatId: update.chatId,
+        threadId: MAIN_THREAD_ID,
+        lastMessageId: update.id,
+      },
+    });
+  }
   onUpdate(update);
 }
 

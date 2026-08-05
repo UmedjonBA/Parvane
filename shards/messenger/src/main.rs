@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use async_nats::Client;
+use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine as _};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures::StreamExt;
 use parvane_types::{
     AckPayload, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
@@ -222,6 +224,129 @@ async fn edit_message(pool: &SqlitePool, message_id: &str, author: &str, text: &
     .execute(pool)
     .await
     .context("правка сообщения")?;
+    Ok(res.rows_affected() > 0)
+}
+
+fn encrypted_mutation_metadata(content: &MessageContent) -> Option<(&str, &str)> {
+    match content {
+        MessageContent::Encrypted { ciphertext, sender_signing_key, .. }
+        | MessageContent::GroupEncrypted { ciphertext, sender_signing_key, .. }
+            if !sender_signing_key.is_empty() => Some((ciphertext, sender_signing_key)),
+        _ => None,
+    }
+}
+
+fn decode_base64(value: &str) -> Option<Vec<u8>> {
+    STANDARD_NO_PAD.decode(value).or_else(|_| STANDARD.decode(value)).ok()
+}
+
+fn verify_mutation_signature(signing_key: &str, payload: &str, signature: &str) -> bool {
+    let Some(key_bytes) = decode_base64(signing_key).and_then(|bytes| bytes.try_into().ok()) else {
+        return false;
+    };
+    let Some(signature_bytes) = decode_base64(signature) else {
+        return false;
+    };
+    let Ok(key) = VerifyingKey::from_bytes(&key_bytes) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_slice(&signature_bytes) else {
+        return false;
+    };
+    key.verify(payload.as_bytes(), &signature).is_ok()
+}
+
+async fn replace_message_content(
+    pool: &SqlitePool,
+    message_id: &str,
+    author: &str,
+    content: &MessageContent,
+    signature: Option<&str>,
+    now: i64,
+) -> Result<bool> {
+    let current: Option<(String, String)> = sqlx::query_as(
+        "SELECT from_user, content FROM messages WHERE id = ? AND deleted = 0",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((stored_author, stored_json)) = current else {
+        return Ok(false);
+    };
+
+    if stored_author.is_empty() {
+        let stored_content: MessageContent = serde_json::from_str(&stored_json)?;
+        let Some((_, stored_signing_key)) = encrypted_mutation_metadata(&stored_content) else {
+            return Ok(false);
+        };
+        let Some((ciphertext, new_signing_key)) = encrypted_mutation_metadata(content) else {
+            return Ok(false);
+        };
+        let Some(signature) = signature else {
+            return Ok(false);
+        };
+        let signed_payload = format!("edit:{message_id}:{ciphertext}");
+        if new_signing_key != stored_signing_key
+            || !verify_mutation_signature(stored_signing_key, &signed_payload, signature)
+        {
+            return Ok(false);
+        }
+    } else if stored_author != author {
+        return Ok(false);
+    }
+
+    let content_json = serde_json::to_string(content)?;
+    let res = sqlx::query(
+        "UPDATE messages SET text = '', kind = ?, content = ?, edited = 1, updated_at = ?
+         WHERE id = ? AND deleted = 0",
+    )
+    .bind(content.kind())
+    .bind(content_json)
+    .bind(now)
+    .bind(message_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+async fn delete_sealed_message(
+    pool: &SqlitePool,
+    message_id: &str,
+    signature: Option<&str>,
+    now: i64,
+) -> Result<bool> {
+    let content_json: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM messages WHERE id = ? AND from_user = ''",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(content_json) = content_json else {
+        return Ok(false);
+    };
+    let content: MessageContent = serde_json::from_str(&content_json)?;
+    let Some((_, signing_key)) = encrypted_mutation_metadata(&content) else {
+        return Ok(false);
+    };
+    let Some(signature) = signature else {
+        return Ok(false);
+    };
+    if !verify_mutation_signature(signing_key, &format!("delete:{message_id}"), signature) {
+        return Ok(false);
+    }
+
+    let empty = serde_json::to_string(&MessageContent::Text {
+        text: String::new(), entities: vec![], webpage: None,
+    })?;
+    let res = sqlx::query(
+        "UPDATE messages SET deleted = 1, text = '', kind = 'text', content = ?, updated_at = ?
+         WHERE id = ? AND from_user = ''",
+    )
+    .bind(empty)
+    .bind(now)
+    .bind(message_id)
+    .execute(pool)
+    .await?;
     Ok(res.rows_affected() > 0)
 }
 
@@ -932,7 +1057,21 @@ async fn handle_edit(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         let author = verify_token(nc, &event.token).await?;
         validate_sender(&author, &event.from)?;
 
-        let ok = edit_message(pool, &event.payload.message_id.to_string(), &author, &event.payload.text, now_unix()).await?;
+        let message_id = event.payload.message_id.to_string();
+        let ok = if let Some(content) = event.payload.content.as_ref() {
+            replace_message_content(
+                pool,
+                &message_id,
+                &author,
+                content,
+                event.payload.signature.as_deref(),
+                now_unix(),
+            ).await?
+        } else if let Some(text) = event.payload.text.as_deref() {
+            edit_message(pool, &message_id, &author, text, now_unix()).await?
+        } else {
+            false
+        };
         if ok {
             info!("Сообщение {} отредактировано автором {}", event.payload.message_id, author);
         } else {
@@ -956,7 +1095,14 @@ async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         let author = verify_token(nc, &event.token).await?;
         validate_sender(&author, &event.from)?;
 
-        let ok = delete_message(pool, &event.payload.message_id.to_string(), &author, now_unix()).await?;
+        let message_id = event.payload.message_id.to_string();
+        let ok = delete_message(pool, &message_id, &author, now_unix()).await?
+            || delete_sealed_message(
+                pool,
+                &message_id,
+                event.payload.signature.as_deref(),
+                now_unix(),
+            ).await?;
         if ok {
             info!("Сообщение {} удалено у всех автором {}", event.payload.message_id, author);
         } else {
@@ -1355,6 +1501,7 @@ fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     use parvane_types::{MessageContent, SendPayload};
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -2036,6 +2183,61 @@ mod tests {
         // resolve_recipients с пустым from → [to]
         let r = resolve_recipients(&pool, "bob@local", "").await.unwrap();
         assert_eq!(r, vec!["bob@local".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn sealed_mutations_require_the_original_signing_key() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000e6";
+        let signing = SigningKey::from_bytes(&[7_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let original = MessageContent::Encrypted {
+            ciphertext: "cipher-before".into(),
+            ctype: 0,
+            sender_identity: "curve-key".into(),
+            sender_signing_key: signing_key.clone(),
+        };
+        store_message(&pool, &send_content(mid, "", "bob@local", original), 1)
+            .await
+            .unwrap();
+
+        let edited = MessageContent::Encrypted {
+            ciphertext: "cipher-after".into(),
+            ctype: 1,
+            sender_identity: "curve-key".into(),
+            sender_signing_key: signing_key,
+        };
+        assert!(!replace_message_content(&pool, mid, "alice@local", &edited, Some("bad"), 2)
+            .await
+            .unwrap());
+        let edit_payload = format!("edit:{mid}:cipher-after");
+        let edit_signature = STANDARD_NO_PAD.encode(signing.sign(edit_payload.as_bytes()).to_bytes());
+        assert!(replace_message_content(
+            &pool,
+            mid,
+            "alice@local",
+            &edited,
+            Some(&edit_signature),
+            3,
+        )
+        .await
+        .unwrap());
+
+        let changed = fetch_missed(&pool, "bob@local", mid, 1).await.unwrap();
+        assert_eq!(changed.len(), 1);
+        assert!(matches!(
+            &changed[0].content,
+            MessageContent::Encrypted { ciphertext, .. } if ciphertext == "cipher-after"
+        ));
+
+        let delete_payload = format!("delete:{mid}");
+        let delete_signature = STANDARD_NO_PAD.encode(signing.sign(delete_payload.as_bytes()).to_bytes());
+        assert!(delete_sealed_message(&pool, mid, Some(&delete_signature), 4)
+            .await
+            .unwrap());
+        let deleted = fetch_missed(&pool, "bob@local", mid, 3).await.unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert!(deleted[0].deleted);
     }
 
     #[tokio::test]

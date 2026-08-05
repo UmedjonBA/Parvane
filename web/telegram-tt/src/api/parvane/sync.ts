@@ -87,10 +87,20 @@ export function createSyncController(deps: SyncDependencies) {
   function unsealStored(stored: WireStoredMessage): UnsealResult {
     const content = stored.content;
     const e2e = deps.getE2e();
+    const cached = e2e?.getCachedInner(stored.id);
+
+    // A sealed tombstone intentionally has no ciphertext or public sender.
+    // Reuse the UUID binding established when the original message was
+    // decrypted so the delete update targets the correct private chat.
+    if (stored.deleted && cached) {
+      return {
+        stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },
+        wasSealed: true,
+      };
+    }
 
     if (content.kind === 'group_encrypted') {
-      const cached = e2e?.getCachedInner(stored.id);
-      if (cached) {
+      if (cached && !stored.edited) {
         deps.media.rememberKeys(cached.content as WireMessageContent);
         return { stored: { ...stored, content: cached.content as WireMessageContent }, wasSealed: true };
       }
@@ -110,8 +120,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (content.kind !== 'encrypted') return { stored, wasSealed: false };
-    const cached = e2e?.getCachedInner(stored.id);
-    if (cached) {
+    if (cached && !stored.edited) {
       deps.media.rememberKeys(cached.content as WireMessageContent);
       return {
         stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },

@@ -79,7 +79,45 @@ async function sendText(page, text) {
 }
 
 function findMessage(page, text) {
-  return page.locator('.Message .text-content').filter({ hasText: text });
+  return page
+    .locator('.Transition_slide-active > .MessageList .Message .text-content')
+    .filter({ hasText: text });
+}
+
+function findMessageContainer(page, text) {
+  return page
+    .locator('.Transition_slide-active > .MessageList .Message')
+    .filter({ hasText: text })
+    .last();
+}
+
+async function selectMessageAction(page, text, action) {
+  const message = findMessageContainer(page, text);
+  const box = await message.boundingBox();
+  assert(box, `message is not visible: ${text}`);
+  await message.click({
+    button: 'right',
+    position: { x: box.width / 2, y: box.height / 2 },
+  });
+  const item = page.locator('.MessageContextMenu').getByRole('menuitem', { name: action, exact: true });
+  await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await item.click();
+}
+
+async function editText(page, sourceText, editedText) {
+  await selectMessageAction(page, sourceText, 'Edit');
+  await page.locator('.ComposerEmbeddedMessage').filter({ hasText: sourceText })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const input = page.locator('#editable-message-text');
+  await input.fill(editedText);
+  await input.press('Enter');
+}
+
+async function deleteMessage(page, text) {
+  await selectMessageAction(page, text, 'Delete');
+  const confirm = page.locator('.Modal').getByRole('button', { name: 'Delete', exact: true });
+  await confirm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await confirm.click();
 }
 
 async function waitForSocketCount(page, field, count) {
@@ -104,6 +142,8 @@ try {
   const alice = `sync-alice-${suffix}@local`;
   const bob = `sync-bob-${suffix}@local`;
   const message = `offline-reconnect-${suffix}`;
+  const reply = `reply-${suffix}`;
+  const editedReply = `modified-${suffix}`;
 
   const aliceSession = await preparePage(aliceContext, alice);
   const bobSession = await preparePage(bobContext, bob);
@@ -127,10 +167,25 @@ try {
   await waitForSocketCount(aliceSession.page, 'opened', 3);
   await aliceSession.page.waitForTimeout(1000);
   assert.equal(await findMessage(aliceSession.page, message).count(), 1, 'message duplicated after second reconnect');
+
+  await selectMessageAction(aliceSession.page, message, 'Reply');
+  await aliceSession.page.locator('.ComposerEmbeddedMessage').filter({ hasText: message })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await sendText(aliceSession.page, reply);
+  const bobReply = findMessageContainer(bobSession.page, reply);
+  await bobReply.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.match(await bobReply.innerText(), new RegExp(message), 'reply does not reference the original message');
+
+  await editText(aliceSession.page, reply, editedReply);
+  await findMessage(bobSession.page, editedReply).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findMessage(bobSession.page, reply).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+
+  await deleteMessage(aliceSession.page, editedReply);
+  await findMessage(bobSession.page, editedReply).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: two-browser offline delivery, reconnect and UUID idempotency');
+  console.log('OK: two-browser delivery, reconnect, reply, edit, delete and UUID idempotency');
 } finally {
   await aliceContext.close();
   await bobContext.close();
