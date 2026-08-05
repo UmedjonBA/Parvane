@@ -108,14 +108,14 @@ const expirationTime = 12 * 60 * 60 * 1000; // 12 hours
 // Notification id is removed from soundPlayed cache after 3 seconds
 const soundPlayedDelay = 3 * 1000;
 const soundPlayedIds = new Set<string>();
-const notificationSound = new Audio('./notification.mp3');
-notificationSound.setAttribute('mozaudiochannel', 'notification');
+let notificationSound: HTMLAudioElement | undefined;
 
 export async function playNotifySound(id?: string, volume?: number) {
   if (id !== undefined && soundPlayedIds.has(id)) return;
   const { notificationSoundVolume } = selectSettingsKeys(getGlobal());
   const currentVolume = volume ? volume / 10 : notificationSoundVolume / 10;
   if (currentVolume === 0) return;
+  notificationSound ||= createNotificationSound();
   notificationSound.volume = currentVolume;
   if (id !== undefined) {
     notificationSound.addEventListener('ended', () => {
@@ -135,6 +135,12 @@ export async function playNotifySound(id?: string, volume?: number) {
       console.warn('[PUSH] Unable to play notification sound');
     }
   }
+}
+
+function createNotificationSound() {
+  const audio = new Audio('./notification.mp3');
+  audio.setAttribute('mozaudiochannel', 'notification');
+  return audio;
 }
 
 export const playNotifySoundDebounced = debounce(playNotifySound, 1000, true, false);
