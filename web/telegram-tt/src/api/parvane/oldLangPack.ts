@@ -15,7 +15,14 @@ const MONTH_KEYS = [
 
 export function buildOldLangPack(langCode: string): ApiOldLangPack {
   const pack: ApiOldLangPack = {
+    Cancel: 'Cancel',
+    DialogPin: 'Pin',
+    DialogUnpin: 'Unpin',
+    Forward: 'Forward',
+    PinMessageAlertChat: 'Do you want to pin this message for both participants?',
+    PinMessageAlertTitle: 'Pin Message',
     UnreadMessages: 'Unread Messages',
+    'Conversation.PinMessagesFor': 'Also pin for %@',
     'Weekday.Today': 'Today',
     'Weekday.Yesterday': 'Yesterday',
     formatDateAtTime: '%1$s at %2$s',

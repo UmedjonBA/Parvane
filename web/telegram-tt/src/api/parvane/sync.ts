@@ -54,6 +54,16 @@ export function createSyncController(deps: SyncDependencies) {
   const reportedReadUuids = new Set<string>();
   const checkedGroupCandidates = new Set<string>();
 
+  function buildSyncPayload(lastSeenId: string, updatedSince: number) {
+    const e2e = deps.getE2e();
+    return {
+      last_seen_id: lastSeenId,
+      since_updated: updatedSince,
+      sender_signing_key: e2e?.signingKey,
+      signature: e2e?.signCallData(`sync:${lastSeenId}:${updatedSince}`),
+    };
+  }
+
   const buildWireFlags = (stored: WireStoredMessage): WireFlags => ({
     read: Boolean(stored.read),
     deleted: Boolean(stored.deleted),
@@ -87,6 +97,7 @@ export function createSyncController(deps: SyncDependencies) {
   function unsealStored(stored: WireStoredMessage): UnsealResult {
     const content = stored.content;
     const e2e = deps.getE2e();
+    const store = deps.getStore();
     const cached = e2e?.getCachedInner(stored.id);
 
     // A sealed tombstone intentionally has no ciphertext or public sender.
@@ -100,7 +111,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (content.kind === 'group_encrypted') {
-      if (cached && !stored.edited) {
+      if (cached && (!stored.edited || cached.from === store.self)) {
         deps.media.rememberKeys(cached.content as WireMessageContent);
         return { stored: { ...stored, content: cached.content as WireMessageContent }, wasSealed: true };
       }
@@ -120,7 +131,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (content.kind !== 'encrypted') return { stored, wasSealed: false };
-    if (cached && !stored.edited) {
+    if (cached && (!stored.edited || cached.from === store.self)) {
       deps.media.rememberKeys(cached.content as WireMessageContent);
       return {
         stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },
@@ -321,7 +332,7 @@ export function createSyncController(deps: SyncDependencies) {
       deps.sendUpdate({ '@type': 'deleteMessages', ids: [message.id], chatId: message.chatId });
       return;
     }
-    if (previousFlags && flags.snapshot !== previousFlags.snapshot && !flags.deleted) {
+    if ((!previousFlags || flags.snapshot !== previousFlags.snapshot) && !flags.deleted) {
       deps.sendUpdate({
         '@type': 'updateMessage', chatId: message.chatId, id: message.id, isFull: true, message,
       });
@@ -342,7 +353,7 @@ export function createSyncController(deps: SyncDependencies) {
     const groups = (JSON.parse(groupsRaw) as { groups?: WireGroupInfo[] }).groups || [];
     groups.forEach(deps.groups.register);
 
-    const syncEvent = buildWireEvent(store.self, token, { last_seen_id: '0', since_updated: 0 });
+    const syncEvent = buildWireEvent(store.self, token, buildSyncPayload('0', 0));
     const syncRaw = await connection.request(
       TOPIC_MSG_SYNC_REQUEST,
       JSON.stringify(syncEvent),
@@ -406,10 +417,11 @@ export function createSyncController(deps: SyncDependencies) {
     let messages: WireStoredMessage[];
     try {
       const store = deps.getStore();
-      const syncEvent = buildWireEvent(store.self, deps.getToken(), {
-        last_seen_id: lastSeenUuid || '0',
-        since_updated: sinceUpdated,
-      });
+      const syncEvent = buildWireEvent(
+        store.self,
+        deps.getToken(),
+        buildSyncPayload(lastSeenUuid || '0', sinceUpdated),
+      );
       const raw = await connection.request(
         TOPIC_MSG_SYNC_REQUEST,
         JSON.stringify(syncEvent),

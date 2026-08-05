@@ -54,6 +54,16 @@
   height: 90%;
 }
 
+.fallbackEmoji {
+  position: relative;
+
+  display: block;
+
+  font-size: 1.75rem;
+  line-height: 2rem;
+  text-align: center;
+}
+
 .lock {
   position: absolute;
   right: 0;

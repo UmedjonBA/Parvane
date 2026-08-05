@@ -161,6 +161,7 @@ type StateProps = {
   freezeAppealChat?: ApiChat;
   shouldBlockSendInMonoforum?: boolean;
   isUiReady?: boolean;
+  isForwarding?: boolean;
 };
 
 function isImage(item: DataTransferItem) {
@@ -230,6 +231,7 @@ function MiddleColumn({
   freezeAppealChat,
   shouldBlockSendInMonoforum,
   isUiReady,
+  isForwarding,
 }: OwnProps & StateProps) {
   const {
     openChat,
@@ -245,6 +247,7 @@ function MiddleColumn({
     setLeftColumnWidth,
     resetLeftColumnWidth,
     unblockUser,
+    forwardMessages,
   } = getActions();
 
   const { width: windowWidth } = useWindowSize();
@@ -480,6 +483,10 @@ function MiddleColumn({
     unblockUser({ userId: chatId! });
   });
 
+  const handleForward = useLastCallback(() => {
+    forwardMessages({});
+  });
+
   const className = buildClassName(
     MASK_IMAGE_DISABLED ? 'mask-image-disabled' : 'mask-image-enabled',
     isUiReady && 'ui-ready',
@@ -650,6 +657,7 @@ function MiddleColumn({
                     editableInputId={EDITABLE_INPUT_ID}
                     editableInputCssSelector={EDITABLE_INPUT_CSS_SELECTOR}
                     inputId="message-input-text"
+                    onForward={isForwarding ? handleForward : undefined}
                   />
                 )}
                 {isPinnedMessageList && canUnpin && (
@@ -804,7 +812,7 @@ export default memo(withGlobal<OwnProps>(
       messageLists, isLeftColumnShown, activeEmojiInteractions,
       seenByModal, reactorModal, shouldSkipHistoryAnimations,
       chatLanguageModal, privacySettingsNoticeModal,
-      uiReadyState,
+      uiReadyState, forwardMessages,
     } = selectTabState(global);
     const currentMessageList = selectCurrentMessageList(global);
     const { leftColumnWidth } = global;
@@ -831,6 +839,9 @@ export default memo(withGlobal<OwnProps>(
       activeEmojiInteractions,
       leftColumnWidth,
       isUiReady: uiReadyState >= 1,
+      isForwarding: Boolean(
+        currentMessageList && forwardMessages.toChatId === currentMessageList.chatId,
+      ),
     };
 
     if (!currentMessageList) {
