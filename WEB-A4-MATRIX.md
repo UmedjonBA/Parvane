@@ -11,7 +11,7 @@ path.
 | Logout | Not covered | Not covered | Not covered | Secure storage has unit coverage only | Add browser logout and storage cleanup |
 | Profile and avatar | Not covered | Not covered | Cloud public/private ACL is automated | `tests/playwright/cloud-security.spec.ts` | Add Web profile edit and avatar reload |
 | Personal text | Automated | Automated | Plaintext rejection is automated | `scripts/e2e_web_sync_reconnect.mjs`, gateway security test | Add online delivery in the full mutation scenario |
-| Reply, edit, delete, reaction, pin, forward | Not covered | Not covered | Actor binding is automated at gateway level | Provider methods exist; no browser acceptance | Highest-priority messaging gap |
+| Reply, edit, delete, reaction, pin, forward | Reply/edit/delete automated | Reply/edit/delete automated after reconnect | Signed encrypted mutations and invalid-signature rejection are automated | Two-browser reconnect script; messenger sealed-mutation test | Add reaction, pin, and forward browser acceptance |
 | Read receipt, unread, typing, presence | Partially covered | Not covered | Forged actors and wildcard subjects are automated | Gateway security test; reconnect script | Add two-client UI state assertions |
 | User and message search | User search is automated | Not covered | Empty/error paths not covered | Reconnect script opens peers through UI search | Add message-search acceptance |
 | Photo and file | Not covered | Not covered | Owner/recipient/public ACL is automated | Cloud security test | Add encrypted Web upload/download UI path |
@@ -29,6 +29,7 @@ path.
 - Chromium, Firefox, WebKit, and iOS startup/login matrix: green.
 - Web lint/typecheck, 52 unit/integration tests, production and mocked builds: green.
 - Production-like live security matrix: green.
-- Two-browser offline delivery, reconnect, and UUID idempotency: green.
+- Two-browser offline delivery, reconnect, UUID idempotency, reply, edit, and
+  delete: green.
 - A4 remains open until every row has an automated happy path, reload/reconnect
   coverage where state persists, and a permission/error assertion.
