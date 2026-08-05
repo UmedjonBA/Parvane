@@ -204,6 +204,7 @@ export class ParvaneStore {
       chatId,
       content: buildMessageContent(stored),
       date: stored.ts,
+      isForwardingAllowed: true,
       isOutgoing,
       senderId: stored.from ? this.getIdForAddress(stored.from) : undefined,
       isEdited: stored.edited ? true : undefined,

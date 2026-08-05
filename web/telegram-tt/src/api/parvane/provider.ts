@@ -5,6 +5,8 @@
 import type { SendMessageParams, ThreadReadState } from '../../types';
 import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
 import type {
+  ApiAppConfig,
+  ApiAvailableReaction,
   ApiChat, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
@@ -18,6 +20,7 @@ import type { GatewayConnection } from './gateway';
 import type { WireUserInfo } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
+import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   clearLoginStorage,
   consumeLegacyCredentials,
@@ -45,6 +48,13 @@ import {
 } from './wire';
 
 const LOGIN_HASH_PREFIX = '#parvane=';
+const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
+const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
+  '👍', '❤️', '🔥', '😂', '👏', '🎉', '🤔',
+].map((emoticon) => ({
+  reaction: { type: 'emoji', emoticon },
+  title: emoticon,
+}));
 
 let onUpdate: OnApiUpdate = () => undefined;
 let startupCredentials = consumeStartupCredentials();
@@ -204,6 +214,14 @@ function logDebug(message: string) {
 const RECENT_STATUS: ApiUserStatus = { type: 'userStatusRecently' };
 
 const methods = {
+  fetchAppConfig({ hash }: { hash?: number }) {
+    return Promise.resolve(hash === PARVANE_APP_CONFIG.hash ? undefined : PARVANE_APP_CONFIG);
+  },
+
+  fetchAvailableReactions() {
+    return Promise.resolve(BUILTIN_REACTIONS);
+  },
+
   async fetchChats({ archived }: { archived?: boolean }) {
     if (archived) {
       // Архива у Parvane пока нет

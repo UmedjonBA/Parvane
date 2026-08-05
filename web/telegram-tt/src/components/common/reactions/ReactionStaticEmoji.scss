@@ -9,6 +9,11 @@
     color: var(--color-heart) !important;
   }
 
+  &.fallback-emoji {
+    line-height: 1;
+    text-align: center;
+  }
+
   .thumb,
   .media {
     position: absolute;

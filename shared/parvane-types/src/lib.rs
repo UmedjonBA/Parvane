@@ -454,13 +454,19 @@ pub struct DeletePayload {
 pub struct ReactPayload {
     pub message_id: Uuid,
     pub emoji: String,
+    /// Ed25519 signature over `react:<message_id>:<emoji>` for sealed senders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
-/// Закрепить/открепить сообщение (только автор диалога-собеседник? — любой из 1-на-1).
+/// Закрепить/открепить сообщение: любой участник 1-на-1, owner/admin в группе.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinPayload {
     pub message_id: Uuid,
     pub pin: bool,
+    /// Ed25519 signature over `pin:<message_id>:<pin>` for sealed senders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -470,6 +476,12 @@ pub struct SyncRequestPayload {
     /// (правки, удаления, отметки о прочтении старых сообщений). `0` — отдать всё.
     #[serde(default)]
     pub since_updated: i64,
+    /// Public identity used to recover the caller's own sealed envelopes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_signing_key: Option<String>,
+    /// Ed25519 signature over `sync:<last_seen_id>:<since_updated>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

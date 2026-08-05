@@ -319,6 +319,7 @@ export function createMessageController(deps: MessageDependencies) {
       chatId: chat.id,
       content: deps.media.buildLocalContent(uuid, params),
       date: Math.floor(Date.now() / 1000),
+      isForwardingAllowed: true,
       isOutgoing: true,
       senderId: deps.selfId(),
       sendingState: 'messageSendingStatePending',
@@ -588,6 +589,7 @@ export function createMessageController(deps: MessageDependencies) {
       activeConnection.publish(TOPIC_MSG_EDIT, JSON.stringify(
         buildWireEvent(currentStore.self, token(), { message_id: uuid, content: encryptedContent, signature }),
       ));
+      engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
       const edited: ApiMessage = { ...message, content: { text: { text } }, isEdited: true };
       currentStore.putMessage(edited);
       deps.sendUpdate({ '@type': 'updateMessage', chatId: chat.id, id: message.id, isFull: true, message: edited });
@@ -617,8 +619,9 @@ export function createMessageController(deps: MessageDependencies) {
       const uuid = currentStore.getUuidForMessage(chat.id, messageId);
       if (!uuid || !connection()) return Promise.resolve(undefined);
       const emoji = reactions?.find((reaction) => reaction.type === 'emoji')?.emoticon || '';
+      const signature = requireE2e(deps.getE2e()).signCallData(`react:${uuid}:${emoji}`);
       connection()!.publish(TOPIC_MSG_REACT, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), { message_id: uuid, emoji }),
+        buildWireEvent(currentStore.self, token(), { message_id: uuid, emoji, signature }),
       ));
       const message = currentStore.getMessages(chat.id).find((candidate) => candidate.id === messageId);
       if (message) {
@@ -649,10 +652,12 @@ export function createMessageController(deps: MessageDependencies) {
       const currentStore = store();
       const uuid = currentStore.getUuidForMessage(chat.id, messageId);
       if (!uuid || !connection()) return Promise.resolve(undefined);
+      const pin = !isUnpin;
+      const signature = requireE2e(deps.getE2e()).signCallData(`pin:${uuid}:${pin}`);
       connection()!.publish(TOPIC_MSG_PIN, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), { message_id: uuid, pin: !isUnpin }),
+        buildWireEvent(currentStore.self, token(), { message_id: uuid, pin, signature }),
       ));
-      deps.sendUpdate({ '@type': 'updatePinnedIds', chatId: chat.id, isPinned: !isUnpin, messageIds: [messageId] });
+      deps.sendUpdate({ '@type': 'updatePinnedIds', chatId: chat.id, isPinned: pin, messageIds: [messageId] });
       return Promise.resolve(undefined);
     },
 
@@ -744,6 +749,7 @@ export function createMessageController(deps: MessageDependencies) {
           chatId: toChat.id,
           content: message.content,
           date: Math.floor(Date.now() / 1000),
+          isForwardingAllowed: true,
           isOutgoing: true,
           senderId: deps.selfId(),
           forwardInfo: {

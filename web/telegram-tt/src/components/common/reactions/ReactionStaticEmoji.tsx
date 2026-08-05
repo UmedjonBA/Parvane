@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useMemo } from '../../../lib/teact/teact';
 
 import type { ApiAvailableReaction, ApiReaction } from '../../../api/types';
@@ -27,14 +26,14 @@ type OwnProps = {
   observeIntersection?: ObserveFn;
 };
 
-const ReactionStaticEmoji: FC<OwnProps> = ({
+const ReactionStaticEmoji = ({
   reaction,
   availableReactions,
   className,
   size,
   withIconHeart,
   observeIntersection,
-}) => {
+}: OwnProps) => {
   const availableReaction = useMemo(() => (
     availableReactions?.find((available) => isSameReaction(available.reaction, reaction))
   ), [availableReactions, reaction]);
@@ -69,6 +68,17 @@ const ReactionStaticEmoji: FC<OwnProps> = ({
   if (shouldReplaceWithHeartIcon) {
     return (
       <Icon name="heart" className="ReactionStaticEmoji" style={`font-size: ${size}px; width: ${size}px`} />
+    );
+  }
+
+  if (!staticIcon) {
+    return (
+      <span
+        className={buildClassName('ReactionStaticEmoji', 'fallback-emoji', className)}
+        style={size ? `width: ${size}px; height: ${size}px; font-size: ${size}px` : undefined}
+      >
+        {reaction.emoticon}
+      </span>
     );
   }
 

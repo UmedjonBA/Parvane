@@ -91,7 +91,7 @@ function findMessageContainer(page, text) {
     .last();
 }
 
-async function selectMessageAction(page, text, action) {
+async function openMessageMenu(page, text) {
   const message = findMessageContainer(page, text);
   const box = await message.boundingBox();
   assert(box, `message is not visible: ${text}`);
@@ -99,9 +99,46 @@ async function selectMessageAction(page, text, action) {
     button: 'right',
     position: { x: box.width / 2, y: box.height / 2 },
   });
+}
+
+async function selectMessageAction(page, text, action) {
+  await openMessageMenu(page, text);
   const item = page.locator('.MessageContextMenu').getByRole('menuitem', { name: action, exact: true });
   await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await item.click();
+}
+
+async function addReaction(page, text, emoji) {
+  await openMessageMenu(page, text);
+  const reaction = page.locator('.MessageContextMenu .ReactionSelector')
+    .getByRole('button', { name: emoji, exact: true });
+  await reaction.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await reaction.click();
+}
+
+async function pinMessage(page, text) {
+  await selectMessageAction(page, text, 'Pin');
+  const confirm = page.locator('.Modal.pin').getByRole('button', { name: 'Pin', exact: true });
+  await confirm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await confirm.click();
+}
+
+async function forwardMessage(page, text, address) {
+  const displayName = address.split('@')[0];
+  await selectMessageAction(page, text, 'Forward');
+  const picker = page.locator('.Modal').filter({ has: page.locator('.ChatOrUserPicker-item') });
+  await picker.locator('.search-input').fill(displayName);
+  const recipient = picker.locator('.Transition_slide-active .ChatOrUserPicker-item')
+    .filter({ hasText: displayName }).last();
+  await recipient.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await recipient.click();
+  await recipient.locator('.picker-checkbox.selected').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await picker.locator('.picker-footer-button').click();
+  const embedded = page.locator('.Transition_slide-active .ComposerEmbeddedMessage').filter({ hasText: text });
+  await embedded.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('.Transition_slide-active .Composer')
+    .getByRole('button', { name: 'Forward', exact: true }).click();
+  await embedded.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
 async function editText(page, sourceText, editedText) {
@@ -168,6 +205,25 @@ try {
   await aliceSession.page.waitForTimeout(1000);
   assert.equal(await findMessage(aliceSession.page, message).count(), 1, 'message duplicated after second reconnect');
 
+  await addReaction(aliceSession.page, message, '👍');
+  const bobOriginal = findMessageContainer(bobSession.page, message);
+  await bobOriginal.locator('.message-reaction').filter({ hasText: '👍' })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  await pinMessage(aliceSession.page, message);
+  await bobSession.page.locator('.HeaderPinnedMessageWrapper').filter({ hasText: message })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  await forwardMessage(aliceSession.page, message, bob);
+  await bobSession.page.waitForFunction(
+    (expected) => Array.from(document.querySelectorAll('.Transition_slide-active > .MessageList .Message'))
+      .filter((element) => element.textContent?.includes(expected)).length === 2,
+    message,
+    { timeout: LOGIN_TIMEOUT_MS },
+  );
+  const forwarded = findMessageContainer(bobSession.page, message);
+  assert.equal(await forwarded.locator('.forwarded-message').count(), 1, 'forward metadata is missing');
+
   await selectMessageAction(aliceSession.page, message, 'Reply');
   await aliceSession.page.locator('.ComposerEmbeddedMessage').filter({ hasText: message })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -185,7 +241,7 @@ try {
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: two-browser delivery, reconnect, reply, edit, delete and UUID idempotency');
+  console.log('OK: two-browser reconnect, reply, edit, delete, reaction, pin, forward and UUID idempotency');
 } finally {
   await aliceContext.close();
   await bobContext.close();

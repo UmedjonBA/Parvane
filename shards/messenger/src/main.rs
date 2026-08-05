@@ -256,6 +256,13 @@ fn verify_mutation_signature(signing_key: &str, payload: &str, signature: &str) 
     key.verify(payload.as_bytes(), &signature).is_ok()
 }
 
+fn authenticated_sync_signing_key(payload: &SyncRequestPayload) -> Option<&str> {
+    let signing_key = payload.sender_signing_key.as_deref()?;
+    let signature = payload.signature.as_deref()?;
+    let signed_payload = format!("sync:{}:{}", payload.last_seen_id, payload.since_updated);
+    verify_mutation_signature(signing_key, &signed_payload, signature).then_some(signing_key)
+}
+
 async fn replace_message_content(
     pool: &SqlitePool,
     message_id: &str,
@@ -335,13 +342,38 @@ async fn delete_sealed_message(
         return Ok(false);
     }
 
-    let empty = serde_json::to_string(&MessageContent::Text {
-        text: String::new(), entities: vec![], webpage: None,
-    })?;
+    let tombstone = match content {
+        MessageContent::Encrypted {
+            ctype,
+            sender_identity,
+            sender_signing_key,
+            ..
+        } => MessageContent::Encrypted {
+            ciphertext: String::new(),
+            ctype,
+            sender_identity,
+            sender_signing_key,
+        },
+        MessageContent::GroupEncrypted {
+            group,
+            sender_identity,
+            sender_signing_key,
+            ..
+        } => MessageContent::GroupEncrypted {
+            ciphertext: String::new(),
+            group,
+            sender_identity,
+            sender_signing_key,
+        },
+        _ => return Ok(false),
+    };
+    let tombstone_kind = tombstone.kind();
+    let empty = serde_json::to_string(&tombstone)?;
     let res = sqlx::query(
-        "UPDATE messages SET deleted = 1, text = '', kind = 'text', content = ?, updated_at = ?
+        "UPDATE messages SET deleted = 1, text = '', kind = ?, content = ?, updated_at = ?
          WHERE id = ? AND from_user = ''",
     )
+    .bind(tombstone_kind)
     .bind(empty)
     .bind(now)
     .bind(message_id)
@@ -366,6 +398,57 @@ async fn delete_message(pool: &SqlitePool, message_id: &str, author: &str, now: 
     .await
     .context("удаление сообщения")?;
     Ok(res.rows_affected() > 0)
+}
+
+/// Проверяет, что действие выполняет участник диалога. Для sealed-сообщения
+/// публичный `from_user` пуст, поэтому его исходный автор доказывает владение
+/// ключом подписью конкретного действия.
+async fn can_mutate_message(
+    pool: &SqlitePool,
+    message_id: &str,
+    actor: &str,
+    signature: Option<&str>,
+    signed_payload: &str,
+    requires_group_admin: bool,
+) -> Result<bool> {
+    let row: Option<(String, String, String, i64, i64)> = sqlx::query_as(
+        "SELECT m.from_user, m.to_user, m.content, m.deleted,
+                EXISTS(SELECT 1 FROM groups g WHERE g.id = m.to_user)
+           FROM messages m WHERE m.id = ?",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((from, to, content_json, deleted, is_group)) = row else {
+        return Ok(false);
+    };
+    if deleted != 0 {
+        return Ok(false);
+    }
+
+    if is_group != 0 {
+        let role = member_role(pool, &to, actor).await?;
+        return Ok(if requires_group_admin {
+            matches!(role.as_deref(), Some("owner") | Some("admin"))
+        } else {
+            matches!(role.as_deref(), Some("owner") | Some("admin") | Some("member"))
+        });
+    }
+
+    if actor == to || (!from.is_empty() && actor == from) {
+        return Ok(true);
+    }
+    if !from.is_empty() {
+        return Ok(false);
+    }
+
+    let content: MessageContent = serde_json::from_str(&content_json)?;
+    let Some((_, signing_key)) = encrypted_mutation_metadata(&content) else {
+        return Ok(false);
+    };
+    Ok(signature
+        .map(|value| verify_mutation_signature(signing_key, signed_payload, value))
+        .unwrap_or(false))
 }
 
 /// Поставить/снять реакцию (одна на пару message_id+reactor). Пустой `emoji` —
@@ -676,11 +759,12 @@ async fn store_read_receipt(
 /// отправленные сообщения.
 /// UUID v7 лексикографически упорядочен по времени, поэтому сравнение строк
 /// эквивалентно сравнению по времени создания.
-async fn fetch_missed(
+async fn fetch_missed_for_signing_key(
     pool: &SqlitePool,
     user: &str,
     last_seen_id: &str,
     since_updated: i64,
+    sender_signing_key: &str,
 ) -> Result<Vec<StoredMessage>> {
     // Два курсора: новые сообщения (`id > last_seen_id`) И мутации старых
     // (`updated_at > since_updated`: правки, удаления, отметки о прочтении).
@@ -707,7 +791,8 @@ async fn fetch_missed(
          FROM messages m
          WHERE (m.to_user = ? OR m.from_user = ?
                 OR m.to_user IN (SELECT group_id FROM group_members
-                                 WHERE member = ? AND role != 'banned'))
+                                 WHERE member = ? AND role != 'banned')
+                OR (? != '' AND COALESCE(json_extract(m.content, '$.sender_signing_key'), '') = ?))
            AND (m.id > ? OR m.updated_at > ?)
          ORDER BY m.updated_at, m.id
          LIMIT 100",
@@ -715,6 +800,8 @@ async fn fetch_missed(
     .bind(user)
     .bind(user)
     .bind(user)
+    .bind(sender_signing_key)
+    .bind(sender_signing_key)
     .bind(last_seen_id)
     .bind(since_updated)
     .fetch_all(pool)
@@ -746,6 +833,16 @@ async fn fetch_missed(
         });
     }
     Ok(messages)
+}
+
+#[cfg(test)]
+async fn fetch_missed(
+    pool: &SqlitePool,
+    user: &str,
+    last_seen_id: &str,
+    since_updated: i64,
+) -> Result<Vec<StoredMessage>> {
+    fetch_missed_for_signing_key(pool, user, last_seen_id, since_updated, "").await
 }
 
 /// Агрегат реакций сообщения для конкретного зрителя (`mine` — реагировал ли он).
@@ -1124,7 +1221,20 @@ async fn handle_react(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         let event: ParvaneEvent<ReactPayload> = serde_json::from_slice(&msg.payload)
             .context("неверный JSON в msg.chat.react")?;
         let reactor = verify_token(nc, &event.token).await?;
+        validate_sender(&reactor, &event.from)?;
         let mid = event.payload.message_id.to_string();
+        let signed_payload = format!("react:{mid}:{}", event.payload.emoji);
+        if !can_mutate_message(
+            pool,
+            &mid,
+            &reactor,
+            event.payload.signature.as_deref(),
+            &signed_payload,
+            false,
+        ).await? {
+            warn!("Реакция на {} отклонена для {}", mid, reactor);
+            return anyhow::Ok(());
+        }
         set_reaction(pool, &mid, &reactor, &event.payload.emoji, now_unix()).await?;
         info!("Реакция '{}' на {} от {}", event.payload.emoji, mid, reactor);
         anyhow::Ok(())
@@ -1142,7 +1252,20 @@ async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         let event: ParvaneEvent<PinPayload> = serde_json::from_slice(&msg.payload)
             .context("неверный JSON в msg.chat.pin")?;
         let who = verify_token(nc, &event.token).await?;
+        validate_sender(&who, &event.from)?;
         let mid = event.payload.message_id.to_string();
+        let signed_payload = format!("pin:{mid}:{}", event.payload.pin);
+        if !can_mutate_message(
+            pool,
+            &mid,
+            &who,
+            event.payload.signature.as_deref(),
+            &signed_payload,
+            true,
+        ).await? {
+            warn!("Pin для {} отклонён для {}", mid, who);
+            return anyhow::Ok(());
+        }
         set_pinned(pool, &mid, event.payload.pin, now_unix()).await?;
         info!("Pin={} для {} ({})", event.payload.pin, mid, who);
         anyhow::Ok(())
@@ -1463,7 +1586,14 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 
         let user = verify_token(nc, &event.token).await?;
         let last_id = &event.payload.last_seen_id;
-        let messages = fetch_missed(pool, &user, last_id, event.payload.since_updated).await?;
+        let sender_signing_key = authenticated_sync_signing_key(&event.payload).unwrap_or_default();
+        let messages = fetch_missed_for_signing_key(
+            pool,
+            &user,
+            last_id,
+            event.payload.since_updated,
+            sender_signing_key,
+        ).await?;
 
         let count = messages.len();
         let resp = ParvaneEvent {
@@ -2102,6 +2232,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_message_actions_respect_membership_and_admin_roles() {
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "g", GroupKind::Group, "alice@local", &["bob@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        let mid = "00000000-0000-7000-8000-0000000000a4";
+        store_message(&pool, &send_event(mid, "alice@local", &gid, "group action"), 1)
+            .await
+            .unwrap();
+
+        assert!(can_mutate_message(&pool, mid, "bob@local", None, "react", false)
+            .await
+            .unwrap());
+        assert!(!can_mutate_message(&pool, mid, "mallory@evil", None, "react", false)
+            .await
+            .unwrap());
+        assert!(!can_mutate_message(&pool, mid, "bob@local", None, "pin", true)
+            .await
+            .unwrap());
+        assert!(can_mutate_message(&pool, mid, "alice@local", None, "pin", true)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn list_groups_returns_users_groups() {
         let pool = test_pool().await;
         let g1 = create_group(&pool, "G1", GroupKind::Group, "alice@local", &["bob@local".into()], 1)
@@ -2205,7 +2362,7 @@ mod tests {
             ciphertext: "cipher-after".into(),
             ctype: 1,
             sender_identity: "curve-key".into(),
-            sender_signing_key: signing_key,
+            sender_signing_key: signing_key.clone(),
         };
         assert!(!replace_message_content(&pool, mid, "alice@local", &edited, Some("bad"), 2)
             .await
@@ -2230,6 +2387,50 @@ mod tests {
             MessageContent::Encrypted { ciphertext, .. } if ciphertext == "cipher-after"
         ));
 
+        let react_payload = format!("react:{mid}:👍");
+        let react_signature = STANDARD_NO_PAD.encode(signing.sign(react_payload.as_bytes()).to_bytes());
+        assert!(can_mutate_message(&pool, mid, "bob@local", None, &react_payload, false)
+            .await
+            .unwrap(), "получатель может реагировать");
+        assert!(!can_mutate_message(&pool, mid, "mallory@evil", None, &react_payload, false)
+            .await
+            .unwrap(), "посторонний не может реагировать");
+        assert!(can_mutate_message(
+            &pool,
+            mid,
+            "alice@local",
+            Some(&react_signature),
+            &react_payload,
+            false,
+        )
+        .await
+        .unwrap(), "sealed-автор подтверждает действие подписью");
+        assert!(!can_mutate_message(
+            &pool,
+            mid,
+            "alice@local",
+            Some("bad"),
+            &react_payload,
+            false,
+        )
+        .await
+        .unwrap(), "неверная подпись отклоняется");
+
+        let sync_payload = SyncRequestPayload {
+            last_seen_id: "0".into(),
+            since_updated: 0,
+            sender_signing_key: Some(signing_key.clone()),
+            signature: None,
+        };
+        let sync_signed = format!("sync:{}:{}", sync_payload.last_seen_id, sync_payload.since_updated);
+        let sync_signature = STANDARD_NO_PAD.encode(signing.sign(sync_signed.as_bytes()).to_bytes());
+        let sync_payload = SyncRequestPayload { signature: Some(sync_signature), ..sync_payload };
+        let authenticated_key = authenticated_sync_signing_key(&sync_payload).unwrap();
+        let for_sender = fetch_missed_for_signing_key(&pool, "alice@local", "0", 0, authenticated_key)
+            .await
+            .unwrap();
+        assert_eq!(for_sender.len(), 1, "sealed-автор получает собственное сообщение по подписанному sync");
+
         let delete_payload = format!("delete:{mid}");
         let delete_signature = STANDARD_NO_PAD.encode(signing.sign(delete_payload.as_bytes()).to_bytes());
         assert!(delete_sealed_message(&pool, mid, Some(&delete_signature), 4)
@@ -2238,6 +2439,22 @@ mod tests {
         let deleted = fetch_missed(&pool, "bob@local", mid, 3).await.unwrap();
         assert_eq!(deleted.len(), 1);
         assert!(deleted[0].deleted);
+        assert!(matches!(
+            &deleted[0].content,
+            MessageContent::Encrypted { ciphertext, sender_signing_key, .. }
+                if ciphertext.is_empty() && sender_signing_key == &signing_key
+        ), "sealed tombstone сохраняет ключ авторизации sync");
+        let deleted_for_sender = fetch_missed_for_signing_key(
+            &pool,
+            "alice@local",
+            mid,
+            3,
+            &signing_key,
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted_for_sender.len(), 1);
+        assert!(deleted_for_sender[0].deleted, "sealed-автор получает tombstone по sync");
     }
 
     #[tokio::test]
