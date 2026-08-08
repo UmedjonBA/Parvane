@@ -2,6 +2,7 @@ import type { ApiMessage, ApiUpdate, ApiVideo } from '../types';
 import type { E2eEngine } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { PollStore } from './polls';
+import { MAIN_THREAD_ID } from '../types';
 
 import { buildWebPage, type ParvaneStore } from './store';
 import {
@@ -276,10 +277,12 @@ export function createSyncController(deps: SyncDependencies) {
     const current = readOutboxMaxByChatId.get(message.chatId) || 0;
     if (message.id <= current) return;
     readOutboxMaxByChatId.set(message.chatId, message.id);
+    // Именно updateThreadReadState: updateChat с readState tt игнорирует,
+    // и исходящие никогда не получают ✓✓
     deps.sendUpdate({
-      '@type': 'updateChat',
-      id: message.chatId,
-      chat: {},
+      '@type': 'updateThreadReadState',
+      chatId: message.chatId,
+      threadId: MAIN_THREAD_ID,
       readState: { lastReadOutboxMessageId: message.id },
     });
   }
