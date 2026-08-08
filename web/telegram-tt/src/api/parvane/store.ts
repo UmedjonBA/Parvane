@@ -296,10 +296,43 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           size: content.size_bytes || 0,
         },
       };
-    case 'file':
     case 'video':
-    case 'video_note':
-      // Видео/кругляши пока отдаются документом (progressive-стриминг — позже)
+    case 'video_note': {
+      const isRound = content.kind === 'video_note';
+      return {
+        ...(isRound ? {} : caption),
+        video: {
+          mediaType: 'video',
+          id: content.file_id!,
+          isRound: isRound || undefined,
+          mimeType: content.mime || 'video/mp4',
+          duration: content.duration_secs || 1,
+          fileName: content.filename
+            || `video-${(content.file_id || '').slice(0, 8)}${extForMime(content.mime) || '.mp4'}`,
+          width: content.width || (isRound ? 384 : 640),
+          height: content.height || (isRound ? 384 : 480),
+          size: content.size_bytes || 0,
+        },
+      };
+    }
+    case 'file':
+      // Аудиофайл — нативный плеер; duration/title/performer есть только от Web
+      if (content.mime?.startsWith('audio/')) {
+        return {
+          ...caption,
+          audio: {
+            mediaType: 'audio',
+            id: content.file_id!,
+            size: content.size_bytes || 0,
+            mimeType: content.mime,
+            fileName: content.filename
+              || `audio-${(content.file_id || '').slice(0, 8)}${extForMime(content.mime)}`,
+            duration: content.duration_secs || 0,
+            title: content.audio_title,
+            performer: content.audio_performer,
+          },
+        };
+      }
       return {
         ...caption,
         document: {
