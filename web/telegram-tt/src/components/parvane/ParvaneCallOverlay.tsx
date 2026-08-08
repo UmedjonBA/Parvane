@@ -14,8 +14,11 @@ type CallInfo = {
   peerName?: string;
   incoming?: { from: string; callId: string; media: string };
   remoteStream?: MediaStream;
+  localStream?: MediaStream;
   sas?: string;
   hasSecurityError?: boolean;
+  isMuted?: boolean;
+  isCameraOff?: boolean;
 };
 
 function getWinCall(): CallInfo | undefined {
@@ -32,6 +35,8 @@ const ParvaneCallOverlay = () => {
   const [call, setCall] = useState<CallInfo | undefined>();
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>();
+  const remoteVideoRef = useRef<HTMLVideoElement>();
+  const localVideoRef = useRef<HTMLVideoElement>();
   const activeSinceRef = useRef<number>();
   const lang = useOldLang();
 
@@ -58,13 +63,28 @@ const ParvaneCallOverlay = () => {
     return () => window.clearInterval(timer);
   }, [state]);
 
-  // Проигрываем удалённый аудиопоток
+  const hasRemoteVideo = Boolean(call?.remoteStream?.getVideoTracks().length);
+  const hasLocalVideo = Boolean(call?.localStream?.getVideoTracks().length);
+
+  // Проигрываем удалённый поток: аудио всегда, видео — при наличии трека
   useEffect(() => {
     if (call?.remoteStream && audioRef.current) {
       audioRef.current.srcObject = call.remoteStream;
       void audioRef.current.play().catch(() => undefined);
     }
-  }, [call?.remoteStream]);
+    if (call?.remoteStream && remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = call.remoteStream;
+      void remoteVideoRef.current.play().catch(() => undefined);
+    }
+  }, [call?.remoteStream, hasRemoteVideo]);
+
+  // Локальное превью камеры
+  useEffect(() => {
+    if (call?.localStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = call.localStream;
+      void localVideoRef.current.play().catch(() => undefined);
+    }
+  }, [call?.localStream, hasLocalVideo]);
 
   if (!isVisible) return undefined;
 
@@ -75,6 +95,11 @@ const ParvaneCallOverlay = () => {
   const anyCallApi = callApi as unknown as (name: string) => void;
   const handleAccept = () => anyCallApi('parvaneAcceptCall');
   const handleHangup = () => anyCallApi('parvaneHangUp');
+  const handleToggleMute = () => anyCallApi('parvaneToggleMute');
+  const handleToggleCamera = () => anyCallApi('parvaneToggleCamera');
+  const isActive = state === 'active' || state === 'connecting';
+  const muteIcon = call?.isMuted ? 'icon-microphone-alt' : 'icon-microphone';
+  const cameraIcon = call?.isCameraOff ? 'icon-video-stop' : 'icon-video';
 
   let statusText = '';
   if (state === 'requesting') statusText = lang('CallStatusRequesting');
@@ -86,8 +111,17 @@ const ParvaneCallOverlay = () => {
 
   return (
     <div className={styles.overlay}>
-      <div className={styles.card}>
-        <div className={styles.avatar}>{peerName.charAt(0).toUpperCase()}</div>
+      <div className={buildClassName(styles.card, hasRemoteVideo && styles.videoCard)}>
+        {hasRemoteVideo && (
+          <div className={styles.videoArea}>
+            {/* Звук идёт через отдельный audio-элемент — иначе дублируется */}
+            <video ref={remoteVideoRef} className={styles.remoteVideo} autoPlay playsInline muted />
+            {hasLocalVideo && !call?.isCameraOff && (
+              <video ref={localVideoRef} className={styles.localPreview} autoPlay playsInline muted />
+            )}
+          </div>
+        )}
+        {!hasRemoteVideo && <div className={styles.avatar}>{peerName.charAt(0).toUpperCase()}</div>}
         <div className={styles.name}>{peerName}</div>
         <div className={buildClassName(styles.status, call?.hasSecurityError && styles.securityError)}>
           {statusText}
@@ -107,6 +141,28 @@ const ParvaneCallOverlay = () => {
               ariaLabel={lang('CallAccept')}
             >
               <i className={buildClassName(styles.icon, 'icon icon-phone')} />
+            </Button>
+          )}
+          {isActive && (
+            <Button
+              round
+              color="translucent"
+              className={buildClassName(styles.control, call?.isMuted && styles.controlOff)}
+              onClick={handleToggleMute}
+              ariaLabel={lang(call?.isMuted ? 'ParvaneCallUnmute' : 'ParvaneCallMute')}
+            >
+              <i className={buildClassName(styles.icon, 'icon', muteIcon)} />
+            </Button>
+          )}
+          {isActive && hasLocalVideo && (
+            <Button
+              round
+              color="translucent"
+              className={buildClassName(styles.control, call?.isCameraOff && styles.controlOff)}
+              onClick={handleToggleCamera}
+              ariaLabel={lang(call?.isCameraOff ? 'ParvaneCallCameraOn' : 'ParvaneCallCameraOff')}
+            >
+              <i className={buildClassName(styles.icon, 'icon', cameraIcon)} />
             </Button>
           )}
           <Button
