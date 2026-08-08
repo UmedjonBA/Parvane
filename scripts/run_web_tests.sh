@@ -33,3 +33,18 @@ npm run test:playwright
 
 log "Two-browser sync and reconnect e2e"
 "$ROOT/scripts/run_web_sync_e2e.sh"
+
+log "Two-browser media and TTL e2e"
+"$ROOT/scripts/run_web_media_e2e.sh"
+
+log "Three-browser groups e2e"
+"$ROOT/scripts/run_web_groups_e2e.sh"
+
+log "Two-browser content features e2e"
+"$ROOT/scripts/run_web_content_features_e2e.sh"
+
+log "Two-browser calls e2e"
+"$ROOT/scripts/run_web_calls_e2e.sh"
+
+log "Cross-client Web <-> desktop e2e"
+"$ROOT/scripts/run_web_cross_client_e2e.sh"

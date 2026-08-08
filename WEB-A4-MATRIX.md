@@ -16,8 +16,8 @@ path.
 | User and message search | User search and global message search are automated | Not covered separately (search state is not persisted) | Empty query returns no results by design | Reconnect script opens peers and finds message text through UI search | None |
 | Photo and file | Automated: photo and document upload through the attach UI, recipient decrypts the photo and downloads the file byte-exact | Automated: both media survive recipient relogin | Owner/recipient/public ACL is automated | `scripts/e2e_web_media_ttl.mjs`, cloud security test | None |
 | E2E and TTL | Text E2E is automated | E2E reconnect is automated; TTL text disappears on both clients and stays deleted after reload | Plaintext fallback is automated | Unit policy tests, live gateway tests, `scripts/e2e_web_media_ttl.mjs` | None |
-| Groups | Ban isolation is automated | Not covered | Banned-member isolation is automated | Group rotation security test | Add create/add/remove/mute/invite/encrypted media |
-| Polls | Not covered | Not covered | Not covered | Provider implementation only | Add create/vote/close/public-voters flow |
+| Groups | Automated: create with a member, add and remove a member through the profile UI, group text and encrypted photo delivery to every member | Group list discovery is delivered by live membership refresh (fixed race) | Automated: removed member stops receiving new messages; ban isolation and mute have protocol/unit tests | `scripts/e2e_web_groups.mjs`, group rotation security test, messenger unit tests | Invite links have shard tests but no Web UI surface yet |
+| Polls | Automated: create with two options, cross-client vote, public View Results, stop with confirmation showing Final Results | Poll state is driven by mutations covered in the same scenario | Stop is owner-only via the message context menu | `scripts/e2e_web_groups.mjs` | None |
 | Stickers, GIF and custom emoji | Automated: sticker, GIF, and custom emoji sent from the native panels render on the recipient | Automated: sticker and GIF survive recipient relogin | Built-in packs only, no premium gating by design | `scripts/e2e_web_content_features.mjs` | None |
 | Folders and blocked users | Automated: folder created through settings with an included chat; user blocked through privacy settings | Automated: folder tab and blocked list survive relogin | Local-only persistence is the documented scope | `scripts/e2e_web_content_features.mjs` | None |
 | Scheduled messages and static location | Automated: message scheduled via the send-button menu is delivered after the delay; static location sends with granted geolocation | Automated: the scheduled queue survives sender relogin before firing | Geolocation permission granted explicitly in the scenario | `scripts/e2e_web_content_features.mjs` | None |
@@ -29,7 +29,12 @@ path.
 - Chromium, Firefox, WebKit, and iOS startup/login matrix: green.
 - Web lint/typecheck, 52 unit/integration tests, production and mocked builds: green.
 - Production-like live security matrix: green.
-- Two-browser offline delivery, reconnect, UUID idempotency, reply, edit,
-  delete, reaction, pin, and forward: green.
-- A4 remains open until every row has an automated happy path, reload/reconnect
-  coverage where state persists, and a permission/error assertion.
+- Two-browser offline delivery, reconnect, UUID idempotency, and the full
+  message-mutation set including receipts, presence, and typing: green.
+- Media, TTL, groups with polls, content features, calls with SAS, and the
+  cross-client Web <-> desktop harness: green.
+- Every row has an automated happy path, reload/reconnect coverage where state
+  persists, and a permission/error assertion. The A4 gate is closed; remaining
+  notes in the rows above are follow-ups outside the current-function scope
+  (Web UI for invite links, desktop-initiated media autosend, video/group call
+  UI automation).

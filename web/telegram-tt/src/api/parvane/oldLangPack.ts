@@ -82,6 +82,8 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     ParvaneCallSecurityError: 'Call security check failed',
     CallEmojiKeyTooltip: 'If these emoji match what %@ sees, this call is fully secure',
     lng_polls_stop: 'Stop poll',
+    lng_polls_stop_warning: 'If you stop this poll now, nobody will be able to vote in it anymore',
+    lng_polls_stop_sure: 'Stop poll',
     GroupName: 'Group name',
     EnterChannelName: 'Channel name',
     'GroupInfo.ParticipantCount': { oneValue: '%@ member', otherValue: '%@ members' },
