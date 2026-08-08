@@ -78,7 +78,17 @@ export function createGroupController(deps: GroupDependencies) {
         JSON.stringify({ token: deps.getToken() }),
       );
       const groups = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups || [];
-      groups.forEach(register);
+      const store = deps.getStore();
+      groups.forEach((info) => {
+        // Новая группа (нас добавили с другого клиента) должна попасть в
+        // список чатов, иначе она видна только после перезахода
+        const isNew = !store.isGroupAddress(info.group_id);
+        register(info);
+        if (isNew) {
+          const chat = store.buildApiChatForGroup(info);
+          deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+        }
+      });
     } catch {
       // Следующий delta-sync повторит membership refresh.
     }

@@ -271,6 +271,12 @@ export function createSyncController(deps: SyncDependencies) {
     } catch {
       // Список групп догоним следующим синком.
     }
+    // Если группа так и не нашлась (гонка с фан-аутом членства или сбой
+    // запроса), кандидата нужно проверять снова — иначе чат не появится
+    // до перезахода
+    if (!store.isGroupAddress(stored.to)) {
+      checkedGroupCandidates.delete(stored.to);
+    }
   }
 
   function noteReadOutbox(message: ApiMessage) {
