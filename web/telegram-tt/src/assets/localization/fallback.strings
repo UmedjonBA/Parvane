@@ -2011,6 +2011,7 @@
 "PasswordFormPlaceholder" = "Password";
 "PasswordFormSubmit" = "Next";
 "Cache.ClearProgress" = "Please wait...";
+"lng_channel_add_users" = "Add members";
 "ActionFallbackUser" = "User";
 "ActionFallbackChat" = "Chat";
 "ActionFallbackChannel" = "Channel";

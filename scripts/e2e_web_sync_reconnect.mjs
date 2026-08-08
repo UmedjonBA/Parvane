@@ -1,174 +1,31 @@
+// Двухбраузерный сценарий: offline-доставка, reconnect, идемпотентность UUID,
+// мутации сообщений, receipts/presence/typing, мульти-пересылка и поиск.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
-const BASE_URL = process.env.PARVANE_E2E_BASE_URL;
-const GATEWAY_URL = process.env.PARVANE_E2E_GATEWAY_URL;
+import {
+  LOGIN_TIMEOUT_MS,
+  addReaction,
+  deleteMessage,
+  disconnectWhileOffline,
+  editText,
+  findMessage,
+  findMessageContainer,
+  forwardMessage,
+  openPrivateChat,
+  pickForwardRecipientAndSend,
+  pinMessage,
+  preparePage as preparePageShared,
+  selectMessageAction,
+  selectMessageActionOn,
+  sendText,
+  waitForSocketCount,
+} from './e2e_web_helpers.mjs';
+
 const PASSWORD = 'Parvane-sync-e2e-password';
-const LOGIN_TIMEOUT_MS = 60000;
-const RECONNECT_TIMEOUT_MS = 30000;
 
-assert(BASE_URL, 'PARVANE_E2E_BASE_URL is required');
-assert(GATEWAY_URL, 'PARVANE_E2E_GATEWAY_URL is required');
-
-async function preparePage(context, user) {
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', (err) => errors.push(err.message));
-  await page.addInitScript(({ gatewayUrl }) => {
-    localStorage.setItem('parvane:gateway', gatewayUrl);
-    const NativeWebSocket = window.WebSocket;
-    globalThis.__parvaneE2eSockets = { opened: 0, closed: 0, active: new Set() };
-    globalThis.__parvaneE2eDisconnect = () => {
-      for (const socket of globalThis.__parvaneE2eSockets.active) {
-        socket.close(4001, 'e2e network interruption');
-      }
-    };
-    window.WebSocket = class TrackedWebSocket extends NativeWebSocket {
-      constructor(url, protocols) {
-        super(url, protocols);
-        globalThis.__parvaneE2eSockets.active.add(this);
-        this.addEventListener('open', () => {
-          globalThis.__parvaneE2eSockets.opened += 1;
-        });
-        this.addEventListener('close', () => {
-          globalThis.__parvaneE2eSockets.active.delete(this);
-          globalThis.__parvaneE2eSockets.closed += 1;
-        });
-      }
-    };
-  }, { gatewayUrl: GATEWAY_URL });
-  await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
-    await route.fulfill({ contentType: 'application/javascript', body: '' });
-  });
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-
-  const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
-  const addressInput = addressScreen.getByLabel('Address (user@server)');
-  await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await addressInput.fill(user);
-  await addressScreen.getByRole('button', { name: 'Next' }).click();
-
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.waitForFunction(() => globalThis.__parvaneE2eSockets?.opened === 1);
-  return { page, errors };
-}
-
-async function openPrivateChat(page, address) {
-  const search = page.locator('#telegram-search-input');
-  const displayName = address.split('@')[0];
-  await search.click();
-  await page.locator('.LeftSearch').waitFor({ state: 'visible', timeout: 10000 });
-  await page.waitForTimeout(250);
-  await search.fill(displayName);
-  const result = page.locator('.LeftSearch .search-result').filter({ hasText: displayName }).first();
-  await result.waitFor({ state: 'visible', timeout: 15000 });
-  await result.locator('.ListItem-button').click();
-  await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
-
-async function sendText(page, text) {
-  const input = page.locator('#editable-message-text');
-  await input.fill(text);
-  await input.press('Enter');
-  await page.waitForFunction(() => !document.querySelector('#editable-message-text')?.textContent);
-}
-
-function findMessage(page, text) {
-  return page
-    .locator('.Transition_slide-active > .MessageList .Message .text-content')
-    .filter({ hasText: text });
-}
-
-function findMessageContainer(page, text) {
-  return page
-    .locator('.Transition_slide-active > .MessageList .Message')
-    .filter({ hasText: text })
-    .last();
-}
-
-async function openMessageMenu(page, text) {
-  const message = findMessageContainer(page, text);
-  const box = await message.boundingBox();
-  assert(box, `message is not visible: ${text}`);
-  await message.click({
-    button: 'right',
-    position: { x: box.width / 2, y: box.height / 2 },
-  });
-}
-
-async function selectMessageAction(page, text, action) {
-  await openMessageMenu(page, text);
-  const item = page.locator('.MessageContextMenu').getByRole('menuitem', { name: action, exact: true });
-  await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await item.click();
-}
-
-async function addReaction(page, text, emoji) {
-  await openMessageMenu(page, text);
-  const reaction = page.locator('.MessageContextMenu .ReactionSelector')
-    .getByRole('button', { name: emoji, exact: true });
-  await reaction.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await reaction.click();
-}
-
-async function pinMessage(page, text) {
-  await selectMessageAction(page, text, 'Pin');
-  const confirm = page.locator('.Modal.pin').getByRole('button', { name: 'Pin', exact: true });
-  await confirm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await confirm.click();
-}
-
-async function forwardMessage(page, text, address) {
-  const displayName = address.split('@')[0];
-  await selectMessageAction(page, text, 'Forward');
-  const picker = page.locator('.Modal').filter({ has: page.locator('.ChatOrUserPicker-item') });
-  await picker.locator('.search-input').fill(displayName);
-  const recipient = picker.locator('.Transition_slide-active .ChatOrUserPicker-item')
-    .filter({ hasText: displayName }).last();
-  await recipient.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await recipient.click();
-  await recipient.locator('.picker-checkbox.selected').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await picker.locator('.picker-footer-button').click();
-  const embedded = page.locator('.Transition_slide-active .ComposerEmbeddedMessage').filter({ hasText: text });
-  await embedded.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.locator('.Transition_slide-active .Composer')
-    .getByRole('button', { name: 'Forward', exact: true }).click();
-  await embedded.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
-}
-
-async function editText(page, sourceText, editedText) {
-  await selectMessageAction(page, sourceText, 'Edit');
-  await page.locator('.ComposerEmbeddedMessage').filter({ hasText: sourceText })
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const input = page.locator('#editable-message-text');
-  await input.fill(editedText);
-  await input.press('Enter');
-}
-
-async function deleteMessage(page, text) {
-  await selectMessageAction(page, text, 'Delete');
-  const confirm = page.locator('.Modal').getByRole('button', { name: 'Delete', exact: true });
-  await confirm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await confirm.click();
-}
-
-async function waitForSocketCount(page, field, count) {
-  await page.waitForFunction(
-    ({ fieldName, expected }) => globalThis.__parvaneE2eSockets?.[fieldName] >= expected,
-    { fieldName: field, expected: count },
-    { timeout: RECONNECT_TIMEOUT_MS },
-  );
-}
-
-async function disconnectWhileOffline(context, page) {
-  await context.setOffline(true);
-  await page.evaluate(() => globalThis.__parvaneE2eDisconnect());
-}
+const preparePage = (context, user) => preparePageShared(context, user, PASSWORD);
 
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
@@ -238,10 +95,89 @@ try {
 
   await deleteMessage(aliceSession.page, editedReply);
   await findMessage(bobSession.page, editedReply).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Живая доставка без reconnect (Bob → Alice при обоих онлайн) ────────────
+  const liveMessage = `live-${suffix}`;
+  await sendText(bobSession.page, liveMessage);
+  await findMessage(aliceSession.page, liveMessage).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Read receipt: Alice держит чат открытым → у Bob исходящее становится ✓✓ ─
+  await findMessageContainer(bobSession.page, liveMessage)
+    .locator('.icon-message-read')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Presence: Bob видит Alice онлайн (heartbeat раз в 30 секунд) ───────────
+  await bobSession.page.locator('.MiddleHeader')
+    .getByText('online', { exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Typing: Alice печатает → Bob видит индикатор ───────────────────────────
+  await aliceSession.page.locator('#editable-message-text').pressSequentially('typing-probe', { delay: 60 });
+  await bobSession.page.locator('.MiddleHeader')
+    .getByText(/typing/i)
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.locator('#editable-message-text').fill('');
+
+  // ── Снятие реакции: клик по бейджу убирает 👍 у обоих ──────────────────────
+  const aliceReacted = aliceSession.page.locator('.Transition_slide-active > .MessageList .Message')
+    .filter({ hasText: message })
+    .filter({ has: aliceSession.page.locator('.message-reaction') })
+    .first();
+  await aliceReacted.locator('.message-reaction').filter({ hasText: '👍' }).click();
+  await bobSession.page.waitForFunction(
+    () => !document.querySelector('.Transition_slide-active > .MessageList .message-reaction'),
+    undefined,
+    { timeout: LOGIN_TIMEOUT_MS },
+  );
+
+  // ── Unpin: закреп снимается у обоих ────────────────────────────────────────
+  const alicePinned = aliceSession.page.locator('.Transition_slide-active > .MessageList .Message')
+    .filter({ hasText: message })
+    .first();
+  await selectMessageActionOn(aliceSession.page, alicePinned, 'Unpin');
+  await bobSession.page.locator('.HeaderPinnedMessageWrapper')
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Мульти-пересылка: две выбранные — одной операцией ──────────────────────
+  const multiA = `multi-a-${suffix}`;
+  const multiB = `multi-b-${suffix}`;
+  await sendText(aliceSession.page, multiA);
+  await sendText(aliceSession.page, multiB);
+  await findMessage(bobSession.page, multiB).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await selectMessageAction(aliceSession.page, multiA, 'Select');
+  await aliceSession.page.locator('.MessageSelectToolbar').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findMessageContainer(aliceSession.page, multiB).click();
+  await aliceSession.page.locator('.MessageSelectToolbar')
+    .getByRole('button', { name: 'Forward', exact: true }).click();
+  await pickForwardRecipientAndSend(aliceSession.page, bob);
+  for (const forwardedText of [multiA, multiB]) {
+    await bobSession.page.waitForFunction(
+      (expected) => Array.from(document.querySelectorAll('.Transition_slide-active > .MessageList .Message'))
+        .filter((element) => element.textContent?.includes(expected)).length === 2,
+      forwardedText,
+      { timeout: LOGIN_TIMEOUT_MS },
+    );
+    assert.equal(
+      await findMessageContainer(bobSession.page, forwardedText).locator('.forwarded-message').count(),
+      1,
+      `multi-forward metadata is missing for ${forwardedText}`,
+    );
+  }
+
+  // ── Поиск по сообщениям: глобальный поиск находит текст ────────────────────
+  const searchInput = bobSession.page.locator('#telegram-search-input');
+  await searchInput.click();
+  await bobSession.page.locator('.LeftSearch').waitFor({ state: 'visible', timeout: 10000 });
+  await searchInput.fill(multiA);
+  await bobSession.page.locator('.LeftSearch')
+    .getByText(multiA)
+    .first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: two-browser reconnect, reply, edit, delete, reaction, pin, forward and UUID idempotency');
+  console.log('OK: two-browser reconnect, mutations, receipts, presence, typing, multi-forward and search');
 } finally {
   await aliceContext.close();
   await bobContext.close();
