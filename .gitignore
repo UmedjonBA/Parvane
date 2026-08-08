@@ -13,6 +13,8 @@
 .agents/
 .codex/
 .claude/
+# Локальные тестовые и демонстрационные профили (tdata, логи, SQLite)
+/local-workdirs/
 AGENTS.md
 CLAUDE.md
 
