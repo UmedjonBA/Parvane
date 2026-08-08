@@ -1602,6 +1602,7 @@ export interface LangPair {
   'CheckPasswordDescription': undefined;
   'PasswordFormPlaceholder': undefined;
   'PasswordFormSubmit': undefined;
+  'Cache.ClearProgress': undefined;
   'ActionFallbackUser': undefined;
   'ActionFallbackChat': undefined;
   'ActionFallbackChannel': undefined;

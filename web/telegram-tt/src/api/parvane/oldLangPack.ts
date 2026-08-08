@@ -33,6 +33,21 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     'Time.MinutesAgo': { oneValue: '%@ minute ago', otherValue: '%@ minutes ago' },
     'StickerPack.AddStickerCount': { oneValue: 'Add %@ Sticker', otherValue: 'Add %@ Stickers' },
     'StickerPack.RemoveStickerCount': { oneValue: 'Remove %@ Sticker', otherValue: 'Remove %@ Stickers' },
+    SETTINGS: 'Settings',
+    lng_settings_information: 'Edit profile',
+    FirstName: 'First name (required)',
+    LastName: 'Last name (optional)',
+    UserBio: 'Bio (optional)',
+    Save: 'Save',
+    Username: 'Username',
+    UsernameHelp: 'Usernames are not supported on this server yet.',
+    lng_settings_about_bio: 'Any details such as age, occupation or city.',
+    LogOutTitle: 'Log Out',
+    'Common.Select': 'Select',
+    'Chat.ForwardActionHeader': 'Forward',
+    lng_sure_logout: 'Are you sure you want to log out?',
+    'AccountSettings.Logout': 'Log Out',
+    AccDescrGoBack: 'Go back',
   };
 
   const longWeekday = new Intl.DateTimeFormat(langCode, { weekday: 'long' });
