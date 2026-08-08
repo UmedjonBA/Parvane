@@ -2012,6 +2012,8 @@
 "PasswordFormSubmit" = "Next";
 "Cache.ClearProgress" = "Please wait...";
 "lng_channel_add_users" = "Add members";
+"GifsTab" = "GIFs";
+"StickersList.EmojiItem" = "Custom Emoji";
 "ActionFallbackUser" = "User";
 "ActionFallbackChat" = "Chat";
 "ActionFallbackChannel" = "Channel";
