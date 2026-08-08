@@ -1,6 +1,7 @@
 // Двухбраузерный звонок 1-на-1: вызов из шапки чата, входящий оверлей,
-// принятие с fake-микрофоном, совпадение SAS-эмодзи у обеих сторон,
-// завершение и отклонение повторного вызова.
+// принятие с fake-микрофоном, совпадение SAS-эмодзи, mute, видеозвонок с
+// рендером потоков, завершение/отклонение и история звонков в чате
+// (включая персист после reload).
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -20,8 +21,22 @@ const browser = await chromium.launch({
     '--autoplay-policy=no-user-gesture-required',
   ],
 });
-const aliceContext = await browser.newContext({ permissions: ['microphone'] });
-const bobContext = await browser.newContext({ permissions: ['microphone'] });
+const aliceContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
+const bobContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
+
+async function relogin(page) {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
+  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
+  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+function findHistoryEntry(page, text) {
+  return page.locator('.Transition_slide-active > .MessageList .Message')
+    .filter({ hasText: text }).first();
+}
 
 try {
   const suffix = `${Date.now()}-${process.pid}`;
@@ -57,10 +72,38 @@ try {
   assert(aliceSasText.length > 0, 'SAS is empty on the caller side');
   assert.equal(aliceSasText, bobSasText, 'SAS emoji differ between the two peers');
 
+  // ── Mute: кнопка переключается и меняет aria ───────────────────────────────
+  await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();
+  await aliceSession.page.getByRole('button', { name: 'Unmute', exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await aliceSession.page.getByRole('button', { name: 'Mute', exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
   // ── Завершение звонка ──────────────────────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await aliceSession.page.getByRole('button', { name: 'End Call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.getByRole('button', { name: 'End Call' })
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Видеозвонок: рендер удалённого потока и локального превью ──────────────
+  await aliceSession.page.getByRole('button', { name: 'More actions' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'Video Call' }).click();
+  await bobSession.page.getByText('is calling you...', { exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.getByRole('button', { name: 'Accept' }).click();
+  // Удалённое видео (плюс локальное превью у обеих сторон)
+  await aliceSession.page.locator('video').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.locator('video').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Камера: переключение и обратно
+  await aliceSession.page.getByRole('button', { name: 'Turn camera off' }).click();
+  await aliceSession.page.getByRole('button', { name: 'Turn camera on' })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.getByRole('button', { name: 'Turn camera on' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await bobSession.page.getByRole('button', { name: 'End Call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
@@ -74,10 +117,28 @@ try {
   await bobSession.page.getByRole('button', { name: 'Accept' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── История звонков в чате: статусы у обеих сторон ─────────────────────────
+  await findHistoryEntry(aliceSession.page, 'Outgoing Call')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findHistoryEntry(aliceSession.page, 'Outgoing Video Call')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findHistoryEntry(aliceSession.page, 'Declined Call')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findHistoryEntry(bobSession.page, 'Incoming Call')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findHistoryEntry(bobSession.page, 'Incoming Video Call')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Персист истории: reload, источник — call-шард ──────────────────────────
+  await relogin(aliceSession.page);
+  await openPrivateChat(aliceSession.page, bob);
+  await findHistoryEntry(aliceSession.page, 'Outgoing Video Call')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: two-browser call with matching SAS, hangup and decline');
+  console.log('OK: звонки — SAS, mute, видео с рендером, decline и история со статусами после reload');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {
