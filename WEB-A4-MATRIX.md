@@ -22,7 +22,7 @@ path.
 | Folders and blocked users | Not covered | Not covered | Not covered | Local persistence implementation only | Add reload persistence flow |
 | Scheduled messages and static location | Not covered | Not covered | Not covered | Provider implementation only | Add scheduling and send-now flow |
 | Audio/video 1-to-1 call | Automated: two-browser audio call with fake devices, matching SAS emoji on both peers, timer, hangup | Not covered (call state is intentionally not persisted) | Automated: decline flow plus signed-signaling rejection tests | `scripts/e2e_web_calls.mjs`, call signaling tests | Video/group call UI flow stays manual |
-| Web to desktop / desktop to Web | Not covered | Not covered | Not covered | No automated cross-client harness | Add text and encrypted media parity harness |
+| Web to desktop / desktop to Web | Automated: sealed text Web -> desktop and desktop -> Web, encrypted photo Web -> desktop on one production-like stack (desktop through the gateway TCP transport) | Desktop restart in the same workdir is part of the scenario | Desktop auto-registers through the gateway bootstrap allowlist | `scripts/e2e_web_cross_client.mjs` (skips with a warning when `desktop/build-probe/bin/Telegram` is not built locally) | Desktop-initiated media needs a desktop autosend hook |
 
 ## Gate status
 
