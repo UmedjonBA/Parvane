@@ -196,7 +196,9 @@ const SettingsEditProfile = ({
     const trimmedLastName = lastName.trim();
     const trimmedBio = bio.trim();
 
-    if (!editableUsername) return;
+    // Parvane: у пользователей нет username — пустая строка не должна блокировать
+    // сохранение; блокирует только невалидный ввод (false)
+    if (editableUsername === false) return;
 
     if (!trimmedFirstName.length) {
       setError(ERROR_FIRST_NAME_MISSING);

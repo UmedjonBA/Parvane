@@ -37,6 +37,8 @@ export default defineConfig(
     'public/',
     'deploy/update_version.js',
     'tauri/target/',
+    'playwright-report/',
+    'test-results/',
   ]),
   {
     name: 'teact-config',

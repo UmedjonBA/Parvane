@@ -2010,6 +2010,7 @@
 "CheckPasswordDescription" = "Please enter your password to continue.";
 "PasswordFormPlaceholder" = "Password";
 "PasswordFormSubmit" = "Next";
+"Cache.ClearProgress" = "Please wait...";
 "ActionFallbackUser" = "User";
 "ActionFallbackChat" = "Chat";
 "ActionFallbackChannel" = "Channel";

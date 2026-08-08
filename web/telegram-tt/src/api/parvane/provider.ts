@@ -562,6 +562,9 @@ const methods = {
 
   provideAuthPhoneNumber(address: string) {
     if (!/^[^@\s]+@[^@\s]+$/.test(address)) {
+      // Повторный WaitPhoneNumber сбрасывает auth.isLoading — иначе форма
+      // навсегда останется в состоянии загрузки и не даст повторить ввод
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
       sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorPhoneNumberInvalid' } });
       return Promise.resolve(undefined);
     }
@@ -581,6 +584,9 @@ const methods = {
       saveLoginAddress(user);
     } catch (err) {
       logDebug(`логин отклонён: ${String(err)}`);
+      // Повторный WaitPassword сбрасывает auth.isLoading, чтобы форма дала
+      // ввести пароль ещё раз
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
       sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorIncorrectPassword' } });
     }
   },
@@ -603,10 +609,11 @@ const methods = {
     return { users, userStatusesById };
   },
 
-  async updateProfile({ firstName }: { firstName?: string; lastName?: string; about?: string }) {
-    if (!connection || !firstName) return undefined;
-    await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify({ token, display_name: firstName }));
-    store.setDisplayName(store.self, firstName);
+  async updateProfile({ firstName, lastName }: { firstName?: string; lastName?: string; about?: string }) {
+    const displayName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    if (!connection || !displayName) return undefined;
+    await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify({ token, display_name: displayName }));
+    store.setDisplayName(store.self, displayName);
     const user = store.buildApiUser(store.self);
     sendUpdate({ '@type': 'updateUser', id: user.id, user });
     sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });

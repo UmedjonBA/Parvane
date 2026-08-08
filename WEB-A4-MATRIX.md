@@ -7,9 +7,9 @@ path.
 
 | Area | Happy path | Reload / reconnect | Permission / error | Current evidence | Next gap |
 | --- | --- | --- | --- | --- | --- |
-| Register and sign in | Automated | Not covered | Invalid credentials not covered | `tests/playwright/live-stack.spec.ts`, Chromium, Firefox, WebKit, iOS | Add reload and invalid-password cases |
-| Logout | Not covered | Not covered | Not covered | Secure storage has unit coverage only | Add browser logout and storage cleanup |
-| Profile and avatar | Not covered | Not covered | Cloud public/private ACL is automated | `tests/playwright/cloud-security.spec.ts` | Add Web profile edit and avatar reload |
+| Register and sign in | Automated | Automated: reload restores the saved address and asks for the password again | Automated: invalid password shows an error, keeps the form usable, and does not register | `tests/playwright/live-stack.spec.ts`, `tests/playwright/auth-lifecycle.spec.ts` | None |
+| Logout | Automated: settings menu sign-out returns to the address screen | Covered by the re-login step of the same scenario | Automated: login address, non-extractable key, and encrypted state are wiped | `tests/playwright/auth-lifecycle.spec.ts` | None |
+| Profile and avatar | Automated: display name and avatar edit through settings | Automated: both survive relogin and load from identity/cloud | Cloud public/private ACL is automated | `tests/playwright/profile.spec.ts`, `tests/playwright/cloud-security.spec.ts` | Bio and username are not backed by the server and stay local-only |
 | Personal text | Automated | Automated | Plaintext rejection is automated | `scripts/e2e_web_sync_reconnect.mjs`, gateway security test | Add online delivery in the full mutation scenario |
 | Reply, edit, delete, reaction, pin, forward | All six actions automated | All six actions automated after reconnect | Signed sealed mutations, participant checks, group roles, and invalid signatures are automated | Two-browser reconnect script; messenger action-authorization tests | Add reaction removal, unpin, and multi-message forwarding |
 | Read receipt, unread, typing, presence | Partially covered | Not covered | Forged actors and wildcard subjects are automated | Gateway security test; reconnect script | Add two-client UI state assertions |
