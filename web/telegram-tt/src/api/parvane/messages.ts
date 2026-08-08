@@ -380,12 +380,10 @@ export function createMessageController(deps: MessageDependencies) {
     if (attachment) {
       try {
         const blob: Blob = attachment.blob ?? await fetch(attachment.blobUrl).then((response) => response.blob());
-        // Local echo играет по id локального uuid; кэшируем блоб под ним до
-        // аплоада, иначе клик по play до/после подмены контента упирается в
-        // несуществующий file_id (audio.src уже зафиксирован плеером)
-        if (attachment.voice) {
-          deps.media.cacheBlob(uuid, blob, attachment.mimeType || 'audio/ogg');
-        }
+        // Local echo играет/скачивает по id локального uuid; кэшируем блоб под
+        // ним до аплоада, иначе обращение до/после подмены контента упирается в
+        // несуществующий file_id (у voice плеер фиксирует audio.src навсегда)
+        deps.media.cacheBlob(uuid, blob, attachment.mimeType || 'application/octet-stream');
         const { fileId, size, mediaKeys } = await deps.media.uploadBlob(
           blob,
           attachment.filename,
@@ -410,6 +408,62 @@ export function createMessageController(deps: MessageDependencies) {
               duration: attachment.voice.duration,
               waveform: attachment.voice.waveform,
               size,
+            },
+          };
+        } else if (attachment.isRoundVideo || deps.media.isVideoAttachment(attachment)) {
+          const isRound = Boolean(attachment.isRoundVideo);
+          const quick = attachment.quick;
+          wireContent = {
+            kind: isRound ? 'video_note' : 'video',
+            file_id: fileId,
+            duration_secs: Math.max(1, Math.round(quick?.duration || 1)),
+            width: quick?.width || (isRound ? 384 : 640),
+            height: quick?.height || (isRound ? 384 : 480),
+            mime: attachment.mimeType,
+            size_bytes: size,
+            caption: isRound ? undefined : params.text || undefined,
+            ...mediaCrypto,
+          };
+          sentContent = {
+            ...(params.text && !isRound ? { text: { text: params.text } } : {}),
+            video: {
+              mediaType: 'video',
+              id: fileId,
+              isRound: isRound || undefined,
+              mimeType: attachment.mimeType,
+              duration: quick?.duration || 1,
+              fileName: attachment.filename,
+              width: quick?.width,
+              height: quick?.height,
+              size,
+              blobUrl: attachment.blobUrl,
+              previewBlobUrl: attachment.previewBlobUrl,
+            },
+          };
+        } else if (attachment.audio) {
+          wireContent = {
+            kind: 'file',
+            file_id: fileId,
+            filename: attachment.filename,
+            mime: attachment.mimeType,
+            size_bytes: size,
+            caption: params.text || undefined,
+            duration_secs: Math.round(attachment.audio.duration) || undefined,
+            audio_title: attachment.audio.title,
+            audio_performer: attachment.audio.performer,
+            ...mediaCrypto,
+          };
+          sentContent = {
+            ...(params.text ? { text: { text: params.text } } : {}),
+            audio: {
+              mediaType: 'audio',
+              id: fileId,
+              size,
+              mimeType: attachment.mimeType,
+              fileName: attachment.filename,
+              duration: attachment.audio.duration,
+              title: attachment.audio.title,
+              performer: attachment.audio.performer,
             },
           };
         } else if (deps.media.isPhotoAttachment(attachment)) {

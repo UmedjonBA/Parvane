@@ -178,6 +178,11 @@ export function createMediaService(deps: MediaDependencies) {
     const normalizedUrl = url.replace(/^.*\/progressive\//, '');
     const avatarMatch = normalizedUrl.match(/^(?:avatar|profile)[^?]*\?(.+)$/);
     const mediaMatch = normalizedUrl.match(MEDIA_URL_REGEX);
+    // Превью-хэши видео (document<id>?size=x) — миниатюр на проводе нет;
+    // не отдавать полный файл в <img>
+    if (normalizedUrl.startsWith('document') && /[?&]size=/.test(normalizedUrl)) {
+      return Promise.resolve(undefined);
+    }
     const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
     if (!fileId) return Promise.resolve(undefined);
 
@@ -211,6 +216,13 @@ export function createMediaService(deps: MediaDependencies) {
     );
   }
 
+  function isVideoAttachment(attachment: NonNullable<SendMessageParams['attachment']>) {
+    return Boolean(
+      attachment.mimeType.startsWith('video/') && attachment.quick
+      && !attachment.shouldSendAsFile && !attachment.isRoundVideo,
+    );
+  }
+
   function buildLocalContent(uuid: string, params: SendMessageParams): ApiMessage['content'] {
     const { attachment, text, entities } = params;
     const caption = text ? { text: { text } } : {};
@@ -223,6 +235,39 @@ export function createMediaService(deps: MediaDependencies) {
           duration: attachment.voice.duration,
           waveform: attachment.voice.waveform,
           size: attachment.size,
+        },
+      };
+    }
+    if (attachment.isRoundVideo || isVideoAttachment(attachment)) {
+      return {
+        ...(attachment.isRoundVideo ? {} : caption),
+        video: {
+          mediaType: 'video',
+          id: uuid,
+          isRound: attachment.isRoundVideo,
+          mimeType: attachment.mimeType,
+          duration: attachment.quick?.duration || 1,
+          fileName: attachment.filename,
+          width: attachment.quick?.width,
+          height: attachment.quick?.height,
+          size: attachment.size,
+          blobUrl: attachment.blobUrl,
+          previewBlobUrl: attachment.previewBlobUrl,
+        },
+      };
+    }
+    if (attachment.audio) {
+      return {
+        ...caption,
+        audio: {
+          mediaType: 'audio',
+          id: uuid,
+          size: attachment.size,
+          mimeType: attachment.mimeType,
+          fileName: attachment.filename,
+          duration: attachment.audio.duration,
+          title: attachment.audio.title,
+          performer: attachment.audio.performer,
         },
       };
     }
@@ -276,7 +321,7 @@ export function createMediaService(deps: MediaDependencies) {
       };
     }
     const mediaId = content.photo?.id || content.document?.id || content.sticker?.id
-      || content.video?.id || content.voice?.id;
+      || content.video?.id || content.voice?.id || content.audio?.id;
     if (!mediaId) return undefined;
     const keys = keysByFileId.get(mediaId);
     const cryptoFields = keys ? { file_key: keys.keyB64, file_nonce: keys.nonceB64 } : {};
@@ -291,6 +336,31 @@ export function createMediaService(deps: MediaDependencies) {
         ...cryptoFields,
       };
     }
+    if (content.video?.isRound) {
+      return {
+        kind: 'video_note',
+        file_id: mediaId,
+        duration_secs: Math.max(1, Math.round(content.video.duration)),
+        width: content.video.width || 384,
+        height: content.video.height || 384,
+        mime: content.video.mimeType,
+        size_bytes: content.video.size,
+        ...cryptoFields,
+      };
+    }
+    if (content.audio) {
+      return {
+        kind: 'file',
+        file_id: mediaId,
+        filename: content.audio.fileName,
+        mime: content.audio.mimeType,
+        size_bytes: content.audio.size,
+        duration_secs: Math.round(content.audio.duration) || undefined,
+        audio_title: content.audio.title,
+        audio_performer: content.audio.performer,
+        ...cryptoFields,
+      };
+    }
     if (content.video?.isGif) {
       return {
         kind: 'gif',
@@ -300,6 +370,18 @@ export function createMediaService(deps: MediaDependencies) {
         width: content.video.width || 240,
         height: content.video.height || 240,
         duration_secs: Math.round(content.video.duration),
+        size_bytes: content.video.size,
+        ...cryptoFields,
+      };
+    }
+    if (content.video) {
+      return {
+        kind: 'video',
+        file_id: mediaId,
+        duration_secs: Math.max(1, Math.round(content.video.duration)),
+        width: content.video.width || 640,
+        height: content.video.height || 480,
+        mime: content.video.mimeType,
         size_bytes: content.video.size,
         ...cryptoFields,
       };
@@ -346,6 +428,7 @@ export function createMediaService(deps: MediaDependencies) {
     getCached: (fileId: string) => cacheByFileId.get(fileId),
     getCloudRecipients,
     isPhotoAttachment,
+    isVideoAttachment,
     messageToWireContent,
     rememberKeys,
     uploadBlob,

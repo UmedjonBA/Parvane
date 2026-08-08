@@ -28,6 +28,10 @@ export type WireMessageContent = {
   // Упакованные 5-битные сэмплы волны (63 байта); поле только Web↔Web —
   // desktop его игнорирует и пересчитывает волну из файла
   waveform?: number[];
+  // Метаданные аудиофайла (kind=file с mime audio/*); только Web↔Web,
+  // desktop игнорирует
+  audio_title?: string;
+  audio_performer?: string;
   width?: number;
   height?: number;
   caption?: string;
