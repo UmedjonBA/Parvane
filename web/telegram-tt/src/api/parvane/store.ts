@@ -283,11 +283,23 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           ],
         },
       };
+    case 'voice':
+      // Waveform едет по проводу только Web↔Web; от desktop её нет —
+      // бабл отрисует пустую волну
+      return {
+        ...caption,
+        voice: {
+          mediaType: 'voice',
+          id: content.file_id!,
+          duration: content.duration_secs || 1,
+          waveform: content.waveform,
+          size: content.size_bytes || 0,
+        },
+      };
     case 'file':
     case 'video':
-    case 'voice':
     case 'video_note':
-      // Видео/голос пока отдаются документом (progressive-стриминг — позже)
+      // Видео/кругляши пока отдаются документом (progressive-стриминг — позже)
       return {
         ...caption,
         document: {

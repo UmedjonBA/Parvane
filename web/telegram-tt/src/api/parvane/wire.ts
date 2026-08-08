@@ -25,6 +25,9 @@ export type WireMessageContent = {
   mime?: string;
   size_bytes?: number;
   duration_secs?: number;
+  // Упакованные 5-битные сэмплы волны (63 байта); поле только Web↔Web —
+  // desktop его игнорирует и пересчитывает волну из файла
+  waveform?: number[];
   width?: number;
   height?: number;
   caption?: string;
