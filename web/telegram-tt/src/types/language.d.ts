@@ -1603,6 +1603,8 @@ export interface LangPair {
   'PasswordFormPlaceholder': undefined;
   'PasswordFormSubmit': undefined;
   'Cache.ClearProgress': undefined;
+  'GifsTab': undefined;
+  'StickersList.EmojiItem': undefined;
   'ActionFallbackUser': undefined;
   'ActionFallbackChat': undefined;
   'ActionFallbackChannel': undefined;

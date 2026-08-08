@@ -21,7 +21,7 @@ path.
 | Stickers, GIF and custom emoji | Not covered | Not covered | Not covered | Built-in provider implementation only | Add send/render/reload flow |
 | Folders and blocked users | Not covered | Not covered | Not covered | Local persistence implementation only | Add reload persistence flow |
 | Scheduled messages and static location | Not covered | Not covered | Not covered | Provider implementation only | Add scheduling and send-now flow |
-| Audio/video 1-to-1 call | Not covered | Not covered | Signed signaling rejection is automated | Call signaling tests and provider controller | Add two-browser call UI flow |
+| Audio/video 1-to-1 call | Automated: two-browser audio call with fake devices, matching SAS emoji on both peers, timer, hangup | Not covered (call state is intentionally not persisted) | Automated: decline flow plus signed-signaling rejection tests | `scripts/e2e_web_calls.mjs`, call signaling tests | Video/group call UI flow stays manual |
 | Web to desktop / desktop to Web | Not covered | Not covered | Not covered | No automated cross-client harness | Add text and encrypted media parity harness |
 
 ## Gate status
