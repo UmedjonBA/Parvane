@@ -40,6 +40,9 @@ log "Two-browser media and TTL e2e"
 log "Two-browser voice messages e2e"
 "$ROOT/scripts/run_web_voice_e2e.sh"
 
+log "Two-browser media kinds e2e"
+"$ROOT/scripts/run_web_media_kinds_e2e.sh"
+
 log "Three-browser groups e2e"
 "$ROOT/scripts/run_web_groups_e2e.sh"
 

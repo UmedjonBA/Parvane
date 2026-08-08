@@ -4,7 +4,7 @@
 // текст desktop -> Web. Требует локально собранный бинарь
 // desktop/build-probe/bin/Telegram; без него сценарий помечается SKIP.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync,
 } from 'node:fs';
@@ -143,21 +143,57 @@ async function stopDesktop(child) {
   });
 }
 
-async function attachPhoto(page, caption) {
+async function attachMedia(page, menuItemName, file, caption) {
   await page.getByRole('button', { name: 'Add an attachment' }).click();
   const fileChooserPromise = page.waitForEvent('filechooser');
-  await page.getByRole('menuitem', { name: 'Photo or Video' }).click();
+  await page.getByRole('menuitem', { name: menuItemName }).click();
   const fileChooser = await fileChooserPromise;
-  await fileChooser.setFiles({
+  await fileChooser.setFiles(file);
+  const captionInput = page.locator('#editable-message-text-modal');
+  await captionInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (caption) await captionInput.fill(caption);
+  await captionInput.press('Enter');
+  await captionInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+}
+
+function attachPhoto(page, caption) {
+  return attachMedia(page, 'Photo or Video', {
     name: 'xclient-photo.png',
     mimeType: 'image/png',
     buffer: makeSolidPng(96, [40, 160, 90]),
-  });
-  const captionInput = page.locator('#editable-message-text-modal');
-  await captionInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await captionInput.fill(caption);
-  await captionInput.press('Enter');
-  await captionInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  }, caption);
+}
+
+// Playwright-Chromium без H.264 — VP9-in-MP4 (desktop декодирует через ffmpeg)
+function makeMp4(dir) {
+  const path = join(dir, 'xclient-video.mp4');
+  execFileSync('ffmpeg', [
+    '-y', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=320x240:rate=15',
+    '-c:v', 'libvpx-vp9', '-b:v', '120k', '-pix_fmt', 'yuv420p', path,
+  ], { stdio: 'ignore' });
+  return readFileSync(path);
+}
+
+function makeWav(seconds = 1, rate = 8000) {
+  const samples = seconds * rate;
+  const data = Buffer.alloc(44 + samples * 2);
+  data.write('RIFF', 0);
+  data.writeUInt32LE(36 + samples * 2, 4);
+  data.write('WAVE', 8);
+  data.write('fmt ', 12);
+  data.writeUInt32LE(16, 16);
+  data.writeUInt16LE(1, 20);
+  data.writeUInt16LE(1, 22);
+  data.writeUInt32LE(rate, 24);
+  data.writeUInt32LE(rate * 2, 28);
+  data.writeUInt16LE(2, 32);
+  data.writeUInt16LE(16, 34);
+  data.write('data', 36);
+  data.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < samples; i++) {
+    data.writeInt16LE(Math.round(Math.sin((i / rate) * 2 * Math.PI * 440) * 12000), 44 + i * 2);
+  }
+  return data;
 }
 
 const browser = await chromium.launch({
@@ -226,6 +262,32 @@ try {
     desktop,
   );
 
+  // ── Видео Web -> desktop (kind=video) и аудиофайл (kind=file) ─────────────
+  await attachMedia(aliceSession.page, 'Photo or Video', {
+    name: 'xclient-video.mp4', mimeType: 'video/mp4', buffer: makeMp4(bobWorkdir),
+  });
+  await waitDesktopLog(
+    bobWorkdir,
+    new RegExp(`входящее медиа [\\w-]+ \\(${escapedAlice}, kind=video\\)`),
+    90000,
+    desktop,
+  );
+  await waitDesktopLog(
+    bobWorkdir,
+    new RegExp(`получено медиа ${escapedAlice}: video_[0-9a-f]{8}`),
+    90000,
+    desktop,
+  );
+  await attachMedia(aliceSession.page, 'Document', {
+    name: 'xclient-audio.wav', mimeType: 'audio/wav', buffer: makeWav(),
+  });
+  await waitDesktopLog(
+    bobWorkdir,
+    new RegExp(`получено медиа ${escapedAlice}: xclient-audio\\.wav`),
+    90000,
+    desktop,
+  );
+
   // ── Текст desktop -> Web: перезапуск в том же workdir с autosend ───────────
   await stopDesktop(desktop);
   desktop = spawnDesktop(bobWorkdir, libraryShim, {
@@ -242,7 +304,7 @@ try {
 
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
 
-  console.log('OK: web<->desktop text both ways, encrypted photo and voice web->desktop');
+  console.log('OK: web<->desktop text both ways; encrypted photo, voice, video and audio web->desktop');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   const page = aliceContext.pages()[0];
