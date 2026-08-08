@@ -160,8 +160,14 @@ async function attachPhoto(page, caption) {
   await captionInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
-const browser = await chromium.launch();
-const aliceContext = await browser.newContext();
+const browser = await chromium.launch({
+  args: [
+    '--use-fake-ui-for-media-stream',
+    '--use-fake-device-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
+  ],
+});
+const aliceContext = await browser.newContext({ permissions: ['microphone'] });
 const bobWorkdir = mkdtempSync(join(tmpdir(), 'parvane-xclient-desktop-'));
 const libraryShim = buildLibraryShim(bobWorkdir);
 let desktop;
@@ -199,6 +205,27 @@ try {
     desktop,
   );
 
+  // ── Голосовое Web -> desktop (wire kind=voice, E2E-блоб) ──────────────────
+  const escapedAlice = alice.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await aliceSession.page.getByRole('button', { name: 'Record voice message' }).click();
+  const voiceSendButton = aliceSession.page.getByRole('button', { name: 'Send Message', exact: true });
+  await voiceSendButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.waitForTimeout(2000);
+  await voiceSendButton.click();
+  // Сначала парсинг wire-контента, затем успешная расшифровка блоба и инъекция
+  await waitDesktopLog(
+    bobWorkdir,
+    new RegExp(`входящее медиа [\\w-]+ \\(${escapedAlice}, kind=voice\\)`),
+    90000,
+    desktop,
+  );
+  await waitDesktopLog(
+    bobWorkdir,
+    new RegExp(`получено медиа ${escapedAlice}: voice_[0-9a-f]{8}`),
+    90000,
+    desktop,
+  );
+
   // ── Текст desktop -> Web: перезапуск в том же workdir с autosend ───────────
   await stopDesktop(desktop);
   desktop = spawnDesktop(bobWorkdir, libraryShim, {
@@ -215,7 +242,7 @@ try {
 
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
 
-  console.log('OK: web<->desktop text both ways and encrypted photo web->desktop');
+  console.log('OK: web<->desktop text both ways, encrypted photo and voice web->desktop');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   const page = aliceContext.pages()[0];

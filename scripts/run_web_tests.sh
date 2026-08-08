@@ -37,6 +37,9 @@ log "Two-browser sync and reconnect e2e"
 log "Two-browser media and TTL e2e"
 "$ROOT/scripts/run_web_media_e2e.sh"
 
+log "Two-browser voice messages e2e"
+"$ROOT/scripts/run_web_voice_e2e.sh"
+
 log "Three-browser groups e2e"
 "$ROOT/scripts/run_web_groups_e2e.sh"
 
