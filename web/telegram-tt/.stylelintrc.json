@@ -6,6 +6,8 @@
   ],
   "ignoreFiles": [
     "dist/**/*.css",
+    "playwright-report/**/*.css",
+    "test-results/**/*.css",
     "src/styles/icons.{scss,css}"
   ],
   "plugins": [
