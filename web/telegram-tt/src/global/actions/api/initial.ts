@@ -208,10 +208,17 @@ addActionHandler('signOut', async (global, actions, payload): Promise<void> => {
   if ('hangUp' in actions) actions.hangUp({ tabId: getCurrentTabId() });
   if ('leaveGroupCall' in actions) actions.leaveGroupCall({ tabId: getCurrentTabId() });
 
+  // Отказ push-отписки (нет подписки/движок без Push API) не должен
+  // отменять destroy — иначе logout оставляет ключи и адрес в storage
+  try {
+    await unsubscribe();
+  } catch (err) {
+    // Do nothing
+  }
+
   try {
     resetInitialLocationHash();
     resetLocationHash();
-    await unsubscribe();
     await Promise.race([callApi('destroy'), pause(3000)]);
     await forceWebsync(false);
   } catch (err) {

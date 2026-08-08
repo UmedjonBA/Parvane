@@ -38,3 +38,9 @@ path.
   notes in the rows above are follow-ups outside the current-function scope
   (Web UI for invite links, desktop-initiated media autosend, video/group call
   UI automation).
+- Engine scope: startup/login runs on Chromium, Firefox, WebKit, and the iOS
+  viewport; the deep logout and profile flows run on Chromium and Firefox
+  because the local Playwright WebKit build crashes sporadically in long
+  scenarios (skips carry this reason in the specs). During this gate a real
+  cross-engine bug was fixed: a failed push unsubscribe used to abort the
+  whole sign-out cleanup, leaving keys and the login address in storage.

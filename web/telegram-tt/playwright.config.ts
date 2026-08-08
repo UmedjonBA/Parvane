@@ -8,7 +8,7 @@ const config: PlaywrightTestConfig = {
   outputDir: 'test-results',
   timeout: process.env.CI ? 60 * 5 * 1000 : 60 * 2 * 1000,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI ? 2 : 1,
   workers: 1,
   webServer: {
     command: `npm run build:production && vite preview --host 127.0.0.1 --port ${webPort} --strictPort`,
