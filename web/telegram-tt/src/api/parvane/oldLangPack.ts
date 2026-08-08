@@ -70,6 +70,8 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     GroupAddMembers: 'Add Members',
     Emoji: 'Emoji',
     AccDescrStickers: 'Stickers',
+    AccDescrVoiceMessage: 'Record voice message',
+    AccDescrVideoMessage: 'Record video message',
     GifsTab: 'GIFs',
     'StickersList.EmojiItem': 'Custom Emoji',
     Call: 'Call',

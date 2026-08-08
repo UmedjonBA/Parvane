@@ -380,6 +380,12 @@ export function createMessageController(deps: MessageDependencies) {
     if (attachment) {
       try {
         const blob: Blob = attachment.blob ?? await fetch(attachment.blobUrl).then((response) => response.blob());
+        // Local echo играет по id локального uuid; кэшируем блоб под ним до
+        // аплоада, иначе клик по play до/после подмены контента упирается в
+        // несуществующий file_id (audio.src уже зафиксирован плеером)
+        if (attachment.voice) {
+          deps.media.cacheBlob(uuid, blob, attachment.mimeType || 'audio/ogg');
+        }
         const { fileId, size, mediaKeys } = await deps.media.uploadBlob(
           blob,
           attachment.filename,
@@ -387,7 +393,26 @@ export function createMessageController(deps: MessageDependencies) {
           { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) },
         );
         const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
-        if (deps.media.isPhotoAttachment(attachment)) {
+        if (attachment.voice) {
+          wireContent = {
+            kind: 'voice',
+            file_id: fileId,
+            duration_secs: Math.max(1, Math.round(attachment.voice.duration)),
+            mime: attachment.mimeType || 'audio/ogg',
+            size_bytes: size,
+            waveform: attachment.voice.waveform,
+            ...mediaCrypto,
+          };
+          sentContent = {
+            voice: {
+              mediaType: 'voice',
+              id: fileId,
+              duration: attachment.voice.duration,
+              waveform: attachment.voice.waveform,
+              size,
+            },
+          };
+        } else if (deps.media.isPhotoAttachment(attachment)) {
           wireContent = {
             kind: 'photo',
             file_id: fileId,

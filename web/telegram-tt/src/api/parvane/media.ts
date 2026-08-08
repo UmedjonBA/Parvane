@@ -173,8 +173,11 @@ export function createMediaService(deps: MediaDependencies) {
   function downloadMedia({
     url, mediaFormat, start, end,
   }: { url: string; mediaFormat: number; start?: number; end?: number }) {
-    const avatarMatch = url.match(/^(?:avatar|profile)[^?]*\?(.+)$/);
-    const mediaMatch = url.match(MEDIA_URL_REGEX);
+    // Progressive-запросы приходят из service worker'а с абсолютным URL
+    // вида http://host/progressive/document<id>
+    const normalizedUrl = url.replace(/^.*\/progressive\//, '');
+    const avatarMatch = normalizedUrl.match(/^(?:avatar|profile)[^?]*\?(.+)$/);
+    const mediaMatch = normalizedUrl.match(MEDIA_URL_REGEX);
     const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
     if (!fileId) return Promise.resolve(undefined);
 
@@ -212,6 +215,17 @@ export function createMediaService(deps: MediaDependencies) {
     const { attachment, text, entities } = params;
     const caption = text ? { text: { text } } : {};
     if (!attachment) return { text: { text: text || '', entities } };
+    if (attachment.voice) {
+      return {
+        voice: {
+          mediaType: 'voice',
+          id: uuid,
+          duration: attachment.voice.duration,
+          waveform: attachment.voice.waveform,
+          size: attachment.size,
+        },
+      };
+    }
     if (isPhotoAttachment(attachment)) {
       return {
         ...caption,
@@ -261,10 +275,22 @@ export function createMediaService(deps: MediaDependencies) {
         entities: apiEntitiesToWire(content.text.entities),
       };
     }
-    const mediaId = content.photo?.id || content.document?.id || content.sticker?.id || content.video?.id;
+    const mediaId = content.photo?.id || content.document?.id || content.sticker?.id
+      || content.video?.id || content.voice?.id;
     if (!mediaId) return undefined;
     const keys = keysByFileId.get(mediaId);
     const cryptoFields = keys ? { file_key: keys.keyB64, file_nonce: keys.nonceB64 } : {};
+    if (content.voice) {
+      return {
+        kind: 'voice',
+        file_id: mediaId,
+        duration_secs: Math.max(1, Math.round(content.voice.duration)),
+        mime: mimeByFileId.get(mediaId) || 'audio/ogg',
+        size_bytes: content.voice.size,
+        waveform: content.voice.waveform,
+        ...cryptoFields,
+      };
+    }
     if (content.video?.isGif) {
       return {
         kind: 'gif',
