@@ -122,6 +122,17 @@ export const TOPIC_GROUP_MUTE = 'group.mute';
 export const TOPIC_GROUP_INVITE_CREATE = 'group.invite.create';
 export const TOPIC_GROUP_JOIN = 'group.join';
 export const TOPIC_CALL_SIGNAL = 'call.signal';
+export const TOPIC_CALL_HISTORY_REQUEST = 'call.history.request';
+
+export type WireCallRecord = {
+  call_id: string;
+  caller: string;
+  callee: string;
+  media: string;
+  status: 'ringing' | 'answered' | 'ended' | 'missed' | 'rejected';
+  started_at: number;
+  ended_at?: number;
+};
 
 export function buildCallInboxTopic(user: string) {
   return `call.user.${user}`;

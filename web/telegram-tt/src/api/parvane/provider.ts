@@ -96,6 +96,7 @@ const callController = createCallController({
   getStore: () => store,
   getToken: () => token,
   isIdentityReady: () => isCallIdentityReady,
+  sendUpdate,
   log: logDebug,
 });
 
@@ -555,6 +556,14 @@ const methods = {
   parvaneHangUp() {
     callController.hangUp();
     return Promise.resolve(true);
+  },
+
+  parvaneToggleMute() {
+    return Promise.resolve(callController.toggleMute());
+  },
+
+  parvaneToggleCamera() {
+    return Promise.resolve(callController.toggleCamera());
   },
 
   // ── логин через штатные Auth-экраны ────────────────────────────────────────
