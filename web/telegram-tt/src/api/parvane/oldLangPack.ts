@@ -87,6 +87,7 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     CallBack: 'Call Back',
     VideoCall: 'Video Call',
     ParvaneGroupCall: 'Group Call',
+    ParvaneCallBusy: 'Line busy',
     ParvaneCallMute: 'Mute',
     ParvaneCallUnmute: 'Unmute',
     ParvaneCallCameraOff: 'Turn camera off',
