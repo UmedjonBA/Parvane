@@ -1,6 +1,9 @@
 // GIF: встроенные анимированные webm-клипы (canvas → MediaRecorder). Рендерятся
 // как ApiVideo isGif; блобы регистрируются в media-кэше провайдера. Saved GIFs
-// также наполняется отправленными/полученными kind=gif.
+// также наполняется отправленными/полученными kind=gif и персистится в
+// IndexedDB (мета + ключи блоба — сам блоб дотягивается из cloud по file_id).
+
+import { createStore, del, get, set } from 'idb-keyval';
 
 import type { ApiVideo } from '../types';
 
@@ -111,4 +114,49 @@ export async function buildBuiltinGifs() {
   }
   cached = { gifs, blobs };
   return cached;
+}
+
+// ── персист сохранённых GIF (на пользователя) ────────────────────────────────
+
+const SAVED_STORAGE = createStore('parvane-gifs', 'saved');
+const SAVED_LIMIT = 50;
+
+export type SavedGifRecord = {
+  id: string;
+  width?: number;
+  height?: number;
+  duration: number;
+  size: number;
+  keyB64?: string;
+  nonceB64?: string;
+};
+
+function savedKey(user: string) {
+  return `gifs:${user}`;
+}
+
+export async function loadSavedGifRecords(user: string): Promise<SavedGifRecord[]> {
+  return (await get<SavedGifRecord[]>(savedKey(user), SAVED_STORAGE)) || [];
+}
+
+export async function storeSavedGifRecords(user: string, records: SavedGifRecord[]) {
+  const limited = records.slice(0, SAVED_LIMIT);
+  if (limited.length) await set(savedKey(user), limited, SAVED_STORAGE);
+  else await del(savedKey(user), SAVED_STORAGE);
+}
+
+export function buildApiVideoFromSavedRecord(record: SavedGifRecord): ApiVideo {
+  return {
+    mediaType: 'video',
+    id: record.id,
+    mimeType: 'video/webm',
+    duration: record.duration || 1,
+    fileName: 'animation.webm',
+    width: record.width || GIF_W,
+    height: record.height || GIF_H,
+    isGif: true,
+    supportsStreaming: false,
+    size: record.size,
+    noSound: true,
+  };
 }

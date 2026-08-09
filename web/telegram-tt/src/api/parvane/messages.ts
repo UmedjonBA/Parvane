@@ -18,6 +18,12 @@ import {
   requireEncrypted,
 } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
+import {
+  buildApiVideoFromSavedRecord,
+  loadSavedGifRecords,
+  type SavedGifRecord,
+  storeSavedGifRecords,
+} from './gifs';
 import { buildPvpkArchive, findInstalledPackBySetId, isCustomPackSetId } from './stickerPacks';
 import {
   buildWireEvent,
@@ -180,8 +186,65 @@ export function createMessageController(deps: MessageDependencies) {
     return uuid;
   }
 
+  // Гидратация сохранённых GIF из IndexedDB — один раз на пользователя;
+  // до её завершения персист не пишем, чтобы не затереть сохранённое.
+  // Пришедшие до гидратации гифы этой сессии остаются в начале списка
+  let savedGifsHydratedFor = '';
+  let savedGifsHydration: Promise<void> | undefined;
+
+  function resetSavedGifs() {
+    savedGifs.length = 0;
+    savedGifsHydratedFor = '';
+    savedGifsHydration = undefined;
+  }
+
+  function ensureSavedGifsHydrated() {
+    const self = store().self;
+    if (!self) return Promise.resolve();
+    if (savedGifsHydratedFor !== self) {
+      savedGifsHydratedFor = self;
+      savedGifsHydration = loadSavedGifRecords(self).then((records) => {
+        records.forEach((record) => {
+          if (savedGifs.some((candidate) => candidate.id === record.id)) return;
+          if (record.keyB64 && record.nonceB64) {
+            deps.media.rememberKeys({
+              kind: 'gif', file_id: record.id, file_key: record.keyB64, file_nonce: record.nonceB64, mime: 'video/webm',
+            });
+          }
+          savedGifs.push(buildApiVideoFromSavedRecord(record));
+        });
+      }).catch(() => undefined);
+    }
+    return savedGifsHydration || Promise.resolve();
+  }
+
+  function persistSavedGifs() {
+    const self = store().self;
+    if (!self) return;
+    void ensureSavedGifsHydrated().then(() => {
+      // Встроенные canvas-гифы не персистим — они генерируются на месте
+      const records: SavedGifRecord[] = savedGifs
+        .filter((gif) => !gif.id.startsWith('pvgif'))
+        .map((gif) => {
+          const keys = deps.media.getMediaKeys(gif.id);
+          return {
+            id: gif.id,
+            width: gif.width,
+            height: gif.height,
+            duration: gif.duration,
+            size: gif.size,
+            keyB64: keys?.keyB64,
+            nonceB64: keys?.nonceB64,
+          };
+        });
+      void storeSavedGifRecords(self, records);
+    });
+  }
+
   function rememberSavedGif(gif: ApiVideo) {
-    if (!savedGifs.some((candidate) => candidate.id === gif.id)) savedGifs.unshift(gif);
+    if (savedGifs.some((candidate) => candidate.id === gif.id)) return;
+    savedGifs.unshift(gif);
+    persistSavedGifs();
   }
 
   async function sendGif(chat: ApiChat, gif: ApiVideo) {
@@ -860,6 +923,23 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
+    // «Save GIF»/unsave из контекст-меню сообщения; персист на пользователя
+    saveGif({ gif, shouldUnsave }: { gif: ApiVideo; shouldUnsave?: boolean }) {
+      if (shouldUnsave) {
+        const index = savedGifs.findIndex((candidate) => candidate.id === gif.id);
+        if (index >= 0) savedGifs.splice(index, 1);
+        persistSavedGifs();
+      } else {
+        rememberSavedGif(gif);
+      }
+      return Promise.resolve(true);
+    },
+
+    // Внешних GIF-провайдеров нет (privacy by design) — честный пустой поиск
+    searchGifs() {
+      return Promise.resolve({ gifs: [] });
+    },
+
     // Список голосовавших за вариант (панель результатов публичного опроса).
     // Агрегат весь на клиенте — пагинация не нужна
     loadPollOptionResults({ chat, messageId, option }: {
@@ -985,9 +1065,11 @@ export function createMessageController(deps: MessageDependencies) {
   };
 
   return {
+    ensureSavedGifsHydrated,
     getSavedGifs: () => savedGifs,
     methods,
     rememberSavedGif,
+    resetSavedGifs,
     refreshPollMessage,
   };
 }

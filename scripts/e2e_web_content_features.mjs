@@ -82,6 +82,13 @@ try {
   await bobSession.page.locator('.Transition_slide-active > .MessageList .Message video')
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // Полученный GIF сохранился в панели GIF (2 builtin + принятый)
+  await openSymbolTab(bobSession.page, 'GIFs');
+  const bobGifButtons = bobSession.page.locator('.SymbolMenu .GifButton');
+  await bobGifButtons.nth(2).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.keyboard.press('Escape');
+  await bobSession.page.locator('.SymbolMenu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+
   // ── Геолокация: статичная точка ────────────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
   await aliceSession.page.getByRole('menuitem', { name: 'Location' }).click();
