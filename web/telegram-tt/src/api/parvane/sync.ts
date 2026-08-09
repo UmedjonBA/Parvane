@@ -330,6 +330,9 @@ export function createSyncController(deps: SyncDependencies) {
         webPages: webPage ? [webPage] : undefined,
         poll: stored.content.kind === 'poll' ? deps.polls.build(stored.id) : undefined,
       });
+      if (!message.isOutgoing && store.isMentionOfSelf(message)) {
+        pushMentionState(message.chatId);
+      }
       if (flags.read && message.isOutgoing) noteReadOutbox(message);
       if (stored.content.ttl_secs) {
         deps.localState.scheduleTtlDeletion(message.chatId, message.id, stored.content.ttl_secs);
@@ -468,9 +471,35 @@ export function createSyncController(deps: SyncDependencies) {
     });
   }
 
+  // Непрочитанные упоминания чата: id входящих без read-флага с '@self'
+  function collectUnreadMentions(chatId: string) {
+    const store = deps.getStore();
+    return store.getMessages(chatId)
+      .filter((message) => {
+        if (message.isOutgoing || !message.senderId) return false;
+        if (!store.isMentionOfSelf(message)) return false;
+        const uuid = store.getUuidForMessage(chatId, message.id);
+        if (!uuid) return true;
+        return !wireFlagsByUuid.get(uuid)?.read && !reportedReadUuids.has(uuid);
+      })
+      .map((message) => message.id);
+  }
+
+  function pushMentionState(chatId: string) {
+    const unreadMentions = collectUnreadMentions(chatId);
+    deps.sendUpdate({
+      '@type': 'updateThreadReadState',
+      chatId,
+      threadId: MAIN_THREAD_ID,
+      readState: { unreadMentionsCount: unreadMentions.length, unreadMentions },
+    });
+  }
+
   return {
     announcePeer,
+    collectUnreadMentions,
     ensureSynced,
+    pushMentionState,
     getFlags: (uuid: string) => wireFlagsByUuid.get(uuid),
     getReadOutboxMax: (chatId: string) => readOutboxMaxByChatId.get(chatId),
     handleInboxFrame,

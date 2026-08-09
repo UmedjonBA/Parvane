@@ -800,7 +800,23 @@ export function createMessageController(deps: MessageDependencies) {
           buildWireEvent(currentStore.self, token(), { message_id: uuid }),
         ));
       });
+      deps.sync.pushMentionState(chat.id);
       return Promise.resolve(undefined);
+    },
+
+    readAllMentions({ chat }: { chat: ApiChat }) {
+      // Прочитанность у Parvane помессаджная: read по каждому упоминанию
+      const currentStore = store();
+      deps.sync.collectUnreadMentions(chat.id).forEach((id) => {
+        const uuid = currentStore.getUuidForMessage(chat.id, id);
+        if (!uuid || deps.sync.hasReportedRead(uuid)) return;
+        deps.sync.markReportedRead(uuid);
+        connection()!.publish(TOPIC_MSG_READ, JSON.stringify(
+          buildWireEvent(currentStore.self, token(), { message_id: uuid }),
+        ));
+      });
+      deps.sync.pushMentionState(chat.id);
+      return Promise.resolve(true);
     },
 
     sendMessageLocal,

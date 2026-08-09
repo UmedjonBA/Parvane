@@ -296,9 +296,12 @@ const methods = {
           }
         });
         if (isSelfChat) lastReadInbox = last.id;
+        const unreadMentions = isSelfChat ? [] : syncController.collectUnreadMentions(chat.id);
         threadReadStatesById[chat.id] = {
           lastReadInboxMessageId: lastReadInbox,
           unreadCount,
+          unreadMentionsCount: unreadMentions.length,
+          unreadMentions,
           lastReadOutboxMessageId: syncController.getReadOutboxMax(chat.id),
         };
       }
@@ -371,6 +374,15 @@ const methods = {
   exportChatInvite: groupController.exportChatInvite,
   importChatInvite: groupController.importChatInvite,
   updateChatAdmin: groupController.updateChatAdmin,
+
+  // ── упоминания ──────────────────────────────────────────────────────────────
+
+  fetchUnreadMentions({ chat }: { chat: ApiChat }) {
+    const ids = new Set(syncController.collectUnreadMentions(chat.id));
+    const messages = store.getMessages(chat.id).filter((message) => ids.has(message.id));
+    return Promise.resolve({ messages, totalCount: messages.length });
+  },
+
   migrateChat: (chat: ApiChat) => Promise.resolve(groupController.migrateChat(chat)),
 
   updateChatTitle(chat: ApiChat, title: string) {
