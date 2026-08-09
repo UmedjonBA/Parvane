@@ -218,6 +218,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
       store.self = user;
       deps.setStore(store);
       deps.polls.setSelf(user);
+      deps.polls.setPeerIdResolver((address) => deps.getStore().getIdForAddress(address));
       deps.onNewSession();
 
       deps.setCallIdentityReady(false);

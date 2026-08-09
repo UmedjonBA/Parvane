@@ -61,6 +61,16 @@ export type WireMessageContent = {
   lat?: number;
   long?: number;
   pack_ref?: WirePackRef;
+  // Опросы: агрегируются клиентами внутри E2E; correct/solution — quiz-режим.
+  // options: string[] в kind=poll (варианты), number[] в kind=poll_vote (индексы)
+  question?: string;
+  options?: string[] | number[];
+  is_public?: boolean;
+  is_multiple?: boolean;
+  is_quiz?: boolean;
+  correct?: number[];
+  solution?: string;
+  poll?: string;
 };
 
 export type WireStoredMessage = {

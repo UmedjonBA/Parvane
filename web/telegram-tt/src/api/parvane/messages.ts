@@ -324,17 +324,24 @@ export function createMessageController(deps: MessageDependencies) {
       answers: { text: { text: string } }[];
       isPublic?: true;
       isMultipleChoice?: true;
+      isQuiz?: true;
     };
+    correctAnswers?: number[];
+    solution?: string;
   }) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
     const question = newPoll.summary.question.text;
     const options = newPoll.summary.answers.map((answer) => answer.text.text);
+    const isQuiz = Boolean(newPoll.summary.isQuiz);
     const uuid = crypto.randomUUID();
     deps.polls.register(uuid, chat.id, question, options, {
       isPublic: Boolean(newPoll.summary.isPublic),
       isMultiple: Boolean(newPoll.summary.isMultipleChoice),
+      isQuiz,
+      correct: newPoll.correctAnswers,
+      solution: newPoll.solution,
     });
     await publishInner(toAddress, {
       kind: 'poll',
@@ -342,6 +349,9 @@ export function createMessageController(deps: MessageDependencies) {
       options,
       is_public: newPoll.summary.isPublic || undefined,
       is_multiple: newPoll.summary.isMultipleChoice || undefined,
+      is_quiz: isQuiz || undefined,
+      correct: isQuiz ? newPoll.correctAnswers : undefined,
+      solution: isQuiz ? newPoll.solution : undefined,
     }, uuid);
     const id = currentStore.allocateMessageId(chat.id, uuid);
     const message: ApiMessage = {
@@ -848,6 +858,21 @@ export function createMessageController(deps: MessageDependencies) {
       refreshPollMessage(uuid);
       await publishInner(toAddress, { kind: 'poll_close', poll: uuid });
       return true;
+    },
+
+    // Список голосовавших за вариант (панель результатов публичного опроса).
+    // Агрегат весь на клиенте — пагинация не нужна
+    loadPollOptionResults({ chat, messageId, option }: {
+      chat: ApiChat; messageId: number; option: string;
+    }) {
+      const currentStore = store();
+      const uuid = currentStore.getUuidForMessage(chat.id, messageId);
+      if (!uuid) return Promise.resolve(undefined);
+      const votes = deps.polls.getVoters(uuid, Number(option)).map((address) => ({
+        peerId: currentStore.getIdForAddress(address),
+        date: 0,
+      }));
+      return Promise.resolve({ count: votes.length, votes, nextOffset: '' });
     },
 
     setChatMessageAutoDeletePeriod({ chat, period }: { chat: ApiChat; period: number }) {
