@@ -87,6 +87,7 @@ allocate_port NATS_PORT PARVANE_E2E_NATS_PORT
 allocate_port GATEWAY_WS_PORT PARVANE_E2E_GATEWAY_WS_PORT
 allocate_port GATEWAY_TCP_PORT PARVANE_E2E_GATEWAY_TCP_PORT
 allocate_port WEB_PORT PARVANE_E2E_WEB_PORT
+allocate_port TURN_PORT PARVANE_E2E_TURN_PORT
 
 wait_for_log() {
   local name="$1"
@@ -143,10 +144,39 @@ env \
 PIDS+=("$!")
 wait_for_log nats 'Server is ready' "${PIDS[-1]}"
 
+# TURN для relay-теста звонков: pion-сервер с ephemeral-кредами (TURN REST).
+# Без go в PATH стек работает как раньше — call-шард отдаст только STUN.
+TURN_SECRET="parvane-e2e-turn-secret"
+if command -v go >/dev/null 2>&1; then
+  log "Build and start TURN server"
+  (cd "$ROOT/infra/turn" && go build -o "$TEMP_ROOT/parvane-turn" .)
+  env \
+    TURN_PUBLIC_IP=127.0.0.1 \
+    TURN_PORT="$TURN_PORT" \
+    TURN_SECRET="$TURN_SECRET" \
+    "$TEMP_ROOT/parvane-turn" >"$TEMP_ROOT/turn.log" 2>&1 &
+  PIDS+=("$!")
+  wait_for_log turn 'Parvane TURN' "${PIDS[-1]}"
+  CALL_ICE_ENV=(
+    PARVANE_STUN_URLS="stun:127.0.0.1:$TURN_PORT"
+    PARVANE_TURN_URL="turn:127.0.0.1:$TURN_PORT"
+    PARVANE_TURN_SECRET="$TURN_SECRET"
+    PARVANE_TURN_TTL_SECS=600
+  )
+  export PARVANE_E2E_TURN=1
+  export PARVANE_E2E_TURN_PORT="$TURN_PORT"
+  export PARVANE_E2E_TURN_SECRET="$TURN_SECRET"
+else
+  CALL_ICE_ENV=()
+fi
+
 log "Start shards with temporary databases"
 start_shard identity "$IDENTITY_PASS"
 start_shard messenger "$MESSENGER_PASS"
 start_shard cloud "$CLOUD_PASS"
+if (( ${#CALL_ICE_ENV[@]} )); then
+  export "${CALL_ICE_ENV[@]}"
+fi
 start_shard call "$CALL_PASS"
 
 wait_for_log identity 'Identity шард запущен' "${PIDS[-4]}"

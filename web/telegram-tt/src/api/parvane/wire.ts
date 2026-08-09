@@ -123,6 +123,13 @@ export const TOPIC_GROUP_INVITE_CREATE = 'group.invite.create';
 export const TOPIC_GROUP_JOIN = 'group.join';
 export const TOPIC_CALL_SIGNAL = 'call.signal';
 export const TOPIC_CALL_HISTORY_REQUEST = 'call.history.request';
+export const TOPIC_CALL_ICE_REQUEST = 'call.ice.request';
+
+export type WireIceServer = {
+  urls: string[];
+  username?: string;
+  credential?: string;
+};
 
 export type WireCallRecord = {
   call_id: string;

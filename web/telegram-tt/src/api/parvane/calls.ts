@@ -3,14 +3,18 @@ import type { E2eEngine } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
-import { CallEngine, type CallMedia, type WireCallSignal } from './callengine';
+import {
+  CallEngine, type CallMedia, FALLBACK_ICE_SERVERS, type WireCallSignal,
+} from './callengine';
 import {
   buildWireEvent,
   TOPIC_CALL_HISTORY_REQUEST,
+  TOPIC_CALL_ICE_REQUEST,
   TOPIC_CALL_SIGNAL,
   TOPIC_IDENTITY_RESOLVE,
   type WireCallRecord,
   type WireEvent,
+  type WireIceServer,
   type WireUserInfo,
 } from './wire';
 
@@ -29,6 +33,10 @@ type CallDependencies = {
 const INITIAL_HISTORY_DELAY_MS = 3000;
 // Терминальный статус пишется шардом по hangup/reject — даём ему долететь
 const POST_CALL_HISTORY_DELAY_MS = 1500;
+// Обновляем TURN-креды заранее, до истечения срока
+const ICE_CACHE_RATIO = 0.8;
+// e2e-хук: iceTransportPolicy=relay — соединение возможно только через TURN
+const FORCE_RELAY_STORAGE_KEY = 'parvane:e2e:forceRelay';
 
 type CallWindowState = {
   state: string;
@@ -51,6 +59,46 @@ export function createCallController(deps: CallDependencies) {
     onIncoming: (_from: string, _callId: string, _media: CallMedia) => {},
     onSas: (_sas?: string) => {},
   };
+
+  let cachedIceServers: RTCIceServer[] | undefined;
+  let iceCacheExpiresAt = 0;
+
+  async function getIceServers(): Promise<RTCIceServer[]> {
+    if (cachedIceServers && Date.now() < iceCacheExpiresAt) return cachedIceServers;
+    const connection = deps.getConnection();
+    if (!connection) return FALLBACK_ICE_SERVERS;
+    try {
+      const store = deps.getStore();
+      const event = buildWireEvent(store.self, deps.getToken(), {});
+      const raw = await connection.request(TOPIC_CALL_ICE_REQUEST, JSON.stringify(event));
+      const response = JSON.parse(raw) as {
+        payload?: { ice_servers?: WireIceServer[]; ttl_secs?: number };
+      };
+      const servers = (response.payload?.ice_servers || [])
+        .filter((server) => server.urls?.length)
+        .map((server) => ({
+          urls: server.urls,
+          username: server.username,
+          credential: server.credential,
+        }));
+      if (!servers.length) return FALLBACK_ICE_SERVERS;
+      cachedIceServers = servers;
+      iceCacheExpiresAt = Date.now() + (response.payload?.ttl_secs || 600) * 1000 * ICE_CACHE_RATIO;
+      deps.log(`ICE-серверы получены: ${servers.map((server) => server.urls.join('|')).join(', ')}`);
+      return servers;
+    } catch (error) {
+      deps.log(`ICE-конфигурация недоступна, фоллбэк на STUN: ${String(error)}`);
+      return FALLBACK_ICE_SERVERS;
+    }
+  }
+
+  function getIceTransportPolicy(): RTCIceTransportPolicy | undefined {
+    try {
+      return localStorage.getItem(FORCE_RELAY_STORAGE_KEY) ? 'relay' : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   function buildCallMessage(record: WireCallRecord): ApiMessage | undefined {
     const store = deps.getStore();
@@ -180,6 +228,8 @@ export function createCallController(deps: CallDependencies) {
         deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
       },
       getPeerSigningKey: fetchSigningKey,
+      getIceServers,
+      getIceTransportPolicy,
       sign: (data) => identity.signCallData(data),
       verify: (publicKey, data, signature) => identity.verifyCallData(publicKey, data, signature),
       onState: (state) => listeners.onState(state),

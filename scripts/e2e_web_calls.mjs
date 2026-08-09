@@ -19,6 +19,9 @@ const browser = await chromium.launch({
     '--use-fake-ui-for-media-stream',
     '--use-fake-device-for-media-stream',
     '--autoplay-policy=no-user-gesture-required',
+    // С выданным mic-разрешением Chromium иначе фильтрует loopback-кандидаты —
+    // relay-тест против TURN на 127.0.0.1 без флага не соединяется
+    '--allow-loopback-in-peer-connection',
   ],
 });
 const aliceContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
@@ -135,10 +138,45 @@ try {
   await findHistoryEntry(aliceSession.page, 'Outgoing Video Call')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── TURN fallback: relay-only звонок соединяется ТОЛЬКО через TURN ─────────
+  if (process.env.PARVANE_E2E_TURN) {
+    const forceRelaySeed = { 'parvane:e2e:forceRelay': '1' };
+    const carolContext = await browser.newContext({ permissions: ['microphone'] });
+    const daveContext = await browser.newContext({ permissions: ['microphone'] });
+    try {
+      const carol = `call-carol-${suffix}@local`;
+      const dave = `call-dave-${suffix}@local`;
+      const carolSession = await preparePage(carolContext, carol, PASSWORD, {
+        seedLocalStorage: forceRelaySeed,
+      });
+      const daveSession = await preparePage(daveContext, dave, PASSWORD, {
+        seedLocalStorage: forceRelaySeed,
+      });
+      await openPrivateChat(carolSession.page, dave);
+      await openPrivateChat(daveSession.page, carol);
+      await carolSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+      await daveSession.page.getByRole('button', { name: 'Accept' })
+        .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      await daveSession.page.getByRole('button', { name: 'Accept' }).click();
+      // active достижим только если relay-кандидаты через TURN сработали
+      await carolSession.page.getByText(/^\d+:\d{2}$/).first()
+        .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      await daveSession.page.getByText(/^\d+:\d{2}$/).first()
+        .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      await carolSession.page.getByRole('button', { name: 'End Call' }).click();
+      console.log('OK: relay-only звонок через TURN с ephemeral-кредами');
+    } finally {
+      await carolContext.close();
+      await daveContext.close();
+    }
+  } else {
+    console.log('SKIP: TURN не поднят в стеке (нет go) — relay-тест пропущен');
+  }
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: звонки — SAS, mute, видео с рендером, decline и история со статусами после reload');
+  console.log('OK: звонки — SAS, mute, видео с рендером, decline, история и TURN relay');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {
