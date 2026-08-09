@@ -89,6 +89,19 @@ try {
   await aliceSession.page.locator('#editable-message-text')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── Mention badge: '@bob' → бейдж у Bob в списке, гаснет после прочтения ──
+  // Создание группы не всегда переключает активный чат — открываем явно
+  await openChatByTitle(aliceSession.page, groupTitle);
+  await sendText(aliceSession.page, `@${bobName} ping`);
+  const bobGroupItem = bobSession.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle });
+  await bobGroupItem.locator('.icon-mention')
+    .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  await openChatByTitle(bobSession.page, groupTitle);
+  await findMessage(bobSession.page, `@${bobName} ping`).first()
+    .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  await bobGroupItem.locator('.icon-mention')
+    .waitFor({ state: 'detached', timeout: CONVERGENCE_TIMEOUT_MS });
+
   // ── Promote Bob: owner делает Bob админом через UI ─────────────────────────
   await openChatByTitle(aliceSession.page, groupTitle);
   await aliceSession.page.locator('.MiddleHeader .ChatInfo').click();
@@ -194,7 +207,7 @@ try {
   assert.deepEqual(aliceSession.errors, [], `alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `bob page errors: ${bobSession.errors.join('; ')}`);
   assert.deepEqual(carolSession.errors, [], `carol page errors: ${carolSession.errors.join('; ')}`);
-  console.log('OK: promote/rename/leave/delete c live-конвергенцией и канал с posting rules');
+  console.log('OK: mention badge, promote/rename/leave/delete c live-конвергенцией и канал с posting rules');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   await Promise.all(contexts.map((context, index) => context.pages()[0]
