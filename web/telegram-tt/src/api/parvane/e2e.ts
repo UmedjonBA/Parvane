@@ -57,6 +57,15 @@ type PersistedE2eState = {
 
 let isOlmReady = false;
 
+// Живые движки по пользователю: pagehide-хук страхует несохранённые снапшоты
+// (очередь персиста асинхронная — закрытие вкладки могло терять хвост)
+const enginesBySelf = new Map<string, E2eEngine>();
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    enginesBySelf.forEach((engine) => engine.persistNow());
+  });
+}
+
 export class E2eEngine {
   private storage!: SecureE2eStorage;
 
@@ -107,10 +116,12 @@ export class E2eEngine {
       engine.loadLegacyState();
     }
     await engine.storage.save(engine.buildState());
+    enginesBySelf.set(self, engine);
     return engine;
   }
 
   static async clear(self: string) {
+    enginesBySelf.delete(self);
     E2eEngine.clearLegacyState(self);
     await SecureE2eStorage.clear(self);
   }
@@ -311,9 +322,15 @@ export class E2eEngine {
     return this.decCache[uuid];
   }
 
+  // Точка атомарного персиста расшифровки: снапшот включает и продвинутый
+  // ратчет (`decryptFrom` сам не персистит), и расшифрованный inner
   cacheInner(uuid: string, inner: StoredInner) {
     this.decCache[uuid] = inner;
     this.persistDecCache();
+  }
+
+  persistNow() {
+    this.queuePersist();
   }
 
   // Шифрует inner-JSON для контакта; undefined — E2E недоступен (нет бандла)
@@ -346,7 +363,12 @@ export class E2eEngine {
     };
   }
 
-  // Расшифровка входящего; undefined — не смогли (нет сессии/чужой ratchet)
+  // Расшифровка входящего; undefined — не смогли (нет сессии/чужой ratchet).
+  // НАМЕРЕННО не персистит: продвинутый ратчет уходит на диск только вместе с
+  // записью decCache (`cacheInner`, тот же тик). Иначе резкий kill между двумя
+  // снапшотами оставлял на диске уехавший ратчет БЕЗ расшифрованного inner —
+  // сообщение становилось нечитаемым навсегда. Без персиста ратчет на диске
+  // отстаёт, и после рестарта то же sealed расшифровывается заново
   decryptFrom(senderIdentity: string, ctype: number, ciphertext: string): string | undefined {
     const existing = this.sessionsByIdentity.get(senderIdentity);
     try {
@@ -354,23 +376,17 @@ export class E2eEngine {
         // Повторный prekey к уже установленной сессии — расшифровываем ею,
         // НЕ создавая новую (иначе one-time израсходован и inbound падает)
         if (existing && existing.matches_inbound(ciphertext)) {
-          const plain = existing.decrypt(ctype, ciphertext);
-          this.persistSessions();
-          return plain;
+          return existing.decrypt(ctype, ciphertext);
         }
         const session = new Olm.Session();
         session.create_inbound_from(this.account, senderIdentity, ciphertext);
         this.account.remove_one_time_keys(session);
-        this.persistAccount();
         const plain = session.decrypt(ctype, ciphertext);
         this.sessionsByIdentity.set(senderIdentity, session);
-        this.persistSessions();
         return plain;
       }
       if (!existing) return undefined;
-      const plain = existing.decrypt(ctype, ciphertext);
-      this.persistSessions();
-      return plain;
+      return existing.decrypt(ctype, ciphertext);
     } catch {
       return undefined;
     }
