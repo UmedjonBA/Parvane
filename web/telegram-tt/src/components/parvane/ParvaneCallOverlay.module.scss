@@ -115,6 +115,36 @@
   background: #000;
 }
 
+.groupPeers {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  max-height: 16rem;
+}
+
+.groupPeer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  font-size: 1rem;
+  color: var(--color-text, #fff);
+}
+
+.peerDot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--color-text-secondary, #aaa);
+}
+
+.peerDotActive {
+  background: #4dcd5e;
+}
+
 .localPreview {
   position: absolute;
   right: 0.5rem;

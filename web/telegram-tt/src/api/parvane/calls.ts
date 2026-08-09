@@ -6,6 +6,10 @@ import type { ParvaneStore } from './store';
 import {
   CallEngine, type CallMedia, FALLBACK_ICE_SERVERS, type WireCallSignal,
 } from './callengine';
+import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
+import {
+  GROUP_CALL_MAX_PARTICIPANTS, GroupCallEngine, type GroupPeerState, type WireGroupInvite,
+} from './groupcall';
 import {
   buildWireEvent,
   TOPIC_CALL_HISTORY_REQUEST,
@@ -48,10 +52,18 @@ type CallWindowState = {
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  group?: {
+    groupCallId: string;
+    title: string;
+    peerStates: Record<string, GroupPeerState>;
+    peerNames: Record<string, string>;
+  };
+  groupStreams?: Record<string, MediaStream>;
 };
 
 export function createCallController(deps: CallDependencies) {
   let engine: CallEngine | undefined;
+  let groupEngine: GroupCallEngine | undefined;
   const listeners = {
     onState: (_state: string) => {},
     onRemoteStream: (_stream: MediaStream) => {},
@@ -147,6 +159,7 @@ export function createCallController(deps: CallDependencies) {
     }
     // Сервер отдаёт новые первыми; вставляем старые первыми и только терминальные
     for (const record of records.reverse()) {
+      if (record.is_group) continue;
       if (record.status !== 'ended' && record.status !== 'missed' && record.status !== 'rejected') continue;
       if (store.hasMessage(record.call_id)) continue;
       const message = buildCallMessage(record);
@@ -237,15 +250,52 @@ export function createCallController(deps: CallDependencies) {
       onIncoming: (from, callId, media) => listeners.onIncoming(from, callId, media),
       onSas: (sas) => listeners.onSas(sas),
     });
+
+    groupEngine = new GroupCallEngine(deps.getStore().self, {
+      sendSignal: (peer, signal) => {
+        const store = deps.getStore();
+        // Реальный from (шард сверяет с JWT), gcall:-префикс только в to
+        const envelope = buildWireEvent(store.self, deps.getToken(), {
+          to: `gcall:${peer}`, signal,
+        });
+        deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
+      },
+      getPeerSigningKey: fetchSigningKey,
+      getIceServers,
+      getIceTransportPolicy,
+      sign: (data) => identity.signCallData(data),
+      verify: (publicKey, data, signature) => identity.verifyCallData(publicKey, data, signature),
+      onPeerState: (peer, state) => {
+        const group = callWindow.parvaneCall!.group;
+        if (!group) return;
+        group.peerStates = { ...group.peerStates, [peer]: state };
+        group.peerNames = { ...group.peerNames, [peer]: deps.getStore().getDisplayName(peer) };
+        emit();
+      },
+      onPeerStream: (peer, stream) => {
+        callWindow.parvaneCall!.groupStreams = {
+          ...callWindow.parvaneCall!.groupStreams, [peer]: stream,
+        };
+        emit();
+      },
+      onEnded: () => {
+        callWindow.parvaneCall!.group = undefined;
+        callWindow.parvaneCall!.groupStreams = undefined;
+        callWindow.parvaneCall!.isMuted = undefined;
+        emit();
+      },
+    });
   }
 
   function teardown() {
     try {
       engine?.hangUp();
+      groupEngine?.leave();
     } catch (error) {
       deps.log(`Ошибка завершения звонка: ${String(error)}`);
     }
     engine = undefined;
+    groupEngine = undefined;
   }
 
   function handleFrame(payload: string) {
@@ -262,10 +312,60 @@ export function createCallController(deps: CallDependencies) {
     });
   }
 
+  function ensureGroupWindowState(groupCallId: string, participants: string[], title?: string) {
+    const callWindow = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall;
+    if (!callWindow || callWindow.group?.groupCallId === groupCallId) return;
+    const store = deps.getStore();
+    const others = participants.filter((peer) => peer !== store.self);
+    callWindow.group = {
+      groupCallId,
+      title: title || others.map((peer) => store.getDisplayName(peer)).join(', '),
+      peerStates: {},
+      peerNames: Object.fromEntries(others.map((peer) => [peer, store.getDisplayName(peer)])),
+    };
+    window.dispatchEvent(new CustomEvent('parvane-call'));
+  }
+
+  function handleGroupFrame(payload: string) {
+    let event: WireEvent<WireCallSignal | WireGroupInvite>;
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    const signal = event.payload;
+    if (!signal?.type || !groupEngine) return;
+    if (signal.type === 'group_invite') {
+      ensureGroupWindowState(signal.group_call_id, signal.participants);
+    }
+    void groupEngine.handleSignal(event.from, signal).catch((error) => {
+      deps.log(`Ошибка группового сигналинга: ${String(error)}`);
+    });
+  }
+
+  function placeGroupCall(groupAddress: string, isVideo?: boolean) {
+    if (!groupEngine) return undefined;
+    const store = deps.getStore();
+    const info = store.getGroupInfo(groupAddress);
+    if (!info) return undefined;
+    const members = getActiveGroupMemberAddresses(info.members);
+    if (members.length > GROUP_CALL_MAX_PARTICIPANTS) {
+      deps.log(
+        `Групповой звонок невозможен: участников ${members.length}, лимит ${GROUP_CALL_MAX_PARTICIPANTS}`,
+      );
+      return undefined;
+    }
+    const groupCallId = crypto.randomUUID();
+    ensureGroupWindowState(groupCallId, members, info.name);
+    groupEngine.startCall(groupCallId, members, isVideo ? 'video' : 'audio');
+    return true;
+  }
+
   async function placeCall(chatId: string, isVideo?: boolean) {
     const store = deps.getStore();
     const toAddress = store.getAddressForId(chatId);
-    if (!toAddress || !engine || store.isGroupAddress(toAddress)) return undefined;
+    if (!toAddress || !engine) return undefined;
+    if (store.isGroupAddress(toAddress)) return placeGroupCall(toAddress, isVideo);
     const callState = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall!;
     callState.peerName = store.getDisplayName(toAddress);
     await engine.placeCall(toAddress, isVideo ? 'video' : 'audio');
@@ -280,7 +380,10 @@ export function createCallController(deps: CallDependencies) {
   }
 
   function toggleMute() {
-    const tracks = engine?.getLocalStream()?.getAudioTracks() || [];
+    const stream = groupEngine?.currentGroupCallId
+      ? groupEngine.getLocalStream()
+      : engine?.getLocalStream();
+    const tracks = stream?.getAudioTracks() || [];
     if (!tracks.length) return undefined;
     const shouldMute = tracks.some((track) => track.enabled);
     tracks.forEach((track) => {
@@ -304,7 +407,11 @@ export function createCallController(deps: CallDependencies) {
   return {
     acceptIncoming: () => engine?.acceptIncoming(),
     handleFrame,
-    hangUp: () => engine?.hangUp(),
+    handleGroupFrame,
+    hangUp: () => {
+      if (groupEngine?.currentGroupCallId) groupEngine.leave();
+      else engine?.hangUp();
+    },
     placeCall,
     setup,
     teardown,

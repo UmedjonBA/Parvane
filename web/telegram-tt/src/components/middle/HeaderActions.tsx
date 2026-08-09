@@ -562,8 +562,10 @@ export default memo(withGlobal<OwnProps>(
       (isMainThread || chat.isForum) && (isChannel || isSuperGroup) && chat.isNotJoined && !chat.isMonoforum,
     );
     const canSearch = isMainThread || isDiscussionThread;
-    const canCall = ARE_CALLS_SUPPORTED && isUserId(chat.id) && !isChatWithSelf && !bot && !chat.isSupport
-      && !isAnonymousForwardsChat(chat.id);
+    // Parvane: групповые mesh-звонки доступны из обычных групп (не каналов)
+    const canCall = ARE_CALLS_SUPPORTED && !isChatWithSelf && !bot && !chat.isSupport
+      && !isAnonymousForwardsChat(chat.id)
+      && (isUserId(chat.id) || isChatBasicGroup(chat));
     const canMute = isMainThread && !isChatWithSelf && !canSubscribe;
     const canLeave = isSavedDialog || (isMainThread && !canSubscribe);
     const canEnterVoiceChat = ARE_CALLS_SUPPORTED && isMainThread && chat.isCallActive;

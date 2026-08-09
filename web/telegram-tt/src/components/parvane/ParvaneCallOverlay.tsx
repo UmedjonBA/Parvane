@@ -19,6 +19,13 @@ type CallInfo = {
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  group?: {
+    groupCallId: string;
+    title: string;
+    peerStates: Record<string, string>;
+    peerNames: Record<string, string>;
+  };
+  groupStreams?: Record<string, MediaStream>;
 };
 
 function getWinCall(): CallInfo | undefined {
@@ -47,7 +54,8 @@ const ParvaneCallOverlay = () => {
   }, []);
 
   const state = call?.state;
-  const isVisible = Boolean(state) && state !== 'ended';
+  const group = call?.group;
+  const isVisible = (Boolean(state) && state !== 'ended') || Boolean(group);
 
   // Таймер длительности активного звонка
   useEffect(() => {
@@ -86,6 +94,34 @@ const ParvaneCallOverlay = () => {
     }
   }, [call?.localStream, hasLocalVideo]);
 
+  // Групповой звонок: по <audio> на каждый удалённый поток (DOM управляется
+  // вручную — количество участников динамическое)
+  const groupAudioRef = useRef<HTMLDivElement>();
+  const groupStreams = call?.groupStreams;
+  useEffect(() => {
+    const container = groupAudioRef.current;
+    if (!container) return;
+    const streams = Object.entries(groupStreams || {});
+    const existing = new Map(
+      Array.from(container.querySelectorAll('audio')).map((el) => [el.dataset.peer!, el]),
+    );
+    streams.forEach(([peer, stream]) => {
+      let el = existing.get(peer);
+      if (!el) {
+        el = document.createElement('audio');
+        el.dataset.peer = peer;
+        el.autoplay = true;
+        container.appendChild(el);
+      }
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+        void el.play().catch(() => undefined);
+      }
+      existing.delete(peer);
+    });
+    existing.forEach((el) => el.remove());
+  }, [groupStreams]);
+
   if (!isVisible) return undefined;
 
   const isIncoming = state === 'incoming';
@@ -108,6 +144,54 @@ const ParvaneCallOverlay = () => {
   else if (state === 'connecting') statusText = lang('CallStatusExchanging');
   else if (state === 'active') statusText = formatDuration(duration);
   else if (state === 'security_failed') statusText = lang('ParvaneCallSecurityError');
+
+  if (group) {
+    return (
+      <div className={styles.overlay}>
+        <div className={styles.card}>
+          <div className={styles.name}>{group.title}</div>
+          <div className={styles.status}>{lang('ParvaneGroupCall')}</div>
+          <div className={styles.groupPeers}>
+            {Object.entries(group.peerNames).map(([peer, name]) => {
+              const peerState = group.peerStates[peer] || 'connecting';
+              return (
+                <div key={peer} className={styles.groupPeer} data-peer-state={peerState}>
+                  <span
+                    className={buildClassName(
+                      styles.peerDot,
+                      peerState === 'active' && styles.peerDotActive,
+                    )}
+                  />
+                  {name}
+                </div>
+              );
+            })}
+          </div>
+          <div className={styles.actions}>
+            <Button
+              round
+              color="translucent"
+              className={buildClassName(styles.control, call?.isMuted && styles.controlOff)}
+              onClick={handleToggleMute}
+              ariaLabel={lang(call?.isMuted ? 'ParvaneCallUnmute' : 'ParvaneCallMute')}
+            >
+              <i className={buildClassName(styles.icon, 'icon', muteIcon)} />
+            </Button>
+            <Button
+              round
+              color="translucent"
+              className={styles.hangup}
+              onClick={handleHangup}
+              ariaLabel={lang('CallEndCall')}
+            >
+              <i className={buildClassName(styles.icon, 'icon icon-phone-discard')} />
+            </Button>
+          </div>
+          <div ref={groupAudioRef} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.overlay}>

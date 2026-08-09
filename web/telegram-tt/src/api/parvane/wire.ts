@@ -139,6 +139,8 @@ export type WireCallRecord = {
   status: 'ringing' | 'answered' | 'ended' | 'missed' | 'rejected';
   started_at: number;
   ended_at?: number;
+  // Pairwise-запись группового mesh-звонка — в личной истории не показывается
+  is_group?: boolean;
 };
 
 export function buildCallInboxTopic(user: string) {

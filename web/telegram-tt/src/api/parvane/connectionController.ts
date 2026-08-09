@@ -126,6 +126,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     activeConnection.subscribe(`msg.typing.${deps.selfId()}`, handleTypingFrame);
     activeConnection.subscribe('presence.*', handlePresenceFrame);
     activeConnection.subscribe(buildCallInboxTopic(user), deps.calls.handleFrame);
+    activeConnection.subscribe(buildCallInboxTopic(`gcall:${user}`), deps.calls.handleGroupFrame);
     deps.calls.setup();
   }
 
