@@ -74,6 +74,8 @@ pub mod topics {
     pub const GROUP_MUTE: &str = "group.mute";
     pub const GROUP_INVITE_CREATE: &str = "group.invite.create";
     pub const GROUP_JOIN: &str = "group.join";
+    pub const GROUP_RENAME: &str = "group.rename";
+    pub const GROUP_DELETE: &str = "group.delete";
 
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
@@ -954,6 +956,21 @@ pub struct GroupSetRoleRequest {
     pub group_id: String,
     pub member: String,
     pub role: String,
+}
+
+/// Переименовать группу (owner/admin).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupRenameRequest {
+    pub token: String,
+    pub group_id: String,
+    pub name: String,
+}
+
+/// Удалить группу со всеми участниками и инвайтами (только owner).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupDeleteRequest {
+    pub token: String,
+    pub group_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
