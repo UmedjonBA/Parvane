@@ -50,10 +50,11 @@ async function launchClient(profile, x, address) {
 // Идемпотентно и устойчиво к переходам: на каждом шаге смотрим, какая форма
 // сейчас активна, и действуем — пока не окажемся внутри (LeftColumn).
 async function loginOrRegister(page, address) {
-  const addressInput = page.locator('.Transition_slide-active > #auth-phone-number-form input');
-  const passwordInput = page.locator('.Transition_slide-active > #auth-password-form #sign-in-password');
+  const addressForm = page.locator('.Transition_slide-active > #auth-phone-number-form');
+  const passwordForm = page.locator('.Transition_slide-active > #auth-password-form');
+  const addressInput = addressForm.getByLabel('Address (user@server)');
+  const passwordInput = passwordForm.locator('#sign-in-password');
   const leftColumn = page.locator('#LeftColumn');
-  const nextButton = () => page.locator('.Transition_slide-active').getByRole('button', { name: 'Next' });
 
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   let addressDone = false;
@@ -62,16 +63,16 @@ async function loginOrRegister(page, address) {
     if (await leftColumn.isVisible().catch(() => false)) return;
     if (!addressDone && await addressInput.isVisible().catch(() => false)) {
       await addressInput.fill(address).catch(() => {});
-      await nextButton().click().catch(() => {});
+      await addressForm.getByRole('button', { name: 'Next' }).click().catch(() => {});
       addressDone = true;
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
       continue;
     }
     if (!passwordDone && await passwordInput.isVisible().catch(() => false)) {
       await passwordInput.fill(PASSWORD).catch(() => {});
-      await nextButton().click().catch(() => {});
+      await passwordForm.getByRole('button', { name: 'Next' }).click().catch(() => {});
       passwordDone = true;
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
       continue;
     }
     await page.waitForTimeout(300);
