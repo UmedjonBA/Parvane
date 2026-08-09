@@ -2656,6 +2656,16 @@ addActionHandler('openUrl', async (global, actions, payload): Promise<void> => {
   const parsedUrl = new URL(urlWithProtocol);
   const isMixedScript = isMixedScriptUrl(urlWithProtocol);
 
+  // Parvane: инвайт-ссылки групп (parvane.invite/<hash>) вступают в группу
+  // вместо открытия внешнего URL
+  if (parsedUrl.hostname === 'parvane.invite') {
+    const inviteHash = parsedUrl.pathname.replace(/^\//, '');
+    if (inviteHash) {
+      actions.acceptChatInvite({ hash: inviteHash, tabId });
+      return;
+    }
+  }
+
   if (!ignoreDeepLinks && isDeepLink(urlWithProtocol)) {
     actions.closeStoryViewer({ tabId });
     actions.closePaymentModal({ tabId });

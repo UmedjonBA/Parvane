@@ -67,6 +67,9 @@ log "B4 UX e2e (shared media, push fallback, mobile)"
 log "Two-browser polls e2e (public voters, quiz)"
 "$ROOT/scripts/run_web_polls_e2e.sh"
 
+log "Three-browser invite links e2e"
+"$ROOT/scripts/run_web_invites_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 
