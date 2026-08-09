@@ -17,7 +17,17 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-media-e2e-password';
-const TTL_SECS = 6;
+// Запас на отправку всей TTL-матрицы (панели стикеров/GIF открываются небыстро)
+const TTL_SECS = 12;
+
+async function openSymbolTab(page, tabName) {
+  const menu = page.locator('.SymbolMenu');
+  if (!(await menu.isVisible().catch(() => false))) {
+    await page.getByRole('button', { name: 'Choose emoji, sticker or GIF' }).first().click();
+    await menu.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  }
+  await menu.getByRole('button', { name: tabName, exact: true }).click({ force: true });
+}
 
 function crc32(bytes) {
   let crc = ~0;
@@ -75,7 +85,10 @@ async function attachFile(page, menuItemName, file, caption) {
 
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
-const bobContext = await browser.newContext();
+const bobContext = await browser.newContext({
+  permissions: ['geolocation'],
+  geolocation: { latitude: 52.52, longitude: 13.405 },
+});
 
 try {
   const suffix = `${Date.now()}-${process.pid}`;
@@ -155,15 +168,69 @@ try {
     'downloaded bytes differ from the uploaded original',
   );
 
-  // ── TTL: сообщение Bob → Alice исчезает у обоих и не возвращается ──────────
+  // ── TTL-матрица: текст, фото, документ, стикер, GIF, локация Bob → Alice ───
+  const ttlPhotoCaption = `ttl-photo-${suffix}`;
+  const ttlDocCaption = `ttl-doc-${suffix}`;
+  const ttlDocName = `ttl-doc-${suffix}.bin`;
+  const bobList = bobSession.page.locator('.Transition_slide-active > .MessageList');
+  const aliceList = aliceSession.page.locator('.Transition_slide-active > .MessageList');
+
   await sendText(bobSession.page, ttlMessage);
   await findMessageContainers(aliceSession.page, ttlMessage).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-  await findMessageContainers(bobSession.page, ttlMessage).first()
-    .waitFor({ state: 'detached', timeout: (TTL_SECS + 25) * 1000 });
-  await findMessageContainers(aliceSession.page, ttlMessage).first()
-    .waitFor({ state: 'detached', timeout: (TTL_SECS + 25) * 1000 });
+  await attachFile(bobSession.page, 'Photo or Video', {
+    name: 'ttl-picture.png',
+    mimeType: 'image/png',
+    buffer: makeSolidPng(96, [210, 60, 30]),
+  }, ttlPhotoCaption);
+  await findMessageContainers(aliceSession.page, ttlPhotoCaption).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  await attachFile(bobSession.page, 'Document', {
+    name: ttlDocName,
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from(`ttl doc payload ${suffix}`),
+  }, ttlDocCaption);
+  await findMessageContainers(aliceSession.page, ttlDocCaption).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  await openSymbolTab(bobSession.page, 'Stickers');
+  const bobSticker = bobSession.page.locator('.SymbolMenu .symbol-set .StickerButton').first();
+  await bobSticker.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSticker.click();
+  // Панель закрывается после отправки стикера с анимацией — дожидаемся,
+  // иначе openSymbolTab кликнет таб в закрывающемся меню
+  await bobSession.page.locator('.SymbolMenu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+  await aliceList.locator('.Message .custom-shape').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  await openSymbolTab(bobSession.page, 'GIFs');
+  const bobGif = bobSession.page.locator('.SymbolMenu .GifButton').first();
+  await bobGif.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobGif.click();
+  await bobSession.page.locator('.SymbolMenu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+  await aliceList.locator('.Message video').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  await bobSession.page.getByRole('button', { name: 'Add an attachment' }).click();
+  await bobSession.page.getByRole('menuitem', { name: 'Location' }).click();
+  await aliceList.locator('.Message .Location').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // Вся матрица исчезает у обеих сторон
+  const ttlDeadline = (TTL_SECS + 30) * 1000;
+  for (const label of [ttlMessage, ttlPhotoCaption, ttlDocCaption]) {
+    await findMessageContainers(bobSession.page, label).first()
+      .waitFor({ state: 'detached', timeout: ttlDeadline });
+    await findMessageContainers(aliceSession.page, label).first()
+      .waitFor({ state: 'detached', timeout: ttlDeadline });
+  }
+  for (const list of [bobList, aliceList]) {
+    for (const selector of ['.Message .custom-shape', '.Message video', '.Message .Location']) {
+      await list.locator(selector).first().waitFor({ state: 'detached', timeout: ttlDeadline });
+    }
+  }
 
   // Reload Alice: истёкшее сообщение не должно вернуться из sync
   await aliceSession.page.reload({ waitUntil: 'domcontentloaded' });
@@ -179,16 +246,25 @@ try {
   await findMessageContainers(aliceSession.page, fileCaption).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await aliceSession.page.waitForTimeout(2000);
-  assert.equal(
-    await findMessageContainers(aliceSession.page, ttlMessage).count(),
-    0,
-    'expired TTL message reappeared after reload',
-  );
+  for (const label of [ttlMessage, ttlPhotoCaption, ttlDocCaption]) {
+    assert.equal(
+      await findMessageContainers(aliceSession.page, label).count(),
+      0,
+      `expired TTL message reappeared after reload: ${label}`,
+    );
+  }
+  for (const selector of ['.Message .custom-shape', '.Message video', '.Message .Location']) {
+    assert.equal(
+      await aliceList.locator(selector).count(),
+      0,
+      `expired TTL media reappeared after reload: ${selector}`,
+    );
+  }
 
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: encrypted photo/file round-trip, byte-exact download and TTL expiry with reload');
+  console.log('OK: encrypted photo/file round-trip, byte-exact download and full TTL matrix (text/photo/doc/sticker/gif/location) expiry with reload');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {

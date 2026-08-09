@@ -115,6 +115,9 @@ export function createMessageController(deps: MessageDependencies) {
     const ts = Math.floor(Date.now() / 1000);
     const engine = requireE2e(deps.getE2e());
     const groupInfo = currentStore.getGroupInfo(toAddress);
+    // TTL-эфемерное не журналируем и не кэшируем — после срока сообщение
+    // не должно восстанавливаться ни из журнала, ни из decCache (как desktop)
+    const isEphemeral = Boolean(wireContent.ttl_secs);
 
     if (groupInfo) {
       const groupEpoch = await distributeGroupKey(
@@ -138,10 +141,12 @@ export function createMessageController(deps: MessageDependencies) {
           },
         },
       }));
-      deps.localState.appendOwnJournal({
-        id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
-      });
-      engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
+      if (!isEphemeral) {
+        deps.localState.appendOwnJournal({
+          id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
+        });
+        engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
+      }
       return uuid;
     }
 
@@ -166,10 +171,12 @@ export function createMessageController(deps: MessageDependencies) {
         },
       },
     }));
-    deps.localState.appendOwnJournal({
-      id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
-    });
-    engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
+    if (!isEphemeral) {
+      deps.localState.appendOwnJournal({
+        id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
+      });
+      engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
+    }
     return uuid;
   }
 
@@ -192,6 +199,7 @@ export function createMessageController(deps: MessageDependencies) {
       recipients: deps.media.getCloudRecipients(toAddress),
     });
     const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+    const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
     const wireContent: Record<string, unknown> = {
       kind: 'gif',
       file_id: fileId,
@@ -201,6 +209,7 @@ export function createMessageController(deps: MessageDependencies) {
       height: gif.height || 240,
       duration_secs: Math.round(gif.duration),
       size_bytes: blob.size,
+      ttl_secs: ttlSecs || undefined,
       ...mediaCrypto,
     };
     deps.media.cacheBlob(fileId, blob, 'video/webm');
@@ -218,6 +227,7 @@ export function createMessageController(deps: MessageDependencies) {
     };
     currentStore.putMessage(message);
     deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
+    if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
   }
 
   // Архив пака грузится в cloud один раз за сессию; получатель по pack_ref
@@ -268,6 +278,7 @@ export function createMessageController(deps: MessageDependencies) {
     const packRef = setId && isCustomPackSetId(setId)
       ? await buildPackRefForSet(setId, toAddress)
       : undefined;
+    const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
     const wireContent: Record<string, unknown> = {
       kind: 'sticker',
       file_id: fileId,
@@ -276,6 +287,7 @@ export function createMessageController(deps: MessageDependencies) {
       width: sticker.width || 256,
       height: sticker.height || 256,
       pack_ref: packRef,
+      ttl_secs: ttlSecs || undefined,
       ...mediaCrypto,
     };
     deps.media.cacheBlob(fileId, blob, mime);
@@ -291,6 +303,7 @@ export function createMessageController(deps: MessageDependencies) {
     };
     currentStore.putMessage(message);
     deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
+    if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
   }
 
   function refreshPollMessage(uuid: string) {
@@ -449,6 +462,7 @@ export function createMessageController(deps: MessageDependencies) {
             mime: attachment.mimeType || 'audio/ogg',
             size_bytes: size,
             waveform: attachment.voice.waveform,
+            ttl_secs: ttlSecs || undefined,
             ...mediaCrypto,
           };
           sentContent = {
@@ -472,6 +486,7 @@ export function createMessageController(deps: MessageDependencies) {
             mime: attachment.mimeType,
             size_bytes: size,
             caption: isRound ? undefined : params.text || undefined,
+            ttl_secs: ttlSecs || undefined,
             ...mediaCrypto,
           };
           sentContent = {
@@ -501,6 +516,7 @@ export function createMessageController(deps: MessageDependencies) {
             duration_secs: Math.round(attachment.audio.duration) || undefined,
             audio_title: attachment.audio.title,
             audio_performer: attachment.audio.performer,
+            ttl_secs: ttlSecs || undefined,
             ...mediaCrypto,
           };
           sentContent = {
@@ -525,6 +541,7 @@ export function createMessageController(deps: MessageDependencies) {
             mime: attachment.mimeType,
             size_bytes: size,
             caption: params.text || undefined,
+            ttl_secs: ttlSecs || undefined,
             ...mediaCrypto,
           };
           sentContent = {
@@ -548,6 +565,7 @@ export function createMessageController(deps: MessageDependencies) {
             mime: attachment.mimeType,
             size_bytes: size,
             caption: params.text || undefined,
+            ttl_secs: ttlSecs || undefined,
             ...mediaCrypto,
           };
           sentContent = {
@@ -597,20 +615,23 @@ export function createMessageController(deps: MessageDependencies) {
             reply_to: replyToUuid,
           },
         }));
-        deps.localState.appendOwnJournal({
-          id: uuid,
-          from: currentStore.self,
-          to: toAddress,
-          content: wireContent as unknown as WireMessageContent,
-          ts,
-          reply_to: replyToUuid,
-        });
-        engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
+        if (!ttlSecs) {
+          deps.localState.appendOwnJournal({
+            id: uuid,
+            from: currentStore.self,
+            to: toAddress,
+            content: wireContent as unknown as WireMessageContent,
+            ts,
+            reply_to: replyToUuid,
+          });
+          engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
+        }
         const sentMessage: ApiMessage = { ...localMessage, sendingState: undefined };
         currentStore.putMessage(sentMessage);
         deps.sendUpdate({
           '@type': 'updateMessageSendSucceeded', chatId: chat.id, localId: localMessage.id, message: sentMessage,
         });
+        if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, localMessage.id, ttlSecs);
         return;
       } catch (error) {
         reportEncryptionSendFailure(chat.id, localMessage.id, error);
@@ -879,6 +900,7 @@ export function createMessageController(deps: MessageDependencies) {
       const toAddress = currentStore.getAddressForId(toChat.id);
       if (!toAddress) return undefined;
       const fromAddress = currentStore.getAddressForId(fromChat.id) || '';
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       for (const message of messages) {
         const wireContent = deps.media.messageToWireContent(message);
         if (!wireContent) continue;
@@ -887,6 +909,8 @@ export function createMessageController(deps: MessageDependencies) {
         wireContent.forwarded_name = originalSender
           ? currentStore.getDisplayName(originalSender)
           : currentStore.getDisplayName(fromAddress);
+        // TTL целевого чата распространяется и на пересланное
+        wireContent.ttl_secs = ttlSecs || undefined;
         const uuid = await publishInner(toAddress, wireContent);
         const id = currentStore.allocateMessageId(toChat.id, uuid);
         const localMessage: ApiMessage = {
@@ -906,6 +930,7 @@ export function createMessageController(deps: MessageDependencies) {
         };
         currentStore.putMessage(localMessage);
         deps.sendUpdate({ '@type': 'newMessage', chatId: toChat.id, id, message: localMessage });
+        if (ttlSecs) deps.localState.scheduleTtlDeletion(toChat.id, id, ttlSecs);
       }
       return true;
     },
@@ -914,7 +939,10 @@ export function createMessageController(deps: MessageDependencies) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(chat.id);
       if (!toAddress) return undefined;
-      const uuid = await publishInner(toAddress, { kind: 'location', lat, long });
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+      const uuid = await publishInner(toAddress, {
+        kind: 'location', lat, long, ttl_secs: ttlSecs || undefined,
+      });
       const id = currentStore.allocateMessageId(chat.id, uuid);
       const message: ApiMessage = {
         id,
@@ -926,6 +954,7 @@ export function createMessageController(deps: MessageDependencies) {
       };
       currentStore.putMessage(message);
       deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
+      if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
       return true;
     },
   };
