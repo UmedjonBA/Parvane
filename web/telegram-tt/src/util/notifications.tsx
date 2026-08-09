@@ -260,10 +260,19 @@ export async function subscribe() {
       // eslint-disable-next-line no-console
       console.log('[PUSH] Received push subscription: ', deviceToken);
     }
-    await callApi('registerDevice', deviceToken);
-    setDeviceToken({ token: deviceToken });
-    hasPushNotifications = true;
-    hasWebNotifications = true;
+    const isRegistered = await callApi('registerDevice', deviceToken);
+    // Parvane: у бэкенда нет web-push — браузерная подписка без серверной
+    // регистрации бесполезна. Честно откатываемся на foreground-уведомления
+    // вместо «включённого» пуша, который никогда не сработает
+    if (!isRegistered) {
+      await subscription.unsubscribe().catch(() => undefined);
+      isSubscriptionFailed = true;
+      hasWebNotifications = await requestPermission();
+    } else {
+      setDeviceToken({ token: deviceToken });
+      hasPushNotifications = true;
+      hasWebNotifications = true;
+    }
   } catch (error: any) {
     if (Notification.permission === 'denied') {
       // The user denied the notification permission which

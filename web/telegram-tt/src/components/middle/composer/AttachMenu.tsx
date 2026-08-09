@@ -297,7 +297,7 @@ const AttachMenu = ({
               <MenuItem icon="poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
             )}
             {!editingMessage && (
-              <MenuItem icon="location" onClick={handleParvaneLocation}>Геопозиция</MenuItem>
+              <MenuItem icon="location" onClick={handleParvaneLocation}>{lang('AttachLocation')}</MenuItem>
             )}
             {canAttachToDoLists && !editingMessage && (
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
