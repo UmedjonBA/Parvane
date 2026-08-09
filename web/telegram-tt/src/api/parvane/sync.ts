@@ -145,7 +145,11 @@ export function createSyncController(deps: SyncDependencies) {
     if (!plain) return { stored, wasSealed: false };
     try {
       const inner = JSON.parse(plain) as { from: string; content: WireMessageContent };
-      if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
+      // ВАЖНО про порядок: `decryptFrom` не персистит продвинутый ратчет —
+      // первым персист-снапшотом ОБЯЗАН быть `cacheInner`/`acceptGroupKey`,
+      // чтобы уехавший ратчет и результат расшифровки легли на диск атомарно.
+      // Резкий kill до этой точки безопасен: на диске ратчет не уехал,
+      // и после рестарта то же сообщение расшифруется заново
       if (inner.content?.kind === 'skdm' && inner.content.group && inner.content.session_key) {
         e2e.acceptGroupKey(
           inner.content.group,
@@ -153,9 +157,11 @@ export function createSyncController(deps: SyncDependencies) {
           inner.content.session_key,
           inner.content.epoch || 0,
         );
+        if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
         return { stored, wasSealed: true, hidden: true };
       }
       e2e.cacheInner(stored.id, inner);
+      if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
       deps.media.rememberKeys(inner.content);
       return { stored: { ...stored, from: inner.from, content: inner.content }, wasSealed: true };
     } catch {
@@ -393,6 +399,12 @@ export function createSyncController(deps: SyncDependencies) {
     ordered.forEach((rawStored) => {
       const { stored, hidden } = unsealStored(rawStored);
       if (hidden || handlePollContent(stored)) return;
+      // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
+      // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
+      if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
+        deps.log(`сообщение ${stored.id} не расшифровано — пропущено (full sync)`);
+        return;
+      }
       deps.media.rememberKeys(stored.content);
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
