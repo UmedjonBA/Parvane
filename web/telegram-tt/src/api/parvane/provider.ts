@@ -63,6 +63,9 @@ import {
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
+  TOPIC_PUSH_REGISTER,
+  TOPIC_PUSH_UNREGISTER,
+  TOPIC_PUSH_VAPID_GET,
 } from './wire';
 
 const LOGIN_HASH_PREFIX = '#parvane=';
@@ -714,6 +717,50 @@ const methods = {
     registerPackBlobs(built.blobs);
     sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
     return { title: finalName, count: packFiles.length };
+  },
+
+  // ── web-push (шард push, VAPID) ─────────────────────────────────────────────
+
+  async parvaneGetPushKey() {
+    if (!connection) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_PUSH_VAPID_GET, JSON.stringify({}));
+      const response = JSON.parse(raw) as { ok: boolean; public_key?: string };
+      if (!response.ok || !response.public_key) return undefined;
+      return { publicKey: response.public_key };
+    } catch {
+      return undefined;
+    }
+  },
+
+  // token — JSON PushSubscription из notifications.tsx (getDeviceToken)
+  async registerDevice(deviceToken: string) {
+    if (!connection) return undefined;
+    try {
+      const subscription = JSON.parse(deviceToken) as { endpoint?: string; keys?: unknown };
+      if (!subscription.endpoint || !subscription.keys) return undefined;
+      const raw = await connection.request(TOPIC_PUSH_REGISTER, JSON.stringify({
+        token,
+        subscription,
+      }));
+      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+
+  async unregisterDevice(deviceToken: string) {
+    if (!connection) return undefined;
+    try {
+      const subscription = JSON.parse(deviceToken) as { endpoint?: string };
+      const raw = await connection.request(TOPIC_PUSH_UNREGISTER, JSON.stringify({
+        token,
+        endpoint: subscription.endpoint,
+      }));
+      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
+    } catch {
+      return undefined;
+    }
   },
 
   // ── C1: бэкап E2E-ключей (перенос на другое устройство) ─────────────────────

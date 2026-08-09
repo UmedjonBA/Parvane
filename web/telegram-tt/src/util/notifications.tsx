@@ -52,6 +52,18 @@ function getDeviceToken(subscription: PushSubscription) {
   });
 }
 
+// Parvane: VAPID-ключ отдаёт push-шард; без него подписка невозможна
+async function fetchParvaneVapidKey(): Promise<Uint8Array | undefined> {
+  const callParvane = callApi as unknown as (method: string) => Promise<{ publicKey: string } | undefined>;
+  const result = await callParvane('parvaneGetPushKey').catch(() => undefined);
+  if (!result?.publicKey) return undefined;
+  const padded = result.publicKey.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 function checkIfPushSupported() {
   if (!IS_SERVICE_WORKER_SUPPORTED || IS_TAURI) return false;
 
@@ -251,9 +263,18 @@ export async function subscribe() {
   let subscription = await serviceWorkerRegistration.pushManager.getSubscription();
   if (!checkIfShouldResubscribe(subscription)) return;
   await unsubscribeFromPush(subscription);
+  // Parvane: без VAPID-ключа шарда подписка бессмысленна — честный fallback
+  const applicationServerKey = await fetchParvaneVapidKey();
+  if (!applicationServerKey) {
+    isSubscriptionFailed = true;
+    hasWebNotifications = await requestPermission();
+    updateWebNotificationSettings({ hasWebNotifications, hasPushNotifications });
+    return;
+  }
   try {
     subscription = await serviceWorkerRegistration.pushManager.subscribe({
       userVisibleOnly: true,
+      applicationServerKey: applicationServerKey.buffer as ArrayBuffer,
     });
     const deviceToken = getDeviceToken(subscription);
     if (DEBUG) {

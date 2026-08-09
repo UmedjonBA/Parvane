@@ -188,7 +188,13 @@ export function handlePush(e: PushEvent) {
     return;
   }
 
-  e.waitUntil(showNotification(notification));
+  // Parvane: пуш будит только закрытое приложение — при открытой вкладке
+  // foreground-уведомления показывает сама страница
+  e.waitUntil((async () => {
+    const clients = await getClients();
+    if (clients.length) return;
+    await showNotification(notification);
+  })());
 }
 
 async function focusChatMessage(client: WindowClient, data: FocusMessageData) {

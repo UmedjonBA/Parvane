@@ -4,6 +4,7 @@
 // «Not supported»; (3) мобильный smoke — свежий логин на 375px без
 // горизонтального переполнения, чат открывается, композер доступен.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -140,6 +141,21 @@ try {
   await offlineRow.getByText('Not supported').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await offlineRow.locator('input').isDisabled(), true, 'offline push toggle must be disabled');
   assert.equal(await offlineRow.locator('input').isChecked(), false, 'offline push toggle must be off');
+
+  // ── Push-шард: VAPID-ключ отдаётся, регистрация требует валидный JWT ───────
+  if (process.env.PARVANE_E2E_NATS_URL) {
+    const natsReq = (subject, payload) => JSON.parse(execFileSync('nats', [
+      'req', subject, payload, '--server', process.env.PARVANE_E2E_NATS_URL, '--raw',
+    ], { encoding: 'utf8' }));
+    const vapid = natsReq('push.vapid.get', '{}');
+    assert.equal(vapid.ok, true, 'push shard must serve the VAPID key');
+    assert.ok(vapid.public_key?.length > 40, 'VAPID public key looks too short');
+    const badRegister = natsReq('push.device.register', JSON.stringify({
+      token: 'invalid-jwt',
+      subscription: { endpoint: 'https://example.com/ep', keys: { p256dh: 'x', auth: 'y' } },
+    }));
+    assert.equal(badRegister.ok, false, 'push register must reject an invalid JWT');
+  }
 
   // ── Мобильный smoke: 375px, без горизонтального скролла, чат открывается ───
   const mobileSession = await preparePage(mobileContext, mobileUser, PASSWORD);
