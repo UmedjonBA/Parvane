@@ -6,14 +6,16 @@ use futures::StreamExt;
 use parvane_types::{
     AckPayload, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
     GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
-    GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
+    GroupDeleteRequest, GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest,
+    GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
     GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
     MessageContent,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, SendPayload, StoredMessage,
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
-        GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_INFO, GROUP_INVITE_CREATE, GROUP_JOIN,
-        GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER, GROUP_SET_ROLE, GROUP_UNBAN,
+        GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_DELETE, GROUP_INFO,
+        GROUP_INVITE_CREATE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
+        GROUP_RENAME, GROUP_SET_ROLE, GROUP_UNBAN,
         IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
@@ -76,6 +78,8 @@ async fn main() -> Result<()> {
     let mut gmute_sub = nc.subscribe(GROUP_MUTE).await?;
     let mut ginvite_sub = nc.subscribe(GROUP_INVITE_CREATE).await?;
     let mut gjoin_sub = nc.subscribe(GROUP_JOIN).await?;
+    let mut grename_sub = nc.subscribe(GROUP_RENAME).await?;
+    let mut gdelete_sub = nc.subscribe(GROUP_DELETE).await?;
     let mut glist_sub = nc.subscribe(GROUP_LIST).await?;
     let mut ginfo_sub = nc.subscribe(GROUP_INFO).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
@@ -134,6 +138,12 @@ async fn main() -> Result<()> {
             }
             Some(msg) = gjoin_sub.next() => {
                 handle_group_join(&nc, &pool, msg).await;
+            }
+            Some(msg) = grename_sub.next() => {
+                handle_group_rename(&nc, &pool, msg).await;
+            }
+            Some(msg) = gdelete_sub.next() => {
+                handle_group_delete(&nc, &pool, msg).await;
             }
             Some(msg) = glist_sub.next() => {
                 handle_group_list(&nc, &pool, msg).await;
@@ -635,6 +645,45 @@ async fn set_group_role(
     .bind(member)
     .execute(pool)
     .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Переименовать группу. Только owner/admin.
+async fn rename_group(pool: &SqlitePool, group_id: &str, actor: &str, name: &str) -> Result<bool> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 128 {
+        return Ok(false);
+    }
+    let actor_role = member_role(pool, group_id, actor).await?;
+    if !matches!(actor_role.as_deref(), Some("owner") | Some("admin")) {
+        return Ok(false);
+    }
+    let res = sqlx::query("UPDATE groups SET name = ? WHERE id = ?")
+        .bind(trimmed)
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Удалить группу с участниками и инвайтами. Только owner.
+async fn delete_group(pool: &SqlitePool, group_id: &str, actor: &str) -> Result<bool> {
+    let actor_role = member_role(pool, group_id, actor).await?;
+    if !matches!(actor_role.as_deref(), Some("owner")) {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM group_invites WHERE group_id = ?")
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM group_members WHERE group_id = ?")
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+    let res = sqlx::query("DELETE FROM groups WHERE id = ?")
+        .bind(group_id)
+        .execute(pool)
+        .await?;
     Ok(res.rows_affected() > 0)
 }
 
@@ -1341,6 +1390,40 @@ async fn handle_group_setrole(nc: &Client, pool: &SqlitePool, msg: async_nats::M
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("не owner / нельзя".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_group_rename(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupRenameRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.rename")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = rename_group(pool, &req.group_id, &actor, &req.name).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("не owner/admin или пустое имя".into()) },
+        })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_group_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupDeleteRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.delete")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = delete_group(pool, &req.group_id, &actor).await?;
+        anyhow::Ok(GroupActionResponse {
+            ok,
+            error: if ok { None } else { Some("удалить может только владелец".into()) },
         })
     }
     .await
@@ -2313,6 +2396,36 @@ mod tests {
         assert!(ack_delivered(&pool, "bob@local", mid).await.unwrap());
         assert!(!ack_delivered(&pool, "bob@local", mid).await.unwrap());
         assert!(pending_for(&pool, "bob@local", 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rename_group_requires_owner_or_admin() {
+        let pool = test_pool().await;
+        let gid = create_group(&pool, "Старое", GroupKind::Group, "owner@l",
+            &["bob@l".into(), "adm@l".into()], 0).await.unwrap();
+        assert!(set_group_role(&pool, &gid, "owner@l", "adm@l", "admin").await.unwrap());
+
+        // member не может, owner и admin могут; пустое имя отклоняется
+        assert!(!rename_group(&pool, &gid, "bob@l", "Взлом").await.unwrap());
+        assert!(rename_group(&pool, &gid, "owner@l", "Новое").await.unwrap());
+        assert!(rename_group(&pool, &gid, "adm@l", "Ещё новее").await.unwrap());
+        assert!(!rename_group(&pool, &gid, "owner@l", "   ").await.unwrap());
+        let info = group_info(&pool, &gid).await.unwrap().unwrap();
+        assert_eq!(info.name, "Ещё новее");
+    }
+
+    #[tokio::test]
+    async fn delete_group_is_owner_only_and_wipes_membership() {
+        let pool = test_pool().await;
+        let gid = create_group(&pool, "Тест", GroupKind::Group, "owner@l",
+            &["bob@l".into()], 0).await.unwrap();
+
+        assert!(!delete_group(&pool, &gid, "bob@l").await.unwrap());
+        assert!(delete_group(&pool, &gid, "owner@l").await.unwrap());
+        assert!(group_info(&pool, &gid).await.unwrap().is_none());
+        assert!(list_groups(&pool, "bob@l").await.unwrap().is_empty());
+        // Повторное удаление — no-op
+        assert!(!delete_group(&pool, &gid, "owner@l").await.unwrap());
     }
 
     #[tokio::test]

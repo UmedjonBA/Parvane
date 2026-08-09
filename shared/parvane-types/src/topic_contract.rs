@@ -41,6 +41,8 @@ pub const MESSENGER_NATS_SUBSCRIBE: &[&str] = &[
     GROUP_MUTE,
     GROUP_INVITE_CREATE,
     GROUP_JOIN,
+    GROUP_RENAME,
+    GROUP_DELETE,
     GROUP_LIST,
     GROUP_INFO,
     REQUEST_INBOX,
@@ -124,6 +126,8 @@ pub const GATEWAY_ALLOWED_REQUEST: &[&str] = &[
     GROUP_MUTE,
     GROUP_INVITE_CREATE,
     GROUP_JOIN,
+    GROUP_RENAME,
+    GROUP_DELETE,
     CALL_HISTORY_REQUEST,
     CALL_ICE_REQUEST,
 ];
@@ -165,6 +169,8 @@ pub const GATEWAY_TOKEN_REQUEST_SUBJECTS: &[&str] = &[
     GROUP_MUTE,
     GROUP_INVITE_CREATE,
     GROUP_JOIN,
+    GROUP_RENAME,
+    GROUP_DELETE,
 ];
 
 /// Минимальные bus-права доверенного gateway. Runtime allowlist выше остаётся
@@ -204,6 +210,8 @@ pub const GATEWAY_NATS_PUBLISH: &[&str] = &[
     GROUP_MUTE,
     GROUP_INVITE_CREATE,
     GROUP_JOIN,
+    GROUP_RENAME,
+    GROUP_DELETE,
     GROUP_LIST,
     GROUP_INFO,
     "msg.typing.>",
