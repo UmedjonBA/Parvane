@@ -42,6 +42,7 @@ type MessageDependencies = {
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
   collectUsersFor: (messages: ApiMessage[]) => ApiUser[];
+  clearPersistedDraft: (address: string) => void;
   log: (message: string) => void;
 };
 
@@ -356,6 +357,9 @@ export function createMessageController(deps: MessageDependencies) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
+    // Отправка гасит persisted-черновик: tt чистит его только в памяти
+    // (clearDraft isLocalOnly), до провайдера это не доходит
+    deps.clearPersistedDraft(toAddress);
 
     let engine: E2eEngine;
     try {

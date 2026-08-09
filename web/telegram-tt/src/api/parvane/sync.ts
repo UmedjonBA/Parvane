@@ -301,6 +301,13 @@ export function createSyncController(deps: SyncDependencies) {
       if (shouldAckIncoming) sendAck(rawStored.id, stored.from);
       return;
     }
+    // Sealed-сообщение, которое не удалось расшифровать, не имеет отправителя —
+    // без этого guard'а оно ошибочно оседало бы в «Избранном» (to === self)
+    if (!stored.from && stored.content.kind === 'encrypted') {
+      deps.log(`sealed-сообщение ${stored.id} не расшифровано — пропущено`);
+      if (shouldAckIncoming) sendAck(rawStored.id, '');
+      return;
+    }
     await refreshGroupsIfUnknownChat(stored);
     if (handlePollContent(stored)) {
       if (shouldAckIncoming && stored.from !== store.self) {
