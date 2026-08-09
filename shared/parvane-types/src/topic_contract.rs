@@ -56,7 +56,12 @@ pub const CLOUD_NATS_SUBSCRIBE: &[&str] = &[
 ];
 pub const CLOUD_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 
-pub const CALL_NATS_SUBSCRIBE: &[&str] = &[CALL_SIGNAL, CALL_HISTORY_REQUEST, REQUEST_INBOX];
+pub const CALL_NATS_SUBSCRIBE: &[&str] = &[
+    CALL_SIGNAL,
+    CALL_HISTORY_REQUEST,
+    CALL_ICE_REQUEST,
+    REQUEST_INBOX,
+];
 pub const CALL_NATS_PUBLISH: &[&str] = &["call.user.>", IDENTITY_VERIFY, REQUEST_INBOX];
 
 pub const NOTES_NATS_SUBSCRIBE: &[&str] = &[
@@ -120,6 +125,7 @@ pub const GATEWAY_ALLOWED_REQUEST: &[&str] = &[
     GROUP_INVITE_CREATE,
     GROUP_JOIN,
     CALL_HISTORY_REQUEST,
+    CALL_ICE_REQUEST,
 ];
 
 /// Subjects с полями actor/token, которые gateway привязывает к сессии.
@@ -134,6 +140,7 @@ pub const GATEWAY_EVENT_SUBJECTS: &[&str] = &[
     MSG_SYNC_REQUEST,
     CALL_SIGNAL,
     CALL_HISTORY_REQUEST,
+    CALL_ICE_REQUEST,
     FILE_UPLOAD_CHUNK,
     FILE_UPLOAD_COMPLETE,
     FILE_DOWNLOAD_REQUEST,
@@ -187,6 +194,7 @@ pub const GATEWAY_NATS_PUBLISH: &[&str] = &[
     FILE_LIST_REQUEST,
     CALL_SIGNAL,
     CALL_HISTORY_REQUEST,
+    CALL_ICE_REQUEST,
     GROUP_CREATE,
     GROUP_ADD_MEMBER,
     GROUP_REMOVE_MEMBER,

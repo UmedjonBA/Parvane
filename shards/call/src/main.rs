@@ -5,9 +5,9 @@ use async_nats::Client;
 use calls::{is_terminal, next_status};
 use futures::StreamExt;
 use parvane_types::{
-    CallHistoryResponse, CallMedia, CallRecord, CallSignal, CallSignalPayload, ParvaneEvent,
-    VerifyRequest, VerifyResponse,
-    topics::{CALL_HISTORY_REQUEST, CALL_SIGNAL, IDENTITY_VERIFY, call_inbox},
+    CallHistoryResponse, CallMedia, CallRecord, CallSignal, CallSignalPayload, IceServer,
+    IceServersResponse, ParvaneEvent, VerifyRequest, VerifyResponse,
+    topics::{CALL_HISTORY_REQUEST, CALL_ICE_REQUEST, CALL_SIGNAL, IDENTITY_VERIFY, call_inbox},
 };
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,15 +39,22 @@ async fn main() -> Result<()> {
     let nc = parvane_types::nats::connect(&nats_url).await.context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
 
+    let ice_config = IceConfig::from_env();
+
     let mut signal_sub = nc.subscribe(CALL_SIGNAL).await?;
     let mut history_sub = nc.subscribe(CALL_HISTORY_REQUEST).await?;
+    let mut ice_sub = nc.subscribe(CALL_ICE_REQUEST).await?;
 
-    info!("Call шард запущен. Слушаю: {}, {}", CALL_SIGNAL, CALL_HISTORY_REQUEST);
+    info!(
+        "Call шард запущен. Слушаю: {}, {}, {}",
+        CALL_SIGNAL, CALL_HISTORY_REQUEST, CALL_ICE_REQUEST
+    );
 
     loop {
         tokio::select! {
             Some(msg) = signal_sub.next()  => handle_signal(&nc, &pool, msg).await,
             Some(msg) = history_sub.next() => handle_history(&nc, &pool, msg).await,
+            Some(msg) = ice_sub.next()     => handle_ice_request(&nc, &ice_config, msg).await,
         }
     }
 }
@@ -296,6 +303,99 @@ async fn handle_history(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
     }
 }
 
+// ── call.ice.request ─────────────────────────────────────────────────────────
+
+/// Конфигурация выдачи ICE-серверов. STUN отдаётся всем как есть; для TURN
+/// генерируются краткоживущие креды (TURN REST): username = `<expiry>:<user>`,
+/// credential = base64(HMAC-SHA1(secret, username)).
+struct IceConfig {
+    stun_urls: Vec<String>,
+    turn_url: Option<String>,
+    turn_secret: Option<String>,
+    ttl_secs: u64,
+}
+
+impl IceConfig {
+    fn from_env() -> Self {
+        let stun_urls = std::env::var("PARVANE_STUN_URLS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(str::to_string)
+            .collect();
+        let turn_url = std::env::var("PARVANE_TURN_URL").ok().filter(|v| !v.is_empty());
+        let turn_secret = std::env::var("PARVANE_TURN_SECRET").ok().filter(|v| !v.is_empty());
+        let ttl_secs = std::env::var("PARVANE_TURN_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3600);
+        Self { stun_urls, turn_url, turn_secret, ttl_secs }
+    }
+
+    fn build_response(&self, user: &str, now: i64) -> IceServersResponse {
+        let mut ice_servers = Vec::new();
+        if !self.stun_urls.is_empty() {
+            ice_servers.push(IceServer {
+                urls: self.stun_urls.clone(),
+                username: None,
+                credential: None,
+            });
+        }
+        if let (Some(turn_url), Some(secret)) = (&self.turn_url, &self.turn_secret) {
+            let username = format!("{}:{}", now + self.ttl_secs as i64, user);
+            let credential = turn_rest_credential(secret, &username);
+            ice_servers.push(IceServer {
+                urls: vec![turn_url.clone()],
+                username: Some(username),
+                credential: Some(credential),
+            });
+        }
+        IceServersResponse { ice_servers, ttl_secs: self.ttl_secs }
+    }
+}
+
+fn turn_rest_credential(secret: &str, username: &str) -> String {
+    use base64::Engine as _;
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(secret.as_bytes())
+        .expect("HMAC принимает ключ любой длины");
+    mac.update(username.as_bytes());
+    base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+}
+
+async fn handle_ice_request(nc: &Client, config: &IceConfig, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        warn!("ice: нет reply-топика");
+        return;
+    };
+
+    let result = async {
+        let event: ParvaneEvent<serde_json::Value> =
+            serde_json::from_slice(&msg.payload).context("неверный JSON в call.ice.request")?;
+        let user = verify_token(nc, &event.token).await?;
+
+        let payload = config.build_response(&user, now_unix());
+        let servers = payload.ice_servers.len();
+        let resp = ParvaneEvent {
+            id: uuid::Uuid::now_v7(),
+            from: "call".to_string(),
+            ts: now_unix(),
+            token: String::new(),
+            payload,
+        };
+        let json = serde_json::to_vec(&resp)?;
+        nc.publish(reply.clone(), json.into()).await?;
+        info!("ICE-конфигурация для {}: {} серверов", user, servers);
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        error!("handle_ice_request: {}", e);
+        let _ = nc.publish(reply, b"{}".as_ref().into()).await;
+    }
+}
+
 fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
@@ -306,6 +406,47 @@ mod tests {
     use parvane_types::CallMedia;
     use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
+
+    #[test]
+    fn turn_rest_credential_is_stable_hmac_sha1() {
+        // Референс посчитан независимо: python hmac/sha1/base64
+        assert_eq!(
+            turn_rest_credential("north", "1700000000:alice@local"),
+            "ng6stooO+WmFmwZcKnSQqroGfRc=",
+        );
+    }
+
+    #[test]
+    fn ice_response_contains_stun_and_ephemeral_turn() {
+        let config = IceConfig {
+            stun_urls: vec!["stun:stun.example:3478".into()],
+            turn_url: Some("turn:turn.example:3478".into()),
+            turn_secret: Some("secret".into()),
+            ttl_secs: 600,
+        };
+        let resp = config.build_response("bob@local", 1_700_000_000);
+        assert_eq!(resp.ttl_secs, 600);
+        assert_eq!(resp.ice_servers.len(), 2);
+        let turn = &resp.ice_servers[1];
+        assert_eq!(turn.username.as_deref(), Some("1700000600:bob@local"));
+        assert_eq!(
+            turn.credential.as_deref().unwrap(),
+            turn_rest_credential("secret", "1700000600:bob@local"),
+        );
+    }
+
+    #[test]
+    fn ice_response_without_turn_env_is_stun_only() {
+        let config = IceConfig {
+            stun_urls: vec!["stun:s".into()],
+            turn_url: None,
+            turn_secret: None,
+            ttl_secs: 3600,
+        };
+        let resp = config.build_response("bob@local", 0);
+        assert_eq!(resp.ice_servers.len(), 1);
+        assert!(resp.ice_servers[0].username.is_none());
+    }
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
