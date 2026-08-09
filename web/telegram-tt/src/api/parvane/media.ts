@@ -463,6 +463,7 @@ export function createMediaService(deps: MediaDependencies) {
     downloadBlob,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),
+    getMediaKeys: (fileId: string) => keysByFileId.get(fileId),
     getCloudRecipients,
     isPhotoAttachment,
     isVideoAttachment,

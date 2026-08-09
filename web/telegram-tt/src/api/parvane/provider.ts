@@ -204,6 +204,7 @@ const connectionController = createConnectionController({
   onNewSession: () => {
     syncController.reset();
     resetPackRegistries();
+    messageController.resetSavedGifs();
   },
   isSynced: syncController.isSynced,
   resetSyncPromise: syncController.resetPromise,
@@ -756,7 +757,9 @@ const methods = {
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, 'video/webm');
     });
-    return { hash: '1', gifs: [...gifs, ...messageController.getSavedGifs()] };
+    await messageController.ensureSavedGifsHydrated();
+    const saved = messageController.getSavedGifs();
+    return { hash: `1:${saved.length}`, gifs: [...saved, ...gifs] };
   },
 
   // ── запланированные сообщения (локальная очередь) ───────────────────────────
