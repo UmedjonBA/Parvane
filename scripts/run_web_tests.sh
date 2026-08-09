@@ -64,6 +64,9 @@ log "Two-browser sticker packs e2e"
 log "B4 UX e2e (shared media, push fallback, mobile)"
 "$ROOT/scripts/run_web_b4_ux_e2e.sh"
 
+log "Two-browser polls e2e (public voters, quiz)"
+"$ROOT/scripts/run_web_polls_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 

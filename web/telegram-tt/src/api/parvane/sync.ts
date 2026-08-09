@@ -182,18 +182,21 @@ export function createSyncController(deps: SyncDependencies) {
       deps.polls.register(
         stored.id,
         chatId,
-        (content as { question?: string }).question || '',
-        (content as { options?: string[] }).options || [],
+        content.question || '',
+        (content.options || []).map(String),
         {
-          isPublic: Boolean((content as { is_public?: boolean }).is_public),
-          isMultiple: Boolean((content as { is_multiple?: boolean }).is_multiple),
+          isPublic: Boolean(content.is_public),
+          isMultiple: Boolean(content.is_multiple),
+          isQuiz: Boolean(content.is_quiz),
+          correct: content.correct,
+          solution: content.solution,
         },
       );
       return false;
     }
     if (content.kind === 'poll_vote') {
-      const pollUuid = (content as { poll?: string }).poll;
-      const options = (content as { options?: number[] }).options || [];
+      const pollUuid = content.poll;
+      const options = (content.options || []).map(Number).filter((idx) => !Number.isNaN(idx));
       if (pollUuid && stored.from) {
         deps.polls.applyVote(pollUuid, stored.from, options);
         deps.refreshPollMessage(pollUuid);
@@ -201,7 +204,7 @@ export function createSyncController(deps: SyncDependencies) {
       return true;
     }
     if (content.kind === 'poll_close') {
-      const pollUuid = (content as { poll?: string }).poll;
+      const pollUuid = content.poll;
       if (pollUuid) {
         deps.polls.close(pollUuid);
         deps.refreshPollMessage(pollUuid);
