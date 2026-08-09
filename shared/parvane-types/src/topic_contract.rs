@@ -84,6 +84,9 @@ pub const CALENDAR_NATS_SUBSCRIBE: &[&str] = &[
 ];
 pub const CALENDAR_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 
+pub const PREVIEW_NATS_SUBSCRIBE: &[&str] = &[PREVIEW_FETCH, REQUEST_INBOX];
+pub const PREVIEW_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+
 /// Fire-and-forget subjects, доступные авторизованному клиенту через gateway.
 pub const GATEWAY_ALLOWED_PUBLISH: &[&str] = &[
     MSG_SEND,
@@ -130,6 +133,7 @@ pub const GATEWAY_ALLOWED_REQUEST: &[&str] = &[
     GROUP_DELETE,
     CALL_HISTORY_REQUEST,
     CALL_ICE_REQUEST,
+    PREVIEW_FETCH,
 ];
 
 /// Subjects с полями actor/token, которые gateway привязывает к сессии.
@@ -171,6 +175,7 @@ pub const GATEWAY_TOKEN_REQUEST_SUBJECTS: &[&str] = &[
     GROUP_JOIN,
     GROUP_RENAME,
     GROUP_DELETE,
+    PREVIEW_FETCH,
 ];
 
 /// Минимальные bus-права доверенного gateway. Runtime allowlist выше остаётся
@@ -214,6 +219,7 @@ pub const GATEWAY_NATS_PUBLISH: &[&str] = &[
     GROUP_DELETE,
     GROUP_LIST,
     GROUP_INFO,
+    PREVIEW_FETCH,
     "msg.typing.>",
     "presence.>",
 ];
