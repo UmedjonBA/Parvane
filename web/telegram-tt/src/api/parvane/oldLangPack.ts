@@ -72,6 +72,8 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     AccDescrStickers: 'Stickers',
     AccDescrVoiceMessage: 'Record voice message',
     AccDescrVideoMessage: 'Record video message',
+    AttachAudio: 'Voice Message',
+    SharedMedia: 'Shared Media',
     CallMessageIncoming: 'Incoming Call',
     CallMessageOutgoing: 'Outgoing Call',
     CallMessageIncomingMissed: 'Missed Call',
