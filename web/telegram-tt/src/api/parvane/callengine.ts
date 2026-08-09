@@ -17,6 +17,10 @@ export type CallState = 'requesting' | 'ringing' | 'connecting' | 'active' | 'se
 type CallCallbacks = {
   sendSignal: (to: string, signal: WireCallSignal) => void;
   getPeerSigningKey: (peer: string) => Promise<string | undefined>;
+  // ICE-конфигурация с сервера (STUN + краткоживущие TURN-креды); при
+  // недоступности возвращает фоллбэк
+  getIceServers: () => Promise<RTCIceServer[]>;
+  getIceTransportPolicy: () => RTCIceTransportPolicy | undefined;
   sign: (data: string) => string;
   verify: (publicKey: string, data: string, signature: string) => boolean;
   onState: (state: CallState) => void;
@@ -25,7 +29,7 @@ type CallCallbacks = {
   onSas: (sas?: string) => void;
 };
 
-const ICE_SERVERS: RTCIceServer[] = [
+export const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
 ];
 
@@ -247,7 +251,12 @@ export class CallEngine {
   }
 
   private async setupPeerConnection(media: CallMedia, callId: string) {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const iceServers = await this.cb.getIceServers();
+    if (this.callId !== callId) return false;
+    const pc = new RTCPeerConnection({
+      iceServers,
+      iceTransportPolicy: this.cb.getIceTransportPolicy(),
+    });
     this.pc = pc;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
