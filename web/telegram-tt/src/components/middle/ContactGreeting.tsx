@@ -100,16 +100,16 @@ const ContactGreeting: FC<OwnProps & StateProps> = ({
         <p className={styles.title} dir="auto">{title}</p>
         <p className={styles.description} dir="auto">{description}</p>
 
-        <div ref={containerRef} className={styles.sticker} onClick={handleStickerSelect}>
-          {sticker && (
+        {sticker && (
+          <div ref={containerRef} className={styles.sticker} onClick={handleStickerSelect}>
             <StickerView
               containerRef={containerRef}
               sticker={sticker}
               size={160}
               shouldLoop
             />
-          )}
-        </div>
+          </div>
+        )}
       </div>
       {businessIntro && (
         <div className={styles.explainer}>

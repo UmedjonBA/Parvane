@@ -789,9 +789,14 @@ const methods = {
     if (!address) return Promise.resolve(undefined);
     const user = store.buildApiUser(address);
     const isBlocked = localState.loadBlocked().includes(address);
+    // `loadFullUser` без guard'ов читает `users`/`chats`/`userStatusesById` —
+    // отдаём полную форму ответа, иначе TypeError в экшене
     return Promise.resolve({
       user,
       fullInfo: { isBlocked, commonChatsCount: 0 },
+      users: [user],
+      chats: [],
+      userStatusesById: { [user.id]: RECENT_STATUS },
     });
   },
 

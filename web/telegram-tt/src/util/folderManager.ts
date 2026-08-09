@@ -253,12 +253,9 @@ function updateFolderManager(global: GlobalState) {
   ));
 
   let affectedFolderIds: number[] = [];
-
-  if (isAllFullyLoadedChanged || isArchivedFullyLoadedChanged || isSavedFolderFullyLoadedChanged) {
-    affectedFolderIds = affectedFolderIds.concat(
-      updateFullyLoaded(global, isArchivedFullyLoadedChanged, isSavedFolderFullyLoadedChanged),
-    );
-  }
+  const areFullyLoadedFlagsChanged = (
+    isAllFullyLoadedChanged || isArchivedFullyLoadedChanged || isSavedFolderFullyLoadedChanged
+  );
 
   if (!(
     isAllFolderChanged || isArchivedFolderChanged || isSavedFolderChanged || areFoldersChanged
@@ -266,8 +263,11 @@ function updateFolderManager(global: GlobalState) {
     || areSavedLastMessageIdsChanged || areAllLastMessageIdsChanged || areThreadsByChatChanged
   )
   ) {
-    if (affectedFolderIds.length) {
-      updateResults(affectedFolderIds);
+    if (areFullyLoadedFlagsChanged) {
+      affectedFolderIds = updateFullyLoaded(global, isArchivedFullyLoadedChanged, isSavedFolderFullyLoadedChanged);
+      if (affectedFolderIds.length) {
+        updateResults(affectedFolderIds);
+      }
     }
 
     return;
@@ -278,6 +278,17 @@ function updateFolderManager(global: GlobalState) {
   const prevSavedFolderListIds = prevGlobal.savedFolderListIds;
 
   updateFolders(global, isAllFolderChanged, isArchivedFolderChanged, isSavedFolderChanged, areFoldersChanged);
+
+  // Parvane: помечать пустые фолдеры можно только ПОСЛЕ построения саммари.
+  // Наш провайдер отвечает без сетевой задержки, поэтому active и archived
+  // прогружаются в одно throttle-окно: updateFullyLoaded до updateFolders
+  // видел пустой folderSummariesById и пустой список навсегда оставался
+  // в спиннере
+  if (areFullyLoadedFlagsChanged) {
+    affectedFolderIds = affectedFolderIds.concat(
+      updateFullyLoaded(global, isArchivedFullyLoadedChanged, isSavedFolderFullyLoadedChanged),
+    );
+  }
 
   affectedFolderIds = affectedFolderIds.concat(updateChats(
     global,
