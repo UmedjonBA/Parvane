@@ -32,6 +32,8 @@ type GroupDependencies = {
 };
 
 export function createGroupController(deps: GroupDependencies) {
+  const inviteLinkByGroupId = new Map<string, string>();
+
   function register(info: WireGroupInfo) {
     const store = deps.getStore();
     store.registerGroup(info);
@@ -267,16 +269,31 @@ export function createGroupController(deps: GroupDependencies) {
       isAdmin: member.role === 'admin' ? true as const : undefined,
     }));
     const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
+    const selfRole = info.members.find(({ address: member }) => member === store.self)?.role;
+    const inviteLink = await ensureInviteLink(chat, address, selfRole);
     return {
       fullInfo: {
         members,
         adminMembersById: Object.fromEntries(adminMembers.map((member) => [member.userId, member])),
         canViewMembers: true,
+        inviteLink,
       },
       chats: [store.buildApiChatForGroup(info)],
       userStatusesById: {},
       membersCount: members.length,
     };
+  }
+
+  // Постоянная инвайт-ссылка группы для владельца/админа: шард создаёт новый
+  // токен на каждый запрос — кэшируем на сессию, чтобы не плодить строки
+  async function ensureInviteLink(chat: ApiChat, groupId: string, selfRole?: string) {
+    if (selfRole !== 'owner' && selfRole !== 'admin') return undefined;
+    const cached = inviteLinkByGroupId.get(groupId);
+    if (cached) return cached;
+    const exported = await exportChatInvite({ peer: chat });
+    if (!exported) return undefined;
+    inviteLinkByGroupId.set(groupId, exported.link);
+    return exported.link;
   }
 
   async function addChatMembers(chat: ApiChat, users: ApiUser[]) {
@@ -366,6 +383,7 @@ export function createGroupController(deps: GroupDependencies) {
     };
   }
 
+  // Формат ответа — как у апстрим-экшена acceptChatInvite: { type: 'ok', chat }
   async function importChatInvite({ hash }: { hash: string }) {
     const connection = deps.getConnection();
     if (!connection) return undefined;
@@ -379,7 +397,7 @@ export function createGroupController(deps: GroupDependencies) {
     if (!info) return undefined;
     const groupChat = deps.getStore().buildApiChatForGroup(info);
     deps.sendUpdate({ '@type': 'updateChat', id: groupChat.id, chat: groupChat });
-    return groupChat;
+    return { type: 'ok' as const, chat: groupChat };
   }
 
   return {
