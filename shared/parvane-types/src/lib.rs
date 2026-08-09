@@ -77,6 +77,10 @@ pub mod topics {
     pub const GROUP_RENAME: &str = "group.rename";
     pub const GROUP_DELETE: &str = "group.delete";
 
+    /// Превью ссылки: клиент-отправитель просит OG-метаданные по URL, наружу
+    /// ходит шард (не браузер), с SSRF-защитой.
+    pub const PREVIEW_FETCH: &str = "preview.link.fetch";
+
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
     /// допустим). Например: `call.user.bob@local`.
@@ -971,6 +975,25 @@ pub struct GroupRenameRequest {
 pub struct GroupDeleteRequest {
     pub token: String,
     pub group_id: String,
+}
+
+/// Запрос превью ссылки (наружу ходит шард preview, не клиент). Токен идёт в
+/// конверте `ParvaneEvent` (его подставляет gateway), в payload — только url.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewFetchRequest {
+    #[serde(default)]
+    pub token: String,
+    pub url: String,
+}
+
+/// Ответ на `preview.link.fetch`. При `ok=false` — `error` c причиной отказа.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewFetchResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webpage: Option<WebPagePreview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
