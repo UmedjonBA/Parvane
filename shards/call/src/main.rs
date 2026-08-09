@@ -188,7 +188,24 @@ async fn record_signal(
     Ok(())
 }
 
+/// Зависшие ringing-звонки (получатель офлайн, hangup не дошёл и т.п.)
+/// терминализируются в missed по таймауту — иначе висят вечно.
+const STALE_RINGING_SECS: i64 = 120;
+
+async fn terminate_stale_ringing(pool: &SqlitePool, now: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE calls SET status = 'missed', ended_at = ?
+         WHERE status = 'ringing' AND started_at < ?",
+    )
+    .bind(now)
+    .bind(now - STALE_RINGING_SECS)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn fetch_history(pool: &SqlitePool, user: &str) -> Result<Vec<CallRecord>> {
+    terminate_stale_ringing(pool, now_unix()).await?;
     let rows: Vec<(String, String, String, String, String, i64, Option<i64>, bool)> = sqlx::query_as(
         "SELECT id, caller, callee, media, status, started_at, ended_at, is_group
          FROM calls
@@ -499,6 +516,22 @@ mod tests {
         record_signal(&pool, "alice@local", "bob@local", &invite(id), 1).await.unwrap();
         record_signal(&pool, "alice@local", "bob@local", &CallSignal::Hangup { call_id: id }, 2).await.unwrap();
         assert_eq!(status_of(&pool, &id.to_string()).await, "missed");
+    }
+
+    #[tokio::test]
+    async fn stale_ringing_terminates_as_missed() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        record_signal(&pool, "alice@local", "bob@local", &invite(id), 1).await.unwrap();
+        terminate_stale_ringing(&pool, 1 + STALE_RINGING_SECS + 1).await.unwrap();
+        assert_eq!(status_of(&pool, &id.to_string()).await, "missed");
+
+        // Свежий ringing не трогается
+        let fresh = Uuid::now_v7();
+        let now = 1 + STALE_RINGING_SECS + 2;
+        record_signal(&pool, "alice@local", "bob@local", &invite(fresh), now).await.unwrap();
+        terminate_stale_ringing(&pool, now + 10).await.unwrap();
+        assert_eq!(status_of(&pool, &fresh.to_string()).await, "ringing");
     }
 
     #[tokio::test]
