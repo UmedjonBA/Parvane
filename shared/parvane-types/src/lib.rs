@@ -59,6 +59,8 @@ pub mod topics {
     pub const CALL_SIGNAL: &str = "call.signal";
     pub const CALL_HISTORY_REQUEST: &str = "call.history.request";
     pub const CALL_HISTORY_RESPONSE: &str = "call.history.response";
+    /// Выдача ICE-конфигурации (STUN + краткоживущие TURN-креды) по JWT.
+    pub const CALL_ICE_REQUEST: &str = "call.ice.request";
 
     // Группы и каналы (request/reply на messenger-шард).
     pub const GROUP_CREATE: &str = "group.create";
@@ -876,6 +878,25 @@ pub struct CallHistoryRequest {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallHistoryResponse {
     pub calls: Vec<CallRecord>,
+}
+
+/// Один ICE-сервер в формате RTCIceServer (username/credential — только TURN).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+}
+
+/// Ответ на `call.ice.request`: STUN + краткоживущие TURN-креды (TURN REST,
+/// username = `<expiry>:<user>`, credential = base64(HMAC-SHA1(secret, username))).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IceServersResponse {
+    pub ice_servers: Vec<IceServer>,
+    /// Сколько секунд клиент может кэшировать выданные креды.
+    pub ttl_secs: u64,
 }
 
 // ── группы и каналы ───────────────────────────────────────────────────────────

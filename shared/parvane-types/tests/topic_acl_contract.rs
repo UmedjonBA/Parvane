@@ -64,6 +64,7 @@ const CLOUD_BINDINGS: &[(&str, &str)] = &[
 const CALL_BINDINGS: &[(&str, &str)] = &[
     ("CALL_SIGNAL", CALL_SIGNAL),
     ("CALL_HISTORY_REQUEST", CALL_HISTORY_REQUEST),
+    ("CALL_ICE_REQUEST", CALL_ICE_REQUEST),
 ];
 
 const NOTES_BINDINGS: &[(&str, &str)] = &[
