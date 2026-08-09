@@ -363,12 +363,36 @@ const methods = {
   // ── группы ─────────────────────────────────────────────────────────────────
 
   createGroupChat: groupController.createGroupChat,
+  createChannel: groupController.createChannel,
   fetchFullChat: groupController.fetchFullChat,
   addChatMembers: groupController.addChatMembers,
   deleteChatMember: groupController.deleteChatMember,
   updateChatMemberBannedRights: groupController.updateChatMemberBannedRights,
   exportChatInvite: groupController.exportChatInvite,
   importChatInvite: groupController.importChatInvite,
+  updateChatAdmin: groupController.updateChatAdmin,
+  migrateChat: (chat: ApiChat) => Promise.resolve(groupController.migrateChat(chat)),
+
+  updateChatTitle(chat: ApiChat, title: string) {
+    return groupController.updateChatTitle(chat, title);
+  },
+
+  // Выход из группы/канала: на бэкенде это self-remove
+  deleteChatUser({ chat }: { chat: ApiChat; user: ApiUser }) {
+    return groupController.leaveGroup(chat.id);
+  },
+
+  leaveChannel({ chat }: { chat: ApiChat }) {
+    return groupController.leaveGroup(chat.id);
+  },
+
+  deleteChat({ chatId }: { chatId: string }) {
+    return groupController.deleteGroup(chatId);
+  },
+
+  deleteChannel({ channelId }: { channelId: string }) {
+    return groupController.deleteGroup(channelId);
+  },
 
   // ── блокировка (локальный персист — у Parvane нет серверного блока) ─────────
   blockUser({ user }: { user: ApiUser }) {

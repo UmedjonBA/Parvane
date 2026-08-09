@@ -180,14 +180,30 @@ export class ParvaneStore {
 
   buildApiChatForGroup(info: WireGroupInfo): ApiChat {
     const isChannel = info.kind === 'channel';
+    const selfRole = info.members.find(({ address }) => address === this.self)?.role;
     return {
       id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
       type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
       title: info.name,
       isListed: true,
       isCreator: info.created_by === this.self ? true : undefined,
-      membersCount: info.members.length,
+      // tt узнаёт админа только по adminRights: Manage-экраны, постинг в
+      // канале, кнопки модерации
+      adminRights: selfRole === 'admin' ? {
+        changeInfo: true,
+        postMessages: true,
+        editMessages: true,
+        deleteMessages: true,
+        banUsers: true,
+        inviteUsers: true,
+        pinMessages: true,
+      } : undefined,
+      membersCount: info.members.filter(({ role }) => role !== 'banned').length,
     };
+  }
+
+  unregisterGroup(address: string) {
+    this.groupInfoByAddress.delete(address);
   }
 
   buildApiMessage(stored: WireStoredMessage): ApiMessage {
