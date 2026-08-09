@@ -18,6 +18,7 @@ import {
   requireEncrypted,
 } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
+import { buildPvpkArchive, findInstalledPackBySetId, isCustomPackSetId } from './stickerPacks';
 import {
   buildWireEvent,
   TOPIC_MSG_DELETE,
@@ -28,6 +29,7 @@ import {
   TOPIC_MSG_SEND,
   TOPIC_PREKEYS_FETCH,
   type WireMessageContent,
+  type WirePackRef,
 } from './wire';
 
 type MessageDependencies = {
@@ -46,9 +48,18 @@ type MessageDependencies = {
   log: (message: string) => void;
 };
 
+const EXT_BY_STICKER_MIME: Record<string, string> = {
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'video/webm': 'webm',
+  'application/x-tgsticker': 'tgs',
+};
+
 export function createMessageController(deps: MessageDependencies) {
   const uuidBySentLocalKey = new Map<string, string>();
   const savedGifs: ApiVideo[] = [];
+  // Кэш загруженных в cloud архивов паков (setId → pack_ref) на сессию
+  const uploadedPackRefBySetId = new Map<string, WirePackRef>();
 
   const connection = () => deps.getConnection();
   const store = () => deps.getStore();
@@ -209,6 +220,33 @@ export function createMessageController(deps: MessageDependencies) {
     deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
   }
 
+  // Архив пака грузится в cloud один раз за сессию; получатель по pack_ref
+  // сможет установить весь набор (конвенция desktop-форка)
+  async function buildPackRefForSet(setId: string, toAddress: string): Promise<WirePackRef | undefined> {
+    const cachedRef = uploadedPackRefBySetId.get(setId);
+    if (cachedRef) return cachedRef;
+    const pack = await findInstalledPackBySetId(store().self, setId);
+    if (!pack) return undefined;
+    const archive = buildPvpkArchive(pack.files);
+    if (!archive) return undefined;
+    const { fileId, mediaKeys } = await deps.media.uploadBlob(
+      new Blob([archive as BlobPart], { type: 'application/octet-stream' }),
+      'pack.pvpk',
+      'application/octet-stream',
+      { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) },
+    );
+    const ref: WirePackRef = {
+      file_id: fileId,
+      name: pack.name,
+      count: pack.files.length,
+      key: mediaKeys?.keyB64,
+      nonce: mediaKeys?.nonceB64,
+    };
+    uploadedPackRefBySetId.set(setId, ref);
+    deps.log(`пак «${pack.name}» загружен в cloud (${archive.length} байт)`);
+    return ref;
+  }
+
   async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
@@ -218,7 +256,7 @@ export function createMessageController(deps: MessageDependencies) {
     const blob = cached?.blob;
     if (!blob) return;
     const mime = cached.mimeType || 'image/png';
-    const extension = mime === 'video/webm' ? 'webm' : 'png';
+    const extension = EXT_BY_STICKER_MIME[mime] || 'png';
     const { fileId, mediaKeys } = await deps.media.uploadBlob(
       blob,
       `sticker-${sticker.id}.${extension}`,
@@ -226,6 +264,10 @@ export function createMessageController(deps: MessageDependencies) {
       { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) },
     );
     const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+    const setId = 'id' in sticker.stickerSetInfo ? sticker.stickerSetInfo.id : undefined;
+    const packRef = setId && isCustomPackSetId(setId)
+      ? await buildPackRefForSet(setId, toAddress)
+      : undefined;
     const wireContent: Record<string, unknown> = {
       kind: 'sticker',
       file_id: fileId,
@@ -233,6 +275,7 @@ export function createMessageController(deps: MessageDependencies) {
       mime,
       width: sticker.width || 256,
       height: sticker.height || 256,
+      pack_ref: packRef,
       ...mediaCrypto,
     };
     deps.media.cacheBlob(fileId, blob, mime);

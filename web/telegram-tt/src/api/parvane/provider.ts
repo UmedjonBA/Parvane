@@ -17,6 +17,7 @@ import type {
   ApiVideo,
   OnApiUpdate } from '../types';
 import type { GatewayConnection } from './gateway';
+import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireUserInfo } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
@@ -39,6 +40,22 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
+import {
+  buildApiStickerSetFromPack,
+  findInstalledPackBySetId,
+  getPackFileMime,
+  getPendingFiles,
+  getReceivedPackRef,
+  isCustomPackSetId,
+  loadInstalledPacks,
+  parsePvpkArchive,
+  removeInstalledPack,
+  resetPackRegistries,
+  resolveSetIdByShortName,
+  sanitizePackName,
+  saveInstalledPack,
+  setPendingFiles,
+} from './stickerPacks';
 import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getStickerBlobMime } from './stickers';
 import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
@@ -184,7 +201,10 @@ const connectionController = createConnectionController({
   setToken: (nextToken) => { token = nextToken; },
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
   polls,
-  onNewSession: syncController.reset,
+  onNewSession: () => {
+    syncController.reset();
+    resetPackRegistries();
+  },
   isSynced: syncController.isSynced,
   resetSyncPromise: syncController.resetPromise,
   requestDeltaSync: syncController.requestDeltaSync,
@@ -236,6 +256,34 @@ function logDebug(message: string) {
 // ── методы (подмножество Methods, остальное — заглушки) ──────────────────────
 
 const RECENT_STATUS: ApiUserStatus = { type: 'userStatusRecently' };
+const INSTALLED_PACK_DATE = Math.floor(Date.now() / 1000);
+
+function registerPackBlobs(blobs: Map<string, { blob: Blob; mime: string }>) {
+  blobs.forEach(({ blob, mime }, id) => mediaService.cacheBlobIfAbsent(id, blob, mime));
+}
+
+// Файлы кастомного пака: установленный → из IndexedDB; открытый в модалке —
+// из pending-кэша; иначе тянем PVPK1-архив из cloud по pack_ref
+async function resolveCustomPack(setId: string): Promise<{ pack: StoredPack; isInstalled: boolean } | undefined> {
+  const installed = await findInstalledPackBySetId(store.self, setId);
+  if (installed) return { pack: installed, isInstalled: true };
+  const pending = getPendingFiles(setId);
+  if (pending) return { pack: pending, isInstalled: false };
+  const ref = getReceivedPackRef(setId);
+  if (!ref?.file_id) return undefined;
+  if (ref.key && ref.nonce) {
+    mediaService.rememberKeys({
+      kind: 'sticker', file_id: ref.file_id, file_key: ref.key, file_nonce: ref.nonce,
+    });
+  }
+  const media = await mediaService.downloadBlob(ref.file_id);
+  if (!media) return undefined;
+  const files = parsePvpkArchive(new Uint8Array(await media.blob.arrayBuffer()));
+  if (!files) return undefined;
+  const pack: StoredPack = { name: ref.name, files };
+  setPendingFiles(setId, pack);
+  return { pack, isInstalled: false };
+}
 
 const methods = {
   fetchAppConfig({ hash }: { hash?: number }) {
@@ -585,24 +633,86 @@ const methods = {
     return Promise.resolve({ langPack: buildOldLangPack(langCode) });
   },
 
-  // ── стикеры (встроенный набор) ──────────────────────────────────────────────
+  // ── стикеры (встроенный набор + кастомные паки) ─────────────────────────────
   async fetchStickerSets() {
     const { set, blobs } = await buildBuiltinStickerSet();
     // Регистрируем картинки/видео стикеров в media-кэше (хэш document<id>)
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, getStickerBlobMime(id));
     });
-    return { hash: '1', sets: [{ ...set, stickers: undefined, count: set.count }] };
+    const packs = await loadInstalledPacks(store.self);
+    const customSets = packs.map((pack) => {
+      const built = buildApiStickerSetFromPack(pack, INSTALLED_PACK_DATE);
+      registerPackBlobs(built.blobs);
+      return { ...built.set, stickers: undefined, count: built.set.count };
+    });
+    const hash = `1:${customSets.map(({ id }) => id).sort().join(',')}`;
+    return { hash, sets: [{ ...set, stickers: undefined, count: set.count }, ...customSets] };
   },
 
   async fetchStickerSet(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {
-    const wantsEmoji = params?.stickerSetInfo?.id === 'parvane-emoji'
-      || params?.stickerSetInfo?.shortName === 'ParvaneEmoji';
+    const info = params?.stickerSetInfo;
+    const customSetId = info?.id && isCustomPackSetId(info.id)
+      ? info.id
+      : info?.shortName ? resolveSetIdByShortName(info.shortName) : undefined;
+    if (customSetId) {
+      const resolved = await resolveCustomPack(customSetId);
+      if (!resolved) throw new Error('STICKERSET_INVALID');
+      const built = buildApiStickerSetFromPack(resolved.pack, resolved.isInstalled
+        ? INSTALLED_PACK_DATE : undefined);
+      registerPackBlobs(built.blobs);
+      return { set: built.set, stickers: built.set.stickers };
+    }
+    const wantsEmoji = info?.id === 'parvane-emoji' || info?.shortName === 'ParvaneEmoji';
     const { set, blobs } = wantsEmoji ? await buildBuiltinCustomEmojiSet() : await buildBuiltinStickerSet();
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, getStickerBlobMime(id));
     });
     return { set, stickers: set.stickers };
+  },
+
+  async installStickerSet({ stickerSetId }: { stickerSetId: string }) {
+    if (!isCustomPackSetId(stickerSetId)) return undefined;
+    const resolved = await resolveCustomPack(stickerSetId);
+    if (!resolved) return undefined;
+    await saveInstalledPack(store.self, resolved.pack);
+    const built = buildApiStickerSetFromPack(resolved.pack, INSTALLED_PACK_DATE);
+    registerPackBlobs(built.blobs);
+    sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
+    return true;
+  },
+
+  async uninstallStickerSet({ stickerSetId }: { stickerSetId: string }) {
+    const pack = await findInstalledPackBySetId(store.self, stickerSetId);
+    if (!pack) return undefined;
+    await removeInstalledPack(store.self, pack.name);
+    sendUpdate({ '@type': 'updateStickerSet', id: stickerSetId, stickerSet: { installedDate: undefined } });
+    return true;
+  },
+
+  // Создание пака из локальных файлов (Настройки → Стикеры). Имя уникализируем
+  // суффиксом, чтобы не перетереть существующий набор
+  async parvaneCreateStickerPack({ name, files }: { name: string; files: File[] }) {
+    const packFiles: PackFile[] = [];
+    for (const file of files) {
+      if (!getPackFileMime(file.name)) continue;
+      packFiles.push({ name: file.name, data: await file.arrayBuffer() });
+    }
+    if (!packFiles.length) return undefined;
+    const baseName = sanitizePackName(name);
+    const existing = await loadInstalledPacks(store.self);
+    let finalName = baseName;
+    let suffix = 2;
+    while (existing.some((pack) => pack.name === finalName)) {
+      finalName = sanitizePackName(`${baseName.slice(0, 28)} ${suffix}`);
+      suffix += 1;
+    }
+    const pack: StoredPack = { name: finalName, files: packFiles };
+    await saveInstalledPack(store.self, pack);
+    const built = buildApiStickerSetFromPack(pack, INSTALLED_PACK_DATE);
+    registerPackBlobs(built.blobs);
+    sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
+    return { title: finalName, count: packFiles.length };
   },
 
   async fetchStickers(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {

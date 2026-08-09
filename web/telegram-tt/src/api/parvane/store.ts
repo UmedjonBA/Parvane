@@ -8,6 +8,7 @@ import type {
 import type { WireGroupInfo, WireStoredMessage } from './wire';
 
 import { wireEntitiesToApi } from './entities';
+import { registerReceivedPackRef } from './stickerPacks';
 
 type PeerKind = 'user' | 'group' | 'channel';
 
@@ -381,19 +382,23 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           geo: { lat: content.lat || 0, long: content.long || 0, accessHash: '0' },
         },
       };
-    case 'sticker':
+    case 'sticker': {
+      // pack_ref — стикер из кастомного набора: помечаем сет-ссылкой,
+      // по клику на стикер модалка предложит установить весь пак
+      const packSetId = content.pack_ref ? registerReceivedPackRef(content.pack_ref) : undefined;
       return {
         sticker: {
           mediaType: 'sticker',
           id: content.file_id!,
-          stickerSetInfo: { id: 'parvane-builtin', accessHash: '0' },
+          stickerSetInfo: { id: packSetId || 'parvane-builtin', accessHash: '0' },
           emoji: content.filename || '⭐',
-          isLottie: false,
+          isLottie: content.mime === 'application/x-tgsticker',
           isVideo: content.mime === 'video/webm',
           width: content.width || 256,
           height: content.height || 256,
         },
       };
+    }
     case 'gif':
       return {
         video: {

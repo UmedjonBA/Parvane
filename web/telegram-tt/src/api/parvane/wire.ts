@@ -15,6 +15,17 @@ export type WireWebPage = {
   description?: string;
 };
 
+// Ссылка на стикер-пак при отправке стикера из кастомного набора: архив PVPK1
+// грузится в cloud шифртекстом (blobcrypt), key+nonce едут в E2E-контенте.
+// Формат идентичен desktop-форку
+export type WirePackRef = {
+  file_id: string;
+  name: string;
+  count: number;
+  key?: string;
+  nonce?: string;
+};
+
 export type WireMessageContent = {
   kind: string;
   text?: string;
@@ -49,6 +60,7 @@ export type WireMessageContent = {
   forwarded_name?: string;
   lat?: number;
   long?: number;
+  pack_ref?: WirePackRef;
 };
 
 export type WireStoredMessage = {

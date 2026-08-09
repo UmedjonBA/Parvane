@@ -58,6 +58,9 @@ log "Two-browser content UX e2e"
 log "Two-browser empty state e2e"
 "$ROOT/scripts/run_web_empty_state_e2e.sh"
 
+log "Two-browser sticker packs e2e"
+"$ROOT/scripts/run_web_sticker_packs_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 
