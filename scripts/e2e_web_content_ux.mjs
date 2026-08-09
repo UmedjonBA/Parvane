@@ -1,0 +1,100 @@
+// Двухбраузерный сценарий B4 (контент/UX): черновик переживает reload и
+// расходится между вкладками; нерасшифрованное sealed-сообщение НЕ оседает
+// в «Избранном» получателя.
+import assert from 'node:assert/strict';
+
+import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
+
+import {
+  LOGIN_TIMEOUT_MS,
+  openPrivateChat,
+  preparePage,
+  sendText,
+} from './e2e_web_helpers.mjs';
+
+const PASSWORD = 'Parvane-content-ux-e2e-password';
+
+async function relogin(page) {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
+  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
+  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+const browser = await chromium.launch();
+const aliceContext = await browser.newContext();
+const bobContext = await browser.newContext();
+
+try {
+  const suffix = `${Date.now()}-${process.pid}`;
+  const alice = `cx-alice-${suffix}@local`;
+  const bob = `cx-bob-${suffix}@local`;
+  const draftText = `draft-${suffix}`;
+
+  const aliceSession = await preparePage(aliceContext, alice, PASSWORD);
+  const bobSession = await preparePage(bobContext, bob, PASSWORD);
+  await openPrivateChat(aliceSession.page, bob);
+  await openPrivateChat(bobSession.page, alice);
+
+  // ── Черновик: набираем текст, НЕ отправляем ────────────────────────────────
+  const input = aliceSession.page.locator('#editable-message-text');
+  await input.fill(draftText);
+  // Debounce useDraft — даём сохраниться, затем уводим фокус кликом по поиску
+  await aliceSession.page.waitForTimeout(1500);
+  await aliceSession.page.locator('#telegram-search-input').click();
+  await aliceSession.page.keyboard.press('Escape');
+  await aliceSession.page.waitForTimeout(1500);
+
+  // ── Черновик переживает reload ─────────────────────────────────────────────
+  await relogin(aliceSession.page);
+  // Чат с черновиком появляется в списке после fetchChats
+  await aliceSession.page.locator('#LeftColumn .ListItem').filter({ hasText: bob.split('@')[0] })
+    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await openPrivateChat(aliceSession.page, bob);
+  await aliceSession.page.waitForTimeout(1000);
+  const restoredDraft = await aliceSession.page.locator('#editable-message-text').innerText();
+  assert.match(restoredDraft, new RegExp(draftText), 'черновик не восстановился после reload');
+
+  // ── Кросс-таб: вторая вкладка того же пользователя видит черновик ──────────
+  const aliceTab2 = await aliceContext.newPage();
+  await aliceTab2.goto(aliceSession.page.url(), { waitUntil: 'domcontentloaded' });
+  // Вторая вкладка стартует из кэша; черновик уже в localStorage
+  const passwordScreen = aliceTab2.locator('.Transition_slide-active > #auth-password-form');
+  if (await passwordScreen.isVisible().catch(() => false)) {
+    await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
+    await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  }
+  await aliceTab2.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await openPrivateChat(aliceTab2, bob);
+  const tab2Draft = await aliceTab2.locator('#editable-message-text').innerText();
+  assert.match(tab2Draft, new RegExp(draftText), 'черновик не виден во второй вкладке');
+  await aliceTab2.close();
+
+  // ── Очистка черновика отправкой ────────────────────────────────────────────
+  await openPrivateChat(aliceSession.page, bob);
+  await sendText(aliceSession.page, draftText);
+  await aliceSession.page.waitForTimeout(1500);
+  await relogin(aliceSession.page);
+  await openPrivateChat(aliceSession.page, bob);
+  const clearedDraft = await aliceSession.page.locator('#editable-message-text').innerText();
+  assert.equal(clearedDraft.trim(), '', 'черновик не очистился после отправки');
+
+  // ── Saved Messages не засорён: у Боба «Избранное» без чужих sealed ─────────
+  // (Боб не пересылал ничего себе — self-чат должен отсутствовать в списке)
+  const bobSavedCount = await bobSession.page.locator('#LeftColumn .ListItem')
+    .filter({ hasText: 'Saved Messages' }).count();
+  assert.equal(bobSavedCount, 0, 'в списке чатов Боба ошибочно появились Saved Messages');
+
+  assert.deepEqual(aliceSession.errors, [], `alice page errors: ${aliceSession.errors.join('; ')}`);
+  assert.deepEqual(bobSession.errors, [], `bob page errors: ${bobSession.errors.join('; ')}`);
+  console.log('OK: черновик переживает reload и кросс-таб, очищается отправкой; Saved Messages чист');
+} catch (err) {
+  const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
+  await aliceContext.pages()[0]?.screenshot({ path: `${dir}content-ux-alice.png` }).catch(() => {});
+  await bobContext.pages()[0]?.screenshot({ path: `${dir}content-ux-bob.png` }).catch(() => {});
+  throw err;
+} finally {
+  await browser.close();
+}
