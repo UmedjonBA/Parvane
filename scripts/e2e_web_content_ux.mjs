@@ -87,9 +87,28 @@ try {
     .filter({ hasText: 'Saved Messages' }).count();
   assert.equal(bobSavedCount, 0, 'в списке чатов Боба ошибочно появились Saved Messages');
 
+  // ── Пин чата: закрепляется и переживает reload ─────────────────────────────
+  const bobChatItem = () => aliceSession.page.locator('#LeftColumn .ListItem').filter({ hasText: bob.split('@')[0] }).first();
+  await bobChatItem().click({ button: 'right' });
+  await aliceSession.page.getByRole('menuitem', { name: /Pin to top|Pin/ }).first().click();
+  await aliceSession.page.waitForTimeout(500);
+  await relogin(aliceSession.page);
+  const pinnedChat = aliceSession.page.locator('#LeftColumn .ListItem').first();
+  await pinnedChat.filter({ hasText: bob.split('@')[0] })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Архив: чат уходит в архив и исчезает из основного списка ───────────────
+  await bobChatItem().click({ button: 'right' });
+  await aliceSession.page.getByRole('menuitem', { name: 'Archive' }).click();
+  await aliceSession.page.waitForTimeout(500);
+  await relogin(aliceSession.page);
+  const bobInMain = await aliceSession.page.locator('#LeftColumn .ListItem')
+    .filter({ hasText: bob.split('@')[0] }).count();
+  assert.equal(bobInMain, 0, 'архивированный чат остался в основном списке после reload');
+
   assert.deepEqual(aliceSession.errors, [], `alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `bob page errors: ${bobSession.errors.join('; ')}`);
-  console.log('OK: черновик переживает reload и кросс-таб, очищается отправкой; Saved Messages чист');
+  console.log('OK: черновики, Saved Messages, пин и архив чата с persist после reload');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   await aliceContext.pages()[0]?.screenshot({ path: `${dir}content-ux-alice.png` }).catch(() => {});
