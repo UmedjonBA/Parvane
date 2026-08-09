@@ -117,6 +117,7 @@ import {
   replaceThreadLocalStateParam,
   replaceThreadReadStateParam,
   updateThreadInfo,
+  updateThreadInfoInStore,
   updateThreadInfoMessagesCount,
   updateThreadReadState,
 } from '../../reducers/threads';
@@ -170,6 +171,7 @@ import {
   selectEditingScheduledId,
   selectNoWebPage,
   selectSavedDialogIdFromMessage,
+  selectThread,
   selectThreadIdFromMessage,
   selectThreadInfo,
   selectThreadLocalStateParam,
@@ -1955,6 +1957,17 @@ async function loadViewportMessages<T extends GlobalState>(
         ids.unshift(Number(threadId));
       }
     }
+  }
+
+  // Parvane: у чата без истории тред не существует, а `updateListedIds` без
+  // треда молча no-op — `listedIds` навсегда остаются undefined и лента
+  // показывает вечный спиннер вместо «No messages here yet»
+  if (!ids.length && !selectThread(global, chatId, threadId)) {
+    global = updateThreadInfoInStore(global, chatId, threadId, {
+      isCommentsInfo: false,
+      chatId,
+      threadId,
+    });
   }
 
   global = addChatMessagesById(global, chatId, byId);

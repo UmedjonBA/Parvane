@@ -55,6 +55,9 @@ log "Two-browser content features e2e"
 log "Two-browser content UX e2e"
 "$ROOT/scripts/run_web_content_ux_e2e.sh"
 
+log "Two-browser empty state e2e"
+"$ROOT/scripts/run_web_empty_state_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 
