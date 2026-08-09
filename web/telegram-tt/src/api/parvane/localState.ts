@@ -194,8 +194,29 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('folders'), JSON.stringify(folders));
   }
 
+  // Черновики: chatId → draft (сериализованный ApiDraft). localStorage общий
+  // для вкладок — конфликт решается last-write-wins по date
+  function loadDrafts(): Record<string, Record<string, unknown>> {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('drafts')) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function saveDraft(chatId: string, draft?: Record<string, unknown>) {
+    const drafts = loadDrafts();
+    const current = drafts[chatId];
+    const currentDate = typeof current?.date === 'number' ? current.date : 0;
+    const nextDate = typeof draft?.date === 'number' ? draft.date : Math.floor(Date.now() / 1000);
+    if (draft && currentDate > nextDate) return;
+    if (draft) drafts[chatId] = { ...draft, date: nextDate };
+    else delete drafts[chatId];
+    localStorage.setItem(storageKey('drafts'), JSON.stringify(drafts));
+  }
+
   function clearUserData(user: string) {
-    ['scheduled', 'hist', 'ttl', 'blocked', 'folders'].forEach((part) => {
+    ['scheduled', 'hist', 'ttl', 'blocked', 'folders', 'drafts'].forEach((part) => {
       localStorage.removeItem(`parvane:${part}:${user}`);
     });
   }
@@ -238,11 +259,13 @@ export function createLocalState(deps: LocalStateDependencies) {
     deleteScheduledMessages: removeScheduled,
     fetchScheduledHistory,
     loadBlocked,
+    loadDrafts,
     loadFolders,
     loadPeerTtl,
     readOwnJournal,
     rescheduleMessage,
     saveBlocked,
+    saveDraft,
     saveFolders,
     savePeerTtl,
     scheduleMessage,

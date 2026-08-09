@@ -7,7 +7,7 @@ import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/type
 import type {
   ApiAppConfig,
   ApiAvailableReaction,
-  ApiChat, ApiInitialArgs,
+  ApiChat, ApiDraft, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
   ApiSticker, ApiThreadInfo,
@@ -119,6 +119,24 @@ const localState = createLocalState({
   sendMessage: sendMessageFromSchedule,
 });
 
+// Кросс-таб синхронизация черновиков: другая вкладка сохранила/очистила
+// черновик — применяем у себя без обращения к серверу
+const draftsChannel = typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('parvane:drafts')
+  : undefined;
+if (draftsChannel) {
+  draftsChannel.onmessage = (event: MessageEvent) => {
+    const { address, draft } = event.data as { address: string; draft?: Record<string, unknown> };
+    localState.saveDraft(address, draft);
+    sendUpdate({
+      '@type': 'draftMessage',
+      chatId: store.getIdForAddress(address),
+      threadId: MAIN_THREAD_ID,
+      draft: draft as ApiDraft | undefined,
+    });
+  };
+}
+
 const syncController = createSyncController({
   getConnection: () => connection,
   getE2e: () => e2e,
@@ -146,6 +164,10 @@ messageController = createMessageController({
   selfId,
   sendUpdate,
   collectUsersFor,
+  clearPersistedDraft: (address: string) => {
+    localState.saveDraft(address, undefined);
+    draftsChannel?.postMessage({ address, draft: undefined });
+  },
   log: logDebug,
 });
 
@@ -261,13 +283,29 @@ const methods = {
       chats.push(store.buildApiChatForGroup(store.getGroupInfo(address)!));
     });
 
+    // Черновики хранятся по адресу пира: восстанавливаем чат даже если пир ещё
+    // не известен (истории нет), иначе черновик негде показать
+    const savedDrafts = localState.loadDrafts();
+    Object.keys(savedDrafts).forEach((address) => {
+      const chatId = store.getIdForAddress(address);
+      if (!chats.some((chat) => chat.id === chatId)) {
+        const user = store.buildApiUser(address);
+        users.push(user);
+        chats.push(store.buildApiChatForUser(address));
+      }
+    });
+    const chatIdsWithDrafts = new Set(
+      Object.keys(savedDrafts).map((address) => store.getIdForAddress(address)),
+    );
+
     const chatIdsWithHistory = new Set(store.getChatIds());
+    const isVisibleChat = (chat: ApiChat) => chatIdsWithHistory.has(chat.id)
+      || chatIdsWithDrafts.has(chat.id)
+      || chat.type !== 'chatTypePrivate';
     const listedChats = chats.filter(
-      (chat) => chatIdsWithHistory.has(chat.id) || chat.type !== 'chatTypePrivate' || chat.id !== selfId(),
+      (chat) => isVisibleChat(chat) || chat.id !== selfId(),
     );
-    const visibleChats = listedChats.filter(
-      (chat) => chatIdsWithHistory.has(chat.id) || chat.type !== 'chatTypePrivate',
-    );
+    const visibleChats = listedChats.filter(isVisibleChat);
 
     const messages: ApiMessage[] = [];
     const lastMessageByChatId: Record<string, number> = {};
@@ -315,12 +353,20 @@ const methods = {
       });
     });
 
+    // Черновики из localStorage (ключ — адрес пира): восстанавливаются после
+    // reload/перезахода. loadAllChats ждёт плоский chatId → ApiDraft
+    const draftsById = Object.fromEntries(
+      Object.entries(savedDrafts)
+        .map(([address, draft]) => [store.getIdForAddress(address), draft])
+        .filter(([chatId]) => visibleChats.some((chat) => chat.id === chatId)),
+    );
+
     return {
       chatIds: visibleChats.map((chat) => chat.id),
       chats: visibleChats,
       users,
       userStatusesById,
-      draftsById: {},
+      draftsById,
       threadReadStatesById,
       threadInfos,
       orderedPinnedIds: undefined,
@@ -374,6 +420,24 @@ const methods = {
   exportChatInvite: groupController.exportChatInvite,
   importChatInvite: groupController.importChatInvite,
   updateChatAdmin: groupController.updateChatAdmin,
+
+  // ── черновики (локальный persist + кросс-таб) ───────────────────────────────
+
+  saveDraft({ chat, draft }: { chat: ApiChat; draft: Record<string, unknown> }) {
+    const address = store.getAddressForId(chat.id);
+    if (!address) return Promise.resolve({});
+    localState.saveDraft(address, draft);
+    draftsChannel?.postMessage({ address, draft });
+    return Promise.resolve({});
+  },
+
+  clearDraft({ chatId }: { chatId: string }) {
+    const address = store.getAddressForId(chatId);
+    if (!address) return Promise.resolve(undefined);
+    localState.saveDraft(address, undefined);
+    draftsChannel?.postMessage({ address, draft: undefined });
+    return Promise.resolve(undefined);
+  },
 
   // ── упоминания ──────────────────────────────────────────────────────────────
 
