@@ -81,6 +81,21 @@ try {
   const clearedDraft = await aliceSession.page.locator('#editable-message-text').innerText();
   assert.equal(clearedDraft.trim(), '', 'черновик не очистился после отправки');
 
+  // ── Link preview: шард тянет OG-метаданные example.com ─────────────────────
+  // (машине нужен интернет). Первое сообщение прогревает кэш шарда — второе
+  // попадает в кэш и укладывается в клиентский дедлайн с полным title
+  await openPrivateChat(aliceSession.page, bob);
+  await sendText(aliceSession.page, 'warm https://example.com first');
+  await aliceSession.page.waitForTimeout(3000);
+  await sendText(aliceSession.page, 'see https://example.com now');
+  const bobWebPage = bobSession.page.locator('.Transition_slide-active > .MessageList .Message .WebPage')
+    .last();
+  await bobWebPage.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const siteName = await bobWebPage.locator('.site-name').innerText();
+  assert.match(siteName, /example\.com/, `site-name карточки: ${siteName}`);
+  const cardTitle = await bobWebPage.locator('.site-title').innerText().catch(() => '');
+  assert.match(cardTitle, /Example Domain/, `title карточки (rich preview): ${cardTitle}`);
+
   // ── Saved Messages не засорён: у Боба «Избранное» без чужих sealed ─────────
   // (Боб не пересылал ничего себе — self-чат должен отсутствовать в списке)
   const bobSavedCount = await bobSession.page.locator('#LeftColumn .ListItem')
@@ -108,7 +123,7 @@ try {
 
   assert.deepEqual(aliceSession.errors, [], `alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `bob page errors: ${bobSession.errors.join('; ')}`);
-  console.log('OK: черновики, Saved Messages, пин и архив чата с persist после reload');
+  console.log('OK: черновики, Saved Messages, link preview, пин и архив с persist после reload');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   await aliceContext.pages()[0]?.screenshot({ path: `${dir}content-ux-alice.png` }).catch(() => {});
