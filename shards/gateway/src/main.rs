@@ -489,11 +489,13 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
     serde_json::to_string(&value).context("payload: не удалось сериализовать")
 }
 
-/// На что можно ПОДПИСАТЬСЯ: только свои пользовательские инбоксы и эфемерные
-/// typing/presence. NATS reply inbox создаёт и обслуживает только gateway.
+/// На что можно ПОДПИСАТЬСЯ: только свои пользовательские инбоксы (включая
+/// групповой mesh-инбокс `call.user.gcall:<self>`) и эфемерные typing/presence.
+/// NATS reply inbox создаёт и обслуживает только gateway.
 fn allowed_sub(user: &str, subject: &str) -> bool {
     subject == msg_inbox(user)
         || subject == call_inbox(user)
+        || subject == call_inbox(&format!("gcall:{user}"))
         || is_own_ephemeral_subject(user, "msg.typing.", subject)
         || subject == "presence.*"
 }

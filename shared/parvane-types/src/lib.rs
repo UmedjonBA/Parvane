@@ -870,6 +870,9 @@ pub struct CallRecord {
     pub status: String,
     pub started_at: i64,
     pub ended_at: Option<i64>,
+    /// Pairwise-запись группового mesh-звонка (`to` шёл с префиксом `gcall:`).
+    #[serde(default)]
+    pub is_group: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

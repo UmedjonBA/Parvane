@@ -119,15 +119,17 @@ async fn record_signal(
         if sdp.is_empty() || sig.is_empty() {
             anyhow::bail!("invite должен содержать подписанный SDP");
         }
+        let is_group = to.starts_with("gcall:");
         sqlx::query(
-            "INSERT INTO calls (id, caller, callee, media, status, started_at)
-             VALUES (?, ?, ?, ?, 'ringing', ?)",
+            "INSERT INTO calls (id, caller, callee, media, status, started_at, is_group)
+             VALUES (?, ?, ?, ?, 'ringing', ?, ?)",
         )
         .bind(&call_id)
         .bind(from)
         .bind(target)
         .bind(media_str(*media))
         .bind(now)
+        .bind(is_group)
         .execute(pool)
         .await
         .context("создание записи звонка")?;
@@ -187,8 +189,8 @@ async fn record_signal(
 }
 
 async fn fetch_history(pool: &SqlitePool, user: &str) -> Result<Vec<CallRecord>> {
-    let rows: Vec<(String, String, String, String, String, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT id, caller, callee, media, status, started_at, ended_at
+    let rows: Vec<(String, String, String, String, String, i64, Option<i64>, bool)> = sqlx::query_as(
+        "SELECT id, caller, callee, media, status, started_at, ended_at, is_group
          FROM calls
          WHERE caller = ? OR callee = ?
          ORDER BY started_at DESC
@@ -201,7 +203,7 @@ async fn fetch_history(pool: &SqlitePool, user: &str) -> Result<Vec<CallRecord>>
 
     Ok(rows
         .into_iter()
-        .map(|(id, caller, callee, media, status, started_at, ended_at)| CallRecord {
+        .map(|(id, caller, callee, media, status, started_at, ended_at, is_group)| CallRecord {
             call_id: id.parse().unwrap_or_default(),
             caller,
             callee,
@@ -209,6 +211,7 @@ async fn fetch_history(pool: &SqlitePool, user: &str) -> Result<Vec<CallRecord>>
             status,
             started_at,
             ended_at,
+            is_group,
         })
         .collect())
 }
