@@ -301,11 +301,12 @@ export function createSyncController(deps: SyncDependencies) {
       if (shouldAckIncoming) sendAck(rawStored.id, stored.from);
       return;
     }
-    // Sealed-сообщение, которое не удалось расшифровать, не имеет отправителя —
-    // без этого guard'а оно ошибочно оседало бы в «Избранном» (to === self)
-    if (!stored.from && stored.content.kind === 'encrypted') {
-      deps.log(`sealed-сообщение ${stored.id} не расшифровано — пропущено`);
-      if (shouldAckIncoming) sendAck(rawStored.id, '');
+    // Если после unseal контент всё ещё зашифрован — расшифровать не удалось
+    // (нет ключа/сессии, продвинутый ратчет). Не рисуем «🔒» и не роутим в
+    // «Избранное» — просто пропускаем, чтобы не мусорить в переписке
+    if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
+      deps.log(`сообщение ${stored.id} не расшифровано — пропущено`);
+      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
       return;
     }
     await refreshGroupsIfUnknownChat(stored);
