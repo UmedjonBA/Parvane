@@ -20,6 +20,7 @@ import type { GatewayConnection } from './gateway';
 import type { WireUserInfo } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
+import { ARCHIVED_FOLDER_ID } from '../../config';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   clearLoginStorage,
@@ -246,23 +247,6 @@ const methods = {
   },
 
   async fetchChats({ archived }: { archived?: boolean }) {
-    if (archived) {
-      // Архива у Parvane пока нет
-      return {
-        chatIds: [],
-        chats: [],
-        users: [],
-        userStatusesById: {},
-        draftsById: {},
-        threadReadStatesById: {},
-        threadInfos: [],
-        orderedPinnedIds: undefined,
-        totalChatCount: 0,
-        messages: [],
-        notifyExceptionById: {},
-        lastMessageByChatId: {},
-      };
-    }
     await syncController.ensureSynced();
     // Пинок загрузки наборов стикеров/кастом-эмодзи после маунта Main: штатный
     // путь гейтится на isAppConfigLoaded (fetchAppConfig у нас нет), а апдейт
@@ -305,7 +289,22 @@ const methods = {
     const listedChats = chats.filter(
       (chat) => isVisibleChat(chat) || chat.id !== selfId(),
     );
-    const visibleChats = listedChats.filter(isVisibleChat);
+    const allVisibleChats = listedChats.filter(isVisibleChat);
+
+    // Архив и пины (локальный persist по адресу пира/группы)
+    const archivedIds = new Set(
+      localState.loadArchived().map((address) => store.getIdForAddress(address)),
+    );
+    allVisibleChats.forEach((chat) => {
+      chat.folderId = archivedIds.has(chat.id) ? ARCHIVED_FOLDER_ID : undefined;
+    });
+    const visibleChats = allVisibleChats.filter(
+      (chat) => (archived ? archivedIds.has(chat.id) : !archivedIds.has(chat.id)),
+    );
+    const pinnedIds = localState.loadPinned()
+      .map((address) => store.getIdForAddress(address))
+      .filter((id) => visibleChats.some((chat) => chat.id === id));
+    const orderedPinnedIds = archived || !pinnedIds.length ? undefined : pinnedIds;
 
     const messages: ApiMessage[] = [];
     const lastMessageByChatId: Record<string, number> = {};
@@ -369,7 +368,7 @@ const methods = {
       draftsById,
       threadReadStatesById,
       threadInfos,
-      orderedPinnedIds: undefined,
+      orderedPinnedIds,
       totalChatCount: visibleChats.length,
       messages,
       notifyExceptionById: {},
@@ -420,6 +419,27 @@ const methods = {
   exportChatInvite: groupController.exportChatInvite,
   importChatInvite: groupController.importChatInvite,
   updateChatAdmin: groupController.updateChatAdmin,
+
+  // ── пины и архив чатов (локальный persist) ──────────────────────────────────
+
+  toggleChatPinned({ chat, shouldBePinned }: { chat: ApiChat; shouldBePinned: boolean }) {
+    const address = store.getAddressForId(chat.id);
+    if (!address) return Promise.resolve(undefined);
+    localState.setPinned(address, shouldBePinned);
+    sendUpdate({ '@type': 'updateChatPinned', id: chat.id, isPinned: shouldBePinned });
+    return Promise.resolve(undefined);
+  },
+
+  toggleChatArchived({ chat, folderId }: { chat: ApiChat; folderId: number }) {
+    const address = store.getAddressForId(chat.id);
+    if (!address) return Promise.resolve(undefined);
+    const isArchiving = folderId === ARCHIVED_FOLDER_ID;
+    localState.setArchived(address, isArchiving);
+    // Архивируемый чат снимается с пина
+    if (isArchiving) localState.setPinned(address, false);
+    sendUpdate({ '@type': 'updateChatListType', id: chat.id, folderId });
+    return Promise.resolve(undefined);
+  },
 
   // ── черновики (локальный persist + кросс-таб) ───────────────────────────────
 
@@ -552,7 +572,12 @@ const methods = {
     return Promise.resolve(buildSearchResults(searchLocalMessages(query)));
   },
 
-  searchMessagesInChat({ peer, query }: { peer: { id: string }; query?: string }) {
+  searchMessagesInChat({ peer, query, type }: { peer: { id: string }; query?: string; type?: string }) {
+    // Вкладки профиля (Media/Files/Links/Voice/Music) зовут без query, но с
+    // type — фильтруем по типу контента вместо текстового поиска
+    if (type && type !== 'text') {
+      return Promise.resolve(buildSearchResults(filterMediaMessages(peer.id, type)));
+    }
     return Promise.resolve(buildSearchResults(searchLocalMessages(query, peer.id)));
   },
 
@@ -757,6 +782,19 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
+  // Профиль контакта: bio/username локальны у Parvane (нет серверного
+  // профиля), но full-user нужен, чтобы экран профиля не оставался пустым
+  fetchFullUser({ id }: { id: string }) {
+    const address = store.getAddressForId(id);
+    if (!address) return Promise.resolve(undefined);
+    const user = store.buildApiUser(address);
+    const isBlocked = localState.loadBlocked().includes(address);
+    return Promise.resolve({
+      user,
+      fullInfo: { isBlocked, commonChatsCount: 0 },
+    });
+  },
+
   updateIsOnline() {
     return Promise.resolve(undefined);
   },
@@ -797,6 +835,22 @@ function searchLocalMessages(query: string | undefined, chatId?: string): ApiMes
     .flatMap((id) => store.getMessages(id))
     .filter((m) => m.content.text?.text.toLowerCase().includes(needle))
     .sort((a, b) => b.date - a.date);
+}
+
+function filterMediaMessages(chatId: string, type: string): ApiMessage[] {
+  const matches = (message: ApiMessage): boolean => {
+    const c = message.content;
+    switch (type) {
+      case 'media': return Boolean(c.photo || (c.video && !c.video.isRound && !c.video.isGif));
+      case 'documents': return Boolean(c.document);
+      case 'links': return Boolean(c.text?.text && /https?:\/\//.test(c.text.text));
+      case 'voice': return Boolean(c.voice || (c.video && c.video.isRound));
+      case 'audio': return Boolean(c.audio);
+      case 'gif': return Boolean(c.video?.isGif);
+      default: return false;
+    }
+  };
+  return store.getMessages(chatId).filter(matches).sort((a, b) => b.date - a.date);
 }
 
 function buildSearchResults(messages: ApiMessage[]) {
