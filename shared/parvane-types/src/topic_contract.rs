@@ -87,6 +87,15 @@ pub const CALENDAR_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 pub const PREVIEW_NATS_SUBSCRIBE: &[&str] = &[PREVIEW_FETCH, REQUEST_INBOX];
 pub const PREVIEW_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 
+pub const PUSH_NATS_SUBSCRIBE: &[&str] = &[
+    PUSH_VAPID_GET,
+    PUSH_REGISTER,
+    PUSH_UNREGISTER,
+    MSG_USER_WILDCARD,
+    REQUEST_INBOX,
+];
+pub const PUSH_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+
 /// Fire-and-forget subjects, доступные авторизованному клиенту через gateway.
 pub const GATEWAY_ALLOWED_PUBLISH: &[&str] = &[
     MSG_SEND,
@@ -134,6 +143,9 @@ pub const GATEWAY_ALLOWED_REQUEST: &[&str] = &[
     CALL_HISTORY_REQUEST,
     CALL_ICE_REQUEST,
     PREVIEW_FETCH,
+    PUSH_VAPID_GET,
+    PUSH_REGISTER,
+    PUSH_UNREGISTER,
 ];
 
 /// Subjects с полями actor/token, которые gateway привязывает к сессии.
@@ -176,6 +188,8 @@ pub const GATEWAY_TOKEN_REQUEST_SUBJECTS: &[&str] = &[
     GROUP_RENAME,
     GROUP_DELETE,
     PREVIEW_FETCH,
+    PUSH_REGISTER,
+    PUSH_UNREGISTER,
 ];
 
 /// Минимальные bus-права доверенного gateway. Runtime allowlist выше остаётся
@@ -220,6 +234,9 @@ pub const GATEWAY_NATS_PUBLISH: &[&str] = &[
     GROUP_LIST,
     GROUP_INFO,
     PREVIEW_FETCH,
+    PUSH_VAPID_GET,
+    PUSH_REGISTER,
+    PUSH_UNREGISTER,
     "msg.typing.>",
     "presence.>",
 ];

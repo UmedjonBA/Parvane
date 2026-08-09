@@ -81,6 +81,18 @@ pub mod topics {
     /// ходит шард (не браузер), с SSRF-защитой.
     pub const PREVIEW_FETCH: &str = "preview.link.fetch";
 
+    /// Web-push: публичный VAPID-ключ для pushManager.subscribe.
+    pub const PUSH_VAPID_GET: &str = "push.vapid.get";
+    /// Web-push: регистрация подписки устройства (JWT в конверте).
+    pub const PUSH_REGISTER: &str = "push.device.register";
+    /// Web-push: снятие подписки (endpoint или все подписки пользователя).
+    pub const PUSH_UNREGISTER: &str = "push.device.unregister";
+
+    /// Wildcard входящих инбоксов — на него подписан push-шард, чтобы будить
+    /// офлайн-устройства web-push'ем. Контента в инбоксе он не понимает
+    /// (sealed sender) и не разбирает — только факт доставки.
+    pub const MSG_USER_WILDCARD: &str = "msg.user.>";
+
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
     /// допустим). Например: `call.user.bob@local`.
@@ -992,6 +1004,46 @@ pub struct PreviewFetchResponse {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webpage: Option<WebPagePreview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Подписка web-push (как её отдаёт `PushSubscription.toJSON()` браузера).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushSubscriptionInfo {
+    pub endpoint: String,
+    pub keys: PushSubscriptionKeys,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushSubscriptionKeys {
+    pub p256dh: String,
+    pub auth: String,
+}
+
+/// Запрос `push.device.register`. Токен подставляет gateway (как у превью).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushRegisterRequest {
+    #[serde(default)]
+    pub token: String,
+    pub subscription: PushSubscriptionInfo,
+}
+
+/// Запрос `push.device.unregister`; без `endpoint` — снять все подписки юзера.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushUnregisterRequest {
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+/// Ответ `push.vapid.get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushVapidResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

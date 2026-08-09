@@ -28,6 +28,7 @@ export PARVANE_NOTES_PASS=demo-notes
 export PARVANE_CALENDAR_PASS=demo-calendar
 export PARVANE_CALL_PASS=demo-call
 export PARVANE_PREVIEW_PASS=demo-preview
+export PARVANE_PUSH_PASS=demo-push
 export PARVANE_GATEWAY_PASS=demo-gateway
 
 log() { printf '\n== %s ==\n' "$*"; }
@@ -65,7 +66,7 @@ start_shard() {
 
 log "Build backend"
 cd "$ROOT"
-cargo build -p identity -p messenger -p cloud -p call -p preview -p gateway
+cargo build -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
 
 log "Start NATS (persistent)"
 nats-server -c "$ROOT/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
@@ -79,11 +80,13 @@ start_shard messenger "$PARVANE_MESSENGER_PASS"
 start_shard cloud "$PARVANE_CLOUD_PASS"
 start_shard call "$PARVANE_CALL_PASS"
 start_shard preview "$PARVANE_PREVIEW_PASS"
-wait_for_log identity 'Identity шард запущен' "${PIDS[-5]}"
-wait_for_log messenger 'Messenger шард запущен' "${PIDS[-4]}"
-wait_for_log cloud 'Cloud шард запущен' "${PIDS[-3]}"
-wait_for_log call 'Call шард запущен' "${PIDS[-2]}"
-wait_for_log preview 'Preview шард запущен' "${PIDS[-1]}"
+start_shard push "$PARVANE_PUSH_PASS"
+wait_for_log identity 'Identity шард запущен' "${PIDS[-6]}"
+wait_for_log messenger 'Messenger шард запущен' "${PIDS[-5]}"
+wait_for_log cloud 'Cloud шард запущен' "${PIDS[-4]}"
+wait_for_log call 'Call шард запущен' "${PIDS[-3]}"
+wait_for_log preview 'Preview шард запущен' "${PIDS[-2]}"
+wait_for_log push 'Push шард запущен' "${PIDS[-1]}"
 
 log "Start gateway"
 env PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \

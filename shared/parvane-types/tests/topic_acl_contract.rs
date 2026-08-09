@@ -85,7 +85,14 @@ const CALENDAR_BINDINGS: &[(&str, &str)] = &[
 
 const PREVIEW_BINDINGS: &[(&str, &str)] = &[("PREVIEW_FETCH", PREVIEW_FETCH)];
 
-fn role_contracts() -> [RoleContract; 8] {
+const PUSH_BINDINGS: &[(&str, &str)] = &[
+    ("PUSH_VAPID_GET", PUSH_VAPID_GET),
+    ("PUSH_REGISTER", PUSH_REGISTER),
+    ("PUSH_UNREGISTER", PUSH_UNREGISTER),
+    ("MSG_USER_WILDCARD", MSG_USER_WILDCARD),
+];
+
+fn role_contracts() -> [RoleContract; 9] {
     [
         RoleContract {
             name: "identity",
@@ -123,6 +130,11 @@ fn role_contracts() -> [RoleContract; 8] {
             publish: PREVIEW_NATS_PUBLISH,
         },
         RoleContract {
+            name: "push",
+            subscribe: PUSH_NATS_SUBSCRIBE,
+            publish: PUSH_NATS_PUBLISH,
+        },
+        RoleContract {
             name: "gateway",
             subscribe: GATEWAY_NATS_SUBSCRIBE,
             publish: GATEWAY_NATS_PUBLISH,
@@ -130,7 +142,7 @@ fn role_contracts() -> [RoleContract; 8] {
     ]
 }
 
-fn shard_contracts() -> [ShardContract; 7] {
+fn shard_contracts() -> [ShardContract; 8] {
     [
         ShardContract {
             name: "identity",
@@ -173,6 +185,12 @@ fn shard_contracts() -> [ShardContract; 7] {
             source: include_str!("../../../shards/preview/src/main.rs"),
             bindings: PREVIEW_BINDINGS,
             nats_subscribe: PREVIEW_NATS_SUBSCRIBE,
+        },
+        ShardContract {
+            name: "push",
+            source: include_str!("../../../shards/push/src/main.rs"),
+            bindings: PUSH_BINDINGS,
+            nats_subscribe: PUSH_NATS_SUBSCRIBE,
         },
     ]
 }
