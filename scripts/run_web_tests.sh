@@ -70,6 +70,9 @@ log "Two-browser polls e2e (public voters, quiz)"
 log "Three-browser invite links e2e"
 "$ROOT/scripts/run_web_invites_e2e.sh"
 
+log "E2E keys backup e2e (C1 device migration)"
+"$ROOT/scripts/run_web_keys_backup_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 
