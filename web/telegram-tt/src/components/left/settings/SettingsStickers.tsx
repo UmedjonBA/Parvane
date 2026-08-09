@@ -15,6 +15,8 @@ import { SettingsScreens } from '../../../types';
 
 import { selectCanPlayAnimatedEmojis } from '../../../global/selectors';
 import { pick } from '../../../util/iteratees';
+import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
+import { callApi } from '../../../api/gramjs';
 import { REM } from '../../common/helpers/mediaDimensions';
 import renderText from '../../common/helpers/renderText';
 
@@ -63,11 +65,36 @@ const SettingsStickers: FC<OwnProps & StateProps> = ({
     setSettingOption,
     openStickerSet,
     openSettingsScreen,
+    showNotification,
   } = getActions();
   const lang = useOldLang();
 
   const stickerSettingsRef = useRef<HTMLDivElement>();
   const { observe: observeIntersectionForCovers } = useIntersectionObserver({ rootRef: stickerSettingsRef });
+
+  const handlePackFilesSelected = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    const defaultName = files[0].name.replace(/\.[^.]+$/, '');
+
+    const name = window.prompt(lang('ParvanePackNamePrompt'), defaultName);
+    if (!name) return;
+    const callParvane = callApi as unknown as (
+      method: string, args: unknown,
+    ) => Promise<{ title: string; count: number } | undefined>;
+    const result = await callParvane('parvaneCreateStickerPack', { name, files });
+    showNotification({
+      message: result
+        ? lang('ParvanePackCreated', `${result.title} (${result.count})`)
+        : lang('ParvanePackCreateFailed'),
+    });
+  }, [lang, showNotification]);
+
+  const handleCreatePackClick = useCallback(() => {
+    openSystemFilesDialog('.webp,.png,.tgs,.webm', (e) => {
+      const { files } = e.target as HTMLInputElement;
+      void handlePackFilesSelected(Array.from(files || []));
+    });
+  }, [handlePackFilesSelected]);
 
   const handleStickerSetClick = useCallback((sticker: ApiSticker) => {
     openStickerSet({
@@ -107,6 +134,13 @@ const SettingsStickers: FC<OwnProps & StateProps> = ({
         >
           {lang('StickersList.EmojiItem')}
           {customEmojiSetIds && <span className="settings-item__current-value">{customEmojiSetIds.length}</span>}
+        </ListItem>
+        <ListItem
+          narrow
+          onClick={handleCreatePackClick}
+          icon="stickers"
+        >
+          {lang('ParvaneCreatePack')}
         </ListItem>
         {defaultReaction && (
           <ListItem

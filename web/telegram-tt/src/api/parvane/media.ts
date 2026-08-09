@@ -424,7 +424,9 @@ export function createMediaService(deps: MediaDependencies) {
         kind: 'sticker',
         file_id: mediaId,
         filename: content.sticker.emoji || '⭐',
-        mime: 'image/png',
+        mime: mimeByFileId.get(mediaId) || 'image/png',
+        width: content.sticker.width,
+        height: content.sticker.height,
         ...cryptoFields,
       };
     }
@@ -458,6 +460,7 @@ export function createMediaService(deps: MediaDependencies) {
     clearCache: () => cacheByFileId.clear(),
     detectWebPage,
     fetchWebPagePreview,
+    downloadBlob,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),
     getCloudRecipients,
