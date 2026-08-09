@@ -61,6 +61,9 @@ log "Two-browser empty state e2e"
 log "Two-browser sticker packs e2e"
 "$ROOT/scripts/run_web_sticker_packs_e2e.sh"
 
+log "B4 UX e2e (shared media, push fallback, mobile)"
+"$ROOT/scripts/run_web_b4_ux_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 
