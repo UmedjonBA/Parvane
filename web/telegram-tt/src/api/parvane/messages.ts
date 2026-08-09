@@ -373,11 +373,14 @@ export function createMessageController(deps: MessageDependencies) {
     const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
     const replyToUuid = replyToMsgId ? currentStore.getUuidForMessage(chat.id, replyToMsgId) : undefined;
     const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+    // Богатое превью тянем с шарда (SSRF-safe); короткий дедлайн, деградация к
+    // hostname. При noWebPage наружу не ходим вовсе
+    const webpage = params.noWebPage ? undefined : await deps.media.fetchWebPagePreview(params.text);
     let wireContent: Record<string, unknown> = {
       kind: 'text',
       text: params.text || '',
       entities: apiEntitiesToWire(params.entities),
-      webpage: params.noWebPage ? undefined : deps.media.detectWebPage(params.text),
+      webpage,
       ttl_secs: ttlSecs || undefined,
     };
     let sentContent = localMessage.content;
