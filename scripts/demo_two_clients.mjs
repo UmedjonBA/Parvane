@@ -16,15 +16,17 @@ async function launchClient(x, title) {
   const browser = await chromium.launch({
     headless: false,
     args: [
-      `--window-position=${x},60`,
-      '--window-size=760,900',
+      `--window-position=${x},40`,
+      '--window-size=955,1000',
       // Реальные камера/микрофон (без fake-устройств), разрешения выданы
       // через context.permissions — чтобы голос и кружок были настоящими
       '--autoplay-policy=no-user-gesture-required',
     ],
   });
+  // viewport: null — приложение заполняет реальное окно (без белых полей),
+  // а ширина >925px включает статичный список чатов (десктоп-раскладка)
   const context = await browser.newContext({
-    viewport: { width: 740, height: 860 },
+    viewport: null,
     permissions: ['microphone', 'camera'],
   });
   return { browser, context, title };
