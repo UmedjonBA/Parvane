@@ -94,6 +94,21 @@ const ParvaneCallOverlay = () => {
     }
   }, [call?.localStream, hasLocalVideo]);
 
+  // Рингтоны: входящий и исходящий гудок — loop, «занято» — однократно
+  useEffect(() => {
+    let tone: HTMLAudioElement | undefined;
+    if (state === 'incoming') tone = new Audio('call_incoming.mp3');
+    else if (state === 'ringing') tone = new Audio('call_ringing.mp3');
+    else if (state === 'busy') tone = new Audio('call_busy.mp3');
+    if (!tone) return undefined;
+    tone.loop = state !== 'busy';
+    void tone.play().catch(() => undefined);
+    return () => {
+      tone.pause();
+      tone.src = '';
+    };
+  }, [state]);
+
   // Групповой звонок: по <audio> на каждый удалённый поток (DOM управляется
   // вручную — количество участников динамическое)
   const groupAudioRef = useRef<HTMLDivElement>();
@@ -143,6 +158,7 @@ const ParvaneCallOverlay = () => {
   else if (state === 'incoming') statusText = lang('CallStatusIncoming');
   else if (state === 'connecting') statusText = lang('CallStatusExchanging');
   else if (state === 'active') statusText = formatDuration(duration);
+  else if (state === 'busy') statusText = lang('ParvaneCallBusy');
   else if (state === 'security_failed') statusText = lang('ParvaneCallSecurityError');
 
   if (group) {

@@ -12,7 +12,14 @@ export type WireCallSignal =
   | { type: 'ice'; call_id: string; candidate: string }
   | { type: 'hangup'; call_id: string };
 
-export type CallState = 'requesting' | 'ringing' | 'connecting' | 'active' | 'security_failed' | 'ended';
+export type CallState =
+  | 'requesting' | 'ringing' | 'connecting' | 'active' | 'busy' | 'security_failed' | 'ended';
+
+// Кратковременный сетевой провал WebRTC чинит сам — рвём только по таймауту
+const DISCONNECT_GRACE_MS = 10000;
+// Недозвон: авто-отбой у звонящего (сервер запишет missed) и авто-скрытие
+// входящего у собеседника
+const RING_TIMEOUT_MS = 45000;
 
 type CallCallbacks = {
   sendSignal: (to: string, signal: WireCallSignal) => void;
@@ -61,6 +68,10 @@ export class CallEngine {
 
   private remoteReady = false;
 
+  private disconnectTimer?: number;
+
+  private ringTimer?: number;
+
   constructor(private cb: CallCallbacks) {}
 
   get currentCallId() {
@@ -101,6 +112,10 @@ export class CallEngine {
         type: 'invite', call_id: callId, media, sdp, sig: signature,
       });
       this.cb.onState('ringing');
+      this.ringTimer = window.setTimeout(() => {
+        // Недозвон: собеседник так и не ответил — отбой (сервер запишет missed)
+        if (this.isCurrentCall(peer, callId) && !this.remoteReady) this.hangUp();
+      }, RING_TIMEOUT_MS);
     } catch {
       if (this.isCurrentCall(peer, callId)) this.endAfterMediaFailure();
     }
@@ -190,6 +205,13 @@ export class CallEngine {
         this.incomingMedia = signal.media;
         this.isAwaitingAcceptance = true;
         this.cb.onIncoming(from, signal.call_id, signal.media);
+        this.ringTimer = window.setTimeout(() => {
+          // Звонящий уже отбился по своему таймауту — тихо закрываем входящий
+          if (this.isCurrentCall(from, signal.call_id) && this.isAwaitingAcceptance) {
+            this.cleanup();
+            this.cb.onState('ended');
+          }
+        }, RING_TIMEOUT_MS);
         break;
       case 'answer':
         if (!this.pc || !this.isCaller || this.remoteReady
@@ -217,8 +239,9 @@ export class CallEngine {
       case 'reject':
       case 'hangup':
         if (signal.call_id === this.callId && from === this.peer) {
+          const isBusy = signal.type === 'reject' && signal.reason === 'busy';
           this.cleanup();
-          this.cb.onState('ended');
+          this.cb.onState(isBusy ? 'busy' : 'ended');
         }
         break;
       default:
@@ -283,8 +306,20 @@ export class CallEngine {
     pc.onconnectionstatechange = () => {
       if (this.pc !== pc) return;
       const s = pc.connectionState;
-      if (s === 'connected') this.cb.onState('active');
-      else if (s === 'failed' || s === 'disconnected' || s === 'closed') {
+      if (s === 'connected') {
+        window.clearTimeout(this.disconnectTimer);
+        this.disconnectTimer = undefined;
+        this.cb.onState('active');
+      } else if (s === 'disconnected') {
+        // Кратковременный провал сети: даём WebRTC шанс восстановиться
+        window.clearTimeout(this.disconnectTimer);
+        this.disconnectTimer = window.setTimeout(() => {
+          if (this.pc === pc && pc.connectionState === 'disconnected') {
+            this.cleanup();
+            this.cb.onState('ended');
+          }
+        }, DISCONNECT_GRACE_MS);
+      } else if (s === 'failed' || s === 'closed') {
         this.cleanup();
         this.cb.onState('ended');
       }
@@ -298,6 +333,10 @@ export class CallEngine {
   }
 
   private cleanup() {
+    window.clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = undefined;
+    window.clearTimeout(this.ringTimer);
+    this.ringTimer = undefined;
     this.localStream?.getTracks().forEach((t) => t.stop());
     const pc = this.pc;
     this.pc = undefined;

@@ -41,6 +41,8 @@ const POST_CALL_HISTORY_DELAY_MS = 1500;
 const ICE_CACHE_RATIO = 0.8;
 // e2e-хук: iceTransportPolicy=relay — соединение возможно только через TURN
 const FORCE_RELAY_STORAGE_KEY = 'parvane:e2e:forceRelay';
+// Сколько показывать «занято» перед закрытием оверлея
+const BUSY_OVERLAY_MS = 2500;
 
 type CallWindowState = {
   state: string;
@@ -201,13 +203,22 @@ export function createCallController(deps: CallDependencies) {
       callWindow.parvaneCall!.state = state;
       callWindow.parvaneCall!.hasSecurityError = state === 'security_failed';
       callWindow.parvaneCall!.localStream = engine?.getLocalStream();
-      if (state === 'ended' || state === 'security_failed') {
+      if (state === 'ended' || state === 'security_failed' || state === 'busy') {
         callWindow.parvaneCall!.incoming = undefined;
         callWindow.parvaneCall!.remoteStream = undefined;
         callWindow.parvaneCall!.localStream = undefined;
         callWindow.parvaneCall!.isMuted = undefined;
         callWindow.parvaneCall!.isCameraOff = undefined;
         scheduleHistorySync(POST_CALL_HISTORY_DELAY_MS);
+      }
+      if (state === 'busy') {
+        // Показываем «занято» пару секунд, затем закрываем оверлей
+        window.setTimeout(() => {
+          if (callWindow.parvaneCall?.state === 'busy') {
+            callWindow.parvaneCall.state = 'ended';
+            emit();
+          }
+        }, BUSY_OVERLAY_MS);
       }
       emit();
     };
@@ -365,6 +376,8 @@ export function createCallController(deps: CallDependencies) {
     const store = deps.getStore();
     const toAddress = store.getAddressForId(chatId);
     if (!toAddress || !engine) return undefined;
+    // Уже в звонке — повторный вызов затёр бы состояние движка
+    if (engine.currentCallId || groupEngine?.currentGroupCallId) return undefined;
     if (store.isGroupAddress(toAddress)) return placeGroupCall(toAddress, isVideo);
     const callState = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall!;
     callState.peerName = store.getDisplayName(toAddress);
