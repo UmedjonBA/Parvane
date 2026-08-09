@@ -333,6 +333,52 @@ export class E2eEngine {
     this.queuePersist();
   }
 
+  // ── C1: перенос ключей на другое устройство ────────────────────────────────
+  // Экспорт полного состояния (аккаунт, сессии, decCache, группы) под паролем:
+  // PBKDF2-SHA256 → AES-GCM. Импорт на новом устройстве делает старую
+  // sealed-историю читаемой (decCache) и сохраняет identity
+
+  async exportEncrypted(password: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveExportKey(password, salt);
+    const plaintext = encoder.encode(JSON.stringify(this.buildState()));
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: toStandaloneBuffer(iv) }, key, toStandaloneBuffer(plaintext),
+    );
+    return JSON.stringify({
+      v: EXPORT_VERSION,
+      kdf: 'pbkdf2-sha256',
+      iterations: EXPORT_KDF_ITERATIONS,
+      salt: bytesToBase64(salt),
+      iv: bytesToBase64(iv),
+      data: bytesToBase64(new Uint8Array(ciphertext)),
+    });
+  }
+
+  static async importEncrypted(self: string, payload: string, password: string): Promise<E2eEngine> {
+    const parsed = JSON.parse(payload) as {
+      v: number; iterations?: number; salt: string; iv: string; data: string;
+    };
+    if (parsed.v !== EXPORT_VERSION) throw new Error(`Unsupported key backup version: ${parsed.v}.`);
+    const key = await deriveExportKey(password, base64ToBytes(parsed.salt), parsed.iterations);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: toStandaloneBuffer(base64ToBytes(parsed.iv)) },
+      key,
+      toStandaloneBuffer(base64ToBytes(parsed.data)),
+    );
+    const state = JSON.parse(new TextDecoder().decode(plaintext)) as PersistedE2eState;
+
+    const engine = new E2eEngine();
+    engine.self = self;
+    engine.storage = await SecureE2eStorage.open(self);
+    engine.loadState(state, state.pickleKey);
+    await engine.storage.save(engine.buildState());
+    enginesBySelf.set(self, engine);
+    return engine;
+  }
+
   // Шифрует inner-JSON для контакта; undefined — E2E недоступен (нет бандла)
   async encryptFor(contact: string, innerJson: string, fetchBundle: BundleFetcher) {
     let identity = this.identityByContact[contact];
@@ -499,6 +545,46 @@ export class E2eEngine {
 
 function stripBase64Padding(value: string) {
   return value.replace(/=+$/, '');
+}
+
+const EXPORT_VERSION = 1;
+const EXPORT_KDF_ITERATIONS = 310000;
+
+// WebCrypto требует BufferSource с обычным ArrayBuffer
+function toStandaloneBuffer(bytes: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(bytes.length);
+  new Uint8Array(out).set(bytes);
+  return out;
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(data: string) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function deriveExportKey(password: string, salt: Uint8Array, iterations = EXPORT_KDF_ITERATIONS) {
+  const material = await crypto.subtle.importKey(
+    'raw', toStandaloneBuffer(new TextEncoder().encode(password)), 'PBKDF2', false, ['deriveKey'],
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2', hash: 'SHA-256', salt: toStandaloneBuffer(salt), iterations,
+    },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 function randomSecret() {

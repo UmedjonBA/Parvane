@@ -12,6 +12,8 @@ import {
 } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { getClosestEntry } from '../../../util/getClosestEntry';
+import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
+import { callApi } from '../../../api/gramjs';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
@@ -116,6 +118,42 @@ const SettingsPrivacy = ({
     onBack: onReset,
   });
 
+  const { showNotification } = getActions();
+  const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
+
+  const handleExportE2eKeys = useLastCallback(async () => {
+    const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
+    if (!password) return;
+    const result = await callParvane('parvaneExportE2eKeys', { password }) as { payload: string } | undefined;
+    if (!result) {
+      showNotification({ message: oldLang('ParvaneKeysExportFailed') });
+      return;
+    }
+    const blob = new Blob([result.payload], { type: 'application/json' });
+    const anchor = document.createElement('a');
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = 'parvane-e2e-keys.json';
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+    showNotification({ message: oldLang('ParvaneKeysExported') });
+  });
+
+  const handleImportE2eKeys = useLastCallback(() => {
+    openSystemFilesDialog('.json', (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      void (async () => {
+        const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
+        if (!password) return;
+        const payload = await file.text();
+        const result = await callParvane('parvaneImportE2eKeys', { payload, password });
+        showNotification({
+          message: oldLang(result ? 'ParvaneKeysImported' : 'ParvaneKeysImportFailed'),
+        });
+      })();
+    }, true);
+  });
+
   const handleArchiveAndMuteChange = useLastCallback((isEnabled: boolean) => {
     updateGlobalPrivacySettings({
       shouldArchiveAndMuteNewNonContact: isEnabled,
@@ -205,6 +243,12 @@ const SettingsPrivacy = ({
         >
           {oldLang('BlockedUsers')}
           <span className="settings-item__current-value">{blockedCount || ''}</span>
+        </ListItem>
+        <ListItem icon="key" narrow onClick={handleExportE2eKeys}>
+          {oldLang('ParvaneExportKeys')}
+        </ListItem>
+        <ListItem icon="download" narrow onClick={handleImportE2eKeys}>
+          {oldLang('ParvaneImportKeys')}
         </ListItem>
         {canSetPasscode && (
           <ListItem

@@ -716,6 +716,31 @@ const methods = {
     return { title: finalName, count: packFiles.length };
   },
 
+  // ── C1: бэкап E2E-ключей (перенос на другое устройство) ─────────────────────
+
+  async parvaneExportE2eKeys({ password }: { password: string }) {
+    if (!e2e) return undefined;
+    await e2e.flushStorage();
+    return { payload: await e2e.exportEncrypted(password) };
+  },
+
+  async parvaneImportE2eKeys({ payload, password }: { payload: string; password: string }) {
+    if (!store.self) return undefined;
+    try {
+      const imported = await E2eEngine.importEncrypted(store.self, payload, password);
+      e2e = imported;
+      // Полный ресинк с восстановленным состоянием: старая sealed-история
+      // расшифруется из привезённого decCache
+      syncController.reset();
+      resetPackRegistries();
+      sendUpdate({ '@type': 'requestSync' });
+      return true;
+    } catch (err) {
+      logDebug(`импорт ключей не удался: ${String(err)}`);
+      return undefined;
+    }
+  },
+
   async fetchStickers(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {
     const result = await methods.fetchStickerSet(params);
     const packs: Record<string, ApiSticker[]> = {};
