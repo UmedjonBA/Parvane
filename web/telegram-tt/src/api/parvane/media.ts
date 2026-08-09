@@ -11,6 +11,7 @@ import {
   TOPIC_FILE_DOWNLOAD_REQUEST,
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
+  TOPIC_PREVIEW_FETCH,
   type WireMessageContent,
 } from './wire';
 
@@ -311,6 +312,38 @@ export function createMediaService(deps: MediaDependencies) {
     }
   }
 
+  // Богатое превью: шард ходит наружу (SSRF-safe), клиент получает OG-метаданные.
+  // Возвращает undefined при таймауте/ошибке — отправка деградирует к hostname
+  async function fetchWebPagePreview(text?: string, timeoutMs = 1500) {
+    const fallback = detectWebPage(text);
+    if (!fallback) return undefined;
+    const connection = deps.getConnection();
+    if (!connection) return fallback;
+    try {
+      const event = buildWireEvent(deps.getStore().self, deps.getToken(), { url: fallback.url });
+      const raw = await Promise.race([
+        connection.request(TOPIC_PREVIEW_FETCH, JSON.stringify(event)),
+        new Promise<string>((_, reject) => { window.setTimeout(() => reject(new Error('timeout')), timeoutMs); }),
+      ]);
+      const response = JSON.parse(raw) as {
+        ok?: boolean;
+        webpage?: { url: string; site_name?: string; title?: string; description?: string };
+      };
+      const wp = response.webpage;
+      if (response.ok && wp) {
+        return {
+          url: wp.url,
+          site_name: wp.site_name || fallback.site_name,
+          title: wp.title,
+          description: wp.description,
+        };
+      }
+    } catch {
+      // Таймаут/ошибка — деградируем к hostname
+    }
+    return fallback;
+  }
+
   function messageToWireContent(message: ApiMessage): Record<string, unknown> | undefined {
     const content = message.content;
     if (content.text && !content.photo && !content.document && !content.sticker) {
@@ -424,6 +457,7 @@ export function createMediaService(deps: MediaDependencies) {
     cacheBlobIfAbsent,
     clearCache: () => cacheByFileId.clear(),
     detectWebPage,
+    fetchWebPagePreview,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),
     getCloudRecipients,

@@ -124,6 +124,7 @@ export const TOPIC_GROUP_JOIN = 'group.join';
 export const TOPIC_GROUP_SET_ROLE = 'group.setrole';
 export const TOPIC_GROUP_RENAME = 'group.rename';
 export const TOPIC_GROUP_DELETE = 'group.delete';
+export const TOPIC_PREVIEW_FETCH = 'preview.link.fetch';
 export const TOPIC_CALL_SIGNAL = 'call.signal';
 export const TOPIC_CALL_HISTORY_REQUEST = 'call.history.request';
 export const TOPIC_CALL_ICE_REQUEST = 'call.ice.request';
