@@ -34,34 +34,48 @@ async function launchClient(profile, x, address) {
   const page = context.pages()[0] || await context.newPage();
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
+  if (process.env.PARVANE_DEMO_DIAG) {
+    page.on('console', (msg) => {
+      const t = msg.text();
+      if (/E2E|prekey|encrypt|decrypt|Error|ошибк|не удал/i.test(t)) {
+        console.log(`[${profile}:console] ${t}`);
+      }
+    });
+  }
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   await loginOrRegister(page, address);
   return { context, page, errors };
 }
 
-// Идемпотентно: первый запуск видит экран адреса (регистрация), последующие —
-// сразу экран пароля (сохранённый адрес), либо уже внутри
+// Идемпотентно и устойчиво к переходам: на каждом шаге смотрим, какая форма
+// сейчас активна, и действуем — пока не окажемся внутри (LeftColumn).
 async function loginOrRegister(page, address) {
-  const addressForm = page.locator('.Transition_slide-active > #auth-phone-number-form');
-  const passwordForm = page.locator('.Transition_slide-active > #auth-password-form');
+  const addressInput = page.locator('.Transition_slide-active > #auth-phone-number-form input');
+  const passwordInput = page.locator('.Transition_slide-active > #auth-password-form #sign-in-password');
   const leftColumn = page.locator('#LeftColumn');
+  const nextButton = () => page.locator('.Transition_slide-active').getByRole('button', { name: 'Next' });
 
-  // Определяем стартовое состояние по первому появившемуся элементу
-  const state = await Promise.race([
-    addressForm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).then(() => 'address').catch(() => undefined),
-    passwordForm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).then(() => 'password').catch(() => undefined),
-    leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).then(() => 'in').catch(() => undefined),
-  ]);
-  if (state === 'in') return;
-
-  if (state === 'address') {
-    await addressForm.getByLabel('Address (user@server)').fill(address);
-    await addressForm.getByRole('button', { name: 'Next' }).click();
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  let addressDone = false;
+  let passwordDone = false;
+  while (Date.now() < deadline) {
+    if (await leftColumn.isVisible().catch(() => false)) return;
+    if (!addressDone && await addressInput.isVisible().catch(() => false)) {
+      await addressInput.fill(address).catch(() => {});
+      await nextButton().click().catch(() => {});
+      addressDone = true;
+      await page.waitForTimeout(500);
+      continue;
+    }
+    if (!passwordDone && await passwordInput.isVisible().catch(() => false)) {
+      await passwordInput.fill(PASSWORD).catch(() => {});
+      await nextButton().click().catch(() => {});
+      passwordDone = true;
+      await page.waitForTimeout(500);
+      continue;
+    }
+    await page.waitForTimeout(300);
   }
-  // После адреса пароль появляется с переходом — ждём его явно
-  await passwordForm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordForm.locator('#sign-in-password').fill(PASSWORD);
-  await passwordForm.getByRole('button', { name: 'Next' }).click();
   await leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
@@ -95,6 +109,38 @@ const bobClient = await launchClient('bob', 800, bob);
 try {
   await openPrivateChat(aliceClient.page, bob);
   await openPrivateChat(bobClient.page, alice);
+
+  if (process.env.PARVANE_DEMO_DIAG) {
+    // Диагностика: alice шлёт → проверяем, дошло ли до bob
+    const probe = `diag-${Date.now()}`;
+    const input = aliceClient.page.locator('#editable-message-text');
+    await input.fill(probe);
+    await input.press('Enter');
+    await aliceClient.page.waitForTimeout(6000);
+    const gotByBob = await bobClient.page
+      .locator('.Transition_slide-active > .MessageList .Message .text-content')
+      .filter({ hasText: probe }).count();
+    console.log(`[diag] alice→bob "${probe}" получено bob: ${gotByBob}`);
+    const bobProbe = `diagb-${Date.now()}`;
+    const bInput = bobClient.page.locator('#editable-message-text');
+    await bInput.fill(bobProbe);
+    await bInput.press('Enter');
+    await bobClient.page.waitForTimeout(6000);
+    const gotByAlice = await aliceClient.page
+      .locator('.Transition_slide-active > .MessageList .Message .text-content')
+      .filter({ hasText: bobProbe }).count();
+    console.log(`[diag] bob→alice "${bobProbe}" получено alice: ${gotByAlice}`);
+  }
+
+  if (process.env.PARVANE_DEMO_VERIFY) {
+    // Проверка персиста: сколько прошлых сообщений загрузилось после входа
+    await aliceClient.page.waitForTimeout(4000);
+    const aliceMsgs = await aliceClient.page
+      .locator('.Transition_slide-active > .MessageList .Message').count();
+    const bobMsgs = await bobClient.page
+      .locator('.Transition_slide-active > .MessageList .Message').count();
+    console.log(`[verify] прошлых сообщений после входа — alice: ${aliceMsgs}, bob: ${bobMsgs}`);
+  }
 
   console.log('\n════════════════════════════════════════════════════════════');
   console.log('  Персистентное демо: два постоянных аккаунта с историей');
