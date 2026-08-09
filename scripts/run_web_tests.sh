@@ -52,5 +52,8 @@ log "Two-browser content features e2e"
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 
+log "Three-browser group calls e2e"
+"$ROOT/scripts/run_web_group_calls_e2e.sh"
+
 log "Cross-client Web <-> desktop e2e"
 "$ROOT/scripts/run_web_cross_client_e2e.sh"
