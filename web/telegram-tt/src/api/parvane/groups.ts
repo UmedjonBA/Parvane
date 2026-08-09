@@ -8,12 +8,15 @@ import {
   TOPIC_GROUP_ADD_MEMBER,
   TOPIC_GROUP_BAN,
   TOPIC_GROUP_CREATE,
+  TOPIC_GROUP_DELETE,
   TOPIC_GROUP_INFO,
   TOPIC_GROUP_INVITE_CREATE,
   TOPIC_GROUP_JOIN,
   TOPIC_GROUP_LIST,
   TOPIC_GROUP_MUTE,
   TOPIC_GROUP_REMOVE_MEMBER,
+  TOPIC_GROUP_RENAME,
+  TOPIC_GROUP_SET_ROLE,
   TOPIC_GROUP_UNBAN,
   type WireGroupInfo,
 } from './wire';
@@ -69,6 +72,29 @@ export function createGroupController(deps: GroupDependencies) {
     return info;
   }
 
+  function buildFullInfo(info: WireGroupInfo) {
+    const store = deps.getStore();
+    const activeMembers = info.members.filter(({ role }) => role !== 'banned');
+    const members = activeMembers.map((member) => ({
+      userId: store.getIdForAddress(member.address),
+      isOwner: member.role === 'owner' ? true as const : undefined,
+      isAdmin: member.role === 'admin' ? true as const : undefined,
+    }));
+    const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
+    return {
+      members,
+      adminMembersById: Object.fromEntries(adminMembers.map((member) => [member.userId, member])),
+      canViewMembers: true,
+    };
+  }
+
+  function pushGroupUpdates(info: WireGroupInfo) {
+    const store = deps.getStore();
+    const chat = store.buildApiChatForGroup(info);
+    deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+    deps.sendUpdate({ '@type': 'updateChatFullInfo', id: chat.id, fullInfo: buildFullInfo(info) });
+  }
+
   async function refreshMemberships() {
     const connection = deps.getConnection();
     if (!connection) return;
@@ -79,28 +105,35 @@ export function createGroupController(deps: GroupDependencies) {
       );
       const groups = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups || [];
       const store = deps.getStore();
+      const listed = new Set(groups.map((info) => info.group_id));
       groups.forEach((info) => {
-        // Новая группа (нас добавили с другого клиента) должна попасть в
-        // список чатов, иначе она видна только после перезахода
-        const isNew = !store.isGroupAddress(info.group_id);
+        // Изменения имени/состава/ролей должны сходиться на всех клиентах
+        // без full reload; новые группы — попадать в список чатов
+        const previous = store.getGroupInfo(info.group_id);
         register(info);
-        if (isNew) {
-          const chat = store.buildApiChatForGroup(info);
-          deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+        if (!previous || JSON.stringify(previous) !== JSON.stringify(info)) {
+          pushGroupUpdates(info);
         }
       });
+      // Исчезнувшие группы: удалены владельцем либо нас выгнали
+      store.getGroupAddresses()
+        .filter((address) => !listed.has(address))
+        .forEach((address) => {
+          store.unregisterGroup(address);
+          deps.sendUpdate({ '@type': 'updateChatLeave', id: store.getIdForAddress(address) });
+        });
     } catch {
       // Следующий delta-sync повторит membership refresh.
     }
   }
 
-  async function createGroupChat({ title, users }: { title: string; users: ApiUser[] }) {
+  async function createGroupKind(title: string, users: ApiUser[], kind: 'group' | 'channel') {
     const connection = deps.getConnection();
     if (!connection) return undefined;
     const store = deps.getStore();
     const members = users.map((user) => store.getAddressForId(user.id)).filter(Boolean);
     const raw = await connection.request(TOPIC_GROUP_CREATE, JSON.stringify({
-      token: deps.getToken(), name: title, kind: 'group', members,
+      token: deps.getToken(), name: title, kind, members,
     }));
     const response = JSON.parse(raw) as { ok: boolean; group_id?: string; error?: string };
     if (!response.ok || !response.group_id) return undefined;
@@ -108,7 +141,7 @@ export function createGroupController(deps: GroupDependencies) {
     const info: WireGroupInfo = {
       group_id: response.group_id,
       name: title,
-      kind: 'group',
+      kind,
       created_by: store.self,
       members: [
         { address: store.self, role: 'owner' },
@@ -118,7 +151,92 @@ export function createGroupController(deps: GroupDependencies) {
     register(info);
     const chat = store.buildApiChatForGroup(info);
     deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
-    return { chat, missingUsers: [] };
+    return chat;
+  }
+
+  async function createGroupChat({ title, users }: { title: string; users: ApiUser[] }) {
+    const chat = await createGroupKind(title, users, 'group');
+    return chat ? { chat, missingUsers: [] } : undefined;
+  }
+
+  async function createChannel({ title, users }: { title: string; users?: ApiUser[] }) {
+    const channel = await createGroupKind(title, users || [], 'channel');
+    return channel ? { channel, missingUsers: [] } : undefined;
+  }
+
+  async function updateChatAdmin({ chat, user, adminRights }: {
+    chat: ApiChat;
+    user: ApiUser;
+    adminRights?: Record<string, boolean | undefined>;
+  }) {
+    const connection = deps.getConnection();
+    const store = deps.getStore();
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chat.id);
+    const member = store.getAddressForId(user.id);
+    if (!groupId || !member) return undefined;
+    const isPromotion = Boolean(adminRights && Object.values(adminRights).some(Boolean));
+    const raw = await connection.request(TOPIC_GROUP_SET_ROLE, JSON.stringify({
+      token: deps.getToken(),
+      group_id: groupId,
+      member,
+      role: isPromotion ? 'admin' : 'member',
+    }));
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    const info = await refresh(groupId);
+    if (info) pushGroupUpdates(info);
+    return true;
+  }
+
+  // Parvane-группы не мигрируют в супергруппы — tt зовёт это перед
+  // promote/demote, отдаём чат как есть
+  function migrateChat(chat: ApiChat) {
+    return chat;
+  }
+
+  async function updateChatTitle(chat: ApiChat, title: string) {
+    const connection = deps.getConnection();
+    const store = deps.getStore();
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chat.id);
+    if (!groupId) return undefined;
+    const raw = await connection.request(TOPIC_GROUP_RENAME, JSON.stringify({
+      token: deps.getToken(), group_id: groupId, name: title,
+    }));
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    const info = await refresh(groupId);
+    if (info) pushGroupUpdates(info);
+    return true;
+  }
+
+  async function leaveGroup(chatId: string) {
+    const connection = deps.getConnection();
+    const store = deps.getStore();
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chatId);
+    if (!groupId) return undefined;
+    const raw = await connection.request(TOPIC_GROUP_REMOVE_MEMBER, JSON.stringify({
+      token: deps.getToken(), group_id: groupId, member: store.self,
+    }));
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    store.unregisterGroup(groupId);
+    deps.sendUpdate({ '@type': 'updateChatLeave', id: chatId });
+    return true;
+  }
+
+  async function deleteGroup(chatId: string) {
+    const connection = deps.getConnection();
+    const store = deps.getStore();
+    if (!connection) return undefined;
+    const groupId = store.getAddressForId(chatId);
+    if (!groupId) return undefined;
+    const raw = await connection.request(TOPIC_GROUP_DELETE, JSON.stringify({
+      token: deps.getToken(), group_id: groupId,
+    }));
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    store.unregisterGroup(groupId);
+    deps.sendUpdate({ '@type': 'updateChatLeave', id: chatId });
+    return true;
   }
 
   async function fetchFullChat(chat: ApiChat) {
@@ -266,15 +384,21 @@ export function createGroupController(deps: GroupDependencies) {
 
   return {
     addChatMembers,
+    createChannel,
     createGroupChat,
     deleteChatMember,
+    deleteGroup,
     exportChatInvite,
     fetchFullChat,
     importChatInvite,
+    leaveGroup,
+    migrateChat,
     refresh,
     refreshMemberships,
     register,
     registerExclusion,
+    updateChatAdmin,
     updateChatMemberBannedRights,
+    updateChatTitle,
   };
 }
