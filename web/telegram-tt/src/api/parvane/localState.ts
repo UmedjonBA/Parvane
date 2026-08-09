@@ -215,8 +215,37 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('drafts'), JSON.stringify(drafts));
   }
 
+  // Закреплённые чаты (адреса пиров, порядок = порядок пина) и архив
+  function loadPinned(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('pinned')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function setPinned(address: string, shouldPin: boolean) {
+    const pinned = loadPinned().filter((a) => a !== address);
+    if (shouldPin) pinned.unshift(address);
+    localStorage.setItem(storageKey('pinned'), JSON.stringify(pinned));
+  }
+
+  function loadArchived(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('archived')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function setArchived(address: string, shouldArchive: boolean) {
+    const archived = loadArchived().filter((a) => a !== address);
+    if (shouldArchive) archived.push(address);
+    localStorage.setItem(storageKey('archived'), JSON.stringify(archived));
+  }
+
   function clearUserData(user: string) {
-    ['scheduled', 'hist', 'ttl', 'blocked', 'folders', 'drafts'].forEach((part) => {
+    ['scheduled', 'hist', 'ttl', 'blocked', 'folders', 'drafts', 'pinned', 'archived'].forEach((part) => {
       localStorage.removeItem(`parvane:${part}:${user}`);
     });
   }
@@ -258,15 +287,19 @@ export function createLocalState(deps: LocalStateDependencies) {
     clearUserData,
     deleteScheduledMessages: removeScheduled,
     fetchScheduledHistory,
+    loadArchived,
     loadBlocked,
     loadDrafts,
     loadFolders,
     loadPeerTtl,
+    loadPinned,
     readOwnJournal,
     rescheduleMessage,
     saveBlocked,
     saveDraft,
     saveFolders,
+    setArchived,
+    setPinned,
     savePeerTtl,
     scheduleMessage,
     scheduleTtlDeletion,
