@@ -75,6 +75,18 @@ try {
   assert(aliceSasText.length > 0, 'SAS is empty on the caller side');
   assert.equal(aliceSasText, bobSasText, 'SAS emoji differ between the two peers');
 
+  // ── Busy: третий пользователь звонит занятой стороне и видит «занято» ──────
+  const carolContext = await browser.newContext({ permissions: ['microphone'] });
+  const carolSession = await preparePage(carolContext, `call-carol-${suffix}@local`, PASSWORD);
+  await openPrivateChat(carolSession.page, alice);
+  await carolSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+  await carolSession.page.getByText('Line busy', { exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Оверлей закрывается сам через пару секунд
+  await carolSession.page.getByText('Line busy', { exact: true })
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await carolContext.close();
+
   // ── Mute: кнопка переключается и меняет aria ───────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();
   await aliceSession.page.getByRole('button', { name: 'Unmute', exact: true })
