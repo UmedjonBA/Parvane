@@ -161,10 +161,21 @@ export class ParvaneStore {
       isPremium: isSelf ? true : undefined,
       type: 'userTypeRegular',
       firstName: this.getDisplayName(address),
+      // Username = local-part адреса: включает @-автокомплит и упоминания
+      usernames: [{ username: address.split('@')[0], isActive: true, isEditable: false }],
       phoneNumber: '',
       color: { type: 'regular', color: Number(id) % 7 },
       avatarPhotoId: this.avatarByAddress.get(address),
     };
+  }
+
+  // Упоминание == '@<local-part>' или полный '@адрес' в тексте сообщения
+  isMentionOfSelf(message: ApiMessage) {
+    const text = message.content.text?.text;
+    if (!text || !this.self) return false;
+    const localPart = this.self.split('@')[0];
+    return text.includes(`@${this.self}`)
+      || new RegExp(`@${localPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text);
   }
 
   buildApiChatForUser(address: string): ApiChat {
