@@ -46,6 +46,9 @@ log "Two-browser media kinds e2e"
 log "Three-browser groups e2e"
 "$ROOT/scripts/run_web_groups_e2e.sh"
 
+log "Three-browser group admin e2e"
+"$ROOT/scripts/run_web_group_admin_e2e.sh"
+
 log "Two-browser content features e2e"
 "$ROOT/scripts/run_web_content_features_e2e.sh"
 
