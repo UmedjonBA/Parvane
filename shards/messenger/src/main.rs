@@ -831,11 +831,27 @@ async fn fetch_missed_for_signing_key(
         i64,            // read (0/1)
         i64,            // pinned (0/1)
     );
+    // `read` контекстно-зависим от запрашивающего: в группе to_user = group_id,
+    // receipt же пишется от адреса участника — старое сравнение с to_user
+    // делало групповые сообщения вечно непрочитанными. Для входящих групповых
+    // read = мой собственный receipt; для своих исходящих (✓✓) — receipt
+    // любого другого участника; 1-1 — как раньше (receipt получателя).
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT m.id, m.from_user, m.to_user, m.content, m.ts,
                 m.reply_to, m.edited, m.deleted, m.updated_at,
-                EXISTS(SELECT 1 FROM read_receipts r
-                        WHERE r.message_id = m.id AND r.reader = m.to_user) AS read,
+                CASE
+                  WHEN m.to_user IN (SELECT id FROM groups) THEN
+                    CASE WHEN m.from_user = ? THEN
+                      EXISTS(SELECT 1 FROM read_receipts r
+                              WHERE r.message_id = m.id AND r.reader <> ?)
+                    ELSE
+                      EXISTS(SELECT 1 FROM read_receipts r
+                              WHERE r.message_id = m.id AND r.reader = ?)
+                    END
+                  ELSE
+                    EXISTS(SELECT 1 FROM read_receipts r
+                            WHERE r.message_id = m.id AND r.reader = m.to_user)
+                END AS read,
                 m.pinned
          FROM messages m
          WHERE (m.to_user = ? OR m.from_user = ?
@@ -846,6 +862,9 @@ async fn fetch_missed_for_signing_key(
          ORDER BY m.updated_at, m.id
          LIMIT 100",
     )
+    .bind(user)
+    .bind(user)
+    .bind(user)
     .bind(user)
     .bind(user)
     .bind(user)
@@ -946,11 +965,25 @@ async fn fetch_one_message(
     )> = sqlx::query_as(
         "SELECT m.id, m.from_user, m.to_user, m.content, m.ts, m.reply_to,
                 m.edited, m.deleted, m.updated_at,
-                EXISTS(SELECT 1 FROM read_receipts r
-                        WHERE r.message_id = m.id AND r.reader = m.to_user) AS read,
+                CASE
+                  WHEN m.to_user IN (SELECT id FROM groups) THEN
+                    CASE WHEN m.from_user = ? THEN
+                      EXISTS(SELECT 1 FROM read_receipts r
+                              WHERE r.message_id = m.id AND r.reader <> ?)
+                    ELSE
+                      EXISTS(SELECT 1 FROM read_receipts r
+                              WHERE r.message_id = m.id AND r.reader = ?)
+                    END
+                  ELSE
+                    EXISTS(SELECT 1 FROM read_receipts r
+                            WHERE r.message_id = m.id AND r.reader = m.to_user)
+                END AS read,
                 m.pinned
          FROM messages m WHERE m.id = ?",
     )
+    .bind(viewer)
+    .bind(viewer)
+    .bind(viewer)
     .bind(id)
     .fetch_optional(pool)
     .await?;
@@ -1970,6 +2003,36 @@ mod tests {
             .await
             .unwrap();
         assert!(after[0].read, "read-галочка после receipt");
+    }
+
+    #[tokio::test]
+    async fn group_read_state_is_per_requester() {
+        // В группе read зависит от запрашивающего: получатель считает своё
+        // прочтение, автор видит ✓✓ по receipt любого другого участника.
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "g", GroupKind::Group, "alice@local", &["bob@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        let mid = "00000000-0000-7000-8000-0000000000d1";
+        store_message(&pool, &send_event(mid, "alice@local", &gid, "групповое"), 2)
+            .await
+            .unwrap();
+
+        let zero = "00000000-0000-0000-0000-000000000000";
+        // Боб ещё не читал: для него unread, для автора — нет ✓✓.
+        let bob_before = fetch_missed(&pool, "bob@local", zero, 0).await.unwrap();
+        assert!(!bob_before[0].read, "непрочитанное групповое должно быть unread у получателя");
+        let alice_before = fetch_missed(&pool, "alice@local", zero, 0).await.unwrap();
+        assert!(!alice_before[0].read, "без чужих receipt автор не видит ✓✓");
+
+        // Боб прочитал: у него read=true (переживает перезапуск), у автора ✓✓.
+        store_read_receipt(&pool, mid, "bob@local", 7).await.unwrap();
+        let bob_after = fetch_missed(&pool, "bob@local", zero, 0).await.unwrap();
+        assert!(bob_after[0].read, "своё прочтение группового должно приходить из sync");
+        let alice_after = fetch_missed(&pool, "alice@local", zero, 0).await.unwrap();
+        assert!(alice_after[0].read, "receipt участника даёт автору ✓✓");
     }
 
     #[tokio::test]

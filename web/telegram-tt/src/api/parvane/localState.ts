@@ -244,8 +244,36 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('archived'), JSON.stringify(archived));
   }
 
+  // Notify-настройки чатов (mute/превью) по адресу пира/группы
+  function loadNotifyExceptions(): Record<string, Record<string, unknown>> {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('notify')) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function saveNotifyExceptions(map: Record<string, Record<string, unknown>>) {
+    localStorage.setItem(storageKey('notify'), JSON.stringify(map));
+  }
+
+  // Дефолты уведомлений по типам чатов (users/groups/channels)
+  function loadNotifyDefaults(): Record<string, Record<string, unknown>> {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('notifydefaults')) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function saveNotifyDefaults(map: Record<string, Record<string, unknown>>) {
+    localStorage.setItem(storageKey('notifydefaults'), JSON.stringify(map));
+  }
+
   function clearUserData(user: string) {
-    ['scheduled', 'hist', 'ttl', 'blocked', 'folders', 'drafts', 'pinned', 'archived'].forEach((part) => {
+    [
+      'scheduled', 'hist', 'ttl', 'blocked', 'folders', 'drafts', 'pinned', 'archived', 'notify', 'notifydefaults',
+    ].forEach((part) => {
       localStorage.removeItem(`parvane:${part}:${user}`);
     });
   }
@@ -291,8 +319,12 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadBlocked,
     loadDrafts,
     loadFolders,
+    loadNotifyDefaults,
+    loadNotifyExceptions,
     loadPeerTtl,
     loadPinned,
+    saveNotifyDefaults,
+    saveNotifyExceptions,
     readOwnJournal,
     rescheduleMessage,
     saveBlocked,

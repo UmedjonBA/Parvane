@@ -55,9 +55,37 @@ import {
 import { getIsMobile } from '../hooks/useAppLayout';
 
 const UPDATE_THROTTLE = 5000;
+const PARVANE_SETTINGS_CACHE_KEY = 'parvane-account-settings';
 
 const updateCacheThrottled = throttle(() => onFullyIdle(() => updateCache()), UPDATE_THROTTLE, false);
 const updateCacheForced = () => updateCache(true);
+
+// Parvane: MTProto-сессии нет (saveSession не диспатчится) → полный global-кэш
+// выключен навсегда. Настройки при этом обязаны переживать перезапуск:
+// всегда-активный точечный персист sharedState (тема, send-combo, анимации)
+// и settings.byKey (уведомления, автозагрузка и т.д.)
+const persistParvaneSettingsThrottled = throttle(() => {
+  const global = getGlobal();
+  void cacheSharedState(reduceSharedState(global.sharedState));
+  void MAIN_IDB_STORE.set(PARVANE_SETTINGS_CACHE_KEY, global.settings.byKey);
+}, 1000, false);
+
+let prevParvaneSharedState: SharedState | undefined;
+let prevParvaneSettings: GlobalState['settings']['byKey'] | undefined;
+
+function watchParvaneSettings(global: GlobalState) {
+  if (isCaching) return; // полный кэш активен — он персистит сам
+  if (global.sharedState === prevParvaneSharedState && global.settings.byKey === prevParvaneSettings) {
+    return;
+  }
+  prevParvaneSharedState = global.sharedState;
+  prevParvaneSettings = global.settings.byKey;
+  persistParvaneSettingsThrottled();
+}
+
+export function loadCachedParvaneSettings() {
+  return MAIN_IDB_STORE.get<GlobalState['settings']['byKey']>(PARVANE_SETTINGS_CACHE_KEY);
+}
 
 let isCaching = false;
 let isRemovingCache = false;
@@ -96,6 +124,8 @@ export function initCache() {
   if (GLOBAL_STATE_CACHE_DISABLED) {
     return;
   }
+
+  addCallback(watchParvaneSettings);
 
   const resetCache = () => {
     isRemovingCache = true;

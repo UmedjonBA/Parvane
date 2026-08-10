@@ -21,7 +21,7 @@ import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireUserInfo } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
-import { ARCHIVED_FOLDER_ID } from '../../config';
+import { ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, UNMUTE_TIMESTAMP } from '../../config';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   clearLoginStorage,
@@ -412,9 +412,20 @@ const methods = {
         .filter(([chatId]) => visibleChats.some((chat) => chat.id === chatId)),
     );
 
+    // Saved Messages: self-чат обязан существовать в глобале всегда (иначе
+    // композер «Text not allowed» и вечный спиннер треда) — в видимый список
+    // при этом попадает только с историей
+    const selfChat = store.self ? store.buildApiChatForUser(store.self) : undefined;
+    const chatsPayload = selfChat && !visibleChats.some((chat) => chat.id === selfChat.id)
+      ? [...visibleChats, selfChat]
+      : visibleChats;
+    if (store.self && !users.some((user) => user.id === selfId())) {
+      users.push(store.buildApiUser(store.self));
+    }
+
     return {
       chatIds: visibleChats.map((chat) => chat.id),
-      chats: visibleChats,
+      chats: chatsPayload,
       users,
       userStatusesById,
       draftsById,
@@ -423,7 +434,10 @@ const methods = {
       orderedPinnedIds,
       totalChatCount: visibleChats.length,
       messages,
-      notifyExceptionById: {},
+      notifyExceptionById: Object.fromEntries(
+        Object.entries(localState.loadNotifyExceptions())
+          .map(([address, settings]) => [store.getIdForAddress(address), settings]),
+      ),
       lastMessageByChatId,
     };
   },
@@ -473,6 +487,38 @@ const methods = {
   updateChatAdmin: groupController.updateChatAdmin,
 
   // ── пины и архив чатов (локальный persist) ──────────────────────────────────
+
+  // Дефолты уведомлений по типам чатов — локальный persist
+  fetchNotifyDefaultSettings() {
+    const stored = localState.loadNotifyDefaults();
+    return Promise.resolve({
+      users: stored.users || {},
+      groups: stored.groups || {},
+      channels: stored.channels || {},
+    });
+  },
+
+  updateNotificationSettings(peerType: string, settings: { isMuted?: boolean; shouldShowPreviews?: boolean }) {
+    const defaults = localState.loadNotifyDefaults();
+    defaults[peerType] = {
+      mutedUntil: settings.isMuted ? MUTE_INDEFINITE_TIMESTAMP : UNMUTE_TIMESTAMP,
+      shouldShowPreviews: settings.shouldShowPreviews,
+    };
+    localState.saveNotifyDefaults(defaults);
+    return Promise.resolve(true);
+  },
+
+  // Мьют/превью уведомлений: локальный persist по адресу, tt рисует бейдж и
+  // гасит уведомления через chats.notifyExceptionById
+  updateChatNotifySettings({ chat, settings }: { chat: ApiChat; settings: Record<string, unknown> }) {
+    const address = store.getAddressForId(chat.id);
+    if (!address) return Promise.resolve(undefined);
+    const exceptions = localState.loadNotifyExceptions();
+    exceptions[address] = { ...exceptions[address], ...settings };
+    localState.saveNotifyExceptions(exceptions);
+    sendUpdate({ '@type': 'updateChatNotifySettings', chatId: chat.id, settings: exceptions[address] });
+    return Promise.resolve(undefined);
+  },
 
   toggleChatPinned({ chat, shouldBePinned }: { chat: ApiChat; shouldBePinned: boolean }) {
     const address = store.getAddressForId(chat.id);

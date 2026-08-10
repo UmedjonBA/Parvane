@@ -1,7 +1,7 @@
 import type { GlobalState } from '../global/types';
 
 import { IS_MOCKED_CLIENT } from '../config';
-import { loadCache, loadCachedSharedState } from '../global/cache';
+import { loadCache, loadCachedParvaneSettings, loadCachedSharedState } from '../global/cache';
 import {
   getGlobal, setGlobal,
 } from '../global/index';
@@ -38,6 +38,14 @@ export async function initGlobal(force: boolean = false, prevGlobal?: GlobalStat
     const storedSharedState = await loadCachedSharedState();
     if (storedSharedState) {
       global.sharedState = storedSharedState;
+    }
+    // Parvane: без полного global-кэша настройки аккаунта персистятся отдельно
+    const storedSettings = await loadCachedParvaneSettings();
+    if (storedSettings) {
+      global.settings = {
+        ...global.settings,
+        byKey: { ...global.settings.byKey, ...storedSettings },
+      };
     }
   }
 
