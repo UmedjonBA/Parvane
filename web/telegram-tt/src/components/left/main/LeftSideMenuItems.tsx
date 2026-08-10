@@ -10,7 +10,6 @@ import {
   ANIMATION_LEVEL_MIN,
   ARCHIVED_FOLDER_ID,
   BETA_CHANGELOG_URL,
-  FEEDBACK_URL,
   IS_BETA,
   IS_TEST,
   PRODUCTION_HOSTNAME,
@@ -79,8 +78,6 @@ const LeftSideMenuItems = ({
     openChat,
     setSharedSettingOption,
     updatePerformanceSettings,
-    openChatByUsername,
-    openUrl,
     openChatWithInfo,
   } = getActions();
   const lang = useLang();
@@ -132,14 +129,6 @@ const LeftSideMenuItems = ({
 
   const handleSwitchToWebK = useLastCallback(() => {
     switchPermanentWebVersion('K');
-  });
-
-  const handleOpenTipsChat = useLastCallback(() => {
-    openChatByUsername({ username: lang('TelegramFeaturesUsername') });
-  });
-
-  const handleBugReportClick = useLastCallback(() => {
-    openUrl({ url: FEEDBACK_URL });
   });
 
   return (
@@ -223,19 +212,8 @@ const LeftSideMenuItems = ({
               <span className="menu-item-name capitalize">{lang('MenuUIFeaturesSwitch')}</span>
               <Toggle value={animationLevelValue} />
             </MenuItem>
-            <MenuSeparator />
-            <MenuItem
-              icon="help"
-              onClick={handleOpenTipsChat}
-            >
-              {lang('MenuTelegramFeatures')}
-            </MenuItem>
-            <MenuItem
-              icon="bug"
-              onClick={handleBugReportClick}
-            >
-              {lang('MenuReportBug')}
-            </MenuItem>
+            {/* Parvane: Telegram Features (t.me/TelegramTips) и Report a Bug
+                (bugs.telegram.org) ведут в инфраструктуру Telegram — скрыты */}
             {IS_BETA && (
               <MenuItem
                 icon="permissions"

@@ -86,7 +86,7 @@ import { selectCurrentLimit } from './limits';
 import { selectMessageDownloadableMedia } from './media';
 import { selectPeer, selectPeerPaidMessagesStars } from './peers';
 import { selectPeerStory } from './stories';
-import { selectCustomEmoji, selectIsStickerFavorite } from './symbols';
+import { selectCustomEmoji } from './symbols';
 import { selectTabState } from './tabs';
 import {
   selectEditingId,
@@ -547,7 +547,6 @@ export function selectAllowedMessageActionsSlow<T extends GlobalState>(
   const { content } = message;
   const isDocumentSticker = isMessageDocumentSticker(message);
   const isBoostMessage = message.content.action?.type === 'boostApply';
-  const isMonoforum = chat.isMonoforum;
 
   // https://github.com/telegramdesktop/tdesktop/blob/6627de646022af1394134974477109cd1439e1bb/Telegram/SourceFiles/data/data_peer_values.cpp#L367C2-L372C3
   const canPinMessage = (() => {
@@ -623,7 +622,8 @@ export function selectAllowedMessageActionsSlow<T extends GlobalState>(
     || getHasAdminRight(chat, 'deleteMessages')
   );
 
-  const canReport = !isPrivate && !isOwn;
+  // Parvane: жалоб некуда отправлять (нет модерации Telegram)
+  const canReport = false;
 
   const canDeleteForAll = canDelete && !chat.isForbidden && (
     (isPrivate && !isChatWithSelf && !isBotChat && !content.dice)
@@ -636,12 +636,12 @@ export function selectAllowedMessageActionsSlow<T extends GlobalState>(
 
   const canEdit = !isLocal && !isAction && isMessageEditable && hasMessageEditRight;
 
-  const hasSticker = Boolean(message.content.sticker);
-  const hasFavoriteSticker = hasSticker && selectIsStickerFavorite(global, message.content.sticker!);
-  const canFaveSticker = !isAction && hasSticker && !hasFavoriteSticker;
-  const canUnfaveSticker = !isAction && hasFavoriteSticker;
+  // Parvane: избранные стикеры не реализованы, t.me-ссылок на сообщения нет —
+  // соответствующие пункты меню скрыты
+  const canFaveSticker = undefined;
+  const canUnfaveSticker = undefined;
   const canCopy = !isAction;
-  const canCopyLink = !isLocal && !isAction && (isChannel || isSuperGroup) && !isMonoforum;
+  const canCopyLink = undefined;
   const canSelect = !isLocal && !isAction;
 
   const canDownload = selectMessageDownloadableMedia(global, message) && !hasTtl;

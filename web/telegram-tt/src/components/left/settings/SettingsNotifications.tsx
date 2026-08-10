@@ -24,7 +24,6 @@ type OwnProps = {
 
 type StateProps = {
   notifyDefaults?: Record<ApiNotifyPeerType, ApiPeerNotifySettings>;
-  hasContactJoinedNotifications: boolean;
   shouldNotifyAboutPinnedMessages: boolean;
   hasWebNotifications: boolean;
   hasPushNotifications: boolean;
@@ -35,7 +34,6 @@ const SettingsNotifications = ({
   isActive,
   onReset,
   notifyDefaults,
-  hasContactJoinedNotifications,
   shouldNotifyAboutPinnedMessages,
   hasPushNotifications,
   hasWebNotifications,
@@ -44,7 +42,6 @@ const SettingsNotifications = ({
   const {
     loadNotificationSettings,
     setSettingOption,
-    updateContactSignUpNotification,
     updateNotificationSettings,
     updateWebNotificationSettings,
   } = getActions();
@@ -114,12 +111,6 @@ const SettingsNotifications = ({
   const handleChannelsPreviewChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     handleSettingsChange(e, 'channels', 'showPreviews');
   }, [handleSettingsChange]);
-
-  const handleContactNotificationChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    updateContactSignUpNotification({
-      isSilent: !e.target.checked,
-    });
-  }, [updateContactSignUpNotification]);
 
   const handlePinnedMessagesNotificationChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setSettingOption({ shouldNotifyAboutPinnedMessages: e.target.checked });
@@ -229,11 +220,7 @@ const SettingsNotifications = ({
 
       <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('PhoneOther')}</IslandTitle>
       <Island>
-        <Checkbox
-          label={lang('ContactJoined')}
-          checked={hasContactJoinedNotifications}
-          onChange={handleContactNotificationChange}
-        />
+        {/* Parvane: «Contact joined» — серверная нотификация Telegram, скрыта */}
         <Checkbox
           label={lang('PinnedMessagesNotifications')}
           checked={shouldNotifyAboutPinnedMessages}
@@ -247,7 +234,6 @@ const SettingsNotifications = ({
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
     return {
-      hasContactJoinedNotifications: Boolean(global.settings.byKey.hasContactJoinedNotifications),
       shouldNotifyAboutPinnedMessages: global.settings.byKey.shouldNotifyAboutPinnedMessages,
       hasWebNotifications: global.settings.byKey.hasWebNotifications,
       hasPushNotifications: global.settings.byKey.hasPushNotifications,

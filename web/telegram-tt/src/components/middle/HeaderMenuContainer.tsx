@@ -18,9 +18,6 @@ import {
   getCanManageTopic,
   getHasAdminRight,
   getIsSavedDialog,
-  isChatAdmin,
-  isChatChannel,
-  isChatGroup,
   isSystemBot,
   isUserRightBanned,
 } from '../../global/helpers';
@@ -212,7 +209,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
     toggleStatistics,
     openMonetizationStatistics,
     openBoostStatistics,
-    openGiftModal,
     openThreadWithInfo,
     openCreateTopicPanel,
     openEditTopicPanel,
@@ -225,9 +221,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
     setViewForumAsMessages,
     openBoostModal,
     reportMessages,
-    showNotification,
-    toggleNoForwards,
-    openDisableSharingAboutModal,
   } = getActions();
 
   const oldLang = useOldLang();
@@ -246,13 +239,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
     (!isChatInfoShown && isForum) ? true : undefined, CLOSE_MENU_ANIMATION_DURATION,
   );
   const viewInfoLangKey = getViewInfoLangKey(isTopic, isBotForum);
-
-  const areAllGiftsDisallowed = useMemo(() => {
-    if (!disallowedGifts) {
-      return undefined;
-    }
-    return Object.values(disallowedGifts).every(Boolean);
-  }, [disallowedGifts]);
 
   const closeMuteModal = useLastCallback(() => {
     setIsMuteModalOpen(false);
@@ -398,20 +384,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
     closeMenu();
   });
 
-  const handleGiftClick = useLastCallback(() => {
-    if (areAllGiftsDisallowed && chat) {
-      showNotification({ message: lang('SendDisallowError') });
-      return;
-    }
-    openGiftModal({ forUserId: chatId });
-    if (isAccountFrozen) {
-      openFrozenAccountModal();
-    } else {
-      openGiftModal({ forUserId: chatId });
-    }
-    closeMenu();
-  });
-
   const handleAddContactClick = useLastCallback(() => {
     if (isAccountFrozen) {
       openFrozenAccountModal();
@@ -514,21 +486,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
     closeMenu();
   });
 
-  const handleToggleNoForwards = useLastCallback(() => {
-    closeMenu();
-    if (isAccountFrozen) {
-      openFrozenAccountModal();
-      return;
-    }
-
-    if (noForwardsMyEnabled || noForwardsPeerEnabled) {
-      toggleNoForwards({ userId: chatId, isEnabled: false });
-      return;
-    }
-
-    openDisableSharingAboutModal({ userId: chatId });
-  });
-
   const handleSendChannelMessage = useLastCallback(() => {
     openChat({ id: channelMonoforumId });
     closeMenu();
@@ -624,14 +581,14 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
             icon="schedule"
             submenu={(
               <>
-                <MenuItem onClick={() => handleAutoDelete(0)}>Выключить</MenuItem>
-                <MenuItem onClick={() => handleAutoDelete(3600)}>1 час</MenuItem>
-                <MenuItem onClick={() => handleAutoDelete(86400)}>1 день</MenuItem>
-                <MenuItem onClick={() => handleAutoDelete(604800)}>1 неделя</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(0)}>{oldLang('ParvaneAutoDeleteOff')}</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(3600)}>{oldLang('ParvaneAutoDelete1h')}</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(86400)}>{oldLang('ParvaneAutoDelete1d')}</MenuItem>
+                <MenuItem onClick={() => handleAutoDelete(604800)}>{oldLang('ParvaneAutoDelete1w')}</MenuItem>
               </>
             )}
           >
-            Автоудаление
+            {oldLang('ParvaneAutoDelete')}
           </NestedMenuItem>
           {withForumActions && canCreateTopic && (
             <>
@@ -832,28 +789,14 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
             </MenuItem>
           )}
           {botButtons}
-          {canGift && (
-            <MenuItem
-              icon="gift"
-              onClick={handleGiftClick}
-            >
-              {oldLang('ProfileSendAGift')}
-            </MenuItem>
-          )}
+          {/* Parvane: подарки (Premium) и переключатель noForwards не
+              поддерживаются бэкендом — пункты скрыты */}
           {isBot && (
             <MenuItem
               icon={isBlocked ? 'bots' : 'hand-stop'}
               onClick={isBlocked ? handleRestartBot : handleBlock}
             >
               {isBlocked ? oldLang('BotRestart') : oldLang('Bot.Stop')}
-            </MenuItem>
-          )}
-          {isPrivate && !isChatWithSelf && !isBot && (
-            <MenuItem
-              icon={noForwardsMyEnabled || noForwardsPeerEnabled ? 'allow-share' : 'no-share'}
-              onClick={handleToggleNoForwards}
-            >
-              {noForwardsMyEnabled || noForwardsPeerEnabled ? lang('EnableSharing') : lang('DisableSharing')}
             </MenuItem>
           )}
           {isPrivate && !isChatWithSelf && !isBot && (
@@ -923,7 +866,8 @@ export default memo(withGlobal<OwnProps>(
     const isMainThread = threadId === MAIN_THREAD_ID;
     const isChatWithSelf = selectIsChatWithSelf(global, chatId);
     const { chatId: currentChatId, threadId: currentThreadId } = selectCurrentMessageList(global) || {};
-    const canReportChat = isMainThread && !user && (isChatChannel(chat) || isChatGroup(chat)) && !isChatAdmin(chat);
+    // Parvane: жалобы не поддерживаются (нет модерации Telegram)
+    const canReportChat = false;
 
     const chatBot = !isSystemBot(chatId) ? selectBot(global, chatId) : undefined;
     const userFullInfo = isPrivate ? selectUserFullInfo(global, chatId) : undefined;
