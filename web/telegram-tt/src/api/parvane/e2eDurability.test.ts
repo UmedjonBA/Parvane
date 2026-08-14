@@ -35,18 +35,19 @@ describe('E2E decrypt durability', () => {
       one_time: oneTime,
     });
     const innerJson = JSON.stringify({ from: 'dur-alice@local', content: { kind: 'text', text: 'restore me' } });
-    const sealed = (await alice.encryptFor('dur-bob@local', innerJson, fetchBundle))!;
-    expect(sealed).toBeTruthy();
+    const sealedResult = (await alice.encryptForDevices('dur-bob@local', innerJson, fetchBundle))!;
+    expect(sealedResult).toBeTruthy();
+    const sealed = sealedResult.copies[0];
 
     // Расшифровка БЕЗ cacheInner — «резкий kill» до атомарного персиста:
     // ратчет уехал только в памяти, на диск попасть не должен
-    const plain = bob.decryptFrom(sealed.sender_identity, sealed.ctype, sealed.ciphertext);
+    const plain = bob.decryptFrom(sealedResult.senderIdentity, sealed.ctype, sealed.ciphertext);
     expect(plain).toContain('restore me');
     await bob.flushStorage();
 
     // Рестарт: ратчет на диске не продвинут — то же sealed читается снова
     bob = await E2eEngine.create('dur-bob@local');
-    const again = bob.decryptFrom(sealed.sender_identity, sealed.ctype, sealed.ciphertext);
+    const again = bob.decryptFrom(sealedResult.senderIdentity, sealed.ctype, sealed.ciphertext);
     expect(again).toContain('restore me');
 
     // Атомарный персист: cacheInner кладёт inner и продвинутый ратчет одним
@@ -55,6 +56,6 @@ describe('E2E decrypt durability', () => {
     await bob.flushStorage();
     bob = await E2eEngine.create('dur-bob@local');
     expect(bob.getCachedInner('uuid-durability')?.content).toMatchObject({ text: 'restore me' });
-    expect(bob.decryptFrom(sealed.sender_identity, sealed.ctype, sealed.ciphertext)).toBeUndefined();
+    expect(bob.decryptFrom(sealedResult.senderIdentity, sealed.ctype, sealed.ciphertext)).toBeUndefined();
   });
 });

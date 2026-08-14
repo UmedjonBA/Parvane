@@ -60,6 +60,7 @@ export function createSyncController(deps: SyncDependencies) {
     return {
       last_seen_id: lastSeenId,
       since_updated: updatedSince,
+      device_id: e2e?.deviceId || '',
       sender_signing_key: e2e?.signingKey,
       signature: e2e?.signCallData(`sync:${lastSeenId}:${updatedSince}`),
     };
@@ -95,10 +96,23 @@ export function createSyncController(deps: SyncDependencies) {
     if (updatedAt > sinceUpdated) sinceUpdated = updatedAt;
   }
 
-  function unsealStored(stored: WireStoredMessage): UnsealResult {
-    const content = stored.content;
+  function unsealStored(rawStored: WireStoredMessage): UnsealResult {
     const e2e = deps.getE2e();
     const store = deps.getStore();
+    // Мультидевайс: live-пуш несёт копии всех устройств адресата — подменяем
+    // шифртекст своей (по device_id) до расшифровки. В sync-ответах сервер
+    // уже подменил, copies там пусто
+    const ownCopy = e2e && rawStored.content.kind === 'encrypted'
+      ? rawStored.copies?.find((copy) => copy.device_id === e2e.deviceId
+        && (copy.recipient === store.self || (copy.signing_key && copy.signing_key === e2e.signingKey)))
+      : undefined;
+    const stored = ownCopy
+      ? {
+        ...rawStored,
+        content: { ...rawStored.content, ciphertext: ownCopy.ciphertext, ctype: ownCopy.ctype },
+      }
+      : rawStored;
+    const content = stored.content;
     const cached = e2e?.getCachedInner(stored.id);
 
     // A sealed tombstone intentionally has no ciphertext or public sender.

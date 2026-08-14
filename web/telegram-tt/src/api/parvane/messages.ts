@@ -2,7 +2,7 @@ import type { SendMessageParams } from '../../types';
 import type {
   ApiChat, ApiMessage, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
 } from '../types';
-import type { E2eEngine } from './e2e';
+import type { E2eEngine, WireDeviceBundle } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { createLocalState } from './localState';
 import type { createMediaService } from './media';
@@ -34,6 +34,7 @@ import {
   TOPIC_MSG_READ,
   TOPIC_MSG_SEND,
   TOPIC_PREKEYS_FETCH,
+  type WireDeviceCopy,
   type WireMessageContent,
   type WirePackRef,
 } from './wire';
@@ -72,10 +73,61 @@ export function createMessageController(deps: MessageDependencies) {
   const token = () => deps.getToken();
 
   async function fetchPrekeyBundle(user: string) {
-    const raw = await connection()!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({ token: token(), user }));
+    const engine = deps.getE2e();
+    const raw = await connection()!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
+      token: token(), user, known_devices: engine?.getKnownDeviceIds(user) || [],
+    }));
     return JSON.parse(raw) as {
-      ok: boolean; identity_key?: string; signed_prekey?: string; one_time?: string;
+      ok: boolean;
+      identity_key?: string;
+      signed_prekey?: string;
+      one_time?: string;
+      devices?: WireDeviceBundle[];
     };
+  }
+
+  // Запечатать inner для всех устройств адресата (мультидевайс): основной
+  // шифртекст — копия «primary»-устройства ('' приоритетно, wire-совместимость
+  // с desktop), остальные устройства едут в copies. Плюс best-effort копии для
+  // СВОИХ других устройств (recipient пуст — sealed sender, владельца задаёт
+  // signing_key), чтобы исходящие читались на втором устройстве
+  async function sealForAddress(toAddress: string, innerJson: string) {
+    const engine = requireE2e(deps.getE2e());
+    const sealed = requireEncrypted(
+      await engine.encryptForDevices(toAddress, innerJson, fetchPrekeyBundle),
+      `No usable prekey/session for ${toAddress}.`,
+    );
+    const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
+    const copies: WireDeviceCopy[] = sealed.copies.map((copy) => ({
+      recipient: toAddress, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
+    }));
+    try {
+      const selfSealed = await engine.encryptForDevices(
+        store().self, innerJson, fetchPrekeyBundle, engine.deviceId,
+      );
+      selfSealed?.copies.forEach((copy) => {
+        // signing_key ЦЕЛЕВОГО устройства: по нему то устройство заберёт копию
+        // своим подписанным sync (recipient пуст — sealed sender)
+        copies.push({
+          recipient: '',
+          signing_key: copy.deviceSigningKey,
+          device_id: copy.deviceId,
+          ciphertext: copy.ciphertext,
+          ctype: copy.ctype,
+        });
+      });
+    } catch {
+      // Свои устройства догонят историю после экспорта/импорта ключей —
+      // недоставленная self-копия не должна ронять отправку получателю
+    }
+    const content: WireMessageContent = {
+      kind: 'encrypted',
+      ciphertext: primary.ciphertext,
+      ctype: primary.ctype,
+      sender_identity: sealed.senderIdentity,
+      sender_signing_key: engine.signingKey,
+    };
+    return { content, copies };
   }
 
   async function distributeGroupKey(group: string, members: string[]) {
@@ -89,8 +141,9 @@ export function createMessageController(deps: MessageDependencies) {
     const innerJson = JSON.stringify({ from: currentStore.self, content });
 
     await deliverToEveryGroupMember(members, currentStore.self, async (member) => {
-      const encrypted = await engine.encryptFor(member, innerJson, fetchPrekeyBundle);
-      if (!encrypted) return false;
+      const sealed = await engine.encryptForDevices(member, innerJson, fetchPrekeyBundle);
+      if (!sealed) return false;
+      const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
       connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
         id: crypto.randomUUID(),
         from: '',
@@ -100,16 +153,54 @@ export function createMessageController(deps: MessageDependencies) {
           to: member,
           content: {
             kind: 'encrypted',
-            ciphertext: encrypted.ciphertext,
-            ctype: encrypted.ctype,
-            sender_identity: encrypted.sender_identity,
+            ciphertext: primary.ciphertext,
+            ctype: primary.ctype,
+            sender_identity: sealed.senderIdentity,
             sender_signing_key: engine.signingKey,
           },
+          copies: sealed.copies.map((copy) => ({
+            recipient: member, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
+          })),
         },
       }));
       return true;
     });
+    await distributeGroupKeyToOwnDevices(group, innerJson);
     return epoch;
+  }
+
+  // SKDM своим другим устройствам: без него второе устройство не прочтёт
+  // группу от этого отправителя. Best-effort — их отсутствие не ломает отправку
+  async function distributeGroupKeyToOwnDevices(group: string, innerJson: string) {
+    const engine = requireE2e(deps.getE2e());
+    const self = store().self;
+    try {
+      const sealed = await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId);
+      if (!sealed) return;
+      const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
+      connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
+        id: crypto.randomUUID(),
+        from: '',
+        ts: Math.floor(Date.now() / 1000),
+        token: token(),
+        payload: {
+          to: self,
+          content: {
+            kind: 'encrypted',
+            ciphertext: primary.ciphertext,
+            ctype: primary.ctype,
+            sender_identity: sealed.senderIdentity,
+            sender_signing_key: engine.signingKey,
+          },
+          copies: sealed.copies.map((copy) => ({
+            recipient: self, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
+          })),
+        },
+      }));
+    } catch {
+      // Нет других устройств или сеть — группа для них станет читаемой после
+      // следующей успешной раздачи ключа
+    }
   }
 
   async function publishInner(
@@ -157,10 +248,7 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     const inner = JSON.stringify({ from: currentStore.self, content: wireContent });
-    const encrypted = requireEncrypted(
-      await engine.encryptFor(toAddress, inner, fetchPrekeyBundle),
-      `No usable prekey/session for ${toAddress}.`,
-    );
+    const sealed = await sealForAddress(toAddress, inner);
     connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
       id: uuid,
       from: '',
@@ -168,13 +256,8 @@ export function createMessageController(deps: MessageDependencies) {
       token: token(),
       payload: {
         to: toAddress,
-        content: {
-          kind: 'encrypted',
-          ciphertext: encrypted.ciphertext,
-          ctype: encrypted.ctype,
-          sender_identity: encrypted.sender_identity,
-          sender_signing_key: engine.signingKey,
-        },
+        content: sealed.content,
+        copies: sealed.copies,
       },
     }));
     if (!isEphemeral) {
@@ -713,19 +796,12 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     const plainContent = wireContent;
+    let sealedCopies: WireDeviceCopy[];
     try {
       const innerJson = JSON.stringify({ from: currentStore.self, content: wireContent });
-      const encrypted = requireEncrypted(
-        await engine.encryptFor(toAddress, innerJson, fetchPrekeyBundle),
-        `No usable prekey/session for ${toAddress}.`,
-      );
-      wireContent = {
-        kind: 'encrypted',
-        ciphertext: encrypted.ciphertext,
-        ctype: encrypted.ctype,
-        sender_identity: encrypted.sender_identity,
-        sender_signing_key: engine.signingKey,
-      };
+      const sealed = await sealForAddress(toAddress, innerJson);
+      wireContent = sealed.content;
+      sealedCopies = sealed.copies;
     } catch (error) {
       reportEncryptionSendFailure(chat.id, localMessage.id, error);
       return;
@@ -737,7 +813,9 @@ export function createMessageController(deps: MessageDependencies) {
       from: '',
       ts,
       token: token(),
-      payload: { to: toAddress, content: wireContent, reply_to: replyToUuid },
+      payload: {
+        to: toAddress, content: wireContent, reply_to: replyToUuid, copies: sealedCopies,
+      },
     }));
     if (!ttlSecs) {
       deps.localState.appendOwnJournal({
@@ -777,6 +855,7 @@ export function createMessageController(deps: MessageDependencies) {
       const engine = requireE2e(deps.getE2e());
       const plainContent = { kind: 'text', text, entities: [] };
       let encryptedContent: WireMessageContent;
+      let editCopies: WireDeviceCopy[] = [];
       const groupInfo = currentStore.getGroupInfo(toAddress);
       if (groupInfo) {
         const epoch = await distributeGroupKey(
@@ -796,21 +875,15 @@ export function createMessageController(deps: MessageDependencies) {
         };
       } else {
         const inner = JSON.stringify({ from: currentStore.self, content: plainContent });
-        const encrypted = requireEncrypted(
-          await engine.encryptFor(toAddress, inner, fetchPrekeyBundle),
-          `No usable prekey/session for ${toAddress}.`,
-        );
-        encryptedContent = {
-          kind: 'encrypted',
-          ciphertext: encrypted.ciphertext,
-          ctype: encrypted.ctype,
-          sender_identity: encrypted.sender_identity,
-          sender_signing_key: engine.signingKey,
-        };
+        const sealed = await sealForAddress(toAddress, inner);
+        encryptedContent = sealed.content;
+        editCopies = sealed.copies;
       }
       const signature = engine.signCallData(`edit:${uuid}:${encryptedContent.ciphertext}`);
       activeConnection.publish(TOPIC_MSG_EDIT, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), { message_id: uuid, content: encryptedContent, signature }),
+        buildWireEvent(currentStore.self, token(), {
+          message_id: uuid, content: encryptedContent, signature, copies: editCopies,
+        }),
       ));
       engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
       const edited: ApiMessage = { ...message, content: { text: { text } }, isEdited: true };

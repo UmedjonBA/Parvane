@@ -33,14 +33,34 @@ function locateOlmWasm() {
   return olmWasmPath;
 }
 
+export type WireDeviceBundle = {
+  device_id: string;
+  signing_key?: string;
+  identity_key: string;
+  signed_prekey?: string;
+  one_time?: string;
+};
+
 type BundleFetcher = (user: string) => Promise<{
   ok: boolean;
   identity_key?: string;
   signed_prekey?: string;
   one_time?: string;
+  devices?: WireDeviceBundle[];
 } | undefined>;
 
+export type DeviceCiphertext = {
+  deviceId: string;
+  // Ed25519 ЦЕЛЕВОГО устройства: им помечаются self-копии, чтобы то устройство
+  // забрало их своим подписанным sync
+  deviceSigningKey: string;
+  ciphertext: string;
+  ctype: number;
+};
+
 type StoredInner = { from: string; content: unknown };
+
+type ContactDevice = { identity: string; signing: string };
 
 type PersistedE2eState = {
   version: number;
@@ -53,7 +73,15 @@ type PersistedE2eState = {
   groupIn: Record<string, { pickle: string; epoch: number }>;
   groupRecipients: Record<string, string[]>;
   published: boolean;
+  // Мультидевайс (опциональны для обратной совместимости снапшотов/бэкапов):
+  // id этого устройства ('' — legacy-primary) и известные устройства контактов
+  deviceId?: string;
+  contactDevices?: Record<string, Record<string, ContactDevice>>;
 };
+
+// Как часто перепроверять список устройств контакта перед отправкой (обнаружение
+// новых устройств). Известные устройства не расходуют one-time при fetch
+const DEVICE_LIST_TTL_MS = 15000;
 
 let isOlmReady = false;
 
@@ -81,6 +109,13 @@ export class E2eEngine {
 
   private identityByContact: Record<string, string> = {};
 
+  // Мультидевайс: contact → deviceId → {identity, signing}. Sessions остаются
+  // keyed по identity (он уникален на устройство)
+  private devicesByContact = new Map<string, Record<string, ContactDevice>>();
+
+  // Когда список устройств контакта запрашивался в последний раз (не персистится)
+  private deviceListFetchedAt = new Map<string, number>();
+
   private decCache: Record<string, StoredInner> = {};
 
   // Megolm: своя исходящая group-сессия на группу (+ эпоха для ротации) и
@@ -98,6 +133,10 @@ export class E2eEngine {
   identityKey = '';
 
   signingKey = '';
+
+  // '' — legacy-primary (прежние установки и desktop); новые установки получают
+  // uuid при создании аккаунта. Персистится вместе с состоянием (и в бэкапе)
+  deviceId = '';
 
   static async create(self: string) {
     if (!isOlmReady) {
@@ -152,6 +191,17 @@ export class E2eEngine {
     });
     this.identityByContact = state.contacts || {};
     this.decCache = state.decCache || {};
+    this.deviceId = state.deviceId ?? '';
+    Object.entries(state.contactDevices || {}).forEach(([contact, devices]) => {
+      this.devicesByContact.set(contact, devices);
+    });
+    // Миграция до-мультидевайсного снапшота: единственная известная identity
+    // контакта — его legacy-primary устройство ''
+    Object.entries(this.identityByContact).forEach(([contact, identity]) => {
+      if (!this.devicesByContact.has(contact)) {
+        this.devicesByContact.set(contact, { '': { identity, signing: '' } });
+      }
+    });
 
     Object.entries(state.groupOut || {}).forEach(([group, { pickle, epoch }]) => {
       const session = new Olm.OutboundGroupSession();
@@ -173,9 +223,12 @@ export class E2eEngine {
     const accountPickle = localStorage.getItem(this.legacyStorageKey('account'));
     this.pickleKey = randomSecret();
     if (!accountPickle) {
+      // Совсем новая установка: свой Olm-аккаунт и свой device_id — не
+      // перетирает ключи других устройств этого пользователя на сервере
       this.account = new Olm.Account();
       this.account.create();
       this.loadIdentityKeys();
+      this.deviceId = crypto.randomUUID();
       E2eEngine.clearLegacyState(this.self);
       return;
     }
@@ -229,6 +282,8 @@ export class E2eEngine {
       groupIn,
       groupRecipients: Object.fromEntries(this.groupRecipients),
       published: this.published,
+      deviceId: this.deviceId,
+      contactDevices: Object.fromEntries(this.devicesByContact),
     };
   }
 
@@ -293,6 +348,8 @@ export class E2eEngine {
 
     return {
       token,
+      device_id: this.deviceId,
+      signing_key: this.signingKey,
       registration_id: 1,
       identity_key: this.identityKey,
       signed_prekey_id: 1,
@@ -379,34 +436,100 @@ export class E2eEngine {
     return engine;
   }
 
-  // Шифрует inner-JSON для контакта; undefined — E2E недоступен (нет бандла)
-  async encryptFor(contact: string, innerJson: string, fetchBundle: BundleFetcher) {
-    let identity = this.identityByContact[contact];
-    let session = identity ? this.sessionsByIdentity.get(identity) : undefined;
+  // ── Мультидевайс: fan-out по устройствам контакта ─────────────────────────
 
-    if (!session) {
-      const bundle = await fetchBundle(contact);
-      if (!bundle?.ok || !bundle.identity_key) return undefined;
-      const oneTimeKey = bundle.one_time || bundle.signed_prekey;
-      if (!oneTimeKey) return undefined;
+  // Устройства контакта, с которыми уже есть сессии — identity передаётся в
+  // prekeys.fetch как known_devices (их one-time не расходуются)
+  getKnownDeviceIds(contact: string): string[] {
+    const devices = this.devicesByContact.get(contact) || {};
+    const known = Object.entries(devices)
+      .filter(([, device]) => this.sessionsByIdentity.has(device.identity))
+      .map(([deviceId]) => deviceId);
+    // Своё текущее устройство «известно» всегда — иначе каждый fetch самого
+    // себя расходовал бы собственную one-time
+    if (contact === this.self && !known.includes(this.deviceId)) known.push(this.deviceId);
+    return known;
+  }
 
-      identity = bundle.identity_key;
-      session = new Olm.Session();
-      session.create_outbound(this.account, identity, oneTimeKey);
-      this.sessionsByIdentity.set(identity, session);
-      this.identityByContact[contact] = identity;
-      this.persistAccount();
-      this.persistContacts();
+  // Обновить список устройств контакта и установить сессии с новыми.
+  // Сетевая ошибка не фатальна — работаем с известными устройствами
+  private async refreshContactDevices(contact: string, fetchBundle: BundleFetcher) {
+    const now = Date.now();
+    const fetchedAt = this.deviceListFetchedAt.get(contact) || 0;
+    if (this.devicesByContact.has(contact) && now - fetchedAt < DEVICE_LIST_TTL_MS) return;
+
+    let bundle: Awaited<ReturnType<BundleFetcher>>;
+    try {
+      bundle = await fetchBundle(contact);
+    } catch {
+      return;
     }
+    if (!bundle?.ok) return;
+    const devices: WireDeviceBundle[] = bundle.devices?.length ? bundle.devices : (
+      // Legacy identity без списка устройств — считаем его primary ('')
+      bundle.identity_key ? [{
+        device_id: '',
+        identity_key: bundle.identity_key,
+        signed_prekey: bundle.signed_prekey,
+        one_time: bundle.one_time,
+      }] : []
+    );
+    if (!devices.length) return;
 
-    const encrypted = session.encrypt(innerJson) as { type: number; body: string };
+    const next: Record<string, ContactDevice> = {};
+    let accountChanged = false;
+    devices.forEach((device) => {
+      // Своё текущее устройство в списке самого себя — сессия не нужна
+      if (!device.identity_key || device.identity_key === this.identityKey) return;
+      next[device.device_id] = { identity: device.identity_key, signing: device.signing_key || '' };
+      if (this.sessionsByIdentity.has(device.identity_key)) return;
+      const oneTimeKey = device.one_time || device.signed_prekey;
+      if (!oneTimeKey) return;
+      const session = new Olm.Session();
+      session.create_outbound(this.account, device.identity_key, oneTimeKey);
+      this.sessionsByIdentity.set(device.identity_key, session);
+      accountChanged = true;
+    });
+    this.devicesByContact.set(contact, next);
+    this.deviceListFetchedAt.set(contact, now);
+    if (!Object.keys(next).length) return;
+    const primary = devices.find((device) => device.device_id === '') || devices[0];
+    if (primary.identity_key !== this.identityKey) {
+      this.identityByContact[contact] = primary.identity_key;
+    }
+    if (accountChanged) this.persistAccount();
+    this.persistContacts();
+  }
+
+  // Шифрует inner-JSON для ВСЕХ устройств контакта (мультидевайс). undefined —
+  // E2E недоступен (нет ни одного устройства с рабочей сессией).
+  // `skipDeviceId` — не шифровать для этого устройства (своё текущее при
+  // fan-out самому себе). Частичное покрытие (часть устройств без сессии) —
+  // не ошибка: копии получают те, до кого дотянулись
+  async encryptForDevices(
+    contact: string,
+    innerJson: string,
+    fetchBundle: BundleFetcher,
+    skipDeviceId?: string,
+  ): Promise<{ copies: DeviceCiphertext[]; senderIdentity: string } | undefined> {
+    await this.refreshContactDevices(contact, fetchBundle);
+    const devices = this.devicesByContact.get(contact);
+    if (!devices) return undefined;
+
+    const copies: DeviceCiphertext[] = [];
+    Object.entries(devices).forEach(([deviceId, device]) => {
+      if (skipDeviceId !== undefined && deviceId === skipDeviceId) return;
+      const session = this.sessionsByIdentity.get(device.identity);
+      if (!session) return;
+      const encrypted = session.encrypt(innerJson) as { type: number; body: string };
+      copies.push({
+        deviceId, deviceSigningKey: device.signing, ciphertext: encrypted.body, ctype: encrypted.type,
+      });
+    });
+    if (!copies.length) return undefined;
     this.persistSessions();
     await this.flushStorage();
-    return {
-      ciphertext: encrypted.body,
-      ctype: encrypted.type,
-      sender_identity: this.identityKey,
-    };
+    return { copies, senderIdentity: this.identityKey };
   }
 
   // Расшифровка входящего; undefined — не смогли (нет сессии/чужой ratchet).

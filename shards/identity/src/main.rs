@@ -338,33 +338,36 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
 
 // ── E2E prekeys (Фаза 2) ──────────────────────────────────────────────────────
 
-/// Сохранить/обновить бандл пользователя: долгоживущие ключи (UPSERT) + пачка
-/// одноразовых (INSERT OR IGNORE — key_id уникален на пользователя).
+/// Сохранить/обновить бандл УСТРОЙСТВА пользователя (мультидевайс): долгоживущие
+/// ключи (UPSERT по (username, device_id)) + пачка одноразовых (INSERT OR IGNORE).
 ///
-/// Смена identity_key = пере-инициализация устройства (новый Olm-аккаунт):
-/// все прежние one-time принадлежат СТАРОМУ устройству и для X3DH с новым
-/// невалидны (а из-за коллизий key_id новые бы игнорировались) — вычищаем.
+/// Смена identity_key = пере-инициализация ЭТОГО устройства (новый Olm-аккаунт):
+/// его прежние one-time невалидны для X3DH с новым ключом (а из-за коллизий
+/// key_id новые бы игнорировались) — вычищаем. Другие устройства не трогаем.
 async fn store_prekeys(pool: &SqlitePool, username: &str, req: &PublishPrekeysRequest) -> Result<()> {
     let prev: Option<(String,)> =
-        sqlx::query_as("SELECT identity_key FROM device_keys WHERE username = ?")
+        sqlx::query_as("SELECT identity_key FROM device_keys WHERE username = ? AND device_id = ?")
             .bind(username)
+            .bind(&req.device_id)
             .fetch_optional(pool)
             .await
             .context("чтение прежнего identity_key")?;
     let device_changed = prev.map(|(k,)| k != req.identity_key).unwrap_or(false);
     if device_changed {
-        sqlx::query("DELETE FROM one_time_prekeys WHERE username = ?")
+        sqlx::query("DELETE FROM one_time_prekeys WHERE username = ? AND device_id = ?")
             .bind(username)
+            .bind(&req.device_id)
             .execute(pool)
             .await
             .context("очистка one_time старого устройства")?;
     }
     sqlx::query(
         "INSERT INTO device_keys
-           (username, registration_id, identity_key, signed_prekey_id,
+           (username, device_id, signing_key, registration_id, identity_key, signed_prekey_id,
             signed_prekey, signed_prekey_sig, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(username) DO UPDATE SET
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(username, device_id) DO UPDATE SET
+            signing_key = excluded.signing_key,
             registration_id = excluded.registration_id,
             identity_key = excluded.identity_key,
             signed_prekey_id = excluded.signed_prekey_id,
@@ -373,6 +376,8 @@ async fn store_prekeys(pool: &SqlitePool, username: &str, req: &PublishPrekeysRe
             updated_at = excluded.updated_at",
     )
     .bind(username)
+    .bind(&req.device_id)
+    .bind(&req.signing_key)
     .bind(req.registration_id)
     .bind(&req.identity_key)
     .bind(req.signed_prekey_id)
@@ -384,10 +389,11 @@ async fn store_prekeys(pool: &SqlitePool, username: &str, req: &PublishPrekeysRe
     .context("сохранение device_keys")?;
     for otp in &req.one_time {
         sqlx::query(
-            "INSERT OR IGNORE INTO one_time_prekeys (username, key_id, public_key)
-             VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO one_time_prekeys (username, device_id, key_id, public_key)
+             VALUES (?, ?, ?, ?)",
         )
         .bind(username)
+        .bind(&req.device_id)
         .bind(otp.key_id)
         .bind(&otp.public_key)
         .execute(pool)
@@ -397,50 +403,86 @@ async fn store_prekeys(pool: &SqlitePool, username: &str, req: &PublishPrekeysRe
     Ok(())
 }
 
-/// Бандл собеседника для X3DH. Атомарно снимает одну доступную one-time
-/// (UPDATE … RETURNING — без гонки). Если ключей нет — ok=false; если нет
-/// одноразовых — бандл без них (валидный X3DH-фолбэк).
-async fn fetch_bundle(pool: &SqlitePool, username: &str) -> Result<FetchBundleResponse> {
-    let dk: Option<(i64, String, i64, String, String)> = sqlx::query_as(
-        "SELECT registration_id, identity_key, signed_prekey_id, signed_prekey, signed_prekey_sig
-         FROM device_keys WHERE username = ?",
+fn empty_bundle_response(error: Option<String>) -> FetchBundleResponse {
+    FetchBundleResponse {
+        ok: error.is_none(),
+        registration_id: None,
+        identity_key: None,
+        signed_prekey_id: None,
+        signed_prekey: None,
+        signed_prekey_sig: None,
+        one_time_id: None,
+        one_time: None,
+        devices: vec![],
+        error,
+    }
+}
+
+/// Бандлы ВСЕХ устройств собеседника для X3DH (мультидевайс). Для устройств не
+/// из `known_devices` атомарно снимает по одной one-time (UPDATE … RETURNING —
+/// без гонки); для известных (сессия уже есть) one-time не расходуется.
+/// Верхнеуровневые legacy-поля — бандл «primary»-устройства ('' приоритетно,
+/// иначе самое свежее) для одно-девайсных клиентов. Если ключей нет — ok=false.
+async fn fetch_bundle(
+    pool: &SqlitePool,
+    username: &str,
+    known_devices: &[String],
+) -> Result<FetchBundleResponse> {
+    let rows: Vec<(String, String, i64, String, i64, String, String)> = sqlx::query_as(
+        "SELECT device_id, signing_key, registration_id, identity_key, signed_prekey_id,
+                signed_prekey, signed_prekey_sig
+         FROM device_keys WHERE username = ?
+         ORDER BY CASE WHEN device_id = '' THEN 0 ELSE 1 END, updated_at DESC",
     )
     .bind(username)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
-    let Some((reg, ik, spid, sp, sig)) = dk else {
-        return Ok(FetchBundleResponse {
-            ok: false,
-            registration_id: None,
-            identity_key: None,
-            signed_prekey_id: None,
-            signed_prekey: None,
-            signed_prekey_sig: None,
-            one_time_id: None,
-            one_time: None,
-            error: Some("нет ключей пользователя".into()),
+    if rows.is_empty() {
+        return Ok(empty_bundle_response(Some("нет ключей пользователя".into())));
+    }
+
+    let mut devices = Vec::with_capacity(rows.len());
+    for (device_id, signing_key, reg, ik, spid, sp, sig) in rows {
+        let otp: Option<(i64, String)> = if known_devices.contains(&device_id) {
+            None
+        } else {
+            sqlx::query_as(
+                "UPDATE one_time_prekeys SET consumed = 1
+                 WHERE rowid = (SELECT rowid FROM one_time_prekeys
+                                WHERE username = ? AND device_id = ? AND consumed = 0
+                                ORDER BY key_id LIMIT 1)
+                 RETURNING key_id, public_key",
+            )
+            .bind(username)
+            .bind(&device_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+        };
+        devices.push(parvane_types::DeviceBundle {
+            device_id,
+            signing_key,
+            registration_id: reg,
+            identity_key: ik,
+            signed_prekey_id: spid,
+            signed_prekey: sp,
+            signed_prekey_sig: sig,
+            one_time_id: otp.as_ref().map(|(k, _)| *k),
+            one_time: otp.map(|(_, p)| p),
         });
-    };
-    // Атомарно взять и пометить одну доступную one-time.
-    let otp: Option<(i64, String)> = sqlx::query_as(
-        "UPDATE one_time_prekeys SET consumed = 1
-         WHERE rowid = (SELECT rowid FROM one_time_prekeys
-                        WHERE username = ? AND consumed = 0 ORDER BY key_id LIMIT 1)
-         RETURNING key_id, public_key",
-    )
-    .bind(username)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    }
+
+    let primary = devices[0].clone();
     Ok(FetchBundleResponse {
         ok: true,
-        registration_id: Some(reg),
-        identity_key: Some(ik),
-        signed_prekey_id: Some(spid),
-        signed_prekey: Some(sp),
-        signed_prekey_sig: Some(sig),
-        one_time_id: otp.as_ref().map(|(k, _)| *k),
-        one_time: otp.map(|(_, p)| p),
+        registration_id: Some(primary.registration_id),
+        identity_key: Some(primary.identity_key),
+        signed_prekey_id: Some(primary.signed_prekey_id),
+        signed_prekey: Some(primary.signed_prekey),
+        signed_prekey_sig: Some(primary.signed_prekey_sig),
+        one_time_id: primary.one_time_id,
+        one_time: primary.one_time,
+        devices,
         error: None,
     })
 }
@@ -461,7 +503,10 @@ async fn handle_prekeys_publish(
         Ok(req) => match verify(&req.token) {
             Ok(username) => match store_prekeys(pool, &username, &req).await {
                 Ok(()) => {
-                    info!("{} опубликовал prekeys ({} one-time)", username, req.one_time.len());
+                    info!(
+                        "{} опубликовал prekeys (устройство '{}', {} one-time)",
+                        username, req.device_id, req.one_time.len(),
+                    );
                     PublishPrekeysResponse { ok: true, error: None }
                 }
                 Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
@@ -487,42 +532,12 @@ async fn handle_prekeys_fetch(
     };
     let resp = match serde_json::from_slice::<FetchBundleRequest>(&msg.payload) {
         Ok(req) => match verify(&req.token) {
-            Ok(_requester) => fetch_bundle(pool, &req.user).await.unwrap_or_else(|e| {
-                FetchBundleResponse {
-                    ok: false,
-                    registration_id: None,
-                    identity_key: None,
-                    signed_prekey_id: None,
-                    signed_prekey: None,
-                    signed_prekey_sig: None,
-                    one_time_id: None,
-                    one_time: None,
-                    error: Some(e.to_string()),
-                }
-            }),
-            Err(e) => FetchBundleResponse {
-                ok: false,
-                registration_id: None,
-                identity_key: None,
-                signed_prekey_id: None,
-                signed_prekey: None,
-                signed_prekey_sig: None,
-                one_time_id: None,
-                one_time: None,
-                error: Some(e.to_string()),
-            },
+            Ok(_requester) => fetch_bundle(pool, &req.user, &req.known_devices)
+                .await
+                .unwrap_or_else(|e| empty_bundle_response(Some(e.to_string()))),
+            Err(e) => empty_bundle_response(Some(e.to_string())),
         },
-        Err(e) => FetchBundleResponse {
-            ok: false,
-            registration_id: None,
-            identity_key: None,
-            signed_prekey_id: None,
-            signed_prekey: None,
-            signed_prekey_sig: None,
-            one_time_id: None,
-            one_time: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => empty_bundle_response(Some(e.to_string())),
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -914,10 +929,16 @@ mod tests {
     // ── E2E prekey-каталог (Фаза 2) ──
 
     fn sample_publish(reg: i64, otps: &[(i64, &str)]) -> PublishPrekeysRequest {
+        sample_publish_device("", reg, otps)
+    }
+
+    fn sample_publish_device(device_id: &str, reg: i64, otps: &[(i64, &str)]) -> PublishPrekeysRequest {
         PublishPrekeysRequest {
             token: String::new(),
+            device_id: device_id.into(),
+            signing_key: format!("SK-{device_id}=="),
             registration_id: reg,
-            identity_key: "IK==".into(),
+            identity_key: format!("IK-{reg}=="),
             signed_prekey_id: 7,
             signed_prekey: "SPK==".into(),
             signed_prekey_sig: "SIG==".into(),
@@ -937,19 +958,19 @@ mod tests {
             .unwrap();
 
         // Первый fetch отдаёт бандл + одну one-time, помечает consumed.
-        let b1 = fetch_bundle(&pool, "alice@local").await.unwrap();
+        let b1 = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
         assert!(b1.ok);
         assert_eq!(b1.registration_id, Some(111));
-        assert_eq!(b1.identity_key.as_deref(), Some("IK=="));
+        assert_eq!(b1.identity_key.as_deref(), Some("IK-111=="));
         assert!(b1.one_time_id.is_some() && b1.one_time.is_some(), "первая one-time выдана");
 
         // Второй fetch — другая one-time.
-        let b2 = fetch_bundle(&pool, "alice@local").await.unwrap();
+        let b2 = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
         assert!(b2.one_time_id.is_some());
         assert_ne!(b1.one_time_id, b2.one_time_id, "разные one-time");
 
         // Третий — one-time кончились, бандл без них (валидный фолбэк).
-        let b3 = fetch_bundle(&pool, "alice@local").await.unwrap();
+        let b3 = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
         assert!(b3.ok);
         assert!(b3.one_time_id.is_none(), "one-time исчерпаны");
         assert!(b3.identity_key.is_some(), "долгоживущие ключи всё равно есть");
@@ -958,9 +979,10 @@ mod tests {
     #[tokio::test]
     async fn fetch_bundle_unknown_user() {
         let pool = test_pool().await;
-        let b = fetch_bundle(&pool, "ghost@local").await.unwrap();
+        let b = fetch_bundle(&pool, "ghost@local", &[]).await.unwrap();
         assert!(!b.ok);
         assert!(b.identity_key.is_none());
+        assert!(b.devices.is_empty());
     }
 
     #[tokio::test]
@@ -972,9 +994,77 @@ mod tests {
         let mut req = sample_publish(999, &[(5, "NEW")]);
         req.signed_prekey_id = 42;
         store_prekeys(&pool, "bob@local", &req).await.unwrap();
-        let b = fetch_bundle(&pool, "bob@local").await.unwrap();
+        let b = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
         assert_eq!(b.registration_id, Some(999));
         assert_eq!(b.signed_prekey_id, Some(42));
+    }
+
+    // ── мультидевайс: бандлы на устройство ──
+
+    #[tokio::test]
+    async fn multidevice_bundles_coexist_and_fetch_returns_all() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        // desktop/legacy — устройство '', web — свой uuid: не перетирают друг друга
+        store_prekeys(&pool, "alice@local", &sample_publish_device("", 1, &[(1, "L1")]))
+            .await
+            .unwrap();
+        store_prekeys(&pool, "alice@local", &sample_publish_device("dev-web", 2, &[(1, "W1")]))
+            .await
+            .unwrap();
+
+        let b = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
+        assert!(b.ok);
+        assert_eq!(b.devices.len(), 2, "оба устройства в списке");
+        // legacy-поля — «primary» ('' приоритетно)
+        assert_eq!(b.registration_id, Some(1));
+        let web = b.devices.iter().find(|d| d.device_id == "dev-web").unwrap();
+        assert_eq!(web.registration_id, 2);
+        assert_eq!(web.one_time.as_deref(), Some("W1"), "one-time нового устройства выдана");
+        assert_eq!(web.signing_key, "SK-dev-web==", "signing-ключ устройства едет в бандле");
+    }
+
+    #[tokio::test]
+    async fn multidevice_known_devices_skip_one_time_consumption() {
+        let pool = test_pool().await;
+        insert_user(&pool, "bob@local").await;
+        store_prekeys(&pool, "bob@local", &sample_publish_device("dev-a", 1, &[(1, "A1")]))
+            .await
+            .unwrap();
+
+        // known: one-time НЕ расходуется
+        let b1 = fetch_bundle(&pool, "bob@local", &["dev-a".to_string()]).await.unwrap();
+        let a1 = b1.devices.iter().find(|d| d.device_id == "dev-a").unwrap();
+        assert!(a1.one_time.is_none(), "известное устройство — без one-time");
+
+        // не known: расходуется та самая одна
+        let b2 = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
+        let a2 = b2.devices.iter().find(|d| d.device_id == "dev-a").unwrap();
+        assert_eq!(a2.one_time.as_deref(), Some("A1"));
+        let b3 = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
+        assert!(b3.devices[0].one_time.is_none(), "one-time исчерпана");
+    }
+
+    #[tokio::test]
+    async fn multidevice_identity_change_wipes_only_own_one_time() {
+        let pool = test_pool().await;
+        insert_user(&pool, "carol@local").await;
+        store_prekeys(&pool, "carol@local", &sample_publish_device("dev-a", 1, &[(1, "A1")]))
+            .await
+            .unwrap();
+        store_prekeys(&pool, "carol@local", &sample_publish_device("dev-b", 2, &[(1, "B1")]))
+            .await
+            .unwrap();
+        // dev-a пере-инициализирован (новый identity_key) — его one-time вычищены
+        store_prekeys(&pool, "carol@local", &sample_publish_device("dev-a", 3, &[(9, "A9")]))
+            .await
+            .unwrap();
+
+        let b = fetch_bundle(&pool, "carol@local", &[]).await.unwrap();
+        let a = b.devices.iter().find(|d| d.device_id == "dev-a").unwrap();
+        let bb = b.devices.iter().find(|d| d.device_id == "dev-b").unwrap();
+        assert_eq!(a.one_time.as_deref(), Some("A9"), "у dev-a только новая пачка");
+        assert_eq!(bb.one_time.as_deref(), Some("B1"), "dev-b не пострадал");
     }
 
     #[tokio::test]
