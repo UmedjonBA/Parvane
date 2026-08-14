@@ -20,8 +20,24 @@
   self-чат для «Избранного», персист настроек без MTProto-кэша, рабочий мьют
   (+notify defaults), локализация меню, вычистка Telegram-инфраструктуры из
   UI (Premium/Stars/Gram/FAQ/жалобы/подарки/Active Sessions/Language/…).
-- **Следующее большое**: мультидевайс (этап C) — протокольные решения записаны
-  в памяти Claude (per-device прекеи, fan-out sealed, изменения desktop).
+- **Мультидевайс-ядро СДЕЛАНО (2026-08-14, коммит 6d4626dd)**: per-device
+  прекей-бандлы в identity (devices + signing_key устройства, known_devices
+  не расходуют one-time), per-device sealed-копии в messenger
+  (`message_device_copies`, подмена шифртекста в sync по `device_id`,
+  self-копии по signing-ключу целевого устройства, копии в live-пуше,
+  правка/удаление обновляют копии), Web-движок с `deviceId` и fan-out
+  шифрованием на все устройства получателя и свои устройства, SKDM-fan-out
+  в группах. Свежий логин больше НЕ перетирает identity других устройств;
+  wire-контракт с desktop обратно совместим (desktop = устройство '').
+  e2e: `scripts/run_web_multidevice_e2e.sh` (3 браузера, один аккаунт на
+  двух устройствах) + регрессии keys_backup/groups/cross_client/sync зелёные.
+- **Остатки мультидевайса**: Settings→Devices (список/отзыв устройства с
+  ротацией групповых ключей), авто-линковка с передачей истории (сейчас —
+  ручной экспорт/импорт E2E-ключей), fan-out в desktop-клиенте.
+- **Следующее большое**: деплой на VPS — деплой-комплекта в репо ещё нет
+  (systemd-юниты шардов, nginx/caddy + TLS, .env-шаблоны, файрвол, TURN).
+  Оценка железа для старта: 2 vCPU / 4 ГБ / 80 ГБ NVMe; сборка веба и шардов
+  — не на VPS (нужно 4+ ГБ), заливать готовые бинари и dist.
 
 Регрессионный набор: `scripts/run_web_tests.sh` (по сценарию за раз — см.
 CLAUDE.md), юнит-тесты `npx vitest run` в web/telegram-tt, `cargo test`.
