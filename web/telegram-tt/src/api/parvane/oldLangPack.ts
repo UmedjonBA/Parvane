@@ -150,6 +150,9 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     Unblock: 'Unblock',
     'SharedMedia.EmptyTitle': 'No shared media yet',
     NewGroup: 'New Group',
+    // Разделитель в авто-имени группы из участников («Alice & Bob»); без ключа
+    // сырой текст попадал в НАЗВАНИЕ создаваемой группы
+    'CreateGroup.PeersTitleLastDelimeter': ' & ',
     NewChannel: 'New Channel',
     StickersName: 'Stickers and Emoji',
     SuggestStickers: 'Sticker suggestions by emoji',

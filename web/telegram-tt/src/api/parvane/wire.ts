@@ -73,6 +73,16 @@ export type WireMessageContent = {
   poll?: string;
 };
 
+// Per-device sealed-копия (мультидевайс): recipient пуст у self-копий
+// отправителя — владельца тогда определяет signing_key (как в sync)
+export type WireDeviceCopy = {
+  recipient?: string;
+  signing_key?: string;
+  device_id: string;
+  ciphertext: string;
+  ctype?: number;
+};
+
 export type WireStoredMessage = {
   id: string;
   from: string;
@@ -86,6 +96,9 @@ export type WireStoredMessage = {
   updated_at?: number;
   reactions?: { emoji: string; count: number; mine?: boolean }[];
   pinned?: boolean;
+  // Заполнено только в live-пуше инбокса: копии адресата, устройство выбирает
+  // свою по device_id (в sync-ответах сервер уже подменил ciphertext)
+  copies?: WireDeviceCopy[];
 };
 
 export type WireGroupMember = {

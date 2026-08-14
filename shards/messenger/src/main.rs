@@ -9,7 +9,7 @@ use parvane_types::{
     GroupDeleteRequest, GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest,
     GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
     GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
-    MessageContent,
+    MessageContent, MessageDeviceCopy,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, SendPayload, StoredMessage,
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
@@ -214,7 +214,83 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
     .execute(pool)
     .await
     .context("сохранение сообщения")?;
+    store_device_copies(pool, &ev.id.to_string(), &ev.payload.copies).await?;
     Ok(())
+}
+
+/// Лимит per-device копий на сообщение: устройства одного получателя + свои —
+/// десятков достаточно, а мусорный fan-out отсечёт.
+const MAX_DEVICE_COPIES: usize = 64;
+
+/// Сохранить per-device sealed-копии (мультидевайс). Идемпотентно.
+async fn store_device_copies(
+    pool: &SqlitePool,
+    message_id: &str,
+    copies: &[MessageDeviceCopy],
+) -> Result<()> {
+    for copy in copies.iter().take(MAX_DEVICE_COPIES) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO message_device_copies
+               (message_id, recipient, signing_key, device_id, ciphertext, ctype)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(message_id)
+        .bind(&copy.recipient)
+        .bind(&copy.signing_key)
+        .bind(&copy.device_id)
+        .bind(&copy.ciphertext)
+        .bind(copy.ctype as i64)
+        .execute(pool)
+        .await
+        .context("сохранение device-копии")?;
+    }
+    Ok(())
+}
+
+/// Снести все per-device копии сообщения (правка заменяет, удаление затирает).
+async fn clear_device_copies(pool: &SqlitePool, message_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM message_device_copies WHERE message_id = ?")
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .context("очистка device-копий")?;
+    Ok(())
+}
+
+/// Копия сообщения для устройства запросившего: либо адресована ему как
+/// получателю, либо это его собственная self-копия (по signing_key — sealed
+/// sender не раскрывает адрес). Возвращает (ciphertext, ctype).
+async fn device_copy_for(
+    pool: &SqlitePool,
+    message_id: &str,
+    user: &str,
+    signing_key: &str,
+    device_id: &str,
+) -> Option<(String, i64)> {
+    sqlx::query_as(
+        "SELECT ciphertext, ctype FROM message_device_copies
+         WHERE message_id = ? AND device_id = ?
+           AND (recipient = ? OR (? != '' AND signing_key = ?))
+         LIMIT 1",
+    )
+    .bind(message_id)
+    .bind(device_id)
+    .bind(user)
+    .bind(signing_key)
+    .bind(signing_key)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Подменить шифртекст sealed-контента копией конкретного устройства.
+/// Только Olm-вариант (Encrypted): Megolm-группы шифруются одним блобом на всех.
+fn substitute_device_copy(content: &mut MessageContent, copy_ciphertext: String, copy_ctype: i64) {
+    if let MessageContent::Encrypted { ciphertext, ctype, .. } = content {
+        *ciphertext = copy_ciphertext;
+        *ctype = copy_ctype as u32;
+    }
 }
 
 /// Отредактировать текст своего сообщения. Возвращает `true`, если строка
@@ -279,6 +355,7 @@ async fn replace_message_content(
     author: &str,
     content: &MessageContent,
     signature: Option<&str>,
+    copies: &[MessageDeviceCopy],
     now: i64,
 ) -> Result<bool> {
     let current: Option<(String, String)> = sqlx::query_as(
@@ -323,6 +400,12 @@ async fn replace_message_content(
     .bind(message_id)
     .execute(pool)
     .await?;
+    if res.rows_affected() > 0 {
+        // Мультидевайс: правка заменяет per-device копии целиком — старые
+        // шифртексты относятся к прежнему контенту.
+        clear_device_copies(pool, message_id).await?;
+        store_device_copies(pool, message_id, copies).await?;
+    }
     Ok(res.rows_affected() > 0)
 }
 
@@ -389,6 +472,9 @@ async fn delete_sealed_message(
     .bind(message_id)
     .execute(pool)
     .await?;
+    if res.rows_affected() > 0 {
+        clear_device_copies(pool, message_id).await?;
+    }
     Ok(res.rows_affected() > 0)
 }
 
@@ -407,6 +493,9 @@ async fn delete_message(pool: &SqlitePool, message_id: &str, author: &str, now: 
     .execute(pool)
     .await
     .context("удаление сообщения")?;
+    if res.rows_affected() > 0 {
+        clear_device_copies(pool, message_id).await?;
+    }
     Ok(res.rows_affected() > 0)
 }
 
@@ -814,6 +903,7 @@ async fn fetch_missed_for_signing_key(
     last_seen_id: &str,
     since_updated: i64,
     sender_signing_key: &str,
+    device_id: &str,
 ) -> Result<Vec<StoredMessage>> {
     // Два курсора: новые сообщения (`id > last_seen_id`) И мутации старых
     // (`updated_at > since_updated`: правки, удаления, отметки о прочтении).
@@ -857,7 +947,9 @@ async fn fetch_missed_for_signing_key(
          WHERE (m.to_user = ? OR m.from_user = ?
                 OR m.to_user IN (SELECT group_id FROM group_members
                                  WHERE member = ? AND role != 'banned')
-                OR (? != '' AND COALESCE(json_extract(m.content, '$.sender_signing_key'), '') = ?))
+                OR (? != '' AND COALESCE(json_extract(m.content, '$.sender_signing_key'), '') = ?)
+                OR (? != '' AND EXISTS(SELECT 1 FROM message_device_copies c
+                                        WHERE c.message_id = m.id AND c.signing_key = ?)))
            AND (m.id > ? OR m.updated_at > ?)
          ORDER BY m.updated_at, m.id
          LIMIT 100",
@@ -870,6 +962,8 @@ async fn fetch_missed_for_signing_key(
     .bind(user)
     .bind(sender_signing_key)
     .bind(sender_signing_key)
+    .bind(sender_signing_key)
+    .bind(sender_signing_key)
     .bind(last_seen_id)
     .bind(since_updated)
     .fetch_all(pool)
@@ -879,10 +973,19 @@ async fn fetch_missed_for_signing_key(
     for (id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, read, pinned) in rows {
         // content может быть NULL только для legacy-строк без миграции данных;
         // в норме всегда заполнен.
-        let content = match content_json {
+        let mut content = match content_json {
             Some(json) => serde_json::from_str(&json).context("разбор content")?,
             None => MessageContent::Text { text: String::new(), entities: vec![], webpage: None },
         };
+        // Мультидевайс: у sealed-сообщения основной шифртекст адресован
+        // «primary»-устройству; для остальных подменяем копией запросившего.
+        if matches!(content, MessageContent::Encrypted { .. }) && deleted == 0 {
+            if let Some((copy_ciphertext, copy_ctype)) =
+                device_copy_for(pool, &id, user, sender_signing_key, device_id).await
+            {
+                substitute_device_copy(&mut content, copy_ciphertext, copy_ctype);
+            }
+        }
         // Агрегат реакций: эмодзи → count, mine = реагировал ли запросивший.
         let reactions = reactions_for(pool, &id, user).await;
         messages.push(StoredMessage {
@@ -898,6 +1001,7 @@ async fn fetch_missed_for_signing_key(
             updated_at,
             reactions,
             pinned: pinned != 0,
+            copies: vec![],
         });
     }
     Ok(messages)
@@ -910,7 +1014,7 @@ async fn fetch_missed(
     last_seen_id: &str,
     since_updated: i64,
 ) -> Result<Vec<StoredMessage>> {
-    fetch_missed_for_signing_key(pool, user, last_seen_id, since_updated, "").await
+    fetch_missed_for_signing_key(pool, user, last_seen_id, since_updated, "", "").await
 }
 
 /// Агрегат реакций сообщения для конкретного зрителя (`mine` — реагировал ли он).
@@ -1010,6 +1114,7 @@ async fn fetch_one_message(
         updated_at,
         reactions,
         pinned: pinned != 0,
+        copies: vec![],
     }))
 }
 
@@ -1096,17 +1201,27 @@ async fn deliver_message(
     now: i64,
 ) -> Result<()> {
     let recipients = resolve_recipients(pool, &stored.to, &stored.from).await?;
-    let ev = ParvaneEvent {
-        id: Uuid::now_v7(),
-        from: "messenger".to_string(),
-        ts: now,
-        token: String::new(),
-        payload: parvane_types::InboxPush { message: stored.clone() },
-    };
-    let bytes = serde_json::to_vec(&ev)?;
     for r in &recipients {
+        // Мультидевайс: в live-пуш кладём копии ЭТОГО адресата — все его
+        // устройства слушают один инбокс и каждое выберет свою по device_id.
+        // Self-копии отправителя (recipient='') адресату не отдаются.
+        let mut message = stored.clone();
+        message.copies = stored
+            .copies
+            .iter()
+            .filter(|copy| copy.recipient == *r)
+            .cloned()
+            .collect();
+        let ev = ParvaneEvent {
+            id: Uuid::now_v7(),
+            from: "messenger".to_string(),
+            ts: now,
+            token: String::new(),
+            payload: parvane_types::InboxPush { message },
+        };
+        let bytes = serde_json::to_vec(&ev)?;
         enqueue(pool, r, &stored.id.to_string(), now).await?;
-        nc.publish(msg_inbox(r), bytes.clone().into()).await?;
+        nc.publish(msg_inbox(r), bytes.into()).await?;
     }
     Ok(())
 }
@@ -1152,6 +1267,7 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             updated_at: now,
             reactions: vec![],
             pinned: false,
+            copies: event.payload.copies.clone(),
         };
         deliver_message(nc, pool, &stored, now).await?;
         anyhow::Ok(())
@@ -1244,6 +1360,7 @@ async fn handle_edit(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                 &author,
                 content,
                 event.payload.signature.as_deref(),
+                &event.payload.copies,
                 now_unix(),
             ).await?
         } else if let Some(text) = event.payload.text.as_deref() {
@@ -1709,6 +1826,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             last_id,
             event.payload.since_updated,
             sender_signing_key,
+            &event.payload.device_id,
         ).await?;
 
         let count = messages.len();
@@ -1768,7 +1886,7 @@ mod tests {
             from: from.into(),
             ts: 1_000_000,
             token: "tok".into(),
-            payload: SendPayload { to: to.into(), content, reply_to: None },
+            payload: SendPayload { to: to.into(), content, reply_to: None, copies: vec![] },
         }
     }
 
@@ -2540,7 +2658,7 @@ mod tests {
             sender_identity: "curve-key".into(),
             sender_signing_key: signing_key.clone(),
         };
-        assert!(!replace_message_content(&pool, mid, "alice@local", &edited, Some("bad"), 2)
+        assert!(!replace_message_content(&pool, mid, "alice@local", &edited, Some("bad"), &[], 2)
             .await
             .unwrap());
         let edit_payload = format!("edit:{mid}:cipher-after");
@@ -2551,6 +2669,7 @@ mod tests {
             "alice@local",
             &edited,
             Some(&edit_signature),
+            &[],
             3,
         )
         .await
@@ -2594,6 +2713,7 @@ mod tests {
 
         let sync_payload = SyncRequestPayload {
             last_seen_id: "0".into(),
+            device_id: String::new(),
             since_updated: 0,
             sender_signing_key: Some(signing_key.clone()),
             signature: None,
@@ -2602,7 +2722,7 @@ mod tests {
         let sync_signature = STANDARD_NO_PAD.encode(signing.sign(sync_signed.as_bytes()).to_bytes());
         let sync_payload = SyncRequestPayload { signature: Some(sync_signature), ..sync_payload };
         let authenticated_key = authenticated_sync_signing_key(&sync_payload).unwrap();
-        let for_sender = fetch_missed_for_signing_key(&pool, "alice@local", "0", 0, authenticated_key)
+        let for_sender = fetch_missed_for_signing_key(&pool, "alice@local", "0", 0, authenticated_key, "")
             .await
             .unwrap();
         assert_eq!(for_sender.len(), 1, "sealed-автор получает собственное сообщение по подписанному sync");
@@ -2626,11 +2746,177 @@ mod tests {
             mid,
             3,
             &signing_key,
+            "",
         )
         .await
         .unwrap();
         assert_eq!(deleted_for_sender.len(), 1);
         assert!(deleted_for_sender[0].deleted, "sealed-автор получает tombstone по sync");
+    }
+
+    // ── мультидевайс: per-device копии ──
+
+    fn sealed_send_with_copies(
+        id: &str,
+        to: &str,
+        signing_key: &str,
+        copies: Vec<MessageDeviceCopy>,
+    ) -> ParvaneEvent<SendPayload> {
+        let mut ev = send_content(id, "", to, MessageContent::Encrypted {
+            ciphertext: "cipher-primary".into(),
+            ctype: 0,
+            sender_identity: "curve-key".into(),
+            sender_signing_key: signing_key.into(),
+        });
+        ev.payload.copies = copies;
+        ev
+    }
+
+    #[tokio::test]
+    async fn sync_substitutes_device_copy_per_requesting_device() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000f1";
+        let copies = vec![
+            MessageDeviceCopy {
+                recipient: "bob@local".into(),
+                signing_key: String::new(),
+                device_id: "dev-b2".into(),
+                ciphertext: "cipher-for-b2".into(),
+                ctype: 0,
+            },
+            // Self-копия для ДРУГОГО устройства alice: помечена ключом подписи
+            // ЦЕЛЕВОГО устройства (dev-a2), не отправившего (alice-sign)
+            MessageDeviceCopy {
+                recipient: String::new(),
+                signing_key: "alice-dev2-sign".into(),
+                device_id: "dev-a2".into(),
+                ciphertext: "cipher-for-a2".into(),
+                ctype: 1,
+            },
+        ];
+        store_message(&pool, &sealed_send_with_copies(mid, "bob@local", "alice-sign", copies), 1)
+            .await
+            .unwrap();
+
+        // Primary-устройство bob ('' — desktop/legacy) получает основной шифртекст.
+        let primary = fetch_missed(&pool, "bob@local", "0", 0).await.unwrap();
+        assert!(matches!(
+            &primary[0].content,
+            MessageContent::Encrypted { ciphertext, .. } if ciphertext == "cipher-primary"
+        ));
+
+        // Второе устройство bob получает свою копию.
+        let b2 = fetch_missed_for_signing_key(&pool, "bob@local", "0", 0, "", "dev-b2")
+            .await
+            .unwrap();
+        assert!(matches!(
+            &b2[0].content,
+            MessageContent::Encrypted { ciphertext, ctype, .. }
+                if ciphertext == "cipher-for-b2" && *ctype == 0
+        ));
+
+        // Второе устройство alice (self-копия по СВОЕМУ signing_key — сообщение
+        // выбирается через EXISTS по копиям, не через sender_signing_key)
+        let a2 = fetch_missed_for_signing_key(&pool, "alice@local", "0", 0, "alice-dev2-sign", "dev-a2")
+            .await
+            .unwrap();
+        assert_eq!(a2.len(), 1);
+        assert!(matches!(
+            &a2[0].content,
+            MessageContent::Encrypted { ciphertext, ctype, .. }
+                if ciphertext == "cipher-for-a2" && *ctype == 1
+        ));
+
+        // Чужое устройство bob без копии — основной шифртекст (fallback).
+        let unknown = fetch_missed_for_signing_key(&pool, "bob@local", "0", 0, "", "dev-ghost")
+            .await
+            .unwrap();
+        assert!(matches!(
+            &unknown[0].content,
+            MessageContent::Encrypted { ciphertext, .. } if ciphertext == "cipher-primary"
+        ));
+
+        // Копия bob не выдаётся постороннему устройству под чужим адресом.
+        let stranger = fetch_missed_for_signing_key(&pool, "carol@local", "0", 0, "", "dev-b2")
+            .await
+            .unwrap();
+        assert!(stranger.is_empty(), "посторонний не получает sealed вообще");
+    }
+
+    #[tokio::test]
+    async fn sealed_edit_replaces_device_copies() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000f2";
+        let signing = SigningKey::from_bytes(&[9_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let copies = vec![MessageDeviceCopy {
+            recipient: "bob@local".into(),
+            signing_key: String::new(),
+            device_id: "dev-b2".into(),
+            ciphertext: "old-b2".into(),
+            ctype: 0,
+        }];
+        store_message(&pool, &sealed_send_with_copies(mid, "bob@local", &signing_key, copies), 1)
+            .await
+            .unwrap();
+
+        let edited = MessageContent::Encrypted {
+            ciphertext: "new-primary".into(),
+            ctype: 1,
+            sender_identity: "curve-key".into(),
+            sender_signing_key: signing_key.clone(),
+        };
+        let edit_payload = format!("edit:{mid}:new-primary");
+        let edit_signature = STANDARD_NO_PAD.encode(signing.sign(edit_payload.as_bytes()).to_bytes());
+        let new_copies = vec![MessageDeviceCopy {
+            recipient: "bob@local".into(),
+            signing_key: String::new(),
+            device_id: "dev-b2".into(),
+            ciphertext: "new-b2".into(),
+            ctype: 1,
+        }];
+        assert!(replace_message_content(
+            &pool, mid, "alice@local", &edited, Some(&edit_signature), &new_copies, 2,
+        )
+        .await
+        .unwrap());
+
+        let b2 = fetch_missed_for_signing_key(&pool, "bob@local", mid, 1, "", "dev-b2")
+            .await
+            .unwrap();
+        assert!(matches!(
+            &b2[0].content,
+            MessageContent::Encrypted { ciphertext, .. } if ciphertext == "new-b2"
+        ), "правка заменила копию устройства");
+    }
+
+    #[tokio::test]
+    async fn sealed_delete_clears_device_copies() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000f3";
+        let signing = SigningKey::from_bytes(&[11_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let copies = vec![MessageDeviceCopy {
+            recipient: "bob@local".into(),
+            signing_key: String::new(),
+            device_id: "dev-b2".into(),
+            ciphertext: "b2".into(),
+            ctype: 0,
+        }];
+        store_message(&pool, &sealed_send_with_copies(mid, "bob@local", &signing_key, copies), 1)
+            .await
+            .unwrap();
+
+        let delete_signature =
+            STANDARD_NO_PAD.encode(signing.sign(format!("delete:{mid}").as_bytes()).to_bytes());
+        assert!(delete_sealed_message(&pool, mid, Some(&delete_signature), 2).await.unwrap());
+        let left: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM message_device_copies WHERE message_id = ?")
+                .bind(mid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(left.0, 0, "tombstone затирает и per-device копии");
     }
 
     #[tokio::test]

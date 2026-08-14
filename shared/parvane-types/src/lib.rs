@@ -164,10 +164,19 @@ pub struct OneTimePrekey {
 }
 
 /// Публикация своей пачки prekey-бандлов. `one_time` — пачка одноразовых
-/// (напр. 100); signed prekey и identity — долгоживущие.
+/// (напр. 100); signed prekey и identity — долгоживущие. `device_id` —
+/// устройство-владелец бандла (мультидевайс); пусто = legacy-«primary»
+/// (desktop и прежние web-установки).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishPrekeysRequest {
     pub token: String,
+    #[serde(default)]
+    pub device_id: String,
+    /// Ed25519-ключ подписи устройства (base64). Нужен другим УСТРОЙСТВАМ
+    /// владельца: self-копии помечаются этим ключом, и устройство забирает их
+    /// по своему подписанному sync.
+    #[serde(default)]
+    pub signing_key: String,
     pub registration_id: i64,
     pub identity_key: String,     // base64 публичный identity-ключ
     pub signed_prekey_id: i64,
@@ -183,15 +192,40 @@ pub struct PublishPrekeysResponse {
     pub error: Option<String>,
 }
 
-/// Запрос бандла собеседника для X3DH.
+/// Запрос бандла собеседника для X3DH. `known_devices` — устройства, с
+/// которыми у запрашивающего уже есть сессия: для них identity не расходует
+/// one-time prekey (отдаёт бандл без него), для новых — расходует как обычно.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchBundleRequest {
     pub token: String,
     pub user: String,
+    #[serde(default)]
+    pub known_devices: Vec<String>,
+}
+
+/// Prekey-бандл одного устройства пользователя (мультидевайс).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceBundle {
+    pub device_id: String,
+    /// Ed25519-ключ подписи устройства (см. PublishPrekeysRequest).
+    #[serde(default)]
+    pub signing_key: String,
+    pub registration_id: i64,
+    pub identity_key: String,
+    pub signed_prekey_id: i64,
+    pub signed_prekey: String,
+    pub signed_prekey_sig: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_time_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_time: Option<String>,
 }
 
 /// Бандл собеседника. `one_time*` = None, если одноразовые кончились (X3DH без
 /// one-time — стандартный фолбэк, чуть слабее forward secrecy для 1-го сообщения).
+/// Верхнеуровневые поля — legacy-вид для одно-девайсных клиентов (desktop):
+/// бандл «primary»-устройства (device_id = '', иначе самое свежее). `devices` —
+/// полный список бандлов всех устройств (мультидевайс).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchBundleResponse {
     pub ok: bool,
@@ -202,6 +236,8 @@ pub struct FetchBundleResponse {
     pub signed_prekey_sig: Option<String>,
     pub one_time_id: Option<i64>,
     pub one_time: Option<String>,
+    #[serde(default)]
+    pub devices: Vec<DeviceBundle>,
     pub error: Option<String>,
 }
 
@@ -408,6 +444,23 @@ impl MessageContent {
     }
 }
 
+/// Sealed-копия сообщения для конкретного устройства (мультидевайс). Один и
+/// тот же inner шифруется Olm-сессией каждого устройства получателя и каждого
+/// «другого» устройства отправителя. `recipient` — адрес владельца устройства;
+/// для копий самому себе (sealed sender не раскрывает адрес) он пуст, а
+/// владельца определяет `signing_key` — Ed25519 отправителя, как в sync.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MessageDeviceCopy {
+    #[serde(default)]
+    pub recipient: String,
+    #[serde(default)]
+    pub signing_key: String,
+    pub device_id: String,
+    pub ciphertext: String,
+    #[serde(default)]
+    pub ctype: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendPayload {
     pub to: String,
@@ -415,6 +468,10 @@ pub struct SendPayload {
     /// Если сообщение — ответ на другое, здесь его `id`. `None` — обычное.
     #[serde(default)]
     pub reply_to: Option<Uuid>,
+    /// Per-device sealed-копии (мультидевайс). Пусто — одно-девайсный клиент,
+    /// весь шифртекст в `content`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copies: Vec<MessageDeviceCopy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -458,6 +515,10 @@ pub struct EditPayload {
     /// Ed25519 signature over `edit:<message_id>:<ciphertext>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Per-device sealed-копии нового контента (мультидевайс). Заменяют
+    /// прежние копии сообщения целиком.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copies: Vec<MessageDeviceCopy>,
 }
 
 /// Удаление сообщения «у всех» (tombstone). Только автор.
@@ -492,6 +553,12 @@ pub struct PinPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRequestPayload {
     pub last_seen_id: String,
+    /// Устройство запрашивающего (мультидевайс): для sealed-сообщений в ответе
+    /// шифртекст подменяется копией этого устройства. Пусто = legacy-«primary».
+    /// Подпись `signature` это поле не покрывает (wire-совместимость с desktop);
+    /// чужая копия бесполезна без приватного ключа устройства.
+    #[serde(default)]
+    pub device_id: String,
     /// Курсор по мутациям: вернуть также сообщения с `updated_at > since_updated`
     /// (правки, удаления, отметки о прочтении старых сообщений). `0` — отдать всё.
     #[serde(default)]
@@ -537,6 +604,11 @@ pub struct StoredMessage {
     /// Закреплено в диалоге.
     #[serde(default)]
     pub pinned: bool,
+    /// Per-device sealed-копии (мультидевайс). Заполняется ТОЛЬКО в live-пуше
+    /// в инбокс (копии адресата пуша) — устройство само выбирает свою по
+    /// device_id. В sync-ответах пусто: там шифртекст подменён на сервере.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copies: Vec<MessageDeviceCopy>,
 }
 
 /// Агрегат реакции: эмодзи, сколько всего, реагировал ли запросивший (`mine`).
@@ -1201,6 +1273,7 @@ mod tests {
                 to: "bob@local".to_string(),
                 content: MessageContent::Text { text: "hi".to_string(), entities: vec![], webpage: None },
                 reply_to: None,
+                copies: vec![],
             },
         };
         let json = serde_json::to_string(&event).unwrap();

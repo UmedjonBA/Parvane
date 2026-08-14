@@ -145,10 +145,20 @@ try {
   await sendText(aliceSession.page, multiB);
   await findMessage(bobSession.page, multiB).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await selectMessageAction(aliceSession.page, multiA, 'Select');
-  await aliceSession.page.locator('.MessageSelectToolbar').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await findMessageContainer(aliceSession.page, multiB).click();
-  await aliceSession.page.locator('.MessageSelectToolbar')
-    .getByRole('button', { name: 'Forward', exact: true }).click();
+  const selectToolbar = aliceSession.page.locator('.MessageSelectToolbar');
+  await selectToolbar.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Клик по второму сообщению может промахнуться (анимации) — тогда пересылка
+  // уйдёт с ОДНИМ выбранным (известный флак). Добиваемся счётчика «2 …»
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await findMessageContainer(aliceSession.page, multiB).click();
+    await aliceSession.page.waitForTimeout(300);
+    if (/\b2\b/.test(await selectToolbar.innerText())) break;
+  }
+  assert.match(
+    await selectToolbar.innerText(), /\b2\b/,
+    'both messages must be selected before multi-forward',
+  );
+  await selectToolbar.getByRole('button', { name: 'Forward', exact: true }).click();
   await pickForwardRecipientAndSend(aliceSession.page, bob);
   for (const forwardedText of [multiA, multiB]) {
     await bobSession.page.waitForFunction(
