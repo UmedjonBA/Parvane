@@ -142,8 +142,12 @@
   читает всё, как раньше (wire back-compat, cross_client зелёный), но
   сообщения С desktop читает только одно устройство получателя. Нужен
   fan-out по бандлам из prekeys.fetch (поле devices).
-- Остатки: Settings→Devices (список/отзыв + ротация Megolm), авто-линковка
-  передачи истории вместо ручного экспорта/импорта.
+- Settings→Devices СДЕЛАНО 2026-08-17 (Web): identity.device.list/revoke во
+  всех слоях контракта, нативный экран Active Sessions кормится нашими
+  устройствами, отзыв ротирует Megolm (своих групп и общих групп у контактов
+  отозванного). e2e: scripts/run_web_devices_e2e.sh. DESKTOP-ДОЛГ: экран
+  Sessions в tdesktop не подключён к identity.device.* (показывает пусто).
+- Остатки: авто-линковка передачи истории вместо ручного экспорта/импорта.
 
 ### Регистрация через почту (СДЕЛАНО 2026-08-14, веб-клиент)
 - За флагом `PARVANE_EMAIL_REQUIRED=1` на identity: register + email → код из

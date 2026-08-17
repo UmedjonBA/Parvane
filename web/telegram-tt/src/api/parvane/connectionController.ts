@@ -8,6 +8,7 @@ import { ParvaneStore } from './store';
 import {
   buildCallInboxTopic,
   buildMsgInboxTopic,
+  TOPIC_DEVICE_LIST,
   TOPIC_IDENTITY_EMAIL_CONFIRM,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
@@ -40,6 +41,8 @@ type ConnectionDependencies = {
   log: (message: string) => void;
 };
 
+// Остаток one-time prekeys на сервере, ниже которого доливаем свежую пачку
+const OTK_REPLENISH_THRESHOLD = 5;
 const DELTA_SYNC_INTERVAL_MS = 10000;
 const PRESENCE_INTERVAL_MS = 30000;
 const PRESENCE_TTL_SECS = 90;
@@ -269,6 +272,10 @@ export function createConnectionController(deps: ConnectionDependencies) {
         deps.log(`E2E недоступен: ${String(error)}`);
       }
 
+      // Пополнение one-time prekeys при просевшем серверном остатке —
+      // fire-and-forget, вход не тормозим
+      void replenishOneTimePrekeys(activeConnection, nextToken);
+
       const nextE2e = deps.getE2e();
       if (nextE2e) {
         try {
@@ -304,6 +311,31 @@ export function createConnectionController(deps: ConnectionDependencies) {
       }
       activeConnection.close();
       throw error;
+    }
+  }
+
+  // Каждый fetch нашего бандла новым собеседником сжигает по одной one-time
+  // prekey; без пополнения X3DH деградирует к fallback-ключу (слабее PFS
+  // первого сообщения). Порог/пачка — OTK_REPLENISH_THRESHOLD/ONE_TIME_BATCH
+  async function replenishOneTimePrekeys(connection: GatewayConnection, token: string) {
+    const engine = deps.getE2e();
+    if (!engine) return;
+    try {
+      const raw = await connection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token }));
+      const response = JSON.parse(raw) as {
+        ok: boolean;
+        devices?: { device_id: string; one_time_available: number }[];
+      };
+      if (!response.ok) return;
+      const own = response.devices?.find((device) => device.device_id === engine.deviceId);
+      if (!own || own.one_time_available >= OTK_REPLENISH_THRESHOLD) return;
+      const payload = engine.buildTopUpPrekeysPayload(token);
+      if (!payload) return;
+      await engine.flushStorage();
+      await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(payload));
+      deps.log(`one-time prekeys пополнены (остаток был ${own.one_time_available})`);
+    } catch (error) {
+      deps.log(`пополнение one-time prekeys не удалось: ${String(error)}`);
     }
   }
 

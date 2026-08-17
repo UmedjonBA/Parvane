@@ -17,6 +17,11 @@ pub mod topics {
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
     pub const IDENTITY_PREKEYS_FETCH: &str = "identity.prekeys.fetch";
+    /// Мультидевайс: список устройств СВОЕГО аккаунта (владелец — из JWT).
+    pub const IDENTITY_DEVICE_LIST: &str = "identity.device.list";
+    /// Мультидевайс: отзыв устройства — удаляет его прекей-бандл из каталога,
+    /// после чего новые сообщения на это устройство не шифруются.
+    pub const IDENTITY_DEVICE_REVOKE: &str = "identity.device.revoke";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
@@ -263,6 +268,48 @@ pub struct FetchBundleResponse {
     pub one_time: Option<String>,
     #[serde(default)]
     pub devices: Vec<DeviceBundle>,
+    pub error: Option<String>,
+}
+
+/// Список своих устройств (Settings → Devices). Владелец — только из JWT.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceListRequest {
+    pub token: String,
+}
+
+/// Одно устройство аккаунта. В отличие от prekeys.fetch НЕ расходует one-time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub device_id: String,
+    #[serde(default)]
+    pub signing_key: String,
+    pub identity_key: String,
+    /// Unix-время последней публикации прекеев (≈ последняя активность установки).
+    pub updated_at: i64,
+    /// Сколько несожжённых one-time prekey осталось (для клиентского пополнения).
+    pub one_time_available: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceListResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub devices: Vec<DeviceInfo>,
+    pub error: Option<String>,
+}
+
+/// Отзыв устройства: identity удаляет его бандл и one-time prekeys — fan-out
+/// новых сообщений устройство больше не включает. Владелец — из JWT (чужое
+/// устройство отозвать нельзя). Ротация групповых ключей — забота клиента.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceRevokeRequest {
+    pub token: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceRevokeResponse {
+    pub ok: bool,
     pub error: Option<String>,
 }
 

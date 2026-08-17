@@ -33,6 +33,7 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   onReset,
 }) => {
   const {
+    loadAuthorizations,
     loadMoreProfilePhotos,
     openSettingsScreen,
   } = getActions();
@@ -44,6 +45,14 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
       loadMoreProfilePhotos({ peerId: currentUserId, isPreload: true });
     }
   }, [currentUserId]);
+
+  // Parvane: устройства могли добавиться/отозваться после старта приложения —
+  // перечитываем список при каждом заходе в настройки
+  useEffect(() => {
+    if (isActive) {
+      loadAuthorizations();
+    }
+  }, [isActive]);
 
   useHistoryBack({
     isActive,
@@ -112,8 +121,14 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
           >
             {lang('Filters')}
           </ListItem>
-          {/* Parvane: Active Sessions (нет трекинга сессий) и Language
-              (лангпаки грузятся с серверов Telegram) скрыты */}
+          <ListItem
+            icon="active-sessions"
+            narrow
+            onClick={() => openSettingsScreen({ screen: SettingsScreens.ActiveSessions })}
+          >
+            {lang('Devices')}
+          </ListItem>
+          {/* Parvane: Language скрыт (лангпаки грузятся с серверов Telegram) */}
           <ListItem
             icon="stickers"
             narrow
