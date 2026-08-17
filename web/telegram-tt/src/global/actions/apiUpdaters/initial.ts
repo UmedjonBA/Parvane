@@ -89,6 +89,15 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       break;
 
     case 'requestSync':
+      // Parvane: полный ресинк (импорт ключей / авто-линковка истории) —
+      // чат-лист уже помечен загруженным, и loadAllChats был бы no-op;
+      // снимаем флаг, чтобы sync честно перечитал чаты и заменил сообщения
+      global = {
+        ...global,
+        chats: { ...global.chats, isFullyLoaded: {} },
+      };
+      setGlobal(global);
+      global = getGlobal();
       resetOpenedChannelShortpollState();
       syncOpenedShortpollChannelIds(global);
       actions.sync();

@@ -349,6 +349,22 @@ fn authenticated_sync_signing_key(payload: &SyncRequestPayload) -> Option<&str> 
     verify_mutation_signature(signing_key, &signed_payload, signature).then_some(signing_key)
 }
 
+/// Кап дополнительных подписей в sync (анти-DoS: каждая — ed25519 verify).
+const MAX_EXTRA_SIGNING: usize = 8;
+
+/// Доказанные signing-ключи ПРЕЖНИХ устройств (авто-линковка): в выдачу sync
+/// попадают и их sealed-исходящие. Недоказанные подписи молча отбрасываются.
+fn authenticated_extra_signing_keys(payload: &SyncRequestPayload) -> Vec<String> {
+    let signed_payload = format!("sync:{}:{}", payload.last_seen_id, payload.since_updated);
+    payload
+        .extra_signing
+        .iter()
+        .take(MAX_EXTRA_SIGNING)
+        .filter(|extra| verify_mutation_signature(&extra.signing_key, &signed_payload, &extra.signature))
+        .map(|extra| extra.signing_key.clone())
+        .collect()
+}
+
 async fn replace_message_content(
     pool: &SqlitePool,
     message_id: &str,
@@ -935,6 +951,30 @@ async fn fetch_missed_for_signing_key(
     sender_signing_key: &str,
     device_id: &str,
 ) -> Result<Vec<StoredMessage>> {
+    fetch_missed_with_keys(pool, user, last_seen_id, since_updated, sender_signing_key, device_id, &[])
+        .await
+}
+
+/// Как `fetch_missed_for_signing_key`, но с дополнительными ДОКАЗАННЫМИ
+/// signing-ключами (авто-линковка: sealed-исходящие прежних устройств,
+/// чьё состояние перенесено на запрашивающее).
+async fn fetch_missed_with_keys(
+    pool: &SqlitePool,
+    user: &str,
+    last_seen_id: &str,
+    since_updated: i64,
+    sender_signing_key: &str,
+    device_id: &str,
+    extra_signing_keys: &[String],
+) -> Result<Vec<StoredMessage>> {
+    // Все доказанные ключи одним JSON-массивом для IN (json_each): '' не кладём,
+    // чтобы сообщения без sender_signing_key не совпали с пустым значением
+    let mut proven_keys: Vec<&str> = Vec::with_capacity(1 + extra_signing_keys.len());
+    if !sender_signing_key.is_empty() {
+        proven_keys.push(sender_signing_key);
+    }
+    proven_keys.extend(extra_signing_keys.iter().map(String::as_str).filter(|key| !key.is_empty()));
+    let keys_json = serde_json::to_string(&proven_keys).unwrap_or_else(|_| "[]".into());
     // Два курсора: новые сообщения (`id > last_seen_id`) И мутации старых
     // (`updated_at > since_updated`: правки, удаления, отметки о прочтении).
     // `read` считается подзапросом: есть ли receipt от получателя (to_user).
@@ -977,9 +1017,11 @@ async fn fetch_missed_for_signing_key(
          WHERE (m.to_user = ? OR m.from_user = ?
                 OR m.to_user IN (SELECT group_id FROM group_members
                                  WHERE member = ? AND role != 'banned')
-                OR (? != '' AND COALESCE(json_extract(m.content, '$.sender_signing_key'), '') = ?)
-                OR (? != '' AND EXISTS(SELECT 1 FROM message_device_copies c
-                                        WHERE c.message_id = m.id AND c.signing_key = ?)))
+                OR COALESCE(json_extract(m.content, '$.sender_signing_key'), '')
+                   IN (SELECT value FROM json_each(?))
+                OR EXISTS(SELECT 1 FROM message_device_copies c
+                           WHERE c.message_id = m.id
+                             AND c.signing_key IN (SELECT value FROM json_each(?))))
            AND (m.id > ? OR m.updated_at > ?)
          ORDER BY m.updated_at, m.id
          LIMIT 100",
@@ -990,10 +1032,8 @@ async fn fetch_missed_for_signing_key(
     .bind(user)
     .bind(user)
     .bind(user)
-    .bind(sender_signing_key)
-    .bind(sender_signing_key)
-    .bind(sender_signing_key)
-    .bind(sender_signing_key)
+    .bind(&keys_json)
+    .bind(&keys_json)
     .bind(last_seen_id)
     .bind(since_updated)
     .fetch_all(pool)
@@ -1859,13 +1899,15 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         let user = verify_token(nc, &event.token).await?;
         let last_id = &event.payload.last_seen_id;
         let sender_signing_key = authenticated_sync_signing_key(&event.payload).unwrap_or_default();
-        let messages = fetch_missed_for_signing_key(
+        let extra_keys = authenticated_extra_signing_keys(&event.payload);
+        let messages = fetch_missed_with_keys(
             pool,
             &user,
             last_id,
             event.payload.since_updated,
             sender_signing_key,
             &event.payload.device_id,
+            &extra_keys,
         ).await?;
 
         let count = messages.len();
@@ -2719,6 +2761,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn linked_extra_signing_reveals_previous_device_outgoing() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000e7";
+        let old_signing = SigningKey::from_bytes(&[9_u8; 32]);
+        let old_key = STANDARD_NO_PAD.encode(old_signing.verifying_key().to_bytes());
+        let content = MessageContent::Encrypted {
+            ciphertext: "old-outgoing".into(),
+            ctype: 1,
+            sender_identity: "old-curve".into(),
+            sender_signing_key: old_key.clone(),
+        };
+        store_message(&pool, &send_content(mid, "", "bob@local", content), 1)
+            .await
+            .unwrap();
+
+        // Новое устройство alice со СВОИМ ключом старое sealed-исходящее не видит…
+        let fresh = fetch_missed_with_keys(&pool, "alice@local", "0", 0, "fresh-key", "dev-new", &[])
+            .await
+            .unwrap();
+        assert!(fresh.is_empty(), "без доказанного старого ключа исходящее скрыто");
+
+        // …а с доказанным старым ключом (авто-линковка) — видит
+        let linked = fetch_missed_with_keys(
+            &pool,
+            "alice@local",
+            "0",
+            0,
+            "fresh-key",
+            "dev-new",
+            std::slice::from_ref(&old_key),
+        )
+        .await
+        .unwrap();
+        assert_eq!(linked.len(), 1, "старое исходящее возвращается по linked-ключу");
+
+        // Доказательство владения: валидная подпись проходит, мусор — нет
+        let signed = "sync:0:0";
+        let good = STANDARD_NO_PAD.encode(old_signing.sign(signed.as_bytes()).to_bytes());
+        let payload = SyncRequestPayload {
+            last_seen_id: "0".into(),
+            device_id: "dev-new".into(),
+            since_updated: 0,
+            sender_signing_key: None,
+            signature: None,
+            extra_signing: vec![
+                parvane_types::SyncExtraSigning { signing_key: old_key.clone(), signature: good },
+                parvane_types::SyncExtraSigning { signing_key: old_key.clone(), signature: "bad".into() },
+            ],
+        };
+        assert_eq!(authenticated_extra_signing_keys(&payload), vec![old_key]);
+    }
+
+    #[tokio::test]
     async fn sealed_mutations_require_the_original_signing_key() {
         let pool = test_pool().await;
         let mid = "00000000-0000-7000-8000-0000000000e6";
@@ -2799,6 +2894,7 @@ mod tests {
             since_updated: 0,
             sender_signing_key: Some(signing_key.clone()),
             signature: None,
+            extra_signing: vec![],
         };
         let sync_signed = format!("sync:{}:{}", sync_payload.last_seen_id, sync_payload.since_updated);
         let sync_signature = STANDARD_NO_PAD.encode(signing.sign(sync_signed.as_bytes()).to_bytes());

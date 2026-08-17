@@ -6,14 +6,16 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use parvane_types::{
     DeviceInfo, DeviceListRequest, DeviceListResponse, DeviceRevokeRequest, DeviceRevokeResponse,
     EmailConfirmRequest, EmailConfirmResponse, FetchBundleRequest, FetchBundleResponse,
-    IssueRequest, IssueResponse, PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest,
-    RegisterResponse, ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse,
-    SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest,
-    VerifyResponse,
+    IssueRequest, IssueResponse, LinkGrantInfo, LinkGrantRequest, LinkGrantResponse,
+    LinkOfferInfo, LinkOfferRequest, LinkOfferResponse, LinkPollRequest, LinkPollResponse,
+    PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest, RegisterResponse,
+    ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse, SetAvatarRequest,
+    SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
     topics::{
         IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
-        IDENTITY_PREKEYS_FETCH, IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_RESOLVE,
-        IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME, IDENTITY_VERIFY,
+        IDENTITY_LINK_GRANT, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
+        IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH,
+        IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME, IDENTITY_VERIFY,
     },
 };
 
@@ -114,6 +116,9 @@ async fn main() -> Result<()> {
     let mut pkfetch_sub = nc.subscribe(IDENTITY_PREKEYS_FETCH).await?;
     let mut devlist_sub = nc.subscribe(IDENTITY_DEVICE_LIST).await?;
     let mut devrevoke_sub = nc.subscribe(IDENTITY_DEVICE_REVOKE).await?;
+    let mut linkoffer_sub = nc.subscribe(IDENTITY_LINK_OFFER).await?;
+    let mut linkpoll_sub = nc.subscribe(IDENTITY_LINK_POLL).await?;
+    let mut linkgrant_sub = nc.subscribe(IDENTITY_LINK_GRANT).await?;
 
     info!("Identity шард запущен. Слушаю: issue/register/email.confirm/verify/search/setname/setavatar/setkey/resolve/prekeys/devices");
 
@@ -157,6 +162,15 @@ async fn main() -> Result<()> {
             }
             Some(msg) = devrevoke_sub.next() => {
                 handle_device_revoke(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = linkoffer_sub.next() => {
+                handle_link_offer(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = linkpoll_sub.next() => {
+                handle_link_poll(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = linkgrant_sub.next() => {
+                handle_link_grant(&nc, &pool, &decoding, msg).await;
             }
         }
     }
@@ -599,6 +613,223 @@ async fn handle_device_revoke(
             Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
         },
         Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+// ── линковка: передача E2E-состояния на новое устройство ────────────────────
+// Сервер — слепой релей: видит эфемерные ПУБЛИЧНЫЕ ключи и ECDH-бокс
+// (внутри — координаты шифртекста экспорта в cloud), прочитать не может.
+
+/// Время жизни оффера/гранта; просроченные чистятся при каждом обращении.
+const LINK_TTL_SECS: i64 = 900;
+/// Кап полей против злоупотребления хранилищем (base64-строки).
+const LINK_EPH_PUB_MAX: usize = 512;
+const LINK_BOX_MAX: usize = 8192;
+
+async fn purge_stale_links(pool: &SqlitePool) -> Result<()> {
+    let cutoff = now_unix() - LINK_TTL_SECS;
+    sqlx::query("DELETE FROM link_offers WHERE created_at < ?")
+        .bind(cutoff)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM link_grants WHERE created_at < ?")
+        .bind(cutoff)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn store_link_offer(
+    pool: &SqlitePool,
+    username: &str,
+    device_id: &str,
+    eph_pub: &str,
+) -> Result<()> {
+    // Пустой eph_pub — ОТЗЫВ собственного оффера (устройство получило историю
+    // или накопило свою): чужие устройства перестают видеть запрос
+    if eph_pub.is_empty() {
+        sqlx::query("DELETE FROM link_offers WHERE username = ? AND device_id = ?")
+            .bind(username)
+            .bind(device_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM link_grants WHERE username = ? AND device_id = ?")
+            .bind(username)
+            .bind(device_id)
+            .execute(pool)
+            .await?;
+        return Ok(());
+    }
+    if eph_pub.len() > LINK_EPH_PUB_MAX {
+        anyhow::bail!("некорректный эфемерный ключ");
+    }
+    purge_stale_links(pool).await?;
+    // Повторный оффер того же устройства заменяет прежний (и гасит старый
+    // грант — он зашифрован на уже потерянный эфемерный ключ)
+    sqlx::query("INSERT OR REPLACE INTO link_offers (username, device_id, eph_pub, created_at) VALUES (?, ?, ?, ?)")
+        .bind(username)
+        .bind(device_id)
+        .bind(eph_pub)
+        .bind(now_unix())
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM link_grants WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(device_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Офферы ДРУГИХ устройств аккаунта + одноразовый грант для запрашивающего
+/// (удаляется при выдаче: клиент, упавший до импорта, просто переофферит).
+async fn poll_link(
+    pool: &SqlitePool,
+    username: &str,
+    device_id: &str,
+) -> Result<(Vec<LinkOfferInfo>, Option<LinkGrantInfo>)> {
+    purge_stale_links(pool).await?;
+    let offers: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT device_id, eph_pub, created_at FROM link_offers
+          WHERE username = ? AND device_id != ? ORDER BY created_at",
+    )
+    .bind(username)
+    .bind(device_id)
+    .fetch_all(pool)
+    .await?;
+    let grant: Option<(String, String)> = sqlx::query_as(
+        "DELETE FROM link_grants WHERE username = ? AND device_id = ?
+         RETURNING box, eph_pub",
+    )
+    .bind(username)
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok((
+        offers
+            .into_iter()
+            .map(|(device_id, eph_pub, created_at)| LinkOfferInfo { device_id, eph_pub, created_at })
+            .collect(),
+        grant.map(|(box_payload, eph_pub)| LinkGrantInfo { box_payload, eph_pub }),
+    ))
+}
+
+/// Грант принимается только под живой оффер целевого устройства (иначе это
+/// мусор в пустоту); оффер при этом гасится — линковка одноразовая.
+async fn store_link_grant(
+    pool: &SqlitePool,
+    username: &str,
+    target_device: &str,
+    box_payload: &str,
+    eph_pub: &str,
+) -> Result<()> {
+    if box_payload.is_empty() || box_payload.len() > LINK_BOX_MAX {
+        anyhow::bail!("некорректный бокс");
+    }
+    if eph_pub.is_empty() || eph_pub.len() > LINK_EPH_PUB_MAX {
+        anyhow::bail!("некорректный эфемерный ключ");
+    }
+    purge_stale_links(pool).await?;
+    let removed = sqlx::query("DELETE FROM link_offers WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(target_device)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if removed == 0 {
+        anyhow::bail!("оффер линковки не найден или истёк");
+    }
+    sqlx::query("INSERT OR REPLACE INTO link_grants (username, device_id, box, eph_pub, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(username)
+        .bind(target_device)
+        .bind(box_payload)
+        .bind(eph_pub)
+        .bind(now_unix())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn handle_link_offer(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<LinkOfferRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => match store_link_offer(pool, &username, &req.device_id, &req.eph_pub).await {
+                Ok(()) => {
+                    info!("{} опубликовал оффер линковки (устройство '{}')", username, req.device_id);
+                    LinkOfferResponse { ok: true, error: None }
+                }
+                Err(e) => LinkOfferResponse { ok: false, error: Some(e.to_string()) },
+            },
+            Err(e) => LinkOfferResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => LinkOfferResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_link_poll(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<LinkPollRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => match poll_link(pool, &username, &req.device_id).await {
+                Ok((offers, grant)) => LinkPollResponse { ok: true, offers, grant, error: None },
+                Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
+            },
+            Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
+        },
+        Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_link_grant(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<LinkGrantRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => {
+                match store_link_grant(pool, &username, &req.device_id, &req.box_payload, &req.eph_pub).await {
+                    Ok(()) => {
+                        info!("{} выдал грант линковки устройству '{}'", username, req.device_id);
+                        LinkGrantResponse { ok: true, error: None }
+                    }
+                    Err(e) => LinkGrantResponse { ok: false, error: Some(e.to_string()) },
+                }
+            }
+            Err(e) => LinkGrantResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => LinkGrantResponse { ok: false, error: Some(e.to_string()) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1837,6 +2068,96 @@ mod tests {
         assert!(!revoke_device(&pool, "eve@local", "dev-a").await.unwrap());
         let devices = list_devices(&pool, "alice@local").await.unwrap();
         assert_eq!(devices.len(), 1, "устройство alice на месте");
+    }
+
+    // ── линковка: офферы и одноразовые гранты ──
+
+    #[tokio::test]
+    async fn link_offer_poll_grant_roundtrip() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+
+        // Новое устройство публикует оффер; старое видит его в poll
+        store_link_offer(&pool, "alice@local", "dev-new", "EPH-NEW==").await.unwrap();
+        let (offers, grant) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].device_id, "dev-new");
+        assert_eq!(offers[0].eph_pub, "EPH-NEW==");
+        assert!(grant.is_none());
+        // Своего оффера устройство в poll не видит
+        let (own_offers, _) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
+        assert!(own_offers.is_empty());
+
+        // Старое выдаёт грант — оффер гасится, целевое устройство получает
+        // грант РОВНО один раз
+        store_link_grant(&pool, "alice@local", "dev-new", "BOX==", "EPH-OLD==").await.unwrap();
+        let (offers_after, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
+        assert!(offers_after.is_empty(), "оффер погашен грантом");
+        let (_, g1) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
+        let g1 = g1.expect("грант выдан");
+        assert_eq!(g1.box_payload, "BOX==");
+        assert_eq!(g1.eph_pub, "EPH-OLD==");
+        let (_, g2) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
+        assert!(g2.is_none(), "грант одноразовый");
+    }
+
+    #[tokio::test]
+    async fn link_grant_requires_live_offer_and_reoffer_voids_grant() {
+        let pool = test_pool().await;
+        insert_user(&pool, "bob@local").await;
+
+        // Грант без оффера — отказ
+        let err = store_link_grant(&pool, "bob@local", "dev-x", "BOX==", "EPH==")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("оффер"));
+
+        // Повторный оффер заменяет прежний и гасит уже выданный грант
+        // (он зашифрован на потерянный эфемерный ключ)
+        store_link_offer(&pool, "bob@local", "dev-x", "EPH-1==").await.unwrap();
+        store_link_grant(&pool, "bob@local", "dev-x", "BOX-1==", "EPH-OLD==").await.unwrap();
+        store_link_offer(&pool, "bob@local", "dev-x", "EPH-2==").await.unwrap();
+        let (_, grant) = poll_link(&pool, "bob@local", "dev-x").await.unwrap();
+        assert!(grant.is_none(), "грант под старый эфемерный ключ погашен");
+    }
+
+    #[tokio::test]
+    async fn link_offer_retraction_clears_offer_and_grant() {
+        let pool = test_pool().await;
+        insert_user(&pool, "carol@local").await;
+        store_link_offer(&pool, "carol@local", "dev-n", "EPH==").await.unwrap();
+        // Отзыв (пустой eph) гасит оффер
+        store_link_offer(&pool, "carol@local", "dev-n", "").await.unwrap();
+        let (offers, _) = poll_link(&pool, "carol@local", "dev-other").await.unwrap();
+        assert!(offers.is_empty(), "отозванный оффер не виден");
+
+        // Отзыв гасит и уже выданный грант
+        store_link_offer(&pool, "carol@local", "dev-n", "EPH-2==").await.unwrap();
+        store_link_grant(&pool, "carol@local", "dev-n", "BOX==", "EPH-O==").await.unwrap();
+        store_link_offer(&pool, "carol@local", "dev-n", "").await.unwrap();
+        let (_, grant) = poll_link(&pool, "carol@local", "dev-n").await.unwrap();
+        assert!(grant.is_none(), "отзыв гасит невостребованный грант");
+    }
+
+    #[tokio::test]
+    async fn link_is_scoped_per_user_and_expires() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        insert_user(&pool, "eve@local").await;
+
+        store_link_offer(&pool, "alice@local", "dev-new", "EPH==").await.unwrap();
+        // Чужой аккаунт офферов не видит и грант выдать не может
+        let (offers, _) = poll_link(&pool, "eve@local", "dev-eve").await.unwrap();
+        assert!(offers.is_empty());
+        assert!(store_link_grant(&pool, "eve@local", "dev-new", "BOX==", "EPH==").await.is_err());
+
+        // Просроченный оффер исчезает
+        sqlx::query("UPDATE link_offers SET created_at = created_at - 100000")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (stale, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
+        assert!(stale.is_empty(), "просроченный оффер вычищен");
     }
 
     #[tokio::test]

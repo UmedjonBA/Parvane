@@ -89,6 +89,9 @@ type PersistedE2eState = {
   // Следующий key_id для пополнения one-time prekeys: сервер дедупит по
   // (username, device_id, key_id), повтор старых id был бы тихим no-op
   oneTimeKeyIdNext?: number;
+  // Авто-линковка: Olm-pickle прежних устройств (под НАШИМ pickleKey) — только
+  // для подписи sync (extra_signing), их sealed-исходящие видны и нам
+  legacyAccounts?: string[];
 };
 
 // Как часто перепроверять список устройств контакта перед отправкой (обнаружение
@@ -143,6 +146,10 @@ export class E2eEngine {
   private published = false;
 
   private oneTimeKeyIdNext = ONE_TIME_BATCH + 1;
+
+  // Аккаунты прежних устройств (авто-линковка): используются ТОЛЬКО для
+  // подписи sync-запросов, никаких сессий/шифрования от их имени
+  private legacySigners: Olm.Account[] = [];
 
   identityKey = '';
 
@@ -232,6 +239,15 @@ export class E2eEngine {
     });
     this.published = Boolean(state.published);
     this.oneTimeKeyIdNext = state.oneTimeKeyIdNext ?? ONE_TIME_BATCH + 1;
+    (state.legacyAccounts || []).forEach((accountPickle) => {
+      try {
+        const legacy = new Olm.Account();
+        legacy.unpickle(pickleKey, accountPickle);
+        this.legacySigners.push(legacy);
+      } catch {
+        // битый pickle — теряем только подпись старых исходящих
+      }
+    });
   }
 
   private loadLegacyState() {
@@ -300,6 +316,7 @@ export class E2eEngine {
       deviceId: this.deviceId,
       contactDevices: Object.fromEntries(this.devicesByContact),
       oneTimeKeyIdNext: this.oneTimeKeyIdNext,
+      legacyAccounts: this.legacySigners.map((legacy) => legacy.pickle(this.pickleKey)),
     };
   }
 
@@ -474,6 +491,82 @@ export class E2eEngine {
       iv: bytesToBase64(iv),
       data: bytesToBase64(new Uint8Array(ciphertext)),
     });
+  }
+
+  // ── Авто-линковка: передача истории между живыми устройствами ─────────────
+  // Экспорт — полный снапшот (как ручной бэкап), но импорт при линковке
+  // СЛИВАЕТ только читающий материал: decCache (расшифрованная история) и
+  // входящие Megolm-сессии. Собственные identity/Olm-сессии/deviceId остаются
+  // нетронутыми — полная замена раздвоила бы один Olm-ратчет между двумя
+  // живыми устройствами (в отличие от ручного импорта, который — миграция).
+  // Шифрование здесь НЕ делается — транспорт (linking.ts) заворачивает JSON
+  // в ECDH-бокс + cloud-шифртекст
+
+  exportStateJson(): string {
+    return JSON.stringify(this.buildState());
+  }
+
+  importLinkedHistory(stateJson: string) {
+    const state = JSON.parse(stateJson) as PersistedE2eState;
+    Object.entries(state.decCache || {}).forEach(([uuid, inner]) => {
+      if (!(uuid in this.decCache)) this.decCache[uuid] = inner;
+    });
+    Object.entries(state.groupIn || {}).forEach(([key, { pickle, epoch }]) => {
+      if (this.groupIn.has(key)) return;
+      try {
+        const session = new Olm.InboundGroupSession();
+        session.unpickle(state.pickleKey, pickle);
+        this.groupIn.set(key, { session, epoch });
+      } catch {
+        // битый pickle — пропускаем, остальное импортируем
+      }
+    });
+    // Аккаунт старого устройства (и его собственные legacy-подписанты —
+    // цепочка линковок) становятся нашими подписантами sync: их
+    // sealed-исходящие сервер отдаёт только по доказательству владения ключом
+    [state.account, ...(state.legacyAccounts || [])].forEach((accountPickle) => {
+      if (!accountPickle) return;
+      this.adoptLegacySigner(accountPickle, state.pickleKey);
+    });
+    this.queuePersist();
+  }
+
+  private adoptLegacySigner(accountPickle: string, pickleKey: string) {
+    try {
+      const legacy = new Olm.Account();
+      legacy.unpickle(pickleKey, accountPickle);
+      const keys = JSON.parse(legacy.identity_keys()) as { ed25519: string };
+      const isDuplicate = keys.ed25519 === this.signingKey
+        || this.legacySigners.some((signer) => {
+          const existing = JSON.parse(signer.identity_keys()) as { ed25519: string };
+          return existing.ed25519 === keys.ed25519;
+        });
+      if (isDuplicate) {
+        legacy.free();
+        return;
+      }
+      this.legacySigners.push(legacy);
+    } catch {
+      // битый pickle — подпись старых исходящих недоступна, остальное работает
+    }
+  }
+
+  // Подписи sync-строки всеми legacy-подписантами (extra_signing в sync)
+  signExtraSync(payload: string): { signing_key: string; signature: string }[] {
+    return this.legacySigners.map((legacy) => {
+      const keys = JSON.parse(legacy.identity_keys()) as { ed25519: string };
+      return { signing_key: keys.ed25519, signature: legacy.sign(payload) };
+    });
+  }
+
+  // Прокси «свежей неслинкованной установки»: ни одной Olm-сессии, пустой
+  // кэш расшифровок и ни одного группового ключа — читать нечего, есть смысл
+  // просить историю у других устройств. После импорта/переписки — false
+  needsHistoryLink(): boolean {
+    return this.sessionsByIdentity.size === 0
+      && !Object.keys(this.decCache).length
+      && this.groupIn.size === 0
+      && this.legacySigners.length === 0;
   }
 
   static async importEncrypted(self: string, payload: string, password: string): Promise<E2eEngine> {

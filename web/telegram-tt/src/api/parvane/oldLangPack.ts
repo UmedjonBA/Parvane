@@ -192,6 +192,15 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     ParvaneImportKeys: 'Import E2E Keys',
     // Заголовок экрана Settings → Devices (SettingsHeader)
     SessionsTitle: 'Devices',
+    // Авто-линковка истории (Settings → Devices)
+    ParvaneLinkPendingTitle: 'History transfer',
+    ParvaneLinkPendingText: 'Waiting for your other device. Open Settings → Devices there and confirm code %@.',
+    ParvaneLinkRequests: 'History transfer requests',
+    ParvaneLinkOfferCode: 'Code: %@',
+    ParvaneLinkConfirm: 'Transfer message history to this device? Make sure it shows code %@.',
+    ParvaneLinkConfirmAction: 'Transfer',
+    ParvaneLinkGranted: 'History transferred',
+    ParvaneLinkFailed: 'History transfer failed',
     ParvaneKeysPasswordPrompt: 'Backup password',
     ParvaneKeysExported: 'E2E keys exported',
     ParvaneKeysExportFailed: 'Could not export E2E keys',

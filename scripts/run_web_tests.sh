@@ -79,6 +79,9 @@ log "Three-browser multidevice e2e (one account, two devices)"
 log "Three-browser devices e2e (Settings → Devices, revoke)"
 "$ROOT/scripts/run_web_devices_e2e.sh"
 
+log "Three-browser history linking e2e (auto-link, SAS, transfer)"
+"$ROOT/scripts/run_web_linking_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 

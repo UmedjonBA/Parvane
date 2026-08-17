@@ -36,6 +36,13 @@ import { createConnectionController } from './connectionController';
 import { E2eEngine } from './e2e';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
+import {
+  exportLinkPublicKey,
+  generateLinkKeyPair,
+  openLinkBox,
+  sasCodeForEphPub,
+  sealLinkBox,
+} from './linking';
 import { createLocalState } from './localState';
 import { createMediaService } from './media';
 import { createMessageController } from './messages';
@@ -66,6 +73,9 @@ import {
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
+  TOPIC_LINK_GRANT,
+  TOPIC_LINK_OFFER,
+  TOPIC_LINK_POLL,
   TOPIC_PUSH_REGISTER,
   TOPIC_PUSH_UNREGISTER,
   TOPIC_PUSH_VAPID_GET,
@@ -218,9 +228,13 @@ const connectionController = createConnectionController({
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
   polls,
   onNewSession: () => {
+    stopHistoryLink();
     syncController.reset();
     resetPackRegistries();
     messageController.resetSavedGifs();
+  },
+  onSessionReady: () => {
+    void startHistoryLinkOffer();
   },
   isSynced: syncController.isSynced,
   resetSyncPromise: syncController.resetPromise,
@@ -352,6 +366,130 @@ function detectPlatformName() {
   if (ua.includes('Windows')) return 'Windows';
   if (ua.includes('Linux')) return 'Linux';
   return '';
+}
+
+// ── Авто-линковка истории ────────────────────────────────────────────────────
+// Новое устройство (needsHistoryLink) после логина публикует оффер с
+// эфемерным ECDH-ключом и опрашивает грант; старое устройство в Settings →
+// Devices показывает запрос с SAS-кодом, подтверждение выгружает шифрованный
+// экспорт в cloud и передаёт ECDH-бокс с координатами. Новое устройство
+// сливает decCache и входящие Megolm-сессии (importLinkedHistory) и ресинкается
+
+const LINK_GRANT_POLL_MS = 5000;
+const LINK_OFFER_LIFETIME_MS = 10 * 60 * 1000;
+
+type LinkRuntime = {
+  generation: number;
+  keyPair?: CryptoKeyPair;
+  code?: string;
+  timer?: number;
+};
+
+const linkRuntime: LinkRuntime = { generation: 0 };
+
+function stopHistoryLink() {
+  linkRuntime.generation++;
+  window.clearInterval(linkRuntime.timer);
+  linkRuntime.timer = undefined;
+  linkRuntime.keyPair = undefined;
+  linkRuntime.code = undefined;
+}
+
+// Новое устройство: оффер + опрос гранта до успеха или истечения срока
+async function startHistoryLinkOffer() {
+  stopHistoryLink();
+  const engine = e2e;
+  if (!connection || !engine || !engine.needsHistoryLink()) return;
+  const generation = linkRuntime.generation;
+  const keyPair = await generateLinkKeyPair();
+  const ephPub = await exportLinkPublicKey(keyPair);
+  const code = await sasCodeForEphPub(ephPub);
+  if (generation !== linkRuntime.generation) return;
+  linkRuntime.keyPair = keyPair;
+  linkRuntime.code = code;
+  try {
+    const raw = await connection.request(TOPIC_LINK_OFFER, JSON.stringify({
+      token, device_id: engine.deviceId, eph_pub: ephPub,
+    }));
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
+  } catch {
+    return;
+  }
+  logDebug(`линковка: оффер опубликован, код ${code}`);
+  const startedAt = Date.now();
+  linkRuntime.timer = window.setInterval(() => {
+    if (generation !== linkRuntime.generation) return;
+    if (Date.now() - startedAt > LINK_OFFER_LIFETIME_MS) {
+      stopHistoryLink();
+      return;
+    }
+    void pollHistoryLinkGrant(generation);
+  }, LINK_GRANT_POLL_MS);
+}
+
+async function pollHistoryLinkGrant(generation: number) {
+  const engine = e2e;
+  const activeConnection = connection;
+  const keyPair = linkRuntime.keyPair;
+  if (!engine || !activeConnection || !keyPair) return;
+  // История появилась другим путём (живая переписка) — отзываем оффер, чтобы
+  // другие устройства не видели висящий запрос
+  if (!engine.needsHistoryLink()) {
+    stopHistoryLink();
+    try {
+      await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
+        token, device_id: engine.deviceId, eph_pub: '',
+      }));
+    } catch {
+      // сервер вычистит по TTL
+    }
+    return;
+  }
+  let grant: { box_payload: string; eph_pub: string } | undefined;
+  try {
+    const raw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
+      token, device_id: engine.deviceId,
+    }));
+    const response = JSON.parse(raw) as {
+      ok: boolean;
+      grant?: { box_payload: string; eph_pub: string };
+    };
+    if (!response.ok || !response.grant) return;
+    grant = response.grant;
+  } catch {
+    return;
+  }
+  if (generation !== linkRuntime.generation) return;
+  stopHistoryLink();
+
+  const boxPayload = await openLinkBox(keyPair.privateKey, grant.eph_pub, grant.box_payload);
+  if (!boxPayload) {
+    logDebug('линковка: бокс не расшифровался (чужой эфемерный ключ?)');
+    return;
+  }
+  mediaService.rememberKeys({
+    kind: 'file',
+    file_id: boxPayload.file_id,
+    file_key: boxPayload.file_key,
+    file_nonce: boxPayload.file_nonce,
+  });
+  const media = await mediaService.downloadBlob(boxPayload.file_id);
+  if (!media) {
+    logDebug('линковка: экспорт не скачался из cloud');
+    return;
+  }
+  try {
+    engine.importLinkedHistory(await media.blob.text());
+    await engine.flushStorage();
+  } catch (err) {
+    logDebug(`линковка: импорт не удался: ${String(err)}`);
+    return;
+  }
+  // Полный ресинк: пропущенная как нечитаемая история теперь расшифруется
+  // из привезённого decCache/групповых сессий
+  syncController.reset();
+  sendUpdate({ '@type': 'requestSync' });
+  logDebug('линковка: история получена и импортирована');
 }
 
 // Отзыв устройства: identity выкидывает его бандл из каталога (fan-out новых
@@ -885,6 +1023,80 @@ const methods = {
       .filter((deviceId) => deviceId !== e2e!.deviceId);
     const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId)));
     return results.every(Boolean) ? true : undefined;
+  },
+
+  // ── Авто-линковка истории: методы для Settings → Devices ────────────────────
+
+  // Новое устройство: статус собственного оффера (код показывается в UI,
+  // пользователь сверяет его на старом устройстве перед подтверждением)
+  parvaneGetLinkStatus() {
+    const isPending = Boolean(linkRuntime.timer && linkRuntime.code && e2e?.needsHistoryLink());
+    return Promise.resolve({ isPending, code: isPending ? linkRuntime.code : undefined });
+  },
+
+  // Старое устройство: запросы линковки от других устройств аккаунта
+  async parvaneListLinkOffers() {
+    if (!connection || !e2e) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_LINK_POLL, JSON.stringify({
+        token, device_id: e2e.deviceId,
+      }));
+      const response = JSON.parse(raw) as {
+        ok: boolean;
+        offers?: { device_id: string; eph_pub: string; created_at: number }[];
+      };
+      if (!response.ok || !response.offers) return undefined;
+      return {
+        offers: await Promise.all(response.offers.map(async (offer) => ({
+          deviceId: offer.device_id,
+          code: await sasCodeForEphPub(offer.eph_pub),
+        }))),
+      };
+    } catch {
+      return undefined;
+    }
+  },
+
+  // Старое устройство: подтверждённая передача истории целевому устройству.
+  // Экспорт шифруется случайным ключом и уезжает в cloud (owner-only),
+  // координаты и ключ — в ECDH-боксе под эфемерным ключом оффера
+  async parvaneGrantLink({ deviceId }: { deviceId: string }) {
+    const engine = e2e;
+    const activeConnection = connection;
+    if (!engine || !activeConnection) return undefined;
+    try {
+      const pollRaw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
+        token, device_id: engine.deviceId,
+      }));
+      const poll = JSON.parse(pollRaw) as {
+        ok: boolean;
+        offers?: { device_id: string; eph_pub: string }[];
+      };
+      const offer = poll.ok ? poll.offers?.find((entry) => entry.device_id === deviceId) : undefined;
+      if (!offer) return undefined;
+
+      await engine.flushStorage();
+      const exportJson = engine.exportStateJson();
+      const upload = await mediaService.uploadBlob(
+        new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },
+      );
+      if (!upload.mediaKeys) return undefined;
+
+      const keyPair = await generateLinkKeyPair();
+      const ephPub = await exportLinkPublicKey(keyPair);
+      const box = await sealLinkBox(keyPair.privateKey, offer.eph_pub, {
+        file_id: upload.fileId,
+        file_key: upload.mediaKeys.keyB64,
+        file_nonce: upload.mediaKeys.nonceB64,
+      });
+      const grantRaw = await activeConnection.request(TOPIC_LINK_GRANT, JSON.stringify({
+        token, device_id: deviceId, box_payload: box, eph_pub: ephPub,
+      }));
+      return (JSON.parse(grantRaw) as { ok?: boolean }).ok ? true : undefined;
+    } catch (err) {
+      logDebug(`линковка: грант не удался: ${String(err)}`);
+      return undefined;
+    }
   },
 
   // ── web-push (шард push, VAPID) ─────────────────────────────────────────────
