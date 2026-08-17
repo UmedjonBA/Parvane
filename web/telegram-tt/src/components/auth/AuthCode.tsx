@@ -20,7 +20,8 @@ type StateProps = {
   auth: GlobalState['auth'];
 };
 
-const CODE_LENGTH = 5;
+// Parvane: 6-значный код подтверждения почты (identity.email.confirm)
+const CODE_LENGTH = 6;
 
 const AuthCode = ({
   auth,
@@ -31,7 +32,7 @@ const AuthCode = ({
     clearAuthErrorKey,
   } = getActions();
 
-  const { phoneNumber, isCodeViaApp, isLoading, errorKey } = auth;
+  const { phoneNumber, isLoading, errorKey } = auth;
 
   const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
@@ -108,12 +109,7 @@ const AuthCode = ({
             <Icon name="edit" />
           </div>
         </h1>
-        <p className="note">
-          {lang(isCodeViaApp ? 'SentAppCode' : 'LoginJustSentSms', undefined, {
-            withNodes: true,
-            withMarkdown: true,
-          })}
-        </p>
+        <p className="note">{lang('ParvaneCodeSentEmail')}</p>
         <InputText
           ref={inputRef}
           id="sign-in-code"

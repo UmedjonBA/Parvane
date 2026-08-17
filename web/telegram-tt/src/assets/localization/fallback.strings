@@ -92,7 +92,7 @@
 "PremiumLimitAccountsNoPremium" = "You have reached your current limit of connected accounts. You can free one more place by subscribing to Telegram Premium.";
 "PremiumLimitAccounts" = "You have reached your current limit of connected accounts. You can free one more place by subscribing to Telegram Premium with one of these connected accounts.";
 "SendMessage" = "Send Message";
-"MessageUnsupported" = "This message is not supported on the web version of Telegram";
+"MessageUnsupported" = "This message is not supported on the web version of Parvane";
 "PageContentUnsupported" = "Unsupported content";
 "PageContentEmbed" = "Embedded content";
 "ConversationDefaultRestrictedMedia" = "Sending media isn't allowed in this group.";
@@ -141,7 +141,7 @@
 "ChannelPrivateLinkHelp" = "People can join your channel by following this link. You can revoke the link at any time.";
 "MegaPrivateLinkHelp" = "People can join your group by following this link. You can revoke the link at any time.";
 "ChannelUsernameCreatePublicLinkHelp" = "If you set a public link, other people will be able to find and join your channel.\n\nYou can use a–z, 0–9 and underscores.\nMinimum length is 5 characters.";
-"GroupUsernameCreatePublicLinkHelp" = "People can share this link with others and find your group using Telegram search.";
+"GroupUsernameCreatePublicLinkHelp" = "People can share this link with others and find your group using Parvane search.";
 "UserRestrictionsNoSend" = "can't send messages";
 "UserRestrictionsNoSendMedia" = "no media";
 "UserRestrictionsNoSendStickers" = "no stickers & GIFs";
@@ -354,7 +354,7 @@
 "ChatListEmptyChatListFilterText" = "No chats currently belong to this folder.";
 "ChatEmptyChat" = "No messages here yet";
 "ChatListEmptyChatListEditFilter" = "Edit Folder";
-"UpdateTelegram" = "Update Telegram";
+"UpdateTelegram" = "Update Parvane";
 "AriaLabelOpenMenu" = "Open menu";
 "AriaLabelBackChatList" = "Return to chat list";
 "SettingsTipsUsername" = "TelegramTips";
@@ -1186,8 +1186,8 @@
 "InviteLinkExpired" = "expired";
 "Permanent" = "Primary link";
 "DeleteLink" = "Delete Link";
-"PrimaryLinkHelpChannel" = "Anyone on Telegram will be able to join your channel by following this link.";
-"PrimaryLinkHelp" = "Anyone on Telegram will be able to join your group by following this link.";
+"PrimaryLinkHelpChannel" = "Anyone on Parvane will be able to join your channel by following this link.";
+"PrimaryLinkHelp" = "Anyone on Parvane will be able to join your group by following this link.";
 "PublicLink" = "Public link";
 "CreatePermanentLinkTitle" = "Primary link";
 "CreateNewLink" = "Create a New Link";
@@ -1381,7 +1381,7 @@
 "ConversationViewBot" = "VIEW BOT";
 "ConversationViewPost" = "VIEW POST";
 "ConversationViewChannel" = "VIEW CHANNEL";
-"Telegram" = "Telegram";
+"Telegram" = "Parvane";
 "ChatListFilterAddToFolder" = "Add to folder...";
 "ChatListUnpinFromTop" = "Unpin from Top";
 "ChatListPinToTop" = "Pin to Top";
@@ -1474,8 +1474,8 @@
 "SettingsFoldersEmpty" = "You have no folders yet";
 "SettingsPasscodeSuccess" = "Congratulations!\nNow you can lock the app with a passcode so that others can't open it.";
 "SettingsPasscodeEnabled" = "Local Passcode is Enabled";
-"SettingsPasscodeStart1" = "When you set up an additional passcode, a lock icon will appear on the chats page.\nTap it to lock and unlock your Telegram Web A.";
-"SettingsPasscodeStart2" = "Note: if you forget your local passcode, you'll need to log out of Telegram Web A and log in again.";
+"SettingsPasscodeStart1" = "When you set up an additional passcode, a lock icon will appear on the chats page.\nTap it to lock and unlock your Parvane.";
+"SettingsPasscodeStart2" = "Note: if you forget your local passcode, you'll need to log out of Parvane and log in again.";
 "CurrentPasswordPlaceholder" = "Current password";
 "ChangeYourProfilePicture" = "Change your profile photo";
 "AppInactiveOtherClientTitle" = "Many sessions. So conflict.";
@@ -2072,7 +2072,7 @@
 "ActionVideoInvitedYou" = "You invited {user} to the video chat";
 "ActionVideoInvitedMany" = "{from} invited {users} to the video chat";
 "ActionVideoInvitedManyYou" = "You invited {users} to the video chat";
-"ActionUserRegistered" = "{from} joined Telegram";
+"ActionUserRegistered" = "{from} joined Parvane";
 "ActionRemovedPhoto" = "{from} removed group photo";
 "ActionRemovedPhotoYou" = "You removed group photo";
 "ActionRemovedPhotoChannel" = "Channel photo removed";
@@ -3022,3 +3022,9 @@
 "PollDurationOther" = "Other";
 "ParvaneStartText" = "Enter your Parvane address to sign in or create an account.";
 "ParvaneAddress" = "Address (user@server)";
+"ParvaneEmailText" = "New account — enter your email address, and we will send you a confirmation code.";
+"ParvaneEmail" = "Email";
+"ParvaneEmailInvalid" = "Please enter a valid email address.";
+"ParvaneRegisterFailed" = "Registration failed. Please try again.";
+"ParvaneCodeSentEmail" = "We have sent a confirmation code to your email.";
+"ParvaneCodeInvalid" = "Invalid code. Please try again or request a new one by signing in again.";

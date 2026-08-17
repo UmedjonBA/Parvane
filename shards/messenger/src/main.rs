@@ -866,6 +866,36 @@ async fn can_post(pool: &SqlitePool, to: &str, sender: &str) -> Result<bool> {
     Ok(muted.map(|(m,)| m <= now_unix()).unwrap_or(false))
 }
 
+/// Участвует ли `reader` в переписке сообщения `message_id`: для 1-1 — один из
+/// двух собеседников (для sealed из БД известен только получатель `to_user`);
+/// для группы — активный (не забаненный) участник. По аналогии с
+/// `can_mutate_message`. Используется, чтобы посторонний не мог ставить
+/// read-receipt на чужое сообщение (утечка факта существования + ложная галочка).
+async fn is_conversation_participant(
+    pool: &SqlitePool,
+    message_id: &str,
+    reader: &str,
+) -> Result<bool> {
+    let row: Option<(String, String, i64)> = sqlx::query_as(
+        "SELECT m.from_user, m.to_user,
+                EXISTS(SELECT 1 FROM groups g WHERE g.id = m.to_user)
+           FROM messages m WHERE m.id = ?",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((from, to, is_group)) = row else {
+        return Ok(false);
+    };
+    if is_group != 0 {
+        let role = member_role(pool, &to, reader).await?;
+        return Ok(matches!(role.as_deref(), Some(r) if r != "banned"));
+    }
+    // 1-1: получатель (`to_user`) или явный отправитель. Sealed-отправитель в БД
+    // пуст и через этот путь read-receipt не ставит (он и так автор).
+    Ok(reader == to || (!from.is_empty() && reader == from))
+}
+
 /// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
 async fn store_read_receipt(
     pool: &SqlitePool,
@@ -1290,18 +1320,21 @@ async fn handle_ack(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         // Снять из очереди этого получателя; при первом снятии — уведомить
         // отправителя о доставке (delivered-галочка).
         if ack_delivered(pool, &reader, &mid).await? {
-            // Sealed sender: у сообщения нет открытого from — получатель, расшифровав,
-            // сам указал отправителя. Иначе берём из БД (обычный путь).
-            let sender: Option<String> = if !event.payload.sender.is_empty() {
-                Some(event.payload.sender.clone())
-            } else {
-                sqlx::query_as::<_, (String,)>("SELECT from_user FROM messages WHERE id = ?")
-                    .bind(&mid)
-                    .fetch_optional(pool)
-                    .await?
-                    .map(|(s,)| s)
-                    .filter(|s| !s.is_empty())
-            };
+            // Отправитель берётся из БД (авторитетно), чтобы получатель не мог
+            // подставить произвольный адрес в delivered-receipt. Клиентский
+            // `payload.sender` — только фолбэк для sealed-сообщений, где открытого
+            // `from_user` в БД нет (его знает лишь расшифровавший получатель).
+            let sender: Option<String> = sqlx::query_as::<_, (String,)>(
+                "SELECT from_user FROM messages WHERE id = ?",
+            )
+            .bind(&mid)
+            .fetch_optional(pool)
+            .await?
+            .map(|(s,)| s)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                Some(event.payload.sender.clone()).filter(|s| !s.is_empty())
+            });
             if let Some(sender) = sender {
                 let delivered = ParvaneEvent {
                     id: Uuid::now_v7(),
@@ -1331,7 +1364,13 @@ async fn handle_read(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             .context("неверный JSON в msg.chat.read")?;
 
         let reader = verify_token(nc, &event.token).await?;
-        store_read_receipt(pool, &event.payload.message_id.to_string(), &reader, now_unix()).await?;
+        let mid = event.payload.message_id.to_string();
+        // Только участник переписки может ставить read-receipt на сообщение.
+        if !is_conversation_participant(pool, &mid, &reader).await? {
+            warn!("Read receipt отклонён: {} не участник переписки {}", reader, mid);
+            return anyhow::Ok(());
+        }
+        store_read_receipt(pool, &mid, &reader, now_unix()).await?;
 
         info!("Read receipt: {} прочитал {}", reader, event.payload.message_id);
         anyhow::Ok(())
@@ -2121,6 +2160,49 @@ mod tests {
             .await
             .unwrap();
         assert!(after[0].read, "read-галочка после receipt");
+    }
+
+    #[tokio::test]
+    async fn read_receipt_rejects_non_participant() {
+        // 1-1: посторонний не может ставить read-receipt; собеседники могут.
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000be";
+        store_message(&pool, &send_event(mid, "alice@local", "bob@local", "приват"), 1)
+            .await
+            .unwrap();
+        assert!(is_conversation_participant(&pool, mid, "bob@local").await.unwrap());
+        assert!(is_conversation_participant(&pool, mid, "alice@local").await.unwrap());
+        assert!(
+            !is_conversation_participant(&pool, mid, "mallory@local").await.unwrap(),
+            "посторонний — не участник переписки"
+        );
+        // Несуществующее сообщение — тоже отказ.
+        assert!(
+            !is_conversation_participant(&pool, "00000000-0000-7000-8000-00000000dead", "bob@local")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn read_receipt_group_requires_membership() {
+        // В группе только участник (не забаненный / не посторонний) ставит receipt.
+        let pool = test_pool().await;
+        let gid = create_group(
+            &pool, "g", GroupKind::Group, "alice@local", &["bob@local".into()], 1,
+        )
+        .await
+        .unwrap();
+        let mid = "00000000-0000-7000-8000-0000000000d9";
+        store_message(&pool, &send_event(mid, "alice@local", &gid, "групповое"), 2)
+            .await
+            .unwrap();
+        assert!(is_conversation_participant(&pool, mid, "bob@local").await.unwrap());
+        assert!(is_conversation_participant(&pool, mid, "alice@local").await.unwrap());
+        assert!(
+            !is_conversation_participant(&pool, mid, "carol@local").await.unwrap(),
+            "не член группы не ставит receipt"
+        );
     }
 
     #[tokio::test]

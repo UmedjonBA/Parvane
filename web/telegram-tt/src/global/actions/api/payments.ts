@@ -522,35 +522,8 @@ addActionHandler('closePremiumModal', (global, actions, payload): ActionReturnTy
   }, tabId);
 });
 
-addActionHandler('openPremiumModal', async (global, actions, payload): Promise<void> => {
-  const {
-    initialSection, fromUserId, isSuccess, isGift, daysAmount, toUserId, gift,
-    tabId = getCurrentTabId(),
-  } = payload || {};
-
-  actions.loadPremiumStickers();
-
-  const result = await callApi('fetchPremiumPromo');
-  if (!result) return;
-
-  global = getGlobal();
-
-  global = updateTabState(global, {
-    premiumModal: {
-      promo: result.promo,
-      initialSection,
-      isOpen: true,
-      fromUserId,
-      toUserId,
-      isGift,
-      daysAmount,
-      isSuccess,
-      gift,
-    },
-  }, tabId);
-  setGlobal(global);
-
-  actions.closeReactionPicker({ tabId });
+addActionHandler('openPremiumModal', async (): Promise<void> => {
+  // Parvane has no Telegram Premium; never show the premium pitch modal
 });
 
 addActionHandler('openGiveawayModal', async (global, actions, payload): Promise<void> => {

@@ -11,9 +11,6 @@ import {
   ARCHIVED_FOLDER_ID,
   BETA_CHANGELOG_URL,
   IS_BETA,
-  IS_TEST,
-  PRODUCTION_HOSTNAME,
-  WEB_VERSION_BASE,
 } from '../../../config';
 import {
   INITIAL_PERFORMANCE_STATE_MAX,
@@ -23,9 +20,8 @@ import {
 import { selectTabState, selectTheme, selectUser } from '../../../global/selectors';
 import { selectPremiumLimit } from '../../../global/selectors/limits';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
-import { IS_MULTIACCOUNT_SUPPORTED, IS_TAURI } from '../../../util/browser/globalEnvironment';
+import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironment';
 import { getPromptInstall } from '../../../util/installPrompt';
-import { switchPermanentWebVersion } from '../../../util/permanentWebVersion';
 import { getSystemTheme } from '../../../util/systemTheme';
 
 import { useFolderManagerForUnreadCounters } from '../../../hooks/useFolderManager';
@@ -85,8 +81,6 @@ const LeftSideMenuItems = ({
   const animationLevelValue = animationLevel !== ANIMATION_LEVEL_MIN
     ? (animationLevel === ANIMATION_LEVEL_MAX ? 'max' : 'mid') : 'min';
 
-  const withOtherVersions = !IS_TAURI && (window.location.hostname === PRODUCTION_HOSTNAME || IS_TEST);
-
   const archivedUnreadChatsCount = useFolderManagerForUnreadCounters()[ARCHIVED_FOLDER_ID]?.chatsCount || 0;
 
   const bots = useMemo(() => Object.values(attachBots).filter((bot) => bot.isForSideMenu), [attachBots]);
@@ -125,10 +119,6 @@ const LeftSideMenuItems = ({
 
   const handleChangelogClick = useLastCallback(() => {
     window.open(BETA_CHANGELOG_URL, '_blank', 'noopener,noreferrer');
-  });
-
-  const handleSwitchToWebK = useLastCallback(() => {
-    switchPermanentWebVersion('K');
   });
 
   return (
@@ -220,16 +210,6 @@ const LeftSideMenuItems = ({
                 onClick={handleChangelogClick}
               >
                 {lang('MenuBetaChangelog')}
-              </MenuItem>
-            )}
-            {withOtherVersions && (
-              <MenuItem
-                icon="K"
-                isCharIcon
-                href={`${WEB_VERSION_BASE}k`}
-                onClick={handleSwitchToWebK}
-              >
-                {lang('MenuSwitchToK')}
               </MenuItem>
             )}
             {canInstall && (

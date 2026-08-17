@@ -4,14 +4,15 @@ use base64::{engine::general_purpose::{STANDARD as B64, STANDARD_NO_PAD as B64_N
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
-    FetchBundleRequest, FetchBundleResponse, IssueRequest, IssueResponse, PublishPrekeysRequest,
-    PublishPrekeysResponse, RegisterRequest, RegisterResponse, ResolveRequest, ResolveResponse,
-    SearchUsersRequest, SearchUsersResponse, SetAvatarRequest, SetKeyRequest, SetNameRequest,
-    SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
+    EmailConfirmRequest, EmailConfirmResponse, FetchBundleRequest, FetchBundleResponse,
+    IssueRequest, IssueResponse, PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest,
+    RegisterResponse, ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse,
+    SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest,
+    VerifyResponse,
     topics::{
-        IDENTITY_ISSUE, IDENTITY_PREKEYS_FETCH, IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER,
-        IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME,
-        IDENTITY_VERIFY,
+        IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_PREKEYS_FETCH, IDENTITY_PREKEYS_PUBLISH,
+        IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
+        IDENTITY_SETNAME, IDENTITY_VERIFY,
     },
 };
 
@@ -101,6 +102,7 @@ async fn main() -> Result<()> {
 
     let mut issue_sub = nc.subscribe(IDENTITY_ISSUE).await?;
     let mut register_sub = nc.subscribe(IDENTITY_REGISTER).await?;
+    let mut email_confirm_sub = nc.subscribe(IDENTITY_EMAIL_CONFIRM).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
@@ -110,7 +112,7 @@ async fn main() -> Result<()> {
     let mut pkpub_sub = nc.subscribe(IDENTITY_PREKEYS_PUBLISH).await?;
     let mut pkfetch_sub = nc.subscribe(IDENTITY_PREKEYS_FETCH).await?;
 
-    info!("Identity шард запущен. Слушаю: issue/register/verify/search/setname/setavatar/setkey/resolve/prekeys");
+    info!("Identity шард запущен. Слушаю: issue/register/email.confirm/verify/search/setname/setavatar/setkey/resolve/prekeys");
 
     loop {
         tokio::select! {
@@ -119,6 +121,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = register_sub.next() => {
                 handle_register(&nc, &pool, msg).await;
+            }
+            Some(msg) = email_confirm_sub.next() => {
+                handle_email_confirm(&nc, &pool, msg).await;
             }
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, msg).await;
@@ -532,9 +537,17 @@ async fn handle_prekeys_fetch(
     };
     let resp = match serde_json::from_slice::<FetchBundleRequest>(&msg.payload) {
         Ok(req) => match verify(&req.token) {
-            Ok(_requester) => fetch_bundle(pool, &req.user, &req.known_devices)
-                .await
-                .unwrap_or_else(|e| empty_bundle_response(Some(e.to_string()))),
+            Ok(requester) => {
+                if !prekey_fetch_rate_ok(&requester, &req.user) {
+                    empty_bundle_response(Some(
+                        "слишком много запросов ключей, попробуйте позже".into(),
+                    ))
+                } else {
+                    fetch_bundle(pool, &req.user, &req.known_devices)
+                        .await
+                        .unwrap_or_else(|e| empty_bundle_response(Some(e.to_string())))
+                }
+            }
             Err(e) => empty_bundle_response(Some(e.to_string())),
         },
         Err(e) => empty_bundle_response(Some(e.to_string())),
@@ -597,19 +610,39 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
     let req: IssueRequest = serde_json::from_slice(payload)
         .context("неверный JSON в IssueRequest")?;
 
+    // Брутфорс-защита: частотный лимит + экспоненциальный лок-аут по логину
+    // (источник соединения gateway'ем в payload не прокидывается, поэтому ключ —
+    // логин). Проверяем ДО обращения к БД, чтобы отклонённая попытка была дёшева.
+    login_gate_check(&req.user)?;
+
     // Логин: пользователь ОБЯЗАН существовать. Создание аккаунтов — только через
     // identity.user.register (раньше issue молча создавал юзера с любым паролем —
     // это позволяло занять любой адрес первым запросом).
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT password_hash FROM users WHERE username = ?")
+    let row: Option<(String, i64)> =
+        sqlx::query_as("SELECT password_hash, email_verified FROM users WHERE username = ?")
             .bind(&req.user)
             .fetch_optional(pool)
             .await?;
-    let Some((hash,)) = row else {
-        anyhow::bail!("нет такого пользователя");
+    // Анти-энумерация + анти-timing: несуществующий юзер и неверный пароль дают
+    // ОДНУ ошибку, а argon2-verify выполняется всегда (по dummy-хэшу постоянного
+    // времени, когда юзера нет), чтобы по задержке нельзя было отличить случаи.
+    let Some((hash, email_verified)) = row else {
+        let _ = verify_password(&req.password, dummy_password_hash());
+        login_record_failure(&req.user);
+        anyhow::bail!("неверный логин или пароль");
     };
     if !verify_password(&req.password, &hash) {
-        anyhow::bail!("неверный пароль");
+        login_record_failure(&req.user);
+        anyhow::bail!("неверный логин или пароль");
+    }
+    // Пароль верен — сбрасываем счётчик неудач (в т.ч. до проверки почты, чтобы
+    // неподтверждённый аккаунт с верным паролем не копил лок-аут и мог получать
+    // перевысылку кода).
+    login_record_success(&req.user);
+    // Сообщаем о неподтверждённой почте только после проверки пароля, чтобы
+    // посторонний не мог зондировать статус чужого аккаунта.
+    if email_verified == 0 {
+        anyhow::bail!("почта не подтверждена");
     }
 
     let now = now_unix() as usize;
@@ -628,9 +661,15 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         error!("register: нет reply-топика, игнорирую");
         return;
     };
-    let resp = match do_register(pool, &msg.payload).await {
-        Ok(()) => RegisterResponse { ok: true, error: None },
-        Err(e) => RegisterResponse { ok: false, error: Some(e.to_string()) },
+    let email_required = std::env::var("PARVANE_EMAIL_REQUIRED").as_deref() == Ok("1");
+    let resp = match do_register(pool, &msg.payload, email_required).await {
+        Ok(out) => {
+            if let Some((email, code)) = out.send {
+                send_confirmation_email(email, code);
+            }
+            RegisterResponse { ok: true, error: None, confirm_required: out.confirm_required }
+        }
+        Err(e) => RegisterResponse { ok: false, error: Some(e.to_string()), confirm_required: false },
     };
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
@@ -638,9 +677,31 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     }
 }
 
+/// Итог регистрации: ждать ли код и какое письмо отправить.
+#[derive(Debug)]
+struct RegisterOutcome {
+    confirm_required: bool,
+    /// (email, код) для письма. None — подтверждение не требуется.
+    send: Option<(String, String)>,
+}
+
+/// Сколько живёт неподтверждённый аккаунт: после — логин можно занять заново
+/// (иначе регистрация без подтверждения сквотила бы адреса навсегда).
+const PENDING_TTL_SECS: i64 = 86_400;
+/// Срок действия кода подтверждения.
+const CODE_TTL_SECS: i64 = 900;
+/// Попыток ввода кода до принудительного перезапроса.
+const CODE_MAX_ATTEMPTS: i64 = 5;
+
 /// Создать аккаунт. Отвергает занятый логин, пустые поля, превышение лимита
 /// попыток и (при PARVANE_INVITE_REQUIRED=1) отсутствие валидного инвайта.
-async fn do_register(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
+/// При `email_required` аккаунт создаётся неподтверждённым и ждёт кода с почты;
+/// повторный register с тем же паролем до подтверждения — перевысылка кода.
+async fn do_register(
+    pool: &SqlitePool,
+    payload: &[u8],
+    email_required: bool,
+) -> Result<RegisterOutcome> {
     let req: RegisterRequest = serde_json::from_slice(payload)
         .context("неверный JSON в RegisterRequest")?;
 
@@ -655,20 +716,59 @@ async fn do_register(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
         anyhow::bail!("слишком много попыток, попробуйте позже");
     }
 
+    // Пустой email валиден только для перевысылки кода pending-аккаунту
+    // (ниже), для новой регистрации проверяется перед INSERT.
+    let email = req.email.trim().to_lowercase();
+
+    // Неподтверждённый аккаунт: тот же пароль — перевысылаем код (пустой email
+    // = на сохранённую почту, непустой — обновляем, вдруг была опечатка);
+    // чужой просроченный — освобождаем логин.
+    let existing: Option<(String, i64, i64, String)> = sqlx::query_as(
+        "SELECT password_hash, email_verified, created_at, email FROM users WHERE username = ?",
+    )
+    .bind(&user)
+    .fetch_optional(pool)
+    .await?;
+    if let Some((hash, verified, created_at, stored_email)) = existing {
+        if verified != 0 {
+            anyhow::bail!("логин занят");
+        }
+        if verify_password(&req.password, &hash) {
+            let email = if email.is_empty() { stored_email } else { email };
+            if !valid_email(&email) {
+                anyhow::bail!("нужен корректный email");
+            }
+            sqlx::query("UPDATE users SET email = ? WHERE username = ?")
+                .bind(&email)
+                .bind(&user)
+                .execute(pool)
+                .await?;
+            let code = issue_email_code(pool, &user).await?;
+            info!("Перевысылка кода подтверждения: {}", user);
+            return Ok(RegisterOutcome { confirm_required: true, send: Some((email, code)) });
+        }
+        if now_unix() - created_at <= PENDING_TTL_SECS {
+            anyhow::bail!("логин занят");
+        }
+        sqlx::query("DELETE FROM users WHERE username = ?")
+            .bind(&user)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM email_codes WHERE username = ?")
+            .bind(&user)
+            .execute(pool)
+            .await?;
+    }
+
+    if email_required && !valid_email(&email) {
+        anyhow::bail!("нужен корректный email");
+    }
+
     // Инвайт-режим за флагом окружения (закрытый пузырь).
     if std::env::var("PARVANE_INVITE_REQUIRED").as_deref() == Ok("1")
         && !consume_invite(pool, &req.invite).await?
     {
         anyhow::bail!("нужен валидный инвайт-код");
-    }
-
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM users WHERE username = ?")
-            .bind(&user)
-            .fetch_optional(pool)
-            .await?;
-    if existing.is_some() {
-        anyhow::bail!("логин занят");
     }
 
     let hash = hash_password(&req.password)?;
@@ -677,17 +777,179 @@ async fn do_register(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
     // Отображаемое имя по умолчанию — локальная часть адреса (до '@').
     let default_name = user.split('@').next().unwrap_or(&user).to_string();
     sqlx::query(
-        "INSERT INTO users (id, username, password_hash, created_at, display_name)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, username, password_hash, created_at, display_name, email, email_verified)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&user)
     .bind(&hash)
     .bind(now)
     .bind(&default_name)
+    .bind(&email)
+    .bind(if email_required { 0 } else { 1 })
     .execute(pool)
     .await?;
+
+    if email_required {
+        let code = issue_email_code(pool, &user).await?;
+        info!("Пользователь зарегистрирован, ждёт подтверждения почты: {}", user);
+        return Ok(RegisterOutcome { confirm_required: true, send: Some((email, code)) });
+    }
     info!("Пользователь зарегистрирован: {} (имя: {})", user, default_name);
+    Ok(RegisterOutcome { confirm_required: false, send: None })
+}
+
+/// Минимальная проверка адреса почты (полная валидация — задача SMTP-сервера).
+fn valid_email(email: &str) -> bool {
+    if email.len() < 5 || email.len() > 254 || email.contains(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains('@')
+}
+
+/// Сгенерировать 6-значный код, сохранить его argon2-хэш (upsert) и вернуть
+/// открытый код для письма. Прежний код перестаёт действовать.
+async fn issue_email_code(pool: &SqlitePool, user: &str) -> Result<String> {
+    use rand::Rng;
+    let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000u32));
+    let hash = hash_password(&code)?;
+    let now = now_unix();
+    sqlx::query(
+        "INSERT INTO email_codes (username, code_hash, expires_at, attempts, sent_at)
+         VALUES (?, ?, ?, 0, ?)
+         ON CONFLICT(username) DO UPDATE SET
+            code_hash = excluded.code_hash,
+            expires_at = excluded.expires_at,
+            attempts = 0,
+            sent_at = excluded.sent_at",
+    )
+    .bind(user)
+    .bind(&hash)
+    .bind(now + CODE_TTL_SECS)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(code)
+}
+
+/// Отправить письмо с кодом. Без PARVANE_SMTP_HOST — dev-режим: код в лог
+/// (локальная разработка и e2e). Отправка — в отдельной таске, чтобы медленный
+/// SMTP не блокировал цикл обработки шины.
+fn send_confirmation_email(email: String, code: String) {
+    let Some(host) = std::env::var("PARVANE_SMTP_HOST").ok().filter(|h| !h.is_empty()) else {
+        info!("dev-режим SMTP: код подтверждения для {}: {}", email, code);
+        return;
+    };
+    tokio::spawn(async move {
+        match smtp_send(&host, &email, &code).await {
+            Ok(()) => info!("Код подтверждения отправлен на {}", email),
+            Err(e) => error!("не удалось отправить письмо на {}: {}", email, e),
+        }
+    });
+}
+
+async fn smtp_send(host: &str, email: &str, code: &str) -> Result<()> {
+    use lettre::transport::smtp::authentication::Credentials;
+    use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+
+    let port: u16 = std::env::var("PARVANE_SMTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(587);
+    let smtp_user = std::env::var("PARVANE_SMTP_USER").unwrap_or_default();
+    let smtp_pass = std::env::var("PARVANE_SMTP_PASS").unwrap_or_default();
+    let from = std::env::var("PARVANE_SMTP_FROM").unwrap_or_else(|_| smtp_user.clone());
+
+    let message = Message::builder()
+        .from(from.parse().context("PARVANE_SMTP_FROM: неверный адрес")?)
+        .to(email.parse().context("неверный адрес получателя")?)
+        .subject("Parvane: код подтверждения")
+        .body(format!(
+            "Ваш код подтверждения: {code}\n\nКод действует {} минут. Если вы не \
+             регистрировались в Parvane — просто проигнорируйте это письмо.",
+            CODE_TTL_SECS / 60
+        ))
+        .context("сборка письма")?;
+
+    // 465 — implicit TLS, иначе STARTTLS (587 и т.п.).
+    let mut builder = if port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(host).context("SMTP relay")?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host).context("SMTP starttls")?
+    };
+    builder = builder.port(port);
+    if !smtp_user.is_empty() {
+        builder = builder.credentials(Credentials::new(smtp_user, smtp_pass));
+    }
+    builder.build().send(message).await.context("отправка SMTP")?;
+    Ok(())
+}
+
+// ── подтверждение почты ───────────────────────────────────────────────────────
+
+async fn handle_email_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        error!("email.confirm: нет reply-топика, игнорирую");
+        return;
+    };
+    let resp = match do_email_confirm(pool, &msg.payload).await {
+        Ok(()) => EmailConfirmResponse { ok: true, error: None },
+        Err(e) => EmailConfirmResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
+    if let Err(e) = nc.publish(reply, json.into()).await {
+        error!("email.confirm: ошибка отправки ответа: {}", e);
+    }
+}
+
+/// Проверить код из письма и подтвердить аккаунт. Код одноразовый, живёт
+/// CODE_TTL_SECS, до CODE_MAX_ATTEMPTS попыток; счётчик атомарный (UPDATE …
+/// RETURNING), поэтому перебор параллельными запросами не обходит лимит.
+async fn do_email_confirm(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
+    let req: EmailConfirmRequest = serde_json::from_slice(payload)
+        .context("неверный JSON в EmailConfirmRequest")?;
+    let user = req.user.trim().to_string();
+    let code = req.code.trim().to_string();
+    if user.is_empty() || code.is_empty() {
+        anyhow::bail!("пустой логин или код");
+    }
+
+    let row: Option<(String, i64, i64)> = sqlx::query_as(
+        "UPDATE email_codes SET attempts = attempts + 1 WHERE username = ?
+         RETURNING code_hash, expires_at, attempts",
+    )
+    .bind(&user)
+    .fetch_optional(pool)
+    .await?;
+    let Some((hash, expires_at, attempts)) = row else {
+        anyhow::bail!("код не запрошен или уже использован");
+    };
+    if now_unix() > expires_at {
+        anyhow::bail!("код истёк, запросите новый");
+    }
+    if attempts > CODE_MAX_ATTEMPTS {
+        anyhow::bail!("слишком много попыток, запросите новый код");
+    }
+    if !verify_password(&code, &hash) {
+        anyhow::bail!("неверный код");
+    }
+
+    sqlx::query("UPDATE users SET email_verified = 1 WHERE username = ?")
+        .bind(&user)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM email_codes WHERE username = ?")
+        .bind(&user)
+        .execute(pool)
+        .await?;
+    info!("Почта подтверждена: {}", user);
     Ok(())
 }
 
@@ -721,6 +983,109 @@ fn rate_ok(user: &str) -> bool {
     let map = LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap();
     let hits = guard.entry(user.to_string()).or_default();
+    hits.retain(|&t| now - t < 60);
+    if hits.len() >= limit {
+        return false;
+    }
+    hits.push(now);
+    true
+}
+
+/// Dummy argon2-хэш постоянного времени: verify по нему для несуществующего
+/// пользователя тратит то же время, что и реальная проверка (анти-timing).
+fn dummy_password_hash() -> &'static str {
+    use std::sync::OnceLock;
+    static H: OnceLock<String> = OnceLock::new();
+    H.get_or_init(|| {
+        // Валидный PHC-хэш случайного пароля; если генерация вдруг не удалась —
+        // фиксированный корректный argon2id-хэш строки "parvane" (fallback).
+        hash_password("parvane-timing-guard").unwrap_or_else(|_| {
+            "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$\
+             J6m5o0m0Zq0m0Zq0m0Zq0m0Zq0m0Zq0m0Zq0m0Zq0m0"
+                .to_string()
+        })
+    })
+}
+
+// ── брутфорс-гейт логина (identity.token.issue) ───────────────────────────────
+
+#[derive(Default)]
+struct LoginBucket {
+    /// Метки времени попыток в текущем частотном окне (60 c).
+    attempts: Vec<i64>,
+    /// Серия подряд идущих неудач (сбрасывается при верном пароле).
+    fails: u32,
+    /// Unix-время, до которого логин по этому ключу заблокирован.
+    locked_until: i64,
+}
+
+fn login_limiter() -> &'static std::sync::Mutex<std::collections::HashMap<String, LoginBucket>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static L: OnceLock<Mutex<HashMap<String, LoginBucket>>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
+/// Пропускает попытку логина или отвергает её: частотный лимит на 60 c
+/// (PARVANE_LOGIN_RATE, по умолчанию 10) и активный лок-аут после серии неудач.
+fn login_gate_check(user: &str) -> Result<()> {
+    let rate = env_u64("PARVANE_LOGIN_RATE", 10) as usize;
+    let now = now_unix();
+    let map = login_limiter();
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let bucket = guard.entry(user.to_string()).or_default();
+    if bucket.locked_until > now {
+        anyhow::bail!("слишком много неудачных попыток, попробуйте позже");
+    }
+    bucket.attempts.retain(|&t| now - t < 60);
+    if bucket.attempts.len() >= rate {
+        anyhow::bail!("слишком много попыток, попробуйте позже");
+    }
+    bucket.attempts.push(now);
+    Ok(())
+}
+
+/// Учесть неудачную попытку и, при достижении порога, включить экспоненциальный
+/// лок-аут: base * 2^(fails-threshold), но не дольше max.
+fn login_record_failure(user: &str) {
+    let threshold = env_u64("PARVANE_LOGIN_LOCK_THRESHOLD", 5) as u32;
+    let base = env_u64("PARVANE_LOGIN_LOCK_BASE_SECS", 2);
+    let max = env_u64("PARVANE_LOGIN_LOCK_MAX_SECS", 900);
+    let now = now_unix();
+    let map = login_limiter();
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let bucket = guard.entry(user.to_string()).or_default();
+    bucket.fails = bucket.fails.saturating_add(1);
+    if bucket.fails >= threshold {
+        let over = (bucket.fails - threshold).min(20);
+        let backoff = base.saturating_mul(1u64 << over).min(max);
+        bucket.locked_until = now + backoff as i64;
+    }
+}
+
+/// Верный пароль: снимаем лок-аут и счётчик неудач для этого логина.
+fn login_record_success(user: &str) {
+    let map = login_limiter();
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    guard.remove(user);
+}
+
+/// Частотный лимит фетча prekey-бандла по паре (запросивший → цель): не даёт
+/// вычерпать one-time prekeys жертвы циклом фетчей. PARVANE_PREKEY_FETCH_RATE
+/// (по умолчанию 20) запросов на пару за 60 c.
+fn prekey_fetch_rate_ok(requester: &str, target: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static L: OnceLock<Mutex<HashMap<(String, String), Vec<i64>>>> = OnceLock::new();
+    let limit = env_u64("PARVANE_PREKEY_FETCH_RATE", 20) as usize;
+    let now = now_unix();
+    let map = L.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let hits = guard.entry((requester.to_string(), target.to_string())).or_default();
     hits.retain(|&t| now - t < 60);
     if hits.len() >= limit {
         return false;
@@ -884,12 +1249,19 @@ mod tests {
         serde_json::to_vec(&IssueRequest { user: user.into(), password: password.into() }).unwrap()
     }
     fn register_bytes(user: &str, password: &str) -> Vec<u8> {
+        register_bytes_email(user, password, "")
+    }
+    fn register_bytes_email(user: &str, password: &str, email: &str) -> Vec<u8> {
         serde_json::to_vec(&RegisterRequest {
             user: user.into(),
             password: password.into(),
             invite: String::new(),
+            email: email.into(),
         })
         .unwrap()
+    }
+    fn confirm_bytes(user: &str, code: &str) -> Vec<u8> {
+        serde_json::to_vec(&EmailConfirmRequest { user: user.into(), code: code.into() }).unwrap()
     }
 
     #[tokio::test]
@@ -898,7 +1270,8 @@ mod tests {
         let pool = test_pool().await;
         let (enc, _) = make_keys();
         let err = do_issue(&pool, &enc, &issue_bytes("ghost@local", "pw")).await.unwrap_err();
-        assert!(err.to_string().contains("нет такого пользователя"));
+        // Единая ошибка (анти-энумерация): не раскрываем, существует ли логин.
+        assert!(err.to_string().contains("неверный логин или пароль"));
         let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE username = ?")
             .bind("ghost@local").fetch_one(&pool).await.unwrap();
         assert_eq!(cnt.0, 0, "аккаунт не должен быть создан логином");
@@ -909,7 +1282,7 @@ mod tests {
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
         // регистрация создаёт аккаунт
-        do_register(&pool, &register_bytes("newbie@local", "pw")).await.unwrap();
+        do_register(&pool, &register_bytes("newbie@local", "pw"), false).await.unwrap();
         // теперь логин проходит и выдаёт валидный JWT
         let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap();
         let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap();
@@ -919,10 +1292,217 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn issue_indistinguishable_unknown_vs_wrong_password() {
+        // Анти-энумерация: несуществующий юзер и неверный пароль — одна ошибка.
+        let pool = test_pool().await;
+        let (enc, _) = make_keys();
+        do_register(&pool, &register_bytes("real@local", "pw"), false).await.unwrap();
+        let e_unknown = do_issue(&pool, &enc, &issue_bytes("nouser@local", "pw"))
+            .await
+            .unwrap_err()
+            .to_string();
+        let e_wrong = do_issue(&pool, &enc, &issue_bytes("real@local", "bad"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(e_unknown, e_wrong, "ошибки должны быть неотличимы");
+        assert!(e_unknown.contains("неверный логин или пароль"));
+    }
+
+    #[tokio::test]
+    async fn issue_locks_out_after_repeated_failures() {
+        // После порога подряд идущих неудач логин временно блокируется даже с
+        // верным паролем; PARVANE_LOGIN_LOCK_THRESHOLD берётся из env (по умолч. 5).
+        let pool = test_pool().await;
+        let (enc, _) = make_keys();
+        do_register(&pool, &register_bytes("lock@local", "pw"), false).await.unwrap();
+        for _ in 0..5 {
+            assert!(do_issue(&pool, &enc, &issue_bytes("lock@local", "bad")).await.is_err());
+        }
+        // теперь даже верный пароль отклонён (лок-аут активен)
+        let err = do_issue(&pool, &enc, &issue_bytes("lock@local", "pw"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("много"), "ожидался лок-аут: {err}");
+    }
+
+    #[test]
+    fn prekey_fetch_rate_limits_per_pair() {
+        // Пара (requester → target) ограничена; другая цель не затронута.
+        let (a, victim, other) = ("rl_a@local", "rl_victim@local", "rl_other@local");
+        let mut ok = 0;
+        for _ in 0..25 {
+            if prekey_fetch_rate_ok(a, victim) {
+                ok += 1;
+            }
+        }
+        assert!(ok <= 20, "лимит пары не превышен: {ok}");
+        assert!(prekey_fetch_rate_ok(a, other), "другая цель — свой лимит");
+    }
+
+    // ── регистрация через почту (PARVANE_EMAIL_REQUIRED) ──
+
+    #[tokio::test]
+    async fn email_flow_register_confirm_login() {
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        let out = do_register(
+            &pool,
+            &register_bytes_email("mail@local", "pw", "user@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(out.confirm_required);
+        let (email, code) = out.send.unwrap();
+        assert_eq!(email, "user@example.com");
+        assert_eq!(code.len(), 6);
+
+        // логин до подтверждения — отказ с различимой ошибкой
+        let err = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap_err();
+        assert!(err.to_string().contains("почта не подтверждена"));
+
+        // неверный код — отказ
+        let wrong = if code == "000000" { "000001" } else { "000000" };
+        assert!(do_email_confirm(&pool, &confirm_bytes("mail@local", wrong)).await.is_err());
+
+        // верный код подтверждает, повторно не работает (одноразовый)
+        do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.unwrap();
+        assert!(do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.is_err());
+
+        let token = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap();
+        let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap();
+        assert_eq!(user, "mail@local");
+    }
+
+    #[tokio::test]
+    async fn email_flow_requires_valid_email() {
+        let pool = test_pool().await;
+        for bad in ["", "no-at", "a@b", "a @b.com", "@x.com"] {
+            let err = do_register(
+                &pool,
+                &register_bytes_email(&format!("u{}@local", bad.len()), "pw", bad),
+                true,
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("email"), "'{bad}': {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn email_flow_reregister_resends_and_fixes_email() {
+        let pool = test_pool().await;
+        let out1 = do_register(
+            &pool,
+            &register_bytes_email("re@local", "pw", "typo@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+        let (_, code1) = out1.send.unwrap();
+        // повтор с тем же паролем — новый код и исправленный email
+        let out2 = do_register(
+            &pool,
+            &register_bytes_email("re@local", "pw", "fixed@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(out2.confirm_required);
+        let (email2, code2) = out2.send.unwrap();
+        assert_eq!(email2, "fixed@example.com");
+        if code1 != code2 {
+            assert!(
+                do_email_confirm(&pool, &confirm_bytes("re@local", &code1)).await.is_err(),
+                "старый код должен быть отозван"
+            );
+        }
+        // пустой email при повторе — перевысылка на сохранённую почту
+        let out3 = do_register(&pool, &register_bytes_email("re@local", "pw", ""), true)
+            .await
+            .unwrap();
+        let (email3, code3) = out3.send.unwrap();
+        assert_eq!(email3, "fixed@example.com");
+        do_email_confirm(&pool, &confirm_bytes("re@local", &code3)).await.unwrap();
+        // подтверждённый логин чужим register больше не перехватить
+        let err = do_register(
+            &pool,
+            &register_bytes_email("re@local", "other", "x@example.com"),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("занят"));
+    }
+
+    #[tokio::test]
+    async fn email_flow_pending_login_protected_until_ttl() {
+        let pool = test_pool().await;
+        do_register(&pool, &register_bytes_email("pend@local", "pw", "p@example.com"), true)
+            .await
+            .unwrap();
+        // чужой пароль на свежем pending — занят
+        let err = do_register(
+            &pool,
+            &register_bytes_email("pend@local", "other", "x@example.com"),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("занят"));
+        // просроченный pending освобождает логин
+        sqlx::query("UPDATE users SET created_at = created_at - 200000 WHERE username = 'pend@local'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let out = do_register(
+            &pool,
+            &register_bytes_email("pend@local", "other", "x@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(out.confirm_required);
+    }
+
+    #[tokio::test]
+    async fn email_code_attempts_limited() {
+        let pool = test_pool().await;
+        let out = do_register(
+            &pool,
+            &register_bytes_email("brute@local", "pw", "b@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+        let (_, code) = out.send.unwrap();
+        let wrong = if code == "999999" { "999998" } else { "999999" };
+        for _ in 0..CODE_MAX_ATTEMPTS {
+            assert!(do_email_confirm(&pool, &confirm_bytes("brute@local", wrong)).await.is_err());
+        }
+        // лимит исчерпан — даже верный код отклонён
+        let err = do_email_confirm(&pool, &confirm_bytes("brute@local", &code)).await.unwrap_err();
+        assert!(err.to_string().contains("много попыток"));
+    }
+
+    #[tokio::test]
+    async fn register_without_email_flag_stays_verified() {
+        // Флаг выключен (desktop и существующие e2e): аккаунт сразу активен.
+        let pool = test_pool().await;
+        let (enc, _) = make_keys();
+        let out = do_register(&pool, &register_bytes("plain@local", "pw"), false).await.unwrap();
+        assert!(!out.confirm_required);
+        assert!(out.send.is_none());
+        do_issue(&pool, &enc, &issue_bytes("plain@local", "pw")).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn register_rejects_duplicate() {
         let pool = test_pool().await;
-        do_register(&pool, &register_bytes("dup@local", "pw")).await.unwrap();
-        let err = do_register(&pool, &register_bytes("dup@local", "other")).await.unwrap_err();
+        do_register(&pool, &register_bytes("dup@local", "pw"), false).await.unwrap();
+        let err = do_register(&pool, &register_bytes("dup@local", "other"), false).await.unwrap_err();
         assert!(err.to_string().contains("занят"));
     }
 

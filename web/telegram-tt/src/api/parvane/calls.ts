@@ -28,6 +28,7 @@ type CallDependencies = {
   getStore: () => ParvaneStore;
   getToken: () => string;
   isIdentityReady: () => boolean;
+  isBlocked: (address: string) => boolean;
   sendUpdate: (update: ApiUpdate) => void;
   log: (message: string) => void;
 };
@@ -227,6 +228,11 @@ export function createCallController(deps: CallDependencies) {
       emit();
     };
     listeners.onIncoming = (from, callId, media) => {
+      // Звонок от заблокированного контакта: молча отклоняем, не показывая экран
+      if (deps.isBlocked(from)) {
+        engine?.rejectCall(from, callId);
+        return;
+      }
       callWindow.parvaneCall!.incoming = { from, callId, media };
       callWindow.parvaneCall!.state = 'incoming';
       callWindow.parvaneCall!.peerName = deps.getStore().getDisplayName(from);
@@ -281,18 +287,24 @@ export function createCallController(deps: CallDependencies) {
         if (!group) return;
         group.peerStates = { ...group.peerStates, [peer]: state };
         group.peerNames = { ...group.peerNames, [peer]: deps.getStore().getDisplayName(peer) };
+        // Локальный поток появляется асинхронно (getUserMedia) — подхватываем его
+        // для превью и кнопки камеры, как только медиа поднялось
+        callWindow.parvaneCall!.localStream = groupEngine?.getLocalStream();
         emit();
       },
       onPeerStream: (peer, stream) => {
         callWindow.parvaneCall!.groupStreams = {
           ...callWindow.parvaneCall!.groupStreams, [peer]: stream,
         };
+        callWindow.parvaneCall!.localStream = groupEngine?.getLocalStream();
         emit();
       },
       onEnded: () => {
         callWindow.parvaneCall!.group = undefined;
         callWindow.parvaneCall!.groupStreams = undefined;
+        callWindow.parvaneCall!.localStream = undefined;
         callWindow.parvaneCall!.isMuted = undefined;
+        callWindow.parvaneCall!.isCameraOff = undefined;
         emit();
       },
     });
@@ -407,7 +419,12 @@ export function createCallController(deps: CallDependencies) {
   }
 
   function toggleCamera() {
-    const tracks = engine?.getLocalStream()?.getVideoTracks() || [];
+    // В mesh камеру гасим через track.enabled (без ренеготиации): пиры видят
+    // застывший/пустой кадр, звук не трогаем
+    const stream = groupEngine?.currentGroupCallId
+      ? groupEngine.getLocalStream()
+      : engine?.getLocalStream();
+    const tracks = stream?.getVideoTracks() || [];
     if (!tracks.length) return undefined;
     const shouldDisable = tracks.some((track) => track.enabled);
     tracks.forEach((track) => {

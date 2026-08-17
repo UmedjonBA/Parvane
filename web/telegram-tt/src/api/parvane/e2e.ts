@@ -58,7 +58,16 @@ export type DeviceCiphertext = {
   ctype: number;
 };
 
-type StoredInner = { from: string; content: unknown };
+// `senderIdentity` — curve25519 устройства-отправителя из sealed-конверта.
+// Кэшируется вместе с расшифровкой, чтобы аутентичность отправителя можно было
+// перепроверять по каталогу identity и после рестарта (иначе cached-путь
+// доверял бы `from` слепо). Для своих исходящих не задаётся
+type StoredInner = { from: string; content: unknown; senderIdentity?: string };
+
+// Вердикт проверки принадлежности sender_identity заявленному отправителю:
+// ok — ключ в каталоге отправителя; spoofed — каталог получен, ключа там нет
+// (подмена); unknown — каталог недоступен (сеть), подтвердить не удалось
+export type SenderVerdict = 'ok' | 'spoofed' | 'unknown';
 
 type ContactDevice = { identity: string; signing: string };
 
@@ -386,6 +395,15 @@ export class E2eEngine {
     this.persistDecCache();
   }
 
+  // Снять расшифрованный inner из кэша (TTL-самоуничтожение у получателя):
+  // без этого plaintext эфемерного сообщения оставался бы в persisted decCache
+  // навсегда и уезжал в экспорт ключей, ломая обещание «исчезает после срока»
+  dropCachedInner(uuid: string) {
+    if (!(uuid in this.decCache)) return;
+    delete this.decCache[uuid];
+    this.persistDecCache();
+  }
+
   persistNow() {
     this.queuePersist();
   }
@@ -453,10 +471,10 @@ export class E2eEngine {
 
   // Обновить список устройств контакта и установить сессии с новыми.
   // Сетевая ошибка не фатальна — работаем с известными устройствами
-  private async refreshContactDevices(contact: string, fetchBundle: BundleFetcher) {
+  private async refreshContactDevices(contact: string, fetchBundle: BundleFetcher, force = false) {
     const now = Date.now();
     const fetchedAt = this.deviceListFetchedAt.get(contact) || 0;
-    if (this.devicesByContact.has(contact) && now - fetchedAt < DEVICE_LIST_TTL_MS) return;
+    if (!force && this.devicesByContact.has(contact) && now - fetchedAt < DEVICE_LIST_TTL_MS) return;
 
     let bundle: Awaited<ReturnType<BundleFetcher>>;
     try {
@@ -565,6 +583,37 @@ export class E2eEngine {
     if (this.identityByContact[contact] === identity) return;
     this.identityByContact[contact] = identity;
     this.persistContacts();
+  }
+
+  // Аутентичность отправителя sealed-сообщения: sender_identity ОБЯЗАН
+  // принадлежать заявленному отправителю по каталогу identity. Без этой сверки
+  // любой пользователь мог бы прислать конверт с `inner.from` = кто угодно и
+  // выдать себя за него (sealed sender скрывает отправителя от сервера, но не
+  // подтверждает его получателю). Новое устройство отправителя не роняем:
+  // при промахе принудительно перечитываем каталог, и только затем вердикт
+  async verifySenderIdentity(
+    claimedFrom: string,
+    senderIdentity: string,
+    fetchBundle: BundleFetcher,
+  ): Promise<SenderVerdict> {
+    if (!claimedFrom || !senderIdentity) return 'unknown';
+    // Наше текущее устройство: подписывать себя может только self
+    if (senderIdentity === this.identityKey) return claimedFrom === this.self ? 'ok' : 'spoofed';
+    if (this.hasDeviceIdentity(claimedFrom, senderIdentity)) return 'ok';
+    await this.refreshContactDevices(claimedFrom, fetchBundle, true);
+    if (this.hasDeviceIdentity(claimedFrom, senderIdentity)) return 'ok';
+    // Каталог получен (есть список устройств), но ключа в нём нет — подмена.
+    // Каталог недоступен (сеть/шард) — подтвердить нельзя, не клеймим подменой
+    return this.devicesByContact.has(claimedFrom) ? 'spoofed' : 'unknown';
+  }
+
+  private hasDeviceIdentity(contact: string, identity: string): boolean {
+    const devices = this.devicesByContact.get(contact);
+    if (devices && Object.values(devices).some((device) => device.identity === identity)) {
+      return true;
+    }
+    // Legacy-снапшоты держат только primary-identity контакта
+    return this.identityByContact[contact] === identity;
   }
 
   private loadIdentityKeys() {

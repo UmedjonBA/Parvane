@@ -21,7 +21,6 @@ import { establishMultitabRole, subscribeToMasterChange } from './util/establish
 import { initGlobal } from './util/init';
 import { initLocalization } from './util/localization';
 import { MULTITAB_STORAGE_KEY } from './util/multiaccount';
-import { checkAndAssignPermanentWebVersion } from './util/permanentWebVersion';
 import { onBeforeUnload } from './util/schedulers';
 import initTauriApi from './util/tauri/initTauriApi';
 import setupTauriListeners from './util/tauri/setupTauriListeners';
@@ -51,7 +50,6 @@ async function init() {
 
   if (!(window as any).isCompatTestPassed) return;
 
-  checkAndAssignPermanentWebVersion();
   listenOtherClients();
 
   subscribeToMultitabBroadcastChannel();

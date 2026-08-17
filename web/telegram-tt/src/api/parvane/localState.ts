@@ -1,5 +1,6 @@
 import type { SendMessageParams } from '../../types';
 import type { ApiChat, ApiMessage, ApiUpdate } from '../types';
+import type { E2eEngine } from './e2e';
 import type { ParvaneStore } from './store';
 import type { WireStoredMessage } from './wire';
 
@@ -17,6 +18,7 @@ type ScheduledEntry = {
 
 type LocalStateDependencies = {
   getStore: () => ParvaneStore;
+  getE2e: () => E2eEngine | undefined;
   isAuthorized: () => boolean;
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
@@ -165,7 +167,13 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function scheduleTtlDeletion(chatId: string, messageId: number, ttlSecs: number) {
     window.setTimeout(() => {
-      deps.getStore().removeMessage(chatId, messageId);
+      const store = deps.getStore();
+      // Снять расшифрованный inner из persisted-кэша ДО удаления сообщения
+      // (после removeMessage маппинг id→uuid теряется). Иначе plaintext
+      // «самоуничтожающегося» сообщения остаётся на диске навсегда
+      const uuid = store.getUuidForMessage(chatId, messageId);
+      if (uuid) deps.getE2e()?.dropCachedInner(uuid);
+      store.removeMessage(chatId, messageId);
       deps.sendUpdate({ '@type': 'deleteMessages', ids: [messageId], chatId });
     }, ttlSecs * 1000);
   }
@@ -180,6 +188,10 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveBlocked(list: string[]) {
     localStorage.setItem(storageKey('blocked'), JSON.stringify(list));
+  }
+
+  function isBlocked(address: string) {
+    return loadBlocked().includes(address);
   }
 
   function loadFolders(): { id: number; [key: string]: unknown }[] {
@@ -319,6 +331,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadBlocked,
     loadDrafts,
     loadFolders,
+    isBlocked,
     loadNotifyDefaults,
     loadNotifyExceptions,
     loadPeerTtl,

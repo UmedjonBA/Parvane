@@ -109,33 +109,46 @@ const ParvaneCallOverlay = () => {
     };
   }, [state]);
 
-  // Групповой звонок: по <audio> на каждый удалённый поток (DOM управляется
-  // вручную — количество участников динамическое)
-  const groupAudioRef = useRef<HTMLDivElement>();
+  // Групповой звонок: видео-тайл на каждого участника (video проигрывает и
+  // звук). DOM управляется вручную — количество участников динамическое
+  const groupTilesRef = useRef<HTMLDivElement>();
   const groupStreams = call?.groupStreams;
+  const groupPeerNames = group?.peerNames;
   useEffect(() => {
-    const container = groupAudioRef.current;
+    const container = groupTilesRef.current;
     if (!container) return;
     const streams = Object.entries(groupStreams || {});
     const existing = new Map(
-      Array.from(container.querySelectorAll('audio')).map((el) => [el.dataset.peer!, el]),
+      Array.from(container.querySelectorAll<HTMLElement>('[data-peer]')).map((el) => [el.dataset.peer!, el]),
     );
     streams.forEach(([peer, stream]) => {
-      let el = existing.get(peer);
-      if (!el) {
-        el = document.createElement('audio');
-        el.dataset.peer = peer;
-        el.autoplay = true;
-        container.appendChild(el);
+      let tile = existing.get(peer);
+      if (!tile) {
+        tile = document.createElement('div');
+        tile.dataset.peer = peer;
+        tile.className = styles.groupTile;
+        const video = document.createElement('video');
+        video.autoplay = true;
+        video.playsInline = true;
+        video.className = styles.groupTileVideo;
+        tile.appendChild(video);
+        const label = document.createElement('span');
+        label.className = styles.groupTileName;
+        tile.appendChild(label);
+        container.appendChild(tile);
       }
-      if (el.srcObject !== stream) {
-        el.srcObject = stream;
-        void el.play().catch(() => undefined);
+      const video = tile.querySelector('video')!;
+      if (video.srcObject !== stream) {
+        video.srcObject = stream;
+        void video.play().catch(() => undefined);
       }
+      tile.querySelector('span')!.textContent = groupPeerNames?.[peer] || peer;
       existing.delete(peer);
     });
     existing.forEach((el) => el.remove());
-  }, [groupStreams]);
+  }, [groupStreams, groupPeerNames]);
+
+  const hasGroupVideo = Boolean(call?.localStream?.getVideoTracks().length);
 
   if (!isVisible) return undefined;
 
@@ -164,9 +177,14 @@ const ParvaneCallOverlay = () => {
   if (group) {
     return (
       <div className={styles.overlay}>
-        <div className={styles.card}>
+        <div className={buildClassName(styles.card, hasGroupVideo && styles.videoCard)}>
           <div className={styles.name}>{group.title}</div>
           <div className={styles.status}>{lang('ParvaneGroupCall')}</div>
+          {/* Видео-тайлы удалённых участников (video проигрывает и звук) */}
+          <div ref={groupTilesRef} className={styles.groupGrid} />
+          {hasGroupVideo && !call?.isCameraOff && (
+            <video ref={localVideoRef} className={styles.groupSelf} autoPlay playsInline muted />
+          )}
           <div className={styles.groupPeers}>
             {Object.entries(group.peerNames).map(([peer, name]) => {
               const peerState = group.peerStates[peer] || 'connecting';
@@ -193,6 +211,17 @@ const ParvaneCallOverlay = () => {
             >
               <i className={buildClassName(styles.icon, 'icon', muteIcon)} />
             </Button>
+            {hasGroupVideo && (
+              <Button
+                round
+                color="translucent"
+                className={buildClassName(styles.control, call?.isCameraOff && styles.controlOff)}
+                onClick={handleToggleCamera}
+                ariaLabel={lang(call?.isCameraOff ? 'ParvaneCallCameraOn' : 'ParvaneCallCameraOff')}
+              >
+                <i className={buildClassName(styles.icon, 'icon', cameraIcon)} />
+              </Button>
+            )}
             <Button
               round
               color="translucent"
@@ -203,7 +232,6 @@ const ParvaneCallOverlay = () => {
               <i className={buildClassName(styles.icon, 'icon icon-phone-discard')} />
             </Button>
           </div>
-          <div ref={groupAudioRef} />
         </div>
       </div>
     );

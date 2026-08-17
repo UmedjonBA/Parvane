@@ -1,5 +1,5 @@
 import type { ApiMessage, ApiUpdate, ApiVideo } from '../types';
-import type { E2eEngine } from './e2e';
+import type { E2eEngine, WireDeviceBundle } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { PollStore } from './polls';
 import { MAIN_THREAD_ID } from '../types';
@@ -11,6 +11,7 @@ import {
   TOPIC_IDENTITY_RESOLVE,
   TOPIC_MSG_ACK,
   TOPIC_MSG_SYNC_REQUEST,
+  TOPIC_PREKEYS_FETCH,
   type WireEvent,
   type WireGroupInfo,
   type WireMessageContent,
@@ -30,6 +31,7 @@ type SyncDependencies = {
   localState: {
     readOwnJournal: () => WireStoredMessage[];
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
+    isBlocked: (address: string) => boolean;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -40,7 +42,12 @@ type SyncDependencies = {
 };
 
 type WireFlags = { read: boolean; deleted: boolean; pinned: boolean; snapshot: string };
-type UnsealResult = { stored: WireStoredMessage; wasSealed: boolean; hidden?: boolean };
+// `verify` присутствует у sealed 1-1 сообщений, чью аутентичность отправителя
+// нужно подтвердить по каталогу identity перед показом (анти-имперсонация)
+type SenderCheck = { claimedFrom: string; senderIdentity: string };
+type UnsealResult = {
+  stored: WireStoredMessage; wasSealed: boolean; hidden?: boolean; verify?: SenderCheck;
+};
 
 const SYNC_TIMEOUT_MS = 15000;
 
@@ -151,6 +158,12 @@ export function createSyncController(deps: SyncDependencies) {
       return {
         stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },
         wasSealed: true,
+        // Перепроверяем и cached-путь: иначе однажды закэшированная подмена
+        // доверялась бы вечно. Своё исходящее кэшируется без senderIdentity
+        // (verify не ставится); self-копии сиблинг-устройств проверяются
+        verify: cached.senderIdentity
+          ? { claimedFrom: cached.from, senderIdentity: cached.senderIdentity }
+          : undefined,
       };
     }
     if (!e2e || !content.ciphertext || !content.sender_identity) return { stored, wasSealed: false };
@@ -165,21 +178,63 @@ export function createSyncController(deps: SyncDependencies) {
       // Резкий kill до этой точки безопасен: на диске ратчет не уехал,
       // и после рестарта то же сообщение расшифруется заново
       if (inner.content?.kind === 'skdm' && inner.content.group && inner.content.session_key) {
-        e2e.acceptGroupKey(
-          inner.content.group,
-          inner.content.sender_identity!,
-          inner.content.session_key,
-          inner.content.epoch || 0,
-        );
+        // Групповой ключ привязываем к устройству, РЕАЛЬНО приславшему конверт
+        // (внешний sender_identity, расшифровавший Olm), а не к самозаявленному
+        // внутри SKDM — иначе участник затирал бы megolm-сессию другого,
+        // назвав его identity (подмена/DoS канала участника)
+        if (inner.content.sender_identity === content.sender_identity) {
+          e2e.acceptGroupKey(
+            inner.content.group,
+            content.sender_identity,
+            inner.content.session_key,
+            inner.content.epoch || 0,
+          );
+        } else {
+          deps.log(`SKDM с чужим sender_identity от ${inner.from} — отклонён`);
+        }
         if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
         return { stored, wasSealed: true, hidden: true };
       }
-      e2e.cacheInner(stored.id, inner);
-      if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
+      // Кэшируем вместе с sender_identity — для показа сообщение ещё должно
+      // пройти проверку аутентичности отправителя в `applyStoredUpdate`
+      e2e.cacheInner(stored.id, { from: inner.from, content: inner.content, senderIdentity: content.sender_identity });
       deps.media.rememberKeys(inner.content);
-      return { stored: { ...stored, from: inner.from, content: inner.content }, wasSealed: true };
+      return {
+        stored: { ...stored, from: inner.from, content: inner.content },
+        wasSealed: true,
+        // Проверяем и inner.from === self: спуфер иначе вложил бы сообщение в
+        // «Избранное» жертвы. Легитимная self-копия сиблинг-устройства пройдёт
+        // (его identity есть в каталоге своих устройств)
+        verify: inner.from
+          ? { claimedFrom: inner.from, senderIdentity: content.sender_identity }
+          : undefined,
+      };
     } catch {
       return { stored, wasSealed: false };
+    }
+  }
+
+  // Подтверждение принадлежности sender_identity заявленному отправителю по
+  // каталогу identity (анти-имперсонация). Известные устройства проверяются
+  // синхронно из локального каталога; неизвестные — с дозапросом бандла
+  async function fetchBundleForVerify(user: string) {
+    const engine = deps.getE2e();
+    const raw = await deps.getConnection()!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
+      token: deps.getToken(), user, known_devices: engine?.getKnownDeviceIds(user) || [],
+    }));
+    return JSON.parse(raw) as {
+      ok: boolean; identity_key?: string; signed_prekey?: string;
+      one_time?: string; devices?: WireDeviceBundle[];
+    };
+  }
+
+  async function verifySender(check: SenderCheck): Promise<'ok' | 'spoofed' | 'unknown'> {
+    const engine = deps.getE2e();
+    if (!engine) return 'unknown';
+    try {
+      return await engine.verifySenderIdentity(check.claimedFrom, check.senderIdentity, fetchBundleForVerify);
+    } catch {
+      return 'unknown';
     }
   }
 
@@ -318,10 +373,36 @@ export function createSyncController(deps: SyncDependencies) {
 
   async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
     trackCursors(rawStored);
-    const { stored, wasSealed, hidden } = unsealStored(rawStored);
+    const { stored, wasSealed, hidden, verify } = unsealStored(rawStored);
     const store = deps.getStore();
     if (hidden) {
       if (shouldAckIncoming) sendAck(rawStored.id, stored.from);
+      return;
+    }
+    if (verify) {
+      const verdict = await verifySender(verify);
+      if (verdict === 'spoofed') {
+        // Подмена отправителя: расшифровалось, но sender_identity не принадлежит
+        // заявленному адресу. НЕ показываем и НЕ роутим в его чат. Подтверждаем
+        // приём (anonymous ack), чтобы сервер не гонял повтор
+        deps.log(`ОТКЛОНЕНО: подмена отправителя ${verify.claimedFrom} в ${rawStored.id}`);
+        if (shouldAckIncoming) sendAck(rawStored.id, '');
+        return;
+      }
+      if (verdict === 'unknown') {
+        // Каталог отправителя недоступен — подтвердить нельзя. Показываем, но
+        // помечаем в логе; не запоминаем связку contact↔identity до подтверждения
+        deps.log(`не подтверждён отправитель ${verify.claimedFrom} в ${rawStored.id} (каталог недоступен)`);
+      } else if (verify.claimedFrom !== store.self) {
+        deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity);
+      }
+    }
+    // Заблокированный контакт: входящее личное сообщение не показываем и не
+    // роутим в его чат (в группах блок участника так не работает — только 1-1).
+    // Приём подтверждаем, чтобы сервер не гонял повтор
+    if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
+      && deps.localState.isBlocked(stored.from)) {
+      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
       return;
     }
     // Если после unseal контент всё ещё зашифрован — расшифровать не удалось
@@ -413,14 +494,24 @@ export function createSyncController(deps: SyncDependencies) {
     ordered.forEach((stored) => {
       if (stored.content.kind === 'encrypted') unsealStored(stored);
     });
-    ordered.forEach((rawStored) => {
-      const { stored, hidden } = unsealStored(rawStored);
-      if (hidden || handlePollContent(stored)) return;
+    for (const rawStored of ordered) {
+      const { stored, hidden, verify } = unsealStored(rawStored);
+      if (hidden || handlePollContent(stored)) continue;
       // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
         deps.log(`сообщение ${stored.id} не расшифровано — пропущено (full sync)`);
-        return;
+        continue;
+      }
+      if (verify) {
+        const verdict = await verifySender(verify);
+        if (verdict === 'spoofed') {
+          deps.log(`ОТКЛОНЕНО (full sync): подмена отправителя ${verify.claimedFrom} в ${stored.id}`);
+          continue;
+        }
+        if (verdict === 'ok' && verify.claimedFrom !== store.self) {
+          deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity);
+        }
       }
       deps.media.rememberKeys(stored.content);
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
@@ -435,7 +526,7 @@ export function createSyncController(deps: SyncDependencies) {
         const remaining = stored.content.ttl_secs - (Math.floor(Date.now() / 1000) - stored.ts);
         deps.localState.scheduleTtlDeletion(message.chatId, message.id, Math.max(0, remaining));
       }
-    });
+    }
 
     const peerAddresses = new Set<string>();
     serverMessages.concat(journal).forEach((message) => {

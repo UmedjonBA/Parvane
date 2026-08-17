@@ -2200,6 +2200,12 @@ export interface LangPair {
   'PollDurationOther': undefined;
   'ParvaneStartText': undefined;
   'ParvaneAddress': undefined;
+  'ParvaneEmailText': undefined;
+  'ParvaneEmail': undefined;
+  'ParvaneEmailInvalid': undefined;
+  'ParvaneRegisterFailed': undefined;
+  'ParvaneCodeSentEmail': undefined;
+  'ParvaneCodeInvalid': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
