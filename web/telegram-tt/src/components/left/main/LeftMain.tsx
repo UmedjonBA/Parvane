@@ -15,8 +15,8 @@ import buildClassName from '../../../util/buildClassName';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
 import useForumPanelRender from '../../../hooks/useForumPanelRender';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 import useShowTransitionDeprecated from '../../../hooks/useShowTransitionDeprecated';
 
 import Button from '../../ui/Button';
@@ -178,7 +178,7 @@ const LeftMain: FC<OwnProps> = ({
     (IS_TAURI && !DEBUG) ? TAURI_CHECK_UPDATE_INTERVAL : undefined,
   );
 
-  const lang = useOldLang();
+  const lang = useLang();
 
   return (
     <div
@@ -239,7 +239,7 @@ const LeftMain: FC<OwnProps> = ({
           onClick={handleUpdateClick}
           isLoading={isTauriUpdateDownloading}
         >
-          {lang('lng_update_telegram')}
+          {lang('UpdateTelegram')}
         </Button>
       )}
       {shouldRenderForumPanel && (

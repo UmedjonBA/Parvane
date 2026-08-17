@@ -30,7 +30,7 @@ const useMessageMediaMetadata = (
   const { audio, voice } = message ? getMessageContent(message) : {} satisfies MediaContent;
   const title = audio ? (audio.title || audio.fileName) : voice ? 'Voice message' : '';
   const artist = audio?.performer || (sender && getPeerTitle(lang, sender));
-  const album = (chat && getChatTitle(lang, chat)) || 'Telegram';
+  const album = (chat && getChatTitle(lang, chat)) || 'Parvane';
 
   const audioCoverHash = (audio && getAudioHasCover(audio) && getMediaHash(audio, 'pictogram'));
   const avatarHash = sender && getChatAvatarHash(sender, 'big');

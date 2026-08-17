@@ -8,6 +8,7 @@ import { ParvaneStore } from './store';
 import {
   buildCallInboxTopic,
   buildMsgInboxTopic,
+  TOPIC_IDENTITY_EMAIL_CONFIRM,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
   TOPIC_IDENTITY_SETKEY,
@@ -53,6 +54,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
   let reconnectAttempt = 0;
   let sessionGeneration = 0;
   const typingClearTimers = new Map<string, number>();
+  // Групповые typing-топики (msg.typing.<groupChatId>), на которые подписаны —
+  // переустанавливаются на каждом (пере)подключении
+  const subscribedTypingGroups = new Set<string>();
 
   async function issueToken(activeConnection: GatewayConnection, user: string, password: string) {
     const issue = async () => {
@@ -70,7 +74,15 @@ export function createConnectionController(deps: ConnectionDependencies) {
         JSON.stringify({ user, password, invite: '' }),
       );
       const registration = JSON.parse(raw) as { ok: boolean; error?: string };
-      if (registration.ok) response = await issue();
+      if (registration.ok) {
+        response = await issue();
+      } else if (registration.error && registration.error.toLowerCase().includes('email')) {
+        // Сервер с обязательной почтой отклонил безпочтовую регистрацию нового
+        // аккаунта («нужен корректный email») — это НОВЫЙ логин, ведём на экран
+        // email. Ошибку issue не раскрываем: она унифицирована анти-энумерацией,
+        // а существование аккаунта здесь определяет ответ register
+        throw new Error('нужна регистрация через почту');
+      }
     }
     if (!response.ok || !response.token) {
       throw new Error(response.error || 'identity отказал в выдаче токена');
@@ -79,16 +91,21 @@ export function createConnectionController(deps: ConnectionDependencies) {
   }
 
   function handleTypingFrame(payload: string) {
-    let from: string | undefined;
+    let frame: { from?: string; to?: string };
     try {
-      from = (JSON.parse(payload) as { from?: string }).from;
+      frame = JSON.parse(payload) as { from?: string; to?: string };
     } catch {
       return;
     }
+    const { from, to } = frame;
     const store = deps.getStore();
     if (!from || from === store.self) return;
 
-    const chatId = store.getIdForAddress(from);
+    // Групповой typing: печатает участник — показываем в групповом чате (по
+    // `to`). Личный: показываем в 1-1 чате собеседника (по `from`)
+    const chatId = to && store.isGroupAddress(to)
+      ? store.getIdForAddress(to, 'group')
+      : store.getIdForAddress(from);
     deps.sendUpdate({
       '@type': 'updateChatTypingStatus',
       id: chatId,
@@ -127,7 +144,19 @@ export function createConnectionController(deps: ConnectionDependencies) {
     activeConnection.subscribe('presence.*', handlePresenceFrame);
     activeConnection.subscribe(buildCallInboxTopic(user), deps.calls.handleFrame);
     activeConnection.subscribe(buildCallInboxTopic(`gcall:${user}`), deps.calls.handleGroupFrame);
+    // Переустанавливаем подписки на typing-топики известных групп
+    subscribedTypingGroups.forEach((groupChatId) => {
+      activeConnection.subscribe(`msg.typing.${groupChatId}`, handleTypingFrame);
+    });
     deps.calls.setup();
+  }
+
+  // Подписка на групповой typing-топик (идемпотентно). Вызывается при
+  // регистрации группы; на reconnect переустанавливается в `activate`
+  function ensureGroupTyping(groupChatId: string) {
+    if (!groupChatId || subscribedTypingGroups.has(groupChatId)) return;
+    subscribedTypingGroups.add(groupChatId);
+    deps.getConnection()?.subscribe(`msg.typing.${groupChatId}`, handleTypingFrame);
   }
 
   function handleClose(closedConnection: GatewayConnection, user: string, generation: number) {
@@ -196,6 +225,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   async function connectAndLogin(user: string, password: string) {
     cancelReconnect();
+    // Новая сессия — состав групп (и их typing-подписки) будет пересобран синком
+    subscribedTypingGroups.clear();
     const generation = ++sessionGeneration;
     deps.calls.teardown();
     deps.getConnection()?.close();
@@ -276,6 +307,44 @@ export function createConnectionController(deps: ConnectionDependencies) {
     }
   }
 
+  // Pre-auth запрос на отдельном коротком соединении (для флоу регистрации,
+  // когда постоянной сессии ещё нет)
+  async function requestPreAuth<T>(subject: string, payload: unknown): Promise<T> {
+    const connection = new GatewayConnection();
+    try {
+      await connection.connect(getGatewayUrl());
+      const raw = await connection.request(subject, JSON.stringify(payload));
+      return JSON.parse(raw) as T;
+    } finally {
+      connection.close();
+    }
+  }
+
+  // Регистрация с почтой. true — сервер ждёт код подтверждения
+  // (identity.email.confirm), false — аккаунт сразу активен
+  async function registerWithEmail(user: string, password: string, email: string) {
+    const response = await requestPreAuth<{ ok: boolean; error?: string; confirm_required?: boolean }>(
+      TOPIC_IDENTITY_REGISTER,
+      {
+        user, password, invite: '', email,
+      },
+    );
+    if (!response.ok) {
+      throw new Error(response.error || 'identity отказал в регистрации');
+    }
+    return Boolean(response.confirm_required);
+  }
+
+  async function confirmEmail(user: string, code: string) {
+    const response = await requestPreAuth<{ ok: boolean; error?: string }>(
+      TOPIC_IDENTITY_EMAIL_CONFIRM,
+      { user, code },
+    );
+    if (!response.ok) {
+      throw new Error(response.error || 'identity отклонил код');
+    }
+  }
+
   function shutdown() {
     const currentE2e = deps.getE2e();
     sessionGeneration += 1;
@@ -294,5 +363,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     return currentE2e;
   }
 
-  return { connectAndLogin, shutdown };
+  return {
+    connectAndLogin, registerWithEmail, confirmEmail, ensureGroupTyping, shutdown,
+  };
 }

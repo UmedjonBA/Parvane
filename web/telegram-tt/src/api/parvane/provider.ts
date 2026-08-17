@@ -83,6 +83,9 @@ let connection: GatewayConnection | undefined;
 let store = new ParvaneStore();
 let token = '';
 let pendingLoginAddress = '';
+// Пароль между экранами регистрации: register (email) и confirm (код) должны
+// повторить логин без повторного ввода
+let pendingLoginPassword = '';
 let e2e: E2eEngine | undefined;
 let isCallIdentityReady = false;
 const polls = new PollStore();
@@ -111,15 +114,30 @@ const mediaService = createMediaService({
   getToken: () => token,
 });
 
+const localState = createLocalState({
+  getStore: () => store,
+  getE2e: () => e2e,
+  isAuthorized: () => Boolean(token),
+  selfId,
+  sendUpdate,
+  buildLocalContent: mediaService.buildLocalContent,
+  sendMessage: sendMessageFromSchedule,
+});
+
 const callController = createCallController({
   getConnection: () => connection,
   getE2e: () => e2e,
   getStore: () => store,
   getToken: () => token,
   isIdentityReady: () => isCallIdentityReady,
+  isBlocked: localState.isBlocked,
   sendUpdate,
   log: logDebug,
 });
+
+// Forward-ref: подписку на групповой typing реализует connectionController,
+// который создаётся ниже. Устанавливается после его создания
+let subscribeGroupTyping: (groupChatId: string) => void = () => {};
 
 const groupController = createGroupController({
   getConnection: () => connection,
@@ -128,16 +146,8 @@ const groupController = createGroupController({
   getToken: () => token,
   selfId,
   sendUpdate,
+  onGroupRegistered: (groupChatId) => subscribeGroupTyping(groupChatId),
   log: logDebug,
-});
-
-const localState = createLocalState({
-  getStore: () => store,
-  isAuthorized: () => Boolean(token),
-  selfId,
-  sendUpdate,
-  buildLocalContent: mediaService.buildLocalContent,
-  sendMessage: sendMessageFromSchedule,
 });
 
 // Кросс-таб синхронизация черновиков: другая вкладка сохранила/очистила
@@ -218,6 +228,8 @@ const connectionController = createConnectionController({
   sendUpdate,
   log: logDebug,
 });
+
+subscribeGroupTyping = connectionController.ensureGroupTyping;
 
 export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialArgs) {
   onUpdate = _onUpdate;
@@ -948,7 +960,21 @@ const methods = {
       await connectionController.connectAndLogin(user, password);
       saveLoginAddress(user);
     } catch (err) {
-      logDebug(`логин отклонён: ${String(err)}`);
+      const message = String(err);
+      logDebug(`логин отклонён: ${message}`);
+      // Сервер требует регистрацию через почту: новый аккаунт — экран email;
+      // аккаунт есть, но не подтверждён — сразу экран кода (fallback-register
+      // в issueToken уже перевыслал код на сохранённую почту)
+      if (message.includes('нужна регистрация через почту') || message.includes('нет такого пользователя')) {
+        pendingLoginPassword = password;
+        sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
+        return;
+      }
+      if (message.includes('почта не подтверждена')) {
+        pendingLoginPassword = password;
+        sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
+        return;
+      }
       // Повторный WaitPassword сбрасывает auth.isLoading, чтобы форма дала
       // ввести пароль ещё раз
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
@@ -956,8 +982,55 @@ const methods = {
     }
   },
 
+  // Экран email (WaitRegistration): регистрация нового аккаунта. Email едет в
+  // поле firstName — штатный signUp других полей не имеет
+  async provideAuthRegistration({ firstName }: { firstName: string; lastName: string }) {
+    const user = pendingLoginAddress || readLoginAddress();
+    const email = firstName.trim();
+    if (!user || !pendingLoginPassword) {
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+      return;
+    }
+    try {
+      const isConfirmRequired = await connectionController.registerWithEmail(user, pendingLoginPassword, email);
+      if (isConfirmRequired) {
+        sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
+        return;
+      }
+      await connectionController.connectAndLogin(user, pendingLoginPassword);
+      saveLoginAddress(user);
+    } catch (err) {
+      const message = String(err);
+      logDebug(`регистрация отклонена: ${message}`);
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
+      sendUpdate({
+        '@type': 'updateAuthorizationError',
+        errorKey: { key: message.includes('email') ? 'ParvaneEmailInvalid' : 'ParvaneRegisterFailed' },
+      });
+    }
+  },
+
+  // Экран кода (WaitCode): подтверждение почты кодом из письма
+  async provideAuthCode(code: string) {
+    const user = pendingLoginAddress || readLoginAddress();
+    if (!user || !pendingLoginPassword) {
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+      return;
+    }
+    try {
+      await connectionController.confirmEmail(user, code);
+      await connectionController.connectAndLogin(user, pendingLoginPassword);
+      saveLoginAddress(user);
+    } catch (err) {
+      logDebug(`код отклонён: ${String(err)}`);
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneCodeInvalid' } });
+    }
+  },
+
   restartAuth() {
     pendingLoginAddress = '';
+    pendingLoginPassword = '';
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
     return Promise.resolve(undefined);
   },

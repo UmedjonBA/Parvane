@@ -11,20 +11,75 @@ use anyhow::{anyhow, Context, Result};
 use async_nats::Client;
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{info, warn};
+
+/// Максимальная длина одного клиентского кадра (защита от кадра без разделителя,
+/// раздувающего память). TCP рвёт соединение, WS отвергает по конфигу.
+const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Ёмкость каналов кадров: даёт backpressure вместо неограниченного роста памяти.
+const CHANNEL_CAP: usize = 512;
+/// За сколько секунд соединение обязано пройти auth, иначе сокет закрывается.
+const AUTH_TIMEOUT_SECS: u64 = 10;
+
+/// Лимиты параллельных соединений (глобально и на IP-источник) против исчерпания
+/// ресурсов множеством незакрытых/неавторизованных сокетов.
+struct Limits {
+    conns: Arc<Semaphore>,
+    per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    max_per_ip: usize,
+}
+
+/// RAII-учёт соединения: освобождает глобальный permit и счётчик по IP при Drop.
+struct ConnGuard {
+    _permit: OwnedSemaphorePermit,
+    per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    ip: IpAddr,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        let mut map = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = map.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                map.remove(&self.ip);
+            }
+        }
+    }
+}
+
+/// Пытается «впустить» соединение: берёт глобальный permit и место в квоте IP.
+/// None — лимит исчерпан (вызывающий закрывает сокет, ничего не выделив).
+fn admit(limits: &Limits, ip: IpAddr) -> Option<ConnGuard> {
+    let permit = limits.conns.clone().try_acquire_owned().ok()?;
+    {
+        let mut map = limits.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        let count = map.entry(ip).or_insert(0);
+        if *count >= limits.max_per_ip {
+            return None; // permit дропнется здесь → глобальный слот освобождён
+        }
+        *count += 1;
+    }
+    Some(ConnGuard { _permit: permit, per_ip: limits.per_ip.clone(), ip })
+}
 
 use parvane_types::{
     topic_contract::{
         GATEWAY_ALLOWED_PUBLISH, GATEWAY_ALLOWED_REQUEST, GATEWAY_EVENT_SUBJECTS,
         GATEWAY_TOKEN_REQUEST_SUBJECTS,
     },
-    topics::{call_inbox, msg_inbox, IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_VERIFY},
+    topics::{
+        call_inbox, msg_inbox, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_REGISTER,
+        IDENTITY_VERIFY,
+    },
     VerifyRequest, VerifyResponse,
 };
 
@@ -55,17 +110,38 @@ async fn main() -> Result<()> {
     let nats = Arc::new(opts.connect(&nats_url).await.context("подключение к NATS")?);
     info!("NATS подключён: {}", nats_url);
 
+    let max_conns = std::env::var("PARVANE_GATEWAY_MAX_CONNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2000usize);
+    let max_per_ip = std::env::var("PARVANE_GATEWAY_MAX_CONNS_PER_IP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64usize);
+    let limits = Arc::new(Limits {
+        conns: Arc::new(Semaphore::new(max_conns)),
+        per_ip: Arc::new(Mutex::new(HashMap::new())),
+        max_per_ip,
+    });
+    info!("Лимиты соединений: всего {}, на IP {}", max_conns, max_per_ip);
+
     // TCP-листенер (нативный клиент).
     let tcp = TcpListener::bind(&tcp_bind).await.context("bind TCP")?;
     info!("Gateway TCP на {}", tcp_bind);
     {
         let nats = nats.clone();
+        let limits = limits.clone();
         tokio::spawn(async move {
             loop {
                 match tcp.accept().await {
                     Ok((stream, peer)) => {
+                        let Some(guard) = admit(&limits, peer.ip()) else {
+                            warn!("tcp {}: соединение отклонено (лимит)", peer);
+                            continue; // stream дропается → сокет закрыт
+                        };
                         let nats = nats.clone();
                         tokio::spawn(async move {
+                            let _guard = guard;
                             if let Err(e) = handle_tcp(stream, nats).await {
                                 warn!("tcp {}: {}", peer, e);
                             }
@@ -82,8 +158,13 @@ async fn main() -> Result<()> {
     info!("Gateway WebSocket на {}", ws_bind);
     loop {
         let (stream, peer) = ws.accept().await?;
+        let Some(guard) = admit(&limits, peer.ip()) else {
+            warn!("ws {}: соединение отклонено (лимит)", peer);
+            continue;
+        };
         let nats = nats.clone();
         tokio::spawn(async move {
+            let _guard = guard;
             if let Err(e) = handle_ws(stream, nats).await {
                 warn!("ws {}: {}", peer, e);
             }
@@ -94,20 +175,37 @@ async fn main() -> Result<()> {
 // ── адаптеры транспорта: превращают соединение в пару каналов кадров-строк ─────
 
 async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
-    let (rd, mut wr) = stream.into_split();
-    let (in_tx, in_rx) = mpsc::unbounded_channel::<String>();
+    let (mut rd, mut wr) = stream.into_split();
+    let (in_tx, in_rx) = mpsc::channel::<String>(CHANNEL_CAP);
+    // Построчное чтение с жёстким лимитом длины кадра: кадр без разделителя,
+    // превысивший MAX_FRAME_BYTES, рвёт соединение (защита от OOM). Ранее
+    // BufReader::lines читал строку неограниченной длины.
     tokio::spawn(async move {
-        let mut lines = BufReader::new(rd).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if in_tx.send(line).is_err() {
-                break;
+        let mut acc: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = match rd.read(&mut buf).await {
+                Ok(0) => break, // EOF
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            for &byte in &buf[..n] {
+                if byte == b'\n' {
+                    let line = String::from_utf8_lossy(&acc).trim().to_string();
+                    acc.clear();
+                    if !line.is_empty() && in_tx.send(line).await.is_err() {
+                        return;
+                    }
+                } else {
+                    if acc.len() >= MAX_FRAME_BYTES {
+                        return; // кадр слишком длинный — закрываем сокет
+                    }
+                    acc.push(byte);
+                }
             }
         }
     });
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let (out_tx, mut out_rx) = mpsc::channel::<String>(CHANNEL_CAP);
     let writer = tokio::spawn(async move {
         while let Some(mut s) = out_rx.recv().await {
             s.push('\n');
@@ -122,16 +220,20 @@ async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
 }
 
 async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
-    let ws = tokio_tungstenite::accept_async(stream)
+    // Ограничиваем размер сообщения/кадра WS на уровне протокола (симметрично TCP).
+    let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+    config.max_message_size = Some(MAX_FRAME_BYTES);
+    config.max_frame_size = Some(MAX_FRAME_BYTES);
+    let ws = tokio_tungstenite::accept_async_with_config(stream, Some(config))
         .await
         .context("WS handshake")?;
     let (mut write, mut read) = ws.split();
-    let (in_tx, in_rx) = mpsc::unbounded_channel::<String>();
+    let (in_tx, in_rx) = mpsc::channel::<String>(CHANNEL_CAP);
     tokio::spawn(async move {
         while let Some(m) = read.next().await {
             match m {
                 Ok(WsMessage::Text(t)) => {
-                    if in_tx.send(t).is_err() {
+                    if in_tx.send(t).await.is_err() {
                         break;
                     }
                 }
@@ -140,7 +242,7 @@ async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
             }
         }
     });
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let (out_tx, mut out_rx) = mpsc::channel::<String>(CHANNEL_CAP);
     let writer = tokio::spawn(async move {
         while let Some(s) = out_rx.recv().await {
             if write.send(WsMessage::Text(s)).await.is_err() {
@@ -156,33 +258,46 @@ async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
 // ── общая логика: auth + pub/req/reqmany/sub с проверкой прав ──────────────────
 
 async fn serve(
-    mut in_rx: mpsc::UnboundedReceiver<String>,
-    tx: mpsc::UnboundedSender<String>,
+    mut in_rx: mpsc::Receiver<String>,
+    tx: mpsc::Sender<String>,
     nats: Arc<Client>,
 ) {
     // 1) pre-auth: до авторизации разрешены ТОЛЬКО bootstrap-запросы (логин и
     // регистрация — иначе получить токен через gateway было бы невозможно).
-    // Всё остальное — после auth с валидным JWT.
+    // Всё остальное — после auth с валидным JWT. На всю фазу — idle-timeout:
+    // соединение, не авторизовавшееся за AUTH_TIMEOUT_SECS, закрывается.
+    let auth_deadline = Instant::now() + Duration::from_secs(AUTH_TIMEOUT_SECS);
     let (user, auth_token) = loop {
-        let Some(text) = in_rx.recv().await else {
-            return; // закрыто до auth
+        let remaining = auth_deadline.saturating_duration_since(Instant::now());
+        let text = match tokio::time::timeout(remaining, in_rx.recv()).await {
+            Ok(Some(text)) => text,
+            Ok(None) => return, // закрыто до auth
+            Err(_) => {
+                let _ = tx.send(err_frame(None, "таймаут авторизации")).await;
+                return; // не авторизовался вовремя — рвём соединение
+            }
         };
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         match v["op"].as_str().unwrap_or("") {
             "auth" => match verify_token(&nats, v["token"].as_str().unwrap_or("")).await {
                 Ok(u) => {
                     let token = v["token"].as_str().unwrap_or("").to_string();
-                    let _ = tx.send(json!({"op":"auth_ok","user":u}).to_string());
+                    let _ = tx.send(json!({"op":"auth_ok","user":u}).to_string()).await;
                     break (u, token);
                 }
                 Err(e) => {
-                    let _ = tx.send(json!({"op":"auth_err","error":e.to_string()}).to_string());
+                    let _ = tx
+                        .send(json!({"op":"auth_err","error":e.to_string()}).to_string())
+                        .await;
                     return;
                 }
             },
             "req" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                if subject == IDENTITY_ISSUE || subject == IDENTITY_REGISTER {
+                if subject == IDENTITY_ISSUE
+                    || subject == IDENTITY_REGISTER
+                    || subject == IDENTITY_EMAIL_CONFIRM
+                {
                     spawn_req(
                         nats.clone(),
                         tx.clone(),
@@ -192,11 +307,11 @@ async fn serve(
                         v["timeout_ms"].as_u64().unwrap_or(3000),
                     );
                 } else {
-                    let _ = tx.send(err_frame(v["id"].as_str(), "нужна авторизация"));
+                    let _ = tx.send(err_frame(v["id"].as_str(), "нужна авторизация")).await;
                 }
             }
             _ => {
-                let _ = tx.send(err_frame(None, "нужна авторизация"));
+                let _ = tx.send(err_frame(None, "нужна авторизация")).await;
             }
         }
     };
@@ -209,7 +324,7 @@ async fn serve(
         let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => {
-                let _ = tx.send(err_frame(None, "битый json"));
+                let _ = tx.send(err_frame(None, "битый json")).await;
                 continue;
             }
         };
@@ -227,11 +342,11 @@ async fn serve(
                             let _ = nats.publish(subject, payload.into()).await;
                         }
                         Err(e) => {
-                            let _ = tx.send(err_frame(None, &e.to_string()));
+                            let _ = tx.send(err_frame(None, &e.to_string())).await;
                         }
                     }
                 } else {
-                    let _ = tx.send(err_frame(None, "publish в этот subject запрещён"));
+                    let _ = tx.send(err_frame(None, "publish в этот subject запрещён")).await;
                 }
             }
             "req" => {
@@ -239,7 +354,7 @@ async fn serve(
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
                 let timeout = v["timeout_ms"].as_u64().unwrap_or(3000);
                 if !allowed_req(&user, &subject) {
-                    let _ = tx.send(err_frame(Some(&id), "request запрещён"));
+                    let _ = tx.send(err_frame(Some(&id), "request запрещён")).await;
                     continue;
                 }
                 let payload = match bind_client_payload(
@@ -250,7 +365,7 @@ async fn serve(
                 ) {
                     Ok(payload) => payload,
                     Err(e) => {
-                        let _ = tx.send(err_frame(Some(&id), &e.to_string()));
+                        let _ = tx.send(err_frame(Some(&id), &e.to_string())).await;
                         continue;
                     }
                 };
@@ -264,7 +379,7 @@ async fn serve(
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
                 let timeout = v["timeout_ms"].as_u64().unwrap_or(5000);
                 if !allowed_req(&user, &subject) {
-                    let _ = tx.send(err_frame(Some(&id), "request запрещён"));
+                    let _ = tx.send(err_frame(Some(&id), "request запрещён")).await;
                     continue;
                 }
                 let payload = match bind_client_payload(
@@ -275,7 +390,7 @@ async fn serve(
                 ) {
                     Ok(payload) => payload,
                     Err(e) => {
-                        let _ = tx.send(err_frame(Some(&id), &e.to_string()));
+                        let _ = tx.send(err_frame(Some(&id), &e.to_string())).await;
                         continue;
                     }
                 };
@@ -283,15 +398,15 @@ async fn serve(
                 let tx2 = tx.clone();
                 tokio::spawn(async move {
                     if let Err(e) = reqmany(&nats2, &tx2, &id, subject, payload, timeout).await {
-                        let _ = tx2.send(err_frame(Some(&id), &e.to_string()));
+                        let _ = tx2.send(err_frame(Some(&id), &e.to_string())).await;
                     }
-                    let _ = tx2.send(json!({"op":"reply_end","id":id}).to_string());
+                    let _ = tx2.send(json!({"op":"reply_end","id":id}).to_string()).await;
                 });
             }
             "sub" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
                 if !allowed_sub(&user, &subject) {
-                    let _ = tx.send(err_frame(None, "подписка на чужой/запрещённый subject"));
+                    let _ = tx.send(err_frame(None, "подписка на чужой/запрещённый subject")).await;
                     continue;
                 }
                 match nats.subscribe(subject).await {
@@ -303,19 +418,19 @@ async fn serve(
                                 let frame =
                                     json!({"op":"msg","subject":m.subject.as_str(),"payload":p})
                                         .to_string();
-                                if tx2.send(frame).is_err() {
+                                if tx2.send(frame).await.is_err() {
                                     break;
                                 }
                             }
                         }));
                     }
                     Err(_) => {
-                        let _ = tx.send(err_frame(None, "не удалось подписаться"));
+                        let _ = tx.send(err_frame(None, "не удалось подписаться")).await;
                     }
                 }
             }
             _ => {
-                let _ = tx.send(err_frame(None, "неизвестный op"));
+                let _ = tx.send(err_frame(None, "неизвестный op")).await;
             }
         }
     }
@@ -328,7 +443,7 @@ async fn serve(
 
 async fn reqmany(
     nats: &Client,
-    tx: &mpsc::UnboundedSender<String>,
+    tx: &mpsc::Sender<String>,
     id: &str,
     subject: String,
     payload: String,
@@ -342,7 +457,7 @@ async fn reqmany(
         match tokio::time::timeout(per, sub.next()).await {
             Ok(Some(m)) => {
                 let p = String::from_utf8_lossy(&m.payload).to_string();
-                let _ = tx.send(json!({"op":"reply","id":id,"payload":p}).to_string());
+                let _ = tx.send(json!({"op":"reply","id":id,"payload":p}).to_string()).await;
             }
             _ => break, // тишина/конец — завершаем (reply_end шлёт вызывающий)
         }
@@ -371,7 +486,7 @@ async fn verify_token(nats: &Client, token: &str) -> Result<String> {
 /// Одиночный request/reply → отдельным таском (не блокирует цикл чтения).
 fn spawn_req(
     nats: Arc<Client>,
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::Sender<String>,
     id: String,
     subject: String,
     payload: String,
@@ -382,10 +497,10 @@ fn spawn_req(
         match tokio::time::timeout(Duration::from_millis(timeout_ms), fut).await {
             Ok(Ok(reply)) => {
                 let p = String::from_utf8_lossy(&reply.payload).to_string();
-                let _ = tx.send(json!({"op":"reply","id":id,"payload":p}).to_string());
+                let _ = tx.send(json!({"op":"reply","id":id,"payload":p}).to_string()).await;
             }
             _ => {
-                let _ = tx.send(err_frame(Some(&id), "нет ответа / таймаут"));
+                let _ = tx.send(err_frame(Some(&id), "нет ответа / таймаут")).await;
             }
         }
     });
@@ -589,6 +704,7 @@ mod tests {
     fn req_allows_known_denies_unknown() {
         assert!(allowed_req("alice@local", "identity.token.issue"));
         assert!(allowed_req("alice@local", "identity.user.register"));
+        assert!(allowed_req("alice@local", "identity.email.confirm"));
         assert!(allowed_req("alice@local", "msg.sync.request"));
         assert!(allowed_req("alice@local", "group.create"));
         assert!(!allowed_req("alice@local", "msg.user.bob@local"));

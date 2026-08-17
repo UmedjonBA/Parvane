@@ -28,6 +28,7 @@ type GroupDependencies = {
   getToken: () => string;
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
+  onGroupRegistered: (groupChatId: string) => void;
   log: (message: string) => void;
 };
 
@@ -37,6 +38,9 @@ export function createGroupController(deps: GroupDependencies) {
   function register(info: WireGroupInfo) {
     const store = deps.getStore();
     store.registerGroup(info);
+    // Подписка на typing-топик группы (msg.typing.<groupChatId>) — иначе
+    // «печатает…» в группе никто не услышит
+    deps.onGroupRegistered(store.getIdForAddress(info.group_id, 'group'));
     const e2e = deps.getE2e();
     if (!e2e || !store.self) return;
     const activeMembers = getActiveGroupMemberAddresses(info.members);

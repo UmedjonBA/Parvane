@@ -177,7 +177,11 @@ fn is_public_ip(ip: &IpAddr) -> bool {
                 // CGNAT 100.64.0.0/10
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
                 // 0.0.0.0/8
-                || v4.octets()[0] == 0)
+                || v4.octets()[0] == 0
+                // benchmarking 198.18.0.0/15
+                || (v4.octets()[0] == 198 && (v4.octets()[1] & 0xfe) == 18)
+                // reserved/class E 240.0.0.0/4 (incl. 255.* broadcast)
+                || v4.octets()[0] >= 240)
         }
         IpAddr::V6(v6) => {
             !(v6.is_loopback()
@@ -187,6 +191,15 @@ fn is_public_ip(ip: &IpAddr) -> bool {
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
                 // link-local fe80::/10
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
+                // documentation 2001:db8::/32
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+                // NAT64 well-known 64:ff9b::/96 (встраивает IPv4 — SSRF-риск)
+                || (v6.segments()[0] == 0x0064
+                    && v6.segments()[1] == 0xff9b
+                    && v6.segments()[2] == 0
+                    && v6.segments()[3] == 0
+                    && v6.segments()[4] == 0
+                    && v6.segments()[5] == 0)
                 // IPv4-mapped ::ffff:0:0/96 — проверяем вложенный v4
                 || v6.to_ipv4_mapped().map(|v4| !is_public_ip(&IpAddr::V4(v4))).unwrap_or(false))
         }
@@ -325,7 +338,8 @@ mod tests {
     #[test]
     fn private_ipv4_is_blocked() {
         for ip in ["127.0.0.1", "10.0.0.1", "192.168.1.1", "172.16.0.1",
-                   "169.254.169.254", "100.64.0.1", "0.0.0.0"] {
+                   "169.254.169.254", "100.64.0.1", "0.0.0.0",
+                   "198.18.0.1", "198.19.255.255", "240.0.0.1", "250.1.2.3"] {
             assert!(!is_public_ip(&ip.parse().unwrap()), "{ip} должен блокироваться");
         }
         for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
@@ -340,6 +354,9 @@ mod tests {
         assert!(!is_public_ip(&"fe80::1".parse::<IpAddr>().unwrap()));
         // IPv4-mapped приватный
         assert!(!is_public_ip(&"::ffff:10.0.0.1".parse::<IpAddr>().unwrap()));
+        // documentation 2001:db8::/32 и NAT64 64:ff9b::/96
+        assert!(!is_public_ip(&"2001:db8::1".parse::<IpAddr>().unwrap()));
+        assert!(!is_public_ip(&"64:ff9b::8.8.8.8".parse::<IpAddr>().unwrap()));
         assert!(is_public_ip(&"2606:4700:4700::1111".parse::<IpAddr>().unwrap()));
     }
 

@@ -1,7 +1,7 @@
 {
-    "name": "Telegram Web",
-    "short_name": "Telegram Web",
-    "description": "Telegram is a cloud-based mobile and desktop messaging app with a focus on security and speed.",
+    "name": "Parvane",
+    "short_name": "Parvane",
+    "description": "Parvane is a self-hosted, end-to-end encrypted messaging app.",
     "start_url": "./",
     "icons": [
         {

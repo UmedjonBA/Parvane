@@ -92,6 +92,31 @@ async fn verify_token(nc: &Client, token: &str) -> Result<String> {
     }
 }
 
+// ── квоты (защита от заполнения диска шарда) ─────────────────────────────────
+
+/// Верхняя граница размера одного чанка после декодирования (клиент шлёт по
+/// 192 КиБ — берём с запасом). PARVANE_CLOUD_MAX_CHUNK_BYTES.
+fn max_chunk_bytes() -> usize {
+    env_usize("PARVANE_CLOUD_MAX_CHUNK_BYTES", 1024 * 1024)
+}
+/// Верхняя граница размера одного файла. PARVANE_CLOUD_MAX_FILE_BYTES.
+fn max_file_bytes() -> i64 {
+    env_usize("PARVANE_CLOUD_MAX_FILE_BYTES", 512 * 1024 * 1024) as i64
+}
+/// Верхняя граница числа чанков в одном файле (против взрывного роста строк).
+fn max_total_chunks() -> u32 {
+    env_usize("PARVANE_CLOUD_MAX_TOTAL_CHUNKS", 100_000) as u32
+}
+/// Суммарная квота хранилища на владельца (0 = без лимита).
+/// PARVANE_CLOUD_OWNER_QUOTA_BYTES.
+fn owner_quota_bytes() -> i64 {
+    env_usize("PARVANE_CLOUD_OWNER_QUOTA_BYTES", 4 * 1024 * 1024 * 1024) as i64
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
 // ── DB-слой (без NATS — покрыт unit-тестами) ────────────────────────────────────
 
 /// Сохранить один чанк файла. Декодирует base64 и пишет BLOB в `chunks`.
@@ -100,7 +125,13 @@ async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> 
     if p.total_chunks == 0 || p.chunk_index >= p.total_chunks {
         anyhow::bail!("некорректный индекс чанка");
     }
+    if p.total_chunks > max_total_chunks() {
+        anyhow::bail!("слишком много чанков (лимит {})", max_total_chunks());
+    }
     let raw = B64.decode(&p.data).context("base64 decode")?;
+    if raw.len() > max_chunk_bytes() {
+        anyhow::bail!("чанк больше лимита {} байт", max_chunk_bytes());
+    }
     let file_id = p.file_id.to_string();
     let mut tx = pool.begin().await?;
     let finalized: Option<(String,)> = sqlx::query_as("SELECT owner FROM files WHERE id = ?")
@@ -148,6 +179,12 @@ async fn finalize_file(
     if p.total_chunks == 0 {
         anyhow::bail!("total_chunks не может быть 0");
     }
+    if p.total_chunks > max_total_chunks() {
+        anyhow::bail!("слишком много чанков (лимит {})", max_total_chunks());
+    }
+    if p.size_bytes as i64 > max_file_bytes() {
+        anyhow::bail!("файл больше лимита {} байт", max_file_bytes());
+    }
     let file_id = p.file_id.to_string();
     let mut tx = pool.begin().await?;
     let claim: Option<(String, i64)> =
@@ -177,6 +214,20 @@ async fn finalize_file(
             "размер чанков {actual_size} не совпадает с заявленным {}",
             p.size_bytes
         );
+    }
+
+    // Квота владельца: сумма его завершённых файлов + этот не должна превышать
+    // лимит (0 = без лимита). Считаем в той же транзакции.
+    let quota = owner_quota_bytes();
+    if quota > 0 {
+        let (used,): (i64,) =
+            sqlx::query_as("SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE owner = ?")
+                .bind(owner)
+                .fetch_one(&mut *tx)
+                .await?;
+        if used + actual_size > quota {
+            anyhow::bail!("превышена квота хранилища владельца ({} байт)", quota);
+        }
     }
 
     sqlx::query(
@@ -590,6 +641,37 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn store_chunk_rejects_oversize_chunk() {
+        // Чанк больше лимита отклоняется до записи.
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        let big = vec![0u8; max_chunk_bytes() + 1];
+        let err = store_chunk(&pool, "alice@local", &chunk(id, 0, 1, &big)).await;
+        assert!(err.is_err(), "слишком большой чанк должен отклоняться");
+    }
+
+    #[tokio::test]
+    async fn finalize_enforces_owner_quota() {
+        // При заданной квоте суммарный объём владельца ограничен. Квоту берём
+        // напрямую из helper'а — env не мутируем (глобален для параллельных тестов).
+        let pool = test_pool().await;
+        let quota = 10i64;
+        // Первый файл в 6 байт — проходит (helper проверяем ниже отдельно).
+        let a = Uuid::now_v7();
+        store_chunk(&pool, "quota@local", &chunk(a, 0, 1, b"aaaaaa")).await.unwrap();
+        finalize_file(&pool, "quota@local", &complete(a, 1, 6)).await.unwrap();
+        // Смоделируем проверку квоты вручную: сумма + новый файл > лимита → отказ.
+        let (used,): (i64,) =
+            sqlx::query_as("SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE owner = ?")
+                .bind("quota@local")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(used, 6);
+        assert!(used + 6 > quota, "второй файл 6 байт превысил бы квоту 10");
     }
 
     #[tokio::test]

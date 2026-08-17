@@ -1,6 +1,6 @@
 import type { SendMessageParams } from '../../types';
 import type {
-  ApiChat, ApiMessage, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
+  ApiChat, ApiMessage, ApiMessageEntity, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
 } from '../types';
 import type { E2eEngine, WireDeviceBundle } from './e2e';
 import type { GatewayConnection } from './gateway';
@@ -845,7 +845,11 @@ export function createMessageController(deps: MessageDependencies) {
       return Promise.resolve(messageIds.map((id) => byId.get(id)).filter(Boolean));
     },
 
-    async editMessage({ chat, message, text }: { chat: ApiChat; message: ApiMessage; text: string }) {
+    async editMessage({
+      chat, message, text, entities,
+    }: {
+      chat: ApiChat; message: ApiMessage; text: string; entities?: ApiMessageEntity[];
+    }) {
       const currentStore = store();
       const uuid = currentStore.getUuidForMessage(chat.id, message.id);
       const activeConnection = connection();
@@ -853,7 +857,14 @@ export function createMessageController(deps: MessageDependencies) {
       if (!uuid || !activeConnection || !toAddress) return undefined;
 
       const engine = requireE2e(deps.getE2e());
-      const plainContent = { kind: 'text', text, entities: [] };
+      const wireEntities = apiEntitiesToWire(entities);
+      // Правка не должна терять форматирование и не должна подменять медиа
+      // текстом: у медиа-сообщения меняем только подпись (по кэшированному
+      // inner), у текстового — текст и entities
+      const previous = engine.getCachedInner(uuid)?.content as WireMessageContent | undefined;
+      const plainContent: WireMessageContent = previous && previous.kind !== 'text'
+        ? { ...previous, caption: text || undefined, entities: wireEntities }
+        : { kind: 'text', text, entities: wireEntities };
       let encryptedContent: WireMessageContent;
       let editCopies: WireDeviceCopy[] = [];
       const groupInfo = currentStore.getGroupInfo(toAddress);
@@ -886,7 +897,13 @@ export function createMessageController(deps: MessageDependencies) {
         }),
       ));
       engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
-      const edited: ApiMessage = { ...message, content: { text: { text } }, isEdited: true };
+      // Сохраняем медиа/вложение оригинала, обновляя только текст и entities
+      const nextText = text ? { text, entities } : undefined;
+      const edited: ApiMessage = {
+        ...message,
+        content: { ...message.content, text: nextText },
+        isEdited: true,
+      };
       currentStore.putMessage(edited);
       deps.sendUpdate({ '@type': 'updateMessage', chatId: chat.id, id: message.id, isFull: true, message: edited });
       return undefined;

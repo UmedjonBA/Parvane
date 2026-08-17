@@ -11,6 +11,8 @@ pub mod topics {
     pub const IDENTITY_VERIFY: &str = "identity.token.verify";
     /// Регистрация аккаунта (отдельно от логина). issue больше не создаёт юзеров.
     pub const IDENTITY_REGISTER: &str = "identity.user.register";
+    /// Подтверждение почты кодом из письма (при PARVANE_EMAIL_REQUIRED=1).
+    pub const IDENTITY_EMAIL_CONFIRM: &str = "identity.email.confirm";
     /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
@@ -144,11 +146,34 @@ pub struct RegisterRequest {
     pub password: String,
     #[serde(default)]
     pub invite: String,
+    /// Почта для подтверждения регистрации. Обязательна при
+    /// PARVANE_EMAIL_REQUIRED=1; иначе опциональна (просто сохраняется).
+    #[serde(default)]
+    pub email: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub ok: bool,
+    pub error: Option<String>,
+    /// true — аккаунт создан, но ждёт кода подтверждения с почты
+    /// (identity.email.confirm); логин до подтверждения невозможен.
+    #[serde(default)]
+    pub confirm_required: bool,
+}
+
+/// Подтверждение почты: код из письма. Повторный `register` с тем же
+/// user+password до подтверждения — перевыслать код (rate-limited).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfirmRequest {
+    pub user: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfirmResponse {
+    pub ok: bool,
+    #[serde(default)]
     pub error: Option<String>,
 }
 
