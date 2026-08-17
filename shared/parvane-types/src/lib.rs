@@ -22,6 +22,14 @@ pub mod topics {
     /// Мультидевайс: отзыв устройства — удаляет его прекей-бандл из каталога,
     /// после чего новые сообщения на это устройство не шифруются.
     pub const IDENTITY_DEVICE_REVOKE: &str = "identity.device.revoke";
+    /// Линковка: новое устройство просит историю (эфемерный ECDH-ключ).
+    pub const IDENTITY_LINK_OFFER: &str = "identity.link.offer";
+    /// Линковка: опрос — старому устройству отдаёт чужие офферы, новому — его
+    /// грант (одноразово).
+    pub const IDENTITY_LINK_POLL: &str = "identity.link.poll";
+    /// Линковка: старое устройство передаёт целевому ECDH-бокс с координатами
+    /// зашифрованного экспорта в cloud.
+    pub const IDENTITY_LINK_GRANT: &str = "identity.link.grant";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
@@ -309,6 +317,72 @@ pub struct DeviceRevokeRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceRevokeResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+// ── Авто-линковка: передача E2E-состояния на новое устройство ────────────────
+// Сервер — слепой релей эфемерных публичных ключей и запечатанного бокса;
+// сам экспорт едет шифртекстом через cloud, ключи — внутри ECDH-бокса.
+
+/// Оффер нового устройства: «передайте мне историю». Владелец — из JWT.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkOfferRequest {
+    pub token: String,
+    pub device_id: String,
+    pub eph_pub: String, // base64 эфемерный публичный ключ ECDH
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkOfferResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Опрос линковки от устройства `device_id`: в ответе — офферы ДРУГИХ
+/// устройств аккаунта (роль старого устройства) и, если есть, грант для
+/// самого `device_id` (роль нового; грант одноразовый — удаляется при выдаче).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkPollRequest {
+    pub token: String,
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkOfferInfo {
+    pub device_id: String,
+    pub eph_pub: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkGrantInfo {
+    pub box_payload: String, // base64 AES-GCM-бокс под ECDH-ключом
+    pub eph_pub: String,     // base64 эфемерный ключ грантера
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkPollResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub offers: Vec<LinkOfferInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<LinkGrantInfo>,
+    pub error: Option<String>,
+}
+
+/// Грант старого устройства: бокс для целевого устройства `device_id`.
+/// Оффер целевого устройства при этом гасится.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkGrantRequest {
+    pub token: String,
+    pub device_id: String,   // ЦЕЛЕВОЕ (новое) устройство
+    pub box_payload: String,
+    pub eph_pub: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkGrantResponse {
     pub ok: bool,
     pub error: Option<String>,
 }
@@ -641,6 +715,19 @@ pub struct SyncRequestPayload {
     /// Ed25519 signature over `sync:<last_seen_id>:<since_updated>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Авто-линковка: доказательства владения signing-ключами ПРЕЖНИХ
+    /// устройств (их состояние перенесено на это устройство) — sealed-исходящие
+    /// тех устройств включаются в выдачу. Подпись — над той же строкой
+    /// `sync:<last_seen_id>:<since_updated>`. Отсутствует у legacy-клиентов.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_signing: Vec<SyncExtraSigning>,
+}
+
+/// Одно доказательство владения дополнительным signing-ключом в sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncExtraSigning {
+    pub signing_key: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

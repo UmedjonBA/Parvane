@@ -31,6 +31,9 @@ type ConnectionDependencies = {
   setCallIdentityReady: (isReady: boolean) => void;
   polls: PollStore;
   onNewSession: () => void;
+  // Сессия полностью поднята (auth + E2E + подписки): точка старта фоновых
+  // пост-логин задач (авто-линковка истории)
+  onSessionReady?: () => void;
   isSynced: () => boolean;
   resetSyncPromise: () => void;
   requestDeltaSync: () => void;
@@ -304,6 +307,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
       syncTimer = window.setInterval(deps.requestDeltaSync, DELTA_SYNC_INTERVAL_MS);
       presenceTimer = window.setInterval(publishPresence, PRESENCE_INTERVAL_MS);
       publishPresence();
+      deps.onSessionReady?.();
     } catch (error) {
       if (generation === sessionGeneration && deps.getConnection() === activeConnection) {
         deps.setConnection(undefined);

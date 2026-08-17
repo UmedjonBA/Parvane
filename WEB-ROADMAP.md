@@ -40,9 +40,17 @@
   посреди SKDM ломала эпоху). Плюс: пополнение one-time prekeys на логине
   (порог 5, персистентный счётчик key_id), PBKDF2 экспорта 600k, wss:// на
   https. e2e: `scripts/run_web_devices_e2e.sh` (3 браузера).
-- **Остатки мультидевайса**: авто-линковка с передачей истории (сейчас —
-  ручной экспорт/импорт E2E-ключей), fan-out в desktop-клиенте, Devices-экран
-  в desktop.
+- **Авто-линковка истории СДЕЛАНА (2026-08-17)**: identity.link.offer/poll/
+  grant (эфемерный ECDH P-256, SAS-код, экспорт шифртекстом через cloud,
+  одноразовый грант, TTL 15 мин, отзыв оффера пустым eph_pub); импорт —
+  слияние (decCache + входящие Megolm + legacy-подписант), своя identity
+  сохраняется; sealed-исходящие прежних устройств — через extra_signing в
+  sync (messenger проверяет подписи, cap 8). UI — в Settings→Devices (код
+  ожидания на новом, запросы с подтверждением на старом). Плюс фикс
+  requestSync (сброс chats.isFullyLoaded — ресинк после импорта был no-op).
+  e2e: `scripts/run_web_linking_e2e.sh`; крипто — vitest linking.test.ts.
+- **Остатки мультидевайса**: fan-out в desktop-клиенте, Devices-экран и
+  линковка в desktop.
 - **Следующее большое**: деплой на VPS — деплой-комплекта в репо ещё нет
   (systemd-юниты шардов, nginx/caddy + TLS, .env-шаблоны, файрвол, TURN).
   Оценка железа для старта: 2 vCPU / 4 ГБ / 80 ГБ NVMe; сборка веба и шардов

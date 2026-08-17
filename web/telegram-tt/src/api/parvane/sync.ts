@@ -64,12 +64,17 @@ export function createSyncController(deps: SyncDependencies) {
 
   function buildSyncPayload(lastSeenId: string, updatedSince: number) {
     const e2e = deps.getE2e();
+    const signedPayload = `sync:${lastSeenId}:${updatedSince}`;
+    // Авто-линковка: доказательства владения ключами прежних устройств —
+    // сервер включает в выдачу их sealed-исходящие
+    const extraSigning = e2e?.signExtraSync(signedPayload);
     return {
       last_seen_id: lastSeenId,
       since_updated: updatedSince,
       device_id: e2e?.deviceId || '',
       sender_signing_key: e2e?.signingKey,
-      signature: e2e?.signCallData(`sync:${lastSeenId}:${updatedSince}`),
+      signature: e2e?.signCallData(signedPayload),
+      extra_signing: extraSigning?.length ? extraSigning : undefined,
     };
   }
 
