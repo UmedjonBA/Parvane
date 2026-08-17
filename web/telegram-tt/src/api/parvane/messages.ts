@@ -134,6 +134,12 @@ export function createMessageController(deps: MessageDependencies) {
     const engine = requireE2e(deps.getE2e());
     const currentStore = store();
     engine.syncGroupRecipients(group, members, currentStore.self);
+    // Прогрев каталогов устройств ДО выбора ключа: отзыв устройства участника
+    // ротирует группу (rotateGroupsWith), и ключ должен браться уже новый
+    await Promise.all(
+      Array.from(new Set([...members, currentStore.self]))
+        .map((member) => engine.primeContactDevices(member, fetchPrekeyBundle).catch(() => {})),
+    );
     const { sessionKey, epoch } = engine.getGroupSessionKey(group);
     const content = {
       kind: 'skdm', group, session_key: sessionKey, sender_identity: engine.identityKey, epoch,

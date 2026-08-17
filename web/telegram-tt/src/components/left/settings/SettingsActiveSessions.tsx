@@ -150,23 +150,12 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           <ListItem narrow inactive icon={`device-${getSessionIcon(session)}`} iconClassName="icon-device">
             <div className="multiline-item full-size" dir="auto">
               <span className="title" dir="auto">{session.deviceModel}</span>
-              <span className="subtitle black tight">
-                {session.appName}
-                {' '}
-                {session.appVersion}
-                ,
-                {' '}
-                {session.platform}
-                {' '}
-                {session.systemVersion}
-              </span>
-              <span className="subtitle">
-                {session.ip}
-                {' '}
-                -
-                {' '}
-                {getLocation(session)}
-              </span>
+              <span className="subtitle black tight">{getAppLine(session)}</span>
+              {Boolean(session.ip || getLocation(session)) && (
+                <span className="subtitle">
+                  {[session.ip, getLocation(session)].filter(Boolean).join(' - ')}
+                </span>
+              )}
             </div>
           </ListItem>
 
@@ -243,21 +232,12 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
             {session.deviceModel}
             <span className="date">{formatPastTimeShort(oldLang, session.dateActive * 1000)}</span>
           </span>
-          <span className="subtitle black tight">
-            {session.appName}
-            {' '}
-            {session.appVersion}
-            ,
-            {' '}
-            {session.platform}
-            {' '}
-            {session.systemVersion}
-          </span>
-          <span className="subtitle">
-            {session.ip}
-            {' '}
-            {getLocation(session)}
-          </span>
+          <span className="subtitle black tight">{getAppLine(session)}</span>
+          {Boolean(session.ip || getLocation(session)) && (
+            <span className="subtitle">
+              {[session.ip, getLocation(session)].filter(Boolean).join(' ')}
+            </span>
+          )}
         </div>
       </ListItem>
     );
@@ -267,7 +247,9 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     <div className="settings-content custom-scroll SettingsActiveSessions">
       {currentSession && renderCurrentSession(currentSession)}
       {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
-      {renderAutoTerminate()}
+      {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
+          показывается только когда бэкенд отдал ttlDays */}
+      {ttlDays !== undefined && renderAutoTerminate()}
       {hasOtherSessions && (
         <ConfirmDialog
           isOpen={isConfirmTerminateAllDialogOpen}
@@ -286,6 +268,15 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
 
 function getLocation(session: ApiSession) {
   return [session.region, session.country].filter(Boolean).join(', ');
+}
+
+// Parvane: часть полей пуста (сервер не хранит метаданные устройств) —
+// собираем строку только из заполненных, без висячих запятых
+function getAppLine(session: ApiSession) {
+  return [
+    [session.appName, session.appVersion].filter(Boolean).join(' '),
+    [session.platform, session.systemVersion].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ');
 }
 
 export default memo(withGlobal<OwnProps>(

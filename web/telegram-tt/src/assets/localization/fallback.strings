@@ -300,6 +300,7 @@
 "ConversationDeleteMessagesForEveryone" = "Delete for everyone";
 "ChatListDeleteForCurrentUser" = "Delete just for me";
 "Delete" = "Delete";
+"Devices" = "Devices";
 "FakeMessage" = "FAKE";
 "ScamMessage" = "SCAM";
 "SendWithoutSound" = "Send Without Sound";

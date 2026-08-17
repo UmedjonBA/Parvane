@@ -86,6 +86,9 @@ type PersistedE2eState = {
   // id этого устройства ('' — legacy-primary) и известные устройства контактов
   deviceId?: string;
   contactDevices?: Record<string, Record<string, ContactDevice>>;
+  // Следующий key_id для пополнения one-time prekeys: сервер дедупит по
+  // (username, device_id, key_id), повтор старых id был бы тихим no-op
+  oneTimeKeyIdNext?: number;
 };
 
 // Как часто перепроверять список устройств контакта перед отправкой (обнаружение
@@ -138,6 +141,8 @@ export class E2eEngine {
   private self = '';
 
   private published = false;
+
+  private oneTimeKeyIdNext = ONE_TIME_BATCH + 1;
 
   identityKey = '';
 
@@ -226,6 +231,7 @@ export class E2eEngine {
       this.groupRecipients.set(group, recipients);
     });
     this.published = Boolean(state.published);
+    this.oneTimeKeyIdNext = state.oneTimeKeyIdNext ?? ONE_TIME_BATCH + 1;
   }
 
   private loadLegacyState() {
@@ -293,6 +299,7 @@ export class E2eEngine {
       published: this.published,
       deviceId: this.deviceId,
       contactDevices: Object.fromEntries(this.devicesByContact),
+      oneTimeKeyIdNext: this.oneTimeKeyIdNext,
     };
   }
 
@@ -353,6 +360,43 @@ export class E2eEngine {
     }));
     this.account.mark_keys_as_published();
     this.published = true;
+    this.oneTimeKeyIdNext = one_time.length + 1;
+    this.persistAccount();
+
+    return {
+      token,
+      device_id: this.deviceId,
+      signing_key: this.signingKey,
+      registration_id: 1,
+      identity_key: this.identityKey,
+      signed_prekey_id: 1,
+      signed_prekey: fallbackKey,
+      signed_prekey_sig: this.account.sign(fallbackKey),
+      one_time,
+    };
+  }
+
+  // Пополнение one-time prekeys, когда серверный остаток просел (X3DH без
+  // one-time — деградация PFS первого сообщения). Нумерация key_id продолжается
+  // с персистентного счётчика: сервер дедупит по (username, device_id, key_id),
+  // и повтор старых id был бы тихим no-op. Fallback-ключ перегенерируется (olm
+  // держит и предыдущий — прекей-сообщения в полёте расшифруются)
+  buildTopUpPrekeysPayload(token: string): Record<string, unknown> | undefined {
+    if (!this.published) return undefined;
+
+    this.account.generate_fallback_key();
+    const fallback = JSON.parse(this.account.fallback_key()) as { curve25519: Record<string, string> };
+    const fallbackKey = Object.values(fallback.curve25519)[0];
+
+    this.account.generate_one_time_keys(ONE_TIME_BATCH);
+    const oneTime = JSON.parse(this.account.one_time_keys()) as { curve25519: Record<string, string> };
+    const keys = Object.values(oneTime.curve25519);
+    if (!keys.length || !fallbackKey) return undefined;
+    const one_time = keys.map((publicKey) => ({
+      key_id: this.oneTimeKeyIdNext++,
+      public_key: publicKey,
+    }));
+    this.account.mark_keys_as_published();
     this.persistAccount();
 
     return {
@@ -508,8 +552,15 @@ export class E2eEngine {
       this.sessionsByIdentity.set(device.identity_key, session);
       accountChanged = true;
     });
+    const previous = this.devicesByContact.get(contact);
     this.devicesByContact.set(contact, next);
     this.deviceListFetchedAt.set(contact, now);
+    // Устройство контакта исчезло из каталога (отозвано) — ротируем общие
+    // группы: групповой шифртекст рассылается всем, и без ротации отозванное
+    // устройство продолжало бы читать НАШИ новые сообщения старым session key
+    if (previous && Object.keys(previous).some((deviceId) => !(deviceId in next))) {
+      this.rotateGroupsWith(contact);
+    }
     if (!Object.keys(next).length) return;
     const primary = devices.find((device) => device.device_id === '') || devices[0];
     if (primary.identity_key !== this.identityKey) {
@@ -517,6 +568,14 @@ export class E2eEngine {
     }
     if (accountChanged) this.persistAccount();
     this.persistContacts();
+  }
+
+  // Прогрев каталога устройств контакта ДО выбора группового ключа: ротация от
+  // обнаруженного отзыва (rotateGroupsWith) должна случиться до
+  // getGroupSessionKey, иначе SKDM уедет со старым ключом, а groupEncrypt
+  // упадёт на несовпадении эпохи
+  async primeContactDevices(contact: string, fetchBundle: BundleFetcher) {
+    await this.refreshContactDevices(contact, fetchBundle);
   }
 
   // Шифрует inner-JSON для ВСЕХ устройств контакта (мультидевайс). undefined —
@@ -686,6 +745,31 @@ export class E2eEngine {
     this.persistGroupOut();
   }
 
+  // Отзыв СВОЕГО устройства (Settings → Devices): выбрасываем его из локального
+  // каталога self (fan-out этой сессии сразу перестаёт слать ему копии) и
+  // ротируем все исходящие групповые сессии — старый session key у отозванного
+  // устройства не должен читать новые групповые сообщения. Новый ключ разъедется
+  // штатным SKDM при следующей отправке в каждую группу
+  forgetOwnDevice(deviceId: string) {
+    const ownDevices = this.devicesByContact.get(this.self);
+    if (ownDevices && deviceId in ownDevices) {
+      delete ownDevices[deviceId];
+      this.persistContacts();
+    }
+    this.deviceListFetchedAt.delete(this.self);
+    this.groupOut.forEach((_entry, group) => this.rotateGroup(group));
+  }
+
+  // Ротация исходящих сессий всех групп, где участвует контакт (его устройство
+  // отозвано). Новый ключ разъедется штатным SKDM при следующей отправке
+  private rotateGroupsWith(contact: string) {
+    this.groupRecipients.forEach((recipients, group) => {
+      if (recipients.includes(contact) && this.groupOut.has(group)) {
+        this.rotateGroup(group);
+      }
+    });
+  }
+
   // Приём SKDM: принимаем ключ только строго новее известной эпохи (дедуп той
   // же, анти-откат старой, замена на ротацию)
   acceptGroupKey(group: string, senderIdentity: string, sessionKey: string, epoch: number) {
@@ -720,7 +804,9 @@ function stripBase64Padding(value: string) {
 }
 
 const EXPORT_VERSION = 1;
-const EXPORT_KDF_ITERATIONS = 310000;
+// OWASP-2023 минимум для PBKDF2-SHA256. Импорт читает iterations из самого
+// бэкапа — старые экспорты на 310k остаются читаемыми
+const EXPORT_KDF_ITERATIONS = 600000;
 
 // WebCrypto требует BufferSource с обычным ArrayBuffer
 function toStandaloneBuffer(bytes: Uint8Array): ArrayBuffer {

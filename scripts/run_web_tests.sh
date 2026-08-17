@@ -76,6 +76,9 @@ log "E2E keys backup e2e (C1 device migration)"
 log "Three-browser multidevice e2e (one account, two devices)"
 "$ROOT/scripts/run_web_multidevice_e2e.sh"
 
+log "Three-browser devices e2e (Settings → Devices, revoke)"
+"$ROOT/scripts/run_web_devices_e2e.sh"
+
 log "Two-browser calls e2e"
 "$ROOT/scripts/run_web_calls_e2e.sh"
 

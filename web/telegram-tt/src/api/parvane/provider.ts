@@ -10,6 +10,7 @@ import type {
   ApiChat, ApiDraft, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
+  ApiSession,
   ApiSticker, ApiThreadInfo,
   ApiUpdate,
   ApiUser,
@@ -60,6 +61,8 @@ import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getStickerBlobMime 
 import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
 import {
+  TOPIC_DEVICE_LIST,
+  TOPIC_DEVICE_REVOKE,
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
@@ -299,6 +302,74 @@ async function resolveCustomPack(setId: string): Promise<{ pack: StoredPack; isI
   const pack: StoredPack = { name: ref.name, files };
   setPendingFiles(setId, pack);
   return { pack, isInstalled: false };
+}
+
+// Метаданных об устройствах сервер не хранит (только ключи и updated_at) —
+// человекочитаемые поля синтезируем: для текущего устройства из UA, для
+// остальных по device_id ('' — legacy-primary: desktop или прежний web)
+function buildDeviceSession(
+  device: { device_id: string; updated_at: number },
+  currentDeviceId: string,
+): ApiSession {
+  const isCurrent = device.device_id === currentDeviceId;
+  const deviceModel = isCurrent
+    ? detectBrowserName()
+    : (device.device_id ? `Web ${device.device_id.slice(0, 8)}` : 'Desktop');
+  return {
+    hash: device.device_id,
+    isCurrent,
+    isOfficialApp: true,
+    isPasswordPending: false,
+    deviceModel,
+    platform: isCurrent ? detectPlatformName() : '',
+    systemVersion: '',
+    appName: 'Parvane',
+    appVersion: '',
+    dateCreated: device.updated_at,
+    dateActive: device.updated_at,
+    ip: '',
+    country: '',
+    region: '',
+    areCallsEnabled: true,
+    areSecretChatsEnabled: false,
+  };
+}
+
+function detectBrowserName() {
+  const ua = navigator.userAgent;
+  if (ua.includes('Firefox/')) return 'Firefox';
+  if (ua.includes('OPR/')) return 'Opera';
+  if (ua.includes('Chrome/')) return 'Chrome';
+  if (ua.includes('Safari/')) return 'Safari';
+  return 'Browser';
+}
+
+function detectPlatformName() {
+  const ua = navigator.userAgent;
+  if (ua.includes('Android')) return 'Android';
+  if (/iPhone|iPad/.test(ua)) return 'iOS';
+  if (ua.includes('Mac OS')) return 'macOS';
+  if (ua.includes('Windows')) return 'Windows';
+  if (ua.includes('Linux')) return 'Linux';
+  return '';
+}
+
+// Отзыв устройства: identity выкидывает его бандл из каталога (fan-out новых
+// сообщений его больше не включает), локально — чистка каталога self и ротация
+// групповых ключей (forgetOwnDevice)
+async function revokeOwnDevice(deviceId: string) {
+  if (!connection || !e2e) return undefined;
+  try {
+    const raw = await connection.request(TOPIC_DEVICE_REVOKE, JSON.stringify({
+      token, device_id: deviceId,
+    }));
+    if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    e2e.forgetOwnDevice(deviceId);
+    await e2e.flushStorage();
+    return true;
+  } catch {
+    return undefined;
+  }
 }
 
 const methods = {
@@ -775,6 +846,45 @@ const methods = {
     registerPackBlobs(built.blobs);
     sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
     return { title: finalName, count: packFiles.length };
+  },
+
+  // ── Settings → Devices: устройства аккаунта = прекей-каталог identity ───────
+
+  async fetchAuthorizations() {
+    if (!connection || !e2e) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token }));
+      const response = JSON.parse(raw) as {
+        ok: boolean;
+        devices?: { device_id: string; updated_at: number }[];
+      };
+      if (!response.ok || !response.devices) return undefined;
+      const currentDeviceId = e2e.deviceId;
+      const authorizations: Record<string, ApiSession> = {};
+      response.devices.forEach((device) => {
+        authorizations[device.device_id] = buildDeviceSession(device, currentDeviceId);
+      });
+      return { authorizations, ttlDays: undefined };
+    } catch {
+      return undefined;
+    }
+  },
+
+  // hash = device_id ('' — legacy-primary: desktop или прежняя web-установка).
+  // Текущее устройство не отзываем — UI его и не предлагает
+  async terminateAuthorization(hash: string) {
+    if (!e2e || hash === e2e.deviceId) return undefined;
+    return revokeOwnDevice(hash);
+  },
+
+  async terminateAllAuthorizations() {
+    if (!connection || !e2e) return undefined;
+    const list = await methods.fetchAuthorizations();
+    if (!list) return undefined;
+    const others = Object.keys(list.authorizations)
+      .filter((deviceId) => deviceId !== e2e!.deviceId);
+    const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId)));
+    return results.every(Boolean) ? true : undefined;
   },
 
   // ── web-push (шард push, VAPID) ─────────────────────────────────────────────

@@ -11,9 +11,7 @@ import getSessionIcon from './helpers/getSessionIcon';
 import useCurrentOrPrev from '../../../hooks/useCurrentOrPrev';
 import useLang from '../../../hooks/useLang';
 
-import Switch from '../../gili/primitives/Switch';
 import Button from '../../ui/Button';
-import ListItem from '../../ui/ListItem';
 import Modal from '../../ui/Modal';
 
 import styles from './SettingsActiveSession.module.scss';
@@ -31,24 +29,10 @@ type StateProps = {
 const SettingsActiveSession: FC<OwnProps & StateProps> = ({
   isOpen, session, onClose,
 }) => {
-  const { changeSessionSettings, terminateAuthorization } = getActions();
+  const { terminateAuthorization } = getActions();
   const lang = useLang();
 
   const renderingSession = useCurrentOrPrev(session, true);
-
-  const handleSecretChatsStateChange = useCallback(() => {
-    changeSessionSettings({
-      hash: session!.hash,
-      areSecretChatsEnabled: !session!.areSecretChatsEnabled,
-    });
-  }, [changeSessionSettings, session]);
-
-  const handleCallsStateChange = useCallback(() => {
-    changeSessionSettings({
-      hash: session!.hash,
-      areCallsEnabled: !session!.areCallsEnabled,
-    });
-  }, [changeSessionSettings, session]);
 
   const handleTerminateSessionClick = useCallback(() => {
     terminateAuthorization({ hash: session!.hash });
@@ -95,16 +79,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
       <dl className={styles.box}>
         <dt>{lang('SessionPreviewApp')}</dt>
-        <dd>
-          {renderingSession?.appName}
-          {' '}
-          {renderingSession?.appVersion}
-          ,
-          {' '}
-          {renderingSession?.platform}
-          {' '}
-          {renderingSession?.systemVersion}
-        </dd>
+        <dd>{getAppLine(renderingSession)}</dd>
         {renderingSession?.ip && (
           <>
             <dt>{lang('SessionPreviewIp')}</dt>
@@ -112,28 +87,16 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
           </>
         )}
 
-        <dt>{lang('SessionPreviewLocation')}</dt>
-        <dd>{renderingSession && getLocation(renderingSession)}</dd>
+        {Boolean(getLocation(renderingSession)) && (
+          <>
+            <dt>{lang('SessionPreviewLocation')}</dt>
+            <dd>{getLocation(renderingSession)}</dd>
+          </>
+        )}
       </dl>
 
-      <p className={styles.note}>{lang('SessionPreviewIpDesc')}</p>
-
-      <h4 className={styles.actionHeader}>{lang('AuthSessionsViewAcceptTitle')}</h4>
-
-      <ListItem onClick={handleSecretChatsStateChange}>
-        <span className={styles.actionName}>{lang('SessionPreviewAcceptSecret')}</span>
-        <Switch
-          id="accept_secrets"
-          checked={renderingSession.areSecretChatsEnabled}
-        />
-      </ListItem>
-      <ListItem onClick={handleCallsStateChange}>
-        <span className={styles.actionName}>{lang('SessionPreviewAcceptCalls')}</span>
-        <Switch
-          id="accept_calls"
-          checked={renderingSession.areCallsEnabled}
-        />
-      </ListItem>
+      {/* Parvane: IP/гео сервер не хранит, per-session тумблеры звонков и
+          секретных чатов не поддерживаются — примечание и переключатели скрыты */}
       <div className="dialog-buttons mt-2">
         <Button
           color="danger"
@@ -150,6 +113,16 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
 function getLocation(session: ApiSession) {
   return [session.region, session.country].filter(Boolean).join(', ');
+}
+
+// Parvane: часть полей пуста (сервер не хранит метаданные устройств) —
+// собираем строку только из заполненных, без висячих запятых
+function getAppLine(session?: ApiSession) {
+  if (!session) return '';
+  return [
+    [session.appName, session.appVersion].filter(Boolean).join(' '),
+    [session.platform, session.systemVersion].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ');
 }
 
 export default memo(withGlobal<OwnProps>((global, { hash }) => {

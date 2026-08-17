@@ -253,6 +253,7 @@ export interface LangPair {
   'ConversationDeleteMessagesForEveryone': undefined;
   'ChatListDeleteForCurrentUser': undefined;
   'Delete': undefined;
+  'Devices': undefined;
   'FakeMessage': undefined;
   'ScamMessage': undefined;
   'SendWithoutSound': undefined;

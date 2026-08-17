@@ -4,15 +4,16 @@ use base64::{engine::general_purpose::{STANDARD as B64, STANDARD_NO_PAD as B64_N
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use parvane_types::{
+    DeviceInfo, DeviceListRequest, DeviceListResponse, DeviceRevokeRequest, DeviceRevokeResponse,
     EmailConfirmRequest, EmailConfirmResponse, FetchBundleRequest, FetchBundleResponse,
     IssueRequest, IssueResponse, PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest,
     RegisterResponse, ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse,
     SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest,
     VerifyResponse,
     topics::{
-        IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_PREKEYS_FETCH, IDENTITY_PREKEYS_PUBLISH,
-        IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
-        IDENTITY_SETNAME, IDENTITY_VERIFY,
+        IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
+        IDENTITY_PREKEYS_FETCH, IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_RESOLVE,
+        IDENTITY_SEARCH, IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME, IDENTITY_VERIFY,
     },
 };
 
@@ -111,8 +112,10 @@ async fn main() -> Result<()> {
     let mut resolve_sub = nc.subscribe(IDENTITY_RESOLVE).await?;
     let mut pkpub_sub = nc.subscribe(IDENTITY_PREKEYS_PUBLISH).await?;
     let mut pkfetch_sub = nc.subscribe(IDENTITY_PREKEYS_FETCH).await?;
+    let mut devlist_sub = nc.subscribe(IDENTITY_DEVICE_LIST).await?;
+    let mut devrevoke_sub = nc.subscribe(IDENTITY_DEVICE_REVOKE).await?;
 
-    info!("Identity шард запущен. Слушаю: issue/register/email.confirm/verify/search/setname/setavatar/setkey/resolve/prekeys");
+    info!("Identity шард запущен. Слушаю: issue/register/email.confirm/verify/search/setname/setavatar/setkey/resolve/prekeys/devices");
 
     loop {
         tokio::select! {
@@ -148,6 +151,12 @@ async fn main() -> Result<()> {
             }
             Some(msg) = pkfetch_sub.next() => {
                 handle_prekeys_fetch(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = devlist_sub.next() => {
+                handle_device_list(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = devrevoke_sub.next() => {
+                handle_device_revoke(&nc, &pool, &decoding, msg).await;
             }
         }
     }
@@ -490,6 +499,108 @@ async fn fetch_bundle(
         devices,
         error: None,
     })
+}
+
+/// Устройства аккаунта БЕЗ расхода one-time (в отличие от fetch_bundle):
+/// каталог + остаток несожжённых one-time на устройство (для пополнения).
+async fn list_devices(pool: &SqlitePool, username: &str) -> Result<Vec<DeviceInfo>> {
+    let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
+        "SELECT d.device_id, d.signing_key, d.identity_key, d.updated_at,
+                (SELECT COUNT(*) FROM one_time_prekeys o
+                  WHERE o.username = d.username AND o.device_id = d.device_id
+                    AND o.consumed = 0)
+         FROM device_keys d WHERE d.username = ?
+         ORDER BY CASE WHEN d.device_id = '' THEN 0 ELSE 1 END, d.updated_at DESC",
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(device_id, signing_key, identity_key, updated_at, one_time_available)| DeviceInfo {
+            device_id,
+            signing_key,
+            identity_key,
+            updated_at,
+            one_time_available,
+        })
+        .collect())
+}
+
+/// Отзыв устройства: бандл и one-time удаляются, fan-out его больше не увидит.
+/// Ok(false) — такого устройства нет. Уже выданные JWT отзыв не гасит (24ч);
+/// чтение НОВЫХ сообщений закрывает исчезновение из fan-out + клиентская
+/// ротация групповых ключей.
+async fn revoke_device(pool: &SqlitePool, username: &str, device_id: &str) -> Result<bool> {
+    let deleted = sqlx::query("DELETE FROM device_keys WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(device_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    sqlx::query("DELETE FROM one_time_prekeys WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(device_id)
+        .execute(pool)
+        .await?;
+    Ok(deleted > 0)
+}
+
+async fn handle_device_list(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<DeviceListRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => match list_devices(pool, &username).await {
+                Ok(devices) => DeviceListResponse { ok: true, devices, error: None },
+                Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
+            },
+            Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
+        },
+        Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn handle_device_revoke(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let verify = |token: &str| -> Result<String> {
+        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+            .context("неверный или просроченный JWT")?;
+        Ok(data.claims.sub)
+    };
+    let resp = match serde_json::from_slice::<DeviceRevokeRequest>(&msg.payload) {
+        Ok(req) => match verify(&req.token) {
+            Ok(username) => match revoke_device(pool, &username, &req.device_id).await {
+                Ok(true) => {
+                    info!("{} отозвал устройство '{}'", username, req.device_id);
+                    DeviceRevokeResponse { ok: true, error: None }
+                }
+                Ok(false) => DeviceRevokeResponse {
+                    ok: false,
+                    error: Some("устройство не найдено".into()),
+                },
+                Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+            },
+            Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
 async fn handle_prekeys_publish(
@@ -1645,6 +1756,87 @@ mod tests {
         let bb = b.devices.iter().find(|d| d.device_id == "dev-b").unwrap();
         assert_eq!(a.one_time.as_deref(), Some("A9"), "у dev-a только новая пачка");
         assert_eq!(bb.one_time.as_deref(), Some("B1"), "dev-b не пострадал");
+    }
+
+    // ── мультидевайс: листинг и отзыв устройств ──
+
+    #[tokio::test]
+    async fn device_list_counts_one_time_without_consuming() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        store_prekeys(&pool, "alice@local", &sample_publish_device("", 1, &[(1, "L1")]))
+            .await
+            .unwrap();
+        store_prekeys(
+            &pool,
+            "alice@local",
+            &sample_publish_device("dev-web", 2, &[(1, "W1"), (2, "W2")]),
+        )
+        .await
+        .unwrap();
+
+        let devices = list_devices(&pool, "alice@local").await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].device_id, "", "primary первым");
+        assert_eq!(devices[0].one_time_available, 1);
+        let web = devices.iter().find(|d| d.device_id == "dev-web").unwrap();
+        assert_eq!(web.one_time_available, 2);
+        assert_eq!(web.signing_key, "SK-dev-web==");
+
+        // листинг ничего не сжёг: fetch по-прежнему выдаёт one-time обоим
+        let b = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
+        assert!(b.devices.iter().all(|d| d.one_time.is_some()), "one-time целы");
+        // и остаток в листинге падает только после fetch
+        let after = list_devices(&pool, "alice@local").await.unwrap();
+        let web_after = after.iter().find(|d| d.device_id == "dev-web").unwrap();
+        assert_eq!(web_after.one_time_available, 1);
+    }
+
+    #[tokio::test]
+    async fn device_revoke_removes_bundle_and_one_time() {
+        let pool = test_pool().await;
+        insert_user(&pool, "bob@local").await;
+        store_prekeys(&pool, "bob@local", &sample_publish_device("", 1, &[(1, "L1")]))
+            .await
+            .unwrap();
+        store_prekeys(&pool, "bob@local", &sample_publish_device("dev-old", 2, &[(1, "O1")]))
+            .await
+            .unwrap();
+
+        assert!(revoke_device(&pool, "bob@local", "dev-old").await.unwrap());
+        // повторный отзыв — «не найдено»
+        assert!(!revoke_device(&pool, "bob@local", "dev-old").await.unwrap());
+
+        // из каталога и fan-out-выдачи устройство исчезло, one-time вычищены
+        let devices = list_devices(&pool, "bob@local").await.unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device_id, "");
+        let b = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
+        assert!(b.devices.iter().all(|d| d.device_id != "dev-old"));
+        let (orphans,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM one_time_prekeys WHERE username = ? AND device_id = ?",
+        )
+        .bind("bob@local")
+        .bind("dev-old")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(orphans, 0, "one-time отозванного устройства удалены");
+    }
+
+    #[tokio::test]
+    async fn device_revoke_is_scoped_to_owner() {
+        let pool = test_pool().await;
+        insert_user(&pool, "alice@local").await;
+        insert_user(&pool, "eve@local").await;
+        store_prekeys(&pool, "alice@local", &sample_publish_device("dev-a", 1, &[(1, "A1")]))
+            .await
+            .unwrap();
+
+        // eve «отзывает» устройство alice — по своему username ничего не найдено
+        assert!(!revoke_device(&pool, "eve@local", "dev-a").await.unwrap());
+        let devices = list_devices(&pool, "alice@local").await.unwrap();
+        assert_eq!(devices.len(), 1, "устройство alice на месте");
     }
 
     #[tokio::test]

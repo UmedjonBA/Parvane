@@ -190,6 +190,8 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     ParvaneCreatePack: 'Create Sticker Pack',
     ParvaneExportKeys: 'Export E2E Keys',
     ParvaneImportKeys: 'Import E2E Keys',
+    // Заголовок экрана Settings → Devices (SettingsHeader)
+    SessionsTitle: 'Devices',
     ParvaneKeysPasswordPrompt: 'Backup password',
     ParvaneKeysExported: 'E2E keys exported',
     ParvaneKeysExportFailed: 'Could not export E2E keys',
