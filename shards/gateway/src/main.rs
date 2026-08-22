@@ -547,9 +547,12 @@ fn is_own_ephemeral_subject(user: &str, prefix: &str, subject: &str) -> bool {
 }
 
 fn is_concrete_typing_subject(subject: &str) -> bool {
-    subject
-        .strip_prefix("msg.typing.")
-        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+    subject.strip_prefix("msg.typing.").is_some_and(|id| {
+        // Групповой typing веб-клиента адресован chat-id вида "-<digits>"
+        // (FNV с ведущим минусом); 1-на-1 — просто <digits>.
+        let digits = id.strip_prefix('-').unwrap_or(id);
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 /// Привязывает actor-поля к уже проверенному WebSocket/TCP соединению. Клиент
@@ -611,7 +614,11 @@ fn allowed_sub(user: &str, subject: &str) -> bool {
     subject == msg_inbox(user)
         || subject == call_inbox(user)
         || subject == call_inbox(&format!("gcall:{user}"))
-        || is_own_ephemeral_subject(user, "msg.typing.", subject)
+        // Групповой typing: подписка на msg.typing.<chatId> (эфемерный индикатор
+        // «печатает…»). Симметрично publish (is_concrete_typing_subject уже
+        // открыт). Утечка минимальна: только факт набора для известного chatId,
+        // без содержимого; сообщения по-прежнему изолированы инбоксами.
+        || is_concrete_typing_subject(subject)
         || subject == "presence.*"
 }
 
@@ -668,11 +675,12 @@ mod tests {
         ] {
             assert!(!allowed_sub("alice@local", subject), "allowed {subject}");
         }
+        // Групповой typing: подписка на КОНКРЕТНЫЙ msg.typing.<id> теперь
+        // разрешена всем (эфемерный индикатор набора; см. allowed_sub) —
+        // включая чужой 1-на-1 id и групповой "-<digits>". Раньше блокировалось.
         let bob_web_id = web_user_id("bob@local");
-        assert!(!allowed_sub(
-            "alice@local",
-            &format!("msg.typing.{bob_web_id}")
-        ));
+        assert!(allowed_sub("alice@local", &format!("msg.typing.{bob_web_id}")));
+        assert!(allowed_sub("alice@local", "msg.typing.-123456"));
     }
 
     #[test]

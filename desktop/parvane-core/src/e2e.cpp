@@ -1,12 +1,13 @@
-// Parvane fork: E2E-слой (Фаза 2). См. e2e.h.
+// Parvane fork: E2E-слой. См. e2e.h. Паритет с web e2e.ts/messages.ts.
 // Sealed sender: реальный отправитель (from) едет ВНУТРИ шифртекста
-// ({from,content}); сервер видит только шифртекст + identity-ключ отправителя.
-// Сессии keyed по IDENTITY-ключу собеседника (адрес скрыт), с кэшем
-// contact→identity. Персист аккаунта/сессий/кэша в storeDir.
+// ({from,content}); сервер видит только шифртекст + identity/signing ключи
+// отправителя. Сессии keyed по IDENTITY-ключу устройства собеседника; каталог
+// устройств контакта (device_id → {identity, signing}) кэшируется 15 с.
 #include "parvane/e2e.h"
 
 #include "parvane_e2e.h" // C-FFI vodozemac (shared/parvane-e2e/include)
 #include "parvane/itransport.h"
+#include "parvane/linking.h"
 #include "parvane/topics.h"
 
 #include <nlohmann/json.hpp>
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,17 +29,33 @@ using nlohmann::json;
 namespace parvane::e2e {
 namespace {
 
+constexpr int kOneTimeBatch = 20;
+constexpr int kOtkReplenishThreshold = 5;
+constexpr std::uint64_t kDeviceListTtlMs = 15000;
+
+struct DeviceInfo {
+    std::string identity;
+    std::string signing;
+};
+
 std::mutex g_mu;
 ParvaneE2EAccount *g_account = nullptr;
-std::map<std::string, ParvaneE2ESession *> g_sessions; // identity собеседника → сессия
-std::map<std::string, std::string> g_contactId;        // адрес контакта → identity
-std::map<std::string, ParvaneE2EGroupSession *> g_ownGroups;   // groupId → своя исходящая
-std::map<std::string, ParvaneE2EInboundGroup *> g_inGroups;    // "group|senderId" → входящая
-std::map<std::string, std::uint64_t> g_ownGroupEpoch;          // groupId → эпоха своей исходящей
-std::map<std::string, std::uint64_t> g_inGroupEpoch;           // "group|senderId" → эпоха входящей
-std::map<std::string, std::vector<std::string>> g_groupRecipients; // groupId → последний набор SKDM
-std::string g_identityB64;                              // свой identity-ключ
-std::string g_self;                                     // свой адрес (для конверта)
+std::map<std::string, ParvaneE2ESession *> g_sessions; // identity устройства → сессия
+std::map<std::string, std::string> g_contactId;        // адрес → primary identity
+std::map<std::string, std::map<std::string, DeviceInfo>> g_contactDevices; // адрес → dev → info
+std::map<std::string, std::uint64_t> g_contactFetchedAt;                    // адрес → ms
+std::map<std::string, ParvaneE2EGroupSession *> g_ownGroups;
+std::map<std::string, ParvaneE2EInboundGroup *> g_inGroups;
+std::map<std::string, std::uint64_t> g_ownGroupEpoch;
+std::map<std::string, std::uint64_t> g_inGroupEpoch;
+std::map<std::string, std::vector<std::string>> g_groupRecipients;
+std::vector<ParvaneE2EAccount *> g_legacy; // legacy-подписанты (линковка)
+std::string g_identityB64;
+std::string g_signingB64;
+std::string g_deviceId;
+bool g_published = false;
+std::int64_t g_otkNext = 1;
+std::string g_self;
 std::string g_storeDir;
 
 std::string take(char *p) {
@@ -88,6 +106,11 @@ std::string b64d(const std::string &in) {
     return out;
 }
 
+std::uint64_t nowMs() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
 // ── файловый персист (под g_mu) ───────────────────────────────────────────────
 std::string hexName(const std::string &s) {
     static const char *H = "0123456789abcdef";
@@ -112,17 +135,48 @@ void writeFile(const std::string &path, const std::string &data) {
     }
 }
 std::string accountPath() { return g_storeDir + "/account.json"; }
+std::string devicePath() { return g_storeDir + "/device.json"; }
 std::string sessionPath(const std::string &idB64) {
     return g_storeDir + "/sess_" + hexName(idB64) + ".json";
 }
 std::string contactsPath() { return g_storeDir + "/contacts.json"; }
+std::string contactDevicesPath() { return g_storeDir + "/devices.json"; }
 std::string groupRecipientsPath() { return g_storeDir + "/grecip.json"; }
+std::string epochsPath() { return g_storeDir + "/gepoch.json"; }
+std::string legacyPath(const std::string &signingB64) {
+    return g_storeDir + "/legacy_" + hexName(signingB64) + ".json";
+}
+std::string ownGroupPath(const std::string &groupId) {
+    return g_storeDir + "/gout_" + hexName(groupId) + ".json";
+}
+std::string inGroupPath(const std::string &key) {
+    return g_storeDir + "/gin_" + hexName(key) + ".json";
+}
 
 void persistAccount() {
     if (g_storeDir.empty() || !g_account) {
         return;
     }
     writeFile(accountPath(), take(parvane_e2e_account_pickle(g_account)));
+}
+void persistDevice() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    json j = {{"device_id", g_deviceId}, {"published", g_published}, {"otk_next", g_otkNext}};
+    writeFile(devicePath(), j.dump());
+}
+void loadDevice() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    auto j = json::parse(readFile(devicePath()), nullptr, false);
+    if (!j.is_object()) {
+        return;
+    }
+    g_deviceId = j.value("device_id", std::string());
+    g_published = j.value("published", false);
+    g_otkNext = j.value("otk_next", std::int64_t(1));
 }
 void persistSession(const std::string &idB64, ParvaneE2ESession *s) {
     if (g_storeDir.empty() || !s) {
@@ -144,11 +198,7 @@ void loadContacts() {
     if (g_storeDir.empty()) {
         return;
     }
-    const auto raw = readFile(contactsPath());
-    if (raw.empty()) {
-        return;
-    }
-    auto j = json::parse(raw, nullptr, false);
+    auto j = json::parse(readFile(contactsPath()), nullptr, false);
     if (j.is_object()) {
         for (auto it = j.begin(); it != j.end(); ++it) {
             if (it.value().is_string()) {
@@ -157,7 +207,41 @@ void loadContacts() {
         }
     }
 }
-
+void saveContactDevices() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    json j = json::object();
+    for (const auto &[contact, devs] : g_contactDevices) {
+        json d = json::object();
+        for (const auto &[id, info] : devs) {
+            d[id] = {{"identity", info.identity}, {"signing", info.signing}};
+        }
+        j[contact] = d;
+    }
+    writeFile(contactDevicesPath(), j.dump());
+}
+void loadContactDevices() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    auto j = json::parse(readFile(contactDevicesPath()), nullptr, false);
+    if (!j.is_object()) {
+        return;
+    }
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (!it.value().is_object()) {
+            continue;
+        }
+        auto &devs = g_contactDevices[it.key()];
+        for (auto d = it.value().begin(); d != it.value().end(); ++d) {
+            if (d.value().is_object()) {
+                devs[d.key()] = {d.value().value("identity", std::string()),
+                                 d.value().value("signing", std::string())};
+            }
+        }
+    }
+}
 void saveGroupRecipients() {
     if (g_storeDir.empty()) {
         return;
@@ -168,16 +252,11 @@ void saveGroupRecipients() {
     }
     writeFile(groupRecipientsPath(), j.dump());
 }
-
 void loadGroupRecipients() {
     if (g_storeDir.empty()) {
         return;
     }
-    const auto raw = readFile(groupRecipientsPath());
-    if (raw.empty()) {
-        return;
-    }
-    const auto j = json::parse(raw, nullptr, false);
+    const auto j = json::parse(readFile(groupRecipientsPath()), nullptr, false);
     if (!j.is_object()) {
         return;
     }
@@ -187,12 +266,6 @@ void loadGroupRecipients() {
         }
     }
 }
-
-std::uint64_t nowMs() {
-    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
-}
-std::string epochsPath() { return g_storeDir + "/gepoch.json"; }
 void saveEpochs() {
     if (g_storeDir.empty()) {
         return;
@@ -212,35 +285,40 @@ void loadEpochs() {
     if (g_storeDir.empty()) {
         return;
     }
-    const auto raw = readFile(epochsPath());
-    if (raw.empty()) {
-        return;
-    }
-    auto j = json::parse(raw, nullptr, false);
+    auto j = json::parse(readFile(epochsPath()), nullptr, false);
     if (!j.is_object()) {
         return;
     }
-    if (j.contains("own") && j["own"].is_object()) {
-        for (auto it = j["own"].begin(); it != j["own"].end(); ++it) {
-            if (it.value().is_number_unsigned()) {
-                g_ownGroupEpoch[it.key()] = it.value().get<std::uint64_t>();
-            }
+    for (const char *sect : {"own", "in"}) {
+        if (!j.contains(sect) || !j[sect].is_object()) {
+            continue;
         }
-    }
-    if (j.contains("in") && j["in"].is_object()) {
-        for (auto it = j["in"].begin(); it != j["in"].end(); ++it) {
+        auto &dst = (std::string(sect) == "own") ? g_ownGroupEpoch : g_inGroupEpoch;
+        for (auto it = j[sect].begin(); it != j[sect].end(); ++it) {
             if (it.value().is_number_unsigned()) {
-                g_inGroupEpoch[it.key()] = it.value().get<std::uint64_t>();
+                dst[it.key()] = it.value().get<std::uint64_t>();
             }
         }
     }
 }
-
-std::string ownGroupPath(const std::string &groupId) {
-    return g_storeDir + "/gout_" + hexName(groupId) + ".json";
-}
-std::string inGroupPath(const std::string &key) {
-    return g_storeDir + "/gin_" + hexName(key) + ".json";
+void loadLegacy() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(g_storeDir, ec)) {
+        const auto name = entry.path().filename().string();
+        if (name.rfind("legacy_", 0) != 0) {
+            continue;
+        }
+        const auto pickle = readFile(entry.path().string());
+        if (pickle.empty()) {
+            continue;
+        }
+        if (auto *acc = parvane_e2e_account_from_pickle(pickle.c_str())) {
+            g_legacy.push_back(acc);
+        }
+    }
 }
 void persistOwnGroup(const std::string &groupId, ParvaneE2EGroupSession *g) {
     if (g_storeDir.empty() || !g) {
@@ -255,7 +333,6 @@ void persistInGroup(const std::string &key, ParvaneE2EInboundGroup *g) {
     writeFile(inGroupPath(key), take(parvane_e2e_inbound_group_pickle(g)));
 }
 
-// Своя исходящая group-сессия: память → диск (создаётся вызывающим при отсутствии).
 ParvaneE2EGroupSession *getOwnGroup(const std::string &groupId) {
     auto it = g_ownGroups.find(groupId);
     if (it != g_ownGroups.end()) {
@@ -287,7 +364,6 @@ void rotateOwnGroupLocked(const std::string &groupId) {
     }
 }
 
-// Входящая group-сессия по ключу "group|senderIdentity": память → диск.
 ParvaneE2EInboundGroup *getInGroup(const std::string &key) {
     auto it = g_inGroups.find(key);
     if (it != g_inGroups.end()) {
@@ -305,7 +381,6 @@ ParvaneE2EInboundGroup *getInGroup(const std::string &key) {
     return nullptr;
 }
 
-// Сессия по identity собеседника: память → диск.
 ParvaneE2ESession *getSession(const std::string &idB64) {
     auto it = g_sessions.find(idB64);
     if (it != g_sessions.end()) {
@@ -323,11 +398,251 @@ ParvaneE2ESession *getSession(const std::string &idB64) {
     return nullptr;
 }
 
+bool sessionExists(const std::string &idB64) {
+    if (g_sessions.count(idB64)) {
+        return true;
+    }
+    if (g_storeDir.empty() || idB64.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(sessionPath(idB64), ec);
+}
+
+// Все известные группы (память + диск): для ротации «всех своих».
+std::set<std::string> allOwnGroupIdsLocked() {
+    std::set<std::string> out;
+    for (const auto &[g, _] : g_ownGroups) {
+        out.insert(g);
+    }
+    for (const auto &[g, _] : g_ownGroupEpoch) {
+        out.insert(g);
+    }
+    for (const auto &[g, _] : g_groupRecipients) {
+        out.insert(g);
+    }
+    return out;
+}
+
+// ── публикация бандла ─────────────────────────────────────────────────────────
+// Полный бандл (первая публикация) или пополнение one-time. Под g_mu → JSON
+// запроса; сеть — вне лока.
+json buildPublishPayloadLocked(const std::string &token) {
+    const auto fallback = take(parvane_e2e_account_gen_fallback(g_account));
+    const auto otksJson = take(parvane_e2e_account_gen_otks(g_account, kOneTimeBatch, g_otkNext));
+    json otks = json::parse(otksJson, nullptr, false);
+    if (!otks.is_array()) {
+        otks = json::array();
+    }
+    g_otkNext += static_cast<std::int64_t>(otks.size());
+    const auto sig = take(parvane_e2e_account_sign(g_account, fallback.c_str()));
+    persistAccount();
+    return json{
+        {"token", token},
+        {"device_id", g_deviceId},
+        {"signing_key", g_signingB64},
+        {"registration_id", 1},
+        {"identity_key", g_identityB64},
+        {"signed_prekey_id", 1},
+        {"signed_prekey", fallback},
+        {"signed_prekey_sig", sig},
+        {"one_time", otks},
+    };
+}
+
+// ── каталог устройств контакта (паритет refreshContactDevices) ───────────────
+std::vector<std::string> knownDeviceIdsLocked(const std::string &contact) {
+    std::vector<std::string> out;
+    auto it = g_contactDevices.find(contact);
+    if (it != g_contactDevices.end()) {
+        for (const auto &[id, info] : it->second) {
+            if (sessionExists(info.identity)) {
+                out.push_back(id);
+            }
+        }
+    }
+    if (contact == g_self && !g_deviceId.empty()) {
+        out.push_back(g_deviceId);
+    }
+    return out;
+}
+
+bool hasDeviceIdentityLocked(const std::string &contact, const std::string &identity) {
+    auto it = g_contactDevices.find(contact);
+    if (it != g_contactDevices.end()) {
+        for (const auto &[id, info] : it->second) {
+            if (info.identity == identity) {
+                return true;
+            }
+        }
+    }
+    auto c = g_contactId.find(contact);
+    return c != g_contactId.end() && c->second == identity;
+}
+
+void rotateGroupsWithLocked(const std::string &contact) {
+    for (const auto &[group, recipients] : g_groupRecipients) {
+        if (std::find(recipients.begin(), recipients.end(), contact) != recipients.end()) {
+            rotateOwnGroupLocked(group);
+        }
+    }
+}
+
+// Перечитать каталог устройств контакта (identity.prekeys.fetch + known_devices).
+// force — игнорировать TTL. Сеть вне лока.
+void refreshContactDevices(const std::string &contact, ITransport &t, const std::string &token,
+                           bool force) {
+    std::vector<std::string> known;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_account) {
+            return;
+        }
+        const auto fetched = g_contactFetchedAt.find(contact);
+        const bool have = g_contactDevices.count(contact) && !g_contactDevices[contact].empty();
+        if (!force && have && fetched != g_contactFetchedAt.end()
+            && nowMs() - fetched->second < kDeviceListTtlMs) {
+            return;
+        }
+        known = knownDeviceIdsLocked(contact);
+    }
+    json resp;
+    try {
+        json fr = {{"token", token}, {"user", contact}, {"known_devices", known}};
+        resp = json::parse(t.request(topics::IdentityPrekeysFetch, fr.dump(), 5000));
+    } catch (const std::exception &) {
+        return;
+    }
+    if (!resp.is_object() || !resp.value("ok", false)) {
+        return;
+    }
+    json devices = json::array();
+    if (resp.contains("devices") && resp["devices"].is_array() && !resp["devices"].empty()) {
+        devices = resp["devices"];
+    } else if (resp.contains("identity_key") && resp["identity_key"].is_string()) {
+        devices.push_back({{"device_id", ""},
+                           {"signing_key", ""},
+                           {"identity_key", resp["identity_key"]},
+                           {"signed_prekey", resp.value("signed_prekey", "")},
+                           {"one_time", resp.contains("one_time") ? resp["one_time"] : json()}});
+    }
+    if (devices.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    std::map<std::string, DeviceInfo> next;
+    for (const auto &d : devices) {
+        if (!d.is_object()) {
+            continue;
+        }
+        const auto identity = d.value("identity_key", std::string());
+        if (identity.empty() || identity == g_identityB64) {
+            continue; // своё текущее устройство пропускаем
+        }
+        const auto devId = d.value("device_id", std::string());
+        next[devId] = {identity, d.value("signing_key", std::string())};
+        if (sessionExists(identity)) {
+            continue;
+        }
+        std::string otk;
+        if (d.contains("one_time") && d["one_time"].is_string()) {
+            otk = d["one_time"].get<std::string>();
+        }
+        if (otk.empty() && d.contains("signed_prekey") && d["signed_prekey"].is_string()) {
+            otk = d["signed_prekey"].get<std::string>();
+        }
+        if (otk.empty()) {
+            continue;
+        }
+        if (auto *s = parvane_e2e_outbound(g_account, identity.c_str(), otk.c_str())) {
+            g_sessions[identity] = s;
+            persistSession(identity, s);
+        }
+    }
+    bool lost = false;
+    auto prev = g_contactDevices.find(contact);
+    if (prev != g_contactDevices.end()) {
+        for (const auto &[id, _] : prev->second) {
+            if (!next.count(id)) {
+                lost = true;
+            }
+        }
+    }
+    g_contactDevices[contact] = next;
+    g_contactFetchedAt[contact] = nowMs();
+    saveContactDevices();
+    if (lost) {
+        rotateGroupsWithLocked(contact);
+    }
+    // primary identity (legacy-кэш contact → identity) — устройство '' либо первое.
+    std::string primary;
+    for (const auto &d : devices) {
+        if (d.is_object() && d.value("device_id", std::string("x")).empty()) {
+            primary = d.value("identity_key", std::string());
+            break;
+        }
+    }
+    if (primary.empty()) {
+        primary = devices[0].value("identity_key", std::string());
+    }
+    if (!primary.empty() && primary != g_identityB64 && g_contactId[contact] != primary) {
+        g_contactId[contact] = primary;
+        saveContacts();
+    }
+}
+
+struct DeviceCopy {
+    std::string deviceId;
+    std::string signing;
+    std::string ciphertext;
+    std::uint32_t ctype = 0;
+};
+
+// Зашифровать inner для всех устройств контакта (кроме skipDeviceId). Вне лока
+// сеть (refresh), под локом — шифрование.
+std::vector<DeviceCopy> encryptForDevices(const std::string &contact, const std::string &innerJson,
+                                          ITransport &t, const std::string &token,
+                                          const std::optional<std::string> &skipDeviceId) {
+    refreshContactDevices(contact, t, token, false);
+    std::vector<DeviceCopy> out;
+    std::lock_guard<std::mutex> lk(g_mu);
+    auto it = g_contactDevices.find(contact);
+    if (it == g_contactDevices.end()) {
+        return out;
+    }
+    const auto ptB64 = b64e(innerJson);
+    for (const auto &[devId, info] : it->second) {
+        if (skipDeviceId && devId == *skipDeviceId) {
+            continue;
+        }
+        auto *sess = getSession(info.identity);
+        if (!sess) {
+            continue;
+        }
+        std::uint32_t ctype = 0;
+        const auto ct = take(parvane_e2e_encrypt(sess, ptB64.c_str(), &ctype));
+        if (ct.empty()) {
+            continue;
+        }
+        persistSession(info.identity, sess);
+        out.push_back({devId, info.signing, ct, ctype});
+    }
+    return out;
+}
+
 } // namespace
+
+json Copy::toJson() const {
+    return json{{"recipient", recipient},
+                {"signing_key", signing_key},
+                {"device_id", device_id},
+                {"ciphertext", ciphertext},
+                {"ctype", ctype}};
+}
 
 void initDevice(ITransport &t, const std::string &self, const std::string &token,
                 const std::string &storeDir) {
-    std::string identity, otksJson;
+    json publish;
     {
         std::lock_guard<std::mutex> lk(g_mu);
         if (g_account) {
@@ -338,34 +653,83 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
         if (!g_storeDir.empty()) {
             std::error_code ec;
             std::filesystem::create_directories(g_storeDir, ec);
+            std::filesystem::permissions(g_storeDir, std::filesystem::perms::owner_all,
+                std::filesystem::perm_options::replace, ec);
             const auto pickle = readFile(accountPath());
             if (!pickle.empty()) {
                 g_account = parvane_e2e_account_from_pickle(pickle.c_str());
             }
+            loadDevice();
             loadContacts();
+            loadContactDevices();
             loadEpochs();
             loadGroupRecipients();
+            loadLegacy();
         }
         if (!g_account) {
             g_account = parvane_e2e_account_new();
+            g_published = false;
+            g_otkNext = 1;
+            // Свежая установка → собственный device_id (не перетирает бандлы других
+            // устройств аккаунта). Прежние установки без device.json остаются
+            // legacy-устройством '' (wire back-compat).
+            if (g_deviceId.empty() && readFile(devicePath()).empty()) {
+                g_deviceId = linking::b64encode(linking::randomBytes(12));
+                for (auto &c : g_deviceId) {
+                    if (c == '+' || c == '/' || c == '=') {
+                        c = 'x';
+                    }
+                }
+            }
         }
         g_identityB64 = take(parvane_e2e_account_identity(g_account));
-        identity = g_identityB64;
-        otksJson = take(parvane_e2e_account_gen_otks(g_account, 20, 1));
-        persistAccount(); // новый аккаунт ИЛИ приватные one-time
+        g_signingB64 = take(parvane_e2e_account_ed25519(g_account));
+        if (!g_published) {
+            publish = buildPublishPayloadLocked(token);
+        }
+        persistDevice();
+    }
+    if (!publish.is_null()) {
+        try {
+            const auto resp = json::parse(t.request(topics::IdentityPrekeysPublish, publish.dump(), 5000));
+            if (resp.value("ok", false)) {
+                std::lock_guard<std::mutex> lk(g_mu);
+                g_published = true;
+                persistDevice();
+            }
+        } catch (const std::exception &) {
+        }
+        return;
+    }
+    // Уже публиковались: проверить остаток one-time (identity.device.list) и
+    // долить пачку при < порога; устройства нет в каталоге (отозвано/сброс
+    // сервера) — переопубликовать полный бандл.
+    json resp;
+    try {
+        resp = json::parse(t.request(topics::IdentityDeviceList, json{{"token", token}}.dump(), 5000));
+    } catch (const std::exception &) {
+        return;
+    }
+    if (!resp.is_object() || !resp.value("ok", false) || !resp.contains("devices")) {
+        return;
+    }
+    std::int64_t available = -1;
+    for (const auto &d : resp["devices"]) {
+        if (d.is_object() && d.value("device_id", std::string("x")) == g_deviceId) {
+            available = d.value("one_time_available", std::int64_t(0));
+        }
+    }
+    if (available >= kOtkReplenishThreshold) {
+        return;
+    }
+    json topUp;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        topUp = buildPublishPayloadLocked(token);
+        persistDevice();
     }
     try {
-        json otks = json::parse(otksJson);
-        json req = {
-            {"token", token},
-            {"registration_id", 1},
-            {"identity_key", identity},
-            {"signed_prekey_id", 1},
-            {"signed_prekey", identity},
-            {"signed_prekey_sig", "olm"},
-            {"one_time", otks},
-        };
-        t.request(topics::IdentityPrekeysPublish, req.dump(), 5000);
+        t.request(topics::IdentityPrekeysPublish, topUp.dump(), 5000);
     } catch (const std::exception &) {
     }
 }
@@ -375,93 +739,130 @@ bool ready() {
     return g_account != nullptr;
 }
 
-std::string sealFor(const std::string &to, const std::string &contentJson, ITransport &t,
-                    const std::string &token) {
-    // Реальный отправитель — ВНУТРЬ шифртекста (sealed sender).
-    json inner;
-    try {
-        inner = {{"from", g_self}, {"content", json::parse(contentJson)}};
-    } catch (const std::exception &) {
+std::string myIdentity() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_identityB64;
+}
+std::string deviceId() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_deviceId;
+}
+std::string signingKey() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_signingB64;
+}
+std::string sign(const std::string &data) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account) {
         return {};
     }
+    return take(parvane_e2e_account_sign(g_account, data.c_str()));
+}
+std::vector<std::pair<std::string, std::string>> extraSignatures(const std::string &data) {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::lock_guard<std::mutex> lk(g_mu);
+    for (auto *acc : g_legacy) {
+        const auto key = take(parvane_e2e_account_ed25519(acc));
+        const auto sig = take(parvane_e2e_account_sign(acc, data.c_str()));
+        if (!key.empty() && !sig.empty()) {
+            out.emplace_back(key, sig);
+        }
+        if (out.size() >= 8) {
+            break;
+        }
+    }
+    return out;
+}
 
-    std::string identity, idB64;
+std::optional<Sealed> sealForAddress(const std::string &to, const std::string &contentJson,
+                                     ITransport &t, const std::string &token) {
+    json inner;
+    std::string self, identity, signing, ownDevice;
     {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_account) {
-            return {};
+            return std::nullopt;
         }
+        self = g_self;
         identity = g_identityB64;
-        auto c = g_contactId.find(to);
-        if (c != g_contactId.end()) {
-            idB64 = c->second;
+        signing = g_signingB64;
+        ownDevice = g_deviceId;
+    }
+    try {
+        inner = {{"from", self}, {"content", json::parse(contentJson)}};
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+    const auto innerStr = inner.dump();
+    // Холодный старт (оба только вошли): получатель мог ещё не опубликовать
+    // бандл — ~6 с ретраев, как раньше.
+    std::vector<DeviceCopy> copies;
+    // Для самого себя (SKDM своим устройствам) других устройств может не быть —
+    // без ретраев, иначе каждая групповая отправка ждала бы ~6 с.
+    const int attempts = (to == self) ? 1 : 12;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        copies = encryptForDevices(to, innerStr, t, token, std::nullopt);
+        if (!copies.empty()) {
+            break;
+        }
+        refreshContactDevices(to, t, token, true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    if (copies.empty()) {
+        return std::nullopt;
+    }
+    Sealed out;
+    const DeviceCopy *primary = &copies[0];
+    for (const auto &c : copies) {
+        if (c.deviceId.empty()) {
+            primary = &c;
         }
     }
+    out.content = {
+        {"kind", "encrypted"},
+        {"ciphertext", primary->ciphertext},
+        {"ctype", primary->ctype},
+        {"sender_identity", identity},
+        {"sender_signing_key", signing},
+    };
+    for (const auto &c : copies) {
+        out.copies.push_back({to, std::string(), c.deviceId, c.ciphertext, c.ctype});
+    }
+    // Self-копии (свои другие устройства) — best-effort; признак — signing_key
+    // ЦЕЛЕВОГО устройства (sealed sender: адрес не раскрываем).
+    if (to != self) {
+        const auto selfCopies = encryptForDevices(self, innerStr, t, token, ownDevice);
+        for (const auto &c : selfCopies) {
+            out.copies.push_back({std::string(), c.signing, c.deviceId, c.ciphertext, c.ctype});
+        }
+    }
+    return out;
+}
 
-    // Нет известной сессии по кэшу → тянем бандл (identity + one-time), ретраим.
-    std::string otk;
-    bool needBundle;
+json pickOwnCopy(const json &content, const json &copies, const std::string &self) {
+    if (!copies.is_array() || !content.is_object()) {
+        return content;
+    }
+    std::string devId, signing;
     {
         std::lock_guard<std::mutex> lk(g_mu);
-        needBundle = idB64.empty() || getSession(idB64) == nullptr;
+        devId = g_deviceId;
+        signing = g_signingB64;
     }
-    if (needBundle) {
-        std::string peerIdentity;
-        // ~6с ретраев: при «холодном старте» обоих (оба только вошли и сразу пишут
-        // друг другу) получатель мог ещё не опубликовать prekeys — короткое окно
-        // приводило к «E2E не удался» на первом контакте. Ждём публикации пира.
-        for (int attempt = 0; attempt < 12; ++attempt) {
-            try {
-                json fr = {{"token", token}, {"user", to}};
-                auto resp = json::parse(t.request(topics::IdentityPrekeysFetch, fr.dump(), 5000));
-                if (resp.value("ok", false)) {
-                    peerIdentity = resp.value("identity_key", "");
-                    if (resp.contains("one_time") && resp["one_time"].is_string()) {
-                        otk = resp["one_time"].get<std::string>();
-                    }
-                }
-            } catch (const std::exception &) {
-            }
-            if (!peerIdentity.empty() && !otk.empty()) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    for (const auto &c : copies) {
+        if (!c.is_object() || c.value("device_id", std::string("x")) != devId) {
+            continue;
         }
-        if (peerIdentity.empty() || otk.empty()) {
-            return {};
-        }
-        idB64 = peerIdentity;
-    }
-
-    std::lock_guard<std::mutex> lk(g_mu);
-    // Обновляем кэш contact→identity (детект смены ключа — новый safety number).
-    if (g_contactId[to] != idB64) {
-        g_contactId[to] = idB64;
-        saveContacts();
-    }
-    ParvaneE2ESession *sess = getSession(idB64);
-    if (!sess && !otk.empty()) {
-        sess = parvane_e2e_outbound(g_account, idB64.c_str(), otk.c_str());
-        if (sess) {
-            g_sessions[idB64] = sess;
+        const auto recipient = c.value("recipient", std::string());
+        const auto sk = c.value("signing_key", std::string());
+        if (recipient == self || (!sk.empty() && sk == signing)) {
+            auto out = content;
+            out["ciphertext"] = c.value("ciphertext", std::string());
+            out["ctype"] = c.value("ctype", 0u);
+            return out;
         }
     }
-    if (!sess) {
-        return {};
-    }
-    std::uint32_t ctype = 0;
-    const std::string ct = take(parvane_e2e_encrypt(sess, b64e(inner.dump()).c_str(), &ctype));
-    if (ct.empty()) {
-        return {};
-    }
-    persistSession(idB64, sess);
-    json enc = {
-        {"kind", "encrypted"},
-        {"ciphertext", ct},
-        {"ctype", ctype},
-        {"sender_identity", identity},
-    };
-    return enc.dump();
+    return content;
 }
 
 std::string open(const std::string & /*from_hint*/, const std::string &encryptedJson) {
@@ -484,10 +885,6 @@ std::string open(const std::string & /*from_hint*/, const std::string &encrypted
         return {};
     }
     if (ctype == 0) {
-        // pre-key: отправитель шлёт prekey, ПОКА не получил ответ. Если сессия с
-        // этим identity уже есть (в т.ч. подгруженная с диска) — расшифровываем
-        // ЕЮ (без повторного расхода one-time — он уже израсходован на 1-м prekey).
-        // Только если сессии нет / не подошла — создаём новую inbound.
         if (auto *existing = getSession(senderId)) {
             const auto pt = take(parvane_e2e_decrypt(existing, 0, ct.c_str()));
             if (!pt.empty()) {
@@ -507,7 +904,7 @@ std::string open(const std::string & /*from_hint*/, const std::string &encrypted
         g_sessions[senderId] = sess;
         persistAccount(); // inbound израсходовал one-time
         persistSession(senderId, sess);
-        return b64d(take(outPt)); // inner {from, content}
+        return b64d(take(outPt));
     }
     ParvaneE2ESession *sess = getSession(senderId);
     if (!sess) {
@@ -519,6 +916,42 @@ std::string open(const std::string & /*from_hint*/, const std::string &encrypted
     }
     persistSession(senderId, sess);
     return b64d(ptB64);
+}
+
+Verdict verifySender(const std::string &claimedFrom, const std::string &senderIdentity,
+                     ITransport &t, const std::string &token) {
+    if (claimedFrom.empty() || senderIdentity.empty()) {
+        return Verdict::Unknown;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (senderIdentity == g_identityB64) {
+            return claimedFrom == g_self ? Verdict::Ok : Verdict::Spoofed;
+        }
+        if (hasDeviceIdentityLocked(claimedFrom, senderIdentity)) {
+            return Verdict::Ok;
+        }
+    }
+    refreshContactDevices(claimedFrom, t, token, true);
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (hasDeviceIdentityLocked(claimedFrom, senderIdentity)) {
+        return Verdict::Ok;
+    }
+    return g_contactDevices.count(claimedFrom) ? Verdict::Spoofed : Verdict::Unknown;
+}
+
+void rememberContactIdentity(const std::string &contact, const std::string &identity) {
+    if (contact.empty() || identity.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (contact == g_self) {
+        return;
+    }
+    if (g_contactId[contact] != identity) {
+        g_contactId[contact] = identity;
+        saveContacts();
+    }
 }
 
 std::string safetyNumber(const std::string &contact) {
@@ -533,14 +966,8 @@ std::string safetyNumber(const std::string &contact) {
     return take(parvane_e2e_safety_number(g_identityB64.c_str(), it->second.c_str()));
 }
 
-std::string myIdentity() {
-    std::lock_guard<std::mutex> lk(g_mu);
-    return g_identityB64;
-}
-
-// (под g_mu) Своя исходящая для группы + её эпоха. Создаёт при отсутствии, выдавая
-// СТРОГО бОльшую эпоху, чем любая прежняя (nowMs, либо old+1 при совпадении) — это
-// делает ротацию монотонной: новый ключ всегда «новее» для получателей.
+// (под g_mu) Своя исходящая для группы + её эпоха; строго растущая эпоха.
+namespace {
 ParvaneE2EGroupSession *ensureOwnGroupLocked(const std::string &groupId) {
     auto *g = getOwnGroup(groupId);
     if (g) {
@@ -561,6 +988,7 @@ ParvaneE2EGroupSession *ensureOwnGroupLocked(const std::string &groupId) {
     saveEpochs();
     return g;
 }
+} // namespace
 
 std::string groupSessionKey(const std::string &groupId) {
     std::lock_guard<std::mutex> lk(g_mu);
@@ -576,7 +1004,7 @@ std::uint64_t groupEpoch(const std::string &groupId) {
     if (!g_account || groupId.empty()) {
         return 0;
     }
-    ensureOwnGroupLocked(groupId); // гарантирует наличие эпохи
+    ensureOwnGroupLocked(groupId);
     auto it = g_ownGroupEpoch.find(groupId);
     return it == g_ownGroupEpoch.end() ? 0 : it->second;
 }
@@ -586,11 +1014,7 @@ void groupRotate(const std::string &groupId) {
         return;
     }
     std::lock_guard<std::mutex> lk(g_mu);
-    // Сбрасываем свою исходящую (память + файл) — следующая отправка создаст свежую
-    // сессию с НОВЫМ ключом и бОльшей эпохой; удалённый участник его не получит.
     rotateOwnGroupLocked(groupId);
-    // Эпоху НЕ трогаем: ensureOwnGroupLocked при пересоздании выставит строго
-    // большую (nowMs или old+1), так что новый ключ заведомо новее старого.
 }
 
 bool groupSyncRecipients(const std::string &groupId, const std::vector<std::string> &members) {
@@ -598,23 +1022,19 @@ bool groupSyncRecipients(const std::string &groupId, const std::vector<std::stri
         return false;
     }
     auto recipients = members;
+    std::lock_guard<std::mutex> lk(g_mu);
     recipients.erase(std::remove_if(recipients.begin(), recipients.end(), [](const auto &member) {
         return member.empty() || member == g_self;
     }), recipients.end());
     std::sort(recipients.begin(), recipients.end());
     recipients.erase(std::unique(recipients.begin(), recipients.end()), recipients.end());
 
-    std::lock_guard<std::mutex> lk(g_mu);
     const auto previous = g_groupRecipients.find(groupId);
     bool rotate = false;
     if (previous == g_groupRecipients.end()) {
-        // Без сохранённого baseline старый pickle мог быть раздан уже
-        // исключённым участникам: одноразовая безопасная миграция.
         rotate = getOwnGroup(groupId) != nullptr;
     } else {
-        rotate = std::any_of(
-            previous->second.begin(),
-            previous->second.end(),
+        rotate = std::any_of(previous->second.begin(), previous->second.end(),
             [&recipients](const auto &member) {
                 return !std::binary_search(recipients.begin(), recipients.end(), member);
             });
@@ -627,9 +1047,17 @@ bool groupSyncRecipients(const std::string &groupId, const std::vector<std::stri
     return rotate;
 }
 
+void primeContactDevices(const std::vector<std::string> &contacts, ITransport &t,
+                         const std::string &token) {
+    for (const auto &c : contacts) {
+        if (!c.empty()) {
+            refreshContactDevices(c, t, token, false);
+        }
+    }
+}
+
 std::string groupSeal(const std::string &groupId, const std::string &contentJson,
                       std::uint64_t expectedEpoch) {
-    // Реальный отправитель — ВНУТРЬ шифртекста (как в 1-на-1), путь inject единый.
     json inner;
     try {
         inner = {{"from", g_self}, {"content", json::parse(contentJson)}};
@@ -649,12 +1077,13 @@ std::string groupSeal(const std::string &groupId, const std::string &contentJson
     if (ct.empty()) {
         return {};
     }
-    persistOwnGroup(groupId, g); // ratchet-индекс продвинулся
+    persistOwnGroup(groupId, g);
     json enc = {
         {"kind", "group_encrypted"},
         {"ciphertext", ct},
         {"group", groupId},
         {"sender_identity", g_identityB64},
+        {"sender_signing_key", g_signingB64},
     };
     return enc.dump();
 }
@@ -666,11 +1095,6 @@ void groupAcceptKey(const std::string &groupId, const std::string &senderIdentit
     }
     std::lock_guard<std::mutex> lk(g_mu);
     const std::string key = groupId + "|" + senderIdentity;
-    // Принять, только если сессии ещё нет ЛИБО ключ новее (эпоха строго больше):
-    //  • тот же ключ раз за разом (дедуп на каждой отправке) → эпоха равна → игнор
-    //    (иначе сброс ratchet-индекса сломал бы уже расшифрованное);
-    //  • ротация после удаления участника → эпоха больше → ЗАМЕНА входящей;
-    //  • старый дубль SKDM из очереди → эпоха меньше → игнор (защита от отката).
     if (getInGroup(key)) {
         auto e = g_inGroupEpoch.find(key);
         const std::uint64_t have = (e == g_inGroupEpoch.end()) ? 0 : e->second;
@@ -701,14 +1125,205 @@ std::string groupOpen(const std::string &groupId, const std::string &senderIdent
     const std::string key = groupId + "|" + senderIdentity;
     auto *g = getInGroup(key);
     if (!g) {
-        return {}; // SKDM ещё не пришёл
+        return {};
     }
     const std::string ptB64 = take(parvane_e2e_inbound_group_decrypt(g, ciphertext.c_str()));
     if (ptB64.empty()) {
         return {};
     }
     persistInGroup(key, g);
-    return b64d(ptB64); // inner {from, content}
+    return b64d(ptB64);
+}
+
+void forgetOwnDevice(const std::string &deviceId) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    auto it = g_contactDevices.find(g_self);
+    if (it != g_contactDevices.end() && it->second.erase(deviceId)) {
+        saveContactDevices();
+    }
+    g_contactFetchedAt.erase(g_self);
+    for (const auto &group : allOwnGroupIdsLocked()) {
+        rotateOwnGroupLocked(group);
+    }
+}
+
+void rotateGroupsWith(const std::string &contact) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    rotateGroupsWithLocked(contact);
+}
+
+bool needsHistoryLink(bool decCacheEmpty) {
+    if (!decCacheEmpty) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account || !g_sessions.empty() || !g_inGroups.empty() || !g_legacy.empty()) {
+        return false;
+    }
+    if (g_storeDir.empty()) {
+        return true;
+    }
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(g_storeDir, ec)) {
+        const auto name = entry.path().filename().string();
+        if (name.rfind("sess_", 0) == 0 || name.rfind("gin_", 0) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string exportStateJson(const json &decCache) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account) {
+        return {};
+    }
+    const auto pickleKey = linking::b64encode(linking::randomBytes(32));
+    json st;
+    st["version"] = 2;
+    st["pickleKey"] = pickleKey;
+    st["account"] = take(parvane_e2e_account_to_libolm_pickle(g_account, pickleKey.c_str()));
+    st["sessions"] = json::object();
+    json contacts = json::object();
+    for (const auto &[k, v] : g_contactId) {
+        contacts[k] = v;
+    }
+    st["contacts"] = contacts;
+    st["decCache"] = decCache.is_object() ? decCache : json::object();
+    st["groupOut"] = json::object();
+    // Входящие Megolm: все с диска + памяти, экспорт ключа с первого известного
+    // индекса (формат libolm export_session — веб принимает через import_session).
+    json groupIn = json::object();
+    std::set<std::string> keys;
+    for (const auto &[k, _] : g_inGroups) {
+        keys.insert(k);
+    }
+    for (const auto &[k, _] : g_inGroupEpoch) {
+        keys.insert(k);
+    }
+    for (const auto &key : keys) {
+        auto *g = getInGroup(key);
+        if (!g) {
+            continue;
+        }
+        const auto e = g_inGroupEpoch.find(key);
+        groupIn[key] = {{"exported", take(parvane_e2e_inbound_group_export(g))},
+                        {"epoch", e == g_inGroupEpoch.end() ? 0 : e->second}};
+    }
+    st["groupIn"] = groupIn;
+    json recipients = json::object();
+    for (const auto &[g, r] : g_groupRecipients) {
+        recipients[g] = r;
+    }
+    st["groupRecipients"] = recipients;
+    st["published"] = g_published;
+    st["deviceId"] = g_deviceId;
+    json contactDevices = json::object();
+    for (const auto &[contact, devs] : g_contactDevices) {
+        json d = json::object();
+        for (const auto &[id, info] : devs) {
+            d[id] = {{"identity", info.identity}, {"signing", info.signing}};
+        }
+        contactDevices[contact] = d;
+    }
+    st["contactDevices"] = contactDevices;
+    st["oneTimeKeyIdNext"] = g_otkNext;
+    json legacy = json::array();
+    for (auto *acc : g_legacy) {
+        const auto p = take(parvane_e2e_account_to_libolm_pickle(acc, pickleKey.c_str()));
+        if (!p.empty()) {
+            legacy.push_back(p);
+        }
+    }
+    st["legacyAccounts"] = legacy;
+    return st.dump();
+}
+
+bool importLinkedHistory(
+        const std::string &stateJson,
+        const std::function<void(const std::string &uuid, const json &inner)> &onDecCache) {
+    json st = json::parse(stateJson, nullptr, false);
+    if (!st.is_object()) {
+        return false;
+    }
+    const auto pickleKey = st.value("pickleKey", std::string());
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account) {
+        return false;
+    }
+    // decCache — решает вызывающий (только отсутствующие uuid).
+    if (st.contains("decCache") && st["decCache"].is_object() && onDecCache) {
+        for (auto it = st["decCache"].begin(); it != st["decCache"].end(); ++it) {
+            onDecCache(it.key(), it.value());
+        }
+    }
+    // Входящие Megolm: только отсутствующие ключи group|sender.
+    if (st.contains("groupIn") && st["groupIn"].is_object()) {
+        for (auto it = st["groupIn"].begin(); it != st["groupIn"].end(); ++it) {
+            const auto &key = it.key();
+            if (!it.value().is_object() || getInGroup(key)) {
+                continue;
+            }
+            ParvaneE2EInboundGroup *g = nullptr;
+            if (it.value().contains("exported") && it.value()["exported"].is_string()) {
+                g = parvane_e2e_inbound_group_from_exported(
+                    it.value()["exported"].get<std::string>().c_str());
+            } else if (it.value().contains("pickle") && it.value()["pickle"].is_string()) {
+                g = parvane_e2e_inbound_group_from_libolm_pickle(
+                    it.value()["pickle"].get<std::string>().c_str(), pickleKey.c_str());
+            }
+            if (!g) {
+                continue;
+            }
+            g_inGroups[key] = g;
+            g_inGroupEpoch[key] = it.value().value("epoch", std::uint64_t(0));
+            persistInGroup(key, g);
+        }
+        saveEpochs();
+    }
+    // Аккаунт(ы) прежних устройств → legacy-подписанты (только для extra_signing).
+    std::vector<std::string> pickles;
+    if (st.contains("account") && st["account"].is_string()) {
+        pickles.push_back(st["account"].get<std::string>());
+    }
+    if (st.contains("legacyAccounts") && st["legacyAccounts"].is_array()) {
+        for (const auto &p : st["legacyAccounts"]) {
+            if (p.is_string()) {
+                pickles.push_back(p.get<std::string>());
+            }
+        }
+    }
+    for (const auto &p : pickles) {
+        auto *acc = parvane_e2e_account_from_libolm_pickle(p.c_str(), pickleKey.c_str());
+        if (!acc) {
+            continue;
+        }
+        const auto key = take(parvane_e2e_account_ed25519(acc));
+        bool dup = key.empty() || key == g_signingB64;
+        for (auto *have : g_legacy) {
+            if (take(parvane_e2e_account_ed25519(have)) == key) {
+                dup = true;
+            }
+        }
+        if (dup) {
+            parvane_e2e_account_free(acc);
+            continue;
+        }
+        g_legacy.push_back(acc);
+        if (!g_storeDir.empty()) {
+            writeFile(legacyPath(key), take(parvane_e2e_account_pickle(acc)));
+        }
+    }
+    // Контакты: дополняем отсутствующие primary identity.
+    if (st.contains("contacts") && st["contacts"].is_object()) {
+        for (auto it = st["contacts"].begin(); it != st["contacts"].end(); ++it) {
+            if (it.value().is_string() && !g_contactId.count(it.key())) {
+                g_contactId[it.key()] = it.value().get<std::string>();
+            }
+        }
+        saveContacts();
+    }
+    return true;
 }
 
 } // namespace parvane::e2e

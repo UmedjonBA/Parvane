@@ -12,6 +12,12 @@ inline constexpr auto IdentityRegister = "identity.user.register";
 inline constexpr auto IdentityVerify = "identity.token.verify";
 inline constexpr auto IdentityPrekeysPublish = "identity.prekeys.publish";
 inline constexpr auto IdentityPrekeysFetch = "identity.prekeys.fetch";
+inline constexpr auto IdentityEmailConfirm = "identity.email.confirm";
+inline constexpr auto IdentityDeviceList = "identity.device.list";
+inline constexpr auto IdentityDeviceRevoke = "identity.device.revoke";
+inline constexpr auto IdentityLinkOffer = "identity.link.offer";
+inline constexpr auto IdentityLinkPoll = "identity.link.poll";
+inline constexpr auto IdentityLinkGrant = "identity.link.grant";
 
 // messenger
 inline constexpr auto MsgSend = "msg.chat.send";
@@ -55,6 +61,8 @@ inline constexpr auto CalSyncResponse = "cal.sync.response";
 inline constexpr auto CallSignal = "call.signal";
 inline constexpr auto CallHistoryRequest = "call.history.request";
 inline constexpr auto CallHistoryResponse = "call.history.response";
+inline constexpr auto CallIceRequest = "call.ice.request";
+inline constexpr auto PreviewLinkFetch = "preview.link.fetch";
 
 // группы/каналы (request/reply на messenger)
 inline constexpr auto GroupCreate = "group.create";
@@ -68,5 +76,7 @@ inline constexpr auto GroupMute = "group.mute";
 inline constexpr auto GroupInviteCreate = "group.invite.create";
 inline constexpr auto GroupJoin = "group.join";
 inline constexpr auto GroupInfo = "group.info";
+inline constexpr auto GroupRename = "group.rename";
+inline constexpr auto GroupDelete = "group.delete";
 
 } // namespace parvane::topics

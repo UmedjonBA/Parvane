@@ -493,7 +493,7 @@ mtpRequestId EditTextMessage(
 		bool spoilered) {
 	// Parvane: зеркалим правку СВОЕГО текста в шину (msg.chat.edit). Чужое/
 	// неизвестное — no-op (шард проверяет автора).
-	Parvane::MirrorEdit(item->id.bare, caption.text);
+	Parvane::MirrorEdit(item, caption);
 	const auto media = item->media();
 	if (media
 		&& HistoryView::MediaEditManager::CanBeSpoilered(item)

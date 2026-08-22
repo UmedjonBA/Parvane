@@ -44,6 +44,8 @@ inline json textContent(const std::string &text,
 inline std::optional<std::string> contentText(const json &content) {
     if (!content.is_object()) return std::nullopt;
     const auto kind = content.value("kind", std::string());
+    // location (внутри E2E-контента) рендерится как сообщение с гео-медиа.
+    if (kind == "location") return std::string();
     if (kind != "text") return std::nullopt;
     return content.value("text", std::string());
 }
@@ -76,10 +78,12 @@ struct SendPayload {
     std::string to;
     json content;                          // обычно textContent(...)
     std::optional<std::string> reply_to;   // id сообщения-родителя
+    json copies = json::array();           // per-device копии (MessageDeviceCopy[])
 
     json toJson() const {
         json j{{"to", to}, {"content", content}};
         if (reply_to) j["reply_to"] = *reply_to;
+        if (copies.is_array() && !copies.empty()) j["copies"] = copies;
         return j;
     }
 };
@@ -88,10 +92,31 @@ struct SendPayload {
 struct SyncRequestPayload {
     std::string last_seen_id;     // id-курсор; "" / нулевой uuid = с начала
     std::int64_t since_updated = 0; // курсор мутаций (правки/удаления/прочтения)
+    // Мультидевайс: device_id (подмена шифртекста per-device копией на сервере),
+    // Ed25519 signing_key устройства + подпись `sync:<last_seen_id>:<since_updated>`
+    // (свои sealed-исходящие в выдаче), доказанные ключи прежних устройств.
+    std::string device_id;
+    std::string sender_signing_key;
+    std::string signature;
+    json extra_signing = json::array(); // [{signing_key, signature}]
+
+    // Строка, которую подписывает устройство.
+    std::string signedPayload() const {
+        return "sync:" + last_seen_id + ":" + std::to_string(since_updated);
+    }
 
     json toJson() const {
-        return json{{"last_seen_id", last_seen_id},
-                    {"since_updated", since_updated}};
+        json j{{"last_seen_id", last_seen_id},
+               {"since_updated", since_updated},
+               {"device_id", device_id}};
+        if (!sender_signing_key.empty() && !signature.empty()) {
+            j["sender_signing_key"] = sender_signing_key;
+            j["signature"] = signature;
+        }
+        if (extra_signing.is_array() && !extra_signing.empty()) {
+            j["extra_signing"] = extra_signing;
+        }
+        return j;
     }
 };
 
@@ -115,6 +140,7 @@ struct StoredMessage {
     std::int64_t updated_at = 0;
     std::vector<ReactionSummary> reactions;
     bool pinned = false;
+    json copies = json::array(); // per-device копии (InboxPush; в sync — пусто)
 
     static StoredMessage fromJson(const json &j) {
         StoredMessage m;
@@ -140,6 +166,8 @@ struct StoredMessage {
                 m.reactions.push_back(std::move(rs));
             }
         }
+        if (auto it = j.find("copies"); it != j.end() && it->is_array())
+            m.copies = *it;
         return m;
     }
 

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <memory>
+
 #include "data/data_authorization.h"
 #include "mtproto/sender.h"
 
@@ -28,6 +30,8 @@ public:
 		QString name, active, info, ip, location, system, platform;
 	};
 	using List = std::vector<Entry>;
+	// Parvane: guard для асинхронных колбэков ListDevices/RevokeDevice.
+	std::shared_ptr<bool> parvaneAlive = std::make_shared<bool>(true);
 
 	void reload();
 	void cancelCurrentRequest();

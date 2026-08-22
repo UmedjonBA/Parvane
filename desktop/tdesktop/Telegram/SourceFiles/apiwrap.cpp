@@ -4234,6 +4234,19 @@ void ApiWrap::sendMessage(
 	}
 	local().saveRecentSentHashtags(textWithTags.text);
 
+	// Parvane fork: запланированное (action.options.scheduled) — в локальную
+	// очередь Parvane и ВЫХОД (нативная вкладка Scheduled завязана на MTProto).
+	// Сообщение уйдёт в назначенное время обычным E2E-путём.
+	if (action.options.scheduled > 0) {
+		Parvane::ScheduleOutgoing(
+			peer.get(),
+			TextWithEntities{
+				textWithTags.text,
+				TextUtilities::ConvertTextTagsToEntities(textWithTags.tags) },
+			action.replyTo.messageId.msg.bare,
+			qint64(action.options.scheduled));
+		return;
+	}
 	// Parvane fork (Фаза 3b): зеркалим исходящий текст в шину (msg.chat.send)
 	// после прохождения проверок отправки, до построения локального MTP-эха.
 	// Получатель резолвится из реестра пиров по id; неизвестный пир — no-op+лог.

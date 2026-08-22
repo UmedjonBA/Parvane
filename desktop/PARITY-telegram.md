@@ -131,6 +131,61 @@
   sendStoryReaction). Просмотр без постинга — мёртвая функция; отложено до
   появления постинга в апстриме tt либо явного запроса на свой UI.
 
+## Перенос web→desktop (СДЕЛАНО 2026-08-22)
+
+Весь E2E/мультидевайс-функционал веба перенесён в desktop-форк по
+исправленному wire-контракту (verifSender, sender_signing_key, copies,
+подписанный sync). Detail — в CLAUDE.md. Кратко:
+- **Мультидевайс**: desktop получил свой `device_id` (persist device.json),
+  публикует полный бандл (Ed25519 signing_key, настоящий fallback+подпись),
+  fan-out sealed-копий по устройствам получателя и своим устройствам,
+  self-копии по signing_key, подмена копии в sync по device_id, SKDM-fan-out
+  участникам И своим устройствам. Каталог устройств контакта (TTL 15с,
+  known_devices — не жгут one-time). OTK-пополнение при <5 (device.list).
+  e2e: `desktop/verify_multidevice.sh`.
+- **Анти-имперсонация**: `e2e::verifySender` (Ok/Spoofed/Unknown) в
+  prepareIncoming (воркер) — spoofed дропается+анонимный ack; SKDM принимается
+  только если sender_identity конверта совпадает. Кэш расшифровки хранит
+  отпечаток шифртекста (FNV полного ct) → правка перерасшифровывается.
+- **E2E-правка/delete/react/pin**: sealed-мутации подписаны ключом устройства
+  (`edit:/delete:/react:/pin:`); правка несёт entities и для медиа меняет
+  только caption; копии. e2e: `desktop/verify_edit_e2e.sh`.
+- **Settings→Devices**: нативный Active Sessions кормится identity.device.list;
+  отзыв → identity.device.revoke + ротация всех своих Megolm. Хук
+  PARVANE_AUTOREVOKE_OTHERS. e2e: `desktop/verify_devices.sh`.
+- **Авто-линковка истории**: desktop публикует оффер (ECDH P-256, SAS 6 цифр),
+  опрашивает грант, а как «старое устройство» подтверждает перенос
+  (ConfirmBox; PARVANE_AUTOLINK_GRANT=1 для e2e). Экспорт — формат web
+  PersistedE2eState (аккаунт/legacy libolm-pickle, входящие Megolm — libolm
+  export_session). Импорт — слияние (decCache+входящие+legacy-подписанты).
+  extra_signing в sync. Совместимо web↔desktop (web e2e.ts принимает
+  `exported`). e2e: `desktop/verify_linking.sh`,
+  `scripts/run_web_cross_multidevice_e2e.sh`.
+- **Регистрация через почту**: intro_parvane — стадии Email/Code
+  (PARVANE_EMAIL_REQUIRED). Хуки PARVANE_AUTOEMAIL / PARVANE_AUTOCODE_FILE.
+  e2e: `desktop/verify_email.sh`.
+- **Прочее по паритету/аудиту**: превью ссылок через шард preview
+  (не светит IP клиента), геолокация (kind=location → messageMediaGeo),
+  блокировка → авто-отбой входящего звонка, STUN/TURN из шарда call
+  (call.ice.request, кэш 0.8×TTL) + env как фолбэк, group.rename/group.delete
+  (переименование/удаление группы из нативного edit_peer_info),
+  ОТПРАВКА геолокации (врезка Api::SendLocation/SendVenue → kind=location,
+  e2e: desktop/verify_location.sh),
+  ГРУППОВОЙ typing (gateway: подписка на msg.typing.<chatId> разрешена —
+  симметрично publish; клиент: MirrorTyping для chat-пира + подписка на
+  групповые typing-топики + маршрут по `to`; e2e: verify_group_typing.sh),
+  ЗАПЛАНИРОВАННЫЕ сообщения (локальная очередь+таймер+персист вместо
+  MTProto-вкладки Scheduled; врезка в ApiWrap::sendMessage при
+  action.options.scheduled; e2e: verify_scheduled.sh), кастом-эмодзи —
+  round-trip entity custom_emoji (сохраняется при пересылке; рендерится, когда
+  документ локально доступен).
+- **ОСТАЛОСЬ по кастом-эмодзи**: сделан round-trip entity; полноценное
+  АВТОРСТВО (секция custom-emoji в эмодзи-панели с локальными паками +
+  материализация документов у получателя + обмен паками через pack_ref) —
+  крупная GUI-работа «как стикеры целиком», ещё не сделана. Групповой typing,
+  запланированные, геолокация-отправка — СДЕЛАНЫ (см. выше). Ручной
+  экспорт/импорт ключей — не делаем (авто-линковка заменяет).
+
 ### Мультидевайс (ЯДРО СДЕЛАНО 2026-08-14, веб-клиент; коммит 6d4626dd)
 - РАБОТАЕТ (Web↔Web): per-device прекеи в identity, fan-out sealed-копий на
   все устройства получателя и свои устройства (message_device_copies +
@@ -138,29 +193,21 @@
   перетирает identity первого устройства; новые входящие и исходящие видны
   на обоих. Старая история на новом устройстве — через экспорт/импорт ключей
   (E2E честный). e2e: scripts/run_web_multidevice_e2e.sh.
-- DESKTOP-ДОЛГ: parvane_client.cpp шлёт ОДНУ копию (устройство '') — desktop
-  читает всё, как раньше (wire back-compat, cross_client зелёный), но
-  сообщения С desktop читает только одно устройство получателя. Нужен
-  fan-out по бандлам из prekeys.fetch (поле devices).
+- DESKTOP: fan-out СДЕЛАН 2026-08-22 (см. секцию «Перенос web→desktop»).
 - Settings→Devices СДЕЛАНО 2026-08-17 (Web): identity.device.list/revoke во
   всех слоях контракта, нативный экран Active Sessions кормится нашими
   устройствами, отзыв ротирует Megolm (своих групп и общих групп у контактов
-  отозванного). e2e: scripts/run_web_devices_e2e.sh. DESKTOP-ДОЛГ: экран
-  Sessions в tdesktop не подключён к identity.device.* (показывает пусто).
+  отозванного). e2e: scripts/run_web_devices_e2e.sh. DESKTOP: СДЕЛАНО 2026-08-22.
 - Авто-линковка истории СДЕЛАНА 2026-08-17 (Web↔Web): identity.link.* +
   extra_signing в msg.sync.request (опциональное поле — desktop-совместимо).
-  e2e: scripts/run_web_linking_e2e.sh. DESKTOP-ДОЛГ: desktop не публикует
-  офферы и не выдаёт гранты — линковка работает только между web-установками;
-  desktop-историю на web по-прежнему переносить ручным экспортом ключей.
+  e2e: scripts/run_web_linking_e2e.sh. DESKTOP: СДЕЛАНО 2026-08-22 (в т.ч.
+  web↔desktop, run_web_cross_multidevice_e2e.sh).
 
 ### Регистрация через почту (СДЕЛАНО 2026-08-14, веб-клиент)
 - За флагом `PARVANE_EMAIL_REQUIRED=1` на identity: register + email → код из
   письма → identity.email.confirm; без флага поведение прежнее. Детали — в
   корневом CLAUDE.md. e2e: scripts/run_web_email_e2e.sh.
-- DESKTOP-ДОЛГ: intro_parvane не знает про email/код — при включённом флаге
-  desktop может логиниться в подтверждённые аккаунты, но НЕ регистрировать
-  новые (register вернёт «нужен корректный email»). Нужны поля email+код в
-  intro_parvane.cpp, когда дойдём до desktop-обвязки.
+- DESKTOP: СДЕЛАНО 2026-08-22 — стадии Email/Code в intro_parvane.
 
 ## План реализации (приоритеты)
 

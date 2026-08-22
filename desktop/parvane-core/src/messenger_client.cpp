@@ -42,11 +42,13 @@ std::string MessengerClient::sendContent(
         const json &contentJson,
         const std::string &token,
         const std::optional<std::string> &replyTo,
-        const std::optional<std::string> &id) {
+        const std::optional<std::string> &id,
+        const json &copies) {
     SendPayload payload;
     payload.to = to;
     payload.content = contentJson;
     payload.reply_to = replyTo;
+    payload.copies = copies;
 
     const std::string idStr = id.value_or(uuid4());
     const json ev = makeEvent(idStr, from, nowUnix(), token, payload.toJson());
@@ -59,10 +61,24 @@ std::vector<StoredMessage> MessengerClient::sync(
         const std::string &token,
         const std::string &lastSeenId,
         std::int64_t sinceUpdated,
-        int timeoutMs) {
+        int timeoutMs,
+        const SyncAuth *auth) {
     SyncRequestPayload req;
     req.last_seen_id = lastSeenId.empty() ? zeroCursor() : lastSeenId;
     req.since_updated = sinceUpdated;
+    if (auth) {
+        req.device_id = auth->device_id;
+        req.sender_signing_key = auth->signing_key;
+        const auto data = req.signedPayload();
+        if (auth->signer) {
+            req.signature = auth->signer(data);
+        }
+        if (auth->extra) {
+            for (const auto &[key, sig] : auth->extra(data)) {
+                req.extra_signing.push_back({{"signing_key", key}, {"signature", sig}});
+            }
+        }
+    }
 
     const json ev = makeEvent(uuid4(), from, nowUnix(), token, req.toJson());
     const std::string raw =
@@ -78,10 +94,22 @@ void MessengerClient::editText(
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
+void MessengerClient::editContent(
+        const std::string &from, const std::string &messageId,
+        const json &content, const std::string &signature,
+        const json &copies, const std::string &token) {
+    json payload{{"message_id", messageId}, {"content", content}};
+    if (!signature.empty()) payload["signature"] = signature;
+    if (copies.is_array() && !copies.empty()) payload["copies"] = copies;
+    _t.publish(topics::MsgEdit,
+               makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
+}
+
 void MessengerClient::deleteMessage(
         const std::string &from, const std::string &messageId,
-        const std::string &token) {
-    const json payload{{"message_id", messageId}};
+        const std::string &token, const std::string &signature) {
+    json payload{{"message_id", messageId}};
+    if (!signature.empty()) payload["signature"] = signature;
     _t.publish(topics::MsgDelete,
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
@@ -96,16 +124,19 @@ void MessengerClient::markRead(
 
 void MessengerClient::react(
         const std::string &from, const std::string &messageId,
-        const std::string &emoji, const std::string &token) {
-    const json payload{{"message_id", messageId}, {"emoji", emoji}};
+        const std::string &emoji, const std::string &token,
+        const std::string &signature) {
+    json payload{{"message_id", messageId}, {"emoji", emoji}};
+    if (!signature.empty()) payload["signature"] = signature;
     _t.publish(topics::MsgReact,
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
 void MessengerClient::pin(
         const std::string &from, const std::string &messageId,
-        bool pinned, const std::string &token) {
-    const json payload{{"message_id", messageId}, {"pin", pinned}};
+        bool pinned, const std::string &token, const std::string &signature) {
+    json payload{{"message_id", messageId}, {"pin", pinned}};
+    if (!signature.empty()) payload["signature"] = signature;
     _t.publish(topics::MsgPin,
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }

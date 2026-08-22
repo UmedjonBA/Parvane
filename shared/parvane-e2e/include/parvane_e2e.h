@@ -77,6 +77,25 @@ char *parvane_e2e_inbound_group_decrypt(ParvaneE2EInboundGroup *g, const char *c
 char *parvane_e2e_inbound_group_pickle(const ParvaneE2EInboundGroup *g);
 ParvaneE2EInboundGroup *parvane_e2e_inbound_group_from_pickle(const char *pickle_json);
 
+
+/* ── Мультидевайс / линковка (совместимость с веб-клиентом, libolm) ── */
+/* Публичный Ed25519 аккаунта (base64) — signing_key устройства. */
+char *parvane_e2e_account_ed25519(const ParvaneE2EAccount *acc);
+/* Подпись UTF-8 строки Ed25519-ключом аккаунта → base64 (unpadded). */
+char *parvane_e2e_account_sign(const ParvaneE2EAccount *acc, const char *data);
+/* Новый fallback-ключ (signed_prekey бандла) → base64. */
+char *parvane_e2e_account_gen_fallback(ParvaneE2EAccount *acc);
+/* libolm-pickle (формат @matrix-org/olm веб-клиента); key — строка pickleKey. */
+ParvaneE2EAccount *parvane_e2e_account_from_libolm_pickle(const char *pickle, const char *key);
+char *parvane_e2e_account_to_libolm_pickle(const ParvaneE2EAccount *acc, const char *key);
+ParvaneE2ESession *parvane_e2e_session_from_libolm_pickle(const char *pickle, const char *key);
+/* Экспорт/импорт входящей Megolm-сессии в формате libolm export_session. */
+char *parvane_e2e_inbound_group_export(const ParvaneE2EInboundGroup *g);
+ParvaneE2EInboundGroup *parvane_e2e_inbound_group_from_exported(const char *key_b64);
+ParvaneE2EInboundGroup *parvane_e2e_inbound_group_from_libolm_pickle(const char *pickle,
+                                                                     const char *key);
+/* Проверка Ed25519-подписи (base64 ключ/подпись, data — UTF-8 строка). 1 = ок. */
+int parvane_e2e_ed25519_verify(const char *pub_b64, const char *data, const char *sig_b64);
 #ifdef __cplusplus
 }
 #endif

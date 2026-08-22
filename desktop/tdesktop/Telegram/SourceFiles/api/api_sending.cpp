@@ -499,6 +499,11 @@ bool SendDice(MessageToSend &message) {
 }
 
 void SendLocation(SendAction action, float64 lat, float64 lon) {
+	// Parvane: геолокация через шину (E2E), минуя MTProto.
+	if (const auto peer = action.history->peer.get();
+			Parvane::MirrorLocationIfOurs(peer, lat, lon)) {
+		return;
+	}
 	SendSimpleMedia(
 		action,
 		MTP_inputMediaGeoPoint(
@@ -510,6 +515,11 @@ void SendLocation(SendAction action, float64 lat, float64 lon) {
 }
 
 void SendVenue(SendAction action, Data::InputVenue venue) {
+	// Parvane: venue отправляем как обычную точку (карта в E2E-content).
+	if (const auto peer = action.history->peer.get();
+			Parvane::MirrorLocationIfOurs(peer, venue.lat, venue.lon)) {
+		return;
+	}
 	SendSimpleMedia(
 		action,
 		MTP_inputMediaVenue(
