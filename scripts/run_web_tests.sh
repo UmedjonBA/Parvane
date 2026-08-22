@@ -90,3 +90,6 @@ log "Three-browser group calls e2e"
 
 log "Cross-client Web <-> desktop e2e"
 "$ROOT/scripts/run_web_cross_client_e2e.sh"
+
+log "Cross-client multidevice + linking Web <-> desktop e2e"
+"$ROOT/scripts/run_web_cross_multidevice_e2e.sh"

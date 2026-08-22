@@ -54,7 +54,19 @@ public:
         const std::optional<std::string> &replyTo = std::nullopt,
         // Если задан — используется как id сообщения (корреляция с локальным эхом,
         // как в sendText). Иначе генерируется uuid7.
-        const std::optional<std::string> &id = std::nullopt);
+        const std::optional<std::string> &id = std::nullopt,
+        // Мультидевайс: per-device копии шифртекста (MessageDeviceCopy[]).
+        const json &copies = json::array());
+
+    // Подписанный sync (мультидевайс): device_id, signing_key + подпись строки
+    // SyncRequestPayload::signedPayload(), доказанные ключи прежних устройств.
+    struct SyncAuth {
+        std::string device_id;
+        std::string signing_key;
+        // signer(data) → подпись base64; extra(data) → [(key, sig)] legacy.
+        std::function<std::string(const std::string &)> signer;
+        std::function<std::vector<std::pair<std::string, std::string>>(const std::string &)> extra;
+    };
 
     // Опрашивает msg.sync.request (request/reply, полный конверт) и возвращает
     // сообщения после курсоров. lastSeenId — id-курсор (нулевой uuid = с начала),
@@ -64,28 +76,39 @@ public:
         const std::string &token,
         const std::string &lastSeenId,
         std::int64_t sinceUpdated = 0,
-        int timeoutMs = 3000);
+        int timeoutMs = 3000,
+        const SyncAuth *auth = nullptr);
 
     // Правка текста уже отправленного сообщения (только автор — проверяет шард).
     // Публикует ParvaneEvent<EditPayload> на msg.chat.edit.
     void editText(const std::string &from, const std::string &messageId,
                   const std::string &text, const std::string &token);
 
-    // Удаление «у всех» (tombstone, только автор). msg.chat.delete.
+    // E2E-правка: новый зашифрованный content + подпись `edit:<id>:<ciphertext>`
+    // ключом устройства (sealed-сообщения) + per-device копии.
+    void editContent(const std::string &from, const std::string &messageId,
+                     const json &content, const std::string &signature,
+                     const json &copies, const std::string &token);
+
+    // Удаление «у всех» (tombstone, только автор). msg.chat.delete. Для sealed —
+    // signature над `delete:<id>`.
     void deleteMessage(const std::string &from, const std::string &messageId,
-                       const std::string &token);
+                       const std::string &token, const std::string &signature = {});
 
     // Отметка о прочтении (получателем). msg.chat.read → read-галочка ✓✓.
     void markRead(const std::string &from, const std::string &messageId,
                   const std::string &token);
 
     // Реакция на сообщение (msg.chat.react). Пустой emoji — снять свою.
+    // signature над `react:<id>:<emoji>` — для своих sealed-сообщений.
     void react(const std::string &from, const std::string &messageId,
-               const std::string &emoji, const std::string &token);
+               const std::string &emoji, const std::string &token,
+               const std::string &signature = {});
 
-    // Закрепить/открепить сообщение (msg.chat.pin).
+    // Закрепить/открепить сообщение (msg.chat.pin). signature над
+    // `pin:<id>:<true|false>` — для своих sealed-сообщений.
     void pin(const std::string &from, const std::string &messageId,
-             bool pinned, const std::string &token);
+             bool pinned, const std::string &token, const std::string &signature = {});
 
     // Подписка на СВОЙ инбокс msg.user.<self> — delivered-подтверждения (Фаза 1:
     // приходят, когда получатель подтвердил приём). handler(message_id).

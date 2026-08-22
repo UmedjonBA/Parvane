@@ -79,7 +79,9 @@ type PersistedE2eState = {
   contacts: Record<string, string>;
   decCache: Record<string, StoredInner>;
   groupOut: Record<string, { pickle: string; epoch: number }>;
-  groupIn: Record<string, { pickle: string; epoch: number }>;
+  // exported — ключ в формате libolm export_session (так экспортирует desktop,
+  // у vodozemac нет libolm-pickle для входящих Megolm); pickle — свой формат.
+  groupIn: Record<string, { pickle?: string; exported?: string; epoch: number }>;
   groupRecipients: Record<string, string[]>;
   published: boolean;
   // Мультидевайс (опциональны для обратной совместимости снапшотов/бэкапов):
@@ -229,9 +231,11 @@ export class E2eEngine {
       session.unpickle(pickleKey, pickle);
       this.groupOut.set(group, { session, epoch });
     });
-    Object.entries(state.groupIn || {}).forEach(([key, { pickle, epoch }]) => {
+    Object.entries(state.groupIn || {}).forEach(([key, { pickle, exported, epoch }]) => {
       const session = new Olm.InboundGroupSession();
-      session.unpickle(pickleKey, pickle);
+      if (exported) session.import_session(exported);
+      else if (pickle) session.unpickle(pickleKey, pickle);
+      else return;
       this.groupIn.set(key, { session, epoch });
     });
     Object.entries(state.groupRecipients || {}).forEach(([group, recipients]) => {
@@ -511,11 +515,13 @@ export class E2eEngine {
     Object.entries(state.decCache || {}).forEach(([uuid, inner]) => {
       if (!(uuid in this.decCache)) this.decCache[uuid] = inner;
     });
-    Object.entries(state.groupIn || {}).forEach(([key, { pickle, epoch }]) => {
+    Object.entries(state.groupIn || {}).forEach(([key, { pickle, exported, epoch }]) => {
       if (this.groupIn.has(key)) return;
       try {
         const session = new Olm.InboundGroupSession();
-        session.unpickle(state.pickleKey, pickle);
+        if (exported) session.import_session(exported);
+        else if (pickle) session.unpickle(state.pickleKey, pickle);
+        else return;
         this.groupIn.set(key, { session, epoch });
       } catch {
         // битый pickle — пропускаем, остальное импортируем

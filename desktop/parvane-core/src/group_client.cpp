@@ -70,6 +70,20 @@ GroupActionResponse GroupClient::mute(const std::string &token, const std::strin
     return GroupActionResponse::fromJson(json::parse(raw));
 }
 
+GroupActionResponse GroupClient::rename(const std::string &token, const std::string &groupId,
+                                        const std::string &name, int timeoutMs) {
+    const json req{ { "token", token }, { "group_id", groupId }, { "name", name } };
+    const std::string raw = _t.request(topics::GroupRename, req.dump(), timeoutMs);
+    return GroupActionResponse::fromJson(json::parse(raw));
+}
+
+GroupActionResponse GroupClient::remove(const std::string &token, const std::string &groupId,
+                                        int timeoutMs) {
+    const json req{ { "token", token }, { "group_id", groupId } };
+    const std::string raw = _t.request(topics::GroupDelete, req.dump(), timeoutMs);
+    return GroupActionResponse::fromJson(json::parse(raw));
+}
+
 std::string GroupClient::inviteCreate(const std::string &token, const std::string &groupId,
                                       int timeoutMs) {
     const json req{ { "token", token }, { "group_id", groupId } };

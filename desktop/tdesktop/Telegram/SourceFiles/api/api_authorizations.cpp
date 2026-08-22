@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_app_config.h"
 #include "main/main_session_settings.h"
 #include "main/main_session.h"
+#include "parvane/parvane_client.h" // Parvane: устройства из identity.device.*
 
 namespace Api {
 namespace {
@@ -118,28 +119,64 @@ Authorizations::Authorizations(not_null<ApiWrap*> api)
 	}
 }
 
+namespace {
+
+// Parvane: hash записи = FNV-1a(device_id) (0 — текущее устройство, как у
+// MTProto is_current); обратная карта для отзыва.
+base::flat_map<uint64, QString> g_parvaneDeviceByHash;
+
+[[nodiscard]] uint64 ParvaneDeviceHash(const QString &deviceId) {
+	const auto utf8 = deviceId.toUtf8();
+	auto h = uint64(1469598103934665603ULL);
+	for (const auto c : utf8) {
+		h ^= static_cast<unsigned char>(c);
+		h *= 1099511628211ULL;
+	}
+	return h ? h : 1;
+}
+
+} // namespace
+
 void Authorizations::reload() {
 	if (_requestId) {
 		return;
 	}
-
-	_requestId = _api.request(MTPaccount_GetAuthorizations(
-	)).done([=](const MTPaccount_Authorizations &result) {
+	// Parvane: список устройств аккаунта из identity.device.list (MTProto нет).
+	_requestId = 1;
+	const auto weak = std::weak_ptr<bool>(parvaneAlive);
+	Parvane::ListDevices([=](std::vector<Parvane::DeviceEntry> devices) {
+		if (weak.expired()) {
+			return;
+		}
 		_requestId = 0;
 		_lastReceived = crl::now();
-		const auto &data = result.data();
-		_ttlDays = data.vauthorization_ttl_days().v;
-		_list = ranges::views::all(
-			data.vauthorizations().v
-		) | ranges::views::transform([](const MTPAuthorization &auth) {
-			return ParseEntry(auth.data());
-		}) | ranges::to<List>;
+		_ttlDays = 0;
+		_list.clear();
+		g_parvaneDeviceByHash.clear();
+		for (const auto &d : devices) {
+			auto e = Entry();
+			e.hash = d.current ? 0 : ParvaneDeviceHash(d.deviceId);
+			if (!d.current) {
+				g_parvaneDeviceByHash.emplace(e.hash, d.deviceId);
+			}
+			const auto legacy = d.deviceId.isEmpty();
+			e.name = d.current
+				? Core::App().settings().deviceModel()
+				: legacy ? u"Parvane Desktop (legacy)"_q
+				: u"Parvane %1"_q.arg(d.deviceId.left(8));
+			e.info = u"Parvane (one-time prekeys: %1)"_q.arg(d.oneTimeAvailable);
+			e.system = d.current ? u"this device"_q : QString();
+			e.platform = QString();
+			e.activeTime = TimeId(d.updatedAt);
+			e.active = d.current
+				? tr::lng_status_online(tr::now)
+				: ActiveDateString(e.activeTime);
+			_list.push_back(std::move(e));
+		}
 		removeExpiredUnreviewed();
 		refreshCallsDisabledHereFromCloud();
 		_listChanges.fire({});
-	}).fail([=] {
-		_requestId = 0;
-	}).send();
+	});
 }
 
 void Authorizations::cancelCurrentRequest() {
@@ -158,6 +195,45 @@ void Authorizations::requestTerminate(
 		Fn<void(const MTPBool &result)> &&done,
 		Fn<void(const MTP::Error &error)> &&fail,
 		std::optional<uint64> hash) {
+	// Parvane: отзыв устройства через identity.device.revoke (все — по одному,
+	// кроме текущего). Отзыв ротирует групповые ключи (parvane_client).
+	{
+		auto ids = std::vector<QString>();
+		if (hash) {
+			const auto it = g_parvaneDeviceByHash.find(*hash);
+			if (it != g_parvaneDeviceByHash.end()) {
+				ids.push_back(it->second);
+			}
+		} else {
+			for (const auto &[h, id] : g_parvaneDeviceByHash) {
+				ids.push_back(id);
+			}
+		}
+		const auto weak = std::weak_ptr<bool>(parvaneAlive);
+		const auto shared = std::make_shared<Fn<void(const MTPBool&)>>(std::move(done));
+		const auto step = std::make_shared<Fn<void(size_t)>>();
+		*step = [=](size_t i) {
+			if (i >= ids.size()) {
+				if (!weak.expired()) {
+					if (hash) {
+						_list.erase(
+							ranges::remove(_list, *hash, &Entry::hash),
+							end(_list));
+					} else {
+						_list.erase(
+							ranges::remove_if(_list, [](const Entry &e) { return e.hash != 0; }),
+							end(_list));
+					}
+					_listChanges.fire({});
+				}
+				(*shared)(MTP_boolTrue());
+				return;
+			}
+			Parvane::RevokeDevice(ids[i], [=](bool) { (*step)(i + 1); });
+		};
+		(*step)(0);
+		return;
+	}
 	const auto send = [&](auto request) {
 		_api.request(
 			std::move(request)

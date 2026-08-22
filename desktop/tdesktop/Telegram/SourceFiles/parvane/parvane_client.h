@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 class PeerData;
@@ -42,10 +43,47 @@ struct IssueResult {
 struct RegisterResult {
 	bool ok = false;
 	QString error;
+	bool confirmRequired = false; // регистрация через почту: ждём код
 };
 
 // БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
-[[nodiscard]] RegisterResult Register(const QString &user, const QString &password);
+[[nodiscard]] RegisterResult Register(
+	const QString &user,
+	const QString &password,
+	const QString &email = QString());
+
+struct ConfirmResult {
+	bool ok = false;
+	QString error;
+};
+
+// БЛОКИРУЮЩИЙ identity.email.confirm (код из письма). Звать с воркер-потока.
+[[nodiscard]] ConfirmResult ConfirmEmail(const QString &user, const QString &code);
+
+// Устройства аккаунта (Settings → Devices): identity.device.list / revoke.
+struct DeviceEntry {
+	QString deviceId;
+	QString signingKey;
+	qint64 updatedAt = 0;
+	int oneTimeAvailable = 0;
+	bool current = false;
+};
+void ListDevices(Fn<void(std::vector<DeviceEntry>)> done);
+void RevokeDevice(const QString &deviceId, Fn<void(bool)> done);
+
+// STUN/TURN из шарда call (эфемерные креды, кэш 0.8×TTL). Блокирующий.
+struct IceServer {
+	std::vector<std::string> urls;
+	std::string username;
+	std::string password;
+};
+[[nodiscard]] std::vector<IceServer> FetchIceServers();
+
+void RenameGroup(const QString &groupId, const QString &name);
+void DeleteGroup(const QString &groupId);
+
+// Авто-линковка истории: код на новом устройстве (пусто — не ждём грант).
+[[nodiscard]] QString HistoryLinkCode();
 
 // JWT текущей сессии (хранится в процессе).
 void SetToken(const QString &token);
@@ -120,7 +158,7 @@ void MirrorPin(not_null<HistoryItem*> item, bool pin);
 void MirrorDelete(std::int64_t msgId);
 
 // Правит текст СВОЕГО сообщения (msg.chat.edit). Аналогично MirrorDelete.
-void MirrorEdit(std::int64_t msgId, const QString &newText);
+void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text);
 
 // Отмечает прочитанными непрочитанные входящие от пира (msg.chat.read → ✓✓ у
 // отправителя). peerId — локальный id пира (bare). Вызывается из readInbox.
@@ -206,6 +244,18 @@ void InstallStickerPackFromDocument(DocumentData *document);
 
 // Создать опрос: шлёт poll-контент через шину и синтезирует локальное эхо.
 bool MirrorPollCreate(PeerData *peer, const PollData &data);
+// Геолокация через шину (E2E). true — обработано нашим пиром (MTProto
+// не нужен); false — пир нераспознан.
+[[nodiscard]] bool MirrorLocationIfOurs(PeerData *peer, double lat, double lon);
+
+// Запланированные сообщения: очередь+таймер (нативная вкладка Scheduled в
+// форке без MTProto не работает; сообщение уходит в назначенное время).
+void ScheduleOutgoing(
+	PeerData *peer,
+	const TextWithEntities &text,
+	std::int64_t replyToMsgId,
+	qint64 dueAtUnix);
+void RestoreScheduled();
 
 // Проголосовать. options — байты выбранных вариантов ("0","1",…); пусто —
 // отозвать голос. Локально применяется сразу, остальным уходит poll_vote.

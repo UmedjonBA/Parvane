@@ -5,6 +5,7 @@
 #include "parvane/parvane_webrtc_backend.h"
 
 #include "base/debug_log.h"
+#include "parvane/parvane_client.h"     // FetchIceServers (шард call)
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Native*)
 #include "parvane/parvane_call_video.h" // сырые кадры → нативный видео-трек
 #include "parvane/parvane_pulse_adm.h"  // свой ADM (PulseAudio) вместо dummy
@@ -329,6 +330,15 @@ private:
 			srv.urls.push_back(std::string(turn));
 			if (const char *u = std::getenv("PARVANE_TURN_USER")) srv.username = u;
 			if (const char *p = std::getenv("PARVANE_TURN_PASS")) srv.password = p;
+			config.servers.push_back(srv);
+		}
+		// Шард call: STUN/TURN с эфемерными кредами (call.ice.request, кэш).
+		// Env-переменные выше — дополнение/фолбэк (dev без TURN-секрета).
+		for (const auto &ice : Parvane::FetchIceServers()) {
+			webrtc::PeerConnectionInterface::IceServer srv;
+			srv.urls = ice.urls;
+			srv.username = ice.username;
+			srv.password = ice.password;
 			config.servers.push_back(srv);
 		}
 		if (!config.servers.empty()) {

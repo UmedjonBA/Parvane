@@ -44,6 +44,11 @@ public:
     GroupActionResponse mute(const std::string &token, const std::string &groupId,
                              const std::string &member, long long until,
                              int timeoutMs = 3000);
+    // Переименовать (owner/admin) / удалить группу (только owner).
+    GroupActionResponse rename(const std::string &token, const std::string &groupId,
+                               const std::string &name, int timeoutMs = 3000);
+    GroupActionResponse remove(const std::string &token, const std::string &groupId,
+                               int timeoutMs = 3000);
     // Создать инвайт-токен (owner/admin). Пустая строка при ошибке.
     std::string inviteCreate(const std::string &token, const std::string &groupId,
                              int timeoutMs = 3000);

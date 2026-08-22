@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_info_box.h"
 
 #include "apiwrap.h"
+#include "parvane/parvane_client.h" // Parvane: rename/delete групп
 #include "api/api_credits.h"
 #include "api/api_peer_photo.h"
 #include "api/api_statistics.h"
@@ -2486,6 +2487,13 @@ void Controller::saveTitle() {
 		cancelSave();
 	};
 
+	// Parvane: группа/канал шины → group.rename (owner/admin), имя подтянет
+	// RefreshGroups. Ниже — штатный MTProto-путь (не используется).
+	if (const auto gid = Parvane::GroupIdForChat(_peer); !gid.isEmpty()) {
+		Parvane::RenameGroup(gid, *_savingData.title);
+		continueSave();
+		return;
+	}
 	if (const auto channel = _peer->asChannel()) {
 		_api.request(MTPchannels_EditTitle(
 			channel->inputChannel(),
@@ -2885,6 +2893,12 @@ void Controller::deleteChannel() {
 	Core::App().closeChatFromWindows(channel);
 	if (chat) {
 		session->api().deleteConversation(chat, false);
+	}
+	// Parvane: удаление группы/канала шины (только owner) → group.delete.
+	if (const auto gid = Parvane::GroupIdForChat(_peer); !gid.isEmpty()) {
+		Parvane::DeleteGroup(gid);
+		session->data().deleteConversationLocally(_peer);
+		return;
 	}
 	session->api().request(MTPchannels_DeleteChannel(
 		channel->inputChannel()

@@ -33,8 +33,21 @@ private:
 	void onIssued(const QString &user, bool ok, QString token, QString error);
 	void loginSucceeded(const QString &user);
 
+	// Регистрация через почту (PARVANE_EMAIL_REQUIRED на identity): после
+	// пароля — экран email, затем 6-значный код из письма (identity.email.confirm).
+	enum class Stage { Login, Email, Code };
+	void setStage(Stage stage);
+	void finishLogin(const QString &user, const QString &password);
+	// Headless e2e: PARVANE_AUTOCODE_FILE — опрос файла с кодом (тест пишет его
+	// из лога identity); уже испробованный код повторно не шлём.
+	void startCodeFilePoll();
+	QString _lastCodeTried;
+
 	object_ptr<Ui::InputField> _user;
 	object_ptr<Ui::PasswordInput> _password;
+	object_ptr<Ui::InputField> _email;
+	object_ptr<Ui::InputField> _code;
+	Stage _stage = Stage::Login;
 	bool _requesting = false;
 	bool _autologinTried = false;
 

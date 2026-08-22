@@ -10,6 +10,10 @@
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
 
+#include "base/call_delayed.h"
+
+#include <QtCore/QFile>
+
 #include <cstdlib>
 
 namespace Intro {
@@ -21,7 +25,9 @@ ParvaneWidget::ParvaneWidget(
 	not_null<Data*> data)
 : Step(parent, account, data)
 , _user(this, st::introName, rpl::single(u"user@server"_q))
-, _password(this, st::introPassword, rpl::single(u"пароль"_q)) {
+, _password(this, st::introPassword, rpl::single(u"пароль"_q))
+, _email(this, st::introName, rpl::single(u"email для подтверждения"_q))
+, _code(this, st::introName, rpl::single(u"код из письма (6 цифр)"_q)) {
 	setTitleText(rpl::single(u"Parvane"_q));
 	setDescriptionText(rpl::single(u"Вход через шард identity"_q));
 	setErrorCentered(true);
@@ -29,8 +35,36 @@ ParvaneWidget::ParvaneWidget(
 	_user->submits(
 	) | rpl::on_next([=] { submit(); }, _user->lifetime());
 	connect(_password, &Ui::MaskedInputField::submitted, [=] { submit(); });
+	_email->submits(
+	) | rpl::on_next([=] { submit(); }, _email->lifetime());
+	_code->submits(
+	) | rpl::on_next([=] { submit(); }, _code->lifetime());
+	_email->hide();
+	_code->hide();
 
 	setMouseTracking(true);
+}
+
+void ParvaneWidget::setStage(Stage stage) {
+	_stage = stage;
+	const auto login = (stage == Stage::Login);
+	_user->setVisible(login);
+	_password->setVisible(login);
+	_email->setVisible(stage == Stage::Email);
+	_code->setVisible(stage == Stage::Code);
+	if (stage == Stage::Email) {
+		setDescriptionText(rpl::single(
+			u"Регистрация: укажите email — на него придёт код подтверждения"_q));
+		_email->setFocus();
+	} else if (stage == Stage::Code) {
+		setDescriptionText(rpl::single(
+			u"Введите 6-значный код из письма"_q));
+		_code->setFocus();
+	} else {
+		setDescriptionText(rpl::single(u"Вход через шард identity"_q));
+		_user->setFocus();
+	}
+	updateControlsGeometry();
 }
 
 void ParvaneWidget::resizeEvent(QResizeEvent *e) {
@@ -45,6 +79,8 @@ void ParvaneWidget::updateControlsGeometry() {
 		+ st::introPhoneTop;
 	_user->moveToLeft(contentLeft(), firstTop);
 	_password->moveToLeft(contentLeft(), secondTop);
+	_email->moveToLeft(contentLeft(), firstTop);
+	_code->moveToLeft(contentLeft(), firstTop);
 }
 
 void ParvaneWidget::setInnerFocus() {
@@ -68,6 +104,10 @@ void ParvaneWidget::activate() {
 			if (sep > 0) {
 				_user->setText(spec.left(sep));
 				_password->setText(spec.mid(sep + 1));
+				// PARVANE_AUTOEMAIL=addr — email для headless-регистрации через почту.
+				if (const char *em = std::getenv("PARVANE_AUTOEMAIL"); em && *em) {
+					_email->setText(QString::fromUtf8(em));
+				}
 				LOG(("Parvane: autologin hook for %1").arg(spec.left(sep)));
 				submit();
 			}
@@ -79,41 +119,142 @@ rpl::producer<QString> ParvaneWidget::nextButtonText() const {
 	return rpl::single(u"Войти"_q);
 }
 
+void ParvaneWidget::startCodeFilePoll() {
+	const char *cf = std::getenv("PARVANE_AUTOCODE_FILE");
+	if (!cf || !*cf) {
+		return;
+	}
+	const auto path = QString::fromUtf8(cf);
+	const auto weak = base::make_weak(this);
+	const auto poll = std::make_shared<Fn<void(int)>>();
+	*poll = [=](int left) {
+		if (!weak || left <= 0 || _stage != Stage::Code || _requesting) {
+			return;
+		}
+		QFile f(path);
+		if (f.open(QIODevice::ReadOnly)) {
+			const auto c = QString::fromUtf8(f.readAll()).trimmed();
+			if (c.size() == 6 && c != _lastCodeTried) {
+				_lastCodeTried = c;
+				_code->setText(c);
+				submit();
+				return;
+			}
+		}
+		base::call_delayed(1000, weak, [=] { (*poll)(left - 1); });
+	};
+	(*poll)(120);
+}
+
+void ParvaneWidget::finishLogin(const QString &user, const QString &password) {
+	const auto weak = base::make_weak(this);
+	crl::async([=] {
+		auto res = Parvane::Issue(user, password);
+		crl::on_main(weak, [=, res = std::move(res)] {
+			onIssued(user, res.ok, res.token, res.error);
+		});
+	});
+}
+
 void ParvaneWidget::submit() {
 	if (_requesting) {
 		return;
 	}
 	const auto user = _user->getLastText().trimmed();
 	const auto password = _password->getLastText();
-	if (user.isEmpty()) {
-		showError(rpl::single(u"Укажите user@server"_q));
-		_user->setFocus();
-		return;
+	if (_stage == Stage::Login) {
+		if (user.isEmpty()) {
+			showError(rpl::single(u"Укажите user@server"_q));
+			_user->setFocus();
+			return;
+		}
+		if (password.isEmpty()) {
+			showError(rpl::single(u"Укажите пароль"_q));
+			_password->setFocus();
+			return;
+		}
 	}
-	if (password.isEmpty()) {
-		showError(rpl::single(u"Укажите пароль"_q));
-		_password->setFocus();
-		return;
-	}
-
 	_requesting = true;
 	hideError();
-
 	const auto weak = base::make_weak(this);
+	const auto stage = _stage;
+	const auto email = _email->getLastText().trimmed();
+	const auto code = _code->getLastText().trimmed();
+
+	if (stage == Stage::Code) {
+		// Код из письма → identity.email.confirm → обычный вход.
+		crl::async([=] {
+			const auto r = Parvane::ConfirmEmail(user, code);
+			crl::on_main(weak, [=] {
+				_requesting = false;
+				if (!r.ok) {
+					showError(rpl::single(r.error.isEmpty() ? u"Неверный код"_q : r.error));
+					_code->setFocus();
+					startCodeFilePoll(); // headless: ждём следующий код
+					return;
+				}
+				finishLogin(user, password);
+			});
+		});
+		return;
+	}
+	if (stage == Stage::Email) {
+		crl::async([=] {
+			const auto reg = Parvane::Register(user, password, email);
+			crl::on_main(weak, [=] {
+				_requesting = false;
+				if (!reg.ok) {
+					showError(rpl::single(reg.error.isEmpty()
+						? u"Ошибка регистрации"_q : reg.error));
+					_email->setFocus();
+					return;
+				}
+				if (reg.confirmRequired) {
+					setStage(Stage::Code);
+				} else {
+					finishLogin(user, password);
+				}
+			});
+		});
+		return;
+	}
 	crl::async([=] {
-		// Логин. Если аккаунта нет (issue отделён от регистрации, Фаза 0) —
-		// регистрируем и логинимся повторно. Так один экран покрывает и вход, и
-		// регистрацию: новый user@server просто создаётся при первом входе.
+		// Логин. Если аккаунта нет (issue отделён от регистрации) — регистрируем
+		// и логинимся повторно: один экран покрывает вход и регистрацию. При
+		// PARVANE_EMAIL_REQUIRED identity просит email («нужен корректный
+		// email») → экран email → код; «почта не подтверждена» → экран кода
+		// (повторный register перевысылает код на сохранённую почту, как у web).
 		auto res = Parvane::Issue(user, password);
-		if (!res.ok && res.error.contains(u"нет такого пользователя"_q)) {
-			const auto reg = Parvane::Register(user, password);
-			if (reg.ok) {
-				res = Parvane::Issue(user, password);
-			} else if (!reg.error.isEmpty()) {
-				res.error = reg.error;
+		auto next = Stage::Login;
+		if (!res.ok) {
+			if (res.error.contains(u"почта не подтверждена"_q)) {
+				Parvane::Register(user, password, email); // перевысылка кода
+				next = Stage::Code;
+			} else {
+				const auto reg = Parvane::Register(user, password, email);
+				if (reg.ok && reg.confirmRequired) {
+					next = Stage::Code;
+				} else if (reg.ok) {
+					res = Parvane::Issue(user, password);
+				} else if (reg.error.contains(u"email"_q, Qt::CaseInsensitive)) {
+					next = Stage::Email;
+				} else if (!reg.error.isEmpty() && !reg.error.contains(u"логин занят"_q)) {
+					res.error = reg.error;
+				}
 			}
 		}
 		crl::on_main(weak, [=, res = std::move(res)] {
+			if (next != Stage::Login) {
+				_requesting = false;
+				hideError();
+				setStage(next);
+				if (next == Stage::Code) {
+					startCodeFilePoll();
+				} else if (next == Stage::Email && !email.isEmpty()) {
+					submit(); // autologin с PARVANE_AUTOEMAIL — шлём сразу
+				}
+				return;
+			}
 			onIssued(user, res.ok, res.token, res.error);
 		});
 	});

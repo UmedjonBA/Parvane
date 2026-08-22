@@ -89,6 +89,45 @@ impl E2EAccount {
     }
 }
 
+impl E2EAccount {
+    /// Публичный Ed25519-ключ аккаунта (base64) — «signing_key» устройства в
+    /// identity (мультидевайс) и ключ подписи sync/edit/delete в messenger.
+    pub fn ed25519_b64(&self) -> String {
+        self.0.ed25519_key().to_base64()
+    }
+
+    /// Подпись произвольных байт Ed25519-ключом аккаунта (base64 без padding) —
+    /// тот же формат, что у libolm `account.sign()` в веб-клиенте.
+    pub fn sign_b64(&self, data: &[u8]) -> String {
+        self.0.sign(data).to_base64()
+    }
+
+    /// Сгенерировать fallback-ключ (signed_prekey бандла), пометить опубликованным
+    /// и вернуть его base64. Предыдущий fallback vodozemac хранит — pre-key
+    /// сообщения «в пути» продолжают расшифровываться.
+    pub fn generate_fallback_b64(&mut self) -> Option<String> {
+        // generate_fallback_key возвращает ПРЕДЫДУЩИЙ ключ — новый берём из fallback_key().
+        self.0.generate_fallback_key();
+        let key = self.0.fallback_key().into_values().next().map(|k| k.to_base64());
+        self.0.mark_keys_as_published();
+        key
+    }
+
+    /// Импорт libolm-pickle (формат @matrix-org/olm веб-клиента). `key` — строка
+    /// pickleKey веб-клиента (её UTF-8 байты — ключ шифрования pickle).
+    pub fn from_libolm_pickle(pickle: &str, key: &str) -> Option<Self> {
+        Account::from_libolm_pickle(pickle, key.as_bytes())
+            .ok()
+            .map(E2EAccount)
+    }
+
+    /// Экспорт в libolm-pickle под ключом `key` — чтобы веб-клиент мог принять
+    /// аккаунт desktop как legacy-подписанта при линковке истории.
+    pub fn to_libolm_pickle(&self, key: &str) -> Option<String> {
+        self.0.to_libolm_pickle(key.as_bytes()).ok()
+    }
+}
+
 impl Default for E2EAccount {
     fn default() -> Self {
         Self::new()
@@ -118,6 +157,11 @@ impl E2ESession {
     pub fn from_pickle_json(s: &str) -> Option<Self> {
         let p: vodozemac::olm::SessionPickle = serde_json::from_str(s).ok()?;
         Some(E2ESession(Session::from_pickle(p)))
+    }
+
+    /// Импорт libolm-pickle сессии веб-клиента (ручной импорт бэкапа ключей).
+    pub fn from_libolm_pickle(pickle: &str, key: &str) -> Option<Self> {
+        Session::from_libolm_pickle(pickle, key.as_bytes()).ok().map(E2ESession)
     }
 }
 
@@ -175,6 +219,25 @@ impl E2EInboundGroup {
     pub fn from_pickle_json(s: &str) -> Option<Self> {
         let p: vodozemac::megolm::InboundGroupSessionPickle = serde_json::from_str(s).ok()?;
         Some(E2EInboundGroup(InboundGroupSession::from_pickle(p)))
+    }
+
+    /// Экспорт ключа сессии с первого известного индекса (формат libolm
+    /// `export_session` — его принимает и веб `import_session`, и `from_exported`).
+    pub fn export_b64(&self) -> String {
+        self.0.export_at_first_known_index().to_base64()
+    }
+
+    /// Импорт экспортированного ключа (см. export_b64).
+    pub fn from_exported(key_b64: &str) -> Option<Self> {
+        let key = vodozemac::megolm::ExportedSessionKey::from_base64(key_b64).ok()?;
+        Some(E2EInboundGroup(InboundGroupSession::import(&key, MegolmConfig::version_1())))
+    }
+
+    /// Импорт libolm-pickle входящей сессии веб-клиента.
+    pub fn from_libolm_pickle(pickle: &str, key: &str) -> Option<Self> {
+        InboundGroupSession::from_libolm_pickle(pickle, key.as_bytes())
+            .ok()
+            .map(E2EInboundGroup)
     }
 }
 
@@ -462,6 +525,113 @@ pub extern "C" fn parvane_e2e_decrypt(
     }
 }
 
+// ── extern "C": мультидевайс / линковка (совместимость с веб-клиентом) ────────
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_account_ed25519(p: *const E2EAccount) -> *mut c_char {
+    let acc = unsafe { p.as_ref() };
+    acc.map(|a| to_cstring(a.ed25519_b64())).unwrap_or(std::ptr::null_mut())
+}
+
+/// Подпись data (сырые байты UTF-8 строки) Ed25519-ключом аккаунта → base64.
+#[no_mangle]
+pub extern "C" fn parvane_e2e_account_sign(p: *const E2EAccount, data: *const c_char) -> *mut c_char {
+    let acc = unsafe { p.as_ref() };
+    let (Some(acc), Some(d)) = (acc, unsafe { cstr(data) }) else { return std::ptr::null_mut() };
+    to_cstring(acc.sign_b64(d.as_bytes()))
+}
+
+/// Новый fallback-ключ (signed_prekey) → base64, NULL при ошибке.
+#[no_mangle]
+pub extern "C" fn parvane_e2e_account_gen_fallback(p: *mut E2EAccount) -> *mut c_char {
+    let Some(acc) = (unsafe { p.as_mut() }) else { return std::ptr::null_mut() };
+    acc.generate_fallback_b64().map(to_cstring).unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_account_from_libolm_pickle(
+    pickle: *const c_char,
+    key: *const c_char,
+) -> *mut E2EAccount {
+    let (Some(pk), Some(k)) = (unsafe { cstr(pickle) }, unsafe { cstr(key) }) else {
+        return std::ptr::null_mut();
+    };
+    match E2EAccount::from_libolm_pickle(&pk, &k) {
+        Some(a) => Box::into_raw(Box::new(a)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_account_to_libolm_pickle(
+    p: *const E2EAccount,
+    key: *const c_char,
+) -> *mut c_char {
+    let acc = unsafe { p.as_ref() };
+    let (Some(acc), Some(k)) = (acc, unsafe { cstr(key) }) else { return std::ptr::null_mut() };
+    acc.to_libolm_pickle(&k).map(to_cstring).unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_session_from_libolm_pickle(
+    pickle: *const c_char,
+    key: *const c_char,
+) -> *mut E2ESession {
+    let (Some(pk), Some(k)) = (unsafe { cstr(pickle) }, unsafe { cstr(key) }) else {
+        return std::ptr::null_mut();
+    };
+    match E2ESession::from_libolm_pickle(&pk, &k) {
+        Some(s) => Box::into_raw(Box::new(s)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_export(p: *const E2EInboundGroup) -> *mut c_char {
+    let g = unsafe { p.as_ref() };
+    g.map(|x| to_cstring(x.export_b64())).unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_from_exported(key_b64: *const c_char) -> *mut E2EInboundGroup {
+    let Some(k) = (unsafe { cstr(key_b64) }) else { return std::ptr::null_mut() };
+    match E2EInboundGroup::from_exported(&k) {
+        Some(g) => Box::into_raw(Box::new(g)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn parvane_e2e_inbound_group_from_libolm_pickle(
+    pickle: *const c_char,
+    key: *const c_char,
+) -> *mut E2EInboundGroup {
+    let (Some(pk), Some(k)) = (unsafe { cstr(pickle) }, unsafe { cstr(key) }) else {
+        return std::ptr::null_mut();
+    };
+    match E2EInboundGroup::from_libolm_pickle(&pk, &k) {
+        Some(g) => Box::into_raw(Box::new(g)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Проверка Ed25519-подписи (base64 ключ/подпись, сырые байты data). 1 = ок.
+#[no_mangle]
+pub extern "C" fn parvane_e2e_ed25519_verify(
+    pub_b64: *const c_char,
+    data: *const c_char,
+    sig_b64: *const c_char,
+) -> i32 {
+    let (Some(pk), Some(d), Some(sg)) =
+        (unsafe { cstr(pub_b64) }, unsafe { cstr(data) }, unsafe { cstr(sig_b64) })
+    else {
+        return 0;
+    };
+    let Ok(key) = vodozemac::Ed25519PublicKey::from_base64(&pk) else { return 0 };
+    let Ok(sig) = vodozemac::Ed25519Signature::from_base64(&sg) else { return 0 };
+    key.verify(d.as_bytes(), &sig).is_ok() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,5 +778,30 @@ mod tests {
     fn wrong_bundle_no_session() {
         let alice = E2EAccount::new();
         assert!(alice.outbound("не-base64!!!", "тоже-мусор").is_none());
+    }
+
+    #[test]
+    fn libolm_account_round_trip_and_sign() {
+        let mut acc = E2EAccount::new();
+        let pickle = acc.to_libolm_pickle("k3y").expect("to libolm");
+        let back = E2EAccount::from_libolm_pickle(&pickle, "k3y").expect("from libolm");
+        assert_eq!(acc.identity_b64(), back.identity_b64());
+        assert_eq!(acc.ed25519_b64(), back.ed25519_b64());
+        let sig = acc.sign_b64(b"sync:0:0");
+        assert!(!sig.is_empty());
+        assert!(E2EAccount::from_libolm_pickle(&pickle, "wrong").is_none());
+        assert!(acc.generate_fallback_b64().is_some());
+    }
+
+    #[test]
+    fn inbound_group_export_import_decrypts() {
+        let mut out = E2EGroupSession::new();
+        let mut inb = E2EInboundGroup::from_session_key(&out.session_key_b64()).unwrap();
+        let ct = out.encrypt(b"one");
+        assert_eq!(inb.decrypt(&ct).unwrap(), b"one");
+        let exported = inb.export_b64();
+        let mut copy = E2EInboundGroup::from_exported(&exported).unwrap();
+        let ct2 = out.encrypt(b"two");
+        assert_eq!(copy.decrypt(&ct2).unwrap(), b"two");
     }
 }
