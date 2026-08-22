@@ -110,6 +110,15 @@ void DecCacheRemove(const QString &id);
 namespace {
 
 void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live);
+[[nodiscard]] std::int64_t docIdFromFileId(const QString &fileId);
+// Кастом-эмодзи (определены ниже): pack_ref используемых эмодзи для отправки;
+// материализация пришедших паков; поиск набора по docId.
+[[nodiscard]] nlohmann::json BuildEmojiPacks(
+	parvane::ITransport *t, const nlohmann::json &entities,
+	const std::string &from, const std::string &token,
+	const std::vector<std::string> &recipients);
+void MaterializeEmojiPacks(
+	not_null<Main::Session*> session, const nlohmann::json &content);
 [[nodiscard]] std::string sendSealedDirect(
 	parvane::MessengerClient *m,
 	parvane::ITransport *t,
@@ -195,6 +204,12 @@ QHash<quint64, PackDirInfo> g_stickerPackDirs; // setId → пак (main)
 QHash<qint64, QString> g_packRefByDocId;       // docId → pack_ref JSON (main)
 QHash<quint64, QString> g_packRefUploaded;     // setId → pack_ref (g_sessionMutex)
 QSet<QString> g_packInstallBusy;               // file_id идущих установок (main)
+// Кастом-эмодзи: docId детерминирован от (имя пака|файл) → резолвится у
+// получателя после материализации того же пака. g_emojiDocToSet — для поиска
+// набора по docId при отправке (какой pack_ref приложить к тексту).
+QHash<qint64, quint64> g_emojiDocToSet;        // docId эмодзи → setId (main)
+QHash<quint64, PackDirInfo> g_emojiPackDirs;   // setId → локальный пак (main)
+QSet<QString> g_emojiPackMaterialized;         // имена уже материализованных паков (main)
 // ── опросы (паритет) — только main-поток ─────────────────────────────────────
 // Опрос = обычное сообщение с E2E-контентом kind=poll (uuid сообщения и есть
 // идентификатор опроса). Голоса/закрытие — отдельные kind=poll_vote/poll_close
@@ -626,6 +641,10 @@ void sendTextAsync(
 				if (ttl > 0) {
 					content["ttl_secs"] = ttl;
 				}
+				if (auto packs = BuildEmojiPacks(t, entities, from, token,
+						cloudRecipients(to)); !packs.empty()) {
+					content["emoji_packs"] = packs;
+				}
 				// Sealed sender: from и token ПУСТЫЕ на проводе (отправитель скрыт;
 				// gateway уже аутентифицировал, подлинность — крипто Olm).
 				id = sendSealedDirect(m, t, to, content, token, replyToUuid,
@@ -640,6 +659,10 @@ void sendTextAsync(
 				auto content = parvane::textContent(body, entities, webpage);
 				if (ttl > 0) {
 					content["ttl_secs"] = ttl;
+				}
+				if (auto packs = BuildEmojiPacks(t, entities, from, token,
+						cloudRecipients(to)); !packs.empty()) {
+					content["emoji_packs"] = packs;
 				}
 				const auto sealed = sealGroup(m, t, to, content, token);
 				if (sealed.empty()) {
@@ -2431,6 +2454,296 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 	});
 }
 
+namespace {
+// ── Кастом-эмодзи: локальные паки → нативная эмодзи-панель + инлайн-рендер ─────
+// Секция кастом-эмодзи появляется, когда feedSetFull получает набор с флагом
+// f_emojis: type()==Emoji → set попадает в emojiSetsOrder, документы с
+// documentAttributeCustomEmoji резолвятся CustomEmojiManager'ом из локального
+// файла (без MTProto). docId детерминирован от (rawName|file), поэтому entity
+// custom_emoji (data=docId) резолвится и у получателя после материализации.
+[[nodiscard]] QString CustomEmojiRoot() {
+	if (const char *v = std::getenv("PARVANE_EMOJI_DIR"); v && *v) {
+		return QString::fromUtf8(v);
+	}
+	return QDir::homePath() + u"/.local/share/ParvaneEmoji"_q;
+}
+
+[[nodiscard]] std::int64_t EmojiDocId(const QString &rawName, const QString &file) {
+	return docIdFromFileId(u"pvemoji:"_q + rawName + u"|"_q + file);
+}
+
+// Синтезировать/обновить один эмодзи-набор из каталога `dir` под ИМЕНЕМ
+// `rawName` (важно: docId считается по rawName, одинаковому у отправителя и
+// получателя). Возвращает setId (0 — пусто). Только main-поток.
+[[nodiscard]] quint64 FeedCustomEmojiSet(
+		not_null<Main::Session*> session,
+		const QString &rawName,
+		const QString &dir) {
+	const auto packDir = QDir(dir);
+	const auto files = packDir.entryList(
+		{ u"*.webp"_q, u"*.png"_q, u"*.tgs"_q, u"*.webm"_q },
+		QDir::Files, QDir::Name);
+	if (files.isEmpty()) {
+		return 0;
+	}
+	const auto setId = std::uint64_t(docIdFromFileId(u"pvemoji-set:"_q + rawName));
+	auto &stickers = session->data().stickers();
+	auto docs = QVector<MTPDocument>();
+	auto paths = QVector<QPair<qint64, QString>>();
+	for (const auto &name : files) {
+		const auto path = packDir.filePath(name);
+		const auto isTgs = name.endsWith(u".tgs"_q, Qt::CaseInsensitive);
+		const auto isWebm = name.endsWith(u".webm"_q, Qt::CaseInsensitive);
+		auto w = 100, h = 100;
+		if (!isTgs && !isWebm) {
+			const auto img = QImage(path);
+			if (img.isNull()) {
+				continue;
+			}
+			w = img.width();
+			h = img.height();
+		}
+		const auto docId = EmojiDocId(rawName, name);
+		const auto size = QFileInfo(path).size();
+		const auto mime = isTgs
+			? u"application/x-tgsticker"_q
+			: isWebm ? u"video/webm"_q
+			: name.endsWith(u".png"_q, Qt::CaseInsensitive) ? u"image/png"_q
+			: u"image/webp"_q;
+		auto alt = QString::fromUtf8("\xF0\x9F\x99\x82");
+		const auto base = QFileInfo(name).completeBaseName();
+		if (const auto dash = base.lastIndexOf(u'-'); dash >= 0) {
+			auto ok = false;
+			const auto code = base.mid(dash + 1).toUInt(&ok, 16);
+			if (ok && code >= 0x80 && code <= 0x10FFFF) {
+				const char32_t c = code;
+				alt = QString::fromUcs4(&c, 1);
+			}
+		}
+		auto attrs = QVector<MTPDocumentAttribute>();
+		attrs.push_back(MTP_documentAttributeImageSize(MTP_int(w), MTP_int(h)));
+		attrs.push_back(MTP_documentAttributeCustomEmoji(
+			MTP_flags(MTPDdocumentAttributeCustomEmoji::Flag::f_free),
+			MTP_string(alt),
+			MTP_inputStickerSetID(MTP_long(setId), MTP_long(0))));
+		docs.push_back(MTP_document(
+			MTP_flags(0), MTP_long(docId), MTP_long(0), MTP_bytes(),
+			MTP_int(int(base::unixtime::now())), MTP_string(mime), MTP_long(size),
+			MTP_vector<MTPPhotoSize>(), MTPVector<MTPVideoSize>(),
+			MTP_int(session->mainDcId()),
+			MTP_vector<MTPDocumentAttribute>(attrs)));
+		paths.push_back({ docId, path });
+		g_emojiDocToSet.insert(docId, setId);
+	}
+	if (docs.isEmpty()) {
+		return 0;
+	}
+	using SFlag = MTPDstickerSet::Flag;
+	const auto set = MTP_stickerSet(
+		MTP_flags(SFlag::f_installed_date | SFlag::f_emojis),
+		MTP_int(int(base::unixtime::now())),
+		MTP_long(setId), MTP_long(0),
+		MTP_string(rawName), MTP_string(rawName),
+		MTPVector<MTPPhotoSize>(), MTPint(), MTPint(), MTPlong(),
+		MTP_int(docs.size()), MTP_int(0));
+	const auto full = MTP_messages_stickerSet(
+		set, MTP_vector<MTPStickerPack>(), MTP_vector<MTPStickerKeyword>(),
+		MTP_vector<MTPDocument>(docs));
+	full.match([&](const MTPDmessages_stickerSet &data) {
+		stickers.feedSetFull(data);
+	}, [](const auto &) {});
+	for (const auto &[docId, path] : paths) {
+		session->data().document(DocumentId(docId))->setLocation(
+			Core::FileLocation(path));
+	}
+	auto &order = stickers.emojiSetsOrderRef();
+	if (!order.contains(setId)) {
+		order.push_back(setId);
+	}
+	g_emojiPackDirs.insert(setId, PackDirInfo{
+		packDir.absolutePath(), rawName, int(docs.size()) });
+	g_emojiPackMaterialized.insert(rawName);
+	return setId;
+}
+
+// Загрузка своих локальных эмодзи-паков (авторство): каждый подкаталог
+// ParvaneEmoji/<Имя> → набор. Имя каталога = rawName (для совпадения docId).
+void LoadLocalCustomEmoji(not_null<Main::Session*> session) {
+	const auto rootDir = QDir(CustomEmojiRoot());
+	if (!rootDir.exists()) {
+		return;
+	}
+	auto loaded = 0;
+	for (const auto &packName : rootDir.entryList(
+			QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+		if (FeedCustomEmojiSet(session, packName,
+				rootDir.filePath(packName))) {
+			++loaded;
+			LOG(("Parvane: эмодзи-пак «%1» загружен").arg(packName));
+		}
+	}
+	if (loaded > 0) {
+		session->data().stickers().notifyUpdated(Data::StickersType::Emoji);
+	}
+}
+
+// Материализовать эмодзи-паки, пришедшие в сообщении (content.emoji_packs):
+// скачать архив из cloud, распаковать в ParvaneEmoji/<name>, синтезировать набор
+// → entity custom_emoji резолвятся. Идемпотентно по имени пака. Триггерится на
+// приёме текста с кастом-эмодзи. Скачивание — воркер, feed — main.
+void MaterializeEmojiPacks(not_null<Main::Session*> session,
+		const nlohmann::json &content) {
+	if (!content.is_object() || !content.contains("emoji_packs")
+		|| !content["emoji_packs"].is_array()) {
+		return;
+	}
+	// Лимит паков на сообщение (анти-DoS: иначе одно сообщение порождает
+	// множество параллельных скачиваний из cloud).
+	auto processed = 0;
+	for (const auto &ref : content["emoji_packs"]) {
+		if (!ref.is_object() || ++processed > 4) {
+			continue;
+		}
+		const auto rawName = QString::fromStdString(ref.value("name", std::string()));
+		const auto fileId = QString::fromStdString(ref.value("file_id", std::string()));
+		const auto key = ref.value("key", std::string());
+		const auto nonce = ref.value("nonce", std::string());
+		if (rawName.isEmpty() || fileId.isEmpty()) {
+			continue;
+		}
+		if (g_emojiPackMaterialized.contains(rawName)
+			|| g_packInstallBusy.contains(fileId)) {
+			continue;
+		}
+		const auto dest = CustomEmojiRoot() + u"/"_q + SanitizePackName(rawName);
+		// Защита от подмены: НЕ перезаписываем уже существующий пак (свой или
+		// ранее полученный) — иначе отправитель, зная имя, подменил бы содержимое
+		// (и docId, детерминированный от имени|файла). Существующий пак уже
+		// загружается LoadLocalCustomEmoji на старте.
+		if (QDir(dest).exists()) {
+			g_emojiPackMaterialized.insert(rawName);
+			continue;
+		}
+		g_packInstallBusy.insert(fileId);
+		const auto fidStd = fileId.toStdString();
+		const auto weak = base::make_weak(session.get());
+		crl::async([=] {
+			parvane::ITransport *t = nullptr;
+			std::string self, token;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				t = g_transport.get();
+				self = g_selfAddress.toStdString();
+				token = g_token.toStdString();
+			}
+			auto written = 0;
+			if (t) {
+				try {
+					parvane::CloudClient cloud(*t);
+					auto d = cloud.download(self, token, fidStd, 20000);
+					if (d.ok) {
+						auto dec = parvane::blobcrypt::decrypt(d.bytes, key, nonce);
+						if (dec) {
+							written = UnpackPackArchive(*dec, dest);
+						}
+					}
+				} catch (const std::exception &) {
+				}
+			}
+			crl::on_main([weak, rawName, dest, fileId, written] {
+				g_packInstallBusy.remove(fileId);
+				const auto s = weak.get();
+				if (!s || written <= 0) {
+					return;
+				}
+				if (FeedCustomEmojiSet(s, rawName, dest)) {
+					s->data().stickers().notifyUpdated(Data::StickersType::Emoji);
+					// Перерисовать открытые сообщения — кастом-эмодзи резолвятся.
+					s->data().stickers().notifyRecentUpdated(Data::StickersType::Emoji);
+					LOG(("Parvane: эмодзи-пак «%1» материализован (%2 шт)")
+						.arg(rawName).arg(written));
+				}
+			});
+		});
+	}
+}
+
+// Прикрепить pack_ref используемых кастом-эмодзи к контенту (для отправки).
+// Возвращает json-массив emoji_packs (пусто — эмодзи нет / наши локальные не
+// найдены). Вызывать из async send-контекста (нужен cloud). from/token/to —
+// как в остальных отправках.
+[[nodiscard]] nlohmann::json BuildEmojiPacks(
+		parvane::ITransport *t,
+		const nlohmann::json &entities,
+		const std::string &from,
+		const std::string &token,
+		const std::vector<std::string> &recipients) {
+	auto out = nlohmann::json::array();
+	if (!t || !entities.is_array()) {
+		return out;
+	}
+	// Собрать setId, на которые ссылаются custom_emoji-entities.
+	QSet<quint64> setIds;
+	for (const auto &e : entities) {
+		if (!e.is_object() || e.value("type", std::string()) != "custom_emoji") {
+			continue;
+		}
+		const auto data = QString::fromStdString(e.value("data", std::string()));
+		auto ok = false;
+		const auto docId = qint64(data.toLongLong(&ok));
+		if (!ok) {
+			continue;
+		}
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		const auto it = g_emojiDocToSet.constFind(docId);
+		if (it != g_emojiDocToSet.constEnd()) {
+			setIds.insert(it.value());
+		}
+	}
+	if (setIds.isEmpty()) {
+		return out;
+	}
+	parvane::CloudClient cloud(*t);
+	for (const auto setId : setIds) {
+		QString refStr;
+		PackDirInfo info;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			refStr = g_packRefUploaded.value(setId);
+			info = g_emojiPackDirs.value(setId);
+		}
+		if (refStr.isEmpty() && !info.dir.isEmpty()) {
+			const auto archive = BuildPackArchive(info.dir);
+			if (!archive.empty()) {
+				auto penc = parvane::blobcrypt::encrypt(archive);
+				if (!penc.ciphertext.empty()) {
+					try {
+						const auto pfid = cloud.upload(from, token, "emoji.pvpk",
+							"application/octet-stream", penc.ciphertext,
+							recipients, false, 256 * 1024, 20000);
+						const nlohmann::json ref{
+							{ "file_id", pfid },
+							{ "name", info.name.toStdString() },
+							{ "count", info.count },
+							{ "key", penc.keyB64 },
+							{ "nonce", penc.nonceB64 }};
+						refStr = QString::fromStdString(ref.dump());
+						std::lock_guard<std::mutex> lk(g_sessionMutex);
+						g_packRefUploaded.insert(setId, refStr);
+					} catch (const std::exception &) {
+					}
+				}
+			}
+		}
+		if (!refStr.isEmpty()) {
+			out.push_back(nlohmann::json::parse(refStr.toStdString()));
+		}
+	}
+	return out;
+}
+
+} // namespace (кастом-эмодзи)
+
 void LoadLocalStickerPacks(not_null<Main::Session*> session); // ниже по файлу
 
 bool HasStickerPackRef(DocumentData *document) {
@@ -3991,34 +4304,46 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 			fresh = true;
 		}
 		const auto claimedFrom = inner.value("from", std::string());
-		// Верификация отправителя (1-на-1): identity конверта обязана
-		// принадлежать устройствам заявленного адреса (в т.ч. from==self —
-		// анти-вброс в «Избранное»). Свои исходящие (кэш без identity) — не сверяем.
+		// АВТОР сообщения: 1-на-1 — реальный отправитель ВНУТРИ шифртекста
+		// (sealed, скрыт на проводе); ГРУППА — ВСЕГДА gateway-аутентифицированный
+		// wire from. Для групп inner.from контролирует отправитель (Megolm
+		// plaintext) → доверять ему нельзя (иначе любой участник выдаёт себя за
+		// другого). wireFrom подставляет gateway и подделать нельзя.
+		const auto wireFrom = sm.from;
+		const auto author = direct ? claimedFrom : wireFrom;
+		// Верификация: identity конверта обязана принадлежать устройствам АВТОРА
+		// (в т.ч. from==self — анти-вброс в «Избранное»). Свои исходящие (кэш без
+		// identity) — не сверяем.
 		const auto cachedIdentity = inner.value("sender_identity", std::string());
 		const auto verifyIdentity = fresh ? envIdentity : cachedIdentity;
-		if (direct && !verifyIdentity.empty() && !claimedFrom.empty()) {
-			const auto v = parvane::e2e::verifySender(claimedFrom, verifyIdentity, *t, token);
+		if (!verifyIdentity.empty() && !author.empty()) {
+			const auto v = parvane::e2e::verifySender(author, verifyIdentity, *t, token);
 			if (v == parvane::e2e::Verdict::Spoofed) {
-				LOG(("Parvane: ОТКЛОНЕНО: подмена отправителя %1 в %2")
-					.arg(QString::fromStdString(claimedFrom), uuidQ));
+				LOG(("Parvane: ОТКЛОНЕНО: подмена отправителя %1 в %2%3")
+					.arg(QString::fromStdString(author), uuidQ,
+						direct ? QString() : u" (группа)"_q));
 				ackAnon(sm.id);
 				continue;
 			} else if (v == parvane::e2e::Verdict::Unknown) {
 				LOG(("Parvane: не подтверждён отправитель %1 в %2 (каталог недоступен)")
-					.arg(QString::fromStdString(claimedFrom), uuidQ));
-			} else if (claimedFrom != self) {
-				parvane::e2e::rememberContactIdentity(claimedFrom, verifyIdentity);
+					.arg(QString::fromStdString(author), uuidQ));
+			} else if (author != self) {
+				parvane::e2e::rememberContactIdentity(author, verifyIdentity);
 			}
 		}
 		if (fresh) {
 			auto cached = inner;
 			cached["ct"] = ctFp.toStdString();
-			if (direct && !envIdentity.empty()) {
+			// sender_identity в кэш для ОБОИХ (иначе cached-путь групп не сверялся
+			// бы и доверял бы кэшированной подмене).
+			if (!envIdentity.empty()) {
 				cached["sender_identity"] = envIdentity;
 			}
 			DecCachePut(uuidQ, QString::fromStdString(cached.dump()));
 		}
-		if (!claimedFrom.empty()) {
+		// 1-на-1: реальный отправитель — inner.from. Группа: inner.from НЕ
+		// доверяем — автор остаётся wire from (не перезаписываем sm.from).
+		if (direct && !claimedFrom.empty()) {
 			sm.from = claimedFrom;
 		}
 		if (inner.contains("content") && inner["content"].is_object()) {
@@ -4026,6 +4351,8 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 		}
 		// SKDM: ключ принимаем только если заявленный sender_identity совпадает с
 		// identity конверта (иначе участник мог бы подменить чужой Megolm-канал).
+		// SKDM всегда приходит как direct sealed — verifyIdentity уже сверен с
+		// автором (inner.from) выше.
 		if (parvane::contentKind(sm.content) == "skdm") {
 			if (!direct || sm.content.value("sender_identity", std::string()) != verifyIdentity) {
 				LOG(("Parvane: SKDM с чужим sender_identity от %1 — отклонён")
@@ -4340,6 +4667,7 @@ void injectOnMain(
 				continue;
 			}
 			const auto gtextQ = QString::fromStdString(*gtext);
+			MaterializeEmojiPacks(session, sm.content); // кастом-эмодзи в тексте
 			ensurePeerUser(session, gAuthorId, from); // автор в группе
 			const auto gMsgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, gMsgId.bare);
@@ -4471,6 +4799,7 @@ void injectOnMain(
 			continue;
 		}
 		const auto text = QString::fromStdString(*maybeText);
+		MaterializeEmojiPacks(session, sm.content); // кастом-эмодзи в тексте
 		RegisterPeer(peerAddress);
 		ensurePeerUser(session, peerId, peerAddress);
 		// Ответ: uuid цитируемого → локальный msgId (если он уже инъецирован).
@@ -4841,9 +5170,11 @@ void ArmScheduledTimers() {
 		pop(it.id);
 	}
 	for (const auto &it : pending) {
-		const auto delayMs = crl::time(
-			(it.dueAt - QDateTime::currentSecsSinceEpoch()) * 1000);
-		base::call_delayed(std::max<crl::time>(delayMs, 1), [it, pop] {
+		// Клампим задержку (защита от переполнения при испорченном далёком due
+		// на диске): максимум ~24 дня.
+		const auto secs = std::clamp<qint64>(
+			it.dueAt - QDateTime::currentSecsSinceEpoch(), 0, qint64(2000000));
+		base::call_delayed(std::max<crl::time>(crl::time(secs * 1000), 1), [it, pop] {
 			FireScheduled(it);
 			pop(it.id);
 		});
@@ -6214,6 +6545,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			if (const auto s = weak.get()) {
 				LoadLocalStickerPacks(s);
 				LoadLocalSavedGifs(s);
+				LoadLocalCustomEmoji(s); // кастом-эмодзи: локальные паки → панель
 			}
 		});
 		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
@@ -6643,6 +6975,43 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autolocation для e2e: PARVANE_AUTOLOCATION=peer@server:lat,lon —
 		// отправляет геолокацию тем же путём, что меню вложений (MirrorLocationIfOurs).
+		// Debug-autoemoji для e2e кастом-эмодзи: PARVANE_AUTOEMOJI=peer:pack:file —
+		// отправляет текст с одним custom_emoji-entity (как выбор из панели):
+		// грузит локальный пак, шлёт entity(docId)+emoji_packs получателю.
+		if (const char *ev = std::getenv("PARVANE_AUTOEMOJI"); ev && *ev) {
+			const auto espec = QString::fromUtf8(ev);
+			const auto p1 = espec.indexOf(':');
+			const auto p2 = espec.indexOf(':', p1 + 1);
+			if (p1 > 0 && p2 > p1) {
+				const auto eaddr = espec.left(p1);
+				const auto pack = espec.mid(p1 + 1, p2 - p1 - 1);
+				const auto file = espec.mid(p2 + 1);
+				RegisterPeer(eaddr);
+				const auto eu = session->data().user(
+					UserId(BareId(IdForAddress(eaddr))));
+				// t+5с: после LoadLocalCustomEmoji (t+3с), чтобы g_emojiDocToSet
+				// знал набор и BuildEmojiPacks приложил pack_ref.
+				base::call_delayed(5 * crl::time(1000), [eu, pack, file] {
+					const auto docId = EmojiDocId(pack, file);
+					auto alt = QString::fromUtf8("\xF0\x9F\x99\x82");
+					const auto base = QFileInfo(file).completeBaseName();
+					if (const auto d = base.lastIndexOf(u'-'); d >= 0) {
+						auto ok = false;
+						const auto code = base.mid(d + 1).toUInt(&ok, 16);
+						if (ok && code >= 0x80 && code <= 0x10FFFF) {
+							const char32_t c = code; alt = QString::fromUcs4(&c, 1);
+						}
+					}
+					auto entities = EntitiesInText();
+					entities.push_back(EntityInText(
+						EntityType::CustomEmoji, 0, int(alt.size()),
+						QString::number(docId)));
+					MirrorOutgoing(eu, TextWithEntities{ alt, entities });
+					LOG(("Parvane: autoemoji → %1 (docId=%2)")
+						.arg(eu ? u"peer"_q : QString()).arg(docId));
+				});
+			}
+		}
 		// Debug-autoschedule для e2e: PARVANE_AUTOSCHEDULE=peer@server:secs:текст —
 		// планирует сообщение через secs секунд тем же путём, что нативное меню.
 		if (const char *sv = std::getenv("PARVANE_AUTOSCHEDULE"); sv && *sv) {

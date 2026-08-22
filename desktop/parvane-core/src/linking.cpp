@@ -223,6 +223,9 @@ std::optional<std::string> EphemeralKey::seal(const std::string &peerPubB64,
         return std::nullopt;
     }
     const auto iv = randomBytes(kIvLen);
+    if (iv.size() != static_cast<size_t>(kIvLen)) {
+        return std::nullopt; // RAND_bytes не дал энтропии — не шифруем c пустым IV
+    }
     std::unique_ptr<EVP_CIPHER_CTX, CipherDel> c(EVP_CIPHER_CTX_new());
     if (!c || EVP_EncryptInit_ex(c.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1
         || EVP_CIPHER_CTX_ctrl(c.get(), EVP_CTRL_GCM_SET_IVLEN, kIvLen, nullptr) != 1
