@@ -62,7 +62,9 @@ export type DeviceCiphertext = {
 // Кэшируется вместе с расшифровкой, чтобы аутентичность отправителя можно было
 // перепроверять по каталогу identity и после рестарта (иначе cached-путь
 // доверял бы `from` слепо). Для своих исходящих не задаётся
-type StoredInner = { from: string; content: unknown; senderIdentity?: string };
+// `ctHash` — отпечаток шифртекста, из которого получен inner: по нему
+// решаем, можно ли верить кэшу после правки (см. unsealStored в sync.ts)
+type StoredInner = { from: string; content: unknown; senderIdentity?: string; ctHash?: string };
 
 // Вердикт проверки принадлежности sender_identity заявленному отправителю:
 // ok — ключ в каталоге отправителя; spoofed — каталог получен, ключа там нет

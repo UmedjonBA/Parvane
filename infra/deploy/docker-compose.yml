@@ -1,0 +1,150 @@
+# Parvane на m60-7 (docker compose, без sudo). Файлы на сервере: ~/parvane/
+#   .env            — секреты (генерирует deploy.sh при первом деплое)
+#   nats/server.prod.conf, Caddyfile, web-dist/ — заливает deploy.sh
+# Образы parvane-shards / parvane-turn собираются ЛОКАЛЬНО (podman, baseline
+# x86-64) и заливаются через docker load — на сервере НЕ собирать.
+
+name: parvane
+
+x-shard-common: &shard-common
+  image: localhost/parvane-shards:latest
+  restart: unless-stopped
+  depends_on:
+    - nats
+  volumes:
+    - db:/data
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-c", "/etc/nats/server.prod.conf"]
+    env_file: .env
+    volumes:
+      - ./nats/server.prod.conf:/etc/nats/server.prod.conf:ro
+    restart: unless-stopped
+
+  identity:
+    <<: *shard-common
+    command: ["/usr/local/bin/identity"]
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: identity
+      PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}
+      PARVANE_DB_PATH: /data/identity.db
+      PARVANE_LOG_LEVEL: info
+
+  messenger:
+    <<: *shard-common
+    command: ["/usr/local/bin/messenger"]
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: messenger
+      PARVANE_NATS_PASS: ${PARVANE_MESSENGER_PASS}
+      PARVANE_DB_PATH: /data/messenger.db
+      PARVANE_LOG_LEVEL: info
+
+  cloud:
+    <<: *shard-common
+    command: ["/usr/local/bin/cloud"]
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: cloud
+      PARVANE_NATS_PASS: ${PARVANE_CLOUD_PASS}
+      PARVANE_DB_PATH: /data/cloud.db
+      PARVANE_LOG_LEVEL: info
+
+  call:
+    <<: *shard-common
+    command: ["/usr/local/bin/call"]
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: call
+      PARVANE_NATS_PASS: ${PARVANE_CALL_PASS}
+      PARVANE_DB_PATH: /data/call.db
+      PARVANE_LOG_LEVEL: info
+      PARVANE_STUN_URLS: stun:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}
+      PARVANE_TURN_URL: turn:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}?transport=udp
+      PARVANE_TURN_SECRET: ${PARVANE_TURN_SECRET}
+
+  preview:
+    <<: *shard-common
+    command: ["/usr/local/bin/preview"]
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: preview
+      PARVANE_NATS_PASS: ${PARVANE_PREVIEW_PASS}
+      PARVANE_DB_PATH: /data/preview.db
+      PARVANE_LOG_LEVEL: info
+
+  push:
+    <<: *shard-common
+    command: ["/usr/local/bin/push"]
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: push
+      PARVANE_NATS_PASS: ${PARVANE_PUSH_PASS}
+      PARVANE_DB_PATH: /data/push.db
+      PARVANE_LOG_LEVEL: info
+
+  gateway:
+    image: localhost/parvane-shards:latest
+    command: ["/usr/local/bin/gateway"]
+    restart: unless-stopped
+    depends_on:
+      - nats
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: gateway
+      PARVANE_NATS_PASS: ${PARVANE_GATEWAY_PASS}
+      PARVANE_GATEWAY_BIND: 0.0.0.0:9222
+      PARVANE_GATEWAY_TCP_BIND: 0.0.0.0:9223
+      # За Caddy все WS-клиенты приходят с ОДНОГО IP (контейнер caddy), поэтому
+      # per-IP лимит по умолчанию (64) стал бы общим потолком на всех веб-юзеров
+      # и per-IP защита не различала бы клиентов. Поднимаем до глобального лимита;
+      # защита от abuse — на уровне conn-лимита и (позже) rate-limit в Caddy.
+      PARVANE_GATEWAY_MAX_CONNS: "2000"
+      PARVANE_GATEWAY_MAX_CONNS_PER_IP: "2000"
+      PARVANE_LOG_LEVEL: info
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "443:443"
+      - "80:80"
+    environment:
+      PARVANE_PUBLIC_HOST: ${PARVANE_PUBLIC_HOST}
+      PARVANE_PUBLIC_HTTPS_PORT: ${PARVANE_PUBLIC_HTTPS_PORT}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web-dist:/srv/dist:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # TURN — host-сеть: NAT хостера шлёт 20478->3478 и (пока криво) 2016x->4916x
+  # прямо на хост. Relay-адрес — ПРИВАТНЫЙ IP хоста: из-за случайного range-DNAT
+  # у хостера внешние relay-кандидаты недостижимы, а relay<->relay внутри
+  # сервера по приватному адресу работает (double-relay через 3478).
+  # Когда хостер переделает проброс 1:1 (20160-20200 -> те же порты), сменить:
+  # TURN_PUBLIC_IP на внешний IP, TURN_MIN/MAX_PORT на 20160/20200.
+  turn:
+    image: localhost/parvane-turn:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_PUBLIC_IP: ${PARVANE_TURN_RELAY_IP}
+      TURN_PORT: "3478"
+      TURN_REALM: parvane
+      # Статичный long-term кред ОТКЛЮЧЁН (TURN_USER пуст) — только ephemeral
+      # REST-креды от call-шарда по JWT. Нет постоянного разделяемого пароля.
+      TURN_USER: ""
+      TURN_SECRET: ${PARVANE_TURN_SECRET}
+      TURN_MIN_PORT: ${PARVANE_TURN_MIN_PORT}
+      TURN_MAX_PORT: ${PARVANE_TURN_MAX_PORT}
+
+volumes:
+  db:
+  caddy-data:
+  caddy-config:

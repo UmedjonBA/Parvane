@@ -27,6 +27,7 @@ import {
 import { buildPvpkArchive, findInstalledPackBySetId, isCustomPackSetId } from './stickerPacks';
 import {
   buildWireEvent,
+  newMessageId,
   TOPIC_MSG_DELETE,
   TOPIC_MSG_EDIT,
   TOPIC_MSG_PIN,
@@ -151,7 +152,7 @@ export function createMessageController(deps: MessageDependencies) {
       if (!sealed) return false;
       const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
       connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
-        id: crypto.randomUUID(),
+        id: newMessageId(),
         from: '',
         ts: Math.floor(Date.now() / 1000),
         token: token(),
@@ -185,7 +186,7 @@ export function createMessageController(deps: MessageDependencies) {
       if (!sealed) return;
       const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
       connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
-        id: crypto.randomUUID(),
+        id: newMessageId(),
         from: '',
         ts: Math.floor(Date.now() / 1000),
         token: token(),
@@ -212,7 +213,7 @@ export function createMessageController(deps: MessageDependencies) {
   async function publishInner(
     toAddress: string,
     wireContent: Record<string, unknown>,
-    uuid = crypto.randomUUID(),
+    uuid = newMessageId(),
   ) {
     const currentStore = store();
     const ts = Math.floor(Date.now() / 1000);
@@ -487,7 +488,7 @@ export function createMessageController(deps: MessageDependencies) {
     const question = newPoll.summary.question.text;
     const options = newPoll.summary.answers.map((answer) => answer.text.text);
     const isQuiz = Boolean(newPoll.summary.isQuiz);
-    const uuid = crypto.randomUUID();
+    const uuid = newMessageId();
     deps.polls.register(uuid, chat.id, question, options, {
       isPublic: Boolean(newPoll.summary.isPublic),
       isMultiple: Boolean(newPoll.summary.isMultipleChoice),
@@ -530,7 +531,7 @@ export function createMessageController(deps: MessageDependencies) {
     const { chat, replyInfo } = params;
     if (!chat) return Promise.resolve(undefined);
     const currentStore = store();
-    const uuid = crypto.randomUUID();
+    const uuid = newMessageId();
     const id = currentStore.allocateMessageId(chat.id, uuid);
     const replyToMsgId = replyInfo?.type === 'message' ? replyInfo.replyToMsgId : undefined;
     const message: ApiMessage = {
@@ -587,7 +588,7 @@ export function createMessageController(deps: MessageDependencies) {
       return;
     }
 
-    const uuid = uuidBySentLocalKey.get(`${chat.id}:${localMessage.id}`) || crypto.randomUUID();
+    const uuid = uuidBySentLocalKey.get(`${chat.id}:${localMessage.id}`) || newMessageId();
     const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
     const replyToUuid = replyToMsgId ? currentStore.getUuidForMessage(chat.id, replyToMsgId) : undefined;
     const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
