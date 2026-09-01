@@ -36,6 +36,15 @@
 	handle {
 		root * /srv/dist
 		encode gzip
+		# Кэш: хешированные ассеты (/assets/name-<hash>.js) можно держать вечно —
+		# новый деплой даёт новые имена. А index.html и корневые воркеры (в т.ч.
+		# service worker) — ВСЕГДА перепроверять: без Cache-Control браузер
+		# кэшировал index.html эвристически и продолжал ссылаться на старый JS
+		# даже после обновления страницы («баг не уходит после деплоя»).
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@volatile not path /assets/*
+		header @volatile Cache-Control "no-cache, must-revalidate"
 		try_files {path} /index.html
 		file_server
 	}
