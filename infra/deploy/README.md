@@ -115,6 +115,26 @@ sync_reconnect, пин/архив чата (пробник). TURN relay — RELA
 реакций в sync_reconnect. ЛЕЧИТЬ: uuid v7 для message id (монотонный) ИЛИ
 курсор по (updated_at,id), а не по одному id.
 
+## Закрытая регистрация — пароль на сайт (basic-auth, 2026-09-01)
+
+Приватный круг сделан через Caddy `basic_auth` на ВЕСЬ сайт (включая `/ws` —
+иначе регистрацию можно дёрнуть по WebSocket мимо пароля). Без пароля сайт даже
+не грузится; с паролем — обычная регистрация/вход. Один общий пароль на круг.
+
+Как задан (уже сделано на m60-7):
+```
+# сгенерить пароль и bcrypt-хэш (хэшим в контейнере caddy):
+docker compose exec -T caddy caddy hash-password --plaintext '<PW>'
+# в .env (ГРАБЛЯ: удвоить каждый $ в хэше → $$, иначе compose съест $2a/$14):
+PARVANE_SITE_USER=parvane
+PARVANE_SITE_HASH=$$2a$$14$$....
+docker compose up -d caddy
+```
+Проверка: `curl -u parvane:<PW>` → 200, без -u → 401. Пароль хранится у
+пользователя (в репо/памяти НЕ хранить). Сменить: перегенерить хэш, обновить
+.env, `up -d caddy`. Открыть сайт назад: убрать блок `basic_auth` из Caddyfile
+(или очистить PARVANE_SITE_HASH) и перезапустить caddy.
+
 ## Заметки
 
 - Регистрация ОТКРЫТА (PARVANE_EMAIL_REQUIRED/PARVANE_INVITE_REQUIRED не
