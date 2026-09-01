@@ -86,13 +86,20 @@ const ParvaneCallOverlay = () => {
     }
   }, [call?.remoteStream, hasRemoteVideo]);
 
-  // Локальное превью камеры
+  // Локальное превью камеры. ВАЖНО: у звонящего localStream появляется ещё на
+  // стадии 'ringing' (до монтирования <video> превью), а к 'active' ССЫЛКА на
+  // поток та же — эффект с deps только по потоку не перезапускался, и srcObject
+  // не привязывался к уже смонтированному элементу (чёрное превью у инициатора).
+  // Поэтому пере-привязываем и при смене стадии/режима (state/group), когда
+  // элемент появляется в разметке.
   useEffect(() => {
     if (call?.localStream && localVideoRef.current) {
-      localVideoRef.current.srcObject = call.localStream;
+      if (localVideoRef.current.srcObject !== call.localStream) {
+        localVideoRef.current.srcObject = call.localStream;
+      }
       void localVideoRef.current.play().catch(() => undefined);
     }
-  }, [call?.localStream, hasLocalVideo]);
+  }, [call?.localStream, hasLocalVideo, state, group]);
 
   // Рингтоны: входящий и исходящий гудок — loop, «занято» — однократно
   useEffect(() => {
