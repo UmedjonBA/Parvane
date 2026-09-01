@@ -1,7 +1,7 @@
 # Parvane m60-7 — эксплуатация (шпаргалка)
 
 Сервер: `ssh -p 2240 umejon@185.81.248.52`, всё в `~/parvane/`.
-Вход для пользователей: `https://185.81.248.52:20443` (пароль сайта у владельца).
+Вход для пользователей: `https://parvane.duckdns.org:20443` (пароль сайта у владельца).
 
 Все команды ниже — из `~/parvane/` на сервере.
 
@@ -32,8 +32,8 @@ sed -i '/^PARVANE_SITE_HASH=/d' .env
 printf 'PARVANE_SITE_HASH=%s\n' "$HESC" >> .env
 docker compose up -d caddy
 # проверка:
-curl -sk -o /dev/null -w '%{http_code}\n' -u "parvane:$NEW" https://185.81.248.52:20443/   # 200
-curl -sk -o /dev/null -w '%{http_code}\n' https://185.81.248.52:20443/                       # 401
+curl -sk -o /dev/null -w '%{http_code}\n' -u "parvane:$NEW" https://parvane.duckdns.org:20443/   # 200
+curl -sk -o /dev/null -w '%{http_code}\n' https://parvane.duckdns.org:20443/                       # 401
 ```
 Открыть регистрацию всем (снять пароль): убрать блок `basic_auth {…}` из
 `Caddyfile` → `docker compose restart caddy`.

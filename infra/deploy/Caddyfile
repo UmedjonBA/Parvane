@@ -13,7 +13,12 @@
 }
 
 {$PARVANE_PUBLIC_HOST}:443 {
-	tls internal
+	# Настоящий серт Let's Encrypt через DNS-01 (плагин duckdns) — HTTP-01
+	# недоступен (наружу проброшен не 80). Токен в env DUCKDNS_TOKEN.
+	# Для self-signed без домена — заменить весь блок на `tls internal`.
+	tls {
+		dns duckdns {$DUCKDNS_TOKEN}
+	}
 
 	# Приватный круг: basic-auth на ВЕСЬ сайт, включая /ws — иначе регистрацию
 	# можно было бы дёрнуть напрямую по WebSocket мимо пароля. Браузер после

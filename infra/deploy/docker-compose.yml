@@ -107,7 +107,7 @@ services:
       PARVANE_LOG_LEVEL: info
 
   caddy:
-    image: caddy:2-alpine
+    image: localhost/parvane-caddy:latest
     restart: unless-stopped
     depends_on:
       - gateway
@@ -120,6 +120,8 @@ services:
       # Basic-auth приватного круга (bcrypt). Пусто/не задано в Caddyfile = гейт off
       PARVANE_SITE_USER: ${PARVANE_SITE_USER:-parvane}
       PARVANE_SITE_HASH: ${PARVANE_SITE_HASH:-}
+      # Токен DuckDNS для ACME DNS-01 (в .env, не в репо)
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./web-dist:/srv/dist:ro
