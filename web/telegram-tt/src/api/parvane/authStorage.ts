@@ -1,5 +1,6 @@
 const LEGACY_CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_ADDRESS_STORAGE_KEY = 'parvane:login-address';
+const REMEMBER_ME_STORAGE_KEY = 'parvane:remember-me';
 
 export type LoginCredentials = { user: string; password: string };
 
@@ -23,12 +24,23 @@ export function readLoginAddress() {
   return localStorage.getItem(LOGIN_ADDRESS_STORAGE_KEY) || undefined;
 }
 
+export function saveRememberMe(value: boolean) {
+  localStorage.setItem(REMEMBER_ME_STORAGE_KEY, value ? '1' : '0');
+}
+
+// Дефолт (ключа нет) — true, как auth.rememberMe в initialState tt.
+export function readRememberMe() {
+  return localStorage.getItem(REMEMBER_ME_STORAGE_KEY) !== '0';
+}
+
 export function clearLoginStorage() {
   localStorage.removeItem(LEGACY_CREDS_STORAGE_KEY);
   localStorage.removeItem(LOGIN_ADDRESS_STORAGE_KEY);
+  localStorage.removeItem(REMEMBER_ME_STORAGE_KEY);
 }
 
 export const authStorageKeys = {
   legacyCredentials: LEGACY_CREDS_STORAGE_KEY,
   loginAddress: LOGIN_ADDRESS_STORAGE_KEY,
+  rememberMe: REMEMBER_ME_STORAGE_KEY,
 };

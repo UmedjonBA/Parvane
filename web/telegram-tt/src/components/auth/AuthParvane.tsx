@@ -4,6 +4,8 @@ import { getActions, withGlobal } from '../../global';
 
 import type { GlobalState } from '../../global/types';
 
+import { saveRememberMe } from '../../api/parvane/authStorage';
+
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
@@ -32,6 +34,9 @@ const AuthParvane = ({ auth }: StateProps) => {
 
   const handleKeepSessionChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
     setAuthRememberMe({ value: e.target.checked });
+    // Провайдер читает этот флаг из localStorage при сохранении/восстановлении
+    // сессии (глобальный кэш tt у нас выключен)
+    saveRememberMe(e.target.checked);
   });
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {

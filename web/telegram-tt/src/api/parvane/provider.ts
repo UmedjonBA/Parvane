@@ -29,6 +29,7 @@ import {
   consumeLegacyCredentials,
   parseLoginCredentials,
   readLoginAddress,
+  readRememberMe,
   saveLoginAddress,
 } from './authStorage';
 import { createCallController } from './calls';
@@ -48,6 +49,7 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
+import { clearSecureCredential, loadSecureCredential, saveSecureCredential } from './secureStorage';
 import {
   buildApiStickerSetFromPack,
   findInstalledPackBySetId,
@@ -262,6 +264,23 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     const savedAddress = readLoginAddress();
     if (savedAddress) {
       pendingLoginAddress = savedAddress;
+      // «Keep me signed in»: если пароль сохранён (зашифрован в IndexedDB) —
+      // авто-логин без экрана пароля. Иначе (или при просроченном/битом
+      // credential) показываем экран пароля.
+      if (readRememberMe()) {
+        const savedPassword = await loadSecureCredential(savedAddress).catch(() => undefined);
+        if (savedPassword) {
+          try {
+            await connectionController.connectAndLogin(savedAddress, savedPassword);
+            saveLoginAddress(savedAddress);
+            return;
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('[parvane] авто-логин не удался, спрашиваем пароль:', err);
+            await clearSecureCredential(savedAddress).catch(() => undefined);
+          }
+        }
+      }
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
       return;
     }
@@ -272,6 +291,7 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
   try {
     await connectionController.connectAndLogin(creds.user, creds.password);
     saveLoginAddress(creds.user);
+    await persistSessionCredential(creds.user, creds.password);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[parvane] логин не удался:', err);
@@ -284,6 +304,20 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
 function logDebug(message: string) {
   // eslint-disable-next-line no-console
   console.info(`[parvane] ${message}`);
+}
+
+// «Keep me signed in»: при включённом флаге сохраняем пароль (зашифрованным),
+// чтобы reload не спрашивал его снова. При выключенном — стираем сохранённое.
+async function persistSessionCredential(user: string, password: string) {
+  try {
+    if (readRememberMe()) {
+      await saveSecureCredential(user, password);
+    } else {
+      await clearSecureCredential(user);
+    }
+  } catch {
+    // Хранилище недоступно (приватный режим) — просто будем спрашивать пароль
+  }
 }
 
 // ── методы (подмножество Methods, остальное — заглушки) ──────────────────────
@@ -1281,6 +1315,7 @@ const methods = {
     try {
       await connectionController.connectAndLogin(user, password);
       saveLoginAddress(user);
+      await persistSessionCredential(user, password);
     } catch (err) {
       const message = String(err);
       logDebug(`логин отклонён: ${message}`);
@@ -1444,6 +1479,7 @@ const methods = {
         }
         localState.clearUserData(user);
         await E2eEngine.clear(user);
+        await clearSecureCredential(user).catch(() => undefined);
       }
     }
     return undefined;
@@ -1503,6 +1539,13 @@ function collectUsersFor(messages: ApiMessage[]): ApiUser[] {
 }
 
 function sendUpdate(update: ApiUpdate) {
+  // ВАЖЕН ПОРЯДОК: сперва сам newMessage, потом обновление lastMessageId.
+  // Если lastMessageId поднять ДО newMessage, selectIsViewportNewest станет
+  // false (последний id чата уже больше максимума в загруженном окне), и
+  // reducer newMessage НЕ добавит сообщение в viewport — оно не появится в
+  // ленте до ручной перезагрузки окна (стрелка ↓). Поэтому lastMessageId
+  // выставляем ПОСЛЕ, когда сообщение уже в окне и вьюпорт остаётся новейшим.
+  onUpdate(update);
   if (update['@type'] === 'newMessage') {
     onUpdate({
       '@type': 'updateThreadInfo',
@@ -1514,7 +1557,6 @@ function sendUpdate(update: ApiUpdate) {
       },
     });
   }
-  onUpdate(update);
 }
 
 // Пароль из login-link живёт только в памяти до первого connectAndLogin.

@@ -285,7 +285,7 @@ export const LOTTIE_STICKER_MIME_TYPE = 'application/x-tgsticker';
 export const VIDEO_STICKER_MIME_TYPE = VIDEO_WEBM_TYPE;
 
 export const SUPPORTED_PHOTO_CONTENT_TYPES = new Set([
-  'image/png', 'image/jpeg', GIF_MIME_TYPE,
+  'image/png', 'image/jpeg', 'image/webp', GIF_MIME_TYPE,
 ]);
 
 export const SUPPORTED_VIDEO_CONTENT_TYPES = new Set([

@@ -68,8 +68,12 @@ export const IS_VIDEO_RECORDING_SUPPORTED = Boolean(
   && 'captureStream' in HTMLCanvasElement.prototype
   // WebKit (Safari and all iOS browsers) canvas.captureStream produces invalid frames / can hang on stop
   && !IS_SAFARI && !IS_IOS
+  // Parvane: принимаем и webm — Firefox не пишет mp4, но пишет webm, а наш
+  // mediaRecorderEngine выбирает поддерживаемый формат (mp4→webm). Без webm
+  // кружочки были недоступны в Firefox.
   && (MediaRecorder.isTypeSupported(VIDEO_RECORDING_MIME_TYPE)
-    || MediaRecorder.isTypeSupported('video/mp4')),
+    || MediaRecorder.isTypeSupported('video/mp4')
+    || MediaRecorder.isTypeSupported('video/webm')),
 );
 export const IS_EMOJI_SUPPORTED = PLATFORM_ENV && (IS_MAC_OS || IS_IOS) && isLastEmojiVersionSupported();
 
@@ -82,7 +86,10 @@ export const IS_CANVAS_FILTER_SUPPORTED = (
   !IS_TEST && 'filter' in (document.createElement('canvas').getContext('2d') || {})
 );
 export const IS_REQUEST_FULLSCREEN_SUPPORTED = 'requestFullscreen' in document.createElement('div');
-export const ARE_CALLS_SUPPORTED = !IS_FIREFOX;
+// Parvane: звонки на СТАНДАРТНОМ WebRTC — Firefox их поддерживает. Апстрим
+// глушил звонки в Firefox (!IS_FIREFOX) из-за особенностей MTProto-звонков
+// Telegram; нам это не нужно, поэтому включаем везде, где есть RTCPeerConnection.
+export const ARE_CALLS_SUPPORTED = typeof RTCPeerConnection !== 'undefined';
 
 export const IS_WAVE_TRANSFORM_SUPPORTED = !IS_MOBILE
   && !IS_FIREFOX // https://bugzilla.mozilla.org/show_bug.cgi?id=1961378
