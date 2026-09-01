@@ -41,7 +41,7 @@ export class ParvaneStore {
 
   private uuidByMsgKey = new Map<string, string>();
 
-  private nextMsgIdByChatId = new Map<string, number>();
+  private usedMsgIdsByChatId = new Map<string, Set<number>>();
 
   getIdForAddress(address: string, kind: PeerKind = 'user'): string {
     const existingKind = this.kindByAddress.get(address);
@@ -108,11 +108,22 @@ export class ParvaneStore {
     return this.uuidByMsgKey.get(`${chatId}:${id}`);
   }
 
-  allocateMessageId(chatId: string, uuid: string): number {
+  // Числовой id сообщения ВЫВОДИТСЯ ИЗ ВРЕМЕНИ (date в секундах → мс), чтобы
+  // сортировка по id (как в tt) совпадала с сортировкой по времени. Иначе
+  // подтянутая позже история (напр. журнал звонков) со старыми датами получала
+  // бы большие «поздние» id и вставала в ленту после свежих сообщений (и ломала
+  // isViewportNewest → стрелка ↓). id — целые (tt считает локальными только
+  // дробные), уникальны в пределах чата, стабильны по uuid; всё in-memory и
+  // пересоздаётся из sync на каждом входе, поэтому смена схемы безопасна.
+  allocateMessageId(chatId: string, uuid: string, dateSecs?: number): number {
     const known = this.msgKeyByUuid.get(uuid);
     if (known) return known.id;
-    const id = this.nextMsgIdByChatId.get(chatId) || 1;
-    this.nextMsgIdByChatId.set(chatId, id + 1);
+    const base = Math.floor((dateSecs || Math.floor(Date.now() / 1000)) * 1000);
+    const used = this.usedMsgIdsByChatId.get(chatId) || new Set<number>();
+    let id = base;
+    while (used.has(id)) id++;
+    used.add(id);
+    this.usedMsgIdsByChatId.set(chatId, used);
     this.msgKeyByUuid.set(uuid, { chatId, id });
     this.uuidByMsgKey.set(`${chatId}:${id}`, uuid);
     return id;
@@ -222,7 +233,7 @@ export class ParvaneStore {
     const chatAddress = this.resolveChatAddress(stored);
     const chatKind = this.kindByAddress.get(chatAddress) || 'user';
     const chatId = this.getIdForAddress(chatAddress, chatKind);
-    const id = this.allocateMessageId(chatId, stored.id);
+    const id = this.allocateMessageId(chatId, stored.id, stored.ts);
     const isOutgoing = stored.from === this.self;
 
     const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;

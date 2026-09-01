@@ -121,7 +121,7 @@ export function createCallController(deps: CallDependencies) {
     const peer = isOutgoing ? record.callee : record.caller;
     if (!peer || peer === store.self || store.isGroupAddress(peer)) return undefined;
     const chatId = store.getIdForAddress(peer);
-    const id = store.allocateMessageId(chatId, record.call_id);
+    const id = store.allocateMessageId(chatId, record.call_id, record.started_at);
     const reason = record.status === 'missed' ? 'missed'
       : record.status === 'rejected' ? 'busy' : 'hangup';
     const duration = record.status === 'ended' && record.ended_at
