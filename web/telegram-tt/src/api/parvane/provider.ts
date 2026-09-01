@@ -1539,24 +1539,15 @@ function collectUsersFor(messages: ApiMessage[]): ApiUser[] {
 }
 
 function sendUpdate(update: ApiUpdate) {
-  // ВАЖЕН ПОРЯДОК: сперва сам newMessage, потом обновление lastMessageId.
-  // Если lastMessageId поднять ДО newMessage, selectIsViewportNewest станет
-  // false (последний id чата уже больше максимума в загруженном окне), и
-  // reducer newMessage НЕ добавит сообщение в viewport — оно не появится в
-  // ленте до ручной перезагрузки окна (стрелка ↓). Поэтому lastMessageId
-  // выставляем ПОСЛЕ, когда сообщение уже в окне и вьюпорт остаётся новейшим.
+  // Как в апстрим Telegram: lastMessageId/lastMessage выставляет САМ reducer
+  // newMessage (updateChatLastMessage) в правильном порядке — уже ПОСЛЕ
+  // updateListedAndViewportIds, которое добавляет сообщение в окно, пока
+  // isViewportNewest ещё истинно. Раньше мы слали отдельный updateThreadInfo с
+  // lastMessageId — он гонил reducer: если lastMessageId поднимался до/вместо
+  // штатного порядка, selectIsViewportNewest становился false и новое сообщение
+  // не попадало в загруженное окно (стрелка ↓, «сообщение не появляется»).
+  // Отдаём всё reducer'у — поведение 1:1 с Telegram.
   onUpdate(update);
-  if (update['@type'] === 'newMessage') {
-    onUpdate({
-      '@type': 'updateThreadInfo',
-      threadInfo: {
-        isCommentsInfo: false,
-        chatId: update.chatId,
-        threadId: MAIN_THREAD_ID,
-        lastMessageId: update.id,
-      },
-    });
-  }
 }
 
 // Пароль из login-link живёт только в памяти до первого connectAndLogin.
