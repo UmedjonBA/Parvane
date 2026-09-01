@@ -89,6 +89,57 @@ export class SecureE2eStorage {
   }
 }
 
+// ── «Keep me signed in»: пароль под тем же non-extractable AES-GCM, что и
+// E2E-состояние. Риск не растёт: у кого есть доступ выполнять JS в этом origin
+// и читать IndexedDB, у того и так уже E2E-ключи (= доступ ко всем сообщениям).
+// Отдельные id, чтобы не пересекаться с E2E-состоянием.
+function credKeyId(user: string) {
+  return `credkey:${user}`;
+}
+
+function credId(user: string) {
+  return `cred:${user}`;
+}
+
+function credAad(user: string) {
+  return encoder.encode(`parvane-cred-storage:${STORAGE_VERSION}:${user}`).buffer;
+}
+
+export async function saveSecureCredential(user: string, password: string) {
+  let protectionKey = await get<CryptoKey>(credKeyId(user), STORAGE);
+  if (!protectionKey) {
+    protectionKey = await generateProtectionKey();
+    await set(credKeyId(user), protectionKey, STORAGE);
+  }
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: credAad(user) },
+    protectionKey,
+    encoder.encode(password).buffer,
+  );
+  await set(credId(user), { version: STORAGE_VERSION, iv: iv.buffer, ciphertext } satisfies EncryptedRecord, STORAGE);
+}
+
+export async function loadSecureCredential(user: string): Promise<string | undefined> {
+  const record = await get<EncryptedRecord>(credId(user), STORAGE);
+  const protectionKey = await get<CryptoKey>(credKeyId(user), STORAGE);
+  if (!record || !protectionKey || record.version !== STORAGE_VERSION) return undefined;
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: record.iv, additionalData: credAad(user) },
+      protectionKey,
+      record.ciphertext,
+    );
+    return decoder.decode(plaintext);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function clearSecureCredential(user: string) {
+  await Promise.all([del(credId(user), STORAGE), del(credKeyId(user), STORAGE)]);
+}
+
 export const secureStorageInternals = {
   keyId,
   stateId,
