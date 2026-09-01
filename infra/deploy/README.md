@@ -20,10 +20,13 @@ double-relay через 3478 (оба пира через наш TURN). Когд�
 
 ## TLS
 
-Домена нет → Caddy `tls internal` (self-signed, браузер предупредит один раз).
-Let's Encrypt HTTP-01 невозможен (внешний порт не 80); при появлении
-DuckDNS-домена перейти на DNS-01 (нужен кастомный образ caddy с плагином).
-Без валидного серта не работают service worker/web-push — остальное работает.
+Настоящий серт Let's Encrypt на домен `parvane.duckdns.org` через ACME **DNS-01**
+(HTTP-01 невозможен — наружу проброшен не 80). Кастомный образ Caddy с плагином
+`caddy-dns/duckdns` (`Dockerfile.caddy`, собирается deploy.sh/локально), токен
+DuckDNS в серверном `.env` (`DUCKDNS_TOKEN`, НЕ в репо), домен в
+`PARVANE_PUBLIC_HOST`. Авто-обновление серта — сам Caddy. Домен резолвится на
+185.81.248.52 (обновляется на duckdns.org). Вход: `https://parvane.duckdns.org:20443`.
+Для деплоя без домена — заменить блок `tls {…}` в Caddyfile на `tls internal`.
 
 ## Деплой
 
@@ -42,11 +45,12 @@ SSE4.2/AVX — target-cpu=native даст SIGILL) и уезжают через `
 
 ## Проверка после деплоя
 
-- `https://185.81.248.52:20443` — веб-клиент (принять self-signed серт).
+- `https://parvane.duckdns.org:20443` — веб-клиент (серт Let's Encrypt, доверенный;
+  сайт под basic-auth — нужен пароль круга).
 - Smoke против прода:
   ```bash
-  PARVANE_E2E_BASE_URL=https://185.81.248.52:20443 \
-  PARVANE_E2E_GATEWAY_URL=wss://185.81.248.52:20443/ws \
+  PARVANE_E2E_BASE_URL=https://parvane.duckdns.org:20443 \
+  PARVANE_E2E_GATEWAY_URL=wss://parvane.duckdns.org:20443/ws \
   node scripts/e2e_web_prod_smoke.mjs
   ```
 - Логи: `ssh ... 'cd parvane && docker compose logs --tail 50 identity gateway caddy'`.
@@ -98,7 +102,7 @@ NATS и порты шардов НЕ опубликованы наружу, .env
 
 ## Функциональное тестирование против прода (2026-09-01) — ЗЕЛЁНОЕ
 
-Прогнаны реальные браузерные e2e ПРОТИВ https://185.81.248.52:20443
+Прогнаны реальные браузерные e2e ПРОТИВ https://parvane.duckdns.org:20443
 (scripts/run_prod_scenario.sh <сценарий> — добавляет --ignore-certificate-errors,
 берёт URL из env). PASS: smoke (текст/правка/реакция/пин/удаление/фото/превью/
 группа/reload), voice, media_kinds, content_features (стикеры/GIF/эмодзи/
@@ -137,8 +141,9 @@ docker compose up -d caddy
 
 ## Заметки
 
-- Регистрация ОТКРЫТА (PARVANE_EMAIL_REQUIRED/PARVANE_INVITE_REQUIRED не
-  включены) — для закрытого пузыря включить в compose у identity.
+- Регистрация ЗАКРЫТА паролем сайта (Caddy basic_auth, см. секцию выше) —
+  снаружи до регистрации доходит только круг с паролем. Флаги
+  PARVANE_EMAIL_REQUIRED/PARVANE_INVITE_REQUIRED не используются.
 - notes/calendar шарды не разворачиваются (к UI не подключены).
 - Desktop-клиенту нужен TCP-гейтвей — наружу не проброшен (только WS через
   Caddy); desktop против этого сервера пока не работает.
