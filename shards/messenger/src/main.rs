@@ -975,8 +975,13 @@ async fn fetch_missed_with_keys(
     }
     proven_keys.extend(extra_signing_keys.iter().map(String::as_str).filter(|key| !key.is_empty()));
     let keys_json = serde_json::to_string(&proven_keys).unwrap_or_else(|_| "[]".into());
-    // Два курсора: новые сообщения (`id > last_seen_id`) И мутации старых
-    // (`updated_at > since_updated`: правки, удаления, отметки о прочтении).
+    // Два курсора: новые сообщения (по `rowid` — монотонному порядку ВСТАВКИ,
+    // а не по строковому id) И мутации старых (`updated_at > since_updated`:
+    // правки, удаления, отметки о прочтении). rowid берём по last_seen_id:
+    // строковое сравнение id ломалось на всплеске (два id в одну мс различаются
+    // только рандом-битами → курсор перепрыгивал сообщение с меньшим id).
+    // last_seen_id клиента = максимальный УВИДЕННЫЙ id; при v7-id он совпадает
+    // с максимальным rowid, так что маппинг id→rowid корректен без правки клиента.
     // `read` считается подзапросом: есть ли receipt от получателя (to_user).
     type Row = (
         String,         // id
@@ -1022,8 +1027,9 @@ async fn fetch_missed_with_keys(
                 OR EXISTS(SELECT 1 FROM message_device_copies c
                            WHERE c.message_id = m.id
                              AND c.signing_key IN (SELECT value FROM json_each(?))))
-           AND (m.id > ? OR m.updated_at > ?)
-         ORDER BY m.updated_at, m.id
+           AND (m.rowid > COALESCE((SELECT rowid FROM messages WHERE id = ?), 0)
+                OR m.updated_at > ?)
+         ORDER BY m.rowid
          LIMIT 100",
     )
     .bind(user)
