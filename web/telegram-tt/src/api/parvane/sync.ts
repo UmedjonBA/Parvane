@@ -471,6 +471,15 @@ export function createSyncController(deps: SyncDependencies) {
       if (!message.isOutgoing && store.isMentionOfSelf(message)) {
         pushMentionState(message.chatId);
       }
+      // Первичный sync: pinnedIds наполняется ТОЛЬКО через updatePinnedIds, а не
+      // из message.isPinned — без этого закреплённые не восстанавливаются на
+      // свежем входе (панель пинов пуста до нового пина). Эмитим для уже
+      // закреплённых при первом появлении сообщения
+      if (flags.pinned) {
+        deps.sendUpdate({
+          '@type': 'updatePinnedIds', chatId: message.chatId, isPinned: true, messageIds: [message.id],
+        });
+      }
       if (flags.read && message.isOutgoing) noteReadOutbox(message);
       if (stored.content.ttl_secs) {
         deps.localState.scheduleTtlDeletion(message.chatId, message.id, stored.content.ttl_secs);
