@@ -1,0 +1,24 @@
+# Все Rust-шарды Parvane в одном образе (каждый сервис compose запускает свой бинарь).
+# Контекст сборки — корень репозитория, ignorefile — shards.dockerignore.
+# ВАЖНО: target-cpu=x86-64 (baseline) — прод-сервер m60-7 на Xeon 5160 без SSE4.2/AVX.
+
+FROM rust:1-bookworm AS builder
+WORKDIR /src
+ENV RUSTFLAGS="-C target-cpu=x86-64"
+COPY Cargo.toml Cargo.lock ./
+COPY shared ./shared
+COPY shards ./shards
+RUN cargo build --release --locked \
+    -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /src/target/release/identity /usr/local/bin/identity
+COPY --from=builder /src/target/release/messenger /usr/local/bin/messenger
+COPY --from=builder /src/target/release/cloud /usr/local/bin/cloud
+COPY --from=builder /src/target/release/call /usr/local/bin/call
+COPY --from=builder /src/target/release/preview /usr/local/bin/preview
+COPY --from=builder /src/target/release/push /usr/local/bin/push
+COPY --from=builder /src/target/release/gateway /usr/local/bin/gateway

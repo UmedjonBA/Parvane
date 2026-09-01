@@ -1,0 +1,32 @@
+# Caddy для Parvane на m60-7: статика web-клиента + WSS gateway по пути /ws.
+# Пока домена нет — self-signed (tls internal) на внешний IP; когда появится
+# DuckDNS-домен, адрес сайта и tls заменить на DNS-01.
+# Внешний вход: https://{PARVANE_PUBLIC_HOST}:20443 (NAT 20443 -> 443).
+
+{
+	# Заход по IP — браузер НЕ шлёт SNI; без default_sni Caddy не выбирает
+	# сертификат и рвёт handshake (tlsv1 alert internal error)
+	default_sni {$PARVANE_PUBLIC_HOST}
+	# Авто-редирект Caddy на :80 не знает про внешний порт 20443 —
+	# редиректим сами (сайт http://:80 ниже)
+	auto_https disable_redirects
+}
+
+{$PARVANE_PUBLIC_HOST}:443 {
+	tls internal
+
+	handle /ws {
+		reverse_proxy gateway:9222
+	}
+
+	handle {
+		root * /srv/dist
+		encode gzip
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+http://:80 {
+	redir https://{$PARVANE_PUBLIC_HOST}:{$PARVANE_PUBLIC_HTTPS_PORT}{uri}
+}

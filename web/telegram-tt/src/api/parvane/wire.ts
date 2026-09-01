@@ -211,3 +211,24 @@ export function buildWireEvent<T>(from: string, token: string, payload: T): Wire
     payload,
   };
 }
+
+// UUID v7 (48-битный unix-ms timestamp + рандом) — ВРЕМЕННО-УПОРЯДОЧЕННЫЙ id.
+// Критично для id СООБЩЕНИЙ: messenger ведёт sync-курсор `last_seen_id` строковым
+// сравнением `m.id > ?`, поэтому случайный v4 позволял курсору «перепрыгнуть»
+// сообщение с лексикографически меньшим id и больше его не отдавать. v7
+// монотонен по времени → строковый порядок совпадает с временным.
+export function newMessageId(): string {
+  const ts = Date.now();
+  const bytes = new Uint8Array(16);
+  bytes[0] = Math.floor(ts / 2 ** 40) & 0xff;
+  bytes[1] = Math.floor(ts / 2 ** 32) & 0xff;
+  bytes[2] = Math.floor(ts / 2 ** 24) & 0xff;
+  bytes[3] = Math.floor(ts / 2 ** 16) & 0xff;
+  bytes[4] = Math.floor(ts / 2 ** 8) & 0xff;
+  bytes[5] = ts & 0xff;
+  crypto.getRandomValues(bytes.subarray(6));
+  bytes[6] = (bytes[6] & 0x0f) | 0x70; // версия 7
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // вариант RFC 4122
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}

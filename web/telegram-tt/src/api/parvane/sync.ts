@@ -78,6 +78,20 @@ export function createSyncController(deps: SyncDependencies) {
     };
   }
 
+  // FNV-1a 32-бит от полного шифртекста: по нему decCache отличает «тот же ct,
+  // что уже расшифрован» от нового ct после правки. Без этого delta-строка
+  // отредактированного sealed-сообщения пыталась расшифроваться повторно
+  // (Olm-ратчет ct уже потребил), падала и ПРОПУСКАЛАСЬ вместе с флагами
+  // (пин/прочтение/реакции у собеседника). Паритет с desktop (FNV полного ct)
+  function hashCiphertext(ciphertext: string): string {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < ciphertext.length; i++) {
+      hash ^= ciphertext.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return (hash >>> 0).toString(16);
+  }
+
   const buildWireFlags = (stored: WireStoredMessage): WireFlags => ({
     read: Boolean(stored.read),
     deleted: Boolean(stored.deleted),
@@ -158,7 +172,9 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (content.kind !== 'encrypted') return { stored, wasSealed: false };
-    if (cached && (!stored.edited || cached.from === store.self)) {
+    const sameCiphertext = Boolean(cached?.ctHash && content.ciphertext
+      && cached.ctHash === hashCiphertext(content.ciphertext));
+    if (cached && (!stored.edited || cached.from === store.self || sameCiphertext)) {
       deps.media.rememberKeys(cached.content as WireMessageContent);
       return {
         stored: { ...stored, from: cached.from, content: cached.content as WireMessageContent },
@@ -202,7 +218,12 @@ export function createSyncController(deps: SyncDependencies) {
       }
       // Кэшируем вместе с sender_identity — для показа сообщение ещё должно
       // пройти проверку аутентичности отправителя в `applyStoredUpdate`
-      e2e.cacheInner(stored.id, { from: inner.from, content: inner.content, senderIdentity: content.sender_identity });
+      e2e.cacheInner(stored.id, {
+        from: inner.from,
+        content: inner.content,
+        senderIdentity: content.sender_identity,
+        ctHash: content.ciphertext ? hashCiphertext(content.ciphertext) : undefined,
+      });
       deps.media.rememberKeys(inner.content);
       return {
         stored: { ...stored, from: inner.from, content: inner.content },

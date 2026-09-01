@@ -24,10 +24,13 @@ type PendingRequest = {
 
 export function getGatewayUrl() {
   // Страница на https обязана ходить в gateway по wss (mixed content всё равно
-  // блокируется браузером); prod-раскладка — wss на том же хосте за реверс-прокси
+  // блокируется браузером); prod-раскладка — wss на том же origin за
+  // реверс-прокси по пути /ws (наружу проброшен один порт)
   const isSecurePage = window.location.protocol === 'https:';
   return localStorage.getItem(GATEWAY_URL_STORAGE_KEY)
-    || `${isSecurePage ? 'wss' : 'ws'}://${window.location.hostname}:9222`;
+    || (isSecurePage
+      ? `wss://${window.location.host}/ws`
+      : `ws://${window.location.hostname}:9222`);
 }
 
 export class GatewayConnection {

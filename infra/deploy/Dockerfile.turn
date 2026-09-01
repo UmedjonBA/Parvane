@@ -1,0 +1,9 @@
+# TURN/STUN сервер Parvane (pion, userspace). Контекст сборки — infra/turn.
+FROM golang:1-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum main.go ./
+RUN CGO_ENABLED=0 GOAMD64=v1 go build -o /parvane-turn .
+
+FROM alpine:3
+COPY --from=builder /parvane-turn /usr/local/bin/parvane-turn
+ENTRYPOINT ["/usr/local/bin/parvane-turn"]

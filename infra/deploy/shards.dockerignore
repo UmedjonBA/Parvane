@@ -1,0 +1,10 @@
+*
+!Cargo.toml
+!Cargo.lock
+!shared
+!shards
+**/.env
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/target
