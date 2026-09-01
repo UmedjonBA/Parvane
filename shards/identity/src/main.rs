@@ -1317,11 +1317,29 @@ fn rate_ok(user: &str) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static LIMITER: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    // Глобальный кэп поверх пер-логин: пер-логин лимит НЕ мешает спаму РАЗНЫМИ
+    // логинами (каждый — свой bucket). Глобальный ловит массовую саморегистрацию
+    // (в закрытом режиме за basic-auth это ещё и защита при утечке пароля сайта).
+    static GLOBAL: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
     let limit: usize = std::env::var("PARVANE_REGISTER_RATE")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
+    let global_limit: usize = std::env::var("PARVANE_REGISTER_RATE_GLOBAL")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
     let now = now_unix();
+
+    let gmap = GLOBAL.get_or_init(|| Mutex::new(Vec::new()));
+    {
+        let mut g = gmap.lock().unwrap();
+        g.retain(|&t| now - t < 60);
+        if g.len() >= global_limit {
+            return false;
+        }
+    }
+
     let map = LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap();
     let hits = guard.entry(user.to_string()).or_default();
@@ -1330,6 +1348,8 @@ fn rate_ok(user: &str) -> bool {
         return false;
     }
     hits.push(now);
+    // Успешную попытку учитываем и в глобальном счётчике
+    gmap.lock().unwrap().push(now);
     true
 }
 
