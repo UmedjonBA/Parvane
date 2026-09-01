@@ -15,6 +15,15 @@
 {$PARVANE_PUBLIC_HOST}:443 {
 	tls internal
 
+	# Приватный круг: basic-auth на ВЕСЬ сайт, включая /ws — иначе регистрацию
+	# можно было бы дёрнуть напрямую по WebSocket мимо пароля. Браузер после
+	# ввода пароля кэширует его для origin и подставляет в т.ч. в WS-хендшейк.
+	# Юзер/хэш — из .env (PARVANE_SITE_USER / PARVANE_SITE_HASH, bcrypt).
+	# Пусто = гейт выключен (открытый режим).
+	basic_auth {
+		{$PARVANE_SITE_USER:parvane} {$PARVANE_SITE_HASH}
+	}
+
 	handle /ws {
 		reverse_proxy gateway:9222
 	}

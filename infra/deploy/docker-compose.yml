@@ -117,6 +117,9 @@ services:
     environment:
       PARVANE_PUBLIC_HOST: ${PARVANE_PUBLIC_HOST}
       PARVANE_PUBLIC_HTTPS_PORT: ${PARVANE_PUBLIC_HTTPS_PORT}
+      # Basic-auth приватного круга (bcrypt). Пусто/не задано в Caddyfile = гейт off
+      PARVANE_SITE_USER: ${PARVANE_SITE_USER:-parvane}
+      PARVANE_SITE_HASH: ${PARVANE_SITE_HASH:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./web-dist:/srv/dist:ro
