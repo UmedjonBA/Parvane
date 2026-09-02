@@ -3,7 +3,8 @@ import type { ApiMessage } from '../types';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
-import { decryptBlob, encryptBlob } from './blobcrypt';
+import { diagLog } from '../../util/parvaneDiag';
+import { decryptBlob, decryptRange, encryptBlob } from './blobcrypt';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import {
@@ -12,6 +13,7 @@ import {
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
   TOPIC_PREVIEW_FETCH,
+  TOPIC_PREVIEW_MAP_TILE,
   type WireMessageContent,
 } from './wire';
 
@@ -34,6 +36,8 @@ type WireDownloadChunk = {
   data?: string;
   mime_type?: string;
   error?: string;
+  size_bytes?: number;
+  chunk_bytes?: number;
 };
 
 type CachedMedia = { blob: Blob; mimeType: string } | undefined;
@@ -42,6 +46,15 @@ const UPLOAD_CHUNK_BYTES = 192 * 1024;
 const MEDIA_TIMEOUT_MS = 30000;
 const MEDIA_URL_REGEX = /^(?:photo|document)([\w-]+?)(?:\?|$)/;
 const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
+// Статичная карта геолокации: tt просит `staticMap:<hash>?lat&long&w&h&zoom&scale`
+// (Telegram отдаёт картинку со своего сервера). Мы склеиваем OSM-тайлы,
+// полученные через шард preview (наружу ходит сервер, а не браузер)
+const MAP_TILE_SIZE = 256;
+// Range-стриминг: кэш шифртекст-чанков на файл (сколько держим в памяти)
+const RANGE_CHUNK_CACHE_LIMIT = 96;
+const GCM_TAG_BYTES = 16;
+const MAP_TILE_TIMEOUT_MS = 15000;
+const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
 
 function encodeBase64(bytes: Uint8Array) {
@@ -146,6 +159,90 @@ export function createMediaService(deps: MediaDependencies) {
     return { fileId, size: blob.size, mediaKeys };
   }
 
+  // ── range-стриминг (прогрессивное видео) ─────────────────────────────────
+  // Service worker просит байты [start,end]; качаем только нужные чанки
+  // (chunk_from/chunk_to), дешифруем окно AES-CTR по смещению GCM-потока.
+  // Метаданные (размер, размер чанка) приходят с любым чанком — берём с
+  // первого запроса
+  type FileMeta = { sizeBytes: number; chunkBytes: number; totalChunks: number; mimeType: string };
+  const metaByFileId = new Map<string, FileMeta>();
+  const chunkCacheByFileId = new Map<string, Map<number, Uint8Array>>();
+
+  function rememberChunk(fileId: string, index: number, bytes: Uint8Array) {
+    let cache = chunkCacheByFileId.get(fileId);
+    if (!cache) {
+      cache = new Map();
+      chunkCacheByFileId.set(fileId, cache);
+    }
+    cache.set(index, bytes);
+    if (cache.size > RANGE_CHUNK_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+  }
+
+  async function fetchChunkRange(fileId: string, from: number, to: number) {
+    const store = deps.getStore();
+    const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId, chunk_from: from, chunk_to: to });
+    const replies = await requireConnection().requestMany(TOPIC_FILE_DOWNLOAD_REQUEST, JSON.stringify(event));
+    const chunks = replies
+      .map((reply) => JSON.parse(reply) as WireDownloadChunk)
+      .filter((chunk) => chunk.ok && chunk.data !== undefined && chunk.chunk_index !== undefined);
+    chunks.forEach((chunk) => {
+      if (!metaByFileId.has(fileId) && chunk.size_bytes && chunk.chunk_bytes && chunk.total_chunks) {
+        metaByFileId.set(fileId, {
+          sizeBytes: chunk.size_bytes,
+          chunkBytes: chunk.chunk_bytes,
+          totalChunks: chunk.total_chunks,
+          mimeType: chunk.mime_type || mimeByFileId.get(fileId) || 'application/octet-stream',
+        });
+      }
+      rememberChunk(fileId, chunk.chunk_index!, decodeBase64(chunk.data!));
+    });
+    return chunks.length > 0;
+  }
+
+  async function downloadRange(fileId: string, start: number, end: number | undefined) {
+    const keys = keysByFileId.get(fileId);
+    if (!keys) return undefined;
+    if (!metaByFileId.has(fileId)) await fetchChunkRange(fileId, 0, 0);
+    const meta = metaByFileId.get(fileId);
+    if (!meta || !meta.chunkBytes) return undefined;
+    const fullSize = meta.sizeBytes - GCM_TAG_BYTES;
+    if (fullSize <= 0 || start >= fullSize) return undefined;
+    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1);
+    const alignedStart = Math.floor(start / 16) * 16;
+    const chunkFrom = Math.floor(alignedStart / meta.chunkBytes);
+    const chunkTo = Math.floor(lastByte / meta.chunkBytes);
+    const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
+    let missingFrom: number | undefined;
+    for (let index = chunkFrom; index <= chunkTo; index++) {
+      if (!cache.has(index)) {
+        missingFrom = index;
+        break;
+      }
+    }
+    if (missingFrom !== undefined) {
+      const fetched = await fetchChunkRange(fileId, missingFrom, chunkTo);
+      if (!fetched) return undefined;
+    }
+    const cached = chunkCacheByFileId.get(fileId)!;
+    const window = new Uint8Array(lastByte - alignedStart + 1);
+    for (let index = chunkFrom; index <= chunkTo; index++) {
+      const bytes = cached.get(index);
+      if (!bytes) return undefined;
+      const chunkStart = index * meta.chunkBytes;
+      const copyFrom = Math.max(alignedStart, chunkStart);
+      const copyTo = Math.min(lastByte, chunkStart + bytes.length - 1);
+      if (copyTo < copyFrom) continue;
+      window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - alignedStart);
+    }
+    const plain = await decryptRange(window, keys.keyB64, keys.nonceB64, alignedStart);
+    if (!plain) return undefined;
+    const slice = plain.slice(start - alignedStart);
+    return { arrayBuffer: slice.buffer, mimeType: meta.mimeType, fullSize };
+  }
+
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
     const store = deps.getStore();
     const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId });
@@ -184,9 +281,18 @@ export function createMediaService(deps: MediaDependencies) {
     if (normalizedUrl.startsWith('document') && /[?&]size=/.test(normalizedUrl)) {
       return Promise.resolve(undefined);
     }
+    if (normalizedUrl.startsWith('staticMap:')) {
+      if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT) return Promise.resolve(undefined);
+      return renderStaticMap(normalizedUrl);
+    }
     const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
     if (!fileId) return Promise.resolve(undefined);
 
+    // Прогрессивный плеер: качаем окно, а не файл целиком (кроме уже
+    // скачанных целиком — тогда режем локальный блоб)
+    if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT && !cacheByFileId.has(fileId) && keysByFileId.has(fileId)) {
+      return downloadRange(fileId, start || 0, end);
+    }
     let cached = cacheByFileId.get(fileId);
     if (!cached) {
       cached = downloadBlob(fileId);
@@ -202,6 +308,92 @@ export function createMediaService(deps: MediaDependencies) {
       }
       return { dataBlob: result.blob, mimeType: result.mimeType };
     });
+  }
+
+  const tileCache = new Map<string, Promise<ImageBitmap | undefined>>();
+
+  function fetchTile(z: number, x: number, y: number): Promise<ImageBitmap | undefined> {
+    const key = `${z}/${x}/${y}`;
+    let cached = tileCache.get(key);
+    if (cached) return cached;
+    cached = (async () => {
+      const store = deps.getStore();
+      // Один повтор: шард мог не успеть (проверка токена/сеть) — серый тайл хуже паузы
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const event = buildWireEvent(store.self, deps.getToken(), { z, x, y });
+        const raw = await requireConnection()
+          .request(TOPIC_PREVIEW_MAP_TILE, JSON.stringify(event), MAP_TILE_TIMEOUT_MS)
+          .catch((error: unknown) => {
+            diagLog('map', `tile ${key}: ${error instanceof Error ? error.message : String(error)}`);
+            return undefined;
+          });
+        const parsed = raw ? JSON.parse(raw) as { ok?: boolean; png_base64?: string; error?: string } : undefined;
+        if (parsed?.ok && parsed.png_base64) {
+          const bytes = Uint8Array.from(atob(parsed.png_base64), (c) => c.charCodeAt(0));
+          return createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        }
+        diagLog('map', `tile ${key}: ${parsed?.error || 'empty'}`);
+        await new Promise((resolve) => {
+          setTimeout(resolve, MAP_TILE_RETRY_MS);
+        });
+      }
+      return undefined;
+    })();
+    tileCache.set(key, cached);
+    cached.then((bitmap) => {
+      if (!bitmap) tileCache.delete(key);
+    }).catch(() => tileCache.delete(key));
+    return cached;
+  }
+
+  async function renderStaticMap(url: string): Promise<{ dataBlob: Blob; mimeType: string } | undefined> {
+    const params = new URLSearchParams(url.slice(url.indexOf('?') + 1));
+    const lat = Number(params.get('lat'));
+    const long = Number(params.get('long'));
+    const width = Number(params.get('w')) || 400;
+    const height = Number(params.get('h')) || 300;
+    const zoom = Math.min(19, Math.max(0, Math.round(Number(params.get('zoom')) || 16)));
+    const scale = Math.min(3, Math.max(1, Number(params.get('scale')) || 1));
+    if (!Number.isFinite(lat) || !Number.isFinite(long)) return undefined;
+    // Web Mercator: центр в «тайловых пикселях»
+    const n = 2 ** zoom;
+    const latRad = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180;
+    const centerX = ((long + 180) / 360) * n * MAP_TILE_SIZE;
+    const centerY = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n * MAP_TILE_SIZE;
+    const left = centerX - width / 2;
+    const top = centerY - height / 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return undefined;
+    ctx.fillStyle = '#e8e6e1';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const tiles: Promise<void>[] = [];
+    for (let tx = Math.floor(left / MAP_TILE_SIZE); tx <= Math.floor((left + width) / MAP_TILE_SIZE); tx++) {
+      for (let ty = Math.floor(top / MAP_TILE_SIZE); ty <= Math.floor((top + height) / MAP_TILE_SIZE); ty++) {
+        if (ty < 0 || ty >= n) continue;
+        const wrappedX = ((tx % n) + n) % n;
+        tiles.push(fetchTile(zoom, wrappedX, ty).then((bitmap) => {
+          if (!bitmap) return;
+          ctx.drawImage(
+            bitmap,
+            Math.round((tx * MAP_TILE_SIZE - left) * scale),
+            Math.round((ty * MAP_TILE_SIZE - top) * scale),
+            Math.ceil(MAP_TILE_SIZE * scale),
+            Math.ceil(MAP_TILE_SIZE * scale),
+          );
+        }).catch((error: unknown) => {
+          diagLog('map', `tile error: ${error instanceof Error ? error.message : String(error)}`);
+        }));
+      }
+    }
+    await Promise.all(tiles);
+    diagLog('map', `rendered ${tiles.length} tiles for ${lat.toFixed(3)},${long.toFixed(3)} z${zoom}`);
+    const blob = await new Promise<Blob | undefined>((resolve) => {
+      canvas.toBlob((result) => resolve(result || undefined), 'image/png');
+    });
+    return blob ? { dataBlob: blob, mimeType: 'image/png' } : undefined;
   }
 
   function rememberKeys(content: WireMessageContent) {

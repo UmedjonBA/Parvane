@@ -9,7 +9,7 @@ import type { createMediaService } from './media';
 import type { PollStore } from './polls';
 import type { ParvaneStore } from './store';
 import type { createSyncController } from './sync';
-import { MAIN_THREAD_ID } from '../types';
+import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
 import {
   deliverToEveryGroupMember,
@@ -25,7 +25,10 @@ import {
   type SavedGifRecord,
   storeSavedGifRecords,
 } from './gifs';
-import { buildPvpkArchive, findInstalledPackBySetId, isCustomPackSetId } from './stickerPacks';
+import {
+  buildPvpkArchive, findInstalledPackBySetId, getEmojiSetIdForDocId, isCustomPackSetId,
+} from './stickerPacks';
+import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
 import {
   buildWireEvent,
   newMessageId,
@@ -34,6 +37,7 @@ import {
   TOPIC_MSG_PIN,
   TOPIC_MSG_REACT,
   TOPIC_MSG_READ,
+  TOPIC_MSG_READERS,
   TOPIC_MSG_SEND,
   TOPIC_PREKEYS_FETCH,
   type WireDeviceCopy,
@@ -44,6 +48,7 @@ import {
 type MessageDependencies = {
   getConnection: () => GatewayConnection | undefined;
   getE2e: () => E2eEngine | undefined;
+  awaitE2e: () => Promise<void>;
   getStore: () => ParvaneStore;
   getToken: () => string;
   localState: ReturnType<typeof createLocalState>;
@@ -63,6 +68,10 @@ const EXT_BY_STICKER_MIME: Record<string, string> = {
   'video/webm': 'webm',
   'application/x-tgsticker': 'tgs',
 };
+
+const LIVE_LOCATION_UPDATE_MS = 15000;
+const EMOJI_PACKS_PER_MESSAGE = 4;
+const LIVE_LOCATION_POSITION_TIMEOUT_MS = 10000;
 
 export function createMessageController(deps: MessageDependencies) {
   const uuidBySentLocalKey = new Map<string, string>();
@@ -216,6 +225,7 @@ export function createMessageController(deps: MessageDependencies) {
     wireContent: Record<string, unknown>,
     uuid = newMessageId(),
   ) {
+    await deps.awaitE2e();
     const currentStore = store();
     const ts = Math.floor(Date.now() / 1000);
     const engine = requireE2e(deps.getE2e());
@@ -386,10 +396,32 @@ export function createMessageController(deps: MessageDependencies) {
 
   // Архив пака грузится в cloud один раз за сессию; получатель по pack_ref
   // сможет установить весь набор (конвенция desktop-форка)
+  // Кастом-эмодзи в тексте (entity custom_emoji → docId → пак): приложить
+  // pack_ref паков, чтобы получатель (web/desktop) материализовал их. Лимит и
+  // формат — как в desktop BuildEmojiPacks
+  async function buildEmojiPackRefs(
+    entities: ApiMessageEntity[] | undefined, toAddress: string,
+  ): Promise<WirePackRef[]> {
+    const setIds = new Set<string>();
+    (entities || []).forEach((entity) => {
+      if (entity.type !== ApiMessageEntityTypes.CustomEmoji || !entity.documentId) return;
+      const setId = getEmojiSetIdForDocId(entity.documentId);
+      if (setId) setIds.add(setId);
+    });
+    const refs: WirePackRef[] = [];
+    for (const setId of Array.from(setIds).slice(0, EMOJI_PACKS_PER_MESSAGE)) {
+      const ref = await buildPackRefForSet(setId, toAddress);
+      if (ref) refs.push(ref);
+    }
+    return refs;
+  }
+
   async function buildPackRefForSet(setId: string, toAddress: string): Promise<WirePackRef | undefined> {
     const cachedRef = uploadedPackRefBySetId.get(setId);
     if (cachedRef) return cachedRef;
-    const pack = await findInstalledPackBySetId(store().self, setId);
+    const pack = setId === getBuiltinEmojiSetId()
+      ? await buildBuiltinEmojiPack()
+      : await findInstalledPackBySetId(store().self, setId);
     if (!pack) return undefined;
     const archive = buildPvpkArchive(pack.files);
     if (!archive) return undefined;
@@ -583,6 +615,7 @@ export function createMessageController(deps: MessageDependencies) {
 
     let engine: E2eEngine;
     try {
+      await deps.awaitE2e();
       engine = requireE2e(deps.getE2e());
     } catch (error) {
       reportEncryptionSendFailure(chat.id, localMessage.id, error);
@@ -596,12 +629,14 @@ export function createMessageController(deps: MessageDependencies) {
     // Богатое превью тянем с шарда (SSRF-safe); короткий дедлайн, деградация к
     // hostname. При noWebPage наружу не ходим вовсе
     const webpage = params.noWebPage ? undefined : await deps.media.fetchWebPagePreview(params.text);
+    const emojiPacks = await buildEmojiPackRefs(params.entities, toAddress);
     let wireContent: Record<string, unknown> = {
       kind: 'text',
       text: params.text || '',
       entities: apiEntitiesToWire(params.entities),
       webpage,
       ttl_secs: ttlSecs || undefined,
+      emoji_packs: emojiPacks.length ? emojiPacks : undefined,
     };
     let sentContent = localMessage.content;
     if (attachment) {
@@ -847,6 +882,181 @@ export function createMessageController(deps: MessageDependencies) {
     if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, localMessage.id, ttlSecs);
   }
 
+  async function requestReaders(chatId: string, messageId: number) {
+    const currentStore = store();
+    const uuid = currentStore.getUuidForMessage(chatId, messageId);
+    const conn = connection();
+    if (!uuid || !conn) return undefined;
+    try {
+      const raw = await conn.request(TOPIC_MSG_READERS, JSON.stringify(
+        buildWireEvent(currentStore.self, token(), { message_id: uuid }),
+      ));
+      const parsed = JSON.parse(raw) as { ok?: boolean; readers?: { address: string; ts: number }[] };
+      return parsed.ok ? (parsed.readers || []) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Правка содержимого сообщения на проводе (msg.chat.edit): шифрует новый
+  // inner для группы/лички, подписывает и обновляет decCache. Общий путь для
+  // правки текста/подписи и для обновлений live-локации
+  async function publishEditedContent(uuid: string, toAddress: string, plainContent: WireMessageContent) {
+    const currentStore = store();
+    const activeConnection = connection();
+    if (!activeConnection) return;
+    await deps.awaitE2e();
+    const engine = requireE2e(deps.getE2e());
+    let encryptedContent: WireMessageContent;
+    let editCopies: WireDeviceCopy[] = [];
+    const groupInfo = currentStore.getGroupInfo(toAddress);
+    if (groupInfo) {
+      const epoch = await distributeGroupKey(
+        toAddress,
+        getActiveGroupMemberAddresses(groupInfo.members),
+      );
+      const ciphertext = requireEncrypted(
+        await engine.groupEncrypt(toAddress, JSON.stringify(plainContent), epoch),
+        `Group encryption failed for ${toAddress}.`,
+      );
+      encryptedContent = {
+        kind: 'group_encrypted',
+        ciphertext,
+        group: toAddress,
+        sender_identity: engine.identityKey,
+        sender_signing_key: engine.signingKey,
+      };
+    } else {
+      const inner = JSON.stringify({ from: currentStore.self, content: plainContent });
+      const sealed = await sealForAddress(toAddress, inner);
+      encryptedContent = sealed.content;
+      editCopies = sealed.copies;
+    }
+    const signature = engine.signCallData(`edit:${uuid}:${encryptedContent.ciphertext}`);
+    activeConnection.publish(TOPIC_MSG_EDIT, JSON.stringify(
+      buildWireEvent(currentStore.self, token(), {
+        message_id: uuid, content: encryptedContent, signature, copies: editCopies,
+      }),
+    ));
+    engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
+  }
+
+  // ── Live-локация ─────────────────────────────────────────────────────────
+  // Как в Telegram: одно сообщение geoLive, позиция обновляется правками того
+  // же сообщения, пока не истечёт period или пользователь не остановит.
+  // Активные трансляции персистятся (localStorage) и возобновляются после
+  // reload, пока не истёк срок
+  type LiveLocationEntry = {
+    chatId: string; messageId: number; uuid: string; toAddress: string; date: number; period: number;
+  };
+  const liveLocations = new Map<string, LiveLocationEntry & { timer?: ReturnType<typeof setInterval> }>();
+
+  function liveLocationsStorageKey() {
+    return `parvane:livelocs:${store().self}`;
+  }
+
+  function persistLiveLocations() {
+    try {
+      const entries = Array.from(liveLocations.values()).map(({ timer, ...entry }) => entry);
+      localStorage.setItem(liveLocationsStorageKey(), JSON.stringify(entries));
+    } catch {
+      // приватный режим / квота — трансляция живёт только в памяти
+    }
+  }
+
+  function readPosition(): Promise<{ lat: number; long: number; heading?: number; accuracy?: number } | undefined> {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve(undefined);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({
+          lat: pos.coords.latitude,
+          long: pos.coords.longitude,
+          heading: typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)
+            ? Math.round(pos.coords.heading) : undefined,
+          accuracy: pos.coords.accuracy ? Math.round(pos.coords.accuracy) : undefined,
+        }),
+        () => resolve(undefined),
+        { enableHighAccuracy: true, timeout: LIVE_LOCATION_POSITION_TIMEOUT_MS, maximumAge: 5000 },
+      );
+    });
+  }
+
+  async function publishLivePosition(
+    entry: LiveLocationEntry,
+    position: { lat: number; long: number; heading?: number; accuracy?: number },
+    period: number,
+  ) {
+    const currentStore = store();
+    const ttlSecs = deps.localState.loadPeerTtl()[entry.toAddress];
+    const wireContent: WireMessageContent = {
+      kind: 'location',
+      lat: position.lat,
+      long: position.long,
+      live_period: period,
+      heading: position.heading,
+      accuracy: position.accuracy,
+      ttl_secs: ttlSecs || undefined,
+    };
+    await publishEditedContent(entry.uuid, entry.toAddress, wireContent);
+    const current = currentStore.getMessages(entry.chatId).find((m) => m.id === entry.messageId);
+    if (!current) return;
+    const edited: ApiMessage = {
+      ...current,
+      content: {
+        location: {
+          mediaType: 'geoLive',
+          geo: {
+            lat: position.lat, long: position.long, accessHash: '0', accuracyRadius: position.accuracy,
+          },
+          heading: position.heading,
+          period,
+        },
+      },
+      isEdited: true,
+      editDate: Math.floor(Date.now() / 1000),
+    };
+    currentStore.putMessage(edited);
+    deps.sendUpdate({
+      '@type': 'updateMessage', chatId: entry.chatId, id: entry.messageId, isFull: true, message: edited,
+    });
+  }
+
+  function finishLiveLocation(key: string) {
+    const entry = liveLocations.get(key);
+    if (entry?.timer) clearInterval(entry.timer);
+    liveLocations.delete(key);
+    persistLiveLocations();
+  }
+
+  async function tickLiveLocation(key: string) {
+    const entry = liveLocations.get(key);
+    if (!entry) return;
+    if (Math.floor(Date.now() / 1000) >= entry.date + entry.period) {
+      finishLiveLocation(key);
+      return;
+    }
+    const position = await readPosition();
+    if (!position || !liveLocations.has(key)) return;
+    try {
+      await publishLivePosition(entry, position, entry.period);
+    } catch (error) {
+      deps.log(`live-локация: обновление не отправлено — ${String(error)}`);
+    }
+  }
+
+  function startLiveLocation(entry: LiveLocationEntry) {
+    const key = `${entry.chatId}:${entry.messageId}`;
+    finishLiveLocation(key);
+    const timer = setInterval(() => {
+      void tickLiveLocation(key);
+    }, LIVE_LOCATION_UPDATE_MS);
+    liveLocations.set(key, { ...entry, timer });
+    persistLiveLocations();
+  }
+
   const methods = {
     fetchMessagesById({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
       const byId = new Map(store().getMessages(chat.id).map((message) => [message.id, message]));
@@ -873,38 +1083,7 @@ export function createMessageController(deps: MessageDependencies) {
       const plainContent: WireMessageContent = previous && previous.kind !== 'text'
         ? { ...previous, caption: text || undefined, entities: wireEntities }
         : { kind: 'text', text, entities: wireEntities };
-      let encryptedContent: WireMessageContent;
-      let editCopies: WireDeviceCopy[] = [];
-      const groupInfo = currentStore.getGroupInfo(toAddress);
-      if (groupInfo) {
-        const epoch = await distributeGroupKey(
-          toAddress,
-          getActiveGroupMemberAddresses(groupInfo.members),
-        );
-        const ciphertext = requireEncrypted(
-          await engine.groupEncrypt(toAddress, JSON.stringify(plainContent), epoch),
-          `Group encryption failed for ${toAddress}.`,
-        );
-        encryptedContent = {
-          kind: 'group_encrypted',
-          ciphertext,
-          group: toAddress,
-          sender_identity: engine.identityKey,
-          sender_signing_key: engine.signingKey,
-        };
-      } else {
-        const inner = JSON.stringify({ from: currentStore.self, content: plainContent });
-        const sealed = await sealForAddress(toAddress, inner);
-        encryptedContent = sealed.content;
-        editCopies = sealed.copies;
-      }
-      const signature = engine.signCallData(`edit:${uuid}:${encryptedContent.ciphertext}`);
-      activeConnection.publish(TOPIC_MSG_EDIT, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), {
-          message_id: uuid, content: encryptedContent, signature, copies: editCopies,
-        }),
-      ));
-      engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
+      await publishEditedContent(uuid, toAddress, plainContent);
       // Сохраняем медиа/вложение оригинала, обновляя только текст и entities
       const nextText = text ? { text, entities } : undefined;
       const edited: ApiMessage = {
@@ -980,6 +1159,27 @@ export function createMessageController(deps: MessageDependencies) {
       ));
       deps.sendUpdate({ '@type': 'updatePinnedIds', chatId: chat.id, isPinned: pin, messageIds: [messageId] });
       return Promise.resolve(undefined);
+    },
+
+    // «Seen by» в группах: список прочитавших с временем из read_receipts
+    // шарда (msg.chat.readers). Ключи — id пользователей tt, себя отбрасываем
+    async fetchSeenBy({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+      const readers = await requestReaders(chat.id, messageId);
+      if (!readers) return undefined;
+      const currentStore = store();
+      const result: Record<string, number> = {};
+      readers.forEach(({ address, ts }) => {
+        if (address === currentStore.self) return;
+        result[currentStore.getIdForAddress(address)] = ts;
+      });
+      return result;
+    },
+
+    // Время прочтения своего сообщения собеседником (1-1, пункт «read at»)
+    async fetchOutboxReadDate({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+      const readers = await requestReaders(chat.id, messageId);
+      const other = readers?.find(({ address }) => address !== store().self);
+      return other ? { date: other.ts } : undefined;
     },
 
     fetchPinnedMessages({ chat }: { chat: ApiChat }) {
@@ -1165,27 +1365,98 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
-    async parvaneSendLocation({ chat, lat, long }: { chat: ApiChat; lat: number; long: number }) {
+    // Геолокация: статичная точка или live (period в секундах) — тогда позиция
+    // обновляется правками этого же сообщения (см. startLiveLocation)
+    async parvaneSendLocation({
+      chat, lat, long, period, heading, accuracy,
+    }: {
+      chat: ApiChat; lat: number; long: number; period?: number; heading?: number; accuracy?: number;
+    }) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(chat.id);
       if (!toAddress) return undefined;
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       const uuid = await publishInner(toAddress, {
-        kind: 'location', lat, long, ttl_secs: ttlSecs || undefined,
+        kind: 'location',
+        lat,
+        long,
+        live_period: period || undefined,
+        heading: period ? heading : undefined,
+        accuracy: period ? accuracy : undefined,
+        ttl_secs: ttlSecs || undefined,
       });
       const id = currentStore.allocateMessageId(chat.id, uuid);
+      const date = Math.floor(Date.now() / 1000);
+      const geo = {
+        lat, long, accessHash: '0', accuracyRadius: period ? accuracy : undefined,
+      };
       const message: ApiMessage = {
         id,
         chatId: chat.id,
-        content: { location: { mediaType: 'geo', geo: { lat, long, accessHash: '0' } } },
-        date: Math.floor(Date.now() / 1000),
+        content: {
+          location: period
+            ? {
+              mediaType: 'geoLive', geo, heading, period,
+            }
+            : { mediaType: 'geo', geo },
+        },
+        date,
         isOutgoing: true,
         senderId: deps.selfId(),
       };
       currentStore.putMessage(message);
       deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
       if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
+      if (period) {
+        startLiveLocation({
+          chatId: chat.id, messageId: id, uuid, toAddress, date, period,
+        });
+      }
       return true;
+    },
+
+    // Остановить трансляцию: последняя правка с истёкшим period (как Telegram —
+    // сообщение остаётся, таймер и «live» гаснут у всех)
+    async parvaneStopLiveLocation({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+      const currentStore = store();
+      const message = currentStore.getMessages(chat.id).find((m) => m.id === messageId);
+      const location = message?.content.location;
+      const uuid = currentStore.getUuidForMessage(chat.id, messageId);
+      const toAddress = currentStore.getAddressForId(chat.id);
+      if (!message || !location || location.mediaType !== 'geoLive' || !uuid || !toAddress) return undefined;
+      const key = `${chat.id}:${messageId}`;
+      finishLiveLocation(key);
+      const expiredPeriod = Math.max(1, Math.floor(Date.now() / 1000) - message.date - 1);
+      await publishLivePosition(
+        {
+          chatId: chat.id, messageId, uuid, toAddress, date: message.date, period: location.period,
+        },
+        {
+          lat: location.geo.lat,
+          long: location.geo.long,
+          heading: location.heading,
+          accuracy: location.geo.accuracyRadius,
+        },
+        expiredPeriod,
+      );
+      return true;
+    },
+
+    // После логина: возобновить незавершённые трансляции этого аккаунта
+    parvaneResumeLiveLocations() {
+      let stored: LiveLocationEntry[];
+      try {
+        stored = JSON.parse(localStorage.getItem(liveLocationsStorageKey()) || '[]') as LiveLocationEntry[];
+      } catch {
+        stored = [];
+      }
+      const now = Math.floor(Date.now() / 1000);
+      stored.forEach((entry) => {
+        if (!entry || now >= entry.date + entry.period) return;
+        if (!liveLocations.has(`${entry.chatId}:${entry.messageId}`)) startLiveLocation(entry);
+      });
+      persistLiveLocations();
+      return Promise.resolve(undefined);
     },
   };
 

@@ -10,13 +10,14 @@ use parvane_types::{
     GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
     GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
     MessageContent, MessageDeviceCopy,
-    ParvaneEvent, PinPayload, ReactPayload, ReadPayload, SendPayload, StoredMessage,
+    ParvaneEvent, PinPayload, ReactPayload, ReadPayload, ReaderEntry, ReadersPayload,
+    ReadersResponse, SendPayload, StoredMessage,
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
         GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_DELETE, GROUP_INFO,
         GROUP_INVITE_CREATE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
         GROUP_RENAME, GROUP_SET_ROLE, GROUP_UNBAN,
-        IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_REACT, MSG_SEND,
+        IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
 };
@@ -65,6 +66,7 @@ async fn main() -> Result<()> {
     let mut send_sub = nc.subscribe(MSG_SEND).await?;
     let mut ack_sub = nc.subscribe(MSG_ACK).await?;
     let mut read_sub = nc.subscribe(MSG_READ).await?;
+    let mut readers_sub = nc.subscribe(MSG_READERS).await?;
     let mut edit_sub = nc.subscribe(MSG_EDIT).await?;
     let mut delete_sub = nc.subscribe(MSG_DELETE).await?;
     let mut react_sub = nc.subscribe(MSG_REACT).await?;
@@ -99,6 +101,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = read_sub.next() => {
                 handle_read(&nc, &pool, msg).await;
+            }
+            Some(msg) = readers_sub.next() => {
+                handle_readers(&nc, &pool, msg).await;
             }
             Some(msg) = edit_sub.next() => {
                 handle_edit(&nc, &pool, msg).await;
@@ -913,6 +918,44 @@ async fn is_conversation_participant(
 }
 
 /// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
+// ── msg.chat.readers ──────────────────────────────────────────────────────────
+
+/// Список прочитавших сообщение с временем прочтения («seen by» в группах,
+/// время прочтения в 1-1). Только участнику переписки; автор не исключается —
+/// клиент сам отбрасывает себя.
+async fn handle_readers(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let event: ParvaneEvent<ReadersPayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.readers")?;
+        let requester = verify_token(nc, &event.token).await?;
+        let mid = event.payload.message_id.to_string();
+        if !is_conversation_participant(pool, &mid, &requester).await? {
+            anyhow::bail!("не участник переписки");
+        }
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT reader, ts FROM read_receipts WHERE message_id = ? ORDER BY ts")
+                .bind(&mid)
+                .fetch_all(pool)
+                .await
+                .context("чтение read receipts")?;
+        anyhow::Ok(ReadersResponse {
+            ok: true,
+            readers: rows
+                .into_iter()
+                .map(|(address, ts)| ReaderEntry { address, ts })
+                .collect(),
+            error: None,
+        })
+    }
+    .await
+    .unwrap_or_else(|e| {
+        warn!("handle_readers: {}", e);
+        ReadersResponse { ok: false, readers: vec![], error: Some(e.to_string()) }
+    });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
 async fn store_read_receipt(
     pool: &SqlitePool,
     message_id: &str,

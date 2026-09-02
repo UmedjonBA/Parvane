@@ -60,7 +60,15 @@ export type WireMessageContent = {
   forwarded_name?: string;
   lat?: number;
   long?: number;
+  // Live-локация: период трансляции (сек от ts сообщения), курс, точность (м).
+  // Обновления позиции едут штатной правкой (msg.chat.edit) с тем же kind
+  live_period?: number;
+  heading?: number;
+  accuracy?: number;
   pack_ref?: WirePackRef;
+  // Кастом-эмодзи в тексте: паки, на которые ссылаются entity custom_emoji
+  // (data = docId, детерминированный от имени пака и файла — как в desktop)
+  emoji_packs?: WirePackRef[];
   // Опросы: агрегируются клиентами внутри E2E; correct/solution — quiz-режим.
   // options: string[] в kind=poll (варианты), number[] в kind=poll_vote (индексы)
   question?: string;
@@ -147,6 +155,7 @@ export const TOPIC_LINK_GRANT = 'identity.link.grant';
 export const TOPIC_MSG_SEND = 'msg.chat.send';
 export const TOPIC_MSG_ACK = 'msg.chat.ack';
 export const TOPIC_MSG_READ = 'msg.chat.read';
+export const TOPIC_MSG_READERS = 'msg.chat.readers';
 export const TOPIC_MSG_EDIT = 'msg.chat.edit';
 export const TOPIC_MSG_DELETE = 'msg.chat.delete';
 export const TOPIC_MSG_REACT = 'msg.chat.react';
@@ -166,6 +175,7 @@ export const TOPIC_GROUP_SET_ROLE = 'group.setrole';
 export const TOPIC_GROUP_RENAME = 'group.rename';
 export const TOPIC_GROUP_DELETE = 'group.delete';
 export const TOPIC_PREVIEW_FETCH = 'preview.link.fetch';
+export const TOPIC_PREVIEW_MAP_TILE = 'preview.map.tile';
 export const TOPIC_PUSH_VAPID_GET = 'push.vapid.get';
 export const TOPIC_PUSH_REGISTER = 'push.device.register';
 export const TOPIC_PUSH_UNREGISTER = 'push.device.unregister';

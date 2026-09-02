@@ -74,6 +74,7 @@ type OwnProps = {
   canQuote?: boolean;
   repliesThreadInfo?: ApiThreadInfo;
   canPin?: boolean;
+  canStopLiveLocation?: boolean;
   canUnpin?: boolean;
   canDelete?: boolean;
   canReport?: boolean;
@@ -113,6 +114,7 @@ type OwnProps = {
   onEdit?: NoneToVoidFunction;
   onAppendTodoList?: NoneToVoidFunction;
   onPin?: NoneToVoidFunction;
+  onStopLiveLocation?: NoneToVoidFunction;
   onUnpin?: NoneToVoidFunction;
   onForward?: NoneToVoidFunction;
   onDelete?: NoneToVoidFunction;
@@ -177,6 +179,7 @@ const MessageContextMenu: FC<OwnProps> = ({
   canAppendTodoList,
   noReplies,
   canPin,
+  canStopLiveLocation,
   canUnpin,
   canDelete,
   canForward,
@@ -211,6 +214,7 @@ const MessageContextMenu: FC<OwnProps> = ({
   onEdit,
   onAppendTodoList,
   onPin,
+  onStopLiveLocation,
   onUnpin,
   onForward,
   onDelete,
@@ -516,6 +520,9 @@ const MessageContextMenu: FC<OwnProps> = ({
           </MenuItem>
         ))}
         {canPin && <MenuItem icon="pin" onClick={onPin}>{oldLang('DialogPin')}</MenuItem>}
+        {canStopLiveLocation && (
+          <MenuItem icon="stop" onClick={onStopLiveLocation}>{oldLang('StopLiveLocation')}</MenuItem>
+        )}
         {canUnpin && <MenuItem icon="unpin" onClick={onUnpin}>{oldLang('DialogUnpin')}</MenuItem>}
         {canSaveGif && <MenuItem icon="gifs" onClick={onSaveGif}>{oldLang('lng_context_save_gif')}</MenuItem>}
         {canRevote && <MenuItem icon="revote" onClick={onCancelVote}>{oldLang('lng_polls_retract')}</MenuItem>}

@@ -84,7 +84,7 @@ try {
 
   // ── Геолокация: статичная точка ────────────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Location' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).click();
   await bobSession.page.locator('.Transition_slide-active > .MessageList .Message .Location')
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

@@ -43,6 +43,9 @@ pub mod topics {
     pub const MSG_DELETE: &str = "msg.chat.delete";
     pub const MSG_REACT: &str = "msg.chat.react";
     pub const MSG_PIN: &str = "msg.chat.pin";
+    /// Список прочитавших сообщение (группы: «seen by», 1-1: время прочтения).
+    /// Request/reply в reply-inbox; только участник переписки.
+    pub const MSG_READERS: &str = "msg.chat.readers";
     /// Клиент подтверждает получение сообщения из своего инбокса (Фаза 1):
     /// снимает его из офлайн-очереди и сообщает отправителю о доставке.
     pub const MSG_ACK: &str = "msg.chat.ack";
@@ -95,6 +98,9 @@ pub mod topics {
     /// Превью ссылки: клиент-отправитель просит OG-метаданные по URL, наружу
     /// ходит шард (не браузер), с SSRF-защитой.
     pub const PREVIEW_FETCH: &str = "preview.link.fetch";
+    /// Тайл карты (OSM) для статичной карты геолокации — шард ходит наружу
+    /// вместо клиента (приватность IP/координат), кэширует тайлы.
+    pub const PREVIEW_MAP_TILE: &str = "preview.map.tile";
 
     /// Web-push: публичный VAPID-ключ для pushManager.subscribe.
     pub const PUSH_VAPID_GET: &str = "push.vapid.get";
@@ -648,6 +654,28 @@ pub struct ReadPayload {
     pub message_id: Uuid,
 }
 
+/// Запрос списка прочитавших (msg.chat.readers). Несётся в `ParvaneEvent`
+/// (token в конверте), ответ — `ReadersResponse` в reply-inbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadersPayload {
+    pub message_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReaderEntry {
+    pub address: String,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadersResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub readers: Vec<ReaderEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Редактирование уже отправленного текстового сообщения. Только автор.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditPayload {
@@ -816,6 +844,11 @@ pub struct UploadCompleteResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadRequest {
     pub file_id: Uuid,
+    /// Range-стриминг: диапазон чанков (включительно). Без него — весь файл.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_from: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_to: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -828,6 +861,12 @@ pub struct DownloadResponse {
     pub total_chunks: Option<u32>,
     pub data: Option<String>, // base64
     pub error: Option<String>,
+    /// Размер файла (байт шифртекста) и размер чанка — чтобы клиент считал
+    /// смещения при range-стриминге, не скачивая файл целиком.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_bytes: Option<u32>,
 }
 
 /// Один файл в облаке.
@@ -1227,6 +1266,26 @@ pub struct PreviewFetchRequest {
     #[serde(default)]
     pub token: String,
     pub url: String,
+}
+
+/// Запрос тайла карты `preview.map.tile` (Web Mercator z/x/y, как у OSM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapTileRequest {
+    #[serde(default)]
+    pub token: String,
+    pub z: u32,
+    pub x: u32,
+    pub y: u32,
+}
+
+/// Ответ на `preview.map.tile`: PNG тайла в base64 (или `error`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapTileResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub png_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Ответ на `preview.link.fetch`. При `ok=false` — `error` c причиной отказа.

@@ -42,6 +42,7 @@ const MESSENGER_BINDINGS: &[(&str, &str)] = &[
     ("MSG_SEND", MSG_SEND),
     ("MSG_ACK", MSG_ACK),
     ("MSG_READ", MSG_READ),
+    ("MSG_READERS", MSG_READERS),
     ("MSG_EDIT", MSG_EDIT),
     ("MSG_DELETE", MSG_DELETE),
     ("MSG_REACT", MSG_REACT),
@@ -89,7 +90,10 @@ const CALENDAR_BINDINGS: &[(&str, &str)] = &[
     ("CAL_SYNC_REQUEST", CAL_SYNC_REQUEST),
 ];
 
-const PREVIEW_BINDINGS: &[(&str, &str)] = &[("PREVIEW_FETCH", PREVIEW_FETCH)];
+const PREVIEW_BINDINGS: &[(&str, &str)] = &[
+    ("PREVIEW_FETCH", PREVIEW_FETCH),
+    ("PREVIEW_MAP_TILE", PREVIEW_MAP_TILE),
+];
 
 const PUSH_BINDINGS: &[(&str, &str)] = &[
     ("PUSH_VAPID_GET", PUSH_VAPID_GET),

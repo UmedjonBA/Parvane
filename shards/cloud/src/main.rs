@@ -277,6 +277,8 @@ struct LoadedFile {
     filename: String,
     mime_type: String,
     total_chunks: i64,
+    size_bytes: i64,
+    chunk_bytes: i64,
     chunks: Vec<(i64, Vec<u8>)>,
 }
 
@@ -285,6 +287,17 @@ async fn load_file_for_user(
     pool: &SqlitePool,
     file_id: &str,
     user: &str,
+) -> Result<Option<LoadedFile>> {
+    load_file_range_for_user(pool, file_id, user, None).await
+}
+
+/// Загрузить файл или диапазон его чанков (включительно) — range-стриминг
+/// видео: клиент просит только нужное окно. ACL — как у целого файла.
+async fn load_file_range_for_user(
+    pool: &SqlitePool,
+    file_id: &str,
+    user: &str,
+    range: Option<(u32, u32)>,
 ) -> Result<Option<LoadedFile>> {
     let meta: Option<(String, String, i64, i64)> = sqlx::query_as(
         "SELECT f.filename, f.mime_type, f.size_bytes, f.total_chunks
@@ -302,21 +315,41 @@ async fn load_file_for_user(
     .fetch_optional(pool)
     .await?;
 
-    let Some((filename, mime_type, _size, total_chunks)) = meta else {
+    let Some((filename, mime_type, size_bytes, total_chunks)) = meta else {
         return Ok(None);
     };
 
-    let chunks: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT chunk_index, data FROM chunks WHERE file_id = ? ORDER BY chunk_index",
+    let chunk_bytes: Option<i64> = sqlx::query_scalar(
+        "SELECT length(data) FROM chunks WHERE file_id = ? AND chunk_index = 0",
     )
     .bind(file_id)
-    .fetch_all(pool)
+    .fetch_optional(pool)
     .await?;
+
+    let chunks: Vec<(i64, Vec<u8>)> = match range {
+        Some((from, to)) => sqlx::query_as(
+            "SELECT chunk_index, data FROM chunks
+             WHERE file_id = ? AND chunk_index BETWEEN ? AND ? ORDER BY chunk_index",
+        )
+        .bind(file_id)
+        .bind(from as i64)
+        .bind(to.max(from) as i64)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query_as(
+            "SELECT chunk_index, data FROM chunks WHERE file_id = ? ORDER BY chunk_index",
+        )
+        .bind(file_id)
+        .fetch_all(pool)
+        .await?,
+    };
 
     Ok(Some(LoadedFile {
         filename,
         mime_type,
         total_chunks,
+        size_bytes,
+        chunk_bytes: chunk_bytes.unwrap_or(0),
         chunks,
     }))
 }
@@ -446,7 +479,12 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         let user = verify_token(nc, &event.token).await?;
 
         let file_id = event.payload.file_id.to_string();
-        let file = load_file_for_user(pool, &file_id, &user)
+        let range = match (event.payload.chunk_from, event.payload.chunk_to) {
+            (Some(from), Some(to)) => Some((from, to)),
+            (Some(from), None) => Some((from, from)),
+            _ => None,
+        };
+        let file = load_file_range_for_user(pool, &file_id, &user, range)
             .await?
             .ok_or_else(|| anyhow::anyhow!("файл не найден или доступ запрещён"))?;
 
@@ -461,6 +499,8 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
                 total_chunks: Some(file.total_chunks as u32),
                 data: Some(B64.encode(data)),
                 error: None,
+                size_bytes: Some(file.size_bytes),
+                chunk_bytes: Some(file.chunk_bytes as u32),
             };
             nc.publish(reply.clone(), serde_json::to_vec(&resp)?.into())
                 .await?;
@@ -485,6 +525,8 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             total_chunks: None,
             data: None,
             error: Some(e.to_string()),
+            size_bytes: None,
+            chunk_bytes: None,
         };
         let _ = nc
             .publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into())
@@ -672,6 +714,27 @@ mod tests {
                 .unwrap();
         assert_eq!(used, 6);
         assert!(used + 6 > quota, "второй файл 6 байт превысил бы квоту 10");
+    }
+
+    #[tokio::test]
+    async fn range_load_returns_only_requested_chunks_with_meta() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        for (i, data) in [&b"aaaa"[..], &b"bbbb"[..], &b"cc"[..]].iter().enumerate() {
+            store_chunk(&pool, "alice@local", &chunk(id, i as u32, 3, data)).await.unwrap();
+        }
+        finalize_file(&pool, "alice@local", &complete(id, 3, 10)).await.unwrap();
+        let full = load_file_for_user(&pool, &id.to_string(), "alice@local")
+            .await.unwrap().unwrap();
+        assert_eq!(full.chunks.len(), 3);
+        assert_eq!(full.size_bytes, 10);
+        assert_eq!(full.chunk_bytes, 4, "размер чанка — длина нулевого чанка");
+        let part = load_file_range_for_user(&pool, &id.to_string(), "alice@local", Some((1, 2)))
+            .await.unwrap().unwrap();
+        assert_eq!(part.chunks.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(part.total_chunks, 3);
+        assert!(load_file_range_for_user(&pool, &id.to_string(), "mallory@evil", Some((0, 0)))
+            .await.unwrap().is_none(), "range не обходит ACL");
     }
 
     #[tokio::test]

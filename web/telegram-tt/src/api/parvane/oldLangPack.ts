@@ -17,6 +17,11 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
   const pack: ApiOldLangPack = {
     Cancel: 'Cancel',
     DialogPin: 'Pin',
+    StopLiveLocation: 'Stop Sharing Location',
+    AttachLiveLocation: 'Live Location',
+    'LiveLocationUpdated.JustNow': 'updated just now',
+    'LiveLocationUpdated.MinutesAgo': { oneValue: 'updated %@ minute ago', otherValue: 'updated %@ minutes ago' },
+    'LiveLocationUpdated.TodayAt': 'updated at %@',
     DialogUnpin: 'Unpin',
     Forward: 'Forward',
     PinMessageAlertChat: 'Do you want to pin this message for both participants?',

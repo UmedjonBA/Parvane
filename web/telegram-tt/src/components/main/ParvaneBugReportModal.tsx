@@ -63,6 +63,9 @@ function buildStateSnapshot(global: GlobalState) {
 // Read-only хук для читалки отчётов (scripts/bugs_reader.mjs): отдать текст
 // JSON-вложения по chatId/messageId через штатный mediaLoader (расшифровка
 // blobcrypt внутри), минуя браузерное скачивание, которое в headless не ловится
+// parvaneDiag: прямой вызов методов провайдера из пробников/e2e (временно)
+(window as unknown as { __parvaneDiagCallApi?: typeof callApi }).__parvaneDiagCallApi = callApi;
+
 (window as unknown as {
   __parvaneDiagReadDocument?: (chatId: string, messageId: number) => Promise<string | undefined>;
 }).__parvaneDiagReadDocument = async (chatId, messageId) => {

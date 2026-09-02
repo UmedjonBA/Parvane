@@ -62,3 +62,30 @@ export async function decryptBlob(
     return undefined;
   }
 }
+
+// Range-дешифровка окна GCM-шифртекста БЕЗ тега: GCM шифрует данные как
+// AES-CTR со счётчиком nonce||u32be(2 + блок) (J0 = nonce||1, данные с inc32).
+// Так видео стримится кусками с того же файла, что и целиком (формат на
+// проводе не меняется, desktop не затронут). Тег не проверяется — только для
+// прогрессивного плеера; целостность целого файла проверяет decryptBlob.
+export async function decryptRange(
+  ciphertext: Uint8Array, keyB64: string, nonceB64: string, byteOffset: number,
+): Promise<Uint8Array | undefined> {
+  if (byteOffset % 16 !== 0) return undefined;
+  try {
+    const rawKey = fromBase64(keyB64);
+    const nonce = fromBase64(nonceB64);
+    if (rawKey.length !== KEY_LEN || nonce.length !== NONCE_LEN) return undefined;
+    const counter = new Uint8Array(16);
+    counter.set(nonce, 0);
+    const blockCounter = (2 + byteOffset / 16) >>> 0;
+    new DataView(counter.buffer).setUint32(12, blockCounter, false);
+    const key = await crypto.subtle.importKey('raw', toArrayBuffer(rawKey), 'AES-CTR', false, ['decrypt']);
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-CTR', counter: toArrayBuffer(counter), length: 32 }, key, toArrayBuffer(ciphertext),
+    );
+    return new Uint8Array(plain);
+  } catch {
+    return undefined;
+  }
+}
