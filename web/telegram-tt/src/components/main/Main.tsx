@@ -91,6 +91,7 @@ import ForwardRecipientPicker from './ForwardRecipientPicker.async';
 import GameModal from './GameModal';
 import HistoryCalendar from './HistoryCalendar.async';
 import NewContactModal from './NewContactModal.async';
+import ParvaneBugReportModal from './ParvaneBugReportModal';
 import PremiumLimitReachedModal from './premium/common/PremiumLimitReachedModal.async';
 import GiveawayModal from './premium/GiveawayModal.async';
 import PremiumMainModal from './premium/PremiumMainModal.async';
@@ -655,6 +656,7 @@ const Main = ({
       />
       <GameModal openedGame={openedGame} gameTitle={gameTitle} />
       <DownloadManager />
+      <ParvaneBugReportModal />
       <ConfettiContainer />
       {IS_WAVE_TRANSFORM_SUPPORTED && <WaveContainer />}
       <SnapEffectContainer />

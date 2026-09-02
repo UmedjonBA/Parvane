@@ -5,6 +5,8 @@ import type {
   ActionPayloads, GlobalState, RequiredActionPayloads, RequiredGlobalState,
 } from './types';
 
+import { diagLog, installParvaneDiag } from '../util/parvaneDiag';
+
 const typed = typify<GlobalState, ActionPayloads & RequiredActionPayloads>();
 
 type ProjectActionTypes =
@@ -46,12 +48,24 @@ type ActionHandlers = {
 
 export const getGlobal = typed.getGlobal;
 export const setGlobal = typed.setGlobal;
+// Parvane: read-only доступ к global из консоли/e2e для диагностики состояния
+// ленты (viewportIds/lastMessageId) в реальном браузере. Без setGlobal.
+(window as unknown as { __parvaneGetGlobal?: typeof getGlobal }).__parvaneGetGlobal = getGlobal;
 export const getActions = typed.getActions;
 export const getPromiseActions = typed.getPromiseActions;
-export const addActionHandler = typed.addActionHandler as <ActionName extends ProjectActionNames>(
+// parvaneDiag: временный журнал действий (см. util/parvaneDiag.ts) — каждое
+// действие UI пишется в кольцевой буфер (apiUpdate журналится в провайдере).
+installParvaneDiag();
+type AddActionHandler = <ActionName extends ProjectActionNames>(
   name: ActionName,
   handler: ActionHandlers[ActionName],
 ) => void;
+export const addActionHandler: AddActionHandler = (name, handler) => {
+  (typed.addActionHandler as AddActionHandler)(name, ((global, actions, payload) => {
+    if (name !== 'apiUpdate') diagLog(`act:${String(name)}`, payload);
+    return handler(global, actions, payload);
+  }) as typeof handler);
+};
 export const execAfterActions = typed.execAfterActions;
 export const withGlobal = typed.withGlobal;
 export type GlobalActions = ReturnType<typeof getActions>;
