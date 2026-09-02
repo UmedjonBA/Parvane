@@ -211,11 +211,19 @@ try {
   await aliceSession.page.reload({ waitUntil: 'domcontentloaded' });
   // Клиент по дизайну не хранит пароль: после перезагрузки помнит адрес и
   // просит пароль заново — вводим и ждём загрузки
+  // keep-signed-in (92e73322): после reload пароль сохранён и вход
+  // автоматический; форма пароля появляется только если сессия не сохранена
   const reloginPassword = aliceSession.page.locator('#sign-in-password');
-  await reloginPassword.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await reloginPassword.fill(PASSWORD);
-  await aliceSession.page.locator('.Transition_slide-active > #auth-password-form')
-    .getByRole('button', { name: 'Next' }).click();
+  const leftColumn = aliceSession.page.locator('#LeftColumn');
+  await Promise.race([
+    reloginPassword.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+    leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+  ]);
+  if (await reloginPassword.isVisible()) {
+    await reloginPassword.fill(PASSWORD);
+    await aliceSession.page.locator('.Transition_slide-active > #auth-password-form')
+      .getByRole('button', { name: 'Next' }).click();
+  }
   await aliceSession.page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openPrivateChatStrict(aliceSession.page, bob);
   await findMessage(aliceSession.page, helloBA).first()
