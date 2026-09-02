@@ -21,8 +21,12 @@ function stateId(user: string) {
   return `state:${user}`;
 }
 
+// ВАЖНО: для записи состояния AAD остаётся ПРЕЖНИМ (без суффикса) — иначе
+// сохранённое до этого состояние всех пользователей перестаёт расшифровываться
+// (OperationError → «E2E недоступен»). Суффикс — только у именованных записей
 function additionalData(user: string, record = 'state') {
-  return encoder.encode(`parvane-e2e-storage:${STORAGE_VERSION}:${user}:${record}`).buffer;
+  const base = `parvane-e2e-storage:${STORAGE_VERSION}:${user}`;
+  return encoder.encode(record === 'state' ? base : `${base}:${record}`).buffer;
 }
 
 function recordId(user: string, name: string) {
@@ -207,6 +211,7 @@ export async function clearSecureCredential(user: string) {
 }
 
 export const secureStorageInternals = {
+  additionalData,
   keyId,
   stateId,
   store: STORAGE,

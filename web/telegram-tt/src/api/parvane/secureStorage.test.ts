@@ -67,3 +67,13 @@ describe('secure E2E storage records', () => {
     expect(await storage.loadRecordsByPrefix('m:')).toEqual([]);
   });
 });
+
+describe('secure E2E storage compatibility', () => {
+  it('keeps the legacy AAD for the state record so old profiles still decrypt', () => {
+    const decoder = new TextDecoder();
+    const state = decoder.decode(secureStorageInternals.additionalData('erin@local'));
+    expect(state).toBe('parvane-e2e-storage:2:erin@local');
+    const named = decoder.decode(secureStorageInternals.additionalData('erin@local', 'journal'));
+    expect(named).toBe('parvane-e2e-storage:2:erin@local:journal');
+  });
+});
