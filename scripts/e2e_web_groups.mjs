@@ -212,23 +212,31 @@ try {
       }
     }
     const seenLabel = aliceSession.page.locator('.MessageContextMenu--seen-by-label');
-    const seenModal = aliceSession.page.locator('.Modal').filter({ hasText: 'Seen by' });
-    let seenTitle = '';
-    for (let attempt = 0; attempt < 12; attempt++) {
+    const readSeenModal = () => aliceSession.page.evaluate(() => {
+      const modal = Array.from(document.querySelectorAll('.Modal'))
+        .find((el) => (el.textContent || '').includes('Seen by'));
+      return modal ? { title: modal.querySelector('.modal-title')?.textContent || '', text: modal.textContent || '' } : undefined;
+    });
+    let seenModal;
+    for (let attempt = 0; attempt < 12 && !seenModal?.title.startsWith('Seen by 2'); attempt++) {
       await openMessageMenu(aliceSession.page, groupMessage);
       await seenLabel.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
       await aliceSession.page.waitForTimeout(1500);
       await seenLabel.click();
-      const isModalOpen = await seenModal.waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
-      seenTitle = isModalOpen ? (await seenModal.locator('.modal-title').innerText().catch(() => '')).trim() : '';
-      if (seenTitle.startsWith('Seen by 2')) break;
+      // Модалка — async-чанк; опрашиваем DOM (локаторы .Modal здесь нестабильны)
+      for (let tick = 0; tick < 30; tick++) {
+        await aliceSession.page.waitForTimeout(500);
+        seenModal = await readSeenModal();
+        if (seenModal) break;
+      }
+      if (seenModal?.title.startsWith('Seen by 2')) break;
       await aliceSession.page.keyboard.press('Escape');
       await aliceSession.page.waitForTimeout(4000);
     }
-    assert.equal(seenTitle.startsWith('Seen by 2'), true, `seen-by modal must list 2 readers, got: ${seenTitle}`);
+    assert.ok(seenModal?.title.startsWith('Seen by 2'), `seen-by modal must list 2 readers, got: ${seenModal?.title}`);
     // Имена в списке усечены (…), матчим по префиксу
-    await seenModal.getByText(bobName.slice(0, 18)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await seenModal.getByText(charlieName.slice(0, 18)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    assert.ok(seenModal.text.includes(bobName.slice(0, 18)), 'seen-by list must include bob');
+    assert.ok(seenModal.text.includes(charlieName.slice(0, 18)), 'seen-by list must include charlie');
     await aliceSession.page.keyboard.press('Escape');
     await aliceSession.page.waitForTimeout(500);
   }
