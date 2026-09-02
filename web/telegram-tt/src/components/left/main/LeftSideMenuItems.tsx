@@ -22,6 +22,7 @@ import { selectPremiumLimit } from '../../../global/selectors/limits';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironment';
 import { getPromptInstall } from '../../../util/installPrompt';
+import { openBugReport } from '../../../util/parvaneDiag';
 import { getSystemTheme } from '../../../util/systemTheme';
 
 import { useFolderManagerForUnreadCounters } from '../../../hooks/useFolderManager';
@@ -202,8 +203,15 @@ const LeftSideMenuItems = ({
               <span className="menu-item-name capitalize">{lang('MenuUIFeaturesSwitch')}</span>
               <Toggle value={animationLevelValue} />
             </MenuItem>
-            {/* Parvane: Telegram Features (t.me/TelegramTips) и Report a Bug
-                (bugs.telegram.org) ведут в инфраструктуру Telegram — скрыты */}
+            {/* Parvane: Telegram Features (t.me/TelegramTips) ведёт в инфраструктуру
+                Telegram — скрыт. Report a Bug — НАШ (util/parvaneDiag): описание +
+                журнал действий уходят сообщением на адрес отчётов. ВРЕМЕННО. */}
+            <MenuItem
+              icon="bug"
+              onClick={openBugReport}
+            >
+              Report a Bug
+            </MenuItem>
             {IS_BETA && (
               <MenuItem
                 icon="permissions"

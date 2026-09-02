@@ -23,6 +23,7 @@ import type { WireUserInfo } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
 import { ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, UNMUTE_TIMESTAMP } from '../../config';
+import { diagLog } from '../../util/parvaneDiag';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   clearLoginStorage,
@@ -697,10 +698,33 @@ const methods = {
     };
   },
 
-  async fetchMessages({ chat, limit }: { chat: ApiChat; limit: number }) {
+  // Пагинация с семантикой Telegram messages.getHistory (tt строит на ней
+  // окно вьюпорта): в списке НОВЫЕ→СТАРЫЕ берём позицию offsetId, сдвигаем на
+  // addOffset и отдаём limit элементов. Backwards (offsetId, addOffset=-1) =
+  // offsetId и старее; Around = половина новее/половина старее; Forwards
+  // (addOffset=-(limit)) = offsetId и новее; без offsetId = самые новые.
+  // Раньше параметры игнорировались и ВСЕГДА отдавались последние N: в длинном
+  // чате при прокрутке вверх tt просил старое, а получал снова новое — учёт
+  // окна ломался, «самое новое» терялось, и новые сообщения не попадали в
+  // ленту (стрелка ↓).
+  async fetchMessages({
+    chat, limit, offsetId, addOffset,
+  }: { chat: ApiChat; limit: number; offsetId?: number; addOffset?: number }) {
     await syncController.ensureSynced();
     const history = store.getMessages(chat.id);
-    const messages = history.slice(-Math.max(limit, 1) * 2);
+    const newestFirst = history.slice().reverse();
+    let start = 0;
+    if (offsetId) {
+      let anchor = newestFirst.findIndex((m) => m.id === offsetId);
+      if (anchor < 0) {
+        // offsetId нет в истории: встаём так, чтобы anchor+1 был первым более старым
+        const firstOlder = newestFirst.findIndex((m) => m.id < offsetId);
+        anchor = (firstOlder < 0 ? newestFirst.length : firstOlder) - 1;
+      }
+      start = anchor + 1 + (addOffset ?? 0);
+    }
+    start = Math.max(0, start);
+    const messages = newestFirst.slice(start, start + Math.max(limit, 1));
     // Опросы: poll-объект не в content, доотдаём отдельными апдейтами после
     // того как сообщения окажутся в global (следующий тик)
     const pollMessages = messages.filter((m) => m.content.pollId);
@@ -919,6 +943,18 @@ const methods = {
       globalResultIds.push(store.getIdForAddress(u.username));
     });
     return { accountResultIds: [], globalResultIds };
+  },
+
+  // parvaneDiag: снимок состояния провайдера для отчёта о баге (без контента)
+  fetchParvaneDiagStoreInfo({ chatId }: { chatId?: string }) {
+    const history = chatId ? store.getMessages(chatId) : [];
+    return Promise.resolve({
+      self: store.self,
+      connected: Boolean(connection),
+      storeCount: history.length,
+      storeFirstId: history[0]?.id,
+      storeLastId: history[history.length - 1]?.id,
+    });
   },
 
   searchMessagesGlobal({ query }: { query?: string }) {
@@ -1547,6 +1583,7 @@ function sendUpdate(update: ApiUpdate) {
   // штатного порядка, selectIsViewportNewest становился false и новое сообщение
   // не попадало в загруженное окно (стрелка ↓, «сообщение не появляется»).
   // Отдаём всё reducer'у — поведение 1:1 с Telegram.
+  diagLog(`upd:${update['@type']}`, update);
   onUpdate(update);
 }
 
@@ -1583,7 +1620,15 @@ export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<
     }
     return Promise.resolve(undefined) as MethodResponse<T>;
   }
-  return method(...args) as MethodResponse<T>;
+  // parvaneDiag: журналим вызов провайдера (без содержимого) и его ошибку
+  diagLog(`api:${String(fnName)}`, args[0]);
+  const result = method(...args) as MethodResponse<T>;
+  if (result && typeof (result as Promise<unknown>).catch === 'function') {
+    (result as Promise<unknown>).catch((error: unknown) => {
+      diagLog('api-err', `${String(fnName)}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+  return result;
 }
 
 export const callApiLocal = callApi;
