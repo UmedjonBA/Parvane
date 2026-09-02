@@ -79,6 +79,10 @@ EOF
   chmod 600 .env
   echo ".env создан"
 fi
+# NATS перечитывает ACL только по сигналу: без этого шарды, стартующие с новыми
+# топиками, ловят Subscription Violation (подписка молча отброшена) — HUP ДО up
+docker kill -s HUP parvane-nats-1 >/dev/null 2>&1 || true
+sleep 1
 docker compose up -d --remove-orphans
 docker compose ps
 REMOTE
