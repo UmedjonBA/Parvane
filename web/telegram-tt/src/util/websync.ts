@@ -15,6 +15,7 @@ const WEBSYNC_URLS = [
 const WEBSYNC_VERSION = `${APP_VERSION} ${APP_CODE_NAME}`;
 const WEBSYNC_KEY = 'tgme_sync';
 const WEBSYNC_TIMEOUT = 86400;
+const IS_PARVANE_WEBSYNC_DISABLED = true;
 
 const getTs = () => {
   return Math.floor(Number(new Date()) / 1000);
@@ -31,7 +32,10 @@ const saveSync = (authed: boolean) => {
 let lastTimeout: number | undefined;
 
 export const forceWebsync = (authed: boolean) => {
-  if (IS_MOCKED_CLIENT || IS_TAURI) return undefined;
+  // Parvane: self-hosted — никаких маячков на t.me/telegram.me при входе/выходе
+  // (утечка факта использования на инфраструктуру Telegram). Локальную
+  // отметку оставляем для совместимости с логикой редиректов
+  if (IS_PARVANE_WEBSYNC_DISABLED || IS_MOCKED_CLIENT || IS_TAURI) return undefined;
   const currentTs = getTs();
 
   const { canRedirect, ts } = JSON.parse(localStorage.getItem(WEBSYNC_KEY) || '{}');
