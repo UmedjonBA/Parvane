@@ -694,7 +694,16 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
 
       const currentMessage = selectChatMessage(global, chatId, localId);
 
-      global = deleteChatMessages(global, chatId, [localId], { shouldPreserveMedia: true });
+      // Parvane: локальный и итоговый id СОВПАДАЮТ (id выводится из времени и
+      // выделяется один раз на uuid, а не через MTProto-ответ). Штатное удаление
+      // «локального» сообщения выбрасывало из listedIds/viewportIds само
+      // отправленное сообщение, а lastMessageId ниже уже поднимался до него →
+      // окно переставало быть «самым новым» (selectIsViewportNewest) и ВСЕ
+      // следующие сообщения не попадали в ленту до нажатия ↓ (стрелка).
+      const isSameId = localId === message.id;
+      if (!isSameId) {
+        global = deleteChatMessages(global, chatId, [localId], { shouldPreserveMedia: true });
+      }
 
       // Edge case for "Send When Online"
       if (message.isScheduled) {
@@ -704,7 +713,7 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       global = updateChatMessage(global, chatId, message.id, {
         ...currentMessage,
         ...message,
-        previousLocalId: localId,
+        previousLocalId: isSameId ? currentMessage?.previousLocalId : localId,
         isDeleting: undefined,
       });
 

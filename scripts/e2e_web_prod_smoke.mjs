@@ -108,8 +108,13 @@ async function attachPhoto(page, caption) {
 }
 
 const browser = await chromium.launch();
-const aliceContext = await browser.newContext({ ignoreHTTPSErrors: true });
-const bobContext = await browser.newContext({ ignoreHTTPSErrors: true });
+// Basic-auth гейта сайта (Caddy): PARVANE_E2E_HTTP_USER/PASS — через
+// httpCredentials контекста, а НЕ userinfo в URL (ненадёжно для WS).
+const httpCredentials = process.env.PARVANE_E2E_HTTP_USER
+  ? { username: process.env.PARVANE_E2E_HTTP_USER, password: process.env.PARVANE_E2E_HTTP_PASS || '' }
+  : undefined;
+const aliceContext = await browser.newContext({ ignoreHTTPSErrors: true, httpCredentials });
+const bobContext = await browser.newContext({ ignoreHTTPSErrors: true, httpCredentials });
 // Аплинк прод-сервера скромный, бандл большой — дефолтных 30s на goto мало
 aliceContext.setDefaultNavigationTimeout(120000);
 bobContext.setDefaultNavigationTimeout(120000);

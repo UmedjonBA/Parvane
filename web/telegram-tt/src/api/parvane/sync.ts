@@ -452,6 +452,10 @@ export function createSyncController(deps: SyncDependencies) {
     wireFlagsByUuid.set(stored.id, flags);
 
     const isKnown = store.hasMessage(stored.id);
+    // Пин по стору, а не только по прошлым wire-флагам: если предыдущих флагов
+    // нет (сброс после ресинка/реконнекта), смена пина всё равно должна дойти
+    // до pinnedIds — иначе у собеседника на сообщении иконка есть, а панели нет
+    const wasPinned = previousFlags ? previousFlags.pinned : Boolean(store.getMessageByUuid(stored.id)?.isPinned);
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
@@ -496,7 +500,7 @@ export function createSyncController(deps: SyncDependencies) {
         '@type': 'updateMessage', chatId: message.chatId, id: message.id, isFull: true, message,
       });
     }
-    if (previousFlags && flags.pinned !== previousFlags.pinned) {
+    if (flags.pinned !== wasPinned) {
       deps.sendUpdate({
         '@type': 'updatePinnedIds', chatId: message.chatId, isPinned: flags.pinned, messageIds: [message.id],
       });

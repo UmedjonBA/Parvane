@@ -9,6 +9,7 @@ import type { createMediaService } from './media';
 import type { PollStore } from './polls';
 import type { ParvaneStore } from './store';
 import type { createSyncController } from './sync';
+import { MAIN_THREAD_ID } from '../types';
 
 import {
   deliverToEveryGroupMember,
@@ -1064,7 +1065,8 @@ export function createMessageController(deps: MessageDependencies) {
 
     markMessageListRead({ chat, maxId }: { chat: ApiChat; maxId?: number }) {
       const currentStore = store();
-      currentStore.getMessages(chat.id).forEach((message) => {
+      const history = currentStore.getMessages(chat.id);
+      history.forEach((message) => {
         if (message.isOutgoing || (maxId && message.id > maxId)) return;
         const uuid = currentStore.getUuidForMessage(chat.id, message.id);
         if (!uuid || deps.sync.hasReportedRead(uuid)) return;
@@ -1073,6 +1075,32 @@ export function createMessageController(deps: MessageDependencies) {
           buildWireEvent(currentStore.self, token(), { message_id: uuid }),
         ));
       });
+      // ВАЖНО: двигаем и ЛОКАЛЬНЫЙ read-state tt. Сам tt в markMessageListRead
+      // обновляет lastReadInboxMessageId только при unreadCount>0 (ранний
+      // выход), а мы unreadCount вживую не ведём → lastReadInboxMessageId
+      // застывал на снапшоте fetchChats. Тогда selectFirstUnreadId вечно
+      // указывал на старое входящее; как только оно выпадало из окна (длинный
+      // чат / прокрутка), reducer newMessage ОТКАЗЫВАЛСЯ добавлять новые
+      // сообщения в окно (стрелка ↓, «сообщение появляется только по ↓»).
+      const readUpTo = maxId ?? history[history.length - 1]?.id;
+      if (readUpTo) {
+        let lastReadInbox = 0;
+        let unreadCount = 0;
+        history.forEach((message) => {
+          if (message.isOutgoing || !message.senderId) return;
+          if (message.id <= readUpTo) {
+            if (message.id > lastReadInbox) lastReadInbox = message.id;
+          } else {
+            unreadCount += 1;
+          }
+        });
+        deps.sendUpdate({
+          '@type': 'updateThreadReadState',
+          chatId: chat.id,
+          threadId: MAIN_THREAD_ID,
+          readState: { lastReadInboxMessageId: lastReadInbox || readUpTo, unreadCount },
+        });
+      }
       deps.sync.pushMentionState(chat.id);
       return Promise.resolve(undefined);
     },
