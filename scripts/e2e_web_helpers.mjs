@@ -77,6 +77,21 @@ export async function openPrivateChat(page, address) {
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
+// Строгий вариант: проверяет заголовок чата и ретраит — нестрогий
+// openPrivateChat мог оставить композер предыдущего чата (текст уходил не туда)
+export async function openPrivateChatStrict(page, address) {
+  const name = address.split('@')[0];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await openPrivateChat(page, address).catch(() => {});
+    const isOpen = await page.locator('.MiddleHeader').getByText(name).first()
+      .isVisible().catch(() => false);
+    if (isOpen) return;
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`chat with ${address} did not open`);
+}
+
 export async function sendText(page, text) {
   const input = page.locator('#editable-message-text');
   await input.fill(text);
