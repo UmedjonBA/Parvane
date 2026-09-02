@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   findMessageContainers,
   openPrivateChat,
@@ -65,14 +66,6 @@ async function trackAudioInstances(context) {
   });
 }
 
-async function relogin(page) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 async function attachFile(page, menuItemName, file, caption) {
   await page.getByRole('button', { name: 'Add an attachment' }).click();
@@ -189,7 +182,7 @@ try {
   }, undefined, { timeout: LOGIN_TIMEOUT_MS });
 
   // ── Персист: reload получателя, все три бабла рендерятся нативно ───────────
-  await relogin(bobSession.page);
+  await relogin(bobSession.page, PASSWORD);
   await openPrivateChat(bobSession.page, alice);
   await bobRound.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await findMessageContainers(bobSession.page, videoCaption).first()

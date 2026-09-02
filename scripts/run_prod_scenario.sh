@@ -18,6 +18,13 @@ if (/chromium\.launch\(\{[\s\S]*?args:\s*\[/.test(s)) {
 } else {
   s = s.replace(/chromium\.launch\(\{/, "chromium.launch({ args: [\x27--ignore-certificate-errors\x27], ");
 }
+// Basic-auth гейта сайта: PARVANE_E2E_HTTP_USER/PASS → httpCredentials каждого
+// контекста (userinfo в URL для WS ненадёжен)
+if (process.env.PARVANE_E2E_HTTP_USER) {
+  const creds = `httpCredentials: { username: ${JSON.stringify(process.env.PARVANE_E2E_HTTP_USER)}, password: ${JSON.stringify(process.env.PARVANE_E2E_HTTP_PASS || "")} }`;
+  s = s.replace(/\.newContext\(\s*\)/g, `.newContext({ ${creds} })`);
+  s = s.replace(/\.newContext\(\{(?![^}]*httpCredentials)/g, `.newContext({ ${creds}, `);
+}
 fs.writeFileSync(process.argv[2], s);
 ' "$SRC" "$TMP"
 

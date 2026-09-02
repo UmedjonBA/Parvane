@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   findMessage,
   findMessageContainers,
@@ -17,14 +18,6 @@ import {
 const PASSWORD = 'Parvane-content-e2e-password';
 const SCHEDULE_DELAY_SECS = 75;
 
-async function relogin(page, password) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(password);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 async function openSymbolTab(page, tabName) {
   await page.getByRole('button', { name: 'Choose emoji, sticker or GIF' }).first().click();

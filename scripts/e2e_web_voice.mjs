@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
@@ -39,14 +40,6 @@ async function trackAudioInstances(context) {
   });
 }
 
-async function relogin(page) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 function findVoiceBubble(page) {
   return page.locator('.Transition_slide-active > .MessageList .Message .Audio').last();
@@ -94,7 +87,7 @@ try {
   await assertVoicePlays(bobSession.page, 'bob');
 
   // ── Персист: reload получателя, ключи приходят через sync ──────────────────
-  await relogin(bobSession.page);
+  await relogin(bobSession.page, PASSWORD);
   await openPrivateChat(bobSession.page, alice);
   await assertVoicePlays(bobSession.page, 'bob after reload');
 

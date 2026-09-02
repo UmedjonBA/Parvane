@@ -11,6 +11,7 @@ import { gzipSync } from 'node:zlib';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
@@ -30,14 +31,6 @@ const TGS_BYTES = gzipSync(JSON.stringify({
   v: '5.5.2', fr: 30, ip: 0, op: 30, w: 512, h: 512, layers: [],
 }));
 
-async function relogin(page, password) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(password);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 async function openStickerTab(page) {
   const menu = page.locator('.SymbolMenu');
