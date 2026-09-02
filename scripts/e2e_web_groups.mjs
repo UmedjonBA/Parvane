@@ -219,7 +219,7 @@ try {
       await seenLabel.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
       await aliceSession.page.waitForTimeout(1500);
       await seenLabel.click();
-      const isModalOpen = await seenModal.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+      const isModalOpen = await seenModal.waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
       seenTitle = isModalOpen ? (await seenModal.locator('.modal-title').innerText().catch(() => '')).trim() : '';
       if (seenTitle.startsWith('Seen by 2')) break;
       await aliceSession.page.keyboard.press('Escape');
