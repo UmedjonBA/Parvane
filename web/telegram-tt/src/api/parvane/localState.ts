@@ -32,6 +32,9 @@ const SCHEDULED_CHECK_INTERVAL_MS = 5000;
 const SCHEDULED_ID_BASE = 1_000_001;
 const RECORD_SAVE_DELAY_MS = 300;
 const HISTORY_FLUSH_DELAY_MS = 500;
+// v2: курсоры, сохранённые до hotfix AAD (E2E был недоступен, сообщения
+// пропускались), не должны использоваться
+const SYNC_CURSOR_RECORD = 'cursor.v2';
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const JOURNAL_MAX_ENTRIES = 5000;
 
@@ -145,7 +148,7 @@ export function createLocalState(deps: LocalStateDependencies) {
         if (stored) await storage.saveRecord(`m:${uuid}`, stored);
         else await storage.deleteRecord(`m:${uuid}`);
       }
-      if (cursor) await storage.saveRecord('cursor', cursor);
+      if (cursor) await storage.saveRecord(SYNC_CURSOR_RECORD, cursor);
     }).catch(() => undefined);
   }
 
@@ -178,7 +181,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   async function loadSyncCursor() {
     const storage = await secureStorage();
     if (!storage) return undefined;
-    return storage.loadRecord<{ lastSeenUuid: string; sinceUpdated: number }>('cursor');
+    return storage.loadRecord<{ lastSeenUuid: string; sinceUpdated: number }>(SYNC_CURSOR_RECORD);
   }
 
   function resetSecureCaches() {

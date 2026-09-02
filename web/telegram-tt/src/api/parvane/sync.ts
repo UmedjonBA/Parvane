@@ -116,6 +116,7 @@ export function createSyncController(deps: SyncDependencies) {
     wireFlagsByUuid.clear();
     announcedThreadChatIds.clear();
     inFlightByUuid.clear();
+    sawUndecryptable = false;
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
     checkedGroupCandidates.clear();
@@ -497,6 +498,7 @@ export function createSyncController(deps: SyncDependencies) {
     // (нет ключа/сессии, продвинутый ратчет). Не рисуем «🔒» и не роутим в
     // «Избранное» — просто пропускаем, чтобы не мусорить в переписке
     if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
+      sawUndecryptable = true;
       deps.log(`сообщение ${stored.id} не расшифровано — пропущено`);
       if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
       return;
@@ -585,13 +587,20 @@ export function createSyncController(deps: SyncDependencies) {
     deps.localState.saveHistoryRecord(stored);
   }
 
+  // Курсор сохраняем только если этот проход ничего не пропустил: иначе
+  // сообщение, не расшифрованное сейчас (E2E не поднялся, нет ключа), после
+  // рестарта уже не пришло бы дельтой
+  let sawUndecryptable = false;
+
   function persistCursor() {
-    if (lastSeenUuid) deps.localState.saveSyncCursor({ lastSeenUuid, sinceUpdated });
+    if (!lastSeenUuid || sawUndecryptable || !deps.getE2e()) return;
+    deps.localState.saveSyncCursor({ lastSeenUuid, sinceUpdated });
   }
 
   // Быстрый старт из локального кэша: восстановить историю без сервера и
   // догнать дельтой от сохранённого курсора. false — кэша нет (полный синк)
   async function restoreFromCache(): Promise<boolean> {
+    if (!deps.getE2e()) return false;
     const cursor = await deps.localState.loadSyncCursor();
     if (!cursor?.lastSeenUuid) return false;
     const records = await deps.localState.loadHistoryRecords();
@@ -607,6 +616,7 @@ export function createSyncController(deps: SyncDependencies) {
   }
 
   async function runFullSync() {
+    sawUndecryptable = false;
     const store = deps.getStore();
     const connection = deps.getConnection()!;
     const token = deps.getToken();
@@ -656,6 +666,7 @@ export function createSyncController(deps: SyncDependencies) {
       // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
+        sawUndecryptable = true;
         deps.log(`сообщение ${stored.id} не расшифровано — пропущено (full sync)`);
         continue;
       }
@@ -711,6 +722,7 @@ export function createSyncController(deps: SyncDependencies) {
   async function runDeltaSync() {
     const connection = deps.getConnection();
     if (!connection || !isSynced) return;
+    sawUndecryptable = false;
     await deps.groups.refreshMemberships();
     let messages: WireStoredMessage[];
     try {
