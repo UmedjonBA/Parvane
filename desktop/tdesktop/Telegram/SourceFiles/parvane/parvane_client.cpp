@@ -14,6 +14,7 @@
 #include "data/data_peer_id.h"
 #include "core/file_location.h"
 #include "base/unixtime.h"
+#include "history/history_item_edition.h"
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 #include "storage/storage_facade.h"
 #include "storage/storage_shared_media.h"
@@ -1100,6 +1101,10 @@ IssueResult Issue(const QString &user, const QString &password) {
 		auto transport = MakeTransport(QString());
 
 		parvane::IssueRequest req{user.toStdString(), password.toStdString()};
+		// device_id этой установки (тот же каталог, что initDevice ниже) →
+		// claim dev в JWT: отозванное устройство теряет токен сразу
+		req.deviceId = parvane::e2e::peekDeviceId(
+			(cWorkingDir() + u"tdata/parvane-e2e-"_q + user).toStdString());
 		const auto raw = transport->request(
 			parvane::topics::IdentityIssue,
 			req.toJson().dump(),
@@ -3290,18 +3295,38 @@ void ResolveNames(const QStringList &addresses) {
 		page);
 }
 
-// content kind=location {lat,long} → MTP_messageMediaGeo (нативный рендер карты).
+// content kind=location {lat,long[,live_period,heading,accuracy]} →
+// MTP_messageMediaGeo / MTP_messageMediaGeoLive (нативный рендер карты и
+// таймера live-локации; обновления позиции приходят правкой сообщения).
 [[nodiscard]] MTPMessageMedia buildLocationMedia(const nlohmann::json &c) {
 	if (!c.is_object() || !c.contains("lat") || !c.contains("long")
 		|| !c["lat"].is_number() || !c["long"].is_number()) {
 		return MTPMessageMedia();
 	}
-	return MTP_messageMediaGeo(MTP_geoPoint(
-		MTP_flags(0),
+	const auto accuracy = (c.contains("accuracy") && c["accuracy"].is_number())
+		? c["accuracy"].get<int>()
+		: 0;
+	const auto geo = MTP_geoPoint(
+		MTP_flags(accuracy > 0
+			? MTPDgeoPoint::Flag::f_accuracy_radius
+			: MTPDgeoPoint::Flag(0)),
 		MTP_double(c["long"].get<double>()),
 		MTP_double(c["lat"].get<double>()),
 		MTP_long(0),
-		MTPint()));
+		MTP_int(accuracy));
+	if (c.contains("live_period") && c["live_period"].is_number()
+		&& c["live_period"].get<int>() > 0) {
+		const auto hasHeading = c.contains("heading") && c["heading"].is_number();
+		return MTP_messageMediaGeoLive(
+			MTP_flags(hasHeading
+				? MTPDmessageMediaGeoLive::Flag::f_heading
+				: MTPDmessageMediaGeoLive::Flag(0)),
+			geo,
+			MTP_int(hasHeading ? c["heading"].get<int>() : 0),
+			MTP_int(c["live_period"].get<int>()),
+			MTPint());
+	}
+	return MTP_messageMediaGeo(geo);
 }
 
 // TTL (самоуничтожение) сообщения в секундах из content.ttl_secs (0 — нет).
@@ -4488,6 +4513,30 @@ void injectOnMain(
 				const auto &ec = sm.content;
 				const auto hasCaption = ec.is_object() && ec.contains("caption")
 					&& ec["caption"].is_string();
+				if (ec.is_object() && ec.value("kind", std::string()) == "location") {
+					// Live-локация: новая позиция приходит правкой того же
+					// сообщения — подменяем медиа (geo/geoLive), текст не трогаем
+					const auto toR = QString::fromStdString(sm.to);
+					const auto isOwn = (from == self);
+					const auto peerAddr = isOwn ? toR : from;
+					const auto dialogPeer = g_knownGroups.contains(toR)
+						? peerFromChat(ChatId(BareId(IdForAddress(toR))))
+						: peerFromUser(UserId(BareId(IdForAddress(peerAddr))));
+					const auto full = FullMsgId(dialogPeer, MsgId(found.value()));
+					if (const auto item = session->data().message(full)) {
+						const auto media = buildLocationMedia(ec);
+						HistoryMessageEdition edition;
+						edition.editDate = TimeId(base::unixtime::now());
+						edition.useSameViews = true;
+						edition.useSameForwards = true;
+						edition.useSameReplies = true;
+						edition.useSameMarkup = true;
+						edition.useSameReactions = true;
+						edition.textWithEntities = item->originalText();
+						edition.mtpMedia = &media;
+						item->applyEdition(std::move(edition));
+					}
+				}
 				if (maybeText || hasCaption) {
 					const auto toR = QString::fromStdString(sm.to);
 					const auto isOwn = (from == self);
@@ -4533,8 +4582,9 @@ void injectOnMain(
 			}
 			// не continue — ниже contains→continue пропустит уже инъецированное
 		}
-		if (!sm.reactions.empty() || sm.pinned) {
-			// Реакции/закрепление могли измениться — обновляем инъецированное.
+		{
+			// Реакции/закрепление могли измениться (delta-sync или live-пуш
+			// мутации) — обновляем инъецированное; снятие пина тоже применяем.
 			// Диалог: группа → chat-пир, иначе 1-на-1 user-пир.
 			const auto found = g_uuidToMsgId.find(uuid);
 			if (found != g_uuidToMsgId.end() && found.value() != 0) {
@@ -4546,9 +4596,7 @@ void injectOnMain(
 				const auto full = FullMsgId(dialogPeer, MsgId(found.value()));
 				if (const auto item = session->data().message(full)) {
 					applyReactions(item, sm.reactions);
-					if (sm.pinned) {
-						applyPin(session, item, true);
-					}
+					applyPin(session, item, sm.pinned);
 				}
 			}
 		}
@@ -7085,6 +7133,49 @@ void ListDevices(Fn<void(std::vector<DeviceEntry>)> done) {
 			}
 		}
 		crl::on_main([done, out = std::move(out)]() mutable { done(std::move(out)); });
+	});
+}
+
+// «Seen by» / «read at» для нативного меню: список прочитавших сообщение из
+// messenger (msg.chat.readers). Воркер → main. Себя не отдаём.
+void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
+	QString uuid;
+	{
+		const auto it = g_msgIdToUuid.find(msgId);
+		if (it != g_msgIdToUuid.end()) {
+			uuid = it.value();
+		}
+	}
+	parvane::MessengerClient *m = nullptr;
+	std::string self, token;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		m = g_messenger.get();
+		self = g_selfAddress.toStdString();
+		token = g_token.toStdString();
+	}
+	if (uuid.isEmpty() || !m || token.empty()) {
+		done({});
+		return;
+	}
+	crl::async([=, uuid = uuid.toStdString()] {
+		std::vector<ReaderEntry> out;
+		try {
+			for (const auto &[address, ts] : m->readers(self, uuid, token)) {
+				if (address == self || address.empty()) {
+					continue;
+				}
+				out.push_back(ReaderEntry{
+					.address = QString::fromStdString(address),
+					.userId = qint64(IdForAddress(QString::fromStdString(address))),
+					.date = ts,
+				});
+			}
+		} catch (...) {
+		}
+		crl::on_main([done, out = std::move(out)]() mutable {
+			done(std::move(out));
+		});
 	});
 }
 

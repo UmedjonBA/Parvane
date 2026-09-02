@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_global_privacy.h"
 #include "history/history_item.h"
+#include "parvane/parvane_client.h"
 #include "history/history.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_peer.h"
@@ -287,60 +288,42 @@ struct State {
 		auto &entry = context->cacheRead(item);
 		if (entry.requestId) {
 		} else if (const auto user = item->history()->peer->asUser()) {
-			entry.requestId = session->api().request(
-				MTPmessages_GetOutboxReadDate(
-					user->input(),
-					MTP_int(item->id)
-				)
-			).done([=](const MTPOutboxReadDate &result) {
-				const auto &data = result.data();
+			// Parvane: время прочтения из messenger (msg.chat.readers), без MTProto
+			entry.requestId = 1;
+			Parvane::FetchReaders(item->id.bare, [=](
+					std::vector<Parvane::ReaderEntry> readers) {
 				auto &entry = context->cacheRead(item);
 				entry.requestId = 0;
+				if (readers.empty()) {
+					if (entry.data.current().state == WhoReadState::Unknown) {
+						entry.data = Peers{ .state = WhoReadState::Empty };
+					}
+					return;
+				}
 				auto parsed = Peers();
 				parsed.list.push_back({
 					.peer = user->id,
-					.date = data.vdate().v,
+					.date = TimeId(readers.front().date),
 				});
 				entry.data = std::move(parsed);
-			}).fail([=](const MTP::Error &error) {
-				auto &entry = context->cacheRead(item);
-				entry.requestId = 0;
-				if (entry.data.current().state == WhoReadState::Unknown) {
-					const auto &text = error.type();
-					entry.data = (text == u"YOUR_PRIVACY_RESTRICTED"_q)
-						? Peers{ .state = WhoReadState::MyHidden }
-						: (text == u"USER_PRIVACY_RESTRICTED"_q)
-						? Peers{ .state = WhoReadState::HisHidden }
-						: (text == u"MESSAGE_TOO_OLD"_q)
-						? Peers{ .state = WhoReadState::TooOld }
-						: Peers{ .state = WhoReadState::Empty };
-				}
-			}).send();
+			});
 		} else {
-			entry.requestId = session->api().request(
-				MTPmessages_GetMessageReadParticipants(
-					item->history()->peer->input(),
-					MTP_int(item->id)
-				)
-			).done([=](const MTPVector<MTPReadParticipantDate> &result) {
+			// Parvane: «Seen by» группы из messenger (msg.chat.readers)
+			entry.requestId = 1;
+			Parvane::FetchReaders(item->id.bare, [=](
+					std::vector<Parvane::ReaderEntry> readers) {
 				auto &entry = context->cacheRead(item);
 				entry.requestId = 0;
 				auto parsed = Peers();
-				parsed.list.reserve(result.v.size());
-				for (const auto &id : result.v) {
+				parsed.list.reserve(readers.size());
+				for (const auto &reader : readers) {
 					parsed.list.push_back({
-						.peer = UserId(id.data().vuser_id()),
-						.date = id.data().vdate().v,
+						.peer = peerFromUser(UserId(BareId(reader.userId))),
+						.date = TimeId(reader.date),
 					});
 				}
 				entry.data = std::move(parsed);
-			}).fail([=] {
-				auto &entry = context->cacheRead(item);
-				entry.requestId = 0;
-				if (entry.data.current().state == WhoReadState::Unknown) {
-					entry.data = Peers{ .state = WhoReadState::Empty };
-				}
-			}).send();
+			});
 		}
 		return entry.data.value().start_existing(consumer);
 	};

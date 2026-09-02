@@ -36,6 +36,9 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
 // Свой identity-ключ (Curve25519, base64), device_id и Ed25519 signing_key.
 [[nodiscard]] std::string myIdentity();
 [[nodiscard]] std::string deviceId();
+// device_id из device.json каталога persist'а ДО initDevice (нужен при выдаче
+// JWT, когда E2E ещё не поднят). Пусто для новой установки.
+[[nodiscard]] std::string peekDeviceId(const std::string &storeDir);
 [[nodiscard]] std::string signingKey();
 // Подпись строки Ed25519-ключом аккаунта (base64 без padding). "" если не готов.
 [[nodiscard]] std::string sign(const std::string &data);

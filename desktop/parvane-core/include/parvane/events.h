@@ -33,8 +33,15 @@ inline json makeEvent(const std::string &id, const std::string &from,
 struct IssueRequest {
     std::string user;
     std::string password;
+    // device_id этой установки (device.json) — JWT получает claim dev, и после
+    // отзыва устройства в Settings → Devices его токен гаснет сразу
+    std::string deviceId;
 
-    json toJson() const { return json{{"user", user}, {"password", password}}; }
+    json toJson() const {
+        json j{{"user", user}, {"password", password}};
+        if (!deviceId.empty()) j["device_id"] = deviceId;
+        return j;
+    }
 };
 
 struct IssueResponse {

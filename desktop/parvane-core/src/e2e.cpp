@@ -747,6 +747,12 @@ std::string deviceId() {
     std::lock_guard<std::mutex> lk(g_mu);
     return g_deviceId;
 }
+
+std::string peekDeviceId(const std::string &storeDir) {
+    if (storeDir.empty()) return {};
+    auto j = json::parse(readFile(storeDir + "/device.json"), nullptr, false);
+    return j.is_object() ? j.value("device_id", std::string()) : std::string();
+}
 std::string signingKey() {
     std::lock_guard<std::mutex> lk(g_mu);
     return g_signingB64;

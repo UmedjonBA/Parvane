@@ -71,6 +71,14 @@ struct DeviceEntry {
 void ListDevices(Fn<void(std::vector<DeviceEntry>)> done);
 void RevokeDevice(const QString &deviceId, Fn<void(bool)> done);
 
+// Прочитавшие сообщение (msg.chat.readers) — для нативного «Seen by»/«read at».
+struct ReaderEntry {
+	QString address;
+	qint64 userId = 0; // IdForAddress(address) — BareId пользователя
+	qint64 date = 0;   // unix ts прочтения
+};
+void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done);
+
 // STUN/TURN из шарда call (эфемерные креды, кэш 0.8×TTL). Блокирующий.
 struct IceServer {
 	std::vector<std::string> urls;
