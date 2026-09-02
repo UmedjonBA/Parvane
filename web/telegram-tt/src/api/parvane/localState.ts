@@ -4,6 +4,8 @@ import type { E2eEngine } from './e2e';
 import type { ParvaneStore } from './store';
 import type { WireStoredMessage } from './wire';
 
+import { SecureE2eStorage } from './secureStorage';
+
 type ScheduledEntry = {
   id: number;
   chatId: string;
@@ -28,6 +30,9 @@ type LocalStateDependencies = {
 
 const SCHEDULED_CHECK_INTERVAL_MS = 5000;
 const SCHEDULED_ID_BASE = 1_000_001;
+const RECORD_SAVE_DELAY_MS = 300;
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+const JOURNAL_MAX_ENTRIES = 5000;
 
 export function createLocalState(deps: LocalStateDependencies) {
   const scheduledQueue: ScheduledEntry[] = [];
@@ -35,6 +40,104 @@ export function createLocalState(deps: LocalStateDependencies) {
   let scheduledNextId = SCHEDULED_ID_BASE;
 
   const storageKey = (part: string) => `parvane:${part}:${deps.getStore().self}`;
+
+  // ── шифрованные записи (журнал исходящих, черновики) ──────────────────────
+  // Исходящий журнал несёт ОТКРЫТЫЙ текст сообщений и file_key/file_nonce
+  // вложений, черновики — текст; в localStorage это отдавало всю исходящую
+  // переписку любому дампу. Теперь — IndexedDB под non-extractable ключом
+  // SecureE2eStorage (тот же, что у E2E-состояния), с одноразовой миграцией.
+  let secureUser = '';
+  let securePromise: Promise<SecureE2eStorage> | undefined;
+  let journalCache: WireStoredMessage[] | undefined;
+  let draftsCache: Record<string, Record<string, unknown>> | undefined;
+  let journalSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let draftsSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function secureStorage() {
+    const { self } = deps.getStore();
+    if (!self) return undefined;
+    if (!securePromise || secureUser !== self) {
+      secureUser = self;
+      securePromise = SecureE2eStorage.open(self);
+    }
+    return securePromise;
+  }
+
+  function readLegacyJson<T>(key: string, fallback: T): T {
+    try {
+      return JSON.parse(localStorage.getItem(key) || '') as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  // Загрузить журнал и черновики (один раз на сессию) — с миграцией из
+  // localStorage. Зовётся перед первым чтением (sync/fetchChats).
+  async function hydrate() {
+    if (journalCache && draftsCache) return;
+    const storage = await secureStorage();
+    if (!storage) {
+      journalCache = journalCache || [];
+      draftsCache = draftsCache || {};
+      return;
+    }
+    if (!journalCache) {
+      const stored = await storage.loadRecord<WireStoredMessage[]>('journal');
+      const legacy = readLegacyJson<WireStoredMessage[]>(storageKey('hist'), []);
+      journalCache = stored || [];
+      if (legacy.length) {
+        const known = new Set(journalCache.map((m) => m.id));
+        legacy.forEach((m) => {
+          if (!known.has(m.id)) {
+            journalCache!.push(m);
+          }
+        });
+        await storage.saveRecord('journal', journalCache);
+        localStorage.removeItem(storageKey('hist'));
+      }
+    }
+    if (!draftsCache) {
+      const stored = await storage.loadRecord<Record<string, Record<string, unknown>>>('drafts');
+      const legacy = readLegacyJson<Record<string, Record<string, unknown>>>(storageKey('drafts'), {});
+      draftsCache = stored || {};
+      if (Object.keys(legacy).length) {
+        draftsCache = { ...legacy, ...draftsCache };
+        await storage.saveRecord('drafts', draftsCache);
+        localStorage.removeItem(storageKey('drafts'));
+      }
+    }
+  }
+
+  function scheduleRecordSave(name: 'journal' | 'drafts') {
+    const isJournal = name === 'journal';
+    if (isJournal ? journalSaveTimer : draftsSaveTimer) return;
+    const timer = setTimeout(() => {
+      if (isJournal) {
+        journalSaveTimer = undefined;
+      } else {
+        draftsSaveTimer = undefined;
+      }
+      void secureStorage()?.then((storage) => storage.saveRecord(
+        name, isJournal ? (journalCache || []) : (draftsCache || {}),
+      )).catch(() => undefined);
+    }, RECORD_SAVE_DELAY_MS);
+    if (isJournal) {
+      journalSaveTimer = timer;
+    } else {
+      draftsSaveTimer = timer;
+    }
+  }
+
+  function resetSecureCaches() {
+    journalCache = undefined;
+    draftsCache = undefined;
+    securePromise = undefined;
+    secureUser = '';
+    if (journalSaveTimer) clearTimeout(journalSaveTimer);
+    if (draftsSaveTimer) clearTimeout(draftsSaveTimer);
+    journalSaveTimer = undefined;
+    draftsSaveTimer = undefined;
+  }
 
   function loadScheduledQueue() {
     const { self } = deps.getStore();
@@ -139,18 +242,19 @@ export function createLocalState(deps: LocalStateDependencies) {
     void checkDueScheduled();
   }, SCHEDULED_CHECK_INTERVAL_MS);
 
-  function readOwnJournal(): WireStoredMessage[] {
-    try {
-      return JSON.parse(localStorage.getItem(storageKey('hist')) || '[]');
-    } catch {
-      return [];
-    }
+  async function readOwnJournal(): Promise<WireStoredMessage[]> {
+    await hydrate();
+    return (journalCache || []).slice();
   }
 
   function appendOwnJournal(entry: WireStoredMessage) {
-    const list = readOwnJournal();
-    list.push(entry);
-    localStorage.setItem(storageKey('hist'), JSON.stringify(list));
+    // До hydrate (сразу после логина) копим в памяти — hydrate сольёт с записью
+    journalCache = journalCache || [];
+    journalCache.push(entry);
+    if (journalCache.length > JOURNAL_MAX_ENTRIES) {
+      journalCache.splice(0, journalCache.length - JOURNAL_MAX_ENTRIES);
+    }
+    scheduleRecordSave('journal');
   }
 
   function loadPeerTtl(): Record<string, number> {
@@ -165,8 +269,25 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('ttl'), JSON.stringify(map));
   }
 
+  // Таймеры TTL: setTimeout переполняется на ~24.8 сутках (срабатывал сразу
+  // для «1 месяц»), поэтому длинные сроки ждём отрезками; на logout гасим
+  const ttlTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   function scheduleTtlDeletion(chatId: string, messageId: number, ttlSecs: number) {
-    window.setTimeout(() => {
+    armTtl(chatId, messageId, Date.now() + Math.max(0, ttlSecs) * 1000);
+  }
+
+  function armTtl(chatId: string, messageId: number, deadlineMs: number) {
+    const key = `${chatId}:${messageId}`;
+    const existing = ttlTimers.get(key);
+    if (existing) clearTimeout(existing);
+    const delay = Math.min(Math.max(0, deadlineMs - Date.now()), MAX_TIMEOUT_MS);
+    ttlTimers.set(key, setTimeout(() => {
+      ttlTimers.delete(key);
+      if (Date.now() < deadlineMs) {
+        armTtl(chatId, messageId, deadlineMs);
+        return;
+      }
       const store = deps.getStore();
       // Снять расшифрованный inner из persisted-кэша ДО удаления сообщения
       // (после removeMessage маппинг id→uuid теряется). Иначе plaintext
@@ -175,7 +296,12 @@ export function createLocalState(deps: LocalStateDependencies) {
       if (uuid) deps.getE2e()?.dropCachedInner(uuid);
       store.removeMessage(chatId, messageId);
       deps.sendUpdate({ '@type': 'deleteMessages', ids: [messageId], chatId });
-    }, ttlSecs * 1000);
+    }, delay));
+  }
+
+  function clearTtlTimers() {
+    ttlTimers.forEach((timer) => clearTimeout(timer));
+    ttlTimers.clear();
   }
 
   function loadBlocked(): string[] {
@@ -209,11 +335,8 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Черновики: chatId → draft (сериализованный ApiDraft). localStorage общий
   // для вкладок — конфликт решается last-write-wins по date
   function loadDrafts(): Record<string, Record<string, unknown>> {
-    try {
-      return JSON.parse(localStorage.getItem(storageKey('drafts')) || '{}');
-    } catch {
-      return {};
-    }
+    // Синхронно из кэша: hydrate() вызывается провайдером перед fetchChats
+    return draftsCache || {};
   }
 
   function saveDraft(chatId: string, draft?: Record<string, unknown>) {
@@ -224,7 +347,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (draft && currentDate > nextDate) return;
     if (draft) drafts[chatId] = { ...draft, date: nextDate };
     else delete drafts[chatId];
-    localStorage.setItem(storageKey('drafts'), JSON.stringify(drafts));
+    draftsCache = drafts;
+    scheduleRecordSave('drafts');
   }
 
   // Закреплённые чаты (адреса пиров, порядок = порядок пина) и архив
@@ -288,6 +412,18 @@ export function createLocalState(deps: LocalStateDependencies) {
     ].forEach((part) => {
       localStorage.removeItem(`parvane:${part}:${user}`);
     });
+    resetSecureCaches();
+    void SecureE2eStorage.clearRecords(user).catch(() => undefined);
+  }
+
+  // Смена аккаунта: очереди/кэши прежнего пользователя не должны утечь в
+  // ключи нового (persist считается от текущего self)
+  function reset() {
+    scheduledQueue.length = 0;
+    isScheduledLoaded = false;
+    scheduledNextId = SCHEDULED_ID_BASE;
+    resetSecureCaches();
+    clearTtlTimers();
   }
 
   function fetchScheduledHistory(chat: ApiChat) {
@@ -323,6 +459,8 @@ export function createLocalState(deps: LocalStateDependencies) {
   }
 
   return {
+    hydrate,
+    reset,
     appendOwnJournal,
     clearUserData,
     deleteScheduledMessages: removeScheduled,

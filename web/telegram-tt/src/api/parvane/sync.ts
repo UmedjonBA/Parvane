@@ -29,7 +29,7 @@ type SyncDependencies = {
     refreshMemberships: () => Promise<void>;
   };
   localState: {
-    readOwnJournal: () => WireStoredMessage[];
+    readOwnJournal: () => Promise<WireStoredMessage[]>;
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
     isBlocked: (address: string) => boolean;
   };
@@ -108,6 +108,7 @@ export function createSyncController(deps: SyncDependencies) {
     sinceUpdated = 0;
     wireFlagsByUuid.clear();
     announcedThreadChatIds.clear();
+    inFlightByUuid.clear();
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
     checkedGroupCandidates.clear();
@@ -154,9 +155,18 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (content.kind === 'group_encrypted') {
+      // Группы: `from` — открытое поле провода, сервер может переподписать
+      // сообщение любым участником. Как и в 1-1, требуем, чтобы sender_identity
+      // принадлежал заявленному адресу по каталогу устройств (verify ниже)
       if (cached && (!stored.edited || cached.from === store.self)) {
         deps.media.rememberKeys(cached.content as WireMessageContent);
-        return { stored: { ...stored, content: cached.content as WireMessageContent }, wasSealed: true };
+        return {
+          stored: { ...stored, content: cached.content as WireMessageContent },
+          wasSealed: true,
+          verify: cached.senderIdentity && cached.from !== store.self
+            ? { claimedFrom: cached.from, senderIdentity: cached.senderIdentity }
+            : undefined,
+        };
       }
       if (!e2e || !content.ciphertext || !content.group || !content.sender_identity) {
         return { stored, wasSealed: false };
@@ -165,9 +175,17 @@ export function createSyncController(deps: SyncDependencies) {
       if (!plain) return { stored, wasSealed: false };
       try {
         const inner = JSON.parse(plain) as WireMessageContent;
-        e2e.cacheInner(stored.id, { from: stored.from, content: inner });
+        e2e.cacheInner(stored.id, {
+          from: stored.from, content: inner, senderIdentity: content.sender_identity,
+        });
         deps.media.rememberKeys(inner);
-        return { stored: { ...stored, content: inner }, wasSealed: true };
+        return {
+          stored: { ...stored, content: inner },
+          wasSealed: true,
+          verify: stored.from !== store.self
+            ? { claimedFrom: stored.from, senderIdentity: content.sender_identity }
+            : undefined,
+        };
       } catch {
         return { stored, wasSealed: false };
       }
@@ -417,7 +435,24 @@ export function createSyncController(deps: SyncDependencies) {
     });
   }
 
-  async function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
+  // Live-пуш и delta-синк могут нести один uuid одновременно; проверка
+  // «известно» внутри стоит после await'ов → без сериализации по uuid
+  // сообщение попадало в ленту дважды
+  const inFlightByUuid = new Map<string, Promise<void>>();
+
+  function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming: boolean): Promise<void> {
+    const previous = inFlightByUuid.get(rawStored.id) || Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => applyStoredUpdateUnserialized(rawStored, shouldAckIncoming));
+    inFlightByUuid.set(rawStored.id, next);
+    void next.finally(() => {
+      if (inFlightByUuid.get(rawStored.id) === next) inFlightByUuid.delete(rawStored.id);
+    }).catch(() => undefined);
+    return next;
+  }
+
+  async function applyStoredUpdateUnserialized(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
     trackCursors(rawStored);
     const { stored, wasSealed, hidden, verify } = unsealStored(rawStored);
     const store = deps.getStore();
@@ -546,7 +581,7 @@ export function createSyncController(deps: SyncDependencies) {
     const serverMessages = parsed.payload?.messages || [];
     serverMessages.forEach(trackCursors);
     const knownIds = new Set(serverMessages.map((message) => message.id));
-    const journal = deps.localState.readOwnJournal().filter((message) => !knownIds.has(message.id));
+    const journal = (await deps.localState.readOwnJournal()).filter((message) => !knownIds.has(message.id));
     const ordered = serverMessages.concat(journal)
       .sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
 
@@ -556,6 +591,12 @@ export function createSyncController(deps: SyncDependencies) {
     for (const rawStored of ordered) {
       const { stored, hidden, verify } = unsealStored(rawStored);
       if (hidden || handlePollContent(stored)) continue;
+      // Заблокированный контакт: как и в live-пути, его личные сообщения не
+      // показываем (раньше после reload вся история блокированного возвращалась)
+      if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
+        && deps.localState.isBlocked(stored.from)) {
+        continue;
+      }
       // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {

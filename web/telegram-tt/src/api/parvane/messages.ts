@@ -80,6 +80,36 @@ export function createMessageController(deps: MessageDependencies) {
   const uploadedPackRefBySetId = new Map<string, WirePackRef>();
 
   const connection = () => deps.getConnection();
+
+  // Публикация на шину без исключений: GatewayConnection.publish бросает,
+  // если сокет не открыт (реконнект) — раньше это роняло отправку после
+  // «точки невозврата» (бабл вечно «отправляется»), тайпинг на каждый символ
+  // и цикл read-receipts посередине
+  function publishFrame(subject: string, payload: string): boolean {
+    const activeConnection = connection();
+    if (!activeConnection?.isOpen) return false;
+    try {
+      activeConnection.publish(subject, payload);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function publishOrThrow(subject: string, payload: string) {
+    if (!publishFrame(subject, payload)) throw new Error('Gateway: соединение не открыто');
+  }
+
+  // Смена аккаунта / logout: ничего из сессии прежнего пользователя не должно
+  // пережить (persist считается от текущего self)
+  function reset() {
+    uuidBySentLocalKey.clear();
+    uploadedPackRefBySetId.clear();
+    liveLocations.forEach((entry) => {
+      if (entry.timer) clearInterval(entry.timer);
+    });
+    liveLocations.clear();
+  }
   const store = () => deps.getStore();
   const token = () => deps.getToken();
 
@@ -161,7 +191,7 @@ export function createMessageController(deps: MessageDependencies) {
       const sealed = await engine.encryptForDevices(member, innerJson, fetchPrekeyBundle);
       if (!sealed) return false;
       const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
-      connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
+      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
         id: newMessageId(),
         from: '',
         ts: Math.floor(Date.now() / 1000),
@@ -195,7 +225,7 @@ export function createMessageController(deps: MessageDependencies) {
       const sealed = await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId);
       if (!sealed) return;
       const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
-      connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
+      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
         id: newMessageId(),
         from: '',
         ts: Math.floor(Date.now() / 1000),
@@ -243,7 +273,7 @@ export function createMessageController(deps: MessageDependencies) {
         await engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
         `Group encryption failed for ${toAddress}.`,
       );
-      connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
+      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
         id: uuid,
         from: currentStore.self,
         ts,
@@ -267,7 +297,7 @@ export function createMessageController(deps: MessageDependencies) {
 
     const inner = JSON.stringify({ from: currentStore.self, content: wireContent });
     const sealed = await sealForAddress(toAddress, inner);
-    connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
+    publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
       id: uuid,
       from: '',
       ts,
@@ -800,7 +830,7 @@ export function createMessageController(deps: MessageDependencies) {
           `Group encryption failed for ${toAddress}.`,
         );
         const ts = Math.floor(Date.now() / 1000);
-        connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
+        publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
           id: uuid,
           from: currentStore.self,
           ts,
@@ -851,15 +881,20 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     const ts = Math.floor(Date.now() / 1000);
-    connection()!.publish(TOPIC_MSG_SEND, JSON.stringify({
-      id: uuid,
-      from: '',
-      ts,
-      token: token(),
-      payload: {
-        to: toAddress, content: wireContent, reply_to: replyToUuid, copies: sealedCopies,
-      },
-    }));
+    try {
+      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
+        id: uuid,
+        from: '',
+        ts,
+        token: token(),
+        payload: {
+          to: toAddress, content: wireContent, reply_to: replyToUuid, copies: sealedCopies,
+        },
+      }));
+    } catch (error) {
+      reportEncryptionSendFailure(chat.id, localMessage.id, error);
+      return;
+    }
     if (!ttlSecs) {
       deps.localState.appendOwnJournal({
         id: uuid,
@@ -1103,7 +1138,7 @@ export function createMessageController(deps: MessageDependencies) {
         const uuid = currentStore.getUuidForMessage(chat.id, id);
         if (!uuid) return;
         const signature = requireE2e(deps.getE2e()).signCallData(`delete:${uuid}`);
-        connection()!.publish(TOPIC_MSG_DELETE, JSON.stringify(
+        publishFrame(TOPIC_MSG_DELETE, JSON.stringify(
           buildWireEvent(currentStore.self, token(), { message_id: uuid, signature }),
         ));
         deps.sync.markDeleted(uuid);
@@ -1120,7 +1155,7 @@ export function createMessageController(deps: MessageDependencies) {
       if (!uuid || !connection()) return Promise.resolve(undefined);
       const emoji = reactions?.find((reaction) => reaction.type === 'emoji')?.emoticon || '';
       const signature = requireE2e(deps.getE2e()).signCallData(`react:${uuid}:${emoji}`);
-      connection()!.publish(TOPIC_MSG_REACT, JSON.stringify(
+      publishFrame(TOPIC_MSG_REACT, JSON.stringify(
         buildWireEvent(currentStore.self, token(), { message_id: uuid, emoji, signature }),
       ));
       const message = currentStore.getMessages(chat.id).find((candidate) => candidate.id === messageId);
@@ -1154,7 +1189,7 @@ export function createMessageController(deps: MessageDependencies) {
       if (!uuid || !connection()) return Promise.resolve(undefined);
       const pin = !isUnpin;
       const signature = requireE2e(deps.getE2e()).signCallData(`pin:${uuid}:${pin}`);
-      connection()!.publish(TOPIC_MSG_PIN, JSON.stringify(
+      publishFrame(TOPIC_MSG_PIN, JSON.stringify(
         buildWireEvent(currentStore.self, token(), { message_id: uuid, pin, signature }),
       ));
       deps.sendUpdate({ '@type': 'updatePinnedIds', chatId: chat.id, isPinned: pin, messageIds: [messageId] });
@@ -1194,7 +1229,7 @@ export function createMessageController(deps: MessageDependencies) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(peer.id);
       if (!toAddress) return Promise.resolve(undefined);
-      connection()!.publish(`msg.typing.${peer.id}`, JSON.stringify({ from: currentStore.self, to: toAddress }));
+      publishFrame(`msg.typing.${peer.id}`, JSON.stringify({ from: currentStore.self, to: toAddress }));
       return Promise.resolve(undefined);
     },
 
@@ -1271,7 +1306,7 @@ export function createMessageController(deps: MessageDependencies) {
         const uuid = currentStore.getUuidForMessage(chat.id, message.id);
         if (!uuid || deps.sync.hasReportedRead(uuid)) return;
         deps.sync.markReportedRead(uuid);
-        connection()!.publish(TOPIC_MSG_READ, JSON.stringify(
+        publishFrame(TOPIC_MSG_READ, JSON.stringify(
           buildWireEvent(currentStore.self, token(), { message_id: uuid }),
         ));
       });
@@ -1312,7 +1347,7 @@ export function createMessageController(deps: MessageDependencies) {
         const uuid = currentStore.getUuidForMessage(chat.id, id);
         if (!uuid || deps.sync.hasReportedRead(uuid)) return;
         deps.sync.markReportedRead(uuid);
-        connection()!.publish(TOPIC_MSG_READ, JSON.stringify(
+        publishFrame(TOPIC_MSG_READ, JSON.stringify(
           buildWireEvent(currentStore.self, token(), { message_id: uuid }),
         ));
       });
@@ -1461,6 +1496,7 @@ export function createMessageController(deps: MessageDependencies) {
   };
 
   return {
+    reset,
     ensureSavedGifsHydrated,
     getSavedGifs: () => savedGifs,
     methods,

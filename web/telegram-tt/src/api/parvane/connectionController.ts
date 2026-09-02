@@ -37,6 +37,7 @@ type ConnectionDependencies = {
   isSynced: () => boolean;
   resetSyncPromise: () => void;
   requestDeltaSync: () => void;
+  requestFullSync: () => void;
   resolveDisplayNames: (addresses: string[]) => Promise<void>;
   handleInboxFrame: (payload: string) => void;
   selfId: () => string;
@@ -225,8 +226,14 @@ export function createConnectionController(deps: ConnectionDependencies) {
       reconnectAttempt = 0;
       deps.sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateReady' });
       publishPresence();
-      if (deps.isSynced()) deps.requestDeltaSync();
-      else deps.resetSyncPromise();
+      if (deps.isSynced()) {
+        deps.requestDeltaSync();
+      } else {
+        // Первичный синк упал (таймаут/обрыв) — раньше просто сбрасывали memo
+        // и список чатов оставался пустым до перезагрузки
+        deps.resetSyncPromise();
+        deps.requestFullSync();
+      }
       deps.log('соединение с gateway восстановлено');
     } catch (error) {
       if (deps.getConnection() === nextConnection) deps.setConnection(undefined);

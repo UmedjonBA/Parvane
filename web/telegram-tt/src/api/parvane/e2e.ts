@@ -326,7 +326,27 @@ export class E2eEngine {
     };
   }
 
+  // Коалесценция записи: раньше на КАЖДОЕ сообщение сериализовалось всё
+  // состояние (все pickle + весь decCache) и писалось в IDB — O(история) на
+  // сообщение, минуты на входе. Теперь dirty-флаг + короткий debounce; при
+  // уходе со страницы сбрасываем немедленно (ратчет Olm обязан пережить
+  // закрытие вкладки), flushStorage() форсирует запись
+  private persistDirty = false;
+
+  private persistTimer: ReturnType<typeof setTimeout> | undefined;
+
   private queuePersist() {
+    this.persistDirty = true;
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      this.flushNow();
+    }, PERSIST_DEBOUNCE_MS);
+  }
+
+  private flushNow() {
+    if (!this.persistDirty) return;
+    this.persistDirty = false;
     const state = this.buildState();
     this.persistChain = this.persistChain.then(async () => {
       try {
@@ -337,7 +357,16 @@ export class E2eEngine {
     });
   }
 
+  flushOnPageHide() {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = undefined;
+    }
+    this.flushNow();
+  }
+
   async flushStorage() {
+    this.flushOnPageHide();
     await this.persistChain;
     if (this.storageError) {
       throw this.storageError instanceof Error
@@ -582,7 +611,11 @@ export class E2eEngine {
       v: number; iterations?: number; salt: string; iv: string; data: string;
     };
     if (parsed.v !== EXPORT_VERSION) throw new Error(`Unsupported key backup version: ${parsed.v}.`);
-    const key = await deriveExportKey(password, base64ToBytes(parsed.salt), parsed.iterations);
+    // Число итераций из файла не ниже минимума: подделанный бэкап с iterations=1
+    // делал бы перебор пароля тривиальным
+    const key = await deriveExportKey(
+      password, base64ToBytes(parsed.salt), Math.max(parsed.iterations ?? EXPORT_MIN_ITERATIONS, EXPORT_MIN_ITERATIONS),
+    );
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: toStandaloneBuffer(base64ToBytes(parsed.iv)) },
       key,
@@ -905,6 +938,8 @@ function stripBase64Padding(value: string) {
 }
 
 const EXPORT_VERSION = 1;
+const EXPORT_MIN_ITERATIONS = 310000;
+const PERSIST_DEBOUNCE_MS = 250;
 // OWASP-2023 минимум для PBKDF2-SHA256. Импорт читает iterations из самого
 // бэкапа — старые экспорты на 310k остаются читаемыми
 const EXPORT_KDF_ITERATIONS = 600000;

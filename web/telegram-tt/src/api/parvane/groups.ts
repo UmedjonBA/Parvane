@@ -404,7 +404,12 @@ export function createGroupController(deps: GroupDependencies) {
     return { type: 'ok' as const, chat: groupChat };
   }
 
+  function reset() {
+    inviteLinkByGroupId.clear();
+  }
+
   return {
+    reset,
     addChatMembers,
     createChannel,
     createGroupChat,
