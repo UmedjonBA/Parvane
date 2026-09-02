@@ -70,20 +70,20 @@ if (ARE_DIAG_HOOKS_ENABLED) {
   (window as unknown as { __parvaneDiagCallApi?: typeof callApi }).__parvaneDiagCallApi = callApi;
 }
 
-if (ARE_DIAG_HOOKS_ENABLED) {
-  (window as unknown as {
-    __parvaneDiagReadDocument?: (chatId: string, messageId: number) => Promise<string | undefined>;
-  }).__parvaneDiagReadDocument = async (chatId, messageId) => {
-    const message = selectChatMessage(getGlobal(), chatId, messageId);
-    const document = message?.content.document;
-    if (!document) return undefined;
-    const mediaHash = getDocumentMediaHash(document, 'download');
-    if (!mediaHash) return undefined;
-    const blobUrl = await mediaLoader.fetch(mediaHash, ApiMediaFormat.BlobUrl);
-    if (typeof blobUrl !== 'string') return undefined;
-    return (await fetch(blobUrl)).text();
-  };
-}
+// Чтение JSON-вложения отчёта читалкой bugs_reader.mjs — read-only и только
+// свои документы (их и так можно скачать со страницы), поэтому остаётся в проде
+(window as unknown as {
+  __parvaneDiagReadDocument?: (chatId: string, messageId: number) => Promise<string | undefined>;
+}).__parvaneDiagReadDocument = async (chatId, messageId) => {
+  const message = selectChatMessage(getGlobal(), chatId, messageId);
+  const document = message?.content.document;
+  if (!document) return undefined;
+  const mediaHash = getDocumentMediaHash(document, 'download');
+  if (!mediaHash) return undefined;
+  const blobUrl = await mediaLoader.fetch(mediaHash, ApiMediaFormat.BlobUrl);
+  if (typeof blobUrl !== 'string') return undefined;
+  return (await fetch(blobUrl)).text();
+};
 
 const ParvaneBugReportModal: FC = () => {
   const { sendMessage, showNotification } = getActions();

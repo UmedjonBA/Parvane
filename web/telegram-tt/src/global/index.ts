@@ -50,11 +50,9 @@ export const getGlobal = typed.getGlobal;
 export const setGlobal = typed.setGlobal;
 // Parvane: read-only доступ к global из консоли/e2e для диагностики состояния
 // ленты (viewportIds/lastMessageId) в реальном браузере. Без setGlobal.
-// Только в e2e/dev-сборках (VITE_PARVANE_DIAG_HOOKS=1): в проде любой XSS
-// получил бы через хуки полный стейт
-if (import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1') {
-  (window as unknown as { __parvaneGetGlobal?: typeof getGlobal }).__parvaneGetGlobal = getGlobal;
-}
+// Read-only доступ к global для пробников и читалки отчётов о багах. Стейт
+// и так виден на странице; опасный хук (callApi) — только в e2e-сборках
+(window as unknown as { __parvaneGetGlobal?: typeof getGlobal }).__parvaneGetGlobal = getGlobal;
 export const getActions = typed.getActions;
 export const getPromiseActions = typed.getPromiseActions;
 // parvaneDiag: временный журнал действий (см. util/parvaneDiag.ts) — каждое

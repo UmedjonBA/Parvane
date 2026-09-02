@@ -56,15 +56,21 @@ try {
   await bobLive.locator('.location-avatar').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   console.log('[live-location] обновление позиции доезжает получателю');
+  // Без хуков window.__parvane* (в прод-сборке их нет): новая позиция →
+  // новый хэш карты → у получателя меняется blob-картинка карты
+  const liveMap = bobLive.locator('img.map[src^="blob:"]');
+  await liveMap.waitFor({ state: 'visible', timeout: LIVE_UPDATE_TIMEOUT_MS });
+  const mapBefore = await liveMap.getAttribute('src');
   await aliceContext.setGeolocation({ latitude: 48.8566, longitude: 2.3522 });
-  await bobSession.page.waitForFunction(() => {
-    const g = window.__parvaneGetGlobal?.();
-    const tab = Object.values(g?.byTabId || {})[0];
-    const chatId = tab?.messageLists?.[0]?.chatId;
-    const byId = g?.messages?.byChatId?.[chatId]?.byId || {};
-    return Object.values(byId).some((m) => m.content?.location?.mediaType === 'geoLive'
-      && Math.abs(m.content.location.geo.lat - 48.8566) < 0.01);
-  }, undefined, { timeout: LIVE_UPDATE_TIMEOUT_MS });
+  await bobSession.page.waitForFunction(
+    ({ selector, before }) => {
+      const bubbles = document.querySelectorAll('.Transition_slide-active > .MessageList .Message .Location');
+      const img = bubbles[1]?.querySelector(selector);
+      return Boolean(img) && img.getAttribute('src') !== before;
+    },
+    { selector: 'img.map[src^="blob:"]', before: mapBefore },
+    { timeout: LIVE_UPDATE_TIMEOUT_MS },
+  );
   await bobLive.locator('.geo-countdown').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   console.log('[live-location] Stop Sharing Location');
