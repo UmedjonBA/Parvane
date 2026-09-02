@@ -141,6 +141,23 @@ void MessengerClient::pin(
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
+std::vector<std::pair<std::string, std::int64_t>> MessengerClient::readers(
+        const std::string &from, const std::string &messageId,
+        const std::string &token, int timeoutMs) {
+    std::vector<std::pair<std::string, std::int64_t>> out;
+    const json payload{{"message_id", messageId}};
+    const auto raw = _t.request(topics::MsgReaders,
+                                makeEvent(uuid4(), from, nowUnix(), token, payload).dump(),
+                                timeoutMs);
+    const auto resp = json::parse(raw, nullptr, false);
+    if (!resp.is_object() || !resp.value("ok", false)) return out;
+    for (const auto &r : resp.value("readers", json::array())) {
+        if (!r.is_object()) continue;
+        out.emplace_back(r.value("address", std::string()), r.value("ts", std::int64_t(0)));
+    }
+    return out;
+}
+
 void MessengerClient::onDelivered(const std::string &self,
                                   std::function<void(std::string)> handler) {
     _t.subscribe(topics::msgInbox(self),

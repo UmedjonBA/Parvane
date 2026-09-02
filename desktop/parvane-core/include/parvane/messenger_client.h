@@ -109,6 +109,11 @@ public:
     // `pin:<id>:<true|false>` — для своих sealed-сообщений.
     void pin(const std::string &from, const std::string &messageId,
              bool pinned, const std::string &token, const std::string &signature = {});
+    // Кто прочитал сообщение (msg.chat.readers): (адрес, unix ts). Только
+    // участнику переписки; пусто при ошибке.
+    std::vector<std::pair<std::string, std::int64_t>> readers(
+        const std::string &from, const std::string &messageId,
+        const std::string &token, int timeoutMs = 3000);
 
     // Подписка на СВОЙ инбокс msg.user.<self> — delivered-подтверждения (Фаза 1:
     // приходят, когда получатель подтвердил приём). handler(message_id).

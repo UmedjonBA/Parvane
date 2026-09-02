@@ -27,6 +27,7 @@ inline constexpr auto MsgEdit = "msg.chat.edit";
 inline constexpr auto MsgDelete = "msg.chat.delete";
 inline constexpr auto MsgReact = "msg.chat.react";
 inline constexpr auto MsgPin = "msg.chat.pin";
+inline constexpr auto MsgReaders = "msg.chat.readers";
 inline constexpr auto MsgAck = "msg.chat.ack";
 
 // Персональный инбокс пользователя (msg.user.<addr>): входящие сообщения
