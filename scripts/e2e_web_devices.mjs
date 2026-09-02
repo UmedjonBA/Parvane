@@ -16,7 +16,7 @@ import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
   findMessage,
-  openPrivateChat,
+  openPrivateChatStrict,
   preparePage,
   sendText,
 } from './e2e_web_helpers.mjs';
@@ -104,12 +104,12 @@ try {
   await aliceSession.page.waitForTimeout(DEVICE_LIST_TTL_WAIT_MS);
 
   // ── До отзыва: 1-на-1 и группа читаются на обоих устройствах ───────────────
-  await openPrivateChat(aliceSession.page, bob);
+  await openPrivateChatStrict(aliceSession.page, bob);
   await sendText(aliceSession.page, beforeRevoke);
-  await openPrivateChat(bobDevice1.page, alice);
+  await openPrivateChatStrict(bobDevice1.page, alice);
   await findMessage(bobDevice1.page, beforeRevoke).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await openPrivateChat(bobDevice2.page, alice);
+  await openPrivateChatStrict(bobDevice2.page, alice);
   await findMessage(bobDevice2.page, beforeRevoke).first()
     .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
 
@@ -152,9 +152,9 @@ try {
   await aliceSession.page.waitForTimeout(DEVICE_LIST_TTL_WAIT_MS);
 
   // ── После отзыва: 1-на-1 читает только живое устройство ────────────────────
-  await openPrivateChat(aliceSession.page, bob);
+  await openPrivateChatStrict(aliceSession.page, bob);
   await sendText(aliceSession.page, afterRevokeDirect);
-  await openPrivateChat(bobDevice1.page, alice);
+  await openPrivateChatStrict(bobDevice1.page, alice);
   await findMessage(bobDevice1.page, afterRevokeDirect).first()
     .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
   await bobDevice2.page.waitForTimeout(NEGATIVE_WAIT_MS);

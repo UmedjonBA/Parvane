@@ -305,6 +305,9 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
 function logDebug(message: string) {
   // eslint-disable-next-line no-console
   console.info(`[parvane] ${message}`);
+  // parvaneDiag: внутренние события провайдера (пропуски расшифровки,
+  // подмена отправителя и т.п.) — в журнал отчёта о баге
+  diagLog('log', message);
 }
 
 // «Keep me signed in»: при включённом флаге сохраняем пароль (зашифрованным),
