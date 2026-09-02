@@ -31,6 +31,7 @@ type LocalStateDependencies = {
 const SCHEDULED_CHECK_INTERVAL_MS = 5000;
 const SCHEDULED_ID_BASE = 1_000_001;
 const RECORD_SAVE_DELAY_MS = 300;
+const HISTORY_FLUSH_DELAY_MS = 500;
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const JOURNAL_MAX_ENTRIES = 5000;
 
@@ -128,7 +129,63 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
+  // ── кэш истории и курсор синка (шифрованные записи m:<uuid>, cursor) ────
+  const historyWriteQueue = new Map<string, WireStoredMessage | undefined>();
+  let historyFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  let cursorPending: { lastSeenUuid: string; sinceUpdated: number } | undefined;
+
+  function flushHistoryQueue() {
+    historyFlushTimer = undefined;
+    const batch = Array.from(historyWriteQueue.entries());
+    historyWriteQueue.clear();
+    const cursor = cursorPending;
+    cursorPending = undefined;
+    void secureStorage()?.then(async (storage) => {
+      for (const [uuid, stored] of batch) {
+        if (stored) await storage.saveRecord(`m:${uuid}`, stored);
+        else await storage.deleteRecord(`m:${uuid}`);
+      }
+      if (cursor) await storage.saveRecord('cursor', cursor);
+    }).catch(() => undefined);
+  }
+
+  function scheduleHistoryFlush() {
+    if (historyFlushTimer) return;
+    historyFlushTimer = setTimeout(flushHistoryQueue, HISTORY_FLUSH_DELAY_MS);
+  }
+
+  function saveHistoryRecord(stored: WireStoredMessage) {
+    historyWriteQueue.set(stored.id, stored);
+    scheduleHistoryFlush();
+  }
+
+  function deleteHistoryRecord(uuid: string) {
+    historyWriteQueue.set(uuid, undefined);
+    scheduleHistoryFlush();
+  }
+
+  async function loadHistoryRecords(): Promise<WireStoredMessage[]> {
+    const storage = await secureStorage();
+    if (!storage) return [];
+    return storage.loadRecordsByPrefix<WireStoredMessage>('m:');
+  }
+
+  function saveSyncCursor(cursor: { lastSeenUuid: string; sinceUpdated: number }) {
+    cursorPending = cursor;
+    scheduleHistoryFlush();
+  }
+
+  async function loadSyncCursor() {
+    const storage = await secureStorage();
+    if (!storage) return undefined;
+    return storage.loadRecord<{ lastSeenUuid: string; sinceUpdated: number }>('cursor');
+  }
+
   function resetSecureCaches() {
+    historyWriteQueue.clear();
+    cursorPending = undefined;
+    if (historyFlushTimer) clearTimeout(historyFlushTimer);
+    historyFlushTimer = undefined;
     journalCache = undefined;
     draftsCache = undefined;
     securePromise = undefined;
@@ -461,6 +518,11 @@ export function createLocalState(deps: LocalStateDependencies) {
   return {
     hydrate,
     reset,
+    saveHistoryRecord,
+    deleteHistoryRecord,
+    loadHistoryRecords,
+    saveSyncCursor,
+    loadSyncCursor,
     appendOwnJournal,
     clearUserData,
     deleteScheduledMessages: removeScheduled,

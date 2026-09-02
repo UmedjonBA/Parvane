@@ -37,6 +37,10 @@ export class ParvaneStore {
 
   private messagesByChatId = new Map<string, ApiMessage[]>();
 
+  // Индекс id → сообщение на чат: раньше putMessage искал перебором и
+  // пересортировывал весь чат на каждое сообщение
+  private messageByIdByChatId = new Map<string, Map<number, ApiMessage>>();
+
   private msgKeyByUuid = new Map<string, { chatId: string; id: number }>();
 
   private uuidByMsgKey = new Map<string, string>();
@@ -116,7 +120,11 @@ export class ParvaneStore {
   getMessageByUuid(uuid: string): ApiMessage | undefined {
     const key = this.msgKeyByUuid.get(uuid);
     if (!key) return undefined;
-    return this.getMessages(key.chatId).find((message) => message.id === key.id);
+    return this.messageByIdByChatId.get(key.chatId)?.get(key.id);
+  }
+
+  getMessage(chatId: string, id: number): ApiMessage | undefined {
+    return this.messageByIdByChatId.get(chatId)?.get(id);
   }
 
   // Числовой id сообщения ВЫВОДИТСЯ ИЗ ВРЕМЕНИ (date в секундах → мс), чтобы
@@ -144,14 +152,41 @@ export class ParvaneStore {
     const uuid = this.uuidByMsgKey.get(`${message.chatId}:${message.id}`);
     if (uuid) this.storedUuids.add(uuid);
     const list = this.messagesByChatId.get(message.chatId) || [];
-    const index = list.findIndex((m) => m.id === message.id);
-    if (index >= 0) {
-      list[index] = message;
-    } else {
-      list.push(message);
-      list.sort((a, b) => a.id - b.id);
+    let byId = this.messageByIdByChatId.get(message.chatId);
+    if (!byId) {
+      byId = new Map();
+      this.messageByIdByChatId.set(message.chatId, byId);
     }
+    if (byId.has(message.id)) {
+      const index = this.indexOfId(list, message.id);
+      if (index >= 0) list[index] = message;
+    } else if (!list.length || list[list.length - 1].id < message.id) {
+      list.push(message);
+    } else {
+      // Бинарная вставка в отсортированный по id список
+      let low = 0;
+      let high = list.length;
+      while (low < high) {
+        const mid = (low + high) >> 1;
+        if (list[mid].id < message.id) low = mid + 1;
+        else high = mid;
+      }
+      list.splice(low, 0, message);
+    }
+    byId.set(message.id, message);
     this.messagesByChatId.set(message.chatId, list);
+  }
+
+  private indexOfId(list: ApiMessage[], id: number) {
+    let low = 0;
+    let high = list.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (list[mid].id === id) return mid;
+      if (list[mid].id < id) low = mid + 1;
+      else high = mid - 1;
+    }
+    return -1;
   }
 
   getMessages(chatId: string): ApiMessage[] {
@@ -161,8 +196,12 @@ export class ParvaneStore {
   removeMessage(chatId: string, id: number) {
     const uuid = this.uuidByMsgKey.get(`${chatId}:${id}`);
     if (uuid) this.storedUuids.delete(uuid);
+    this.messageByIdByChatId.get(chatId)?.delete(id);
     const list = this.messagesByChatId.get(chatId);
-    if (list) this.messagesByChatId.set(chatId, list.filter((m) => m.id !== id));
+    if (list) {
+      const index = this.indexOfId(list, id);
+      if (index >= 0) list.splice(index, 1);
+    }
   }
 
   getChatIds() {

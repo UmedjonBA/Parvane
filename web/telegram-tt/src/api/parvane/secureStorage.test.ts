@@ -47,3 +47,23 @@ describe('secure E2E storage', () => {
     await expect(SecureE2eStorage.open(USER)).rejects.toThrow('protection key is missing');
   });
 });
+
+describe('secure E2E storage records', () => {
+  it('stores named records and lists them by prefix under the same key', async () => {
+    const storage = await SecureE2eStorage.open('carol@local');
+    await storage.saveRecord('journal', [{ id: 'j1' }]);
+    await storage.saveRecord('m:u1', { id: 'u1', ts: 1 });
+    await storage.saveRecord('m:u2', { id: 'u2', ts: 2 });
+    expect(await storage.loadRecord<unknown[]>('journal')).toEqual([{ id: 'j1' }]);
+    const history = await storage.loadRecordsByPrefix<{ id: string }>('m:');
+    expect(history.map((r) => r.id).sort()).toEqual(['u1', 'u2']);
+    await storage.deleteRecord('m:u1');
+    expect((await storage.loadRecordsByPrefix<{ id: string }>('m:')).map((r) => r.id)).toEqual(['u2']);
+    // Записи другого пользователя не видны и не читаются его ключом
+    const other = await SecureE2eStorage.open('dave@local');
+    expect(await other.loadRecordsByPrefix('m:')).toEqual([]);
+    await SecureE2eStorage.clearRecords('carol@local');
+    expect(await storage.loadRecord('journal')).toBeUndefined();
+    expect(await storage.loadRecordsByPrefix('m:')).toEqual([]);
+  });
+});
