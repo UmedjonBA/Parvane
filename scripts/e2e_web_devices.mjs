@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  dumpDiagJournal,
+  relogin,
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
   findMessage,
@@ -77,14 +79,6 @@ async function openGroupChat(page, title) {
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-async function relogin(page, password) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(password);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
@@ -202,7 +196,10 @@ try {
     ['alice', aliceContext], ['bob-dev1', bobDevice1Context], ['bob-dev2', bobDevice2Context],
   ]) {
     const page = context.pages()[0];
-    if (page) await page.screenshot({ path: `${dir}devices-${name}.png` }).catch(() => {});
+    if (page) {
+      await page.screenshot({ path: `${dir}devices-${name}.png` }).catch(() => {});
+      await dumpDiagJournal(page, name, 60);
+    }
   }
   throw err;
 } finally {

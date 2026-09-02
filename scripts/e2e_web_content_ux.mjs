@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
@@ -14,14 +15,6 @@ import {
 
 const PASSWORD = 'Parvane-content-ux-e2e-password';
 
-async function relogin(page) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
@@ -48,7 +41,7 @@ try {
   await aliceSession.page.waitForTimeout(1500);
 
   // ── Черновик переживает reload ─────────────────────────────────────────────
-  await relogin(aliceSession.page);
+  await relogin(aliceSession.page, PASSWORD);
   // Чат с черновиком появляется в списке после fetchChats
   await aliceSession.page.locator('#LeftColumn .ListItem').filter({ hasText: bob.split('@')[0] })
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -76,7 +69,7 @@ try {
   await openPrivateChat(aliceSession.page, bob);
   await sendText(aliceSession.page, draftText);
   await aliceSession.page.waitForTimeout(1500);
-  await relogin(aliceSession.page);
+  await relogin(aliceSession.page, PASSWORD);
   await openPrivateChat(aliceSession.page, bob);
   const clearedDraft = await aliceSession.page.locator('#editable-message-text').innerText();
   assert.equal(clearedDraft.trim(), '', 'черновик не очистился после отправки');
@@ -107,7 +100,7 @@ try {
   await bobChatItem().click({ button: 'right' });
   await aliceSession.page.getByRole('menuitem', { name: /Pin to top|Pin/ }).first().click();
   await aliceSession.page.waitForTimeout(500);
-  await relogin(aliceSession.page);
+  await relogin(aliceSession.page, PASSWORD);
   const pinnedChat = aliceSession.page.locator('#LeftColumn .ListItem').first();
   await pinnedChat.filter({ hasText: bob.split('@')[0] })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -116,7 +109,7 @@ try {
   await bobChatItem().click({ button: 'right' });
   await aliceSession.page.getByRole('menuitem', { name: 'Archive' }).click();
   await aliceSession.page.waitForTimeout(500);
-  await relogin(aliceSession.page);
+  await relogin(aliceSession.page, PASSWORD);
   const bobInMain = await aliceSession.page.locator('#LeftColumn .ListItem')
     .filter({ hasText: bob.split('@')[0] }).count();
   assert.equal(bobInMain, 0, 'архивированный чат остался в основном списке после reload');

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
@@ -27,14 +28,6 @@ const browser = await chromium.launch({
 const aliceContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
 const bobContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
 
-async function relogin(page) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 function findHistoryEntry(page, text) {
   return page.locator('.Transition_slide-active > .MessageList .Message')
@@ -145,7 +138,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Персист истории: reload, источник — call-шард ──────────────────────────
-  await relogin(aliceSession.page);
+  await relogin(aliceSession.page, PASSWORD);
   await openPrivateChat(aliceSession.page, bob);
   await findHistoryEntry(aliceSession.page, 'Outgoing Video Call')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

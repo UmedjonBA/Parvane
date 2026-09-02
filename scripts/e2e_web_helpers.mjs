@@ -195,3 +195,33 @@ export function assertNoPageErrors(sessions) {
     assert.deepEqual(session.errors, [], `${name} page errors: ${session.errors.join('; ')}`);
   }
 }
+
+// Reload + вход. keep-signed-in (92e73322): пароль сохранён и вход после
+// reload автоматический; форма пароля появляется только без сохранённой сессии
+export async function relogin(page, password) {
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
+  const leftColumn = page.locator('#LeftColumn');
+  await Promise.race([
+    passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+    leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+  ]);
+  if (await passwordScreen.isVisible()) {
+    await passwordScreen.locator('#sign-in-password').fill(password);
+    await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  }
+  await leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Журнал действий клиента (web util/parvaneDiag, localStorage parvane:diag:v1)
+// — при падении сценария печатаем хвост: видно апдейты/ошибки провайдера
+export async function dumpDiagJournal(page, label, limit = 40) {
+  const lines = await page.evaluate((max) => {
+    try {
+      const raw = localStorage.getItem('parvane:diag:v1');
+      const entries = raw ? JSON.parse(raw) : [];
+      return entries.slice(-max).map((e) => `${new Date(e.t).toISOString().slice(11, 23)} ${e.k}${e.n ? ` x${e.n}` : ''} ${(e.d || '').slice(0, 140)}`);
+    } catch (e) { return [`diag unavailable: ${e}`]; }
+  }, limit).catch((e) => [`diag eval failed: ${e.message}`]);
+  console.error(`--- diag ${label} ---\n${lines.join('\n')}`);
+}
