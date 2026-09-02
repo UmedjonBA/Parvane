@@ -1345,6 +1345,75 @@ async fn deliver_message(
     Ok(())
 }
 
+/// Живой пуш мутации (правка/удаление/реакция/пин): всем участникам, включая
+/// автора, уезжает актуальная строка сообщения тем же InboxPush, что и при
+/// отправке — клиент обрабатывает его как известное сообщение (диф флагов),
+/// не дожидаясь delta-синка (до 10 с). Офлайн-очередь не трогаем: кто был
+/// офлайн, подтянет мутацию через sync.
+async fn push_mutation(nc: &Client, pool: &SqlitePool, message_id: &str, now: i64) -> Result<()> {
+    type Row = (String, String, String, Option<String>, i64, Option<String>, i64, i64, i64, i64);
+    let Some((id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, pinned)) =
+        sqlx::query_as::<_, Row>(
+            "SELECT id, from_user, to_user, content, ts, reply_to, edited, deleted, updated_at, pinned
+             FROM messages WHERE id = ?",
+        )
+        .bind(message_id)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(());
+    };
+    let Some(content_json) = content_json else { return Ok(()) };
+    let content: MessageContent = serde_json::from_str(&content_json).context("разбор content")?;
+    let copies: Vec<MessageDeviceCopy> = sqlx::query_as::<_, (String, String, String, String, i64)>(
+        "SELECT recipient, signing_key, device_id, ciphertext, ctype
+         FROM message_device_copies WHERE message_id = ?",
+    )
+    .bind(message_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(recipient, signing_key, device_id, ciphertext, ctype)| MessageDeviceCopy {
+        recipient,
+        signing_key,
+        device_id,
+        ciphertext,
+        ctype: ctype as u32,
+    })
+    .collect();
+    let mut targets = resolve_recipients(pool, &to, &from).await?;
+    if !targets.contains(&from) {
+        targets.push(from.clone());
+    }
+    for r in &targets {
+        let reactions = reactions_for(pool, &id, r).await;
+        let stored = StoredMessage {
+            id: id.parse().unwrap_or(Uuid::nil()),
+            from: from.clone(),
+            to: to.clone(),
+            content: content.clone(),
+            ts,
+            reply_to: reply_to.as_deref().and_then(|v| v.parse().ok()),
+            edited: edited != 0,
+            deleted: deleted != 0,
+            read: false,
+            updated_at,
+            reactions,
+            pinned: pinned != 0,
+            copies: copies.iter().filter(|copy| copy.recipient == *r).cloned().collect(),
+        };
+        let ev = ParvaneEvent {
+            id: Uuid::now_v7(),
+            from: "messenger".to_string(),
+            ts: now,
+            token: String::new(),
+            payload: parvane_types::InboxPush { message: stored },
+        };
+        nc.publish(msg_inbox(r), serde_json::to_vec(&ev)?.into()).await?;
+    }
+    Ok(())
+}
+
 // ── msg.chat.send ─────────────────────────────────────────────────────────────
 
 async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -1498,6 +1567,9 @@ async fn handle_edit(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         };
         if ok {
             info!("Сообщение {} отредактировано автором {}", event.payload.message_id, author);
+            if let Err(e) = push_mutation(nc, pool, &event.payload.message_id.to_string(), now_unix()).await {
+                warn!("live-пуш правки {}: {}", event.payload.message_id, e);
+            }
         } else {
             warn!("Правка {} отклонена (не автор или удалено)", event.payload.message_id);
         }
@@ -1529,6 +1601,9 @@ async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
             ).await?;
         if ok {
             info!("Сообщение {} удалено у всех автором {}", event.payload.message_id, author);
+            if let Err(e) = push_mutation(nc, pool, &event.payload.message_id.to_string(), now_unix()).await {
+                warn!("live-пуш удаления {}: {}", event.payload.message_id, e);
+            }
         } else {
             warn!("Удаление {} отклонено (не автор)", event.payload.message_id);
         }
@@ -1564,6 +1639,9 @@ async fn handle_react(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         }
         set_reaction(pool, &mid, &reactor, &event.payload.emoji, now_unix()).await?;
         info!("Реакция '{}' на {} от {}", event.payload.emoji, mid, reactor);
+        if let Err(e) = push_mutation(nc, pool, &mid, now_unix()).await {
+            warn!("live-пуш реакции {}: {}", mid, e);
+        }
         anyhow::Ok(())
     }
     .await;
@@ -1595,6 +1673,9 @@ async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         }
         set_pinned(pool, &mid, event.payload.pin, now_unix()).await?;
         info!("Pin={} для {} ({})", event.payload.pin, mid, who);
+        if let Err(e) = push_mutation(nc, pool, &mid, now_unix()).await {
+            warn!("live-пуш пина {}: {}", mid, e);
+        }
         anyhow::Ok(())
     }
     .await;

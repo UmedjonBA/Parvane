@@ -36,6 +36,9 @@ struct Claims {
     sub: String,
     exp: usize,
     iat: usize,
+    /// device_id устройства (если клиент его сообщил при issue)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dev: Option<String>,
 }
 
 // ── password hashing (argon2id, соль на пароль) ───────────────────────────────
@@ -134,7 +137,7 @@ async fn main() -> Result<()> {
                 handle_email_confirm(&nc, &pool, msg).await;
             }
             Some(msg) = verify_sub.next() => {
-                handle_verify(&nc, &decoding, msg).await;
+                handle_verify(&nc, &decoding, &pool, msg).await;
             }
             Some(msg) = search_sub.next() => {
                 handle_search(&nc, &pool, msg).await;
@@ -546,6 +549,14 @@ async fn list_devices(pool: &SqlitePool, username: &str) -> Result<Vec<DeviceInf
 /// чтение НОВЫХ сообщений закрывает исчезновение из fan-out + клиентская
 /// ротация групповых ключей.
 async fn revoke_device(pool: &SqlitePool, username: &str, device_id: &str) -> Result<bool> {
+    // Тумбстоун: JWT этого устройства перестают проходить verify сразу
+    sqlx::query("INSERT OR REPLACE INTO revoked_devices (username, device_id, revoked_at) VALUES (?, ?, ?)")
+        .bind(username)
+        .bind(device_id)
+        .bind(now_unix())
+        .execute(pool)
+        .await
+        .context("тумбстоун отозванного устройства")?;
     let deleted = sqlx::query("DELETE FROM device_keys WHERE username = ? AND device_id = ?")
         .bind(username)
         .bind(device_id)
@@ -988,7 +999,12 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
     }
 
     let now = now_unix() as usize;
-    let claims = Claims { sub: req.user.clone(), iat: now, exp: now + 86400 };
+    let claims = Claims {
+        sub: req.user.clone(),
+        iat: now,
+        exp: now + 86400,
+        dev: req.device_id.clone().filter(|d| !d.is_empty()),
+    };
     let token = encode(&Header::new(Algorithm::HS256), &claims, encoding)
         .context("подпись JWT")?;
 
@@ -1456,14 +1472,27 @@ fn prekey_fetch_rate_ok(requester: &str, target: &str) -> bool {
     true
 }
 
-async fn handle_verify(nc: &Client, decoding: &DecodingKey, msg: async_nats::Message) {
+async fn handle_verify(
+    nc: &Client,
+    decoding: &DecodingKey,
+    pool: &SqlitePool,
+    msg: async_nats::Message,
+) {
     let Some(reply) = msg.reply.clone() else {
         error!("verify: нет reply-топика, игнорирую");
         return;
     };
 
     let resp = match do_verify(decoding, &msg.payload) {
-        Ok(user) => VerifyResponse { ok: true, user: Some(user), error: None },
+        Ok(claims) => match is_device_revoked(pool, &claims.sub, claims.dev.as_deref()).await {
+            Ok(false) => VerifyResponse { ok: true, user: Some(claims.sub), error: None },
+            Ok(true) => VerifyResponse {
+                ok: false,
+                user: None,
+                error: Some("устройство отозвано".to_string()),
+            },
+            Err(e) => VerifyResponse { ok: false, user: None, error: Some(e.to_string()) },
+        },
         Err(e) => VerifyResponse { ok: false, user: None, error: Some(e.to_string()) },
     };
 
@@ -1473,7 +1502,7 @@ async fn handle_verify(nc: &Client, decoding: &DecodingKey, msg: async_nats::Mes
     }
 }
 
-fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<String> {
+fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<Claims> {
     let req: VerifyRequest = serde_json::from_slice(payload)
         .context("неверный JSON в VerifyRequest")?;
 
@@ -1481,7 +1510,20 @@ fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<String> {
     let data = decode::<Claims>(&req.token, decoding, &validation)
         .context("неверный или просроченный JWT")?;
 
-    Ok(data.claims.sub)
+    Ok(data.claims)
+}
+
+/// Токен с claim dev отозванного устройства недействителен (Settings → Devices).
+async fn is_device_revoked(pool: &SqlitePool, username: &str, device_id: Option<&str>) -> Result<bool> {
+    let Some(device_id) = device_id else { return Ok(false) };
+    let found: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM revoked_devices WHERE username = ? AND device_id = ?")
+            .bind(username)
+            .bind(device_id)
+            .fetch_optional(pool)
+            .await
+            .context("проверка отзыва устройства")?;
+    Ok(found.is_some())
 }
 
 fn now_unix() -> i64 {
@@ -1504,11 +1546,11 @@ mod tests {
     fn jwt_roundtrip() {
         let (enc, dec) = make_keys();
         let now = now_unix() as usize;
-        let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600 };
+        let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
         let token = encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap();
 
         let req = serde_json::to_vec(&VerifyRequest { token }).unwrap();
-        let user = do_verify(&dec, &req).unwrap();
+        let user = do_verify(&dec, &req).unwrap().sub;
         assert_eq!(user, "alice@local");
     }
 
@@ -1516,7 +1558,7 @@ mod tests {
     fn jwt_wrong_secret_rejected() {
         let (enc, _) = make_keys();
         let now = now_unix() as usize;
-        let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600 };
+        let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
         let token = encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap();
 
         let other_dec = DecodingKey::from_secret(b"different-secret-32-bytes-exactly");
@@ -1608,7 +1650,7 @@ mod tests {
     // ── регистрация отделена от логина ──
 
     fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
-        serde_json::to_vec(&IssueRequest { user: user.into(), password: password.into() }).unwrap()
+        serde_json::to_vec(&IssueRequest { user: user.into(), password: password.into(), device_id: None }).unwrap()
     }
     fn register_bytes(user: &str, password: &str) -> Vec<u8> {
         register_bytes_email(user, password, "")
@@ -1647,7 +1689,7 @@ mod tests {
         do_register(&pool, &register_bytes("newbie@local", "pw"), false).await.unwrap();
         // теперь логин проходит и выдаёт валидный JWT
         let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap();
-        let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap();
+        let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(user, "newbie@local");
         // неверный пароль — отказ
         assert!(do_issue(&pool, &enc, &issue_bytes("newbie@local", "wrong")).await.is_err());
@@ -1734,7 +1776,7 @@ mod tests {
         assert!(do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.is_err());
 
         let token = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap();
-        let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap();
+        let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(user, "mail@local");
     }
 
@@ -2041,6 +2083,18 @@ mod tests {
         let after = list_devices(&pool, "alice@local").await.unwrap();
         let web_after = after.iter().find(|d| d.device_id == "dev-web").unwrap();
         assert_eq!(web_after.one_time_available, 1);
+    }
+
+    #[tokio::test]
+    async fn revoked_device_token_fails_verify() {
+        let pool = test_pool().await;
+        assert!(!is_device_revoked(&pool, "bob@local", Some("dev-x")).await.unwrap());
+        assert!(!is_device_revoked(&pool, "bob@local", None).await.unwrap());
+        // Отзыв несуществующего бандла тоже оставляет тумбстоун
+        let _ = revoke_device(&pool, "bob@local", "dev-x").await.unwrap();
+        assert!(is_device_revoked(&pool, "bob@local", Some("dev-x")).await.unwrap());
+        assert!(!is_device_revoked(&pool, "bob@local", Some("dev-y")).await.unwrap());
+        assert!(!is_device_revoked(&pool, "alice@local", Some("dev-x")).await.unwrap());
     }
 
     #[tokio::test]

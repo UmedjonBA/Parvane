@@ -147,6 +147,10 @@ pub struct ParvaneEvent<T> {
 pub struct IssueRequest {
     pub user: String,
     pub password: String,
+    /// Устройство, для которого выдаётся JWT (claim `dev`): после отзыва
+    /// устройства его токены отклоняются на verify сразу, а не через 24 ч.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
