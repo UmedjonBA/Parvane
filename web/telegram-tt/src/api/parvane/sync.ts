@@ -30,6 +30,13 @@ type SyncDependencies = {
   };
   localState: {
     readOwnJournal: () => Promise<WireStoredMessage[]>;
+    // Кэш истории (расшифрованные строки) + курсор синка — в шифрованном IDB,
+    // чтобы вход не тянул всю историю с сервера и не расшифровывал её заново
+    saveHistoryRecord: (stored: WireStoredMessage) => void;
+    deleteHistoryRecord: (uuid: string) => void;
+    loadHistoryRecords: () => Promise<WireStoredMessage[]>;
+    saveSyncCursor: (cursor: { lastSeenUuid: string; sinceUpdated: number }) => void;
+    loadSyncCursor: () => Promise<{ lastSeenUuid: string; sinceUpdated: number } | undefined>;
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
     isBlocked: (address: string) => boolean;
   };
@@ -513,6 +520,9 @@ export function createSyncController(deps: SyncDependencies) {
     const wasPinned = previousFlags ? previousFlags.pinned : Boolean(store.getMessageByUuid(stored.id)?.isPinned);
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
+    // Кэш истории: только серверные строки (shouldAck) — восстановление из
+    // кэша (shouldAck=false) не переписывает само себя
+    if (shouldAckIncoming) persistHistory(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
     if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id, wasSealed ? stored.from : '');
 
@@ -547,6 +557,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (flags.deleted && !previousFlags?.deleted) {
+      deps.localState.deleteHistoryRecord(stored.id);
       deps.sendUpdate({ '@type': 'deleteMessages', ids: [message.id], chatId: message.chatId });
       return;
     }
@@ -563,6 +574,38 @@ export function createSyncController(deps: SyncDependencies) {
     if (flags.read && !previousFlags?.read && message.isOutgoing) noteReadOutbox(message);
   }
 
+  // Строка кэша: расшифрованный stored без TTL и без tombstone
+  function persistHistory(stored: WireStoredMessage) {
+    if (stored.content.ttl_secs) return;
+    if (stored.deleted) {
+      deps.localState.deleteHistoryRecord(stored.id);
+      return;
+    }
+    if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') return;
+    deps.localState.saveHistoryRecord(stored);
+  }
+
+  function persistCursor() {
+    if (lastSeenUuid) deps.localState.saveSyncCursor({ lastSeenUuid, sinceUpdated });
+  }
+
+  // Быстрый старт из локального кэша: восстановить историю без сервера и
+  // догнать дельтой от сохранённого курсора. false — кэша нет (полный синк)
+  async function restoreFromCache(): Promise<boolean> {
+    const cursor = await deps.localState.loadSyncCursor();
+    if (!cursor?.lastSeenUuid) return false;
+    const records = await deps.localState.loadHistoryRecords();
+    if (!records.length) return false;
+    records.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
+    for (const stored of records) {
+      await applyStoredUpdate(stored, false);
+    }
+    lastSeenUuid = cursor.lastSeenUuid;
+    sinceUpdated = cursor.sinceUpdated;
+    deps.log(`история восстановлена из кэша: ${records.length} сообщений`);
+    return true;
+  }
+
   async function runFullSync() {
     const store = deps.getStore();
     const connection = deps.getConnection()!;
@@ -570,6 +613,19 @@ export function createSyncController(deps: SyncDependencies) {
     const groupsRaw = await connection.request(TOPIC_GROUP_LIST, JSON.stringify({ token }));
     const groups = (JSON.parse(groupsRaw) as { groups?: WireGroupInfo[] }).groups || [];
     groups.forEach(deps.groups.register);
+
+    if (await restoreFromCache()) {
+      isSynced = true;
+      // Догнать изменения с момента последнего курсора (правки, пины,
+      // прочтения, новые сообщения) — обычной дельтой
+      await runDeltaSync();
+      const peers = new Set<string>();
+      store.getKnownUserAddresses().forEach((address) => peers.add(address));
+      groups.forEach((group) => group.members.forEach(({ address }) => peers.add(address)));
+      peers.delete(store.self);
+      await resolveDisplayNames(Array.from(peers));
+      return;
+    }
 
     const syncEvent = buildWireEvent(store.self, token, buildSyncPayload('0', 0));
     const syncRaw = await connection.request(
@@ -617,6 +673,7 @@ export function createSyncController(deps: SyncDependencies) {
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
+      persistHistory(stored);
       if (message.isOutgoing && stored.read) {
         const current = readOutboxMaxByChatId.get(message.chatId) || 0;
         if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
@@ -637,6 +694,7 @@ export function createSyncController(deps: SyncDependencies) {
     peerAddresses.delete(store.self);
     await resolveDisplayNames(Array.from(peerAddresses));
     isSynced = true;
+    persistCursor();
   }
 
   function ensureSynced() {
@@ -674,6 +732,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
     const sorted = messages.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
     for (const stored of sorted) await applyStoredUpdate(stored, true);
+    if (sorted.length) persistCursor();
   }
 
   function requestDeltaSync() {

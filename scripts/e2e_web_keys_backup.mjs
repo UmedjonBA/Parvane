@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   findMessage,
   openPrivateChat,
@@ -80,12 +81,8 @@ try {
 
   // Перезапуск после импорта (реальный флоу миграции): импортированные ключи
   // персистентны, история читается после обычного входа
-  await newDevice.page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = newDevice.page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await newDevice.page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // keep-signed-in: после reload вход может быть автоматическим
+  await relogin(newDevice.page, PASSWORD);
   await openPrivateChat(newDevice.page, alice);
   await findMessage(newDevice.page, secretMessage).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

@@ -1,5 +1,5 @@
 import {
-  createStore, del, get, set,
+  createStore, del, delMany, get, getMany, keys, set,
 } from 'idb-keyval';
 
 const STORAGE_VERSION = 2;
@@ -110,20 +110,48 @@ export class SecureE2eStorage {
     await set(id, record, STORAGE);
   }
 
+  // Все записи с префиксом имени (кэш истории `m:<uuid>`): ключи IDB
+  // читаются списком, значения — пачкой
+  async loadRecordsByPrefix<T>(prefix: string): Promise<T[]> {
+    const fullPrefix = recordId(this.user, prefix);
+    const allKeys = (await keys(STORAGE)).filter((key) => typeof key === 'string' && key.startsWith(fullPrefix));
+    if (!allKeys.length) return [];
+    const records = await getMany<EncryptedRecord>(allKeys, STORAGE);
+    const out: T[] = [];
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i];
+      if (!record || record.version !== STORAGE_VERSION) continue;
+      const name = (allKeys[i] as string).slice(recordId(this.user, '').length);
+      try {
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
+          this.protectionKey,
+          record.ciphertext,
+        );
+        out.push(JSON.parse(decoder.decode(plaintext)) as T);
+      } catch {
+        // повреждённая запись — пропускаем, delta-sync доложит
+      }
+    }
+    return out;
+  }
+
+  async deleteRecord(name: string) {
+    await del(recordId(this.user, name), STORAGE);
+  }
+
   static async clear(user: string) {
     await Promise.all([
       del(stateId(user), STORAGE),
       del(keyId(user), STORAGE),
-      del(recordId(user, 'journal'), STORAGE),
-      del(recordId(user, 'drafts'), STORAGE),
+      SecureE2eStorage.clearRecords(user),
     ]);
   }
 
   static async clearRecords(user: string) {
-    await Promise.all([
-      del(recordId(user, 'journal'), STORAGE),
-      del(recordId(user, 'drafts'), STORAGE),
-    ]);
+    const prefix = recordId(user, '');
+    const userKeys = (await keys(STORAGE)).filter((key) => typeof key === 'string' && key.startsWith(prefix));
+    if (userKeys.length) await delMany(userKeys, STORAGE);
   }
 }
 
