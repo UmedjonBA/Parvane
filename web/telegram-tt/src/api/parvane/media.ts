@@ -53,6 +53,9 @@ const MAP_TILE_SIZE = 256;
 // Range-стриминг: кэш шифртекст-чанков на файл (сколько держим в памяти)
 const RANGE_CHUNK_CACHE_LIMIT = 96;
 const GCM_TAG_BYTES = 16;
+// 1×1 прозрачный PNG — заглушка миниатюр видео
+const TRANSPARENT_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+  + 'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const MAP_TILE_TIMEOUT_MS = 15000;
 const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
@@ -206,6 +209,29 @@ export function createMediaService(deps: MediaDependencies) {
     return chunks.length > 0;
   }
 
+  async function verifyCompleteFile(
+    fileId: string, meta: FileMeta, keys: { keyB64: string; nonceB64: string },
+  ): Promise<Blob | 'bad' | undefined> {
+    const cached = chunkCacheByFileId.get(fileId);
+    if (!cached) return undefined;
+    const parts: Uint8Array[] = [];
+    for (let index = 0; index < meta.totalChunks; index++) {
+      const bytes = cached.get(index);
+      if (!bytes) return undefined;
+      parts.push(bytes);
+    }
+    const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
+    chunkCacheByFileId.delete(fileId);
+    if (!plain) {
+      diagLog('media', `файл ${fileId}: GCM-тег не сошёлся — стрим отброшен`);
+      metaByFileId.delete(fileId);
+      return 'bad';
+    }
+    const blob = new Blob([plain as BlobPart], { type: meta.mimeType });
+    cacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: meta.mimeType }));
+    return blob;
+  }
+
   async function downloadRange(fileId: string, start: number, end: number | undefined) {
     const keys = keysByFileId.get(fileId);
     if (!keys) return undefined;
@@ -231,6 +257,16 @@ export function createMediaService(deps: MediaDependencies) {
       if (!fetched) return undefined;
     }
     const cached = chunkCacheByFileId.get(fileId)!;
+    // Все чанки на руках — проверяем GCM-тег целого файла (окна идут без
+    // аутентификации) и дальше отдаём из проверенного блоба
+    if (cached.size >= meta.totalChunks) {
+      const verified = await verifyCompleteFile(fileId, meta, keys);
+      if (verified === 'bad') return undefined;
+      if (verified) {
+        const buffer = await verified.arrayBuffer();
+        return { arrayBuffer: buffer.slice(start, lastByte + 1), mimeType: meta.mimeType, fullSize };
+      }
+    }
     const window = new Uint8Array(lastByte - alignedStart + 1);
     for (let index = chunkFrom; index <= chunkTo; index++) {
       const bytes = cached.get(index);
@@ -290,7 +326,15 @@ export function createMediaService(deps: MediaDependencies) {
     // Превью-хэши видео (document<id>?size=x) — миниатюр на проводе нет;
     // не отдавать полный файл в <img>
     if (normalizedUrl.startsWith('document') && /[?&]size=/.test(normalizedUrl)) {
-      return Promise.resolve(undefined);
+      // Миниатюр на проводе нет. Картинки (стикеры/эмодзи) отдаём тем же
+      // блобом, для видео — прозрачную заглушку: undefined заставлял tt
+      // ретраить запрос по кругу
+      const thumbFileId = normalizedUrl.match(MEDIA_URL_REGEX)?.[1];
+      const cachedFull = thumbFileId ? cacheByFileId.get(thumbFileId) : undefined;
+      if (!cachedFull) return Promise.resolve(buildThumbPlaceholder());
+      return cachedFull.then((result) => (result && result.mimeType.startsWith('image/')
+        ? { dataBlob: result.blob, mimeType: result.mimeType }
+        : buildThumbPlaceholder()));
     }
     if (normalizedUrl.startsWith('staticMap:')) {
       if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT) return Promise.resolve(undefined);
@@ -319,6 +363,11 @@ export function createMediaService(deps: MediaDependencies) {
       }
       return { dataBlob: result.blob, mimeType: result.mimeType };
     });
+  }
+
+  function buildThumbPlaceholder() {
+    const bytes = decodeBase64(TRANSPARENT_PNG_BASE64);
+    return { dataBlob: new Blob([bytes], { type: 'image/png' }), mimeType: 'image/png' };
   }
 
   const tileCache = new Map<string, Promise<ImageBitmap | undefined>>();

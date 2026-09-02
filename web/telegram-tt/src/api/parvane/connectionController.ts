@@ -64,11 +64,34 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // переустанавливаются на каждом (пере)подключении
   const subscribedTypingGroups = new Set<string>();
 
+  function deviceMirrorKey(user: string) {
+    return `parvane:device:${user}`;
+  }
+
+  function readDeviceIdMirror(user: string) {
+    try {
+      return localStorage.getItem(deviceMirrorKey(user)) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function writeDeviceIdMirror(user: string, deviceId: string) {
+    try {
+      if (deviceId) localStorage.setItem(deviceMirrorKey(user), deviceId);
+    } catch {
+      // приватный режим — без зеркала (claim dev появится позже)
+    }
+  }
+
   async function issueToken(activeConnection: GatewayConnection, user: string, password: string) {
     const issue = async () => {
+      // device_id известен со второго входа (зеркало из E2eEngine.create):
+      // JWT получает claim dev → отзыв устройства гасит его токены сразу
+      const deviceId = readDeviceIdMirror(user);
       const raw = await activeConnection.request(
         TOPIC_IDENTITY_ISSUE,
-        JSON.stringify({ user, password }),
+        JSON.stringify({ user, password, device_id: deviceId || undefined }),
       );
       return JSON.parse(raw) as { ok: boolean; token?: string; error?: string };
     };
@@ -262,6 +285,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
       try {
         const nextE2e = await E2eEngine.create(user);
         deps.setE2e(nextE2e);
+        writeDeviceIdMirror(user, nextE2e.deviceId);
         const prekeys = nextE2e.buildPrekeysPayload(nextToken);
         if (prekeys) {
           await nextE2e.flushStorage();
