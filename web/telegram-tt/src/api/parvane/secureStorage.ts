@@ -21,8 +21,12 @@ function stateId(user: string) {
   return `state:${user}`;
 }
 
-function additionalData(user: string) {
-  return encoder.encode(`parvane-e2e-storage:${STORAGE_VERSION}:${user}`).buffer;
+function additionalData(user: string, record = 'state') {
+  return encoder.encode(`parvane-e2e-storage:${STORAGE_VERSION}:${user}:${record}`).buffer;
+}
+
+function recordId(user: string, name: string) {
+  return `rec:${user}:${name}`;
 }
 
 async function generateProtectionKey() {
@@ -67,9 +71,34 @@ export class SecureE2eStorage {
   }
 
   async save(value: unknown) {
+    await this.saveEncrypted(stateId(this.user), 'state', value);
+  }
+
+  // Именованные записи под тем же non-extractable ключом (журнал исходящих,
+  // черновики): раньше они лежали в localStorage открытым текстом
+  async saveRecord(name: string, value: unknown) {
+    await this.saveEncrypted(recordId(this.user, name), name, value);
+  }
+
+  async loadRecord<T>(name: string): Promise<T | undefined> {
+    const record = await get<EncryptedRecord>(recordId(this.user, name), STORAGE);
+    if (!record || record.version !== STORAGE_VERSION) return undefined;
+    try {
+      const plaintext = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
+        this.protectionKey,
+        record.ciphertext,
+      );
+      return JSON.parse(decoder.decode(plaintext)) as T;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async saveEncrypted(id: string, name: string, value: unknown) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: additionalData(this.user) },
+      { name: 'AES-GCM', iv, additionalData: additionalData(this.user, name) },
       this.protectionKey,
       encoder.encode(JSON.stringify(value)).buffer,
     );
@@ -78,13 +107,22 @@ export class SecureE2eStorage {
       iv: iv.buffer,
       ciphertext,
     };
-    await set(stateId(this.user), record, STORAGE);
+    await set(id, record, STORAGE);
   }
 
   static async clear(user: string) {
     await Promise.all([
       del(stateId(user), STORAGE),
       del(keyId(user), STORAGE),
+      del(recordId(user, 'journal'), STORAGE),
+      del(recordId(user, 'drafts'), STORAGE),
+    ]);
+  }
+
+  static async clearRecords(user: string) {
+    await Promise.all([
+      del(recordId(user, 'journal'), STORAGE),
+      del(recordId(user, 'drafts'), STORAGE),
     ]);
   }
 }

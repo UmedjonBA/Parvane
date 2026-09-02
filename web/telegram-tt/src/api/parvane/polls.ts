@@ -28,6 +28,10 @@ export class PollStore {
 
   private resolvePeerId: (address: string) => string = (address) => address;
 
+  reset() {
+    this.byUuid.clear();
+  }
+
   setSelf(self: string) {
     this.self = self;
   }

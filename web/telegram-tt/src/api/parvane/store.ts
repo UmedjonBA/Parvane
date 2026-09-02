@@ -43,6 +43,11 @@ export class ParvaneStore {
 
   private usedMsgIdsByChatId = new Map<string, Set<number>>();
 
+  // uuid сообщений, реально положенных в стор (putMessage). Раньше hasMessage
+  // отвечал по msgKeyByUuid, который заполняет allocateMessageId — и локальное
+  // эхо с провалившейся отправкой считалось «известным»
+  private storedUuids = new Set<string>();
+
   getIdForAddress(address: string, kind: PeerKind = 'user'): string {
     const existingKind = this.kindByAddress.get(address);
     const actualKind = existingKind || kind;
@@ -101,7 +106,7 @@ export class ParvaneStore {
   }
 
   hasMessage(uuid: string) {
-    return this.msgKeyByUuid.has(uuid);
+    return this.storedUuids.has(uuid);
   }
 
   getUuidForMessage(chatId: string, id: number) {
@@ -136,6 +141,8 @@ export class ParvaneStore {
   }
 
   putMessage(message: ApiMessage) {
+    const uuid = this.uuidByMsgKey.get(`${message.chatId}:${message.id}`);
+    if (uuid) this.storedUuids.add(uuid);
     const list = this.messagesByChatId.get(message.chatId) || [];
     const index = list.findIndex((m) => m.id === message.id);
     if (index >= 0) {
@@ -152,6 +159,8 @@ export class ParvaneStore {
   }
 
   removeMessage(chatId: string, id: number) {
+    const uuid = this.uuidByMsgKey.get(`${chatId}:${id}`);
+    if (uuid) this.storedUuids.delete(uuid);
     const list = this.messagesByChatId.get(chatId);
     if (list) this.messagesByChatId.set(chatId, list.filter((m) => m.id !== id));
   }

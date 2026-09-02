@@ -63,21 +63,27 @@ function buildStateSnapshot(global: GlobalState) {
 // Read-only хук для читалки отчётов (scripts/bugs_reader.mjs): отдать текст
 // JSON-вложения по chatId/messageId через штатный mediaLoader (расшифровка
 // blobcrypt внутри), минуя браузерное скачивание, которое в headless не ловится
-// parvaneDiag: прямой вызов методов провайдера из пробников/e2e (временно)
-(window as unknown as { __parvaneDiagCallApi?: typeof callApi }).__parvaneDiagCallApi = callApi;
+// Хуки для пробников/e2e — ТОЛЬКО в сборках с VITE_PARVANE_DIAG_HOOKS=1: в
+// проде они превращали бы любой XSS в полный доступ к провайдеру и ключам
+const ARE_DIAG_HOOKS_ENABLED = import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1';
+if (ARE_DIAG_HOOKS_ENABLED) {
+  (window as unknown as { __parvaneDiagCallApi?: typeof callApi }).__parvaneDiagCallApi = callApi;
+}
 
-(window as unknown as {
-  __parvaneDiagReadDocument?: (chatId: string, messageId: number) => Promise<string | undefined>;
-}).__parvaneDiagReadDocument = async (chatId, messageId) => {
-  const message = selectChatMessage(getGlobal(), chatId, messageId);
-  const document = message?.content.document;
-  if (!document) return undefined;
-  const mediaHash = getDocumentMediaHash(document, 'download');
-  if (!mediaHash) return undefined;
-  const blobUrl = await mediaLoader.fetch(mediaHash, ApiMediaFormat.BlobUrl);
-  if (typeof blobUrl !== 'string') return undefined;
-  return (await fetch(blobUrl)).text();
-};
+if (ARE_DIAG_HOOKS_ENABLED) {
+  (window as unknown as {
+    __parvaneDiagReadDocument?: (chatId: string, messageId: number) => Promise<string | undefined>;
+  }).__parvaneDiagReadDocument = async (chatId, messageId) => {
+    const message = selectChatMessage(getGlobal(), chatId, messageId);
+    const document = message?.content.document;
+    if (!document) return undefined;
+    const mediaHash = getDocumentMediaHash(document, 'download');
+    if (!mediaHash) return undefined;
+    const blobUrl = await mediaLoader.fetch(mediaHash, ApiMediaFormat.BlobUrl);
+    if (typeof blobUrl !== 'string') return undefined;
+    return (await fetch(blobUrl)).text();
+  };
+}
 
 const ParvaneBugReportModal: FC = () => {
   const { sendMessage, showNotification } = getActions();
@@ -101,8 +107,10 @@ const ParvaneBugReportModal: FC = () => {
     if (!text || isSending) return;
     setIsSending(true);
     try {
-      const search = await callApi('searchChats', { query: PARVANE_BUG_REPORT_ADDRESS });
-      const targetChatId = search?.globalResultIds?.[0];
+      // Точное совпадение адреса: первый результат поиска выбирает сервер
+      const targetChatId = await (callApi as unknown as (name: string, args: unknown) => Promise<string | undefined>)(
+        'parvaneResolveExactAddress', { address: PARVANE_BUG_REPORT_ADDRESS },
+      );
       if (!targetChatId) {
         showNotification({ message: `Bug report address not found: ${PARVANE_BUG_REPORT_ADDRESS}` });
         return;

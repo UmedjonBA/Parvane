@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+# Хуки window.__parvane* для пробников — только в e2e/demo-сборках
+export VITE_PARVANE_DIAG_HOOKS=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_ROOT="$ROOT/web/telegram-tt"

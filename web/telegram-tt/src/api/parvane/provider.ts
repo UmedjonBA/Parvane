@@ -116,6 +116,15 @@ let e2eReadyResolve: (() => void) | undefined;
 let e2eReady = new Promise<void>((resolve) => {
   e2eReadyResolve = resolve;
 });
+// Уход со страницы: сбросить отложенную запись E2E-состояния (debounce)
+if (typeof window !== 'undefined') {
+  const flushE2e = () => e2e?.flushOnPageHide();
+  window.addEventListener('pagehide', flushE2e);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushE2e();
+  });
+}
+
 function setE2eEngine(next: E2eEngine | undefined) {
   e2e = next;
   if (next) {
@@ -268,6 +277,10 @@ const connectionController = createConnectionController({
     syncController.reset();
     resetPackRegistries();
     messageController.resetSavedGifs();
+    messageController.reset();
+    localState.reset();
+    polls.reset();
+    groupController.reset();
   },
   onSessionReady: () => {
     void startHistoryLinkOffer();
@@ -275,6 +288,11 @@ const connectionController = createConnectionController({
   isSynced: syncController.isSynced,
   resetSyncPromise: syncController.resetPromise,
   requestDeltaSync: syncController.requestDeltaSync,
+  requestFullSync: () => {
+    void syncController.ensureSynced()
+      .then(() => sendUpdate({ '@type': 'requestSync' }))
+      .catch((error: unknown) => logDebug(`повторный синк не удался: ${String(error)}`));
+  },
   resolveDisplayNames: syncController.resolveDisplayNames,
   handleInboxFrame: syncController.handleInboxFrame,
   selfId,
@@ -495,7 +513,7 @@ async function startHistoryLinkOffer() {
   } catch {
     return;
   }
-  logDebug(`линковка: оффер опубликован, код ${code}`);
+  logDebug('линковка: оффер опубликован');
   const startedAt = Date.now();
   linkRuntime.timer = window.setInterval(() => {
     if (generation !== linkRuntime.generation) return;
@@ -623,6 +641,7 @@ const methods = {
 
     // Черновики хранятся по адресу пира: восстанавливаем чат даже если пир ещё
     // не известен (истории нет), иначе черновик негде показать
+    await localState.hydrate();
     const savedDrafts = localState.loadDrafts();
     Object.keys(savedDrafts).forEach((address) => {
       const chatId = store.getIdForAddress(address);
@@ -989,6 +1008,14 @@ const methods = {
       globalResultIds.push(store.getIdForAddress(u.username));
     });
     return { accountResultIds: [], globalResultIds };
+  },
+
+  // chatId пользователя по ТОЧНОМУ адресу (поиск identity — подстрочный, и
+  // порядок результатов задаёт сервер): нужен для адреса отчётов о багах
+  async parvaneResolveExactAddress({ address }: { address: string }) {
+    const result = await methods.searchChats({ query: address });
+    const expectedId = store.getIdForAddress(address);
+    return result.globalResultIds.includes(expectedId) ? expectedId : undefined;
   },
 
   // parvaneDiag: снимок состояния провайдера для отчёта о баге (без контента)
@@ -1581,6 +1608,12 @@ const methods = {
     const user = store.self || pendingLoginAddress || readLoginAddress();
     const currentE2e = connectionController.shutdown();
     mediaService.clearCache();
+    // Стор прежнего аккаунта не должен отвечать на запросы между logout и
+    // следующим входом
+    store = new ParvaneStore();
+    messageController.reset();
+    localState.reset();
+    polls.reset();
     if (!noSessionClear) {
       clearLoginStorage();
       if (user) {

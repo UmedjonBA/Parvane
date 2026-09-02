@@ -53,6 +53,17 @@ const MAP_TILE_SIZE = 256;
 // Range-стриминг: кэш шифртекст-чанков на файл (сколько держим в памяти)
 const RANGE_CHUNK_CACHE_LIMIT = 96;
 const GCM_TAG_BYTES = 16;
+// Лимиты на серверные метаданные (size_bytes/chunk_bytes/данные чанка): без
+// них подделанный ответ cloud заставлял бы вкладку выделить произвольный объём
+const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+const MAX_RANGE_WINDOW_BYTES = 16 * 1024 * 1024;
+const MAX_CHUNK_BASE64_LENGTH = Math.ceil(MAX_CHUNK_BYTES / 3) * 4 + 4;
+// Бюджеты кэшей: раньше все скачанные блобы, тайлы карт и чанки видео жили
+// в памяти до logout (1 ГБ просмотренного медиа = 1 ГБ resident)
+const BLOB_CACHE_BUDGET_BYTES = 256 * 1024 * 1024;
+const TILE_CACHE_LIMIT = 200;
+const RANGE_FILE_CACHE_LIMIT = 6;
 // 1×1 прозрачный PNG — заглушка миниатюр видео
 const TRANSPARENT_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
   + 'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -175,6 +186,10 @@ export function createMediaService(deps: MediaDependencies) {
     let cache = chunkCacheByFileId.get(fileId);
     if (!cache) {
       cache = new Map();
+      if (chunkCacheByFileId.size >= RANGE_FILE_CACHE_LIMIT) {
+        const oldest = chunkCacheByFileId.keys().next().value;
+        if (oldest !== undefined) chunkCacheByFileId.delete(oldest);
+      }
       chunkCacheByFileId.set(fileId, cache);
     }
     cache.set(index, bytes);
@@ -196,14 +211,18 @@ export function createMediaService(deps: MediaDependencies) {
       .map((reply) => JSON.parse(reply) as WireDownloadChunk)
       .filter((chunk) => chunk.ok && chunk.data !== undefined && chunk.chunk_index !== undefined);
     chunks.forEach((chunk) => {
-      if (!metaByFileId.has(fileId) && chunk.size_bytes && chunk.chunk_bytes && chunk.total_chunks) {
+      if (!metaByFileId.has(fileId) && chunk.size_bytes && chunk.chunk_bytes && chunk.total_chunks
+        && chunk.size_bytes <= MAX_FILE_BYTES && chunk.chunk_bytes <= MAX_CHUNK_BYTES) {
         metaByFileId.set(fileId, {
           sizeBytes: chunk.size_bytes,
           chunkBytes: chunk.chunk_bytes,
           totalChunks: chunk.total_chunks,
-          mimeType: chunk.mime_type || mimeByFileId.get(fileId) || 'application/octet-stream',
+          // MIME — ТОЛЬКО из E2E-обёртки сообщения, не из ответа cloud: иначе
+          // сервер мог бы отдать окно видео как text/html на same-origin URL
+          mimeType: mimeByFileId.get(fileId) || 'application/octet-stream',
         });
       }
+      if (chunk.data!.length > MAX_CHUNK_BASE64_LENGTH) return;
       rememberChunk(fileId, chunk.chunk_index!, decodeBase64(chunk.data!));
     });
     return chunks.length > 0;
@@ -240,7 +259,7 @@ export function createMediaService(deps: MediaDependencies) {
     if (!meta || !meta.chunkBytes) return undefined;
     const fullSize = meta.sizeBytes - GCM_TAG_BYTES;
     if (fullSize <= 0 || start >= fullSize) return undefined;
-    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1);
+    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
     const alignedStart = Math.floor(start / 16) * 16;
     const chunkFrom = Math.floor(alignedStart / meta.chunkBytes);
     const chunkTo = Math.floor(lastByte / meta.chunkBytes);
@@ -352,7 +371,12 @@ export function createMediaService(deps: MediaDependencies) {
     if (!cached) {
       cached = downloadBlob(fileId);
       cacheByFileId.set(fileId, cached);
-      cached.catch(() => cacheByFileId.delete(fileId));
+      cached.then((result) => {
+        if (result) noteCachedBlob(fileId, result.blob.size);
+      }).catch(() => cacheByFileId.delete(fileId));
+    } else if (blobSizeByFileId.has(fileId)) {
+      // touch — LRU-порядок
+      noteCachedBlob(fileId, blobSizeByFileId.get(fileId)!);
     }
     return cached.then(async (result) => {
       if (!result) return undefined;
@@ -399,6 +423,14 @@ export function createMediaService(deps: MediaDependencies) {
       }
       return undefined;
     })();
+    if (tileCache.size >= TILE_CACHE_LIMIT) {
+      const oldest = tileCache.keys().next().value;
+      if (oldest !== undefined) {
+        const evicted = tileCache.get(oldest);
+        tileCache.delete(oldest);
+        evicted?.then((bitmap) => bitmap?.close()).catch(() => undefined);
+      }
+    }
     tileCache.set(key, cached);
     cached.then((bitmap) => {
       if (!bitmap) tileCache.delete(key);
@@ -449,7 +481,7 @@ export function createMediaService(deps: MediaDependencies) {
       }
     }
     await Promise.all(tiles);
-    diagLog('map', `rendered ${tiles.length} tiles for ${lat.toFixed(3)},${long.toFixed(3)} z${zoom}`);
+    diagLog('map', `rendered ${tiles.length} tiles z${zoom}`);
     const blob = await new Promise<Blob | undefined>((resolve) => {
       canvas.toBlob((result) => resolve(result || undefined), 'image/png');
     });
@@ -697,8 +729,27 @@ export function createMediaService(deps: MediaDependencies) {
     };
   }
 
+  // LRU по байтам: при превышении бюджета выкидываем самые старые записи
+  const blobSizeByFileId = new Map<string, number>();
+  let blobCacheBytes = 0;
+
+  function noteCachedBlob(fileId: string, size: number) {
+    const previous = blobSizeByFileId.get(fileId) || 0;
+    blobCacheBytes += size - previous;
+    blobSizeByFileId.delete(fileId);
+    blobSizeByFileId.set(fileId, size);
+    while (blobCacheBytes > BLOB_CACHE_BUDGET_BYTES && blobSizeByFileId.size > 1) {
+      const oldest = blobSizeByFileId.keys().next().value;
+      if (oldest === undefined || oldest === fileId) break;
+      blobCacheBytes -= blobSizeByFileId.get(oldest) || 0;
+      blobSizeByFileId.delete(oldest);
+      cacheByFileId.delete(oldest);
+    }
+  }
+
   function cacheBlob(fileId: string, blob: Blob, mimeType: string) {
     cacheByFileId.set(fileId, Promise.resolve({ blob, mimeType }));
+    noteCachedBlob(fileId, blob.size);
   }
 
   function cacheBlobIfAbsent(fileId: string, blob: Blob, mimeType: string) {
@@ -709,7 +760,14 @@ export function createMediaService(deps: MediaDependencies) {
     buildLocalContent,
     cacheBlob,
     cacheBlobIfAbsent,
-    clearCache: () => cacheByFileId.clear(),
+    clearCache: () => {
+      cacheByFileId.clear();
+      blobSizeByFileId.clear();
+      blobCacheBytes = 0;
+      tileCache.clear();
+      chunkCacheByFileId.clear();
+      metaByFileId.clear();
+    },
     detectWebPage,
     fetchWebPagePreview,
     downloadBlob,

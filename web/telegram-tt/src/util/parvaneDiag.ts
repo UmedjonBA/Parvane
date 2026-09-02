@@ -25,10 +25,13 @@ const STORAGE_KEY = 'parvane:diag:v1';
 const MAX_ENTRIES = 800;
 const SAVE_DELAY_MS = 1500;
 const DEDUPE_WINDOW_MS = 60;
-const SENSITIVE_KEYS = new Set([
-  'text', 'query', 'password', 'caption', 'html', 'code', 'email', 'draft', 'title', 'description',
-  'firstName', 'lastName', 'token', 'ciphertext', 'key', 'secret',
+// Строки журналим ТОЛЬКО по allowlist ключей (идентификаторы/типы); всё
+// остальное (адреса, имена, url, текст) — только длина
+const STRING_KEYS_ALLOWED = new Set([
+  'id', 'chatId', 'messageId', 'threadId', 'userId', 'peerId', 'type', '@type', 'kind', 'direction',
+  'url', 'mediaFormat', 'action', 'reaction', 'emoticon', 'setId', 'stickerSetId', 'tabId',
 ]);
+const URL_LIKE_KEYS = new Set(['url']);
 const ID_KEYS = new Set(['chat', 'peer', 'message', 'user', 'messageList', 'attachment']);
 
 let entries: DiagEntry[] = [];
@@ -80,8 +83,13 @@ export function summarize(value: unknown, depth = 0): string | undefined {
   const parts: string[] = [];
   Object.entries(value as Record<string, unknown>).slice(0, 10).forEach(([key, item]) => {
     if (item === undefined || typeof item === 'function') return;
-    if (SENSITIVE_KEYS.has(key)) {
-      parts.push(`${key}:len=${typeof item === 'string' ? item.length : '?'}`);
+    if (typeof item === 'string' && URL_LIKE_KEYS.has(key)) {
+      // медиа-хэши без query (там могут быть координаты карты)
+      parts.push(`${key}:"${truncate(item.split('?')[0], 40)}"`);
+      return;
+    }
+    if (typeof item === 'string' && !STRING_KEYS_ALLOWED.has(key)) {
+      parts.push(`${key}:len=${item.length}`);
       return;
     }
     if (ID_KEYS.has(key) && item && typeof item === 'object') {
