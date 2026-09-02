@@ -110,7 +110,15 @@ export class GatewayConnection {
   // Один запрос — много ответов (чанки файла): собираем до reply_end.
   // ВАЖНО: gateway ждёт `timeout_ms` ТИШИНЫ после последнего ответа, прежде чем
   // прислать reply_end — интервал должен быть коротким, а общий лимит щедрым
-  requestMany(subject: string, payload: string, silenceMs = 4000, totalMs = 90000) {
+  // `isComplete` — досрочное завершение, когда ответов уже достаточно (число
+  // чанков известно): не ждём паузу тишины, поздний reply_end игнорируется
+  requestMany(
+    subject: string,
+    payload: string,
+    silenceMs = 4000,
+    totalMs = 90000,
+    isComplete?: (replies: string[]) => boolean,
+  ) {
     const id = String(++this.requestSeq);
     return new Promise<string[]>((resolve, reject) => {
       const replies: string[] = [];
@@ -119,7 +127,14 @@ export class GatewayConnection {
         reject(new Error(`Таймаут reqmany ${subject}`));
       }, totalMs);
       this.pendingManyById.set(id, {
-        onReply: (reply) => replies.push(reply),
+        onReply: (reply) => {
+          replies.push(reply);
+          if (isComplete?.(replies)) {
+            clearTimeout(timer);
+            this.pendingManyById.delete(id);
+            resolve(replies);
+          }
+        },
         onEnd: () => {
           clearTimeout(timer);
           this.pendingManyById.delete(id);

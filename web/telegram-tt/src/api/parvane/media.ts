@@ -184,7 +184,11 @@ export function createMediaService(deps: MediaDependencies) {
   async function fetchChunkRange(fileId: string, from: number, to: number) {
     const store = deps.getStore();
     const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId, chunk_from: from, chunk_to: to });
-    const replies = await requireConnection().requestMany(TOPIC_FILE_DOWNLOAD_REQUEST, JSON.stringify(event));
+    const expected = to - from + 1;
+    const replies = await requireConnection().requestMany(
+      TOPIC_FILE_DOWNLOAD_REQUEST, JSON.stringify(event), undefined, undefined,
+      (collected) => collected.length >= expected,
+    );
     const chunks = replies
       .map((reply) => JSON.parse(reply) as WireDownloadChunk)
       .filter((chunk) => chunk.ok && chunk.data !== undefined && chunk.chunk_index !== undefined);
@@ -246,9 +250,16 @@ export function createMediaService(deps: MediaDependencies) {
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
     const store = deps.getStore();
     const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId });
+    // Число чанков известно из первого ответа — завершаем без паузы тишины
     const replies = await requireConnection().requestMany(
       TOPIC_FILE_DOWNLOAD_REQUEST,
       JSON.stringify(event),
+      undefined,
+      undefined,
+      (collected) => {
+        const total = (JSON.parse(collected[0]) as WireDownloadChunk).total_chunks;
+        return Boolean(total) && collected.length >= total;
+      },
     );
     const chunks = replies
       .map((reply) => JSON.parse(reply) as WireDownloadChunk)
