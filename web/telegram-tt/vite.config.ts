@@ -157,9 +157,8 @@ export default defineConfig(({ mode }): UserConfig => {
 
   const shouldCollectWorkerReportBundles = bundleStatsVisualizerValue === '1' || bundleStatsValue === '1';
 
-  if (appEnv !== 'test' && (!telegramApiId || !telegramApiHash)) {
-    throw new Error('Missing required Telegram API credentials');
-  }
+  // Parvane: MTProto заменён провайдером NATS — креды Telegram API для сборки
+  // не нужны (оставлены пустыми значениями ради типов config.ts)
 
   setViteEnv({
     TG_APP_ENV: appEnv,
