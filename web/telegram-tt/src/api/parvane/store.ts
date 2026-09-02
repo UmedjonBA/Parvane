@@ -108,6 +108,12 @@ export class ParvaneStore {
     return this.uuidByMsgKey.get(`${chatId}:${id}`);
   }
 
+  getMessageByUuid(uuid: string): ApiMessage | undefined {
+    const key = this.msgKeyByUuid.get(uuid);
+    if (!key) return undefined;
+    return this.getMessages(key.chatId).find((message) => message.id === key.id);
+  }
+
   // Числовой id сообщения ВЫВОДИТСЯ ИЗ ВРЕМЕНИ (date в секундах → мс), чтобы
   // сортировка по id (как в tt) совпадала с сортировкой по времени. Иначе
   // подтянутая позже история (напр. журнал звонков) со старыми датами получала
