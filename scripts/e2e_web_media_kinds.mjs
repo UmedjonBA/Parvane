@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  dumpDiagJournal,
   relogin,
   LOGIN_TIMEOUT_MS,
   findMessageContainers,
@@ -202,6 +203,10 @@ try {
   const roundHtml = await bobContext.pages()[0]
     ?.locator('.RoundVideo').first().evaluate((el) => el.outerHTML).catch(() => 'no .RoundVideo');
   console.error('Bob RoundVideo DOM:', roundHtml);
+  for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {
+    const page = context.pages()[0];
+    if (page) await dumpDiagJournal(page, name, 60);
+  }
   throw err;
 } finally {
   await browser.close();
