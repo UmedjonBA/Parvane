@@ -61,6 +61,7 @@ export function createSyncController(deps: SyncDependencies) {
   const readOutboxMaxByChatId = new Map<string, number>();
   const reportedReadUuids = new Set<string>();
   const checkedGroupCandidates = new Set<string>();
+  const announcedThreadChatIds = new Set<string>();
 
   function buildSyncPayload(lastSeenId: string, updatedSince: number) {
     const e2e = deps.getE2e();
@@ -106,6 +107,7 @@ export function createSyncController(deps: SyncDependencies) {
     lastSeenUuid = '';
     sinceUpdated = 0;
     wireFlagsByUuid.clear();
+    announcedThreadChatIds.clear();
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
     checkedGroupCandidates.clear();
@@ -338,7 +340,24 @@ export function createSyncController(deps: SyncDependencies) {
     const user = store.buildApiUser(address);
     deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
     deps.sendUpdate({ '@type': 'updateChat', id: user.id, chat: store.buildApiChatForUser(address) });
+    ensureMainThread(user.id);
     void resolveDisplayNames([address]);
+  }
+
+  // Как в Telegram, где тред главной ленты приходит вместе с диалогом: без
+  // объекта треда tt МОЛЧА отбрасывает записи listedIds/pinnedIds/readState
+  // (updateThreadLocalState → no-op). Чат из поиска/входящего появлялся раньше,
+  // чем loadViewportMessages успевал создать тред (гонка) → пин собеседника,
+  // «прочитано» и пр. терялись. Создаём тред один раз на чат, БЕЗ lastMessageId:
+  // его выставляет сам reducer newMessage в правильном порядке относительно
+  // вьюпорта (иначе isViewportNewest ломается — стрелка ↓).
+  function ensureMainThread(chatId: string) {
+    if (announcedThreadChatIds.has(chatId)) return;
+    announcedThreadChatIds.add(chatId);
+    deps.sendUpdate({
+      '@type': 'updateThreadInfo',
+      threadInfo: { isCommentsInfo: false, chatId, threadId: MAIN_THREAD_ID },
+    });
   }
 
   function sendAck(messageId: string, sealedSender: string) {
@@ -370,6 +389,7 @@ export function createSyncController(deps: SyncDependencies) {
         if (isNew) {
           const chat = store.buildApiChatForGroup(info);
           deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+          ensureMainThread(chat.id);
         }
       });
     } catch {
