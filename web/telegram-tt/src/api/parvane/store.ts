@@ -8,7 +8,7 @@ import type {
 import type { WireGroupInfo, WireStoredMessage } from './wire';
 
 import { wireEntitiesToApi } from './entities';
-import { registerReceivedPackRef } from './stickerPacks';
+import { registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
 
 type PeerKind = 'user' | 'group' | 'channel';
 
@@ -253,6 +253,8 @@ export class ParvaneStore {
       isOutgoing,
       senderId: stored.from ? this.getIdForAddress(stored.from) : undefined,
       isEdited: stored.edited ? true : undefined,
+      // Время последней правки — для «updated N min ago» у live-локации
+      editDate: stored.edited && stored.updated_at ? stored.updated_at : undefined,
       isPinned: stored.pinned ? true : undefined,
       replyInfo: replyKey && replyKey.chatId === chatId
         ? { type: 'message', replyToMsgId: replyKey.id }
@@ -311,6 +313,9 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
   const caption = content.caption ? { text: { text: content.caption } } : {};
   switch (content.kind) {
     case 'text':
+      // Эмодзи-паки, приложенные к тексту: регистрируем ref — fetchCustomEmoji
+      // подтянет архив из cloud и отдаст документы по docId из entities
+      content.emoji_packs?.forEach((ref) => registerReceivedEmojiPackRef(ref));
       return {
         text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) },
         webPage: content.webpage ? { id: `wp${stored.id}` } : undefined,
@@ -392,13 +397,18 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       };
     case 'poll':
       return { pollId: stored.id };
-    case 'location':
-      return {
-        location: {
-          mediaType: 'geo',
-          geo: { lat: content.lat || 0, long: content.long || 0, accessHash: '0' },
-        },
+    case 'location': {
+      const geo = {
+        lat: content.lat || 0, long: content.long || 0, accessHash: '0', accuracyRadius: content.accuracy,
       };
+      return {
+        location: content.live_period
+          ? {
+            mediaType: 'geoLive', geo, heading: content.heading, period: content.live_period,
+          }
+          : { mediaType: 'geo', geo },
+      };
+    }
     case 'sticker': {
       // pack_ref — стикер из кастомного набора: помечаем сет-ссылкой,
       // по клику на стикер модалка предложит установить весь пак

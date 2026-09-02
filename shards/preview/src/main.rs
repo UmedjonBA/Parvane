@@ -7,12 +7,13 @@ use std::net::IpAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    ParvaneEvent, PreviewFetchRequest, PreviewFetchResponse, VerifyRequest, VerifyResponse,
+    ParvaneEvent, MapTileRequest, MapTileResponse, PreviewFetchRequest, PreviewFetchResponse, VerifyRequest, VerifyResponse,
     WebPagePreview,
-    topics::{IDENTITY_VERIFY, PREVIEW_FETCH},
+    topics::{IDENTITY_VERIFY, PREVIEW_FETCH, PREVIEW_MAP_TILE},
 };
 use sqlx::SqlitePool;
 use tracing::{info, warn};
@@ -26,6 +27,12 @@ const CACHE_TTL_SECS: i64 = 6 * 3600;
 const NEG_CACHE_TTL_SECS: i64 = 15 * 60;
 const TITLE_MAX: usize = 200;
 const DESC_MAX: usize = 500;
+// Тайлы карты: OSM (политика — обязателен идентифицирующий User-Agent, без
+// массовой выкачки; мы отдаём только тайлы вокруг присланных точек и кэшируем)
+const TILE_BASE_URL: &str = "https://tile.openstreetmap.org";
+const TILE_MAX_ZOOM: u32 = 19;
+const TILE_MAX_BYTES: usize = 512 * 1024;
+const TILE_CACHE_TTL_SECS: i64 = 7 * 24 * 3600;
 const SITE_MAX: usize = 64;
 const USER_AGENT: &str = "ParvaneBot/1.0";
 
@@ -54,11 +61,13 @@ async fn main() -> Result<()> {
     info!("NATS подключён: {}", nats_url);
 
     let mut fetch_sub = nc.subscribe(PREVIEW_FETCH).await?;
-    info!("Preview шард запущен. Слушаю: {}", PREVIEW_FETCH);
+    let mut tile_sub = nc.subscribe(PREVIEW_MAP_TILE).await?;
+    info!("Preview шард запущен. Слушаю: {}, {}", PREVIEW_FETCH, PREVIEW_MAP_TILE);
 
     loop {
         tokio::select! {
             Some(msg) = fetch_sub.next() => handle_fetch(&nc, &pool, msg).await,
+            Some(msg) = tile_sub.next() => handle_map_tile(&nc, &pool, msg).await,
         }
     }
 }
@@ -102,6 +111,75 @@ async fn handle_fetch(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
 
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     let _ = nc.publish(reply, json.into()).await;
+}
+
+// ── preview.map.tile ──────────────────────────────────────────────────────────
+
+async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        warn!("map tile: нет reply-топика");
+        return;
+    };
+    let resp = async {
+        let event: ParvaneEvent<MapTileRequest> =
+            serde_json::from_slice(&msg.payload).context("неверный JSON preview.map.tile")?;
+        let _user = verify_token(nc, &event.token).await?;
+        let MapTileRequest { z, x, y, .. } = event.payload;
+        if z > TILE_MAX_ZOOM || x >= (1u32 << z) || y >= (1u32 << z) {
+            anyhow::bail!("тайл вне диапазона");
+        }
+        let png = resolve_tile(pool, z, x, y).await?;
+        anyhow::Ok(MapTileResponse { ok: true, png_base64: Some(B64.encode(png)), error: None })
+    }
+    .await
+    .unwrap_or_else(|e| {
+        warn!("map tile: {}", e);
+        MapTileResponse { ok: false, png_base64: None, error: Some(e.to_string()) }
+    });
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
+    let _ = nc.publish(reply, json.into()).await;
+}
+
+async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u8>> {
+    let key = format!("{z}/{x}/{y}");
+    let cached: Option<(Vec<u8>, i64)> =
+        sqlx::query_as("SELECT png, fetched_at FROM map_tiles WHERE tile_key = ?")
+            .bind(&key)
+            .fetch_optional(pool)
+            .await
+            .context("чтение кэша тайлов")?;
+    if let Some((png, fetched_at)) = cached {
+        if now_unix() - fetched_at < TILE_CACHE_TTL_SECS {
+            return Ok(png);
+        }
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_millis(CONNECT_TIMEOUT_MS))
+        .timeout(std::time::Duration::from_millis(TOTAL_TIMEOUT_MS))
+        .user_agent(USER_AGENT)
+        .build()
+        .context("http client")?;
+    let response = client
+        .get(format!("{TILE_BASE_URL}/{key}.png"))
+        .send()
+        .await
+        .context("запрос тайла")?;
+    if !response.status().is_success() {
+        anyhow::bail!("тайл: HTTP {}", response.status());
+    }
+    let bytes = response.bytes().await.context("тело тайла")?;
+    if bytes.is_empty() || bytes.len() > TILE_MAX_BYTES {
+        anyhow::bail!("тайл: неверный размер {}", bytes.len());
+    }
+    let png = bytes.to_vec();
+    sqlx::query("INSERT OR REPLACE INTO map_tiles (tile_key, png, fetched_at) VALUES (?, ?, ?)")
+        .bind(&key)
+        .bind(&png)
+        .bind(now_unix())
+        .execute(pool)
+        .await
+        .context("кэш тайла")?;
+    Ok(png)
 }
 
 /// Проверяет кэш, иначе фетчит и кэширует (в т.ч. отрицательный результат).

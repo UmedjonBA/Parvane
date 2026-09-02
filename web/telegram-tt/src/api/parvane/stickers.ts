@@ -4,6 +4,9 @@
 // приём — kind=sticker (реюз медиа-потока, alt-эмодзи в content).
 
 import type { ApiSticker, ApiStickerSet } from '../types';
+import type { PackFile, StoredPack } from './stickerPacks';
+
+import { buildEmojiDocId, registerEmojiPackName } from './stickerPacks';
 
 const SET_ID = 'parvane-builtin';
 const SET_ACCESS = '0';
@@ -163,8 +166,17 @@ const EMOJI_SIZE = 128;
 
 let cachedEmojiSet: { set: ApiStickerSet; blobs: Map<string, Blob> } | undefined;
 
+// Встроенный набор — тоже пак в терминах desktop: файлы NN-<hex>.png, docId
+// от («ParvaneEmoji»|файл). Так entity custom_emoji резолвятся в desktop после
+// материализации приложенного emoji_packs
+export const BUILTIN_EMOJI_PACK_NAME = 'ParvaneEmoji';
+
+function customEmojiFileName(index: number, emoji: string) {
+  return `${String(index).padStart(2, '0')}-${(emoji.codePointAt(0) || 0).toString(16)}.png`;
+}
+
 function customEmojiId(index: number) {
-  return `pvce${index}`;
+  return buildEmojiDocId(BUILTIN_EMOJI_PACK_NAME, customEmojiFileName(index, CUSTOM_EMOJIS[index]));
 }
 
 function buildApiCustomEmoji(index: number, emoji: string): ApiSticker {
@@ -183,6 +195,7 @@ function buildApiCustomEmoji(index: number, emoji: string): ApiSticker {
 
 export async function buildBuiltinCustomEmojiSet() {
   if (cachedEmojiSet) return cachedEmojiSet;
+  registerEmojiPackName(EMOJI_SET_ID, BUILTIN_EMOJI_PACK_NAME);
   const stickers: ApiSticker[] = [];
   const blobs = new Map<string, Blob>();
   for (let i = 0; i < CUSTOM_EMOJIS.length; i++) {
@@ -203,6 +216,18 @@ export async function buildBuiltinCustomEmojiSet() {
   return cachedEmojiSet;
 }
 
-export function isBuiltinCustomEmojiId(id: string) {
-  return id.startsWith('pvce');
+// Встроенный набор как PVPK-пак — чтобы приложить его к тексту (emoji_packs)
+export async function buildBuiltinEmojiPack(): Promise<StoredPack> {
+  const { blobs } = await buildBuiltinCustomEmojiSet();
+  const files: PackFile[] = [];
+  for (let i = 0; i < CUSTOM_EMOJIS.length; i++) {
+    const blob = blobs.get(customEmojiId(i));
+    if (!blob) continue;
+    files.push({ name: customEmojiFileName(i, CUSTOM_EMOJIS[i]), data: await blob.arrayBuffer() });
+  }
+  return { name: BUILTIN_EMOJI_PACK_NAME, files, isEmoji: true };
+}
+
+export function getBuiltinEmojiSetId() {
+  return EMOJI_SET_ID;
 }

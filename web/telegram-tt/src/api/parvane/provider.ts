@@ -52,12 +52,17 @@ import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
 import { clearSecureCredential, loadSecureCredential, saveSecureCredential } from './secureStorage';
 import {
+  buildApiCustomEmojiSetFromPack,
   buildApiStickerSetFromPack,
   findInstalledPackBySetId,
+  getEmojiPackRawName,
   getPackFileMime,
   getPendingFiles,
+  getReceivedEmojiPackSetIds,
   getReceivedPackRef,
+  getSetIdForPackName,
   isCustomPackSetId,
+  isEmojiPackSetId,
   loadInstalledPacks,
   parsePvpkArchive,
   removeInstalledPack,
@@ -103,6 +108,33 @@ let pendingLoginAddress = '';
 // повторить логин без повторного ввода
 let pendingLoginPassword = '';
 let e2e: E2eEngine | undefined;
+// Готовность E2E: движок создаётся асинхронно ПОСЛЕ авторизации (Olm, прекеи),
+// а UI уже доступен — отправка в это окно падала «Encryption engine is
+// unavailable». Пути отправки ждут готовности (с таймаутом)
+const E2E_READY_TIMEOUT_MS = 20000;
+let e2eReadyResolve: (() => void) | undefined;
+let e2eReady = new Promise<void>((resolve) => {
+  e2eReadyResolve = resolve;
+});
+function setE2eEngine(next: E2eEngine | undefined) {
+  e2e = next;
+  if (next) {
+    e2eReadyResolve?.();
+  } else {
+    e2eReady = new Promise<void>((resolve) => {
+      e2eReadyResolve = resolve;
+    });
+  }
+}
+function awaitE2e(): Promise<void> {
+  if (e2e) return Promise.resolve();
+  return Promise.race([
+    e2eReady,
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, E2E_READY_TIMEOUT_MS);
+    }),
+  ]);
+}
 let isCallIdentityReady = false;
 const polls = new PollStore();
 
@@ -202,6 +234,7 @@ const syncController = createSyncController({
 messageController = createMessageController({
   getConnection: () => connection,
   getE2e: () => e2e,
+  awaitE2e,
   getStore: () => store,
   getToken: () => token,
   localState,
@@ -223,7 +256,7 @@ const connectionController = createConnectionController({
   getConnection: () => connection,
   setConnection: (nextConnection) => { connection = nextConnection; },
   getE2e: () => e2e,
-  setE2e: (nextE2e) => { e2e = nextE2e; },
+  setE2e: setE2eEngine,
   getStore: () => store,
   setStore: (nextStore) => { store = nextStore; },
   getToken: () => token,
@@ -331,6 +364,15 @@ const INSTALLED_PACK_DATE = Math.floor(Date.now() / 1000);
 
 function registerPackBlobs(blobs: Map<string, { blob: Blob; mime: string }>) {
   blobs.forEach(({ blob, mime }, id) => mediaService.cacheBlobIfAbsent(id, blob, mime));
+}
+
+// Стикер-пак или эмодзи-пак (по реестру emoji_packs / флагу isEmoji)
+function buildCustomSet(setId: string, pack: StoredPack, installedDate?: number) {
+  if (isEmojiPackSetId(setId) || pack.isEmoji) {
+    const rawName = getEmojiPackRawName(setId) || pack.name;
+    return buildApiCustomEmojiSetFromPack(pack, rawName, setId, installedDate);
+  }
+  return buildApiStickerSetFromPack(pack, installedDate);
 }
 
 // Файлы кастомного пака: установленный → из IndexedDB; открытый в модалке —
@@ -559,6 +601,7 @@ const methods = {
 
   async fetchChats({ archived }: { archived?: boolean }) {
     await syncController.ensureSynced();
+    void messageController.methods.parvaneResumeLiveLocations();
     // Пинок загрузки наборов стикеров/кастом-эмодзи после маунта Main: штатный
     // путь гейтится на isAppConfigLoaded (fetchAppConfig у нас нет), а апдейт
     // updateStickerSets зовёт loadStickerSets напрямую
@@ -1002,7 +1045,7 @@ const methods = {
     if (customSetId) {
       const resolved = await resolveCustomPack(customSetId);
       if (!resolved) throw new Error('STICKERSET_INVALID');
-      const built = buildApiStickerSetFromPack(resolved.pack, resolved.isInstalled
+      const built = buildCustomSet(customSetId, resolved.pack, resolved.isInstalled
         ? INSTALLED_PACK_DATE : undefined);
       registerPackBlobs(built.blobs);
       return { set: built.set, stickers: built.set.stickers };
@@ -1019,8 +1062,9 @@ const methods = {
     if (!isCustomPackSetId(stickerSetId)) return undefined;
     const resolved = await resolveCustomPack(stickerSetId);
     if (!resolved) return undefined;
-    await saveInstalledPack(store.self, resolved.pack);
-    const built = buildApiStickerSetFromPack(resolved.pack, INSTALLED_PACK_DATE);
+    const isEmoji = isEmojiPackSetId(stickerSetId) || Boolean(resolved.pack.isEmoji);
+    await saveInstalledPack(store.self, { ...resolved.pack, isEmoji: isEmoji || undefined });
+    const built = buildCustomSet(stickerSetId, resolved.pack, INSTALLED_PACK_DATE);
     registerPackBlobs(built.blobs);
     sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
     return true;
@@ -1228,7 +1272,7 @@ const methods = {
     if (!store.self) return undefined;
     try {
       const imported = await E2eEngine.importEncrypted(store.self, payload, password);
-      e2e = imported;
+      setE2eEngine(imported);
       // Полный ресинк с восстановленным состоянием: старая sealed-история
       // расшифруется из привезённого decCache
       syncController.reset();
@@ -1261,20 +1305,49 @@ const methods = {
 
   // ── кастом-эмодзи (встроенный набор) ────────────────────────────────────────
 
+  // Кастом-эмодзи: встроенный набор + установленные эмодзи-паки (в т.ч.
+  // пришедшие из desktop через emoji_packs)
   async fetchCustomEmojiSets() {
     const { set, blobs } = await buildBuiltinCustomEmojiSet();
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, 'image/png');
     });
-    return { hash: '1', sets: [set] };
+    const sets = [set];
+    const installed = (await loadInstalledPacks(store.self)).filter((pack) => pack.isEmoji);
+    installed.forEach((pack) => {
+      const built = buildCustomSet(getSetIdForPackName(pack.name), pack, INSTALLED_PACK_DATE);
+      registerPackBlobs(built.blobs);
+      sets.push(built.set);
+    });
+    return { hash: `1:${installed.length}`, sets };
   },
 
+  // Документы по docId из entity custom_emoji: встроенные, установленные и
+  // ещё не установленные паки, приложенные к принятым сообщениям (архив
+  // тянется из cloud по pack_ref)
   async fetchCustomEmoji({ documentId }: { documentId: string[] }) {
     const { set, blobs } = await buildBuiltinCustomEmojiSet();
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, 'image/png');
     });
-    return (set.stickers || []).filter((s) => documentId.includes(s.id));
+    const found = (set.stickers || []).filter((s) => documentId.includes(s.id));
+    const missing = new Set(documentId.filter((id) => !found.some((s) => s.id === id)));
+    if (!missing.size) return found;
+    for (const setId of getReceivedEmojiPackSetIds()) {
+      if (!missing.size) break;
+      if (setId === set.id) continue;
+      const resolved = await resolveCustomPack(setId).catch(() => undefined);
+      if (!resolved) continue;
+      const built = buildCustomSet(setId, resolved.pack, resolved.isInstalled ? INSTALLED_PACK_DATE : undefined);
+      registerPackBlobs(built.blobs);
+      (built.set.stickers || []).forEach((sticker) => {
+        if (missing.has(sticker.id)) {
+          found.push(sticker);
+          missing.delete(sticker.id);
+        }
+      });
+    }
+    return found;
   },
 
   async fetchSavedGifs() {

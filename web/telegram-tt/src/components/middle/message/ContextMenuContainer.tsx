@@ -39,6 +39,7 @@ import {
   isChatAdmin,
   isChatChannel,
   isChatGroup,
+  isGeoLiveExpired,
   isMessageLocal,
   isOwnMessage,
   isUserRightBanned,
@@ -81,6 +82,7 @@ import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { isUserId } from '../../../util/entities/ids';
 import { getTranslationCacheKey, parseTranslationCacheKey } from '../../../util/keys/translationKey';
+import { callApi } from '../../../api/gramjs';
 import { getSelectionAsFormattedText } from './helpers/getSelectionAsFormattedText';
 import { isSelectionRangeInsideMessage } from './helpers/isSelectionRangeInsideMessage';
 
@@ -124,6 +126,7 @@ type StateProps = {
   canReschedule?: boolean;
   canReply?: boolean;
   canPin?: boolean;
+  canStopLiveLocation?: boolean;
   canShowReactionsCount?: boolean;
   canBuyPremium?: boolean;
   canShowReactionList?: boolean;
@@ -198,6 +201,7 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
   canReschedule,
   canReply,
   canPin,
+  canStopLiveLocation,
   repliesThreadInfo,
   canUnpin,
   canDelete,
@@ -505,6 +509,16 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
     setIsPinModalOpen(true);
   });
 
+  // Parvane: остановить трансляцию live-локации (наше сообщение geoLive)
+  const handleStopLiveLocation = useLastCallback(() => {
+    if (chat) {
+      void (callApi as unknown as (n: string, a: unknown) => void)('parvaneStopLiveLocation', {
+        chat, messageId: message.id,
+      });
+    }
+    closeMenu();
+  });
+
   const handleUnpin = useLastCallback(() => {
     pinMessage({ chatId: message.chatId, messageId: message.id, isUnpin: true });
     closeMenu();
@@ -741,6 +755,7 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         canQuote={selectionQuoteOffset !== UNQUOTABLE_OFFSET}
         canDelete={canDelete}
         canPin={canPin}
+        canStopLiveLocation={canStopLiveLocation}
         canReport={canReport}
         repliesThreadInfo={repliesThreadInfo}
         canUnpin={canUnpin}
@@ -778,6 +793,7 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         onEdit={handleEdit}
         onAppendTodoList={handleAppendTodoList}
         onPin={handlePin}
+        onStopLiveLocation={handleStopLiveLocation}
         onUnpin={handleUnpin}
         onForward={handleForward}
         onDelete={handleDelete}
@@ -974,6 +990,8 @@ export default memo(withGlobal<OwnProps>(
       canReschedule: isScheduled,
       canReply: !isPinned && !isScheduled && canReplyGlobally,
       canPin: !isScheduled && canPin,
+      canStopLiveLocation: Boolean(isOwn && !isScheduled
+        && message.content.location?.mediaType === 'geoLive' && !isGeoLiveExpired(message)),
       canUnpin: !isScheduled && canUnpin,
       canDelete,
       canEdit: !isPinned && canEdit,

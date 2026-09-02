@@ -18,7 +18,7 @@ const DEFAULT_ALT_EMOJI = '🙂';
 const STORAGE = createStore('parvane-stickers', 'packs');
 
 export type PackFile = { name: string; data: ArrayBuffer };
-export type StoredPack = { name: string; files: PackFile[] };
+export type StoredPack = { name: string; files: PackFile[]; isEmoji?: boolean };
 
 const MIME_BY_EXT: Record<string, string> = {
   webp: 'image/webp',
@@ -32,6 +32,11 @@ const receivedRefBySetId = new Map<string, WirePackRef>();
 // Распакованные файлы набора, показанного в модалке, но ещё не установленного
 const pendingFilesBySetId = new Map<string, StoredPack>();
 const setIdByShortName = new Map<string, string>();
+// Эмодзи-паки: setId → «сырое» имя пака (docId считается от него, как в
+// desktop), docId → setId (для отправки: какие паки приложить к тексту)
+const emojiRawNameBySetId = new Map<string, string>();
+const emojiSetIdByDocId = new Map<string, string>();
+const EMOJI_SIZE = 128;
 
 // FNV-1a 32-бит — как IdForAddress в store; даёт стабильный короткий id
 function buildHashedId(value: string): string {
@@ -41,6 +46,24 @@ function buildHashedId(value: string): string {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return String(hash >>> 1);
+}
+
+// FNV-1a 64-бит по UTF-8 → знаковый int64 десятичной строкой — ровно как
+// docIdFromFileId в desktop (parvane_client.cpp), иначе entity custom_emoji
+// не резолвятся на другой стороне
+export function fnv1a64Signed(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  const signed = hash >= 0x8000000000000000n ? hash - 0x10000000000000000n : hash;
+  return signed.toString();
+}
+
+export function buildEmojiDocId(rawPackName: string, fileName: string) {
+  return fnv1a64Signed(`pvemoji:${rawPackName}|${fileName}`);
 }
 
 // Зеркало desktop SanitizePackName: буквы/цифры/пробел/дефис/подчёркивание, ≤32
@@ -161,6 +184,34 @@ export function registerReceivedPackRef(ref: WirePackRef): string {
   return setId;
 }
 
+// Эмодзи-пак, приложенный к тексту (emoji_packs): регистрируем как обычный
+// pack_ref + помним сырое имя для docId
+export function registerReceivedEmojiPackRef(ref: WirePackRef): string {
+  const setId = registerReceivedPackRef(ref);
+  if (!emojiRawNameBySetId.has(setId)) emojiRawNameBySetId.set(setId, ref.name || 'Pack');
+  return setId;
+}
+
+export function registerEmojiPackName(setId: string, rawName: string) {
+  emojiRawNameBySetId.set(setId, rawName);
+}
+
+export function isEmojiPackSetId(setId: string) {
+  return emojiRawNameBySetId.has(setId);
+}
+
+export function getEmojiPackRawName(setId: string) {
+  return emojiRawNameBySetId.get(setId);
+}
+
+export function getEmojiSetIdForDocId(docId: string) {
+  return emojiSetIdByDocId.get(docId);
+}
+
+export function getReceivedEmojiPackSetIds() {
+  return Array.from(emojiRawNameBySetId.keys());
+}
+
 export function getReceivedPackRef(setId: string) {
   return receivedRefBySetId.get(setId);
 }
@@ -181,6 +232,8 @@ export function resetPackRegistries() {
   receivedRefBySetId.clear();
   pendingFilesBySetId.clear();
   setIdByShortName.clear();
+  emojiRawNameBySetId.clear();
+  emojiSetIdByDocId.clear();
 }
 
 // ── синтез ApiStickerSet ─────────────────────────────────────────────────────
@@ -197,6 +250,50 @@ function altEmojiForFileName(fileName: string) {
   const code = Number.parseInt(base.slice(dash + 1), 16);
   if (!Number.isInteger(code) || code < 0x80 || code > 0x10FFFF) return DEFAULT_ALT_EMOJI;
   return String.fromCodePoint(code);
+}
+
+export function altEmojiForPackFile(fileName: string) {
+  return altEmojiForFileName(fileName);
+}
+
+// Эмодзи-набор из пака: id документа = docId(rawName|file) (общий с desktop),
+// isCustomEmoji — рендер инлайн по entity; медиа-хэш document<docId>
+export function buildApiCustomEmojiSetFromPack(
+  pack: StoredPack, rawName: string, setId: string, installedDate?: number,
+): { set: ApiStickerSet; blobs: Map<string, { blob: Blob; mime: string }> } {
+  registerEmojiPackName(setId, rawName);
+  setIdByShortName.set(pack.name, setId);
+  const stickers: ApiSticker[] = [];
+  const blobs = new Map<string, { blob: Blob; mime: string }>();
+  for (const file of pack.files) {
+    const mime = getPackFileMime(file.name);
+    if (!mime) continue;
+    const id = buildEmojiDocId(rawName, file.name);
+    emojiSetIdByDocId.set(id, setId);
+    stickers.push({
+      mediaType: 'sticker',
+      id,
+      stickerSetInfo: { id: setId, accessHash: '0' },
+      emoji: altEmojiForFileName(file.name),
+      isCustomEmoji: true,
+      isLottie: mime === 'application/x-tgsticker',
+      isVideo: mime === 'video/webm',
+      width: EMOJI_SIZE,
+      height: EMOJI_SIZE,
+    });
+    blobs.set(id, { blob: new Blob([file.data], { type: mime }), mime });
+  }
+  const apiSet: ApiStickerSet = {
+    id: setId,
+    accessHash: '0',
+    title: pack.name,
+    shortName: pack.name,
+    count: stickers.length,
+    installedDate,
+    isEmoji: true,
+    stickers,
+  };
+  return { set: apiSet, blobs };
 }
 
 export function buildApiStickerSetFromPack(pack: StoredPack, installedDate?: number): {

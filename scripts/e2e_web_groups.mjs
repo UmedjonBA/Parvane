@@ -7,6 +7,8 @@ import zlib from 'node:zlib';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  dumpDiagJournal,
+  openMessageMenu,
   LOGIN_TIMEOUT_MS,
   findMessage,
   findMessageContainers,
@@ -192,6 +194,45 @@ try {
   await findMessage(charlieSession.page, groupMessage).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── «Seen by»: у автора в меню сообщения — кто прочитал (msg.chat.readers) ─
+  // Receipts bob/charlie доезжают до alice delta-синком (✓✓), потом меню
+  // грузит список прочитавших; ждём, пока в подписи не появится счётчик/имя
+  {
+    if (process.env.PARVANE_E2E_DEBUG_READ) {
+      for (const [who, session] of [['bob', bobSession], ['charlie', charlieSession], ['alice', aliceSession]]) {
+        const st = await session.page.evaluate(() => {
+          const g = window.__parvaneGetGlobal?.();
+          const tab = Object.values(g.byTabId || {})[0];
+          const chatId = tab?.messageLists?.[0]?.chatId;
+          const th = g.messages?.byChatId?.[chatId]?.threadsById?.['-1'] || {};
+          const byId = g.messages?.byChatId?.[chatId]?.byId || {};
+          return { chatId, readState: th.readState, listed: th.localState?.listedIds, ids: Object.keys(byId), unread: g.chats?.byId?.[chatId]?.unreadCount };
+        });
+        console.error(`[debug-read] ${who}: ${JSON.stringify(st)}`);
+      }
+    }
+    const seenLabel = aliceSession.page.locator('.MessageContextMenu--seen-by-label');
+    const seenModal = aliceSession.page.locator('.Modal').filter({ hasText: 'Seen by' });
+    let seenTitle = '';
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await openMessageMenu(aliceSession.page, groupMessage);
+      await seenLabel.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      await aliceSession.page.waitForTimeout(1500);
+      await seenLabel.click();
+      const isModalOpen = await seenModal.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+      seenTitle = isModalOpen ? (await seenModal.locator('.modal-title').innerText().catch(() => '')).trim() : '';
+      if (seenTitle.startsWith('Seen by 2')) break;
+      await aliceSession.page.keyboard.press('Escape');
+      await aliceSession.page.waitForTimeout(4000);
+    }
+    assert.equal(seenTitle.startsWith('Seen by 2'), true, `seen-by modal must list 2 readers, got: ${seenTitle}`);
+    // Имена в списке усечены (…), матчим по префиксу
+    await seenModal.getByText(bobName.slice(0, 18)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await seenModal.getByText(charlieName.slice(0, 18)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await aliceSession.page.keyboard.press('Escape');
+    await aliceSession.page.waitForTimeout(500);
+  }
+
   // ── Зашифрованное фото в группе ────────────────────────────────────────────
   await attachPhoto(aliceSession.page, photoCaption);
   for (const session of [bobSession, charlieSession]) {
@@ -271,7 +312,10 @@ try {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext], ['charlie', charlieContext]]) {
     const page = context.pages()[0];
-    if (page) await page.screenshot({ path: `${dir}groups-${name}.png` }).catch(() => {});
+    if (page) {
+      await page.screenshot({ path: `${dir}groups-${name}.png` }).catch(() => {});
+      await dumpDiagJournal(page, name, 80);
+    }
   }
   throw err;
 } finally {

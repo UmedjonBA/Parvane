@@ -34,6 +34,7 @@ import useOldLang from '../../../hooks/useOldLang';
 import Icon from '../../common/icons/Icon';
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
+import NestedMenuItem from '../../ui/NestedMenuItem';
 import ResponsiveHoverButton from '../../ui/ResponsiveHoverButton';
 import AttachBotItem from './AttachBotItem';
 import FormattedDateModal from './FormattedDateModal';
@@ -68,6 +69,9 @@ export type OwnProps = {
   onMenuOpen: NoneToVoidFunction;
   onMenuClose: NoneToVoidFunction;
 };
+
+// Live-локация: длительность трансляции (сек), как в Telegram
+const LIVE_LOCATION_PERIODS = [15 * 60, 60 * 60, 8 * 60 * 60];
 
 const AttachMenu = ({
   chatId,
@@ -148,17 +152,28 @@ const AttachMenu = ({
     }
   });
 
-  const handleParvaneLocation = useLastCallback(() => {
+  const sendParvaneLocation = useLastCallback((period?: number) => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition((pos) => {
       const chat = getGlobal().chats.byId[chatId];
-      if (chat) {
-        void (callApi as unknown as (n: string, a: unknown) => void)('parvaneSendLocation', {
-          chat, lat: pos.coords.latitude, long: pos.coords.longitude,
-        });
-      }
-    });
+      if (!chat) return;
+      const heading = typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)
+        ? Math.round(pos.coords.heading) : undefined;
+      void (callApi as unknown as (n: string, a: unknown) => void)('parvaneSendLocation', {
+        chat,
+        lat: pos.coords.latitude,
+        long: pos.coords.longitude,
+        period,
+        heading,
+        accuracy: pos.coords.accuracy ? Math.round(pos.coords.accuracy) : undefined,
+      });
+    }, undefined, { enableHighAccuracy: Boolean(period) });
   });
+
+  const handleParvaneLocation = useLastCallback(() => sendParvaneLocation());
+  const handleParvaneLiveLocation15 = useLastCallback(() => sendParvaneLocation(LIVE_LOCATION_PERIODS[0]));
+  const handleParvaneLiveLocation1h = useLastCallback(() => sendParvaneLocation(LIVE_LOCATION_PERIODS[1]));
+  const handleParvaneLiveLocation8h = useLastCallback(() => sendParvaneLocation(LIVE_LOCATION_PERIODS[2]));
 
   const handleQuickSelect = useLastCallback(() => {
     updateAttachmentSettings({ shouldCompress: true });
@@ -298,6 +313,20 @@ const AttachMenu = ({
             )}
             {!editingMessage && (
               <MenuItem icon="location" onClick={handleParvaneLocation}>{lang('AttachLocation')}</MenuItem>
+            )}
+            {!editingMessage && (
+              <NestedMenuItem
+                icon="location"
+                submenu={(
+                  <>
+                    <MenuItem onClick={handleParvaneLiveLocation15}>15 min</MenuItem>
+                    <MenuItem onClick={handleParvaneLiveLocation1h}>1 hour</MenuItem>
+                    <MenuItem onClick={handleParvaneLiveLocation8h}>8 hours</MenuItem>
+                  </>
+                )}
+              >
+                {lang('AttachLiveLocation')}
+              </NestedMenuItem>
             )}
             {canAttachToDoLists && !editingMessage && (
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
