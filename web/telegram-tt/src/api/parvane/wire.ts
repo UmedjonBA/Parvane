@@ -160,6 +160,10 @@ export const TOPIC_MSG_EDIT = 'msg.chat.edit';
 export const TOPIC_MSG_DELETE = 'msg.chat.delete';
 export const TOPIC_MSG_REACT = 'msg.chat.react';
 export const TOPIC_MSG_PIN = 'msg.chat.pin';
+// Очистка истории «для меня»: пачка id скрывается из sync только для нас
+export const TOPIC_MSG_CLEAR = 'msg.chat.clear';
+// Максимум id в одном msg.chat.clear (как CLEAR_MAX_IDS на сервере)
+export const CLEAR_MAX_IDS = 500;
 export const TOPIC_MSG_SYNC_REQUEST = 'msg.sync.request';
 export const TOPIC_GROUP_LIST = 'group.list';
 export const TOPIC_GROUP_CREATE = 'group.create';

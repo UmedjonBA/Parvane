@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures::StreamExt;
 use parvane_types::{
-    AckPayload, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
+    AckPayload, ClearPayload, ClearedIds, ClearedNotice, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
     GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
     GroupDeleteRequest, GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest,
     GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
@@ -17,7 +17,7 @@ use parvane_types::{
         GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_DELETE, GROUP_INFO,
         GROUP_INVITE_CREATE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
         GROUP_RENAME, GROUP_SET_ROLE, GROUP_UNBAN,
-        IDENTITY_VERIFY, MSG_ACK, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
+        IDENTITY_VERIFY, MSG_ACK, MSG_CLEAR, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
 };
@@ -71,6 +71,7 @@ async fn main() -> Result<()> {
     let mut delete_sub = nc.subscribe(MSG_DELETE).await?;
     let mut react_sub = nc.subscribe(MSG_REACT).await?;
     let mut pin_sub = nc.subscribe(MSG_PIN).await?;
+    let mut clear_sub = nc.subscribe(MSG_CLEAR).await?;
     let mut gcreate_sub = nc.subscribe(GROUP_CREATE).await?;
     let mut gadd_sub = nc.subscribe(GROUP_ADD_MEMBER).await?;
     let mut gremove_sub = nc.subscribe(GROUP_REMOVE_MEMBER).await?;
@@ -116,6 +117,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = pin_sub.next() => {
                 handle_pin(&nc, &pool, msg).await;
+            }
+            Some(msg) = clear_sub.next() => {
+                handle_clear(&nc, &pool, msg).await;
             }
             Some(msg) = gcreate_sub.next() => {
                 handle_group_create(&nc, &pool, msg).await;
@@ -1072,6 +1076,8 @@ async fn fetch_missed_with_keys(
                              AND c.signing_key IN (SELECT value FROM json_each(?))))
            AND (m.rowid > COALESCE((SELECT rowid FROM messages WHERE id = ?), 0)
                 OR m.updated_at > ?)
+           AND NOT EXISTS(SELECT 1 FROM hidden_messages h
+                           WHERE h.message_id = m.id AND h.user = ?)
          ORDER BY m.rowid
          LIMIT 100",
     )
@@ -1085,6 +1091,7 @@ async fn fetch_missed_with_keys(
     .bind(&keys_json)
     .bind(last_seen_id)
     .bind(since_updated)
+    .bind(user)
     .fetch_all(pool)
     .await?;
 
@@ -1386,6 +1393,11 @@ async fn push_mutation(nc: &Client, pool: &SqlitePool, message_id: &str, now: i6
         targets.push(from.clone());
     }
     for r in &targets {
+        // Скрывшему «для себя» мутацию не пушим — иначе правка/реакция
+        // собеседника воскресила бы очищенное сообщение в его кэше
+        if is_hidden_for(pool, &id, r).await? {
+            continue;
+        }
         let reactions = reactions_for(pool, &id, r).await;
         let stored = StoredMessage {
             id: id.parse().unwrap_or(Uuid::nil()),
@@ -1681,6 +1693,71 @@ async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     .await;
     if let Err(e) = result {
         error!("handle_pin: {}", e);
+    }
+}
+
+// ── msg.chat.clear ────────────────────────────────────────────────────────────
+
+/// Скрыть сообщения «для меня»: строка (user, message_id) исключает сообщение
+/// из выдачи sync запросившему. Права не проверяются: скрыть от себя можно
+/// что угодно (чужое/несуществующее id — безвредно), остальные участники
+/// продолжают видеть сообщение. Возвращает число реально скрытых id.
+async fn hide_messages(pool: &SqlitePool, user: &str, ids: &[Uuid], now: i64) -> Result<Vec<Uuid>> {
+    let mut hidden = Vec::with_capacity(ids.len());
+    for id in ids.iter().take(parvane_types::CLEAR_MAX_IDS) {
+        let inserted = sqlx::query(
+            "INSERT OR IGNORE INTO hidden_messages (user, message_id, hidden_at) VALUES (?, ?, ?)",
+        )
+        .bind(user)
+        .bind(id.to_string())
+        .bind(now)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if inserted > 0 {
+            hidden.push(*id);
+        }
+    }
+    Ok(hidden)
+}
+
+async fn is_hidden_for(pool: &SqlitePool, message_id: &str, user: &str) -> Result<bool> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM hidden_messages WHERE message_id = ? AND user = ?",
+    )
+    .bind(message_id)
+    .bind(user)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+async fn handle_clear(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<ClearPayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.clear")?;
+        let who = verify_token(nc, &event.token).await?;
+        validate_sender(&who, &event.from)?;
+        let hidden = hide_messages(pool, &who, &event.payload.message_ids, now_unix()).await?;
+        info!("Очистка истории: {} скрыл(а) {} сообщений", who, hidden.len());
+        if hidden.is_empty() {
+            return anyhow::Ok(());
+        }
+        // Остальные устройства этого же пользователя: пусть тоже уберут
+        // сообщения из локального кэша. В инбокс — ТОЛЬКО автору очистки.
+        let ev = ParvaneEvent {
+            id: Uuid::now_v7(),
+            from: "messenger".to_string(),
+            ts: now_unix(),
+            token: String::new(),
+            payload: ClearedNotice { cleared: ClearedIds { message_ids: hidden } },
+        };
+        nc.publish(msg_inbox(&who), serde_json::to_vec(&ev)?.into()).await?;
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        error!("handle_clear: {}", e);
     }
 }
 
@@ -2290,6 +2367,51 @@ mod tests {
         let missed = fetch_missed(&pool, "bob@local", older, 1).await.unwrap();
         assert_eq!(missed.len(), 1);
         assert_eq!(text_of(&missed[0]), "второе");
+    }
+
+    #[tokio::test]
+    async fn hidden_messages_are_excluded_only_for_the_hider() {
+        // Очистка «для меня»: скрытое не приходит в sync bob'у (ни по курсору
+        // id, ни по мутациям), а alice видит переписку как раньше.
+        let pool = test_pool().await;
+        let first = "00000000-0000-7000-8000-000000000001";
+        let second = "00000000-0000-7000-8000-000000000002";
+        store_message(&pool, &send_event(first, "alice@local", "bob@local", "первое"), 1)
+            .await
+            .unwrap();
+        store_message(&pool, &send_event(second, "alice@local", "bob@local", "второе"), 2)
+            .await
+            .unwrap();
+
+        let hidden = hide_messages(&pool, "bob@local", &[first.parse().unwrap()], 5).await.unwrap();
+        assert_eq!(hidden.len(), 1);
+        // Повтор — идемпотентен (ничего нового не скрыто → уведомления не будет)
+        let again = hide_messages(&pool, "bob@local", &[first.parse().unwrap()], 6).await.unwrap();
+        assert!(again.is_empty());
+
+        let bob = fetch_missed(&pool, "bob@local", "0", 0).await.unwrap();
+        assert_eq!(bob.len(), 1);
+        assert_eq!(text_of(&bob[0]), "второе");
+
+        // Мутация скрытого (правка автором) тоже не всплывает у скрывшего
+        sqlx::query("UPDATE messages SET edited = 1, updated_at = 50 WHERE id = ?")
+            .bind(first)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let bob_delta = fetch_missed(&pool, "bob@local", second, 2).await.unwrap();
+        assert!(bob_delta.is_empty());
+
+        let alice = fetch_missed(&pool, "alice@local", "0", 0).await.unwrap();
+        assert_eq!(alice.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn hide_messages_caps_batch_size() {
+        let pool = test_pool().await;
+        let ids: Vec<Uuid> = (0..(parvane_types::CLEAR_MAX_IDS + 10)).map(|_| Uuid::now_v7()).collect();
+        let hidden = hide_messages(&pool, "bob@local", &ids, 1).await.unwrap();
+        assert_eq!(hidden.len(), parvane_types::CLEAR_MAX_IDS);
     }
 
     #[tokio::test]

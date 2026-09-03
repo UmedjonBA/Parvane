@@ -35,6 +35,9 @@ type SyncDependencies = {
     saveHistoryRecord: (stored: WireStoredMessage) => void;
     deleteHistoryRecord: (uuid: string) => void;
     loadHistoryRecords: () => Promise<WireStoredMessage[]>;
+    flushHistoryNow: () => Promise<void>;
+    markChatDeleted: (address: string) => void;
+    removeOwnJournalEntries: (uuids: string[]) => Promise<void>;
     saveSyncCursor: (cursor: { lastSeenUuid: string; sinceUpdated: number }) => void;
     loadSyncCursor: () => Promise<{ lastSeenUuid: string; sinceUpdated: number } | undefined>;
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
@@ -756,11 +759,49 @@ export function createSyncController(deps: SyncDependencies) {
       });
   }
 
+  // Очистка истории «для меня» (наша или с другого своего устройства): убрать
+  // сообщения из стора, кэша истории и wire-флагов, сообщить tt. Опустевший
+  // чат снимается из списка как удалённый диалог; новое сообщение вернёт его
+  // (fetchChats показывает чаты с историей)
+  async function forgetMessages(uuids: string[]) {
+    const store = deps.getStore();
+    const idsByChatId = new Map<string, number[]>();
+    uuids.forEach((uuid) => {
+      wireFlagsByUuid.delete(uuid);
+      deps.localState.deleteHistoryRecord(uuid);
+      const message = store.getMessageByUuid(uuid);
+      if (!message) return;
+      store.removeMessage(message.chatId, message.id);
+      const ids = idsByChatId.get(message.chatId) || [];
+      ids.push(message.id);
+      idsByChatId.set(message.chatId, ids);
+    });
+    idsByChatId.forEach((ids, chatId) => {
+      deps.sendUpdate({ '@type': 'deleteMessages', ids, chatId });
+      if (!store.getMessages(chatId).length) {
+        const address = store.getAddressForId(chatId);
+        if (address && !store.isGroupAddress(address)) deps.localState.markChatDeleted(address);
+        deps.sendUpdate({ '@type': 'deleteHistory', chatId });
+      }
+    });
+    // Кэш истории и журнал исходящих — сразу, не по таймеру: reload сразу
+    // после удаления не должен воскресить очищенное из IDB
+    await deps.localState.removeOwnJournalEntries(uuids);
+    await deps.localState.flushHistoryNow();
+  }
+
   function handleInboxFrame(payload: string) {
-    let event: WireEvent<{ message?: WireStoredMessage; message_id?: string }>;
+    let event: WireEvent<{
+      message?: WireStoredMessage; message_id?: string; cleared?: { message_ids?: string[] };
+    }>;
     try {
       event = JSON.parse(payload);
     } catch {
+      return;
+    }
+    const cleared = event.payload?.cleared?.message_ids;
+    if (Array.isArray(cleared) && cleared.length) {
+      forgetMessages(cleared.filter((uuid): uuid is string => typeof uuid === 'string'));
       return;
     }
     const stored = event.payload?.message;
@@ -798,6 +839,7 @@ export function createSyncController(deps: SyncDependencies) {
     announcePeer,
     collectUnreadMentions,
     ensureSynced,
+    forgetMessages,
     pushMentionState,
     getFlags: (uuid: string) => wireFlagsByUuid.get(uuid),
     getReadOutboxMax: (chatId: string) => readOutboxMaxByChatId.get(chatId),
