@@ -37,7 +37,11 @@ const context = await chromium.launchPersistentContext(PROFILE_DIR, {
 context.setDefaultNavigationTimeout(120000);
 try {
   const page = await loginPersistent(context, bugsUser, bugsPass);
-  await page.waitForTimeout(8000); // первичный sync
+  await page.waitForTimeout(20000); // первичный sync (прод медленный)
+  if (process.env.PARVANE_BUGS_DEBUG) {
+    const lines = await page.evaluate(() => (JSON.parse(localStorage.getItem('parvane:diag:v1') || '[]')).filter((e) => e.k === 'log' || /err/.test(e.k) || /fetchChats/.test(e.d || '')).slice(-14).map((e) => `${new Date(e.t).toISOString().slice(11, 19)} ${e.k} ${(e.d || '').slice(0, 140)}`));
+    console.error(lines.join('\n'));
+  }
   if (mode === 'login') {
     console.log(`[bugs-reader] вошли как ${bugsUser}; профиль: ${PROFILE_DIR}`);
   } else {
