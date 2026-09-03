@@ -43,6 +43,10 @@ pub mod topics {
     pub const MSG_DELETE: &str = "msg.chat.delete";
     pub const MSG_REACT: &str = "msg.chat.react";
     pub const MSG_PIN: &str = "msg.chat.pin";
+    /// Очистка истории «для меня»: пачка id сообщений скрывается из выдачи sync
+    /// ТОЛЬКО для запросившего (у остальных участников ничего не меняется).
+    /// Собственные устройства получают в инбокс уведомление `ClearedNotice`.
+    pub const MSG_CLEAR: &str = "msg.chat.clear";
     /// Список прочитавших сообщение (группы: «seen by», 1-1: время прочтения).
     /// Request/reply в reply-inbox; только участник переписки.
     pub const MSG_READERS: &str = "msg.chat.readers";
@@ -726,6 +730,31 @@ pub struct PinPayload {
     /// Ed25519 signature over `pin:<message_id>:<pin>` for sealed senders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+}
+
+/// Очистка истории «для меня» (msg.chat.clear): скрыть перечисленные
+/// сообщения из выдачи sync запросившему. Клиент режет историю чата на пачки
+/// (не больше `CLEAR_MAX_IDS` id в событии); лишние id сервер отбрасывает.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearPayload {
+    pub message_ids: Vec<Uuid>,
+}
+
+/// Максимум id в одном `msg.chat.clear`.
+pub const CLEAR_MAX_IDS: usize = 500;
+
+/// Уведомление собственным устройствам (инбокс `msg.user.<я>`): эти сообщения
+/// скрыты «для меня» на другом устройстве. Несётся в `ParvaneEvent` вместо
+/// `InboxPush` (поле `cleared` вместо `message`); клиенты, не знающие поля,
+/// игнорируют кадр.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearedNotice {
+    pub cleared: ClearedIds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearedIds {
+    pub message_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

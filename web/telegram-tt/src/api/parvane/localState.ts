@@ -137,19 +137,58 @@ export function createLocalState(deps: LocalStateDependencies) {
   let historyFlushTimer: ReturnType<typeof setTimeout> | undefined;
   let cursorPending: { lastSeenUuid: string; sinceUpdated: number } | undefined;
 
-  function flushHistoryQueue() {
+  function flushHistoryQueue(): Promise<void> {
+    if (historyFlushTimer) clearTimeout(historyFlushTimer);
     historyFlushTimer = undefined;
     const batch = Array.from(historyWriteQueue.entries());
     historyWriteQueue.clear();
     const cursor = cursorPending;
     cursorPending = undefined;
-    void secureStorage()?.then(async (storage) => {
+    if (!batch.length && !cursor) return Promise.resolve();
+    const pending = secureStorage();
+    if (!pending) return Promise.resolve();
+    return pending.then(async (storage) => {
       for (const [uuid, stored] of batch) {
         if (stored) await storage.saveRecord(`m:${uuid}`, stored);
         else await storage.deleteRecord(`m:${uuid}`);
       }
       if (cursor) await storage.saveRecord(SYNC_CURSOR_RECORD, cursor);
     }).catch(() => undefined);
+  }
+
+  // Уход со страницы: дописать очередь кэша сразу (иначе удаление/очистка,
+  // сделанные за <500 мс до reload, терялись — курсор уже записан, а сервер
+  // скрытое повторно не отдаст → в кэше навсегда оставались старые строки)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', () => {
+      void flushHistoryQueue();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') void flushHistoryQueue();
+    });
+  }
+
+  // Удалённые «для меня» личные чаты (по адресу пира): не показывать в списке,
+  // пока в чате нет ни одного сообщения (новое входящее возвращает чат). Без
+  // этого пир, известный по составу общей группы, всплывал бы пустым чатом
+  function loadDeletedChats(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('deletedchats')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function markChatDeleted(address: string) {
+    const list = loadDeletedChats();
+    if (!list.includes(address)) localStorage.setItem(storageKey('deletedchats'), JSON.stringify([...list, address]));
+  }
+
+  function unmarkChatDeleted(address: string) {
+    const list = loadDeletedChats();
+    if (list.includes(address)) {
+      localStorage.setItem(storageKey('deletedchats'), JSON.stringify(list.filter((item) => item !== address)));
+    }
   }
 
   function scheduleHistoryFlush() {
@@ -317,6 +356,21 @@ export function createLocalState(deps: LocalStateDependencies) {
     scheduleRecordSave('journal');
   }
 
+  // Очистка истории: убрать свои исходящие из журнала СРАЗУ (журнал сливается
+  // с выдачей sync на полном синке — без этого удалённый чат воскресал из
+  // собственных сообщений после reload)
+  async function removeOwnJournalEntries(uuids: string[]) {
+    await hydrate();
+    const drop = new Set(uuids);
+    const before = journalCache?.length || 0;
+    journalCache = (journalCache || []).filter((entry) => !drop.has(entry.id));
+    if (journalCache.length === before) return;
+    if (journalSaveTimer) clearTimeout(journalSaveTimer);
+    journalSaveTimer = undefined;
+    await secureStorage()?.then((storage) => storage.saveRecord('journal', journalCache || []))
+      .catch(() => undefined);
+  }
+
   function loadPeerTtl(): Record<string, number> {
     try {
       return JSON.parse(localStorage.getItem(storageKey('ttl')) || '{}');
@@ -378,6 +432,19 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function isBlocked(address: string) {
     return loadBlocked().includes(address);
+  }
+
+  // «Отметить непрочитанным»: chatId с ручной пометкой (сервер такого не хранит)
+  function loadUnreadMarks(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('unreadmarks')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function saveUnreadMarks(chatIds: string[]) {
+    localStorage.setItem(storageKey('unreadmarks'), JSON.stringify(chatIds));
   }
 
   function loadFolders(): { id: number; [key: string]: unknown }[] {
@@ -532,6 +599,12 @@ export function createLocalState(deps: LocalStateDependencies) {
     fetchScheduledHistory,
     loadArchived,
     loadBlocked,
+    loadDeletedChats,
+    loadUnreadMarks,
+    markChatDeleted,
+    unmarkChatDeleted,
+    removeOwnJournalEntries,
+    flushHistoryNow: flushHistoryQueue,
     loadDrafts,
     loadFolders,
     isBlocked,
@@ -544,6 +617,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     readOwnJournal,
     rescheduleMessage,
     saveBlocked,
+    saveUnreadMarks,
     saveDraft,
     saveFolders,
     setArchived,

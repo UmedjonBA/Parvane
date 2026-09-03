@@ -656,11 +656,20 @@ const methods = {
     );
 
     const chatIdsWithHistory = new Set(store.getChatIds());
+    const unreadMarks = new Set(localState.loadUnreadMarks());
     const isVisibleChat = (chat: ApiChat) => chatIdsWithHistory.has(chat.id)
       || chatIdsWithDrafts.has(chat.id)
       || chat.type !== 'chatTypePrivate';
+    // Удалённые «для меня» личные чаты: скрыты, пока пусты; появление истории
+    // (новое сообщение) снимает пометку
+    const deletedChatIds = new Set<string>();
+    localState.loadDeletedChats().forEach((address) => {
+      const chatId = store.getIdForAddress(address);
+      if (chatIdsWithHistory.has(chatId)) localState.unmarkChatDeleted(address);
+      else deletedChatIds.add(chatId);
+    });
     const listedChats = chats.filter(
-      (chat) => isVisibleChat(chat) || chat.id !== selfId(),
+      (chat) => (isVisibleChat(chat) || chat.id !== selfId()) && !deletedChatIds.has(chat.id),
     );
     const allVisibleChats = listedChats.filter(isVisibleChat);
 
@@ -695,6 +704,7 @@ const methods = {
         let lastReadInbox = 0;
         let unreadCount = 0;
         const isSelfChat = chat.id === selfId();
+        const hasUnreadMark = unreadMarks.has(chat.id) || undefined;
         history.forEach((message) => {
           // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем
           if (message.isOutgoing || isSelfChat || !message.senderId) return;
@@ -710,6 +720,7 @@ const methods = {
         threadReadStatesById[chat.id] = {
           lastReadInboxMessageId: lastReadInbox,
           unreadCount,
+          hasUnreadMark,
           unreadMentionsCount: unreadMentions.length,
           unreadMentions,
           lastReadOutboxMessageId: syncController.getReadOutboxMax(chat.id),
@@ -954,6 +965,64 @@ const methods = {
   fetchBlockedUsers() {
     const ids = localState.loadBlocked().map((a) => store.getIdForAddress(a));
     return Promise.resolve({ blockedIds: ids, totalCount: ids.length });
+  },
+
+  // ── «Отметить непрочитанным» (локальный персист; снимается при открытии чата
+  //    штатным markChatRead → hasUnreadMark: undefined) ──────────────────────
+  toggleDialogUnread({ chat, hasUnreadMark }: { chat: ApiChat; hasUnreadMark?: true }) {
+    const marks = new Set(localState.loadUnreadMarks());
+    if (hasUnreadMark) marks.add(chat.id);
+    else marks.delete(chat.id);
+    localState.saveUnreadMarks(Array.from(marks));
+    sendUpdate({
+      '@type': 'updateThreadReadState',
+      chatId: chat.id,
+      threadId: MAIN_THREAD_ID,
+      readState: { hasUnreadMark },
+    });
+    return Promise.resolve(undefined);
+  },
+
+  // «Открепить все»: по одному штатным msg.chat.pin (у сервера нет пакетного)
+  unpinAllMessages({ chat }: { chat: ApiChat; threadId?: unknown }) {
+    store.getMessages(chat.id)
+      .filter((message) => message.isPinned)
+      .forEach((message) => {
+        void methods.pinMessage({ chat, messageId: message.id, isUnpin: true });
+      });
+    return Promise.resolve(undefined);
+  },
+
+  // «Общие группы» в профиле: группы из реестра, где состоим оба
+  fetchCommonChats({ user }: { user: ApiUser; maxId?: string }) {
+    const address = store.getAddressForId(user.id);
+    if (!address || address === store.self) return Promise.resolve({ chatIds: [], count: 0 });
+    const chatIds = store.getGroupAddresses()
+      .map((groupAddress) => store.getGroupInfo(groupAddress))
+      .filter((info): info is NonNullable<typeof info> => Boolean(info))
+      .filter((info) => info.members.some((member) => member.address === address)
+        && info.members.some((member) => member.address === store.self))
+      .map((info) => store.buildApiChatForGroup(info).id);
+    return Promise.resolve({ chatIds, count: chatIds.length });
+  },
+
+  // Пользователи/сообщения по id — из стора (сервер per-id не отдаёт)
+  fetchUsers({ users }: { users: ApiUser[] }) {
+    const apiUsers = users
+      .map((user) => store.getAddressForId(user.id))
+      .filter((address): address is string => Boolean(address))
+      .map((address) => store.buildApiUser(address));
+    if (!apiUsers.length) return Promise.resolve(undefined);
+    const userStatusesById: Record<string, ApiUserStatus> = {};
+    apiUsers.forEach((user) => {
+      userStatusesById[user.id] = RECENT_STATUS;
+    });
+    return Promise.resolve({ users: apiUsers, userStatusesById });
+  },
+
+  fetchMessage({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+    const message = store.getMessage(chat.id, messageId);
+    return Promise.resolve(message ? { message } : undefined);
   },
 
   // «Кто голосовал» в опросе (публичные): список проголосовавших за вариант

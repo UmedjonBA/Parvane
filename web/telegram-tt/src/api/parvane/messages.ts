@@ -31,7 +31,9 @@ import {
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
 import {
   buildWireEvent,
+  CLEAR_MAX_IDS,
   newMessageId,
+  TOPIC_MSG_CLEAR,
   TOPIC_MSG_DELETE,
   TOPIC_MSG_EDIT,
   TOPIC_MSG_PIN,
@@ -1145,6 +1147,45 @@ export function createMessageController(deps: MessageDependencies) {
       });
       deps.sendUpdate({ '@type': 'deleteMessages', ids: messageIds, chatId: chat.id });
       return Promise.resolve(undefined);
+    },
+
+    // «Удалить чат»: вся история чата скрывается «для меня» на сервере
+    // (msg.chat.clear пачками — после полного ресинка не вернётся) и удаляется
+    // локально; собственные устройства узнают из инбокса (`cleared`). Для
+    // «удалить и у собеседника» свои сообщения дополнительно удаляются у всех
+    // штатным msg.chat.delete — чужие у собеседника остаются (Parvane не даёт
+    // удалять чужое). Пустой чат tt снимает из списка по update deleteHistory
+    async deleteHistory({ chat, shouldDeleteForAll }: { chat: ApiChat; shouldDeleteForAll?: boolean }) {
+      const currentStore = store();
+      const uuids: string[] = [];
+      const ownUuids: string[] = [];
+      currentStore.getMessages(chat.id).forEach((message) => {
+        const uuid = currentStore.getUuidForMessage(chat.id, message.id);
+        if (!uuid) return;
+        uuids.push(uuid);
+        if (message.isOutgoing) ownUuids.push(uuid);
+      });
+      if (shouldDeleteForAll && ownUuids.length) {
+        const e2e = requireE2e(deps.getE2e());
+        ownUuids.forEach((uuid) => {
+          publishOrThrow(TOPIC_MSG_DELETE, JSON.stringify(buildWireEvent(currentStore.self, token(), {
+            message_id: uuid, signature: e2e.signCallData(`delete:${uuid}`),
+          })));
+        });
+      }
+      for (let offset = 0; offset < uuids.length; offset += CLEAR_MAX_IDS) {
+        publishOrThrow(TOPIC_MSG_CLEAR, JSON.stringify(buildWireEvent(currentStore.self, token(), {
+          message_ids: uuids.slice(offset, offset + CLEAR_MAX_IDS),
+        })));
+      }
+      const address = currentStore.getAddressForId(chat.id);
+      if (address && !currentStore.isGroupAddress(address)) {
+        deps.localState.markChatDeleted(address);
+        deps.localState.saveDraft(address, undefined);
+      }
+      await deps.sync.forgetMessages(uuids);
+      deps.sendUpdate({ '@type': 'deleteHistory', chatId: chat.id });
+      return undefined;
     },
 
     sendReaction({ chat, messageId, reactions }: {
