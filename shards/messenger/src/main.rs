@@ -1328,6 +1328,11 @@ async fn deliver_message(
 ) -> Result<()> {
     let recipients = resolve_recipients(pool, &stored.to, &stored.from).await?;
     for r in &recipients {
+        // Sealed sender: у копии «самому себе» адрес пуст — инбокса `msg.user.`
+        // не существует (NATS писал Publish Violation), такие цели пропускаем
+        if r.is_empty() {
+            continue;
+        }
         // Мультидевайс: в live-пуш кладём копии ЭТОГО адресата — все его
         // устройства слушают один инбокс и каждое выберет свою по device_id.
         // Self-копии отправителя (recipient='') адресату не отдаются.
@@ -1393,6 +1398,9 @@ async fn push_mutation(nc: &Client, pool: &SqlitePool, message_id: &str, now: i6
         targets.push(from.clone());
     }
     for r in &targets {
+        if r.is_empty() {
+            continue;
+        }
         // Скрывшему «для себя» мутацию не пушим — иначе правка/реакция
         // собеседника воскресила бы очищенное сообщение в его кэше
         if is_hidden_for(pool, &id, r).await? {
