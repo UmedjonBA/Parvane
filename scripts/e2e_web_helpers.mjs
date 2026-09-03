@@ -67,14 +67,37 @@ export async function preparePage(context, user, password, { seedLocalStorage } 
 export async function openPrivateChat(page, address) {
   const search = page.locator('#telegram-search-input');
   const displayName = address.split('@')[0];
-  await search.click();
-  await page.locator('.LeftSearch').waitFor({ state: 'visible', timeout: 10000 });
+  const pane = page.locator('.LeftSearch');
+  // Панель открывается по фокусу: если поле уже в фокусе (прошлый вызов),
+  // клик её не откроет — снимаем фокус и кликаем снова
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await search.click();
+    const isOpen = await pane.waitFor({ state: 'visible', timeout: 3000 }).then(() => true).catch(() => false);
+    if (isOpen) break;
+    await search.evaluate((el) => el.blur());
+    await page.waitForTimeout(300);
+  }
+  await pane.waitFor({ state: 'visible', timeout: 10000 });
   await page.waitForTimeout(250);
   await search.fill(displayName);
   const result = page.locator('.LeftSearch .search-result').filter({ hasText: displayName }).first();
   await result.waitFor({ state: 'visible', timeout: 15000 });
   await result.locator('.ListItem-button').click();
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await closeLeftSearch(page);
+}
+
+// Панель поиска после клика по результату закрывается с анимацией; если чат
+// уже был открыт, tt иногда оставляет её висеть поверх списка чатов (клик по
+// чату в списке тогда падает «element is not visible»). Дожидаемся закрытия,
+// иначе закрываем Escape'ом (композер в фокусе — Escape ему безвреден)
+async function closeLeftSearch(page) {
+  const search = page.locator('.LeftSearch');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const isHidden = await search.waitFor({ state: 'hidden', timeout: 2000 }).then(() => true).catch(() => false);
+    if (isHidden) return;
+    await page.keyboard.press('Escape');
+  }
 }
 
 // Строгий вариант: проверяет заголовок чата и ретраит — нестрогий
