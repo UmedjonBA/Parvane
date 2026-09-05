@@ -2215,6 +2215,12 @@ export interface LangPair {
   'ParvaneRegisterFailed': undefined;
   'ParvaneCodeSentEmail': undefined;
   'ParvaneCodeInvalid': undefined;
+  'ParvaneTelegramTitle': undefined;
+  'ParvaneTelegramText': undefined;
+  'ParvaneTelegramOpen': undefined;
+  'ParvaneTelegramWaiting': undefined;
+  'ParvaneTelegramCheck': undefined;
+  'ParvaneTelegramExpired': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

@@ -39,6 +39,10 @@ services:
       # сайт это единственный барьер от мусорных аккаунтов. Без SMTP_HOST код
       # уходит лишь в лог identity (dev-режим) — на проде обязательно задать
       PARVANE_EMAIL_REQUIRED: ${PARVANE_EMAIL_REQUIRED:-1}
+      # Подтверждение через Telegram-бота (infra/telegram-bot) — приоритетнее
+      # почты; бот живёт на хосте с доступом к api.telegram.org
+      PARVANE_TELEGRAM_BOT: ${PARVANE_TELEGRAM_BOT:-}
+      PARVANE_TELEGRAM_SECRET: ${PARVANE_TELEGRAM_SECRET:-}
       PARVANE_SMTP_HOST: ${PARVANE_SMTP_HOST:-}
       PARVANE_SMTP_PORT: ${PARVANE_SMTP_PORT:-587}
       PARVANE_SMTP_USER: ${PARVANE_SMTP_USER:-}

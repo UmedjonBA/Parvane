@@ -1,0 +1,21 @@
+# systemd-юнит бота подтверждения регистрации Parvane.
+# Установка: см. README.md рядом.
+[Unit]
+Description=Parvane Telegram confirmation bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=parvane-bot
+EnvironmentFile=/etc/parvane/tg-bot.env
+ExecStart=/usr/bin/python3 /opt/parvane-tg-bot/parvane_tg_bot.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

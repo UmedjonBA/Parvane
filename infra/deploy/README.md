@@ -119,12 +119,15 @@ sync_reconnect, пин/архив чата (пробник). TURN relay — RELA
 реакций в sync_reconnect. ЛЕЧИТЬ: uuid v7 для message id (монотонный) ИЛИ
 курсор по (updated_at,id), а не по одному id.
 
-## Регистрация: почта вместо пароля на сайт (2026-09-05)
+## Регистрация: Telegram-бот/почта вместо пароля на сайт (2026-09-05)
 
 Пароль круга (Caddy `basic_auth` на весь сайт, 2026-09-01 — 2026-09-05) снят.
-Сайт открыт, барьер от мусорных аккаунтов — регистрация с подтверждением
-почты у identity: `PARVANE_EMAIL_REQUIRED=1` (дефолт compose) +
-`PARVANE_SMTP_HOST/PORT/USER/PASS/FROM` в `.env`. Экран входа принимает ник без
+Сайт открыт, барьер от мусорных аккаунтов — подтверждение регистрации у
+identity. Основной режим — Telegram-бот (`PARVANE_TELEGRAM_BOT` +
+`PARVANE_TELEGRAM_SECRET`, бот на отдельном VPS — см. `infra/telegram-bot`),
+один Telegram = один аккаунт. Запасной — почта: `PARVANE_EMAIL_REQUIRED=1`
+(дефолт compose) + `PARVANE_SMTP_HOST/PORT/USER/PASS/FROM`; SMTP пока нет.
+Экран входа принимает ник без
 `@сервер` — identity дополняет его до `ник@PARVANE_DOMAIN` (дефолт compose —
 `PARVANE_PUBLIC_HOST`, т.е. `parvane.duckdns.org`); регистрация на чужой домен
 отклоняется, полный адрес `ник@сервер` на входе по-прежнему работает (старые
@@ -145,8 +148,8 @@ docker compose exec -T caddy caddy hash-password --plaintext '<PW>'
 
 ## Заметки
 
-- Регистрация ОТКРЫТА с подтверждением почты (PARVANE_EMAIL_REQUIRED=1 +
-  SMTP в .env, см. секцию выше). Rate-limit регистрации у identity — по
+- Регистрация ОТКРЫТА с подтверждением через Telegram-бота (PARVANE_TELEGRAM_*
+  в .env, см. секцию выше). Rate-limit регистрации у identity — по
   логину, не по IP (gateway не прокидывает адрес клиента); при спаме — лимит
   в Caddy или PARVANE_INVITE_REQUIRED=1.
 - notes/calendar шарды не разворачиваются (к UI не подключены).

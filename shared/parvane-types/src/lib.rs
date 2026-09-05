@@ -16,6 +16,11 @@ pub mod topics {
     /// Публичные параметры сервера для экрана входа (pre-auth): домен адресов
     /// (ник без `@` дополняется до `ник@домен`) и нужна ли почта при регистрации.
     pub const IDENTITY_SERVER_INFO: &str = "identity.server.info";
+    /// Подтверждение регистрации Telegram-ботом (pre-auth, с общим секретом):
+    /// бот получил `/start <token>` и привязывает Telegram-аккаунт к pending-нику.
+    pub const IDENTITY_TELEGRAM_CONFIRM: &str = "identity.telegram.confirm";
+    /// Опрос клиентом статуса подтверждения pending-аккаунта (pre-auth).
+    pub const IDENTITY_REGISTER_STATUS: &str = "identity.register.status";
     /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
@@ -186,10 +191,14 @@ pub struct RegisterRequest {
 pub struct RegisterResponse {
     pub ok: bool,
     pub error: Option<String>,
-    /// true — аккаунт создан, но ждёт кода подтверждения с почты
-    /// (identity.email.confirm); логин до подтверждения невозможен.
+    /// true — аккаунт создан, но ждёт подтверждения (код с почты через
+    /// identity.email.confirm или Telegram-бот); логин до подтверждения
+    /// невозможен.
     #[serde(default)]
     pub confirm_required: bool,
+    /// Режим Telegram: одноразовый токен для deep link `t.me/<bot>?start=<token>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_token: Option<String>,
 }
 
 /// Подтверждение почты: код из письма. Повторный `register` с тем же
@@ -216,8 +225,51 @@ pub struct ServerInfoRequest {}
 pub struct ServerInfoResponse {
     /// Домен адресов этого сервера (`PARVANE_DOMAIN`): `ник` → `ник@домен`.
     pub domain: String,
-    /// true — регистрация требует почту и код подтверждения.
+    /// true — регистрация требует почту и код подтверждения (confirm = email).
     pub email_required: bool,
+    /// Как подтверждается регистрация: `none` | `email` | `telegram`.
+    #[serde(default)]
+    pub confirm: String,
+    /// Username Telegram-бота (без @) для deep link при confirm = telegram.
+    #[serde(default)]
+    pub telegram_bot: String,
+}
+
+/// Бот → identity: пользователь Telegram нажал Start по deep link с токеном.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramConfirmRequest {
+    /// Общий секрет бота и identity (`PARVANE_TELEGRAM_SECRET`).
+    pub secret: String,
+    /// Токен из `/start <token>`.
+    pub token: String,
+    /// Telegram user id — один Telegram = один подтверждённый аккаунт.
+    pub telegram_id: i64,
+    /// Имя/username для лога (необязательно).
+    #[serde(default)]
+    pub telegram_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramConfirmResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Подтверждённый адрес (ник@домен) — для ответа пользователю в боте.
+    #[serde(default)]
+    pub user: Option<String>,
+}
+
+/// Клиент опрашивает, подтверждён ли его pending-аккаунт (токен — доказательство
+/// владения регистрационной сессией).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterStatusRequest {
+    pub user: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterStatusResponse {
+    pub confirmed: bool,
 }
 
 // ── E2E prekeys (Фаза 2, X3DH) ────────────────────────────────────────────────

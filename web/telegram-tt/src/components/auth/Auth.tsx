@@ -15,6 +15,7 @@ import Transition from '../ui/Transition';
 import AuthCode from './AuthCode.async';
 import AuthParvane from './AuthParvane';
 import AuthParvaneRegister from './AuthParvaneRegister';
+import AuthParvaneTelegram from './AuthParvaneTelegram';
 import AuthPassword from './AuthPassword.async';
 
 import './Auth.scss';
@@ -60,8 +61,10 @@ const Auth = ({
         return <AuthPassword />;
       case 'authorizationStateWaitRegistration':
         return <AuthParvaneRegister />;
-      case 'authorizationStateWaitPhoneNumber':
+      // Parvane: WaitQrCode = подтверждение регистрации в Telegram-боте
       case 'authorizationStateWaitQrCode':
+        return <AuthParvaneTelegram />;
+      case 'authorizationStateWaitPhoneNumber':
         return <AuthParvane />;
       default:
         return <AuthParvane />;

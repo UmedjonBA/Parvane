@@ -21,9 +21,21 @@ docker compose up -d                        # применить изменён�
 ```
 Контейнеры и так поднимаются сами (`restart: unless-stopped`) после падения/ребута.
 
-## Регистрация (открытая, с подтверждением почты)
-Пароля на сайт больше нет (снят 2026-09-05). Регистрация: ник + почта +
-пароль → 6-значный код письмом. Нужны в `.env` (identity):
+## Регистрация (открытая, подтверждение через Telegram-бота или почту)
+Пароля на сайт больше нет (снят 2026-09-05). Регистрация: ник + пароль →
+экран «Confirm via Telegram» (deep link `t.me/<bot>?start=<token>`) → Start в
+боте → клиент логинится сам. Бот живёт на VPS 213.155.15.139
+(`infra/telegram-bot`, юнит `parvane-tg-bot`, env `/etc/parvane/tg-bot.env`),
+потому что с прод-сервера api.telegram.org недоступен. В `.env` identity:
+```
+PARVANE_TELEGRAM_BOT=Parvane_test_bot
+PARVANE_TELEGRAM_SECRET=<тот же, что у бота>
+```
+Проверка: `journalctl -u parvane-tg-bot -f` на VPS, `docker compose logs
+identity | grep Telegram` на проде.
+
+Запасной вариант — почта (когда появится SMTP): убрать PARVANE_TELEGRAM_*,
+ник + почта + пароль → 6-значный код письмом. Нужны в `.env` (identity):
 ```
 PARVANE_EMAIL_REQUIRED=1          # дефолт compose — 1
 PARVANE_SMTP_HOST=smtp.example.com

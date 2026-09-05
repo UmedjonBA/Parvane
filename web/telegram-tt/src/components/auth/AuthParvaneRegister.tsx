@@ -47,7 +47,7 @@ const AuthParvaneRegister = ({ auth }: StateProps) => {
       fetchParvaneAuthContext(),
     ]).then(([serverInfo, context]) => {
       if (isCancelled) return;
-      setIsEmailRequired(Boolean(serverInfo?.emailRequired));
+      setIsEmailRequired(serverInfo?.confirm === 'email');
       if (context?.nick) setNick(context.nick);
       if (context?.email) setEmail(context.email);
     });
@@ -99,7 +99,8 @@ const AuthParvaneRegister = ({ auth }: StateProps) => {
   const errorText = errorKey && lang.withRegular(errorKey);
   const isNickError = errorKey?.key === 'ParvaneNickInvalid' || errorKey?.key === 'ParvaneNickTaken';
   const isEmailError = errorKey?.key === 'ParvaneEmailInvalid';
-  const isGeneralError = Boolean(errorText) && !isNickError && !isEmailError;
+  const isNoAccountHint = errorKey?.key === 'ParvaneNoAccountYet';
+  const isGeneralError = Boolean(errorText) && !isNickError && !isEmailError && !isNoAccountHint;
 
   return (
     <div id="auth-registration-form" className="custom-scroll">
@@ -109,6 +110,7 @@ const AuthParvaneRegister = ({ auth }: StateProps) => {
         <p className="note">
           {isEmailRequired ? lang('ParvaneRegisterTextEmail') : lang('ParvaneRegisterText')}
         </p>
+        {isNoAccountHint && <p className="note">{errorText}</p>}
         <form className="form" action="" autoComplete="off" onSubmit={handleSubmit}>
           <InputText
             id="sign-up-parvane-nick"
