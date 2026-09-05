@@ -1806,7 +1806,8 @@ const Message = ({
       senderTitle = getPeerFullTitle(oldLang, originSender);
     }
     const senderEmojiStatus = senderPeer && 'emojiStatus' in senderPeer && senderPeer.emojiStatus;
-    const senderIsPremium = senderPeer && 'isPremium' in senderPeer && senderPeer.isPremium;
+    // Parvane: подписок нет — звёздочку premium у отправителя не рисуем
+    const senderIsPremium = false;
     const guestFromSenderTitle = guestFromSender ? getPeerTitle(oldLang, guestFromSender) : undefined;
 
     const shouldRenderForwardAvatar = asForwarded && senderPeer;

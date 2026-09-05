@@ -88,7 +88,9 @@ const FullNameTitle = ({
   const customPeer = 'isCustomPeer' in peer ? peer : undefined;
   const isUser = realPeer && isApiPeerUser(realPeer);
   const title = realPeer && (isUser ? getUserFullName(realPeer) : getChatTitle(oldLang, realPeer));
-  const isPremium = (isUser && realPeer.isPremium) || customPeer?.isPremium;
+  // Parvane: подписок нет — isPremium у self нужен только для снятия гейтов
+  // tt (кастом-эмодзи и т.п.), звёздочку рядом с именем не рисуем
+  const isPremium = false;
   const canShowEmojiStatus = withEmojiStatus && !isSavedMessages;
   const emojiStatus = realPeer?.emojiStatus
     || (customPeer?.emojiStatusId ? { type: 'regular', documentId: customPeer.emojiStatusId } : undefined);
