@@ -924,9 +924,12 @@ export function createMessageController(deps: MessageDependencies) {
     const uuid = currentStore.getUuidForMessage(chatId, messageId);
     const conn = connection();
     if (!uuid || !conn) return undefined;
+    // Своё sealed-исходящее: сервер не знает автора (from пуст) — участие
+    // доказывает подпись над `readers:<uuid>` (как у delete/react/pin)
+    const signature = deps.getE2e()?.signCallData(`readers:${uuid}`);
     try {
       const raw = await conn.request(TOPIC_MSG_READERS, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), { message_id: uuid }),
+        buildWireEvent(currentStore.self, token(), { message_id: uuid, signature }),
       ));
       const parsed = JSON.parse(raw) as { ok?: boolean; readers?: { address: string; ts: number }[] };
       return parsed.ok ? (parsed.readers || []) : undefined;

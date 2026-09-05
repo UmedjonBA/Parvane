@@ -39,6 +39,10 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
 // device_id из device.json каталога persist'а ДО initDevice (нужен при выдаче
 // JWT, когда E2E ещё не поднят). Пусто для новой установки.
 [[nodiscard]] std::string peekDeviceId(const std::string &storeDir);
+// device_id ДО первого логина: если device.json нет и установка свежая (нет
+// account.json), генерирует id и пишет device.json — первый же JWT получает
+// claim dev, и отзыв устройства гасит его сразу. Legacy-установка → ''.
+[[nodiscard]] std::string ensureDeviceId(const std::string &storeDir);
 [[nodiscard]] std::string signingKey();
 // Подпись строки Ed25519-ключом аккаунта (base64 без padding). "" если не готов.
 [[nodiscard]] std::string sign(const std::string &data);

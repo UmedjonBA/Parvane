@@ -934,7 +934,19 @@ async fn handle_readers(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
             .context("неверный JSON в msg.chat.readers")?;
         let requester = verify_token(nc, &event.token).await?;
         let mid = event.payload.message_id.to_string();
-        if !is_conversation_participant(pool, &mid, &requester).await? {
+        // Sealed-автор в БД не виден (from_user пуст) — принимаем подпись
+        // sender_signing_key над `readers:<id>` (тот же путь, что у react)
+        let signed_payload = format!("readers:{mid}");
+        if !is_conversation_participant(pool, &mid, &requester).await?
+            && !can_mutate_message(
+                pool,
+                &mid,
+                &requester,
+                event.payload.signature.as_deref(),
+                &signed_payload,
+                false,
+            ).await?
+        {
             anyhow::bail!("не участник переписки");
         }
         let rows: Vec<(String, i64)> =
@@ -3071,6 +3083,34 @@ mod tests {
             ],
         };
         assert_eq!(authenticated_extra_signing_keys(&payload), vec![old_key]);
+    }
+
+    #[tokio::test]
+    async fn sealed_author_proves_readers_access_by_signature() {
+        // «read at» по своему sealed-исходящему: from_user пуст, участие
+        // автора доказывает подпись над `readers:<id>`; чужая подпись — отказ
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000e9";
+        let signing = SigningKey::from_bytes(&[11_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let content = MessageContent::Encrypted {
+            ciphertext: "cipher".into(),
+            ctype: 0,
+            sender_identity: "curve-key".into(),
+            sender_signing_key: signing_key,
+        };
+        store_message(&pool, &send_content(mid, "", "bob@local", content), 1)
+            .await
+            .unwrap();
+        let payload = format!("readers:{mid}");
+        assert!(is_conversation_participant(&pool, mid, "bob@local").await.unwrap());
+        assert!(!is_conversation_participant(&pool, mid, "alice@local").await.unwrap());
+        assert!(!can_mutate_message(&pool, mid, "alice@local", None, &payload, false).await.unwrap());
+        let good = STANDARD_NO_PAD.encode(signing.sign(payload.as_bytes()).to_bytes());
+        assert!(can_mutate_message(&pool, mid, "alice@local", Some(&good), &payload, false).await.unwrap());
+        let other = SigningKey::from_bytes(&[12_u8; 32]);
+        let bad = STANDARD_NO_PAD.encode(other.sign(payload.as_bytes()).to_bytes());
+        assert!(!can_mutate_message(&pool, mid, "alice@local", Some(&bad), &payload, false).await.unwrap());
     }
 
     #[tokio::test]

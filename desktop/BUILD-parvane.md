@@ -96,3 +96,35 @@ nice -n 10 ninja -C ../build-probe -j6      # -j6: щадим 16 ГБ RAM
 
 См. `desktop/UPSTREAM` (тег/коммит). Версии tde2e/tg_owt в новом теге —
 сверять по `Telegram/build/prepare/prepare.py` (stage 'tde2e', 'tg_owt').
+
+## 5. Пропавшие системные пакеты (2026-09-03) — всё в sysroot без root
+После чистки системы исчезли `lld`, `gobject-introspection` (g-ir-scanner),
+`python-setuptools` (+ цепочка jaraco/more-itertools/packaging), `libdispatch`,
+`boost` (заголовки) и `/usr/bin/cargo`. Кэш сборки помнил `/usr/...` пути, cmake
+падал ещё на пробе компилятора (`-fuse-ld=lld`). Рецепт восстановления —
+всё из `/var/cache/pacman/pkg` (или `pacman -Sp`) в `~/.local/parvane-sysroot`:
+```bash
+SR=~/.local/parvane-sysroot
+for p in lld gobject-introspection libdispatch python-setuptools \
+         python-jaraco.functools python-jaraco.text python-jaraco.context \
+         python-jaraco.collections python-more-itertools python-packaging \
+         python-autocommand python-platformdirs python-wheel; do
+  tar --use-compress-program=unzstd -xf /var/cache/pacman/pkg/$p-*.pkg.tar.zst -C "$SR"
+done
+# distutils для giscanner на Python ≥3.12: шим на setuptools/_distutils
+SP=$(ls -d $SR/usr/lib/python3.*/site-packages | tail -1)
+mkdir -p $SR/pyshim && ln -sfn $SP/setuptools/_distutils $SR/pyshim/distutils
+```
+Обёртки в `~/.local/bin` (лежат вне репо): `ld.lld` — exec sysroot-бинаря с
+`LD_LIBRARY_PATH=$SR/usr/lib`; `g-ir-scanner` — то же плюс
+`PYTHONPATH=$SR/pyshim:$SP`. Затем перенастроить кэш:
+```bash
+cmake -S desktop/tdesktop -B desktop/build-probe \
+  -DCARGO_EXE=$HOME/.cargo/bin/cargo \
+  -DDESKTOP_APP_GIRSCANNER=$HOME/.local/bin/g-ir-scanner \
+  -DDESKTOP_APP_DISPATCH_LIBRARIES=$SR/usr/lib/libdispatch.so \
+  -DDESKTOP_APP_DISPATCH_INCLUDE_DIRS=$SR/usr/include
+```
+Проверка, что build.ninja не ссылается на пропавшее (осторожно: паттерн
+`/usr/lib/` матчит и подстроки sysroot-путей — смотреть полный токен):
+`grep -o "[^ ]*/usr/bin/[^ ]*" build.ninja | sort -u | while read f; do [ -e "$f" ] || echo MISSING $f; done`.

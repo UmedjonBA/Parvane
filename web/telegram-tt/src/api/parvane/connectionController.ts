@@ -87,9 +87,14 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   async function issueToken(activeConnection: GatewayConnection, user: string, password: string) {
     const issue = async () => {
-      // device_id известен со второго входа (зеркало из E2eEngine.create):
-      // JWT получает claim dev → отзыв устройства гасит его токены сразу
-      const deviceId = readDeviceIdMirror(user);
+      // device_id — из зеркала (E2eEngine.create), а для свежей установки
+      // генерируется прямо здесь и передаётся движку: уже ПЕРВЫЙ JWT несёт
+      // claim dev, и отзыв устройства гасит его токены сразу
+      let deviceId = readDeviceIdMirror(user);
+      if (!deviceId) {
+        deviceId = crypto.randomUUID();
+        writeDeviceIdMirror(user, deviceId);
+      }
       const raw = await activeConnection.request(
         TOPIC_IDENTITY_ISSUE,
         JSON.stringify({ user, password, device_id: deviceId || undefined }),
@@ -290,7 +295,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
       deps.setCallIdentityReady(false);
       try {
-        const nextE2e = await E2eEngine.create(user);
+        const nextE2e = await E2eEngine.create(user, readDeviceIdMirror(user));
         deps.setE2e(nextE2e);
         writeDeviceIdMirror(user, nextE2e.deviceId);
         const prekeys = nextE2e.buildPrekeysPayload(nextToken);

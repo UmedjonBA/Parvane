@@ -163,7 +163,12 @@ export class E2eEngine {
   // uuid при создании аккаунта. Персистится вместе с состоянием (и в бэкапе)
   deviceId = '';
 
-  static async create(self: string) {
+  private presetDeviceId = '';
+
+  // presetDeviceId — id, уже заявленный в JWT первого входа (claim dev):
+  // свежая установка берёт его, а не генерирует свой, иначе отзыв устройства
+  // не гасил бы токен первой сессии
+  static async create(self: string, presetDeviceId?: string) {
     if (!isOlmReady) {
       // Emscripten-сборка olm читает глобаль OLM_OPTIONS и падает без неё
       (globalThis as { OLM_OPTIONS?: object }).OLM_OPTIONS = {};
@@ -172,6 +177,7 @@ export class E2eEngine {
     }
     const engine = new E2eEngine();
     engine.self = self;
+    engine.presetDeviceId = presetDeviceId || '';
     engine.storage = await SecureE2eStorage.open(self);
     const state = await engine.storage.load<PersistedE2eState>();
     if (state) {
@@ -265,7 +271,7 @@ export class E2eEngine {
       this.account = new Olm.Account();
       this.account.create();
       this.loadIdentityKeys();
-      this.deviceId = crypto.randomUUID();
+      this.deviceId = this.presetDeviceId || crypto.randomUUID();
       E2eEngine.clearLegacyState(this.self);
       return;
     }
