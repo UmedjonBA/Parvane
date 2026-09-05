@@ -134,6 +134,15 @@ void writeFile(const std::string &path, const std::string &data) {
         f.write(data.data(), static_cast<std::streamsize>(data.size()));
     }
 }
+std::string generateDeviceId() {
+    auto id = linking::b64encode(linking::randomBytes(12));
+    for (auto &c : id) {
+        if (c == '+' || c == '/' || c == '=') {
+            c = 'x';
+        }
+    }
+    return id;
+}
 std::string accountPath() { return g_storeDir + "/account.json"; }
 std::string devicePath() { return g_storeDir + "/device.json"; }
 std::string sessionPath(const std::string &idB64) {
@@ -674,12 +683,7 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
             // устройств аккаунта). Прежние установки без device.json остаются
             // legacy-устройством '' (wire back-compat).
             if (g_deviceId.empty() && readFile(devicePath()).empty()) {
-                g_deviceId = linking::b64encode(linking::randomBytes(12));
-                for (auto &c : g_deviceId) {
-                    if (c == '+' || c == '/' || c == '=') {
-                        c = 'x';
-                    }
-                }
+                g_deviceId = generateDeviceId();
             }
         }
         g_identityB64 = take(parvane_e2e_account_identity(g_account));
@@ -752,6 +756,20 @@ std::string peekDeviceId(const std::string &storeDir) {
     if (storeDir.empty()) return {};
     auto j = json::parse(readFile(storeDir + "/device.json"), nullptr, false);
     return j.is_object() ? j.value("device_id", std::string()) : std::string();
+}
+std::string ensureDeviceId(const std::string &storeDir) {
+    if (storeDir.empty()) return {};
+    const auto existing = peekDeviceId(storeDir);
+    if (!existing.empty()) return existing;
+    // Прежняя установка без device.json — legacy-устройство '' (wire
+    // back-compat), новый id ей не выдумываем
+    if (!readFile(storeDir + "/account.json").empty()) return {};
+    std::error_code ec;
+    std::filesystem::create_directories(storeDir, ec);
+    const auto id = generateDeviceId();
+    const json j = {{"device_id", id}, {"published", false}, {"otk_next", 1}};
+    writeFile(storeDir + "/device.json", j.dump());
+    return id;
 }
 std::string signingKey() {
     std::lock_guard<std::mutex> lk(g_mu);

@@ -143,9 +143,10 @@ void MessengerClient::pin(
 
 std::vector<std::pair<std::string, std::int64_t>> MessengerClient::readers(
         const std::string &from, const std::string &messageId,
-        const std::string &token, int timeoutMs) {
+        const std::string &token, const std::string &signature, int timeoutMs) {
     std::vector<std::pair<std::string, std::int64_t>> out;
-    const json payload{{"message_id", messageId}};
+    json payload{{"message_id", messageId}};
+    if (!signature.empty()) payload["signature"] = signature;
     const auto raw = _t.request(topics::MsgReaders,
                                 makeEvent(uuid4(), from, nowUnix(), token, payload).dump(),
                                 timeoutMs);

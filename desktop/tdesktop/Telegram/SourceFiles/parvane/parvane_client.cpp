@@ -1102,8 +1102,9 @@ IssueResult Issue(const QString &user, const QString &password) {
 
 		parvane::IssueRequest req{user.toStdString(), password.toStdString()};
 		// device_id этой установки (тот же каталог, что initDevice ниже) →
-		// claim dev в JWT: отозванное устройство теряет токен сразу
-		req.deviceId = parvane::e2e::peekDeviceId(
+		// claim dev в JWT: отозванное устройство теряет токен сразу. Для
+		// свежей установки id создаётся здесь же — иначе первый токен без dev
+		req.deviceId = parvane::e2e::ensureDeviceId(
 			(cWorkingDir() + u"tdata/parvane-e2e-"_q + user).toStdString());
 		const auto raw = transport->request(
 			parvane::topics::IdentityIssue,
@@ -3317,6 +3318,10 @@ void ResolveNames(const QStringList &addresses) {
 	if (c.contains("live_period") && c["live_period"].is_number()
 		&& c["live_period"].get<int>() > 0) {
 		const auto hasHeading = c.contains("heading") && c["heading"].is_number();
+		LOG(("Parvane: live-локация live_period=%1 lat=%2 long=%3")
+			.arg(c["live_period"].get<int>())
+			.arg(c["lat"].get<double>(), 0, 'f', 5)
+			.arg(c["long"].get<double>(), 0, 'f', 5));
 		return MTP_messageMediaGeoLive(
 			MTP_flags(hasHeading
 				? MTPDmessageMediaGeoLive::Flag::f_heading
@@ -4535,6 +4540,7 @@ void injectOnMain(
 						edition.textWithEntities = item->originalText();
 						edition.mtpMedia = &media;
 						item->applyEdition(std::move(edition));
+						LOG(("Parvane: правка локации применена msg %1").arg(uuid));
 					}
 				}
 				if (maybeText || hasCaption) {
@@ -6685,6 +6691,20 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			});
 		}
 
+		// Debug-autoreaders для e2e «seen by / read at»: PARVANE_AUTOREADERS=<секунды>
+		// — запрашивает msg.chat.readers для своего последнего исходящего и пишет
+		// результат в лог (см. FetchReaders).
+		if (const char *rv = std::getenv("PARVANE_AUTOREADERS"); rv && *rv) {
+			const auto secs = std::max(QString::fromUtf8(rv).toInt(), 1);
+			base::call_delayed(secs * crl::time(1000), [] {
+				if (!g_lastOwnFullId) {
+					LOG(("Parvane: autoreaders — нет своего исходящего"));
+					return;
+				}
+				FetchReaders(g_lastOwnFullId.msg.bare, [](std::vector<ReaderEntry>) {});
+			});
+		}
+
 		// Debug-autoedit для e2e edit: PARVANE_AUTOEDIT=<секунды>:новый текст.
 		if (const char *ev = std::getenv("PARVANE_AUTOEDIT"); ev && *ev) {
 			const auto spec = QString::fromUtf8(ev);
@@ -7161,7 +7181,8 @@ void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 	crl::async([=, uuid = uuid.toStdString()] {
 		std::vector<ReaderEntry> out;
 		try {
-			for (const auto &[address, ts] : m->readers(self, uuid, token)) {
+			const auto signature = parvane::e2e::sign("readers:" + uuid);
+			for (const auto &[address, ts] : m->readers(self, uuid, token, signature)) {
 				if (address == self || address.empty()) {
 					continue;
 				}
@@ -7171,8 +7192,18 @@ void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 					.date = ts,
 				});
 			}
-		} catch (...) {
+		} catch (const std::exception &e) {
+			LOG(("Parvane: readers %1 — ошибка: %2")
+				.arg(QString::fromStdString(uuid))
+				.arg(QString::fromUtf8(e.what())));
 		}
+		QStringList who;
+		for (const auto &r : out) {
+			who.push_back(r.address + '@' + QString::number(r.date));
+		}
+		LOG(("Parvane: readers %1: %2")
+			.arg(QString::fromStdString(uuid))
+			.arg(who.isEmpty() ? u"—"_q : who.join(", ")));
 		crl::on_main([done, out = std::move(out)]() mutable {
 			done(std::move(out));
 		});

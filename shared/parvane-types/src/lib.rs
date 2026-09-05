@@ -667,6 +667,11 @@ pub struct ReadPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadersPayload {
     pub message_id: Uuid,
+    /// Ed25519 signature over `readers:<message_id>` for sealed senders: у
+    /// sealed-сообщения from_user пуст, автор доказывает участие подписью
+    /// (как delete/react/pin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
