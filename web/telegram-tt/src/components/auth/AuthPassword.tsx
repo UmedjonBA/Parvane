@@ -9,6 +9,7 @@ import useLang from '../../hooks/useLang';
 
 import PasswordForm from '../common/PasswordForm';
 import MonkeyPassword from '../common/PasswordMonkey';
+import Button from '../ui/Button';
 
 type StateProps = {
   auth: GlobalState['auth'];
@@ -17,7 +18,7 @@ type StateProps = {
 const AuthPassword = ({
   auth,
 }: StateProps) => {
-  const { setAuthPassword, clearAuthErrorKey } = getActions();
+  const { setAuthPassword, clearAuthErrorKey, parvaneStartRegistration } = getActions();
   const { isLoading, errorKey, hint } = auth;
 
   const lang = useLang();
@@ -30,6 +31,12 @@ const AuthPassword = ({
   const handleSubmit = useCallback((password: string) => {
     setAuthPassword({ password });
   }, [setAuthPassword]);
+
+  // Parvane: на сервере с подтверждением вход не регистрирует неизвестный
+  // ник — отсюда путь на форму регистрации (ник уже заполнен)
+  const handleCreateAccount = useCallback(() => {
+    parvaneStartRegistration();
+  }, [parvaneStartRegistration]);
 
   return (
     <div id="auth-password-form" className="custom-scroll">
@@ -46,6 +53,9 @@ const AuthPassword = ({
           onChangePasswordVisibility={handleChangePasswordVisibility}
           onSubmit={handleSubmit}
         />
+        <Button className="auth-button" isText onClick={handleCreateAccount}>
+          {lang('ParvaneCreateAccount')}
+        </Button>
       </div>
     </div>
   );

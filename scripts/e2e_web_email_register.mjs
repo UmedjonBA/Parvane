@@ -63,18 +63,21 @@ async function openLoginPage(context, user) {
 // шлёт WaitPhoneNumber — ранний клик может быть перекрыт, повторяем. Клик —
 // событием mousedown напрямую (Button срабатывает на mousedown): маска UiLoader в headless-вкладке подолгу
 // висит в состоянии closing и перехватывает указатель
-async function openRegisterForm(page, startScreen) {
+async function pressAuthButton(page, screen, name, targetScreenId) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await startScreen.getByRole('button', { name: 'Create account' }).dispatchEvent('mousedown', { button: 0 });
+    await screen.getByRole('button', { name }).dispatchEvent('mousedown', { button: 0 });
     try {
-      await page.locator('.Transition_slide-active > #auth-registration-form')
-        .waitFor({ state: 'visible', timeout: 3000 });
+      await page.locator(`.Transition_slide-active > ${targetScreenId}`).waitFor({ state: 'visible', timeout: 3000 });
       return;
     } catch (err) {
       if (Date.now() > deadline) throw err;
     }
   }
+}
+
+async function openRegisterForm(page, startScreen) {
+  await pressAuthButton(page, startScreen, 'Create account', '#auth-registration-form');
 }
 
 async function waitRegisterScreen(page) {
@@ -162,14 +165,17 @@ try {
   assertNoPageErrors({ taken: takenSession });
   await takenContext.close();
 
-  // ── Вход под несуществующим ником → форма регистрации с заполненным ником ──
+  // ── Вход под несуществующим ником: ошибка пароля (молчаливой регистрации
+  // нет), «Create account» на экране пароля → форма с заполненным ником ──
   const bobNick = `email-b-${suffix}`;
   const bobEmail = `bob-${suffix}@example.com`;
   const abandonContext = await browser.newContext();
   const abandonSession = await openLoginPage(abandonContext, bobNick);
-  const bobRegisterScreen = await waitRegisterScreen(abandonSession.page);
-  await bobRegisterScreen.getByText('no account with this nickname', { exact: false })
+  const bobPasswordScreen = abandonSession.page.locator('.Transition_slide-active > #auth-password-form');
+  await bobPasswordScreen.getByText('Invalid password', { exact: false })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await pressAuthButton(abandonSession.page, bobPasswordScreen, 'Create account', '#auth-registration-form');
+  const bobRegisterScreen = await waitRegisterScreen(abandonSession.page);
   assert.equal(await bobRegisterScreen.locator('#sign-up-parvane-nick').inputValue(), bobNick);
   await submitRegisterForm(bobRegisterScreen, { email: bobEmail });
   await waitCodeScreen(abandonSession.page);

@@ -9,15 +9,16 @@ use parvane_types::{
     IssueRequest, IssueResponse, LinkGrantInfo, LinkGrantRequest, LinkGrantResponse,
     LinkOfferInfo, LinkOfferRequest, LinkOfferResponse, LinkPollRequest, LinkPollResponse,
     PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest, RegisterResponse,
-    ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse, ServerInfoResponse,
-    SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest,
-    VerifyResponse,
+    RegisterStatusRequest, RegisterStatusResponse, ResolveRequest, ResolveResponse,
+    SearchUsersRequest, SearchUsersResponse, ServerInfoResponse, SetAvatarRequest, SetKeyRequest,
+    SetNameRequest, SetNameResponse, TelegramConfirmRequest, TelegramConfirmResponse, UserInfo,
+    VerifyRequest, VerifyResponse,
     topics::{
         IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
         IDENTITY_LINK_GRANT, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
-        IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH,
-        IDENTITY_SERVER_INFO, IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME,
-        IDENTITY_VERIFY,
+        IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_RESOLVE,
+        IDENTITY_SEARCH, IDENTITY_SERVER_INFO, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
+        IDENTITY_SETNAME, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY,
     },
 };
 
@@ -112,6 +113,8 @@ async fn main() -> Result<()> {
     let mut register_sub = nc.subscribe(IDENTITY_REGISTER).await?;
     let mut email_confirm_sub = nc.subscribe(IDENTITY_EMAIL_CONFIRM).await?;
     let mut server_info_sub = nc.subscribe(IDENTITY_SERVER_INFO).await?;
+    let mut telegram_confirm_sub = nc.subscribe(IDENTITY_TELEGRAM_CONFIRM).await?;
+    let mut register_status_sub = nc.subscribe(IDENTITY_REGISTER_STATUS).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
@@ -127,9 +130,9 @@ async fn main() -> Result<()> {
     let mut linkgrant_sub = nc.subscribe(IDENTITY_LINK_GRANT).await?;
 
     info!(
-        "Identity шард запущен (домен {}, почта при регистрации: {}). Слушаю: issue/register/email.confirm/server.info/verify/search/setname/setavatar/setkey/resolve/prekeys/devices",
+        "Identity шард запущен (домен {}, подтверждение регистрации: {}). Слушаю: issue/register/email.confirm/telegram.confirm/register.status/server.info/verify/search/setname/setavatar/setkey/resolve/prekeys/devices",
         server_domain(),
-        email_required()
+        confirm_mode().as_str()
     );
 
     loop {
@@ -145,6 +148,12 @@ async fn main() -> Result<()> {
             }
             Some(msg) = server_info_sub.next() => {
                 handle_server_info(&nc, msg).await;
+            }
+            Some(msg) = telegram_confirm_sub.next() => {
+                handle_telegram_confirm(&nc, &pool, msg).await;
+            }
+            Some(msg) = register_status_sub.next() => {
+                handle_register_status(&nc, &pool, msg).await;
             }
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, &pool, msg).await;
@@ -201,8 +210,46 @@ fn server_domain() -> String {
         .unwrap_or_else(|| "local".to_string())
 }
 
-fn email_required() -> bool {
-    std::env::var("PARVANE_EMAIL_REQUIRED").as_deref() == Ok("1")
+/// Как подтверждается новый аккаунт. Telegram (`PARVANE_TELEGRAM_BOT` +
+/// `PARVANE_TELEGRAM_SECRET`) имеет приоритет над почтой
+/// (`PARVANE_EMAIL_REQUIRED=1`); без обоих — аккаунт активен сразу.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmMode {
+    None,
+    Email,
+    Telegram,
+}
+
+impl ConfirmMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ConfirmMode::None => "none",
+            ConfirmMode::Email => "email",
+            ConfirmMode::Telegram => "telegram",
+        }
+    }
+}
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn telegram_bot() -> Option<String> {
+    env_nonempty("PARVANE_TELEGRAM_BOT").map(|b| b.trim_start_matches('@').to_string())
+}
+
+fn telegram_secret() -> Option<String> {
+    env_nonempty("PARVANE_TELEGRAM_SECRET")
+}
+
+fn confirm_mode() -> ConfirmMode {
+    if telegram_bot().is_some() && telegram_secret().is_some() {
+        ConfirmMode::Telegram
+    } else if std::env::var("PARVANE_EMAIL_REQUIRED").as_deref() == Ok("1") {
+        ConfirmMode::Email
+    } else {
+        ConfirmMode::None
+    }
 }
 
 /// Полный адрес по вводу пользователя: `ник` → `ник@домен`, `ник@сервер`
@@ -255,7 +302,13 @@ async fn handle_server_info(nc: &Client, msg: async_nats::Message) {
         error!("server.info: нет reply-топика, игнорирую");
         return;
     };
-    let resp = ServerInfoResponse { domain: server_domain(), email_required: email_required() };
+    let mode = confirm_mode();
+    let resp = ServerInfoResponse {
+        domain: server_domain(),
+        email_required: mode == ConfirmMode::Email,
+        confirm: mode.as_str().to_string(),
+        telegram_bot: if mode == ConfirmMode::Telegram { telegram_bot().unwrap_or_default() } else { String::new() },
+    };
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
         error!("server.info: ошибка отправки ответа: {}", e);
@@ -1103,14 +1156,24 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         error!("register: нет reply-топика, игнорирую");
         return;
     };
-    let resp = match do_register(pool, &msg.payload, email_required()).await {
+    let resp = match do_register(pool, &msg.payload, confirm_mode()).await {
         Ok(out) => {
             if let Some((email, code)) = out.send {
                 send_confirmation_email(email, code);
             }
-            RegisterResponse { ok: true, error: None, confirm_required: out.confirm_required }
+            RegisterResponse {
+                ok: true,
+                error: None,
+                confirm_required: out.confirm_required,
+                telegram_token: out.telegram_token,
+            }
         }
-        Err(e) => RegisterResponse { ok: false, error: Some(e.to_string()), confirm_required: false },
+        Err(e) => RegisterResponse {
+            ok: false,
+            error: Some(e.to_string()),
+            confirm_required: false,
+            telegram_token: None,
+        },
     };
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
@@ -1124,6 +1187,8 @@ struct RegisterOutcome {
     confirm_required: bool,
     /// (email, код) для письма. None — подтверждение не требуется.
     send: Option<(String, String)>,
+    /// Режим Telegram: токен deep link для бота.
+    telegram_token: Option<String>,
 }
 
 /// Сколько живёт неподтверждённый аккаунт: после — логин можно занять заново
@@ -1131,17 +1196,20 @@ struct RegisterOutcome {
 const PENDING_TTL_SECS: i64 = 86_400;
 /// Срок действия кода подтверждения.
 const CODE_TTL_SECS: i64 = 900;
+/// Срок действия токена Telegram deep link.
+const TELEGRAM_LINK_TTL_SECS: i64 = 900;
 /// Попыток ввода кода до принудительного перезапроса.
 const CODE_MAX_ATTEMPTS: i64 = 5;
 
 /// Создать аккаунт. Отвергает занятый логин, пустые поля, превышение лимита
 /// попыток и (при PARVANE_INVITE_REQUIRED=1) отсутствие валидного инвайта.
-/// При `email_required` аккаунт создаётся неподтверждённым и ждёт кода с почты;
-/// повторный register с тем же паролем до подтверждения — перевысылка кода.
+/// В режимах Email/Telegram аккаунт создаётся неподтверждённым и ждёт кода с
+/// почты либо Start в боте; повторный register с тем же паролем до
+/// подтверждения — перевысылка кода / новый токен deep link.
 async fn do_register(
     pool: &SqlitePool,
     payload: &[u8],
-    email_required: bool,
+    mode: ConfirmMode,
 ) -> Result<RegisterOutcome> {
     let req: RegisterRequest = serde_json::from_slice(payload)
         .context("неверный JSON в RegisterRequest")?;
@@ -1177,6 +1245,15 @@ async fn do_register(
             anyhow::bail!("логин занят");
         }
         if verify_password(&req.password, &hash) {
+            if mode == ConfirmMode::Telegram {
+                let token = issue_telegram_token(pool, &user).await?;
+                info!("Новый Telegram-токен для pending-аккаунта: {}", user);
+                return Ok(RegisterOutcome {
+                    confirm_required: true,
+                    send: None,
+                    telegram_token: Some(token),
+                });
+            }
             let email = if email.is_empty() { stored_email } else { email };
             if !valid_email(&email) {
                 anyhow::bail!("нужен корректный email");
@@ -1188,7 +1265,11 @@ async fn do_register(
                 .await?;
             let code = issue_email_code(pool, &user).await?;
             info!("Перевысылка кода подтверждения: {}", user);
-            return Ok(RegisterOutcome { confirm_required: true, send: Some((email, code)) });
+            return Ok(RegisterOutcome {
+                confirm_required: true,
+                send: Some((email, code)),
+                telegram_token: None,
+            });
         }
         if now_unix() - created_at <= PENDING_TTL_SECS {
             anyhow::bail!("логин занят");
@@ -1201,9 +1282,13 @@ async fn do_register(
             .bind(&user)
             .execute(pool)
             .await?;
+        sqlx::query("DELETE FROM telegram_links WHERE username = ?")
+            .bind(&user)
+            .execute(pool)
+            .await?;
     }
 
-    if email_required && !valid_email(&email) {
+    if mode == ConfirmMode::Email && !valid_email(&email) {
         anyhow::bail!("нужен корректный email");
     }
 
@@ -1229,17 +1314,156 @@ async fn do_register(
     .bind(now)
     .bind(&default_name)
     .bind(&email)
-    .bind(if email_required { 0 } else { 1 })
+    .bind(if mode == ConfirmMode::None { 1 } else { 0 })
     .execute(pool)
     .await?;
 
-    if email_required {
-        let code = issue_email_code(pool, &user).await?;
-        info!("Пользователь зарегистрирован, ждёт подтверждения почты: {}", user);
-        return Ok(RegisterOutcome { confirm_required: true, send: Some((email, code)) });
+    match mode {
+        ConfirmMode::Email => {
+            let code = issue_email_code(pool, &user).await?;
+            info!("Пользователь зарегистрирован, ждёт подтверждения почты: {}", user);
+            Ok(RegisterOutcome { confirm_required: true, send: Some((email, code)), telegram_token: None })
+        }
+        ConfirmMode::Telegram => {
+            let token = issue_telegram_token(pool, &user).await?;
+            info!("Пользователь зарегистрирован, ждёт подтверждения в Telegram: {}", user);
+            Ok(RegisterOutcome { confirm_required: true, send: None, telegram_token: Some(token) })
+        }
+        ConfirmMode::None => {
+            info!("Пользователь зарегистрирован: {} (имя: {})", user, default_name);
+            Ok(RegisterOutcome { confirm_required: false, send: None, telegram_token: None })
+        }
     }
-    info!("Пользователь зарегистрирован: {} (имя: {})", user, default_name);
-    Ok(RegisterOutcome { confirm_required: false, send: None })
+}
+
+// ── подтверждение через Telegram-бота ────────────────────────────────────────
+
+/// Новый токен deep link для pending-аккаунта (прежний перестаёт действовать).
+async fn issue_telegram_token(pool: &SqlitePool, user: &str) -> Result<String> {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    sqlx::query(
+        "INSERT INTO telegram_links (username, token, expires_at) VALUES (?, ?, ?)
+         ON CONFLICT(username) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at",
+    )
+    .bind(user)
+    .bind(&token)
+    .bind(now_unix() + TELEGRAM_LINK_TTL_SECS)
+    .execute(pool)
+    .await?;
+    Ok(token)
+}
+
+/// Сравнение секретов без ранней остановки (по длине и по байтам).
+fn secret_matches(given: &str, expected: &str) -> bool {
+    let (a, b) = (given.as_bytes(), expected.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
+}
+
+async fn handle_telegram_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        error!("telegram.confirm: нет reply-топика, игнорирую");
+        return;
+    };
+    let resp = match do_telegram_confirm(pool, &msg.payload, telegram_secret().as_deref()).await {
+        Ok(user) => TelegramConfirmResponse { ok: true, error: None, user: Some(user) },
+        Err(e) => TelegramConfirmResponse { ok: false, error: Some(e.to_string()), user: None },
+    };
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
+    if let Err(e) = nc.publish(reply, json.into()).await {
+        error!("telegram.confirm: ошибка отправки ответа: {}", e);
+    }
+}
+
+/// Бот прислал `/start <token>`: привязать Telegram к pending-аккаунту и
+/// подтвердить его. Один Telegram — один аккаунт; повторный Start тем же
+/// Telegram по своей же ссылке идемпотентен.
+async fn do_telegram_confirm(pool: &SqlitePool, payload: &[u8], secret: Option<&str>) -> Result<String> {
+    let req: TelegramConfirmRequest = serde_json::from_slice(payload)
+        .context("неверный JSON в TelegramConfirmRequest")?;
+    let Some(secret) = secret else {
+        anyhow::bail!("подтверждение через Telegram не включено");
+    };
+    if !secret_matches(&req.secret, secret) {
+        anyhow::bail!("неверный секрет бота");
+    }
+    let token = req.token.trim();
+    if token.is_empty() || req.telegram_id <= 0 {
+        anyhow::bail!("пустой токен или telegram_id");
+    }
+    let link: Option<(String, i64)> =
+        sqlx::query_as("SELECT username, expires_at FROM telegram_links WHERE token = ?")
+            .bind(token)
+            .fetch_optional(pool)
+            .await?;
+    let Some((user, expires_at)) = link else {
+        anyhow::bail!("ссылка не найдена или уже использована");
+    };
+    if now_unix() > expires_at {
+        anyhow::bail!("ссылка устарела, начните регистрацию заново");
+    }
+    let bound: Option<(String,)> =
+        sqlx::query_as("SELECT username FROM users WHERE telegram_id = ? AND username != ?")
+            .bind(req.telegram_id)
+            .bind(&user)
+            .fetch_optional(pool)
+            .await?;
+    if bound.is_some() {
+        anyhow::bail!("этот Telegram уже привязан к другому аккаунту");
+    }
+    let current: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT email_verified, telegram_id FROM users WHERE username = ?")
+            .bind(&user)
+            .fetch_optional(pool)
+            .await?;
+    let Some((verified, telegram_id)) = current else {
+        anyhow::bail!("аккаунт не найден");
+    };
+    if verified != 0 && telegram_id.is_some_and(|id| id != req.telegram_id) {
+        anyhow::bail!("аккаунт уже подтверждён другим Telegram");
+    }
+    sqlx::query("UPDATE users SET email_verified = 1, telegram_id = ? WHERE username = ?")
+        .bind(req.telegram_id)
+        .bind(&user)
+        .execute(pool)
+        .await?;
+    info!("Аккаунт {} подтверждён через Telegram ({} {})", user, req.telegram_id, req.telegram_name);
+    Ok(user)
+}
+
+async fn handle_register_status(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        error!("register.status: нет reply-топика, игнорирую");
+        return;
+    };
+    let confirmed = do_register_status(pool, &msg.payload).await.unwrap_or(false);
+    let json = serde_json::to_vec(&RegisterStatusResponse { confirmed }).unwrap_or_default();
+    if let Err(e) = nc.publish(reply, json.into()).await {
+        error!("register.status: ошибка отправки ответа: {}", e);
+    }
+}
+
+/// Подтверждён ли pending-аккаунт. Токен обязателен: без него любой мог бы
+/// зондировать статус чужого ника.
+async fn do_register_status(pool: &SqlitePool, payload: &[u8]) -> Result<bool> {
+    let req: RegisterStatusRequest = serde_json::from_slice(payload)
+        .context("неверный JSON в RegisterStatusRequest")?;
+    let user = canonical_user(&req.user, &server_domain());
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT u.email_verified FROM users u
+         JOIN telegram_links l ON l.username = u.username
+         WHERE u.username = ? AND l.token = ?",
+    )
+    .bind(&user)
+    .bind(req.token.trim())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some_and(|(verified,)| verified != 0))
 }
 
 /// Минимальная проверка адреса почты (полная валидация — задача SMTP-сервера).
@@ -1771,7 +1995,7 @@ mod tests {
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
         // регистрация создаёт аккаунт
-        do_register(&pool, &register_bytes("newbie@local", "pw"), false).await.unwrap();
+        do_register(&pool, &register_bytes("newbie@local", "pw"), ConfirmMode::None).await.unwrap();
         // теперь логин проходит и выдаёт валидный JWT
         let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap();
         let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
@@ -1785,7 +2009,7 @@ mod tests {
         // Анти-энумерация: несуществующий юзер и неверный пароль — одна ошибка.
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        do_register(&pool, &register_bytes("real@local", "pw"), false).await.unwrap();
+        do_register(&pool, &register_bytes("real@local", "pw"), ConfirmMode::None).await.unwrap();
         let e_unknown = do_issue(&pool, &enc, &issue_bytes("nouser@local", "pw"))
             .await
             .unwrap_err()
@@ -1804,7 +2028,7 @@ mod tests {
         // верным паролем; PARVANE_LOGIN_LOCK_THRESHOLD берётся из env (по умолч. 5).
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        do_register(&pool, &register_bytes("lock@local", "pw"), false).await.unwrap();
+        do_register(&pool, &register_bytes("lock@local", "pw"), ConfirmMode::None).await.unwrap();
         for _ in 0..5 {
             assert!(do_issue(&pool, &enc, &issue_bytes("lock@local", "bad")).await.is_err());
         }
@@ -1863,7 +2087,7 @@ mod tests {
         // (в тестах домен по умолчанию — local).
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
-        do_register(&pool, &register_bytes("barenick", "pw"), false).await.unwrap();
+        do_register(&pool, &register_bytes("barenick", "pw"), ConfirmMode::None).await.unwrap();
         let (stored,): (String,) = sqlx::query_as("SELECT username FROM users WHERE username = ?")
             .bind("barenick@local").fetch_one(&pool).await.unwrap();
         assert_eq!(stored, "barenick@local");
@@ -1877,14 +2101,81 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_foreign_domain_and_bad_nick() {
         let pool = test_pool().await;
-        let err = do_register(&pool, &register_bytes("alice@evil.example", "pw"), false)
+        let err = do_register(&pool, &register_bytes("alice@evil.example", "pw"), ConfirmMode::None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("чужой домен"), "{err}");
-        let err = do_register(&pool, &register_bytes("Alice", "pw"), false).await.unwrap_err();
+        let err = do_register(&pool, &register_bytes("Alice", "pw"), ConfirmMode::None).await.unwrap_err();
         assert!(err.to_string().contains("некорректный ник"), "{err}");
         let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
         assert_eq!(cnt.0, 0);
+    }
+
+    // ── подтверждение через Telegram-бота ──
+
+    fn tg_confirm_bytes(secret: &str, token: &str, telegram_id: i64) -> Vec<u8> {
+        serde_json::to_vec(&TelegramConfirmRequest {
+            secret: secret.into(),
+            token: token.into(),
+            telegram_id,
+            telegram_name: "tester".into(),
+        })
+        .unwrap()
+    }
+
+    fn status_bytes(user: &str, token: &str) -> Vec<u8> {
+        serde_json::to_vec(&RegisterStatusRequest { user: user.into(), token: token.into() }).unwrap()
+    }
+
+    #[tokio::test]
+    async fn telegram_flow_register_confirm_login() {
+        let pool = test_pool().await;
+        let (enc, _) = make_keys();
+        let out = do_register(&pool, &register_bytes("tg", "pw"), ConfirmMode::Telegram).await.unwrap();
+        assert!(out.confirm_required);
+        let token = out.telegram_token.clone().expect("токен deep link");
+        assert!(token.len() >= 20);
+        // до Start в боте: не подтверждён, логин отклонён, статус false
+        assert!(!do_register_status(&pool, &status_bytes("tg", &token)).await.unwrap());
+        let err = do_issue(&pool, &enc, &issue_bytes("tg", "pw")).await.unwrap_err();
+        assert!(err.to_string().contains("не подтверждена"), "{err}");
+        // чужой секрет / чужой токен — отказ
+        assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("wrong", &token, 42), Some("s3cret")).await.is_err());
+        assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", "nope", 42), Some("s3cret")).await.is_err());
+        // без включённого режима — отказ даже с верным токеном
+        assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), None).await.is_err());
+        // Start в боте подтверждает
+        let user = do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), Some("s3cret")).await.unwrap();
+        assert_eq!(user, "tg@local");
+        assert!(do_register_status(&pool, &status_bytes("tg", &token)).await.unwrap());
+        // статус без верного токена — false (не зондируется)
+        assert!(!do_register_status(&pool, &status_bytes("tg", "other")).await.unwrap());
+        assert!(do_issue(&pool, &enc, &issue_bytes("tg", "pw")).await.is_ok());
+        // повторный Start тем же Telegram — идемпотентен
+        assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), Some("s3cret")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn telegram_one_account_per_telegram_and_token_refresh() {
+        let pool = test_pool().await;
+        let out_a = do_register(&pool, &register_bytes("tga", "pw"), ConfirmMode::Telegram).await.unwrap();
+        do_telegram_confirm(&pool, &tg_confirm_bytes("s", &out_a.telegram_token.unwrap(), 7), Some("s"))
+            .await
+            .unwrap();
+        // второй аккаунт тем же Telegram — отказ
+        let out_b = do_register(&pool, &register_bytes("tgb", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let token_b = out_b.telegram_token.unwrap();
+        let err = do_telegram_confirm(&pool, &tg_confirm_bytes("s", &token_b, 7), Some("s")).await.unwrap_err();
+        assert!(err.to_string().contains("уже привязан"), "{err}");
+        // повторный register pending-аккаунта с тем же паролем — новый токен, старый гаснет
+        let out_b2 = do_register(&pool, &register_bytes("tgb", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let token_b2 = out_b2.telegram_token.unwrap();
+        assert_ne!(token_b, token_b2);
+        assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s", &token_b, 8), Some("s")).await.is_err());
+        assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s", &token_b2, 8), Some("s")).await.is_ok());
+        // чужой пароль на pending — «логин занят»
+        let err = do_register(&pool, &register_bytes("tgb", "other"), ConfirmMode::Telegram).await.unwrap_err();
+        assert!(err.to_string().contains("логин занят"), "{err}");
     }
 
     // ── регистрация через почту (PARVANE_EMAIL_REQUIRED) ──
@@ -1896,7 +2187,7 @@ mod tests {
         let out = do_register(
             &pool,
             &register_bytes_email("mail@local", "pw", "user@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap();
@@ -1929,7 +2220,7 @@ mod tests {
             let err = do_register(
                 &pool,
                 &register_bytes_email(&format!("u{}@local", bad.len()), "pw", bad),
-                true,
+                ConfirmMode::Email,
             )
             .await
             .unwrap_err();
@@ -1943,7 +2234,7 @@ mod tests {
         let out1 = do_register(
             &pool,
             &register_bytes_email("re@local", "pw", "typo@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap();
@@ -1952,7 +2243,7 @@ mod tests {
         let out2 = do_register(
             &pool,
             &register_bytes_email("re@local", "pw", "fixed@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap();
@@ -1966,7 +2257,7 @@ mod tests {
             );
         }
         // пустой email при повторе — перевысылка на сохранённую почту
-        let out3 = do_register(&pool, &register_bytes_email("re@local", "pw", ""), true)
+        let out3 = do_register(&pool, &register_bytes_email("re@local", "pw", ""), ConfirmMode::Email)
             .await
             .unwrap();
         let (email3, code3) = out3.send.unwrap();
@@ -1976,7 +2267,7 @@ mod tests {
         let err = do_register(
             &pool,
             &register_bytes_email("re@local", "other", "x@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap_err();
@@ -1986,14 +2277,14 @@ mod tests {
     #[tokio::test]
     async fn email_flow_pending_login_protected_until_ttl() {
         let pool = test_pool().await;
-        do_register(&pool, &register_bytes_email("pend@local", "pw", "p@example.com"), true)
+        do_register(&pool, &register_bytes_email("pend@local", "pw", "p@example.com"), ConfirmMode::Email)
             .await
             .unwrap();
         // чужой пароль на свежем pending — занят
         let err = do_register(
             &pool,
             &register_bytes_email("pend@local", "other", "x@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap_err();
@@ -2006,7 +2297,7 @@ mod tests {
         let out = do_register(
             &pool,
             &register_bytes_email("pend@local", "other", "x@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap();
@@ -2019,7 +2310,7 @@ mod tests {
         let out = do_register(
             &pool,
             &register_bytes_email("brute@local", "pw", "b@example.com"),
-            true,
+            ConfirmMode::Email,
         )
         .await
         .unwrap();
@@ -2038,7 +2329,7 @@ mod tests {
         // Флаг выключен (desktop и существующие e2e): аккаунт сразу активен.
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        let out = do_register(&pool, &register_bytes("plain@local", "pw"), false).await.unwrap();
+        let out = do_register(&pool, &register_bytes("plain@local", "pw"), ConfirmMode::None).await.unwrap();
         assert!(!out.confirm_required);
         assert!(out.send.is_none());
         do_issue(&pool, &enc, &issue_bytes("plain@local", "pw")).await.unwrap();
@@ -2047,8 +2338,8 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_duplicate() {
         let pool = test_pool().await;
-        do_register(&pool, &register_bytes("dup@local", "pw"), false).await.unwrap();
-        let err = do_register(&pool, &register_bytes("dup@local", "other"), false).await.unwrap_err();
+        do_register(&pool, &register_bytes("dup@local", "pw"), ConfirmMode::None).await.unwrap();
+        let err = do_register(&pool, &register_bytes("dup@local", "other"), ConfirmMode::None).await.unwrap_err();
         assert!(err.to_string().contains("занят"));
     }
 

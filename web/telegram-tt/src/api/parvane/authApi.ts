@@ -6,8 +6,18 @@ import { callApi } from '../gramjs';
 type AnyCallApi = (name: string, ...args: unknown[]) => Promise<unknown>;
 const anyCallApi = callApi as unknown as AnyCallApi;
 
-export type ParvaneServerInfo = { domain: string; emailRequired: boolean };
-export type ParvaneAuthContext = { nick: string; email: string };
+export type ParvaneServerInfo = {
+  domain: string;
+  emailRequired: boolean;
+  confirm: 'none' | 'email' | 'telegram';
+  telegramBot: string;
+};
+export type ParvaneAuthContext = {
+  nick: string;
+  email: string;
+  telegramBot: string;
+  telegramLink: string;
+};
 export type ParvaneRegisterPayload = { nick: string; email: string; password: string };
 
 export function fetchParvaneServerInfo() {
@@ -24,4 +34,9 @@ export function startParvaneRegistration() {
 
 export function registerParvane(payload: ParvaneRegisterPayload) {
   return anyCallApi('parvaneRegister', payload) as Promise<void>;
+}
+
+// Экран Telegram: проверить подтверждение сразу, не дожидаясь опроса
+export function checkParvaneTelegramConfirmation() {
+  return anyCallApi('parvaneCheckTelegramConfirmation') as Promise<boolean>;
 }

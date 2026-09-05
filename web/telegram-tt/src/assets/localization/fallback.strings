@@ -3037,3 +3037,9 @@
 "ParvaneRegisterFailed" = "Registration failed. Please try again.";
 "ParvaneCodeSentEmail" = "We have sent a confirmation code to your email.";
 "ParvaneCodeInvalid" = "Invalid code. Please try again or request a new one by signing in again.";
+"ParvaneTelegramTitle" = "Confirm via Telegram";
+"ParvaneTelegramText" = "Open our Telegram bot and press Start — the account will be confirmed automatically.";
+"ParvaneTelegramOpen" = "Open Telegram";
+"ParvaneTelegramWaiting" = "Waiting for confirmation in Telegram…";
+"ParvaneTelegramCheck" = "I pressed Start";
+"ParvaneTelegramExpired" = "The Telegram link has expired. Please register again.";

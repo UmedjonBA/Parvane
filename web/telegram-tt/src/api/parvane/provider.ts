@@ -110,6 +110,13 @@ let pendingLoginAddress = '';
 let pendingLoginPassword = '';
 // Почта, на которую ушёл код (для шапки экрана кода)
 let pendingEmail = '';
+// Режим Telegram: токен deep link t.me/<bot>?start=<token> и опрос статуса
+let pendingTelegramToken = '';
+let telegramPollTimer: number | undefined;
+let telegramPollGeneration = 0;
+const TELEGRAM_POLL_INTERVAL_MS = 2000;
+// Токен живёт 15 мин на сервере; опрос прекращаем чуть раньше
+const TELEGRAM_POLL_MAX_MS = 14 * 60 * 1000;
 // Параметры сервера (домен адресов, нужна ли почта) — запрашиваются один раз
 // на экране входа, дальше берутся из кэша
 let serverInfoPromise: Promise<ServerInfo> | undefined;
@@ -361,6 +368,76 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
     sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
   }
+}
+
+// ── подтверждение регистрации через Telegram-бота ────────────────────────────
+// Экран WaitQrCode показывает deep link t.me/<bot>?start=<token>; провайдер
+// опрашивает identity.register.status, пока бот не подтвердит аккаунт, потом
+// логинит сохранённым паролем
+
+function stopTelegramPolling() {
+  telegramPollGeneration += 1;
+  if (telegramPollTimer !== undefined) {
+    window.clearTimeout(telegramPollTimer);
+    telegramPollTimer = undefined;
+  }
+  pendingTelegramToken = '';
+}
+
+function startTelegramConfirmation(user: string, password: string, linkToken: string) {
+  stopTelegramPolling();
+  pendingLoginAddress = user;
+  pendingLoginPassword = password;
+  pendingTelegramToken = linkToken;
+  const generation = telegramPollGeneration;
+  sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitQrCode' });
+  const startedAt = Date.now();
+  const tick = async () => {
+    if (generation !== telegramPollGeneration) return;
+    if (Date.now() - startedAt > TELEGRAM_POLL_MAX_MS) {
+      logDebug('Telegram: токен истёк, обратно на форму регистрации');
+      stopTelegramPolling();
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneTelegramExpired' } });
+      return;
+    }
+    const done = await pollTelegramConfirmation(generation);
+    if (!done && generation === telegramPollGeneration) {
+      telegramPollTimer = window.setTimeout(() => {
+        void tick();
+      }, TELEGRAM_POLL_INTERVAL_MS);
+    }
+  };
+  telegramPollTimer = window.setTimeout(() => {
+    void tick();
+  }, TELEGRAM_POLL_INTERVAL_MS);
+}
+
+// true — подтверждено и логин запущен (или опрос уже неактуален)
+async function pollTelegramConfirmation(generation: number): Promise<boolean> {
+  if (generation !== telegramPollGeneration || !pendingTelegramToken) return true;
+  const user = pendingLoginAddress;
+  const password = pendingLoginPassword;
+  const linkToken = pendingTelegramToken;
+  let confirmed = false;
+  try {
+    confirmed = await connectionController.fetchRegisterStatus(user, linkToken);
+  } catch (err) {
+    logDebug(`опрос статуса Telegram не удался: ${String(err)}`);
+  }
+  if (generation !== telegramPollGeneration) return true;
+  if (!confirmed) return false;
+  stopTelegramPolling();
+  try {
+    const address = await connectionController.connectAndLogin(user, password);
+    saveLoginAddress(address);
+    await persistSessionCredential(address, password);
+  } catch (err) {
+    logDebug(`логин после подтверждения в Telegram не удался: ${String(err)}`);
+    pendingLoginAddress = user;
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
+  }
+  return true;
 }
 
 function logDebug(message: string) {
@@ -1520,11 +1597,18 @@ const methods = {
     return serverInfoPromise;
   },
 
-  // Что показать на экранах регистрации/кода: ник (без домена) и почта
+  // Что показать на экранах регистрации/кода/Telegram: ник (без домена),
+  // почта, deep link бота
   parvaneFetchAuthContext() {
+    const info = connectionController.getLastServerInfo();
+    const bot = info?.telegramBot || '';
     return Promise.resolve({
       nick: pendingLoginAddress.split('@')[0],
       email: pendingEmail,
+      telegramBot: bot,
+      telegramLink: bot && pendingTelegramToken
+        ? `https://t.me/${bot}?start=${encodeURIComponent(pendingTelegramToken)}`
+        : '',
     });
   },
 
@@ -1568,8 +1652,22 @@ const methods = {
         sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneNoAccountYet' } });
         return;
       }
-      if (message.includes('почта не подтверждена')) {
+      if (message.includes('не подтверждена')) {
+        // Пароль верен, аккаунт ждёт подтверждения: повторный register тем же
+        // паролем перевысылает код / даёт новый токен deep link
         pendingLoginPassword = password;
+        const info = connectionController.getLastServerInfo();
+        const address = canonicalAddress(user, info?.domain || '');
+        pendingLoginAddress = address;
+        try {
+          const result = await connectionController.registerAccount(address, password, '');
+          if (result.telegramToken) {
+            startTelegramConfirmation(address, password, result.telegramToken);
+            return;
+          }
+        } catch (resendErr) {
+          logDebug(`перевысылка подтверждения не удалась: ${String(resendErr)}`);
+        }
         sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
         return;
       }
@@ -1582,9 +1680,10 @@ const methods = {
 
   // Кнопка «Создать аккаунт» на экране входа — форма регистрации с пустым ником
   parvaneStartRegistration() {
-    pendingLoginAddress = '';
+    // Ник с экрана входа/пароля остаётся заполненным в форме
     pendingLoginPassword = '';
     pendingEmail = '';
+    stopTelegramPolling();
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
     return Promise.resolve(undefined);
   },
@@ -1592,7 +1691,8 @@ const methods = {
   // Форма регистрации (WaitRegistration): ник + почта (если сервер требует) +
   // пароль. Дальше экран кода или сразу логин
   async parvaneRegister({ nick, email, password }: { nick: string; email: string; password: string }) {
-    const { domain, emailRequired } = await methods.parvaneFetchServerInfo();
+    const { domain, confirm } = await methods.parvaneFetchServerInfo();
+    const emailRequired = confirm === 'email';
     const raw = nick.trim().toLowerCase();
     const fail = (key: 'ParvaneNickInvalid' | 'ParvaneEmailInvalid' | 'ParvaneNickTaken' | 'ParvaneRegisterFailed') => {
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
@@ -1612,8 +1712,12 @@ const methods = {
     pendingLoginPassword = password;
     pendingEmail = cleanEmail;
     try {
-      const isConfirmRequired = await connectionController.registerWithEmail(user, password, cleanEmail);
-      if (isConfirmRequired) {
+      const result = await connectionController.registerAccount(user, password, cleanEmail);
+      if (result.telegramToken) {
+        startTelegramConfirmation(user, password, result.telegramToken);
+        return;
+      }
+      if (result.confirmRequired) {
         sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
         return;
       }
@@ -1658,8 +1762,15 @@ const methods = {
     pendingLoginAddress = '';
     pendingLoginPassword = '';
     pendingEmail = '';
+    stopTelegramPolling();
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
     return Promise.resolve(undefined);
+  },
+
+  // Экран Telegram (WaitQrCode): пользователь нажал Start в боте, но опрос
+  // ещё не увидел подтверждения — проверить сразу
+  parvaneCheckTelegramConfirmation() {
+    return pollTelegramConfirmation(telegramPollGeneration);
   },
 
   async fetchContactList() {

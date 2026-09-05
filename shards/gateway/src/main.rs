@@ -77,7 +77,8 @@ use parvane_types::{
         GATEWAY_TOKEN_REQUEST_SUBJECTS,
     },
     topics::{
-        call_inbox, msg_inbox, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_SERVER_INFO,
+        call_inbox, msg_inbox, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_REGISTER,
+        IDENTITY_REGISTER_STATUS, IDENTITY_SERVER_INFO, IDENTITY_TELEGRAM_CONFIRM,
         IDENTITY_VERIFY,
     },
     VerifyRequest, VerifyResponse,
@@ -298,6 +299,8 @@ async fn serve(
                     || subject == IDENTITY_REGISTER
                     || subject == IDENTITY_EMAIL_CONFIRM
                     || subject == IDENTITY_SERVER_INFO
+                    || subject == IDENTITY_TELEGRAM_CONFIRM
+                    || subject == IDENTITY_REGISTER_STATUS
                 {
                     spawn_req(
                         nats.clone(),
@@ -715,6 +718,8 @@ mod tests {
         assert!(allowed_req("alice@local", "identity.user.register"));
         assert!(allowed_req("alice@local", "identity.email.confirm"));
         assert!(allowed_req("alice@local", "identity.server.info"));
+        assert!(allowed_req("alice@local", "identity.telegram.confirm"));
+        assert!(allowed_req("alice@local", "identity.register.status"));
         assert!(allowed_req("alice@local", "msg.sync.request"));
         assert!(allowed_req("alice@local", "group.create"));
         assert!(!allowed_req("alice@local", "msg.user.bob@local"));

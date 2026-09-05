@@ -12,6 +12,7 @@ import {
   TOPIC_IDENTITY_EMAIL_CONFIRM,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
+  TOPIC_IDENTITY_REGISTER_STATUS,
   TOPIC_IDENTITY_SERVER_INFO,
   TOPIC_IDENTITY_SETKEY,
   TOPIC_PREKEYS_PUBLISH,
@@ -55,7 +56,14 @@ const TYPING_CLEAR_MS = 6000;
 const RECONNECT_INITIAL_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 10000;
 
-export type ServerInfo = { domain: string; emailRequired: boolean };
+export type ConfirmMode = 'none' | 'email' | 'telegram';
+export type ServerInfo = {
+  domain: string;
+  emailRequired: boolean;
+  confirm: ConfirmMode;
+  telegramBot: string;
+};
+export type RegisterResult = { confirmRequired: boolean; telegramToken?: string };
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -73,7 +81,14 @@ export function canonicalAddress(input: string, domain: string) {
   return trimmed.includes('@') ? trimmed : `${trimmed}@${domain}`;
 }
 
+function fallbackServerInfo(): ServerInfo {
+  return {
+    domain: fallbackDomain(), emailRequired: false, confirm: 'none', telegramBot: '',
+  };
+}
+
 export function createConnectionController(deps: ConnectionDependencies) {
+  let lastServerInfo: ServerInfo | undefined;
   let syncTimer: number | undefined;
   let presenceTimer: number | undefined;
   let reconnectTimer: number | undefined;
@@ -104,7 +119,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
     }
   }
 
-  async function issueToken(activeConnection: GatewayConnection, user: string, password: string) {
+  // `implicitRegister` — сервер без подтверждения (dev/e2e): неизвестный ник
+  // регистрируется прямо при входе. С подтверждением (почта/Telegram) вход
+  // только для существующих аккаунтов — иначе опечатка в нике заводила бы
+  // pending-аккаунт и вела на экран подтверждения чужого ника
+  async function issueToken(
+    activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean,
+  ) {
     const issue = async () => {
       // device_id — из зеркала (E2eEngine.create), а для свежей установки
       // генерируется прямо здесь и передаётся движку: уже ПЕРВЫЙ JWT несёт
@@ -122,7 +143,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     };
 
     let response = await issue();
-    if (!response.ok) {
+    if (!response.ok && implicitRegister) {
       const raw = await activeConnection.request(
         TOPIC_IDENTITY_REGISTER,
         JSON.stringify({ user, password, invite: '' }),
@@ -302,11 +323,11 @@ export function createConnectionController(deps: ConnectionDependencies) {
       await activeConnection.connect(getGatewayUrl());
       deps.log('WS открыт');
 
-      const user = input.includes('@')
-        ? canonicalAddress(input, '')
-        : canonicalAddress(input, (await requestServerInfo(activeConnection)).domain);
+      const info = await requestServerInfo(activeConnection);
+      lastServerInfo = info;
+      const user = canonicalAddress(input, info.domain);
 
-      const nextToken = await issueToken(activeConnection, user, password);
+      const nextToken = await issueToken(activeConnection, user, password, info.confirm === 'none');
       deps.setToken(nextToken);
       deps.log('JWT получен');
       await activeConnection.authorize(nextToken);
@@ -426,14 +447,24 @@ export function createConnectionController(deps: ConnectionDependencies) {
   async function requestServerInfo(activeConnection: GatewayConnection): Promise<ServerInfo> {
     try {
       const raw = await activeConnection.request(TOPIC_IDENTITY_SERVER_INFO, JSON.stringify({}));
-      const info = JSON.parse(raw) as { domain?: string; email_required?: boolean };
+      const info = JSON.parse(raw) as {
+        domain?: string; email_required?: boolean; confirm?: string; telegram_bot?: string;
+      };
       if (info.domain) {
-        return { domain: info.domain, emailRequired: Boolean(info.email_required) };
+        const confirm: ConfirmMode = info.confirm === 'telegram' || info.confirm === 'email'
+          ? info.confirm
+          : (info.email_required ? 'email' : 'none');
+        return {
+          domain: info.domain,
+          emailRequired: confirm === 'email',
+          confirm,
+          telegramBot: info.telegram_bot || '',
+        };
       }
     } catch (err) {
       deps.log(`server.info недоступен, домен по хосту: ${String(err)}`);
     }
-    return { domain: fallbackDomain(), emailRequired: false };
+    return fallbackServerInfo();
   }
 
   // Отдельное короткое соединение — для формы регистрации (сессии ещё нет)
@@ -441,19 +472,39 @@ export function createConnectionController(deps: ConnectionDependencies) {
     const connection = new GatewayConnection();
     try {
       await connection.connect(getGatewayUrl());
-      return await requestServerInfo(connection);
+      const info = await requestServerInfo(connection);
+      lastServerInfo = info;
+      return info;
     } catch (err) {
       deps.log(`server.info недоступен, домен по хосту: ${String(err)}`);
-      return { domain: fallbackDomain(), emailRequired: false };
+      return fallbackServerInfo();
     } finally {
       connection.close();
     }
   }
 
-  // Регистрация с почтой. true — сервер ждёт код подтверждения
-  // (identity.email.confirm), false — аккаунт сразу активен
-  async function registerWithEmail(user: string, password: string, email: string) {
-    const response = await requestPreAuth<{ ok: boolean; error?: string; confirm_required?: boolean }>(
+  // Последний ответ server.info (логин-соединение или отдельный запрос)
+  function getLastServerInfo() {
+    return lastServerInfo;
+  }
+
+  // Подтверждён ли pending-аккаунт (режим Telegram: бот получил Start)
+  async function fetchRegisterStatus(user: string, token: string) {
+    const response = await requestPreAuth<{ confirmed?: boolean }>(
+      TOPIC_IDENTITY_REGISTER_STATUS,
+      { user, token },
+    );
+    return Boolean(response.confirmed);
+  }
+
+  // Регистрация. confirmRequired — сервер ждёт подтверждения: код с почты
+  // (identity.email.confirm) или Start в Telegram-боте (telegramToken для
+  // deep link); иначе аккаунт сразу активен. Повторный вызов для
+  // pending-аккаунта с тем же паролем — перевысылка кода / новый токен
+  async function registerAccount(user: string, password: string, email: string): Promise<RegisterResult> {
+    const response = await requestPreAuth<{
+      ok: boolean; error?: string; confirm_required?: boolean; telegram_token?: string;
+    }>(
       TOPIC_IDENTITY_REGISTER,
       {
         user, password, invite: '', email,
@@ -462,7 +513,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     if (!response.ok) {
       throw new Error(response.error || 'identity отказал в регистрации');
     }
-    return Boolean(response.confirm_required);
+    return { confirmRequired: Boolean(response.confirm_required), telegramToken: response.telegram_token };
   }
 
   async function confirmEmail(user: string, code: string) {
@@ -494,6 +545,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
   }
 
   return {
-    connectAndLogin, registerWithEmail, confirmEmail, fetchServerInfo, ensureGroupTyping, shutdown,
+    connectAndLogin,
+    registerAccount,
+    confirmEmail,
+    fetchServerInfo,
+    getLastServerInfo,
+    fetchRegisterStatus,
+    ensureGroupTyping,
+    shutdown,
   };
 }
