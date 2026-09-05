@@ -42,6 +42,9 @@ import StatusButton from './StatusButton';
 
 import './LeftMainHeader.scss';
 
+// Parvane: emoji-статусы завязаны на premium Telegram
+const IS_EMOJI_STATUS_SUPPORTED = false;
+
 type OwnProps = {
   shouldHideSearch?: boolean;
   content: LeftColumnContent;
@@ -287,7 +290,8 @@ const LeftMainHeader = ({
             canShow={withStoryToggler}
           />
         </SearchInput>
-        {isCurrentUserPremium && <StatusButton />}
+        {/* Parvane: кнопка emoji-статуса (звёздочка premium) — подписок нет */}
+        {IS_EMOJI_STATUS_SUPPORTED && isCurrentUserPremium && <StatusButton />}
         {hasPasscode && (
           <Button
             round
