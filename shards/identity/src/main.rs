@@ -9,13 +9,15 @@ use parvane_types::{
     IssueRequest, IssueResponse, LinkGrantInfo, LinkGrantRequest, LinkGrantResponse,
     LinkOfferInfo, LinkOfferRequest, LinkOfferResponse, LinkPollRequest, LinkPollResponse,
     PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest, RegisterResponse,
-    ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse, SetAvatarRequest,
-    SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest, VerifyResponse,
+    ResolveRequest, ResolveResponse, SearchUsersRequest, SearchUsersResponse, ServerInfoResponse,
+    SetAvatarRequest, SetKeyRequest, SetNameRequest, SetNameResponse, UserInfo, VerifyRequest,
+    VerifyResponse,
     topics::{
         IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
         IDENTITY_LINK_GRANT, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
         IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_RESOLVE, IDENTITY_SEARCH,
-        IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME, IDENTITY_VERIFY,
+        IDENTITY_SERVER_INFO, IDENTITY_SETAVATAR, IDENTITY_SETKEY, IDENTITY_SETNAME,
+        IDENTITY_VERIFY,
     },
 };
 
@@ -109,6 +111,7 @@ async fn main() -> Result<()> {
     let mut issue_sub = nc.subscribe(IDENTITY_ISSUE).await?;
     let mut register_sub = nc.subscribe(IDENTITY_REGISTER).await?;
     let mut email_confirm_sub = nc.subscribe(IDENTITY_EMAIL_CONFIRM).await?;
+    let mut server_info_sub = nc.subscribe(IDENTITY_SERVER_INFO).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
@@ -123,7 +126,11 @@ async fn main() -> Result<()> {
     let mut linkpoll_sub = nc.subscribe(IDENTITY_LINK_POLL).await?;
     let mut linkgrant_sub = nc.subscribe(IDENTITY_LINK_GRANT).await?;
 
-    info!("Identity шард запущен. Слушаю: issue/register/email.confirm/verify/search/setname/setavatar/setkey/resolve/prekeys/devices");
+    info!(
+        "Identity шард запущен (домен {}, почта при регистрации: {}). Слушаю: issue/register/email.confirm/server.info/verify/search/setname/setavatar/setkey/resolve/prekeys/devices",
+        server_domain(),
+        email_required()
+    );
 
     loop {
         tokio::select! {
@@ -135,6 +142,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = email_confirm_sub.next() => {
                 handle_email_confirm(&nc, &pool, msg).await;
+            }
+            Some(msg) = server_info_sub.next() => {
+                handle_server_info(&nc, msg).await;
             }
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, &pool, msg).await;
@@ -176,6 +186,79 @@ async fn main() -> Result<()> {
                 handle_link_grant(&nc, &pool, &decoding, msg).await;
             }
         }
+    }
+}
+
+// ── адреса: домен сервера и правила ников ─────────────────────────────────────
+
+/// Домен адресов этого сервера (`PARVANE_DOMAIN`, по умолчанию `local`).
+/// Ник без `@` в запросах логина/регистрации дополняется до `ник@домен`.
+fn server_domain() -> String {
+    std::env::var("PARVANE_DOMAIN")
+        .ok()
+        .map(|d| d.trim().trim_start_matches('@').to_lowercase())
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "local".to_string())
+}
+
+fn email_required() -> bool {
+    std::env::var("PARVANE_EMAIL_REQUIRED").as_deref() == Ok("1")
+}
+
+/// Полный адрес по вводу пользователя: `ник` → `ник@домен`, `ник@сервер`
+/// остаётся как есть (десктоп и старые аккаунты вводят адрес целиком).
+fn canonical_user(raw: &str, domain: &str) -> String {
+    let raw = raw.trim();
+    if raw.contains('@') {
+        raw.to_string()
+    } else {
+        format!("{}@{}", raw, domain)
+    }
+}
+
+const NICK_MIN_LEN: usize = 2;
+const NICK_MAX_LEN: usize = 64;
+
+/// Ник нового аккаунта: строчные латинские буквы, цифры, `_ . -`; первый
+/// символ — буква или цифра; 2..=64 символа. Регистр приводится клиентом;
+/// здесь только проверка, чтобы адрес был однозначным.
+fn valid_nick(nick: &str) -> bool {
+    let len = nick.chars().count();
+    if !(NICK_MIN_LEN..=NICK_MAX_LEN).contains(&len) {
+        return false;
+    }
+    let first = nick.chars().next().unwrap_or(' ');
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && nick
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
+}
+
+/// Адрес нового аккаунта: ник проверен, домен — только свой (чужие домены
+/// регистрировать нельзя, иначе любой мог бы занять адрес чужого сервера).
+fn validate_new_user(user: &str, domain: &str) -> Result<()> {
+    let Some((nick, user_domain)) = user.split_once('@') else {
+        anyhow::bail!("некорректный адрес");
+    };
+    if !valid_nick(nick) {
+        anyhow::bail!("некорректный ник: 2–64 символа, латиница в нижнем регистре, цифры, _ . -");
+    }
+    if user_domain != domain {
+        anyhow::bail!("чужой домен: на этом сервере адреса @{}", domain);
+    }
+    Ok(())
+}
+
+// Публичные параметры сервера для экрана входа (pre-auth).
+async fn handle_server_info(nc: &Client, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        error!("server.info: нет reply-топика, игнорирую");
+        return;
+    };
+    let resp = ServerInfoResponse { domain: server_domain(), email_required: email_required() };
+    let json = serde_json::to_vec(&resp).unwrap_or_default();
+    if let Err(e) = nc.publish(reply, json.into()).await {
+        error!("server.info: ошибка отправки ответа: {}", e);
     }
 }
 
@@ -960,8 +1043,9 @@ async fn handle_issue(
 }
 
 async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> Result<String> {
-    let req: IssueRequest = serde_json::from_slice(payload)
+    let mut req: IssueRequest = serde_json::from_slice(payload)
         .context("неверный JSON в IssueRequest")?;
+    req.user = canonical_user(&req.user, &server_domain());
 
     // Брутфорс-защита: частотный лимит + экспоненциальный лок-аут по логину
     // (источник соединения gateway'ем в payload не прокидывается, поэтому ключ —
@@ -1019,8 +1103,7 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         error!("register: нет reply-топика, игнорирую");
         return;
     };
-    let email_required = std::env::var("PARVANE_EMAIL_REQUIRED").as_deref() == Ok("1");
-    let resp = match do_register(pool, &msg.payload, email_required).await {
+    let resp = match do_register(pool, &msg.payload, email_required()).await {
         Ok(out) => {
             if let Some((email, code)) = out.send {
                 send_confirmation_email(email, code);
@@ -1063,13 +1146,15 @@ async fn do_register(
     let req: RegisterRequest = serde_json::from_slice(payload)
         .context("неверный JSON в RegisterRequest")?;
 
-    let user = req.user.trim().to_string();
-    if user.is_empty() || req.password.is_empty() {
+    let domain = server_domain();
+    let user = canonical_user(&req.user, &domain);
+    if req.user.trim().is_empty() || req.password.is_empty() {
         anyhow::bail!("пустой логин или пароль");
     }
     if user.len() > 128 {
         anyhow::bail!("слишком длинный логин");
     }
+    validate_new_user(&user, &domain)?;
     if !rate_ok(&user) {
         anyhow::bail!("слишком много попыток, попробуйте позже");
     }
@@ -1273,9 +1358,9 @@ async fn handle_email_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats::M
 async fn do_email_confirm(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
     let req: EmailConfirmRequest = serde_json::from_slice(payload)
         .context("неверный JSON в EmailConfirmRequest")?;
-    let user = req.user.trim().to_string();
+    let user = canonical_user(&req.user, &server_domain());
     let code = req.code.trim().to_string();
-    if user.is_empty() || code.is_empty() {
+    if req.user.trim().is_empty() || code.is_empty() {
         anyhow::bail!("пустой логин или код");
     }
 
@@ -1743,6 +1828,63 @@ mod tests {
         }
         assert!(ok <= 20, "лимит пары не превышен: {ok}");
         assert!(prekey_fetch_rate_ok(a, other), "другая цель — свой лимит");
+    }
+
+    // ── адреса: ник без домена, правила ников, чужой домен ──
+
+    #[test]
+    fn canonical_user_appends_domain_only_without_at() {
+        assert_eq!(canonical_user("alice", "local"), "alice@local");
+        assert_eq!(canonical_user("  alice  ", "example.org"), "alice@example.org");
+        assert_eq!(canonical_user("bob@other", "local"), "bob@other");
+    }
+
+    #[test]
+    fn nick_rules() {
+        for ok in ["ab", "alice", "a1", "1a", "rl_victim", "content-alice-1725000000000-123", "u.v"] {
+            assert!(valid_nick(ok), "{ok} должен быть валидным");
+        }
+        for bad in ["", "a", "Alice", "al ice", "_alice", "-a", "тест", "a@b", &"x".repeat(65)] {
+            assert!(!valid_nick(bad), "{bad:?} должен быть отклонён");
+        }
+    }
+
+    #[test]
+    fn new_user_must_be_on_own_domain() {
+        assert!(validate_new_user("alice@local", "local").is_ok());
+        assert!(validate_new_user("alice@other", "local").is_err());
+        assert!(validate_new_user("Alice@local", "local").is_err());
+        assert!(validate_new_user("alice", "local").is_err());
+    }
+
+    #[tokio::test]
+    async fn register_and_issue_accept_bare_nick() {
+        // Клиент шлёт голый ник — сервер сам дополняет до nick@PARVANE_DOMAIN
+        // (в тестах домен по умолчанию — local).
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        do_register(&pool, &register_bytes("barenick", "pw"), false).await.unwrap();
+        let (stored,): (String,) = sqlx::query_as("SELECT username FROM users WHERE username = ?")
+            .bind("barenick@local").fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, "barenick@local");
+        let token = do_issue(&pool, &enc, &issue_bytes("barenick", "pw")).await.unwrap();
+        let sub = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
+        assert_eq!(sub, "barenick@local");
+        // и полный адрес по-прежнему работает
+        assert!(do_issue(&pool, &enc, &issue_bytes("barenick@local", "pw")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn register_rejects_foreign_domain_and_bad_nick() {
+        let pool = test_pool().await;
+        let err = do_register(&pool, &register_bytes("alice@evil.example", "pw"), false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("чужой домен"), "{err}");
+        let err = do_register(&pool, &register_bytes("Alice", "pw"), false).await.unwrap_err();
+        assert!(err.to_string().contains("некорректный ник"), "{err}");
+        let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
+        assert_eq!(cnt.0, 0);
     }
 
     // ── регистрация через почту (PARVANE_EMAIL_REQUIRED) ──

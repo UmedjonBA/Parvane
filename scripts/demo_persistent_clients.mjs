@@ -52,7 +52,7 @@ async function launchClient(profile, x, address) {
 async function loginOrRegister(page, address) {
   const addressForm = page.locator('.Transition_slide-active > #auth-phone-number-form');
   const passwordForm = page.locator('.Transition_slide-active > #auth-password-form');
-  const addressInput = addressForm.getByLabel('Address (user@server)');
+  const addressInput = addressForm.getByLabel('Nickname');
   const passwordInput = passwordForm.locator('#sign-in-password');
   const leftColumn = page.locator('#LeftColumn');
 

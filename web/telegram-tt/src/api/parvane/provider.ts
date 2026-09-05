@@ -17,6 +17,7 @@ import type {
   ApiUserStatus,
   ApiVideo,
   OnApiUpdate } from '../types';
+import type { ServerInfo } from './connectionController';
 import type { GatewayConnection } from './gateway';
 import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireUserInfo } from './wire';
@@ -34,7 +35,7 @@ import {
   saveLoginAddress,
 } from './authStorage';
 import { createCallController } from './calls';
-import { createConnectionController } from './connectionController';
+import { canonicalAddress, createConnectionController } from './connectionController';
 import { E2eEngine } from './e2e';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
@@ -107,6 +108,15 @@ let pendingLoginAddress = '';
 // Пароль между экранами регистрации: register (email) и confirm (код) должны
 // повторить логин без повторного ввода
 let pendingLoginPassword = '';
+// Почта, на которую ушёл код (для шапки экрана кода)
+let pendingEmail = '';
+// Параметры сервера (домен адресов, нужна ли почта) — запрашиваются один раз
+// на экране входа, дальше берутся из кэша
+let serverInfoPromise: Promise<ServerInfo> | undefined;
+// Ник нового аккаунта (зеркало valid_nick в identity): 2–64 символа, строчная
+// латиница, цифры, _ . -; первый символ — буква или цифра
+const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 let e2e: E2eEngine | undefined;
 // Готовность E2E: движок создаётся асинхронно ПОСЛЕ авторизации (Olm, прекеи),
 // а UI уже доступен — отправка в это окно падала «Encryption engine is
@@ -1499,17 +1509,37 @@ const methods = {
   },
 
   // ── логин через штатные Auth-экраны ────────────────────────────────────────
-  // «Телефон» = федеративный адрес user@server; дальше нативный экран пароля
+  // «Телефон» = ник (сервер дополняет до ник@домен) или полный адрес
+  // user@server; дальше нативный экран пароля
 
-  provideAuthPhoneNumber(address: string) {
-    if (!/^[^@\s]+@[^@\s]+$/.test(address)) {
+  // Параметры сервера для экранов входа/регистрации (кэш на сессию вкладки)
+  parvaneFetchServerInfo() {
+    if (!serverInfoPromise) {
+      serverInfoPromise = connectionController.fetchServerInfo();
+    }
+    return serverInfoPromise;
+  },
+
+  // Что показать на экранах регистрации/кода: ник (без домена) и почта
+  parvaneFetchAuthContext() {
+    return Promise.resolve({
+      nick: pendingLoginAddress.split('@')[0],
+      email: pendingEmail,
+    });
+  },
+
+  provideAuthPhoneNumber(input: string) {
+    const raw = input.trim().toLowerCase();
+    const isFullAddress = /^[^@\s]+@[^@\s]+$/.test(raw);
+    if (!isFullAddress && !NICK_PATTERN.test(raw)) {
       // Повторный WaitPhoneNumber сбрасывает auth.isLoading — иначе форма
       // навсегда останется в состоянии загрузки и не даст повторить ввод
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
-      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorPhoneNumberInvalid' } });
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneNickInvalid' } });
       return Promise.resolve(undefined);
     }
-    pendingLoginAddress = address;
+    // Голый ник дополнит доменом сервера connectAndLogin (на логин-соединении)
+    pendingLoginAddress = raw;
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
     return Promise.resolve(undefined);
   },
@@ -1521,18 +1551,21 @@ const methods = {
       return;
     }
     try {
-      await connectionController.connectAndLogin(user, password);
-      saveLoginAddress(user);
-      await persistSessionCredential(user, password);
+      const address = await connectionController.connectAndLogin(user, password);
+      pendingLoginAddress = address;
+      saveLoginAddress(address);
+      await persistSessionCredential(address, password);
     } catch (err) {
       const message = String(err);
       logDebug(`логин отклонён: ${message}`);
-      // Сервер требует регистрацию через почту: новый аккаунт — экран email;
-      // аккаунт есть, но не подтверждён — сразу экран кода (fallback-register
-      // в issueToken уже перевыслал код на сохранённую почту)
+      // Сервер требует регистрацию через почту: такого аккаунта нет — форма
+      // регистрации с этим ником; аккаунт есть, но не подтверждён — сразу
+      // экран кода (fallback-register в issueToken уже перевыслал код на
+      // сохранённую почту)
       if (message.includes('нужна регистрация через почту') || message.includes('нет такого пользователя')) {
         pendingLoginPassword = password;
         sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
+        sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneNoAccountYet' } });
         return;
       }
       if (message.includes('почта не подтверждена')) {
@@ -1547,31 +1580,58 @@ const methods = {
     }
   },
 
-  // Экран email (WaitRegistration): регистрация нового аккаунта. Email едет в
-  // поле firstName — штатный signUp других полей не имеет
-  async provideAuthRegistration({ firstName }: { firstName: string; lastName: string }) {
-    const user = pendingLoginAddress || readLoginAddress();
-    const email = firstName.trim();
-    if (!user || !pendingLoginPassword) {
-      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+  // Кнопка «Создать аккаунт» на экране входа — форма регистрации с пустым ником
+  parvaneStartRegistration() {
+    pendingLoginAddress = '';
+    pendingLoginPassword = '';
+    pendingEmail = '';
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
+    return Promise.resolve(undefined);
+  },
+
+  // Форма регистрации (WaitRegistration): ник + почта (если сервер требует) +
+  // пароль. Дальше экран кода или сразу логин
+  async parvaneRegister({ nick, email, password }: { nick: string; email: string; password: string }) {
+    const { domain, emailRequired } = await methods.parvaneFetchServerInfo();
+    const raw = nick.trim().toLowerCase();
+    const fail = (key: 'ParvaneNickInvalid' | 'ParvaneEmailInvalid' | 'ParvaneNickTaken' | 'ParvaneRegisterFailed') => {
+      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key } });
+    };
+    if (!NICK_PATTERN.test(raw) && !/^[^@\s]+@[^@\s]+$/.test(raw)) {
+      fail('ParvaneNickInvalid');
       return;
     }
+    const user = canonicalAddress(raw, domain);
+    const cleanEmail = email.trim().toLowerCase();
+    if (emailRequired && !EMAIL_PATTERN.test(cleanEmail)) {
+      fail('ParvaneEmailInvalid');
+      return;
+    }
+    pendingLoginAddress = user;
+    pendingLoginPassword = password;
+    pendingEmail = cleanEmail;
     try {
-      const isConfirmRequired = await connectionController.registerWithEmail(user, pendingLoginPassword, email);
+      const isConfirmRequired = await connectionController.registerWithEmail(user, password, cleanEmail);
       if (isConfirmRequired) {
         sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
         return;
       }
-      await connectionController.connectAndLogin(user, pendingLoginPassword);
+      await connectionController.connectAndLogin(user, password);
       saveLoginAddress(user);
+      await persistSessionCredential(user, password);
     } catch (err) {
       const message = String(err);
       logDebug(`регистрация отклонена: ${message}`);
-      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
-      sendUpdate({
-        '@type': 'updateAuthorizationError',
-        errorKey: { key: message.includes('email') ? 'ParvaneEmailInvalid' : 'ParvaneRegisterFailed' },
-      });
+      if (message.includes('email')) {
+        fail('ParvaneEmailInvalid');
+      } else if (message.includes('логин занят')) {
+        fail('ParvaneNickTaken');
+      } else if (message.includes('некорректный ник') || message.includes('чужой домен')) {
+        fail('ParvaneNickInvalid');
+      } else {
+        fail('ParvaneRegisterFailed');
+      }
     }
   },
 
@@ -1586,6 +1646,7 @@ const methods = {
       await connectionController.confirmEmail(user, code);
       await connectionController.connectAndLogin(user, pendingLoginPassword);
       saveLoginAddress(user);
+      await persistSessionCredential(user, pendingLoginPassword);
     } catch (err) {
       logDebug(`код отклонён: ${String(err)}`);
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitCode' });
@@ -1596,6 +1657,7 @@ const methods = {
   restartAuth() {
     pendingLoginAddress = '';
     pendingLoginPassword = '';
+    pendingEmail = '';
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
     return Promise.resolve(undefined);
   },

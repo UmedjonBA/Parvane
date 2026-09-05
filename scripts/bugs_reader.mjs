@@ -106,7 +106,7 @@ async function loginPersistent(ctx, user, password) {
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
-  const addressInput = addressScreen.getByLabel('Address (user@server)');
+  const addressInput = addressScreen.getByLabel('Nickname');
   await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await addressInput.fill(user);
   await addressScreen.getByRole('button', { name: 'Next' }).click();

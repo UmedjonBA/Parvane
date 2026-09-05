@@ -46,7 +46,7 @@ SSE4.2/AVX — target-cpu=native даст SIGILL) и уезжают через `
 ## Проверка после деплоя
 
 - `https://parvane.duckdns.org:20443` — веб-клиент (серт Let's Encrypt, доверенный;
-  сайт под basic-auth — нужен пароль круга).
+  сайт открыт, регистрация с кодом на почту).
 - Smoke против прода:
   ```bash
   PARVANE_E2E_BASE_URL=https://parvane.duckdns.org:20443 \
@@ -119,31 +119,36 @@ sync_reconnect, пин/архив чата (пробник). TURN relay — RELA
 реакций в sync_reconnect. ЛЕЧИТЬ: uuid v7 для message id (монотонный) ИЛИ
 курсор по (updated_at,id), а не по одному id.
 
-## Закрытая регистрация — пароль на сайт (basic-auth, 2026-09-01)
+## Регистрация: почта вместо пароля на сайт (2026-09-05)
 
-Приватный круг сделан через Caddy `basic_auth` на ВЕСЬ сайт (включая `/ws` —
-иначе регистрацию можно дёрнуть по WebSocket мимо пароля). Без пароля сайт даже
-не грузится; с паролем — обычная регистрация/вход. Один общий пароль на круг.
+Пароль круга (Caddy `basic_auth` на весь сайт, 2026-09-01 — 2026-09-05) снят.
+Сайт открыт, барьер от мусорных аккаунтов — регистрация с подтверждением
+почты у identity: `PARVANE_EMAIL_REQUIRED=1` (дефолт compose) +
+`PARVANE_SMTP_HOST/PORT/USER/PASS/FROM` в `.env`. Экран входа принимает ник без
+`@сервер` — identity дополняет его до `ник@PARVANE_DOMAIN` (дефолт compose —
+`PARVANE_PUBLIC_HOST`, т.е. `parvane.duckdns.org`); регистрация на чужой домен
+отклоняется, полный адрес `ник@сервер` на входе по-прежнему работает (старые
+аккаунты `@server`/`@local`, десктоп). Параметры домен/почта клиент берёт
+pre-auth запросом `identity.server.info`.
 
-Как задан (уже сделано на m60-7):
+Аккаунты, созданные ДО 2026-09-05 (`@server`, e2e `@local`), входят только по
+полному адресу — по голому нику их не найти (он теперь означает
+`ник@parvane.duckdns.org`).
+
+Архив: как ставился пароль сайта (если понадобится вернуть приватный круг —
+блок `basic_auth` на весь сайт, включая `/ws`):
 ```
-# сгенерить пароль и bcrypt-хэш (хэшим в контейнере caddy):
 docker compose exec -T caddy caddy hash-password --plaintext '<PW>'
-# в .env (ГРАБЛЯ: удвоить каждый $ в хэше → $$, иначе compose съест $2a/$14):
-PARVANE_SITE_USER=parvane
-PARVANE_SITE_HASH=$$2a$$14$$....
-docker compose up -d caddy
+# .env (удвоить каждый $ в хэше → $$): PARVANE_SITE_USER=parvane, PARVANE_SITE_HASH=$$2a$$14$$....
+# Caddyfile, внутри сайта: basic_auth { {$PARVANE_SITE_USER:parvane} {$PARVANE_SITE_HASH} }
 ```
-Проверка: `curl -u parvane:<PW>` → 200, без -u → 401. Пароль хранится у
-пользователя (в репо/памяти НЕ хранить). Сменить: перегенерить хэш, обновить
-.env, `up -d caddy`. Открыть сайт назад: убрать блок `basic_auth` из Caddyfile
-(или очистить PARVANE_SITE_HASH) и перезапустить caddy.
 
 ## Заметки
 
-- Регистрация ЗАКРЫТА паролем сайта (Caddy basic_auth, см. секцию выше) —
-  снаружи до регистрации доходит только круг с паролем. Флаги
-  PARVANE_EMAIL_REQUIRED/PARVANE_INVITE_REQUIRED не используются.
+- Регистрация ОТКРЫТА с подтверждением почты (PARVANE_EMAIL_REQUIRED=1 +
+  SMTP в .env, см. секцию выше). Rate-limit регистрации у identity — по
+  логину, не по IP (gateway не прокидывает адрес клиента); при спаме — лимит
+  в Caddy или PARVANE_INVITE_REQUIRED=1.
 - notes/calendar шарды не разворачиваются (к UI не подключены).
 - Desktop-клиенту нужен TCP-гейтвей — наружу не проброшен (только WS через
   Caddy); desktop против этого сервера пока не работает.

@@ -7,6 +7,7 @@ import type { GlobalState } from '../../global/types';
 
 import { IS_TOUCH_ENV } from '../../util/browser/windowEnvironment';
 import { pick } from '../../util/iteratees';
+import { fetchParvaneAuthContext } from '../../api/parvane/authApi';
 
 import useHistoryBack from '../../hooks/useHistoryBack';
 import useLang from '../../hooks/useLang';
@@ -32,12 +33,25 @@ const AuthCode = ({
     clearAuthErrorKey,
   } = getActions();
 
-  const { phoneNumber, isLoading, errorKey } = auth;
+  const { isLoading, errorKey } = auth;
 
   const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
 
   const [code, setCode] = useState<string>('');
+  // Parvane: в шапке — почта, на которую ушёл код (без домена сервера в
+  // адресе аккаунта пользователю показывать нечего)
+  const [email, setEmail] = useState('');
+
+  useEffect(() => {
+    let isCancelled = false;
+    void fetchParvaneAuthContext().then((context) => {
+      if (!isCancelled && context) setEmail(context.email || context.nick);
+    });
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
   const [isTracking, setIsTracking] = useState(false);
   const [trackingDirection, setTrackingDirection] = useState(1);
 
@@ -97,7 +111,7 @@ const AuthCode = ({
           trackingDirection={trackingDirection}
         />
         <h1>
-          {phoneNumber}
+          {email}
           <div
             className="auth-number-edit div-button"
             onClick={handleReturnToAuthPhoneNumber}
