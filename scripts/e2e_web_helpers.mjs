@@ -83,20 +83,27 @@ export async function openPrivateChat(page, address) {
   const result = page.locator('.LeftSearch .search-result').filter({ hasText: displayName }).first();
   await result.waitFor({ state: 'visible', timeout: 15000 });
   await result.locator('.ListItem-button').click();
-  await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Пока история чата не подгружена (шапка «Updating»), tt рендерит композер
+  // с contenteditable=false и placeholder «Text not allowed»: fill() падает
+  // сразу, без ретраев. Ждём именно редактируемый композер
+  await page.locator('#editable-message-text[contenteditable="true"]')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await closeLeftSearch(page);
 }
 
 // Панель поиска после клика по результату закрывается с анимацией; если чат
 // уже был открыт, tt иногда оставляет её висеть поверх списка чатов (клик по
 // чату в списке тогда падает «element is not visible»). Дожидаемся закрытия,
-// иначе закрываем Escape'ом (композер в фокусе — Escape ему безвреден)
+// иначе закрываем кнопкой «назад» в шапке. НЕ Escape: после открытия чата
+// последним Esc-обработчиком становится MiddleColumn — он закрывает сам чат,
+// и композер остаётся без объекта чата («Text not allowed»)
 async function closeLeftSearch(page) {
   const search = page.locator('.LeftSearch');
   for (let attempt = 0; attempt < 3; attempt++) {
     const isHidden = await search.waitFor({ state: 'hidden', timeout: 2000 }).then(() => true).catch(() => false);
     if (isHidden) return;
-    await page.keyboard.press('Escape');
+    await page.locator('#LeftColumn').getByRole('button', { name: 'Return to chat list' }).first()
+      .click({ timeout: 2000 }).catch(() => {});
   }
 }
 
@@ -116,7 +123,11 @@ export async function openPrivateChatStrict(page, address) {
 }
 
 export async function sendText(page, text) {
-  const input = page.locator('#editable-message-text');
+  // Только редактируемый композер: пока история открытого чата подгружается
+  // (шапка «Updating»), tt кратко рендерит его с contenteditable=false и
+  // placeholder «Text not allowed», а fill() на таком элементе падает сразу,
+  // без авто-ожидания. Селектор с атрибутом заставляет Playwright дождаться
+  const input = page.locator('#editable-message-text[contenteditable="true"]');
   await input.fill(text);
   await input.press('Enter');
   await page.waitForFunction(() => !document.querySelector('#editable-message-text')?.textContent);

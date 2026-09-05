@@ -128,3 +128,23 @@ cmake -S desktop/tdesktop -B desktop/build-probe \
 Проверка, что build.ninja не ссылается на пропавшее (осторожно: паттерн
 `/usr/lib/` матчит и подстроки sysroot-путей — смотреть полный токен):
 `grep -o "[^ ]*/usr/bin/[^ ]*" build.ninja | sort -u | while read f; do [ -e "$f" ] || echo MISSING $f; done`.
+
+## 6. Переезд на новую систему (2026-09-05)
+Пути в кэше сборки абсолютные (`/home/ub/Projects/active/...`, `~/.cargo`,
+`~/.local/parvane-sysroot`) — после переноса $HOME достаточно восстановить их
+симлинками, кэш переживает. Дополнительно понадобилось:
+- `gdbus-codegen` (пакет `glib2-devel`) — в sysroot без root, скрипт сам находит
+  `../share/glib-2.0/codegen`:
+  ```bash
+  cd /tmp && curl -fsSL -O "$(pacman -Sp glib2-devel | tail -1)"
+  tar --use-compress-program=unzstd -xf glib2-devel-*.pkg.tar.zst -C "$SR" \
+    usr/bin/gdbus-codegen usr/share/glib-2.0/codegen
+  ```
+  и к cmake-реконфигу из п. 5 добавить `-DDESKTOP_APP_GDBUSCODEGEN=$SR/usr/bin/gdbus-codegen`.
+- Смена мажора protobuf в системе (36 → 35) → старый бинарь не стартует
+  (`libprotobuf-lite.so.36 not found`), нужна полная пересборка; cmake сам
+  подхватывает новый `protoc`.
+- Финальная линковка `Telegram` (Debug, lld) держит ~10 ГБ. Если сборку гоняет
+  агент, его харнесс убивает фоновые задачи при нехватке памяти, хотя swap
+  свободен — линк запускать отдельным юнитом:
+  `systemd-run --user --unit=parvane-ninja-link --collect -p WorkingDirectory=$PWD -E PATH="$PATH" sh -c 'ninja -C desktop/build-probe -j1 > /tmp/ninja.log 2>&1'`.
