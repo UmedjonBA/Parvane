@@ -32,6 +32,18 @@ services:
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}
       PARVANE_DB_PATH: /data/identity.db
       PARVANE_LOG_LEVEL: info
+      # Домен адресов: ник на экране входа → ник@домен; регистрация на чужой
+      # домен отклоняется
+      PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
+      # Открытая регистрация только с подтверждением почты (1) — без пароля на
+      # сайт это единственный барьер от мусорных аккаунтов. Без SMTP_HOST код
+      # уходит лишь в лог identity (dev-режим) — на проде обязательно задать
+      PARVANE_EMAIL_REQUIRED: ${PARVANE_EMAIL_REQUIRED:-1}
+      PARVANE_SMTP_HOST: ${PARVANE_SMTP_HOST:-}
+      PARVANE_SMTP_PORT: ${PARVANE_SMTP_PORT:-587}
+      PARVANE_SMTP_USER: ${PARVANE_SMTP_USER:-}
+      PARVANE_SMTP_PASS: ${PARVANE_SMTP_PASS:-}
+      PARVANE_SMTP_FROM: ${PARVANE_SMTP_FROM:-}
 
   messenger:
     <<: *shard-common

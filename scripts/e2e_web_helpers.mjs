@@ -49,11 +49,7 @@ export async function preparePage(context, user, password, { seedLocalStorage } 
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
 
-  const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
-  const addressInput = addressScreen.getByLabel('Address (user@server)');
-  await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await addressInput.fill(user);
-  await addressScreen.getByRole('button', { name: 'Next' }).click();
+  await submitNick(page, user);
 
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -62,6 +58,28 @@ export async function preparePage(context, user, password, { seedLocalStorage } 
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForFunction(() => globalThis.__parvaneE2eSockets?.opened === 1);
   return { page, errors };
+}
+
+// Экран входа: ввести ник (или полный адрес) и нажать Next. Экран может
+// перемонтироваться сразу после появления (провайдер повторно шлёт
+// WaitPhoneNumber после чтения storage) и сбросить введённое — повторяем ввод,
+// пока не появится кнопка
+export async function submitNick(page, user) {
+  const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
+  const addressInput = addressScreen.getByLabel('Nickname');
+  await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const nextButton = addressScreen.getByRole('button', { name: 'Next' });
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  for (;;) {
+    await addressInput.fill(user);
+    try {
+      await nextButton.waitFor({ state: 'visible', timeout: 3000 });
+      break;
+    } catch (err) {
+      if (Date.now() > deadline) throw err;
+    }
+  }
+  await nextButton.click();
 }
 
 export async function openPrivateChat(page, address) {

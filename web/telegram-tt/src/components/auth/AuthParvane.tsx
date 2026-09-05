@@ -15,21 +15,32 @@ import InputText from '../ui/InputText';
 
 type StateProps = Pick<GlobalState, 'auth'>;
 
-// Parvane: вместо телефона — федеративный адрес user@server. Дальше штатный
-// экран пароля (authorizationStateWaitPassword)
-const AuthParvane = ({ auth }: StateProps) => {
-  const { setAuthPhoneNumber, setAuthRememberMe } = getActions();
+// Ник нового аккаунта (зеркало valid_nick в identity). Полный адрес
+// user@server тоже принимается — для аккаунтов с других серверов
+export const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/i;
+export const FULL_ADDRESS_PATTERN = /^[^@\s]+@[^@\s]+$/;
 
-  const [address, setAddress] = useState('');
+export function isNickOrAddress(value: string) {
+  const trimmed = value.trim();
+  return NICK_PATTERN.test(trimmed) || FULL_ADDRESS_PATTERN.test(trimmed);
+}
+
+// Parvane: вместо телефона — ник (сервер дополняет до ник@домен) или полный
+// адрес user@server. Дальше штатный экран пароля
+// (authorizationStateWaitPassword); «Создать аккаунт» — форма регистрации
+const AuthParvane = ({ auth }: StateProps) => {
+  const { setAuthPhoneNumber, setAuthRememberMe, parvaneStartRegistration } = getActions();
+
+  const [nick, setNick] = useState('');
 
   const lang = useLang();
 
   const { isLoading: authIsLoading, errorKey, rememberMe } = auth;
 
-  const canSubmit = /^[^@\s]+@[^@\s]+$/.test(address.trim());
+  const canSubmit = isNickOrAddress(nick);
 
-  const handleAddressChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
-    setAddress(e.target.value);
+  const handleNickChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setNick(e.target.value);
   });
 
   const handleKeepSessionChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
@@ -39,12 +50,19 @@ const AuthParvane = ({ auth }: StateProps) => {
     saveRememberMe(e.target.checked);
   });
 
+  const handleCreateAccount = useLastCallback(() => {
+    if (authIsLoading) {
+      return;
+    }
+    parvaneStartRegistration();
+  });
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (authIsLoading || !canSubmit) {
       return;
     }
-    setAuthPhoneNumber({ phoneNumber: address.trim() });
+    setAuthPhoneNumber({ phoneNumber: nick.trim() });
   }
 
   return (
@@ -56,12 +74,12 @@ const AuthParvane = ({ auth }: StateProps) => {
         <form className="form" action="" onSubmit={handleSubmit}>
           <InputText
             id="sign-in-parvane-address"
-            label={lang('ParvaneAddress')}
-            value={address}
+            label={lang('ParvaneNickname')}
+            value={nick}
             error={errorKey && lang.withRegular(errorKey)}
-            inputMode="email"
+            autoComplete="username"
             autoFocus
-            onChange={handleAddressChange}
+            onChange={handleNickChange}
           />
           <Checkbox
             id="sign-in-keep-session"
@@ -79,6 +97,13 @@ const AuthParvane = ({ auth }: StateProps) => {
               {lang('LoginNext')}
             </Button>
           )}
+          <Button
+            className="auth-button"
+            isText
+            onClick={handleCreateAccount}
+          >
+            {lang('ParvaneCreateAccount')}
+          </Button>
         </form>
       </div>
     </div>

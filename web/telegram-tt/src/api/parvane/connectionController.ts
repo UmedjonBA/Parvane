@@ -12,6 +12,7 @@ import {
   TOPIC_IDENTITY_EMAIL_CONFIRM,
   TOPIC_IDENTITY_ISSUE,
   TOPIC_IDENTITY_REGISTER,
+  TOPIC_IDENTITY_SERVER_INFO,
   TOPIC_IDENTITY_SETKEY,
   TOPIC_PREKEYS_PUBLISH,
 } from './wire';
@@ -53,6 +54,24 @@ const PRESENCE_TTL_SECS = 90;
 const TYPING_CLEAR_MS = 6000;
 const RECONNECT_INITIAL_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 10000;
+
+export type ServerInfo = { domain: string; emailRequired: boolean };
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+// Домен адресов, если сервер не сообщил свой: хост страницы; локальная
+// разработка — «local» (дефолт PARVANE_DOMAIN у identity)
+export function fallbackDomain() {
+  const host = window.location.hostname.toLowerCase();
+  return !host || LOCAL_HOSTS.has(host) ? 'local' : host;
+}
+
+// Полный адрес по вводу: «ник» → «ник@домен», «ник@сервер» — как есть
+// (десктоп и старые аккаунты вводят адрес целиком)
+export function canonicalAddress(input: string, domain: string) {
+  const trimmed = input.trim().toLowerCase();
+  return trimmed.includes('@') ? trimmed : `${trimmed}@${domain}`;
+}
 
 export function createConnectionController(deps: ConnectionDependencies) {
   let syncTimer: number | undefined;
@@ -264,7 +283,10 @@ export function createConnectionController(deps: ConnectionDependencies) {
     }
   }
 
-  async function connectAndLogin(user: string, password: string) {
+  // `input` — ник или полный адрес; голый ник дополняется доменом сервера
+  // (server.info запрашивается на этом же соединении — лишних сокетов нет).
+  // Возвращает полный адрес аккаунта
+  async function connectAndLogin(input: string, password: string): Promise<string> {
     cancelReconnect();
     // Новая сессия — состав групп (и их typing-подписки) будет пересобран синком
     subscribedTypingGroups.clear();
@@ -279,6 +301,10 @@ export function createConnectionController(deps: ConnectionDependencies) {
     try {
       await activeConnection.connect(getGatewayUrl());
       deps.log('WS открыт');
+
+      const user = input.includes('@')
+        ? canonicalAddress(input, '')
+        : canonicalAddress(input, (await requestServerInfo(activeConnection)).domain);
 
       const nextToken = await issueToken(activeConnection, user, password);
       deps.setToken(nextToken);
@@ -344,6 +370,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
       presenceTimer = window.setInterval(publishPresence, PRESENCE_INTERVAL_MS);
       publishPresence();
       deps.onSessionReady?.();
+      return user;
     } catch (error) {
       if (generation === sessionGeneration && deps.getConnection() === activeConnection) {
         deps.setConnection(undefined);
@@ -387,6 +414,37 @@ export function createConnectionController(deps: ConnectionDependencies) {
       await connection.connect(getGatewayUrl());
       const raw = await connection.request(subject, JSON.stringify(payload));
       return JSON.parse(raw) as T;
+    } finally {
+      connection.close();
+    }
+  }
+
+  // Публичные параметры сервера для экрана входа: домен адресов (ник →
+  // ник@домен) и нужна ли почта при регистрации. Старый сервер без топика
+  // (или обрыв) — фолбэк по хосту страницы: e2e и dev ходят на localhost, где
+  // identity по умолчанию отвечает за домен «local»
+  async function requestServerInfo(activeConnection: GatewayConnection): Promise<ServerInfo> {
+    try {
+      const raw = await activeConnection.request(TOPIC_IDENTITY_SERVER_INFO, JSON.stringify({}));
+      const info = JSON.parse(raw) as { domain?: string; email_required?: boolean };
+      if (info.domain) {
+        return { domain: info.domain, emailRequired: Boolean(info.email_required) };
+      }
+    } catch (err) {
+      deps.log(`server.info недоступен, домен по хосту: ${String(err)}`);
+    }
+    return { domain: fallbackDomain(), emailRequired: false };
+  }
+
+  // Отдельное короткое соединение — для формы регистрации (сессии ещё нет)
+  async function fetchServerInfo(): Promise<ServerInfo> {
+    const connection = new GatewayConnection();
+    try {
+      await connection.connect(getGatewayUrl());
+      return await requestServerInfo(connection);
+    } catch (err) {
+      deps.log(`server.info недоступен, домен по хосту: ${String(err)}`);
+      return { domain: fallbackDomain(), emailRequired: false };
     } finally {
       connection.close();
     }
@@ -436,6 +494,6 @@ export function createConnectionController(deps: ConnectionDependencies) {
   }
 
   return {
-    connectAndLogin, registerWithEmail, confirmEmail, ensureGroupTyping, shutdown,
+    connectAndLogin, registerWithEmail, confirmEmail, fetchServerInfo, ensureGroupTyping, shutdown,
   };
 }

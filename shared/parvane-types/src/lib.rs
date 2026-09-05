@@ -13,6 +13,9 @@ pub mod topics {
     pub const IDENTITY_REGISTER: &str = "identity.user.register";
     /// Подтверждение почты кодом из письма (при PARVANE_EMAIL_REQUIRED=1).
     pub const IDENTITY_EMAIL_CONFIRM: &str = "identity.email.confirm";
+    /// Публичные параметры сервера для экрана входа (pre-auth): домен адресов
+    /// (ник без `@` дополняется до `ник@домен`) и нужна ли почта при регистрации.
+    pub const IDENTITY_SERVER_INFO: &str = "identity.server.info";
     /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
@@ -202,6 +205,19 @@ pub struct EmailConfirmResponse {
     pub ok: bool,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// Запрос публичных параметров сервера (тело пустое, поля зарезервированы).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerInfoRequest {}
+
+/// Публичные параметры сервера для клиента до логина.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerInfoResponse {
+    /// Домен адресов этого сервера (`PARVANE_DOMAIN`): `ник` → `ник@домен`.
+    pub domain: String,
+    /// true — регистрация требует почту и код подтверждения.
+    pub email_required: bool,
 }
 
 // ── E2E prekeys (Фаза 2, X3DH) ────────────────────────────────────────────────

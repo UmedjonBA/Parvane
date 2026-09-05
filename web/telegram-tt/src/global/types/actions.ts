@@ -158,6 +158,9 @@ export interface ActionPayloads {
   };
   goToAuthQrCode: undefined;
   loginWithPasskey: undefined;
+  // Parvane: явная регистрация (ник + почта + пароль)
+  parvaneStartRegistration: undefined;
+  parvaneRegister: { nick: string; email: string; password: string };
 
   // stickers & GIFs
   setStickerSearchQuery: { query?: string } & WithTabId;

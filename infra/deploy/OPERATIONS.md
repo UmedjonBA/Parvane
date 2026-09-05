@@ -21,22 +21,29 @@ docker compose up -d                        # применить изменён�
 ```
 Контейнеры и так поднимаются сами (`restart: unless-stopped`) после падения/ребута.
 
-## Пароль сайта (basic-auth приватного круга)
-Сменить пароль:
-```bash
-NEW='новыйпароль'
-H=$(docker compose exec -T caddy caddy hash-password --plaintext "$NEW")
-# ВАЖНО: удвоить каждый $ в хэше, иначе docker compose его испортит
-HESC=$(printf '%s' "$H" | sed 's/[$]/$$/g')
-sed -i '/^PARVANE_SITE_HASH=/d' .env
-printf 'PARVANE_SITE_HASH=%s\n' "$HESC" >> .env
-docker compose up -d caddy
-# проверка:
-curl -sk -o /dev/null -w '%{http_code}\n' -u "parvane:$NEW" https://parvane.duckdns.org:20443/   # 200
-curl -sk -o /dev/null -w '%{http_code}\n' https://parvane.duckdns.org:20443/                       # 401
+## Регистрация (открытая, с подтверждением почты)
+Пароля на сайт больше нет (снят 2026-09-05). Регистрация: ник + почта +
+пароль → 6-значный код письмом. Нужны в `.env` (identity):
 ```
-Открыть регистрацию всем (снять пароль): убрать блок `basic_auth {…}` из
-`Caddyfile` → `docker compose restart caddy`.
+PARVANE_EMAIL_REQUIRED=1          # дефолт compose — 1
+PARVANE_SMTP_HOST=smtp.example.com
+PARVANE_SMTP_PORT=587             # 465 = implicit TLS, иначе STARTTLS
+PARVANE_SMTP_USER=...
+PARVANE_SMTP_PASS=...
+PARVANE_SMTP_FROM=Parvane <noreply@example.com>
+PARVANE_DOMAIN=parvane.duckdns.org   # дефолт — PARVANE_PUBLIC_HOST
+```
+Применить: `docker compose up -d identity`. Проверка: зарегистрировать
+тестовый ник — письмо с кодом должно прийти; `docker compose logs identity`
+покажет «Код подтверждения отправлен на …» (или ошибку SMTP). Без
+`PARVANE_SMTP_HOST` код печатается только в лог identity (dev-режим) — на
+проде так оставлять нельзя: зарегистрироваться сможет только тот, кто читает
+логи.
+
+Временно закрыть регистрацию совсем: `PARVANE_INVITE_REQUIRED=1` у identity
+(коды — вручную в таблицу `invites` identity.db, UI выдачи нет) или вернуть
+basic_auth в Caddyfile (архив в README, раздел «Регистрация: почта вместо
+пароля на сайт»).
 
 ## Бэкапы
 - Автоматом: cron `0 4 * * *` → `~/parvane/backup.sh` → `~/parvane/backups/`, хранит 14 дней.

@@ -23,7 +23,7 @@ export async function openApp(page: Page, gatewayUrl: string): Promise<string[]>
 
 export async function submitAddress(page: Page, user: string) {
   const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
-  const addressInput = addressScreen.getByLabel('Address (user@server)');
+  const addressInput = addressScreen.getByLabel('Nickname');
   await expect(addressInput).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
   // Экран может перемонтироваться сразу после появления (например, после
   // logout) и сбросить введённое — повторяем ввод, пока не появится кнопка

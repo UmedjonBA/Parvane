@@ -33,6 +33,7 @@ import { forceWebsync } from '../../../util/websync';
 import {
   callApi, callApiLocal, initApi, setShouldEnableDebugLog,
 } from '../../../api/gramjs';
+import { registerParvane, startParvaneRegistration } from '../../../api/parvane/authApi';
 import {
   removeGlobalFromCache, removeSharedStateFromCache, serializeGlobal, serializeShared,
 } from '../../cache';
@@ -91,9 +92,8 @@ addActionHandler('initApi', (global, actions): ActionReturnType => {
 addActionHandler('setAuthPhoneNumber', (global, actions, payload): ActionReturnType => {
   const { phoneNumber } = payload;
 
-  // Parvane: федеративный адрес user@server передаётся как есть
-  const adapted = phoneNumber.includes('@') ? phoneNumber : phoneNumber.replace(/[^\d]/g, '');
-  void callApi('provideAuthPhoneNumber', adapted);
+  // Parvane: ник или полный адрес user@server передаётся как есть
+  void callApi('provideAuthPhoneNumber', phoneNumber);
 
   return updateAuth(global, {
     isLoading: true,
@@ -167,6 +167,23 @@ addActionHandler('signUp', (global, actions, payload): ActionReturnType => {
   const { firstName, lastName } = payload;
 
   void callApi('provideAuthRegistration', { firstName, lastName });
+
+  return updateAuth(global, {
+    isLoading: true,
+    errorKey: undefined,
+  });
+});
+
+addActionHandler('parvaneStartRegistration', (global): ActionReturnType => {
+  void startParvaneRegistration();
+
+  return updateAuth(global, {
+    errorKey: undefined,
+  });
+});
+
+addActionHandler('parvaneRegister', (global, actions, payload): ActionReturnType => {
+  void registerParvane(payload);
 
   return updateAuth(global, {
     isLoading: true,

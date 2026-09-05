@@ -14,7 +14,7 @@ import useHistoryBack from '../../hooks/useHistoryBack';
 import Transition from '../ui/Transition';
 import AuthCode from './AuthCode.async';
 import AuthParvane from './AuthParvane';
-import AuthParvaneEmail from './AuthParvaneEmail';
+import AuthParvaneRegister from './AuthParvaneRegister';
 import AuthPassword from './AuthPassword.async';
 
 import './Auth.scss';
@@ -59,7 +59,7 @@ const Auth = ({
       case 'authorizationStateWaitPassword':
         return <AuthPassword />;
       case 'authorizationStateWaitRegistration':
-        return <AuthParvaneEmail />;
+        return <AuthParvaneRegister />;
       case 'authorizationStateWaitPhoneNumber':
       case 'authorizationStateWaitQrCode':
         return <AuthParvane />;
