@@ -91,9 +91,10 @@ const NewContactModal: FC<OwnProps & StateProps> = ({
     setFirstName(e.target.value);
   }, []);
 
+  // Parvane: вместо телефона — ник (или ник@сервер); телефонной книги нет
   const handlePhoneChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setPhone(formatPhoneNumberWithCode(phoneCodeList, e.target.value));
-  }, [phoneCodeList]);
+    setPhone(e.target.value.trim());
+  }, []);
 
   const handleLastNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setLastName(e.target.value);
@@ -209,8 +210,7 @@ const NewContactModal: FC<OwnProps & StateProps> = ({
           <InputText
             ref={inputRef}
             value={phone}
-            inputMode="tel"
-            label={oldLang('lng_contact_phone')}
+            label={lang('ParvaneNickname')}
             tabIndex={0}
             onChange={handlePhoneChange}
           />

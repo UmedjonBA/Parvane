@@ -13,23 +13,34 @@ export default async function readFallbackStrings(): Promise<CachedLangData> {
   return buildFallbackStrings(file.default);
 }
 
-export function buildFallbackStrings(fileData: string): CachedLangData {
+// Parvane: суффикс формы множественного числа распознаём только из списка
+// CLDR — иначе ключи вида `lng_channel_add_users` разваливались на «lng»
+const PLURAL_SUFFIX_REGEX = /^(.+)_(zero|one|two|few|many|other)$/;
+
+export function parseLangPackStrings(fileData: string): LangPack['strings'] {
   const rawStrings = readStrings(fileData);
 
   const strings: LangPack['strings'] = {};
 
   Object.entries(rawStrings).forEach(([key, value]) => {
-    const [clearKey, pluralSuffix] = key.split('_');
+    const match = key.match(PLURAL_SUFFIX_REGEX);
 
-    if (!pluralSuffix) {
-      strings[clearKey] = value;
+    if (!match) {
+      strings[key] = value;
       return;
     }
 
+    const [, clearKey, pluralSuffix] = match;
     const knownValue = (strings[clearKey] || {}) as LangPackStringValuePlural;
     knownValue[pluralSuffix as keyof LangPackStringValuePlural] = value;
     strings[clearKey] = knownValue;
   });
+
+  return strings;
+}
+
+export function buildFallbackStrings(fileData: string): CachedLangData {
+  const strings = parseLangPackStrings(fileData);
 
   const langPack: LangPack = {
     langCode: FALLBACK_LANG_CODE,

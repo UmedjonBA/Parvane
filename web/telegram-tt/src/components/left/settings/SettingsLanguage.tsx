@@ -5,12 +5,9 @@ import {
 import { getActions, withGlobal } from '../../../global';
 
 import type { SharedSettings } from '../../../global/types';
-import type { AccountSettings, LangCode } from '../../../types';
-import { SettingsScreens } from '../../../types';
+import type { LangCode } from '../../../types';
 
-import { selectIsCurrentUserPremium } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
-import { IS_TRANSLATION_SUPPORTED } from '../../../util/browser/windowEnvironment';
 import { oldSetLanguage } from '../../../util/oldLangProvider';
 
 import useFlag from '../../../hooks/useFlag';
@@ -19,9 +16,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
 import ItemPicker, { type ItemPickerOption } from '../../common/pickers/ItemPicker';
-import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
-import Checkbox from '../../ui/Checkbox';
-import ListItem from '../../ui/ListItem';
+import Island, { IslandTitle } from '../../gili/layout/Island';
 import Loading from '../../ui/Loading';
 import Transition from '../../ui/Transition';
 
@@ -30,33 +25,21 @@ type OwnProps = {
   onReset: () => void;
 };
 
-type StateProps = {
-  isCurrentUserPremium: boolean;
-} & Pick<AccountSettings, 'canTranslate' | 'canTranslateChats' | 'doNotTranslate'>
-& Pick<SharedSettings, 'language' | 'languages'>;
+type StateProps = Pick<SharedSettings, 'language' | 'languages'>;
 
 const SettingsLanguage: FC<OwnProps & StateProps> = ({
   isActive,
-  isCurrentUserPremium,
   languages,
   language,
-  canTranslate,
-  canTranslateChats,
-  doNotTranslate,
   onReset,
 }) => {
   const {
     loadLanguages,
-    setSettingOption,
     setSharedSettingOption,
-    openPremiumModal,
-    openSettingsScreen,
   } = getActions();
 
   const [selectedLanguage, setSelectedLanguage] = useState<string>(language);
   const [isLoading, markIsLoading, unmarkIsLoading] = useFlag();
-
-  const canTranslateChatsEnabled = isCurrentUserPremium && canTranslateChats;
 
   const lang = useOldLang();
 
@@ -92,39 +75,6 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
     });
   }, [isLoading, languages, selectedLanguage]);
 
-  const handleShouldTranslateChange = useLastCallback((newValue: boolean) => {
-    setSettingOption({ canTranslate: newValue });
-  });
-
-  const handleShouldTranslateChatsChange = useLastCallback((newValue: boolean) => {
-    setSettingOption({ canTranslateChats: newValue });
-  });
-
-  const handleShouldTranslateChatsClick = useLastCallback(() => {
-    if (!isCurrentUserPremium) {
-      openPremiumModal({
-        initialSection: 'translations',
-      });
-    }
-  });
-
-  const doNotTranslateText = useMemo(() => {
-    if (!IS_TRANSLATION_SUPPORTED || !doNotTranslate.length) {
-      return undefined;
-    }
-
-    if (doNotTranslate.length === 1) {
-      const originalNames = new Intl.DisplayNames([language], { type: 'language' });
-      return originalNames.of(doNotTranslate[0])!;
-    }
-
-    return lang('Languages', doNotTranslate.length);
-  }, [doNotTranslate, lang, language]);
-
-  const handleDoNotSelectOpen = useLastCallback(() => {
-    openSettingsScreen({ screen: SettingsScreens.DoNotTranslate });
-  });
-
   useHistoryBack({
     isActive,
     onBack: onReset,
@@ -132,38 +82,7 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
 
   return (
     <div className="settings-content settings-language custom-scroll">
-      {IS_TRANSLATION_SUPPORTED && (
-        <>
-          <Island>
-            <Checkbox
-              label={lang('ShowTranslateButton')}
-              checked={canTranslate}
-              onCheck={handleShouldTranslateChange}
-            />
-            <Checkbox
-              label={lang('ShowTranslateChatButton')}
-              checked={canTranslateChatsEnabled}
-              disabled={!isCurrentUserPremium}
-              rightIcon={!isCurrentUserPremium ? 'lock' : undefined}
-              onClickLabel={handleShouldTranslateChatsClick}
-              onCheck={handleShouldTranslateChatsChange}
-            />
-            {(canTranslate || canTranslateChatsEnabled) && (
-              <ListItem
-                narrow
-                onClick={handleDoNotSelectOpen}
-              >
-                {lang('DoNotTranslate')}
-                <span className="settings-item__current-value">{doNotTranslateText}</span>
-              </ListItem>
-            )}
-          </Island>
-          <IslandDescription>
-            {lang('lng_translate_settings_about')}
-          </IslandDescription>
-        </>
-      )}
-
+      {/* Parvane: перевод сообщений (Telegram Translate) недоступен — только выбор языка */}
       <Transition activeKey={options ? 1 : 0} name="fade" className="settings-language-transition">
         {options ? (
           <>
@@ -189,20 +108,11 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const {
-      canTranslate, canTranslateChats, doNotTranslate,
-    } = global.settings.byKey;
     const { language, languages } = selectSharedSettings(global);
 
-    const isCurrentUserPremium = selectIsCurrentUserPremium(global);
-
     return {
-      isCurrentUserPremium,
       languages,
       language,
-      canTranslate,
-      canTranslateChats,
-      doNotTranslate,
     };
   },
 )(SettingsLanguage));

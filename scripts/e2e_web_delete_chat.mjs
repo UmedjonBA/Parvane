@@ -123,6 +123,8 @@ try {
   assertNoPageErrors({ alice: aliceSession, bob: bobSession });
   console.log('web delete-chat e2e: OK');
 } catch (error) {
+  const shotDir = process.env.PARVANE_E2E_SHOT_DIR;
+  if (shotDir && aliceSession) await aliceSession.page.screenshot({ path: `${shotDir}/delchat-alice.png` }).catch(() => {});
   if (aliceSession) await dumpDiagJournal(aliceSession.page, 'alice').catch(() => {});
   if (bobSession) await dumpDiagJournal(bobSession.page, 'bob').catch(() => {});
   throw error;

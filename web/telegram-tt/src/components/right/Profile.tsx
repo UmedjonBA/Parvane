@@ -1452,9 +1452,9 @@ export default memo(withGlobal<OwnProps>(
     const hasPreviewMediaTab = userFullInfo?.botInfo?.hasPreviewMedia;
     const botPreviewMedia = global.users.previewMediaByBotId[chatId];
 
-    const hasStoriesTab = peer && (user?.isSelf || (!peer.areStoriesHidden && peerFullInfo?.hasPinnedStories))
-      && !isSavedMessages;
-    const peerStories = hasStoriesTab ? selectPeerStories(global, peer.id) : undefined;
+    // Parvane: историй нет — вкладка «Posts»/«Story Archive» крутила спиннер
+    const hasStoriesTab = false;
+    const peerStories = hasStoriesTab && peer ? selectPeerStories(global, peer.id) : undefined;
     const selectedStoryAlbumId = selectActiveStoriesCollectionId(global);
     const storyIds = selectedStoryAlbumId !== 'all'
       ? peerStories?.idsByAlbumId?.[selectedStoryAlbumId]?.ids

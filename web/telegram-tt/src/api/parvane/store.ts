@@ -33,6 +33,11 @@ export class ParvaneStore {
 
   private avatarByAddress = new Map<string, string>();
 
+  // Parvane: явно добавленные контакты (localStorage); плюс контактом считаем
+  // каждого, с кем есть личная переписка. Раньше isContact стоял у всех
+  // известных пользователей — в «Контакты» попадал весь каталог сервера
+  private contactAddresses = new Set<string>();
+
   private groupInfoByAddress = new Map<string, WireGroupInfo>();
 
   private messagesByChatId = new Map<string, ApiMessage[]>();
@@ -91,6 +96,38 @@ export class ParvaneStore {
 
   getDisplayName(address: string) {
     return this.displayNameByAddress.get(address) || address.split('@')[0];
+  }
+
+  // Явно убранные из контактов (иначе собеседник возвращался бы по правилу
+  // «есть переписка»)
+  private nonContactAddresses = new Set<string>();
+
+  setContacts(added: string[], removed: string[] = []) {
+    this.contactAddresses = new Set(added);
+    this.nonContactAddresses = new Set(removed);
+  }
+
+  addContact(address: string) {
+    this.contactAddresses.add(address);
+    this.nonContactAddresses.delete(address);
+  }
+
+  removeContact(address: string) {
+    this.contactAddresses.delete(address);
+    this.nonContactAddresses.add(address);
+  }
+
+  getContactLists() {
+    return { added: Array.from(this.contactAddresses), removed: Array.from(this.nonContactAddresses) };
+  }
+
+  isContact(address: string) {
+    if (address === this.self) return false;
+    if (this.nonContactAddresses.has(address)) return false;
+    if (this.contactAddresses.has(address)) return true;
+    if (this.kindByAddress.get(address) !== 'user') return false;
+    const chatId = this.addressById.size ? this.getIdForAddress(address) : undefined;
+    return Boolean(chatId && this.messagesByChatId.get(chatId)?.length);
   }
 
   setAvatar(address: string, fileId: string | undefined) {
@@ -221,7 +258,7 @@ export class ParvaneStore {
       id,
       isMin: false,
       isSelf: isSelf ? true : undefined,
-      isContact: isSelf ? undefined : true,
+      isContact: !isSelf && this.isContact(address) ? true : undefined,
       // Premium-гейт tt (вставка кастом-эмодзи и т.п.) в Parvane снят: свой
       // юзер всегда premium; чужим не ставим, чтобы не рисовать бейджи
       isPremium: isSelf ? true : undefined,

@@ -10,12 +10,15 @@ import type {
   ApiChat, ApiDraft, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
+  ApiPeer,
+  ApiPhoto,
   ApiSession,
   ApiSticker, ApiThreadInfo,
   ApiUpdate,
   ApiUser,
   ApiUserStatus,
   ApiVideo,
+  ApiWallpaper,
   OnApiUpdate } from '../types';
 import type { ServerInfo } from './connectionController';
 import type { GatewayConnection } from './gateway';
@@ -39,6 +42,7 @@ import { canonicalAddress, createConnectionController } from './connectionContro
 import { E2eEngine } from './e2e';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
+import { langPackMethods } from './langPacks';
 import {
   exportLinkPublicKey,
   generateLinkKeyPair,
@@ -296,6 +300,7 @@ const connectionController = createConnectionController({
     messageController.resetSavedGifs();
     messageController.reset();
     localState.reset();
+    store.setContacts(localState.loadContacts(), localState.loadNonContacts());
     polls.reset();
     groupController.reset();
   },
@@ -695,7 +700,33 @@ async function revokeOwnDevice(deviceId: string) {
   }
 }
 
+// Фото профиля как ApiPhoto: один файл в облаке, ключ = file_id
+function buildAvatarPhoto(fileId: string): ApiPhoto {
+  return {
+    mediaType: 'photo',
+    id: fileId,
+    date: Math.floor(Date.now() / 1000),
+    sizes: [{ type: 'x', width: 640, height: 640 }],
+  };
+}
+
+function persistContacts() {
+  const { added, removed } = store.getContactLists();
+  localState.saveContacts(added);
+  localState.saveNonContacts(removed);
+}
+
+function addContactAddress(address: string) {
+  store.addContact(address);
+  persistContacts();
+  const user = store.buildApiUser(address);
+  sendUpdate({ '@type': 'updateUser', id: user.id, user });
+}
+
 const methods = {
+  // Языковые пакеты из сборки (fallback.strings / ru.strings)
+  ...langPackMethods,
+
   fetchAppConfig({ hash }: { hash?: number }) {
     return Promise.resolve(hash === PARVANE_APP_CONFIG.hash ? undefined : PARVANE_APP_CONFIG);
   },
@@ -1139,8 +1170,26 @@ const methods = {
   },
 
   editChatFolder({ id, folderUpdate }: { id: number; folderUpdate: Record<string, unknown> }) {
-    const folders = localState.loadFolders().filter((f) => f.id !== id);
-    folders.push({ ...folderUpdate, id });
+    // Правка папки не должна переставлять её в конец
+    const folders = localState.loadFolders();
+    const index = folders.findIndex((f) => f.id === id);
+    const next = { ...folderUpdate, id };
+    if (index >= 0) {
+      folders[index] = next;
+    } else {
+      folders.push(next);
+    }
+    localState.saveFolders(folders);
+    return Promise.resolve(true);
+  },
+
+  // Перетаскивание папок в Settings → Folders: без ответа tt не обновлял ни
+  // вкладки слева, ни порядок после reload
+  sortChatFolders(folderIds: number[]) {
+    const order = new Map(folderIds.map((folderId, index) => [folderId, index]));
+    const folders = localState.loadFolders().sort((a, b) => (
+      (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+    ));
     localState.saveFolders(folders);
     return Promise.resolve(true);
   },
@@ -1201,6 +1250,39 @@ const methods = {
 
   oldFetchLangPack({ langCode }: { langCode: string }) {
     return Promise.resolve({ langPack: buildOldLangPack(langCode) });
+  },
+
+  // ── фон чата ────────────────────────────────────────────────────────────────
+  // Галереи обоев Telegram нет: пустой список вместо вечного спиннера; свою
+  // картинку клиент кладёт в CUSTOM_BG_CACHE_NAME сам (WallpaperTile), нам
+  // достаточно отдать её как локальный документ
+  fetchWallpapers() {
+    return Promise.resolve({ wallpapers: [] as ApiWallpaper[] });
+  },
+
+  uploadWallpaper(file: File) {
+    const id = `wp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const mimeType = file.type || 'image/jpeg';
+    mediaService.cacheBlob(id, file, mimeType);
+    const wallpaper: ApiWallpaper = {
+      slug: id,
+      document: {
+        mediaType: 'document',
+        id,
+        fileName: file.name || 'wallpaper.jpg',
+        mimeType,
+        size: file.size,
+      },
+    };
+    return Promise.resolve({ wallpaper });
+  },
+
+  // Просмотр фото профиля (MediaViewer): у пользователя одно фото — аватар
+  fetchProfilePhotos({ peer }: { peer: ApiPeer; offset?: number; limit?: number }) {
+    const address = store.getAddressForId(peer.id);
+    const fileId = address ? store.getAvatar(address) : undefined;
+    const photos: ApiPhoto[] = fileId ? [buildAvatarPhoto(fileId)] : [];
+    return Promise.resolve({ count: photos.length, photos, nextOffsetId: undefined });
   },
 
   // ── стикеры (встроенный набор + кастомные паки) ─────────────────────────────
@@ -1773,16 +1855,48 @@ const methods = {
     return pollTelegramConfirmation(telegramPollGeneration);
   },
 
+  // Контакты: явно добавленные плюс те, с кем есть личная переписка (см.
+  // ParvaneStore.isContact). Раньше сюда попадал весь каталог сервера
   async fetchContactList() {
     await syncController.ensureSynced();
     const users = store.getKnownUserAddresses()
-      .filter((address) => address !== store.self)
+      .filter((address) => address !== store.self && store.isContact(address))
       .map((address) => store.buildApiUser(address));
     const userStatusesById: Record<string, ApiUserStatus> = {};
     users.forEach((user) => {
       userStatusesById[user.id] = RECENT_STATUS;
     });
     return { users, userStatusesById };
+  },
+
+  // «Добавить в контакты» из профиля / «Новый контакт» по нику
+  updateContact({ id }: { id: string; firstName?: string; lastName?: string }) {
+    const address = store.getAddressForId(id);
+    if (!address || address === store.self) return Promise.resolve(undefined);
+    addContactAddress(address);
+    return Promise.resolve(true);
+  },
+
+  async importContact({ phone }: { phone?: string; firstName?: string; lastName?: string }) {
+    // tt передаёт «телефон» — у нас это ник или ник@сервер
+    const input = (phone || '').trim().replace(/^@/, '');
+    if (!input) return undefined;
+    const info = connectionController.getLastServerInfo();
+    const address = canonicalAddress(input, info?.domain || '');
+    if (address === store.self) return undefined;
+    const id = await methods.parvaneResolveExactAddress({ address });
+    if (!id) return undefined;
+    addContactAddress(address);
+    return id;
+  },
+
+  deleteContact({ id }: { id: string; accessHash?: string }) {
+    const address = store.getAddressForId(id);
+    if (!address) return Promise.resolve(undefined);
+    store.removeContact(address);
+    persistContacts();
+    sendUpdate({ '@type': 'deleteContact', id });
+    return Promise.resolve(undefined);
   },
 
   async updateProfile({ firstName, lastName }: { firstName?: string; lastName?: string; about?: string }) {
@@ -1810,14 +1924,7 @@ const methods = {
     const user = store.buildApiUser(store.self);
     sendUpdate({ '@type': 'updateUser', id: user.id, user });
     sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });
-    return {
-      photo: {
-        mediaType: 'photo' as const,
-        id: fileId,
-        date: Math.floor(Date.now() / 1000),
-        sizes: [{ type: 'x' as const, width: 640, height: 640 }],
-      },
-    };
+    return { photo: buildAvatarPhoto(fileId) };
   },
 
   fetchCurrentUser() {

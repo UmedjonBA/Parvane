@@ -43,7 +43,9 @@ import buildStyle from '../../util/buildStyle';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { processDeepLink } from '../../util/deeplink';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
-import { parseInitialLocationHash, parseLocationHash } from '../../util/routing';
+import {
+  getInitialLocationHash, parseInitialLocationHash, parseLocationHash, resetLocationHash,
+} from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
 
 import useInterval from '../../hooks/schedulers/useInterval';
@@ -283,6 +285,7 @@ const Main = ({
     loadGiftAuction,
     loadPromoData,
     loadActiveGiftAuctions,
+    openChatByUsername,
   } = getActions();
 
   if (DEBUG && !DEBUG_isLogged) {
@@ -447,6 +450,14 @@ const Main = ({
   useEffect(() => {
     if (!isSynced) return;
     updatePageTitle();
+
+    // Parvane: ссылка на пользователя `<origin>/#@<ник>` (QR-код профиля)
+    const userLinkMatch = getInitialLocationHash().match(/^#@([A-Za-z0-9_.@-]+)$/);
+    if (userLinkMatch) {
+      resetLocationHash();
+      openChatByUsername({ username: userLinkMatch[1] });
+      return;
+    }
 
     const parsedInitialLocationHash = parseInitialLocationHash();
     if (parsedInitialLocationHash?.tgaddr) {

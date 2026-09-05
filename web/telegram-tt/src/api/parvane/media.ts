@@ -44,7 +44,8 @@ type CachedMedia = { blob: Blob; mimeType: string } | undefined;
 
 const UPLOAD_CHUNK_BYTES = 192 * 1024;
 const MEDIA_TIMEOUT_MS = 30000;
-const MEDIA_URL_REGEX = /^(?:photo|document)([\w-]+?)(?:\?|$)/;
+// `wallpaper<id>` — локальные обои (uploadWallpaper), блоб лежит в cacheByFileId
+const MEDIA_URL_REGEX = /^(?:photo|document|wallpaper)([\w-]+?)(?:\?|$)/;
 const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
 // Статичная карта геолокации: tt просит `staticMap:<hash>?lat&long&w&h&zoom&scale`
 // (Telegram отдаёт картинку со своего сервера). Мы склеиваем OSM-тайлы,

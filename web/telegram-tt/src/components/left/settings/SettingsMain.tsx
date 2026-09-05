@@ -128,7 +128,14 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
           >
             {lang('Devices')}
           </ListItem>
-          {/* Parvane: Language скрыт (лангпаки грузятся с серверов Telegram) */}
+          <ListItem
+            icon="language"
+            narrow
+            onClick={() => openSettingsScreen({ screen: SettingsScreens.Language })}
+          >
+            {lang('Language')}
+            <span className="settings-item__current-value">{lang.languageInfo.nativeName}</span>
+          </ListItem>
           <ListItem
             icon="stickers"
             narrow

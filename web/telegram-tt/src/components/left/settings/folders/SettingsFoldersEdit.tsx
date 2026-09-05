@@ -46,6 +46,9 @@ import InputText from '../../../ui/InputText';
 import ListItem from '../../../ui/ListItem';
 import FolderIconPickerMenu from './FolderIconPickerMenu';
 
+// Parvane: ссылок на папки (chatlist invites) нет
+const IS_FOLDER_LINKS_SUPPORTED = false;
+
 type OwnProps = {
   state: FoldersState;
   dispatch: FolderEditDispatch;
@@ -538,35 +541,41 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
           {lang('FilterColorHint')}
         </IslandDescription>
 
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('FolderLinkScreen.Title')}
-        </IslandTitle>
-        <Island>
-          <ListItem
-            className="settings-folders-list-item color-primary"
-            icon="add"
-            narrow
-            onClick={handleCreateInviteClick}
-          >
-            {oldLang('ChatListFilter.CreateLinkNew')}
-          </ListItem>
-
-          {invites?.map((invite) => (
+        {/* Parvane: ссылки на папки (chatlist invites) — серверная функция
+            Telegram, у нас её нет; секцию не показываем */}
+        {IS_FOLDER_LINKS_SUPPORTED && (
+          <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+            {oldLang('FolderLinkScreen.Title')}
+          </IslandTitle>
+        )}
+        {IS_FOLDER_LINKS_SUPPORTED && (
+          <Island>
             <ListItem
-              className="settings-folders-list-item"
-              icon="link"
+              className="settings-folders-list-item color-primary"
+              icon="add"
               narrow
-              multiline
-              onClick={handleEditInviteClick}
-              clickArg={invite.url}
+              onClick={handleCreateInviteClick}
             >
-              <span className="title" dir="auto">{invite.title || invite.url}</span>
-              <span className="subtitle">
-                {oldLang('ChatListFilter.LinkLabelChatCount', invite.peerIds.length, 'i')}
-              </span>
+              {oldLang('ChatListFilter.CreateLinkNew')}
             </ListItem>
-          ))}
-        </Island>
+
+            {invites?.map((invite) => (
+              <ListItem
+                className="settings-folders-list-item"
+                icon="link"
+                narrow
+                multiline
+                onClick={handleEditInviteClick}
+                clickArg={invite.url}
+              >
+                <span className="title" dir="auto">{invite.title || invite.url}</span>
+                <span className="subtitle">
+                  {oldLang('ChatListFilter.LinkLabelChatCount', invite.peerIds.length, 'i')}
+                </span>
+              </ListItem>
+            ))}
+          </Island>
+        )}
       </Surface>
 
       <FloatingActionButton
