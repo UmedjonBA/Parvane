@@ -66,8 +66,11 @@ const NewChatStep1: FC<OwnProps & StateProps> = ({
     const foundContactIds = localContactIds
       ? filterPeersByQuery({ ids: localContactIds, query: searchQuery, type: 'user' }) : [];
 
+    // Parvane: выбранные остаются в списке — найденный через поиск не-контакт
+    // после выбора (сброс строки поиска) пропадал из списка
     return sortChatIds(
       unique([
+        ...(selectedMemberIds || []),
         ...foundContactIds,
         ...(localPeerIds || []),
         ...(globalPeerIds || []),
