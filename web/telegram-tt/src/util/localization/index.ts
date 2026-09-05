@@ -346,6 +346,12 @@ function createTranslationFn(): LangFn {
   return fn;
 }
 
+// Parvane: мост для старого lang-провайдера — строка нового пакета по ключу
+// (с учётом текущего языка и формы множественного числа), без подстановок
+export function getLangStringByKey(key: string, count = 0): string | undefined {
+  return getString(key as LangKey, count);
+}
+
 export function getTranslationFn(): LangFn {
   return translationFn;
 }

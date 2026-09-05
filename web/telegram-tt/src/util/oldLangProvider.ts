@@ -3,14 +3,11 @@ import { getGlobal } from '../global';
 import type { ApiOldLangPack, ApiOldLangString } from '../api/types';
 import type { LangCode, TimeFormat } from '../types';
 
-import {
-  LANG_CACHE_NAME, LANG_PACKS,
-} from '../config';
+import { LANG_PACKS } from '../config';
 import { selectSharedSettings } from '../global/selectors/sharedState';
 import { callApi } from '../api/gramjs';
-import * as cacheApi from './cacheApi';
 import { createCallbackManager } from './callbacks';
-import { loadAndChangeLanguage } from './localization';
+import { addLocalizationCallback, getLangStringByKey, loadAndChangeLanguage } from './localization';
 import { formatInteger } from './textFormat';
 
 const FALLBACK_LANG_CODE = 'en';
@@ -129,7 +126,7 @@ function createLangFn() {
       }
     }
 
-    const langString = langPack?.[key];
+    const langString = langPack?.[key] || bridgeFromNewLangPack(key, value, pluralValue);
     if (!langString) {
       return key;
     }
@@ -137,6 +134,23 @@ function createLangFn() {
     return processTranslation(langString, key, value, format, pluralValue);
   };
 }
+
+// Parvane: ключа нет в синтезированном старом пакете — берём строку нового
+// пакета (fallback.strings / ru.strings). Плейсхолдеры `{name}` превращаем в
+// позиционные `%@`, форму множественного числа выбирает новый провайдер
+function bridgeFromNewLangPack(key: string, value?: any, pluralValue?: number): string | undefined {
+  const count = pluralValue ?? (typeof value === 'number' ? value : 0);
+  const bridged = getLangStringByKey(key, count);
+  if (!bridged) return undefined;
+  return bridged.replace(/\{[A-Za-z0-9_]+\}/g, '%@');
+}
+
+// Смена языка/подгрузка нового пакета должна сбросить кэш мостовых строк и
+// перерисовать компоненты на useOldLang
+addLocalizationCallback(() => {
+  cache.clear();
+  runCallbacks();
+});
 
 let translationFn: LangFn = createLangFn();
 
@@ -164,12 +178,11 @@ export async function oldSetLanguage(langCode: LangCode, callback?: NoneToVoidFu
     return;
   }
 
-  let newLangPack = await cacheApi.fetch(LANG_CACHE_NAME, langCode, cacheApi.Type.Json);
+  // Parvane: старый пакет синтезируется локально (oldLangPack.ts), кэш
+  // Cache Storage не нужен — из-за него правки словаря не доезжали до клиента
+  const newLangPack = await fetchRemote(langCode);
   if (!newLangPack) {
-    newLangPack = await fetchRemote(langCode);
-    if (!newLangPack) {
-      return;
-    }
+    return;
   }
 
   cache.clear();
@@ -208,7 +221,6 @@ export function setTimeFormat(timeFormat: TimeFormat) {
 async function fetchRemote(langCode: string): Promise<ApiOldLangPack | undefined> {
   const remote = await callApi('oldFetchLangPack', { sourceLangPacks: LANG_PACKS, langCode });
   if (remote) {
-    await cacheApi.save(LANG_CACHE_NAME, langCode, remote.langPack);
     return remote.langPack;
   }
 

@@ -314,6 +314,15 @@ const SettingsFoldersMain = ({
                   secondaryIcon="more"
                   multiline
                   contextActions={[
+                    // Parvane: явный пункт «Изменить» — иначе не находили, как
+                    // добавить/убрать чаты в готовой папке (клик по строке)
+                    {
+                      handler: () => {
+                        if (!isBlocked) onEditFolder(foldersById[folder.id]);
+                      },
+                      title: lang('EditFolder'),
+                      icon: 'edit',
+                    },
                     {
                       handler: () => {
                         openDeleteChatFolderModal({ folderId: folder.id });

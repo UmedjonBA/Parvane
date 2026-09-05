@@ -159,12 +159,31 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Уход со страницы: дописать очередь кэша сразу (иначе удаление/очистка,
   // сделанные за <500 мс до reload, терялись — курсор уже записан, а сервер
   // скрытое повторно не отдаст → в кэше навсегда оставались старые строки)
+  // Журнал исходящих и черновики тоже: сообщение «Избранному» без других
+  // устройств живёт ТОЛЬКО в журнале — reload сразу после отправки терял его
+  function flushRecordSaves() {
+    if (journalSaveTimer) {
+      clearTimeout(journalSaveTimer);
+      journalSaveTimer = undefined;
+      void secureStorage()?.then((storage) => storage.saveRecord('journal', journalCache || [])).catch(() => undefined);
+    }
+    if (draftsSaveTimer) {
+      clearTimeout(draftsSaveTimer);
+      draftsSaveTimer = undefined;
+      void secureStorage()?.then((storage) => storage.saveRecord('drafts', draftsCache || {})).catch(() => undefined);
+    }
+  }
+
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', () => {
       void flushHistoryQueue();
+      flushRecordSaves();
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') void flushHistoryQueue();
+      if (document.visibilityState === 'hidden') {
+        void flushHistoryQueue();
+        flushRecordSaves();
+      }
     });
   }
 
@@ -434,6 +453,31 @@ export function createLocalState(deps: LocalStateDependencies) {
     return loadBlocked().includes(address);
   }
 
+  // Явно добавленные контакты (адреса) — телефонной книги у Parvane нет
+  function loadContacts(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('contacts')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function saveContacts(list: string[]) {
+    localStorage.setItem(storageKey('contacts'), JSON.stringify(list));
+  }
+
+  function loadNonContacts(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('noncontacts')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function saveNonContacts(list: string[]) {
+    localStorage.setItem(storageKey('noncontacts'), JSON.stringify(list));
+  }
+
   // «Отметить непрочитанным»: chatId с ручной пометкой (сервер такого не хранит)
   function loadUnreadMarks(): string[] {
     try {
@@ -535,7 +579,8 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function clearUserData(user: string) {
     [
-      'scheduled', 'hist', 'ttl', 'blocked', 'folders', 'drafts', 'pinned', 'archived', 'notify', 'notifydefaults',
+      'scheduled', 'hist', 'ttl', 'blocked', 'contacts', 'noncontacts', 'folders', 'drafts', 'pinned', 'archived',
+      'notify', 'notifydefaults',
     ].forEach((part) => {
       localStorage.removeItem(`parvane:${part}:${user}`);
     });
@@ -599,6 +644,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     fetchScheduledHistory,
     loadArchived,
     loadBlocked,
+    loadContacts,
+    loadNonContacts,
     loadDeletedChats,
     loadUnreadMarks,
     markChatDeleted,
@@ -617,6 +664,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     readOwnJournal,
     rescheduleMessage,
     saveBlocked,
+    saveContacts,
+    saveNonContacts,
     saveUnreadMarks,
     saveDraft,
     saveFolders,

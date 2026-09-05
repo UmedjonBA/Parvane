@@ -21,7 +21,6 @@ import buildClassName from '../../../util/buildClassName';
 import buildStyle from '../../../util/buildStyle';
 import { CLIPBOARD_ITEM_SUPPORTED, copyTextToClipboard } from '../../../util/clipboard';
 import { createStyledQrCode } from '../../../util/qrCode/buildStyledQrCode';
-import { LOCAL_TGS_URLS } from '../../common/helpers/animatedAssets';
 import formatUsername from '../../common/helpers/formatUsername';
 import {
   generateQrCodeCard,
@@ -36,7 +35,6 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import AnimatedIcon from '../../common/AnimatedIcon';
 import Avatar from '../../common/Avatar';
 import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
@@ -298,14 +296,14 @@ const QrCodeModal = ({
               className={buildClassName(styles.qrContainer, isQrMounted && styles.qrContainerReady)}
               data-stricterdom-ignore
             />
-            <AnimatedIcon
-              tgsUrl={LOCAL_TGS_URLS.QrPlane}
-              size={QR_PLANE_SIZE}
-              play
+            {/* Parvane: в центре QR — иконка приложения, а не самолётик Telegram */}
+            <img
+              src="favicon.svg"
+              alt=""
+              width={QR_PLANE_SIZE}
+              height={QR_PLANE_SIZE}
               className={buildClassName(styles.qrPlane, !isQrMounted && styles.qrPlaneHidden)}
-              nonInteractive
-              noLoop={false}
-              noTransition
+              draggable={false}
             />
             <div className={buildClassName(styles.qrLoading, isQrMounted && styles.qrLoadingHidden)}>
               <Loading />

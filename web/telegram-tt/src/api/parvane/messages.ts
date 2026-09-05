@@ -134,8 +134,41 @@ export function createMessageController(deps: MessageDependencies) {
   // с desktop), остальные устройства едут в copies. Плюс best-effort копии для
   // СВОИХ других устройств (recipient пуст — sealed sender, владельца задаёт
   // signing_key), чтобы исходящие читались на втором устройстве
-  async function sealForAddress(toAddress: string, innerJson: string) {
+  type SealResult =
+    | { isLocalOnly: true; content?: undefined; copies: WireDeviceCopy[] }
+    | { isLocalOnly: false; content: WireMessageContent; copies: WireDeviceCopy[] };
+
+  async function sealForAddress(toAddress: string, innerJson: string): Promise<SealResult> {
     const engine = requireE2e(deps.getE2e());
+    const self = store().self;
+
+    if (toAddress === self) {
+      // «Избранное»: Olm-сессии с самим собой нет — сообщение живёт в журнале
+      // исходящих, на сервер уходят только копии для СВОИХ других устройств;
+      // без них публиковать нечего (isLocalOnly)
+      const selfSealed = await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId)
+        .catch(() => undefined);
+      if (!selfSealed?.copies.length) return { isLocalOnly: true, copies: [] };
+      const primary = selfSealed.copies.find((copy) => copy.deviceId === '') || selfSealed.copies[0];
+      return {
+        isLocalOnly: false,
+        content: {
+          kind: 'encrypted',
+          ciphertext: primary.ciphertext,
+          ctype: primary.ctype,
+          sender_identity: selfSealed.senderIdentity,
+          sender_signing_key: engine.signingKey,
+        },
+        copies: selfSealed.copies.map((copy) => ({
+          recipient: '',
+          signing_key: copy.deviceSigningKey,
+          device_id: copy.deviceId,
+          ciphertext: copy.ciphertext,
+          ctype: copy.ctype,
+        })),
+      };
+    }
+
     const sealed = requireEncrypted(
       await engine.encryptForDevices(toAddress, innerJson, fetchPrekeyBundle),
       `No usable prekey/session for ${toAddress}.`,
@@ -146,7 +179,7 @@ export function createMessageController(deps: MessageDependencies) {
     }));
     try {
       const selfSealed = await engine.encryptForDevices(
-        store().self, innerJson, fetchPrekeyBundle, engine.deviceId,
+        self, innerJson, fetchPrekeyBundle, engine.deviceId,
       );
       selfSealed?.copies.forEach((copy) => {
         // signing_key ЦЕЛЕВОГО устройства: по нему то устройство заберёт копию
@@ -170,7 +203,7 @@ export function createMessageController(deps: MessageDependencies) {
       sender_identity: sealed.senderIdentity,
       sender_signing_key: engine.signingKey,
     };
-    return { content, copies };
+    return { isLocalOnly: false, content, copies };
   }
 
   async function distributeGroupKey(group: string, members: string[]) {
@@ -298,18 +331,21 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     const inner = JSON.stringify({ from: currentStore.self, content: wireContent });
+
     const sealed = await sealForAddress(toAddress, inner);
-    publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-      id: uuid,
-      from: '',
-      ts,
-      token: token(),
-      payload: {
-        to: toAddress,
-        content: sealed.content,
-        copies: sealed.copies,
-      },
-    }));
+    if (!sealed.isLocalOnly) {
+      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
+        id: uuid,
+        from: '',
+        ts,
+        token: token(),
+        payload: {
+          to: toAddress,
+          content: sealed.content,
+          copies: sealed.copies,
+        },
+      }));
+    }
     if (!isEphemeral) {
       deps.localState.appendOwnJournal({
         id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
@@ -871,31 +907,31 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     const plainContent = wireContent;
-    let sealedCopies: WireDeviceCopy[];
+    let sealed: SealResult;
     try {
       const innerJson = JSON.stringify({ from: currentStore.self, content: wireContent });
-      const sealed = await sealForAddress(toAddress, innerJson);
-      wireContent = sealed.content;
-      sealedCopies = sealed.copies;
+      sealed = await sealForAddress(toAddress, innerJson);
     } catch (error) {
       reportEncryptionSendFailure(chat.id, localMessage.id, error);
       return;
     }
 
     const ts = Math.floor(Date.now() / 1000);
-    try {
-      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id: uuid,
-        from: '',
-        ts,
-        token: token(),
-        payload: {
-          to: toAddress, content: wireContent, reply_to: replyToUuid, copies: sealedCopies,
-        },
-      }));
-    } catch (error) {
-      reportEncryptionSendFailure(chat.id, localMessage.id, error);
-      return;
+    if (!sealed.isLocalOnly) {
+      try {
+        publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
+          id: uuid,
+          from: '',
+          ts,
+          token: token(),
+          payload: {
+            to: toAddress, content: sealed.content, reply_to: replyToUuid, copies: sealed.copies,
+          },
+        }));
+      } catch (error) {
+        reportEncryptionSendFailure(chat.id, localMessage.id, error);
+        return;
+      }
     }
     if (!ttlSecs) {
       deps.localState.appendOwnJournal({
@@ -969,6 +1005,11 @@ export function createMessageController(deps: MessageDependencies) {
     } else {
       const inner = JSON.stringify({ from: currentStore.self, content: plainContent });
       const sealed = await sealForAddress(toAddress, inner);
+      if (sealed.isLocalOnly) {
+        // Правка в «Избранном» без других устройств — только локально
+        engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
+        return;
+      }
       encryptedContent = sealed.content;
       editCopies = sealed.copies;
     }

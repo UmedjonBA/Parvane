@@ -80,6 +80,13 @@ export const INITIAL_PERFORMANCE_STATE_MIN: PerformanceType = {
   textStreaming: false,
 };
 
+// Parvane: язык интерфейса на чистой установке — по языку браузера (в сборке
+// есть только английский и русский); дальше выбор хранится в настройках
+function getDefaultLanguage() {
+  const browserLanguage = typeof navigator !== 'undefined' ? navigator.language : '';
+  return /^ru\b/i.test(browserLanguage) ? 'ru' : 'en';
+}
+
 export const INITIAL_SHARED_STATE: SharedState = {
   settings: {
     theme: 'light',
@@ -93,7 +100,7 @@ export const INITIAL_SHARED_STATE: SharedState = {
     messageSendKeyCombo: 'enter',
     performance: INITIAL_PERFORMANCE_STATE_MAX,
     shouldSkipBrowserCloseConfirmation: false,
-    language: 'en',
+    language: getDefaultLanguage(),
     timeFormat: '24h',
     wasTimeFormatSetManually: false,
     isConnectionStatusMinimized: true,
