@@ -80,6 +80,7 @@ import {
 import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getStickerBlobMime } from './stickers';
 import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
+import { buildBuiltinWallpapers } from './wallpapers';
 import {
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
@@ -1203,7 +1204,11 @@ const methods = {
     if (!connection || !query.trim()) {
       return { accountResultIds: [], globalResultIds: [] };
     }
-    const raw = await connection.request(TOPIC_IDENTITY_SEARCH, JSON.stringify({ query: query.trim() }));
+    // Ники строчные; мобильная клавиатура ставит заглавную первую букву и
+    // пробел — с телефона поиск «Asd » не находил «asd»
+    const raw = await connection.request(TOPIC_IDENTITY_SEARCH, JSON.stringify({
+      query: query.trim().replace(/^@/, '').toLowerCase(),
+    }));
     const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
     const globalResultIds: string[] = [];
     users.forEach((u) => {
@@ -1253,11 +1258,12 @@ const methods = {
   },
 
   // ── фон чата ────────────────────────────────────────────────────────────────
-  // Галереи обоев Telegram нет: пустой список вместо вечного спиннера; свою
-  // картинку клиент кладёт в CUSTOM_BG_CACHE_NAME сам (WallpaperTile), нам
-  // достаточно отдать её как локальный документ
-  fetchWallpapers() {
-    return Promise.resolve({ wallpapers: [] as ApiWallpaper[] });
+  // Галереи обоев Telegram нет: встроенные градиенты рисуем на клиенте
+  // (wallpapers.ts); свою картинку клиент кладёт в CUSTOM_BG_CACHE_NAME сам
+  // (WallpaperTile), нам достаточно отдать её как локальный документ
+  async fetchWallpapers() {
+    const wallpapers = await buildBuiltinWallpapers(mediaService.cacheBlob);
+    return { wallpapers };
   },
 
   uploadWallpaper(file: File) {
@@ -1858,8 +1864,18 @@ const methods = {
   // Контакты: явно добавленные плюс те, с кем есть личная переписка (см.
   // ParvaneStore.isContact). Раньше сюда попадал весь каталог сервера
   async fetchContactList() {
-    await syncController.ensureSynced();
-    const users = store.getKnownUserAddresses()
+    // Сорвавшийся синк (обрыв WS) не должен оставлять экран контактов без ответа
+    await syncController.ensureSynced().catch(() => undefined);
+    // Явно добавленные без переписки после reload в сторе не «известны» —
+    // регистрируем их и подтягиваем имена, иначе после перезагрузки пропадали
+    const explicit = store.getContactLists().added.filter((address) => address !== store.self);
+    explicit.forEach((address) => {
+      if (!store.getKnownUserAddresses().includes(address)) {
+        store.getIdForAddress(address);
+        syncController.announcePeer(address);
+      }
+    });
+    const users = Array.from(new Set([...store.getKnownUserAddresses(), ...explicit]))
       .filter((address) => address !== store.self && store.isContact(address))
       .map((address) => store.buildApiUser(address));
     const userStatusesById: Record<string, ApiUserStatus> = {};
@@ -1879,7 +1895,7 @@ const methods = {
 
   async importContact({ phone }: { phone?: string; firstName?: string; lastName?: string }) {
     // tt передаёт «телефон» — у нас это ник или ник@сервер
-    const input = (phone || '').trim().replace(/^@/, '');
+    const input = (phone || '').trim().replace(/^@/, '').toLowerCase();
     if (!input) return undefined;
     const info = connectionController.getLastServerInfo();
     const address = canonicalAddress(input, info?.domain || '');

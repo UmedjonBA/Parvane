@@ -642,6 +642,15 @@ export class E2eEngine {
 
   // Устройства контакта, с которыми уже есть сессии — identity передаётся в
   // prekeys.fetch как known_devices (их one-time не расходуются)
+  // Ключи подписи ВСЕХ устройств контакта (для проверки сигналов звонка):
+  // identity хранит один pubkey на пользователя — ключ последнего вошедшего
+  // устройства, из-за чего звонок со второго устройства (телефон) отвергался
+  async getContactSigningKeys(contact: string, fetchBundle: BundleFetcher): Promise<string[]> {
+    await this.refreshContactDevices(contact, fetchBundle, true);
+    const devices = this.devicesByContact.get(contact) || {};
+    return Object.values(devices).map((device) => device.signing).filter(Boolean);
+  }
+
   getKnownDeviceIds(contact: string): string[] {
     const devices = this.devicesByContact.get(contact) || {};
     const known = Object.entries(devices)

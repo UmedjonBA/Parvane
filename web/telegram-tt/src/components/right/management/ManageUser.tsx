@@ -8,8 +8,7 @@ import { getActions, withGlobal } from '../../../global';
 import type { ApiPhoto, ApiUser } from '../../../api/types';
 import { ManagementProgress } from '../../../types';
 
-import { MUTE_INDEFINITE_TIMESTAMP, SERVICE_NOTIFICATIONS_USER_ID, UNMUTE_TIMESTAMP } from '../../../config';
-import { isUserBot } from '../../../global/helpers';
+import { MUTE_INDEFINITE_TIMESTAMP, UNMUTE_TIMESTAMP } from '../../../config';
 import { getIsChatMuted } from '../../../global/helpers/notifications';
 import {
   selectChat,
@@ -221,7 +220,9 @@ const ManageUser: FC<OwnProps & StateProps> = ({
     return undefined;
   }
 
-  const canSetPersonalPhoto = !isUserBot(user) && user.id !== SERVICE_NOTIFICATIONS_USER_ID;
+  // Parvane: своё фото для контакта / предложить фото — серверная функция Telegram
+
+  const canSetPersonalPhoto = false;
   const isLoading = progress === ManagementProgress.InProgress;
   const noteSymbolsLeft = contactNoteLimit - note.length;
 

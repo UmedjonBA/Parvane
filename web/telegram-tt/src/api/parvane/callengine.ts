@@ -23,7 +23,7 @@ const RING_TIMEOUT_MS = 45000;
 
 type CallCallbacks = {
   sendSignal: (to: string, signal: WireCallSignal) => void;
-  getPeerSigningKey: (peer: string) => Promise<string | undefined>;
+  getPeerSigningKeys: (peer: string) => Promise<string[]>;
   // ICE-конфигурация с сервера (STUN + краткоживущие TURN-креды); при
   // недоступности возвращает фоллбэк
   getIceServers: () => Promise<RTCIceServer[]>;
@@ -56,7 +56,7 @@ export class CallEngine {
 
   private peer?: string;
 
-  private peerSigningKey?: string;
+  private peerSigningKeys: string[] = [];
 
   private isCaller = false;
 
@@ -344,7 +344,7 @@ export class CallEngine {
     this.localStream = undefined;
     this.callId = undefined;
     this.peer = undefined;
-    this.peerSigningKey = undefined;
+    this.peerSigningKeys = [];
     this.isCaller = false;
     this.isAwaitingAcceptance = false;
     this.remoteReady = false;
@@ -360,15 +360,15 @@ export class CallEngine {
   }
 
   private async loadPeerSigningKey(peer: string, callId: string) {
-    let key: string | undefined;
+    let keys: string[];
     try {
-      key = await this.cb.getPeerSigningKey(peer);
+      keys = await this.cb.getPeerSigningKeys(peer);
     } catch {
-      key = undefined;
+      keys = [];
     }
     if (!this.isCurrentCall(peer, callId)) return false;
-    this.peerSigningKey = key;
-    return Boolean(key);
+    this.peerSigningKeys = keys;
+    return keys.length > 0;
   }
 
   private signSdp(sdp: string) {
@@ -380,8 +380,9 @@ export class CallEngine {
   }
 
   private verifySdp(sdp: string, signature?: string) {
-    return Boolean(this.callId && this.peerSigningKey && signature
-      && this.cb.verify(this.peerSigningKey, buildSignedData(this.callId, sdp), signature));
+    if (!this.callId || !signature) return false;
+    const data = buildSignedData(this.callId, sdp);
+    return this.peerSigningKeys.some((key) => this.cb.verify(key, data, signature));
   }
 
   private failSecurity(notifyPeer?: 'reject' | 'hangup') {

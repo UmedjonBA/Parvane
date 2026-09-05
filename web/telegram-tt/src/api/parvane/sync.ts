@@ -523,6 +523,23 @@ export function createSyncController(deps: SyncDependencies) {
     // нет (сброс после ресинка/реконнекта), смена пина всё равно должна дойти
     // до pinnedIds — иначе у собеседника на сообщении иконка есть, а панели нет
     const wasPinned = previousFlags ? previousFlags.pinned : Boolean(store.getMessageByUuid(stored.id)?.isPinned);
+
+    // Надгробие (deleted): сообщение просто исчезает. Раньше неизвестное стору
+    // надгробие рисовалось новым сообщением «🗑 Сообщение удалено», а у автора
+    // после собственного удаления оно так же воскресало из эха инбокса
+    if (stored.deleted) {
+      deps.localState.deleteHistoryRecord(stored.id);
+      const existing = store.getMessageByUuid(stored.id);
+      if (existing) {
+        store.removeMessage(existing.chatId, existing.id);
+        deps.sendUpdate({ '@type': 'deleteMessages', ids: [existing.id], chatId: existing.chatId });
+      }
+      if (shouldAckIncoming && stored.from && stored.from !== store.self) {
+        sendAck(rawStored.id, wasSealed ? stored.from : '');
+      }
+      return;
+    }
+
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
     // Кэш истории: только серверные строки (shouldAck) — восстановление из
@@ -561,11 +578,6 @@ export function createSyncController(deps: SyncDependencies) {
       return;
     }
 
-    if (flags.deleted && !previousFlags?.deleted) {
-      deps.localState.deleteHistoryRecord(stored.id);
-      deps.sendUpdate({ '@type': 'deleteMessages', ids: [message.id], chatId: message.chatId });
-      return;
-    }
     if ((!previousFlags || flags.snapshot !== previousFlags.snapshot) && !flags.deleted) {
       deps.sendUpdate({
         '@type': 'updateMessage', chatId: message.chatId, id: message.id, isFull: true, message,
@@ -608,8 +620,15 @@ export function createSyncController(deps: SyncDependencies) {
     if (!cursor?.lastSeenUuid) return false;
     const records = await deps.localState.loadHistoryRecords();
     if (!records.length) return false;
-    records.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
-    for (const stored of records) {
+    // «Избранное» без других устройств живёт ТОЛЬКО в журнале исходящих (на
+    // сервер не уходит) — без подмешивания журнала чат пустел после reload
+    const store = deps.getStore();
+    const knownIds = new Set(records.map((record) => record.id));
+    const savedNotes = (await deps.localState.readOwnJournal())
+      .filter((message) => message.to === store.self && !knownIds.has(message.id));
+    const ordered = records.concat(savedNotes)
+      .sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
+    for (const stored of ordered) {
       await applyStoredUpdate(stored, false);
     }
     lastSeenUuid = cursor.lastSeenUuid;
@@ -682,6 +701,11 @@ export function createSyncController(deps: SyncDependencies) {
         if (verdict === 'ok' && verify.claimedFrom !== store.self) {
           deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity);
         }
+      }
+      // Надгробия в полном синке не рисуем (см. applyStoredUpdate)
+      if (stored.deleted) {
+        deps.localState.deleteHistoryRecord(stored.id);
+        continue;
       }
       deps.media.rememberKeys(stored.content);
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
