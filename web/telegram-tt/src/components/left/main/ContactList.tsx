@@ -1,5 +1,7 @@
 import type { FC } from '../../../lib/teact/teact';
-import { memo, useCallback, useMemo } from '../../../lib/teact/teact';
+import {
+  memo, useCallback, useEffect, useMemo,
+} from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiUser, ApiUserStatus } from '../../../api/types';
@@ -42,7 +44,14 @@ const ContactList: FC<OwnProps & StateProps> = ({
   const {
     openChat,
     openNewContactDialog,
+    loadContactList,
   } = getActions();
+
+  // Parvane: первая загрузка списка (Main, по isSynced) могла сорваться при
+  // обрыве соединения — экран крутил спиннер до reload. Повторяем при открытии
+  useEffect(() => {
+    if (!contactIds) loadContactList();
+  }, [contactIds, loadContactList]);
 
   const lang = useOldLang();
   const { isMobile } = useAppLayout();

@@ -442,6 +442,9 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   AnonymousForward: 'Anonymous',
   NewContact: 'New Contact',
   'Contacts.PhoneNumber.NotRegistred': 'There is no user with this nickname.',
+  'UserInfo.NotificationsEnabled': 'Enabled',
+  'UserInfo.NotificationsDisabled': 'Disabled',
+  DeleteContact: 'Delete Contact',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -937,6 +940,9 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   AnonymousForward: 'Аноним',
   NewContact: 'Новый контакт',
   'Contacts.PhoneNumber.NotRegistred': 'Пользователя с таким ником нет.',
+  'UserInfo.NotificationsEnabled': 'Включены',
+  'UserInfo.NotificationsDisabled': 'Выключены',
+  DeleteContact: 'Удалить контакт',
 };
 
 function isRussian(langCode: string) {

@@ -1,5 +1,5 @@
 import type { ApiMessage, ApiUpdate } from '../types';
-import type { E2eEngine } from './e2e';
+import type { E2eEngine, WireDeviceBundle } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
@@ -16,11 +16,11 @@ import {
   TOPIC_CALL_ICE_REQUEST,
   TOPIC_CALL_SIGNAL,
   TOPIC_IDENTITY_RESOLVE,
+  TOPIC_PREKEYS_FETCH,
   type WireCallRecord,
   type WireEvent,
   type WireIceServer,
-  type WireUserInfo,
-} from './wire';
+  type WireUserInfo } from './wire';
 
 type CallDependencies = {
   getConnection: () => GatewayConnection | undefined;
@@ -187,13 +187,43 @@ export function createCallController(deps: CallDependencies) {
     }, delayMs);
   }
 
-  async function fetchSigningKey(peer: string) {
-    const raw = await deps.getConnection()!.request(
-      TOPIC_IDENTITY_RESOLVE,
-      JSON.stringify({ usernames: [peer] }),
-    );
-    const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
-    return users.find(({ username }) => username === peer)?.pubkey;
+  async function fetchPrekeyBundle(user: string) {
+    const e2eEngine = deps.getE2e();
+    const raw = await deps.getConnection()!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
+      token: deps.getToken(), user, known_devices: e2eEngine?.getKnownDeviceIds(user) || [],
+    }));
+    return JSON.parse(raw) as {
+      ok: boolean;
+      identity_key?: string;
+      signed_prekey?: string;
+      one_time?: string;
+      devices?: WireDeviceBundle[];
+    };
+  }
+
+  // Ключи подписи собеседника: pubkey из identity (ключ последнего вошедшего
+  // устройства) плюс signing-ключи всех его устройств из каталога prekeys —
+  // иначе звонок со второго устройства (телефон) падал на проверке подписи
+  async function fetchSigningKeys(peer: string): Promise<string[]> {
+    const keys = new Set<string>();
+    try {
+      const raw = await deps.getConnection()!.request(
+        TOPIC_IDENTITY_RESOLVE,
+        JSON.stringify({ usernames: [peer] }),
+      );
+      const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
+      const pubkey = users.find(({ username }) => username === peer)?.pubkey;
+      if (pubkey) keys.add(pubkey);
+    } catch {
+      // каталог недоступен — попробуем устройства
+    }
+    try {
+      const deviceKeys = await deps.getE2e()?.getContactSigningKeys(peer, fetchPrekeyBundle);
+      deviceKeys?.forEach((key) => keys.add(key));
+    } catch {
+      // нет списка устройств — остаёмся с identity pubkey
+    }
+    return Array.from(keys);
   }
 
   function setup() {
@@ -257,7 +287,7 @@ export function createCallController(deps: CallDependencies) {
         const envelope = buildWireEvent(store.self, deps.getToken(), { to, signal });
         deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
       },
-      getPeerSigningKey: fetchSigningKey,
+      getPeerSigningKeys: fetchSigningKeys,
       getIceServers,
       getIceTransportPolicy,
       sign: (data) => identity.signCallData(data),
@@ -277,7 +307,7 @@ export function createCallController(deps: CallDependencies) {
         });
         deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
       },
-      getPeerSigningKey: fetchSigningKey,
+      getPeerSigningKeys: fetchSigningKeys,
       getIceServers,
       getIceTransportPolicy,
       sign: (data) => identity.signCallData(data),

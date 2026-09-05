@@ -18,7 +18,7 @@ export type GroupPeerState = 'connecting' | 'active' | 'ended' | 'security_faile
 type GroupCallCallbacks = {
   // Контроллер сам добавляет gcall:-префикс к адресу получателя
   sendSignal: (peer: string, signal: WireCallSignal | WireGroupInvite) => void;
-  getPeerSigningKey: (peer: string) => Promise<string | undefined>;
+  getPeerSigningKeys: (peer: string) => Promise<string[]>;
   getIceServers: () => Promise<RTCIceServer[]>;
   getIceTransportPolicy: () => RTCIceTransportPolicy | undefined;
   sign: (data: string) => string;
@@ -45,7 +45,7 @@ class MeshPeerSession {
 
   private pendingCandidates: RTCIceCandidateInit[] = [];
 
-  private peerSigningKey?: string;
+  private peerSigningKeys: string[] = [];
 
   private isEnded = false;
 
@@ -181,11 +181,11 @@ class MeshPeerSession {
 
   private loadKey = async () => {
     try {
-      this.peerSigningKey = await this.cb.getPeerSigningKey(this.peer);
+      this.peerSigningKeys = await this.cb.getPeerSigningKeys(this.peer);
     } catch {
-      this.peerSigningKey = undefined;
+      this.peerSigningKeys = [];
     }
-    return Boolean(this.peerSigningKey);
+    return this.peerSigningKeys.length > 0;
   };
 
   private sign(sdp: string) {
@@ -197,8 +197,9 @@ class MeshPeerSession {
   }
 
   private verify(sdp: string, signature?: string) {
-    return Boolean(this.callId && this.peerSigningKey && signature
-      && this.cb.verify(this.peerSigningKey, buildSignedData(this.callId, sdp), signature));
+    if (!this.callId || !signature) return false;
+    const data = buildSignedData(this.callId, sdp);
+    return this.peerSigningKeys.some((key) => this.cb.verify(key, data, signature));
   }
 
   private fail() {

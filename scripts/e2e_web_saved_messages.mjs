@@ -10,6 +10,7 @@ import {
   assertNoPageErrors,
   findMessage,
   findMessageContainer,
+  openPrivateChatStrict,
   preparePage as preparePageShared,
   sendText,
 } from './e2e_web_helpers.mjs';
@@ -19,7 +20,9 @@ const preparePage = (context, user) => preparePageShared(context, user, PASSWORD
 
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
+const bobContext = await browser.newContext();
 let aliceSession;
+let bobSession;
 
 async function openSavedMessages(page) {
   await page.getByRole('button', { name: 'Open menu' }).first().click();
@@ -43,8 +46,19 @@ try {
   const m1 = `note-one-${suffix}`;
   const m2 = `note-two-${suffix}`;
 
+  const bob = `saved-bob-${suffix}@local`;
   aliceSession = await preparePage(aliceContext, alice);
+  bobSession = await preparePage(bobContext, bob);
   const { page } = aliceSession;
+
+  // История с собеседником нужна, чтобы reload шёл через локальный кэш
+  // (restoreFromCache), а не через полный синк — именно там терялось Избранное
+  await openPrivateChatStrict(page, bob);
+  await sendText(page, `hello-${suffix}`);
+  await openPrivateChatStrict(bobSession.page, alice);
+  await findMessage(bobSession.page, `hello-${suffix}`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await sendText(bobSession.page, `reply-${suffix}`);
+  await findMessage(page, `reply-${suffix}`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   await openSavedMessages(page);
   await sendText(page, m1);
@@ -63,7 +77,7 @@ try {
   await expectSent(page, m2);
   console.log('OK: Избранное пережило reload');
 
-  assertNoPageErrors({ alice: aliceSession });
+  assertNoPageErrors({ alice: aliceSession, bob: bobSession });
   console.log('OK: Избранное — отправка и persist');
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR;
