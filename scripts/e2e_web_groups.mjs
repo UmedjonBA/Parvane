@@ -292,9 +292,17 @@ try {
   const charlieItem = aliceSession.page.locator('#RightColumn .ListItem')
     .filter({ hasText: charlieName }).first();
   await charlieItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await charlieItem.click({ button: 'right' });
-  await aliceSession.page.getByRole('menuitem', { name: 'Remove from group' })
-    .click({ timeout: LOGIN_TIMEOUT_MS });
+  // Список участников перерисовывается по live-обновлениям (presence/typing),
+  // и открытое контекстное меню может отвалиться от DOM до клика
+  // («element is not stable» → «detached») — открываем меню заново
+  for (let attempt = 0; ; attempt++) {
+    await charlieItem.click({ button: 'right' });
+    const removed = await aliceSession.page.getByRole('menuitem', { name: 'Remove from group' })
+      .click({ timeout: 5000 }).then(() => true).catch(() => false);
+    if (removed) break;
+    if (attempt >= 4) throw new Error('контекстное меню участника не удержалось для «Remove from group»');
+    await aliceSession.page.waitForTimeout(500);
+  }
   await aliceSession.page.locator('.Modal').getByRole('button', { name: 'Remove', exact: true })
     .click({ timeout: LOGIN_TIMEOUT_MS });
   await charlieItem.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
