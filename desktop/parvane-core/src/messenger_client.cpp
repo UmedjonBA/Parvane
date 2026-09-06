@@ -114,6 +114,38 @@ void MessengerClient::deleteMessage(
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
+void MessengerClient::clearMessages(
+        const std::string &from, const std::vector<std::string> &messageIds,
+        const std::string &token) {
+    for (std::size_t offset = 0; offset < messageIds.size(); offset += kClearMaxIds) {
+        const auto end = std::min(messageIds.size(), offset + kClearMaxIds);
+        json ids = json::array();
+        for (auto i = offset; i < end; ++i) ids.push_back(messageIds[i]);
+        const json payload{{"message_ids", ids}};
+        _t.publish(topics::MsgClear,
+                   makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
+    }
+}
+
+void MessengerClient::onCleared(const std::string &self,
+                                std::function<void(std::vector<std::string>)> handler) {
+    _t.subscribe(topics::msgInbox(self),
+                 [handler = std::move(handler)](std::string, std::string payload) {
+                     try {
+                         const auto ev = json::parse(payload);
+                         const auto &p = ev.contains("payload") ? ev["payload"] : ev;
+                         if (!p.contains("cleared") || !p["cleared"].is_object()) return;
+                         const auto &ids = p["cleared"].value("message_ids", json::array());
+                         std::vector<std::string> out;
+                         for (const auto &id : ids) {
+                             if (id.is_string()) out.push_back(id.get<std::string>());
+                         }
+                         if (!out.empty()) handler(std::move(out));
+                     } catch (...) {
+                     }
+                 });
+}
+
 void MessengerClient::markRead(
         const std::string &from, const std::string &messageId,
         const std::string &token) {

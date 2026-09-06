@@ -29,22 +29,56 @@ namespace Parvane {
 // Логирует факт линковки транспорта и целевой NATS-URL (ранний sanity-check).
 void LogStartup();
 
+// Публичные параметры сервера (identity.server.info): домен адресов (ник →
+// ник@домен), режим подтверждения регистрации и бот Telegram.
+struct ServerInfo {
+	QString domain;
+	QString confirm = u"none"_q; // none | email | telegram
+	QString telegramBot;
+};
+// БЛОКИРУЮЩИЙ. При недоступности — домен по умолчанию "local", confirm none.
+[[nodiscard]] ServerInfo FetchServerInfo();
+// Голый ник → ник@домен (полный адрес возвращается как есть).
+[[nodiscard]] QString CanonicalAddress(const QString &input, const QString &domain);
+
 // Результат identity.token.issue.
 struct IssueResult {
 	bool ok = false;
 	QString token;
 	QString error;
+	// Двухфакторный вход: пароль верен, нужен Start в привязанном Telegram по
+	// deep link t.me/<bot>?start=<loginToken>; затем Issue с loginToken.
+	bool twofaRequired = false;
+	QString loginToken;
+	QString telegramBot;
 };
 
 // БЛОКИРУЮЩИЙ запрос identity.token.issue. Звать с воркер-потока (crl::async).
-[[nodiscard]] IssueResult Issue(const QString &user, const QString &password);
+[[nodiscard]] IssueResult Issue(
+	const QString &user,
+	const QString &password,
+	const QString &loginToken = QString());
 
 // Результат identity.user.register (регистрация отделена от логина, Фаза 0).
 struct RegisterResult {
 	bool ok = false;
 	QString error;
 	bool confirmRequired = false; // регистрация через почту: ждём код
+	QString telegramToken;        // режим Telegram: токен deep link для бота
 };
+
+// Подтверждён ли pending-аккаунт / вход (identity.register.status, pre-auth).
+[[nodiscard]] bool RegisterStatus(const QString &user, const QString &token);
+
+// Двухфакторный вход (identity.user.twofa, JWT сессии). Блокирующие.
+struct TwoFactorState {
+	bool ok = false;
+	bool enabled = false;
+	bool telegramLinked = false;
+	QString error;
+};
+[[nodiscard]] TwoFactorState FetchTwoFactor();
+[[nodiscard]] TwoFactorState SetTwoFactor(bool enabled);
 
 // БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
 [[nodiscard]] RegisterResult Register(
@@ -160,6 +194,11 @@ void MirrorReact(not_null<HistoryItem*> item, const QString &emoji);
 
 // Зеркалит закрепление/открепление сообщения (msg.chat.pin).
 void MirrorPin(not_null<HistoryItem*> item, bool pin);
+
+// Удаление/очистка чата «для меня» (msg.chat.clear): все известные сообщения
+// диалога скрываются на сервере для этого пользователя, локальный журнал
+// переписывается без них. Зовётся из ApiWrap::deleteHistory до локальной очистки.
+void MirrorClearHistory(not_null<PeerData*> peer);
 
 // Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
 // синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.

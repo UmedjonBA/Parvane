@@ -148,3 +148,22 @@ cmake -S desktop/tdesktop -B desktop/build-probe \
   агент, его харнесс убивает фоновые задачи при нехватке памяти, хотя swap
   свободен — линк запускать отдельным юнитом:
   `systemd-run --user --unit=parvane-ninja-link --collect -p WorkingDirectory=$PWD -E PATH="$PATH" sh -c 'ninja -C desktop/build-probe -j1 > /tmp/ninja.log 2>&1'`.
+
+## 7. Запуск против прода (2026-09-06)
+
+Прод публикует gateway только по WebSocket через Caddy (`wss://parvane.duckdns.org:20443/ws`);
+TCP-порт 9223 наружу не открыт. Десктоп теперь умеет WS/WSS сам
+(`parvane-core/src/gateway_ws_transport.cpp`: TLS через OpenSSL с системными CA,
+handshake RFC 6455, маскированные текстовые кадры, ping→pong):
+
+- без переменных окружения клиент идёт на `wss://parvane.duckdns.org:20443/ws`
+  (константа `kDefaultGatewayWss` в `parvane_client.cpp`);
+- `PARVANE_GATEWAY_URL=ws://127.0.0.1:9222/ws` — локальный gateway по WS,
+  `PARVANE_GATEWAY_URL=127.0.0.1:9223` — по TCP (как в `verify_lib.sh`);
+- `PARVANE_NATS_URL=nats://…` — прямой NATS (dev), gateway не используется;
+- `PARVANE_WSS_INSECURE=1` — не проверять сертификат (только для самоподписанных стендов).
+
+Вход: голый ник дополняется доменом сервера (`identity.server.info`), регистрация и
+двухфакторный вход подтверждаются в Telegram-боте (экран со ссылкой
+`https://t.me/<бот>?start=<token>`, клиент опрашивает `identity.register.status`
+раз в 2 с). Headless-проверка: `PARVANE_AUTOLOGIN=ник:пароль` без `@server`.

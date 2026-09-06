@@ -44,15 +44,31 @@ std::string CallSession::signSdp(const std::string &sdp) const {
 }
 
 bool CallSession::authenticateSdp(const std::string &sdp, const std::string &sig) {
-    const std::string pub = cb_.peerPubkey ? cb_.peerPubkey() : std::string();
-    if (pub.empty()) {
+    std::vector<std::string> pubs;
+    if (cb_.peerPubkey) {
+        const auto pub = cb_.peerPubkey();
+        if (!pub.empty()) pubs.push_back(pub);
+    }
+    if (cb_.peerPubkeys) {
+        for (auto &k : cb_.peerPubkeys()) {
+            if (!k.empty()) pubs.push_back(k);
+        }
+    }
+    if (pubs.empty()) {
         // У собеседника нет зарегистрированного ключа — проверить нечем.
         // Пропускаем, но помечаем как неаутентифицированный (UI покажет).
         peerAuth_ = PeerAuth::Unverified;
         return true;
     }
-    if (sig.empty() || !crypto::verify(pub, callSignedData(callId_, sdp), sig)) {
-        // Ключ известен, но подпись отсутствует/невалидна → возможный MITM.
+    const auto data = callSignedData(callId_, sdp);
+    bool ok = false;
+    if (!sig.empty()) {
+        for (const auto &pub : pubs) {
+            if (crypto::verify(pub, data, sig)) { ok = true; break; }
+        }
+    }
+    if (!ok) {
+        // Ключи известны, но подпись отсутствует/невалидна → возможный MITM.
         peerAuth_ = PeerAuth::Failed;
         return false;
     }

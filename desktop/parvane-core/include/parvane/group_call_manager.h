@@ -26,6 +26,8 @@ public:
         std::function<void(std::string peer, CallState)> onPeerState;
         // Публичный ключ участника (base64) для проверки подписи; "" — нет.
         std::function<std::string(std::string peer)> peerPubkey;
+        // Ключи подписи всех устройств собеседника (см. CallSession::Callbacks)
+        std::function<std::vector<std::string>(std::string peer)> peerPubkeys;
     };
 
     GroupCallManager(CallClient &calls, std::string selfAddr, std::string token,

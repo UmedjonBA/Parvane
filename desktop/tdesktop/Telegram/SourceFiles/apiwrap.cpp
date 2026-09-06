@@ -2121,6 +2121,9 @@ void ApiWrap::deleteHistory(
 		bool revoke) {
 	auto deleteTillId = MsgId(0);
 	const auto history = _session->data().history(peer);
+	// Parvane: скрыть сообщения диалога «для меня» на шине (msg.chat.clear) и в
+	// локальном журнале — до нативной очистки (нужны живые item'ы для uuid).
+	Parvane::MirrorClearHistory(peer);
 	if (justClear) {
 		// In case of clear history we need to know the last server message.
 		while (history->lastMessageKnown()) {

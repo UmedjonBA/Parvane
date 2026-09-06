@@ -95,6 +95,17 @@ public:
     void deleteMessage(const std::string &from, const std::string &messageId,
                        const std::string &token, const std::string &signature = {});
 
+    // Скрыть сообщения «для меня» (msg.chat.clear): удаление/очистка чата.
+    // Сервер исключает id из sync запросившему; остальные видят как прежде.
+    // Не больше kClearMaxIds за событие — бьётся на пачки.
+    static constexpr std::size_t kClearMaxIds = 500;
+    void clearMessages(const std::string &from, const std::vector<std::string> &messageIds,
+                       const std::string &token);
+
+    // Уведомление messenger'а другим устройствам того же пользователя об
+    // очистке (payload.cleared.message_ids) — убрать из локального кэша.
+    void onCleared(const std::string &self, std::function<void(std::vector<std::string>)> handler);
+
     // Отметка о прочтении (получателем). msg.chat.read → read-галочка ✓✓.
     void markRead(const std::string &from, const std::string &messageId,
                   const std::string &token);

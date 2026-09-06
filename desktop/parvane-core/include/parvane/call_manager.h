@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "parvane/call_client.h"
 #include "parvane/call_session.h"
@@ -27,6 +28,8 @@ public:
         std::function<void(CallState)> onState;
         // Публичный ключ собеседника (base64) для проверки подписи; "" — нет.
         std::function<std::string(std::string peer)> peerPubkey;
+        // Ключи подписи всех устройств собеседника (см. CallSession::Callbacks)
+        std::function<std::vector<std::string>(std::string peer)> peerPubkeys;
     };
 
     CallManager(CallClient &calls, std::string selfAddr, std::string token,

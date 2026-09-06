@@ -47,6 +47,9 @@ CallSession *GroupCallManager::ensureSession(const std::string &peer,
     scb.peerPubkey = [this, peer] {
         return cb_.peerPubkey ? cb_.peerPubkey(peer) : std::string();
     };
+    scb.peerPubkeys = [this, peer] {
+        return cb_.peerPubkeys ? cb_.peerPubkeys(peer) : std::vector<std::string>{};
+    };
     scb.onState = [this, peer](CallState s) {
         if (cb_.onPeerState) cb_.onPeerState(peer, s);
     };
