@@ -71,13 +71,16 @@ void GatewayTransport::close() {
     ::close(fd_);
     fd_ = -1;
 
-    // Разбудить всех ожидающих с ошибкой.
+    abortPending("соединение с gateway закрыто");
+}
+
+void GatewayTransport::abortPending(const std::string &reason) {
     {
         std::lock_guard<std::mutex> lk(pendMu_);
         for (auto &[id, p] : pending_) {
             std::lock_guard<std::mutex> pl(p->m);
             p->error = true;
-            p->errmsg = "соединение с gateway закрыто";
+            p->errmsg = reason;
             p->ended = true;
             p->cv.notify_all();
         }

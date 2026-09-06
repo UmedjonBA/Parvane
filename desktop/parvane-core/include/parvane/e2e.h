@@ -120,6 +120,10 @@ void groupAcceptKey(const std::string &groupId, const std::string &senderIdentit
 // После отзыва СВОЕГО устройства: убрать из каталога, ротировать все свои
 // исходящие Megolm-сессии (отозванное не должно читать новые сообщения).
 void forgetOwnDevice(const std::string &deviceId);
+
+// Ed25519 signing-ключи известных устройств контакта (из каталога prekeys):
+// для проверки подписи сигналов звонка с любого устройства собеседника.
+[[nodiscard]] std::vector<std::string> contactSigningKeys(const std::string &contact);
 // Ротировать группы, где есть контакт (его устройство исчезло из каталога).
 void rotateGroupsWith(const std::string &contact);
 

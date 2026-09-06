@@ -22,7 +22,7 @@ stack_start() { # stack_start <scratch> [env-для-identity]
     PARVANE_LOG_LEVEL=info "$SHARD/identity" >"$SB/identity.log" 2>&1 & PIDS+=($!)
   for s in messenger cloud call; do
     PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/$s.db" \
-      PARVANE_LOG_LEVEL=warn "$SHARD/$s" >"$SB/$s.log" 2>&1 & PIDS+=($!)
+      PARVANE_LOG_LEVEL=info "$SHARD/$s" >"$SB/$s.log" 2>&1 & PIDS+=($!)
   done
   PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 \
     PARVANE_GATEWAY_BIND=127.0.0.1:9222 PARVANE_LOG_LEVEL=info \
@@ -33,6 +33,8 @@ stack_start() { # stack_start <scratch> [env-для-identity]
 start_client() {
   local work="$1" user="$2"; shift 2
   mkdir -p "$work/td"
+  # tdesktop переписывает log.txt при каждом старте — прошлый прогон сохраняем
+  [ -f "$work/td/log.txt" ] && mv "$work/td/log.txt" "$work/td/log.$(date +%s%N).txt"
   env "$@" QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
     PARVANE_AUTOLOGIN="$user:test" "$BIN" -workdir "$work/td" \
     >>"$work/stdout.log" 2>&1 &

@@ -641,6 +641,17 @@ std::vector<DeviceCopy> encryptForDevices(const std::string &contact, const std:
 
 } // namespace
 
+std::vector<std::string> contactSigningKeys(const std::string &contact) {
+    std::vector<std::string> out;
+    std::lock_guard<std::mutex> lk(g_mu);
+    auto it = g_contactDevices.find(contact);
+    if (it == g_contactDevices.end()) return out;
+    for (const auto &[dev, info] : it->second) {
+        if (!info.signing.empty()) out.push_back(info.signing);
+    }
+    return out;
+}
+
 json Copy::toJson() const {
     return json{{"recipient", recipient},
                 {"signing_key", signing_key},

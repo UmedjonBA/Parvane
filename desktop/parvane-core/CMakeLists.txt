@@ -48,6 +48,7 @@ add_custom_target(parvane_e2e_build ALL
 add_library(parvane_core STATIC
     src/transport.cpp
     src/gateway_transport.cpp
+    src/gateway_ws_transport.cpp
     src/e2e.cpp
     src/linking.cpp
     src/blobcrypt.cpp
@@ -66,7 +67,7 @@ target_include_directories(parvane_core
     PRIVATE ${cnats_SOURCE_DIR}/src)
 target_link_libraries(parvane_core
     PUBLIC nlohmann_json::nlohmann_json
-    PRIVATE nats_static OpenSSL::Crypto
+    PRIVATE nats_static OpenSSL::SSL OpenSSL::Crypto
             ${PARVANE_E2E_LIB} pthread dl m)
 
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────

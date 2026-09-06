@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_sensitive_content.h"
 #include "api/api_websites.h"
 #include "apiwrap.h"
+#include "parvane/parvane_client.h"
 #include "base/system_unlock.h"
 #include "base/timer_rpl.h"
 #include "boxes/edit_privacy_box.h"
@@ -599,6 +600,66 @@ void BuildSecuritySection(
 	});
 
 	session->api().cloudPassword().reload();
+
+	// Parvane: двухфакторный вход через Telegram-бота (identity.user.twofa).
+	// Состояние тянем с шарда; переключение — блокирующий запрос на воркере.
+	{
+		struct TwoFa {
+			rpl::variable<bool> enabled;
+			rpl::variable<QString> label;
+			bool busy = false;
+		};
+		const auto twofa = builder.container()->lifetime().make_state<TwoFa>();
+		twofa->label = tr::lng_profile_loading(tr::now);
+		const auto weak = base::make_weak(builder.container());
+		const auto apply = [=](Parvane::TwoFactorState state) {
+			twofa->busy = false;
+			if (!state.ok) {
+				twofa->label = state.error.isEmpty()
+					? u"недоступно"_q : state.error;
+				return;
+			}
+			twofa->enabled = state.enabled;
+			twofa->label = state.enabled
+				? u"включён: вход подтверждает бот в Telegram"_q
+				: (state.telegramLinked
+					? u"выключен"_q
+					: u"нужен привязанный Telegram (регистрация через бота)"_q);
+		};
+		crl::async([=] {
+			auto state = Parvane::FetchTwoFactor();
+			crl::on_main(weak, [=] { apply(state); });
+		});
+		const auto toggle = builder.addButton({
+			.id = u"security/parvane_twofa"_q,
+			.title = rpl::single(u"Двухфакторный вход через Telegram"_q),
+			.icon = { &st::menuIconLock },
+			.label = twofa->label.value(),
+			.toggled = twofa->enabled.value(),
+			.keywords = { u"2fa"_q, u"telegram"_q, u"two-factor"_q },
+		});
+		if (toggle) {
+			toggle->toggledChanges(
+			) | rpl::filter([=](bool toggled) {
+				return !twofa->busy && toggled != twofa->enabled.current();
+			}) | rpl::on_next([=](bool toggled) {
+				twofa->busy = true;
+				crl::async([=] {
+					auto state = Parvane::SetTwoFactor(toggled);
+					crl::on_main(weak, [=] {
+						apply(state);
+						if (!state.ok) {
+							// Откат тумблера + пояснение (напр. нет привязки)
+							twofa->enabled.force_assign(twofa->enabled.current());
+							controller->showToast(state.error.isEmpty()
+								? u"Не удалось изменить двухфакторный вход"_q
+								: state.error);
+						}
+					});
+				});
+			}, toggle->lifetime());
+		}
+	}
 
 	auto ttlLabel = rpl::combine(
 		session->api().selfDestruct().periodDefaultHistoryTTL(),

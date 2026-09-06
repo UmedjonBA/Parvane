@@ -1309,6 +1309,18 @@ async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> 
         let _ = sqlx::query("DELETE FROM login_links WHERE username = ?").bind(&username).execute(pool).await;
         // При повторном включении все устройства подтверждают вход заново
         let _ = sqlx::query("DELETE FROM trusted_devices WHERE username = ?").bind(&username).execute(pool).await;
+    } else if let Some(dev) = data.claims.dev.as_deref().filter(|d| !d.is_empty()) {
+        // Устройство, с которого включили 2FA, уже вошло по паролю — считаем
+        // его доверенным (иначе десктоп, который переизвлекает JWT при каждом
+        // старте, сразу попросит подтверждение на том же устройстве)
+        let _ = sqlx::query(
+            "INSERT OR REPLACE INTO trusted_devices (username, device_id, confirmed_at) VALUES (?, ?, ?)",
+        )
+        .bind(&username)
+        .bind(dev)
+        .bind(now_unix())
+        .execute(pool)
+        .await;
     }
     info!("Двухфакторный вход {} для {}", if enabled { "включён" } else { "выключен" }, username);
     Ok((enabled, telegram_linked))
@@ -2169,6 +2181,13 @@ mod tests {
 
     // ── регистрация отделена от логина ──
 
+    fn issue_bytes_with_device(user: &str, password: &str, device: &str) -> Vec<u8> {
+        serde_json::to_vec(&IssueRequest {
+            user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None,
+        })
+        .unwrap()
+    }
+
     fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
         serde_json::to_vec(&IssueRequest {
             user: user.into(), password: password.into(), device_id: None, login_token: None,
@@ -2936,6 +2955,16 @@ mod tests {
         // По умолчанию выключено; включаем по JWT
         assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(), (false, true));
         assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap(), (true, true));
+        // Устройство, включившее 2FA (JWT с dev), — доверенное: входит без Telegram
+        let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await;
+        assert!(dev_jwt.is_ok(), "пока 2FA включено JWT без dev-устройства: {:?}", dev_jwt.as_ref().err());
+        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(), (false, true));
+        let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().unwrap().to_string();
+        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&dev_jwt, Some(true))).await.unwrap(), (true, true));
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().is_some(),
+            "устройство, включившее 2FA, доверенное");
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-other")).await.unwrap().token().is_none(),
+            "другое устройство подтверждает вход");
         assert!(do_twofa(&pool, &dec, &twofa_bytes("bad.jwt", Some(false))).await.is_err());
 
         // Логин: пароль верен → не JWT, а токен входа

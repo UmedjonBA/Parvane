@@ -49,9 +49,9 @@ public:
 
     // Подключиться к gateway по TCP (host — IP или имя, напр. "127.0.0.1").
     // Бросает GatewayError.
-    void connect(const std::string &host, int port);
-    bool connected() const;
-    void close();
+    virtual void connect(const std::string &host, int port);
+    virtual bool connected() const;
+    virtual void close();
 
     // Авторизоваться JWT. Вызывать после connect, до защищённых операций.
     // До auth разрешены только request к identity.token.issue / .user.register
@@ -74,7 +74,7 @@ public:
     // Асинхронная подписка. handler(subject, payload) зовётся на потоке reader.
     void subscribe(const std::string &subject, Handler handler) override;
 
-private:
+protected:
     // Состояние одного pending-запроса (single или many).
     struct Pending {
         std::mutex m;
@@ -85,9 +85,13 @@ private:
         std::string errmsg;
     };
 
-    void readerLoop();
+    // Точки подмены канала (TCP-строки / WebSocket-кадры): наследник даёт
+    // свой reader и запись кадра, остальное (корреляция, auth, подписки) общее.
+    virtual void readerLoop();
+    virtual void sendLine(const std::string &frame); // под writeMu_
     void dispatch(const std::string &line);
-    void sendLine(const std::string &frame); // под writeMu_
+    // Разбудить всех ожидающих с ошибкой (после закрытия канала).
+    void abortPending(const std::string &reason);
     std::string nextId();
 
     int fd_ = -1;

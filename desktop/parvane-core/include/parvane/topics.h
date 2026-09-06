@@ -25,6 +25,7 @@ inline constexpr auto MsgDelivered = "msg.chat.delivered";
 inline constexpr auto MsgRead = "msg.chat.read";
 inline constexpr auto MsgEdit = "msg.chat.edit";
 inline constexpr auto MsgDelete = "msg.chat.delete";
+inline constexpr auto MsgClear = "msg.chat.clear"; // скрыть «для меня» (очистка/удаление чата)
 inline constexpr auto MsgReact = "msg.chat.react";
 inline constexpr auto MsgPin = "msg.chat.pin";
 inline constexpr auto MsgReaders = "msg.chat.readers";

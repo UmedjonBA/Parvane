@@ -35,9 +35,20 @@ private:
 
 	// Регистрация через почту (PARVANE_EMAIL_REQUIRED на identity): после
 	// пароля — экран email, затем 6-значный код из письма (identity.email.confirm).
-	enum class Stage { Login, Email, Code };
+	enum class Stage { Login, Email, Code, Telegram };
 	void setStage(Stage stage);
 	void finishLogin(const QString &user, const QString &password);
+	// Экран Telegram: deep link боту + опрос identity.register.status.
+	// mode: регистрация (после подтверждения — обычный вход) или двухфакторный
+	// вход (Issue с loginToken).
+	enum class TelegramMode { Register, Login };
+	void startTelegram(
+		const QString &user,
+		const QString &password,
+		const QString &token,
+		const QString &bot,
+		TelegramMode mode);
+	void pollTelegram();
 	// Headless e2e: PARVANE_AUTOCODE_FILE — опрос файла с кодом (тест пишет его
 	// из лога identity); уже испробованный код повторно не шлём.
 	void startCodeFilePoll();
@@ -50,6 +61,19 @@ private:
 	Stage _stage = Stage::Login;
 	bool _requesting = false;
 	bool _autologinTried = false;
+	// Домен сервера (identity.server.info): голый ник → ник@домен
+	QString _serverDomain;
+	QString _serverConfirm;
+	QString _serverBot;
+	bool _serverInfoLoaded = false;
+	// Состояние экрана Telegram
+	QString _tgUser;
+	QString _tgPassword;
+	QString _tgToken;
+	TelegramMode _tgMode = TelegramMode::Register;
+	int _tgGeneration = 0;
+	qint64 _tgStartedAt = 0;
+	object_ptr<Ui::InputField> _tgLink;
 
 };
 

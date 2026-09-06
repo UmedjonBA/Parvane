@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -74,6 +75,11 @@ public:
         std::function<void(json signal)> sendSignal;
         // Публичный ключ собеседника (base64) для verify; "" — ключа нет.
         std::function<std::string()> peerPubkey;
+        // Ключи подписи ВСЕХ устройств собеседника (identity хранит один pubkey
+        // на пользователя — ключ последнего вошедшего устройства; звонок со
+        // второго устройства иначе отвергался). Подпись верна, если подходит
+        // любой из peerPubkey/peerPubkeys.
+        std::function<std::vector<std::string>()> peerPubkeys;
         // Смена состояния звонка (для UI).
         std::function<void(CallState)> onState;
     };
