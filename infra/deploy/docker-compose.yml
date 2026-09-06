@@ -78,8 +78,10 @@ services:
       PARVANE_NATS_PASS: ${PARVANE_CALL_PASS}
       PARVANE_DB_PATH: /data/call.db
       PARVANE_LOG_LEVEL: info
-      PARVANE_STUN_URLS: stun:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}
-      PARVANE_TURN_URL: turn:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}?transport=udp
+      # Внешний TURN (VPS с публичным IP) переопределяется в .env:
+      # PARVANE_TURN_URL=turn:host:3478?transport=udp,turn:host:3478?transport=tcp
+      PARVANE_STUN_URLS: ${PARVANE_STUN_URLS:-stun:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}}
+      PARVANE_TURN_URL: ${PARVANE_TURN_URL:-turn:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}?transport=udp}
       PARVANE_TURN_SECRET: ${PARVANE_TURN_SECRET}
 
   preview:

@@ -102,3 +102,21 @@ df -h /                                     # свободно на хосте
 заливает, поднимает. Флаги: `PARVANE_DEPLOY_SKIP_WEB_BUILD=1`,
 `PARVANE_DEPLOY_SKIP_IMAGES=1`. После заливки dist Caddy перезапускается
 автоматически (иначе bind-mount отдаёт 404).
+
+## TURN на VPS (звонки с мобильных сетей)
+Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи недостижим: звонок с
+телефона (CGNAT/VPN) висел на «exchanging encryption keys» и падал. TURN/STUN
+поднят на VPS 213.155.15.139 (публичный IP, тот же хост, что Telegram-бот):
+- бинарь `/usr/local/bin/parvane-turn` (infra/turn, сборка:
+  `podman run --rm --network=host -v $PWD:/src:Z -w /src -e CGO_ENABLED=0
+  golang:1-alpine go build -o parvane-turn .`), systemd `parvane-turn`,
+  env `/etc/parvane/turn.env` (TURN_SECRET = PARVANE_TURN_SECRET прода,
+  UDP+TCP 3478, relay 49160-49400, TURN_PUBLIC_IP=213.155.15.139).
+- прод `.env`: `PARVANE_TURN_URL=turn:213.155.15.139:3478?transport=udp,
+  turn:213.155.15.139:3478?transport=tcp`, `PARVANE_STUN_URLS=stun:213.155.15.139:3478`
+  (call-шард принимает список URL через запятую; compose подставляет старый
+  локальный TURN, если переменные не заданы).
+- проверка снаружи: `TURN_URL=turn:213.155.15.139:3478?transport=udp
+  TURN_USER=<expiry>:probe@local TURN_PASS=<base64 HMAC-SHA1(secret, user)>
+  node scripts/e2e_turn_relay_check.mjs` → `RELAY OK` с relay-кандидатом
+  213.155.15.139. Логи: `journalctl -u parvane-turn -f` на VPS.
