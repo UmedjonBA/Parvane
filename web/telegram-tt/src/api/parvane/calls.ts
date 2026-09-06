@@ -142,7 +142,11 @@ export function createCallController(deps: CallDependencies) {
       },
       date: record.started_at,
       isOutgoing,
-      senderId: isOutgoing ? store.getIdForAddress(store.self) : chatId,
+      // Свои записи без senderId (как свои sealed-сообщения): апдейтер tt
+      // считает newMessage «нашим» по senderId === currentUserId, а на старте
+      // currentUserId ещё может быть не выставлен — исходящий звонок после
+      // reload помечал чат непрочитанным
+      senderId: isOutgoing ? undefined : chatId,
     };
   }
 

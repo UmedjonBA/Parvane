@@ -151,6 +151,12 @@ try {
   await openPrivateChat(aliceSession.page, bob);
   await findHistoryEntry(aliceSession.page, 'Outgoing Video Call')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Записи из истории после reload не должны помечать чат непрочитанным
+  await relogin(bobSession.page, PASSWORD);
+  await bobSession.page.waitForTimeout(5000);
+  assert.equal(await unreadBadge(aliceSession.page, bob).count(), 0, 'у Алисы бейдж после reload (последний — звонок)');
+  assert.equal(await unreadBadge(bobSession.page, alice).count(), 0, 'у Боба бейдж после reload (последний — звонок)');
+  console.log('OK: после reload записи о звонках не дают бейдж');
 
   // ── TURN fallback: relay-only звонок соединяется ТОЛЬКО через TURN ─────────
   if (process.env.PARVANE_E2E_TURN) {

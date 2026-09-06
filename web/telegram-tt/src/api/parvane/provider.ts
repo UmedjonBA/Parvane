@@ -828,8 +828,11 @@ const methods = {
         const isSelfChat = chat.id === selfId();
         const hasUnreadMark = unreadMarks.has(chat.id) || undefined;
         history.forEach((message) => {
-          // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем
+          // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем;
+          // записи о звонках (phoneCall) — тоже: у них нет uuid сообщения,
+          // msg.chat.read для них невозможен, и бейдж возвращался после reload
           if (message.isOutgoing || isSelfChat || !message.senderId) return;
+          if (message.content.action?.type === 'phoneCall') return;
           const uuid = store.getUuidForMessage(chat.id, message.id);
           if (uuid && syncController.getFlags(uuid)?.read) {
             if (message.id > lastReadInbox) lastReadInbox = message.id;
