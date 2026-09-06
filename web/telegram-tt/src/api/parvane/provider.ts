@@ -32,13 +32,15 @@ import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   clearLoginStorage,
   consumeLegacyCredentials,
+  isSessionExpired,
   parseLoginCredentials,
   readLoginAddress,
   readRememberMe,
   saveLoginAddress,
+  touchSessionActivity,
 } from './authStorage';
 import { createCallController } from './calls';
-import { canonicalAddress, createConnectionController } from './connectionController';
+import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
 import { E2eEngine } from './e2e';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
@@ -87,6 +89,7 @@ import {
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
+  TOPIC_IDENTITY_TWOFA,
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
@@ -106,6 +109,20 @@ const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
 
 let onUpdate: OnApiUpdate = () => undefined;
 let startupCredentials = consumeStartupCredentials();
+
+// Активность для «оставаться в системе»: отметка обновляется, пока вкладка
+// видима (раз в минуту), при возвращении на вкладку и при уходе со страницы
+const SESSION_ACTIVITY_INTERVAL_MS = 60 * 1000;
+if (typeof window !== 'undefined') {
+  const touchIfVisible = () => {
+    if (document.visibilityState === 'visible' && store.self) touchSessionActivity();
+  };
+  window.setInterval(touchIfVisible, SESSION_ACTIVITY_INTERVAL_MS);
+  document.addEventListener('visibilitychange', touchIfVisible);
+  window.addEventListener('pagehide', () => {
+    if (store.self) touchSessionActivity();
+  });
+}
 let connection: GatewayConnection | undefined;
 let store = new ParvaneStore();
 let token = '';
@@ -117,6 +134,8 @@ let pendingLoginPassword = '';
 let pendingEmail = '';
 // Режим Telegram: токен deep link t.me/<bot>?start=<token> и опрос статуса
 let pendingTelegramToken = '';
+// Зачем Telegram: подтверждение регистрации или двухфакторный вход
+let pendingTelegramMode: 'register' | 'login' = 'register';
 let telegramPollTimer: number | undefined;
 let telegramPollGeneration = 0;
 const TELEGRAM_POLL_INTERVAL_MS = 2000;
@@ -342,14 +361,23 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
       // «Keep me signed in»: если пароль сохранён (зашифрован в IndexedDB) —
       // авто-логин без экрана пароля. Иначе (или при просроченном/битом
       // credential) показываем экран пароля.
-      if (readRememberMe()) {
+      if (readRememberMe() && isSessionExpired()) {
+        // Сутки без активности — пароль просим заново
+        await clearSecureCredential(savedAddress).catch(() => undefined);
+      } else if (readRememberMe()) {
         const savedPassword = await loadSecureCredential(savedAddress).catch(() => undefined);
         if (savedPassword) {
           try {
             await connectionController.connectAndLogin(savedAddress, savedPassword);
             saveLoginAddress(savedAddress);
+            touchSessionActivity();
             return;
           } catch (err) {
+            if (err instanceof TwoFactorRequiredError) {
+              // Устройство ещё не доверенное — экран подтверждения входа
+              startTelegramConfirmation(savedAddress, savedPassword, err.loginToken, 'login');
+              return;
+            }
             // eslint-disable-next-line no-console
             console.error('[parvane] авто-логин не удался, спрашиваем пароль:', err);
             await clearSecureCredential(savedAddress).catch(() => undefined);
@@ -368,6 +396,10 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     saveLoginAddress(creds.user);
     await persistSessionCredential(creds.user, creds.password);
   } catch (err) {
+    if (err instanceof TwoFactorRequiredError) {
+      startTelegramConfirmation(creds.user, creds.password, err.loginToken, 'login');
+      return;
+    }
     // eslint-disable-next-line no-console
     console.error('[parvane] логин не удался:', err);
     pendingLoginAddress = creds.user;
@@ -390,21 +422,31 @@ function stopTelegramPolling() {
   pendingTelegramToken = '';
 }
 
-function startTelegramConfirmation(user: string, password: string, linkToken: string) {
+function startTelegramConfirmation(
+  user: string, password: string, linkToken: string, mode: 'register' | 'login' = 'register',
+) {
   stopTelegramPolling();
   pendingLoginAddress = user;
   pendingLoginPassword = password;
   pendingTelegramToken = linkToken;
+  pendingTelegramMode = mode;
   const generation = telegramPollGeneration;
   sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitQrCode' });
   const startedAt = Date.now();
   const tick = async () => {
     if (generation !== telegramPollGeneration) return;
     if (Date.now() - startedAt > TELEGRAM_POLL_MAX_MS) {
-      logDebug('Telegram: токен истёк, обратно на форму регистрации');
+      const isLogin = pendingTelegramMode === 'login';
+      logDebug(`Telegram: токен истёк, обратно на ${isLogin ? 'экран пароля' : 'форму регистрации'}`);
       stopTelegramPolling();
-      sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitRegistration' });
-      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneTelegramExpired' } });
+      sendUpdate({
+        '@type': 'updateAuthorizationState',
+        authorizationState: isLogin ? 'authorizationStateWaitPassword' : 'authorizationStateWaitRegistration',
+      });
+      sendUpdate({
+        '@type': 'updateAuthorizationError',
+        errorKey: { key: isLogin ? 'ParvaneTelegramLoginExpired' : 'ParvaneTelegramExpired' },
+      });
       return;
     }
     const done = await pollTelegramConfirmation(generation);
@@ -425,6 +467,7 @@ async function pollTelegramConfirmation(generation: number): Promise<boolean> {
   const user = pendingLoginAddress;
   const password = pendingLoginPassword;
   const linkToken = pendingTelegramToken;
+  const mode = pendingTelegramMode;
   let confirmed = false;
   try {
     confirmed = await connectionController.fetchRegisterStatus(user, linkToken);
@@ -435,7 +478,8 @@ async function pollTelegramConfirmation(generation: number): Promise<boolean> {
   if (!confirmed) return false;
   stopTelegramPolling();
   try {
-    const address = await connectionController.connectAndLogin(user, password);
+    // Двухфакторный вход: JWT выдаётся только с подтверждённым login_token
+    const address = await connectionController.connectAndLogin(user, password, mode === 'login' ? linkToken : '');
     saveLoginAddress(address);
     await persistSessionCredential(address, password);
   } catch (err) {
@@ -460,6 +504,7 @@ async function persistSessionCredential(user: string, password: string) {
   try {
     if (readRememberMe()) {
       await saveSecureCredential(user, password);
+      touchSessionActivity();
     } else {
       await clearSecureCredential(user);
     }
@@ -1703,7 +1748,24 @@ const methods = {
       telegramLink: bot && pendingTelegramToken
         ? `https://t.me/${bot}?start=${encodeURIComponent(pendingTelegramToken)}`
         : '',
+      telegramMode: pendingTelegramMode,
     });
+  },
+
+  // ── двухфакторный вход (Settings → Privacy) ──────────────────────────────
+  async parvaneFetchTwoFactor() {
+    if (!connection) return undefined;
+    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token }));
+    const response = JSON.parse(raw) as { ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string };
+    return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
+  },
+
+  async parvaneSetTwoFactor({ enabled }: { enabled: boolean }) {
+    if (!connection) return undefined;
+    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled }));
+    const response = JSON.parse(raw) as { ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string };
+    if (!response.ok) throw new Error(response.error || 'identity отклонил настройку');
+    return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
   },
 
   provideAuthPhoneNumber(input: string) {
@@ -1734,6 +1796,13 @@ const methods = {
       saveLoginAddress(address);
       await persistSessionCredential(address, password);
     } catch (err) {
+      if (err instanceof TwoFactorRequiredError) {
+        // Пароль верен, включён двухфакторный вход — экран Telegram (deep link)
+        const info = connectionController.getLastServerInfo();
+        const address = canonicalAddress(user, info?.domain || '');
+        startTelegramConfirmation(address, password, err.loginToken, 'login');
+        return;
+      }
       const message = String(err);
       logDebug(`логин отклонён: ${message}`);
       // Сервер требует регистрацию через почту: такого аккаунта нет — форма

@@ -1,6 +1,10 @@
 const LEGACY_CREDS_STORAGE_KEY = 'parvane:creds';
 const LOGIN_ADDRESS_STORAGE_KEY = 'parvane:login-address';
 const REMEMBER_ME_STORAGE_KEY = 'parvane:remember-me';
+const LAST_ACTIVE_STORAGE_KEY = 'parvane:last-active';
+// «Оставаться в системе» действует сутки без активности (открытая вкладка):
+// дольше — сохранённый пароль стирается и вход снова через экран пароля
+export const SESSION_IDLE_LIMIT_MS = 24 * 60 * 60 * 1000;
 
 export type LoginCredentials = { user: string; password: string };
 
@@ -33,10 +37,33 @@ export function readRememberMe() {
   return localStorage.getItem(REMEMBER_ME_STORAGE_KEY) !== '0';
 }
 
+export function touchSessionActivity(now = Date.now()) {
+  try {
+    localStorage.setItem(LAST_ACTIVE_STORAGE_KEY, String(now));
+  } catch {
+    // приватный режим — сессию не продлеваем
+  }
+}
+
+export function readSessionActivity() {
+  const raw = localStorage.getItem(LAST_ACTIVE_STORAGE_KEY);
+  const value = raw ? Number(raw) : NaN;
+  return Number.isFinite(value) ? value : undefined;
+}
+
+// Без отметки активности (старые сессии) — считаем сессию свежей и ставим
+// отметку; просрочена, если тишина дольше SESSION_IDLE_LIMIT_MS
+export function isSessionExpired(now = Date.now(), limitMs = SESSION_IDLE_LIMIT_MS) {
+  const lastActive = readSessionActivity();
+  if (lastActive === undefined) return false;
+  return now - lastActive > limitMs;
+}
+
 export function clearLoginStorage() {
   localStorage.removeItem(LEGACY_CREDS_STORAGE_KEY);
   localStorage.removeItem(LOGIN_ADDRESS_STORAGE_KEY);
   localStorage.removeItem(REMEMBER_ME_STORAGE_KEY);
+  localStorage.removeItem(LAST_ACTIVE_STORAGE_KEY);
 }
 
 export const authStorageKeys = {

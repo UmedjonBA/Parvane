@@ -1,4 +1,4 @@
-import { memo, useEffect } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { GlobalState } from '../../../global/types';
@@ -20,6 +20,9 @@ import useOldLang from '../../../hooks/useOldLang';
 import Island, { IslandTitle } from '../../gili/layout/Island';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
+
+// parvane* — кастомные методы провайдера вне типизированного Methods
+const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
 
 type OwnProps = {
   isActive?: boolean;
@@ -107,7 +110,35 @@ const SettingsPrivacy = ({
   });
 
   const { showNotification } = getActions();
-  const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
+
+  type TwoFactorState = { enabled: boolean; telegramLinked: boolean };
+  const [twoFactor, setTwoFactor] = useState<TwoFactorState | undefined>();
+  const [isTwoFactorBusy, setIsTwoFactorBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isActive) return;
+    let isCancelled = false;
+    void (callParvane('parvaneFetchTwoFactor', undefined) as Promise<TwoFactorState | undefined>)
+      .then((state) => {
+        if (!isCancelled && state) setTwoFactor(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      isCancelled = true;
+    };
+  }, [isActive]);
+
+  const handleTwoFactorChange = useLastCallback(async (enabled: boolean) => {
+    setIsTwoFactorBusy(true);
+    try {
+      const state = await (callParvane('parvaneSetTwoFactor', { enabled }) as Promise<TwoFactorState | undefined>);
+      if (state) setTwoFactor(state);
+    } catch {
+      showNotification({ message: oldLang('ParvaneTwoFactorFailed') });
+    } finally {
+      setIsTwoFactorBusy(false);
+    }
+  });
 
   const handleExportE2eKeys = useLastCallback(async () => {
     const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
@@ -170,6 +201,22 @@ const SettingsPrivacy = ({
       {/* Parvane: скрыты серверные MTProto-разделы — Passcode/2FA/Passkeys/
           Web Sessions, privacy-видимость (номер/last seen/фото/bio/…),
           sensitive-контент, автоархив и удаление аккаунта по TTL */}
+
+      {/* Parvane: двухфакторный вход — подтверждение в привязанном Telegram */}
+      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+        {oldLang('ParvaneTwoFactorTitle')}
+      </IslandTitle>
+      <Island>
+        <Checkbox
+          label={oldLang('ParvaneTwoFactorToggle')}
+          subLabel={twoFactor && !twoFactor.telegramLinked
+            ? oldLang('ParvaneTwoFactorNoTelegram')
+            : oldLang('ParvaneTwoFactorInfo')}
+          checked={Boolean(twoFactor?.enabled)}
+          disabled={!twoFactor || !twoFactor.telegramLinked || isTwoFactorBusy}
+          onCheck={handleTwoFactorChange}
+        />
+      </Island>
 
       <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
         {oldLang('lng_settings_window_system')}

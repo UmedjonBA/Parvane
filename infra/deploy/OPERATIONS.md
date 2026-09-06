@@ -34,6 +34,19 @@ PARVANE_TELEGRAM_SECRET=<тот же, что у бота>
 Проверка: `journalctl -u parvane-tg-bot -f` на VPS, `docker compose logs
 identity | grep Telegram` на проде.
 
+### Двухфакторный вход (по желанию, Settings → Privacy → «Подтверждать вход в Telegram»)
+Требует привязанного Telegram (после подтверждения аккаунта ботом). Вход по
+паролю на НОВОМ устройстве → экран «Подтвердите вход» с deep link → Start в
+боте; identity принимает Start только от `users.telegram_id`. После
+подтверждения устройство (claim `dev`) доверенное (`trusted_devices`) — вход по
+паролю без Telegram, пока устройство не отозвано или 2FA не выключен/включён
+заново. Топик `identity.user.twofa` (JWT; `enabled` пуст — только чтение),
+токены входа в `login_links` (10 мин, одноразовые). Бот отвечает «Вход
+подтверждён» (поле `kind: login` в ответе identity.telegram.confirm).
+Обновление бота на VPS: `scp infra/telegram-bot/parvane_tg_bot.py
+root@213.155.15.139:/opt/parvane-tg-bot/ && ssh root@213.155.15.139 systemctl
+restart parvane-tg-bot`.
+
 Запасной вариант — почта (когда появится SMTP): убрать PARVANE_TELEGRAM_*,
 ник + почта + пароль → 6-значный код письмом. Нужны в `.env` (identity):
 ```

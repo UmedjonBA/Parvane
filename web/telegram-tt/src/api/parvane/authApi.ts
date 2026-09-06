@@ -17,6 +17,7 @@ export type ParvaneAuthContext = {
   email: string;
   telegramBot: string;
   telegramLink: string;
+  telegramMode?: 'register' | 'login';
 };
 export type ParvaneRegisterPayload = { nick: string; email: string; password: string };
 

@@ -1064,3 +1064,6 @@
 "ParvaneTelegramWaiting" = "Ждём подтверждения в Telegram…";
 "ParvaneTelegramCheck" = "Я нажал Start";
 "ParvaneTelegramExpired" = "Ссылка Telegram истекла. Зарегистрируйтесь заново.";
+"ParvaneTelegramLoginTitle" = "Подтвердите вход через Telegram";
+"ParvaneTelegramLoginText" = "Включена двухфакторная аутентификация. Откройте нашего Telegram-бота и нажмите Start — подтвердить вход может только Telegram, привязанный к этому аккаунту.";
+"ParvaneTelegramLoginExpired" = "Ссылка для входа истекла. Введите пароль ещё раз.";

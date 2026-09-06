@@ -11,14 +11,14 @@ use parvane_types::{
     PublishPrekeysRequest, PublishPrekeysResponse, RegisterRequest, RegisterResponse,
     RegisterStatusRequest, RegisterStatusResponse, ResolveRequest, ResolveResponse,
     SearchUsersRequest, SearchUsersResponse, ServerInfoResponse, SetAvatarRequest, SetKeyRequest,
-    SetNameRequest, SetNameResponse, TelegramConfirmRequest, TelegramConfirmResponse, UserInfo,
-    VerifyRequest, VerifyResponse,
+    SetNameRequest, SetNameResponse, TelegramConfirmRequest, TelegramConfirmResponse,
+    TwoFactorRequest, TwoFactorResponse, UserInfo, VerifyRequest, VerifyResponse,
     topics::{
         IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
         IDENTITY_LINK_GRANT, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
         IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_RESOLVE,
         IDENTITY_SEARCH, IDENTITY_SERVER_INFO, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
-        IDENTITY_SETNAME, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY,
+        IDENTITY_SETNAME, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_TWOFA, IDENTITY_VERIFY,
     },
 };
 
@@ -115,6 +115,7 @@ async fn main() -> Result<()> {
     let mut server_info_sub = nc.subscribe(IDENTITY_SERVER_INFO).await?;
     let mut telegram_confirm_sub = nc.subscribe(IDENTITY_TELEGRAM_CONFIRM).await?;
     let mut register_status_sub = nc.subscribe(IDENTITY_REGISTER_STATUS).await?;
+    let mut twofa_sub = nc.subscribe(IDENTITY_TWOFA).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
@@ -154,6 +155,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = register_status_sub.next() => {
                 handle_register_status(&nc, &pool, msg).await;
+            }
+            Some(msg) = twofa_sub.next() => {
+                handle_twofa(&nc, &pool, &decoding, msg).await;
             }
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, &pool, msg).await;
@@ -685,6 +689,12 @@ async fn list_devices(pool: &SqlitePool, username: &str) -> Result<Vec<DeviceInf
 /// чтение НОВЫХ сообщений закрывает исчезновение из fan-out + клиентская
 /// ротация групповых ключей.
 async fn revoke_device(pool: &SqlitePool, username: &str, device_id: &str) -> Result<bool> {
+    // Отозванное устройство перестаёт быть доверенным для двухфакторного входа
+    let _ = sqlx::query("DELETE FROM trusted_devices WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(device_id)
+        .execute(pool)
+        .await;
     // Тумбстоун: JWT этого устройства перестают проходить verify сразу
     sqlx::query("INSERT OR REPLACE INTO revoked_devices (username, device_id, revoked_at) VALUES (?, ?, ?)")
         .bind(username)
@@ -1082,10 +1092,22 @@ async fn handle_issue(
     };
 
     let resp = match do_issue(pool, encoding, &msg.payload).await {
-        Ok(token) => IssueResponse { ok: true, token: Some(token), error: None },
+        Ok(IssueOutcome::Token(token)) => IssueResponse {
+            ok: true, token: Some(token), error: None, twofa_required: false, login_token: None, telegram_bot: None,
+        },
+        Ok(IssueOutcome::TwoFactor { login_token }) => IssueResponse {
+            ok: false,
+            token: None,
+            error: Some("нужно подтверждение входа в Telegram".into()),
+            twofa_required: true,
+            login_token: Some(login_token),
+            telegram_bot: telegram_bot(),
+        },
         Err(e) => {
             error!("issue error: {}", e);
-            IssueResponse { ok: false, token: None, error: Some(e.to_string()) }
+            IssueResponse {
+                ok: false, token: None, error: Some(e.to_string()), twofa_required: false, login_token: None, telegram_bot: None,
+            }
         }
     };
 
@@ -1095,7 +1117,27 @@ async fn handle_issue(
     }
 }
 
-async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> Result<String> {
+/// Исход логина: JWT или ожидание подтверждения двухфакторного входа.
+#[derive(Debug)]
+enum IssueOutcome {
+    Token(String),
+    TwoFactor { login_token: String },
+}
+
+impl IssueOutcome {
+    #[cfg(test)]
+    fn token(&self) -> Option<&str> {
+        match self {
+            IssueOutcome::Token(token) => Some(token),
+            IssueOutcome::TwoFactor { .. } => None,
+        }
+    }
+}
+
+/// Срок действия токена подтверждения входа (deep link боту).
+const LOGIN_LINK_TTL_SECS: i64 = 600;
+
+async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> Result<IssueOutcome> {
     let mut req: IssueRequest = serde_json::from_slice(payload)
         .context("неверный JSON в IssueRequest")?;
     req.user = canonical_user(&req.user, &server_domain());
@@ -1135,6 +1177,66 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
         anyhow::bail!("почта не подтверждена");
     }
 
+    // Двухфакторный вход: пароль верен, но нужен Start в привязанном Telegram.
+    // С подтверждённым login_token выдаём JWT (токен одноразовый).
+    let (tg_2fa, telegram_id): (i64, Option<i64>) =
+        sqlx::query_as("SELECT tg_2fa, telegram_id FROM users WHERE username = ?")
+            .bind(&req.user)
+            .fetch_one(pool)
+            .await?;
+    let device_id = req.device_id.as_deref().map(str::trim).unwrap_or("");
+    let trusted = if tg_2fa != 0 && telegram_id.is_some() && !device_id.is_empty() {
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM trusted_devices WHERE username = ? AND device_id = ?")
+                .bind(&req.user)
+                .bind(device_id)
+                .fetch_optional(pool)
+                .await?;
+        row.is_some()
+    } else {
+        false
+    };
+    if tg_2fa != 0 && telegram_id.is_some() && !trusted {
+        let now = now_unix();
+        let _ = sqlx::query("DELETE FROM login_links WHERE expires_at < ?").bind(now).execute(pool).await;
+        let presented = req.login_token.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        let confirmed = match presented {
+            Some(token) => {
+                let row: Option<(i64,)> = sqlx::query_as(
+                    "SELECT confirmed FROM login_links WHERE token = ? AND username = ? AND expires_at >= ?",
+                )
+                .bind(token)
+                .bind(&req.user)
+                .bind(now)
+                .fetch_optional(pool)
+                .await?;
+                match row {
+                    Some((1,)) => {
+                        sqlx::query("DELETE FROM login_links WHERE token = ?").bind(token).execute(pool).await?;
+                        if !device_id.is_empty() {
+                            sqlx::query(
+                                "INSERT OR REPLACE INTO trusted_devices (username, device_id, confirmed_at) VALUES (?, ?, ?)",
+                            )
+                            .bind(&req.user)
+                            .bind(device_id)
+                            .bind(now)
+                            .execute(pool)
+                            .await?;
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            None => false,
+        };
+        if !confirmed {
+            let login_token = issue_login_token(pool, &req.user, device_id).await?;
+            info!("Двухфакторный вход: {} ждёт подтверждения в Telegram", req.user);
+            return Ok(IssueOutcome::TwoFactor { login_token });
+        }
+    }
+
     let now = now_unix() as usize;
     let claims = Claims {
         sub: req.user.clone(),
@@ -1146,7 +1248,70 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
         .context("подпись JWT")?;
 
     info!("JWT выдан для: {}", req.user);
+    Ok(IssueOutcome::Token(token))
+}
+
+/// Новый токен подтверждения входа (deep link боту). Прежние токены этого
+/// пользователя гасятся — действует только последний.
+async fn issue_login_token(pool: &SqlitePool, user: &str, device_id: &str) -> Result<String> {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    sqlx::query("DELETE FROM login_links WHERE username = ?").bind(user).execute(pool).await?;
+    sqlx::query("INSERT INTO login_links (token, username, device_id, expires_at, confirmed) VALUES (?, ?, ?, ?, 0)")
+        .bind(&token)
+        .bind(user)
+        .bind(device_id)
+        .bind(now_unix() + LOGIN_LINK_TTL_SECS)
+        .execute(pool)
+        .await?;
     Ok(token)
+}
+
+// ── двухфакторный вход: чтение/переключение ──────────────────────────────────
+
+async fn handle_twofa(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = match do_twofa(pool, decoding, &msg.payload).await {
+        Ok((enabled, telegram_linked)) => TwoFactorResponse { ok: true, error: None, enabled, telegram_linked },
+        Err(e) => TwoFactorResponse { ok: false, error: Some(e.to_string()), enabled: false, telegram_linked: false },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+/// (enabled, telegram_linked). Включить можно только при привязанном Telegram.
+async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<(bool, bool)> {
+    let req: TwoFactorRequest = serde_json::from_slice(payload).context("неверный JSON в TwoFactorRequest")?;
+    let data = decode::<Claims>(&req.token, decoding, &Validation::new(Algorithm::HS256))
+        .context("неверный или просроченный JWT")?;
+    let username = data.claims.sub;
+    let row: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT tg_2fa, telegram_id FROM users WHERE username = ?")
+            .bind(&username)
+            .fetch_optional(pool)
+            .await?;
+    let Some((current, telegram_id)) = row else {
+        anyhow::bail!("аккаунт не найден");
+    };
+    let telegram_linked = telegram_id.is_some();
+    let Some(enabled) = req.enabled else {
+        return Ok((current != 0, telegram_linked));
+    };
+    if enabled && !telegram_linked {
+        anyhow::bail!("сначала привяжите Telegram (подтверждение через бота)");
+    }
+    sqlx::query("UPDATE users SET tg_2fa = ? WHERE username = ?")
+        .bind(enabled as i64)
+        .bind(&username)
+        .execute(pool)
+        .await?;
+    if !enabled {
+        let _ = sqlx::query("DELETE FROM login_links WHERE username = ?").bind(&username).execute(pool).await;
+        // При повторном включении все устройства подтверждают вход заново
+        let _ = sqlx::query("DELETE FROM trusted_devices WHERE username = ?").bind(&username).execute(pool).await;
+    }
+    info!("Двухфакторный вход {} для {}", if enabled { "включён" } else { "выключен" }, username);
+    Ok((enabled, telegram_linked))
 }
 
 // ── регистрация (отдельно от логина) ──────────────────────────────────────────
@@ -1371,8 +1536,10 @@ async fn handle_telegram_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats
         return;
     };
     let resp = match do_telegram_confirm(pool, &msg.payload, telegram_secret().as_deref()).await {
-        Ok(user) => TelegramConfirmResponse { ok: true, error: None, user: Some(user) },
-        Err(e) => TelegramConfirmResponse { ok: false, error: Some(e.to_string()), user: None },
+        Ok((user, kind)) => TelegramConfirmResponse {
+            ok: true, error: None, user: Some(user), kind: Some(kind.to_string()),
+        },
+        Err(e) => TelegramConfirmResponse { ok: false, error: Some(e.to_string()), user: None, kind: None },
     };
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
@@ -1383,7 +1550,7 @@ async fn handle_telegram_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats
 /// Бот прислал `/start <token>`: привязать Telegram к pending-аккаунту и
 /// подтвердить его. Один Telegram — один аккаунт; повторный Start тем же
 /// Telegram по своей же ссылке идемпотентен.
-async fn do_telegram_confirm(pool: &SqlitePool, payload: &[u8], secret: Option<&str>) -> Result<String> {
+async fn do_telegram_confirm(pool: &SqlitePool, payload: &[u8], secret: Option<&str>) -> Result<(String, &'static str)> {
     let req: TelegramConfirmRequest = serde_json::from_slice(payload)
         .context("неверный JSON в TelegramConfirmRequest")?;
     let Some(secret) = secret else {
@@ -1402,7 +1569,8 @@ async fn do_telegram_confirm(pool: &SqlitePool, payload: &[u8], secret: Option<&
             .fetch_optional(pool)
             .await?;
     let Some((user, expires_at)) = link else {
-        anyhow::bail!("ссылка не найдена или уже использована");
+        // Не регистрация — может быть токен двухфакторного входа
+        return confirm_login_link(pool, token, req.telegram_id).await.map(|user| (user, "login"));
     };
     if now_unix() > expires_at {
         anyhow::bail!("ссылка устарела, начните регистрацию заново");
@@ -1433,6 +1601,37 @@ async fn do_telegram_confirm(pool: &SqlitePool, payload: &[u8], secret: Option<&
         .execute(pool)
         .await?;
     info!("Аккаунт {} подтверждён через Telegram ({} {})", user, req.telegram_id, req.telegram_name);
+    Ok((user, "register"))
+}
+
+/// Токен двухфакторного входа: подтвердить может ТОЛЬКО привязанный Telegram
+/// (иначе пароль + любой Telegram обходили бы второй фактор).
+async fn confirm_login_link(pool: &SqlitePool, token: &str, telegram_id: i64) -> Result<String> {
+    let row: Option<(String, i64, i64)> =
+        sqlx::query_as("SELECT username, expires_at, confirmed FROM login_links WHERE token = ?")
+            .bind(token)
+            .fetch_optional(pool)
+            .await?;
+    let Some((user, expires_at, confirmed)) = row else {
+        anyhow::bail!("ссылка не найдена или уже использована");
+    };
+    if now_unix() > expires_at {
+        anyhow::bail!("ссылка входа устарела, войдите заново");
+    }
+    let linked: Option<(Option<i64>,)> = sqlx::query_as("SELECT telegram_id FROM users WHERE username = ?")
+        .bind(&user)
+        .fetch_optional(pool)
+        .await?;
+    let Some((Some(linked_id),)) = linked else {
+        anyhow::bail!("к аккаунту не привязан Telegram");
+    };
+    if linked_id != telegram_id {
+        anyhow::bail!("подтвердить вход может только Telegram, привязанный к аккаунту");
+    }
+    if confirmed == 0 {
+        sqlx::query("UPDATE login_links SET confirmed = 1 WHERE token = ?").bind(token).execute(pool).await?;
+        info!("Вход {} подтверждён в Telegram ({})", user, telegram_id);
+    }
     Ok(user)
 }
 
@@ -1463,7 +1662,19 @@ async fn do_register_status(pool: &SqlitePool, payload: &[u8]) -> Result<bool> {
     .bind(req.token.trim())
     .fetch_optional(pool)
     .await?;
-    Ok(row.is_some_and(|(verified,)| verified != 0))
+    if let Some((verified,)) = row {
+        return Ok(verified != 0);
+    }
+    // Токен двухфакторного входа: подтверждён ли Start в привязанном Telegram
+    let login: Option<(i64,)> = sqlx::query_as(
+        "SELECT confirmed FROM login_links WHERE username = ? AND token = ? AND expires_at >= ?",
+    )
+    .bind(&user)
+    .bind(req.token.trim())
+    .bind(now_unix())
+    .fetch_optional(pool)
+    .await?;
+    Ok(login.is_some_and(|(confirmed,)| confirmed != 0))
 }
 
 /// Минимальная проверка адреса почты (полная валидация — задача SMTP-сервера).
@@ -1959,7 +2170,10 @@ mod tests {
     // ── регистрация отделена от логина ──
 
     fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
-        serde_json::to_vec(&IssueRequest { user: user.into(), password: password.into(), device_id: None }).unwrap()
+        serde_json::to_vec(&IssueRequest {
+            user: user.into(), password: password.into(), device_id: None, login_token: None,
+        })
+        .unwrap()
     }
     fn register_bytes(user: &str, password: &str) -> Vec<u8> {
         register_bytes_email(user, password, "")
@@ -1997,7 +2211,7 @@ mod tests {
         // регистрация создаёт аккаунт
         do_register(&pool, &register_bytes("newbie@local", "pw"), ConfirmMode::None).await.unwrap();
         // теперь логин проходит и выдаёт валидный JWT
-        let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap();
+        let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap().token().unwrap().to_string();
         let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(user, "newbie@local");
         // неверный пароль — отказ
@@ -2091,7 +2305,7 @@ mod tests {
         let (stored,): (String,) = sqlx::query_as("SELECT username FROM users WHERE username = ?")
             .bind("barenick@local").fetch_one(&pool).await.unwrap();
         assert_eq!(stored, "barenick@local");
-        let token = do_issue(&pool, &enc, &issue_bytes("barenick", "pw")).await.unwrap();
+        let token = do_issue(&pool, &enc, &issue_bytes("barenick", "pw")).await.unwrap().token().unwrap().to_string();
         let sub = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(sub, "barenick@local");
         // и полный адрес по-прежнему работает
@@ -2145,8 +2359,9 @@ mod tests {
         // без включённого режима — отказ даже с верным токеном
         assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), None).await.is_err());
         // Start в боте подтверждает
-        let user = do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), Some("s3cret")).await.unwrap();
+        let (user, kind) = do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), Some("s3cret")).await.unwrap();
         assert_eq!(user, "tg@local");
+        assert_eq!(kind, "register");
         assert!(do_register_status(&pool, &status_bytes("tg", &token)).await.unwrap());
         // статус без верного токена — false (не зондируется)
         assert!(!do_register_status(&pool, &status_bytes("tg", "other")).await.unwrap());
@@ -2208,7 +2423,7 @@ mod tests {
         do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.unwrap();
         assert!(do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.is_err());
 
-        let token = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap();
+        let token = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap().token().unwrap().to_string();
         let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(user, "mail@local");
     }
@@ -2692,5 +2907,75 @@ mod tests {
         let (stored,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
             .bind("alice@local").fetch_one(&pool).await.unwrap();
         assert!(stored.is_empty());
+    }
+
+    fn issue_bytes_with_login_token(user: &str, password: &str, login_token: &str) -> Vec<u8> {
+        serde_json::to_vec(&IssueRequest {
+            user: user.into(),
+            password: password.into(),
+            device_id: Some("dev-1".into()),
+            login_token: Some(login_token.into()),
+        })
+        .unwrap()
+    }
+
+    fn twofa_bytes(token: &str, enabled: Option<bool>) -> Vec<u8> {
+        serde_json::to_vec(&TwoFactorRequest { token: token.into(), enabled }).unwrap()
+    }
+
+    #[tokio::test]
+    async fn twofa_login_requires_linked_telegram_confirmation() {
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        // Регистрация с подтверждением в Telegram (привязка tg 42)
+        let out = do_register(&pool, &register_bytes("two", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let reg_token = out.telegram_token.unwrap();
+        do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &reg_token, 42), Some("s3cret")).await.unwrap();
+        let jwt = do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().unwrap().to_string();
+
+        // По умолчанию выключено; включаем по JWT
+        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(), (false, true));
+        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap(), (true, true));
+        assert!(do_twofa(&pool, &dec, &twofa_bytes("bad.jwt", Some(false))).await.is_err());
+
+        // Логин: пароль верен → не JWT, а токен входа
+        let outcome = do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap();
+        let IssueOutcome::TwoFactor { login_token } = outcome else { panic!("ожидался двухфакторный вход") };
+        assert!(!do_register_status(&pool, &status_bytes("two", &login_token)).await.unwrap());
+        // Неподтверждённый токен JWT не даёт (выдаётся новый токен)
+        let again = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", &login_token)).await.unwrap();
+        let IssueOutcome::TwoFactor { login_token: login_token2 } = again else { panic!("токен без подтверждения") };
+        assert!(!do_register_status(&pool, &status_bytes("two", &login_token)).await.unwrap(), "старый токен погашен");
+        // Чужой Telegram — отказ; неверный пароль по-прежнему отказ
+        let wrong = do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &login_token2, 43), Some("s3cret")).await;
+        assert!(wrong.unwrap_err().to_string().contains("привязанный"));
+        assert!(do_issue(&pool, &enc, &issue_bytes("two", "nope")).await.is_err());
+        // Привязанный Telegram подтверждает → статус true → JWT с login_token
+        let (user, kind) = do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &login_token2, 42), Some("s3cret")).await.unwrap();
+        assert_eq!((user.as_str(), kind), ("two@local", "login"));
+        assert!(do_register_status(&pool, &status_bytes("two", &login_token2)).await.unwrap());
+        let jwt2 = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", &login_token2)).await.unwrap();
+        assert!(jwt2.token().is_some());
+        // Устройство dev-1 стало доверенным: вход по паролю без Telegram
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", "")).await.unwrap().token().is_some());
+        // Другое устройство — снова подтверждение (токен одноразовый и погашен)
+        assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().is_none());
+        // Отзыв устройства снимает доверие
+        revoke_device(&pool, "two@local", "dev-1").await.unwrap();
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", "")).await.unwrap().token().is_none());
+        // Выключение — обычный логин без Telegram
+        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(), (false, true));
+        assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().is_some());
+    }
+
+    #[tokio::test]
+    async fn twofa_cannot_be_enabled_without_telegram() {
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        do_register(&pool, &register_bytes("plain", "pw"), ConfirmMode::None).await.unwrap();
+        let jwt = do_issue(&pool, &enc, &issue_bytes("plain", "pw")).await.unwrap().token().unwrap().to_string();
+        let err = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap_err();
+        assert!(err.to_string().contains("привяжите Telegram"), "{err}");
+        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(), (false, false));
     }
 }

@@ -720,6 +720,7 @@ mod tests {
         assert!(allowed_req("alice@local", "identity.server.info"));
         assert!(allowed_req("alice@local", "identity.telegram.confirm"));
         assert!(allowed_req("alice@local", "identity.register.status"));
+        assert!(allowed_req("alice@local", "identity.user.twofa"));
         assert!(allowed_req("alice@local", "msg.sync.request"));
         assert!(allowed_req("alice@local", "group.create"));
         assert!(!allowed_req("alice@local", "msg.user.bob@local"));

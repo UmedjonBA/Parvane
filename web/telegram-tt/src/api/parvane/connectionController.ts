@@ -65,6 +65,16 @@ export type ServerInfo = {
 };
 export type RegisterResult = { confirmRequired: boolean; telegramToken?: string };
 
+// Пароль верен, но включён двухфакторный вход: нужен Start в привязанном
+// Telegram по deep link t.me/<bot>?start=<loginToken>, затем повторный логин с
+// loginToken
+export class TwoFactorRequiredError extends Error {
+  constructor(public loginToken: string, public telegramBot: string) {
+    super('нужно подтверждение входа в Telegram');
+    this.name = 'TwoFactorRequiredError';
+  }
+}
+
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 // Домен адресов, если сервер не сообщил свой: хост страницы; локальная
@@ -124,7 +134,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // только для существующих аккаунтов — иначе опечатка в нике заводила бы
   // pending-аккаунт и вела на экран подтверждения чужого ника
   async function issueToken(
-    activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean,
+    activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean, loginToken = '',
   ) {
     const issue = async () => {
       // device_id — из зеркала (E2eEngine.create), а для свежей установки
@@ -137,12 +147,24 @@ export function createConnectionController(deps: ConnectionDependencies) {
       }
       const raw = await activeConnection.request(
         TOPIC_IDENTITY_ISSUE,
-        JSON.stringify({ user, password, device_id: deviceId || undefined }),
+        JSON.stringify({
+          user, password, device_id: deviceId || undefined, login_token: loginToken || undefined,
+        }),
       );
-      return JSON.parse(raw) as { ok: boolean; token?: string; error?: string };
+      return JSON.parse(raw) as {
+        ok: boolean;
+        token?: string;
+        error?: string;
+        twofa_required?: boolean;
+        login_token?: string;
+        telegram_bot?: string;
+      };
     };
 
     let response = await issue();
+    if (response.twofa_required && response.login_token) {
+      throw new TwoFactorRequiredError(response.login_token, response.telegram_bot || '');
+    }
     if (!response.ok && implicitRegister) {
       const raw = await activeConnection.request(
         TOPIC_IDENTITY_REGISTER,
@@ -307,7 +329,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // `input` — ник или полный адрес; голый ник дополняется доменом сервера
   // (server.info запрашивается на этом же соединении — лишних сокетов нет).
   // Возвращает полный адрес аккаунта
-  async function connectAndLogin(input: string, password: string): Promise<string> {
+  async function connectAndLogin(input: string, password: string, loginToken = ''): Promise<string> {
     cancelReconnect();
     // Новая сессия — состав групп (и их typing-подписки) будет пересобран синком
     subscribedTypingGroups.clear();
@@ -327,7 +349,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
       lastServerInfo = info;
       const user = canonicalAddress(input, info.domain);
 
-      const nextToken = await issueToken(activeConnection, user, password, info.confirm === 'none');
+      const nextToken = await issueToken(activeConnection, user, password, info.confirm === 'none', loginToken);
       deps.setToken(nextToken);
       deps.log('JWT получен');
       await activeConnection.authorize(nextToken);
