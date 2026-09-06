@@ -774,7 +774,10 @@ const methods = {
       Object.keys(savedDrafts).map((address) => store.getIdForAddress(address)),
     );
 
-    const chatIdsWithHistory = new Set(store.getChatIds());
+    // Только чаты с сообщениями: после «удалить чат» список в сторе пустеет,
+    // но ключ остаётся — иначе пометка deleted снималась и пустой чат
+    // всплывал в списке до reload
+    const chatIdsWithHistory = new Set(store.getChatIds().filter((id) => store.getMessages(id).length > 0));
     const unreadMarks = new Set(localState.loadUnreadMarks());
     const isVisibleChat = (chat: ApiChat) => chatIdsWithHistory.has(chat.id)
       || chatIdsWithDrafts.has(chat.id)
