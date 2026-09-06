@@ -137,6 +137,15 @@ try {
   await findHistoryEntry(bobSession.page, 'Incoming Video Call')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── Запись о звонке не делает чат «непрочитанным» (бейдж на строке чата) ──
+  // У звонившего запись исходящая; у принявшего чат открыт — прочитано.
+  const unreadBadge = (page, name) => page.locator('#LeftColumn .ListItem')
+    .filter({ hasText: name.split('@')[0] }).first().getByText(/^\d{1,3}$/);
+  await aliceSession.page.waitForTimeout(1000);
+  assert.equal(await unreadBadge(aliceSession.page, bob).count(), 0, 'у Алисы бейдж непрочитанного после звонка');
+  assert.equal(await unreadBadge(bobSession.page, alice).count(), 0, 'у Боба бейдж непрочитанного при открытом чате');
+  console.log('OK: записи о звонках не оставляют бейдж непрочитанного');
+
   // ── Персист истории: reload, источник — call-шард ──────────────────────────
   await relogin(aliceSession.page, PASSWORD);
   await openPrivateChat(aliceSession.page, bob);

@@ -5,6 +5,8 @@
 // Конфиг через окружение:
 //   TURN_PUBLIC_IP  — внешний IP сервера (в relay-кандидатах). По умолч. 127.0.0.1
 //   TURN_PORT       — UDP-порт (по умолч. 3478)
+//   TURN_TCP_PORT   — дополнительно слушать TURN по TCP (мобильные VPN/сети,
+//                     режущие UDP); пусто — только UDP
 //   TURN_MIN_PORT/TURN_MAX_PORT — диапазон relay-портов (для проброса через NAT);
 //                     без них relay берёт случайные эфемерные порты
 //   TURN_REALM      — realm (по умолч. parvane)
@@ -90,6 +92,19 @@ func main() {
 		}
 	}
 
+	var listenerConfigs []turn.ListenerConfig
+	tcpPort := env("TURN_TCP_PORT", "")
+	if tcpPort != "" {
+		tcpListener, errTCP := net.Listen("tcp4", "0.0.0.0:"+tcpPort)
+		if errTCP != nil {
+			log.Fatalf("не слушается TCP :%s: %v", tcpPort, errTCP)
+		}
+		listenerConfigs = []turn.ListenerConfig{{
+			Listener:              tcpListener,
+			RelayAddressGenerator: relayGen,
+		}}
+	}
+
 	server, err := turn.NewServer(turn.ServerConfig{
 		Realm: realm,
 		AuthHandler: func(username, realm string, srcAddr net.Addr) ([]byte, bool) {
@@ -108,6 +123,7 @@ func main() {
 			PacketConn:            udpListener,
 			RelayAddressGenerator: relayGen,
 		}},
+		ListenerConfigs: listenerConfigs,
 	})
 	if err != nil {
 		log.Fatalf("TURN-сервер не поднялся: %v", err)
@@ -116,8 +132,8 @@ func main() {
 	if user != "" {
 		staticAuth = "on (" + user + ")"
 	}
-	log.Printf("Parvane TURN/STUN на :%s (realm=%s, public=%s, static-user=%s, ephemeral=%t)",
-		port, realm, publicIP, staticAuth, secret != "")
+	log.Printf("Parvane TURN/STUN на udp:%s tcp:%q (realm=%s, public=%s, static-user=%s, ephemeral=%t)",
+		port, tcpPort, realm, publicIP, staticAuth, secret != "")
 	defer func() { _ = server.Close() }()
 
 	select {}

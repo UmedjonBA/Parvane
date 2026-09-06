@@ -330,7 +330,8 @@ async fn handle_history(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
 /// credential = base64(HMAC-SHA1(secret, username)).
 struct IceConfig {
     stun_urls: Vec<String>,
-    turn_url: Option<String>,
+    /// Один или несколько URL одного TURN (udp/tcp через запятую) — общие креды
+    turn_urls: Vec<String>,
     turn_secret: Option<String>,
     ttl_secs: u64,
 }
@@ -344,13 +345,19 @@ impl IceConfig {
             .filter(|url| !url.is_empty())
             .map(str::to_string)
             .collect();
-        let turn_url = std::env::var("PARVANE_TURN_URL").ok().filter(|v| !v.is_empty());
+        let turn_urls = std::env::var("PARVANE_TURN_URL")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(str::to_string)
+            .collect();
         let turn_secret = std::env::var("PARVANE_TURN_SECRET").ok().filter(|v| !v.is_empty());
         let ttl_secs = std::env::var("PARVANE_TURN_TTL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(3600);
-        Self { stun_urls, turn_url, turn_secret, ttl_secs }
+        Self { stun_urls, turn_urls, turn_secret, ttl_secs }
     }
 
     fn build_response(&self, user: &str, now: i64) -> IceServersResponse {
@@ -362,11 +369,11 @@ impl IceConfig {
                 credential: None,
             });
         }
-        if let (Some(turn_url), Some(secret)) = (&self.turn_url, &self.turn_secret) {
+        if let Some(secret) = self.turn_secret.as_ref().filter(|_| !self.turn_urls.is_empty()) {
             let username = format!("{}:{}", now + self.ttl_secs as i64, user);
             let credential = turn_rest_credential(secret, &username);
             ice_servers.push(IceServer {
-                urls: vec![turn_url.clone()],
+                urls: self.turn_urls.clone(),
                 username: Some(username),
                 credential: Some(credential),
             });
@@ -440,7 +447,7 @@ mod tests {
     fn ice_response_contains_stun_and_ephemeral_turn() {
         let config = IceConfig {
             stun_urls: vec!["stun:stun.example:3478".into()],
-            turn_url: Some("turn:turn.example:3478".into()),
+            turn_urls: vec!["turn:turn.example:3478".into()],
             turn_secret: Some("secret".into()),
             ttl_secs: 600,
         };
@@ -459,7 +466,7 @@ mod tests {
     fn ice_response_without_turn_env_is_stun_only() {
         let config = IceConfig {
             stun_urls: vec!["stun:s".into()],
-            turn_url: None,
+            turn_urls: vec![],
             turn_secret: None,
             ttl_secs: 3600,
         };
