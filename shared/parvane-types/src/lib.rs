@@ -21,6 +21,8 @@ pub mod topics {
     pub const IDENTITY_TELEGRAM_CONFIRM: &str = "identity.telegram.confirm";
     /// Опрос клиентом статуса подтверждения pending-аккаунта (pre-auth).
     pub const IDENTITY_REGISTER_STATUS: &str = "identity.register.status";
+    /// Двухфакторный вход через привязанный Telegram: прочитать/переключить (JWT).
+    pub const IDENTITY_TWOFA: &str = "identity.user.twofa";
     /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
@@ -163,6 +165,10 @@ pub struct IssueRequest {
     /// устройства его токены отклоняются на verify сразу, а не через 24 ч.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    /// Двухфакторный вход: токен входа, уже подтверждённый в Telegram
+    /// (identity.telegram.confirm) — с ним issue выдаёт JWT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +176,14 @@ pub struct IssueResponse {
     pub ok: bool,
     pub token: Option<String>,
     pub error: Option<String>,
+    /// Пароль верен, но включён двухфакторный вход: нужно подтверждение в
+    /// привязанном Telegram по deep link t.me/<bot>?start=<login_token>.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub twofa_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_bot: Option<String>,
 }
 
 /// Регистрация нового аккаунта. Отделена от логина (`issue`), чтобы `issue` не
@@ -257,6 +271,29 @@ pub struct TelegramConfirmResponse {
     /// Подтверждённый адрес (ник@домен) — для ответа пользователю в боте.
     #[serde(default)]
     pub user: Option<String>,
+    /// Что подтверждено: "register" (аккаунт) или "login" (двухфакторный вход).
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+/// Двухфакторный вход: чтение/переключение (JWT). `enabled: None` — только
+/// прочитать состояние. Включить можно только при привязанном Telegram.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TwoFactorRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TwoFactorResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub telegram_linked: bool,
 }
 
 /// Клиент опрашивает, подтверждён ли его pending-аккаунт (токен — доказательство

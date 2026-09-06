@@ -6,9 +6,13 @@ import {
   authStorageKeys,
   clearLoginStorage,
   consumeLegacyCredentials,
+  isSessionExpired,
   parseLoginCredentials,
   readLoginAddress,
+  readSessionActivity,
   saveLoginAddress,
+  SESSION_IDLE_LIMIT_MS,
+  touchSessionActivity,
 } from './authStorage';
 
 const localValues = new Map<string, string>();
@@ -50,5 +54,19 @@ describe('Parvane login storage', () => {
     expect(parseLoginCredentials('alice@local:pass:with:colons')).toEqual({
       user: 'alice@local', password: 'pass:with:colons',
     });
+  });
+});
+
+describe('Срок сессии «оставаться в системе»', () => {
+  it('без отметки активности сессия свежая, после суток тишины — просрочена', () => {
+    localStorage.removeItem('parvane:last-active');
+    expect(isSessionExpired()).toBe(false);
+    const now = 1_800_000_000_000;
+    touchSessionActivity(now);
+    expect(readSessionActivity()).toBe(now);
+    expect(isSessionExpired(now + SESSION_IDLE_LIMIT_MS - 1)).toBe(false);
+    expect(isSessionExpired(now + SESSION_IDLE_LIMIT_MS + 1)).toBe(true);
+    clearLoginStorage();
+    expect(readSessionActivity()).toBeUndefined();
   });
 });

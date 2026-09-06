@@ -142,6 +142,7 @@ export const TOPIC_IDENTITY_REGISTER = 'identity.user.register';
 export const TOPIC_IDENTITY_EMAIL_CONFIRM = 'identity.email.confirm';
 export const TOPIC_IDENTITY_SERVER_INFO = 'identity.server.info';
 export const TOPIC_IDENTITY_REGISTER_STATUS = 'identity.register.status';
+export const TOPIC_IDENTITY_TWOFA = 'identity.user.twofa';
 export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
 export const TOPIC_IDENTITY_SEARCH = 'identity.user.search';
 export const TOPIC_IDENTITY_SETNAME = 'identity.user.setname';

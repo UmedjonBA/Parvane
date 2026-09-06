@@ -23,6 +23,7 @@ const AuthParvaneTelegram = ({ auth }: StateProps) => {
 
   const [link, setLink] = useState('');
   const [nick, setNick] = useState('');
+  const [isLogin, setIsLogin] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
 
   const lang = useLang();
@@ -35,6 +36,7 @@ const AuthParvaneTelegram = ({ auth }: StateProps) => {
       if (isCancelled || !context) return;
       setLink(context.telegramLink);
       setNick(context.nick);
+      setIsLogin(context.telegramMode === 'login');
     });
     return () => {
       isCancelled = true;
@@ -60,14 +62,14 @@ const AuthParvaneTelegram = ({ auth }: StateProps) => {
     <div id="auth-telegram-form" className="custom-scroll">
       <div className="auth-form">
         <div id="logo" />
-        <h1>{lang('ParvaneTelegramTitle')}</h1>
+        <h1>{lang(isLogin ? 'ParvaneTelegramLoginTitle' : 'ParvaneTelegramTitle')}</h1>
         {nick && (
           <p className="note">
             @
             {nick}
           </p>
         )}
-        <p className="note">{lang('ParvaneTelegramText')}</p>
+        <p className="note">{lang(isLogin ? 'ParvaneTelegramLoginText' : 'ParvaneTelegramText')}</p>
         <Button
           className="auth-button"
           ripple

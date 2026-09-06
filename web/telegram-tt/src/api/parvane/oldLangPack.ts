@@ -445,6 +445,12 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   'UserInfo.NotificationsEnabled': 'Enabled',
   'UserInfo.NotificationsDisabled': 'Disabled',
   DeleteContact: 'Delete Contact',
+  ParvaneTwoFactorTitle: 'Two-factor authentication',
+  ParvaneTwoFactorToggle: 'Confirm sign-in in Telegram',
+  ParvaneTwoFactorInfo: 'After the password, each new device must be confirmed in the Telegram account '
+    + 'linked to this profile.',
+  ParvaneTwoFactorNoTelegram: 'Link Telegram first: it is done when confirming the account via the bot.',
+  ParvaneTwoFactorFailed: 'Could not change the two-factor setting',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -943,6 +949,12 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'UserInfo.NotificationsEnabled': 'Включены',
   'UserInfo.NotificationsDisabled': 'Выключены',
   DeleteContact: 'Удалить контакт',
+  ParvaneTwoFactorTitle: 'Двухфакторная аутентификация',
+  ParvaneTwoFactorToggle: 'Подтверждать вход в Telegram',
+  ParvaneTwoFactorInfo: 'После пароля каждое новое устройство нужно подтвердить в Telegram-аккаунте, '
+    + 'привязанном к профилю.',
+  ParvaneTwoFactorNoTelegram: 'Сначала привяжите Telegram: это происходит при подтверждении аккаунта через бота.',
+  ParvaneTwoFactorFailed: 'Не удалось изменить настройку двухфакторного входа',
 };
 
 function isRussian(langCode: string) {

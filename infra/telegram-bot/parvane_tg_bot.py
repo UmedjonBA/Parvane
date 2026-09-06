@@ -44,6 +44,7 @@ TEXT_HELP = (
     "и на следующем экране нажмите «Open Telegram». Тогда я подтвержу аккаунт."
 )
 TEXT_OK = "Аккаунт {user} подтверждён ✅\nВозвращайтесь в " + APP_NAME + " — вход произойдёт сам."
+TEXT_OK_LOGIN = "Вход в аккаунт {user} подтверждён. Возвращайтесь в Parvane."
 TEXT_FAIL = "Не получилось подтвердить: {error}\nНачните регистрацию в " + APP_NAME + " заново и нажмите Start по новой ссылке."
 TEXT_DOWN = "Сервер " + APP_NAME + " сейчас недоступен, попробуйте через минуту."
 
@@ -106,8 +107,10 @@ async def handle_message(message: dict):
     if result.get("ok"):
         user = result.get("user") or ""
         nick = user.split("@")[0] if user else "?"
-        log.info("подтверждён %s для tg %s (%s)", user, sender.get("id"), name)
-        tg_call("sendMessage", chat_id=chat_id, text=TEXT_OK.format(user=f"@{nick}"))
+        kind = result.get("kind") or "register"
+        log.info("подтверждён %s (%s) для tg %s (%s)", user, kind, sender.get("id"), name)
+        text = TEXT_OK_LOGIN if kind == "login" else TEXT_OK
+        tg_call("sendMessage", chat_id=chat_id, text=text.format(user=f"@{nick}"))
     else:
         log.warning("отказ для tg %s: %s", sender.get("id"), result.get("error"))
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_FAIL.format(error=result.get("error", "неизвестная ошибка")))

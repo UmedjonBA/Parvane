@@ -3043,3 +3043,6 @@
 "ParvaneTelegramWaiting" = "Waiting for confirmation in Telegram…";
 "ParvaneTelegramCheck" = "I pressed Start";
 "ParvaneTelegramExpired" = "The Telegram link has expired. Please register again.";
+"ParvaneTelegramLoginTitle" = "Confirm sign-in via Telegram";
+"ParvaneTelegramLoginText" = "Two-factor authentication is on. Open our Telegram bot and press Start — only the Telegram account linked to this profile can confirm the sign-in.";
+"ParvaneTelegramLoginExpired" = "The sign-in link has expired. Please enter your password again.";

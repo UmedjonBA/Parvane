@@ -643,6 +643,8 @@ export function createMediaService(deps: MediaDependencies) {
     if (!mediaId) return undefined;
     const keys = keysByFileId.get(mediaId);
     const cryptoFields = keys ? { file_key: keys.keyB64, file_nonce: keys.nonceB64 } : {};
+    // Подпись к медиа (пересылка теряла её)
+    const captionFields = content.text?.text ? { caption: content.text.text } : {};
     if (content.voice) {
       return {
         kind: 'voice',
@@ -677,6 +679,7 @@ export function createMediaService(deps: MediaDependencies) {
         audio_title: content.audio.title,
         audio_performer: content.audio.performer,
         ...cryptoFields,
+        ...captionFields,
       };
     }
     if (content.video?.isGif) {
@@ -690,6 +693,7 @@ export function createMediaService(deps: MediaDependencies) {
         duration_secs: Math.round(content.video.duration),
         size_bytes: content.video.size,
         ...cryptoFields,
+        ...captionFields,
       };
     }
     if (content.video) {
@@ -702,6 +706,7 @@ export function createMediaService(deps: MediaDependencies) {
         mime: content.video.mimeType,
         size_bytes: content.video.size,
         ...cryptoFields,
+        ...captionFields,
       };
     }
     if (content.sticker) {
@@ -717,7 +722,7 @@ export function createMediaService(deps: MediaDependencies) {
     }
     if (content.photo) {
       return {
-        kind: 'photo', file_id: mediaId, width: 0, height: 0, mime: 'image/jpeg', ...cryptoFields,
+        kind: 'photo', file_id: mediaId, width: 0, height: 0, mime: 'image/jpeg', ...cryptoFields, ...captionFields,
       };
     }
     return {

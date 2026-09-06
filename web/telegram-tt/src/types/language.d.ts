@@ -2221,6 +2221,9 @@ export interface LangPair {
   'ParvaneTelegramWaiting': undefined;
   'ParvaneTelegramCheck': undefined;
   'ParvaneTelegramExpired': undefined;
+  'ParvaneTelegramLoginTitle': undefined;
+  'ParvaneTelegramLoginText': undefined;
+  'ParvaneTelegramLoginExpired': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

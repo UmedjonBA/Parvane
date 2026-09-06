@@ -285,6 +285,35 @@ export function createMessageController(deps: MessageDependencies) {
     }
   }
 
+  // Пересылка зашифрованного медиа в другой чат: скачать (или взять из кэша)
+  // расшифрованный блоб и выгрузить заново с грантами для получателей
+  // целевого чата. undefined — оставить как есть (блоб недоступен)
+  async function reshareMedia(fileId: string, toAddress: string) {
+    const cached = await deps.media.getCached(fileId)?.catch(() => undefined)
+      || await deps.media.downloadBlob(fileId).catch(() => undefined);
+    if (!cached) return undefined;
+    const mimeType = cached.mimeType || cached.blob.type || 'application/octet-stream';
+    const upload = await deps.media.uploadBlob(cached.blob, `forward-${fileId}`, mimeType, {
+      encrypt: true, recipients: deps.media.getCloudRecipients(toAddress),
+    });
+    if (!upload.mediaKeys) return undefined;
+    deps.media.cacheBlob(upload.fileId, cached.blob, mimeType);
+    return {
+      oldId: fileId, fileId: upload.fileId, keyB64: upload.mediaKeys.keyB64, nonceB64: upload.mediaKeys.nonceB64,
+    };
+  }
+
+  function replaceMediaId(content: ApiMessage['content'], oldId: string, newId: string): ApiMessage['content'] {
+    const next = { ...content };
+    (['photo', 'document', 'video', 'voice', 'audio', 'sticker'] as const).forEach((key) => {
+      const media = next[key] as { id?: string } | undefined;
+      if (media?.id === oldId) {
+        (next as Record<string, unknown>)[key] = { ...media, id: newId };
+      }
+    });
+    return next;
+  }
+
   async function publishInner(
     toAddress: string,
     wireContent: Record<string, unknown>,
@@ -1454,6 +1483,19 @@ export function createMessageController(deps: MessageDependencies) {
       for (const message of messages) {
         const wireContent = deps.media.messageToWireContent(message);
         if (!wireContent) continue;
+        // Зашифрованное медиа: файл в облаке выдан только участникам исходного
+        // чата, у нового получателя доступа нет (грант только при загрузке) —
+        // перевыгружаем блоб под новым ключом для получателей целевого чата
+        let content = message.content;
+        if (typeof wireContent.file_id === 'string' && wireContent.file_key) {
+          const reshared = await reshareMedia(wireContent.file_id, toAddress);
+          if (reshared) {
+            wireContent.file_id = reshared.fileId;
+            wireContent.file_key = reshared.keyB64;
+            wireContent.file_nonce = reshared.nonceB64;
+            content = replaceMediaId(content, reshared.oldId, reshared.fileId);
+          }
+        }
         const originalSender = message.senderId ? currentStore.getAddressForId(message.senderId) : fromAddress;
         wireContent.forwarded_from = originalSender || fromAddress;
         wireContent.forwarded_name = originalSender
@@ -1466,7 +1508,7 @@ export function createMessageController(deps: MessageDependencies) {
         const localMessage: ApiMessage = {
           id,
           chatId: toChat.id,
-          content: message.content,
+          content,
           date: Math.floor(Date.now() / 1000),
           isForwardingAllowed: true,
           isOutgoing: true,
