@@ -77,9 +77,9 @@ use parvane_types::{
         GATEWAY_TOKEN_REQUEST_SUBJECTS,
     },
     topics::{
-        call_inbox, msg_inbox, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_REGISTER,
-        IDENTITY_REGISTER_STATUS, IDENTITY_SERVER_INFO, IDENTITY_TELEGRAM_CONFIRM,
-        IDENTITY_VERIFY,
+        call_inbox, msg_inbox, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, IDENTITY_EMAIL_CONFIRM,
+        IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_SERVER_INFO,
+        IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY,
     },
     VerifyRequest, VerifyResponse,
 };
@@ -87,6 +87,75 @@ use parvane_types::{
 fn env(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+/// Token bucket: `capacity` — допустимый всплеск, `refill_per_sec` — устойчивая
+/// частота. Клиент недоверенный: флуд сообщениями/чанками режем на gateway,
+/// потому что для sealed-сообщений только он знает пользователя сессии.
+struct TokenBucket {
+    capacity: f64,
+    tokens: f64,
+    refill_per_sec: f64,
+    last: Instant,
+}
+
+impl TokenBucket {
+    fn new(capacity: f64, refill_per_sec: f64) -> Self {
+        Self { capacity, tokens: capacity, refill_per_sec, last: Instant::now() }
+    }
+
+    fn try_take_at(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = (self.tokens + elapsed * self.refill_per_sec).min(self.capacity);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn try_take(&mut self) -> bool {
+        self.try_take_at(Instant::now())
+    }
+}
+
+/// Лимиты одной авторизованной сессии по классам операций.
+struct SessionRate {
+    messages: TokenBucket,
+    uploads: TokenBucket,
+    requests: TokenBucket,
+}
+
+impl SessionRate {
+    fn from_env() -> Self {
+        Self {
+            // сообщения/правки/реакции: всплеск 30, устойчиво 3 в секунду
+            messages: TokenBucket::new(env_f64("GATEWAY_RATE_MSG_BURST", 30.0), env_f64("GATEWAY_RATE_MSG_PER_SEC", 3.0)),
+            // чанки загрузки (256 КиБ): всплеск 400, устойчиво 40/с ≈ 10 МБ/с
+            uploads: TokenBucket::new(env_f64("GATEWAY_RATE_UPLOAD_BURST", 400.0), env_f64("GATEWAY_RATE_UPLOAD_PER_SEC", 40.0)),
+            // прочие request/reply: всплеск 120, устойчиво 20/с
+            requests: TokenBucket::new(env_f64("GATEWAY_RATE_REQ_BURST", 120.0), env_f64("GATEWAY_RATE_REQ_PER_SEC", 20.0)),
+        }
+    }
+
+    /// true — операция допущена; false — лимит исчерпан
+    fn allow(&mut self, subject: &str) -> bool {
+        if subject == FILE_UPLOAD_CHUNK || subject == FILE_UPLOAD_COMPLETE {
+            self.uploads.try_take()
+        } else if subject.starts_with("msg.chat.") {
+            self.messages.try_take()
+        } else {
+            self.requests.try_take()
+        }
+    }
+}
+
+const RATE_LIMITED: &str = "rate_limited: слишком часто, подождите";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -324,6 +393,7 @@ async fn serve(
     let mut subs: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // 2) основной цикл
+    let mut rate = SessionRate::from_env();
     while let Some(text) = in_rx.recv().await {
         let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
@@ -335,6 +405,11 @@ async fn serve(
         match v["op"].as_str().unwrap_or("") {
             "pub" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
+                if !rate.allow(&subject) {
+                    warn!("rate limit: {} pub {}", user, subject);
+                    let _ = tx.send(json!({"op":"err","error":RATE_LIMITED,"subject":subject}).to_string()).await;
+                    continue;
+                }
                 if allowed_pub(&user, &subject) {
                     match bind_client_payload(
                         &user,
@@ -361,6 +436,11 @@ async fn serve(
                     let _ = tx.send(err_frame(Some(&id), "request запрещён")).await;
                     continue;
                 }
+                if !rate.allow(&subject) {
+                    warn!("rate limit: {} req {}", user, subject);
+                    let _ = tx.send(err_frame(Some(&id), RATE_LIMITED)).await;
+                    continue;
+                }
                 let payload = match bind_client_payload(
                     &user,
                     &auth_token,
@@ -384,6 +464,11 @@ async fn serve(
                 let timeout = v["timeout_ms"].as_u64().unwrap_or(5000);
                 if !allowed_req(&user, &subject) {
                     let _ = tx.send(err_frame(Some(&id), "request запрещён")).await;
+                    continue;
+                }
+                if !rate.allow(&subject) {
+                    warn!("rate limit: {} reqmany {}", user, subject);
+                    let _ = tx.send(err_frame(Some(&id), RATE_LIMITED)).await;
                     continue;
                 }
                 let payload = match bind_client_payload(
@@ -641,6 +726,39 @@ fn allowed_req(_user: &str, subject: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_bucket_bursts_then_refills() {
+        let mut bucket = TokenBucket::new(3.0, 1.0);
+        let t0 = Instant::now();
+        assert!(bucket.try_take_at(t0));
+        assert!(bucket.try_take_at(t0));
+        assert!(bucket.try_take_at(t0));
+        assert!(!bucket.try_take_at(t0), "всплеск исчерпан");
+        assert!(!bucket.try_take_at(t0 + Duration::from_millis(500)));
+        assert!(bucket.try_take_at(t0 + Duration::from_millis(1100)), "через секунду — один токен");
+        assert!(!bucket.try_take_at(t0 + Duration::from_millis(1100)));
+        // Долгая пауза не копит больше capacity
+        assert!(bucket.try_take_at(t0 + Duration::from_secs(60)));
+        assert!(bucket.try_take_at(t0 + Duration::from_secs(60)));
+        assert!(bucket.try_take_at(t0 + Duration::from_secs(60)));
+        assert!(!bucket.try_take_at(t0 + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn session_rate_classifies_subjects() {
+        let mut rate = SessionRate {
+            messages: TokenBucket::new(1.0, 0.0),
+            uploads: TokenBucket::new(1.0, 0.0),
+            requests: TokenBucket::new(1.0, 0.0),
+        };
+        assert!(rate.allow("msg.chat.send"));
+        assert!(!rate.allow("msg.chat.edit"), "сообщения делят одну корзину");
+        assert!(rate.allow("file.upload.chunk"));
+        assert!(!rate.allow("file.upload.complete"));
+        assert!(rate.allow("identity.user.search"));
+        assert!(!rate.allow("group.list"));
+    }
 
     #[test]
     fn sub_allows_only_own_inboxes() {

@@ -21,6 +21,7 @@ import type {
   ApiWallpaper,
   OnApiUpdate } from '../types';
 import type { ServerInfo } from './connectionController';
+import type { WireDeviceBundle } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireUserInfo } from './wire';
@@ -93,6 +94,7 @@ import {
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
+  TOPIC_PREKEYS_FETCH,
   TOPIC_PUSH_REGISTER,
   TOPIC_PUSH_UNREGISTER,
   TOPIC_PUSH_VAPID_GET,
@@ -1750,6 +1752,27 @@ const methods = {
         : '',
       telegramMode: pendingTelegramMode,
     });
+  },
+
+  // ── ключи безопасности (отпечатки identity-ключей) ──────────────────────
+  async parvaneFetchSecurityInfo({ chatId }: { chatId?: string }) {
+    const engine = e2e;
+    if (!engine) return undefined;
+    const own = await engine.getOwnFingerprint();
+    const address = chatId ? store.getAddressForId(chatId) : undefined;
+    if (!address || address === store.self || store.isGroupAddress(address)) {
+      return { own, devices: [] as { deviceId: string; fingerprint: string }[] };
+    }
+    const fetchBundle = async (user: string) => {
+      const raw = await connection!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
+        token, user, known_devices: engine.getKnownDeviceIds(user),
+      }));
+      return JSON.parse(raw) as {
+        ok: boolean; identity_key?: string; signed_prekey?: string; one_time?: string; devices?: WireDeviceBundle[];
+      };
+    };
+    const devices = await engine.getContactFingerprints(address, connection ? fetchBundle : undefined);
+    return { own, devices };
   },
 
   // ── двухфакторный вход (Settings → Privacy) ──────────────────────────────

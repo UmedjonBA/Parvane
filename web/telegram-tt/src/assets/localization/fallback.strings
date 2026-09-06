@@ -3046,3 +3046,4 @@
 "ParvaneTelegramLoginTitle" = "Confirm sign-in via Telegram";
 "ParvaneTelegramLoginText" = "Two-factor authentication is on. Open our Telegram bot and press Start — only the Telegram account linked to this profile can confirm the sign-in.";
 "ParvaneTelegramLoginExpired" = "The sign-in link has expired. Please enter your password again.";
+"ParvaneSecurityKeyChanged" = "The security key of {user} has changed. If you did not expect this, verify the key fingerprint in the profile.";

@@ -71,6 +71,15 @@ try {
   console.log('OK: контакт по нику добавлен и виден в списке');
   await closeContacts(page);
 
+  // ── Профиль собеседника: отпечаток ключа безопасности (12 групп hex) ──────
+  await page.locator('#MiddleColumn .ChatInfo, #MiddleColumn .chat-info-wrapper, #MiddleColumn .MiddleHeader').first().click();
+  const securityRow = page.locator('#RightColumn').getByText('Security key', { exact: true });
+  await securityRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#RightColumn').getByText(/^([0-9a-f]{4} ){11}[0-9a-f]{4}$/).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: в профиле показан отпечаток ключа безопасности');
+  await page.keyboard.press('Escape');
+
   // ── Переписка делает собеседника контактом ────────────────────────────────
   const hello = `hello-${suffix}`;
   await openPrivateChatStrict(carolSession.page, alice);

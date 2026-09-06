@@ -41,6 +41,15 @@ export type WireDeviceBundle = {
   one_time?: string;
 };
 
+// Отпечаток ключа: SHA-256 от base64 identity-ключа, 12 групп по 4 hex-символа
+// (48 символов), как safety number — сверяется вслух/по другому каналу
+export async function fingerprintOf(key: string): Promise<string> {
+  if (!key) return '';
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return (hex.slice(0, 48).match(/.{4}/g) || []).join(' ');
+}
+
 type BundleFetcher = (user: string) => Promise<{
   ok: boolean;
   identity_key?: string;
@@ -651,6 +660,21 @@ export class E2eEngine {
     return Object.values(devices).map((device) => device.signing).filter(Boolean);
   }
 
+  // Отпечатки identity-ключей устройств собеседника (для ручной сверки по
+  // другому каналу). Пусто — устройства ещё не известны
+  async getContactFingerprints(contact: string, fetchBundle?: BundleFetcher) {
+    if (fetchBundle) await this.refreshContactDevices(contact, fetchBundle);
+    const devices = this.devicesByContact.get(contact) || {};
+    const entries = await Promise.all(Object.entries(devices).map(async ([deviceId, device]) => ({
+      deviceId, fingerprint: await fingerprintOf(device.identity),
+    })));
+    return entries.sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+  }
+
+  getOwnFingerprint() {
+    return fingerprintOf(this.identityKey);
+  }
+
   getKnownDeviceIds(contact: string): string[] {
     const devices = this.devicesByContact.get(contact) || {};
     const known = Object.entries(devices)
@@ -787,10 +811,15 @@ export class E2eEngine {
     }
   }
 
-  rememberContactIdentity(contact: string, identity: string) {
-    if (this.identityByContact[contact] === identity) return;
+  // true — ключ собеседника СМЕНИЛСЯ (был другой): повод предупредить
+  // пользователя, как «safety number changed» в Signal
+  rememberContactIdentity(contact: string, identity: string): boolean {
+    const previous = this.identityByContact[contact];
+    if (previous === identity) return false;
     this.identityByContact[contact] = identity;
+    const changed = Boolean(previous);
     this.persistContacts();
+    return changed;
   }
 
   // Аутентичность отправителя sealed-сообщения: sender_identity ОБЯЗАН
