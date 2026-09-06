@@ -116,6 +116,9 @@ Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи 
   turn:213.155.15.139:3478?transport=tcp`, `PARVANE_STUN_URLS=stun:213.155.15.139:3478`
   (call-шард принимает список URL через запятую; compose подставляет старый
   локальный TURN, если переменные не заданы).
+- локальный контейнер `turn` из compose и его сборка из deploy.sh удалены
+  (6 сен 2026); PARVANE_TURN_RELAY_IP/MIN/MAX_PORT в .env прода больше не
+  используются.
 - проверка снаружи: `TURN_URL=turn:213.155.15.139:3478?transport=udp
   TURN_USER=<expiry>:probe@local TURN_PASS=<base64 HMAC-SHA1(secret, user)>
   node scripts/e2e_turn_relay_check.mjs` → `RELAY OK` с relay-кандидатом

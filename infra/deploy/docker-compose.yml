@@ -1,7 +1,7 @@
 # Parvane на m60-7 (docker compose, без sudo). Файлы на сервере: ~/parvane/
 #   .env            — секреты (генерирует deploy.sh при первом деплое)
 #   nats/server.prod.conf, Caddyfile, web-dist/ — заливает deploy.sh
-# Образы parvane-shards / parvane-turn собираются ЛОКАЛЬНО (podman, baseline
+# Образ parvane-shards собирается ЛОКАЛЬНО (podman, baseline
 # x86-64) и заливаются через docker load — на сервере НЕ собирать.
 
 name: parvane
@@ -146,26 +146,8 @@ services:
       - caddy-data:/data
       - caddy-config:/config
 
-  # TURN — host-сеть: NAT хостера шлёт 20478->3478 и (пока криво) 2016x->4916x
-  # прямо на хост. Relay-адрес — ПРИВАТНЫЙ IP хоста: из-за случайного range-DNAT
-  # у хостера внешние relay-кандидаты недостижимы, а relay<->relay внутри
-  # сервера по приватному адресу работает (double-relay через 3478).
-  # Когда хостер переделает проброс 1:1 (20160-20200 -> те же порты), сменить:
-  # TURN_PUBLIC_IP на внешний IP, TURN_MIN/MAX_PORT на 20160/20200.
-  turn:
-    image: localhost/parvane-turn:latest
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      TURN_PUBLIC_IP: ${PARVANE_TURN_RELAY_IP}
-      TURN_PORT: "3478"
-      TURN_REALM: parvane
-      # Статичный long-term кред ОТКЛЮЧЁН (TURN_USER пуст) — только ephemeral
-      # REST-креды от call-шарда по JWT. Нет постоянного разделяемого пароля.
-      TURN_USER: ""
-      TURN_SECRET: ${PARVANE_TURN_SECRET}
-      TURN_MIN_PORT: ${PARVANE_TURN_MIN_PORT}
-      TURN_MAX_PORT: ${PARVANE_TURN_MAX_PORT}
+  # TURN/STUN вынесен на VPS 213.155.15.139 (см. OPERATIONS.md «TURN на VPS»):
+  # relay хостера снаружи недостижим. Локальный контейнер turn удалён.
 
 volumes:
   db:

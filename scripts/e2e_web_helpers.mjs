@@ -5,6 +5,26 @@ import assert from 'node:assert/strict';
 export const LOGIN_TIMEOUT_MS = 60000;
 export const RECONNECT_TIMEOUT_MS = 30000;
 
+// Клик, который под нагрузкой мог не дойти (перерисовка/анимация кнопки):
+// обычный → force → dispatchEvent, после каждого ждём `isDone`
+export async function clickUntil(locator, isDone, { attempts = 4, settleMs = 3000 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      if (attempt === 0) await locator.click({ timeout: 5000 });
+      else if (attempt === 1) await locator.click({ force: true, timeout: 5000 });
+      else await locator.dispatchEvent('click');
+    } catch {
+      // кнопка перемонтировалась — проверим результат и попробуем снова
+    }
+    const done = await Promise.race([
+      isDone().then(() => true).catch(() => false),
+      new Promise((resolve) => { setTimeout(() => resolve(false), settleMs); }),
+    ]);
+    if (done) return;
+  }
+  await isDone();
+}
+
 export function requireEnv() {
   const baseUrl = process.env.PARVANE_E2E_BASE_URL;
   const gatewayUrl = process.env.PARVANE_E2E_GATEWAY_URL;
@@ -54,8 +74,11 @@ export async function preparePage(context, user, password, { seedLocalStorage } 
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(password);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await clickUntil(
+    passwordScreen.getByRole('button', { name: 'Next' }),
+    () => page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+    { settleMs: 15000 },
+  );
   await page.waitForFunction(() => globalThis.__parvaneE2eSockets?.opened === 1);
   return { page, errors };
 }
@@ -79,7 +102,13 @@ export async function submitNick(page, user) {
       if (Date.now() > deadline) throw err;
     }
   }
-  await nextButton.click();
+  // Под нагрузкой кнопка «Next» перерисовывается и обычный click не проходит
+  // («element is not stable») — повторяем, пока экран ника не сменится
+  await clickUntil(
+    nextButton,
+    () => addressScreen.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }),
+    { settleMs: 8000 },
+  );
 }
 
 export async function openPrivateChat(page, address) {
@@ -275,7 +304,11 @@ export async function relogin(page, password) {
   ]);
   if (await passwordScreen.isVisible()) {
     await passwordScreen.locator('#sign-in-password').fill(password);
-    await passwordScreen.getByRole('button', { name: 'Next' }).click();
+    await clickUntil(
+      passwordScreen.getByRole('button', { name: 'Next' }),
+      () => leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+      { settleMs: 15000 },
+    );
   }
   await leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }

@@ -10,6 +10,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  clickUntil,
   dumpDiagJournal,
   findMessage,
   openPrivateChatStrict,
@@ -44,8 +45,13 @@ async function deleteChatFromList(page, address, buttonName) {
   const modal = page.locator('.Modal.DeleteChatModal, .Modal').filter({ hasText: /delete/i }).first();
   const button = modal.getByRole('button', { name: buttonName });
   await button.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await button.click();
-  await chatItem(page, address).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  // Под нагрузкой клик по кнопке модалки мог не дойти — повторяем, пока чат
+  // не исчезнет из списка
+  await clickUntil(
+    button,
+    () => chatItem(page, address).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }),
+    { settleMs: 8000 },
+  );
 }
 
 async function expectVisible(page, text) {
@@ -125,7 +131,7 @@ try {
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR;
   if (shotDir && aliceSession) await aliceSession.page.screenshot({ path: `${shotDir}/delchat-alice.png` }).catch(() => {});
-  if (aliceSession) await dumpDiagJournal(aliceSession.page, 'alice').catch(() => {});
+  if (aliceSession) await dumpDiagJournal(aliceSession.page, 'alice', 160).catch(() => {});
   if (bobSession) await dumpDiagJournal(bobSession.page, 'bob').catch(() => {});
   throw error;
 } finally {

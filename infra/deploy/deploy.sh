@@ -29,12 +29,8 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
     --ignorefile "$ROOT/infra/deploy/shards.dockerignore" \
     -t parvane-shards "$ROOT"
 
-  log "Сборка образа TURN"
-  podman build --http-proxy=false -f "$ROOT/infra/deploy/Dockerfile.turn" -t parvane-turn "$ROOT/infra/turn"
-
   log "Заливка образов на сервер (docker load)"
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
-  podman save --format docker-archive parvane-turn | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
 fi
 
 log "Заливка конфигов и web-dist (tar over ssh — rsync локально нет)"
