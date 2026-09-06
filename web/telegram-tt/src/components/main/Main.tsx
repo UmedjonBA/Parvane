@@ -43,6 +43,7 @@ import buildStyle from '../../util/buildStyle';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { processDeepLink } from '../../util/deeplink';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
+import { oldTranslate } from '../../util/oldLangProvider';
 import {
   getInitialLocationHash, parseInitialLocationHash, parseLocationHash, resetLocationHash,
 } from '../../util/routing';
@@ -286,6 +287,7 @@ const Main = ({
     loadPromoData,
     loadActiveGiftAuctions,
     openChatByUsername,
+    showNotification,
   } = getActions();
 
   if (DEBUG && !DEBUG_isLogged) {
@@ -445,6 +447,15 @@ const Main = ({
       ensureTimeFormat();
     }
   }, [wasTimeFormatSetManually]);
+
+  // Parvane: gateway ограничил частоту (флуд сообщениями/загрузками)
+  useEffect(() => {
+    const handleRateLimited = () => {
+      showNotification({ message: oldTranslate('ParvaneRateLimited') });
+    };
+    window.addEventListener('parvane-rate-limited', handleRateLimited);
+    return () => window.removeEventListener('parvane-rate-limited', handleRateLimited);
+  }, [showNotification]);
 
   // Parse deep link
   useEffect(() => {

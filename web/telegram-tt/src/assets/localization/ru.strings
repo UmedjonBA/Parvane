@@ -1067,3 +1067,4 @@
 "ParvaneTelegramLoginTitle" = "Подтвердите вход через Telegram";
 "ParvaneTelegramLoginText" = "Включена двухфакторная аутентификация. Откройте нашего Telegram-бота и нажмите Start — подтвердить вход может только Telegram, привязанный к этому аккаунту.";
 "ParvaneTelegramLoginExpired" = "Ссылка для входа истекла. Введите пароль ещё раз.";
+"ParvaneSecurityKeyChanged" = "Ключ безопасности {user} изменился. Если вы этого не ожидали, сверьте отпечаток ключа в профиле.";

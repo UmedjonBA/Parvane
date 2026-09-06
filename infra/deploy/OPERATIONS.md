@@ -136,3 +136,20 @@ Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи 
   TURN_USER=<expiry>:probe@local TURN_PASS=<base64 HMAC-SHA1(secret, user)>
   node scripts/e2e_turn_relay_check.mjs` → `RELAY OK` с relay-кандидатом
   213.155.15.139. Логи: `journalctl -u parvane-turn -f` на VPS.
+
+## Лимиты частоты gateway (клиент недоверенный)
+На авторизованную сессию три token-bucket (всплеск / устойчиво в секунду),
+переопределяются env gateway в compose: сообщения `msg.chat.*`
+`GATEWAY_RATE_MSG_BURST=30` / `GATEWAY_RATE_MSG_PER_SEC=3`; чанки загрузки
+`file.upload.*` `GATEWAY_RATE_UPLOAD_BURST=400` / `GATEWAY_RATE_UPLOAD_PER_SEC=40`
+(≈10 МБ/с); прочие request `GATEWAY_RATE_REQ_BURST=120` / `GATEWAY_RATE_REQ_PER_SEC=20`.
+Превышение — err-фрейм `rate_limited…` (клиент показывает «Слишком много
+действий»), в логах gateway `rate limit: <user> pub/req <subject>`.
+Проверка: `scripts/run_gateway_rate_limit_e2e.sh`.
+
+## Сверка ключей безопасности
+Профиль собеседника → «Ключ безопасности»: отпечатки identity-ключей его
+устройств (SHA-256, 12 групп hex); Settings → Privacy → «Ваш ключ
+безопасности». Смена ключа известного контакта даёт локальное служебное
+сообщение в чате («Ключ безопасности … изменился»). Сверять голосом или по
+другому каналу — защита от подмены ключей на сервере.

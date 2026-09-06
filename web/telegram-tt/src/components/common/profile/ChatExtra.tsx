@@ -1,5 +1,5 @@
 import {
-  memo, useMemo, useRef,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
@@ -44,6 +44,7 @@ import { copyTextToClipboard } from '../../../util/clipboard';
 import { formatPhoneNumberWithCode } from '../../../util/phoneNumber';
 import stopEvent from '../../../util/stopEvent';
 import { extractCurrentThemeParams } from '../../../util/themeStyle';
+import { callApi } from '../../../api/gramjs';
 import { ChatAnimationTypes } from '../../left/main/hooks';
 import formatUsername from '../helpers/formatUsername';
 import renderText from '../helpers/renderText';
@@ -330,6 +331,27 @@ const ChatExtra = ({
     });
   });
 
+  // Parvane: отпечатки identity-ключей устройств собеседника для ручной сверки
+  type SecurityInfo = { own: string; devices: { deviceId: string; fingerprint: string }[] };
+  const [securityInfo, setSecurityInfo] = useState<SecurityInfo | undefined>();
+  const showSecurityKey = Boolean(user && !isSelf && chatId);
+  useEffect(() => {
+    if (!showSecurityKey) return;
+    let isCancelled = false;
+    const fetchSecurity = callApi as unknown as (method: string, args: unknown) => Promise<SecurityInfo | undefined>;
+    void fetchSecurity('parvaneFetchSecurityInfo', { chatId }).then((info) => {
+      if (!isCancelled && info) setSecurityInfo(info);
+    }).catch(() => undefined);
+    return () => {
+      isCancelled = true;
+    };
+  }, [chatId, showSecurityKey]);
+
+  const handleCopySecurityKey = useLastCallback(() => {
+    const text = securityInfo?.devices.map((d) => d.fingerprint).join('\n');
+    if (text) copyTextToClipboard(text);
+  });
+
   const appTermsInfo = lang('ProfileOpenAppAbout', {
     terms: (
       <SafeLink
@@ -342,6 +364,24 @@ const ChatExtra = ({
   const isRestricted = chatId ? selectIsChatRestricted(getGlobal(), chatId) : false;
   if (isRestricted || (isSelf && !isOwnProfile && !isInSettings)) {
     return undefined;
+  }
+
+  function renderSecurityKey() {
+    if (!showSecurityKey) return undefined;
+    const devices = securityInfo?.devices || [];
+    return (
+      <ListItem icon="lock" multiline narrow ripple onClick={handleCopySecurityKey}>
+        <span className="title" dir="auto">{oldLang('ParvaneSecurityKeyTitle')}</span>
+        {devices.length ? devices.map((device) => (
+          <span key={device.deviceId} className="subtitle" style="font-family: var(--font-monospace)">
+            {device.fingerprint}
+          </span>
+        )) : (
+          <span className="subtitle">{oldLang('ParvaneSecurityKeyNoDevices')}</span>
+        )}
+        <span className="subtitle">{oldLang('ParvaneSecurityKeyHint')}</span>
+      </ListItem>
+    );
   }
 
   function renderUsernames(usernameList: ApiUsername[], isChat?: boolean) {
@@ -453,6 +493,7 @@ const ChatExtra = ({
           </ListItem>
         )}
         {activeUsernames && renderUsernames(activeUsernames)}
+        {renderSecurityKey()}
         {description && Boolean(description.length) && (
           <ListItem
             icon="info"

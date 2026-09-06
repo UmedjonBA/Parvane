@@ -9,6 +9,7 @@ import {
   selectIsCurrentUserPremium,
 } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
+import { copyTextToClipboard } from '../../../util/clipboard';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { callApi } from '../../../api/gramjs';
 
@@ -128,6 +129,24 @@ const SettingsPrivacy = ({
     };
   }, [isActive]);
 
+  const [ownFingerprint, setOwnFingerprint] = useState('');
+  useEffect(() => {
+    if (!isActive) return;
+    let isCancelled = false;
+    void (callParvane('parvaneFetchSecurityInfo', {}) as Promise<{ own: string } | undefined>)
+      .then((info) => {
+        if (!isCancelled && info) setOwnFingerprint(info.own);
+      })
+      .catch(() => undefined);
+    return () => {
+      isCancelled = true;
+    };
+  }, [isActive]);
+
+  const handleCopyOwnKey = useLastCallback(() => {
+    if (ownFingerprint) copyTextToClipboard(ownFingerprint);
+  });
+
   const handleTwoFactorChange = useLastCallback(async (enabled: boolean) => {
     setIsTwoFactorBusy(true);
     try {
@@ -201,6 +220,19 @@ const SettingsPrivacy = ({
       {/* Parvane: скрыты серверные MTProto-разделы — Passcode/2FA/Passkeys/
           Web Sessions, privacy-видимость (номер/last seen/фото/bio/…),
           sensitive-контент, автоархив и удаление аккаунта по TTL */}
+
+      {/* Parvane: свой ключ безопасности — отпечаток identity-ключа устройства */}
+      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+        {oldLang('ParvaneSecurityKeyOwn')}
+      </IslandTitle>
+      <Island>
+        <ListItem icon="key" narrow multiline onClick={handleCopyOwnKey}>
+          <span className="title" style="font-family: var(--font-monospace); font-size: 0.875rem">
+            {ownFingerprint || '…'}
+          </span>
+          <span className="subtitle">{oldLang('ParvaneSecurityKeyOwnHint')}</span>
+        </ListItem>
+      </Island>
 
       {/* Parvane: двухфакторный вход — подтверждение в привязанном Telegram */}
       <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>

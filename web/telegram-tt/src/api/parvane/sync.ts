@@ -4,6 +4,7 @@ import type { GatewayConnection } from './gateway';
 import type { PollStore } from './polls';
 import { MAIN_THREAD_ID } from '../types';
 
+import { getLangStringByKey } from '../../util/localization';
 import { buildWebPage, type ParvaneStore } from './store';
 import {
   buildWireEvent,
@@ -244,7 +245,9 @@ export function createSyncController(deps: SyncDependencies) {
         } else {
           deps.log(`SKDM с чужим sender_identity от ${inner.from} — отклонён`);
         }
-        if (inner.from) e2e.rememberContactIdentity(inner.from, content.sender_identity);
+        if (inner.from && e2e.rememberContactIdentity(inner.from, content.sender_identity)) {
+          announceKeyChange(inner.from);
+        }
         return { stored, wasSealed: true, hidden: true };
       }
       // Кэшируем вместе с sender_identity — для показа сообщение ещё должно
@@ -361,6 +364,35 @@ export function createSyncController(deps: SyncDependencies) {
     } catch {
       // Имена не критичны — показываем локальную часть адреса.
     }
+  }
+
+  // Ключ безопасности собеседника сменился (новый identity-ключ у известного
+  // контакта): служебное сообщение в его чате, как «safety number changed».
+  // Локальное, на сервер не уходит; отпечатки — в профиле
+  function announceKeyChange(address: string) {
+    const store = deps.getStore();
+    if (store.isGroupAddress(address) || address === store.self) return;
+    const chatId = store.getIdForAddress(address);
+    const ts = Math.floor(Date.now() / 1000);
+    const id = store.allocateMessageId(chatId, `keychange:${address}:${ts}`, ts);
+    const template = getLangStringByKey('ParvaneSecurityKeyChanged') || 'The security key of {user} has changed.';
+    const message: ApiMessage = {
+      id,
+      chatId,
+      date: ts,
+      isOutgoing: false,
+      senderId: chatId,
+      content: {
+        action: {
+          mediaType: 'action',
+          type: 'customAction',
+          message: template.replace('{user}', store.getDisplayName(address)),
+        },
+      },
+    };
+    store.putMessage(message);
+    deps.sendUpdate({ '@type': 'newMessage', chatId, id, message });
+    deps.log(`ключ безопасности ${address} изменился`);
   }
 
   function announcePeer(address: string) {
@@ -486,7 +518,9 @@ export function createSyncController(deps: SyncDependencies) {
         // помечаем в логе; не запоминаем связку contact↔identity до подтверждения
         deps.log(`не подтверждён отправитель ${verify.claimedFrom} в ${rawStored.id} (каталог недоступен)`);
       } else if (verify.claimedFrom !== store.self) {
-        deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity);
+        if (deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity)) {
+          announceKeyChange(verify.claimedFrom);
+        }
       }
     }
     // Заблокированный контакт: входящее личное сообщение не показываем и не
@@ -699,7 +733,9 @@ export function createSyncController(deps: SyncDependencies) {
           continue;
         }
         if (verdict === 'ok' && verify.claimedFrom !== store.self) {
-          deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity);
+          if (deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity)) {
+            announceKeyChange(verify.claimedFrom);
+          }
         }
       }
       // Надгробия в полном синке не рисуем (см. applyStoredUpdate)

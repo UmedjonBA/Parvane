@@ -228,6 +228,11 @@ export class GatewayConnection {
           this.pendingById.delete(frame.id!);
           pending.reject(new Error(frame.error || 'Ошибка запроса'));
         }
+        // Лимит частоты gateway (в т.ч. на fire-and-forget publish без id):
+        // UI показывает предупреждение через провайдер
+        if ((frame.error || '').startsWith('rate_limited')) {
+          window.dispatchEvent(new CustomEvent('parvane-rate-limited', { detail: frame.subject || '' }));
+        }
         break;
       }
       case 'msg': {

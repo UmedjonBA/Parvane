@@ -451,6 +451,14 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'linked to this profile.',
   ParvaneTwoFactorNoTelegram: 'Link Telegram first: it is done when confirming the account via the bot.',
   ParvaneTwoFactorFailed: 'Could not change the two-factor setting',
+  ParvaneSecurityKeyTitle: 'Security key',
+  ParvaneSecurityKeyHint: 'Compare these fingerprints with the ones shown on the other person\'s device '
+    + '(by voice or another channel). A mismatch means someone may be in the middle.',
+  ParvaneSecurityKeyOwn: 'Your security key',
+  ParvaneSecurityKeyOwnHint: 'Show it to people who want to verify you.',
+  ParvaneSecurityKeyNoDevices: 'No devices known yet — the key appears after the first message.',
+  ParvaneSecurityKeyDevice: 'Device %@',
+  ParvaneRateLimited: 'Too many actions, please slow down.',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -955,6 +963,14 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'привязанном к профилю.',
   ParvaneTwoFactorNoTelegram: 'Сначала привяжите Telegram: это происходит при подтверждении аккаунта через бота.',
   ParvaneTwoFactorFailed: 'Не удалось изменить настройку двухфакторного входа',
+  ParvaneSecurityKeyTitle: 'Ключ безопасности',
+  ParvaneSecurityKeyHint: 'Сверьте эти отпечатки с тем, что показано на устройстве собеседника '
+    + '(голосом или по другому каналу). Несовпадение — признак подмены.',
+  ParvaneSecurityKeyOwn: 'Ваш ключ безопасности',
+  ParvaneSecurityKeyOwnHint: 'Покажите его тем, кто хочет вас сверить.',
+  ParvaneSecurityKeyNoDevices: 'Устройства ещё не известны — ключ появится после первого сообщения.',
+  ParvaneSecurityKeyDevice: 'Устройство %@',
+  ParvaneRateLimited: 'Слишком много действий, подождите немного.',
 };
 
 function isRussian(langCode: string) {
