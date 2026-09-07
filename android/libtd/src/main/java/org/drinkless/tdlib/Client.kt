@@ -177,6 +177,10 @@ class Client private constructor(
         is TdApi.GetTextEntities, is TdApi.ParseTextEntities -> try { execute(f) } catch (e: ExecutionException) { e.error }
 
         is TdApi.SetTdlibParameters -> {
+            // Дев-стенд/эмулятор: gateway из файла (adb push … /data/local/tmp/parvane-gateway),
+            // когда extra запуска недоступен (Telegram X)
+            java.io.File("/data/local/tmp/parvane-gateway").takeIf { it.canRead() }
+                ?.readText()?.trim()?.takeIf { it.isNotEmpty() }?.let { gatewayUrl = it }
             ParvaneCore.init(gatewayUrl, f.databaseDirectory)
             // Telegram X ждёт версию/хэш опциями сразу после параметров
             postUpdate(TdApi.UpdateOption("version", TdApi.OptionValueString(TDLIB_VERSION)))
