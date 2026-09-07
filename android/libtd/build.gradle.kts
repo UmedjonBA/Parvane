@@ -7,7 +7,6 @@ android {
     namespace = "org.parvane.libtd"
     compileSdk = 34
     ndkVersion = "27.2.12479018"
-    ndkPath = "/mnt/hdd/ub/android/android-ndk-r27c"
 
     defaultConfig {
         minSdk = 24

@@ -67,7 +67,9 @@ Compose-приложении с тем же контрактом, что у Tele
 ### Тулчейн приложения (на HDD, без root)
 - JDK 17 Temurin: `/mnt/hdd/ub/android/jdk-17`
 - SDK: `/mnt/hdd/ub/android/sdk` (platforms;android-34, build-tools;34.0.0,
-  platform-tools, cmake;3.22.1; emulator + system-images;android-34;google_apis;x86_64)
+  platform-tools, cmake;3.22.1; emulator + system-images;android-34;google_apis;x86_64);
+  NDK r27c подключён симлинком `sdk/ndk/27.2.12479018` (AGP ищет strip там —
+  с `ndkPath` вне SDK .so уходил в APK нестрипнутым, 27 МБ вместо 11)
 - Gradle 8.9: `/mnt/hdd/ub/android/gradle-8.9/bin/gradle`
 - TDLib для генерации TdApi: `/mnt/hdd/ub/android/td` (build/td/generate/td_generate_java_api)
 
