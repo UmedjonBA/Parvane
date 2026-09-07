@@ -6,6 +6,7 @@
 #include "parvane/topics.h"
 
 #include <cstdint>
+#include <stdexcept>
 
 namespace parvane {
 
@@ -84,7 +85,15 @@ std::vector<StoredMessage> MessengerClient::sync(
     const json ev = makeEvent(uuid4(), from, nowUnix(), token, req.toJson());
     const std::string raw =
         _t.request(topics::MsgSyncRequest, ev.dump(), timeoutMs);
-    auto resp = SyncResponsePayload::fromJson(json::parse(raw));
+    const auto rawJson = json::parse(raw);
+    // Отказ messenger'а (отозванное устройство, невалидный токен) приходит
+    // как {"error": ...} — наверх исключением, а не пустой страницей.
+    if (rawJson.is_object()) {
+        if (auto it = rawJson.find("error"); it != rawJson.end() && it->is_string()) {
+            throw std::runtime_error("sync: " + it->get<std::string>());
+        }
+    }
+    auto resp = SyncResponsePayload::fromJson(rawJson);
     if (readMessageIds) {
         *readMessageIds = std::move(resp.read_message_ids);
     }

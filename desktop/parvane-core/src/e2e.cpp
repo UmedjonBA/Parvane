@@ -11,6 +11,7 @@
 #include "parvane/topics.h"
 
 #include <nlohmann/json.hpp>
+#include <openssl/evp.h>
 
 #include <algorithm>
 #include <chrono>
@@ -42,6 +43,7 @@ std::mutex g_mu;
 ParvaneE2EAccount *g_account = nullptr;
 std::map<std::string, ParvaneE2ESession *> g_sessions; // identity устройства → сессия
 std::map<std::string, std::string> g_contactId;        // адрес → primary identity
+std::map<std::string, std::set<std::string>> g_seenIds; // адрес → виденные identity (смена ключа)
 std::map<std::string, std::map<std::string, DeviceInfo>> g_contactDevices; // адрес → dev → info
 std::map<std::string, std::uint64_t> g_contactFetchedAt;                    // адрес → ms
 std::map<std::string, ParvaneE2EGroupSession *> g_ownGroups;
@@ -201,6 +203,15 @@ void saveContacts() {
     for (const auto &[k, v] : g_contactId) {
         j[k] = v;
     }
+    // виденные identity — под служебным ключом (адрес с '@' с ним не спутать)
+    json seen = json::object();
+    for (const auto &[k, ids] : g_seenIds) {
+        seen[k] = json::array();
+        for (const auto &id : ids) {
+            seen[k].push_back(id);
+        }
+    }
+    j["__seen"] = seen;
     writeFile(contactsPath(), j.dump());
 }
 void loadContacts() {
@@ -210,7 +221,17 @@ void loadContacts() {
     auto j = json::parse(readFile(contactsPath()), nullptr, false);
     if (j.is_object()) {
         for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.value().is_string()) {
+            if (it.key() == "__seen" && it.value().is_object()) {
+                for (auto c = it.value().begin(); c != it.value().end(); ++c) {
+                    if (c.value().is_array()) {
+                        for (const auto &id : c.value()) {
+                            if (id.is_string()) {
+                                g_seenIds[c.key()].insert(id.get<std::string>());
+                            }
+                        }
+                    }
+                }
+            } else if (it.value().is_string()) {
                 g_contactId[it.key()] = it.value().get<std::string>();
             }
         }
@@ -580,6 +601,18 @@ void refreshContactDevices(const std::string &contact, ITransport &t, const std:
     g_contactDevices[contact] = next;
     g_contactFetchedAt[contact] = nowMs();
     saveContactDevices();
+    // Первое знакомство с каталогом (напр. своя отправка до любого входящего):
+    // текущие identity считаем «виденными», чтобы последующая смена ключа
+    // распозналась. Позже каталог НЕ засевает множество — иначе принудительная
+    // перечитка при промахе verifySender спрятала бы смену ключа.
+    if (g_seenIds[contact].empty()) {
+        for (const auto &[id, info] : next) {
+            if (!info.identity.empty()) {
+                g_seenIds[contact].insert(info.identity);
+            }
+        }
+        saveContacts();
+    }
     if (lost) {
         rotateGroupsWithLocked(contact);
     }
@@ -975,18 +1008,81 @@ Verdict verifySender(const std::string &claimedFrom, const std::string &senderId
     return g_contactDevices.count(claimedFrom) ? Verdict::Spoofed : Verdict::Unknown;
 }
 
-void rememberContactIdentity(const std::string &contact, const std::string &identity) {
+// Смена ключа детектируется по множеству УЖЕ ВИДЕННЫХ identity контакта
+// (g_seenIds, персист рядом с contacts): g_contactId перезаписывается при
+// перечитке каталога (refreshContactDevices) ещё до этой проверки, поэтому
+// сравнивать с ним нельзя. Новое устройство контакта тоже считается сменой
+// ключа (как safety number в Signal) — пользователь сверяет отпечатки заново.
+bool rememberContactIdentity(const std::string &contact, const std::string &identity) {
     if (contact.empty() || identity.empty()) {
-        return;
+        return false;
     }
     std::lock_guard<std::mutex> lk(g_mu);
     if (contact == g_self) {
-        return;
+        return false;
     }
     if (g_contactId[contact] != identity) {
         g_contactId[contact] = identity;
-        saveContacts();
     }
+    auto &seen = g_seenIds[contact];
+    if (seen.count(identity)) {
+        saveContacts();
+        return false;
+    }
+    const bool changed = !seen.empty();
+    seen.insert(identity);
+    saveContacts();
+    return changed;
+}
+
+std::string fingerprintOf(const std::string &identityB64) {
+    if (identityB64.empty()) {
+        return {};
+    }
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int len = 0;
+    if (!EVP_Digest(identityB64.data(), identityB64.size(), digest, &len, EVP_sha256(), nullptr)) {
+        return {};
+    }
+    static const char *hex = "0123456789abcdef";
+    std::string out;
+    // 48 hex-символов = 24 байта; группы по 4 через пробел (как fingerprintOf в вебе)
+    for (unsigned i = 0; i < 24 && i < len; ++i) {
+        if (i && i % 2 == 0) {
+            out += ' ';
+        }
+        out += hex[digest[i] >> 4];
+        out += hex[digest[i] & 0xF];
+    }
+    return out;
+}
+
+std::string ownFingerprint() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return fingerprintOf(g_identityB64);
+}
+
+std::vector<DeviceFingerprint> contactFingerprints(const std::string &contact) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    std::vector<DeviceFingerprint> out;
+    auto it = g_contactDevices.find(contact);
+    if (it != g_contactDevices.end()) {
+        for (const auto &[id, info] : it->second) {
+            if (!info.identity.empty()) {
+                out.push_back({id, fingerprintOf(info.identity)});
+            }
+        }
+    }
+    if (out.empty()) {
+        auto c = g_contactId.find(contact);
+        if (c != g_contactId.end() && !c->second.empty()) {
+            out.push_back({"", fingerprintOf(c->second)});
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const DeviceFingerprint &a, const DeviceFingerprint &b) {
+        return a.deviceId < b.deviceId;
+    });
+    return out;
 }
 
 std::string safetyNumber(const std::string &contact) {

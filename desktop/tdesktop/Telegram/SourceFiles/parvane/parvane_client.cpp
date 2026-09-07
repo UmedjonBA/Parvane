@@ -74,6 +74,7 @@
 #include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
 #include "core/file_location.h"       // Core::FileLocation
 #include "core/application.h"        // Core::App().settings().getSoundPath
+#include "window/window_controller.h" // Parvane: тост rate_limited
 #include "lang/lang_instance.h"    // Parvane: русский по умолчанию
 #include "core/core_settings.h"
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
@@ -115,6 +116,10 @@ void DecCacheRemove(const QString &id);
 namespace {
 
 void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live);
+not_null<UserData*> ensurePeerUser(
+	not_null<Main::Session*> session,
+	std::uint64_t id,
+	const QString &address);
 [[nodiscard]] std::int64_t docIdFromFileId(const QString &fileId);
 // Кастом-эмодзи (определены ниже): pack_ref используемых эмодзи для отправки;
 // материализация пришедших паков; поиск набора по docId.
@@ -246,6 +251,8 @@ QSet<quint64> g_typingGroupSubs;          // id групп, на typing кото
 bool g_foldersSubscribed = false;         // подписка на изменения папок (once)
 rpl::lifetime g_foldersLifetime;          // время жизни подписки на папки
 FullMsgId g_lastOwnFullId;                 // последнее своё исходящее (debug-хуки)
+QString g_lastOwnUuid;                     // его uuid — переживает сброс сессии
+QString g_firstOwnUuid;                    // первое своё за процесс (хуки: headless шлёт autosend при каждой пересборке сессии)
 bool g_presenceSubscribed = false;        // подписка на presence.* (once)
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
 
@@ -800,6 +807,14 @@ void sendTextAsync(
 						.arg(QString::fromStdString(to)));
 					return;
 				}
+				// Каталог устройств собеседника только что прогрет (первый
+				// контакт) — обновить отпечатки ключа в его профиле, не дожидаясь
+				// входящего (профиль синтезируется в ensurePeerUser).
+				crl::on_main([toQ = QString::fromStdString(to)] {
+					if (const auto session = g_sessionWeak.get()) {
+						ensurePeerUser(session, IdForAddress(toQ), toQ);
+					}
+				});
 			} else if (isGroup && t && parvane::e2e::ready()) {
 				auto content = parvane::textContent(body, entities, webpage);
 				if (ttl > 0) {
@@ -1616,6 +1631,8 @@ void InitE2E() {
 				+ QString::fromStdString(self)).toStdString();
 			parvane::e2e::initDevice(*t, self, token, dir);
 			LOG(("Parvane: E2E-устройство готово (prekeys опубликованы, персист)"));
+			LOG(("Parvane: свой ключ безопасности (отпечаток): %1")
+				.arg(QString::fromStdString(parvane::e2e::ownFingerprint())));
 			StartHistoryLinking();
 		}
 	});
@@ -1627,6 +1644,31 @@ bool StartSession() {
 		return true; // идемпотентно
 	}
 	try {
+		// Лимит частоты gateway (безадресный err rate_limited на publish): как
+		// в вебе — предупреждение пользователю, не чаще раза в 5 с.
+		static const auto rateLimitHandlerInstalled = [] {
+			parvane::GatewayTransport::setUnaddressedErrorHandler(
+				[](const std::string &error, const std::string &subject) {
+					if (error.rfind("rate_limited", 0) != 0) {
+						return;
+					}
+					static std::atomic<qint64> last{0};
+					const auto now = QDateTime::currentMSecsSinceEpoch();
+					if (now - last.load() < 5000) {
+						return;
+					}
+					last = now;
+					LOG(("Parvane: gateway rate_limited (%1) — слишком много действий")
+						.arg(QString::fromStdString(subject)));
+					crl::on_main([] {
+						if (const auto window = Core::App().activeWindow()) {
+							window->showToast(u"Слишком много действий, помедленнее."_q);
+						}
+					});
+				});
+			return true;
+		}();
+		(void)rateLimitHandlerInstalled;
 		// Транспорт по окружению: gateway (PARVANE_GATEWAY_URL, auth по JWT)
 		// либо прямой NATS (dev). Токен уже установлен (SetSelf до StartSession).
 		auto transport = MakeTransport(g_token);
@@ -3599,17 +3641,21 @@ not_null<UserData*> ensurePeerUser(
 	}
 	// processUser выше стёр userpic пустым фото — возвращаем аватар из кэша.
 	applyAvatar(result, address);
-	// E2E: код безопасности (Signal-style, симметричный) в bio профиля — ручная
-	// верификация против MITM. Появляется, как только установлена сессия с
-	// контактом (иначе safetyNumber пуст). Нативный профиль рендерит about().
+	// E2E: ключ безопасности в bio профиля — ручная верификация против MITM.
+	// Формат тот же, что в веб-клиенте (отпечаток SHA-256 identity-ключа
+	// каждого устройства собеседника), чтобы сверять между клиентами. Появляется,
+	// как только известен каталог/identity контакта. Нативный профиль рендерит about().
 	if (address != SelfAddress()) {
-		const auto sn = parvane::e2e::safetyNumber(address.toStdString());
-		if (!sn.empty()) {
+		const auto fps = parvane::e2e::contactFingerprints(address.toStdString());
+		if (!fps.empty()) {
+			auto about = u"\xF0\x9F\x94\x92 Ключ безопасности (сверьте с устройством собеседника):"_q;
+			for (const auto &fp : fps) {
+				about += u"\n"_q + QString::fromStdString(fp.fingerprint);
+			}
 			// setAbout вернёт true только при реальном изменении → лог однократно.
-			if (result->setAbout(u"\xF0\x9F\x94\x92 E2E · код безопасности:\n"_q
-					+ QString::fromStdString(sn))) {
-				LOG(("Parvane: код безопасности с %1 в профиле: %2")
-					.arg(address, QString::fromStdString(sn)));
+			if (result->setAbout(about)) {
+				LOG(("Parvane: ключ безопасности с %1 в профиле: %2")
+					.arg(address, QString::fromStdString(fps.front().fingerprint)));
 			}
 		}
 	}
@@ -4898,7 +4944,11 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 				LOG(("Parvane: не подтверждён отправитель %1 в %2 (каталог недоступен)")
 					.arg(QString::fromStdString(author), uuidQ));
 			} else if (author != self) {
-				parvane::e2e::rememberContactIdentity(author, verifyIdentity);
+				if (parvane::e2e::rememberContactIdentity(author, verifyIdentity)) {
+					// Ключ известного контакта сменился — служебное сообщение в чат
+					const auto authorQ = QString::fromStdString(author);
+					crl::on_main([authorQ] { AnnounceKeyChange(authorQ); });
+				}
 			}
 		}
 		if (fresh) {
@@ -5499,6 +5549,71 @@ not_null<UserData*> EnsurePeer(
 		const QString &address) {
 	RegisterPeer(address);
 	return ensurePeerUser(session, IdForAddress(address), address);
+}
+
+QString OwnFingerprint() {
+	return QString::fromStdString(parvane::e2e::ownFingerprint());
+}
+
+// Как announceKeyChange в вебе: локальное служебное сообщение (на сервер не
+// уходит, в журнал не пишется — после перезапуска остаётся только в логе),
+// отпечатки в профиле пересчитываются через ensurePeerUser.
+void AnnounceKeyChange(const QString &address) {
+	const auto session = g_sessionWeak.get();
+	if (!session || address == SelfAddress()) {
+		return;
+	}
+	const auto user = EnsurePeer(session, address);
+	const auto text = u"Ключ безопасности %1 изменился."_q.arg(user->name());
+	const auto msgId = MsgId(g_nextMsgId++);
+	session->data().addNewMessage(
+		msgId,
+		MTP_messageService(
+			MTP_flags(MTPDmessageService::Flag::f_from_id),
+			MTP_int(0),
+			peerToMTP(user->id),
+			peerToMTP(user->id),
+			MTPPeer(),                  // saved_peer_id
+			MTPMessageReplyHeader(),
+			MTP_int(int(QDateTime::currentSecsSinceEpoch())),
+			MTP_messageActionCustomAction(MTP_string(text)),
+			MTPMessageReactions(),
+			MTPint()),                  // ttl_period
+		MessageFlags(),
+		NewMessageType::Unread);
+	LOG(("Parvane: ключ безопасности %1 изменился — служебное сообщение в чате")
+		.arg(address));
+}
+
+std::vector<not_null<HistoryItem*>> SearchMessagesLocal(
+		not_null<Main::Session*> session,
+		const QString &query,
+		int limit) {
+	auto found = std::vector<not_null<HistoryItem*>>();
+	const auto needle = query.trimmed();
+	if (needle.isEmpty()) {
+		return found;
+	}
+	// Все инъецированные сообщения известны по карте uuid → msgId; пиры у нас
+	// только user/chat, поэтому nonChannelMessage находит их без загрузки
+	// блоков истории (в отличие от history->blocks закрытых чатов).
+	for (auto i = g_uuidToMsgId.cbegin(); i != g_uuidToMsgId.cend(); ++i) {
+		const auto item = session->data().nonChannelMessage(MsgId(i.value()));
+		if (!item || item->isService()) {
+			continue;
+		}
+		if (item->originalText().text.contains(needle, Qt::CaseInsensitive)) {
+			found.push_back(item);
+		}
+	}
+	ranges::sort(found, std::greater<>(), [](not_null<HistoryItem*> item) {
+		return std::pair(item->date(), item->id.bare);
+	});
+	if (int(found.size()) > limit) {
+		found.erase(found.begin() + limit, found.end());
+	}
+	LOG(("Parvane: локальный поиск «%1»: %2 совпадений").arg(needle).arg(found.size()));
+	return found;
 }
 
 bool MirrorPollCreate(PeerData *peer, const PollData &data) {
@@ -6993,10 +7108,53 @@ void LoadLocalSavedGifs(not_null<Main::Session*> session) {
 	}
 }
 
+// Сброс всего, что привязано к КОНКРЕТНОЙ Data::Session (msgId-карты, хуки
+// newItemAdded/папок, локальные паки, опросы): при новой Main::Session
+// (релогин в этом же процессе; в headless — пересоздание сессии интро) старые
+// msgId не существуют, а дедуп по uuid молча пропустил бы воспроизведение
+// журнала — список чатов оставался бы пустым.
+void ResetSessionBoundState() {
+	g_uuidToMsgId.clear();
+	g_msgIdToUuid.clear();
+	g_pendingOwnUuids.clear();
+	g_unreadIncoming.clear();
+	g_mediaContentByMsgId.clear();
+	g_stickerPackDirs.clear();
+	g_packRefByDocId.clear();
+	g_packInstallBusy.clear();
+	g_emojiDocToSet.clear();
+	g_emojiPackDirs.clear();
+	g_emojiPackMaterialized.clear();
+	g_pollsByUuid.clear();
+	g_pollUuidById.clear();
+	g_pendingPollVotes.clear();
+	g_pendingPollClose.clear();
+	g_lastOwnFullId = FullMsgId();
+	g_finalizeLifetime.destroy();
+	g_finalizeHooked = false;
+	g_foldersLifetime.destroy();
+	g_foldersSubscribed = false;
+	{
+		// «Живое эхо» своих отправок жило в прежней Data::Session — иначе свои
+		// сообщения из журнала не воспроизведутся в новой (liveEcho → пропуск).
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_ownSentUuids.clear();
+	}
+	LOG(("Parvane: новая сессия — состояние прежней Data::Session сброшено"));
+}
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
 	crl::on_main(weak, [=] {
+		// Признак «прежняя сессия разрушена» — через её lifetime, а не по
+		// сравнению указателей: новая Main::Session часто получает тот же адрес.
+		static bool previousEnded = false;
+		if (previousEnded) {
+			ResetSessionBoundState();
+			previousEnded = false;
+		}
+		session->lifetime().add([] { previousEnded = true; });
 		g_sessionWeak = weak;
 		// Рестарт: tdesktop возобновил кэшированную сессию, минуя экран логина
 		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
@@ -7125,6 +7283,10 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 							g_uuidToMsgId.insert(uuid, newId.bare);
 							g_msgIdToUuid.insert(newId.bare, uuid);
 							g_lastOwnFullId = it->fullId(); // debug AUTODELETE/EDIT
+							g_lastOwnUuid = uuid;
+							if (g_firstOwnUuid.isEmpty()) {
+								g_firstOwnUuid = uuid;
+							}
 						}
 					}
 					// СВОЁ медиа — в общие медиа (профиль отправителя иначе показывает
@@ -7272,6 +7434,30 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			}
 		}
 
+		// Debug-autosearch: PARVANE_AUTOSEARCH=<подстрока>:<секунды> — глобальный
+		// локальный поиск по сообщениям, результат в лог (для e2e).
+		if (const char *sv = std::getenv("PARVANE_AUTOSEARCH"); sv && *sv) {
+			const auto spec = QString::fromUtf8(sv);
+			const auto sep = spec.lastIndexOf(':');
+			if (sep > 0) {
+				const auto needle = spec.left(sep);
+				const auto secs = std::max(spec.mid(sep + 1).toInt(), 1);
+				base::call_delayed(secs * crl::time(1000), [needle] {
+					const auto session = g_sessionWeak.get();
+					if (!session) {
+						return;
+					}
+					const auto found = SearchMessagesLocal(session, needle);
+					for (const auto &item : found) {
+						LOG(("Parvane: autosearch «%1» → %2 в %3: %4")
+							.arg(needle).arg(item->id.bare)
+							.arg(item->history()->peer->name())
+							.arg(item->originalText().text.left(60)));
+					}
+				});
+			}
+		}
+
 		// Debug-autoforward: PARVANE_AUTOFORWARD=from@server:to@server:<секунды> —
 		// пересылает последнее МЕДИА диалога from получателю to. В headless
 		// history->blocks часто пуст, поэтому берём сохранённый media-content
@@ -7320,26 +7506,53 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			}
 		}
 
+		// Своё исходящее для debug-хуков: ПЕРВОЕ за процесс (headless пересоздаёт
+		// сессию и autosend шлёт заново — «последнее» было бы только что
+		// отправленным и ещё не прочитанным); после сброса сессии msgId
+		// переназначен — ищем по uuid через текущую карту.
+		const auto lastOwnItem = [](not_null<Main::Session*> session) -> HistoryItem* {
+			for (const auto &uuid : { g_firstOwnUuid, g_lastOwnUuid }) {
+				if (const auto msgId = g_uuidToMsgId.value(uuid, 0)) {
+					if (const auto item = session->data().nonChannelMessage(MsgId(msgId))) {
+						return item;
+					}
+				}
+			}
+			// Эхо первого своего могло пройти до подписки newItemAdded — берём
+			// самое раннее своё текстовое из карты текущей сессии (журнал
+			// воспроизводится в порядке отправки → минимальный msgId).
+			HistoryItem *oldest = nullptr;
+			for (auto i = g_msgIdToUuid.cbegin(); i != g_msgIdToUuid.cend(); ++i) {
+				const auto item = session->data().nonChannelMessage(MsgId(i.key()));
+				if (item && item->out() && !item->media()
+					&& (!oldest || item->id < oldest->id)) {
+					oldest = item;
+				}
+			}
+			if (oldest) {
+				return oldest;
+			}
+			return g_lastOwnFullId ? session->data().message(g_lastOwnFullId) : nullptr;
+		};
 		// Debug-autodelete для e2e delete: PARVANE_AUTODELETE=<секунды> — удаляет
 		// своё последнее исходящее штатным путём (deleteMessages → MirrorDelete).
 		if (const char *dv = std::getenv("PARVANE_AUTODELETE"); dv && *dv) {
 			const auto secs = std::max(QString::fromUtf8(dv).toInt(), 1);
-			base::call_delayed(secs * crl::time(1000), [] {
+			base::call_delayed(secs * crl::time(1000), [lastOwnItem] {
 				const auto session = g_sessionWeak.get();
-				if (!session || !g_lastOwnFullId) {
+				if (!session) {
 					return;
 				}
-				const auto item = session->data().message(g_lastOwnFullId);
+				const auto item = lastOwnItem(session);
 				if (!item) {
 					LOG(("Parvane: autodelete — сообщение не найдено"));
 					return;
 				}
 				session->data().histories().deleteMessages(
 					item->history(),
-					QVector<MTPint>{ MTP_int(g_lastOwnFullId.msg.bare) },
+					QVector<MTPint>{ MTP_int(int(item->id.bare)) },
 					true);
-				LOG(("Parvane: autodelete → msgId %1")
-					.arg(g_lastOwnFullId.msg.bare));
+				LOG(("Parvane: autodelete → msgId %1").arg(item->id.bare));
 			});
 		}
 
@@ -7348,12 +7561,14 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// результат в лог (см. FetchReaders).
 		if (const char *rv = std::getenv("PARVANE_AUTOREADERS"); rv && *rv) {
 			const auto secs = std::max(QString::fromUtf8(rv).toInt(), 1);
-			base::call_delayed(secs * crl::time(1000), [] {
-				if (!g_lastOwnFullId) {
+			base::call_delayed(secs * crl::time(1000), [lastOwnItem] {
+				const auto session = g_sessionWeak.get();
+				const auto item = session ? lastOwnItem(session) : nullptr;
+				if (!item) {
 					LOG(("Parvane: autoreaders — нет своего исходящего"));
 					return;
 				}
-				FetchReaders(g_lastOwnFullId.msg.bare, [](std::vector<ReaderEntry>) {});
+				FetchReaders(item->id.bare, [](std::vector<ReaderEntry>) {});
 			});
 		}
 
@@ -7364,12 +7579,12 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			if (sep > 0) {
 				const auto secs = std::max(spec.left(sep).toInt(), 1);
 				const auto newText = spec.mid(sep + 1);
-				base::call_delayed(secs * crl::time(1000), [newText] {
+				base::call_delayed(secs * crl::time(1000), [newText, lastOwnItem] {
 					const auto session = g_sessionWeak.get();
-					if (!session || !g_lastOwnFullId) {
+					if (!session) {
 						return;
 					}
-					const auto item = session->data().message(g_lastOwnFullId);
+					const auto item = lastOwnItem(session);
 					if (!item) {
 						return;
 					}

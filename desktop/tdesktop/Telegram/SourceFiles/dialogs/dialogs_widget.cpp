@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/dialogs_widget.h"
 
+#include "parvane/parvane_client.h" // Parvane: локальный поиск по сообщениям
+
 #include "base/call_delayed.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "base/options.h"
@@ -3071,11 +3073,21 @@ void Widget::requestPublicPosts(bool fromStart) {
 
 void Widget::requestMessages(bool fromStart) {
 	// Parvane: глобальный поиск по сообщениям через MTProto (SearchGlobal)
-	// недоступен — сеть наша. Чтобы не висеть на «Loading…», завершаем поиск
-	// сразу пустым результатом. Локальный поиск по сообщениям — доводка.
-	// Поиск ВНУТРИ открытого чата (MTPmessages_Search выше) работает как раньше,
-	// поиск по аккаунтам идёт через identity.user.search (peer search).
-	searchApplyEmpty(SearchRequestType{ .start = true }, &_searchProcess);
+	// недоступен — сеть наша. Ищем локально по всем сообщениям (журнал/sync,
+	// см. Parvane::SearchMessagesLocal) и сразу отдаём в список; поиск по
+	// аккаунтам идёт следом через identity.user.search (peer search).
+	{
+		const auto type = SearchRequestType{ .start = true };
+		auto found = Parvane::SearchMessagesLocal(&session(), _searchQuery);
+		const auto count = int(found.size());
+		_searchProcess.lastPeer = nullptr;
+		_searchProcess.lastId = 0;
+		_searchProcess.full = true;
+		_inner->searchReceived(std::move(found), nullptr, type, count);
+		_searchProcess.requestId = 0;
+		listScrollUpdated();
+		update();
+	}
 	return;
 #if 0
 	if (!_searchProcess.lastId || !_searchProcess.lastPeer) {

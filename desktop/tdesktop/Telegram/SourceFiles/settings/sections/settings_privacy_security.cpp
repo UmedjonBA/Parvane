@@ -70,10 +70,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/vertical_layout.h"
 #include "window/window_session_controller.h"
 #include "styles/style_layers.h"
+#include "ui/widgets/labels.h" // Parvane: отпечаток ключа
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 
 #include <QtGui/QGuiApplication>
+#include <QtGui/QClipboard>
 #include <QtSvg/QSvgRenderer>
 
 namespace Settings {
@@ -640,6 +642,41 @@ void BuildSecuritySection(
 				});
 			}, toggle->lifetime());
 		}
+	}
+
+	// Parvane: свой ключ безопасности (отпечаток identity-ключа, формат как в
+	// вебе) — показать тем, кто хочет вас проверить; клик копирует.
+	{
+		const auto container = builder.container();
+		const auto fingerprint = Parvane::OwnFingerprint();
+		Ui::AddSkip(container);
+		Ui::AddSubsectionTitle(container, rpl::single(u"Ваш ключ безопасности"_q));
+		const auto label = container->add(
+			object_ptr<Ui::FlatLabel>(
+				container,
+				rpl::single(fingerprint.isEmpty() ? u"…"_q : fingerprint),
+				st::boxDividerLabel),
+			st::defaultBoxDividerLabelPadding);
+		label->setSelectable(true);
+		Ui::AddSkip(container);
+		Ui::AddDividerText(
+			container,
+			rpl::single(u"Покажите его тем, кто хочет вас проверить. Отпечатки устройств собеседника — в его профиле."_q));
+		const auto copy = builder.addButton({
+			.id = u"security/parvane_key_copy"_q,
+			.title = rpl::single(u"Скопировать ключ безопасности"_q),
+			.icon = { &st::menuIconCopy },
+			.onClick = [=] {
+				if (fingerprint.isEmpty()) {
+					controller->showToast(u"Ключ ещё не готов"_q);
+					return;
+				}
+				QGuiApplication::clipboard()->setText(fingerprint);
+				controller->showToast(u"Ключ безопасности скопирован"_q);
+			},
+			.keywords = { u"key"_q, u"fingerprint"_q, u"ключ"_q, u"отпечаток"_q },
+		});
+		(void)copy;
 	}
 
 	auto ttlLabel = rpl::combine(

@@ -268,19 +268,17 @@ void SetupExperimental(
 			registerHighlight);
 	};
 
+	// Parvane: тумблеры, за которыми нет функций (форумы, боты/webview,
+	// MTProto IPv6, модерация общих групп, AI-кнопка), не показываем.
 	addToggle(ChatHelpers::kOptionTabbedPanelShowOnClick);
-	addToggle(Dialogs::kOptionForumHideChatsList);
 	addToggle(Dialogs::Ui::kOptionDialogsMuteIcon);
 	addToggle(Core::kOptionFractionalScalingEnabled);
 	addToggle(Core::kOptionHighDpiDownscale);
 	addToggle(Ui::GL::kOptionUseQtRhi);
 	addToggle(Window::kOptionViewProfileInChatsListContextMenu);
 	addToggle(Info::Profile::kOptionShowPeerIdBelowAbout);
-	addToggle(Info::Profile::kOptionShowChannelJoinedBelowAbout);
 	addToggle(Ui::kOptionUseSmallMsgBubbleRadius);
 	addToggle(Media::Player::kOptionDisableAutoplayNext);
-	addToggle(Webview::kOptionWebviewDebugEnabled);
-	addToggle(Webview::kOptionWebviewLegacyEdge);
 	addToggle(kOptionAutoScrollInactiveChat);
 	addToggle(Window::Notifications::kOptionHideReplyButton);
 	addToggle(Window::Notifications::kOptionCustomNotification);
@@ -290,16 +288,15 @@ void SetupExperimental(
 	addToggle(Core::kOptionDeadlockDetector);
 	addToggle(Window::kOptionExternalMediaViewer);
 	addToggle(Window::kOptionNewWindowsSizeAsFirst);
-	addToggle(MTP::details::kOptionPreferIPv6);
 	if (base::options::lookup<bool>(kOptionFastButtonsMode).value()) {
 		addToggle(kOptionFastButtonsMode);
 	}
+#ifdef Q_OS_MAC
 	addToggle(Window::kOptionDisableTouchbar);
+#endif // Q_OS_MAC
 	addToggle(Info::kAlternativeScrollProcessing);
-	addToggle(kModerateCommonGroups);
 	addToggle(kForceComposeSearchOneColumn);
 	addToggle(ChatHelpers::kOptionUnlimitedRecentStickers);
-	addToggle(Ui::kOptionHideAiButton);
 	addToggle(HistoryView::kOptionUnlimitedMessageWidth);
 	addToggle(HistoryView::Controls::kOptionMacCmdReplyImmediately);
 }

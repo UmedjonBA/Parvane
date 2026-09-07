@@ -296,13 +296,21 @@
      Your name color, Personal channel, Phone) → вместо MTProto вызывать
      `Parvane::SetName(...)` с новыми полями; убрать премиум-гейт у name color.
    - Проверка: задать Bio/дату/цвет в вебе → видно на десктопе; и наоборот.
-3. **Глобальный поиск по сообщениям на десктопе** (по локальному журналу):
-   сейчас только убрано вечное Loading (`dialogs_widget.cpp requestMessages →
-   searchApplyEmpty`); поиск внутри чата работает. Реализовать выборку по
-   `HistoryPath` jsonl всех чатов и отдачу в `Dialogs::Widget` как результаты.
-4. **Мелочи**: спрятать инертные Experimental-тумблеры (IPv6, bots webview,
-   forums, touchbar — ~5 шт, проверены по коду, не кликами); отдельная иконка
+3. ~~Глобальный поиск по сообщениям на десктопе~~ — СДЕЛАНО 7 сен 2026 вечером:
+   `Parvane::SearchMessagesLocal` (по карте uuid→msgId через
+   `Data::Session::nonChannelMessage`, без загрузки блоков истории),
+   `Dialogs::Widget::requestMessages` отдаёт результат в список, peer-search
+   идёт следом. Хук `PARVANE_AUTOSEARCH`, e2e `verify_global_search.sh`.
+4. ~~Инертные Experimental-тумблеры~~ — убраны (форумы, webview, IPv6,
+   модерация общих групп, AI-кнопка, touchbar вне macOS). Отдельная иконка
    вместо «P» из веба — по желанию пользователя.
+5. ~~Хвосты с веба~~ — СДЕЛАНО 7 сен: ключи безопасности в формате веба
+   (`e2e::fingerprintOf/ownFingerprint/contactFingerprints`; отпечатки
+   устройств собеседника в bio профиля, свой — в Settings → Privacy с
+   копированием), служебное сообщение «ключ безопасности изменился»
+   (`AnnounceKeyChange` при смене identity известного контакта), тост
+   «Слишком много действий» на `rate_limited` от gateway
+   (`GatewayTransport::setUnaddressedErrorHandler`). e2e `verify_security_keys.sh`.
 
 Смежное (не десктоп): закоммитить рабочее дерево (READMEs, баг-пакет, кросс-девайс
 прочитанное/мут, профильные поля, Android-скелет `android/`) — пользователь ещё

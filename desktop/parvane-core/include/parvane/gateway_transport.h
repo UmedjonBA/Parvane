@@ -74,6 +74,12 @@ public:
     // Асинхронная подписка. handler(subject, payload) зовётся на потоке reader.
     void subscribe(const std::string &subject, Handler handler) override;
 
+    // Безадресные ошибки gateway ({"op":"err"} без id — напр. rate_limited на
+    // fire-and-forget publish). Один обработчик на процесс (UI показывает
+    // предупреждение); зовётся на потоке reader, subject может быть пуст.
+    using ErrorHandler = std::function<void(const std::string &error, const std::string &subject)>;
+    static void setUnaddressedErrorHandler(ErrorHandler handler);
+
 protected:
     // Состояние одного pending-запроса (single или many).
     struct Pending {

@@ -226,6 +226,24 @@ void MirrorRead(std::int64_t peerId);
 	not_null<Main::Session*> session,
 	const QString &address);
 
+// Ключи безопасности (паритет с вебом): свой отпечаток identity-ключа
+// (SHA-256, 48 hex группами по 4) — показывается в Settings → Privacy;
+// "" до готовности E2E.
+[[nodiscard]] QString OwnFingerprint();
+
+// Глобальный поиск по сообщениям (паритет с вебом): локально по всем
+// сообщениям, восстановленным из журнала/sync (MTProto SearchGlobal нет).
+// Подстрока без учёта регистра в тексте/подписи, свежие первыми, не более limit.
+[[nodiscard]] std::vector<not_null<HistoryItem*>> SearchMessagesLocal(
+	not_null<Main::Session*> session,
+	const QString &query,
+	int limit = 100);
+
+// Ключ безопасности контакта сменился (новый identity у известного адреса):
+// локальное служебное сообщение в его чате + обновление отпечатков в профиле.
+// Только main-поток.
+void AnnounceKeyChange(const QString &address);
+
 // Поиск пользователей в каталоге identity (identity.user.search). Асинхронно:
 // запрос на воркере, callback с найденными адресами — на main-потоке.
 void SearchUsers(const QString &query, Fn<void(QStringList)> callback);

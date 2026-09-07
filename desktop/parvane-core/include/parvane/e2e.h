@@ -92,10 +92,26 @@ enum class Verdict { Ok, Spoofed, Unknown };
 [[nodiscard]] Verdict verifySender(const std::string &claimedFrom,
                                    const std::string &senderIdentity, ITransport &t,
                                    const std::string &token);
-void rememberContactIdentity(const std::string &contact, const std::string &identity);
+// true — identity УЖЕ ИЗВЕСТНОГО контакта сменилась (повод для служебного
+// сообщения «ключ безопасности изменился», как в вебе).
+bool rememberContactIdentity(const std::string &contact, const std::string &identity);
 
 // Safety number с контактом. "" если нет identity контакта.
 [[nodiscard]] std::string safetyNumber(const std::string &contact);
+
+// Отпечаток ключа в формате веб-клиента: SHA-256 от base64-строки identity-ключа,
+// первые 48 hex-символов группами по 4 (сверяется вслух/по другому каналу).
+[[nodiscard]] std::string fingerprintOf(const std::string &identityB64);
+// Свой отпечаток ("" до initDevice).
+[[nodiscard]] std::string ownFingerprint();
+struct DeviceFingerprint {
+    std::string deviceId;
+    std::string fingerprint;
+};
+// Отпечатки устройств контакта по каталогу (если каталога нет — primary
+// identity как устройство ""). Отсортировано по deviceId; пусто — устройства
+// ещё не известны (появятся после первого сообщения).
+[[nodiscard]] std::vector<DeviceFingerprint> contactFingerprints(const std::string &contact);
 
 // ── Группы (Megolm) ──────────────────────────────────────────────────────────
 [[nodiscard]] std::string groupSessionKey(const std::string &groupId);
