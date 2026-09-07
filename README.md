@@ -24,7 +24,7 @@ Rust-сервисов («шардов»), каждый со своей встр�
 | `gateway` | Единая доверенная точка входа (TCP/WS), JWT-auth, изоляция инбоксов, лимиты частоты | ✅ готов |
 | `client` (`web/`) | **Основной** клиент — форк Telegram Web A (TS) | ✅ задеплоен на прод; мессенджер + звонки + **E2E по умолчанию**, паритет-фичи, русская локализация, 2FA через Telegram |
 | `client` (`desktop/`) | Клиент — форк Telegram Desktop (C++/Qt) | ✅ паритет с вебом; ходит на прод по **WSS** (`gateway`), вход по нику, 2FA |
-| `client` (`android/`) | Клиент — форк TDLib-клиента (Telegram X) + `parvane-core` | 🛠 начат: `parvane-core` собирается под Android NDK; JNI-shim и UI — впереди |
+| `client` (`android/`) | Клиент — shim TDLib `Client` над `parvane-core` (JNI): свой Compose-клиент + форк Telegram X | 🟡 свой клиент: APK собирается, дымовой тест в эмуляторе зелёный (вход, E2E-текст); форк Telegram X собирается и стартует на шове, **разработка приостановлена 8 сен 2026** (см. `android/BUILD-android.md`) |
 | `smarthome` | Умный дом, RBAC по устройствам | ⛔ заморожен |
 
 Клиентов три, все на общем контракте NATS/JSON: **веб** (основной, задеплоен),
@@ -72,9 +72,13 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 > вебом и ходит на прод по тому же WSS (`GatewayWsTransport`), вход по нику,
 > Telegram-подтверждение/2FA. Лицензия унаследована от tdesktop — **GPLv3**.
 >
-> **Android** (`android/`) — начат: форкаем клиент на TDLib (кандидат Telegram X),
-> подменяя его `Client` shim'ом поверх `parvane-core` (JNI). Ядро уже собирается
-> под NDK (см. `android/BUILD-android.md`).
+> **Android** (`android/`) — шов TDLib: класс `org.drinkless.tdlib.Client` подменён
+> shim'ом поверх `parvane-core` (JNI, `libparvane_jni.so`), объекты `TdApi`
+> синтезируются из событий Parvane. Свой минимальный Compose-клиент (`android/app`)
+> работает end-to-end (вход по нику/паролю, E2E-текст с десктопом/вебом);
+> форк Telegram X (`setup-tgx.sh`, оверлей) собирается и стартует на том же шове —
+> доводка приостановлена 8 сен 2026. Подробности и как возобновить —
+> `android/BUILD-android.md`.
 >
 > Прежний самодельный Tauri-клиент (React 18, Gruvbox-TUI) архивирован в ветке
 > **`tauri`**.
@@ -191,12 +195,19 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
   без изменений
 - **Лицензия**: GPLv3 (с OpenSSL-исключением), унаследована от tdesktop
 
-### Client (Android) — форк TDLib-клиента · В РАБОТЕ
+### Client (Android) — шов TDLib над parvane-core · ПРИОСТАНОВЛЕН (8 сен 2026)
 
-- **База (план)**: клиент на TDLib (кандидат — Telegram X), нативный UI
-- **Транспорт**: `parvane-core` под Android NDK (собирается; `android/BUILD-android.md`),
-  подключается через JNI-shim класса `org.drinkless.tdlib.Client`
-- **Шов (план)**: запросы/обновления TDLib (`TdApi`) синтезируются из событий Parvane
+- **Шов**: `android/libtd` — `TdApi.java` (бандл Telegram X, TDLib d1085f9),
+  `Client.kt` (`create/send/execute/close`, авторизация: ник = поле «телефон» →
+  пароль → `identity.token.issue`), `ParvaneStore.kt` (синтез Chat/User/Message),
+  `ParvaneCore.kt` + `jni/parvane_jni.cpp` → `libparvane_jni.so` (сессия WSS,
+  E2E, sealed-отправка, verifySender, sync/инбокс, resolve/search)
+- **Свой клиент** `android/app` (Compose): вход, чаты, текст, «новый чат по нику»;
+  APK arm64 ~11 МБ; дымовой тест в эмуляторе x86_64 `smoke_emulator.sh` — зелёный
+- **Telegram X**: оверлей `setup-tgx.sh` на внешний клон; собирается (arm64/x64),
+  стартует, экран входа по нику; дальше не доведено (падение хостового эмулятора
+  на экране пароля; на телефоне не проверялось)
+- **Лицензия**: свой клиент — как проект; форк Telegram X — GPLv3
 
 > Прежний Tauri-клиент (React 18 + Babel-standalone, Gruvbox-TUI, Rust IPC-мост
 > с 17 командами) сохранён в ветке **`tauri`**.
@@ -231,10 +242,13 @@ Parvane/
 │   ├── tdesktop/               ← вендоренный снапшот форка
 │   │   └── Telegram/SourceFiles/parvane/  ← parvane_client.{h,cpp}, intro_parvane
 │   └── verify_*.sh             ← e2e-скрипты (два реальных экземпляра)
-├── android/                    ← клиент — форк TDLib-клиента (в работе)
-│   ├── BUILD-android.md        ← сборка parvane-core под NDK
-│   ├── jni/CMakeLists.txt      ← Android-сборка ядра (без cnats, WSS-only)
-│   └── build-openssl.sh · build-core.sh  ← OpenSSL(NDK) + cargo-ndk + ninja
+├── android/                    ← Android: шов TDLib над parvane-core (приостановлен)
+│   ├── BUILD-android.md        ← тулчейн, стадии 1–3, как возобновить
+│   ├── libtd/                  ← TdApi.java + Client.kt (shim) + ParvaneStore + ParvaneCore
+│   ├── app/                    ← свой Compose-клиент (APK, дымовой тест зелёный)
+│   ├── jni/                    ← CMake ядра (без cnats, WSS-only) + parvane_jni.cpp
+│   ├── tgx-overlay/ · setup-tgx.sh · tgx_*.sh  ← форк Telegram X (оверлей, эмулятор)
+│   └── build-openssl.sh · build-core.sh · smoke_emulator.sh
 ├── scripts/                    ← e2e веба (Playwright) и прод-смоук
 └── infra/
     ├── nats/server.conf        ← ACL по ролям

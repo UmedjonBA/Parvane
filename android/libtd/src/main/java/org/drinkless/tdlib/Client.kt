@@ -252,9 +252,22 @@ class Client private constructor(
         is TdApi.SearchPublicChats -> searchNicks(f.query, 20)
         is TdApi.CreatePrivateChat -> store.chatById(f.userId) ?: TdApi.Error(404, "chat not found")
         else -> {
-            Log.d(TAG, "не реализовано: ${f.javaClass.simpleName}")
-            TdApi.Error(501, "Parvane: не реализовано ${f.javaClass.simpleName}")
+            // Неизвестная функция: если TDLib отвечала бы Ok (сеттеры/уведомления
+            // о состоянии) — Ok, UI не спотыкается; запросы данных — ошибка 501
+            if (resultTypeOf(f) == TdApi.Ok::class.java) {
+                Log.d(TAG, "ok-заглушка: ${f.javaClass.simpleName}")
+                TdApi.Ok()
+            } else {
+                Log.d(TAG, "не реализовано: ${f.javaClass.simpleName}")
+                TdApi.Error(501, "Parvane: не реализовано ${f.javaClass.simpleName}")
+            }
         }
+    }
+
+    /** Тип результата функции TdApi по generic-предку (Function<R>). */
+    private fun resultTypeOf(f: TdApi.Function<*>): Class<*>? {
+        val t = f.javaClass.genericSuperclass as? java.lang.reflect.ParameterizedType ?: return null
+        return t.actualTypeArguments.firstOrNull() as? Class<*>
     }
 
     private fun onSessionReady(self: String) {
