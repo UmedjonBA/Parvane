@@ -31,3 +31,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // TdApi.java из бандла Telegram X использует androidx-аннотации (@IntDef/@Nullable)
+    implementation("androidx.annotation:annotation:1.8.2")
+}

@@ -40,9 +40,9 @@ Compose-приложении с тем же контрактом, что у Tele
 `org.drinkless.tdlib.Client.send(TdApi.Function)` и апдейтами `TdApi.*`.
 
 - `libtd/` — Android-библиотека:
-  - `org/drinkless/tdlib/TdApi.java` — сгенерирован из TDLib
-    (`td_generate_java_api` по `td_api.tlo`, master 7 сен 2026, 64k строк);
-    DTO как у Telegram X, версию при переносе на X подменить на их.
+  - `org/drinkless/tdlib/TdApi.java` — из бандла Telegram X (TGX-Android/tdlib,
+    TDLib d1085f9, с androidx-аннотациями @IntDef/@Nullable — X на них
+    опирается); свой генератор (`td_generate_java_api`) — запасной путь.
   - `org/drinkless/tdlib/Client.kt` — **shim**: `create/send/execute/close`,
     отображение авторизации TDLib на вход Parvane (WaitPhoneNumber = ник →
     WaitPassword → `identity.token.issue` → Ready; сохранённая сессия → Ready
