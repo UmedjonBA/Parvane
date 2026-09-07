@@ -2,14 +2,18 @@
 
 Звонки Parvane — P2P WebRTC. В одной LAN хватает host-кандидатов, но через
 интернет (за NAT) нужен STUN (узнать свой внешний адрес) и TURN (релей, когда
-прямое соединение невозможно). Клиент читает адрес сервера из окружения:
+прямое соединение невозможно). ICE-конфиг клиентам отдаёт **шард `call`**, читая
+его из своего окружения (клиент сам эти переменные не читает):
 
 ```
-PARVANE_STUN=stun:turn.example.com:3478
-PARVANE_TURN=turn:turn.example.com:3478
-PARVANE_TURN_USER=parvane
-PARVANE_TURN_PASS=parvane
+PARVANE_STUN_URLS=stun:turn.example.com:3478            # список через запятую
+PARVANE_TURN_URL=turn:turn.example.com:3478?transport=udp,turn:...?transport=tcp
+PARVANE_TURN_SECRET=<hex>                                # ephemeral REST (TURN REST API)
+# TTL эфемерных кредов — PARVANE_TURN_TTL_SECS
 ```
+
+На проде эти переменные задаются в `infra/deploy` (см. docker-compose.yml);
+сам TURN-сервер поднят на VPS (`infra/turn/main.go`, systemd `parvane-turn`).
 
 ## Вариант 1 — parvane-turn (userspace, без root)
 

@@ -153,7 +153,8 @@ docker compose exec -T caddy caddy hash-password --plaintext '<PW>'
   логину, не по IP (gateway не прокидывает адрес клиента); при спаме — лимит
   в Caddy или PARVANE_INVITE_REQUIRED=1.
 - notes/calendar шарды не разворачиваются (к UI не подключены).
-- Desktop-клиенту нужен TCP-гейтвей — наружу не проброшен (только WS через
-  Caddy); desktop против этого сервера пока не работает.
+- Desktop-клиент **теперь работает против прода** — ходит на `gateway` по WSS
+  (`wss://<host>/ws`, `GatewayWsTransport`), TCP-гейтвей наружу по-прежнему не
+  проброшен и не нужен. Android-клиент (в работе) пойдёт тем же WSS-путём.
 - Бэкапы SQLite: том `parvane_db` (`docker compose exec`+`sqlite3 .backup`
   или скрипт `scripts/backup_server_dbs.sh` изнутри тома) — TODO cron.

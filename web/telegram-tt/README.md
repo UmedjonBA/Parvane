@@ -1,3 +1,17 @@
+# Parvane Web (форк Telegram Web A)
+
+> **Это форк Telegram Web A — основной клиент Parvane.** Сетевой слой
+> MTProto/GramJS заменён провайдером `src/api/parvane/`: он ходит на шард
+> `gateway` по WSS (`wss://<host>/ws`) и маппит события Parvane в объекты
+> api-слоя Telegram Web A, поэтому родной UI работает без изменений. Поверх
+> добавлены: русская локализация, «Избранное», контакты, папки, обои, QR,
+> двухфакторный вход через Telegram-бота, лимиты частоты и сверка ключей
+> безопасности. Бэкенд — Rust-шарды на шине NATS (см. корневой `README.md`).
+> Общий контракт с десктоп- и Android-клиентами — NATS/JSON. Деплой на прод —
+> `infra/deploy`. Ниже — оригинальный README Telegram Web A.
+
+---
+
 # Telegram Web A
 
 This project won the first prize 🥇 at [Telegram Lightweight Client Contest](https://contest.com/javascript-web-3) and now is an official Telegram client available to anyone at [web.telegram.org/a](https://web.telegram.org/a).

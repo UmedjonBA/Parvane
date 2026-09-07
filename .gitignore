@@ -26,3 +26,8 @@ CLAUDE.md
 
 # Node-зависимости корневых e2e-скриптов
 node_modules/
+
+# Android (Parvane): тяжёлые артефакты и клоны для изучения — не коммитить
+/android/.build/
+/android/prebuilt/
+/android/_study/
