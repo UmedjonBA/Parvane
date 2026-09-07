@@ -11,13 +11,13 @@ use parvane_types::{
     GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
     MessageContent, MessageDeviceCopy,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, ReaderEntry, ReadersPayload,
-    ReadersResponse, SendPayload, StoredMessage,
+    NotifyPayload, NotifyNotice, ReadNotice, ReadersResponse, SendPayload, StoredMessage,
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
         GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_DELETE, GROUP_INFO,
         GROUP_INVITE_CREATE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
         GROUP_RENAME, GROUP_SET_ROLE, GROUP_UNBAN,
-        IDENTITY_VERIFY, MSG_ACK, MSG_CLEAR, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
+        IDENTITY_VERIFY, MSG_ACK, MSG_CLEAR, MSG_SETNOTIFY, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
 };
@@ -72,6 +72,7 @@ async fn main() -> Result<()> {
     let mut react_sub = nc.subscribe(MSG_REACT).await?;
     let mut pin_sub = nc.subscribe(MSG_PIN).await?;
     let mut clear_sub = nc.subscribe(MSG_CLEAR).await?;
+    let mut setnotify_sub = nc.subscribe(MSG_SETNOTIFY).await?;
     let mut gcreate_sub = nc.subscribe(GROUP_CREATE).await?;
     let mut gadd_sub = nc.subscribe(GROUP_ADD_MEMBER).await?;
     let mut gremove_sub = nc.subscribe(GROUP_REMOVE_MEMBER).await?;
@@ -120,6 +121,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = clear_sub.next() => {
                 handle_clear(&nc, &pool, msg).await;
+            }
+            Some(msg) = setnotify_sub.next() => {
+                handle_setnotify(&nc, &pool, msg).await;
             }
             Some(msg) = gcreate_sub.next() => {
                 handle_group_create(&nc, &pool, msg).await;
@@ -1562,6 +1566,17 @@ async fn handle_read(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         }
         store_read_receipt(pool, &mid, &reader, now_unix()).await?;
 
+        // Кросс-девайс: сообщаем ДРУГИМ своим устройствам, что я это прочитал
+        // (мгновенно снимут непрочитанное). Офлайн-устройства догонят через sync.
+        let notice = ParvaneEvent {
+            id: Uuid::now_v7(),
+            from: "messenger".to_string(),
+            ts: now_unix(),
+            token: String::new(),
+            payload: ReadNotice { read: vec![event.payload.message_id] },
+        };
+        nc.publish(msg_inbox(&reader), serde_json::to_vec(&notice)?.into()).await?;
+
         info!("Read receipt: {} прочитал {}", reader, event.payload.message_id);
         anyhow::Ok(())
     }
@@ -1750,6 +1765,43 @@ async fn is_hidden_for(pool: &SqlitePool, message_id: &str, user: &str) -> Resul
     .fetch_optional(pool)
     .await?;
     Ok(row.is_some())
+}
+
+async fn handle_setnotify(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let result = async {
+        let event: ParvaneEvent<NotifyPayload> = serde_json::from_slice(&msg.payload)
+            .context("неверный JSON в msg.chat.setnotify")?;
+        let user = verify_token(nc, &event.token).await?;
+        validate_sender(&user, &event.from)?;
+        let json = &event.payload.settings;
+        if json.len() > 200_000 {
+            anyhow::bail!("настройки уведомлений слишком большие");
+        }
+        sqlx::query(
+            "INSERT INTO user_settings (user, notify_json, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(user) DO UPDATE SET notify_json = excluded.notify_json,              updated_at = excluded.updated_at",
+        )
+        .bind(&user)
+        .bind(json)
+        .bind(now_unix())
+        .execute(pool)
+        .await?;
+        // Другим устройствам этого пользователя — применить те же настройки.
+        let notice = ParvaneEvent {
+            id: Uuid::now_v7(),
+            from: "messenger".to_string(),
+            ts: now_unix(),
+            token: String::new(),
+            payload: NotifyNotice { notify: json.clone() },
+        };
+        nc.publish(msg_inbox(&user), serde_json::to_vec(&notice)?.into()).await?;
+        info!("Настройки уведомлений обновлены: {}", user);
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        error!("handle_setnotify: {}", e);
+    }
 }
 
 async fn handle_clear(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
@@ -2138,12 +2190,37 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         ).await?;
 
         let count = messages.len();
+        // Кросс-девайс прочитанное: id, которые ЭТОТ пользователь уже прочитал
+        // (в т.ч. на другом устройстве) с момента курсора мутаций — офлайн-
+        // догон непрочитанного между своими устройствами.
+        let read_rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT message_id FROM read_receipts WHERE reader = ? AND ts > ?",
+        )
+        .bind(&user)
+        .bind(event.payload.since_updated)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        let read_message_ids: Vec<Uuid> = read_rows
+            .iter()
+            .filter_map(|(m,)| Uuid::parse_str(m).ok())
+            .collect();
+        let notify_row: Option<(String,)> = sqlx::query_as(
+            "SELECT notify_json FROM user_settings WHERE user = ?",
+        )
+        .bind(&user)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        let notify_settings = notify_row
+            .map(|(j,)| j)
+            .filter(|j| !j.is_empty());
         let resp = ParvaneEvent {
             id: Uuid::now_v7(),
             from: "messenger".to_string(),
             ts: now_unix(),
             token: String::new(),
-            payload: SyncResponsePayload { messages },
+            payload: SyncResponsePayload { messages, read_message_ids, notify_settings },
         };
 
         // Ответ ТОЛЬКО в reply-inbox запросившего. Раньше был ещё broadcast в

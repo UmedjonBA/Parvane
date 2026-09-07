@@ -85,6 +85,7 @@ import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
 import { buildBuiltinWallpapers } from './wallpapers';
 import {
+  buildWireEvent as buildWireEventNotify,
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
   TOPIC_IDENTITY_SEARCH,
@@ -94,6 +95,7 @@ import {
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
+  TOPIC_MSG_SETNOTIFY,
   TOPIC_PREKEYS_FETCH,
   TOPIC_PUSH_REGISTER,
   TOPIC_PUSH_UNREGISTER,
@@ -128,6 +130,24 @@ if (typeof window !== 'undefined') {
 let connection: GatewayConnection | undefined;
 let store = new ParvaneStore();
 let token = '';
+
+// Публикует весь блок настроек уведомлений (умолчания + исключения по чатам,
+// включая мут) на messenger — синхронизация между своими устройствами.
+function pushNotifySettings() {
+  if (!connection) return;
+  const payload = JSON.stringify({
+    defaults: localState.loadNotifyDefaults(),
+    exceptions: localState.loadNotifyExceptions(),
+  });
+  try {
+    connection.publish(
+      TOPIC_MSG_SETNOTIFY,
+      JSON.stringify(buildWireEventNotify(store.self, token, { settings: payload })),
+    );
+  } catch {
+    // не критично — догонит следующий sync
+  }
+}
 let pendingLoginAddress = '';
 // Пароль между экранами регистрации: register (email) и confirm (код) должны
 // повторить логин без повторного ввода
@@ -1032,6 +1052,7 @@ const methods = {
       shouldShowPreviews: settings.shouldShowPreviews,
     };
     localState.saveNotifyDefaults(defaults);
+    pushNotifySettings();
     return Promise.resolve(true);
   },
 
@@ -1043,6 +1064,7 @@ const methods = {
     const exceptions = localState.loadNotifyExceptions();
     exceptions[address] = { ...exceptions[address], ...settings };
     localState.saveNotifyExceptions(exceptions);
+    pushNotifySettings();
     sendUpdate({ '@type': 'updateChatNotifySettings', chatId: chat.id, settings: exceptions[address] });
     return Promise.resolve(undefined);
   },
@@ -2013,11 +2035,18 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
-  async updateProfile({ firstName, lastName }: { firstName?: string; lastName?: string; about?: string }) {
+  async updateProfile({ firstName, lastName, about }: { firstName?: string; lastName?: string; about?: string }) {
     const displayName = [firstName, lastName].filter(Boolean).join(' ').trim();
     if (!connection || !displayName) return undefined;
-    await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify({ token, display_name: displayName }));
+    // Bio (about) хранится в identity и синхронизируется через resolve.
+    const payload: Record<string, unknown> = { token, display_name: displayName };
+    if (about !== undefined) payload.bio = about;
+    await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify(payload));
     store.setDisplayName(store.self, displayName);
+    if (about !== undefined) {
+      const prev = store.getProfile(store.self) || {};
+      store.setProfile(store.self, { ...prev, bio: about });
+    }
     const user = store.buildApiUser(store.self);
     sendUpdate({ '@type': 'updateUser', id: user.id, user });
     sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });
@@ -2054,9 +2083,23 @@ const methods = {
     const isBlocked = localState.loadBlocked().includes(address);
     // `loadFullUser` без guard'ов читает `users`/`chats`/`userStatusesById` —
     // отдаём полную форму ответа, иначе TypeError в экшене
+    const profile = store.getProfile(address);
+    const birthday = (() => {
+      const iso = profile?.birthday;
+      if (!iso) return undefined;
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+      if (!m) return undefined;
+      return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+    })();
     return Promise.resolve({
       user,
-      fullInfo: { isBlocked, commonChatsCount: 0 },
+      fullInfo: {
+        isBlocked,
+        commonChatsCount: 0,
+        bio: profile?.bio || undefined,
+        birthday,
+        personalChannelId: profile?.personalChannel || undefined,
+      },
       users: [user],
       chats: [],
       userStatusesById: { [user.id]: RECENT_STATUS },

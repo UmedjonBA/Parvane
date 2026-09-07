@@ -43,6 +43,10 @@ type SyncDependencies = {
     loadSyncCursor: () => Promise<{ lastSeenUuid: string; sinceUpdated: number } | undefined>;
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
     isBlocked: (address: string) => boolean;
+    loadNotifyExceptions: () => Record<string, Record<string, unknown>>;
+    saveNotifyExceptions: (map: Record<string, Record<string, unknown>>) => void;
+    loadNotifyDefaults: () => Record<string, Record<string, unknown>>;
+    saveNotifyDefaults: (map: Record<string, Record<string, unknown>>) => void;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -354,6 +358,13 @@ export function createSyncController(deps: SyncDependencies) {
       const store = deps.getStore();
       users.forEach((userInfo) => {
         store.setDisplayName(userInfo.username, userInfo.display_name || userInfo.username);
+        store.setProfile(userInfo.username, {
+          bio: userInfo.bio,
+          birthday: userInfo.birthday,
+          nameColor: userInfo.name_color,
+          personalChannel: userInfo.personal_channel,
+          phone: userInfo.phone,
+        });
         const previousAvatar = store.getAvatar(userInfo.username);
         store.setAvatar(userInfo.username, userInfo.avatar);
         if (userInfo.avatar !== previousAvatar && userInfo.username !== store.self) {
@@ -462,6 +473,63 @@ export function createSyncController(deps: SyncDependencies) {
     if (!store.isGroupAddress(stored.to)) {
       checkedGroupCandidates.delete(stored.to);
     }
+  }
+
+  // Кросс-девайс прочитанное: сообщения, которые я прочитал на другом
+  // устройстве (ReadNotice из инбокса или read_message_ids из sync). Помечаем
+  // прочитанными и двигаем бейдж непрочитанного затронутых чатов.
+  // Кросс-девайс настройки уведомлений/мута: применить блок, пришедший с
+  // другого своего устройства (NotifyNotice из инбокса или notify_settings из
+  // sync). Сохраняем локально и обновляем бейджи мута затронутых чатов.
+  function applyNotifySettings(json: string) {
+    if (!json) return;
+    let parsed: { defaults?: Record<string, Record<string, unknown>>;
+      exceptions?: Record<string, Record<string, unknown>>; };
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return;
+    }
+    const store = deps.getStore();
+    if (parsed.defaults) deps.localState.saveNotifyDefaults(parsed.defaults);
+    if (parsed.exceptions) {
+      deps.localState.saveNotifyExceptions(parsed.exceptions);
+      Object.entries(parsed.exceptions).forEach(([address, settings]) => {
+        const chatId = store.getIdForAddress(address);
+        deps.sendUpdate({ '@type': 'updateChatNotifySettings', chatId, settings });
+      });
+    }
+  }
+
+  function markUuidsRead(uuids: string[]) {
+    if (!uuids.length) return;
+    const store = deps.getStore();
+    const affected = new Map<string, number>();
+    uuids.forEach((uuid) => {
+      const flags = wireFlagsByUuid.get(uuid);
+      if (flags) {
+        flags.read = true;
+        wireFlagsByUuid.set(uuid, flags);
+      }
+      reportedReadUuids.add(uuid);
+      const message = store.getMessageByUuid(uuid);
+      if (!message || message.isOutgoing) return;
+      const cur = affected.get(message.chatId) || 0;
+      if (message.id > cur) affected.set(message.chatId, message.id);
+    });
+    affected.forEach((maxId, chatId) => {
+      const unreadCount = store.getMessages(chatId).filter((message) => {
+        if (message.isOutgoing || !message.senderId) return false;
+        const uuid = store.getUuidForMessage(chatId, message.id);
+        return uuid ? (!wireFlagsByUuid.get(uuid)?.read && !reportedReadUuids.has(uuid)) : true;
+      }).length;
+      deps.sendUpdate({
+        '@type': 'updateThreadReadState',
+        chatId,
+        threadId: MAIN_THREAD_ID,
+        readState: { lastReadInboxMessageId: maxId, unreadCount },
+      });
+    });
   }
 
   function noteReadOutbox(message: ApiMessage) {
@@ -699,7 +767,9 @@ export function createSyncController(deps: SyncDependencies) {
       JSON.stringify(syncEvent),
       SYNC_TIMEOUT_MS,
     );
-    const parsed = JSON.parse(syncRaw) as WireEvent<{ messages?: WireStoredMessage[] }>;
+    const parsed = JSON.parse(syncRaw) as WireEvent<{
+      messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
+    }>;
     const serverMessages = parsed.payload?.messages || [];
     serverMessages.forEach(trackCursors);
     const knownIds = new Set(serverMessages.map((message) => message.id));
@@ -759,6 +829,10 @@ export function createSyncController(deps: SyncDependencies) {
       }
     }
 
+    // Кросс-девайс прочитанное (прочитал на другом устройстве)
+    markUuidsRead(parsed.payload?.read_message_ids || []);
+    if (parsed.payload?.notify_settings) applyNotifySettings(parsed.payload.notify_settings);
+
     const peerAddresses = new Set<string>();
     serverMessages.concat(journal).forEach((message) => {
       if (message.from && !store.isGroupAddress(message.from)) peerAddresses.add(message.from);
@@ -800,8 +874,12 @@ export function createSyncController(deps: SyncDependencies) {
         JSON.stringify(syncEvent),
         SYNC_TIMEOUT_MS,
       );
-      const parsed = JSON.parse(raw) as WireEvent<{ messages?: WireStoredMessage[] }>;
+      const parsed = JSON.parse(raw) as WireEvent<{
+        messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
+      }>;
       messages = parsed.payload?.messages || [];
+      markUuidsRead(parsed.payload?.read_message_ids || []);
+      if (parsed.payload?.notify_settings) applyNotifySettings(parsed.payload.notify_settings);
     } catch {
       return;
     }
@@ -862,6 +940,16 @@ export function createSyncController(deps: SyncDependencies) {
     const cleared = event.payload?.cleared?.message_ids;
     if (Array.isArray(cleared) && cleared.length) {
       forgetMessages(cleared.filter((uuid): uuid is string => typeof uuid === 'string'));
+      return;
+    }
+    const read = (event.payload as { read?: string[] } | undefined)?.read;
+    if (Array.isArray(read) && read.length) {
+      markUuidsRead(read.filter((uuid): uuid is string => typeof uuid === 'string'));
+      return;
+    }
+    const notify = (event.payload as { notify?: string } | undefined)?.notify;
+    if (typeof notify === 'string' && notify) {
+      applyNotifySettings(notify);
       return;
     }
     const stored = event.payload?.message;

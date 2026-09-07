@@ -127,6 +127,11 @@ export type WireUserInfo = {
   display_name: string;
   avatar?: string;
   pubkey?: string;
+  bio?: string;
+  birthday?: string;
+  name_color?: number;
+  personal_channel?: string;
+  phone?: string;
 };
 
 export type WireEvent<T> = {
@@ -165,6 +170,7 @@ export const TOPIC_MSG_REACT = 'msg.chat.react';
 export const TOPIC_MSG_PIN = 'msg.chat.pin';
 // Очистка истории «для меня»: пачка id скрывается из sync только для нас
 export const TOPIC_MSG_CLEAR = 'msg.chat.clear';
+export const TOPIC_MSG_SETNOTIFY = 'msg.chat.setnotify';
 // Максимум id в одном msg.chat.clear (как CLEAR_MAX_IDS на сервере)
 export const CLEAR_MAX_IDS = 500;
 export const TOPIC_MSG_SYNC_REQUEST = 'msg.sync.request';

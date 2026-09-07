@@ -32,6 +32,10 @@ export class ParvaneStore {
   private displayNameByAddress = new Map<string, string>();
 
   private avatarByAddress = new Map<string, string>();
+  private profileByAddress = new Map<string, {
+    bio?: string; birthday?: string; nameColor?: number;
+    personalChannel?: string; phone?: string;
+  }>();
 
   // Parvane: явно добавленные контакты (localStorage); плюс контактом считаем
   // каждого, с кем есть личная переписка. Раньше isContact стоял у всех
@@ -137,6 +141,17 @@ export class ParvaneStore {
 
   getAvatar(address: string) {
     return this.avatarByAddress.get(address);
+  }
+
+  setProfile(address: string, fields: {
+    bio?: string; birthday?: string; nameColor?: number;
+    personalChannel?: string; phone?: string;
+  }) {
+    this.profileByAddress.set(address, fields);
+  }
+
+  getProfile(address: string) {
+    return this.profileByAddress.get(address);
   }
 
   // Куда (в какой чат) кладётся сообщение с точки зрения этого клиента
@@ -266,8 +281,11 @@ export class ParvaneStore {
       firstName: this.getDisplayName(address),
       // Username = local-part адреса: включает @-автокомплит и упоминания
       usernames: [{ username: address.split('@')[0], isActive: true, isEditable: false }],
-      phoneNumber: '',
-      color: { type: 'regular', color: Number(id) % 7 },
+      phoneNumber: this.profileByAddress.get(address)?.phone || '',
+      color: {
+        type: 'regular',
+        color: this.profileByAddress.get(address)?.nameColor ?? (Number(id) % 7),
+      },
       avatarPhotoId: this.avatarByAddress.get(address),
     };
   }

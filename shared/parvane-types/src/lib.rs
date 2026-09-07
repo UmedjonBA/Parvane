@@ -57,6 +57,7 @@ pub mod topics {
     /// ТОЛЬКО для запросившего (у остальных участников ничего не меняется).
     /// Собственные устройства получают в инбокс уведомление `ClearedNotice`.
     pub const MSG_CLEAR: &str = "msg.chat.clear";
+    pub const MSG_SETNOTIFY: &str = "msg.chat.setnotify";
     /// Список прочитавших сообщение (группы: «seen by», 1-1: время прочтения).
     /// Request/reply в reply-inbox; только участник переписки.
     pub const MSG_READERS: &str = "msg.chat.readers";
@@ -525,6 +526,21 @@ pub struct UserInfo {
     /// сигналинга звонков. None — юзер ещё не зарегистрировал ключ.
     #[serde(default)]
     pub pubkey: Option<String>,
+    /// «О себе» (bio). None/пусто — не задано.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
+    /// Дата рождения ISO `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birthday: Option<String>,
+    /// Индекс цвета имени (как у Telegram peer color; бесплатно для всех).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_color: Option<i64>,
+    /// Личный канал (адрес/id канала), None — не задан.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_channel: Option<String>,
+    /// Телефон (по желанию), None — не задан.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
 }
 
 /// Установка своего аватара: file_id уже загруженного в cloud изображения.
@@ -558,6 +574,18 @@ pub struct SearchUsersResponse {
 pub struct SetNameRequest {
     pub token: String,
     pub display_name: String,
+    /// Профильные поля (все опциональны — задаём только присланные; пустая
+    /// строка очищает). Хранятся в identity, синхронизируются через resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birthday: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_color: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -867,6 +895,28 @@ pub struct ClearedIds {
     pub message_ids: Vec<Uuid>,
 }
 
+/// Уведомление собственным устройствам (инбокс `msg.user.<я>`): эти сообщения
+/// я прочитал на другом своём устройстве. Клиенты помечают их прочитанными.
+/// Несётся в `ParvaneEvent` вместо `InboxPush` (поле `read` вместо `message`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadNotice {
+    pub read: Vec<Uuid>,
+}
+
+/// Синхронизация настроек уведомлений/мута между СВОИМИ устройствами.
+/// Клиент шлёт весь блок настроек (JSON: исключения по чатам + умолчания),
+/// messenger хранит per-user и релеит на другие устройства.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyPayload {
+    pub settings: String,
+}
+
+/// Уведомление своим устройствам об изменении настроек уведомлений.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyNotice {
+    pub notify: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRequestPayload {
     pub last_seen_id: String,
@@ -904,6 +954,16 @@ pub struct SyncExtraSigning {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResponsePayload {
     pub messages: Vec<StoredMessage>,
+    /// Кросс-девайс прочитанное: id сообщений, которые ЗАПРОСИВШИЙ пользователь
+    /// уже прочитал (возможно, на другом своём устройстве). Клиент помечает их
+    /// прочитанными и не считает непрочитанными. Инкрементально по
+    /// `since_updated`. Пусто у legacy-сервера.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_message_ids: Vec<Uuid>,
+    /// Настройки уведомлений/мута пользователя (JSON), заданные на любом его
+    /// устройстве. None — сервер их не хранит (legacy). Клиент применяет.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_settings: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
