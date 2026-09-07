@@ -1,0 +1,10 @@
+# артефакты и локальные тулчейны — не коммитить
+.build/
+prebuilt/
+_study/
+build/
+.gradle/
+.cxx/
+local.properties
+*.iml
+.idea/
