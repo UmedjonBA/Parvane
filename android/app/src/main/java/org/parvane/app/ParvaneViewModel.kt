@@ -46,12 +46,28 @@ class ParvaneViewModel(app: Application) : AndroidViewModel(app) {
     private fun onUpdate(obj: TdApi.Object) {
         when (obj) {
             is TdApi.UpdateAuthorizationState -> when (obj.authorizationState) {
-                is TdApi.AuthorizationStateWaitPhoneNumber -> auth.value = Auth.NICK
-                is TdApi.AuthorizationStateWaitPassword -> auth.value = Auth.PASSWORD
+                is TdApi.AuthorizationStateWaitPhoneNumber -> {
+                    auth.value = Auth.NICK
+                    DevHooks.autologin?.substringBefore(':')?.let { submitNick(it) }
+                }
+                is TdApi.AuthorizationStateWaitPassword -> {
+                    auth.value = Auth.PASSWORD
+                    DevHooks.autologin?.substringAfter(':', "")?.takeIf { it.isNotEmpty() }?.let { submitPassword(it) }
+                }
                 is TdApi.AuthorizationStateReady -> {
                     auth.value = Auth.READY
                     client.send(TdApi.GetMe()) { me -> (me as? TdApi.User)?.let { self.value = it } }
                     client.send(TdApi.LoadChats(TdApi.ChatListMain(), 100)) { }
+                    DevHooks.autosend?.let { spec ->
+                        DevHooks.autosend = null
+                        val peer = spec.substringBefore(':')
+                        val text = spec.substringAfter(':', "")
+                        viewModelScope.launch {
+                            val r = withContext(Dispatchers.IO) { call(TdApi.SearchPublicChat(peer)) }
+                            if (r is TdApi.Chat) { chats[r.id] = r; openChat(r.id); sendText(r.id, text) }
+                            else error.value = (r as? TdApi.Error)?.message
+                        }
+                    }
                 }
                 is TdApi.AuthorizationStateLoggingOut, is TdApi.AuthorizationStateClosed -> {
                     chats.clear(); messages.clear(); openChatId.value = null

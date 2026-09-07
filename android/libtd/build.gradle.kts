@@ -10,8 +10,8 @@ android {
 
     defaultConfig {
         minSdk = 24
-        // Ядро собрано пока только под arm64-v8a (android/build-core.sh)
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // Ядро собрано под arm64-v8a и x86_64 (android/build-core.sh <ABI>)
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_static")
