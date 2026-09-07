@@ -34,8 +34,22 @@ class Client private constructor(
         fun onException(e: Throwable)
     }
 
+    /** Как в TDLib: лог-сообщения ядра (setLogMessageHandler). */
+    fun interface LogMessageHandler {
+        fun onLogMessage(verbosityLevel: Int, message: String)
+    }
+
+    /** Как в TDLib: ошибка синхронного [execute]. */
+    class ExecutionException(@JvmField val error: TdApi.Error) : Exception("${error.code}: ${error.message}")
+
     companion object {
         private const val TAG = "ParvaneClient"
+        @Volatile private var logHandler: LogMessageHandler? = null
+
+        @JvmStatic
+        fun setLogMessageHandler(@Suppress("UNUSED_PARAMETER") maxVerbosityLevel: Int, handler: LogMessageHandler?) {
+            logHandler = handler
+        }
 
         /** Gateway по умолчанию — тестовый прод; приложение может переопределить. */
         @JvmStatic
@@ -49,12 +63,47 @@ class Client private constructor(
             @Suppress("UNUSED_PARAMETER") defaultExceptionHandler: ExceptionHandler?,
         ): Client = Client(updateHandler, updateExceptionHandler)
 
-        /** Синхронные запросы TDLib (execute) — у нас только GetOption/Log*. */
+        /**
+         * Синхронные запросы TDLib (execute) — локальные функции без сети:
+         * логирование, MIME, разбор текста. Ошибка — [ExecutionException], как в TDLib.
+         */
         @JvmStatic
-        fun execute(function: TdApi.Function<*>): TdApi.Object = when (function) {
-            is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream -> TdApi.Ok()
-            is TdApi.GetOption -> TdApi.OptionValueEmpty()
-            else -> TdApi.Error(400, "execute: не поддерживается ${function.javaClass.simpleName}")
+        @Throws(ExecutionException::class)
+        @Suppress("UNCHECKED_CAST")
+        fun <T : TdApi.Object> execute(query: TdApi.Function<T>): T {
+            val result: TdApi.Object = when (query) {
+                is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream, is TdApi.SetLogTagVerbosityLevel -> TdApi.Ok()
+                is TdApi.AddLogMessage -> { Log.println(Log.DEBUG, "tdlib", query.text ?: ""); TdApi.Ok() }
+                is TdApi.GetOption -> optionValue(query.name)
+                is TdApi.GetFileMimeType -> TdApi.Text(
+                    android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                        query.fileName.substringAfterLast('.', "").lowercase()) ?: "")
+                is TdApi.GetFileExtension -> TdApi.Text(
+                    android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(query.mimeType) ?: "")
+                is TdApi.GetMarkdownText -> query.text ?: TdApi.FormattedText("", arrayOf())
+                is TdApi.GetTextEntities -> TdApi.TextEntities(arrayOf())
+                is TdApi.ParseTextEntities -> TdApi.FormattedText(query.text ?: "", arrayOf())
+                is TdApi.GetLogVerbosityLevel -> TdApi.LogVerbosityLevel(1)
+                else -> TdApi.Error(400, "Parvane execute: не поддерживается ${query.javaClass.simpleName}")
+            }
+            if (result is TdApi.Error) throw ExecutionException(result)
+            return result as T
+        }
+
+        private const val PARVANE_VERSION = "0.1-parvane"
+        private const val TDLIB_VERSION = "1.8.53"
+
+        private fun optionValue(name: String): TdApi.OptionValue = when (name) {
+            "version" -> TdApi.OptionValueString(TDLIB_VERSION)
+            "commit_hash" -> TdApi.OptionValueString(PARVANE_VERSION)
+            "unix_time" -> TdApi.OptionValueInteger(System.currentTimeMillis() / 1000)
+            "utc_time_offset" -> TdApi.OptionValueInteger((java.util.TimeZone.getDefault().rawOffset / 1000).toLong())
+            "message_text_length_max" -> TdApi.OptionValueInteger(4096)
+            "message_caption_length_max" -> TdApi.OptionValueInteger(1024)
+            "is_premium", "is_premium_available", "can_ignore_sensitive_content_restrictions",
+            "disable_top_chats", "test_mode", "expect_blocking" -> TdApi.OptionValueBoolean(false)
+            "localization_target", "language_pack_id" -> TdApi.OptionValueString("android")
+            else -> TdApi.OptionValueEmpty()
         }
     }
 
@@ -115,13 +164,24 @@ class Client private constructor(
 
     // ── обработка функций TDLib ─────────────────────────────────────────────
     private fun handle(f: TdApi.Function<*>): TdApi.Object = when (f) {
-        is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream, is TdApi.SetLogTagVerbosityLevel -> TdApi.Ok()
-        is TdApi.GetOption -> TdApi.OptionValueEmpty()
+        is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream, is TdApi.SetLogTagVerbosityLevel,
+        is TdApi.AddLogMessage -> TdApi.Ok()
+        is TdApi.GetOption -> optionValue(f.name)
         is TdApi.SetOption -> TdApi.Ok()
         is TdApi.GetAuthorizationState -> authState
+        // runOnTdlibThread у Telegram X: Ok через timeout секунд на потоке ответов
+        is TdApi.SetAlarm -> { if (f.seconds > 0) Thread.sleep((f.seconds * 1000).toLong()); TdApi.Ok() }
+        is TdApi.GetProxies -> TdApi.AddedProxies(arrayOf())
+        is TdApi.GetApplicationConfig -> TdApi.JsonValueObject(arrayOf())
+        is TdApi.GetFileMimeType, is TdApi.GetFileExtension, is TdApi.GetMarkdownText,
+        is TdApi.GetTextEntities, is TdApi.ParseTextEntities -> try { execute(f) } catch (e: ExecutionException) { e.error }
 
         is TdApi.SetTdlibParameters -> {
             ParvaneCore.init(gatewayUrl, f.databaseDirectory)
+            // Telegram X ждёт версию/хэш опциями сразу после параметров
+            postUpdate(TdApi.UpdateOption("version", TdApi.OptionValueString(TDLIB_VERSION)))
+            postUpdate(TdApi.UpdateOption("commit_hash", TdApi.OptionValueString(PARVANE_VERSION)))
+            postUpdate(TdApi.UpdateConnectionState(TdApi.ConnectionStateReady()))
             if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                 onSessionReady(ParvaneCore.self())
             } else {
@@ -196,6 +256,8 @@ class Client private constructor(
     private fun onSessionReady(self: String) {
         store.self = self
         ensurePeer(self, announce = true)
+        postUpdate(TdApi.UpdateOption("my_id", TdApi.OptionValueInteger(store.idOf(self))))
+        postUpdate(TdApi.UpdateOption("authorization_date", TdApi.OptionValueInteger(System.currentTimeMillis() / 1000)))
         setAuth(TdApi.AuthorizationStateReady())
     }
 
