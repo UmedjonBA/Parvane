@@ -32,14 +32,67 @@ cd android
 ```
 Другие ABI (`armeabi-v7a`, `x86_64`) — те же две команды с другим аргументом.
 
-## Дальше (не сделано)
+## Стадия 2: шов TDLib поверх ядра + минимальное приложение — ✅ APK СОБИРАЕТСЯ
 
-1. JNI-`Client`-shim: класс формы `org.drinkless.tdlib.Client`
-   (`create/send/execute/close`, `ResultHandler`) поверх `parvane_core`,
-   синтез объектов `TdApi` из событий Parvane. Начать на маленьком
-   `TelegramExample` (Compose, ~15 функций TDLib) как доказательство стека.
-2. Android SDK + JDK + Gradle (для сборки самого приложения; ядру не нужны).
-3. Перенос шва на Telegram X, наращивание покрытия функций/апдейтов TDLib.
+Решение: вместо форка устаревшего `TelegramExample` (AGP 7.0-alpha, Compose beta
+2021 — не собирается современным тулчейном) шов доказан на СВОЁМ минимальном
+Compose-приложении с тем же контрактом, что у Telegram X: UI говорит только с
+`org.drinkless.tdlib.Client.send(TdApi.Function)` и апдейтами `TdApi.*`.
+
+- `libtd/` — Android-библиотека:
+  - `org/drinkless/tdlib/TdApi.java` — сгенерирован из TDLib
+    (`td_generate_java_api` по `td_api.tlo`, master 7 сен 2026, 64k строк);
+    DTO как у Telegram X, версию при переносе на X подменить на их.
+  - `org/drinkless/tdlib/Client.kt` — **shim**: `create/send/execute/close`,
+    отображение авторизации TDLib на вход Parvane (WaitPhoneNumber = ник →
+    WaitPassword → `identity.token.issue` → Ready; сохранённая сессия → Ready
+    сразу), функции: SetTdlibParameters, GetMe, GetChat(s)/LoadChats,
+    GetChatHistory, SendMessage(текст), ViewMessages, SearchPublicChat/
+    SearchChatsOnServer (identity.user.search), LogOut/Close. Апдейты:
+    UpdateAuthorizationState, UpdateUser, UpdateNewChat, UpdateChatTitle,
+    UpdateNewMessage, UpdateChatLastMessage, UpdateChatReadInbox/Outbox.
+  - `org/drinkless/tdlib/ParvaneStore.kt` — синтез объектов TdApi (адрес↔id
+    FNV-1a как на десктопе, Chat/User/Message, история, непрочитанное).
+  - `org/parvane/core/ParvaneCore.kt` — обёртка JNI + раздача событий ядра.
+  - нативная часть: `jni/parvane_jni.cpp` → `libparvane_jni.so` (CMake-таргет
+    `parvane_jni` в `jni/CMakeLists.txt`, линкует `parvane_core`): логин с
+    device_id, сессия (WSS `GatewayWsTransport`, `e2e::initDevice`, инбокс,
+    pump sync с подписью устройства), sealed-отправка с fan-out по устройствам,
+    расшифровка + `verifySender` на приёме, ack, resolve/search, markRead.
+    События в Kotlin — JSON через `ParvaneCore.onEvent`.
+- `app/` — Compose-клиент: экран входа (ник → пароль), список чатов, чат с
+  отправкой текста, «новый чат» по нику, выход. Gateway по умолчанию —
+  тестовый прод `wss://parvane.duckdns.org:20443/ws` (`Client.gatewayUrl`).
+
+### Тулчейн приложения (на HDD, без root)
+- JDK 17 Temurin: `/mnt/hdd/ub/android/jdk-17`
+- SDK: `/mnt/hdd/ub/android/sdk` (platforms;android-34, build-tools;34.0.0,
+  platform-tools, cmake;3.22.1; emulator + system-images;android-34;google_apis;x86_64)
+- Gradle 8.9: `/mnt/hdd/ub/android/gradle-8.9/bin/gradle`
+- TDLib для генерации TdApi: `/mnt/hdd/ub/android/td` (build/td/generate/td_generate_java_api)
+
+```
+export JAVA_HOME=/mnt/hdd/ub/android/jdk-17 ANDROID_HOME=/mnt/hdd/ub/android/sdk \
+       ANDROID_NDK_HOME=/mnt/hdd/ub/android/android-ndk-r27c \
+       PATH=$JAVA_HOME/bin:$HOME/.cargo/bin:$PATH
+cd android
+./build-openssl.sh arm64-v8a && ./build-core.sh arm64-v8a   # один раз (префиксы под ABI)
+/mnt/hdd/ub/android/gradle-8.9/bin/gradle :app:assembleDebug --no-daemon
+# → app/build/outputs/apk/debug/app-debug.apk (arm64-v8a, ~80 МБ debug)
+```
+`local.properties` (sdk.dir) — локальный, в gitignore. Gradle сам собирает
+`libparvane_jni.so` через `externalNativeBuild` (CMake берёт OpenSSL/e2e из
+`prebuilt/openssl/<ABI>` и `target/<rust-target>/release`).
+
+## Дальше
+
+1. Живой тест APK на телефоне (arm64) против тестового прода: вход, чат с
+   веб-аккаунтом, приём/отправка. Эмулятор x86_64 — для дымового теста здесь.
+2. Перенос шва на Telegram X: их `Client.java` → наш `Client.kt`, их TdApi
+   (совместимость DTO), наращивание функций/апдейтов (медиа, группы, звонки —
+   в ядре уже есть cloud/group/call клиенты).
+3. Регистрация из приложения (сейчас — через веб), кросс-девайс прочитанное
+   (ReadNotice уже приходит событием read), аватары через cloud.
 
 Артефакты сборки (`.build/`, `prebuilt/`) и клоны для изучения (`_study/`) —
 в `.gitignore`.
