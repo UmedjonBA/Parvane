@@ -614,7 +614,10 @@ const Composer = ({
   const canUseInlineBots = !chat || isChatAdmin(chat) || !isUserRightBanned(chat, 'sendInline', chatFullInfo);
 
   const isNeedPremium = isContactRequirePremium && isInStoryViewer;
-  const isSendTextBlocked = isNeedPremium || !canSendPlainText;
+  // Parvane: пока объект чата ещё не в глобале (первые секунды после открытия
+  // чата/reload), это состояние загрузки, а не запрет — иначе композер
+  // мерцает «Text not allowed» до прихода чата
+  const isSendTextBlocked = isNeedPremium || (Boolean(chat) && !canSendPlainText);
 
   const messagesCount = useDerivedState(() => {
     if (hasAttachments) return attachments.length;

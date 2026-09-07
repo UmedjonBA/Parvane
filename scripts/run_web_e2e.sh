@@ -126,6 +126,8 @@ start_shard() {
     PARVANE_NATS_PASS="$password" \
     PARVANE_DB_PATH="$TEMP_ROOT/$shard.db" \
     PARVANE_LOG_LEVEL=info \
+    PARVANE_LOGIN_RATE_IP=100000 \
+    PARVANE_REGISTER_RATE_IP=100000 \
     "$ROOT/target/debug/$shard" >"$TEMP_ROOT/$shard.log" 2>&1 &
   PIDS+=("$!")
 }

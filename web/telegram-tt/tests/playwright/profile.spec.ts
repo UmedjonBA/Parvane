@@ -7,7 +7,6 @@ import {
   openApp,
   registerAndSignIn,
   requireGatewayUrl,
-  submitPassword,
   uniqueUser,
 } from './helpers';
 
@@ -100,7 +99,8 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
     .not.toHaveClass(/revealed/, { timeout: LOGIN_TIMEOUT_MS });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await submitPassword(page, PASSWORD);
+  // «Keep me signed in» включён по умолчанию — после reload сессия
+  // восстанавливается без ввода пароля
   await expectSignedIn(page);
 
   await page.getByRole('button', { name: 'Open menu' }).first().click();

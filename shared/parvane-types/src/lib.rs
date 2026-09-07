@@ -170,6 +170,10 @@ pub struct IssueRequest {
     /// (identity.telegram.confirm) — с ним issue выдаёт JWT.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_token: Option<String>,
+    /// IP клиента — подставляет gateway (X-Forwarded-For за прокси / пир);
+    /// клиентское значение перезаписывается. Для лимитов по источнику.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +204,9 @@ pub struct RegisterRequest {
     /// PARVANE_EMAIL_REQUIRED=1; иначе опциональна (просто сохраняется).
     #[serde(default)]
     pub email: String,
+    /// IP клиента от gateway (см. IssueRequest::client_ip).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

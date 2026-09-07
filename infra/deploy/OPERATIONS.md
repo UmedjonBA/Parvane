@@ -147,6 +147,13 @@ Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи 
 действий»), в логах gateway `rate limit: <user> pub/req <subject>`.
 Проверка: `scripts/run_gateway_rate_limit_e2e.sh`.
 
+Лимиты identity по источнику: gateway подставляет `client_ip` (X-Forwarded-For
+за Caddy, иначе адрес пира) в `identity.user.register` и `identity.token.issue`;
+identity отказывает после `PARVANE_REGISTER_RATE_IP=30` регистраций или
+`PARVANE_LOGIN_RATE_IP=120` логинов в минуту с одного IP (в дополнение к лимитам
+по логину). При прямом NATS (dev без gateway) поле пусто — лимит по IP не
+применяется.
+
 ## Сверка ключей безопасности
 Профиль собеседника → «Ключ безопасности»: отпечатки identity-ключей его
 устройств (SHA-256, 12 групп hex); Settings → Privacy → «Ваш ключ

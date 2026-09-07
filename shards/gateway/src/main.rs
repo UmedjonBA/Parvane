@@ -245,6 +245,7 @@ async fn main() -> Result<()> {
 // ── адаптеры транспорта: превращают соединение в пару каналов кадров-строк ─────
 
 async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
+    let client_ip = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     let (mut rd, mut wr) = stream.into_split();
     let (in_tx, in_rx) = mpsc::channel::<String>(CHANNEL_CAP);
     // Построчное чтение с жёстким лимитом длины кадра: кадр без разделителя,
@@ -284,7 +285,7 @@ async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
             }
         }
     });
-    serve(in_rx, out_tx, nats).await;
+    serve(in_rx, out_tx, nats, client_ip).await;
     let _ = writer.await;
     Ok(())
 }
@@ -294,9 +295,27 @@ async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
     let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
     config.max_message_size = Some(MAX_FRAME_BYTES);
     config.max_frame_size = Some(MAX_FRAME_BYTES);
-    let ws = tokio_tungstenite::accept_async_with_config(stream, Some(config))
-        .await
-        .context("WS handshake")?;
+    // Адрес клиента: за reverse-proxy (Caddy в проде) реальный IP приходит в
+    // X-Forwarded-For — берём его только от приватного/loopback пира (сам прокси),
+    // иначе клиент мог бы подставить любой IP и обойти лимиты identity.
+    let peer_ip = stream.peer_addr().map(|a| a.ip()).ok();
+    let mut forwarded: Option<String> = None;
+    let ws = tokio_tungstenite::accept_hdr_async_with_config(
+        stream,
+        |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+         resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+            forwarded = req
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string());
+            Ok(resp)
+        },
+        Some(config),
+    )
+    .await
+    .context("WS handshake")?;
+    let client_ip = client_ip_from(peer_ip, forwarded.as_deref());
     let (mut write, mut read) = ws.split();
     let (in_tx, in_rx) = mpsc::channel::<String>(CHANNEL_CAP);
     tokio::spawn(async move {
@@ -320,9 +339,45 @@ async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
             }
         }
     });
-    serve(in_rx, out_tx, nats).await;
+    serve(in_rx, out_tx, nats, client_ip).await;
     let _ = writer.await;
     Ok(())
+}
+
+/// IP клиента для лимитов identity: X-Forwarded-For (первый адрес) доверяем
+/// только если сам пир — loopback/приватная сеть (reverse-proxy), иначе — пир.
+fn client_ip_from(peer: Option<IpAddr>, forwarded: Option<&str>) -> String {
+    let peer_trusted = match peer {
+        Some(IpAddr::V4(v4)) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        Some(IpAddr::V6(v6)) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+        None => false,
+    };
+    if peer_trusted {
+        if let Some(first) = forwarded
+            .and_then(|f| f.split(',').next())
+            .map(str::trim)
+            .filter(|f| !f.is_empty() && f.parse::<IpAddr>().is_ok())
+        {
+            return first.to_string();
+        }
+    }
+    peer.map(|p| p.to_string()).unwrap_or_default()
+}
+
+/// Bootstrap-запросы (регистрация/логин) идут до auth, поэтому identity не знает
+/// источник; подмешиваем `client_ip` в JSON-объект payload (поле клиента, если
+/// он его прислал, перезаписывается — подделать нельзя).
+fn inject_client_ip(payload: &str, client_ip: &str) -> String {
+    if client_ip.is_empty() {
+        return payload.to_string();
+    }
+    match serde_json::from_str::<Value>(payload) {
+        Ok(Value::Object(mut map)) => {
+            map.insert("client_ip".to_string(), Value::String(client_ip.to_string()));
+            Value::Object(map).to_string()
+        }
+        _ => payload.to_string(),
+    }
 }
 
 // ── общая логика: auth + pub/req/reqmany/sub с проверкой прав ──────────────────
@@ -331,6 +386,7 @@ async fn serve(
     mut in_rx: mpsc::Receiver<String>,
     tx: mpsc::Sender<String>,
     nats: Arc<Client>,
+    client_ip: String,
 ) {
     // 1) pre-auth: до авторизации разрешены ТОЛЬКО bootstrap-запросы (логин и
     // регистрация — иначе получить токен через gateway было бы невозможно).
@@ -371,12 +427,18 @@ async fn serve(
                     || subject == IDENTITY_TELEGRAM_CONFIRM
                     || subject == IDENTITY_REGISTER_STATUS
                 {
+                    let payload = v["payload"].as_str().unwrap_or("");
+                    let payload = if subject == IDENTITY_ISSUE || subject == IDENTITY_REGISTER {
+                        inject_client_ip(payload, &client_ip)
+                    } else {
+                        payload.to_string()
+                    };
                     spawn_req(
                         nats.clone(),
                         tx.clone(),
                         v["id"].as_str().unwrap_or("").to_string(),
                         subject,
-                        v["payload"].as_str().unwrap_or("").to_string(),
+                        payload,
                         v["timeout_ms"].as_u64().unwrap_or(3000),
                     );
                 } else {
@@ -726,6 +788,26 @@ fn allowed_req(_user: &str, subject: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_ip_trusts_forwarded_only_from_proxy() {
+        let proxy = Some("172.18.0.2".parse::<IpAddr>().unwrap());
+        let public = Some("203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip_from(proxy, Some("198.51.100.9, 10.0.0.1")), "198.51.100.9");
+        assert_eq!(client_ip_from(proxy, Some("garbage")), "172.18.0.2");
+        assert_eq!(client_ip_from(public, Some("198.51.100.9")), "203.0.113.7", "XFF от публичного пира — подделка");
+        assert_eq!(client_ip_from(None, Some("198.51.100.9")), "");
+    }
+
+    #[test]
+    fn inject_client_ip_overrides_client_field() {
+        let out = inject_client_ip(r#"{"user":"a","client_ip":"1.1.1.1"}"#, "9.9.9.9");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["client_ip"], "9.9.9.9");
+        assert_eq!(v["user"], "a");
+        assert_eq!(inject_client_ip("not json", "9.9.9.9"), "not json");
+        assert_eq!(inject_client_ip(r#"{"user":"a"}"#, ""), r#"{"user":"a"}"#);
+    }
 
     #[test]
     fn token_bucket_bursts_then_refills() {

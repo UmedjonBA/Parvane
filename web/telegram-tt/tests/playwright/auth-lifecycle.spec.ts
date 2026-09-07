@@ -20,7 +20,9 @@ test('keeps the saved address after reload and rejects an invalid password', asy
   const user = uniqueUser('auth-reload', testInfo.project.name);
 
   await openApp(page, gatewayUrl);
-  await registerAndSignIn(page, user, PASSWORD);
+  // Без «Keep me signed in»: иначе после reload вход происходит без пароля
+  // (пароль сохранён зашифрованным) и экран пароля не показывается
+  await registerAndSignIn(page, user, PASSWORD, { keepSignedIn: false });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
 

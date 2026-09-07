@@ -82,8 +82,14 @@ NATS и порты шардов НЕ опубликованы наружу, .env
 1. **Открытая регистрация** (нет `PARVANE_INVITE_REQUIRED`/`PARVANE_EMAIL_REQUIRED`)
    — любой из интернета создаёт аккаунт. Для закрытого пузыря включить инвайты
    у identity. СРЕДНЕ→ВЫСОКО (зависит от намерения).
-2. **Rate-limit регистрации — по username, не по IP** (identity `rate_ok`):
-   спам РАЗНЫМИ логинами не троттлится (флуд БД/прекеев). СРЕДНЕ.
+2. **ИСПРАВЛЕНО (7 сен 2026)**: rate-limit регистрации был только по username
+   (спам РАЗНЫМИ логинами не троттлился). Теперь gateway подмешивает `client_ip`
+   в bootstrap-запросы `identity.user.register`/`identity.token.issue`
+   (X-Forwarded-For от Caddy доверяется только от приватного пира; клиентское
+   поле перезаписывается), identity держит лимиты по IP:
+   `PARVANE_REGISTER_RATE_IP=30` и `PARVANE_LOGIN_RATE_IP=120` попыток/мин (с запасом на NAT)
+   (плюс прежние по логину `PARVANE_REGISTER_RATE=5`, глобальный
+   `PARVANE_REGISTER_RATE_GLOBAL=30`, `PARVANE_LOGIN_RATE=10`).
 3. **Поиск пользователей без токена** (identity `handle_search`): любая сессия
    перечисляет директорию (username/display/avatar/pubkey, LIKE %q%, 20 шт).
    SQL параметризован (инъекции нет), но это harvesting. СРЕДНЕ (приватность).

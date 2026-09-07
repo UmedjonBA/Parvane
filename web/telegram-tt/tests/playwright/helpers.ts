@@ -21,7 +21,14 @@ export async function openApp(page: Page, gatewayUrl: string): Promise<string[]>
   return pageErrors;
 }
 
-export async function submitAddress(page: Page, user: string) {
+export type SubmitAddressOptions = {
+  // «Keep me signed in» по умолчанию включён (сессия ~сутки, пароль сохранён
+  // зашифрованным): после reload вход без пароля. Тесты, проверяющие экран
+  // пароля после reload, снимают галку.
+  keepSignedIn?: boolean;
+};
+
+export async function submitAddress(page: Page, user: string, options: SubmitAddressOptions = {}) {
   const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
   const addressInput = addressScreen.getByLabel('Nickname');
   await expect(addressInput).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
@@ -31,6 +38,14 @@ export async function submitAddress(page: Page, user: string) {
     await addressInput.fill(user);
     await expect(addressScreen.getByRole('button', { name: 'Next' })).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: LOGIN_TIMEOUT_MS });
+  if (options.keepSignedIn === false) {
+    // input чекбокса визуально скрыт — кликаем по его label
+    const keep = addressScreen.locator('#sign-in-keep-session');
+    if (await keep.isChecked()) {
+      await addressScreen.locator('label:has(#sign-in-keep-session)').click();
+      await expect(keep).not.toBeChecked({ timeout: 3000 });
+    }
+  }
   await addressScreen.getByRole('button', { name: 'Next' }).click();
 }
 
@@ -48,8 +63,10 @@ export async function expectSignedIn(page: Page) {
   await expect(page.locator('#LeftColumn')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
 }
 
-export async function registerAndSignIn(page: Page, user: string, password: string) {
-  await submitAddress(page, user);
+export async function registerAndSignIn(
+  page: Page, user: string, password: string, options: SubmitAddressOptions = {},
+) {
+  await submitAddress(page, user, options);
   await submitPassword(page, password);
   await expectSignedIn(page);
 }
