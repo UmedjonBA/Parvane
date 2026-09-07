@@ -21,7 +21,10 @@ export type DiagEntry = {
   n?: number; // счётчик схлопнутых повторов
 };
 
-const STORAGE_KEY = 'parvane:diag:v1';
+// v2: v1 журналил строковый аргумент вызова целиком (provideAuthPassword →
+// пароль в localStorage); старый ключ стираем при установке
+const STORAGE_KEY = 'parvane:diag:v2';
+const LEGACY_STORAGE_KEYS = ['parvane:diag:v1'];
 const MAX_ENTRIES = 800;
 const SAVE_DELAY_MS = 1500;
 const DEDUPE_WINDOW_MS = 60;
@@ -42,6 +45,7 @@ let lastAt = 0;
 
 function load() {
   try {
+    LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) entries = JSON.parse(raw) as DiagEntry[];
   } catch {
@@ -71,7 +75,9 @@ function truncate(value: string, max = 48) {
 
 export function summarize(value: unknown, depth = 0): string | undefined {
   if (typeof value === 'undefined' || (typeof value === 'object' && !value)) return undefined;
-  if (typeof value === 'string') return `"${truncate(value)}"`;
+  // Строка верхнего уровня — это аргумент вызова целиком (пароль в
+  // provideAuthPassword, текст, адрес): журналим только длину
+  if (typeof value === 'string') return depth === 0 ? `len=${value.length}` : `"${truncate(value)}"`;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) return `[${value.length}]`;
   if (typeof value !== 'object') return typeof value;
@@ -105,7 +111,9 @@ export function summarize(value: unknown, depth = 0): string | undefined {
 
 export function diagLog(kind: string, details?: unknown) {
   if (!PARVANE_DIAG_ENABLED) return;
-  const d = typeof details === 'string' ? details : summarize(details);
+  // Аргумент вызова API (kind api:*) всегда идёт через summarize — строковый
+  // аргумент целиком (provideAuthPassword) в журнал не попадает
+  const d = typeof details === 'string' && !kind.startsWith('api:') ? details : summarize(details);
   const now = Date.now();
   const key = `${kind}|${d || ''}`;
   const last = entries[entries.length - 1];
