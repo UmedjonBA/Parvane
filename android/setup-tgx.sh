@@ -49,6 +49,18 @@ for abi in arm64-v8a x86_64; do
   fi
 done
 
+echo "== NLoader: грузим libparvane_jni вместо libtdjni =="
+for f in "$TGX"/app/src/*/kotlin/tgx/flavor/NLoader.kt; do
+  sed -i 's/loadLibrary("tdjni")/loadLibrary("parvane_jni")/; s/loadLibrary(reLinker, "tdjni", BuildConfig.TDLIB_VERSION)/loadLibrary(reLinker, "parvane_jni", BuildConfig.JNI_VERSION)/' "$f"
+done
+
+echo "== экран входа по нику (ParvaneNickController) вместо PhoneController в логине =="
+cp -r "$ROOT/tgx-overlay/app" "$TGX/"
+MA="$TGX/app/src/main/java/org/thunderdog/challegram/MainActivity.java"
+sed -i 's/PhoneController c = new PhoneController(this, account.tdlib());/ParvaneNickController c = new ParvaneNickController(this, account.tdlib());/; s/new PhoneController(this, account.tdlib())/new ParvaneNickController(this, account.tdlib())/g' "$MA"
+grep -q "import org.thunderdog.challegram.ui.ParvaneNickController;" "$MA" ||   sed -i 's/^import org.thunderdog.challegram.ui.PhoneController;/import org.thunderdog.challegram.ui.PhoneController;\nimport org.thunderdog.challegram.ui.ParvaneNickController;/' "$MA"
+sed -i 's/navigateTo(new PhoneController(context, getTdlib()));/navigateTo(new ParvaneNickController(context, getTdlib()));/' "$TGX/app/src/main/java/org/thunderdog/challegram/ui/IntroController.java"
+
 echo "== CMake: без libtdjni (наш шов — не JNI TDLib) =="
 CM="$TGX/app/jni/CMakeLists.txt"
 if grep -q "^  tdjni$" "$CM"; then

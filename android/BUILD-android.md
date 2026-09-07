@@ -97,10 +97,52 @@ cd android
 ответ bob → приложение получило. APK: `app-x86_64-release.apk` /
 `app-arm64-v8a-release.apk` (splits по ABI, R8, ~11 МБ).
 
+## Стадия 3: Telegram X поверх шва — СОБИРАЕТСЯ И СТАРТУЕТ (остановлено 8 сен 2026)
+
+Форк Telegram X (GPL-3, `TGX-Android/Telegram-X`, коммит в `android/tgx.commit`)
+живёт вне репозитория: `/mnt/hdd/ub/android/tgx` (клон с сабмодулями ~7.5 ГБ).
+В репозитории — оверлей и скрипты:
+
+- `setup-tgx.sh [--build]` — накладывает оверлей на клон: модуль `tdlib` → наш
+  шов (Client.kt/ParvaneStore.kt/ParvaneCore.kt + `libparvane_jni.so` в
+  jniLibs; TdApi.java у бандла X тот же коммит TDLib d1085f9), Git LFS для
+  бинарников OpenSSL бандла, CMake без `tdjni`, `NLoader.kt` грузит
+  `parvane_jni`, `google-services.json` получает клиента `org.parvane.tgx`,
+  `local.properties`/keystore; `--build` = `assembleLatestArm64Debug`.
+- `tgx-overlay/` — наши файлы для X: `ParvaneNickController.java` (экран
+  входа по нику вместо телефонного `PhoneController`; пароль — родной
+  `PasswordController`), подключается в `MainActivity`/`IntroController`.
+- `tgx_iterate.sh` — оверлей → инкрементальная сборка x64 → переустановка в
+  запущенный эмулятор → logcat + скриншот.
+- `tgx_emulator_run.sh`, `tgx_login_flow.sh` (интро → ник → пароль → чаты,
+  автоматически), `tgx_session_flow.sh` (готовая сессия через токен из NATS,
+  минуя экран пароля).
+
+Что проверено: APK `Parvane-0.28.11.1808-{arm64-v8a,x64}-debug.apk` собираются
+(65 МБ; внутри `libparvane_jni.so`, без `libtdjni`), приложение стартует на
+шове без крашей, показывает интро и экран ника в стиле X, шов отвечает на
+стартовые запросы X (`updateOption version/commit_hash/my_id`, `SetAlarm`,
+`GetProxies`, `GetApplicationConfig`, заглушки Ok для сеттеров по generic-типу
+результата), ник уходит в шов и X переходит к экрану пароля.
+
+Где остановились: **хостовый эмулятор (qemu) падает с SIGSEGV ровно при
+переходе X на экран пароля** — не GPU (падает и с `swiftshader_indirect`, и с
+`-gpu guest`), не звук (`-audio none`), не камера/метрики; перед падением в
+госте — старт AudioFlinger и `wpa_supplicant BEACON-LOSS`. С `-feature -Wifi`
+падения не было, но у гостя пропала сеть (WS handshake к 10.0.2.2 не прошёл),
+поэтому обход через готовую сессию (`tgx_session_flow.sh`) до списка чатов не
+доведён. На реальном телефоне этой проблемы нет (это баг эмулятора), но живой
+тест форка на телефоне не делался.
+
+Как возобновить: (1) прогнать `tgx_session_flow.sh` с сетью (без `-feature
+-Wifi`; падение на экране пароля этот путь обходит) → список чатов; (2) по
+`unimplemented.txt` наращивать функции TDLib в `Client.kt` (X обрабатывает 189
+апдейтов, `Tdlib.java`); (3) arm64-APK форка на телефон против тестового прода.
+
 ## Дальше
 
-1. Живой тест arm64-APK на телефоне против тестового прода: вход, чат с
-   веб-аккаунтом, приём/отправка.
+1. Живой тест arm64-APK своего клиента на телефоне против тестового прода:
+   вход, чат с веб-аккаунтом, приём/отправка.
 2. Перенос шва на Telegram X: их `Client.java` → наш `Client.kt`, их TdApi
    (совместимость DTO), наращивание функций/апдейтов (медиа, группы, звонки —
    в ядре уже есть cloud/group/call клиенты).

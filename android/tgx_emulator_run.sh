@@ -10,7 +10,7 @@ export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 WAIT="${1:-25}"
 TGX="${TGX_DIR:-/mnt/hdd/ub/android/tgx}"
-APK="$(find "$TGX/app/build/outputs/apk" -name "*x86_64-debug.apk" | head -1)"
+APK="$(find "$TGX/app/build/outputs/apk" -name "*-x64-debug.apk" | head -1)"
 [ -f "$APK" ] || { echo "нет x86_64 APK форка (gradlew assembleLatestX64Debug)"; exit 2; }
 OUT="${OUT_DIR:-/tmp/pv-tgx-run}"; mkdir -p "$OUT"
 SB="$(mktemp -d /tmp/pv-tgx.XXXXXX)"
