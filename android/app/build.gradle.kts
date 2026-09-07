@@ -18,7 +18,12 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Пока без релизного ключа: подпись debug-ключом, .so без отладочных
+            // символов (release-сборка CMake) — APK ~втрое меньше debug
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     buildFeatures { compose = true }

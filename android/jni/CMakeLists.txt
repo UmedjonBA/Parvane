@@ -75,3 +75,6 @@ target_link_libraries(parvane_jni PRIVATE parvane_core log)
 # Символы JNI наружу, остальное — скрыть (меньше .so, нет конфликтов)
 target_compile_options(parvane_jni PRIVATE -fvisibility=hidden)
 set_target_properties(parvane_jni PROPERTIES CXX_VISIBILITY_PRESET hidden)
+# Вне Debug — стрипаем при линковке сами (AGP не стрипает .so из библиотечного
+# модуля с NDK вне SDK; символы для отладки — в obj/ каталоге cxx).
+target_link_options(parvane_jni PRIVATE $<$<NOT:$<CONFIG:Debug>>:-s>)
