@@ -1178,10 +1178,16 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
         .context("неверный JSON в IssueRequest")?;
     req.user = canonical_user(&req.user, &server_domain());
 
-    // Брутфорс-защита: частотный лимит + экспоненциальный лок-аут по логину
-    // (источник соединения gateway'ем в payload не прокидывается, поэтому ключ —
-    // логин). Проверяем ДО обращения к БД, чтобы отклонённая попытка была дёшева.
+    // Брутфорс-защита: частотный лимит + экспоненциальный лок-аут по логину,
+    // плюс частотный лимит по IP (gateway подмешивает client_ip; пусто при
+    // прямом NATS в dev). Проверяем ДО обращения к БД, чтобы отклонённая
+    // попытка была дёшева.
     login_gate_check(&req.user)?;
+    if !req.client_ip.is_empty()
+        && !window_rate_ok("login-ip", &req.client_ip, env_u64("PARVANE_LOGIN_RATE_IP", 120) as usize)
+    {
+        anyhow::bail!("слишком много попыток, попробуйте позже");
+    }
 
     // Логин: пользователь ОБЯЗАН существовать. Создание аккаунтов — только через
     // identity.user.register (раньше issue молча создавал юзера с любым паролем —
@@ -1437,6 +1443,14 @@ async fn do_register(
     }
     validate_new_user(&user, &domain)?;
     if !rate_ok(&user) {
+        anyhow::bail!("слишком много попыток, попробуйте позже");
+    }
+    // По источнику (IP от gateway): пер-логин лимит не мешает спаму разными
+    // логинами с одного адреса. Пусто — прямой NATS (dev), лимита по IP нет.
+    // Дефолты с запасом на NAT (много людей за одним адресом).
+    if !req.client_ip.is_empty()
+        && !window_rate_ok("register-ip", &req.client_ip, env_u64("PARVANE_REGISTER_RATE_IP", 30) as usize)
+    {
         anyhow::bail!("слишком много попыток, попробуйте позже");
     }
 
@@ -1937,6 +1951,24 @@ fn rate_ok(user: &str) -> bool {
     true
 }
 
+/// Общий частотный лимит «не более `limit` за 60 с» по произвольному ключу в
+/// пространстве `scope` (в памяти процесса). Используется для лимитов по IP.
+fn window_rate_ok(scope: &str, key: &str, limit: usize) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static MAP: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    let now = now_unix();
+    let map = MAP.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let hits = guard.entry(format!("{scope}:{key}")).or_default();
+    hits.retain(|&t| now - t < 60);
+    if hits.len() >= limit {
+        return false;
+    }
+    hits.push(now);
+    true
+}
+
 /// Dummy argon2-хэш постоянного времени: verify по нему для несуществующего
 /// пользователя тратит то же время, что и реальная проверка (анти-timing).
 fn dummy_password_hash() -> &'static str {
@@ -2123,6 +2155,15 @@ mod tests {
     }
 
     #[test]
+    fn window_rate_limits_per_scope_and_key() {
+        assert!(window_rate_ok("t-scope", "1.2.3.4", 2));
+        assert!(window_rate_ok("t-scope", "1.2.3.4", 2));
+        assert!(!window_rate_ok("t-scope", "1.2.3.4", 2), "третья за минуту — отказ");
+        assert!(window_rate_ok("t-scope", "5.6.7.8", 2), "другой ключ — свой бюджет");
+        assert!(window_rate_ok("t-other", "1.2.3.4", 2), "другой scope — свой бюджет");
+    }
+
+    #[test]
     fn jwt_wrong_secret_rejected() {
         let (enc, _) = make_keys();
         let now = now_unix() as usize;
@@ -2220,6 +2261,7 @@ mod tests {
     fn issue_bytes_with_device(user: &str, password: &str, device: &str) -> Vec<u8> {
         serde_json::to_vec(&IssueRequest {
             user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None,
+            client_ip: String::new(),
         })
         .unwrap()
     }
@@ -2227,6 +2269,7 @@ mod tests {
     fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
         serde_json::to_vec(&IssueRequest {
             user: user.into(), password: password.into(), device_id: None, login_token: None,
+            client_ip: String::new(),
         })
         .unwrap()
     }
@@ -2239,6 +2282,7 @@ mod tests {
             password: password.into(),
             invite: String::new(),
             email: email.into(),
+            client_ip: String::new(),
         })
         .unwrap()
     }
@@ -2970,6 +3014,7 @@ mod tests {
             password: password.into(),
             device_id: Some("dev-1".into()),
             login_token: Some(login_token.into()),
+            client_ip: String::new(),
         })
         .unwrap()
     }

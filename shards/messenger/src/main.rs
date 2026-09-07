@@ -2236,7 +2236,10 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 
     if let Err(e) = result {
         error!("handle_sync: {}", e);
-        let _ = nc.publish(reply, b"{}".as_ref().into()).await;
+        // Ошибку отдаём явно (не пустой страницей): клиент должен отличать
+        // «нет новых сообщений» от отказа (отозванное устройство, битый токен).
+        let body = serde_json::json!({ "error": e.to_string() }).to_string();
+        let _ = nc.publish(reply, body.into()).await;
     }
 }
 

@@ -769,7 +769,10 @@ export function createSyncController(deps: SyncDependencies) {
     );
     const parsed = JSON.parse(syncRaw) as WireEvent<{
       messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
-    }>;
+    }> & { error?: string };
+    // Отказ messenger'а ({"error"}: отозванное устройство, битый токен) — не
+    // «пусто», а причина; в журнал, дальше как без серверных сообщений
+    if (parsed.error) deps.log(`sync отказ: ${parsed.error}`);
     const serverMessages = parsed.payload?.messages || [];
     serverMessages.forEach(trackCursors);
     const knownIds = new Set(serverMessages.map((message) => message.id));
@@ -876,7 +879,11 @@ export function createSyncController(deps: SyncDependencies) {
       );
       const parsed = JSON.parse(raw) as WireEvent<{
         messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
-      }>;
+      }> & { error?: string };
+      if (parsed.error) {
+        deps.log(`sync отказ: ${parsed.error}`);
+        return;
+      }
       messages = parsed.payload?.messages || [];
       markUuidsRead(parsed.payload?.read_message_ids || []);
       if (parsed.payload?.notify_settings) applyNotifySettings(parsed.payload.notify_settings);

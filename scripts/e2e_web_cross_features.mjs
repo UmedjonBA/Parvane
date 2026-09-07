@@ -130,7 +130,8 @@ try {
   await aliceSession.page.locator('#LeftColumn .ListItem').filter({ hasText: bob.split('@')[0] }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openPrivateChatStrict(aliceSession.page, bob);
-  await findMessage(aliceSession.page, fromDesktop).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // headless-десктоп шлёт autosend при каждой пересборке сессии — текст повторяется
+  await findMessage(aliceSession.page, fromDesktop).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const readers = await waitDesktopLog(
     desktopWorkdir,
     new RegExp(`readers [\\w-]+: (.*)`),
