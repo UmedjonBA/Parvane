@@ -173,6 +173,8 @@ void deliverStored(parvane::StoredMessage sm, bool live) {
     g_seen.insert(sm.id);
     const bool out = (author == g_self);
     const auto text = sm.text();
+    LOGI("%s msg %s (%s): %s", out ? "своё" : "входящее", sm.id.c_str(), author.c_str(),
+         text ? text->c_str() : "[медиа]");
     emit(json{{"type", "message"}, {"id", sm.id}, {"from", author}, {"to", sm.to},
               {"ts", sm.ts}, {"text", text ? *text : ""}, {"out", out},
               {"kind", parvane::contentKind(sm.content)}, {"read", sm.read}});
@@ -328,6 +330,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendText(
         emitError(std::string("send: ") + e.what());
         return env->NewStringUTF("");
     }
+    LOGI("отправлено msg %s → %s", id.c_str(), toStd.c_str());
     emit(json{{"type", "message"}, {"id", id}, {"from", g_self}, {"to", toStd},
               {"ts", std::chrono::duration_cast<std::chrono::seconds>(
                          std::chrono::system_clock::now().time_since_epoch()).count()},

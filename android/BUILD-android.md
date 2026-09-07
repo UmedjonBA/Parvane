@@ -86,10 +86,21 @@ cd android
 `libparvane_jni.so` через `externalNativeBuild` (CMake берёт OpenSSL/e2e из
 `prebuilt/openssl/<ABI>` и `target/<rust-target>/release`).
 
+### Дымовой тест в эмуляторе — ✅ ЗЕЛЁНЫЙ (7 сен 2026)
+`android/smoke_emulator.sh`: локальный стек (desktop/verify_lib.sh), alice/bob
+регистрируются headless-десктопом, эмулятор x86_64 (AVD `parvane`,
+`ANDROID_AVD_HOME=~/.config/.android/avd` — avdmanager и emulator иначе смотрят
+в разные каталоги), приложение запускается с dev-extras
+(`--es gateway ws://10.0.2.2:9222/ws --es autologin alice@local:test
+--es autosend bob@local:текст`), проверка по logcat (тег `parvane`) и логам
+десктопа: вход → sealed-сообщение bob (десктоп получил, расшифровал) →
+ответ bob → приложение получило. APK: `app-x86_64-release.apk` /
+`app-arm64-v8a-release.apk` (splits по ABI, R8, ~11 МБ).
+
 ## Дальше
 
-1. Живой тест APK на телефоне (arm64) против тестового прода: вход, чат с
-   веб-аккаунтом, приём/отправка. Эмулятор x86_64 — для дымового теста здесь.
+1. Живой тест arm64-APK на телефоне против тестового прода: вход, чат с
+   веб-аккаунтом, приём/отправка.
 2. Перенос шва на Telegram X: их `Client.java` → наш `Client.kt`, их TdApi
    (совместимость DTO), наращивание функций/апдейтов (медиа, группы, звонки —
    в ядре уже есть cloud/group/call клиенты).
