@@ -21,9 +21,18 @@ Rust-сервисов («шардов»), каждый со своей встр�
 | `notes` | Заметки, текстовый CRDT (RGA) | ✅ готов |
 | `calendar` | События, CRDT (per-field LWW) | ✅ готов |
 | `call` | Сигналинг звонков (WebRTC SDP/ICE) + история | ✅ готов |
-| `gateway` | Единая доверенная точка входа (TCP/WS), JWT-auth, изоляция инбоксов | ✅ готов |
-| `client` (`desktop/`) | Десктопный клиент — форк Telegram Desktop | ✅ мессенджер + звонки + **E2E по умолчанию** (текст/медиа/группы), паритет-фичи; рескин и Календарь/Дневник — впереди |
+| `gateway` | Единая доверенная точка входа (TCP/WS), JWT-auth, изоляция инбоксов, лимиты частоты | ✅ готов |
+| `client` (`web/`) | **Основной** клиент — форк Telegram Web A (TS) | ✅ задеплоен на прод; мессенджер + звонки + **E2E по умолчанию**, паритет-фичи, русская локализация, 2FA через Telegram |
+| `client` (`desktop/`) | Клиент — форк Telegram Desktop (C++/Qt) | ✅ паритет с вебом; ходит на прод по **WSS** (`gateway`), вход по нику, 2FA |
+| `client` (`android/`) | Клиент — форк TDLib-клиента (Telegram X) + `parvane-core` | 🛠 начат: `parvane-core` собирается под Android NDK; JNI-shim и UI — впереди |
 | `smarthome` | Умный дом, RBAC по устройствам | ⛔ заморожен |
+
+Клиентов три, все на общем контракте NATS/JSON: **веб** (основной, задеплоен),
+**десктоп** (форк tdesktop) и **Android** (в работе). Принцип везде один — берём
+зрелый клиент Telegram и подменяем его сетевой слой на наш (`web`: провайдер
+вместо MTProto/GramJS; `desktop`: `parvane-core` вместо MTProto; `android`:
+планируется shim TDLib поверх `parvane-core`). Прод-путь клиентов — через
+`gateway` по **WSS** (`wss://<host>/ws`); прямой NATS остаётся для дева.
 
 ### E2E-шифрование и безопасность (сделано)
 
@@ -54,16 +63,24 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 экземпляра форка): E2E текст/группы/медиа, ротация ключей, safety numbers, TTL,
 персист истории, @упоминания, папки, админка групп, опросы, стикеры — все проходят.
 
-> **Пивот клиента (июнь 2026).** Самодельный Tauri-клиент (React 18 +
-> Babel-standalone, Gruvbox-TUI) сохранён в ветке **`tauri`** и остаётся рабочим.
-> Дальнейший клиент строится как **форк Telegram Desktop** (`tdesktop`, C++/Qt) в
-> каталоге `desktop/`: зрелый UX переключается с MTProto на наш бэкенд (NATS +
-> Rust-шарды через NATS C-клиент `cnats`), затем перекрашивается под TUI/Gruvbox;
-> КАЛЕНДАРЬ и ДНЕВНИК добавляются после готового мессенджера. Форк наследует
-> лицензию tdesktop — **GPLv3** (с OpenSSL-исключением).
+> **Основной клиент — веб** (`web/telegram-tt`, форк Telegram Web A на TypeScript):
+> задеплоен на прод, ходит на `gateway` по WSS. Провайдер `src/api/parvane/`
+> заменяет MTProto/GramJS; там же — русская локализация, «Избранное», контакты,
+> папки, обои, QR, 2FA через Telegram-бота, лимиты частоты и сверка ключей.
 >
-> **Состояние форка:** мессенджер и звонки работают end-to-end поверх шардов.
-> Сделано:
+> **Десктоп** (`desktop/`, форк Telegram Desktop, C++/Qt) доведён до паритета с
+> вебом и ходит на прод по тому же WSS (`GatewayWsTransport`), вход по нику,
+> Telegram-подтверждение/2FA. Лицензия унаследована от tdesktop — **GPLv3**.
+>
+> **Android** (`android/`) — начат: форкаем клиент на TDLib (кандидат Telegram X),
+> подменяя его `Client` shim'ом поверх `parvane-core` (JNI). Ядро уже собирается
+> под NDK (см. `android/BUILD-android.md`).
+>
+> Прежний самодельный Tauri-клиент (React 18, Gruvbox-TUI) архивирован в ветке
+> **`tauri`**.
+>
+> **Состояние (общее для веба и десктопа):** мессенджер и звонки работают
+> end-to-end поверх шардов. Сделано:
 > - **Текст 1-на-1** (логин через `identity`, отправка/приём/sync) + **форматирование**
 >   (жирный/курсив/моно/код/цитата/спойлер/ссылка — round-trip через `entities`).
 > - **Медиа**: голосовые (с реальной формой волны), видео-кружочки, фото, видео,
@@ -97,11 +114,18 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│            Desktop client — форк Telegram Desktop (C++/Qt)        │
-│  parvane-core: cnats + nlohmann/json вместо MTProto              │
-│  ──────────────────────────────────────────────────────────     │
-│  Transport/MessengerClient → NATS напрямую (как обычный шард)    │
+│  Клиенты: web (Telegram Web A, TS) · desktop (tdesktop, C++) ·   │
+│           android (форк TDLib-клиента, в работе)                 │
+│  У каждого сетевой слой Telegram заменён на наш (провайдер/        │
+│  parvane-core); события Parvane маппятся в родные объекты клиента │
 └────────────────────────────┬────────────────────────────────────┘
+              прод: WSS через gateway (wss://host/ws)
+              дев:  NATS напрямую (TCP :4222) или gateway TCP :9223
+                             │
+                       ┌─────▼──────────────────────────────────┐
+                       │   gateway (JWT-auth, изоляция инбоксов, │
+                       │   лимиты частоты; WS :9222 / TCP :9223) │
+                       └─────┬───────────────────────────────────┘
                              │ NATS Core (TCP :4222)
                        ┌─────▼──────────────────────────────────┐
                        │              NATS (Core)                │
@@ -126,10 +150,12 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 2. **Шарды** — независимые Rust-сервисы. Каждый владеет своей SQLite и своей
    доменной логикой. Шарды не ходят в БД друг друга — только обмениваются
    событиями через шину.
-3. **Клиент** — форк Telegram Desktop (C++/Qt). Модуль `parvane-core`
-   (cnats + nlohmann/json) подключается к NATS как обычный шард вместо MTProto;
-   события Parvane маппятся в TL-объекты (`MTPMessage`/`MTPUser`), которые
-   читает штатный UI tdesktop.
+3. **Клиенты** — форки зрелых клиентов Telegram с заменённым сетевым слоем.
+   Веб (`web/`, форк Telegram Web A) — провайдер `src/api/parvane/` вместо
+   MTProto/GramJS. Десктоп (`desktop/`, форк tdesktop) — модуль `parvane-core`
+   (WSS/gateway или cnats) вместо MTProto, события маппятся в TL-объекты
+   (`MTPMessage`/`MTPUser`) для штатного UI. Android (`android/`, в работе) —
+   shim TDLib поверх `parvane-core`. Прод-подключение — через `gateway` по WSS.
 
 ---
 
@@ -147,17 +173,33 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 - **Логи**: `tracing` + `tracing-subscriber`
 - **Ошибки**: `anyhow` в бинарниках
 
+### Client (web) — форк Telegram Web A · ОСНОВНОЙ
+
+- **База**: Telegram Web A (`web/telegram-tt`), TypeScript + собственный фреймворк Teact
+- **Транспорт**: провайдер `src/api/parvane/` — WSS до `gateway`, заменяет MTProto/GramJS
+- **Шов**: события Parvane ↔ объекты api-слоя Telegram Web A; UI без изменений
+- **Своё**: русская локализация, «Избранное», контакты, папки, обои, QR, 2FA,
+  лимиты частоты, сверка ключей безопасности
+- **Деплой**: статика за Caddy, `wss://<host>/ws` (см. `infra/deploy`)
+
 ### Client (десктоп) — форк Telegram Desktop
 
 - **База**: Telegram Desktop (`tdesktop`), C++ / Qt 6 (см. `desktop/UPSTREAM`)
-- **Транспорт**: `parvane-core` — cnats (NATS C-клиент) + nlohmann/json,
-  заменяет MTProto
+- **Транспорт**: `parvane-core` — WSS до `gateway` (`GatewayWsTransport`, прод)
+  либо cnats/NATS напрямую (дев); заменяет MTProto
 - **Шов**: события Parvane ↔ TL-объекты (`MTPMessage`/`MTPUser`); UX tdesktop
   без изменений
 - **Лицензия**: GPLv3 (с OpenSSL-исключением), унаследована от tdesktop
 
+### Client (Android) — форк TDLib-клиента · В РАБОТЕ
+
+- **База (план)**: клиент на TDLib (кандидат — Telegram X), нативный UI
+- **Транспорт**: `parvane-core` под Android NDK (собирается; `android/BUILD-android.md`),
+  подключается через JNI-shim класса `org.drinkless.tdlib.Client`
+- **Шов (план)**: запросы/обновления TDLib (`TdApi`) синтезируются из событий Parvane
+
 > Прежний Tauri-клиент (React 18 + Babel-standalone, Gruvbox-TUI, Rust IPC-мост
-> с 17 командами) сохранён в ветке **`tauri`** и остаётся полностью рабочим.
+> с 17 командами) сохранён в ветке **`tauri`**.
 
 ---
 
@@ -177,28 +219,56 @@ Parvane/
 │   ├── notes/        (src/rga.rs — RGA CRDT)
 │   ├── calendar/     (src/lww.rs — LWW-Map CRDT)
 │   └── call/         (src/calls.rs — логика статусов)
-├── desktop/                    ← форк-клиент (прежний Tauri-клиент — в ветке tauri)
-│   ├── UPSTREAM                ← тег + commitснапшота tdesktop
-│   ├── BUILD-parvane.md        ← воспроизводимый рецепт сборки
+├── web/                        ← ОСНОВНОЙ клиент — форк Telegram Web A (TS)
+│   └── telegram-tt/
+│       └── src/api/parvane/     ← провайдер: WSS/gateway вместо MTProto, локализация
+├── desktop/                    ← клиент — форк Telegram Desktop (C++/Qt)
+│   ├── UPSTREAM                ← тег + commit снапшота tdesktop
+│   ├── BUILD-parvane.md        ← рецепт сборки (п.7 — запуск против прода по WSS)
 │   ├── ARCHITECTURE-parvane.md ← шов врезки Parvane в tdesktop
-│   ├── PHASE3-progress.md      ← журнал ядра мессенджера
-│   ├── parvane-core/           ← Transport + MessengerClient (cnats), тесты
+│   ├── PARITY-telegram.md      ← карта паритета с Telegram
+│   ├── parvane-core/           ← транспорт (WSS/cnats) + E2E + cloud + звонки, тесты
 │   ├── tdesktop/               ← вендоренный снапшот форка
 │   │   └── Telegram/SourceFiles/parvane/  ← parvane_client.{h,cpp}, intro_parvane
-│   └── verify_phase3{b,c,d}.sh · verify_two_instances.sh  ← e2e-скрипты
+│   └── verify_*.sh             ← e2e-скрипты (два реальных экземпляра)
+├── android/                    ← клиент — форк TDLib-клиента (в работе)
+│   ├── BUILD-android.md        ← сборка parvane-core под NDK
+│   ├── jni/CMakeLists.txt      ← Android-сборка ядра (без cnats, WSS-only)
+│   └── build-openssl.sh · build-core.sh  ← OpenSSL(NDK) + cargo-ndk + ninja
+├── scripts/                    ← e2e веба (Playwright) и прод-смоук
 └── infra/
-    └── nats/
-        └── server.conf         ← ACL по ролям
+    ├── nats/server.conf        ← ACL по ролям
+    ├── deploy/                 ← docker compose + deploy.sh (прод за Caddy)
+    ├── telegram-bot/           ← бот подтверждения регистрации (на VPS)
+    └── turn/                   ← TURN/STUN для звонков
 ```
 
 ---
 
+## Веб-клиент (основной, форк Telegram Web A)
+
+Основной клиент — форк Telegram Web A в `web/telegram-tt`. Сетевой слой
+(MTProto/GramJS) заменён провайдером `src/api/parvane/`, который ходит на
+`gateway` по WSS и маппит события Parvane в объекты api-слоя Telegram Web A —
+штатный UI без изменений. Там же: русская локализация, «Избранное», контакты,
+папки, обои, QR, 2FA через Telegram-бота, лимиты частоты, сверка ключей.
+
+```bash
+cd web/telegram-tt
+npm ci
+npm run dev            # локально; адрес gateway задаётся в настройках/окружении
+npm run check:ts       # типы; тесты — vitest; e2e — scripts/run_web_*_e2e.sh
+```
+
+Деплой на прод (статика за Caddy + `wss://<host>/ws`) — `infra/deploy`.
+
 ## Десктопный клиент (форк tdesktop)
 
 Клиент — форк Telegram Desktop в `desktop/`. Сетевой слой MTProto заменён
-модулем `desktop/parvane-core` (cnats + nlohmann/json), события Parvane
-маппятся в TL-объекты, которые потребляет штатный UI tdesktop. Подробности
-шва — `desktop/ARCHITECTURE-parvane.md`, журнал работ — `desktop/PHASE3-progress.md`.
+модулем `desktop/parvane-core`; на проде транспорт — **WSS до `gateway`**
+(`GatewayWsTransport`), в деве — cnats/NATS напрямую. События Parvane маппятся
+в TL-объекты, которые потребляет штатный UI tdesktop. Подробности шва —
+`desktop/ARCHITECTURE-parvane.md`, паритет — `desktop/PARITY-telegram.md`.
 
 ### Точки врезки в tdesktop
 
@@ -377,8 +447,11 @@ Identity генерирует keypair (Ed25519) при первом старте
 - Rust ≥ 1.80 (бэкенд-шарды)
 - nats-server ≥ 2.10
 - nats CLI (для ручного тестирования)
-- Тулчейн tdesktop (Qt 6, OpenSSL, FFmpeg, CMake/ninja) — для сборки клиента,
+- Node ≥ 20 + npm — для веб-клиента (`web/telegram-tt`, `npm ci && npm run dev`)
+- Тулчейн tdesktop (Qt 6, OpenSSL, FFmpeg, CMake/ninja) — для десктоп-клиента,
   см. `desktop/BUILD-parvane.md`
+- Android NDK + `cargo-ndk` + Rust android-таргеты — для `parvane-core` под
+  Android, см. `android/BUILD-android.md` (Android-клиент в работе)
 
 ### Установка NATS (без прав root)
 
@@ -533,9 +606,10 @@ nats req call.history.request \
 
 - Федерация (`fed.*`, leaf nodes) — «North Star», пока не реализована.
 - `smarthome` заморожен.
-- TTL самоуничтожения — пока только для текста (медиа-инъекция ttl не прокидывает).
 - Свои исходящие sealed после релогина — восстанавливаются из локального журнала
   истории (на сервере их как «своих» нет — by design sealed sender).
-- Из паритета Telegram осталось: опросы, стикеры/GIF/кастом-эмодзи.
-- Рескин под Gruvbox (Фаза 5) и Календарь/Дневник (Фаза 6, шарды `notes`/`calendar`
-  есть, к UI не подключены) — впереди.
+- **Android-клиент в работе**: `parvane-core` собирается под NDK; JNI-shim TDLib,
+  установка SDK/JDK и сам UI — впереди (см. `android/BUILD-android.md`).
+- Календарь/Дневник (шарды `notes`/`calendar` есть, к UI клиентов не подключены)
+  — впереди.
+- `notes`/`calendar` шарды на прод не разворачиваются (пока не нужны клиентам).
