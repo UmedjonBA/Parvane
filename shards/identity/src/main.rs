@@ -341,22 +341,32 @@ async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         vec![]
     } else {
         let like = format!("%{}%", q);
-        sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT username, display_name, avatar_file_id, pubkey FROM users
-             WHERE username LIKE ? OR display_name LIKE ?
+        // Ограничиваем выдачу доменом этого сервера: аккаунты чужих доменов
+        // (в т.ч. e2e-тестовые `@local` на проде) в директорию не попадают.
+        let domain_suffix = format!("%@{}", server_domain());
+        sqlx::query_as::<_, (String, String, String, String, String, String, i64, String, String)>(
+            "SELECT username, display_name, avatar_file_id, pubkey, bio, birthday,              name_color, personal_channel, phone FROM users
+             WHERE (username LIKE ? OR display_name LIKE ?)
+               AND username LIKE ?
              ORDER BY username LIMIT 20",
         )
         .bind(&like)
         .bind(&like)
+        .bind(&domain_suffix)
         .fetch_all(pool)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(u, d, a, k)| UserInfo {
+        .map(|(u, d, a, k, bio, bday, color, chan, phone)| UserInfo {
             display_name: name_or_default(&u, &d),
             username: u,
             avatar: opt(a),
             pubkey: opt(k),
+            bio: opt(bio),
+            birthday: opt(bday),
+            name_color: if color != 0 { Some(color) } else { None },
+            personal_channel: opt(chan),
+            phone: opt(phone),
         })
         .collect()
     };
@@ -391,7 +401,28 @@ async fn handle_setname(
                         .bind(&username)
                         .execute(pool)
                         .await;
-                    info!("{} сменил имя на '{}'", username, name);
+                    // Профильные поля (опциональны): задаём только присланные.
+                    if let Some(v) = req.bio.as_ref() {
+                        let _ = sqlx::query("UPDATE users SET bio = ? WHERE username = ?")
+                            .bind(v.trim()).bind(&username).execute(pool).await;
+                    }
+                    if let Some(v) = req.birthday.as_ref() {
+                        let _ = sqlx::query("UPDATE users SET birthday = ? WHERE username = ?")
+                            .bind(v.trim()).bind(&username).execute(pool).await;
+                    }
+                    if let Some(v) = req.name_color {
+                        let _ = sqlx::query("UPDATE users SET name_color = ? WHERE username = ?")
+                            .bind(v).bind(&username).execute(pool).await;
+                    }
+                    if let Some(v) = req.personal_channel.as_ref() {
+                        let _ = sqlx::query("UPDATE users SET personal_channel = ? WHERE username = ?")
+                            .bind(v.trim()).bind(&username).execute(pool).await;
+                    }
+                    if let Some(v) = req.phone.as_ref() {
+                        let _ = sqlx::query("UPDATE users SET phone = ? WHERE username = ?")
+                            .bind(v.trim()).bind(&username).execute(pool).await;
+                    }
+                    info!("{} обновил профиль (имя '{}')", username, name);
                     SetNameResponse { ok: true, error: None }
                 }
             }
@@ -486,19 +517,24 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
     });
     let mut users = Vec::new();
     for u in req.usernames.iter().take(50) {
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT display_name, avatar_file_id, pubkey FROM users WHERE username = ?",
+        let row: Option<(String, String, String, String, String, i64, String, String)> = sqlx::query_as(
+            "SELECT display_name, avatar_file_id, pubkey, bio, birthday, name_color,              personal_channel, phone FROM users WHERE username = ?",
         )
         .bind(u)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
-        if let Some((d, a, k)) = row {
+        if let Some((d, a, k, bio, bday, color, chan, phone)) = row {
             users.push(UserInfo {
                 display_name: name_or_default(u, &d),
                 username: u.clone(),
                 avatar: opt(a),
                 pubkey: opt(k),
+                bio: opt(bio),
+                birthday: opt(bday),
+                name_color: if color != 0 { Some(color) } else { None },
+                personal_channel: opt(chan),
+                phone: opt(phone),
             });
         }
     }
