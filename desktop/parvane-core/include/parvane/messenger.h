@@ -206,6 +206,8 @@ struct StoredMessage {
 // ── SyncResponsePayload (msg.sync.response) ──────────────────────────────────
 struct SyncResponsePayload {
     std::vector<StoredMessage> messages;
+    // Кросс-девайс: id сообщений, прочитанных запросившим на другом устройстве.
+    std::vector<std::string> read_message_ids;
 
     // Принимает либо ПОЛНЫЙ конверт ParvaneEvent<SyncResponsePayload>, либо
     // голый payload — messenger отвечает конвертом, но устойчивость не вредит.
@@ -219,6 +221,11 @@ struct SyncResponsePayload {
             r.messages.reserve(it->size());
             for (const auto &m : *it)
                 r.messages.push_back(StoredMessage::fromJson(m));
+        }
+        if (auto it = payload->find("read_message_ids");
+                it != payload->end() && it->is_array()) {
+            for (const auto &m : *it)
+                if (m.is_string()) r.read_message_ids.push_back(m.get<std::string>());
         }
         return r;
     }

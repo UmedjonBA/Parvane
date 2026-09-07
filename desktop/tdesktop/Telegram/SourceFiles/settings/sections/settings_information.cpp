@@ -473,7 +473,7 @@ void SetupBirthday(
 			tr::marked)));
 }
 
-void SetupChatAutomation(
+[[maybe_unused]] void SetupChatAutomation(
 		not_null<Ui::VerticalLayout*> container,
 		not_null<Window::SessionController*> controller,
 		not_null<UserData*> self,
@@ -564,7 +564,8 @@ void SetupPersonalChannel(
 		edit,
 		{ &st::menuIconChannel });
 
-	SetupChatAutomation(container, controller, self, targets);
+	// Parvane: «Chat automation» (Telegram Business, боты) убрано.
+	// SetupChatAutomation(container, controller, self, targets);
 
 	const auto colorButton = AddPeerColorButton(
 		container,

@@ -6,6 +6,8 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/boxes/peer_qr_box.h"
+#include "parvane/parvane_client.h"
+#include "data/data_peer.h"
 
 #include "core/application.h"
 #include "data/data_cloud_themes.h"
@@ -1012,6 +1014,17 @@ void FillPeerQrBox(
 void DefaultShowFillPeerQrBoxCallback(
 		std::shared_ptr<Ui::Show> show,
 		PeerData *peer) {
+	// Parvane: username Telegram у нас нет — кодируем ссылку-профиль Parvane
+	// (адрес ник@домен → https://домен/#@ник), чтобы QR был не пустым.
+	if (peer && peer->isUser()) {
+		const auto address = Parvane::AddressForId(
+			std::uint64_t(peerToUser(peer->id).bare));
+		const auto link = Parvane::ProfileLink(address);
+		if (!link.isEmpty()) {
+			show->show(Box(Ui::FillPeerQrBox, peer, link, nullptr));
+			return;
+		}
+	}
 	if (peer && !peer->username().isEmpty()) {
 		show->show(Box(Ui::FillPeerQrBox, peer, std::nullopt, nullptr));
 	}

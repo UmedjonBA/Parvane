@@ -77,7 +77,8 @@ public:
         const std::string &lastSeenId,
         std::int64_t sinceUpdated = 0,
         int timeoutMs = 3000,
-        const SyncAuth *auth = nullptr);
+        const SyncAuth *auth = nullptr,
+        std::vector<std::string> *readMessageIds = nullptr);
 
     // Правка текста уже отправленного сообщения (только автор — проверяет шард).
     // Публикует ParvaneEvent<EditPayload> на msg.chat.edit.
@@ -105,6 +106,10 @@ public:
     // Уведомление messenger'а другим устройствам того же пользователя об
     // очистке (payload.cleared.message_ids) — убрать из локального кэша.
     void onCleared(const std::string &self, std::function<void(std::vector<std::string>)> handler);
+
+    // Уведомление другим устройствам того же пользователя о прочтении
+    // (payload.read) — пометить сообщения прочитанными (снять непрочитанное).
+    void onReadNotice(const std::string &self, std::function<void(std::vector<std::string>)> handler);
 
     // Отметка о прочтении (получателем). msg.chat.read → read-галочка ✓✓.
     void markRead(const std::string &from, const std::string &messageId,

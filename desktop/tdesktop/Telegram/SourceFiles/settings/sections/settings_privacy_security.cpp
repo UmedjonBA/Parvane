@@ -578,26 +578,7 @@ void BuildSecuritySection(
 			: tr::lng_settings_cloud_password_off(tr::now);
 	});
 
-	builder.addButton({
-		.id = u"security/cloud_password"_q,
-		.title = tr::lng_settings_cloud_password_start_title(),
-		.icon = { &st::menuIcon2SV },
-		.label = std::move(cloudPasswordLabel),
-		.onClick = [=, passwordState = base::duplicate(passwordState)] {
-			const auto state = rpl::variable<PasswordState>(
-				base::duplicate(passwordState)).current();
-			if (state == PasswordState::Loading) {
-				return;
-			} else if (state == PasswordState::On) {
-				showOther(CloudPasswordInputId());
-			} else if (state == PasswordState::Off) {
-				showOther(CloudPasswordStartId());
-			} else if (state == PasswordState::Unconfirmed) {
-				showOther(CloudPasswordEmailConfirmId());
-			}
-		},
-		.keywords = { u"password"_q, u"2fa"_q, u"two-factor"_q },
-	});
+	// Parvane: облачный пароль (MTProto 2FA) убран — используем свой 2FA через Telegram.
 
 	session->api().cloudPassword().reload();
 

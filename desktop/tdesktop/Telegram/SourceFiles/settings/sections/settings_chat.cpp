@@ -1297,12 +1297,12 @@ void BuildSupportSection(SectionBuilder &builder) {
 void BuildChatSectionContent(SectionBuilder &builder) {
 	BuildThemeOptionsSection(builder);
 	BuildThemeSettingsSection(builder);
-	BuildCloudThemesSection(builder);
+	// Parvane: облачные темы (MTProto) отключены.
 	BuildChatBackgroundSection(builder);
 	BuildChatListQuickActionSection(builder);
 	BuildStickersEmojiSection(builder);
 	BuildMessagesSection(builder);
-	BuildSensitiveContentSection(builder);
+	// Parvane: «чувствительный контент» (облачная настройка MTProto) отключён.
 	BuildArchiveSection(builder);
 	BuildSupportSection(builder);
 }
@@ -1835,20 +1835,7 @@ void SetupExport(
 		not_null<Window::SessionController*> controller,
 		not_null<Ui::VerticalLayout*> container,
 		Fn<void(Type)> showOther) {
-	AddButtonWithIcon(
-		container,
-		tr::lng_settings_export_data(),
-		st::settingsButton,
-		{ &st::menuIconExport }
-	)->addClickHandler([=] {
-		const auto session = &controller->session();
-		controller->window().hideSettingsAndLayer();
-		base::call_delayed(
-			st::boxDuration,
-			session,
-			[=] { Core::App().exportManager().start(session); });
-	});
-
+	// Parvane: экспорт данных Telegram (MTProto) убран.
 	AddButtonWithIcon(
 		container,
 		tr::lng_settings_experimental(),

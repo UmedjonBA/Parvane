@@ -63,7 +63,7 @@ rpl::producer<TextWithEntities> Text3() {
 } // namespace
 
 void AboutBox(not_null<Ui::GenericBox*> box) {
-	box->setTitle(u"Telegram Desktop"_q);
+	box->setTitle(u"Parvane"_q);
 
 	auto layout = box->verticalLayout();
 
@@ -122,9 +122,9 @@ void AboutBox(not_null<Ui::GenericBox*> box) {
 		Ui::AddSkip(layout, st::aboutSkip);
 	};
 
-	addText(Text1());
-	addText(Text2());
-	addText(Text3());
+	addText(rpl::single(TextWithEntities{
+		u"Parvane — федеративный мессенджер на своём бэкенде "
+		u"(форк Telegram Desktop, сетевой слой заменён)."_q }));
 
 	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
 
