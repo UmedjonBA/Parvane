@@ -383,10 +383,7 @@ MainMenu::MainMenu(
 
 	parentResized();
 
-	_telegram->setMarkedText(tr::link(
-		u"Telegram Desktop"_q,
-		u"https://desktop.telegram.org"_q));
-	_telegram->setLinksTrusted();
+	_telegram->setMarkedText(TextWithEntities{ u"Parvane"_q });
 	_version->setMarkedText(
 		tr::link(
 			tr::lng_settings_current_version(

@@ -91,6 +91,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Settings {
 namespace {
 
+// Parvane: выбор языка (Русский/English). Облачный список Telegram у нас
+// заглушён, поэтому свой простой бокс: русский — кастомный пакет (live),
+// английский — встроенный (перезапуск для применения).
+void ShowParvaneLanguageBox(not_null<Window::SessionController*> controller) {
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"Язык"_q));
+		const auto addRow = [&](const QString &title, Fn<void()> onClick) {
+			const auto button = box->addRow(object_ptr<Ui::SettingsButton>(
+				box,
+				rpl::single(title),
+				st::settingsButton), QMargins());
+			button->setClickedCallback([=] {
+				onClick();
+				box->closeBox();
+			});
+		};
+		addRow(u"Русский"_q, [] {
+			if (const char *lf = std::getenv("PARVANE_LANG_FILE"); lf && *lf) {
+				Lang::GetInstance().switchToCustomFile(QString::fromUtf8(lf));
+			}
+		});
+		addRow(u"English"_q, [] {
+			Lang::GetInstance().switchToId(Lang::DefaultLanguage());
+			Local::writeLangPack();
+			Core::Restart();
+		});
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+	}));
+}
+
 using namespace Builder;
 
 constexpr auto kSugValidatePhone = "VALIDATE_PHONE_NUMBER"_cs;
@@ -207,12 +237,9 @@ Cover::Cover(
 		}
 	});
 
-	_badge.setPremiumClickCallback([=] {
-		_emojiStatusPanel.show(
-			_controller,
-			_badge.widget(),
-			_badge.sizeTag());
-	});
+	// Parvane: эмодзи-статус (премиум + кастом-эмодзи) отложен — не открываем
+	// панель и не показываем премиум-диалог.
+	_badge.setPremiumClickCallback([=] {});
 	_badge.updated() | rpl::on_next([=] {
 		refreshNameGeometry(width());
 	}, _name->lifetime());
@@ -391,26 +418,11 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		const auto preload = [=] {
 			session->data().chatsFilters().requestSuggested();
 		};
-		const auto hasFilters = session->data().chatsFilters().has()
-			|| session->settings().dialogsFiltersEnabled();
-
-		auto shownProducer = hasFilters
-			? rpl::single(true) | rpl::type_erased
-			: (rpl::single(rpl::empty) | rpl::then(
-				session->appConfig().refreshed()
-			) | rpl::map([=] {
-			const auto enabled = session->appConfig().get<bool>(
-				u"dialog_filters_enabled"_q,
-				false);
-			if (enabled) {
-				preload();
-			}
-			return enabled;
-		}));
-
-		if (hasFilters) {
-			preload();
-		}
+		// Parvane: папки (chat filters) у нас локальные — appConfig их не
+		// включает (MTProto заглушён), поэтому раздел показываем ВСЕГДА,
+		// иначе «создать папку» не найти, пока папок нет.
+		auto shownProducer = rpl::single(true) | rpl::type_erased;
+		preload();
 
 		builder.addButton({
 			.title = tr::lng_settings_section_filters(),
@@ -455,8 +467,7 @@ void BuildSectionButtons(SectionBuilder &builder) {
 			Lang::GetInstance().idChanges()
 		) | rpl::map([] { return Lang::GetInstance().nativeName(); }),
 		.onClick = [=] {
-			static auto Guard = base::binary_guard();
-			Guard = LanguageBox::Show(controller);
+			ShowParvaneLanguageBox(controller);
 		},
 		.keywords = { u"translate"_q, u"localization"_q, u"language"_q },
 	});
@@ -566,37 +577,9 @@ void BuildPremiumSection(SectionBuilder &builder) {
 }
 
 void BuildHelpSection(SectionBuilder &builder) {
-	builder.addDivider();
-	builder.addSkip();
-
-	const auto controller = builder.controller();
-	builder.addButton({
-		.id = u"main/faq"_q,
-		.title = tr::lng_settings_faq(),
-		.icon = { &st::menuIconFaq },
-		.onClick = [=] { OpenFaq(controller); },
-		.keywords = { u"help"_q, u"support"_q, u"questions"_q },
-	});
-
-	builder.addButton({
-		.id = u"main/features"_q,
-		.title = tr::lng_settings_features(),
-		.icon = { &st::menuIconEmojiObjects },
-		.onClick = [] {
-			UrlClickHandler::Open(tr::lng_telegram_features_url(tr::now));
-		},
-		.keywords = { u"tips"_q, u"tutorial"_q },
-	});
-
-	builder.addButton({
-		.id = u"main/ask-question"_q,
-		.title = tr::lng_settings_ask_question(),
-		.icon = { &st::menuIconDiscussion },
-		.onClick = [=] { OpenAskQuestionConfirm(controller); },
-		.keywords = { u"contact"_q, u"feedback"_q },
-	});
-
-	builder.addSkip();
+	// Parvane: раздел «Помощь» убран — FAQ/Features/Ask a Question вели на
+	// ресурсы Telegram (внешние ссылки + облачный саппорт-бот), у нас их нет.
+	(void)builder;
 }
 
 void BuildValidationSuggestions(SectionBuilder &builder) {
@@ -805,14 +788,8 @@ void SetupLanguageButton(
 		) | rpl::map([] { return Lang::GetInstance().nativeName(); }),
 		st::settingsButton,
 		{ &st::menuIconTranslate });
-	const auto guard = Ui::CreateChild<base::binary_guard>(button.get());
 	button->addClickHandler([=] {
-		const auto m = button->clickModifiers();
-		if ((m & Qt::ShiftModifier) && (m & Qt::AltModifier)) {
-			Lang::CurrentCloudManager().switchToLanguage({ u"#custom"_q });
-		} else {
-			*guard = LanguageBox::Show(window->sessionController());
-		}
+		ShowParvaneLanguageBox(window->sessionController());
 	});
 }
 

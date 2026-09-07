@@ -105,33 +105,7 @@ void BuildDataStorageSection(SectionBuilder &builder) {
 		.keywords = { u"storage"_q, u"data"_q, u"download"_q, u"connection"_q },
 	});
 
-	const auto connectionType = [=] {
-		const auto transport = account->mtp().dctransport();
-		if (!Core::App().settings().proxy().isEnabled()) {
-			return transport.isEmpty()
-				? tr::lng_connection_auto_connecting(tr::now)
-				: tr::lng_connection_auto(tr::now, lt_transport, transport);
-		} else {
-			return transport.isEmpty()
-				? tr::lng_connection_proxy_connecting(tr::now)
-				: tr::lng_connection_proxy(tr::now, lt_transport, transport);
-		}
-	};
-
-	builder.addButton({
-		.id = u"advanced/connection_type"_q,
-		.title = tr::lng_settings_connection_type(),
-		.icon = { &st::menuIconNetwork },
-		.label = rpl::merge(
-			Core::App().settings().proxy().connectionTypeChanges(),
-			tr::lng_connection_auto_connecting() | rpl::to_empty
-		) | rpl::map(connectionType),
-		.onClick = [=] {
-			controller->window().show(
-				ProxiesBoxController::CreateOwningBox(account));
-		},
-		.keywords = { u"connection"_q, u"proxy"_q, u"network"_q, u"vpn"_q },
-	});
+	// Parvane: «Connection type» (MTProto-прокси) убран — транспорт наш (WSS).
 
 	const auto showDownloadPath = container
 		? container->lifetime().make_state<rpl::variable<bool>>(
@@ -1187,20 +1161,7 @@ void BuildExportSection(SectionBuilder &builder) {
 	builder.addDivider();
 	builder.addSkip();
 
-	builder.addButton({
-		.id = u"advanced/export"_q,
-		.title = tr::lng_settings_export_data(),
-		.icon = { &st::menuIconExport },
-		.onClick = [=] {
-			controller->window().hideSettingsAndLayer();
-			base::call_delayed(
-				st::boxDuration,
-				session,
-				[=] { Core::App().exportManager().start(session); });
-		},
-		.keywords = { u"export"_q, u"data"_q, u"backup"_q },
-	});
-
+	// Parvane: «Export Telegram data» убран — экспорт шёл через MTProto.
 	builder.addButton({
 		.id = u"advanced/experimental"_q,
 		.title = tr::lng_settings_experimental(),

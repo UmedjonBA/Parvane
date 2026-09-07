@@ -62,7 +62,8 @@ std::vector<StoredMessage> MessengerClient::sync(
         const std::string &lastSeenId,
         std::int64_t sinceUpdated,
         int timeoutMs,
-        const SyncAuth *auth) {
+        const SyncAuth *auth,
+        std::vector<std::string> *readMessageIds) {
     SyncRequestPayload req;
     req.last_seen_id = lastSeenId.empty() ? zeroCursor() : lastSeenId;
     req.since_updated = sinceUpdated;
@@ -83,7 +84,11 @@ std::vector<StoredMessage> MessengerClient::sync(
     const json ev = makeEvent(uuid4(), from, nowUnix(), token, req.toJson());
     const std::string raw =
         _t.request(topics::MsgSyncRequest, ev.dump(), timeoutMs);
-    return SyncResponsePayload::fromJson(json::parse(raw)).messages;
+    auto resp = SyncResponsePayload::fromJson(json::parse(raw));
+    if (readMessageIds) {
+        *readMessageIds = std::move(resp.read_message_ids);
+    }
+    return resp.messages;
 }
 
 void MessengerClient::editText(
@@ -138,6 +143,24 @@ void MessengerClient::onCleared(const std::string &self,
                          const auto &ids = p["cleared"].value("message_ids", json::array());
                          std::vector<std::string> out;
                          for (const auto &id : ids) {
+                             if (id.is_string()) out.push_back(id.get<std::string>());
+                         }
+                         if (!out.empty()) handler(std::move(out));
+                     } catch (...) {
+                     }
+                 });
+}
+
+void MessengerClient::onReadNotice(const std::string &self,
+                                   std::function<void(std::vector<std::string>)> handler) {
+    _t.subscribe(topics::msgInbox(self),
+                 [handler = std::move(handler)](std::string, std::string payload) {
+                     try {
+                         const auto ev = json::parse(payload);
+                         const auto &p = ev.contains("payload") ? ev["payload"] : ev;
+                         if (!p.contains("read") || !p["read"].is_array()) return;
+                         std::vector<std::string> out;
+                         for (const auto &id : p["read"]) {
                              if (id.is_string()) out.push_back(id.get<std::string>());
                          }
                          if (!out.empty()) handler(std::move(out));

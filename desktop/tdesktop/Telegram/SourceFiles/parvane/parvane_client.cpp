@@ -74,6 +74,7 @@
 #include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
 #include "core/file_location.h"       // Core::FileLocation
 #include "core/application.h"        // Core::App().settings().getSoundPath
+#include "lang/lang_instance.h"    // Parvane: русский по умолчанию
 #include "core/core_settings.h"
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
 #include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
@@ -519,6 +520,35 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 
 // Локально забыть скрытые сообщения (карты uuid, медиа-контент, кэш расшифровки)
 // и удалить их из UI. uuids — уже в g_clearedUuids.
+// Кросс-девайс прочитанное: пометить сообщения прочитанными на ЭТОМ устройстве
+// (я прочитал их на другом). Снимаем из непрочитанного и двигаем бейдж чата.
+void MarkUuidsReadLocal(not_null<Main::Session*> session, const QSet<QString> &uuids) {
+	auto maxByHistory = QHash<History*, MsgId>();
+	for (const auto &uuid : uuids) {
+		const auto found = g_uuidToMsgId.constFind(uuid);
+		if (found == g_uuidToMsgId.constEnd() || found.value() == 0) {
+			continue;
+		}
+		const auto msgId = MsgId(found.value());
+		// Убираем из списков непрочитанного по всем пирам
+		for (auto it = g_unreadIncoming.begin(); it != g_unreadIncoming.end(); ++it) {
+			it.value().removeAll(uuid);
+		}
+		if (const auto item = session->data().nonChannelMessage(msgId)) {
+			const auto history = item->history();
+			auto &cur = maxByHistory[history];
+			if (msgId > cur) {
+				cur = msgId;
+			}
+		}
+	}
+	for (auto it = maxByHistory.constBegin(); it != maxByHistory.constEnd(); ++it) {
+		if (it.value() > 0) {
+			it.key()->inboxRead(it.value()); // двигает бейдж непрочитанного
+		}
+	}
+}
+
 void ForgetClearedOnMain(not_null<Main::Session*> session, const QSet<QString> &uuids) {
 	for (const auto &uuid : uuids) {
 		const auto found = g_uuidToMsgId.find(uuid);
@@ -1221,6 +1251,29 @@ void DecCacheRemove(const QString &id) {
 	return out;
 }
 
+void EnsureDefaultLanguage() {
+	const char *lf = std::getenv("PARVANE_LANG_FILE");
+	if (!lf || !*lf) {
+		return;
+	}
+	const auto path = QString::fromUtf8(lf);
+	if (!QFileInfo::exists(path)) {
+		LOG(("Parvane: языковой файл не найден: %1").arg(path));
+		return;
+	}
+	// Однократно: маркер в tdata. Дальше язык — выбор пользователя.
+	const auto marker = cWorkingDir() + u"tdata/parvane-lang-applied"_q;
+	if (QFileInfo::exists(marker)) {
+		return;
+	}
+	Core::App().langpack().switchToCustomFile(path);
+	QFile f(marker);
+	if (f.open(QIODevice::WriteOnly)) {
+		f.write("ru");
+	}
+	LOG(("Parvane: язык по умолчанию — русский (%1)").arg(path));
+}
+
 void LogStartup() {
 	// Конструирование parvane::Transport заставляет линкер втянуть cnats.
 	parvane::Transport transport;
@@ -1464,6 +1517,16 @@ QString AddressForId(std::uint64_t userId) {
 	return g_idToAddress.value(quint64(userId));
 }
 
+QString ProfileLink(const QString &address) {
+	const auto at = address.indexOf('@');
+	if (at <= 0 || at + 1 >= address.size()) {
+		return QString();
+	}
+	const auto nick = address.left(at);
+	const auto domain = address.mid(at + 1);
+	return u"https://"_q + domain + u"/#@"_q + nick;
+}
+
 // ── сессия ───────────────────────────────────────────────────────────────────
 void SetSelf(const QString &address, const QString &token) {
 	{
@@ -1589,6 +1652,18 @@ bool StartSession() {
 			crl::on_main([set] {
 				if (const auto session = g_sessionWeak.get()) {
 					ForgetClearedOnMain(session, set);
+				}
+			});
+		});
+		// Прочтение с другого своего устройства → снять непрочитанное здесь.
+		g_messenger->onReadNotice(self, [](std::vector<std::string> ids) {
+			auto set = QSet<QString>();
+			for (const auto &id : ids) {
+				set.insert(QString::fromStdString(id));
+			}
+			crl::on_main([set] {
+				if (const auto session = g_sessionWeak.get()) {
+					MarkUuidsReadLocal(session, set);
 				}
 			});
 		});
@@ -4624,6 +4699,16 @@ void injectPollMessage(
 		peerId = IdForAddress(peerAddress);
 		authorId = isOwn ? IdForAddress(self) : peerId;
 		ensurePeerUser(session, peerId, peerAddress);
+		// Личная переписка → собеседник становится контактом (список Contacts
+		// показывает реальных людей, а не дамп директории). Себя (Избранное)
+		// контактом не помечаем.
+		if (peerAddress != self) {
+			if (const auto u = session->data().userLoaded(UserId(BareId(peerId)))) {
+				if (!u->isContact()) {
+					u->setIsContact(true);
+				}
+			}
+		}
 		if (!isOwn) {
 			const auto u = session->data().userLoaded(UserId(BareId(peerId)));
 			if (u && u->isBlocked()) {
@@ -6010,6 +6095,7 @@ void PumpReceive() {
 			cursorUpd = g_sinceUpdated;
 		}
 		std::vector<parvane::StoredMessage> msgs;
+		std::vector<std::string> readIds; // кросс-девайс прочитанное
 		try {
 			for (;;) {
 				// Подписанный sync: device_id (подмена per-device копии на
@@ -6020,8 +6106,10 @@ void PumpReceive() {
 				auth.signing_key = parvane::e2e::signingKey();
 				auth.signer = [](const std::string &d) { return parvane::e2e::sign(d); };
 				auth.extra = [](const std::string &d) { return parvane::e2e::extraSignatures(d); };
+				std::vector<std::string> pageRead;
 				auto page = m->sync(self, token, cursorId, cursorUpd, 15000,
-					parvane::e2e::ready() ? &auth : nullptr);
+					parvane::e2e::ready() ? &auth : nullptr, &pageRead);
+				readIds.insert(readIds.end(), pageRead.begin(), pageRead.end());
 				if (page.empty()) {
 					break;
 				}
@@ -6047,7 +6135,19 @@ void PumpReceive() {
 			LOG(("Parvane: sync ошибка: %1").arg(QString::fromUtf8(e.what())));
 			return;
 		}
+		// Кросс-девайс прочитанное можно применить даже без новых сообщений.
+		auto readSet = QSet<QString>();
+		for (const auto &id : readIds) {
+			readSet.insert(QString::fromStdString(id));
+		}
 		if (msgs.empty()) {
+			if (!readSet.isEmpty()) {
+				crl::on_main([readSet] {
+					if (const auto session = g_sessionWeak.get()) {
+						MarkUuidsReadLocal(session, readSet);
+					}
+				});
+			}
 			return;
 		}
 		{
@@ -6057,12 +6157,17 @@ void PumpReceive() {
 		}
 		SaveCursors(cursorId, cursorUpd); // персист (worker, вне лока)
 		prepareIncoming(msgs, /*live=*/true); // расшифровка + верификация на воркере
-		crl::on_main([msgs = std::move(msgs)]() mutable {
+		crl::on_main([msgs = std::move(msgs), readSet]() mutable {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return; // сессия ещё/уже не активна — придёт со следующим pump
 			}
 			injectOnMain(session, msgs);
+			// После инъекции снимаем непрочитанное, прочитанное на другом
+			// устройстве (в т.ч. если это же сообщение только что добавлено).
+			if (!readSet.isEmpty()) {
+				MarkUuidsReadLocal(session, readSet);
+			}
 		});
 	});
 }
@@ -6901,6 +7006,10 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			RestoreSessionCreds();
 		}
 		RegisterPeer(SelfAddress());
+		// Свой профиль (имя + аватар) мог быть задан на другом устройстве (веб).
+		// identity хранит их per-user — подтягиваем себя, иначе своя иконка,
+		// поставленная в вебе, на десктопе не видна.
+		ResolveNames({ SelfAddress() });
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
 		}

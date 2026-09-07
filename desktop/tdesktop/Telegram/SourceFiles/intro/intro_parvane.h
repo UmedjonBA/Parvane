@@ -8,6 +8,7 @@
 namespace Ui {
 class InputField;
 class PasswordInput;
+class LinkButton;
 } // namespace Ui
 
 namespace Intro {
@@ -74,6 +75,10 @@ private:
 	int _tgGeneration = 0;
 	qint64 _tgStartedAt = 0;
 	object_ptr<Ui::InputField> _tgLink;
+	// Кнопка-переключатель видимости пароля (нет нативной в PasswordInput)
+	object_ptr<Ui::LinkButton> _showPassword;
+	bool _passwordShown = false;
+	void togglePasswordShown();
 
 };
 

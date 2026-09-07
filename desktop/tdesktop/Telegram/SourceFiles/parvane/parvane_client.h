@@ -143,6 +143,10 @@ void RegisterPeer(const QString &address);
 // Адрес по UserId (bare). "" если неизвестен.
 [[nodiscard]] QString AddressForId(std::uint64_t userId);
 
+// Ссылка-профиль Parvane для QR/шаринга: адрес `ник@домен` →
+// `https://<домен>/#@<ник>` (открывается веб-клиентом, находит пользователя).
+[[nodiscard]] QString ProfileLink(const QString &address);
+
 // ── сессия ───────────────────────────────────────────────────────────────────
 // Запомнить себя (адрес + JWT) после успешного логина.
 void SetSelf(const QString &address, const QString &token);
@@ -194,6 +198,11 @@ void MirrorReact(not_null<HistoryItem*> item, const QString &emoji);
 
 // Зеркалит закрепление/открепление сообщения (msg.chat.pin).
 void MirrorPin(not_null<HistoryItem*> item, bool pin);
+
+// Русский по умолчанию при первом старте: если задан PARVANE_LANG_FILE и язык
+// ещё не выбирался (маркер отсутствует), грузит кастомный русский языковой
+// пакет. Дальше пользователь свободно меняет язык — не навязываем.
+void EnsureDefaultLanguage();
 
 // Удаление/очистка чата «для меня» (msg.chat.clear): все известные сообщения
 // диалога скрываются на сервере для этого пользователя, локальный журнал

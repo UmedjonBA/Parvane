@@ -5,6 +5,7 @@
 #include "parvane/parvane_client.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
+#include "ui/widgets/buttons.h"
 #include "styles/style_intro.h"
 
 #include <crl/crl_async.h>
@@ -12,6 +13,7 @@
 
 #include "base/call_delayed.h"
 
+#include <QtWidgets/QLineEdit>
 #include <QtCore/QDateTime>
 #include <QtCore/QFile>
 
@@ -25,15 +27,18 @@ ParvaneWidget::ParvaneWidget(
 	not_null<Main::Account*> account,
 	not_null<Data*> data)
 : Step(parent, account, data)
-, _user(this, st::introName, rpl::single(u"user@server"_q))
+, _user(this, st::introName, rpl::single(u"ник"_q))
 , _password(this, st::introPassword, rpl::single(u"пароль"_q))
 , _email(this, st::introName, rpl::single(u"email для подтверждения"_q))
 , _code(this, st::introName, rpl::single(u"код из письма (6 цифр)"_q))
-, _tgLink(this, st::introName, rpl::single(u"ссылка на бота"_q)) {
+, _tgLink(this, st::introName, rpl::single(u"ссылка на бота"_q))
+, _showPassword(this, u"Показать пароль"_q, st::introLink) {
 	setTitleText(rpl::single(u"Parvane"_q));
 	setDescriptionText(rpl::single(u"Вход по нику"_q));
 	setErrorCentered(true);
 	_tgLink->hide();
+	_showPassword->hide();
+	_showPassword->setClickedCallback([=] { togglePasswordShown(); });
 
 	_user->submits(
 	) | rpl::on_next([=] { submit(); }, _user->lifetime());
@@ -53,6 +58,7 @@ void ParvaneWidget::setStage(Stage stage) {
 	const auto login = (stage == Stage::Login);
 	_user->setVisible(login);
 	_password->setVisible(login);
+	_showPassword->setVisible(login);
 	_email->setVisible(stage == Stage::Email);
 	_code->setVisible(stage == Stage::Code);
 	_tgLink->setVisible(stage == Stage::Telegram);
@@ -164,6 +170,10 @@ void ParvaneWidget::updateControlsGeometry() {
 	_email->moveToLeft(contentLeft(), firstTop);
 	_code->moveToLeft(contentLeft(), firstTop);
 	_tgLink->moveToLeft(contentLeft(), firstTop);
+	// Ссылку-переключатель ставим у правого края строки пароля
+	_showPassword->moveToRight(
+		contentLeft(),
+		secondTop + (st::introPassword.heightMin - _showPassword->height()) / 2);
 }
 
 void ParvaneWidget::setInnerFocus() {
@@ -174,6 +184,7 @@ void ParvaneWidget::activate() {
 	Step::activate();
 	_user->show();
 	_password->show();
+	_showPassword->show();
 	setInnerFocus();
 
 	// Debug-хук для headless e2e: PARVANE_AUTOLOGIN=user[@server]:password
@@ -196,6 +207,17 @@ void ParvaneWidget::activate() {
 			}
 		}
 	}
+}
+
+void ParvaneWidget::togglePasswordShown() {
+	_passwordShown = !_passwordShown;
+	_password->setEchoMode(_passwordShown
+		? QLineEdit::Normal
+		: QLineEdit::Password);
+	_showPassword->setText(_passwordShown
+		? u"Скрыть пароль"_q
+		: u"Показать пароль"_q);
+	_password->setFocus();
 }
 
 rpl::producer<QString> ParvaneWidget::nextButtonText() const {

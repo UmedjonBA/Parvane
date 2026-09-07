@@ -1250,22 +1250,8 @@ void BuildEventNotificationsSection(SectionBuilder &builder) {
 		session->api().contactSignupSilentCurrent().value_or(false)
 	) | rpl::then(session->api().contactSignupSilent());
 
-	const auto joined = builder.addButton({
-		.id = u"notifications/events/joined"_q,
-		.title = tr::lng_settings_events_joined(),
-		.icon = { &st::menuIconInvite },
-		.toggled = std::move(joinSilent) | rpl::map([](bool s) { return !s; }),
-		.keywords = { u"joined"_q, u"contacts"_q, u"signup"_q },
-	});
-	if (joined) {
-		joined->toggledChanges(
-		) | rpl::filter([=](bool enabled) {
-			const auto silent = session->api().contactSignupSilentCurrent();
-			return (enabled == silent.value_or(false));
-		}) | rpl::on_next([=](bool enabled) {
-			session->api().saveContactSignupSilent(!enabled);
-		}, joined->lifetime());
-	}
+	// Parvane: «Contact joined» (облачное событие регистрации контакта) убрано.
+	(void)joinSilent;
 
 	const auto pinned = builder.addButton({
 		.id = u"notifications/events/pinned"_q,

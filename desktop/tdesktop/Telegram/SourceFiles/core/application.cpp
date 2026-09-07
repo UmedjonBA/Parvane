@@ -270,6 +270,8 @@ void Application::run() {
 
 	startLocalStorage();
 
+	Parvane::EnsureDefaultLanguage(); // Parvane fork: русский по умолчанию (1-й старт).
+
 	style::SetCustomFont(settings().customFontFamily());
 	style::internal::StartFonts();
 

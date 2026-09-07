@@ -3070,6 +3070,14 @@ void Widget::requestPublicPosts(bool fromStart) {
 }
 
 void Widget::requestMessages(bool fromStart) {
+	// Parvane: глобальный поиск по сообщениям через MTProto (SearchGlobal)
+	// недоступен — сеть наша. Чтобы не висеть на «Loading…», завершаем поиск
+	// сразу пустым результатом. Локальный поиск по сообщениям — доводка.
+	// Поиск ВНУТРИ открытого чата (MTPmessages_Search выше) работает как раньше,
+	// поиск по аккаунтам идёт через identity.user.search (peer search).
+	searchApplyEmpty(SearchRequestType{ .start = true }, &_searchProcess);
+	return;
+#if 0
 	if (!_searchProcess.lastId || !_searchProcess.lastPeer) {
 		fromStart = true;
 	}
@@ -3116,6 +3124,7 @@ void Widget::requestMessages(bool fromStart) {
 	if (fromStart && _searchWithPostsPreview) {
 		requestPublicPosts(true);
 	}
+#endif
 }
 
 auto Widget::currentSearchProcess() -> not_null<SearchProcessState*> {

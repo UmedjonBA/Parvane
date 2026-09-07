@@ -262,3 +262,48 @@
 
 Правило на каждый пункт: сперва найти нативный модуль, потом прокинуть в него наши
 данные из NATS; свои виджеты — только если нативного пути нет.
+
+## TODO после сессии 7 сен 2026 — нужны живые тесты на двух устройствах
+
+Всё ниже НЕ проверяется headless (под `QT_QPA_PLATFORM=offscreen` intro
+пересоздаётся раз в секунду), поэтому отложено до живой проверки пользователем
+на реальном GUI + веб-клиенте. Бэкенд и веб для всех пунктов уже готовы и
+задеплоены на тестовый прод, недостаёт только десктоп-стороны.
+
+1. **Мут / настройки уведомлений веб↔десктоп** (пункт 12 списка багов).
+   Бэкенд: `msg.chat.setnotify` → `user_settings` + `NotifyNotice` в свой инбокс
+   + `notify_settings` в sync (messenger 0011). Веб: `provider.ts
+   pushNotifySettings()` шлёт `{defaults, exceptions}`, `sync.ts
+   applyNotifySettings` применяет. ДОДЕЛАТЬ на десктопе:
+   - `messenger_client`: разбор `NotifyNotice` + `notify_settings` из sync
+     (по образцу `onReadNotice`/`read_message_ids`);
+   - `parvane_client.cpp`: маппинг JSON-блоба веба ↔ `Data::NotifySettings`
+     (`Data::Session::notifySettings().update(...)` для peer/defaults; поля
+     muteUntil/sound/showPreviews);
+   - обратно: перехват изменения мута на десктопе (`ApiWrap::updateNotifySettings`
+     / `Data::NotifySettings::request`) → publish `msg.chat.setnotify` тем же
+     блобом, что и веб (иначе веб не поймёт).
+   - Проверка: замутить чат в вебе → на десктопе колокольчик; и наоборот.
+2. **Профильные поля на десктопе** (Bio, дата рождения, цвет имени, личный
+   канал, телефон — всё бесплатно, см. CLAUDE/память `parvane-no-paid-features`).
+   Бэкенд: identity 0013 + `identity.user.setname` с опц. полями, resolve отдаёт
+   `UserInfo{bio,birthday,name_color,personal_channel,phone}`. Веб: Bio
+   редактируется/показывается, остальное показывается. ДОДЕЛАТЬ на десктопе:
+   - показ: синтез `UserFull` (about/birthday/personalChannel) из resolve при
+     `ResolveNames` → `user->setAbout(...)`, `Data::Birthday`,
+     `setPersonalChannel`, `setPhone`, `nameColor` (`PeerData::changeColor`);
+   - редактирование: строки `settings_information.cpp` (Bio, Date of birth,
+     Your name color, Personal channel, Phone) → вместо MTProto вызывать
+     `Parvane::SetName(...)` с новыми полями; убрать премиум-гейт у name color.
+   - Проверка: задать Bio/дату/цвет в вебе → видно на десктопе; и наоборот.
+3. **Глобальный поиск по сообщениям на десктопе** (по локальному журналу):
+   сейчас только убрано вечное Loading (`dialogs_widget.cpp requestMessages →
+   searchApplyEmpty`); поиск внутри чата работает. Реализовать выборку по
+   `HistoryPath` jsonl всех чатов и отдачу в `Dialogs::Widget` как результаты.
+4. **Мелочи**: спрятать инертные Experimental-тумблеры (IPv6, bots webview,
+   forums, touchbar — ~5 шт, проверены по коду, не кликами); отдельная иконка
+   вместо «P» из веба — по желанию пользователя.
+
+Смежное (не десктоп): закоммитить рабочее дерево (READMEs, баг-пакет, кросс-девайс
+прочитанное/мут, профильные поля, Android-скелет `android/`) — пользователь ещё
+не просил коммит/пуш.
