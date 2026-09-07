@@ -117,6 +117,19 @@ struct FakeTransport : parvane::ITransport {
 
 int main() {
     namespace e2e = parvane::e2e;
+    // Отпечаток ключа — тот же формат, что fingerprintOf в веб-клиенте
+    // (SHA-256 от base64-строки, 48 hex группами по 4): sha256("test").
+    check(e2e::fingerprintOf("test")
+              == "9f86 d081 884c 7d65 9a2f eaa0 c55a d015 a3bf 4f1b 2b0b 822c",
+          "fingerprintOf: формат как в вебе");
+    check(e2e::fingerprintOf("").empty(), "fingerprintOf: пусто для пустого ключа");
+    check(e2e::ownFingerprint().empty(), "ownFingerprint пуст до initDevice");
+    check(!e2e::rememberContactIdentity("x@local", "k1"), "первый ключ контакта — не смена");
+    check(!e2e::rememberContactIdentity("x@local", "k1"), "тот же ключ — не смена");
+    check(e2e::rememberContactIdentity("x@local", "k2"), "новый ключ известного контакта — смена");
+    check(e2e::contactFingerprints("x@local").size() == 1
+              && e2e::contactFingerprints("x@local")[0].fingerprint == e2e::fingerprintOf("k2"),
+          "contactFingerprints по primary identity");
     const auto dir = std::filesystem::temp_directory_path() / "parvane-e2e-tests";
     std::filesystem::remove_all(dir);
 
@@ -183,6 +196,16 @@ int main() {
           "verifySender: чужой ключ под именем bob → Spoofed (каталог есть)");
     check(e2e::verifySender("nobody@local", mallory.identity, t, "tok") == e2e::Verdict::Unknown,
           "verifySender: нет каталога → Unknown");
+    // Смена ключа: identity из первого каталога bob — «виденные» (свой отпечаток
+    // без входящего), поэтому известное устройство — не смена, новое — смена.
+    check(!e2e::rememberContactIdentity("bob@local", bob1.identity),
+          "rememberContactIdentity: устройство из каталога — не смена ключа");
+    check(!e2e::rememberContactIdentity("bob@local", bob2.identity),
+          "rememberContactIdentity: второе известное устройство — не смена");
+    check(e2e::rememberContactIdentity("bob@local", mallory.identity),
+          "rememberContactIdentity: новый identity известного контакта — смена");
+    check(e2e::contactFingerprints("bob@local").size() == 2,
+          "contactFingerprints: по устройству каталога");
 
     // pickOwnCopy: подстановка копии по device_id + signing_key.
     json copies = json::array({{{"recipient", ""}, {"signing_key", e2e::signingKey()},

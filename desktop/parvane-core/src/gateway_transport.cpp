@@ -135,6 +135,16 @@ void GatewayTransport::readerLoop() {
     }
 }
 
+namespace {
+std::mutex g_errMu;
+GatewayTransport::ErrorHandler g_errHandler;
+} // namespace
+
+void GatewayTransport::setUnaddressedErrorHandler(ErrorHandler handler) {
+    std::lock_guard<std::mutex> lk(g_errMu);
+    g_errHandler = std::move(handler);
+}
+
 void GatewayTransport::dispatch(const std::string &line) {
     json v = json::parse(line, nullptr, /*allow_exceptions=*/false);
     if (v.is_discarded() || !v.is_object()) {
@@ -175,7 +185,19 @@ void GatewayTransport::dispatch(const std::string &line) {
     if (op == "reply" || op == "reply_end" || op == "err") {
         const std::string id = v.value("id", "");
         if (id.empty()) {
-            return; // безадресная ошибка — игнор (напр. запрещённый pub)
+            // безадресная ошибка (rate_limited на publish, запрещённый pub) —
+            // наверх через общий обработчик, если задан
+            if (op == "err") {
+                ErrorHandler h;
+                {
+                    std::lock_guard<std::mutex> lk(g_errMu);
+                    h = g_errHandler;
+                }
+                if (h) {
+                    h(v.value("error", ""), v.value("subject", ""));
+                }
+            }
+            return;
         }
         std::shared_ptr<Pending> p;
         {
