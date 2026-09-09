@@ -65,7 +65,7 @@ try {
     await findMessage(bobBack.page, text);
   }
 
-  await assertNoPageErrors(bobBack.page);
+  assertNoPageErrors({ alice: aliceSession, bob: bobBack });
   assert.ok(true, 'все сообщения, присланные в отсутствие устройства, доехали');
   // eslint-disable-next-line no-console
   console.log('offline-device: OK');

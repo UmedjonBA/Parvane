@@ -44,7 +44,8 @@ describe('SYNC-1: дисковый курсор двигается только 
 
   it('web не пишет курсор без E2E и при пропущенных сообщениях', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(source).toMatch(/sawUndecryptable\s*\|\|\s*!deps\.getE2e\(\)/);
+    expect(source).toMatch(/!deps\.getE2e\(\)\) return;/);
+    expect(source).toMatch(/if \(!mayAdvanceDiskCursor\(\)\) return;/);
   });
 
   it('desktop двигает дисковый курсор только после успешной вставки', () => {
@@ -59,6 +60,13 @@ describe('SYNC-1: дисковый курсор двигается только 
 });
 
 describe('SYNC-2: непрочитанное не держит курсор вечно', () => {
+  it('web REPAIR_ATTEMPTS совпадает с документом', () => {
+    const expected = rule('SYNC-2').maxRepairAttempts;
+    const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
+    const match = source.match(/const REPAIR_ATTEMPTS = (\d+);/);
+    expect(match?.[1]).toBe(String(expected));
+  });
+
   it('desktop kRepairAttempts совпадает с документом', () => {
     const expected = rule('SYNC-2').maxRepairAttempts;
     const match = readDesktopSource().match(/constexpr int kRepairAttempts = (\d+);/);
@@ -111,6 +119,13 @@ describe('FAIL-1: ожидание без ответа запрещено', () =
   it('web обрабатывает отказ загрузки бандла', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/hooks/useModuleLoader.ts'), 'utf8');
     expect(source).toMatch(/recoverFromStaleChunk/);
+  });
+
+  it('desktop при отказе авторизации выходит на экран входа, а не молчит', () => {
+    const source = readDesktopSource();
+    // Протухший JWT раньше тихо оставлял старый журнал на экране (8 сен 2026)
+    expect(source).toMatch(/void OnAuthRejected\(const QString &reason\) \{/);
+    expect(source).toMatch(/forcedLogOut\(\)/);
   });
 
   it('desktop не ждёт messages.getDialogFilters, которого не будет', () => {

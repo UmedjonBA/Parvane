@@ -515,6 +515,28 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
+  // Очередь починки нерасшифрованного (conformance SYNC-2): uuid → число
+  // попыток. Пока есть непрочитанное с попытками < потолка, курсор синка на
+  // диск не пишем; исчерпавшее потолок отпускаем — иначе одно сообщение без
+  // копии под наше устройство заставляло бы пересинхронизировать историю при
+  // каждом входе.
+  function loadRepairAttempts(): Record<string, number> {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('repair')) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function saveRepairAttempts(map: Record<string, number>) {
+    try {
+      if (Object.keys(map).length) localStorage.setItem(storageKey('repair'), JSON.stringify(map));
+      else localStorage.removeItem(storageKey('repair'));
+    } catch {
+      // квота — переживём
+    }
+  }
+
   function loadFolders(): { id: number; [key: string]: unknown }[] {
     try {
       return JSON.parse(localStorage.getItem(storageKey('folders')) || '[]');
@@ -673,6 +695,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadDeletedChats,
     loadUnreadMarks,
     loadReadUuids,
+    loadRepairAttempts,
     markChatDeleted,
     unmarkChatDeleted,
     removeOwnJournalEntries,
@@ -693,6 +716,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveNonContacts,
     saveUnreadMarks,
     saveReadUuids,
+    saveRepairAttempts,
     saveDraft,
     saveFolders,
     setArchived,
