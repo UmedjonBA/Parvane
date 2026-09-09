@@ -6,6 +6,8 @@
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
 #include "ui/widgets/buttons.h"
+#include "ui/abstract_button.h"
+#include "ui/painter.h"
 #include "styles/style_intro.h"
 
 #include <crl/crl_async.h>
@@ -21,6 +23,39 @@
 
 namespace Intro {
 namespace details {
+namespace {
+
+// Глаз рисуем вручную: иконки eye в ресурсах tdesktop нет, а тащить новый
+// ресурс ради одной кнопки — лишний виток кодогенерации.
+void PaintEye(QPainter &p, QRect rect, bool crossed, QColor color) {
+	auto hq = PainterHighQualityEnabler(p);
+	auto pen = QPen(color);
+	pen.setWidthF(1.4);
+	pen.setCapStyle(Qt::RoundCap);
+	pen.setJoinStyle(Qt::RoundJoin);
+	p.setPen(pen);
+	p.setBrush(Qt::NoBrush);
+	const auto cx = rect.center().x() + 0.5;
+	const auto cy = rect.center().y() + 0.5;
+	const auto w = rect.width() * 0.34;
+	const auto h = rect.height() * 0.17;
+	auto path = QPainterPath();
+	path.moveTo(cx - w, cy);
+	path.quadTo(cx, cy - h * 2.6, cx + w, cy);
+	path.quadTo(cx, cy + h * 2.6, cx - w, cy);
+	p.drawPath(path);
+	p.drawEllipse(QPointF(cx, cy), h * 0.85, h * 0.85);
+	if (crossed) {
+		p.drawLine(
+			QPointF(cx - w * 0.9, cy + h * 2.0),
+			QPointF(cx + w * 0.9, cy - h * 2.0));
+	}
+}
+
+constexpr auto kEyeSize = 28;
+
+} // namespace
+
 
 ParvaneWidget::ParvaneWidget(
 	QWidget *parent,
@@ -32,13 +67,32 @@ ParvaneWidget::ParvaneWidget(
 , _email(this, st::introName, rpl::single(u"email для подтверждения"_q))
 , _code(this, st::introName, rpl::single(u"код из письма (6 цифр)"_q))
 , _tgLink(this, st::introName, rpl::single(u"ссылка на бота"_q))
-, _showPassword(this, u"Показать пароль"_q, st::introLink) {
+, _showPassword(this)
+, _switchMode(this, QString(), st::introLink) {
 	setTitleText(rpl::single(u"Parvane"_q));
-	setDescriptionText(rpl::single(u"Вход по нику"_q));
 	setErrorCentered(true);
 	_tgLink->hide();
-	_showPassword->hide();
+
+	_showPassword->resize(kEyeSize, kEyeSize);
+	_showPassword->setPointerCursor(true);
+	_showPassword->paintRequest(
+	) | rpl::on_next([=](QRect) {
+		auto p = QPainter(_showPassword.data());
+		PaintEye(
+			p,
+			_showPassword->rect(),
+			_passwordShown,
+			(_showPassword->isOver()
+				? st::introLink.overColor
+				: st::introLink.color)->c);
+	}, _showPassword->lifetime());
 	_showPassword->setClickedCallback([=] { togglePasswordShown(); });
+	_showPassword->hide();
+
+	_switchMode->setClickedCallback([=] {
+		setMode(_mode == Mode::SignIn ? Mode::SignUp : Mode::SignIn);
+	});
+	setMode(Mode::SignIn);
 
 	_user->submits(
 	) | rpl::on_next([=] { submit(); }, _user->lifetime());
@@ -59,6 +113,7 @@ void ParvaneWidget::setStage(Stage stage) {
 	_user->setVisible(login);
 	_password->setVisible(login);
 	_showPassword->setVisible(login);
+	_switchMode->setVisible(login);
 	_email->setVisible(stage == Stage::Email);
 	_code->setVisible(stage == Stage::Code);
 	_tgLink->setVisible(stage == Stage::Telegram);
@@ -76,9 +131,12 @@ void ParvaneWidget::setStage(Stage stage) {
 			u"Введите 6-значный код из письма"_q));
 		_code->setFocus();
 	} else {
-		setDescriptionText(rpl::single(u"Вход по нику"_q));
+		setDescriptionText(rpl::single(_mode == Mode::SignIn
+			? u"Вход в аккаунт"_q
+			: u"Создание аккаунта"_q));
 		_user->setFocus();
 	}
+	_switchMode->setVisible(login);
 	updateControlsGeometry();
 }
 
@@ -170,10 +228,14 @@ void ParvaneWidget::updateControlsGeometry() {
 	_email->moveToLeft(contentLeft(), firstTop);
 	_code->moveToLeft(contentLeft(), firstTop);
 	_tgLink->moveToLeft(contentLeft(), firstTop);
-	// Ссылку-переключатель ставим у правого края строки пароля
+	// Глазок — внутри строки пароля у правого края
 	_showPassword->moveToRight(
 		contentLeft(),
 		secondTop + (st::introPassword.heightMin - _showPassword->height()) / 2);
+	// Переключатель «вход ↔ регистрация» — отдельной строкой под паролем
+	_switchMode->moveToLeft(
+		contentLeft(),
+		secondTop + st::introPassword.heightMin + st::introPhoneTop / 2);
 }
 
 void ParvaneWidget::setInnerFocus() {
@@ -185,6 +247,7 @@ void ParvaneWidget::activate() {
 	_user->show();
 	_password->show();
 	_showPassword->show();
+	_switchMode->show();
 	setInnerFocus();
 
 	// Debug-хук для headless e2e: PARVANE_AUTOLOGIN=user[@server]:password
@@ -214,14 +277,28 @@ void ParvaneWidget::togglePasswordShown() {
 	_password->setEchoMode(_passwordShown
 		? QLineEdit::Normal
 		: QLineEdit::Password);
-	_showPassword->setText(_passwordShown
-		? u"Скрыть пароль"_q
-		: u"Показать пароль"_q);
+	_showPassword->update();
 	_password->setFocus();
 }
 
+void ParvaneWidget::setMode(Mode mode) {
+	_mode = mode;
+	const auto signIn = (mode == Mode::SignIn);
+	_switchMode->setText(signIn
+		? u"Нет аккаунта? Зарегистрироваться"_q
+		: u"Уже есть аккаунт? Войти"_q);
+	_nextText = signIn ? u"Войти"_q : u"Создать аккаунт"_q;
+	if (_stage == Stage::Login) {
+		setDescriptionText(rpl::single(signIn
+			? u"Вход в аккаунт"_q
+			: u"Создание аккаунта"_q));
+	}
+	hideError();
+	updateControlsGeometry();
+}
+
 rpl::producer<QString> ParvaneWidget::nextButtonText() const {
-	return rpl::single(u"Войти"_q);
+	return _nextText.value();
 }
 
 void ParvaneWidget::startCodeFilePoll() {
@@ -349,23 +426,42 @@ void ParvaneWidget::submit() {
 		});
 		return;
 	}
+	const auto mode = _mode;
 	crl::async([=] {
-		// Логин. Если аккаунта нет (issue отделён от регистрации) — регистрируем
-		// и логинимся повторно: один экран покрывает вход и регистрацию. При
-		// PARVANE_EMAIL_REQUIRED identity просит email («нужен корректный
-		// email») → экран email → код; «почта не подтверждена» → экран кода
-		// (повторный register перевысылает код на сохранённую почту, как у web).
-		auto res = Parvane::Issue(user, password);
+		// Вход и регистрация РАЗДЕЛЕНЫ. Раньше это была одна ветка: не удался
+		// issue — молча звали register, и пользователь не понимал, вошёл он или
+		// завёл новый аккаунт (а опечатка в нике создавала пустой аккаунт).
+		auto res = Parvane::IssueResult();
 		auto next = Stage::Login;
-		QString telegramToken;
-		if (!res.ok && res.twofaRequired) {
-			// Пароль верен, включён двухфакторный вход — экран Telegram
-			next = Stage::Telegram;
-			telegramToken = res.loginToken;
-		} else if (!res.ok) {
-			if (res.error.contains(u"почта не подтверждена"_q)) {
-				// Аккаунт ждёт подтверждения: повторный register перевысылает
-				// код / выдаёт новый токен Telegram
+		auto telegramToken = QString();
+		if (mode == Mode::SignUp) {
+			const auto reg = Parvane::Register(user, password, email);
+			if (!reg.ok) {
+				if (reg.error.contains(u"email"_q, Qt::CaseInsensitive)) {
+					next = Stage::Email; // сервер требует почту — спросим её
+				} else {
+					res.error = reg.error.isEmpty()
+						? u"Не удалось создать аккаунт"_q
+						: reg.error;
+				}
+			} else if (reg.confirmRequired && !reg.telegramToken.isEmpty()) {
+				next = Stage::Telegram;
+				telegramToken = reg.telegramToken;
+			} else if (reg.confirmRequired) {
+				next = Stage::Code;
+			} else {
+				res = Parvane::Issue(user, password);
+			}
+		} else {
+			res = Parvane::Issue(user, password);
+			if (!res.ok && res.twofaRequired) {
+				// Пароль верен, включён двухфакторный вход — экран Telegram
+				next = Stage::Telegram;
+				telegramToken = res.loginToken;
+			} else if (!res.ok
+				&& res.error.contains(u"почта не подтверждена"_q)) {
+				// Аккаунт есть, но ждёт подтверждения: повторный register
+				// перевысылает код / выдаёт новый токен Telegram
 				const auto reg = Parvane::Register(user, password, email);
 				if (!reg.telegramToken.isEmpty()) {
 					next = Stage::Telegram;
@@ -373,20 +469,8 @@ void ParvaneWidget::submit() {
 				} else {
 					next = Stage::Code;
 				}
-			} else {
-				const auto reg = Parvane::Register(user, password, email);
-				if (reg.ok && reg.confirmRequired && !reg.telegramToken.isEmpty()) {
-					next = Stage::Telegram;
-					telegramToken = reg.telegramToken;
-				} else if (reg.ok && reg.confirmRequired) {
-					next = Stage::Code;
-				} else if (reg.ok) {
-					res = Parvane::Issue(user, password);
-				} else if (reg.error.contains(u"email"_q, Qt::CaseInsensitive)) {
-					next = Stage::Email;
-				} else if (!reg.error.isEmpty() && !reg.error.contains(u"логин занят"_q)) {
-					res.error = reg.error;
-				}
+			} else if (!res.ok && res.error.isEmpty()) {
+				res.error = u"Неверный ник или пароль"_q;
 			}
 		}
 		const auto twofaBot = res.telegramBot;
@@ -424,7 +508,13 @@ void ParvaneWidget::onIssued(
 			// После подтверждения выдача не удалась — назад к паролю
 			setStage(Stage::Login);
 		}
-		showError(rpl::single(error.isEmpty() ? u"Ошибка входа"_q : error));
+		// В режиме входа подсказываем, что аккаунта может не быть: молча
+		// заводить его мы больше не станем, переключение — осознанное.
+		const auto hint = (_mode == Mode::SignIn && !error.contains(u"пароль"_q))
+			? u" Если аккаунта ещё нет — нажмите «Зарегистрироваться»."_q
+			: QString();
+		showError(rpl::single(
+			(error.isEmpty() ? u"Не удалось войти"_q : error) + hint));
 		_password->setFocus();
 		return;
 	}

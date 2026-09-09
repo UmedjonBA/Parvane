@@ -9,6 +9,7 @@ namespace Ui {
 class InputField;
 class PasswordInput;
 class LinkButton;
+class AbstractButton;
 } // namespace Ui
 
 namespace Intro {
@@ -75,10 +76,20 @@ private:
 	int _tgGeneration = 0;
 	qint64 _tgStartedAt = 0;
 	object_ptr<Ui::InputField> _tgLink;
-	// Кнопка-переключатель видимости пароля (нет нативной в PasswordInput)
-	object_ptr<Ui::LinkButton> _showPassword;
+	// Глазок видимости пароля: своя кнопка, рисуется вручную (готовой иконки
+	// глаза в ресурсах tdesktop нет, а надпись «Показать пароль» занимала строку)
+	object_ptr<Ui::AbstractButton> _showPassword;
 	bool _passwordShown = false;
 	void togglePasswordShown();
+
+	// Вход и регистрация РАЗДЕЛЕНЫ явно: раньше один экран молча заводил
+	// аккаунт, если ника не существовало, и пользователь не понимал, что
+	// произошло — вошёл он или зарегистрировался.
+	enum class Mode { SignIn, SignUp };
+	void setMode(Mode mode);
+	Mode _mode = Mode::SignIn;
+	object_ptr<Ui::LinkButton> _switchMode;
+	rpl::variable<QString> _nextText;
 
 };
 
