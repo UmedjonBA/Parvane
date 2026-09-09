@@ -96,7 +96,10 @@ cd /home/ub/Projects/active/Parvane/desktop      # ТОЛЬКО этот пут�
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 # 1) компиляция — -j6, только изменённые объектники (ninja сам решит)
 nice -n 10 ninja -C build-probe -j6 <изменённые .o>   # или без целей: всё, кроме линка
-# 2) линковка — ОДИН поток, отсоединённо от терминала (иначе харнесс/OOM снимет)
+# 2) линковка — ОДИН поток, отсоединённо от терминала (иначе харнесс/OOM снимет).
+#    Линковщик сначала УДАЛЯЕТ bin/Telegram — установленная обёртка
+#    ~/.local/bin/parvane-desktop на это время берёт bin/Telegram.stable
+cp build-probe/bin/Telegram build-probe/bin/Telegram.stable 2>/dev/null
 setsid nohup nice -n 15 ninja -C build-probe -j1 >/tmp/pv-link.log 2>&1 </dev/null & disown
 ```
 

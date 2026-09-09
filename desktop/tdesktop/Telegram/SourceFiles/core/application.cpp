@@ -1910,6 +1910,11 @@ void Application::startShortcuts() {
 }
 
 void Application::RegisterUrlScheme() {
+	// Parvane: у нас нет ссылок tg:// и tonsite://. Штатная регистрация
+	// перехватывала системный обработчик у установленного Telegram Desktop и
+	// при каждом запуске с новым -workdir (e2e, демо) плодила
+	// userapp-Parvane-*.desktop в ~/.local/share/applications.
+	return;
 	const auto arguments = Launcher::Instance().customWorkingDir()
 		? u"-workdir \"%1\""_q.arg(cWorkingDir())
 		: QString();

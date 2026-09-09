@@ -116,8 +116,26 @@ async function setTwoFactor(page, enabled) {
 }
 
 async function logOut(page) {
-  // Из экрана Privacy — назад в корень настроек, где меню с «Log Out»
-  await page.getByRole('button', { name: /Go back|Return to Chat List/ }).first().click();
+  // Добираемся до корня настроек (там «More actions» → «Log Out») из любого
+  // экрана левой колонки: Privacy (назад), список чатов (меню → Settings) или
+  // уже корень настроек (после повторного входа tt остаётся в Settings).
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  for (;;) {
+    const visible = (locator) => locator.isVisible().catch(() => false);
+    const inSettingsRoot = await visible(page.getByRole('button', { name: 'Edit profile' }).first());
+    if (inSettingsRoot) break;
+    const menu = page.getByRole('button', { name: 'Open menu' }).first();
+    if (await visible(menu)) {
+      await menu.click();
+      await page.getByRole('menuitem', { name: 'Settings' }).click();
+      await page.getByRole('button', { name: 'Edit profile' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      break;
+    }
+    const back = page.getByRole('button', { name: /Go back|Return to Chat List/ }).first();
+    if (await visible(back)) await back.click();
+    assert(Date.now() < deadline, 'не нашёл ни «Open menu», ни «Go back» в левой колонке');
+    await page.waitForTimeout(500);
+  }
   await page.getByRole('button', { name: 'More actions' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.getByRole('button', { name: 'More actions' }).first().click();
   await page.getByRole('menuitem', { name: 'Log Out' }).click();
@@ -149,8 +167,20 @@ try {
   await setTwoFactor(s1.page, true);
   console.log('OK: двухфакторный вход включён в настройках');
 
-  // ── Выход и вход по паролю → экран подтверждения входа ──
+  // ── Устройство, включившее 2FA, получило секрет доверия: после выхода
+  // входит по паролю без Telegram (как и десктоп) ──
   await logOut(s1.page);
+  await loginWithPassword(s1.page, nick);
+  await signedIn(s1.page);
+  assert.equal(await s1.page.locator('#auth-telegram-form').count(), 0);
+  console.log('OK: устройство, включившее 2FA, входит без повторного подтверждения');
+
+  // ── Без секрета доверия голый device_id НЕ доверенный (device_id публичен):
+  // стираем только секрет, зеркало device_id остаётся → подтверждение ──
+  await logOut(s1.page);
+  await s1.page.evaluate(() => {
+    Object.keys(localStorage).filter((k) => k.startsWith('parvane:trust:')).forEach((k) => localStorage.removeItem(k));
+  });
   await loginWithPassword(s1.page, nick);
   const { telegramScreen, token: loginToken } = await waitTelegramScreen(s1.page, 'Confirm sign-in');
   assert.notEqual(loginToken, regToken);
@@ -164,9 +194,9 @@ try {
   assert.equal(owner.ok, true, `подтверждение владельцем: ${JSON.stringify(owner)}`);
   assert.equal(owner.kind, 'login');
   await signedIn(s1.page);
-  console.log('OK: вход подтверждён только привязанным Telegram');
+  console.log('OK: без секрета device_id не доверяется; вход подтверждён только привязанным Telegram');
 
-  // ── То же устройство: reload без Telegram (доверенное) ──
+  // ── То же устройство: reload без Telegram (секрет выдан заново) ──
   await s1.page.waitForTimeout(1500);
   await s1.page.reload({ waitUntil: 'domcontentloaded' });
   await signedIn(s1.page);
