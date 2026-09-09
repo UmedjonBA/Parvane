@@ -50,6 +50,8 @@ type SyncDependencies = {
     saveNotifyDefaults: (map: Record<string, Record<string, unknown>>) => void;
     loadReadUuids: () => string[];
     saveReadUuids: (uuids: string[]) => void;
+    loadRepairAttempts: () => Record<string, number>;
+    saveRepairAttempts: (map: Record<string, number>) => void;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -128,6 +130,7 @@ export function createSyncController(deps: SyncDependencies) {
     announcedThreadChatIds.clear();
     inFlightByUuid.clear();
     sawUndecryptable = false;
+    undecryptableUuids.clear();
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
     deps.localState.loadReadUuids().forEach((uuid) => reportedReadUuids.add(uuid));
@@ -649,6 +652,7 @@ export function createSyncController(deps: SyncDependencies) {
     // «Избранное» — просто пропускаем, чтобы не мусорить в переписке
     if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
       sawUndecryptable = true;
+      undecryptableUuids.add(stored.id);
       deps.log(`сообщение ${stored.id} не расшифровано — пропущено`);
       if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
       return;
@@ -753,9 +757,32 @@ export function createSyncController(deps: SyncDependencies) {
   // сообщение, не расшифрованное сейчас (E2E не поднялся, нет ключа), после
   // рестарта уже не пришло бы дельтой
   let sawUndecryptable = false;
+  // Какие именно uuid не прочитались за проход (conformance SYNC-2)
+  const undecryptableUuids = new Set<string>();
+  const REPAIR_ATTEMPTS = 3;
+
+  // Курсор придерживаем, пока непрочитанное не исчерпало попытки (десктоп —
+  // тот же потолок kRepairAttempts=3). Чистый проход очищает очередь.
+  function mayAdvanceDiskCursor(): boolean {
+    if (!sawUndecryptable) {
+      deps.localState.saveRepairAttempts({});
+      return true;
+    }
+    const attempts = deps.localState.loadRepairAttempts();
+    let mayAdvance = true;
+    undecryptableUuids.forEach((uuid) => {
+      const count = (attempts[uuid] || 0) + 1;
+      attempts[uuid] = count;
+      if (count < REPAIR_ATTEMPTS) mayAdvance = false;
+      else deps.log(`сообщение ${uuid} не прочитано за ${REPAIR_ATTEMPTS} попытки — пропускаем`);
+    });
+    deps.localState.saveRepairAttempts(attempts);
+    return mayAdvance;
+  }
 
   function persistCursor() {
-    if (!lastSeenUuid || sawUndecryptable || !deps.getE2e()) return;
+    if (!lastSeenUuid || !deps.getE2e()) return;
+    if (!mayAdvanceDiskCursor()) return;
     deps.localState.saveSyncCursor({ lastSeenUuid, sinceUpdated });
   }
 
@@ -786,6 +813,7 @@ export function createSyncController(deps: SyncDependencies) {
 
   async function runFullSync() {
     sawUndecryptable = false;
+    undecryptableUuids.clear();
     const store = deps.getStore();
     const connection = deps.getConnection()!;
     const token = deps.getToken();
@@ -841,6 +869,7 @@ export function createSyncController(deps: SyncDependencies) {
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
         sawUndecryptable = true;
+        undecryptableUuids.add(stored.id);
         deps.log(`сообщение ${stored.id} не расшифровано — пропущено (full sync)`);
         continue;
       }
@@ -909,6 +938,7 @@ export function createSyncController(deps: SyncDependencies) {
     const connection = deps.getConnection();
     if (!connection || !isSynced) return;
     sawUndecryptable = false;
+    undecryptableUuids.clear();
     await deps.groups.refreshMemberships();
     let messages: WireStoredMessage[];
     try {

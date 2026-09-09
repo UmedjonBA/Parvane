@@ -35,7 +35,8 @@ desktop `parvane/parvane_client.cpp` (`prepareIncoming` → `NotePendingAndMayAd
 - После N попыток (desktop: `kRepairAttempts` = 3) сообщение пропускается с
   записью в лог. История в этом случае восстанавливается авто-линковкой.
 
-Реализации: desktop — есть. web — НЕТ (курсор придерживается без ограничения).
+Реализации: desktop `NotePendingAndMayAdvance` (`tdata/parvane-pending.txt`);
+web `mayAdvanceDiskCursor` + `localState.loadRepairAttempts` (9 сен 2026).
 
 ## PROFILE-1. Профиль собеседника перечитывается по TTL
 
