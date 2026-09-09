@@ -78,7 +78,8 @@ public:
         std::int64_t sinceUpdated = 0,
         int timeoutMs = 3000,
         const SyncAuth *auth = nullptr,
-        std::vector<std::string> *readMessageIds = nullptr);
+        std::vector<std::string> *readMessageIds = nullptr,
+        std::string *notifySettings = nullptr);
 
     // Правка текста уже отправленного сообщения (только автор — проверяет шард).
     // Публикует ParvaneEvent<EditPayload> на msg.chat.edit.
@@ -110,6 +111,11 @@ public:
     // Уведомление другим устройствам того же пользователя о прочтении
     // (payload.read) — пометить сообщения прочитанными (снять непрочитанное).
     void onReadNotice(const std::string &self, std::function<void(std::vector<std::string>)> handler);
+    // Кросс-девайс настройки уведомлений: NotifyNotice {notify: json} в инбоксе.
+    void onNotifyNotice(const std::string &self, std::function<void(std::string)> handler);
+    // Опубликовать свои настройки уведомлений (msg.chat.setnotify, блоб веба).
+    void setNotify(const std::string &from, const std::string &settingsJson,
+                   const std::string &token);
 
     // Отметка о прочтении (получателем). msg.chat.read → read-галочка ✓✓.
     void markRead(const std::string &from, const std::string &messageId,

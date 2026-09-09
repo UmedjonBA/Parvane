@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_information.h"
 
+#include "parvane/parvane_client.h" // Parvane: профиль в identity
+
 #include "settings/sections/settings_main.h"
 #include "settings/settings_builder.h"
 #include "settings/settings_common_session.h"
@@ -747,8 +749,11 @@ void SetupBio(
 			countLeft < 0 ? st::boxTextFgError->c : std::optional<QColor>());
 	};
 	const auto save = [=] {
-		self->session().api().saveSelfBio(
-			TextUtilities::PrepareForSending(bio->getLastText()));
+		// Parvane: bio живёт в identity (setname), не в MTProto; локально —
+		// сразу, чтобы профиль обновился без ожидания сервера.
+		const auto text = TextUtilities::PrepareForSending(bio->getLastText());
+		self->setAbout(text);
+		Parvane::SetProfileFields({ .bio = text });
 	};
 
 	Info::Profile::AboutValue(

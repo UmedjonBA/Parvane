@@ -170,6 +170,12 @@ pub struct IssueRequest {
     /// (identity.telegram.confirm) — с ним issue выдаёт JWT.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_token: Option<String>,
+    /// Секрет доверия устройства (2FA): выдан identity после подтверждённого
+    /// входа в Telegram; с ним доверенное устройство входит без Telegram.
+    /// Раньше доверие висело на голом device_id, который каталог отдаёт
+    /// любому — второй фактор обходился при известном пароле.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_secret: Option<String>,
     /// IP клиента — подставляет gateway (X-Forwarded-For за прокси / пир);
     /// клиентское значение перезаписывается. Для лимитов по источнику.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -189,6 +195,10 @@ pub struct IssueResponse {
     pub login_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram_bot: Option<String>,
+    /// Новый секрет доверия (только после подтверждённого 2FA-входа) — клиент
+    /// сохраняет и предъявляет при следующих issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_secret: Option<String>,
 }
 
 /// Регистрация нового аккаунта. Отделена от логина (`issue`), чтобы `issue` не
@@ -302,6 +312,9 @@ pub struct TwoFactorResponse {
     pub enabled: bool,
     #[serde(default)]
     pub telegram_linked: bool,
+    /// При включении 2FA — секрет доверия для устройства, которое включило.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_secret: Option<String>,
 }
 
 /// Клиент опрашивает, подтверждён ли его pending-аккаунт (токен — доказательство

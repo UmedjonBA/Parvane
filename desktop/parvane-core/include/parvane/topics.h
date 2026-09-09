@@ -23,6 +23,7 @@ inline constexpr auto IdentityLinkGrant = "identity.link.grant";
 inline constexpr auto MsgSend = "msg.chat.send";
 inline constexpr auto MsgDelivered = "msg.chat.delivered";
 inline constexpr auto MsgRead = "msg.chat.read";
+inline constexpr auto MsgSetNotify = "msg.chat.setnotify"; // настройки уведомлений (кросс-девайс)
 inline constexpr auto MsgEdit = "msg.chat.edit";
 inline constexpr auto MsgDelete = "msg.chat.delete";
 inline constexpr auto MsgClear = "msg.chat.clear"; // скрыть «для меня» (очистка/удаление чата)

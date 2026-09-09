@@ -1811,8 +1811,13 @@ const methods = {
   async parvaneSetTwoFactor({ enabled }: { enabled: boolean }) {
     if (!connection) return undefined;
     const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled }));
-    const response = JSON.parse(raw) as { ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string };
+    const response = JSON.parse(raw) as {
+      ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string; trust_secret?: string;
+    };
     if (!response.ok) throw new Error(response.error || 'identity отклонил настройку');
+    // Устройство, включившее 2FA, получает секрет доверия сразу — иначе при
+    // следующей загрузке оно само попросило бы подтверждение в Telegram
+    if (response.trust_secret) connectionController.writeTrustSecret(store.self, response.trust_secret);
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
   },
 

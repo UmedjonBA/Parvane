@@ -113,11 +113,36 @@ export function createConnectionController(deps: ConnectionDependencies) {
     return `parvane:device:${user}`;
   }
 
+  // Секрет доверия для 2FA: identity выдаёт его ОДИН раз после подтверждения
+  // входа в Telegram, дальше доверенное устройство входит по паролю без
+  // Telegram, предъявляя секрет. Раньше доверие висело на голом device_id,
+  // который каталог отдаёт любому — второй фактор обходился при известном
+  // пароле (security-review 8 сен 2026).
+  function trustMirrorKey(user: string) {
+    return `parvane:trust:${user}`;
+  }
+
   function readDeviceIdMirror(user: string) {
     try {
       return localStorage.getItem(deviceMirrorKey(user)) || '';
     } catch {
       return '';
+    }
+  }
+
+  function readTrustSecret(user: string) {
+    try {
+      return localStorage.getItem(trustMirrorKey(user)) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function writeTrustSecret(user: string, secret: string) {
+    try {
+      if (secret) localStorage.setItem(trustMirrorKey(user), secret);
+    } catch {
+      // приватный режим — вход через Telegram будет спрашиваться каждый раз
     }
   }
 
@@ -148,17 +173,24 @@ export function createConnectionController(deps: ConnectionDependencies) {
       const raw = await activeConnection.request(
         TOPIC_IDENTITY_ISSUE,
         JSON.stringify({
-          user, password, device_id: deviceId || undefined, login_token: loginToken || undefined,
+          user,
+          password,
+          device_id: deviceId || undefined,
+          login_token: loginToken || undefined,
+          trust_secret: readTrustSecret(user) || undefined,
         }),
       );
-      return JSON.parse(raw) as {
+      const parsed = JSON.parse(raw) as {
         ok: boolean;
         token?: string;
         error?: string;
         twofa_required?: boolean;
         login_token?: string;
         telegram_bot?: string;
+        trust_secret?: string;
       };
+      if (parsed.trust_secret) writeTrustSecret(user, parsed.trust_secret);
+      return parsed;
     };
 
     let response = await issue();
@@ -568,6 +600,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   return {
     connectAndLogin,
+    writeTrustSecret,
     registerAccount,
     confirmEmail,
     fetchServerInfo,

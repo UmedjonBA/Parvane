@@ -30,6 +30,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 namespace {
 
+constexpr auto kParvaneRejectDelayMs = crl::time(300);
+
 constexpr auto kConfigBecomesOldIn = 2 * 60 * crl::time(1000);
 constexpr auto kConfigBecomesOldForBlockedIn = 8 * crl::time(1000);
 
@@ -1016,6 +1018,25 @@ void Instance::Private::sendRequest(
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId) {
+	// Parvane: сети MTProto за форком нет — клиент говорит с шардами через
+	// gateway. Раньше запрос уходил в никуда и ВИСЕЛ вечно: ни done, ни fail,
+	// поэтому любой не перехваченный нативный путь замирал (экран папок,
+	// выход из аккаунта, счётчики). Теперь каждый запрос сразу получает
+	// локальную ошибку, и нативный UI идёт по своей ветке отказа. Небольшая
+	// задержка — чтобы код, который на fail тут же повторяет запрос, не
+	// крутил главный поток впустую (conformance FAIL-1).
+	base::call_delayed(kParvaneRejectDelayMs, _instance, [
+			requestId,
+			callbacks = std::move(callbacks)]() mutable {
+		if (callbacks.fail) {
+			callbacks.fail(
+				Error::Local(
+					QStringLiteral("PARVANE_NO_MTPROTO"),
+					QStringLiteral("MTProto is disabled in the Parvane fork")),
+				Response{ .requestId = requestId });
+		}
+	});
+	return;
 	const auto session = getSession(shiftedDcId);
 
 	request->requestId = requestId;

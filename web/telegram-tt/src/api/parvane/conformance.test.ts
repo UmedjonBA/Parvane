@@ -104,6 +104,13 @@ describe('READ-1: прочитанное журналируется локаль
     expect(source).toMatch(/getFlags\(uuid\)\?\.read \|\| syncController\.hasReportedRead\(uuid\)/);
   });
 
+  it('desktop журналирует и повторяет прочитанное (READ-1)', () => {
+    const source = readDesktopSource();
+    expect(source).toMatch(/parvane-read\.txt/);
+    expect(source).toMatch(/void RetryUnconfirmedReads\(/);
+    expect(source).toMatch(/NoteReported\(ids\);/);
+  });
+
   it('web повторяет неподтверждённые msg.chat.read', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
     expect(source).toMatch(/retryUnconfirmedReads/);
@@ -126,6 +133,14 @@ describe('FAIL-1: ожидание без ответа запрещено', () =
     // Протухший JWT раньше тихо оставлял старый журнал на экране (8 сен 2026)
     expect(source).toMatch(/void OnAuthRejected\(const QString &reason\) \{/);
     expect(source).toMatch(/forcedLogOut\(\)/);
+  });
+
+  it('desktop: любой MTProto-запрос отдаётся в fail локальной ошибкой', () => {
+    const source = readFileSync(
+      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/mtproto/mtp_instance.cpp'),
+      'utf8',
+    );
+    expect(source).toMatch(/PARVANE_NO_MTPROTO/);
   });
 
   it('desktop не ждёт messages.getDialogFilters, которого не будет', () => {
