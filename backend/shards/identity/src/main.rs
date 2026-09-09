@@ -26,6 +26,7 @@ fn opt(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1128,8 +1129,9 @@ async fn handle_issue(
     };
 
     let resp = match do_issue(pool, encoding, &msg.payload).await {
-        Ok(IssueOutcome::Token(token)) => IssueResponse {
+        Ok(IssueOutcome::Token { token, trust_secret }) => IssueResponse {
             ok: true, token: Some(token), error: None, twofa_required: false, login_token: None, telegram_bot: None,
+            trust_secret,
         },
         Ok(IssueOutcome::TwoFactor { login_token }) => IssueResponse {
             ok: false,
@@ -1138,11 +1140,13 @@ async fn handle_issue(
             twofa_required: true,
             login_token: Some(login_token),
             telegram_bot: telegram_bot(),
+            trust_secret: None,
         },
         Err(e) => {
             error!("issue error: {}", e);
             IssueResponse {
                 ok: false, token: None, error: Some(e.to_string()), twofa_required: false, login_token: None, telegram_bot: None,
+                trust_secret: None,
             }
         }
     };
@@ -1153,10 +1157,24 @@ async fn handle_issue(
     }
 }
 
+/// Хэш секрета доверия для trusted_devices.secret_hash.
+fn trust_secret_hash(secret: &str) -> String {
+    B64.encode(Sha256::digest(secret.as_bytes()))
+}
+
+/// Новый секрет доверия (32 случайных байта, base64) + его хэш.
+fn new_trust_secret() -> (String, String) {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let secret = B64.encode(bytes);
+    let hash = trust_secret_hash(&secret);
+    (secret, hash)
+}
+
 /// Исход логина: JWT или ожидание подтверждения двухфакторного входа.
 #[derive(Debug)]
 enum IssueOutcome {
-    Token(String),
+    Token { token: String, trust_secret: Option<String> },
     TwoFactor { login_token: String },
 }
 
@@ -1164,7 +1182,14 @@ impl IssueOutcome {
     #[cfg(test)]
     fn token(&self) -> Option<&str> {
         match self {
-            IssueOutcome::Token(token) => Some(token),
+            IssueOutcome::Token { token, .. } => Some(token),
+            IssueOutcome::TwoFactor { .. } => None,
+        }
+    }
+    #[cfg(test)]
+    fn trust_secret(&self) -> Option<&str> {
+        match self {
+            IssueOutcome::Token { trust_secret, .. } => trust_secret.as_deref(),
             IssueOutcome::TwoFactor { .. } => None,
         }
     }
@@ -1227,17 +1252,25 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
             .fetch_one(pool)
             .await?;
     let device_id = req.device_id.as_deref().map(str::trim).unwrap_or("");
+    // Доверие — по СЕКРЕТУ, а не по device_id: device_id публичен (каталог
+    // прекеев отдаёт его любому), и раньше второй фактор обходился при
+    // известном пароле. Строки без хэша (до миграции 0014) не доверяем.
+    let presented_secret = req.trust_secret.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let trusted = if tg_2fa != 0 && telegram_id.is_some() && !device_id.is_empty() {
-        let row: Option<(i64,)> =
-            sqlx::query_as("SELECT 1 FROM trusted_devices WHERE username = ? AND device_id = ?")
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT secret_hash FROM trusted_devices WHERE username = ? AND device_id = ?")
                 .bind(&req.user)
                 .bind(device_id)
                 .fetch_optional(pool)
                 .await?;
-        row.is_some()
+        match (row, presented_secret) {
+            (Some((hash,)), Some(secret)) if !hash.is_empty() => trust_secret_hash(secret) == hash,
+            _ => false,
+        }
     } else {
         false
     };
+    let mut issued_trust_secret: Option<String> = None;
     if tg_2fa != 0 && telegram_id.is_some() && !trusted {
         let now = now_unix();
         let _ = sqlx::query("DELETE FROM login_links WHERE expires_at < ?").bind(now).execute(pool).await;
@@ -1256,14 +1289,17 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
                     Some((1,)) => {
                         sqlx::query("DELETE FROM login_links WHERE token = ?").bind(token).execute(pool).await?;
                         if !device_id.is_empty() {
+                            let (secret, hash) = new_trust_secret();
                             sqlx::query(
-                                "INSERT OR REPLACE INTO trusted_devices (username, device_id, confirmed_at) VALUES (?, ?, ?)",
+                                "INSERT OR REPLACE INTO trusted_devices (username, device_id, confirmed_at, secret_hash) VALUES (?, ?, ?, ?)",
                             )
                             .bind(&req.user)
                             .bind(device_id)
                             .bind(now)
+                            .bind(&hash)
                             .execute(pool)
                             .await?;
+                            issued_trust_secret = Some(secret);
                         }
                         true
                     }
@@ -1290,7 +1326,7 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
         .context("подпись JWT")?;
 
     info!("JWT выдан для: {}", req.user);
-    Ok(IssueOutcome::Token(token))
+    Ok(IssueOutcome::Token { token, trust_secret: issued_trust_secret })
 }
 
 /// Новый токен подтверждения входа (deep link боту). Прежние токены этого
@@ -1315,14 +1351,15 @@ async fn issue_login_token(pool: &SqlitePool, user: &str, device_id: &str) -> Re
 async fn handle_twofa(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match do_twofa(pool, decoding, &msg.payload).await {
-        Ok((enabled, telegram_linked)) => TwoFactorResponse { ok: true, error: None, enabled, telegram_linked },
-        Err(e) => TwoFactorResponse { ok: false, error: Some(e.to_string()), enabled: false, telegram_linked: false },
+        Ok((enabled, telegram_linked, trust_secret)) => TwoFactorResponse { ok: true, error: None, enabled, telegram_linked, trust_secret },
+        Err(e) => TwoFactorResponse { ok: false, error: Some(e.to_string()), enabled: false, telegram_linked: false, trust_secret: None },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
-/// (enabled, telegram_linked). Включить можно только при привязанном Telegram.
-async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<(bool, bool)> {
+/// (enabled, telegram_linked, trust_secret). Включить можно только при
+/// привязанном Telegram; устройство, включившее 2FA, получает секрет доверия.
+async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<(bool, bool, Option<String>)> {
     let req: TwoFactorRequest = serde_json::from_slice(payload).context("неверный JSON в TwoFactorRequest")?;
     let data = decode::<Claims>(&req.token, decoding, &Validation::new(Algorithm::HS256))
         .context("неверный или просроченный JWT")?;
@@ -1337,7 +1374,7 @@ async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> 
     };
     let telegram_linked = telegram_id.is_some();
     let Some(enabled) = req.enabled else {
-        return Ok((current != 0, telegram_linked));
+        return Ok((current != 0, telegram_linked, None));
     };
     if enabled && !telegram_linked {
         anyhow::bail!("сначала привяжите Telegram (подтверждение через бота)");
@@ -1351,21 +1388,28 @@ async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> 
         let _ = sqlx::query("DELETE FROM login_links WHERE username = ?").bind(&username).execute(pool).await;
         // При повторном включении все устройства подтверждают вход заново
         let _ = sqlx::query("DELETE FROM trusted_devices WHERE username = ?").bind(&username).execute(pool).await;
-    } else if let Some(dev) = data.claims.dev.as_deref().filter(|d| !d.is_empty()) {
-        // Устройство, с которого включили 2FA, уже вошло по паролю — считаем
-        // его доверенным (иначе десктоп, который переизвлекает JWT при каждом
-        // старте, сразу попросит подтверждение на том же устройстве)
-        let _ = sqlx::query(
-            "INSERT OR REPLACE INTO trusted_devices (username, device_id, confirmed_at) VALUES (?, ?, ?)",
-        )
-        .bind(&username)
-        .bind(dev)
-        .bind(now_unix())
-        .execute(pool)
-        .await;
+    }
+    let mut trust_secret = None;
+    if enabled {
+        if let Some(dev) = data.claims.dev.as_deref().filter(|d| !d.is_empty()) {
+            // Устройство, с которого включили 2FA, уже вошло по паролю — даём ему
+            // секрет доверия сразу (иначе десктоп, который переизвлекает JWT при
+            // каждом старте, тут же попросил бы подтверждение на том же устройстве)
+            let (secret, hash) = new_trust_secret();
+            let _ = sqlx::query(
+                "INSERT OR REPLACE INTO trusted_devices (username, device_id, confirmed_at, secret_hash) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&username)
+            .bind(dev)
+            .bind(now_unix())
+            .bind(&hash)
+            .execute(pool)
+            .await;
+            trust_secret = Some(secret);
+        }
     }
     info!("Двухфакторный вход {} для {}", if enabled { "включён" } else { "выключен" }, username);
-    Ok((enabled, telegram_linked))
+    Ok((enabled, telegram_linked, trust_secret))
 }
 
 // ── регистрация (отдельно от логина) ──────────────────────────────────────────
@@ -2260,15 +2304,23 @@ mod tests {
 
     fn issue_bytes_with_device(user: &str, password: &str, device: &str) -> Vec<u8> {
         serde_json::to_vec(&IssueRequest {
-            user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None,
+            user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None, trust_secret: None,
             client_ip: String::new(),
+        })
+        .unwrap()
+    }
+
+    fn issue_bytes_with_device_secret(user: &str, password: &str, device: &str, secret: &str) -> Vec<u8> {
+        serde_json::to_vec(&IssueRequest {
+            user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None,
+            trust_secret: Some(secret.into()), client_ip: String::new(),
         })
         .unwrap()
     }
 
     fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
         serde_json::to_vec(&IssueRequest {
-            user: user.into(), password: password.into(), device_id: None, login_token: None,
+            user: user.into(), password: password.into(), device_id: None, login_token: None, trust_secret: None,
             client_ip: String::new(),
         })
         .unwrap()
@@ -3013,7 +3065,7 @@ mod tests {
             user: user.into(),
             password: password.into(),
             device_id: Some("dev-1".into()),
-            login_token: Some(login_token.into()),
+            login_token: Some(login_token.into()), trust_secret: None,
             client_ip: String::new(),
         })
         .unwrap()
@@ -3034,16 +3086,22 @@ mod tests {
         let jwt = do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().unwrap().to_string();
 
         // По умолчанию выключено; включаем по JWT
-        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(), (false, true));
-        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap(), (true, true));
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(); (e, l) }, (false, true));
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap(); (e, l) }, (true, true));
         // Устройство, включившее 2FA (JWT с dev), — доверенное: входит без Telegram
         let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await;
         assert!(dev_jwt.is_ok(), "пока 2FA включено JWT без dev-устройства: {:?}", dev_jwt.as_ref().err());
-        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(), (false, true));
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(); (e, l) }, (false, true));
         let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().unwrap().to_string();
-        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&dev_jwt, Some(true))).await.unwrap(), (true, true));
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().is_some(),
-            "устройство, включившее 2FA, доверенное");
+        let (e, l, secret) = do_twofa(&pool, &dec, &twofa_bytes(&dev_jwt, Some(true))).await.unwrap();
+        assert_eq!((e, l), (true, true));
+        let secret = secret.expect("устройство, включившее 2FA, получает секрет доверия");
+        // device_id публичен (identity.prekeys.fetch отдаёт его любому): без
+        // секрета доверия НЕТ — иначе второй фактор обходился при известном пароле
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().is_none(),
+            "голый device_id больше не доверенный");
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw", "dev-enabler", &secret)).await.unwrap().token().is_some(),
+            "устройство, включившее 2FA, входит с секретом без Telegram");
         assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-other")).await.unwrap().token().is_none(),
             "другое устройство подтверждает вход");
         assert!(do_twofa(&pool, &dec, &twofa_bytes("bad.jwt", Some(false))).await.is_err());
@@ -3066,15 +3124,19 @@ mod tests {
         assert!(do_register_status(&pool, &status_bytes("two", &login_token2)).await.unwrap());
         let jwt2 = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", &login_token2)).await.unwrap();
         assert!(jwt2.token().is_some());
-        // Устройство dev-1 стало доверенным: вход по паролю без Telegram
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", "")).await.unwrap().token().is_some());
+        let secret2 = jwt2.trust_secret().expect("после подтверждения в Telegram выдан секрет доверия").to_string();
+        // dev-1 доверенное: по паролю + секрету без Telegram; без секрета — подтверждение
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", "")).await.unwrap().token().is_none(),
+            "dev-1 без секрета — снова подтверждение");
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw", "dev-1", &secret2)).await.unwrap().token().is_some());
         // Другое устройство — снова подтверждение (токен одноразовый и погашен)
         assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().is_none());
         // Отзыв устройства снимает доверие
         revoke_device(&pool, "two@local", "dev-1").await.unwrap();
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", "")).await.unwrap().token().is_none());
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw", "dev-1", &secret2)).await.unwrap().token().is_none(),
+            "отзыв снимает доверие даже с секретом");
         // Выключение — обычный логин без Telegram
-        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(), (false, true));
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(); (e, l) }, (false, true));
         assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().is_some());
     }
 
@@ -3086,6 +3148,6 @@ mod tests {
         let jwt = do_issue(&pool, &enc, &issue_bytes("plain", "pw")).await.unwrap().token().unwrap().to_string();
         let err = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap_err();
         assert!(err.to_string().contains("привяжите Telegram"), "{err}");
-        assert_eq!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(), (false, false));
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(); (e, l) }, (false, false));
     }
 }

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/local_url_handlers.h"
 
+#include "parvane/parvane_client.h" // Parvane: профиль в identity
+
 #include "core/deep_links/deep_links_router.h"
 #include "api/api_confirm_phone.h"
 #include "api/api_chat_filters.h"
@@ -965,24 +967,14 @@ bool ShowEditBirthday(
 	const auto user = controller->session().user();
 	const auto save = [=](Data::Birthday result) {
 		user->setBirthday(result);
-
-		using Flag = MTPaccount_UpdateBirthday::Flag;
-		using BFlag = MTPDbirthday::Flag;
-		user->session().api().request(MTPaccount_UpdateBirthday(
-			MTP_flags(result ? Flag::f_birthday : Flag()),
-			MTP_birthday(
-				MTP_flags(result.year() ? BFlag::f_year : BFlag()),
-				MTP_int(result.day()),
-				MTP_int(result.month()),
-				MTP_int(result.year()))
-		)).done(crl::guard(controller, [=] {
-			controller->showToast(tr::lng_settings_birthday_saved(tr::now));
-		})).fail(crl::guard(controller, [=](const MTP::Error &error) {
-			const auto type = error.type();
-			controller->showToast(type.startsWith(u"FLOOD_WAIT_"_q)
-				? tr::lng_flood_error(tr::now)
-				: (u"Error: "_q + error.type()));
-		})).handleFloodErrors().send();
+		// Parvane: дата рождения хранится в identity (setname.birthday,
+		// ISO YYYY-MM-DD; пустая строка — очистить), MTProto здесь нет.
+		const auto iso = result
+			? QString::asprintf("%04d-%02d-%02d",
+				result.year(), result.month(), result.day())
+			: QString();
+		Parvane::SetProfileFields({ .birthday = iso });
+		controller->showToast(tr::lng_settings_birthday_saved(tr::now));
 	};
 	if (captured.startsWith(u":suggestion_"_q)) {
 		const auto suggested = Data::Birthday::FromSerialized(

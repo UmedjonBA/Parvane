@@ -3,6 +3,8 @@
 // и зеркалит исходящие сообщения в шину (Фаза 3).
 #pragma once
 
+#include <optional>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -16,6 +18,10 @@ class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
 struct TextWithEntities;   // ui/text/text_entity.h (форматирование)
 struct PollData;           // data/data_poll.h (опросы)
+
+namespace Data {
+enum class DefaultNotify : uint8_t;
+} // namespace Data
 
 namespace Main {
 class Session;
@@ -171,6 +177,22 @@ void ClearLocalState();
 [[nodiscard]] bool ImportKeyBackup(const QString &path, const QString &password, QString *error);
 // Делалась ли копия на этом устройстве (маркер tdata/parvane-backup-done).
 [[nodiscard]] bool KeyBackupDone();
+
+// Профиль в identity (setname): bio / дата рождения (ISO YYYY-MM-DD, пусто —
+// очистить) / телефон / индекс цвета имени. Меняются только присланные поля.
+struct ProfileFields {
+	std::optional<QString> bio;
+	std::optional<QString> birthday;
+	std::optional<QString> phone;
+	std::optional<int> nameColor;
+};
+void SetProfileFields(const ProfileFields &fields);
+
+// Настройки уведомлений (мут/тихие/звук) — кросс-девайс через msg.chat.setnotify
+// тем же блобом, что у веба: {defaults, exceptions}. Звать с main-потока после
+// локального изменения (ApiWrap::updateNotifySettingsDelayed).
+void MirrorNotifySettings(not_null<const PeerData*> peer);
+void MirrorNotifyDefault(Data::DefaultNotify type);
 
 // Зеркалит исходящее текстовое сообщение (с форматированием) в шину. Адрес
 // получателя — из реестра по userId пира; если неизвестен/нет сессии — no-op.

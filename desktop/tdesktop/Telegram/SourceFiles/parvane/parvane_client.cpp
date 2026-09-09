@@ -23,6 +23,9 @@
 #include "data/data_send_action.h"
 #include "data/data_lastseen_status.h"
 #include "data/data_changes.h"
+#include "data/data_birthday.h"                  // профиль: дата рождения
+#include "data/notify/data_notify_settings.h"   // уведомления кросс-девайс
+#include "data/notify/data_peer_notify_settings.h"
 #include "data/data_chat_filters.h" // папки (folders): персист + restore
 #include "data/data_histories.h"
 #include "base/call_delayed.h"
@@ -116,6 +119,7 @@ void DecCacheRemove(const QString &id);
 [[nodiscard]] bool DecCacheEmpty();
 [[nodiscard]] nlohmann::json DecCacheSnapshot();
 void OnAuthRejected(const QString &reason); // fwd: отказ JWT → экран входа
+void ApplyNotifyBlob(const QString &json);   // fwd: настройки уведомлений с другого устройства
 
 namespace {
 
@@ -213,6 +217,20 @@ QHash<QString, QString> g_displayNames; // адрес → отображаемо
 // дёргать identity на каждое сообщение.
 QHash<QString, qint64> g_resolvedAt;
 constexpr qint64 kProfileTtlMs = 10 * 60 * 1000;
+// READ-1 (conformance): прочитанное ЭТИМ устройством. Журнал на диске
+// (переживает рестарт — бейдж не возвращается), очередь неподтверждённых
+// (msg.chat.read уходит без ответа — повторяем, пока сервер не вернёт
+// read=true / ReadNotice) и счётчик попыток. Под g_sessionMutex.
+QSet<QString> g_reportedRead;
+QSet<QString> g_unconfirmedRead;
+QHash<QString, int> g_readRetries;
+constexpr int kReadRetryMax = 3;
+constexpr int kReadRetryPerPass = 50;
+// Уведомления (кросс-девайс): наш снимок блоба веба {defaults, exceptions}.
+// Только main-поток.
+QHash<QString, QString> g_notifyExceptions; // адрес → JSON настроек
+QHash<QString, QString> g_notifyDefaults;   // users|groups|channels → JSON
+bool g_applyingNotify = false;              // применяем чужое — не зеркалим назад
 QHash<QString, QString> g_avatarFileIds; // адрес → file_id аватара (cloud)
 QSet<QString> g_avatarDownloaded;        // аватары, уже скачанные/в процессе
 QHash<QString, QImage> g_avatarImages;   // адрес → скачанная картинка (кэш для
@@ -1215,6 +1233,161 @@ void SavePending(const QHash<QString, int> &pending) {
 	return mayAdvance;
 }
 
+// ── READ-1: журнал прочитанного + очередь подтверждения ─────────────────────
+[[nodiscard]] QString ReadJournalPath() {
+	return cWorkingDir() + u"tdata/parvane-read.txt"_q;
+}
+
+// main-поток, ДО воспроизведения журнала истории (AfterSessionReady).
+void LoadReadJournal() {
+	QFile f(ReadJournalPath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	const auto lines = QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts);
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	for (const auto &line : lines) {
+		g_reportedRead.insert(line.trimmed());
+	}
+}
+
+void AppendReadJournal(const std::vector<std::string> &ids) { // worker
+	QFile f(ReadJournalPath());
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+		return;
+	}
+	for (const auto &id : ids) {
+		f.write(id.data(), qint64(id.size()));
+		f.write("\n");
+	}
+}
+
+[[nodiscard]] bool IsReportedRead(const QString &uuid) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return g_reportedRead.contains(uuid);
+}
+
+void NoteReported(const std::vector<std::string> &ids) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	for (const auto &id : ids) {
+		const auto q = QString::fromStdString(id);
+		g_reportedRead.insert(q);
+		g_unconfirmedRead.insert(q);
+	}
+}
+
+void ConfirmReads(const std::vector<std::string> &ids) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	for (const auto &id : ids) {
+		const auto q = QString::fromStdString(id);
+		g_unconfirmedRead.remove(q);
+		g_readRetries.remove(q);
+	}
+}
+
+// Повторить неподтверждённые msg.chat.read (worker): не больше
+// kReadRetryPerPass за проход и kReadRetryMax раз на сообщение.
+void RetryUnconfirmedReads(
+		parvane::MessengerClient *m,
+		const std::string &from,
+		const std::string &token) {
+	auto batch = std::vector<std::string>();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (auto it = g_unconfirmedRead.begin();
+			it != g_unconfirmedRead.end() && int(batch.size()) < kReadRetryPerPass;) {
+			const auto attempts = g_readRetries.value(*it, 0) + 1;
+			if (attempts > kReadRetryMax) {
+				g_readRetries.remove(*it);
+				it = g_unconfirmedRead.erase(it);
+				continue;
+			}
+			g_readRetries.insert(*it, attempts);
+			batch.push_back(it->toStdString());
+			++it;
+		}
+	}
+	for (const auto &id : batch) {
+		try {
+			m->markRead(from, id, token);
+		} catch (const std::exception &) {
+		}
+	}
+	if (!batch.empty()) {
+		LOG(("Parvane: повторно отправлено %1 msg.chat.read без подтверждения")
+			.arg(int(batch.size())));
+	}
+}
+
+// ── уведомления: снимок блоба веба + персист ────────────────────────────────
+[[nodiscard]] QString NotifyStatePath() {
+	return cWorkingDir() + u"tdata/parvane-notify.json"_q;
+}
+
+[[nodiscard]] QString NotifyBlob() { // main
+	auto j = nlohmann::json::object();
+	j["defaults"] = nlohmann::json::object();
+	j["exceptions"] = nlohmann::json::object();
+	for (auto it = g_notifyDefaults.constBegin(); it != g_notifyDefaults.constEnd(); ++it) {
+		const auto v = nlohmann::json::parse(it.value().toStdString(), nullptr, false);
+		if (v.is_object()) j["defaults"][it.key().toStdString()] = v;
+	}
+	for (auto it = g_notifyExceptions.constBegin(); it != g_notifyExceptions.constEnd(); ++it) {
+		const auto v = nlohmann::json::parse(it.value().toStdString(), nullptr, false);
+		if (v.is_object()) j["exceptions"][it.key().toStdString()] = v;
+	}
+	return QString::fromStdString(j.dump());
+}
+
+void SaveNotifyState() { // main
+	QFile f(NotifyStatePath());
+	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		f.write(NotifyBlob().toUtf8());
+	}
+}
+
+void LoadNotifyState() { // main
+	QFile f(NotifyStatePath());
+	if (!f.open(QIODevice::ReadOnly)) {
+		return;
+	}
+	const auto j = nlohmann::json::parse(f.readAll().toStdString(), nullptr, false);
+	if (!j.is_object()) {
+		return;
+	}
+	for (const char *section : { "defaults", "exceptions" }) {
+		if (!j.contains(section) || !j[section].is_object()) continue;
+		auto &target = (std::string(section) == "defaults") ? g_notifyDefaults : g_notifyExceptions;
+		for (auto it = j[section].begin(); it != j[section].end(); ++it) {
+			target.insert(QString::fromStdString(it.key()), QString::fromStdString(it.value().dump()));
+		}
+	}
+}
+
+// ── секрет доверия (2FA) ────────────────────────────────────────────────────
+// Выдаётся identity ОДИН раз после подтверждённого входа в Telegram; с ним
+// доверенное устройство входит по паролю без Telegram. device_id для этого не
+// годится — он публичен (каталог прекеев отдаёт его любому).
+[[nodiscard]] QString TrustSecretPath(const QString &user) {
+	return cWorkingDir() + u"tdata/parvane-trust-"_q + user + u".txt"_q;
+}
+
+[[nodiscard]] QString ReadTrustSecret(const QString &user) {
+	QFile f(TrustSecretPath(user));
+	return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()).trimmed() : QString();
+}
+
+void WriteTrustSecret(const QString &user, const QString &secret) {
+	if (user.isEmpty() || secret.isEmpty()) {
+		return;
+	}
+	QFile f(TrustSecretPath(user));
+	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		f.write(secret.toUtf8());
+		LOG(("Parvane: получен секрет доверия устройства (2FA) для %1").arg(user));
+	}
+}
+
 // ── персист логин-состояния (self+token) ─────────────────────────────────────
 // tdesktop на РЕСТАРТЕ возобновляет кэшированную сессию, минуя экран логина
 // (SetSelf не зовётся). Чтобы Parvane-слой поднялся с той же личностью,
@@ -1443,6 +1616,9 @@ IssueResult Issue(
 			// Двухфакторный вход: подтверждённый в Telegram токен входа
 			reqJson["login_token"] = loginToken.toStdString();
 		}
+		if (const auto secret = ReadTrustSecret(user); !secret.isEmpty()) {
+			reqJson["trust_secret"] = secret.toStdString(); // доверенное устройство
+		}
 		const auto raw = transport->request(
 			parvane::topics::IdentityIssue,
 			reqJson.dump(),
@@ -1455,6 +1631,9 @@ IssueResult Issue(
 		}
 		if (resp.error) {
 			out.error = QString::fromStdString(*resp.error);
+		}
+		if (rawJson.contains("trust_secret") && rawJson["trust_secret"].is_string()) {
+			WriteTrustSecret(user, QString::fromStdString(rawJson["trust_secret"].get<std::string>()));
 		}
 		if (rawJson.value("twofa_required", false)
 			&& rawJson.contains("login_token") && rawJson["login_token"].is_string()) {
@@ -1541,6 +1720,11 @@ TwoFactorState RequestTwoFactor(const std::optional<bool> &enabled) {
 		out.ok = resp.value("ok", false);
 		out.enabled = resp.value("enabled", false);
 		out.telegramLinked = resp.value("telegram_linked", false);
+		if (resp.contains("trust_secret") && resp["trust_secret"].is_string()) {
+			// Устройство, включившее 2FA, доверенное сразу — иначе при следующем
+			// старте оно само попросило бы подтверждение в Telegram
+			WriteTrustSecret(SelfAddress(), QString::fromStdString(resp["trust_secret"].get<std::string>()));
+		}
 		if (resp.contains("error") && resp["error"].is_string()) {
 			out.error = QString::fromStdString(resp["error"].get<std::string>());
 		}
@@ -1789,6 +1973,7 @@ bool StartSession() {
 		});
 		// Прочтение с другого своего устройства → снять непрочитанное здесь.
 		g_messenger->onReadNotice(self, [](std::vector<std::string> ids) {
+			ConfirmReads(ids); // READ-1: сервер подтвердил наши msg.chat.read
 			auto set = QSet<QString>();
 			for (const auto &id : ids) {
 				set.insert(QString::fromStdString(id));
@@ -1798,6 +1983,10 @@ bool StartSession() {
 					MarkUuidsReadLocal(session, set);
 				}
 			});
+		});
+		// Настройки уведомлений с другого устройства (NotifyNotice в инбоксе).
+		g_messenger->onNotifyNotice(self, [](std::string json) {
+			crl::on_main([json] { ApplyNotifyBlob(QString::fromStdString(json)); });
 		});
 		// delivered (после ack получателя) → пинок синка: обновит ✓-статусы.
 		g_messenger->onDelivered(self, [](std::string id) {
@@ -2642,6 +2831,8 @@ void MirrorRead(std::int64_t peerId) {
 			} catch (const std::exception &) {
 			}
 		}
+		NoteReported(ids);      // READ-1: помним локально и ждём подтверждения
+		AppendReadJournal(ids); // переживает рестарт
 		LOG(("Parvane: отмечено прочитанным %1 входящих").arg(int(ids.size())));
 	});
 }
@@ -3844,6 +4035,7 @@ void ResolveNames(const QStringList &addresses) {
 		}
 		auto names = QHash<QString, QString>();
 		auto avatars = QHash<QString, QString>();
+		auto profiles = QHash<QString, QString>(); // адрес → UserInfo JSON (bio/birthday/…)
 		try {
 			const auto reply = t->request(
 				"identity.user.resolve", reqStr, 3000);
@@ -3863,6 +4055,7 @@ void ResolveNames(const QStringList &addresses) {
 						avatars.insert(addr, QString::fromStdString(
 							u["avatar"].get<std::string>()));
 					}
+					profiles.insert(addr, QString::fromStdString(u.dump()));
 					// Публичный ключ звонков → кэш для проверки подписи SDP.
 					if (u.contains("pubkey") && u["pubkey"].is_string()) {
 						const auto pk = u["pubkey"].get<std::string>();
@@ -3876,10 +4069,10 @@ void ResolveNames(const QStringList &addresses) {
 		} catch (const std::exception &) {
 			return;
 		}
-		if (names.isEmpty() && avatars.isEmpty()) {
+		if (names.isEmpty() && avatars.isEmpty() && profiles.isEmpty()) {
 			return;
 		}
-		crl::on_main([names, avatars] {
+		crl::on_main([names, avatars, profiles] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
@@ -3893,6 +4086,39 @@ void ResolveNames(const QStringList &addresses) {
 			}
 			for (auto it = avatars.constBegin(); it != avatars.constEnd(); ++it) {
 				NoteAvatar(it.key(), it.value());
+			}
+			// Профильные поля из identity (bio, дата рождения, телефон, цвет
+			// имени) — в синтезированный UserData; свои тоже (настройки их
+			// показывают через Info::Profile::*Value).
+			for (auto it = profiles.constBegin(); it != profiles.constEnd(); ++it) {
+				const auto user = session->data().userLoaded(
+					UserId(BareId(IdForAddress(it.key()))));
+				if (!user) {
+					continue;
+				}
+				const auto j = nlohmann::json::parse(it.value().toStdString(), nullptr, false);
+				if (!j.is_object()) {
+					continue;
+				}
+				if (j.contains("bio") && j["bio"].is_string()) {
+					user->setAbout(QString::fromStdString(j["bio"].get<std::string>()));
+				}
+				if (j.contains("birthday") && j["birthday"].is_string()) {
+					const auto parts = QString::fromStdString(
+						j["birthday"].get<std::string>()).split('-');
+					user->setBirthday((parts.size() == 3)
+						? Data::Birthday(parts[2].toInt(), parts[1].toInt(), parts[0].toInt())
+						: Data::Birthday());
+				}
+				if (j.contains("phone") && j["phone"].is_string()) {
+					user->setPhone(QString::fromStdString(j["phone"].get<std::string>()));
+				}
+				if (j.contains("name_color") && j["name_color"].is_number_integer()) {
+					const auto color = j["name_color"].get<int>();
+					if (color >= 0 && color < 256) {
+						user->changeColorIndex(uint8(color));
+					}
+				}
 			}
 		});
 	});
@@ -4955,7 +5181,7 @@ void injectPollMessage(
 	g_msgIdToUuid.insert(msgId.bare, uuid);
 	g_mediaContentByMsgId.insert(msgId.bare,
 		QString::fromStdString(sm.content.dump())); // для пересылки опроса
-	if (!isOwn && !isGroup) {
+	if (!isOwn && !isGroup && !IsReportedRead(uuid)) {
 		g_unreadIncoming[peerId].push_back(uuid);
 	}
 	const auto item = session->data().addNewMessage(
@@ -5596,7 +5822,7 @@ void injectOnMain(
 				g_packRefByDocId.insert(docIdFromFileId(fileId),
 					QString::fromStdString(c["pack_ref"].dump()));
 			}
-			if (!out) {
+			if (!out && !IsReportedRead(uuid)) {
 				g_unreadIncoming[peerId].push_back(uuid);
 			}
 			const auto jstr = [&](const char *k) {
@@ -5681,7 +5907,21 @@ void injectOnMain(
 		}
 	}
 	if (added > 0) {
-		LOG(("Parvane: инъецировано %1 сообщений").arg(added));
+		{
+		// READ-1: входящие, которые ЭТО устройство уже читало (журнал на диске),
+		// после воспроизведения/синка не должны возвращать бейдж.
+		auto reported = QSet<QString>();
+		for (const auto &sm : msgs) {
+			const auto q = QString::fromStdString(sm.id);
+			if (sm.from != selfStd && IsReportedRead(q)) {
+				reported.insert(q);
+			}
+		}
+		if (!reported.isEmpty()) {
+			MarkUuidsReadLocal(session, reported);
+		}
+	}
+	LOG(("Parvane: инъецировано %1 сообщений").arg(added));
 	}
 }
 
@@ -6302,6 +6542,174 @@ void SetDisplayName(const QString &name) {
 	});
 }
 
+void SetProfileFields(const ProfileFields &fields) {
+	// identity.user.setname требует display_name — шлём текущее (каталог уже
+	// резолвил себя при старте), остальные поля — только присланные.
+	auto req = parvane::json{
+		{ "token", Token().toStdString() },
+		{ "display_name", DisplayNameFor(SelfAddress()).toStdString() },
+	};
+	if (fields.bio) req["bio"] = fields.bio->toStdString();
+	if (fields.birthday) req["birthday"] = fields.birthday->toStdString();
+	if (fields.phone) req["phone"] = fields.phone->toStdString();
+	if (fields.nameColor) req["name_color"] = *fields.nameColor;
+	crl::async([req] {
+		parvane::ITransport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return;
+		}
+		try {
+			t->request("identity.user.setname", req.dump(), 3000);
+			LOG(("Parvane: профиль обновлён (%1)").arg(QString::fromStdString(req.dump()).left(120)));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: профиль не обновлён: %1").arg(QString::fromUtf8(e.what())));
+		}
+	});
+}
+
+namespace {
+
+// Блоб веба → tdesktop. MuteValue: mutedUntil 0 — снять, MAX_INT32 — навсегда,
+// иначе абсолютное время.
+[[nodiscard]] std::optional<Data::MuteValue> MuteFromWeb(const nlohmann::json &s) {
+	if (!s.contains("mutedUntil") || !s["mutedUntil"].is_number()) {
+		return std::nullopt;
+	}
+	const auto until = s["mutedUntil"].get<std::int64_t>();
+	if (until <= 0) {
+		return Data::MuteValue{ .unmute = true };
+	}
+	if (until >= 2147483647LL) {
+		return Data::MuteValue{ .forever = true };
+	}
+	const auto left = int(until - QDateTime::currentSecsSinceEpoch());
+	return (left > 0) ? Data::MuteValue{ .period = left } : Data::MuteValue{ .unmute = true };
+}
+
+[[nodiscard]] std::optional<bool> SilentFromWeb(const nlohmann::json &s) {
+	return (s.contains("isSilentPosting") && s["isSilentPosting"].is_boolean())
+		? std::optional<bool>(s["isSilentPosting"].get<bool>())
+		: std::nullopt;
+}
+
+// tdesktop → блоб веба (те же ключи, что у ApiPeerNotifySettings).
+[[nodiscard]] QString NotifyToWeb(const Data::PeerNotifySettings &n) {
+	auto s = nlohmann::json::object();
+	if (const auto until = n.muteUntil()) s["mutedUntil"] = *until;
+	if (const auto silent = n.silentPosts()) s["isSilentPosting"] = *silent;
+	if (const auto sound = n.sound()) s["hasSound"] = !sound->none;
+	return QString::fromStdString(s.dump());
+}
+
+[[nodiscard]] QString DefaultKey(Data::DefaultNotify type) {
+	return (type == Data::DefaultNotify::User) ? u"users"_q
+		: (type == Data::DefaultNotify::Group) ? u"groups"_q
+		: u"channels"_q;
+}
+
+void PublishNotifyBlob() { // main → worker
+	const auto blob = NotifyBlob().toStdString();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::MessengerClient *m = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			m = g_messenger.get();
+		}
+		if (!m) {
+			return;
+		}
+		try {
+			m->setNotify(from, blob, token);
+		} catch (const std::exception &) {
+		}
+	});
+}
+
+struct ApplyingNotifyGuard {
+	ApplyingNotifyGuard() { g_applyingNotify = true; }
+	~ApplyingNotifyGuard() { g_applyingNotify = false; }
+};
+
+} // namespace
+
+// Пришло с другого устройства (NotifyNotice / notify_settings в sync). main.
+void ApplyNotifyBlob(const QString &json) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	const auto j = nlohmann::json::parse(json.toStdString(), nullptr, false);
+	if (!j.is_object()) {
+		return;
+	}
+	auto &settings = session->data().notifySettings();
+	const auto guard = ApplyingNotifyGuard(); // локальные хуки не зеркалят обратно
+	if (j.contains("defaults") && j["defaults"].is_object()) {
+		for (auto it = j["defaults"].begin(); it != j["defaults"].end(); ++it) {
+			const auto key = QString::fromStdString(it.key());
+			auto type = std::optional<Data::DefaultNotify>();
+			if (key == u"users"_q) type = Data::DefaultNotify::User;
+			else if (key == u"groups"_q) type = Data::DefaultNotify::Group;
+			else if (key == u"channels"_q) type = Data::DefaultNotify::Broadcast;
+			if (!type) {
+				continue;
+			}
+			g_notifyDefaults.insert(key, QString::fromStdString(it.value().dump()));
+			if (const auto mute = MuteFromWeb(it.value())) {
+				settings.defaultUpdate(*type, *mute, SilentFromWeb(it.value()));
+			}
+		}
+	}
+	if (j.contains("exceptions") && j["exceptions"].is_object()) {
+		for (auto it = j["exceptions"].begin(); it != j["exceptions"].end(); ++it) {
+			const auto address = QString::fromStdString(it.key());
+			g_notifyExceptions.insert(address, QString::fromStdString(it.value().dump()));
+			if (g_knownGroups.contains(address)) {
+				continue; // группы: пир-чат по адресу — отдельная задача
+			}
+			const auto peer = ensurePeerUser(session, IdForAddress(address), address);
+			if (const auto mute = MuteFromWeb(it.value())) {
+				settings.update(peer, *mute, SilentFromWeb(it.value()));
+			}
+		}
+	}
+	SaveNotifyState();
+	LOG(("Parvane: настройки уведомлений применены с другого устройства"));
+}
+
+void MirrorNotifySettings(not_null<const PeerData*> peer) {
+	if (g_applyingNotify || !peer->isUser()) {
+		return; // применяем чужое / группы пока не зеркалим
+	}
+	const auto address = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	if (address.isEmpty()) {
+		return;
+	}
+	g_notifyExceptions.insert(address, NotifyToWeb(peer->notify()));
+	SaveNotifyState();
+	PublishNotifyBlob();
+}
+
+void MirrorNotifyDefault(Data::DefaultNotify type) {
+	if (g_applyingNotify) {
+		return;
+	}
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	g_notifyDefaults.insert(DefaultKey(type),
+		NotifyToWeb(session->data().notifySettings().defaultSettings(type)));
+	SaveNotifyState();
+	PublishNotifyBlob();
+}
+
 void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 	if (!selfPeer || image.isNull()) {
 		return;
@@ -6381,6 +6789,7 @@ void PumpReceive() {
 		}
 		std::vector<parvane::StoredMessage> msgs;
 		std::vector<std::string> readIds; // кросс-девайс прочитанное
+		std::string notifyJson;           // кросс-девайс настройки уведомлений
 		try {
 			for (;;) {
 				// Подписанный sync: device_id (подмена per-device копии на
@@ -6392,9 +6801,13 @@ void PumpReceive() {
 				auth.signer = [](const std::string &d) { return parvane::e2e::sign(d); };
 				auth.extra = [](const std::string &d) { return parvane::e2e::extraSignatures(d); };
 				std::vector<std::string> pageRead;
+				std::string pageNotify;
 				auto page = m->sync(self, token, cursorId, cursorUpd, 15000,
-					parvane::e2e::ready() ? &auth : nullptr, &pageRead);
+					parvane::e2e::ready() ? &auth : nullptr, &pageRead, &pageNotify);
 				readIds.insert(readIds.end(), pageRead.begin(), pageRead.end());
+				if (!pageNotify.empty()) {
+					notifyJson = pageNotify;
+				}
 				if (page.empty()) {
 					break;
 				}
@@ -6423,6 +6836,21 @@ void PumpReceive() {
 				OnAuthRejected(what); // истёк на ходу — не молчим
 			}
 			return;
+		}
+		// READ-1: read=true у входящих и ReadNotice — подтверждение наших
+		// msg.chat.read; остальное неподтверждённое повторяем (ограниченно).
+		{
+			auto confirmed = std::vector<std::string>();
+			for (const auto &sm : msgs) {
+				if (sm.read) confirmed.push_back(sm.id);
+			}
+			ConfirmReads(confirmed);
+			ConfirmReads(readIds);
+			RetryUnconfirmedReads(m, self, token);
+		}
+		// Настройки уведомлений с другого устройства (из sync).
+		if (!notifyJson.empty()) {
+			crl::on_main([notifyJson] { ApplyNotifyBlob(QString::fromStdString(notifyJson)); });
 		}
 		// Кросс-девайс прочитанное можно применить даже без новых сообщений.
 		auto readSet = QSet<QString>();
@@ -7357,6 +7785,8 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
 		// диска, иначе Parvane-слой поднимется без личности (отправка/приём/E2E
 		// не работают).
+		LoadReadJournal();  // READ-1: до воспроизведения журнала истории
+		LoadNotifyState();  // снимок настроек уведомлений
 		if (SelfAddress().isEmpty()) {
 			RestoreSessionCreds();
 		}

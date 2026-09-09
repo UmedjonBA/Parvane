@@ -64,7 +64,8 @@ std::vector<StoredMessage> MessengerClient::sync(
         std::int64_t sinceUpdated,
         int timeoutMs,
         const SyncAuth *auth,
-        std::vector<std::string> *readMessageIds) {
+        std::vector<std::string> *readMessageIds,
+        std::string *notifySettings) {
     SyncRequestPayload req;
     req.last_seen_id = lastSeenId.empty() ? zeroCursor() : lastSeenId;
     req.since_updated = sinceUpdated;
@@ -96,6 +97,9 @@ std::vector<StoredMessage> MessengerClient::sync(
     auto resp = SyncResponsePayload::fromJson(rawJson);
     if (readMessageIds) {
         *readMessageIds = std::move(resp.read_message_ids);
+    }
+    if (notifySettings) {
+        *notifySettings = std::move(resp.notify_settings);
     }
     return resp.messages;
 }
@@ -176,6 +180,27 @@ void MessengerClient::onReadNotice(const std::string &self,
                      } catch (...) {
                      }
                  });
+}
+
+void MessengerClient::onNotifyNotice(const std::string &self,
+                                     std::function<void(std::string)> handler) {
+    _t.subscribe(topics::msgInbox(self),
+                 [handler = std::move(handler)](std::string, std::string payload) {
+                     try {
+                         const auto ev = json::parse(payload);
+                         const auto &p = ev.contains("payload") ? ev["payload"] : ev;
+                         if (!p.contains("notify") || !p["notify"].is_string()) return;
+                         handler(p["notify"].get<std::string>());
+                     } catch (...) {
+                     }
+                 });
+}
+
+void MessengerClient::setNotify(const std::string &from, const std::string &settingsJson,
+                                const std::string &token) {
+    const json payload{{"settings", settingsJson}};
+    _t.publish(topics::MsgSetNotify,
+               makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }
 
 void MessengerClient::markRead(

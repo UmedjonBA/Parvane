@@ -57,15 +57,18 @@ desktop `g_resolvedAt` + `kProfileTtlMs` (10 мин), включая собст�
 - считать сообщение прочитанным по объединению локального журнала и серверного флага;
 - повторять публикацию, пока сервер не вернёт `read=true`.
 
-Реализации: web `localState.loadReadUuids/saveReadUuids`,
-`retryUnconfirmedReads`. desktop — НЕТ (кросс-девайс прочитанное только читается).
+Реализации: web `localState.loadReadUuids/saveReadUuids`, `retryUnconfirmedReads`;
+desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 сен 2026).
 
 ## FAIL-1. Ожидание без ответа запрещено
 
 Любой путь, ждущий сеть, обязан иметь конец: таймаут, ветку ошибки или
 локальное завершение. Нативный UI форков ждёт MTProto, которого нет.
 
-- desktop: `ChatFilters::load` завершается локально (иначе экран «Папки» висел).
+- desktop: ОБОБЩЕНО 9 сен 2026 — `MTP::Instance::Private::sendRequest` любой
+  запрос отдаёт в `fail` локальной ошибкой `PARVANE_NO_MTPROTO` (с задержкой
+  300 мс). Точечные локальные завершения (`ChatFilters::load`, выход, отказ
+  авторизации) остаются.
 - web: `useModuleLoader` ловит отказ импорта, `moduleLoader` не кэширует
   отвергнутый промис, устаревший чанк лечится одноразовой перезагрузкой.
 

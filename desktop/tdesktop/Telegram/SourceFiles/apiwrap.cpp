@@ -2000,12 +2000,16 @@ void ApiWrap::updateNotifySettingsDelayed(
 }
 
 void ApiWrap::updateNotifySettingsDelayed(not_null<const PeerData*> peer) {
+	// Parvane: мут/настройки уведомлений уезжают на другие устройства через
+	// msg.chat.setnotify (блоб веба), MTProto-запрос ниже — заглушка.
+	Parvane::MirrorNotifySettings(peer);
 	if (_updateNotifyPeers.emplace(peer).second) {
 		_updateNotifyTimer.callOnce(kNotifySettingSaveTimeout);
 	}
 }
 
 void ApiWrap::updateNotifySettingsDelayed(Data::DefaultNotify type) {
+	Parvane::MirrorNotifyDefault(type); // Parvane: дефолты по типам чатов — тоже
 	if (_updateNotifyDefaults.emplace(type).second) {
 		_updateNotifyTimer.callOnce(kNotifySettingSaveTimeout);
 	}
