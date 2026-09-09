@@ -1860,12 +1860,19 @@ Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {
 		user
 	) | rpl::start_spawning(result->lifetime());
 
-	const auto channelLabelFactory = [=](rpl::producer<ChannelData*> c) {
+	const auto channelLabelFactory = [=](rpl::producer<PeerData*> c) {
 		return rpl::combine(
 			tr::lng_info_personal_channel_label(tr::marked),
 			std::move(c)
-		) | rpl::map([](TextWithEntities &&text, ChannelData *channel) {
-			const auto count = channel ? channel->membersCount() : 0;
+		) | rpl::map([](TextWithEntities &&text, PeerData *channel) {
+			// Parvane: личный канал — ChatData группы Parvane.
+			const auto count = !channel
+				? 0
+				: channel->isChannel()
+				? channel->asChannel()->membersCount()
+				: channel->isChat()
+				? channel->asChat()->count
+				: 0;
 			if (count > 1) {
 				text.append(' ')
 				.append(Ui::kQBullet)
@@ -1917,7 +1924,7 @@ Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {
 
 		auto text = rpl::duplicate(
 			channel
-		) | rpl::map([=](ChannelData *channel) {
+		) | rpl::map([=](PeerData *channel) {
 			return channel ? NameValue(channel) : rpl::single(QString());
 		}) | rpl::flatten_latest() | rpl::map([](const QString &name) {
 			return name.isEmpty() ? TextWithEntities() : tr::link(name);
@@ -1935,7 +1942,13 @@ Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {
 				const ClickHandlerPtr &handler,
 				Qt::MouseButton button) {
 			if (const auto channelId = user->personalChannelId()) {
-				window->showPeerInfo(peerFromChannel(channelId));
+				// Parvane: id личного канала — id ChatData группы Parvane
+				if (const auto chat = user->owner().chatLoaded(
+						ChatId(channelId.bare))) {
+					window->showPeerInfo(chat);
+				} else {
+					window->showPeerInfo(peerFromChannel(channelId));
+				}
 			}
 			return false;
 		});
@@ -2082,7 +2095,7 @@ Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {
 					object_ptr<Ui::FlatLabel>(
 						inner,
 						channelLabelFactory(
-							rpl::single(item->history()->peer->asChannel())),
+							rpl::single(item->history()->peer.get())),
 						st::infoLabel),
 					QMargins(
 						st::infoProfilePersonalChannelPadding.left(),
@@ -2154,7 +2167,7 @@ Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {
 
 		rpl::duplicate(
 			channel
-		) | rpl::on_next([=](ChannelData *channel) {
+		) | rpl::on_next([=](PeerData *channel) {
 			if (!channel && messageChannelWrap->animating()) {
 				base::call_delayed(duration, messageChannelWrap, clear);
 			} else {

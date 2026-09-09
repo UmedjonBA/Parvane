@@ -104,7 +104,9 @@ struct LinkWithUrl {
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<Data::Birthday> BirthdayValue(
 	not_null<UserData*> user);
-[[nodiscard]] rpl::producer<ChannelData*> PersonalChannelValue(
+// Parvane: личный канал — ChatData группы Parvane (или ChannelData в
+// нативном пути), поэтому PeerData*.
+[[nodiscard]] rpl::producer<PeerData*> PersonalChannelValue(
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<bool> AmInChannelValue(
 	not_null<ChannelData*> channel);

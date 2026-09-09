@@ -11,6 +11,7 @@
 #include <vector>
 
 class PeerData;
+class ChatData;
 class UserData;
 class HistoryItem;
 class DocumentData;
@@ -185,8 +186,13 @@ struct ProfileFields {
 	std::optional<QString> birthday;
 	std::optional<QString> phone;
 	std::optional<int> nameColor;
+	std::optional<QString> personalChannel; // group_id; пустая строка = убрать
 };
 void SetProfileFields(const ProfileFields &fields);
+// Личный канал: известные группы/каналы Parvane как ChatData (для выбора в
+// настройках). Обратно group_id по чату — GroupIdForChat.
+[[nodiscard]] std::vector<not_null<ChatData*>> KnownGroupChats(
+	not_null<Main::Session*> session);
 
 // Настройки уведомлений (мут/тихие/звук) — кросс-девайс через msg.chat.setnotify
 // тем же блобом, что у веба: {defaults, exceptions}. Звать с main-потока после

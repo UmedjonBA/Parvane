@@ -76,6 +76,9 @@ log "E2E keys backup e2e (C1 device migration)"
 log "Three-browser multidevice e2e (one account, two devices)"
 "$ROOT/scripts/run_web_multidevice_e2e.sh"
 
+log "Notify (mute) and profile fields across devices e2e"
+"$ROOT/scripts/run_web_notify_profile_e2e.sh"
+
 log "Three-browser devices e2e (Settings → Devices, revoke)"
 "$ROOT/scripts/run_web_devices_e2e.sh"
 
@@ -93,3 +96,6 @@ log "Cross-client Web <-> desktop e2e"
 
 log "Cross-client multidevice + linking Web <-> desktop e2e"
 "$ROOT/scripts/run_web_cross_multidevice_e2e.sh"
+
+log "Cross-client profile desktop -> web e2e (bio, phone, name color, personal channel)"
+"$ROOT/scripts/run_web_cross_profile_e2e.sh"
