@@ -11,6 +11,7 @@ import {
   TOPIC_GROUP_LIST,
   TOPIC_IDENTITY_RESOLVE,
   TOPIC_MSG_ACK,
+  TOPIC_MSG_READ,
   TOPIC_MSG_SYNC_REQUEST,
   TOPIC_PREKEYS_FETCH,
   type WireEvent,
@@ -47,6 +48,8 @@ type SyncDependencies = {
     saveNotifyExceptions: (map: Record<string, Record<string, unknown>>) => void;
     loadNotifyDefaults: () => Record<string, Record<string, unknown>>;
     saveNotifyDefaults: (map: Record<string, Record<string, unknown>>) => void;
+    loadReadUuids: () => string[];
+    saveReadUuids: (uuids: string[]) => void;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -127,6 +130,8 @@ export function createSyncController(deps: SyncDependencies) {
     sawUndecryptable = false;
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
+    deps.localState.loadReadUuids().forEach((uuid) => reportedReadUuids.add(uuid));
+    unconfirmedReadUuids.clear();
     checkedGroupCandidates.clear();
   }
 
@@ -430,6 +435,46 @@ export function createSyncController(deps: SyncDependencies) {
       '@type': 'updateThreadInfo',
       threadInfo: { isCommentsInfo: false, chatId, threadId: MAIN_THREAD_ID },
     });
+  }
+
+  // Локальный журнал прочитанного пишем с задержкой: markMessageListRead
+  // помечает пачку сообщений подряд, а localStorage синхронный.
+  let persistReadTimer: ReturnType<typeof setTimeout> | undefined;
+  function persistReadUuids() {
+    if (persistReadTimer) return;
+    persistReadTimer = setTimeout(() => {
+      persistReadTimer = undefined;
+      deps.localState.saveReadUuids([...reportedReadUuids]);
+    }, 500);
+  }
+
+  // msg.chat.read уходит без подтверждения (fire-and-forget), поэтому при
+  // обрыве сокета сервер о прочтении не узнаёт и у собеседника не появляется
+  // ✓✓. Повторяем на каждом проходе синка, пока сервер не вернёт read=true.
+  const unconfirmedReadUuids = new Set<string>();
+  const READ_RETRY_PER_PASS = 50;
+
+  function retryUnconfirmedReads() {
+    if (!unconfirmedReadUuids.size) return;
+    const connection = deps.getConnection();
+    if (!connection) return;
+    const store = deps.getStore();
+    let sent = 0;
+    for (const uuid of [...unconfirmedReadUuids]) {
+      if (wireFlagsByUuid.get(uuid)?.read) {
+        unconfirmedReadUuids.delete(uuid); // сервер подтвердил
+        continue;
+      }
+      if (sent >= READ_RETRY_PER_PASS) break;
+      try {
+        connection.publish(TOPIC_MSG_READ, JSON.stringify(
+          buildWireEvent(store.self, deps.getToken(), { message_id: uuid }),
+        ));
+        sent += 1;
+      } catch {
+        return; // сокет снова недоступен — повторим следующим проходом
+      }
+    }
   }
 
   function sendAck(messageId: string, sealedSender: string) {
@@ -846,6 +891,7 @@ export function createSyncController(deps: SyncDependencies) {
     await resolveDisplayNames(Array.from(peerAddresses));
     isSynced = true;
     persistCursor();
+    retryUnconfirmedReads();
   }
 
   function ensureSynced() {
@@ -893,6 +939,7 @@ export function createSyncController(deps: SyncDependencies) {
     const sorted = messages.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
     for (const stored of sorted) await applyStoredUpdate(stored, true);
     if (sorted.length) persistCursor();
+    retryUnconfirmedReads();
   }
 
   function requestDeltaSync() {
@@ -1005,7 +1052,11 @@ export function createSyncController(deps: SyncDependencies) {
       const flags = wireFlagsByUuid.get(uuid);
       if (flags) flags.deleted = true;
     },
-    markReportedRead: (uuid: string) => reportedReadUuids.add(uuid),
+    markReportedRead: (uuid: string) => {
+      reportedReadUuids.add(uuid);
+      unconfirmedReadUuids.add(uuid);
+      persistReadUuids();
+    },
     requestDeltaSync,
     reset,
     resetPromise,

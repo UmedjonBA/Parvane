@@ -901,7 +901,10 @@ const methods = {
           if (message.isOutgoing || isSelfChat || !message.senderId) return;
           if (message.content.action?.type === 'phoneCall') return;
           const uuid = store.getUuidForMessage(chat.id, message.id);
-          if (uuid && syncController.getFlags(uuid)?.read) {
+          // Прочитанным считаем и то, что пометило ЭТО устройство: серверный
+          // флаг мог не успеть вернуться (msg.chat.read уходит без ответа),
+          // и после перезагрузки бейдж возвращался.
+          if (uuid && (syncController.getFlags(uuid)?.read || syncController.hasReportedRead(uuid))) {
             if (message.id > lastReadInbox) lastReadInbox = message.id;
           } else {
             unreadCount += 1;

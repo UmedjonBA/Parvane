@@ -491,6 +491,30 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('unreadmarks'), JSON.stringify(chatIds));
   }
 
+  // Прочитанное ЭТИМ устройством. Раньше жило только в памяти, поэтому после
+  // перезагрузки непрочитанность считалась заново по серверному флагу: если
+  // msg.chat.read не дошёл (кадр потерян, вкладку закрыли до ответа), бейдж
+  // возвращался. Держим локальный журнал и объединяем его с серверным флагом.
+  const READ_UUIDS_CAP = 5000;
+
+  function loadReadUuids(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('readuuids')) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function saveReadUuids(uuids: string[]) {
+    // Обрезаем сверху: список только растёт, а полезен лишь свежий хвост.
+    const tail = uuids.length > READ_UUIDS_CAP ? uuids.slice(-READ_UUIDS_CAP) : uuids;
+    try {
+      localStorage.setItem(storageKey('readuuids'), JSON.stringify(tail));
+    } catch {
+      // квота исчерпана — переживём, серверный флаг остаётся источником истины
+    }
+  }
+
   function loadFolders(): { id: number; [key: string]: unknown }[] {
     try {
       return JSON.parse(localStorage.getItem(storageKey('folders')) || '[]');
@@ -648,6 +672,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadNonContacts,
     loadDeletedChats,
     loadUnreadMarks,
+    loadReadUuids,
     markChatDeleted,
     unmarkChatDeleted,
     removeOwnJournalEntries,
@@ -667,6 +692,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveContacts,
     saveNonContacts,
     saveUnreadMarks,
+    saveReadUuids,
     saveDraft,
     saveFolders,
     setArchived,
