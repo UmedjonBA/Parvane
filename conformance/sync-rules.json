@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "id": "SYNC-1",
+      "title": "Дисковый курсор двигается только по применённому",
+      "cases": [
+        { "name": "чистый проход", "applied": true, "e2eReady": true, "persistCursor": true },
+        { "name": "нерасшифрованное", "applied": false, "e2eReady": true, "persistCursor": false },
+        { "name": "E2E не поднялся", "applied": false, "e2eReady": false, "persistCursor": false },
+        { "name": "умышленный отказ (подмена отправителя)", "applied": false, "e2eReady": true,
+          "deliberateReject": true, "persistCursor": true }
+      ]
+    },
+    {
+      "id": "SYNC-2",
+      "title": "Непрочитанное не держит курсор вечно",
+      "maxRepairAttempts": 3
+    },
+    {
+      "id": "PROFILE-1",
+      "title": "Профиль перечитывается по TTL",
+      "maxCacheAgeMs": 600000
+    },
+    {
+      "id": "READ-1",
+      "title": "Прочитанное журналируется локально и подтверждается",
+      "cases": [
+        { "name": "серверный флаг есть", "serverRead": true, "localRead": false, "isRead": true },
+        { "name": "только локальный журнал", "serverRead": false, "localRead": true, "isRead": true },
+        { "name": "ни того, ни другого", "serverRead": false, "localRead": false, "isRead": false }
+      ]
+    }
+  ]
+}
