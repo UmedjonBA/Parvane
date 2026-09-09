@@ -164,6 +164,14 @@ void StopSession();
 // возвращает переписку. Зовётся из Main::Account::logOut.
 void ClearLocalState();
 
+// Резервная копия ключей E2E в формате веб-клиента (файл годится для
+// переноса между клиентами). Блокирующие — звать с воркера. error —
+// человекочитаемая причина при false.
+[[nodiscard]] bool ExportKeyBackup(const QString &path, const QString &password, QString *error);
+[[nodiscard]] bool ImportKeyBackup(const QString &path, const QString &password, QString *error);
+// Делалась ли копия на этом устройстве (маркер tdata/parvane-backup-done).
+[[nodiscard]] bool KeyBackupDone();
+
 // Зеркалит исходящее текстовое сообщение (с форматированием) в шину. Адрес
 // получателя — из реестра по userId пира; если неизвестен/нет сессии — no-op.
 // Неблокирующая: публикация уходит на воркер-поток.

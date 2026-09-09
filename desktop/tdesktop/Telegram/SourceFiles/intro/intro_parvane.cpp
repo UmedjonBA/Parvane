@@ -266,6 +266,7 @@ void ParvaneWidget::activate() {
 					_email->setText(QString::fromUtf8(em));
 				}
 				LOG(("Parvane: autologin hook for %1").arg(spec.left(sep)));
+				_autologinActive = true;
 				submit();
 			}
 		}
@@ -504,6 +505,18 @@ void ParvaneWidget::onIssued(
 		QString error) {
 	_requesting = false;
 	if (!ok) {
+		// Headless-хук: аккаунта может не быть (e2e регистрируют на лету) —
+		// прежний экран заводил его молча; для хука сохраняем это, для человека
+		// вход и регистрация теперь разделены.
+		if (_autologinActive && !_autologinRegisterTried
+			&& _mode == Mode::SignIn && _stage == Stage::Login) {
+			_autologinRegisterTried = true;
+			LOG(("Parvane: autologin — вход отклонён (%1), пробуем регистрацию")
+				.arg(error));
+			setMode(Mode::SignUp);
+			submit();
+			return;
+		}
 		if (_stage == Stage::Telegram) {
 			// После подтверждения выдача не удалась — назад к паролю
 			setStage(Stage::Login);

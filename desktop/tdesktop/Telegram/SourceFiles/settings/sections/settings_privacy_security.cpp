@@ -66,6 +66,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/fields/password_input.h" // Parvane: пароль копии ключей
+#include "core/file_utilities.h" // Parvane: файл копии ключей
+#include "settings/cloud_password/settings_cloud_password_common.h" // Parvane: AddPasswordField
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "window/window_session_controller.h"
@@ -677,6 +680,101 @@ void BuildSecuritySection(
 			.keywords = { u"key"_q, u"fingerprint"_q, u"ключ"_q, u"отпечаток"_q },
 		});
 		(void)copy;
+	}
+
+	// Parvane: резервная копия ключей E2E. У ЕДИНСТВЕННОГО устройства другой
+	// копии нет: перенос ключей возможен только линковкой с живого второго
+	// устройства, поэтому потеря профиля без файла-копии необратима. Формат
+	// файла — веб-клиента, копия годится для переноса между клиентами.
+	{
+		const auto container = builder.container();
+		Ui::AddSkip(container);
+		Ui::AddSubsectionTitle(container, rpl::single(u"Резервная копия ключей"_q));
+		Ui::AddDividerText(
+			container,
+			rpl::single(u"История зашифрована ключами этого устройства. Без копии переустановка или сбой диска уничтожат переписку навсегда. Файл подходит и для веб-клиента."_q));
+		const auto askPassword = [=](
+				const QString &title,
+				const QString &button,
+				Fn<void(QString)> done) {
+			controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+				box->setTitle(rpl::single(title));
+				// PasswordInput — не RpWidget, в addRow не заходит; берём готовую
+				// обёртку из модуля облачного пароля.
+				const auto field = Settings::CloudPassword::AddPasswordField(
+					box->verticalLayout(),
+					rpl::single(u"Пароль копии (не короче 8 символов)"_q),
+					QString());
+				box->setFocusCallback([=] { field->setFocus(); });
+				const auto submit = [=] {
+					const auto value = field->getLastText();
+					if (value.size() < 8) {
+						field->showError();
+						return;
+					}
+					box->closeBox();
+					done(value);
+				};
+				QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
+				box->addButton(rpl::single(button), submit);
+				box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+			}));
+		};
+		builder.addButton({
+			.id = u"security/parvane_keys_export"_q,
+			.title = rpl::single(u"Сохранить копию ключей…"_q),
+			.icon = { &st::menuIconExport },
+			.onClick = [=] {
+				askPassword(u"Копия ключей"_q, u"Продолжить"_q, [=](QString password) {
+					FileDialog::GetWritePath(
+						Core::App().getFileDialogParent(),
+						u"Сохранить копию ключей"_q,
+						u"Копия ключей Parvane (*.parvane-keys)"_q,
+						u"parvane-keys.parvane-keys"_q,
+						[=](QString &&path) {
+							crl::async([=] {
+								auto error = QString();
+								const auto ok = Parvane::ExportKeyBackup(path, password, &error);
+								crl::on_main([=] {
+									controller->showToast(ok
+										? u"Копия ключей сохранена"_q
+										: error);
+								});
+							});
+						});
+				});
+			},
+			.keywords = { u"backup"_q, u"keys"_q, u"копия"_q, u"ключи"_q },
+		});
+		builder.addButton({
+			.id = u"security/parvane_keys_import"_q,
+			.title = rpl::single(u"Восстановить из копии…"_q),
+			.icon = { &st::menuIconRestore },
+			.onClick = [=] {
+				FileDialog::GetOpenPath(
+					Core::App().getFileDialogParent(),
+					u"Файл копии ключей"_q,
+					u"Копия ключей Parvane (*.parvane-keys *.json);;Все файлы (*)"_q,
+					[=](FileDialog::OpenResult &&result) {
+						if (result.paths.isEmpty()) {
+							return;
+						}
+						const auto path = result.paths.front();
+						askPassword(u"Пароль копии"_q, u"Восстановить"_q, [=](QString password) {
+							crl::async([=] {
+								auto error = QString();
+								const auto ok = Parvane::ImportKeyBackup(path, password, &error);
+								crl::on_main([=] {
+									controller->showToast(ok
+										? u"Ключи восстановлены, история подтягивается"_q
+										: error);
+								});
+							});
+						});
+					});
+			},
+			.keywords = { u"restore"_q, u"keys"_q, u"восстановить"_q, u"ключи"_q },
+		});
 	}
 
 	auto ttlLabel = rpl::combine(

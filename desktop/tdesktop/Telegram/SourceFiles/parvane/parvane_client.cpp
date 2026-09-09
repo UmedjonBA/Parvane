@@ -5,6 +5,8 @@
 #include "base/weak_ptr.h"
 #include "base/timer.h"
 #include "main/main_session.h"
+#include "main/main_account.h"       // forcedLogOut при отказе авторизации
+#include "parvane/keybackup.h"        // резервная копия ключей (формат веба)
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_document.h"
@@ -25,6 +27,7 @@
 #include "data/data_histories.h"
 #include "base/call_delayed.h"
 #include <QtCore/QQueue>
+#include <atomic>
 #include <QtCore/QSet>
 #include <QtCore/QBuffer>
 #include "history/history.h"
@@ -112,6 +115,7 @@ void DecCachePut(const QString &id, const QString &inner);
 void DecCacheRemove(const QString &id);
 [[nodiscard]] bool DecCacheEmpty();
 [[nodiscard]] nlohmann::json DecCacheSnapshot();
+void OnAuthRejected(const QString &reason); // fwd: отказ JWT → экран входа
 
 namespace {
 
@@ -1988,9 +1992,35 @@ bool StartSession() {
 		LOG(("Parvane: сессия поднята для %1").arg(g_selfAddress));
 		return true;
 	} catch (const std::exception &e) {
-		LOG(("Parvane: StartSession не удался: %1").arg(QString::fromUtf8(e.what())));
+		const auto what = QString::fromUtf8(e.what());
+		LOG(("Parvane: StartSession не удался: %1").arg(what));
+		if (what.contains(u"отказ авторизации"_q)) {
+			OnAuthRejected(what);
+		}
 		return false;
 	}
+}
+
+// Сервер отверг наш JWT: истёк (срок 24 ч) либо устройство отозвано.
+// Раньше клиент МОЛЧАЛ: ловил ошибку в лог и дальше показывал журнал с диска —
+// пользователь видел «мессенджер, который отстаёт», не понимая, что он вообще
+// не в сети (8 сен 2026 — так выглядели все жалобы «не синхронизируется»).
+// Теперь снимаем учётные данные (иначе рестарт зациклится на том же токене) и
+// показываем экран входа. Ключи и история остаются — повторный вход вернёт их.
+std::atomic<bool> g_authRejectHandling{ false };
+void OnAuthRejected(const QString &reason) {
+	if (g_authRejectHandling.exchange(true)) {
+		return;
+	}
+	LOG(("Parvane: авторизация отклонена (%1) — на экран входа; ключи и история "
+		"сохранены").arg(reason));
+	crl::on_main([] {
+		ClearLocalState();
+		if (const auto session = g_sessionWeak.get()) {
+			session->account().forcedLogOut();
+		}
+		g_authRejectHandling = false;
+	});
 }
 
 void StopSession() {
@@ -6387,7 +6417,11 @@ void PumpReceive() {
 				}
 			}
 		} catch (const std::exception &e) {
-			LOG(("Parvane: sync ошибка: %1").arg(QString::fromUtf8(e.what())));
+			const auto what = QString::fromUtf8(e.what());
+			LOG(("Parvane: sync ошибка: %1").arg(what));
+			if (what.contains(u"отказ авторизации"_q)) {
+				OnAuthRejected(what); // истёк на ходу — не молчим
+			}
 			return;
 		}
 		// Кросс-девайс прочитанное можно применить даже без новых сообщений.
@@ -7333,6 +7367,30 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		ResolveNames({ SelfAddress() });
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
+		}
+		// Напоминание о резервной копии ключей: у ЕДИНСТВЕННОГО устройства
+		// перенести ключи некуда (линковке нужно второе живое), потеря профиля
+		// необратима. Раз на установку (маркер), не в headless-прогонах.
+		if (!KeyBackupDone() && !std::getenv("PARVANE_AUTOLOGIN")) {
+			base::call_delayed(8000, [] {
+				ListDevices([](std::vector<DeviceEntry> devices) {
+					if (devices.size() > 1) {
+						return;
+					}
+					crl::on_main([] {
+						static auto shown = false;
+						if (shown || !g_sessionWeak.get()) {
+							return;
+						}
+						shown = true;
+						Ui::show(Ui::MakeInformBox(u"Это единственное устройство аккаунта. "
+							"История зашифрована его ключами: без резервной копии "
+							"переустановка или сбой диска уничтожат переписку навсегда.\n\n"
+							"Сделайте копию: Настройки → Конфиденциальность → "
+							"«Сохранить копию ключей»."_q));
+					});
+				});
+			});
 		}
 
 		// Подписка на «печатает…» (эфемерно): msg.typing.<мой id>. Хендлер
@@ -8739,6 +8797,88 @@ void ScheduleLinkOffersPoll() {
 }
 
 } // namespace
+
+// ── Резервная копия ключей (PARITY «ДЫРА: нет резервной копии ключей») ──────
+// Формат веб-клиента (keybackup.h), файл годится для переноса между клиентами.
+// Блокирующие — звать с воркера (crl::async).
+[[nodiscard]] QString BackupMarkerPath() {
+	return cWorkingDir() + u"tdata/parvane-backup-done"_q;
+}
+
+bool KeyBackupDone() {
+	return QFile::exists(BackupMarkerPath());
+}
+
+bool ExportKeyBackup(const QString &path, const QString &password, QString *error) {
+	if (!parvane::e2e::ready()) {
+		*error = u"Ключи ещё не готовы — подождите несколько секунд после входа"_q;
+		return false;
+	}
+	const auto state = parvane::e2e::exportStateJson(DecCacheSnapshot());
+	if (state.empty()) {
+		*error = u"Нечего сохранять"_q;
+		return false;
+	}
+	const auto file = parvane::keybackup::exportEncrypted(state, password.toStdString());
+	if (file.empty()) {
+		*error = u"Не удалось зашифровать копию"_q;
+		return false;
+	}
+	auto f = QFile(path);
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)
+		|| f.write(file.data(), qint64(file.size())) != qint64(file.size())) {
+		*error = u"Не удалось записать файл"_q;
+		return false;
+	}
+	auto marker = QFile(BackupMarkerPath());
+	if (marker.open(QIODevice::WriteOnly)) {
+		marker.write("1");
+	}
+	LOG(("Parvane: копия ключей сохранена (%1 байт)").arg(qint64(file.size())));
+	return true;
+}
+
+bool ImportKeyBackup(const QString &path, const QString &password, QString *error) {
+	if (!parvane::e2e::ready()) {
+		*error = u"Ключи ещё не готовы — подождите несколько секунд после входа"_q;
+		return false;
+	}
+	auto f = QFile(path);
+	if (!f.open(QIODevice::ReadOnly)) {
+		*error = u"Не удалось прочитать файл"_q;
+		return false;
+	}
+	const auto state = parvane::keybackup::importEncrypted(
+		f.readAll().toStdString(), password.toStdString());
+	if (!state) {
+		*error = u"Неверный пароль или повреждённый файл"_q;
+		return false;
+	}
+	// СЛИЯНИЕ, как при линковке: расшифрованная история + входящие Megolm +
+	// прежний аккаунт как legacy-подписант; своя identity сохраняется.
+	int merged = 0;
+	const auto ok = parvane::e2e::importLinkedHistory(*state,
+		[&](const std::string &uuid, const nlohmann::json &inner) {
+			const auto q = QString::fromStdString(uuid);
+			if (!DecCacheGet(q).isEmpty() || !inner.is_object()) {
+				return;
+			}
+			auto entry = inner;
+			if (entry.contains("senderIdentity")) {
+				entry["sender_identity"] = entry["senderIdentity"];
+				entry.erase("senderIdentity");
+			}
+			DecCachePut(q, QString::fromStdString(entry.dump()));
+			++merged;
+		});
+	if (!ok) {
+		*error = u"Копия не подошла к этому аккаунту"_q;
+		return false;
+	}
+	LOG(("Parvane: копия ключей восстановлена, слито %1 сообщений — ресинк").arg(merged));
+	ResyncFromScratch();
+	return true;
+}
 
 // Воркер, после initDevice: новое устройство без истории публикует оффер и
 // ждёт грант; любое устройство опрашивает чужие офферы (роль «старого»).
