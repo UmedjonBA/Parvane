@@ -439,18 +439,22 @@ void ChatFilters::load(bool force) {
 	}
 	auto &api = _owner->session().api();
 	api.request(_loadRequestId).cancel();
-	_loadRequestId = api.request(MTPmessages_GetDialogFilters(
-	)).done([=](const MTPmessages_DialogFilters &result) {
-		_tagsEnabled = result.data().is_tags_enabled();
-		received(result.data().vfilters().v);
-		_loadRequestId = 0;
-	}).fail([=] {
-		_loadRequestId = 0;
-		if (_reloading) {
-			_reloading = false;
-			_listChanged.fire({});
-		}
-	}).send();
+	// Parvane: MTProto в форке не отвечает, поэтому messages.getDialogFilters
+	// не завершался НИКОГДА — ни done, ни fail. _loadRequestId оставался
+	// ненулевым, loaded() навсегда false, и экран «Папки» (кнопка
+	// редактирования внизу списка папок) не открывался. Папки у нас локальные:
+	// их восстанавливает LoadFolders из tdata/parvane-folders.json
+	// (SourceFiles/parvane/parvane_client.cpp) прямо в этот же _list. Поэтому
+	// загрузка завершается сразу тем, что уже в памяти.
+	_loadRequestId = 0;
+	if (!ranges::contains(begin(_list), end(_list), 0, &ChatFilter::id)) {
+		_list.insert(begin(_list), ChatFilter());
+	}
+	if (!_loaded || _reloading) {
+		_loaded = true;
+		_reloading = false;
+		_listChanged.fire({});
+	}
 }
 
 bool ChatFilters::tagsEnabled() const {

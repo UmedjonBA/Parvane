@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "main/main_account.h"
 
+#include "parvane/parvane_client.h"
+
 #include "base/platform/base_platform_info.h"
 #include "core/application.h"
 #include "storage/storage_account.h"
@@ -521,12 +523,14 @@ void Account::logOut() {
 		return;
 	}
 	_loggingOut = true;
-	if (_mtp) {
-		_mtp->logout([=] { loggedOut(); });
-	} else {
-		// We log out because we've forgotten passcode.
-		loggedOut();
-	}
+	// Parvane: MTProto в форке не отвечает, поэтому auth.logOut не завершался
+	// НИКОГДА — ни done, ни fail. Колбэк не вызывался, `loggedOut()` не
+	// наступал, а поднятый `_loggingOut` вместе с ранним выходом выше навсегда
+	// блокировал повторные нажатия: кнопка «Выйти из аккаунта» просто ничего не
+	// делала. Выходим локально и сносим СВОЁ состояние (токен, ключи E2E,
+	// курсоры, журнал) — иначе устройство осталось бы на диске как залогиненное.
+	Parvane::ClearLocalState();
+	loggedOut();
 }
 
 bool Account::loggingOut() const {

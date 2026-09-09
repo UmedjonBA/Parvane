@@ -115,7 +115,13 @@ void DecCacheRemove(const QString &id);
 
 namespace {
 
-void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live);
+// true — проход применил всё; false — что-то не расшифровалось (нет ключа,
+// нет копии для устройства, E2E не поднялся). Дисковый курсор при false НЕ
+// двигаем, иначе пропущенное после рестарта не придёт дельтой.
+[[nodiscard]] bool prepareIncoming(
+	std::vector<parvane::StoredMessage> &msgs,
+	bool live,
+	std::vector<std::string> *failed = nullptr);
 not_null<UserData*> ensurePeerUser(
 	not_null<Main::Session*> session,
 	std::uint64_t id,
@@ -195,7 +201,14 @@ QHash<qint64, QString> g_msgIdToUuid; // обратная карта (для del
 QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отправок, ждут эха (main)
 QHash<qint64, QVector<QString>> g_unreadIncoming; // peerId → uuid'ы непрочит. входящих
 QHash<QString, QString> g_displayNames; // адрес → отображаемое имя (из каталога)
-QSet<QString> g_resolveRequested;       // адреса, для которых уже запросили имя
+// Когда последний раз спрашивали каталог о профиле адреса (мс от старта).
+// Раньше здесь было QSet «уже спрашивали», из-за чего профиль резолвился РОВНО
+// один раз за сессию и только при неизвестном имени: аватар или имя, менявшиеся
+// на другом устройстве, десктоп не видел до перезапуска. Веб перезапрашивает
+// профили на каждом проходе синка — выравниваемся по нему, но с TTL, чтобы не
+// дёргать identity на каждое сообщение.
+QHash<QString, qint64> g_resolvedAt;
+constexpr qint64 kProfileTtlMs = 10 * 60 * 1000;
 QHash<QString, QString> g_avatarFileIds; // адрес → file_id аватара (cloud)
 QSet<QString> g_avatarDownloaded;        // аватары, уже скачанные/в процессе
 QHash<QString, QImage> g_avatarImages;   // адрес → скачанная картинка (кэш для
@@ -1125,6 +1138,79 @@ void SaveCursors(const std::string &lastSeen, std::int64_t sinceUpdated) {
 	f.write("\n");
 }
 
+// ── очередь починки нерасшифрованного ───────────────────────────────────────
+// Сообщение, не прочитанное этим устройством (нет копии под наш device_id, не
+// поднялся E2E), НЕ должно молча уезжать за курсор: после рестарта дельта его
+// уже не вернёт. Пока такие есть, дисковый курсор придерживаем — рестарт даёт
+// ещё попытку. Но держать его вечно нельзя: копия могла не создаваться вовсе,
+// и тогда десктоп пересинхронизировал бы всё при каждом старте. Поэтому у
+// каждого uuid счётчик попыток; после kRepairAttempts сдаёмся, пишем в лог и
+// пропускаем (историю в этом случае возвращает авто-линковка с другого
+// устройства). Формат файла: строки "uuid попытки".
+constexpr int kRepairAttempts = 3;
+
+[[nodiscard]] QString PendingPath() {
+	return cWorkingDir() + u"tdata/parvane-pending.txt"_q;
+}
+
+[[nodiscard]] QHash<QString, int> LoadPending() {
+	auto out = QHash<QString, int>();
+	QFile f(PendingPath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return out;
+	}
+	const auto lines = QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts);
+	for (const auto &line : lines) {
+		const auto parts = line.trimmed().split(' ');
+		if (parts.size() == 2) {
+			out.insert(parts[0], parts[1].toInt());
+		}
+	}
+	return out;
+}
+
+void SavePending(const QHash<QString, int> &pending) {
+	QFile f(PendingPath());
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return;
+	}
+	for (auto it = pending.constBegin(); it != pending.constEnd(); ++it) {
+		f.write(it.key().toUtf8());
+		f.write(" ");
+		f.write(QString::number(it.value()).toUtf8());
+		f.write("\n");
+	}
+}
+
+// Учитывает провалы прохода. Возвращает true, если дисковый курсор двигать
+// можно: непрочитанных нет либо все они исчерпали попытки.
+[[nodiscard]] bool NotePendingAndMayAdvance(const std::vector<std::string> &failed) {
+	if (failed.empty()) {
+		// Проход прочитал всё: то, что ждало починки, либо прочиталось на этом
+		// круге, либо исчерпало попытки и осталось позади — очередь не нужна.
+		if (QFile::exists(PendingPath())) {
+			QFile::remove(PendingPath());
+		}
+		return true;
+	}
+	auto pending = LoadPending();
+	auto mayAdvance = true;
+	for (const auto &id : failed) {
+		const auto key = QString::fromStdString(id);
+		const auto attempts = pending.value(key, 0) + 1;
+		pending.insert(key, attempts);
+		if (attempts < kRepairAttempts) {
+			mayAdvance = false;
+		} else {
+			LOG(("Parvane: сообщение %1 не прочитано за %2 попытки — пропускаем "
+				"(история восстанавливается линковкой с другого устройства)")
+				.arg(key).arg(kRepairAttempts));
+		}
+	}
+	SavePending(pending);
+	return mayAdvance;
+}
+
 // ── персист логин-состояния (self+token) ─────────────────────────────────────
 // tdesktop на РЕСТАРТЕ возобновляет кэшированную сессию, минуя экран логина
 // (SetSelf не зовётся). Чтобы Parvane-слой поднялся с той же личностью,
@@ -1724,7 +1810,9 @@ bool StartSession() {
 			crl::async([sm = std::move(sm)]() mutable {
 				std::vector<parvane::StoredMessage> batch;
 				batch.push_back(std::move(sm));
-				prepareIncoming(batch, /*live=*/true);
+				// Живой пуш курсоры не двигает, поэтому результат не нужен:
+				// не прочитанное сейчас придёт следующим sync.
+				(void)prepareIncoming(batch, /*live=*/true);
 				if (batch.empty()) {
 					return;
 				}
@@ -1909,6 +1997,37 @@ void StopSession() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	g_messenger.reset();
 	g_transport.reset();
+}
+
+// Выход из аккаунта. Снимаем ТОЛЬКО учётные данные сессии (адрес + JWT):
+// после этого нужен повторный ввод пароля, но повторный вход на ТОМ ЖЕ
+// устройстве возвращает всю переписку.
+//
+// ПОЧЕМУ НЕ СНОСИМ КЛЮЧИ. История у нас сквозным шифрованием: на сервере лежит
+// только шифртекст, читаемый исключительно ключами устройства. Ручного
+// экспорта ключей на десктопе НЕТ (в ядре есть exportStateJson, но подключён
+// он только к авто-линковке, а ей нужно ВТОРОЕ живое устройство). Значит для
+// человека, у которого стоит один десктоп, снос ключей = безвозвратная потеря
+// всей переписки, причём по нажатию кнопки, от которой такого никто не ждёт.
+// Поэтому «выйти» ≠ «стереть устройство». Полное стирание — отдельное явное
+// действие (и его стоит давать только вместе с экспортом ключей).
+void ClearLocalState() {
+	StopSession();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_token.clear();
+		g_selfAddress.clear();
+		g_lastSeenId.clear();
+		g_sinceUpdated = 0;
+		g_ownSentUuids.clear();
+	}
+	// Только учётные данные. Ключи E2E, журнал истории, кэш расшифровки,
+	// курсоры и папки остаются — иначе повторный вход показал бы пустоту.
+	const auto creds = cWorkingDir() + u"tdata/parvane-session.txt"_q;
+	const auto removed = QFile::remove(creds);
+	LOG(("Parvane: выход — учётные данные %1; ключи и история СОХРАНЕНЫ "
+		"(повторный вход на этом устройстве вернёт переписку)")
+		.arg(removed ? u"удалены"_q : u"не найдены"_q));
 }
 
 void MirrorOutgoing(
@@ -3495,7 +3614,10 @@ void ResolveNames(const QStringList &addresses); // fwd
 void DownloadAvatar(const QString &address, const QString &fileId); // fwd
 // Сохраняет file_id аватара и запускает загрузку (если ещё не грузили).
 void NoteAvatar(const QString &address, const QString &fileId) {
-	if (fileId.isEmpty() || address == SelfAddress()) {
+	// СВОЙ адрес раньше отбрасывался здесь же — из-за этого аватар, поставленный
+	// на другом устройстве (вебе), на десктопе не появлялся никогда, хотя
+	// каталог identity отдаёт его и для себя.
+	if (fileId.isEmpty()) {
 		return;
 	}
 	g_avatarFileIds.insert(address, fileId);
@@ -3592,12 +3714,16 @@ not_null<UserData*> ensurePeerUser(
 	if (address == SelfAddress()) {
 		flags |= MTPDuser::Flag::f_self;
 	}
-	// Незнакомое имя — просим каталог его резолвнуть (обновим, когда придёт).
-	if (address != SelfAddress()
-		&& !g_displayNames.contains(address)
-		&& !g_resolveRequested.contains(address)) {
-		g_resolveRequested.insert(address);
-		ResolveNames({ address });
+	// Профиль (имя + аватар) спрашиваем у каталога, если не спрашивали вовсе
+	// либо ответ устарел. Условие «имя неизвестно» здесь было ошибкой: после
+	// первого резолва имя известно всегда, и смена аватара уже не подхватывалась.
+	if (address != SelfAddress()) {
+		const auto now = crl::now();
+		const auto last = g_resolvedAt.value(address, 0);
+		if (!last || now - last > kProfileTtlMs) {
+			g_resolvedAt.insert(address, now);
+			ResolveNames({ address });
+		}
 	}
 	const auto user = MTP_user(
 		MTP_flags(flags),
@@ -4842,7 +4968,14 @@ void injectPollMessage(
 // анонимно, чтобы сервер не передоставлял). Кэш расшифровки: uuid → inner
 // (+sender_identity для повторной сверки и экспорта при линковке); правка =
 // новый шифртекст → перерасшифровка (кэш хранит отпечаток шифртекста).
-void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
+bool prepareIncoming(
+		std::vector<parvane::StoredMessage> &msgs,
+		bool live,
+		std::vector<std::string> *failed) {
+	// Сбрасывается, когда сообщение не удалось прочитать. Умышленные отказы
+	// (подмена отправителя, чужой SKDM) флаг НЕ трогают — иначе злоумышленник
+	// одним подложным сообщением заморозил бы синк жертвы навсегда.
+	bool clean = true;
 	parvane::MessengerClient *m = nullptr;
 	parvane::ITransport *t = nullptr;
 	std::string self, token;
@@ -4871,6 +5004,8 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 			continue;
 		}
 		if (!parvane::e2e::ready() || !t) {
+			clean = false; // из кэша может не найтись → курсор не двигаем
+			if (failed) { failed->push_back(sm.id); }
 			out.push_back(std::move(sm)); // main-поток попробует из кэша
 			continue;
 		}
@@ -4908,6 +5043,8 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 					envIdentity, ct);
 			}
 			if (dec.empty()) {
+				clean = false;
+				if (failed) { failed->push_back(sm.id); }
 				LOG(("Parvane: НЕ расшифровано msg %1%2")
 					.arg(uuidQ, direct ? QString() : u" (группа, нет SKDM?)"_q));
 				ackAnon(sm.id); // как web: снять из очереди, не показывать
@@ -4915,6 +5052,8 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 			}
 			inner = nlohmann::json::parse(dec, nullptr, false);
 			if (!inner.is_object()) {
+				clean = false;
+				if (failed) { failed->push_back(sm.id); }
 				continue;
 			}
 			fresh = true;
@@ -4985,6 +5124,7 @@ void prepareIncoming(std::vector<parvane::StoredMessage> &msgs, bool live) {
 		out.push_back(std::move(sm));
 	}
 	msgs = std::move(out);
+	return clean;
 }
 
 // Инъекция результатов sync в Data::Session. Только main-поток. Дедуп по UUID.
@@ -6265,19 +6405,42 @@ void PumpReceive() {
 			}
 			return;
 		}
+		// Курсор в памяти двигаем всегда — иначе тот же кусок тянулся бы по кругу
+		// внутри сессии. Дисковый курсор — отдельно, ниже (как web persistCursor).
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			g_lastSeenId = cursorId;
 			g_sinceUpdated = cursorUpd;
 		}
-		SaveCursors(cursorId, cursorUpd); // персист (worker, вне лока)
-		prepareIncoming(msgs, /*live=*/true); // расшифровка + верификация на воркере
-		crl::on_main([msgs = std::move(msgs), readSet]() mutable {
+		// Расшифровка + верификация на воркере. clean=false — проход что-то
+		// не прочитал (E2E не поднялся, нет ключа/копии для этого устройства).
+		std::vector<std::string> failed;
+		const auto clean = prepareIncoming(msgs, /*live=*/true, &failed);
+		// Непрочитанное придерживает дисковый курсор, но не навсегда: после
+		// kRepairAttempts попыток отпускаем (см. NotePendingAndMayAdvance).
+		// Пока E2E не поднялся, курсор не двигаем вообще.
+		const auto mayAdvance = parvane::e2e::ready()
+			&& NotePendingAndMayAdvance(failed);
+		if (!clean) {
+			LOG(("Parvane: sync не прочитал %1 сообщ.; дисковый курсор %2")
+				.arg(int(failed.size()))
+				.arg(mayAdvance ? u"двигаем (попытки исчерпаны)"_q : u"придержан"_q));
+		}
+		crl::on_main([msgs = std::move(msgs), readSet, cursorId, cursorUpd,
+				mayAdvance]() mutable {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
-				return; // сессия ещё/уже не активна — придёт со следующим pump
+				return; // сессия не активна: дисковый курсор не двинут — вернётся
 			}
 			injectOnMain(session, msgs);
+			// ТОЛЬКО здесь: сообщения расшифрованы и вставлены. Иначе после
+			// рестарта пропущенное не пришло бы дельтой и терялось навсегда
+			// (ратчет Olm одноразовый — второй раз тот же шифртекст не открыть).
+			if (mayAdvance) {
+				crl::async([cursorId, cursorUpd] {
+					SaveCursors(cursorId, cursorUpd); // файловый I/O — вне main
+				});
+			}
 			// После инъекции снимаем непрочитанное, прочитанное на другом
 			// устройстве (в т.ч. если это же сообщение только что добавлено).
 			if (!readSet.isEmpty()) {
@@ -7254,7 +7417,12 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			g_finalizeHooked = true;
 			session->data().newItemAdded(
 			) | rpl::on_next([](not_null<HistoryItem*> item) {
-				if (!item->out()
+				// В чате с самим собой («Избранное») tdesktop не помечает
+				// локальное сообщение как исходящее, поэтому эхо не получало
+				// серверный id и висело с «часиками» вечно. Для self-чата
+				// условие out() снимаем: там все сообщения по определению наши.
+				const auto selfChat = item->history()->peer->isSelf();
+				if ((!item->out() && !selfChat)
 					|| !item->isSending()
 					|| !IsClientMsgId(item->id)) {
 					return;
@@ -7349,6 +7517,17 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				static int tick = 0;
 				if ((++tick % 3) == 0) {
 					RefreshGroups();
+				}
+				// Свой профиль (имя/аватар) мог измениться на другом устройстве:
+				// перечитываем по тому же TTL, что и профили собеседников.
+				// main-поток — g_resolvedAt трогается только отсюда и из
+				// ensurePeerUser, оба на main.
+				const auto self = SelfAddress();
+				const auto now = crl::now();
+				if (!self.isEmpty()
+					&& now - g_resolvedAt.value(self, 0) > kProfileTtlMs) {
+					g_resolvedAt.insert(self, now);
+					ResolveNames({ self });
 				}
 			});
 			g_pumpTimer->callEach(kPumpIntervalMs);
