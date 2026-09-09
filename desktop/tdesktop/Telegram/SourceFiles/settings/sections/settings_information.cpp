@@ -70,6 +70,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h" // dialogsPremiumIcon
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
+#include "styles/style_widgets.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_window.h"
 
@@ -610,8 +611,33 @@ void SetupRows(
 	}
 
 	const auto showChangePhone = [=] {
-		controller->show(
-			Ui::MakeInformBox(tr::lng_change_phone_error()));
+		// Parvane: телефон — свободное поле профиля в identity (без SMS-кода
+		// MTProto), редактируется прямо здесь и уходит через setname.
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(tr::lng_settings_phone_label());
+			const auto field = box->addRow(object_ptr<Ui::InputField>(
+				box,
+				st::defaultInputField,
+				Ui::InputField::Mode::SingleLine,
+				tr::lng_settings_phone_label(),
+				self->phone()));
+			const auto save = [=] {
+				const auto text = field->getLastText().trimmed().left(32);
+				self->setPhone(text);
+				self->session().changes().peerUpdated(
+					self,
+					Data::PeerUpdate::Flag::PhoneNumber);
+				Parvane::SetProfileFields({ .phone = text });
+				box->closeBox();
+			};
+			field->submits(
+			) | rpl::on_next([=](Qt::KeyboardModifiers) {
+				save();
+			}, field->lifetime());
+			box->setFocusCallback([=] { field->setFocus(); });
+			box->addButton(tr::lng_settings_save(), save);
+			box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+		}));
 		controller->window().activate();
 	};
 	const auto phoneButton = AddRow(
