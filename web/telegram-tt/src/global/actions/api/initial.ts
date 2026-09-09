@@ -40,10 +40,12 @@ import {
 import {
   addActionHandler, getGlobal, setGlobal,
 } from '../../index';
+import { INITIAL_TAB_STATE } from '../../initialState';
 import {
   clearGlobalForLockScreen, updateManagementProgress, updatePasscodeSettings,
 } from '../../reducers';
 import { updateAuth } from '../../reducers/auth';
+import { updateTabState } from '../../reducers/tabs';
 import { selectSharedSettings } from '../../selectors/sharedState';
 import { destroySharedStatePort } from '../../shared/sharedStateConnector';
 
@@ -241,6 +243,17 @@ addActionHandler('signOut', async (global, actions, payload): Promise<void> => {
   } catch (err) {
     // Do nothing
   }
+
+  // Parvane: reset не пересоздаёт вкладку, пока слот аккаунта числится в
+  // storage, — после повторного входа левая колонка открывалась на экране, с
+  // которого вышли (Settings). Возвращаем её на список чатов явно.
+  global = getGlobal();
+  Object.keys(global.byTabId).forEach((id) => {
+    global = updateTabState(global, {
+      leftColumn: { ...INITIAL_TAB_STATE.leftColumn },
+    }, Number(id));
+  });
+  setGlobal(global);
 
   actions.reset();
   await resetStorage();

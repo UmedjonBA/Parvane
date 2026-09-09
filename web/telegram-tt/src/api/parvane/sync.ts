@@ -369,7 +369,8 @@ export function createSyncController(deps: SyncDependencies) {
         store.setProfile(userInfo.username, {
           bio: userInfo.bio,
           birthday: userInfo.birthday,
-          nameColor: userInfo.name_color,
+          // отрицательный name_color = «сброшен» (десктоп шлёт -1 при сбросе)
+          nameColor: (userInfo.name_color ?? -1) >= 0 ? userInfo.name_color : undefined,
           personalChannel: userInfo.personal_channel,
           phone: userInfo.phone,
         });

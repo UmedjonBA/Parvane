@@ -4117,6 +4117,8 @@ void ResolveNames(const QStringList &addresses) {
 					const auto color = j["name_color"].get<int>();
 					if (color >= 0 && color < 256) {
 						user->changeColorIndex(uint8(color));
+					} else if (color < 0) {
+						user->clearColorIndex(); // сброшен на цвет по умолчанию
 					}
 				}
 			}
@@ -6670,11 +6672,23 @@ void ApplyNotifyBlob(const QString &json) {
 		for (auto it = j["exceptions"].begin(); it != j["exceptions"].end(); ++it) {
 			const auto address = QString::fromStdString(it.key());
 			g_notifyExceptions.insert(address, QString::fromStdString(it.value().dump()));
-			if (g_knownGroups.contains(address)) {
-				continue; // группы: пир-чат по адресу — отдельная задача
+			const auto mute = MuteFromWeb(it.value());
+			if (!mute) {
+				continue;
 			}
-			const auto peer = ensurePeerUser(session, IdForAddress(address), address);
-			if (const auto mute = MuteFromWeb(it.value())) {
+			// Ключ исключения — адрес собеседника или group_id (в вебе
+			// getAddressForId для группы отдаёт её group_id).
+			auto groupName = QString();
+			auto isGroup = false;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				isGroup = g_knownGroups.contains(address);
+				groupName = g_knownGroups.value(address);
+			}
+			const auto peer = isGroup
+				? static_cast<PeerData*>(ensureGroupChat(session, address, groupName, 0))
+				: static_cast<PeerData*>(ensurePeerUser(session, IdForAddress(address), address));
+			if (peer) {
 				settings.update(peer, *mute, SilentFromWeb(it.value()));
 			}
 		}
@@ -6684,10 +6698,16 @@ void ApplyNotifyBlob(const QString &json) {
 }
 
 void MirrorNotifySettings(not_null<const PeerData*> peer) {
-	if (g_applyingNotify || !peer->isUser()) {
-		return; // применяем чужое / группы пока не зеркалим
+	if (g_applyingNotify) {
+		return; // применяем чужое — не зеркалим обратно
 	}
-	const auto address = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	auto address = QString();
+	if (peer->isUser()) {
+		address = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	} else if (peer->isChat()) {
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
+	}
 	if (address.isEmpty()) {
 		return;
 	}

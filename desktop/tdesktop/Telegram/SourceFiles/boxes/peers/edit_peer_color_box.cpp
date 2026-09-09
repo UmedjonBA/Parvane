@@ -46,6 +46,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_icon.h"
 #include "lottie/lottie_single_player.h"
 #include "main/main_session.h"
+#include "parvane/parvane_client.h" // Parvane: цвет имени в identity
 #include "settings/settings_common.h"
 #include "settings/sections/settings_premium.h"
 #include "ui/boxes/boost_box.h"
@@ -568,25 +569,15 @@ void Set(
 		).done(done).fail(fail).send();
 	};
 	if (peer->isSelf()) {
-		using Flag = MTPaccount_UpdateColor::Flag;
-		using ColorFlag = MTPDpeerColor::Flag;
-		send(MTPaccount_UpdateColor(
-			MTP_flags((values.forProfile ? Flag::f_for_profile : Flag(0))
-				| (((!values.forProfile && values.colorCollectible)
-					|| (values.colorIndex != kUnsetColorIndex))
-					? Flag::f_color
-					: Flag(0))),
-			((!values.forProfile && values.colorCollectible)
-				? MTP_inputPeerColorCollectible(
-					MTP_long(values.colorCollectible->collectibleId))
-				: MTP_peerColor(
-					MTP_flags(ColorFlag()
-						| ColorFlag::f_color
-						| (values.backgroundEmojiId
-							? ColorFlag::f_background_emoji_id
-							: ColorFlag(0))),
-					MTP_int(values.colorIndex),
-					MTP_long(values.backgroundEmojiId)))));
+		// Parvane: MTProto заглушён — цвет имени живёт в identity (setname) и
+		// уже применён локально (setLocal). Цвет профиля — только локально.
+		if (!values.forProfile) {
+			Parvane::SetProfileFields({
+				.nameColor = (values.colorIndex == kUnsetColorIndex)
+					? -1
+					: int(values.colorIndex),
+			});
+		}
 		if (values.statusChanged
 			&& (values.statusId || peer->emojiStatusId())) {
 			peer->owner().emojiStatuses().set(
@@ -594,6 +585,7 @@ void Set(
 				values.statusId,
 				values.statusUntil);
 		}
+		done();
 	} else if (const auto channel = peer->asChannel()) {
 		if (peer->isBroadcast()) {
 			using Flag = MTPchannels_UpdateColor::Flag;

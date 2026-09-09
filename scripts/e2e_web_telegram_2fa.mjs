@@ -173,7 +173,9 @@ try {
   await loginWithPassword(s1.page, nick);
   await signedIn(s1.page);
   assert.equal(await s1.page.locator('#auth-telegram-form').count(), 0);
-  console.log('OK: устройство, включившее 2FA, входит без повторного подтверждения');
+  // После повторного входа — список чатов, а не экран Settings, с которого вышли
+  await s1.page.getByRole('button', { name: 'Open menu' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: устройство, включившее 2FA, входит без повторного подтверждения (на список чатов)');
 
   // ── Без секрета доверия голый device_id НЕ доверенный (device_id публичен):
   // стираем только секрет, зеркало device_id остаётся → подтверждение ──
