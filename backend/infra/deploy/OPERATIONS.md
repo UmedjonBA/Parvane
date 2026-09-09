@@ -25,7 +25,7 @@ docker compose up -d                        # применить изменён�
 Пароля на сайт больше нет (снят 2026-09-05). Регистрация: ник + пароль →
 экран «Confirm via Telegram» (deep link `t.me/<bot>?start=<token>`) → Start в
 боте → клиент логинится сам. Бот живёт на VPS 213.155.15.139
-(`infra/telegram-bot`, юнит `parvane-tg-bot`, env `/etc/parvane/tg-bot.env`),
+(`backend/infra/telegram-bot`, юнит `parvane-tg-bot`, env `/etc/parvane/tg-bot.env`),
 потому что с прод-сервера api.telegram.org недоступен. В `.env` identity:
 ```
 PARVANE_TELEGRAM_BOT=Parvane_test_bot
@@ -43,7 +43,7 @@ identity | grep Telegram` на проде.
 заново. Топик `identity.user.twofa` (JWT; `enabled` пуст — только чтение),
 токены входа в `login_links` (10 мин, одноразовые). Бот отвечает «Вход
 подтверждён» (поле `kind: login` в ответе identity.telegram.confirm).
-Обновление бота на VPS: `scp infra/telegram-bot/parvane_tg_bot.py
+Обновление бота на VPS: `scp backend/infra/telegram-bot/parvane_tg_bot.py
 root@213.155.15.139:/opt/parvane-tg-bot/ && ssh root@213.155.15.139 systemctl
 restart parvane-tg-bot`.
 
@@ -111,7 +111,7 @@ df -h /                                     # свободно на хосте
 ```
 
 ## Обновление кода (с рабочей машины, НЕ на сервере)
-`infra/deploy/deploy.sh` — пересобирает образы (podman, baseline x86-64) и dist,
+`backend/infra/deploy/deploy.sh` — пересобирает образы (podman, baseline x86-64) и dist,
 заливает, поднимает. Флаги: `PARVANE_DEPLOY_SKIP_WEB_BUILD=1`,
 `PARVANE_DEPLOY_SKIP_IMAGES=1`. После заливки dist Caddy перезапускается
 автоматически (иначе bind-mount отдаёт 404).
@@ -120,7 +120,7 @@ df -h /                                     # свободно на хосте
 Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи недостижим: звонок с
 телефона (CGNAT/VPN) висел на «exchanging encryption keys» и падал. TURN/STUN
 поднят на VPS 213.155.15.139 (публичный IP, тот же хост, что Telegram-бот):
-- бинарь `/usr/local/bin/parvane-turn` (infra/turn, сборка:
+- бинарь `/usr/local/bin/parvane-turn` (backend/infra/turn, сборка:
   `podman run --rm --network=host -v $PWD:/src:Z -w /src -e CGO_ENABLED=0
   golang:1-alpine go build -o parvane-turn .`), systemd `parvane-turn`,
   env `/etc/parvane/turn.env` (TURN_SECRET = PARVANE_TURN_SECRET прода,

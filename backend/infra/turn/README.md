@@ -12,15 +12,15 @@ PARVANE_TURN_SECRET=<hex>                                # ephemeral REST (TURN 
 # TTL эфемерных кредов — PARVANE_TURN_TTL_SECS
 ```
 
-На проде эти переменные задаются в `infra/deploy` (см. docker-compose.yml);
-сам TURN-сервер поднят на VPS (`infra/turn/main.go`, systemd `parvane-turn`).
+На проде эти переменные задаются в `backend/infra/deploy` (см. docker-compose.yml);
+сам TURN-сервер поднят на VPS (`backend/infra/turn/main.go`, systemd `parvane-turn`).
 
 ## Вариант 1 — parvane-turn (userspace, без root)
 
 Свой TURN/STUN на pion (Go), запускается без прав root:
 
 ```bash
-cd infra/turn
+cd backend/infra/turn
 go build -o parvane-turn .
 TURN_PUBLIC_IP=<внешний_IP> TURN_USER=parvane TURN_PASS=parvane ./parvane-turn
 ```
@@ -28,14 +28,14 @@ TURN_PUBLIC_IP=<внешний_IP> TURN_USER=parvane TURN_PASS=parvane ./parvane
 Переменные: `TURN_PUBLIC_IP` (обязательно реальный публичный IP для релея),
 `TURN_PORT` (3478), `TURN_REALM` (parvane), `TURN_USER`/`TURN_PASS`.
 
-Проверка: `bash infra/turn/verify_turn.sh` → должно быть `RELAY OK` + `STUN mapped`.
+Проверка: `bash backend/infra/turn/verify_turn.sh` → должно быть `RELAY OK` + `STUN mapped`.
 
 ## Вариант 2 — coturn (если есть root)
 
 ```bash
 sudo pacman -S coturn
 # отредактировать external-ip в coturn.conf на реальный публичный IP
-turnserver -c infra/turn/coturn.conf
+turnserver -c backend/infra/turn/coturn.conf
 ```
 
 ## Проверка на клиенте

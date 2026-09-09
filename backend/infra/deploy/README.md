@@ -31,9 +31,9 @@ DuckDNS в серверном `.env` (`DUCKDNS_TOKEN`, НЕ в репо), дом
 ## Деплой
 
 ```bash
-infra/deploy/deploy.sh                 # всё: web dist + образы + заливка + up
-PARVANE_DEPLOY_SKIP_WEB_BUILD=1 infra/deploy/deploy.sh   # без пересборки веба
-PARVANE_DEPLOY_SKIP_IMAGES=1 infra/deploy/deploy.sh      # только конфиги/статика
+backend/infra/deploy/deploy.sh                 # всё: web dist + образы + заливка + up
+PARVANE_DEPLOY_SKIP_WEB_BUILD=1 backend/infra/deploy/deploy.sh   # без пересборки веба
+PARVANE_DEPLOY_SKIP_IMAGES=1 backend/infra/deploy/deploy.sh      # только конфиги/статика
 ```
 
 Образы собираются ЛОКАЛЬНО podman'ом под **baseline x86-64** (Xeon 5160 без
@@ -130,7 +130,7 @@ sync_reconnect, пин/архив чата (пробник). TURN relay — RELA
 Пароль круга (Caddy `basic_auth` на весь сайт, 2026-09-01 — 2026-09-05) снят.
 Сайт открыт, барьер от мусорных аккаунтов — подтверждение регистрации у
 identity. Основной режим — Telegram-бот (`PARVANE_TELEGRAM_BOT` +
-`PARVANE_TELEGRAM_SECRET`, бот на отдельном VPS — см. `infra/telegram-bot`),
+`PARVANE_TELEGRAM_SECRET`, бот на отдельном VPS — см. `backend/infra/telegram-bot`),
 один Telegram = один аккаунт. Запасной — почта: `PARVANE_EMAIL_REQUIRED=1`
 (дефолт compose) + `PARVANE_SMTP_HOST/PORT/USER/PASS/FROM`; SMTP пока нет.
 Экран входа принимает ник без

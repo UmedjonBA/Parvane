@@ -2,8 +2,7 @@
 # Персист между сессиями: обмен → убить → ПЕРЕЗАПУСК с теми же workdir.
 # Инлайн-запуск (как в рабочем verify_phase2), логи ран1/ран2 раздельно.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"; SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-restart}"; rm -rf "$SB"; mkdir -p "$SB"
 A="$SB/alice/td"; B="$SB/bob/td"; mkdir -p "$A" "$B"
 T1="msg1-$(date +%s)"; T2="msg2-$(date +%s)"

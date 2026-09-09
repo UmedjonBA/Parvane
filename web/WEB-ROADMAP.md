@@ -130,7 +130,7 @@ CLAUDE.md), юнит-тесты `npx vitest run` в web/telegram-tt, `cargo test
 Обязательные команды после A0:
 
 ```bash
-cargo test --workspace
+(cd backend && cargo test --workspace)
 cd web/telegram-tt
 npm ci
 npm run check

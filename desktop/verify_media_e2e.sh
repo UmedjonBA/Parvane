@@ -5,8 +5,7 @@
 #    не расшифровался, PNG бы не распознался;
 #  - cloud хранит ШИФРТЕКСТ (PNG-сигнатуры \x89PNG нет в cloud.db).
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"; SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-media-e2e}"; rm -rf "$SB"; mkdir -p "$SB"
 A="$SB/alice/td"; B="$SB/bob/td"; mkdir -p "$A" "$B"; PNG="$SB/pic.png"
 RC=0; ok(){ printf '\033[32mok  \033[0m %s\n' "$*"; }; bad(){ printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }

@@ -8,7 +8,7 @@
 > двухфакторный вход через Telegram-бота, лимиты частоты и сверка ключей
 > безопасности. Бэкенд — Rust-шарды на шине NATS (см. корневой `README.md`).
 > Общий контракт с десктоп- и Android-клиентами — NATS/JSON. Деплой на прод —
-> `infra/deploy`. Ниже — оригинальный README Telegram Web A.
+> `backend/infra/deploy`. Ниже — оригинальный README Telegram Web A.
 
 ---
 

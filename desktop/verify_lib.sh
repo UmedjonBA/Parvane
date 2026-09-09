@@ -2,9 +2,7 @@
 # Parvane — общая обвязка desktop-e2e (мультидевайс/линковка/devices/email/edit).
 # Поднимает nats + шарды (identity, messenger, cloud, call) + gateway в $SB,
 # даёт ok/bad/start_client/wait_log/stop_all. Источник: . verify_lib.sh
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 RC=0
 ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }

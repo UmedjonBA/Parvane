@@ -1,5 +1,5 @@
 # Все Rust-шарды Parvane в одном образе (каждый сервис compose запускает свой бинарь).
-# Контекст сборки — корень репозитория, ignorefile — shards.dockerignore.
+# Контекст сборки — backend/ (Cargo workspace), ignorefile — shards.dockerignore.
 # ВАЖНО: target-cpu=x86-64 (baseline) — прод-сервер m60-7 на Xeon 5160 без SSE4.2/AVX.
 
 FROM rust:1-bookworm AS builder

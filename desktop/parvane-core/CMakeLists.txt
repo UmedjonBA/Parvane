@@ -33,14 +33,14 @@ FetchContent_MakeAvailable(nlohmann_json cnats)
 find_package(OpenSSL REQUIRED)
 
 # ── parvane-e2e (Rust staticlib, vodozemac Olm) — E2E крипта (Фаза 2) ──────────
-# Собираем cargo-крейт и линкуем libparvane_e2e.a. Путь workspace-target —
-# ../../target относительно этого файла (desktop/parvane-core → корень репо).
-set(PARVANE_E2E_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
-set(PARVANE_E2E_LIB ${PARVANE_E2E_DIR}/target/debug/libparvane_e2e.a)
+# Собираем cargo-крейт и линкуем libparvane_e2e.a. Cargo workspace лежит в
+# backend/ — это ../../backend относительно этого файла.
+set(PARVANE_BACKEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../backend)
+set(PARVANE_E2E_LIB ${PARVANE_BACKEND_DIR}/target/debug/libparvane_e2e.a)
 find_program(CARGO_EXE cargo REQUIRED)
 add_custom_target(parvane_e2e_build ALL
     COMMAND ${CARGO_EXE} build -p parvane-e2e
-    WORKING_DIRECTORY ${PARVANE_E2E_DIR}
+    WORKING_DIRECTORY ${PARVANE_BACKEND_DIR}
     BYPRODUCTS ${PARVANE_E2E_LIB}
     COMMENT "cargo build parvane-e2e (vodozemac staticlib)")
 
@@ -63,7 +63,7 @@ add_library(parvane_core STATIC
 add_dependencies(parvane_core parvane_e2e_build)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-           ${PARVANE_E2E_DIR}/shared/parvane-e2e/include
+           ${PARVANE_BACKEND_DIR}/shared/parvane-e2e/include
     PRIVATE ${cnats_SOURCE_DIR}/src)
 target_link_libraries(parvane_core
     PUBLIC nlohmann_json::nlohmann_json

@@ -62,16 +62,15 @@ start_shard() {
   env PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \
       PARVANE_NATS_USER="$shard" PARVANE_NATS_PASS="$pass" \
       PARVANE_DB_PATH="$DB_DIR/$shard.db" PARVANE_LOG_LEVEL=info \
-      "$ROOT/target/debug/$shard" >"$LOG_DIR/$shard.log" 2>&1 &
+      "$ROOT/backend/target/debug/$shard" >"$LOG_DIR/$shard.log" 2>&1 &
   PIDS+=("$!")
 }
 
 log "Build backend"
-cd "$ROOT"
-cargo build -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
+cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
 
 log "Start NATS (persistent)"
-nats-server -c "$ROOT/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
+nats-server -c "$ROOT/backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
   >"$LOG_DIR/nats.log" 2>&1 &
 PIDS+=("$!")
 wait_for_log nats 'Server is ready' "${PIDS[-1]}"
@@ -96,7 +95,7 @@ env PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \
     PARVANE_GATEWAY_BIND="127.0.0.1:$GATEWAY_WS_PORT" \
     PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$GATEWAY_TCP_PORT" \
     PARVANE_LOG_LEVEL=info \
-    "$ROOT/target/debug/gateway" >"$LOG_DIR/gateway.log" 2>&1 &
+    "$ROOT/backend/target/debug/gateway" >"$LOG_DIR/gateway.log" 2>&1 &
 PIDS+=("$!")
 wait_for_log gateway 'Gateway WebSocket' "${PIDS[-1]}"
 

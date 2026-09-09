@@ -1,5 +1,5 @@
 // Соединение с Parvane gateway: JSON-кадры поверх WebSocket.
-// Протокол (shards/gateway): до `auth` разрешены только bootstrap-запросы
+// Протокол (backend/shards/gateway): до `auth` разрешены только bootstrap-запросы
 // (identity.token.issue / identity.user.register); после — pub/req/reqmany/sub.
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;

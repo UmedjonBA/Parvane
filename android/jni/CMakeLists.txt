@@ -13,9 +13,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CORE ${CMAKE_CURRENT_SOURCE_DIR}/../../desktop/parvane-core)
 set(REPO ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+set(BACKEND ${REPO}/backend)   # Cargo workspace (parvane-e2e, target/)
 
 # Из Gradle (externalNativeBuild) префиксы выводим из ANDROID_ABI: OpenSSL —
-# android/prebuilt/openssl/<ABI> (build-openssl.sh), e2e — target/<rust>/release
+# android/prebuilt/openssl/<ABI> (build-openssl.sh), e2e — backend/target/<rust>/release
 # (cargo ndk … -p parvane-e2e --release, см. build-core.sh).
 if(NOT DEFINED PARVANE_OPENSSL_DIR)
   set(PARVANE_OPENSSL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../prebuilt/openssl/${ANDROID_ABI})
@@ -30,7 +31,7 @@ if(NOT DEFINED PARVANE_E2E_LIB)
   else()
     set(_rust i686-linux-android)
   endif()
-  set(PARVANE_E2E_LIB ${REPO}/target/${_rust}/release/libparvane_e2e.a)
+  set(PARVANE_E2E_LIB ${BACKEND}/target/${_rust}/release/libparvane_e2e.a)
 endif()
 if(NOT EXISTS ${PARVANE_OPENSSL_DIR}/lib/libcrypto.a)
   message(FATAL_ERROR "нет OpenSSL под ${ANDROID_ABI}: ${PARVANE_OPENSSL_DIR} (android/build-openssl.sh)")
@@ -56,7 +57,7 @@ add_library(parvane_core STATIC
 
 target_include_directories(parvane_core PUBLIC
     ${CORE}/include
-    ${REPO}/shared/parvane-e2e/include
+    ${BACKEND}/shared/parvane-e2e/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party        # nlohmann/json.hpp
     ${PARVANE_OPENSSL_DIR}/include)
 

@@ -21,9 +21,9 @@ case "$ABI" in
 esac
 
 echo "== 1/2 cargo-ndk: parvane-e2e для $ABI ($RUST_TARGET) =="
-cd "$REPO"
+cd "$REPO/backend"
 cargo ndk -t "$ABI" --platform "$API" build -p parvane-e2e --release
-E2E_LIB="$REPO/target/$RUST_TARGET/release/libparvane_e2e.a"
+E2E_LIB="$REPO/backend/target/$RUST_TARGET/release/libparvane_e2e.a"
 [ -f "$E2E_LIB" ] || { echo "нет $E2E_LIB"; exit 3; }
 
 echo "== 2/2 cmake+ninja: parvane_core для $ABI =="

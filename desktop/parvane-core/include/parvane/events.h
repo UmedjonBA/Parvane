@@ -1,5 +1,5 @@
 // Parvane fork: C++-зеркало конверта событий и identity-пейлоадов из
-// shared/parvane-types/src/lib.rs. Только то, что нужно для Фазы 2 (логин);
+// backend/shared/parvane-types/src/lib.rs. Только то, что нужно для Фазы 2 (логин);
 // messenger/cloud-пейлоады добавим в Фазе 3-4. Сериализация — nlohmann/json.
 #pragma once
 

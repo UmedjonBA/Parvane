@@ -84,7 +84,7 @@ cd android
 ```
 `local.properties` (sdk.dir) — локальный, в gitignore. Gradle сам собирает
 `libparvane_jni.so` через `externalNativeBuild` (CMake берёт OpenSSL/e2e из
-`prebuilt/openssl/<ABI>` и `target/<rust-target>/release`).
+`prebuilt/openssl/<ABI>` и `../backend/target/<rust-target>/release`).
 
 ### Дымовой тест в эмуляторе — ✅ ЗЕЛЁНЫЙ (7 сен 2026)
 `android/smoke_emulator.sh`: локальный стек (desktop/verify_lib.sh), alice/bob
