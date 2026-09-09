@@ -174,6 +174,7 @@ QHash<quint64, QString> g_idToAddress;
 std::unique_ptr<parvane::GroupClient> g_groupClient;
 std::unique_ptr<parvane::GroupCallManager> g_groupCallManager;
 QHash<QString, QString> g_knownGroups;
+QHash<QString, QSet<quint64>> g_personalChannelUsers; // group_id → user id, чей личный канал ещё не синтезирован
 QHash<quint64, QString> g_chatIdToGroupId;
 // Участники групп (адреса) — для инициации группового звонка. Под g_sessionMutex.
 QHash<QString, QStringList> g_groupMembers;
@@ -3917,8 +3918,59 @@ ChatData *ensureGroupChat(
 			history->setUnreadCount(0);
 		}
 		LOG(("Parvane: группа синтезирована %1 (%2)").arg(gid, title));
+		// Личный канал контактов, указывающий на эту группу, теперь можно
+		// показать — перерисовать секцию профиля.
+		auto waiting = QSet<quint64>();
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			waiting = g_personalChannelUsers.take(gid);
+		}
+		for (const auto uid : waiting) {
+			if (const auto user = session->data().userLoaded(UserId(BareId(uid)))) {
+				session->changes().peerUpdated(
+					user,
+					Data::PeerUpdate::Flag::PersonalChannel);
+			}
+		}
 	}
 	return result;
+}
+
+QString GroupIdByName(const QString &name) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	for (auto it = g_knownGroups.constBegin(); it != g_knownGroups.constEnd(); ++it) {
+		if (it.value() == name) {
+			return it.key();
+		}
+	}
+	return QString();
+}
+
+// personal_channel из identity — group_id группы Parvane. Личный канал в
+// UserData — ChannelId с bare = IdForAddress(group_id) (см.
+// Info::Profile::PersonalChannelValue: ищет ChatData по этому id). Если группа
+// ещё не известна (не участник / group.list не пришёл) — запомним и
+// перерисуем, когда ensureGroupChat её синтезирует.
+void ApplyPersonalChannel(not_null<UserData*> user, const QString &gid) {
+	if (gid.isEmpty()) {
+		user->setPersonalChannel(ChannelId(), MsgId());
+		return;
+	}
+	const auto id = IdForAddress(gid);
+	auto known = false;
+	auto name = QString();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		known = g_knownGroups.contains(gid);
+		name = g_knownGroups.value(gid);
+		if (!known) {
+			g_personalChannelUsers[gid].insert(std::uint64_t(peerToUser(user->id).bare));
+		}
+	}
+	if (known) {
+		ensureGroupChat(&user->session(), gid, name, 0);
+	}
+	user->setPersonalChannel(ChannelId(BareId(id)), MsgId());
 }
 
 not_null<UserData*> ensurePeerUser(
@@ -4121,6 +4173,21 @@ void ResolveNames(const QStringList &addresses) {
 						user->clearColorIndex(); // сброшен на цвет по умолчанию
 					}
 				}
+				if (j.contains("personal_channel") && j["personal_channel"].is_string()) {
+					ApplyPersonalChannel(user, QString::fromStdString(
+						j["personal_channel"].get<std::string>()));
+				}
+				const auto str = [&](const char *key) {
+					return (j.contains(key) && j[key].is_string())
+						? QString::fromStdString(j[key].get<std::string>())
+						: QString();
+				};
+				LOG(("Parvane: профиль %1: bio=%2 phone=%3 color=%4 channel=%5")
+					.arg(it.key(), str("bio"), str("phone"))
+					.arg((j.contains("name_color") && j["name_color"].is_number_integer())
+						? j["name_color"].get<int>()
+						: -1)
+					.arg(str("personal_channel")));
 			}
 		});
 	});
@@ -6555,6 +6622,7 @@ void SetProfileFields(const ProfileFields &fields) {
 	if (fields.birthday) req["birthday"] = fields.birthday->toStdString();
 	if (fields.phone) req["phone"] = fields.phone->toStdString();
 	if (fields.nameColor) req["name_color"] = *fields.nameColor;
+	if (fields.personalChannel) req["personal_channel"] = fields.personalChannel->toStdString();
 	crl::async([req] {
 		parvane::ITransport *t = nullptr;
 		{
@@ -6566,7 +6634,9 @@ void SetProfileFields(const ProfileFields &fields) {
 		}
 		try {
 			t->request("identity.user.setname", req.dump(), 3000);
-			LOG(("Parvane: профиль обновлён (%1)").arg(QString::fromStdString(req.dump()).left(120)));
+			auto shown = req;
+			shown.erase("token"); // JWT в лог не попадает
+			LOG(("Parvane: профиль обновлён (%1)").arg(QString::fromStdString(shown.dump()).left(400)));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: профиль не обновлён: %1").arg(QString::fromUtf8(e.what())));
 		}
@@ -6673,6 +6743,11 @@ void ApplyNotifyBlob(const QString &json) {
 			const auto address = QString::fromStdString(it.key());
 			g_notifyExceptions.insert(address, QString::fromStdString(it.value().dump()));
 			const auto mute = MuteFromWeb(it.value());
+			LOG(("Parvane: уведомления с другого устройства: %1 mutedUntil=%2")
+				.arg(address)
+				.arg((it.value().contains("mutedUntil") && it.value()["mutedUntil"].is_number())
+					? it.value()["mutedUntil"].get<std::int64_t>()
+					: 0));
 			if (!mute) {
 				continue;
 			}
@@ -7461,6 +7536,21 @@ QString GroupIdForChat(not_null<PeerData*> peer) {
 	return g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
 }
 
+std::vector<not_null<ChatData*>> KnownGroupChats(not_null<Main::Session*> session) {
+	auto groups = QHash<QString, QString>();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		groups = g_knownGroups;
+	}
+	auto result = std::vector<not_null<ChatData*>>();
+	for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
+		if (const auto chat = ensureGroupChat(session, it.key(), it.value(), 0)) {
+			result.push_back(chat);
+		}
+	}
+	return result;
+}
+
 // ── Папки (chat filters): персист локально + восстановление на старте ─────────
 // tdesktop создаёт/применяет фильтры ЛОКАЛЬНО (local id + apply), но сохраняет их
 // только в облако (MTProto заглушён) → при рестарте терялись. Сериализуем список
@@ -8117,6 +8207,94 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						UserId(BareId(IdForAddress(peerAddr))));
 					LOG(("Parvane: autoclearchat → %1").arg(peerAddr));
 					session->api().deleteConversation(user, false);
+				});
+			}
+		}
+
+		// Debug-automute для e2e: PARVANE_AUTOMUTE=цель[,цель]:<секунды>; цель —
+		// адрес собеседника или group:<имя группы>. Мут навсегда штатным
+		// NotifySettings::update → MirrorNotifySettings → другие устройства.
+		if (const char *mv = std::getenv("PARVANE_AUTOMUTE"); mv && *mv) {
+			const auto spec = QString::fromUtf8(mv);
+			const auto sep = spec.lastIndexOf(':');
+			if (sep > 0) {
+				const auto targets = spec.left(sep).split(',', Qt::SkipEmptyParts);
+				const auto secs = std::max(spec.mid(sep + 1).toInt(), 1);
+				base::call_delayed(secs * crl::time(1000), [targets] {
+					const auto session = g_sessionWeak.get();
+					if (!session) {
+						return;
+					}
+					for (const auto &target : targets) {
+						PeerData *peer = nullptr;
+						if (target.startsWith(u"group:"_q)) {
+							const auto gname = target.mid(6);
+							const auto gid = GroupIdByName(gname);
+							if (!gid.isEmpty()) {
+								peer = ensureGroupChat(session, gid, gname, 0);
+							}
+						} else {
+							RegisterPeer(target);
+							peer = session->data().user(
+								UserId(BareId(IdForAddress(target))));
+						}
+						if (!peer) {
+							LOG(("Parvane: automute: не нашёл %1").arg(target));
+							continue;
+						}
+						session->data().notifySettings().update(
+							peer,
+							Data::MuteValue{ .forever = true });
+						LOG(("Parvane: automute → %1").arg(target));
+					}
+				});
+			}
+		}
+
+		// Debug-autoprofile для e2e: PARVANE_AUTOPROFILE=bio=..;phone=..;color=N;
+		// channel=<имя группы>:<секунды> — свои профильные поля в identity
+		// (channel пустой = убрать личный канал).
+		if (const char *pv = std::getenv("PARVANE_AUTOPROFILE"); pv && *pv) {
+			const auto spec = QString::fromUtf8(pv);
+			const auto sep = spec.lastIndexOf(':');
+			if (sep > 0) {
+				const auto pairs = spec.left(sep).split(';', Qt::SkipEmptyParts);
+				const auto secs = std::max(spec.mid(sep + 1).toInt(), 1);
+				base::call_delayed(secs * crl::time(1000), [pairs] {
+					const auto session = g_sessionWeak.get();
+					if (!session) {
+						return;
+					}
+					const auto self = session->user();
+					auto fields = ProfileFields();
+					for (const auto &pair : pairs) {
+						const auto eq = pair.indexOf('=');
+						if (eq <= 0) {
+							continue;
+						}
+						const auto key = pair.left(eq);
+						const auto value = pair.mid(eq + 1);
+						if (key == u"bio"_q) {
+							fields.bio = value;
+							self->setAbout(value);
+						} else if (key == u"phone"_q) {
+							fields.phone = value;
+							self->setPhone(value);
+						} else if (key == u"color"_q) {
+							fields.nameColor = value.toInt();
+							if (*fields.nameColor >= 0) {
+								self->changeColorIndex(uint8(*fields.nameColor));
+							} else {
+								self->clearColorIndex();
+							}
+						} else if (key == u"channel"_q) {
+							const auto gid = GroupIdByName(value);
+							fields.personalChannel = gid;
+							ApplyPersonalChannel(self, gid);
+						}
+					}
+					SetProfileFields(fields);
+					LOG(("Parvane: autoprofile применён (%1)").arg(pairs.join(';')));
 				});
 			}
 		}

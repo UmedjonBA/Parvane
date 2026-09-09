@@ -46,6 +46,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_ai_compose_tones.h"
 #include "data/data_birthday.h"
 #include "data/data_channel.h"
+#include "data/data_chat.h" // Parvane: личный канал = группа
 #include "data/data_document.h"
 #include "data/data_poll.h"
 #include "data/data_session.h"
@@ -94,12 +95,11 @@ public:
 	Main::Session &session() const override;
 	void prepare() override;
 	void rowClicked(not_null<PeerListRow*> row) override;
-	[[nodiscard]] rpl::producer<not_null<ChannelData*>> chosen() const;
+	[[nodiscard]] rpl::producer<not_null<PeerData*>> chosen() const;
 
 private:
 	const not_null<Window::SessionController*> _window;
-	rpl::event_stream<not_null<ChannelData*>> _chosen;
-	mtpRequestId _requestId = 0;
+	rpl::event_stream<not_null<PeerData*>> _chosen;
 
 };
 
@@ -108,77 +108,52 @@ PersonalChannelController::PersonalChannelController(
 : _window(window) {
 }
 
-PersonalChannelController::~PersonalChannelController() {
-	if (_requestId) {
-		_window->session().api().request(_requestId).cancel();
-	}
-}
+PersonalChannelController::~PersonalChannelController() = default;
 
 Main::Session &PersonalChannelController::session() const {
 	return _window->session();
 }
 
 void PersonalChannelController::prepare() {
-	setDescription(object_ptr<Ui::FlatLabel>(
-		nullptr,
-		tr::lng_contacts_loading(),
-		computeListSt().about));
-
-	using Flag = MTPchannels_GetAdminedPublicChannels::Flag;
-	_requestId = _window->session().api().request(
-		MTPchannels_GetAdminedPublicChannels(
-			MTP_flags(Flag::f_for_personal))
-	).done([=](const MTPmessages_Chats &result) {
-		_requestId = 0;
-
-		setDescription(nullptr);
-		const auto &chats = result.match([](const auto &data) {
-			return data.vchats().v;
+	// Parvane: личный канал — любая известная группа/канал Parvane (ChatData),
+	// без MTProto (channels.getAdminedPublicChannels).
+	for (const auto chat : Parvane::KnownGroupChats(&_window->session())) {
+		const auto rowId = chat->id.value;
+		if (!delegate()->peerListFindRow(rowId)) {
+			auto row = std::make_unique<PeerListRow>(chat);
+			row->setCustomStatus(tr::lng_chat_status_members(
+				tr::now,
+				lt_count,
+				std::max(chat->count, 1)));
+			delegate()->peerListAppendRow(std::move(row));
+		}
+	}
+	if (!delegate()->peerListFullRowsCount()) {
+		auto none = rpl::combine(
+			tr::lng_settings_channel_no_yet(tr::marked),
+			tr::lng_settings_channel_start()
+		) | rpl::map([](TextWithEntities &&text, const QString &link) {
+			return text.append('\n').append(tr::link(link));
 		});
-		const auto owner = &_window->session().data();
-		for (const auto &chat : chats) {
-			if (const auto peer = owner->processChat(chat)) {
-				const auto rowId = peer->id.value;
-				const auto channel = peer->asChannel();
-				if (channel && !delegate()->peerListFindRow(rowId)) {
-					auto row = std::make_unique<PeerListRow>(peer);
-					row->setCustomStatus(tr::lng_chat_status_subscribers(
-						tr::now,
-						lt_count,
-						channel->membersCount()));
-					delegate()->peerListAppendRow(std::move(row));
-				}
-			}
-		}
-		if (!delegate()->peerListFullRowsCount()) {
-			auto none = rpl::combine(
-				tr::lng_settings_channel_no_yet(tr::marked),
-				tr::lng_settings_channel_start()
-			) | rpl::map([](TextWithEntities &&text, const QString &link) {
-				return text.append('\n').append(tr::link(link));
-			});
-			auto label = object_ptr<Ui::FlatLabel>(
-				nullptr,
-				std::move(none),
-				computeListSt().about);
-			label->setClickHandlerFilter([=](const auto &...) {
-				_window->showNewChannel();
-				return false;
-			});
-			setDescription(std::move(label));
-		}
-		delegate()->peerListRefreshRows();
-	}).send();
+		auto label = object_ptr<Ui::FlatLabel>(
+			nullptr,
+			std::move(none),
+			computeListSt().about);
+		label->setClickHandlerFilter([=](const auto &...) {
+			_window->showNewChannel();
+			return false;
+		});
+		setDescription(std::move(label));
+	}
+	delegate()->peerListRefreshRows();
 }
 
 void PersonalChannelController::rowClicked(not_null<PeerListRow*> row) {
-	if (const auto channel = row->peer()->asChannel()) {
-		_chosen.fire_copy(channel);
-	}
+	_chosen.fire_copy(row->peer());
 }
 
 auto PersonalChannelController::chosen() const
--> rpl::producer<not_null<ChannelData*>> {
+-> rpl::producer<not_null<PeerData*>> {
 	return _chosen.events();
 }
 
@@ -212,31 +187,26 @@ Window::SessionController *ApplyAccountIndex(
 
 void SavePersonalChannel(
 		not_null<Window::SessionController*> window,
-		ChannelData *channel) {
+		PeerData *channel) {
+	// Parvane: канал — группа Parvane (ChatData); в UserData личный канал —
+	// ChannelId с bare = id чата; на сервер уходит group_id через
+	// identity.user.setname (personal_channel, пустая строка = убрать).
 	const auto self = window->session().user();
-	const auto history = channel
-		? channel->owner().history(channel->id).get()
-		: nullptr;
-	const auto item = history
-		? history->lastServerMessage()
-		: nullptr;
-	const auto channelId = channel
-		? peerToChannel(channel->id)
-		: ChannelId();
-	const auto messageId = item ? item->id : MsgId();
-	if (self->personalChannelId() != channelId
-		|| (messageId
-			&& self->personalChannelMessageId() != messageId)) {
-		self->setPersonalChannel(channelId, messageId);
-		self->session().api().request(MTPaccount_UpdatePersonalChannel(
-			channel ? channel->inputChannel() : MTP_inputChannelEmpty()
-		)).done(crl::guard(window, [=] {
-			window->showToast((channel
-				? tr::lng_settings_channel_saved
-				: tr::lng_settings_channel_removed)(tr::now));
-		})).fail(crl::guard(window, [=](const MTP::Error &error) {
-			window->showToast(u"Error: "_q + error.type());
-		})).send();
+	const auto channelId = !channel
+		? ChannelId()
+		: channel->isChat()
+		? ChannelId(peerToChat(channel->id).bare)
+		: peerToChannel(channel->id);
+	if (self->personalChannelId() != channelId) {
+		self->setPersonalChannel(channelId, MsgId());
+		Parvane::SetProfileFields({
+			.personalChannel = channel
+				? Parvane::GroupIdForChat(channel)
+				: QString(),
+		});
+		window->showToast((channel
+			? tr::lng_settings_channel_saved
+			: tr::lng_settings_channel_removed)(tr::now));
 	}
 }
 
@@ -1077,8 +1047,8 @@ bool ShowEditPersonalChannel(
 	if (!maybePeerId.isEmpty()) {
 		if (const auto peerId = PeerId(maybePeerId.toULongLong())) {
 			if (const auto peer = controller->session().data().peer(peerId)) {
-				if (const auto channel = peer->asChannel()) {
-					SavePersonalChannel(controller, channel);
+				if (peer->isChat() || peer->isChannel()) {
+					SavePersonalChannel(controller, peer);
 					return true;
 				}
 			}
@@ -1097,13 +1067,13 @@ bool ShowEditPersonalChannel(
 			box->closeBox();
 		});
 
-		const auto save = [=](ChannelData *channel) {
+		const auto save = [=](PeerData *channel) {
 			SavePersonalChannel(controller, channel);
 			box->closeBox();
 		};
 
 		rawController->chosen(
-		) | rpl::on_next([=](not_null<ChannelData*> channel) {
+		) | rpl::on_next([=](not_null<PeerData*> channel) {
 			save(channel);
 		}, box->lifetime());
 

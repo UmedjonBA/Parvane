@@ -442,13 +442,21 @@ rpl::producer<Data::Birthday> BirthdayValue(not_null<UserData*> user) {
 	});
 }
 
-rpl::producer<ChannelData*> PersonalChannelValue(not_null<UserData*> user) {
+rpl::producer<PeerData*> PersonalChannelValue(not_null<UserData*> user) {
 	return user->session().changes().peerFlagsValue(
 		user,
 		UpdateFlag::PersonalChannel
-	) | rpl::map([=] {
+	) | rpl::map([=]() -> PeerData* {
 		const auto channelId = user->personalChannelId();
-		return channelId ? user->owner().channel(channelId).get() : nullptr;
+		if (!channelId) {
+			return nullptr;
+		}
+		// Parvane: id личного канала — это id ChatData группы Parvane
+		// (IdForAddress(group_id)); канал MTProto не синтезируем.
+		if (const auto chat = user->owner().chatLoaded(ChatId(channelId.bare))) {
+			return chat;
+		}
+		return user->owner().channelLoaded(channelId);
 	});
 }
 

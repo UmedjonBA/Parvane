@@ -448,8 +448,10 @@ MTProto, а завершать локально (по образцу `ChatFilter
 2. **Профильные поля на десктопе** (Bio, дата рождения, цвет имени, личный
    канал, телефон — всё бесплатно, см. CLAUDE/память `parvane-no-paid-features`) —
    СДЕЛАНО 9 сен 2026: показ bio/даты/телефона/цвета из resolve; правка bio,
-   даты рождения, цвета имени (нативный бокс цвета) и телефона (свой бокс без
-   SMS) → identity. Личный канал — TODO.
+   даты рождения, цвета имени (нативный бокс цвета), телефона (свой бокс без
+   SMS) и личного канала (нативный выбор из групп Parvane) → identity.
+   e2e: `desktop/verify_notify_profile.sh`, `scripts/run_web_notify_profile_e2e.sh`,
+   `scripts/run_web_cross_profile_e2e.sh`.
    Бэкенд: identity 0013 + `identity.user.setname` с опц. полями, resolve отдаёт
    `UserInfo{bio,birthday,name_color,personal_channel,phone}`. Веб: Bio
    редактируется/показывается, остальное показывается. ДОДЕЛАТЬ на десктопе:

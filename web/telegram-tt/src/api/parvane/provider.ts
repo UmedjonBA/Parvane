@@ -2106,7 +2106,10 @@ const methods = {
         commonChatsCount: 0,
         bio: profile?.bio || undefined,
         birthday,
-        personalChannelId: profile?.personalChannel || undefined,
+        // personal_channel — group_id группы Parvane; tt ждёт id чата
+        personalChannelId: profile?.personalChannel
+          ? store.getIdForAddress(profile.personalChannel, 'group')
+          : undefined,
       },
       users: [user],
       chats: [],

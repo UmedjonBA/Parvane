@@ -549,7 +549,7 @@ void SetupPersonalChannel(
 	auto value = rpl::combine(
 		Info::Profile::PersonalChannelValue(self),
 		tr::lng_settings_channel_add()
-	) | rpl::map([](ChannelData *channel, const QString &add) {
+	) | rpl::map([](PeerData *channel, const QString &add) {
 		return TextWithEntities{ channel ? channel->name() : add };
 	});
 	const auto edit = [=] {
