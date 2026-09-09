@@ -52,6 +52,7 @@ add_library(parvane_core STATIC
     src/e2e.cpp
     src/linking.cpp
     src/blobcrypt.cpp
+    src/keybackup.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
     src/call_client.cpp

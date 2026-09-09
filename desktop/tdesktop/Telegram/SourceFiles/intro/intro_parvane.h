@@ -63,6 +63,11 @@ private:
 	Stage _stage = Stage::Login;
 	bool _requesting = false;
 	bool _autologinTried = false;
+	// Headless-хук PARVANE_AUTOLOGIN: e2e заводят аккаунты на лету, поэтому при
+	// отказе входа хук один раз пробует регистрацию (человеку так не делаем —
+	// вход и регистрация разделены явно).
+	bool _autologinActive = false;
+	bool _autologinRegisterTried = false;
 	// Домен сервера (identity.server.info): голый ник → ник@домен
 	QString _serverDomain;
 	QString _serverConfirm;
