@@ -4,9 +4,7 @@
 # Проверяет: авто-регистрация+логин+auth через gateway, отправка, приём
 # (inbox push Фазы 1), двусторонний обмен.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-p0c}"; mkdir -p "$SB"; rm -f "$SB"/*.db*
 STAMP="$(date +%s)"
 A_WORK="$SB/alice"; B_WORK="$SB/bob"; mkdir -p "$A_WORK/td" "$B_WORK/td"

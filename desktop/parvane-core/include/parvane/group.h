@@ -1,4 +1,4 @@
-// Parvane fork: C++-зеркало типов групп/каналов из shared/parvane-types.
+// Parvane fork: C++-зеркало типов групп/каналов из backend/shared/parvane-types.
 // Группа/канал — адресуемая переписка (group_id); сообщения в неё идут обычным
 // msg.chat.send с to = group_id, а участник получает их через sync.
 #pragma once

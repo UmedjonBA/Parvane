@@ -1,4 +1,4 @@
-// Parvane fork: C++-зеркало messenger-пейлоадов из shared/parvane-types/src/lib.rs.
+// Parvane fork: C++-зеркало messenger-пейлоадов из backend/shared/parvane-types/src/lib.rs.
 // Контракт (Фаза 3):
 //   msg.chat.send      — публикуется ПОЛНЫЙ ParvaneEvent<SendPayload>
 //   msg.chat.delivered — messenger публикует ParvaneEvent<DeliveredPayload>

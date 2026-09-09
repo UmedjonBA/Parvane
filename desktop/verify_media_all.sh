@@ -8,9 +8,7 @@
 #
 # Поднимает свой чистый backend на временных БД (nats переиспользует).
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$ROOT/.." && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 export PATH="$HOME/.local/bin:$PATH"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 URL="nats://127.0.0.1:4222"
@@ -33,9 +31,9 @@ trap cleanup EXIT
 # чистый backend (гасим дубли — иначе JWT-рассинхрон разных identity)
 pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null; pkill -x cloud 2>/dev/null; sleep 1
 pgrep -x nats-server >/dev/null || { setsid nohup nats-server >"$TMP/nats.log" 2>&1 </dev/null & disown; sleep 1; }
-setsid nohup env PARVANE_DB_PATH="$TMP/id.db"    "$REPO/target/debug/identity"  >"$TMP/id.log"    2>&1 </dev/null & disown
-setsid nohup env PARVANE_DB_PATH="$TMP/msg.db"   "$REPO/target/debug/messenger" >"$TMP/msg.log"   2>&1 </dev/null & disown
-setsid nohup env PARVANE_DB_PATH="$TMP/cloud.db" "$REPO/target/debug/cloud"     >"$TMP/cloud.log" 2>&1 </dev/null & disown
+setsid nohup env PARVANE_DB_PATH="$TMP/id.db"    "$SHARD/identity"  >"$TMP/id.log"    2>&1 </dev/null & disown
+setsid nohup env PARVANE_DB_PATH="$TMP/msg.db"   "$SHARD/messenger" >"$TMP/msg.log"   2>&1 </dev/null & disown
+setsid nohup env PARVANE_DB_PATH="$TMP/cloud.db" "$SHARD/cloud"     >"$TMP/cloud.log" 2>&1 </dev/null & disown
 sleep 2.5
 grep -q "NATS подключён" "$TMP/msg.log" || { echo "backend не поднялся"; exit 2; }
 

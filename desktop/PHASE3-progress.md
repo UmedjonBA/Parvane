@@ -132,8 +132,8 @@ bob получил от alice, alice получила от bob, у обоих д
 ```bash
 # поднять бэкенд
 nats-server &                                   # уже может быть запущен (4222)
-PARVANE_DB_PATH=/tmp/id.db  ./target/debug/identity  &
-PARVANE_DB_PATH=/tmp/msg.db ./target/debug/messenger &
+PARVANE_DB_PATH=/tmp/id.db  backend/target/debug/identity  &
+PARVANE_DB_PATH=/tmp/msg.db backend/target/debug/messenger &
 
 # весь регресс
 bash scripts/run_all_tests.sh

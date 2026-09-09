@@ -5,7 +5,7 @@
 // устройств контакта (device_id → {identity, signing}) кэшируется 15 с.
 #include "parvane/e2e.h"
 
-#include "parvane_e2e.h" // C-FFI vodozemac (shared/parvane-e2e/include)
+#include "parvane_e2e.h" // C-FFI vodozemac (backend/shared/parvane-e2e/include)
 #include "parvane/itransport.h"
 #include "parvane/linking.h"
 #include "parvane/topics.h"

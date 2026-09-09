@@ -1,4 +1,4 @@
-// Parvane fork: C++-зеркало cloud-пейлоадов из shared/parvane-types/src/lib.rs.
+// Parvane fork: C++-зеркало cloud-пейлоадов из backend/shared/parvane-types/src/lib.rs.
 // Контракт (Фаза 4, медиа-блобы):
 //   file.upload.chunk    — ParvaneEvent<UploadChunkPayload> (request/reply: ack)
 //   file.upload.complete — ParvaneEvent<UploadCompletePayload> (request/reply)

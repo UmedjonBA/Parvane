@@ -11,6 +11,7 @@
 # переиспользует, а если его нет — стартует свой и гасит в конце.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND="$ROOT/backend"
 cd "$ROOT"
 source "$HOME/.cargo/env" 2>/dev/null || true
 export PATH="$HOME/.local/bin:$PATH"
@@ -43,7 +44,8 @@ fi
 
 # ── 1. Rust unit-тесты (все шарды + types) ───────────────────────────────────
 log "1. cargo test --workspace"
-if cargo test --workspace 2>&1 | tee "$TMP/cargo.log" | grep -E "test result:|error\[|error:" ; then :; fi
+cargo test --manifest-path "$BACKEND/Cargo.toml" --workspace 2>&1 \
+    | tee "$TMP/cargo.log" | grep -E "test result:|error\[|error:" || true
 if grep -qE "test result: FAILED|error\[|^error:" "$TMP/cargo.log"; then
     fail "cargo test"
 else
@@ -53,13 +55,13 @@ fi
 # ── 2+3. поднять шарды для интеграционных тестов ─────────────────────────────
 log "2-3. поднимаю identity + messenger (временные БД)"
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/identity.db" \
-    ./target/debug/identity >"$TMP/identity.log" 2>&1 & PIDS+=($!)
+    "$BACKEND"/target/debug/identity >"$TMP/identity.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/messenger.db" \
-    ./target/debug/messenger >"$TMP/messenger.log" 2>&1 & PIDS+=($!)
+    "$BACKEND"/target/debug/messenger >"$TMP/messenger.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/cloud.db" \
-    ./target/debug/cloud >"$TMP/cloud.log" 2>&1 & PIDS+=($!)
+    "$BACKEND"/target/debug/cloud >"$TMP/cloud.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/call.db" \
-    ./target/debug/call >"$TMP/call.log" 2>&1 & PIDS+=($!)
+    "$BACKEND"/target/debug/call >"$TMP/call.log" 2>&1 & PIDS+=($!)
 sleep 2
 grep -q "NATS подключён" "$TMP/identity.log"  || fail "identity не стартовал"
 grep -q "NATS подключён" "$TMP/messenger.log" || fail "messenger не стартовал"

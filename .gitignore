@@ -1,4 +1,5 @@
-# Rust build artifacts
+# Rust build artifacts (после переноса workspace в backend/; /target — старые клоны)
+/backend/target
 /target
 
 # SQLite базы (создаются шардами при запуске)
@@ -26,6 +27,10 @@ CLAUDE.md
 
 # Node-зависимости корневых e2e-скриптов
 node_modules/
+
+# Байткод Python (телеграм-бот)
+__pycache__/
+*.pyc
 
 # Android (Parvane): тяжёлые артефакты и клоны для изучения — не коммитить
 /android/.build/

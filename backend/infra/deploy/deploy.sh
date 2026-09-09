@@ -3,12 +3,14 @@
 # по ключу). Сборка образов — локально под baseline x86-64, на сервер уезжают
 # готовые образы (docker load) + конфиги + web-dist.
 #
+#   Пути считаются от расположения скрипта, рабочий каталог не важен.
 #   PARVANE_DEPLOY_SKIP_WEB_BUILD=1  — не пересобирать web dist
 #   PARVANE_DEPLOY_SKIP_IMAGES=1     — не пересобирать/не перезаливать образы
 
 set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"   # корень репозитория
+BACKEND="$REPO/backend"                                         # Cargo workspace + infra
 SSH_PORT=2240
 SSH_DEST=umejon@185.81.248.52
 SSH=(ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_DEST")
@@ -18,16 +20,16 @@ log() { printf '\n== %s ==\n' "$*"; }
 
 if [[ "${PARVANE_DEPLOY_SKIP_WEB_BUILD:-0}" != "1" ]]; then
   log "Web dist (npm run build:production)"
-  (cd "$ROOT/web/telegram-tt" && npm run build:production)
+  (cd "$REPO/web/telegram-tt" && npm run build:production)
 fi
 
 if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
   # --http-proxy=false: не передавать в сборку прокси-переменные хоста
   # (локальный sing-box из контейнера недостижим/медленный, прямой доступ есть)
   log "Сборка образа шардов (podman, baseline x86-64)"
-  podman build --http-proxy=false -f "$ROOT/infra/deploy/Dockerfile.shards" \
-    --ignorefile "$ROOT/infra/deploy/shards.dockerignore" \
-    -t parvane-shards "$ROOT"
+  podman build --http-proxy=false -f "$BACKEND/infra/deploy/Dockerfile.shards" \
+    --ignorefile "$BACKEND/infra/deploy/shards.dockerignore" \
+    -t parvane-shards "$BACKEND"
 
   log "Заливка образов на сервер (docker load)"
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
@@ -35,10 +37,10 @@ fi
 
 log "Заливка конфигов и web-dist (tar over ssh — rsync локально нет)"
 "${SSH[@]}" "mkdir -p $REMOTE_DIR/nats"
-scp -P "$SSH_PORT" -q "$ROOT/infra/deploy/docker-compose.yml" \
-  "$ROOT/infra/deploy/Caddyfile" "$SSH_DEST:$REMOTE_DIR/"
-scp -P "$SSH_PORT" -q "$ROOT/infra/nats/server.prod.conf" "$SSH_DEST:$REMOTE_DIR/nats/"
-tar -C "$ROOT/web/telegram-tt/dist" -czf - . \
+scp -P "$SSH_PORT" -q "$BACKEND/infra/deploy/docker-compose.yml" \
+  "$BACKEND/infra/deploy/Caddyfile" "$SSH_DEST:$REMOTE_DIR/"
+scp -P "$SSH_PORT" -q "$BACKEND/infra/nats/server.prod.conf" "$SSH_DEST:$REMOTE_DIR/nats/"
+tar -C "$REPO/web/telegram-tt/dist" -czf - . \
   | "${SSH[@]}" "rm -rf $REMOTE_DIR/web-dist.new && mkdir -p $REMOTE_DIR/web-dist.new \
       && tar -C $REMOTE_DIR/web-dist.new -xzf - \
       && rm -rf $REMOTE_DIR/web-dist && mv $REMOTE_DIR/web-dist.new $REMOTE_DIR/web-dist"

@@ -6,9 +6,9 @@
 #   bash desktop/run-live-demo.sh video    # то же, но видеозвонок
 #   bash desktop/run-live-demo.sh stop      # погасить
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
+cd "$ROOT/.."
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-BIN="$PWD/desktop/build-probe/bin/Telegram"
 W="$HOME/parvane-demo"
 MODE="${1:-audio}"
 
@@ -31,7 +31,7 @@ rm -rf "$W"; mkdir -p "$W"/{alice,bob}
 run nats nats-server -p 4222
 sleep 2
 for s in identity messenger cloud call; do
-	run "$s" PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$W/$s.db" "$PWD/target/debug/$s"
+	run "$s" PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$W/$s.db" "$SHARD/$s"
 done
 sleep 3
 echo "бэкенд на 4222: $(ss -ltn 2>/dev/null | grep -c ':4222')"

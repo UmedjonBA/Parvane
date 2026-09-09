@@ -3,9 +3,7 @@
 # Проверяет: доставку в обе стороны И что контент ЗАШИФРОВАН (в messenger.db
 # нет плейнтекста; отправка помечена [E2E]).
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-p2c}"; rm -rf "$SB"; mkdir -p "$SB" # полная очистка (tdata тоже)
 STAMP="$(date +%s)"
 A_WORK="$SB/alice"; B_WORK="$SB/bob"; mkdir -p "$A_WORK/td" "$B_WORK/td"

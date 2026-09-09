@@ -1,4 +1,4 @@
-// Parvane fork: C++-зеркало call-пейлоадов из shared/parvane-types/src/lib.rs.
+// Parvane fork: C++-зеркало call-пейлоадов из backend/shared/parvane-types/src/lib.rs.
 // Контракт (Фаза 4, звонки):
 //   call.signal          — клиент шлёт ParvaneEvent<CallSignalPayload{to,signal}>
 //   call.user.<addr>     — call-шард релеит ParvaneEvent<CallSignal> в инбокс

@@ -1,5 +1,5 @@
 // Wire-типы протокола Parvane (NATS/JSON через gateway). Поля — snake_case,
-// как в `shared/parvane-types`. Контракт бэкенда стабилен, клиент подстраивается.
+// как в `backend/shared/parvane-types`. Контракт бэкенда стабилен, клиент подстраивается.
 
 export type WireTextEntity = {
   type: string;

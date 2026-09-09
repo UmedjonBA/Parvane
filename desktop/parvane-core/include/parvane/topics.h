@@ -1,4 +1,4 @@
-// Parvane fork: зеркало топиков-констант из shared/parvane-types/src/lib.rs.
+// Parvane fork: зеркало топиков-констант из backend/shared/parvane-types/src/lib.rs.
 // Держать один-в-один с Rust-источником. Соглашение: {domain}.{resource}.{action}.
 #pragma once
 

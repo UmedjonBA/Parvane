@@ -9,8 +9,7 @@
 #   4) carol НЕ получила msg2 (удалена: и сервером не фанится, и ключа новой сессии нет);
 #   5) плейнтекста msg2 нет в messenger.db.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"; SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 URL="nats://127.0.0.1:4222"
 SB="${SCRATCH:-/tmp/parvane-grprot}"; rm -rf "$SB"; mkdir -p "$SB"
 STAMP="$(date +%s)"; GNAME="РотГруппа"

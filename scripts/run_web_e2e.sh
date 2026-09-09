@@ -128,13 +128,12 @@ start_shard() {
     PARVANE_LOG_LEVEL=info \
     PARVANE_LOGIN_RATE_IP=100000 \
     PARVANE_REGISTER_RATE_IP=100000 \
-    "$ROOT/target/debug/$shard" >"$TEMP_ROOT/$shard.log" 2>&1 &
+    "$ROOT/backend/target/debug/$shard" >"$TEMP_ROOT/$shard.log" 2>&1 &
   PIDS+=("$!")
 }
 
 log "Build backend binaries"
-cd "$ROOT"
-cargo build -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
+cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
 
 log "Start isolated production-like NATS"
 env \
@@ -147,7 +146,7 @@ env \
   PARVANE_PREVIEW_PASS="$PREVIEW_PASS" \
   PARVANE_PUSH_PASS="$PUSH_PASS" \
   PARVANE_GATEWAY_PASS="$GATEWAY_PASS" \
-  nats-server -c "$ROOT/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
+  nats-server -c "$ROOT/backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
   >"$TEMP_ROOT/nats.log" 2>&1 &
 PIDS+=("$!")
 wait_for_log nats 'Server is ready' "${PIDS[-1]}"
@@ -157,7 +156,7 @@ wait_for_log nats 'Server is ready' "${PIDS[-1]}"
 TURN_SECRET="parvane-e2e-turn-secret"
 if command -v go >/dev/null 2>&1; then
   log "Build and start TURN server"
-  (cd "$ROOT/infra/turn" && go build -o "$TEMP_ROOT/parvane-turn" .)
+  (cd "$ROOT/backend/infra/turn" && go build -o "$TEMP_ROOT/parvane-turn" .)
   env \
     TURN_PUBLIC_IP=127.0.0.1 \
     TURN_PORT="$TURN_PORT" \
@@ -209,7 +208,7 @@ env \
   PARVANE_GATEWAY_BIND="127.0.0.1:$GATEWAY_WS_PORT" \
   PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$GATEWAY_TCP_PORT" \
   PARVANE_LOG_LEVEL=info \
-  "$ROOT/target/debug/gateway" >"$TEMP_ROOT/gateway.log" 2>&1 &
+  "$ROOT/backend/target/debug/gateway" >"$TEMP_ROOT/gateway.log" 2>&1 &
 PIDS+=("$!")
 wait_for_log gateway 'Gateway WebSocket' "${PIDS[-1]}"
 

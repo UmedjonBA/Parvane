@@ -96,7 +96,7 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 >   свой аудио-модуль на **PulseAudio** (прибилженный tg_owt без ALSA/Pulse давал
 >   тишину); защита от MITM (подпись SDP Ed25519 + SAS-эмодзи); **нативный экран
 >   звонка** (`Ui::GL::Window` + родные виджеты `calls.style`), входящий с
->   «Ответить/Отклонить», рингтоны; **STUN/TURN** (свой сервер `infra/turn`).
+>   «Ответить/Отклонить», рингтоны; **STUN/TURN** (свой сервер `backend/infra/turn`).
 > - **Безопасность инфраструктуры**: **TLS на NATS** (`PARVANE_NATS_TLS_CA`),
 >   пароли **argon2id**.
 >
@@ -184,7 +184,7 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 - **Шов**: события Parvane ↔ объекты api-слоя Telegram Web A; UI без изменений
 - **Своё**: русская локализация, «Избранное», контакты, папки, обои, QR, 2FA,
   лимиты частоты, сверка ключей безопасности
-- **Деплой**: статика за Caddy, `wss://<host>/ws` (см. `infra/deploy`)
+- **Деплой**: статика за Caddy, `wss://<host>/ws` (см. `backend/infra/deploy`)
 
 ### Client (десктоп) — форк Telegram Desktop
 
@@ -216,23 +216,30 @@ call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`
 
 ## Структура репозитория
 
+Четыре самостоятельных каталога — у каждого свой `CLAUDE.md` с подробными
+знаниями о содержимом (корневой `CLAUDE.md` — общие правила и маршрутизация).
+
 ```
 Parvane/
-├── Cargo.toml                  ← workspace (шарды)
-├── README.md
-├── CLAUDE.md
-├── shared/
-│   └── parvane-types/          ← общие типы, CRDT-типы, топики
-├── shards/
-│   ├── identity/
-│   ├── messenger/
-│   ├── cloud/
-│   ├── notes/        (src/rga.rs — RGA CRDT)
-│   ├── calendar/     (src/lww.rs — LWW-Map CRDT)
-│   └── call/         (src/calls.rs — логика статусов)
+├── README.md · CLAUDE.md · ARCHITECTURE.md · ROADMAP.md · specs/
+├── backend/                    ← БЭКЕНД: Rust-шарды на NATS + инфраструктура
+│   ├── Cargo.toml              ← workspace (шарды); target/ — артефакты (не в git)
+│   ├── shared/
+│   │   ├── parvane-types/      ← общие типы, топики, topic_contract (единый ACL)
+│   │   └── parvane-e2e/        ← Rust staticlib (vodozemac) для клиентов C++
+│   ├── shards/                 ← identity, messenger, cloud, call, preview, push,
+│   │                              gateway, notes (RGA CRDT), calendar (LWW CRDT)
+│   └── infra/
+│       ├── nats/               ← server.conf (dev) / server.prod.conf — ACL по ролям
+│       ├── deploy/             ← docker compose + deploy.sh (прод за Caddy)
+│       ├── telegram-bot/       ← бот подтверждения регистрации/2FA (на VPS)
+│       ├── turn/               ← TURN/STUN для звонков (pion, Go)
+│       └── tls/                ← самоподписанные серты для TLS на NATS (dev)
 ├── web/                        ← ОСНОВНОЙ клиент — форк Telegram Web A (TS)
-│   └── telegram-tt/
-│       └── src/api/parvane/     ← провайдер: WSS/gateway вместо MTProto, локализация
+│   ├── telegram-tt/
+│   │   └── src/api/parvane/    ← провайдер: WSS/gateway вместо MTProto, E2E, локализация
+│   ├── dev/cdp.mjs             ← headless-драйвер Chromium
+│   └── WEB-ROADMAP.md · WEB-A4-MATRIX.md
 ├── desktop/                    ← клиент — форк Telegram Desktop (C++/Qt)
 │   ├── UPSTREAM                ← тег + commit снапшота tdesktop
 │   ├── BUILD-parvane.md        ← рецепт сборки (п.7 — запуск против прода по WSS)
@@ -249,12 +256,8 @@ Parvane/
 │   ├── jni/                    ← CMake ядра (без cnats, WSS-only) + parvane_jni.cpp
 │   ├── tgx-overlay/ · setup-tgx.sh · tgx_*.sh  ← форк Telegram X (оверлей, эмулятор)
 │   └── build-openssl.sh · build-core.sh · smoke_emulator.sh
-├── scripts/                    ← e2e веба (Playwright) и прод-смоук
-└── infra/
-    ├── nats/server.conf        ← ACL по ролям
-    ├── deploy/                 ← docker compose + deploy.sh (прод за Caddy)
-    ├── telegram-bot/           ← бот подтверждения регистрации (на VPS)
-    └── turn/                   ← TURN/STUN для звонков
+├── scripts/                    ← сквозные e2e (Playwright, весь стек), демо, бэкапы
+└── local-workdirs/             ← локальные профили/демо/логи (не в git)
 ```
 
 ---
@@ -274,7 +277,7 @@ npm run dev            # локально; адрес gateway задаётся �
 npm run check:ts       # типы; тесты — vitest; e2e — scripts/run_web_*_e2e.sh
 ```
 
-Деплой на прод (статика за Caddy + `wss://<host>/ws`) — `infra/deploy`.
+Деплой на прод (статика за Caddy + `wss://<host>/ws`) — `backend/infra/deploy`.
 
 ## Десктопный клиент (форк tdesktop)
 
@@ -406,7 +409,7 @@ Backend **релеит** WebRTC-сигналы и ведёт историю. В�
 
 Двухуровневая:
 
-1. **NATS ACL** (`infra/nats/server.conf`) — каждый компонент подключается своим
+1. **NATS ACL** (`backend/infra/nats/server.conf`) — каждый компонент подключается своим
    пользователем и имеет права только на нужные топики.
 2. **JWT внутри события** — шард извлекает `token` из события, спрашивает
    `identity.token.verify`, получает `user` (subject токена) и сверяет с `from`.
@@ -441,14 +444,14 @@ Identity генерирует keypair (Ed25519) при первом старте
 
 ## CRDT
 
-### Заметки — RGA (`shards/notes/src/rga.rs`)
+### Заметки — RGA (`backend/shards/notes/src/rga.rs`)
 
 Текстовый CRDT. Каждый символ — узел с уникальным `OpId{seq, site}` и ссылкой
 `after`. Вставки и удаления (tombstone) коммутируют. Видимый текст — preorder-обход,
 сиблинги упорядочены по `OpId` убыванием. Обход итеративный (не рекурсивный — длинный
 текст = переполнение стека при рекурсии).
 
-### Календарь — per-field LWW-Map (`shards/calendar/src/lww.rs`)
+### Календарь — per-field LWW-Map (`backend/shards/calendar/src/lww.rs`)
 
 Событие — набор полей, каждое со своим LWW-регистром `(value, Stamp{ts, site})`.
 Конкурентные правки разных полей сливаются; одного поля — побеждает больший `ts`
@@ -484,6 +487,8 @@ curl -sL https://github.com/nats-io/natscli/releases/download/v0.1.6/nats-0.1.6-
 ## Сборка
 
 ```bash
+cd backend            # Cargo workspace живёт здесь
+
 # Все шарды
 cargo build
 
@@ -503,7 +508,8 @@ cargo build -p messenger
 # 1. Шина
 nats-server
 
-# 2. Identity (нужен всем шардам для проверки JWT)
+# 2. Identity (нужен всем шардам для проверки JWT); шарды — из backend/
+cd backend
 cargo run -p identity
 
 # 3. Доменные шарды
@@ -514,7 +520,7 @@ PARVANE_DB_PATH=/tmp/calendar.db  cargo run -p calendar
 PARVANE_DB_PATH=/tmp/call.db      cargo run -p call
 
 # 4. Клиент (форк tdesktop) — см. desktop/BUILD-parvane.md
-cd desktop/build-probe/bin && QT_QPA_PLATFORM=offscreen \
+cd ../desktop/build-probe/bin && QT_QPA_PLATFORM=offscreen \
   PARVANE_AUTOLOGIN='alice@local:test' ./Telegram -workdir /tmp/parvane-fork
 ```
 
@@ -536,6 +542,7 @@ cd desktop/build-probe/bin && QT_QPA_PLATFORM=offscreen \
 ### Unit-тесты
 
 ```bash
+cd backend                    # все cargo-команды — из backend/
 cargo test --workspace        # все 47
 cargo test -p notes           # RGA CRDT
 cargo test -p calendar        # LWW CRDT

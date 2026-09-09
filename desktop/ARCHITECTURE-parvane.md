@@ -99,4 +99,4 @@ data dir → `Parvane`), чтобы форк никогда не делил `~/.
 - `Telegram/SourceFiles/api/api_updates.{h,cpp}` — обработка апдейтов.
 - `Telegram/SourceFiles/intro/*` — экраны логина (заменяем на Parvane-логин).
 - НОВОЕ: `Telegram/SourceFiles/parvane/{transport,events}.{h,cpp}` — cnats + JSON,
-  C++-зеркало `shared/parvane-types/src/lib.rs` (типы + топики-константы).
+  C++-зеркало `backend/shared/parvane-types/src/lib.rs` (типы + топики-константы).

@@ -5,8 +5,7 @@
 # как «свои» не попадают, входящие инкрем.курсор не пере-тянет). Плюс новое T2
 # после рестарта доставляется. Проверяем и ОТСУТСТВИЕ дублей в журнале.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"; SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-hist}"; rm -rf "$SB"; mkdir -p "$SB"
 A="$SB/alice/td"; B="$SB/bob/td"; mkdir -p "$A" "$B"
 T1="история1-$(date +%s)"; T2="история2-$(date +%s)"

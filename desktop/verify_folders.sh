@@ -5,8 +5,7 @@
 # tdesktop создаёт фильтры локально, но хранит только в облаке (MTProto заглушён);
 # наш слой добавляет локальный персист.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"; SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-folders}"; rm -rf "$SB"; mkdir -p "$SB"
 A="$SB/alice/td"; B="$SB/bob/td"; mkdir -p "$A" "$B"
 FF="$A/tdata/parvane-folders.json"

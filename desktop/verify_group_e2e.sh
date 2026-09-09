@@ -8,9 +8,7 @@
 #   4) SKDM sealed (from_user пуст у kind=encrypted — раздача ключа скрыта);
 #   5) без фатальных ошибок.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-SHARD="$ROOT/../target/debug"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 SB="${SCRATCH:-/tmp/parvane-grpe2e}"; rm -rf "$SB"; mkdir -p "$SB"
 STAMP="$(date +%s)"
 A_WORK="$SB/alice"; B_WORK="$SB/bob"; mkdir -p "$A_WORK/td" "$B_WORK/td"
