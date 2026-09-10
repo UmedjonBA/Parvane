@@ -17,7 +17,9 @@ class ParvaneStore {
     }
     /** Группа Parvane: group_id (uuid) ↔ basic group TdApi (chatId = -basicGroupId). */
     class GroupRef(val gid: String, var name: String, var members: List<String>, var createdBy: String,
-                   val basicGroupId: Long, val chatId: Long)
+                   val basicGroupId: Long, val chatId: Long) {
+        var roles: Map<String, String> = emptyMap() // address → "admin" (создатель и обычные — по createdBy/умолчанию)
+    }
     private val groupsByGid = ConcurrentHashMap<String, GroupRef>()
     private val groupsByChatId = ConcurrentHashMap<Long, GroupRef>()
     fun isGroup(address: String) = groupsByGid.containsKey(address)
@@ -216,12 +218,17 @@ class ParvaneStore {
         return Triple(user, chat, !existed)
     }
 
-    private fun memberStatus(g: GroupRef, address: String): TdApi.ChatMemberStatus =
-        if (address == g.createdBy) TdApi.ChatMemberStatusCreator(false, true) else TdApi.ChatMemberStatusMember(0)
+    private fun memberStatus(g: GroupRef, address: String): TdApi.ChatMemberStatus = when {
+        address == g.createdBy -> TdApi.ChatMemberStatusCreator(false, true)
+        g.roles[address] == "admin" -> TdApi.ChatMemberStatusAdministrator(true,
+            // manage, changeInfo, post, edit, delete, invite, restrict, pin, topics, promote, video, stories×3, directMsg, tags, welcome
+            TdApi.ChatAdministratorRights(true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false))
+        else -> TdApi.ChatMemberStatusMember(0)
+    }
 
     /** Группа с сервера → basic group + чат. created — впервые. */
     @Synchronized
-    fun ensureGroup(gid: String, name: String, members: List<String>, createdBy: String): Triple<TdApi.Chat, TdApi.BasicGroup, Boolean> {
+    fun ensureGroup(gid: String, name: String, members: List<String>, createdBy: String, roles: Map<String, String> = emptyMap()): Triple<TdApi.Chat, TdApi.BasicGroup, Boolean> {
         val existed = groupsByGid[gid]
         val g = existed ?: GroupRef(gid, name, members, createdBy, groupHash(gid), -groupHash(gid)).also {
             groupsByGid[gid] = it; groupsByChatId[it.chatId] = it
