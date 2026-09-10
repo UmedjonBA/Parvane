@@ -1155,6 +1155,10 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupAction(
         else if (act == "leave") r = gc.removeMember(g_token, gid, g_self);
         else if (act == "rename") r = gc.rename(g_token, gid, a);
         else if (act == "remove_group") r = gc.remove(g_token, gid);
+        else if (act == "admin") r = gc.setRole(g_token, gid, a, "admin");   // назначить администратором (owner)
+        else if (act == "member") r = gc.setRole(g_token, gid, a, "member"); // снять администратора
+        else if (act == "ban") r = gc.ban(g_token, gid, a, true);            // заблокировать (owner/admin)
+        else if (act == "unban") r = gc.ban(g_token, gid, a, false);
         else throw std::runtime_error("неизвестное действие " + act);
         if (!r.ok) throw std::runtime_error(r.error.empty() ? "отказ" : r.error);
         refreshGroupsLocked();

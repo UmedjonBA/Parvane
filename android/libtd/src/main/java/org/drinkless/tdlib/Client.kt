@@ -345,6 +345,17 @@ class Client private constructor(
         is TdApi.AddChatMember -> groupAction(f.chatId, "add", store.addressOf(f.userId) ?: "")?.let { TdApi.FailedToAddMembers(arrayOf()) } ?: TdApi.Error(500, "не добавлен")
         is TdApi.SetChatTitle -> if (store.groupByChat(f.chatId) != null) (groupAction(f.chatId, "rename", f.title ?: "")?.let { TdApi.Ok() } ?: TdApi.Error(500, "не переименована")) else TdApi.Ok()
         is TdApi.LeaveChat -> if (store.groupByChat(f.chatId) != null) (groupAction(f.chatId, "leave", "")?.let { TdApi.Ok() } ?: TdApi.Error(500, "не вышли")) else TdApi.Ok()
+        is TdApi.SetChatMemberStatus -> { // роли/бан участника группы (owner/admin)
+            val addr = (f.memberId as? TdApi.MessageSenderUser)?.userId?.let { store.addressOf(it) } ?: return TdApi.Error(404, "member not found")
+            val act = when (f.status) {
+                is TdApi.ChatMemberStatusAdministrator -> "admin"
+                is TdApi.ChatMemberStatusMember -> "member"
+                is TdApi.ChatMemberStatusBanned -> "ban"
+                is TdApi.ChatMemberStatusLeft -> "remove"
+                else -> return TdApi.Error(400, "статус не поддерживается")
+            }
+            groupAction(f.chatId, act, addr)?.let { TdApi.Ok() } ?: TdApi.Error(500, "не удалось изменить участника")
+        }
         is TdApi.GetChat -> store.chatById(f.chatId)?.copyForUi() ?: TdApi.Error(404, "chat not found")
         is TdApi.LoadChats -> {
             // Первый запрос списка = X готов принимать чаты: реплей журнала истории
@@ -541,9 +552,13 @@ class Client private constructor(
             val g = arr.getJSONObject(i)
             val mem = g.optJSONArray("members")
             val members = ArrayList<String>()
-            if (mem != null) for (j in 0 until mem.length()) members += mem.getJSONObject(j).optString("address")
+            val roles = HashMap<String, String>()
+            if (mem != null) for (j in 0 until mem.length()) {
+                val mo = mem.getJSONObject(j); val addr = mo.optString("address"); members += addr
+                if (mo.optString("role") == "admin") roles[addr] = "admin"
+            }
             members.forEach { ensurePeer(it, announce = true) } // участники — пользователи для UI
-            val (chat, basic, created) = store.ensureGroup(g.optString("group_id"), g.optString("name"), members, g.optString("created_by"))
+            val (chat, basic, created) = store.ensureGroup(g.optString("group_id"), g.optString("name"), members, g.optString("created_by"), roles)
             postUpdate(TdApi.UpdateBasicGroup(basic))
             if (created && announcedChats.add(chat.id)) postUpdate(TdApi.UpdateNewChat(chat.copyForUi()))
             else postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
