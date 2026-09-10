@@ -61,6 +61,57 @@ sed -i 's/PhoneController c = new PhoneController(this, account.tdlib());/Parvan
 grep -q "import org.thunderdog.challegram.ui.ParvaneNickController;" "$MA" ||   sed -i 's/^import org.thunderdog.challegram.ui.PhoneController;/import org.thunderdog.challegram.ui.PhoneController;\nimport org.thunderdog.challegram.ui.ParvaneNickController;/' "$MA"
 sed -i 's/navigateTo(new PhoneController(context, getTdlib()));/navigateTo(new ParvaneNickController(context, getTdlib()));/' "$TGX/app/src/main/java/org/thunderdog/challegram/ui/IntroController.java"
 
+echo "== контакты: без диалога синхронизации с Telegram (телефонной книги у Parvane нет) =="
+CMGR="$TGX/app/src/main/java/org/thunderdog/challegram/telegram/TdlibContactManager.java"
+grep -q "parvane: нет синхронизации контактов" "$CMGR" || sed -i 's/^  private boolean canShowAlert (boolean force) {$/  private boolean canShowAlert (boolean force) {\n    if (true) return false; \/\/ parvane: нет синхронизации контактов с Telegram/' "$CMGR"
+
+echo "== ребрендинг: Telegram → Parvane в строках, интро X → экран ника, иконки =="
+# Текст ресурсов (все локали): «Telegram X» и слово Telegram (не в URL/ключах)
+for f in "$TGX"/app/src/main/res/values*/strings.xml; do
+  perl -pi -e 's/Telegram X/Parvane/g; s/\bTelegram\b(?!\.(?:org|me|dog|com)\b|\/)/Parvane/g; s/(\\n)Telegram\b/$1Parvane/g' "$f"
+done
+# Русский язык: values-ru из словаря десктопа + ручного (tgx-overlay/ru_hand.py); формы few/many
+python3 "$(dirname "$0")/tgx-overlay/gen-ru.py" "$TGX" "$(cd "$(dirname "$0")/.." && pwd)" || { echo "gen-ru упал"; exit 3; }
+# Без телеграмовского интро (бумажный самолётик, «fastest messaging app»): сразу ник
+sed -i 's/navigation.initController(new IntroController(this, account.tdlib()));/navigation.initController(new ParvaneNickController(this, account.tdlib()));/' "$MA"
+# Иконки приложения/уведомлений — из tgx-overlay (mipmap-*), скопированы выше вместе с app/
+
+echo "== кнопки без логики — прячем (решение пользователя: боты/Stories/Premium/платежи вне скоупа; Telegram-ссылки не про нас) =="
+DR="$TGX/app/src/main/java/org/thunderdog/challegram/navigation/DrawerController.java"
+# боковое меню: «Пригласить друзей», «Помощь» (Telegram FAQ), «Звонки» (на Android пока нет), «Добавить аккаунт», прокси
+perl -0pi -e 's/^\s*items\.add\(new ListItem\(ListItem\.TYPE_DRAWER_ITEM, R\.id\.btn_(invite|help|addAccount), [^\n]*\n//mg; s/^\s*items\.add\(new ListItem\(ListItem\.TYPE_DRAWER_ITEM, R\.id\.btn_calls, [^\n]*\n//mg; s/^\s*items\.add\(proxyItem\);\n//mg' "$DR"
+SC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/SettingsController.java"
+# настройки: строки, за которыми Telegram-сервисы (вопрос, FAQ, политика, обновления, бета, исходники),
+# и разделы без логики в шве (стикеры, папки, устройства, приватность, телефон) — вместе с разделителем перед ними
+perl -0pi -e 's/^\s*items\.add\(new ListItem\(ListItem\.TYPE_SEPARATOR\)\);\n(?=\s*items\.add\(new ListItem\([^\n]*R\.id\.btn_(help|faq|privacyPolicy|checkUpdates|subscribeToBeta|sourceCode|sourceCodeChanges|stickerSettingsAndEmoji|chatFolders|devices|privacySettings|phone)\b)//mg; s/^\s*items\.add\(new ListItem\([^\n]*R\.id\.btn_(help|faq|privacyPolicy|checkUpdates|subscribeToBeta|sourceCode|sourceCodeChanges|stickerSettingsAndEmoji|chatFolders|devices|privacySettings|phone)\b[^\n]*\n(\s*\.set[^\n]*\n)*//mg' "$SC"
+grep -c "btn_faq\|btn_privacyPolicy" "$SC" | sed 's/^/   осталось упоминаний faq\/policy в настройках: /'
+ML="$TGX/app/src/main/java/org/thunderdog/challegram/component/attach/MediaLayout.java"
+# меню вложений: пятая вкладка «Опрос»/«Инлайн-бот» (опросов в шве пока нет, ботов не будет)
+perl -0pi -e 's/^\s*needVote \?\n\s*new MediaBottomBar\.BarItem\([^\n]*CreatePoll[^\n]*\n\s*new MediaBottomBar\.BarItem\([^\n]*InlineBot[^\n]*\)(,)?\n//mg' "$ML"
+PC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/ProfileController.java"
+# профиль, меню «…»: «Секретный чат» (у нас всё E2E), «Приватность» (экрана нет)
+perl -0pi -e 's/^\s*if \(mode == Mode\.USER && user\.id != myUserId && !TD\.isBot\(user\)\) \{\n\s*ids\.append\(R\.id\.btn_newSecretChat\);\n\s*strings\.append\(R\.string\.StartEncryptedChat\);\n\s*\}\n//m; s/^\s*if \(!tdlib\.chatFullyBlocked\((?:chatId|getChatId\(\))\)\) \{\n\s*ids\.append\(R\.id\.more_btn_privacy\);\n\s*strings\.append\(R\.string\.EditPrivacy\);\n\s*\}\n//mg' "$PC"
+# предохранители: код, ищущий удалённые строки по id (−1 → вставка по кривому индексу)
+sed -i 's/position = adapter.indexOfViewById(R.id.btn_phone);/position = adapter.indexOfViewById(R.id.btn_username);/' "$SC"
+sed -i 's/^\(\s*\)adapter.addItem(i, proxyItem);/\1if (i >= 0) adapter.addItem(i, proxyItem);/' "$DR"
+# drawer: отладочные «Clear/Send TDLib logs» (в debug-сборке developer mode включён всегда)
+perl -0pi -e 's/if \(Settings\.instance\(\)\.inDeveloperMode\(\)\) \{\n(\s*items\.add\(new ListItem\(ListItem\.TYPE_SEPARATOR_FULL\)\);)/if (false) {\n$1/' "$DR"
+CC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/ChatsController.java"
+# пустой список чатов: кнопка «Invite contacts» (SMS-приглашения) — нет
+perl -0pi -e 's/^\s*items\.add\(new ListItem\(ListItem\.TYPE_SHADOW_TOP\)\);\n\s*items\.add\(new ListItem\(ListItem\.TYPE_BUTTON, R\.id\.btn_invite, 0, [^\n]*\n\s*items\.add\(new ListItem\(ListItem\.TYPE_SHADOW_BOTTOM\)\);\n//m' "$CC"
+MC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/MainController.java"
+# главный экран: вкладка «Calls» (звонков на Android пока нет) — одна вкладка
+perl -0pi -e 's/return hasFolders\(\) \? pagerChatLists\.size\(\) : 2;/return hasFolders() ? pagerChatLists.size() : 1;/; s/(getMenuSectionName\(MAIN_PAGER_ITEM_ID, \/\* pagerItemPosition \*\/ 0, \/\* hasFolders \*\/ false, ChatFolderStyle\.LABEL_ONLY, \/\* upperCase \*\/ true\)),\n\s*Lang\.uppercase\(Lang\.getString\(R\.string\.Calls\)\)[^\n]*\n/$1\n/; s/(getDefaultMainItem\(\)),\n\s*new ViewPagerTopView\.Item\(callsItem\)\n/$1\n/' "$MC"
+NM="$TGX/app/src/main/java/org/thunderdog/challegram/telegram/TdlibNotificationManager.java"
+# нет Firebase → X вечно светит «уведомления могут не работать» красной точкой; пуша у нас нет по дизайну
+perl -0pi -e 's/boolean hasPushServices = hasRemotePushService\(\);\n(\s*)if \(!hasPushServices\) \{/boolean hasPushServices = hasRemotePushService();\n$1if (false) {/; s/if \(tdlib\.context\(\)\.getTokenState\(\) == TdlibManager\.TokenState\.ERROR\)\n(\s*)return Status\.PUSH_SERVICE_ERROR;/if (false)\n$1return Status.PUSH_SERVICE_ERROR;/' "$NM"
+sed -i '/^      !hasRemotePushService() ||$/d' "$NM"   # hasLocalNotificationProblem: без Firebase — не «проблема»
+echo "   drawer devmode: $(grep -c 'inDeveloperMode()) {' "$DR"), invite btn: $(grep -c 'R.id.btn_invite, 0' "$CC"), calls tab: $(grep -c 'R.string.Calls))' "$MC"), push warn: $(grep -c 'if (!hasPushServices)' "$NM")"
+# профиль: строка «Телефон: Unknown» только при заданном номере; «Переименовать/Удалить/Добавить контакт» — телефонной книги нет
+perl -0pi -e 's/return user\.isContact \|\| user\.isMutualContact \|\| TD\.hasPhoneNumber\(user\);/return TD.hasPhoneNumber(user);/; s/^\s*if \(TD\.isContact\(user\)\) \{\n\s*ids\.append\(R\.id\.more_btn_edit\);\n\s*strings\.append\(R\.string\.RenameContact\);\n\s*ids\.append\(R\.id\.more_btn_delete\);\n\s*strings\.append\(R\.string\.DeleteContact\);\n\s*\} else if \(TD\.canAddContact\(user\)\) \{\n\s*ids\.append\(R\.id\.more_btn_addToContacts\);\n\s*strings\.append\(R\.string\.AddContact\);\n\s*\}\n//m' "$PC"
+echo "   profile contact menu: $(grep -c 'R.string.RenameContact' "$PC"), phone cell: $(grep -c 'user.isMutualContact || TD.hasPhoneNumber' "$PC")"
+echo "   attach InlineBot: $(grep -c 'R.string.InlineBot' "$ML"), profile newSecretChat/privacy: $(grep -c 'btn_newSecretChat\|more_btn_privacy' "$PC")"
+
 echo "== CMake: без libtdjni (наш шов — не JNI TDLib) =="
 CM="$TGX/app/jni/CMakeLists.txt"
 if grep -q "^  tdjni$" "$CM"; then

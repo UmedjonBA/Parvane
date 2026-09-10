@@ -9,6 +9,18 @@ OUT="${1:-/tmp/pv-tgx-login}"; NICK="${2:-alice}"; PASS="${3:-test}"; mkdir -p "
 export ANDROID_HOME=/mnt/hdd/ub/android/sdk JAVA_HOME=/mnt/hdd/ub/android/jdk-17
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+# Обход регрессии mesa 26.2.2 (10 сен 2026): хостовый qemu падал SIGSEGV с
+# тяжёлым UI Telegram X. Если распакована mesa 26.2.1 (~/.local/mesa-26.2.1,
+# `tar -xf` пакетов из archive.archlinux.org), эмулятор берёт GL/Vulkan из неё
+# и рендерит на хостовом GPU — система не трогается. Иначе swiftshader.
+PV_MESA="${PV_MESA:-$HOME/.local/mesa-26.2.1}"
+if [ -d "$PV_MESA/usr/lib" ]; then
+  export LD_LIBRARY_PATH="$PV_MESA/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export LIBGL_DRIVERS_PATH="$PV_MESA/usr/lib/dri"
+  export __EGL_VENDOR_LIBRARY_DIRS="$PV_MESA/usr/share/glvnd/egl_vendor.d"
+  export VK_ICD_FILENAMES="$PV_MESA/usr/share/vulkan/icd.d/intel_icd.json"
+  EMU_GPU="${EMU_GPU:-host}"
+fi
 TGX="${TGX_DIR:-/mnt/hdd/ub/android/tgx}"
 APK="$(find "$TGX/app/build/outputs/apk" -name "*-x64-debug.apk" | head -1)"
 a() { timeout 25 adb "$@"; }   # каждая adb-команда с таймаутом — эмулятор может умереть
@@ -23,10 +35,10 @@ else
   ok "стек уже запущен (переиспользую)"
 fi
 if [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; then
-  pkill -f "emulator -avd parvane" 2>/dev/null; sleep 2
+  pkill -f "emulator -avd ${AVD:-parvane}" 2>/dev/null; sleep 2
   # хостовый swiftshader падал (segfault) на экране пароля X — по умолчанию рендер в госте
   # shellcheck disable=SC2086
-  emulator -avd parvane -no-window -audio none -no-boot-anim -gpu "${EMU_GPU:-guest}" -no-snapshot -memory 2048 ${EMU_EXTRA:-} > "$OUT/emulator.log" 2>&1 &
+  emulator -avd "${AVD:-parvane}" -no-window -audio none -no-boot-anim -gpu "${EMU_GPU:-swiftshader_indirect}" -no-snapshot -memory 2048 ${EMU_EXTRA:--feature -Vulkan,-VirtioWifi,-BluetoothEmulation} > "$OUT/emulator.log" 2>&1 &
   for _ in $(seq 1 150); do [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break; sleep 2; done
 fi
 [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор" || { bad "эмулятор не загрузился"; finish "TGX LOGIN"; }
