@@ -289,6 +289,9 @@ class ParvaneStore {
             interactionInfo = reactionsFrom(reactions)
             val replied = replyUuid?.let { msgByUuid[it] }
             this.replyTo = if (replied != null) TdApi.MessageReplyToMessage(replied.chatId, replied.id, null, 0, null, null, 0, null) else null
+            // пересланное: forwarded_name (wire как в вебе/десктопе) → «Переслано от …»
+            val fwd = if (content.isNull("forwarded_name")) "" else content.optString("forwarded_name")
+            if (fwd.isNotEmpty()) forwardInfo = TdApi.MessageForwardInfo(TdApi.MessageOriginHiddenUser(fwd), ts.toInt(), null, "")
         }
         messages.getOrPut(chat.id) { ArrayList() }.add(msg)
         msgByUuid[uuid] = msg

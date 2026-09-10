@@ -98,6 +98,8 @@ class Client private constructor(
                 // Языковой пак «ru» — это наши ресурсы values-ru (см. tgx-overlay/gen-ru.py);
                 // встроенный пак X (language_code из ресурсов) сюда не приходит. Иначе 404 → встроенная строка.
                 is TdApi.GetLanguagePackString -> packString(query.languagePackId, query.key) ?: TdApi.Error(404, "Not Found")
+                // X зовёт и синхронно (clientExecuteT): свойства сообщения — из стора привязанного клиента
+                is TdApi.GetMessageProperties -> boundClient?.messageProperties(query.chatId, query.messageId) ?: TdApi.Error(404, "message not found")
                 else -> TdApi.Error(400, "Parvane execute: не поддерживается ${query.javaClass.simpleName}")
             }
             if (result is TdApi.Error) throw ExecutionException(result)
@@ -288,16 +290,32 @@ class Client private constructor(
         is TdApi.CheckAuthenticationPassword -> {
             val r = ParvaneCore.login(pendingNick, f.password ?: "")
             if (r.optBoolean("ok")) {
-                if (ParvaneCore.startSession()) {
-                    onSessionReady(r.optString("address"))
-                    TdApi.Ok()
-                } else {
-                    TdApi.Error(500, "не удалось поднять сессию")
-                }
+                finishLogin(r.optString("address"))
+            } else if (r.optBoolean("twofa_required") && r.optString("login_token").isNotEmpty()) {
+                // Двухфакторный вход (как Stage::Telegram на десктопе): подтверждение в Telegram-боте.
+                // X показывает экран WaitOtherDeviceConfirmation со ссылкой; ссылку открываем сами,
+                // статус опрашиваем каждые 2 с, после подтверждения — issue с login_token.
+                startTwoFactor(r.optString("address"), f.password ?: "", r.optString("login_token"))
+                TdApi.Ok()
             } else {
                 TdApi.Error(400, r.optString("error", "неверный логин или пароль"))
             }
         }
+        is TdApi.ForwardMessages -> forwardMessages(f) // паритет: тот же content новому адресату, медиа перезаливается
+        // Settings → Devices: устройства аккаунта из identity; отзыв = терминация сессии
+        is TdApi.GetActiveSessions -> TdApi.Sessions(sessionsList(), 0)
+        is TdApi.TerminateSession -> deviceById[f.sessionId]?.let { dev ->
+            if (ParvaneCore.revokeDevice(dev)) TdApi.Ok() else TdApi.Error(400, "не удалось отозвать устройство")
+        } ?: TdApi.Error(404, "session not found")
+        is TdApi.TerminateAllOtherSessions -> { sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let(ParvaneCore::revokeDevice) }; TdApi.Ok() }
+        // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
+        is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
+            .let { TdApi.MessageSenders(it.size, it.toTypedArray()) }
+        is TdApi.ClearAllDraftMessages -> TdApi.Ok()
+        is TdApi.GetPasswordState -> TdApi.PasswordState(false, "", false, false, null, "", 0)
+        is TdApi.GetAccountTtl -> TdApi.AccountTtl(365)
+        // Без этого X считает, что сообщение нельзя переслать/закрепить/ответить (кнопок в панели выбора нет)
+        is TdApi.GetMessageProperties -> messageProperties(f.chatId, f.messageId) ?: TdApi.Error(404, "message not found")
         is TdApi.ResendAuthenticationCode, is TdApi.CheckAuthenticationCode ->
             TdApi.Error(400, "Parvane: кодов нет — вход по нику и паролю")
         is TdApi.LogOut -> {
@@ -712,6 +730,79 @@ class Client private constructor(
     /** Чаты, о которых UI уже получил updateNewChat (апдейты по чату — только после него). */
     private val announcedChats = ConcurrentHashMap.newKeySet<Long>()
     private val journalReplayed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Что можно делать с сообщением (паритет TDLib): своё — править (текст) и удалять у всех; чужое — только у себя. */
+    fun messageProperties(chatId: Long, messageId: Long): TdApi.MessageProperties? {
+        val uuid = store.uuidOf(chatId, messageId) ?: return null
+        val m = store.messageByUuid(uuid) ?: return null
+        val own = m.isOutgoing
+        val text = m.content is TdApi.MessageText
+        return TdApi.MessageProperties(
+            false, false, false, /*canBeCopied*/ true, false, false,
+            /*canBeDeletedOnlyForSelf*/ true, /*canBeDeletedForAllUsers*/ own, /*canBeEdited*/ own && text,
+            /*canBeForwarded*/ true, false, /*canBePinned*/ true, /*canBeReplied*/ true, false, /*canBeSaved*/ true,
+            false, /*canDeleteReactions*/ false, false, false, false, false, false, false, false, false, false,
+            /*canGetReadDate*/ false, false, false, false, false, false, false, false, false, false, false, false, false)
+    }
+
+    private fun forwardMessages(f: TdApi.ForwardMessages): TdApi.Object {
+        val to = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
+        val out = ArrayList<TdApi.Message>()
+        for (mid in f.messageIds) {
+            val uuid = store.uuidOf(f.fromChatId, mid) ?: continue
+            val nid = ParvaneCore.forward(to, uuid) // событие message придёт синхронно → стор уже знает
+            if (nid.isNotEmpty()) store.messageByUuid(nid)?.let { out += it }
+        }
+        return TdApi.Messages(out.size, out.toTypedArray())
+    }
+
+    private fun finishLogin(address: String): TdApi.Object =
+        if (ParvaneCore.startSession()) { onSessionReady(address); TdApi.Ok() } else TdApi.Error(500, "не удалось поднять сессию")
+
+    @Volatile private var twoFactorGeneration = 0
+    private fun startTwoFactor(address: String, password: String, loginToken: String) {
+        val info = try { ParvaneCore.serverInfo() } catch (e: Throwable) { JSONObject() }
+        val link = "https://t.me/" + info.optString("telegram_bot") + "?start=" + loginToken
+        setAuth(TdApi.AuthorizationStateWaitOtherDeviceConfirmation(link))
+        openLink(link)
+        val gen = ++twoFactorGeneration
+        io.execute {
+            val started = System.currentTimeMillis()
+            while (gen == twoFactorGeneration && System.currentTimeMillis() - started < 14 * 60 * 1000L) {
+                Thread.sleep(2000)
+                if (!ParvaneCore.registerStatus(address, loginToken)) continue
+                val r = ParvaneCore.login(address, password, loginToken)
+                if (r.optBoolean("ok")) { finishLogin(r.optString("address")) }
+                else { Log.w(TAG, "2FA: ${r.optString("error")}"); setAuth(TdApi.AuthorizationStateWaitPassword("", false, false, "")) }
+                return@execute
+            }
+            if (gen == twoFactorGeneration) setAuth(TdApi.AuthorizationStateWaitPassword("", false, false, ""))
+        }
+    }
+    private fun openLink(url: String) {
+        try {
+            val ctx = Class.forName("android.app.ActivityThread").getMethod("currentApplication").invoke(null) as? android.content.Context ?: return
+            ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Throwable) { Log.w(TAG, "открыть ссылку: ${e.message}") }
+    }
+
+    /** Устройства identity как TdApi.Session; id сессии = FNV от device_id (для TerminateSession). */
+    private val deviceById = ConcurrentHashMap<Long, String>()
+    private fun sessionsList(): Array<TdApi.Session> {
+        val arr = try { ParvaneCore.listDevices() } catch (e: Throwable) { org.json.JSONArray() }
+        val out = ArrayList<TdApi.Session>()
+        for (i in 0 until arr.length()) {
+            val d = arr.getJSONObject(i)
+            val dev = d.optString("device_id"); if (dev.isEmpty()) continue
+            val id = store.idOf("dev:$dev"); deviceById[id] = dev
+            val ts = d.optLong("updated_at").toInt()
+            val current = d.optBoolean("current")
+            out += TdApi.Session(id, current, false, false, false, false,
+                if (current) TdApi.SessionDeviceTypeAndroid() else TdApi.SessionDeviceTypeUnknown(),
+                0, "Parvane", if (current) "android" else "", true, dev.take(10), "", "", ts, ts, "", "")
+        }
+        return out.sortedByDescending { it.isCurrent }.toTypedArray()
+    }
 
     private fun messageText(m: TdApi.Message): String = when (val c = m.content) {
         is TdApi.MessageText -> c.text.text
