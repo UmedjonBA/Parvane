@@ -120,6 +120,9 @@ void DecCacheRemove(const QString &id);
 [[nodiscard]] nlohmann::json DecCacheSnapshot();
 void OnAuthRejected(const QString &reason); // fwd: отказ JWT → экран входа
 void ApplyNotifyBlob(const QString &json);   // fwd: настройки уведомлений с другого устройства
+void NoteReported(const std::vector<std::string> &ids);     // fwd (READ-1)
+void NoteConfirmedRead(const std::vector<std::string> &ids); // fwd (READ-1, сервер уже знает)
+void AppendReadJournal(const std::vector<std::string> &ids); // fwd (worker)
 
 namespace {
 
@@ -298,6 +301,11 @@ std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутст
 // Доступ под g_sessionMutex; персист — в tdata/parvane-cursors.txt.
 std::string g_lastSeenId;
 std::int64_t g_sinceUpdated = 0;
+// Вход через экран логина (SetSelf), а не рестарт: первый sync идёт с
+// since_updated=0 — сервер отдаёт ВСЕ мутации и все мои read-receipts, иначе
+// после повторного входа прочитанное до дискового курсора (на другом
+// устройстве или на этом до READ-1) снова светится непрочитанным (10 сен 2026).
+bool g_freshLogin = false;
 
 constexpr auto kPumpIntervalMs = crl::time(3000);
 
@@ -561,11 +569,74 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 	}
 }
 
+// Журнал истории хранит `read` на момент записи, а он append-only: receipt
+// собеседника на СВОЁ сообщение раньше жил только в памяти → после рестарта
+// реплей показывал одну галочку, хотя sync курсор уже прошёл эту мутацию и
+// повторно её не отдавал (10 сен 2026). Перезаписываем записи с read=true.
+// Воркер; файл под мьютексом — параллельные перезаписи теряли бы правки.
+std::mutex g_historyFileMutex;
+void MarkHistoryRead(const QSet<QString> &uuids) {
+	std::lock_guard<std::mutex> lk(g_historyFileMutex);
+	QFile f(HistoryPath());
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		return;
+	}
+	QByteArray kept;
+	auto changed = 0;
+	while (!f.atEnd()) {
+		const auto line = QString::fromUtf8(f.readLine()).trimmed();
+		if (line.isEmpty()) {
+			continue;
+		}
+		try {
+			auto j = nlohmann::json::parse(line.toStdString());
+			const auto id = QString::fromStdString(j.value("id", std::string()));
+			if (!id.isEmpty() && uuids.contains(id) && !j.value("read", false)) {
+				j["read"] = true;
+				++changed;
+				kept += QByteArray::fromStdString(j.dump());
+				kept += '\n';
+				continue;
+			}
+		} catch (const std::exception &) {
+		}
+		kept += line.toUtf8();
+		kept += '\n';
+	}
+	f.close();
+	if (!changed) {
+		return;
+	}
+	QFile out(HistoryPath());
+	if (out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+		out.write(kept);
+	}
+}
+
 // Локально забыть скрытые сообщения (карты uuid, медиа-контент, кэш расшифровки)
 // и удалить их из UI. uuids — уже в g_clearedUuids.
 // Кросс-девайс прочитанное: пометить сообщения прочитанными на ЭТОМ устройстве
 // (я прочитал их на другом). Снимаем из непрочитанного и двигаем бейдж чата.
 void MarkUuidsReadLocal(not_null<Main::Session*> session, const QSet<QString> &uuids) {
+	// В журнал прочитанного — иначе после рестарта реплей журнала истории
+	// снова покажет их непрочитанными (запись read в журнале — на момент
+	// получения).
+	{
+		auto ids = std::vector<std::string>();
+		ids.reserve(uuids.size());
+		for (const auto &uuid : uuids) {
+			ids.push_back(uuid.toStdString());
+		}
+		// Сюда приходят receipts, которые сервер УЖЕ знает (sync read=true,
+		// ReadNotice с другого устройства) — это подтверждение, а не наш
+		// отчёт. Раньше клалось в g_unconfirmedRead → RetryUnconfirmedReads
+		// слал msg.chat.read заново → сервер обновлял updated_at → следующий
+		// sync снова отдавал те же uuid в readSet → снова сюда: вечный цикл
+		// (9000 повторов за вечер 10 сен 2026, rate_limited на gateway, а все
+		// другие устройства пересинхронизировали эти сообщения каждые 3 с).
+		NoteConfirmedRead(ids);
+		crl::async([ids = std::move(ids)] { AppendReadJournal(ids); });
+	}
 	auto maxByHistory = QHash<History*, MsgId>();
 	for (const auto &uuid : uuids) {
 		const auto found = g_uuidToMsgId.constFind(uuid);
@@ -1137,15 +1208,31 @@ std::unique_ptr<parvane::ITransport> MakeTransport(const QString &token) {
 // Звать ПОД g_sessionMutex (например из StartSession) — сама не лочит.
 void LoadCursorsLocked() {
 	QFile f(CursorsPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
+	if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+		const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+		if (lines.size() > 0) {
+			g_lastSeenId = lines[0].trimmed().toStdString();
+		}
+		if (lines.size() > 1) {
+			g_sinceUpdated = lines[1].trimmed().toLongLong();
+		}
 	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n');
-	if (lines.size() > 0) {
-		g_lastSeenId = lines[0].trimmed().toStdString();
-	}
-	if (lines.size() > 1) {
-		g_sinceUpdated = lines[1].trimmed().toLongLong();
+	// Ниже — и без файла курсоров: маркер должен встать на первом же запуске.
+	// Один раз на установку — тоже полный: у профилей, заведённых до этой
+	// правки, прочитанное/✓✓ до курсора иначе не подтянулись бы без выхода.
+	const auto marker = cWorkingDir() + u"tdata/parvane-fullsync-v1"_q;
+	const auto firstOnThisBuild = !QFile::exists(marker);
+	if (g_freshLogin || firstOnThisBuild) {
+		g_freshLogin = false;
+		g_sinceUpdated = 0;
+		if (firstOnThisBuild) {
+			QFile f(marker);
+			if (f.open(QIODevice::WriteOnly)) {
+				f.write("1");
+			}
+		}
+		LOG(("Parvane: вход — первый sync полный (since_updated=0): "
+			"подтянуть прочитанное и мутации до курсора"));
 	}
 }
 
@@ -1281,6 +1368,18 @@ void ConfirmReads(const std::vector<std::string> &ids) {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	for (const auto &id : ids) {
 		const auto q = QString::fromStdString(id);
+		g_unconfirmedRead.remove(q);
+		g_readRetries.remove(q);
+	}
+}
+
+// Receipt известен серверу (sync/ReadNotice): помним как отчитанный, чтобы не
+// слать msg.chat.read повторно, и снимаем ожидание подтверждения.
+void NoteConfirmedRead(const std::vector<std::string> &ids) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	for (const auto &id : ids) {
+		const auto q = QString::fromStdString(id);
+		g_reportedRead.insert(q);
 		g_unconfirmedRead.remove(q);
 		g_readRetries.remove(q);
 	}
@@ -1823,6 +1922,7 @@ void SetSelf(const QString &address, const QString &token) {
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_selfAddress = address;
 		g_token = token;
+		g_freshLogin = true; // см. LoadCursorsLocked
 	}
 	RegisterPeer(address);
 	SaveSessionCreds(address, token); // пережить рестарт (tdesktop минует логин)
@@ -1921,6 +2021,19 @@ bool StartSession() {
 	try {
 		// Лимит частоты gateway (безадресный err rate_limited на publish): как
 		// в вебе — предупреждение пользователю, не чаще раза в 5 с.
+		static const auto reconnectHandlerInstalled = [] {
+			parvane::GatewayTransport::setReconnectHandler(
+				[](bool ok, const std::string &error) {
+					if (ok) {
+						LOG(("Parvane: gateway переподключён (auth + подписки восстановлены)"));
+					} else {
+						LOG(("Parvane: gateway переподключение не удалось: %1")
+							.arg(QString::fromStdString(error)));
+					}
+				});
+			return true;
+		}();
+		(void)reconnectHandlerInstalled;
 		static const auto rateLimitHandlerInstalled = [] {
 			parvane::GatewayTransport::setUnaddressedErrorHandler(
 				[](const std::string &error, const std::string &subject) {
@@ -3990,7 +4103,9 @@ not_null<UserData*> ensurePeerUser(
 	// Профиль (имя + аватар) спрашиваем у каталога, если не спрашивали вовсе
 	// либо ответ устарел. Условие «имя неизвестно» здесь было ошибкой: после
 	// первого резолва имя известно всегда, и смена аватара уже не подхватывалась.
-	if (address != SelfAddress()) {
+	// Свой адрес — тоже: аватар/bio, изменённые в вебе, иначе подхватывались
+	// только одним запросом на старте, без повтора при его сбое (10 сен 2026).
+	{
 		const auto now = crl::now();
 		const auto last = g_resolvedAt.value(address, 0);
 		if (!last || now - last > kProfileTtlMs) {
@@ -4118,10 +4233,15 @@ void ResolveNames(const QStringList &addresses) {
 					}
 				}
 			}
-		} catch (const std::exception &) {
+		} catch (const std::exception &e) {
+			LOG(("Parvane: identity.user.resolve не удался (%1): %2")
+				.arg(QString::fromStdString(reqStr).left(120))
+				.arg(QString::fromUtf8(e.what())));
 			return;
 		}
 		if (names.isEmpty() && avatars.isEmpty() && profiles.isEmpty()) {
+			LOG(("Parvane: identity.user.resolve — пустой ответ на %1")
+				.arg(QString::fromStdString(reqStr).left(120)));
 			return;
 		}
 		crl::on_main([names, avatars, profiles] {
@@ -4146,6 +4266,10 @@ void ResolveNames(const QStringList &addresses) {
 				const auto user = session->data().userLoaded(
 					UserId(BareId(IdForAddress(it.key()))));
 				if (!user) {
+					if (it.key() == SelfAddress()) {
+						LOG(("Parvane: свой профиль пришёл, но self не загружен (%1)")
+							.arg(it.key()));
+					}
 					continue;
 				}
 				const auto j = nlohmann::json::parse(it.value().toStdString(), nullptr, false);
@@ -5643,6 +5767,12 @@ void injectOnMain(
 						LOG(("Parvane: своё прочитано ✓✓ msg %1").arg(uuid));
 					}
 				}
+				// В журнал — чтобы ✓✓ пережило рестарт (раз на uuid за сессию)
+				static QSet<QString> journaled;
+				if (!journaled.contains(uuid)) {
+					journaled.insert(uuid);
+					crl::async([uuid] { MarkHistoryRead({ uuid }); });
+				}
 			}
 			// не continue — ниже contains→continue пропустит уже инъецированное
 		}
@@ -5891,7 +6021,7 @@ void injectOnMain(
 				g_packRefByDocId.insert(docIdFromFileId(fileId),
 					QString::fromStdString(c["pack_ref"].dump()));
 			}
-			if (!out && !IsReportedRead(uuid)) {
+			if (!out && !sm.read && !IsReportedRead(uuid)) {
 				g_unreadIncoming[peerId].push_back(uuid);
 			}
 			const auto jstr = [&](const char *k) {
@@ -5926,7 +6056,9 @@ void injectOnMain(
 		const auto msgId = MsgId(g_nextMsgId++);
 		g_uuidToMsgId.insert(uuid, msgId.bare);
 		g_msgIdToUuid.insert(msgId.bare, uuid);
-		if (!out) {
+		// read=true у входящего — мой receipt уже есть на сервере (прочитано на
+		// любом устройстве); журнал прочитанного — READ-1 этого устройства.
+		if (!out && !sm.read && !IsReportedRead(uuid)) {
 			g_unreadIncoming[peerId].push_back(uuid);
 		}
 		const auto entities = Api::EntitiesToMTP(
@@ -6952,6 +7084,11 @@ void PumpReceive() {
 		for (const auto &id : readIds) {
 			readSet.insert(QString::fromStdString(id));
 		}
+		for (const auto &sm : msgs) {
+			if (sm.read && sm.from != self) { // входящее, мой receipt есть
+				readSet.insert(QString::fromStdString(sm.id));
+			}
+		}
 		if (msgs.empty()) {
 			if (!readSet.isEmpty()) {
 				crl::on_main([readSet] {
@@ -7899,6 +8036,17 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		LoadNotifyState();  // снимок настроек уведомлений
 		if (SelfAddress().isEmpty()) {
 			RestoreSessionCreds();
+		}
+		if (SelfAddress().isEmpty()) {
+			// tdesktop восстановил сессию по userId из mtp-данных, а
+			// учётных данных Parvane на диске нет (выход/отказ JWT не дошёл до
+			// local().reset() — например, из-за падения). Продолжать нельзя:
+			// self не загружен, окно пустое, выйти неоткуда. Уводим на экран
+			// входа; ключи и история остаются.
+			LOG(("Parvane: сессия без адреса — учётных данных нет, "
+				"на экран входа"));
+			session->account().forcedLogOut();
+			return;
 		}
 		RegisterPeer(SelfAddress());
 		// Свой профиль (имя + аватар) мог быть задан на другом устройстве (веб).

@@ -55,11 +55,76 @@ void GatewayTransport::connect(const std::string &host, int port) {
     fd_ = fd;
     running_ = true;
     reader_ = std::thread(&GatewayTransport::readerLoop, this);
+    lastHost_ = host;
+    lastPort_ = port;
+    closedByUser_ = false;
 }
 
 bool GatewayTransport::connected() const { return fd_ >= 0 && running_; }
 
+void GatewayTransport::reopen() { connect(lastHost_, lastPort_); }
+
+namespace {
+std::mutex g_reconnMu;
+GatewayTransport::ReconnectHandler g_reconnHandler;
+} // namespace
+
+void GatewayTransport::setReconnectHandler(ReconnectHandler handler) {
+    std::lock_guard<std::mutex> lk(g_reconnMu);
+    g_reconnHandler = std::move(handler);
+}
+
+void GatewayTransport::ensureConnected() {
+    if (connected()) {
+        return;
+    }
+    if (closedByUser_) {
+        throw GatewayError("gateway: не подключено");
+    }
+    std::lock_guard<std::mutex> lk(reconnMu_);
+    if (connected()) {
+        return; // переподключил параллельный вызов
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastReconnectTry_ < std::chrono::milliseconds(kReconnectMinGapMs)) {
+        throw GatewayError("gateway: не подключено (ждём паузу перед переподключением)");
+    }
+    lastReconnectTry_ = now;
+    ReconnectHandler h;
+    {
+        std::lock_guard<std::mutex> hl(g_reconnMu);
+        h = g_reconnHandler;
+    }
+    try {
+        reopen(); // внутри connect() → close() поднимет closedByUser_, успех сбросит
+        if (!lastToken_.empty()) {
+            authenticate(lastToken_);
+        }
+        std::vector<std::string> subjects;
+        {
+            std::lock_guard<std::mutex> sl(subMu_);
+            for (const auto &[subject, handlers] : subs_) {
+                subjects.push_back(subject);
+            }
+        }
+        for (const auto &subject : subjects) {
+            json f = {{"op", "sub"}, {"subject", subject}};
+            sendLine(f.dump());
+        }
+    } catch (const std::exception &e) {
+        closedByUser_ = false; // это была НАША попытка, не явный close()
+        if (h) {
+            h(false, e.what());
+        }
+        throw;
+    }
+    if (h) {
+        h(true, std::string());
+    }
+}
+
 void GatewayTransport::close() {
+    closedByUser_ = true;
     if (fd_ < 0) {
         return;
     }
@@ -107,7 +172,8 @@ void GatewayTransport::sendLine(const std::string &frame) {
     while (off < data.size()) {
         ssize_t n = ::send(fd_, data.data() + off, data.size() - off, MSG_NOSIGNAL);
         if (n <= 0) {
-            throw GatewayError("gateway: ошибка отправки");
+            running_ = false; // соединение мёртвое → следующий вызов переподключит
+            throw GatewayError("gateway: не подключено (ошибка отправки)");
         }
         off += static_cast<size_t>(n);
     }
@@ -133,6 +199,9 @@ void GatewayTransport::readerLoop() {
             }
         }
     }
+    // Сервер закрыл/обрыв: connected() → false, ensureConnected() переподключит
+    running_ = false;
+    abortPending("соединение с gateway потеряно");
 }
 
 namespace {
@@ -143,6 +212,24 @@ GatewayTransport::ErrorHandler g_errHandler;
 void GatewayTransport::setUnaddressedErrorHandler(ErrorHandler handler) {
     std::lock_guard<std::mutex> lk(g_errMu);
     g_errHandler = std::move(handler);
+}
+
+bool GatewayTransport::subjectMatches(const std::string &pattern, const std::string &subject) {
+    size_t p = 0, s = 0;
+    while (p < pattern.size()) {
+        const auto pe = pattern.find('.', p);
+        const auto tok = pattern.substr(p, pe == std::string::npos ? std::string::npos : pe - p);
+        if (tok == ">") return s <= subject.size();
+        if (s > subject.size()) return false;
+        const auto se = subject.find('.', s);
+        const auto stok = subject.substr(s, se == std::string::npos ? std::string::npos : se - s);
+        if (tok != "*" && tok != stok) return false;
+        if (pe == std::string::npos) return se == std::string::npos;
+        if (se == std::string::npos) return false;
+        p = pe + 1;
+        s = se + 1;
+    }
+    return s >= subject.size();
 }
 
 void GatewayTransport::dispatch(const std::string &line) {
@@ -171,9 +258,15 @@ void GatewayTransport::dispatch(const std::string &line) {
         std::vector<Handler> hs;
         {
             std::lock_guard<std::mutex> lk(subMu_);
-            auto it = subs_.find(subject);
-            if (it != subs_.end()) {
-                hs = it->second;
+            // Gateway кладёт в кадр РЕАЛЬНЫЙ subject (presence.<id>), а
+            // подписка могла быть на шаблон (presence.*): сверяем по правилам
+            // NATS (`*` — один токен, `>` — хвост). Раньше искали только точное
+            // совпадение, и wildcard-подписки через gateway молчали — на проде
+            // не работали «онлайн» и групповой «печатает…» (10 сен 2026).
+            for (const auto &[pattern, handlers] : subs_) {
+                if (pattern == subject || subjectMatches(pattern, subject)) {
+                    hs.insert(hs.end(), handlers.begin(), handlers.end());
+                }
             }
         }
         for (auto &h : hs) {
@@ -225,6 +318,7 @@ void GatewayTransport::dispatch(const std::string &line) {
 }
 
 void GatewayTransport::authenticate(const std::string &token, std::int64_t timeoutMs) {
+    lastToken_ = token;
     {
         std::lock_guard<std::mutex> lk(authMu_);
         authState_ = 0;
@@ -247,6 +341,7 @@ void GatewayTransport::authenticate(const std::string &token, std::int64_t timeo
 std::string GatewayTransport::request(const std::string &subject,
                                       const std::string &payload,
                                       std::int64_t timeoutMs) {
+    ensureConnected();
     const auto id = nextId();
     auto p = std::make_shared<Pending>();
     {
@@ -286,12 +381,14 @@ std::string GatewayTransport::request(const std::string &subject,
 }
 
 void GatewayTransport::publish(const std::string &subject, const std::string &payload) {
+    ensureConnected();
     json f = {{"op", "pub"}, {"subject", subject}, {"payload", payload}};
     sendLine(f.dump());
 }
 
 void GatewayTransport::requestMany(const std::string &subject, const std::string &payload,
                                    const ReplyHandler &onReply, std::int64_t timeoutMs) {
+    ensureConnected();
     const auto id = nextId();
     auto p = std::make_shared<Pending>();
     {
@@ -347,6 +444,7 @@ void GatewayTransport::subscribe(const std::string &subject, Handler handler) {
         std::lock_guard<std::mutex> lk(subMu_);
         subs_[subject].push_back(std::move(handler));
     }
+    ensureConnected(); // при переподключении подписка уйдёт из subs_
     json f = {{"op", "sub"}, {"subject", subject}};
     sendLine(f.dump());
 }

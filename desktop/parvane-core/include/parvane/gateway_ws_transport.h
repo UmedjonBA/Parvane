@@ -41,6 +41,7 @@ public:
 protected:
     void readerLoop() override;
     void sendLine(const std::string &frame) override;
+    void reopen() override { connectUrl(lastUrl_); }
 
 private:
     void tlsConnect(const std::string &host);
@@ -53,6 +54,7 @@ private:
     SSL_CTX *ctx_ = nullptr;
     SSL *ssl_ = nullptr;
     bool tls_ = false;
+    std::string lastUrl_; // для reopen()
 };
 
 } // namespace parvane

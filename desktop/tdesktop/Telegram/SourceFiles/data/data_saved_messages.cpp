@@ -46,6 +46,16 @@ SavedMessages::SavedMessages(
 	FilterId(),
 	_owner->maxPinnedChatsLimitValue(this))
 , _loadMore([=] { sendLoadMoreRequests(); }) {
+	// Parvane: «чаты внутри Избранного» (saved sublists — пересланное
+	// группируется по авторам, своё — «Мои заметки») для СВОЕГО Избранного
+	// отключены: список синтезировался из локальных сообщений, а история
+	// сублиста просит messages.getSavedHistory у MTProto → «Загрузка…»
+	// навечно. Upstream отключает их только по SAVED_DIALOGS_UNSUPPORTED от
+	// сервера, которого у нас нет. savedSublistsInfo() → false: Info
+	// «Избранного» открывает профиль/медиа, а не список сублистов.
+	if (!parentChat) {
+		_unsupported = true;
+	}
 	// We don't assign _owningHistory for my Saved Messages here,
 	// because the data structures are not ready yet.
 	if (_owningHistory && _owningHistory->inChatList()) {
