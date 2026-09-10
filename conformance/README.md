@@ -67,8 +67,13 @@ desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 
 
 - desktop: ОБОБЩЕНО 9 сен 2026 — `MTP::Instance::Private::sendRequest` любой
   запрос отдаёт в `fail` локальной ошибкой `PARVANE_NO_MTPROTO` (с задержкой
-  300 мс). Точечные локальные завершения (`ChatFilters::load`, выход, отказ
-  авторизации) остаются.
+  300 мс; колбэки — в штатной карте запросов, чтобы `cancel()` разрушенного
+  `MTP::Sender` их снимал, иначе отложенный fail бьёт по мёртвому объекту —
+  10 сен 2026). Точечные локальные завершения (`ChatFilters::load`, выход,
+  отказ авторизации) остаются. Тест отказа авторизации без падения —
+  `desktop/verify_auth_reject.sh`. Обрыв соединения с gateway: транспорт
+  сам переподключается (auth + подписки), тест —
+  `desktop/verify_gateway_reconnect.sh`.
 - web: `useModuleLoader` ловит отказ импорта, `moduleLoader` не кэширует
   отвергнутый промис, устаревший чанк лечится одноразовой перезагрузкой.
 
