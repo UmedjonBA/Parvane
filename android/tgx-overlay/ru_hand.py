@@ -14,6 +14,13 @@ RU = {
     "language_dateFormatLocale": "ru-RU",
     "language_rtl": "0",
     "language_continueInLanguage": "Продолжить на русском",
+    # ── устройства / код-пароль ──
+    "Devices": "Устройства", "PasscodeTitle": "Код-пароль", "SessionsTitle": "Активные сессии",
+    "ActiveDevices": "Активные устройства", "OtherDevices": "Другие устройства", "ThisDevice": "Это устройство",
+    "NoOtherSessions": "Других активных сессий нет",
+    "NoOtherSessionsInfo": "Войти в Parvane можно с других телефонов, планшетов и компьютеров по тому же нику. Ключи и история переносятся линковкой или копией ключей.",
+    "TerminateAllSessions": "Завершить все другие сессии", "TerminateSessionQuestion": "Завершить эту сессию?",
+    "TerminateSession": "Завершить сессию", "UnknownLocation": "Местоположение неизвестно",
     # ── общее ──
     "Message": "Сообщение",  # словарь десктопа давал «Чат» — подсказка поля ввода
     "NotificationsEnabled": "Включены", "NotificationsDisabled": "Выключены",

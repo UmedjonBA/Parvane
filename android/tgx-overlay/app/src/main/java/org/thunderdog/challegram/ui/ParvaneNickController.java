@@ -82,7 +82,9 @@ public class ParvaneNickController extends EditBaseController<Void> implements M
     hintView.setTypeface(Fonts.getRobotoRegular());
     hintView.setTextColor(Theme.getColor(ColorId.textLight));
     addThemeTextDecentColorListener(hintView);
-    hintView.setText("Вход в Parvane по нику и паролю. Аккаунт создаётся в веб-клиенте.");
+    hintView.setText(UI.getAppContext().getString(R.string.ParvaneSignInHint) + " " + UI.getAppContext().getString(R.string.ParvaneNoAccount));
+    // регистрация из приложения (паритет с интро десктопа): тап по подсказке → экран создания аккаунта
+    hintView.setOnClickListener(v -> navigateTo(new ParvaneRegisterController(context, tdlib)));
     params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
     params.topMargin = Screen.dp(96f);
     params.leftMargin = params.rightMargin = Screen.dp(16f);

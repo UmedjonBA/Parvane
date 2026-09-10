@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="ParvaneSignUp">Создать аккаунт</string>
+  <string name="ParvaneSignUpHint">Ник и пароль. Если сервер подтверждает через Telegram или почту, будет шаг подтверждения.</string>
+  <string name="ParvaneSignInHint">Вход по нику и паролю.</string>
+  <string name="ParvaneNoAccount">Нет аккаунта? Нажмите, чтобы создать.</string>
+  <string name="ParvaneNick">Ник</string>
+  <string name="ParvanePassword">Пароль</string>
+  <string name="ParvaneEmailOptional">E-mail (необязательно)</string>
+  <string name="ParvaneEmailRequired">E-mail (нужен для подтверждения)</string>
+  <string name="ParvaneEmailCode">Код из письма</string>
+  <string name="ParvaneEmailCodeHint">На почту отправлен код подтверждения. Введите его здесь.</string>
+  <string name="ParvaneWrongCode">Неверный код</string>
+  <string name="ParvanePasswordShort">Пароль слишком короткий (минимум 4 символа)</string>
+  <string name="ParvaneSignUpFailed">Не удалось создать аккаунт</string>
+  <string name="ParvaneConfirmInTelegram">Подтвердите в Telegram-боте (ссылка открылась), затем вернитесь — вход продолжится сам.</string>
+  <string name="ParvaneLinkExpired">Ссылка устарела, попробуйте снова</string>
+  <string name="ParvaneSigningIn">Вход…</string>
+  <string name="ParvaneKeysExport">Сохранить копию ключей…</string>
+  <string name="ParvaneKeysImport">Восстановить ключи из копии…</string>
+  <string name="ParvaneKeysPassword">Пароль копии (не короче 8 символов)</string>
+  <string name="ParvaneKeysPasswordShort">Пароль не короче 8 символов</string>
+  <string name="ParvaneKeysSaved">Копия ключей сохранена:</string>
+  <string name="ParvaneKeysExportFailed">Не удалось сохранить копию ключей</string>
+  <string name="ParvaneKeysImported">Копия восстановлена, сообщений добавлено:</string>
+  <string name="ParvaneKeysImportFailed">Неверный пароль или повреждённый файл</string>
+  <string name="ParvaneKeysNotReady">Ключи ещё не готовы, подождите несколько секунд после входа</string>
+</resources>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Parvane: свои id и строки (EN); русский — values-ru/parvane.xml -->
+<resources>
+  <item type="id" name="btn_parvaneKeysExport" />
+  <item type="id" name="btn_parvaneKeysImport" />
+  <item type="id" name="btn_parvaneSignUp" />
+  <string name="ParvaneSignUp">Create account</string>
+  <string name="ParvaneSignUpHint">Nickname and password. If the server confirms by Telegram or e-mail, a confirmation step follows.</string>
+  <string name="ParvaneSignInHint">Sign in with nickname and password.</string>
+  <string name="ParvaneNoAccount">No account? Tap here to create one.</string>
+  <string name="ParvaneNick">Nickname</string>
+  <string name="ParvanePassword">Password</string>
+  <string name="ParvaneEmailOptional">E-mail (optional)</string>
+  <string name="ParvaneEmailRequired">E-mail (required for confirmation)</string>
+  <string name="ParvaneEmailCode">Code from e-mail</string>
+  <string name="ParvaneEmailCodeHint">A confirmation code was sent to your e-mail. Enter it here.</string>
+  <string name="ParvaneWrongCode">Wrong code</string>
+  <string name="ParvanePasswordShort">Password is too short (minimum 4 characters)</string>
+  <string name="ParvaneSignUpFailed">Could not create account</string>
+  <string name="ParvaneConfirmInTelegram">Confirm in the Telegram bot (the link opened), then come back — sign-in continues automatically.</string>
+  <string name="ParvaneLinkExpired">The link has expired, try again</string>
+  <string name="ParvaneSigningIn">Signing in…</string>
+  <string name="ParvaneKeysExport">Save keys backup…</string>
+  <string name="ParvaneKeysImport">Restore keys from backup…</string>
+  <string name="ParvaneKeysPassword">Backup password (8+ characters)</string>
+  <string name="ParvaneKeysPasswordShort">Password must be at least 8 characters</string>
+  <string name="ParvaneKeysSaved">Keys backup saved:</string>
+  <string name="ParvaneKeysExportFailed">Could not save keys backup</string>
+  <string name="ParvaneKeysImported">Backup restored, messages merged:</string>
+  <string name="ParvaneKeysImportFailed">Wrong password or damaged file</string>
+  <string name="ParvaneKeysNotReady">Keys are not ready yet, wait a few seconds after sign-in</string>
+</resources>

@@ -25,6 +25,8 @@
 #include <parvane/cloud_client.h>
 #include <parvane/gateway_ws_transport.h>
 #include <parvane/group_client.h>
+#include <parvane/ids.h>
+#include <parvane/keybackup.h>
 #include <parvane/linking.h>
 #include <parvane/messenger.h>
 #include <parvane/messenger_client.h>
@@ -468,7 +470,22 @@ std::string sendSealedLocked(const std::string &to, const json &content, const s
         return id;
     }
     const auto sealed = parvane::e2e::sealForAddress(to, content.dump(), *g_transport, g_token);
-    if (!sealed) throw std::runtime_error("E2E: нет устройств получателя");
+    if (!sealed) {
+        // «Избранное» на единственном устройстве: шифровать сообщение некому
+        // (Olm требует устройство-получателя). Храним заметку локально — на
+        // сервер не уходит, будущие устройства старых заметок не увидят (как и
+        // у десктопа при одном устройстве). Для чужого адреса — честная ошибка.
+        if (to != g_self) throw std::runtime_error("E2E: нет устройств получателя");
+        const auto id = parvane::newUuidV7();
+        g_seen.insert(id);
+        decCachePut(id, json{{"from", g_self}, {"content", content}});
+        emit(json{{"type", "message"}, {"id", id}, {"from", g_self}, {"to", to}, {"ts", nowSec()},
+                  {"text", content.value("text", content.value("caption", std::string()))}, {"out", true},
+                  {"kind", content.value("kind", "text")}, {"read", true}, {"content", content},
+                  {"reply_to", replyTo ? json(*replyTo) : json()}});
+        LOGI("заметка себе (локально) %s", id.c_str());
+        return id;
+    }
     auto copies = json::array();
     for (const auto &c : sealed->copies) copies.push_back(c.toJson());
     const auto id = g_messenger->sendContent(std::string(), to, sealed->content, std::string(), replyTo, std::nullopt, copies);
@@ -512,6 +529,25 @@ void retractLinkOffer() {
     } catch (const std::exception &) {}
 }
 // Под g_mu. true — линковка закончена (успех/отзыв), false — ждём дальше.
+// Слияние состояния E2E (PersistedE2eState веба: линковка, копия ключей) в это
+// устройство + пере-синк с нуля (старые сообщения придут снова и откроются из
+// кэша). Под g_mu. Возвращает число новых записей кэша, −1 — ошибка.
+int importStateLocked(const std::string &stateJson) {
+    int merged = 0;
+    const auto ok = parvane::e2e::importLinkedHistory(stateJson, [&](const std::string &uuid, const json &inner) {
+        if (!inner.is_object() || g_decCache.count(uuid)) return;
+        auto entry = inner;
+        if (entry.contains("senderIdentity")) { entry["sender_identity"] = entry["senderIdentity"]; entry.erase("senderIdentity"); }
+        decCachePut(uuid, entry);
+        ++merged;
+    });
+    if (!ok) return -1;
+    g_cursorId = parvane::MessengerClient::zeroCursor();
+    g_cursorUpd = 0;
+    g_seen.clear();
+    saveCursors();
+    return merged;
+}
 bool pollLinkGrantOnce() {
     if (!g_linkActive || !g_transport || !g_linkEph) return true;
     if (nowMs() - g_linkStartedMs > kLinkOfferLifetimeMs) {
@@ -549,21 +585,9 @@ bool pollLinkGrantOnce() {
         LOGE("линковка: скачивание: %s", e.what());
         return true;
     }
-    int merged = 0;
-    const auto ok = parvane::e2e::importLinkedHistory(stateJson, [&](const std::string &uuid, const json &inner) {
-        if (!inner.is_object() || g_decCache.count(uuid)) return;
-        auto entry = inner;
-        if (entry.contains("senderIdentity")) { entry["sender_identity"] = entry["senderIdentity"]; entry.erase("senderIdentity"); }
-        decCachePut(uuid, entry);
-        ++merged;
-    });
-    if (!ok) { LOGE("линковка: импорт не удался"); return true; }
+    const int merged = importStateLocked(stateJson);
+    if (merged < 0) { LOGE("линковка: импорт не удался"); return true; }
     LOGI("линковка: история получена и импортирована (%d сообщений в кэше) — пере-синк с нуля", merged);
-    // Пере-синк с нуля: старые сообщения придут снова и откроются из кэша
-    g_cursorId = parvane::MessengerClient::zeroCursor();
-    g_cursorUpd = 0;
-    g_seen.clear();
-    saveCursors();
     emit(json{{"type", "link"}, {"state", "imported"}, {"count", merged}});
     return true;
 }
@@ -662,23 +686,48 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeServerDomain(J
     return env->NewStringUTF(serverDomain().c_str());
 }
 
+// Секрет доверия 2FA (как tdata/parvane-trust-<адрес>.txt на десктопе): устройство,
+// однажды подтверждённое в Telegram, при следующих входах не спрашивает подтверждения.
+std::string trustPath(const std::string &address) { return g_storeDir + "/trust-" + address + ".txt"; }
+std::string readTrust(const std::string &address) {
+    std::ifstream f(trustPath(address)); std::string s; std::getline(f, s); return s;
+}
+void writeTrust(const std::string &address, const std::string &secret) {
+    std::ofstream f(trustPath(address), std::ios::trunc); f << secret;
+}
+std::string canonicalAddress(std::string address) {
+    if (address.find('@') == std::string::npos) {
+        const auto domain = serverDomain();
+        if (domain.empty()) throw std::runtime_error("сервер недоступен");
+        address += "@" + domain;
+    }
+    return address;
+}
+// identity.token.issue. Ответ: {ok, address | error, twofa_required, login_token}.
+// loginToken — подтверждённый в Telegram токен второго фактора (пусто — обычный вход).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeLogin(
-        JNIEnv *env, jclass, jstring user, jstring password) {
+        JNIEnv *env, jclass, jstring user, jstring password, jstring loginToken) {
     json out{{"ok", false}};
     try {
-        auto address = jstr(env, user);
-        if (address.find('@') == std::string::npos) {
-            const auto domain = serverDomain();
-            if (domain.empty()) throw std::runtime_error("сервер недоступен");
-            address += "@" + domain;
-        }
+        const auto address = canonicalAddress(jstr(env, user));
         parvane::IssueRequest req{address, jstr(env, password)};
         req.deviceId = parvane::e2e::ensureDeviceId(e2eDir(address));
+        auto reqJson = req.toJson();
+        if (const auto lt = jstr(env, loginToken); !lt.empty()) reqJson["login_token"] = lt;
+        if (const auto secret = readTrust(address); !secret.empty()) reqJson["trust_secret"] = secret;
         auto t = makeTransport("");
-        const auto raw = t->request(parvane::topics::IdentityIssue, req.toJson().dump(), 8000);
-        const auto resp = parvane::IssueResponse::fromJson(json::parse(raw));
+        const auto raw = t->request(parvane::topics::IdentityIssue, reqJson.dump(), 8000);
+        const auto rawJson = json::parse(raw, nullptr, false);
+        const auto resp = parvane::IssueResponse::fromJson(rawJson);
+        if (rawJson.is_object() && rawJson.contains("trust_secret") && rawJson["trust_secret"].is_string())
+            writeTrust(address, rawJson["trust_secret"].get<std::string>());
         if (!resp.ok || !resp.token) {
             out["error"] = resp.error.value_or("неверный логин или пароль");
+            if (rawJson.is_object() && rawJson.value("twofa_required", false)) {
+                out["twofa_required"] = true;
+                out["login_token"] = rawJson.value("login_token", "");
+                out["address"] = address;
+            }
         } else {
             std::lock_guard<std::mutex> lk(g_mu);
             g_self = address;
@@ -691,6 +740,115 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeLogin(
         out["error"] = e.what();
     }
     return env->NewStringUTF(out.dump().c_str());
+}
+// identity.server.info → {domain, confirm ("telegram"|"email"|""), telegram_bot}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeServerInfo(JNIEnv *env, jclass) {
+    json out{{"domain", ""}, {"confirm", ""}, {"telegram_bot", ""}};
+    try {
+        auto t = makeTransport("");
+        const auto j = json::parse(t->request(std::string("identity.server.info"), "{}", 5000), nullptr, false);
+        if (j.is_object()) {
+            out["domain"] = j.value("domain", "");
+            out["telegram_bot"] = j.value("telegram_bot", "");
+            if (j.contains("confirm") && j["confirm"].is_string()) out["confirm"] = j["confirm"];
+            else if (j.value("email_required", false)) out["confirm"] = "email";
+        }
+    } catch (const std::exception &e) { out["error"] = e.what(); }
+    return env->NewStringUTF(out.dump().c_str());
+}
+// identity.user.register (как Parvane::Register десктопа) → {ok, address, confirm_required, telegram_token, error}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRegister(
+        JNIEnv *env, jclass, jstring user, jstring password, jstring email) {
+    json out{{"ok", false}};
+    try {
+        const auto address = canonicalAddress(jstr(env, user));
+        out["address"] = address;
+        auto t = makeTransport("");
+        const json req{{"user", address}, {"password", jstr(env, password)}, {"invite", ""}, {"email", jstr(env, email)}};
+        const auto resp = json::parse(t->request(parvane::topics::IdentityRegister, req.dump(), 8000), nullptr, false);
+        if (!resp.is_object()) throw std::runtime_error("битый ответ identity");
+        out["ok"] = resp.value("ok", false);
+        out["confirm_required"] = resp.value("confirm_required", false);
+        if (resp.contains("telegram_token") && resp["telegram_token"].is_string()) out["telegram_token"] = resp["telegram_token"];
+        if (resp.contains("error") && resp["error"].is_string()) out["error"] = resp["error"];
+        if (!out["ok"].get<bool>() && !out.contains("error")) out["error"] = "identity отклонил регистрацию";
+    } catch (const std::exception &e) { out["error"] = e.what(); }
+    return env->NewStringUTF(out.dump().c_str());
+}
+// identity.register.status — подтверждён ли токен (регистрация или 2FA-вход) в Telegram-боте
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRegisterStatus(JNIEnv *env, jclass, jstring user, jstring token) {
+    try {
+        auto t = makeTransport("");
+        const json req{{"user", jstr(env, user)}, {"token", jstr(env, token)}};
+        return json::parse(t->request(std::string("identity.register.status"), req.dump(), 5000), nullptr, false).value("confirmed", false) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception &e) { LOGE("register.status: %s", e.what()); return JNI_FALSE; }
+}
+// identity.email.confirm — код из письма → {ok, error}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeConfirmEmail(JNIEnv *env, jclass, jstring user, jstring code) {
+    json out{{"ok", false}};
+    try {
+        auto t = makeTransport("");
+        const json req{{"user", jstr(env, user)}, {"code", jstr(env, code)}};
+        const auto resp = json::parse(t->request(parvane::topics::IdentityEmailConfirm, req.dump(), 5000), nullptr, false);
+        out["ok"] = resp.value("ok", false);
+        if (resp.contains("error") && resp["error"].is_string()) out["error"] = resp["error"];
+        if (!out["ok"].get<bool>() && !out.contains("error")) out["error"] = "неверный код";
+    } catch (const std::exception &e) { out["error"] = e.what(); }
+    return env->NewStringUTF(out.dump().c_str());
+}
+// ── устройства (identity.device.list / revoke), как Settings → Devices десктопа ──
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeListDevices(JNIEnv *env, jclass) {
+    auto out = json::array();
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        const auto resp = json::parse(g_transport->request(parvane::topics::IdentityDeviceList, json{{"token", g_token}}.dump(), 5000), nullptr, false);
+        const auto mine = parvane::e2e::deviceId();
+        if (resp.is_object() && resp.value("ok", false) && resp.contains("devices") && resp["devices"].is_array()) {
+            for (const auto &d : resp["devices"]) {
+                if (!d.is_object()) continue;
+                const auto id = d.value("device_id", std::string());
+                out.push_back(json{{"device_id", id}, {"updated_at", d.value("updated_at", std::int64_t(0))},
+                                   {"one_time_available", d.value("one_time_available", 0)}, {"current", id == mine}});
+            }
+        }
+    } catch (const std::exception &e) { LOGE("device.list: %s", e.what()); }
+    return env->NewStringUTF(out.dump().c_str());
+}
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeDevice(JNIEnv *env, jclass, jstring deviceId) {
+    const auto dev = jstr(env, deviceId);
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        if (dev == parvane::e2e::deviceId()) return JNI_FALSE; // себя не отзываем
+        const auto resp = json::parse(g_transport->request(parvane::topics::IdentityDeviceRevoke, json{{"token", g_token}, {"device_id", dev}}.dump(), 5000), nullptr, false);
+        return resp.value("ok", false) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception &e) { LOGE("device.revoke: %s", e.what()); return JNI_FALSE; }
+}
+// ── копия ключей под паролем (формат веб-клиента, parvane-core keybackup) ──
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeExportKeys(JNIEnv *env, jclass, jstring password) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!parvane::e2e::ready()) throw std::runtime_error("ключи ещё не готовы — подождите после входа");
+        auto snap = json::object();
+        for (const auto &[id, inner] : g_decCache) snap[id] = inner;
+        const auto state = parvane::e2e::exportStateJson(snap);
+        if (state.empty()) throw std::runtime_error("нечего сохранять");
+        const auto file = parvane::keybackup::exportEncrypted(state, jstr(env, password));
+        if (file.empty()) throw std::runtime_error("не удалось зашифровать копию");
+        LOGI("копия ключей: %zu байт", file.size());
+        return env->NewStringUTF(file.c_str());
+    } catch (const std::exception &e) { LOGE("exportKeys: %s", e.what()); return env->NewStringUTF(""); }
+}
+// → число новых записей в кэше; −1 — неверный пароль/битый файл; −2 — E2E не готов
+JNIEXPORT jint JNICALL Java_org_parvane_core_ParvaneCore_nativeImportKeys(JNIEnv *env, jclass, jstring fileJson, jstring password) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!parvane::e2e::ready()) return -2;
+    const auto state = parvane::keybackup::importEncrypted(jstr(env, fileJson), jstr(env, password));
+    if (!state) return -1;
+    const int merged = importStateLocked(*state);
+    if (merged >= 0) { LOGI("копия ключей восстановлена: %d записей — пере-синк", merged); emit(json{{"type", "link"}, {"state", "imported"}, {"count", merged}}); }
+    return merged;
 }
 
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(JNIEnv *, jclass) {
@@ -818,20 +976,12 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendContent(
                        {"reply_to", reply.empty() ? json() : json(reply)}, {"group", isGroupLocked(toStd)}});
     return env->NewStringUTF(id.c_str());
 }
-// Медиа: файл → blobcrypt → cloud → sealed-сообщение с file_id/file_key/file_nonce.
-// contentJson — {kind, mime, width, height, duration_secs, filename, caption}.
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendMedia(
-        JNIEnv *env, jclass, jstring to, jstring path, jstring contentJson, jstring replyTo) {
-    const auto toStd = jstr(env, to);
-    const auto pathStd = jstr(env, path);
-    const auto reply = jstr(env, replyTo);
+// Медиа: байты → blobcrypt → cloud → sealed-сообщение с file_id/file_key/file_nonce;
+// локальная копия под file_id и событие message (out) в Kotlin. Пусто — ошибка (в логе).
+// content — {kind, mime, width, height, duration_secs, filename, caption[, forwarded_name]}.
+std::string sendMediaBytes(const std::string &toStd, const std::string &plain, json content, const std::string &reply) {
     std::string id;
     try {
-        auto content = json::parse(jstr(env, contentJson), nullptr, false);
-        if (!content.is_object()) throw std::runtime_error("битый content");
-        std::ifstream f(pathStd, std::ios::binary);
-        if (!f) throw std::runtime_error("файл не читается: " + pathStd);
-        std::string plain((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         auto enc = parvane::blobcrypt::encrypt(plain);
         if (enc.ciphertext.empty()) throw std::runtime_error("blobcrypt");
         std::lock_guard<std::mutex> lk(g_mu);
@@ -860,10 +1010,76 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendMedia(
     } catch (const std::exception &e) {
         LOGE("sendMedia: %s", e.what());
         emitError(std::string("send: ") + e.what());
-        return env->NewStringUTF("");
+        return {};
     }
     LOGI("отправлено медиа %s → %s", id.c_str(), toStd.c_str());
-    return env->NewStringUTF(id.c_str());
+    return id;
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendMedia(
+        JNIEnv *env, jclass, jstring to, jstring path, jstring contentJson, jstring replyTo) {
+    const auto pathStd = jstr(env, path);
+    auto content = json::parse(jstr(env, contentJson), nullptr, false);
+    std::ifstream f(pathStd, std::ios::binary);
+    if (!content.is_object() || !f) { LOGE("sendMedia: битый content или файл не читается: %s", pathStd.c_str()); return env->NewStringUTF(""); }
+    std::string plain((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return env->NewStringUTF(sendMediaBytes(jstr(env, to), plain, content, jstr(env, replyTo)).c_str());
+}
+// Пересылка (паритет ForwardMediaReshared десктопа): текст — тот же content новому
+// адресату; медиа — блоб скачивается (или берётся локальная копия) и перезаливается
+// для нового получателя (у cloud список получателей на блоб). forwarded_name — автор.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeForward(
+        JNIEnv *env, jclass, jstring to, jstring uuid) {
+    const auto toStd = jstr(env, to), id = jstr(env, uuid);
+    json inner;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        auto it = g_decCache.find(id);
+        if (it == g_decCache.end()) { LOGE("forward: %s нет в кэше", id.c_str()); return env->NewStringUTF(""); }
+        inner = it->second;
+    }
+    auto content = inner.value("content", json::object());
+    if (!content.is_object()) return env->NewStringUTF("");
+    const auto author = inner.value("from", std::string());
+    if (!author.empty()) content["forwarded_name"] = author.substr(0, author.find('@'));
+    content.erase("local_path");
+    const auto fid = content.value("file_id", std::string());
+    if (!fid.empty()) {
+        std::string plain;
+        const auto local = mediaDir() + "/" + fid;
+        if (std::ifstream lf(local, std::ios::binary); lf) {
+            plain.assign((std::istreambuf_iterator<char>(lf)), std::istreambuf_iterator<char>());
+        } else {
+            try {
+                std::string self, token;
+                { std::lock_guard<std::mutex> lk(g_mu); self = g_self; token = g_token; }
+                auto own = makeTransport(token);
+                parvane::CloudClient cloud(*own);
+                auto d = cloud.download(self, token, fid, 120000);
+                if (!d.ok) throw std::runtime_error(d.error);
+                auto dec = parvane::blobcrypt::decrypt(d.bytes, content.value("file_key", std::string()), content.value("file_nonce", std::string()));
+                if (!dec) throw std::runtime_error("blobcrypt: не расшифровался");
+                plain = *dec;
+            } catch (const std::exception &e) {
+                LOGE("forward %s: блоб: %s", id.c_str(), e.what());
+                return env->NewStringUTF("");
+            }
+        }
+        for (const char *k : {"file_id", "file_key", "file_nonce", "size_bytes"}) content.erase(k);
+        return env->NewStringUTF(sendMediaBytes(toStd, plain, content, "").c_str());
+    }
+    std::string nid;
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        nid = sendSealedLocked(toStd, content, std::nullopt);
+        emit(json{{"type", "message"}, {"id", nid}, {"from", g_self}, {"to", toStd}, {"ts", nowSec()},
+                  {"text", content.value("text", std::string())}, {"out", true}, {"kind", content.value("kind", "")},
+                  {"read", false}, {"content", content}, {"reply_to", json()}});
+    } catch (const std::exception &e) {
+        LOGE("forward: %s", e.what());
+        return env->NewStringUTF("");
+    }
+    LOGI("переслано %s → %s как %s", id.c_str(), toStd.c_str(), nid.c_str());
+    return env->NewStringUTF(nid.c_str());
 }
 // Скачать блоб из cloud (с расшифровкой, если есть ключ) → путь файла ("" при ошибке).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
