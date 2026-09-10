@@ -252,6 +252,7 @@ const callController = createCallController({
   isIdentityReady: () => isCallIdentityReady,
   isBlocked: localState.isBlocked,
   sendUpdate,
+  pushReadState: (chatId) => syncController.pushReadState(chatId),
   log: logDebug,
 });
 
@@ -895,19 +896,16 @@ const methods = {
         const isSelfChat = chat.id === selfId();
         const hasUnreadMark = unreadMarks.has(chat.id) || undefined;
         history.forEach((message) => {
-          // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем;
-          // записи о звонках (phoneCall) — тоже: у них нет uuid сообщения,
-          // msg.chat.read для них невозможен, и бейдж возвращался после reload
+          // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем.
+          // Единый предикат (sync.isUnreadIncoming): записи о звонках и служебные
+          // (без uuid, msg.chat.read невозможен) — прочитаны; прочитанным
+          // считается и то, что пометило ЭТО устройство (READ-1): серверный
+          // флаг мог не успеть вернуться, и после перезагрузки бейдж возвращался.
           if (message.isOutgoing || isSelfChat || !message.senderId) return;
-          if (message.content.action?.type === 'phoneCall') return;
-          const uuid = store.getUuidForMessage(chat.id, message.id);
-          // Прочитанным считаем и то, что пометило ЭТО устройство: серверный
-          // флаг мог не успеть вернуться (msg.chat.read уходит без ответа),
-          // и после перезагрузки бейдж возвращался.
-          if (uuid && (syncController.getFlags(uuid)?.read || syncController.hasReportedRead(uuid))) {
-            if (message.id > lastReadInbox) lastReadInbox = message.id;
-          } else {
+          if (syncController.isUnreadIncoming(chat.id, message)) {
             unreadCount += 1;
+          } else if (message.id > lastReadInbox) {
+            lastReadInbox = message.id;
           }
         });
         if (isSelfChat) lastReadInbox = last.id;
@@ -918,7 +916,8 @@ const methods = {
           hasUnreadMark,
           unreadMentionsCount: unreadMentions.length,
           unreadMentions,
-          lastReadOutboxMessageId: syncController.getReadOutboxMax(chat.id),
+          // «Избранное»: свои сообщения прочитаны всегда (как в tdesktop)
+          lastReadOutboxMessageId: isSelfChat ? last.id : syncController.getReadOutboxMax(chat.id),
         };
       }
       // Без ApiThreadInfo главного треда updateListedIds молча не создаёт тред —

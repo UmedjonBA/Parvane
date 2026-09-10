@@ -550,10 +550,51 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
+  // ЕДИНЫЙ предикат «входящее не прочитано» — для стартового состояния
+  // (provider), пересчёта после кросс-девайс прочтения и упоминаний. Раньше
+  // пересчёт считал непрочитанным всё без uuid — записи о звонках и служебные
+  // сообщения (у них нет uuid, msg.chat.read невозможен), и бейдж «1»
+  // возвращался на чат, где последним был звонок (10 сен 2026).
+  function isUnreadIncoming(chatId: string, message: ApiMessage) {
+    if (message.isOutgoing || !message.senderId) return false;
+    if (message.content.action) return false;
+    const uuid = store_().getUuidForMessage(chatId, message.id);
+    if (!uuid) return false;
+    return !wireFlagsByUuid.get(uuid)?.read && !reportedReadUuids.has(uuid);
+  }
+
+  function store_() {
+    return deps.getStore();
+  }
+
+  // Пересчитать и разослать состояние прочитанного чата по стору. Зовётся и
+  // из calls.ts после инъекции входящей записи о звонке: tt на любой
+  // newMessage с чужим senderId прибавляет +1 к непрочитанному (chats.ts,
+  // addUnreadMessageToCounter), не глядя на lastReadInboxMessageId.
+  function pushReadState(chatId: string) {
+    const store = deps.getStore();
+    let lastReadInbox = 0;
+    let unreadCount = 0;
+    store.getMessages(chatId).forEach((message) => {
+      if (message.isOutgoing || !message.senderId) return;
+      if (isUnreadIncoming(chatId, message)) {
+        unreadCount += 1;
+      } else if (message.id > lastReadInbox) {
+        lastReadInbox = message.id;
+      }
+    });
+    deps.sendUpdate({
+      '@type': 'updateThreadReadState',
+      chatId,
+      threadId: MAIN_THREAD_ID,
+      readState: { lastReadInboxMessageId: lastReadInbox, unreadCount },
+    });
+  }
+
   function markUuidsRead(uuids: string[]) {
     if (!uuids.length) return;
     const store = deps.getStore();
-    const affected = new Map<string, number>();
+    const affected = new Set<string>();
     uuids.forEach((uuid) => {
       const flags = wireFlagsByUuid.get(uuid);
       if (flags) {
@@ -563,22 +604,18 @@ export function createSyncController(deps: SyncDependencies) {
       reportedReadUuids.add(uuid);
       const message = store.getMessageByUuid(uuid);
       if (!message || message.isOutgoing) return;
-      const cur = affected.get(message.chatId) || 0;
-      if (message.id > cur) affected.set(message.chatId, message.id);
+      affected.add(message.chatId);
     });
-    affected.forEach((maxId, chatId) => {
-      const unreadCount = store.getMessages(chatId).filter((message) => {
-        if (message.isOutgoing || !message.senderId) return false;
-        const uuid = store.getUuidForMessage(chatId, message.id);
-        return uuid ? (!wireFlagsByUuid.get(uuid)?.read && !reportedReadUuids.has(uuid)) : true;
-      }).length;
-      deps.sendUpdate({
-        '@type': 'updateThreadReadState',
-        chatId,
-        threadId: MAIN_THREAD_ID,
-        readState: { lastReadInboxMessageId: maxId, unreadCount },
-      });
-    });
+    affected.forEach((chatId) => pushReadState(chatId));
+  }
+
+  // «Избранное»: свои сообщения там прочитаны всегда (tdesktop:
+  // HistoryItem::unread → false для peer->isSelf()); серверный флаг read у
+  // них никогда не встанет (receipt «не от меня» невозможен) — иначе одна
+  // галочка навсегда у отправленного с другого устройства (10 сен 2026).
+  function isSelfChat(chatId: string) {
+    const store = deps.getStore();
+    return Boolean(store.self) && chatId === store.getIdForAddress(store.self);
   }
 
   function noteReadOutbox(message: ApiMessage) {
@@ -723,7 +760,7 @@ export function createSyncController(deps: SyncDependencies) {
           '@type': 'updatePinnedIds', chatId: message.chatId, isPinned: true, messageIds: [message.id],
         });
       }
-      if (flags.read && message.isOutgoing) noteReadOutbox(message);
+      if ((flags.read || isSelfChat(message.chatId)) && message.isOutgoing) noteReadOutbox(message);
       if (stored.content.ttl_secs) {
         deps.localState.scheduleTtlDeletion(message.chatId, message.id, stored.content.ttl_secs);
       }
@@ -740,7 +777,9 @@ export function createSyncController(deps: SyncDependencies) {
         '@type': 'updatePinnedIds', chatId: message.chatId, isPinned: flags.pinned, messageIds: [message.id],
       });
     }
-    if (flags.read && !previousFlags?.read && message.isOutgoing) noteReadOutbox(message);
+    if ((flags.read || isSelfChat(message.chatId)) && !previousFlags?.read && message.isOutgoing) {
+      noteReadOutbox(message);
+    }
   }
 
   // Строка кэша: расшифрованный stored без TTL и без tombstone
@@ -896,7 +935,7 @@ export function createSyncController(deps: SyncDependencies) {
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
       persistHistory(stored);
-      if (message.isOutgoing && stored.read) {
+      if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
         const current = readOutboxMaxByChatId.get(message.chatId) || 0;
         if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
       }
@@ -1048,13 +1087,7 @@ export function createSyncController(deps: SyncDependencies) {
   function collectUnreadMentions(chatId: string) {
     const store = deps.getStore();
     return store.getMessages(chatId)
-      .filter((message) => {
-        if (message.isOutgoing || !message.senderId) return false;
-        if (!store.isMentionOfSelf(message)) return false;
-        const uuid = store.getUuidForMessage(chatId, message.id);
-        if (!uuid) return true;
-        return !wireFlagsByUuid.get(uuid)?.read && !reportedReadUuids.has(uuid);
-      })
+      .filter((message) => store.isMentionOfSelf(message) && isUnreadIncoming(chatId, message))
       .map((message) => message.id);
   }
 
@@ -1079,6 +1112,8 @@ export function createSyncController(deps: SyncDependencies) {
     handleInboxFrame,
     hasReportedRead: (uuid: string) => reportedReadUuids.has(uuid),
     isSynced: () => isSynced,
+    isUnreadIncoming,
+    pushReadState,
     markDeleted: (uuid: string) => {
       const flags = wireFlagsByUuid.get(uuid);
       if (flags) flags.deleted = true;

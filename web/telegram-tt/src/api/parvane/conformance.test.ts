@@ -101,7 +101,13 @@ describe('READ-1: прочитанное журналируется локаль
 
   it('web считает прочитанным объединение серверного флага и локального журнала', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/provider.ts'), 'utf8');
-    expect(source).toMatch(/getFlags\(uuid\)\?\.read \|\| syncController\.hasReportedRead\(uuid\)/);
+    // Единый предикат живёт в sync.ts (isUnreadIncoming): серверный флаг ИЛИ
+    // локальный журнал; provider и пересчёты зовут его, а не дублируют
+    expect(source).toMatch(/syncController\.isUnreadIncoming\(chat\.id, message\)/);
+    const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
+    expect(sync).toMatch(
+      /function isUnreadIncoming[\s\S]*?!wireFlagsByUuid\.get\(uuid\)\?\.read && !reportedReadUuids\.has\(uuid\)/,
+    );
   });
 
   it('desktop журналирует и повторяет прочитанное (READ-1)', () => {

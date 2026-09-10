@@ -30,6 +30,8 @@ type CallDependencies = {
   isIdentityReady: () => boolean;
   isBlocked: (address: string) => boolean;
   sendUpdate: (update: ApiUpdate) => void;
+  // Пересчёт непрочитанного чата после инъекции входящей записи о звонке
+  pushReadState: (chatId: string) => void;
   log: (message: string) => void;
 };
 
@@ -182,6 +184,10 @@ export function createCallController(deps: CallDependencies) {
       deps.sendUpdate({
         '@type': 'newMessage', chatId: message.chatId, id: message.id, message,
       });
+      // tt на newMessage с чужим senderId прибавляет +1 к непрочитанному;
+      // запись о звонке прочитать нельзя (нет uuid) — возвращаем счётчик
+      // к честному значению, иначе бейдж «1» на чате после каждого reload
+      if (!message.isOutgoing) deps.pushReadState(message.chatId);
     }
   }
 

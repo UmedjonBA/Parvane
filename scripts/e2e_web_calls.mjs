@@ -151,9 +151,15 @@ try {
   await openPrivateChat(aliceSession.page, bob);
   await findHistoryEntry(aliceSession.page, 'Outgoing Video Call')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Записи из истории после reload не должны помечать чат непрочитанным
+  // Записи из истории после reload не должны помечать чат непрочитанным.
+  // У Боба запись ВХОДЯЩАЯ и чат ЗАКРЫТ (как в списке чатов у пользователя):
+  // историю звонков веб инъецирует через newMessage спустя ~3 с после синка,
+  // а tt на чужой newMessage прибавляет +1 к непрочитанному (10 сен 2026 —
+  // бейдж «1» на чате, где последним был звонок, после каждого reload).
+  await bobSession.page.keyboard.press('Escape');
   await relogin(bobSession.page, PASSWORD);
-  await bobSession.page.waitForTimeout(5000);
+  await bobSession.page.keyboard.press('Escape');
+  await bobSession.page.waitForTimeout(6000);
   assert.equal(await unreadBadge(aliceSession.page, bob).count(), 0, 'у Алисы бейдж после reload (последний — звонок)');
   assert.equal(await unreadBadge(bobSession.page, alice).count(), 0, 'у Боба бейдж после reload (последний — звонок)');
   console.log('OK: после reload записи о звонках не дают бейдж');
