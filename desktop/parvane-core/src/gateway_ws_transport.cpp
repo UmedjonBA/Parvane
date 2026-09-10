@@ -8,6 +8,7 @@
 
 #include <arpa/inet.h>
 #include <cstring>
+#include <dirent.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -127,6 +128,8 @@ void GatewayWsTransport::connectUrl(const std::string &url) {
     }
     running_ = true;
     reader_ = std::thread(&GatewayWsTransport::readerLoop, this);
+    lastUrl_ = url;
+    closedByUser_ = false;
 }
 
 void GatewayWsTransport::tlsConnect(const std::string &host) {
@@ -134,6 +137,33 @@ void GatewayWsTransport::tlsConnect(const std::string &host) {
     if (!ctx_) throw GatewayError("gateway wss: SSL_CTX_new: " + sslError());
     SSL_CTX_set_min_proto_version(ctx_, TLS1_2_VERSION);
     SSL_CTX_set_default_verify_paths(ctx_);
+    // Android: у статического OpenSSL нет пути к системным CA (пусто), а
+    // сертификаты лежат в /apex/com.android.conscrypt/cacerts (14+) или
+    // /system/etc/security/cacerts — имена файлов по СТАРОМУ хэшу, поэтому не
+    // hash-dir, а каждый файл в стор. JNI задаёт PARVANE_CA_DIRS (через ':').
+    // Без этого на телефоне «TLS handshake» → «сервер недоступен» (10 сен 2026).
+    if (const char *dirs = std::getenv("PARVANE_CA_DIRS"); dirs && *dirs) {
+        X509_STORE *store = SSL_CTX_get_cert_store(ctx_);
+        std::string all = dirs;
+        size_t start = 0;
+        while (start <= all.size()) {
+            const auto colon = all.find(':', start);
+            const auto dir = all.substr(start, colon == std::string::npos ? std::string::npos : colon - start);
+            if (!dir.empty()) {
+                if (DIR *d = opendir(dir.c_str())) {
+                    while (dirent *e = readdir(d)) {
+                        if (e->d_name[0] == '.') continue;
+                        const auto path = dir + "/" + e->d_name;
+                        X509_STORE_load_locations(store, path.c_str(), nullptr); // сбой одного файла не важен
+                    }
+                    closedir(d);
+                }
+            }
+            if (colon == std::string::npos) break;
+            start = colon + 1;
+        }
+        ERR_clear_error();
+    }
     // Проверка сертификата: системные CA + имя хоста. PARVANE_WSS_INSECURE=1 —
     // только для dev-стенда с самоподписанным сертификатом.
     const char *insecure = std::getenv("PARVANE_WSS_INSECURE");
@@ -234,7 +264,10 @@ void GatewayWsTransport::sendFrame(unsigned char opcode, const std::string &payl
     for (size_t i = 0; i < len; ++i) {
         frame[start + i] = static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % 4]);
     }
-    if (!writeRaw(frame)) throw GatewayError("gateway ws: ошибка отправки");
+    if (!writeRaw(frame)) {
+        running_ = false; // мёртвое соединение → ensureConnected() переподключит
+        throw GatewayError("gateway ws: не подключено (ошибка отправки)");
+    }
 }
 
 void GatewayWsTransport::sendLine(const std::string &frame) {
@@ -305,9 +338,11 @@ void GatewayWsTransport::readerLoop() {
         }
     }
     running_ = false;
+    abortPending("соединение с gateway потеряно"); // ждущие request не висят до таймаута
 }
 
 void GatewayWsTransport::close() {
+    closedByUser_ = true;
     if (fd_ < 0) return;
     running_ = false;
     ::shutdown(fd_, SHUT_RDWR);

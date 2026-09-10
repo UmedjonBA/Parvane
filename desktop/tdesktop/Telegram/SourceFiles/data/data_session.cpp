@@ -811,8 +811,12 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 		if (!result->isMinimalLoaded()) {
 			result->setLoadedStatus(PeerData::LoadedStatus::Minimal);
 		}
-	} else if (!result->isLoaded()
-		&& (!result->isSelf() || !result->phone().isEmpty())) {
+	} else if (!result->isLoaded()) {
+		// Parvane: upstream помечал СЕБЯ загруженным только при непустом
+		// телефоне (в Telegram он есть всегда). У нас телефона нет → после
+		// входа через интро self оставался NotLoaded, userLoaded(self) давал
+		// nullptr, и свой аватар/bio из identity не применялись до рестарта
+		// (там self читается из сериализации). 10 сен 2026.
 		result->setLoadedStatus(PeerData::LoadedStatus::Normal);
 	}
 

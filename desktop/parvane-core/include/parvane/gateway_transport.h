@@ -20,6 +20,7 @@
 #include "parvane/itransport.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -80,6 +81,15 @@ public:
     using ErrorHandler = std::function<void(const std::string &error, const std::string &subject)>;
     static void setUnaddressedErrorHandler(ErrorHandler handler);
 
+    // Автопереподключение: соединение с gateway рвётся (рестарт caddy при
+    // деплое, сеть) — раньше транспорт навсегда оставался «не подключено», и
+    // клиент до рестарта не синхронизировался (10 сен 2026). Перед каждым
+    // запросом: если reader завершился и это не наш close() — переоткрыть
+    // (reopen), заново auth тем же токеном и переподписаться на всё из subs_.
+    // Не чаще раза в kReconnectMinGapMs. Хук — для лога клиента.
+    using ReconnectHandler = std::function<void(bool ok, const std::string &error)>;
+    static void setReconnectHandler(ReconnectHandler handler);
+
 protected:
     // Состояние одного pending-запроса (single или many).
     struct Pending {
@@ -95,7 +105,11 @@ protected:
     // свой reader и запись кадра, остальное (корреляция, auth, подписки) общее.
     virtual void readerLoop();
     virtual void sendLine(const std::string &frame); // под writeMu_
+    virtual void reopen(); // повторный connect по запомненному адресу
+    void ensureConnected(); // бросает GatewayError, если переподключиться не вышло
     void dispatch(const std::string &line);
+    // Сопоставление subject с NATS-шаблоном подписки (`*` — токен, `>` — хвост)
+    [[nodiscard]] static bool subjectMatches(const std::string &pattern, const std::string &subject);
     // Разбудить всех ожидающих с ошибкой (после закрытия канала).
     void abortPending(const std::string &reason);
     std::string nextId();
@@ -121,6 +135,14 @@ protected:
     int authState_ = 0; // 0 ждём, 1 ok, -1 err
     std::string authUser_;
     std::string authErr_;
+
+    static constexpr std::int64_t kReconnectMinGapMs = 3000;
+    std::string lastHost_;
+    int lastPort_ = 0;
+    std::string lastToken_;
+    std::atomic<bool> closedByUser_{false}; // явный close(): не переподключаться
+    std::mutex reconnMu_;
+    std::chrono::steady_clock::time_point lastReconnectTry_{};
 };
 
 } // namespace parvane

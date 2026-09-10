@@ -539,7 +539,15 @@ bool Account::loggingOut() const {
 
 void Account::forcedLogOut() {
 	if (sessionExists()) {
-		resetAuthorizationKeys();
+		// Parvane: upstream сначала звал resetAuthorizationKeys() — он
+		// пересоздаёт MTP::Instance, а сессия разрушается ПОСЛЕ. У нас MTProto —
+		// заглушка, запросы (Api::PeerColors и др.) никогда не завершаются, и
+		// их MTP::Sender при разрушении ApiWrap отменял запрос в уже
+		// уничтоженном инстансе → SIGSEGV (10 сен 2026, отказ JWT). Падение
+		// случалось ПОСЛЕ записи mtp-данных с userId и ДО local().reset():
+		// следующий запуск поднимал аккаунт без self и без адреса (пустое
+		// окно без чатов, иконки и кнопки выхода). MTP-ключей у нас нет —
+		// просто выходим: loggedOut() сам перепишет mtp-данные с userId=0.
 		loggedOut();
 	}
 }

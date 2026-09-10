@@ -1025,15 +1025,35 @@ void Instance::Private::sendRequest(
 	// локальную ошибку, и нативный UI идёт по своей ветке отказа. Небольшая
 	// задержка — чтобы код, который на fail тут же повторяет запрос, не
 	// крутил главный поток впустую (conformance FAIL-1).
-	base::call_delayed(kParvaneRejectDelayMs, _instance, [
-			requestId,
-			callbacks = std::move(callbacks)]() mutable {
-		if (callbacks.fail) {
-			callbacks.fail(
+	//
+	// Колбэки НЕ захватываем в лямбду, а кладём в штатную карту запросов:
+	// владелец (MTP::Sender внутри ApiWrap/Session) при разрушении зовёт
+	// cancel(requestId) и снимает их оттуда. Иначе за 300 мс задержки сессия
+	// могла быть разрушена (forcedLogOut при отказе JWT), и отложенный fail
+	// бил по освобождённому Sender → SIGSEGV (10 сен 2026).
+	request->requestId = requestId;
+	storeRequest(requestId, request, std::move(callbacks));
+	base::call_delayed(kParvaneRejectDelayMs, _instance, [=] {
+		auto handler = ResponseHandler();
+		{
+			QMutexLocker locker(&_parserMapLock);
+			auto it = _parserMap.find(requestId);
+			if (it == _parserMap.cend()) {
+				return; // отменён — владелец колбэков уже разрушен
+			}
+			handler = std::move(it->second);
+			_parserMap.erase(it);
+		}
+		const auto guard = QPointer<Instance>(_instance);
+		if (handler.fail) {
+			handler.fail(
 				Error::Local(
 					QStringLiteral("PARVANE_NO_MTPROTO"),
 					QStringLiteral("MTProto is disabled in the Parvane fork")),
 				Response{ .requestId = requestId });
+		}
+		if (guard) {
+			unregisterRequest(requestId);
 		}
 	});
 	return;
