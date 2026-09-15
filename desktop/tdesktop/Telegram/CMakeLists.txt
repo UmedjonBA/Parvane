@@ -33,6 +33,8 @@ get_filename_component(res_loc Resources REALPATH)
 target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_client.cpp
     ${src_loc}/parvane/parvane_client.h
+    ${src_loc}/parvane/parvane_map.cpp
+    ${src_loc}/parvane/parvane_map.h
     ${src_loc}/parvane/parvane_webrtc_backend.cpp
     ${src_loc}/parvane/parvane_webrtc_backend.h
     ${src_loc}/parvane/parvane_call_panel.cpp

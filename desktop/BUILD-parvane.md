@@ -180,7 +180,16 @@ cmake -S desktop/tdesktop -B desktop/build-probe \
 - Финальная линковка `Telegram` (Debug, lld) держит ~10 ГБ. Если сборку гоняет
   агент, его харнесс убивает фоновые задачи при нехватке памяти, хотя swap
   свободен — линк запускать отдельным юнитом:
-  `systemd-run --user --unit=parvane-ninja-link --collect -p WorkingDirectory=$PWD -E PATH="$PATH" sh -c 'ninja -C desktop/build-probe -j1 > /tmp/ninja.log 2>&1'`.
+  `systemd-run --user --unit=parvane-ninja-link --collect -p Slice=parvane-link.slice -p WorkingDirectory=$PWD -E PATH="$PATH" sh -c 'ninja -C desktop/build-probe -j1 > /tmp/ninja.log 2>&1'`.
+  **Обязательно `-p Slice=parvane-link.slice`** (15 сен 2026): без него юнит
+  попадает в `app.slice`, где Arch ставит `ManagedOOMMemoryPressure=kill` /
+  `ManagedOOMSwap=kill` (`/usr/lib/systemd/user/app.slice.d/10-oomd.conf`), и
+  `systemd-oomd` снимает линк по давлению памяти при свободных 26 ГБ свопа
+  (`journalctl --user -u parvane-ninja-link`: «systemd-oomd killed 18
+  process(es)», пик 11,2 ГБ RAM + 7,6 ГБ своп) — уже после того, как линкер
+  удалил `bin/Telegram`. Свой slice наследует политику `auto` от корня
+  сессии, oomd его не трогает. Особенно важно, когда параллельно запущен
+  рабочий клиент Parvane. После успешной линковки `Telegram.stable` не нужен.
 
 ## 7. Запуск против прода (2026-09-06)
 

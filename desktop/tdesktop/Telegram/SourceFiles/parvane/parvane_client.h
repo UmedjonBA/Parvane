@@ -28,10 +28,27 @@ namespace Main {
 class Session;
 } // namespace Main
 
+namespace parvane {
+class ITransport;
+} // namespace parvane
+
 namespace Parvane {
 
 // URL шины из PARVANE_NATS_URL (или дефолт). Реального соединения не открывает.
 [[nodiscard]] QString NatsUrl();
+
+// Снимок шины для воркеров (транспорт/self/JWT под g_sessionMutex). Транспорт
+// не владеющий — как в fetchWebpage; nullptr, если сессии нет.
+struct BusSnapshot {
+	parvane::ITransport *transport = nullptr;
+	std::string self;
+	std::string token;
+};
+[[nodiscard]] BusSnapshot SnapshotBus();
+
+// Текущая Main::Session форка (nullptr до входа); для проверок на main-потоке,
+// что асинхронный результат относится к живой сессии.
+[[nodiscard]] Main::Session *ActiveMainSession();
 
 // Логирует факт линковки транспорта и целевой NATS-URL (ранний sanity-check).
 void LogStartup();
@@ -360,8 +377,23 @@ void InstallStickerPackFromDocument(DocumentData *document);
 // Создать опрос: шлёт poll-контент через шину и синтезирует локальное эхо.
 bool MirrorPollCreate(PeerData *peer, const PollData &data);
 // Геолокация через шину (E2E). true — обработано нашим пиром (MTProto
-// не нужен); false — пир нераспознан.
-[[nodiscard]] bool MirrorLocationIfOurs(PeerData *peer, double lat, double lon);
+// не нужен); false — пир нераспознан. livePeriod > 0 — live-локация
+// (uuidOut — id сообщения для последующих правок позиции).
+[[nodiscard]] bool MirrorLocationIfOurs(
+	PeerData *peer,
+	double lat,
+	double lon,
+	int livePeriod = 0,
+	std::string *uuidOut = nullptr);
+// Обновление позиции live-локации: правка своего сообщения uuid (msg.chat.edit
+// с kind=location, формат web publishLivePosition) + локальное применение к
+// собственному пузырю. livePeriod = 0 — остановка трансляции.
+void MirrorLiveLocationUpdate(
+	PeerData *peer,
+	const std::string &uuid,
+	double lat,
+	double lon,
+	int livePeriod);
 
 // Запланированные сообщения: очередь+таймер (нативная вкладка Scheduled в
 // форке без MTProto не работает; сообщение уходит в назначенное время).

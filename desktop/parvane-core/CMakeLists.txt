@@ -53,6 +53,7 @@ add_library(parvane_core STATIC
     src/linking.cpp
     src/blobcrypt.cpp
     src/keybackup.cpp
+    src/map_tiles.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
     src/call_client.cpp
@@ -113,6 +114,10 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_group_call_tests tests/group_call_tests.cpp)
     target_link_libraries(parvane_group_call_tests PRIVATE parvane_core)
 
+    # Геометрия тайлов карты (чистая математика, без стека)
+    add_executable(parvane_map_tiles_tests tests/map_tiles_tests.cpp)
+    target_link_libraries(parvane_map_tiles_tests PRIVATE parvane_core)
+
     # Живой e2e gateway (нужен запущенный стек nats+identity+messenger+gateway).
     add_executable(parvane_gateway_probe probe/gateway_probe.cpp)
     target_link_libraries(parvane_gateway_probe PRIVATE parvane_core)
@@ -129,4 +134,5 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME call_manager COMMAND parvane_call_manager_tests)
     add_test(NAME group COMMAND parvane_group_tests)
     add_test(NAME group_call COMMAND parvane_group_call_tests)
+    add_test(NAME map_tiles COMMAND parvane_map_tiles_tests)
 endif()

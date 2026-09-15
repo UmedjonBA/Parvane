@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_session.h"
 
+#include "parvane/parvane_map.h" // карта в пузыре геолокации через preview
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "main/main_app_config.h"
@@ -4730,11 +4731,15 @@ not_null<Data::CloudImage*> Session::location(const LocationPoint &point) {
 			location.width,
 			location.height)
 	};
-	return _locations.emplace(
+	const auto result = _locations.emplace(
 		point,
 		std::make_unique<Data::CloudImage>(
 			_session,
 			prepared)).first->second.get();
+	// Parvane: картинку карты даёт склейка тайлов через шард preview, а не
+	// MTProto (upload.getWebFile у нас не отвечает)
+	Parvane::RequestLocationMap(_session, point, result);
+	return result;
 }
 
 void Session::registerPhotoItem(
