@@ -29,6 +29,28 @@
         { "name": "только локальный журнал", "serverRead": false, "localRead": true, "isRead": true },
         { "name": "ни того, ни другого", "serverRead": false, "localRead": false, "isRead": false }
       ]
+    },
+    {
+      "id": "MAP-1",
+      "title": "Фрагменты карты — только через шард preview",
+      "tileTopic": "preview.map.tile",
+      "tileSize": 256,
+      "defaultZoom": 16,
+      "forbiddenHosts": [
+        "tile.openstreetmap.org",
+        "tile.osm.org",
+        "maps.googleapis.com",
+        "mt0.google.com",
+        "core-renderer-tiles.maps.yandex.net"
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/media.ts",
+        "desktop": [
+          "desktop/parvane-core/src/map_tiles.cpp",
+          "desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_map.cpp"
+        ],
+        "android": "n/a: карт нет"
+      }
     }
   ]
 }

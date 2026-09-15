@@ -15,6 +15,11 @@ const rules = JSON.parse(
     maxRepairAttempts?: number;
     maxCacheAgeMs?: number;
     cases?: Record<string, unknown>[];
+    tileTopic?: string;
+    tileSize?: number;
+    defaultZoom?: number;
+    forbiddenHosts?: string[];
+    clients?: { web: string; desktop: string[]; android: string };
   }[];
 };
 
@@ -155,5 +160,42 @@ describe('FAIL-1: ожидание без ответа запрещено', () =
       'utf8',
     );
     expect(source).not.toMatch(/_loadRequestId = api\.request\(MTPmessages_GetDialogFilters/);
+  });
+});
+
+describe('MAP-1: фрагменты карты — только через шард preview', () => {
+  const map = rule('MAP-1');
+  const hosts = map.forbiddenHosts ?? [];
+  const readRepo = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+
+  it('web берёт тайлы через preview.map.tile и не знает картографических хостов', () => {
+    const wire = readFileSync(path.join(process.cwd(), 'src/api/parvane/wire.ts'), 'utf8');
+    expect(wire).toContain(`TOPIC_PREVIEW_MAP_TILE = '${map.tileTopic}'`);
+    const media = readRepo(map.clients!.web);
+    expect(media).toMatch(/TOPIC_PREVIEW_MAP_TILE/);
+    expect(media).toMatch(new RegExp(`MAP_TILE_SIZE = ${map.tileSize};`));
+    for (const host of hosts) expect(media).not.toContain(host);
+  });
+
+  it('desktop берёт тайлы через topics::PreviewMapTile и не знает картографических хостов', () => {
+    const topics = readRepo('desktop/parvane-core/include/parvane/topics.h');
+    expect(topics).toContain(`PreviewMapTile = "${map.tileTopic}"`);
+    const core = readRepo('desktop/parvane-core/src/map_tiles.cpp');
+    expect(core).toMatch(/topics::PreviewMapTile/);
+    for (const file of map.clients!.desktop) {
+      const source = readRepo(file);
+      for (const host of hosts) expect(source).not.toContain(host);
+    }
+  });
+
+  it('зум статичной карты совпадает на web и desktop', () => {
+    const location = readFileSync(
+      path.join(process.cwd(), 'src/components/middle/message/Location.tsx'),
+      'utf8',
+    );
+    expect(location).toMatch(new RegExp(`zoom: ${map.defaultZoom},`));
+    const header = readRepo('desktop/parvane-core/include/parvane/map_tiles.h');
+    expect(header).toMatch(new RegExp(`kDefaultZoom = ${map.defaultZoom};`));
+    expect(header).toMatch(new RegExp(`kTileSize = ${map.tileSize};`));
   });
 });

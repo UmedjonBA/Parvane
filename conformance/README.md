@@ -77,6 +77,24 @@ desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 
 - web: `useModuleLoader` ловит отказ импорта, `moduleLoader` не кэширует
   отвергнутый промис, устаревший чанк лечится одноразовой перезагрузкой.
 
+## MAP-1. Фрагменты карты — только через шард preview
+
+Любой клиент, показывающий карту (статичная точка, venue, live), запрашивает
+тайлы исключительно через `preview.map.tile` (Web Mercator z/x/y, PNG в
+base64). Прямых сетевых обращений клиента к картографическим сервисам
+(`tile.openstreetmap.org`, Google/Yandex-тайлы и т. п.) быть не должно — иначе
+IP пользователя и просматриваемая область утекают третьей стороне. Клик
+«открыть карту» во внешнем браузере — явное действие пользователя, правилом не
+покрывается. Центр и зум статичной карты одинаковы на всех клиентах
+(`defaultZoom` в `sync-rules.json`, размер пузыря — свой у каждого клиента).
+
+Реализации: web `api/parvane/media.ts` (`fetchTile`/`renderStaticMap`);
+desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент тайлов, LRU) +
+`parvane/parvane_map.cpp` (склейка → нативный `Data::CloudImage` через
+`Session::location()`, 15 сен 2026); android — карт нет, правило применяется с
+их появлением. Тесты: web `conformance.test.ts` (MAP-1), desktop
+`desktop/verify_location_map.sh` (grep хостов + runtime-маркер «через preview»).
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в

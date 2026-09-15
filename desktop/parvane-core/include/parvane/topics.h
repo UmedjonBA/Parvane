@@ -66,6 +66,9 @@ inline constexpr auto CallHistoryRequest = "call.history.request";
 inline constexpr auto CallHistoryResponse = "call.history.response";
 inline constexpr auto CallIceRequest = "call.ice.request";
 inline constexpr auto PreviewLinkFetch = "preview.link.fetch";
+// OSM-тайл карты (Web Mercator z/x/y, PNG в base64) — для статичной карты в
+// пузыре геолокации; наружу ходит шард preview, клиент к OSM не обращается
+inline constexpr auto PreviewMapTile = "preview.map.tile";
 
 // группы/каналы (request/reply на messenger)
 inline constexpr auto GroupCreate = "group.create";

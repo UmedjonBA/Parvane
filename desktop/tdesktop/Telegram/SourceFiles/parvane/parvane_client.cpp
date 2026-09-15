@@ -7,6 +7,7 @@
 #include "main/main_session.h"
 #include "main/main_account.h"       // forcedLogOut при отказе авторизации
 #include "parvane/keybackup.h"        // резервная копия ключей (формат веба)
+#include "parvane/parvane_map.h"      // карта геолокации: сброс при StopSession
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_document.h"
@@ -2026,6 +2027,8 @@ bool StartSession() {
 				[](bool ok, const std::string &error) {
 					if (ok) {
 						LOG(("Parvane: gateway переподключён (auth + подписки восстановлены)"));
+						// Карты геолокации, не собранные без связи, — повторить сразу
+						crl::on_main([] { RetryFailedLocationMaps(); });
 					} else {
 						LOG(("Parvane: gateway переподключение не удалось: %1")
 							.arg(QString::fromStdString(error)));
@@ -2327,9 +2330,23 @@ void OnAuthRejected(const QString &reason) {
 }
 
 void StopSession() {
+	ResetLocationMaps(); // склейки карт и кэш тайлов — на сессию
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	g_messenger.reset();
 	g_transport.reset();
+}
+
+BusSnapshot SnapshotBus() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return BusSnapshot{
+		.transport = g_transport.get(),
+		.self = g_selfAddress.toStdString(),
+		.token = g_token.toStdString(),
+	};
+}
+
+Main::Session *ActiveMainSession() {
+	return g_sessionWeak.get();
 }
 
 // Выход из аккаунта. Снимаем ТОЛЬКО учётные данные сессии (адрес + JWT):
@@ -2827,49 +2844,14 @@ void MirrorDelete(std::int64_t msgId) {
 	});
 }
 
-void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text) {
-	// Правим только СВОИ сообщения. Контент пересобирается и шифруется заново
-	// (E2E; сервер видит только новый шифртекст): текст → text+entities; медиа →
-	// прежний контент с новой подписью (caption). Подпись `edit:<id>:<ct>`
-	// ключом устройства авторизует правку sealed-сообщения; копии — по
-	// устройствам получателя и своим.
-	const auto it = g_msgIdToUuid.find(item->id.bare);
-	if (it == g_msgIdToUuid.end()) {
-		return;
-	}
-	const auto peer = item->history()->peer;
-	QString address;
-	if (peer->isChat()) {
-		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		address = g_chatIdToGroupId.value(chatBare);
-	} else if (peer->isUser()) {
-		address = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
-	}
-	if (address.isEmpty()) {
-		return;
-	}
-	const auto uuid = it.value().toStdString();
+// Публикация правки своего сообщения (msg.chat.edit) с новым E2E-контентом:
+// общий хвост MirrorEdit (текст/подпись) и MirrorLiveLocationUpdate (позиция).
+void publishEditAsync(
+		const std::string &to,
+		const std::string &uuid,
+		const parvane::json &content) {
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
-	const auto to = address.toStdString();
-	auto entitiesJson = entitiesToJson(text.entities);
-	for (auto &me : detectMentions(text.text)) {
-		entitiesJson.push_back(std::move(me));
-	}
-	parvane::json content;
-	const auto prev = g_mediaContentByMsgId.value(item->id.bare);
-	auto prevJson = prev.isEmpty()
-		? parvane::json()
-		: parvane::json::parse(prev.toStdString(), nullptr, false);
-	if (prevJson.is_object() && prevJson.value("kind", std::string()) != "text") {
-		content = prevJson;
-		content["caption"] = text.text.toStdString();
-		content["entities"] = entitiesJson;
-	} else {
-		content = parvane::textContent(text.text.toStdString(), entitiesJson);
-	}
-	g_mediaContentByMsgId.insert(item->id.bare, QString::fromStdString(content.dump()));
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
 		parvane::ITransport *t = nullptr;
@@ -2914,6 +2896,52 @@ void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text) {
 			LOG(("Parvane: ошибка правки: %1").arg(QString::fromUtf8(e.what())));
 		}
 	});
+}
+
+void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text) {
+	// Правим только СВОИ сообщения. Контент пересобирается и шифруется заново
+	// (E2E; сервер видит только новый шифртекст): текст → text+entities; медиа →
+	// прежний контент с новой подписью (caption). Подпись `edit:<id>:<ct>`
+	// ключом устройства авторизует правку sealed-сообщения; копии — по
+	// устройствам получателя и своим.
+	const auto it = g_msgIdToUuid.find(item->id.bare);
+	if (it == g_msgIdToUuid.end()) {
+		return;
+	}
+	const auto peer = item->history()->peer;
+	QString address;
+	if (peer->isChat()) {
+		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(chatBare);
+	} else if (peer->isUser()) {
+		address = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	}
+	if (address.isEmpty()) {
+		return;
+	}
+	const auto uuid = it.value().toStdString();
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto to = address.toStdString();
+	auto entitiesJson = entitiesToJson(text.entities);
+	for (auto &me : detectMentions(text.text)) {
+		entitiesJson.push_back(std::move(me));
+	}
+	parvane::json content;
+	const auto prev = g_mediaContentByMsgId.value(item->id.bare);
+	auto prevJson = prev.isEmpty()
+		? parvane::json()
+		: parvane::json::parse(prev.toStdString(), nullptr, false);
+	if (prevJson.is_object() && prevJson.value("kind", std::string()) != "text") {
+		content = prevJson;
+		content["caption"] = text.text.toStdString();
+		content["entities"] = entitiesJson;
+	} else {
+		content = parvane::textContent(text.text.toStdString(), entitiesJson);
+	}
+	g_mediaContentByMsgId.insert(item->id.bare, QString::fromStdString(content.dump()));
+	publishEditAsync(to, uuid, content);
 }
 
 void MirrorRead(std::int64_t peerId) {
@@ -6578,26 +6606,45 @@ void RestoreScheduled() {
 	ArmScheduledTimers();
 }
 
-bool MirrorLocationIfOurs(PeerData *peer, double lat, double lon) {
+namespace {
+
+// Адрес пира для отправки через шину (группа → group_id, юзер → адрес)
+[[nodiscard]] QString BusAddressForPeer(PeerData *peer) {
+	if (peer->isChat()) {
+		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		return g_chatIdToGroupId.value(chatBare);
+	} else if (peer->isUser()) {
+		return peer->isSelf()
+			? SelfAddress()
+			: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	}
+	return QString();
+}
+
+} // namespace
+
+bool MirrorLocationIfOurs(
+		PeerData *peer,
+		double lat,
+		double lon,
+		int livePeriod,
+		std::string *uuidOut) {
 	const auto session = g_sessionWeak.get();
 	if (!peer || !session || !SessionActive()) {
 		return false;
 	}
-	QString address;
-	if (peer->isChat()) {
-		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		address = g_chatIdToGroupId.value(chatBare);
-	} else if (peer->isUser()) {
-		address = peer->isSelf()
-			? SelfAddress()
-			: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
-	}
+	const auto address = BusAddressForPeer(peer);
 	if (address.isEmpty()) {
 		LOG(("Parvane: геолокация не отправлена — адрес пира неизвестен"));
 		return false;
 	}
 	auto content = nlohmann::json{{"kind", "location"}, {"lat", lat}, {"long", lon}};
+	if (livePeriod > 0) {
+		// Live-локация (формат web publishLivePosition): дальше позиция едет
+		// правками того же сообщения через MirrorLiveLocationUpdate
+		content["live_period"] = livePeriod;
+	}
 	const int ttl = PeerTtl(address);
 	if (ttl > 0) {
 		content["ttl_secs"] = ttl;
@@ -6608,20 +6655,71 @@ bool MirrorLocationIfOurs(PeerData *peer, double lat, double lon) {
 	own.to = address.toStdString();
 	own.ts = QDateTime::currentSecsSinceEpoch();
 	own.content = content;
+	// Инъекция локального эха (live=false → без ack/повторного журнала);
+	// журналируем сами (переживёт рестарт), если не эфемерное. Пометка в
+	// g_ownSentUuids — ПОСЛЕ инъекции: injectOnMain пропускает свои uuid из
+	// этого набора как уже показанное эхо, и до 15 сен 2026 собственный пузырь
+	// геолокации не появлялся вовсе (только после рестарта из журнала).
+	injectOnMain(session, { own }, /*live=*/false);
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_ownSentUuids.insert(own.id);
 	}
-	// Инъекция локального эха (live=false → без ack/повторного журнала);
-	// журналируем сами (переживёт рестарт), если не эфемерное.
-	injectOnMain(session, { own }, /*live=*/false);
 	if (ttl == 0) {
 		HistoryAppend(own);
 	}
 	sendInnerAsync(address, content, own.id);
 	LOG(("Parvane: геолокация → %1 (%2,%3)").arg(address)
 		.arg(lat).arg(lon));
+	if (uuidOut) {
+		*uuidOut = own.id;
+	}
 	return true;
+}
+
+void MirrorLiveLocationUpdate(
+		PeerData *peer,
+		const std::string &uuid,
+		double lat,
+		double lon,
+		int livePeriod) {
+	const auto session = g_sessionWeak.get();
+	if (!peer || !session || !SessionActive()) {
+		return;
+	}
+	const auto address = BusAddressForPeer(peer);
+	if (address.isEmpty()) {
+		return;
+	}
+	auto content = nlohmann::json{{"kind", "location"}, {"lat", lat}, {"long", lon}};
+	if (livePeriod > 0) {
+		content["live_period"] = livePeriod;
+	}
+	// Собственный пузырь: та же правка медиа, что для входящих live-правок
+	// (новая точка → новый CloudImage → карта пересобирается)
+	const auto msgId = g_uuidToMsgId.value(QString::fromStdString(uuid), 0);
+	if (msgId != 0) {
+		const auto full = FullMsgId(peer->id, MsgId(msgId));
+		if (const auto item = session->data().message(full)) {
+			const auto media = buildLocationMedia(content);
+			HistoryMessageEdition edition;
+			edition.editDate = TimeId(base::unixtime::now());
+			edition.useSameViews = true;
+			edition.useSameForwards = true;
+			edition.useSameReplies = true;
+			edition.useSameMarkup = true;
+			edition.useSameReactions = true;
+			edition.textWithEntities = item->originalText();
+			edition.mtpMedia = &media;
+			item->applyEdition(std::move(edition));
+			g_mediaContentByMsgId.insert(msgId, QString::fromStdString(content.dump()));
+			LOG(("Parvane: правка локации применена msg %1")
+				.arg(QString::fromStdString(uuid)));
+		}
+	}
+	publishEditAsync(address.toStdString(), uuid, content);
+	LOG(("Parvane: live-правка → %1 (%2,%3)%4").arg(address).arg(lat).arg(lon)
+		.arg(livePeriod > 0 ? QString() : u" стоп"_q));
 }
 
 bool ShowPollResultsBox(PollData *poll) {
@@ -8977,20 +9075,57 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				ScheduleOutgoing(su, TextWithEntities{ stext }, 0, due);
 			}
 		}
+		// PARVANE_AUTOLOCATION=peer:lat,lon[:live=SEC[:moves=lat,lon;lat,lon…]]
+		// live — трансляция на SEC секунд; moves — правки позиции каждые 2 с,
+		// после последней — стоп (правка без live_period). Собственный пузырь
+		// обновляется локально (карта следует за координатами и у отправителя).
 		if (const char *lv = std::getenv("PARVANE_AUTOLOCATION"); lv && *lv) {
-			const auto lspec = QString::fromUtf8(lv);
-			const auto lsep = lspec.indexOf(':');
-			const auto comma = lspec.indexOf(',', lsep + 1);
-			if (lsep > 0 && comma > lsep) {
-				const auto laddr = lspec.left(lsep);
-				const auto lat = lspec.mid(lsep + 1, comma - lsep - 1).toDouble();
-				const auto lon = lspec.mid(comma + 1).toDouble();
+			const auto parts = QString::fromUtf8(lv).split(':');
+			const auto coords = (parts.size() > 1) ? parts[1].split(',') : QStringList();
+			if (parts.size() >= 2 && coords.size() == 2) {
+				const auto laddr = parts[0];
+				const auto lat = coords[0].toDouble();
+				const auto lon = coords[1].toDouble();
+				auto live = 0;
+				auto moves = std::vector<std::pair<double, double>>();
+				for (auto i = 2; i < parts.size(); ++i) {
+					if (parts[i].startsWith(u"live="_q)) {
+						live = parts[i].mid(5).toInt();
+					} else if (parts[i].startsWith(u"moves="_q)) {
+						for (const auto &m : parts[i].mid(6).split(';')) {
+							const auto c = m.split(',');
+							if (c.size() == 2) {
+								moves.emplace_back(c[0].toDouble(), c[1].toDouble());
+							}
+						}
+					}
+				}
 				RegisterPeer(laddr);
 				const auto lu = session->data().user(
 					UserId(BareId(IdForAddress(laddr))));
-				base::call_delayed(crl::time(1500), [lu, lat, lon] {
-					(void)MirrorLocationIfOurs(lu, lat, lon);
+				const auto uuid = std::make_shared<std::string>();
+				base::call_delayed(crl::time(1500), [lu, lat, lon, live, uuid] {
+					(void)MirrorLocationIfOurs(lu, lat, lon, live, uuid.get());
 				});
+				if (live > 0) {
+					auto delay = crl::time(1500);
+					for (const auto &[mlat, mlon] : moves) {
+						delay += 2000;
+						base::call_delayed(delay, [lu, mlat, mlon, live, uuid] {
+							if (!uuid->empty()) {
+								MirrorLiveLocationUpdate(lu, *uuid, mlat, mlon, live);
+							}
+						});
+					}
+					const auto last = moves.empty()
+						? std::make_pair(lat, lon)
+						: moves.back();
+					base::call_delayed(delay + 2000, [lu, last, uuid] {
+						if (!uuid->empty()) {
+							MirrorLiveLocationUpdate(lu, *uuid, last.first, last.second, 0);
+						}
+					});
+				}
 			}
 		}
 	});
