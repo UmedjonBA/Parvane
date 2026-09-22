@@ -162,7 +162,43 @@ try {
   assert.equal(nameColor, color, 'цвет имени alice у web-bob');
   console.log('OK: web-bob видит цвет имени с десктопа');
 
-  console.log('OK: кросс-клиентский профиль desktop → web');
+  // ── web → desktop: bob правит bio, телефон, цвет и личный канал в вебе ────
+  const bobBio = `web bio ${suffix}`;
+  const bobPhone = `+7911${String(Date.now()).slice(-6)}`;
+  await bobWeb.page.keyboard.press('Escape');
+  await bobWeb.page.getByRole('button', { name: 'Open menu' }).first().click();
+  await bobWeb.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await bobWeb.page.getByRole('button', { name: 'Edit profile' }).click();
+  await bobWeb.page.getByLabel('Bio').fill(bobBio);
+  await bobWeb.page.getByLabel('Phone', { exact: true }).fill(bobPhone);
+  await bobWeb.page.getByRole('button', { name: 'Save', exact: true }).click();
+  await bobWeb.page.waitForFunction(() => {
+    const fab = document.querySelector('.FloatingActionButton');
+    return !fab || !fab.classList.contains('revealed');
+  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+  await bobWeb.page.locator('.ListItem').filter({ hasText: 'Name color' }).first().click();
+  // Палитра начинается с цвета 1, поэтому выбираем по классу цвета, а не по
+  // позиции: ниже десктоп ждёт именно `color=2`
+  await bobWeb.page.locator('.parvane-name-color-option.peer-color-2').click();
+  await bobWeb.page.locator('.ListItem').filter({ hasText: 'Personal channel' }).first().click();
+  const picker = bobWeb.page.locator('.modal-dialog').filter({ has: bobWeb.page.locator('.ChatOrUserPicker-item') });
+  await picker.locator('.ChatOrUserPicker-item').filter({ hasText: groupTitle }).first().click();
+  await picker.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await bobWeb.page.waitForTimeout(2000);
+
+  // Десктоп перечитывает профиль собеседника при запуске/входящем сообщении
+  await stopDesktop(desktop);
+  desktop = spawnDesktop(desktopWorkdir, libraryShim, { PARVANE_AUTOLOGIN: `${alice}:${PASSWORD}` });
+  await waitDesktopLog(desktopWorkdir, /E2E-устройство готово/, 90000, desktop);
+  await openPrivateChatStrict(bobWeb.page, alice);
+  await sendText(bobWeb.page, `after-profile-${suffix}`);
+  const bobProfileLine = new RegExp(
+    `профиль ${esc(bob)}: bio=${esc(bobBio)} phone=${esc(bobPhone)} color=2 channel=${esc(groupId)}`,
+  );
+  await waitDesktopLog(desktopWorkdir, bobProfileLine, 90000, desktop);
+  console.log('OK: desktop видит bio, телефон, цвет и личный канал, заданные в вебе');
+
+  console.log('OK: кросс-клиентский профиль desktop → web и web → desktop');
 } finally {
   await stopDesktop(desktop);
   await browser.close();

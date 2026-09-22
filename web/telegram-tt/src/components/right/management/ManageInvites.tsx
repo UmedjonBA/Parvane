@@ -30,6 +30,10 @@ import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import ListItem, { type MenuItemContextAction } from '../../ui/ListItem';
 
+// Parvane: сервер умеет только создать постоянную ссылку и вступить по ней —
+// отзыва, дополнительных ссылок, срока, лимита и списка вступивших нет
+const IS_INVITE_MANAGEMENT_SUPPORTED = false;
+
 type OwnProps = {
   chatId: string;
   onClose: NoneToVoidFunction;
@@ -300,35 +304,44 @@ const ManageInvites: FC<OwnProps & StateProps> = ({
                 link={primaryInviteLink}
                 noTitle
                 withShare
-                onRevoke={!chat?.usernames ? handlePrimaryRevoke : undefined}
+                onRevoke={IS_INVITE_MANAGEMENT_SUPPORTED && !chat?.usernames ? handlePrimaryRevoke : undefined}
               />
             </Island>
           </>
         )}
-        <Island teactFastList>
-          <ListItem icon="add" withPrimaryColor key="create" className="create-item" onClick={handleCreateNewClick}>
-            {oldLang('CreateNewLink')}
-          </ListItem>
-          {(!temporalInvites || !temporalInvites.length) && <NothingFound text="No links found" key="nothing" />}
-          {temporalInvites?.map((invite) => (
-            <ListItem
-              leftElement={<Icon name="link" className={`link-status-icon ${getInviteIconClass(invite)}`} />}
-              secondaryIcon="more"
-              multiline
-
-              onClick={() => showInviteInfo(invite)}
-              contextActions={prepareContextActions(invite)}
-              key={invite.link}
-            >
-              <span className="title invite-title">{invite.title || invite.link}</span>
-              <span className="subtitle" dir="auto">
-                {prepareUsageText(invite)}
-              </span>
+        {/* Parvane: ссылки нет — это отказ сервера/сети, а не пустой список.
+            Экран без ссылки и без объяснения был молчаливым отказом (FR-013) */}
+        {!primaryInviteLink && (
+          <Island>
+            <NothingFound text={oldLang('ParvaneInviteLinkFailed')} />
+          </Island>
+        )}
+        {IS_INVITE_MANAGEMENT_SUPPORTED && (
+          <Island teactFastList>
+            <ListItem icon="add" withPrimaryColor key="create" className="create-item" onClick={handleCreateNewClick}>
+              {oldLang('CreateNewLink')}
             </ListItem>
-          ))}
-        </Island>
-        <IslandDescription>{oldLang('ManageLinksInfoHelp')}</IslandDescription>
-        {revokedExportedInvites && Boolean(revokedExportedInvites.length) && (
+            {(!temporalInvites || !temporalInvites.length) && <NothingFound text="No links found" key="nothing" />}
+            {temporalInvites?.map((invite) => (
+              <ListItem
+                leftElement={<Icon name="link" className={`link-status-icon ${getInviteIconClass(invite)}`} />}
+                secondaryIcon="more"
+                multiline
+
+                onClick={() => showInviteInfo(invite)}
+                contextActions={prepareContextActions(invite)}
+                key={invite.link}
+              >
+                <span className="title invite-title">{invite.title || invite.link}</span>
+                <span className="subtitle" dir="auto">
+                  {prepareUsageText(invite)}
+                </span>
+              </ListItem>
+            ))}
+          </Island>
+        )}
+        {IS_INVITE_MANAGEMENT_SUPPORTED && <IslandDescription>{oldLang('ManageLinksInfoHelp')}</IslandDescription>}
+        {IS_INVITE_MANAGEMENT_SUPPORTED && revokedExportedInvites && Boolean(revokedExportedInvites.length) && (
           <Island teactFastList>
             <IslandDescription key="title">{oldLang('RevokedLinks')}</IslandDescription>
             <ListItem

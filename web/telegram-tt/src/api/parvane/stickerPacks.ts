@@ -4,10 +4,12 @@
 // принятых стикеров. Обмен: отправляемый стикер из пака несёт
 // pack_ref = {file_id архива в cloud, name, count, key, nonce}.
 
-import { createStore, del, get, set } from 'idb-keyval';
+import { createStore, del, get } from 'idb-keyval';
 
 import type { ApiSticker, ApiStickerSet } from '../types';
 import type { WirePackRef } from './wire';
+
+import { SecureE2eStorage } from './secureStorage';
 
 const PACK_MAGIC = 'PVPK1';
 const PACK_MAX_BYTES = 20 * 1024 * 1024;
@@ -18,7 +20,20 @@ const DEFAULT_ALT_EMOJI = '🙂';
 const STORAGE = createStore('parvane-stickers', 'packs');
 
 export type PackFile = { name: string; data: ArrayBuffer };
-export type StoredPack = { name: string; files: PackFile[]; isEmoji?: boolean };
+export type StoredPack = {
+  name: string;
+  files: PackFile[];
+  isEmoji?: boolean;
+  // Сырое имя пака из ссылки (docId эмодзи, EMOJI-1) и прочие имена набора
+  rawName?: string;
+  aliases?: string[];
+  // Набор, под которым пак установлен. Имя НЕ уникально: два пака с одним
+  // именем от разных отправителей — два разных набора (см. ownerBySetId), и
+  // ключевать хранилище по имени значило бы затирать архив первого вторым, а
+  // docId первого накладывать на файлы второго. Поле необязательное: у записей,
+  // сделанных до 16 сен 2026, его нет — они мигрируют при первом чтении
+  setId?: string;
+};
 
 const MIME_BY_EXT: Record<string, string> = {
   webp: 'image/webp',
@@ -29,6 +44,13 @@ const MIME_BY_EXT: Record<string, string> = {
 
 // pack_ref принятых стикеров: setId → ref (до установки — источник архива)
 const receivedRefBySetId = new Map<string, WirePackRef>();
+// Кто прислал набор: имя пака не уникально, и два разных пака с одинаковым
+// именем от РАЗНЫХ отправителей — это два разных набора. Иначе сырое имя
+// второго становилось алиасом набора первого, и его docId резолвились в чужие
+// картинки (имена файлов в паках конвенциональны). Отличить паки по
+// содержимому нельзя: по PACK-1 один и тот же пак получает новый file_id под
+// каждый набор получателей, а отпечаток содержимого — это поле провода
+const ownerBySetId = new Map<string, string>();
 // Распакованные файлы набора, показанного в модалке, но ещё не установленного
 const pendingFilesBySetId = new Map<string, StoredPack>();
 const setIdByShortName = new Map<string, string>();
@@ -36,6 +58,10 @@ const setIdByShortName = new Map<string, string>();
 // desktop), docId → setId (для отправки: какие паки приложить к тексту)
 const emojiRawNameBySetId = new Map<string, string>();
 const emojiSetIdByDocId = new Map<string, string>();
+// Все имена, под которыми набор приходил в ссылках (conformance EMOJI-1):
+// десктоп после рестарта может прислать тот же пак под нормализованным
+// именем — документы ищем по каждому
+const emojiAliasesBySetId = new Map<string, Set<string>>();
 const EMOJI_SIZE = 128;
 
 // FNV-1a 32-бит — как IdForAddress в store; даёт стабильный короткий id
@@ -49,11 +75,18 @@ function buildHashedId(value: string): string {
 }
 
 // FNV-1a 64-бит по UTF-8 → знаковый int64 десятичной строкой — ровно как
-// docIdFromFileId в desktop (parvane_client.cpp), иначе entity custom_emoji
-// не резолвятся на другой стороне
-export function fnv1a64Signed(value: string): string {
+// docIdFromFileId в desktop (parvane_client.cpp) и android (parvane_jni.cpp),
+// иначе entity custom_emoji не резолвятся на другой стороне. ВНИМАНИЕ: у
+// нативных клиентов начальное значение 1469598103934665603 — стандартное
+// FNV-смещение 14695981039346656037 без последней цифры. Это формат провода
+// (conformance EMOJI-1): считаем так же. Веб до 15 сен 2026 считал со
+// стандартным смещением — такие docId резолвятся как алиасы
+export const EMOJI_DOC_ID_OFFSET_BASIS = 1469598103934665603n;
+const FNV64_STANDARD_OFFSET_BASIS = 0xcbf29ce484222325n;
+
+export function fnv1a64Signed(value: string, offsetBasis = EMOJI_DOC_ID_OFFSET_BASIS): string {
   const bytes = new TextEncoder().encode(value);
-  let hash = 0xcbf29ce484222325n;
+  let hash = offsetBasis;
   for (const byte of bytes) {
     hash ^= BigInt(byte);
     hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
@@ -64,6 +97,11 @@ export function fnv1a64Signed(value: string): string {
 
 export function buildEmojiDocId(rawPackName: string, fileName: string) {
   return fnv1a64Signed(`pvemoji:${rawPackName}|${fileName}`);
+}
+
+// docId старых веб-сообщений (стандартное FNV-смещение) — только для резолва
+export function buildLegacyEmojiDocId(rawPackName: string, fileName: string) {
+  return fnv1a64Signed(`pvemoji:${rawPackName}|${fileName}`, FNV64_STANDARD_OFFSET_BASIS);
 }
 
 // Зеркало desktop SanitizePackName: буквы/цифры/пробел/дефис/подчёркивание, ≤32
@@ -146,50 +184,187 @@ export function parsePvpkArchive(bytes: Uint8Array): PackFile[] | undefined {
   return files.length ? files : undefined;
 }
 
-// ── persist установленных паков (IndexedDB, ключ на пользователя) ────────────
+// ── persist установленных паков (шифрованный IndexedDB, на пользователя) ─────
+// Файлы паков — полученное от других медиа: на диске только шифртекстом
+// (SecureE2eStorage, non-extractable ключ устройства). Раньше лежали открыто в
+// idb-keyval `parvane-stickers/packs` — переносим при первом чтении.
+
+type StoredPackMeta = {
+  name: string; setId?: string; isEmoji?: boolean; rawName?: string; aliases?: string[];
+};
+
+const PACK_INDEX_RECORD = 'stickerpacks';
+const packRecordName = (key: string) => `stickerpack:${key}`;
+const installedCache = new Map<string, Promise<StoredPack[]>>();
+
+// Набор установленного пака. У записей без `setId` (до 16 сен 2026) он выводится
+// из имени — ровно тот id, под которым такой пак и был установлен
+export function getPackSetId(pack: StoredPackMeta) {
+  return pack.setId || getSetIdForPackName(pack.name);
+}
+
+// Ключ записи архива. Пока `setId` не проставлен, запись лежит под именем —
+// иначе миграция не нашла бы уже сохранённые байты
+const packStorageKey = (pack: StoredPackMeta) => pack.setId || pack.name;
 
 function storageKey(user: string) {
   return `packs:${user}`;
 }
 
-export async function loadInstalledPacks(user: string): Promise<StoredPack[]> {
-  return (await get<StoredPack[]>(storageKey(user), STORAGE)) || [];
+function toMeta({
+  name, setId, isEmoji, rawName, aliases,
+}: StoredPack): StoredPackMeta {
+  return {
+    name, setId, isEmoji, rawName, aliases,
+  };
+}
+
+async function writePack(storage: SecureE2eStorage, pack: StoredPack) {
+  const archive = buildPvpkArchive(pack.files);
+  if (!archive) return false;
+  await storage.saveBytesRecord(packRecordName(packStorageKey(pack)), archive);
+  return true;
+}
+
+async function readInstalledPacks(user: string): Promise<StoredPack[]> {
+  const storage = await SecureE2eStorage.open(user);
+  let index = await storage.loadRecord<StoredPackMeta[]>(PACK_INDEX_RECORD) || [];
+  const legacy = await get<StoredPack[]>(storageKey(user), STORAGE);
+  if (legacy?.length) {
+    for (const pack of legacy) {
+      const migrated = { ...pack, setId: getPackSetId(pack) };
+      if (await writePack(storage, migrated)) {
+        index = index.filter((meta) => getPackSetId(meta) !== migrated.setId).concat(toMeta(migrated));
+      }
+    }
+    await storage.saveRecord(PACK_INDEX_RECORD, index);
+    await del(storageKey(user), STORAGE);
+  }
+  // Записи без `setId` лежат под именем пака — переносим под ключ набора, иначе
+  // одноимённый пак второго отправителя перетёр бы их архив
+  const stale = index.filter((meta) => !meta.setId);
+  if (stale.length) {
+    for (const meta of stale) {
+      const bytes = await storage.loadBytesRecord(packRecordName(meta.name));
+      if (!bytes) continue;
+      meta.setId = getPackSetId(meta);
+      await storage.saveBytesRecord(packRecordName(meta.setId), bytes);
+      await storage.deleteRecord(packRecordName(meta.name));
+    }
+    await storage.saveRecord(PACK_INDEX_RECORD, index);
+  }
+  const packs: StoredPack[] = [];
+  for (const meta of index) {
+    const bytes = await storage.loadBytesRecord(packRecordName(packStorageKey(meta)));
+    const files = bytes ? parsePvpkArchive(bytes) : undefined;
+    if (files) packs.push({ ...meta, files });
+  }
+  return packs;
+}
+
+export function loadInstalledPacks(user: string): Promise<StoredPack[]> {
+  let cached = installedCache.get(user);
+  if (!cached) {
+    cached = readInstalledPacks(user).catch(() => []);
+    installedCache.set(user, cached);
+  }
+  return cached;
 }
 
 export async function saveInstalledPack(user: string, pack: StoredPack) {
-  const packs = (await loadInstalledPacks(user)).filter(({ name }) => name !== pack.name);
-  packs.push(pack);
-  await set(storageKey(user), packs, STORAGE);
+  const storage = await SecureE2eStorage.open(user);
+  const stored: StoredPack = { ...pack, setId: getPackSetId(pack) };
+  if (!await writePack(storage, stored)) return;
+  const index = (await storage.loadRecord<StoredPackMeta[]>(PACK_INDEX_RECORD) || [])
+    .filter((meta) => getPackSetId(meta) !== stored.setId)
+    .concat(toMeta(stored));
+  await storage.saveRecord(PACK_INDEX_RECORD, index);
+  installedCache.delete(user);
 }
 
-export async function removeInstalledPack(user: string, name: string) {
-  const packs = (await loadInstalledPacks(user)).filter((pack) => pack.name !== name);
-  if (packs.length) await set(storageKey(user), packs, STORAGE);
-  else await del(storageKey(user), STORAGE);
+export async function removeInstalledPack(user: string, setId: string) {
+  const storage = await SecureE2eStorage.open(user);
+  const all = await storage.loadRecord<StoredPackMeta[]>(PACK_INDEX_RECORD) || [];
+  const removed = all.filter((meta) => getPackSetId(meta) === setId);
+  if (!removed.length) return;
+  for (const meta of removed) {
+    await storage.deleteRecord(packRecordName(packStorageKey(meta)));
+  }
+  await storage.saveRecord(PACK_INDEX_RECORD, all.filter((meta) => getPackSetId(meta) !== setId));
+  installedCache.delete(user);
 }
 
 export async function findInstalledPackBySetId(user: string, setId: string) {
-  return (await loadInstalledPacks(user)).find((pack) => getSetIdForPackName(pack.name) === setId);
+  return (await loadInstalledPacks(user)).find((pack) => getPackSetId(pack) === setId);
+}
+
+export function resetInstalledPacksCache() {
+  installedCache.clear();
 }
 
 // ── реестры сессии ───────────────────────────────────────────────────────────
 
-export function registerReceivedPackRef(ref: WirePackRef): string {
+// Набор второго отправителя с тем же именем получает собственный setId: имя
+// пака дополняется адресом отправителя. Разделитель —  , он невозможен в
+// адресе и в имени пака, поэтому коллизию «имя+отправитель» не породит
+function setIdForSender(name: string, from: string) {
+  return getSetIdForPackName(`${name} ${from}`);
+}
+
+export function registerReceivedPackRef(ref: WirePackRef, from?: string): string {
   const name = sanitizePackName(ref.name || 'Pack');
-  const setId = getSetIdForPackName(name);
+  const baseSetId = getSetIdForPackName(name);
+  const owner = from || '';
+  const knownOwner = ownerBySetId.get(baseSetId);
+  // Имя занято другим отправителем — заводим отдельный набор под этого
+  const setId = receivedRefBySetId.has(baseSetId) && knownOwner !== undefined
+    && owner && knownOwner && knownOwner !== owner
+    ? setIdForSender(name, owner)
+    : baseSetId;
   if (!receivedRefBySetId.has(setId)) {
     receivedRefBySetId.set(setId, { ...ref, name });
-    setIdByShortName.set(name, setId);
+    ownerBySetId.set(setId, owner);
+    // Короткое имя ведёт на первый пришедший набор — как и раньше
+    if (!setIdByShortName.has(name)) setIdByShortName.set(name, setId);
   }
   return setId;
 }
 
 // Эмодзи-пак, приложенный к тексту (emoji_packs): регистрируем как обычный
 // pack_ref + помним сырое имя для docId
-export function registerReceivedEmojiPackRef(ref: WirePackRef): string {
-  const setId = registerReceivedPackRef(ref);
-  if (!emojiRawNameBySetId.has(setId)) emojiRawNameBySetId.set(setId, ref.name || 'Pack');
+export function registerReceivedEmojiPackRef(ref: WirePackRef, from?: string): string {
+  const setId = registerReceivedPackRef(ref, from);
+  const rawName = ref.name || 'Pack';
+  if (!emojiRawNameBySetId.has(setId)) emojiRawNameBySetId.set(setId, rawName);
+  // Алиас ложится только на набор ЭТОГО отправителя
+  addEmojiPackAlias(setId, rawName);
   return setId;
+}
+
+export function addEmojiPackAlias(setId: string, name: string) {
+  let aliases = emojiAliasesBySetId.get(setId);
+  if (!aliases) {
+    aliases = new Set();
+    emojiAliasesBySetId.set(setId, aliases);
+  }
+  aliases.add(name);
+}
+
+// Имена, от которых считаются docId набора: сохранённое сырое, имя реестра,
+// все имена из ссылок и нормализованное
+export function getEmojiPackNames(setId: string, pack?: Pick<StoredPack, 'name' | 'rawName' | 'aliases'>) {
+  const names = new Set<string>();
+  if (pack?.rawName) names.add(pack.rawName);
+  const registered = emojiRawNameBySetId.get(setId);
+  if (registered) names.add(registered);
+  pack?.aliases?.forEach((name) => names.add(name));
+  emojiAliasesBySetId.get(setId)?.forEach((name) => names.add(name));
+  if (pack?.name) names.add(pack.name);
+  return Array.from(names);
+}
+
+export function registerEmojiDocId(docId: string, setId: string) {
+  emojiSetIdByDocId.set(docId, setId);
 }
 
 export function registerEmojiPackName(setId: string, rawName: string) {
@@ -229,11 +404,18 @@ export function getPendingFiles(setId: string) {
 }
 
 export function resetPackRegistries() {
+  installedCache.clear();
   receivedRefBySetId.clear();
+  ownerBySetId.clear();
   pendingFilesBySetId.clear();
   setIdByShortName.clear();
   emojiRawNameBySetId.clear();
   emojiSetIdByDocId.clear();
+  emojiAliasesBySetId.clear();
+  // Документы паков предыдущего аккаунта не должны резолвиться в новом:
+  // `fetchCustomEmoji` ходит сюда по docId, а docId детерминирован от имени
+  // пака и файла — у другого аккаунта он совпадёт и отдал бы чужие картинки
+  aliasStickers.clear();
 }
 
 // ── синтез ApiStickerSet ─────────────────────────────────────────────────────
@@ -265,6 +447,30 @@ export function buildApiCustomEmojiSetFromPack(
   setIdByShortName.set(pack.name, setId);
   const stickers: ApiSticker[] = [];
   const blobs = new Map<string, { blob: Blob; mime: string }>();
+  // Документы под остальными именами набора (EMOJI-1): не показываются в
+  // панели, но резолвят entity, пришедшие под другим именем пака
+  const aliasDocIds = (name: string, fileName: string) => (name === rawName
+    ? [buildLegacyEmojiDocId(name, fileName)]
+    : [buildEmojiDocId(name, fileName), buildLegacyEmojiDocId(name, fileName)]);
+  getEmojiPackNames(setId, pack).forEach((alias) => {
+    pack.files.forEach((file) => aliasDocIds(alias, file.name).forEach((id) => {
+      const mime = getPackFileMime(file.name);
+      if (!mime) return;
+      emojiSetIdByDocId.set(id, setId);
+      aliasStickers.set(id, {
+        mediaType: 'sticker',
+        id,
+        stickerSetInfo: { id: setId, accessHash: '0' },
+        emoji: altEmojiForFileName(file.name),
+        isCustomEmoji: true,
+        isLottie: mime === 'application/x-tgsticker',
+        isVideo: mime === 'video/webm',
+        width: EMOJI_SIZE,
+        height: EMOJI_SIZE,
+      });
+      blobs.set(id, { blob: new Blob([file.data], { type: mime }), mime });
+    }));
+  });
   for (const file of pack.files) {
     const mime = getPackFileMime(file.name);
     if (!mime) continue;
@@ -296,11 +502,23 @@ export function buildApiCustomEmojiSetFromPack(
   return { set: apiSet, blobs };
 }
 
+// Документы-алиасы эмодзи (другие имена набора), зарегистрированные при сборке
+const aliasStickers = new Map<string, ApiSticker>();
+
+export function getAliasEmojiSticker(docId: string) {
+  return aliasStickers.get(docId);
+}
+
+export function registerAliasEmojiSticker(sticker: ApiSticker, setId: string) {
+  aliasStickers.set(sticker.id, sticker);
+  emojiSetIdByDocId.set(sticker.id, setId);
+}
+
 export function buildApiStickerSetFromPack(pack: StoredPack, installedDate?: number): {
   set: ApiStickerSet;
   blobs: Map<string, { blob: Blob; mime: string }>;
 } {
-  const setId = getSetIdForPackName(pack.name);
+  const setId = getPackSetId(pack);
   setIdByShortName.set(pack.name, setId);
   const stickers: ApiSticker[] = [];
   const blobs = new Map<string, { blob: Blob; mime: string }>();

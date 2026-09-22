@@ -17,6 +17,7 @@ import {
 import { stopCurrentAudio } from '../../../util/audioPlayer';
 import buildClassName from '../../../util/buildClassName';
 import { formatMediaDuration } from '../../../util/dates/oldDateFormat';
+import { useParvaneMediaTampered } from '../../../util/parvaneMediaIntegrity';
 import safePlay from '../../../util/safePlay';
 import { ROUND_VIDEO_DIMENSIONS_PX } from '../../common/helpers/mediaDimensions';
 
@@ -25,6 +26,7 @@ import { useThrottledSignal } from '../../../hooks/useAsyncResolvers';
 import useFlag from '../../../hooks/useFlag';
 import { useIsIntersecting } from '../../../hooks/useIntersectionObserver';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useMedia from '../../../hooks/useMedia';
 import useMediaTransition from '../../../hooks/useMediaTransition';
 import useMediaWithLoadProgress from '../../../hooks/useMediaWithLoadProgress';
 import usePreviousDeprecated from '../../../hooks/usePreviousDeprecated';
@@ -40,6 +42,7 @@ import MediaBadge from './MediaBadge';
 
 import './RoundVideo.scss';
 import styles from './media.module.scss';
+import videoStyles from './Video.module.scss';
 
 type OwnProps = {
   message: ApiMessage;
@@ -108,16 +111,44 @@ const RoundVideo: FC<OwnProps> = ({
   );
 
   const [isPlayerReady, markPlayerReady] = useFlag();
+  // Parvane: файл не прошёл проверку целостности — не играем, показываем
+  // ошибку (как Video.tsx и просмотрщик, spec 002 FR-022)
+  const isTampered = useParvaneMediaTampered(video.id);
   const hasTtl = hasMessageTtl(message);
   const isInOneTimeModal = origin === 'oneTimeModal';
   const shouldRenderSpoiler = hasTtl && !isInOneTimeModal;
   const thumbDataUri = useThumbnail(message);
   const hasThumb = Boolean(thumbDataUri);
+  // Parvane: кадр миниатюры мог не уложиться в бюджет SC-004 — тогда пузырю
+  // отдана заглушка, а провайдер сообщает о готовом кадре событием. Запись
+  // заглушки к этому моменту уже выброшена из памяти mediaLoader'ом, поэтому
+  // достаточно перерисовки: хэш превью запросится заново и вернёт кадр
+  const [thumbGeneration, setThumbGeneration] = useState(0);
+  useEffect(() => {
+    const handleThumbReady = (event: Event) => {
+      if ((event as CustomEvent<{ fileId?: string }>).detail?.fileId !== video.id) return;
+      setThumbGeneration((generation) => generation + 1);
+    };
+    window.addEventListener('parvane-media-thumb', handleThumbReady);
+    return () => window.removeEventListener('parvane-media-thumb', handleThumbReady);
+  }, [video.id]);
+  // Parvane: миниатюр на проводе нет — кадр самого видео (провайдер отдаёт
+  // его на ?size=x), пока плеер не готов
+  const previewBlobUrl = useMedia(
+    !hasThumb && !shouldRenderSpoiler ? getVideoMediaHash(video, 'preview') : undefined,
+    !isIntersecting,
+    ApiMediaFormat.BlobUrl,
+    undefined,
+    thumbGeneration,
+  );
+  const shouldShowPreview = Boolean(previewBlobUrl && !isPlayerReady && !shouldRenderSpoiler);
   const noThumb = !hasThumb || isPlayerReady || shouldRenderSpoiler;
   const thumbRef = useBlurredMediaThumbRef(video, noThumb);
   useMediaTransition({ hasMediaData: !noThumb, ref: thumbRef });
 
-  const isTransferring = (isLoadAllowed && !isPlayerReady) || isDownloading;
+  // Parvane: у подменённого файла ждать нечего — иначе пузырь крутил бы
+  // спиннер вечно (провайдер на такой хэш отдаёт только ошибку)
+  const isTransferring = (isLoadAllowed && !isPlayerReady && !isTampered) || isDownloading;
   const wasLoadDisabled = usePreviousDeprecated(isLoadAllowed) === false;
 
   const {
@@ -153,7 +184,7 @@ const RoundVideo: FC<OwnProps> = ({
     circleRef.current.setAttribute('stroke-dashoffset', strokeDashOffset.toString());
   }, [isActivated, getThrottledProgress]);
 
-  const shouldPlay = Boolean(fullMediaData && isIntersecting);
+  const shouldPlay = Boolean(fullMediaData && isIntersecting && !isTampered);
 
   const stopPlaying = useLastCallback(() => {
     if (!playerRef.current) {
@@ -199,6 +230,11 @@ const RoundVideo: FC<OwnProps> = ({
 
   const handleClick = useLastCallback((event) => {
     if (event.target.closest('.transcribe-button')) {
+      return;
+    }
+
+    // Parvane: подменённый файл не грузим и не играем ни по какому клику
+    if (isTampered) {
       return;
     }
 
@@ -274,7 +310,7 @@ const RoundVideo: FC<OwnProps> = ({
       )}
       onClick={handleClick}
     >
-      {fullMediaData && (
+      {fullMediaData && !isTampered && (
         <div className="video-wrapper">
           {shouldRenderSpoiler && (
             <MediaSpoiler
@@ -305,11 +341,20 @@ const RoundVideo: FC<OwnProps> = ({
           />
         </div>
       )}
-      {!shouldRenderSpoiler && (
+      {!shouldRenderSpoiler && !shouldShowPreview && (
         <canvas
           ref={thumbRef}
           className="thumbnail"
           style={`width: ${ROUND_VIDEO_DIMENSIONS_PX}px; height: ${ROUND_VIDEO_DIMENSIONS_PX}px`}
+        />
+      )}
+      {shouldShowPreview && (
+        <img
+          src={previewBlobUrl}
+          className="thumbnail"
+          alt=""
+          draggable={false}
+          style={`width: ${ROUND_VIDEO_DIMENSIONS_PX}px; height: ${ROUND_VIDEO_DIMENSIONS_PX}px; object-fit: cover`}
         />
       )}
       <div className="progress">
@@ -345,6 +390,8 @@ const RoundVideo: FC<OwnProps> = ({
         >
           {isActivated ? formatMediaDuration(currentTime) : formatMediaDuration(video.duration)}
           {(!isActivated || playerRef.current!.paused) && <Icon name="muted" className="muted-icon" />}
+          {/* Parvane: тот же значок ошибки, что у обычного видео (FR-022) */}
+          {isTampered && <Icon name="message-failed" className={videoStyles.playbackFailed} />}
         </MediaBadge>
       )}
       {canTranscribe && (

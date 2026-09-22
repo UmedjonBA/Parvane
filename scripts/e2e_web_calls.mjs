@@ -9,8 +9,12 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   relogin,
   LOGIN_TIMEOUT_MS,
+  expectMediaFlowing,
   openPrivateChat,
+  openPrivateChatStrict,
   preparePage,
+  remoteCallVideoLuma,
+  waitLuma,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-calls-e2e-password';
@@ -63,6 +67,10 @@ try {
   await bobSession.page.getByText(/^\d+:\d{2}$/).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // Звук реально идёт в обе стороны (растёт bytesReceived)
+  await expectMediaFlowing(aliceSession.page, { audio: true });
+  await expectMediaFlowing(bobSession.page, { audio: true });
+
   const aliceSasText = (await aliceSas.innerText()).trim();
   const bobSasText = (await bobSas.innerText()).trim();
   assert(aliceSasText.length > 0, 'SAS is empty on the caller side');
@@ -101,16 +109,29 @@ try {
   await bobSession.page.getByText('is calling you...', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' }).click();
+  // Соединено — у обеих сторон идёт таймер длительности (состояние active)
+  await Promise.all([aliceSession.page, bobSession.page].map((page) => page.getByText(/^\d+:\d{2}$/).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })));
+  const videoConnectedAt = Date.now();
   // Удалённое видео (плюс локальное превью у обеих сторон)
   await aliceSession.page.locator('video').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.locator('video').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Камера: переключение и обратно
+  // Кадры и звук идут у обеих сторон не позже 10 с после соединения (SC-009)
+  await Promise.all([aliceSession.page, bobSession.page].map((page) => expectMediaFlowing(page, {
+    audio: true, video: true, windowMs: 2000, timeoutMs: 10000, sinceMs: videoConnectedAt,
+  })));
+  console.log(`1-1 video call: frames and audio flow both ways within ${Date.now() - videoConnectedAt} ms`);
+  // Живой узор фейковой камеры у собеседника
+  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
+  // Камера выкл → у Боба чёрные кадры; вкл → изображение возвращается
   await aliceSession.page.getByRole('button', { name: 'Turn camera off' }).click();
   await aliceSession.page.getByRole('button', { name: 'Turn camera on' })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ mean, variance }) => mean >= 0 && mean < 20 && variance < 5);
   await aliceSession.page.getByRole('button', { name: 'Turn camera on' }).click();
+  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await bobSession.page.getByRole('button', { name: 'End Call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
@@ -199,10 +220,101 @@ try {
     console.log('SKIP: TURN не поднят в стеке (нет go) — relay-тест пропущен');
   }
 
+  // ── Пропущенный звонок: таймаут вызова (тестовое переопределение 5 с) ─────
+  const shortRing = { 'parvane:e2e:ringTimeoutMs': '5000' };
+  const erinContext = await browser.newContext({ permissions: ['microphone'] });
+  const frankContext = await browser.newContext({ permissions: ['microphone'] });
+  const malloryContext = await browser.newContext({ permissions: ['microphone'] });
+  try {
+    const erin = `call-erin-${suffix}@local`;
+    const frank = `call-frank-${suffix}@local`;
+    const erinSession = await preparePage(erinContext, erin, PASSWORD, { seedLocalStorage: shortRing });
+    const frankSession = await preparePage(frankContext, frank, PASSWORD, { seedLocalStorage: shortRing });
+    await openPrivateChatStrict(erinSession.page, frank);
+    await openPrivateChatStrict(frankSession.page, erin);
+    await erinSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+    await frankSession.page.getByText('is calling you...', { exact: true })
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await erinSession.page.getByText('ringing...', { exact: true })
+      .waitFor({ state: 'detached', timeout: 20000 });
+    await frankSession.page.getByText('is calling you...', { exact: true })
+      .waitFor({ state: 'detached', timeout: 20000 });
+    await findHistoryEntry(erinSession.page, 'Canceled Call')
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await findHistoryEntry(frankSession.page, 'Missed Call')
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+    // ── Заблокированный абонент: вызов отбивается без «занято» ────────────────
+    await frankSession.page.getByRole('button', { name: 'More actions' }).click();
+    await frankSession.page.getByRole('menuitem', { name: 'Block user' }).click();
+    await frankSession.page.waitForTimeout(1500);
+    const declinedBefore = await erinSession.page.locator('.Transition_slide-active > .MessageList .Message')
+      .filter({ hasText: 'Declined Call' }).count();
+    let frankRang = false;
+    const ringWatcher = frankSession.page.getByText('is calling you...', { exact: true })
+      .waitFor({ state: 'visible', timeout: 12000 }).then(() => { frankRang = true; }).catch(() => {});
+    await erinSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+    const blockedStarted = Date.now();
+    await erinSession.page.getByRole('button', { name: 'End Call' })
+      .waitFor({ state: 'detached', timeout: 10000 });
+    assert(Date.now() - blockedStarted < 10000, 'blocked call did not end quickly');
+    assert.equal(await erinSession.page.getByText('Line busy', { exact: true }).count(), 0, 'blocked call shows busy');
+    await ringWatcher;
+    assert.equal(frankRang, false, 'blocked caller rang on the callee');
+    await erinSession.page.waitForFunction((count) => Array.from(
+      document.querySelectorAll('.Transition_slide-active > .MessageList .Message'),
+    ).filter((element) => element.textContent.includes('Declined Call')).length > count, declinedBefore, {
+      timeout: LOGIN_TIMEOUT_MS,
+    });
+
+    // ── Неверная подпись сигналинга: предложение звонка отвергается ──────────
+    const mallory = `call-mallory-${suffix}@local`;
+    const mallorySession = await preparePage(malloryContext, mallory, PASSWORD);
+    await openPrivateChatStrict(mallorySession.page, bob);
+    await mallorySession.page.waitForTimeout(1000);
+    await mallorySession.page.evaluate(async (to) => {
+      const pc = new RTCPeerConnection();
+      pc.addTransceiver('audio');
+      const offer = await pc.createOffer();
+      pc.close();
+      const sig = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(64))));
+      const envelope = {
+        id: crypto.randomUUID(),
+        from: '',
+        ts: Math.floor(Date.now() / 1000),
+        token: '',
+        payload: {
+          to,
+          signal: {
+            type: 'invite', call_id: crypto.randomUUID(), media: 'audio', sdp: offer.sdp, sig,
+          },
+        },
+      };
+      const socket = [...globalThis.__parvaneE2eSockets.active][0];
+      socket.send(JSON.stringify({ op: 'pub', subject: 'call.signal', payload: JSON.stringify(envelope) }));
+    }, bob);
+    await bobSession.page.getByText('Call security check failed').first()
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    assert.equal(
+      await bobSession.page.getByText('is calling you...', { exact: true }).count(),
+      0,
+      'forged invite showed an incoming call',
+    );
+    await bobSession.page.getByRole('button', { name: 'End Call' }).click();
+    assert.deepEqual(erinSession.errors, [], `Erin page errors: ${erinSession.errors.join('; ')}`);
+    assert.deepEqual(frankSession.errors, [], `Frank page errors: ${frankSession.errors.join('; ')}`);
+    console.log('OK: пропущенный звонок, автоотбой заблокированного, отказ при неверной подписи');
+  } finally {
+    await erinContext.close();
+    await frankContext.close();
+    await malloryContext.close();
+  }
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
-  console.log('OK: звонки — SAS, mute, видео с рендером, decline, история и TURN relay');
+  console.log('OK: звонки — SAS, звук и кадры идут, камера выкл/вкл, mute, decline, пропущенный, блок, '
+    + 'неверная подпись, история и TURN relay');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {

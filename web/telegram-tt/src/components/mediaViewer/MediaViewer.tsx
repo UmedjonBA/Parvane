@@ -76,6 +76,9 @@ import SenderInfo from './SenderInfo';
 
 import './MediaViewer.scss';
 
+// Parvane: жалоб на сервере нет — пункт «Пожаловаться» на аватар скрыт
+const IS_REPORT_SUPPORTED = false;
+
 type StateProps = {
   chatId?: string;
   threadId?: ThreadId;
@@ -176,6 +179,8 @@ const MediaViewer = ({
   });
 
   const canReportAvatar = (() => {
+    // Parvane: жалоб на сервере нет
+    if (!IS_REPORT_SUPPORTED) return false;
     if (isChatWithSelf) return false;
     if (currentItem?.type !== 'avatar' || !avatarOwner) return false;
     const info = currentItem.profilePhotos;

@@ -4,9 +4,17 @@ import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
 import { diagLog } from '../../util/parvaneDiag';
+import {
+  DECRYPTED_MEDIA_BUDGET_BYTES,
+  enforceDecryptedMediaBudget,
+  registerBudgetConsumer,
+  totalDecryptedBytes,
+} from '../../util/parvaneMediaBudget';
 import { decryptBlob, decryptRange, encryptBlob } from './blobcrypt';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
+import { createStreamingGcmVerifier } from './gcmVerifyClient';
+import { createMediaIntegrity } from './mediaIntegrity';
 import {
   buildWireEvent,
   TOPIC_FILE_DOWNLOAD_REQUEST,
@@ -42,6 +50,11 @@ type WireDownloadChunk = {
 
 type CachedMedia = { blob: Blob; mimeType: string } | undefined;
 
+// Ответ провайдера, когда файл не прошёл проверку целостности: mediaLoader не
+// ретраит и сразу рвёт progressive-запрос (spec 002 FR-022)
+export const MEDIA_INTEGRITY_ERROR = 'MEDIA_INTEGRITY';
+type MediaIntegrityFailure = { error: typeof MEDIA_INTEGRITY_ERROR };
+
 const UPLOAD_CHUNK_BYTES = 192 * 1024;
 const MEDIA_TIMEOUT_MS = 30000;
 // `wallpaper<id>` — локальные обои (uploadWallpaper), блоб лежит в cacheByFileId
@@ -61,13 +74,26 @@ const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_RANGE_WINDOW_BYTES = 16 * 1024 * 1024;
 const MAX_CHUNK_BASE64_LENGTH = Math.ceil(MAX_CHUNK_BYTES / 3) * 4 + 4;
 // Бюджеты кэшей: раньше все скачанные блобы, тайлы карт и чанки видео жили
-// в памяти до logout (1 ГБ просмотренного медиа = 1 ГБ resident)
-const BLOB_CACHE_BUDGET_BYTES = 256 * 1024 * 1024;
+// в памяти до logout (1 ГБ просмотренного медиа = 1 ГБ resident). Сам потолок
+// теперь общий с `util/mediaLoader.ts` — см. `util/parvaneMediaBudget.ts`
 const TILE_CACHE_LIMIT = 200;
 const RANGE_FILE_CACHE_LIMIT = 6;
-// 1×1 прозрачный PNG — заглушка миниатюр видео
-const TRANSPARENT_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
-  + 'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+// Нейтральная непрозрачная заглушка миниатюры (кадр снять не удалось:
+// кодек не поддержан, таймаут): серый PNG 1×1
+const PLACEHOLDER_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAA'
+  + 'AADElEQVR4nGPo6uoCAANAAZ/jRRJXAAAAAElFTkSuQmCC';
+// Миниатюра видео — кадр самого видео на стороне клиента (spec 002 FR-020)
+const THUMB_MAX_SIDE = 320;
+const THUMB_TIMEOUT_MS = 8000;
+const THUMB_CONCURRENCY = 2;
+// Бюджет SC-004: миниатюра обязана появиться не позже 3 с после показа пузыря.
+// Очередь слотов этого не гарантирует — при N пузырях k-я миниатюра стартует
+// после ⌈k/2⌉ освобождений, а зависший кадр держит слот все THUMB_TIMEOUT_MS.
+// Поэтому: кадра ждём только до бюджета (дальше пузырь получает заглушку, а
+// съёмка продолжается и заменяет её), и слот не держим дольше бюджета, пока
+// в очереди кто-то есть
+const THUMB_BUDGET_MS = 3000;
+const THUMB_FRAME_SECONDS = 0.1;
 const MAP_TILE_TIMEOUT_MS = 15000;
 const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
@@ -105,6 +131,8 @@ export function createMediaService(deps: MediaDependencies) {
   // нейтральный application/octet-stream.
   const keysByFileId = new Map<string, { keyB64: string; nonceB64: string }>();
   const mimeByFileId = new Map<string, string>();
+  // Размер открытого текста из E2E-контента — сверка с размером в облаке
+  const plainSizeByFileId = new Map<string, number>();
 
   function requireConnection() {
     const connection = deps.getConnection();
@@ -169,7 +197,11 @@ export function createMediaService(deps: MediaDependencies) {
     if (!response.ok) throw new Error(response.error || 'upload.complete отказ');
     if (mediaKeys) {
       keysByFileId.set(fileId, mediaKeys);
-      cacheByFileId.set(fileId, Promise.resolve({ blob, mimeType }));
+      cacheBlob(fileId, blob, mimeType);
+      // Настоящий mime нужен ветке миниатюр (?size=): без него отправитель в
+      // той же сессии видел серую заглушку вместо кадра своего видео, а кадр
+      // появлялся только после релогина, когда mime проставлял rememberKeys
+      mimeByFileId.set(fileId, mimeType);
     }
     return { fileId, size: blob.size, mediaKeys };
   }
@@ -178,10 +210,77 @@ export function createMediaService(deps: MediaDependencies) {
   // Service worker просит байты [start,end]; качаем только нужные чанки
   // (chunk_from/chunk_to), дешифруем окно AES-CTR по смещению GCM-потока.
   // Метаданные (размер, размер чанка) приходят с любым чанком — берём с
-  // первого запроса
+  // первого запроса. Окна идут без тега; целостность всего файла проверяет
+  // фоновая задача mediaIntegrity (шифртекст целиком, потоковый GHASH), а
+  // каждый фрагмент сверяется с эталонным SHA-256
   type FileMeta = { sizeBytes: number; chunkBytes: number; totalChunks: number; mimeType: string };
   const metaByFileId = new Map<string, FileMeta>();
   const chunkCacheByFileId = new Map<string, Map<number, Uint8Array>>();
+  let rangeCacheBytes = 0;
+
+  const integrity = createMediaIntegrity({
+    fetchChunks: (fileId, from, to) => fetchChunkRange(fileId, from, to, { remember: false }),
+    createVerifier: async (fileId, geometry) => {
+      const keys = keysByFileId.get(fileId);
+      if (!keys) return undefined;
+      return createStreamingGcmVerifier(keys.keyB64, keys.nonceB64, geometry.sizeBytes);
+    },
+    onTampered: (fileId, reason) => forgetTamperedFile(fileId, reason),
+    // Проверку довести не удалось (шард недоступен, долгий офлайн): это НЕ
+    // подмена, и путать её с `parvane-media-integrity` нельзя — то событие
+    // означает доказанную подмену, снимает src у плеера и выбрасывает
+    // расшифрованные байты. Здесь байты честные, просто непроверенные:
+    // молча продолжать воспроизведение — против FR-022, рвать его —
+    // наказывать пользователя за обрыв сети. Поэтому отдельное событие
+    onUnverifiable: (fileId, reason) => noteUnverifiableFile(fileId, reason),
+    log: (message) => diagLog('media', message),
+  });
+
+  // UI сообщает о настоящем старте воспроизведения — от него SC-003 отсчитывает
+  // пять секунд до начала фоновой докачки
+  if (typeof window !== 'undefined') {
+    window.addEventListener('parvane-media-playing', (event) => {
+      const fileId = (event as CustomEvent<{ fileId?: string }>).detail?.fileId;
+      if (fileId) integrity.notePlaybackStarted(fileId);
+    });
+  }
+
+  function forgetTamperedFile(fileId: string, reason: string) {
+    diagLog('media', `файл ${fileId} отброшен: ${reason}`);
+    dropRangeCache(fileId);
+    metaByFileId.delete(fileId);
+    cacheByFileId.delete(fileId);
+    thumbnailBytes -= thumbnailByFileId.get(fileId)?.size || 0;
+    thumbnailByFileId.delete(fileId);
+    thumbBudgetMissed.delete(fileId);
+    const size = blobSizeByFileId.get(fileId);
+    if (size !== undefined) {
+      blobCacheBytes -= size;
+      blobSizeByFileId.delete(fileId);
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('parvane-media-integrity', { detail: { fileId } }));
+    }
+  }
+
+  // Файл не подменён, но и не проверен: попытки докачать шифртекст исчерпаны.
+  // Кэши не чистим и воспроизведение не рвём — файл остаётся рабочим, но
+  // перестаёт считаться проверенным, и UI об этом узнаёт (spec 002 FR-022)
+  function noteUnverifiableFile(fileId: string, reason: string) {
+    diagLog('media', `файл ${fileId} остался непроверенным: ${reason}`);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('parvane-media-unverifiable', { detail: { fileId, reason } }));
+    }
+  }
+
+  function dropRangeCache(fileId: string) {
+    const cache = chunkCacheByFileId.get(fileId);
+    if (!cache) return;
+    cache.forEach((bytes) => {
+      rangeCacheBytes -= bytes.length;
+    });
+    chunkCacheByFileId.delete(fileId);
+  }
 
   function rememberChunk(fileId: string, index: number, bytes: Uint8Array) {
     let cache = chunkCacheByFileId.get(fileId);
@@ -189,18 +288,27 @@ export function createMediaService(deps: MediaDependencies) {
       cache = new Map();
       if (chunkCacheByFileId.size >= RANGE_FILE_CACHE_LIMIT) {
         const oldest = chunkCacheByFileId.keys().next().value;
-        if (oldest !== undefined) chunkCacheByFileId.delete(oldest);
+        if (oldest !== undefined) dropRangeCache(oldest);
       }
       chunkCacheByFileId.set(fileId, cache);
     }
+    const previous = cache.get(index);
+    if (previous) rangeCacheBytes -= previous.length;
     cache.set(index, bytes);
+    rangeCacheBytes += bytes.length;
     if (cache.size > RANGE_CHUNK_CACHE_LIMIT) {
       const oldest = cache.keys().next().value;
-      if (oldest !== undefined) cache.delete(oldest);
+      if (oldest !== undefined) {
+        rangeCacheBytes -= cache.get(oldest)?.length || 0;
+        cache.delete(oldest);
+      }
     }
+    enforceBudget();
   }
 
-  async function fetchChunkRange(fileId: string, from: number, to: number) {
+  async function fetchChunkRange(
+    fileId: string, from: number, to: number, { remember = true }: { remember?: boolean } = {},
+  ): Promise<Map<number, Uint8Array> | undefined> {
     const store = deps.getStore();
     const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId, chunk_from: from, chunk_to: to });
     const expected = to - from + 1;
@@ -211,24 +319,36 @@ export function createMediaService(deps: MediaDependencies) {
     const chunks = replies
       .map((reply) => JSON.parse(reply) as WireDownloadChunk)
       .filter((chunk) => chunk.ok && chunk.data !== undefined && chunk.chunk_index !== undefined);
-    chunks.forEach((chunk) => {
-      if (!metaByFileId.has(fileId) && chunk.size_bytes && chunk.chunk_bytes && chunk.total_chunks
+    const fetched = new Map<number, Uint8Array>();
+    for (const chunk of chunks) {
+      if (chunk.size_bytes && chunk.chunk_bytes && chunk.total_chunks
         && chunk.size_bytes <= MAX_FILE_BYTES && chunk.chunk_bytes <= MAX_CHUNK_BYTES) {
-        metaByFileId.set(fileId, {
-          sizeBytes: chunk.size_bytes,
-          chunkBytes: chunk.chunk_bytes,
-          totalChunks: chunk.total_chunks,
-          // MIME — ТОЛЬКО из E2E-обёртки сообщения, не из ответа cloud: иначе
-          // сервер мог бы отдать окно видео как text/html на same-origin URL
-          mimeType: mimeByFileId.get(fileId) || 'application/octet-stream',
-        });
+        const geometry = {
+          sizeBytes: chunk.size_bytes, chunkBytes: chunk.chunk_bytes, totalChunks: chunk.total_chunks,
+        };
+        if (!integrity.noteGeometry(fileId, geometry, plainSizeByFileId.get(fileId))) return undefined;
+        if (!metaByFileId.has(fileId)) {
+          metaByFileId.set(fileId, {
+            ...geometry,
+            // MIME — ТОЛЬКО из E2E-обёртки сообщения, не из ответа cloud: иначе
+            // сервер мог бы отдать окно видео как text/html на same-origin URL
+            mimeType: mimeByFileId.get(fileId) || 'application/octet-stream',
+          });
+        }
       }
-      if (chunk.data!.length > MAX_CHUNK_BASE64_LENGTH) return;
-      rememberChunk(fileId, chunk.chunk_index!, decodeBase64(chunk.data!));
-    });
-    return chunks.length > 0;
+      if (chunk.data!.length > MAX_CHUNK_BASE64_LENGTH) continue;
+      const bytes = decodeBase64(chunk.data!);
+      if (keysByFileId.has(fileId) && !await integrity.noteChunk(fileId, chunk.chunk_index!, bytes)) {
+        return undefined;
+      }
+      fetched.set(chunk.chunk_index!, bytes);
+      if (remember) rememberChunk(fileId, chunk.chunk_index!, bytes);
+    }
+    return fetched.size ? fetched : undefined;
   }
 
+  // Файл целиком оказался в кэше окон (короткое видео) — проверяем тег сразу
+  // одним вызовом WebCrypto и дальше режем окна из проверенного блоба
   async function verifyCompleteFile(
     fileId: string, meta: FileMeta, keys: { keyB64: string; nonceB64: string },
   ): Promise<Blob | 'bad' | undefined> {
@@ -241,66 +361,76 @@ export function createMediaService(deps: MediaDependencies) {
       parts.push(bytes);
     }
     const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
-    chunkCacheByFileId.delete(fileId);
+    dropRangeCache(fileId);
     if (!plain) {
-      diagLog('media', `файл ${fileId}: GCM-тег не сошёлся — стрим отброшен`);
-      metaByFileId.delete(fileId);
+      integrity.reportTampered(fileId, 'GCM-тег целого файла не сошёлся');
       return 'bad';
     }
+    integrity.reportVerified(fileId);
     const blob = new Blob([plain as BlobPart], { type: meta.mimeType });
-    cacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: meta.mimeType }));
+    cacheBlob(fileId, blob, meta.mimeType);
     return blob;
   }
 
-  async function downloadRange(fileId: string, start: number, end: number | undefined) {
+  async function downloadRange(
+    fileId: string, start: number, end: number | undefined, isThumbnailRequest = false,
+  ) {
     const keys = keysByFileId.get(fileId);
     if (!keys) return undefined;
-    if (!metaByFileId.has(fileId)) await fetchChunkRange(fileId, 0, 0);
-    const meta = metaByFileId.get(fileId);
-    if (!meta || !meta.chunkBytes) return undefined;
-    const fullSize = meta.sizeBytes - GCM_TAG_BYTES;
-    if (fullSize <= 0 || start >= fullSize) return undefined;
-    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
-    const alignedStart = Math.floor(start / 16) * 16;
-    const chunkFrom = Math.floor(alignedStart / meta.chunkBytes);
-    const chunkTo = Math.floor(lastByte / meta.chunkBytes);
-    const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
-    let missingFrom: number | undefined;
-    for (let index = chunkFrom; index <= chunkTo; index++) {
-      if (!cache.has(index)) {
-        missingFrom = index;
-        break;
+    if (integrity.isTampered(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+    if (!isThumbnailRequest) integrity.touch(fileId);
+    integrity.beginPlayerRequest();
+    try {
+      if (!metaByFileId.has(fileId)) await fetchChunkRange(fileId, 0, 0);
+      if (integrity.isTampered(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+      const meta = metaByFileId.get(fileId);
+      if (!meta || !meta.chunkBytes) return undefined;
+      const fullSize = meta.sizeBytes - GCM_TAG_BYTES;
+      if (fullSize <= 0 || start >= fullSize) return undefined;
+      const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
+      const alignedStart = Math.floor(start / 16) * 16;
+      const chunkFrom = Math.floor(alignedStart / meta.chunkBytes);
+      const chunkTo = Math.floor(lastByte / meta.chunkBytes);
+      const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
+      let missingFrom: number | undefined;
+      for (let index = chunkFrom; index <= chunkTo; index++) {
+        if (!cache.has(index)) {
+          missingFrom = index;
+          break;
+        }
       }
-    }
-    if (missingFrom !== undefined) {
-      const fetched = await fetchChunkRange(fileId, missingFrom, chunkTo);
-      if (!fetched) return undefined;
-    }
-    const cached = chunkCacheByFileId.get(fileId)!;
-    // Все чанки на руках — проверяем GCM-тег целого файла (окна идут без
-    // аутентификации) и дальше отдаём из проверенного блоба
-    if (cached.size >= meta.totalChunks) {
-      const verified = await verifyCompleteFile(fileId, meta, keys);
-      if (verified === 'bad') return undefined;
-      if (verified) {
-        const buffer = await verified.arrayBuffer();
-        return { arrayBuffer: buffer.slice(start, lastByte + 1), mimeType: meta.mimeType, fullSize };
+      if (missingFrom !== undefined) {
+        const fetched = await fetchChunkRange(fileId, missingFrom, chunkTo);
+        if (integrity.isTampered(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+        if (!fetched) return undefined;
       }
+      const cached = chunkCacheByFileId.get(fileId);
+      if (!cached) return undefined;
+      if (cached.size >= meta.totalChunks) {
+        const verified = await verifyCompleteFile(fileId, meta, keys);
+        if (verified === 'bad') return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+        if (verified) {
+          const buffer = await verified.slice(start, lastByte + 1).arrayBuffer();
+          return { arrayBuffer: buffer, mimeType: meta.mimeType, fullSize };
+        }
+      }
+      const window = new Uint8Array(lastByte - alignedStart + 1);
+      for (let index = chunkFrom; index <= chunkTo; index++) {
+        const bytes = cached.get(index);
+        if (!bytes) return undefined;
+        const chunkStart = index * meta.chunkBytes;
+        const copyFrom = Math.max(alignedStart, chunkStart);
+        const copyTo = Math.min(lastByte, chunkStart + bytes.length - 1);
+        if (copyTo < copyFrom) continue;
+        window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - alignedStart);
+      }
+      const plain = await decryptRange(window, keys.keyB64, keys.nonceB64, alignedStart);
+      if (!plain) return undefined;
+      const slice = plain.slice(start - alignedStart);
+      return { arrayBuffer: slice.buffer, mimeType: meta.mimeType, fullSize };
+    } finally {
+      integrity.endPlayerRequest();
     }
-    const window = new Uint8Array(lastByte - alignedStart + 1);
-    for (let index = chunkFrom; index <= chunkTo; index++) {
-      const bytes = cached.get(index);
-      if (!bytes) return undefined;
-      const chunkStart = index * meta.chunkBytes;
-      const copyFrom = Math.max(alignedStart, chunkStart);
-      const copyTo = Math.min(lastByte, chunkStart + bytes.length - 1);
-      if (copyTo < copyFrom) continue;
-      window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - alignedStart);
-    }
-    const plain = await decryptRange(window, keys.keyB64, keys.nonceB64, alignedStart);
-    if (!plain) return undefined;
-    const slice = plain.slice(start - alignedStart);
-    return { arrayBuffer: slice.buffer, mimeType: meta.mimeType, fullSize };
   }
 
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
@@ -327,7 +457,10 @@ export function createMediaService(deps: MediaDependencies) {
     const keys = keysByFileId.get(fileId);
     if (keys) {
       const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
-      if (!plain) return undefined;
+      if (!plain) {
+        integrity.reportTampered(fileId, 'GCM-тег файла не сошёлся');
+        return undefined;
+      }
       const mimeType = mimeByFileId.get(fileId) || 'application/octet-stream';
       return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
     }
@@ -347,10 +480,17 @@ export function createMediaService(deps: MediaDependencies) {
     // не отдавать полный файл в <img>
     if (normalizedUrl.startsWith('document') && /[?&]size=/.test(normalizedUrl)) {
       // Миниатюр на проводе нет. Картинки (стикеры/эмодзи) отдаём тем же
-      // блобом, для видео — прозрачную заглушку: undefined заставлял tt
+      // блобом, для видео — кадр самого видео; undefined заставлял tt
       // ретраить запрос по кругу
       const thumbFileId = normalizedUrl.match(MEDIA_URL_REGEX)?.[1];
-      const cachedFull = thumbFileId ? cacheByFileId.get(thumbFileId) : undefined;
+      if (!thumbFileId) return Promise.resolve(buildThumbPlaceholder());
+      if (integrity.isTampered(thumbFileId)) return Promise.resolve(buildThumbPlaceholder());
+      if (mimeByFileId.get(thumbFileId)?.startsWith('video/')) {
+        return getVideoThumbnail(thumbFileId).then((blob) => (blob
+          ? { dataBlob: blob, mimeType: 'image/jpeg' }
+          : buildThumbPlaceholder()));
+      }
+      const cachedFull = cacheByFileId.get(thumbFileId);
       if (!cachedFull) return Promise.resolve(buildThumbPlaceholder());
       return cachedFull.then((result) => (result && result.mimeType.startsWith('image/')
         ? { dataBlob: result.blob, mimeType: result.mimeType }
@@ -362,11 +502,15 @@ export function createMediaService(deps: MediaDependencies) {
     }
     const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
     if (!fileId) return Promise.resolve(undefined);
+    if (integrity.isTampered(fileId)) {
+      return Promise.resolve({ error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure);
+    }
 
     // Прогрессивный плеер: качаем окно, а не файл целиком (кроме уже
-    // скачанных целиком — тогда режем локальный блоб)
+    // скачанных целиком — тогда режем локальный блоб). `thumb=1` — запрос
+    // генератора миниатюр: фоновую проверку не запускает
     if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT && !cacheByFileId.has(fileId) && keysByFileId.has(fileId)) {
-      return downloadRange(fileId, start || 0, end);
+      return downloadRange(fileId, start || 0, end, /[?&]thumb=1/.test(normalizedUrl));
     }
     let cached = cacheByFileId.get(fileId);
     if (!cached) {
@@ -382,17 +526,168 @@ export function createMediaService(deps: MediaDependencies) {
     return cached.then(async (result) => {
       if (!result) return undefined;
       if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT) {
-        const buffer = await result.blob.arrayBuffer();
-        const slice = buffer.slice(start || 0, end !== undefined ? end + 1 : undefined);
-        return { arrayBuffer: slice, mimeType: result.mimeType, fullSize: buffer.byteLength };
+        // Только нужное окно: arrayBuffer() целого блоба на каждую часть по
+        // 0.5 МБ копировал весь файл
+        const slice = await result.blob.slice(start || 0, end !== undefined ? end + 1 : undefined).arrayBuffer();
+        return { arrayBuffer: slice, mimeType: result.mimeType, fullSize: result.blob.size };
       }
       return { dataBlob: result.blob, mimeType: result.mimeType };
     });
   }
 
   function buildThumbPlaceholder() {
-    const bytes = decodeBase64(TRANSPARENT_PNG_BASE64);
+    const bytes = decodeBase64(PLACEHOLDER_PNG_BASE64);
     return { dataBlob: new Blob([bytes], { type: 'image/png' }), mimeType: 'image/png' };
+  }
+
+  // ── миниатюры видео ───────────────────────────────────────────────────────
+  // Скрытый <video> вне DOM на progressive-URL с маркером thumb=1: сервис-
+  // воркер отдаёт только нужные окна (в т.ч. moov из хвоста), фоновая проверка
+  // целостности от этого не стартует. Кадр ≈ 0.1 с → canvas → JPEG в памяти
+  const thumbnailInFlight = new Map<string, Promise<Blob | undefined>>();
+  const thumbWaiters: Array<() => void> = [];
+  // Файлы, которым пузырь уже отдал заглушку: не уложились в бюджет SC-004.
+  // Пришедший позже кадр по ним нужно объявить наружу, иначе заглушка
+  // останется на экране до следующей перерисовки ленты
+  const thumbBudgetMissed = new Set<string>();
+  let activeThumbs = 0;
+
+  async function withThumbSlot<T>(task: () => Promise<T>): Promise<T> {
+    if (activeThumbs >= THUMB_CONCURRENCY) {
+      await new Promise<void>((resolve) => {
+        thumbWaiters.push(resolve);
+      });
+    }
+    activeThumbs++;
+    try {
+      return await task();
+    } finally {
+      activeThumbs--;
+      thumbWaiters.shift()?.();
+    }
+  }
+
+  function captureVideoFrame(src: string, timeoutMs = THUMB_TIMEOUT_MS): Promise<Blob | undefined> {
+    return new Promise((resolve) => {
+      if (typeof document === 'undefined') {
+        resolve(undefined);
+        return;
+      }
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      let isDone = false;
+      const finish = (blob?: Blob) => {
+        if (isDone) return;
+        isDone = true;
+        window.clearTimeout(timer);
+        video.removeAttribute('src');
+        video.load();
+        resolve(blob);
+      };
+      const timer = window.setTimeout(() => finish(undefined), timeoutMs);
+      video.addEventListener('error', () => finish(undefined));
+      video.addEventListener('loadedmetadata', () => {
+        const target = Number.isFinite(video.duration) && video.duration > 0
+          ? Math.min(THUMB_FRAME_SECONDS, video.duration / 2) : THUMB_FRAME_SECONDS;
+        video.currentTime = target;
+      });
+      video.addEventListener('seeked', () => {
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        if (!width || !height) {
+          finish(undefined);
+          return;
+        }
+        const scale = Math.min(1, THUMB_MAX_SIDE / Math.max(width, height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          finish(undefined);
+          return;
+        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => finish(blob || undefined), 'image/jpeg', 0.8);
+      });
+      video.src = src;
+    });
+  }
+
+  // Ждём кадр не дольше бюджета SC-004: дальше вызывающий отдаёт пузырю
+  // заглушку, а съёмка (свой слот в очереди) продолжается и по готовности
+  // кладёт кадр в кэш — следующий запрос того же хэша получит уже его
+  function getVideoThumbnail(fileId: string): Promise<Blob | undefined> {
+    const ready = thumbnailByFileId.get(fileId);
+    if (ready) return Promise.resolve(ready);
+    const capture = captureThumbnail(fileId);
+    return new Promise<Blob | undefined>((resolve) => {
+      const timer = setTimeout(() => {
+        thumbBudgetMissed.add(fileId);
+        resolve(undefined);
+      }, THUMB_BUDGET_MS);
+      const settle = (blob?: Blob) => {
+        clearTimeout(timer);
+        resolve(blob);
+      };
+      capture.then(settle, () => settle(undefined));
+    });
+  }
+
+  function captureThumbnail(fileId: string): Promise<Blob | undefined> {
+    const pending = thumbnailInFlight.get(fileId);
+    if (pending) return pending;
+    const promise = withThumbSlot(async () => {
+      const cached = await cacheByFileId.get(fileId);
+      let objectUrl: string | undefined;
+      let src: string;
+      if (cached?.blob) {
+        objectUrl = URL.createObjectURL(cached.blob);
+        src = objectUrl;
+      } else if (keysByFileId.has(fileId)) {
+        const url = new URL(`./progressive/document${fileId}?thumb=1`, window.location.href);
+        const slot = getAccountSlotParam();
+        if (slot) url.searchParams.set('account', slot);
+        src = url.href;
+      } else {
+        return undefined;
+      }
+      try {
+        // Пока в очереди кто-то ждёт, слот не держим дольше бюджета SC-004:
+        // иначе один файл с неподдерживаемым кодеком отнимал бы у соседних
+        // пузырей все 8 с до заглушки
+        return await captureVideoFrame(src, thumbWaiters.length ? THUMB_BUDGET_MS : THUMB_TIMEOUT_MS);
+      } finally {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      }
+    }).then((blob) => {
+      thumbnailInFlight.delete(fileId);
+      if (blob && !integrity.isTampered(fileId)) {
+        thumbnailByFileId.set(fileId, blob);
+        thumbnailBytes += blob.size;
+        enforceBudget();
+        // Кадр опоздал к бюджету — пузырь показывает заглушку. Сообщаем
+        // наружу: `util/mediaLoader.ts` выбросит заглушку из памяти, и
+        // следующий запрос того же хэша отдаст кадр (SC-004)
+        if (thumbBudgetMissed.delete(fileId) && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('parvane-media-thumb', { detail: { fileId } }));
+        }
+      }
+      return blob;
+    }, () => {
+      thumbnailInFlight.delete(fileId);
+      thumbBudgetMissed.delete(fileId);
+      return undefined;
+    });
+    thumbnailInFlight.set(fileId, promise);
+    return promise;
+  }
+
+  function getAccountSlotParam() {
+    if (typeof window === 'undefined') return undefined;
+    return new URL(window.location.href).searchParams.get('account') || undefined;
   }
 
   const tileCache = new Map<string, Promise<ImageBitmap | undefined>>();
@@ -493,6 +788,7 @@ export function createMediaService(deps: MediaDependencies) {
     if (content.file_id && content.file_key && content.file_nonce) {
       keysByFileId.set(content.file_id, { keyB64: content.file_key, nonceB64: content.file_nonce });
       if (content.mime) mimeByFileId.set(content.file_id, content.mime);
+      if (content.size_bytes && content.size_bytes > 0) plainSizeByFileId.set(content.file_id, content.size_bytes);
     }
   }
 
@@ -738,19 +1034,94 @@ export function createMediaService(deps: MediaDependencies) {
   // LRU по байтам: при превышении бюджета выкидываем самые старые записи
   const blobSizeByFileId = new Map<string, number>();
   let blobCacheBytes = 0;
+  // Миниатюры видео, снятые с кадра (генератор — ниже). Кэш НАМЕРЕННО живёт
+  // только в сессии (решение 2026-09-16, spec 002 FR-020/FR-023): миниатюра —
+  // это кадр расшифрованного E2E-видео, и открытым текстом её не переживает ни
+  // Cache Storage, ни IndexedDB. Шифрованное хранилище (`SecureE2eStorage`)
+  // технически подошло бы, но это durable-копия расшифрованного содержимого —
+  // ровно то, чего мы избегаем для медиа, — ради экономии одного окна
+  // `thumb=1` на файл за перезагрузку. FR-020 «кэшировать локально» и US2/AC2
+  // (перерисовка ленты, общие медиа — без повторной загрузки) закрываются этой
+  // картой: в пределах сессии кадр снимается один раз на файл
+  const thumbnailByFileId = new Map<string, Blob>();
+  let thumbnailBytes = 0;
 
   function noteCachedBlob(fileId: string, size: number) {
     const previous = blobSizeByFileId.get(fileId) || 0;
     blobCacheBytes += size - previous;
     blobSizeByFileId.delete(fileId);
     blobSizeByFileId.set(fileId, size);
-    while (blobCacheBytes > BLOB_CACHE_BUDGET_BYTES && blobSizeByFileId.size > 1) {
-      const oldest = blobSizeByFileId.keys().next().value;
-      if (oldest === undefined || oldest === fileId) break;
+    enforceBudget(fileId);
+  }
+
+  function ownBytes() {
+    return blobCacheBytes + rangeCacheBytes + thumbnailBytes;
+  }
+
+  // Вытеснить одну самую давнюю запись по просьбе общего бюджета: сначала окна
+  // фрагментов, затем миниатюры, затем блобы. Защищаемый файл (тот, который
+  // прямо сейчас читают или только что записали) не трогаем ни в одной из
+  // веток — иначе вытеснение выбрасывало ровно то, ради чего вызвано
+  function evictOldestOwn(protectedFileId?: string) {
+    // Окна единственного файла не выбиваем: он и есть тот, который стримится,
+    // и без его фрагментов `downloadRange` вернёт пустоту
+    if (chunkCacheByFileId.size > 1) {
+      const oldestRange = Array.from(chunkCacheByFileId.keys())
+        .find((fileId) => fileId !== protectedFileId);
+      if (oldestRange !== undefined) {
+        dropRangeCache(oldestRange);
+        return true;
+      }
+    }
+    const oldestThumb = Array.from(thumbnailByFileId.keys())
+      .find((fileId) => fileId !== protectedFileId);
+    if (oldestThumb !== undefined) {
+      thumbnailBytes -= thumbnailByFileId.get(oldestThumb)?.size || 0;
+      thumbnailByFileId.delete(oldestThumb);
+      return true;
+    }
+    const oldestBlob = Array.from(blobSizeByFileId.keys())
+      .find((fileId) => fileId !== protectedFileId);
+    if (oldestBlob !== undefined) {
+      blobCacheBytes -= blobSizeByFileId.get(oldestBlob) || 0;
+      blobSizeByFileId.delete(oldestBlob);
+      cacheByFileId.delete(oldestBlob);
+      return true;
+    }
+    return false;
+  }
+
+  registerBudgetConsumer({ name: 'parvaneMedia', usedBytes: ownBytes, evictOldest: evictOldestOwn });
+
+  // Общий бюджет расшифрованного/скачанного медиа в памяти (FR-024): блобы
+  // файлов, миниатюры видео и кэш фрагментов окон — плюс расшифрованные блобы
+  // `util/mediaLoader.ts`, которые считаются в том же бюджете через реестр.
+  // Сначала отпускаем окна старых файлов, затем самые давние блобы
+  function enforceBudget(keepFileId?: string) {
+    const total = totalDecryptedBytes;
+    while (total() > DECRYPTED_MEDIA_BUDGET_BYTES && chunkCacheByFileId.size > 1) {
+      const oldest = chunkCacheByFileId.keys().next().value;
+      if (oldest === undefined) break;
+      dropRangeCache(oldest);
+    }
+    while (total() > DECRYPTED_MEDIA_BUDGET_BYTES && thumbnailByFileId.size > 0) {
+      const oldest = thumbnailByFileId.keys().next().value;
+      if (oldest === undefined) break;
+      thumbnailBytes -= thumbnailByFileId.get(oldest)?.size || 0;
+      thumbnailByFileId.delete(oldest);
+    }
+    // Вытесняем самый давний блоб, кроме защищаемого, пока бюджет превышен.
+    // Раньше здесь был `break` на защищаемом файле — если он оказывался самым
+    // старым, вытеснение прекращалось и бюджет оставался превышенным
+    while (total() > DECRYPTED_MEDIA_BUDGET_BYTES) {
+      const oldest = Array.from(blobSizeByFileId.keys()).find((fileId) => fileId !== keepFileId);
+      if (oldest === undefined) break;
       blobCacheBytes -= blobSizeByFileId.get(oldest) || 0;
       blobSizeByFileId.delete(oldest);
       cacheByFileId.delete(oldest);
     }
+    // Своё отдали — пусть добирают остальные держатели расшифрованных байт
+    enforceDecryptedMediaBudget(keepFileId);
   }
 
   function cacheBlob(fileId: string, blob: Blob, mimeType: string) {
@@ -772,13 +1143,20 @@ export function createMediaService(deps: MediaDependencies) {
       blobCacheBytes = 0;
       tileCache.clear();
       chunkCacheByFileId.clear();
+      rangeCacheBytes = 0;
       metaByFileId.clear();
+      thumbnailByFileId.clear();
+      thumbnailBytes = 0;
+      thumbBudgetMissed.clear();
+      plainSizeByFileId.clear();
+      integrity.reset();
     },
     detectWebPage,
     fetchWebPagePreview,
     downloadBlob,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),
+    isTampered: (fileId: string) => integrity.isTampered(fileId),
     getMediaKeys: (fileId: string) => keysByFileId.get(fileId),
     getCloudRecipients,
     isPhotoAttachment,

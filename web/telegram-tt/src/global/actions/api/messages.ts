@@ -60,6 +60,7 @@ import { parseTranslationCacheKey } from '../../../util/keys/translationKey';
 import { getTranslationFn, type RegularLangFnParameters } from '../../../util/localization';
 import { formatStarsAsText } from '../../../util/localization/format';
 import { oldTranslate } from '../../../util/oldLangProvider';
+import { matchInviteHash } from '../../../util/routing';
 import { debounce, onTickEnd, rafPromise } from '../../../util/schedulers';
 import { getServerTime } from '../../../util/serverTime';
 import { callApi, cancelApiProgress } from '../../../api/gramjs';
@@ -2662,6 +2663,16 @@ addActionHandler('openUrl', async (global, actions, payload): Promise<void> => {
     const inviteHash = parsedUrl.pathname.replace(/^\//, '');
     if (inviteHash) {
       actions.acceptChatInvite({ hash: inviteHash, tabId });
+      return;
+    }
+  }
+
+  // Сейчас ссылки выдаются как `<origin>/#+<токен>` — тот же вид, что понимает
+  // адресная строка. По клику вступаем сразу, без перезагрузки вкладки
+  if (parsedUrl.origin === window.location.origin) {
+    const appInviteHash = matchInviteHash(parsedUrl.hash);
+    if (appInviteHash) {
+      actions.acceptChatInvite({ hash: appInviteHash, tabId });
       return;
     }
   }

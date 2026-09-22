@@ -195,16 +195,24 @@ async function getClientForRequest(url: string) {
 }
 
 self.addEventListener('message', (e) => {
-  const { type, messageId, result } = e.data as {
+  const {
+    type, messageId, result, error,
+  } = e.data as {
     type: string;
     messageId: string;
     result: PartInfo;
+    error?: string;
   };
 
   if (type === 'partResponse') {
     const requestState = requestStates.get(messageId);
     if (requestState) {
-      requestState.resolve(result);
+      // Parvane: провайдер отказал (целостность файла) — ответ 500 сразу
+      if (error) {
+        requestState.reject();
+      } else {
+        requestState.resolve(result);
+      }
     }
   }
 });

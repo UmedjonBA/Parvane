@@ -15,6 +15,8 @@ import { buildCollectionByCallback, compact } from '../util/iteratees';
 import useSelector, { useShallowSelector } from './data/useSelector';
 import useLang from './useLang';
 
+const IS_REPORT_SUPPORTED = false as boolean;
+
 const useChatContextActions = ({
   chat,
   user,
@@ -200,7 +202,8 @@ const useChatContextActions = ({
       ? { title: lang('Unarchive'), icon: 'unarchive', handler: () => toggleChatArchived({ id: chat.id }) }
       : { title: lang('Archive'), icon: 'archive', handler: () => toggleChatArchived({ id: chat.id }) };
 
-    const canReport = handleReport && !user && (isChatChannel(chat) || isChatGroup(chat));
+    // Parvane: жалоб на сервере нет — пункт молча ничего не делал
+    const canReport = IS_REPORT_SUPPORTED && handleReport && !user && (isChatChannel(chat) || isChatGroup(chat));
     const actionReport = canReport
       ? { title: lang('ReportPeerReport'), icon: 'flag', handler: handleReport } satisfies MenuItemContextAction
       : undefined;

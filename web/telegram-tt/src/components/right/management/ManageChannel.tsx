@@ -32,6 +32,10 @@ import TextArea from '../../ui/TextArea';
 
 import './Management.scss';
 
+// Parvane: у каналов нет серверных фото, описания, типа, обсуждений (треды вне
+// продукта), заявок, реакций и автоперевода — пункты молча ничего не делали
+const IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED = false;
+
 type OwnProps = {
   chatId: string;
   onScreenSelect: (screen: ManagementScreens) => void;
@@ -109,7 +113,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
     if (!canInvite) return;
     loadExportedChatInvites({ chatId });
     loadExportedChatInvites({ chatId, isRevoked: true });
-    loadChatJoinRequests({ chatId });
+    if (IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED) loadChatJoinRequests({ chatId });
   }, [chatId, canInvite]);
 
   useEffect(() => {
@@ -226,11 +230,13 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management">
       <div className="panel-content custom-scroll">
-        <AvatarEditable
-          currentAvatarBlobUrl={currentAvatarBlobUrl}
-          onChange={handleSetPhoto}
-          disabled={!canChangeInfo}
-        />
+        {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
+          <AvatarEditable
+            currentAvatarBlobUrl={currentAvatarBlobUrl}
+            onChange={handleSetPhoto}
+            disabled={!canChangeInfo}
+          />
+        )}
         <Island>
           <div className="settings-edit">
             <InputText
@@ -241,32 +247,36 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               error={error === CHANNEL_TITLE_EMPTY ? error : undefined}
               disabled={!canChangeInfo}
             />
-            <TextArea
-              id="channel-about"
-              label={lang('DescriptionPlaceholder')}
-              onChange={handleAboutChange}
-              value={about}
-              maxLength={CHANNEL_MAX_DESCRIPTION}
-              maxLengthIndicator={(CHANNEL_MAX_DESCRIPTION - about.length).toString()}
-              disabled={!canChangeInfo}
-              noReplaceNewlines
-            />
+            {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
+              <TextArea
+                id="channel-about"
+                label={lang('DescriptionPlaceholder')}
+                onChange={handleAboutChange}
+                value={about}
+                maxLength={CHANNEL_MAX_DESCRIPTION}
+                maxLengthIndicator={(CHANNEL_MAX_DESCRIPTION - about.length).toString()}
+                disabled={!canChangeInfo}
+                noReplaceNewlines
+              />
+            )}
           </div>
-          {chat.isCreator && (
+          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && chat.isCreator && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('ChannelType')}</span>
               <span className="subtitle">{isChannelPublic ? lang('TypePublic') : lang('TypePrivate')}</span>
             </ListItem>
           )}
-          <ListItem
-            icon="message"
-            multiline
-            onClick={handleClickDiscussion}
-            disabled={!canChangeInfo}
-          >
-            <span className="title">{lang('Discussion')}</span>
-            <span className="subtitle">{hasLinkedChat ? lang('DiscussionUnlink') : lang('Add')}</span>
-          </ListItem>
+          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
+            <ListItem
+              icon="message"
+              multiline
+              onClick={handleClickDiscussion}
+              disabled={!canChangeInfo}
+            >
+              <span className="title">{lang('Discussion')}</span>
+              <span className="subtitle">{hasLinkedChat ? lang('DiscussionUnlink') : lang('Add')}</span>
+            </ListItem>
+          )}
           {canInvite && (
             <ListItem
               icon="link"
@@ -280,7 +290,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          {Boolean(chat.joinRequests?.length) && (
+          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"
               onClick={handleClickRequests}
@@ -292,31 +302,35 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          <ListItem
-            icon="heart-outline"
-            multiline
-            onClick={handleClickReactions}
-            disabled={!canChangeInfo}
-          >
-            <span className="title">{lang('Reactions')}</span>
-            <span className="subtitle" dir="auto">
-              {chatReactionsDescription}
-            </span>
-          </ListItem>
-          {hasAutoTranslationAvailable && (
-            <ListItem
-              icon="language"
-              narrow
-              ripple
-              disabled={!canToggleAutoTranslation}
-              onClick={handleAutoTranslationChange}
-            >
-              <span>{lang('AutomaticTranslation')}</span>
-              <Switch
-                id="auto-translation"
-                checked={Boolean(hasAutoTranslation)}
-              />
-            </ListItem>
+          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
+            <>
+              <ListItem
+                icon="heart-outline"
+                multiline
+                onClick={handleClickReactions}
+                disabled={!canChangeInfo}
+              >
+                <span className="title">{lang('Reactions')}</span>
+                <span className="subtitle" dir="auto">
+                  {chatReactionsDescription}
+                </span>
+              </ListItem>
+              {hasAutoTranslationAvailable && (
+                <ListItem
+                  icon="language"
+                  narrow
+                  ripple
+                  disabled={!canToggleAutoTranslation}
+                  onClick={handleAutoTranslationChange}
+                >
+                  <span>{lang('AutomaticTranslation')}</span>
+                  <Switch
+                    id="auto-translation"
+                    checked={Boolean(hasAutoTranslation)}
+                  />
+                </ListItem>
+              )}
+            </>
           )}
         </Island>
         <Island>
@@ -387,7 +401,8 @@ export default memo(withGlobal<OwnProps>(
       chatFullInfo: selectChatFullInfo(global, chatId),
       progress,
       canChangeInfo: getHasAdminRight(chat, 'changeInfo'),
-      canInvite: getHasAdminRight(chat, 'inviteUsers'),
+      // Parvane: владелец канала — isCreator без adminRights, ссылка ему тоже нужна
+      canInvite: chat.isCreator || getHasAdminRight(chat, 'inviteUsers'),
       exportedInvites: invites,
       availableReactions: global.reactions.availableReactions,
       hasAutoTranslation,

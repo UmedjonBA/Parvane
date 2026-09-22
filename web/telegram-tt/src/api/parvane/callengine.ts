@@ -19,7 +19,7 @@ export type CallState =
 const DISCONNECT_GRACE_MS = 10000;
 // Недозвон: авто-отбой у звонящего (сервер запишет missed) и авто-скрытие
 // входящего у собеседника
-const RING_TIMEOUT_MS = 45000;
+export const RING_TIMEOUT_MS = 45000;
 
 type CallCallbacks = {
   sendSignal: (to: string, signal: WireCallSignal) => void;
@@ -28,6 +28,10 @@ type CallCallbacks = {
   // недоступности возвращает фоллбэк
   getIceServers: () => Promise<RTCIceServer[]>;
   getIceTransportPolicy: () => RTCIceTransportPolicy | undefined;
+  // Таймаут вызова (e2e переопределяет в диаг-сборке); по умолчанию 45 с
+  getRingTimeoutMs?: () => number;
+  // Идёт групповой звонок — входящий личный отбиваем «занято»
+  isBusy?: () => boolean;
   sign: (data: string) => string;
   verify: (publicKey: string, data: string, signature: string) => boolean;
   onState: (state: CallState) => void;
@@ -115,7 +119,7 @@ export class CallEngine {
       this.ringTimer = window.setTimeout(() => {
         // Недозвон: собеседник так и не ответил — отбой (сервер запишет missed)
         if (this.isCurrentCall(peer, callId) && !this.remoteReady) this.hangUp();
-      }, RING_TIMEOUT_MS);
+      }, this.cb.getRingTimeoutMs?.() ?? RING_TIMEOUT_MS);
     } catch {
       if (this.isCurrentCall(peer, callId)) this.endAfterMediaFailure();
     }
@@ -181,7 +185,7 @@ export class CallEngine {
     switch (signal.type) {
       case 'invite':
         if (!from || !signal.call_id || !signal.sdp || this.seenCallIds.has(signal.call_id)) return;
-        if (this.callId) {
+        if (this.callId || this.cb.isBusy?.()) {
           this.cb.sendSignal(from, { type: 'reject', call_id: signal.call_id, reason: 'busy' });
           return;
         }
@@ -211,7 +215,7 @@ export class CallEngine {
             this.cleanup();
             this.cb.onState('ended');
           }
-        }, RING_TIMEOUT_MS);
+        }, this.cb.getRingTimeoutMs?.() ?? RING_TIMEOUT_MS);
         break;
       case 'answer':
         if (!this.pc || !this.isCaller || this.remoteReady

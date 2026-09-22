@@ -4,9 +4,10 @@
 // текст desktop -> Web. Требует локально собранный бинарь
 // desktop/build-probe/bin/Telegram; без него сценарий помечается SKIP.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
-  existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync,
+  mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,26 +16,31 @@ import zlib from 'node:zlib';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  buildLibraryShim,
+  DESKTOP_READY_PATTERN,
+  readDesktopLog,
+  requireGatewayTcpUrl,
+  skipWithoutDesktop,
+  spawnDesktop,
+  stopDesktop,
+  waitDesktopLog,
+} from './e2e_desktop_helpers.mjs';
+import {
   LOGIN_TIMEOUT_MS,
   findMessage,
   findMessageContainers,
   openPrivateChat,
   preparePage,
+  relogin,
   sendText,
+  sha256OfDownload,
+  thumbnailStats,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-xclient-e2e-password';
-const DESKTOP_BIN = process.env.PARVANE_E2E_DESKTOP_BIN
-  || new URL('../desktop/build-probe/bin/Telegram', import.meta.url).pathname;
-const GATEWAY_TCP_URL = process.env.PARVANE_E2E_GATEWAY_TCP_URL;
-const DESKTOP_READY_PATTERN = /E2E-устройство готово/;
 
-assert(GATEWAY_TCP_URL, 'PARVANE_E2E_GATEWAY_TCP_URL is required');
-
-if (!existsSync(DESKTOP_BIN)) {
-  console.log(`SKIP: desktop binary is not built (${DESKTOP_BIN}); cross-client parity needs a local build`);
-  process.exit(0);
-}
+requireGatewayTcpUrl();
+skipWithoutDesktop('cross-client parity');
 
 function crc32(bytes) {
   let crc = ~0;
@@ -77,72 +83,6 @@ function makeSolidPng(size, [r, g, b]) {
   ]);
 }
 
-// Rolling-release окружение может обновить soname системных библиотек после
-// сборки бинаря (libjxl 0.11 -> 0.12); подставляем совместимые симлинки
-function buildLibraryShim(shimDir) {
-  const aliases = [
-    ['libjxl.so.0.11', 'libjxl.so.0.12'],
-    ['libjxl_threads.so.0.11', 'libjxl_threads.so.0.12'],
-  ];
-  let hasShim = false;
-  for (const [wanted, actual] of aliases) {
-    if (!existsSync(`/usr/lib/${wanted}`) && existsSync(`/usr/lib/${actual}`)) {
-      symlinkSync(`/usr/lib/${actual}`, join(shimDir, wanted));
-      hasShim = true;
-    }
-  }
-  return hasShim ? shimDir : undefined;
-}
-
-function spawnDesktop(workdir, shimDir, env) {
-  return spawn(DESKTOP_BIN, ['-workdir', join(workdir, 'td')], {
-    env: {
-      ...process.env,
-      QT_QPA_PLATFORM: 'offscreen',
-      PARVANE_GATEWAY_URL: GATEWAY_TCP_URL,
-      ...(shimDir ? { LD_LIBRARY_PATH: shimDir } : {}),
-      ...env,
-    },
-    stdio: 'ignore',
-  });
-}
-
-function readDesktopLog(workdir) {
-  try {
-    return readFileSync(join(workdir, 'td', 'log.txt'), 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-async function waitDesktopLog(workdir, pattern, timeoutMs, child) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const log = readDesktopLog(workdir);
-    if (pattern.test(log)) return;
-    if (child.exitCode !== null) {
-      throw new Error(`desktop exited with code ${child.exitCode} while waiting for ${pattern}`);
-    }
-    await new Promise((resolve) => { setTimeout(resolve, 1000); });
-  }
-  throw new Error(`Timed out waiting desktop log ${pattern}; tail:\n${readDesktopLog(workdir).slice(-2000)}`);
-}
-
-async function stopDesktop(child) {
-  if (child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      resolve();
-    }, 10000);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
 async function attachMedia(page, menuItemName, file, caption) {
   await page.getByRole('button', { name: 'Add an attachment' }).click();
   const fileChooserPromise = page.waitForEvent('filechooser');
@@ -165,6 +105,19 @@ function attachPhoto(page, caption) {
 }
 
 // Playwright-Chromium без H.264 — VP9-in-MP4 (desktop декодирует через ffmpeg)
+// Миниатюра видео с десктопа — кадр самого видео (не 1×1, не однотонная)
+async function expectDesktopVideoThumbnail(bubble, label) {
+  const started = Date.now();
+  let stats;
+  for (;;) {
+    stats = await thumbnailStats(bubble).catch(() => undefined);
+    if (stats && stats.width > 1 && stats.variance > 50) break;
+    assert(Date.now() - started < 15000, `${label}: thumbnail ${JSON.stringify(stats)}`);
+    await bubble.page().waitForTimeout(300);
+  }
+  console.log(`${label}: thumbnail ${stats.width}x${stats.height}`);
+}
+
 function makeMp4(dir) {
   const path = join(dir, 'xclient-video.mp4');
   execFileSync('ffmpeg', [
@@ -302,9 +255,158 @@ try {
     .locator('img[src^="blob:"]').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── Медиа desktop -> Web: по одному файлу на запуск десктопа ───────────────
+  const messages = () => aliceSession.page.locator('.Transition_slide-active > .MessageList .Message');
+  const mediaDir = join(bobWorkdir, 'media');
+  mkdirSync(mediaDir, { recursive: true });
+  const pngBytes = makeSolidPng(64, [200, 40, 120]);
+  const pdfBytes = Buffer.from(`%PDF-1.4\n% parvane ${suffix}\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n`);
+  const mp4Bytes = makeMp4(mediaDir);
+  const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const files = [
+    { name: 'desk.png', bytes: pngBytes },
+    { name: 'desk.mp4', bytes: mp4Bytes },
+    { name: 'desk.pdf', bytes: pdfBytes },
+  ];
+  for (const file of files) {
+    const path = join(mediaDir, file.name);
+    writeFileSync(path, file.bytes);
+    await stopDesktop(desktop);
+    const before = readDesktopLog(bobWorkdir);
+    const countBefore = await messages().count();
+    desktop = spawnDesktop(bobWorkdir, libraryShim, {
+      PARVANE_AUTOLOGIN: `${bob}:${PASSWORD}`,
+      PARVANE_AUTOSENDFILE: `${alice}:${path}`,
+    });
+    await waitDesktopLog(bobWorkdir, /медиа отправлено msg /, 90000, desktop, { since: before });
+    await aliceSession.page.waitForFunction(
+      (count) => document.querySelectorAll('.Transition_slide-active > .MessageList .Message').length > count,
+      countBefore,
+      { timeout: 90000 },
+    );
+    const bubble = messages().last();
+    if (file.name.endsWith('.mp4')) {
+      // Видео — нативный плеер, воспроизводится
+      const video = bubble.locator('video.full-media');
+      await video.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+      await bubble.locator('.message-media-duration').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      await video.evaluate((element) => element.play());
+      await video.evaluate((element) => new Promise((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error(`desktop video stuck at ${element.currentTime}`)), 30000);
+        const timer = setInterval(() => {
+          if (element.currentTime > 0.3) {
+            clearTimeout(deadline);
+            clearInterval(timer);
+            resolve(undefined);
+          }
+        }, 200);
+      }));
+      // Перемотка на середину и продолжение воспроизведения, миниатюра-кадр (FR-025)
+      await video.evaluate((element) => new Promise((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error(`desktop video did not resume after seek at ${element.currentTime}`)), 10000);
+        element.addEventListener('seeked', () => {
+          const from = element.currentTime;
+          const timer = setInterval(() => {
+            if (element.currentTime !== from && !element.paused) {
+              clearTimeout(deadline);
+              clearInterval(timer);
+              resolve(undefined);
+            }
+          }, 100);
+        }, { once: true });
+        element.currentTime = element.duration / 2;
+      }));
+      await expectDesktopVideoThumbnail(bubble, 'desktop video');
+    } else {
+      // Картинка хуком десктопа понижается до документа image/* — побайтно
+      const fileRow = bubble.locator('.File .file-icon-container');
+      await fileRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      const downloaded = await sha256OfDownload(aliceSession.page, fileRow);
+      assert.equal(downloaded.sha256, sha(file.bytes), `${file.name}: downloaded bytes differ`);
+      assert.match(downloaded.name, file.name.endsWith('.png') ? /^image_.*\.png$/ : /^file_.*\.pdf$/,
+        `${file.name}: unexpected file name ${downloaded.name}`);
+    }
+  }
+
+  // ── Стикер desktop -> Web из локального пака (pack_ref) ───────────────────
+  const stickersDir = join(bobWorkdir, 'stickers');
+  const emojiDir = join(bobWorkdir, 'emoji-empty');
+  mkdirSync(join(stickersDir, 'PvStickers'), { recursive: true });
+  mkdirSync(emojiDir, { recursive: true });
+  writeFileSync(join(stickersDir, 'PvStickers', '01-1f600.png'), makeSolidPng(128, [30, 90, 200]));
+  await stopDesktop(desktop);
+  const beforeSticker = readDesktopLog(bobWorkdir);
+  const countBeforeSticker = await messages().count();
+  desktop = spawnDesktop(bobWorkdir, libraryShim, {
+    PARVANE_AUTOLOGIN: `${bob}:${PASSWORD}`,
+    PARVANE_STICKERS_DIR: stickersDir,
+    PARVANE_EMOJI_DIR: emojiDir,
+    PARVANE_AUTOSTICKER: alice,
+  });
+  await waitDesktopLog(bobWorkdir, /sticker отправлен → /, 90000, desktop, { since: beforeSticker });
+  await aliceSession.page.waitForFunction(
+    (count) => document.querySelectorAll('.Transition_slide-active > .MessageList .Message').length > count,
+    countBeforeSticker,
+    { timeout: 90000 },
+  );
+  await messages().last().locator('.media-inner').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const stickerSetId = await aliceSession.page.evaluate(() => {
+    const global = window.__parvaneGetGlobal();
+    const stickers = Object.values(global.messages.byChatId)
+      .flatMap((chat) => Object.values(chat.byId || {}))
+      .filter((message) => message.content?.sticker);
+    return stickers.pop()?.content?.sticker?.stickerSetInfo?.id;
+  });
+  assert.match(String(stickerSetId), /^pvpk-/, `desktop sticker has no pack_ref set id: ${stickerSetId}`);
+  // SC-008 «стикер — стикером с паком»: пузырь несёт настоящую картинку, а
+  // клик открывает модалку пака с предложением установить его
+  const stickerBubble = messages().last();
+  const stickerImage = stickerBubble.locator('.media-inner img, .media-inner canvas, .media-inner video').first();
+  await stickerImage.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const stickerBox = await stickerImage.boundingBox();
+  assert(stickerBox && stickerBox.width > 1 && stickerBox.height > 1,
+    `desktop sticker rendered empty: ${JSON.stringify(stickerBox)}`);
+  // Стикер рисуется двумя слоями (миниатюра под полной картинкой `.full-media`),
+  // клик по нижнему перехватывает верхний — кликаем по контейнеру
+  await stickerBubble.locator('.media-inner').first().click();
+  // Ждём именно кнопку установки: заголовок при неудачной загрузке набора —
+  // сырой ключ `AccDescrStickerSet`, он содержит «Sticker» и прошёл бы проверку
+  // Корневой `.Modal` Playwright считает скрытым (контейнер без размера) — ждём
+  // саму кнопку установки внутри диалога
+  const packModal = aliceSession.page.locator('.StickerSetModal').first();
+  await packModal.getByRole('button', { name: /Add \d+ Sticker/i })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.keyboard.press('Escape');
+  await packModal.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }).catch(() => {});
+
+  // ── Всё на месте после перезагрузки веба ──────────────────────────────────
+  await relogin(aliceSession.page, PASSWORD);
+  await openPrivateChat(aliceSession.page, bob);
+  await findMessage(aliceSession.page, desktopToWebText).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.locator('.Transition_slide-active > .MessageList .Message video').first()
+    .waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+  await expectDesktopVideoThumbnail(aliceSession.page.locator('.Transition_slide-active > .MessageList .Message')
+    .filter({ has: aliceSession.page.locator('.message-media-duration') }).last(), 'desktop video after reload');
+  assert((await aliceSession.page.locator('.Transition_slide-active > .MessageList .Message .File').count()) >= 2,
+    'desktop documents are missing after reload');
+  // FR-040 требует «все четыре вида, в том числе после перезагрузки» — стикер
+  // после relogin раньше не проверялся вовсе
+  const stickerAfterReload = await aliceSession.page.evaluate(() => {
+    const global = window.__parvaneGetGlobal();
+    const stickers = Object.values(global.messages.byChatId)
+      .flatMap((chat) => Object.values(chat.byId || {}))
+      .filter((message) => message.content?.sticker);
+    return stickers.pop()?.content?.sticker?.stickerSetInfo?.id;
+  });
+  assert.match(String(stickerAfterReload), /^pvpk-/,
+    `desktop sticker lost its pack after reload: ${stickerAfterReload}`);
+  await aliceSession.page.locator('.Transition_slide-active > .MessageList .Message .media-inner img')
+    .last().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
 
-  console.log('OK: web<->desktop text both ways; encrypted photo, voice, video and audio web->desktop');
+  console.log('OK: web<->desktop text both ways; encrypted photo, voice, video and audio web->desktop; '
+    + 'image (as document), video with seek and frame thumbnail, pdf and pack sticker desktop->web, all after web reload');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   const page = aliceContext.pages()[0];

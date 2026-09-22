@@ -5,15 +5,16 @@ import { getActions, withGlobal } from '../../../global';
 
 import type { ApiBirthday, ApiUsername } from '../../../api/types';
 import { ApiMediaFormat } from '../../../api/types';
-import { ProfileEditProgress, SettingsScreens } from '../../../types';
+import { ProfileEditProgress } from '../../../types';
 
-import { PURCHASE_USERNAME, TME_LINK_PREFIX, USERNAME_PURCHASE_ERROR } from '../../../config';
 import { getChatAvatarHash } from '../../../global/helpers';
 import { selectTabState, selectUser, selectUserFullInfo } from '../../../global/selectors';
 import { selectCurrentLimit } from '../../../global/selectors/limits';
+import buildClassName from '../../../util/buildClassName';
 import { formatDateToString } from '../../../util/dates/oldDateFormat';
-import { NEXT_ARROW_REPLACEMENT } from '../../../util/localization/format';
 import { throttle } from '../../../util/schedulers';
+import { callApi } from '../../../api/gramjs';
+import { buildParvaneUserLink } from '../../common/helpers/formatUsername';
 import renderText from '../../common/helpers/renderText';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -24,14 +25,12 @@ import useOldLang from '../../../hooks/useOldLang';
 import usePreviousDeprecated from '../../../hooks/usePreviousDeprecated';
 
 import ManageUsernames from '../../common/ManageUsernames';
-import SafeLink from '../../common/SafeLink';
-import UsernameInput from '../../common/UsernameInput';
+import ChatOrUserPicker from '../../common/pickers/ChatOrUserPicker';
 import Island, { IslandDescription, IslandOutside, IslandTitle } from '../../gili/layout/Island';
 import Surface from '../../gili/layout/Surface';
 import AvatarEditable from '../../ui/AvatarEditable';
 import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
-import Link from '../../ui/Link';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
 
@@ -52,7 +51,28 @@ type StateProps = {
   isUsernameAvailable?: boolean;
   maxBioLength: number;
   usernames?: ApiUsername[];
+  currentNameColor?: number;
+  currentPhone?: string;
+  currentPersonalChannelId?: string;
+  currentPersonalChannelTitle?: string;
+  channelIds: string[];
 };
+
+// Parvane: цвет имени, личный канал и телефон хранятся в identity, а нативных
+// редакторов этих полей в Web A нет — минимальные строки из штатных примитивов
+// (spec 002 US7, plan Complexity Tracking). Премиум-гейтов нет
+const PEER_COLOR_COUNT = 7;
+// Индекс 0 не предлагаем: сервер держит name_color числом и трактует 0 как
+// «не задан» (identity: `if color != 0`), поэтому выбор первого цвета молча
+// не сохранялся бы. Цвета 1..7 различимы и одинаково читаются десктопом;
+// менять провод ради нуля нельзя (FR-001)
+const FIRST_SELECTABLE_COLOR = 1;
+type ParvaneProfileFields = { nameColor?: number; personalChannelId?: string; phone?: string };
+const updateParvaneProfile = (fields: ParvaneProfileFields) => (
+  (callApi as unknown as (name: string, args: ParvaneProfileFields) => Promise<unknown>)(
+    'parvaneUpdateProfileFields', fields,
+  )
+);
 
 const runThrottled = throttle((cb) => cb(), 60000, true);
 
@@ -71,12 +91,16 @@ const SettingsEditProfile = ({
   isUsernameAvailable,
   maxBioLength,
   usernames,
+  currentNameColor,
+  currentPhone,
+  currentPersonalChannelId,
+  currentPersonalChannelTitle,
+  channelIds,
   onReset,
 }: OwnProps & StateProps) => {
   const {
     loadCurrentUser,
     updateProfile,
-    openSettingsScreen,
     openBirthdaySetupModal,
   } = getActions();
 
@@ -94,6 +118,12 @@ const SettingsEditProfile = ({
   const [lastName, setLastName] = useState(currentLastName || '');
   const [bio, setBio] = useState(currentBio || '');
   const [editableUsername, setEditableUsername] = useState<string | false>(currentUsername);
+  const [phone, setPhone] = useState(currentPhone || '');
+  const [isPhoneTouched, setIsPhoneTouched] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  const [isChannelPickerOpen, setIsChannelPickerOpen] = useState(false);
+  const [channelSearch, setChannelSearch] = useState('');
+  const readOnlyUsername = usernames?.[0]?.username;
 
   const currentAvatarBlobUrl = useMedia(currentAvatarHash, false, ApiMediaFormat.BlobUrl);
 
@@ -109,8 +139,9 @@ const SettingsEditProfile = ({
       return false;
     }
 
-    return Boolean(photo) || isProfileFieldsTouched || (isUsernameTouched && renderingIsUsernameAvailable === true);
-  }, [isUsernameError, photo, isProfileFieldsTouched, isUsernameTouched, renderingIsUsernameAvailable]);
+    return Boolean(photo) || isProfileFieldsTouched || isPhoneTouched
+      || (isUsernameTouched && renderingIsUsernameAvailable === true);
+  }, [isUsernameError, photo, isProfileFieldsTouched, isPhoneTouched, isUsernameTouched, renderingIsUsernameAvailable]);
 
   useHistoryBack({
     isActive,
@@ -138,6 +169,11 @@ const SettingsEditProfile = ({
   useEffect(() => {
     setEditableUsername(currentUsername || '');
   }, [currentUsername]);
+
+  useEffect(() => {
+    setPhone(currentPhone || '');
+    setIsPhoneTouched(false);
+  }, [currentPhone]);
 
   useEffect(() => {
     if (progress === ProfileEditProgress.Complete) {
@@ -178,13 +214,23 @@ const SettingsEditProfile = ({
     setIsProfileFieldsTouched(true);
   });
 
-  const handleUsernameChange = useLastCallback((value: string | false) => {
-    setEditableUsername(value);
-    setIsUsernameTouched(currentUsername !== value);
+  const handlePhoneChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setPhone(e.target.value);
+    setIsPhoneTouched(e.target.value.trim() !== (currentPhone || ''));
   });
 
-  const handleBirthdayPrivacyClick = useLastCallback(() => {
-    openSettingsScreen({ screen: SettingsScreens.PrivacyBirthday });
+  const handleNameColorSelect = useLastCallback((color: number) => {
+    setIsColorPickerOpen(false);
+    void updateParvaneProfile({ nameColor: color });
+  });
+
+  const handlePersonalChannelSelect = useLastCallback((chatId: string) => {
+    setIsChannelPickerOpen(false);
+    void updateParvaneProfile({ personalChannelId: chatId });
+  });
+
+  const handlePersonalChannelRemove = useLastCallback(() => {
+    void updateParvaneProfile({ personalChannelId: '' });
   });
 
   const handleBirthdayClick = useLastCallback(() => {
@@ -205,6 +251,12 @@ const SettingsEditProfile = ({
       return;
     }
 
+    if (isPhoneTouched) {
+      setIsPhoneTouched(false);
+      void updateParvaneProfile({ phone: phone.trim() });
+      if (!photo && !isProfileFieldsTouched) return;
+    }
+
     updateProfile({
       photo,
       ...(isProfileFieldsTouched && {
@@ -217,21 +269,6 @@ const SettingsEditProfile = ({
       }),
     });
   });
-
-  function renderPurchaseLink() {
-    const purchaseInfoLink = `${TME_LINK_PREFIX}${PURCHASE_USERNAME}`;
-
-    return (
-      <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-        {(oldLang('lng_username_purchase_available'))
-          .replace('{link}', '%PURCHASE_LINK%')
-          .split('%')
-          .map((s) => {
-            return (s === 'PURCHASE_LINK' ? <SafeLink url={purchaseInfoLink} text={`@${PURCHASE_USERNAME}`} /> : s);
-          })}
-      </IslandDescription>
-    );
-  }
 
   return (
     <div className="settings-fab-wrapper">
@@ -285,41 +322,90 @@ const SettingsEditProfile = ({
             <span className="flex-grow">{lang('SettingsBirthday')}</span>
           </ListItem>
         </Island>
-        <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-          {lang('BirthdayPrivacySuggestion', {
-            link: (
-              <Link isPrimary onClick={handleBirthdayPrivacyClick}>
-                {lang('BirthdayPrivacySuggestionLink',
-                  undefined, { withNodes: true, specialReplacement: NEXT_ARROW_REPLACEMENT })}
-              </Link>
-            ),
-          }, { withNodes: true })}
-        </IslandDescription>
+        {/* Parvane: настроек приватности даты рождения нет (серверной приватности нет) */}
 
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang('Username')}</IslandTitle>
         <Island>
+          <ListItem
+            icon="colorize"
+            narrow
+            className="parvane-name-color"
+            rightElement={(
+              <span
+                className={buildClassName('parvane-name-color-swatch', `peer-color-${currentNameColor ?? 0}`)}
+              />
+            )}
+            onClick={() => setIsColorPickerOpen(!isColorPickerOpen)}
+          >
+            <span className="flex-grow">{oldLang('ParvaneNameColor')}</span>
+          </ListItem>
+          {isColorPickerOpen && (
+            <div className="parvane-name-color-palette">
+              {Array.from({ length: PEER_COLOR_COUNT }, (_, index) => index + FIRST_SELECTABLE_COLOR).map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  className={buildClassName('parvane-name-color-option', `peer-color-${color}`)}
+                  aria-label={`${oldLang('ParvaneNameColor')} ${color}`}
+                  onClick={() => handleNameColorSelect(color)}
+                />
+              ))}
+              <button type="button" className="parvane-name-color-default" onClick={() => handleNameColorSelect(-1)}>
+                {oldLang('ParvaneNameColorDefault')}
+              </button>
+            </div>
+          )}
+          <ListItem
+            icon="channel"
+            narrow
+            className="parvane-personal-channel"
+            rightElement={currentPersonalChannelTitle
+              ? <span className="settings-birthday-date">{currentPersonalChannelTitle}</span>
+              : undefined}
+            onClick={() => setIsChannelPickerOpen(true)}
+          >
+            <span className="flex-grow">{oldLang('ParvanePersonalChannel')}</span>
+          </ListItem>
+          {currentPersonalChannelId && (
+            <ListItem icon="delete" narrow destructive onClick={handlePersonalChannelRemove}>
+              <span className="flex-grow">{oldLang('ParvanePersonalChannelRemove')}</span>
+            </ListItem>
+          )}
           <div className="settings-input">
-            <UsernameInput
-              currentUsername={currentUsername}
-              isLoading={isLoading}
-              isUsernameAvailable={isUsernameAvailable}
-              checkedUsername={checkedUsername}
-              onChange={handleUsernameChange}
+            <InputText
+              value={phone}
+              onChange={handlePhoneChange}
+              label={oldLang('ParvanePhone')}
+              disabled={isLoading}
             />
           </div>
         </Island>
-        {editUsernameError === USERNAME_PURCHASE_ERROR && renderPurchaseLink()}
-        <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-          {renderText(oldLang('UsernameHelp'), ['br', 'simple_markdown'])}
-        </IslandDescription>
-        {editableUsername && (
+        <ChatOrUserPicker
+          isOpen={isChannelPickerOpen}
+          chatOrUserIds={channelIds}
+          title={oldLang('ParvanePersonalChannel')}
+          searchPlaceholder={oldLang('Search')}
+          search={channelSearch}
+          onSearchChange={setChannelSearch}
+          onSelectChatOrUser={handlePersonalChannelSelect}
+          onClose={() => setIsChannelPickerOpen(false)}
+        />
+
+        {/* Parvane: username — ник из адреса, не редактируется (сервер его не хранит) */}
+        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang('Username')}</IslandTitle>
+        <Island>
+          <div className="settings-input">
+            <InputText
+              value={readOnlyUsername ? `@${readOnlyUsername}` : ''}
+              label={oldLang('Username')}
+              readOnly
+            />
+          </div>
+        </Island>
+        {readOnlyUsername && (
           <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
             {oldLang('lng_username_link')}
             <br />
-            <span className="username-link">
-              {TME_LINK_PREFIX}
-              {editableUsername}
-            </span>
+            <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>
           </IslandDescription>
         )}
 
@@ -360,6 +446,11 @@ export default memo(withGlobal<OwnProps>(
     } = currentUser || {};
     const currentUserFullInfo = currentUserId ? selectUserFullInfo(global, currentUserId) : undefined;
     const currentAvatarHash = currentUser && getChatAvatarHash(currentUser);
+    const currentPersonalChannelId = currentUserFullInfo?.personalChannelId;
+    // Личный канал — любая своя группа/канал Parvane
+    const channelIds = Object.values(global.chats.byId)
+      .filter((chat) => chat.type === 'chatTypeChannel' || chat.type === 'chatTypeBasicGroup')
+      .map((chat) => chat.id);
 
     return {
       currentAvatarHash,
@@ -373,6 +464,13 @@ export default memo(withGlobal<OwnProps>(
       editUsernameError,
       maxBioLength,
       usernames,
+      currentNameColor: currentUser?.color && 'color' in currentUser.color ? currentUser.color.color : undefined,
+      currentPhone: currentUser?.phoneNumber,
+      currentPersonalChannelId,
+      currentPersonalChannelTitle: currentPersonalChannelId
+        ? global.chats.byId[currentPersonalChannelId]?.title
+        : undefined,
+      channelIds,
     };
   },
 )(SettingsEditProfile));

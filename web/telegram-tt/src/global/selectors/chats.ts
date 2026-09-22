@@ -259,9 +259,14 @@ export function selectCanShareFolder<T extends GlobalState>(global: T, folderId:
     });
 }
 
+const IS_PARVANE_TRANSLATION_DISABLED = true;
+
 export function selectShouldDetectChatLanguage<T extends GlobalState>(
   global: T, chatId: string,
 ) {
+  // Parvane: перевода нет (сервиса перевода нет, plaintext на сервер не уходит) —
+  // кнопка перевода чата показывалась и молча ничего не делала
+  if (IS_PARVANE_TRANSLATION_DISABLED) return false;
   const chat = selectChat(global, chatId);
   if (!chat) return false;
 

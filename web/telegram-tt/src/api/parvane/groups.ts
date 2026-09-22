@@ -21,6 +21,32 @@ import {
   type WireGroupInfo,
 } from './wire';
 
+export type InviteLinkRecord = { link: string; date: number };
+
+export type InviteErrorCode = 'invalid' | 'banned' | 'rateLimited' | 'failed';
+
+// Точные тексты отказа шарда messenger на group.join
+// (backend/shards/messenger/src/main.rs, обработчик group.join)
+export function mapJoinError(error?: string): InviteErrorCode {
+  if (error === 'ссылка недействительна') return 'invalid';
+  if (error === 'вы забанены в этой группе') return 'banned';
+  // Шард может отказать по лимиту запросов — у этого отказа свой понятный текст
+  if (error?.includes('rate_limited')) return 'rateLimited';
+  return 'failed';
+}
+
+function isInviteManager(role?: string) {
+  return role === 'owner' || role === 'admin';
+}
+
+// Ссылка-приглашение в форме, которую понимают и клик в сообщении, и вставка
+// адреса в браузер: `<origin><path>#+<токен>` (см. util/routing.ts)
+export function buildInviteLink(token: string) {
+  if (typeof window === 'undefined') return `#+${token}`;
+  const { origin, pathname } = window.location;
+  return `${origin}${pathname}#+${token}`;
+}
+
 type GroupDependencies = {
   getConnection: () => GatewayConnection | undefined;
   getE2e: () => E2eEngine | undefined;
@@ -30,10 +56,18 @@ type GroupDependencies = {
   sendUpdate: (update: ApiUpdate) => void;
   onGroupRegistered: (groupChatId: string) => void;
   log: (message: string) => void;
+  // Постоянная ссылка группы переживает перезагрузку: сервер не умеет отдать
+  // уже созданный токен и не умеет отзывать, новый токен на каждую сессию
+  // плодил бы неотзываемые ссылки
+  loadInviteLink?: (groupId: string) => InviteLinkRecord | undefined;
+  saveInviteLink?: (groupId: string, record: InviteLinkRecord) => void;
+  forgetInviteLink?: (groupId: string) => void;
 };
 
 export function createGroupController(deps: GroupDependencies) {
-  const inviteLinkByGroupId = new Map<string, string>();
+  const inviteLinkByGroupId = new Map<string, InviteLinkRecord>();
+  // Незавершённые запросы создания ссылки — по одному на группу
+  const inviteRequestByGroupId = new Map<string, Promise<InviteLinkRecord | undefined>>();
 
   function register(info: WireGroupInfo) {
     const store = deps.getStore();
@@ -225,6 +259,7 @@ export function createGroupController(deps: GroupDependencies) {
       token: deps.getToken(), group_id: groupId, member: store.self,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    forgetInviteLink(groupId);
     store.unregisterGroup(groupId);
     deps.sendUpdate({ '@type': 'updateChatLeave', id: chatId });
     return true;
@@ -240,6 +275,7 @@ export function createGroupController(deps: GroupDependencies) {
       token: deps.getToken(), group_id: groupId,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    forgetInviteLink(groupId);
     store.unregisterGroup(groupId);
     deps.sendUpdate({ '@type': 'updateChatLeave', id: chatId });
     return true;
@@ -262,19 +298,10 @@ export function createGroupController(deps: GroupDependencies) {
     if (!info) return undefined;
     register(info);
 
-    const activeMembers = info.members.filter(({ role }) => role !== 'banned');
-    activeMembers.forEach((member) => {
-      const user = store.buildApiUser(member.address);
-      deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
-    });
-    const members = activeMembers.map((member) => ({
-      userId: store.getIdForAddress(member.address),
-      isOwner: member.role === 'owner' ? true as const : undefined,
-      isAdmin: member.role === 'admin' ? true as const : undefined,
-    }));
+    const members = buildMembers(info.members.filter(({ role }) => role !== 'banned'));
     const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
     const selfRole = info.members.find(({ address: member }) => member === store.self)?.role;
-    const inviteLink = await ensureInviteLink(chat, address, selfRole);
+    const inviteLink = (await ensureInviteRecord(address, selfRole))?.link;
     return {
       fullInfo: {
         members,
@@ -288,16 +315,118 @@ export function createGroupController(deps: GroupDependencies) {
     };
   }
 
-  // Постоянная инвайт-ссылка группы для владельца/админа: шард создаёт новый
-  // токен на каждый запрос — кэшируем на сессию, чтобы не плодить строки
-  async function ensureInviteLink(chat: ApiChat, groupId: string, selfRole?: string) {
-    if (selfRole !== 'owner' && selfRole !== 'admin') return undefined;
+  // Участники группы для нативных экранов: пользователи отправляются апдейтом
+  function buildMembers(list: WireGroupInfo['members']) {
+    const store = deps.getStore();
+    list.forEach((member) => {
+      const user = store.buildApiUser(member.address);
+      deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    });
+    return list.map((member) => ({
+      userId: store.getIdForAddress(member.address),
+      isOwner: member.role === 'owner' ? true as const : undefined,
+      isAdmin: member.role === 'admin' ? true as const : undefined,
+    }));
+  }
+
+  // Список участников (канал/поиск/админы/заблокированные) из group.info:
+  // отдельной пагинации на сервере нет — фильтруем состав целиком
+  async function fetchMembers({
+    chat, memberFilter = 'recent', offset = 0, query,
+  }: {
+    chat: ApiChat;
+    memberFilter?: 'recent' | 'kicked' | 'admin' | 'search';
+    offset?: number;
+    query?: string;
+  }) {
+    const store = deps.getStore();
+    const groupId = store.getAddressForId(chat.id);
+    if (!groupId) return undefined;
+    const info = await refresh(groupId).catch(() => undefined) || store.getGroupInfo(groupId);
+    if (!info) return undefined;
+    const needle = (query || '').trim().toLowerCase();
+    const selected = info.members.filter(({ address, role }) => {
+      switch (memberFilter) {
+        case 'kicked':
+          return role === 'banned';
+        case 'admin':
+          return role === 'owner' || role === 'admin';
+        case 'search':
+          return role !== 'banned' && (!needle || address.toLowerCase().includes(needle)
+            || store.getDisplayName(address).toLowerCase().includes(needle));
+        default:
+          return role !== 'banned';
+      }
+    });
+    return { members: buildMembers(selected).slice(offset), userStatusesById: {} };
+  }
+
+  // Постоянная инвайт-ссылка группы для владельца/админа. Порядок: память
+  // сессии → сохранённая на устройстве → group.invite.create (шард создаёт
+  // новый неотзываемый токен на каждый запрос). Ошибка сети не должна ронять
+  // fetchFullChat — ссылки просто нет
+  async function ensureInviteRecord(groupId: string, selfRole?: string) {
+    if (!isInviteManager(selfRole)) return undefined;
     const cached = inviteLinkByGroupId.get(groupId);
     if (cached) return cached;
-    const exported = await exportChatInvite({ peer: chat });
-    if (!exported) return undefined;
-    inviteLinkByGroupId.set(groupId, exported.link);
-    return exported.link;
+    const persisted = deps.loadInviteLink?.(groupId);
+    if (persisted) {
+      inviteLinkByGroupId.set(groupId, persisted);
+      return persisted;
+    }
+    // Кэш пишется только ПОСЛЕ await, поэтому без этого замка конкурентные
+    // fetchFullChat и fetchExportedChatInvites при первом открытии группы
+    // создавали на сервере два вечных токена (SC-002)
+    const inFlight = inviteRequestByGroupId.get(groupId);
+    if (inFlight) return inFlight;
+    const request = createInviteRecord(groupId).finally(() => {
+      inviteRequestByGroupId.delete(groupId);
+    });
+    inviteRequestByGroupId.set(groupId, request);
+    return request;
+  }
+
+  async function createInviteRecord(groupId: string) {
+    const connection = deps.getConnection();
+    if (!connection) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_GROUP_INVITE_CREATE, JSON.stringify({
+        token: deps.getToken(), group_id: groupId,
+      }));
+      const response = JSON.parse(raw) as { ok: boolean; invite?: string };
+      if (!response.ok || !response.invite) return undefined;
+      // Ссылку выдаём в той же форме, которую понимает адресная строка
+      // (`<origin>/#+<токен>`, util/routing.ts): прежняя `parvane.invite/<токен>`
+      // работала только по клику внутри клиента, а вставка её в адрес браузера
+      // никуда не вела — домена нет (FR-012)
+      const record = { link: buildInviteLink(response.invite), date: Math.floor(Date.now() / 1000) };
+      inviteLinkByGroupId.set(groupId, record);
+      deps.saveInviteLink?.(groupId, record);
+      return record;
+    } catch (error) {
+      deps.log(`инвайт-ссылка ${groupId} не получена: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  }
+
+  function forgetInviteLink(groupId: string) {
+    inviteLinkByGroupId.delete(groupId);
+    deps.forgetInviteLink?.(groupId);
+  }
+
+  async function getSelfRole(groupId: string) {
+    const store = deps.getStore();
+    const info = store.getGroupInfo(groupId) || await refresh(groupId).catch(() => undefined);
+    return info?.members.find(({ address }) => address === store.self)?.role;
+  }
+
+  function buildExportedInvite(record: InviteLinkRecord) {
+    return {
+      link: record.link,
+      date: record.date,
+      isPermanent: true as const,
+      adminId: deps.selfId(),
+    };
   }
 
   async function addChatMembers(chat: ApiChat, users: ApiUser[]) {
@@ -370,38 +499,76 @@ export function createGroupController(deps: GroupDependencies) {
     return true;
   }
 
+  // tt зовёт при «создать ссылку»: у Parvane одна постоянная ссылка на группу
   async function exportChatInvite({ peer }: { peer: ApiChat }) {
-    const connection = deps.getConnection();
     const groupId = deps.getStore().getAddressForId(peer.id);
-    if (!connection || !groupId) return undefined;
-    const raw = await connection.request(TOPIC_GROUP_INVITE_CREATE, JSON.stringify({
-      token: deps.getToken(), group_id: groupId,
-    }));
-    const response = JSON.parse(raw) as { ok: boolean; invite?: string };
-    if (!response.ok || !response.invite) return undefined;
-    return {
-      link: `https://parvane.invite/${response.invite}`,
-      date: Math.floor(Date.now() / 1000),
-      isPermanent: true,
-      adminId: deps.selfId(),
-    };
+    if (!groupId) return undefined;
+    const record = await ensureInviteRecord(groupId, await getSelfRole(groupId));
+    return record ? buildExportedInvite(record) : undefined;
   }
 
-  // Формат ответа — как у апстрим-экшена acceptChatInvite: { type: 'ok', chat }
+  // Экран «Пригласительные ссылки»: одна постоянная ссылка, отозванных нет
+  // (сервер не умеет отзыв). undefined оставлял экран в вечном «Loading»
+  async function fetchExportedChatInvites({ peer, isRevoked }: {
+    peer: ApiChat;
+    admin?: unknown;
+    isRevoked?: boolean;
+    limit?: number;
+  }) {
+    if (isRevoked) return { invites: [] };
+    const groupId = deps.getStore().getAddressForId(peer.id);
+    if (!groupId) return { invites: [] };
+    const selfRole = await getSelfRole(groupId);
+    const record = await ensureInviteRecord(groupId, selfRole);
+    // Молчаливый отказ не допускается (FR-013): владелец/админ, открывший
+    // экран, обязан увидеть либо ссылку, либо ошибку
+    if (!record && isInviteManager(selfRole)) reportInviteError('ссылка не получена', 'linkFailed');
+    return { invites: record ? [buildExportedInvite(record)] : [] };
+  }
+
+  function reportInviteError(error?: string, code?: string) {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('parvane-invite-error', {
+      detail: { code: code || mapJoinError(error) },
+    }));
+  }
+
+  // Формат ответа — как у апстрим-экшена acceptChatInvite: { type: 'ok', chat }.
+  // Отказ (бан, недействительная ссылка, сеть) — событие для тоста, иначе
+  // вступление молча ничего не делало
   async function importChatInvite({ hash }: { hash: string }) {
     const connection = deps.getConnection();
-    if (!connection) return undefined;
-    const raw = await connection.request(
-      TOPIC_GROUP_JOIN,
-      JSON.stringify({ token: deps.getToken(), invite: hash }),
-    );
-    const response = JSON.parse(raw) as { ok: boolean; group_id?: string; name?: string };
-    if (!response.ok || !response.group_id) return undefined;
-    const info = await refresh(response.group_id);
-    if (!info) return undefined;
-    const groupChat = deps.getStore().buildApiChatForGroup(info);
-    deps.sendUpdate({ '@type': 'updateChat', id: groupChat.id, chat: groupChat });
-    return { type: 'ok' as const, chat: groupChat };
+    if (!connection) {
+      reportInviteError();
+      return undefined;
+    }
+    try {
+      const raw = await connection.request(
+        TOPIC_GROUP_JOIN,
+        JSON.stringify({ token: deps.getToken(), invite: hash }),
+      );
+      const response = JSON.parse(raw) as { ok: boolean; group_id?: string; name?: string; error?: string };
+      if (!response.ok || !response.group_id) {
+        reportInviteError(response.error);
+        return undefined;
+      }
+      const info = await refresh(response.group_id);
+      if (!info) {
+        reportInviteError();
+        return undefined;
+      }
+      const groupChat = deps.getStore().buildApiChatForGroup(info);
+      deps.sendUpdate({ '@type': 'updateChat', id: groupChat.id, chat: groupChat });
+      return { type: 'ok' as const, chat: groupChat };
+    } catch (error) {
+      // Лимит запросов приходит именно сюда: gateway отклоняет промис, а не
+      // кладёт причину в тело ответа. Без передачи текста отказ обобщался до
+      // `failed`, и ветка `rateLimited` была недостижима
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(`вступление по ссылке не удалось: ${message}`);
+      reportInviteError(message);
+      return undefined;
+    }
   }
 
   function reset() {
@@ -416,7 +583,9 @@ export function createGroupController(deps: GroupDependencies) {
     deleteChatMember,
     deleteGroup,
     exportChatInvite,
+    fetchExportedChatInvites,
     fetchFullChat,
+    fetchMembers,
     importChatInvite,
     leaveGroup,
     migrateChat,

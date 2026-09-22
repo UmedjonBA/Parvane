@@ -65,8 +65,14 @@ try {
   await firstCustomEmoji.click();
   await aliceSession.page.keyboard.press('Escape');
   await aliceSession.page.locator('#editable-message-text').press('Enter');
-  await bobSession.page.locator('.Transition_slide-active > .MessageList .Message .custom-emoji')
+  // Эмодзи именно отрисован: документ резолвлен (data-alt) и картинка из blob
+  // загружена — голый .custom-emoji рендерится и заглушкой
+  await bobSession.page.locator('.Transition_slide-active > .MessageList .Message .custom-emoji[data-document-id][data-alt]')
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.waitForFunction(() => {
+    const images = document.querySelectorAll('.Transition_slide-active > .MessageList .Message .custom-emoji[data-alt] img');
+    return Array.from(images).some((img) => img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0);
+  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
 
   // Reload Bob: стикер и GIF переживают повторный вход
   await relogin(bobSession.page, PASSWORD);

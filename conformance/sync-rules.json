@@ -4,11 +4,31 @@
       "id": "SYNC-1",
       "title": "Дисковый курсор двигается только по применённому",
       "cases": [
-        { "name": "чистый проход", "applied": true, "e2eReady": true, "persistCursor": true },
-        { "name": "нерасшифрованное", "applied": false, "e2eReady": true, "persistCursor": false },
-        { "name": "E2E не поднялся", "applied": false, "e2eReady": false, "persistCursor": false },
-        { "name": "умышленный отказ (подмена отправителя)", "applied": false, "e2eReady": true,
-          "deliberateReject": true, "persistCursor": true }
+        {
+          "name": "чистый проход",
+          "applied": true,
+          "e2eReady": true,
+          "persistCursor": true
+        },
+        {
+          "name": "нерасшифрованное",
+          "applied": false,
+          "e2eReady": true,
+          "persistCursor": false
+        },
+        {
+          "name": "E2E не поднялся",
+          "applied": false,
+          "e2eReady": false,
+          "persistCursor": false
+        },
+        {
+          "name": "умышленный отказ (подмена отправителя)",
+          "applied": false,
+          "e2eReady": true,
+          "deliberateReject": true,
+          "persistCursor": true
+        }
       ]
     },
     {
@@ -25,9 +45,24 @@
       "id": "READ-1",
       "title": "Прочитанное журналируется локально и подтверждается",
       "cases": [
-        { "name": "серверный флаг есть", "serverRead": true, "localRead": false, "isRead": true },
-        { "name": "только локальный журнал", "serverRead": false, "localRead": true, "isRead": true },
-        { "name": "ни того, ни другого", "serverRead": false, "localRead": false, "isRead": false }
+        {
+          "name": "серверный флаг есть",
+          "serverRead": true,
+          "localRead": false,
+          "isRead": true
+        },
+        {
+          "name": "только локальный журнал",
+          "serverRead": false,
+          "localRead": true,
+          "isRead": true
+        },
+        {
+          "name": "ни того, ни другого",
+          "serverRead": false,
+          "localRead": false,
+          "isRead": false
+        }
       ]
     },
     {
@@ -51,6 +86,89 @@
         ],
         "android": "n/a: карт нет"
       }
+    },
+    {
+      "id": "PACK-1",
+      "title": "Архив пака — под набор получателей",
+      "cases": [
+        {
+          "name": "тот же получатель",
+          "cached": [
+            "bob"
+          ],
+          "next": [
+            "bob"
+          ],
+          "reuse": true
+        },
+        {
+          "name": "другой получатель",
+          "cached": [
+            "bob"
+          ],
+          "next": [
+            "carol"
+          ],
+          "reuse": false
+        },
+        {
+          "name": "новый участник группы",
+          "cached": [
+            "bob",
+            "carol"
+          ],
+          "next": [
+            "bob",
+            "carol",
+            "dave"
+          ],
+          "reuse": false
+        },
+        {
+          "name": "подмножество",
+          "cached": [
+            "bob",
+            "carol"
+          ],
+          "next": [
+            "bob"
+          ],
+          "reuse": true
+        }
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/messages.ts",
+        "desktop": "parvane_client.cpp (FindUploadedPackRef/RememberUploadedPackRef — кэш по набору получателей, 16 сен 2026); тест desktop/verify_conformance_packs.sh",
+        "android": "n/a: паков нет"
+      }
+    },
+    {
+      "id": "EMOJI-1",
+      "title": "docId кастом-эмодзи — от имени из ссылки",
+      "cases": [
+        {
+          "name": "латиница",
+          "packName": "PvEmoji123",
+          "file": "01-1f600.png"
+        },
+        {
+          "name": "нормализуемое имя",
+          "packName": "Pv.Emoji!123",
+          "file": "01-1f600.png"
+        },
+        {
+          "name": "кириллица",
+          "packName": "ТестЭмодзи",
+          "file": "01-1f600.png"
+        }
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/stickerPacks.ts",
+        "desktop": "parvane_client.cpp (сырое имя пака в .pvname, ReadRawPackName в LoadLocalCustomEmoji, 16 сен 2026); тест desktop/verify_conformance_packs.sh",
+        "android": "n/a: кастом-эмодзи нет"
+      },
+      "offsetBasis": "1469598103934665603",
+      "prime": "1099511628211"
     }
   ]
 }

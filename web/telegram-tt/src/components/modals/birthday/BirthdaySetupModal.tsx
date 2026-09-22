@@ -21,6 +21,8 @@ import Modal from '../../ui/Modal';
 
 import styles from './BirthdaySetupModal.module.scss';
 
+const IS_BIRTHDAY_PRIVACY_SUPPORTED = false as boolean;
+
 export type OwnProps = {
   modal: TabState['birthdaySetupModal'];
 };
@@ -205,8 +207,9 @@ const BirthdaySetupModal = ({ modal }: OwnProps) => {
         />
       </div>
       <div className={styles.footer}>
-        <span className={styles.privacySuggestion}>
-          {lang('BirthdayPrivacySuggestion', {
+        {/* Parvane: серверной приватности даты рождения нет — ссылка скрыта */}
+        <span className={styles.privacySuggestion} hidden={!IS_BIRTHDAY_PRIVACY_SUPPORTED}>
+          {IS_BIRTHDAY_PRIVACY_SUPPORTED && lang('BirthdayPrivacySuggestion', {
             link: (
               <Link isPrimary onClick={handlePrivacyClick}>
                 {lang('BirthdayPrivacySuggestionLink', undefined,

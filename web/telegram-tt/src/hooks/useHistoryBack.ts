@@ -4,6 +4,7 @@ import { getActions } from '../global';
 import { IS_TEST } from '../config';
 import { requestMeasure } from '../lib/fasterdom/fasterdom';
 import { IS_IOS } from '../util/browser/windowEnvironment';
+import { matchInviteHash, rememberPendingInvite } from '../util/routing';
 import useEffectOnce from './useEffectOnce';
 import useLastCallback from './useLastCallback';
 import useSyncEffect from './useSyncEffect';
@@ -172,6 +173,14 @@ function cleanupTrashedState() {
 }
 
 window.addEventListener('popstate', ({ state }: PopStateEvent) => {
+  // Parvane: `#+<токен>` вставлен в адрес открытой вкладки — ловим до того,
+  // как очистка истории ниже сотрёт хэш (hashchange приходит уже с пустым)
+  const inviteToken = matchInviteHash(window.location.hash);
+  if (inviteToken) {
+    rememberPendingInvite(window.location.hash);
+    window.dispatchEvent(new CustomEvent('parvane-invite-hash', { detail: { token: inviteToken } }));
+  }
+
   if (!isHistoryInitialized) {
     return;
   }

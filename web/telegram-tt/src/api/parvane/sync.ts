@@ -366,14 +366,41 @@ export function createSyncController(deps: SyncDependencies) {
       const store = deps.getStore();
       users.forEach((userInfo) => {
         store.setDisplayName(userInfo.username, userInfo.display_name || userInfo.username);
-        store.setProfile(userInfo.username, {
+        const previousProfile = store.getProfile(userInfo.username);
+        const profile = {
           bio: userInfo.bio,
           birthday: userInfo.birthday,
           // отрицательный name_color = «сброшен» (десктоп шлёт -1 при сбросе)
           nameColor: (userInfo.name_color ?? -1) >= 0 ? userInfo.name_color : undefined,
           personalChannel: userInfo.personal_channel,
           phone: userInfo.phone,
-        });
+        };
+        store.setProfile(userInfo.username, profile);
+        // Профиль собеседника изменился (bio, дата рождения, личный канал, цвет,
+        // телефон): tt не перечитывает уже загруженный fullInfo — шлём апдейты,
+        // иначе открытый профиль показывал старое до перезагрузки. Профили в
+        // снимок кэша не входят: после восстановления устройства «предыдущего»
+        // нет, и без сравнения с пустым профилем bio, изменённое за время
+        // отсутствия, не показывалось вовсе (fetchFullUser отдаёт store ДО
+        // резолва). JSON.stringify опускает undefined — пустой профиль равен {}
+        if (JSON.stringify(previousProfile ?? {}) !== JSON.stringify(profile)) {
+          const user = store.buildApiUser(userInfo.username);
+          deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
+          const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(profile.birthday || '');
+          deps.sendUpdate({
+            '@type': 'updateUserFullInfo',
+            id: user.id,
+            fullInfo: {
+              bio: profile.bio || undefined,
+              birthday: iso
+                ? { year: Number(iso[1]) || undefined, month: Number(iso[2]), day: Number(iso[3]) }
+                : undefined,
+              personalChannelId: profile.personalChannel
+                ? store.getIdForAddress(profile.personalChannel, 'group')
+                : undefined,
+            },
+          });
+        }
         const previousAvatar = store.getAvatar(userInfo.username);
         store.setAvatar(userInfo.username, userInfo.avatar);
         if (userInfo.avatar !== previousAvatar && userInfo.username !== store.self) {
@@ -691,7 +718,16 @@ export function createSyncController(deps: SyncDependencies) {
     if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
       sawUndecryptable = true;
       undecryptableUuids.add(stored.id);
-      deps.log(`сообщение ${stored.id} не расшифровано — пропущено`);
+      deps.log(`сообщение ${stored.id} не расшифровано — показываем заглушку`);
+      // Показываем видимую заглушку вместо пустоты: попытки расшифровать
+      // продолжаются (курсор придерживается), и удачный проход заменит её
+      // настоящим содержимым — `putMessage` кладёт по тому же uuid. В историю
+      // заглушку НЕ пишем, чтобы она не пережила успешную расшифровку
+      const placeholder = store.buildApiMessage(stored);
+      store.putMessage(placeholder);
+      deps.sendUpdate({
+        '@type': 'newMessage', chatId: placeholder.chatId, id: placeholder.id, message: placeholder,
+      });
       if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
       return;
     }

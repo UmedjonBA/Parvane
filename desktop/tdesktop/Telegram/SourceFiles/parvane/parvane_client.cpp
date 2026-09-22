@@ -252,7 +252,49 @@ struct PackDirInfo {
 };
 QHash<quint64, PackDirInfo> g_stickerPackDirs; // setId → пак (main)
 QHash<qint64, QString> g_packRefByDocId;       // docId → pack_ref JSON (main)
-QHash<quint64, QString> g_packRefUploaded;     // setId → pack_ref (g_sessionMutex)
+// conformance PACK-1: ссылка на архив пака выдаётся ПОД НАБОР ПОЛУЧАТЕЛЕЙ
+// (в cloud доступ к файлу получают только они) — переиспользуем ссылку, только
+// если новый набор входит в тот, под который архив загружен.
+struct UploadedPackRef {
+	QSet<QString> recipients;
+	QString ref;
+};
+QHash<quint64, QVector<UploadedPackRef>> g_packRefUploaded; // setId → ссылки (g_sessionMutex)
+constexpr auto kPackRefVariantsLimit = 16;
+
+[[nodiscard]] QSet<QString> RecipientsSet(
+		const std::vector<std::string> &recipients) {
+	auto out = QSet<QString>();
+	for (const auto &address : recipients) {
+		out.insert(QString::fromStdString(address));
+	}
+	return out;
+}
+
+// Вызывать под g_sessionMutex
+[[nodiscard]] QString FindUploadedPackRef(
+		quint64 setId,
+		const QSet<QString> &recipients) {
+	for (const auto &entry : g_packRefUploaded.value(setId)) {
+		// новый набор ⊆ того, под который загружен архив
+		if ((recipients - entry.recipients).isEmpty()) {
+			return entry.ref;
+		}
+	}
+	return QString();
+}
+
+// Вызывать под g_sessionMutex
+void RememberUploadedPackRef(
+		quint64 setId,
+		const QSet<QString> &recipients,
+		const QString &ref) {
+	auto &variants = g_packRefUploaded[setId];
+	variants.push_back(UploadedPackRef{ recipients, ref });
+	while (variants.size() > kPackRefVariantsLimit) {
+		variants.removeFirst();
+	}
+}
 QSet<QString> g_packInstallBusy;               // file_id идущих установок (main)
 // Кастом-эмодзи: docId детерминирован от (имя пака|файл) → резолвится у
 // получателя после материализации того же пака. g_emojiDocToSet — для поиска
@@ -3222,6 +3264,32 @@ namespace {
 	return QDir::homePath() + u"/.local/share/ParvaneStickers"_q;
 }
 
+// Сырое имя пака хранится в каталоге файлом .pvname: имя каталога
+// нормализовано, а docId эмодзи считается от имени из ссылки (EMOJI-1).
+constexpr auto kRawPackNameFile = ".pvname";
+
+void WriteRawPackName(const QString &dir, const QString &rawName) {
+	if (rawName.isEmpty() || dir.isEmpty()) {
+		return;
+	}
+	auto file = QFile(dir + u"/"_q + QString::fromLatin1(kRawPackNameFile));
+	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		file.write(rawName.toUtf8());
+	}
+}
+
+// Сырое имя пака, если его сохранили при материализации; иначе имя каталога
+[[nodiscard]] QString ReadRawPackName(
+		const QString &dir,
+		const QString &fallback) {
+	auto file = QFile(dir + u"/"_q + QString::fromLatin1(kRawPackNameFile));
+	if (!file.open(QIODevice::ReadOnly)) {
+		return fallback;
+	}
+	const auto raw = QString::fromUtf8(file.read(256)).trimmed();
+	return raw.isEmpty() ? fallback : raw;
+}
+
 // Имя пака → безопасное имя каталога (без путей/спецсимволов).
 [[nodiscard]] QString SanitizePackName(const QString &name) {
 	auto out = QString();
@@ -3438,10 +3506,11 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 			}
 			// pack_ref: архив набора в cloud (кэш на сессию по setId).
 			if (packSetId) {
+				const auto packRecipients = RecipientsSet(cloudRecipients(to));
 				auto refStr = QString();
 				{
 					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					refStr = g_packRefUploaded.value(packSetId);
+					refStr = FindUploadedPackRef(packSetId, packRecipients);
 				}
 				if (refStr.isEmpty()) {
 					const auto archive = BuildPackArchive(packInfo.dir);
@@ -3461,7 +3530,8 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 								{ "nonce", penc.nonceB64 }};
 							refStr = QString::fromStdString(ref.dump());
 							std::lock_guard<std::mutex> lk(g_sessionMutex);
-							g_packRefUploaded.insert(packSetId, refStr);
+							RememberUploadedPackRef(
+								packSetId, packRecipients, refStr);
 							LOG(("Parvane: пак «%1» загружен в cloud (%2 байт)")
 								.arg(packInfo.name)
 								.arg(qint64(archive.size())));
@@ -3636,10 +3706,14 @@ void LoadLocalCustomEmoji(not_null<Main::Session*> session) {
 	auto loaded = 0;
 	for (const auto &packName : rootDir.entryList(
 			QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
-		if (FeedCustomEmojiSet(session, packName,
-				rootDir.filePath(packName))) {
+		const auto dir = rootDir.filePath(packName);
+		// EMOJI-1: набор строится от сырого имени из ссылки, каталог может
+		// называться нормализованно
+		const auto rawName = ReadRawPackName(dir, packName);
+		if (FeedCustomEmojiSet(session, rawName, dir)) {
 			++loaded;
-			LOG(("Parvane: эмодзи-пак «%1» загружен").arg(packName));
+			LOG(("Parvane: эмодзи-пак «%1» загружен (каталог «%2»)")
+				.arg(rawName, packName));
 		}
 	}
 	if (loaded > 0) {
@@ -3705,6 +3779,13 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 						auto dec = parvane::blobcrypt::decrypt(d.bytes, key, nonce);
 						if (dec) {
 							written = UnpackPackArchive(*dec, dest);
+							if (written > 0) {
+								// conformance EMOJI-1: docId считается от ИМЕНИ
+								// ИЗ ССЫЛКИ, а каталог назван нормализованным
+								// именем — сохраняем сырое рядом, иначе после
+								// рестарта docId разъедутся с отправителем.
+								WriteRawPackName(dest, rawName);
+							}
 						}
 					}
 				} catch (const std::exception &) {
@@ -3764,12 +3845,13 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 		return out;
 	}
 	parvane::CloudClient cloud(*t);
+	const auto packRecipients = RecipientsSet(recipients);
 	for (const auto setId : setIds) {
 		QString refStr;
 		PackDirInfo info;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
-			refStr = g_packRefUploaded.value(setId);
+			refStr = FindUploadedPackRef(setId, packRecipients);
 			info = g_emojiPackDirs.value(setId);
 		}
 		if (refStr.isEmpty() && !info.dir.isEmpty()) {
@@ -3789,7 +3871,8 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 							{ "nonce", penc.nonceB64 }};
 						refStr = QString::fromStdString(ref.dump());
 						std::lock_guard<std::mutex> lk(g_sessionMutex);
-						g_packRefUploaded.insert(setId, refStr);
+						RememberUploadedPackRef(
+							setId, packRecipients, refStr);
 					} catch (const std::exception &) {
 					}
 				}
@@ -6116,6 +6199,28 @@ void injectOnMain(
 		LOG(("Parvane: %1 msg %2 (%3): %4")
 			.arg(out ? u"своё"_q : u"входящее"_q).arg(uuid)
 			.arg(peerAddress).arg(text));
+		// Диагностика кросс-сценария web→desktop: сообщение принято — это ещё
+		// не значит, что кастом-эмодзи отрисовано. Эмодзи рендерится, только
+		// если его документ скормлен из локального пака (g_emojiDocToSet);
+		// иначе оно деградирует в запасной символ
+		for (const auto &e : entitiesFromJson(
+				parvane::contentEntities(sm.content))) {
+			if (e.type() != EntityType::CustomEmoji) {
+				continue;
+			}
+			auto ok = false;
+			const auto docId = qint64(e.data().toLongLong(&ok));
+			const auto it = ok
+				? g_emojiDocToSet.constFind(docId)
+				: g_emojiDocToSet.constEnd();
+			if (it != g_emojiDocToSet.constEnd()) {
+				LOG(("Parvane: кастом-эмодзи %1 резолвится (набор %2)")
+					.arg(docId).arg(it.value()));
+			} else {
+				LOG(("Parvane: кастом-эмодзи %1 НЕ резолвится — пака нет локально")
+					.arg(e.data()));
+			}
+		}
 		if (item) {
 			applyReactions(item, sm.reactions);
 			if (sm.pinned) {
@@ -9021,41 +9126,50 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autolocation для e2e: PARVANE_AUTOLOCATION=peer@server:lat,lon —
 		// отправляет геолокацию тем же путём, что меню вложений (MirrorLocationIfOurs).
-		// Debug-autoemoji для e2e кастом-эмодзи: PARVANE_AUTOEMOJI=peer:pack:file —
+		// Debug-autoemoji для e2e кастом-эмодзи: PARVANE_AUTOEMOJI=peer[,peer2]:pack:file —
 		// отправляет текст с одним custom_emoji-entity (как выбор из панели):
 		// грузит локальный пак, шлёт entity(docId)+emoji_packs получателю.
+		// Несколько адресатов через запятую — для conformance PACK-1: архив
+		// пака грузится в cloud ОТДЕЛЬНО под каждый набор получателей.
 		if (const char *ev = std::getenv("PARVANE_AUTOEMOJI"); ev && *ev) {
 			const auto espec = QString::fromUtf8(ev);
 			const auto p1 = espec.indexOf(':');
 			const auto p2 = espec.indexOf(':', p1 + 1);
 			if (p1 > 0 && p2 > p1) {
-				const auto eaddr = espec.left(p1);
+				const auto eaddrs = espec.left(p1).split(
+					QChar(','), Qt::SkipEmptyParts);
 				const auto pack = espec.mid(p1 + 1, p2 - p1 - 1);
 				const auto file = espec.mid(p2 + 1);
-				RegisterPeer(eaddr);
-				const auto eu = session->data().user(
-					UserId(BareId(IdForAddress(eaddr))));
-				// t+5с: после LoadLocalCustomEmoji (t+3с), чтобы g_emojiDocToSet
-				// знал набор и BuildEmojiPacks приложил pack_ref.
-				base::call_delayed(5 * crl::time(1000), [eu, pack, file] {
-					const auto docId = EmojiDocId(pack, file);
-					auto alt = QString::fromUtf8("\xF0\x9F\x99\x82");
-					const auto base = QFileInfo(file).completeBaseName();
-					if (const auto d = base.lastIndexOf(u'-'); d >= 0) {
-						auto ok = false;
-						const auto code = base.mid(d + 1).toUInt(&ok, 16);
-						if (ok && code >= 0x80 && code <= 0x10FFFF) {
-							const char32_t c = code; alt = QString::fromUcs4(&c, 1);
+				auto delaySecs = 5;
+				for (const auto &eaddr : eaddrs) {
+					RegisterPeer(eaddr);
+					const auto eu = session->data().user(
+						UserId(BareId(IdForAddress(eaddr))));
+					// t+5с: после LoadLocalCustomEmoji (t+3с), чтобы
+					// g_emojiDocToSet знал набор и BuildEmojiPacks приложил
+					// pack_ref; следующему адресату — ещё +5 с, архив под
+					// предыдущий набор получателей успевает загрузиться
+					base::call_delayed(delaySecs * crl::time(1000), [eu, pack, file] {
+						const auto docId = EmojiDocId(pack, file);
+						auto alt = QString::fromUtf8("\xF0\x9F\x99\x82");
+						const auto base = QFileInfo(file).completeBaseName();
+						if (const auto d = base.lastIndexOf(u'-'); d >= 0) {
+							auto ok = false;
+							const auto code = base.mid(d + 1).toUInt(&ok, 16);
+							if (ok && code >= 0x80 && code <= 0x10FFFF) {
+								const char32_t c = code; alt = QString::fromUcs4(&c, 1);
+							}
 						}
-					}
-					auto entities = EntitiesInText();
-					entities.push_back(EntityInText(
-						EntityType::CustomEmoji, 0, int(alt.size()),
-						QString::number(docId)));
-					MirrorOutgoing(eu, TextWithEntities{ alt, entities });
-					LOG(("Parvane: autoemoji → %1 (docId=%2)")
-						.arg(eu ? u"peer"_q : QString()).arg(docId));
-				});
+						auto entities = EntitiesInText();
+						entities.push_back(EntityInText(
+							EntityType::CustomEmoji, 0, int(alt.size()),
+							QString::number(docId)));
+						MirrorOutgoing(eu, TextWithEntities{ alt, entities });
+						LOG(("Parvane: autoemoji → %1 (docId=%2)")
+							.arg(eu ? u"peer"_q : QString()).arg(docId));
+					});
+					delaySecs += 5;
+				}
 			}
 		}
 		// Debug-autoschedule для e2e: PARVANE_AUTOSCHEDULE=peer@server:secs:текст —
