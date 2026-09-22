@@ -167,7 +167,10 @@ addActionHandler('checkUsername', async (global, actions, payload): Promise<void
   }, tabId);
   setGlobal(global);
 
-  const { result, error } = (await callApi('checkUsername', username));
+  // Parvane: username не редактируется — метода нет, ответ undefined
+  const response = await callApi('checkUsername', username);
+  if (!response) return;
+  const { result, error } = response;
 
   global = getGlobal();
   tabState = selectTabState(global, tabId);

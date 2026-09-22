@@ -7,6 +7,7 @@ import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/type
 import type {
   ApiAppConfig,
   ApiAvailableReaction,
+  ApiBirthday,
   ApiChat, ApiDraft, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
@@ -58,17 +59,21 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
-import { clearSecureCredential, loadSecureCredential, saveSecureCredential } from './secureStorage';
+import {
+  clearSecureCredential, loadSecureCredential, saveSecureCredential, SecureE2eStorage,
+} from './secureStorage';
 import {
   buildApiCustomEmojiSetFromPack,
   buildApiStickerSetFromPack,
   findInstalledPackBySetId,
+  getAliasEmojiSticker,
+  getEmojiPackNames,
   getEmojiPackRawName,
   getPackFileMime,
+  getPackSetId,
   getPendingFiles,
   getReceivedEmojiPackSetIds,
   getReceivedPackRef,
-  getSetIdForPackName,
   isCustomPackSetId,
   isEmojiPackSetId,
   loadInstalledPacks,
@@ -80,7 +85,9 @@ import {
   saveInstalledPack,
   setPendingFiles,
 } from './stickerPacks';
-import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getStickerBlobMime } from './stickers';
+import {
+  buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getBuiltinLegacyEmojiIds, getStickerBlobMime,
+} from './stickers';
 import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
 import { buildBuiltinWallpapers } from './wallpapers';
@@ -103,6 +110,8 @@ import {
 } from './wire';
 
 const LOGIN_HASH_PREFIX = '#parvane=';
+// Свой фон чата — в шифрованном хранилище, а не открытым блобом в Cache Storage
+const BACKGROUND_RECORD_PREFIX = 'background:';
 const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
 const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
   '👍', '❤️', '🔥', '😂', '👏', '🎉', '🤔',
@@ -269,6 +278,14 @@ const groupController = createGroupController({
   sendUpdate,
   onGroupRegistered: (groupChatId) => subscribeGroupTyping(groupChatId),
   log: logDebug,
+  loadInviteLink: (groupId) => localState.loadInviteLinks()[groupId],
+  saveInviteLink: (groupId, record) => {
+    localState.saveInviteLinks({ ...localState.loadInviteLinks(), [groupId]: record });
+  },
+  forgetInviteLink: (groupId) => {
+    const { [groupId]: _removed, ...rest } = localState.loadInviteLinks();
+    localState.saveInviteLinks(rest);
+  },
 });
 
 // Кросс-таб синхронизация черновиков: другая вкладка сохранила/очистила
@@ -322,6 +339,8 @@ messageController = createMessageController({
     draftsChannel?.postMessage({ address, draft: undefined });
   },
   log: logDebug,
+  resolveCustomPack: (setId) => resolveCustomPack(setId),
+  primeCustomEmoji: (docIds) => methods.fetchCustomEmoji({ documentId: docIds }),
 });
 
 const connectionController = createConnectionController({
@@ -548,7 +567,9 @@ function registerPackBlobs(blobs: Map<string, { blob: Blob; mime: string }>) {
 // Стикер-пак или эмодзи-пак (по реестру emoji_packs / флагу isEmoji)
 function buildCustomSet(setId: string, pack: StoredPack, installedDate?: number) {
   if (isEmojiPackSetId(setId) || pack.isEmoji) {
-    const rawName = getEmojiPackRawName(setId) || pack.name;
+    // EMOJI-1: docId — от сохранённого сырого имени (переживает перезагрузку),
+    // затем от имени из ссылок этой сессии
+    const rawName = pack.rawName || getEmojiPackRawName(setId) || pack.name;
     return buildApiCustomEmojiSetFromPack(pack, rawName, setId, installedDate);
   }
   return buildApiStickerSetFromPack(pack, installedDate);
@@ -572,7 +593,18 @@ async function resolveCustomPack(setId: string): Promise<{ pack: StoredPack; isI
   if (!media) return undefined;
   const files = parsePvpkArchive(new Uint8Array(await media.blob.arrayBuffer()));
   if (!files) return undefined;
-  const pack: StoredPack = { name: ref.name, files };
+  const rawName = getEmojiPackRawName(setId);
+  const pack: StoredPack = {
+    // Нормализованное имя: setId установленного пака считается отсюда
+    // (`findInstalledPackBySetId`), а входящие ссылки регистрируются под
+    // setId от нормализованного имени. С сырым именем эти два setId
+    // расходились, и уже установленный пак скачивался из cloud заново.
+    // Сырое имя для docId живёт отдельно, в rawName
+    name: sanitizePackName(ref.name || 'Pack'),
+    files,
+    rawName,
+    aliases: rawName ? getEmojiPackNames(setId).filter((name) => name !== rawName) : undefined,
+  };
   setPendingFiles(setId, pack);
   return { pack, isInstalled: false };
 }
@@ -790,6 +822,42 @@ function addContactAddress(address: string) {
   persistContacts();
   const user = store.buildApiUser(address);
   sendUpdate({ '@type': 'updateUser', id: user.id, user });
+}
+
+// identity.user.setname применяет поля профиля ЦЕЛИКОМ или не применяет ничего:
+// пустое либо длиннее 64 БАЙТ display_name и протухший токен отклоняют весь
+// вызов вместе с bio, датой рождения, цветом, каналом и телефоном. Ответ надо
+// читать, иначе веб покажет значения, которых на сервере нет, до следующего
+// входа (fetchFullUser намеренно не перерезолвит себя), а собеседник их не
+// увидит
+// Вызовы строго по очереди: шард безусловно пишет display_name из КАЖДОГО
+// запроса, поэтому два параллельных setname (одно «Сохранить» меняет и имя, и
+// телефон) могли переупорядочиться, и запрос телефона со старым именем молча
+// откатывал переименование. `useCurrentName` берёт имя в момент отправки, а не
+// в момент вызова — по той же причине
+let setNameQueue: Promise<unknown> = Promise.resolve();
+
+async function requestSetName(
+  payload: Record<string, unknown>, { useCurrentName }: { useCurrentName?: boolean } = {},
+) {
+  const run = async () => {
+    if (!connection) return false;
+    try {
+      const body = useCurrentName
+        ? { ...payload, display_name: store.getDisplayName(store.self) }
+        : payload;
+      const raw = await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify(body));
+      const response = JSON.parse(raw) as { ok?: boolean; error?: string };
+      if (response.ok) return true;
+      window.dispatchEvent(new CustomEvent('parvane-profile-error', { detail: { error: response.error } }));
+    } catch {
+      window.dispatchEvent(new CustomEvent('parvane-profile-error', { detail: {} }));
+    }
+    return false;
+  };
+  const result = setNameQueue.then(run, run);
+  setNameQueue = result.catch(() => undefined);
+  return result;
 }
 
 const methods = {
@@ -1032,8 +1100,52 @@ const methods = {
   deleteChatMember: groupController.deleteChatMember,
   updateChatMemberBannedRights: groupController.updateChatMemberBannedRights,
   exportChatInvite: groupController.exportChatInvite,
+  fetchExportedChatInvites: groupController.fetchExportedChatInvites,
+  fetchMembers: groupController.fetchMembers,
   importChatInvite: groupController.importChatInvite,
   updateChatAdmin: groupController.updateChatAdmin,
+
+  // Экраны профиля и канала запрашивают это фоном; в Parvane нет историй,
+  // рекомендаций каналов и плашек «добавить/заблокировать» — честно пусто
+  fetchPeerStories() {
+    return Promise.resolve(undefined);
+  },
+  fetchStoriesMaxIds() {
+    return Promise.resolve(undefined);
+  },
+  fetchChannelRecommendations() {
+    return Promise.resolve(undefined);
+  },
+  fetchPeerSettings() {
+    return Promise.resolve(undefined);
+  },
+  // Фоновая обслуга MTProto при открытии чата/профиля: tt просит обновить
+  // чат, отменить его запросы и сообщает об открытых каналах. Обновления
+  // Parvane толкает сам через gateway, отменять нечего — честно пусто, а не
+  // «метод не реализован» в журнале обхода UI
+  requestChatUpdate() {
+    return Promise.resolve(undefined);
+  },
+  abortChatRequests() {
+    return Promise.resolve(undefined);
+  },
+  setOpenedChannelIds() {
+    return Promise.resolve(undefined);
+  },
+  // Звёздных подарков, рекламных пиров, лимита поиска по постам и облачного
+  // пароля (2FA — подтверждение через Telegram) в Parvane нет
+  fetchSavedStarGifts() {
+    return Promise.resolve(undefined);
+  },
+  fetchSponsoredPeer() {
+    return Promise.resolve(undefined);
+  },
+  checkSearchPostsFlood() {
+    return Promise.resolve(undefined);
+  },
+  getPasswordInfo() {
+    return Promise.resolve(undefined);
+  },
 
   // ── пины и архив чатов (локальный persist) ──────────────────────────────────
 
@@ -1336,8 +1448,39 @@ const methods = {
 
   // ── фон чата ────────────────────────────────────────────────────────────────
   // Галереи обоев Telegram нет: встроенные градиенты рисуем на клиенте
-  // (wallpapers.ts); свою картинку клиент кладёт в CUSTOM_BG_CACHE_NAME сам
-  // (WallpaperTile), нам достаточно отдать её как локальный документ
+  // (wallpapers.ts). Свою картинку пользователя раньше клали открытым блобом в
+  // Cache Storage (CUSTOM_BG_CACHE_NAME) — это пользовательское медиа в
+  // постоянном хранилище в открытом виде (FR-023). Теперь она лежит
+  // зашифрованной в SecureE2eStorage под ключом устройства
+  // Картинка хранится БАЙТАМИ (`saveBytesRecord`), а не base64 в JSON: тот же
+  // довод, что и для архивов паков — base64 раздувает файл на треть, а обои
+  // бывают многомегабайтными. Мим-тип лежит отдельной маленькой записью
+  async saveChatBackground({ theme, bytes, mimeType }: {
+    theme: string; bytes: ArrayBuffer; mimeType: string;
+  }) {
+    if (!store.self) return { status: 'not-ready' as const };
+    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+    if (!storage) return { status: 'not-ready' as const };
+    const name = `${BACKGROUND_RECORD_PREFIX}${theme}`;
+    await storage.saveBytesRecord(name, new Uint8Array(bytes));
+    await storage.saveRecord(`${name}:mime`, mimeType);
+    return { status: 'ok' as const };
+  },
+
+  // `not-ready` (провайдер ещё не знает пользователя) и `empty` (обоев нет)
+  // РАЗНЫЕ: на `not-ready` вызывающий обязан повторить, а не сбрасывать
+  // настройку темы — иначе фон терялся бы при каждой перезагрузке
+  async loadChatBackground({ theme }: { theme: string }) {
+    if (!store.self) return { status: 'not-ready' as const };
+    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+    if (!storage) return { status: 'not-ready' as const };
+    const name = `${BACKGROUND_RECORD_PREFIX}${theme}`;
+    const bytes = await storage.loadBytesRecord(name);
+    if (!bytes) return { status: 'empty' as const };
+    const mimeType = await storage.loadRecord<string>(`${name}:mime`);
+    return { status: 'ok' as const, blob: new Blob([bytes as BlobPart], { type: mimeType || 'image/jpeg' }) };
+  },
+
   async fetchWallpapers() {
     const wallpapers = await buildBuiltinWallpapers(mediaService.cacheBlob);
     return { wallpapers };
@@ -1411,7 +1554,16 @@ const methods = {
     const resolved = await resolveCustomPack(stickerSetId);
     if (!resolved) return undefined;
     const isEmoji = isEmojiPackSetId(stickerSetId) || Boolean(resolved.pack.isEmoji);
-    await saveInstalledPack(store.self, { ...resolved.pack, isEmoji: isEmoji || undefined });
+    const rawName = resolved.pack.rawName || (isEmoji ? getEmojiPackRawName(stickerSetId) : undefined);
+    await saveInstalledPack(store.self, {
+      ...resolved.pack,
+      // Набор — тот, по которому пак пришёл: у одноимённого пака другого
+      // отправителя он свой (PACK-1/EMOJI-1), и хранение обязано их различать
+      setId: stickerSetId,
+      isEmoji: isEmoji || undefined,
+      rawName,
+      aliases: isEmoji ? getEmojiPackNames(stickerSetId, resolved.pack).filter((name) => name !== rawName) : undefined,
+    });
     const built = buildCustomSet(stickerSetId, resolved.pack, INSTALLED_PACK_DATE);
     registerPackBlobs(built.blobs);
     sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
@@ -1421,7 +1573,7 @@ const methods = {
   async uninstallStickerSet({ stickerSetId }: { stickerSetId: string }) {
     const pack = await findInstalledPackBySetId(store.self, stickerSetId);
     if (!pack) return undefined;
-    await removeInstalledPack(store.self, pack.name);
+    await removeInstalledPack(store.self, stickerSetId);
     sendUpdate({ '@type': 'updateStickerSet', id: stickerSetId, stickerSet: { installedDate: undefined } });
     return true;
   },
@@ -1663,7 +1815,7 @@ const methods = {
     const sets = [set];
     const installed = (await loadInstalledPacks(store.self)).filter((pack) => pack.isEmoji);
     installed.forEach((pack) => {
-      const built = buildCustomSet(getSetIdForPackName(pack.name), pack, INSTALLED_PACK_DATE);
+      const built = buildCustomSet(getPackSetId(pack), pack, INSTALLED_PACK_DATE);
       registerPackBlobs(built.blobs);
       sets.push(built.set);
     });
@@ -1680,7 +1832,35 @@ const methods = {
     });
     const found = (set.stickers || []).filter((s) => documentId.includes(s.id));
     const missing = new Set(documentId.filter((id) => !found.some((s) => s.id === id)));
+    // Старые docId встроенного набора: блоб тот же, что у нового id
+    getBuiltinLegacyEmojiIds().forEach(([legacyId, currentId]) => {
+      const blob = blobs.get(currentId);
+      if (blob && missing.has(legacyId)) mediaService.cacheBlobIfAbsent(legacyId, blob, 'image/png');
+    });
+    const takeAliases = () => {
+      Array.from(missing).forEach((id) => {
+        const alias = getAliasEmojiSticker(id);
+        if (alias) {
+          found.push(alias);
+          missing.delete(id);
+        }
+      });
+    };
+    takeAliases();
     if (!missing.size) return found;
+    // Установленные эмодзи-паки (после перезагрузки реестр сессии пуст)
+    for (const pack of (await loadInstalledPacks(store.self)).filter((candidate) => candidate.isEmoji)) {
+      if (!missing.size) break;
+      const built = buildCustomSet(getPackSetId(pack), pack, INSTALLED_PACK_DATE);
+      registerPackBlobs(built.blobs);
+      (built.set.stickers || []).forEach((sticker) => {
+        if (missing.has(sticker.id)) {
+          found.push(sticker);
+          missing.delete(sticker.id);
+        }
+      });
+      takeAliases();
+    }
     for (const setId of getReceivedEmojiPackSetIds()) {
       if (!missing.size) break;
       if (setId === set.id) continue;
@@ -1694,6 +1874,7 @@ const methods = {
           missing.delete(sticker.id);
         }
       });
+      takeAliases();
     }
     return found;
   },
@@ -2048,7 +2229,7 @@ const methods = {
     // Bio (about) хранится в identity и синхронизируется через resolve.
     const payload: Record<string, unknown> = { token, display_name: displayName };
     if (about !== undefined) payload.bio = about;
-    await connection.request(TOPIC_IDENTITY_SETNAME, JSON.stringify(payload));
+    if (!await requestSetName(payload)) return undefined;
     store.setDisplayName(store.self, displayName);
     if (about !== undefined) {
       const prev = store.getProfile(store.self) || {};
@@ -2057,6 +2238,51 @@ const methods = {
     const user = store.buildApiUser(store.self);
     sendUpdate({ '@type': 'updateUser', id: user.id, user });
     sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });
+    return true;
+  },
+
+  // Дата рождения: identity.user.setname с текущим именем (display_name
+  // обязателен в каждом вызове — иначе сервер не сохраняет ничего). Без года —
+  // 0000-MM-DD (конвенция десктопа), сброс — пустая строка
+  async updateBirthday(birthday?: ApiBirthday) {
+    if (!connection) return undefined;
+    const pad = (value: number, size: number) => String(value).padStart(size, '0');
+    const iso = birthday ? `${pad(birthday.year || 0, 4)}-${pad(birthday.month, 2)}-${pad(birthday.day, 2)}` : '';
+    const payload = { token, birthday: iso };
+    if (!await requestSetName(payload, { useCurrentName: true })) return undefined;
+    const prev = store.getProfile(store.self) || {};
+    store.setProfile(store.self, { ...prev, birthday: iso || undefined });
+    return true;
+  },
+
+  // Поля профиля без нативных редакторов в Web A: цвет имени (-1 — сброс),
+  // личный канал (группа/канал Parvane, '' — убрать), телефон ('' — убрать)
+  async parvaneUpdateProfileFields({ nameColor, personalChannelId, phone }: {
+    nameColor?: number; personalChannelId?: string; phone?: string;
+  }) {
+    if (!connection) return undefined;
+    const payload: Record<string, unknown> = { token };
+    const prev = store.getProfile(store.self) || {};
+    const next = { ...prev };
+    if (nameColor !== undefined) {
+      payload.name_color = nameColor;
+      next.nameColor = nameColor >= 0 ? nameColor : undefined;
+    }
+    if (personalChannelId !== undefined) {
+      const groupAddress = personalChannelId ? store.getAddressForId(personalChannelId) : '';
+      payload.personal_channel = groupAddress || '';
+      next.personalChannel = groupAddress || undefined;
+    }
+    if (phone !== undefined) {
+      payload.phone = phone.trim();
+      next.phone = phone.trim() || undefined;
+    }
+    if (!await requestSetName(payload, { useCurrentName: true })) return undefined;
+    store.setProfile(store.self, next);
+    const user = store.buildApiUser(store.self);
+    sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    const full = await methods.fetchFullUser({ id: user.id });
+    if (full) sendUpdate({ '@type': 'updateUserFullInfo', id: user.id, fullInfo: full.fullInfo });
     return true;
   },
 
@@ -2081,11 +2307,16 @@ const methods = {
     return Promise.resolve(undefined);
   },
 
-  // Профиль контакта: bio/username локальны у Parvane (нет серверного
-  // профиля), но full-user нужен, чтобы экран профиля не оставался пустым
+  // Профиль: bio, дата рождения, личный канал, телефон, цвет имени хранятся в
+  // identity (resolve); username — локальная часть адреса, не редактируется
   fetchFullUser({ id }: { id: string }) {
     const address = store.getAddressForId(id);
     if (!address) return Promise.resolve(undefined);
+    // Отдаём кэш сразу, но заодно перечитываем identity: без этого открытый
+    // профиль показывал старые поля до перезагрузки или входящего сообщения —
+    // resolve сам разошлёт updateUser/updateUserFullInfo, если что-то менялось
+    // (SC-011)
+    if (address !== store.self) void syncController.resolveDisplayNames([address]).catch(() => undefined);
     const user = store.buildApiUser(address);
     const isBlocked = localState.loadBlocked().includes(address);
     // `loadFullUser` без guard'ов читает `users`/`chats`/`userStatusesById` —
@@ -2096,7 +2327,8 @@ const methods = {
       if (!iso) return undefined;
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
       if (!m) return undefined;
-      return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+      // 0000 — дата без года (десктоп пишет так)
+      return { year: Number(m[1]) || undefined, month: Number(m[2]), day: Number(m[3]) };
     })();
     return Promise.resolve({
       user,
@@ -2111,7 +2343,15 @@ const methods = {
           : undefined,
       },
       users: [user],
-      chats: [],
+      // Секция личного канала рисуется только когда сам чат есть в сторе
+      // (ChatExtra → selectChat). Отдаём его, если группа клиенту известна;
+      // если наблюдатель в ней не состоит, канал остаётся невидимым — без
+      // серверной выдачи чужих групп иначе никак (отмечено в матрице)
+      chats: (() => {
+        const channelAddress = profile?.personalChannel;
+        const info = channelAddress ? store.getGroupInfo(channelAddress) : undefined;
+        return info ? [store.buildApiChatForGroup(info)] : [];
+      })(),
       userStatusesById: { [user.id]: RECENT_STATUS },
     });
   },
@@ -2238,6 +2478,9 @@ function consumeStartupCredentials() {
 export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<T>): MethodResponse<T> {
   const method = (methods as Record<string, AnyFunction>)[fnName as string];
   if (!method) {
+    // parvaneDiag: пропуск метода виден в журнале — по нему сценарий обхода
+    // UI ловит действия, которые молча ничего не делают
+    diagLog('api-missing', String(fnName));
     if (!reportedMissingMethods.has(fnName)) {
       reportedMissingMethods.add(fnName);
       // eslint-disable-next-line no-console

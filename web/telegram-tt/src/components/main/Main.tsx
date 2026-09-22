@@ -42,10 +42,19 @@ import buildClassName from '../../util/buildClassName';
 import buildStyle from '../../util/buildStyle';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { processDeepLink } from '../../util/deeplink';
+import * as mediaLoader from '../../util/mediaLoader';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
 import { oldTranslate } from '../../util/oldLangProvider';
 import {
-  getInitialLocationHash, parseInitialLocationHash, parseLocationHash, resetLocationHash,
+  markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
+} from '../../util/parvaneMediaIntegrity';
+import {
+  consumePendingInvite,
+  getInitialLocationHash,
+  parseInitialLocationHash,
+  parseLocationHash,
+  peekPendingInvite,
+  resetLocationHash,
 } from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
 
@@ -164,6 +173,9 @@ type StateProps = {
   isBackgroundBlurred?: boolean;
 };
 
+// Parvane: сколько ждать синка с открытой ссылкой-приглашением, прежде чем
+// сказать пользователю, что связи нет (вступление ждёт синка)
+const INVITE_OFFLINE_NOTICE_MS = 15000;
 const APP_OUTDATED_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
 
@@ -287,6 +299,7 @@ const Main = ({
     loadPromoData,
     loadActiveGiftAuctions,
     openChatByUsername,
+    acceptChatInvite,
     showNotification,
   } = getActions();
 
@@ -457,6 +470,103 @@ const Main = ({
     return () => window.removeEventListener('parvane-rate-limited', handleRateLimited);
   }, [showNotification]);
 
+  // Parvane: перенести старые открытые обои в шифрованное хранилище. Только
+  // после синка — до него провайдер не знает пользователя, запись не пройдёт,
+  // и кэш (единственная копия картинки) остался бы удалённым впустую
+  useEffect(() => {
+    if (!isSynced) return;
+    void migrateCustomBackgrounds();
+  }, [isSynced]);
+
+  // Parvane: файл не прошёл проверку целостности — пометить и сообщить
+  useEffect(() => {
+    void purgePlaintextMediaCaches();
+    const handleIntegrity = (event: Event) => {
+      const fileId = (event as CustomEvent<{ fileId?: string }>).detail?.fileId;
+      if (!fileId) return;
+      markMediaTampered(fileId);
+      // Расшифрованные байты этого файла больше не отдавать ни из какого кэша
+      mediaLoader.unloadByFileId(fileId);
+      showNotification({ message: oldTranslate('ParvaneMediaTampered') });
+    };
+    window.addEventListener('parvane-media-integrity', handleIntegrity);
+    return () => window.removeEventListener('parvane-media-integrity', handleIntegrity);
+  }, [showNotification]);
+
+  // Parvane: целостность файла проверить не удалось (шард недоступен, долгий
+  // офлайн). Это НЕ подмена: окна уже сыграли непроверенными, и промолчать
+  // значило бы выдать файл за проверенный вопреки FR-022 — но и рвать
+  // воспроизведение из-за обрыва сети нельзя, поэтому только предупреждение
+  useEffect(() => {
+    const handleUnverifiable = () => {
+      showNotification({ message: oldTranslate('ParvaneMediaUnverified') });
+    };
+    window.addEventListener('parvane-media-unverifiable', handleUnverifiable);
+    return () => window.removeEventListener('parvane-media-unverifiable', handleUnverifiable);
+  }, [showNotification]);
+
+  // Parvane: групповой звонок не получил доступ к микрофону/камере
+  useEffect(() => {
+    const handleCallMediaError = () => {
+      showNotification({ message: oldTranslate('ParvaneCallNoDevice') });
+    };
+    window.addEventListener('parvane-call-media-error', handleCallMediaError);
+    return () => window.removeEventListener('parvane-call-media-error', handleCallMediaError);
+  }, [showNotification]);
+
+  // Parvane: в групповом звонке больше участников, чем тянет mesh
+  useEffect(() => {
+    const handleTooMany = (event: Event) => {
+      const limit = (event as CustomEvent<{ limit?: number }>).detail?.limit;
+      showNotification({ message: oldTranslate('ParvaneCallTooManyMembers', limit) });
+    };
+    window.addEventListener('parvane-call-too-many', handleTooMany);
+    return () => window.removeEventListener('parvane-call-too-many', handleTooMany);
+  }, [showNotification]);
+
+  // Parvane: ссылка-приглашение открыта, но синка нет (gateway недоступен).
+  // Вступление заперто за isSynced, поэтому без этого пользователь видел бы
+  // бесконечное «соединение» и ни одной ошибки — FAIL-1 такое запрещает.
+  // Токен при этом НЕ расходуется: после восстановления связи вступление
+  // пройдёт само, а перезагрузка страницы повторит попытку
+  useEffect(() => {
+    if (isSynced || !peekPendingInvite()) return undefined;
+    const timer = window.setTimeout(() => {
+      showNotification({ message: oldTranslate('ParvaneInviteOffline') });
+    }, INVITE_OFFLINE_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [isSynced, showNotification]);
+
+  // Parvane: отказ вступления по ссылке-приглашению (бан, битая ссылка, сеть)
+  useEffect(() => {
+    const keys: Record<string, string> = {
+      invalid: 'ParvaneInviteInvalid',
+      banned: 'ParvaneInviteBanned',
+      failed: 'ParvaneInviteFailed',
+      linkFailed: 'ParvaneInviteLinkFailed',
+    };
+    const handleInviteError = (event: Event) => {
+      const code = (event as CustomEvent<{ code?: string }>).detail?.code || 'failed';
+      // Лимит запросов gateway показывает своим тостом (`parvane-rate-limited`
+      // ниже) — второй про «не удалось вступить» был бы дублем
+      if (code === 'rateLimited') return;
+      showNotification({ message: oldTranslate(keys[code] || keys.failed) });
+    };
+    window.addEventListener('parvane-invite-error', handleInviteError);
+    return () => window.removeEventListener('parvane-invite-error', handleInviteError);
+  }, [showNotification]);
+
+  // Parvane: identity отклонил запись профиля целиком (пустое или слишком
+  // длинное имя, протухший токен) — молча оставлять экран с непринятыми
+  // значениями нельзя
+  useEffect(() => {
+    const handleProfileError = () => {
+      showNotification({ message: oldTranslate('ParvaneProfileSaveFailed') });
+    };
+    window.addEventListener('parvane-profile-error', handleProfileError);
+    return () => window.removeEventListener('parvane-profile-error', handleProfileError);
+  }, [showNotification]);
+
   // Parse deep link
   useEffect(() => {
     if (!isSynced) return;
@@ -470,11 +580,35 @@ const Main = ({
       return;
     }
 
+    // Parvane: ссылка-приглашение в адресной строке `<origin>/#+<токен>`;
+    // токен, пришедший до входа, пережил перезагрузку в sessionStorage
+    const pendingInvite = consumePendingInvite();
+    if (pendingInvite) {
+      resetLocationHash();
+      acceptChatInvite({ hash: pendingInvite });
+      return;
+    }
+
     const parsedInitialLocationHash = parseInitialLocationHash();
     if (parsedInitialLocationHash?.tgaddr) {
       processDeepLink(decodeURIComponent(parsedInitialLocationHash.tgaddr), { type: 'inner' });
     }
   }, [isSynced]);
+
+  // Parvane: `#+<токен>` вставлен в адрес уже открытой вкладки (перехват —
+  // в popstate useHistoryBack, до очистки хэша). Токен лежит в sessionStorage:
+  // пока синк не закончен, вступление ждёт эффекта ниже
+  useEffect(() => {
+    const handleInviteHash = () => {
+      if (!getGlobal().isSynced) return;
+      const token = consumePendingInvite();
+      if (!token) return;
+      resetLocationHash();
+      acceptChatInvite({ hash: token });
+    };
+    window.addEventListener('parvane-invite-hash', handleInviteHash);
+    return () => window.removeEventListener('parvane-invite-hash', handleInviteHash);
+  }, []);
 
   useTauriEvent<string>('deeplink', (event) => {
     try {

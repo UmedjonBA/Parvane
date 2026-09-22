@@ -259,7 +259,10 @@ export function mergeWithChatMediaSearchSegment(
 ): ChatMediaSearchSegment {
   if (!segment) {
     return {
-      foundIds,
+      // Parvane: id сообщений — метки времени в мс (> 2^32), Object.keys отдаёт
+      // их в порядке вставки, а не по возрастанию; несортированный сегмент не
+      // находит текущее медиа и просмотрщик бесконечно ищет «вокруг»
+      foundIds: orderFoundIdsByAscending(foundIds.slice()),
       loadingState,
     };
   }

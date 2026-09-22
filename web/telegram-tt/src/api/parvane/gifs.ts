@@ -7,6 +7,8 @@ import { createStore, del, get, set } from 'idb-keyval';
 
 import type { ApiVideo } from '../types';
 
+import { SecureE2eStorage } from './secureStorage';
+
 const GIF_W = 240;
 const GIF_H = 240;
 const REC_MS = 1200;
@@ -135,13 +137,39 @@ function savedKey(user: string) {
   return `gifs:${user}`;
 }
 
+// Ключи файлов сохранённых GIF — секрет (дают расшифровать блоб в cloud):
+// в idb-keyval храним только метаданные, ключи — в SecureE2eStorage
+const GIF_KEYS_RECORD = 'gifkeys';
+type GifKeys = Record<string, { keyB64: string; nonceB64: string }>;
+
 export async function loadSavedGifRecords(user: string): Promise<SavedGifRecord[]> {
-  return (await get<SavedGifRecord[]>(savedKey(user), SAVED_STORAGE)) || [];
+  const records = (await get<SavedGifRecord[]>(savedKey(user), SAVED_STORAGE)) || [];
+  const storage = await SecureE2eStorage.open(user).catch(() => undefined);
+  if (!storage) return records.map(({ keyB64, nonceB64, ...meta }) => meta);
+  const keys = await storage.loadRecord<GifKeys>(GIF_KEYS_RECORD) || {};
+  const legacy = records.filter((record) => record.keyB64 && record.nonceB64);
+  if (legacy.length) {
+    legacy.forEach((record) => {
+      keys[record.id] = { keyB64: record.keyB64!, nonceB64: record.nonceB64! };
+    });
+    await storage.saveRecord(GIF_KEYS_RECORD, keys);
+    await set(savedKey(user), records.map(({ keyB64, nonceB64, ...meta }) => meta), SAVED_STORAGE);
+  }
+  return records.map((record) => ({ ...record, ...keys[record.id] }));
 }
 
 export async function storeSavedGifRecords(user: string, records: SavedGifRecord[]) {
   const limited = records.slice(0, SAVED_LIMIT);
-  if (limited.length) await set(savedKey(user), limited, SAVED_STORAGE);
+  const storage = await SecureE2eStorage.open(user).catch(() => undefined);
+  if (storage) {
+    const keys: GifKeys = {};
+    limited.forEach((record) => {
+      if (record.keyB64 && record.nonceB64) keys[record.id] = { keyB64: record.keyB64, nonceB64: record.nonceB64 };
+    });
+    await storage.saveRecord(GIF_KEYS_RECORD, keys);
+  }
+  const metadata = limited.map(({ keyB64, nonceB64, ...meta }) => meta);
+  if (metadata.length) await set(savedKey(user), metadata, SAVED_STORAGE);
   else await del(savedKey(user), SAVED_STORAGE);
 }
 

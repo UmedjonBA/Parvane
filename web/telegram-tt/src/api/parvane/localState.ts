@@ -515,6 +515,25 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
+  // Постоянные инвайт-ссылки групп, полученные на этом устройстве:
+  // group_id → { link, date }. Сервер не отдаёт уже созданный токен и не
+  // умеет отзыв — без памяти каждая сессия плодила бы новую ссылку
+  function loadInviteLinks(): Record<string, { link: string; date: number }> {
+    try {
+      return JSON.parse(localStorage.getItem(storageKey('invites')) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function saveInviteLinks(map: Record<string, { link: string; date: number }>) {
+    try {
+      localStorage.setItem(storageKey('invites'), JSON.stringify(map));
+    } catch {
+      // квота — ссылка останется в памяти сессии
+    }
+  }
+
   // Очередь починки нерасшифрованного (conformance SYNC-2): uuid → число
   // попыток. Пока есть непрочитанное с попытками < потолка, курсор синка на
   // диск не пишем; исчерпавшее потолок отпускаем — иначе одно сообщение без
@@ -623,6 +642,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('notifydefaults'), JSON.stringify(map));
   }
 
+  // `invites` намеренно НЕ стирается: сервер не умеет отзывать ссылки, и на
+  // каждый новый вход создавал бы новый вечный токен группы. FR-011 требует
+  // переиспользовать ссылку и между повторными входами на устройстве
   function clearUserData(user: string) {
     [
       'scheduled', 'hist', 'ttl', 'blocked', 'contacts', 'noncontacts', 'folders', 'drafts', 'pinned', 'archived',
@@ -702,6 +724,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     flushHistoryNow: flushHistoryQueue,
     loadDrafts,
     loadFolders,
+    loadInviteLinks,
     isBlocked,
     loadNotifyDefaults,
     loadNotifyExceptions,
@@ -719,6 +742,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveRepairAttempts,
     saveDraft,
     saveFolders,
+    saveInviteLinks,
     setArchived,
     setPinned,
     savePeerTtl,

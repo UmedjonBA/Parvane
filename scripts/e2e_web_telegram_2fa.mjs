@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  LOGIN_TIMEOUT_MS, assertNoPageErrors, clickUntil, requireEnv, submitNick,
+  LOGIN_TIMEOUT_MS, assertNoPageErrors, logOut, requireEnv, submitNick,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-telegram-2fa-password';
@@ -113,37 +113,6 @@ async function setTwoFactor(page, enabled) {
     );
   }
   await page.waitForTimeout(1000);
-}
-
-async function logOut(page) {
-  // Добираемся до корня настроек (там «More actions» → «Log Out») из любого
-  // экрана левой колонки: Privacy (назад), список чатов (меню → Settings) или
-  // уже корень настроек (после повторного входа tt остаётся в Settings).
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
-  for (;;) {
-    const visible = (locator) => locator.isVisible().catch(() => false);
-    const inSettingsRoot = await visible(page.getByRole('button', { name: 'Edit profile' }).first());
-    if (inSettingsRoot) break;
-    const menu = page.getByRole('button', { name: 'Open menu' }).first();
-    if (await visible(menu)) {
-      await menu.click();
-      await page.getByRole('menuitem', { name: 'Settings' }).click();
-      await page.getByRole('button', { name: 'Edit profile' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-      break;
-    }
-    const back = page.getByRole('button', { name: /Go back|Return to Chat List/ }).first();
-    if (await visible(back)) await back.click();
-    assert(Date.now() < deadline, 'не нашёл ни «Open menu», ни «Go back» в левой колонке');
-    await page.waitForTimeout(500);
-  }
-  await page.getByRole('button', { name: 'More actions' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.getByRole('button', { name: 'More actions' }).first().click();
-  await page.getByRole('menuitem', { name: 'Log Out' }).click();
-  await clickUntil(
-    page.getByRole('button', { name: 'Log Out' }).last(),
-    () => page.locator('.Transition_slide-active > #auth-phone-number-form').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-    { settleMs: 15000 },
-  );
 }
 
 const browser = await chromium.launch();

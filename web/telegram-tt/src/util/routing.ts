@@ -8,6 +8,54 @@ let messageHash: string | undefined;
 let isAlreadyParsed = false;
 let initialLocationHash = window.location.hash;
 
+// Parvane: ссылка-приглашение в адресной строке `#+<токен>`. Вход в аккаунт
+// может перезагрузить страницу — токен переживает её в sessionStorage и
+// потребляется после синка (Main.tsx)
+const PENDING_INVITE_KEY = 'parvane:pending-invite';
+const INVITE_HASH_REGEX = /^#\+([0-9a-f]{32})$/;
+
+export function rememberPendingInvite(hash: string) {
+  const match = hash.match(INVITE_HASH_REGEX);
+  if (!match) return;
+  try {
+    sessionStorage.setItem(PENDING_INVITE_KEY, match[1]);
+  } catch {
+    // приватный режим — вступление сработает только без перезагрузки
+  }
+}
+
+rememberPendingInvite(initialLocationHash);
+
+// Вставка `#+<токен>` в адрес уже открытой вкладки меняет только хэш —
+// перезагрузки нет, ловим hashchange
+export function matchInviteHash(hash: string) {
+  return hash.match(INVITE_HASH_REGEX)?.[1];
+}
+
+// Токен, не тронув его: пока синк не прошёл, вступление невозможно, но и
+// терять ссылку нельзя — повторное открытие/перезагрузка должны сработать
+export function peekPendingInvite(): string | undefined {
+  const fromHash = initialLocationHash.match(INVITE_HASH_REGEX)?.[1];
+  if (fromHash) return fromHash;
+  try {
+    return sessionStorage.getItem(PENDING_INVITE_KEY) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function consumePendingInvite(): string | undefined {
+  let token = initialLocationHash.match(INVITE_HASH_REGEX)?.[1];
+  try {
+    token = token || sessionStorage.getItem(PENDING_INVITE_KEY) || undefined;
+    sessionStorage.removeItem(PENDING_INVITE_KEY);
+  } catch {
+    // нет sessionStorage — остаётся токен из текущего адреса
+  }
+  if (initialLocationHash.match(INVITE_HASH_REGEX)) initialLocationHash = '';
+  return token;
+}
+
 export function resetInitialLocationHash() {
   isAlreadyParsed = false;
   messageHash = undefined;

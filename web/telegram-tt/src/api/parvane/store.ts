@@ -413,12 +413,21 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
   if (deleted) {
     return { text: { text: '🗑 Сообщение удалено' } };
   }
+  // Расшифровать не удалось (нет ключа/сессии, продвинутый ратчет). Раньше
+  // такое сообщение просто не показывалось, и после исчерпания попыток
+  // терялось насовсем — спека требует видимую заглушку, а не пустоту
+  if (content.kind === 'encrypted' || content.kind === 'group_encrypted') {
+    // Текст здесь захардкожен так же, как у ветки `deleted` выше: импорт
+    // lang-провайдера в слой API тянет за собой UI-модули. Локализация
+    // обеих заглушек — отдельной задачей
+    return { text: { text: '🔒 Не удалось расшифровать сообщение' } };
+  }
   const caption = content.caption ? { text: { text: content.caption } } : {};
   switch (content.kind) {
     case 'text':
       // Эмодзи-паки, приложенные к тексту: регистрируем ref — fetchCustomEmoji
       // подтянет архив из cloud и отдаст документы по docId из entities
-      content.emoji_packs?.forEach((ref) => registerReceivedEmojiPackRef(ref));
+      content.emoji_packs?.forEach((ref) => registerReceivedEmojiPackRef(ref, stored.from));
       return {
         text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) },
         webPage: content.webpage ? { id: `wp${stored.id}` } : undefined,
@@ -515,7 +524,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
     case 'sticker': {
       // pack_ref — стикер из кастомного набора: помечаем сет-ссылкой,
       // по клику на стикер модалка предложит установить весь пак
-      const packSetId = content.pack_ref ? registerReceivedPackRef(content.pack_ref) : undefined;
+      const packSetId = content.pack_ref ? registerReceivedPackRef(content.pack_ref, stored.from) : undefined;
       return {
         sticker: {
           mediaType: 'sticker',

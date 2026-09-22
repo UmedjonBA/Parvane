@@ -9,6 +9,7 @@ import type { ApiDimensions, StoryboardInfo } from '../../api/types';
 import { IS_IOS, IS_TOUCH_ENV, IS_YA_BROWSER } from '../../util/browser/windowEnvironment';
 import getPointerPosition from '../../util/events/getPointerPosition';
 import { clamp } from '../../util/math';
+import { getMediaIdFromUrl, notifyMediaPlaying, useParvaneMediaTampered } from '../../util/parvaneMediaIntegrity';
 import safePlay from '../../util/safePlay';
 import stopEvent from '../../util/stopEvent';
 
@@ -17,6 +18,7 @@ import useAppLayout from '../../hooks/useAppLayout';
 import useBuffering from '../../hooks/useBuffering';
 import useCurrentTimeSignal from '../../hooks/useCurrentTimeSignal';
 import useLastCallback from '../../hooks/useLastCallback';
+import useOldLang from '../../hooks/useOldLang';
 import usePictureInPicture from '../../hooks/usePictureInPicture';
 import useShowTransitionDeprecated from '../../hooks/useShowTransitionDeprecated';
 import useVideoCleanup from '../../hooks/useVideoCleanup';
@@ -24,6 +26,7 @@ import useFullscreen from '../../hooks/window/useFullscreen';
 import useControlsSignal, { registerPlayerElement } from './hooks/useControlsSignal';
 import useVideoWaitingSignal from './hooks/useVideoWaitingSignal';
 
+import Icon from '../common/icons/Icon';
 import Button from '../ui/Button';
 import ProgressSpinner from '../ui/ProgressSpinner';
 import VideoPlayerControls from './VideoPlayerControls';
@@ -163,7 +166,10 @@ const VideoPlayer: FC<OwnProps> = ({
   const {
     isReady, isBuffered, bufferedRanges, bufferingHandlers, bufferedProgress,
   } = useBuffering();
-  const isUnsupported = useUnsupportedMedia(videoRef, undefined, !url);
+  // Parvane: файл не прошёл проверку целостности — плеер не играет
+  const isTampered = useParvaneMediaTampered(getMediaIdFromUrl(url));
+  const oldLang = useOldLang();
+  const isUnsupported = useUnsupportedMedia(videoRef, undefined, !url) || isTampered;
 
   const {
     shouldRender: shouldRenderSpinner,
@@ -353,7 +359,10 @@ const VideoPlayer: FC<OwnProps> = ({
           id="media-viewer-video"
           style={videoStyle}
           onWaiting={() => setIsVideoWaiting(true)}
-          onPlay={() => setIsPlaying(true)}
+          onPlay={() => {
+            setIsPlaying(true);
+            notifyMediaPlaying(url);
+          }}
           onEnded={handleEnded}
           onClick={!isMobile && !isFullscreen ? handleClick : undefined}
           onDoubleClick={!IS_TOUCH_ENV ? handleFullscreenChange : undefined}
@@ -364,8 +373,16 @@ const VideoPlayer: FC<OwnProps> = ({
             bufferingHandlers.onPause(e);
           }}
           onTimeUpdate={handleTimeUpdate}
-          src={url}
+          // Parvane: подменённый файл нельзя отдавать плееру даже повторно —
+          // снимаем src и показываем ошибку вместо кадров (FR-022)
+          src={isTampered ? undefined : url}
         />
+        {isTampered && (
+          <div className="media-viewer-tampered">
+            <Icon name="message-failed" />
+            <span>{oldLang('ParvaneMediaTampered')}</span>
+          </div>
+        )}
       </div>
       {shouldRenderPlayButton && (
         <Button round className={`play-button ${playButtonClassNames}`} onClick={togglePlayState} iconName="play" />

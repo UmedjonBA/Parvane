@@ -1,0 +1,688 @@
+// Длинное E2E-видео: настоящая миниатюра, перемотка без полной загрузки,
+// фоновая проверка целостности (подмена фрагмента в облаке, подмена тега,
+// разные байты плееру и проверке), отсутствие открытых данных в Cache Storage.
+// Spec 002 US2, FR-020…FR-024, SC-003…SC-006.
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  mkdtempSync, readFileSync, rmSync, statSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
+
+import {
+  dumpDiagJournal,
+  findMessageContainers,
+  LOGIN_TIMEOUT_MS,
+  openPrivateChatStrict,
+  preparePage,
+  readDiagJournal,
+  relogin,
+  selectMessageActionOn,
+  sendText,
+  sha256OfDownload,
+  thumbnailStats,
+  trackDownloadedBytes,
+} from './e2e_web_helpers.mjs';
+
+const PASSWORD = 'Parvane-video-stream-e2e-password';
+const BACKEND_DIR = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+const GATEWAY_URL = process.env.PARVANE_E2E_GATEWAY_URL;
+assert(BACKEND_DIR, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
+assert(GATEWAY_URL, 'PARVANE_E2E_GATEWAY_URL is required');
+const TAMPER_TOAST = /damaged or was tampered with/;
+// Видео активного слайда: соседние медиа чата просмотрщик рендерит в
+// неактивных слайдах, и их <video> не грузится
+const VIEWER_VIDEO = '#MediaViewer .MediaViewerSlide--active video';
+
+// Уведомление живёт ~3 с и может исчезнуть, пока сценарий ещё открывает
+// просмотрщик: страница сама копит тексты всех показанных уведомлений
+async function recordToasts(page) {
+  await page.evaluate(() => {
+    if (globalThis.__parvaneE2eToasts) return;
+    globalThis.__parvaneE2eToasts = [];
+    // Каждое появление уведомления — отдельная запись (тексты повторяются)
+    const seen = new WeakSet();
+    new MutationObserver(() => {
+      document.querySelectorAll('.Notification-container').forEach((node) => {
+        const text = node.textContent || '';
+        if (!text || seen.has(node)) return;
+        seen.add(node);
+        globalThis.__parvaneE2eToasts.push({ text, t: Date.now() });
+      });
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+}
+
+function tamperToasts(page) {
+  return page.evaluate((source) => globalThis.__parvaneE2eToasts
+    .filter(({ text }) => new RegExp(source).test(text)), TAMPER_TOAST.source);
+}
+
+async function toastCount(page) {
+  return (await tamperToasts(page)).length;
+}
+
+// Тост о подмене появился не позже 5 с после того, как фоновая проверка
+// зафиксировала провал для этого файла (SC-006)
+async function assertToastSoonAfterFailure(page, log, fileId, toastsBefore) {
+  const started = Date.now();
+  let failure;
+  while (!(failure = log.entries().find((entry) => entry.d.includes(fileId) && /не сошёлся|другими байтами/.test(entry.d)))) {
+    assert(Date.now() - started < 10000, `no integrity failure in the journal for ${fileId}`);
+    await page.waitForTimeout(500);
+  }
+  const toast = (await tamperToasts(page))[toastsBefore];
+  const delay = toast.t - failure.t;
+  console.log(`${fileId}: toast ${delay} ms after the integrity failure`);
+  assert(delay <= 5000, `tamper toast came ${delay} ms after the integrity failure`);
+}
+
+// Сколько раз провайдер получил вызов метода с момента sinceMs (журнал diag,
+// повторы схлопнуты в поле n)
+async function apiCallCount(page, method, sinceMs) {
+  await page.waitForTimeout(2000); // журнал пишется с задержкой ~1.5 с
+  const entries = await readDiagJournal(page);
+  return entries.filter((entry) => entry.k === `api:${method}` && entry.t >= sinceMs)
+    .reduce((sum, entry) => sum + (entry.n || 1), 0);
+}
+
+// Состояние поиска медиа чата (сегменты просмотрщика) — для диагностики цикла
+function chatMediaSearchState(page) {
+  return page.evaluate(() => {
+    const global = window.__parvaneGetGlobal?.();
+    return Object.values(global?.byTabId || {}).map((tab) => {
+      const chatId = tab.mediaViewer?.chatId;
+      const byId = (chatId && global.messages.byChatId[chatId]?.byId) || {};
+      return {
+        viewer: tab.mediaViewer && { chatId, messageId: tab.mediaViewer.messageId },
+        messageList: tab.messageLists?.[tab.messageLists.length - 1],
+        media: Object.values(byId).filter((message) => message.content?.video || message.content?.photo)
+          .map((message) => ({ id: message.id, round: message.content.video?.isRound, gif: message.content.video?.isGif })),
+        search: tab.chatMediaSearch?.byChatThreadKey,
+      };
+    });
+  });
+}
+
+// Открытый просмотрщик не крутит поиск медиа чата (T090, FR-022): при обычном
+// открытии запросов 3–4
+async function assertNoMediaSearchLoop(page, sinceMs, label) {
+  const count = await apiCallCount(page, 'searchMessagesInChat', sinceMs);
+  if (count > 5) console.error(`${label}: chat media search state:`, JSON.stringify(await chatMediaSearchState(page)));
+  assert(count <= 5, `${label}: media viewer searched chat media ${count} times`);
+}
+
+// Ждём НОВОЕ уведомление о подмене (больше, чем было до шага)
+async function waitTamperToast(page, before, timeoutMs = 180000) {
+  await page.waitForFunction(({ source, count }) => globalThis.__parvaneE2eToasts
+    .filter(({ text }) => new RegExp(source).test(text)).length > count,
+  { source: TAMPER_TOAST.source, count: before }, { timeout: timeoutMs });
+}
+const BIG_VIDEO_MIN_BYTES = 40 * 1024 * 1024;
+
+// Строки фоновой проверки (diag kind "media") из журнала страницы: журнал —
+// кольцевой буфер, поэтому собираем по ходу сценария и печатаем при падении
+function watchIntegrityLog(page) {
+  const seen = new Map();
+  const timer = setInterval(() => {
+    readDiagJournal(page).then((entries) => {
+      entries.filter((entry) => entry.k === 'media').forEach((entry) => seen.set(`${entry.t}|${entry.d}`, entry));
+    }).catch(() => {});
+  }, 1000);
+  return {
+    stop: () => clearInterval(timer),
+    entries: () => [...seen.values()].sort((a, b) => a.t - b.t),
+    lines: () => [...seen.values()].sort((a, b) => a.t - b.t)
+      .map((entry) => `${new Date(entry.t).toISOString().slice(11, 23)} ${entry.d}`),
+  };
+}
+
+// Playwright-Chromium без H.264 — VP9-in-MP4. testsrc2 + высокий битрейт даёт
+// крупный файл быстро; faststart переносит moov в начало
+function makeVideo(dir, name, { seconds, bitrate, faststart }) {
+  const path = join(dir, name);
+  execFileSync('ffmpeg', [
+    '-y', '-f', 'lavfi', '-i', `testsrc2=size=1280x720:rate=30:duration=${seconds}`,
+    '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-row-mt', '1',
+    '-b:v', bitrate, '-minrate', bitrate, '-maxrate', bitrate, '-pix_fmt', 'yuv420p',
+    ...(faststart ? ['-movflags', '+faststart'] : []),
+    path,
+  ], { stdio: 'ignore' });
+  return { path, size: statSync(path).size };
+}
+
+function sqlite(query) {
+  // Шард держит БД открытой (WAL) — ждём снятия блокировки, а не падаем
+  return execFileSync('sqlite3', ['-cmd', '.timeout 10000', join(BACKEND_DIR, 'cloud.db'), query], { encoding: 'utf8' }).trim();
+}
+
+// Кадр-миниатюра в пузыре: не 1×1, не однотонная, появилась ≤ 3 с после пузыря
+async function expectFrameThumbnail(page, bubble, label, maxMs = 3000) {
+  await bubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const started = Date.now();
+  let stats;
+  for (;;) {
+    stats = await thumbnailStats(bubble);
+    if (stats.width > 1 && stats.variance > 50) break;
+    if (Date.now() - started > 15000) break;
+    await page.waitForTimeout(300);
+  }
+  assert(stats.width > 1 && stats.height > 1, `${label}: thumbnail is a placeholder ${JSON.stringify(stats)}`);
+  assert(stats.variance > 50, `${label}: thumbnail is uniform ${JSON.stringify(stats)}`);
+  const elapsed = Date.now() - started;
+  console.log(`${label}: thumbnail ${stats.width}x${stats.height} in ${elapsed} ms`);
+  assert(elapsed <= maxMs, `${label}: thumbnail appeared ${elapsed} ms after the bubble (limit ${maxMs} ms)`);
+}
+
+function cloudFileIds() {
+  return new Set(sqlite('SELECT id FROM files').split('\n').filter(Boolean));
+}
+
+// Новый файл в облаке, у которого загружены все фрагменты
+function completeNewFileId(before) {
+  const rows = sqlite('SELECT f.id FROM files f WHERE f.total_chunks = '
+    + '(SELECT count(*) FROM chunks c WHERE c.file_id = f.id) ORDER BY f.created_at DESC, f.rowid DESC');
+  return rows.split('\n').filter(Boolean).find((id) => !before.has(id));
+}
+
+// Меняет один байт фрагмента в облаке (шифртекст): окна видео при этом
+// расшифровываются без ошибок — поймать можно только проверкой тега
+function flipCloudByte(fileId, chunkIndex, offset = 100) {
+  const hex = sqlite(`SELECT hex(substr(data, ${offset + 1}, 1)) FROM chunks WHERE file_id = '${fileId}' AND chunk_index = ${chunkIndex}`);
+  assert(hex, `chunk ${chunkIndex} of ${fileId} not found`);
+  const flipped = (parseInt(hex, 16) ^ 0x5a).toString(16).padStart(2, '0');
+  const lengthBefore = sqlite(`SELECT length(data) FROM chunks WHERE file_id = '${fileId}' AND chunk_index = ${chunkIndex}`);
+  sqlite(`UPDATE chunks SET data = CAST(substr(data, 1, ${offset}) || x'${flipped}' || substr(data, ${offset + 2}) AS BLOB) WHERE file_id = '${fileId}' AND chunk_index = ${chunkIndex}`);
+  const lengthAfter = sqlite(`SELECT length(data) FROM chunks WHERE file_id = '${fileId}' AND chunk_index = ${chunkIndex}`);
+  assert.equal(lengthAfter, lengthBefore, 'cloud chunk length changed while flipping a byte');
+  const after = sqlite(`SELECT hex(substr(data, ${offset + 1}, 1)) FROM chunks WHERE file_id = '${fileId}' AND chunk_index = ${chunkIndex}`);
+  assert.notEqual(after, hex, 'cloud chunk byte was not changed');
+}
+
+function chunkCount(fileId) {
+  return Number(sqlite(`SELECT count(*) FROM chunks WHERE file_id = '${fileId}'`));
+}
+
+async function attachVideo(page, path, caption) {
+  await page.getByRole('button', { name: 'Add an attachment' }).click();
+  const fileChooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('menuitem', { name: 'Photo or Video' }).click();
+  const fileChooser = await fileChooserPromise;
+  await fileChooser.setFiles(path);
+  const captionInput = page.locator('#editable-message-text-modal');
+  await captionInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await captionInput.fill(caption);
+  await captionInput.press('Enter');
+  await captionInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Ждём, пока отправитель дозальёт файл в облако: новый файл со всеми
+// фрагментами и исходящий пузырь без прогресса. Индикатор прогресса может ещё
+// не появиться к первой проверке, поэтому опора — облако. Возвращает file_id
+async function waitUploaded(page, caption, before, timeoutMs = 240000) {
+  const bubble = findMessageContainers(page, caption).first();
+  await bubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const started = Date.now();
+  let fileId;
+  while (!(fileId = completeNewFileId(before))) {
+    assert(Date.now() - started < timeoutMs, `upload of ${caption} did not complete`);
+    await page.waitForTimeout(500);
+  }
+  await bubble.locator('.message-transfer-progress').waitFor({ state: 'detached', timeout: timeoutMs });
+  return fileId;
+}
+
+// Незагруженное видео (больше лимита автозагрузки): первый клик tt может
+// потратить на «разрешить загрузку» — кликаем, пока не откроется просмотрщик
+async function openViewer(page, bubble) {
+  const video = page.locator(VIEWER_VIDEO).first();
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await bubble.locator('.media-inner').first().click();
+    const isOpen = await video.waitFor({ state: 'attached', timeout: 8000 }).then(() => true).catch(() => false);
+    if (isOpen) return video;
+  }
+  await video.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+  return video;
+}
+
+async function closeViewer(page) {
+  await page.keyboard.press('Escape');
+  await page.locator(VIEWER_VIDEO).first()
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS }).catch(() => {});
+}
+
+async function waitPlaying(video, { minTime, timeoutMs }) {
+  return video.evaluate((element, { min, timeout }) => new Promise((resolve, reject) => {
+    const started = performance.now();
+    element.muted = true;
+    element.play().catch(() => {});
+    const timer = setInterval(() => {
+      if (element.currentTime > min && !element.paused && element.readyState >= 3) {
+        clearInterval(timer);
+        resolve(performance.now() - started);
+      } else if (performance.now() - started > timeout) {
+        clearInterval(timer);
+        reject(new Error(`video did not play past ${min}s (at ${element.currentTime}, readyState ${element.readyState})`));
+      }
+    }, 100);
+  }), { min: minTime, timeout: timeoutMs });
+}
+
+const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+const aliceContext = await browser.newContext();
+const bobContext = await browser.newContext();
+const eveContext = await browser.newContext();
+const fixtureDir = mkdtempSync(join(tmpdir(), 'parvane-video-stream-'));
+const sessions = {};
+let integrityLog;
+let eveIntegrityLog;
+let seenChunkReplies;
+
+try {
+  const suffix = `${Date.now()}-${process.pid}`;
+  const alice = `vs-alice-${suffix}@local`;
+  const bob = `vs-bob-${suffix}@local`;
+  const eve = `vs-eve-${suffix}@local`;
+
+  // ── Фикстуры: ≥ 40 МБ с moov в конце и с faststart, ~20 МБ для атаки на тег
+  const bigVideo = makeVideo(fixtureDir, 'big-moov-end.mp4', { seconds: 30, bitrate: '24M', faststart: false });
+  const bigFaststart = makeVideo(fixtureDir, 'big-faststart.mp4', { seconds: 30, bitrate: '24M', faststart: true });
+  const midVideo = makeVideo(fixtureDir, 'mid.mp4', { seconds: 10, bitrate: '18M', faststart: true });
+  assert(bigVideo.size >= BIG_VIDEO_MIN_BYTES, `fixture too small: ${bigVideo.size}`);
+  assert(bigFaststart.size >= BIG_VIDEO_MIN_BYTES, `faststart fixture too small: ${bigFaststart.size}`);
+
+  sessions.alice = await preparePage(aliceContext, alice, PASSWORD);
+  sessions.bob = await preparePage(bobContext, bob, PASSWORD);
+  const bobBytes = trackDownloadedBytes(sessions.bob.page);
+  integrityLog = watchIntegrityLog(sessions.bob.page);
+  await recordToasts(sessions.bob.page);
+  await openPrivateChatStrict(sessions.alice.page, bob);
+  await sendText(sessions.alice.page, `hi-bob-${suffix}`);
+  await openPrivateChatStrict(sessions.bob.page, alice);
+
+  // PARVANE_E2E_VS_ONLY_TAMPER=1 — отладка: пропустить миниатюру и перемотку
+  const seekFixtures = process.env.PARVANE_E2E_VS_ONLY_TAMPER ? [] : [['moov-end', bigVideo], ['faststart', bigFaststart]];
+  for (const [label, fixture] of seekFixtures) {
+    const caption = `vs-${label}-${suffix}`;
+    const filesBefore = cloudFileIds();
+    await attachVideo(sessions.alice.page, fixture.path, caption);
+    const seekFileId = await waitUploaded(sessions.alice.page, caption, filesBefore);
+
+    // ── Миниатюра: кадр видео, не 1×1 и не однотонная, ≤ 3 с (SC-004) ──────
+    const bubble = findMessageContainers(sessions.bob.page, caption).first();
+    await expectFrameThumbnail(sessions.bob.page, bubble, `${label} (bob)`);
+
+    // ── Миниатюра у отправителя после relogin (FR-020) ─────────────────────
+    if (label === 'moov-end') {
+      await relogin(sessions.alice.page, PASSWORD);
+      await openPrivateChatStrict(sessions.alice.page, bob);
+      await expectFrameThumbnail(sessions.alice.page, findMessageContainers(sessions.alice.page, caption).first(),
+        `${label} (alice after relogin)`, 15000);
+    }
+
+    // ── Перемотка на середину сразу после открытия (SC-003) ──────────────────
+    await bobBytes.reset();
+    const video = await openViewer(sessions.bob.page, bubble);
+    await video.evaluate((element) => new Promise((resolve) => {
+      if (element.readyState >= 1) resolve(undefined);
+      else element.addEventListener('loadedmetadata', () => resolve(undefined), { once: true });
+      setTimeout(() => resolve(undefined), 15000);
+    }));
+    const duration = await video.evaluate((element) => element.duration);
+    assert(duration > 10, `${label}: duration ${duration}`);
+    await video.evaluate((element) => { element.currentTime = element.duration / 2; });
+    const seekMs = await waitPlaying(video, { minTime: duration / 2 + 0.3, timeoutMs: 5000 });
+    const downloadedAtStart = await bobBytes.bytesFor();
+    const requestLog = (await bobBytes.requests()).map((request) => `${request.from}-${request.to}`).join(' ');
+    console.log(`${label}: requests before playing: ${requestLog}`);
+    console.log(`${label}: seek to middle played in ${Math.round(seekMs)} ms, downloaded ${downloadedAtStart} of ${fixture.size}`);
+    assert(downloadedAtStart <= fixture.size * 0.25, `${label}: downloaded ${downloadedAtStart} > 25% before playing`);
+    // SC-003: фоновая проверка не должна начинаться раньше 5 с после старта
+    // воспроизведения — иначе её пакеты попадают в замер выше
+    assert(
+      !integrityLog.lines().some((line) => line.includes(`целостность ${seekFileId}`)),
+      `${label}: background verification started before playback got going`,
+    );
+
+    // ── Многократная перемотка без зависаний ──────────────────────────────────
+    for (const fraction of [0.1, 0.8, 0.3, 0.9, 0.05]) {
+      await video.evaluate((element, f) => { element.currentTime = element.duration * f; }, fraction);
+      await waitPlaying(video, { minTime: duration * fraction + 0.2, timeoutMs: 10000 });
+    }
+    await closeViewer(sessions.bob.page);
+
+    // ── Проверка доходит до конца при ЗАКРЫТОМ просмотрщике (FR-022) ──────────
+    // Пауза по простою обязана сама возобновляться: окон плеера больше нет
+    const verifyStarted = Date.now();
+    while (!integrityLog.lines().some((line) => line.includes(`${seekFileId}: проверено`))) {
+      assert(Date.now() - verifyStarted < 120000,
+        `${label}: background verification did not finish with the viewer closed`);
+      await sessions.bob.page.waitForTimeout(1000);
+    }
+    console.log(`${label}: verified in ${Date.now() - verifyStarted} ms with the viewer closed`);
+
+    // ── Повторное открытие: видео продолжает играть ───────────────────────────
+    const replay = await openViewer(sessions.bob.page, bubble);
+    await replay.evaluate((element) => { element.currentTime = 0; });
+    await waitPlaying(replay, { minTime: 0.5, timeoutMs: 10000 });
+    console.log(`${label}: plays from the start after reopening`);
+    await closeViewer(sessions.bob.page);
+  }
+
+  // ── Подмена фрагмента в середине файла (SC-006) ─────────────────────────────
+  const tamperCaption = `vs-tamper-mid-${suffix}`;
+  const beforeTamperedFile = cloudFileIds();
+  await attachVideo(sessions.alice.page, bigVideo.path, tamperCaption);
+  const tamperedFile = await waitUploaded(sessions.alice.page, tamperCaption, beforeTamperedFile);
+  flipCloudByte(tamperedFile, Math.floor(chunkCount(tamperedFile) / 2));
+  const tamperBubble = findMessageContainers(sessions.bob.page, tamperCaption).first();
+  await tamperBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const midToastsBefore = await toastCount(sessions.bob.page);
+  let tamperVideo = await openViewer(sessions.bob.page, tamperBubble);
+  // Плеер открыт и тянет окна; на локальном стеке проверка тега может успеть
+  // раньше метаданных плеера — мгновенный старт проверяет сценарий перемотки
+  await Promise.race([
+    waitPlaying(tamperVideo, { minTime: 0.3, timeoutMs: 15000 }).catch(() => undefined),
+    waitTamperToast(sessions.bob.page, midToastsBefore, 15000).catch(() => undefined),
+  ]);
+  const tamperRequests = (await bobBytes.requests()).filter((request) => request.fileId === tamperedFile);
+  assert(tamperRequests.length > 0, 'viewer did not request the tampered file');
+  await waitTamperToast(sessions.bob.page, midToastsBefore);
+  await assertToastSoonAfterFailure(sessions.bob.page, integrityLog, tamperedFile, midToastsBefore);
+  await closeViewer(sessions.bob.page);
+  await tamperBubble.locator('.icon-message-failed').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Повторный запуск — ошибка без новых запросов файла
+  const requestsBefore = (await bobBytes.requests()).filter((request) => request.fileId === tamperedFile).length;
+  // Один клик: подменённое видео открывается без плеера, повторные клики по
+  // пузырю под открытым просмотрщиком не нужны
+  const replayStartedAt = await sessions.bob.page.evaluate(() => Date.now());
+  await tamperBubble.locator('.media-inner').first().click();
+  await sessions.bob.page.locator('.MediaViewer, #MediaViewer').first()
+    .waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+  tamperVideo = await sessions.bob.page.locator(VIEWER_VIDEO).first()
+    .waitFor({ state: 'attached', timeout: 3000 })
+    .then(() => sessions.bob.page.locator(VIEWER_VIDEO).first())
+    .catch(() => undefined);
+  // tt восстанавливает запомненную позицию (currentTime ≠ 0) — проверяем, что
+  // время не идёт и плеер стоит на паузе
+  const readPlayback = () => tamperVideo?.evaluate((element) => ({ time: element.currentTime, paused: element.paused }))
+    .catch(() => undefined);
+  // Восстановление позиции — асинхронный скачок currentTime; базовый замер
+  // берём после того, как позиция перестала меняться, иначе скачок выглядит
+  // как воспроизведение
+  let playbackBefore = await readPlayback();
+  for (let attempt = 0; attempt < 10 && playbackBefore; attempt++) {
+    await sessions.bob.page.waitForTimeout(500);
+    const next = await readPlayback();
+    if (next && next.time === playbackBefore.time) break;
+    playbackBefore = next;
+  }
+  await sessions.bob.page.waitForTimeout(3000);
+  const playbackAfter = await readPlayback();
+  if (playbackBefore && playbackAfter) {
+    assert(playbackAfter.paused && playbackAfter.time - playbackBefore.time < 0.2,
+      `tampered video plays again: ${JSON.stringify({ playbackBefore, playbackAfter })}`);
+  }
+  // Просмотрщик на подменённом видео не крутит поиск медиа чата (FR-022, T090)
+  await assertNoMediaSearchLoop(sessions.bob.page, replayStartedAt, 'replay of the tampered video');
+
+  // Просмотрщик мог открыться и без <video> (подменённый файл) — закрываем всегда
+  await closeViewer(sessions.bob.page);
+  await sessions.bob.page.locator('.MediaViewer, #MediaViewer').first()
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS }).catch(() => {});
+  const requestsAfter = (await bobBytes.requests()).filter((request) => request.fileId === tamperedFile).length;
+  assert.equal(requestsAfter, requestsBefore, 'tampered file was requested from the network again');
+
+  // ── Подмена тега (последний фрагмент): средний файл загружается целиком — ловит проверка целого файла
+  const tagCaption = `vs-tamper-tag-${suffix}`;
+  const beforeTagFile = cloudFileIds();
+  await attachVideo(sessions.alice.page, midVideo.path, tagCaption);
+  const tagFile = await waitUploaded(sessions.alice.page, tagCaption, beforeTagFile);
+  flipCloudByte(tagFile, chunkCount(tagFile) - 1, 0);
+  const tagBubble = findMessageContainers(sessions.bob.page, tagCaption).first();
+  await tagBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const tagToastsBefore = await toastCount(sessions.bob.page);
+  const tagOpenedAt = await sessions.bob.page.evaluate(() => Date.now());
+  await openViewer(sessions.bob.page, tagBubble);
+  await waitTamperToast(sessions.bob.page, tagToastsBefore);
+  await assertToastSoonAfterFailure(sessions.bob.page, integrityLog, tagFile, tagToastsBefore);
+  await sessions.bob.page.waitForTimeout(3000);
+  await assertNoMediaSearchLoop(sessions.bob.page, tagOpenedAt, 'tag-tampered video in the viewer');
+  await closeViewer(sessions.bob.page);
+
+  // ── Разные байты плееру и проверке: повторный ответ на фрагмент подменён ────
+  let targetFile;
+  // Какой по счёту ответ на фрагмент 3 подменить: 2 — достаётся проверке,
+  // 1 — плееру (первый экземпляр становится эталоном, чистая копия проверки
+  // с ним не сходится)
+  let tamperedReply = 2;
+  // Цель — новый файл, загруженный после снимка облака (id ещё неизвестен,
+  // когда получатель уже может тянуть первые фрагменты)
+  let isTargetFile = (fileId) => fileId === targetFile;
+  const seenByIndex = new Map();
+  seenChunkReplies = seenByIndex;
+  await eveContext.routeWebSocket(/.*/, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      try {
+        const frame = JSON.parse(String(message));
+        if (frame.op === 'reply' && frame.payload) {
+          const body = JSON.parse(frame.payload);
+          if (body.file_id && isTargetFile(body.file_id) && body.chunk_index === 3 && body.data) {
+            const seen = (seenByIndex.get(3) || 0) + 1;
+            seenByIndex.set(3, seen);
+            if (seen === tamperedReply) {
+              const bytes = Buffer.from(body.data, 'base64');
+              bytes[10] ^= 0xff;
+              body.data = bytes.toString('base64');
+              frame.payload = JSON.stringify(body);
+              ws.send(JSON.stringify(frame));
+              return;
+            }
+          }
+        }
+      } catch {
+        // не JSON
+      }
+      ws.send(message);
+    });
+  });
+  sessions.eve = await preparePage(eveContext, eve, PASSWORD);
+  await recordToasts(sessions.eve.page);
+  eveIntegrityLog = watchIntegrityLog(sessions.eve.page);
+  await openPrivateChatStrict(sessions.alice.page, eve);
+  const doubleCaption = `vs-double-${suffix}`;
+  const beforeDouble = cloudFileIds();
+  // Большой файл: он стримится окнами (средний автозагружается целиком одним
+  // проходом — тогда плеер и проверка и так видят одни и те же байты)
+  await attachVideo(sessions.alice.page, bigFaststart.path, doubleCaption);
+  targetFile = await waitUploaded(sessions.alice.page, doubleCaption, beforeDouble);
+  await openPrivateChatStrict(sessions.eve.page, alice);
+  const doubleBubble = findMessageContainers(sessions.eve.page, doubleCaption).first();
+  await doubleBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const eveToastsBefore = await toastCount(sessions.eve.page);
+  const eveVideo = await openViewer(sessions.eve.page, doubleBubble);
+  await Promise.race([
+    waitPlaying(eveVideo, { minTime: 0.5, timeoutMs: 20000 }).catch(() => undefined),
+    waitTamperToast(sessions.eve.page, eveToastsBefore, 20000).catch(() => undefined),
+  ]);
+  await waitTamperToast(sessions.eve.page, eveToastsBefore);
+  await assertToastSoonAfterFailure(sessions.eve.page, eveIntegrityLog, targetFile, eveToastsBefore);
+  assert(seenByIndex.get(3) >= 2, 'chunk 3 was not requested twice');
+  await closeViewer(sessions.eve.page);
+
+  // ── Обратное направление: плееру подменённое, проверке чистое ───────────────
+  const reverseCaption = `vs-double-first-${suffix}`;
+  const beforeReverse = cloudFileIds();
+  seenByIndex.clear();
+  tamperedReply = 1;
+  isTargetFile = (fileId) => !beforeReverse.has(fileId);
+  await attachVideo(sessions.alice.page, bigVideo.path, reverseCaption);
+  const reverseFile = await waitUploaded(sessions.alice.page, reverseCaption, beforeReverse);
+  isTargetFile = (fileId) => fileId === reverseFile;
+  const reverseBubble = findMessageContainers(sessions.eve.page, reverseCaption).first();
+  await reverseBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const reverseToastsBefore = await toastCount(sessions.eve.page);
+  const reverseVideo = await openViewer(sessions.eve.page, reverseBubble);
+  await Promise.race([
+    waitPlaying(reverseVideo, { minTime: 0.5, timeoutMs: 20000 }).catch(() => undefined),
+    waitTamperToast(sessions.eve.page, reverseToastsBefore, 20000).catch(() => undefined),
+  ]);
+  await waitTamperToast(sessions.eve.page, reverseToastsBefore);
+  await assertToastSoonAfterFailure(sessions.eve.page, eveIntegrityLog, reverseFile, reverseToastsBefore);
+  assert(seenByIndex.get(3) >= 2, 'chunk 3 of the reverse-attack file was not requested twice');
+  await closeViewer(sessions.eve.page);
+
+  // ── Кодек, который браузер не умеет декодировать ───────────────────────────
+  // Граничный случай спеки: «миниатюра — нейтральная заглушка с длительностью,
+  // файл можно скачать». MPEG-4 Visual в MP4 Chromium не декодирует. Через
+  // композер такой файл уходит ДОКУМЕНТОМ (отправитель тем же декодером не
+  // читает метаданные), поэтому путь получателя «кадр снять не с чего →
+  // заглушка (buildThumbPlaceholder)» так не проверить. Видео-сообщение с
+  // метаданными (как с десктопа/другого клиента) отправляем через диаг-хук
+  // провайдера: длительность рисует нативный оверлей из метаданных, заглушка
+  // непрозрачная, файл скачивается побайтно
+  {
+    const undecodable = join(fixtureDir, 'undecodable.mp4');
+    execFileSync('ffmpeg', [
+      '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=15:duration=3',
+      '-c:v', 'mpeg4', '-b:v', '600k', '-pix_fmt', 'yuv420p', undecodable,
+    ], { stdio: 'ignore' });
+    const caption = `vs-undecodable-${suffix}`;
+    await openPrivateChatStrict(sessions.alice.page, bob);
+    await sessions.alice.page.waitForFunction(
+      () => typeof window.__parvaneDiagCallApi === 'function',
+      undefined,
+      { timeout: LOGIN_TIMEOUT_MS },
+    );
+    const sendResult = await sessions.alice.page.evaluate(async ({ b64, text, peerName, quick, filename }) => {
+      const global = window.__parvaneGetGlobal();
+      const user = Object.values(global.users.byId)
+        .find((candidate) => candidate.usernames?.some(({ username }) => username === peerName));
+      const chat = user && global.chats.byId[user.id];
+      if (!chat) return `chat for ${peerName} not found`;
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'video/mp4' });
+      // Промис отправки НЕ ждём: у page.evaluate нет таймаута, а sendMessage
+      // провайдера с вложением может не разрешиться (17 сен сценарий висел на
+      // этом сутки). Факт отправки проверяется пузырём у получателя ниже
+      void window.__parvaneDiagCallApi('sendMessage', {
+        chat,
+        text,
+        attachment: {
+          blob, blobUrl: URL.createObjectURL(blob), filename, mimeType: 'video/mp4', size: blob.size, quick,
+        },
+      }).catch(() => undefined);
+      return 'ok';
+    }, {
+      b64: readFileSync(undecodable).toString('base64'),
+      text: caption,
+      peerName: bob.split('@')[0],
+      quick: { width: 320, height: 240, duration: 3 },
+      filename: 'undecodable.mp4',
+    });
+    assert.equal(sendResult, 'ok', `provider send failed: ${sendResult}`);
+    const bubble = findMessageContainers(sessions.bob.page, caption).first();
+    await bubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    // Пришло видео (не документ): оверлей длительности из метаданных
+    await bubble.getByText('0:03', { exact: true }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    // Заглушка приходит как previewBlobUrl → `img.thumbnail` (Video.tsx);
+    // широкий селектор ловил первым `canvas.blurred-bg`/`img.full-media` без
+    // src, у которых naturalWidth не появляется никогда. Непрозрачная и не 1×1
+    // — пузырь не «пустой прямоугольник»
+    const stats = await thumbnailStats(bubble);
+    assert(!stats.timedOut, `undecodable video: placeholder never loaded (${JSON.stringify(stats)})`);
+    // Заглушка (PLACEHOLDER_PNG_BASE64) — 1×1 непрозрачный пиксель, растянутый
+    // CSS до размеров пузыря из метаданных: проверяем непрозрачность и
+    // отрисованный бокс, а не naturalWidth
+    assert(stats.alpha === 255, `undecodable video: placeholder is transparent (alpha=${stats.alpha})`);
+    const placeholderBox = await bubble.locator('img.thumbnail').first().boundingBox();
+    assert(placeholderBox && placeholderBox.width > 40 && placeholderBox.height > 40,
+      `undecodable video: placeholder box is ${JSON.stringify(placeholderBox)}`);
+    // Файл всё равно скачивается побайтно (через меню сообщения — клик по
+    // пузырю открывает просмотрщик)
+    const downloadEvent = sessions.bob.page.waitForEvent('download', { timeout: LOGIN_TIMEOUT_MS });
+    await selectMessageActionOn(sessions.bob.page, bubble, 'Download');
+    const download = await downloadEvent;
+    const downloaded = readFileSync(await download.path());
+    assert.equal(
+      createHash('sha256').update(downloaded).digest('hex'),
+      createHash('sha256').update(readFileSync(undecodable)).digest('hex'),
+      'undecodable video did not download byte-identical',
+    );
+    console.log('OK: недекодируемый кодек — видео с длительностью, непрозрачная заглушка, файл скачивается');
+  }
+
+  // ── Открытых медиа-данных в Cache Storage нет (SC-005) ─────────────────────
+  const storageProbe = await sessions.bob.page.evaluate(async () => {
+    // Кэши с открытым медиа: потоковые окна и свой фон чата (FR-023)
+    const names = await caches.keys();
+    const caches_ = {};
+    for (const name of names.filter((n) => n.startsWith('tt-media') || n.startsWith('tt-custom-bg'))) {
+      const cache = await caches.open(name);
+      caches_[name] = (await cache.keys()).length;
+    }
+    // IndexedDB: ни одна база не должна нести открытые байты медиа. Ищем
+    // значения, похожие на медиа (Blob/ArrayBuffer заметного размера)
+    const databases = (await indexedDB.databases?.() || []).map(({ name }) => name).filter(Boolean);
+    const plaintextBlobs = [];
+    await Promise.all(databases.map((dbName) => new Promise((resolve) => {
+      const request = indexedDB.open(dbName);
+      request.onerror = () => resolve(undefined);
+      request.onsuccess = () => {
+        const db = request.result;
+        const stores = Array.from(db.objectStoreNames);
+        if (!stores.length) { db.close(); resolve(undefined); return; }
+        const tx = db.transaction(stores, 'readonly');
+        let pending = stores.length;
+        const done = () => { if (--pending === 0) { db.close(); resolve(undefined); } };
+        stores.forEach((store) => {
+          const all = tx.objectStore(store).getAll();
+          all.onerror = done;
+          all.onsuccess = () => {
+            all.result.forEach((value) => {
+              const size = value instanceof Blob ? value.size
+                : value instanceof ArrayBuffer ? value.byteLength : 0;
+              if (size > 64 * 1024) plaintextBlobs.push(`${dbName}/${store}:${size}`);
+            });
+            done();
+          };
+        });
+      };
+    })));
+    return { caches: caches_, plaintextBlobs };
+  });
+  Object.entries(storageProbe.caches).forEach(([name, count]) => {
+    assert.equal(count, 0, `plaintext media cache ${name} has ${count} entries`);
+  });
+  assert.deepEqual(storageProbe.plaintextBlobs, [],
+    `plaintext media-sized values in IndexedDB: ${storageProbe.plaintextBlobs.join(', ')}`);
+
+  Object.entries(sessions).forEach(([name, session]) => {
+    assert.deepEqual(session.errors, [], `${name} page errors: ${session.errors.join('; ')}`);
+  });
+  console.log('OK: длинное видео — миниатюра, перемотка без полной загрузки, подмена фрагмента/тега/ответа '
+    + 'плееру или проверке ловится фоновой проверкой, открытых данных в Cache Storage нет');
+} catch (err) {
+  const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
+  for (const [name, session] of Object.entries(sessions)) {
+    await session.page.screenshot({ path: `${dir}video-stream-${name}.png` }).catch(() => {});
+    await dumpDiagJournal(session.page, name);
+  }
+  if (integrityLog) console.error(`--- integrity bob ---\n${integrityLog.lines().join('\n')}`);
+  if (eveIntegrityLog) console.error(`--- integrity eve ---\n${eveIntegrityLog.lines().join('\n')}`);
+  if (seenChunkReplies) console.error(`--- eve chunk replies ---\n${JSON.stringify([...seenChunkReplies])}`);
+  throw err;
+} finally {
+  integrityLog?.stop();
+  eveIntegrityLog?.stop();
+  await browser.close();
+  rmSync(fixtureDir, { recursive: true, force: true });
+}

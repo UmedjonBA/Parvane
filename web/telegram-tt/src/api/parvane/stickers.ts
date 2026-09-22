@@ -6,7 +6,9 @@
 import type { ApiSticker, ApiStickerSet } from '../types';
 import type { PackFile, StoredPack } from './stickerPacks';
 
-import { buildEmojiDocId, registerEmojiPackName } from './stickerPacks';
+import {
+  buildEmojiDocId, buildLegacyEmojiDocId, registerAliasEmojiSticker, registerEmojiDocId, registerEmojiPackName,
+} from './stickerPacks';
 
 const SET_ID = 'parvane-builtin';
 const SET_ACCESS = '0';
@@ -179,6 +181,14 @@ function customEmojiId(index: number) {
   return buildEmojiDocId(BUILTIN_EMOJI_PACK_NAME, customEmojiFileName(index, CUSTOM_EMOJIS[index]));
 }
 
+function legacyCustomEmojiId(index: number) {
+  return buildLegacyEmojiDocId(BUILTIN_EMOJI_PACK_NAME, customEmojiFileName(index, CUSTOM_EMOJIS[index]));
+}
+
+export function getBuiltinLegacyEmojiIds() {
+  return CUSTOM_EMOJIS.map((_, index) => [legacyCustomEmojiId(index), customEmojiId(index)] as const);
+}
+
 function buildApiCustomEmoji(index: number, emoji: string): ApiSticker {
   return {
     mediaType: 'sticker',
@@ -194,8 +204,16 @@ function buildApiCustomEmoji(index: number, emoji: string): ApiSticker {
 }
 
 export async function buildBuiltinCustomEmojiSet() {
-  if (cachedEmojiSet) return cachedEmojiSet;
+  // Реестр docId → набор сбрасывается при смене аккаунта, кэш набора — нет:
+  // регистрируем при каждом вызове, иначе встроенный пак не прикладывался
+  // к сообщению и десктоп не мог отрисовать эмодзи
   registerEmojiPackName(EMOJI_SET_ID, BUILTIN_EMOJI_PACK_NAME);
+  CUSTOM_EMOJIS.forEach((emoji, index) => {
+    registerEmojiDocId(customEmojiId(index), EMOJI_SET_ID);
+    // Старые веб-сообщения со встроенными эмодзи (стандартное FNV-смещение)
+    registerAliasEmojiSticker({ ...buildApiCustomEmoji(index, emoji), id: legacyCustomEmojiId(index) }, EMOJI_SET_ID);
+  });
+  if (cachedEmojiSet) return cachedEmojiSet;
   const stickers: ApiSticker[] = [];
   const blobs = new Map<string, Blob>();
   for (let i = 0; i < CUSTOM_EMOJIS.length; i++) {

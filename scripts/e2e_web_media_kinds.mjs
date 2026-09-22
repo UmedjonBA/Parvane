@@ -22,6 +22,93 @@ import {
 const PASSWORD = 'Parvane-media-kinds-e2e-password';
 const RECORD_MS = 2000;
 
+// id видео из состояния страницы: миниатюр на проводе нет, пузырь просит их
+// отдельным запросом document<id>?size=x
+async function videoFileIds(page, isRound) {
+  return page.evaluate((round) => {
+    const global = window.__parvaneGetGlobal?.();
+    const messages = Object.values(global?.messages.byChatId || {})
+      .flatMap((chat) => Object.values(chat.byId || {}));
+    return messages
+      .filter((message) => message.content?.video && Boolean(message.content.video.isRound) === round)
+      .map((message) => message.content.video.id);
+  }, isRound);
+}
+
+// Те же запросы миниатюр, что делают пузыри, — разом, через diag-callApi
+// страницы. Возвращает на каждый файл размер кадра, разброс яркости (заглушка
+// однотонная) и время ответа от общего старта
+async function measureThumbnails(page, fileIds) {
+  return page.evaluate(async (ids) => {
+    const started = performance.now();
+    const measure = async (id) => {
+      const result = await window.__parvaneDiagCallApi?.('downloadMedia', {
+        url: `document${id}?size=x`, mediaFormat: 0,
+      });
+      const ms = Math.round(performance.now() - started);
+      const blob = result?.dataBlob;
+      if (!blob) return { id, ms, error: `no blob: ${JSON.stringify(result)}` };
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, 32, 24);
+      const { data } = ctx.getImageData(0, 0, 32, 24);
+      const values = [];
+      for (let i = 0; i < data.length; i += 4) values.push(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
+      return {
+        id, ms, width: bitmap.width, height: bitmap.height, mimeType: blob.type, variance,
+      };
+    };
+    return Promise.all(ids.map(measure));
+  }, fileIds);
+}
+
+function isFrame(stats) {
+  return !stats.error && stats.width > 1 && stats.height > 1 && stats.variance > 5;
+}
+
+// Миниатюра кружка: кадр самого видео, не 1×1 и не однотонная серая заглушка
+// (spec 002 FR-020). Мелкий кружок автозагружается и начинает играть раньше,
+// чем миниатюра успевает показаться, поэтому проверяем тот же запрос, что
+// делает RoundVideo (document<id>?size=x)
+async function expectRoundThumbnail(page, label) {
+  const [id] = await videoFileIds(page, true);
+  assert(id, `${label}: no round message`);
+  const [stats] = await measureThumbnails(page, [id]);
+  assert(isFrame(stats), `${label}: round video thumbnail ${JSON.stringify(stats)}`);
+  console.log(`${label}: round thumbnail ${stats.width}x${stats.height}, variance ${Math.round(stats.variance)}, ${stats.ms} ms`);
+}
+
+// SC-004 на нескольких пузырях: миниатюры запрашиваются разом, и очередь
+// (THUMB_CONCURRENCY = 2) не должна отодвинуть k-ю за бюджет. Уложиться в
+// бюджет разрешено заглушкой — кадр приходит позже и заменяет её, поэтому
+// вторым шагом ждём настоящий кадр у каждого видео
+async function expectThumbnailQueue(page, label, count, budgetMs = 4000, frameMs = 20000) {
+  const ids = (await videoFileIds(page, false)).slice(-count);
+  assert.equal(ids.length, count, `${label}: expected ${count} video messages, got ${ids.length}`);
+  const first = await measureThumbnails(page, ids);
+  first.forEach((stats) => {
+    assert(!stats.error, `${label}: thumbnail ${stats.id} — ${stats.error}`);
+    assert(stats.ms <= budgetMs,
+      `${label}: thumbnail ${stats.id} answered in ${stats.ms} ms (budget ${budgetMs} ms)`);
+  });
+  console.log(`${label}: ${count} thumbnails answered in ${first.map((stats) => stats.ms).join('/')} ms`);
+  let latest = first;
+  const deadline = Date.now() + frameMs;
+  while (Date.now() < deadline && !latest.every(isFrame)) {
+    await page.waitForTimeout(500);
+    latest = await measureThumbnails(page, ids);
+  }
+  latest.forEach((stats) => {
+    assert(isFrame(stats), `${label}: thumbnail ${stats.id} stayed a placeholder ${JSON.stringify(stats)}`);
+  });
+  console.log(`${label}: ${count} thumbnails are real frames`);
+}
+
 function makeWav(seconds = 2, rate = 8000) {
   const samples = seconds * rate;
   const data = Buffer.alloc(44 + samples * 2);
@@ -105,8 +192,9 @@ try {
   await openPrivateChat(bobSession.page, alice);
 
   // ── Обычное видео с подписью ────────────────────────────────────────────────
+  const videoBuffer = makeMp4(fixtureDir);
   await attachFile(aliceSession.page, 'Photo or Video', {
-    name: 'e2e-video.mp4', mimeType: 'video/mp4', buffer: makeMp4(fixtureDir),
+    name: 'e2e-video.mp4', mimeType: 'video/mp4', buffer: videoBuffer,
   }, videoCaption);
   const bobVideoMessage = findMessageContainers(bobSession.page, videoCaption).first();
   await bobVideoMessage.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -126,6 +214,19 @@ try {
       }, 200);
     }),
   );
+
+  // ── Несколько видео разом: миниатюры в бюджете SC-004 ──────────────────────
+  // Очередь миниатюр (два слота) раньше выстраивала остальные пузыри за собой,
+  // и k-й ждал освобождения слота — до восьми секунд на каждое зависшее видео
+  for (const index of [2, 3]) {
+    const caption = `${videoCaption}-${index}`;
+    await attachFile(aliceSession.page, 'Photo or Video', {
+      name: `e2e-video-${index}.mp4`, mimeType: 'video/mp4', buffer: videoBuffer,
+    }, caption);
+    await findMessageContainers(bobSession.page, caption).first()
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  }
+  await expectThumbnailQueue(bobSession.page, 'bob', 3);
 
   // ── Аудиофайл: нативный плеер с title и playback ───────────────────────────
   await attachFile(aliceSession.page, 'Document', {
@@ -165,6 +266,7 @@ try {
 
   const bobRound = bobSession.page.locator('.Transition_slide-active > .MessageList .Message .RoundVideo');
   await bobRound.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectRoundThumbnail(bobSession.page, 'bob');
   // Клик включает загрузку (клик по свежему баблу может потеряться —
   // ретраим, пока не появится видео-элемент); play — следующий клик
   const bobRoundVideo = bobRound.locator('video.full-media');
@@ -186,6 +288,7 @@ try {
   await relogin(bobSession.page, PASSWORD);
   await openPrivateChat(bobSession.page, alice);
   await bobRound.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectRoundThumbnail(bobSession.page, 'bob after reload');
   await findMessageContainers(bobSession.page, videoCaption).first()
     .locator('video.full-media, .media-inner').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

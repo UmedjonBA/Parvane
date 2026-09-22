@@ -167,7 +167,9 @@ addActionHandler('openSettingsScreen', (global, actions, payload): ActionReturnT
   const { screen, tabId = getCurrentTabId() } = payload;
   const tabState = selectTabState(global, tabId);
 
-  actions.loadPrivacySettings({ skipIfCached: true });
+  // Parvane: серверных настроек приватности нет, метод не реализован (FR-080),
+  // а `skipIfCached` тут не спасает — обработчик выходит раньше записи кэша, и
+  // каждое открытие настроек сыпало бы `api-missing` в диаг-журнал (FR-082)
   // Force settings only if new screen is passed, do not on resets
   if (payload.screen !== undefined) actions.openLeftColumnContent({ contentKey: LeftColumnContent.Settings, tabId });
   return updateTabState(global, {

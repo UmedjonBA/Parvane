@@ -8,6 +8,19 @@ import ruText from '../../assets/localization/ru.strings?raw';
 
 const PLURAL_FORMS_RU = ['one', 'few', 'many', 'other'] as const;
 
+// Собственные ключи форка: их пишем сами, значит перевод обязателен в обе
+// стороны. Остальной `fallback.strings` — снимок Web A, переведён частично,
+// поэтому полное совпадение наборов требовать нельзя
+const FORK_KEY_PREFIXES = ['Parvane', 'ProfileBirthday'];
+const FORK_KEYS = [
+  'SettingsBirthday', 'BirthdaySetupTitle', 'BirthdayInputDay', 'BirthdayInputMonth', 'BirthdayInputYear',
+  'BirthdayRemove',
+];
+
+function isForkKey(key: string) {
+  return FORK_KEY_PREFIXES.some((prefix) => key.startsWith(prefix)) || FORK_KEYS.includes(key);
+}
+
 function placeholdersOf(text: string) {
   return new Set(text.match(/\{[A-Za-z0-9_]+\}/g) || []);
 }
@@ -24,6 +37,14 @@ describe('Русский языковой пакет', () => {
   it('содержит только ключи из английского пакета', () => {
     const unknown = Object.keys(ru.strings).filter((key) => !(key in en.strings));
     expect(unknown).toEqual([]);
+  });
+
+  it('переводит все собственные ключи форка (ни одного EN-only)', () => {
+    const forkKeysEn = Object.keys(en.strings).filter(isForkKey);
+    // Набор не должен опустеть от опечатки в префиксах — иначе тест ничего не проверяет
+    expect(forkKeysEn.length).toBeGreaterThan(30);
+    const untranslated = forkKeysEn.filter((key) => !(key in ru.strings));
+    expect(untranslated).toEqual([]);
   });
 
   it('сохраняет плейсхолдеры и полные формы множественного числа', () => {

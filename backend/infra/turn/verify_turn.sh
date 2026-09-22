@@ -7,7 +7,9 @@ export PATH="$HOME/.local/bin:$PATH"; export GOFLAGS=-mod=mod
 [ -x ./parvane-turn ] || go build -o parvane-turn . || { echo "не собрать сервер"; exit 2; }
 [ -x ./turntest/turntest ] || go build -o turntest/turntest ./turntest || { echo "не собрать клиент"; exit 2; }
 pkill -x parvane-turn 2>/dev/null; sleep 1
-TURN_PUBLIC_IP=127.0.0.1 setsid nohup ./parvane-turn >/tmp/parvane-turnsrv.log 2>&1 </dev/null & disown
+# Статичный пользователь у сервера опциональный (пустой TURN_USER = только ephemeral),
+# а turntest ходит как parvane/parvane — задаём явно, иначе «Allocate error 400».
+TURN_PUBLIC_IP=127.0.0.1 TURN_USER=parvane TURN_PASS=parvane setsid nohup ./parvane-turn >/tmp/parvane-turnsrv.log 2>&1 </dev/null & disown
 sleep 2
 OUT=$(./turntest/turntest 2>&1)
 pkill -x parvane-turn 2>/dev/null

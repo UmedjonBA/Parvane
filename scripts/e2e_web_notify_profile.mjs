@@ -13,9 +13,11 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  clickUntil,
   findMessage,
   openPrivateChatStrict,
   preparePage,
+  relogin,
   sendText,
 } from './e2e_web_helpers.mjs';
 
@@ -83,6 +85,54 @@ async function closeSettings(page) {
   await menu.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
+async function saveProfileFab(page) {
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.waitForFunction(() => {
+    const fab = document.querySelector('.FloatingActionButton');
+    return !fab || !fab.classList.contains('revealed');
+  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+}
+
+async function createGroupWith(page, member, title) {
+  await page.mouse.move(800, 360);
+  await page.locator('#LeftColumn').hover();
+  await page.getByRole('button', { name: 'New Message' }).click();
+  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  const search = page.locator('#new-group-picker-search');
+  await search.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const name = member.split('@')[0];
+  await search.fill(name);
+  const row = page.locator('#LeftColumn .PeerPickerItem, #LeftColumn .ItemPickerItem').filter({ hasText: name }).first();
+  await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (await row.locator('input[type="checkbox"]:checked').count()) break;
+    if (attempt % 2 === 0) await row.press(' ').catch(() => {});
+    else await row.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+  await page.getByRole('button', { name: 'Continue To Group Info' }).click();
+  await page.getByLabel('Group name').fill(title);
+  await page.getByRole('button', { name: 'Create Group' }).click();
+  await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Профиль alice глазами bob: bio/телефон/канал в правой колонке, цвет — в сторе
+async function readAliceProfile(page, aliceNick) {
+  return page.evaluate((nick) => {
+    const global = window.__parvaneGetGlobal?.();
+    const user = Object.values(global?.users.byId || {})
+      .find((candidate) => (candidate.usernames || []).some((entry) => entry.username === nick));
+    const full = user ? global.users.fullInfoById?.[user.id] : undefined;
+    return {
+      color: user?.color?.color,
+      phone: user?.phoneNumber,
+      birthday: full?.birthday,
+      personalChannelId: full?.personalChannelId,
+      text: document.querySelector('#RightColumn')?.textContent || '',
+    };
+  }, aliceNick);
+}
+
 const browser = await chromium.launch();
 const aliceDev1Context = await browser.newContext();
 const aliceDev2Context = await browser.newContext();
@@ -122,6 +172,130 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: bob видит bio alice в профиле');
 
+  // ── Username только для чтения, без ошибок ────────────────────────────────
+  const aliceNick = alice.split('@')[0];
+  await openEditProfile(aliceDev1.page);
+  const usernameInput = aliceDev1.page.getByLabel('Username', { exact: true });
+  await usernameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await usernameInput.inputValue(), `@${aliceNick}`, 'username shows the nick');
+  assert(await usernameInput.evaluate((input) => input.readOnly), 'username must be read-only');
+  await usernameInput.pressSequentially('zzz').catch(() => {});
+  assert.equal(await usernameInput.inputValue(), `@${aliceNick}`, 'username must not change on typing');
+
+  // ── Личный канал: группа alice с bob ──────────────────────────────────────
+  await closeSettings(aliceDev1.page);
+  const channelTitle = `NP-G-${suffix.slice(-6)}`;
+  await createGroupWith(aliceDev1.page, bob, channelTitle);
+
+  // ── Дата рождения (нативная модалка), цвет имени, телефон, личный канал ───
+  await openEditProfile(aliceDev1.page);
+  await aliceDev1.page.locator('.ListItem').filter({ hasText: 'Birthday' }).first().click();
+  const modal = aliceDev1.page.locator('.modal-dialog').filter({ hasText: 'Date of Birth' });
+  await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await modal.getByLabel('Day').fill('15');
+  await modal.getByLabel('Month').click();
+  await aliceDev1.page.getByRole('menuitem', { name: 'March', exact: true }).click();
+  await modal.getByLabel('Year').fill('1990');
+  await modal.getByRole('button', { name: 'Save', exact: true }).click();
+  await modal.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await aliceDev1.page.locator('.ListItem').filter({ hasText: 'Name color' }).first().click();
+  // Цвет по умолчанию в Parvane — id % 7: выбираем заведомо другой, иначе
+  // сброс неотличим от выбранного цвета
+  const aliceDefaultColor = await bobSession.page.evaluate((nick) => {
+    const global = window.__parvaneGetGlobal?.();
+    const user = Object.values(global?.users.byId || {})
+      .find((candidate) => (candidate.usernames || []).some((entry) => entry.username === nick));
+    return Number(user.id) % 7;
+  }, alice.split('@')[0]);
+  // Палитра предлагает цвета 1..7 (ноль сервер трактует как «не задан»),
+  // поэтому nth(i) — это цвет i + 1
+  const chosenColor = ((aliceDefaultColor + 3) % 7) + 1;
+  await aliceDev1.page.locator('.parvane-name-color-option').nth(chosenColor - 1).click();
+  await aliceDev1.page.locator('.ListItem').filter({ hasText: 'Personal channel' }).first().click();
+  const picker = aliceDev1.page.locator('.modal-dialog').filter({ has: aliceDev1.page.locator('.ChatOrUserPicker-item') });
+  await picker.locator('.ChatOrUserPicker-item').filter({ hasText: channelTitle }).first().click();
+  await picker.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  const phone = `+7900${String(Date.now()).slice(-6)}`;
+  await aliceDev1.page.getByLabel('Phone', { exact: true }).fill(phone);
+  await saveProfileFab(aliceDev1.page);
+  // SC-011: отсчёт от сохранения; живого пуша профиля в контракте нет — bob
+  // видит поля, открыв профиль alice (fetchFullUser перечитывает identity)
+  const profileSavedAt = Date.now();
+  await closeSettings(aliceDev1.page);
+
+  // ── bob видит все поля (и после reload) ───────────────────────────────────
+  const expectProfile = async (label) => {
+    await bobSession.page.waitForFunction(({
+      nick, digits, title, color,
+    }) => {
+      const global = window.__parvaneGetGlobal?.();
+      const user = Object.values(global?.users.byId || {})
+        .find((candidate) => (candidate.usernames || []).some((entry) => entry.username === nick));
+      const full = user ? global.users.fullInfoById?.[user.id] : undefined;
+      const text = document.querySelector('#RightColumn')?.textContent || '';
+      return user?.color?.color === color && (user.phoneNumber || '').replace(/\D/g, '').includes(digits)
+        && full?.birthday?.day === 15 && full?.birthday?.month === 3 && full?.birthday?.year === 1990
+        && text.includes(title);
+    }, {
+      nick: aliceNick, digits: phone.replace(/\D/g, ''), title: channelTitle, color: chosenColor,
+    }, { timeout: LOGIN_TIMEOUT_MS })
+      .catch(async (error) => {
+        throw new Error(`${label}: ${error.message}; profile=${JSON.stringify(await readAliceProfile(bobSession.page, aliceNick))}`);
+      });
+  };
+  await bobSession.page.keyboard.press('Escape');
+  await openPrivateChatStrict(bobSession.page, alice);
+  await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').first().click();
+  await expectProfile('bob live');
+  const profileVisibleMs = Date.now() - profileSavedAt;
+  console.log(`bob sees alice's profile fields ${profileVisibleMs} ms after save`);
+  assert(profileVisibleMs <= 10000, `profile fields reached bob in ${profileVisibleMs} ms (SC-011: ≤ 10 s)`);
+  // Заголовок секции личного канала переведён, а не сырой ключ (FR-003)
+  await bobSession.page.locator('#RightColumn').getByText('Channel', { exact: true }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await bobSession.page.locator('#RightColumn').getByText('ProfileChannel').count(), 0,
+    'personal channel section shows the raw lang key');
+  await relogin(bobSession.page, PASSWORD);
+  await openPrivateChatStrict(bobSession.page, alice);
+  await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').first().click();
+  await expectProfile('bob after reload');
+  console.log('OK: bob видит дату рождения, цвет имени, телефон и личный канал alice');
+
+  // ── Сброс даты рождения и цвета ───────────────────────────────────────────
+  await openEditProfile(aliceDev1.page);
+  const birthdayRow = aliceDev1.page.locator('.ListItem:visible').filter({ hasText: 'Birthday' }).first();
+  await clickUntil(birthdayRow, () => modal.waitFor({ state: 'visible', timeout: 5000 }));
+  await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await modal.getByRole('button', { name: 'Remove from Profile' }).click();
+  await modal.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await aliceDev1.page.locator('.ListItem').filter({ hasText: 'Name color' }).first().click();
+  await aliceDev1.page.locator('.parvane-name-color-default').click();
+  // FR-071 требует сброса ВСЕХ четырёх полей, не только даты и цвета.
+  // Снятие канала — отдельный пункт под строкой «Personal channel»
+  await aliceDev1.page.locator('.ListItem:visible')
+    .filter({ hasText: 'Remove personal channel' }).first().click();
+  await aliceDev1.page.getByLabel('Phone', { exact: true }).fill('');
+  await saveProfileFab(aliceDev1.page);
+  await closeSettings(aliceDev1.page);
+  await relogin(bobSession.page, PASSWORD);
+  await openPrivateChatStrict(bobSession.page, alice);
+  await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').first().click();
+  await bobSession.page.waitForFunction((nick) => {
+    const global = window.__parvaneGetGlobal?.();
+    const user = Object.values(global?.users.byId || {})
+      .find((candidate) => (candidate.usernames || []).some((entry) => entry.username === nick));
+    const full = user ? global.users.fullInfoById?.[user.id] : undefined;
+    // Сброшены все четыре поля: дата, цвет, телефон и личный канал (FR-071)
+    return user && full && !full.birthday
+      && user.color?.color === Number(user.id) % 7
+      && !user.phoneNumber
+      && !full.personalChannelId;
+  }, aliceNick, { timeout: LOGIN_TIMEOUT_MS }).catch(async (error) => {
+    const profile = await readAliceProfile(bobSession.page, aliceNick);
+    throw new Error(`reset not visible to bob: ${error.message}; profile=${JSON.stringify({ ...profile, text: undefined })}`);
+  });
+  console.log('OK: сброс даты рождения, цвета, телефона и личного канала виден bob после reload');
+
   // ── dev1 мутит bob навсегда ───────────────────────────────────────────────
   assert.equal(await mutedChatCount(aliceDev1.page), 0, 'до мута замученных нет');
   await muteChatForever(aliceDev1.page, bob);
@@ -135,6 +309,14 @@ try {
 
   assertNoPageErrors({ aliceDev1, aliceDev2, bob: bobSession });
   console.log('OK: уведомления и профильные поля кросс-девайс (web)');
+} catch (err) {
+  const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
+  for (const [index, context] of browser.contexts().entries()) {
+    for (const [pageIndex, page] of context.pages().entries()) {
+      await page.screenshot({ path: `${dir}notify-profile-${index}-${pageIndex}.png` }).catch(() => {});
+    }
+  }
+  throw err;
 } finally {
   await browser.close();
 }

@@ -19,6 +19,8 @@ type CallInfo = {
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  pendingGroup?: boolean;
+  pendingGroupTitle?: string;
   group?: {
     groupCallId: string;
     title: string;
@@ -172,9 +174,17 @@ const ParvaneCallOverlay = () => {
   const muteIcon = call?.isMuted ? 'icon-microphone-alt' : 'icon-microphone';
   const cameraIcon = call?.isCameraOff ? 'icon-video-stop' : 'icon-video';
 
+  // Parvane: приглашение в групповой звонок ждёт согласия (микрофон ещё не
+  // открыт). Название группы есть, только если приглашённый в ней состоит: в
+  // самом приглашении его нет (провод не меняем)
+  const pendingGroupText = call?.pendingGroupTitle
+    ? lang('ParvaneGroupCallIncomingNamed', call.pendingGroupTitle)
+    : lang('ParvaneGroupCallIncoming');
+
   let statusText = '';
   if (state === 'requesting') statusText = lang('CallStatusRequesting');
   else if (state === 'ringing') statusText = lang('CallStatusRinging');
+  else if (state === 'incoming' && call?.pendingGroup) statusText = pendingGroupText;
   else if (state === 'incoming') statusText = lang('CallStatusIncoming');
   else if (state === 'connecting') statusText = lang('CallStatusExchanging');
   else if (state === 'active') statusText = formatDuration(duration);
@@ -204,6 +214,7 @@ const ParvaneCallOverlay = () => {
                     )}
                   />
                   {name}
+                  {peerState === 'busy' && ` — ${lang('ParvaneGroupPeerBusy')}`}
                 </div>
               );
             })}

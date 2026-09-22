@@ -8,9 +8,11 @@ import type { IMediaDimensions } from './helpers/calculateAlbumLayout';
 import {
   getMediaFormat, getMediaThumbUri, getMediaTransferState, getVideoMediaHash,
 } from '../../../global/helpers';
+import { selectIsMediaViewerOpen } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 import { formatMediaDuration } from '../../../util/dates/oldDateFormat';
 import * as mediaLoader from '../../../util/mediaLoader';
+import { notifyMediaPlaying, useParvaneMediaTampered } from '../../../util/parvaneMediaIntegrity';
 import { calculateExtendedPreviewDimensions, calculateVideoDimensions } from '../../common/helpers/mediaDimensions';
 import { MIN_MEDIA_HEIGHT } from './helpers/mediaDimensions';
 
@@ -62,6 +64,7 @@ export type OwnProps<T> = {
 
 type StateProps = {
   needsAgeVerification?: boolean;
+  isMediaViewerOpen?: boolean;
 };
 
 const Video = <T,>({
@@ -87,6 +90,7 @@ const Video = <T,>({
   onClick,
   onCancelUpload,
   needsAgeVerification,
+  isMediaViewerOpen,
 }: OwnProps<T> & StateProps) => {
   const { cancelMediaDownload, updateContentSettings, openAgeVerificationModal } = getActions();
   const ref = useRef<HTMLDivElement>();
@@ -147,9 +151,17 @@ const Video = <T,>({
   const hasThumb = Boolean(thumbDataUri);
   const withBlurredBackground = Boolean(forcedWidth);
 
-  const isInline = fullMediaData && wasIntersectedRef.current;
+  // Parvane: файл не прошёл проверку целостности — не играем, показываем ошибку
+  const isTampered = useParvaneMediaTampered('id' in video ? video.id : undefined);
+  // Parvane: пока открыт просмотрщик, потоковое видео пузыря не держим — иначе
+  // встроенный плеер продолжает буферизовать файл с начала параллельно с
+  // просмотрщиком (лишний трафик, spec 002 SC-003)
+  const isProgressiveStream = !localBlobUrl && typeof fullMediaData === 'string'
+    && fullMediaData.includes('progressive/');
+  const isInline = fullMediaData && wasIntersectedRef.current && !isTampered
+    && !(isMediaViewerOpen && isProgressiveStream);
 
-  const isUnsupported = useUnsupportedMedia(videoRef, true, !isInline);
+  const isUnsupported = useUnsupportedMedia(videoRef, true, !isInline) || isTampered;
 
   const previewMediaHash = !isPaidPreview ? getVideoMediaHash(video, 'preview') : undefined;
   const [isPreviewPreloaded] = useState(Boolean(previewMediaHash && mediaLoader.getFromMemory(previewMediaHash)));
@@ -302,6 +314,10 @@ const Video = <T,>({
           disablePictureInPicture
           draggable={!isProtected}
           onTimeUpdate={handleTimeUpdate}
+          // Parvane: настоящий старт воспроизведения — от него отсчитывается
+          // отсрочка фоновой докачки (SC-003). Встроенное видео пузыря тоже
+          // идёт потоком, поэтому сигнал нужен и здесь, не только в просмотрщике
+          onPlaying={() => notifyMediaPlaying(typeof fullMediaData === 'string' ? fullMediaData : undefined)}
           onReady={markPlayerReady}
           style={forcedWidth ? `width: ${forcedWidth}px` : undefined}
         />
@@ -378,5 +394,6 @@ export default memo(withGlobal((global): Complete<StateProps> => {
 
   return {
     needsAgeVerification,
+    isMediaViewerOpen: selectIsMediaViewerOpen(global),
   };
 })(Video));

@@ -9,6 +9,11 @@
 //                     режущие UDP); пусто — только UDP
 //   TURN_MIN_PORT/TURN_MAX_PORT — диапазон relay-портов (для проброса через NAT);
 //                     без них relay берёт случайные эфемерные порты
+//   TURN_RELAY_PORT_OFFSET — сдвиг между портом, на который relay БИНДИТСЯ, и
+//                     портом, который сообщается клиенту (XOR-RELAYED-ADDRESS).
+//                     Для NAT хостера с range-DNAT «внешний 20160..20200 →
+//                     внутренний 49160..49200» биндимся на 49160+k, а клиенту
+//                     отдаём 20160+k: OFFSET=-29000. 0/пусто — без сдвига.
 //   TURN_REALM      — realm (по умолч. parvane)
 //   TURN_USER/TURN_PASS — статические креды (по умолч. parvane/parvane)
 //   TURN_SECRET     — включает краткоживущие креды (TURN REST): username
@@ -92,6 +97,11 @@ func main() {
 		}
 	}
 
+	// Сдвиг рекламируемого relay-порта (см. шапку): оборачиваем генератор.
+	if off, errOff := strconv.Atoi(env("TURN_RELAY_PORT_OFFSET", "0")); errOff == nil && off != 0 {
+		relayGen = &offsetRelayGen{inner: relayGen, offset: off}
+	}
+
 	var listenerConfigs []turn.ListenerConfig
 	tcpPort := env("TURN_TCP_PORT", "")
 	if tcpPort != "" {
@@ -137,4 +147,40 @@ func main() {
 	defer func() { _ = server.Close() }()
 
 	select {}
+}
+
+// offsetRelayGen — RelayAddressGenerator, который биндит relay на внутренний порт,
+// а наружу (в XOR-RELAYED-ADDRESS) отдаёт порт со сдвигом. Нужен, когда NAT
+// пробрасывает внешний диапазон на внутренний с постоянным смещением.
+type offsetRelayGen struct {
+	inner  turn.RelayAddressGenerator
+	offset int
+}
+
+func (g *offsetRelayGen) Validate() error { return g.inner.Validate() }
+
+func (g *offsetRelayGen) shift(addr net.Addr) net.Addr {
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return &net.UDPAddr{IP: a.IP, Port: a.Port + g.offset, Zone: a.Zone}
+	case *net.TCPAddr:
+		return &net.TCPAddr{IP: a.IP, Port: a.Port + g.offset, Zone: a.Zone}
+	}
+	return addr
+}
+
+func (g *offsetRelayGen) AllocatePacketConn(network string, requestedPort int) (net.PacketConn, net.Addr, error) {
+	conn, addr, err := g.inner.AllocatePacketConn(network, requestedPort)
+	if err != nil {
+		return conn, addr, err
+	}
+	return conn, g.shift(addr), nil
+}
+
+func (g *offsetRelayGen) AllocateConn(network string, requestedPort int) (net.Conn, net.Addr, error) {
+	conn, addr, err := g.inner.AllocateConn(network, requestedPort)
+	if err != nil {
+		return conn, addr, err
+	}
+	return conn, g.shift(addr), nil
 }

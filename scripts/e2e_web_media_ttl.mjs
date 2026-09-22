@@ -9,6 +9,7 @@ import zlib from 'node:zlib';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  relogin,
   LOGIN_TIMEOUT_MS,
   findMessageContainers,
   openPrivateChat,
@@ -214,7 +215,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   await bobSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await bobSession.page.getByRole('menuitem', { name: 'Location' }).click();
+  await bobSession.page.getByRole('menuitem', { name: 'Location', exact: true }).click();
   await aliceList.locator('.Message .Location').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
@@ -233,12 +234,8 @@ try {
   }
 
   // Reload Alice: истёкшее сообщение не должно вернуться из sync
-  await aliceSession.page.reload({ waitUntil: 'domcontentloaded' });
-  const passwordScreen = aliceSession.page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
-  await aliceSession.page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // keep-signed-in: после reload вход автоматический (форма пароля — только без сессии)
+  await relogin(aliceSession.page, PASSWORD);
   await openPrivateChat(aliceSession.page, bob);
   // Фото и файл пережили reload, TTL-сообщение — нет
   await findMessageContainers(aliceSession.page, photoCaption).first()

@@ -23,6 +23,10 @@ import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
 
 // parvane* — кастомные методы провайдера вне типизированного Methods
+// Parvane: серверных MTProto-разделов (веб-сессии, passkeys, автоархив, TTL
+// аккаунта) нет в контракте — экраны скрыты, запросы не отправляются
+const IS_SERVER_SECURITY_SECTIONS_SUPPORTED = false as boolean;
+
 const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
 
 type OwnProps = {
@@ -89,14 +93,20 @@ const SettingsPrivacy = ({
   useEffect(() => {
     if (!isCurrentUserFrozen) {
       loadBlockedUsers();
-      loadPrivacySettings({});
-      loadWebAuthorizations();
-      loadPasskeys();
+      // Parvane: строки privacy-видимости, веб-сессии и passkeys скрыты — их
+      // данные не грузим; loadPrivacySettings — это 13 вызовов
+      // fetchPrivacySettings, метода нет в провайдере (api-missing в журнале)
+      if (IS_SERVER_SECURITY_SECTIONS_SUPPORTED) {
+        loadPrivacySettings({});
+        loadWebAuthorizations();
+        loadPasskeys();
+      }
     }
   }, [isCurrentUserFrozen]);
 
   useEffect(() => {
-    if (isActive && !isCurrentUserFrozen) {
+    // Parvane: автоархив и удаление аккаунта по TTL скрыты — их данные не грузим
+    if (IS_SERVER_SECURITY_SECTIONS_SUPPORTED && isActive && !isCurrentUserFrozen) {
       loadGlobalPrivacySettings();
       loadAccountDaysTtl();
     }

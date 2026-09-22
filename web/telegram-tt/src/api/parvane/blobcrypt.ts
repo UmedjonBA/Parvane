@@ -68,6 +68,25 @@ export async function decryptBlob(
 // Так видео стримится кусками с того же файла, что и целиком (формат на
 // проводе не меняется, desktop не затронут). Тег не проверяется — только для
 // прогрессивного плеера; целостность целого файла проверяет decryptBlob.
+// Импорт AES-CTR ключа на каждое окно видео дорог — держим non-extractable
+// CryptoKey на файл (ключ сессии, не пишется на диск)
+const CTR_KEY_CACHE_LIMIT = 32;
+const ctrKeyCache = new Map<string, Promise<CryptoKey>>();
+
+function importCtrKey(rawKey: Uint8Array, cacheKey: string) {
+  let cached = ctrKeyCache.get(cacheKey);
+  if (!cached) {
+    cached = crypto.subtle.importKey('raw', toArrayBuffer(rawKey), 'AES-CTR', false, ['encrypt', 'decrypt']);
+    if (ctrKeyCache.size >= CTR_KEY_CACHE_LIMIT) {
+      const oldest = ctrKeyCache.keys().next().value;
+      if (oldest !== undefined) ctrKeyCache.delete(oldest);
+    }
+    ctrKeyCache.set(cacheKey, cached);
+    cached.catch(() => ctrKeyCache.delete(cacheKey));
+  }
+  return cached;
+}
+
 export async function decryptRange(
   ciphertext: Uint8Array, keyB64: string, nonceB64: string, byteOffset: number,
 ): Promise<Uint8Array | undefined> {
@@ -80,7 +99,7 @@ export async function decryptRange(
     counter.set(nonce, 0);
     const blockCounter = (2 + byteOffset / 16) >>> 0;
     new DataView(counter.buffer).setUint32(12, blockCounter, false);
-    const key = await crypto.subtle.importKey('raw', toArrayBuffer(rawKey), 'AES-CTR', false, ['decrypt']);
+    const key = await importCtrKey(rawKey, keyB64);
     const plain = await crypto.subtle.decrypt(
       { name: 'AES-CTR', counter: toArrayBuffer(counter), length: 32 }, key, toArrayBuffer(ciphertext),
     );
@@ -88,4 +107,24 @@ export async function decryptRange(
   } catch {
     return undefined;
   }
+}
+
+// Ключи потоковой проверки тега GCM (gcmVerify.ts): H = AES_K(0^128) и
+// E_K(J0), J0 = nonce ‖ 00000001. AES-CTR над 16 нулевыми байтами с таким
+// начальным счётчиком даёт ровно шифр одного блока
+export async function deriveGhashKeys(keyB64: string, nonceB64: string) {
+  const rawKey = fromBase64(keyB64);
+  const nonce = fromBase64(nonceB64);
+  if (rawKey.length !== KEY_LEN || nonce.length !== NONCE_LEN) throw new Error('неверный ключ файла');
+  const key = await importCtrKey(rawKey, keyB64);
+  const zeros = new ArrayBuffer(16);
+  const hCounter = new Uint8Array(16);
+  const j0 = new Uint8Array(16);
+  j0.set(nonce, 0);
+  j0[15] = 1;
+  const [h, ej0] = await Promise.all([
+    crypto.subtle.encrypt({ name: 'AES-CTR', counter: toArrayBuffer(hCounter), length: 32 }, key, zeros),
+    crypto.subtle.encrypt({ name: 'AES-CTR', counter: toArrayBuffer(j0), length: 32 }, key, zeros),
+  ]);
+  return { h: new Uint8Array(h), ej0: new Uint8Array(ej0) };
 }

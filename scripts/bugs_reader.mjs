@@ -39,7 +39,7 @@ try {
   const page = await loginPersistent(context, bugsUser, bugsPass);
   await page.waitForTimeout(20000); // первичный sync (прод медленный)
   if (process.env.PARVANE_BUGS_DEBUG) {
-    const lines = await page.evaluate(() => (JSON.parse(localStorage.getItem('parvane:diag:v1') || '[]')).filter((e) => e.k === 'log' || /err/.test(e.k) || /fetchChats/.test(e.d || '')).slice(-14).map((e) => `${new Date(e.t).toISOString().slice(11, 19)} ${e.k} ${(e.d || '').slice(0, 140)}`));
+    const lines = await page.evaluate(() => (JSON.parse(localStorage.getItem('parvane:diag:v2') || '[]')).filter((e) => e.k === 'log' || /err/.test(e.k) || /fetchChats/.test(e.d || '')).slice(-14).map((e) => `${new Date(e.t).toISOString().slice(11, 19)} ${e.k} ${(e.d || '').slice(0, 140)}`));
     console.error(lines.join('\n'));
   }
   if (mode === 'login') {

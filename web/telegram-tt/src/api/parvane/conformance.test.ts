@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { packRefCacheKey, shouldReusePackRef } from './messages';
+import { buildEmojiDocId, getEmojiPackNames, sanitizePackName } from './stickerPacks';
+
 // Правила из conformance/ обязаны соблюдать ВСЕ клиенты. Тест сторожит две
 // вещи: логику веба и то, что константы десктопа не разъехались с документом.
 // Смысл — поймать расхождение реализаций до пользователя: именно так фикс
@@ -19,7 +22,7 @@ const rules = JSON.parse(
     tileSize?: number;
     defaultZoom?: number;
     forbiddenHosts?: string[];
-    clients?: { web: string; desktop: string[]; android: string };
+    clients?: { web: string; desktop: string | string[]; android: string };
   }[];
 };
 
@@ -182,7 +185,7 @@ describe('MAP-1: фрагменты карты — только через ша�
     expect(topics).toContain(`PreviewMapTile = "${map.tileTopic}"`);
     const core = readRepo('desktop/parvane-core/src/map_tiles.cpp');
     expect(core).toMatch(/topics::PreviewMapTile/);
-    for (const file of map.clients!.desktop) {
+    for (const file of map.clients!.desktop as string[]) {
       const source = readRepo(file);
       for (const host of hosts) expect(source).not.toContain(host);
     }
@@ -197,5 +200,96 @@ describe('MAP-1: фрагменты карты — только через ша�
     const header = readRepo('desktop/parvane-core/include/parvane/map_tiles.h');
     expect(header).toMatch(new RegExp(`kDefaultZoom = ${map.defaultZoom};`));
     expect(header).toMatch(new RegExp(`kTileSize = ${map.tileSize};`));
+  });
+});
+
+describe('PACK-1: архив пака — под набор получателей', () => {
+  const pack = rule('PACK-1');
+
+  it('веб переиспользует архив только для подмножества получателей', () => {
+    for (const testCase of pack.cases ?? []) {
+      const { cached, next, reuse } = testCase as { cached: string[]; next: string[]; reuse: boolean };
+      expect(shouldReusePackRef(cached, next), String(testCase.name)).toBe(reuse);
+    }
+  });
+
+  it('ключ кэша архива — отпечаток содержимого, а не число файлов и размер', async () => {
+    const bytes = (values: number[]) => ({ data: new Uint8Array(values).buffer });
+    // Тот же набор, пересобранный с ДРУГИМИ файлами той же суммарной длины,
+    // не должен переиспользовать чужой архив
+    const original = await packRefCacheKey('set1', [bytes([1, 2, 3]), bytes([4, 5, 6])]);
+    const sameSizes = await packRefCacheKey('set1', [bytes([9, 9, 9]), bytes([8, 8, 8])]);
+    expect(sameSizes).not.toBe(original);
+    // Те же файлы — тот же ключ (иначе архив грузился бы каждый раз заново)
+    expect(await packRefCacheKey('set1', [bytes([1, 2, 3]), bytes([4, 5, 6])])).toBe(original);
+    // Разные наборы не делят архив
+    expect(await packRefCacheKey('set2', [bytes([1, 2, 3]), bytes([4, 5, 6])])).not.toBe(original);
+  });
+
+  it('десктоп помнит ссылку вместе с набором получателей', () => {
+    const source = readFileSync(
+      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
+      'utf8',
+    );
+    // ссылка ищется по набору получателей, а не только по id набора
+    expect(source).toMatch(/FindUploadedPackRef\(\s*\n?\s*quint64 setId,\s*\n?\s*const QSet<QString> &recipients\)/);
+    expect(source).toMatch(/\(recipients - entry\.recipients\)\.isEmpty\(\)/);
+    expect(source).toMatch(/RememberUploadedPackRef\(/);
+    expect(source).not.toMatch(/g_packRefUploaded\.value\(\w+\);/);
+    expect(String(pack.clients!.desktop)).toContain('verify_conformance_packs.sh');
+  });
+});
+
+describe('EMOJI-1: docId кастом-эмодзи — от имени из ссылки', () => {
+  const emoji = rule('EMOJI-1');
+
+  // Эталон формулы — независимо от реализации веба
+  function referenceDocId(value: string) {
+    let hash = BigInt((emoji as { offsetBasis?: string }).offsetBasis || '0');
+    for (const byte of new TextEncoder().encode(value)) {
+      hash ^= BigInt(byte);
+      hash = (hash * BigInt((emoji as { prime?: string }).prime || '0')) & 0xffffffffffffffffn;
+    }
+    return BigInt.asIntN(64, hash).toString();
+  }
+
+  it('начальное значение FNV совпадает с десктопом и android', () => {
+    const basis = (emoji as { offsetBasis?: string }).offsetBasis;
+    expect(readDesktopSource()).toContain(`std::uint64_t h = ${basis}ULL;`);
+    const jni = readFileSync(path.join(REPO_ROOT, 'android/jni/parvane_jni.cpp'), 'utf8');
+    expect(jni).toContain(`std::uint64_t h = ${basis}ULL;`);
+  });
+
+  it('веб считает docId по формуле правила', () => {
+    for (const testCase of emoji.cases ?? []) {
+      const { packName, file } = testCase as { packName: string; file: string };
+      expect(buildEmojiDocId(packName, file), String(testCase.name))
+        .toBe(referenceDocId(`pvemoji:${packName}|${file}`));
+    }
+  });
+
+  it('сохранённый пак помнит сырое имя: docId не меняются после перезагрузки', () => {
+    for (const testCase of emoji.cases ?? []) {
+      const { packName } = testCase as { packName: string };
+      const stored = { name: sanitizePackName(packName), rawName: packName };
+      // «после перезагрузки» реестр сессии пуст — имена берутся из записи
+      expect(getEmojiPackNames('pvpk-reload-check', stored)[0]).toBe(packName);
+    }
+  });
+
+  it('веб кладёт в ссылку сырое имя эмодзи-пака', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/messages.ts'), 'utf8');
+    expect(source).toMatch(/pack\.rawName \|\| getEmojiPackRawName\(setId\) \|\| pack\.name/);
+  });
+
+  it('десктоп грузит полученный пак под сырым именем и после рестарта', () => {
+    const source = readFileSync(
+      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
+      'utf8',
+    );
+    // сырое имя пишется рядом с распакованным каталогом и читается при загрузке
+    expect(source).toMatch(/WriteRawPackName\(dest, rawName\)/);
+    expect(source).toMatch(/const auto rawName = ReadRawPackName\(dir, packName\)/);
+    expect(String(emoji.clients!.desktop)).toContain('verify_conformance_packs.sh');
   });
 });

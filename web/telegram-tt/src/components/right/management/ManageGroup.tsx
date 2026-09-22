@@ -40,6 +40,11 @@ import TextArea from '../../ui/TextArea';
 
 import './Management.scss';
 
+// Parvane: у групп нет серверных фото, описания, общих ограничений, реакций,
+// типа, заявок на вступление, форумов и скрытия истории — эти пункты молча
+// ничего не делали; остаются название, участники, админы, инвайт-ссылки
+const IS_GROUP_EXTRA_SETTINGS_SUPPORTED = false;
+
 type OwnProps = {
   chatId: string;
   onScreenSelect: (screen: ManagementScreens) => void;
@@ -142,7 +147,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
     if (canInvite) {
       loadExportedChatInvites({ chatId });
       loadExportedChatInvites({ chatId, isRevoked: true });
-      loadChatJoinRequests({ chatId });
+      if (IS_GROUP_EXTRA_SETTINGS_SUPPORTED) loadChatJoinRequests({ chatId });
     }
   }, [chatId, canInvite]);
 
@@ -321,12 +326,14 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management">
       <div className="panel-content custom-scroll">
-        <AvatarEditable
-          isForForum={isForumEnabled}
-          currentAvatarBlobUrl={currentAvatarBlobUrl}
-          onChange={handleSetPhoto}
-          disabled={!canChangeInfo}
-        />
+        {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+          <AvatarEditable
+            isForForum={isForumEnabled}
+            currentAvatarBlobUrl={currentAvatarBlobUrl}
+            onChange={handleSetPhoto}
+            disabled={!canChangeInfo}
+          />
+        )}
         <Island>
           <div className="settings-edit">
             <InputText
@@ -337,24 +344,26 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               error={error === GROUP_TITLE_EMPTY ? error : undefined}
               disabled={!canChangeInfo}
             />
-            <TextArea
-              id="group-about"
-              label={lang('DescriptionPlaceholder')}
-              maxLength={GROUP_MAX_DESCRIPTION}
-              maxLengthIndicator={(GROUP_MAX_DESCRIPTION - about.length).toString()}
-              onChange={handleAboutChange}
-              value={about}
-              disabled={!canChangeInfo}
-              noReplaceNewlines
-            />
+            {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+              <TextArea
+                id="group-about"
+                label={lang('DescriptionPlaceholder')}
+                maxLength={GROUP_MAX_DESCRIPTION}
+                maxLengthIndicator={(GROUP_MAX_DESCRIPTION - about.length).toString()}
+                onChange={handleAboutChange}
+                value={about}
+                disabled={!canChangeInfo}
+                noReplaceNewlines
+              />
+            )}
           </div>
-          {chat.isCreator && (
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && chat.isCreator && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('GroupType')}</span>
               <span className="subtitle">{isPublicGroup ? lang('TypePublic') : lang('TypePrivate')}</span>
             </ListItem>
           )}
-          {hasLinkedChannel && (
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && hasLinkedChannel && (
             <ListItem
               icon="message"
               multiline
@@ -364,30 +373,34 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               <span className="subtitle">{lang('DiscussionUnlink')}</span>
             </ListItem>
           )}
-          <ListItem
-            icon="permissions"
-            multiline
-            onClick={handleClickPermissions}
-            disabled={!canBanUsers}
-          >
-            <span className="title">{lang('ChannelPermissions')}</span>
-            <span className="subtitle" dir="auto">
-              {enabledPermissionsCount}
-              /
-              {TOTAL_PERMISSIONS_COUNT - (isForumEnabled ? 0 : 1)}
-            </span>
-          </ListItem>
-          <ListItem
-            icon="heart-outline"
-            multiline
-            onClick={handleClickReactions}
-            disabled={!canChangeInfo}
-          >
-            <span className="title">{lang('Reactions')}</span>
-            <span className="subtitle" dir="auto">
-              {chatReactionsDescription}
-            </span>
-          </ListItem>
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+            <ListItem
+              icon="permissions"
+              multiline
+              onClick={handleClickPermissions}
+              disabled={!canBanUsers}
+            >
+              <span className="title">{lang('ChannelPermissions')}</span>
+              <span className="subtitle" dir="auto">
+                {enabledPermissionsCount}
+                /
+                {TOTAL_PERMISSIONS_COUNT - (isForumEnabled ? 0 : 1)}
+              </span>
+            </ListItem>
+          )}
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+            <ListItem
+              icon="heart-outline"
+              multiline
+              onClick={handleClickReactions}
+              disabled={!canChangeInfo}
+            >
+              <span className="title">{lang('Reactions')}</span>
+              <span className="subtitle" dir="auto">
+                {chatReactionsDescription}
+              </span>
+            </ListItem>
+          )}
           <ListItem
             icon="admin"
             multiline
@@ -409,7 +422,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          {Boolean(chat.joinRequests?.length) && (
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"
               onClick={handleClickRequests}
@@ -421,7 +434,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          {canEditForum && (
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && canEditForum && (
             <>
               <ListItem icon="forums" ripple onClick={handleForumToggle}>
                 <span>{lang('ChannelTopics')}</span>
@@ -440,7 +453,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
             <span className="subtitle">{formatInteger(chat.membersCount ?? 0)}</span>
           </ListItem>
 
-          {!isPublicGroup && !hasLinkedChannel && Boolean(chatFullInfo) && (
+          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && !isPublicGroup && !hasLinkedChannel && Boolean(chatFullInfo) && (
             <div className="ListItem narrow" ref={isPreHistoryHiddenCheckboxRef}>
               <Checkbox
                 className="align-checkbox-with-list-buttons"

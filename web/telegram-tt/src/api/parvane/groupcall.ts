@@ -1,8 +1,9 @@
 // Групповые звонки: mesh из pairwise WebRTC-сессий (протокол desktop).
 // Каждая пара — обычные invite/answer/ice в отдельный инбокс
 // call.user.gcall:<peer>; оффер инициирует лексикографически меньший адрес
-// (детерминированное разрешение glare), входящие в mesh принимаются
-// автоматически. Локальный поток один на звонок, треки шарятся между pc.
+// (детерминированное разрешение glare). В звонок входят только после
+// согласия пользователя (calls.ts), дальше парные invite внутри mesh
+// принимаются сами. Локальный поток один на звонок, треки шарятся между pc.
 
 import type { CallMedia, WireCallSignal } from './callengine';
 
@@ -13,7 +14,7 @@ export type WireGroupInvite = {
   media: CallMedia;
 };
 
-export type GroupPeerState = 'connecting' | 'active' | 'ended' | 'security_failed';
+export type GroupPeerState = 'connecting' | 'active' | 'ended' | 'security_failed' | 'busy';
 
 type GroupCallCallbacks = {
   // Контроллер сам добавляет gcall:-префикс к адресу получателя
@@ -21,6 +22,8 @@ type GroupCallCallbacks = {
   getPeerSigningKeys: (peer: string) => Promise<string[]>;
   getIceServers: () => Promise<RTCIceServer[]>;
   getIceTransportPolicy: () => RTCIceTransportPolicy | undefined;
+  // Сколько ждать соединения с участником, прежде чем закрыть его строку
+  getRingTimeoutMs?: () => number;
   sign: (data: string) => string;
   verify: (publicKey: string, data: string, signature: string) => boolean;
   onPeerState: (peer: string, state: GroupPeerState) => void;
@@ -31,6 +34,7 @@ type GroupCallCallbacks = {
 // Явный клиентский лимит mesh: N-1 исходящих потоков на участника; сервер
 // допускает до 32, но аудио-mesh больше восьми деградирует
 export const GROUP_CALL_MAX_PARTICIPANTS = 8;
+const PEER_CONNECT_TIMEOUT_MS = 45000;
 
 function buildSignedData(callId: string, sdp: string) {
   return `${callId}\n${sdp}`;
@@ -49,11 +53,21 @@ class MeshPeerSession {
 
   private isEnded = false;
 
+  private connectTimer?: number;
+
   constructor(
     private peer: string,
     private engine: GroupCallEngine,
     private cb: GroupCallCallbacks,
-  ) {}
+  ) {
+    // Участник не принял приглашение / не ответил: строка не должна висеть
+    // «connecting» — закрываем сессию по таймауту вызова
+    this.connectTimer = window.setTimeout(() => {
+      if (this.isEnded || this.pc?.connectionState === 'connected') return;
+      this.hangup();
+      this.engine.onSessionClosed(this.peer);
+    }, this.cb.getRingTimeoutMs?.() ?? PEER_CONNECT_TIMEOUT_MS);
+  }
 
   async startOffer(media: CallMedia) {
     this.callId = crypto.randomUUID();
@@ -129,6 +143,26 @@ class MeshPeerSession {
         }
         break;
       case 'reject':
+        // Своего call_id у сессии нет, пока оффер за участником (правило glare:
+        // шлёт лексикографически меньший адрес); до его invite reject от него
+        // прийти не может (шард форвардит reject только по записи invite), и
+        // строка закрывается таймаутом соединения
+        if (this.callId && signal.call_id !== this.callId) return;
+        // Ответ уже применён — сессия ведёт разговор с тем устройством
+        // участника, которое приняло вызов. Отказ с тем же call_id может
+        // прислать только ДРУГОЕ его устройство (приглашение звонит на всех,
+        // и остальные отклоняют его по своему таймауту): ронять по нему живую
+        // сессию нельзя. Уход принявшего устройства приходит сигналом hangup
+        if (this.remoteReady) return;
+        if (signal.reason === 'busy') {
+          // Участник занят другим звонком: строка остаётся с пометкой «занят»
+          this.close();
+          this.cb.onPeerState(this.peer, 'busy');
+          this.engine.onSessionClosed(this.peer);
+          return;
+        }
+        this.end(false);
+        break;
       case 'hangup':
         if (signal.call_id === this.callId) this.end(false);
         break;
@@ -148,7 +182,15 @@ class MeshPeerSession {
     const iceServers = await this.cb.getIceServers();
     if (this.isEnded) return undefined;
     const stream = await this.engine.ensureLocalStream(media);
-    if (this.isEnded || !stream) return undefined;
+    if (this.isEnded) return undefined;
+    if (!stream) {
+      // Нет доступа к микрофону/камере: сессия не должна висеть «connecting»
+      // бесконечно — закрываем и сообщаем пользователю
+      if (this.callId) this.cb.sendSignal(this.peer, { type: 'hangup', call_id: this.callId });
+      this.end(false);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-call-media-error'));
+      return undefined;
+    }
     const pc = new RTCPeerConnection({
       iceServers,
       iceTransportPolicy: this.cb.getIceTransportPolicy(),
@@ -168,8 +210,10 @@ class MeshPeerSession {
     pc.onconnectionstatechange = () => {
       if (this.pc !== pc) return;
       const s = pc.connectionState;
-      if (s === 'connected') this.cb.onPeerState(this.peer, 'active');
-      else if (s === 'failed' || s === 'disconnected' || s === 'closed') this.end(false);
+      if (s === 'connected') {
+        window.clearTimeout(this.connectTimer);
+        this.cb.onPeerState(this.peer, 'active');
+      } else if (s === 'failed' || s === 'disconnected' || s === 'closed') this.end(false);
     };
     return pc;
   }
@@ -217,6 +261,7 @@ class MeshPeerSession {
   }
 
   private close() {
+    window.clearTimeout(this.connectTimer);
     this.isEnded = true;
     const pc = this.pc;
     this.pc = undefined;
@@ -234,6 +279,8 @@ export class GroupCallEngine {
   private localStream?: MediaStream;
 
   private localStreamPromise?: Promise<MediaStream | undefined>;
+
+  private localStreamGeneration = 0;
 
   constructor(private self: string, private cb: GroupCallCallbacks) {}
 
@@ -261,6 +308,17 @@ export class GroupCallEngine {
     this.media = media || 'audio';
     for (const peer of participants) {
       if (peer === this.self || this.sessions.has(peer)) continue;
+      // Лимит mesh держим и при ДОБОРЕ участников в идущий звонок, а не только
+      // при его создании: иначе девятый и следующие достраивали бы сетку без
+      // предела (N-1 исходящих потоков на каждого)
+      if (this.sessions.size + 1 >= GROUP_CALL_MAX_PARTICIPANTS) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('parvane-call-too-many', {
+            detail: { limit: GROUP_CALL_MAX_PARTICIPANTS },
+          }));
+        }
+        break;
+      }
       const session = new MeshPeerSession(peer, this, this.cb);
       this.sessions.set(peer, session);
       // Оффер шлёт лексикографически меньший адрес; иначе ждём invite
@@ -270,9 +328,11 @@ export class GroupCallEngine {
 
   async handleSignal(from: string, signal: WireCallSignal | WireGroupInvite) {
     if (signal.type === 'group_invite') {
-      // Уже в другом групповом звонке — игнорируем приглашение
-      if (this.groupCallId && this.groupCallId !== signal.group_call_id) return;
-      this.joinMesh(signal.group_call_id, signal.participants, signal.media);
+      // Приглашение в идущий звонок (новые участники) — достраиваем mesh;
+      // новое приглашение решает контроллер (согласие пользователя)
+      if (this.groupCallId === signal.group_call_id) {
+        this.joinMesh(signal.group_call_id, signal.participants, signal.media);
+      }
       return;
     }
     let session = this.sessions.get(from);
@@ -282,11 +342,16 @@ export class GroupCallEngine {
     }
     if (!session) return;
     if (signal.type === 'invite') {
-      // Mesh-инвайт принимается автоматически, без отдельного «принять»
+      // Mesh-инвайт внутри звонка, в который пользователь уже вошёл
       await session.acceptOffer(signal.call_id, signal.media, signal.sdp, signal.sig);
       return;
     }
     await session.handleSignal(signal);
+  }
+
+  // Отказ/занятость на парный invite без входа в mesh (согласие не дано)
+  rejectInvite(peer: string, callId: string, reason: string) {
+    this.cb.sendSignal(peer, { type: 'reject', call_id: callId, reason });
   }
 
   leave() {
@@ -309,15 +374,29 @@ export class GroupCallEngine {
   async ensureLocalStream(media: CallMedia) {
     if (this.localStream) return this.localStream;
     if (!this.localStreamPromise) {
-      this.localStreamPromise = navigator.mediaDevices
-        .getUserMedia({ audio: true, video: media === 'video' })
-        .then((stream) => {
-          this.localStream = stream;
-          return stream;
-        })
-        .catch(() => undefined);
+      this.localStreamGeneration += 1;
+      this.localStreamPromise = this.requestLocalStream(media, this.localStreamGeneration);
     }
     return this.localStreamPromise;
+  }
+
+  // Отказ в доступе к микрофону/камере НЕ кэшируем: запомненный отказ пережил бы
+  // и выдачу прав, и все следующие звонки во вкладке — каждый из них мгновенно
+  // самоотклонялся бы. Успешный поток кэшируется как раньше (один на звонок).
+  // Поколение — чтобы отказ старого запроса (звонок успели закрыть) не сбросил
+  // запрос уже следующего звонка
+  private async requestLocalStream(media: CallMedia, generation: number) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: media === 'video' });
+      this.localStream = stream;
+      return stream;
+    } catch {
+      if (this.localStreamGeneration === generation) {
+        this.localStream = undefined;
+        this.localStreamPromise = undefined;
+      }
+      return undefined;
+    }
   }
 
   private stopLocalStream() {

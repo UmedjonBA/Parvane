@@ -140,6 +140,35 @@ export class SecureE2eStorage {
     return out;
   }
 
+  // Двоичная запись (архив пака): шифруем байты как есть, без JSON — иначе
+  // ArrayBuffer не сериализуется, а base64 раздувал бы 20-МБ пак на треть
+  async saveBytesRecord(name: string, bytes: Uint8Array) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plain = new Uint8Array(bytes.length);
+    plain.set(bytes);
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: additionalData(this.user, name) },
+      this.protectionKey,
+      plain.buffer,
+    );
+    const record: EncryptedRecord = { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
+    await set(recordId(this.user, name), record, STORAGE);
+  }
+
+  async loadBytesRecord(name: string): Promise<Uint8Array | undefined> {
+    const record = await get<EncryptedRecord>(recordId(this.user, name), STORAGE);
+    if (!record || record.version !== STORAGE_VERSION) return undefined;
+    try {
+      return new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
+        this.protectionKey,
+        record.ciphertext,
+      ));
+    } catch {
+      return undefined;
+    }
+  }
+
   async deleteRecord(name: string) {
     await del(recordId(this.user, name), STORAGE);
   }

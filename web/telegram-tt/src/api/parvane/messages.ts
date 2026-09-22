@@ -7,6 +7,7 @@ import type { GatewayConnection } from './gateway';
 import type { createLocalState } from './localState';
 import type { createMediaService } from './media';
 import type { PollStore } from './polls';
+import type { StoredPack } from './stickerPacks';
 import type { ParvaneStore } from './store';
 import type { createSyncController } from './sync';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
@@ -26,7 +27,13 @@ import {
   storeSavedGifRecords,
 } from './gifs';
 import {
-  buildPvpkArchive, findInstalledPackBySetId, getEmojiSetIdForDocId, isCustomPackSetId,
+  buildPvpkArchive,
+  findInstalledPackBySetId,
+  getEmojiPackRawName,
+  getEmojiSetIdForDocId,
+  getPendingFiles,
+  isCustomPackSetId,
+  isEmojiPackSetId,
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
 import {
@@ -62,7 +69,39 @@ type MessageDependencies = {
   collectUsersFor: (messages: ApiMessage[]) => ApiUser[];
   clearPersistedDraft: (address: string) => void;
   log: (message: string) => void;
+  // Файлы полученного, но не установленного пака (по pack_ref из cloud) и
+  // дозагрузка документов эмодзи по docId (заполняет реестр docId → набор)
+  resolveCustomPack?: (setId: string) => Promise<{ pack: StoredPack } | undefined>;
+  primeCustomEmoji?: (docIds: string[]) => Promise<unknown>;
 };
+
+const PACK_REF_CACHE_LIMIT = 64;
+
+type CachedPackRef = { recipients: string[]; ref: WirePackRef };
+
+// Ключ кэша загруженного архива пака: набор + отпечаток содержимого (тот же
+// набор, пересобранный с другими файлами, не должен переиспользовать архив).
+// Раньше отпечатком было «число файлов : суммарный размер» — пак, пересобранный
+// с файлами той же общей длины, брал чужой архив
+export async function packRefCacheKey(setId: string, files: Array<{ data: ArrayBuffer }>) {
+  const totalBytes = files.reduce((sum, file) => sum + file.data.byteLength, 0);
+  const joined = new Uint8Array(totalBytes);
+  let offset = 0;
+  files.forEach((file) => {
+    joined.set(new Uint8Array(file.data), offset);
+    offset += file.data.byteLength;
+  });
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', joined.buffer));
+  const digest = Array.from(hash.subarray(0, 16), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${setId}|${files.length}:${digest}`;
+}
+
+// PACK-1: архив в cloud доступен только получателям, названным при загрузке —
+// переиспользовать можно, только если все новые получатели в том наборе
+export function shouldReusePackRef(cachedRecipients: string[], nextRecipients: string[]) {
+  const cached = new Set(cachedRecipients);
+  return nextRecipients.every((recipient) => cached.has(recipient));
+}
 
 const EXT_BY_STICKER_MIME: Record<string, string> = {
   'image/png': 'png',
@@ -78,8 +117,9 @@ const LIVE_LOCATION_POSITION_TIMEOUT_MS = 10000;
 export function createMessageController(deps: MessageDependencies) {
   const uuidBySentLocalKey = new Map<string, string>();
   const savedGifs: ApiVideo[] = [];
-  // Кэш загруженных в cloud архивов паков (setId → pack_ref) на сессию
-  const uploadedPackRefBySetId = new Map<string, WirePackRef>();
+  // Кэш загруженных в cloud архивов паков на сессию: ключ набор+отпечаток,
+  // значение — архивы под разные наборы получателей (PACK-1)
+  const uploadedPackRefs = new Map<string, CachedPackRef[]>();
 
   const connection = () => deps.getConnection();
 
@@ -106,7 +146,7 @@ export function createMessageController(deps: MessageDependencies) {
   // пережить (persist считается от текущего self)
   function reset() {
     uuidBySentLocalKey.clear();
-    uploadedPackRefBySetId.clear();
+    uploadedPackRefs.clear();
     liveLocations.forEach((entry) => {
       if (entry.timer) clearInterval(entry.timer);
     });
@@ -491,18 +531,38 @@ export function createMessageController(deps: MessageDependencies) {
     if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
   }
 
-  // Архив пака грузится в cloud один раз за сессию; получатель по pack_ref
-  // сможет установить весь набор (конвенция desktop-форка)
+  // Архив пака грузится в cloud под каждый новый набор получателей (PACK-1:
+  // доступ к архиву выдаётся списку, названному при загрузке), получатель по
+  // pack_ref сможет установить весь набор (конвенция desktop-форка)
   // Кастом-эмодзи в тексте (entity custom_emoji → docId → пак): приложить
   // pack_ref паков, чтобы получатель (web/desktop) материализовал их. Лимит и
   // формат — как в desktop BuildEmojiPacks
+  // Ссылки прошлой версии сообщения + ссылки текущего текста, без дублей по
+  // file_id и не длиннее лимита на сообщение
+  function mergePackRefs(previous: WirePackRef[] | undefined, next: WirePackRef[]) {
+    const merged: WirePackRef[] = [];
+    const seen = new Set<string>();
+    for (const ref of [...next, ...(previous || [])]) {
+      if (seen.has(ref.file_id)) continue;
+      seen.add(ref.file_id);
+      merged.push(ref);
+    }
+    return merged.length ? merged.slice(0, EMOJI_PACKS_PER_MESSAGE) : undefined;
+  }
+
   async function buildEmojiPackRefs(
     entities: ApiMessageEntity[] | undefined, toAddress: string,
   ): Promise<WirePackRef[]> {
+    const docIds = (entities || [])
+      .filter((entity) => entity.type === ApiMessageEntityTypes.CustomEmoji && entity.documentId)
+      .map((entity) => (entity as { documentId: string }).documentId);
+    // Пересылка эмодзи из неустановленного пака: набор ещё не собран в этой
+    // сессии — дозагружаем документы, это заполняет реестр docId → набор
+    const unknown = docIds.filter((docId) => !getEmojiSetIdForDocId(docId));
+    if (unknown.length && deps.primeCustomEmoji) await deps.primeCustomEmoji(unknown).catch(() => undefined);
     const setIds = new Set<string>();
-    (entities || []).forEach((entity) => {
-      if (entity.type !== ApiMessageEntityTypes.CustomEmoji || !entity.documentId) return;
-      const setId = getEmojiSetIdForDocId(entity.documentId);
+    docIds.forEach((docId) => {
+      const setId = getEmojiSetIdForDocId(docId);
       if (setId) setIds.add(setId);
     });
     const refs: WirePackRef[] = [];
@@ -513,29 +573,47 @@ export function createMessageController(deps: MessageDependencies) {
     return refs;
   }
 
+  async function findPackFiles(setId: string): Promise<StoredPack | undefined> {
+    if (setId === getBuiltinEmojiSetId()) return buildBuiltinEmojiPack();
+    const installed = await findInstalledPackBySetId(store().self, setId);
+    if (installed) return installed;
+    const pending = getPendingFiles(setId);
+    if (pending) return pending;
+    return (await deps.resolveCustomPack?.(setId).catch(() => undefined))?.pack;
+  }
+
   async function buildPackRefForSet(setId: string, toAddress: string): Promise<WirePackRef | undefined> {
-    const cachedRef = uploadedPackRefBySetId.get(setId);
-    if (cachedRef) return cachedRef;
-    const pack = setId === getBuiltinEmojiSetId()
-      ? await buildBuiltinEmojiPack()
-      : await findInstalledPackBySetId(store().self, setId);
+    const pack = await findPackFiles(setId);
     if (!pack) return undefined;
+    const recipients = deps.media.getCloudRecipients(toAddress);
+    const cacheKey = await packRefCacheKey(setId, pack.files);
+    const cachedRefs = uploadedPackRefs.get(cacheKey) || [];
+    const reusable = cachedRefs.find((entry) => shouldReusePackRef(entry.recipients, recipients));
+    if (reusable) return reusable.ref;
     const archive = buildPvpkArchive(pack.files);
     if (!archive) return undefined;
     const { fileId, mediaKeys } = await deps.media.uploadBlob(
       new Blob([archive as BlobPart], { type: 'application/octet-stream' }),
       'pack.pvpk',
       'application/octet-stream',
-      { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) },
+      { encrypt: true, recipients },
     );
+    // EMOJI-1: в ссылке — ровно то имя, от которого считались docId
+    const isEmoji = pack.isEmoji || isEmojiPackSetId(setId);
+    const refName = isEmoji ? (pack.rawName || getEmojiPackRawName(setId) || pack.name) : pack.name;
     const ref: WirePackRef = {
       file_id: fileId,
-      name: pack.name,
+      name: refName,
       count: pack.files.length,
       key: mediaKeys?.keyB64,
       nonce: mediaKeys?.nonceB64,
     };
-    uploadedPackRefBySetId.set(setId, ref);
+    uploadedPackRefs.delete(cacheKey);
+    uploadedPackRefs.set(cacheKey, [...cachedRefs, { recipients, ref }]);
+    if (uploadedPackRefs.size > PACK_REF_CACHE_LIMIT) {
+      const oldest = uploadedPackRefs.keys().next().value;
+      if (oldest !== undefined) uploadedPackRefs.delete(oldest);
+    }
     deps.log(`пак «${pack.name}» загружен в cloud (${archive.length} байт)`);
     return ref;
   }
@@ -726,7 +804,10 @@ export function createMessageController(deps: MessageDependencies) {
     // Богатое превью тянем с шарда (SSRF-safe); короткий дедлайн, деградация к
     // hostname. При noWebPage наружу не ходим вовсе
     const webpage = params.noWebPage ? undefined : await deps.media.fetchWebPagePreview(params.text);
-    const emojiPacks = await buildEmojiPackRefs(params.entities, toAddress);
+    // Только для текстовой отправки: ветка вложения ниже целиком заменяет
+    // wireContent, а подпись в проводе — простая строка без entities, так что
+    // архив пака (PACK-1 грузит его под набор получателей) ушёл бы в cloud зря
+    const emojiPacks = attachment ? [] : await buildEmojiPackRefs(params.entities, toAddress);
     let wireContent: Record<string, unknown> = {
       kind: 'text',
       text: params.text || '',
@@ -1190,9 +1271,20 @@ export function createMessageController(deps: MessageDependencies) {
       // текстом: у медиа-сообщения меняем только подпись (по кэшированному
       // inner), у текстового — текст и entities
       const previous = engine.getCachedInner(uuid)?.content as WireMessageContent | undefined;
+      // Правка обязана нести ссылки на паки так же, как отправка и пересылка:
+      // без них entity custom_emoji у получателя не резолвится, а десктоп не
+      // материализует пак. Ссылки прошлой версии сохраняем — иначе правка
+      // текста снимала бы эмодзи, которые в сообщении уже были
+      const isMediaEdit = Boolean(previous && previous.kind !== 'text');
+      const emojiPacks = isMediaEdit ? undefined : mergePackRefs(
+        previous?.kind === 'text' ? previous.emoji_packs : undefined,
+        await buildEmojiPackRefs(entities, toAddress),
+      );
       const plainContent: WireMessageContent = previous && previous.kind !== 'text'
         ? { ...previous, caption: text || undefined, entities: wireEntities }
-        : { kind: 'text', text, entities: wireEntities };
+        : {
+          kind: 'text', text, entities: wireEntities, emoji_packs: emojiPacks,
+        };
       await publishEditedContent(uuid, toAddress, plainContent);
       // Сохраняем медиа/вложение оригинала, обновляя только текст и entities
       const nextText = text ? { text, entities } : undefined;
@@ -1495,6 +1587,18 @@ export function createMessageController(deps: MessageDependencies) {
             wireContent.file_nonce = reshared.nonceB64;
             content = replaceMediaId(content, reshared.oldId, reshared.fileId);
           }
+        }
+        // Паки эмодзи/стикера перекладываются под нового получателя: архив в
+        // cloud выдан только получателям исходного сообщения (PACK-1)
+        if (wireContent.kind === 'text' && message.content.text?.entities?.length) {
+          const emojiPacks = await buildEmojiPackRefs(message.content.text.entities, toAddress);
+          if (emojiPacks.length) wireContent.emoji_packs = emojiPacks;
+        }
+        const stickerSetInfo = message.content.sticker?.stickerSetInfo;
+        const stickerSetId = stickerSetInfo && 'id' in stickerSetInfo ? stickerSetInfo.id : undefined;
+        if (wireContent.kind === 'sticker' && stickerSetId && isCustomPackSetId(stickerSetId)) {
+          const packRef = await buildPackRefForSet(stickerSetId, toAddress);
+          if (packRef) wireContent.pack_ref = packRef;
         }
         const originalSender = message.senderId ? currentStore.getAddressForId(message.senderId) : fromAddress;
         wireContent.forwarded_from = originalSender || fromAddress;

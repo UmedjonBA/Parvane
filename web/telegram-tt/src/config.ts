@@ -58,10 +58,12 @@ export const GLOBAL_STATE_CACHE_CUSTOM_EMOJI_LIMIT = 150;
 
 export const IS_SCREEN_LOCKED_CACHE_KEY = 'tt-is-screen-locked';
 
-export const MEDIA_CACHE_DISABLED = false;
+// Parvane: расшифрованное медиа не пишется на диск (spec 002 FR-023)
+export const MEDIA_CACHE_DISABLED = true;
 export const MEDIA_CACHE_NAME = 'tt-media';
 export const MEDIA_CACHE_NAME_AVATARS = 'tt-media-avatars';
-export const MEDIA_PROGRESSIVE_CACHE_DISABLED = false;
+// Parvane: части потокового аудио/видео — открытый текст, не кэшируем
+export const MEDIA_PROGRESSIVE_CACHE_DISABLED = true;
 export const MEDIA_PROGRESSIVE_CACHE_NAME = 'tt-media-progressive';
 export const MEDIA_CACHE_MAX_BYTES = 512 * 1024; // 512 KB
 export const CUSTOM_BG_CACHE_NAME = 'tt-custom-bg';
@@ -331,8 +333,11 @@ export const SUPPORTED_TRANSLATION_LANGUAGES = [
   'cy', 'xh', 'yi', 'yo', 'zu',
 ];
 
+// Parvane: сервер самостоятельный, инстансы часто живут на IP:порт — ссылка вида
+// http://192.168.1.10:8443/#+<токен> (инвайт группы) должна размечаться и
+// открываться кликом, а не только доменная
 // eslint-disable-next-line @stylistic/max-len
-export const RE_LINK_TEMPLATE = '((ftp|https?):\\/\\/)?((www\\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\\.[a-zA-Z][-a-zA-Z0-9]{1,62})\\b([-a-zA-Z0-9()@:%_+.,~#?&/=]*)';
+export const RE_LINK_TEMPLATE = '((ftp|https?):\\/\\/)?((www\\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\\.[a-zA-Z][-a-zA-Z0-9]{1,62}|(?:\\d{1,3}\\.){3}\\d{1,3}(?::\\d{1,5})?)\\b([-a-zA-Z0-9()@:%_+.,~#?&/=]*)';
 export const RE_MENTION_TEMPLATE = '(@[\\w\\d_-]+)';
 export const RE_TG_LINK = /^tg:(\/\/)?/i;
 export const RE_TME_LINK = /^(https?:\/\/)?(?:([-a-zA-Z0-9@:%_+~#=]{1,32}\.)?t\.me|telegram\.(?:me|dog))(?=[:/?#]|$)/i;

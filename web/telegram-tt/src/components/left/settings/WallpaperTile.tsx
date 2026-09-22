@@ -3,15 +3,16 @@ import {
   memo, useCallback, useEffect, useRef,
   useState,
 } from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
 import type { ApiWallpaper } from '../../../api/types';
 import type { ThemeKey } from '../../../types';
 import { UPLOADING_WALLPAPER_SLUG } from '../../../types';
 
-import { CUSTOM_BG_CACHE_NAME } from '../../../config';
 import buildClassName from '../../../util/buildClassName';
-import * as cacheApi from '../../../util/cacheApi';
 import { fetchBlob } from '../../../util/files';
+import { oldTranslate } from '../../../util/oldLangProvider';
+import { callApi } from '../../../api/gramjs';
 
 import useCanvasBlur from '../../../hooks/useCanvasBlur';
 import useMedia from '../../../hooks/useMedia';
@@ -66,7 +67,21 @@ const WallpaperTile: FC<OwnProps> = ({
   const handleSelect = useCallback(() => {
     (async () => {
       const blob = await fetchBlob(fullMedia!);
-      await cacheApi.save(CUSTOM_BG_CACHE_NAME, cacheKeyRef.current!, blob);
+      // Parvane: картинка пользователя хранится зашифрованной (FR-023), в
+      // Cache Storage открытым блобом её больше не кладём. Пишем байтами —
+      // base64 раздул бы многомегабайтный файл на треть
+      const bytes = await blob.arrayBuffer();
+      const result = await (callApi as unknown as (
+        name: string, args: { theme: string; bytes: ArrayBuffer; mimeType: string },
+      ) => Promise<{ status: string } | undefined>)('saveChatBackground', {
+        theme: cacheKeyRef.current!, bytes, mimeType: blob.type || 'image/jpeg',
+      });
+      // Молчаливого отказа быть не должно: иначе настройка выставлена, а
+      // картинки нигде нет
+      if (result?.status !== 'ok') {
+        getActions().showNotification({ message: oldTranslate('ParvaneBackgroundFailed') });
+        return;
+      }
       onClick(slug);
     })();
   }, [fullMedia, onClick, slug]);
