@@ -71,6 +71,7 @@
 #include <parvane/group_client.h>    // parvane-core (группы/каналы)
 #include <parvane/group_call_manager.h> // parvane-core (групповые звонки, mesh)
 #include "data/data_chat.h"          // ChatData (синтез группы)
+#include "data/data_chat_participant_status.h" // ChatRestriction/ChatAdminRight (spec 003)
 #include "data/data_poll.h"          // PollData (опросы)
 #include "data/data_media_types.h"   // Data::Media::poll()
 #include "data/stickers/data_stickers.h"     // стикеры: локальные паки → панель
@@ -242,6 +243,11 @@ QHash<QString, QImage> g_avatarImages;   // адрес → скачанная к
                                          // повторной установки: ensurePeerUser с
                                          // пустым фото стирает userpic).
 QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для forward)
+// spec 003 / GROUP-1: ревизия сведений группы — нотис или список, догнавший
+// более свежие сведения, не откатывает их. Только main-поток.
+QHash<QString, quint64> g_groupVersions; // gid → version
+bool ApplyGroupInfo(not_null<Main::Session*> session, const parvane::GroupInfo &gi, const QString &source); // fwd
+void DropGroupLocally(not_null<Main::Session*> session, const QString &gid, const QString &why); // fwd
 // ── обмен стикер-паками ──────────────────────────────────────────────────────
 // Отправляемый стикер из локального пака несёт pack_ref = {file_id архива в
 // cloud, name, count, key, nonce}; архив грузится ОДИН раз за сессию на пак.
@@ -2146,6 +2152,28 @@ bool StartSession() {
 		// Настройки уведомлений с другого устройства (NotifyNotice в инбоксе).
 		g_messenger->onNotifyNotice(self, [](std::string json) {
 			crl::on_main([json] { ApplyNotifyBlob(QString::fromStdString(json)); });
+		});
+		// Изменение группы (spec 003, GROUP-1): сведения применяются по ревизии,
+		// removed/deleted снимают чат, остальное — перечитать список.
+		g_messenger->onGroupNotice(self, [](parvane::GroupNotice n) {
+			crl::on_main([n = std::move(n)] {
+				const auto session = g_sessionWeak.get();
+				if (!session) {
+					return;
+				}
+				const auto gid = QString::fromStdString(n.group_id);
+				if (n.change == "removed" || n.change == "deleted") {
+					DropGroupLocally(session, gid, QString::fromStdString(n.change));
+					return;
+				}
+				if (n.info) {
+					ApplyGroupInfo(session, *n.info, u"нотис"_q);
+					return;
+				}
+				LOG(("Parvane: нотис группы %1 (%2, v%3) → перечитываем список")
+					.arg(gid, QString::fromStdString(n.change)).arg(n.version));
+				RefreshGroups();
+			});
 		});
 		// delivered (после ack получателя) → пинок синка: обновит ✓-статусы.
 		g_messenger->onDelivered(self, [](std::string id) {
@@ -4160,6 +4188,143 @@ ChatData *ensureGroupChat(
 	return result;
 }
 
+// ── spec 003: сведения группы → нативные объекты (просмотр) ──────────────────
+// Права по умолчанию провода (разрешено) → запреты tdesktop.
+[[nodiscard]] ChatRestrictions restrictionsFromPerms(const parvane::DefaultPermissions &p) {
+	using R = ChatRestriction;
+	auto r = ChatRestrictions();
+	const auto media = R::SendPhotos | R::SendVideos | R::SendVideoMessages
+		| R::SendMusic | R::SendVoiceMessages | R::SendFiles;
+	if (!p.send_messages) {
+		r |= R::SendOther | media | R::SendStickers | R::SendGifs | R::SendPolls | R::EmbedLinks;
+	}
+	if (!p.send_media) r |= media;
+	if (!p.send_stickers_gifs) r |= R::SendStickers | R::SendGifs;
+	if (!p.send_polls) r |= R::SendPolls;
+	if (!p.embed_links) r |= R::EmbedLinks;
+	if (!p.invite_users) r |= R::AddParticipants;
+	if (!p.pin_messages) r |= R::PinMessages;
+	if (!p.change_info) r |= R::ChangeInfo;
+	return r;
+}
+
+[[nodiscard]] ChatAdminRights adminRightsFrom(const parvane::AdminRights &a) {
+	using A = ChatAdminRight;
+	auto r = ChatAdminRights();
+	if (a.change_info) r |= A::ChangeInfo;
+	if (a.delete_messages) r |= A::DeleteMessages;
+	if (a.ban_users) r |= A::BanUsers;
+	if (a.invite_users) r |= A::InviteByLinkOrAdd;
+	if (a.pin_messages) r |= A::PinMessages;
+	if (a.add_admins) r |= A::AddAdmins;
+	return r;
+}
+
+// Применить сведения группы (из group.list/group.info или нотиса) к чату:
+// имя, состав, ротация ключа, роль и права своего участника, права по
+// умолчанию, описание, фото. Ревизия ниже известной — пропуск (GROUP-1).
+// Возвращает true, если сведения применены.
+bool ApplyGroupInfo(
+		not_null<Main::Session*> session,
+		const parvane::GroupInfo &gi,
+		const QString &source) {
+	const auto gid = QString::fromStdString(gi.group_id);
+	if (gid.isEmpty()) {
+		return false;
+	}
+	const auto known = g_groupVersions.constFind(gid);
+	if (known != g_groupVersions.constEnd() && gi.version < known.value()) {
+		LOG(("Parvane: нотис группы %1 устарел (v%2 < v%3), пропущен")
+			.arg(gid).arg(gi.version).arg(known.value()));
+		return false;
+	}
+	g_groupVersions.insert(gid, gi.version);
+
+	QStringList mem;
+	std::string selfRole;
+	parvane::AdminRights selfRights;
+	const auto self = SelfAddress().toStdString();
+	for (const auto &m : gi.members) {
+		if (m.role != "banned") {
+			mem.push_back(QString::fromStdString(m.address));
+		}
+		if (m.address == self) {
+			selfRole = m.role;
+			selfRights = m.effectiveRights();
+		}
+	}
+	const auto chat = ensureGroupChat(session, gid, QString::fromStdString(gi.name), mem.size());
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_groupMembers.insert(gid, mem);
+	}
+	std::vector<std::string> recipients;
+	for (const auto &member : mem) {
+		recipients.push_back(member.toStdString());
+	}
+	if (parvane::e2e::groupSyncRecipients(gid.toStdString(), recipients)) {
+		LOG(("Parvane: участник выбыл из %1 → ротация ключа группы").arg(gid));
+	}
+	if (!chat) {
+		return true;
+	}
+	// Роль и права своего участника: владелец — Creator, админ — гранулярные
+	// права; по ним tdesktop сам решает, что показывать в меню и композере.
+	if (selfRole == "owner") {
+		chat->addFlags(ChatDataFlag::Creator);
+		chat->setAdminRights(adminRightsFrom(parvane::AdminRights{}));
+	} else {
+		chat->removeFlags(ChatDataFlag::Creator);
+		chat->setAdminRights(selfRole == "admin"
+			? adminRightsFrom(selfRights)
+			: ChatAdminRights());
+	}
+	// Права по умолчанию только у групп: в канале пишут владелец и админы.
+	chat->setDefaultRestrictions(gi.kind == "channel"
+		? ChatRestrictions()
+		: restrictionsFromPerms(gi.default_permissions));
+	chat->setAbout(QString::fromStdString(gi.about));
+	// Фото группы — открытый объект cloud, как аватар пользователя.
+	const auto avatar = QString::fromStdString(gi.avatar);
+	if (!avatar.isEmpty()) {
+		NoteAvatar(gid, avatar);
+		applyAvatar(chat, gid);
+	} else if (g_avatarFileIds.contains(gid)) {
+		g_avatarFileIds.remove(gid);
+		g_avatarImages.remove(gid);
+		chat->setPhoto(MTP_chatPhotoEmpty());
+	}
+	session->changes().peerUpdated(chat, Data::PeerUpdate::Flag::Rights
+		| Data::PeerUpdate::Flag::About
+		| Data::PeerUpdate::Flag::Members);
+	LOG(("Parvane: группа %1 обновлена (v%2, %3) about=%4 avatar=%5 perms=%6 role=%7")
+		.arg(gid)
+		.arg(gi.version)
+		.arg(source)
+		.arg(QString::fromStdString(gi.about))
+		.arg(avatar.isEmpty() ? u"-"_q : avatar)
+		.arg(QString::fromStdString(gi.default_permissions.toJson().dump()))
+		.arg(QString::fromStdString(selfRole)));
+	return true;
+}
+
+// Группа удалена или нас удалили/забанили (нотис removed/deleted): убрать из
+// реестров и пометить чат покинутым — tdesktop прячет его из списка.
+void DropGroupLocally(not_null<Main::Session*> session, const QString &gid, const QString &why) {
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_knownGroups.remove(gid);
+		g_groupMembers.remove(gid);
+	}
+	g_groupVersions.remove(gid);
+	const auto chatId = IdForAddress(gid);
+	if (const auto chat = session->data().chatLoaded(ChatId(BareId(chatId)))) {
+		chat->addFlags(ChatDataFlag::Left);
+		session->data().history(chat)->clear(History::ClearType::DeleteChat);
+	}
+	LOG(("Parvane: группа %1 снята (%2)").arg(gid, why));
+}
+
 QString GroupIdByName(const QString &name) {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	for (auto it = g_knownGroups.constBegin(); it != g_knownGroups.constEnd(); ++it) {
@@ -4729,8 +4894,12 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 			if (!session) {
 				return;
 			}
-			const auto user = session->data().userLoaded(UserId(BareId(id)));
-			if (!user) {
+			// Пользователь или группа (spec 003: фото группы — тот же путь)
+			PeerData *peer = session->data().userLoaded(UserId(BareId(id)));
+			if (!peer) {
+				peer = session->data().chatLoaded(ChatId(BareId(id)));
+			}
+			if (!peer) {
 				return;
 			}
 			const auto qb = QByteArray(bytes.data(), int(bytes.size()));
@@ -4739,7 +4908,7 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				return;
 			}
 			g_avatarImages.insert(addressCopy, image); // кэш для повторной установки
-			user->setUserpicInMemory(photoId,
+			peer->setUserpicInMemory(photoId,
 				Images::FromImageInMemory(image, "JPG", qb));
 			LOG(("Parvane: аватар применён для %1").arg(addressCopy));
 		});
@@ -7547,27 +7716,7 @@ void RefreshGroups() {
 				return;
 			}
 			for (const auto &gi : groups) {
-				const auto gid = QString::fromStdString(gi.group_id);
-				QStringList mem;
-				for (const auto &m : gi.members) {
-					if (m.role != "banned") {
-						mem.push_back(QString::fromStdString(m.address));
-					}
-				}
-				ensureGroupChat(session, gid,
-					QString::fromStdString(gi.name),
-					mem.size());
-				{
-					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					g_groupMembers.insert(gid, mem);
-				}
-				std::vector<std::string> recipients;
-				for (const auto &member : mem) {
-					recipients.push_back(member.toStdString());
-				}
-				if (parvane::e2e::groupSyncRecipients(gid.toStdString(), recipients)) {
-					LOG(("Parvane: участник выбыл из %1 → ротация ключа группы").arg(gid));
-				}
+				ApplyGroupInfo(session, gi, u"список"_q);
 			}
 			SubscribeGroupTyping(); // групповой «печатает…»
 			LOG(("Parvane: групп синхронизировано: %1").arg(int(groups.size())));

@@ -40,10 +40,14 @@ import TextArea from '../../ui/TextArea';
 
 import './Management.scss';
 
-// Parvane: у групп нет серверных фото, описания, общих ограничений, реакций,
-// типа, заявок на вступление, форумов и скрытия истории — эти пункты молча
-// ничего не делали; остаются название, участники, админы, инвайт-ссылки
+// Parvane (spec 003): фото, описание, права по умолчанию и заявки на
+// вступление — на сервере; тип группы, привязанный канал, реакции, форумы и
+// скрытие истории — вне контракта, эти пункты остаются скрытыми
 const IS_GROUP_EXTRA_SETTINGS_SUPPORTED = false;
+const IS_GROUP_PHOTO_SUPPORTED = true;
+const IS_GROUP_DESCRIPTION_SUPPORTED = true;
+const IS_GROUP_PERMISSIONS_SUPPORTED = true;
+const IS_GROUP_REQUESTS_SUPPORTED = true;
 
 type OwnProps = {
   chatId: string;
@@ -147,8 +151,26 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
     if (canInvite) {
       loadExportedChatInvites({ chatId });
       loadExportedChatInvites({ chatId, isRevoked: true });
-      if (IS_GROUP_EXTRA_SETTINGS_SUPPORTED) loadChatJoinRequests({ chatId });
+      if (IS_GROUP_REQUESTS_SUPPORTED) loadChatJoinRequests({ chatId });
     }
+  }, [chatId, canInvite]);
+
+  // Parvane (GROUP-1): уведомление об изменении ссылок/заявок группы —
+  // перечитать списки, пока экран открыт
+  useEffect(() => {
+    if (!canInvite) return undefined;
+    const handleGroupChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId?: string; change?: string }>).detail;
+      if (detail?.chatId !== chatId) return;
+      if (detail.change === 'invites') {
+        loadExportedChatInvites({ chatId });
+        loadExportedChatInvites({ chatId, isRevoked: true });
+      } else if (detail.change === 'requests') {
+        loadChatJoinRequests({ chatId });
+      }
+    };
+    window.addEventListener('parvane-group-changed', handleGroupChanged);
+    return () => window.removeEventListener('parvane-group-changed', handleGroupChanged);
   }, [chatId, canInvite]);
 
   // Resetting `isForum` switch on flood wait error
@@ -326,7 +348,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management">
       <div className="panel-content custom-scroll">
-        {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+        {IS_GROUP_PHOTO_SUPPORTED && (
           <AvatarEditable
             isForForum={isForumEnabled}
             currentAvatarBlobUrl={currentAvatarBlobUrl}
@@ -344,7 +366,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               error={error === GROUP_TITLE_EMPTY ? error : undefined}
               disabled={!canChangeInfo}
             />
-            {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+            {IS_GROUP_DESCRIPTION_SUPPORTED && (
               <TextArea
                 id="group-about"
                 label={lang('DescriptionPlaceholder')}
@@ -373,7 +395,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               <span className="subtitle">{lang('DiscussionUnlink')}</span>
             </ListItem>
           )}
-          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && (
+          {IS_GROUP_PERMISSIONS_SUPPORTED && (
             <ListItem
               icon="permissions"
               multiline
@@ -422,7 +444,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
+          {IS_GROUP_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"
               onClick={handleClickRequests}

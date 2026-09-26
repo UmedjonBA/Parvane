@@ -99,9 +99,21 @@ test('banned group member loses metadata and future ciphertext delivery', async 
 
     member.socket.send(JSON.stringify({ op: 'sub', subject: `msg.user.${memberAddress}` }));
     let malloryDeliveries = 0;
+    let malloryGroupNotice: string | undefined;
     mallory.socket.addEventListener('message', (event: MessageEvent<string>) => {
       const frame = JSON.parse(event.data) as Frame;
-      if (frame.op === 'msg' && frame.subject === `msg.user.${malloryAddress}`) malloryDeliveries++;
+      if (frame.op !== 'msg' || frame.subject !== `msg.user.${malloryAddress}`) return;
+      // Инбокс несёт не только сообщения: забаненному участнику положен нотис
+      // `{group}` с `removed` (spec 003, GROUP-1) — шифртекста в нём нет,
+      // доставкой он не считается.
+      const inbox = JSON.parse(frame.payload || '{}') as {
+        payload?: { message?: unknown; group?: { change?: string } };
+      };
+      if (inbox.payload?.group) {
+        malloryGroupNotice = inbox.payload.group.change;
+        return;
+      }
+      malloryDeliveries++;
     });
     mallory.socket.send(JSON.stringify({ op: 'sub', subject: `msg.user.${malloryAddress}` }));
     await new Promise((resolve) => window.setTimeout(resolve, 100));
@@ -147,6 +159,7 @@ test('banned group member loses metadata and future ciphertext delivery', async 
       banOk: ban.ok,
       memberReceived: delivered.op === 'msg',
       malloryDeliveries,
+      malloryGroupNotice,
       malloryInfoCount: malloryInfo.groups?.length || 0,
       malloryListHasGroup: malloryList.groups?.some((group) => group.group_id === groupId) || false,
       malloryRole: ownerInfo.groups?.[0]?.members
@@ -158,6 +171,7 @@ test('banned group member loses metadata and future ciphertext delivery', async 
     banOk: true,
     memberReceived: true,
     malloryDeliveries: 0,
+    malloryGroupNotice: 'removed',
     malloryInfoCount: 0,
     malloryListHasGroup: false,
     malloryRole: 'banned',

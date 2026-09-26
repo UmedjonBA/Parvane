@@ -145,9 +145,13 @@ describe('media integrity after chunk cache eviction', () => {
     const { server, service, readChunk } = await setup();
     for (let index = 0; index <= 100; index++) await readChunk(index);
     server.tampered.set(2, flipped(server.chunks[2]));
-    // Задача стартует через 5 с после окна плеера и докачивает шифртекст целиком
-    for (let step = 0; step < 400 && !service.isTampered(FILE_ID); step++) {
+    // Задача стартует через 5 с после окна плеера и докачивает шифртекст целиком.
+    // GCM считается через `crypto.subtle` в реальном пуле потоков — вне фейковых
+    // таймеров, поэтому на каждом шаге уступаем очереди макрозадач: иначе под
+    // нагрузкой (параллельные файлы vitest) 400 тиков не хватало и тест плавал
+    for (let step = 0; step < 2000 && !service.isTampered(FILE_ID); step++) {
       await vi.advanceTimersByTimeAsync(50);
+      await new Promise((resolve) => setImmediate(resolve));
     }
     expect(service.isTampered(FILE_ID)).toBe(true);
     expect(server.requested.some(([from, to]) => from <= 2 && to >= 2 && to - from > 0)).toBe(true);

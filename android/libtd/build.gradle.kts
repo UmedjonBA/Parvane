@@ -35,4 +35,7 @@ android {
 dependencies {
     // TdApi.java из бандла Telegram X использует androidx-аннотации (@IntDef/@Nullable)
     implementation("androidx.annotation:annotation:1.8.2")
+    // JVM-юнит маппинга шва (conformance GROUP-1) — без эмулятора
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

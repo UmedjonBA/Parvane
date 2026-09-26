@@ -68,6 +68,10 @@ const GUARD_BOT_DEFAULT_ADMIN_RIGHTS: ApiChatAdminRights = {
   manageCall: true,
 };
 
+// Parvane (spec 003): в контракте шесть прав — менять информацию, удалять сообщения,
+// банить, приглашать, закреплять, добавлять админов; истории, звонки, анонимность,
+// личные сообщения, звание, охранный бот и передача владения — вне контракта
+const IS_ADMIN_EXTRA_RIGHTS_SUPPORTED = false;
 const GUARD_BOT_LOCKED_ADMIN_RIGHTS: (keyof ApiChatAdminRights)[] = ['changeInfo', 'pinMessages'];
 
 const ManageGroupAdminRights = ({
@@ -384,36 +388,42 @@ const ManageGroupAdminRights = ({
               onChange={handlePermissionChange}
             />
           </div>
-          <div className="ListItem">
-            <Checkbox
-              name="postStories"
-              checked={Boolean(permissions.postStories)}
-              label={lang('EditAdminPostStories')}
-              blocking
-              disabled={getControlIsDisabled('postStories')}
-              onChange={handlePermissionChange}
-            />
-          </div>
-          <div className="ListItem">
-            <Checkbox
-              name="editStories"
-              checked={Boolean(permissions.editStories)}
-              label={lang('EditAdminEditStories')}
-              blocking
-              disabled={getControlIsDisabled('editStories')}
-              onChange={handlePermissionChange}
-            />
-          </div>
-          <div className="ListItem">
-            <Checkbox
-              name="deleteStories"
-              checked={Boolean(permissions.deleteStories)}
-              label={lang('EditAdminDeleteStories')}
-              blocking
-              disabled={getControlIsDisabled('deleteStories')}
-              onChange={handlePermissionChange}
-            />
-          </div>
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && (
+            <div className="ListItem">
+              <Checkbox
+                name="postStories"
+                checked={Boolean(permissions.postStories)}
+                label={lang('EditAdminPostStories')}
+                blocking
+                disabled={getControlIsDisabled('postStories')}
+                onChange={handlePermissionChange}
+              />
+            </div>
+          )}
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && (
+            <div className="ListItem">
+              <Checkbox
+                name="editStories"
+                checked={Boolean(permissions.editStories)}
+                label={lang('EditAdminEditStories')}
+                blocking
+                disabled={getControlIsDisabled('editStories')}
+                onChange={handlePermissionChange}
+              />
+            </div>
+          )}
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && (
+            <div className="ListItem">
+              <Checkbox
+                name="deleteStories"
+                checked={Boolean(permissions.deleteStories)}
+                label={lang('EditAdminDeleteStories')}
+                blocking
+                disabled={getControlIsDisabled('deleteStories')}
+                onChange={handlePermissionChange}
+              />
+            </div>
+          )}
           {hasDirectMessages && (
             <div className="ListItem">
               <Checkbox
@@ -446,16 +456,18 @@ const ManageGroupAdminRights = ({
               onChange={handlePermissionChange}
             />
           </div>
-          <div className="ListItem">
-            <Checkbox
-              name="editRank"
-              checked={Boolean(permissions.manageRanks)}
-              label={lang('EditAdminEditRank')}
-              blocking
-              disabled={getControlIsDisabled('manageRanks')}
-              onChange={handlePermissionChange}
-            />
-          </div>
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && (
+            <div className="ListItem">
+              <Checkbox
+                name="editRank"
+                checked={Boolean(permissions.manageRanks)}
+                label={lang('EditAdminEditRank')}
+                blocking
+                disabled={getControlIsDisabled('manageRanks')}
+                onChange={handlePermissionChange}
+              />
+            </div>
+          )}
           {!isChannel && (
             <div className="ListItem">
               <Checkbox
@@ -468,16 +480,18 @@ const ManageGroupAdminRights = ({
               />
             </div>
           )}
-          <div className="ListItem">
-            <Checkbox
-              name="manageCall"
-              checked={Boolean(permissions.manageCall)}
-              label={lang('StartVoipChatPermission')}
-              blocking
-              disabled={getControlIsDisabled('manageCall')}
-              onChange={handlePermissionChange}
-            />
-          </div>
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && (
+            <div className="ListItem">
+              <Checkbox
+                name="manageCall"
+                checked={Boolean(permissions.manageCall)}
+                label={lang('StartVoipChatPermission')}
+                blocking
+                disabled={getControlIsDisabled('manageCall')}
+                onChange={handlePermissionChange}
+              />
+            </div>
+          )}
           <div className="ListItem">
             <Checkbox
               name="addAdmins"
@@ -500,7 +514,7 @@ const ManageGroupAdminRights = ({
               />
             </div>
           )}
-          {!isChannel && (
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && !isChannel && (
             <div className="ListItem">
               <Checkbox
                 name="anonymous"
@@ -513,7 +527,7 @@ const ManageGroupAdminRights = ({
             </div>
           )}
 
-          {canManageGuardBot && (
+          {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && canManageGuardBot && (
             <div className="ListItem">
               <Checkbox
                 name="guardBot"
@@ -541,7 +555,7 @@ const ManageGroupAdminRights = ({
 
         {shouldRenderAdminActions && (
           <Island>
-            {!isChannel && (
+            {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && !isChannel && (
               <InputText
                 id="admin-title"
                 label={lang('EditAdminRank')}
@@ -553,7 +567,7 @@ const ManageGroupAdminRights = ({
               />
             )}
 
-            {canTransferOwnership && canDismissAdmin && (
+            {IS_ADMIN_EXTRA_RIGHTS_SUPPORTED && canTransferOwnership && canDismissAdmin && (
               <ListItem icon="key" ripple onClick={handleStartTransfer}>
                 {lang(isChannel ? 'EditAdminTransferChannelOwnership' : 'EditAdminTransferGroupOwnership')}
               </ListItem>

@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "parvane/group.h"
 #include "parvane/messenger.h"
 #include "parvane/transport.h"
 
@@ -113,6 +114,9 @@ public:
     void onReadNotice(const std::string &self, std::function<void(std::vector<std::string>)> handler);
     // Кросс-девайс настройки уведомлений: NotifyNotice {notify: json} в инбоксе.
     void onNotifyNotice(const std::string &self, std::function<void(std::string)> handler);
+    // Изменение группы (spec 003, GROUP-1): GroupNotice {group: {...}} в инбоксе —
+    // фото/описание/права/роли/состав/ссылки/заявки, removed/deleted.
+    void onGroupNotice(const std::string &self, std::function<void(GroupNotice)> handler);
     // Опубликовать свои настройки уведомлений (msg.chat.setnotify, блоб веба).
     void setNotify(const std::string &from, const std::string &settingsJson,
                    const std::string &token);

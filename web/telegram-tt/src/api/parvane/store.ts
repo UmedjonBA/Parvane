@@ -3,9 +3,11 @@
 // из наших NATS-событий и кормим ими нативный UI.
 
 import type {
-  ApiChat, ApiMessage, ApiUser,
+  ApiChat, ApiChatAdminRights, ApiChatBannedRights, ApiMessage, ApiUser,
 } from '../types';
-import type { WireGroupInfo, WireStoredMessage } from './wire';
+import type {
+  WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireStoredMessage,
+} from './wire';
 
 import { wireEntitiesToApi } from './entities';
 import { registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
@@ -44,6 +46,9 @@ export class ParvaneStore {
 
   private groupInfoByAddress = new Map<string, WireGroupInfo>();
 
+  // Ревизия сведений группы (GROUP-1): применять только не старее известной
+  private groupVersionByAddress = new Map<string, number>();
+
   private messagesByChatId = new Map<string, ApiMessage[]>();
 
   // Индекс id → сообщение на чат: раньше putMessage искал перебором и
@@ -76,10 +81,22 @@ export class ParvaneStore {
     return this.addressById.get(id);
   }
 
-  registerGroup(info: WireGroupInfo) {
+  // Сведения группы применяются по ревизии `version` (conformance GROUP-1):
+  // нотис или список, догнавший более свежие сведения, не откатывает их.
+  // Возвращает false, если пришедшая ревизия старее известной
+  registerGroup(info: WireGroupInfo): boolean {
+    if (!shouldApplyGroupInfo(this.groupVersionByAddress.get(info.group_id), info.version)) {
+      return false;
+    }
     this.kindByAddress.set(info.group_id, info.kind === 'channel' ? 'channel' : 'group');
     this.groupInfoByAddress.set(info.group_id, info);
+    this.groupVersionByAddress.set(info.group_id, info.version ?? 0);
     this.displayNameByAddress.set(info.group_id, info.name);
+    return true;
+  }
+
+  getGroupVersion(address: string) {
+    return this.groupVersionByAddress.get(address);
   }
 
   isGroupAddress(address: string) {
@@ -312,7 +329,8 @@ export class ParvaneStore {
 
   buildApiChatForGroup(info: WireGroupInfo): ApiChat {
     const isChannel = info.kind === 'channel';
-    const selfRole = info.members.find(({ address }) => address === this.self)?.role;
+    const selfMember = info.members.find(({ address }) => address === this.self);
+    const selfRole = selfMember?.role;
     return {
       id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
       type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
@@ -320,22 +338,21 @@ export class ParvaneStore {
       isListed: true,
       isCreator: info.created_by === this.self ? true : undefined,
       // tt узнаёт админа только по adminRights: Manage-экраны, постинг в
-      // канале, кнопки модерации
-      adminRights: selfRole === 'admin' ? {
-        changeInfo: true,
-        postMessages: true,
-        editMessages: true,
-        deleteMessages: true,
-        banUsers: true,
-        inviteUsers: true,
-        pinMessages: true,
-      } : undefined,
+      // канале, кнопки модерации. Права гранулярные (spec 003); legacy-админ
+      // без явного набора от сервера приходит с полным
+      adminRights: selfRole === 'admin' ? toAdminRights(selfMember?.admin_rights, isChannel) : undefined,
+      // Права по умолчанию — только у групп: в канале пишут владелец и админы
+      defaultBannedRights: !isChannel ? toBannedRights(info.default_permissions) : undefined,
+      // Фото группы — открытый объект cloud, как аватар пользователя: tt
+      // строит hash `avatar<id>?<file_id>`, провайдер отдаёт файл по file_id
+      avatarPhotoId: info.avatar || undefined,
       membersCount: info.members.filter(({ role }) => role !== 'banned').length,
     };
   }
 
   unregisterGroup(address: string) {
     this.groupInfoByAddress.delete(address);
+    this.groupVersionByAddress.delete(address);
   }
 
   buildApiMessage(stored: WireStoredMessage): ApiMessage {
@@ -573,4 +590,118 @@ function extForMime(mime?: string) {
     'audio/mpeg': '.mp3',
   };
   return known[mime] || '';
+}
+
+// ── права групп (spec 003): провод ↔ нативные типы Telegram Web A ────────────
+
+// Применять ли сведения группы с ревизией `incoming` при известной `local`
+// (conformance GROUP-1): равная — идемпотентно, старее — игнор
+export function shouldApplyGroupInfo(local: number | undefined, incoming: number | undefined): boolean {
+  if (local === undefined) return true;
+  return (incoming ?? 0) >= local;
+}
+
+export const DEFAULT_GROUP_PERMISSIONS: Required<WireDefaultPermissions> = {
+  send_messages: true,
+  send_media: true,
+  send_stickers_gifs: true,
+  send_polls: true,
+  embed_links: true,
+  invite_users: true,
+  pin_messages: false,
+  change_info: false,
+};
+
+export function normalizePermissions(perms?: WireDefaultPermissions): Required<WireDefaultPermissions> {
+  return { ...DEFAULT_GROUP_PERMISSIONS, ...(perms || {}) };
+}
+
+// Разрешения → запреты tt (`ApiChatBannedRights`: `true` = запрещено)
+export function toBannedRights(perms?: WireDefaultPermissions): ApiChatBannedRights {
+  const p = normalizePermissions(perms);
+  const out: ApiChatBannedRights = {};
+  if (!p.send_messages) {
+    out.sendMessages = true;
+    out.sendPlain = true;
+  }
+  if (!p.send_media) {
+    out.sendMedia = true;
+    out.sendPhotos = true;
+    out.sendVideos = true;
+    out.sendRoundvideos = true;
+    out.sendAudios = true;
+    out.sendVoices = true;
+    out.sendDocs = true;
+  }
+  if (!p.send_stickers_gifs) {
+    out.sendStickers = true;
+    out.sendGifs = true;
+  }
+  if (!p.send_polls) out.sendPolls = true;
+  if (!p.embed_links) out.embedLinks = true;
+  if (!p.invite_users) out.inviteUsers = true;
+  if (!p.pin_messages) out.pinMessages = true;
+  if (!p.change_info) out.changeInfo = true;
+  return out;
+}
+
+// Запреты tt → разрешения провода. Экран Permissions правит медиа группой
+// (Send Media) — любой запрет внутри группы медиа выключает `send_media`.
+// «Send Messages» на экране — это `sendPlain`; `sendMessages` tt выставляет
+// сам как общий запрет (мы его дублируем в toBannedRights), поэтому обратно
+// читаем только `sendPlain` — иначе снятый с экрана запрет не снимался
+export function fromBannedRights(banned: ApiChatBannedRights): Required<WireDefaultPermissions> {
+  const mediaBanned = Boolean(banned.sendMedia || banned.sendPhotos || banned.sendVideos
+    || banned.sendRoundvideos || banned.sendAudios || banned.sendVoices || banned.sendDocs);
+  return {
+    send_messages: !banned.sendPlain,
+    send_media: !mediaBanned,
+    send_stickers_gifs: !(banned.sendStickers || banned.sendGifs),
+    send_polls: !banned.sendPolls,
+    embed_links: !banned.embedLinks,
+    invite_users: !banned.inviteUsers,
+    pin_messages: !banned.pinMessages,
+    change_info: !banned.changeInfo,
+  };
+}
+
+export const FULL_ADMIN_RIGHTS: Required<WireAdminRights> = {
+  change_info: true,
+  delete_messages: true,
+  ban_users: true,
+  invite_users: true,
+  pin_messages: true,
+  add_admins: true,
+};
+
+// Права админа провода → `ApiChatAdminRights`. Отсутствующий набор — полный
+// (legacy). В канале админ ещё и публикует/правит посты (у Parvane это
+// следствие роли, отдельного права нет)
+export function toAdminRights(rights: WireAdminRights | undefined, isChannel = false): ApiChatAdminRights {
+  const r = { ...FULL_ADMIN_RIGHTS, ...(rights || {}) };
+  const out: ApiChatAdminRights = {};
+  if (r.change_info) out.changeInfo = true;
+  if (r.delete_messages) out.deleteMessages = true;
+  if (r.ban_users) out.banUsers = true;
+  if (r.invite_users) out.inviteUsers = true;
+  if (r.pin_messages) out.pinMessages = true;
+  if (r.add_admins) out.addAdmins = true;
+  if (isChannel) {
+    out.postMessages = true;
+    out.editMessages = true;
+  }
+  return out;
+}
+
+// `ApiChatAdminRights` с экрана «Edit admin» → права провода; права вне
+// контракта (anonymous, manageCall, stories, …) отбрасываются
+export function toWireAdminRights(rights: ApiChatAdminRights): Required<WireAdminRights> {
+  return {
+    change_info: Boolean(rights.changeInfo),
+    delete_messages: Boolean(rights.deleteMessages),
+    ban_users: Boolean(rights.banUsers),
+    invite_users: Boolean(rights.inviteUsers),
+    pin_messages: Boolean(rights.pinMessages),
+    add_admins: Boolean(rights.addAdmins),
+  };
 }

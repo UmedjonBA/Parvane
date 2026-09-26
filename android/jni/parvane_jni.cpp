@@ -102,7 +102,8 @@ std::string journalPath() { return g_storeDir + "/journal.jsonl"; }
 std::mutex g_journalMu;
 std::atomic<bool> g_replaying{false};
 bool journaledType(const std::string &t) {
-    return t == "message" || t == "edited" || t == "deleted" || t == "cleared" || t == "meta" || t == "outbox_read" || t == "read";
+    return t == "message" || t == "edited" || t == "deleted" || t == "cleared" || t == "meta" || t == "outbox_read" || t == "read"
+        || t == "group"; // изменение группы (spec 003): после рестарта Kotlin снова синкает группы
 }
 void journalAppend(const json &event) {
     if (g_replaying || g_storeDir.empty()) return;
@@ -348,7 +349,21 @@ json refreshGroupsLocked() {
                     emit(json{{"type", "typing"}, {"from", j.value("from", "")}, {"to", gid}});
             });
         }
-        out.push_back(json{{"group_id", gi.group_id}, {"name", gi.name}, {"kind", gi.kind}, {"created_by", gi.created_by}, {"members", memJson}});
+        // spec 003: фото/описание/права/ревизия — для просмотра в Telegram X;
+        // права админов — в записи участника
+        auto perms = gi.default_permissions.toJson();
+        for (auto &m : memJson) {
+            for (const auto &gm : gi.members) {
+                if (gm.address == m.value("address", "") && gm.role == "admin") {
+                    const auto r = gm.effectiveRights();
+                    m["admin_rights"] = json{{"change_info", r.change_info}, {"delete_messages", r.delete_messages}, {"ban_users", r.ban_users},
+                                             {"invite_users", r.invite_users}, {"pin_messages", r.pin_messages}, {"add_admins", r.add_admins}};
+                }
+            }
+        }
+        out.push_back(json{{"group_id", gi.group_id}, {"name", gi.name}, {"kind", gi.kind}, {"created_by", gi.created_by}, {"members", memJson},
+                           {"avatar", gi.avatar}, {"about", gi.about}, {"default_permissions", perms}, {"version", gi.version},
+                           {"pending_requests", gi.pending_requests}});
     }
     LOGI("групп синхронизировано: %zu", groups.size());
     return out;
@@ -878,6 +893,11 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
         // Настройки уведомлений с другого устройства (NotifyNotice в инбоксе)
         g_messenger->onNotifyNotice(g_self, [](std::string blob) {
             emit(json{{"type", "notify"}, {"blob", blob}});
+        });
+        // Изменение группы (spec 003, GROUP-1): Kotlin перечитывает группы и
+        // применяет сведения по ревизии; removed/deleted — снимает чат
+        g_messenger->onGroupNotice(g_self, [](parvane::GroupNotice n) {
+            emit(json{{"type", "group"}, {"group_id", n.group_id}, {"change", n.change}, {"version", n.version}});
         });
         // «печатает…» и присутствие — эфемерные темы, как на десктопе/вебе
         g_transport->subscribe("msg.typing." + std::to_string(idForAddress(g_self)),

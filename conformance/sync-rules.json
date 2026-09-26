@@ -169,6 +169,68 @@
       },
       "offsetBasis": "1469598103934665603",
       "prime": "1099511628211"
+    },
+    {
+      "id": "GROUP-1",
+      "title": "Сведения группы применяются по ревизии, изменения — без перезагрузки",
+      "noticeField": "group",
+      "changes": [
+        "info",
+        "perms",
+        "members",
+        "admin",
+        "invites",
+        "requests",
+        "removed",
+        "deleted"
+      ],
+      "cases": [
+        {
+          "name": "новее — применить",
+          "local": 3,
+          "incoming": 4,
+          "apply": true
+        },
+        {
+          "name": "равно — идемпотентно",
+          "local": 4,
+          "incoming": 4,
+          "apply": true
+        },
+        {
+          "name": "старее — игнор",
+          "local": 5,
+          "incoming": 4,
+          "apply": false
+        },
+        {
+          "name": "нет локальной — применить",
+          "local": null,
+          "incoming": 1,
+          "apply": true
+        },
+        {
+          "name": "без ревизии от старого сервера при известной — игнор",
+          "local": 2,
+          "incoming": null,
+          "apply": false
+        },
+        {
+          "name": "без ревизии и без локальной — применить",
+          "local": null,
+          "incoming": null,
+          "apply": true
+        }
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/store.ts (shouldApplyGroupInfo, registerGroup), groups.ts (applyNotice), sync.ts (payload.group)",
+        "desktop": [
+          "parvane-core/src/messenger_client.cpp (onGroupNotice)",
+          "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (ApplyGroupInfo, g_groupVersions, DropGroupLocally)",
+          "тест desktop/verify_conformance_group.sh"
+        ],
+        "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (ensureGroup по version) + Client.kt (onCoreEvent group) — тест libtd ParvaneStoreGroupTest (JVM); сценарий на эмуляторе после починки GPU — правило открыто"
+      }
     }
   ]
 }

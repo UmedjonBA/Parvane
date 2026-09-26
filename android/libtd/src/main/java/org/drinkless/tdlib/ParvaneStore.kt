@@ -19,6 +19,34 @@ class ParvaneStore {
     class GroupRef(val gid: String, var name: String, var members: List<String>, var createdBy: String,
                    val basicGroupId: Long, val chatId: Long) {
         var roles: Map<String, String> = emptyMap() // address → "admin" (создатель и обычные — по createdBy/умолчанию)
+        // spec 003: гранулярные права админов (address → JSON admin_rights; нет — полный набор, legacy)
+        var adminRights: Map<String, JSONObject> = emptyMap()
+        var about: String = ""
+        var avatarFileId: String = ""
+        var permissions: JSONObject? = null // default_permissions провода; null — по умолчанию
+        var version: Long = -1 // ревизия сведений (GROUP-1); -1 — не известна
+    }
+
+    /** Права участников по умолчанию провода → TdApi.ChatPermissions (16 полей бандла X). */
+    fun chatPermissionsOf(p: JSONObject?): TdApi.ChatPermissions {
+        fun b(k: String, d: Boolean) = p?.optBoolean(k, d) ?: d
+        val send = b("send_messages", true)
+        val media = send && b("send_media", true)
+        val stickers = send && b("send_stickers_gifs", true)
+        val polls = send && b("send_polls", true)
+        val links = send && b("embed_links", true)
+        // basic, audios, documents, photos, videos, videoNotes, voiceNotes, polls, other(стикеры/анимации), linkPreviews,
+        // react, editTag, changeInfo, inviteUsers, pinMessages, createTopics
+        return TdApi.ChatPermissions(send, media, media, media, media, media, media, polls, stickers, links,
+            true, false, b("change_info", false), b("invite_users", true), b("pin_messages", false), false)
+    }
+
+    /** Права админа провода (нет — полный набор) → TdApi.ChatAdministratorRights (18 полей бандла X). */
+    fun adminRightsOf(r: JSONObject?): TdApi.ChatAdministratorRights {
+        fun b(k: String) = r?.optBoolean(k, true) ?: true
+        // manage, changeInfo, post, edit, delete, invite, restrict, pin, topics, promote, video, stories×3, directMsg, tags, welcome
+        return TdApi.ChatAdministratorRights(true, b("change_info"), false, false, b("delete_messages"), b("invite_users"),
+            b("ban_users"), b("pin_messages"), false, b("add_admins"), false, false, false, false, false, false, false, false)
     }
     private val groupsByGid = ConcurrentHashMap<String, GroupRef>()
     private val groupsByChatId = ConcurrentHashMap<Long, GroupRef>()
@@ -220,20 +248,37 @@ class ParvaneStore {
 
     private fun memberStatus(g: GroupRef, address: String): TdApi.ChatMemberStatus = when {
         address == g.createdBy -> TdApi.ChatMemberStatusCreator(false, true)
-        g.roles[address] == "admin" -> TdApi.ChatMemberStatusAdministrator(true,
-            // manage, changeInfo, post, edit, delete, invite, restrict, pin, topics, promote, video, stories×3, directMsg, tags, welcome
-            TdApi.ChatAdministratorRights(true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false))
+        g.roles[address] == "admin" -> TdApi.ChatMemberStatusAdministrator(true, adminRightsOf(g.adminRights[address]))
         else -> TdApi.ChatMemberStatusMember(0)
     }
 
-    /** Группа с сервера → basic group + чат. created — впервые. */
+    /** Группа с сервера → basic group + чат. created — впервые. Сведения с
+     *  ревизией ниже известной не применяются (GROUP-1): возвращается null. */
     @Synchronized
-    fun ensureGroup(gid: String, name: String, members: List<String>, createdBy: String, roles: Map<String, String> = emptyMap()): Triple<TdApi.Chat, TdApi.BasicGroup, Boolean> {
+    fun ensureGroup(gid: String, name: String, members: List<String>, createdBy: String, roles: Map<String, String> = emptyMap(),
+                    info: JSONObject? = null): Triple<TdApi.Chat, TdApi.BasicGroup, Boolean>? {
         val existed = groupsByGid[gid]
+        val version = info?.optLong("version", -1L) ?: -1L
+        // Сведения без ревизии (старый сервер) при известной тоже не применяем — как web/desktop
+        if (existed != null && existed.version >= 0 && info != null && version < existed.version) return null
         val g = existed ?: GroupRef(gid, name, members, createdBy, groupHash(gid), -groupHash(gid)).also {
             groupsByGid[gid] = it; groupsByChatId[it.chatId] = it
         }
-        g.name = name; g.members = members; g.createdBy = createdBy
+        g.name = name; g.members = members; g.createdBy = createdBy; g.roles = roles
+        if (info != null) {
+            g.version = version
+            g.about = info.optString("about", "")
+            g.avatarFileId = if (info.isNull("avatar")) "" else info.optString("avatar", "")
+            g.permissions = info.optJSONObject("default_permissions")
+            val rights = HashMap<String, JSONObject>()
+            info.optJSONArray("members")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val mo = arr.getJSONObject(i)
+                    mo.optJSONObject("admin_rights")?.let { rights[mo.optString("address")] = it }
+                }
+            }
+            g.adminRights = rights
+        }
         val chat = chats[g.chatId] ?: TdApi.Chat().apply {
             id = g.chatId
             type = TdApi.ChatTypeBasicGroup(g.basicGroupId)
@@ -248,13 +293,32 @@ class ParvaneStore {
             clientData = ""
         }
         chat.title = name
+        // Права по умолчанию — только у групп; в канале пишут владелец и админы
+        chat.permissions = if (info?.optString("kind") == "channel") TdApi.ChatPermissions(true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false)
+            else chatPermissionsOf(g.permissions)
         chats[g.chatId] = chat
         return Triple(chat, basicGroup(g), existed == null)
+    }
+    /** Фото группы из cloud (открытый объект, уже скачан в path) → фото чата. */
+    @Synchronized
+    fun setGroupPhoto(gid: String, fileId: String, path: String): TdApi.Chat? {
+        val g = groupsByGid[gid] ?: return null
+        val chat = chats[g.chatId] ?: return null
+        val f = fileFor("avatar:$fileId", "", "", 0, "image/jpeg", path)
+        chat.photo = TdApi.ChatPhotoInfo(f, f, null, false, false)
+        return chat
+    }
+    @Synchronized
+    fun clearGroupPhoto(gid: String): TdApi.Chat? {
+        val g = groupsByGid[gid] ?: return null
+        val chat = chats[g.chatId] ?: return null
+        chat.photo = null
+        return chat
     }
     fun basicGroup(g: GroupRef): TdApi.BasicGroup =
         TdApi.BasicGroup(g.basicGroupId, g.members.size, memberStatus(g, self), true, 0)
     fun basicGroupFullInfo(g: GroupRef): TdApi.BasicGroupFullInfo = TdApi.BasicGroupFullInfo().apply {
-        description = ""
+        description = g.about
         creatorUserId = idOf(g.createdBy)
         members = g.members.map { m -> TdApi.ChatMember(TdApi.MessageSenderUser(idOf(m)), "", 0, 0, memberStatus(g, m)) }.toTypedArray()
         botCommands = arrayOf()

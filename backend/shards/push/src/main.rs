@@ -134,7 +134,7 @@ async fn handle_vapid_get(nc: &Client, vapid: &VapidKeys, msg: async_nats::Messa
 }
 
 async fn reply_action(nc: &Client, reply: async_nats::Subject, ok: bool, error: Option<String>) {
-    let resp = GroupActionResponse { ok, error };
+    let resp = GroupActionResponse { ok, error, error_code: None };
     if let Ok(body) = serde_json::to_vec(&resp) {
         let _ = nc.publish(reply, body.into()).await;
     }

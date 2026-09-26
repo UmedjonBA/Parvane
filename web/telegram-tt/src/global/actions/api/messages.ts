@@ -2662,7 +2662,7 @@ addActionHandler('openUrl', async (global, actions, payload): Promise<void> => {
   if (parsedUrl.hostname === 'parvane.invite') {
     const inviteHash = parsedUrl.pathname.replace(/^\//, '');
     if (inviteHash) {
-      actions.acceptChatInvite({ hash: inviteHash, tabId });
+      actions.checkChatInvite({ hash: inviteHash, tabId });
       return;
     }
   }
@@ -2672,7 +2672,7 @@ addActionHandler('openUrl', async (global, actions, payload): Promise<void> => {
   if (parsedUrl.origin === window.location.origin) {
     const appInviteHash = matchInviteHash(parsedUrl.hash);
     if (appInviteHash) {
-      actions.acceptChatInvite({ hash: appInviteHash, tabId });
+      actions.checkChatInvite({ hash: appInviteHash, tabId });
       return;
     }
   }

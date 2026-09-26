@@ -27,6 +27,7 @@ import {
 } from './e2e_desktop_helpers.mjs';
 import {
   LOGIN_TIMEOUT_MS,
+  callProviderForChat,
   findMessage,
   findMessageContainers,
   openPrivateChat,
@@ -403,10 +404,45 @@ try {
   await aliceSession.page.locator('.Transition_slide-active > .MessageList .Message .media-inner img')
     .last().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── Группа web → desktop (spec 003, GROUP-1): описание и фото группы,
+  // заданные в вебе, доходят до десктопа нотисом и видны в логе ────────────
+  const groupTitle = `XC-${suffix.slice(-6)}`;
+  const groupCreated = await aliceSession.page.evaluate(async ({ title, name }) => {
+    const global = window.__parvaneGetGlobal();
+    const user = Object.values(global.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+    if (!user) return { error: 'desktop user unknown' };
+    const result = await window.__parvaneDiagCallApi('createGroupChat', { title, users: [user] });
+    return { chatId: result?.chat?.id };
+  }, { title: groupTitle, name: bob.split('@')[0] });
+  assert(groupCreated.chatId, `group not created: ${JSON.stringify(groupCreated)}`);
+  const beforeGroup = readDesktopLog(bobWorkdir).length;
+  await waitDesktopLog(bobWorkdir, /группа [0-9a-f-]{36} обновлена \(v0, список\)/, 90000, desktop, { since: beforeGroup });
+  const aboutText = `about-${suffix.slice(-6)}`;
+  const aboutResult = await callProviderForChat(aliceSession.page, 'updateChatAbout', groupTitle, undefined, ['$chat', aboutText]);
+  assert.equal(aboutResult.result, true, `updateChatAbout failed: ${JSON.stringify(aboutResult)}`);
+  await waitDesktopLog(bobWorkdir, new RegExp(`группа [0-9a-f-]{36} обновлена \\(v1, нотис\\) about=${aboutText} avatar=-`), 30000, desktop, { since: beforeGroup });
+  await aliceSession.page.evaluate(async ({ title }) => {
+    const global = window.__parvaneGetGlobal();
+    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === title);
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#2aabee';
+    ctx.fillRect(0, 0, 64, 64);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const file = new File([blob], 'group.png', { type: 'image/png' });
+    return window.__parvaneDiagCallApi('editChatPhoto', { chatId: chat.id, photo: file });
+  }, { title: groupTitle });
+  await waitDesktopLog(bobWorkdir, /группа [0-9a-f-]{36} обновлена \(v2, нотис\) about=about-[0-9]+ avatar=[0-9a-f-]{36}/, 30000, desktop, { since: beforeGroup });
+  await waitDesktopLog(bobWorkdir, /аватар применён для [0-9a-f-]{36}/, 30000, desktop, { since: beforeGroup });
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
 
   console.log('OK: web<->desktop text both ways; encrypted photo, voice, video and audio web->desktop; '
-    + 'image (as document), video with seek and frame thumbnail, pdf and pack sticker desktop->web, all after web reload');
+    + 'image (as document), video with seek and frame thumbnail, pdf and pack sticker desktop->web, all after web reload; '
+    + 'group description and photo web->desktop by notice (GROUP-1)');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   const page = aliceContext.pages()[0];

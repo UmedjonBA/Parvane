@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { packRefCacheKey, shouldReusePackRef } from './messages';
 import { buildEmojiDocId, getEmojiPackNames, sanitizePackName } from './stickerPacks';
+import { shouldApplyGroupInfo } from './store';
 
 // Правила из conformance/ обязаны соблюдать ВСЕ клиенты. Тест сторожит две
 // вещи: логику веба и то, что константы десктопа не разъехались с документом.
@@ -22,6 +23,8 @@ const rules = JSON.parse(
     tileSize?: number;
     defaultZoom?: number;
     forbiddenHosts?: string[];
+    noticeField?: string;
+    changes?: string[];
     clients?: { web: string; desktop: string | string[]; android: string };
   }[];
 };
@@ -30,6 +33,10 @@ function rule(id: string) {
   const found = rules.rules.find((item) => item.id === id);
   if (!found) throw new Error(`нет правила ${id}`);
   return found;
+}
+
+function readRepo(rel: string) {
+  return readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 }
 
 function readDesktopSource() {
@@ -169,7 +176,6 @@ describe('FAIL-1: ожидание без ответа запрещено', () =
 describe('MAP-1: фрагменты карты — только через шард preview', () => {
   const map = rule('MAP-1');
   const hosts = map.forbiddenHosts ?? [];
-  const readRepo = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
   it('web берёт тайлы через preview.map.tile и не знает картографических хостов', () => {
     const wire = readFileSync(path.join(process.cwd(), 'src/api/parvane/wire.ts'), 'utf8');
@@ -291,5 +297,60 @@ describe('EMOJI-1: docId кастом-эмодзи — от имени из сс
     expect(source).toMatch(/WriteRawPackName\(dest, rawName\)/);
     expect(source).toMatch(/const auto rawName = ReadRawPackName\(dir, packName\)/);
     expect(String(emoji.clients!.desktop)).toContain('verify_conformance_packs.sh');
+  });
+});
+
+describe('GROUP-1: сведения группы применяются по ревизии, изменения — без перезагрузки', () => {
+  const group = rule('GROUP-1');
+
+  it.each(group.cases as { name: string; local: number | null; incoming: number | null; apply: boolean }[])(
+    '$name',
+    (testCase) => {
+      expect(shouldApplyGroupInfo(testCase.local ?? undefined, testCase.incoming ?? undefined)).toBe(testCase.apply);
+    },
+  );
+
+  it('веб: нотис группы — поле `group` в кадре инбокса, применение через applyNotice', () => {
+    expect(group.noticeField).toBe('group');
+    const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
+    expect(sync).toMatch(/\.group;/);
+    expect(sync).toMatch(/deps\.groups\.applyNotice\(group\)/);
+    const groups = readFileSync(path.join(process.cwd(), 'src/api/parvane/groups.ts'), 'utf8');
+    for (const change of group.changes ?? []) {
+      expect(groups, `change ${change}`).toContain(`case '${change}':`);
+    }
+    // неизвестный вид — догон, а не ошибка
+    expect(groups).toMatch(/default: \{\n\s+deps\.log\(`неизвестное изменение группы/);
+    const store = readFileSync(path.join(process.cwd(), 'src/api/parvane/store.ts'), 'utf8');
+    expect(store).toMatch(
+      /if \(!shouldApplyGroupInfo\(this\.groupVersionByAddress\.get\(info\.group_id\), info\.version\)\)/,
+    );
+  });
+
+  it('десктоп: нотис читается из поля `group`, сведения применяются по ревизии, removed/deleted снимают чат', () => {
+    const core = readRepo('desktop/parvane-core/src/messenger_client.cpp');
+    expect(core).toMatch(/MessengerClient::onGroupNotice\(/);
+    expect(core).toMatch(/p\.contains\("group"\)/);
+    const client = readDesktopSource();
+    expect(client).toMatch(/QHash<QString, quint64> g_groupVersions;/);
+    expect(client).toMatch(/gi\.version < known\.value\(\)/);
+    expect(client).toMatch(/onGroupNotice\(self,/);
+    expect(client).toMatch(/n\.change == "removed" \|\| n\.change == "deleted"/);
+    expect(client).toMatch(/ApplyGroupInfo\(session, \*n\.info/);
+    const header = readRepo('desktop/parvane-core/include/parvane/group.h');
+    expect(header).toMatch(/struct GroupNotice/);
+    expect(header).toMatch(/std::uint64_t version = 0;/);
+    expect(String(group.clients!.desktop)).toContain('verify_conformance_group.sh');
+  });
+
+  it('android: событие `group` ядра → повторный синк групп, применение по ревизии', () => {
+    const jni = readRepo('android/jni/parvane_jni.cpp');
+    expect(jni).toMatch(/onGroupNotice\(g_self,/);
+    expect(jni).toMatch(/\{"type", "group"\}/);
+    const client = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt');
+    expect(client).toMatch(/"group" ->/);
+    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
+    expect(store).toMatch(/version < existed\.version/);
+    expect(String(group.clients!.android)).toContain('ParvaneStoreGroupTest');
   });
 });

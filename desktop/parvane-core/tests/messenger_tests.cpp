@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "parvane/events.h"
+#include "parvane/group.h"
 #include "parvane/messenger.h"
 #include "parvane/messenger_client.h"
 #include "parvane/topics.h"
@@ -67,6 +68,39 @@ int main() {
     std::printf("=== parvane-core messenger tests (NATS %s) ===\n", url.c_str());
 
     // ── A. Чистые тесты (без бэкенда) ─────────────────────────────────────────
+    // spec 003 / GROUP-1: сведения группы с новыми полями и нотис из инбокса
+    {
+        using nlohmann::json;
+        const auto gi = parvane::GroupInfo::fromJson(json::parse(R"({
+            "group_id":"g1","name":"G","kind":"group","created_by":"alice@local",
+            "members":[{"address":"alice@local","role":"owner"},
+                       {"address":"bob@local","role":"admin","admin_rights":{"pin_messages":true,"ban_users":false,"change_info":false,"delete_messages":false,"invite_users":false,"add_admins":false},"promoted_by":"alice@local"},
+                       {"address":"carol@local","role":"admin"},
+                       {"address":"dave@local","role":"member"}],
+            "avatar":"f-1","about":"о группе","default_permissions":{"send_messages":false,"pin_messages":true},
+            "version":7,"pending_requests":2})"));
+        check(gi.avatar == "f-1" && gi.about == "о группе" && gi.version == 7 && gi.pending_requests == 2,
+              "GroupInfo: avatar/about/version/pending_requests разобраны");
+        check(!gi.default_permissions.send_messages && gi.default_permissions.pin_messages
+              && gi.default_permissions.send_media && !gi.default_permissions.change_info,
+              "GroupInfo: default_permissions с дефолтами Telegram");
+        const auto &bob = gi.members[1];
+        check(bob.admin_rights && bob.effectiveRights().pin_messages && !bob.effectiveRights().ban_users
+              && bob.promoted_by == "alice@local", "GroupMember: гранулярные права админа");
+        check(!gi.members[2].admin_rights && gi.members[2].effectiveRights().ban_users && gi.members[2].effectiveRights().add_admins,
+              "GroupMember: legacy-админ без набора = полные права");
+        const auto legacy = parvane::GroupInfo::fromJson(json::parse(R"({"group_id":"g0","name":"old","created_by":"x","members":[]})"));
+        check(legacy.version == 0 && legacy.about.empty() && legacy.avatar.empty() && legacy.pending_requests == -1
+              && legacy.default_permissions.send_messages && !legacy.default_permissions.pin_messages,
+              "GroupInfo: старый сервер без новых полей → дефолты");
+        const auto n = parvane::GroupNotice::fromJson(json::parse(R"({"group_id":"g1","version":8,"change":"info","info":{"group_id":"g1","name":"N","created_by":"a","members":[],"version":8}})"));
+        check(n.group_id == "g1" && n.version == 8 && n.change == "info" && n.info && n.info->name == "N" && n.info->version == 8,
+              "GroupNotice: info вложен и разобран");
+        const auto r = parvane::GroupNotice::fromJson(json::parse(R"({"group_id":"g1","version":9,"change":"removed"})"));
+        check(r.change == "removed" && !r.info, "GroupNotice: removed без info");
+        const auto a = parvane::GroupActionResponse::fromJson(json::parse(R"({"ok":false,"error":"нет прав","error_code":"forbidden"})"));
+        check(!a.ok && a.error_code == "forbidden", "GroupActionResponse: error_code");
+    }
     {
         check(parvane::contentText(parvane::textContent("привет")).value_or("") == "привет",
               "contentText(text) → строка");

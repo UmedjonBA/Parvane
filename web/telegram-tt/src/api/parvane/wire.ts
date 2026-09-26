@@ -109,9 +109,34 @@ export type WireStoredMessage = {
   copies?: WireDeviceCopy[];
 };
 
+// Права участников по умолчанию (spec 003): позитивные флаги «разрешено».
+// Отсутствующее поле = значение по умолчанию (как в Telegram).
+export type WireDefaultPermissions = {
+  send_messages?: boolean;
+  send_media?: boolean;
+  send_stickers_gifs?: boolean;
+  send_polls?: boolean;
+  embed_links?: boolean;
+  invite_users?: boolean;
+  pin_messages?: boolean;
+  change_info?: boolean;
+};
+
+// Гранулярные права админа (spec 003). У legacy-админа сервер отдаёт полный набор.
+export type WireAdminRights = {
+  change_info?: boolean;
+  delete_messages?: boolean;
+  ban_users?: boolean;
+  invite_users?: boolean;
+  pin_messages?: boolean;
+  add_admins?: boolean;
+};
+
 export type WireGroupMember = {
   address: string;
   role: string;
+  admin_rights?: WireAdminRights;
+  promoted_by?: string;
 };
 
 export type WireGroupInfo = {
@@ -120,6 +145,62 @@ export type WireGroupInfo = {
   kind: 'group' | 'channel';
   created_by: string;
   members: WireGroupMember[];
+  // file_id фото группы в cloud (открытый объект, как аватар пользователя)
+  avatar?: string;
+  about?: string;
+  default_permissions?: WireDefaultPermissions;
+  // Ревизия сведений: применять только при version >= локальной (GROUP-1)
+  version?: number;
+  // Только владельцу и админам с invite_users
+  pending_requests?: number;
+};
+
+// Инвайт-ссылка группы (group.invite.list / group.invite.create)
+export type WireInviteLink = {
+  token: string;
+  created_by: string;
+  created_at: number;
+  title?: string;
+  expires_at?: number;
+  max_uses?: number;
+  uses?: number;
+  request_needed?: boolean;
+  revoked?: boolean;
+  revoked_at?: number;
+  state?: 'active' | 'revoked' | 'expired' | 'exhausted' | (string & {});
+  is_primary?: boolean;
+  pending_requests?: number;
+};
+
+// Превью ссылки до вступления (group.invite.check)
+export type WireInviteCheck = {
+  ok: boolean;
+  group_id?: string;
+  name?: string;
+  kind?: 'group' | 'channel';
+  avatar?: string;
+  about?: string;
+  members_count?: number;
+  request_needed?: boolean;
+  already_member?: boolean;
+  pending?: boolean;
+  error?: string;
+  error_code?: string;
+};
+
+export type WireJoinRequest = {
+  member: string;
+  invite: string;
+  created_at: number;
+};
+
+// Уведомление об изменении группы в кадре инбокса: поле `group` вместо
+// `message` (как `notify`/`read`/`cleared`); старые клиенты кадр игнорируют
+export type WireGroupNotice = {
+  group_id: string;
+  version: number;
+  change: 'info' | 'perms' | 'members' | 'admin' | 'invites' | 'requests' | 'removed' | 'deleted' | (string & {});
+  info?: WireGroupInfo;
 };
 
 export type WireUserInfo = {
@@ -187,6 +268,15 @@ export const TOPIC_GROUP_JOIN = 'group.join';
 export const TOPIC_GROUP_SET_ROLE = 'group.setrole';
 export const TOPIC_GROUP_RENAME = 'group.rename';
 export const TOPIC_GROUP_DELETE = 'group.delete';
+export const TOPIC_GROUP_SETINFO = 'group.setinfo';
+export const TOPIC_GROUP_SETPERMS = 'group.setperms';
+export const TOPIC_GROUP_SETADMIN = 'group.setadmin';
+export const TOPIC_GROUP_INVITE_LIST = 'group.invite.list';
+export const TOPIC_GROUP_INVITE_REVOKE = 'group.invite.revoke';
+export const TOPIC_GROUP_INVITE_DELETE = 'group.invite.delete';
+export const TOPIC_GROUP_INVITE_CHECK = 'group.invite.check';
+export const TOPIC_GROUP_REQUEST_LIST = 'group.request.list';
+export const TOPIC_GROUP_REQUEST_DECIDE = 'group.request.decide';
 export const TOPIC_PREVIEW_FETCH = 'preview.link.fetch';
 export const TOPIC_PREVIEW_MAP_TILE = 'preview.map.tile';
 export const TOPIC_PUSH_VAPID_GET = 'push.vapid.get';
