@@ -440,11 +440,23 @@ void GatewayTransport::requestMany(const std::string &subject, const std::string
 }
 
 void GatewayTransport::subscribe(const std::string &subject, Handler handler) {
+    // Один `sub` на subject: MessengerClient вешает на свой инбокс шесть
+    // обработчиков (сообщения, read, notify, cleared, group, …), и раньше каждый
+    // слал gateway'ю свой `sub` — тот заводил шесть NATS-подписок и слал
+    // каждый кадр инбокса шесть раз (в логах «обновлена (v1, нотис)» ×6,
+    // найдено 27 сен 2026 сценарием эмулятора). dispatch и так зовёт все
+    // обработчики subject'а на каждый кадр, вторая подписка не нужна.
+    bool first = false;
     {
         std::lock_guard<std::mutex> lk(subMu_);
-        subs_[subject].push_back(std::move(handler));
+        auto &hs = subs_[subject];
+        first = hs.empty();
+        hs.push_back(std::move(handler));
     }
     ensureConnected(); // при переподключении подписка уйдёт из subs_
+    if (!first) {
+        return;
+    }
     json f = {{"op", "sub"}, {"subject", subject}};
     sendLine(f.dump());
 }

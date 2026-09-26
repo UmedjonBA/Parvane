@@ -2737,6 +2737,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_channels_too_much_located_other" = "Sorry, the target user has too many location-based groups already. Please ask them to delete or transfer one of their existing ones first.";
 
 "lng_group_invite_bad_link" = "This invite link is invalid or has expired.";
+"lng_parvane_invite_expired" = "This invite link has expired.";
+"lng_parvane_invite_revoked" = "This invite link was revoked.";
+"lng_parvane_invite_exhausted" = "This invite link has reached its usage limit.";
+"lng_parvane_invite_banned" = "You are banned from this group.";
+"lng_parvane_invite_declined" = "Your join request was declined. Try again later.";
+"lng_parvane_invite_request_sent" = "Join request sent.";
+"lng_parvane_invite_edit_unsupported" = "Editing a link is not supported — revoke it and create a new one.";
+"lng_parvane_restrict_unsupported" = "Partial restrictions are not supported here — you can only remove a member.";
 
 "lng_group_invite_members#one" = "{count} member, among them:";
 "lng_group_invite_members#other" = "{count} members, among them:";

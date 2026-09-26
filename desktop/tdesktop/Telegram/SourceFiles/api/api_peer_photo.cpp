@@ -244,6 +244,18 @@ void PeerPhoto::upload(
 		}
 		return;
 	}
+	// Parvane: фото группы/канала шины → cloud (открытый объект) +
+	// group.setinfo{avatar_file_id}; применится по нотису (spec 004, US1).
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		if (!photo.image.isNull()) {
+			Parvane::SetGroupPhoto(gid, photo.image, [done](bool ok, const QString &) {
+				if (ok && done) {
+					done();
+				}
+			});
+		}
+		return;
+	}
 	const auto mtpMarkup = PrepareMtpMarkup(_session, photo);
 
 	const auto fakeId = FullMsgId(
@@ -356,7 +368,10 @@ void PeerPhoto::clear(not_null<PhotoData*> photo) {
 		const auto applier = [=](const MTPUpdates &result) {
 			_session->updates().applyUpdates(result);
 		};
-		if (const auto chat = photo->peer->asChat()) {
+		if (const auto gid = Parvane::GroupIdForChat(photo->peer); !gid.isEmpty()) {
+			// Parvane: снять фото группы шины → group.setinfo{clear_avatar}
+			Parvane::ClearGroupPhoto(gid, nullptr);
+		} else if (const auto chat = photo->peer->asChat()) {
 			_api.request(MTPmessages_EditChatPhoto(
 				chat->inputChat(),
 				MTP_inputChatPhotoEmpty()

@@ -40,6 +40,8 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -152,9 +154,8 @@ std::vector<json> journalFold() {
     return out;
 }
 
-// Событие в Kotlin: аттачим поток к VM (pump/inbox — нативные потоки).
-void emit(const json &event) {
-    if (journaledType(event.value("type", ""))) journalAppend(event);
+// Вызов ParvaneCore.onEvent(json) в ТЕКУЩЕМ потоке (аттачим его к VM).
+void callOnEvent(const std::string &s) {
     if (!g_vm || !g_coreClass || !g_onEvent) return;
     JNIEnv *env = nullptr;
     bool attached = false;
@@ -162,12 +163,59 @@ void emit(const json &event) {
         if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
         attached = true;
     }
-    const auto s = event.dump();
     jstring js = env->NewStringUTF(s.c_str());
     env->CallStaticVoidMethod(g_coreClass, g_onEvent, js);
     env->DeleteLocalRef(js);
     if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); } // видно в logcat как W/System.err
     if (attached) g_vm->DetachCurrentThread();
+}
+
+// Очередь событий в Kotlin (27 сен 2026, найдено сценарием эмулятора
+// tgx_group_manage_flow.sh). Обработчики Client.kt зовут ядро прямо из
+// onEvent (нотис {group} → syncGroups → group.list, сообщение в незнакомую
+// группу → то же). Раньше событие уходило из потока ЧИТАТЕЛЯ транспорта:
+// запрос из обработчика ждал ответ, который мог прочитать только этот же
+// поток, — таймаут 30 с, за ним таймауты всех остальных запросов (sync,
+// listGroups), X «замолкал» после первого нотиса. Теперь события ставятся в
+// очередь и уходят в Kotlin из отдельного потока строго по порядку.
+std::mutex g_emitMu;
+std::condition_variable g_emitCv;
+std::deque<std::string> g_emitQueue;
+bool g_emitThreadStarted = false;
+
+void emitLoop() {
+    for (;;) {
+        std::string s;
+        {
+            std::unique_lock<std::mutex> lk(g_emitMu);
+            g_emitCv.wait(lk, [] { return !g_emitQueue.empty(); });
+            s = std::move(g_emitQueue.front());
+            g_emitQueue.pop_front();
+        }
+        callOnEvent(s);
+    }
+}
+
+// Событие в Kotlin — через очередь (любой поток ядра: pump/inbox/читатель).
+void emit(const json &event) {
+    if (journaledType(event.value("type", ""))) journalAppend(event);
+    if (!g_vm || !g_coreClass || !g_onEvent) return;
+    {
+        std::lock_guard<std::mutex> lk(g_emitMu);
+        g_emitQueue.push_back(event.dump());
+        if (!g_emitThreadStarted) {
+            g_emitThreadStarted = true;
+            std::thread(emitLoop).detach();
+        }
+    }
+    g_emitCv.notify_one();
+}
+
+// Событие в Kotlin синхронно, в вызывающем потоке — только для реплея журнала:
+// Kotlin ждёт, что после nativeReplayJournal стор уже заполнен (GetChats).
+void emitNow(const json &event) {
+    if (!g_vm || !g_coreClass || !g_onEvent) return;
+    callOnEvent(event.dump());
 }
 
 void emitError(const std::string &text) { emit(json{{"type", "error"}, {"text", text}}); }
@@ -184,7 +232,7 @@ void journalReplay() {
     g_replaying = true;
     for (const auto &m : msgs) {
         { std::lock_guard<std::mutex> lk(g_mu); g_seen.insert(m.value("id", "")); }
-        emit(m);
+        emitNow(m); // синхронно: журнал не пишется повторно (journaledType) и стор нужен сразу
     }
     g_replaying = false;
     {
@@ -1186,6 +1234,209 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupAction(
     } catch (const std::exception &e) {
         LOGE("groupAction %s %s: %s", act.c_str(), gid.c_str(), e.what());
         return env->NewStringUTF(e.what());
+    }
+}
+// ── spec 004: управление группой с экранов Telegram X ──────────────────────
+// Все функции блокирующие (пул io шва), под g_mu; возвращают JSON ответа сервера
+// ({ok, error, error_code, …}) — коды ошибок доходят до Kotlin, как в web.
+namespace {
+jstring jreply(JNIEnv *env, const json &j) { return env->NewStringUTF(j.dump().c_str()); }
+json jfail(const char *code, const std::string &text) {
+    return json{{"ok", false}, {"error_code", code}, {"error", text}};
+}
+} // namespace
+
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetInfo(
+        JNIEnv *env, jclass, jstring groupId, jstring about, jboolean clearAvatar) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.setInfo(g_token, jstr(env, groupId),
+            about ? std::optional<std::string>(jstr(env, about)) : std::nullopt, std::nullopt, clearAvatar == JNI_TRUE);
+        if (r.ok) refreshGroupsLocked();
+        return jreply(env, r.toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupSetInfo: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+// Фото группы: файл → cloud (открытый объект, как аватар) → group.setinfo{avatar_file_id};
+// копия байтов в mediaDir()/<file_id>, чтобы стор показал фото без повторной загрузки
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPhoto(
+        JNIEnv *env, jclass, jstring groupId, jstring path) {
+    try {
+        std::ifstream f(jstr(env, path), std::ios::binary);
+        if (!f) throw std::runtime_error("файл не читается");
+        std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::CloudClient cloud(*g_transport);
+        const auto fileId = cloud.upload(g_self, g_token, "group.jpg", "image/jpeg", bytes, {}, true, 256 * 1024, 60000);
+        if (fileId.empty()) throw std::runtime_error("cloud не принял");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.setInfo(g_token, jstr(env, groupId), std::nullopt, fileId, false);
+        auto out = r.toJson();
+        if (r.ok) {
+            std::error_code ec; std::filesystem::create_directories(mediaDir(), ec);
+            const auto local = mediaDir() + "/" + fileId;
+            std::ofstream o(local, std::ios::binary); o << bytes;
+            out["file_id"] = fileId;
+            out["path"] = local;
+            refreshGroupsLocked();
+        }
+        return jreply(env, out);
+    } catch (const std::exception &e) {
+        LOGE("groupSetPhoto: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPerms(
+        JNIEnv *env, jclass, jstring groupId, jstring permsJson) {
+    try {
+        const auto pj = json::parse(jstr(env, permsJson), nullptr, false);
+        if (!pj.is_object()) throw std::runtime_error("права: не объект");
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.setPerms(g_token, jstr(env, groupId), parvane::DefaultPermissions::fromJson(pj));
+        if (r.ok) refreshGroupsLocked();
+        return jreply(env, r.toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupSetPerms: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+// rightsJson == null — снять админа
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetAdmin(
+        JNIEnv *env, jclass, jstring groupId, jstring member, jstring rightsJson) {
+    try {
+        std::optional<parvane::AdminRights> rights;
+        if (rightsJson) {
+            const auto rj = json::parse(jstr(env, rightsJson), nullptr, false);
+            if (!rj.is_object()) throw std::runtime_error("права админа: не объект");
+            rights = parvane::AdminRights::fromJson(rj);
+        }
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.setAdmin(g_token, jstr(env, groupId), jstr(env, member), rights);
+        if (r.ok) refreshGroupsLocked();
+        return jreply(env, r.toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupSetAdmin: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInvites(
+        JNIEnv *env, jclass, jstring groupId, jboolean revoked) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.inviteList(g_token, jstr(env, groupId), revoked == JNI_TRUE);
+        json links = json::array();
+        for (const auto &l : r.links) links.push_back(l.toJson());
+        return jreply(env, json{{"ok", r.ok}, {"links", links}, {"error", r.error}, {"error_code", r.error_code}});
+    } catch (const std::exception &e) {
+        LOGE("groupInvites: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteCreate(
+        JNIEnv *env, jclass, jstring groupId, jstring title, jlong expiresAt, jint maxUses, jboolean requestNeeded) {
+    try {
+        parvane::InviteParams p;
+        p.title = title ? jstr(env, title) : std::string();
+        p.expires_at = expiresAt;
+        p.max_uses = maxUses;
+        p.request_needed = requestNeeded == JNI_TRUE;
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.inviteCreate(g_token, jstr(env, groupId), p);
+        json out{{"ok", r.ok}, {"invite", r.invite}, {"error", r.error}, {"error_code", r.error_code}};
+        if (r.link) out["link"] = r.link->toJson();
+        return jreply(env, out);
+    } catch (const std::exception &e) {
+        LOGE("groupInviteCreate: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteRevoke(
+        JNIEnv *env, jclass, jstring groupId, jstring token) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        return jreply(env, gc.inviteRevoke(g_token, jstr(env, groupId), jstr(env, token)).toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupInviteRevoke: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteDelete(
+        JNIEnv *env, jclass, jstring groupId, jstring token) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        return jreply(env, gc.inviteDelete(g_token, jstr(env, groupId), jstr(env, token)).toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupInviteDelete: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteCheck(JNIEnv *env, jclass, jstring token) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        return jreply(env, gc.inviteCheck(g_token, jstr(env, token)).toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupInviteCheck: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupJoin(JNIEnv *env, jclass, jstring token) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.joinByInvite(g_token, jstr(env, token));
+        if (r.ok && !r.pending) refreshGroupsLocked();
+        return jreply(env, r.toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupJoin: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequests(JNIEnv *env, jclass, jstring groupId) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.requestList(g_token, jstr(env, groupId));
+        json reqs = json::array();
+        for (const auto &q : r.requests) reqs.push_back(q.toJson());
+        return jreply(env, json{{"ok", r.ok}, {"requests", reqs}, {"error", r.error}, {"error_code", r.error_code}});
+    } catch (const std::exception &e) {
+        LOGE("groupRequests: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequestDecide(
+        JNIEnv *env, jclass, jstring groupId, jstring member, jboolean approve) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_transport) throw std::runtime_error("нет сессии");
+        parvane::GroupClient gc(*g_transport);
+        const auto r = gc.requestDecide(g_token, jstr(env, groupId), jstr(env, member), approve == JNI_TRUE);
+        if (r.ok) refreshGroupsLocked();
+        return jreply(env, r.toJson());
+    } catch (const std::exception &e) {
+        LOGE("groupRequestDecide: %s", e.what());
+        return jreply(env, jfail("failed", e.what()));
     }
 }
 // Настройки уведомлений → серверу (блоб веба {defaults, exceptions})

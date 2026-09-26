@@ -100,6 +100,26 @@ int main() {
         check(r.change == "removed" && !r.info, "GroupNotice: removed без info");
         const auto a = parvane::GroupActionResponse::fromJson(json::parse(R"({"ok":false,"error":"нет прав","error_code":"forbidden"})"));
         check(!a.ok && a.error_code == "forbidden", "GroupActionResponse: error_code");
+        // spec 004: структуры управления группой
+        const auto lk = parvane::InviteLink::fromJson(json::parse(R"({"token":"t1","created_by":"alice@local","created_at":10,"title":"T","expires_at":20,"max_uses":3,"uses":1,"request_needed":true,"revoked":false,"revoked_at":0,"state":"active","is_primary":true,"pending_requests":1})"));
+        check(lk.token == "t1" && lk.title == "T" && lk.max_uses == 3 && lk.uses == 1 && lk.request_needed && lk.state == "active" && lk.is_primary && lk.pending_requests == 1,
+              "InviteLink: все поля");
+        const auto lk2 = parvane::InviteLink::fromJson(json::parse(R"({"token":"t2","revoked":true})"));
+        check(lk2.state == "revoked" && lk2.revoked, "InviteLink: state выводится из revoked при отсутствии");
+        const auto ck = parvane::GroupInviteCheckResponse::fromJson(json::parse(R"({"ok":true,"group_id":"g","name":"N","kind":"channel","members_count":2,"already_member":true,"pending":false})"));
+        check(ck.ok && ck.kind == "channel" && ck.members_count == 2 && ck.already_member, "GroupInviteCheckResponse: already_member");
+        const auto ck2 = parvane::GroupInviteCheckResponse::fromJson(json::parse(R"({"ok":false,"error_code":"banned"})"));
+        check(!ck2.ok && ck2.error_code == "banned", "GroupInviteCheckResponse: error_code");
+        const auto jr = parvane::GroupJoinResponse::fromJson(json::parse(R"({"ok":true,"group_id":"g","name":"N","pending":true})"));
+        check(jr.ok && jr.pending && jr.group_id == "g", "GroupJoinResponse: pending");
+        const auto rq = parvane::GroupRequestListResponse::fromJson(json::parse(R"({"ok":true,"requests":[{"member":"m@local","invite":"t1","created_at":5}]})"));
+        check(rq.ok && rq.requests.size() == 1 && rq.requests[0].member == "m@local" && rq.requests[0].created_at == 5, "GroupRequestListResponse");
+        const auto vr = parvane::GroupVersionResponse::fromJson(json::parse(R"({"ok":true,"version":12})"));
+        check(vr.ok && vr.version == 12, "GroupVersionResponse");
+        auto ar = parvane::AdminRights::none();
+        ar.invite_users = true;
+        const auto ar2 = parvane::AdminRights::fromJson(ar.toJson());
+        check(ar2.invite_users && !ar2.change_info && !ar2.add_admins && !ar2.ban_users, "AdminRights: toJson ↔ fromJson, none()");
     }
     {
         check(parvane::contentText(parvane::textContent("привет")).value_or("") == "привет",

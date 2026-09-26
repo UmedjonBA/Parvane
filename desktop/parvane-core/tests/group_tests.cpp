@@ -103,7 +103,8 @@ int main() {
     check(hasMsg(mc.sync(carol, tC, MessengerClient::zeroCursor()), mid2),
           "после добавления carol видит новое сообщение");
     // обычный участник не может добавлять.
-    check(!groups.addMember(tB, gid, "eve@evil").ok, "обычный участник НЕ добавляет");
+    // spec 003: участник с правом invite_users (по умолчанию включено) добавлять МОЖЕТ —
+    // отказ проверяется ниже, после снятия права владельцем (блок spec 004)
 
     // Канал: подписчик не может писать, owner может.
     auto ch = groups.create(tA, "Тест-канал", "channel", { bob });
@@ -115,6 +116,78 @@ int main() {
     auto chSync = mc.sync(bob, tB, MessengerClient::zeroCursor());
     check(hasMsg(chSync, ownerMsg), "пост owner канала доставлен");
     check(!hasMsg(chSync, subMsg), "пост подписчика в канал ОТКЛОНЁН");
+
+    // ── spec 004: управление группой живьём (сервер spec 003) ────────────────
+    {
+        auto vi = groups.setInfo(tA, gid, std::string("описание core"), std::nullopt, false);
+        check(vi.ok && vi.version > 0, "setInfo владельцем → ok, version растёт", std::to_string(vi.version));
+        const auto prev = vi.version;
+        check(groups.setInfo(tB, gid, std::string("взлом"), std::nullopt, false).error_code == "forbidden",
+              "setInfo участником → forbidden");
+        check(groups.info(tA, gid).about == "описание core", "group.info несёт about");
+        DefaultPermissions p;
+        p.send_polls = false;
+        auto vp = groups.setPerms(tA, gid, p);
+        check(vp.ok && vp.version == prev + 1, "setPerms владельцем → version+1");
+        check(groups.setPerms(tB, gid, p).error_code == "forbidden", "setPerms участником → forbidden");
+        check(!groups.info(tB, gid).default_permissions.send_polls, "участник видит новые права");
+        p.invite_users = false;
+        check(groups.setPerms(tA, gid, p).ok, "владелец снял invite_users");
+        check(groups.addMember(tB, gid, "dave@local").error_code == "forbidden", "участник без invite_users НЕ добавляет → forbidden");
+        p.invite_users = true;
+        check(groups.setPerms(tA, gid, p).ok, "владелец вернул invite_users");
+        check(groups.addMember(tB, gid, "dave@local").ok, "участник с invite_users добавляет");
+        auto ar = AdminRights::none();
+        ar.pin_messages = true;
+        check(groups.setAdmin(tA, gid, bob, ar).ok, "setAdmin владельцем (только pin) → ok");
+        {
+            const auto gi = groups.info(tA, gid);
+            bool bobAdmin = false;
+            for (const auto &m : gi.members)
+                if (m.address == bob) bobAdmin = (m.role == "admin" && m.admin_rights && m.admin_rights->pin_messages && !m.admin_rights->ban_users);
+            check(bobAdmin, "info: bob admin с pin_messages, без ban_users");
+        }
+        check(groups.setAdmin(tB, gid, carol, ar).error_code == "forbidden", "bob без add_admins не назначает → forbidden");
+        check(groups.setAdmin(tA, gid, bob, std::nullopt).ok, "setAdmin(nullopt) снимает админа");
+        InviteParams ip;
+        ip.max_uses = 1;
+        auto ic = groups.inviteCreate(tA, gid, ip);
+        check(ic.ok && ic.link && ic.link->state == "active" && ic.link->max_uses == 1, "inviteCreate max_uses=1 → active");
+        auto il = groups.inviteList(tA, gid, false);
+        bool found = false;
+        for (const auto &l : il.links) found = found || l.token == ic.invite;
+        check(il.ok && found, "inviteList содержит созданную ссылку");
+        check(groups.inviteList(tB, gid, false).error_code == "forbidden", "inviteList участником → forbidden");
+        auto ck = groups.inviteCheck(tC, ic.invite);
+        check(ck.ok && !ck.name.empty() && ck.members_count >= 2 && !ck.request_needed, "inviteCheck: превью без состава");
+        const std::string erin = "erin@local", frank = "frank@local";
+        const std::string tE = issue(tr, erin), tF = issue(tr, frank);
+        check(groups.joinByInvite(tE, ic.invite).ok, "erin вступила по лимитной ссылке");
+        check(groups.joinByInvite(tF, ic.invite).error_code == "exhausted", "frank → exhausted");
+        check(groups.inviteRevoke(tA, gid, ic.invite).ok, "inviteRevoke → ok");
+        auto rl = groups.inviteList(tA, gid, true);
+        bool revoked = false;
+        for (const auto &l : rl.links) revoked = revoked || (l.token == ic.invite && l.state == "revoked");
+        check(revoked, "отозванная в списке revoked");
+        check(groups.joinByInvite(tF, ic.invite).error_code == "revoked", "по отозванной → revoked");
+        check(groups.inviteDelete(tA, gid, ic.invite).ok, "inviteDelete отозванной → ok");
+        InviteParams rp;
+        rp.request_needed = true;
+        auto rc = groups.inviteCreate(tA, gid, rp);
+        check(rc.ok, "ссылка по одобрению создана");
+        check(groups.joinByInvite(tF, rc.invite).pending, "frank → pending (заявка)");
+        auto rq = groups.requestList(tA, gid);
+        bool hasFrank = false;
+        for (const auto &r : rq.requests) hasFrank = hasFrank || r.member == frank;
+        check(rq.ok && hasFrank, "requestList владельцем содержит frank");
+        check(groups.requestList(tB, gid).error_code == "forbidden", "requestList участником → forbidden");
+        check(groups.requestDecide(tA, gid, frank, true).ok, "requestDecide approve → ok");
+        {
+            bool member = false;
+            for (const auto &m : groups.info(tA, gid).members) member = member || (m.address == frank && m.role == "member");
+            check(member, "frank стал участником");
+        }
+    }
 
     std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;

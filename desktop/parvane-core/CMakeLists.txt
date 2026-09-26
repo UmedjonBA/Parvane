@@ -111,6 +111,10 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_group_tests tests/group_tests.cpp)
     target_link_libraries(parvane_group_tests PRIVATE parvane_core)
 
+    # Управление группой (spec 004): форма запросов и GROUP-2, без стека
+    add_executable(parvane_group_client_tests tests/group_client_tests.cpp)
+    target_link_libraries(parvane_group_client_tests PRIVATE parvane_core)
+
     add_executable(parvane_group_call_tests tests/group_call_tests.cpp)
     target_link_libraries(parvane_group_call_tests PRIVATE parvane_core)
 
@@ -133,6 +137,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME call_session COMMAND parvane_call_session_tests)
     add_test(NAME call_manager COMMAND parvane_call_manager_tests)
     add_test(NAME group COMMAND parvane_group_tests)
+    add_test(NAME group_client COMMAND parvane_group_client_tests)
     add_test(NAME group_call COMMAND parvane_group_call_tests)
     add_test(NAME map_tiles COMMAND parvane_map_tiles_tests)
 endif()

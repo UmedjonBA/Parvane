@@ -9,6 +9,8 @@ bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 PIDS=()
 stack_start() { # stack_start <scratch> [env-для-identity]
   SB="$1"; shift
+  # зомби прошлого прогона с тем же -workdir перехватит новый старт через локальный сокет
+  pkill -9 -f -- "-workdir $SB/" 2>/dev/null; sleep 0.5
   rm -rf "$SB"; mkdir -p "$SB"
   [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
   for s in identity messenger cloud call gateway; do
@@ -59,7 +61,15 @@ wait_log() {
   done
   return 1
 }
-stop_pid() { kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
+# клиент запускается через PA=$(start_client …) — он не потомок этой оболочки, `wait`
+# не ждёт; ждём выхода опросом, иначе следующий старт того же -workdir найдёт живой
+# экземпляр через локальный сокет и тихо выйдет (log_startN.txt «not the first instance»)
+stop_pid() {
+  [ -n "$1" ] || return 0
+  kill "$1" 2>/dev/null; wait "$1" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.2; done
+  kill -9 "$1" 2>/dev/null; sleep 0.5
+}
 stack_stop() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; }
 finish() { # finish <имя>
   [ "$RC" -eq 0 ] && printf '\033[32m%s: OK\033[0m\n' "$1" || printf '\033[31m%s: ЕСТЬ ПРОВАЛЫ\033[0m\n' "$1"

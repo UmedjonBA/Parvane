@@ -2,6 +2,7 @@
 // Токен — JWT текущей сессии. Все методы БЛОКИРУЮЩИЕ (звать из worker-потока).
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -49,12 +50,50 @@ public:
                                const std::string &name, int timeoutMs = 3000);
     GroupActionResponse remove(const std::string &token, const std::string &groupId,
                                int timeoutMs = 3000);
-    // Создать инвайт-токен (owner/admin). Пустая строка при ошибке.
+    // Создать инвайт-токен без параметров (owner/admin). Пустая строка при ошибке.
     std::string inviteCreate(const std::string &token, const std::string &groupId,
                              int timeoutMs = 3000);
     // Вступить по инвайт-токену. Возвращает {ok,group_id,name,error} JSON-ом.
     json join(const std::string &token, const std::string &invite,
               int timeoutMs = 3000);
+
+    // ── spec 004: управление группой (сервер и провод — spec 003) ────────────
+    // Описание/фото: заданные поля меняются, отсутствующие — нет; clear_avatar
+    // приоритетнее avatar_file_id. Право: владелец или change_info.
+    GroupVersionResponse setInfo(const std::string &token, const std::string &groupId,
+                                 const std::optional<std::string> &about,
+                                 const std::optional<std::string> &avatarFileId,
+                                 bool clearAvatar, int timeoutMs = 3000);
+    // Права участников по умолчанию (полный набор 8 ключей). У канала — bad_request.
+    GroupVersionResponse setPerms(const std::string &token, const std::string &groupId,
+                                  const DefaultPermissions &perms, int timeoutMs = 3000);
+    // Гранулярные права админа; nullopt — снять админа (rights: null).
+    GroupVersionResponse setAdmin(const std::string &token, const std::string &groupId,
+                                  const std::string &member,
+                                  const std::optional<AdminRights> &rights,
+                                  int timeoutMs = 3000);
+    // Ссылка с названием/сроком/лимитом/«по одобрению»; ответ несёт саму ссылку.
+    GroupInviteCreateResponse inviteCreate(const std::string &token, const std::string &groupId,
+                                           const InviteParams &params, int timeoutMs = 3000);
+    // revoked=false — активные/истёкшие/исчерпанные, true — отозванные.
+    GroupInviteListResponse inviteList(const std::string &token, const std::string &groupId,
+                                       bool revoked, int timeoutMs = 3000);
+    GroupActionResponse inviteRevoke(const std::string &token, const std::string &groupId,
+                                     const std::string &invite, int timeoutMs = 3000);
+    // Удалить можно только отозванную.
+    GroupActionResponse inviteDelete(const std::string &token, const std::string &groupId,
+                                     const std::string &invite, int timeoutMs = 3000);
+    // Превью до вступления (любой авторизованный).
+    GroupInviteCheckResponse inviteCheck(const std::string &token, const std::string &invite,
+                                         int timeoutMs = 3000);
+    // Типизированный join: ok / pending (заявка) / error_code.
+    GroupJoinResponse joinByInvite(const std::string &token, const std::string &invite,
+                                   int timeoutMs = 3000);
+    GroupRequestListResponse requestList(const std::string &token, const std::string &groupId,
+                                         int timeoutMs = 3000);
+    GroupVersionResponse requestDecide(const std::string &token, const std::string &groupId,
+                                       const std::string &member, bool approve,
+                                       int timeoutMs = 3000);
 
 private:
     ITransport &_t;

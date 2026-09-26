@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "data/data_chat_participant_status.h" // ChatAdminRights (spec 004)
+
 class PeerData;
 class ChatData;
 class UserData;
@@ -342,16 +344,104 @@ void LeaveGroup(const QString &groupId);
 // нативного «выйти из группы» в меню.
 [[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
 
+// ── spec 004: экраны управления группой (нативные боксы tdesktop) ────────────
+// Результат операции: ok и код ошибки сервера (forbidden|bad_request|limit|…)
+// либо текст исключения. Вызывается на main-потоке после RefreshGroups.
+using GroupOpDone = Fn<void(bool ok, const QString &error)>;
+// Роль участника по кэшу сведений (owner|admin|member|banned), "" — неизвестно.
+[[nodiscard]] QString GroupRoleOf(const QString &groupId, const QString &address);
+// Нативные права админа участника (по гранулярному набору провода; legacy —
+// полный). Для «Edit admin» как стартовые значения.
+[[nodiscard]] ChatAdminRights GroupMemberAdminRights(const QString &groupId, const QString &address);
+// Ожидающих заявок (0, если сведений нет или self не менеджер ссылок).
+[[nodiscard]] int GroupPendingRequests(const QString &groupId);
+// US1: описание (≤255) и фото группы через group.setinfo. Локально
+// применяется по нотису/RefreshGroups; done — на main.
+void SetGroupAbout(const QString &groupId, const QString &about, GroupOpDone done);
+void SetGroupPhoto(const QString &groupId, const QImage &image, GroupOpDone done);
+void ClearGroupPhoto(const QString &groupId, GroupOpDone done);
+// US2: права участников по умолчанию (экран «Permissions») → group.setperms.
+// rights — нативные запреты; инверсия в 8 разрешений провода внутри.
+void SetGroupPerms(const QString &groupId, ChatRestrictions rights, GroupOpDone done);
+// US3: гранулярные права админа (экран «Edit admin») → group.setadmin;
+// demote=true (или пустой набор) — снять админа.
+void SetGroupAdmin(const QString &groupId, const QString &member, ChatAdminRights rights, bool demote, GroupOpDone done);
+// Адрес участника по его UserData (по маппингу id↔адрес); "" — неизвестен.
+[[nodiscard]] QString AddressForUser(not_null<UserData*> user);
+
 // ── модерация групп и инвайт-ссылки (P2) ─────────────────────────────────────
 // Бан/разбан участника (owner/admin; бэкенд сам гейтит права).
 void BanMember(const QString &groupId, const QString &member, bool ban);
 // Мьют на minutes минут (0 — снять). owner/admin.
 void MuteMember(const QString &groupId, const QString &member, int minutes);
-// Создать инвайт-ссылку: бокс со ссылкой + копия в буфер обмена.
-void CreateInviteLink(const QString &groupId);
-// Перехват клика по ссылке: parvane.invite/<token> → конфирм → вступление.
-// true — ссылка наша (обработана), false — не наша.
+// Перехват клика по ссылке группы (https://parvane.invite/<token>,
+// …#+<token>): проверка group.invite.check → нативный ConfirmInviteBox →
+// вступление. true — ссылка наша (обработана), false — не наша.
 [[nodiscard]] bool JoinByInviteLink(const QString &url);
+
+// ── US4/US5: инвайт-ссылки и заявки (spec 004) — данные для Api::InviteLinks ─
+struct GroupInviteLink {
+	QString token;
+	QString createdBy; // адрес автора
+	QString title;
+	QString state; // active | revoked | expired | exhausted
+	int date = 0;
+	int expireDate = 0;
+	int usageLimit = 0;
+	int usage = 0;
+	int requested = 0;
+	bool requestApproval = false;
+	bool permanent = false;
+	bool revoked = false;
+};
+struct GroupInvitePreview {
+	QString groupId;
+	QString name;
+	QString kind; // group | channel
+	QString avatar;
+	QString about;
+	int members = 0;
+	bool requestNeeded = false;
+	bool alreadyMember = false;
+	bool pending = false;
+};
+struct GroupJoinRequest {
+	QString member;
+	QString invite;
+	int date = 0;
+};
+// Ссылка по токену — https://parvane.invite/<token> (web открывает её).
+[[nodiscard]] QString GroupInviteUrl(const QString &token);
+// Токен из ссылки любого формата (parvane.invite/<t>, …#+<t>, голый 32 hex); "" — не наша.
+[[nodiscard]] QString GroupInviteToken(const QString &linkOrToken);
+// Текст отказа по коду сервера (invalid|revoked|expired|exhausted|banned|declined).
+[[nodiscard]] QString InviteErrorText(const QString &errorCode);
+void ListGroupInvites(const QString &groupId, bool revoked,
+	Fn<void(bool ok, std::vector<GroupInviteLink> links, const QString &error)> done);
+void CreateGroupInvite(const QString &groupId, const QString &title, int expireDate,
+	int usageLimit, bool requestApproval,
+	Fn<void(bool ok, GroupInviteLink link, const QString &error)> done);
+// Активные ссылки для экрана «Invite Links» (FR-040): как в web — если в списке
+// сервера нет активной основной (is_primary = самая ранняя активная ссылка
+// владельца без параметров), создаётся ссылка без параметров и список
+// перечитывается; без права приглашать — просто список.
+void ListGroupInvitesWithPrimary(const QString &groupId,
+	Fn<void(bool ok, std::vector<GroupInviteLink> links, const QString &error)> done);
+void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone done);
+void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone done);
+// Открытый объект cloud (фото группы, аватар) → картинка на main-потоке;
+// пустая QImage при сбое. Для модалки «Join group» (FR-041: фото в превью).
+void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done);
+void CheckGroupInvite(const QString &token,
+	Fn<void(bool ok, GroupInvitePreview preview, const QString &error)> done);
+void JoinGroupByInvite(const QString &token,
+	Fn<void(bool ok, const QString &groupId, bool pending, const QString &error)> done);
+void ListJoinRequests(const QString &groupId,
+	Fn<void(bool ok, std::vector<GroupJoinRequest> requests, const QString &error)> done);
+void DecideJoinRequest(const QString &groupId, const QString &member, bool approve, GroupOpDone done);
+// UserData по адресу (синтез при отсутствии) и открытие чата группы.
+[[nodiscard]] not_null<UserData*> EnsureUser(not_null<Main::Session*> session, const QString &address);
+void OpenGroupChat(const QString &groupId);
 
 // ── стикеры/GIF (паритет) ────────────────────────────────────────────────────
 // Зеркалит отправку СУЩЕСТВУЮЩЕГО документа (стикер из панели / GIF из

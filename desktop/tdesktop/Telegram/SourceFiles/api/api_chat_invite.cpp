@@ -6,6 +6,9 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_chat_invite.h"
+#include "parvane/parvane_client.h" // Parvane: вступление по ссылке группы шины (spec 004)
+#include "base/unixtime.h"
+#include "ui/image/image_location_factory.h" // Images::FromImageInMemory (фото в модалке)
 
 #include "apiwrap.h"
 #include "api/api_credits.h"
@@ -673,6 +676,112 @@ void CheckChatInvite(
 		Fn<void()> loaded) {
 	const auto session = &controller->session();
 	const auto weak = base::make_weak(controller);
+	// Parvane: ссылка группы шины → group.invite.check → нативный ConfirmInviteBox
+	// («Join group» / «Request to Join»), вступление → group.join; отказы —
+	// шесть различимых текстов (spec 004, US4).
+	if (const auto token = Parvane::GroupInviteToken(hash); !token.isEmpty()) {
+		Parvane::CheckGroupInvite(token, [=](bool ok, Parvane::GroupInvitePreview p, const QString &error) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (loaded) {
+				loaded();
+			}
+			if (!ok) {
+				strong->uiShow()->showToast(Parvane::InviteErrorText(error));
+				return;
+			}
+			if (p.alreadyMember) {
+				Parvane::OpenGroupChat(p.groupId);
+				return;
+			}
+			// Фото группы (FR-041): открытый объект cloud → синтез MTPPhoto в
+			// chatInvite, а картинка кладётся в PhotoData из памяти ПОСЛЕ показа
+			// бокса (ParseInvite → processPhoto затирает локации пустыми, как у
+			// принятых фото). Сбой загрузки → бокс с EmptyUserpic, как раньше.
+			const auto showBox = [=](QImage image, QByteArray bytes) {
+				const auto shown = weak.get();
+				if (!shown) {
+					return;
+				}
+				const auto photoId = PhotoId(Parvane::IdForAddress(p.avatar) | 0x2000000000000000ULL);
+				using Flag = MTPDchatInvite::Flag;
+				const auto flags = (p.requestNeeded ? Flag::f_request_needed : Flag(0))
+					| ((p.kind == u"channel"_q) ? (Flag::f_channel | Flag::f_broadcast) : Flag(0))
+					| (p.about.isEmpty() ? Flag(0) : Flag::f_about);
+				auto sizes = QVector<MTPPhotoSize>();
+				if (!image.isNull()) {
+					sizes.push_back(MTP_photoSize(
+						MTP_string("a"),
+						MTP_int(image.width()),
+						MTP_int(image.height()),
+						MTP_int(int(bytes.size()))));
+				}
+				const auto photo = image.isNull()
+					? MTP_photoEmpty(MTP_long(0))
+					: MTP_photo(
+						MTP_flags(0),
+						MTP_long(photoId),
+						MTP_long(0),
+						MTP_bytes(),
+						MTP_int(int(base::unixtime::now())),
+						MTP_vector<MTPPhotoSize>(sizes),
+						MTPVector<MTPVideoSize>(),
+						MTP_int(session->mainDcId()));
+				const auto invite = MTP_chatInvite(
+					MTP_flags(flags),
+					MTP_string(p.name),
+					MTP_string(p.about),
+					photo,
+					MTP_int(p.members),
+					MTP_vector<MTPUser>(),
+					MTP_int(0),
+					MTPStarsSubscriptionPricing(),
+					MTP_long(0),
+					MTPBotVerification());
+				shown->show(Box(ConfirmInviteBox, session, &invite.c_chatInvite(), nullptr, [=] {
+				Parvane::JoinGroupByInvite(token, [=](bool ok2, const QString &groupId, bool pending, const QString &error2) {
+					const auto s = weak.get();
+					if (s) {
+						s->hideLayer();
+					}
+					if (!ok2) {
+						if (s) {
+							s->uiShow()->showToast(Parvane::InviteErrorText(error2));
+						}
+						return;
+					}
+					if (pending) {
+						if (s) {
+							s->uiShow()->showToast(tr::lng_parvane_invite_request_sent(tr::now));
+						}
+						return;
+					}
+					Parvane::OpenGroupChat(groupId);
+				});
+			}));
+				if (!image.isNull()) {
+					const auto data = session->data().photo(photoId);
+					const auto inMemory = Images::FromImageInMemory(image, "JPG", bytes);
+					data->updateImages(
+						QByteArray(),
+						inMemory,          // small — его рисует бокс
+						inMemory,          // thumbnail
+						inMemory,          // large
+						ImageWithLocation(),
+						ImageWithLocation(),
+						0);
+				}
+			};
+			if (p.avatar.isEmpty()) {
+				showBox(QImage(), QByteArray());
+			} else {
+				Parvane::FetchPublicImage(p.avatar, showBox);
+			}
+		});
+		return;
+	}
 	session->api().checkChatInvite(hash, [=](const MTPChatInvite &result) {
 		const auto strong = weak.get();
 		if (!strong) {

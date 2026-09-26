@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/edit_participants_box.h"
+#include "parvane/parvane_client.h" // Parvane: группы шины (spec 004)
 
 #include "api/api_chat_participants.h"
 #include "boxes/peers/edit_participant_box.h"
@@ -396,6 +397,28 @@ Fn<void(
 				onFail);
 		};
 		if (const auto chat = peer->asChatNotMigrated()) {
+			// Parvane: гранулярные права админа группы шины → group.setadmin;
+			// пустой набор — снять. migrateChat (MTProto, FAIL-1) не зовём.
+			if (const auto gid = Parvane::GroupIdForChat(chat); !gid.isEmpty()) {
+				Parvane::SetGroupAdmin(
+					gid,
+					Parvane::AddressForUser(user),
+					strippedNewRights.flags,
+					!strippedNewRights.flags,
+					[=](bool ok, const QString &error) {
+						if (ok) {
+							done();
+							return;
+						}
+						if (show) {
+							show->showToast(error);
+						}
+						if (onFail) {
+							onFail();
+						}
+					});
+				return;
+			}
 			const auto saveChatAdmin = [&](bool isAdmin) {
 				SaveChatAdmin(show, chat, user, isAdmin, done, onFail);
 				if (rank) {
@@ -447,6 +470,25 @@ Fn<void(
 				});
 		};
 		if (const auto chat = peer->asChatNotMigrated()) {
+			// Parvane: у групп шины персональных ограничений нет — только
+			// удаление (group.removemember); частичный набор — честный отказ.
+			if (const auto gid = Parvane::GroupIdForChat(chat); !gid.isEmpty()) {
+				if (participant->isUser()
+					&& (newRights.flags & ChatRestriction::ViewMessages)) {
+					Parvane::KickMember(gid, Parvane::AddressForUser(participant->asUser()));
+					done();
+				} else if (!newRights.flags) {
+					done();
+				} else {
+					if (show) {
+						show->showToast(tr::lng_parvane_restrict_unsupported(tr::now));
+					}
+					if (onFail) {
+						onFail();
+					}
+				}
+				return;
+			}
 			if (participant->isUser()
 				&& (newRights.flags & ChatRestriction::ViewMessages)) {
 				SaveChatParticipantKick(
@@ -2093,7 +2135,15 @@ base::unique_qptr<Ui::PopupMenu> ParticipantsBoxController::rowContextMenu(
 
 void ParticipantsBoxController::showAdmin(not_null<UserData*> user) {
 	const auto adminRights = _additional.adminRights(user);
-	const auto currentRights = adminRights.value_or(ChatAdminRightsInfo());
+	auto currentRights = adminRights.value_or(ChatAdminRightsInfo());
+	// Parvane: стартовые права — гранулярный набор участника из сведений
+	// группы (а не полный defaultAdminRights basic-группы).
+	if (const auto gid = Parvane::GroupIdForChat(_peer); !gid.isEmpty()) {
+		const auto address = Parvane::AddressForUser(user);
+		currentRights = (Parvane::GroupRoleOf(gid, address) == u"admin"_q)
+			? ChatAdminRightsInfo(Parvane::GroupMemberAdminRights(gid, address))
+			: ChatAdminRightsInfo();
+	}
 	auto box = Box<EditAdminBox>(
 		_peer,
 		user,
@@ -2276,6 +2326,18 @@ void ParticipantsBoxController::removeAdminSure(not_null<UserData*> user) {
 
 	if (const auto chat = _peer->asChat()) {
 		const auto show = delegate()->peerListUiShow();
+		// Parvane: снять админа группы шины → group.setadmin без прав
+		if (const auto gid = Parvane::GroupIdForChat(chat); !gid.isEmpty()) {
+			Parvane::SetGroupAdmin(gid, Parvane::AddressForUser(user), ChatAdminRights(), true,
+				crl::guard(this, [=](bool ok, const QString &error) {
+					if (ok) {
+						editAdminDone(user, {}, {});
+					} else if (show) {
+						show->showToast(error);
+					}
+				}));
+			return;
+		}
 		SaveChatAdmin(show, chat, user, false, crl::guard(this, [=] {
 			editAdminDone(user, {}, {});
 		}), nullptr);
