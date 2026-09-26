@@ -147,13 +147,32 @@ try {
   await right.getByRole('button', { name: 'Edit' }).click();
   await right.locator('.Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(1000);
+  // spec 003: фото, описание, права и заявки — на сервере, экраны вернулись;
+  // тип группы, привязанный канал, реакции, форумы и история — вне контракта
   await assertAbsent(right, [
-    'Description (optional)', 'Group Type', 'Permissions', 'Reactions', 'Topics', 'Chat History For New Members',
-    'Member Requests',
+    'Group Type', 'Reactions', 'Topics', 'Chat History For New Members', 'Linked Channel',
   ], 'ManageGroup');
-  assert.equal(await right.locator('.AvatarEditable').count(), 0, 'ManageGroup: group photo must be hidden');
+  assert.equal(await right.locator('.AvatarEditable').count(), 1, 'ManageGroup: group photo editor must be shown');
+  await right.locator('#group-about').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await right.getByText('Permissions').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await right.getByText('Administrators').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await right.getByText('Invite Links').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Экран прав: только поддерживаемые тумблеры, без api-missing
+  await right.getByText('Permissions').first().click();
+  await right.getByText('What can members of this group do?').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await right.locator('.Checkbox').filter({ hasText: 'Send Messages' }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(800);
+  await page.keyboard.press('Escape');
+  await right.locator('#group-about').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Экран ссылок: основная ссылка и создание новой (spec 003)
+  await right.getByText('Invite Links').first().click();
+  await right.locator('.ManageInvites').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await right.getByText('Create a New Link').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(800);
+  await page.keyboard.press('Escape');
+  await right.locator('#group-about').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Участники с ролями
   await right.getByText('Members').first().click();
   await right.locator('.ListItem').filter({ hasText: bobName }).first()
@@ -168,9 +187,9 @@ try {
   await right.getByRole('button', { name: 'Edit' }).click();
   await right.locator('.Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(1000);
-  await assertAbsent(right, ['Description (optional)', 'Channel Type', 'Discussion', 'Reactions', 'Subscribe Requests'],
-    'ManageChannel');
-  assert.equal(await right.locator('.AvatarEditable').count(), 0, 'ManageChannel: channel photo must be hidden');
+  await assertAbsent(right, ['Channel Type', 'Discussion', 'Reactions'], 'ManageChannel');
+  assert.equal(await right.locator('.AvatarEditable').count(), 1, 'ManageChannel: channel photo editor must be shown');
+  await right.locator('#channel-about, textarea').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
 

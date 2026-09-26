@@ -286,6 +286,7 @@ const groupController = createGroupController({
     const { [groupId]: _removed, ...rest } = localState.loadInviteLinks();
     localState.saveInviteLinks(rest);
   },
+  buildAvatarPhoto,
 });
 
 // Кросс-таб синхронизация черновиков: другая вкладка сохранила/очистила
@@ -1104,6 +1105,37 @@ const methods = {
   fetchMembers: groupController.fetchMembers,
   importChatInvite: groupController.importChatInvite,
   updateChatAdmin: groupController.updateChatAdmin,
+  // Управление группой (spec 003): описание, фото, права по умолчанию,
+  // инвайт-ссылки (список/отзыв/удаление/превью), заявки на вступление
+  updateChatAbout: groupController.updateChatAbout,
+  updateChatDefaultBannedRights: groupController.updateChatDefaultBannedRights,
+  editExportedChatInvite: groupController.editExportedChatInvite,
+  deleteExportedChatInvite: groupController.deleteExportedChatInvite,
+  deleteRevokedExportedChatInvites: groupController.deleteRevokedExportedChatInvites,
+  fetchChatInviteImporters: groupController.fetchChatInviteImporters,
+  hideChatJoinRequest: groupController.hideChatJoinRequest,
+  hideAllChatJoinRequests: groupController.hideAllChatJoinRequests,
+  checkChatInvite: groupController.checkChatInvite,
+  // Фото группы — как аватар пользователя: открытый объект cloud
+  // (publicAccess), затем group.setinfo{avatar_file_id}; без файла — снять
+  async editChatPhoto({ chatId, photo }: { chatId: string; accessHash?: string; photo?: File | ApiPhoto }) {
+    const groupId = store.getAddressForId(chatId);
+    if (!groupId || !connection) return undefined;
+    if (!photo) return groupController.setGroupInfo(groupId, { clearAvatar: true });
+    if (!(photo instanceof File)) return undefined;
+    const { fileId } = await mediaService.uploadBlob(
+      photo,
+      photo.name || 'group.jpg',
+      photo.type || 'image/jpeg',
+      { publicAccess: true },
+    );
+    mediaService.cacheBlob(fileId, photo, photo.type || 'image/jpeg');
+    return groupController.setGroupInfo(groupId, { avatarFileId: fileId });
+  },
+  // tt зовёт при удалении «не текущего» фото профиля; у группы фото одно
+  deleteProfilePhotos() {
+    return Promise.resolve(true);
+  },
 
   // Экраны профиля и канала запрашивают это фоном; в Parvane нет историй,
   // рекомендаций каналов и плашек «добавить/заблокировать» — честно пусто

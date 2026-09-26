@@ -109,6 +109,16 @@ pub mod topics {
     pub const GROUP_JOIN: &str = "group.join";
     pub const GROUP_RENAME: &str = "group.rename";
     pub const GROUP_DELETE: &str = "group.delete";
+    // Управление группой (spec 003): фото/описание, права, админы, ссылки, заявки.
+    pub const GROUP_SETINFO: &str = "group.setinfo";
+    pub const GROUP_SETPERMS: &str = "group.setperms";
+    pub const GROUP_SETADMIN: &str = "group.setadmin";
+    pub const GROUP_INVITE_LIST: &str = "group.invite.list";
+    pub const GROUP_INVITE_REVOKE: &str = "group.invite.revoke";
+    pub const GROUP_INVITE_DELETE: &str = "group.invite.delete";
+    pub const GROUP_INVITE_CHECK: &str = "group.invite.check";
+    pub const GROUP_REQUEST_LIST: &str = "group.request.list";
+    pub const GROUP_REQUEST_DECIDE: &str = "group.request.decide";
 
     /// Превью ссылки: клиент-отправитель просит OG-метаданные по URL, наружу
     /// ходит шард (не браузер), с SSRF-защитой.
@@ -1566,6 +1576,11 @@ pub struct GroupActionResponse {
     pub ok: bool,
     #[serde(default)]
     pub error: Option<String>,
+    /// Стабильный код ошибки (spec 003): forbidden | not_member | not_found |
+    /// invalid | revoked | expired | exhausted | banned | pending | declined |
+    /// limit | bad_request. `error` — человекочитаемый текст для логов.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 /// Замьютить участника до unix-времени `until` (0 — снять мьют).
@@ -1583,6 +1598,18 @@ pub struct GroupMuteRequest {
 pub struct GroupInviteCreateRequest {
     pub token: String,
     pub group_id: String,
+    /// Название ссылки (≤32 символов), только для админов.
+    #[serde(default)]
+    pub title: String,
+    /// Unix-секунды; 0 — бессрочно.
+    #[serde(default)]
+    pub expires_at: i64,
+    /// 0 — без лимита вступлений.
+    #[serde(default)]
+    pub max_uses: u32,
+    /// Вступление через заявку с одобрением админом.
+    #[serde(default)]
+    pub request_needed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1592,6 +1619,11 @@ pub struct GroupInviteCreateResponse {
     pub invite: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Полная запись созданной ссылки (spec 003).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<InviteLink>,
 }
 
 /// Вступить в группу по инвайт-токену.
@@ -1610,6 +1642,11 @@ pub struct GroupJoinResponse {
     pub name: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Ссылка «по одобрению»: заявка создана (или уже есть), членства нет.
+    #[serde(default)]
+    pub pending: bool,
 }
 
 /// Сведения о группе: имя, тип, создатель, участники (с ролями).
@@ -1620,12 +1657,33 @@ pub struct GroupInfo {
     pub kind: GroupKind,
     pub created_by: String,
     pub members: Vec<GroupMember>,
+    /// file_id фото группы в шарде cloud (открытый объект, как аватар пользователя).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// Описание группы, ≤255 символов.
+    #[serde(default)]
+    pub about: String,
+    /// Права участников по умолчанию (для канала не применяются).
+    #[serde(default)]
+    pub default_permissions: DefaultPermissions,
+    /// Ревизия сведений: растёт на каждую мутацию группы. Клиент применяет
+    /// сведения только при version >= локальной (conformance GROUP-1).
+    #[serde(default)]
+    pub version: u64,
+    /// Число ожидающих заявок — только владельцу и админам с invite_users.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_requests: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMember {
     pub address: String,
     pub role: String,
+    /// Права админа. None у role=admin — полный набор (админ до spec 003).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_rights: Option<AdminRights>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_by: Option<String>,
 }
 
 /// Список групп/каналов, где состоит пользователь.
@@ -1644,6 +1702,293 @@ pub struct GroupListResponse {
 pub struct GroupInfoRequest {
     pub token: String,
     pub group_id: String,
+}
+
+// ── управление группой (spec 003) ────────────────────────────────────────────
+
+fn default_true() -> bool {
+    true
+}
+
+/// Права участников по умолчанию (позитивные флаги «разрешено»). Значения по
+/// умолчанию — как в Telegram: всё включено, кроме закрепа и смены информации.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultPermissions {
+    #[serde(default = "default_true")]
+    pub send_messages: bool,
+    #[serde(default = "default_true")]
+    pub send_media: bool,
+    #[serde(default = "default_true")]
+    pub send_stickers_gifs: bool,
+    #[serde(default = "default_true")]
+    pub send_polls: bool,
+    #[serde(default = "default_true")]
+    pub embed_links: bool,
+    #[serde(default = "default_true")]
+    pub invite_users: bool,
+    #[serde(default)]
+    pub pin_messages: bool,
+    #[serde(default)]
+    pub change_info: bool,
+}
+
+impl Default for DefaultPermissions {
+    fn default() -> Self {
+        Self {
+            send_messages: true,
+            send_media: true,
+            send_stickers_gifs: true,
+            send_polls: true,
+            embed_links: true,
+            invite_users: true,
+            pin_messages: false,
+            change_info: false,
+        }
+    }
+}
+
+/// Гранулярные права админа. Значение по умолчанию (новый админ с экрана) —
+/// всё, кроме «добавлять админов». `full()` — набор legacy-админа.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminRights {
+    #[serde(default = "default_true")]
+    pub change_info: bool,
+    #[serde(default = "default_true")]
+    pub delete_messages: bool,
+    #[serde(default = "default_true")]
+    pub ban_users: bool,
+    #[serde(default = "default_true")]
+    pub invite_users: bool,
+    #[serde(default = "default_true")]
+    pub pin_messages: bool,
+    #[serde(default)]
+    pub add_admins: bool,
+}
+
+impl Default for AdminRights {
+    fn default() -> Self {
+        Self {
+            change_info: true,
+            delete_messages: true,
+            ban_users: true,
+            invite_users: true,
+            pin_messages: true,
+            add_admins: false,
+        }
+    }
+}
+
+impl AdminRights {
+    /// Полный набор (админ, назначенный до spec 003, или назначенный владельцем без явных прав).
+    pub fn full() -> Self {
+        Self { add_admins: true, ..Self::default() }
+    }
+
+    /// Каждое включённое право `self` включено и в `other`.
+    pub fn is_subset_of(&self, other: &Self) -> bool {
+        (!self.change_info || other.change_info)
+            && (!self.delete_messages || other.delete_messages)
+            && (!self.ban_users || other.ban_users)
+            && (!self.invite_users || other.invite_users)
+            && (!self.pin_messages || other.pin_messages)
+            && (!self.add_admins || other.add_admins)
+    }
+
+    pub fn any(&self) -> bool {
+        self.change_info
+            || self.delete_messages
+            || self.ban_users
+            || self.invite_users
+            || self.pin_messages
+            || self.add_admins
+    }
+}
+
+/// `group.setinfo`: описание и/или фото. Отсутствующее поле не меняется;
+/// `clear_avatar` имеет приоритет над `avatar_file_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupSetInfoRequest {
+    pub token: String,
+    pub group_id: String,
+    #[serde(default)]
+    pub about: Option<String>,
+    #[serde(default)]
+    pub avatar_file_id: Option<String>,
+    #[serde(default)]
+    pub clear_avatar: bool,
+}
+
+/// Ответ мутаций группы, возвращающих новую ревизию.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupVersionResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupSetPermsRequest {
+    pub token: String,
+    pub group_id: String,
+    #[serde(default)]
+    pub default_permissions: DefaultPermissions,
+}
+
+/// `group.setadmin`: `rights: None` — снять админа.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupSetAdminRequest {
+    pub token: String,
+    pub group_id: String,
+    pub member: String,
+    #[serde(default)]
+    pub rights: Option<AdminRights>,
+}
+
+/// Инвайт-ссылка в ответах `group.invite.list` / `group.invite.create`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InviteLink {
+    pub token: String,
+    pub created_by: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub expires_at: i64,
+    #[serde(default)]
+    pub max_uses: u32,
+    #[serde(default)]
+    pub uses: u32,
+    #[serde(default)]
+    pub request_needed: bool,
+    #[serde(default)]
+    pub revoked: bool,
+    #[serde(default)]
+    pub revoked_at: i64,
+    /// active | revoked | expired | exhausted — вычисляется сервером.
+    #[serde(default)]
+    pub state: String,
+    /// Основная ссылка группы (самая ранняя активная ссылка владельца без параметров).
+    #[serde(default)]
+    pub is_primary: bool,
+    #[serde(default)]
+    pub pending_requests: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInviteListRequest {
+    pub token: String,
+    pub group_id: String,
+    /// true — отозванные; false — активные, истёкшие и исчерпанные.
+    #[serde(default)]
+    pub revoked: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupInviteListResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub links: Vec<InviteLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+/// `group.invite.revoke` / `group.invite.delete`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInviteTokenRequest {
+    pub token: String,
+    pub group_id: String,
+    pub invite: String,
+}
+
+/// `group.invite.check`: превью ссылки до вступления (без состава группы).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInviteCheckRequest {
+    pub token: String,
+    pub invite: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupInviteCheckResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<GroupKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub about: String,
+    #[serde(default)]
+    pub members_count: u32,
+    #[serde(default)]
+    pub request_needed: bool,
+    #[serde(default)]
+    pub already_member: bool,
+    #[serde(default)]
+    pub pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupRequestListRequest {
+    pub token: String,
+    pub group_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JoinRequestInfo {
+    pub member: String,
+    pub invite: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GroupRequestListResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub requests: Vec<JoinRequestInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupRequestDecideRequest {
+    pub token: String,
+    pub group_id: String,
+    pub member: String,
+    pub approve: bool,
+}
+
+/// Уведомление об изменении группы в инбоксе `msg.user.<адрес>`: как
+/// `NotifyNotice`, в payload лежит поле `group` вместо `message`; клиенты,
+/// не знающие поля, кадр игнорируют (старые desktop/android/web).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupNotice {
+    pub group: GroupNoticePayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupNoticePayload {
+    pub group_id: String,
+    pub version: u64,
+    /// info | perms | members | admin | invites | requests | removed | deleted
+    pub change: String,
+    /// Полные сведения — для info/perms/members/admin (участнику).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<GroupInfo>,
 }
 
 #[cfg(test)]

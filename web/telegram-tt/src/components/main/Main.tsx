@@ -299,7 +299,7 @@ const Main = ({
     loadPromoData,
     loadActiveGiftAuctions,
     openChatByUsername,
-    acceptChatInvite,
+    checkChatInvite,
     showNotification,
   } = getActions();
 
@@ -542,6 +542,12 @@ const Main = ({
     const keys: Record<string, string> = {
       invalid: 'ParvaneInviteInvalid',
       banned: 'ParvaneInviteBanned',
+      revoked: 'ParvaneInviteRevoked',
+      expired: 'ParvaneInviteExpired',
+      exhausted: 'ParvaneInviteExhausted',
+      requested: 'ParvaneInviteRequested',
+      declined: 'ParvaneInviteDeclined',
+      editUnsupported: 'ParvaneInviteEditUnsupported',
       failed: 'ParvaneInviteFailed',
       linkFailed: 'ParvaneInviteLinkFailed',
     };
@@ -582,10 +588,12 @@ const Main = ({
 
     // Parvane: ссылка-приглашение в адресной строке `<origin>/#+<токен>`;
     // токен, пришедший до входа, пережил перезагрузку в sessionStorage
+    // Как t.me/+hash: сперва превью группы (нативная модалка с «Join» /
+    // «Request to Join»); участнику сразу открывается чат (spec 003)
     const pendingInvite = consumePendingInvite();
     if (pendingInvite) {
       resetLocationHash();
-      acceptChatInvite({ hash: pendingInvite });
+      checkChatInvite({ hash: pendingInvite });
       return;
     }
 
@@ -604,7 +612,7 @@ const Main = ({
       const token = consumePendingInvite();
       if (!token) return;
       resetLocationHash();
-      acceptChatInvite({ hash: token });
+      checkChatInvite({ hash: token });
     };
     window.addEventListener('parvane-invite-hash', handleInviteHash);
     return () => window.removeEventListener('parvane-invite-hash', handleInviteHash);

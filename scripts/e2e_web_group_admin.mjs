@@ -15,8 +15,8 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-group-admin-e2e-password';
-// Конвергенция ролей/имён — delta-sync каждые 10с
-const CONVERGENCE_TIMEOUT_MS = 30000;
+// Конвергенция ролей/имён — нотис группы мгновенно, запас на delta-sync (10 с)
+const CONVERGENCE_TIMEOUT_MS = 15000;
 
 async function selectPickerRow(page, containerSelector, name) {
   const row = page.locator(`${containerSelector} .PeerPickerItem, ${containerSelector} .ItemPickerItem`)
@@ -114,10 +114,14 @@ try {
   // Экран прав: включаем пару тумблеров (все выключены = demote) и жмём
   // floating-галку Save
   const rightsScreen = aliceSession.page.locator('#RightColumn');
+  // Гранулярные права (spec 003): только «Change Group Info» и «Pin Messages»
+  // — «Ban Users» НЕ выдаём, ниже проверяется отказ сервера на бан
   const changeInfoToggle = rightsScreen.locator('.Checkbox').filter({ hasText: 'Change Group Info' });
   await changeInfoToggle.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await changeInfoToggle.click();
-  await rightsScreen.locator('.Checkbox').filter({ hasText: 'Ban Users' }).click();
+  await rightsScreen.locator('.Checkbox').filter({ hasText: 'Pin Messages' }).click();
+  assert.equal(await rightsScreen.locator('.Checkbox').filter({ hasText: /Stories|Anonymously|Video Chats|Manage Topics/ }).count(),
+    0, 'Edit admin: checkboxes outside the contract must be hidden');
   const saveAdmin = rightsScreen.getByRole('button', { name: 'Save', exact: true });
   await saveAdmin.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await saveAdmin.click();
@@ -132,6 +136,28 @@ try {
   await bobSession.page.locator('.MiddleHeader .ChatInfo').click();
   await bobSession.page.locator('#RightColumn').getByRole('button', { name: 'Edit' })
     .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+
+  // ── Права админа проверяет сервер: Bob без «Ban Users» не банит Carol ────
+  await bobSession.page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
+    timeout: LOGIN_TIMEOUT_MS,
+  });
+  const banResult = await bobSession.page.evaluate(async ({ title, name }) => {
+    const global = window.__parvaneGetGlobal();
+    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === title);
+    const user = Object.values(global.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+    if (!chat || !user) return `chat=${Boolean(chat)} user=${Boolean(user)}`;
+    return window.__parvaneDiagCallApi('updateChatMemberBannedRights', {
+      chat, user, bannedRights: { viewMessages: true },
+    });
+  }, { title: groupTitle, name: carolName });
+  assert.equal(banResult, undefined, `admin without Ban Users must not ban: ${banResult}`);
+  // В UI бейдж «Admin» у Bob виден Carol без reload (нотис группы)
+  await openChatByTitle(carolSession.page, groupTitle);
+  await carolSession.page.locator('.MiddleHeader .ChatInfo').click();
+  await carolSession.page.locator('#RightColumn .ListItem').filter({ hasText: bobName }).filter({ hasText: 'Admin' })
+    .first().waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  await carolSession.page.keyboard.press('Escape');
 
   // ── Rename админом: Bob переименовывает, у Carol заголовок сходится ────────
   await bobSession.page.locator('#RightColumn').getByRole('button', { name: 'Edit' }).click();

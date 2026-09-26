@@ -251,34 +251,35 @@ try {
   await findMessage(bobDevice2.page, groupMessage).first()
     .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
 
-  // ── Инвайт-ссылки: у каждого устройства своя постоянная, обе рабочие ───────
-  // Ссылка кэшируется ПО УСТРОЙСТВУ, а сервер не отдаёт уже созданную и на
-  // каждый group.invite.create чеканит новый токен — поэтому второе устройство
-  // получает свою ссылку, а не ссылку первого (граничный случай спеки)
-  // Запись ссылки заводится уже при открытии чата группы владельцем
-  // (`fetchFullChat` → `ensureInviteRecord`), поэтому считаем не «до/после
-  // экрана», а итог: по одной записи на устройство
+  // ── Инвайт-ссылки: у группы ОДНА основная ссылка, общая для устройств ─────
+  // spec 003: источник истины — список сервера (group.invite.list, is_primary),
+  // поэтому второе устройство видит ту же ссылку и ничего не создаёт
   const linkDevice1 = await readInvitesScreen(bobDevice1.page, inviteGroupTitle);
   assert.equal(countInvitesCreatedBy(bob), 1, 'first device must hold exactly one invite');
   const linkDevice2 = await readInvitesScreen(bobDevice2.page, inviteGroupTitle);
-  assert.equal(countInvitesCreatedBy(bob), 2, 'second device must create its own invite');
-  assert.notEqual(inviteToken(linkDevice1), inviteToken(linkDevice2), 'devices must not share one invite token');
+  assert.equal(countInvitesCreatedBy(bob), 1, 'second device must reuse the primary invite, not mint one');
+  assert.equal(inviteToken(linkDevice1), inviteToken(linkDevice2), 'devices must share the primary invite token');
   // Повторный заход на экран ссылку не меняет и новых не создаёт
   assert.equal(await readInvitesScreen(bobDevice1.page, inviteGroupTitle), linkDevice1,
     'first device link changed between visits');
   assert.equal(await readInvitesScreen(bobDevice2.page, inviteGroupTitle), linkDevice2,
     'second device link changed between visits');
-  assert.equal(countInvitesCreatedBy(bob), 2, 'repeat visits must not create new invites');
+  assert.equal(countInvitesCreatedBy(bob), 1, 'repeat visits must not create new invites');
 
-  // Обе ссылки рабочие: Чарли входит по ссылке второго устройства, Дейв — первого
+  // Ссылка рабочая с любого устройства: Чарли и Дейв входят через нативную
+  // модалку приглашения (t.me/+hash-поведение)
+  const joinByLink = async (page, token) => {
+    await page.goto(`${baseUrl}#+${token}`, { waitUntil: 'domcontentloaded' });
+    const modal = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: /join group/i }) }).first();
+    await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+    await modal.getByRole('button', { name: /join group/i }).first().click();
+    await page.locator('.MiddleHeader').getByText(inviteGroupTitle)
+      .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+  };
   const charlieSession = await preparePage(charlieContext, charlie, PASSWORD);
-  await charlieSession.page.goto(`${baseUrl}#+${inviteToken(linkDevice2)}`, { waitUntil: 'domcontentloaded' });
-  await charlieSession.page.locator('.MiddleHeader').getByText(inviteGroupTitle)
-    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+  await joinByLink(charlieSession.page, inviteToken(linkDevice2));
   const daveSession = await preparePage(daveContext, dave, PASSWORD);
-  await daveSession.page.goto(`${baseUrl}#+${inviteToken(linkDevice1)}`, { waitUntil: 'domcontentloaded' });
-  await daveSession.page.locator('.MiddleHeader').getByText(inviteGroupTitle)
-    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+  await joinByLink(daveSession.page, inviteToken(linkDevice1));
   // Оба устройства владельца видят вступивших (bob, alice, charlie, dave)
   await openGroupChat(bobDevice1.page, inviteGroupTitle);
   await membersCountLocator(bobDevice1.page, 4).waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
@@ -298,7 +299,7 @@ try {
   // …и своя ссылка устройства переживает рестарт, не плодя новых
   assert.equal(await readInvitesScreen(bobDevice2.page, inviteGroupTitle), linkDevice2,
     'second device link changed after restart');
-  assert.equal(countInvitesCreatedBy(bob), 2, 'restart must not create a new invite');
+  assert.equal(countInvitesCreatedBy(bob), 1, 'restart must not create a new invite');
 
   // ── Групповой вызов звонит на ОБА устройства, входит только принявшее ──────
   // Снять звонок на остальных устройствах без нового сигнала протокола нельзя

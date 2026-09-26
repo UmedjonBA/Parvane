@@ -5,6 +5,8 @@ import type { PollStore } from './polls';
 import { MAIN_THREAD_ID } from '../types';
 
 import { getLangStringByKey } from '../../util/localization';
+import { diagLog } from '../../util/parvaneDiag';
+import { isContentAllowedForMember } from './groups';
 import { buildWebPage, type ParvaneStore } from './store';
 import {
   buildWireEvent,
@@ -16,6 +18,7 @@ import {
   TOPIC_PREKEYS_FETCH,
   type WireEvent,
   type WireGroupInfo,
+  type WireGroupNotice,
   type WireMessageContent,
   type WireStoredMessage,
   type WireUserInfo,
@@ -29,6 +32,7 @@ type SyncDependencies = {
   groups: {
     register: (info: WireGroupInfo) => void;
     refreshMemberships: () => Promise<void>;
+    applyNotice: (notice: WireGroupNotice) => Promise<void>;
   };
   localState: {
     readOwnJournal: () => Promise<WireStoredMessage[]>;
@@ -518,6 +522,20 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
+  // Групповое сообщение участника без роли с типом содержимого, запрещённым
+  // текущими правами по умолчанию (владелец и админы правам не подчиняются)
+  function isHiddenByGroupPermissions(stored: WireStoredMessage) {
+    const store = deps.getStore();
+    if (!stored.from || stored.from === store.self || !store.isGroupAddress(stored.to)) return false;
+    const info = store.getGroupInfo(stored.to);
+    const role = info?.members.find(({ address }) => address === stored.from)?.role;
+    if (!info || role !== 'member') return false;
+    if (isContentAllowedForMember(info.default_permissions, stored.content)) return false;
+    diagLog('group-perm-hidden', { uuid: stored.id, kind: stored.content.kind, from: stored.from });
+    deps.log(`сообщение ${stored.id} (${stored.content.kind}) от ${stored.from} скрыто правами группы`);
+    return true;
+  }
+
   async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
     const store = deps.getStore();
     if (!stored.to || stored.to === store.self || stored.from === store.self
@@ -709,6 +727,14 @@ export function createSyncController(deps: SyncDependencies) {
     // Приём подтверждаем, чтобы сервер не гонял повтор
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
       && deps.localState.isBlocked(stored.from)) {
+      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
+      return;
+    }
+    // Права по типу содержимого (spec 003, FR-009): сервер видит шифртекст и
+    // тип не проверяет — участник без роли, приславший запрещённый тип в
+    // обход композера, у остальных не показывается. Решение принято —
+    // курсор двигается как за применённым (не сбой расшифровки)
+    if (isHiddenByGroupPermissions(stored)) {
       if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
       return;
     }
@@ -941,6 +967,7 @@ export function createSyncController(deps: SyncDependencies) {
         && deps.localState.isBlocked(stored.from)) {
         continue;
       }
+      if (isHiddenByGroupPermissions(stored)) continue;
       // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
@@ -1110,6 +1137,15 @@ export function createSyncController(deps: SyncDependencies) {
     const notify = (event.payload as { notify?: string } | undefined)?.notify;
     if (typeof notify === 'string' && notify) {
       applyNotifySettings(notify);
+      return;
+    }
+    // Изменение группы (spec 003, GROUP-1): фото/описание/права/роли/состав/
+    // ссылки/заявки — применить к открытым экранам без перезагрузки
+    const group = (event.payload as { group?: WireGroupNotice } | undefined)?.group;
+    if (group && typeof group === 'object' && typeof group.group_id === 'string') {
+      void deps.groups.applyNotice(group).catch((error) => {
+        deps.log(`изменение группы не применено: ${String(error)}`);
+      });
       return;
     }
     const stored = event.payload?.message;

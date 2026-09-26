@@ -71,6 +71,7 @@ log "Three-browser group admin e2e"
 # 15–16 сен шаг был известным красным (пикер New Channel, e2e_web_group_admin.mjs:185);
 # 17 сен прошёл 2/2 — пометка known_red снята, при повторном падении вернуть обёртку
 "$ROOT/scripts/run_web_group_admin_e2e.sh"
+"$ROOT/scripts/run_web_group_info_e2e.sh"
 
 log "Two-browser content features e2e"
 "$ROOT/scripts/run_web_content_features_e2e.sh"

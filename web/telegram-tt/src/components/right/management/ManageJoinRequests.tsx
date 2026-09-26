@@ -56,6 +56,16 @@ const ManageJoinRequests: FC<OwnProps & StateProps> = ({
     }
   }, [chat, chatId, loadChatJoinRequests]);
 
+  // Parvane (GROUP-1): новая или решённая заявка — перечитать список
+  useEffect(() => {
+    const handleGroupChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId?: string; change?: string }>).detail;
+      if (detail?.chatId === chatId && detail.change === 'requests') loadChatJoinRequests({ chatId });
+    };
+    window.addEventListener('parvane-group-changed', handleGroupChanged);
+    return () => window.removeEventListener('parvane-group-changed', handleGroupChanged);
+  }, [chatId, loadChatJoinRequests]);
+
   const handleAcceptAllRequests = useCallback(() => {
     hideAllChatJoinRequests({ chatId, isApproved: true });
     closeAcceptAllDialog();

@@ -30,9 +30,10 @@ import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import ListItem, { type MenuItemContextAction } from '../../ui/ListItem';
 
-// Parvane: сервер умеет только создать постоянную ссылку и вступить по ней —
-// отзыва, дополнительных ссылок, срока, лимита и списка вступивших нет
-const IS_INVITE_MANAGEMENT_SUPPORTED = false;
+// Parvane (spec 003): несколько ссылок, отзыв, срок, лимит, одобрение и
+// счётчик вступивших — на сервере; список вступивших по ссылке сервер не
+// хранит (только счётчик)
+const IS_INVITE_MANAGEMENT_SUPPORTED = true;
 
 type OwnProps = {
   chatId: string;

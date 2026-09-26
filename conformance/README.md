@@ -134,6 +134,47 @@ FNV-смещение без последней цифры: так историч
 `conformance.test.ts` (EMOJI-1) и `scripts/e2e_web_cross_emoji.mjs`, desktop
 `verify_conformance_packs.sh` (рестарт получателя).
 
+## GROUP-1. Сведения группы применяются по ревизии, изменения — без перезагрузки
+
+Сервер (шард `messenger`) держит у группы ревизию `version`, растущую на каждую
+мутацию (имя, фото, описание, права по умолчанию, роль/права участника, состав,
+ссылки, заявки). Онлайн-участникам изменение приходит уведомлением в инбокс
+`msg.user.<адрес>` — поле `group` в кадре (как `notify`/`read`/`cleared`):
+`{group_id, version, change, info?}`; для `info | perms | members | admin`
+вложены итоговые сведения `GroupInfo`, для `invites | requests` — только факт
+(клиент перечитывает открытый экран), `removed | deleted` — группа снимается
+у адресата. Отсутствовавшее устройство догоняет итог обычным `group.list`.
+
+Клиент обязан:
+
+- применять `GroupInfo` (из нотиса или списка) только если его `version` не
+  меньше известной; равная — идемпотентно; меньшую игнорировать. Иначе нотис,
+  догнавший более свежий список, откатывал бы фото/описание/права;
+- применять сведения к уже открытым экранам (профиль, участники, права,
+  ссылки, заявки) без перезагрузки; удалённому/забаненному — убрать группу из
+  списка чатов;
+- неизвестный `change` не считать ошибкой: игнорировать поле и перечитать
+  группу; кадр без поля `group` (старые клиенты) — игнорировать целиком.
+
+Приёмный фильтр прав по типу содержимого (медиа/стикеры/опросы/ссылки от
+участника без права) — часть правила только для web; desktop и android
+проверяют права в композере и меню, фильтр на приёме — следующая фича.
+
+Реализации: web `api/parvane/store.ts` (`shouldApplyGroupInfo`, `registerGroup`),
+`api/parvane/groups.ts` (`applyNotice`, `refreshMemberships`), `api/parvane/sync.ts`
+(поле `group` в `handleInboxFrame`), 22 сен 2026; desktop
+`parvane-core/src/messenger_client.cpp` (`onGroupNotice`) +
+`parvane/parvane_client.cpp` (`ApplyGroupInfo` с `g_groupVersions`,
+`DropGroupLocally`); android `jni/parvane_jni.cpp` (событие `group`) +
+`libtd/.../Client.kt` (`onCoreEvent("group")` → `syncGroups`) +
+`libtd/.../ParvaneStore.kt` (`ensureGroup` по `version`). Тесты: web
+`conformance.test.ts` (GROUP-1) и `scripts/e2e_web_group_info.mjs` (открытый
+профиль, устройство отсутствовало); desktop `desktop/verify_conformance_group.sh`
+(нотис/список, устаревший нотис, рестарт); android — JVM-юнит
+`libtd/src/test/.../ParvaneStoreGroupTest.kt`; сценарий на эмуляторе
+(`android/tgx_group_flow.sh`) — после починки хостового GPU-стека, до него
+правило для android считается ОТКРЫТЫМ.
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в

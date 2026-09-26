@@ -7,8 +7,7 @@ use parvane_types::{
     AckPayload, ClearPayload, ClearedIds, ClearedNotice, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
     GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
     GroupDeleteRequest, GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest,
-    GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
-    GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
+    GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest,
     MessageContent, MessageDeviceCopy,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, ReaderEntry, ReadersPayload,
     NotifyPayload, NotifyNotice, ReadNotice, ReadersResponse, SendPayload, StoredMessage,
@@ -17,6 +16,8 @@ use parvane_types::{
         GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_DELETE, GROUP_INFO,
         GROUP_INVITE_CREATE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
         GROUP_RENAME, GROUP_SET_ROLE, GROUP_UNBAN,
+        GROUP_SETINFO, GROUP_SETPERMS, GROUP_SETADMIN, GROUP_INVITE_LIST, GROUP_INVITE_REVOKE,
+        GROUP_INVITE_DELETE, GROUP_INVITE_CHECK, GROUP_REQUEST_LIST, GROUP_REQUEST_DECIDE,
         IDENTITY_VERIFY, MSG_ACK, MSG_CLEAR, MSG_SETNOTIFY, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
     },
@@ -25,6 +26,8 @@ use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+mod group_mgmt;
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
@@ -86,6 +89,15 @@ async fn main() -> Result<()> {
     let mut gdelete_sub = nc.subscribe(GROUP_DELETE).await?;
     let mut glist_sub = nc.subscribe(GROUP_LIST).await?;
     let mut ginfo_sub = nc.subscribe(GROUP_INFO).await?;
+    let mut gsetinfo_sub = nc.subscribe(GROUP_SETINFO).await?;
+    let mut gsetperms_sub = nc.subscribe(GROUP_SETPERMS).await?;
+    let mut gsetadmin_sub = nc.subscribe(GROUP_SETADMIN).await?;
+    let mut ginvlist_sub = nc.subscribe(GROUP_INVITE_LIST).await?;
+    let mut ginvrevoke_sub = nc.subscribe(GROUP_INVITE_REVOKE).await?;
+    let mut ginvdelete_sub = nc.subscribe(GROUP_INVITE_DELETE).await?;
+    let mut ginvcheck_sub = nc.subscribe(GROUP_INVITE_CHECK).await?;
+    let mut greqlist_sub = nc.subscribe(GROUP_REQUEST_LIST).await?;
+    let mut greqdecide_sub = nc.subscribe(GROUP_REQUEST_DECIDE).await?;
     let mut sync_sub = nc.subscribe(MSG_SYNC_REQUEST).await?;
 
     info!(
@@ -147,10 +159,37 @@ async fn main() -> Result<()> {
                 handle_group_mute(&nc, &pool, msg).await;
             }
             Some(msg) = ginvite_sub.next() => {
-                handle_group_invite_create(&nc, &pool, msg).await;
+                group_mgmt::handle_group_invite_create(&nc, &pool, msg).await;
             }
             Some(msg) = gjoin_sub.next() => {
-                handle_group_join(&nc, &pool, msg).await;
+                group_mgmt::handle_group_join(&nc, &pool, msg).await;
+            }
+            Some(msg) = gsetinfo_sub.next() => {
+                group_mgmt::handle_group_setinfo(&nc, &pool, msg).await;
+            }
+            Some(msg) = gsetperms_sub.next() => {
+                group_mgmt::handle_group_setperms(&nc, &pool, msg).await;
+            }
+            Some(msg) = gsetadmin_sub.next() => {
+                group_mgmt::handle_group_setadmin(&nc, &pool, msg).await;
+            }
+            Some(msg) = ginvlist_sub.next() => {
+                group_mgmt::handle_group_invite_list(&nc, &pool, msg).await;
+            }
+            Some(msg) = ginvrevoke_sub.next() => {
+                group_mgmt::handle_group_invite_revoke(&nc, &pool, msg).await;
+            }
+            Some(msg) = ginvdelete_sub.next() => {
+                group_mgmt::handle_group_invite_delete(&nc, &pool, msg).await;
+            }
+            Some(msg) = ginvcheck_sub.next() => {
+                group_mgmt::handle_group_invite_check(&nc, &pool, msg).await;
+            }
+            Some(msg) = greqlist_sub.next() => {
+                group_mgmt::handle_group_request_list(&nc, &pool, msg).await;
+            }
+            Some(msg) = greqdecide_sub.next() => {
+                group_mgmt::handle_group_request_decide(&nc, &pool, msg).await;
             }
             Some(msg) = grename_sub.next() => {
                 handle_group_rename(&nc, &pool, msg).await;
@@ -507,6 +546,57 @@ async fn delete_sealed_message(
     Ok(res.rows_affected() > 0)
 }
 
+/// Админ группы с правом delete_messages удаляет чужое сообщение группы «у всех»
+/// (spec 003). Автор-путь и подпись не нужны: право проверяется по составу.
+async fn delete_message_as_group_admin(
+    pool: &SqlitePool,
+    message_id: &str,
+    actor: &str,
+    now: i64,
+) -> Result<bool> {
+    let row: Option<(String, String, i64)> = sqlx::query_as(
+        "SELECT m.to_user, m.content, m.deleted FROM messages m
+          WHERE m.id = ? AND EXISTS(SELECT 1 FROM groups g WHERE g.id = m.to_user)",
+    )
+    .bind(message_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((group_id, content_json, deleted)) = row else {
+        return Ok(false);
+    };
+    if deleted != 0 {
+        return Ok(false);
+    }
+    if !group_mgmt::has_group_right(pool, &group_id, actor, group_mgmt::GroupRight::DeleteMessages, false).await? {
+        return Ok(false);
+    }
+    let content: MessageContent = serde_json::from_str(&content_json)?;
+    let tombstone = match content {
+        MessageContent::GroupEncrypted { group, sender_identity, sender_signing_key, .. } => {
+            MessageContent::GroupEncrypted { ciphertext: String::new(), group, sender_identity, sender_signing_key }
+        }
+        MessageContent::Encrypted { ctype, sender_identity, sender_signing_key, .. } => {
+            MessageContent::Encrypted { ciphertext: String::new(), ctype, sender_identity, sender_signing_key }
+        }
+        _ => MessageContent::Text { text: String::new(), entities: vec![], webpage: None },
+    };
+    let kind = tombstone.kind();
+    let empty = serde_json::to_string(&tombstone)?;
+    let res = sqlx::query(
+        "UPDATE messages SET deleted = 1, text = '', kind = ?, content = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(kind)
+    .bind(empty)
+    .bind(now)
+    .bind(message_id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() > 0 {
+        clear_device_copies(pool, message_id).await?;
+    }
+    Ok(res.rows_affected() > 0)
+}
+
 /// Удалить своё сообщение «у всех» (tombstone). Содержимое затирается.
 async fn delete_message(pool: &SqlitePool, message_id: &str, author: &str, now: i64) -> Result<bool> {
     let empty = serde_json::to_string(&MessageContent::Text { text: String::new(), entities: vec![], webpage: None })?;
@@ -555,12 +645,13 @@ async fn can_mutate_message(
     }
 
     if is_group != 0 {
+        // requires_group_admin = закреп: владелец, админ с pin_messages,
+        // участник — если pin_messages включён в правах по умолчанию (spec 003).
+        if requires_group_admin {
+            return group_mgmt::has_group_right(pool, &to, actor, group_mgmt::GroupRight::PinMessages, true).await;
+        }
         let role = member_role(pool, &to, actor).await?;
-        return Ok(if requires_group_admin {
-            matches!(role.as_deref(), Some("owner") | Some("admin"))
-        } else {
-            matches!(role.as_deref(), Some("owner") | Some("admin") | Some("member"))
-        });
+        return Ok(matches!(role.as_deref(), Some("owner") | Some("admin") | Some("member")));
     }
 
     if actor == to || (!from.is_empty() && actor == from) {
@@ -703,7 +794,11 @@ async fn add_group_member(
     ) {
         return Ok(false); // забанен — сначала разбанить
     }
-    if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
+    if !matches!(role.as_deref(), Some("owner") | Some("admin") | Some("member")) {
+        return Ok(false);
+    }
+    // Владелец; админ с invite_users; участник — если invite_users в правах по умолчанию.
+    if !group_mgmt::has_group_right(pool, group_id, actor, group_mgmt::GroupRight::InviteUsers, true).await? {
         return Ok(false);
     }
     sqlx::query(
@@ -725,8 +820,16 @@ async fn remove_group_member(
 ) -> Result<bool> {
     let actor_role = member_role(pool, group_id, actor).await?;
     let is_self = actor == member;
-    let can = is_self || matches!(actor_role.as_deref(), Some("owner") | Some("admin"));
+    let can = is_self
+        || group_mgmt::has_group_right(pool, group_id, actor, group_mgmt::GroupRight::BanUsers, false).await?;
     if !can {
+        return Ok(false);
+    }
+    // Админа удаляет только владелец.
+    if !is_self
+        && matches!(member_role(pool, group_id, member).await?.as_deref(), Some("admin"))
+        && !matches!(actor_role.as_deref(), Some("owner"))
+    {
         return Ok(false);
     }
     let res = sqlx::query(
@@ -772,8 +875,7 @@ async fn rename_group(pool: &SqlitePool, group_id: &str, actor: &str, name: &str
     if trimmed.is_empty() || trimmed.len() > 128 {
         return Ok(false);
     }
-    let actor_role = member_role(pool, group_id, actor).await?;
-    if !matches!(actor_role.as_deref(), Some("owner") | Some("admin")) {
+    if !group_mgmt::has_group_right(pool, group_id, actor, group_mgmt::GroupRight::ChangeInfo, true).await? {
         return Ok(false);
     }
     let res = sqlx::query("UPDATE groups SET name = ? WHERE id = ?")
@@ -794,6 +896,10 @@ async fn delete_group(pool: &SqlitePool, group_id: &str, actor: &str) -> Result<
         .bind(group_id)
         .execute(pool)
         .await?;
+    sqlx::query("DELETE FROM group_join_requests WHERE group_id = ?")
+        .bind(group_id)
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM group_members WHERE group_id = ?")
         .bind(group_id)
         .execute(pool)
@@ -805,21 +911,39 @@ async fn delete_group(pool: &SqlitePool, group_id: &str, actor: &str) -> Result<
     Ok(res.rows_affected() > 0)
 }
 
-/// Сведения о группе + участники. None — группы нет.
-async fn group_info(pool: &SqlitePool, group_id: &str) -> Result<Option<GroupInfo>> {
-    let g: Option<(String, String, String)> =
-        sqlx::query_as("SELECT name, kind, created_by FROM groups WHERE id = ?")
-            .bind(group_id)
-            .fetch_optional(pool)
-            .await?;
-    let Some((name, kind, created_by)) = g else {
+/// Сведения о группе + участники. None — группы нет. `viewer` — кто
+/// спрашивает: владельцу и админам с invite_users добавляется число
+/// ожидающих заявок (`pending_requests`), остальным поле не отдаётся.
+async fn group_info(pool: &SqlitePool, group_id: &str, viewer: Option<&str>) -> Result<Option<GroupInfo>> {
+    let g: Option<(String, String, String, Option<String>, String, String, i64)> = sqlx::query_as(
+        "SELECT name, kind, created_by, avatar_file_id, about, default_perms_json, version
+           FROM groups WHERE id = ?",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((name, kind, created_by, avatar, about, perms_raw, version)) = g else {
         return Ok(None);
     };
-    let members: Vec<(String, String)> =
-        sqlx::query_as("SELECT member, role FROM group_members WHERE group_id = ? ORDER BY role, member")
+    let members: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT member, role, admin_rights_json, promoted_by FROM group_members
+          WHERE group_id = ? ORDER BY role, member",
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await?;
+    let pending_requests = match viewer {
+        Some(v) if group_mgmt::is_invite_manager(pool, group_id, v).await? => {
+            let n: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM group_join_requests WHERE group_id = ? AND status = 'pending'",
+            )
             .bind(group_id)
-            .fetch_all(pool)
+            .fetch_one(pool)
             .await?;
+            Some(n.0.max(0) as u32)
+        }
+        _ => None,
+    };
     Ok(Some(GroupInfo {
         group_id: group_id.to_string(),
         name,
@@ -827,8 +951,18 @@ async fn group_info(pool: &SqlitePool, group_id: &str) -> Result<Option<GroupInf
         created_by,
         members: members
             .into_iter()
-            .map(|(address, role)| GroupMember { address, role })
+            .map(|(address, role, rights_raw, promoted_by)| GroupMember {
+                admin_rights: group_mgmt::parse_admin_rights(&role, rights_raw.as_deref()),
+                promoted_by: if role == "admin" { promoted_by } else { None },
+                address,
+                role,
+            })
             .collect(),
+        avatar,
+        about,
+        default_permissions: group_mgmt::parse_default_perms(Some(&perms_raw)),
+        version: version.max(0) as u64,
+        pending_requests,
     }))
 }
 
@@ -845,7 +979,7 @@ async fn group_info_for_member(
     ) {
         return Ok(None);
     }
-    group_info(pool, group_id).await
+    group_info(pool, group_id, Some(user)).await
 }
 
 /// Все группы пользователя (со сведениями и участниками).
@@ -857,7 +991,7 @@ async fn list_groups(pool: &SqlitePool, user: &str) -> Result<Vec<GroupInfo>> {
             .await?;
     let mut out = Vec::new();
     for (gid,) in gids {
-        if let Some(info) = group_info(pool, &gid).await? {
+        if let Some(info) = group_info(pool, &gid, Some(user)).await? {
             out.push(info);
         }
     }
@@ -882,6 +1016,13 @@ async fn can_post(pool: &SqlitePool, to: &str, sender: &str) -> Result<bool> {
         return Ok(matches!(role.as_deref(), Some("owner") | Some("admin")));
     }
     if role.is_none() {
+        return Ok(false);
+    }
+    // Права по умолчанию (spec 003): участник без send_messages не пишет;
+    // владелец и админы им не подчиняются.
+    if matches!(role.as_deref(), Some("member"))
+        && !group_mgmt::load_default_perms(pool, to).await?.send_messages
+    {
         return Ok(false);
     }
     // Мьют: до muted_until писать нельзя (owner немьютим по построению).
@@ -1645,7 +1786,8 @@ async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
                 &message_id,
                 event.payload.signature.as_deref(),
                 now_unix(),
-            ).await?;
+            ).await?
+            || delete_message_as_group_admin(pool, &message_id, &author, now_unix()).await?;
         if ok {
             info!("Сообщение {} удалено у всех автором {}", event.payload.message_id, author);
             if let Err(e) = push_mutation(nc, pool, &event.payload.message_id.to_string(), now_unix()).await {
@@ -1861,13 +2003,18 @@ async fn handle_group_add(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
             serde_json::from_slice(&msg.payload).context("JSON group.addmember")?;
         let actor = verify_token(nc, &req.token).await?;
         let ok = add_group_member(pool, &req.group_id, &actor, &req.member).await?;
+        if ok {
+            let version = group_mgmt::bump_group_version(pool, &req.group_id).await.unwrap_or(0);
+            group_mgmt::notify_group(nc, pool, &req.group_id, "members", version, group_mgmt::GroupRecipients::AllMembers).await;
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("нет прав или группы".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -1878,13 +2025,19 @@ async fn handle_group_remove(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
             serde_json::from_slice(&msg.payload).context("JSON group.removemember")?;
         let actor = verify_token(nc, &req.token).await?;
         let ok = remove_group_member(pool, &req.group_id, &actor, &req.member).await?;
+        if ok {
+            let version = group_mgmt::bump_group_version(pool, &req.group_id).await.unwrap_or(0);
+            group_mgmt::notify_group(nc, pool, &req.group_id, "removed", version, group_mgmt::GroupRecipients::Only(req.member.clone())).await;
+            group_mgmt::notify_group(nc, pool, &req.group_id, "members", version, group_mgmt::GroupRecipients::AllMembers).await;
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("нет прав или owner".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -1895,13 +2048,18 @@ async fn handle_group_setrole(nc: &Client, pool: &SqlitePool, msg: async_nats::M
             serde_json::from_slice(&msg.payload).context("JSON group.setrole")?;
         let actor = verify_token(nc, &req.token).await?;
         let ok = set_group_role(pool, &req.group_id, &actor, &req.member, &req.role).await?;
+        if ok {
+            let version = group_mgmt::bump_group_version(pool, &req.group_id).await.unwrap_or(0);
+            group_mgmt::notify_group(nc, pool, &req.group_id, "admin", version, group_mgmt::GroupRecipients::AllMembers).await;
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("не owner / нельзя".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -1912,13 +2070,18 @@ async fn handle_group_rename(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
             serde_json::from_slice(&msg.payload).context("JSON group.rename")?;
         let actor = verify_token(nc, &req.token).await?;
         let ok = rename_group(pool, &req.group_id, &actor, &req.name).await?;
+        if ok {
+            let version = group_mgmt::bump_group_version(pool, &req.group_id).await.unwrap_or(0);
+            group_mgmt::notify_group(nc, pool, &req.group_id, "info", version, group_mgmt::GroupRecipients::AllMembers).await;
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("не owner/admin или пустое имя".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -1928,14 +2091,24 @@ async fn handle_group_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
         let req: GroupDeleteRequest =
             serde_json::from_slice(&msg.payload).context("JSON group.delete")?;
         let actor = verify_token(nc, &req.token).await?;
+        let recipients = group_mgmt::notice_recipients(pool, &req.group_id, &group_mgmt::GroupRecipients::AllMembers)
+            .await
+            .unwrap_or_default();
+        let version = group_mgmt::current_version(pool, &req.group_id).await.unwrap_or(0);
         let ok = delete_group(pool, &req.group_id, &actor).await?;
+        if ok {
+            for addr in recipients {
+                group_mgmt::notify_group(nc, pool, &req.group_id, "deleted", version + 1, group_mgmt::GroupRecipients::Only(addr)).await;
+            }
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("удалить может только владелец".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -1949,14 +2122,18 @@ async fn ban_group_member(
     ban: bool,
 ) -> Result<bool> {
     let actor_role = member_role(pool, group_id, actor).await?;
-    if !matches!(actor_role.as_deref(), Some("owner") | Some("admin")) {
+    if !group_mgmt::has_group_right(pool, group_id, actor, group_mgmt::GroupRight::BanUsers, false).await? {
         return Ok(false);
     }
     let target = member_role(pool, group_id, member).await?;
     if matches!(target.as_deref(), Some("owner")) {
         return Ok(false);
     }
+    if matches!(target.as_deref(), Some("admin")) && !matches!(actor_role.as_deref(), Some("owner")) {
+        return Ok(false);
+    }
     if ban {
+        group_mgmt::drop_join_request(pool, group_id, member).await?;
         sqlx::query(
             "INSERT INTO group_members (group_id, member, role) VALUES (?, ?, 'banned')
              ON CONFLICT(group_id, member) DO UPDATE SET role = 'banned', muted_until = 0",
@@ -1986,7 +2163,12 @@ async fn mute_group_member(
     until: i64,
 ) -> Result<bool> {
     let actor_role = member_role(pool, group_id, actor).await?;
-    if !matches!(actor_role.as_deref(), Some("owner") | Some("admin")) {
+    if !group_mgmt::has_group_right(pool, group_id, actor, group_mgmt::GroupRight::BanUsers, false).await? {
+        return Ok(false);
+    }
+    if matches!(member_role(pool, group_id, member).await?.as_deref(), Some("admin"))
+        && !matches!(actor_role.as_deref(), Some("owner"))
+    {
         return Ok(false);
     }
     let n = sqlx::query(
@@ -2009,13 +2191,21 @@ async fn handle_group_ban(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
             serde_json::from_slice(&msg.payload).context("JSON group.ban")?;
         let actor = verify_token(nc, &req.token).await?;
         let ok = ban_group_member(pool, &req.group_id, &actor, &req.member, ban).await?;
+        if ok {
+            let version = group_mgmt::bump_group_version(pool, &req.group_id).await.unwrap_or(0);
+            group_mgmt::notify_group(nc, pool, &req.group_id, "members", version, group_mgmt::GroupRecipients::AllMembers).await;
+            if ban {
+                group_mgmt::notify_group(nc, pool, &req.group_id, "removed", version, group_mgmt::GroupRecipients::Only(req.member.clone())).await;
+            }
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("нет прав / нельзя".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2026,110 +2216,18 @@ async fn handle_group_mute(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
             serde_json::from_slice(&msg.payload).context("JSON group.mute")?;
         let actor = verify_token(nc, &req.token).await?;
         let ok = mute_group_member(pool, &req.group_id, &actor, &req.member, req.until).await?;
+        if ok {
+            let version = group_mgmt::bump_group_version(pool, &req.group_id).await.unwrap_or(0);
+            group_mgmt::notify_group(nc, pool, &req.group_id, "members", version, group_mgmt::GroupRecipients::AllMembers).await;
+        }
         anyhow::Ok(GroupActionResponse {
             ok,
             error: if ok { None } else { Some("нет прав / нельзя".into()) },
+            error_code: if ok { None } else { Some("forbidden".into()) },
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
-}
-
-async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else { return };
-    let resp = async {
-        let req: GroupInviteCreateRequest =
-            serde_json::from_slice(&msg.payload).context("JSON group.invite.create")?;
-        let actor = verify_token(nc, &req.token).await?;
-        let role = member_role(pool, &req.group_id, &actor).await?;
-        if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
-            return anyhow::Ok(GroupInviteCreateResponse {
-                ok: false,
-                invite: None,
-                error: Some("нет прав".into()),
-            });
-        }
-        let token = Uuid::now_v7().simple().to_string();
-        sqlx::query(
-            "INSERT INTO group_invites (token, group_id, created_by, created_at)
-             VALUES (?, ?, ?, ?)",
-        )
-        .bind(&token)
-        .bind(&req.group_id)
-        .bind(&actor)
-        .bind(now_unix())
-        .execute(pool)
-        .await?;
-        info!("Инвайт для {} создан ({})", req.group_id, actor);
-        anyhow::Ok(GroupInviteCreateResponse { ok: true, invite: Some(token), error: None })
-    }
-    .await
-    .unwrap_or_else(|e| GroupInviteCreateResponse {
-        ok: false,
-        invite: None,
-        error: Some(e.to_string()),
-    });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
-}
-
-async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else { return };
-    let resp = async {
-        let req: GroupJoinRequest =
-            serde_json::from_slice(&msg.payload).context("JSON group.join")?;
-        let user = verify_token(nc, &req.token).await?;
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT group_id FROM group_invites WHERE token = ? AND revoked = 0",
-        )
-        .bind(&req.invite)
-        .fetch_optional(pool)
-        .await?;
-        let Some((group_id,)) = row else {
-            return anyhow::Ok(GroupJoinResponse {
-                ok: false,
-                group_id: None,
-                name: None,
-                error: Some("ссылка недействительна".into()),
-            });
-        };
-        if matches!(
-            member_role(pool, &group_id, &user).await?.as_deref(),
-            Some("banned")
-        ) {
-            return anyhow::Ok(GroupJoinResponse {
-                ok: false,
-                group_id: None,
-                name: None,
-                error: Some("вы забанены в этой группе".into()),
-            });
-        }
-        sqlx::query(
-            "INSERT OR IGNORE INTO group_members (group_id, member, role) VALUES (?, ?, 'member')",
-        )
-        .bind(&group_id)
-        .bind(&user)
-        .execute(pool)
-        .await?;
-        let name: Option<(String,)> = sqlx::query_as("SELECT name FROM groups WHERE id = ?")
-            .bind(&group_id)
-            .fetch_optional(pool)
-            .await?;
-        info!("{} вступил в {} по инвайту", user, group_id);
-        anyhow::Ok(GroupJoinResponse {
-            ok: true,
-            group_id: Some(group_id),
-            name: name.map(|(n,)| n),
-            error: None,
-        })
-    }
-    .await
-    .unwrap_or_else(|e| GroupJoinResponse {
-        ok: false,
-        group_id: None,
-        name: None,
-        error: Some(e.to_string()),
-    });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()), error_code: None });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2879,7 +2977,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let info = group_info(&pool, &gid).await.unwrap().unwrap();
+        let info = group_info(&pool, &gid, None).await.unwrap().unwrap();
         assert_eq!(info.name, "Наша группа");
         assert_eq!(info.created_by, "alice@local");
         assert_eq!(info.members.len(), 3, "owner + 2 участника");
@@ -2931,13 +3029,18 @@ mod tests {
         assert!(add_group_member(&pool, &gid, "alice@local", "bob@local").await.unwrap());
         // не-участник добавить не может
         assert!(!add_group_member(&pool, &gid, "mallory@evil", "eve@evil").await.unwrap());
-        // обычный участник (bob) добавить не может (не owner/admin)
+        // обычный участник (bob) добавляет по праву по умолчанию invite_users
+        // (spec 003, как в Telegram); после выключения права — не может
+        assert!(add_group_member(&pool, &gid, "bob@local", "eve@evil").await.unwrap());
+        assert!(remove_group_member(&pool, &gid, "alice@local", "eve@evil").await.unwrap());
+        let perms = parvane_types::DefaultPermissions { invite_users: false, ..Default::default() };
+        group_mgmt::set_perms(&pool, &gid, "alice@local", &perms).await.unwrap();
         assert!(!add_group_member(&pool, &gid, "bob@local", "eve@evil").await.unwrap());
         // bob сам выходит
         assert!(remove_group_member(&pool, &gid, "bob@local", "bob@local").await.unwrap());
         // owner нельзя удалить
         assert!(!remove_group_member(&pool, &gid, "alice@local", "alice@local").await.unwrap());
-        let info = group_info(&pool, &gid).await.unwrap().unwrap();
+        let info = group_info(&pool, &gid, None).await.unwrap().unwrap();
         assert_eq!(info.members.len(), 1, "остался только owner");
     }
 
@@ -3067,7 +3170,7 @@ mod tests {
         assert!(rename_group(&pool, &gid, "owner@l", "Новое").await.unwrap());
         assert!(rename_group(&pool, &gid, "adm@l", "Ещё новее").await.unwrap());
         assert!(!rename_group(&pool, &gid, "owner@l", "   ").await.unwrap());
-        let info = group_info(&pool, &gid).await.unwrap().unwrap();
+        let info = group_info(&pool, &gid, None).await.unwrap().unwrap();
         assert_eq!(info.name, "Ещё новее");
     }
 
@@ -3079,7 +3182,7 @@ mod tests {
 
         assert!(!delete_group(&pool, &gid, "bob@l").await.unwrap());
         assert!(delete_group(&pool, &gid, "owner@l").await.unwrap());
-        assert!(group_info(&pool, &gid).await.unwrap().is_none());
+        assert!(group_info(&pool, &gid, None).await.unwrap().is_none());
         assert!(list_groups(&pool, "bob@l").await.unwrap().is_empty());
         // Повторное удаление — no-op
         assert!(!delete_group(&pool, &gid, "owner@l").await.unwrap());
@@ -3494,5 +3597,123 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    // ── spec 003: права по умолчанию и права админов в существующих мутациях ──
+
+    async fn group_with_admin(pool: &SqlitePool) -> String {
+        let gid = create_group(pool, "G", GroupKind::Group, "alice@local", &["bob@local".into(), "carol@local".into()], 1)
+            .await
+            .unwrap();
+        // bob — админ только с pin_messages
+        sqlx::query("UPDATE group_members SET role = 'admin', admin_rights_json = ?, promoted_by = 'alice@local' WHERE group_id = ? AND member = 'bob@local'")
+            .bind(serde_json::to_string(&parvane_types::AdminRights { change_info: false, delete_messages: false, ban_users: false, invite_users: false, pin_messages: true, add_admins: false }).unwrap())
+            .bind(&gid)
+            .execute(pool)
+            .await
+            .unwrap();
+        gid
+    }
+
+    #[tokio::test]
+    async fn can_post_respects_send_messages() {
+        let pool = test_pool().await;
+        let gid = group_with_admin(&pool).await;
+        assert!(can_post(&pool, &gid, "carol@local").await.unwrap());
+        let perms = parvane_types::DefaultPermissions { send_messages: false, ..Default::default() };
+        assert!(group_mgmt::set_perms(&pool, &gid, "alice@local", &perms).await.unwrap().ok);
+        assert!(!can_post(&pool, &gid, "carol@local").await.unwrap(), "участник без send_messages");
+        assert!(can_post(&pool, &gid, "alice@local").await.unwrap(), "владелец пишет");
+        assert!(can_post(&pool, &gid, "bob@local").await.unwrap(), "админ пишет");
+        assert!(!can_post(&pool, &gid, "nobody@local").await.unwrap());
+        // канал — как раньше
+        let ch = create_group(&pool, "C", GroupKind::Channel, "alice@local", &["carol@local".into()], 1).await.unwrap();
+        assert!(!can_post(&pool, &ch, "carol@local").await.unwrap());
+        assert!(can_post(&pool, &ch, "alice@local").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn addmember_respects_invite_users() {
+        let pool = test_pool().await;
+        let gid = group_with_admin(&pool).await;
+        // участник — по умолчанию invite_users включён
+        assert!(add_group_member(&pool, &gid, "carol@local", "dave@local").await.unwrap());
+        // админ без invite_users — нет
+        assert!(!add_group_member(&pool, &gid, "bob@local", "eve@local").await.unwrap());
+        let perms = parvane_types::DefaultPermissions { invite_users: false, ..Default::default() };
+        group_mgmt::set_perms(&pool, &gid, "alice@local", &perms).await.unwrap();
+        assert!(!add_group_member(&pool, &gid, "carol@local", "eve@local").await.unwrap());
+        assert!(add_group_member(&pool, &gid, "alice@local", "eve@local").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pin_respects_pin_messages() {
+        let pool = test_pool().await;
+        let gid = group_with_admin(&pool).await;
+        let mid = "00000000-0000-7000-8000-00000000aa01";
+        store_message(&pool, &send_event(mid, "alice@local", &gid, "закрепи"), 1).await.unwrap();
+        assert!(can_mutate_message(&pool, mid, "bob@local", None, "pin", true).await.unwrap(), "админ с pin_messages");
+        assert!(!can_mutate_message(&pool, mid, "carol@local", None, "pin", true).await.unwrap(), "участник без права");
+        let perms = parvane_types::DefaultPermissions { pin_messages: true, ..Default::default() };
+        group_mgmt::set_perms(&pool, &gid, "alice@local", &perms).await.unwrap();
+        assert!(can_mutate_message(&pool, mid, "carol@local", None, "pin", true).await.unwrap(), "участник с default pin");
+        // rename: change_info
+        assert!(!rename_group(&pool, &gid, "carol@local", "X").await.unwrap());
+        assert!(!rename_group(&pool, &gid, "bob@local", "X").await.unwrap());
+        assert!(rename_group(&pool, &gid, "alice@local", "X").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ban_requires_ban_users_and_admin_cannot_ban_admin() {
+        let pool = test_pool().await;
+        let gid = group_with_admin(&pool).await;
+        assert!(!ban_group_member(&pool, &gid, "bob@local", "carol@local", true).await.unwrap(), "админ без ban_users");
+        assert!(!ban_group_member(&pool, &gid, "carol@local", "bob@local", true).await.unwrap(), "участник");
+        assert!(!mute_group_member(&pool, &gid, "bob@local", "carol@local", 999).await.unwrap());
+        assert!(!remove_group_member(&pool, &gid, "bob@local", "carol@local").await.unwrap());
+        assert!(remove_group_member(&pool, &gid, "carol@local", "carol@local").await.unwrap(), "выход сам");
+        // dave — админ с ban_users, но не владелец: банит участников, не админов
+        add_group_member(&pool, &gid, "alice@local", "dave@local").await.unwrap();
+        add_group_member(&pool, &gid, "alice@local", "erin@local").await.unwrap();
+        assert!(group_mgmt::set_admin(&pool, &gid, "alice@local", "dave@local", Some(&parvane_types::AdminRights::default())).await.unwrap().ok);
+        assert!(ban_group_member(&pool, &gid, "dave@local", "erin@local", true).await.unwrap());
+        assert!(!ban_group_member(&pool, &gid, "dave@local", "bob@local", true).await.unwrap(), "админ не банит админа");
+        assert!(!mute_group_member(&pool, &gid, "dave@local", "bob@local", 999).await.unwrap());
+        assert!(!remove_group_member(&pool, &gid, "dave@local", "bob@local").await.unwrap());
+        assert!(ban_group_member(&pool, &gid, "alice@local", "bob@local", true).await.unwrap(), "владелец банит админа");
+        assert!(!ban_group_member(&pool, &gid, "dave@local", "alice@local", true).await.unwrap(), "владельца нельзя");
+    }
+
+    #[tokio::test]
+    async fn delete_others_message_requires_delete_messages() {
+        let pool = test_pool().await;
+        let gid = group_with_admin(&pool).await;
+        let mid = "00000000-0000-7000-8000-00000000aa02";
+        store_message(&pool, &send_event(mid, "carol@local", &gid, "удали меня"), 1).await.unwrap();
+        assert!(!delete_message_as_group_admin(&pool, mid, "bob@local", 5).await.unwrap(), "админ без delete_messages");
+        assert!(!delete_message_as_group_admin(&pool, mid, "carol@local", 5).await.unwrap(), "участник (свой путь — delete_message)");
+        assert!(delete_message_as_group_admin(&pool, mid, "alice@local", 5).await.unwrap(), "владелец");
+        let deleted: (i64,) = sqlx::query_as("SELECT deleted FROM messages WHERE id = ?").bind(mid).fetch_one(&pool).await.unwrap();
+        assert_eq!(deleted.0, 1);
+        assert!(!delete_message_as_group_admin(&pool, mid, "alice@local", 6).await.unwrap(), "повторно — нет");
+        // 1-на-1 сообщение этим путём не удаляется
+        let pm = "00000000-0000-7000-8000-00000000aa03";
+        store_message(&pool, &send_event(pm, "carol@local", "alice@local", "личное"), 1).await.unwrap();
+        assert!(!delete_message_as_group_admin(&pool, pm, "alice@local", 7).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn legacy_setrole_admin_gets_full_rights_and_ban_drops_request() {
+        let pool = test_pool().await;
+        let gid = group_with_admin(&pool).await;
+        assert!(set_group_role(&pool, &gid, "alice@local", "carol@local", "admin").await.unwrap());
+        let info = group_info(&pool, &gid, Some("alice@local")).await.unwrap().unwrap();
+        let carol = info.members.iter().find(|m| m.address == "carol@local").unwrap();
+        assert_eq!(carol.admin_rights, Some(parvane_types::AdminRights::full()));
+        // заявка снимается баном
+        sqlx::query("INSERT INTO group_join_requests (group_id, member, invite_token, created_at, status) VALUES (?, 'zed@local', 't', 1, 'pending')")
+            .bind(&gid).execute(&pool).await.unwrap();
+        assert!(ban_group_member(&pool, &gid, "alice@local", "zed@local", true).await.unwrap());
+        assert!(group_mgmt::list_requests(&pool, &gid).await.unwrap().is_empty());
     }
 }

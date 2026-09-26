@@ -1,6 +1,7 @@
 // Общие помощники двухбраузерных Web e2e сценариев (живой стек NATS+gateway).
 // Скрипты-сценарии: e2e_web_sync_reconnect.mjs, e2e_web_media_ttl.mjs и другие.
 import assert from 'node:assert/strict';
+import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
@@ -187,12 +188,23 @@ export async function submitNick(page, user) {
     }
   }
   // Под нагрузкой кнопка «Next» перерисовывается и обычный click не проходит
-  // («element is not stable») — повторяем, пока экран ника не сменится
-  await clickUntil(
-    nextButton,
-    () => addressScreen.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }),
-    { settleMs: 8000 },
-  );
+  // («element is not stable»), а перерисовка формы после подгрузки языка
+  // теряет введённый ник — перед каждой попыткой перепроверяем значение,
+  // шлём Enter и клик, пока экран ника не сменится
+  const hidden = () => addressScreen.waitFor({ state: 'hidden', timeout: 8000 }).then(() => true).catch(() => false);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if ((await addressInput.inputValue().catch(() => '')) !== user) await addressInput.fill(user).catch(() => {});
+    await addressInput.press('Enter').catch(() => {});
+    if (await hidden()) return;
+    try {
+      if (attempt % 2 === 0) await nextButton.click({ timeout: 5000 });
+      else await nextButton.click({ force: true, timeout: 5000 });
+    } catch {
+      // кнопка перемонтировалась — проверим результат и попробуем снова
+    }
+    if (await hidden()) return;
+  }
+  await addressScreen.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
 export async function openPrivateChat(page, address) {
@@ -652,12 +664,12 @@ export async function openGroupChatByTitle(page, title) {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-// Профиль группы → Edit → «Invite Links»: экран открывается, на нём ровно одна
-// постоянная ссылка `…/#+<токен>`, нет «Создать»/«Отозвать»/«Отозванные»
-// (сервер этого не умеет). Возвращает ссылку и закрывает правую колонку.
-// Общий для сценариев инвайтов и мультидевайса: у каждого устройства одного
-// аккаунта — своя ссылка (кэш по устройству, сервер не отдаёт уже созданную)
-export async function readInvitesScreen(page, title) {
+// Профиль группы → Edit → «Invite Links»: экран открывается, на нём основная
+// ссылка `…/#+<токен>` и «Create a New Link» (spec 003: сервер хранит список
+// ссылок, отзыв и параметры). Возвращает основную ссылку и закрывает правую
+// колонку. Общая для сценариев инвайтов и мультидевайса: у всех устройств и
+// админов одного владельца — одна и та же основная ссылка группы
+export async function readInvitesScreen(page, title, { keepOpen = false } = {}) {
   await openGroupChatByTitle(page, title);
   await page.locator('.MiddleHeader .ChatInfo').click();
   const right = page.locator('#RightColumn');
@@ -673,12 +685,12 @@ export async function readInvitesScreen(page, title) {
   if (!(await invitesItem.isVisible())) await editButton.click();
   await invitesItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Вечное «Loading» (нет fetchExportedChatInvites) держало пункт disabled
-  await right.locator('.ListItem').filter({ hasText: 'Invite Links' }).filter({ hasText: '1' }).first()
+  await right.locator('.ListItem').filter({ hasText: 'Invite Links' }).filter({ hasText: /\d/ }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await invitesItem.click();
   const screen = right.locator('.ManageInvites');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Ссылка — значение readonly-поля LinkField (getByText его не видит)
+  // Основная ссылка — значение readonly-поля LinkField (getByText его не видит)
   const linkInput = screen.locator('input[readonly]');
   await linkInput.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForFunction(
@@ -687,22 +699,150 @@ export async function readInvitesScreen(page, title) {
     { timeout: LOGIN_TIMEOUT_MS },
   );
   const links = await linkInput.evaluateAll((inputs) => inputs.map((input) => input.value));
-  assert.equal(links.length, 1, `expected one invite link field, got ${links}`);
+  assert.equal(links.length, 1, `expected one primary invite link field, got ${links}`);
   assert.match(links[0], /#\+[0-9a-f]{32}/, 'invite link field is empty');
   assert.equal(await screen.getByText(/FolderLinkScreen|LinkActionShare/).count(), 0, 'raw lang key on the share button');
-  assert.equal(await screen.getByText('Create a New Link').count(), 0, 'Create a New Link must be hidden');
-  assert.equal(await screen.getByText('Revoked links').count(), 0, 'revoked links section must be hidden');
-  const menuButton = screen.getByRole('button', { name: /menu/i }).first();
-  if (await menuButton.count()) {
-    await menuButton.click();
-    await page.waitForTimeout(400);
-    assert.equal(await page.getByRole('menuitem', { name: 'Revoke' }).count(), 0, 'Revoke must be hidden');
+  await screen.getByText('Create a New Link').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const link = links[0].trim();
+  if (!keepOpen) {
+    // Назад к чату
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
   }
-  const link = links[0].trim();
-  // Назад к чату
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
   return link.startsWith('http') ? link : `https://${link}`;
+}
+
+// Токен из ссылки-приглашения
+export function inviteTokenOf(link) {
+  return link.match(/#\+([0-9a-f]{32})/)?.[1];
+}
+
+// Создать группу через нативный пикер «New Group» (участники — по никам)
+export async function createGroupViaUi(page, title, memberNames) {
+  await page.mouse.move(800, 360);
+  await page.waitForTimeout(200);
+  await page.locator('#LeftColumn').hover();
+  await page.getByRole('button', { name: 'New Message' }).click();
+  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  const memberSearch = page.locator('#new-group-picker-search');
+  await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  for (const name of memberNames) {
+    await memberSearch.fill(name);
+    const row = page.locator('#LeftColumn .PeerPickerItem, #LeftColumn .ItemPickerItem').filter({ hasText: name }).first();
+    await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    let selected = false;
+    for (let attempt = 0; attempt < 6 && !selected; attempt++) {
+      if (attempt % 2 === 0) await row.press(' ').catch(() => {});
+      else await row.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(500);
+      selected = (await row.locator('input[type="checkbox"]:checked').count()) > 0;
+    }
+    assert(selected, `picker row for ${name} is never selected`);
+  }
+  await page.getByRole('button', { name: 'Continue To Group Info' }).click();
+  const nameInput = page.getByLabel('Group name');
+  await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await nameInput.fill(title);
+  await page.getByRole('button', { name: 'Create Group' }).click();
+  await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Профиль группы → кнопка Edit → экран управления (`.Management`)
+export async function openGroupManagement(page, title) {
+  await openGroupChatByTitle(page, title);
+  await page.locator('.MiddleHeader .ChatInfo').click();
+  const right = page.locator('#RightColumn');
+  const editButton = right.getByRole('button', { name: 'Edit' });
+  const management = right.locator('.Management');
+  await Promise.race([
+    editButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+    management.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+  ]);
+  if (!(await management.isVisible())) await editButton.click();
+  await management.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  return right;
+}
+
+// Закрыть правую колонку (несколько Escape — вложенные экраны)
+export async function closeRightColumn(page) {
+  const column = page.locator('#RightColumn');
+  for (let i = 0; i < 5; i++) {
+    const visible = await column.isVisible().catch(() => false);
+    const box = visible ? await column.boundingBox().catch(() => null) : null;
+    if (!box || box.width < 10) break;
+    // Кнопка закрытия/назад надёжнее Escape: Escape по пустой колонке закрывает чат
+    const close = column.getByRole('button', { name: /Close|Back|Go back/ }).first();
+    if (await close.isVisible().catch(() => false)) await close.click().catch(() => {});
+    else await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+  }
+}
+
+// Вызов метода провайдера из страницы (диаг-сборка): chat/user ищутся по
+// названию/нику в глобальном состоянии
+export async function callProviderForChat(page, method, chatTitle, userName, extra = {}) {
+  await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
+    timeout: LOGIN_TIMEOUT_MS,
+  });
+  return page.evaluate(async ({ method: fn, title, name, args }) => {
+    const global = window.__parvaneGetGlobal();
+    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === title);
+    const user = name ? Object.values(global.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name)) : undefined;
+    if (!chat || (name && !user)) return { error: `chat=${Boolean(chat)} user=${Boolean(user)}` };
+    const map = (value) => {
+      if (value === '$chat') return chat;
+      if (value === '$user') return user;
+      if (Array.isArray(value)) return value.map(map);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, map(inner)]));
+      }
+      return value;
+    };
+    let params = map(args);
+    if (params && typeof params === 'object' && !Array.isArray(params) && (params.peer === chat || params.chat === chat)) {
+      // Методы провайдера ждут то `peer`, то `chat` — даём оба
+      params = { chatId: chat.id, chat, peer: chat, ...params, user: params.user ?? user };
+    }
+    const result = await window.__parvaneDiagCallApi(fn, ...(Array.isArray(params) ? params : [params]));
+    return result === undefined ? { result: null } : { result };
+  }, { method, title: chatTitle, name: userName, args: extra });
+}
+
+// Тост (`.Notification-container`) с текстом
+export async function expectToast(page, text, timeout = LOGIN_TIMEOUT_MS) {
+  await page.locator('.Notification-container').getByText(text).first().waitFor({ state: 'visible', timeout });
+}
+
+// Минимальный валидный PNG (сплошной цвет) — фикстура фото группы
+export function buildPngBuffer(size = 64, rgb = [0x2a, 0xab, 0xee]) {
+  const { deflateSync } = zlib;
+  const raw = Buffer.alloc((size * 3 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * (size * 3 + 1)] = 0;
+    for (let x = 0; x < size; x++) raw.set(rgb, y * (size * 3 + 1) + 1 + x * 3);
+  }
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf) => {
+    let c = 0xffffffff;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const typeBuf = Buffer.from(type, 'ascii');
+    const crcBuf = Buffer.alloc(4); crcBuf.writeUInt32BE(crc(Buffer.concat([typeBuf, data])));
+    return Buffer.concat([len, typeBuf, data, crcBuf]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4); ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
+  ]);
 }

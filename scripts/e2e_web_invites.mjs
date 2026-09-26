@@ -1,8 +1,9 @@
-// Сценарий инвайт-ссылок группы: владелец видит одну постоянную ссылку в
-// профиле и на экране «Пригласительные ссылки» (без отзыва/создания новых —
-// сервер их не умеет), ссылка не пересоздаётся между сессиями, вступление
-// кликом по ссылке, через адресную строку `#+<токен>` (в т.ч. до входа),
-// понятные ошибки для забаненного и недействительной ссылки.
+// Сценарий инвайт-ссылок группы (spec 003): у группы одна основная ссылка,
+// общая для всех устройств и админов (список сервера), плюс дополнительные с
+// лимитом; вступление — через нативную модалку «Join Group» по клику в личке,
+// через адресную строку `#+<токен>` (в т.ч. до входа); понятные ошибки для
+// забаненного, недействительной, исчерпанной и отозванной ссылки; отзыв,
+// раздел «Revoked Links» и удаление; обычный участник управления не видит.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -11,12 +12,20 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   LOGIN_TIMEOUT_MS,
+  callProviderForChat,
   clickUntil,
+  closeRightColumn,
+  createGroupViaUi,
   dumpDiagJournal,
+  expectToast,
   findMessage,
+  inviteTokenOf,
   logOut,
+  openGroupChatByTitle,
+  openGroupManagement,
   openPrivateChatStrict,
   preparePage,
+  readDiagJournal,
   readInvitesScreen,
   relogin,
   requireEnv,
@@ -27,33 +36,8 @@ import {
 const PASSWORD = 'Parvane-invites-e2e-password';
 const BACKEND_DIR = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
 assert(BACKEND_DIR, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
-
-async function selectPickerRow(page, containerSelector, name) {
-  const row = page.locator(`${containerSelector} .PeerPickerItem, ${containerSelector} .ItemPickerItem`)
-    .filter({ hasText: name })
-    .first();
-  await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const checkedRows = `${containerSelector} .PeerPickerItem input[type="checkbox"]:checked, `
-    + `${containerSelector} .ItemPickerItem input[type="checkbox"]:checked`;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    if (await page.locator(checkedRows).count()) return;
-    if (attempt % 2 === 0) {
-      await row.press(' ').catch(() => {});
-    } else {
-      await row.click({ force: true }).catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  assert.fail(`picker row for ${name} is never selected in ${containerSelector}`);
-}
-
-async function openGroupChat(page, title) {
-  const item = page.locator('#LeftColumn .ListItem').filter({ hasText: title }).first();
-  await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await item.locator('.ListItem-button').click();
-  await page.locator('.MiddleHeader').getByText(title).first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
+// Изменения группы доезжают нотисом мгновенно; запас — на delta-sync (10 с)
+const CONVERGENCE_TIMEOUT_MS = 15000;
 
 function countInvitesCreatedBy(address) {
   const out = execFileSync('sqlite3', [
@@ -63,35 +47,38 @@ function countInvitesCreatedBy(address) {
   return Number(out.trim());
 }
 
-async function expectToast(page, text) {
-  await page.locator('.Notification-container').getByText(text).first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
-
-function membersCountLocator(page, count) {
-  return page.locator('.MiddleHeader').getByText(new RegExp(`${count} members`)).first();
-}
-
-async function banViaProvider(page, groupTitle, userName) {
-  await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
-    timeout: LOGIN_TIMEOUT_MS,
-  });
-  const ok = await page.evaluate(async ({ title, name }) => {
+// Число участников — по состоянию чата: подпись в шапке временно сменяется
+// статусом «is typing», и текст «N members» пропадает
+async function waitMembersCount(page, title, count, timeout = LOGIN_TIMEOUT_MS) {
+  await page.waitForFunction(({ t, n }) => {
     const global = window.__parvaneGetGlobal();
-    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === title);
-    const user = Object.values(global.users.byId)
-      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
-    if (!chat || !user) return `chat=${Boolean(chat)} user=${Boolean(user)}`;
-    return window.__parvaneDiagCallApi('updateChatMemberBannedRights', {
-      chat, user, bannedRights: { viewMessages: true },
-    });
-  }, { title: groupTitle, name: userName });
-  assert.equal(ok, true, `ban failed: ${ok}`);
+    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === t);
+    return chat?.membersCount === n;
+  }, { t: title, n: count }, { timeout });
+}
+
+// Нативная модалка приглашения: кнопка «JOIN GROUP» / «Request to Join»
+async function acceptInviteModal(page, buttonName = /join group/i) {
+  const modal = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: buttonName }) }).first();
+  await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+  await modal.getByRole('button', { name: buttonName }).first().click();
+  await modal.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }).catch(() => {});
+}
+
+async function openLinkInAddressBar(page, baseUrl, token) {
+  await page.goto(`${baseUrl}#+${token}`, { waitUntil: 'domcontentloaded' });
+}
+
+async function joinByAddressBar(page, baseUrl, token, groupTitle) {
+  await openLinkInAddressBar(page, baseUrl, token);
+  await acceptInviteModal(page);
+  await page.locator('.MiddleHeader').getByText(groupTitle).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
 }
 
 const { baseUrl } = requireEnv();
 const browser = await chromium.launch();
-const names = ['alice', 'bob', 'charlie', 'dave', 'erin', 'mallory'];
+const names = ['alice', 'bob', 'charlie', 'dave', 'erin', 'mallory', 'frank', 'grace', 'heidi'];
 const contexts = Object.fromEntries(await Promise.all(
   names.map(async (name) => [name, await browser.newContext()]),
 ));
@@ -121,37 +108,22 @@ try {
 
   // ── Группа с Бобом ─────────────────────────────────────────────────────────
   const { page: alicePage } = sessions.alice;
-  await alicePage.mouse.move(800, 360);
-  await alicePage.waitForTimeout(200);
-  await alicePage.locator('#LeftColumn').hover();
-  await alicePage.getByRole('button', { name: 'New Message' }).click();
-  await alicePage.getByRole('menuitem', { name: 'New Group' }).click();
-  const memberSearch = alicePage.locator('#new-group-picker-search');
-  await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await memberSearch.fill(bob.split('@')[0]);
-  await selectPickerRow(alicePage, '#LeftColumn', bob.split('@')[0]);
-  await alicePage.getByRole('button', { name: 'Continue To Group Info' }).click();
-  const nameInput = alicePage.getByLabel('Group name');
-  await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await nameInput.fill(groupTitle);
-  await alicePage.getByRole('button', { name: 'Create Group' }).click();
-  await alicePage.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await createGroupViaUi(alicePage, groupTitle, [bob.split('@')[0]]);
 
-  // ── Экран «Пригласительные ссылки»: одна постоянная ссылка ────────────────
+  // ── Экран «Пригласительные ссылки»: основная ссылка + «Create a New Link» ─
   const inviteUrl = await readInvitesScreen(alicePage, groupTitle);
-  const token = inviteUrl.match(/#\+([0-9a-f]{32})/)[1];
+  const token = inviteTokenOf(inviteUrl);
   assert.equal(countInvitesCreatedBy(alice), 1, 'first visit must create exactly one invite');
 
-  // ── Повторные входы не плодят ссылки (SC-002) ─────────────────────────────
-  for (let round = 0; round < 10; round++) {
+  // ── Повторные входы не плодят ссылки: источник истины — список сервера ────
+  for (let round = 0; round < 3; round++) {
     await relogin(alicePage, PASSWORD);
     const again = await readInvitesScreen(alicePage, groupTitle);
     assert.equal(again, inviteUrl, `invite link changed after relogin #${round + 1}`);
   }
   assert.equal(countInvitesCreatedBy(alice), 1, 'relogins must not create new invites');
 
-  // ── Полный выход и вход заново тоже не плодит ссылки (FR-011, SC-002) ─────
-  // Сервер не умеет отзыв: каждая лишняя ссылка — вечный токен группы
+  // ── Полный выход и вход заново тоже не плодит ссылки ──────────────────────
   await logOut(alicePage);
   await submitNick(alicePage, alice);
   const passwordScreen = alicePage.locator('.Transition_slide-active > #auth-password-form');
@@ -167,27 +139,33 @@ try {
   assert.equal(countInvitesCreatedBy(alice), 1, 'logout and sign-in must not create a new invite');
 
   // ── Обычный участник не видит управления ссылками ─────────────────────────
-  await openGroupChat(sessions.bob.page, groupTitle);
+  await openGroupChatByTitle(sessions.bob.page, groupTitle);
   await sessions.bob.page.locator('.MiddleHeader .ChatInfo').click();
   const bobRight = sessions.bob.page.locator('#RightColumn');
   await bobRight.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await sessions.bob.page.waitForTimeout(1500);
   assert.equal(await bobRight.getByRole('button', { name: 'Edit' }).count(), 0, 'member must not see Edit');
   assert.equal(await bobRight.getByText(/#\+[0-9a-f]{32}/).count(), 0, 'member must not see the invite link');
+  const bobList = await callProviderForChat(sessions.bob.page, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' });
+  assert.deepEqual(bobList.result, { invites: [] }, `member must not list invites: ${JSON.stringify(bobList)}`);
   await sessions.bob.page.keyboard.press('Escape');
 
-  // ── Чарли вступает по клику на ссылку в личке ─────────────────────────────
+  // ── Чарли вступает по клику на ссылку в личке: превью → «Join Group» ──────
   await openPrivateChatStrict(alicePage, charlie);
   await sendText(alicePage, inviteUrl);
   await openPrivateChatStrict(sessions.charlie.page, alice);
-  // Кликабелен якорь ПРЕВЬЮ ссылки (SafeLink с `href` = ссылка): сам текст
-  // сообщения сущностью Url не размечается — провайдер их при отправке не
-  // строит (в Telegram это делает сервер), так было и на HEAD, где локатор
-  // попадал в превью по тексту «parvane.invite». Пробел записан в матрице
   const inviteLink = sessions.charlie.page
     .locator(`.Transition_slide-active > .MessageList a[href*="#+${token}"]`).first();
   await inviteLink.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await inviteLink.click();
+  await sessions.charlie.page.waitForTimeout(3000);
+  console.log('charlie after link click:', (await readDiagJournal(sessions.charlie.page)).slice(-12)
+    .map((entry) => `${entry.k} ${(entry.d || '').slice(0, 80)}`).join(' | '));
+  // Модалка показывает имя группы и число участников до вступления
+  const charlieModal = sessions.charlie.page.locator('.Modal .modal-dialog').filter({ hasText: groupTitle }).first();
+  await charlieModal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await charlieModal.getByText(/2 members/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await acceptInviteModal(sessions.charlie.page);
   await sessions.charlie.page.locator('.MiddleHeader').getByText(groupTitle)
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
@@ -195,17 +173,16 @@ try {
   const charlieComposer = sessions.charlie.page
     .locator('.Transition_slide-active #editable-message-text').last();
   await charlieComposer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Первое сообщение вступившего доходит до всех участников ≤ 10 с (SC-001):
-  // чаты группы открыты заранее, отсчёт — от отправки
-  await openGroupChat(alicePage, groupTitle);
-  await openGroupChat(sessions.bob.page, groupTitle);
+  await openGroupChatByTitle(alicePage, groupTitle);
+  await openGroupChatByTitle(sessions.bob.page, groupTitle);
   await charlieComposer.fill(charlieHello);
   const charlieSentAt = Date.now();
   await charlieComposer.press('Enter');
   await Promise.all([alicePage, sessions.bob.page].map((page) => findMessage(page, charlieHello).first()
     .waitFor({ state: 'visible', timeout: 10000 })));
   console.log(`charlie's first group message reached alice and bob in ${Date.now() - charlieSentAt} ms`);
-  await membersCountLocator(alicePage, 3).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Состав у владельца обновился нотисом без перезагрузки
+  await waitMembersCount(alicePage, groupTitle, 3, CONVERGENCE_TIMEOUT_MS);
 
   // ── Повторное открытие ссылки участником: просто открывает группу ─────────
   await openPrivateChatStrict(sessions.charlie.page, alice);
@@ -213,59 +190,23 @@ try {
     .locator(`.Transition_slide-active > .MessageList a[href*="#+${token}"]`).first().click();
   await sessions.charlie.page.locator('.MiddleHeader').getByText(groupTitle)
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await sessions.charlie.page.locator('.Modal .modal-dialog').filter({ hasText: groupTitle }).count(), 0,
+    'a member must not see the join modal again');
   await alicePage.waitForTimeout(2000);
-  assert.equal(await membersCountLocator(alicePage, 3).count(), 1, 'members count must stay 3 after re-open');
+  await waitMembersCount(alicePage, groupTitle, 3, 5000);
 
-  // ── Администратор тоже видит экран ссылок, и ссылку ту же (FR-010) ───────
-  // Ссылка кэшируется на устройстве, поэтому у админа на его устройстве это
-  // ПЕРВЫЙ запрос — сервер не дедуплицирует, и без общей ссылки у группы
-  // появился бы второй вечный токен
-  const invitesBeforeAdmin = countInvitesCreatedBy(alice) + countInvitesCreatedBy(bob);
-  await openGroupChat(alicePage, groupTitle);
-  await alicePage.locator('.MiddleHeader .ChatInfo').click();
-  // Правая колонка могла открыться сразу на экране управления (tt помнит её
-  // состояние после прошлого захода) — в профиль через Edit идём, только если
-  // открылся он
-  const adminsItem = alicePage.locator('#RightColumn').getByText('Administrators');
-  const editButton = alicePage.locator('#RightColumn').getByRole('button', { name: 'Edit' });
-  await Promise.race([
-    adminsItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-    editButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-  ]);
-  if (!(await adminsItem.isVisible())) await editButton.click();
-  await adminsItem.click();
-  await alicePage.locator('#RightColumn').getByRole('button', { name: 'Add Admin' }).click();
-  const bobAdminRow = alicePage.locator('#RightColumn .ListItem')
-    .filter({ hasText: bob.split('@')[0] }).first();
-  await bobAdminRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await bobAdminRow.click();
-  const rightsScreen = alicePage.locator('#RightColumn');
-  const changeInfoToggle = rightsScreen.locator('.Checkbox').filter({ hasText: 'Change Group Info' });
-  await changeInfoToggle.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await changeInfoToggle.click();
-  const saveAdmin = rightsScreen.getByRole('button', { name: 'Save', exact: true });
-  await saveAdmin.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await saveAdmin.click();
-  await alicePage.keyboard.press('Escape');
-  await alicePage.keyboard.press('Escape');
-  // Сервер не умеет отдавать уже созданную ссылку, а кэш — по устройству,
-  // поэтому у администратора она СВОЯ. Спека это прямо допускает («у каждого
-  // устройства своя постоянная инвайт-ссылка, все они рабочие»), проверяем не
-  // совпадение, а что ссылка действительная и экран админу доступен
+  // ── Администратор видит ТУ ЖЕ основную ссылку (список сервера) ────────────
+  const promoted = await callProviderForChat(alicePage, 'updateChatAdmin', groupTitle, bob.split('@')[0], {
+    peer: '$chat', adminRights: { inviteUsers: true, changeInfo: true },
+  });
+  assert.equal(promoted.result, true, `promote failed: ${JSON.stringify(promoted)}`);
   const adminInviteUrl = await readInvitesScreen(sessions.bob.page, groupTitle);
-  assert.match(adminInviteUrl, /#\+[0-9a-f]{32}/, 'admin got no valid invite link');
-  const invitesAfterAdmin = countInvitesCreatedBy(alice) + countInvitesCreatedBy(bob);
-  assert(invitesAfterAdmin >= invitesBeforeAdmin,
-    'invite rows disappeared after the admin opened the screen');
-  // Ссылка админа тоже рабочая: повторный заход на экран её не меняет
-  assert.equal(await readInvitesScreen(sessions.bob.page, groupTitle), adminInviteUrl,
-    "the admin's own link changed between visits");
+  assert.equal(adminInviteUrl, inviteUrl, 'admin must see the same primary link as the owner');
+  assert.equal(countInvitesCreatedBy(bob), 0, 'admin opening the screen must not mint a link');
 
   // ── Дейв (уже вошёл) открывает `#+<токен>` в адресной строке ──────────────
   sessions.dave = await preparePage(contexts.dave, address('dave'), PASSWORD);
-  await sessions.dave.page.goto(`${baseUrl}#+${token}`, { waitUntil: 'domcontentloaded' });
-  await sessions.dave.page.locator('.MiddleHeader').getByText(groupTitle)
-    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+  await joinByAddressBar(sessions.dave.page, baseUrl, token, groupTitle);
 
   // ── Эрин открывает `#+<токен>` ДО входа, уходит на корень той же вкладки
   // (токен переживает навигацию в sessionStorage), затем входит ─────────────
@@ -275,29 +216,33 @@ try {
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     },
   });
+  await acceptInviteModal(sessions.erin.page);
   await sessions.erin.page.locator('.MiddleHeader').getByText(groupTitle)
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
 
   // ── Доставка всем, включая вступивших по ссылке ───────────────────────────
-  await membersCountLocator(alicePage, 5).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await openGroupChat(alicePage, groupTitle);
+  await waitMembersCount(alicePage, groupTitle, 5, CONVERGENCE_TIMEOUT_MS);
+  await openGroupChatByTitle(alicePage, groupTitle);
   await sendText(alicePage, groupHello);
   for (const name of ['bob', 'charlie', 'dave', 'erin']) {
-    await openGroupChat(sessions[name].page, groupTitle);
+    await openGroupChatByTitle(sessions[name].page, groupTitle);
     await findMessage(sessions[name].page, groupHello).first()
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   }
 
   // ── Недействительная ссылка: понятная ошибка, интерфейс рабочий ───────────
   const badToken = token.split('').reverse().join('');
-  await sessions.charlie.page.goto(`${baseUrl}#+${badToken}`, { waitUntil: 'domcontentloaded' });
+  await openLinkInAddressBar(sessions.charlie.page, baseUrl, badToken);
   await expectToast(sessions.charlie.page, 'This invite link is invalid');
   await sessions.charlie.page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Забаненный: ошибка, не участник ───────────────────────────────────────
   await openPrivateChatStrict(alicePage, mallory);
   await sendText(alicePage, inviteUrl);
-  await banViaProvider(alicePage, groupTitle, mallory.split('@')[0]);
+  const banned = await callProviderForChat(alicePage, 'updateChatMemberBannedRights', groupTitle, mallory.split('@')[0], {
+    peer: '$chat', bannedRights: { viewMessages: true },
+  });
+  assert.equal(banned.result, true, `ban failed: ${JSON.stringify(banned)}`);
   await openPrivateChatStrict(sessions.mallory.page, alice);
   const malloryLink = sessions.mallory.page
     .locator(`.Transition_slide-active > .MessageList a[href*="#+${token}"]`).first();
@@ -311,19 +256,95 @@ try {
     'banned user must not get the group',
   );
 
+  // ── Дополнительная ссылка с лимитом 1 через нативный экран ────────────────
+  const right = await openGroupManagement(alicePage, groupTitle);
+  await right.locator('.ListItem').filter({ hasText: 'Invite Links' }).first().click();
+  const invitesScreen = right.locator('.ManageInvites');
+  await invitesScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await invitesScreen.getByText('Create a New Link').first().click();
+  // Форма «New Link»: первый input экрана — тумблер одобрения, поэтому поле
+  // названия ищем по placeholder; ждём конец анимации перехода
+  const linkName = right.getByPlaceholder('Link Name (Optional)').first();
+  await linkName.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await alicePage.waitForTimeout(700);
+  await linkName.fill(`limit-1-${suffix.slice(-4)}`);
+  // Лимит использований: радио «1»
+  const usageOne = right.locator('input[name="usageOptions"][value="1"]').first();
+  await usageOne.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+  await usageOne.check({ force: true });
+  await right.getByRole('button', { name: 'Create Link' }).click();
+  // В списке появилась ссылка с названием и лимитом
+  const limitedRow = invitesScreen.locator('.ListItem').filter({ hasText: `limit-1-${suffix.slice(-4)}` }).first();
+  await limitedRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const limitedLinks = await callProviderForChat(alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' });
+  const limited = limitedLinks.result.invites.find((invite) => invite.title === `limit-1-${suffix.slice(-4)}`);
+  assert(limited && limited.usageLimit === 1, `limited link not listed: ${JSON.stringify(limitedLinks)}`);
+  const limitedToken = inviteTokenOf(limited.link);
+  await alicePage.keyboard.press('Escape');
+  await alicePage.keyboard.press('Escape');
+  await alicePage.keyboard.press('Escape');
+
+  sessions.frank = await preparePage(contexts.frank, address('frank'), PASSWORD);
+  await joinByAddressBar(sessions.frank.page, baseUrl, limitedToken, groupTitle);
+  sessions.grace = await preparePage(contexts.grace, address('grace'), PASSWORD);
+  await openLinkInAddressBar(sessions.grace.page, baseUrl, limitedToken);
+  await expectToast(sessions.grace.page, 'This invite link has reached its usage limit');
+  await sessions.grace.page.waitForTimeout(1000);
+  assert.equal(await sessions.grace.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle }).count(), 0,
+    'exhausted link must not admit');
+  // Счётчик вступивших по лимитной ссылке = 1/1 в списке владельца
+  const afterFrank = await callProviderForChat(alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' });
+  const limitedAfter = afterFrank.result.invites.find((invite) => inviteTokenOf(invite.link) === limitedToken);
+  assert.equal(limitedAfter?.usage, 1, `usage must be 1: ${JSON.stringify(limitedAfter)}`);
+
+  // ── Отзыв основной ссылки: раздел «Revoked Links», удаление ───────────────
+  const right2 = await openGroupManagement(alicePage, groupTitle);
+  await right2.locator('.ListItem').filter({ hasText: 'Invite Links' }).first().click();
+  await right2.locator('.ManageInvites').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const primaryMenu = right2.locator('.ManageInvites').getByRole('button', { name: /menu|more/i }).first();
+  await primaryMenu.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await primaryMenu.click();
+  await alicePage.getByRole('menuitem', { name: 'Revoke' }).first().click();
+  // Подтверждение — нативный ConfirmDialog (корень `.Modal` Playwright не
+  // считает видимым, ждём диалог)
+  const confirm = alicePage.locator('.Modal .modal-dialog').getByRole('button', { name: /Revoke/i }).first();
+  await confirm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await confirm.click();
+  await right2.getByText('Revoked Links').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await closeRightColumn(alicePage);
+  // Новая основная ссылка создана автоматически и отличается от отозванной
+  const newPrimary = await readInvitesScreen(alicePage, groupTitle);
+  assert.notEqual(newPrimary, inviteUrl, 'a new primary link must replace the revoked one');
+  sessions.heidi = await preparePage(contexts.heidi, address('heidi'), PASSWORD);
+  await openLinkInAddressBar(sessions.heidi.page, baseUrl, token);
+  await expectToast(sessions.heidi.page, 'This invite link was revoked');
+  await sessions.heidi.page.waitForTimeout(1000);
+  assert.equal(await sessions.heidi.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle }).count(), 0,
+    'revoked link must not admit');
+  // Новая основная пускает
+  await joinByAddressBar(sessions.heidi.page, baseUrl, inviteTokenOf(newPrimary), groupTitle);
+  // Удаление отозванной
+  const deleted = await callProviderForChat(alicePage, 'deleteExportedChatInvite', groupTitle, undefined, { peer: '$chat', link: inviteUrl });
+  assert.equal(deleted.result, true, `delete revoked failed: ${JSON.stringify(deleted)}`);
+  const revokedLeft = await callProviderForChat(alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat', isRevoked: true });
+  assert.deepEqual(revokedLeft.result, { invites: [] }, `revoked list must be empty: ${JSON.stringify(revokedLeft)}`);
+  await openLinkInAddressBar(sessions.grace.page, baseUrl, token);
+  await expectToast(sessions.grace.page, 'This invite link is invalid');
+
   Object.entries(sessions).forEach(([name, session]) => {
     assert.deepEqual(session.errors, [], `${name} page errors: ${session.errors.join('; ')}`);
   });
 
-  console.log('OK: экран ссылок с одной постоянной ссылкой без отзыва, ссылка стабильна между входами, '
-    + 'вступление кликом и через #+токен (в т.ч. до входа), ошибки бана и битой ссылки');
+  console.log('OK: основная ссылка общая для владельца и админа, стабильна между входами; вступление через '
+    + 'модалку по клику и #+токен (в т.ч. до входа); лимит, отзыв, revoked-раздел, удаление; ошибки бана, '
+    + 'исчерпания, отзыва и битой ссылки');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of Object.entries(contexts)) {
     const page = context.pages()[0];
     if (page) {
       await page.screenshot({ path: `${dir}invites-${name}.png` }).catch(() => {});
-      await dumpDiagJournal(page, name);
+      await dumpDiagJournal(page, name, name === 'charlie' ? 200 : 40);
     }
   }
   throw err;

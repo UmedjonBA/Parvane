@@ -26,13 +26,16 @@ try {
   // Пустой список чатов: empty-state вместо спиннера
   const emptyFolderTitle = page.locator('.chat-list h3', { hasText: 'No chats yet' });
   await emptyFolderTitle.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await page.locator('.chat-list .Loading').count(), 0, 'chat list stuck in spinner');
+  // Спиннер может догорать после появления empty-state — ждём его снятия, а не считаем в моменте
+  await page.locator('.chat-list .Loading').waitFor({ state: 'detached', timeout: 10000 })
+    .catch(() => assert.fail('chat list stuck in spinner'));
 
   // Пустая переписка: greeting вместо спиннера
   await openPrivateChat(page, bob);
   const greeting = page.locator('#MiddleColumn', { hasText: 'No messages here yet' });
   await greeting.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await page.locator('.MessageList .Loading').count(), 0, 'message list stuck in spinner');
+  await page.locator('.MessageList .Loading').waitFor({ state: 'detached', timeout: 10000 })
+    .catch(() => assert.fail('message list stuck in spinner'));
 
   assertNoPageErrors({ alice: aliceSession, bob: bobSession });
   console.log('OK: пустой аккаунт показывает empty-state списка чатов и переписки без спиннеров');

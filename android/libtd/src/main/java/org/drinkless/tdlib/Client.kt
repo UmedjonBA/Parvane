@@ -558,10 +558,32 @@ class Client private constructor(
                 if (mo.optString("role") == "admin") roles[addr] = "admin"
             }
             members.forEach { ensurePeer(it, announce = true) } // участники — пользователи для UI
-            val (chat, basic, created) = store.ensureGroup(g.optString("group_id"), g.optString("name"), members, g.optString("created_by"), roles)
+            val gid = g.optString("group_id")
+            val ref = store.group(gid)
+            val previousVersion = ref?.version ?: -1L
+            val previousAvatar = ref?.avatarFileId ?: ""
+            // GROUP-1: сведения с ревизией ниже известной пропускаются
+            val ensured = store.ensureGroup(gid, g.optString("name"), members, g.optString("created_by"), roles, g)
+            if (ensured == null) {
+                Log.i(TAG, "группа $gid: сведения v${g.optLong("version", -1)} устарели, пропущены")
+                continue
+            }
+            val (chat, basic, created) = ensured
             postUpdate(TdApi.UpdateBasicGroup(basic))
             if (created && announcedChats.add(chat.id)) postUpdate(TdApi.UpdateNewChat(chat.copyForUi()))
             else postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
+            val version = g.optLong("version", -1L)
+            if (!created && version >= 0 && version == previousVersion) continue
+            // spec 003: права по умолчанию, описание, фото — открытые экраны X обновляются апдейтами
+            postUpdate(TdApi.UpdateChatPermissions(chat.id, chat.permissions))
+            store.group(gid)?.let { postUpdate(TdApi.UpdateBasicGroupFullInfo(it.basicGroupId, store.basicGroupFullInfo(it))) }
+            val avatar = if (g.isNull("avatar")) "" else g.optString("avatar", "")
+            if (avatar.isEmpty()) {
+                if (previousAvatar.isNotEmpty()) store.clearGroupPhoto(gid)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
+            } else if (avatar != previousAvatar) {
+                val path = ParvaneCore.downloadFile(avatar, "", "")
+                if (path.isNotEmpty()) store.setGroupPhoto(gid, avatar, path)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
+            }
         }
     }
 
@@ -978,6 +1000,13 @@ class Client private constructor(
             "notify" -> try {
                 store.applyNotifyBlob(JSONObject(event.optString("blob"))).forEach { postUpdate(it) }
             } catch (e: Exception) { Log.w(TAG, "notify blob: ${e.message}") }
+            // Изменение группы (spec 003, GROUP-1): перечитать группы — сведения
+            // применяются по ревизии; неизвестный вид изменения — тоже перечитать
+            "group" -> {
+                val change = event.optString("change")
+                Log.i(TAG, "группа ${event.optString("group_id")}: $change v${event.optLong("version")}")
+                syncGroups()
+            }
             "link" -> Log.i(TAG, "линковка: ${event.optString("state")} ${event.optString("code")} ${event.optInt("count")}")
             "session" -> if (event.optString("state") == "failed") {
                 Log.w(TAG, "сессия: ${event.optString("error")}")

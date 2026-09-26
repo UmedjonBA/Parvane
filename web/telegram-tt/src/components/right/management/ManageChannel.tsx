@@ -32,9 +32,12 @@ import TextArea from '../../ui/TextArea';
 
 import './Management.scss';
 
-// Parvane: у каналов нет серверных фото, описания, типа, обсуждений (треды вне
-// продукта), заявок, реакций и автоперевода — пункты молча ничего не делали
+// Parvane (spec 003): фото, описание и заявки — на сервере; тип канала,
+// обсуждения (треды вне продукта), реакции и автоперевод — вне контракта
 const IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED = false;
+const IS_CHANNEL_PHOTO_SUPPORTED = true;
+const IS_CHANNEL_DESCRIPTION_SUPPORTED = true;
+const IS_CHANNEL_REQUESTS_SUPPORTED = true;
 
 type OwnProps = {
   chatId: string;
@@ -113,7 +116,24 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
     if (!canInvite) return;
     loadExportedChatInvites({ chatId });
     loadExportedChatInvites({ chatId, isRevoked: true });
-    if (IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED) loadChatJoinRequests({ chatId });
+    if (IS_CHANNEL_REQUESTS_SUPPORTED) loadChatJoinRequests({ chatId });
+  }, [chatId, canInvite]);
+
+  // Parvane (GROUP-1): уведомление об изменении ссылок/заявок — перечитать
+  useEffect(() => {
+    if (!canInvite) return undefined;
+    const handleGroupChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId?: string; change?: string }>).detail;
+      if (detail?.chatId !== chatId) return;
+      if (detail.change === 'invites') {
+        loadExportedChatInvites({ chatId });
+        loadExportedChatInvites({ chatId, isRevoked: true });
+      } else if (detail.change === 'requests') {
+        loadChatJoinRequests({ chatId });
+      }
+    };
+    window.addEventListener('parvane-group-changed', handleGroupChanged);
+    return () => window.removeEventListener('parvane-group-changed', handleGroupChanged);
   }, [chatId, canInvite]);
 
   useEffect(() => {
@@ -230,7 +250,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management">
       <div className="panel-content custom-scroll">
-        {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
+        {IS_CHANNEL_PHOTO_SUPPORTED && (
           <AvatarEditable
             currentAvatarBlobUrl={currentAvatarBlobUrl}
             onChange={handleSetPhoto}
@@ -247,7 +267,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               error={error === CHANNEL_TITLE_EMPTY ? error : undefined}
               disabled={!canChangeInfo}
             />
-            {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
+            {IS_CHANNEL_DESCRIPTION_SUPPORTED && (
               <TextArea
                 id="channel-about"
                 label={lang('DescriptionPlaceholder')}
@@ -290,7 +310,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
+          {IS_CHANNEL_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"
               onClick={handleClickRequests}

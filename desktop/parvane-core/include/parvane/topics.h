@@ -84,5 +84,15 @@ inline constexpr auto GroupJoin = "group.join";
 inline constexpr auto GroupInfo = "group.info";
 inline constexpr auto GroupRename = "group.rename";
 inline constexpr auto GroupDelete = "group.delete";
+// управление группой (spec 003): фото/описание, права, админы, ссылки, заявки
+inline constexpr auto GroupSetInfo = "group.setinfo";
+inline constexpr auto GroupSetPerms = "group.setperms";
+inline constexpr auto GroupSetAdmin = "group.setadmin";
+inline constexpr auto GroupInviteList = "group.invite.list";
+inline constexpr auto GroupInviteRevoke = "group.invite.revoke";
+inline constexpr auto GroupInviteDelete = "group.invite.delete";
+inline constexpr auto GroupInviteCheck = "group.invite.check";
+inline constexpr auto GroupRequestList = "group.request.list";
+inline constexpr auto GroupRequestDecide = "group.request.decide";
 
 } // namespace parvane::topics

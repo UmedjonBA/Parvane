@@ -196,6 +196,23 @@ void MessengerClient::onNotifyNotice(const std::string &self,
                  });
 }
 
+void MessengerClient::onGroupNotice(const std::string &self,
+                                    std::function<void(GroupNotice)> handler) {
+    _t.subscribe(topics::msgInbox(self),
+                 [handler = std::move(handler)](std::string, std::string payload) {
+                     try {
+                         const auto ev = json::parse(payload);
+                         const auto &p = ev.contains("payload") ? ev["payload"] : ev;
+                         if (!p.contains("group") || !p["group"].is_object()) return;
+                         auto n = GroupNotice::fromJson(p["group"]);
+                         if (n.group_id.empty()) return;
+                         handler(std::move(n));
+                     } catch (...) {
+                         // битый кадр — игнор
+                     }
+                 });
+}
+
 void MessengerClient::setNotify(const std::string &from, const std::string &settingsJson,
                                 const std::string &token) {
     const json payload{{"settings", settingsJson}};
