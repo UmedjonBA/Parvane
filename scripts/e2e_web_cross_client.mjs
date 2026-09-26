@@ -438,11 +438,54 @@ try {
   await waitDesktopLog(bobWorkdir, /группа [0-9a-f-]{36} обновлена \(v2, нотис\) about=about-[0-9]+ avatar=[0-9a-f-]{36}/, 30000, desktop, { since: beforeGroup });
   await waitDesktopLog(bobWorkdir, /аватар применён для [0-9a-f-]{36}/, 30000, desktop, { since: beforeGroup });
 
+  // ── Группа desktop → web (spec 004, US6): описание, права и ссылка, заданные
+  // на десктопе штатными функциями экранов (хуки), доходят до web нотисом ────
+  // bob (десктоп) — админ с change_info + invite_users: назначаем из web
+  const promote = await callProviderForChat(aliceSession.page, 'updateChatAdmin', groupTitle, bob.split('@')[0], {
+    chat: '$chat', user: '$user', adminRights: { changeInfo: true, inviteUsers: true },
+  });
+  assert.equal(promote.result, true, `updateChatAdmin failed: ${JSON.stringify(promote)}`);
+  await stopDesktop(desktop);
+  const beforeManage = readDesktopLog(bobWorkdir).length;
+  desktop = spawnDesktop(bobWorkdir, libraryShim, {
+    PARVANE_AUTOLOGIN: `${bob}:${PASSWORD}`,
+    PARVANE_AUTOGROUPINFO: `${groupTitle}:about=from-desktop`,
+    PARVANE_AUTOGROUPPERMS: `${groupTitle}:send_polls=0`,
+    PARVANE_AUTOGROUPINVITE: `${groupTitle}:create;title=from-desktop;max=3`,
+  });
+  await waitDesktopLog(bobWorkdir, /AUTOGROUPINFO .* about → ok/, 60000, desktop, { since: beforeManage });
+  await waitDesktopLog(bobWorkdir, /AUTOGROUPPERMS .* → ok/, 60000, desktop, { since: beforeManage });
+  await waitDesktopLog(bobWorkdir, /AUTOGROUPINVITE .* create → ok [0-9a-f]{32}/, 60000, desktop, { since: beforeManage });
+  const desktopToken = readDesktopLog(bobWorkdir).match(/AUTOGROUPINVITE .* create → ok ([0-9a-f]{32})/)?.[1];
+  assert(desktopToken, 'desktop did not report the created invite token');
+  // web видит описание и права без reload (нотис GROUP-1)
+  await aliceSession.page.waitForFunction(({ title }) => {
+    const global = window.__parvaneGetGlobal();
+    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === title);
+    const full = chat && global.chats.fullInfoById?.[chat.id];
+    return Boolean(chat && full && full.about === 'from-desktop' && chat.defaultBannedRights?.sendPolls === true);
+  }, { title: groupTitle }, { timeout: 30000 });
+  // web видит ссылку, созданную на десктопе, в списке ссылок группы
+  const invites = await callProviderForChat(aliceSession.page, 'fetchExportedChatInvites', groupTitle, undefined, {
+    chat: '$chat', isRevoked: false,
+  });
+  const desktopLink = invites.result?.invites?.find((invite) => invite.link.includes(desktopToken));
+  assert(desktopLink, `web does not list the desktop-created link: ${JSON.stringify(invites).slice(0, 300)}`);
+  assert.equal(desktopLink.title, 'from-desktop');
+  assert.equal(desktopLink.usageLimit, 3);
+  // web → desktop: права, изменённые в web, перерисовывают сведения на десктопе
+  const revert = await callProviderForChat(aliceSession.page, 'updateChatDefaultBannedRights', groupTitle, undefined, {
+    chat: '$chat', bannedRights: { sendPolls: false },
+  });
+  assert.equal(revert.result, true, `updateChatDefaultBannedRights failed: ${JSON.stringify(revert)}`);
+  await waitDesktopLog(bobWorkdir, /группа [0-9a-f-]{36} обновлена \(v[0-9]+, нотис\) .*"send_polls":true/, 30000, desktop, { since: beforeManage });
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
 
   console.log('OK: web<->desktop text both ways; encrypted photo, voice, video and audio web->desktop; '
     + 'image (as document), video with seek and frame thumbnail, pdf and pack sticker desktop->web, all after web reload; '
-    + 'group description and photo web->desktop by notice (GROUP-1)');
+    + 'group description and photo web->desktop by notice (GROUP-1); '
+    + 'description, permissions and invite link desktop->web and permissions web->desktop (spec 004)');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   const page = aliceContext.pages()[0];

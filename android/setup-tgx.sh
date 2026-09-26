@@ -120,6 +120,12 @@ echo "   sessions: qr/ttl rows left: $(grep -c 'R.id.btn_qrLogin,\|R.id.btn_sess
 echo "   settings parvane rows: $(grep -c 'btn_parvaneKeysExport' "$SC") (ожидается 2)"
 echo "   attach InlineBot: $(grep -c 'R.string.InlineBot' "$ML"), profile newSecretChat/privacy: $(grep -c 'btn_newSecretChat\|more_btn_privacy' "$PC")"
 
+# spec 004: у basic-групп шва управление идёт через шов; тумблеры, требующие
+# апгрейда в супергруппу (одобрение вступления, защита контента, история для
+# новых, реакции), скрываем — иначе X предлагает «улучшить группу» (MTProto)
+perl -0pi -e 's/tdlib\.canToggleJoinByRequest\(chat\)/false/g; s/tdlib\.canToggleAllHistory\(chat\)/false/g; s/tdlib\.canToggleContentProtection\(chat\.id\) \|\| \(myStatus != null && TD\.isAdmin\(myStatus\)\)/false/g; s/if \(tdlib\.canChangeInfo\(chat\)\) \{\n(\s*items\.add\(new ListItem\(added \? ListItem\.TYPE_SEPARATOR_FULL : ListItem\.TYPE_SHADOW_TOP\)\);\n\s*items\.add\(new ListItem\(ListItem\.TYPE_VALUED_SETTING, R\.id\.btn_enabledReactions)/if (false) {\n$1/' "$PC"
+echo "   profile upgrade toggles left: $(grep -c 'tdlib.canToggleJoinByRequest(chat)\|tdlib.canToggleAllHistory(chat)' "$PC"), reactions row: $(grep -c 'if (tdlib.canChangeInfo(chat)) {' "$PC")"
+
 echo "== CMake: без libtdjni (наш шов — не JNI TDLib) =="
 CM="$TGX/app/jni/CMakeLists.txt"
 if grep -q "^  tdjni$" "$CM"; then

@@ -212,7 +212,10 @@ class Client private constructor(
 
     private fun postUpdate(update: TdApi.Update) {
         val h = updateHandler ?: run { Log.w(TAG, "апдейт ${update.javaClass.simpleName} до подписки X — потерян"); return }
-        if (update is TdApi.UpdateNewChat || update is TdApi.UpdateChatLastMessage || update is TdApi.UpdateChatPosition)
+        if (update is TdApi.UpdateNewChat || update is TdApi.UpdateChatLastMessage || update is TdApi.UpdateChatPosition
+            // группы (spec 003/004): маркеры для tgx_group_manage_flow.sh
+            || update is TdApi.UpdateChatPermissions || update is TdApi.UpdateBasicGroupFullInfo
+            || update is TdApi.UpdateChatPendingJoinRequests || update is TdApi.UpdateChatPhoto)
             Log.d(TAG, "→ X ${update.javaClass.simpleName}")
         handlerThread.execute {
             try {
@@ -346,15 +349,115 @@ class Client private constructor(
         is TdApi.SetChatTitle -> if (store.groupByChat(f.chatId) != null) (groupAction(f.chatId, "rename", f.title ?: "")?.let { TdApi.Ok() } ?: TdApi.Error(500, "не переименована")) else TdApi.Ok()
         is TdApi.LeaveChat -> if (store.groupByChat(f.chatId) != null) (groupAction(f.chatId, "leave", "")?.let { TdApi.Ok() } ?: TdApi.Error(500, "не вышли")) else TdApi.Ok()
         is TdApi.SetChatMemberStatus -> { // роли/бан участника группы (owner/admin)
+            val g = store.groupByChat(f.chatId) ?: return TdApi.Error(404, "group not found")
             val addr = (f.memberId as? TdApi.MessageSenderUser)?.userId?.let { store.addressOf(it) } ?: return TdApi.Error(404, "member not found")
-            val act = when (f.status) {
-                is TdApi.ChatMemberStatusAdministrator -> "admin"
-                is TdApi.ChatMemberStatusMember -> "member"
-                is TdApi.ChatMemberStatusBanned -> "ban"
-                is TdApi.ChatMemberStatusLeft -> "remove"
-                else -> return TdApi.Error(400, "статус не поддерживается")
+            when (val st = f.status) {
+                // spec 004: гранулярные права → group.setadmin (экран «Edit admin» X)
+                is TdApi.ChatMemberStatusAdministrator -> groupResult(ParvaneCore.groupSetAdmin(g.gid, addr, ParvaneStore.adminRightsToWire(st.rights).toString()))
+                is TdApi.ChatMemberStatusMember ->
+                    if (store.roleOf(g, addr) == "admin") groupResult(ParvaneCore.groupSetAdmin(g.gid, addr, null)) else TdApi.Ok()
+                is TdApi.ChatMemberStatusBanned -> groupAction(f.chatId, "ban", addr)?.let { TdApi.Ok() } ?: TdApi.Error(500, "не удалось изменить участника")
+                is TdApi.ChatMemberStatusLeft -> groupAction(f.chatId, "remove", addr)?.let { TdApi.Ok() } ?: TdApi.Error(500, "не удалось изменить участника")
+                else -> TdApi.Error(400, uiText("restrict_unsupported"))
             }
-            groupAction(f.chatId, act, addr)?.let { TdApi.Ok() } ?: TdApi.Error(500, "не удалось изменить участника")
+        }
+        // ── spec 004: экраны управления группой Telegram X поверх шва ────────────
+        is TdApi.SetChatDescription -> withGroup(f.chatId) { g -> groupResult(ParvaneCore.groupSetInfo(g.gid, f.description ?: "", false)) }
+        is TdApi.SetChatPhoto -> withGroup(f.chatId) { g ->
+            if (f.photo == null) groupResult(ParvaneCore.groupSetInfo(g.gid, null, true)) else {
+                val path = ((f.photo as? TdApi.InputChatPhotoStatic)?.photo)?.let { localPath(it) } ?: return@withGroup TdApi.Error(400, "нет файла")
+                val r = ParvaneCore.groupSetPhoto(g.gid, path)
+                if (r.optBoolean("ok")) store.setGroupPhoto(g.gid, r.optString("file_id"), r.optString("path"))?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
+                groupResult(r)
+            }
+        }
+        is TdApi.SetChatPermissions -> withGroup(f.chatId) { g -> groupResult(ParvaneCore.groupSetPerms(g.gid, ParvaneStore.permissionsToWire(f.permissions).toString())) }
+        is TdApi.GetChatAdministrators -> withGroup(f.chatId) { g ->
+            val admins = ArrayList<TdApi.ChatAdministrator>()
+            admins += TdApi.ChatAdministrator(store.idOf(g.createdBy), "", true, false)
+            g.roles.filterValues { it == "admin" }.keys.forEach { admins += TdApi.ChatAdministrator(store.idOf(it), "", false, true) }
+            TdApi.ChatAdministrators(admins.toTypedArray())
+        }
+        is TdApi.GetChatInviteLinks -> withGroup(f.chatId) { g ->
+            val links = inviteLinks(g, f.isRevoked) ?: return@withGroup TdApi.Error(403, uiText("forbidden"))
+            val mine = if (f.creatorUserId != 0L) links.filter { it.creatorUserId == f.creatorUserId } else links
+            TdApi.ChatInviteLinks(mine.size, mine.toTypedArray())
+        }
+        is TdApi.GetChatInviteLinkCounts -> withGroup(f.chatId) { g ->
+            val active = inviteLinks(g, false) ?: return@withGroup TdApi.Error(403, uiText("forbidden"))
+            val revoked = inviteLinks(g, true) ?: emptyList()
+            val creators = (active + revoked).map { it.creatorUserId }.distinct()
+            TdApi.ChatInviteLinkCounts(creators.map { c -> TdApi.ChatInviteLinkCount(c, active.count { it.creatorUserId == c }, revoked.count { it.creatorUserId == c }) }.toTypedArray())
+        }
+        is TdApi.GetChatInviteLink -> withGroup(f.chatId) { g ->
+            val token = ParvaneStore.inviteTokenOf(f.inviteLink)
+            ((inviteLinks(g, false) ?: emptyList()) + (inviteLinks(g, true) ?: emptyList())).firstOrNull { ParvaneStore.inviteTokenOf(it.inviteLink) == token }
+                ?: TdApi.Error(404, uiText("invalid"))
+        }
+        is TdApi.CreateChatInviteLink -> withGroup(f.chatId) { g ->
+            val r = ParvaneCore.groupInviteCreate(g.gid, f.name ?: "", f.expirationDate.toLong(), f.memberLimit, f.createsJoinRequest)
+            val link = r.optJSONObject("link")
+            if (!r.optBoolean("ok") || link == null) groupError(r) else store.inviteLinkOf(link).also { refreshPrimaryLink(g) }
+        }
+        is TdApi.EditChatInviteLink -> TdApi.Error(400, uiText("invite_edit_unsupported"))
+        is TdApi.RevokeChatInviteLink -> withGroup(f.chatId) { g ->
+            val token = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return@withGroup TdApi.Error(400, uiText("invalid"))
+            val r = ParvaneCore.groupInviteRevoke(g.gid, token)
+            if (!r.optBoolean("ok")) groupError(r) else {
+                refreshPrimaryLink(g)
+                val revoked = (inviteLinks(g, true) ?: emptyList()).filter { ParvaneStore.inviteTokenOf(it.inviteLink) == token }
+                TdApi.ChatInviteLinks(revoked.size, revoked.toTypedArray())
+            }
+        }
+        is TdApi.DeleteRevokedChatInviteLink -> withGroup(f.chatId) { g ->
+            val token = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return@withGroup TdApi.Error(400, uiText("invalid"))
+            groupResult(ParvaneCore.groupInviteDelete(g.gid, token))
+        }
+        is TdApi.DeleteAllRevokedChatInviteLinks -> withGroup(f.chatId) { g ->
+            val revoked = inviteLinks(g, true) ?: return@withGroup TdApi.Error(403, uiText("forbidden"))
+            revoked.filter { f.creatorUserId == 0L || it.creatorUserId == f.creatorUserId }
+                .forEach { l -> ParvaneStore.inviteTokenOf(l.inviteLink)?.let { ParvaneCore.groupInviteDelete(g.gid, it) } }
+            TdApi.Ok()
+        }
+        is TdApi.ReplacePrimaryChatInviteLink -> withGroup(f.chatId) { g ->
+            // основная есть → отозвать её; создать новую без параметров (сервер сделает её основной)
+            (inviteLinks(g, false) ?: return@withGroup TdApi.Error(403, uiText("forbidden"))).firstOrNull { it.isPrimary }
+                ?.let { p -> ParvaneStore.inviteTokenOf(p.inviteLink)?.let { ParvaneCore.groupInviteRevoke(g.gid, it) } }
+            val r = ParvaneCore.groupInviteCreate(g.gid, "", 0L, 0, false)
+            val link = r.optJSONObject("link")
+            if (!r.optBoolean("ok") || link == null) groupError(r) else store.inviteLinkOf(link).also { refreshPrimaryLink(g) }
+        }
+        is TdApi.GetChatInviteLinkMembers -> TdApi.ChatInviteLinkMembers(0, arrayOf()) // сервер хранит только счётчик
+        is TdApi.GetInternalLinkType -> ParvaneStore.inviteTokenOf(f.link)?.let { TdApi.InternalLinkTypeChatInvite(ParvaneStore.buildInviteLink(it)) }
+            ?: TdApi.Error(404, "Not Found")
+        is TdApi.CheckChatInviteLink -> {
+            val token = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return TdApi.Error(400, uiText("invalid"))
+            val r = ParvaneCore.groupInviteCheck(token)
+            if (r.optBoolean("ok")) store.inviteLinkInfoOf(r) else groupError(r)
+        }
+        is TdApi.JoinChatByInviteLink -> {
+            val token = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return TdApi.Error(400, uiText("invalid"))
+            val r = ParvaneCore.groupJoin(token)
+            if (r.optBoolean("ok") && !r.optBoolean("pending")) syncGroups()
+            store.joinResultOf(r).let { if (it is TdApi.Error) TdApi.Error(400, uiText(it.message)) else it }
+        }
+        is TdApi.GetChatJoinRequests -> withGroup(f.chatId) { g ->
+            val r = ParvaneCore.groupRequests(g.gid)
+            if (!r.optBoolean("ok")) groupError(r) else {
+                val all = store.joinRequestsOf(r.optJSONArray("requests"))
+                val token = ParvaneStore.inviteTokenOf(f.inviteLink)
+                if (token == null) all else {
+                    val arr = r.optJSONArray("requests")
+                    val keep = HashSet<Long>()
+                    if (arr != null) for (i in 0 until arr.length()) { val q = arr.getJSONObject(i); if (q.optString("invite") == token) keep += store.idOf(q.optString("member")) }
+                    val filtered = all.requests.filter { it.userId in keep }
+                    TdApi.ChatJoinRequests(filtered.size, filtered.toTypedArray())
+                }
+            }
+        }
+        is TdApi.ProcessChatJoinRequest -> withGroup(f.chatId) { g ->
+            val member = store.addressOf(f.userId) ?: return@withGroup TdApi.Error(404, "user not found")
+            groupResult(ParvaneCore.groupRequestDecide(g.gid, member, f.approve))
         }
         is TdApi.GetChat -> store.chatById(f.chatId)?.copyForUi() ?: TdApi.Error(404, "chat not found")
         is TdApi.LoadChats -> {
@@ -508,8 +611,10 @@ class Client private constructor(
         }
         else -> {
             // Неизвестная функция: если TDLib отвечала бы Ok (сеттеры/уведомления
-            // о состоянии) — Ok, UI не спотыкается; запросы данных — ошибка 501
-            if (resultTypeOf(f) == TdApi.Ok::class.java) {
+            // о состоянии) — Ok, UI не спотыкается; запросы данных — ошибка 501.
+            // spec 004: управляющие функции группы НЕ имеют права молча отвечать Ok —
+            // иначе X показывает успех, а данные теряются (сторож — ClientHonestUiTest)
+            if (resultTypeOf(f) == TdApi.Ok::class.java && f.javaClass.simpleName !in NO_OK_STUB) {
                 Log.d(TAG, "ok-заглушка: ${f.javaClass.simpleName}")
                 TdApi.Ok()
             } else {
@@ -562,6 +667,7 @@ class Client private constructor(
             val ref = store.group(gid)
             val previousVersion = ref?.version ?: -1L
             val previousAvatar = ref?.avatarFileId ?: ""
+            val previousPending = ref?.pendingRequests ?: 0
             // GROUP-1: сведения с ревизией ниже известной пропускаются
             val ensured = store.ensureGroup(gid, g.optString("name"), members, g.optString("created_by"), roles, g)
             if (ensured == null) {
@@ -577,6 +683,8 @@ class Client private constructor(
             // spec 003: права по умолчанию, описание, фото — открытые экраны X обновляются апдейтами
             postUpdate(TdApi.UpdateChatPermissions(chat.id, chat.permissions))
             store.group(gid)?.let { postUpdate(TdApi.UpdateBasicGroupFullInfo(it.basicGroupId, store.basicGroupFullInfo(it))) }
+            // spec 004: счётчик заявок — строка «Join Requests» в профиле X
+            if ((store.group(gid)?.pendingRequests ?: 0) != previousPending) postUpdate(TdApi.UpdateChatPendingJoinRequests(chat.id, chat.pendingJoinRequests))
             val avatar = if (g.isNull("avatar")) "" else g.optString("avatar", "")
             if (avatar.isEmpty()) {
                 if (previousAvatar.isNotEmpty()) store.clearGroupPhoto(gid)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
@@ -603,6 +711,58 @@ class Client private constructor(
         if (err.isNotEmpty()) { Log.w(TAG, "группа $action: $err"); return null }
         syncGroups()
         return ""
+    }
+
+    // ── spec 004: хелперы экранов управления ────────────────────────────────
+    /** Функции, которым запрещена молчаливая Ok-заглушка (управление группой). */
+    private val NO_OK_STUB = setOf("SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
+        "DeleteRevokedChatInviteLink", "DeleteAllRevokedChatInviteLinks", "EditChatInviteLink", "SetChatMemberStatus")
+
+    private inline fun withGroup(chatId: Long, block: (ParvaneStore.GroupRef) -> TdApi.Object): TdApi.Object =
+        store.groupByChat(chatId)?.let(block) ?: TdApi.Error(404, "group not found")
+
+    /** Ответ сервера {ok, error_code, error} → Ok (+ синк групп) либо Error(400, текст по коду). */
+    private fun groupResult(r: JSONObject): TdApi.Object =
+        if (r.optBoolean("ok")) { syncGroups(); TdApi.Ok() } else groupError(r)
+    private fun groupError(r: JSONObject): TdApi.Error {
+        val code = r.optString("error_code").ifEmpty { "failed" }
+        Log.w(TAG, "группа: отказ $code ${r.optString("error")}")
+        return TdApi.Error(if (code == "forbidden") 403 else 400, uiText(code, r.optString("error")))
+    }
+    /** Тексты для X по коду сервера — EN и RU (принцип IX), выбор по локали. */
+    private fun uiText(code: String, fallback: String = ""): String {
+        val ru = java.util.Locale.getDefault().language == "ru"
+        return when (code) {
+            "forbidden" -> if (ru) "Нет прав" else "No permission"
+            "bad_request" -> if (ru) "Неверный запрос" else "Bad request"
+            "limit" -> if (ru) "Слишком много активных ссылок" else "Too many active links"
+            "invalid" -> if (ru) "Пригласительная ссылка недействительна" else "This invite link is invalid"
+            "revoked" -> if (ru) "Пригласительная ссылка отозвана" else "This invite link was revoked"
+            "expired" -> if (ru) "Срок действия ссылки истёк" else "This invite link has expired"
+            "exhausted" -> if (ru) "Лимит вступлений по ссылке исчерпан" else "This invite link has reached its usage limit"
+            "banned" -> if (ru) "Вы заблокированы в этой группе" else "You are banned from this group"
+            "declined" -> if (ru) "Ваша заявка отклонена. Попробуйте позже" else "Your join request was declined. Try again later"
+            "invite_edit_unsupported" -> if (ru) "Правка ссылки не поддерживается — отзовите её и создайте новую" else "Editing a link is not supported — revoke it and create a new one"
+            "restrict_unsupported" -> if (ru) "Частичные ограничения не поддерживаются — участника можно только удалить" else "Partial restrictions are not supported — you can only remove a member"
+            else -> fallback.ifEmpty { code }
+        }
+    }
+    /** Список ссылок (активные/отозванные) → ChatInviteLink[]; null — отказ сервера. */
+    private fun inviteLinks(g: ParvaneStore.GroupRef, revoked: Boolean): List<TdApi.ChatInviteLink>? {
+        val r = ParvaneCore.groupInvites(g.gid, revoked)
+        if (!r.optBoolean("ok")) { Log.w(TAG, "ссылки ${g.gid}: отказ ${r.optString("error_code")}"); return null }
+        val arr = r.optJSONArray("links") ?: return emptyList()
+        val out = ArrayList<TdApi.ChatInviteLink>()
+        for (i in 0 until arr.length()) out += store.inviteLinkOf(arr.getJSONObject(i))
+        if (!revoked) {
+            g.primaryInviteLink = out.firstOrNull { it.isPrimary && !it.isRevoked }
+        }
+        return out
+    }
+    /** Основная ссылка в BasicGroupFullInfo (getPrimaryChatInviteLink в X читает её оттуда). */
+    private fun refreshPrimaryLink(g: ParvaneStore.GroupRef) {
+        inviteLinks(g, false) ?: return
+        postUpdate(TdApi.UpdateBasicGroupFullInfo(g.basicGroupId, store.basicGroupFullInfo(g)))
     }
 
     private fun scopeKey(scope: TdApi.NotificationSettingsScope?): String = when (scope) {
@@ -962,6 +1122,16 @@ class Client private constructor(
                 }
                 val content = event.optJSONObject("content")
                     ?: JSONObject().put("kind", "text").put("text", event.optString("text"))
+                // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
+                // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
+                if (event.optBoolean("group") && !out) {
+                    val g = store.group(to)
+                    if (store.roleOf(g, from) == "member"
+                        && !ParvaneStore.isContentAllowedForMember(g?.permissions, content.optString("kind", "text"), ParvaneStore.contentHasLink(content))) {
+                        Log.i(TAG, "групповое ${event.optString("id")} (${content.optString("kind")}) от $from скрыто правами группы")
+                        return
+                    }
+                }
                 val msg = store.putMessage(
                     event.optString("id"), from, to, event.optLong("ts"), content, out,
                     read = event.optBoolean("read"), replyUuid = if (event.isNull("reply_to")) null else event.optString("reply_to").ifEmpty { null },
@@ -1006,6 +1176,8 @@ class Client private constructor(
                 val change = event.optString("change")
                 Log.i(TAG, "группа ${event.optString("group_id")}: $change v${event.optLong("version")}")
                 syncGroups()
+                // spec 004: ссылки изменились — обновить основную в BasicGroupFullInfo (если уже читали)
+                if (change == "invites") store.group(event.optString("group_id"))?.takeIf { it.primaryInviteLink != null }?.let { refreshPrimaryLink(it) }
             }
             "link" -> Log.i(TAG, "линковка: ${event.optString("state")} ${event.optString("code")} ${event.optInt("count")}")
             "session" -> if (event.optString("state") == "failed") {

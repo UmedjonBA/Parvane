@@ -178,6 +178,21 @@ void SaveDefaultRestrictions(
 		not_null<PeerData*> peer,
 		ChatRestrictions rights,
 		Fn<void()> done) {
+	// Parvane: права по умолчанию группы шины → group.setperms (spec 004);
+	// локально применяем только после ok, при отказе — тост, экран остаётся.
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		Parvane::SetGroupPerms(gid, rights, [=](bool ok, const QString &error) {
+			if (!ok) {
+				Ui::Toast::Show(error);
+				return;
+			}
+			if (const auto chat = peer->asChat()) {
+				chat->setDefaultRestrictions(rights);
+			}
+			done();
+		});
+		return;
+	}
 	const auto api = &peer->session().api();
 	const auto key = Api::RequestKey("default_restrictions", peer->id);
 
@@ -2576,6 +2591,21 @@ void Controller::saveDescription() {
 		}).fail([=] {
 			continueSave();
 		}).send();
+		return;
+	}
+	// Parvane: описание группы/канала шины → group.setinfo{about}; при отказе
+	// сервера (нет права / >255) поле подсвечивается, локальное описание
+	// не меняется. Ниже — штатный MTProto-путь (заглушён).
+	if (const auto gid = Parvane::GroupIdForChat(_peer); !gid.isEmpty()) {
+		Parvane::SetGroupAbout(gid, *_savingData.description, [=](bool ok, const QString &error) {
+			if (ok) {
+				successCallback();
+				return;
+			}
+			_controls.description->showError();
+			_navigation->showToast(error);
+			cancelSave();
+		});
 		return;
 	}
 	_api.request(MTPmessages_EditChatAbout(

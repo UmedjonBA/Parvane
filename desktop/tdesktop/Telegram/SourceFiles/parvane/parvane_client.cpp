@@ -83,6 +83,9 @@
 #include "core/file_location.h"       // Core::FileLocation
 #include "core/application.h"        // Core::App().settings().getSoundPath
 #include "window/window_controller.h" // Parvane: тост rate_limited
+#include "window/window_session_controller.h" // Parvane: открыть чат группы (spec 004)
+#include "api/api_chat_invite.h" // Parvane: CheckChatInvite по ссылке группы (spec 004)
+#include "api/api_invite_links.h" // Parvane: перечитать ссылки по нотису (spec 004)
 #include "lang/lang_instance.h"    // Parvane: русский по умолчанию
 #include "core/core_settings.h"
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
@@ -246,6 +249,10 @@ QHash<qint64, QString> g_mediaContentByMsgId; // msgId → content JSON (для 
 // spec 003 / GROUP-1: ревизия сведений группы — нотис или список, догнавший
 // более свежие сведения, не откатывает их. Только main-поток.
 QHash<QString, quint64> g_groupVersions; // gid → version
+// spec 004: полные сведения группы (роли и права участников, права по
+// умолчанию, заявки) — для нативных экранов управления и приёмного фильтра
+// GROUP-2. Заполняется только в ApplyGroupInfo. Только main-поток.
+QHash<QString, parvane::GroupInfo> g_groupInfo;
 bool ApplyGroupInfo(not_null<Main::Session*> session, const parvane::GroupInfo &gi, const QString &source); // fwd
 void DropGroupLocally(not_null<Main::Session*> session, const QString &gid, const QString &why); // fwd
 // ── обмен стикер-паками ──────────────────────────────────────────────────────
@@ -2172,6 +2179,13 @@ bool StartSession() {
 				}
 				LOG(("Parvane: нотис группы %1 (%2, v%3) → перечитываем список")
 					.arg(gid, QString::fromStdString(n.change)).arg(n.version));
+				// spec 004: открытый экран «Invite Links» перечитывает список по
+				// нотису invites (Api::InviteLinks::requestMyLinks → врезка → group.invite.list)
+				if (n.change == "invites") {
+					if (const auto chat = session->data().chatLoaded(ChatId(BareId(IdForAddress(gid))))) {
+						session->api().inviteLinks().requestMyLinks(chat);
+					}
+				}
 				RefreshGroups();
 			});
 		});
@@ -4208,6 +4222,25 @@ ChatData *ensureGroupChat(
 	return r;
 }
 
+// Обратно: запреты tdesktop (экран «Permissions») → разрешения провода.
+// «Писать сообщения» читаем ТОЛЬКО по SendOther (как web по sendPlain): общий
+// запрет медиа не должен гасить текст.
+[[nodiscard]] parvane::DefaultPermissions permsFromRestrictions(ChatRestrictions r) {
+	using R = ChatRestriction;
+	auto p = parvane::DefaultPermissions();
+	const auto media = R::SendPhotos | R::SendVideos | R::SendVideoMessages
+		| R::SendMusic | R::SendVoiceMessages | R::SendFiles;
+	p.send_messages = !(r & R::SendOther);
+	p.send_media = !(r & media);
+	p.send_stickers_gifs = !(r & (R::SendStickers | R::SendGifs));
+	p.send_polls = !(r & R::SendPolls);
+	p.embed_links = !(r & R::EmbedLinks);
+	p.invite_users = !(r & R::AddParticipants);
+	p.pin_messages = !(r & R::PinMessages);
+	p.change_info = !(r & R::ChangeInfo);
+	return p;
+}
+
 [[nodiscard]] ChatAdminRights adminRightsFrom(const parvane::AdminRights &a) {
 	using A = ChatAdminRight;
 	auto r = ChatAdminRights();
@@ -4239,6 +4272,7 @@ bool ApplyGroupInfo(
 		return false;
 	}
 	g_groupVersions.insert(gid, gi.version);
+	g_groupInfo.insert(gid, gi);
 
 	QStringList mem;
 	std::string selfRole;
@@ -4268,6 +4302,33 @@ bool ApplyGroupInfo(
 	if (!chat) {
 		return true;
 	}
+	// spec 004: нативные списки «Участники»/«Администраторы» читают
+	// chat->participants/admins/creator; без них tdesktop уходит в
+	// updateFullForced → MTProto (FAIL-1) и крутит спиннер вечно. Ставим
+	// напрямую, а не через Data::ApplyChatUpdate(MTPChatParticipants): тот
+	// перетирает гранулярные права self полным набором.
+	{
+		auto participants = base::flat_set<not_null<UserData*>>();
+		auto admins = base::flat_set<not_null<UserData*>>();
+		auto creator = UserId(0);
+		for (const auto &m : gi.members) {
+			if (m.role == "banned") {
+				continue;
+			}
+			const auto address = QString::fromStdString(m.address);
+			const auto user = ensurePeerUser(session, IdForAddress(address), address);
+			participants.emplace(user);
+			if (m.role == "admin") {
+				admins.emplace(user);
+			} else if (m.role == "owner") {
+				creator = peerToUser(user->id);
+			}
+		}
+		chat->participants = std::move(participants);
+		chat->admins = std::move(admins);
+		chat->creator = creator;
+		chat->count = mem.size();
+	}
 	// Роль и права своего участника: владелец — Creator, админ — гранулярные
 	// права; по ним tdesktop сам решает, что показывать в меню и композере.
 	if (selfRole == "owner") {
@@ -4294,19 +4355,264 @@ bool ApplyGroupInfo(
 		g_avatarImages.remove(gid);
 		chat->setPhoto(MTP_chatPhotoEmpty());
 	}
+	// Счётчик заявок — ПОСЛЕ setAdminRights: тот сбрасывает его в 0, если у
+	// self нет права на ссылки (data_chat.cpp). Владельцу/админам сервер
+	// отдаёт число, остальным -1 → 0.
+	chat->setPendingRequestsCount(
+		gi.pending_requests > 0 ? gi.pending_requests : 0,
+		std::vector<UserId>());
+	chat->fullUpdated();
 	session->changes().peerUpdated(chat, Data::PeerUpdate::Flag::Rights
 		| Data::PeerUpdate::Flag::About
-		| Data::PeerUpdate::Flag::Members);
-	LOG(("Parvane: группа %1 обновлена (v%2, %3) about=%4 avatar=%5 perms=%6 role=%7")
+		| Data::PeerUpdate::Flag::Members
+		| Data::PeerUpdate::Flag::Admins
+		| Data::PeerUpdate::Flag::PendingRequests);
+	auto adminsLog = QStringList();
+	for (const auto &m : gi.members) {
+		if (m.role != "admin") {
+			continue;
+		}
+		const auto r = m.effectiveRights();
+		adminsLog.push_back(QString::fromStdString(m.address) + ':'
+			+ (r.change_info ? 'c' : '-') + (r.delete_messages ? 'd' : '-')
+			+ (r.ban_users ? 'b' : '-') + (r.invite_users ? 'i' : '-')
+			+ (r.pin_messages ? 'p' : '-') + (r.add_admins ? 'a' : '-'));
+	}
+	LOG(("Parvane: группа %1 обновлена (v%2, %3) about=%4 avatar=%5 perms=%6 role=%7 pending=%8 admins=%9")
 		.arg(gid)
 		.arg(gi.version)
 		.arg(source)
 		.arg(QString::fromStdString(gi.about))
 		.arg(avatar.isEmpty() ? u"-"_q : avatar)
 		.arg(QString::fromStdString(gi.default_permissions.toJson().dump()))
-		.arg(QString::fromStdString(selfRole)));
+		.arg(QString::fromStdString(selfRole))
+		.arg(gi.pending_requests > 0 ? gi.pending_requests : 0)
+		.arg(adminsLog.isEmpty() ? u"-"_q : adminsLog.join(';')));
 	return true;
 }
+
+} // namespace
+
+// ── spec 004: доступ к кэшу сведений группы (main-поток), публичные функции
+// экранов управления (объявлены в parvane_client.h) ───────────────────────
+std::optional<parvane::GroupInfo> GroupInfoFor(const QString &gid) {
+	const auto it = g_groupInfo.constFind(gid);
+	return (it == g_groupInfo.constEnd())
+		? std::nullopt
+		: std::optional<parvane::GroupInfo>(it.value());
+}
+
+QString GroupRoleOf(const QString &gid, const QString &address) {
+	const auto it = g_groupInfo.constFind(gid);
+	if (it == g_groupInfo.constEnd()) {
+		return QString();
+	}
+	const auto a = address.toStdString();
+	for (const auto &m : it.value().members) {
+		if (m.address == a) {
+			return QString::fromStdString(m.role);
+		}
+	}
+	return QString();
+}
+
+parvane::AdminRights GroupAdminRightsOf(const QString &gid, const QString &address) {
+	const auto it = g_groupInfo.constFind(gid);
+	if (it != g_groupInfo.constEnd()) {
+		const auto a = address.toStdString();
+		for (const auto &m : it.value().members) {
+			if (m.address == a) {
+				return (m.role == "admin" || m.role == "owner")
+					? m.effectiveRights()
+					: parvane::AdminRights::none();
+			}
+		}
+	}
+	return parvane::AdminRights::none();
+}
+
+ChatAdminRights GroupMemberAdminRights(const QString &gid, const QString &address) {
+	return adminRightsFrom(GroupAdminRightsOf(gid, address));
+}
+
+int GroupPendingRequests(const QString &gid) {
+	const auto it = g_groupInfo.constFind(gid);
+	return (it == g_groupInfo.constEnd() || it.value().pending_requests < 0)
+		? 0
+		: it.value().pending_requests;
+}
+
+// ── spec 004: общий воркер операций управления группой ───────────────────────
+// Берёт клиент и токен под мьютексом, зовёт op на воркере, логирует маркер
+// «Parvane: <tag> → ok (vN)» либо «… → отказ <код>», на main — RefreshGroups
+// при успехе и done(ok, error). error = error_code сервера, иначе текст.
+struct GroupOpResult {
+	bool ok = false;
+	quint64 version = 0;
+	QString error;
+};
+[[nodiscard]] GroupOpResult normalizeOp(const parvane::GroupVersionResponse &r) {
+	return { r.ok, r.version, QString::fromStdString(
+		!r.error_code.empty() ? r.error_code : r.error) };
+}
+[[nodiscard]] GroupOpResult normalizeOp(const parvane::GroupActionResponse &r) {
+	return { r.ok, 0, QString::fromStdString(
+		!r.error_code.empty() ? r.error_code : r.error) };
+}
+template <typename Op>
+void runGroupOp(const QString &tag, Op op, GroupOpDone done) {
+	const auto token = Token().toStdString();
+	crl::async([=] {
+		parvane::GroupClient *g = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g = g_groupClient.get();
+		}
+		auto result = GroupOpResult();
+		if (!g || token.empty()) {
+			result.error = u"нет сессии"_q;
+		} else {
+			try {
+				result = normalizeOp(op(*g, token));
+			} catch (const std::exception &e) {
+				result.error = QString::fromUtf8(e.what());
+			}
+		}
+		if (result.ok) {
+			LOG(("Parvane: %1 → ok (v%2)").arg(tag).arg(result.version));
+		} else {
+			LOG(("Parvane: %1 → отказ %2").arg(tag, result.error));
+		}
+		crl::on_main([=] {
+			if (result.ok) {
+				RefreshGroups();
+			}
+			if (done) {
+				done(result.ok, result.error);
+			}
+		});
+	});
+}
+
+// gid по имени группы (для e2e-хуков PARVANE_AUTOGROUP*). "" — не найдена.
+[[nodiscard]] QString findGroupIdByName(const QString &name) {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	for (auto it = g_knownGroups.constBegin(); it != g_knownGroups.constEnd(); ++it) {
+		if (it.value() == name) {
+			return it.key();
+		}
+	}
+	return QString();
+}
+
+// ── US1: описание и фото группы ──────────────────────────────────────────────
+void SetGroupAbout(const QString &groupId, const QString &about, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	const auto text = about.toStdString();
+	runGroupOp(u"SETINFO about '%1'"_q.arg(groupId), [gid, text](parvane::GroupClient &g, const std::string &token) {
+		return g.setInfo(token, gid, text, std::nullopt, false);
+	}, std::move(done));
+}
+
+void ClearGroupPhoto(const QString &groupId, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	runGroupOp(u"SETINFO clear_avatar '%1'"_q.arg(groupId), [gid](parvane::GroupClient &g, const std::string &token) {
+		return g.setInfo(token, gid, std::nullopt, std::nullopt, true);
+	}, std::move(done));
+}
+
+// ── US3: гранулярные права админа ────────────────────────────────────────────
+// Нативные права tdesktop → 6 флагов провода (остальные нативные флаги
+// у наших групп не имеют смысла и отбрасываются).
+[[nodiscard]] parvane::AdminRights adminRightsToWire(ChatAdminRights r) {
+	using A = ChatAdminRight;
+	auto a = parvane::AdminRights::none();
+	a.change_info = (r & A::ChangeInfo) != 0;
+	a.delete_messages = (r & A::DeleteMessages) != 0;
+	a.ban_users = (r & A::BanUsers) != 0;
+	a.invite_users = (r & A::InviteByLinkOrAdd) != 0;
+	a.pin_messages = (r & A::PinMessages) != 0;
+	a.add_admins = (r & A::AddAdmins) != 0;
+	return a;
+}
+
+QString AddressForUser(not_null<UserData*> user) {
+	return AddressForId(std::uint64_t(peerToUser(user->id).bare));
+}
+
+void SetGroupAdmin(const QString &groupId, const QString &member, ChatAdminRights rights, bool demote, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	const auto mem = member.toStdString();
+	const auto wire = adminRightsToWire(rights);
+	const auto isPromotion = !demote && (wire.change_info || wire.delete_messages || wire.ban_users
+		|| wire.invite_users || wire.pin_messages || wire.add_admins);
+	const auto opt = isPromotion ? std::optional<parvane::AdminRights>(wire) : std::nullopt;
+	runGroupOp(u"SETADMIN '%1' %2 %3"_q.arg(groupId, member, isPromotion ? u"rights"_q : u"demote"_q),
+		[gid, mem, opt](parvane::GroupClient &g, const std::string &token) {
+			return g.setAdmin(token, gid, mem, opt);
+		}, std::move(done));
+}
+
+// ── US2: права по умолчанию ──────────────────────────────────────────────────
+void SetGroupPerms(const QString &groupId, ChatRestrictions rights, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	const auto perms = permsFromRestrictions(rights);
+	runGroupOp(u"SETPERMS '%1'"_q.arg(groupId), [gid, perms](parvane::GroupClient &g, const std::string &token) {
+		return g.setPerms(token, gid, perms);
+	}, std::move(done));
+}
+
+// Фото группы — открытый объект cloud, как аватар пользователя (SetOwnAvatar):
+// JPEG → cloud (public) на воркере → group.setinfo{avatar_file_id}; локально
+// фото применит ApplyGroupInfo по нотису («аватар применён для <gid>»).
+void SetGroupPhoto(const QString &groupId, const QImage &image, GroupOpDone done) {
+	if (image.isNull()) {
+		if (done) {
+			done(false, u"bad_request"_q);
+		}
+		return;
+	}
+	auto bytes = QByteArray();
+	{
+		QBuffer buf(&bytes);
+		buf.open(QIODevice::WriteOnly);
+		image.save(&buf, "JPG", 87);
+	}
+	const auto from = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+	const auto gid = groupId.toStdString();
+	crl::async([=] {
+		parvane::ITransport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		std::string fileId;
+		if (t && !bytesStd.empty()) {
+			try {
+				parvane::CloudClient cloud(*t);
+				fileId = cloud.upload(from, token, "group.jpg", "image/jpeg", bytesStd, {}, true);
+			} catch (const std::exception &e) {
+				LOG(("Parvane: фото группы %1 не загружено: %2")
+					.arg(groupId, QString::fromUtf8(e.what())));
+			}
+		}
+		if (fileId.empty()) {
+			crl::on_main([done] {
+				if (done) {
+					done(false, u"upload_failed"_q);
+				}
+			});
+			return;
+		}
+		runGroupOp(u"SETINFO avatar '%1'"_q.arg(groupId), [gid, fileId](parvane::GroupClient &g, const std::string &token) {
+			return g.setInfo(token, gid, std::nullopt, fileId, false);
+		}, done);
+	});
+}
+
+namespace {
 
 // Группа удалена или нас удалили/забанили (нотис removed/deleted): убрать из
 // реестров и пометить чат покинутым — tdesktop прячет его из списка.
@@ -6116,6 +6422,24 @@ void injectOnMain(
 		// Групповое сообщение: to — известная группа → инъекция в историю группы.
 		const auto toStr = QString::fromStdString(sm.to);
 		if (g_knownGroups.contains(toStr)) {
+			// conformance GROUP-2: сервер видит шифртекст и тип не проверяет —
+			// сообщение запрещённого вида от участника БЕЗ роли, присланное в
+			// обход композера, не показываем (как web). Владелец/админ/self и
+			// неизвестная роль — показываем. Оценка при приёме, сообщение
+			// считается обработанным (курсор двигается).
+			{
+				const auto authorAddr = QString::fromStdString(sm.from);
+				const auto info = g_groupInfo.constFind(toStr);
+				if (authorAddr != SelfAddress()
+					&& info != g_groupInfo.constEnd()
+					&& GroupRoleOf(toStr, authorAddr) == u"member"_q
+					&& !parvane::isContentAllowedForMember(info.value().default_permissions, sm.content)) {
+					LOG(("Parvane: групповое %1 (%2) от %3 скрыто правами группы")
+						.arg(uuid, QString::fromStdString(parvane::contentKind(sm.content)), authorAddr));
+					g_uuidToMsgId.insert(uuid, 0);
+					continue;
+				}
+			}
 			const auto gOwn = (from == self);
 			if (gOwn) {
 				bool liveEcho = false;
@@ -7919,98 +8243,328 @@ void MuteMember(const QString &groupId, const QString &member, int minutes) {
 	});
 }
 
-void CreateInviteLink(const QString &groupId) {
+// ── US4/US5: инвайт-ссылки, вступление, заявки (spec 004) ────────────────────
+// Универсальный воркер запроса: op(client, token) → T на воркере, done(optional<T>,
+// error) на main. Исключения транспорта → error.
+template <typename Op, typename Done>
+void runGroupQuery(Op op, Done done) {
+	using T = std::invoke_result_t<Op, parvane::GroupClient&, const std::string&>;
 	const auto token = Token().toStdString();
-	const auto gid = groupId.toStdString();
-	crl::async([token, gid] {
+	crl::async([=] {
 		parvane::GroupClient *g = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			g = g_groupClient.get();
 		}
-		auto invite = std::string();
-		if (g) {
+		auto result = std::optional<T>();
+		auto error = QString();
+		if (!g || token.empty()) {
+			error = u"нет сессии"_q;
+		} else {
 			try {
-				invite = g->inviteCreate(token, gid);
-			} catch (const std::exception &) {
+				result = op(*g, token);
+			} catch (const std::exception &e) {
+				error = QString::fromUtf8(e.what());
 			}
 		}
-		crl::on_main([invite] {
-			if (invite.empty()) {
-				Ui::show(Ui::MakeInformBox(
-					u"Не удалось создать ссылку (нужны права админа)."_q));
-				return;
-			}
-			const auto link = u"https://parvane.invite/"_q
-				+ QString::fromStdString(invite);
-			QGuiApplication::clipboard()->setText(link);
-			LOG(("Parvane: инвайт-ссылка создана: %1").arg(link));
-			Ui::show(Ui::MakeInformBox(
-				u"Ссылка-приглашение скопирована в буфер обмена:\n\n%1"_q
-					.arg(link)));
-		});
+		crl::on_main([=] { done(result, error); });
 	});
 }
 
-bool JoinByInviteLink(const QString &url) {
-	auto u = url.trimmed();
-	auto token = QString();
+[[nodiscard]] GroupInviteLink toInviteLink(const parvane::InviteLink &l) {
+	auto r = GroupInviteLink();
+	r.token = QString::fromStdString(l.token);
+	r.createdBy = QString::fromStdString(l.created_by);
+	r.title = QString::fromStdString(l.title);
+	r.state = QString::fromStdString(l.state);
+	r.date = int(l.created_at);
+	r.expireDate = int(l.expires_at);
+	r.usageLimit = l.max_uses;
+	r.usage = l.uses;
+	r.requested = l.pending_requests;
+	r.requestApproval = l.request_needed;
+	r.permanent = l.is_primary;
+	r.revoked = l.revoked;
+	return r;
+}
+
+[[nodiscard]] QString errorOf(const std::string &code, const std::string &text, const QString &transport) {
+	if (!code.empty()) return QString::fromStdString(code);
+	if (!text.empty()) return QString::fromStdString(text);
+	return transport.isEmpty() ? u"failed"_q : transport;
+}
+
+QString GroupInviteUrl(const QString &token) {
+	return u"https://parvane.invite/"_q + token;
+}
+
+QString GroupInviteToken(const QString &linkOrToken) {
+	static const auto hex = QRegularExpression(u"^[0-9a-f]{32}$"_q);
+	static const auto hash = QRegularExpression(u"#\\+([0-9a-f]{32})"_q);
+	const auto u = linkOrToken.trimmed();
+	if (hex.match(u).hasMatch()) {
+		return u;
+	}
+	if (const auto m = hash.match(u); m.hasMatch()) {
+		return m.captured(1);
+	}
 	for (const auto &prefix : {
 			u"https://parvane.invite/"_q,
 			u"http://parvane.invite/"_q,
 			u"parvane.invite/"_q }) {
 		if (u.startsWith(prefix, Qt::CaseInsensitive)) {
-			token = u.mid(prefix.size());
-			break;
+			const auto t = u.mid(prefix.size()).section(u'/', 0, 0).section(u'?', 0, 0);
+			return hex.match(t).hasMatch() ? t : QString();
 		}
 	}
+	return QString();
+}
+
+QString InviteErrorText(const QString &code) {
+	if (code == u"revoked"_q) return tr::lng_parvane_invite_revoked(tr::now);
+	if (code == u"expired"_q) return tr::lng_parvane_invite_expired(tr::now);
+	if (code == u"exhausted"_q) return tr::lng_parvane_invite_exhausted(tr::now);
+	if (code == u"banned"_q) return tr::lng_parvane_invite_banned(tr::now);
+	if (code == u"declined"_q) return tr::lng_parvane_invite_declined(tr::now);
+	return tr::lng_group_invite_bad_link(tr::now); // invalid и всё прочее
+}
+
+void ListGroupInvites(const QString &groupId, bool revoked,
+		Fn<void(bool ok, std::vector<GroupInviteLink> links, const QString &error)> done) {
+	const auto gid = groupId.toStdString();
+	runGroupQuery([gid, revoked](parvane::GroupClient &g, const std::string &token) {
+		return g.inviteList(token, gid, revoked);
+	}, [=](std::optional<parvane::GroupInviteListResponse> r, const QString &transport) {
+		auto links = std::vector<GroupInviteLink>();
+		if (r && r->ok) {
+			for (const auto &l : r->links) links.push_back(toInviteLink(l));
+			auto log = QStringList();
+			for (const auto &l : links) {
+				log.push_back(l.token + ':' + l.state + ':' + QString::number(l.usage) + '/'
+					+ QString::number(l.usageLimit) + ':' + (l.permanent ? u"primary"_q : u"-"_q));
+			}
+			LOG(("Parvane: ссылки %1 (%2): %3").arg(groupId, revoked ? u"отозванные"_q : u"активные"_q,
+				log.isEmpty() ? u"-"_q : log.join(';')));
+			done(true, std::move(links), QString());
+			return;
+		}
+		const auto error = r ? errorOf(r->error_code, r->error, transport) : transport;
+		LOG(("Parvane: ссылки %1 → отказ %2").arg(groupId, error));
+		done(false, {}, error);
+	});
+}
+
+void CreateGroupInvite(const QString &groupId, const QString &title, int expireDate,
+		int usageLimit, bool requestApproval,
+		Fn<void(bool ok, GroupInviteLink link, const QString &error)> done) {
+	const auto gid = groupId.toStdString();
+	auto params = parvane::InviteParams();
+	params.title = title.toStdString();
+	params.expires_at = expireDate;
+	params.max_uses = usageLimit;
+	params.request_needed = requestApproval;
+	runGroupQuery([gid, params](parvane::GroupClient &g, const std::string &token) {
+		return g.inviteCreate(token, gid, params);
+	}, [=](std::optional<parvane::GroupInviteCreateResponse> r, const QString &transport) {
+		if (r && r->ok && r->link) {
+			const auto link = toInviteLink(*r->link);
+			LOG(("Parvane: INVITE create '%1' → ok %2 state=%3").arg(groupId, link.token, link.state));
+			done(true, link, QString());
+			return;
+		}
+		const auto error = r ? errorOf(r->error_code, r->error, transport) : transport;
+		LOG(("Parvane: INVITE create '%1' → отказ %2").arg(groupId, error));
+		done(false, {}, error);
+	});
+}
+
+void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done) {
+	const auto self = SelfAddress().toStdString();
+	const auto token = Token().toStdString();
+	const auto fid = fileId.toStdString();
+	crl::async([=] {
+		parvane::ITransport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		std::string bytes;
+		if (t) {
+			try {
+				parvane::CloudClient cloud(*t);
+				auto d = cloud.download(self, token, fid, 20000);
+				if (d.ok) {
+					bytes = std::move(d.bytes);
+				}
+			} catch (const std::exception &) {
+			}
+		}
+		crl::on_main([=] {
+			const auto qb = QByteArray(bytes.data(), int(bytes.size()));
+			auto image = QImage();
+			if (qb.isEmpty() || !image.loadFromData(qb)) {
+				done(QImage(), QByteArray());
+				return;
+			}
+			done(std::move(image), qb);
+		});
+	});
+}
+
+void ListGroupInvitesWithPrimary(const QString &groupId,
+		Fn<void(bool ok, std::vector<GroupInviteLink> links, const QString &error)> done) {
+	ListGroupInvites(groupId, false, [=](bool ok, std::vector<GroupInviteLink> links, const QString &error) {
+		if (!ok) {
+			done(false, {}, error);
+			return;
+		}
+		const auto hasPrimary = ranges::any_of(links, [](const GroupInviteLink &l) {
+			return l.permanent && l.state == u"active"_q;
+		});
+		if (hasPrimary) {
+			done(true, std::move(links), QString());
+			return;
+		}
+		CreateGroupInvite(groupId, QString(), 0, 0, false, [=](bool created, GroupInviteLink, const QString &createError) {
+			if (!created) {
+				LOG(("Parvane: основная ссылка %1 не создана: %2").arg(groupId, createError));
+				done(true, links, QString());
+				return;
+			}
+			LOG(("Parvane: основная ссылка %1 создана (в списке не было активной без параметров)").arg(groupId));
+			ListGroupInvites(groupId, false, done);
+		});
+	});
+}
+
+void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	const auto t = token.toStdString();
+	runGroupOp(u"INVITE revoke %1"_q.arg(token), [gid, t](parvane::GroupClient &g, const std::string &jwt) {
+		return g.inviteRevoke(jwt, gid, t);
+	}, std::move(done));
+}
+
+void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	const auto t = token.toStdString();
+	runGroupOp(u"INVITE delete %1"_q.arg(token), [gid, t](parvane::GroupClient &g, const std::string &jwt) {
+		return g.inviteDelete(jwt, gid, t);
+	}, std::move(done));
+}
+
+void CheckGroupInvite(const QString &token,
+		Fn<void(bool ok, GroupInvitePreview preview, const QString &error)> done) {
+	const auto t = token.toStdString();
+	runGroupQuery([t](parvane::GroupClient &g, const std::string &jwt) {
+		return g.inviteCheck(jwt, t);
+	}, [=](std::optional<parvane::GroupInviteCheckResponse> r, const QString &transport) {
+		if (r && r->ok && !r->group_id.empty()) {
+			auto p = GroupInvitePreview();
+			p.groupId = QString::fromStdString(r->group_id);
+			p.name = QString::fromStdString(r->name);
+			p.kind = QString::fromStdString(r->kind);
+			p.avatar = QString::fromStdString(r->avatar);
+			p.about = QString::fromStdString(r->about);
+			p.members = r->members_count;
+			p.requestNeeded = r->request_needed;
+			p.alreadyMember = r->already_member;
+			p.pending = r->pending;
+			LOG(("Parvane: INVITE check → %1 members=%2 request=%3 member=%4")
+				.arg(p.name).arg(p.members).arg(p.requestNeeded ? 1 : 0).arg(p.alreadyMember ? 1 : 0));
+			done(true, p, QString());
+			return;
+		}
+		const auto error = r ? errorOf(r->error_code, r->error, transport) : transport;
+		LOG(("Parvane: INVITE check → отказ %1").arg(error));
+		done(false, {}, error);
+	});
+}
+
+void JoinGroupByInvite(const QString &token,
+		Fn<void(bool ok, const QString &groupId, bool pending, const QString &error)> done) {
+	const auto t = token.toStdString();
+	runGroupQuery([t](parvane::GroupClient &g, const std::string &jwt) {
+		return g.joinByInvite(jwt, t);
+	}, [=](std::optional<parvane::GroupJoinResponse> r, const QString &transport) {
+		if (r && r->ok) {
+			const auto gid = QString::fromStdString(r->group_id);
+			LOG(("Parvane: INVITE join → %1 %2").arg(r->pending ? u"pending"_q : u"ok"_q, gid));
+			if (!r->pending) {
+				RefreshGroups();
+			}
+			done(true, gid, r->pending, QString());
+			return;
+		}
+		const auto error = r ? errorOf(r->error_code, r->error, transport) : transport;
+		LOG(("Parvane: INVITE join → отказ %1").arg(error));
+		done(false, QString(), false, error);
+	});
+}
+
+void ListJoinRequests(const QString &groupId,
+		Fn<void(bool ok, std::vector<GroupJoinRequest> requests, const QString &error)> done) {
+	const auto gid = groupId.toStdString();
+	runGroupQuery([gid](parvane::GroupClient &g, const std::string &token) {
+		return g.requestList(token, gid);
+	}, [=](std::optional<parvane::GroupRequestListResponse> r, const QString &transport) {
+		if (r && r->ok) {
+			auto list = std::vector<GroupJoinRequest>();
+			auto log = QStringList();
+			for (const auto &q : r->requests) {
+				list.push_back({ QString::fromStdString(q.member), QString::fromStdString(q.invite), int(q.created_at) });
+				log.push_back(list.back().member + ':' + list.back().invite);
+			}
+			LOG(("Parvane: заявки %1: %2").arg(groupId, log.isEmpty() ? u"-"_q : log.join(';')));
+			done(true, std::move(list), QString());
+			return;
+		}
+		const auto error = r ? errorOf(r->error_code, r->error, transport) : transport;
+		LOG(("Parvane: заявки %1 → отказ %2").arg(groupId, error));
+		done(false, {}, error);
+	});
+}
+
+void DecideJoinRequest(const QString &groupId, const QString &member, bool approve, GroupOpDone done) {
+	const auto gid = groupId.toStdString();
+	const auto mem = member.toStdString();
+	runGroupOp(u"REQUEST %1 %2"_q.arg(approve ? u"approve"_q : u"decline"_q, member),
+		[gid, mem, approve](parvane::GroupClient &g, const std::string &token) {
+			return g.requestDecide(token, gid, mem, approve);
+		}, std::move(done));
+}
+
+not_null<UserData*> EnsureUser(not_null<Main::Session*> session, const QString &address) {
+	return ensurePeerUser(session, IdForAddress(address), address);
+}
+
+void OpenGroupChat(const QString &groupId) {
+	const auto session = g_sessionWeak.get();
+	if (!session || groupId.isEmpty()) {
+		return;
+	}
+	const auto chat = ensureGroupChat(session, groupId, g_knownGroups.value(groupId), 0);
+	const auto window = Core::App().activeWindow();
+	const auto controller = window ? window->sessionController() : nullptr;
+	if (chat && controller) {
+		controller->showPeerHistory(chat, Window::SectionShow::Way::Forward);
+	}
+}
+
+// Клик по ссылке группы: проверка + нативная модалка (Api::CheckChatInvite, где
+// врезка для наших токенов), как t.me/+hash в Telegram.
+bool JoinByInviteLink(const QString &url) {
+	const auto token = GroupInviteToken(url);
 	if (token.isEmpty()) {
 		return false; // не наша ссылка
 	}
-	token = token.section(u'/', 0, 0).section(u'?', 0, 0);
-	const auto tokenStd = token.toStdString();
-	Ui::show(Ui::MakeConfirmBox({
-		.text = u"Вступить в группу по приглашению?"_q,
-		.confirmed = [tokenStd](Fn<void()> &&close) {
-			close();
-			const auto jwt = Token().toStdString();
-			crl::async([jwt, tokenStd] {
-				parvane::GroupClient *g = nullptr;
-				{
-					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					g = g_groupClient.get();
-				}
-				auto ok = false;
-				auto name = QString();
-				auto error = QString();
-				if (g) {
-					try {
-						const auto r = g->join(jwt, tokenStd);
-						ok = r.value("ok", false);
-						name = QString::fromStdString(
-							r.value("name", std::string()));
-						error = QString::fromStdString(
-							r.value("error", std::string()));
-					} catch (const std::exception &e) {
-						error = QString::fromUtf8(e.what());
-					}
-				}
-				crl::on_main([ok, name, error] {
-					if (ok) {
-						RefreshGroups();
-						LOG(("Parvane: вступил в группу «%1» по инвайту")
-							.arg(name));
-						Ui::show(Ui::MakeInformBox(
-							u"Вы вступили в группу «%1»."_q.arg(name)));
-					} else {
-						Ui::show(Ui::MakeInformBox(
-							u"Не удалось вступить: %1"_q.arg(error)));
-					}
-				});
-			});
-		},
-		.confirmText = u"Вступить"_q,
-	}));
+	const auto window = Core::App().activeWindow();
+	const auto controller = window ? window->sessionController() : nullptr;
+	if (!controller) {
+		LOG(("Parvane: ссылка группы %1 — нет активного окна").arg(token));
+		return true;
+	}
+	Api::CheckChatInvite(controller, token);
 	return true;
 }
 void LeaveGroup(const QString &groupId) {
@@ -9113,6 +9667,336 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						groupAdminAction(gid, mem, act);
 					});
 				}
+			}
+		}
+
+		// spec 004 / US1: PARVANE_AUTOGROUPINFO=Имя:about=<текст>[;avatar=<путь>][;clear_avatar=1]
+		// Через ~11с (группа синхронизирована) зовёт те же функции, что экран
+		// «Edit». Маркеры: «AUTOGROUPINFO '<Имя>' → ok (vN)» / «→ отказ <код>».
+		if (const char *giv = std::getenv("PARVANE_AUTOGROUPINFO"); giv && *giv) {
+			const auto spec = QString::fromUtf8(giv);
+			const auto c = spec.indexOf(':');
+			if (c > 0) {
+				const auto gname = spec.left(c);
+				const auto fields = spec.mid(c + 1).split(';', Qt::SkipEmptyParts);
+				base::call_delayed(11 * crl::time(1000), [gname, fields] {
+					const auto gid = findGroupIdByName(gname);
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPINFO — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					const auto report = [gname](const QString &what) {
+						return [gname, what](bool ok, const QString &error) {
+							if (ok) {
+								LOG(("Parvane: AUTOGROUPINFO '%1' %2 → ok").arg(gname, what));
+							} else {
+								LOG(("Parvane: AUTOGROUPINFO '%1' %2 → отказ %3").arg(gname, what, error));
+							}
+						};
+					};
+					for (const auto &field : fields) {
+						const auto eq = field.indexOf('=');
+						const auto key = (eq > 0) ? field.left(eq) : field;
+						const auto value = (eq > 0) ? field.mid(eq + 1) : QString();
+						if (key == u"about"_q) {
+							SetGroupAbout(gid, value, report(u"about"_q));
+						} else if (key == u"avatar"_q) {
+							const auto image = QImage(value);
+							if (image.isNull()) {
+								LOG(("Parvane: AUTOGROUPINFO '%1' avatar → файл не прочитан %2").arg(gname, value));
+								continue;
+							}
+							SetGroupPhoto(gid, image, report(u"avatar"_q));
+						} else if (key == u"clear_avatar"_q) {
+							ClearGroupPhoto(gid, report(u"clear_avatar"_q));
+						}
+					}
+				});
+			}
+		}
+
+		// spec 004 / US2: PARVANE_AUTOGROUPPERMS=Имя:send_media=0;send_polls=1;…
+		// Незаданные права — текущие из кэша сведений. Зовёт SetGroupPerms (как
+		// экран «Permissions»). Маркер «AUTOGROUPPERMS '<Имя>' → ok|отказ <код>».
+		if (const char *gpv = std::getenv("PARVANE_AUTOGROUPPERMS"); gpv && *gpv) {
+			const auto spec = QString::fromUtf8(gpv);
+			const auto c = spec.indexOf(':');
+			if (c > 0) {
+				const auto gname = spec.left(c);
+				const auto fields = spec.mid(c + 1).split(';', Qt::SkipEmptyParts);
+				base::call_delayed(11 * crl::time(1000), [gname, fields] {
+					const auto gid = findGroupIdByName(gname);
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPPERMS — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					auto perms = parvane::DefaultPermissions();
+					if (const auto info = g_groupInfo.constFind(gid); info != g_groupInfo.constEnd()) {
+						perms = info.value().default_permissions;
+					}
+					for (const auto &field : fields) {
+						const auto eq = field.indexOf('=');
+						if (eq <= 0) {
+							continue;
+						}
+						const auto key = field.left(eq);
+						const auto on = (field.mid(eq + 1) != u"0"_q);
+						if (key == u"send_messages"_q) perms.send_messages = on;
+						else if (key == u"send_media"_q) perms.send_media = on;
+						else if (key == u"send_stickers_gifs"_q) perms.send_stickers_gifs = on;
+						else if (key == u"send_polls"_q) perms.send_polls = on;
+						else if (key == u"embed_links"_q) perms.embed_links = on;
+						else if (key == u"invite_users"_q) perms.invite_users = on;
+						else if (key == u"pin_messages"_q) perms.pin_messages = on;
+						else if (key == u"change_info"_q) perms.change_info = on;
+					}
+					SetGroupPerms(gid, restrictionsFromPerms(perms), [gname](bool ok, const QString &error) {
+						if (ok) {
+							LOG(("Parvane: AUTOGROUPPERMS '%1' → ok").arg(gname));
+						} else {
+							LOG(("Parvane: AUTOGROUPPERMS '%1' → отказ %2").arg(gname, error));
+						}
+					});
+				});
+			}
+		}
+
+		// spec 004 / US3: PARVANE_AUTOGROUPADMIN=Имя:<member>:<right,right,…> —
+		// назначить админом с набором прав (как экран «Edit admin»); пустой
+		// набор после второго ':' — снять. Маркер «AUTOGROUPADMIN '<Имя>' <member>
+		// [rights] → ok|отказ <код>».
+		if (const char *gav = std::getenv("PARVANE_AUTOGROUPADMIN"); gav && *gav) {
+			const auto spec = QString::fromUtf8(gav);
+			const auto parts = spec.split(':');
+			if (parts.size() >= 2) {
+				const auto gname = parts[0];
+				const auto member = parts[1];
+				const auto rightsSpec = (parts.size() >= 3) ? parts[2] : QString();
+				base::call_delayed(11 * crl::time(1000), [=] {
+					const auto gid = findGroupIdByName(gname);
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPADMIN — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					using A = ChatAdminRight;
+					auto rights = ChatAdminRights();
+					for (const auto &r : rightsSpec.split(',', Qt::SkipEmptyParts)) {
+						if (r == u"change_info"_q) rights |= A::ChangeInfo;
+						else if (r == u"delete_messages"_q) rights |= A::DeleteMessages;
+						else if (r == u"ban_users"_q) rights |= A::BanUsers;
+						else if (r == u"invite_users"_q) rights |= A::InviteByLinkOrAdd;
+						else if (r == u"pin_messages"_q) rights |= A::PinMessages;
+						else if (r == u"add_admins"_q) rights |= A::AddAdmins;
+					}
+					const auto demote = rightsSpec.trimmed().isEmpty();
+					SetGroupAdmin(gid, member, rights, demote, [=](bool ok, const QString &error) {
+						if (ok) {
+							LOG(("Parvane: AUTOGROUPADMIN '%1' %2 [%3] → ok").arg(gname, member, rightsSpec));
+						} else {
+							LOG(("Parvane: AUTOGROUPADMIN '%1' %2 [%3] → отказ %4").arg(gname, member, rightsSpec, error));
+						}
+					});
+				});
+			}
+		}
+
+		// spec 004 / US4: PARVANE_AUTOGROUPINVITE=Имя:create[;title=…][;expires=<unix>][;max=<n>][;request=1]
+		// | Имя:revoke:<token> | Имя:delete:<token> | Имя:list — те же функции,
+		// что экран «Invite Links». Маркеры: «AUTOGROUPINVITE '<Имя>' create → ok <token> state=…»,
+		// «… revoke <token> → ok», «ссылки <gid> (активные|отозванные): …».
+		if (const char *giv2 = std::getenv("PARVANE_AUTOGROUPINVITE"); giv2 && *giv2) {
+			const auto spec = QString::fromUtf8(giv2);
+			const auto parts = spec.split(':');
+			if (parts.size() >= 2) {
+				const auto gname = parts[0];
+				const auto actionSpec = parts[1];
+				const auto arg = (parts.size() >= 3) ? parts[2] : QString();
+				base::call_delayed(11 * crl::time(1000), [=] {
+					const auto gid = findGroupIdByName(gname);
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPINVITE — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					const auto fields = actionSpec.split(';', Qt::SkipEmptyParts);
+					const auto action = fields.isEmpty() ? QString() : fields.first();
+					if (action == u"create"_q) {
+						auto title = QString();
+						auto expires = 0, max = 0;
+						auto request = false;
+						for (const auto &f : fields.mid(1)) {
+							const auto eq = f.indexOf('=');
+							const auto k = f.left(eq), v = f.mid(eq + 1);
+							if (k == u"title"_q) title = v;
+							else if (k == u"expires"_q) expires = v.toInt();
+							else if (k == u"max"_q) max = v.toInt();
+							else if (k == u"request"_q) request = (v != u"0"_q);
+						}
+						CreateGroupInvite(gid, title, expires, max, request, [=](bool ok, GroupInviteLink l, const QString &error) {
+							if (ok) {
+								LOG(("Parvane: AUTOGROUPINVITE '%1' create → ok %2 state=%3").arg(gname, l.token, l.state));
+							} else {
+								LOG(("Parvane: AUTOGROUPINVITE '%1' create → отказ %2").arg(gname, error));
+							}
+						});
+					} else if (action == u"revoke"_q || action == u"delete"_q) {
+						const auto report = [=](bool ok, const QString &error) {
+							if (ok) {
+								LOG(("Parvane: AUTOGROUPINVITE '%1' %2 %3 → ok").arg(gname, action, arg));
+							} else {
+								LOG(("Parvane: AUTOGROUPINVITE '%1' %2 %3 → отказ %4").arg(gname, action, arg, error));
+							}
+						};
+						if (action == u"revoke"_q) RevokeGroupInvite(gid, arg, report);
+						else DeleteGroupInvite(gid, arg, report);
+					} else if (action == u"list"_q) {
+						// тот же путь, что экран «Invite Links» (основная создаётся при отсутствии)
+						ListGroupInvitesWithPrimary(gid, [=](bool ok, std::vector<GroupInviteLink>, const QString &error) {
+							LOG(("Parvane: AUTOGROUPINVITE '%1' list → %2").arg(gname, ok ? u"ok"_q : u"отказ "_q + error));
+							ListGroupInvites(gid, true, [](bool, std::vector<GroupInviteLink>, const QString &) {});
+						});
+					}
+				});
+			}
+		}
+
+		// spec 004 / US4: PARVANE_AUTOGROUPJOIN=<ссылка|токен>[;confirm=0] — проверка
+		// (как модалка) и вступление. Маркеры «AUTOGROUPJOIN check → <name> members=N request=0/1»,
+		// «AUTOGROUPJOIN join → ok <gid> | → pending | → отказ <код>».
+		if (const char *gjv = std::getenv("PARVANE_AUTOGROUPJOIN"); gjv && *gjv) {
+			const auto spec = QString::fromUtf8(gjv).split(';', Qt::SkipEmptyParts);
+			const auto token = spec.isEmpty() ? QString() : GroupInviteToken(spec.first());
+			const auto confirm = !spec.contains(u"confirm=0"_q);
+			base::call_delayed(6 * crl::time(1000), [=] {
+				if (token.isEmpty()) {
+					LOG(("Parvane: AUTOGROUPJOIN → отказ invalid (ссылка не распознана)"));
+					return;
+				}
+				CheckGroupInvite(token, [=](bool ok, GroupInvitePreview p, const QString &error) {
+					if (!ok) {
+						LOG(("Parvane: AUTOGROUPJOIN check → отказ %1").arg(error));
+						LOG(("Parvane: AUTOGROUPJOIN join → отказ %1").arg(error));
+						return;
+					}
+					LOG(("Parvane: AUTOGROUPJOIN check → %1 members=%2 request=%3")
+						.arg(p.name).arg(p.members).arg(p.requestNeeded ? 1 : 0));
+					// FR-041: фото группы в превью — тот же путь, что модалка
+					if (!p.avatar.isEmpty()) {
+						FetchPublicImage(p.avatar, [=](QImage image, QByteArray) {
+							if (image.isNull()) {
+								LOG(("Parvane: AUTOGROUPJOIN превью: фото группы %1 не загружено").arg(p.avatar));
+							} else {
+								LOG(("Parvane: AUTOGROUPJOIN превью: фото группы %1x%2")
+									.arg(image.width()).arg(image.height()));
+							}
+						});
+					}
+					if (p.alreadyMember) {
+						LOG(("Parvane: AUTOGROUPJOIN join → ok %1 (уже участник)").arg(p.groupId));
+						return;
+					}
+					if (!confirm) {
+						return;
+					}
+					JoinGroupByInvite(token, [=](bool ok2, const QString &gid, bool pending, const QString &error2) {
+						if (!ok2) {
+							LOG(("Parvane: AUTOGROUPJOIN join → отказ %1").arg(error2));
+						} else if (pending) {
+							LOG(("Parvane: AUTOGROUPJOIN join → pending"));
+						} else {
+							LOG(("Parvane: AUTOGROUPJOIN join → ok %1").arg(gid));
+						}
+					});
+				});
+			});
+		}
+
+		// spec 004 / US5: PARVANE_AUTOGROUPREQUEST=Имя:list | Имя:approve:<member> |
+		// Имя:decline:<member> | Имя:approve:all — как экран «Join Requests».
+		// Маркеры: «заявки <gid>: …», «AUTOGROUPREQUEST '<Имя>' approve <member> → ok|отказ <код>».
+		if (const char *grv = std::getenv("PARVANE_AUTOGROUPREQUEST"); grv && *grv) {
+			const auto parts = QString::fromUtf8(grv).split(':');
+			if (parts.size() >= 2) {
+				const auto gname = parts[0];
+				const auto action = parts[1];
+				const auto member = (parts.size() >= 3) ? parts[2] : QString();
+				base::call_delayed(11 * crl::time(1000), [=] {
+					const auto gid = findGroupIdByName(gname);
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPREQUEST — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					const auto decide = [=](const QString &who, bool approve) {
+						DecideJoinRequest(gid, who, approve, [=](bool ok, const QString &error) {
+							LOG(("Parvane: AUTOGROUPREQUEST '%1' %2 %3 → %4")
+								.arg(gname, approve ? u"approve"_q : u"decline"_q, who,
+									ok ? u"ok"_q : u"отказ "_q + error));
+						});
+					};
+					if (action == u"list"_q) {
+						ListJoinRequests(gid, [](bool, std::vector<GroupJoinRequest>, const QString &) {});
+					} else if (member == u"all"_q) {
+						ListJoinRequests(gid, [=](bool ok, std::vector<GroupJoinRequest> list, const QString &) {
+							if (!ok) {
+								return;
+							}
+							for (const auto &r : list) {
+								decide(r.member, action == u"approve"_q);
+							}
+						});
+					} else if (!member.isEmpty()) {
+						decide(member, action == u"approve"_q);
+					}
+				});
+			}
+		}
+
+		// spec 004 / GROUP-2: PARVANE_AUTOGROUPSENDFILE=Имя:<путь>[;bypass=1] —
+		// файл в группу. Без bypass — через штатную проверку прав композера
+		// (Data::AnyFileRestrictionError): при запрете маркер «запрещено правами»
+		// и отправки нет. С bypass=1 — мимо проверки (участник-нарушитель для
+		// теста приёмного фильтра). Через ~11с (группа синхронизирована).
+		if (const char *gfv = std::getenv("PARVANE_AUTOGROUPSENDFILE"); gfv && *gfv) {
+			const auto spec = QString::fromUtf8(gfv);
+			const auto c = spec.indexOf(':');
+			if (c > 0) {
+				const auto gname = spec.left(c);
+				const auto rest = spec.mid(c + 1).split(';', Qt::SkipEmptyParts);
+				const auto path = rest.isEmpty() ? QString() : rest.first();
+				const auto bypass = rest.contains(u"bypass=1"_q);
+				base::call_delayed(11 * crl::time(1000), [=] {
+					const auto gid = findGroupIdByName(gname);
+					if (gid.isEmpty()) {
+						LOG(("Parvane: AUTOGROUPSENDFILE — группа '%1' не найдена").arg(gname));
+						return;
+					}
+					auto f = QFile(path);
+					if (!f.open(QIODevice::ReadOnly)) {
+						LOG(("Parvane: AUTOGROUPSENDFILE — не открыть %1").arg(path));
+						return;
+					}
+					const auto bytes = f.readAll();
+					ensureGroupChat(session, gid, gname, 0);
+					const auto chat = session->data().chat(ChatId(BareId(IdForAddress(gid))));
+					const auto lower = path.toLower();
+					const auto type = (lower.endsWith(u".png"_q) || lower.endsWith(u".jpg"_q) || lower.endsWith(u".jpeg"_q))
+						? SendMediaType::Photo
+						: SendMediaType::File;
+					if (!bypass) {
+						// Как штатная отправка (Data::FileRestrictionError): проверка
+						// ПО ТИПУ файла. AnyFileRestrictionError тут не годится — он
+						// «запрещено», только когда закрыты все типы, включая стикеры/GIF.
+						const auto right = (type == SendMediaType::Photo)
+							? ChatRestriction::SendPhotos
+							: ChatRestriction::SendFiles;
+						if (const auto error = Data::RestrictionError(chat, right)) {
+							LOG(("Parvane: AUTOGROUPSENDFILE → запрещено правами (%1)").arg(error.text));
+							return;
+						}
+					}
+					session->api().sendFile(bytes, type, Api::SendAction(session->data().history(chat)));
+					LOG(("Parvane: AUTOGROUPSENDFILE → отправлено (%1 байт%2)")
+						.arg(bytes.size()).arg(bypass ? u", bypass"_q : QString()));
+				});
 			}
 		}
 

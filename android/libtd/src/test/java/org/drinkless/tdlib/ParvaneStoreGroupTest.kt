@@ -76,6 +76,24 @@ class ParvaneStoreGroupTest {
         assertNull(s.clearGroupPhoto("g1")!!.photo)
     }
 
+    // spec 004: заявки → Chat.pendingJoinRequests; основная ссылка → BasicGroupFullInfo.inviteLink
+    @Test
+    fun pendingRequestsAndPrimaryLinkReachNativeObjects() {
+        val s = store()
+        val (chat, _, _) = s.ensureGroup("g1", "G", listOf("alice@local", "carol@local"), "alice@local", emptyMap(),
+            JSONObject("""{"group_id":"g1","name":"G","created_by":"alice@local","members":[],"version":1,"pending_requests":2}"""))!!
+        assertNotNull(chat.pendingJoinRequests)
+        assertEquals(2, chat.pendingJoinRequests!!.totalCount)
+        val g = s.group("g1")!!
+        assertNull(s.basicGroupFullInfo(g).inviteLink)
+        g.primaryInviteLink = s.inviteLinkOf(JSONObject("""{"token":"0123456789abcdef0123456789abcdef","created_by":"alice@local","is_primary":true}"""))
+        assertEquals("https://parvane.invite/0123456789abcdef0123456789abcdef", s.basicGroupFullInfo(g).inviteLink!!.inviteLink)
+        // участнику pending_requests не отдаётся (-1) → 0 и без строки заявок
+        val (chat2, _, _) = s.ensureGroup("g1", "G", listOf("alice@local", "carol@local"), "alice@local", emptyMap(),
+            JSONObject("""{"group_id":"g1","name":"G","created_by":"alice@local","members":[],"version":2,"pending_requests":-1}"""))!!
+        assertNull(chat2.pendingJoinRequests)
+    }
+
     @Test
     fun staleVersionIsIgnored() {
         val s = store()

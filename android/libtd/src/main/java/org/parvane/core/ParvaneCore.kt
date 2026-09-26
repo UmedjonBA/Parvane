@@ -85,8 +85,23 @@ object ParvaneCore {
     fun setAvatar(path: String): String = nativeSetAvatar(path)
     fun createGroup(name: String, kind: String, members: List<String>): String =
         nativeCreateGroup(name, kind, org.json.JSONArray(members).toString())
-    /** add|remove|rename|leave|remove_group; "" — ок, иначе текст ошибки. */
+    /** add|remove|rename|leave|remove_group|admin|member|ban|unban; "" — ок, иначе текст ошибки. */
     fun groupAction(groupId: String, action: String, arg: String): String = nativeGroupAction(groupId, action, arg)
+    // spec 004: управление группой — ответы сервера JSON {ok, error, error_code, …}
+    fun groupSetInfo(groupId: String, about: String?, clearAvatar: Boolean): JSONObject = JSONObject(nativeGroupSetInfo(groupId, about, clearAvatar))
+    fun groupSetPhoto(groupId: String, path: String): JSONObject = JSONObject(nativeGroupSetPhoto(groupId, path))
+    fun groupSetPerms(groupId: String, permsJson: String): JSONObject = JSONObject(nativeGroupSetPerms(groupId, permsJson))
+    /** rightsJson == null — снять админа. */
+    fun groupSetAdmin(groupId: String, member: String, rightsJson: String?): JSONObject = JSONObject(nativeGroupSetAdmin(groupId, member, rightsJson))
+    fun groupInvites(groupId: String, revoked: Boolean): JSONObject = JSONObject(nativeGroupInvites(groupId, revoked))
+    fun groupInviteCreate(groupId: String, title: String, expiresAt: Long, maxUses: Int, requestNeeded: Boolean): JSONObject =
+        JSONObject(nativeGroupInviteCreate(groupId, title, expiresAt, maxUses, requestNeeded))
+    fun groupInviteRevoke(groupId: String, token: String): JSONObject = JSONObject(nativeGroupInviteRevoke(groupId, token))
+    fun groupInviteDelete(groupId: String, token: String): JSONObject = JSONObject(nativeGroupInviteDelete(groupId, token))
+    fun groupInviteCheck(token: String): JSONObject = JSONObject(nativeGroupInviteCheck(token))
+    fun groupJoin(token: String): JSONObject = JSONObject(nativeGroupJoin(token))
+    fun groupRequests(groupId: String): JSONObject = JSONObject(nativeGroupRequests(groupId))
+    fun groupRequestDecide(groupId: String, member: String, approve: Boolean): JSONObject = JSONObject(nativeGroupRequestDecide(groupId, member, approve))
     fun resolve(addresses: List<String>): JSONObject =
         JSONObject(nativeResolve(org.json.JSONArray(addresses).toString()))
     fun search(query: String): JSONObject = JSONObject(nativeSearch(query))
@@ -124,6 +139,18 @@ object ParvaneCore {
     @JvmStatic private external fun nativeSetAvatar(path: String): String
     @JvmStatic private external fun nativeCreateGroup(name: String, kind: String, membersJson: String): String
     @JvmStatic private external fun nativeGroupAction(groupId: String, action: String, arg: String): String
+    @JvmStatic private external fun nativeGroupSetInfo(groupId: String, about: String?, clearAvatar: Boolean): String
+    @JvmStatic private external fun nativeGroupSetPhoto(groupId: String, path: String): String
+    @JvmStatic private external fun nativeGroupSetPerms(groupId: String, permsJson: String): String
+    @JvmStatic private external fun nativeGroupSetAdmin(groupId: String, member: String, rightsJson: String?): String
+    @JvmStatic private external fun nativeGroupInvites(groupId: String, revoked: Boolean): String
+    @JvmStatic private external fun nativeGroupInviteCreate(groupId: String, title: String, expiresAt: Long, maxUses: Int, requestNeeded: Boolean): String
+    @JvmStatic private external fun nativeGroupInviteRevoke(groupId: String, token: String): String
+    @JvmStatic private external fun nativeGroupInviteDelete(groupId: String, token: String): String
+    @JvmStatic private external fun nativeGroupInviteCheck(token: String): String
+    @JvmStatic private external fun nativeGroupJoin(token: String): String
+    @JvmStatic private external fun nativeGroupRequests(groupId: String): String
+    @JvmStatic private external fun nativeGroupRequestDecide(groupId: String, member: String, approve: Boolean): String
     @JvmStatic private external fun nativeResolve(addressesJson: String): String
     @JvmStatic private external fun nativeSearch(query: String): String
     @JvmStatic private external fun nativeMarkRead(uuid: String)

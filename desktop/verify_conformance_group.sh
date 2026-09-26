@@ -43,6 +43,11 @@ R=$(req group.setinfo "{\"token\":\"$TOKEN\",\"group_id\":\"$GID\",\"about\":\"�
 echo "$R" | grep -q '"ok":true' && ok "setinfo about принят ($R)" || bad "setinfo about отклонён: $R"
 wait_log "$B/td/log.txt" "группа $GID обновлена \(v1, нотис\) about=описание конформанса" 20 \
   && ok "GROUP-1: описание дошло до bob нотисом без перезагрузки (v1)" || bad "GROUP-1: описание не дошло нотисом"
+# один кадр инбокса — одно применение: раньше транспорт слал gateway'ю `sub` на
+# каждый обработчик инбокса (6 NATS-подписок → каждый нотис ×6, 27 сен 2026)
+sleep 3
+N=$(grep -ac "группа $GID обновлена (v1, нотис)" "$B/td/log.txt")
+[ "$N" = "1" ] && ok "нотис применён ровно один раз (одна подписка на инбокс)" || bad "нотис v1 применён $N раз (дубли подписки на инбокс)"
 FID="019a0000-0000-7000-8000-00000000c0de"
 R=$(req group.setinfo "{\"token\":\"$TOKEN\",\"group_id\":\"$GID\",\"avatar_file_id\":\"$FID\"}")
 echo "$R" | grep -q '"ok":true' && ok "setinfo avatar принят" || bad "setinfo avatar отклонён: $R"

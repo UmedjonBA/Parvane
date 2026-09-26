@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { isContentAllowedForMember } from './groups';
 import { packRefCacheKey, shouldReusePackRef } from './messages';
 import { buildEmojiDocId, getEmojiPackNames, sanitizePackName } from './stickerPacks';
 import { shouldApplyGroupInfo } from './store';
@@ -25,6 +26,7 @@ const rules = JSON.parse(
     forbiddenHosts?: string[];
     noticeField?: string;
     changes?: string[];
+    contentKinds?: Record<string, string[]>;
     clients?: { web: string; desktop: string | string[]; android: string };
   }[];
 };
@@ -352,5 +354,66 @@ describe('GROUP-1: сведения группы применяются по р�
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
     expect(store).toMatch(/version < existed\.version/);
     expect(String(group.clients!.android)).toContain('ParvaneStoreGroupTest');
+  });
+});
+
+describe('GROUP-2: права по типу содержимого соблюдаются на клиенте', () => {
+  const rule2 = rule('GROUP-2');
+  type Case = {
+    name: string;
+    perms: Record<string, boolean>;
+    kind: string;
+    hasLink: boolean;
+    role: string | null;
+    allowed: boolean;
+  };
+
+  it.each(rule2.cases as Case[])('$name', (testCase) => {
+    if (testCase.role !== 'member') {
+      // владелец/админ/неизвестная роль под фильтр не подпадают — решает вызывающий (sync.ts)
+      expect(testCase.allowed).toBe(true);
+      return;
+    }
+    const content = {
+      kind: testCase.kind,
+      text: 'x',
+      ...(testCase.hasLink ? { webpage: { url: 'https://x' } } : {}),
+    } as never;
+    expect(isContentAllowedForMember(testCase.perms as never, content)).toBe(testCase.allowed);
+  });
+
+  it('таблица contentKinds совпадает с реализацией веба', () => {
+    const groups = readFileSync(path.join(process.cwd(), 'src/api/parvane/groups.ts'), 'utf8');
+    for (const kind of rule2.contentKinds!.send_media) {
+      expect(groups, kind).toMatch(new RegExp(`MEDIA_KINDS[^;]*'${kind}'`));
+    }
+    for (const kind of rule2.contentKinds!.send_stickers_gifs) {
+      expect(groups, kind).toMatch(new RegExp(`STICKER_KINDS[^;]*'${kind}'`));
+    }
+    const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
+    expect(sync).toMatch(/role !== 'member'/);
+    expect(sync).toMatch(/group-perm-hidden/);
+  });
+
+  it('десктоп: та же формула в parvane-core и фильтр при инъекции', () => {
+    const header = readRepo('desktop/parvane-core/include/parvane/group.h');
+    expect(header).toMatch(/inline bool isContentAllowedForMember\(/);
+    expect(header).toMatch(/inline bool contentHasLink\(/);
+    for (const kind of rule2.contentKinds!.send_media) {
+      expect(header, kind).toContain(`kind == "${kind}"`);
+    }
+    const client = readDesktopSource();
+    expect(client).toMatch(/скрыто правами группы/);
+    expect(client).toMatch(/GroupRoleOf\(toStr, authorAddr\) == u"member"_q/);
+    expect(client).toMatch(/parvane::isContentAllowedForMember\(/);
+    expect(String(rule2.clients!.desktop)).toContain('verify_conformance_perms.sh');
+  });
+
+  it('android: та же формула в ParvaneStore и фильтр при приёме', () => {
+    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
+    expect(store).toMatch(/fun isContentAllowedForMember\(/);
+    const client = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt');
+    expect(client).toMatch(/isContentAllowedForMember\(/);
+    expect(String(rule2.clients!.android)).toContain('ParvaneStorePermsTest');
   });
 });

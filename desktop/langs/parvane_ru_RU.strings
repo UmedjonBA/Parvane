@@ -8913,3 +8913,11 @@
 "lng_you_paid_stars#many" = "Вы заплатили {count} звёзд.";
 "lng_you_paid_stars#other" = "Вы заплатили {count} звезды.";
 "lng_language_name" = "Русский";
+"lng_parvane_invite_expired" = "Срок действия пригласительной ссылки истёк.";
+"lng_parvane_invite_revoked" = "Пригласительная ссылка отозвана.";
+"lng_parvane_invite_exhausted" = "Лимит вступлений по этой ссылке исчерпан.";
+"lng_parvane_invite_banned" = "Вы заблокированы в этой группе.";
+"lng_parvane_invite_declined" = "Ваша заявка отклонена. Попробуйте позже.";
+"lng_parvane_invite_request_sent" = "Заявка на вступление отправлена.";
+"lng_parvane_invite_edit_unsupported" = "Правка ссылки не поддерживается — отзовите её и создайте новую.";
+"lng_parvane_restrict_unsupported" = "Частичные ограничения здесь не поддерживаются — участника можно только удалить.";

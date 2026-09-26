@@ -229,7 +229,298 @@
           "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (ApplyGroupInfo, g_groupVersions, DropGroupLocally)",
           "тест desktop/verify_conformance_group.sh"
         ],
-        "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (ensureGroup по version) + Client.kt (onCoreEvent group) — тест libtd ParvaneStoreGroupTest (JVM); сценарий на эмуляторе после починки GPU — правило открыто"
+        "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (ensureGroup по version) + Client.kt (onCoreEvent group) — тесты libtd ParvaneStoreGroupTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (нотисы perms/members → UpdateChatPermissions/UpdateBasicGroupFullInfo)"
+      }
+    },
+    {
+      "id": "GROUP-2",
+      "title": "Права по типу содержимого соблюдаются на клиенте: композер блокирует, приёмный фильтр скрывает",
+      "contentKinds": {
+        "send_media": [
+          "photo",
+          "video",
+          "file",
+          "voice",
+          "video_note",
+          "audio"
+        ],
+        "send_stickers_gifs": [
+          "sticker",
+          "gif"
+        ],
+        "send_polls": [
+          "poll"
+        ],
+        "embed_links": [
+          "text+link"
+        ]
+      },
+      "cases": [
+        {
+          "name": "полные права — фото показывается",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "photo",
+          "hasLink": false,
+          "role": "member",
+          "allowed": true
+        },
+        {
+          "name": "send_media=false — фото скрыто",
+          "perms": {
+            "send_messages": true,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "photo",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "send_media=false — файл скрыт",
+          "perms": {
+            "send_messages": true,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "file",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "send_media=false — голосовое скрыто",
+          "perms": {
+            "send_messages": true,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "voice",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "send_media=false — текст показывается",
+          "perms": {
+            "send_messages": true,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "text",
+          "hasLink": false,
+          "role": "member",
+          "allowed": true
+        },
+        {
+          "name": "send_stickers_gifs=false — стикер скрыт",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": false,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "sticker",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "send_stickers_gifs=false — gif скрыт",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": false,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "gif",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "send_polls=false — опрос скрыт",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": true,
+            "send_polls": false,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "poll",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "embed_links=false — текст со ссылкой скрыт",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": false,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "text",
+          "hasLink": true,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "embed_links=false — текст без ссылки показывается",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": false,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "text",
+          "hasLink": false,
+          "role": "member",
+          "allowed": true
+        },
+        {
+          "name": "send_messages=false — любой вид скрыт",
+          "perms": {
+            "send_messages": false,
+            "send_media": true,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "text",
+          "hasLink": false,
+          "role": "member",
+          "allowed": false
+        },
+        {
+          "name": "location не фильтруется",
+          "perms": {
+            "send_messages": true,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "location",
+          "hasLink": false,
+          "role": "member",
+          "allowed": true
+        },
+        {
+          "name": "владелец не фильтруется",
+          "perms": {
+            "send_messages": false,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "photo",
+          "hasLink": false,
+          "role": "owner",
+          "allowed": true
+        },
+        {
+          "name": "админ не фильтруется",
+          "perms": {
+            "send_messages": true,
+            "send_media": true,
+            "send_stickers_gifs": true,
+            "send_polls": false,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "poll",
+          "hasLink": false,
+          "role": "admin",
+          "allowed": true
+        },
+        {
+          "name": "роль неизвестна — показывать",
+          "perms": {
+            "send_messages": true,
+            "send_media": false,
+            "send_stickers_gifs": true,
+            "send_polls": true,
+            "embed_links": true,
+            "invite_users": true,
+            "pin_messages": false,
+            "change_info": false
+          },
+          "kind": "photo",
+          "hasLink": false,
+          "role": null,
+          "allowed": true
+        }
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/groups.ts (isContentAllowedForMember), sync.ts (isHiddenByGroupPermissions), store.ts (toBannedRights)",
+        "desktop": [
+          "parvane-core/include/parvane/group.h (isContentAllowedForMember, contentHasLink)",
+          "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы; composer — defaultRestrictions)",
+          "тест desktop/verify_conformance_perms.sh",
+          "тест parvane-core parvane_group_client_tests"
+        ],
+        "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (файл участника без права скрыт, с правом показан)"
       }
     }
   ]

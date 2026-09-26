@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_chat_participants.h"
+#include "parvane/parvane_client.h" // Parvane: группы шины (spec 004)
 
 #include "apiwrap.h"
 #include "boxes/add_contact_box.h" // ShowAddParticipantsError
@@ -570,6 +571,15 @@ void ChatParticipants::add(
 		bool passGroupHistory,
 		Fn<void(bool)> done) {
 	if (const auto chat = peer->asChat()) {
+		// Parvane: добавить участников группы шины → group.addmember (права
+		// проверяет сервер; список обновит RefreshGroups по нотису).
+		if (const auto gid = Parvane::GroupIdForChat(chat); !gid.isEmpty()) {
+			for (const auto &user : users) {
+				Parvane::AddMember(gid, Parvane::AddressForUser(user));
+			}
+			if (done) done(true);
+			return;
+		}
 		for (const auto &user : users) {
 			_api.request(MTPmessages_AddChatUser(
 				chat->inputChat(),
@@ -757,6 +767,11 @@ void ChatParticipants::kick(
 		not_null<PeerData*> participant) {
 	Expects(participant->isUser());
 
+	// Parvane: удалить участника группы шины → group.removemember
+	if (const auto gid = Parvane::GroupIdForChat(chat); !gid.isEmpty()) {
+		Parvane::KickMember(gid, Parvane::AddressForUser(participant->asUser()));
+		return;
+	}
 	_api.request(MTPmessages_DeleteChatUser(
 		MTP_flags(0),
 		chat->inputChat(),

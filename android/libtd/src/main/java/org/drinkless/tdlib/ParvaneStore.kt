@@ -14,6 +14,65 @@ class ParvaneStore {
     companion object {
         const val MAX_USER_ID = (1L shl 40) - 1 // TDLib: id пользователя < 2^40
         const val MAX_GROUP_HASH = (1L shl 39) - 1 // basic group id ≤ 999999999999 (X: ChatId.MAX_GROUP_ID)
+        // spec 004: формат инвайт-ссылки — как у desktop (web открывает её legacy-веткой)
+        const val INVITE_HOST = "https://parvane.invite/"
+        private val HEX32 = Regex("^[0-9a-f]{32}$")
+        private val HASH_TOKEN = Regex("#\\+([0-9a-f]{32})")
+        fun buildInviteLink(token: String) = INVITE_HOST + token
+        /** Токен из ссылки любого формата: parvane.invite/<t>, …#+<t>, голый 32 hex; null — не наша. */
+        fun inviteTokenOf(linkOrToken: String?): String? {
+            val u = linkOrToken?.trim() ?: return null
+            if (HEX32.matches(u)) return u
+            HASH_TOKEN.find(u)?.let { return it.groupValues[1] }
+            for (prefix in listOf("https://parvane.invite/", "http://parvane.invite/", "parvane.invite/")) {
+                if (u.startsWith(prefix, ignoreCase = true)) {
+                    val t = u.substring(prefix.length).substringBefore('/').substringBefore('?')
+                    return if (HEX32.matches(t)) t else null
+                }
+            }
+            return null
+        }
+        /** Обратно к 8 разрешениям провода из ChatPermissions экрана «Permissions». */
+        fun permissionsToWire(p: TdApi.ChatPermissions): JSONObject = JSONObject()
+            .put("send_messages", p.canSendBasicMessages)
+            .put("send_media", p.canSendAudios || p.canSendDocuments || p.canSendPhotos || p.canSendVideos || p.canSendVideoNotes || p.canSendVoiceNotes)
+            .put("send_stickers_gifs", p.canSendOtherMessages)
+            .put("send_polls", p.canSendPolls)
+            .put("embed_links", p.canAddLinkPreviews)
+            .put("invite_users", p.canInviteUsers)
+            .put("pin_messages", p.canPinMessages)
+            .put("change_info", p.canChangeInfo)
+        /** Обратно к 6 правам провода из ChatAdministratorRights экрана «Edit admin». */
+        fun adminRightsToWire(r: TdApi.ChatAdministratorRights): JSONObject = JSONObject()
+            .put("change_info", r.canChangeInfo)
+            .put("delete_messages", r.canDeleteMessages)
+            .put("ban_users", r.canRestrictMembers)
+            .put("invite_users", r.canInviteUsers)
+            .put("pin_messages", r.canPinMessages)
+            .put("add_admins", r.canPromoteMembers)
+        private val MEDIA_KINDS = setOf("photo", "video", "file", "voice", "video_note", "audio")
+        private val STICKER_KINDS = setOf("sticker", "gif")
+        /** conformance GROUP-2: разрешён ли вид содержимого участнику БЕЗ роли по правам по умолчанию. */
+        fun isContentAllowedForMember(perms: JSONObject?, kind: String, hasLink: Boolean): Boolean {
+            fun b(k: String) = perms?.optBoolean(k, true) ?: true
+            if (!b("send_messages")) return false
+            if (!b("send_media") && kind in MEDIA_KINDS) return false
+            if (!b("send_stickers_gifs") && kind in STICKER_KINDS) return false
+            if (!b("send_polls") && kind == "poll") return false
+            if (!b("embed_links") && kind == "text" && hasLink) return false
+            return true
+        }
+        /** Есть ли ссылка в тексте: превью webpage или сущность url/text_url (имена tt и короткие). */
+        fun contentHasLink(content: JSONObject?): Boolean {
+            if (content == null) return false
+            content.optJSONObject("webpage")?.let { if (it.length() > 0) return true }
+            val ents = content.optJSONArray("entities") ?: return false
+            for (i in 0 until ents.length()) {
+                val t = ents.optJSONObject(i)?.optString("type") ?: continue
+                if (t == "MessageEntityUrl" || t == "MessageEntityTextUrl" || t == "url" || t == "text_url") return true
+            }
+            return false
+        }
     }
     /** Группа Parvane: group_id (uuid) ↔ basic group TdApi (chatId = -basicGroupId). */
     class GroupRef(val gid: String, var name: String, var members: List<String>, var createdBy: String,
@@ -25,6 +84,48 @@ class ParvaneStore {
         var avatarFileId: String = ""
         var permissions: JSONObject? = null // default_permissions провода; null — по умолчанию
         var version: Long = -1 // ревизия сведений (GROUP-1); -1 — не известна
+        // spec 004: заявки (только менеджерам ссылок; 0 — нет/не отдано) и основная ссылка (кэш invite.list)
+        var pendingRequests: Int = 0
+        var primaryInviteLink: TdApi.ChatInviteLink? = null
+    }
+
+    // ── spec 004: чистые маппинги для экранов управления X (JVM-тесты) ──────────
+    /** Ссылка провода (13 полей) → TdApi.ChatInviteLink. */
+    fun inviteLinkOf(l: JSONObject): TdApi.ChatInviteLink = TdApi.ChatInviteLink(
+        buildInviteLink(l.optString("token")), l.optString("title", ""), idOf(l.optString("created_by")),
+        l.optInt("created_at"), 0, l.optInt("expires_at"), null, l.optInt("max_uses"), l.optInt("uses"), 0,
+        l.optInt("pending_requests"), l.optBoolean("request_needed"), l.optBoolean("is_primary"), l.optBoolean("revoked"))
+    /** Превью group.invite.check → TdApi.ChatInviteLinkInfo (chatId — только если уже участник). */
+    fun inviteLinkInfoOf(j: JSONObject): TdApi.ChatInviteLinkInfo {
+        val gid = j.optString("group_id")
+        val chatId = if (j.optBoolean("already_member")) (groupsByGid[gid]?.chatId ?: 0L) else 0L
+        val type: TdApi.InviteLinkChatType = if (j.optString("kind") == "channel") TdApi.InviteLinkChatTypeChannel() else TdApi.InviteLinkChatTypeBasicGroup()
+        return TdApi.ChatInviteLinkInfo(chatId, 0, type, j.optString("name", ""), null, 0, j.optString("about", ""),
+            j.optInt("members_count"), LongArray(0), null, j.optBoolean("request_needed"), false, null)
+    }
+    /** Ответ group.join → ChatJoinResult* либо Error(400, код). */
+    fun joinResultOf(j: JSONObject): TdApi.Object = when {
+        j.optBoolean("ok") && j.optBoolean("pending") -> TdApi.ChatJoinResultRequestSent()
+        j.optBoolean("ok") -> TdApi.ChatJoinResultSuccess(groupsByGid[j.optString("group_id")]?.chatId ?: 0L)
+        j.optString("error_code") == "declined" -> TdApi.ChatJoinResultDeclined()
+        else -> TdApi.Error(400, j.optString("error_code").ifEmpty { j.optString("error", "failed") })
+    }
+    /** Заявки group.request.list → TdApi.ChatJoinRequests. */
+    fun joinRequestsOf(arr: JSONArray?): TdApi.ChatJoinRequests {
+        val list = ArrayList<TdApi.ChatJoinRequest>()
+        if (arr != null) for (i in 0 until arr.length()) {
+            val r = arr.getJSONObject(i)
+            list += TdApi.ChatJoinRequest(idOf(r.optString("member")), r.optInt("created_at"), "")
+        }
+        return TdApi.ChatJoinRequests(list.size, list.toTypedArray())
+    }
+    /** Роль участника: owner|admin|member|null (не участник / нет сведений). */
+    fun roleOf(g: GroupRef?, address: String): String? = when {
+        g == null -> null
+        address == g.createdBy -> "owner"
+        g.roles[address] == "admin" -> "admin"
+        g.members.contains(address) -> "member"
+        else -> null
     }
 
     /** Права участников по умолчанию провода → TdApi.ChatPermissions (16 полей бандла X). */
@@ -50,6 +151,7 @@ class ParvaneStore {
     }
     private val groupsByGid = ConcurrentHashMap<String, GroupRef>()
     private val groupsByChatId = ConcurrentHashMap<Long, GroupRef>()
+    fun groups(): Collection<GroupRef> = groupsByGid.values
     fun isGroup(address: String) = groupsByGid.containsKey(address)
     fun group(gid: String): GroupRef? = groupsByGid[gid]
     fun groupByChat(chatId: Long): GroupRef? = groupsByChatId[chatId]
@@ -278,6 +380,7 @@ class ParvaneStore {
                 }
             }
             g.adminRights = rights
+            g.pendingRequests = info.optInt("pending_requests", -1).coerceAtLeast(0)
         }
         val chat = chats[g.chatId] ?: TdApi.Chat().apply {
             id = g.chatId
@@ -296,6 +399,8 @@ class ParvaneStore {
         // Права по умолчанию — только у групп; в канале пишут владелец и админы
         chat.permissions = if (info?.optString("kind") == "channel") TdApi.ChatPermissions(true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false)
             else chatPermissionsOf(g.permissions)
+        // spec 004: счётчик заявок → строка «Join Requests» в X (только при > 0, как TDLib)
+        chat.pendingJoinRequests = if (g.pendingRequests > 0) TdApi.ChatJoinRequestsInfo(g.pendingRequests, LongArray(0)) else null
         chats[g.chatId] = chat
         return Triple(chat, basicGroup(g), existed == null)
     }
@@ -322,6 +427,7 @@ class ParvaneStore {
         creatorUserId = idOf(g.createdBy)
         members = g.members.map { m -> TdApi.ChatMember(TdApi.MessageSenderUser(idOf(m)), "", 0, 0, memberStatus(g, m)) }.toTypedArray()
         botCommands = arrayOf()
+        inviteLink = g.primaryInviteLink // spec 004: основная ссылка (getPrimaryChatInviteLink в X)
     }
     fun chatMember(g: GroupRef, address: String): TdApi.ChatMember =
         TdApi.ChatMember(TdApi.MessageSenderUser(idOf(address)), "", 0, 0, memberStatus(g, address))

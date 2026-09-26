@@ -156,9 +156,7 @@ FNV-смещение без последней цифры: так историч
 - неизвестный `change` не считать ошибкой: игнорировать поле и перечитать
   группу; кадр без поля `group` (старые клиенты) — игнорировать целиком.
 
-Приёмный фильтр прав по типу содержимого (медиа/стикеры/опросы/ссылки от
-участника без права) — часть правила только для web; desktop и android
-проверяют права в композере и меню, фильтр на приёме — следующая фича.
+Права по типу содержимого — отдельное правило GROUP-2 ниже.
 
 Реализации: web `api/parvane/store.ts` (`shouldApplyGroupInfo`, `registerGroup`),
 `api/parvane/groups.ts` (`applyNotice`, `refreshMemberships`), `api/parvane/sync.ts`
@@ -170,10 +168,53 @@ FNV-смещение без последней цифры: так историч
 `libtd/.../ParvaneStore.kt` (`ensureGroup` по `version`). Тесты: web
 `conformance.test.ts` (GROUP-1) и `scripts/e2e_web_group_info.mjs` (открытый
 профиль, устройство отсутствовало); desktop `desktop/verify_conformance_group.sh`
-(нотис/список, устаревший нотис, рестарт); android — JVM-юнит
-`libtd/src/test/.../ParvaneStoreGroupTest.kt`; сценарий на эмуляторе
-(`android/tgx_group_flow.sh`) — после починки хостового GPU-стека, до него
-правило для android считается ОТКРЫТЫМ.
+(нотис/список, устаревший нотис, рестарт, нотис применяется ровно один раз);
+android — JVM-юнит `libtd/src/test/.../ParvaneStoreGroupTest.kt` и сценарий
+на эмуляторе `android/tgx_group_manage_flow.sh` (нотисы perms/members → 
+`UpdateChatPermissions`/`UpdateBasicGroupFullInfo` без перезапуска; зелёный
+27 сен 2026, AVD с mesa-обходом). Правило закрыто на всех клиентах.
+
+## GROUP-2. Права по типу содержимого соблюдаются на клиенте
+
+Сервер видит только шифртекст группового сообщения и проверяет лишь
+`send_messages` (участник без роли и без права не может писать вовсе), а
+также отдельные действия (закреп, приглашение, смена информации). Тип
+содержимого — медиа, стикеры/GIF, опросы, ссылки в тексте — сервер не знает,
+поэтому права по умолчанию по типу содержимого (`send_media`,
+`send_stickers_gifs`, `send_polls`, `embed_links`) соблюдают клиенты, и ТОЛЬКО
+все три сразу: иначе то, что один клиент не даёт отправить, другой покажет и
+позволит отправить в обход (2026-09-26, spec 004).
+
+Клиент обязан:
+
+- в композере и меню вложений участника без роли блокировать запрещённые
+  виды по текущим правам по умолчанию (владелец и админы ограничениям не
+  подчиняются);
+- полученное групповое сообщение запрещённого вида от участника без роли не
+  показывать и не считать непрочитанным; факт скрытия писать в журнал;
+  сообщения владельца и админов показывать всегда; сообщения с неизвестной
+  ролью автора (сведений группы ещё нет) — показывать;
+- оценивать при приёме и не пересматривать уже показанное при смене прав
+  (единая формула — таблица `contentKinds` в `sync-rules.json`: `send_media`
+  → photo/video/file/voice/video_note/audio, `send_stickers_gifs` →
+  sticker/gif, `send_polls` → poll, `embed_links` → text с превью или
+  URL-сущностью; `send_messages=false` → любой вид; location не фильтруется).
+
+Реализации: web `api/parvane/groups.ts` (`isContentAllowedForMember`) и
+`api/parvane/sync.ts` (`isHiddenByGroupPermissions`, live + full sync,
+журнал `group-perm-hidden`), композер — `defaultBannedRights` (spec 003);
+desktop `parvane-core/include/parvane/group.h` (`isContentAllowedForMember`,
+`contentHasLink`) + `parvane/parvane_client.cpp` (`injectOnMain`, маркер
+«скрыто правами группы»; композер — нативные `defaultRestrictions` через
+`amRestricted`); android `libtd/.../ParvaneStore.kt` (`isContentAllowedForMember`)
++ `Client.kt` (приём), композер — `Chat.permissions`. Тесты: web
+`conformance.test.ts` (GROUP-2: таблица кейсов + grep desktop/android);
+desktop `desktop/verify_conformance_perms.sh` (файл в обход скрыт,
+владелец не фильтруется, композер блокирует) и parvane-core
+`parvane_group_client_tests`; android — JVM `ParvaneStorePermsTest` и сценарий
+на эмуляторе `android/tgx_group_manage_flow.sh` (файл участника без права
+скрыт и в чат не попал, после возврата права показан; зелёный 27 сен 2026).
+Правило закрыто на всех клиентах.
 
 ## Обязательный сценарий: устройство отсутствовало
 

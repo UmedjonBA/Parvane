@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/edit_peer_requests_box.h"
+#include "parvane/parvane_client.h" // Parvane: заявки групп шины (spec 004)
 
 #include "api/api_invite_links.h"
 #include "apiwrap.h"
@@ -357,6 +358,27 @@ void RequestsBoxController::loadMoreRows() {
 		return;
 	}
 
+	// Parvane: заявки группы шины → group.request.list одним списком
+	if (const auto gid = Parvane::GroupIdForChat(_peer); !gid.isEmpty()) {
+		if (_offsetDate) {
+			_allLoaded = true;
+			return;
+		}
+		_loadRequestId = -1;
+		Parvane::ListJoinRequests(gid, crl::guard(this, [=](bool ok, std::vector<Parvane::GroupJoinRequest> list, const QString &) {
+			_loadRequestId = 0;
+			for (const auto &r : list) {
+				const auto user = Parvane::EnsureUser(&session(), r.member);
+				_offsetDate = r.date;
+				_offsetUser = user;
+				appendRow(user, r.date);
+			}
+			_allLoaded = true;
+			refreshDescription();
+			delegate()->peerListRefreshRows();
+		}));
+		return;
+	}
 	// First query is small and fast, next loads a lot of rows.
 	const auto limit = _offsetDate ? kPerPage : kFirstPageCount;
 	using Flag = MTPmessages_GetChatInviteImporters::Flag;
@@ -670,6 +692,9 @@ bool RequestsBoxSearchController::searchInCache() {
 
 bool RequestsBoxSearchController::loadMoreRows() {
 	if (_query.isEmpty()) {
+		return false;
+	} else if (!Parvane::GroupIdForChat(_peer).isEmpty()) {
+		// Parvane: серверного поиска по заявкам нет — показываем весь список
 		return false;
 	} else if (_allLoaded || isLoading()) {
 		return true;

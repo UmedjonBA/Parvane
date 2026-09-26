@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/edit_peer_invite_links.h"
+#include "parvane/parvane_client.h" // Parvane: группы шины (spec 004)
 
 #include "data/data_peer.h"
 #include "data/data_user.h"
@@ -803,6 +804,10 @@ void AdminsController::prepare() {
 		}
 	}
 	if (!_admin->isSelf()) {
+		return;
+	}
+	// Parvane: у групп шины список «ссылки других админов» не ведётся — пусто
+	if (!Parvane::GroupIdForChat(_peer).isEmpty()) {
 		return;
 	}
 	_requestId = session().api().request(MTPmessages_GetAdminsWithInvites(

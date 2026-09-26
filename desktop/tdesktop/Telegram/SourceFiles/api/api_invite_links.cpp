@@ -6,6 +6,9 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_invite_links.h"
+#include "parvane/parvane_client.h" // Parvane: ссылки групп шины (spec 004)
+#include "lang/lang_keys.h"
+#include "ui/toast/toast.h"
 
 #include "api/api_chat_participants.h"
 #include "data/data_changes.h"
@@ -66,6 +69,26 @@ JoinedByLinkSlice ParseJoinedByLinkSlice(
 	return result;
 }
 
+// Parvane: ссылка провода → Api::InviteLink (автор — UserData по адресу)
+[[nodiscard]] InviteLink ParvaneLink(
+		not_null<PeerData*> peer,
+		const Parvane::GroupInviteLink &l) {
+	auto result = InviteLink{
+		.link = Parvane::GroupInviteUrl(l.token),
+		.label = l.title,
+		.admin = Parvane::EnsureUser(&peer->session(), l.createdBy),
+		.date = l.date,
+		.expireDate = l.expireDate,
+		.usageLimit = l.usageLimit,
+		.usage = l.usage,
+		.requested = l.requested,
+		.requestApproval = l.requestApproval,
+		.permanent = l.permanent,
+		.revoked = l.revoked,
+	};
+	return result;
+}
+
 InviteLinks::InviteLinks(not_null<ApiWrap*> api) : _api(api) {
 }
 
@@ -86,6 +109,29 @@ void InviteLinks::performCreate(
 	auto &callbacks = _createCallbacks[args.peer];
 	if (args.done) {
 		callbacks.push_back(std::move(args.done));
+	}
+
+	// Parvane: ссылка группы шины → group.invite.create; ответ кладём в первый
+	// срез как штатный prepend (spec 004, US4).
+	if (const auto gid = Parvane::GroupIdForChat(args.peer); !gid.isEmpty()) {
+		const auto peer = args.peer;
+		Parvane::CreateGroupInvite(gid, args.label, args.expireDate, args.usageLimit, args.requestApproval,
+			[=](bool ok, Parvane::GroupInviteLink created, const QString &error) {
+				const auto callbacks = _createCallbacks.take(peer);
+				if (!ok) {
+					Ui::Toast::Show(error);
+					return;
+				}
+				const auto link = ParvaneLink(peer, created);
+				prependMyToFirstSlice(peer, peer->session().user(), link);
+				_updates.fire(Update{ .peer = peer, .admin = peer->session().user(), .now = link });
+				if (callbacks) {
+					for (const auto &callback : *callbacks) {
+						callback(link);
+					}
+				}
+			});
+		return;
 	}
 
 	const auto requestApproval = !args.subscription && args.requestApproval;
@@ -260,6 +306,45 @@ void InviteLinks::performEdit(
 	if (done) {
 		callbacks.push_back(std::move(done));
 	}
+	// Parvane: отзыв ссылки группы шины → group.invite.revoke; правка
+	// параметров сервером не поддерживается — честный тост (spec 004, US4).
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		if (!revoke) {
+			_editCallbacks.erase(key);
+			Ui::Toast::Show(tr::lng_parvane_invite_edit_unsupported(tr::now));
+			return;
+		}
+		Parvane::RevokeGroupInvite(gid, Parvane::GroupInviteToken(link), [=](bool ok, const QString &error) {
+			const auto callbacks = _editCallbacks.take(key);
+			if (!ok) {
+				Ui::Toast::Show(error);
+				return;
+			}
+			auto revokedLink = std::optional<Link>();
+			auto i = _firstSlices.find(peer);
+			if (i != end(_firstSlices)) {
+				const auto j = ranges::find(i->second.links, key.link, &Link::link);
+				if (j != end(i->second.links)) {
+					revokedLink = *j;
+					revokedLink->revoked = true;
+					i->second.links.erase(j);
+					if (i->second.count > 0) {
+						--i->second.count;
+					}
+				}
+			}
+			if (!revokedLink) {
+				revokedLink = Link{ .link = key.link, .admin = admin, .revoked = true };
+			}
+			if (callbacks) {
+				for (const auto &callback : *callbacks) {
+					callback(*revokedLink);
+				}
+			}
+			_updates.fire(Update{ .peer = peer, .admin = admin, .was = key.link, .now = revokedLink });
+		});
+		return;
+	}
 	using Flag = MTPmessages_EditExportedChatInvite::Flag;
 	const auto flags = (revoke ? Flag::f_revoked : Flag(0))
 		| (!revoke ? Flag::f_title : Flag(0))
@@ -364,6 +449,23 @@ void InviteLinks::destroy(
 	if (done) {
 		callbacks.push_back(std::move(done));
 	}
+	// Parvane: удалить отозванную ссылку группы шины → group.invite.delete
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		Parvane::DeleteGroupInvite(gid, Parvane::GroupInviteToken(link), [=](bool ok, const QString &error) {
+			const auto callbacks = _deleteCallbacks.take(key);
+			if (!ok) {
+				Ui::Toast::Show(error);
+				return;
+			}
+			if (callbacks) {
+				for (const auto &callback : *callbacks) {
+					callback();
+				}
+			}
+			_updates.fire(Update{ .peer = peer, .admin = admin, .was = key.link });
+		});
+		return;
+	}
 	_api->request(MTPmessages_DeleteExportedChatInvite(
 		peer->input(),
 		MTP_string(link)
@@ -399,6 +501,23 @@ void InviteLinks::destroyAllRevoked(
 	if (done) {
 		callbacks.push_back(std::move(done));
 	}
+	// Parvane: удалить все отозванные — список revoked + delete по одной
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		Parvane::ListGroupInvites(gid, true, [=](bool ok, std::vector<Parvane::GroupInviteLink> links, const QString &) {
+			if (ok) {
+				for (const auto &l : links) {
+					Parvane::DeleteGroupInvite(gid, l.token, nullptr);
+				}
+			}
+			if (const auto callbacks = _deleteRevokedCallbacks.take(peer)) {
+				for (const auto &callback : *callbacks) {
+					callback();
+				}
+			}
+			_allRevokedDestroyed.fire({ peer, admin });
+		});
+		return;
+	}
 	_api->request(MTPmessages_DeleteRevokedExportedChatInvites(
 		peer->input(),
 		admin->inputUser()
@@ -414,6 +533,29 @@ void InviteLinks::destroyAllRevoked(
 
 void InviteLinks::requestMyLinks(not_null<PeerData*> peer) {
 	if (_firstSliceRequests.contains(peer)) {
+		return;
+	}
+	// Parvane: активные ссылки группы шины (group.invite.list) → первый срез;
+	// основная (is_primary) — вперёд и в chat->inviteLink
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		_firstSliceRequests.emplace(peer, mtpRequestId(-1));
+		Parvane::ListGroupInvitesWithPrimary(gid, [=](bool ok, std::vector<Parvane::GroupInviteLink> links, const QString &) {
+			_firstSliceRequests.remove(peer);
+			if (!ok) {
+				return;
+			}
+			auto slice = Links();
+			for (const auto &l : links) {
+				slice.links.push_back(ParvaneLink(peer, l));
+			}
+			slice.count = int(slice.links.size());
+			BringPermanentToFront(slice);
+			const auto j = _firstSlices.emplace_or_assign(peer, std::move(slice)).first;
+			if (const auto permanent = lookupMyPermanent(j->second)) {
+				editPermanentLink(peer, permanent->link);
+			}
+			notify(peer);
+		});
 		return;
 	}
 	const auto requestId = _api->request(MTPmessages_GetExportedChatInvites(
@@ -468,6 +610,23 @@ void InviteLinks::processRequest(
 	_processRequests.emplace(
 		std::pair{ peer, user },
 		ProcessRequest{ std::move(done), std::move(fail) });
+	// Parvane: решение заявки группы шины → group.request.decide (spec 004, US5)
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		Parvane::DecideJoinRequest(gid, Parvane::AddressForUser(user), approved, [=](bool ok, const QString &error) {
+			const auto callbacks = _processRequests.take({ peer, user });
+			if (!ok) {
+				Ui::Toast::Show(error);
+				if (callbacks && callbacks->fail) {
+					callbacks->fail();
+				}
+				return;
+			}
+			if (callbacks && callbacks->done) {
+				callbacks->done();
+			}
+		});
+		return;
+	}
 	using Flag = MTPmessages_HideChatJoinRequest::Flag;
 	_api->request(MTPmessages_HideChatJoinRequest(
 		MTP_flags(approved ? Flag::f_approved : Flag(0)),
@@ -597,6 +756,12 @@ rpl::producer<> InviteLinks::allRevokedDestroyed(
 
 void InviteLinks::requestJoinedFirstSlice(LinkKey key) {
 	if (_firstJoinedRequests.contains(key)) {
+		return;
+	}
+	// Parvane: вступивших по ссылке сервер не хранит (только счётчик) — пусто
+	if (!Parvane::GroupIdForChat(key.peer).isEmpty()) {
+		_firstJoined[key] = JoinedByLinkSlice();
+		_joinedFirstSliceLoaded.fire_copy(key);
 		return;
 	}
 	const auto requestId = _api->request(MTPmessages_GetChatInviteImporters(
@@ -776,6 +941,26 @@ void InviteLinks::requestMoreLinks(
 		const QString &lastLink,
 		bool revoked,
 		Fn<void(Links)> done) {
+	// Parvane: страницы у шины нет — первый вызов отдаёт весь список
+	// (активные/отозванные), повторный с offset — пусто (конец).
+	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
+		if (!lastLink.isEmpty()) {
+			done(Links());
+			return;
+		}
+		Parvane::ListGroupInvites(gid, revoked, [=](bool ok, std::vector<Parvane::GroupInviteLink> links, const QString &) {
+			auto slice = Links();
+			if (ok) {
+				for (const auto &l : links) {
+					slice.links.push_back(ParvaneLink(peer, l));
+				}
+				slice.count = int(slice.links.size());
+				BringPermanentToFront(slice);
+			}
+			done(std::move(slice));
+		});
+		return;
+	}
 	using Flag = MTPmessages_GetExportedChatInvites::Flag;
 	_api->request(MTPmessages_GetExportedChatInvites(
 		MTP_flags(Flag::f_offset_link
