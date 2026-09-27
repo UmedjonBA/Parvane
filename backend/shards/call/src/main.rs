@@ -7,7 +7,7 @@ use futures::StreamExt;
 use parvane_types::{
     CallHistoryResponse, CallMedia, CallRecord, CallSignal, CallSignalPayload, IceServer,
     IceServersResponse, ParvaneEvent, VerifyRequest, VerifyResponse,
-    topics::{CALL_HISTORY_REQUEST, CALL_ICE_REQUEST, CALL_SIGNAL, IDENTITY_VERIFY, call_inbox},
+    topics::{CALL_HISTORY_REQUEST, CALL_ICE_REQUEST, CALL_SIGNAL, GROUP_CALL_ROUTE_PREFIX, IDENTITY_VERIFY, call_inbox},
 };
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -83,7 +83,7 @@ fn media_str(m: CallMedia) -> &'static str {
 }
 
 fn route_principal(route: &str) -> &str {
-    route.strip_prefix("gcall:").unwrap_or(route)
+    route.strip_prefix(GROUP_CALL_ROUTE_PREFIX).unwrap_or(route)
 }
 
 /// P-35: лимиты сигналов звонка.
@@ -167,7 +167,7 @@ async fn record_signal(
         if ringing >= MAX_RINGING_PER_CALLER {
             anyhow::bail!("слишком много незавершённых звонков");
         }
-        let is_group = to.starts_with("gcall:");
+        let is_group = to.starts_with(GROUP_CALL_ROUTE_PREFIX);
         sqlx::query(
             "INSERT INTO calls (id, caller, callee, media, status, started_at, is_group)
              VALUES (?, ?, ?, ?, 'ringing', ?, ?)",
@@ -214,7 +214,11 @@ async fn record_signal(
                 anyhow::bail!("звонок уже завершён");
             }
         }
-        CallSignal::Invite { .. } | CallSignal::GroupInvite { .. } => unreachable!(),
+        // 4.14: invite обрабатывается выше; сюда попасть не должен, но пользовательский
+        // ввод не паникует — возвращаем ошибку.
+        CallSignal::Invite { .. } | CallSignal::GroupInvite { .. } => {
+            anyhow::bail!("invite не является переходом состояния");
+        }
     }
 
     if let Some(new_status) = next_status(Some(&current), signal) {

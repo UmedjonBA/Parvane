@@ -20,7 +20,8 @@ import {
   type WireCallRecord,
   type WireEvent,
   type WireIceServer,
-  type WireUserInfo } from './wire';
+  type WireUserInfo,
+  buildGroupCallRoute } from './wire';
 
 type CallDependencies = {
   getConnection: () => GatewayConnection | undefined;
@@ -313,7 +314,7 @@ export function createCallController(deps: CallDependencies) {
         const store = deps.getStore();
         // Реальный from (шард сверяет с JWT), gcall:-префикс только в to
         const envelope = buildWireEvent(store.self, deps.getToken(), {
-          to: `gcall:${peer}`, signal,
+          to: buildGroupCallRoute(peer), signal,
         });
         deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
       },

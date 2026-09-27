@@ -160,7 +160,7 @@ async fn handle_fetch(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
     .unwrap_or_else(|e| PreviewFetchResponse {
         ok: false,
         webpage: None,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
     });
 
     let json = serde_json::to_vec(&resp).unwrap_or_default();
@@ -188,7 +188,7 @@ async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     .await
     .unwrap_or_else(|e| {
         warn!("map tile: {}", e);
-        MapTileResponse { ok: false, png_base64: None, error: Some(e.to_string()) }
+        MapTileResponse { ok: false, png_base64: None, error: Some(parvane_db::public_error(&e)) }
     });
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     let _ = nc.publish(reply, json.into()).await;
@@ -245,7 +245,7 @@ async fn resolve_preview(pool: &SqlitePool, url: &str) -> PreviewFetchResponse {
     }
     let resp = match fetch_preview(url).await {
         Ok(webpage) => PreviewFetchResponse { ok: true, webpage: Some(webpage), error: None },
-        Err(e) => PreviewFetchResponse { ok: false, webpage: None, error: Some(e.to_string()) },
+        Err(e) => PreviewFetchResponse { ok: false, webpage: None, error: Some(parvane_db::public_error(&e)) },
     };
     store_cache(pool, url, &resp).await;
     resp

@@ -139,18 +139,51 @@ pub mod topics {
     /// (sealed sender) и не разбирает — только факт доставки.
     pub const MSG_USER_WILDCARD: &str = "msg.user.>";
 
+    // ── Префиксы субъектов (4.10: без строковых литералов в шардах) ──
+    /// Префикс request/reply-субъектов мессенджера (`msg.chat.*`).
+    pub const MSG_CHAT_PREFIX: &str = "msg.chat.";
+    /// Префикс личного инбокса (`msg.user.<addr>`); см. [`msg_inbox`].
+    pub const MSG_USER_PREFIX: &str = "msg.user.";
+    /// Префикс инбокса сигналов звонка (`call.user.<addr>`); см. [`call_inbox`].
+    pub const CALL_USER_PREFIX: &str = "call.user.";
+    /// Эфемерный typing-субъект: `msg.typing.<числовой id клиента>` (P-18).
+    pub const MSG_TYPING_PREFIX: &str = "msg.typing.";
+    /// Эфемерный presence-субъект: `presence.<числовой id клиента>` (P-18).
+    pub const PRESENCE_PREFIX: &str = "presence.";
+    /// Wildcard'ы эфемерных субъектов для ACL gateway/NATS.
+    pub const CALL_USER_WILDCARD: &str = "call.user.>";
+    pub const MSG_TYPING_WILDCARD: &str = "msg.typing.>";
+    pub const PRESENCE_WILDCARD: &str = "presence.>";
+    /// Маршрут группового mesh-звонка в поле `to` сигнала: `gcall:<user>`.
+    pub const GROUP_CALL_ROUTE_PREFIX: &str = "gcall:";
+
+    /// `msg.typing.<id>` — typing-субъект клиента/группы.
+    pub fn msg_typing(id: &str) -> String {
+        format!("{MSG_TYPING_PREFIX}{id}")
+    }
+
+    /// `presence.<id>` — presence-субъект пользователя.
+    pub fn presence(id: &str) -> String {
+        format!("{PRESENCE_PREFIX}{id}")
+    }
+
+    /// `gcall:<user>` — маршрут группового звонка (см. [`GROUP_CALL_ROUTE_PREFIX`]).
+    pub fn group_call_route(user: &str) -> String {
+        format!("{GROUP_CALL_ROUTE_PREFIX}{user}")
+    }
+
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
     /// допустим). Например: `call.user.bob@local`.
     pub fn call_inbox(user: &str) -> String {
-        format!("call.user.{user}")
+        format!("{CALL_USER_PREFIX}{user}")
     }
 
     /// Персональный инбокс пользователя для входящих сообщений и уведомлений
     /// (delivered/receipts). Получатель подписывается на точный субъект.
     /// Пример: `msg.user.alice@local`. Изоляция «людей» — на gateway.
     pub fn msg_inbox(user: &str) -> String {
-        format!("msg.user.{user}")
+        format!("{MSG_USER_PREFIX}{user}")
     }
 }
 
@@ -1799,6 +1832,27 @@ mod tests {
         assert!(json.contains("\"kind\":\"voice\""));
         let back: MessageContent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, v);
+    }
+
+    // 4.10: префиксы субъектов и хелперы согласованы (клиенты зеркалят их)
+    #[test]
+    fn subject_prefix_helpers_are_consistent() {
+        use topics::*;
+        assert_eq!(msg_inbox("a@local"), "msg.user.a@local");
+        assert!(msg_inbox("a@local").starts_with(MSG_USER_PREFIX));
+        assert!(call_inbox("a@local").starts_with(CALL_USER_PREFIX));
+        assert_eq!(msg_typing("42"), "msg.typing.42");
+        assert_eq!(presence("42"), "presence.42");
+        assert_eq!(group_call_route("bob@local"), "gcall:bob@local");
+        assert!(MSG_SEND.starts_with(MSG_CHAT_PREFIX) && MSG_EDIT.starts_with(MSG_CHAT_PREFIX));
+        for (prefix, wildcard) in [
+            (MSG_USER_PREFIX, MSG_USER_WILDCARD),
+            (CALL_USER_PREFIX, CALL_USER_WILDCARD),
+            (MSG_TYPING_PREFIX, MSG_TYPING_WILDCARD),
+            (PRESENCE_PREFIX, PRESENCE_WILDCARD),
+        ] {
+            assert_eq!(wildcard, format!("{prefix}>"));
+        }
     }
 
     #[test]

@@ -220,6 +220,11 @@ export type WireCallRecord = {
 export function buildCallInboxTopic(user: string) {
   return `call.user.${user}`;
 }
+// Маршрут группового mesh-звонка в `to` сигнала (GROUP_CALL_ROUTE_PREFIX в parvane-types).
+export const GROUP_CALL_ROUTE_PREFIX = 'gcall:';
+export function buildGroupCallRoute(user: string) {
+  return `${GROUP_CALL_ROUTE_PREFIX}${user}`;
+}
 export const TOPIC_FILE_UPLOAD_CHUNK = 'file.upload.chunk';
 export const TOPIC_FILE_UPLOAD_COMPLETE = 'file.upload.complete';
 export const TOPIC_FILE_DOWNLOAD_REQUEST = 'file.download.request';
@@ -227,6 +232,16 @@ export const TOPIC_FILE_DELETE = 'file.delete';
 
 export function buildMsgInboxTopic(user: string) {
   return `msg.user.${user}`;
+}
+
+// Эфемерные субъекты (P-18): зеркалят msg_typing()/presence() из parvane-types.
+export const TOPIC_MSG_TYPING_PREFIX = 'msg.typing.';
+export const TOPIC_PRESENCE_PREFIX = 'presence.';
+export function buildTypingTopic(id: string | number) {
+  return `${TOPIC_MSG_TYPING_PREFIX}${id}`;
+}
+export function buildPresenceTopic(id: string | number) {
+  return `${TOPIC_PRESENCE_PREFIX}${id}`;
 }
 
 export function buildWireEvent<T>(from: string, token: string, payload: T): WireEvent<T> {

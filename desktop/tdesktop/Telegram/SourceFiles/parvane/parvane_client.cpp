@@ -1673,7 +1673,7 @@ ServerInfo FetchServerInfo() {
 	out.domain = u"local"_q;
 	try {
 		auto transport = MakeTransport(QString());
-		const auto raw = transport->request("identity.server.info", "{}", 5000);
+		const auto raw = transport->request(parvane::topics::IdentityServerInfo, "{}", 5000);
 		const auto resp = nlohmann::json::parse(raw);
 		if (resp.contains("domain") && resp["domain"].is_string()) {
 			const auto d = resp["domain"].get<std::string>();
@@ -1805,7 +1805,7 @@ bool RegisterStatus(const QString &user, const QString &token) {
 			{"user", user.toStdString()},
 			{"token", token.toStdString()},
 		};
-		const auto raw = transport->request("identity.register.status", req.dump(), 5000);
+		const auto raw = transport->request(parvane::topics::IdentityRegisterStatus, req.dump(), 5000);
 		return nlohmann::json::parse(raw).value("confirmed", false);
 	} catch (const std::exception &e) {
 		LOG(("Parvane: RegisterStatus exception: %1").arg(QString::fromUtf8(e.what())));
@@ -1928,7 +1928,7 @@ void EnsurePresenceSubscription(const QString &address) {
 		}
 		g_presenceSubscribedIds.insert(id);
 	}
-	t->subscribe("presence." + std::to_string(id),
+	t->subscribe(parvane::topics::presence(std::to_string(id)),
 		[](std::string, std::string payload) { HandlePresencePayload(payload); });
 }
 
@@ -2757,7 +2757,7 @@ void MirrorTyping(PeerData *peer) {
 		}
 		const parvane::json ev{ { "from", self }, { "to", to } };
 		try {
-			t->publish("msg.typing." + std::to_string(id), ev.dump());
+			t->publish(parvane::topics::msgTyping(std::to_string(id)), ev.dump());
 		} catch (const std::exception &) {
 		}
 	});
@@ -2836,7 +2836,7 @@ void SubscribeGroupTyping() {
 			}
 			g_typingGroupSubs.insert(id);
 		}
-		t->subscribe("msg.typing." + std::to_string(id),
+		t->subscribe(parvane::topics::msgTyping(std::to_string(id)),
 			[](std::string, std::string payload) { handleTypingFrame(payload); });
 	}
 }
@@ -4252,7 +4252,7 @@ void ResolveNames(const QStringList &addresses) {
 		auto profiles = QHash<QString, QString>(); // адрес → UserInfo JSON (bio/birthday/…)
 		try {
 			const auto reply = t->request(
-				"identity.user.resolve", reqStr, 3000);
+				parvane::topics::IdentityResolve, reqStr, 3000);
 			const auto j = parvane::json::parse(reply);
 			if (j.contains("users") && j["users"].is_array()) {
 				for (const auto &u : j["users"]) {
@@ -6238,7 +6238,7 @@ void publishPresenceHeartbeat() {
 		}
 		const parvane::json ev{ { "from", selfStd } };
 		try {
-			t->publish("presence." + std::to_string(id), ev.dump());
+			t->publish(parvane::topics::presence(std::to_string(id)), ev.dump());
 		} catch (const std::exception &) {
 		}
 	});
@@ -6768,7 +6768,7 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 			try {
 				const parvane::json req{ { "query", q } };
 				const auto reply = t->request(
-					"identity.user.search", req.dump(), 3000);
+					parvane::topics::IdentitySearch, req.dump(), 3000);
 				const auto j = parvane::json::parse(reply);
 				if (j.contains("users") && j["users"].is_array()) {
 					for (const auto &u : j["users"]) {
@@ -6824,7 +6824,7 @@ void SetDisplayName(const QString &name) {
 		}
 		const parvane::json req{ { "token", token }, { "display_name", nStd } };
 		try {
-			t->request("identity.user.setname", req.dump(), 3000);
+			t->request(parvane::topics::IdentitySetName, req.dump(), 3000);
 			LOG(("Parvane: имя обновлено на '%1'").arg(QString::fromStdString(nStd)));
 		} catch (const std::exception &) {
 		}
@@ -6853,7 +6853,7 @@ void SetProfileFields(const ProfileFields &fields) {
 			return;
 		}
 		try {
-			t->request("identity.user.setname", req.dump(), 3000);
+			t->request(parvane::topics::IdentitySetName, req.dump(), 3000);
 			auto shown = req;
 			shown.erase("token"); // JWT в лог не попадает
 			LOG(("Parvane: профиль обновлён (%1)").arg(QString::fromStdString(shown.dump()).left(400)));
@@ -7070,7 +7070,7 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 		}
 		try {
 			const parvane::json req{ { "token", token }, { "file_id", fileId } };
-			t->request("identity.user.setavatar", req.dump(), 3000);
+			t->request(parvane::topics::IdentitySetAvatar, req.dump(), 3000);
 			LOG(("Parvane: аватар обновлён (%1)").arg(QString::fromStdString(fileId)));
 		} catch (const std::exception &) {
 		}
@@ -8178,7 +8178,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				t = g_transport.get();
 			}
 			if (t) {
-				t->subscribe("msg.typing." + std::to_string(selfId),
+				t->subscribe(parvane::topics::msgTyping(std::to_string(selfId)),
 					[](std::string, std::string payload) { handleTypingFrame(payload); });
 				LOG(("Parvane: подписка на msg.typing.%1").arg(selfId));
 			}

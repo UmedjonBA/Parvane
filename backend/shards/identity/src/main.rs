@@ -717,9 +717,9 @@ async fn handle_setname(
                     SetNameResponse { ok: true, error: None }
                 }
             }
-            Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -743,9 +743,9 @@ async fn handle_setavatar(
                 info!("{} обновил аватар ({})", username, req.file_id);
                 SetNameResponse { ok: true, error: None }
             }
-            Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -798,11 +798,11 @@ async fn handle_setkey(
                     info!("{} зарегистрировал pubkey ({}…)", username, &req.pubkey.chars().take(12).collect::<String>());
                     SetNameResponse { ok: true, error: None }
                 }
-                Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+                Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => SetNameResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1104,11 +1104,11 @@ async fn handle_device_list(
         Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => match list_devices(pool, &username).await {
                 Ok(devices) => DeviceListResponse { ok: true, devices, error: None },
-                Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
+                Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
+            Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
+        Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1137,11 +1137,11 @@ async fn handle_device_revoke(
                     ok: false,
                     error: Some("устройство не найдено".into()),
                 },
-                Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+                Err(e) => DeviceRevokeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => DeviceRevokeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => DeviceRevokeResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => DeviceRevokeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1377,11 +1377,11 @@ async fn handle_link_offer(
                     info!("{} опубликовал оффер линковки (устройство '{}')", username, req.device_id);
                     LinkOfferResponse { ok: true, error: None }
                 }
-                Err(e) => LinkOfferResponse { ok: false, error: Some(e.to_string()) },
+                Err(e) => LinkOfferResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => LinkOfferResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => LinkOfferResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => LinkOfferResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => LinkOfferResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1397,11 +1397,11 @@ async fn handle_link_poll(
         Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
             Ok(username) => match poll_link(pool, &username, &req.device_id).await {
                 Ok((offers, grant, challenge)) => LinkPollResponse { ok: true, offers, grant, challenge, error: None },
-                Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(e.to_string()) },
+                Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(e.to_string()) },
+            Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(e.to_string()) },
+        Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1419,11 +1419,11 @@ async fn handle_link_challenge(
         Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => match store_link_challenge(pool, &username, &req.device_id, &req.eph_pub).await {
                 Ok(()) => LinkChallengeResponse { ok: true, error: None },
-                Err(e) => LinkChallengeResponse { ok: false, error: Some(e.to_string()) },
+                Err(e) => LinkChallengeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => LinkChallengeResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => LinkChallengeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => LinkChallengeResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => LinkChallengeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1443,12 +1443,12 @@ async fn handle_link_grant(
                         info!("{} выдал грант линковки устройству '{}'", username, req.device_id);
                         LinkGrantResponse { ok: true, error: None }
                     }
-                    Err(e) => LinkGrantResponse { ok: false, error: Some(e.to_string()) },
+                    Err(e) => LinkGrantResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
                 }
             }
-            Err(e) => LinkGrantResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => LinkGrantResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => LinkGrantResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => LinkGrantResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1470,11 +1470,11 @@ async fn handle_prekeys_publish(
                     );
                     PublishPrekeysResponse { ok: true, error: None }
                 }
-                Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
+                Err(e) => PublishPrekeysResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
             },
-            Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
+            Err(e) => PublishPrekeysResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => PublishPrekeysResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => PublishPrekeysResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1539,7 +1539,7 @@ async fn handle_issue(
         Err(e) => {
             error!("issue error: {}", e);
             IssueResponse {
-                ok: false, token: None, error: Some(e.to_string()), twofa_required: false, login_token: None, telegram_bot: None,
+                ok: false, token: None, error: Some(parvane_db::public_error(&e)), twofa_required: false, login_token: None, telegram_bot: None,
                 trust_secret: None,
             }
         }
@@ -1765,7 +1765,7 @@ async fn handle_password_change(nc: &Client, pool: &SqlitePool, decoding: &Decod
             info!("{} сменил пароль", user);
             PasswordChangeResponse { ok: true, error: None }
         }
-        Err(e) => PasswordChangeResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => PasswordChangeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1801,7 +1801,7 @@ async fn handle_twofa(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, ms
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match do_twofa(pool, decoding, &msg.payload).await {
         Ok((enabled, telegram_linked, trust_secret)) => TwoFactorResponse { ok: true, error: None, enabled, telegram_linked, trust_secret },
-        Err(e) => TwoFactorResponse { ok: false, error: Some(e.to_string()), enabled: false, telegram_linked: false, trust_secret: None },
+        Err(e) => TwoFactorResponse { ok: false, error: Some(parvane_db::public_error(&e)), enabled: false, telegram_linked: false, trust_secret: None },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -1885,7 +1885,7 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         }
         Err(e) => RegisterResponse {
             ok: false,
-            error: Some(e.to_string()),
+            error: Some(parvane_db::public_error(&e)),
             confirm_required: false,
             telegram_token: None,
         },
@@ -2098,7 +2098,7 @@ async fn handle_telegram_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats
         Ok((user, kind)) => TelegramConfirmResponse {
             ok: true, error: None, user: Some(user), kind: Some(kind.to_string()),
         },
-        Err(e) => TelegramConfirmResponse { ok: false, error: Some(e.to_string()), user: None, kind: None },
+        Err(e) => TelegramConfirmResponse { ok: false, error: Some(parvane_db::public_error(&e)), user: None, kind: None },
     };
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
@@ -2349,7 +2349,7 @@ async fn handle_email_confirm(nc: &Client, pool: &SqlitePool, msg: async_nats::M
     };
     let resp = match do_email_confirm(pool, &msg.payload).await {
         Ok(()) => EmailConfirmResponse { ok: true, error: None },
-        Err(e) => EmailConfirmResponse { ok: false, error: Some(e.to_string()) },
+        Err(e) => EmailConfirmResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     if let Err(e) = nc.publish(reply, json.into()).await {
@@ -2445,7 +2445,8 @@ fn rate_ok(user: &str) -> bool {
 
     let gmap = GLOBAL.get_or_init(|| Mutex::new(Vec::new()));
     {
-        let mut g = gmap.lock().unwrap();
+        // 4.14: отравленный мьютекс не должен навсегда ломать регистрацию
+        let mut g = gmap.lock().unwrap_or_else(|e| e.into_inner());
         g.retain(|&t| now - t < 60);
         if g.len() >= global_limit {
             return false;
@@ -2462,7 +2463,7 @@ fn rate_ok(user: &str) -> bool {
     }
     hits.push(now);
     // Успешную попытку учитываем и в глобальном счётчике
-    gmap.lock().unwrap().push(now);
+    gmap.lock().unwrap_or_else(|e| e.into_inner()).push(now);
     true
 }
 
@@ -2680,9 +2681,9 @@ async fn handle_verify(
                 user: None,
                 error: Some("устройство отозвано".to_string()),
             },
-            Err(e) => VerifyResponse { ok: false, user: None, error: Some(e.to_string()) },
+            Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)) },
         },
-        Err(e) => VerifyResponse { ok: false, user: None, error: Some(e.to_string()) },
+        Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)) },
     };
 
     let json = serde_json::to_vec(&resp).unwrap_or_default();

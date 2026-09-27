@@ -15,7 +15,7 @@ use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use parvane_types::{
     GroupActionResponse, PushRegisterRequest, PushSubscriptionInfo, PushUnregisterRequest,
     PushVapidResponse, VerifyRequest, VerifyResponse,
-    topics::{IDENTITY_VERIFY, MSG_USER_WILDCARD, PUSH_REGISTER, PUSH_UNREGISTER, PUSH_VAPID_GET},
+    topics::{IDENTITY_VERIFY, MSG_USER_PREFIX, MSG_USER_WILDCARD, PUSH_REGISTER, PUSH_UNREGISTER, PUSH_VAPID_GET},
 };
 use sqlx::{Row, SqlitePool};
 use tracing::{info, warn};
@@ -327,7 +327,7 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         Ok(()) => reply_action(nc, reply, true, None).await,
         Err(e) => {
             warn!("register отклонён: {}", e);
-            reply_action(nc, reply, false, Some(e.to_string())).await;
+            reply_action(nc, reply, false, Some(parvane_db::public_error(&e))).await;
         }
     }
 }
@@ -361,7 +361,7 @@ async fn handle_unregister(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
         Ok(()) => reply_action(nc, reply, true, None).await,
         Err(e) => {
             warn!("unregister отклонён: {}", e);
-            reply_action(nc, reply, false, Some(e.to_string())).await;
+            reply_action(nc, reply, false, Some(parvane_db::public_error(&e))).await;
         }
     }
 }
@@ -374,7 +374,7 @@ async fn handle_inbox(
     msg: async_nats::Message,
 ) {
     // Субъект вида msg.user.<адрес>; сам payload — sealed, не разбираем
-    let Some(user) = msg.subject.strip_prefix("msg.user.") else { return };
+    let Some(user) = msg.subject.strip_prefix(MSG_USER_PREFIX) else { return };
     let user = user.to_string();
 
     {
