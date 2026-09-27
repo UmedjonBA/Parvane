@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
-    let vapid = ensure_vapid_keys(&pool).await?;
+    let vapid = ensure_vapid_keys(&pool, &db_path).await?;
     info!("VAPID готов, public key: {}…", &vapid.public_b64url[..16.min(vapid.public_b64url.len())]);
 
     let nc = parvane_types::nats::connect(&nats_url).await.context("подключение к NATS")?;
@@ -81,32 +81,91 @@ struct VapidKeys {
     public_b64url: String,
 }
 
-async fn ensure_vapid_keys(pool: &SqlitePool) -> Result<VapidKeys> {
-    if let Some(row) = sqlx::query("SELECT private_pem, public_b64url FROM vapid_keys WHERE id = 1")
+/// P-11: приватный VAPID-ключ живёт в файле PARVANE_VAPID_KEY_FILE (PKCS#8 PEM,
+/// права 0600; по умолчанию рядом с БД), а не в SQLite — иначе утечка push.db
+/// или незашифрованного бэкапа давала возможность слать web-push от имени
+/// сервера. Старый ключ из таблицы vapid_keys при первом старте переносится в
+/// файл и удаляется из БД.
+fn vapid_key_path(db_path: &str) -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("PARVANE_VAPID_KEY_FILE") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    let dir = std::path::Path::new(db_path).parent().unwrap_or(std::path::Path::new("."));
+    dir.join("push-vapid-p256.pem")
+}
+
+fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).with_context(|| format!("создание {}", path.display()))?;
+    f.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn vapid_from_pem(private_pem: &str) -> Result<VapidKeys> {
+    use p256::pkcs8::DecodePrivateKey;
+    let secret = p256::SecretKey::from_pkcs8_pem(private_pem)
+        .map_err(|e| anyhow::anyhow!("VAPID PEM: {e}"))?;
+    let public_point = secret.public_key().to_sec1_bytes();
+    let public_b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_point);
+    Ok(VapidKeys { private_pem: private_pem.to_string(), public_b64url })
+}
+
+async fn ensure_vapid_keys(pool: &SqlitePool, db_path: &str) -> Result<VapidKeys> {
+    let path = vapid_key_path(db_path);
+    match std::fs::read_to_string(&path) {
+        Ok(pem) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if meta.permissions().mode() & 0o077 != 0 {
+                        warn!("{}: права шире 0600 — VAPID-ключ доступен другим пользователям", path.display());
+                    }
+                }
+            }
+            // Ключ из файла имеет приоритет; строку в БД (если осталась) удаляем.
+            let _ = sqlx::query("DELETE FROM vapid_keys WHERE id = 1").execute(pool).await;
+            return vapid_from_pem(&pem);
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("чтение {}", path.display()));
+        }
+        Err(_) => {}
+    }
+    // Миграция: ключ ещё в SQLite → переносим в файл и удаляем из БД.
+    if let Some(row) = sqlx::query("SELECT private_pem FROM vapid_keys WHERE id = 1")
         .fetch_optional(pool)
         .await?
     {
-        return Ok(VapidKeys {
-            private_pem: row.get::<String, _>("private_pem"),
-            public_b64url: row.get::<String, _>("public_b64url"),
-        });
+        let private_pem: String = row.get("private_pem");
+        let keys = vapid_from_pem(&private_pem)?;
+        write_secret_file(&path, private_pem.as_bytes())?;
+        sqlx::query("DELETE FROM vapid_keys WHERE id = 1").execute(pool).await?;
+        warn!("VAPID-ключ вынесен из SQLite в {} — сохраните файл в бэкап отдельно от БД", path.display());
+        return Ok(keys);
     }
-
     let secret = p256::SecretKey::random(&mut rand::rngs::OsRng);
     let private_pem = secret
         .to_pkcs8_pem(LineEnding::LF)
         .context("экспорт VAPID-ключа в PEM")?
         .to_string();
-    let public_point = secret.public_key().to_sec1_bytes();
-    let public_b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_point);
-
-    sqlx::query("INSERT INTO vapid_keys (id, private_pem, public_b64url) VALUES (1, ?, ?)")
-        .bind(&private_pem)
-        .bind(&public_b64url)
-        .execute(pool)
-        .await?;
-    info!("Сгенерирована новая пара VAPID-ключей");
-    Ok(VapidKeys { private_pem, public_b64url })
+    write_secret_file(&path, private_pem.as_bytes())?;
+    warn!("сгенерирована новая пара VAPID-ключей: {} (подписки браузеров привязаны к публичному ключу)", path.display());
+    vapid_from_pem(&private_pem)
 }
 
 async fn verify_token(nc: &Client, token: &str) -> Result<String> {
@@ -288,4 +347,47 @@ fn build_push_message(
     builder.set_payload(ContentEncoding::Aes128Gcm, PUSH_PAYLOAD.as_bytes());
     builder.set_vapid_signature(signature);
     Ok(builder.build()?)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn vapid_key_lives_in_0600_file_and_migrates_out_of_db() {
+        let dir = std::env::temp_dir().join(format!("parvane-vapid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("push.db");
+        std::env::remove_var("PARVANE_VAPID_KEY_FILE");
+        let pool = test_pool().await;
+        // legacy: ключ в БД
+        let legacy = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        let legacy_pem = legacy.to_pkcs8_pem(LineEnding::LF).unwrap().to_string();
+        sqlx::query("INSERT INTO vapid_keys (id, private_pem, public_b64url) VALUES (1, ?, 'x')")
+            .bind(&legacy_pem).execute(&pool).await.unwrap();
+        let k1 = ensure_vapid_keys(&pool, db_path.to_str().unwrap()).await.unwrap();
+        assert_eq!(k1.private_pem, legacy_pem, "мигрирован тот же ключ (подписки не теряются)");
+        let path = dir.join("push-vapid-p256.pem");
+        assert!(path.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vapid_keys").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 0, "ключ удалён из SQLite");
+        // повторная загрузка — из файла, тот же публичный ключ
+        let k2 = ensure_vapid_keys(&pool, db_path.to_str().unwrap()).await.unwrap();
+        assert_eq!(k1.public_b64url, k2.public_b64url);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

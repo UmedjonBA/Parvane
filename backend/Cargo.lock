@@ -1484,6 +1484,7 @@ dependencies = [
  "async-nats",
  "base64 0.22.1",
  "dotenvy",
+ "ed25519-dalek",
  "futures",
  "jsonwebtoken",
  "lettre",

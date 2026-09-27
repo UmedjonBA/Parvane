@@ -31,6 +31,8 @@ services:
       PARVANE_NATS_USER: identity
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}
       PARVANE_DB_PATH: /data/identity.db
+      # P-11: ключ подписи JWT (Ed25519, PKCS#8 PEM, 0600) — вне SQLite
+      PARVANE_JWT_KEY_FILE: /data/identity-jwt-ed25519.pem
       PARVANE_LOG_LEVEL: info
       # Домен адресов: ник на экране входа → ник@домен; регистрация на чужой
       # домен отклоняется
@@ -102,6 +104,8 @@ services:
       PARVANE_NATS_USER: push
       PARVANE_NATS_PASS: ${PARVANE_PUSH_PASS}
       PARVANE_DB_PATH: /data/push.db
+      # P-11: приватный VAPID-ключ (P-256, PKCS#8 PEM, 0600) — вне SQLite
+      PARVANE_VAPID_KEY_FILE: /data/push-vapid-p256.pem
       PARVANE_LOG_LEVEL: info
 
   gateway:

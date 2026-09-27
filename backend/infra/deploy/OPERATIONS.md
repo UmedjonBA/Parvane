@@ -75,6 +75,23 @@ basic_auth в Caddyfile (архив в README, раздел «Регистрац
 - Вручную: `~/parvane/backup.sh`
 - Проверить снимок: `docker run --rm -v ~/parvane/backups:/bak alpine sh -c 'apk add -q sqlite; sqlite3 /bak/messenger-<дата>.sqlite "PRAGMA integrity_check"'`
 
+## Ключи подписи (P-11)
+
+Ключ подписи JWT и приватный VAPID-ключ больше НЕ лежат в SQLite:
+
+- `/data/identity-jwt-ed25519.pem` — Ed25519 (PKCS#8 PEM, права 0600), задаётся
+  `PARVANE_JWT_KEY_FILE`; при первом старте новой версии старый HS256-секрет
+  переносится из `identity.db` в `/data/identity-jwt-ed25519.legacy-hs256` и
+  принимается ещё 24 ч (срок жизни выданных токенов), затем файл удаляется.
+- `/data/push-vapid-p256.pem` — VAPID (P-256, PKCS#8 PEM, 0600),
+  `PARVANE_VAPID_KEY_FILE`; при первом старте переносится из `push.db` (публичный
+  ключ тот же — подписки браузеров не теряются).
+
+Бэкапить эти файлы ОТДЕЛЬНО от БД и хранить не рядом с бэкапами SQLite:
+владелец файла подписывает JWT за любого пользователя. `scripts/backup_server_dbs.sh`
+ставит `umask 077` и при `PARVANE_BACKUP_AGE_RECIPIENT=age1…` шифрует снимки
+`age` (открытая копия удаляется).
+
 ## Восстановление из бэкапа
 ```bash
 D=2026-09-01                                # нужная дата
