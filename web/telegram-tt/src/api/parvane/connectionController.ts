@@ -246,10 +246,19 @@ export function createConnectionController(deps: ConnectionDependencies) {
     const store = deps.getStore();
     if (!from || from === store.self) return;
 
+    // P-44: `to` — из кадра отправителя, не доверяем: групповой typing только
+    // для известной группы, где `from` состоит; личный — только адресованный нам
+    const isGroup = Boolean(to && store.isGroupAddress(to));
+    if (isGroup) {
+      const members = store.getGroupInfo(to!)?.members || [];
+      if (!members.some((member) => member.address === from && member.role !== 'banned')) return;
+    } else if (to && to !== store.self) {
+      return;
+    }
     // Групповой typing: печатает участник — показываем в групповом чате (по
     // `to`). Личный: показываем в 1-1 чате собеседника (по `from`)
-    const chatId = to && store.isGroupAddress(to)
-      ? store.getIdForAddress(to, 'group')
+    const chatId = isGroup
+      ? store.getIdForAddress(to!, 'group')
       : store.getIdForAddress(from);
     deps.sendUpdate({
       '@type': 'updateChatTypingStatus',

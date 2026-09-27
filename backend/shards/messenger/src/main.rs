@@ -92,6 +92,22 @@ async fn main() -> Result<()> {
         MSG_SEND, MSG_ACK, MSG_READ, MSG_EDIT, MSG_DELETE, MSG_SYNC_REQUEST
     );
 
+    // P-41: периодический GC tombstone'ов и очереди доставки
+    {
+        let gc_pool = pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                match gc_messenger(&gc_pool, now_unix()).await {
+                    Ok((m, q)) if m + q > 0 => info!("GC: удалено tombstone'ов {}, строк очереди {}", m, q),
+                    Ok(_) => {}
+                    Err(e) => warn!("GC: {}", e),
+                }
+            }
+        });
+    }
+
     loop {
         tokio::select! {
             Some(msg) = send_sub.next() => {
@@ -964,11 +980,73 @@ async fn rename_group(pool: &SqlitePool, group_id: &str, actor: &str, name: &str
 }
 
 /// Удалить группу с участниками и инвайтами. Только owner.
+/// P-41: GC остаточных данных. Tombstone'ы удалённых сообщений нужны для
+/// sync других устройств, но не вечно: строки с `deleted = 1` старше
+/// `TOMBSTONE_TTL_SECS` удаляются физически (вместе с копиями, receipts,
+/// hidden_messages, reactions). Доставленные строки inbox_queue и
+/// недоставленные старше TTL вычищаются. Зовётся по расписанию.
+const TOMBSTONE_TTL_SECS: i64 = 30 * 86_400;
+const QUEUE_TTL_SECS: i64 = 30 * 86_400;
+
+async fn gc_messenger(pool: &SqlitePool, now: i64) -> Result<(u64, u64)> {
+    let cutoff = now - TOMBSTONE_TTL_SECS;
+    let ids: Vec<(String,)> = sqlx::query_as(
+        "SELECT id FROM messages WHERE deleted = 1 AND updated_at < ? LIMIT 5000",
+    )
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?;
+    let mut removed = 0u64;
+    for (id,) in ids {
+        let mut tx = pool.begin().await?;
+        for table in ["message_device_copies", "read_receipts", "hidden_messages", "inbox_queue"] {
+            let _ = sqlx::query(&format!("DELETE FROM {table} WHERE message_id = ?"))
+                .bind(&id)
+                .execute(&mut *tx)
+                .await;
+        }
+        let _ = sqlx::query("DELETE FROM reactions WHERE message_id = ?").bind(&id).execute(&mut *tx).await;
+        let res = sqlx::query("DELETE FROM messages WHERE id = ? AND deleted = 1")
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        removed += res.rows_affected();
+    }
+    let queue = sqlx::query(
+        "DELETE FROM inbox_queue WHERE delivered = 1 OR queued_at < ?",
+    )
+    .bind(now - QUEUE_TTL_SECS)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok((removed, queue))
+}
+
 async fn delete_group(pool: &SqlitePool, group_id: &str, actor: &str) -> Result<bool> {
     let actor_role = member_role(pool, group_id, actor).await?;
     if !matches!(actor_role.as_deref(), Some("owner")) {
         return Ok(false);
     }
+    // P-41: сообщения удалённой группы — в tombstone (sync участников узнаёт об
+    // удалении), физически их уберёт gc_messenger по TTL
+    let empty = serde_json::to_string(&MessageContent::Text { text: String::new(), entities: vec![], webpage: None })?;
+    let now = now_unix();
+    sqlx::query(
+        "UPDATE messages SET deleted = 1, text = '', kind = 'text', content = ?, updated_at = ?
+          WHERE to_user = ? AND deleted = 0",
+    )
+    .bind(&empty)
+    .bind(now)
+    .bind(group_id)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "DELETE FROM message_device_copies WHERE message_id IN (SELECT id FROM messages WHERE to_user = ?)",
+    )
+    .bind(group_id)
+    .execute(pool)
+    .await?;
     sqlx::query("DELETE FROM group_invites WHERE group_id = ?")
         .bind(group_id)
         .execute(pool)
@@ -1104,7 +1182,6 @@ async fn is_conversation_participant(
     Ok(reader == to || (!from.is_empty() && reader == from))
 }
 
-/// Зафиксировать прочтение. Идемпотентно по паре (message_id, reader).
 // ── msg.chat.readers ──────────────────────────────────────────────────────────
 
 /// Список прочитавших сообщение с временем прочтения («seen by» в группах,
@@ -3160,6 +3237,48 @@ mod tests {
     }
 
     // ── группы и каналы ──
+
+    // P-41: GC физически убирает старые tombstone'ы и доставленные строки очереди;
+    // удаление группы затирает её сообщения
+    #[tokio::test]
+    async fn gc_removes_old_tombstones_and_delivered_queue() {
+        let pool = test_pool().await;
+        let old_id = "00000000-0000-7000-8000-0000000000a1";
+        let fresh_id = "00000000-0000-7000-8000-0000000000a2";
+        let text = |t: &str| MessageContent::Text { text: t.into(), entities: vec![], webpage: None };
+        store_message(&pool, &send_content(old_id, "alice@local", "bob@local", text("old")), 1).await.unwrap();
+        store_message(&pool, &send_content(fresh_id, "alice@local", "bob@local", text("fresh")), 2).await.unwrap();
+        enqueue(&pool, "bob@local", old_id, 1).await.unwrap();
+        enqueue(&pool, "bob@local", fresh_id, 2).await.unwrap();
+        assert!(ack_delivered(&pool, "bob@local", fresh_id).await.unwrap());
+        assert!(delete_message(&pool, old_id, "alice@local", 10).await.unwrap());
+        let now = 10 + TOMBSTONE_TTL_SECS + 1;
+        let (removed, queue) = gc_messenger(&pool, now).await.unwrap();
+        assert_eq!(removed, 1, "старый tombstone удалён физически");
+        assert!(queue >= 1, "доставленные/старые строки очереди вычищены");
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE id = ?").bind(old_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(left, 0);
+        let fresh_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE id = ?").bind(fresh_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(fresh_left, 1, "живое сообщение не тронуто");
+        // Свежий tombstone (моложе TTL) остаётся для sync
+        assert!(delete_message(&pool, fresh_id, "alice@local", now).await.unwrap());
+        let (removed2, _) = gc_messenger(&pool, now + 1).await.unwrap();
+        assert_eq!(removed2, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_group_tombstones_its_messages() {
+        let pool = test_pool().await;
+        let gid = create_group(&pool, "g", GroupKind::Group, "owner@local", &["m@local".into()], 1).await.unwrap();
+        let mid = "00000000-0000-7000-8000-0000000000a3";
+        let content = MessageContent::GroupEncrypted {
+            ciphertext: "c".into(), group: gid.clone(), sender_identity: "i".into(), sender_signing_key: String::new(),
+        };
+        store_message(&pool, &send_content(mid, "owner@local", &gid, content), 2).await.unwrap();
+        assert!(delete_group(&pool, &gid, "owner@local").await.unwrap());
+        let (deleted, kind): (i64, String) = sqlx::query_as("SELECT deleted, kind FROM messages WHERE id = ?").bind(mid).fetch_one(&pool).await.unwrap();
+        assert_eq!((deleted, kind.as_str()), (1, "text"), "сообщения группы затёрты");
+    }
 
     // P-34: инвайты — срок, число использований, отзыв; потолок размера; согласие
     #[tokio::test]

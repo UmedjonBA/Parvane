@@ -18,7 +18,7 @@ members = [
 [workspace.dependencies]
 # async
 tokio = { version = "1", features = ["full"] }
-async-nats = "0.37"
+async-nats = "0.50"
 
 # serde
 serde = { version = "1", features = ["derive"] }

@@ -6,19 +6,44 @@
 
 name: parvane
 
+# P-31: контейнеры без root (USER parvane в образе), read-only rootfs, без
+# capabilities, без эскалации; том БД — свой на каждый шард (RCE в preview
+# не читает identity.db). Миграция с общего тома `db` — см. OPERATIONS.md.
 x-shard-common: &shard-common
   image: localhost/parvane-shards:latest
   restart: unless-stopped
   depends_on:
     - nats
-  volumes:
-    - db:/data
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp
 
 services:
   nats:
     image: nats:2.10-alpine
     command: ["-c", "/etc/nats/server.prod.conf"]
-    env_file: .env
+    # P-50: в контейнер NATS уходят только его пароли, а не весь .env
+    environment:
+      PARVANE_IDENTITY_PASS: ${PARVANE_IDENTITY_PASS}
+      PARVANE_MESSENGER_PASS: ${PARVANE_MESSENGER_PASS}
+      PARVANE_CLOUD_PASS: ${PARVANE_CLOUD_PASS}
+      PARVANE_NOTES_PASS: ${PARVANE_NOTES_PASS}
+      PARVANE_CALENDAR_PASS: ${PARVANE_CALENDAR_PASS}
+      PARVANE_CALL_PASS: ${PARVANE_CALL_PASS}
+      PARVANE_PREVIEW_PASS: ${PARVANE_PREVIEW_PASS}
+      PARVANE_PUSH_PASS: ${PARVANE_PUSH_PASS}
+      PARVANE_GATEWAY_PASS: ${PARVANE_GATEWAY_PASS}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     volumes:
       - ./nats/server.prod.conf:/etc/nats/server.prod.conf:ro
     restart: unless-stopped
@@ -26,6 +51,8 @@ services:
   identity:
     <<: *shard-common
     command: ["/usr/local/bin/identity"]
+    volumes:
+      - db-identity:/data
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
@@ -54,6 +81,8 @@ services:
   messenger:
     <<: *shard-common
     command: ["/usr/local/bin/messenger"]
+    volumes:
+      - db-messenger:/data
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: messenger
@@ -64,6 +93,8 @@ services:
   cloud:
     <<: *shard-common
     command: ["/usr/local/bin/cloud"]
+    volumes:
+      - db-cloud:/data
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: cloud
@@ -74,6 +105,8 @@ services:
   call:
     <<: *shard-common
     command: ["/usr/local/bin/call"]
+    volumes:
+      - db-call:/data
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: call
@@ -89,6 +122,8 @@ services:
   preview:
     <<: *shard-common
     command: ["/usr/local/bin/preview"]
+    volumes:
+      - db-preview:/data
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: preview
@@ -99,6 +134,8 @@ services:
   push:
     <<: *shard-common
     command: ["/usr/local/bin/push"]
+    volumes:
+      - db-push:/data
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: push
@@ -114,6 +151,13 @@ services:
     restart: unless-stopped
     depends_on:
       - nats
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: gateway
@@ -154,6 +198,11 @@ services:
   # relay хостера снаружи недостижим. Локальный контейнер turn удалён.
 
 volumes:
-  db:
+  db-identity:
+  db-messenger:
+  db-cloud:
+  db-call:
+  db-preview:
+  db-push:
   caddy-data:
   caddy-config:

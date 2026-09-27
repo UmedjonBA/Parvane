@@ -1,0 +1,10 @@
+# P-51: конфигурация `cargo audit` (см. SECURITY-REVIEW.md, раздел 5).
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 (rsa, Marvin). Крейт `rsa` попадает в Cargo.lock только через
+    # опциональную зависимость sqlx → sqlx-mysql, которая у нас не включена
+    # (sqlx собирается с features = ["sqlite", ...]); в бинарники шардов `rsa` не
+    # компилируется — проверка: `cargo tree -i rsa` → «nothing to print».
+    # web-push (jwt-simple → rsa) заменён на web-push-native без фичи `vapid`.
+    "RUSTSEC-2023-0071",
+]
