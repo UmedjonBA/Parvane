@@ -50,6 +50,19 @@
 
 #include <parvane/events.h>          // parvane-core
 #include <parvane/topics.h>          // parvane-core
+
+// P-45/P-46: dev/e2e-хуки из окружения (PARVANE_AUTO*, прямой NATS) существуют
+// только в сборке с -DPARVANE_DEV=ON (см. parvane-core/CMakeLists.txt). В релизе
+// функция всегда возвращает nullptr — переменные окружения не могут включить
+// автологин/автоотправку/автогрант линковки.
+[[maybe_unused]] static const char *ParvaneDevEnv(const char *name) {
+#ifdef PARVANE_DEV
+	return std::getenv(name);
+#else
+	(void)name;
+	return nullptr;
+#endif
+}
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/gateway_transport.h> // parvane-core (доступ через gateway, Фаза 0)
 #include <parvane/gateway_ws_transport.h> // parvane-core (WebSocket/TLS — прод)
@@ -1138,7 +1151,7 @@ void PlayRingtone(bool outgoing);
 void StopRingtone();
 
 QString NatsUrl() {
-	if (const char *v = std::getenv("PARVANE_NATS_URL"); v && *v) {
+	if (const char *v = ParvaneDevEnv("PARVANE_NATS_URL"); v && *v) {
 		return QString::fromUtf8(v);
 	}
 	return u"nats://127.0.0.1:4222"_q;
@@ -1152,9 +1165,18 @@ constexpr auto kDefaultGatewayWss = "wss://parvane.duckdns.org:20443/ws";
 
 QString GatewayUrl() {
 	if (const char *v = std::getenv("PARVANE_GATEWAY_URL"); v && *v) {
-		return QString::fromUtf8(v);
+		const auto url = QString::fromUtf8(v);
+#ifndef PARVANE_DEV
+		// P-45: в релизе только wss:// — plaintext TCP/ws:// к gateway отдал бы
+		// JWT в открытом виде; переменной окружения этого не обойти.
+		if (!url.startsWith(u"wss://"_q, Qt::CaseInsensitive)) {
+			LOG(("Parvane: PARVANE_GATEWAY_URL без wss:// проигнорирован в релизе: %1").arg(url));
+			return QString::fromUtf8(kDefaultGatewayWss);
+		}
+#endif
+		return url;
 	}
-	if (const char *n = std::getenv("PARVANE_NATS_URL"); n && *n) {
+	if (const char *n = ParvaneDevEnv("PARVANE_NATS_URL"); n && *n) {
 		return QString(); // явный прямой NATS (dev-стенд)
 	}
 	return QString::fromUtf8(kDefaultGatewayWss);
@@ -2187,7 +2209,7 @@ bool StartSession() {
 				});
 			}
 			// Авто-приём (e2e) без UI.
-			if (const char *aa = std::getenv("PARVANE_AUTOACCEPT"); aa && *aa) {
+			if (const char *aa = ParvaneDevEnv("PARVANE_AUTOACCEPT"); aa && *aa) {
 				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
 				return;
 			}
@@ -5402,7 +5424,7 @@ void injectPollMessage(
 	// Debug-autovote для e2e: PARVANE_AUTOVOTE=<индекс> — голосуем во входящем
 	// опросе автоматически (headless-проверка агрегации).
 	if (!isOwn) {
-		if (const char *av = std::getenv("PARVANE_AUTOVOTE"); av && *av) {
+		if (const char *av = ParvaneDevEnv("PARVANE_AUTOVOTE"); av && *av) {
 			const auto option = QByteArray(av);
 			const auto pollId = st.pollId;
 			crl::on_main([pollId, option] {
@@ -8080,7 +8102,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Напоминание о резервной копии ключей: у ЕДИНСТВЕННОГО устройства
 		// перенести ключи некуда (линковке нужно второе живое), потеря профиля
 		// необратима. Раз на установку (маркер), не в headless-прогонах.
-		if (!KeyBackupDone() && !std::getenv("PARVANE_AUTOLOGIN")) {
+		if (!KeyBackupDone() && !ParvaneDevEnv("PARVANE_AUTOLOGIN")) {
 			base::call_delayed(8000, [] {
 				ListDevices([](std::vector<DeviceEntry> devices) {
 					if (devices.size() > 1) {
@@ -8304,7 +8326,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autosendfile для e2e Фазы 4: PARVANE_AUTOSENDFILE=peer@server:/path.
 		// Отправляет файл штатным путём tdesktop (FileLoadTask → SendConfirmedFile
 		// → MirrorOutgoingFile). Тип по расширению: png/jpg → Photo, иначе File.
-		if (const char *fv = std::getenv("PARVANE_AUTOSENDFILE"); fv && *fv) {
+		if (const char *fv = ParvaneDevEnv("PARVANE_AUTOSENDFILE"); fv && *fv) {
 			const auto spec = QString::fromUtf8(fv);
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
@@ -8345,7 +8367,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autotwofa: PARVANE_AUTOTWOFA=on|off — переключает двухфакторный
 		// вход (identity.user.twofa) как тумблер в настройках; результат — в лог.
-		if (const char *tv = std::getenv("PARVANE_AUTOTWOFA"); tv && *tv) {
+		if (const char *tv = ParvaneDevEnv("PARVANE_AUTOTWOFA"); tv && *tv) {
 			const auto enable = (QString::fromUtf8(tv) == u"on"_q);
 			base::call_delayed(2 * crl::time(1000), [enable] {
 				crl::async([enable] {
@@ -8360,7 +8382,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoclearchat: PARVANE_AUTOCLEARCHAT=peer@server:<секунды> —
 		// удаляет диалог штатным путём (deleteConversation → deleteHistory →
 		// MirrorClearHistory → msg.chat.clear).
-		if (const char *cv = std::getenv("PARVANE_AUTOCLEARCHAT"); cv && *cv) {
+		if (const char *cv = ParvaneDevEnv("PARVANE_AUTOCLEARCHAT"); cv && *cv) {
 			const auto spec = QString::fromUtf8(cv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8383,7 +8405,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-automute для e2e: PARVANE_AUTOMUTE=цель[,цель]:<секунды>; цель —
 		// адрес собеседника или group:<имя группы>. Мут навсегда штатным
 		// NotifySettings::update → MirrorNotifySettings → другие устройства.
-		if (const char *mv = std::getenv("PARVANE_AUTOMUTE"); mv && *mv) {
+		if (const char *mv = ParvaneDevEnv("PARVANE_AUTOMUTE"); mv && *mv) {
 			const auto spec = QString::fromUtf8(mv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8423,7 +8445,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoprofile для e2e: PARVANE_AUTOPROFILE=bio=..;phone=..;color=N;
 		// channel=<имя группы>:<секунды> — свои профильные поля в identity
 		// (channel пустой = убрать личный канал).
-		if (const char *pv = std::getenv("PARVANE_AUTOPROFILE"); pv && *pv) {
+		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPROFILE"); pv && *pv) {
 			const auto spec = QString::fromUtf8(pv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8470,7 +8492,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autosearch: PARVANE_AUTOSEARCH=<подстрока>:<секунды> — глобальный
 		// локальный поиск по сообщениям, результат в лог (для e2e).
-		if (const char *sv = std::getenv("PARVANE_AUTOSEARCH"); sv && *sv) {
+		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSEARCH"); sv && *sv) {
 			const auto spec = QString::fromUtf8(sv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8498,7 +8520,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// напрямую из g_mediaContentByMsgId (тот же content, что несёт
 		// MirrorForward) и гоним через ForwardMediaReshared — путь перезаливки
 		// блоба под нового получателя (то, что проверяем).
-		if (const char *fw = std::getenv("PARVANE_AUTOFORWARD"); fw && *fw) {
+		if (const char *fw = ParvaneDevEnv("PARVANE_AUTOFORWARD"); fw && *fw) {
 			const auto parts = QString::fromUtf8(fw).split(':');
 			if (parts.size() == 3) {
 				const auto fromAddr = parts[0];
@@ -8570,7 +8592,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		};
 		// Debug-autodelete для e2e delete: PARVANE_AUTODELETE=<секунды> — удаляет
 		// своё последнее исходящее штатным путём (deleteMessages → MirrorDelete).
-		if (const char *dv = std::getenv("PARVANE_AUTODELETE"); dv && *dv) {
+		if (const char *dv = ParvaneDevEnv("PARVANE_AUTODELETE"); dv && *dv) {
 			const auto secs = std::max(QString::fromUtf8(dv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [lastOwnItem] {
 				const auto session = g_sessionWeak.get();
@@ -8593,7 +8615,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoreaders для e2e «seen by / read at»: PARVANE_AUTOREADERS=<секунды>
 		// — запрашивает msg.chat.readers для своего последнего исходящего и пишет
 		// результат в лог (см. FetchReaders).
-		if (const char *rv = std::getenv("PARVANE_AUTOREADERS"); rv && *rv) {
+		if (const char *rv = ParvaneDevEnv("PARVANE_AUTOREADERS"); rv && *rv) {
 			const auto secs = std::max(QString::fromUtf8(rv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [lastOwnItem] {
 				const auto session = g_sessionWeak.get();
@@ -8607,7 +8629,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autoedit для e2e edit: PARVANE_AUTOEDIT=<секунды>:новый текст.
-		if (const char *ev = std::getenv("PARVANE_AUTOEDIT"); ev && *ev) {
+		if (const char *ev = ParvaneDevEnv("PARVANE_AUTOEDIT"); ev && *ev) {
 			const auto spec = QString::fromUtf8(ev);
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
@@ -8632,7 +8654,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug для e2e devices: PARVANE_AUTOREVOKE_OTHERS=<секунды> — перечислить
 		// устройства и отозвать все, кроме текущего (как «Terminate all»).
-		if (const char *rv = std::getenv("PARVANE_AUTOREVOKE_OTHERS"); rv && *rv) {
+		if (const char *rv = ParvaneDevEnv("PARVANE_AUTOREVOKE_OTHERS"); rv && *rv) {
 			const auto secs = std::max(QString::fromUtf8(rv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [] {
 				ListDevices([](std::vector<DeviceEntry> devices) {
@@ -8657,7 +8679,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autogroup для e2e: PARVANE_AUTOGROUP=Имя:member1,member2 (пусто —
 		// без начальных участников). Создаёт группу через ~4с.
-		if (const char *gv = std::getenv("PARVANE_AUTOGROUP"); gv && *gv) {
+		if (const char *gv = ParvaneDevEnv("PARVANE_AUTOGROUP"); gv && *gv) {
 			auto spec = QString::fromUtf8(gv);
 			const auto sep = spec.indexOf(':');
 			const auto gname = (sep > 0) ? spec.left(sep) : spec;
@@ -8674,7 +8696,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autogroupcall для e2e: PARVANE_AUTOGROUPCALL=Имя_группы →
 		// групповой звонок со всеми участниками (через ~9с — дать группе
 		// синхронизироваться).
-		if (const char *gcv = std::getenv("PARVANE_AUTOGROUPCALL"); gcv && *gcv) {
+		if (const char *gcv = ParvaneDevEnv("PARVANE_AUTOGROUPCALL"); gcv && *gcv) {
 			const auto gname = QString::fromUtf8(gcv);
 			base::call_delayed(9 * crl::time(1000), [gname] {
 				QString gid;
@@ -8700,7 +8722,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autottl для e2e самоуничтожения: PARVANE_AUTOTTL=peer@server:секунды
 		// → выставить TTL чата (как нативное меню Auto-Delete). Исходящие получат
 		// ttl_secs → у получателя нативный ttl_period (авто-удаление).
-		if (const char *tv = std::getenv("PARVANE_AUTOTTL"); tv && *tv) {
+		if (const char *tv = ParvaneDevEnv("PARVANE_AUTOTTL"); tv && *tv) {
 			auto spec = QString::fromUtf8(tv);
 			const auto sp = spec.lastIndexOf(':');
 			if (sp > 0) {
@@ -8713,7 +8735,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autofolder для папок: PARVANE_AUTOFOLDER=Имя:peer@server → создаёт
 		// папку с этим чатом (нативный ChatFilters::set) через ~6с. Персист свой.
-		if (const char *fv = std::getenv("PARVANE_AUTOFOLDER"); fv && *fv) {
+		if (const char *fv = ParvaneDevEnv("PARVANE_AUTOFOLDER"); fv && *fv) {
 			auto spec = QString::fromUtf8(fv);
 			const auto c = spec.indexOf(':');
 			if (c > 0) {
@@ -8749,7 +8771,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoadmin для админки групп: PARVANE_AUTOADMIN=Имя_группы;act:member;…
 		// act ∈ add|remove|admin|member. Через ~11с (группа синхронизирована)
 		// выполняет действия ЧЕРЕЗ клиент (GroupClient → messenger), стаггер по 3с.
-		if (const char *av = std::getenv("PARVANE_AUTOADMIN"); av && *av) {
+		if (const char *av = ParvaneDevEnv("PARVANE_AUTOADMIN"); av && *av) {
 			const auto parts = QString::fromUtf8(av).split(';', Qt::SkipEmptyParts);
 			if (parts.size() >= 2) {
 				const auto gname = parts.first();
@@ -8788,7 +8810,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autogroupsend для e2e групп (Фаза 3, Megolm): PARVANE_AUTOGROUPSEND=
 		// Имя_группы:текст → через ~9с (дать группе синхронизироваться) отправляет
 		// текст в группу ЧЕРЕЗ E2E-путь клиента (sender keys + раздача SKDM).
-		if (const char *gsv = std::getenv("PARVANE_AUTOGROUPSEND"); gsv && *gsv) {
+		if (const char *gsv = ParvaneDevEnv("PARVANE_AUTOGROUPSEND"); gsv && *gsv) {
 			auto spec = QString::fromUtf8(gsv);
 			const auto sp = spec.indexOf(':');
 			if (sp > 0) {
@@ -8818,7 +8840,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autogroupsend2 для e2e ротации: второе групповое сообщение через ~24с
 		// (ПОСЛЕ удаления участника + ротации ключа — проверяет re-key у оставшихся).
-		if (const char *gs2 = std::getenv("PARVANE_AUTOGROUPSEND2"); gs2 && *gs2) {
+		if (const char *gs2 = ParvaneDevEnv("PARVANE_AUTOGROUPSEND2"); gs2 && *gs2) {
 			auto spec = QString::fromUtf8(gs2);
 			const auto sp = spec.indexOf(':');
 			if (sp > 0) {
@@ -8847,7 +8869,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autocall для e2e звонков: PARVANE_AUTOCALL=peer@server[:video].
 		// Инициатор через ~4с звонит; принимающий ставит PARVANE_AUTOACCEPT=1.
-		if (const char *cv = std::getenv("PARVANE_AUTOCALL"); cv && *cv) {
+		if (const char *cv = ParvaneDevEnv("PARVANE_AUTOCALL"); cv && *cv) {
 			auto spec = QString::fromUtf8(cv);
 			const auto video = spec.endsWith(u":video"_q);
 			if (video) spec.chop(6);
@@ -8858,7 +8880,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autohangup для диагностики закрытия окна: через N сек отбой.
-		if (const char *hv = std::getenv("PARVANE_AUTOHANGUP"); hv && *hv) {
+		if (const char *hv = ParvaneDevEnv("PARVANE_AUTOHANGUP"); hv && *hv) {
 			const auto secs = std::max(QString::fromUtf8(hv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [] {
 				LOG(("Parvane: AUTOHANGUP"));
@@ -8870,7 +8892,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// шлёт первый стикер первого локального пака нативным путём
 		// (SendExistingDocument → врезка MirrorOutgoingSticker). Отложен за
 		// LoadLocalStickerPacks (t+3с) и E2E-инициализацию.
-		if (const char *sv = std::getenv("PARVANE_AUTOSTICKER"); sv && *sv) {
+		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSTICKER"); sv && *sv) {
 			const auto peerAddr = QString::fromUtf8(sv);
 			base::call_delayed(6 * crl::time(1000), [weak, peerAddr] {
 				const auto s = weak.get();
@@ -8900,7 +8922,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autopoll для e2e опросов: PARVANE_AUTOPOLL=peer@server:Вопрос:а,б,в
-		if (const char *pv = std::getenv("PARVANE_AUTOPOLL"); pv && *pv) {
+		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPOLL"); pv && *pv) {
 			const auto spec = QString::fromUtf8(pv);
 			const auto parts = spec.split(u':');
 			if (parts.size() >= 3) {
@@ -8922,7 +8944,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autosend для e2e Фазы 3b: PARVANE_AUTOSEND=peer@server:текст.
-		const char *v = std::getenv("PARVANE_AUTOSEND");
+		const char *v = ParvaneDevEnv("PARVANE_AUTOSEND");
 		if (!v || !*v) {
 			return;
 		}
@@ -8947,7 +8969,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoemoji для e2e кастом-эмодзи: PARVANE_AUTOEMOJI=peer:pack:file —
 		// отправляет текст с одним custom_emoji-entity (как выбор из панели):
 		// грузит локальный пак, шлёт entity(docId)+emoji_packs получателю.
-		if (const char *ev = std::getenv("PARVANE_AUTOEMOJI"); ev && *ev) {
+		if (const char *ev = ParvaneDevEnv("PARVANE_AUTOEMOJI"); ev && *ev) {
 			const auto espec = QString::fromUtf8(ev);
 			const auto p1 = espec.indexOf(':');
 			const auto p2 = espec.indexOf(':', p1 + 1);
@@ -8983,7 +9005,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		// Debug-autoschedule для e2e: PARVANE_AUTOSCHEDULE=peer@server:secs:текст —
 		// планирует сообщение через secs секунд тем же путём, что нативное меню.
-		if (const char *sv = std::getenv("PARVANE_AUTOSCHEDULE"); sv && *sv) {
+		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSCHEDULE"); sv && *sv) {
 			const auto sspec = QString::fromUtf8(sv);
 			const auto s1 = sspec.indexOf(':');
 			const auto s2i = sspec.indexOf(':', s1 + 1);
@@ -8998,7 +9020,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				ScheduleOutgoing(su, TextWithEntities{ stext }, 0, due);
 			}
 		}
-		if (const char *lv = std::getenv("PARVANE_AUTOLOCATION"); lv && *lv) {
+		if (const char *lv = ParvaneDevEnv("PARVANE_AUTOLOCATION"); lv && *lv) {
 			const auto lspec = QString::fromUtf8(lv);
 			const auto lsep = lspec.indexOf(':');
 			const auto comma = lspec.indexOf(',', lsep + 1);
@@ -9568,7 +9590,7 @@ void PollLinkOffersOnce() {
 		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код %2")
 			.arg(dev, code));
 		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI.
-		if (const char *ag = std::getenv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
+		if (const char *ag = ParvaneDevEnv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
 			GrantLink(dev, eph);
 			continue;
 		}

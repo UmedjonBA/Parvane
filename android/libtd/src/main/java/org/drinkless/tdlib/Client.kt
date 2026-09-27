@@ -65,7 +65,8 @@ class Client private constructor(
         /** Gateway по умолчанию — тестовый прод; приложение может переопределить. */
         @JvmStatic
         @Volatile
-        var gatewayUrl: String = "wss://parvane.duckdns.org:20443/ws"
+        const val DEFAULT_GATEWAY_URL = "wss://parvane.duckdns.org:20443/ws"
+        var gatewayUrl: String = DEFAULT_GATEWAY_URL
 
         @JvmStatic
         fun create(
@@ -267,9 +268,16 @@ class Client private constructor(
                 boundClient = this
                 boundDir = f.databaseDirectory
                 // Дев-стенд/эмулятор: gateway из файла (adb push … /data/local/tmp/parvane-gateway),
-                // когда extra запуска недоступен (Telegram X)
-                java.io.File("/data/local/tmp/parvane-gateway").takeIf { it.canRead() }
-                    ?.readText()?.trim()?.takeIf { it.isNotEmpty() }?.let { gatewayUrl = it }
+                // когда extra запуска недоступен (Telegram X) — ТОЛЬКО в debug (P-12/P-46):
+                // файл в /data/local/tmp доступен любому приложению с shell/adb.
+                if (org.parvane.libtd.BuildConfig.DEBUG) {
+                    java.io.File("/data/local/tmp/parvane-gateway").takeIf { it.canRead() }
+                        ?.readText()?.trim()?.takeIf { it.isNotEmpty() }?.let { gatewayUrl = it }
+                } else if (!gatewayUrl.startsWith("wss://", ignoreCase = true)) {
+                    // Release: только wss:// — plaintext ws:// отдал бы JWT в открытом виде.
+                    Log.w(TAG, "gateway без wss:// в release проигнорирован: $gatewayUrl")
+                    gatewayUrl = DEFAULT_GATEWAY_URL
+                }
                 ParvaneCore.init(gatewayUrl, f.databaseDirectory)
                 if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                     onSessionReady(ParvaneCore.self())

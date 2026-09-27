@@ -24,17 +24,40 @@ android {
             isUniversalApk = false
         }
     }
+    // P-46: релизный keystore из окружения (PARVANE_RELEASE_KEYSTORE,
+    // PARVANE_RELEASE_STORE_PASSWORD, PARVANE_RELEASE_KEY_ALIAS,
+    // PARVANE_RELEASE_KEY_PASSWORD). Без него release подписывается debug-ключом
+    // с громким предупреждением — такой APK нельзя публиковать.
+    val releaseKeystore = System.getenv("PARVANE_RELEASE_KEYSTORE")?.takeIf { it.isNotBlank() }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("PARVANE_RELEASE_STORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("PARVANE_RELEASE_KEY_ALIAS") ?: "parvane"
+                keyPassword = System.getenv("PARVANE_RELEASE_KEY_PASSWORD") ?: ""
+            }
+        }
+    }
     buildTypes {
         release {
-            // Пока без релизного ключа: подпись debug-ключом, .so без отладочных
-            // символов (release-сборка CMake) — APK ~втрое меньше debug
+            // .so без отладочных символов (release-сборка CMake) — APK ~втрое меньше debug
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn("PARVANE_RELEASE_KEYSTORE не задан: release подписан debug-ключом — не для публикации")
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
-    buildFeatures { compose = true }
+    // buildConfig — для BuildConfig.DEBUG (dev-хуки только в debug, P-12)
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -4,7 +4,7 @@
 #   1) bob и alice регистрируются headless-десктопом (PARVANE_AUTOLOGIN);
 #   2) приложение (extras autologin/autosend) входит как alice и пишет bob;
 #   3) bob (десктоп) получает; bob пишет alice — приложение получает (logcat).
-# Требует: собранный app-x86_64-release.apk, образ system-images;android-34;google_apis;x86_64.
+# Требует: собранный app-x86_64-debug.apk (dev-хуки extras только в debug, P-12), образ system-images;android-34;google_apis;x86_64.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/../desktop/verify_lib.sh"
 export ANDROID_HOME=/mnt/hdd/ub/android/sdk JAVA_HOME=/mnt/hdd/ub/android/jdk-17
@@ -12,8 +12,8 @@ export ANDROID_HOME=/mnt/hdd/ub/android/sdk JAVA_HOME=/mnt/hdd/ub/android/jdk-17
 # один путь для обоих
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"; mkdir -p "$ANDROID_AVD_HOME"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-APK="$(dirname "${BASH_SOURCE[0]}")/app/build/outputs/apk/release/app-x86_64-release.apk"
-[ -f "$APK" ] || { echo "нет $APK — gradle :app:assembleRelease"; exit 2; }
+APK="$(dirname "${BASH_SOURCE[0]}")/app/build/outputs/apk/debug/app-x86_64-debug.apk"
+[ -f "$APK" ] || { echo "нет $APK — gradle :app:assembleDebug"; exit 2; }
 SB="$(mktemp -d /tmp/pv-android.XXXXXX)"
 stack_start "$SB"
 STAMP="$(date +%s)"

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-оверлей: cleartext (ws:// к эмуляторному gateway 10.0.2.2:9222) только
+     в debug-сборке; release запрещает plaintext (P-12/P-46). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

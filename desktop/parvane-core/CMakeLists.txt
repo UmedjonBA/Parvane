@@ -72,6 +72,14 @@ target_link_libraries(parvane_core
             ${PARVANE_E2E_LIB} pthread dl m)
 
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
+# P-45/P-46: dev-хуки (PARVANE_WSS_INSECURE, ws:// к gateway, PARVANE_AUTO* в
+# tdesktop) компилируются ТОЛЬКО с -DPARVANE_DEV=ON. В релизе их нет вовсе —
+# переменная окружения в прод-запуске не отключит проверку TLS.
+option(PARVANE_DEV "Compile dev/e2e hooks (insecure TLS, ws://, PARVANE_AUTO*)" OFF)
+if (PARVANE_DEV)
+    target_compile_definitions(parvane_core PUBLIC PARVANE_DEV=1)
+endif()
+
 option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe + tests" ON)
 if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_probe probe/main.cpp)
