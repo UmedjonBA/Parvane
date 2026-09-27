@@ -229,7 +229,7 @@ std::set<std::string> g_presenceSubscribed; // уже подписаны в эт
 void subscribePresenceLocked(const std::string &peer) {
     if (!g_transport || peer.empty() || peer == g_self || g_presenceSubscribed.count(peer)) return;
     g_presenceSubscribed.insert(peer);
-    g_transport->subscribe("presence." + std::to_string(idForAddress(peer)), [](std::string, std::string payload) {
+    g_transport->subscribe(parvane::topics::presence(std::to_string(idForAddress(peer))), [](std::string, std::string payload) {
         auto j = json::parse(payload, nullptr, false);
         if (j.is_object() && j.value("from", "") != g_self) {
             static std::set<std::string> logged;
@@ -308,7 +308,7 @@ std::unique_ptr<parvane::GatewayWsTransport> makeTransport(const std::string &to
 std::string serverDomain() {
     try {
         auto t = makeTransport("");
-        const auto raw = t->request(std::string("identity.server.info"), "{}", 5000);
+        const auto raw = t->request(std::string(parvane::topics::IdentityServerInfo), "{}", 5000);
         const auto j = json::parse(raw, nullptr, false);
         if (j.is_object()) return j.value("domain", "");
     } catch (const std::exception &e) {
@@ -368,7 +368,7 @@ json refreshGroupsLocked() {
         if (parvane::e2e::groupSyncRecipients(gi.group_id, mem)) LOGI("группа %s: участник выбыл — ротация ключа", gi.group_id.c_str());
         if (g_groupTypingSubscribed.insert(gi.group_id).second) {
             const auto gid = gi.group_id;
-            g_transport->subscribe("msg.typing." + std::to_string(idForAddress(gid)), [gid](std::string, std::string payload) {
+            g_transport->subscribe(parvane::topics::msgTyping(std::to_string(idForAddress(gid))), [gid](std::string, std::string payload) {
                 auto j = json::parse(payload, nullptr, false);
                 if (j.is_object() && j.value("from", "") != g_self)
                     emit(json{{"type", "typing"}, {"from", j.value("from", "")}, {"to", gid}});
@@ -871,7 +871,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeServerInfo(JNI
     json out{{"domain", ""}, {"confirm", ""}, {"telegram_bot", ""}};
     try {
         auto t = makeTransport("");
-        const auto j = json::parse(t->request(std::string("identity.server.info"), "{}", 5000), nullptr, false);
+        const auto j = json::parse(t->request(std::string(parvane::topics::IdentityServerInfo), "{}", 5000), nullptr, false);
         if (j.is_object()) {
             out["domain"] = j.value("domain", "");
             out["telegram_bot"] = j.value("telegram_bot", "");
@@ -905,7 +905,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRegisterStatu
     try {
         auto t = makeTransport("");
         const json req{{"user", jstr(env, user)}, {"token", jstr(env, token)}};
-        return json::parse(t->request(std::string("identity.register.status"), req.dump(), 5000), nullptr, false).value("confirmed", false) ? JNI_TRUE : JNI_FALSE;
+        return json::parse(t->request(std::string(parvane::topics::IdentityRegisterStatus), req.dump(), 5000), nullptr, false).value("confirmed", false) ? JNI_TRUE : JNI_FALSE;
     } catch (const std::exception &e) { LOGE("register.status: %s", e.what()); return JNI_FALSE; }
 }
 // identity.email.confirm — код из письма → {ok, error}
@@ -1009,7 +1009,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
             emit(json{{"type", "notify"}, {"blob", blob}});
         });
         // «печатает…» и присутствие — эфемерные темы, как на десктопе/вебе
-        g_transport->subscribe("msg.typing." + std::to_string(idForAddress(g_self)),
+        g_transport->subscribe(parvane::topics::msgTyping(std::to_string(idForAddress(g_self))),
             [](std::string, std::string payload) {
                 auto j = json::parse(payload, nullptr, false);
                 if (j.is_object() && j.value("from", "") != g_self) {
@@ -1026,7 +1026,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
                     {
                         std::lock_guard<std::mutex> lk(g_mu);
                         if (g_transport && !g_self.empty()) {
-                            try { g_transport->publish("presence." + std::to_string(idForAddress(g_self)), json{{"from", g_self}}.dump()); } catch (...) {}
+                            try { g_transport->publish(parvane::topics::presence(std::to_string(idForAddress(g_self))), json{{"from", g_self}}.dump()); } catch (...) {}
                         }
                     }
                     for (int i = 0; i < 300 && g_presenceRunning; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1312,7 +1312,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeSetProfile(JN
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         req["token"] = g_token;
-        const auto raw = g_transport->request("identity.user.setname", req.dump(), 5000);
+        const auto raw = g_transport->request(parvane::topics::IdentitySetName, req.dump(), 5000);
         if (!json::parse(raw, nullptr, false).value("ok", false)) throw std::runtime_error("identity отказал");
         LOGI("профиль обновлён");
         return JNI_TRUE;
@@ -1332,7 +1332,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSetAvatar(JNIE
         parvane::CloudClient cloud(*g_transport);
         const auto fileId = cloud.upload(g_self, g_token, "avatar.jpg", "image/jpeg", bytes, {}, true, 256 * 1024, 60000);
         if (fileId.empty()) throw std::runtime_error("cloud не принял");
-        g_transport->request("identity.user.setavatar", json{{"token", g_token}, {"file_id", fileId}}.dump(), 5000);
+        g_transport->request(parvane::topics::IdentitySetAvatar, json{{"token", g_token}, {"file_id", fileId}}.dump(), 5000);
         std::error_code ec; std::filesystem::create_directories(mediaDir(), ec);
         std::ofstream o(mediaDir() + "/" + fileId, std::ios::binary); o << bytes;
         LOGI("аватар обновлён (%s)", fileId.c_str());
@@ -1364,7 +1364,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSendTyping(JNIEnv
     const auto toStd = jstr(env, to);
     std::lock_guard<std::mutex> lk(g_mu);
     if (!g_transport) return;
-    try { g_transport->publish("msg.typing." + std::to_string(idForAddress(toStd)), json{{"from", g_self}, {"to", toStd}}.dump()); } catch (...) {}
+    try { g_transport->publish(parvane::topics::msgTyping(std::to_string(idForAddress(toStd))), json{{"from", g_self}, {"to", toStd}}.dump()); } catch (...) {}
 }
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(
         JNIEnv *env, jclass, jstring uuid, jstring to, jstring contentJson) {
@@ -1430,7 +1430,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeResolve(
         if (!arr.is_array()) arr = json::array();
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
-        const auto raw = g_transport->request("identity.user.resolve",
+        const auto raw = g_transport->request(parvane::topics::IdentityResolve,
                                               json{{"token", g_token}, {"usernames", arr}}.dump(), 5000);
         return env->NewStringUTF(raw.c_str());
     } catch (const std::exception &e) {
@@ -1444,7 +1444,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSearch(
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
-        const auto raw = g_transport->request("identity.user.search",
+        const auto raw = g_transport->request(parvane::topics::IdentitySearch,
                                               json{{"token", g_token}, {"query", jstr(env, query)}}.dump(), 5000);
         return env->NewStringUTF(raw.c_str());
     } catch (const std::exception &e) {

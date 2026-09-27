@@ -22,6 +22,12 @@ inline constexpr auto IdentityLinkOffer = "identity.link.offer";
 inline constexpr auto IdentityLinkPoll = "identity.link.poll";
 inline constexpr auto IdentityLinkGrant = "identity.link.grant";
 inline constexpr auto IdentityLinkChallenge = "identity.link.challenge";
+inline constexpr auto IdentityServerInfo = "identity.server.info";
+inline constexpr auto IdentityRegisterStatus = "identity.register.status";
+inline constexpr auto IdentitySearch = "identity.user.search";
+inline constexpr auto IdentitySetName = "identity.user.setname";
+inline constexpr auto IdentitySetAvatar = "identity.user.setavatar";
+inline constexpr auto IdentityResolve = "identity.user.resolve";
 
 // messenger
 inline constexpr auto MsgSend = "msg.chat.send";
@@ -40,6 +46,12 @@ inline constexpr auto MsgAck = "msg.chat.ack";
 // (InboxPush) и delivered-подтверждения. Зеркалит msg_inbox() из parvane-types.
 inline std::string msgInbox(const std::string &user) { return "msg.user." + user; }
 inline constexpr auto MsgSyncRequest = "msg.sync.request";
+// Эфемерные субъекты (P-18): typing/presence по числовому id клиента. Зеркалят
+// MSG_TYPING_PREFIX / PRESENCE_PREFIX и msg_typing()/presence() из parvane-types.
+inline constexpr auto MsgTypingPrefix = "msg.typing.";
+inline constexpr auto PresencePrefix = "presence.";
+inline std::string msgTyping(const std::string &id) { return std::string(MsgTypingPrefix) + id; }
+inline std::string presence(const std::string &id) { return std::string(PresencePrefix) + id; }
 inline constexpr auto MsgSyncResponse = "msg.sync.response";
 
 // cloud (медиа-блобы)
@@ -70,6 +82,10 @@ inline constexpr auto CallSignal = "call.signal";
 inline constexpr auto CallHistoryRequest = "call.history.request";
 inline constexpr auto CallHistoryResponse = "call.history.response";
 inline constexpr auto CallIceRequest = "call.ice.request";
+// Инбокс сигналов звонка call.user.<addr>; зеркалит call_inbox() из parvane-types.
+inline std::string callInbox(const std::string &user) { return "call.user." + user; }
+// Маршрут группового mesh-звонка в `to` сигнала (GROUP_CALL_ROUTE_PREFIX).
+inline constexpr auto GroupCallRoutePrefix = "gcall:";
 inline constexpr auto PreviewLinkFetch = "preview.link.fetch";
 
 // группы/каналы (request/reply на messenger)

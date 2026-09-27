@@ -17,6 +17,9 @@ import {
   TOPIC_IDENTITY_SERVER_INFO,
   TOPIC_IDENTITY_SETKEY,
   TOPIC_PREKEYS_PUBLISH,
+  buildGroupCallRoute,
+  buildPresenceTopic,
+  buildTypingTopic,
 } from './wire';
 
 type CallController = ReturnType<typeof createCallController>;
@@ -294,15 +297,15 @@ export function createConnectionController(deps: ConnectionDependencies) {
     deps.setConnection(activeConnection);
     activeConnection.onClose = () => handleClose(activeConnection, user, generation);
     activeConnection.subscribe(buildMsgInboxTopic(user), deps.handleInboxFrame);
-    activeConnection.subscribe(`msg.typing.${deps.selfId()}`, handleTypingFrame);
+    activeConnection.subscribe(buildTypingTopic(deps.selfId()), handleTypingFrame);
     subscribedPresence.forEach((peerId) => {
-      activeConnection.subscribe(`presence.${peerId}`, handlePresenceFrame);
+      activeConnection.subscribe(buildPresenceTopic(peerId), handlePresenceFrame);
     });
     activeConnection.subscribe(buildCallInboxTopic(user), deps.calls.handleFrame);
-    activeConnection.subscribe(buildCallInboxTopic(`gcall:${user}`), deps.calls.handleGroupFrame);
+    activeConnection.subscribe(buildCallInboxTopic(buildGroupCallRoute(user)), deps.calls.handleGroupFrame);
     // Переустанавливаем подписки на typing-топики известных групп
     subscribedTypingGroups.forEach((groupChatId) => {
-      activeConnection.subscribe(`msg.typing.${groupChatId}`, handleTypingFrame);
+      activeConnection.subscribe(buildTypingTopic(groupChatId), handleTypingFrame);
     });
     deps.calls.setup();
   }
@@ -312,7 +315,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
   function ensurePresence(peerId: string) {
     if (!peerId || peerId.startsWith('-') || subscribedPresence.has(peerId)) return;
     subscribedPresence.add(peerId);
-    deps.getConnection()?.subscribe(`presence.${peerId}`, handlePresenceFrame);
+    deps.getConnection()?.subscribe(buildPresenceTopic(peerId), handlePresenceFrame);
   }
 
   // Подписка на групповой typing-топик (идемпотентно). Вызывается при
@@ -320,7 +323,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
   function ensureGroupTyping(groupChatId: string) {
     if (!groupChatId || subscribedTypingGroups.has(groupChatId)) return;
     subscribedTypingGroups.add(groupChatId);
-    deps.getConnection()?.subscribe(`msg.typing.${groupChatId}`, handleTypingFrame);
+    deps.getConnection()?.subscribe(buildTypingTopic(groupChatId), handleTypingFrame);
   }
 
   function handleClose(closedConnection: GatewayConnection, user: string, generation: number) {
@@ -387,7 +390,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     const connection = deps.getConnection();
     if (!connection) return;
     try {
-      connection.publish(`presence.${deps.selfId()}`, JSON.stringify({ from: deps.getStore().self }));
+      connection.publish(buildPresenceTopic(deps.selfId()), JSON.stringify({ from: deps.getStore().self }));
     } catch {
       // onClose запустит reconnect; presence будет опубликован после auth.
     }

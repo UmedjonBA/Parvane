@@ -42,6 +42,7 @@ import {
   TOPIC_MSG_READERS,
   TOPIC_MSG_SEND,
   TOPIC_PREKEYS_FETCH,
+  buildTypingTopic,
   type WireDeviceCopy,
   type WireMessageContent,
   type WirePackRef,
@@ -1362,7 +1363,7 @@ export function createMessageController(deps: MessageDependencies) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(peer.id);
       if (!toAddress) return Promise.resolve(undefined);
-      publishFrame(`msg.typing.${peer.id}`, JSON.stringify({ from: currentStore.self, to: toAddress }));
+      publishFrame(buildTypingTopic(peer.id), JSON.stringify({ from: currentStore.self, to: toAddress }));
       return Promise.resolve(undefined);
     },
 

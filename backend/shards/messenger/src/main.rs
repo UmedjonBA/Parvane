@@ -1227,7 +1227,7 @@ async fn handle_readers(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
     .await
     .unwrap_or_else(|e| {
         warn!("handle_readers: {}", e);
-        ReadersResponse { ok: false, readers: vec![], error: Some(e.to_string()) }
+        ReadersResponse { ok: false, readers: vec![], error: Some(parvane_db::public_error(&e)) }
     });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -2132,7 +2132,7 @@ async fn handle_group_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
     .unwrap_or_else(|e| GroupCreateResponse {
         ok: false,
         group_id: None,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
     });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -2150,7 +2150,7 @@ async fn handle_group_add(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2167,7 +2167,7 @@ async fn handle_group_remove(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2184,7 +2184,7 @@ async fn handle_group_setrole(nc: &Client, pool: &SqlitePool, msg: async_nats::M
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2201,7 +2201,7 @@ async fn handle_group_rename(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2218,7 +2218,7 @@ async fn handle_group_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2298,7 +2298,7 @@ async fn handle_group_ban(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2315,7 +2315,7 @@ async fn handle_group_mute(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
         })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2366,7 +2366,7 @@ async fn handle_group_invite_revoke(nc: &Client, pool: &SqlitePool, msg: async_n
         anyhow::Ok(GroupActionResponse { ok, error: if ok { None } else { Some("нет прав или ссылка не найдена".into()) } })
     }
     .await
-    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
@@ -2409,7 +2409,7 @@ async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: async_n
     .unwrap_or_else(|e| GroupInviteCreateResponse {
         ok: false,
         invite: None,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
     });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -2485,7 +2485,7 @@ async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
         ok: false,
         group_id: None,
         name: None,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
     });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -2596,7 +2596,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         error!("handle_sync: {}", e);
         // Ошибку отдаём явно (не пустой страницей): клиент должен отличать
         // «нет новых сообщений» от отказа (отозванное устройство, битый токен).
-        let body = serde_json::json!({ "error": e.to_string() }).to_string();
+        let body = serde_json::json!({ "error": parvane_db::public_error(&e) }).to_string();
         let _ = nc.publish(reply, body.into()).await;
     }
 }

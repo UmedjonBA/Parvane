@@ -306,14 +306,14 @@ pub const GATEWAY_NATS_PUBLISH: &[&str] = &[
     PUSH_VAPID_GET,
     PUSH_REGISTER,
     PUSH_UNREGISTER,
-    "msg.typing.>",
-    "presence.>",
+    MSG_TYPING_WILDCARD,
+    PRESENCE_WILDCARD,
 ];
 
 pub const GATEWAY_NATS_SUBSCRIBE: &[&str] = &[
-    "msg.user.>",
-    "call.user.>",
-    "msg.typing.>",
-    "presence.>",
+    MSG_USER_WILDCARD,
+    CALL_USER_WILDCARD,
+    MSG_TYPING_WILDCARD,
+    PRESENCE_WILDCARD,
     REQUEST_INBOX,
 ];

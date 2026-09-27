@@ -67,3 +67,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// 4.10: текст ошибки для клиента. Ошибки SQLite/IO/сериализации содержат имена
+/// таблиц, констрейнтов и путей — наружу уходит только код, детали в лог.
+/// Собственные `bail!("...")` обработчиков (квота, права, лимиты) — как есть.
+pub trait PublicError {
+    fn public_message(&self) -> String;
+}
+
+impl PublicError for anyhow::Error {
+    fn public_message(&self) -> String {
+        for cause in self.chain() {
+            if cause.is::<sqlx::Error>() || cause.is::<sqlx::migrate::MigrateError>() {
+                tracing::warn!("внутренняя ошибка БД скрыта от клиента: {self:#}");
+                return "internal_error".to_string();
+            }
+            if cause.is::<std::io::Error>() {
+                tracing::warn!("внутренняя ошибка IO скрыта от клиента: {self:#}");
+                return "internal_error".to_string();
+            }
+            if cause.is::<serde_json::Error>() {
+                return "bad_request".to_string();
+            }
+        }
+        self.to_string()
+    }
+}
+
+impl PublicError for serde_json::Error {
+    fn public_message(&self) -> String {
+        "bad_request".to_string()
+    }
+}
+
+impl PublicError for sqlx::Error {
+    fn public_message(&self) -> String {
+        tracing::warn!("внутренняя ошибка БД скрыта от клиента: {self}");
+        "internal_error".to_string()
+    }
+}
+
+/// Сообщение об ошибке, безопасное для отправки клиенту (см. [`PublicError`]).
+pub fn public_error<E: PublicError + ?Sized>(e: &E) -> String {
+    e.public_message()
+}
+
+#[cfg(test)]
+mod public_error_tests {
+    use super::public_error;
+
+    #[test]
+    fn hides_db_io_and_serde_details() {
+        let db = anyhow::Error::from(sqlx::Error::RowNotFound).context("SELECT FROM files");
+        assert_eq!(public_error(&db), "internal_error");
+        let io = anyhow::Error::from(std::io::Error::other("/data/cloud/blob"));
+        assert_eq!(public_error(&io), "internal_error");
+        let json = anyhow::Error::from(serde_json::from_str::<u8>("x").unwrap_err());
+        assert_eq!(public_error(&json), "bad_request");
+        assert_eq!(public_error(&serde_json::from_str::<u8>("x").unwrap_err()), "bad_request");
+        assert_eq!(public_error(&sqlx::Error::RowNotFound), "internal_error");
+        let own = anyhow::anyhow!("квота исчерпана");
+        assert_eq!(public_error(&own), "квота исчерпана");
+    }
+}

@@ -80,9 +80,10 @@ use parvane_types::{
     },
     GroupListResponse,
     topics::{
-        call_inbox, msg_inbox, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, GROUP_LIST, IDENTITY_EMAIL_CONFIRM,
-        IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_SERVER_INFO,
-        IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY,
+        call_inbox, group_call_route, msg_inbox, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, GROUP_LIST,
+        IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS,
+        IDENTITY_SERVER_INFO, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY, MSG_CHAT_PREFIX, MSG_EDIT,
+        MSG_SEND, MSG_TYPING_PREFIX, PRESENCE_PREFIX,
     },
     VerifyRequest, VerifyResponse,
 };
@@ -150,7 +151,7 @@ impl SessionRate {
     fn allow(&mut self, subject: &str) -> bool {
         if subject == FILE_UPLOAD_CHUNK || subject == FILE_UPLOAD_COMPLETE {
             self.uploads.try_take()
-        } else if subject.starts_with("msg.chat.") {
+        } else if subject.starts_with(MSG_CHAT_PREFIX) {
             self.messages.try_take()
         } else {
             self.requests.try_take()
@@ -615,7 +616,7 @@ async fn serve(
                     continue;
                 }
                 let allowed = allowed_sub(&user, &subject)
-                    || (subject.starts_with("msg.typing.")
+                    || (subject.starts_with(MSG_TYPING_PREFIX)
                         && group_typing_allowed(&nats, &auth_token, &subject).await);
                 if !allowed {
                     let _ = tx.send(err_frame(None, "подписка на чужой/запрещённый subject")).await;
@@ -756,7 +757,7 @@ fn is_own_ephemeral_subject(user: &str, prefix: &str, subject: &str) -> bool {
 }
 
 fn is_concrete_typing_subject(subject: &str) -> bool {
-    subject.strip_prefix("msg.typing.").is_some_and(|id| {
+    subject.strip_prefix(MSG_TYPING_PREFIX).is_some_and(|id| {
         // Групповой typing веб-клиента адресован chat-id вида "-<digits>"
         // (FNV с ведущим минусом); 1-на-1 — просто <digits>.
         let digits = id.strip_prefix('-').unwrap_or(id);
@@ -776,7 +777,7 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
     if GATEWAY_EVENT_SUBJECTS.contains(&subject) {
         // P-22: и отправка, и ПРАВКА принимают только E2E-контент — иначе
         // автор переводил бы E2E-сообщение в открытый текст на сервере правкой.
-        if subject == "msg.chat.send" || subject == "msg.chat.edit" {
+        if subject == MSG_SEND || subject == MSG_EDIT {
             let kind = object
                 .get("payload")
                 .and_then(|payload| payload.get("content"))
@@ -792,7 +793,7 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         // В sealed 1-на-1 реальный sender находится внутри Olm ciphertext. Пустой
         // `from` сохраняем только для этого wire-варианта; plaintext, group и
         // прочие события получают явного actor из авторизованной сессии.
-        let sealed_direct = subject == "msg.chat.send"
+        let sealed_direct = subject == MSG_SEND
             && object.get("from").and_then(Value::as_str) == Some("")
             && object
                 .get("payload")
@@ -839,7 +840,7 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         }
     } else if GATEWAY_TOKEN_REQUEST_SUBJECTS.contains(&subject) {
         object.insert("token".into(), Value::String(token.to_string()));
-    } else if subject.starts_with("msg.typing.") || subject.starts_with("presence.") {
+    } else if subject.starts_with(MSG_TYPING_PREFIX) || subject.starts_with(PRESENCE_PREFIX) {
         object.insert("from".into(), Value::String(user.to_string()));
     }
 
@@ -856,14 +857,14 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
 fn allowed_sub(user: &str, subject: &str) -> bool {
     subject == msg_inbox(user)
         || subject == call_inbox(user)
-        || subject == call_inbox(&format!("gcall:{user}"))
-        || is_own_ephemeral_subject(user, "msg.typing.", subject)
+        || subject == call_inbox(&group_call_route(user))
+        || is_own_ephemeral_subject(user, MSG_TYPING_PREFIX, subject)
         || is_concrete_presence_subject(subject)
 }
 
 fn is_concrete_presence_subject(subject: &str) -> bool {
     subject
-        .strip_prefix("presence.")
+        .strip_prefix(PRESENCE_PREFIX)
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
@@ -879,7 +880,7 @@ fn group_typing_ids(group_id: &str) -> [String; 2] {
 /// P-18: подписка на msg.typing.<id> группы разрешена только участнику —
 /// список групп берём у messenger'а по токену этой же сессии.
 async fn group_typing_allowed(nats: &Client, token: &str, subject: &str) -> bool {
-    let Some(id) = subject.strip_prefix("msg.typing.") else {
+    let Some(id) = subject.strip_prefix(MSG_TYPING_PREFIX) else {
         return false;
     };
     if id.is_empty() || !id.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()) {
@@ -902,7 +903,7 @@ async fn group_typing_allowed(nats: &Client, token: &str, subject: &str) -> bool
 fn allowed_pub(user: &str, subject: &str) -> bool {
     GATEWAY_ALLOWED_PUBLISH.contains(&subject)
         || is_concrete_typing_subject(subject)
-        || is_own_ephemeral_subject(user, "presence.", subject)
+        || is_own_ephemeral_subject(user, PRESENCE_PREFIX, subject)
 }
 
 /// Что можно запросить (request / reqmany).

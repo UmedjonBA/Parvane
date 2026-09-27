@@ -560,7 +560,7 @@ async fn handle_chunk(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
     if let Some(reply) = msg.reply {
         let ack = match &result {
             Ok(()) => serde_json::json!({ "ok": true }),
-            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            Err(e) => serde_json::json!({ "ok": false, "error": parvane_db::public_error(e) }),
         };
         if let Ok(bytes) = serde_json::to_vec(&ack) {
             let _ = nc.publish(reply, bytes.into()).await;
@@ -607,7 +607,7 @@ async fn handle_complete(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         let resp = UploadCompleteResponse {
             ok: false,
             file_id: None,
-            error: Some(e.to_string()),
+            error: Some(parvane_db::public_error(&e)),
         };
         let _ = nc
             .publish(
@@ -693,7 +693,7 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             chunk_index: None,
             total_chunks: None,
             data: None,
-            error: Some(e.to_string()),
+            error: Some(parvane_db::public_error(&e)),
             size_bytes: None,
             chunk_bytes: None,
         };
@@ -726,7 +726,7 @@ async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         }
     }
     .await;
-    let resp = result.unwrap_or_else(|e| FileDeleteResponse { ok: false, error: Some(e.to_string()) });
+    let resp = result.unwrap_or_else(|e| FileDeleteResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
