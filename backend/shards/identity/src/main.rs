@@ -15,11 +15,13 @@ use parvane_types::{
     TwoFactorRequest, TwoFactorResponse, UserInfo, VerifyRequest, VerifyResponse,
     topics::{
         IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
+        IDENTITY_PASSWORD_CHANGE,
         IDENTITY_LINK_GRANT, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
         IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_RESOLVE,
         IDENTITY_SEARCH, IDENTITY_SERVER_INFO, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
         IDENTITY_SETNAME, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_TWOFA, IDENTITY_VERIFY,
     },
+    PasswordChangeRequest, PasswordChangeResponse,
 };
 
 fn opt(s: String) -> Option<String> {
@@ -67,6 +69,40 @@ fn verify_password(password: &str, stored: &str) -> bool {
             .is_ok(),
         Err(_) => false,
     }
+}
+
+/// P-43: политика пароля — не короче 8 и не длиннее 1024 символов.
+fn password_policy_ok(password: &str) -> Result<()> {
+    let n = password.chars().count();
+    if n < 8 {
+        anyhow::bail!("пароль короче 8 символов");
+    }
+    if n > 1024 {
+        anyhow::bail!("пароль слишком длинный");
+    }
+    Ok(())
+}
+
+/// P-07: опасные операции (выключение 2FA, отзыв устройства, смена ключа,
+/// смена пароля) требуют ТЕКУЩИЙ пароль, а не только JWT — украденный
+/// 24-часовой токен не должен снимать второй фактор или выкидывать владельца.
+async fn require_password(pool: &SqlitePool, username: &str, password: Option<&str>) -> Result<()> {
+    let Some(password) = password.filter(|p| !p.is_empty()) else {
+        anyhow::bail!("требуется пароль");
+    };
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT password_hash FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(pool)
+            .await?;
+    let Some((hash,)) = row else {
+        let _ = verify_password(password, dummy_password_hash());
+        anyhow::bail!("неверный пароль");
+    };
+    if !verify_password(password, &hash) {
+        anyhow::bail!("неверный пароль");
+    }
+    Ok(())
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -117,6 +153,7 @@ async fn main() -> Result<()> {
     let mut telegram_confirm_sub = nc.subscribe(IDENTITY_TELEGRAM_CONFIRM).await?;
     let mut register_status_sub = nc.subscribe(IDENTITY_REGISTER_STATUS).await?;
     let mut twofa_sub = nc.subscribe(IDENTITY_TWOFA).await?;
+    let mut password_change_sub = nc.subscribe(IDENTITY_PASSWORD_CHANGE).await?;
     let mut verify_sub = nc.subscribe(IDENTITY_VERIFY).await?;
     let mut search_sub = nc.subscribe(IDENTITY_SEARCH).await?;
     let mut setname_sub = nc.subscribe(IDENTITY_SETNAME).await?;
@@ -159,6 +196,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = twofa_sub.next() => {
                 handle_twofa(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = password_change_sub.next() => {
+                handle_password_change(&nc, &pool, &decoding, msg).await;
             }
             Some(msg) = verify_sub.next() => {
                 handle_verify(&nc, &decoding, &pool, msg).await;
@@ -481,7 +521,24 @@ async fn handle_setkey(
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match serde_json::from_slice::<SetKeyRequest>(&msg.payload) {
         Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(username) => match store_pubkey(pool, &username, &req.pubkey).await {
+            Ok(username) => match async {
+                // P-07: ЗАМЕНА уже зарегистрированного публичного ключа — только с
+                // паролем (украденный JWT не должен подменять ключ подписи
+                // сигналинга звонков). Первая регистрация и повторная публикация
+                // того же ключа (клиенты делают её при каждом входе) — по JWT.
+                let current: Option<(String,)> =
+                    sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+                        .bind(&username)
+                        .fetch_optional(pool)
+                        .await?;
+                let current = current.map(|(k,)| k).unwrap_or_default();
+                if !current.is_empty() && current != req.pubkey {
+                    require_password(pool, &username, req.password.as_deref()).await?;
+                }
+                store_pubkey(pool, &username, &req.pubkey).await
+            }
+            .await
+            {
                 Ok(()) => {
                     info!("{} зарегистрировал pubkey ({}…)", username, &req.pubkey.chars().take(12).collect::<String>());
                     SetNameResponse { ok: true, error: None }
@@ -768,7 +825,13 @@ async fn handle_device_revoke(
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match serde_json::from_slice::<DeviceRevokeRequest>(&msg.payload) {
         Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(username) => match revoke_device(pool, &username, &req.device_id).await {
+            Ok(username) => match async {
+                // P-07: отзыв устройства — только с паролем.
+                require_password(pool, &username, req.password.as_deref()).await?;
+                revoke_device(pool, &username, &req.device_id).await
+            }
+            .await
+            {
                 Ok(true) => {
                     info!("{} отозвал устройство '{}'", username, req.device_id);
                     DeviceRevokeResponse { ok: true, error: None }
@@ -1298,6 +1361,48 @@ async fn issue_login_token(pool: &SqlitePool, user: &str, device_id: &str) -> Re
 
 // ── двухфакторный вход: чтение/переключение ──────────────────────────────────
 
+/// P-07: смена пароля (identity.password.change). Требует JWT живой сессии И
+/// старый пароль; новый — по политике. Сбрасывает доверие устройств 2FA и
+/// незавершённые входы: после компрометации владелец возвращает контроль.
+async fn handle_password_change(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = match do_password_change(pool, decoding, &msg.payload).await {
+        Ok(user) => {
+            info!("{} сменил пароль", user);
+            PasswordChangeResponse { ok: true, error: None }
+        }
+        Err(e) => PasswordChangeResponse { ok: false, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+async fn do_password_change(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<String> {
+    let req: PasswordChangeRequest =
+        serde_json::from_slice(payload).context("неверный JSON в PasswordChangeRequest")?;
+    let username = verify_active_user(pool, decoding, &req.token).await?;
+    login_gate_check(&username)?;
+    if let Err(e) = require_password(pool, &username, Some(&req.old_password)).await {
+        login_record_failure(&username);
+        return Err(e);
+    }
+    password_policy_ok(&req.new_password)?;
+    if req.new_password == req.old_password {
+        anyhow::bail!("новый пароль совпадает со старым");
+    }
+    let hash = hash_password(&req.new_password)?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE users SET password_hash = ? WHERE username = ?")
+        .bind(&hash)
+        .bind(&username)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM trusted_devices WHERE username = ?").bind(&username).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM login_links WHERE username = ?").bind(&username).execute(&mut *tx).await?;
+    tx.commit().await?;
+    login_record_success(&username);
+    Ok(username)
+}
+
 async fn handle_twofa(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match do_twofa(pool, decoding, &msg.payload).await {
@@ -1328,6 +1433,10 @@ async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> 
     };
     if enabled && !telegram_linked {
         anyhow::bail!("сначала привяжите Telegram (подтверждение через бота)");
+    }
+    if !enabled {
+        // P-07: выключить 2FA можно только с паролем.
+        require_password(pool, &username, req.password.as_deref()).await?;
     }
     sqlx::query("UPDATE users SET tg_2fa = ? WHERE username = ?")
         .bind(enabled as i64)
@@ -1432,6 +1541,7 @@ async fn do_register(
     if req.user.trim().is_empty() || req.password.is_empty() {
         anyhow::bail!("пустой логин или пароль");
     }
+    password_policy_ok(&req.password)?;
     if user.len() > 128 {
         anyhow::bail!("слишком длинный логин");
     }
@@ -1612,6 +1722,12 @@ async fn do_telegram_confirm(pool: &SqlitePool, payload: &[u8], secret: Option<&
     let Some(secret) = secret else {
         anyhow::bail!("подтверждение через Telegram не включено");
     };
+    // P-43: pre-auth subject без лимита позволял онлайн-перебор секрета бота.
+    if !req.client_ip.is_empty()
+        && !window_rate_ok("tg-confirm-ip", &req.client_ip, env_u64("PARVANE_TG_CONFIRM_RATE_IP", 10) as usize)
+    {
+        anyhow::bail!("слишком много попыток, попробуйте позже");
+    }
     if !secret_matches(&req.secret, secret) {
         anyhow::bail!("неверный секрет бота");
     }
@@ -1853,6 +1969,12 @@ async fn do_email_confirm(pool: &SqlitePool, payload: &[u8]) -> Result<()> {
     let code = req.code.trim().to_string();
     if req.user.trim().is_empty() || code.is_empty() {
         anyhow::bail!("пустой логин или код");
+    }
+    // P-43: аноним мог 6 запросами по чужому нику сжечь попытки кода жертвы.
+    if !req.client_ip.is_empty()
+        && !window_rate_ok("email-confirm-ip", &req.client_ip, env_u64("PARVANE_EMAIL_CONFIRM_RATE_IP", 20) as usize)
+    {
+        anyhow::bail!("слишком много попыток, попробуйте позже");
     }
 
     let row: Option<(String, i64, i64)> = sqlx::query_as(
@@ -2333,7 +2455,7 @@ mod tests {
         .unwrap()
     }
     fn confirm_bytes(user: &str, code: &str) -> Vec<u8> {
-        serde_json::to_vec(&EmailConfirmRequest { user: user.into(), code: code.into() }).unwrap()
+        serde_json::to_vec(&EmailConfirmRequest { user: user.into(), code: code.into(), client_ip: String::new(), }).unwrap()
     }
 
     #[tokio::test]
@@ -2341,7 +2463,7 @@ mod tests {
         // Регрессия безопасности: логин несуществующего юзера НЕ создаёт аккаунт.
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        let err = do_issue(&pool, &enc, &issue_bytes("ghost@local", "pw")).await.unwrap_err();
+        let err = do_issue(&pool, &enc, &issue_bytes("ghost@local", "pw-secret-1")).await.unwrap_err();
         // Единая ошибка (анти-энумерация): не раскрываем, существует ли логин.
         assert!(err.to_string().contains("неверный логин или пароль"));
         let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE username = ?")
@@ -2354,9 +2476,9 @@ mod tests {
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
         // регистрация создаёт аккаунт
-        do_register(&pool, &register_bytes("newbie@local", "pw"), ConfirmMode::None).await.unwrap();
+        do_register(&pool, &register_bytes("newbie@local", "pw-secret-1"), ConfirmMode::None).await.unwrap();
         // теперь логин проходит и выдаёт валидный JWT
-        let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw")).await.unwrap().token().unwrap().to_string();
+        let token = do_issue(&pool, &enc, &issue_bytes("newbie@local", "pw-secret-1")).await.unwrap().token().unwrap().to_string();
         let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(user, "newbie@local");
         // неверный пароль — отказ
@@ -2368,8 +2490,8 @@ mod tests {
         // Анти-энумерация: несуществующий юзер и неверный пароль — одна ошибка.
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        do_register(&pool, &register_bytes("real@local", "pw"), ConfirmMode::None).await.unwrap();
-        let e_unknown = do_issue(&pool, &enc, &issue_bytes("nouser@local", "pw"))
+        do_register(&pool, &register_bytes("real@local", "pw-secret-1"), ConfirmMode::None).await.unwrap();
+        let e_unknown = do_issue(&pool, &enc, &issue_bytes("nouser@local", "pw-secret-1"))
             .await
             .unwrap_err()
             .to_string();
@@ -2387,12 +2509,12 @@ mod tests {
         // верным паролем; PARVANE_LOGIN_LOCK_THRESHOLD берётся из env (по умолч. 5).
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        do_register(&pool, &register_bytes("lock@local", "pw"), ConfirmMode::None).await.unwrap();
+        do_register(&pool, &register_bytes("lock@local", "pw-secret-1"), ConfirmMode::None).await.unwrap();
         for _ in 0..5 {
             assert!(do_issue(&pool, &enc, &issue_bytes("lock@local", "bad")).await.is_err());
         }
         // теперь даже верный пароль отклонён (лок-аут активен)
-        let err = do_issue(&pool, &enc, &issue_bytes("lock@local", "pw"))
+        let err = do_issue(&pool, &enc, &issue_bytes("lock@local", "pw-secret-1"))
             .await
             .unwrap_err()
             .to_string();
@@ -2446,25 +2568,25 @@ mod tests {
         // (в тестах домен по умолчанию — local).
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
-        do_register(&pool, &register_bytes("barenick", "pw"), ConfirmMode::None).await.unwrap();
+        do_register(&pool, &register_bytes("barenick", "pw-secret-1"), ConfirmMode::None).await.unwrap();
         let (stored,): (String,) = sqlx::query_as("SELECT username FROM users WHERE username = ?")
             .bind("barenick@local").fetch_one(&pool).await.unwrap();
         assert_eq!(stored, "barenick@local");
-        let token = do_issue(&pool, &enc, &issue_bytes("barenick", "pw")).await.unwrap().token().unwrap().to_string();
+        let token = do_issue(&pool, &enc, &issue_bytes("barenick", "pw-secret-1")).await.unwrap().token().unwrap().to_string();
         let sub = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(sub, "barenick@local");
         // и полный адрес по-прежнему работает
-        assert!(do_issue(&pool, &enc, &issue_bytes("barenick@local", "pw")).await.is_ok());
+        assert!(do_issue(&pool, &enc, &issue_bytes("barenick@local", "pw-secret-1")).await.is_ok());
     }
 
     #[tokio::test]
     async fn register_rejects_foreign_domain_and_bad_nick() {
         let pool = test_pool().await;
-        let err = do_register(&pool, &register_bytes("alice@evil.example", "pw"), ConfirmMode::None)
+        let err = do_register(&pool, &register_bytes("alice@evil.example", "pw-secret-1"), ConfirmMode::None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("чужой домен"), "{err}");
-        let err = do_register(&pool, &register_bytes("Alice", "pw"), ConfirmMode::None).await.unwrap_err();
+        let err = do_register(&pool, &register_bytes("Alice", "pw-secret-1"), ConfirmMode::None).await.unwrap_err();
         assert!(err.to_string().contains("некорректный ник"), "{err}");
         let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
         assert_eq!(cnt.0, 0);
@@ -2477,8 +2599,7 @@ mod tests {
             secret: secret.into(),
             token: token.into(),
             telegram_id,
-            telegram_name: "tester".into(),
-        })
+            telegram_name: "tester".into(), client_ip: String::new(), })
         .unwrap()
     }
 
@@ -2490,13 +2611,13 @@ mod tests {
     async fn telegram_flow_register_confirm_login() {
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        let out = do_register(&pool, &register_bytes("tg", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let out = do_register(&pool, &register_bytes("tg", "pw-secret-1"), ConfirmMode::Telegram).await.unwrap();
         assert!(out.confirm_required);
         let token = out.telegram_token.clone().expect("токен deep link");
         assert!(token.len() >= 20);
         // до Start в боте: не подтверждён, логин отклонён, статус false
         assert!(!do_register_status(&pool, &status_bytes("tg", &token)).await.unwrap());
-        let err = do_issue(&pool, &enc, &issue_bytes("tg", "pw")).await.unwrap_err();
+        let err = do_issue(&pool, &enc, &issue_bytes("tg", "pw-secret-1")).await.unwrap_err();
         assert!(err.to_string().contains("не подтверждена"), "{err}");
         // чужой секрет / чужой токен — отказ
         assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("wrong", &token, 42), Some("s3cret")).await.is_err());
@@ -2510,7 +2631,7 @@ mod tests {
         assert!(do_register_status(&pool, &status_bytes("tg", &token)).await.unwrap());
         // статус без верного токена — false (не зондируется)
         assert!(!do_register_status(&pool, &status_bytes("tg", "other")).await.unwrap());
-        assert!(do_issue(&pool, &enc, &issue_bytes("tg", "pw")).await.is_ok());
+        assert!(do_issue(&pool, &enc, &issue_bytes("tg", "pw-secret-1")).await.is_ok());
         // повторный Start тем же Telegram — идемпотентен
         assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &token, 42), Some("s3cret")).await.is_ok());
     }
@@ -2518,23 +2639,23 @@ mod tests {
     #[tokio::test]
     async fn telegram_one_account_per_telegram_and_token_refresh() {
         let pool = test_pool().await;
-        let out_a = do_register(&pool, &register_bytes("tga", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let out_a = do_register(&pool, &register_bytes("tga", "pw-secret-1"), ConfirmMode::Telegram).await.unwrap();
         do_telegram_confirm(&pool, &tg_confirm_bytes("s", &out_a.telegram_token.unwrap(), 7), Some("s"))
             .await
             .unwrap();
         // второй аккаунт тем же Telegram — отказ
-        let out_b = do_register(&pool, &register_bytes("tgb", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let out_b = do_register(&pool, &register_bytes("tgb", "pw-secret-1"), ConfirmMode::Telegram).await.unwrap();
         let token_b = out_b.telegram_token.unwrap();
         let err = do_telegram_confirm(&pool, &tg_confirm_bytes("s", &token_b, 7), Some("s")).await.unwrap_err();
         assert!(err.to_string().contains("уже привязан"), "{err}");
         // повторный register pending-аккаунта с тем же паролем — новый токен, старый гаснет
-        let out_b2 = do_register(&pool, &register_bytes("tgb", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let out_b2 = do_register(&pool, &register_bytes("tgb", "pw-secret-1"), ConfirmMode::Telegram).await.unwrap();
         let token_b2 = out_b2.telegram_token.unwrap();
         assert_ne!(token_b, token_b2);
         assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s", &token_b, 8), Some("s")).await.is_err());
         assert!(do_telegram_confirm(&pool, &tg_confirm_bytes("s", &token_b2, 8), Some("s")).await.is_ok());
         // чужой пароль на pending — «логин занят»
-        let err = do_register(&pool, &register_bytes("tgb", "other"), ConfirmMode::Telegram).await.unwrap_err();
+        let err = do_register(&pool, &register_bytes("tgb", "other-secret-1"), ConfirmMode::Telegram).await.unwrap_err();
         assert!(err.to_string().contains("логин занят"), "{err}");
     }
 
@@ -2546,7 +2667,7 @@ mod tests {
         let (enc, dec) = make_keys();
         let out = do_register(
             &pool,
-            &register_bytes_email("mail@local", "pw", "user@example.com"),
+            &register_bytes_email("mail@local", "pw-secret-1", "user@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2557,7 +2678,7 @@ mod tests {
         assert_eq!(code.len(), 6);
 
         // логин до подтверждения — отказ с различимой ошибкой
-        let err = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap_err();
+        let err = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw-secret-1")).await.unwrap_err();
         assert!(err.to_string().contains("почта не подтверждена"));
 
         // неверный код — отказ
@@ -2568,7 +2689,7 @@ mod tests {
         do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.unwrap();
         assert!(do_email_confirm(&pool, &confirm_bytes("mail@local", &code)).await.is_err());
 
-        let token = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw")).await.unwrap().token().unwrap().to_string();
+        let token = do_issue(&pool, &enc, &issue_bytes("mail@local", "pw-secret-1")).await.unwrap().token().unwrap().to_string();
         let user = do_verify(&dec, &serde_json::to_vec(&VerifyRequest { token }).unwrap()).unwrap().sub;
         assert_eq!(user, "mail@local");
     }
@@ -2579,7 +2700,7 @@ mod tests {
         for bad in ["", "no-at", "a@b", "a @b.com", "@x.com"] {
             let err = do_register(
                 &pool,
-                &register_bytes_email(&format!("u{}@local", bad.len()), "pw", bad),
+                &register_bytes_email(&format!("u{}@local", bad.len()), "pw-secret-1", bad),
                 ConfirmMode::Email,
             )
             .await
@@ -2593,7 +2714,7 @@ mod tests {
         let pool = test_pool().await;
         let out1 = do_register(
             &pool,
-            &register_bytes_email("re@local", "pw", "typo@example.com"),
+            &register_bytes_email("re@local", "pw-secret-1", "typo@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2602,7 +2723,7 @@ mod tests {
         // повтор с тем же паролем — новый код и исправленный email
         let out2 = do_register(
             &pool,
-            &register_bytes_email("re@local", "pw", "fixed@example.com"),
+            &register_bytes_email("re@local", "pw-secret-1", "fixed@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2617,7 +2738,7 @@ mod tests {
             );
         }
         // пустой email при повторе — перевысылка на сохранённую почту
-        let out3 = do_register(&pool, &register_bytes_email("re@local", "pw", ""), ConfirmMode::Email)
+        let out3 = do_register(&pool, &register_bytes_email("re@local", "pw-secret-1", ""), ConfirmMode::Email)
             .await
             .unwrap();
         let (email3, code3) = out3.send.unwrap();
@@ -2626,7 +2747,7 @@ mod tests {
         // подтверждённый логин чужим register больше не перехватить
         let err = do_register(
             &pool,
-            &register_bytes_email("re@local", "other", "x@example.com"),
+            &register_bytes_email("re@local", "other-secret-1", "x@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2637,13 +2758,13 @@ mod tests {
     #[tokio::test]
     async fn email_flow_pending_login_protected_until_ttl() {
         let pool = test_pool().await;
-        do_register(&pool, &register_bytes_email("pend@local", "pw", "p@example.com"), ConfirmMode::Email)
+        do_register(&pool, &register_bytes_email("pend@local", "pw-secret-1", "p@example.com"), ConfirmMode::Email)
             .await
             .unwrap();
         // чужой пароль на свежем pending — занят
         let err = do_register(
             &pool,
-            &register_bytes_email("pend@local", "other", "x@example.com"),
+            &register_bytes_email("pend@local", "other-secret-1", "x@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2656,7 +2777,7 @@ mod tests {
             .unwrap();
         let out = do_register(
             &pool,
-            &register_bytes_email("pend@local", "other", "x@example.com"),
+            &register_bytes_email("pend@local", "other-secret-1", "x@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2669,7 +2790,7 @@ mod tests {
         let pool = test_pool().await;
         let out = do_register(
             &pool,
-            &register_bytes_email("brute@local", "pw", "b@example.com"),
+            &register_bytes_email("brute@local", "pw-secret-1", "b@example.com"),
             ConfirmMode::Email,
         )
         .await
@@ -2689,17 +2810,17 @@ mod tests {
         // Флаг выключен (desktop и существующие e2e): аккаунт сразу активен.
         let pool = test_pool().await;
         let (enc, _) = make_keys();
-        let out = do_register(&pool, &register_bytes("plain@local", "pw"), ConfirmMode::None).await.unwrap();
+        let out = do_register(&pool, &register_bytes("plain@local", "pw-secret-1"), ConfirmMode::None).await.unwrap();
         assert!(!out.confirm_required);
         assert!(out.send.is_none());
-        do_issue(&pool, &enc, &issue_bytes("plain@local", "pw")).await.unwrap();
+        do_issue(&pool, &enc, &issue_bytes("plain@local", "pw-secret-1")).await.unwrap();
     }
 
     #[tokio::test]
     async fn register_rejects_duplicate() {
         let pool = test_pool().await;
-        do_register(&pool, &register_bytes("dup@local", "pw"), ConfirmMode::None).await.unwrap();
-        let err = do_register(&pool, &register_bytes("dup@local", "other"), ConfirmMode::None).await.unwrap_err();
+        do_register(&pool, &register_bytes("dup@local", "pw-secret-1"), ConfirmMode::None).await.unwrap();
+        let err = do_register(&pool, &register_bytes("dup@local", "other-secret-1"), ConfirmMode::None).await.unwrap_err();
         assert!(err.to_string().contains("занят"));
     }
 
@@ -2888,6 +3009,76 @@ mod tests {
         assert!(is_device_revoked(&pool, "bob@local", Some("dev-x")).await.unwrap());
         assert!(!is_device_revoked(&pool, "bob@local", Some("dev-y")).await.unwrap());
         assert!(!is_device_revoked(&pool, "alice@local", Some("dev-x")).await.unwrap());
+    }
+
+    #[test]
+    fn password_policy_enforces_length() {
+        assert!(password_policy_ok("1").is_err(), "короткий пароль отклонён (P-43)");
+        assert!(password_policy_ok("1234567").is_err());
+        assert!(password_policy_ok("12345678").is_ok());
+        assert!(password_policy_ok(&"x".repeat(1025)).is_err(), "слишком длинный отклонён");
+    }
+
+    #[tokio::test]
+    async fn require_password_checks_current_hash() {
+        let pool = test_pool().await;
+        let hash = hash_password("correct-horse").unwrap();
+        sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
+            .bind("pw@local").bind("pw@local").bind(&hash).execute(&pool).await.unwrap();
+        assert!(require_password(&pool, "pw@local", Some("correct-horse")).await.is_ok());
+        assert!(require_password(&pool, "pw@local", Some("wrong")).await.is_err());
+        assert!(require_password(&pool, "pw@local", None).await.is_err(), "без пароля — отказ (P-07)");
+        assert!(require_password(&pool, "pw@local", Some("")).await.is_err());
+        assert!(require_password(&pool, "ghost@local", Some("x")).await.is_err(), "нет юзера — отказ без утечки");
+    }
+
+    #[tokio::test]
+    async fn password_change_requires_old_password_and_resets_trust() {
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        let hash = hash_password("old-password-1").unwrap();
+        sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
+            .bind("chg@local").bind("chg@local").bind(&hash).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO trusted_devices (username, device_id, confirmed_at, secret_hash) VALUES (?, ?, 0, ?)")
+            .bind("chg@local").bind("dev-1").bind("h").execute(&pool).await.unwrap();
+        let now = now_unix() as usize;
+        let claims = Claims { sub: "chg@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()) };
+        let token = encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap();
+        let body = |old: &str, new: &str| serde_json::to_vec(&PasswordChangeRequest {
+            token: token.clone(), old_password: old.into(), new_password: new.into(),
+        }).unwrap();
+        // Неверный старый пароль — отказ; слабый новый — отказ.
+        assert!(do_password_change(&pool, &dec, &body("nope", "new-password-9")).await.is_err());
+        assert!(do_password_change(&pool, &dec, &body("old-password-1", "short")).await.is_err());
+        // Верная смена: новый хэш действует, доверие 2FA сброшено.
+        do_password_change(&pool, &dec, &body("old-password-1", "new-password-9")).await.unwrap();
+        assert!(require_password(&pool, "chg@local", Some("new-password-9")).await.is_ok());
+        assert!(require_password(&pool, "chg@local", Some("old-password-1")).await.is_err());
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM trusted_devices WHERE username = ?")
+            .bind("chg@local").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 0, "смена пароля сбрасывает доверенные устройства");
+    }
+
+    #[tokio::test]
+    async fn setkey_change_requires_password_republish_does_not() {
+        let pool = test_pool().await;
+        let hash = hash_password("pass-word-1").unwrap();
+        sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
+            .bind("sk@local").bind("sk@local").bind(&hash).execute(&pool).await.unwrap();
+        let k1 = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
+        let k2 = base64::engine::general_purpose::STANDARD.encode([2u8; 32]);
+        // первая регистрация — без пароля
+        store_pubkey(&pool, "sk@local", &k1).await.unwrap();
+        let current: (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
+            .bind("sk@local").fetch_one(&pool).await.unwrap();
+        assert_eq!(current.0, k1);
+        // логика обработчика: замена ключа требует пароль
+        let need_pw = !current.0.is_empty() && current.0 != k2;
+        assert!(need_pw);
+        assert!(require_password(&pool, "sk@local", None).await.is_err());
+        assert!(require_password(&pool, "sk@local", Some("pass-word-1")).await.is_ok());
+        // повторная публикация того же ключа — пароль не нужен
+        assert!(!(current.0 != k1));
     }
 
     #[tokio::test]
@@ -3097,7 +3288,11 @@ mod tests {
     }
 
     fn twofa_bytes(token: &str, enabled: Option<bool>) -> Vec<u8> {
-        serde_json::to_vec(&TwoFactorRequest { token: token.into(), enabled }).unwrap()
+        serde_json::to_vec(&TwoFactorRequest { token: token.into(), enabled, password: None, }).unwrap()
+    }
+
+    fn twofa_bytes_pw(token: &str, enabled: Option<bool>, password: &str) -> Vec<u8> {
+        serde_json::to_vec(&TwoFactorRequest { token: token.into(), enabled, password: Some(password.into()) }).unwrap()
     }
 
     #[tokio::test]
@@ -3105,38 +3300,41 @@ mod tests {
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
         // Регистрация с подтверждением в Telegram (привязка tg 42)
-        let out = do_register(&pool, &register_bytes("two", "pw"), ConfirmMode::Telegram).await.unwrap();
+        let out = do_register(&pool, &register_bytes("two", "pw-secret-1"), ConfirmMode::Telegram).await.unwrap();
         let reg_token = out.telegram_token.unwrap();
         do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &reg_token, 42), Some("s3cret")).await.unwrap();
-        let jwt = do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().unwrap().to_string();
+        let jwt = do_issue(&pool, &enc, &issue_bytes("two", "pw-secret-1")).await.unwrap().token().unwrap().to_string();
 
         // По умолчанию выключено; включаем по JWT
         assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(); (e, l) }, (false, true));
         assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap(); (e, l) }, (true, true));
         // Устройство, включившее 2FA (JWT с dev), — доверенное: входит без Telegram
-        let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await;
+        let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw-secret-1", "dev-enabler")).await;
         assert!(dev_jwt.is_ok(), "пока 2FA включено JWT без dev-устройства: {:?}", dev_jwt.as_ref().err());
-        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(); (e, l) }, (false, true));
-        let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().unwrap().to_string();
+        // P-07: выключить 2FA одним JWT нельзя — нужен пароль (и верный).
+        assert!(do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.is_err(), "без пароля 2FA не выключается");
+        assert!(do_twofa(&pool, &dec, &twofa_bytes_pw(&jwt, Some(false), "wrong-pass-1")).await.is_err(), "с неверным паролем — отказ");
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes_pw(&jwt, Some(false), "pw-secret-1")).await.unwrap(); (e, l) }, (false, true));
+        let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw-secret-1", "dev-enabler")).await.unwrap().token().unwrap().to_string();
         let (e, l, secret) = do_twofa(&pool, &dec, &twofa_bytes(&dev_jwt, Some(true))).await.unwrap();
         assert_eq!((e, l), (true, true));
         let secret = secret.expect("устройство, включившее 2FA, получает секрет доверия");
         // device_id публичен (identity.prekeys.fetch отдаёт его любому): без
         // секрета доверия НЕТ — иначе второй фактор обходился при известном пароле
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-enabler")).await.unwrap().token().is_none(),
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw-secret-1", "dev-enabler")).await.unwrap().token().is_none(),
             "голый device_id больше не доверенный");
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw", "dev-enabler", &secret)).await.unwrap().token().is_some(),
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw-secret-1", "dev-enabler", &secret)).await.unwrap().token().is_some(),
             "устройство, включившее 2FA, входит с секретом без Telegram");
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw", "dev-other")).await.unwrap().token().is_none(),
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw-secret-1", "dev-other")).await.unwrap().token().is_none(),
             "другое устройство подтверждает вход");
         assert!(do_twofa(&pool, &dec, &twofa_bytes("bad.jwt", Some(false))).await.is_err());
 
         // Логин: пароль верен → не JWT, а токен входа
-        let outcome = do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap();
+        let outcome = do_issue(&pool, &enc, &issue_bytes("two", "pw-secret-1")).await.unwrap();
         let IssueOutcome::TwoFactor { login_token } = outcome else { panic!("ожидался двухфакторный вход") };
         assert!(!do_register_status(&pool, &status_bytes("two", &login_token)).await.unwrap());
         // Неподтверждённый токен JWT не даёт (выдаётся новый токен)
-        let again = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", &login_token)).await.unwrap();
+        let again = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw-secret-1", &login_token)).await.unwrap();
         let IssueOutcome::TwoFactor { login_token: login_token2 } = again else { panic!("токен без подтверждения") };
         assert!(!do_register_status(&pool, &status_bytes("two", &login_token)).await.unwrap(), "старый токен погашен");
         // Чужой Telegram — отказ; неверный пароль по-прежнему отказ
@@ -3147,30 +3345,30 @@ mod tests {
         let (user, kind) = do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &login_token2, 42), Some("s3cret")).await.unwrap();
         assert_eq!((user.as_str(), kind), ("two@local", "login"));
         assert!(do_register_status(&pool, &status_bytes("two", &login_token2)).await.unwrap());
-        let jwt2 = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", &login_token2)).await.unwrap();
+        let jwt2 = do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw-secret-1", &login_token2)).await.unwrap();
         assert!(jwt2.token().is_some());
         let secret2 = jwt2.trust_secret().expect("после подтверждения в Telegram выдан секрет доверия").to_string();
         // dev-1 доверенное: по паролю + секрету без Telegram; без секрета — подтверждение
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw", "")).await.unwrap().token().is_none(),
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_login_token("two", "pw-secret-1", "")).await.unwrap().token().is_none(),
             "dev-1 без секрета — снова подтверждение");
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw", "dev-1", &secret2)).await.unwrap().token().is_some());
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw-secret-1", "dev-1", &secret2)).await.unwrap().token().is_some());
         // Другое устройство — снова подтверждение (токен одноразовый и погашен)
-        assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().is_none());
+        assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw-secret-1")).await.unwrap().token().is_none());
         // Отзыв устройства снимает доверие
         revoke_device(&pool, "two@local", "dev-1").await.unwrap();
-        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw", "dev-1", &secret2)).await.unwrap().token().is_none(),
+        assert!(do_issue(&pool, &enc, &issue_bytes_with_device_secret("two", "pw-secret-1", "dev-1", &secret2)).await.unwrap().token().is_none(),
             "отзыв снимает доверие даже с секретом");
-        // Выключение — обычный логин без Telegram
-        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(false))).await.unwrap(); (e, l) }, (false, true));
-        assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw")).await.unwrap().token().is_some());
+        // Выключение (с паролем, P-07) — обычный логин без Telegram
+        assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes_pw(&jwt, Some(false), "pw-secret-1")).await.unwrap(); (e, l) }, (false, true));
+        assert!(do_issue(&pool, &enc, &issue_bytes("two", "pw-secret-1")).await.unwrap().token().is_some());
     }
 
     #[tokio::test]
     async fn twofa_cannot_be_enabled_without_telegram() {
         let pool = test_pool().await;
         let (enc, dec) = make_keys();
-        do_register(&pool, &register_bytes("plain", "pw"), ConfirmMode::None).await.unwrap();
-        let jwt = do_issue(&pool, &enc, &issue_bytes("plain", "pw")).await.unwrap().token().unwrap().to_string();
+        do_register(&pool, &register_bytes("plain", "pw-secret-1"), ConfirmMode::None).await.unwrap();
+        let jwt = do_issue(&pool, &enc, &issue_bytes("plain", "pw-secret-1")).await.unwrap().token().unwrap().to_string();
         let err = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap_err();
         assert!(err.to_string().contains("привяжите Telegram"), "{err}");
         assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(); (e, l) }, (false, false));

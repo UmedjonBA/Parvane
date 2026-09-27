@@ -60,7 +60,8 @@ object ParvaneCore {
     @JvmStatic fun confirmEmail(user: String, code: String): JSONObject = JSONObject(nativeConfirmEmail(user, code))
     // устройства аккаунта
     fun listDevices(): org.json.JSONArray = org.json.JSONArray(nativeListDevices())
-    fun revokeDevice(deviceId: String): Boolean = nativeRevokeDevice(deviceId)
+    /** P-07: отзыв устройства требует текущий пароль; без него сервер откажет. */
+    fun revokeDevice(deviceId: String, password: String = ""): Boolean = nativeRevokeDevice(deviceId, password)
     // копия ключей под паролем (формат веба); import → число записей, −1 пароль/файл, −2 E2E не готов
     @JvmStatic fun exportKeys(password: String): String = nativeExportKeys(password)
     @JvmStatic fun importKeys(fileJson: String, password: String): Int = nativeImportKeys(fileJson, password)
@@ -102,7 +103,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeRegisterStatus(user: String, token: String): Boolean
     @JvmStatic private external fun nativeConfirmEmail(user: String, code: String): String
     @JvmStatic private external fun nativeListDevices(): String
-    @JvmStatic private external fun nativeRevokeDevice(deviceId: String): Boolean
+    @JvmStatic private external fun nativeRevokeDevice(deviceId: String, password: String): Boolean
     @JvmStatic private external fun nativeExportKeys(password: String): String
     @JvmStatic private external fun nativeImportKeys(fileJson: String, password: String): Int
     @JvmStatic private external fun nativeForward(to: String, uuid: String): String

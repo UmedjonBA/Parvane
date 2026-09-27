@@ -430,7 +430,13 @@ async fn serve(
                     || subject == IDENTITY_REGISTER_STATUS
                 {
                     let payload = v["payload"].as_str().unwrap_or("");
-                    let payload = if subject == IDENTITY_ISSUE || subject == IDENTITY_REGISTER {
+                    // P-43: IP клиента подмешиваем во ВСЕ pre-auth bootstrap-запросы с
+                    // лимитами в identity (перебор секрета бота / сжигание попыток кода).
+                    let payload = if subject == IDENTITY_ISSUE
+                        || subject == IDENTITY_REGISTER
+                        || subject == IDENTITY_TELEGRAM_CONFIRM
+                        || subject == IDENTITY_EMAIL_CONFIRM
+                    {
                         inject_client_ip(payload, &client_ip)
                     } else {
                         payload.to_string()
@@ -537,6 +543,14 @@ async fn serve(
                         let _ = tx.send(err_frame(Some(&id), &e.to_string())).await;
                         continue;
                     }
+                };
+                // P-20: issue/register доступны и после auth — без client_ip identity
+                // считал их «прямым NATS» и не применял IP-лимит (password spraying
+                // из любого аккаунта). Подмешиваем IP и здесь.
+                let payload = if subject == IDENTITY_ISSUE || subject == IDENTITY_REGISTER {
+                    inject_client_ip(&payload, &client_ip)
+                } else {
+                    payload
                 };
                 spawn_req(nats.clone(), tx.clone(), id, subject, payload, timeout);
             }

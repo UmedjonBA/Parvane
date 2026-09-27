@@ -176,6 +176,8 @@ class Client private constructor(
 
     @Volatile private var authState: TdApi.AuthorizationState = TdApi.AuthorizationStateWaitTdlibParameters()
     @Volatile private var pendingNick: String = ""
+    /** P-07: пароль текущей сессии только в памяти (для identity.device.revoke). */
+    @Volatile private var sessionPassword: String = ""
     @Volatile private var closed = false
     @Volatile private var detached = false // второй Client X (служебный аккаунт) — без ядра
 
@@ -290,6 +292,9 @@ class Client private constructor(
         is TdApi.CheckAuthenticationPassword -> {
             val r = ParvaneCore.login(pendingNick, f.password ?: "")
             if (r.optBoolean("ok")) {
+                // P-07: пароль держим только в памяти процесса — отзыв устройства
+                // (TerminateSession) требует его; на диск не пишем.
+                sessionPassword = f.password ?: ""
                 finishLogin(r.optString("address"))
             } else if (r.optBoolean("twofa_required") && r.optString("login_token").isNotEmpty()) {
                 // Двухфакторный вход (как Stage::Telegram на десктопе): подтверждение в Telegram-боте.
@@ -304,10 +309,16 @@ class Client private constructor(
         is TdApi.ForwardMessages -> forwardMessages(f) // паритет: тот же content новому адресату, медиа перезаливается
         // Settings → Devices: устройства аккаунта из identity; отзыв = терминация сессии
         is TdApi.GetActiveSessions -> TdApi.Sessions(sessionsList(), 0)
+        // P-07: отзыв требует текущий пароль; после рестарта (сессия из session.json)
+        // пароля в памяти нет — сервер откажет, просим войти заново.
         is TdApi.TerminateSession -> deviceById[f.sessionId]?.let { dev ->
-            if (ParvaneCore.revokeDevice(dev)) TdApi.Ok() else TdApi.Error(400, "не удалось отозвать устройство")
+            if (sessionPassword.isEmpty()) TdApi.Error(401, "для отзыва устройства нужен повторный вход по паролю")
+            else if (ParvaneCore.revokeDevice(dev, sessionPassword)) TdApi.Ok() else TdApi.Error(400, "не удалось отозвать устройство")
         } ?: TdApi.Error(404, "session not found")
-        is TdApi.TerminateAllOtherSessions -> { sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let(ParvaneCore::revokeDevice) }; TdApi.Ok() }
+        is TdApi.TerminateAllOtherSessions -> {
+            if (sessionPassword.isEmpty()) TdApi.Error(401, "для отзыва устройств нужен повторный вход по паролю")
+            else { sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let { ParvaneCore.revokeDevice(it, sessionPassword) } }; TdApi.Ok() }
+        }
         // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
         is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
             .let { TdApi.MessageSenders(it.size, it.toTypedArray()) }
@@ -787,7 +798,7 @@ class Client private constructor(
                 Thread.sleep(2000)
                 if (!ParvaneCore.registerStatus(address, loginToken)) continue
                 val r = ParvaneCore.login(address, password, loginToken)
-                if (r.optBoolean("ok")) { finishLogin(r.optString("address")) }
+                if (r.optBoolean("ok")) { sessionPassword = password; finishLogin(r.optString("address")) }
                 else { Log.w(TAG, "2FA: ${r.optString("error")}"); setAuth(TdApi.AuthorizationStateWaitPassword("", false, false, "")) }
                 return@execute
             }

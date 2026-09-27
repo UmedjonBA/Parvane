@@ -848,13 +848,17 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeListDevices(JN
     } catch (const std::exception &e) { LOGE("device.list: %s", e.what()); }
     return env->NewStringUTF(out.dump().c_str());
 }
-JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeDevice(JNIEnv *env, jclass, jstring deviceId) {
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeDevice(JNIEnv *env, jclass, jstring deviceId, jstring password) {
     const auto dev = jstr(env, deviceId);
+    const auto pw = password ? jstr(env, password) : std::string();
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         if (dev == parvane::e2e::deviceId()) return JNI_FALSE; // себя не отзываем
-        const auto resp = json::parse(g_transport->request(parvane::topics::IdentityDeviceRevoke, json{{"token", g_token}, {"device_id", dev}}.dump(), 5000), nullptr, false);
+        // P-07: отзыв устройства требует текущий пароль (сервер отклонит без него).
+        json body{{"token", g_token}, {"device_id", dev}};
+        if (!pw.empty()) body["password"] = pw;
+        const auto resp = json::parse(g_transport->request(parvane::topics::IdentityDeviceRevoke, body.dump(), 5000), nullptr, false);
         return resp.value("ok", false) ? JNI_TRUE : JNI_FALSE;
     } catch (const std::exception &e) { LOGE("device.revoke: %s", e.what()); return JNI_FALSE; }
 }
