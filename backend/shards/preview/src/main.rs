@@ -16,7 +16,7 @@ use parvane_types::{
     topics::{IDENTITY_VERIFY, PREVIEW_FETCH, PREVIEW_MAP_TILE},
 };
 use sqlx::SqlitePool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 // Лимиты (согласованы с desktop-эталоном parvane_client.cpp)
 const MAX_REDIRECTS: u8 = 3;
@@ -30,7 +30,13 @@ const DESC_MAX: usize = 500;
 // Тайлы карты: OSM (политика — обязателен идентифицирующий User-Agent, без
 // массовой выкачки; мы отдаём только тайлы вокруг присланных точек и кэшируем)
 const TILE_BASE_URL: &str = "https://tile.openstreetmap.org";
-const TILE_MAX_ZOOM: u32 = 19;
+/// P-23: тайлы не крупнее zoom 15 (~1,2 км на тайл у экватора): серверу и OSM
+/// уходит окрестность, а не точка; web клампит zoom так же (MAP_MAX_ZOOM).
+const TILE_MAX_ZOOM: u32 = 15;
+/// P-23: кап кэша тайлов (строк), старше выселяются; PARVANE_PREVIEW_TILE_CACHE_MAX.
+fn tile_cache_max() -> i64 {
+    std::env::var("PARVANE_PREVIEW_TILE_CACHE_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000)
+}
 const TILE_MAX_BYTES: usize = 512 * 1024;
 const TILE_CACHE_TTL_SECS: i64 = 7 * 24 * 3600;
 const SITE_MAX: usize = 64;
@@ -52,8 +58,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./preview.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url).await.context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
@@ -64,12 +70,56 @@ async fn main() -> Result<()> {
     let mut tile_sub = nc.subscribe(PREVIEW_MAP_TILE).await?;
     info!("Preview шард запущен. Слушаю: {}, {}", PREVIEW_FETCH, PREVIEW_MAP_TILE);
 
+    // 4.5/P-30: обработчики в tokio::spawn под семафором + общий дедлайн на
+    // запрос — медленный сайт с редиректами не блокирует превью остальных.
+    let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
     loop {
+        let (nc2, pool2) = (nc.clone(), pool.clone());
+        let permit = handlers.clone().acquire_owned().await;
         tokio::select! {
-            Some(msg) = fetch_sub.next() => handle_fetch(&nc, &pool, msg).await,
-            Some(msg) = tile_sub.next() => handle_map_tile(&nc, &pool, msg).await,
+            Some(msg) = fetch_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_fetch(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = tile_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_map_tile(&nc2, &pool2, msg).await });
+            }
         }
     }
+}
+
+/// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 16).
+fn handler_concurrency() -> usize {
+    std::env::var("PARVANE_HANDLER_CONCURRENCY").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(16)
+}
+
+/// P-30: общий дедлайн на превью/тайл (все хопы вместе), мс.
+const REQUEST_DEADLINE_MS: u64 = 12_000;
+
+/// P-30: per-user лимит запросов превью/тайлов (PARVANE_PREVIEW_RATE, по
+/// умолчанию 60 за 60 с). Ключи длиннее 128 символов сворачиваются, пустые
+/// корзины выселяются.
+fn preview_rate_ok(user: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static L: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    let limit = std::env::var("PARVANE_PREVIEW_RATE").ok().and_then(|v| v.parse().ok()).unwrap_or(60usize);
+    let now = now_unix();
+    let map = L.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() >= 50_000 {
+        guard.retain(|_, hits| {
+            hits.retain(|&t| now - t < 60);
+            !hits.is_empty()
+        });
+    }
+    let key = if user.len() > 128 { user[..128].to_string() } else { user.to_string() };
+    let hits = guard.entry(key).or_default();
+    hits.retain(|&t| now - t < 60);
+    if hits.len() >= limit {
+        return false;
+    }
+    hits.push(now);
+    true
 }
 
 async fn verify_token(nc: &Client, token: &str) -> Result<String> {
@@ -98,15 +148,25 @@ async fn handle_fetch(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         // Токен — в конверте (его подставляет gateway), url — в payload
         let event: ParvaneEvent<PreviewFetchRequest> =
             serde_json::from_slice(&msg.payload).context("неверный JSON preview.link.fetch")?;
-        let _user = verify_token(nc, &event.token).await?;
-        info!("preview fetch: {}", event.payload.url);
-        anyhow::Ok(resolve_preview(pool, &event.payload.url).await)
+        let user = verify_token(nc, &event.token).await?;
+        if !preview_rate_ok(&user) {
+            anyhow::bail!("слишком много запросов превью");
+        }
+        // P-42: URL в лог не пишем (это содержимое переписки)
+        debug!("preview fetch для {}", user);
+        let preview = tokio::time::timeout(
+            Duration::from_millis(REQUEST_DEADLINE_MS),
+            resolve_preview(pool, &event.payload.url),
+        )
+        .await
+        .context("превью не уложилось в дедлайн")?;
+        anyhow::Ok(preview)
     }
     .await
     .unwrap_or_else(|e| PreviewFetchResponse {
         ok: false,
         webpage: None,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
     });
 
     let json = serde_json::to_vec(&resp).unwrap_or_default();
@@ -123,10 +183,14 @@ async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     let resp = async {
         let event: ParvaneEvent<MapTileRequest> =
             serde_json::from_slice(&msg.payload).context("неверный JSON preview.map.tile")?;
-        let _user = verify_token(nc, &event.token).await?;
+        let user = verify_token(nc, &event.token).await?;
         let MapTileRequest { z, x, y, .. } = event.payload;
         if z > TILE_MAX_ZOOM || x >= (1u32 << z) || y >= (1u32 << z) {
             anyhow::bail!("тайл вне диапазона");
+        }
+        // P-23: per-user темп (общая корзина с превью), координаты в лог не пишем
+        if !preview_rate_ok(&user) {
+            anyhow::bail!("слишком много запросов тайлов");
         }
         let png = resolve_tile(pool, z, x, y).await?;
         anyhow::Ok(MapTileResponse { ok: true, png_base64: Some(B64.encode(png)), error: None })
@@ -134,7 +198,7 @@ async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     .await
     .unwrap_or_else(|e| {
         warn!("map tile: {}", e);
-        MapTileResponse { ok: false, png_base64: None, error: Some(e.to_string()) }
+        MapTileResponse { ok: false, png_base64: None, error: Some(parvane_db::public_error(&e)) }
     });
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     let _ = nc.publish(reply, json.into()).await;
@@ -154,6 +218,8 @@ async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u
         }
     }
     let client = reqwest::Client::builder()
+        // P-49: без HTTPS_PROXY из окружения — иначе резолв/пиннинг обходились бы через прокси
+        .no_proxy()
         .connect_timeout(std::time::Duration::from_millis(CONNECT_TIMEOUT_MS))
         .timeout(std::time::Duration::from_millis(TOTAL_TIMEOUT_MS))
         .user_agent(USER_AGENT)
@@ -179,7 +245,21 @@ async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u
         .execute(pool)
         .await
         .context("кэш тайла")?;
+    trim_tile_cache(pool, tile_cache_max()).await?;
     Ok(png)
+}
+
+/// P-23: держим в кэше не больше `max` тайлов — самые старые выселяются.
+async fn trim_tile_cache(pool: &SqlitePool, max: i64) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM map_tiles WHERE tile_key IN (
+            SELECT tile_key FROM map_tiles ORDER BY fetched_at DESC, tile_key LIMIT -1 OFFSET ?)",
+    )
+    .bind(max.max(1))
+    .execute(pool)
+    .await
+    .context("выселение тайлов")?;
+    Ok(())
 }
 
 /// Проверяет кэш, иначе фетчит и кэширует (в т.ч. отрицательный результат).
@@ -189,7 +269,7 @@ async fn resolve_preview(pool: &SqlitePool, url: &str) -> PreviewFetchResponse {
     }
     let resp = match fetch_preview(url).await {
         Ok(webpage) => PreviewFetchResponse { ok: true, webpage: Some(webpage), error: None },
-        Err(e) => PreviewFetchResponse { ok: false, webpage: None, error: Some(e.to_string()) },
+        Err(e) => PreviewFetchResponse { ok: false, webpage: None, error: Some(parvane_db::public_error(&e)) },
     };
     store_cache(pool, url, &resp).await;
     resp
@@ -254,6 +334,8 @@ fn is_public_ip(ip: &IpAddr) -> bool {
                 || v4.is_multicast()
                 // CGNAT 100.64.0.0/10
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+                // IETF protocol assignments 192.0.0.0/24 (P-49)
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0)
                 // 0.0.0.0/8
                 || v4.octets()[0] == 0
                 // benchmarking 198.18.0.0/15
@@ -271,6 +353,22 @@ fn is_public_ip(ip: &IpAddr) -> bool {
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
                 // documentation 2001:db8::/32
                 || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+                // P-49: site-local fec0::/10 (deprecated, но маршрутизируется внутрь)
+                || (v6.segments()[0] & 0xffc0) == 0xfec0
+                // P-49: 6to4 2002::/16 — встроенный IPv4 в сегментах 1-2
+                || (v6.segments()[0] == 0x2002 && !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                    (v6.segments()[1] >> 8) as u8, v6.segments()[1] as u8,
+                    (v6.segments()[2] >> 8) as u8, v6.segments()[2] as u8))))
+                // P-49: Teredo 2001::/32 — IPv4 сервера/клиента (клиент — инвертирован в последних 32 битах)
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0 && (
+                    !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                        (v6.segments()[2] >> 8) as u8, v6.segments()[2] as u8,
+                        (v6.segments()[3] >> 8) as u8, v6.segments()[3] as u8)))
+                    || !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                        !(v6.segments()[6] >> 8) as u8, !(v6.segments()[6] as u8),
+                        !(v6.segments()[7] >> 8) as u8, !(v6.segments()[7] as u8))))))
+                // P-49: discard-only 100::/64
+                || (v6.segments()[0] == 0x0100 && v6.segments()[1] == 0 && v6.segments()[2] == 0 && v6.segments()[3] == 0)
                 // NAT64 well-known 64:ff9b::/96 (встраивает IPv4 — SSRF-риск)
                 || (v6.segments()[0] == 0x0064
                     && v6.segments()[1] == 0xff9b
@@ -324,6 +422,9 @@ async fn fetch_preview(input_url: &str) -> Result<WebPagePreview> {
         seen.push(normalized);
 
         let client = reqwest::Client::builder()
+            .no_proxy()
+        // P-49: без HTTPS_PROXY из окружения — иначе резолв/пиннинг обходились бы через прокси
+        .no_proxy()
             .resolve(&host, pinned)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_millis(CONNECT_TIMEOUT_MS))
@@ -410,6 +511,21 @@ fn clip(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    // P-23: кап кэша тайлов и zoom
+    #[tokio::test]
+    async fn tile_cache_is_capped_and_zoom_limited() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        for i in 0..10 {
+            sqlx::query("INSERT INTO map_tiles (tile_key, png, fetched_at) VALUES (?, X'00', ?)")
+                .bind(format!("15/{i}/1")).bind(1000 + i).execute(&pool).await.unwrap();
+        }
+        super::trim_tile_cache(&pool, 4).await.unwrap();
+        let keys: Vec<(String,)> = sqlx::query_as("SELECT tile_key FROM map_tiles ORDER BY fetched_at").fetch_all(&pool).await.unwrap();
+        assert_eq!(keys.iter().map(|k| k.0.as_str()).collect::<Vec<_>>(), ["15/6/1", "15/7/1", "15/8/1", "15/9/1"]);
+        assert_eq!(super::TILE_MAX_ZOOM, 15);
+    }
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -423,6 +539,22 @@ mod tests {
         for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
             assert!(is_public_ip(&ip.parse().unwrap()), "{ip} должен пропускаться");
         }
+    }
+
+    // P-49: пробелы deny-листа закрыты
+    #[test]
+    fn deny_list_gaps_are_closed() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        assert!(!is_public_ip(&IpAddr::V4(Ipv4Addr::new(192, 0, 0, 8))), "192.0.0.0/24");
+        assert!(!is_public_ip(&IpAddr::V6("fec0::1".parse::<Ipv6Addr>().unwrap())), "site-local");
+        // 6to4 с приватным 10.0.0.1 внутри: 2002:0a00:0001::
+        assert!(!is_public_ip(&IpAddr::V6("2002:a00:1::1".parse::<Ipv6Addr>().unwrap())), "6to4 private");
+        // 6to4 с публичным 8.8.8.8: 2002:0808:0808::
+        assert!(is_public_ip(&IpAddr::V6("2002:808:808::1".parse::<Ipv6Addr>().unwrap())), "6to4 public");
+        // Teredo: сервер 8.8.8.8, клиент 10.0.0.1 (инвертирован: f5ff:fffe)
+        assert!(!is_public_ip(&IpAddr::V6("2001:0:808:808::f5ff:fffe".parse::<Ipv6Addr>().unwrap())), "teredo private client");
+        assert!(!is_public_ip(&IpAddr::V6("100::1".parse::<Ipv6Addr>().unwrap())), "discard-only");
+        assert!(is_public_ip(&IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))));
     }
 
     #[test]

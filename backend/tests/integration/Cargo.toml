@@ -1,0 +1,25 @@
+[package]
+name = "parvane-integration"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 4.8: интеграционные тесты с живым nats-server и бинарниками шардов.
+# Запуск: cargo test -p parvane-integration (нужен nats-server в PATH или ~/.local/bin).
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+tokio = { workspace = true }
+async-nats = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+jsonwebtoken = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+parvane-types = { path = "../../shared/parvane-types" }

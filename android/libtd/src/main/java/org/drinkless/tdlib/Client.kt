@@ -65,7 +65,8 @@ class Client private constructor(
         /** Gateway по умолчанию — тестовый прод; приложение может переопределить. */
         @JvmStatic
         @Volatile
-        var gatewayUrl: String = "wss://parvane.duckdns.org:20443/ws"
+        const val DEFAULT_GATEWAY_URL = "wss://parvane.duckdns.org:20443/ws"
+        var gatewayUrl: String = DEFAULT_GATEWAY_URL
 
         @JvmStatic
         fun create(
@@ -176,6 +177,8 @@ class Client private constructor(
 
     @Volatile private var authState: TdApi.AuthorizationState = TdApi.AuthorizationStateWaitTdlibParameters()
     @Volatile private var pendingNick: String = ""
+    /** P-07: пароль текущей сессии только в памяти (для identity.device.revoke). */
+    @Volatile private var sessionPassword: String = ""
     @Volatile private var closed = false
     @Volatile private var detached = false // второй Client X (служебный аккаунт) — без ядра
 
@@ -265,9 +268,16 @@ class Client private constructor(
                 boundClient = this
                 boundDir = f.databaseDirectory
                 // Дев-стенд/эмулятор: gateway из файла (adb push … /data/local/tmp/parvane-gateway),
-                // когда extra запуска недоступен (Telegram X)
-                java.io.File("/data/local/tmp/parvane-gateway").takeIf { it.canRead() }
-                    ?.readText()?.trim()?.takeIf { it.isNotEmpty() }?.let { gatewayUrl = it }
+                // когда extra запуска недоступен (Telegram X) — ТОЛЬКО в debug (P-12/P-46):
+                // файл в /data/local/tmp доступен любому приложению с shell/adb.
+                if (org.parvane.libtd.BuildConfig.DEBUG) {
+                    java.io.File("/data/local/tmp/parvane-gateway").takeIf { it.canRead() }
+                        ?.readText()?.trim()?.takeIf { it.isNotEmpty() }?.let { gatewayUrl = it }
+                } else if (!gatewayUrl.startsWith("wss://", ignoreCase = true)) {
+                    // Release: только wss:// — plaintext ws:// отдал бы JWT в открытом виде.
+                    Log.w(TAG, "gateway без wss:// в release проигнорирован: $gatewayUrl")
+                    gatewayUrl = DEFAULT_GATEWAY_URL
+                }
                 ParvaneCore.init(gatewayUrl, f.databaseDirectory)
                 if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                     onSessionReady(ParvaneCore.self())
@@ -290,6 +300,9 @@ class Client private constructor(
         is TdApi.CheckAuthenticationPassword -> {
             val r = ParvaneCore.login(pendingNick, f.password ?: "")
             if (r.optBoolean("ok")) {
+                // P-07: пароль держим только в памяти процесса — отзыв устройства
+                // (TerminateSession) требует его; на диск не пишем.
+                sessionPassword = f.password ?: ""
                 finishLogin(r.optString("address"))
             } else if (r.optBoolean("twofa_required") && r.optString("login_token").isNotEmpty()) {
                 // Двухфакторный вход (как Stage::Telegram на десктопе): подтверждение в Telegram-боте.
@@ -304,10 +317,16 @@ class Client private constructor(
         is TdApi.ForwardMessages -> forwardMessages(f) // паритет: тот же content новому адресату, медиа перезаливается
         // Settings → Devices: устройства аккаунта из identity; отзыв = терминация сессии
         is TdApi.GetActiveSessions -> TdApi.Sessions(sessionsList(), 0)
+        // P-07: отзыв требует текущий пароль; после рестарта (сессия из session.json)
+        // пароля в памяти нет — сервер откажет, просим войти заново.
         is TdApi.TerminateSession -> deviceById[f.sessionId]?.let { dev ->
-            if (ParvaneCore.revokeDevice(dev)) TdApi.Ok() else TdApi.Error(400, "не удалось отозвать устройство")
+            if (sessionPassword.isEmpty()) TdApi.Error(401, "для отзыва устройства нужен повторный вход по паролю")
+            else if (ParvaneCore.revokeDevice(dev, sessionPassword)) TdApi.Ok() else TdApi.Error(400, "не удалось отозвать устройство")
         } ?: TdApi.Error(404, "session not found")
-        is TdApi.TerminateAllOtherSessions -> { sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let(ParvaneCore::revokeDevice) }; TdApi.Ok() }
+        is TdApi.TerminateAllOtherSessions -> {
+            if (sessionPassword.isEmpty()) TdApi.Error(401, "для отзыва устройств нужен повторный вход по паролю")
+            else { sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let { ParvaneCore.revokeDevice(it, sessionPassword) } }; TdApi.Ok() }
+        }
         // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
         is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
             .let { TdApi.MessageSenders(it.size, it.toTypedArray()) }
@@ -787,7 +806,7 @@ class Client private constructor(
                 Thread.sleep(2000)
                 if (!ParvaneCore.registerStatus(address, loginToken)) continue
                 val r = ParvaneCore.login(address, password, loginToken)
-                if (r.optBoolean("ok")) { finishLogin(r.optString("address")) }
+                if (r.optBoolean("ok")) { sessionPassword = password; finishLogin(r.optString("address")) }
                 else { Log.w(TAG, "2FA: ${r.optString("error")}"); setAuth(TdApi.AuthorizationStateWaitPassword("", false, false, "")) }
                 return@execute
             }
@@ -978,7 +997,21 @@ class Client private constructor(
             "notify" -> try {
                 store.applyNotifyBlob(JSONObject(event.optString("blob"))).forEach { postUpdate(it) }
             } catch (e: Exception) { Log.w(TAG, "notify blob: ${e.message}") }
-            "link" -> Log.i(TAG, "линковка: ${event.optString("state")} ${event.optString("code")} ${event.optInt("count")}")
+            "link" -> {
+                // P-46: код сверки НЕ в logcat — только в UI через сервисное уведомление.
+                val state = event.optString("state")
+                Log.i(TAG, "линковка: $state")
+                val text = when (state) {
+                    "offered" -> "Перенос истории: откройте Настройки → Устройства на другом устройстве — код сверки появится на обоих."
+                    "code" -> "Перенос истории. Сверьте код на другом устройстве и подтвердите там:\n${event.optString("code")}"
+                    "imported" -> "История перенесена (${event.optInt("count")} сообщений)."
+                    else -> null
+                }
+                text?.let {
+                    postUpdate(TdApi.UpdateServiceNotification("parvane_link_$state",
+                        TdApi.MessageText(TdApi.FormattedText(it, arrayOf()), null, null)))
+                }
+            }
             "session" -> if (event.optString("state") == "failed") {
                 Log.w(TAG, "сессия: ${event.optString("error")}")
             }

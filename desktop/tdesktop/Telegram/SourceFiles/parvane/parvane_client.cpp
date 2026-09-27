@@ -6,6 +6,9 @@
 #include "base/timer.h"
 #include "main/main_session.h"
 #include "main/main_account.h"       // forcedLogOut при отказе авторизации
+#include "main/main_domain.h"         // локальный ключ tdesktop для storecrypt (P-13)
+#include "storage/storage_account.h"  // peekLegacyLocalKey
+#include "mtproto/mtproto_auth_key.h"
 #include "parvane/keybackup.h"        // резервная копия ключей (формат веба)
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -50,6 +53,19 @@
 
 #include <parvane/events.h>          // parvane-core
 #include <parvane/topics.h>          // parvane-core
+
+// P-45/P-46: dev/e2e-хуки из окружения (PARVANE_AUTO*, прямой NATS) существуют
+// только в сборке с -DPARVANE_DEV=ON (см. parvane-core/CMakeLists.txt). В релизе
+// функция всегда возвращает nullptr — переменные окружения не могут включить
+// автологин/автоотправку/автогрант линковки.
+[[maybe_unused]] static const char *ParvaneDevEnv(const char *name) {
+#ifdef PARVANE_DEV
+	return std::getenv(name);
+#else
+	(void)name;
+	return nullptr;
+#endif
+}
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/gateway_transport.h> // parvane-core (доступ через gateway, Фаза 0)
 #include <parvane/gateway_ws_transport.h> // parvane-core (WebSocket/TLS — прод)
@@ -59,6 +75,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QDateTime>
 #include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
+#include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -106,6 +123,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <filesystem>              // миграция tdata/parvane-* (P-13)
 #include <set>
 #include <string>
 #include <vector>
@@ -292,7 +310,9 @@ rpl::lifetime g_foldersLifetime;          // время жизни подпис�
 FullMsgId g_lastOwnFullId;                 // последнее своё исходящее (debug-хуки)
 QString g_lastOwnUuid;                     // его uuid — переживает сброс сессии
 QString g_firstOwnUuid;                    // первое своё за процесс (хуки: headless шлёт autosend при каждой пересборке сессии)
-bool g_presenceSubscribed = false;        // подписка на presence.* (once)
+bool g_presenceSubscribed = false;        // presence: хартбит + подписки по пирам (once)
+// P-18: presence — только конкретных собеседников (presence.<id>), не presence.*
+QSet<quint64> g_presenceSubscribedIds;      // под g_sessionMutex
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
 
 // Курсоры инкрементального синка (Фаза 1): двигаются ТОЛЬКО по результатам
@@ -416,6 +436,87 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 	});
 }
 
+// ── Шифрование tdata/parvane-* (P-13) ─────────────────────────────────────────
+// Ключ хранилища — производная от локального ключа tdesktop (тот лежит под
+// паскодом): SHA-256("parvane-store-v1" || AuthKey). Все файлы parvane-*
+// (JWT, секрет доверия, кэш расшифровки, журнал истории, курсоры, ключ
+// звонков, Olm-стор ядра) пишутся шифртекстом; plain прежних версий читается
+// и перешифровывается при первом доступе. Без ключа (домен ещё не стартовал)
+// хелперы работают как раньше — plain, и миграция догоняет позже.
+std::once_flag g_storeMigrated;
+
+void EnsureStoreKey() {
+	if (parvane::storecrypt::enabled()) {
+		return;
+	}
+	if (!Core::App().domain().started()) {
+		return;
+	}
+	const auto key = Core::App().domain().active().local().peekLegacyLocalKey();
+	if (!key) {
+		return;
+	}
+	const auto &data = key->data();
+	parvane::storecrypt::setKey(parvane::storecrypt::deriveKey(
+		std::string(reinterpret_cast<const char *>(data.data()), data.size())));
+	std::call_once(g_storeMigrated, [] {
+		const auto dir = (cWorkingDir() + u"tdata"_q).toStdString();
+		auto migrated = 0;
+		std::error_code ec;
+		for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+			const auto name = entry.path().filename().string();
+			if (name.rfind("parvane-", 0) != 0) {
+				continue;
+			}
+			if (entry.is_regular_file(ec)) {
+				migrated += parvane::storecrypt::migrateFile(entry.path().string());
+			} else if (entry.is_directory(ec)) {
+				migrated += parvane::storecrypt::migrateDir(entry.path().string());
+			}
+		}
+		if (migrated) {
+			LOG(("Parvane: хранилище — перешифровано %1 файлов tdata/parvane-*").arg(migrated));
+		}
+	});
+}
+
+[[nodiscard]] QByteArray StoreRead(const QString &path) {
+	EnsureStoreKey();
+	return QByteArray::fromStdString(parvane::storecrypt::readFile(path.toStdString()));
+}
+
+bool StoreWrite(const QString &path, const QByteArray &data) {
+	EnsureStoreKey();
+	return parvane::storecrypt::writeFile(path.toStdString(), data.toStdString());
+}
+
+[[nodiscard]] QStringList StoreReadLines(const QString &path) {
+	EnsureStoreKey();
+	auto out = QStringList();
+	for (const auto &line : parvane::storecrypt::readLines(path.toStdString())) {
+		const auto trimmed = QString::fromStdString(line).trimmed();
+		if (!trimmed.isEmpty()) {
+			out.push_back(trimmed);
+		}
+	}
+	return out;
+}
+
+bool StoreAppendLine(const QString &path, const QString &line) {
+	EnsureStoreKey();
+	return parvane::storecrypt::appendLine(path.toStdString(), line.toStdString());
+}
+
+bool StoreWriteLines(const QString &path, const QStringList &lines) {
+	EnsureStoreKey();
+	auto raw = std::vector<std::string>();
+	raw.reserve(lines.size());
+	for (const auto &line : lines) {
+		raw.push_back(line.toStdString());
+	}
+	return parvane::storecrypt::writeLines(path.toStdString(), raw);
+}
+
 // ── локальный журнал истории (Фаза 2 доводка) ────────────────────────────────
 // Свои исходящие sealed на сервер как «свои» не попадают (from_user=''), а входящие
 // инкрементальный курсор при рестарте не пере-запрашивает → история терялась.
@@ -439,27 +540,14 @@ void HistoryAppend(const parvane::StoredMessage &sm) {
 	if (sm.id.empty()) {
 		return;
 	}
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
-	f.write(QString::fromStdString(sm.toJson().dump()).toUtf8());
-	f.write("\n");
+	StoreAppendLine(HistoryPath(), QString::fromStdString(sm.toJson().dump()));
 }
 
 // Воспроизвести локальную историю в UI при старте (до первого sync). Дедуп по
 // uuid делает injectOnMain; live=false → без ack и без пере-записи в журнал.
 void ReplayHistory() {
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
 	std::vector<parvane::StoredMessage> msgs;
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(HistoryPath())) {
 		try {
 			msgs.push_back(parvane::StoredMessage::fromJson(
 				nlohmann::json::parse(line.toStdString())));
@@ -504,26 +592,14 @@ QSet<QString> g_clearedUuids; // под g_sessionMutex
 // он берёт тот же мьютекс (дедлок).
 void LoadClearedLocked() {
 	g_clearedUuids.clear();
-	QFile f(ClearedPathFor(g_selfAddress));
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (!line.isEmpty()) {
-			g_clearedUuids.insert(line);
-		}
+	for (const auto &line : StoreReadLines(ClearedPathFor(g_selfAddress))) {
+		g_clearedUuids.insert(line);
 	}
 }
 
 void AppendCleared(const QStringList &uuids) {
-	QFile f(ClearedPath());
-	if (!f.open(QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
 	for (const auto &u : uuids) {
-		f.write(u.toUtf8());
-		f.write("\n");
+		StoreAppendLine(ClearedPath(), u);
 	}
 }
 
@@ -534,18 +610,9 @@ void AppendCleared(const QStringList &uuids) {
 
 // Переписать журнал истории без скрытых сообщений (иначе воскреснут при старте).
 void RewriteHistoryWithout(const QSet<QString> &uuids) {
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	QByteArray kept;
+	QStringList kept;
 	auto dropped = 0;
-	while (!f.atEnd()) {
-		const auto raw = f.readLine();
-		const auto line = QString::fromUtf8(raw).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(HistoryPath())) {
 		auto id = QString();
 		try {
 			const auto j = nlohmann::json::parse(line.toStdString());
@@ -556,17 +623,12 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 			++dropped;
 			continue;
 		}
-		kept += line.toUtf8();
-		kept += '\n';
+		kept.push_back(line);
 	}
-	f.close();
 	if (!dropped) {
 		return;
 	}
-	QFile out(HistoryPath());
-	if (out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		out.write(kept);
-	}
+	StoreWriteLines(HistoryPath(), kept);
 }
 
 // Журнал истории хранит `read` на момент записи, а он append-only: receipt
@@ -577,40 +639,26 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 std::mutex g_historyFileMutex;
 void MarkHistoryRead(const QSet<QString> &uuids) {
 	std::lock_guard<std::mutex> lk(g_historyFileMutex);
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	QByteArray kept;
+	QStringList kept;
 	auto changed = 0;
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(HistoryPath())) {
 		try {
 			auto j = nlohmann::json::parse(line.toStdString());
 			const auto id = QString::fromStdString(j.value("id", std::string()));
 			if (!id.isEmpty() && uuids.contains(id) && !j.value("read", false)) {
 				j["read"] = true;
 				++changed;
-				kept += QByteArray::fromStdString(j.dump());
-				kept += '\n';
+				kept.push_back(QString::fromStdString(j.dump()));
 				continue;
 			}
 		} catch (const std::exception &) {
 		}
-		kept += line.toUtf8();
-		kept += '\n';
+		kept.push_back(line);
 	}
-	f.close();
 	if (!changed) {
 		return;
 	}
-	QFile out(HistoryPath());
-	if (out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		out.write(kept);
-	}
+	StoreWriteLines(HistoryPath(), kept);
 }
 
 // Локально забыть скрытые сообщения (карты uuid, медиа-контент, кэш расшифровки)
@@ -699,18 +747,15 @@ void SaveTtlStore() {
 			}
 		}
 	}
-	QFile f(TtlStorePath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		f.write(QString::fromStdString(j.dump()).toUtf8());
-	}
+	StoreWrite(TtlStorePath(), QString::fromStdString(j.dump()).toUtf8());
 }
 void LoadTtlStore() {
-	QFile f(TtlStorePath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(TtlStorePath());
+	if (raw.isEmpty()) {
 		return;
 	}
 	try {
-		auto j = nlohmann::json::parse(QString::fromUtf8(f.readAll()).toStdString());
+		auto j = nlohmann::json::parse(raw.toStdString());
 		if (j.is_object()) {
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			for (auto it = j.begin(); it != j.end(); ++it) {
@@ -832,6 +877,12 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 	return recipients;
 }
 
+// P-10 (SEND-1): подписант E2E-отправки — Ed25519 устройства
+// (`send:<message_id>:<ciphertext>`), сервер проверяет владение sender_signing_key.
+[[nodiscard]] std::function<std::string(const std::string &)> E2eSigner() {
+	return [](const std::string &statement) { return parvane::e2e::sign(statement); };
+}
+
 // 1-на-1 sealed-отправка с fan-out копий по устройствам получателя и своим
 // устройствам (мультидевайс). "" — E2E не удался (ничего не отправлено).
 // На проводе from/token ПУСТЫЕ (sealed sender; gateway уже аутентифицировал).
@@ -852,7 +903,7 @@ std::string sendSealedDirect(
 		copies.push_back(c.toJson());
 	}
 	return m->sendContent(std::string(), to, sealed->content, std::string(),
-		replyTo, preId, copies);
+		replyTo, preId, copies, E2eSigner());
 }
 
 // Своё исходящее — в кэш расшифровки (как у web): так оно попадает в экспорт
@@ -944,7 +995,7 @@ void sendTextAsync(
 					? std::optional<std::string>{}
 					: std::optional<std::string>{preId};
 				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
-					replyToUuid, pre);
+					replyToUuid, pre, parvane::json::array(), E2eSigner());
 			} else {
 				LOG(("Parvane: E2E недоступен для %1 — сообщение НЕ отправлено")
 					.arg(QString::fromStdString(to)));
@@ -1053,7 +1104,8 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 					return;
 				}
 				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token);
+					nlohmann::json::parse(sealed), token, std::nullopt, std::nullopt,
+					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1114,7 +1166,8 @@ void sendInnerAsync(
 					? std::optional<std::string>{}
 					: std::optional<std::string>{preId};
 				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token, std::nullopt, pre);
+					nlohmann::json::parse(sealed), token, std::nullopt, pre,
+					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1138,7 +1191,7 @@ void PlayRingtone(bool outgoing);
 void StopRingtone();
 
 QString NatsUrl() {
-	if (const char *v = std::getenv("PARVANE_NATS_URL"); v && *v) {
+	if (const char *v = ParvaneDevEnv("PARVANE_NATS_URL"); v && *v) {
 		return QString::fromUtf8(v);
 	}
 	return u"nats://127.0.0.1:4222"_q;
@@ -1152,9 +1205,18 @@ constexpr auto kDefaultGatewayWss = "wss://parvane.duckdns.org:20443/ws";
 
 QString GatewayUrl() {
 	if (const char *v = std::getenv("PARVANE_GATEWAY_URL"); v && *v) {
-		return QString::fromUtf8(v);
+		const auto url = QString::fromUtf8(v);
+#ifndef PARVANE_DEV
+		// P-45: в релизе только wss:// — plaintext TCP/ws:// к gateway отдал бы
+		// JWT в открытом виде; переменной окружения этого не обойти.
+		if (!url.startsWith(u"wss://"_q, Qt::CaseInsensitive)) {
+			LOG(("Parvane: PARVANE_GATEWAY_URL без wss:// проигнорирован в релизе: %1").arg(url));
+			return QString::fromUtf8(kDefaultGatewayWss);
+		}
+#endif
+		return url;
 	}
-	if (const char *n = std::getenv("PARVANE_NATS_URL"); n && *n) {
+	if (const char *n = ParvaneDevEnv("PARVANE_NATS_URL"); n && *n) {
 		return QString(); // явный прямой NATS (dev-стенд)
 	}
 	return QString::fromUtf8(kDefaultGatewayWss);
@@ -1207,9 +1269,8 @@ std::unique_ptr<parvane::ITransport> MakeTransport(const QString &token) {
 
 // Звать ПОД g_sessionMutex (например из StartSession) — сама не лочит.
 void LoadCursorsLocked() {
-	QFile f(CursorsPath());
-	if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	if (const auto raw = StoreRead(CursorsPath()); !raw.isEmpty()) {
+		const auto lines = QString::fromUtf8(raw).split('\n');
 		if (lines.size() > 0) {
 			g_lastSeenId = lines[0].trimmed().toStdString();
 		}
@@ -1238,14 +1299,8 @@ void LoadCursorsLocked() {
 
 // Значения передаются аргументами (зовётся с worker после захвата под локом).
 void SaveCursors(const std::string &lastSeen, std::int64_t sinceUpdated) {
-	QFile f(CursorsPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
-	f.write(QString::fromStdString(lastSeen).toUtf8());
-	f.write("\n");
-	f.write(QString::number(sinceUpdated).toUtf8());
-	f.write("\n");
+	StoreWrite(CursorsPath(), QString::fromStdString(lastSeen).toUtf8() + "\n"
+		+ QString::number(sinceUpdated).toUtf8() + "\n");
 }
 
 // ── очередь починки нерасшифрованного ───────────────────────────────────────
@@ -1265,11 +1320,7 @@ constexpr int kRepairAttempts = 3;
 
 [[nodiscard]] QHash<QString, int> LoadPending() {
 	auto out = QHash<QString, int>();
-	QFile f(PendingPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return out;
-	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts);
+	const auto lines = QString::fromUtf8(StoreRead(PendingPath())).split('\n', Qt::SkipEmptyParts);
 	for (const auto &line : lines) {
 		const auto parts = line.trimmed().split(' ');
 		if (parts.size() == 2) {
@@ -1280,16 +1331,11 @@ constexpr int kRepairAttempts = 3;
 }
 
 void SavePending(const QHash<QString, int> &pending) {
-	QFile f(PendingPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
+	QByteArray data;
 	for (auto it = pending.constBegin(); it != pending.constEnd(); ++it) {
-		f.write(it.key().toUtf8());
-		f.write(" ");
-		f.write(QString::number(it.value()).toUtf8());
-		f.write("\n");
+		data += it.key().toUtf8() + " " + QString::number(it.value()).toUtf8() + "\n";
 	}
+	StoreWrite(PendingPath(), data);
 }
 
 // Учитывает провалы прохода. Возвращает true, если дисковый курсор двигать
@@ -1328,25 +1374,16 @@ void SavePending(const QHash<QString, int> &pending) {
 
 // main-поток, ДО воспроизведения журнала истории (AfterSessionReady).
 void LoadReadJournal() {
-	QFile f(ReadJournalPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts);
+	const auto lines = StoreReadLines(ReadJournalPath());
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	for (const auto &line : lines) {
-		g_reportedRead.insert(line.trimmed());
+		g_reportedRead.insert(line);
 	}
 }
 
 void AppendReadJournal(const std::vector<std::string> &ids) { // worker
-	QFile f(ReadJournalPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
 	for (const auto &id : ids) {
-		f.write(id.data(), qint64(id.size()));
-		f.write("\n");
+		StoreAppendLine(ReadJournalPath(), QString::fromStdString(id));
 	}
 }
 
@@ -1440,18 +1477,15 @@ void RetryUnconfirmedReads(
 }
 
 void SaveNotifyState() { // main
-	QFile f(NotifyStatePath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		f.write(NotifyBlob().toUtf8());
-	}
+	StoreWrite(NotifyStatePath(), NotifyBlob().toUtf8());
 }
 
 void LoadNotifyState() { // main
-	QFile f(NotifyStatePath());
-	if (!f.open(QIODevice::ReadOnly)) {
+	const auto raw = StoreRead(NotifyStatePath());
+	if (raw.isEmpty()) {
 		return;
 	}
-	const auto j = nlohmann::json::parse(f.readAll().toStdString(), nullptr, false);
+	const auto j = nlohmann::json::parse(raw.toStdString(), nullptr, false);
 	if (!j.is_object()) {
 		return;
 	}
@@ -1473,17 +1507,14 @@ void LoadNotifyState() { // main
 }
 
 [[nodiscard]] QString ReadTrustSecret(const QString &user) {
-	QFile f(TrustSecretPath(user));
-	return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()).trimmed() : QString();
+	return QString::fromUtf8(StoreRead(TrustSecretPath(user))).trimmed();
 }
 
 void WriteTrustSecret(const QString &user, const QString &secret) {
 	if (user.isEmpty() || secret.isEmpty()) {
 		return;
 	}
-	QFile f(TrustSecretPath(user));
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		f.write(secret.toUtf8());
+	if (StoreWrite(TrustSecretPath(user), secret.toUtf8())) {
 		LOG(("Parvane: получен секрет доверия устройства (2FA) для %1").arg(user));
 	}
 }
@@ -1497,23 +1528,16 @@ void WriteTrustSecret(const QString &user, const QString &secret) {
 }
 
 void SaveSessionCreds(const QString &address, const QString &token) {
-	QFile f(SessionCredsPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
-	f.write(address.toUtf8());
-	f.write("\n");
-	f.write(token.toUtf8());
-	f.write("\n");
+	StoreWrite(SessionCredsPath(), address.toUtf8() + "\n" + token.toUtf8() + "\n");
 }
 
 // Восстановить self+token с диска (для рестарта). true — восстановлено.
 bool RestoreSessionCreds() {
-	QFile f(SessionCredsPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(SessionCredsPath());
+	if (raw.isEmpty()) {
 		return false;
 	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	const auto lines = QString::fromUtf8(raw).split('\n');
 	if (lines.size() < 2 || lines[0].trimmed().isEmpty()) {
 		return false;
 	}
@@ -1536,15 +1560,7 @@ bool RestoreSessionCreds() {
 
 // Загрузить кэш. Звать ПОД g_sessionMutex (из StartSession).
 void LoadDecCacheLocked() {
-	QFile f(DecCachePath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(DecCachePath())) {
 		try {
 			const auto j = nlohmann::json::parse(line.toStdString());
 			const auto id = QString::fromStdString(j.value("id", std::string()));
@@ -1568,13 +1584,8 @@ void DecCachePut(const QString &id, const QString &inner) {
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_decCache.insert(id, inner);
 	}
-	QFile f(DecCachePath());
-	if (!f.open(QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
 	const nlohmann::json j = {{"id", id.toStdString()}, {"inner", inner.toStdString()}};
-	f.write(QString::fromStdString(j.dump()).toUtf8());
-	f.write("\n");
+	StoreAppendLine(DecCachePath(), QString::fromStdString(j.dump()));
 }
 
 // Удалить запись (TTL-эфемерка не должна лежать плейнтекстом вечно): память +
@@ -1588,16 +1599,13 @@ void DecCacheRemove(const QString &id) {
 		}
 		snapshot = g_decCache;
 	}
-	QFile f(DecCachePath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		return;
-	}
+	QStringList lines;
 	for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
 		const nlohmann::json j = {{"id", it.key().toStdString()},
 			{"inner", it.value().toStdString()}};
-		f.write(QString::fromStdString(j.dump()).toUtf8());
-		f.write("\n");
+		lines.push_back(QString::fromStdString(j.dump()));
 	}
+	StoreWriteLines(DecCachePath(), lines);
 }
 
 [[nodiscard]] bool DecCacheEmpty() {
@@ -1665,7 +1673,7 @@ ServerInfo FetchServerInfo() {
 	out.domain = u"local"_q;
 	try {
 		auto transport = MakeTransport(QString());
-		const auto raw = transport->request("identity.server.info", "{}", 5000);
+		const auto raw = transport->request(parvane::topics::IdentityServerInfo, "{}", 5000);
 		const auto resp = nlohmann::json::parse(raw);
 		if (resp.contains("domain") && resp["domain"].is_string()) {
 			const auto d = resp["domain"].get<std::string>();
@@ -1797,7 +1805,7 @@ bool RegisterStatus(const QString &user, const QString &token) {
 			{"user", user.toStdString()},
 			{"token", token.toStdString()},
 		};
-		const auto raw = transport->request("identity.register.status", req.dump(), 5000);
+		const auto raw = transport->request(parvane::topics::IdentityRegisterStatus, req.dump(), 5000);
 		return nlohmann::json::parse(raw).value("confirmed", false);
 	} catch (const std::exception &e) {
 		LOG(("Parvane: RegisterStatus exception: %1").arg(QString::fromUtf8(e.what())));
@@ -1807,7 +1815,9 @@ bool RegisterStatus(const QString &user, const QString &token) {
 
 namespace {
 
-TwoFactorState RequestTwoFactor(const std::optional<bool> &enabled) {
+TwoFactorState RequestTwoFactor(
+		const std::optional<bool> &enabled,
+		const QString &password = QString()) {
 	TwoFactorState out;
 	try {
 		auto transport = MakeTransport(Token());
@@ -1815,7 +1825,11 @@ TwoFactorState RequestTwoFactor(const std::optional<bool> &enabled) {
 		if (enabled) {
 			req["enabled"] = *enabled;
 		}
-		const auto raw = transport->request("identity.user.twofa", req.dump(), 5000);
+		// P-07: выключение 2FA — только с паролем.
+		if (!password.isEmpty()) {
+			req["password"] = password.toStdString();
+		}
+		const auto raw = transport->request(parvane::topics::IdentityTwoFa, req.dump(), 5000);
 		const auto resp = nlohmann::json::parse(raw);
 		out.ok = resp.value("ok", false);
 		out.enabled = resp.value("enabled", false);
@@ -1841,8 +1855,8 @@ TwoFactorState FetchTwoFactor() {
 	return RequestTwoFactor(std::nullopt);
 }
 
-TwoFactorState SetTwoFactor(bool enabled) {
-	return RequestTwoFactor(enabled);
+TwoFactorState SetTwoFactor(bool enabled, const QString &password) {
+	return RequestTwoFactor(enabled, password);
 }
 
 ConfirmResult ConfirmEmail(const QString &user, const QString &code) {
@@ -1893,12 +1907,40 @@ std::uint64_t IdForAddress(const QString &address) {
 	return h ? h : 1;
 }
 
+void HandlePresencePayload(const std::string &payload);
+
+// P-18: подписка на presence конкретного собеседника (идемпотентно). Зовётся
+// при регистрации пира и для всех известных пиров при старте сессии.
+void EnsurePresenceSubscription(const QString &address) {
+	if (address.isEmpty() || address == SelfAddress()) {
+		return;
+	}
+	parvane::ITransport *t = nullptr;
+	const auto id = quint64(IdForAddress(address));
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (!g_presenceSubscribed || g_presenceSubscribedIds.contains(id)) {
+			return;
+		}
+		t = g_transport.get();
+		if (!t) {
+			return;
+		}
+		g_presenceSubscribedIds.insert(id);
+	}
+	t->subscribe(parvane::topics::presence(std::to_string(id)),
+		[](std::string, std::string payload) { HandlePresencePayload(payload); });
+}
+
 void RegisterPeer(const QString &address) {
 	if (address.isEmpty()) {
 		return;
 	}
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	g_idToAddress.insert(quint64(IdForAddress(address)), address);
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_idToAddress.insert(quint64(IdForAddress(address)), address);
+	}
+	EnsurePresenceSubscription(address);
 }
 
 QString AddressForId(std::uint64_t userId) {
@@ -1977,7 +2019,7 @@ void RegisterCallKey(const QString &pub, const QString &token) {
 			return;
 		}
 		try {
-			t->request("identity.user.setkey", req, 3000);
+			t->request(parvane::topics::IdentitySetKey, req, 3000);
 			LOG(("Parvane: зарегистрирован ключ звонков %1…")
 				.arg(pub.left(12)));
 		} catch (const std::exception &) {
@@ -2063,6 +2105,7 @@ bool StartSession() {
 		auto messenger = std::make_unique<parvane::MessengerClient>(*transport);
 		g_transport = std::move(transport);
 		g_messenger = std::move(messenger);
+		EnsureStoreKey();     // P-13: ключ шифрования tdata/parvane-* до чтения файлов
 		LoadCursorsLocked();  // курсоры инкрементального синка (Фаза 1)
 		LoadDecCacheLocked(); // кэш расшифрованного E2E (пережить рестарт/пере-синк)
 		LoadClearedLocked();  // скрытые «для меня» сообщения (удалённые чаты)
@@ -2181,7 +2224,7 @@ bool StartSession() {
 				});
 			}
 			// Авто-приём (e2e) без UI.
-			if (const char *aa = std::getenv("PARVANE_AUTOACCEPT"); aa && *aa) {
+			if (const char *aa = ParvaneDevEnv("PARVANE_AUTOACCEPT"); aa && *aa) {
 				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
 				return;
 			}
@@ -2714,7 +2757,7 @@ void MirrorTyping(PeerData *peer) {
 		}
 		const parvane::json ev{ { "from", self }, { "to", to } };
 		try {
-			t->publish("msg.typing." + std::to_string(id), ev.dump());
+			t->publish(parvane::topics::msgTyping(std::to_string(id)), ev.dump());
 		} catch (const std::exception &) {
 		}
 	});
@@ -2793,7 +2836,7 @@ void SubscribeGroupTyping() {
 			}
 			g_typingGroupSubs.insert(id);
 		}
-		t->subscribe("msg.typing." + std::to_string(id),
+		t->subscribe(parvane::topics::msgTyping(std::to_string(id)),
 			[](std::string, std::string payload) { handleTypingFrame(payload); });
 	}
 }
@@ -3130,7 +3173,9 @@ void MirrorOutgoingFile(
 			fileNonce = enc.nonceB64;
 			parvane::CloudClient cloud(*t);
 			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
-			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd,
+			// P-29: имя E2E-вложения серверу не сообщаем — оно едет внутри
+			// E2E-контента (buildMediaContent), cloud видит только «blob»
+			const auto fileId = cloud.upload(from, token, "blob", mimeStd,
 				uploadBytes, cloudRecipients(to), false, 256 * 1024, 20000);
 			auto content = buildMediaContent(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
@@ -3153,7 +3198,8 @@ void MirrorOutgoingFile(
 						.arg(QString::fromStdString(to)));
 					return;
 				}
-				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token);
+				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
+					std::nullopt, std::nullopt, parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -3461,7 +3507,8 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 					return;
 				}
 				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token);
+					nlohmann::json::parse(sealed), token, std::nullopt, std::nullopt,
+					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -4205,7 +4252,7 @@ void ResolveNames(const QStringList &addresses) {
 		auto profiles = QHash<QString, QString>(); // адрес → UserInfo JSON (bio/birthday/…)
 		try {
 			const auto reply = t->request(
-				"identity.user.resolve", reqStr, 3000);
+				parvane::topics::IdentityResolve, reqStr, 3000);
 			const auto j = parvane::json::parse(reply);
 			if (j.contains("users") && j["users"].is_array()) {
 				for (const auto &u : j["users"]) {
@@ -5396,7 +5443,7 @@ void injectPollMessage(
 	// Debug-autovote для e2e: PARVANE_AUTOVOTE=<индекс> — голосуем во входящем
 	// опросе автоматически (headless-проверка агрегации).
 	if (!isOwn) {
-		if (const char *av = std::getenv("PARVANE_AUTOVOTE"); av && *av) {
+		if (const char *av = ParvaneDevEnv("PARVANE_AUTOVOTE"); av && *av) {
 			const auto option = QByteArray(av);
 			const auto pollId = st.pollId;
 			crl::on_main([pollId, option] {
@@ -5520,25 +5567,9 @@ bool prepareIncoming(
 		// identity) — не сверяем.
 		const auto cachedIdentity = inner.value("sender_identity", std::string());
 		const auto verifyIdentity = fresh ? envIdentity : cachedIdentity;
-		if (!verifyIdentity.empty() && !author.empty()) {
-			const auto v = parvane::e2e::verifySender(author, verifyIdentity, *t, token);
-			if (v == parvane::e2e::Verdict::Spoofed) {
-				LOG(("Parvane: ОТКЛОНЕНО: подмена отправителя %1 в %2%3")
-					.arg(QString::fromStdString(author), uuidQ,
-						direct ? QString() : u" (группа)"_q));
-				ackAnon(sm.id);
-				continue;
-			} else if (v == parvane::e2e::Verdict::Unknown) {
-				LOG(("Parvane: не подтверждён отправитель %1 в %2 (каталог недоступен)")
-					.arg(QString::fromStdString(author), uuidQ));
-			} else if (author != self) {
-				if (parvane::e2e::rememberContactIdentity(author, verifyIdentity)) {
-					// Ключ известного контакта сменился — служебное сообщение в чат
-					const auto authorQ = QString::fromStdString(author);
-					crl::on_main([authorQ] { AnnounceKeyChange(authorQ); });
-				}
-			}
-		}
+		// Кэшируем результат расшифровки СРАЗУ (до верификации): Olm/Megolm-ратчет
+		// уже продвинулся при decrypt, и если бы мы вышли по `continue` без кэша,
+		// то же сообщение после рестарта уже не расшифровалось бы (SYNC-1).
 		if (fresh) {
 			auto cached = inner;
 			cached["ct"] = ctFp.toStdString();
@@ -5549,13 +5580,42 @@ bool prepareIncoming(
 			}
 			DecCachePut(uuidQ, QString::fromStdString(cached.dump()));
 		}
-		// 1-на-1: реальный отправитель — inner.from. Группа: inner.from НЕ
-		// доверяем — автор остаётся wire from (не перезаписываем sm.from).
+		if (!verifyIdentity.empty() && !author.empty()) {
+			const auto v = parvane::e2e::verifySender(author, verifyIdentity, *t, token);
+			if (v == parvane::e2e::Verdict::Spoofed) {
+				LOG(("Parvane: ОТКЛОНЕНО: подмена отправителя %1 в %2%3")
+					.arg(QString::fromStdString(author), uuidQ,
+						direct ? QString() : u" (группа)"_q));
+				ackAnon(sm.id);
+				continue;
+			} else if (v == parvane::e2e::Verdict::Unknown) {
+				// E2E-1: каталог отправителя недоступен — подтвердить нельзя. НЕ
+				// показываем и НЕ ack'аем; курсор держим, sync повторит. Ратчет
+				// уже закэширован выше, повтор расшифруется из кэша.
+				LOG(("Parvane: отправитель %1 в %2 не подтверждён (каталог недоступен) — откладываем")
+					.arg(QString::fromStdString(author), uuidQ));
+				clean = false;
+				if (failed) { failed->push_back(sm.id); }
+				continue;
+			} else if (author != self) {
+				if (parvane::e2e::rememberContactIdentity(author, verifyIdentity)) {
+					// Ключ известного контакта сменился — служебное сообщение в чат
+					const auto authorQ = QString::fromStdString(author);
+					crl::on_main([authorQ] { AnnounceKeyChange(authorQ); });
+				}
+			}
+		}
+		// 1-на-1: реальный отправитель — inner.from (sealed). Группа: inner.from
+		// НЕ доверяем — автор остаётся wire from (не перезаписываем sm.from).
 		if (direct && !claimedFrom.empty()) {
 			sm.from = claimedFrom;
 		}
-		if (inner.contains("content") && inner["content"].is_object()) {
+		// E2E-1: канонический Megolm-plaintext — голый content; принимаем и
+		// legacy-обёртку {from, content}. Для 1-1 (sealed) обёртка обязательна.
+		if (inner.contains("content") && inner.contains("from") && inner["content"].is_object()) {
 			sm.content = inner["content"];
+		} else if (!direct) {
+			sm.content = inner;
 		}
 		// SKDM: ключ принимаем только если заявленный sender_identity совпадает с
 		// identity конверта (иначе участник мог бы подменить чужой Megolm-канал).
@@ -5623,11 +5683,13 @@ void injectOnMain(
 			}
 			try {
 				auto inner = nlohmann::json::parse(innerQ.toStdString());
-				if (inner.contains("from") && inner["from"].is_string()) {
-					sm.from = inner["from"].get<std::string>();
-				}
-				if (inner.contains("content")) {
+				// E2E-1/P-02: автор группового — ТОЛЬКО wire sm.from; inner.from
+				// не используем. Принимаем голый content и legacy {from, content}.
+				if (inner.contains("content") && inner.contains("from")
+						&& inner["content"].is_object()) {
 					sm.content = inner["content"];
+				} else {
+					sm.content = inner;
 				}
 			} catch (const std::exception &) {
 				continue;
@@ -6126,6 +6188,35 @@ void injectOnMain(
 	}
 }
 
+// Приём presence.<id> собеседника: OnlineTill(now+90) известному пиру.
+void HandlePresencePayload(const std::string &payload) {
+	std::string from;
+	try {
+		from = parvane::json::parse(payload).value("from", std::string());
+	} catch (const std::exception &) {
+		return;
+	}
+	if (from.empty()) {
+		return;
+	}
+	const auto fromQ = QString::fromStdString(from);
+	crl::on_main([fromQ] {
+		const auto session = g_sessionWeak.get();
+		if (!session || fromQ == SelfAddress()) {
+			return;
+		}
+		const auto id = IdForAddress(fromQ);
+		const auto user = session->data().userLoaded(UserId(BareId(id)));
+		if (!user) {
+			return; // присутствие незнакомого пира игнорируем
+		}
+		if (user->updateLastseen(
+				Data::LastseenStatus::OnlineTill(base::unixtime::now() + 90))) {
+			session->changes().peerUpdated(user, Data::PeerUpdate::Flag::OnlineStatus);
+		}
+	});
+}
+
 // Публикует хартбит присутствия на presence.<мой id> (эфемерно). Зовётся с main
 // (таймер). Подписчики ставят пиру OnlineTill(now+90); без нового хартбита за
 // 90с статус сам «протухает» → «был(а) недавно» (offline-таймер не нужен).
@@ -6147,7 +6238,7 @@ void publishPresenceHeartbeat() {
 		}
 		const parvane::json ev{ { "from", selfStd } };
 		try {
-			t->publish("presence." + std::to_string(id), ev.dump());
+			t->publish(parvane::topics::presence(std::to_string(id)), ev.dump());
 		} catch (const std::exception &) {
 		}
 	});
@@ -6438,10 +6529,7 @@ void SaveScheduledLocked() {
 		if (it.replyTo) j["reply_to"] = *it.replyTo;
 		arr.push_back(std::move(j));
 	}
-	QFile f(ScheduledPath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		f.write(QString::fromStdString(arr.dump()).toUtf8());
-	}
+	StoreWrite(ScheduledPath(), QString::fromStdString(arr.dump()).toUtf8());
 }
 
 // Отправить одно запланированное сообщение сейчас (main-поток): локальное эхо
@@ -6551,11 +6639,11 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 
 // Загрузить очередь с диска и взвести таймеры (на старте сессии).
 void RestoreScheduled() {
-	QFile f(ScheduledPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(ScheduledPath());
+	if (raw.isEmpty()) {
 		return;
 	}
-	const auto arr = nlohmann::json::parse(f.readAll().toStdString(), nullptr, false);
+	const auto arr = nlohmann::json::parse(raw.toStdString(), nullptr, false);
 	if (!arr.is_array()) {
 		return;
 	}
@@ -6680,7 +6768,7 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 			try {
 				const parvane::json req{ { "query", q } };
 				const auto reply = t->request(
-					"identity.user.search", req.dump(), 3000);
+					parvane::topics::IdentitySearch, req.dump(), 3000);
 				const auto j = parvane::json::parse(reply);
 				if (j.contains("users") && j["users"].is_array()) {
 					for (const auto &u : j["users"]) {
@@ -6736,7 +6824,7 @@ void SetDisplayName(const QString &name) {
 		}
 		const parvane::json req{ { "token", token }, { "display_name", nStd } };
 		try {
-			t->request("identity.user.setname", req.dump(), 3000);
+			t->request(parvane::topics::IdentitySetName, req.dump(), 3000);
 			LOG(("Parvane: имя обновлено на '%1'").arg(QString::fromStdString(nStd)));
 		} catch (const std::exception &) {
 		}
@@ -6765,7 +6853,7 @@ void SetProfileFields(const ProfileFields &fields) {
 			return;
 		}
 		try {
-			t->request("identity.user.setname", req.dump(), 3000);
+			t->request(parvane::topics::IdentitySetName, req.dump(), 3000);
 			auto shown = req;
 			shown.erase("token"); // JWT в лог не попадает
 			LOG(("Parvane: профиль обновлён (%1)").arg(QString::fromStdString(shown.dump()).left(400)));
@@ -6982,7 +7070,7 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 		}
 		try {
 			const parvane::json req{ { "token", token }, { "file_id", fileId } };
-			t->request("identity.user.setavatar", req.dump(), 3000);
+			t->request(parvane::topics::IdentitySetAvatar, req.dump(), 3000);
 			LOG(("Parvane: аватар обновлён (%1)").arg(QString::fromStdString(fileId)));
 		} catch (const std::exception &) {
 		}
@@ -7027,6 +7115,7 @@ void PumpReceive() {
 				auth.signing_key = parvane::e2e::signingKey();
 				auth.signer = [](const std::string &d) { return parvane::e2e::sign(d); };
 				auth.extra = [](const std::string &d) { return parvane::e2e::extraSignatures(d); };
+				auth.transfers = [] { return parvane::e2e::syncTransfers(); };
 				std::vector<std::string> pageRead;
 				std::string pageNotify;
 				auto page = m->sync(self, token, cursorId, cursorUpd, 15000,
@@ -7722,20 +7811,17 @@ void SaveFolders(not_null<Main::Session*> session) {
 		o["pinned"] = peers(f.pinned());
 		arr.push_back(std::move(o));
 	}
-	QFile file(FoldersPath());
-	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		file.write(QString::fromStdString(arr.dump()).toUtf8());
-	}
+	StoreWrite(FoldersPath(), QString::fromStdString(arr.dump()).toUtf8());
 }
 
 void LoadFolders(not_null<Main::Session*> session) {
-	QFile file(FoldersPath());
-	if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(FoldersPath());
+	if (raw.isEmpty()) {
 		return;
 	}
 	nlohmann::json arr;
 	try {
-		arr = nlohmann::json::parse(QString::fromUtf8(file.readAll()).toStdString());
+		arr = nlohmann::json::parse(raw.toStdString());
 	} catch (const std::exception &) {
 		return;
 	}
@@ -8059,7 +8145,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Напоминание о резервной копии ключей: у ЕДИНСТВЕННОГО устройства
 		// перенести ключи некуда (линковке нужно второе живое), потеря профиля
 		// необратима. Раз на установку (маркер), не в headless-прогонах.
-		if (!KeyBackupDone() && !std::getenv("PARVANE_AUTOLOGIN")) {
+		if (!KeyBackupDone() && !ParvaneDevEnv("PARVANE_AUTOLOGIN")) {
 			base::call_delayed(8000, [] {
 				ListDevices([](std::vector<DeviceEntry> devices) {
 					if (devices.size() > 1) {
@@ -8092,56 +8178,26 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				t = g_transport.get();
 			}
 			if (t) {
-				t->subscribe("msg.typing." + std::to_string(selfId),
+				t->subscribe(parvane::topics::msgTyping(std::to_string(selfId)),
 					[](std::string, std::string payload) { handleTypingFrame(payload); });
 				LOG(("Parvane: подписка на msg.typing.%1").arg(selfId));
 			}
 		}
 
-		// Присутствие (real online): подписка на presence.* + хартбит своего
-		// присутствия каждые 30с. На приёме ставим пиру OnlineTill(now+90).
+		// Присутствие (real online): подписки на presence.<id> известных
+		// собеседников (P-18: не presence.* всех) + хартбит своего присутствия
+		// каждые 30с. На приёме ставим пиру OnlineTill(now+90).
 		if (!g_presenceSubscribed) {
-			g_presenceSubscribed = true;
-			parvane::ITransport *t = nullptr;
+			QList<QString> known;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
-				t = g_transport.get();
+				g_presenceSubscribed = true;
+				known = g_idToAddress.values();
 			}
-			if (t) {
-				t->subscribe("presence.*",
-					[](std::string, std::string payload) {
-						std::string from;
-						try {
-							from = parvane::json::parse(payload)
-								.value("from", std::string());
-						} catch (const std::exception &) {
-							return;
-						}
-						if (from.empty()) {
-							return;
-						}
-						const auto fromQ = QString::fromStdString(from);
-						crl::on_main([fromQ] {
-							const auto session = g_sessionWeak.get();
-							if (!session || fromQ == SelfAddress()) {
-								return;
-							}
-							const auto id = IdForAddress(fromQ);
-							const auto user = session->data().userLoaded(
-								UserId(BareId(id)));
-							if (!user) {
-								return; // присутствие незнакомого пира игнорируем
-							}
-							if (user->updateLastseen(
-									Data::LastseenStatus::OnlineTill(
-										base::unixtime::now() + 90))) {
-								session->changes().peerUpdated(user,
-									Data::PeerUpdate::Flag::OnlineStatus);
-							}
-						});
-					});
-				LOG(("Parvane: подписка на presence.*"));
+			for (const auto &address : known) {
+				EnsurePresenceSubscription(address);
 			}
+			LOG(("Parvane: presence — подписки на %1 собеседников").arg(known.size()));
 			g_presenceTimer = std::make_unique<base::Timer>(
 				[] { publishPresenceHeartbeat(); });
 			g_presenceTimer->callEach(30000);
@@ -8283,7 +8339,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autosendfile для e2e Фазы 4: PARVANE_AUTOSENDFILE=peer@server:/path.
 		// Отправляет файл штатным путём tdesktop (FileLoadTask → SendConfirmedFile
 		// → MirrorOutgoingFile). Тип по расширению: png/jpg → Photo, иначе File.
-		if (const char *fv = std::getenv("PARVANE_AUTOSENDFILE"); fv && *fv) {
+		if (const char *fv = ParvaneDevEnv("PARVANE_AUTOSENDFILE"); fv && *fv) {
 			const auto spec = QString::fromUtf8(fv);
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
@@ -8324,7 +8380,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autotwofa: PARVANE_AUTOTWOFA=on|off — переключает двухфакторный
 		// вход (identity.user.twofa) как тумблер в настройках; результат — в лог.
-		if (const char *tv = std::getenv("PARVANE_AUTOTWOFA"); tv && *tv) {
+		if (const char *tv = ParvaneDevEnv("PARVANE_AUTOTWOFA"); tv && *tv) {
 			const auto enable = (QString::fromUtf8(tv) == u"on"_q);
 			base::call_delayed(2 * crl::time(1000), [enable] {
 				crl::async([enable] {
@@ -8339,7 +8395,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoclearchat: PARVANE_AUTOCLEARCHAT=peer@server:<секунды> —
 		// удаляет диалог штатным путём (deleteConversation → deleteHistory →
 		// MirrorClearHistory → msg.chat.clear).
-		if (const char *cv = std::getenv("PARVANE_AUTOCLEARCHAT"); cv && *cv) {
+		if (const char *cv = ParvaneDevEnv("PARVANE_AUTOCLEARCHAT"); cv && *cv) {
 			const auto spec = QString::fromUtf8(cv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8362,7 +8418,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-automute для e2e: PARVANE_AUTOMUTE=цель[,цель]:<секунды>; цель —
 		// адрес собеседника или group:<имя группы>. Мут навсегда штатным
 		// NotifySettings::update → MirrorNotifySettings → другие устройства.
-		if (const char *mv = std::getenv("PARVANE_AUTOMUTE"); mv && *mv) {
+		if (const char *mv = ParvaneDevEnv("PARVANE_AUTOMUTE"); mv && *mv) {
 			const auto spec = QString::fromUtf8(mv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8402,7 +8458,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoprofile для e2e: PARVANE_AUTOPROFILE=bio=..;phone=..;color=N;
 		// channel=<имя группы>:<секунды> — свои профильные поля в identity
 		// (channel пустой = убрать личный канал).
-		if (const char *pv = std::getenv("PARVANE_AUTOPROFILE"); pv && *pv) {
+		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPROFILE"); pv && *pv) {
 			const auto spec = QString::fromUtf8(pv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8449,7 +8505,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autosearch: PARVANE_AUTOSEARCH=<подстрока>:<секунды> — глобальный
 		// локальный поиск по сообщениям, результат в лог (для e2e).
-		if (const char *sv = std::getenv("PARVANE_AUTOSEARCH"); sv && *sv) {
+		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSEARCH"); sv && *sv) {
 			const auto spec = QString::fromUtf8(sv);
 			const auto sep = spec.lastIndexOf(':');
 			if (sep > 0) {
@@ -8477,7 +8533,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// напрямую из g_mediaContentByMsgId (тот же content, что несёт
 		// MirrorForward) и гоним через ForwardMediaReshared — путь перезаливки
 		// блоба под нового получателя (то, что проверяем).
-		if (const char *fw = std::getenv("PARVANE_AUTOFORWARD"); fw && *fw) {
+		if (const char *fw = ParvaneDevEnv("PARVANE_AUTOFORWARD"); fw && *fw) {
 			const auto parts = QString::fromUtf8(fw).split(':');
 			if (parts.size() == 3) {
 				const auto fromAddr = parts[0];
@@ -8549,7 +8605,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		};
 		// Debug-autodelete для e2e delete: PARVANE_AUTODELETE=<секунды> — удаляет
 		// своё последнее исходящее штатным путём (deleteMessages → MirrorDelete).
-		if (const char *dv = std::getenv("PARVANE_AUTODELETE"); dv && *dv) {
+		if (const char *dv = ParvaneDevEnv("PARVANE_AUTODELETE"); dv && *dv) {
 			const auto secs = std::max(QString::fromUtf8(dv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [lastOwnItem] {
 				const auto session = g_sessionWeak.get();
@@ -8572,7 +8628,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoreaders для e2e «seen by / read at»: PARVANE_AUTOREADERS=<секунды>
 		// — запрашивает msg.chat.readers для своего последнего исходящего и пишет
 		// результат в лог (см. FetchReaders).
-		if (const char *rv = std::getenv("PARVANE_AUTOREADERS"); rv && *rv) {
+		if (const char *rv = ParvaneDevEnv("PARVANE_AUTOREADERS"); rv && *rv) {
 			const auto secs = std::max(QString::fromUtf8(rv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [lastOwnItem] {
 				const auto session = g_sessionWeak.get();
@@ -8586,7 +8642,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autoedit для e2e edit: PARVANE_AUTOEDIT=<секунды>:новый текст.
-		if (const char *ev = std::getenv("PARVANE_AUTOEDIT"); ev && *ev) {
+		if (const char *ev = ParvaneDevEnv("PARVANE_AUTOEDIT"); ev && *ev) {
 			const auto spec = QString::fromUtf8(ev);
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
@@ -8611,7 +8667,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug для e2e devices: PARVANE_AUTOREVOKE_OTHERS=<секунды> — перечислить
 		// устройства и отозвать все, кроме текущего (как «Terminate all»).
-		if (const char *rv = std::getenv("PARVANE_AUTOREVOKE_OTHERS"); rv && *rv) {
+		if (const char *rv = ParvaneDevEnv("PARVANE_AUTOREVOKE_OTHERS"); rv && *rv) {
 			const auto secs = std::max(QString::fromUtf8(rv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [] {
 				ListDevices([](std::vector<DeviceEntry> devices) {
@@ -8636,7 +8692,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autogroup для e2e: PARVANE_AUTOGROUP=Имя:member1,member2 (пусто —
 		// без начальных участников). Создаёт группу через ~4с.
-		if (const char *gv = std::getenv("PARVANE_AUTOGROUP"); gv && *gv) {
+		if (const char *gv = ParvaneDevEnv("PARVANE_AUTOGROUP"); gv && *gv) {
 			auto spec = QString::fromUtf8(gv);
 			const auto sep = spec.indexOf(':');
 			const auto gname = (sep > 0) ? spec.left(sep) : spec;
@@ -8653,7 +8709,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autogroupcall для e2e: PARVANE_AUTOGROUPCALL=Имя_группы →
 		// групповой звонок со всеми участниками (через ~9с — дать группе
 		// синхронизироваться).
-		if (const char *gcv = std::getenv("PARVANE_AUTOGROUPCALL"); gcv && *gcv) {
+		if (const char *gcv = ParvaneDevEnv("PARVANE_AUTOGROUPCALL"); gcv && *gcv) {
 			const auto gname = QString::fromUtf8(gcv);
 			base::call_delayed(9 * crl::time(1000), [gname] {
 				QString gid;
@@ -8679,7 +8735,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autottl для e2e самоуничтожения: PARVANE_AUTOTTL=peer@server:секунды
 		// → выставить TTL чата (как нативное меню Auto-Delete). Исходящие получат
 		// ttl_secs → у получателя нативный ttl_period (авто-удаление).
-		if (const char *tv = std::getenv("PARVANE_AUTOTTL"); tv && *tv) {
+		if (const char *tv = ParvaneDevEnv("PARVANE_AUTOTTL"); tv && *tv) {
 			auto spec = QString::fromUtf8(tv);
 			const auto sp = spec.lastIndexOf(':');
 			if (sp > 0) {
@@ -8692,7 +8748,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autofolder для папок: PARVANE_AUTOFOLDER=Имя:peer@server → создаёт
 		// папку с этим чатом (нативный ChatFilters::set) через ~6с. Персист свой.
-		if (const char *fv = std::getenv("PARVANE_AUTOFOLDER"); fv && *fv) {
+		if (const char *fv = ParvaneDevEnv("PARVANE_AUTOFOLDER"); fv && *fv) {
 			auto spec = QString::fromUtf8(fv);
 			const auto c = spec.indexOf(':');
 			if (c > 0) {
@@ -8728,7 +8784,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoadmin для админки групп: PARVANE_AUTOADMIN=Имя_группы;act:member;…
 		// act ∈ add|remove|admin|member. Через ~11с (группа синхронизирована)
 		// выполняет действия ЧЕРЕЗ клиент (GroupClient → messenger), стаггер по 3с.
-		if (const char *av = std::getenv("PARVANE_AUTOADMIN"); av && *av) {
+		if (const char *av = ParvaneDevEnv("PARVANE_AUTOADMIN"); av && *av) {
 			const auto parts = QString::fromUtf8(av).split(';', Qt::SkipEmptyParts);
 			if (parts.size() >= 2) {
 				const auto gname = parts.first();
@@ -8767,7 +8823,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autogroupsend для e2e групп (Фаза 3, Megolm): PARVANE_AUTOGROUPSEND=
 		// Имя_группы:текст → через ~9с (дать группе синхронизироваться) отправляет
 		// текст в группу ЧЕРЕЗ E2E-путь клиента (sender keys + раздача SKDM).
-		if (const char *gsv = std::getenv("PARVANE_AUTOGROUPSEND"); gsv && *gsv) {
+		if (const char *gsv = ParvaneDevEnv("PARVANE_AUTOGROUPSEND"); gsv && *gsv) {
 			auto spec = QString::fromUtf8(gsv);
 			const auto sp = spec.indexOf(':');
 			if (sp > 0) {
@@ -8797,7 +8853,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autogroupsend2 для e2e ротации: второе групповое сообщение через ~24с
 		// (ПОСЛЕ удаления участника + ротации ключа — проверяет re-key у оставшихся).
-		if (const char *gs2 = std::getenv("PARVANE_AUTOGROUPSEND2"); gs2 && *gs2) {
+		if (const char *gs2 = ParvaneDevEnv("PARVANE_AUTOGROUPSEND2"); gs2 && *gs2) {
 			auto spec = QString::fromUtf8(gs2);
 			const auto sp = spec.indexOf(':');
 			if (sp > 0) {
@@ -8826,7 +8882,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 		// Debug-autocall для e2e звонков: PARVANE_AUTOCALL=peer@server[:video].
 		// Инициатор через ~4с звонит; принимающий ставит PARVANE_AUTOACCEPT=1.
-		if (const char *cv = std::getenv("PARVANE_AUTOCALL"); cv && *cv) {
+		if (const char *cv = ParvaneDevEnv("PARVANE_AUTOCALL"); cv && *cv) {
 			auto spec = QString::fromUtf8(cv);
 			const auto video = spec.endsWith(u":video"_q);
 			if (video) spec.chop(6);
@@ -8837,7 +8893,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autohangup для диагностики закрытия окна: через N сек отбой.
-		if (const char *hv = std::getenv("PARVANE_AUTOHANGUP"); hv && *hv) {
+		if (const char *hv = ParvaneDevEnv("PARVANE_AUTOHANGUP"); hv && *hv) {
 			const auto secs = std::max(QString::fromUtf8(hv).toInt(), 1);
 			base::call_delayed(secs * crl::time(1000), [] {
 				LOG(("Parvane: AUTOHANGUP"));
@@ -8849,7 +8905,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// шлёт первый стикер первого локального пака нативным путём
 		// (SendExistingDocument → врезка MirrorOutgoingSticker). Отложен за
 		// LoadLocalStickerPacks (t+3с) и E2E-инициализацию.
-		if (const char *sv = std::getenv("PARVANE_AUTOSTICKER"); sv && *sv) {
+		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSTICKER"); sv && *sv) {
 			const auto peerAddr = QString::fromUtf8(sv);
 			base::call_delayed(6 * crl::time(1000), [weak, peerAddr] {
 				const auto s = weak.get();
@@ -8879,7 +8935,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autopoll для e2e опросов: PARVANE_AUTOPOLL=peer@server:Вопрос:а,б,в
-		if (const char *pv = std::getenv("PARVANE_AUTOPOLL"); pv && *pv) {
+		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPOLL"); pv && *pv) {
 			const auto spec = QString::fromUtf8(pv);
 			const auto parts = spec.split(u':');
 			if (parts.size() >= 3) {
@@ -8901,7 +8957,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Debug-autosend для e2e Фазы 3b: PARVANE_AUTOSEND=peer@server:текст.
-		const char *v = std::getenv("PARVANE_AUTOSEND");
+		const char *v = ParvaneDevEnv("PARVANE_AUTOSEND");
 		if (!v || !*v) {
 			return;
 		}
@@ -8926,7 +8982,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Debug-autoemoji для e2e кастом-эмодзи: PARVANE_AUTOEMOJI=peer:pack:file —
 		// отправляет текст с одним custom_emoji-entity (как выбор из панели):
 		// грузит локальный пак, шлёт entity(docId)+emoji_packs получателю.
-		if (const char *ev = std::getenv("PARVANE_AUTOEMOJI"); ev && *ev) {
+		if (const char *ev = ParvaneDevEnv("PARVANE_AUTOEMOJI"); ev && *ev) {
 			const auto espec = QString::fromUtf8(ev);
 			const auto p1 = espec.indexOf(':');
 			const auto p2 = espec.indexOf(':', p1 + 1);
@@ -8962,7 +9018,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		// Debug-autoschedule для e2e: PARVANE_AUTOSCHEDULE=peer@server:secs:текст —
 		// планирует сообщение через secs секунд тем же путём, что нативное меню.
-		if (const char *sv = std::getenv("PARVANE_AUTOSCHEDULE"); sv && *sv) {
+		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSCHEDULE"); sv && *sv) {
 			const auto sspec = QString::fromUtf8(sv);
 			const auto s1 = sspec.indexOf(':');
 			const auto s2i = sspec.indexOf(':', s1 + 1);
@@ -8977,7 +9033,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				ScheduleOutgoing(su, TextWithEntities{ stext }, 0, due);
 			}
 		}
-		if (const char *lv = std::getenv("PARVANE_AUTOLOCATION"); lv && *lv) {
+		if (const char *lv = ParvaneDevEnv("PARVANE_AUTOLOCATION"); lv && *lv) {
 			const auto lspec = QString::fromUtf8(lv);
 			const auto lsep = lspec.indexOf(':');
 			const auto comma = lspec.indexOf(',', lsep + 1);
@@ -9090,8 +9146,9 @@ void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 	});
 }
 
-void RevokeDevice(const QString &deviceId, Fn<void(bool)> done) {
+void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &password) {
 	const auto devStd = deviceId.toStdString();
+	const auto pwStd = password.toStdString();
 	crl::async([=] {
 		parvane::ITransport *t = nullptr;
 		std::string token;
@@ -9103,8 +9160,13 @@ void RevokeDevice(const QString &deviceId, Fn<void(bool)> done) {
 		bool ok = false;
 		if (t && devStd != parvane::e2e::deviceId()) {
 			try {
+				// P-07: отзыв устройства требует текущий пароль.
+				parvane::json body{{"token", token}, {"device_id", devStd}};
+				if (!pwStd.empty()) {
+					body["password"] = pwStd;
+				}
 				const auto raw = t->request(parvane::topics::IdentityDeviceRevoke,
-					parvane::json{{"token", token}, {"device_id", devStd}}.dump(), 5000);
+					body.dump(), 5000);
 				ok = parvane::json::parse(raw, nullptr, false).value("ok", false);
 			} catch (const std::exception &e) {
 				LOG(("Parvane: device.revoke ошибка: %1").arg(QString::fromUtf8(e.what())));
@@ -9234,6 +9296,11 @@ void DeleteGroup(const QString &groupId) {
 }
 
 // ── Авто-линковка истории (паритет web provider.ts / linking.ts) ─────────────
+// Протокол v2 (P-03/P-48, правило LINK-1): новое устройство публикует
+// обязательство на эфемерный ключ и свой signing-ключ; старое шлёт challenge
+// своим эфемерным ключом; новое раскрывает ключ; SAS считается от ПАРЫ ключей
+// (12 цифр); грант принимается только под ключ challenge; экспорт — без
+// приватного Olm-аккаунта, с подписанным переносом владения исходящими.
 namespace {
 
 constexpr auto kLinkGrantPollMs = 5000;
@@ -9242,10 +9309,14 @@ constexpr auto kLinkOfferLifetimeMs = 10 * 60 * 1000;
 
 // Новое устройство: эфемерный ключ оффера (пока ждём грант). Под g_sessionMutex.
 std::optional<parvane::linking::EphemeralKey> g_linkEph;
+std::string g_linkCommitment;
+std::string g_linkChallenge; // эфемерный ключ старого устройства (после challenge)
 QString g_linkCode;
 std::int64_t g_linkStartedMs = 0;
 bool g_linkActive = false;
-// Старое устройство: офферы, уже показанные пользователю (device_id → eph_pub).
+// Старое устройство: свой эфемерный ключ на каждый challenge (device_id → ключ)
+// и офферы, уже показанные пользователю (device_id → раскрытый eph_pub).
+std::map<QString, parvane::linking::EphemeralKey> g_linkChallenges;
 QHash<QString, QString> g_linkOffersShown;
 bool g_linkOffersPolling = false;
 
@@ -9253,8 +9324,13 @@ bool g_linkOffersPolling = false;
 	return QDateTime::currentMSecsSinceEpoch();
 }
 
+[[nodiscard]] bool HeadlessUi() {
+	return std::getenv("QT_QPA_PLATFORM")
+		&& QString::fromUtf8(std::getenv("QT_QPA_PLATFORM")) == u"offscreen"_q;
+}
+
 // Полный ресинк после импорта истории: курсоры в ноль → sync вернёт всё, что
-// теперь читается (кэш + legacy-подписанты), дедуп — по uuid.
+// теперь читается (кэш + переносы владения), дедуп — по uuid.
 void ResyncFromScratch() {
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -9265,7 +9341,8 @@ void ResyncFromScratch() {
 	PumpReceive();
 }
 
-// Воркер: публикует оффер (identity.link.offer) и запускает опрос гранта.
+// Воркер: публикует оффер (identity.link.offer: commitment + signing_key, без
+// ключа) и запускает опрос гранта.
 void StartHistoryLinkOffer() {
 	parvane::ITransport *t = nullptr;
 	std::string token;
@@ -9281,11 +9358,11 @@ void StartHistoryLinkOffer() {
 	if (!eph) {
 		return;
 	}
-	const auto code = QString::fromStdString(parvane::linking::sasCode(eph->publicB64()));
+	const auto commitment = parvane::linking::commitment(eph->publicB64());
 	try {
 		const auto raw = t->request(parvane::topics::IdentityLinkOffer,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()},
-				{"eph_pub", eph->publicB64()}}.dump(), 5000);
+				{"commitment", commitment}, {"signing_key", parvane::e2e::signingKey()}}.dump(), 5000);
 		if (!parvane::json::parse(raw, nullptr, false).value("ok", false)) {
 			LOG(("Parvane: линковка: оффер отклонён"));
 			return;
@@ -9297,18 +9374,13 @@ void StartHistoryLinkOffer() {
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_linkEph = std::move(eph);
-		g_linkCode = code;
+		g_linkCommitment = commitment;
+		g_linkChallenge.clear();
+		g_linkCode.clear();
 		g_linkStartedMs = NowMs();
 		g_linkActive = true;
 	}
-	LOG(("Parvane: линковка: оффер опубликован, код %1").arg(code));
-	crl::on_main([code] {
-		if (std::getenv("QT_QPA_PLATFORM") && QString::fromUtf8(std::getenv("QT_QPA_PLATFORM")) == u"offscreen"_q) {
-			return; // headless e2e — без боксов
-		}
-		Ui::show(Ui::MakeInformBox(
-			u"Перенос истории: подтвердите на другом устройстве (Настройки → Устройства).\nКод: %1"_q.arg(code)));
-	});
+	LOG(("Parvane: линковка: оффер (обязательство) опубликован"));
 }
 
 void RetractHistoryLinkOffer() {
@@ -9320,6 +9392,9 @@ void RetractHistoryLinkOffer() {
 		token = g_token.toStdString();
 		g_linkActive = false;
 		g_linkEph.reset();
+		g_linkCommitment.clear();
+		g_linkChallenge.clear();
+		g_linkCode.clear();
 	}
 	if (!t) {
 		return;
@@ -9327,7 +9402,7 @@ void RetractHistoryLinkOffer() {
 	try {
 		t->request(parvane::topics::IdentityLinkOffer,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()},
-				{"eph_pub", ""}}.dump(), 5000);
+				{"revoke", true}}.dump(), 5000);
 	} catch (const std::exception &) {
 	}
 }
@@ -9335,7 +9410,7 @@ void RetractHistoryLinkOffer() {
 // Воркер: один опрос гранта. true — линковка завершена (успех/стоп).
 bool PollLinkGrantOnce() {
 	parvane::ITransport *t = nullptr;
-	std::string self, token;
+	std::string self, token, commitment, challenge;
 	std::optional<parvane::linking::EphemeralKey> eph;
 	std::int64_t started = 0;
 	{
@@ -9347,6 +9422,8 @@ bool PollLinkGrantOnce() {
 		self = g_selfAddress.toStdString();
 		token = g_token.toStdString();
 		eph = g_linkEph;
+		commitment = g_linkCommitment;
+		challenge = g_linkChallenge;
 		started = g_linkStartedMs;
 	}
 	if (!t || !eph) {
@@ -9363,16 +9440,67 @@ bool PollLinkGrantOnce() {
 		return true;
 	}
 	parvane::json grant;
+	std::string newChallenge;
 	try {
 		const auto raw = t->request(parvane::topics::IdentityLinkPoll,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()}}.dump(), 5000);
 		const auto resp = parvane::json::parse(raw, nullptr, false);
-		if (!resp.is_object() || !resp.value("ok", false) || !resp.contains("grant")
-			|| !resp["grant"].is_object()) {
+		if (!resp.is_object() || !resp.value("ok", false)) {
 			return false;
 		}
-		grant = resp["grant"];
+		newChallenge = resp.value("challenge", std::string());
+		if (resp.contains("grant") && resp["grant"].is_object()) {
+			grant = resp["grant"];
+		}
 	} catch (const std::exception &) {
+		return false;
+	}
+	// Challenge пришёл — раскрываем ключ (сервер сверяет с обязательством) и
+	// показываем SAS от пары ключей. Фиксируется первый challenge.
+	if (challenge.empty() && !newChallenge.empty()) {
+		try {
+			const auto raw = t->request(parvane::topics::IdentityLinkOffer,
+				parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()},
+					{"eph_pub", eph->publicB64()}, {"commitment", commitment},
+					{"signing_key", parvane::e2e::signingKey()}}.dump(), 5000);
+			if (!parvane::json::parse(raw, nullptr, false).value("ok", false)) {
+				LOG(("Parvane: линковка: раскрытие ключа отклонено"));
+				return false;
+			}
+		} catch (const std::exception &) {
+			return false;
+		}
+		const auto code = QString::fromStdString(
+			parvane::linking::sasCodeV2(eph->publicB64(), newChallenge));
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (!g_linkActive) {
+				return true;
+			}
+			g_linkChallenge = newChallenge;
+			g_linkCode = code;
+		}
+		challenge = newChallenge;
+		LOG(("Parvane: линковка: ключ раскрыт, код сверки готов"));
+#ifdef PARVANE_DEV
+		// Только dev-сборка: headless e2e сверяет код по логу.
+		LOG(("Parvane: линковка (dev): код сверки %1").arg(code));
+#endif
+		crl::on_main([code] {
+			if (HeadlessUi()) {
+				return; // headless e2e — без боксов
+			}
+			Ui::show(Ui::MakeInformBox(
+				u"Перенос истории: сверьте код на другом устройстве (Настройки → Устройства) и подтвердите там.\nКод: %1"_q.arg(code)));
+		});
+	}
+	if (grant.is_null()) {
+		return false;
+	}
+	if (challenge.empty() || grant.value("eph_pub", std::string()) != challenge) {
+		// Грант не под тот ключ, с которым считался SAS: гонка двух старых
+		// устройств или подмена — игнорируем.
+		LOG(("Parvane: линковка: грант под чужой эфемерный ключ — отклонён"));
 		return false;
 	}
 	{
@@ -9409,6 +9537,11 @@ bool PollLinkGrantOnce() {
 		LOG(("Parvane: линковка: скачивание: %1").arg(QString::fromUtf8(e.what())));
 		return true;
 	}
+	std::pair<std::string, std::string> transfer;
+	if (box.contains("transfer") && box["transfer"].is_object()) {
+		transfer = {box["transfer"].value("old_signing_key", std::string()),
+			box["transfer"].value("signature", std::string())};
+	}
 	int merged = 0;
 	const auto ok = parvane::e2e::importLinkedHistory(stateJson,
 		[&](const std::string &uuid, const nlohmann::json &inner) {
@@ -9423,7 +9556,7 @@ bool PollLinkGrantOnce() {
 			}
 			DecCachePut(q, QString::fromStdString(entry.dump()));
 			++merged;
-		});
+		}, transfer);
 	if (!ok) {
 		LOG(("Parvane: линковка: импорт не удался"));
 		return true;
@@ -9446,22 +9579,28 @@ void ScheduleLinkGrantPoll() {
 	});
 }
 
-// Воркер (старое устройство): выдать грант устройству deviceId с ключом ephPub —
-// полный экспорт → blobcrypt → cloud (owner-only) → ECDH-бокс → link.grant.
-void GrantLink(const QString &deviceId, const QString &ephPub) {
+// Воркер (старое устройство): выдать грант устройству deviceId с раскрытым
+// ключом ephPub — экспорт БЕЗ приватного материала → blobcrypt → cloud
+// (owner-only) → ECDH-бокс (с подписанным переносом владения) → link.grant.
+void GrantLink(const QString &deviceId, const QString &ephPub, const QString &signingKey) {
 	parvane::ITransport *t = nullptr;
 	std::string self, token;
+	std::optional<parvane::linking::EphemeralKey> own;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		t = g_transport.get();
 		self = g_selfAddress.toStdString();
 		token = g_token.toStdString();
+		if (const auto it = g_linkChallenges.find(deviceId); it != g_linkChallenges.end()) {
+			own = it->second;
+		}
 	}
-	if (!t) {
+	if (!t || !own) {
+		LOG(("Parvane: линковка: нет своего challenge для устройства %1").arg(deviceId));
 		return;
 	}
 	try {
-		const auto exported = parvane::e2e::exportStateJson(DecCacheSnapshot());
+		const auto exported = parvane::e2e::exportLinkStateJson(DecCacheSnapshot());
 		if (exported.empty()) {
 			return;
 		}
@@ -9469,22 +9608,26 @@ void GrantLink(const QString &deviceId, const QString &ephPub) {
 		parvane::CloudClient cloud(*t);
 		const auto fileId = cloud.upload(self, token, "link-transfer",
 			"application/octet-stream", enc.ciphertext, {}, false, 192 * 1024, 30000);
-		auto eph = parvane::linking::EphemeralKey::generate();
-		if (!eph) {
-			return;
-		}
-		const parvane::json boxPlain = {{"file_id", fileId},
+		parvane::json boxPlain = {{"file_id", fileId},
 			{"file_key", enc.keyB64}, {"file_nonce", enc.nonceB64}};
-		const auto box = eph->seal(ephPub.toStdString(), boxPlain.dump());
+		if (!signingKey.isEmpty()) {
+			const auto tr = parvane::e2e::signLinkTransfer(self, signingKey.toStdString());
+			if (!tr.second.empty()) {
+				boxPlain["transfer"] = {{"old_signing_key", tr.first}, {"signature", tr.second}};
+			}
+		}
+		const auto box = own->seal(ephPub.toStdString(), boxPlain.dump());
 		if (!box) {
 			return;
 		}
 		const auto raw = t->request(parvane::topics::IdentityLinkGrant,
 			parvane::json{{"token", token}, {"device_id", deviceId.toStdString()},
-				{"box_payload", *box}, {"eph_pub", eph->publicB64()}}.dump(), 5000);
+				{"box_payload", *box}, {"eph_pub", own->publicB64()}}.dump(), 5000);
 		const auto resp = parvane::json::parse(raw, nullptr, false);
 		if (resp.value("ok", false)) {
 			LOG(("Parvane: линковка: грант выдан устройству %1").arg(deviceId));
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_linkChallenges.erase(deviceId);
 		} else {
 			LOG(("Parvane: линковка: грант не удался: %1")
 				.arg(QString::fromStdString(resp.value("error", std::string("?")))));
@@ -9494,7 +9637,9 @@ void GrantLink(const QString &deviceId, const QString &ephPub) {
 	}
 }
 
-// Воркер (старое устройство): опрос чужих офферов → подтверждение с SAS-кодом.
+// Воркер (старое устройство): опрос чужих офферов → challenge → после
+// раскрытия ключа подтверждение с SAS-кодом. Legacy-офферы v1 (без
+// обязательства) не обслуживаются.
 void PollLinkOffersOnce() {
 	parvane::ITransport *t = nullptr;
 	std::string token;
@@ -9521,13 +9666,67 @@ void PollLinkOffersOnce() {
 	if (!offers.is_array()) {
 		return;
 	}
+	// Ключи challenge для исчезнувших офферов больше не нужны.
+	{
+		std::set<QString> live;
+		for (const auto &o : offers) {
+			if (o.is_object()) {
+				live.insert(QString::fromStdString(o.value("device_id", std::string())));
+			}
+		}
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (auto it = g_linkChallenges.begin(); it != g_linkChallenges.end();) {
+			it = live.count(it->first) ? std::next(it) : g_linkChallenges.erase(it);
+		}
+	}
 	for (const auto &o : offers) {
 		if (!o.is_object()) {
 			continue;
 		}
 		const auto dev = QString::fromStdString(o.value("device_id", std::string()));
 		const auto eph = QString::fromStdString(o.value("eph_pub", std::string()));
-		if (dev.isEmpty() || eph.isEmpty()) {
+		const auto commitment = o.value("commitment", std::string());
+		const auto challengePub = o.value("challenge_pub", std::string());
+		const auto signingKey = QString::fromStdString(o.value("signing_key", std::string()));
+		if (dev.isEmpty() || commitment.empty()) {
+			continue;
+		}
+		std::optional<parvane::linking::EphemeralKey> own;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (const auto it = g_linkChallenges.find(dev); it != g_linkChallenges.end()) {
+				own = it->second;
+			}
+		}
+		if (!own && !challengePub.empty()) {
+			continue; // challenge выставило другое наше устройство
+		}
+		if (!own || challengePub.empty()) {
+			// Нет challenge (или новое устройство переофферило — сервер его
+			// сбросил): шлём свой ключ; при повторе — тот же (идемпотентно).
+			auto key = own ? own : parvane::linking::EphemeralKey::generate();
+			if (!key) {
+				continue;
+			}
+			try {
+				const auto raw = t->request(parvane::topics::IdentityLinkChallenge,
+					parvane::json{{"token", token}, {"device_id", dev.toStdString()},
+						{"eph_pub", key->publicB64()}}.dump(), 5000);
+				if (!parvane::json::parse(raw, nullptr, false).value("ok", false)) {
+					continue;
+				}
+			} catch (const std::exception &) {
+				continue;
+			}
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_linkChallenges.insert_or_assign(dev, *key);
+			continue;
+		}
+		if (challengePub != own->publicB64() || eph.isEmpty()) {
+			continue; // ждём раскрытия ключа (или это чужой challenge)
+		}
+		if (!parvane::linking::commitmentMatches(eph.toStdString(), commitment)) {
+			LOG(("Parvane: линковка: ключ оффера %1 не соответствует обязательству").arg(dev));
 			continue;
 		}
 		{
@@ -9537,19 +9736,19 @@ void PollLinkOffersOnce() {
 			}
 			g_linkOffersShown.insert(dev, eph);
 		}
-		const auto code = QString::fromStdString(parvane::linking::sasCode(eph.toStdString()));
-		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код %2")
-			.arg(dev, code));
-		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI.
-		if (const char *ag = std::getenv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
-			GrantLink(dev, eph);
+		const auto code = QString::fromStdString(
+			parvane::linking::sasCodeV2(eph.toStdString(), own->publicB64()));
+		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код готов").arg(dev));
+		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI (только dev-сборка).
+		if (const char *ag = ParvaneDevEnv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
+			GrantLink(dev, eph, signingKey);
 			continue;
 		}
-		crl::on_main([dev, eph, code] {
+		crl::on_main([dev, eph, signingKey, code] {
 			Ui::show(Ui::MakeConfirmBox({
-				.text = u"Новое устройство запрашивает перенос истории.\nКод на новом устройстве: %1\nПередать историю?"_q.arg(code),
-				.confirmed = [dev, eph](Fn<void()> &&close) {
-					crl::async([dev, eph] { GrantLink(dev, eph); });
+				.text = u"Новое устройство запрашивает перенос истории.\nСверьте код — он должен совпадать с кодом на новом устройстве:\n%1\nПередать историю?"_q.arg(code),
+				.confirmed = [dev, eph, signingKey](Fn<void()> &&close) {
+					crl::async([dev, eph, signingKey] { GrantLink(dev, eph, signingKey); });
 					close();
 				},
 				.confirmText = u"Передать"_q,
@@ -9683,7 +9882,8 @@ void StartHistoryLinking() {
 	}
 }
 
-// Код линковки (новое устройство, пока ждём грант); пусто — не ждём.
+// Код линковки (новое устройство, пока ждём грант); пусто — не ждём или
+// старое устройство ещё не прислало challenge (v2: код появляется после него).
 QString HistoryLinkCode() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	return g_linkActive ? g_linkCode : QString();

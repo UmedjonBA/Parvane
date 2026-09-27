@@ -92,6 +92,7 @@ fun LoginScreen(vm: ParvaneViewModel) {
 fun ChatListScreen(vm: ParvaneViewModel) {
     var newChat by remember { mutableStateOf(false) }
     val error by vm.error
+    val serviceNotice by vm.serviceNotice
     val chats = vm.chats.values.sortedByDescending { it.positions.firstOrNull()?.order ?: 0L }
     Scaffold(
         topBar = {
@@ -112,6 +113,14 @@ fun ChatListScreen(vm: ParvaneViewModel) {
                 )
                 HorizontalDivider()
             }
+        }
+        serviceNotice?.let { notice ->
+            AlertDialog(
+                onDismissRequest = { vm.serviceNotice.value = null },
+                title = { Text("Parvane") },
+                text = { Text(notice) },
+                confirmButton = { TextButton({ vm.serviceNotice.value = null }) { Text("Понятно") } },
+            )
         }
         if (newChat) {
             var nick by remember { mutableStateOf("") }

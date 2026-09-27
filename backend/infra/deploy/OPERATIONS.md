@@ -75,6 +75,23 @@ basic_auth в Caddyfile (архив в README, раздел «Регистрац
 - Вручную: `~/parvane/backup.sh`
 - Проверить снимок: `docker run --rm -v ~/parvane/backups:/bak alpine sh -c 'apk add -q sqlite; sqlite3 /bak/messenger-<дата>.sqlite "PRAGMA integrity_check"'`
 
+## Ключи подписи (P-11)
+
+Ключ подписи JWT и приватный VAPID-ключ больше НЕ лежат в SQLite:
+
+- `/data/identity-jwt-ed25519.pem` — Ed25519 (PKCS#8 PEM, права 0600), задаётся
+  `PARVANE_JWT_KEY_FILE`; при первом старте новой версии старый HS256-секрет
+  переносится из `identity.db` в `/data/identity-jwt-ed25519.legacy-hs256` и
+  принимается ещё 24 ч (срок жизни выданных токенов), затем файл удаляется.
+- `/data/push-vapid-p256.pem` — VAPID (P-256, PKCS#8 PEM, 0600),
+  `PARVANE_VAPID_KEY_FILE`; при первом старте переносится из `push.db` (публичный
+  ключ тот же — подписки браузеров не теряются).
+
+Бэкапить эти файлы ОТДЕЛЬНО от БД и хранить не рядом с бэкапами SQLite:
+владелец файла подписывает JWT за любого пользователя. `scripts/backup_server_dbs.sh`
+ставит `umask 077` и при `PARVANE_BACKUP_AGE_RECIPIENT=age1…` шифрует снимки
+`age` (открытая копия удаляется).
+
 ## Восстановление из бэкапа
 ```bash
 D=2026-09-01                                # нужная дата
@@ -154,9 +171,66 @@ identity отказывает после `PARVANE_REGISTER_RATE_IP=30` реги�
 по логину). При прямом NATS (dev без gateway) поле пусто — лимит по IP не
 применяется.
 
+## Переменные окружения лимитов и защит (после ревью 2026-09-27)
+Все — необязательные, значения по умолчанию в скобках; задаются в `environment`
+соответствующего сервиса compose.
+
+| Переменная | Шард | Смысл |
+|---|---|---|
+| `PARVANE_HANDLER_CONCURRENCY` (32) | identity, cloud, preview, push | сколько обработчиков запросов работают параллельно (spawn под семафором, п. 4.5) |
+| `PARVANE_PREKEY_FETCH_RATE` (20) / `PARVANE_PREKEY_FETCH_DAILY` (200) | identity | фетчей prekey-бандла на пару запросивший→цель за минуту / за сутки (P-21) |
+| `PARVANE_PREKEY_REUSE_SECS` (600) | identity | окно, в котором повторный фетч той же пары отдаёт тот же one-time prekey (P-21) |
+| `PARVANE_REGISTER_RATE_IP` (30) / `PARVANE_LOGIN_RATE_IP` (120) | identity | лимиты по IP за минуту (P-43) |
+| `PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS` (256) | cloud | верхняя граница чанков одного download-запроса (P-28) |
+| `PARVANE_PREVIEW_RATE` (60) | preview | запросов превью и тайлов на пользователя за минуту (P-30, P-23) |
+| `PARVANE_PREVIEW_TILE_CACHE_MAX` (20000) | preview | кап кэша тайлов карты, старые выселяются (P-23) |
+| `PARVANE_PUSH_MAX_SUBSCRIPTIONS` (8) | push | web-push подписок на пользователя (P-17) |
+| `PARVANE_GROUP_MAX_MEMBERS` (200) | messenger | участников в группе (P-34) |
+| `PARVANE_GATEWAY_REVERIFY_SECS` (300) | gateway | период переверификации JWT открытой сессии (P-06) |
+| `PARVANE_GATEWAY_MAX_CONNS` / `PARVANE_GATEWAY_MAX_CONNS_PER_IP` | gateway | лимиты соединений (P-37) |
+| `PARVANE_GATEWAY_ORIGIN` | web build | origin gateway для `connect-src` в CSP (P-32); по умолчанию `'self'` |
+| `PARVANE_DEV=1` | identity | dev-режим: код подтверждения в лог, `identity.server.info` без ограничений — только в тестах |
+
+Ошибки клиенту (п. 4.10): SQLite/IO-ошибки уходят как `internal_error`, ошибки
+разбора JSON — `bad_request`; детали только в логах шарда.
+
 ## Сверка ключей безопасности
 Профиль собеседника → «Ключ безопасности»: отпечатки identity-ключей его
 устройств (SHA-256, 12 групп hex); Settings → Privacy → «Ваш ключ
 безопасности». Смена ключа известного контакта даёт локальное служебное
 сообщение в чате («Ключ безопасности … изменился»). Сверять голосом или по
 другому каналу — защита от подмены ключей на сервере.
+
+## Hardening контейнеров и тома на шард (P-31, P-50)
+
+- Образ `parvane-shards` запускает бинарники под пользователем `parvane`
+  (uid 10001), compose даёт `read_only`, `cap_drop: ALL`,
+  `no-new-privileges`, `tmpfs /tmp`. Запись — только в том `/data` шарда.
+- У каждого шарда **свой** том: `parvane_db-identity`, `parvane_db-messenger`,
+  `parvane_db-cloud`, `parvane_db-call`, `parvane_db-preview`, `parvane_db-push`
+  (раньше — общий `parvane_db`). RCE в preview больше не читает `identity.db`.
+- **Миграция с общего тома** (один раз, при остановленных шардах):
+
+  ```bash
+  docker compose stop identity messenger cloud call preview push
+  for s in identity messenger cloud call preview push; do
+    docker run --rm -v parvane_db:/old -v parvane_db-$s:/data alpine sh -c \
+      "cp -a /old/$s.db* /data/ 2>/dev/null; cp -a /old/$s-* /data/ 2>/dev/null; \
+       chown -R 10001:10001 /data"
+  done
+  docker compose up -d
+  ```
+
+  Ключи `identity-jwt-ed25519.pem` и `push-vapid-p256.pem` попадают в свои
+  тома тем же циклом (`/old/identity-*`, `/old/push-*`). Старый том удалять
+  только после проверки: `docker volume rm parvane_db`.
+- Команды из разделов выше с `-v parvane_db:/data` теперь выполняются с томом
+  конкретного шарда (`-v parvane_db-identity:/data` и т.п.).
+- Адрес, порт SSH и логин прод-сервера в `deploy.sh` больше не зашиты:
+  задайте `PARVANE_DEPLOY_SSH_DEST`, `PARVANE_DEPLOY_SSH_PORT`,
+  `PARVANE_DEPLOY_PUBLIC_HOST` (файл `backend/infra/deploy/.deploy.env`,
+  в `.gitignore`). В контейнер NATS уходят только его пароли, а не весь `.env`.
+- TURN (P-16): relay на loopback/приватные/link-local/multicast адреса
+  запрещён (`PermissionHandler` в `parvane-turn`, `denied-peer-ip` в
+  `coturn.conf`); статический пользователь TURN не заводится — только
+  краткоживущие креды по `PARVANE_TURN_SECRET`.

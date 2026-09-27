@@ -22,6 +22,9 @@
 #include "parvane/topics.h"
 #include "parvane/transport.h"
 
+// Пароль тестовых аккаунтов по политике сервера (P-43: не короче 8 символов).
+constexpr auto kTestPassword = "e2e-Test-pass-2026";
+
 using parvane::json;
 using parvane::MessengerClient;
 using parvane::StoredMessage;
@@ -53,7 +56,7 @@ static const StoredMessage *find(const std::vector<StoredMessage> &v,
 }
 
 static std::string issue(parvane::Transport &tr, const std::string &user) {
-    parvane::IssueRequest req{user, "test"};
+    parvane::IssueRequest req{user, kTestPassword};
     // register отделён от issue: сперва регистрируем (идемпотентно — если занято,
     // ответ игнорируем), затем логинимся.
     tr.request(parvane::topics::IdentityRegister, req.toJson().dump());
@@ -75,6 +78,38 @@ int main() {
               "contentText(media) → nullopt");
         check(parvane::contentKind(parvane::textContent("h")) == "text",
               "contentKind(text) == text");
+        // SEND-1 / P-10: строка подписи отправки и её место в payload
+        check(parvane::SendPayload::signedStatement("id-1", "ct-1") == "send:id-1:ct-1",
+              "SendPayload::signedStatement = send:<id>:<ciphertext>");
+        parvane::SendPayload sp;
+        sp.to = "bob@local";
+        sp.content = {{"kind", "encrypted"}, {"ciphertext", "ct-1"}, {"sender_signing_key", "k"}};
+        check(!sp.toJson().contains("signature"), "SendPayload без подписи → поля нет");
+        sp.signature = "sig";
+        check(sp.toJson().value("signature", "") == "sig", "SendPayload.signature уходит в JSON");
+        // signer вызывается со строкой send:<id>:<ciphertext> и id совпадает с возвращённым
+        struct CaptureTransport : parvane::ITransport {
+            std::string subject, body;
+            std::string request(const std::string &subject, const std::string &payload, std::int64_t) override { return "{}"; }
+            void publish(const std::string &s, const std::string &b) override { subject = s; body = b; }
+            void requestMany(const std::string &, const std::string &, const ReplyHandler &, std::int64_t) override {}
+            void subscribe(const std::string &, Handler) override {}
+        } capture;
+        parvane::MessengerClient captureClient(capture);
+        std::string signedStatement;
+        const auto id = captureClient.sendContent(
+            "", "bob@local", sp.content, "tok", std::nullopt, std::nullopt, json::array(),
+            [&](const std::string &st) { signedStatement = st; return std::string("SIG"); });
+        check(signedStatement == "send:" + id + ":ct-1", "sendContent: signer получает send:<id>:<ciphertext>");
+        const auto sent = json::parse(capture.body, nullptr, false);
+        check(capture.subject == parvane::topics::MsgSend && sent.is_object()
+                  && sent["payload"].value("signature", "") == "SIG",
+              "sendContent: подпись в payload.signature");
+        // P-05: ack без sender
+        captureClient.ack("bob@local", id, "tok", "alice@local");
+        const auto ack = json::parse(capture.body, nullptr, false);
+        check(ack.is_object() && ack["payload"].contains("message_id") && !ack["payload"].contains("sender"),
+              "ack: без поля sender");
         check(parvane::contentKind(media) == "photo",
               "contentKind(photo) == photo");
     }

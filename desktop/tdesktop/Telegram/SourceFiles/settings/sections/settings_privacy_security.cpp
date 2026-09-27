@@ -629,20 +629,52 @@ void BuildSecuritySection(
 			) | rpl::filter([=](bool toggled) {
 				return !twofa->busy && toggled != twofa->enabled.current();
 			}) | rpl::on_next([=](bool toggled) {
-				twofa->busy = true;
-				crl::async([=] {
-					auto state = Parvane::SetTwoFactor(toggled);
-					crl::on_main(weak, [=] {
-						apply(state);
-						if (!state.ok) {
-							// Откат тумблера + пояснение (напр. нет привязки)
-							twofa->enabled.force_assign(twofa->enabled.current());
-							controller->showToast(state.error.isEmpty()
-								? u"Не удалось изменить двухфакторный вход"_q
-								: state.error);
-						}
+				const auto run = [=](const QString &password) {
+					twofa->busy = true;
+					crl::async([=] {
+						auto state = Parvane::SetTwoFactor(toggled, password);
+						crl::on_main(weak, [=] {
+							apply(state);
+							if (!state.ok) {
+								// Откат тумблера + пояснение (напр. нет привязки)
+								twofa->enabled.force_assign(twofa->enabled.current());
+								controller->showToast(state.error.isEmpty()
+									? u"Не удалось изменить двухфакторный вход"_q
+									: state.error);
+							}
+						});
 					});
-				});
+				};
+				if (toggled) {
+					run(QString());
+					return;
+				}
+				// P-07: выключение 2FA — только с текущим паролем (украденный JWT
+				// второй фактор не снимает). Тот же password-box, что у копии ключей.
+				controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+					box->setTitle(rpl::single(u"Выключить двухфакторный вход"_q));
+					const auto field = Settings::CloudPassword::AddPasswordField(
+						box->verticalLayout(),
+						rpl::single(u"Текущий пароль"_q),
+						QString());
+					box->setFocusCallback([=] { field->setFocus(); });
+					const auto submit = [=] {
+						const auto value = field->getLastText();
+						if (value.isEmpty()) {
+							field->showError();
+							return;
+						}
+						box->closeBox();
+						run(value);
+					};
+					QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
+					box->addButton(rpl::single(u"Выключить"_q), submit);
+					box->addButton(tr::lng_cancel(), [=] {
+						// Отмена — тумблер обратно
+						twofa->enabled.force_assign(twofa->enabled.current());
+						box->closeBox();
+					});
+				}));
 			}, toggle->lifetime());
 		}
 	}

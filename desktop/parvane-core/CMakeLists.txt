@@ -52,6 +52,7 @@ add_library(parvane_core STATIC
     src/e2e.cpp
     src/linking.cpp
     src/blobcrypt.cpp
+    src/storecrypt.cpp
     src/keybackup.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
@@ -72,6 +73,14 @@ target_link_libraries(parvane_core
             ${PARVANE_E2E_LIB} pthread dl m)
 
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
+# P-45/P-46: dev-хуки (PARVANE_WSS_INSECURE, ws:// к gateway, PARVANE_AUTO* в
+# tdesktop) компилируются ТОЛЬКО с -DPARVANE_DEV=ON. В релизе их нет вовсе —
+# переменная окружения в прод-запуске не отключит проверку TLS.
+option(PARVANE_DEV "Compile dev/e2e hooks (insecure TLS, ws://, PARVANE_AUTO*)" OFF)
+if (PARVANE_DEV)
+    target_compile_definitions(parvane_core PUBLIC PARVANE_DEV=1)
+endif()
+
 option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe + tests" ON)
 if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_probe probe/main.cpp)
@@ -94,6 +103,9 @@ if (PARVANE_CORE_BUILD_PROBE)
 
     add_executable(parvane_blobcrypt_tests tests/blobcrypt_tests.cpp)
     target_link_libraries(parvane_blobcrypt_tests PRIVATE parvane_core)
+
+    add_executable(parvane_storecrypt_tests tests/storecrypt_tests.cpp)
+    target_link_libraries(parvane_storecrypt_tests PRIVATE parvane_core)
 
     add_executable(parvane_linking_tests tests/linking_tests.cpp)
     target_link_libraries(parvane_linking_tests PRIVATE parvane_core)
@@ -124,6 +136,8 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME call COMMAND parvane_call_tests)
     add_test(NAME crypto COMMAND parvane_crypto_tests)
     add_test(NAME linking COMMAND parvane_linking_tests)
+    add_test(NAME storecrypt COMMAND parvane_storecrypt_tests)
+    add_test(NAME blobcrypt COMMAND parvane_blobcrypt_tests)
     add_test(NAME e2e COMMAND parvane_e2e_tests)
     add_test(NAME call_session COMMAND parvane_call_session_tests)
     add_test(NAME call_manager COMMAND parvane_call_manager_tests)

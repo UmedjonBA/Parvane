@@ -136,11 +136,12 @@ impl Default for E2EAccount {
 
 impl E2ESession {
     /// Зашифровать. Возвращает (тип сообщения Olm: 0=prekey/1=normal, base64 шифртекста).
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> (u32, String) {
-        // encrypt даёт ошибку лишь при внутреннем сбое — это баг, не рантайм-путь.
-        let msg = self.0.encrypt(plaintext).expect("olm encrypt");
+    /// None — внутренний сбой vodozemac (P-47: раньше здесь был `expect`, и
+    /// паника разматывалась через `extern "C"` — abort клиента).
+    pub fn encrypt(&mut self, plaintext: &[u8]) -> Option<(u32, String)> {
+        let msg = self.0.encrypt(plaintext).ok()?;
         let (t, ct) = msg.to_parts();
-        (t as u32, base64_encode(ct))
+        Some((t as u32, base64_encode(ct)))
     }
 
     /// Расшифровать. None — не наша сессия / порча.
@@ -503,7 +504,8 @@ pub extern "C" fn parvane_e2e_encrypt(
     let Some(sess) = (unsafe { p.as_mut() }) else { return std::ptr::null_mut() };
     let Some(pt_b64) = (unsafe { cstr(plaintext_b64) }) else { return std::ptr::null_mut() };
     let Ok(pt) = base64_decode(&pt_b64) else { return std::ptr::null_mut() };
-    let (t, ct) = sess.encrypt(&pt);
+    // P-47: сбой шифрования → NULL, а не паника через FFI-границу
+    let Some((t, ct)) = sess.encrypt(&pt) else { return std::ptr::null_mut() };
     if !out_type.is_null() {
         unsafe { *out_type = t };
     }
@@ -648,7 +650,7 @@ mod tests {
         // Alice: исходящая сессия по бандлу + шифр.
         let alice = E2EAccount::new();
         let mut a = alice.outbound(&bob_id, &otk_b64).expect("outbound");
-        let (t, ct) = a.encrypt(b"secret-1");
+        let (t, ct) = a.encrypt(b"secret-1").expect("encrypt");
         assert_eq!(t, 0, "первое — pre-key");
 
         // Bob: входящая сессия + расшифровка.
@@ -656,7 +658,7 @@ mod tests {
         assert_eq!(pt, b"secret-1");
 
         // Ratchet: второе сообщение.
-        let (t2, ct2) = a.encrypt(b"secret-2");
+        let (t2, ct2) = a.encrypt(b"secret-2").unwrap();
         assert_eq!(b.decrypt(t2, &ct2).unwrap(), b"secret-2");
     }
 
@@ -668,7 +670,7 @@ mod tests {
         let bob_id = bob.identity_b64();
         let alice = E2EAccount::new();
         let mut a = alice.outbound(&bob_id, &otks[0].1).unwrap();
-        let (t1, c1) = a.encrypt(b"m1");
+        let (t1, c1) = a.encrypt(b"m1").unwrap();
         let (b, _pt) = bob.inbound(&alice.identity_b64(), t1, &c1).unwrap();
 
         // Сохраняем сессию B и восстанавливаем.
@@ -676,7 +678,7 @@ mod tests {
         let mut b2 = E2ESession::from_pickle_json(&pickle).expect("restore");
 
         // Второе сообщение расшифровывается ВОССТАНОВЛЕННОЙ сессией.
-        let (t2, c2) = a.encrypt(b"m2");
+        let (t2, c2) = a.encrypt(b"m2").unwrap();
         assert_eq!(b2.decrypt(t2, &c2).unwrap(), b"m2");
     }
 
@@ -691,12 +693,12 @@ mod tests {
         let bob_id = bob.identity_b64();
         let alice = E2EAccount::new();
         let mut a = alice.outbound(&bob_id, &otks[0].1).unwrap();
-        let (t1, c1) = a.encrypt(b"m1");
+        let (t1, c1) = a.encrypt(b"m1").unwrap();
         assert_eq!(t1, 0, "первое — pre-key");
         let (mut b, pt1) = bob.inbound(&alice.identity_b64(), t1, &c1).unwrap();
         assert_eq!(pt1, b"m1");
         // Второе — ТОЖЕ pre-key (bob не ответил).
-        let (t2, c2) = a.encrypt(b"m2");
+        let (t2, c2) = a.encrypt(b"m2").unwrap();
         assert_eq!(t2, 0, "второе тоже pre-key");
         // Расшифровать СУЩЕСТВУЮЩЕЙ сессией (а не новой inbound).
         let pt2 = b.decrypt(t2, &c2).expect("prekey расшифрован существующей сессией");

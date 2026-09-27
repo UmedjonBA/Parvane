@@ -1,5 +1,6 @@
 // Parvane fork: реализация group_call_manager.h.
 #include "parvane/group_call_manager.h"
+#include "parvane/topics.h"
 
 #include <utility>
 
@@ -9,7 +10,7 @@ namespace parvane {
 // инбокс call.user.gcall:<addr> и НЕ пересекались с 1-на-1 CallManager (иначе
 // per-pair инвайты группового звонка вызывали бы ложный «входящий звонок»).
 namespace {
-constexpr auto kGPrefix = "gcall:";
+constexpr auto kGPrefix = parvane::topics::GroupCallRoutePrefix;
 std::string gAddr(const std::string &a) { return std::string(kGPrefix) + a; }
 } // namespace
 

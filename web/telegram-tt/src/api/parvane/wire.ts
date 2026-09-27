@@ -148,6 +148,7 @@ export const TOPIC_IDENTITY_EMAIL_CONFIRM = 'identity.email.confirm';
 export const TOPIC_IDENTITY_SERVER_INFO = 'identity.server.info';
 export const TOPIC_IDENTITY_REGISTER_STATUS = 'identity.register.status';
 export const TOPIC_IDENTITY_TWOFA = 'identity.user.twofa';
+export const TOPIC_IDENTITY_PASSWORD_CHANGE = 'identity.password.change';
 export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
 export const TOPIC_IDENTITY_SEARCH = 'identity.user.search';
 export const TOPIC_IDENTITY_SETNAME = 'identity.user.setname';
@@ -160,6 +161,7 @@ export const TOPIC_DEVICE_REVOKE = 'identity.device.revoke';
 export const TOPIC_LINK_OFFER = 'identity.link.offer';
 export const TOPIC_LINK_POLL = 'identity.link.poll';
 export const TOPIC_LINK_GRANT = 'identity.link.grant';
+export const TOPIC_LINK_CHALLENGE = 'identity.link.challenge';
 export const TOPIC_MSG_SEND = 'msg.chat.send';
 export const TOPIC_MSG_ACK = 'msg.chat.ack';
 export const TOPIC_MSG_READ = 'msg.chat.read';
@@ -183,6 +185,7 @@ export const TOPIC_GROUP_BAN = 'group.ban';
 export const TOPIC_GROUP_UNBAN = 'group.unban';
 export const TOPIC_GROUP_MUTE = 'group.mute';
 export const TOPIC_GROUP_INVITE_CREATE = 'group.invite.create';
+export const TOPIC_GROUP_INVITE_REVOKE = 'group.invite.revoke';
 export const TOPIC_GROUP_JOIN = 'group.join';
 export const TOPIC_GROUP_SET_ROLE = 'group.setrole';
 export const TOPIC_GROUP_RENAME = 'group.rename';
@@ -217,12 +220,28 @@ export type WireCallRecord = {
 export function buildCallInboxTopic(user: string) {
   return `call.user.${user}`;
 }
+// Маршрут группового mesh-звонка в `to` сигнала (GROUP_CALL_ROUTE_PREFIX в parvane-types).
+export const GROUP_CALL_ROUTE_PREFIX = 'gcall:';
+export function buildGroupCallRoute(user: string) {
+  return `${GROUP_CALL_ROUTE_PREFIX}${user}`;
+}
 export const TOPIC_FILE_UPLOAD_CHUNK = 'file.upload.chunk';
 export const TOPIC_FILE_UPLOAD_COMPLETE = 'file.upload.complete';
 export const TOPIC_FILE_DOWNLOAD_REQUEST = 'file.download.request';
+export const TOPIC_FILE_DELETE = 'file.delete';
 
 export function buildMsgInboxTopic(user: string) {
   return `msg.user.${user}`;
+}
+
+// Эфемерные субъекты (P-18): зеркалят msg_typing()/presence() из parvane-types.
+export const TOPIC_MSG_TYPING_PREFIX = 'msg.typing.';
+export const TOPIC_PRESENCE_PREFIX = 'presence.';
+export function buildTypingTopic(id: string | number) {
+  return `${TOPIC_MSG_TYPING_PREFIX}${id}`;
+}
+export function buildPresenceTopic(id: string | number) {
+  return `${TOPIC_PRESENCE_PREFIX}${id}`;
 }
 
 export function buildWireEvent<T>(from: string, token: string, payload: T): WireEvent<T> {
