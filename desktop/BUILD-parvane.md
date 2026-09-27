@@ -41,6 +41,9 @@ export PATH="$HOME/.local/bin:$PATH"
 SR=~/.local/parvane-sysroot/usr
 cd desktop && git clone https://github.com/tdlib/td.git tde2e-src
 cd tde2e-src && git fetch --depth 1 origin 51743df && git checkout 51743df
+# Для e2e-скриптов verify_*.sh (PARVANE_AUTOLOGIN/AUTOSEND/…, PARVANE_WSS_INSECURE,
+# PARVANE_NATS_URL, ws:// к gateway) нужна dev-сборка: добавьте -DPARVANE_DEV=ON.
+# В релизной сборке этих хуков нет (P-45/P-46).
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_INSTALL_PREFIX="$SR" -DTD_E2E_ONLY=ON \
   -DGPERF_EXECUTABLE="$HOME/.local/bin/gperf" -DOPENSSL_ROOT_DIR=/usr

@@ -165,9 +165,14 @@ void GatewayWsTransport::tlsConnect(const std::string &host) {
         ERR_clear_error();
     }
     // Проверка сертификата: системные CA + имя хоста. PARVANE_WSS_INSECURE=1 —
-    // только для dev-стенда с самоподписанным сертификатом.
+    // только для dev-стенда с самоподписанным сертификатом и ТОЛЬКО в сборке с
+    // -DPARVANE_DEV=ON (P-45): в релизе переменная окружения проверку не отключит.
+#ifdef PARVANE_DEV
     const char *insecure = std::getenv("PARVANE_WSS_INSECURE");
     const bool verify = !(insecure && *insecure && std::strcmp(insecure, "0") != 0);
+#else
+    const bool verify = true;
+#endif
     SSL_CTX_set_verify(ctx_, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
     ssl_ = SSL_new(ctx_);
     if (!ssl_) throw GatewayError("gateway wss: SSL_new: " + sslError());

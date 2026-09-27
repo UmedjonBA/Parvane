@@ -480,8 +480,9 @@ void deliverStored(parvane::StoredMessage sm, bool live) {
     }
     g_seen.insert(sm.id);
     const auto text = sm.text();
-    LOGI("%s msg %s (%s): %s", out ? "своё" : "входящее", sm.id.c_str(), author.c_str(),
-         text ? text->c_str() : "[медиа]");
+    // P-46: в logcat — только id и вид; текст/автор в бэкрепорты не уходят.
+    LOGI("%s msg %s (%s)", out ? "своё" : "входящее", sm.id.c_str(),
+         text ? "text" : "media");
     emit(json{{"type", "message"}, {"id", sm.id}, {"from", author}, {"to", sm.to},
               {"ts", sm.ts}, {"text", text ? *text : ""}, {"out", out},
               {"kind", parvane::contentKind(sm.content)}, {"read", sm.read},
@@ -549,7 +550,7 @@ void startLinkOffer() {
     g_linkCode = code;
     g_linkStartedMs = nowMs();
     g_linkActive = true;
-    LOGI("линковка: оффер опубликован, код %s — подтвердите на другом устройстве", code.c_str());
+    LOGI("линковка: оффер опубликован — подтвердите код на другом устройстве"); // код в лог не пишем (P-46)
     emit(json{{"type", "link"}, {"state", "offered"}, {"code", code}});
 }
 void retractLinkOffer() {
@@ -689,7 +690,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
     g_gatewayUrl = jstr(env, gatewayUrl);
     g_storeDir = jstr(env, storeDir);
     loadSession();
-    LOGI("init: gateway=%s store=%s self=%s", g_gatewayUrl.c_str(), g_storeDir.c_str(), g_self.c_str());
+    LOGI("init: gateway=%s store=%s self=%s", g_gatewayUrl.c_str(), g_storeDir.c_str(), g_self.empty() ? "-" : "set");
 }
 
 // TdApi.Object/Function.toString() в бандле Telegram X объявлены native (жили
@@ -921,7 +922,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
             [](std::string, std::string payload) {
                 auto j = json::parse(payload, nullptr, false);
                 if (j.is_object() && j.value("from", "") != g_self) {
-                    LOGI("печатает: %s", j.value("from", "").c_str());
+                    LOGI("typing"); // адрес в лог не пишем (P-46)
                     emit(json{{"type", "typing"}, {"from", j.value("from", "")}, {"to", j.value("to", "")}});
                 }
             });
@@ -929,7 +930,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
             auto j = json::parse(payload, nullptr, false);
             if (j.is_object() && j.value("from", "") != g_self) {
                 static std::set<std::string> logged;
-                if (logged.insert(j.value("from", "")).second) LOGI("присутствие: %s онлайн", j.value("from", "").c_str());
+                if (logged.insert(j.value("from", "")).second) LOGI("присутствие: +1 онлайн"); // без адреса (P-46)
                 emit(json{{"type", "presence"}, {"from", j.value("from", "")}});
             }
         });

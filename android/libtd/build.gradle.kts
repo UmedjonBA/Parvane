@@ -30,6 +30,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // buildConfig — BuildConfig.DEBUG для dev-оверрайдов gateway (P-12)
+    buildFeatures { buildConfig = true }
 }
 
 dependencies {
