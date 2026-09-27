@@ -4,6 +4,7 @@
 // генерический «New message». SW клиента сам гасит пуш, если приложение открыто.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -44,8 +45,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./push.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url).await.context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
@@ -61,18 +62,98 @@ async fn main() -> Result<()> {
     let mut inbox_sub = nc.subscribe(MSG_USER_WILDCARD).await?;
     info!("Push шард запущен. Слушаю: {}/{}/{} + {}", PUSH_VAPID_GET, PUSH_REGISTER, PUSH_UNREGISTER, MSG_USER_WILDCARD);
 
-    let push_client = IsahcWebPushClient::new().context("web-push клиент")?;
-    let mut last_push_at: HashMap<String, Instant> = HashMap::new();
+    let push_client = Arc::new(IsahcWebPushClient::new().context("web-push клиент")?);
+    let vapid = Arc::new(vapid);
+    let last_push_at: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
+    // 4.5/P-17: отправка web-push (внешние POST) — в tokio::spawn под семафором,
+    // отдельно от register/unregister: медленный push-сервис не стопорит шард.
+    let handlers = Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
     loop {
+        let permit = handlers.clone().acquire_owned().await;
         tokio::select! {
-            Some(msg) = vapid_sub.next() => handle_vapid_get(&nc, &vapid, msg).await,
-            Some(msg) = register_sub.next() => handle_register(&nc, &pool, msg).await,
-            Some(msg) = unregister_sub.next() => handle_unregister(&nc, &pool, msg).await,
+            Some(msg) = vapid_sub.next() => {
+                let (nc2, vapid2) = (nc.clone(), vapid.clone());
+                tokio::spawn(async move { let _p = permit; handle_vapid_get(&nc2, &vapid2, msg).await });
+            }
+            Some(msg) = register_sub.next() => {
+                let (nc2, pool2) = (nc.clone(), pool.clone());
+                tokio::spawn(async move { let _p = permit; handle_register(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = unregister_sub.next() => {
+                let (nc2, pool2) = (nc.clone(), pool.clone());
+                tokio::spawn(async move { let _p = permit; handle_unregister(&nc2, &pool2, msg).await });
+            }
             Some(msg) = inbox_sub.next() => {
-                handle_inbox(&pool, &push_client, &vapid, &mut last_push_at, msg).await;
+                let (pool2, client2, vapid2, last2) = (pool.clone(), push_client.clone(), vapid.clone(), last_push_at.clone());
+                tokio::spawn(async move { let _p = permit; handle_inbox(&pool2, &client2, &vapid2, &last2, msg).await });
             }
         }
+    }
+}
+
+/// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 32).
+fn handler_concurrency() -> usize {
+    std::env::var("PARVANE_HANDLER_CONCURRENCY").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(32)
+}
+
+/// P-17: максимум подписок на пользователя (PARVANE_PUSH_MAX_SUBSCRIPTIONS,
+/// по умолчанию 8) — иначе тысячи endpoint'ов на аккаунт превращали бы каждое
+/// входящее в N внешних POST'ов (амплификация).
+fn max_subscriptions_per_user() -> i64 {
+    std::env::var("PARVANE_PUSH_MAX_SUBSCRIPTIONS").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(8)
+}
+
+/// P-17: endpoint web-push — только https:// на публичный хост: без userinfo,
+/// не IP-литерал приватного/loopback/link-local диапазона, не localhost.
+/// (DNS-rebinding после проверки остаётся вне модели — push-сервисы браузеров
+/// это публичные HTTPS-хосты.)
+fn endpoint_is_public_https(endpoint: &str) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else { return false };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let Some(host) = url.host_str() else { return false };
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") || host.ends_with(".local") || !host.contains('.') && host.parse::<std::net::IpAddr>().is_err() {
+        return false;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip_is_public(&ip);
+    }
+    true
+}
+
+fn ip_is_public(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
+                || v4.is_broadcast() || v4.is_documentation() || v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
+                || v4.octets()[0] == 0 || v4.octets()[0] >= 224)
+        }
+        std::net::IpAddr::V6(v6) => {
+            !(v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 || v6.to_ipv4_mapped().is_some_and(|v4| !ip_is_public(&std::net::IpAddr::V4(v4))))
+        }
+    }
+}
+
+/// P-17: резолв хоста endpoint'а при регистрации — все адреса обязаны быть
+/// публичными (SSRF во внутреннюю сеть через подписку).
+async fn endpoint_resolves_public(endpoint: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(endpoint) else { return false };
+    let Some(host) = parsed.host_str().map(str::to_string) else { return false };
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true; // литерал уже проверен endpoint_is_public_https
+    }
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    drop(parsed);
+    match tokio::time::timeout(Duration::from_secs(5), tokio::net::lookup_host((host, port))).await {
+        Ok(Ok(addrs)) => {
+            let addrs: Vec<_> = addrs.collect();
+            !addrs.is_empty() && addrs.iter().all(|a| ip_is_public(&a.ip()))
+        }
+        _ => false,
     }
 }
 
@@ -205,8 +286,29 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         let req: PushRegisterRequest =
             serde_json::from_slice(&msg.payload).context("JSON push.device.register")?;
         let user = verify_token(nc, &req.token).await?;
+        // P-17: endpoint — только публичный https, число подписок ограничено
+        if !endpoint_is_public_https(&req.subscription.endpoint) {
+            anyhow::bail!("endpoint должен быть публичным https-адресом");
+        }
+        if !endpoint_resolves_public(&req.subscription.endpoint).await {
+            anyhow::bail!("хост endpoint не резолвится в публичный адрес");
+        }
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
         let subscription_json = serde_json::to_string(&req.subscription)?;
+        // Кап подписок: при переполнении удаляем самые старые
+        let max = max_subscriptions_per_user();
+        sqlx::query(
+            "DELETE FROM push_subscriptions WHERE user = ? AND endpoint <> ? AND rowid NOT IN (
+                SELECT rowid FROM push_subscriptions WHERE user = ? AND endpoint <> ?
+                ORDER BY created_at DESC LIMIT ?)",
+        )
+        .bind(&user)
+        .bind(&req.subscription.endpoint)
+        .bind(&user)
+        .bind(&req.subscription.endpoint)
+        .bind(max - 1)
+        .execute(pool)
+        .await?;
         sqlx::query(
             "INSERT INTO push_subscriptions (endpoint, user, subscription_json, created_at)
              VALUES (?, ?, ?, ?)
@@ -271,16 +373,22 @@ async fn handle_inbox(
     pool: &SqlitePool,
     push_client: &IsahcWebPushClient,
     vapid: &VapidKeys,
-    last_push_at: &mut HashMap<String, Instant>,
+    last_push_at: &Mutex<HashMap<String, Instant>>,
     msg: async_nats::Message,
 ) {
     // Субъект вида msg.user.<адрес>; сам payload — sealed, не разбираем
     let Some(user) = msg.subject.strip_prefix("msg.user.") else { return };
     let user = user.to_string();
 
-    if let Some(last) = last_push_at.get(&user) {
-        if last.elapsed() < Duration::from_secs(PUSH_COOLDOWN_SECS) {
-            return;
+    {
+        let mut guard = last_push_at.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() > 50_000 {
+            guard.retain(|_, t| t.elapsed() < Duration::from_secs(PUSH_COOLDOWN_SECS));
+        }
+        if let Some(last) = guard.get(&user) {
+            if last.elapsed() < Duration::from_secs(PUSH_COOLDOWN_SECS) {
+                return;
+            }
         }
     }
 
@@ -300,7 +408,7 @@ async fn handle_inbox(
     if rows.is_empty() {
         return;
     }
-    last_push_at.insert(user.clone(), Instant::now());
+    last_push_at.lock().unwrap_or_else(|e| e.into_inner()).insert(user.clone(), Instant::now());
 
     for row in rows {
         let endpoint: String = row.get("endpoint");
@@ -354,6 +462,34 @@ fn build_push_message(
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    // P-17: endpoint — только публичный https без userinfo и приватных IP
+    #[test]
+    fn endpoint_validation_rejects_ssrf_targets() {
+        assert!(endpoint_is_public_https("https://fcm.googleapis.com/fcm/send/abc"));
+        assert!(endpoint_is_public_https("https://updates.push.services.mozilla.com/wpush/v2/x"));
+        assert!(endpoint_is_public_https("https://8.8.8.8/push"));
+        for bad in [
+            "http://fcm.googleapis.com/fcm/send/abc",
+            "https://user:pw@fcm.googleapis.com/x",
+            "https://localhost/x",
+            "https://127.0.0.1/x",
+            "https://10.0.0.5/x",
+            "https://192.168.1.1/x",
+            "https://172.16.0.1/x",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/x",
+            "https://[fd00::1]/x",
+            "https://[::ffff:10.0.0.1]/x",
+            "https://push.local/x",
+            "https://gateway/x",
+            "ftp://x.example/x",
+            "not a url",
+        ] {
+            assert!(!endpoint_is_public_https(bad), "{bad}");
+        }
+        assert!(max_subscriptions_per_user() >= 1);
+    }
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();

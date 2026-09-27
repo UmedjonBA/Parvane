@@ -8,7 +8,9 @@ name = "push"
 path = "src/main.rs"
 
 [dependencies]
+url = "2"
 parvane-types = { path = "../../shared/parvane-types" }
+parvane-db = { path = "../../shared/parvane-db" }
 tokio = { workspace = true }
 async-nats = { workspace = true }
 serde = { workspace = true }

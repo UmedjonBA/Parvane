@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "shared/parvane-types",
     "shared/parvane-e2e",
+    "shared/parvane-db",
     "shards/identity",
     "shards/messenger",
     "shards/cloud",

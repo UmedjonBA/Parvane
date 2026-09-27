@@ -82,6 +82,7 @@ inline constexpr auto GroupBan = "group.ban";
 inline constexpr auto GroupUnban = "group.unban";
 inline constexpr auto GroupMute = "group.mute";
 inline constexpr auto GroupInviteCreate = "group.invite.create";
+inline constexpr auto GroupInviteRevoke = "group.invite.revoke";
 inline constexpr auto GroupJoin = "group.join";
 inline constexpr auto GroupInfo = "group.info";
 inline constexpr auto GroupRename = "group.rename";

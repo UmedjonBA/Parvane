@@ -185,6 +185,7 @@ export const TOPIC_GROUP_BAN = 'group.ban';
 export const TOPIC_GROUP_UNBAN = 'group.unban';
 export const TOPIC_GROUP_MUTE = 'group.mute';
 export const TOPIC_GROUP_INVITE_CREATE = 'group.invite.create';
+export const TOPIC_GROUP_INVITE_REVOKE = 'group.invite.revoke';
 export const TOPIC_GROUP_JOIN = 'group.join';
 export const TOPIC_GROUP_SET_ROLE = 'group.setrole';
 export const TOPIC_GROUP_RENAME = 'group.rename';

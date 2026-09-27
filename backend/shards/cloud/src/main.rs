@@ -35,10 +35,8 @@ async fn main() -> Result<()> {
         std::env::var("PARVANE_NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./cloud.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url)
-        .await
-        .context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -86,15 +84,43 @@ async fn main() -> Result<()> {
         });
     }
 
+    // 4.5/P-28: обработчики — в tokio::spawn под семафором: длинный download
+    // одного клиента не стопорит чанки/списки остальных. Гонки chunk/complete
+    // нет: клиент дожидается ack каждого чанка до отправки complete.
+    let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
     loop {
+        let (nc2, pool2) = (nc.clone(), pool.clone());
+        let permit = handlers.clone().acquire_owned().await;
         tokio::select! {
-            Some(msg) = chunk_sub.next() => handle_chunk(&nc, &pool, msg).await,
-            Some(msg) = complete_sub.next() => handle_complete(&nc, &pool, msg).await,
-            Some(msg) = download_sub.next() => handle_download(&nc, &pool, msg).await,
-            Some(msg) = list_sub.next() => handle_list(&nc, &pool, msg).await,
-            Some(msg) = delete_sub.next() => handle_delete(&nc, &pool, msg).await,
+            Some(msg) = chunk_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_chunk(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = complete_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_complete(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = download_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_download(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = list_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_list(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = delete_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_delete(&nc2, &pool2, msg).await });
+            }
         }
     }
+}
+
+/// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 32).
+fn handler_concurrency() -> usize {
+    env_usize("PARVANE_HANDLER_CONCURRENCY", 32)
+}
+
+/// P-28: максимум чанков за один download (окно range-стриминга). Целый файл
+/// в 512 МиБ больше не поднимается в память: чанки читаются и отдаются по
+/// одному, а клиент запрашивает окнами.
+fn max_download_chunks() -> u32 {
+    env_usize("PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS", 256) as u32
 }
 
 // ── auth helper ───────────────────────────────────────────────────────────────
@@ -361,6 +387,7 @@ async fn finalize_file(
 }
 
 /// Собранный файл для отдачи: метаданные + все чанки по порядку.
+#[cfg(test)]
 struct LoadedFile {
     filename: String,
     mime_type: String,
@@ -371,6 +398,7 @@ struct LoadedFile {
 }
 
 /// Загрузить файл целиком из БД. `None` — файла нет.
+#[cfg(test)]
 async fn load_file_for_user(
     pool: &SqlitePool,
     file_id: &str,
@@ -379,8 +407,47 @@ async fn load_file_for_user(
     load_file_range_for_user(pool, file_id, user, None).await
 }
 
+/// Метаданные файла без чанков (ACL — как у целого файла). P-28: download
+/// читает чанки по одному, не поднимая файл целиком.
+struct FileMeta {
+    filename: String,
+    mime_type: String,
+    size_bytes: i64,
+    total_chunks: i64,
+    chunk_bytes: i64,
+}
+
+async fn file_meta_for_user(pool: &SqlitePool, file_id: &str, user: &str) -> Result<Option<FileMeta>> {
+    let meta: Option<(String, String, i64, i64)> = sqlx::query_as(
+        "SELECT f.filename, f.mime_type, f.size_bytes, f.total_chunks
+         FROM files f
+         WHERE f.id = ? AND (
+           f.owner = ? OR EXISTS (
+             SELECT 1 FROM file_grants g
+             WHERE g.file_id = f.id AND (g.principal = ? OR g.principal = '*')
+           )
+         )",
+    )
+    .bind(file_id)
+    .bind(user)
+    .bind(user)
+    .fetch_optional(pool)
+    .await?;
+    let Some((filename, mime_type, size_bytes, total_chunks)) = meta else {
+        return Ok(None);
+    };
+    let chunk_bytes: Option<i64> = sqlx::query_scalar(
+        "SELECT length(data) FROM chunks WHERE file_id = ? AND chunk_index = 0",
+    )
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(Some(FileMeta { filename, mime_type, size_bytes, total_chunks, chunk_bytes: chunk_bytes.unwrap_or(0) }))
+}
+
 /// Загрузить файл или диапазон его чанков (включительно) — range-стриминг
 /// видео: клиент просит только нужное окно. ACL — как у целого файла.
+#[cfg(test)]
 async fn load_file_range_for_user(
     pool: &SqlitePool,
     file_id: &str,
@@ -571,29 +638,47 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             (Some(from), None) => Some((from, from)),
             _ => None,
         };
-        let file = load_file_range_for_user(pool, &file_id, &user, range)
+        let meta = file_meta_for_user(pool, &file_id, &user)
             .await?
             .ok_or_else(|| anyhow::anyhow!("файл не найден или доступ запрещён"))?;
+        let total = meta.total_chunks.max(0) as u32;
+        // P-28: диапазон ограничен окном; целый файл — не более окна за запрос
+        let (from, to) = match range {
+            Some((from, to)) => (from, to.max(from)),
+            None => (0, total.saturating_sub(1)),
+        };
+        let to = to.min(total.saturating_sub(1)).min(from.saturating_add(max_download_chunks() - 1));
 
-        // Шлём чанки последовательно через reply-топик
-        for (idx, data) in &file.chunks {
+        // Шлём чанки по одному через reply-топик, читая каждый из БД отдельно —
+        // память ограничена одним чанком, а не размером файла
+        let mut sent = 0u32;
+        for idx in from..=to {
+            let data: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT data FROM chunks WHERE file_id = ? AND chunk_index = ?",
+            )
+            .bind(&file_id)
+            .bind(idx as i64)
+            .fetch_optional(pool)
+            .await?;
+            let Some(data) = data else { continue };
             let resp = DownloadResponse {
                 ok: true,
                 file_id: Some(event.payload.file_id),
-                filename: Some(file.filename.clone()),
-                mime_type: Some(file.mime_type.clone()),
-                chunk_index: Some(*idx as u32),
-                total_chunks: Some(file.total_chunks as u32),
-                data: Some(B64.encode(data)),
+                filename: Some(meta.filename.clone()),
+                mime_type: Some(meta.mime_type.clone()),
+                chunk_index: Some(idx),
+                total_chunks: Some(total),
+                data: Some(B64.encode(&data)),
                 error: None,
-                size_bytes: Some(file.size_bytes),
-                chunk_bytes: Some(file.chunk_bytes as u32),
+                size_bytes: Some(meta.size_bytes),
+                chunk_bytes: Some(meta.chunk_bytes as u32),
             };
             nc.publish(reply.clone(), serde_json::to_vec(&resp)?.into())
                 .await?;
+            sent += 1;
         }
 
-        debug!("Файл отдан: {} чанков", file.total_chunks);
+        debug!("Файл отдан: {} чанков ({}..={} из {})", sent, from, to, total);
         anyhow::Ok(())
     }
     .await;
@@ -886,6 +971,10 @@ mod tests {
         assert_eq!(part.total_chunks, 3);
         assert!(load_file_range_for_user(&pool, &id.to_string(), "mallory@evil", Some((0, 0)))
             .await.unwrap().is_none(), "range не обходит ACL");
+        // P-28: метаданные тоже под ACL, окно download ограничено
+        assert!(file_meta_for_user(&pool, &id.to_string(), "mallory@local").await.unwrap().is_none());
+        assert!(file_meta_for_user(&pool, &id.to_string(), "alice@local").await.unwrap().is_some());
+        assert!(max_download_chunks() >= 1 && max_download_chunks() <= 4096);
     }
 
     #[tokio::test]

@@ -370,6 +370,15 @@ fn client_ip_from(peer: Option<IpAddr>, forwarded: Option<&str>) -> String {
 /// Bootstrap-запросы (регистрация/логин) идут до auth, поэтому identity не знает
 /// источник; подмешиваем `client_ip` в JSON-объект payload (поле клиента, если
 /// он его прислал, перезаписывается — подделать нельзя).
+/// P-33: потолок подписок на одну сессию.
+const MAX_SUBS_PER_SESSION: usize = 64;
+/// P-33: клиентский timeout_ms ограничен 30 с — иначе висящие reqmany/req
+/// держали бы задачи и inbox'ы NATS неограниченно.
+const MAX_TIMEOUT_MS: u64 = 30_000;
+fn clamp_timeout(timeout_ms: u64) -> u64 {
+    timeout_ms.clamp(100, MAX_TIMEOUT_MS)
+}
+
 fn inject_client_ip(payload: &str, client_ip: &str) -> String {
     if client_ip.is_empty() {
         return payload.to_string();
@@ -448,7 +457,7 @@ async fn serve(
                         v["id"].as_str().unwrap_or("").to_string(),
                         subject,
                         payload,
-                        v["timeout_ms"].as_u64().unwrap_or(3000),
+                        clamp_timeout(v["timeout_ms"].as_u64().unwrap_or(3000)),
                     );
                 } else {
                     let _ = tx.send(err_frame(v["id"].as_str(), "нужна авторизация")).await;
@@ -462,6 +471,8 @@ async fn serve(
     info!("Клиент авторизован: {}", user);
 
     let mut subs: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+    let mut sub_subjects: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // 2) основной цикл
     let mut rate = SessionRate::from_env();
@@ -523,7 +534,7 @@ async fn serve(
             "req" => {
                 let id = v["id"].as_str().unwrap_or("").to_string();
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                let timeout = v["timeout_ms"].as_u64().unwrap_or(3000);
+                let timeout = clamp_timeout(v["timeout_ms"].as_u64().unwrap_or(3000));
                 if !allowed_req(&user, &subject) {
                     let _ = tx.send(err_frame(Some(&id), "request запрещён")).await;
                     continue;
@@ -561,7 +572,7 @@ async fn serve(
             "reqmany" => {
                 let id = v["id"].as_str().unwrap_or("").to_string();
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                let timeout = v["timeout_ms"].as_u64().unwrap_or(5000);
+                let timeout = clamp_timeout(v["timeout_ms"].as_u64().unwrap_or(5000));
                 if !allowed_req(&user, &subject) {
                     let _ = tx.send(err_frame(Some(&id), "request запрещён")).await;
                     continue;
@@ -594,6 +605,15 @@ async fn serve(
             }
             "sub" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
+                // P-33: дедуп и кап подписок на сессию — тысячи sub'ов
+                // раздували память gateway/NATS
+                if sub_subjects.contains(&subject) {
+                    continue;
+                }
+                if sub_subjects.len() >= MAX_SUBS_PER_SESSION {
+                    let _ = tx.send(err_frame(None, "слишком много подписок на сессию")).await;
+                    continue;
+                }
                 let allowed = allowed_sub(&user, &subject)
                     || (subject.starts_with("msg.typing.")
                         && group_typing_allowed(&nats, &auth_token, &subject).await);
@@ -601,8 +621,9 @@ async fn serve(
                     let _ = tx.send(err_frame(None, "подписка на чужой/запрещённый subject")).await;
                     continue;
                 }
-                match nats.subscribe(subject).await {
+                match nats.subscribe(subject.clone()).await {
                     Ok(mut sub) => {
+                        sub_subjects.insert(subject);
                         let tx2 = tx.clone();
                         subs.push(tokio::spawn(async move {
                             while let Some(m) = sub.next().await {
@@ -645,14 +666,10 @@ async fn reqmany(
     let mut sub = nats.subscribe(inbox.clone()).await?;
     nats.publish_with_reply(subject, inbox, payload.into()).await?;
     let per = Duration::from_millis(timeout_ms);
-    loop {
-        match tokio::time::timeout(per, sub.next()).await {
-            Ok(Some(m)) => {
-                let p = String::from_utf8_lossy(&m.payload).to_string();
-                let _ = tx.send(json!({"op":"reply","id":id,"payload":p}).to_string()).await;
-            }
-            _ => break, // тишина/конец — завершаем (reply_end шлёт вызывающий)
-        }
+    // тишина/конец — завершаем (reply_end шлёт вызывающий)
+    while let Ok(Some(m)) = tokio::time::timeout(per, sub.next()).await {
+        let p = String::from_utf8_lossy(&m.payload).to_string();
+        let _ = tx.send(json!({"op":"reply","id":id,"payload":p}).to_string()).await;
     }
     Ok(())
 }
@@ -905,6 +922,14 @@ mod tests {
         assert_eq!(client_ip_from(proxy, Some("garbage")), "172.18.0.2");
         assert_eq!(client_ip_from(public, Some("198.51.100.9")), "203.0.113.7", "XFF от публичного пира — подделка");
         assert_eq!(client_ip_from(None, Some("198.51.100.9")), "");
+    }
+
+    #[test]
+    fn timeouts_are_clamped_and_sub_cap_is_sane() {
+        assert_eq!(clamp_timeout(0), 100);
+        assert_eq!(clamp_timeout(3000), 3000);
+        assert_eq!(clamp_timeout(u64::MAX), MAX_TIMEOUT_MS);
+        assert!(MAX_SUBS_PER_SESSION >= 16 && MAX_SUBS_PER_SESSION <= 256);
     }
 
     #[test]

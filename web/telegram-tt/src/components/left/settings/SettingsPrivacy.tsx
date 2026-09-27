@@ -204,6 +204,17 @@ const SettingsPrivacy = ({
     }
   });
 
+  // P-34: согласие на добавление в группы (сервер отклоняет add без него)
+  const [allowGroupAdd, setAllowGroupAdd] = useState(true);
+  useEffect(() => {
+    void (callParvane('parvaneGetGroupAddPolicy', {}) as Promise<{ policy: string } | undefined>)
+      .then((state) => setAllowGroupAdd(state?.policy !== 'nobody'));
+  }, []);
+  const handleGroupAddChange = useLastCallback((allowed: boolean) => {
+    setAllowGroupAdd(allowed);
+    void callParvane('parvaneSetGroupAddPolicy', { policy: allowed ? 'anyone' : 'nobody' });
+  });
+
   // P-39: опциональный PIN хранилища (E2E-ключи + сохранённая сессия).
   const [storagePin, setStoragePin] = useState('');
   const [storagePinRepeat, setStoragePinRepeat] = useState('');
@@ -371,6 +382,19 @@ const SettingsPrivacy = ({
             {oldLang('ParvaneChangePasswordButton')}
           </Button>
         </div>
+      </Island>
+
+      {/* Parvane: кто может добавлять меня в группы (P-34) */}
+      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+        {oldLang('ParvaneGroupAddTitle')}
+      </IslandTitle>
+      <Island>
+        <Checkbox
+          label={oldLang('ParvaneGroupAddToggle')}
+          subLabel={oldLang('ParvaneGroupAddInfo')}
+          checked={allowGroupAdd}
+          onCheck={handleGroupAddChange}
+        />
       </Island>
 
       {/* Parvane: PIN хранилища E2E-ключей и сессии (P-39) */}

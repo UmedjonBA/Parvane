@@ -16,7 +16,7 @@ use parvane_types::{
     topics::{IDENTITY_VERIFY, PREVIEW_FETCH, PREVIEW_MAP_TILE},
 };
 use sqlx::SqlitePool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 // Лимиты (согласованы с desktop-эталоном parvane_client.cpp)
 const MAX_REDIRECTS: u8 = 3;
@@ -52,8 +52,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./preview.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url).await.context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
@@ -64,12 +64,56 @@ async fn main() -> Result<()> {
     let mut tile_sub = nc.subscribe(PREVIEW_MAP_TILE).await?;
     info!("Preview шард запущен. Слушаю: {}, {}", PREVIEW_FETCH, PREVIEW_MAP_TILE);
 
+    // 4.5/P-30: обработчики в tokio::spawn под семафором + общий дедлайн на
+    // запрос — медленный сайт с редиректами не блокирует превью остальных.
+    let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
     loop {
+        let (nc2, pool2) = (nc.clone(), pool.clone());
+        let permit = handlers.clone().acquire_owned().await;
         tokio::select! {
-            Some(msg) = fetch_sub.next() => handle_fetch(&nc, &pool, msg).await,
-            Some(msg) = tile_sub.next() => handle_map_tile(&nc, &pool, msg).await,
+            Some(msg) = fetch_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_fetch(&nc2, &pool2, msg).await });
+            }
+            Some(msg) = tile_sub.next() => {
+                tokio::spawn(async move { let _p = permit; handle_map_tile(&nc2, &pool2, msg).await });
+            }
         }
     }
+}
+
+/// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 16).
+fn handler_concurrency() -> usize {
+    std::env::var("PARVANE_HANDLER_CONCURRENCY").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(16)
+}
+
+/// P-30: общий дедлайн на превью/тайл (все хопы вместе), мс.
+const REQUEST_DEADLINE_MS: u64 = 12_000;
+
+/// P-30: per-user лимит запросов превью/тайлов (PARVANE_PREVIEW_RATE, по
+/// умолчанию 60 за 60 с). Ключи длиннее 128 символов сворачиваются, пустые
+/// корзины выселяются.
+fn preview_rate_ok(user: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static L: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    let limit = std::env::var("PARVANE_PREVIEW_RATE").ok().and_then(|v| v.parse().ok()).unwrap_or(60usize);
+    let now = now_unix();
+    let map = L.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() >= 50_000 {
+        guard.retain(|_, hits| {
+            hits.retain(|&t| now - t < 60);
+            !hits.is_empty()
+        });
+    }
+    let key = if user.len() > 128 { user[..128].to_string() } else { user.to_string() };
+    let hits = guard.entry(key).or_default();
+    hits.retain(|&t| now - t < 60);
+    if hits.len() >= limit {
+        return false;
+    }
+    hits.push(now);
+    true
 }
 
 async fn verify_token(nc: &Client, token: &str) -> Result<String> {
@@ -98,9 +142,19 @@ async fn handle_fetch(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         // Токен — в конверте (его подставляет gateway), url — в payload
         let event: ParvaneEvent<PreviewFetchRequest> =
             serde_json::from_slice(&msg.payload).context("неверный JSON preview.link.fetch")?;
-        let _user = verify_token(nc, &event.token).await?;
-        info!("preview fetch: {}", event.payload.url);
-        anyhow::Ok(resolve_preview(pool, &event.payload.url).await)
+        let user = verify_token(nc, &event.token).await?;
+        if !preview_rate_ok(&user) {
+            anyhow::bail!("слишком много запросов превью");
+        }
+        // P-42: URL в лог не пишем (это содержимое переписки)
+        debug!("preview fetch для {}", user);
+        let preview = tokio::time::timeout(
+            Duration::from_millis(REQUEST_DEADLINE_MS),
+            resolve_preview(pool, &event.payload.url),
+        )
+        .await
+        .context("превью не уложилось в дедлайн")?;
+        anyhow::Ok(preview)
     }
     .await
     .unwrap_or_else(|e| PreviewFetchResponse {
