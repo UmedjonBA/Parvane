@@ -77,6 +77,39 @@ desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 
 - web: `useModuleLoader` ловит отказ импорта, `moduleLoader` не кэширует
   отвергнутый промис, устаревший чанк лечится одноразовой перезагрузкой.
 
+## E2E-1. Автор берётся из провода, SKDM — из identity конверта, неподтверждённое не показывается
+
+Автор E2E-сообщения определяется ТОЛЬКО так:
+
+- **1-на-1 (Olm, sealed)** — реальный отправитель внутри шифртекста (`inner.from`),
+  и он обязан быть подтверждён: `sender_identity` конверта принадлежит этому
+  адресу по каталогу устройств (`verifySender`).
+- **Группа (Megolm)** — автор ВСЕГДА wire `from` (его ставит gateway из
+  авторизованной сессии). `inner.from` из Megolm-plaintext НЕ используется как
+  автор: его контролирует отправитель, иначе любой участник выдаёт себя за
+  другого (находка P-02).
+
+Канонический Megolm-plaintext — ГОЛЫЙ `content` (объект `MessageContent`).
+Старые клиенты слали обёртку `{from, content}`; приём обязан принимать обе
+формы, но `from` из неё игнорировать. Отправка — только голый `content`.
+
+SKDM (раздача ключа группы) принимается ТОЛЬКО если `sender_identity` внутри
+SKDM совпадает с identity Olm-конверта, реально расшифровавшего сообщение —
+иначе участник затирал бы Megolm-канал другого, назвав его identity (P-02).
+
+Вердикт `unknown` (каталог отправителя недоступен, подтвердить нельзя):
+сообщение НЕ показывать и НЕ подтверждать (`ack`) — оставить нерасшифрованным,
+sync повторит позже; дисковый курсор при этом не двигать (SYNC-1). Ранее
+такое сообщение показывалось без подтверждения — окно для спуфа при
+недоступном identity-шарде (P-26).
+
+Реализации: web `api/parvane/sync.ts` (`unwrapMegolmContent`, ветка `unknown` в
+`applyStoredUpdateUnserialized`); desktop `parvane-core` `groupSeal` (голый
+content) + `parvane_client.cpp` `prepareIncoming`/`injectOnMain`; android
+`jni/parvane_jni.cpp` (`deliverStored`). Тесты: web `conformance.test.ts`
+(`E2E-1`), desktop `parvane-core/tests/e2e_tests.cpp` (голый content), android
+`libtd/src/test`.
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в

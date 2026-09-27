@@ -222,8 +222,15 @@ int main() {
     const auto genc = json::parse(e2e::groupSeal("g1", content, epoch));
     check(genc.value("sender_signing_key", "") == e2e::signingKey(), "group_encrypted + signing key");
     e2e::groupAcceptKey("g1", bob2.identity, skey, 7); // чужая входящая (тот же ключ — для теста)
-    check(!e2e::groupOpen("g1", bob2.identity, genc["ciphertext"]).empty(),
-          "groupOpen по принятому ключу");
+    const auto gplain = e2e::groupOpen("g1", bob2.identity, genc["ciphertext"]);
+    check(!gplain.empty(), "groupOpen по принятому ключу");
+    // E2E-1: Megolm-plaintext — ГОЛЫЙ content (kind внутри), без обёртки
+    // {from, content}. Автор группового сообщения — только wire `from`.
+    {
+        const auto gp = json::parse(gplain, nullptr, false);
+        check(gp.is_object() && gp.contains("kind") && !gp.contains("from"),
+              "groupSeal шлёт голый content без inner.from (E2E-1)");
+    }
 
     // Линковка: экспорт → слияние в «другое устройство» (эмулируем: экспорт
     // содержит legacy-аккаунт = наш; import в себя же даёт dup → 0 legacy).

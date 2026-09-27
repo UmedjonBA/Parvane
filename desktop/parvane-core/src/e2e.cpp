@@ -1189,9 +1189,13 @@ void primeContactDevices(const std::vector<std::string> &contacts, ITransport &t
 
 std::string groupSeal(const std::string &groupId, const std::string &contentJson,
                       std::uint64_t expectedEpoch) {
-    json inner;
+    // E2E-1: канонический Megolm-plaintext — ГОЛЫЙ content. Автор берётся из
+    // wire `from` (его ставит gateway), а не из plaintext, поэтому обёртку
+    // {from, content} больше не пишем (раньше — источник подмены отправителя
+    // в группе, P-02/P-27). Приём принимает и старую обёртку для совместимости.
+    json content;
     try {
-        inner = {{"from", g_self}, {"content", json::parse(contentJson)}};
+        content = json::parse(contentJson);
     } catch (const std::exception &) {
         return {};
     }
@@ -1204,7 +1208,7 @@ std::string groupSeal(const std::string &groupId, const std::string &contentJson
     if (!g || epoch == g_ownGroupEpoch.end() || epoch->second != expectedEpoch) {
         return {};
     }
-    const std::string ct = take(parvane_e2e_group_encrypt(g, b64e(inner.dump()).c_str()));
+    const std::string ct = take(parvane_e2e_group_encrypt(g, b64e(content.dump()).c_str()));
     if (ct.empty()) {
         return {};
     }

@@ -5520,25 +5520,9 @@ bool prepareIncoming(
 		// identity) — не сверяем.
 		const auto cachedIdentity = inner.value("sender_identity", std::string());
 		const auto verifyIdentity = fresh ? envIdentity : cachedIdentity;
-		if (!verifyIdentity.empty() && !author.empty()) {
-			const auto v = parvane::e2e::verifySender(author, verifyIdentity, *t, token);
-			if (v == parvane::e2e::Verdict::Spoofed) {
-				LOG(("Parvane: ОТКЛОНЕНО: подмена отправителя %1 в %2%3")
-					.arg(QString::fromStdString(author), uuidQ,
-						direct ? QString() : u" (группа)"_q));
-				ackAnon(sm.id);
-				continue;
-			} else if (v == parvane::e2e::Verdict::Unknown) {
-				LOG(("Parvane: не подтверждён отправитель %1 в %2 (каталог недоступен)")
-					.arg(QString::fromStdString(author), uuidQ));
-			} else if (author != self) {
-				if (parvane::e2e::rememberContactIdentity(author, verifyIdentity)) {
-					// Ключ известного контакта сменился — служебное сообщение в чат
-					const auto authorQ = QString::fromStdString(author);
-					crl::on_main([authorQ] { AnnounceKeyChange(authorQ); });
-				}
-			}
-		}
+		// Кэшируем результат расшифровки СРАЗУ (до верификации): Olm/Megolm-ратчет
+		// уже продвинулся при decrypt, и если бы мы вышли по `continue` без кэша,
+		// то же сообщение после рестарта уже не расшифровалось бы (SYNC-1).
 		if (fresh) {
 			auto cached = inner;
 			cached["ct"] = ctFp.toStdString();
@@ -5549,13 +5533,42 @@ bool prepareIncoming(
 			}
 			DecCachePut(uuidQ, QString::fromStdString(cached.dump()));
 		}
-		// 1-на-1: реальный отправитель — inner.from. Группа: inner.from НЕ
-		// доверяем — автор остаётся wire from (не перезаписываем sm.from).
+		if (!verifyIdentity.empty() && !author.empty()) {
+			const auto v = parvane::e2e::verifySender(author, verifyIdentity, *t, token);
+			if (v == parvane::e2e::Verdict::Spoofed) {
+				LOG(("Parvane: ОТКЛОНЕНО: подмена отправителя %1 в %2%3")
+					.arg(QString::fromStdString(author), uuidQ,
+						direct ? QString() : u" (группа)"_q));
+				ackAnon(sm.id);
+				continue;
+			} else if (v == parvane::e2e::Verdict::Unknown) {
+				// E2E-1: каталог отправителя недоступен — подтвердить нельзя. НЕ
+				// показываем и НЕ ack'аем; курсор держим, sync повторит. Ратчет
+				// уже закэширован выше, повтор расшифруется из кэша.
+				LOG(("Parvane: отправитель %1 в %2 не подтверждён (каталог недоступен) — откладываем")
+					.arg(QString::fromStdString(author), uuidQ));
+				clean = false;
+				if (failed) { failed->push_back(sm.id); }
+				continue;
+			} else if (author != self) {
+				if (parvane::e2e::rememberContactIdentity(author, verifyIdentity)) {
+					// Ключ известного контакта сменился — служебное сообщение в чат
+					const auto authorQ = QString::fromStdString(author);
+					crl::on_main([authorQ] { AnnounceKeyChange(authorQ); });
+				}
+			}
+		}
+		// 1-на-1: реальный отправитель — inner.from (sealed). Группа: inner.from
+		// НЕ доверяем — автор остаётся wire from (не перезаписываем sm.from).
 		if (direct && !claimedFrom.empty()) {
 			sm.from = claimedFrom;
 		}
-		if (inner.contains("content") && inner["content"].is_object()) {
+		// E2E-1: канонический Megolm-plaintext — голый content; принимаем и
+		// legacy-обёртку {from, content}. Для 1-1 (sealed) обёртка обязательна.
+		if (inner.contains("content") && inner.contains("from") && inner["content"].is_object()) {
 			sm.content = inner["content"];
+		} else if (!direct) {
+			sm.content = inner;
 		}
 		// SKDM: ключ принимаем только если заявленный sender_identity совпадает с
 		// identity конверта (иначе участник мог бы подменить чужой Megolm-канал).
@@ -5623,11 +5636,13 @@ void injectOnMain(
 			}
 			try {
 				auto inner = nlohmann::json::parse(innerQ.toStdString());
-				if (inner.contains("from") && inner["from"].is_string()) {
-					sm.from = inner["from"].get<std::string>();
-				}
-				if (inner.contains("content")) {
+				// E2E-1/P-02: автор группового — ТОЛЬКО wire sm.from; inner.from
+				// не используем. Принимаем голый content и legacy {from, content}.
+				if (inner.contains("content") && inner.contains("from")
+						&& inner["content"].is_object()) {
 					sm.content = inner["content"];
+				} else {
+					sm.content = inner;
 				}
 			} catch (const std::exception &) {
 				continue;
