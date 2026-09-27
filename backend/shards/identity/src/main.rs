@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 // ── JWT claims ───────────────────────────────────────────────────────────────
@@ -45,6 +45,177 @@ struct Claims {
     /// device_id устройства (если клиент его сообщил при issue)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dev: Option<String>,
+}
+
+// ── JWT-ключи (P-11) ──────────────────────────────────────────────────────────
+// Раньше HS256-секрет лежал в той же SQLite, что и хэши паролей: утечка
+// identity.db или её незашифрованного бэкапа = подпись JWT за любого. Теперь
+// подпись — Ed25519 (EdDSA, как заявляет README) ключом из файла
+// PARVANE_JWT_KEY_FILE (PKCS#8 PEM, права 0600; по умолчанию рядом с БД).
+// Старый HS256-секрет при первом старте выносится из БД в
+// `<key>.legacy-hs256` и принимается ТОЛЬКО для проверки уже выданных токенов
+// в течение их срока жизни (24 ч), затем игнорируется и удаляется.
+
+/// Срок, в течение которого после миграции ещё принимаются HS256-токены.
+const LEGACY_HS256_WINDOW_SECS: i64 = 86_400;
+
+/// kid текущего Ed25519-ключа (в заголовке JWT) — задаётся при старте.
+static JWT_KID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// Legacy HS256-ключ и момент, до которого он принимается.
+static LEGACY_HS256: std::sync::LazyLock<std::sync::RwLock<Option<(DecodingKey, i64)>>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
+
+fn jwt_key_path(db_path: &str) -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("PARVANE_JWT_KEY_FILE") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    let dir = std::path::Path::new(db_path).parent().unwrap_or(std::path::Path::new("."));
+    dir.join("identity-jwt-ed25519.pem")
+}
+
+/// Запись секретного файла с правами 0600 (unix); на других ОС — обычная запись.
+fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).with_context(|| format!("создание {}", path.display()))?;
+    f.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn kid_for(verifying: &ed25519_dalek::VerifyingKey) -> String {
+    verifying.as_bytes().iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+fn keys_from_signing(signing: &ed25519_dalek::SigningKey) -> Result<(EncodingKey, DecodingKey, String)> {
+    use ed25519_dalek::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    let private_pem = signing
+        .to_pkcs8_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::LF)
+        .map_err(|e| anyhow::anyhow!("PKCS#8 экспорт: {e}"))?;
+    let public_pem = signing
+        .verifying_key()
+        .to_public_key_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::LF)
+        .map_err(|e| anyhow::anyhow!("SPKI экспорт: {e}"))?;
+    let encoding = EncodingKey::from_ed_pem(private_pem.as_bytes()).context("EncodingKey Ed25519")?;
+    let decoding = DecodingKey::from_ed_pem(public_pem.as_bytes()).context("DecodingKey Ed25519")?;
+    Ok((encoding, decoding, kid_for(&signing.verifying_key())))
+}
+
+/// Загрузить Ed25519-ключ подписи из файла или сгенерировать новый; вынести
+/// legacy HS256-секрет из SQLite в файл на срок жизни старых токенов.
+async fn load_or_create_jwt_keys(pool: &SqlitePool, db_path: &str) -> Result<(EncodingKey, DecodingKey)> {
+    use ed25519_dalek::pkcs8::DecodePrivateKey;
+    let path = jwt_key_path(db_path);
+    let signing = match std::fs::read_to_string(&path) {
+        Ok(pem) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if meta.permissions().mode() & 0o077 != 0 {
+                        warn!("{}: права шире 0600 — ключ подписи JWT доступен другим пользователям", path.display());
+                    }
+                }
+            }
+            ed25519_dalek::SigningKey::from_pkcs8_pem(&pem)
+                .map_err(|e| anyhow::anyhow!("{}: не Ed25519 PKCS#8 PEM: {e}", path.display()))?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            use ed25519_dalek::pkcs8::EncodePrivateKey;
+            let signing = ed25519_dalek::SigningKey::generate(&mut OsRng);
+            let pem = signing
+                .to_pkcs8_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::LF)
+                .map_err(|e| anyhow::anyhow!("PKCS#8 экспорт: {e}"))?;
+            write_secret_file(&path, pem.as_bytes())?;
+            warn!("сгенерирован новый ключ подписи JWT (Ed25519): {} — сохраните его в бэкап отдельно от БД", path.display());
+            signing
+        }
+        Err(e) => return Err(e).with_context(|| format!("чтение {}", path.display())),
+    };
+    let (encoding, decoding, kid) = keys_from_signing(&signing)?;
+    let _ = JWT_KID.set(kid.clone());
+    info!("JWT: EdDSA kid={} ({})", kid, path.display());
+
+    // Миграция legacy HS256-секрета из SQLite → файл рядом с ключом.
+    let legacy_path = path.with_extension("legacy-hs256");
+    let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT bytes FROM secret WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+    if let Some((bytes,)) = row {
+        write_secret_file(&legacy_path, &bytes)?;
+        sqlx::query("DELETE FROM secret WHERE id = 1").execute(pool).await?;
+        warn!(
+            "legacy HS256-секрет вынесен из SQLite в {} — старые токены принимаются ещё {} ч, затем файл удаляется",
+            legacy_path.display(),
+            LEGACY_HS256_WINDOW_SECS / 3600
+        );
+    }
+    if let Ok(meta) = std::fs::metadata(&legacy_path) {
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let until = modified + LEGACY_HS256_WINDOW_SECS;
+        if now_unix() < until {
+            if let Ok(bytes) = std::fs::read(&legacy_path) {
+                set_legacy_hs256(Some((DecodingKey::from_secret(&bytes), until)));
+                info!("JWT: legacy HS256 принимается до {}", until);
+            }
+        } else {
+            let _ = std::fs::remove_file(&legacy_path);
+            info!("JWT: окно legacy HS256 истекло, {} удалён", legacy_path.display());
+        }
+    }
+    Ok((encoding, decoding))
+}
+
+fn set_legacy_hs256(value: Option<(DecodingKey, i64)>) {
+    if let Ok(mut g) = LEGACY_HS256.write() {
+        *g = value;
+    }
+}
+
+/// Подпись JWT: EdDSA с kid текущего ключа.
+fn jwt_encode(encoding: &EncodingKey, claims: &Claims) -> Result<String> {
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = JWT_KID.get().cloned();
+    encode(&header, claims, encoding).context("подпись JWT")
+}
+
+/// Проверка JWT: EdDSA основным ключом; HS256 — только legacy-секретом и только
+/// в окне миграции. Любой другой алгоритм отклоняется.
+fn jwt_decode(decoding: &DecodingKey, token: &str) -> Result<jsonwebtoken::TokenData<Claims>> {
+    let header = jsonwebtoken::decode_header(token).context("неверный или просроченный JWT")?;
+    match header.alg {
+        Algorithm::EdDSA => decode::<Claims>(token, decoding, &Validation::new(Algorithm::EdDSA))
+            .context("неверный или просроченный JWT"),
+        Algorithm::HS256 => {
+            let guard = LEGACY_HS256.read().map_err(|_| anyhow::anyhow!("legacy lock"))?;
+            let Some((legacy, until)) = guard.as_ref() else {
+                anyhow::bail!("неверный или просроченный JWT");
+            };
+            if now_unix() >= *until {
+                anyhow::bail!("неверный или просроченный JWT");
+            }
+            decode::<Claims>(token, legacy, &Validation::new(Algorithm::HS256))
+                .context("неверный или просроченный JWT")
+        }
+        _ => anyhow::bail!("неверный или просроченный JWT"),
+    }
 }
 
 // ── password hashing (argon2id, соль на пароль) ───────────────────────────────
@@ -136,9 +307,7 @@ async fn main() -> Result<()> {
 
     info!("SQLite готов: {}", db_path);
 
-    let secret = load_or_generate_secret(&pool).await?;
-    let encoding = EncodingKey::from_secret(&secret);
-    let decoding = DecodingKey::from_secret(&secret);
+    let (encoding, decoding) = load_or_create_jwt_keys(&pool, &db_path).await?;
 
     let nc = parvane_types::nats::connect(&nats_url)
         .await
@@ -1106,27 +1275,6 @@ async fn handle_prekeys_fetch(
 
 // ── secret management ─────────────────────────────────────────────────────────
 
-async fn load_or_generate_secret(pool: &SqlitePool) -> Result<Vec<u8>> {
-    let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT bytes FROM secret WHERE id = 1")
-        .fetch_optional(pool)
-        .await?;
-
-    if let Some((bytes,)) = row {
-        info!("JWT-секрет загружен из БД");
-        Ok(bytes)
-    } else {
-        let mut secret = vec![0u8; 32];
-        rand::thread_rng().fill_bytes(&mut secret);
-
-        sqlx::query("INSERT INTO secret (id, bytes) VALUES (1, ?)")
-            .bind(&secret)
-            .execute(pool)
-            .await?;
-
-        info!("JWT-секрет сгенерирован и сохранён");
-        Ok(secret)
-    }
-}
 
 // ── handlers ─────────────────────────────────────────────────────────────────
 
@@ -1335,8 +1483,7 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
         exp: now + 86400,
         dev: req.device_id.clone().filter(|d| !d.is_empty()),
     };
-    let token = encode(&Header::new(Algorithm::HS256), &claims, encoding)
-        .context("подпись JWT")?;
+    let token = jwt_encode(encoding, &claims)?;
 
     info!("JWT выдан для: {}", req.user);
     Ok(IssueOutcome::Token { token, trust_secret: issued_trust_secret })
@@ -1416,8 +1563,7 @@ async fn handle_twofa(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, ms
 /// привязанном Telegram; устройство, включившее 2FA, получает секрет доверия.
 async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<(bool, bool, Option<String>)> {
     let req: TwoFactorRequest = serde_json::from_slice(payload).context("неверный JSON в TwoFactorRequest")?;
-    let data = decode::<Claims>(&req.token, decoding, &Validation::new(Algorithm::HS256))
-        .context("неверный или просроченный JWT")?;
+    let data = jwt_decode(decoding, &req.token)?;
     let username = data.claims.sub;
     let row: Option<(i64, Option<i64>)> =
         sqlx::query_as("SELECT tg_2fa, telegram_id FROM users WHERE username = ?")
@@ -2222,9 +2368,7 @@ fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<Claims> {
     let req: VerifyRequest = serde_json::from_slice(payload)
         .context("неверный JSON в VerifyRequest")?;
 
-    let validation = Validation::new(Algorithm::HS256);
-    let data = decode::<Claims>(&req.token, decoding, &validation)
-        .context("неверный или просроченный JWT")?;
+    let data = jwt_decode(decoding, &req.token)?;
 
     Ok(data.claims)
 }
@@ -2234,8 +2378,7 @@ fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<Claims> {
 /// остальные обработчики identity верили любому неистёкшему токену — отозванное
 /// устройство до 24 ч продолжало менять профиль/ключи/отзывать другие.
 async fn verify_active(pool: &SqlitePool, decoding: &DecodingKey, token: &str) -> Result<Claims> {
-    let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-        .context("неверный или просроченный JWT")?;
+    let data = jwt_decode(decoding, token)?;
     if is_device_revoked(pool, &data.claims.sub, data.claims.dev.as_deref()).await? {
         anyhow::bail!("устройство отозвано");
     }
@@ -2298,8 +2441,9 @@ mod tests {
     use super::*;
 
     fn make_keys() -> (EncodingKey, DecodingKey) {
-        let secret = b"test-secret-32-bytes-exactly!!!";
-        (EncodingKey::from_secret(secret), DecodingKey::from_secret(secret))
+        let signing = ed25519_dalek::SigningKey::generate(&mut OsRng);
+        let (enc, dec, _kid) = keys_from_signing(&signing).unwrap();
+        (enc, dec)
     }
 
     #[test]
@@ -2307,7 +2451,7 @@ mod tests {
         let (enc, dec) = make_keys();
         let now = now_unix() as usize;
         let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
-        let token = encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap();
+        let token = jwt_encode(&enc, &claims).unwrap();
 
         let req = serde_json::to_vec(&VerifyRequest { token }).unwrap();
         let user = do_verify(&dec, &req).unwrap().sub;
@@ -2328,11 +2472,67 @@ mod tests {
         let (enc, _) = make_keys();
         let now = now_unix() as usize;
         let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
-        let token = encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap();
+        let token = jwt_encode(&enc, &claims).unwrap();
 
-        let other_dec = DecodingKey::from_secret(b"different-secret-32-bytes-exactly");
+        let (_other_enc, other_dec) = make_keys(); // другой Ed25519-ключ
         let req = serde_json::to_vec(&VerifyRequest { token }).unwrap();
         assert!(do_verify(&other_dec, &req).is_err());
+    }
+
+    #[test]
+    fn legacy_hs256_accepted_only_inside_migration_window() {
+        let (_enc, dec) = make_keys();
+        let now = now_unix() as usize;
+        let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
+        let secret = b"legacy-hs256-secret-32-bytes!!!!";
+        let hs = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)).unwrap();
+        // Без legacy-ключа HS256 отклоняется (P-11: alg-confusion невозможен).
+        set_legacy_hs256(None);
+        assert!(jwt_decode(&dec, &hs).is_err());
+        // В окне миграции — принимается.
+        set_legacy_hs256(Some((DecodingKey::from_secret(secret), now_unix() + 60)));
+        assert_eq!(jwt_decode(&dec, &hs).unwrap().claims.sub, "alice@local");
+        // После окна — снова отказ.
+        set_legacy_hs256(Some((DecodingKey::from_secret(secret), now_unix() - 1)));
+        assert!(jwt_decode(&dec, &hs).is_err());
+        set_legacy_hs256(None);
+        // EdDSA-токен с kid проходит основным ключом.
+        let (enc2, dec2) = make_keys();
+        let ed = jwt_encode(&enc2, &claims).unwrap();
+        assert_eq!(jwt_decode(&dec2, &ed).unwrap().claims.sub, "alice@local");
+        assert!(jwt_decode(&dec, &ed).is_err(), "чужой ключ не проходит");
+    }
+
+    #[tokio::test]
+    async fn jwt_key_file_is_created_0600_and_legacy_secret_moved_out_of_db() {
+        let dir = std::env::temp_dir().join(format!("parvane-jwt-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("identity.db");
+        let pool = test_pool().await;
+        // legacy-секрет в БД, как на старых инсталляциях
+        sqlx::query("INSERT INTO secret (id, bytes) VALUES (1, ?)").bind(&b"old-secret"[..]).execute(&pool).await.unwrap();
+        std::env::remove_var("PARVANE_JWT_KEY_FILE");
+        let (enc, dec) = load_or_create_jwt_keys(&pool, db_path.to_str().unwrap()).await.unwrap();
+        let key_path = dir.join("identity-jwt-ed25519.pem");
+        assert!(key_path.exists(), "ключ создан рядом с БД");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM secret").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 0, "legacy-секрет вынесен из SQLite");
+        assert!(dir.join("identity-jwt-ed25519.legacy-hs256").exists());
+        // повторная загрузка читает тот же ключ (roundtrip подписи)
+        let (enc2, dec2) = load_or_create_jwt_keys(&pool, db_path.to_str().unwrap()).await.unwrap();
+        let now = now_unix() as usize;
+        let claims = Claims { sub: "k@local".into(), iat: now, exp: now + 60, dev: None };
+        let t = jwt_encode(&enc, &claims).unwrap();
+        assert!(jwt_decode(&dec2, &t).is_ok());
+        let t2 = jwt_encode(&enc2, &claims).unwrap();
+        assert!(jwt_decode(&dec, &t2).is_ok());
+        set_legacy_hs256(None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3043,7 +3243,7 @@ mod tests {
             .bind("chg@local").bind("dev-1").bind("h").execute(&pool).await.unwrap();
         let now = now_unix() as usize;
         let claims = Claims { sub: "chg@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()) };
-        let token = encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap();
+        let token = jwt_encode(&enc, &claims).unwrap();
         let body = |old: &str, new: &str| serde_json::to_vec(&PasswordChangeRequest {
             token: token.clone(), old_password: old.into(), new_password: new.into(),
         }).unwrap();
@@ -3093,7 +3293,7 @@ mod tests {
                 exp: now + 3600,
                 dev: dev.map(str::to_string),
             };
-            encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap()
+            jwt_encode(&enc, &claims).unwrap()
         };
 
         // Активный токен устройства dev-1 проходит и привязан к своему device_id.
