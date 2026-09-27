@@ -70,8 +70,11 @@ Parvane шифрует **сквозно по умолчанию везде** (в
 кастом-эмодзи, вкладка GIFs (см. `desktop/PARITY-telegram.md`).
 
 **Тесты:** unit-тесты бэкенда (`cargo test --workspace`, включая argon2 и
-crypto vodozemac) + слой `parvane-core` клиента (transport, messenger, crypto/SAS,
-call, group…) — все зелёные. Живые e2e (`desktop/verify_*.sh`, два реальных
+crypto vodozemac) + интеграционные с живым `nats-server` и бинарниками шардов
+(`backend/tests/integration`: чужой/просроченный/отозванный токен, subject-инъекция,
+повтор id, лимиты, ACL gateway) + слой `parvane-core` клиента (transport, messenger,
+crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conformance.test.ts`
+по правилам `conformance/`) — все зелёные. Живые e2e (`desktop/verify_*.sh`, два реальных
 экземпляра форка): E2E текст/группы/медиа, ротация ключей, safety numbers, TTL,
 персист истории, @упоминания, папки, админка групп, опросы, стикеры — все проходят.
 
@@ -428,9 +431,13 @@ Backend **релеит** WebRTC-сигналы и ведёт историю. В�
    Доменные правила применяются поверх: только владелец может редактировать свои
    заметки/события.
 
-Identity генерирует keypair (Ed25519) при первом старте (хранит в SQLite), JWT
-подписывается им (TTL 24 часа). Пароли — **argon2id**. Регистрация и вход
-разделены (`identity.user.register` / `identity.token.issue`).
+Identity генерирует keypair (Ed25519) при первом старте и хранит его в файле
+`PARVANE_JWT_KEY_FILE` (PKCS#8 PEM, права 0600; по умолчанию рядом с БД), JWT
+подписывается им (EdDSA, claim `kid`, TTL 24 часа); отзыв устройства проверяется
+при каждом verify, gateway переверифицирует токен открытой сессии. Пароли —
+**argon2id**, политика: не короче 8 символов. Регистрация и вход разделены
+(`identity.user.register` / `identity.token.issue`); выключение 2FA, отзыв
+устройства и замена ключа требуют пароль.
 
 ---
 
