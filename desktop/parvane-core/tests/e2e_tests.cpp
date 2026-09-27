@@ -358,7 +358,7 @@ int main() {
         for (const auto &entry : std::filesystem::directory_iterator(dir)) {
             if (!entry.is_regular_file()) continue;
             const auto raw = rawOf(entry.path());
-            if (!raw.empty() && !sc::isSealed(raw)) anyPlain = true;
+            if (!raw.empty() && !sc::isSealed(raw)) { anyPlain = true; std::printf("  plain: %s\n", entry.path().filename().string().c_str()); }
         }
         check(!anyPlain, "P-13: в сторе не осталось plain-файлов");
         check(rawOf(accountFile).find("ed25519") == std::string::npos, "P-13: pickle не читается с диска");

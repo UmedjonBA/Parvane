@@ -93,19 +93,32 @@ const MAX_CANDIDATE_BYTES: usize = 4 * 1024;
 const INVITE_COOLDOWN_SECS: i64 = 5;
 /// Не более стольких ringing-звонков у одного вызывающего за окно.
 const MAX_RINGING_PER_CALLER: i64 = 3;
+/// P-35: не больше стольких invite от одного инициатора за минуту.
+const INVITES_PER_MINUTE: i64 = 20;
 const RINGING_WINDOW_SECS: i64 = 120;
 
 /// Cooldown invite по паре (from → to): по последней записи в `calls`, т.е.
 /// детерминированно и без состояния в памяти.
 async fn invite_cooldown_ok(pool: &SqlitePool, from: &str, to: &str, now: i64) -> Result<bool> {
-    let last: Option<i64> = sqlx::query_scalar(
-        "SELECT MAX(started_at) FROM calls WHERE caller = ? AND callee = ?",
+    // Повторный дозвон после reject/hangup — легитимен; ограничиваем только
+    // «дребезг» invite'ов, пока предыдущий звонок этому же абоненту ещё звонит…
+    let last_ringing: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(started_at) FROM calls WHERE caller = ? AND callee = ? AND status = 'ringing'",
     )
     .bind(from)
     .bind(to)
     .fetch_one(pool)
     .await?;
-    Ok(last.is_none_or(|t| now - t >= INVITE_COOLDOWN_SECS))
+    if last_ringing.is_some_and(|t| now - t < INVITE_COOLDOWN_SECS) {
+        return Ok(false);
+    }
+    // …и общий темп invite'ов инициатора (обзвон каталога).
+    let recent: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM calls WHERE caller = ? AND started_at > ?")
+        .bind(from)
+        .bind(now - 60)
+        .fetch_one(pool)
+        .await?;
+    Ok(recent < INVITES_PER_MINUTE)
 }
 
 /// Проверить, что сигнал идёт между участниками конкретного звонка, и обновить
@@ -653,7 +666,7 @@ mod tests {
             let r = record_signal(&pool, "flood@local", &format!("v{i}@local"), &invite("offer".into(), Uuid::now_v7()), 20 + i).await;
             if r.is_ok() { ok += 1; }
         }
-        assert!(ok as i64 + 1 <= MAX_RINGING_PER_CALLER + 1 && ok < 5, "потолок ringing у вызывающего: {ok}");
+        assert!(ok as i64 <= MAX_RINGING_PER_CALLER && ok < 5, "потолок ringing у вызывающего: {ok}");
         let big_candidate = CallSignal::Ice { call_id: id, candidate: "c".repeat(MAX_CANDIDATE_BYTES + 1) };
         assert!(record_signal(&pool, "flood@local", "victim@local", &big_candidate, 30).await.is_err(), "ICE > 4 КиБ");
     }

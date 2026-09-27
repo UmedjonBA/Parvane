@@ -121,6 +121,34 @@
       "typingSubscribe": "own msg.typing.<id(self)> + msg.typing.<id(group)> only for members (gateway checks group.list)",
       "presenceSubscribe": "presence.<id(peer)> per known peer; presence.* forbidden",
       "presencePublish": "presence.<id(self)> only"
+    },
+    {
+      "id": "BLOB-1",
+      "title": "Медиа-блоб — чанковый AEAD v2 (PVB2); окна плеера только из проверенных чанков",
+      "format": "\"PVB2\" | u32be chunkSize | for i in 0..n: ct_i (<= chunkSize) | tag_i (16)",
+      "chunkSizeDefault": 262144,
+      "chunkSizeRange": [
+        1024,
+        8388608
+      ],
+      "nonce": "nonce_i = nonce XOR (0^8 || u32be i)",
+      "aad": "\"PVB2\" | u32be chunkSize | u32be i | u32be n",
+      "legacyV1": "data || tag without header: accepted for whole-file decrypt only, never for unverified range playback",
+      "vector": {
+        "key": "32 x 0x01",
+        "nonce": "12 x 0x02",
+        "chunkSize": 1024,
+        "plaintext": "1500 x 'a'",
+        "cipherLength": 1540,
+        "headHex": "505642320000040066b7a8282b36a09cb2addda93dc6a3d3",
+        "tailHex": "297636bc1b79f4f72284144a0b0be7e8"
+      },
+      "legacyVector": {
+        "key": "32 x 0x01",
+        "nonce": "12 x 0x02",
+        "plaintext": "parvane blob v1",
+        "ciphertextB64": "d7e7Pys5pN2xoNOqfNHzVpFQwpooOo/gVIDan1UXaA=="
+      }
     }
   ]
 }

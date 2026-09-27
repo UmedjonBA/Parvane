@@ -4,7 +4,15 @@ import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
 import { diagLog } from '../../util/parvaneDiag';
-import { decryptBlob, decryptRange, encryptBlob } from './blobcrypt';
+import {
+  blobChunkCount,
+  blobChunkOffset,
+  blobPlaintextSize,
+  decryptBlob,
+  decryptBlobChunks,
+  encryptBlob,
+  parseBlobHeader,
+} from './blobcrypt';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import {
@@ -52,9 +60,10 @@ const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
 // (Telegram отдаёт картинку со своего сервера). Мы склеиваем OSM-тайлы,
 // полученные через шард preview (наружу ходит сервер, а не браузер)
 const MAP_TILE_SIZE = 256;
+// P-23: максимальный zoom статичной карты (совпадает с TILE_MAX_ZOOM шарда preview)
+const MAP_MAX_ZOOM = 15;
 // Range-стриминг: кэш шифртекст-чанков на файл (сколько держим в памяти)
 const RANGE_CHUNK_CACHE_LIMIT = 96;
-const GCM_TAG_BYTES = 16;
 // Лимиты на серверные метаданные (size_bytes/chunk_bytes/данные чанка): без
 // них подделанный ответ cloud заставлял бы вкладку выделить произвольный объём
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -292,13 +301,32 @@ export function createMediaService(deps: MediaDependencies) {
     if (!metaByFileId.has(fileId)) await fetchChunkRange(fileId, 0, 0);
     const meta = metaByFileId.get(fileId);
     if (!meta || !meta.chunkBytes) return undefined;
-    const fullSize = meta.sizeBytes - GCM_TAG_BYTES;
-    if (fullSize <= 0 || start >= fullSize) return undefined;
-    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
-    const alignedStart = Math.floor(start / 16) * 16;
-    const chunkFrom = Math.floor(alignedStart / meta.chunkBytes);
-    const chunkTo = Math.floor(lastByte / meta.chunkBytes);
     const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
+    const head = cache.get(0);
+    if (!head) return undefined;
+    // P-24 / BLOB-1: окна отдаются декодеру только из проверенных чанков v2.
+    // Legacy v1 (без заголовка) — только целиком после проверки тега.
+    const header = parseBlobHeader(head);
+    if (!header) {
+      const whole = await downloadWholeVerified(fileId, meta, keys);
+      if (!whole) return undefined;
+      const buffer = await whole.arrayBuffer();
+      const fullSize = buffer.byteLength;
+      if (start >= fullSize) return undefined;
+      const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1);
+      return { arrayBuffer: buffer.slice(start, lastByte + 1), mimeType: meta.mimeType, fullSize };
+    }
+    const totalBlobChunks = blobChunkCount(meta.sizeBytes, header);
+    const fullSize = blobPlaintextSize(meta.sizeBytes, header);
+    if (!totalBlobChunks || fullSize <= 0 || start >= fullSize) return undefined;
+    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
+    const blobFrom = Math.floor(start / header.chunkSize);
+    const blobTo = Math.floor(lastByte / header.chunkSize);
+    // Байты шифртекста, покрывающие нужные чанки v2 → cloud-чанки
+    const cipherFrom = blobChunkOffset(blobFrom, header);
+    const cipherTo = Math.min(blobChunkOffset(blobTo + 1, header), meta.sizeBytes) - 1;
+    const chunkFrom = Math.floor(cipherFrom / meta.chunkBytes);
+    const chunkTo = Math.floor(cipherTo / meta.chunkBytes);
     let missingFrom: number | undefined;
     for (let index = chunkFrom; index <= chunkTo; index++) {
       if (!cache.has(index)) {
@@ -311,9 +339,8 @@ export function createMediaService(deps: MediaDependencies) {
       if (!fetched) return undefined;
     }
     const cached = chunkCacheByFileId.get(fileId)!;
-    // Все чанки на руках — проверяем GCM-тег целого файла (окна идут без
-    // аутентификации) и дальше отдаём из проверенного блоба
     if (cached.size >= meta.totalChunks) {
+      // Все чанки на руках — проверяем и кэшируем целиком
       const verified = await verifyCompleteFile(fileId, meta, keys);
       if (verified === 'bad') return undefined;
       if (verified) {
@@ -321,20 +348,37 @@ export function createMediaService(deps: MediaDependencies) {
         return { arrayBuffer: buffer.slice(start, lastByte + 1), mimeType: meta.mimeType, fullSize };
       }
     }
-    const window = new Uint8Array(lastByte - alignedStart + 1);
+    const window = new Uint8Array(cipherTo - cipherFrom + 1);
     for (let index = chunkFrom; index <= chunkTo; index++) {
       const bytes = cached.get(index);
       if (!bytes) return undefined;
       const chunkStart = index * meta.chunkBytes;
-      const copyFrom = Math.max(alignedStart, chunkStart);
-      const copyTo = Math.min(lastByte, chunkStart + bytes.length - 1);
+      const copyFrom = Math.max(cipherFrom, chunkStart);
+      const copyTo = Math.min(cipherTo, chunkStart + bytes.length - 1);
       if (copyTo < copyFrom) continue;
-      window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - alignedStart);
+      window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - cipherFrom);
     }
-    const plain = await decryptRange(window, keys.keyB64, keys.nonceB64, alignedStart);
-    if (!plain) return undefined;
-    const slice = plain.slice(start - alignedStart);
+    const plain = await decryptBlobChunks(window, keys.keyB64, keys.nonceB64, header, blobFrom, totalBlobChunks);
+    if (!plain) {
+      diagLog('media', `файл ${fileId}: тег чанка не сошёлся — окно отброшено`);
+      return undefined;
+    }
+    const windowStart = blobFrom * header.chunkSize;
+    const slice = plain.slice(start - windowStart, lastByte - windowStart + 1);
     return { arrayBuffer: slice.buffer, mimeType: meta.mimeType, fullSize };
+  }
+
+  /** Legacy v1: докачать всё, проверить тег целиком, отдать из кэша. */
+  async function downloadWholeVerified(
+    fileId: string, meta: FileMeta, keys: { keyB64: string; nonceB64: string },
+  ): Promise<Blob | undefined> {
+    const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
+    if (cache.size < meta.totalChunks) {
+      const fetched = await fetchChunkRange(fileId, 0, meta.totalChunks - 1);
+      if (!fetched) return undefined;
+    }
+    const verified = await verifyCompleteFile(fileId, meta, keys);
+    return verified === 'bad' ? undefined : verified;
   }
 
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
@@ -479,7 +523,8 @@ export function createMediaService(deps: MediaDependencies) {
     const long = Number(params.get('long'));
     const width = Number(params.get('w')) || 400;
     const height = Number(params.get('h')) || 300;
-    const zoom = Math.min(19, Math.max(0, Math.round(Number(params.get('zoom')) || 16)));
+    // P-23: zoom не выше MAP_MAX_ZOOM — серверу и OSM уходит окрестность (~1 км), а не точка
+    const zoom = Math.min(MAP_MAX_ZOOM, Math.max(0, Math.round(Number(params.get('zoom')) || MAP_MAX_ZOOM)));
     const scale = Math.min(3, Math.max(1, Number(params.get('scale')) || 1));
     if (!Number.isFinite(lat) || !Number.isFinite(long)) return undefined;
     // Web Mercator: центр в «тайловых пикселях»

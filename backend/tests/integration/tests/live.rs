@@ -25,7 +25,6 @@ const PASSWORD: &str = "e2e-Test-pass-2026";
 struct Stack {
     children: Vec<Child>,
     dir: PathBuf,
-    nats_url: String,
     gateway_tcp: String,
 }
 
@@ -162,7 +161,7 @@ async fn start_stack() -> Option<(Stack, async_nats::Client)> {
         ],
         &dir.join("gateway.log"),
     ));
-    let stack = Stack { children, dir, nats_url: nats_url.clone(), gateway_tcp };
+    let stack = Stack { children, dir, gateway_tcp };
     let nc = wait_ready(&nats_url, IDENTITY_SERVER_INFO, Duration::from_secs(20)).await;
     // messenger и push: ждём их подписки
     let _ = wait_ready(&nats_url, GROUP_LIST, Duration::from_secs(20)).await;

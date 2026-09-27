@@ -30,7 +30,13 @@ const DESC_MAX: usize = 500;
 // Тайлы карты: OSM (политика — обязателен идентифицирующий User-Agent, без
 // массовой выкачки; мы отдаём только тайлы вокруг присланных точек и кэшируем)
 const TILE_BASE_URL: &str = "https://tile.openstreetmap.org";
-const TILE_MAX_ZOOM: u32 = 19;
+/// P-23: тайлы не крупнее zoom 15 (~1,2 км на тайл у экватора): серверу и OSM
+/// уходит окрестность, а не точка; web клампит zoom так же (MAP_MAX_ZOOM).
+const TILE_MAX_ZOOM: u32 = 15;
+/// P-23: кап кэша тайлов (строк), старше выселяются; PARVANE_PREVIEW_TILE_CACHE_MAX.
+fn tile_cache_max() -> i64 {
+    std::env::var("PARVANE_PREVIEW_TILE_CACHE_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000)
+}
 const TILE_MAX_BYTES: usize = 512 * 1024;
 const TILE_CACHE_TTL_SECS: i64 = 7 * 24 * 3600;
 const SITE_MAX: usize = 64;
@@ -177,10 +183,14 @@ async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     let resp = async {
         let event: ParvaneEvent<MapTileRequest> =
             serde_json::from_slice(&msg.payload).context("неверный JSON preview.map.tile")?;
-        let _user = verify_token(nc, &event.token).await?;
+        let user = verify_token(nc, &event.token).await?;
         let MapTileRequest { z, x, y, .. } = event.payload;
         if z > TILE_MAX_ZOOM || x >= (1u32 << z) || y >= (1u32 << z) {
             anyhow::bail!("тайл вне диапазона");
+        }
+        // P-23: per-user темп (общая корзина с превью), координаты в лог не пишем
+        if !preview_rate_ok(&user) {
+            anyhow::bail!("слишком много запросов тайлов");
         }
         let png = resolve_tile(pool, z, x, y).await?;
         anyhow::Ok(MapTileResponse { ok: true, png_base64: Some(B64.encode(png)), error: None })
@@ -235,7 +245,21 @@ async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u
         .execute(pool)
         .await
         .context("кэш тайла")?;
+    trim_tile_cache(pool, tile_cache_max()).await?;
     Ok(png)
+}
+
+/// P-23: держим в кэше не больше `max` тайлов — самые старые выселяются.
+async fn trim_tile_cache(pool: &SqlitePool, max: i64) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM map_tiles WHERE tile_key IN (
+            SELECT tile_key FROM map_tiles ORDER BY fetched_at DESC, tile_key LIMIT -1 OFFSET ?)",
+    )
+    .bind(max.max(1))
+    .execute(pool)
+    .await
+    .context("выселение тайлов")?;
+    Ok(())
 }
 
 /// Проверяет кэш, иначе фетчит и кэширует (в т.ч. отрицательный результат).
@@ -487,6 +511,21 @@ fn clip(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    // P-23: кап кэша тайлов и zoom
+    #[tokio::test]
+    async fn tile_cache_is_capped_and_zoom_limited() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        for i in 0..10 {
+            sqlx::query("INSERT INTO map_tiles (tile_key, png, fetched_at) VALUES (?, X'00', ?)")
+                .bind(format!("15/{i}/1")).bind(1000 + i).execute(&pool).await.unwrap();
+        }
+        super::trim_tile_cache(&pool, 4).await.unwrap();
+        let keys: Vec<(String,)> = sqlx::query_as("SELECT tile_key FROM map_tiles ORDER BY fetched_at").fetch_all(&pool).await.unwrap();
+        assert_eq!(keys.iter().map(|k| k.0.as_str()).collect::<Vec<_>>(), ["15/6/1", "15/7/1", "15/8/1", "15/9/1"]);
+        assert_eq!(super::TILE_MAX_ZOOM, 15);
+    }
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -502,7 +541,6 @@ mod tests {
         }
     }
 
-    #[test]
     // P-49: пробелы deny-листа закрыты
     #[test]
     fn deny_list_gaps_are_closed() {
