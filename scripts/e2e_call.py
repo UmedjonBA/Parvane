@@ -9,7 +9,9 @@
 Требует запущенные nats + identity + call (их поднимает run_all_tests.sh)."""
 import json, subprocess, sys, time, uuid
 
-NATS = "/home/ub/.local/bin/nats"
+import os, shutil
+# nats CLI: из PATH или ~/.local/bin (раньше был захардкожен путь одного разработчика)
+NATS = shutil.which("nats") or os.path.expanduser("~/.local/bin/nats")
 
 
 def req(topic, payload, timeout="3s"):
@@ -26,15 +28,18 @@ def pub(topic, payload):
         raise RuntimeError(f"nats pub {topic} failed: {p.stderr.strip()}")
 
 
+PASSWORD = "e2e-Test-pass-2026"  # политика паролей (P-43): не короче 8 символов
+
+
 def issue(user):
-    r = json.loads(req("identity.token.issue", {"user": user, "password": "test"}))
+    r = json.loads(req("identity.token.issue", {"user": user, "password": PASSWORD}))
     if not r.get("ok"):
         registered = json.loads(req("identity.user.register", {
-            "user": user, "password": "test", "invite": "",
+            "user": user, "password": PASSWORD, "invite": "",
         }))
         if not registered.get("ok") and "существ" not in registered.get("error", ""):
             raise RuntimeError(f"register {user} failed: {registered}")
-        r = json.loads(req("identity.token.issue", {"user": user, "password": "test"}))
+        r = json.loads(req("identity.token.issue", {"user": user, "password": PASSWORD}))
     if not (r.get("ok") and r.get("token")):
         raise RuntimeError(f"issue {user} failed: {r}")
     return r["token"]
@@ -64,7 +69,7 @@ def check(name, ok, detail=""):
 
 print("=== Parvane call-шард e2e ===")
 
-alice, bob, mallory = "alice@local", "bob@local", "mallory@evil"
+alice, bob, mallory = "alice@local", "bob@local", "mallory@local"
 jwt_a = issue(alice)
 jwt_b = issue(bob)
 jwt_m = issue(mallory)
