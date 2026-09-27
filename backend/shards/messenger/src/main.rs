@@ -221,8 +221,17 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
         MessageContent::Text { text, .. } => text.as_str(),
         _ => "",
     };
+    // P-09: лимит размера шифртекста. Клиентский кадр — до 4 МиБ (gateway),
+    // но одно сообщение такого размера раздувает страницу sync выше NATS
+    // max_payload и ломает синк получателя навсегда.
+    if content_json.len() > MAX_CONTENT_BYTES {
+        anyhow::bail!("сообщение больше лимита {} байт", MAX_CONTENT_BYTES);
+    }
     let reply_to = ev.payload.reply_to.map(|u| u.to_string());
-    sqlx::query(
+    // P-09: повтор чужого/существующего id отклоняем ЦЕЛИКОМ. Раньше
+    // INSERT OR IGNORE молча игнорировал вставку, но копии и доставка
+    // выполнялись с контентом атакующего под легитимным id.
+    let res = sqlx::query(
         "INSERT OR IGNORE INTO messages
            (id, from_user, to_user, text, kind, content, ts, created_at, reply_to, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -240,9 +249,22 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
     .execute(pool)
     .await
     .context("сохранение сообщения")?;
+    if res.rows_affected() == 0 {
+        anyhow::bail!("сообщение с этим id уже существует");
+    }
     store_device_copies(pool, &ev.id.to_string(), &ev.payload.copies).await?;
     Ok(())
 }
+
+/// Лимит размера сериализованного `content` (шифртекст + метаданные) одного
+/// сообщения. Держим существенно ниже NATS max_payload, чтобы страница sync
+/// из 100 таких не превысила лимит шины (P-09).
+const MAX_CONTENT_BYTES: usize = 256 * 1024;
+/// Лимит размера одной per-device копии.
+const MAX_COPY_BYTES: usize = 256 * 1024;
+/// Байтовый бюджет одной страницы sync: набираем сообщения, пока ответ не
+/// приблизился к этому размеру, даже если строк меньше LIMIT (P-09).
+const SYNC_PAGE_BYTE_BUDGET: usize = 700 * 1024;
 
 /// Лимит per-device копий на сообщение: устройства одного получателя + свои —
 /// десятков достаточно, а мусорный fan-out отсечёт.
@@ -255,6 +277,11 @@ async fn store_device_copies(
     copies: &[MessageDeviceCopy],
 ) -> Result<()> {
     for copy in copies.iter().take(MAX_DEVICE_COPIES) {
+        // P-09: копия сверх лимита размера пропускается (не роняем всё сообщение).
+        if copy.ciphertext.len() > MAX_COPY_BYTES {
+            warn!("device-копия для {} превышает лимит — пропущена", message_id);
+            continue;
+        }
         sqlx::query(
             "INSERT OR IGNORE INTO message_device_copies
                (message_id, recipient, signing_key, device_id, ciphertext, ctype)
@@ -1125,7 +1152,17 @@ async fn fetch_missed_with_keys(
     .await?;
 
     let mut messages = Vec::with_capacity(rows.len());
+    let mut budget_used: usize = 0;
     for (id, from, to, content_json, ts, reply_to, edited, deleted, updated_at, read, pinned) in rows {
+        // P-09: байтовый бюджет страницы. Даже при LIMIT 100 суммарный размер
+        // ответа не должен превысить NATS max_payload; лишнее уедет следующим
+        // sync (курсор по rowid, порядок сохранён). Хотя бы одно сообщение
+        // отдаём всегда (иначе крупное сообщение заклинит синк).
+        let row_bytes = content_json.as_ref().map(String::len).unwrap_or(0);
+        if !messages.is_empty() && budget_used + row_bytes > SYNC_PAGE_BYTE_BUDGET {
+            break;
+        }
+        budget_used += row_bytes;
         // content может быть NULL только для legacy-строк без миграции данных;
         // в норме всегда заполнен.
         let mut content = match content_json {
@@ -2666,19 +2703,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_message_is_idempotent() {
+    async fn store_message_rejects_duplicate_id() {
         let pool = test_pool().await;
         let ev = send_event("00000000-0000-7000-8000-000000000001", "alice@local", "bob@local", "раз");
         store_message(&pool, &ev, 1).await.unwrap();
-        // повторная доставка того же id (даже с другим текстом) не создаёт дубликат
+        // P-09: повтор того же id (даже с другим текстом) ОТКЛОНЯЕТСЯ ошибкой —
+        // раньше INSERT OR IGNORE молча игнорировал, но копии и доставка шли с
+        // контентом повтора под легитимным id.
         let dup = send_event("00000000-0000-7000-8000-000000000001", "alice@local", "bob@local", "два");
-        store_message(&pool, &dup, 2).await.unwrap();
+        assert!(store_message(&pool, &dup, 2).await.is_err(), "повтор id → ошибка");
 
         let missed = fetch_missed(&pool, "bob@local", "00000000-0000-0000-0000-000000000000", 0)
             .await
             .unwrap();
         assert_eq!(missed.len(), 1, "дубликата быть не должно");
         assert_eq!(text_of(&missed[0]), "раз", "первая запись сохраняется");
+    }
+
+    #[tokio::test]
+    async fn store_message_rejects_oversized_content() {
+        let pool = test_pool().await;
+        let big = "x".repeat(MAX_CONTENT_BYTES + 1);
+        let ev = send_event("00000000-0000-7000-8000-000000000002", "alice@local", "bob@local", &big);
+        assert!(store_message(&pool, &ev, 1).await.is_err(), "контент сверх лимита отклонён");
     }
 
     // ── медиа-сообщения ──

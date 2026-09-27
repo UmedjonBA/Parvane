@@ -220,6 +220,7 @@ export function buildCallInboxTopic(user: string) {
 export const TOPIC_FILE_UPLOAD_CHUNK = 'file.upload.chunk';
 export const TOPIC_FILE_UPLOAD_COMPLETE = 'file.upload.complete';
 export const TOPIC_FILE_DOWNLOAD_REQUEST = 'file.download.request';
+export const TOPIC_FILE_DELETE = 'file.delete';
 
 export function buildMsgInboxTopic(user: string) {
   return `msg.user.${user}`;

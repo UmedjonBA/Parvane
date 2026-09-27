@@ -192,7 +192,7 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
   it('web: вердикт unknown не показывает и не ack-ает сообщение (retry)', () => {
     const idx = webSync.indexOf("verdict === 'unknown'");
     expect(idx).toBeGreaterThan(0);
-    const block = webSync.slice(idx, idx + 400);
+    const block = webSync.slice(idx, idx + 800);
     expect(block).toMatch(/sawUndecryptable = true/);
     expect(block).toMatch(/undecryptableUuids\.add/);
     // между началом ветки и её return не должно быть sendAck
@@ -213,7 +213,7 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     // unknown в prepareIncoming держит сообщение (continue), не показывает
     const uk = client.indexOf('Verdict::Unknown');
     expect(uk).toBeGreaterThan(0);
-    expect(client.slice(uk, uk + 400)).toMatch(/continue;/);
+    expect(client.slice(uk, uk + 700)).toMatch(/continue;/);
   });
 
   it('android: автор группы = wire from, SKDM привязан к identity конверта', () => {

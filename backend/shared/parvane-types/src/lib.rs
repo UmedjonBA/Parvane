@@ -77,6 +77,8 @@ pub mod topics {
     pub const FILE_DOWNLOAD_RESPONSE: &str = "file.download.response";
     pub const FILE_LIST_REQUEST: &str = "file.list.request";
     pub const FILE_LIST_RESPONSE: &str = "file.list.response";
+    /// Удаление своего файла (owner из токена): чистит чанки, гранты, метаданные.
+    pub const FILE_DELETE: &str = "file.delete";
 
     pub const NOTE_CREATE: &str = "note.create";
     pub const NOTE_UPDATE: &str = "note.update";
@@ -1105,6 +1107,20 @@ pub struct FileEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileListPayload {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDeleteRequest {
+    #[serde(default)]
+    pub token: String,
+    pub file_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDeleteResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileListResponse {
