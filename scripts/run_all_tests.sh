@@ -55,7 +55,7 @@ fi
 # ── 2+3. поднять шарды для интеграционных тестов ─────────────────────────────
 log "2-3. поднимаю identity + messenger (временные БД)"
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/identity.db" \
-    "$BACKEND"/target/debug/identity >"$TMP/identity.log" 2>&1 & PIDS+=($!)
+    PARVANE_DEV=1 "$BACKEND"/target/debug/identity >"$TMP/identity.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/messenger.db" \
     "$BACKEND"/target/debug/messenger >"$TMP/messenger.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS_URL" PARVANE_DB_PATH="$TMP/cloud.db" \

@@ -1,7 +1,11 @@
 import { del, get } from 'idb-keyval';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { SecureE2eStorage, secureStorageInternals } from './secureStorage';
+import {
+  clearSecureSession, clearTrustSecret, hasStoragePin, isStorageUnlocked, loadSecureSession, loadTrustSecret,
+  lockStorage, saveSecureSession, saveTrustSecret, SecureE2eStorage, secureStorageInternals, setStoragePin,
+  unlockStorageWithPin,
+} from './secureStorage';
 
 const USER = 'secure-storage@local';
 
@@ -75,5 +79,77 @@ describe('secure E2E storage compatibility', () => {
     expect(state).toBe('parvane-e2e-storage:2:erin@local');
     const named = decoder.decode(secureStorageInternals.additionalData('erin@local', 'journal'));
     expect(named).toBe('parvane-e2e-storage:2:erin@local:journal');
+  });
+});
+
+// P-14/P-39: секрет доверия и JWT сессии — в шифрованном хранилище; пароль не хранится
+describe('secure session secrets', () => {
+  const USER2 = 'secure-secrets@local';
+  beforeEach(async () => {
+    await SecureE2eStorage.clear(USER2);
+  });
+
+  it('stores the trust secret and session token encrypted, never a password', async () => {
+    await saveTrustSecret(USER2, 'trust-1');
+    await saveSecureSession(USER2, 'jwt-1');
+    expect(await loadTrustSecret(USER2)).toBe('trust-1');
+    expect(await loadSecureSession(USER2)).toBe('jwt-1');
+    const record = await get<{ ciphertext: ArrayBuffer }>(
+      secureStorageInternals.recordId(USER2, 'trust-secret'), secureStorageInternals.store,
+    );
+    expect(new TextDecoder().decode(record?.ciphertext)).not.toContain('trust-1');
+    await clearTrustSecret(USER2);
+    await clearSecureSession(USER2);
+    expect(await loadTrustSecret(USER2)).toBeUndefined();
+    expect(await loadSecureSession(USER2)).toBeUndefined();
+    const source = await import('./secureStorage');
+    expect('saveSecureCredential' in source).toBe(false);
+  });
+});
+
+describe('P-39: optional storage PIN', () => {
+  const USER3 = 'secure-pin@local';
+  beforeEach(async () => {
+    await SecureE2eStorage.clear(USER3);
+  });
+
+  it('re-keys state under a PIN-derived key, removes the IndexedDB key and requires unlock', async () => {
+    const storage = await SecureE2eStorage.open(USER3);
+    await storage.save({ pickleKey: 'pin-secret' });
+    await saveSecureSession(USER3, 'jwt-pin');
+    expect(await hasStoragePin(USER3)).toBe(false);
+
+    await setStoragePin(USER3, '1234');
+    expect(await hasStoragePin(USER3)).toBe(true);
+    expect(isStorageUnlocked(USER3)).toBe(true);
+    expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeUndefined();
+    // Разблокировано в памяти: читается
+    await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
+    expect(await loadSecureSession(USER3)).toBe('jwt-pin');
+
+    // «Перезагрузка»: без PIN хранилище закрыто
+    lockStorage(USER3);
+    expect(isStorageUnlocked(USER3)).toBe(false);
+    await expect(SecureE2eStorage.open(USER3)).rejects.toThrow(/locked/);
+    expect(await loadSecureSession(USER3)).toBeUndefined();
+    expect(await unlockStorageWithPin(USER3, '0000')).toBe(false);
+    expect(isStorageUnlocked(USER3)).toBe(false);
+    expect(await unlockStorageWithPin(USER3, '1234')).toBe(true);
+    await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
+    expect(await loadSecureSession(USER3)).toBe('jwt-pin');
+
+    // Снятие PIN: обратно на IndexedDB-ключ, данные целы
+    await setStoragePin(USER3, '');
+    expect(await hasStoragePin(USER3)).toBe(false);
+    expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeDefined();
+    await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
+  });
+
+  it('refuses to set a PIN while locked', async () => {
+    const storage = await SecureE2eStorage.open(USER3);
+    await storage.save({ x: 1 });
+    await setStoragePin(USER3, '9999');
+    lockStorage(USER3);
+    await expect(setStoragePin(USER3, '1111')).rejects.toThrow(/locked/);
   });
 });

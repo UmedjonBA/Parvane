@@ -219,6 +219,25 @@ android использует то же ядро через `jni/parvane_jni.cpp`
 `plaintext_edits_are_rejected_fail_closed`; web `conformance.test.ts`
 (`SEND-1`); desktop `tests/messenger_tests.cpp` (подпись send).
 
+## EPHEMERAL-1. Typing и presence без утечки графа общения
+
+**P-18.** Gateway разрешает подписку на `msg.typing.<id>` только для
+собственного id (`id(self)` в обеих схемах: web FNV-32 и desktop/android
+FNV-64/48) и для групп, где подписчик состоит (проверка по `group.list`
+с токеном той же сессии; web-id группы — `-<fnv32("group:<gid>")>`,
+desktop/android — `fnv48(<gid>)`). Подписка на чужой 1-на-1 typing раскрывала
+бы, кто пишет жертве. `presence.*` запрещён: клиенты подписываются на
+`presence.<id>` каждого известного собеседника (web — при первом появлении
+адреса в сторе, desktop — в `RegisterPeer`, android — при доставке/отправке).
+Публикация presence — только на свой `presence.<id(self)>`.
+
+Реализации: gateway `allowed_sub`, `group_typing_allowed`,
+`is_concrete_presence_subject`; web `connectionController.ts`
+(`ensurePresence`, `store.onUserRegistered`); desktop `parvane_client.cpp`
+(`EnsurePresenceSubscription`); android `jni/parvane_jni.cpp`
+(`ensurePresenceSub`). Тесты: gateway `group_typing_ids_match_both_client_schemes`
+и права подписки; web `conformance.test.ts` (`EPHEMERAL-1`).
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в

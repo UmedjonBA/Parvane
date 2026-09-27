@@ -139,6 +139,9 @@ export function createMediaService(deps: MediaDependencies) {
       mediaKeys = { keyB64: encrypted.keyB64, nonceB64: encrypted.nonceB64 };
     }
     const cloudMime = encrypt ? 'application/octet-stream' : mimeType;
+    // P-29: имя E2E-вложения серверу не сообщаем — настоящее имя едет внутри
+    // E2E-контента (fileName), cloud видит только непрозрачное
+    const cloudName = encrypt ? 'blob' : filename;
     const totalChunks = Math.max(1, Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES));
     for (let index = 0; index < totalChunks; index++) {
       const slice = bytes.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
@@ -147,14 +150,14 @@ export function createMediaService(deps: MediaDependencies) {
         chunk_index: index,
         total_chunks: totalChunks,
         data: encodeBase64(slice),
-        filename,
+        filename: cloudName,
         mime_type: cloudMime,
       });
       await connection.request(TOPIC_FILE_UPLOAD_CHUNK, JSON.stringify(chunkEvent), MEDIA_TIMEOUT_MS);
     }
     const completeEvent = buildWireEvent(store.self, deps.getToken(), {
       file_id: fileId,
-      filename,
+      filename: cloudName,
       total_chunks: totalChunks,
       size_bytes: bytes.length,
       mime_type: cloudMime,

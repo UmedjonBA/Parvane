@@ -60,7 +60,10 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
-import { clearSecureCredential, loadSecureCredential, saveSecureCredential } from './secureStorage';
+import {
+  clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, saveSecureSession,
+  setStoragePin, unlockStorageWithPin,
+} from './secureStorage';
 import {
   buildApiCustomEmojiSetFromPack,
   buildApiStickerSetFromPack,
@@ -263,6 +266,7 @@ const callController = createCallController({
 // Forward-ref: подписку на групповой typing реализует connectionController,
 // который создаётся ниже. Устанавливается после его создания
 let subscribeGroupTyping: (groupChatId: string) => void = () => {};
+let subscribePresence: (peerId: string) => void = () => {};
 
 const groupController = createGroupController({
   getConnection: () => connection,
@@ -335,7 +339,12 @@ const connectionController = createConnectionController({
   getE2e: () => e2e,
   setE2e: setE2eEngine,
   getStore: () => store,
-  setStore: (nextStore) => { store = nextStore; },
+  setStore: (nextStore) => {
+    store = nextStore;
+    // P-18: presence — по конкретным собеседникам, подписка при появлении адреса
+    store.onUserRegistered = (peerId) => subscribePresence(peerId);
+  },
+  unlockStorage: (user) => ensureStorageUnlocked(user),
   getToken: () => token,
   setToken: (nextToken) => { token = nextToken; },
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
@@ -370,6 +379,7 @@ const connectionController = createConnectionController({
 });
 
 subscribeGroupTyping = connectionController.ensureGroupTyping;
+subscribePresence = connectionController.ensurePresence;
 
 export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialArgs) {
   onUpdate = _onUpdate;
@@ -385,29 +395,25 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     const savedAddress = readLoginAddress();
     if (savedAddress) {
       pendingLoginAddress = savedAddress;
-      // «Keep me signed in»: если пароль сохранён (зашифрован в IndexedDB) —
-      // авто-логин без экрана пароля. Иначе (или при просроченном/битом
-      // credential) показываем экран пароля.
+      // «Keep me signed in» (P-39): пароль НЕ хранится — сессия возобновляется
+      // сохранённым JWT (сутки, отзываемый, привязан к устройству). Протухший
+      // или отозванный токен → экран пароля.
       if (readRememberMe() && isSessionExpired()) {
         // Сутки без активности — пароль просим заново
-        await clearSecureCredential(savedAddress).catch(() => undefined);
+        await clearSecureSession(savedAddress).catch(() => undefined);
       } else if (readRememberMe()) {
-        const savedPassword = await loadSecureCredential(savedAddress).catch(() => undefined);
-        if (savedPassword) {
+        await ensureStorageUnlocked(savedAddress);
+        const savedToken = await loadSecureSession(savedAddress).catch(() => undefined);
+        if (savedToken) {
           try {
-            await connectionController.connectAndLogin(savedAddress, savedPassword);
+            await connectionController.connectWithToken(savedAddress, savedToken);
             saveLoginAddress(savedAddress);
             touchSessionActivity();
             return;
           } catch (err) {
-            if (err instanceof TwoFactorRequiredError) {
-              // Устройство ещё не доверенное — экран подтверждения входа
-              startTelegramConfirmation(savedAddress, savedPassword, err.loginToken, 'login');
-              return;
-            }
             // eslint-disable-next-line no-console
-            console.error('[parvane] авто-логин не удался, спрашиваем пароль:', err);
-            await clearSecureCredential(savedAddress).catch(() => undefined);
+            console.error('[parvane] возобновление сессии по токену не удалось, спрашиваем пароль:', err);
+            await clearSecureSession(savedAddress).catch(() => undefined);
           }
         }
       }
@@ -525,15 +531,30 @@ function logDebug(message: string) {
   diagLog('log', message);
 }
 
-// «Keep me signed in»: при включённом флаге сохраняем пароль (зашифрованным),
-// чтобы reload не спрашивал его снова. При выключенном — стираем сохранённое.
-async function persistSessionCredential(user: string, password: string) {
+// P-39: хранилище под PIN — спрашиваем PIN до открытия E2E/сессии.
+// Минимальный UI: нативный prompt (3 попытки); при отказе хранилище остаётся
+// закрытым — E2E и сохранённая сессия недоступны до перезагрузки
+async function ensureStorageUnlocked(user: string) {
+  if (!(await hasStoragePin(user).catch(() => false)) || isStorageUnlocked(user)) return;
+  const prompts = buildOldLangPack('en');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // eslint-disable-next-line no-alert
+    const pin = window.prompt(prompts.ParvaneStoragePinPrompt as string, '');
+    if (pin === null) return;
+    if (await unlockStorageWithPin(user, pin).catch(() => false)) return;
+  }
+}
+
+// «Keep me signed in» (P-39): при включённом флаге сохраняем JWT сессии
+// (зашифрованным, под ключом хранилища/PIN), чтобы reload не спрашивал
+// пароль. Сам пароль на диск не попадает. При выключенном — стираем.
+async function persistSessionCredential(user: string, _password: string) {
   try {
-    if (readRememberMe()) {
-      await saveSecureCredential(user, password);
+    if (readRememberMe() && token) {
+      await saveSecureSession(user, token);
       touchSessionActivity();
     } else {
-      await clearSecureCredential(user);
+      await clearSecureSession(user);
     }
   } catch {
     // Хранилище недоступно (приватный режим) — просто будем спрашивать пароль
@@ -854,7 +875,7 @@ async function revokeOwnDevice(deviceId: string, password?: string) {
   if (!connection || !e2e) return undefined;
   try {
     // P-07: отзыв устройства требует текущий пароль; без явного берём сохранённый.
-    const pw = password || await loadSecureCredential(store.self).catch(() => undefined);
+    const pw = password; // P-39: сохранённого пароля больше нет — только ввод
     const raw = await connection.request(TOPIC_DEVICE_REVOKE, JSON.stringify({
       token, device_id: deviceId, password: pw,
     }));
@@ -1910,7 +1931,7 @@ const methods = {
   // снимать второй фактор). Если пароль не передан — берём сохранённый.
   async parvaneSetTwoFactor({ enabled, password }: { enabled: boolean; password?: string }) {
     if (!connection) return undefined;
-    const pw = !enabled ? (password || await loadSecureCredential(store.self).catch(() => undefined)) : undefined;
+    const pw = !enabled ? password : undefined; // P-39: только введённый пароль
     const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled, password: pw }));
     const response = JSON.parse(raw) as {
       ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string; trust_secret?: string;
@@ -1924,6 +1945,25 @@ const methods = {
 
   // P-07: смена пароля (identity.password.change): JWT + старый пароль; сервер
   // сбрасывает доверие устройств 2FA. Обновляем сохранённый пароль.
+  // P-39: опциональный PIN хранилища E2E/сессии
+  async parvaneGetStoragePin() {
+    if (!store.self) return { enabled: false };
+    return { enabled: await hasStoragePin(store.self).catch(() => false) };
+  },
+
+  async parvaneSetStoragePin({ pin }: { pin: string }) {
+    if (!store.self) return undefined;
+    try {
+      await ensureStorageUnlocked(store.self);
+      await setStoragePin(store.self, pin);
+      if (!pin) lockStorage(store.self);
+      return true;
+    } catch (err) {
+      logDebug(`PIN хранилища: ${String(err)}`);
+      return undefined;
+    }
+  },
+
   async parvaneChangePassword({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) {
     if (!connection) throw new Error('нет соединения');
     const raw = await connection.request(
@@ -1932,8 +1972,7 @@ const methods = {
     );
     const response = JSON.parse(raw) as { ok: boolean; error?: string };
     if (!response.ok) throw new Error(response.error || 'identity отклонил смену пароля');
-    const saved = await loadSecureCredential(store.self).catch(() => undefined);
-    if (saved) await saveSecureCredential(store.self, newPassword).catch(() => undefined);
+    // P-39: пароль не хранится — обновлять нечего
     return true;
   },
 
@@ -2257,7 +2296,7 @@ const methods = {
         }
         localState.clearUserData(user);
         await E2eEngine.clear(user);
-        await clearSecureCredential(user).catch(() => undefined);
+        await clearSecureSession(user).catch(() => undefined);
       }
     }
     return undefined;

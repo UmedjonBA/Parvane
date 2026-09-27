@@ -23,7 +23,7 @@ use parvane_types::{
 };
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -1576,6 +1576,8 @@ async fn push_mutation(nc: &Client, pool: &SqlitePool, message_id: &str, now: i6
 
 // ── msg.chat.send ─────────────────────────────────────────────────────────────
 
+// P-42: адреса участников и id сообщений — только на уровне debug (граф общения
+// не должен оседать в info-логах прода).
 async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     let result = async {
         let event: ParvaneEvent<SendPayload> = serde_json::from_slice(&msg.payload)
@@ -1609,7 +1611,7 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
 
         let now = now_unix();
         store_message_from(pool, &event, now, &sender).await?;
-        info!("Сообщение сохранено: {} → {} ({})", event.from, event.payload.to, event.id);
+        debug!("Сообщение сохранено: {} → {} ({})", event.from, event.payload.to, event.id);
 
         // Раскладываем по инбоксам получателей + офлайн-очередь (Фаза 1).
         // delivered-статус отправителю придёт, когда получатель подтвердит (ack),
@@ -1673,7 +1675,7 @@ async fn handle_ack(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                 };
                 publish_inbox(nc, &sender, serde_json::to_vec(&delivered)?).await?;
             }
-            info!("Ack: {} получил {}", reader, mid);
+            debug!("Ack: {} получил {}", reader, mid);
         }
         anyhow::Ok(())
     }
@@ -1710,7 +1712,7 @@ async fn handle_read(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         };
         publish_inbox(nc, &reader, serde_json::to_vec(&notice)?).await?;
 
-        info!("Read receipt: {} прочитал {}", reader, event.payload.message_id);
+        debug!("Read receipt: {} прочитал {}", reader, event.payload.message_id);
         anyhow::Ok(())
     }
     .await;
@@ -1746,7 +1748,7 @@ async fn handle_edit(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             false
         };
         if ok {
-            info!("Сообщение {} отредактировано автором {}", event.payload.message_id, author);
+            debug!("Сообщение {} отредактировано автором {}", event.payload.message_id, author);
             if let Err(e) = push_mutation(nc, pool, &event.payload.message_id.to_string(), now_unix()).await {
                 warn!("live-пуш правки {}: {}", event.payload.message_id, e);
             }
@@ -1780,7 +1782,7 @@ async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
                 now_unix(),
             ).await?;
         if ok {
-            info!("Сообщение {} удалено у всех автором {}", event.payload.message_id, author);
+            debug!("Сообщение {} удалено у всех автором {}", event.payload.message_id, author);
             if let Err(e) = push_mutation(nc, pool, &event.payload.message_id.to_string(), now_unix()).await {
                 warn!("live-пуш удаления {}: {}", event.payload.message_id, e);
             }
@@ -1818,7 +1820,7 @@ async fn handle_react(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
             return anyhow::Ok(());
         }
         set_reaction(pool, &mid, &reactor, &event.payload.emoji, now_unix()).await?;
-        info!("Реакция '{}' на {} от {}", event.payload.emoji, mid, reactor);
+        debug!("Реакция '{}' на {} от {}", event.payload.emoji, mid, reactor);
         if let Err(e) = push_mutation(nc, pool, &mid, now_unix()).await {
             warn!("live-пуш реакции {}: {}", mid, e);
         }
@@ -1852,7 +1854,7 @@ async fn handle_pin(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             return anyhow::Ok(());
         }
         set_pinned(pool, &mid, event.payload.pin, now_unix()).await?;
-        info!("Pin={} для {} ({})", event.payload.pin, mid, who);
+        debug!("Pin={} для {} ({})", event.payload.pin, mid, who);
         if let Err(e) = push_mutation(nc, pool, &mid, now_unix()).await {
             warn!("live-пуш пина {}: {}", mid, e);
         }
@@ -1928,7 +1930,7 @@ async fn handle_setnotify(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
             payload: NotifyNotice { notify: json.clone() },
         };
         publish_inbox(nc, &user, serde_json::to_vec(&notice)?).await?;
-        info!("Настройки уведомлений обновлены: {}", user);
+        debug!("Настройки уведомлений обновлены: {}", user);
         anyhow::Ok(())
     }
     .await;
@@ -1944,7 +1946,7 @@ async fn handle_clear(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         let who = verify_token(nc, &event.token).await?;
         validate_sender(&who, &event.from)?;
         let hidden = hide_messages(pool, &who, &event.payload.message_ids, now_unix()).await?;
-        info!("Очистка истории: {} скрыл(а) {} сообщений", who, hidden.len());
+        debug!("Очистка истории: {} скрыл(а) {} сообщений", who, hidden.len());
         if hidden.is_empty() {
             return anyhow::Ok(());
         }
@@ -1975,7 +1977,7 @@ async fn handle_group_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Me
             serde_json::from_slice(&msg.payload).context("JSON group.create")?;
         let creator = verify_token(nc, &req.token).await?;
         let gid = create_group(pool, &req.name, req.kind, &creator, &req.members, now_unix()).await?;
-        info!("Группа '{}' создана: {} ({})", req.name, gid, creator);
+        debug!("Группа '{}' создана: {} ({})", req.name, gid, creator);
         anyhow::Ok(GroupCreateResponse { ok: true, group_id: Some(gid), error: None })
     }
     .await
@@ -2194,7 +2196,7 @@ async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: async_n
         .bind(now_unix())
         .execute(pool)
         .await?;
-        info!("Инвайт для {} создан ({})", req.group_id, actor);
+        debug!("Инвайт для {} создан ({})", req.group_id, actor);
         anyhow::Ok(GroupInviteCreateResponse { ok: true, invite: Some(token), error: None })
     }
     .await
@@ -2248,7 +2250,7 @@ async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
             .bind(&group_id)
             .fetch_optional(pool)
             .await?;
-        info!("{} вступил в {} по инвайту", user, group_id);
+        debug!("{} вступил в {} по инвайту", user, group_id);
         anyhow::Ok(GroupJoinResponse {
             ok: true,
             group_id: Some(group_id),
@@ -2363,7 +2365,7 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         let json = serde_json::to_vec(&resp)?;
         nc.publish(reply.clone(), json.into()).await?;
 
-        info!("Sync для {}: {} сообщений после '{}'", user, count, last_id);
+        debug!("Sync для {}: {} сообщений после '{}'", user, count, last_id);
         anyhow::Ok(())
     }
     .await;

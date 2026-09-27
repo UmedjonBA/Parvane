@@ -78,8 +78,9 @@ use parvane_types::{
         GATEWAY_ALLOWED_PUBLISH, GATEWAY_ALLOWED_REQUEST, GATEWAY_EVENT_SUBJECTS,
         GATEWAY_TOKEN_REQUEST_SUBJECTS,
     },
+    GroupListResponse,
     topics::{
-        call_inbox, msg_inbox, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, IDENTITY_EMAIL_CONFIRM,
+        call_inbox, msg_inbox, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, GROUP_LIST, IDENTITY_EMAIL_CONFIRM,
         IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_SERVER_INFO,
         IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY,
     },
@@ -593,7 +594,10 @@ async fn serve(
             }
             "sub" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
-                if !allowed_sub(&user, &subject) {
+                let allowed = allowed_sub(&user, &subject)
+                    || (subject.starts_with("msg.typing.")
+                        && group_typing_allowed(&nats, &auth_token, &subject).await);
+                if !allowed {
                     let _ = tx.send(err_frame(None, "подписка на чужой/запрещённый subject")).await;
                     continue;
                 }
@@ -828,16 +832,53 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
 /// На что можно ПОДПИСАТЬСЯ: только свои пользовательские инбоксы (включая
 /// групповой mesh-инбокс `call.user.gcall:<self>`) и эфемерные typing/presence.
 /// NATS reply inbox создаёт и обслуживает только gateway.
+/// P-18: статические права подписки. Typing — только СВОЙ 1-на-1 topic
+/// (msg.typing.<id(self)>): подписка на чужой раскрывала бы, кто пишет жертве.
+/// Групповой typing проверяется по членству (`group_typing_allowed`).
+/// Presence — только конкретный presence.<id> (без wildcard'а на всех).
 fn allowed_sub(user: &str, subject: &str) -> bool {
     subject == msg_inbox(user)
         || subject == call_inbox(user)
         || subject == call_inbox(&format!("gcall:{user}"))
-        // Групповой typing: подписка на msg.typing.<chatId> (эфемерный индикатор
-        // «печатает…»). Симметрично publish (is_concrete_typing_subject уже
-        // открыт). Утечка минимальна: только факт набора для известного chatId,
-        // без содержимого; сообщения по-прежнему изолированы инбоксами.
-        || is_concrete_typing_subject(subject)
-        || subject == "presence.*"
+        || is_own_ephemeral_subject(user, "msg.typing.", subject)
+        || is_concrete_presence_subject(subject)
+}
+
+fn is_concrete_presence_subject(subject: &str) -> bool {
+    subject
+        .strip_prefix("presence.")
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Typing-id группы в обеих схемах клиентов: web — `-<fnv32("group:<gid>")>`,
+/// desktop/android — fnv64/48(<gid>).
+fn group_typing_ids(group_id: &str) -> [String; 2] {
+    [
+        format!("-{}", web_user_id(&format!("group:{group_id}"))),
+        desktop_user_id(group_id),
+    ]
+}
+
+/// P-18: подписка на msg.typing.<id> группы разрешена только участнику —
+/// список групп берём у messenger'а по токену этой же сессии.
+async fn group_typing_allowed(nats: &Client, token: &str, subject: &str) -> bool {
+    let Some(id) = subject.strip_prefix("msg.typing.") else {
+        return false;
+    };
+    if id.is_empty() || !id.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let request = serde_json::to_vec(&json!({ "token": token })).unwrap_or_default();
+    let reply = match tokio::time::timeout(Duration::from_secs(5), nats.request(GROUP_LIST, request.into())).await {
+        Ok(Ok(reply)) => reply,
+        _ => return false,
+    };
+    let Ok(list) = serde_json::from_slice::<GroupListResponse>(&reply.payload) else {
+        return false;
+    };
+    list.groups
+        .iter()
+        .any(|group| group_typing_ids(&group.group_id).iter().any(|candidate| candidate == id))
 }
 
 /// Что можно ПУБЛИКОВАТЬ (fire-and-forget).
@@ -922,7 +963,10 @@ mod tests {
             "alice@local",
             &format!("msg.typing.{desktop_id}")
         ));
-        assert!(allowed_sub("alice@local", "presence.*"));
+        // P-18: wildcard presence запрещён, конкретный presence.<id> — можно
+        assert!(!allowed_sub("alice@local", "presence.*"));
+        assert!(allowed_sub("alice@local", "presence.123"));
+        assert!(allowed_sub("alice@local", &format!("presence.{}", web_user_id("bob@local"))));
     }
 
     #[test]
@@ -942,7 +986,6 @@ mod tests {
             "msg.typing.*",
             "msg.typing.>",
             "presence.>",
-            "presence.123",
         ] {
             assert!(!allowed_sub("alice@local", subject), "allowed {subject}");
         }
@@ -950,8 +993,24 @@ mod tests {
         // разрешена всем (эфемерный индикатор набора; см. allowed_sub) —
         // включая чужой 1-на-1 id и групповой "-<digits>". Раньше блокировалось.
         let bob_web_id = web_user_id("bob@local");
-        assert!(allowed_sub("alice@local", &format!("msg.typing.{bob_web_id}")));
-        assert!(allowed_sub("alice@local", "msg.typing.-123456"));
+        // P-18: чужой 1-на-1 typing раскрывал бы, кто пишет жертве — запрещён;
+        // групповой typing статически не разрешается (только по членству)
+        assert!(!allowed_sub("alice@local", &format!("msg.typing.{bob_web_id}")));
+        assert!(!allowed_sub("alice@local", "msg.typing.-123456"));
+    }
+
+    #[test]
+    fn group_typing_ids_match_both_client_schemes() {
+        let ids = group_typing_ids("grp-1");
+        assert_eq!(ids[0], format!("-{}", web_user_id("group:grp-1")));
+        assert_eq!(ids[1], desktop_user_id("grp-1"));
+        assert!(ids[0].starts_with('-'));
+        assert!(ids[1].bytes().all(|b| b.is_ascii_digit()));
+        // presence: только конкретный числовой id
+        assert!(is_concrete_presence_subject("presence.42"));
+        assert!(!is_concrete_presence_subject("presence."));
+        assert!(!is_concrete_presence_subject("presence.*"));
+        assert!(!is_concrete_presence_subject("presence.4x"));
     }
 
     #[test]

@@ -114,6 +114,13 @@
       "ackCarriesSender": false,
       "editKeepsKind": true,
       "gatewayRejectsPlaintextEdit": true
+    },
+    {
+      "id": "EPHEMERAL-1",
+      "title": "Typing — только свой topic и группы по членству; presence — по конкретным собеседникам",
+      "typingSubscribe": "own msg.typing.<id(self)> + msg.typing.<id(group)> only for members (gateway checks group.list)",
+      "presenceSubscribe": "presence.<id(peer)> per known peer; presence.* forbidden",
+      "presencePublish": "presence.<id(self)> only"
     }
   ]
 }

@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // ── JWT claims ───────────────────────────────────────────────────────────────
@@ -374,7 +374,7 @@ async fn main() -> Result<()> {
                 handle_verify(&nc, &decoding, &pool, msg).await;
             }
             Some(msg) = search_sub.next() => {
-                handle_search(&nc, &pool, msg).await;
+                handle_search(&nc, &pool, &decoding, msg).await;
             }
             Some(msg) = setname_sub.next() => {
                 handle_setname(&nc, &pool, &decoding, msg).await;
@@ -386,7 +386,7 @@ async fn main() -> Result<()> {
                 handle_setkey(&nc, &pool, &decoding, msg).await;
             }
             Some(msg) = resolve_sub.next() => {
-                handle_resolve(&nc, &pool, msg).await;
+                handle_resolve(&nc, &pool, &decoding, msg).await;
             }
             Some(msg) = pkpub_sub.next() => {
                 handle_prekeys_publish(&nc, &pool, &decoding, msg).await;
@@ -543,25 +543,66 @@ fn name_or_default(username: &str, display_name: &str) -> String {
 }
 
 // Поиск пользователей по подстроке имени/адреса. Возвращает username+display_name.
-async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+/// P-19: экранирование `%`/`_`/`\` в шаблоне LIKE (ESCAPE '\').
+fn like_escape(q: &str) -> String {
+    let mut out = String::with_capacity(q.len());
+    for ch in q.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Минимальная длина запроса поиска: одиночный символ (или пустой/`%`)
+/// отдавал бы весь каталог.
+const SEARCH_MIN_CHARS: usize = 2;
+
+/// Публичная карточка для поиска/резолва: без телефона, даты рождения и bio —
+/// их видит только владелец (P-19).
+fn public_card(u: &str, d: &str, a: String, k: String, color: i64, chan: String) -> UserInfo {
+    UserInfo {
+        display_name: name_or_default(u, d),
+        username: u.to_string(),
+        avatar: opt(a),
+        pubkey: opt(k),
+        bio: None,
+        birthday: None,
+        name_color: if color != 0 { Some(color) } else { None },
+        personal_channel: opt(chan),
+        phone: None,
+    }
+}
+
+/// Адрес запрашивающего по токену (если gateway подставил валидный).
+fn requester_of(decoding: &DecodingKey, token: &str) -> Option<String> {
+    if token.is_empty() {
+        return None;
+    }
+    jwt_decode(decoding, token).ok().map(|data| data.claims.sub)
+}
+
+async fn handle_search(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else {
         error!("search: нет reply-топика, игнорирую");
         return;
     };
-    let q = serde_json::from_slice::<SearchUsersRequest>(&msg.payload)
-        .map(|r| r.query.trim().to_string())
-        .unwrap_or_default();
-    let users: Vec<UserInfo> = if q.is_empty() {
+    let req = serde_json::from_slice::<SearchUsersRequest>(&msg.payload).ok();
+    let q = req.as_ref().map(|r| r.query.trim().to_string()).unwrap_or_default();
+    let _requester = req.as_ref().and_then(|r| requester_of(decoding, &r.token));
+    let users: Vec<UserInfo> = if q.chars().count() < SEARCH_MIN_CHARS {
         vec![]
     } else {
-        let like = format!("%{}%", q);
+        // P-19: `%`/`_` в запросе — литералы, а не wildcard'ы
+        let like = format!("%{}%", like_escape(&q));
         // Ограничиваем выдачу доменом этого сервера: аккаунты чужих доменов
         // (в т.ч. e2e-тестовые `@local` на проде) в директорию не попадают.
-        let domain_suffix = format!("%@{}", server_domain());
-        sqlx::query_as::<_, (String, String, String, String, String, String, i64, String, String)>(
-            "SELECT username, display_name, avatar_file_id, pubkey, bio, birthday,              name_color, personal_channel, phone FROM users
-             WHERE (username LIKE ? OR display_name LIKE ?)
-               AND username LIKE ?
+        let domain_suffix = format!("%@{}", like_escape(&server_domain()));
+        sqlx::query_as::<_, (String, String, String, String, i64, String)>(
+            "SELECT username, display_name, avatar_file_id, pubkey, name_color, personal_channel FROM users
+             WHERE (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
+               AND username LIKE ? ESCAPE '\\'
              ORDER BY username LIMIT 20",
         )
         .bind(&like)
@@ -571,20 +612,11 @@ async fn handle_search(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(u, d, a, k, bio, bday, color, chan, phone)| UserInfo {
-            display_name: name_or_default(&u, &d),
-            username: u,
-            avatar: opt(a),
-            pubkey: opt(k),
-            bio: opt(bio),
-            birthday: opt(bday),
-            name_color: if color != 0 { Some(color) } else { None },
-            personal_channel: opt(chan),
-            phone: opt(phone),
-        })
+        .map(|(u, d, a, k, color, chan)| public_card(&u, &d, a, k, color, chan))
         .collect()
     };
-    info!("search '{}' → {} результатов", q, users.len());
+    // P-42: сам запрос в лог не пишем
+    debug!("search: {} результатов", users.len());
     let _ = nc
         .publish(reply, serde_json::to_vec(&SearchUsersResponse { users }).unwrap_or_default().into())
         .await;
@@ -726,11 +758,13 @@ async fn handle_setkey(
 }
 
 // Резолв display_name по списку адресов (для пиров из sync).
-async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+async fn handle_resolve(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else { return };
     let req: ResolveRequest = serde_json::from_slice(&msg.payload).unwrap_or(ResolveRequest {
         usernames: vec![],
+        token: String::new(),
     });
+    let requester = requester_of(decoding, &req.token);
     let mut users = Vec::new();
     for u in req.usernames.iter().take(50) {
         let row: Option<(String, String, String, String, String, i64, String, String)> = sqlx::query_as(
@@ -741,6 +775,9 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
         .await
         .unwrap_or(None);
         if let Some((d, a, k, bio, bday, color, chan, phone)) = row {
+            // P-19: телефон — только владельцу; bio/дата рождения — публичная
+            // часть профиля, заданная самим пользователем.
+            let is_self = requester.as_deref() == Some(u.as_str());
             users.push(UserInfo {
                 display_name: name_or_default(u, &d),
                 username: u.clone(),
@@ -750,7 +787,7 @@ async fn handle_resolve(nc: &Client, pool: &SqlitePool, msg: async_nats::Message
                 birthday: opt(bday),
                 name_color: if color != 0 { Some(color) } else { None },
                 personal_channel: opt(chan),
-                phone: opt(phone),
+                phone: if is_self { opt(phone) } else { None },
             });
         }
     }
@@ -1541,6 +1578,20 @@ async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload: &[u8]) -> 
         false
     };
     let mut issued_trust_secret: Option<String> = None;
+    // P-14: секрет доверия одноразовый — при каждом доверенном входе выдаём
+    // новый (украденный из хранилища секрет протухает после первого же входа
+    // владельца, а повторное использование старого — сигнал компрометации).
+    if trusted {
+        let (secret, hash) = new_trust_secret();
+        sqlx::query("UPDATE trusted_devices SET secret_hash = ?, confirmed_at = ? WHERE username = ? AND device_id = ?")
+            .bind(&hash)
+            .bind(now_unix())
+            .bind(&req.user)
+            .bind(device_id)
+            .execute(pool)
+            .await?;
+        issued_trust_secret = Some(secret);
+    }
     if tg_2fa != 0 && telegram_id.is_some() && !trusted {
         let now = now_unix();
         let _ = sqlx::query("DELETE FROM login_links WHERE expires_at < ?").bind(now).execute(pool).await;
@@ -2149,7 +2200,12 @@ async fn issue_email_code(pool: &SqlitePool, user: &str) -> Result<String> {
 /// SMTP не блокировал цикл обработки шины.
 fn send_confirmation_email(email: String, code: String) {
     let Some(host) = std::env::var("PARVANE_SMTP_HOST").ok().filter(|h| !h.is_empty()) else {
-        info!("dev-режим SMTP: код подтверждения для {}: {}", email, code);
+        // P-42: код в лог — только в dev-режиме (PARVANE_DEV=1, локальный стенд/e2e)
+        if std::env::var("PARVANE_DEV").ok().as_deref() == Some("1") {
+            info!("dev-режим SMTP: код подтверждения для {}: {}", email, code);
+        } else {
+            warn!("SMTP не настроен (PARVANE_SMTP_HOST): код подтверждения для {} не отправлен", email);
+        }
         return;
     };
     tokio::spawn(async move {
@@ -3625,6 +3681,48 @@ mod tests {
         let (stored,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
             .bind("alice@local").fetch_one(&pool).await.unwrap();
         assert!(stored.is_empty());
+    }
+
+    // P-19: LIKE-экранирование и минимальная длина запроса
+    #[test]
+    fn like_escape_neutralizes_wildcards() {
+        assert_eq!(like_escape("a%b_c\\d"), "a\\%b\\_c\\\\d");
+        assert_eq!(like_escape("plain"), "plain");
+        assert!(SEARCH_MIN_CHARS >= 2);
+    }
+
+    // P-19: телефон — только владельцу, публичная карточка без PII
+    #[test]
+    fn public_card_has_no_pii() {
+        let card = public_card("u@local", "U", "a".into(), "k".into(), 3, "".into());
+        assert!(card.phone.is_none() && card.bio.is_none() && card.birthday.is_none());
+        assert_eq!(card.username, "u@local");
+        assert_eq!(card.avatar.as_deref(), Some("a"));
+    }
+
+    // P-14: секрет доверия ротируется при каждом доверенном входе; старый
+    // после этого не принимается (вход снова требует Telegram)
+    #[tokio::test]
+    async fn trust_secret_rotates_on_each_trusted_login() {
+        let pool = test_pool().await;
+        let (enc, _dec) = make_keys();
+        do_register(&pool, &register_bytes("rot", "pw-secret-1"), ConfirmMode::None).await.unwrap();
+        let user = format!("rot@{}", server_domain());
+        sqlx::query("UPDATE users SET tg_2fa = 1, telegram_id = 42 WHERE username = ?").bind(&user).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO trusted_devices (username, device_id, confirmed_at, secret_hash) VALUES (?, 'dev-1', 1, ?)")
+            .bind(&user).bind(trust_secret_hash("s1")).execute(&pool).await.unwrap();
+        let out = do_issue(&pool, &enc, &issue_bytes_with_device_secret("rot", "pw-secret-1", "dev-1", "s1")).await.unwrap();
+        let s2 = out.trust_secret().expect("доверенный вход выдаёт новый секрет").to_string();
+        assert!(out.token().is_some() && s2 != "s1");
+        let (hash,): (String,) = sqlx::query_as("SELECT secret_hash FROM trusted_devices WHERE username = ? AND device_id = 'dev-1'")
+            .bind(&user).fetch_one(&pool).await.unwrap();
+        assert_eq!(hash, trust_secret_hash(&s2));
+        // Старый секрет больше не доверен → второй фактор
+        let again = do_issue(&pool, &enc, &issue_bytes_with_device_secret("rot", "pw-secret-1", "dev-1", "s1")).await.unwrap();
+        assert!(again.token().is_none(), "старый секрет не должен давать вход");
+        // Новый — работает и ротируется дальше
+        let out3 = do_issue(&pool, &enc, &issue_bytes_with_device_secret("rot", "pw-secret-1", "dev-1", &s2)).await.unwrap();
+        assert!(out3.token().is_some() && out3.trust_secret().is_some_and(|s| s != s2));
     }
 
     fn issue_bytes_with_login_token(user: &str, password: &str, login_token: &str) -> Vec<u8> {

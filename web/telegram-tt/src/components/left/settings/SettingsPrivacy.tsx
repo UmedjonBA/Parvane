@@ -204,6 +204,33 @@ const SettingsPrivacy = ({
     }
   });
 
+  // P-39: опциональный PIN хранилища (E2E-ключи + сохранённая сессия).
+  const [storagePin, setStoragePin] = useState('');
+  const [storagePinRepeat, setStoragePinRepeat] = useState('');
+  const [isPinBusy, setIsPinBusy] = useState(false);
+  const [isPinEnabled, setIsPinEnabled] = useState(false);
+  useEffect(() => {
+    void (callParvane('parvaneGetStoragePin', {}) as Promise<{ enabled: boolean } | undefined>)
+      .then((state) => setIsPinEnabled(Boolean(state?.enabled)));
+  }, []);
+  const canSetPin = storagePin.length >= 4 && storagePin === storagePinRepeat;
+
+  const applyStoragePin = useLastCallback(async (pin: string) => {
+    setIsPinBusy(true);
+    try {
+      const ok = await callParvane('parvaneSetStoragePin', { pin });
+      if (!ok) throw new Error('rejected');
+      setIsPinEnabled(Boolean(pin));
+      setStoragePin('');
+      setStoragePinRepeat('');
+      showNotification({ message: oldLang('ParvaneStoragePinDone') });
+    } catch {
+      showNotification({ message: oldLang('ParvaneStoragePinFailed') });
+    } finally {
+      setIsPinBusy(false);
+    }
+  });
+
   const handleExportE2eKeys = useLastCallback(async () => {
     const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
     if (!password) return;
@@ -344,6 +371,45 @@ const SettingsPrivacy = ({
             {oldLang('ParvaneChangePasswordButton')}
           </Button>
         </div>
+      </Island>
+
+      {/* Parvane: PIN хранилища E2E-ключей и сессии (P-39) */}
+      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+        {oldLang('ParvaneStoragePinTitle')}
+      </IslandTitle>
+      <Island>
+        <p className="settings-item-description-larger">
+          {isPinEnabled ? oldLang('ParvaneStoragePinEnabled') : oldLang('ParvaneStoragePinInfo')}
+        </p>
+        {isPinEnabled ? (
+          <div className="settings-item">
+            <Button size="smaller" disabled={isPinBusy} onClick={() => applyStoragePin('')}>
+              {oldLang('ParvaneStoragePinRemove')}
+            </Button>
+          </div>
+        ) : (
+          <div className="settings-item">
+            <input
+              type="password"
+              className="form-control"
+              placeholder={oldLang('ParvaneStoragePinPlaceholder')}
+              value={storagePin}
+              onChange={(e) => setStoragePin(e.currentTarget.value)}
+              disabled={isPinBusy}
+            />
+            <input
+              type="password"
+              className="form-control"
+              placeholder={oldLang('ParvaneStoragePinRepeat')}
+              value={storagePinRepeat}
+              onChange={(e) => setStoragePinRepeat(e.currentTarget.value)}
+              disabled={isPinBusy}
+            />
+            <Button size="smaller" disabled={!canSetPin || isPinBusy} onClick={() => applyStoragePin(storagePin)}>
+              {oldLang('ParvaneStoragePinSet')}
+            </Button>
+          </div>
+        )}
       </Island>
 
       <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>

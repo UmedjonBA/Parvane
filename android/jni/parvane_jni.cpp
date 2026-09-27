@@ -223,6 +223,27 @@ std::int64_t nowSec() {
                std::chrono::system_clock::now().time_since_epoch()).count();
 }
 std::atomic<bool> g_presenceRunning{false};
+// P-18: presence по конкретным собеседникам. Под g_mu.
+std::set<std::string> g_presencePeers;      // адреса, чьё присутствие нужно
+std::set<std::string> g_presenceSubscribed; // уже подписаны в этой сессии
+void subscribePresenceLocked(const std::string &peer) {
+    if (!g_transport || peer.empty() || peer == g_self || g_presenceSubscribed.count(peer)) return;
+    g_presenceSubscribed.insert(peer);
+    g_transport->subscribe("presence." + std::to_string(idForAddress(peer)), [](std::string, std::string payload) {
+        auto j = json::parse(payload, nullptr, false);
+        if (j.is_object() && j.value("from", "") != g_self) {
+            static std::set<std::string> logged;
+            if (logged.insert(j.value("from", "")).second) LOGI("присутствие: +1 онлайн"); // без адреса (P-46)
+            emit(json{{"type", "presence"}, {"from", j.value("from", "")}});
+        }
+    });
+}
+// Собеседник появился (сообщение/чат) — подписка на его presence. Под g_mu.
+void ensurePresenceSub(const std::string &peer) {
+    if (peer.empty() || peer == g_self || peer.find('@') == std::string::npos || isGroupLocked(peer)) return;
+    g_presencePeers.insert(peer);
+    subscribePresenceLocked(peer);
+}
 // Группы: group_id → участники (без banned); typing-подписки по группам
 std::map<std::string, std::vector<std::string>> g_groupMembers;
 std::set<std::string> g_groupTypingSubscribed;
@@ -365,6 +386,8 @@ json reactionsJson(const parvane::StoredMessage &sm) {
 }
 void deliverStored(parvane::StoredMessage sm, bool live) {
     if (sm.id.empty()) return;
+    ensurePresenceSub(sm.from);
+    ensurePresenceSub(sm.to);
     const bool seen = g_seen.count(sm.id) > 0;
     if (sm.deleted) { // tombstone: убрать из UI (и первый раз — не показывать)
         if (seen) emit(json{{"type", "deleted"}, {"id", sm.id}});
@@ -499,6 +522,7 @@ void deliverStored(parvane::StoredMessage sm, bool live) {
 // Sealed-отправка произвольного content (текст с ответом, медиа). Под g_mu.
 std::string sendSealedLocked(const std::string &to, const json &content, const std::optional<std::string> &replyTo) {
     if (!g_messenger || !g_transport) throw std::runtime_error("нет сессии");
+    ensurePresenceSub(to);
     if (!parvane::e2e::ready()) throw std::runtime_error("E2E не готов");
     if (isGroupLocked(to)) { // группа: Megolm-конверт, from/token настоящие
         const auto sealed = sealGroupLocked(to, content);
@@ -993,14 +1017,9 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
                     emit(json{{"type", "typing"}, {"from", j.value("from", "")}, {"to", j.value("to", "")}});
                 }
             });
-        g_transport->subscribe("presence.*", [](std::string, std::string payload) {
-            auto j = json::parse(payload, nullptr, false);
-            if (j.is_object() && j.value("from", "") != g_self) {
-                static std::set<std::string> logged;
-                if (logged.insert(j.value("from", "")).second) LOGI("присутствие: +1 онлайн"); // без адреса (P-46)
-                emit(json{{"type", "presence"}, {"from", j.value("from", "")}});
-            }
-        });
+        // P-18: presence — только конкретных собеседников (ensurePresenceSub),
+        // не presence.* всех пользователей; известные из журнала — сразу
+        for (const auto &peer : g_presencePeers) subscribePresenceLocked(peer);
         if (!g_presenceRunning.exchange(true)) {
             std::thread([] {
                 while (g_presenceRunning) {
@@ -1092,11 +1111,11 @@ std::string sendMediaBytes(const std::string &toStd, const std::string &plain, j
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         parvane::CloudClient cloud(*g_transport);
-        const auto filename = content.value("filename", content.value("kind", std::string("media")) + ".bin");
+        // P-29: имя E2E-вложения серверу не сообщаем (оно в E2E-контенте)
         const auto mime = content.value("mime", std::string("application/octet-stream"));
         auto recipients = std::vector<std::string>{toStd};
         if (isGroupLocked(toStd)) recipients = g_groupMembers[toStd];
-        const auto fileId = cloud.upload(g_self, g_token, filename, mime, enc.ciphertext,
+        const auto fileId = cloud.upload(g_self, g_token, "blob", mime, enc.ciphertext,
                                          recipients, false, 256 * 1024, 120000);
         if (fileId.empty()) throw std::runtime_error("блоб не загрузился");
         content["file_id"] = fileId;

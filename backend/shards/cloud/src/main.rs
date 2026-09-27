@@ -15,7 +15,7 @@ use parvane_types::{
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
@@ -476,7 +476,7 @@ async fn handle_chunk(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         let owner = verify_token(nc, &event.token).await?;
         store_chunk(pool, &owner, &event.payload).await?;
 
-        info!(
+        debug!(
             "Чанк сохранён: {} [{}/{}] owner={}",
             event.payload.file_id,
             event.payload.chunk_index + 1,
@@ -521,10 +521,9 @@ async fn handle_complete(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         let owner = verify_token(nc, &event.token).await?;
         let file_id = finalize_file(pool, &owner, &event.payload).await?;
 
-        info!(
-            "Файл завершён: {} ({}, {} байт) owner={}",
-            event.payload.filename, file_id, event.payload.size_bytes, owner
-        );
+        // P-29/P-42: имя файла в лог не пишем (для E2E-вложений клиенты и так
+        // шлют непрозрачное имя), владелец — на уровне debug
+        debug!("Файл завершён: {} ({} байт) owner={}", file_id, event.payload.size_bytes, owner);
 
         let resp = UploadCompleteResponse {
             ok: true,
@@ -594,10 +593,7 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
                 .await?;
         }
 
-        info!(
-            "Файл отдан: {} ({} чанков)",
-            file.filename, file.total_chunks
-        );
+        debug!("Файл отдан: {} чанков", file.total_chunks);
         anyhow::Ok(())
     }
     .await;
