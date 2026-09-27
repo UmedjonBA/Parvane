@@ -187,7 +187,7 @@ pub(crate) async fn serve(
     // P-06: токен верифицируется не только при auth. Периодически (и по факту
     // истечения) перепроверяем его через identity; отозванное устройство или
     // протухший JWT рвут соединение, а не живут до 24 ч.
-    let mut reverify = tokio::time::interval(Duration::from_secs(REVERIFY_SECS));
+    let mut reverify = tokio::time::interval(Duration::from_secs(reverify_secs()));
     reverify.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reverify.tick().await; // первый тик — немедленный, пропускаем
     loop {

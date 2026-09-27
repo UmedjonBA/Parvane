@@ -1846,6 +1846,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "parvane-integration"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "ed25519-dalek",
+ "futures",
+ "jsonwebtoken",
+ "parvane-types",
+ "rand 0.8.6",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "parvane-types"
 version = "0.1.0"
 dependencies = [

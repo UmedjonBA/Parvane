@@ -53,8 +53,15 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const CHANNEL_CAP: usize = 512;
 /// За сколько секунд соединение обязано пройти auth, иначе сокет закрывается.
 const AUTH_TIMEOUT_SECS: u64 = 10;
-/// Период переверификации токена уже авторизованной сессии (P-06).
-const REVERIFY_SECS: u64 = 300;
+/// Период переверификации токена уже авторизованной сессии (P-06), по умолчанию
+/// 300 с; PARVANE_GATEWAY_REVERIFY_SECS переопределяет (интеграционные тесты).
+fn reverify_secs() -> u64 {
+    std::env::var("PARVANE_GATEWAY_REVERIFY_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(300)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
