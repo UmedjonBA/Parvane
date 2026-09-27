@@ -38,6 +38,9 @@ export type WireDeviceBundle = {
   signing_key?: string;
   identity_key: string;
   signed_prekey?: string;
+  // P-25: подпись signed_prekey Ed25519-ключом устройства (signing_key);
+  // бандл из каталога без валидной подписи не используется
+  signed_prekey_sig?: string;
   one_time?: string;
 };
 
@@ -52,8 +55,10 @@ export async function fingerprintOf(key: string): Promise<string> {
 
 type BundleFetcher = (user: string) => Promise<{
   ok: boolean;
+  signing_key?: string;
   identity_key?: string;
   signed_prekey?: string;
+  signed_prekey_sig?: string;
   one_time?: string;
   devices?: WireDeviceBundle[];
 } | undefined>;
@@ -109,6 +114,9 @@ type PersistedE2eState = {
   // v2: подписанные прежними устройствами переносы владения их исходящими
   // (`link-transfer:<user>:<old>:<new>`), отправляются в каждом sync.
   transfers?: { old_signing_key: string; signature: string }[];
+  // P-04: УЖЕ ВИДЕННЫЕ identity контактов (TOFU). Каталог их не засевает
+  // после первого знакомства — иначе сервер подменил бы ключ без предупреждения.
+  seenIdentities?: Record<string, string[]>;
 };
 
 // v2-экспорт при линковке (P-48): ТОЛЬКО история и входящие групповые ключи,
@@ -122,6 +130,7 @@ export type LinkExportState = {
   groupRecipients?: Record<string, string[]>;
   // подписанные переносы, унаследованные старым устройством от его предков
   transfers?: { old_signing_key: string; signature: string }[];
+  seenIdentities?: Record<string, string[]>;
 };
 
 // Как часто перепроверять список устройств контакта перед отправкой (обнаружение
@@ -153,6 +162,9 @@ export class E2eEngine {
   private sessionsByIdentity = new Map<string, Olm.Session>();
 
   private identityByContact: Record<string, string> = {};
+  // P-04: виденные identity по контакту — смена ключа определяется по ним,
+  // а не по identityByContact (его перезаписывает каталог до проверки)
+  private seenIdentities = new Map<string, Set<string>>();
 
   // Мультидевайс: contact → deviceId → {identity, signing}. Sessions остаются
   // keyed по identity (он уникален на устройство)
@@ -254,6 +266,20 @@ export class E2eEngine {
     Object.entries(state.contactDevices || {}).forEach(([contact, devices]) => {
       this.devicesByContact.set(contact, devices);
     });
+    if (state.seenIdentities) {
+      Object.entries(state.seenIdentities).forEach(([contact, ids]) => {
+        this.seenIdentities.set(contact, new Set(ids));
+      });
+    } else {
+      // Миграция снапшота без seenIdentities: всё, что знали до сих пор,
+      // считаем виденным — иначе первое же сообщение выглядело бы сменой ключа
+      Object.entries(this.identityByContact).forEach(([contact, identity]) => {
+        this.markSeen(contact, identity);
+      });
+      this.devicesByContact.forEach((devices, contact) => {
+        Object.values(devices).forEach((device) => this.markSeen(contact, device.identity));
+      });
+    }
     // Миграция до-мультидевайсного снапшота: единственная известная identity
     // контакта — его legacy-primary устройство ''
     Object.entries(this.identityByContact).forEach(([contact, identity]) => {
@@ -359,6 +385,7 @@ export class E2eEngine {
       oneTimeKeyIdNext: this.oneTimeKeyIdNext,
       legacyAccounts: this.legacySigners.map((legacy) => legacy.pickle(this.pickleKey)),
       transfers: this.transfers,
+      seenIdentities: this.seenIdentitiesSnapshot(),
     };
   }
 
@@ -505,15 +532,7 @@ export class E2eEngine {
   }
 
   verifyCallData(publicKey: string, data: string, signature: string) {
-    const utility = new Olm.Utility();
-    try {
-      utility.ed25519_verify(stripBase64Padding(publicKey), data, stripBase64Padding(signature));
-      return true;
-    } catch {
-      return false;
-    } finally {
-      utility.free();
-    }
+    return ed25519Verify(publicKey, data, signature);
   }
 
   getCachedInner(uuid: string): StoredInner | undefined {
@@ -598,6 +617,7 @@ export class E2eEngine {
       contactDevices: Object.fromEntries(this.devicesByContact),
       groupRecipients: Object.fromEntries(this.groupRecipients),
       transfers: this.transfers,
+      seenIdentities: this.seenIdentitiesSnapshot(),
     };
     return JSON.stringify(state);
   }
@@ -642,6 +662,10 @@ export class E2eEngine {
       });
       Object.entries(state.contacts || {}).forEach(([contact, identity]) => {
         if (!(contact in this.identityByContact)) this.identityByContact[contact] = identity;
+        this.markSeen(contact, identity);
+      });
+      Object.entries(state.seenIdentities || {}).forEach(([contact, ids]) => {
+        ids.forEach((identity) => this.markSeen(contact, identity));
       });
       (state.transfers || []).forEach((t) => this.addTransfer(t));
       this.addTransfer(transfer);
@@ -792,12 +816,15 @@ export class E2eEngine {
       return;
     }
     if (!bundle?.ok) return;
-    const devices: WireDeviceBundle[] = bundle.devices?.length ? bundle.devices : (
+    const fromDeviceList = Boolean(bundle.devices?.length);
+    const devices: WireDeviceBundle[] = fromDeviceList ? bundle.devices! : (
       // Legacy identity без списка устройств — считаем его primary ('')
       bundle.identity_key ? [{
         device_id: '',
+        signing_key: bundle.signing_key,
         identity_key: bundle.identity_key,
         signed_prekey: bundle.signed_prekey,
+        signed_prekey_sig: bundle.signed_prekey_sig,
         one_time: bundle.one_time,
       }] : []
     );
@@ -805,9 +832,20 @@ export class E2eEngine {
 
     const next: Record<string, ContactDevice> = {};
     let accountChanged = false;
+    let rejected = 0;
     devices.forEach((device) => {
       // Своё текущее устройство в списке самого себя — сессия не нужна
       if (!device.identity_key || device.identity_key === this.identityKey) return;
+      // P-25: signed_prekey обязан быть подписан signing_key устройства —
+      // иначе сервер подсовывает свой SPK (тихий DoS сессий). В списке
+      // устройств подпись обязательна; legacy-бандл без signing_key
+      // проверить нечем, принимаем как раньше
+      if (fromDeviceList || device.signing_key || device.signed_prekey_sig) {
+        if (!verifyPrekeySignature(device)) {
+          rejected++;
+          return;
+        }
+      }
       next[device.device_id] = { identity: device.identity_key, signing: device.signing_key || '' };
       if (this.sessionsByIdentity.has(device.identity_key)) return;
       const oneTimeKey = device.one_time || device.signed_prekey;
@@ -817,9 +855,18 @@ export class E2eEngine {
       this.sessionsByIdentity.set(device.identity_key, session);
       accountChanged = true;
     });
+    // Каталог целиком без валидных подписей — как недоступный: ничего не
+    // перезаписываем, вердикт по такому контакту останется `unknown`
+    if (rejected && !Object.keys(next).length) return;
     const previous = this.devicesByContact.get(contact);
     this.devicesByContact.set(contact, next);
     this.deviceListFetchedAt.set(contact, now);
+    // P-04: первое знакомство с каталогом — текущие identity считаем
+    // виденными (TOFU). Позже каталог множество НЕ засевает: принудительная
+    // перечитка при промахе verifySender иначе спрятала бы смену ключа
+    if (!this.seenIdentities.get(contact)?.size) {
+      Object.values(next).forEach((device) => this.markSeen(contact, device.identity));
+    }
     // Устройство контакта исчезло из каталога (отозвано) — ротируем общие
     // группы: групповой шифртекст рассылается всем, и без ротации отозванное
     // устройство продолжало бы читать НАШИ новые сообщения старым session key
@@ -905,13 +952,47 @@ export class E2eEngine {
 
   // true — ключ собеседника СМЕНИЛСЯ (был другой): повод предупредить
   // пользователя, как «safety number changed» в Signal
+  // P-04: смена определяется по множеству УЖЕ ВИДЕННЫХ identity контакта,
+  // а не по identityByContact — его перезаписывает refreshContactDevices ещё
+  // до этой проверки. Новое устройство контакта тоже считается сменой ключа
+  // (как safety number в Signal) — пользователь сверяет отпечатки заново
   rememberContactIdentity(contact: string, identity: string): boolean {
-    const previous = this.identityByContact[contact];
-    if (previous === identity) return false;
-    this.identityByContact[contact] = identity;
-    const changed = Boolean(previous);
+    if (!contact || !identity || contact === this.self) return false;
+    if (this.identityByContact[contact] !== identity) {
+      this.identityByContact[contact] = identity;
+    }
+    const seen = this.seenIdentities.get(contact);
+    if (seen?.has(identity)) {
+      this.persistContacts();
+      return false;
+    }
+    const changed = Boolean(seen?.size);
+    this.markSeen(contact, identity);
     this.persistContacts();
     return changed;
+  }
+
+  // Виденные identity контакта (для UI/тестов)
+  getSeenIdentities(contact: string): string[] {
+    return Array.from(this.seenIdentities.get(contact) || []);
+  }
+
+  private markSeen(contact: string, identity: string) {
+    if (!contact || !identity || identity === this.identityKey) return;
+    let seen = this.seenIdentities.get(contact);
+    if (!seen) {
+      seen = new Set();
+      this.seenIdentities.set(contact, seen);
+    }
+    seen.add(identity);
+  }
+
+  private seenIdentitiesSnapshot(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    this.seenIdentities.forEach((ids, contact) => {
+      out[contact] = Array.from(ids);
+    });
+    return out;
   }
 
   // Аутентичность отправителя sealed-сообщения: sender_identity ОБЯЗАН
@@ -1067,6 +1148,27 @@ export class E2eEngine {
       return undefined;
     }
   }
+}
+
+// Ed25519-проверка подписи base64-строки (Olm.Utility); false — невалидна
+function ed25519Verify(publicKey: string, data: string, signature: string): boolean {
+  if (!publicKey || !signature) return false;
+  const utility = new Olm.Utility();
+  try {
+    utility.ed25519_verify(stripBase64Padding(publicKey), data, stripBase64Padding(signature));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    utility.free();
+  }
+}
+
+// P-25: signed_prekey бандла подписан signing_key устройства (подпись — над
+// base64-строкой ключа, как при публикации buildPrekeysPayload)
+export function verifyPrekeySignature(device: WireDeviceBundle): boolean {
+  if (!device.signing_key || !device.signed_prekey || !device.signed_prekey_sig) return false;
+  return ed25519Verify(device.signing_key, device.signed_prekey, device.signed_prekey_sig);
 }
 
 function stripBase64Padding(value: string) {

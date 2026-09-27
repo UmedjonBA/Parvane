@@ -160,6 +160,35 @@ desktop `parvane-core` `linking.cpp`/`e2e.cpp` + `parvane_client.cpp`
 `tests/e2e_tests.cpp`, identity `link_v2_*`, messenger
 `link_transfer_proves_old_key_only_with_valid_statement`.
 
+## KEY-1. Смена ключа контакта — по виденным identity; signed_prekey только с подписью
+
+**P-04 (TOFU).** Смена identity-ключа собеседника определяется ТОЛЬКО по
+множеству уже виденных identity контакта (`seenIdentities` / `g_seenIds`),
+а не по кэшу «контакт → primary identity»: тот перезаписывается при перечитке
+каталога (`refreshContactDevices`) ещё до проверки — сервер, подменивший ключ,
+прятал бы предупреждение. Каталог засевает множество только при первом
+знакомстве (пусто); дальше в него попадают лишь identity, реально подтверждённые
+входящими сообщениями (`rememberContactIdentity`). Новое устройство контакта —
+тоже «смена ключа» (как safety number в Signal). Множество переживает
+перезагрузку (персист рядом с контактами) и уезжает в экспорт линковки.
+
+**P-25.** `signed_prekey` устройства из каталога используется для X3DH ТОЛЬКО
+если `signed_prekey_sig` — валидная Ed25519-подпись base64-строки ключа
+ключом `signing_key` того же устройства (то, что подписывает
+`buildPrekeysPayload`). В списке `devices` подпись обязательна (пустой
+`signing_key` не освобождает); legacy-бандл без списка устройств и без
+`signing_key` проверить нечем — принимается как раньше. Устройство с невалидной
+подписью пропускается (сессии нет, self-копии не шифруются); если каталог
+целиком без валидных подписей — он считается недоступным: состояние не
+перезаписывается, вердикт `verifySender` — `unknown` (не `spoofed`).
+
+Реализации: web `e2e.ts` (`seenIdentities`, `rememberContactIdentity`,
+`verifyPrekeySignature`, `refreshContactDevices`); desktop `parvane-core`
+`e2e.cpp` (`g_seenIds`, `prekeySignatureValid`, `refreshContactDevices`) —
+android использует то же ядро через `jni/parvane_jni.cpp`. Тесты: web
+`e2eTrust.test.ts` + `conformance.test.ts` (`KEY-1`), desktop
+`tests/e2e_tests.cpp` (rememberContactIdentity, P-25).
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в

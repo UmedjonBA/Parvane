@@ -41,11 +41,15 @@ struct FakeDevice {
     std::string device_id;
     std::map<std::string, ParvaneE2ESession *> sessions; // sender identity → сессия
 
+    // P-25: подмена SPK/подписи сервером (для негативных тестов)
+    std::string spkOverride, sigOverride;
     json bundle() {
+        const auto spk = spkOverride.empty() ? fallback : spkOverride;
+        const auto sig = sigOverride.empty() ? take(parvane_e2e_account_sign(acc, fallback.c_str())) : sigOverride;
         json d = {{"device_id", device_id}, {"signing_key", signing},
                   {"registration_id", 1}, {"identity_key", identity},
-                  {"signed_prekey_id", 1}, {"signed_prekey", fallback},
-                  {"signed_prekey_sig", ""}};
+                  {"signed_prekey_id", 1}, {"signed_prekey", spk},
+                  {"signed_prekey_sig", sig}};
         if (!otks.empty()) {
             d["one_time_id"] = otks[0]["key_id"];
             d["one_time"] = otks[0]["public_key"];
@@ -196,6 +200,34 @@ int main() {
           "verifySender: чужой ключ под именем bob → Spoofed (каталог есть)");
     check(e2e::verifySender("nobody@local", mallory.identity, t, "tok") == e2e::Verdict::Unknown,
           "verifySender: нет каталога → Unknown");
+
+    // P-25: сервер подменил signed_prekey устройства (подпись не сходится) —
+    // устройство не принимается: сессии нет, вердикт Unknown (не Spoofed).
+    {
+        FakeDevice carol;
+        carol.device_id = "c1";
+        FakeDevice evil;
+        carol.spkOverride = evil.fallback;
+        t.catalog["carol@local"] = {&carol};
+        check(e2e::prekeySignatureValid(carol.bundle()) == false, "prekeySignatureValid: чужой SPK → false");
+        check(e2e::verifySender("carol@local", carol.identity, t, "tok") == e2e::Verdict::Unknown,
+              "verifySender: каталог без валидных подписей → Unknown");
+        check(!e2e::sealForAddress("carol@local", "{}", t, "tok").has_value(),
+              "sealForAddress: с подменённым SPK сессия не устанавливается");
+        carol.spkOverride.clear();
+        carol.sigOverride = take(parvane_e2e_account_sign(evil.acc, carol.fallback.c_str()));
+        check(!e2e::prekeySignatureValid(carol.bundle()), "prekeySignatureValid: подпись чужим ключом → false");
+        check(e2e::verifySender("carol@local", carol.identity, t, "tok") == e2e::Verdict::Unknown,
+              "verifySender: подпись чужим ключом → Unknown");
+        carol.sigOverride.clear();
+        check(e2e::prekeySignatureValid(carol.bundle()), "prekeySignatureValid: честный бандл → true");
+        check(e2e::verifySender("carol@local", carol.identity, t, "tok") == e2e::Verdict::Ok,
+              "verifySender: честный бандл → Ok");
+        auto stripped = carol.bundle();
+        stripped["signing_key"] = "";
+        stripped["signed_prekey_sig"] = "";
+        check(!e2e::prekeySignatureValid(stripped), "prekeySignatureValid: без подписи → false");
+    }
     // Смена ключа: identity из первого каталога bob — «виденные» (свой отпечаток
     // без входящего), поэтому известное устройство — не смена, новое — смена.
     check(!e2e::rememberContactIdentity("bob@local", bob1.identity),
