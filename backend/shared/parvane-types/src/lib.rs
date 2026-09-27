@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod address;
 pub mod nats;
 pub mod topic_contract;
 

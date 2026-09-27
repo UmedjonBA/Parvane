@@ -749,6 +749,34 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         if !sealed_direct {
             object.insert("from".into(), Value::String(user.to_string()));
         }
+
+        // P-01: маршрут доставки (`to`) и список получателей (`recipients`)
+        // приходят от клиента и уходят в NATS-subject (`msg.user.<to>`,
+        // `call.user.<to>`). Пробел/CRLF/wildcard в них разорвали бы кадр `PUB`
+        // и позволили внедрить публикацию в чужой инбокс — отвергаем до шины.
+        if let Some(to) = object
+            .get("payload")
+            .and_then(|payload| payload.get("to"))
+            .and_then(Value::as_str)
+        {
+            if !parvane_types::address::is_valid_route(to) {
+                return Err(anyhow!("недопустимый адрес получателя"));
+            }
+        }
+        if let Some(recipients) = object
+            .get("payload")
+            .and_then(|payload| payload.get("recipients"))
+            .and_then(Value::as_array)
+        {
+            for recipient in recipients {
+                let ok = recipient
+                    .as_str()
+                    .is_some_and(parvane_types::address::is_valid_address);
+                if !ok {
+                    return Err(anyhow!("недопустимый адрес в recipients"));
+                }
+            }
+        }
     } else if GATEWAY_TOKEN_REQUEST_SUBJECTS.contains(&subject) {
         object.insert("token".into(), Value::String(token.to_string()));
     } else if subject.starts_with("msg.typing.") || subject.starts_with("presence.") {
@@ -935,11 +963,11 @@ mod tests {
             "ts": 1,
             "token": "victim-token",
             "payload": {
-                "to": "group-id",
+                "to": "0192f4a0-1c2b-7def-8123-000000000001",
                 "content": {
                     "kind": "group_encrypted",
                     "ciphertext": "ciphertext",
-                    "group": "group-id",
+                    "group": "0192f4a0-1c2b-7def-8123-000000000001",
                     "sender_identity": "curve25519"
                 }
             }
@@ -997,11 +1025,71 @@ mod tests {
         assert_eq!(direct["from"], "");
         assert_eq!(direct["token"], "fresh");
 
-        let group_target = event("group-uuid", "encrypted");
+        let group_target = event("0192f4a0-1c2b-7def-8123-000000000002", "encrypted");
         let bound =
             bind_client_payload("alice@local", "fresh", "msg.chat.send", &group_target).unwrap();
         let bound: Value = serde_json::from_str(&bound).unwrap();
         assert_eq!(bound["from"], "alice@local");
+    }
+
+    #[test]
+    fn rejects_subject_injection_in_to_and_recipients() {
+        // P-01: `to` с пробелом/CRLF/wildcard разорвал бы кадр PUB в NATS.
+        for bad in [
+            "bob@s 0\r\n\r\nPUB msg.user.bob@s 3",
+            "bob@s\r\nSUB > 99",
+            "bob@*",
+            "bob@local.>",
+            "not-a-uuid-not-an-addr",
+        ] {
+            let payload = json!({
+                "id": "00000000-0000-7000-8000-000000000009",
+                "from": "",
+                "ts": 1,
+                "token": "t",
+                "payload": {"to": bad, "content": {"kind": "encrypted", "ciphertext": "x"}}
+            })
+            .to_string();
+            let err = bind_client_payload("alice@local", "fresh", "msg.chat.send", &payload)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("адрес"),
+                "ожидали отказ по адресу для {bad:?}, получили: {err}"
+            );
+        }
+
+        // recipients в file.upload.complete тоже уходят в грант/маршрут
+        let payload = json!({
+            "id": "00000000-0000-7000-8000-00000000000a",
+            "from": "alice@local",
+            "ts": 1,
+            "token": "t",
+            "payload": {"file_id": "0192f4a0-1c2b-7def-8123-00000000000a",
+                        "filename": "f", "total_chunks": 1, "size_bytes": 1,
+                        "mime_type": "text/plain",
+                        "recipients": ["ok@local", "bad addr\r\nPUB x"]}
+        })
+        .to_string();
+        let err =
+            bind_client_payload("alice@local", "fresh", "file.upload.complete", &payload)
+                .unwrap_err();
+        assert!(err.to_string().contains("recipients"));
+
+        // Валидный адрес и валидный групповой UUID проходят
+        for good in ["bob@local", "0192f4a0-1c2b-7def-8123-000000000003"] {
+            let payload = json!({
+                "id": "00000000-0000-7000-8000-00000000000b",
+                "from": "",
+                "ts": 1,
+                "token": "t",
+                "payload": {"to": good, "content": {"kind": "encrypted", "ciphertext": "x"}}
+            })
+            .to_string();
+            assert!(
+                bind_client_payload("alice@local", "fresh", "msg.chat.send", &payload).is_ok(),
+                "валидный адрес {good:?} должен проходить"
+            );
+        }
     }
 
     #[test]
