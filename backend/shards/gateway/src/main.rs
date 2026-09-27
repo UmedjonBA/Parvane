@@ -28,6 +28,8 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const CHANNEL_CAP: usize = 512;
 /// За сколько секунд соединение обязано пройти auth, иначе сокет закрывается.
 const AUTH_TIMEOUT_SECS: u64 = 10;
+/// Период переверификации токена уже авторизованной сессии (P-06).
+const REVERIFY_SECS: u64 = 300;
 
 /// Лимиты параллельных соединений (глобально и на IP-источник) против исчерпания
 /// ресурсов множеством незакрытых/неавторизованных сокетов.
@@ -456,7 +458,28 @@ async fn serve(
 
     // 2) основной цикл
     let mut rate = SessionRate::from_env();
-    while let Some(text) = in_rx.recv().await {
+    // P-06: токен верифицируется не только при auth. Периодически (и по факту
+    // истечения) перепроверяем его через identity; отозванное устройство или
+    // протухший JWT рвут соединение, а не живут до 24 ч.
+    let mut reverify = tokio::time::interval(Duration::from_secs(REVERIFY_SECS));
+    reverify.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reverify.tick().await; // первый тик — немедленный, пропускаем
+    loop {
+        let text = tokio::select! {
+            maybe = in_rx.recv() => match maybe {
+                Some(text) => text,
+                None => break,
+            },
+            _ = reverify.tick() => {
+                if verify_token(&nats, &auth_token).await.is_err() {
+                    let _ = tx
+                        .send(json!({"op":"auth_err","error":"сессия недействительна (устройство отозвано или токен истёк)"}).to_string())
+                        .await;
+                    break;
+                }
+                continue;
+            }
+        };
         let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => {

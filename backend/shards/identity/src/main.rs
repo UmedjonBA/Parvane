@@ -385,13 +385,8 @@ async fn handle_setname(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<SetNameRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => {
                 let name = req.display_name.trim();
                 if name.is_empty() || name.len() > 64 {
@@ -442,13 +437,8 @@ async fn handle_setavatar(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<SetAvatarRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => {
                 let _ = sqlx::query("UPDATE users SET avatar_file_id = ? WHERE username = ?")
                     .bind(&req.file_id)
@@ -489,13 +479,8 @@ async fn handle_setkey(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<SetKeyRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => match store_pubkey(pool, &username, &req.pubkey).await {
                 Ok(()) => {
                     info!("{} зарегистрировал pubkey ({}…)", username, &req.pubkey.chars().take(12).collect::<String>());
@@ -761,13 +746,8 @@ async fn handle_device_list(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<DeviceListRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => match list_devices(pool, &username).await {
                 Ok(devices) => DeviceListResponse { ok: true, devices, error: None },
                 Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(e.to_string()) },
@@ -786,13 +766,8 @@ async fn handle_device_revoke(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<DeviceRevokeRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => match revoke_device(pool, &username, &req.device_id).await {
                 Ok(true) => {
                     info!("{} отозвал устройство '{}'", username, req.device_id);
@@ -952,13 +927,8 @@ async fn handle_link_offer(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<LinkOfferRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
             Ok(username) => match store_link_offer(pool, &username, &req.device_id, &req.eph_pub).await {
                 Ok(()) => {
                     info!("{} опубликовал оффер линковки (устройство '{}')", username, req.device_id);
@@ -980,13 +950,8 @@ async fn handle_link_poll(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<LinkPollRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
             Ok(username) => match poll_link(pool, &username, &req.device_id).await {
                 Ok((offers, grant)) => LinkPollResponse { ok: true, offers, grant, error: None },
                 Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
@@ -1005,13 +970,8 @@ async fn handle_link_grant(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<LinkGrantRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => {
                 match store_link_grant(pool, &username, &req.device_id, &req.box_payload, &req.eph_pub).await {
                     Ok(()) => {
@@ -1035,13 +995,8 @@ async fn handle_prekeys_publish(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<PublishPrekeysRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
             Ok(username) => match store_prekeys(pool, &username, &req).await {
                 Ok(()) => {
                     info!(
@@ -1066,13 +1021,8 @@ async fn handle_prekeys_fetch(
     msg: async_nats::Message,
 ) {
     let Some(reply) = msg.reply.clone() else { return };
-    let verify = |token: &str| -> Result<String> {
-        let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
-            .context("неверный или просроченный JWT")?;
-        Ok(data.claims.sub)
-    };
     let resp = match serde_json::from_slice::<FetchBundleRequest>(&msg.payload) {
-        Ok(req) => match verify(&req.token) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(requester) => {
                 if !prekey_fetch_rate_ok(&requester, &req.user) {
                     empty_bundle_response(Some(
@@ -2157,6 +2107,50 @@ fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<Claims> {
     Ok(data.claims)
 }
 
+/// Единая проверка JWT (P-06): декодирует токен И отклоняет его, если устройство
+/// (claim `dev`) отозвано. Раньше отзыв проверялся только в handle_verify, а все
+/// остальные обработчики identity верили любому неистёкшему токену — отозванное
+/// устройство до 24 ч продолжало менять профиль/ключи/отзывать другие.
+async fn verify_active(pool: &SqlitePool, decoding: &DecodingKey, token: &str) -> Result<Claims> {
+    let data = decode::<Claims>(token, decoding, &Validation::new(Algorithm::HS256))
+        .context("неверный или просроченный JWT")?;
+    if is_device_revoked(pool, &data.claims.sub, data.claims.dev.as_deref()).await? {
+        anyhow::bail!("устройство отозвано");
+    }
+    Ok(data.claims)
+}
+
+/// verify_active → username (для обработчиков, не пишущих данные устройства).
+async fn verify_active_user(pool: &SqlitePool, decoding: &DecodingKey, token: &str) -> Result<String> {
+    Ok(verify_active(pool, decoding, token).await?.sub)
+}
+
+/// verify_active + привязка к устройству (P-06): токен с claim `dev` может писать
+/// данные ТОЛЬКО своего устройства (`device_id == dev`); токен без `dev` —
+/// только для пустого `device_id`. Иначе одна сессия аккаунта перезаписывала бы
+/// бандл/линковку любого устройства.
+async fn verify_active_device(
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    token: &str,
+    device_id: &str,
+) -> Result<String> {
+    let claims = verify_active(pool, decoding, token).await?;
+    match claims.dev.as_deref() {
+        Some(dev) if !dev.is_empty() => {
+            if dev != device_id {
+                anyhow::bail!("device_id не совпадает с устройством токена");
+            }
+        }
+        _ => {
+            if !device_id.is_empty() {
+                anyhow::bail!("токен без устройства не может писать за именованное устройство");
+            }
+        }
+    }
+    Ok(claims.sub)
+}
+
 /// Токен с claim dev отозванного устройства недействителен (Settings → Devices).
 async fn is_device_revoked(pool: &SqlitePool, username: &str, device_id: Option<&str>) -> Result<bool> {
     let Some(device_id) = device_id else { return Ok(false) };
@@ -2894,6 +2888,37 @@ mod tests {
         assert!(is_device_revoked(&pool, "bob@local", Some("dev-x")).await.unwrap());
         assert!(!is_device_revoked(&pool, "bob@local", Some("dev-y")).await.unwrap());
         assert!(!is_device_revoked(&pool, "alice@local", Some("dev-x")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn verify_active_rejects_revoked_and_binds_device() {
+        let pool = test_pool().await;
+        let (enc, dec) = make_keys();
+        let now = now_unix() as usize;
+        let tok = |dev: Option<&str>| {
+            let claims = Claims {
+                sub: "bob@local".into(),
+                iat: now,
+                exp: now + 3600,
+                dev: dev.map(str::to_string),
+            };
+            encode(&Header::new(Algorithm::HS256), &claims, &enc).unwrap()
+        };
+
+        // Активный токен устройства dev-1 проходит и привязан к своему device_id.
+        let t1 = tok(Some("dev-1"));
+        assert_eq!(verify_active_user(&pool, &dec, &t1).await.unwrap(), "bob@local");
+        assert!(verify_active_device(&pool, &dec, &t1, "dev-1").await.is_ok());
+        // P-06: тем же токеном нельзя писать за ЧУЖОЕ устройство.
+        assert!(verify_active_device(&pool, &dec, &t1, "dev-2").await.is_err());
+        // Токен без dev — только для пустого device_id.
+        let t0 = tok(None);
+        assert!(verify_active_device(&pool, &dec, &t0, "").await.is_ok());
+        assert!(verify_active_device(&pool, &dec, &t0, "dev-1").await.is_err());
+        // После отзыва dev-1 любой его токен отклоняется во всех обработчиках.
+        let _ = revoke_device(&pool, "bob@local", "dev-1").await.unwrap();
+        assert!(verify_active_user(&pool, &dec, &t1).await.is_err());
+        assert!(verify_active_device(&pool, &dec, &t1, "dev-1").await.is_err());
     }
 
     #[tokio::test]
