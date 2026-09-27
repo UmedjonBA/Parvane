@@ -567,6 +567,17 @@ void rotateGroupsWithLocked(const std::string &contact) {
     }
 }
 
+// P-25: подпись signed_prekey (base64-строка ключа) Ed25519-ключом устройства.
+bool prekeySigOk(const json &device) {
+    const auto signing = device.value("signing_key", std::string());
+    const auto spk = device.value("signed_prekey", std::string());
+    const auto sig = device.value("signed_prekey_sig", std::string());
+    if (signing.empty() || spk.empty() || sig.empty()) {
+        return false;
+    }
+    return parvane_e2e_ed25519_verify(signing.c_str(), spk.c_str(), sig.c_str()) == 1;
+}
+
 // Перечитать каталог устройств контакта (identity.prekeys.fetch + known_devices).
 // force — игнорировать TTL. Сеть вне лока.
 void refreshContactDevices(const std::string &contact, ITransport &t, const std::string &token,
@@ -596,13 +607,16 @@ void refreshContactDevices(const std::string &contact, ITransport &t, const std:
         return;
     }
     json devices = json::array();
+    bool fromDeviceList = false;
     if (resp.contains("devices") && resp["devices"].is_array() && !resp["devices"].empty()) {
         devices = resp["devices"];
+        fromDeviceList = true;
     } else if (resp.contains("identity_key") && resp["identity_key"].is_string()) {
         devices.push_back({{"device_id", ""},
                            {"signing_key", ""},
                            {"identity_key", resp["identity_key"]},
                            {"signed_prekey", resp.value("signed_prekey", "")},
+                           {"signed_prekey_sig", resp.value("signed_prekey_sig", "")},
                            {"one_time", resp.contains("one_time") ? resp["one_time"] : json()}});
     }
     if (devices.empty()) {
@@ -610,6 +624,7 @@ void refreshContactDevices(const std::string &contact, ITransport &t, const std:
     }
     std::lock_guard<std::mutex> lk(g_mu);
     std::map<std::string, DeviceInfo> next;
+    int rejected = 0;
     for (const auto &d : devices) {
         if (!d.is_object()) {
             continue;
@@ -617,6 +632,17 @@ void refreshContactDevices(const std::string &contact, ITransport &t, const std:
         const auto identity = d.value("identity_key", std::string());
         if (identity.empty() || identity == g_identityB64) {
             continue; // своё текущее устройство пропускаем
+        }
+        // P-25: signed_prekey обязан быть подписан signing_key устройства —
+        // иначе сервер подсовывает свой SPK (тихий DoS сессий). В списке
+        // устройств подпись обязательна; legacy-бандл без signing_key (только
+        // верхнеуровневые поля) проверить нечем — принимаем как раньше.
+        if (fromDeviceList || !d.value("signing_key", std::string()).empty()
+            || !d.value("signed_prekey_sig", std::string()).empty()) {
+            if (!prekeySigOk(d)) {
+                ++rejected;
+                continue;
+            }
         }
         const auto devId = d.value("device_id", std::string());
         next[devId] = {identity, d.value("signing_key", std::string())};
@@ -637,6 +663,11 @@ void refreshContactDevices(const std::string &contact, ITransport &t, const std:
             g_sessions[identity] = s;
             persistSession(identity, s);
         }
+    }
+    // Каталог целиком без валидных подписей — как недоступный: ничего не
+    // перезаписываем, вердикт по контакту останется Unknown.
+    if (rejected && next.empty()) {
+        return;
     }
     bool lost = false;
     auto prev = g_contactDevices.find(contact);
@@ -722,6 +753,10 @@ std::vector<DeviceCopy> encryptForDevices(const std::string &contact, const std:
 }
 
 } // namespace
+
+bool prekeySignatureValid(const json &device) {
+    return prekeySigOk(device);
+}
 
 std::vector<std::string> contactSigningKeys(const std::string &contact) {
     std::vector<std::string> out;

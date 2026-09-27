@@ -94,6 +94,15 @@
         "commitmentOfNew": "mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=",
         "sas": "5659 7031 8371"
       }
+    },
+    {
+      "id": "KEY-1",
+      "title": "Смена ключа контакта — по виденным identity (TOFU); signed_prekey только с подписью signing_key",
+      "keyChangeSource": "seenIdentities",
+      "catalogSeedsSeenOnlyOnFirstContact": true,
+      "prekeySignatureRequiredInDeviceList": true,
+      "legacyBundleWithoutSigningKeyAccepted": true,
+      "allDevicesRejectedVerdict": "unknown"
     }
   ]
 }

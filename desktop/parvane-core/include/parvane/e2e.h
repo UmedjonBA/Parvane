@@ -44,6 +44,9 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
 // claim dev, и отзыв устройства гасит его сразу. Legacy-установка → ''.
 [[nodiscard]] std::string ensureDeviceId(const std::string &storeDir);
 [[nodiscard]] std::string signingKey();
+// P-25: бандл устройства из каталога годен, только если signed_prekey подписан
+// его signing_key (JSON бандла: signing_key, signed_prekey, signed_prekey_sig).
+[[nodiscard]] bool prekeySignatureValid(const nlohmann::json &device);
 // Подпись строки Ed25519-ключом аккаунта (base64 без padding). "" если не готов.
 [[nodiscard]] std::string sign(const std::string &data);
 // Подписи той же строки legacy-подписантами (прежние устройства, принятые при

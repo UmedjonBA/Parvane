@@ -296,3 +296,47 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(android).toMatch(/grant\.value\("eph_pub", std::string\(\)\) != g_linkChallenge/);
   });
 });
+
+describe('KEY-1: смена ключа по виденным identity, signed_prekey только с подписью', () => {
+  const r = rule('KEY-1') as unknown as {
+    keyChangeSource: string; prekeySignatureRequiredInDeviceList: boolean;
+    allDevicesRejectedVerdict: string;
+  };
+  const webE2e = readFileSync(
+    path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'),
+    'utf8',
+  );
+  const core = readFileSync(
+    path.join(REPO_ROOT, 'desktop/parvane-core/src/e2e.cpp'),
+    'utf8',
+  );
+
+  it('правило KEY-1 задокументировано в sync-rules.json', () => {
+    expect(r.keyChangeSource).toBe('seenIdentities');
+    expect(r.prekeySignatureRequiredInDeviceList).toBe(true);
+    expect(r.allDevicesRejectedVerdict).toBe('unknown');
+  });
+
+  it('web и desktop: смена ключа — по множеству виденных, не по кэшу primary', () => {
+    const webIdx = webE2e.indexOf('rememberContactIdentity(contact: string, identity: string): boolean {');
+    expect(webIdx).toBeGreaterThan(0);
+    const webBody = webE2e.slice(webIdx, webIdx + 700);
+    expect(webBody).toMatch(/this\.seenIdentities\.get\(contact\)/);
+    expect(webBody).toMatch(/const changed = Boolean\(seen\?\.size\)/);
+    const coreIdx = core.indexOf('bool rememberContactIdentity(const std::string &contact, const std::string &identity) {');
+    expect(coreIdx).toBeGreaterThan(0);
+    expect(core.slice(coreIdx, coreIdx + 700)).toMatch(/auto &seen = g_seenIds\[contact\]/);
+  });
+
+  it('web и desktop: каталог засевает виденные только при первом знакомстве', () => {
+    expect(webE2e).toMatch(/if \(!this\.seenIdentities\.get\(contact\)\?\.size\) \{/);
+    expect(core).toMatch(/if \(g_seenIds\[contact\]\.empty\(\)\) \{/);
+  });
+
+  it('web и desktop: устройство без валидной подписи SPK пропускается, пустой каталог = unknown', () => {
+    expect(webE2e).toMatch(/if \(!verifyPrekeySignature\(device\)\) \{\s*rejected\+\+;\s*return;/);
+    expect(webE2e).toMatch(/if \(rejected && !Object\.keys\(next\)\.length\) return;/);
+    expect(core).toMatch(/if \(!prekeySigOk\(d\)\) \{\s*\+\+rejected;\s*continue;/);
+    expect(core).toMatch(/if \(rejected && next\.empty\(\)\) \{\s*return;/);
+  });
+});
