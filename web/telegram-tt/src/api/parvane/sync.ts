@@ -89,6 +89,8 @@ export function createSyncController(deps: SyncDependencies) {
     // Авто-линковка: доказательства владения ключами прежних устройств —
     // сервер включает в выдачу их sealed-исходящие
     const extraSigning = e2e?.signExtraSync(signedPayload);
+    // v2 (P-48): переносы владения исходящими прежних устройств
+    const transfers = e2e?.syncTransfers();
     return {
       last_seen_id: lastSeenId,
       since_updated: updatedSince,
@@ -96,6 +98,7 @@ export function createSyncController(deps: SyncDependencies) {
       sender_signing_key: e2e?.signingKey,
       signature: e2e?.signCallData(signedPayload),
       extra_signing: extraSigning?.length ? extraSigning : undefined,
+      transfers: transfers?.length ? transfers : undefined,
     };
   }
 

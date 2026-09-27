@@ -16,12 +16,12 @@ use parvane_types::{
     topics::{
         IDENTITY_DEVICE_LIST, IDENTITY_DEVICE_REVOKE, IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE,
         IDENTITY_PASSWORD_CHANGE,
-        IDENTITY_LINK_GRANT, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
+        IDENTITY_LINK_GRANT, IDENTITY_LINK_CHALLENGE, IDENTITY_LINK_OFFER, IDENTITY_LINK_POLL, IDENTITY_PREKEYS_FETCH,
         IDENTITY_PREKEYS_PUBLISH, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS, IDENTITY_RESOLVE,
         IDENTITY_SEARCH, IDENTITY_SERVER_INFO, IDENTITY_SETAVATAR, IDENTITY_SETKEY,
         IDENTITY_SETNAME, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_TWOFA, IDENTITY_VERIFY,
     },
-    PasswordChangeRequest, PasswordChangeResponse,
+    PasswordChangeRequest, PasswordChangeResponse, LinkChallengeRequest, LinkChallengeResponse,
 };
 
 fn opt(s: String) -> Option<String> {
@@ -336,6 +336,7 @@ async fn main() -> Result<()> {
     let mut linkoffer_sub = nc.subscribe(IDENTITY_LINK_OFFER).await?;
     let mut linkpoll_sub = nc.subscribe(IDENTITY_LINK_POLL).await?;
     let mut linkgrant_sub = nc.subscribe(IDENTITY_LINK_GRANT).await?;
+    let mut linkchallenge_sub = nc.subscribe(IDENTITY_LINK_CHALLENGE).await?;
 
     info!(
         "Identity шард запущен (домен {}, подтверждение регистрации: {}). Слушаю: issue/register/email.confirm/telegram.confirm/register.status/server.info/verify/search/setname/setavatar/setkey/resolve/prekeys/devices",
@@ -407,6 +408,9 @@ async fn main() -> Result<()> {
             }
             Some(msg) = linkgrant_sub.next() => {
                 handle_link_grant(&nc, &pool, &decoding, msg).await;
+            }
+            Some(msg) = linkchallenge_sub.next() => {
+                handle_link_challenge(&nc, &pool, &decoding, msg).await;
             }
         }
     }
@@ -1041,15 +1045,22 @@ async fn purge_stale_links(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+/// Оффер линковки. v2 (P-03): сначала публикуется ТОЛЬКО commitment
+/// (SHA-256 эфемерного ключа), ключ раскрывается тем же обработчиком после
+/// challenge старого устройства; сервер сверяет раскрытие с обязательством.
+/// Legacy-клиент шлёт eph_pub без commitment — принимаем как раньше.
 async fn store_link_offer(
     pool: &SqlitePool,
     username: &str,
     device_id: &str,
     eph_pub: &str,
+    commitment: &str,
+    signing_key: &str,
+    revoke: bool,
 ) -> Result<()> {
-    // Пустой eph_pub — ОТЗЫВ собственного оффера (устройство получило историю
-    // или накопило свою): чужие устройства перестают видеть запрос
-    if eph_pub.is_empty() {
+    // Отзыв собственного оффера (история получена другим путём): чужие
+    // устройства перестают видеть запрос. Legacy: пустой eph_pub без commitment.
+    if revoke || (eph_pub.is_empty() && commitment.is_empty()) {
         sqlx::query("DELETE FROM link_offers WHERE username = ? AND device_id = ?")
             .bind(username)
             .bind(device_id)
@@ -1062,24 +1073,89 @@ async fn store_link_offer(
             .await?;
         return Ok(());
     }
-    if eph_pub.len() > LINK_EPH_PUB_MAX {
+    if eph_pub.len() > LINK_EPH_PUB_MAX || commitment.len() > LINK_EPH_PUB_MAX || signing_key.len() > LINK_EPH_PUB_MAX {
         anyhow::bail!("некорректный эфемерный ключ");
     }
     purge_stale_links(pool).await?;
-    // Повторный оффер того же устройства заменяет прежний (и гасит старый
-    // грант — он зашифрован на уже потерянный эфемерный ключ)
-    sqlx::query("INSERT OR REPLACE INTO link_offers (username, device_id, eph_pub, created_at) VALUES (?, ?, ?, ?)")
+    if !commitment.is_empty() {
+        // Раскрытие: ключ обязан соответствовать обязательству.
+        if !eph_pub.is_empty() && !link_commitment_matches(eph_pub, commitment) {
+            anyhow::bail!("раскрытый ключ не соответствует обязательству");
+        }
+        // Тот же оффер (то же обязательство) — обновляем ключ, сохраняя challenge.
+        let updated = sqlx::query(
+            "UPDATE link_offers SET eph_pub = ?, signing_key = CASE WHEN ? = '' THEN signing_key ELSE ? END
+              WHERE username = ? AND device_id = ? AND commitment = ?",
+        )
+        .bind(eph_pub)
+        .bind(signing_key)
+        .bind(signing_key)
         .bind(username)
         .bind(device_id)
-        .bind(eph_pub)
-        .bind(now_unix())
+        .bind(commitment)
         .execute(pool)
-        .await?;
+        .await?
+        .rows_affected();
+        if updated > 0 {
+            return Ok(());
+        }
+    }
+    // Новый оффер устройства заменяет прежний (и гасит старый грант — он
+    // зашифрован на уже потерянный эфемерный ключ).
+    sqlx::query(
+        "INSERT OR REPLACE INTO link_offers (username, device_id, eph_pub, created_at, commitment, challenge_pub, signing_key)
+         VALUES (?, ?, ?, ?, ?, '', ?)",
+    )
+    .bind(username)
+    .bind(device_id)
+    .bind(eph_pub)
+    .bind(now_unix())
+    .bind(commitment)
+    .bind(signing_key)
+    .execute(pool)
+    .await?;
     sqlx::query("DELETE FROM link_grants WHERE username = ? AND device_id = ?")
         .bind(username)
         .bind(device_id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// SHA-256(raw eph_pub) == commitment (обе строки base64).
+fn link_commitment_matches(eph_pub_b64: &str, commitment_b64: &str) -> bool {
+    let Some(raw) = B64.decode(eph_pub_b64).ok() else { return false };
+    let Some(want) = B64.decode(commitment_b64).ok() else { return false };
+    Sha256::digest(&raw).as_slice() == want.as_slice()
+}
+
+/// v2: challenge старого устройства к офферу целевого. Первый challenge
+/// фиксируется; замена другим ключом невозможна (иначе сервер/третий подменил
+/// бы сторону, с которой считается SAS).
+async fn store_link_challenge(
+    pool: &SqlitePool,
+    username: &str,
+    target_device: &str,
+    eph_pub: &str,
+) -> Result<()> {
+    if eph_pub.is_empty() || eph_pub.len() > LINK_EPH_PUB_MAX {
+        anyhow::bail!("некорректный эфемерный ключ");
+    }
+    purge_stale_links(pool).await?;
+    let updated = sqlx::query(
+        "UPDATE link_offers SET challenge_pub = ?
+          WHERE username = ? AND device_id = ? AND (challenge_pub = '' OR challenge_pub = ?)",
+    )
+    .bind(eph_pub)
+    .bind(username)
+    .bind(target_device)
+    .bind(eph_pub)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if updated == 0 {
+        anyhow::bail!("оффер линковки не найден, истёк или уже имеет challenge");
+    }
     Ok(())
 }
 
@@ -1089,15 +1165,23 @@ async fn poll_link(
     pool: &SqlitePool,
     username: &str,
     device_id: &str,
-) -> Result<(Vec<LinkOfferInfo>, Option<LinkGrantInfo>)> {
+) -> Result<(Vec<LinkOfferInfo>, Option<LinkGrantInfo>, Option<String>)> {
     purge_stale_links(pool).await?;
-    let offers: Vec<(String, String, i64)> = sqlx::query_as(
-        "SELECT device_id, eph_pub, created_at FROM link_offers
+    let offers: Vec<(String, String, i64, String, String, String)> = sqlx::query_as(
+        "SELECT device_id, eph_pub, created_at, commitment, signing_key, challenge_pub FROM link_offers
           WHERE username = ? AND device_id != ? ORDER BY created_at",
     )
     .bind(username)
     .bind(device_id)
     .fetch_all(pool)
+    .await?;
+    // v2: challenge к СОБСТВЕННОМУ офферу запрашивающего (сигнал раскрыть ключ).
+    let challenge: Option<(String,)> = sqlx::query_as(
+        "SELECT challenge_pub FROM link_offers WHERE username = ? AND device_id = ? AND challenge_pub != ''",
+    )
+    .bind(username)
+    .bind(device_id)
+    .fetch_optional(pool)
     .await?;
     let grant: Option<(String, String)> = sqlx::query_as(
         "DELETE FROM link_grants WHERE username = ? AND device_id = ?
@@ -1110,9 +1194,12 @@ async fn poll_link(
     Ok((
         offers
             .into_iter()
-            .map(|(device_id, eph_pub, created_at)| LinkOfferInfo { device_id, eph_pub, created_at })
+            .map(|(device_id, eph_pub, created_at, commitment, signing_key, challenge_pub)| LinkOfferInfo {
+                device_id, eph_pub, created_at, commitment, signing_key, challenge_pub,
+            })
             .collect(),
         grant.map(|(box_payload, eph_pub)| LinkGrantInfo { box_payload, eph_pub }),
+        challenge.map(|(c,)| c),
     ))
 }
 
@@ -1161,7 +1248,7 @@ async fn handle_link_offer(
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match serde_json::from_slice::<LinkOfferRequest>(&msg.payload) {
         Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
-            Ok(username) => match store_link_offer(pool, &username, &req.device_id, &req.eph_pub).await {
+            Ok(username) => match store_link_offer(pool, &username, &req.device_id, &req.eph_pub, &req.commitment, &req.signing_key, req.revoke).await {
                 Ok(()) => {
                     info!("{} опубликовал оффер линковки (устройство '{}')", username, req.device_id);
                     LinkOfferResponse { ok: true, error: None }
@@ -1185,12 +1272,34 @@ async fn handle_link_poll(
     let resp = match serde_json::from_slice::<LinkPollRequest>(&msg.payload) {
         Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
             Ok(username) => match poll_link(pool, &username, &req.device_id).await {
-                Ok((offers, grant)) => LinkPollResponse { ok: true, offers, grant, error: None },
-                Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
+                Ok((offers, grant, challenge)) => LinkPollResponse { ok: true, offers, grant, challenge, error: None },
+                Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(e.to_string()) },
             },
-            Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
+            Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(e.to_string()) },
         },
-        Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, error: Some(e.to_string()) },
+        Err(e) => LinkPollResponse { ok: false, offers: vec![], grant: None, challenge: None, error: Some(e.to_string()) },
+    };
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+/// v2: старое устройство прикладывает свой эфемерный ключ к офферу целевого.
+/// Владелец — из JWT; device_id здесь ЦЕЛЕВОЕ устройство.
+async fn handle_link_challenge(
+    nc: &Client,
+    pool: &SqlitePool,
+    decoding: &DecodingKey,
+    msg: async_nats::Message,
+) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = match serde_json::from_slice::<LinkChallengeRequest>(&msg.payload) {
+        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
+            Ok(username) => match store_link_challenge(pool, &username, &req.device_id, &req.eph_pub).await {
+                Ok(()) => LinkChallengeResponse { ok: true, error: None },
+                Err(e) => LinkChallengeResponse { ok: false, error: Some(e.to_string()) },
+            },
+            Err(e) => LinkChallengeResponse { ok: false, error: Some(e.to_string()) },
+        },
+        Err(e) => LinkChallengeResponse { ok: false, error: Some(e.to_string()) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
@@ -3367,26 +3476,26 @@ mod tests {
         insert_user(&pool, "alice@local").await;
 
         // Новое устройство публикует оффер; старое видит его в poll
-        store_link_offer(&pool, "alice@local", "dev-new", "EPH-NEW==").await.unwrap();
-        let (offers, grant) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
+        store_link_offer(&pool, "alice@local", "dev-new", "EPH-NEW==", "", "", false).await.unwrap();
+        let (offers, grant, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
         assert_eq!(offers.len(), 1);
         assert_eq!(offers[0].device_id, "dev-new");
         assert_eq!(offers[0].eph_pub, "EPH-NEW==");
         assert!(grant.is_none());
         // Своего оффера устройство в poll не видит
-        let (own_offers, _) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
+        let (own_offers, _, _) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
         assert!(own_offers.is_empty());
 
         // Старое выдаёт грант — оффер гасится, целевое устройство получает
         // грант РОВНО один раз
         store_link_grant(&pool, "alice@local", "dev-new", "BOX==", "EPH-OLD==").await.unwrap();
-        let (offers_after, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
+        let (offers_after, _, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
         assert!(offers_after.is_empty(), "оффер погашен грантом");
-        let (_, g1) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
+        let (_, g1, _) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
         let g1 = g1.expect("грант выдан");
         assert_eq!(g1.box_payload, "BOX==");
         assert_eq!(g1.eph_pub, "EPH-OLD==");
-        let (_, g2) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
+        let (_, g2, _) = poll_link(&pool, "alice@local", "dev-new").await.unwrap();
         assert!(g2.is_none(), "грант одноразовый");
     }
 
@@ -3403,28 +3512,70 @@ mod tests {
 
         // Повторный оффер заменяет прежний и гасит уже выданный грант
         // (он зашифрован на потерянный эфемерный ключ)
-        store_link_offer(&pool, "bob@local", "dev-x", "EPH-1==").await.unwrap();
+        store_link_offer(&pool, "bob@local", "dev-x", "EPH-1==", "", "", false).await.unwrap();
         store_link_grant(&pool, "bob@local", "dev-x", "BOX-1==", "EPH-OLD==").await.unwrap();
-        store_link_offer(&pool, "bob@local", "dev-x", "EPH-2==").await.unwrap();
-        let (_, grant) = poll_link(&pool, "bob@local", "dev-x").await.unwrap();
+        store_link_offer(&pool, "bob@local", "dev-x", "EPH-2==", "", "", false).await.unwrap();
+        let (_, grant, _) = poll_link(&pool, "bob@local", "dev-x").await.unwrap();
         assert!(grant.is_none(), "грант под старый эфемерный ключ погашен");
+    }
+
+    #[tokio::test]
+    async fn link_v2_commitment_challenge_reveal() {
+        let pool = test_pool().await;
+        insert_user(&pool, "dave@local").await;
+        let n_pub_raw = [7u8; 65];
+        let n_pub = B64.encode(n_pub_raw);
+        let commitment = B64.encode(Sha256::digest(n_pub_raw));
+        // 1. Новое устройство публикует ТОЛЬКО обязательство (ключ скрыт).
+        store_link_offer(&pool, "dave@local", "dev-new", "", &commitment, "SIGN-NEW==", false).await.unwrap();
+        let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].eph_pub, "", "ключ не раскрыт до challenge");
+        assert_eq!(offers[0].commitment, commitment);
+        assert_eq!(offers[0].signing_key, "SIGN-NEW==");
+        // Новое устройство ещё не видит challenge.
+        let (_, _, ch) = poll_link(&pool, "dave@local", "dev-new").await.unwrap();
+        assert!(ch.is_none());
+        // 2. Старое прикладывает свой эфемерный ключ; второй challenge другим
+        //    ключом (подмена стороны) — отказ.
+        store_link_challenge(&pool, "dave@local", "dev-new", "O-PUB==").await.unwrap();
+        assert!(store_link_challenge(&pool, "dave@local", "dev-new", "MALLORY==").await.is_err());
+        assert!(store_link_challenge(&pool, "dave@local", "dev-new", "O-PUB==").await.is_ok(), "повтор того же — идемпотентен");
+        let (_, _, ch) = poll_link(&pool, "dave@local", "dev-new").await.unwrap();
+        assert_eq!(ch.as_deref(), Some("O-PUB=="));
+        // 3. Раскрытие: ключ, не соответствующий обязательству, — отказ.
+        let wrong = B64.encode([8u8; 65]);
+        assert!(store_link_offer(&pool, "dave@local", "dev-new", &wrong, &commitment, "", false).await.is_err());
+        store_link_offer(&pool, "dave@local", "dev-new", &n_pub, &commitment, "", false).await.unwrap();
+        let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
+        assert_eq!(offers[0].eph_pub, n_pub, "ключ раскрыт");
+        assert_eq!(offers[0].challenge_pub, "O-PUB==", "challenge сохранён при раскрытии");
+        assert_eq!(offers[0].signing_key, "SIGN-NEW==", "signing_key не затёрт пустым");
+        // 4. Грант как раньше — одноразовый.
+        store_link_grant(&pool, "dave@local", "dev-new", "BOX==", "O-PUB==").await.unwrap();
+        let (_, g, _) = poll_link(&pool, "dave@local", "dev-new").await.unwrap();
+        assert!(g.is_some());
+        // 5. Отзыв явным флагом.
+        store_link_offer(&pool, "dave@local", "dev-new", "", "", "", true).await.unwrap();
+        let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
+        assert!(offers.is_empty());
     }
 
     #[tokio::test]
     async fn link_offer_retraction_clears_offer_and_grant() {
         let pool = test_pool().await;
         insert_user(&pool, "carol@local").await;
-        store_link_offer(&pool, "carol@local", "dev-n", "EPH==").await.unwrap();
+        store_link_offer(&pool, "carol@local", "dev-n", "EPH==", "", "", false).await.unwrap();
         // Отзыв (пустой eph) гасит оффер
-        store_link_offer(&pool, "carol@local", "dev-n", "").await.unwrap();
-        let (offers, _) = poll_link(&pool, "carol@local", "dev-other").await.unwrap();
+        store_link_offer(&pool, "carol@local", "dev-n", "", "", "", false).await.unwrap();
+        let (offers, _, _) = poll_link(&pool, "carol@local", "dev-other").await.unwrap();
         assert!(offers.is_empty(), "отозванный оффер не виден");
 
         // Отзыв гасит и уже выданный грант
-        store_link_offer(&pool, "carol@local", "dev-n", "EPH-2==").await.unwrap();
+        store_link_offer(&pool, "carol@local", "dev-n", "EPH-2==", "", "", false).await.unwrap();
         store_link_grant(&pool, "carol@local", "dev-n", "BOX==", "EPH-O==").await.unwrap();
-        store_link_offer(&pool, "carol@local", "dev-n", "").await.unwrap();
-        let (_, grant) = poll_link(&pool, "carol@local", "dev-n").await.unwrap();
+        store_link_offer(&pool, "carol@local", "dev-n", "", "", "", false).await.unwrap();
+        let (_, grant, _) = poll_link(&pool, "carol@local", "dev-n").await.unwrap();
         assert!(grant.is_none(), "отзыв гасит невостребованный грант");
     }
 
@@ -3434,9 +3585,9 @@ mod tests {
         insert_user(&pool, "alice@local").await;
         insert_user(&pool, "eve@local").await;
 
-        store_link_offer(&pool, "alice@local", "dev-new", "EPH==").await.unwrap();
+        store_link_offer(&pool, "alice@local", "dev-new", "EPH==", "", "", false).await.unwrap();
         // Чужой аккаунт офферов не видит и грант выдать не может
-        let (offers, _) = poll_link(&pool, "eve@local", "dev-eve").await.unwrap();
+        let (offers, _, _) = poll_link(&pool, "eve@local", "dev-eve").await.unwrap();
         assert!(offers.is_empty());
         assert!(store_link_grant(&pool, "eve@local", "dev-new", "BOX==", "EPH==").await.is_err());
 
@@ -3445,7 +3596,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let (stale, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
+        let (stale, _, _) = poll_link(&pool, "alice@local", "dev-old").await.unwrap();
         assert!(stale.is_empty(), "просроченный оффер вычищен");
     }
 

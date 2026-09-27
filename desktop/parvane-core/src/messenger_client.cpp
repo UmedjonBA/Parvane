@@ -81,6 +81,11 @@ std::vector<StoredMessage> MessengerClient::sync(
                 req.extra_signing.push_back({{"signing_key", key}, {"signature", sig}});
             }
         }
+        if (auth->transfers) {
+            for (const auto &[key, sig] : auth->transfers()) {
+                req.transfers.push_back({{"old_signing_key", key}, {"signature", sig}});
+            }
+        }
     }
 
     const json ev = makeEvent(uuid4(), from, nowUnix(), token, req.toJson());

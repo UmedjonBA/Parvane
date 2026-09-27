@@ -51,7 +51,9 @@ std::map<std::string, ParvaneE2EInboundGroup *> g_inGroups;
 std::map<std::string, std::uint64_t> g_ownGroupEpoch;
 std::map<std::string, std::uint64_t> g_inGroupEpoch;
 std::map<std::string, std::vector<std::string>> g_groupRecipients;
-std::vector<ParvaneE2EAccount *> g_legacy; // legacy-подписанты (линковка)
+std::vector<ParvaneE2EAccount *> g_legacy; // legacy-подписанты (линковка v1)
+// v2-линковка (P-48): подписанные переносы владения (old_signing_key, signature).
+std::vector<std::pair<std::string, std::string>> g_transfers;
 std::string g_identityB64;
 std::string g_signingB64;
 std::string g_deviceId;
@@ -154,6 +156,7 @@ std::string contactsPath() { return g_storeDir + "/contacts.json"; }
 std::string contactDevicesPath() { return g_storeDir + "/devices.json"; }
 std::string groupRecipientsPath() { return g_storeDir + "/grecip.json"; }
 std::string epochsPath() { return g_storeDir + "/gepoch.json"; }
+std::string transfersPath() { return g_storeDir + "/transfers.json"; }
 std::string legacyPath(const std::string &signingB64) {
     return g_storeDir + "/legacy_" + hexName(signingB64) + ".json";
 }
@@ -330,6 +333,52 @@ void loadEpochs() {
             }
         }
     }
+}
+void saveTransfers() {
+    if (g_storeDir.empty()) {
+        return;
+    }
+    json arr = json::array();
+    for (const auto &[key, sig] : g_transfers) {
+        arr.push_back({{"old_signing_key", key}, {"signature", sig}});
+    }
+    writeFile(transfersPath(), arr.dump());
+}
+void loadTransfers() {
+    g_transfers.clear();
+    if (g_storeDir.empty()) {
+        return;
+    }
+    const auto j = json::parse(readFile(transfersPath()), nullptr, false);
+    if (!j.is_array()) {
+        return;
+    }
+    for (const auto &t : j) {
+        if (!t.is_object()) {
+            continue;
+        }
+        const auto key = t.value("old_signing_key", std::string());
+        const auto sig = t.value("signature", std::string());
+        if (!key.empty() && !sig.empty()) {
+            g_transfers.emplace_back(key, sig);
+        }
+    }
+}
+// Под g_mu. Свой ключ и дубликаты не добавляются; лимит — как у extra_signing.
+bool addTransferLocked(const std::string &key, const std::string &sig) {
+    if (key.empty() || sig.empty() || key == g_signingB64) {
+        return false;
+    }
+    for (const auto &[have, _] : g_transfers) {
+        if (have == key) {
+            return false;
+        }
+    }
+    if (g_transfers.size() >= 8) {
+        return false;
+    }
+    g_transfers.emplace_back(key, sig);
+    return true;
 }
 void loadLegacy() {
     if (g_storeDir.empty()) {
@@ -718,6 +767,7 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
             loadEpochs();
             loadGroupRecipients();
             loadLegacy();
+            loadTransfers();
         }
         if (!g_account) {
             g_account = parvane_e2e_account_new();
@@ -1292,7 +1342,8 @@ bool needsHistoryLink(bool decCacheEmpty) {
         return false;
     }
     std::lock_guard<std::mutex> lk(g_mu);
-    if (!g_account || !g_sessions.empty() || !g_inGroups.empty() || !g_legacy.empty()) {
+    if (!g_account || !g_sessions.empty() || !g_inGroups.empty() || !g_legacy.empty()
+        || !g_transfers.empty()) {
         return false;
     }
     if (g_storeDir.empty()) {
@@ -1374,9 +1425,80 @@ std::string exportStateJson(const json &decCache) {
     return st.dump();
 }
 
+std::string exportLinkStateJson(const json &decCache) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account) {
+        return {};
+    }
+    json st;
+    st["linkVersion"] = 2;
+    json contacts = json::object();
+    for (const auto &[k, v] : g_contactId) {
+        contacts[k] = v;
+    }
+    st["contacts"] = contacts;
+    st["decCache"] = decCache.is_object() ? decCache : json::object();
+    // Входящие Megolm: все с диска + памяти, экспорт ключа с первого известного
+    // индекса (формат libolm export_session — веб принимает через import_session).
+    json groupIn = json::object();
+    std::set<std::string> keys;
+    for (const auto &[k, _] : g_inGroups) {
+        keys.insert(k);
+    }
+    for (const auto &[k, _] : g_inGroupEpoch) {
+        keys.insert(k);
+    }
+    for (const auto &key : keys) {
+        auto *g = getInGroup(key);
+        if (!g) {
+            continue;
+        }
+        const auto e = g_inGroupEpoch.find(key);
+        groupIn[key] = {{"exported", take(parvane_e2e_inbound_group_export(g))},
+                        {"epoch", e == g_inGroupEpoch.end() ? 0 : e->second}};
+    }
+    st["groupIn"] = groupIn;
+    json recipients = json::object();
+    for (const auto &[g, r] : g_groupRecipients) {
+        recipients[g] = r;
+    }
+    st["groupRecipients"] = recipients;
+    json contactDevices = json::object();
+    for (const auto &[contact, devs] : g_contactDevices) {
+        json d = json::object();
+        for (const auto &[id, info] : devs) {
+            d[id] = {{"identity", info.identity}, {"signing", info.signing}};
+        }
+        contactDevices[contact] = d;
+    }
+    st["contactDevices"] = contactDevices;
+    json transfers = json::array();
+    for (const auto &[key, sig] : g_transfers) {
+        transfers.push_back({{"old_signing_key", key}, {"signature", sig}});
+    }
+    st["transfers"] = transfers;
+    return st.dump();
+}
+
+std::pair<std::string, std::string> signLinkTransfer(const std::string &self,
+                                                     const std::string &newSigningKey) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (!g_account || self.empty() || newSigningKey.empty()) {
+        return {};
+    }
+    const auto statement = "link-transfer:" + self + ":" + g_signingB64 + ":" + newSigningKey;
+    return {g_signingB64, take(parvane_e2e_account_sign(g_account, statement.c_str()))};
+}
+
+std::vector<std::pair<std::string, std::string>> syncTransfers() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_transfers;
+}
+
 bool importLinkedHistory(
         const std::string &stateJson,
-        const std::function<void(const std::string &uuid, const json &inner)> &onDecCache) {
+        const std::function<void(const std::string &uuid, const json &inner)> &onDecCache,
+        const std::pair<std::string, std::string> &transfer) {
     json st = json::parse(stateJson, nullptr, false);
     if (!st.is_object()) {
         return false;
@@ -1385,6 +1507,23 @@ bool importLinkedHistory(
     std::lock_guard<std::mutex> lk(g_mu);
     if (!g_account) {
         return false;
+    }
+    const bool v2 = st.value("linkVersion", 0) == 2;
+    if (v2) {
+        // Переносы владения: из экспорта (цепочка прежних устройств) и из бокса.
+        bool changed = false;
+        if (st.contains("transfers") && st["transfers"].is_array()) {
+            for (const auto &t : st["transfers"]) {
+                if (t.is_object()) {
+                    changed = addTransferLocked(t.value("old_signing_key", std::string()),
+                                                t.value("signature", std::string())) || changed;
+                }
+            }
+        }
+        changed = addTransferLocked(transfer.first, transfer.second) || changed;
+        if (changed) {
+            saveTransfers();
+        }
     }
     // decCache — решает вызывающий (только отсутствующие uuid).
     if (st.contains("decCache") && st["decCache"].is_object() && onDecCache) {
@@ -1416,12 +1555,13 @@ bool importLinkedHistory(
         }
         saveEpochs();
     }
-    // Аккаунт(ы) прежних устройств → legacy-подписанты (только для extra_signing).
+    // Legacy v1: аккаунт(ы) прежних устройств → legacy-подписанты (только для
+    // extra_signing). v2-экспорт приватного материала не содержит.
     std::vector<std::string> pickles;
-    if (st.contains("account") && st["account"].is_string()) {
+    if (!v2 && st.contains("account") && st["account"].is_string()) {
         pickles.push_back(st["account"].get<std::string>());
     }
-    if (st.contains("legacyAccounts") && st["legacyAccounts"].is_array()) {
+    if (!v2 && st.contains("legacyAccounts") && st["legacyAccounts"].is_array()) {
         for (const auto &p : st["legacyAccounts"]) {
             if (p.is_string()) {
                 pickles.push_back(p.get<std::string>());

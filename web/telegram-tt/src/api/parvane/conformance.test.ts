@@ -230,3 +230,69 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     expect(jni).toMatch(/не подтверждён — откладываем/);
   });
 });
+
+describe('LINK-1: линковка v2 — обязательство, challenge, SAS от пары ключей, без приватного аккаунта', () => {
+  const r = rule('LINK-1') as unknown as {
+    sasDigits: number; sasInfo: string; exportLinkVersion: number;
+    exportContainsPrivateAccount: boolean; acceptsLegacyOffers: boolean;
+    transferStatement: string;
+    vectors: { newPubB64: string; oldPubB64: string; commitmentOfNew: string; sas: string };
+  };
+
+  it('правило LINK-1 задокументировано в sync-rules.json', () => {
+    expect(r.sasDigits).toBe(12);
+    expect(r.sasInfo).toBe('parvane-link-sas-v2');
+    expect(r.exportLinkVersion).toBe(2);
+    expect(r.exportContainsPrivateAccount).toBe(false);
+    expect(r.acceptsLegacyOffers).toBe(false);
+  });
+
+  it('web считает commitment и SAS по кросс-клиентским векторам', async () => {
+    const { linkCommitment, sasCodeV2 } = await import('./linking');
+    expect(await linkCommitment(r.vectors.newPubB64)).toBe(r.vectors.commitmentOfNew);
+    expect(await sasCodeV2(r.vectors.newPubB64, r.vectors.oldPubB64)).toBe(r.vectors.sas);
+  });
+
+  it('web: экспорт для линковки без приватного материала, transfer по строке из правила', () => {
+    const webE2e = readFileSync(
+      path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'),
+      'utf8',
+    );
+    const idx = webE2e.indexOf('exportLinkStateJson(): string {');
+    expect(idx).toBeGreaterThan(0);
+    const body = webE2e.slice(idx, webE2e.indexOf('signLinkTransfer(', idx));
+    expect(body).toMatch(/linkVersion: 2/);
+    expect(body).not.toMatch(/pickle|account:/);
+    expect(webE2e).toContain('`link-transfer:${self}:${this.signingKey}:${newSigningKey}`');
+    expect(r.transferStatement).toBe('link-transfer:<user>:<old_signing_key>:<new_signing_key>');
+  });
+
+  it('web: грант принимается только под ключ challenge, legacy-офферы не обслуживаются', () => {
+    const provider = readFileSync(
+      path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/provider.ts'),
+      'utf8',
+    );
+    expect(provider).toMatch(/grant\.eph_pub !== linkRuntime\.challenge/);
+    const idx = provider.indexOf('async function describeLinkOffer');
+    expect(idx).toBeGreaterThan(0);
+    expect(provider.slice(idx, idx + 300)).toMatch(/if \(!offer\.commitment\) return undefined/);
+  });
+
+  it('desktop и android используют те же примитивы ядра', () => {
+    const core = readFileSync(
+      path.join(REPO_ROOT, 'desktop/parvane-core/src/linking.cpp'),
+      'utf8',
+    );
+    expect(core).toContain('"parvane-link-sas-v2"');
+    expect(core).toMatch(/v %= 1000000000000ULL/);
+    const desktop = readFileSync(
+      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
+      'utf8',
+    );
+    expect(desktop).toMatch(/exportLinkStateJson\(DecCacheSnapshot\(\)\)/);
+    expect(desktop).toMatch(/grant\.value\("eph_pub", std::string\(\)\) != challenge/);
+    const android = readFileSync(path.join(REPO_ROOT, 'android/jni/parvane_jni.cpp'), 'utf8');
+    expect(android).toMatch(/sasCodeV2\(g_linkEph->publicB64\(\), challenge\)/);
+    expect(android).toMatch(/grant\.value\("eph_pub", std::string\(\)\) != g_linkChallenge/);
+  });
+});

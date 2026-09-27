@@ -143,18 +143,35 @@ void forgetOwnDevice(const std::string &deviceId);
 // Ротировать группы, где есть контакт (его устройство исчезло из каталога).
 void rotateGroupsWith(const std::string &contact);
 
-// ── Линковка истории ─────────────────────────────────────────────────────────
-// Свежая установка без истории (нет сессий/входящих Megolm/legacy-подписантов;
-// `decCacheEmpty` — от вызывающего: кэш расшифровки живёт в клиенте).
+// ── Линковка истории (v2, P-03/P-48) ─────────────────────────────────────────
+// Свежая установка без истории (нет сессий/входящих Megolm/legacy-подписантов/
+// переносов; `decCacheEmpty` — от вызывающего: кэш расшифровки живёт в клиенте).
 [[nodiscard]] bool needsHistoryLink(bool decCacheEmpty);
-// Полный экспорт состояния в формате PersistedE2eState веб-клиента (JSON):
-// аккаунт и legacy-подписанты — libolm-pickle под случайным pickleKey, входящие
-// Megolm — exported session keys, decCache — от вызывающего.
+// Полный экспорт состояния (PersistedE2eState веб-клиента) — ТОЛЬКО для
+// резервной копии ключей под паролем пользователя (keybackup.h); для линковки
+// не используется (P-48): аккаунт и legacy-подписанты — libolm-pickle под
+// случайным pickleKey, входящие Megolm — exported session keys.
 [[nodiscard]] std::string exportStateJson(const nlohmann::json &decCache);
+// Экспорт для линковки БЕЗ приватного материала (формат LinkExportState веба,
+// linkVersion=2): decCache (от вызывающего), входящие Megolm как exported
+// session keys, каталоги контактов/устройств/получателей, накопленные
+// переносы владения. Новое устройство остаётся самостоятельным.
+[[nodiscard]] std::string exportLinkStateJson(const nlohmann::json &decCache);
+// Подписанный перенос владения своими исходящими устройству с signing-ключом
+// newSigningKey: `link-transfer:<self>:<old_signing_key>:<new_signing_key>`.
+// → (old_signing_key, signature); пусто, если аккаунт не готов.
+[[nodiscard]] std::pair<std::string, std::string> signLinkTransfer(
+    const std::string &self, const std::string &newSigningKey);
+// Принятые переносы владения (для `transfers` в sync).
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> syncTransfers();
 // СЛИЯНИЕ чужого экспорта: decCache (через onDecCache), входящие Megolm,
-// аккаунт(ы) как legacy-подписанты. Своя identity/сессии/deviceId сохраняются.
+// контакты; v2 — плюс переносы владения (из экспорта и `transfer` из бокса).
+// Legacy-экспорт (PersistedE2eState с account) принимается как раньше:
+// аккаунт(ы) становятся legacy-подписантами. Своя identity/сессии/deviceId
+// сохраняются.
 [[nodiscard]] bool importLinkedHistory(
     const std::string &stateJson,
-    const std::function<void(const std::string &uuid, const nlohmann::json &inner)> &onDecCache);
+    const std::function<void(const std::string &uuid, const nlohmann::json &inner)> &onDecCache,
+    const std::pair<std::string, std::string> &transfer = {});
 
 } // namespace parvane::e2e

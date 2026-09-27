@@ -1,4 +1,4 @@
-// Parvane fork: тесты крипто линковки (ECDH P-256 → HKDF → AES-GCM, SAS).
+// Parvane fork: тесты крипто линковки (ECDH P-256 → HKDF → AES-GCM, SAS v2, commitment).
 #include "parvane/linking.h"
 
 #include <cstdio>
@@ -43,18 +43,31 @@ int main() {
     check(a2->open(b->publicB64(), *b->seal(a->publicB64(), "x")).value_or("") == "x",
           "восстановленный ключ открывает бокс");
 
-    // SAS: детерминирован, 6 цифр, совпадает с веб-формулой для известного вектора:
-    // eph = 65 нулевых байт → SHA-256 → первые 4 байта BE % 1e6.
-    std::string zeros(65, '\0');
-    const auto sas = sasCode(b64encode(zeros));
-    check(sas.size() == 6, "SAS — 6 символов");
-    check(sas == sasCode(b64encode(zeros)), "SAS детерминирован");
-    bool digits = true;
-    for (char ch : sas) digits = digits && ch >= '0' && ch <= '9';
-    check(digits, "SAS — только цифры");
-    // SHA-256(65×0x00) = 98ce42deef51d40269d542f5314e5de8... → 0x98ce42de % 1e6
-    check(sas == "155678" || true, "(вектор выводится из SHA-256; см. ниже)");
-    std::printf("SAS(65x00) = %s\n", sas.c_str());
+    // LINK-1 / P-03: обязательство на ключ — base64(SHA-256(raw pub)).
+    // Кросс-клиентский вектор (тот же в web linking.test.ts): pub = 65 нулевых байт.
+    const std::string zeros(65, '\0');
+    const std::string newB64 = b64encode(zeros);
+    check(commitment(newB64) == "mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=",
+          "commitment: вектор 65x00 совпадает с web");
+    check(commitmentMatches(a->publicB64(), commitment(a->publicB64())), "commitmentMatches: свой ключ");
+    check(!commitmentMatches(b->publicB64(), commitment(a->publicB64())), "commitmentMatches: чужой ключ");
+    check(!commitmentMatches("", commitment(a->publicB64())) && !commitmentMatches(a->publicB64(), ""),
+          "commitmentMatches: пустые строки → false");
+
+    // LINK-1 / P-03: SAS v2 от ПАРЫ ключей, 12 цифр «dddd dddd dddd».
+    // Вектор: new = 65x00, old = 0x04 || 64x01 → 5659 7031 8371 (см. web-тест).
+    std::string oldRaw(65, '\x01');
+    oldRaw[0] = '\x04';
+    const std::string oldB64 = b64encode(oldRaw);
+    const auto sas = sasCodeV2(newB64, oldB64);
+    check(sas == "5659 7031 8371", ("sasCodeV2: кросс-клиентский вектор (" + sas + ")").c_str());
+    check(sas.size() == 14 && sas[4] == ' ' && sas[9] == ' ', "sasCodeV2: формат 4-4-4");
+    check(sasCodeV2(oldB64, newB64) != sas, "sasCodeV2: порядок (new, old) фиксирован");
+    check(sasCodeV2(a->publicB64(), b->publicB64()) == sasCodeV2(a->publicB64(), b->publicB64()),
+          "sasCodeV2 детерминирован");
+    check(sasCodeV2(a->publicB64(), b->publicB64()) != sasCodeV2(a->publicB64(), c->publicB64()),
+          "sasCodeV2: другой ключ старого устройства → другой код");
+    check(sasCodeV2("не-base64!", oldB64).empty(), "sasCodeV2: мусор → пусто");
 
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;

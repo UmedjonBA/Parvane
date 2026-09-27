@@ -205,6 +205,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   // Авто-линковка истории (Settings → Devices)
   ParvaneLinkPendingTitle: 'History transfer',
   ParvaneLinkPendingText: 'Waiting for your other device. Open Settings → Devices there and confirm code %@.',
+  ParvaneLinkPendingWait: 'Waiting for your other device. Open Settings → Devices there — the verification code will appear on both devices.',
+  ParvaneLinkOfferWait: 'Waiting for the device to reveal its key…',
   ParvaneLinkRequests: 'History transfer requests',
   ParvaneLinkOfferCode: 'Code: %@',
   ParvaneLinkConfirm: 'Transfer message history to this device? Make sure it shows code %@.',
@@ -695,6 +697,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   SessionsTitle: 'Устройства',
   ParvaneLinkPendingTitle: 'Перенос истории',
   ParvaneLinkPendingText: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код %@.',
+  ParvaneLinkPendingWait: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства — код сверки появится на обоих устройствах.',
+  ParvaneLinkOfferWait: 'Ждём, пока устройство раскроет ключ…',
   ParvaneLinkRequests: 'Запросы на перенос истории',
   ParvaneLinkOfferCode: 'Код: %@',
   ParvaneLinkConfirm: 'Перенести историю сообщений на это устройство? Убедитесь, что на нём показан код %@.',

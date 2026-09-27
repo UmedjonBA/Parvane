@@ -7070,6 +7070,7 @@ void PumpReceive() {
 				auth.signing_key = parvane::e2e::signingKey();
 				auth.signer = [](const std::string &d) { return parvane::e2e::sign(d); };
 				auth.extra = [](const std::string &d) { return parvane::e2e::extraSignatures(d); };
+				auth.transfers = [] { return parvane::e2e::syncTransfers(); };
 				std::vector<std::string> pageRead;
 				std::string pageNotify;
 				auto page = m->sync(self, token, cursorId, cursorUpd, 15000,
@@ -9283,6 +9284,11 @@ void DeleteGroup(const QString &groupId) {
 }
 
 // ── Авто-линковка истории (паритет web provider.ts / linking.ts) ─────────────
+// Протокол v2 (P-03/P-48, правило LINK-1): новое устройство публикует
+// обязательство на эфемерный ключ и свой signing-ключ; старое шлёт challenge
+// своим эфемерным ключом; новое раскрывает ключ; SAS считается от ПАРЫ ключей
+// (12 цифр); грант принимается только под ключ challenge; экспорт — без
+// приватного Olm-аккаунта, с подписанным переносом владения исходящими.
 namespace {
 
 constexpr auto kLinkGrantPollMs = 5000;
@@ -9291,10 +9297,14 @@ constexpr auto kLinkOfferLifetimeMs = 10 * 60 * 1000;
 
 // Новое устройство: эфемерный ключ оффера (пока ждём грант). Под g_sessionMutex.
 std::optional<parvane::linking::EphemeralKey> g_linkEph;
+std::string g_linkCommitment;
+std::string g_linkChallenge; // эфемерный ключ старого устройства (после challenge)
 QString g_linkCode;
 std::int64_t g_linkStartedMs = 0;
 bool g_linkActive = false;
-// Старое устройство: офферы, уже показанные пользователю (device_id → eph_pub).
+// Старое устройство: свой эфемерный ключ на каждый challenge (device_id → ключ)
+// и офферы, уже показанные пользователю (device_id → раскрытый eph_pub).
+std::map<QString, parvane::linking::EphemeralKey> g_linkChallenges;
 QHash<QString, QString> g_linkOffersShown;
 bool g_linkOffersPolling = false;
 
@@ -9302,8 +9312,13 @@ bool g_linkOffersPolling = false;
 	return QDateTime::currentMSecsSinceEpoch();
 }
 
+[[nodiscard]] bool HeadlessUi() {
+	return std::getenv("QT_QPA_PLATFORM")
+		&& QString::fromUtf8(std::getenv("QT_QPA_PLATFORM")) == u"offscreen"_q;
+}
+
 // Полный ресинк после импорта истории: курсоры в ноль → sync вернёт всё, что
-// теперь читается (кэш + legacy-подписанты), дедуп — по uuid.
+// теперь читается (кэш + переносы владения), дедуп — по uuid.
 void ResyncFromScratch() {
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -9314,7 +9329,8 @@ void ResyncFromScratch() {
 	PumpReceive();
 }
 
-// Воркер: публикует оффер (identity.link.offer) и запускает опрос гранта.
+// Воркер: публикует оффер (identity.link.offer: commitment + signing_key, без
+// ключа) и запускает опрос гранта.
 void StartHistoryLinkOffer() {
 	parvane::ITransport *t = nullptr;
 	std::string token;
@@ -9330,11 +9346,11 @@ void StartHistoryLinkOffer() {
 	if (!eph) {
 		return;
 	}
-	const auto code = QString::fromStdString(parvane::linking::sasCode(eph->publicB64()));
+	const auto commitment = parvane::linking::commitment(eph->publicB64());
 	try {
 		const auto raw = t->request(parvane::topics::IdentityLinkOffer,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()},
-				{"eph_pub", eph->publicB64()}}.dump(), 5000);
+				{"commitment", commitment}, {"signing_key", parvane::e2e::signingKey()}}.dump(), 5000);
 		if (!parvane::json::parse(raw, nullptr, false).value("ok", false)) {
 			LOG(("Parvane: линковка: оффер отклонён"));
 			return;
@@ -9346,18 +9362,13 @@ void StartHistoryLinkOffer() {
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_linkEph = std::move(eph);
-		g_linkCode = code;
+		g_linkCommitment = commitment;
+		g_linkChallenge.clear();
+		g_linkCode.clear();
 		g_linkStartedMs = NowMs();
 		g_linkActive = true;
 	}
-	LOG(("Parvane: линковка: оффер опубликован, код %1").arg(code));
-	crl::on_main([code] {
-		if (std::getenv("QT_QPA_PLATFORM") && QString::fromUtf8(std::getenv("QT_QPA_PLATFORM")) == u"offscreen"_q) {
-			return; // headless e2e — без боксов
-		}
-		Ui::show(Ui::MakeInformBox(
-			u"Перенос истории: подтвердите на другом устройстве (Настройки → Устройства).\nКод: %1"_q.arg(code)));
-	});
+	LOG(("Parvane: линковка: оффер (обязательство) опубликован"));
 }
 
 void RetractHistoryLinkOffer() {
@@ -9369,6 +9380,9 @@ void RetractHistoryLinkOffer() {
 		token = g_token.toStdString();
 		g_linkActive = false;
 		g_linkEph.reset();
+		g_linkCommitment.clear();
+		g_linkChallenge.clear();
+		g_linkCode.clear();
 	}
 	if (!t) {
 		return;
@@ -9376,7 +9390,7 @@ void RetractHistoryLinkOffer() {
 	try {
 		t->request(parvane::topics::IdentityLinkOffer,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()},
-				{"eph_pub", ""}}.dump(), 5000);
+				{"revoke", true}}.dump(), 5000);
 	} catch (const std::exception &) {
 	}
 }
@@ -9384,7 +9398,7 @@ void RetractHistoryLinkOffer() {
 // Воркер: один опрос гранта. true — линковка завершена (успех/стоп).
 bool PollLinkGrantOnce() {
 	parvane::ITransport *t = nullptr;
-	std::string self, token;
+	std::string self, token, commitment, challenge;
 	std::optional<parvane::linking::EphemeralKey> eph;
 	std::int64_t started = 0;
 	{
@@ -9396,6 +9410,8 @@ bool PollLinkGrantOnce() {
 		self = g_selfAddress.toStdString();
 		token = g_token.toStdString();
 		eph = g_linkEph;
+		commitment = g_linkCommitment;
+		challenge = g_linkChallenge;
 		started = g_linkStartedMs;
 	}
 	if (!t || !eph) {
@@ -9412,16 +9428,67 @@ bool PollLinkGrantOnce() {
 		return true;
 	}
 	parvane::json grant;
+	std::string newChallenge;
 	try {
 		const auto raw = t->request(parvane::topics::IdentityLinkPoll,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()}}.dump(), 5000);
 		const auto resp = parvane::json::parse(raw, nullptr, false);
-		if (!resp.is_object() || !resp.value("ok", false) || !resp.contains("grant")
-			|| !resp["grant"].is_object()) {
+		if (!resp.is_object() || !resp.value("ok", false)) {
 			return false;
 		}
-		grant = resp["grant"];
+		newChallenge = resp.value("challenge", std::string());
+		if (resp.contains("grant") && resp["grant"].is_object()) {
+			grant = resp["grant"];
+		}
 	} catch (const std::exception &) {
+		return false;
+	}
+	// Challenge пришёл — раскрываем ключ (сервер сверяет с обязательством) и
+	// показываем SAS от пары ключей. Фиксируется первый challenge.
+	if (challenge.empty() && !newChallenge.empty()) {
+		try {
+			const auto raw = t->request(parvane::topics::IdentityLinkOffer,
+				parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()},
+					{"eph_pub", eph->publicB64()}, {"commitment", commitment},
+					{"signing_key", parvane::e2e::signingKey()}}.dump(), 5000);
+			if (!parvane::json::parse(raw, nullptr, false).value("ok", false)) {
+				LOG(("Parvane: линковка: раскрытие ключа отклонено"));
+				return false;
+			}
+		} catch (const std::exception &) {
+			return false;
+		}
+		const auto code = QString::fromStdString(
+			parvane::linking::sasCodeV2(eph->publicB64(), newChallenge));
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (!g_linkActive) {
+				return true;
+			}
+			g_linkChallenge = newChallenge;
+			g_linkCode = code;
+		}
+		challenge = newChallenge;
+		LOG(("Parvane: линковка: ключ раскрыт, код сверки готов"));
+#ifdef PARVANE_DEV
+		// Только dev-сборка: headless e2e сверяет код по логу.
+		LOG(("Parvane: линковка (dev): код сверки %1").arg(code));
+#endif
+		crl::on_main([code] {
+			if (HeadlessUi()) {
+				return; // headless e2e — без боксов
+			}
+			Ui::show(Ui::MakeInformBox(
+				u"Перенос истории: сверьте код на другом устройстве (Настройки → Устройства) и подтвердите там.\nКод: %1"_q.arg(code)));
+		});
+	}
+	if (grant.is_null()) {
+		return false;
+	}
+	if (challenge.empty() || grant.value("eph_pub", std::string()) != challenge) {
+		// Грант не под тот ключ, с которым считался SAS: гонка двух старых
+		// устройств или подмена — игнорируем.
+		LOG(("Parvane: линковка: грант под чужой эфемерный ключ — отклонён"));
 		return false;
 	}
 	{
@@ -9458,6 +9525,11 @@ bool PollLinkGrantOnce() {
 		LOG(("Parvane: линковка: скачивание: %1").arg(QString::fromUtf8(e.what())));
 		return true;
 	}
+	std::pair<std::string, std::string> transfer;
+	if (box.contains("transfer") && box["transfer"].is_object()) {
+		transfer = {box["transfer"].value("old_signing_key", std::string()),
+			box["transfer"].value("signature", std::string())};
+	}
 	int merged = 0;
 	const auto ok = parvane::e2e::importLinkedHistory(stateJson,
 		[&](const std::string &uuid, const nlohmann::json &inner) {
@@ -9472,7 +9544,7 @@ bool PollLinkGrantOnce() {
 			}
 			DecCachePut(q, QString::fromStdString(entry.dump()));
 			++merged;
-		});
+		}, transfer);
 	if (!ok) {
 		LOG(("Parvane: линковка: импорт не удался"));
 		return true;
@@ -9495,22 +9567,28 @@ void ScheduleLinkGrantPoll() {
 	});
 }
 
-// Воркер (старое устройство): выдать грант устройству deviceId с ключом ephPub —
-// полный экспорт → blobcrypt → cloud (owner-only) → ECDH-бокс → link.grant.
-void GrantLink(const QString &deviceId, const QString &ephPub) {
+// Воркер (старое устройство): выдать грант устройству deviceId с раскрытым
+// ключом ephPub — экспорт БЕЗ приватного материала → blobcrypt → cloud
+// (owner-only) → ECDH-бокс (с подписанным переносом владения) → link.grant.
+void GrantLink(const QString &deviceId, const QString &ephPub, const QString &signingKey) {
 	parvane::ITransport *t = nullptr;
 	std::string self, token;
+	std::optional<parvane::linking::EphemeralKey> own;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		t = g_transport.get();
 		self = g_selfAddress.toStdString();
 		token = g_token.toStdString();
+		if (const auto it = g_linkChallenges.find(deviceId); it != g_linkChallenges.end()) {
+			own = it->second;
+		}
 	}
-	if (!t) {
+	if (!t || !own) {
+		LOG(("Parvane: линковка: нет своего challenge для устройства %1").arg(deviceId));
 		return;
 	}
 	try {
-		const auto exported = parvane::e2e::exportStateJson(DecCacheSnapshot());
+		const auto exported = parvane::e2e::exportLinkStateJson(DecCacheSnapshot());
 		if (exported.empty()) {
 			return;
 		}
@@ -9518,22 +9596,26 @@ void GrantLink(const QString &deviceId, const QString &ephPub) {
 		parvane::CloudClient cloud(*t);
 		const auto fileId = cloud.upload(self, token, "link-transfer",
 			"application/octet-stream", enc.ciphertext, {}, false, 192 * 1024, 30000);
-		auto eph = parvane::linking::EphemeralKey::generate();
-		if (!eph) {
-			return;
-		}
-		const parvane::json boxPlain = {{"file_id", fileId},
+		parvane::json boxPlain = {{"file_id", fileId},
 			{"file_key", enc.keyB64}, {"file_nonce", enc.nonceB64}};
-		const auto box = eph->seal(ephPub.toStdString(), boxPlain.dump());
+		if (!signingKey.isEmpty()) {
+			const auto tr = parvane::e2e::signLinkTransfer(self, signingKey.toStdString());
+			if (!tr.second.empty()) {
+				boxPlain["transfer"] = {{"old_signing_key", tr.first}, {"signature", tr.second}};
+			}
+		}
+		const auto box = own->seal(ephPub.toStdString(), boxPlain.dump());
 		if (!box) {
 			return;
 		}
 		const auto raw = t->request(parvane::topics::IdentityLinkGrant,
 			parvane::json{{"token", token}, {"device_id", deviceId.toStdString()},
-				{"box_payload", *box}, {"eph_pub", eph->publicB64()}}.dump(), 5000);
+				{"box_payload", *box}, {"eph_pub", own->publicB64()}}.dump(), 5000);
 		const auto resp = parvane::json::parse(raw, nullptr, false);
 		if (resp.value("ok", false)) {
 			LOG(("Parvane: линковка: грант выдан устройству %1").arg(deviceId));
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_linkChallenges.erase(deviceId);
 		} else {
 			LOG(("Parvane: линковка: грант не удался: %1")
 				.arg(QString::fromStdString(resp.value("error", std::string("?")))));
@@ -9543,7 +9625,9 @@ void GrantLink(const QString &deviceId, const QString &ephPub) {
 	}
 }
 
-// Воркер (старое устройство): опрос чужих офферов → подтверждение с SAS-кодом.
+// Воркер (старое устройство): опрос чужих офферов → challenge → после
+// раскрытия ключа подтверждение с SAS-кодом. Legacy-офферы v1 (без
+// обязательства) не обслуживаются.
 void PollLinkOffersOnce() {
 	parvane::ITransport *t = nullptr;
 	std::string token;
@@ -9570,13 +9654,67 @@ void PollLinkOffersOnce() {
 	if (!offers.is_array()) {
 		return;
 	}
+	// Ключи challenge для исчезнувших офферов больше не нужны.
+	{
+		std::set<QString> live;
+		for (const auto &o : offers) {
+			if (o.is_object()) {
+				live.insert(QString::fromStdString(o.value("device_id", std::string())));
+			}
+		}
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (auto it = g_linkChallenges.begin(); it != g_linkChallenges.end();) {
+			it = live.count(it->first) ? std::next(it) : g_linkChallenges.erase(it);
+		}
+	}
 	for (const auto &o : offers) {
 		if (!o.is_object()) {
 			continue;
 		}
 		const auto dev = QString::fromStdString(o.value("device_id", std::string()));
 		const auto eph = QString::fromStdString(o.value("eph_pub", std::string()));
-		if (dev.isEmpty() || eph.isEmpty()) {
+		const auto commitment = o.value("commitment", std::string());
+		const auto challengePub = o.value("challenge_pub", std::string());
+		const auto signingKey = QString::fromStdString(o.value("signing_key", std::string()));
+		if (dev.isEmpty() || commitment.empty()) {
+			continue;
+		}
+		std::optional<parvane::linking::EphemeralKey> own;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (const auto it = g_linkChallenges.find(dev); it != g_linkChallenges.end()) {
+				own = it->second;
+			}
+		}
+		if (!own && !challengePub.empty()) {
+			continue; // challenge выставило другое наше устройство
+		}
+		if (!own || challengePub.empty()) {
+			// Нет challenge (или новое устройство переофферило — сервер его
+			// сбросил): шлём свой ключ; при повторе — тот же (идемпотентно).
+			auto key = own ? own : parvane::linking::EphemeralKey::generate();
+			if (!key) {
+				continue;
+			}
+			try {
+				const auto raw = t->request(parvane::topics::IdentityLinkChallenge,
+					parvane::json{{"token", token}, {"device_id", dev.toStdString()},
+						{"eph_pub", key->publicB64()}}.dump(), 5000);
+				if (!parvane::json::parse(raw, nullptr, false).value("ok", false)) {
+					continue;
+				}
+			} catch (const std::exception &) {
+				continue;
+			}
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_linkChallenges.insert_or_assign(dev, *key);
+			continue;
+		}
+		if (challengePub != own->publicB64() || eph.isEmpty()) {
+			continue; // ждём раскрытия ключа (или это чужой challenge)
+		}
+		if (!parvane::linking::commitmentMatches(eph.toStdString(), commitment)) {
+			LOG(("Parvane: линковка: ключ оффера %1 не соответствует обязательству").arg(dev));
 			continue;
 		}
 		{
@@ -9586,19 +9724,19 @@ void PollLinkOffersOnce() {
 			}
 			g_linkOffersShown.insert(dev, eph);
 		}
-		const auto code = QString::fromStdString(parvane::linking::sasCode(eph.toStdString()));
-		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код %2")
-			.arg(dev, code));
-		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI.
+		const auto code = QString::fromStdString(
+			parvane::linking::sasCodeV2(eph.toStdString(), own->publicB64()));
+		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код готов").arg(dev));
+		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI (только dev-сборка).
 		if (const char *ag = ParvaneDevEnv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
-			GrantLink(dev, eph);
+			GrantLink(dev, eph, signingKey);
 			continue;
 		}
-		crl::on_main([dev, eph, code] {
+		crl::on_main([dev, eph, signingKey, code] {
 			Ui::show(Ui::MakeConfirmBox({
-				.text = u"Новое устройство запрашивает перенос истории.\nКод на новом устройстве: %1\nПередать историю?"_q.arg(code),
-				.confirmed = [dev, eph](Fn<void()> &&close) {
-					crl::async([dev, eph] { GrantLink(dev, eph); });
+				.text = u"Новое устройство запрашивает перенос истории.\nСверьте код — он должен совпадать с кодом на новом устройстве:\n%1\nПередать историю?"_q.arg(code),
+				.confirmed = [dev, eph, signingKey](Fn<void()> &&close) {
+					crl::async([dev, eph, signingKey] { GrantLink(dev, eph, signingKey); });
 					close();
 				},
 				.confirmText = u"Передать"_q,
@@ -9732,7 +9870,8 @@ void StartHistoryLinking() {
 	}
 }
 
-// Код линковки (новое устройство, пока ждём грант); пусто — не ждём.
+// Код линковки (новое устройство, пока ждём грант); пусто — не ждём или
+// старое устройство ещё не прислало challenge (v2: код появляется после него).
 QString HistoryLinkCode() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	return g_linkActive ? g_linkCode : QString();

@@ -232,26 +232,72 @@ int main() {
               "groupSeal шлёт голый content без inner.from (E2E-1)");
     }
 
-    // Линковка: экспорт → слияние в «другое устройство» (эмулируем: экспорт
-    // содержит legacy-аккаунт = наш; import в себя же даёт dup → 0 legacy).
+    // Резервная копия ключей: полный экспорт (с account) остаётся для keybackup.
     const auto exported = e2e::exportStateJson(json{{"u1", {{"from", "bob@local"}}}});
     const auto st = json::parse(exported);
     check(st.value("version", 0) == 2 && st.contains("account") && st["groupIn"].contains("g1|" + bob2.identity),
-          "exportStateJson: версия 2, account (libolm), groupIn exported");
+          "exportStateJson (keybackup): версия 2, account (libolm), groupIn exported");
     check(!e2e::needsHistoryLink(true), "needsHistoryLink=false — есть сессии");
+
+    // P-48 / LINK-1: экспорт для ЛИНКОВКИ — без приватного материала.
+    const auto linkExport = e2e::exportLinkStateJson(json{{"u1", {{"from", "bob@local"}}}});
+    const auto ls = json::parse(linkExport);
+    check(ls.value("linkVersion", 0) == 2 && !ls.contains("account") && !ls.contains("pickleKey")
+              && !ls.contains("legacyAccounts") && linkExport.find("pickle") == std::string::npos,
+          "exportLinkStateJson: linkVersion=2, без account/pickleKey/legacyAccounts");
+    check(ls["groupIn"].contains("g1|" + bob2.identity) && ls["groupIn"]["g1|" + bob2.identity].contains("exported"),
+          "exportLinkStateJson: входящие Megolm как exported");
+    check(ls.contains("decCache") && ls["decCache"].contains("u1") && ls.contains("contacts")
+              && ls.contains("transfers") && ls["transfers"].is_array(),
+          "exportLinkStateJson: decCache, contacts, transfers");
     int dec = 0;
-    const bool imported = e2e::importLinkedHistory(exported, [&](const std::string &id, const json &) {
+    const bool imported = e2e::importLinkedHistory(linkExport, [&](const std::string &id, const json &) {
         dec += (id == "u1");
     });
-    check(imported && dec == 1, "importLinkedHistory: decCache через колбэк");
-    check(e2e::extraSignatures("sync:0:0").empty(), "свой аккаунт не становится legacy");
+    check(imported && dec == 1, "importLinkedHistory v2: decCache через колбэк");
+    check(e2e::extraSignatures("sync:0:0").empty() && e2e::syncTransfers().empty(),
+          "importLinkedHistory v2: свой экспорт не даёт ни legacy, ни transfers");
 
-    // Чужой аккаунт как legacy-подписант (libolm-pickle под pickleKey экспорта).
+    // P-48: подписанный перенос владения — проверяемая подпись над
+    // `link-transfer:<self>:<old>:<new>`; старое устройство подписывает своим ключом.
+    FakeDevice newDev;
+    const auto tr = e2e::signLinkTransfer("alice@local", newDev.signing);
+    check(tr.first == e2e::signingKey() && !tr.second.empty(), "signLinkTransfer: old_signing_key = свой ключ");
+    const std::string statement = "link-transfer:alice@local:" + tr.first + ":" + newDev.signing;
+    check(parvane_e2e_ed25519_verify(tr.first.c_str(), statement.c_str(), tr.second.c_str()) == 1,
+          "signLinkTransfer: подпись проверяется");
+    check(parvane_e2e_ed25519_verify(tr.first.c_str(), ("link-transfer:alice@local:" + tr.first + ":OTHER").c_str(),
+              tr.second.c_str()) != 1,
+          "signLinkTransfer: привязан к конкретному новому ключу");
+    check(e2e::signLinkTransfer("", newDev.signing).first.empty(), "signLinkTransfer: без self — пусто");
+
+    // Импорт с transfer из бокса → попадает в syncTransfers; свой ключ и дубли — нет.
     FakeDevice old;
-    json st2 = st;
-    st2["account"] = take(parvane_e2e_account_to_libolm_pickle(old.acc, st.value("pickleKey", "").c_str()));
+    const std::string oldStatement = "link-transfer:alice@local:" + old.signing + ":" + e2e::signingKey();
+    const auto oldSig = take(parvane_e2e_account_sign(old.acc, oldStatement.c_str()));
+    json st2 = ls;
     st2["groupIn"] = json::object();
-    check(e2e::importLinkedHistory(st2.dump(), nullptr), "импорт с чужим аккаунтом");
+    st2["transfers"] = json::array({{{"old_signing_key", "chain-key"}, {"signature", "chain-sig"}}});
+    check(e2e::importLinkedHistory(st2.dump(), nullptr, {old.signing, oldSig}), "импорт v2 с transfer");
+    const auto transfers = e2e::syncTransfers();
+    check(transfers.size() == 2 && transfers[0].first == "chain-key" && transfers[1].first == old.signing
+              && transfers[1].second == oldSig,
+          "syncTransfers: цепочка из экспорта + transfer из бокса");
+    check(e2e::importLinkedHistory(st2.dump(), nullptr, {e2e::signingKey(), "x"}) && e2e::syncTransfers().size() == 2,
+          "syncTransfers: свой ключ и дубликаты не добавляются");
+    check(!e2e::needsHistoryLink(true), "needsHistoryLink=false — есть transfers");
+    // v2-экспорт с подсунутым account НЕ становится legacy-подписантом.
+    json st3 = ls;
+    st3["pickleKey"] = st.value("pickleKey", "");
+    st3["account"] = st["account"];
+    check(e2e::importLinkedHistory(st3.dump(), nullptr) && e2e::extraSignatures("sync:0:0").empty(),
+          "importLinkedHistory v2: account в экспорте игнорируется");
+
+    // Legacy v1 (с account) по-прежнему принимается: чужой аккаунт → legacy-подписант.
+    json st4 = st;
+    st4["account"] = take(parvane_e2e_account_to_libolm_pickle(old.acc, st.value("pickleKey", "").c_str()));
+    st4["groupIn"] = json::object();
+    check(e2e::importLinkedHistory(st4.dump(), nullptr), "импорт legacy v1 с чужим аккаунтом");
     const auto extra = e2e::extraSignatures("sync:0:0");
     check(extra.size() == 1 && extra[0].first == old.signing
               && parvane_e2e_ed25519_verify(old.signing.c_str(), "sync:0:0", extra[0].second.c_str()) == 1,

@@ -21,6 +21,7 @@ inline constexpr auto IdentityPasswordChange = "identity.password.change";
 inline constexpr auto IdentityLinkOffer = "identity.link.offer";
 inline constexpr auto IdentityLinkPoll = "identity.link.poll";
 inline constexpr auto IdentityLinkGrant = "identity.link.grant";
+inline constexpr auto IdentityLinkChallenge = "identity.link.challenge";
 
 // messenger
 inline constexpr auto MsgSend = "msg.chat.send";

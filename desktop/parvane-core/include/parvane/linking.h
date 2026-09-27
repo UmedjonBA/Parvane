@@ -1,10 +1,15 @@
 // Parvane fork: крипто авто-линковки истории (паритет с web linking.ts).
-// Новое устройство публикует эфемерный ECDH P-256 ключ (identity.link.offer),
-// старое — шифрует координаты перенесённого экспорта в «бокс»
-// (ECDH → HKDF-SHA256(salt=32×0, info="parvane-link-v1") → AES-256-GCM, iv 12 байт
-// в начале бокса, без AAD) и отдаёт identity.link.grant. 6-значный SAS — от
-// SHA-256 сырых байт эфемерного ключа нового устройства (защита от вора пароля).
-// Все base64 здесь — стандартные С padding (как btoa у веба).
+// Протокол v2 (P-03/P-48, правило LINK-1):
+//   1. новое устройство публикует identity.link.offer с ОБЯЗАТЕЛЬСТВОМ
+//      commitment = base64(SHA-256(raw eph_pub)) и своим signing_key;
+//   2. старое устройство шлёт identity.link.challenge со своим эфемерным ключом;
+//   3. новое раскрывает eph_pub (сервер сверяет с обязательством) и обе стороны
+//      показывают SAS = 12 цифр от SHA-256("parvane-link-sas-v2"||new||old);
+//   4. старое шифрует координаты экспорта и подписанный перенос владения в
+//      «бокс» (ECDH → HKDF-SHA256(salt=32×0, info="parvane-link-v1") →
+//      AES-256-GCM, iv 12 байт в начале бокса, без AAD) → identity.link.grant.
+// Приватный Olm-аккаунт никуда не передаётся. Все base64 здесь — стандартные
+// с padding (как btoa у веба).
 #pragma once
 
 #include <optional>
@@ -34,8 +39,12 @@ private:
     std::string _privB64;
 };
 
-// 6-значный SAS-код из эфемерного публичного ключа (base64).
-[[nodiscard]] std::string sasCode(const std::string &ephPubB64);
+// v2: обязательство на эфемерный ключ — base64(SHA-256(raw pub)).
+[[nodiscard]] std::string commitment(const std::string &ephPubB64);
+[[nodiscard]] bool commitmentMatches(const std::string &ephPubB64, const std::string &commitmentB64);
+// v2: SAS от ПАРЫ ключей (новое, старое) — 12 цифр «dddd dddd dddd» (≈40 бит).
+// "" — если хоть один ключ не base64.
+[[nodiscard]] std::string sasCodeV2(const std::string &newPubB64, const std::string &oldPubB64);
 
 // Стандартный base64 с padding (как btoa/atob).
 [[nodiscard]] std::string b64encode(const std::string &raw);

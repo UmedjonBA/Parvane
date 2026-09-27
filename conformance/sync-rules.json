@@ -77,6 +77,23 @@
         "ack": false,
         "retry": true
       }
+    },
+    {
+      "id": "LINK-1",
+      "title": "Линковка v2: обязательство, challenge, SAS от пары ключей, без приватного аккаунта",
+      "sasDigits": 12,
+      "sasInfo": "parvane-link-sas-v2",
+      "commitment": "base64(sha256(raw eph_pub))",
+      "exportLinkVersion": 2,
+      "exportContainsPrivateAccount": false,
+      "transferStatement": "link-transfer:<user>:<old_signing_key>:<new_signing_key>",
+      "acceptsLegacyOffers": false,
+      "vectors": {
+        "newPubB64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "oldPubB64": "BAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "commitmentOfNew": "mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=",
+        "sas": "5659 7031 8371"
+      }
     }
   ]
 }
