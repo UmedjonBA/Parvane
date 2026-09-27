@@ -248,6 +248,12 @@ async fn handle_signal(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
         let to = event.payload.to.clone();
         let signal = event.payload.signal.clone();
 
+        // P-01: `to` уходит в NATS-subject `call.user.<to>`; отвергаем адрес с
+        // пробелом/CRLF/wildcard до публикации (иначе инъекция кадра в шину).
+        if !parvane_types::address::is_valid_route(&to) {
+            anyhow::bail!("недопустимый адрес получателя сигнала");
+        }
+
         record_signal(pool, &event.from, &to, &signal, now_unix()).await?;
 
         // Релеим сигнал в персональный инбокс получателя. `from` = инициатор

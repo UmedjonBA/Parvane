@@ -173,6 +173,19 @@ async fn main() -> Result<()> {
 
 // ── auth helper ───────────────────────────────────────────────────────────────
 
+/// Публикация в персональный инбокс с валидацией адреса (P-01). Адрес приходит
+/// из пользовательского ввода (`to`, `sender`, участники группы) и попадает в
+/// NATS-subject; пробел/CRLF/wildcard разорвали бы кадр `PUB` и позволили
+/// внедрить публикацию в чужой инбокс. Недопустимый адрес — не публикуем.
+async fn publish_inbox(nc: &Client, addr: &str, bytes: Vec<u8>) -> Result<()> {
+    if !parvane_types::address::is_valid_route(addr) {
+        tracing::warn!("отклонён publish в инбокс: недопустимый адрес");
+        return Ok(());
+    }
+    nc.publish(msg_inbox(addr), bytes.into()).await?;
+    Ok(())
+}
+
 async fn verify_token(nc: &Client, token: &str) -> Result<String> {
     let req = serde_json::to_vec(&VerifyRequest { token: token.to_string() })?;
     let reply = nc
@@ -1368,7 +1381,7 @@ async fn deliver_message(
         };
         let bytes = serde_json::to_vec(&ev)?;
         enqueue(pool, r, &stored.id.to_string(), now).await?;
-        nc.publish(msg_inbox(r), bytes.into()).await?;
+        publish_inbox(nc, r, bytes).await?;
     }
     Ok(())
 }
@@ -1445,7 +1458,7 @@ async fn push_mutation(nc: &Client, pool: &SqlitePool, message_id: &str, now: i6
             token: String::new(),
             payload: parvane_types::InboxPush { message: stored },
         };
-        nc.publish(msg_inbox(r), serde_json::to_vec(&ev)?.into()).await?;
+        publish_inbox(nc, r, serde_json::to_vec(&ev)?).await?;
     }
     Ok(())
 }
@@ -1537,8 +1550,7 @@ async fn handle_ack(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                     token: String::new(),
                     payload: DeliveredPayload { message_id: event.payload.message_id },
                 };
-                nc.publish(msg_inbox(&sender), serde_json::to_vec(&delivered)?.into())
-                    .await?;
+                publish_inbox(nc, &sender, serde_json::to_vec(&delivered)?).await?;
             }
             info!("Ack: {} получил {}", reader, mid);
         }
@@ -1575,7 +1587,7 @@ async fn handle_read(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
             token: String::new(),
             payload: ReadNotice { read: vec![event.payload.message_id] },
         };
-        nc.publish(msg_inbox(&reader), serde_json::to_vec(&notice)?.into()).await?;
+        publish_inbox(nc, &reader, serde_json::to_vec(&notice)?).await?;
 
         info!("Read receipt: {} прочитал {}", reader, event.payload.message_id);
         anyhow::Ok(())
@@ -1794,7 +1806,7 @@ async fn handle_setnotify(nc: &Client, pool: &SqlitePool, msg: async_nats::Messa
             token: String::new(),
             payload: NotifyNotice { notify: json.clone() },
         };
-        nc.publish(msg_inbox(&user), serde_json::to_vec(&notice)?.into()).await?;
+        publish_inbox(nc, &user, serde_json::to_vec(&notice)?).await?;
         info!("Настройки уведомлений обновлены: {}", user);
         anyhow::Ok(())
     }
@@ -1824,7 +1836,7 @@ async fn handle_clear(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
             token: String::new(),
             payload: ClearedNotice { cleared: ClearedIds { message_ids: hidden } },
         };
-        nc.publish(msg_inbox(&who), serde_json::to_vec(&ev)?.into()).await?;
+        publish_inbox(nc, &who, serde_json::to_vec(&ev)?).await?;
         anyhow::Ok(())
     }
     .await;
