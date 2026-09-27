@@ -997,7 +997,21 @@ class Client private constructor(
             "notify" -> try {
                 store.applyNotifyBlob(JSONObject(event.optString("blob"))).forEach { postUpdate(it) }
             } catch (e: Exception) { Log.w(TAG, "notify blob: ${e.message}") }
-            "link" -> Log.i(TAG, "линковка: ${event.optString("state")} ${event.optString("code")} ${event.optInt("count")}")
+            "link" -> {
+                // P-46: код сверки НЕ в logcat — только в UI через сервисное уведомление.
+                val state = event.optString("state")
+                Log.i(TAG, "линковка: $state")
+                val text = when (state) {
+                    "offered" -> "Перенос истории: откройте Настройки → Устройства на другом устройстве — код сверки появится на обоих."
+                    "code" -> "Перенос истории. Сверьте код на другом устройстве и подтвердите там:\n${event.optString("code")}"
+                    "imported" -> "История перенесена (${event.optInt("count")} сообщений)."
+                    else -> null
+                }
+                text?.let {
+                    postUpdate(TdApi.UpdateServiceNotification("parvane_link_$state",
+                        TdApi.MessageText(TdApi.FormattedText(it, arrayOf()), null, null)))
+                }
+            }
             "session" -> if (event.optString("state") == "failed") {
                 Log.w(TAG, "сессия: ${event.optString("error")}")
             }

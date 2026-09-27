@@ -29,6 +29,8 @@ class ParvaneViewModel(app: Application) : AndroidViewModel(app) {
     val messages = mutableStateMapOf<Long, List<TdApi.Message>>()
     val openChatId = mutableStateOf<Long?>(null)
     val self = mutableStateOf<TdApi.User?>(null)
+    // Сервисные уведомления ядра (код сверки линковки и т.п.) — показываются диалогом.
+    val serviceNotice = mutableStateOf<String?>(null)
 
     private val client: Client = Client.create({ obj -> onUpdate(obj) }, null, null)
 
@@ -74,6 +76,8 @@ class ParvaneViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 else -> {}
             }
+            is TdApi.UpdateServiceNotification ->
+                serviceNotice.value = (obj.content as? TdApi.MessageText)?.text?.text
             is TdApi.UpdateNewChat -> chats[obj.chat.id] = obj.chat
             is TdApi.UpdateUser -> users[obj.user.id] = obj.user
             is TdApi.UpdateChatTitle -> chats[obj.chatId]?.let { c -> chats[obj.chatId] = c.also { it.title = obj.title } }

@@ -161,6 +161,7 @@ export const TOPIC_DEVICE_REVOKE = 'identity.device.revoke';
 export const TOPIC_LINK_OFFER = 'identity.link.offer';
 export const TOPIC_LINK_POLL = 'identity.link.poll';
 export const TOPIC_LINK_GRANT = 'identity.link.grant';
+export const TOPIC_LINK_CHALLENGE = 'identity.link.challenge';
 export const TOPIC_MSG_SEND = 'msg.chat.send';
 export const TOPIC_MSG_ACK = 'msg.chat.ack';
 export const TOPIC_MSG_READ = 'msg.chat.read';

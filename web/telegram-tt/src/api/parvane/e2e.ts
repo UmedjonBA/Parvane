@@ -102,9 +102,26 @@ type PersistedE2eState = {
   // Следующий key_id для пополнения one-time prekeys: сервер дедупит по
   // (username, device_id, key_id), повтор старых id был бы тихим no-op
   oneTimeKeyIdNext?: number;
-  // Авто-линковка: Olm-pickle прежних устройств (под НАШИМ pickleKey) — только
-  // для подписи sync (extra_signing), их sealed-исходящие видны и нам
+  // Авто-линковка (legacy v1): Olm-pickle прежних устройств (под НАШИМ pickleKey) —
+  // только для подписи sync (extra_signing), их sealed-исходящие видны и нам.
+  // v2 (P-48) приватные аккаунты больше не переезжают — см. transfers.
   legacyAccounts?: string[];
+  // v2: подписанные прежними устройствами переносы владения их исходящими
+  // (`link-transfer:<user>:<old>:<new>`), отправляются в каждом sync.
+  transfers?: { old_signing_key: string; signature: string }[];
+};
+
+// v2-экспорт при линковке (P-48): ТОЛЬКО история и входящие групповые ключи,
+// без приватного Olm-аккаунта, Olm-сессий, исходящих Megolm и pickleKey.
+export type LinkExportState = {
+  linkVersion: 2;
+  decCache: PersistedE2eState['decCache'];
+  groupIn: Record<string, { exported: string; epoch: number }>;
+  contacts: Record<string, string>;
+  contactDevices?: Record<string, Record<string, ContactDevice>>;
+  groupRecipients?: Record<string, string[]>;
+  // подписанные переносы, унаследованные старым устройством от его предков
+  transfers?: { old_signing_key: string; signature: string }[];
 };
 
 // Как часто перепроверять список устройств контакта перед отправкой (обнаружение
@@ -163,6 +180,8 @@ export class E2eEngine {
   // Аккаунты прежних устройств (авто-линковка): используются ТОЛЬКО для
   // подписи sync-запросов, никаких сессий/шифрования от их имени
   private legacySigners: Olm.Account[] = [];
+  // v2 (P-48): переносы владения исходящими прежних устройств.
+  private transfers: { old_signing_key: string; signature: string }[] = [];
 
   identityKey = '';
 
@@ -260,6 +279,7 @@ export class E2eEngine {
     });
     this.published = Boolean(state.published);
     this.oneTimeKeyIdNext = state.oneTimeKeyIdNext ?? ONE_TIME_BATCH + 1;
+    this.transfers = (state.transfers || []).filter((t) => t.old_signing_key && t.signature);
     (state.legacyAccounts || []).forEach((accountPickle) => {
       try {
         const legacy = new Olm.Account();
@@ -338,6 +358,7 @@ export class E2eEngine {
       contactDevices: Object.fromEntries(this.devicesByContact),
       oneTimeKeyIdNext: this.oneTimeKeyIdNext,
       legacyAccounts: this.legacySigners.map((legacy) => legacy.pickle(this.pickleKey)),
+      transfers: this.transfers,
     };
   }
 
@@ -556,8 +577,78 @@ export class E2eEngine {
     return JSON.stringify(this.buildState());
   }
 
-  importLinkedHistory(stateJson: string) {
-    const state = JSON.parse(stateJson) as PersistedE2eState;
+  // v2 (P-48): экспорт для линковки БЕЗ приватного материала — новое устройство
+  // остаётся самостоятельным (свой Olm-аккаунт и сессии); ему передаём только
+  // историю, входящие групповые ключи (экспорт на текущем индексе), каталоги и
+  // уже накопленные переносы владения.
+  exportLinkStateJson(): string {
+    const groupIn: LinkExportState['groupIn'] = {};
+    this.groupIn.forEach(({ session, epoch }, key) => {
+      try {
+        groupIn[key] = { exported: session.export_session(session.first_known_index()), epoch };
+      } catch {
+        // сессию без экспорта пропускаем
+      }
+    });
+    const state: LinkExportState = {
+      linkVersion: 2,
+      decCache: this.decCache,
+      groupIn,
+      contacts: this.identityByContact,
+      contactDevices: Object.fromEntries(this.devicesByContact),
+      groupRecipients: Object.fromEntries(this.groupRecipients),
+      transfers: this.transfers,
+    };
+    return JSON.stringify(state);
+  }
+
+  // v2 (P-48): старое устройство подписывает перенос владения своими исходящими
+  // конкретному новому устройству; приватный ключ никуда не уезжает.
+  signLinkTransfer(self: string, newSigningKey: string): { old_signing_key: string; signature: string } {
+    const statement = `link-transfer:${self}:${this.signingKey}:${newSigningKey}`;
+    return { old_signing_key: this.signingKey, signature: this.account.sign(statement) };
+  }
+
+  // Переносы владения для sync (transfers) — сервер отдаёт исходящие прежних
+  // устройств только по валидной подписи над `link-transfer:<user>:<old>:<new>`.
+  syncTransfers(): { old_signing_key: string; signature: string }[] {
+    return this.transfers;
+  }
+
+  private addTransfer(transfer: { old_signing_key: string; signature: string } | undefined) {
+    if (!transfer || !transfer.old_signing_key || !transfer.signature) return;
+    if (transfer.old_signing_key === this.signingKey) return;
+    if (this.transfers.some((t) => t.old_signing_key === transfer.old_signing_key)) return;
+    this.transfers.push(transfer);
+  }
+
+  importLinkedHistory(stateJson: string, transfer?: { old_signing_key: string; signature: string }) {
+    const parsed = JSON.parse(stateJson) as Partial<PersistedE2eState> & Partial<LinkExportState>;
+    if (parsed.linkVersion === 2) {
+      // v2: без приватного материала
+      const state = parsed as LinkExportState;
+      Object.entries(state.decCache || {}).forEach(([uuid, inner]) => {
+        if (!(uuid in this.decCache)) this.decCache[uuid] = inner;
+      });
+      Object.entries(state.groupIn || {}).forEach(([key, { exported, epoch }]) => {
+        if (this.groupIn.has(key) || !exported) return;
+        try {
+          const session = new Olm.InboundGroupSession();
+          session.import_session(exported);
+          this.groupIn.set(key, { session, epoch });
+        } catch {
+          // битый экспорт — пропускаем
+        }
+      });
+      Object.entries(state.contacts || {}).forEach(([contact, identity]) => {
+        if (!(contact in this.identityByContact)) this.identityByContact[contact] = identity;
+      });
+      (state.transfers || []).forEach((t) => this.addTransfer(t));
+      this.addTransfer(transfer);
+      this.queuePersist();
+      return;
+    }
+    const state = parsed as PersistedE2eState;
     Object.entries(state.decCache || {}).forEach(([uuid, inner]) => {
       if (!(uuid in this.decCache)) this.decCache[uuid] = inner;
     });
@@ -618,7 +709,8 @@ export class E2eEngine {
     return this.sessionsByIdentity.size === 0
       && !Object.keys(this.decCache).length
       && this.groupIn.size === 0
-      && this.legacySigners.length === 0;
+      && this.legacySigners.length === 0
+      && this.transfers.length === 0;
   }
 
   static async importEncrypted(self: string, payload: string, password: string): Promise<E2eEngine> {

@@ -43,6 +43,9 @@ pub mod topics {
     /// Линковка: старое устройство передаёт целевому ECDH-бокс с координатами
     /// зашифрованного экспорта в cloud.
     pub const IDENTITY_LINK_GRANT: &str = "identity.link.grant";
+    /// Линковка v2: старое устройство отвечает на оффер своим эфемерным ключом
+    /// (challenge) ДО раскрытия ключа нового — SAS считается от обоих ключей.
+    pub const IDENTITY_LINK_CHALLENGE: &str = "identity.link.challenge";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
@@ -503,7 +506,20 @@ pub struct DeviceRevokeResponse {
 pub struct LinkOfferRequest {
     pub token: String,
     pub device_id: String,
-    pub eph_pub: String, // base64 эфемерный публичный ключ ECDH
+    /// base64 эфемерный публичный ключ ECDH. В протоколе v2 (P-03) сначала
+    /// публикуется ТОЛЬКО commitment, а eph_pub раскрывается после challenge.
+    #[serde(default)]
+    pub eph_pub: String,
+    /// v2: base64 SHA-256(eph_pub raw) — обязательство на ключ до раскрытия.
+    #[serde(default)]
+    pub commitment: String,
+    /// v2: Ed25519 signing-ключ нового устройства — старое подпишет перенос
+    /// владения своими исходящими (link-transfer), не отдавая приватный аккаунт.
+    #[serde(default)]
+    pub signing_key: String,
+    /// Отзыв собственного оффера (история получена другим путём).
+    #[serde(default)]
+    pub revoke: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -524,8 +540,16 @@ pub struct LinkPollRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkOfferInfo {
     pub device_id: String,
+    /// Пусто, пока новое устройство не раскрыло ключ (v2).
     pub eph_pub: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub commitment: String,
+    #[serde(default)]
+    pub signing_key: String,
+    /// Эфемерный ключ старого устройства, уже приложенный к офферу (v2).
+    #[serde(default)]
+    pub challenge_pub: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -541,6 +565,27 @@ pub struct LinkPollResponse {
     pub offers: Vec<LinkOfferInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<LinkGrantInfo>,
+    /// v2: challenge (эфемерный ключ старого устройства) к СОБСТВЕННОМУ офферу
+    /// запрашивающего — сигнал раскрыть eph_pub и считать SAS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge: Option<String>,
+    pub error: Option<String>,
+}
+
+/// v2: старое устройство прикладывает свой эфемерный ключ к офферу целевого.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkChallengeRequest {
+    #[serde(default)]
+    pub token: String,
+    /// ЦЕЛЕВОЕ (новое) устройство
+    pub device_id: String,
+    pub eph_pub: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkChallengeResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -998,6 +1043,19 @@ pub struct SyncRequestPayload {
     /// `sync:<last_seen_id>:<since_updated>`. Отсутствует у legacy-клиентов.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_signing: Vec<SyncExtraSigning>,
+    /// Линковка v2 (P-48): перенос владения исходящими ПРЕЖНЕГО устройства
+    /// без передачи его приватного аккаунта. Прежнее устройство подписало
+    /// `link-transfer:<user>:<old_signing_key>:<new_signing_key>` своим
+    /// Ed25519-ключом; new_signing_key обязан совпасть с доказанным
+    /// sender_signing_key этого запроса.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfers: Vec<SyncTransfer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncTransfer {
+    pub old_signing_key: String,
+    pub signature: String,
 }
 
 /// Одно доказательство владения дополнительным signing-ключом в sync.

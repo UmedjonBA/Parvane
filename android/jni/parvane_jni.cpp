@@ -73,9 +73,13 @@ std::int64_t g_cursorUpd = 0;
 // (Olm-ратчет одноразовый) и принимает историю с другого устройства при
 // линковке. Файл — dec-cache.jsonl в каталоге стора.
 std::map<std::string, json> g_decCache;
-// Линковка истории (новое устройство): оффер с эфемерным ключом, поллинг
-// гранта в pump'е, импорт экспорта из cloud, пере-синк с нуля.
+// Линковка истории (новое устройство, протокол v2 — P-03/P-48, LINK-1): оффер
+// с ОБЯЗАТЕЛЬСТВОМ на эфемерный ключ, раскрытие после challenge старого
+// устройства, SAS от пары ключей, грант только под ключ challenge, импорт
+// экспорта (без приватного материала) из cloud, пере-синк с нуля.
 std::optional<parvane::linking::EphemeralKey> g_linkEph;
+std::string g_linkCommitment;
+std::string g_linkChallenge;
 std::string g_linkCode;
 std::int64_t g_linkStartedMs = 0;
 bool g_linkActive = false;
@@ -533,11 +537,11 @@ void startLinkOffer() {
     if (!g_transport) return;
     auto eph = parvane::linking::EphemeralKey::generate();
     if (!eph) return;
-    const auto code = parvane::linking::sasCode(eph->publicB64());
+    const auto commitment = parvane::linking::commitment(eph->publicB64());
     try {
         const auto raw = g_transport->request(parvane::topics::IdentityLinkOffer,
             json{{"token", g_token}, {"device_id", parvane::e2e::deviceId()},
-                 {"eph_pub", eph->publicB64()}}.dump(), 5000);
+                 {"commitment", commitment}, {"signing_key", parvane::e2e::signingKey()}}.dump(), 5000);
         if (!json::parse(raw, nullptr, false).value("ok", false)) {
             LOGE("линковка: оффер отклонён");
             return;
@@ -547,26 +551,31 @@ void startLinkOffer() {
         return;
     }
     g_linkEph = std::move(eph);
-    g_linkCode = code;
+    g_linkCommitment = commitment;
+    g_linkChallenge.clear();
+    g_linkCode.clear();
     g_linkStartedMs = nowMs();
     g_linkActive = true;
-    LOGI("линковка: оффер опубликован — подтвердите код на другом устройстве"); // код в лог не пишем (P-46)
-    emit(json{{"type", "link"}, {"state", "offered"}, {"code", code}});
+    LOGI("линковка: оффер (обязательство) опубликован — откройте Настройки → Устройства на другом устройстве");
+    emit(json{{"type", "link"}, {"state", "offered"}});
 }
 void retractLinkOffer() {
     g_linkActive = false;
     g_linkEph.reset();
+    g_linkCommitment.clear();
+    g_linkChallenge.clear();
+    g_linkCode.clear();
     if (!g_transport) return;
     try {
         g_transport->request(parvane::topics::IdentityLinkOffer,
-            json{{"token", g_token}, {"device_id", parvane::e2e::deviceId()}, {"eph_pub", ""}}.dump(), 5000);
+            json{{"token", g_token}, {"device_id", parvane::e2e::deviceId()}, {"revoke", true}}.dump(), 5000);
     } catch (const std::exception &) {}
 }
 // Под g_mu. true — линковка закончена (успех/отзыв), false — ждём дальше.
 // Слияние состояния E2E (PersistedE2eState веба: линковка, копия ключей) в это
 // устройство + пере-синк с нуля (старые сообщения придут снова и откроются из
 // кэша). Под g_mu. Возвращает число новых записей кэша, −1 — ошибка.
-int importStateLocked(const std::string &stateJson) {
+int importStateLocked(const std::string &stateJson, const std::pair<std::string, std::string> &transfer = {}) {
     int merged = 0;
     const auto ok = parvane::e2e::importLinkedHistory(stateJson, [&](const std::string &uuid, const json &inner) {
         if (!inner.is_object() || g_decCache.count(uuid)) return;
@@ -574,7 +583,7 @@ int importStateLocked(const std::string &stateJson) {
         if (entry.contains("senderIdentity")) { entry["sender_identity"] = entry["senderIdentity"]; entry.erase("senderIdentity"); }
         decCachePut(uuid, entry);
         ++merged;
-    });
+    }, transfer);
     if (!ok) return -1;
     g_cursorId = parvane::MessengerClient::zeroCursor();
     g_cursorUpd = 0;
@@ -589,20 +598,50 @@ bool pollLinkGrantOnce() {
         retractLinkOffer();
         return true;
     }
+    if (!parvane::e2e::needsHistoryLink(g_decCache.empty())) {
+        LOGI("линковка: история появилась сама — отзываю оффер");
+        retractLinkOffer();
+        return true;
+    }
     json grant;
+    std::string challenge;
     try {
         const auto raw = g_transport->request(parvane::topics::IdentityLinkPoll,
             json{{"token", g_token}, {"device_id", parvane::e2e::deviceId()}}.dump(), 5000);
         const auto resp = json::parse(raw, nullptr, false);
-        if (!resp.is_object() || !resp.value("ok", false) || !resp.contains("grant") || !resp["grant"].is_object())
-            return false;
-        grant = resp["grant"];
+        if (!resp.is_object() || !resp.value("ok", false)) return false;
+        challenge = resp.value("challenge", std::string());
+        if (resp.contains("grant") && resp["grant"].is_object()) grant = resp["grant"];
     } catch (const std::exception &) {
+        return false;
+    }
+    // Challenge старого устройства → раскрываем ключ (сервер сверяет с
+    // обязательством), считаем SAS от пары ключей; фиксируется первый challenge.
+    if (g_linkChallenge.empty() && !challenge.empty()) {
+        try {
+            const auto raw = g_transport->request(parvane::topics::IdentityLinkOffer,
+                json{{"token", g_token}, {"device_id", parvane::e2e::deviceId()},
+                     {"eph_pub", g_linkEph->publicB64()}, {"commitment", g_linkCommitment},
+                     {"signing_key", parvane::e2e::signingKey()}}.dump(), 5000);
+            if (!json::parse(raw, nullptr, false).value("ok", false)) { LOGE("линковка: раскрытие ключа отклонено"); return false; }
+        } catch (const std::exception &) {
+            return false;
+        }
+        g_linkChallenge = challenge;
+        g_linkCode = parvane::linking::sasCodeV2(g_linkEph->publicB64(), challenge);
+        LOGI("линковка: ключ раскрыт, код сверки готов"); // сам код в лог не пишем (P-46)
+        emit(json{{"type", "link"}, {"state", "code"}, {"code", g_linkCode}});
+    }
+    if (grant.is_null()) return false;
+    if (g_linkChallenge.empty() || grant.value("eph_pub", std::string()) != g_linkChallenge) {
+        LOGE("линковка: грант под чужой эфемерный ключ — отклонён");
         return false;
     }
     g_linkActive = false;
     const auto plain = g_linkEph->open(grant.value("eph_pub", std::string()), grant.value("box_payload", std::string()));
     g_linkEph.reset();
+    g_linkChallenge.clear();
+    g_linkCode.clear();
     if (!plain) { LOGE("линковка: бокс не расшифровался"); return true; }
     const auto box = json::parse(*plain, nullptr, false);
     if (!box.is_object()) return true;
@@ -619,7 +658,10 @@ bool pollLinkGrantOnce() {
         LOGE("линковка: скачивание: %s", e.what());
         return true;
     }
-    const int merged = importStateLocked(stateJson);
+    std::pair<std::string, std::string> transfer;
+    if (box.contains("transfer") && box["transfer"].is_object())
+        transfer = {box["transfer"].value("old_signing_key", std::string()), box["transfer"].value("signature", std::string())};
+    const int merged = importStateLocked(stateJson, transfer);
     if (merged < 0) { LOGE("линковка: импорт не удался"); return true; }
     LOGI("линковка: история получена и импортирована (%d сообщений в кэше) — пере-синк с нуля", merged);
     emit(json{{"type", "link"}, {"state", "imported"}, {"count", merged}});
@@ -634,6 +676,7 @@ void pumpLoop() {
             auth.signing_key = parvane::e2e::signingKey();
             auth.signer = [](const std::string &d) { return parvane::e2e::sign(d); };
             auth.extra = [](const std::string &d) { return parvane::e2e::extraSignatures(d); };
+            auth.transfers = [] { return parvane::e2e::syncTransfers(); };
             std::vector<std::string> readIds;
             std::vector<parvane::StoredMessage> page;
             std::string notifyBlob;

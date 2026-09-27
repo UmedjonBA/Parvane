@@ -158,13 +158,16 @@ try {
   // ── desktop-bob свежий: оффер линковки → web-bob подтверждает ─────────────
   desktop = spawnDesktop(desktopWorkdir, libraryShim, { PARVANE_AUTOLOGIN: `${bob}:${PASSWORD}` });
   await waitDesktopLog(desktopWorkdir, DESKTOP_READY, 90000, desktop);
-  const offer = await waitDesktopLog(desktopWorkdir, /линковка: оффер опубликован, код (\d{6})/, 60000, desktop);
-  const desktopCode = offer[1];
+  await waitDesktopLog(desktopWorkdir, /линковка: оффер \(обязательство\) опубликован/, 60000, desktop);
 
+  // v2 (LINK-1): web шлёт challenge, desktop раскрывает ключ и (dev-сборка)
+  // пишет 12-значный код в лог; web показывает тот же код.
   const devScreen = await openDevicesScreen(bobWeb.page);
-  const offerItem = devScreen.locator('.ListItem').filter({ hasText: 'Code:' }).first();
+  const offer = await waitDesktopLog(desktopWorkdir, /линковка \(dev\): код сверки (\d{4} \d{4} \d{4})/, 60000, desktop);
+  const desktopCode = offer[1];
+  const offerItem = devScreen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const webCode = (await offerItem.textContent()).match(/Code: (\d{6})/)[1];
+  const webCode = (await offerItem.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
   assert.equal(webCode, desktopCode, 'SAS codes must match (web ↔ desktop)');
   await offerItem.locator('.ListItem-button').click();
   const transferButton = bobWeb.page.getByRole('button', { name: 'Transfer', exact: true });

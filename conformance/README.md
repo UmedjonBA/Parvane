@@ -110,6 +110,56 @@ content) + `parvane_client.cpp` `prepareIncoming`/`injectOnMain`; android
 (`E2E-1`), desktop `parvane-core/tests/e2e_tests.cpp` (голый content), android
 `libtd/src/test`.
 
+## LINK-1. Линковка v2: обязательство, challenge, SAS от пары ключей, без приватного аккаунта
+
+Перенос истории на новое устройство (P-03, P-48) идёт по одному протоколу во
+всех клиентах:
+
+1. **Оффер** — новое устройство публикует `identity.link.offer` с
+   `commitment = base64(SHA-256(raw eph_pub))` и своим `signing_key`;
+   сам `eph_pub` НЕ раскрывается.
+2. **Challenge** — старое устройство шлёт `identity.link.challenge`
+   `{device_id: <новое>, eph_pub: <свой эфемерный P-256>}`. Сервер фиксирует
+   первый challenge и не даёт его заменить.
+3. **Раскрытие** — новое устройство видит `challenge` в `identity.link.poll`
+   и переотправляет оффер с `eph_pub` и тем же `commitment`; сервер (и старое
+   устройство) сверяют `SHA-256(eph_pub) == commitment`.
+4. **SAS** — обе стороны показывают 12 цифр (`dddd dddd dddd`, ≈40 бит) от
+   `SHA-256("parvane-link-sas-v2" || raw new_pub || raw old_pub)`, первые
+   8 байт big-endian по модулю 10^12. Сервер-MITM не может подобрать ключ
+   под уже показанный код: ключ нового устройства связан обязательством,
+   ключ старого — фиксированным challenge.
+5. **Грант** — старое устройство шифрует в ECDH-бокс координаты экспорта и
+   `transfer = {old_signing_key, signature}` — подпись Ed25519 над строкой
+   `link-transfer:<user>:<old_signing_key>:<new_signing_key>`. Новое устройство
+   принимает грант ТОЛЬКО если `grant.eph_pub` равен ключу challenge, с которым
+   считался код.
+6. **Экспорт** (`linkVersion: 2`) не содержит приватного материала: ни
+   `account`, ни `pickleKey`, ни `legacyAccounts`. Передаются decCache,
+   входящие Megolm (exported session keys), каталоги и накопленные
+   `transfers`. Новое устройство остаётся самостоятельным (свой Olm-аккаунт),
+   исходящие прежних устройств messenger отдаёт по `transfers` в
+   `msg.sync.request` (подпись проверяется на сервере).
+
+Legacy-офферы v1 (без `commitment`, 6-значный код от одного ключа) не
+обслуживаются старым устройством. Код сверки не пишется в логи release-сборок.
+
+Кросс-клиентские векторы (`vectors` в `sync-rules.json`): `new = 65×0x00`,
+`old = 0x04 || 64×0x01` → `commitment(new) = mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=`,
+`SAS = 5659 7031 8371`.
+
+Реализации: web `api/parvane/linking.ts` (`linkCommitment`, `sasCodeV2`) +
+`provider.ts` (`startHistoryLinkOffer`, `describeLinkOffer`, `parvaneGrantLink`) +
+`e2e.ts` (`exportLinkStateJson`, `signLinkTransfer`, `importLinkedHistory`);
+desktop `parvane-core` `linking.cpp`/`e2e.cpp` + `parvane_client.cpp`
+(`StartHistoryLinkOffer`, `PollLinkOffersOnce`, `GrantLink`); android
+`jni/parvane_jni.cpp` (`startLinkOffer`, `pollLinkGrantOnce`). Сервер:
+`identity` (`store_link_offer`, `store_link_challenge`), `messenger`
+(`authenticated_transfer_keys`). Тесты: web `linking.test.ts` +
+`conformance.test.ts` (`LINK-1`), desktop `tests/linking_tests.cpp` +
+`tests/e2e_tests.cpp`, identity `link_v2_*`, messenger
+`link_transfer_proves_old_key_only_with_valid_statement`.
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в

@@ -49,8 +49,10 @@ import { langPackMethods } from './langPacks';
 import {
   exportLinkPublicKey,
   generateLinkKeyPair,
+  linkCommitment,
+  linkCommitmentMatches,
   openLinkBox,
-  sasCodeForEphPub,
+  sasCodeV2,
   sealLinkBox,
 } from './linking';
 import { createLocalState } from './localState';
@@ -93,6 +95,7 @@ import {
   TOPIC_IDENTITY_SETNAME,
   TOPIC_IDENTITY_TWOFA,
   TOPIC_IDENTITY_PASSWORD_CHANGE,
+  TOPIC_LINK_CHALLENGE,
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
@@ -641,21 +644,46 @@ const LINK_OFFER_LIFETIME_MS = 10 * 60 * 1000;
 type LinkRuntime = {
   generation: number;
   keyPair?: CryptoKeyPair;
+  ephPub?: string;
+  commitment?: string;
+  // v2 (P-03): эфемерный ключ СТАРОГО устройства, приложенный к нашему офферу;
+  // SAS считается от обоих ключей, грант принимается только под этот ключ
+  challenge?: string;
   code?: string;
   timer?: number;
 };
 
 const linkRuntime: LinkRuntime = { generation: 0 };
 
+// Старое устройство: свой эфемерный ключ на каждый challenge (по целевому
+// устройству). Приватный ключ живёт только в памяти вкладки.
+type LinkChallengeState = { keyPair: CryptoKeyPair; pub: string };
+const linkChallenges = new Map<string, LinkChallengeState>();
+
+type LinkOfferWire = {
+  device_id: string;
+  eph_pub: string;
+  created_at: number;
+  commitment?: string;
+  signing_key?: string;
+  challenge_pub?: string;
+};
+
 function stopHistoryLink() {
   linkRuntime.generation++;
   window.clearInterval(linkRuntime.timer);
   linkRuntime.timer = undefined;
   linkRuntime.keyPair = undefined;
+  linkRuntime.ephPub = undefined;
+  linkRuntime.commitment = undefined;
+  linkRuntime.challenge = undefined;
   linkRuntime.code = undefined;
 }
 
-// Новое устройство: оффер + опрос гранта до успеха или истечения срока
+// Новое устройство (протокол v2, P-03/P-48): публикуем ОБЯЗАТЕЛЬСТВО на
+// эфемерный ключ и свой signing-ключ; сам ключ раскрываем только после
+// challenge старого устройства, SAS — от обоих ключей. Опрос до гранта или
+// истечения срока.
 async function startHistoryLinkOffer() {
   stopHistoryLink();
   const engine = e2e;
@@ -663,19 +691,20 @@ async function startHistoryLinkOffer() {
   const generation = linkRuntime.generation;
   const keyPair = await generateLinkKeyPair();
   const ephPub = await exportLinkPublicKey(keyPair);
-  const code = await sasCodeForEphPub(ephPub);
+  const commitment = await linkCommitment(ephPub);
   if (generation !== linkRuntime.generation) return;
   linkRuntime.keyPair = keyPair;
-  linkRuntime.code = code;
+  linkRuntime.ephPub = ephPub;
+  linkRuntime.commitment = commitment;
   try {
     const raw = await connection.request(TOPIC_LINK_OFFER, JSON.stringify({
-      token, device_id: engine.deviceId, eph_pub: ephPub,
+      token, device_id: engine.deviceId, commitment, signing_key: engine.signingKey,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
   } catch {
     return;
   }
-  logDebug('линковка: оффер опубликован');
+  logDebug('линковка: оффер (обязательство) опубликован');
   const startedAt = Date.now();
   linkRuntime.timer = window.setInterval(() => {
     if (generation !== linkRuntime.generation) return;
@@ -691,14 +720,16 @@ async function pollHistoryLinkGrant(generation: number) {
   const engine = e2e;
   const activeConnection = connection;
   const keyPair = linkRuntime.keyPair;
-  if (!engine || !activeConnection || !keyPair) return;
+  const ephPub = linkRuntime.ephPub;
+  const commitment = linkRuntime.commitment;
+  if (!engine || !activeConnection || !keyPair || !ephPub || !commitment) return;
   // История появилась другим путём (живая переписка) — отзываем оффер, чтобы
   // другие устройства не видели висящий запрос
   if (!engine.needsHistoryLink()) {
     stopHistoryLink();
     try {
       await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
-        token, device_id: engine.deviceId, eph_pub: '',
+        token, device_id: engine.deviceId, revoke: true,
       }));
     } catch {
       // сервер вычистит по TTL
@@ -706,6 +737,7 @@ async function pollHistoryLinkGrant(generation: number) {
     return;
   }
   let grant: { box_payload: string; eph_pub: string } | undefined;
+  let challenge: string | undefined;
   try {
     const raw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
       token, device_id: engine.deviceId,
@@ -713,13 +745,40 @@ async function pollHistoryLinkGrant(generation: number) {
     const response = JSON.parse(raw) as {
       ok: boolean;
       grant?: { box_payload: string; eph_pub: string };
+      challenge?: string;
     };
-    if (!response.ok || !response.grant) return;
+    if (!response.ok) return;
     grant = response.grant;
+    challenge = response.challenge;
   } catch {
     return;
   }
   if (generation !== linkRuntime.generation) return;
+
+  // Challenge пришёл — раскрываем ключ (сервер сверяет его с обязательством)
+  // и показываем SAS от пары ключей. Challenge фиксируется один раз: подмена
+  // стороны сервером означала бы другой код на старом устройстве.
+  if (challenge && !linkRuntime.challenge) {
+    try {
+      const raw = await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
+        token, device_id: engine.deviceId, eph_pub: ephPub, commitment, signing_key: engine.signingKey,
+      }));
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
+    } catch {
+      return;
+    }
+    if (generation !== linkRuntime.generation) return;
+    linkRuntime.challenge = challenge;
+    linkRuntime.code = await sasCodeV2(ephPub, challenge);
+    logDebug('линковка: ключ раскрыт, код сверки готов');
+  }
+  if (!grant) return;
+  if (!linkRuntime.challenge || grant.eph_pub !== linkRuntime.challenge) {
+    // Грант не под тот ключ, с которым считался SAS — игнорируем (это либо
+    // гонка двух старых устройств, либо попытка подмены)
+    logDebug('линковка: грант под чужой эфемерный ключ — отклонён');
+    return;
+  }
   stopHistoryLink();
 
   const boxPayload = await openLinkBox(keyPair.privateKey, grant.eph_pub, grant.box_payload);
@@ -739,17 +798,53 @@ async function pollHistoryLinkGrant(generation: number) {
     return;
   }
   try {
-    engine.importLinkedHistory(await media.blob.text());
+    engine.importLinkedHistory(await media.blob.text(), boxPayload.transfer);
     await engine.flushStorage();
   } catch (err) {
     logDebug(`линковка: импорт не удался: ${String(err)}`);
     return;
   }
   // Полный ресинк: пропущенная как нечитаемая история теперь расшифруется
-  // из привезённого decCache/групповых сессий
+  // из привезённого decCache/групповых сессий, а исходящие старого устройства
+  // сервер отдаст по подписанному переносу владения (transfers)
   syncController.reset();
   sendUpdate({ '@type': 'requestSync' });
   logDebug('линковка: история получена и импортирована');
+}
+
+// Старое устройство: код сверки для оффера v2 — только после того, как наш
+// challenge приложен и ключ нового устройства раскрыт и совпал с обязательством.
+// Legacy-офферы (v1, без обязательства) не обслуживаются: их код зависел
+// только от ключа, который сервер мог подменить.
+async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: string; code?: string } | undefined> {
+  if (!offer.commitment) return undefined;
+  const own = linkChallenges.get(offer.device_id);
+  if (offer.challenge_pub && own && offer.challenge_pub !== own.pub) {
+    // Challenge выставило другое наше устройство — грант отсюда невозможен
+    return undefined;
+  }
+  if (!own || !offer.challenge_pub) {
+    // Нет challenge (или новое устройство переофферило — сервер его сбросил):
+    // шлём свой ключ; при повторе — тот же (сервер принимает идемпотентно)
+    const keyPair = own?.keyPair || await generateLinkKeyPair();
+    const pub = own?.pub || await exportLinkPublicKey(keyPair);
+    try {
+      const raw = await connection!.request(TOPIC_LINK_CHALLENGE, JSON.stringify({
+        token, device_id: offer.device_id, eph_pub: pub,
+      }));
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    } catch {
+      return undefined;
+    }
+    linkChallenges.set(offer.device_id, { keyPair, pub });
+    return { deviceId: offer.device_id };
+  }
+  if (!offer.eph_pub) return { deviceId: offer.device_id };
+  if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) {
+    logDebug(`линковка: ключ оффера ${offer.device_id} не соответствует обязательству`);
+    return undefined;
+  }
+  return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub) };
 }
 
 // Отзыв устройства: identity выкидывает его бандл из каталога (fan-out новых
@@ -1498,36 +1593,37 @@ const methods = {
   // Новое устройство: статус собственного оффера (код показывается в UI,
   // пользователь сверяет его на старом устройстве перед подтверждением)
   parvaneGetLinkStatus() {
-    const isPending = Boolean(linkRuntime.timer && linkRuntime.code && e2e?.needsHistoryLink());
+    // v2: код появляется только после challenge старого устройства
+    const isPending = Boolean(linkRuntime.timer && e2e?.needsHistoryLink());
     return Promise.resolve({ isPending, code: isPending ? linkRuntime.code : undefined });
   },
 
-  // Старое устройство: запросы линковки от других устройств аккаунта
+  // Старое устройство: запросы линковки от других устройств аккаунта. На
+  // каждый оффер v2 отправляем свой challenge; код появляется после раскрытия
+  // ключа новым устройством.
   async parvaneListLinkOffers() {
     if (!connection || !e2e) return undefined;
     try {
       const raw = await connection.request(TOPIC_LINK_POLL, JSON.stringify({
         token, device_id: e2e.deviceId,
       }));
-      const response = JSON.parse(raw) as {
-        ok: boolean;
-        offers?: { device_id: string; eph_pub: string; created_at: number }[];
-      };
+      const response = JSON.parse(raw) as { ok: boolean; offers?: LinkOfferWire[] };
       if (!response.ok || !response.offers) return undefined;
-      return {
-        offers: await Promise.all(response.offers.map(async (offer) => ({
-          deviceId: offer.device_id,
-          code: await sasCodeForEphPub(offer.eph_pub),
-        }))),
-      };
+      const live = new Set(response.offers.map((offer) => offer.device_id));
+      Array.from(linkChallenges.keys()).forEach((deviceId) => {
+        if (!live.has(deviceId)) linkChallenges.delete(deviceId);
+      });
+      const described = await Promise.all(response.offers.map(describeLinkOffer));
+      return { offers: described.filter(Boolean) as { deviceId: string; code?: string }[] };
     } catch {
       return undefined;
     }
   },
 
   // Старое устройство: подтверждённая передача истории целевому устройству.
-  // Экспорт шифруется случайным ключом и уезжает в cloud (owner-only),
-  // координаты и ключ — в ECDH-боксе под эфемерным ключом оффера
+  // Экспорт (без приватного Olm-аккаунта, P-48) шифруется случайным ключом и
+  // уезжает в cloud (owner-only); координаты, ключ и подписанный перенос
+  // владения исходящими — в ECDH-боксе под парой эфемерных ключей (P-03).
   async parvaneGrantLink({ deviceId }: { deviceId: string }) {
     const engine = e2e;
     const activeConnection = connection;
@@ -1536,31 +1632,31 @@ const methods = {
       const pollRaw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
         token, device_id: engine.deviceId,
       }));
-      const poll = JSON.parse(pollRaw) as {
-        ok: boolean;
-        offers?: { device_id: string; eph_pub: string }[];
-      };
+      const poll = JSON.parse(pollRaw) as { ok: boolean; offers?: LinkOfferWire[] };
       const offer = poll.ok ? poll.offers?.find((entry) => entry.device_id === deviceId) : undefined;
-      if (!offer) return undefined;
+      const own = linkChallenges.get(deviceId);
+      if (!offer || !own || !offer.commitment || !offer.eph_pub || offer.challenge_pub !== own.pub) return undefined;
+      if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) return undefined;
 
       await engine.flushStorage();
-      const exportJson = engine.exportStateJson();
+      const exportJson = engine.exportLinkStateJson();
       const upload = await mediaService.uploadBlob(
         new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },
       );
       if (!upload.mediaKeys) return undefined;
 
-      const keyPair = await generateLinkKeyPair();
-      const ephPub = await exportLinkPublicKey(keyPair);
-      const box = await sealLinkBox(keyPair.privateKey, offer.eph_pub, {
+      const box = await sealLinkBox(own.keyPair.privateKey, offer.eph_pub, {
         file_id: upload.fileId,
         file_key: upload.mediaKeys.keyB64,
         file_nonce: upload.mediaKeys.nonceB64,
+        transfer: offer.signing_key ? engine.signLinkTransfer(store.self, offer.signing_key) : undefined,
       });
       const grantRaw = await activeConnection.request(TOPIC_LINK_GRANT, JSON.stringify({
-        token, device_id: deviceId, box_payload: box, eph_pub: ephPub,
+        token, device_id: deviceId, box_payload: box, eph_pub: own.pub,
       }));
-      return (JSON.parse(grantRaw) as { ok?: boolean }).ok ? true : undefined;
+      const ok = (JSON.parse(grantRaw) as { ok?: boolean }).ok;
+      if (ok) linkChallenges.delete(deviceId);
+      return ok ? true : undefined;
     } catch (err) {
       logDebug(`линковка: грант не удался: ${String(err)}`);
       return undefined;

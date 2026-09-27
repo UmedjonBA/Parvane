@@ -418,6 +418,27 @@ fn authenticated_extra_signing_keys(payload: &SyncRequestPayload) -> Vec<String>
         .collect()
 }
 
+/// Линковка v2 (P-48): доказанные signing-ключи ПРЕЖНИХ устройств через
+/// подписанный ими перенос владения `link-transfer:<user>:<old>:<new>`, где
+/// `new` — уже доказанный sender_signing_key этого запроса. Приватный аккаунт
+/// прежнего устройства при этом на новое не переезжает.
+fn authenticated_transfer_keys(payload: &SyncRequestPayload, user: &str, new_signing_key: &str) -> Vec<String> {
+    if new_signing_key.is_empty() {
+        return vec![];
+    }
+    payload
+        .transfers
+        .iter()
+        .take(MAX_EXTRA_SIGNING)
+        .filter(|t| !t.old_signing_key.is_empty() && t.old_signing_key != new_signing_key)
+        .filter(|t| {
+            let statement = format!("link-transfer:{}:{}:{}", user, t.old_signing_key, new_signing_key);
+            verify_mutation_signature(&t.old_signing_key, &statement, &t.signature)
+        })
+        .map(|t| t.old_signing_key.clone())
+        .collect()
+}
+
 async fn replace_message_content(
     pool: &SqlitePool,
     message_id: &str,
@@ -2233,7 +2254,8 @@ async fn handle_sync(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         let user = verify_token(nc, &event.token).await?;
         let last_id = &event.payload.last_seen_id;
         let sender_signing_key = authenticated_sync_signing_key(&event.payload).unwrap_or_default();
-        let extra_keys = authenticated_extra_signing_keys(&event.payload);
+        let mut extra_keys = authenticated_extra_signing_keys(&event.payload);
+        extra_keys.extend(authenticated_transfer_keys(&event.payload, &user, sender_signing_key));
         let messages = fetch_missed_with_keys(
             pool,
             &user,
@@ -3177,6 +3199,28 @@ mod tests {
         assert_eq!(r, vec!["bob@local".to_string()]);
     }
 
+    #[test]
+    fn link_transfer_proves_old_key_only_with_valid_statement() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let old = SigningKey::from_bytes(&[11_u8; 32]);
+        let new = SigningKey::from_bytes(&[12_u8; 32]);
+        let old_key = STANDARD_NO_PAD.encode(old.verifying_key().to_bytes());
+        let new_key = STANDARD_NO_PAD.encode(new.verifying_key().to_bytes());
+        let statement = format!("link-transfer:alice@local:{old_key}:{new_key}");
+        let sig = STANDARD_NO_PAD.encode(old.sign(statement.as_bytes()).to_bytes());
+        let payload = |signature: String| SyncRequestPayload {
+            last_seen_id: "0".into(), device_id: String::new(), since_updated: 0,
+            sender_signing_key: None, signature: None, extra_signing: vec![],
+            transfers: vec![parvane_types::SyncTransfer { old_signing_key: old_key.clone(), signature }],
+        };
+        assert_eq!(authenticated_transfer_keys(&payload(sig.clone()), "alice@local", &new_key), vec![old_key.clone()]);
+        // Другой пользователь / другой новый ключ / битая подпись — не доказано.
+        assert!(authenticated_transfer_keys(&payload(sig.clone()), "bob@local", &new_key).is_empty());
+        assert!(authenticated_transfer_keys(&payload(sig.clone()), "alice@local", &old_key).is_empty());
+        assert!(authenticated_transfer_keys(&payload("AAAA".into()), "alice@local", &new_key).is_empty());
+        assert!(authenticated_transfer_keys(&payload(sig), "alice@local", "").is_empty(), "без доказанного нового ключа — ничего");
+    }
+
     #[tokio::test]
     async fn linked_extra_signing_reveals_previous_device_outgoing() {
         let pool = test_pool().await;
@@ -3225,7 +3269,7 @@ mod tests {
             extra_signing: vec![
                 parvane_types::SyncExtraSigning { signing_key: old_key.clone(), signature: good },
                 parvane_types::SyncExtraSigning { signing_key: old_key.clone(), signature: "bad".into() },
-            ],
+            ], transfers: vec![],
         };
         assert_eq!(authenticated_extra_signing_keys(&payload), vec![old_key]);
     }
@@ -3339,7 +3383,7 @@ mod tests {
             since_updated: 0,
             sender_signing_key: Some(signing_key.clone()),
             signature: None,
-            extra_signing: vec![],
+            extra_signing: vec![], transfers: vec![],
         };
         let sync_signed = format!("sync:{}:{}", sync_payload.last_seen_id, sync_payload.since_updated);
         let sync_signature = STANDARD_NO_PAD.encode(signing.sign(sync_signed.as_bytes()).to_bytes());

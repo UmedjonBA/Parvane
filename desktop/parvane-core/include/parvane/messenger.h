@@ -99,6 +99,10 @@ struct SyncRequestPayload {
     std::string sender_signing_key;
     std::string signature;
     json extra_signing = json::array(); // [{signing_key, signature}]
+    // v2-линковка (P-48): подписанные прежними устройствами переносы владения
+    // их исходящими — `link-transfer:<user>:<old>:<new>`; сервер отдаёт
+    // sealed-исходящие тех ключей без приватного материала на этом устройстве.
+    json transfers = json::array(); // [{old_signing_key, signature}]
 
     // Строка, которую подписывает устройство.
     std::string signedPayload() const {
@@ -115,6 +119,9 @@ struct SyncRequestPayload {
         }
         if (extra_signing.is_array() && !extra_signing.empty()) {
             j["extra_signing"] = extra_signing;
+        }
+        if (transfers.is_array() && !transfers.empty()) {
+            j["transfers"] = transfers;
         }
         return j;
     }
