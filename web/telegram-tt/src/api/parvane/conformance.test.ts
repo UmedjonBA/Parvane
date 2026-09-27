@@ -400,13 +400,18 @@ describe('SEND-1: подпись отправки, ack без sender, правк
   });
 
   it('messenger и gateway: подпись send обязательна, правка не понижает E2E', () => {
-    const messenger = readFileSync(
-      path.join(REPO_ROOT, 'backend/shards/messenger/src/main.rs'),
+    // 4.7: messenger разбит на модули — подпись в auth.rs, правки в store.rs
+    const messengerAuth = readFileSync(
+      path.join(REPO_ROOT, 'backend/shards/messenger/src/auth.rs'),
       'utf8',
     );
-    expect(messenger).toMatch(/let statement = format!\("send:\{message_id\}:\{ciphertext\}"\);/);
-    expect(messenger).toMatch(/content\.kind\(\) != stored_content\.kind\(\)/);
-    expect(messenger).toMatch(/AND kind NOT IN \('encrypted', 'group_encrypted'\)/);
+    const messengerStore = readFileSync(
+      path.join(REPO_ROOT, 'backend/shards/messenger/src/store.rs'),
+      'utf8',
+    );
+    expect(messengerAuth).toMatch(/let statement = format!\("send:\{message_id\}:\{ciphertext\}"\);/);
+    expect(messengerStore).toMatch(/content\.kind\(\) != stored_content\.kind\(\)/);
+    expect(messengerStore).toMatch(/AND kind NOT IN \('encrypted', 'group_encrypted'\)/);
     const gateway = readFileSync(
       path.join(REPO_ROOT, 'backend/shards/gateway/src/main.rs'),
       'utf8',
