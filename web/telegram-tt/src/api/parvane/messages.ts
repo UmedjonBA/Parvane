@@ -633,6 +633,7 @@ export function createMessageController(deps: MessageDependencies) {
     const isQuiz = Boolean(newPoll.summary.isQuiz);
     const uuid = newMessageId();
     deps.polls.register(uuid, chat.id, question, options, {
+      author: currentStore.self,
       isPublic: Boolean(newPoll.summary.isPublic),
       isMultiple: Boolean(newPoll.summary.isMultipleChoice),
       isQuiz,

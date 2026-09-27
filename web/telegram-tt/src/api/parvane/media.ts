@@ -100,6 +100,15 @@ function concatBytes(parts: Uint8Array[]) {
   return out;
 }
 
+// P-44: MIME для Blob — из allowlist'а. Тип приходит от отправителя (E2E) или
+// от cloud; blob: URL живёт в нашем origin, и text/html или svg с активным
+// содержимым выполнялся бы с правами приложения. Всё прочее — octet-stream
+const SAFE_BLOB_MIME = /^(image\/(png|jpeg|jpg|gif|webp|avif|bmp)|video\/(mp4|webm|quicktime|ogg)|audio\/(mpeg|mp3|ogg|opus|wav|webm|mp4|aac|x-m4a|flac)|application\/pdf)$/i;
+export function safeBlobMime(mime?: string) {
+  const normalized = (mime || '').split(';')[0].trim().toLowerCase();
+  return SAFE_BLOB_MIME.test(normalized) ? normalized : 'application/octet-stream';
+}
+
 export function createMediaService(deps: MediaDependencies) {
   const cacheByFileId = new Map<string, Promise<CachedMedia>>();
   // Ключи и настоящий mime приходят внутри E2E content; cloud видит только
@@ -271,8 +280,9 @@ export function createMediaService(deps: MediaDependencies) {
       metaByFileId.delete(fileId);
       return 'bad';
     }
-    const blob = new Blob([plain as BlobPart], { type: meta.mimeType });
-    cacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: meta.mimeType }));
+    const safeType = safeBlobMime(meta.mimeType);
+    const blob = new Blob([plain as BlobPart], { type: safeType });
+    cacheByFileId.set(fileId, Promise.resolve({ blob, mimeType: safeType }));
     return blob;
   }
 
@@ -352,10 +362,10 @@ export function createMediaService(deps: MediaDependencies) {
     if (keys) {
       const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
       if (!plain) return undefined;
-      const mimeType = mimeByFileId.get(fileId) || 'application/octet-stream';
+      const mimeType = safeBlobMime(mimeByFileId.get(fileId));
       return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
     }
-    const mimeType = chunks[0].mime_type || 'application/octet-stream';
+    const mimeType = safeBlobMime(chunks[0].mime_type);
     return { blob: new Blob(parts, { type: mimeType }), mimeType };
   }
 

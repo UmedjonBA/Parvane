@@ -177,3 +177,37 @@ identity отказывает после `PARVANE_REGISTER_RATE_IP=30` реги�
 безопасности». Смена ключа известного контакта даёт локальное служебное
 сообщение в чате («Ключ безопасности … изменился»). Сверять голосом или по
 другому каналу — защита от подмены ключей на сервере.
+
+## Hardening контейнеров и тома на шард (P-31, P-50)
+
+- Образ `parvane-shards` запускает бинарники под пользователем `parvane`
+  (uid 10001), compose даёт `read_only`, `cap_drop: ALL`,
+  `no-new-privileges`, `tmpfs /tmp`. Запись — только в том `/data` шарда.
+- У каждого шарда **свой** том: `parvane_db-identity`, `parvane_db-messenger`,
+  `parvane_db-cloud`, `parvane_db-call`, `parvane_db-preview`, `parvane_db-push`
+  (раньше — общий `parvane_db`). RCE в preview больше не читает `identity.db`.
+- **Миграция с общего тома** (один раз, при остановленных шардах):
+
+  ```bash
+  docker compose stop identity messenger cloud call preview push
+  for s in identity messenger cloud call preview push; do
+    docker run --rm -v parvane_db:/old -v parvane_db-$s:/data alpine sh -c \
+      "cp -a /old/$s.db* /data/ 2>/dev/null; cp -a /old/$s-* /data/ 2>/dev/null; \
+       chown -R 10001:10001 /data"
+  done
+  docker compose up -d
+  ```
+
+  Ключи `identity-jwt-ed25519.pem` и `push-vapid-p256.pem` попадают в свои
+  тома тем же циклом (`/old/identity-*`, `/old/push-*`). Старый том удалять
+  только после проверки: `docker volume rm parvane_db`.
+- Команды из разделов выше с `-v parvane_db:/data` теперь выполняются с томом
+  конкретного шарда (`-v parvane_db-identity:/data` и т.п.).
+- Адрес, порт SSH и логин прод-сервера в `deploy.sh` больше не зашиты:
+  задайте `PARVANE_DEPLOY_SSH_DEST`, `PARVANE_DEPLOY_SSH_PORT`,
+  `PARVANE_DEPLOY_PUBLIC_HOST` (файл `backend/infra/deploy/.deploy.env`,
+  в `.gitignore`). В контейнер NATS уходят только его пароли, а не весь `.env`.
+- TURN (P-16): relay на loopback/приватные/link-local/multicast адреса
+  запрещён (`PermissionHandler` в `parvane-turn`, `denied-peer-ip` в
+  `coturn.conf`); статический пользователь TURN не заводится — только
+  краткоживущие креды по `PARVANE_TURN_SECRET`.

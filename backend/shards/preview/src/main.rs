@@ -208,6 +208,8 @@ async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u
         }
     }
     let client = reqwest::Client::builder()
+        // P-49: без HTTPS_PROXY из окружения — иначе резолв/пиннинг обходились бы через прокси
+        .no_proxy()
         .connect_timeout(std::time::Duration::from_millis(CONNECT_TIMEOUT_MS))
         .timeout(std::time::Duration::from_millis(TOTAL_TIMEOUT_MS))
         .user_agent(USER_AGENT)
@@ -308,6 +310,8 @@ fn is_public_ip(ip: &IpAddr) -> bool {
                 || v4.is_multicast()
                 // CGNAT 100.64.0.0/10
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+                // IETF protocol assignments 192.0.0.0/24 (P-49)
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0)
                 // 0.0.0.0/8
                 || v4.octets()[0] == 0
                 // benchmarking 198.18.0.0/15
@@ -325,6 +329,22 @@ fn is_public_ip(ip: &IpAddr) -> bool {
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
                 // documentation 2001:db8::/32
                 || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+                // P-49: site-local fec0::/10 (deprecated, но маршрутизируется внутрь)
+                || (v6.segments()[0] & 0xffc0) == 0xfec0
+                // P-49: 6to4 2002::/16 — встроенный IPv4 в сегментах 1-2
+                || (v6.segments()[0] == 0x2002 && !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                    (v6.segments()[1] >> 8) as u8, v6.segments()[1] as u8,
+                    (v6.segments()[2] >> 8) as u8, v6.segments()[2] as u8))))
+                // P-49: Teredo 2001::/32 — IPv4 сервера/клиента (клиент — инвертирован в последних 32 битах)
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0 && (
+                    !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                        (v6.segments()[2] >> 8) as u8, v6.segments()[2] as u8,
+                        (v6.segments()[3] >> 8) as u8, v6.segments()[3] as u8)))
+                    || !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
+                        !(v6.segments()[6] >> 8) as u8, !(v6.segments()[6] as u8),
+                        !(v6.segments()[7] >> 8) as u8, !(v6.segments()[7] as u8))))))
+                // P-49: discard-only 100::/64
+                || (v6.segments()[0] == 0x0100 && v6.segments()[1] == 0 && v6.segments()[2] == 0 && v6.segments()[3] == 0)
                 // NAT64 well-known 64:ff9b::/96 (встраивает IPv4 — SSRF-риск)
                 || (v6.segments()[0] == 0x0064
                     && v6.segments()[1] == 0xff9b
@@ -378,6 +398,9 @@ async fn fetch_preview(input_url: &str) -> Result<WebPagePreview> {
         seen.push(normalized);
 
         let client = reqwest::Client::builder()
+            .no_proxy()
+        // P-49: без HTTPS_PROXY из окружения — иначе резолв/пиннинг обходились бы через прокси
+        .no_proxy()
             .resolve(&host, pinned)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_millis(CONNECT_TIMEOUT_MS))
@@ -477,6 +500,23 @@ mod tests {
         for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
             assert!(is_public_ip(&ip.parse().unwrap()), "{ip} должен пропускаться");
         }
+    }
+
+    #[test]
+    // P-49: пробелы deny-листа закрыты
+    #[test]
+    fn deny_list_gaps_are_closed() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        assert!(!is_public_ip(&IpAddr::V4(Ipv4Addr::new(192, 0, 0, 8))), "192.0.0.0/24");
+        assert!(!is_public_ip(&IpAddr::V6("fec0::1".parse::<Ipv6Addr>().unwrap())), "site-local");
+        // 6to4 с приватным 10.0.0.1 внутри: 2002:0a00:0001::
+        assert!(!is_public_ip(&IpAddr::V6("2002:a00:1::1".parse::<Ipv6Addr>().unwrap())), "6to4 private");
+        // 6to4 с публичным 8.8.8.8: 2002:0808:0808::
+        assert!(is_public_ip(&IpAddr::V6("2002:808:808::1".parse::<Ipv6Addr>().unwrap())), "6to4 public");
+        // Teredo: сервер 8.8.8.8, клиент 10.0.0.1 (инвертирован: f5ff:fffe)
+        assert!(!is_public_ip(&IpAddr::V6("2001:0:808:808::f5ff:fffe".parse::<Ipv6Addr>().unwrap())), "teredo private client");
+        assert!(!is_public_ip(&IpAddr::V6("100::1".parse::<Ipv6Addr>().unwrap())), "discard-only");
+        assert!(is_public_ip(&IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))));
     }
 
     #[test]

@@ -19,10 +19,7 @@ use parvane_types::{
 };
 use sqlx::{Row, SqlitePool};
 use tracing::{info, warn};
-use web_push::{
-    ContentEncoding, IsahcWebPushClient, SubscriptionInfo, VapidSignatureBuilder, WebPushClient,
-    WebPushMessageBuilder,
-};
+use web_push_native::{Auth, WebPushBuilder};
 
 /// Не дребезжим: не чаще одного пуша на пользователя за интервал.
 const PUSH_COOLDOWN_SECS: u64 = 30;
@@ -62,7 +59,7 @@ async fn main() -> Result<()> {
     let mut inbox_sub = nc.subscribe(MSG_USER_WILDCARD).await?;
     info!("Push шард запущен. Слушаю: {}/{}/{} + {}", PUSH_VAPID_GET, PUSH_REGISTER, PUSH_UNREGISTER, MSG_USER_WILDCARD);
 
-    let push_client = Arc::new(IsahcWebPushClient::new().context("web-push клиент")?);
+    let push_client = Arc::new(build_http_client()?);
     let vapid = Arc::new(vapid);
     let last_push_at: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
@@ -371,7 +368,7 @@ async fn handle_unregister(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
 
 async fn handle_inbox(
     pool: &SqlitePool,
-    push_client: &IsahcWebPushClient,
+    push_client: &reqwest::Client,
     vapid: &VapidKeys,
     last_push_at: &Mutex<HashMap<String, Instant>>,
     msg: async_nats::Message,
@@ -416,21 +413,28 @@ async fn handle_inbox(
         let Ok(info) = serde_json::from_str::<PushSubscriptionInfo>(&subscription_json) else {
             continue;
         };
-        let subscription =
-            SubscriptionInfo::new(info.endpoint.clone(), info.keys.p256dh, info.keys.auth);
 
-        let message = match build_push_message(vapid, &subscription) {
-            Ok(message) => message,
+        let request = match build_push_request(vapid, &info, unix_now()) {
+            Ok(request) => request,
             Err(e) => {
                 warn!("сборка пуша для {} не удалась: {}", user, e);
                 continue;
             }
         };
+        let request = match reqwest::Request::try_from(request) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("сборка HTTP-запроса для {} не удалась: {}", user, e);
+                continue;
+            }
+        };
 
-        match push_client.send(message).await {
-            Ok(()) => info!("push отправлен: {}", user),
-            Err(web_push::WebPushError::EndpointNotValid)
-            | Err(web_push::WebPushError::EndpointNotFound) => {
+        match push_client.execute(request).await {
+            Ok(resp) if resp.status().is_success() => info!("push отправлен: {}", user),
+            Ok(resp)
+                if resp.status() == reqwest::StatusCode::NOT_FOUND
+                    || resp.status() == reqwest::StatusCode::GONE =>
+            {
                 // Подписка мертва (браузер отписался) — вычищаем
                 let _ = sqlx::query("DELETE FROM push_subscriptions WHERE endpoint = ?")
                     .bind(&endpoint)
@@ -438,25 +442,120 @@ async fn handle_inbox(
                     .await;
                 info!("мёртвая подписка удалена: {}", user);
             }
+            Ok(resp) => warn!("push для {} не доставлен: HTTP {}", user, resp.status()),
             Err(e) => warn!("push для {} не доставлен: {}", user, e),
         }
     }
 }
 
-fn build_push_message(
-    vapid: &VapidKeys,
-    subscription: &SubscriptionInfo,
-) -> Result<web_push::WebPushMessage> {
-    let signature = VapidSignatureBuilder::from_pem(vapid.private_pem.as_bytes(), subscription)
-        .context("VAPID из PEM")?
+/// P-51: HTTP-клиент для push-сервисов: rustls, без редиректов (endpoint уже
+/// проверен на публичный https — редирект не должен увести на внутренний адрес),
+/// короткий таймаут, чтобы медленный push-сервис не держал воркер.
+fn build_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .user_agent("parvane-push/0.1")
         .build()
-        .context("подпись VAPID")?;
-    let mut builder = WebPushMessageBuilder::new(subscription);
-    builder.set_payload(ContentEncoding::Aes128Gcm, PUSH_PAYLOAD.as_bytes());
-    builder.set_vapid_signature(signature);
-    Ok(builder.build()?)
+        .context("HTTP-клиент push")
 }
 
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Срок действия VAPID-JWT (RFC 8292 §2: не более 24 ч).
+const VAPID_JWT_TTL_SECS: u64 = 12 * 60 * 60;
+/// Контакт оператора в claim `sub` (RFC 8292 §2.1).
+const VAPID_SUBJECT: &str = "mailto:admin@parvane.local";
+
+fn b64url(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// base64url с паддингом или без (браузеры отдают `p256dh`/`auth` по-разному).
+fn b64url_decode(s: &str) -> Result<Vec<u8>> {
+    let trimmed = s.trim_end_matches('=');
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(trimmed)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(trimmed))
+        .map_err(|e| anyhow::anyhow!("base64url: {e}"))
+}
+
+/// `aud` для VAPID: только scheme://host[:port] endpoint'а (RFC 8292 §2).
+fn vapid_audience(endpoint: &url::Url) -> Result<String> {
+    let host = endpoint.host_str().context("endpoint без host")?;
+    Ok(match endpoint.port() {
+        Some(port) => format!("{}://{}:{}", endpoint.scheme(), host, port),
+        None => format!("{}://{}", endpoint.scheme(), host),
+    })
+}
+
+/// ES256-JWT для VAPID: header `{"typ":"JWT","alg":"ES256"}`, подпись r||s (64 байта),
+/// собранный руками поверх p256 — без jwt-simple/rsa.
+fn vapid_jwt(vapid: &VapidKeys, audience: &str, now: u64) -> Result<String> {
+    use p256::ecdsa::signature::Signer;
+    use p256::pkcs8::DecodePrivateKey;
+
+    let secret = p256::SecretKey::from_pkcs8_pem(&vapid.private_pem)
+        .map_err(|e| anyhow::anyhow!("VAPID PEM: {e}"))?;
+    let signing_key = p256::ecdsa::SigningKey::from(&secret);
+
+    let header = b64url(br#"{"typ":"JWT","alg":"ES256"}"#);
+    let claims = serde_json::json!({
+        "aud": audience,
+        "exp": now + VAPID_JWT_TTL_SECS,
+        "sub": VAPID_SUBJECT,
+    });
+    let claims = b64url(serde_json::to_string(&claims)?.as_bytes());
+    let signing_input = format!("{header}.{claims}");
+    let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
+    Ok(format!("{signing_input}.{}", b64url(&signature.to_bytes())))
+}
+
+/// Заголовок `Authorization: vapid t=<jwt>, k=<публичный ключ>` (RFC 8292 §3).
+fn vapid_authorization(vapid: &VapidKeys, endpoint: &url::Url, now: u64) -> Result<String> {
+    let jwt = vapid_jwt(vapid, &vapid_audience(endpoint)?, now)?;
+    Ok(format!("vapid t={}, k={}", jwt, vapid.public_b64url))
+}
+
+/// Ключи подписки браузера: `p256dh` — несжатая точка P-256 (65 байт), `auth` — 16 байт.
+fn subscription_keys(info: &PushSubscriptionInfo) -> Result<(p256::PublicKey, Auth)> {
+    let p256dh = b64url_decode(&info.keys.p256dh).context("p256dh")?;
+    let ua_public = p256::PublicKey::from_sec1_bytes(&p256dh)
+        .map_err(|e| anyhow::anyhow!("p256dh не точка P-256: {e}"))?;
+    let auth = b64url_decode(&info.keys.auth).context("auth")?;
+    if auth.len() != 16 {
+        anyhow::bail!("auth должен быть 16 байт, получено {}", auth.len());
+    }
+    Ok((ua_public, Auth::clone_from_slice(&auth)))
+}
+
+/// Собирает POST на push-сервис: тело зашифровано aes128gcm (RFC 8291) через
+/// web-push-native, VAPID-заголовок добавляем сами.
+fn build_push_request(
+    vapid: &VapidKeys,
+    info: &PushSubscriptionInfo,
+    now: u64,
+) -> Result<http::Request<Vec<u8>>> {
+    let endpoint_url = url::Url::parse(&info.endpoint).context("endpoint")?;
+    let uri: http::Uri = info.endpoint.parse().context("endpoint как URI")?;
+    let (ua_public, ua_auth) = subscription_keys(info)?;
+    let mut request = WebPushBuilder::new(uri, ua_public, ua_auth)
+        .with_valid_duration(Duration::from_secs(VAPID_JWT_TTL_SECS))
+        .build(PUSH_PAYLOAD.as_bytes())
+        .map_err(|e| anyhow::anyhow!("шифрование пуша: {e}"))?;
+    let authorization = vapid_authorization(vapid, &endpoint_url, now)?;
+    request.headers_mut().insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&authorization).context("заголовок VAPID")?,
+    );
+    request
+        .headers_mut()
+        .insert("Urgency", http::HeaderValue::from_static("normal"));
+    Ok(request)
+}
 
 #[cfg(test)]
 mod tests {
@@ -489,6 +588,91 @@ mod tests {
             assert!(!endpoint_is_public_https(bad), "{bad}");
         }
         assert!(max_subscriptions_per_user() >= 1);
+    }
+
+    fn test_vapid() -> VapidKeys {
+        let secret = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        vapid_from_pem(&secret.to_pkcs8_pem(LineEnding::LF).unwrap()).unwrap()
+    }
+
+    fn test_subscription() -> PushSubscriptionInfo {
+        let ua = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        let point = ua.public_key().to_sec1_bytes();
+        PushSubscriptionInfo {
+            endpoint: "https://fcm.googleapis.com:443/fcm/send/abc".to_string(),
+            keys: parvane_types::PushSubscriptionKeys {
+                p256dh: b64url(&point),
+                auth: base64::engine::general_purpose::URL_SAFE.encode([7u8; 16]),
+            },
+        }
+    }
+
+    // P-51: собственный VAPID-JWT (ES256) вместо web-push/jwt-simple/rsa
+    #[test]
+    fn vapid_authorization_is_rfc8292_es256() {
+        use p256::ecdsa::signature::Verifier;
+        let vapid = test_vapid();
+        let endpoint = url::Url::parse("https://updates.push.services.mozilla.com/wpush/v2/x").unwrap();
+        let now = 1_700_000_000u64;
+        let header = vapid_authorization(&vapid, &endpoint, now).unwrap();
+        let rest = header.strip_prefix("vapid t=").expect("схема vapid");
+        let (jwt, key) = rest.split_once(", k=").expect("t и k");
+        assert_eq!(key, vapid.public_b64url);
+
+        let parts: Vec<&str> = jwt.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let hdr: serde_json::Value = serde_json::from_slice(&b64url_decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(hdr["alg"], "ES256");
+        assert_eq!(hdr["typ"], "JWT");
+        let claims: serde_json::Value = serde_json::from_slice(&b64url_decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(claims["aud"], "https://updates.push.services.mozilla.com", "aud — только origin");
+        assert_eq!(claims["exp"], now + VAPID_JWT_TTL_SECS);
+        assert!(claims["sub"].as_str().unwrap().starts_with("mailto:"));
+
+        let sig_bytes = b64url_decode(parts[2]).unwrap();
+        assert_eq!(sig_bytes.len(), 64, "r||s без DER");
+        let signature = p256::ecdsa::Signature::from_slice(&sig_bytes).unwrap();
+        let pub_bytes = b64url_decode(key).unwrap();
+        let verifying = p256::ecdsa::VerifyingKey::from_sec1_bytes(&pub_bytes).unwrap();
+        verifying
+            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
+            .expect("подпись проверяется публичным ключом из k=");
+    }
+
+    #[test]
+    fn vapid_audience_keeps_explicit_port_only() {
+        assert_eq!(
+            vapid_audience(&url::Url::parse("https://push.example.com/a/b").unwrap()).unwrap(),
+            "https://push.example.com"
+        );
+        assert_eq!(
+            vapid_audience(&url::Url::parse("https://push.example.com:8443/a").unwrap()).unwrap(),
+            "https://push.example.com:8443"
+        );
+    }
+
+    // Тело — aes128gcm (RFC 8291), заголовки по RFC 8030/8292, ключи с паддингом и без
+    #[test]
+    fn push_request_has_encrypted_body_and_vapid_headers() {
+        let vapid = test_vapid();
+        let info = test_subscription();
+        let req = build_push_request(&vapid, &info, 1_700_000_000).unwrap();
+        assert_eq!(req.method(), http::Method::POST);
+        assert_eq!(req.uri().host(), Some("fcm.googleapis.com"));
+        let h = req.headers();
+        assert_eq!(h.get("content-encoding").unwrap(), "aes128gcm");
+        assert_eq!(h.get("ttl").unwrap(), VAPID_JWT_TTL_SECS.to_string().as_str());
+        assert!(h.get("authorization").unwrap().to_str().unwrap().starts_with("vapid t="));
+        // aes128gcm: salt(16) + rs(4) + idlen(1) + keyid(65) + ciphertext(payload+1+16)
+        assert!(req.body().len() >= 86 + PUSH_PAYLOAD.len() + 17);
+        assert!(!req.body().windows(7).any(|w| w == b"Parvane"), "тело зашифровано");
+
+        let mut bad = test_subscription();
+        bad.keys.auth = b64url(&[1u8; 15]);
+        assert!(build_push_request(&vapid, &bad, 0).is_err(), "auth не 16 байт");
+        let mut bad = test_subscription();
+        bad.keys.p256dh = b64url(&[4u8; 65]);
+        assert!(build_push_request(&vapid, &bad, 0).is_err(), "p256dh не на кривой");
     }
 
     async fn test_pool() -> SqlitePool {

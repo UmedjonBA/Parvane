@@ -426,7 +426,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       // подтянет архив из cloud и отдаст документы по docId из entities
       content.emoji_packs?.forEach((ref) => registerReceivedEmojiPackRef(ref));
       return {
-        text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) },
+        text: { text: content.text || '', entities: wireEntitiesToApi(content.entities, (content.text || '').length) },
         webPage: content.webpage ? { id: `wp${stored.id}` } : undefined,
       };
     case 'photo':

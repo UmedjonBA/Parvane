@@ -26,6 +26,20 @@
 	# круг: блок `basic_auth { {$PARVANE_SITE_USER} {$PARVANE_SITE_HASH} }`
 	# на ВЕСЬ сайт, включая /ws (см. README, история 2026-09-01).
 
+	# P-32: защитные заголовки — HSTS, запрет фрейминга (clickjacking),
+	# nosniff, referrer, минимальные permissions. CSP страницы задаёт сборка
+	# web (vite buildCsp), frame-ancestors — только заголовком.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "frame-ancestors 'none'"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(self), microphone=(self), geolocation=(self), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+	}
+
 	handle /ws {
 		reverse_proxy gateway:9222
 	}

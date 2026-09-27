@@ -336,18 +336,14 @@ export function createSyncController(deps: SyncDependencies) {
     const content = stored.content;
     const store = deps.getStore();
     if (content.kind === 'poll') {
-      const chatAddress = store.isGroupAddress(stored.to) ? stored.to
-        : (stored.from && stored.from !== store.self ? stored.from : stored.to);
-      const chatId = store.getIdForAddress(
-        chatAddress,
-        store.isGroupAddress(chatAddress) ? 'group' : 'user',
-      );
+      const chatId = pollChatIdOf(stored);
       deps.polls.register(
         stored.id,
         chatId,
         content.question || '',
         (content.options || []).map(String),
         {
+          author: stored.from,
           isPublic: Boolean(content.is_public),
           isMultiple: Boolean(content.is_multiple),
           isQuiz: Boolean(content.is_quiz),
@@ -360,7 +356,9 @@ export function createSyncController(deps: SyncDependencies) {
     if (content.kind === 'poll_vote') {
       const pollUuid = content.poll;
       const options = (content.options || []).map(Number).filter((idx) => !Number.isNaN(idx));
-      if (pollUuid && stored.from) {
+      // P-44: голос — только из чата опроса (иначе участник другого чата
+      // голосовал бы в чужом опросе по uuid)
+      if (pollUuid && stored.from && deps.polls.isInChat(pollUuid, pollChatIdOf(stored))) {
         deps.polls.applyVote(pollUuid, stored.from, options);
         deps.refreshPollMessage(pollUuid);
       }
@@ -368,13 +366,23 @@ export function createSyncController(deps: SyncDependencies) {
     }
     if (content.kind === 'poll_close') {
       const pollUuid = content.poll;
-      if (pollUuid) {
+      // P-44: закрыть опрос может только автор, и только из того же чата
+      if (pollUuid && stored.from && deps.polls.canClose(pollUuid, stored.from)
+        && deps.polls.isInChat(pollUuid, pollChatIdOf(stored))) {
         deps.polls.close(pollUuid);
         deps.refreshPollMessage(pollUuid);
       }
       return true;
     }
     return false;
+  }
+
+  // Чат, к которому относится сообщение (для опросов: группа или 1-1 собеседник)
+  function pollChatIdOf(stored: WireStoredMessage) {
+    const store = deps.getStore();
+    const chatAddress = store.isGroupAddress(stored.to) ? stored.to
+      : (stored.from && stored.from !== store.self ? stored.from : stored.to);
+    return store.getIdForAddress(chatAddress, store.isGroupAddress(chatAddress) ? 'group' : 'user');
   }
 
   async function resolveDisplayNames(addresses: string[]) {

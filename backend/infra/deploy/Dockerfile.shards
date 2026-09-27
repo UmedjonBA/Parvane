@@ -14,7 +14,11 @@ RUN cargo build --release --locked \
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # P-31: шарды не под root; /data — каталог тома (ownership наследуется
+    # именованным томом при первом создании)
+    && groupadd -r -g 10001 parvane && useradd -r -u 10001 -g parvane -d /nonexistent -s /usr/sbin/nologin parvane \
+    && mkdir -p /data && chown parvane:parvane /data
 COPY --from=builder /src/target/release/identity /usr/local/bin/identity
 COPY --from=builder /src/target/release/messenger /usr/local/bin/messenger
 COPY --from=builder /src/target/release/cloud /usr/local/bin/cloud
@@ -22,3 +26,4 @@ COPY --from=builder /src/target/release/call /usr/local/bin/call
 COPY --from=builder /src/target/release/preview /usr/local/bin/preview
 COPY --from=builder /src/target/release/push /usr/local/bin/push
 COPY --from=builder /src/target/release/gateway /usr/local/bin/gateway
+USER parvane

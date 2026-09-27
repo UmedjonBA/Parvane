@@ -100,6 +100,19 @@ export function createLocalState(deps: LocalStateDependencies) {
         localStorage.removeItem(storageKey('hist'));
       }
     }
+    // P-44: очередь запланированных (текст сообщений) — тоже в шифрованном
+    // хранилище, с миграцией из localStorage
+    if (!isScheduledLoaded) {
+      isScheduledLoaded = true;
+      const stored = (await storage.loadRecord<ScheduledEntry[]>('scheduled')) || [];
+      const legacy = readLegacyJson<ScheduledEntry[]>(storageKey('scheduled'), []);
+      scheduledQueue.push(...stored, ...legacy);
+      scheduledNextId = Math.max(scheduledNextId, ...scheduledQueue.map((entry) => entry.id + 1));
+      if (legacy.length) {
+        await storage.saveRecord('scheduled', scheduledQueue.filter((entry) => !entry.params));
+        localStorage.removeItem(storageKey('scheduled'));
+      }
+    }
     if (!draftsCache) {
       const stored = await storage.loadRecord<Record<string, Record<string, unknown>>>('drafts');
       const legacy = readLegacyJson<Record<string, Record<string, unknown>>>(storageKey('drafts'), {});
@@ -257,22 +270,29 @@ export function createLocalState(deps: LocalStateDependencies) {
     draftsSaveTimer = undefined;
   }
 
+  // Очередь загружается в hydrate() (шифрованное хранилище); до него —
+  // legacy-чтение из localStorage, чтобы ранние вызовы не теряли записи
   function loadScheduledQueue() {
     const { self } = deps.getStore();
     if (isScheduledLoaded || !self) return;
     isScheduledLoaded = true;
-    try {
-      const raw = JSON.parse(localStorage.getItem(storageKey('scheduled')) || '[]') as ScheduledEntry[];
-      scheduledQueue.push(...raw);
-      scheduledNextId = Math.max(scheduledNextId, ...raw.map((entry) => entry.id + 1));
-    } catch {
-      // Повреждённая локальная очередь эквивалентна пустой.
-    }
+    const raw = readLegacyJson<ScheduledEntry[]>(storageKey('scheduled'), []);
+    scheduledQueue.push(...raw);
+    scheduledNextId = Math.max(scheduledNextId, ...raw.map((entry) => entry.id + 1));
   }
 
   function persistScheduledQueue() {
     const persistable = scheduledQueue.filter((entry) => !entry.params);
-    localStorage.setItem(storageKey('scheduled'), JSON.stringify(persistable));
+    void secureStorage()?.then((storage) => {
+      if (!storage) return undefined;
+      return storage.saveRecord('scheduled', persistable).then(() => {
+        try {
+          localStorage.removeItem(storageKey('scheduled'));
+        } catch {
+          // приватный режим
+        }
+      });
+    }).catch(() => undefined);
   }
 
   function buildScheduledApiMessage(entry: ScheduledEntry): ApiMessage {
