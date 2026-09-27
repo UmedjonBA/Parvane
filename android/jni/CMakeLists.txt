@@ -48,6 +48,7 @@ add_library(parvane_core STATIC
     ${CORE}/src/blobcrypt.cpp
     ${CORE}/src/keybackup.cpp
     ${CORE}/src/map_tiles.cpp
+    ${CORE}/src/pack_archive.cpp
     ${CORE}/src/messenger_client.cpp
     ${CORE}/src/cloud_client.cpp
     ${CORE}/src/call_client.cpp

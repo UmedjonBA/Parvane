@@ -54,6 +54,7 @@ add_library(parvane_core STATIC
     src/blobcrypt.cpp
     src/keybackup.cpp
     src/map_tiles.cpp
+    src/pack_archive.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
     src/call_client.cpp
@@ -122,6 +123,12 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_map_tiles_tests tests/map_tiles_tests.cpp)
     target_link_libraries(parvane_map_tiles_tests PRIVATE parvane_core)
 
+    # PVPK1 / PACK-1 / EMOJI-1 (spec 005, без стека)
+    add_executable(parvane_pack_tests tests/pack_tests.cpp)
+    target_link_libraries(parvane_pack_tests PRIVATE parvane_core)
+    add_executable(parvane_poll_tests tests/poll_tests.cpp)
+    target_link_libraries(parvane_poll_tests PRIVATE parvane_core)
+
     # Живой e2e gateway (нужен запущенный стек nats+identity+messenger+gateway).
     add_executable(parvane_gateway_probe probe/gateway_probe.cpp)
     target_link_libraries(parvane_gateway_probe PRIVATE parvane_core)
@@ -140,4 +147,6 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME group_client COMMAND parvane_group_client_tests)
     add_test(NAME group_call COMMAND parvane_group_call_tests)
     add_test(NAME map_tiles COMMAND parvane_map_tiles_tests)
+    add_test(NAME pack COMMAND parvane_pack_tests)
+    add_test(NAME poll COMMAND parvane_poll_tests)
 endif()

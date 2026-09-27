@@ -50,6 +50,7 @@
 #include "storage/localimageloader.h" // FilePrepareResult, SendMediaType
 
 #include <parvane/events.h>          // parvane-core
+#include <parvane/poll.h>            // parvane-core: опросы в обоих форматах (spec 005)
 #include <parvane/topics.h>          // parvane-core
 #include <parvane/transport.h>       // parvane-core
 #include <parvane/gateway_transport.h> // parvane-core (доступ через gateway, Фаза 0)
@@ -4888,12 +4889,12 @@ void ResolveNames(const QStringList &addresses) {
 						? QString::fromStdString(j[key].get<std::string>())
 						: QString();
 				};
-				LOG(("Parvane: профиль %1: bio=%2 phone=%3 color=%4 channel=%5")
+				LOG(("Parvane: профиль %1: bio=%2 phone=%3 color=%4 channel=%5 birthday=%6")
 					.arg(it.key(), str("bio"), str("phone"))
 					.arg((j.contains("name_color") && j["name_color"].is_number_integer())
 						? j["name_color"].get<int>()
 						: -1)
-					.arg(str("personal_channel")));
+					.arg(str("personal_channel"), str("birthday")));
 			}
 		});
 	});
@@ -5693,7 +5694,9 @@ void pumpMediaDownload(
 // ("0","1",…) — так голос сериализуется без обратного поиска байтов.
 [[nodiscard]] MTPMessageMedia buildPollMedia(
 		const PollState &st,
-		const nlohmann::json &c) {
+		const nlohmann::json &cIn) {
+	// spec 005: web пишет options/is_*, desktop — answers/…; читаем оба
+	const auto c = parvane::poll::normalize(cIn);
 	const auto question = QString::fromStdString(
 		c.value("question", std::string()));
 	auto answers = QVector<MTPPollAnswer>();
@@ -5883,7 +5886,9 @@ void handlePollService(
 // отложенные голоса.
 void injectPollMessage(
 		not_null<Main::Session*> session,
-		const parvane::StoredMessage &sm) {
+		const parvane::StoredMessage &smIn) {
+	auto sm = smIn; // spec 005: оба формата имён полей опроса
+	sm.content = parvane::poll::normalize(smIn.content);
 	const auto self = SelfAddress();
 	const auto from = QString::fromStdString(sm.from);
 	const auto uuid = QString::fromStdString(sm.id);
@@ -6999,7 +7004,7 @@ void ForwardPollCopy(const QString &toAddress, const QString &contentJson) {
 	}
 	auto content = nlohmann::json();
 	try {
-		content = nlohmann::json::parse(contentJson.toStdString());
+		content = parvane::poll::normalize(nlohmann::json::parse(contentJson.toStdString()));
 	} catch (const std::exception &) {
 		return;
 	}
@@ -10097,11 +10102,18 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				const auto user = s->data().user(
 					UserId(BareId(IdForAddress(peerAddr))));
 				const auto history = s->data().history(user);
+				// Только локальные стикер-паки (g_stickerPackDirs): sets() — flat_map по id, и первым
+				// непустым набором оказывался эмодзи-набор (pvemoji-set:…), у которого нет каталога пака —
+				// в cloud уходил один файл без pack_ref (tgx_stickers_flow.sh, 27 сен 2026)
 				auto sticker = (DocumentData*)nullptr;
-				for (const auto &[id, set] : s->data().stickers().sets()) {
-					if (!set->stickers.isEmpty()) {
-						sticker = set->stickers.front();
-						break;
+				{
+					const auto &sets = s->data().stickers().sets();
+					for (auto it = g_stickerPackDirs.constBegin(); it != g_stickerPackDirs.constEnd(); ++it) {
+						const auto found = sets.find(it.key());
+						if (found != sets.end() && !found->second->stickers.isEmpty()) {
+							sticker = found->second->stickers.front();
+							break;
+						}
 					}
 				}
 				if (sticker) {

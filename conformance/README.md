@@ -23,7 +23,11 @@
   иначе одно подложное сообщение заморозит синк жертвы навсегда.
 
 Реализации: web `api/parvane/sync.ts` (`persistCursor`, флаг `sawUndecryptable`);
-desktop `parvane/parvane_client.cpp` (`prepareIncoming` → `NotePendingAndMayAdvance`).
+desktop `parvane/parvane_client.cpp` (`prepareIncoming` → `NotePendingAndMayAdvance`);
+android `jni/parvane_jni.cpp` (`enum class Deliver`, `g_diskCursorId` → `cursors.json`
+только после `Applied`, придержанное — `pending.json`; маркеры «курсор придержан»,
+«курсор: … применён», 27 сен 2026). Тест android — сценарий на эмуляторе
+`android/tgx_conformance_flow.sh`, шаг 1 (см. «устройство отсутствовало» ниже).
 
 ## SYNC-2. Непрочитанное не держит курсор вечно
 
@@ -36,7 +40,10 @@ desktop `parvane/parvane_client.cpp` (`prepareIncoming` → `NotePendingAndMayAd
   записью в лог. История в этом случае восстанавливается авто-линковкой.
 
 Реализации: desktop `NotePendingAndMayAdvance` (`tdata/parvane-pending.txt`);
-web `mayAdvanceDiskCursor` + `localState.loadRepairAttempts` (9 сен 2026).
+web `mayAdvanceDiskCursor` + `localState.loadRepairAttempts` (9 сен 2026);
+android `jni/parvane_jni.cpp` (`kRepairAttempts` = 3, `pending.json`, маркер
+«курсор отпущен после 3 попыток (SYNC-2)»; на чистом проходе сценарий
+`android/tgx_conformance_flow.sh` проверяет, что ничего не придержано).
 
 ## PROFILE-1. Профиль собеседника перечитывается по TTL
 
@@ -47,7 +54,11 @@ web `mayAdvanceDiskCursor` + `localState.loadRepairAttempts` (9 сен 2026).
 механизм.
 
 Реализации: web `resolveDisplayNames` на каждом проходе синка;
-desktop `g_resolvedAt` + `kProfileTtlMs` (10 мин), включая собственный профиль.
+desktop `g_resolvedAt` + `kProfileTtlMs` (10 мин), включая собственный профиль;
+android `libtd/.../Client.kt` (`resolvedAt`, `profileTtlMs` 10 мин, тик раз в
+60 с; для e2e TTL переопределяется файлом `/data/local/tmp/parvane-profile-ttl`
+в мс). Тест android — `android/tgx_conformance_flow.sh`, шаг 3 (bio сменён на
+desktop → профиль перечитан без перезапуска X).
 
 ## READ-1. Прочитанное журналируется локально и подтверждается
 
@@ -58,7 +69,11 @@ desktop `g_resolvedAt` + `kProfileTtlMs` (10 мин), включая собст�
 - повторять публикацию, пока сервер не вернёт `read=true`.
 
 Реализации: web `localState.loadReadUuids/saveReadUuids`, `retryUnconfirmedReads`;
-desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 сен 2026).
+desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 сен 2026);
+android `jni/parvane_jni.cpp` (`read.json` + запись в журнал ДО `msg.chat.read` —
+«прочитано локально»; `g_unconfirmedRead` повторяется в `pumpLoop`, пока сервер
+не вернёт `read=true` — «read подтверждён»). Тест android —
+`android/tgx_conformance_flow.sh`, шаг 2 (после рестарта X бейдж не возвращается).
 
 ## FAIL-1. Ожидание без ответа запрещено
 
@@ -76,6 +91,15 @@ desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 
   `desktop/verify_gateway_reconnect.sh`.
 - web: `useModuleLoader` ловит отказ импорта, `moduleLoader` не кэширует
   отвергнутый промис, устаревший чанк лечится одноразовой перезагрузкой.
+- android: `jni/parvane_jni.cpp` `pumpLoop` — ошибка синка «отказ авторизации» /
+  «просроченный JWT» / «устройство отозвано» → событие `session failed`
+  (`reason=auth`) → `Client.kt` `sessionExpired()`: стор очищен, `session.json`
+  снят, ключи `e2e-*` и `journal.jsonl` сохранены, X переводится в
+  `LoggingOut → WaitPhoneNumber` (не `Closed` — тот стирает данные). Обрыв
+  gateway: транспорт ядра переподключается сам, обработчик в `nativeInit`
+  пишет «gateway переподключён». Тест — `android/tgx_conformance_flow.sh`,
+  шаги 4 (отзыв устройства с alice-desktop → экран входа, данные на месте)
+  и 5 (`gateway_restart` → реконнект → следующее сообщение доставлено).
 
 ## MAP-1. Фрагменты карты — только через шард preview
 
@@ -91,9 +115,14 @@ IP пользователя и просматриваемая область у�
 Реализации: web `api/parvane/media.ts` (`fetchTile`/`renderStaticMap`);
 desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент тайлов, LRU) +
 `parvane/parvane_map.cpp` (склейка → нативный `Data::CloudImage` через
-`Session::location()`, 15 сен 2026); android — карт нет, правило применяется с
-их появлением. Тесты: web `conformance.test.ts` (MAP-1), desktop
-`desktop/verify_location_map.sh` (grep хостов + runtime-маркер «через preview»).
+`Session::location()`, 15 сен 2026); android `libtd/.../Client.kt`
+(`mapThumbnail`: `GetMapThumbnailFile` X → `ParvaneCore.mapTile` →
+`jni nativeMapTile` → `preview.map.tile`, склейка в файл) + `MapGeometry.kt`
+(порт `computeGeometry` десктопа, 27 сен 2026). Тесты: web `conformance.test.ts`
+(MAP-1, включая grep хостов в android), desktop `desktop/verify_location_map.sh`
+(grep хостов + runtime-маркер «через preview»), android — JVM
+`FoldersMapTest.mapGeometryMatchesDesktop` и сценарий
+`android/tgx_folders_preview_flow.sh`, шаг 3 (маркер «тайл 16/x/y через preview»).
 
 ## PACK-1. Архив пака — под набор получателей
 
@@ -109,9 +138,14 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 `buildPackRefForSet`, 15 сен 2026); desktop `parvane_client.cpp`
 (`FindUploadedPackRef`/`RememberUploadedPackRef` — ссылка помнится вместе с
 набором получателей, переиспользуется только для его подмножества, 16 сен
-2026); android — паков нет. Тесты: web `conformance.test.ts` (PACK-1) и
+2026); android `jni/parvane_jni.cpp` (`nativePackRefFor`: `packrefs.json`,
+ссылка помнится вместе с набором получателей, повтор только для подмножества,
+не больше 8 вариантов на пак) + `libtd/.../Stickers.kt` (`packRefForSend`,
+`emojiPacksFor`, 27 сен 2026). Тесты: web `conformance.test.ts` (PACK-1) и
 кросс-сценарий `scripts/e2e_web_cross_emoji.mjs` (второй получатель), desktop
-`verify_conformance_packs.sh` (два архива в cloud на двух получателей).
+`verify_conformance_packs.sh` (два архива в cloud на двух получателей), android
+— JVM `StickersTest.sendResolvesInputFileIdAndAttachesPackRefByRecipients`,
+`PackIndexTest` и сценарий `android/tgx_stickers_flow.sh`.
 
 ## EMOJI-1. docId кастом-эмодзи — от имени из ссылки
 
@@ -130,9 +164,15 @@ FNV-смещение без последней цифры: так историч
 алиасы набора) + `provider.ts` (`buildCustomSet`, `fetchCustomEmoji`), 15 сен
 2026; desktop `parvane_client.cpp`: при материализации сырое имя пака пишется
 в `.pvname` рядом с каталогом, `LoadLocalCustomEmoji` читает его через
-`ReadRawPackName` (16 сен 2026); android — кастом-эмодзи нет. Тесты: web
-`conformance.test.ts` (EMOJI-1) и `scripts/e2e_web_cross_emoji.mjs`, desktop
-`verify_conformance_packs.sh` (рестарт получателя).
+`ReadRawPackName` (16 сен 2026); android `libtd/.../EmojiDocId.kt`
+(`emojiDocId`: та же FNV-1a-64 от `pvemoji:<rawName>|<file>`, константы
+`OFFSET_BASIS`/`PRIME`) + `PackIndex.kt` (`emojiByDocId` по сырому имени из
+`emoji_packs[].name`, 27 сен 2026). Тесты: web `conformance.test.ts` (EMOJI-1) и
+`scripts/e2e_web_cross_emoji.mjs`, desktop `verify_conformance_packs.sh`
+(рестарт получателя), android — JVM `EmojiDocIdTest`
+(`constantsMatchConformance`, `docIdUsesRawNameAndFile`),
+`StickersTest.emojiPacksLimitedToFourAndResolvedByDocId` и сценарий
+`android/tgx_stickers_flow.sh`, шаг 3 (docId, посчитанный desktop, разрешается в X).
 
 ## GROUP-1. Сведения группы применяются по ревизии, изменения — без перезагрузки
 
@@ -224,3 +264,6 @@ desktop `desktop/verify_conformance_perms.sh` (файл в обход скрыт
 
 - desktop: `desktop/verify_offline_device.sh`
 - web: `scripts/run_web_offline_device_e2e.sh`
+- android: `android/tgx_conformance_flow.sh`, шаг 1 (X остановлен, bob-desktop
+  шлёт три сообщения, X запущен → все три показаны, курсор в `cursors.json`
+  сдвинут только за применённое; 27 сен 2026)

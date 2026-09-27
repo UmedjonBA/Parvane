@@ -106,8 +106,16 @@ object ParvaneCore {
         JSONObject(nativeResolve(org.json.JSONArray(addresses).toString()))
     fun search(query: String): JSONObject = JSONObject(nativeSearch(query))
     fun markRead(uuid: String) = nativeMarkRead(uuid)
+    // spec 005: паки (PVPK1/PACK-1), превью ссылок, тайлы карты, забыть сообщение (TTL)
+    fun packFetch(refJson: String): JSONObject = JSONObject(nativePackFetch(refJson))
+    fun packRefFor(dir: String, rawName: String, recipients: List<String>): JSONObject =
+        JSONObject(nativePackRefFor(dir, rawName, org.json.JSONArray(recipients).toString()))
+    fun previewFetch(url: String, timeoutMs: Int): JSONObject = JSONObject(nativePreviewFetch(url, timeoutMs))
+    fun mapTile(z: Int, x: Int, y: Int): ByteArray = nativeMapTile(z, x, y) ?: ByteArray(0)
+    fun forget(uuid: String, fileId: String) = nativeForget(uuid, fileId)
     fun self(): String = nativeSelf()
     fun logout() = nativeLogout()
+    fun sessionExpired() = nativeSessionExpired()
 
     @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String)
     @JvmStatic private external fun nativeServerDomain(): String
@@ -154,6 +162,12 @@ object ParvaneCore {
     @JvmStatic private external fun nativeResolve(addressesJson: String): String
     @JvmStatic private external fun nativeSearch(query: String): String
     @JvmStatic private external fun nativeMarkRead(uuid: String)
+    @JvmStatic private external fun nativePackFetch(refJson: String): String
+    @JvmStatic private external fun nativePackRefFor(dir: String, rawName: String, recipientsJson: String): String
+    @JvmStatic private external fun nativePreviewFetch(url: String, timeoutMs: Int): String
+    @JvmStatic private external fun nativeMapTile(z: Int, x: Int, y: Int): ByteArray?
+    @JvmStatic private external fun nativeForget(uuid: String, fileId: String)
     @JvmStatic private external fun nativeSelf(): String
     @JvmStatic private external fun nativeLogout()
+    @JvmStatic private external fun nativeSessionExpired()
 }

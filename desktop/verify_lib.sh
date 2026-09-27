@@ -40,7 +40,15 @@ gateway_start() {
     PARVANE_LOG_LEVEL=info "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
   PIDS+=($GW_PID)
 }
-gateway_restart() { kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; sleep 1; gateway_start; sleep 2; }
+# Работает и из чужого шелла (стек поднят другим скриптом, GW_PID пуст — так tgx_conformance_flow.sh
+# после tgx_link_e2e.sh «перезапускал» gateway, а новый экземпляр падал на занятом порту, 27 сен 2026)
+gateway_restart() {
+  if [ -n "$GW_PID" ]; then kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null
+  else pkill -f "target/debug/[g]ateway" 2>/dev/null; fi
+  for _ in $(seq 1 50); do pgrep -f "target/debug/[g]ateway" >/dev/null || break; sleep 0.2; done
+  sleep 1; gateway_start; sleep 2
+  if ! kill -0 "$GW_PID" 2>/dev/null || tail -3 "$SB/gateway.log" | grep -aq "Address already in use"; then bad "gateway не перезапустился (см. $SB/gateway.log)"; fi
+}
 # start_client <workdir> <user@server> [ENV=VAL ...] → pid; лог: <workdir>/td/log.txt
 start_client() {
   local work="$1" user="$2"; shift 2

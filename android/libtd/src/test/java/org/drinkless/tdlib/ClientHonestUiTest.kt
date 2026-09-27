@@ -19,7 +19,15 @@ class ClientHonestUiTest {
         "GetInternalLinkType", "CheckChatInviteLink", "JoinChatByInviteLink", "GetChatJoinRequests", "ProcessChatJoinRequest",
     )
     private val noStub = listOf("SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
-        "DeleteRevokedChatInviteLink", "DeleteAllRevokedChatInviteLinks", "EditChatInviteLink")
+        "DeleteRevokedChatInviteLink", "DeleteAllRevokedChatInviteLinks", "EditChatInviteLink",
+        // spec 005
+        "ChangeStickerSet", "AddFavoriteSticker", "RemoveFavoriteSticker", "RemoveRecentSticker", "AddSavedAnimation", "RemoveSavedAnimation",
+        "SetPollAnswer", "StopPoll", "SetChatMessageAutoDeleteTime", "EditMessageSchedulingState", "SetChatDraftMessage", "AddChatToList",
+        "DeleteChatFolder", "ReorderChatFolders", "SetBirthdate", "SetAccentColor", "SetProfileAccentColor", "SetPersonalChat")
+    private val managed005 = listOf("GetInstalledStickerSets", "GetStickerSet", "GetCustomEmojiStickers", "GetEmojiCategories", "ChangeStickerSet",
+        "GetSavedAnimations", "AddSavedAnimation", "InputMessageSticker", "InputMessageAnimation", "InputMessagePoll", "SetPollAnswer", "StopPoll", "GetPollVoters",
+        "SetChatMessageAutoDeleteTime", "GetChatScheduledMessages", "EditMessageSchedulingState", "SetChatDraftMessage", "AddChatToList",
+        "GetChatFolder", "CreateChatFolder", "EditChatFolder", "DeleteChatFolder", "ReorderChatFolders", "SearchMessages", "GetLinkPreview", "GetMapThumbnailFile", "SetBirthdate")
 
     private fun clientSource(): String {
         val f = listOf(File("src/main/java/org/drinkless/tdlib/Client.kt"), File("libtd/src/main/java/org/drinkless/tdlib/Client.kt"))
@@ -31,6 +39,12 @@ class ClientHonestUiTest {
     fun everyManagementFunctionHasHandler() {
         val src = clientSource()
         for (name in managed) assertTrue("нет обработчика $name", src.contains("is TdApi.$name ->"))
+    }
+
+    @Test
+    fun spec005FunctionsHaveHandlers() {
+        val src = clientSource()
+        for (name in managed005) assertTrue("нет обработчика $name", src.contains("is TdApi.$name ->"))
     }
 
     @Test
