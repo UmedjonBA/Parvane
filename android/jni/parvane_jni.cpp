@@ -27,6 +27,7 @@
 #include <parvane/group_client.h>
 #include <parvane/ids.h>
 #include <parvane/keybackup.h>
+#include <functional>
 #include <parvane/linking.h>
 #include <parvane/storecrypt.h>
 #include <parvane/messenger.h>
@@ -98,6 +99,10 @@ std::string jstr(JNIEnv *env, jstring s) {
     return out;
 }
 
+// P-10 (SEND-1): подписант E2E-отправки (`send:<message_id>:<ciphertext>`).
+std::function<std::string(const std::string &)> e2eSigner() {
+    return [](const std::string &statement) { return parvane::e2e::sign(statement); };
+}
 // ── Журнал истории (как parvane-history-*.jsonl на десктопе) ───────────────
 // Kotlin-стор живёт в памяти, sync идёт от курсора: без журнала после рестарта
 // список чатов пуст, пока не придёт новое сообщение (найдено 10 сен 2026).
@@ -298,7 +303,7 @@ std::string sendSealed1to1Locked(const std::string &to, const json &content) {
     if (!sealed) return {};
     auto copies = json::array();
     for (const auto &c : sealed->copies) copies.push_back(c.toJson());
-    const auto id = g_messenger->sendContent(std::string(), to, sealed->content, std::string(), std::nullopt, std::nullopt, copies);
+    const auto id = g_messenger->sendContent(std::string(), to, sealed->content, std::string(), std::nullopt, std::nullopt, copies, e2eSigner());
     g_seen.insert(id);
     return id;
 }
@@ -498,7 +503,8 @@ std::string sendSealedLocked(const std::string &to, const json &content, const s
     if (isGroupLocked(to)) { // группа: Megolm-конверт, from/token настоящие
         const auto sealed = sealGroupLocked(to, content);
         if (sealed.empty()) throw std::runtime_error("E2E группы не удался");
-        const auto id = g_messenger->sendContent(g_self, to, json::parse(sealed), g_token, replyTo);
+        const auto id = g_messenger->sendContent(g_self, to, json::parse(sealed), g_token, replyTo,
+                                                 std::nullopt, json::array(), e2eSigner());
         g_seen.insert(id);
         decCachePut(id, json{{"from", g_self}, {"content", content}});
         return id;
@@ -522,7 +528,7 @@ std::string sendSealedLocked(const std::string &to, const json &content, const s
     }
     auto copies = json::array();
     for (const auto &c : sealed->copies) copies.push_back(c.toJson());
-    const auto id = g_messenger->sendContent(std::string(), to, sealed->content, std::string(), replyTo, std::nullopt, copies);
+    const auto id = g_messenger->sendContent(std::string(), to, sealed->content, std::string(), replyTo, std::nullopt, copies, e2eSigner());
     g_seen.insert(id);
     decCachePut(id, json{{"from", g_self}, {"content", content}}); // своё: пережить рестарт/пере-синк
     return id;
@@ -1039,7 +1045,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendText(
         for (const auto &c : sealed->copies) copies.push_back(c.toJson());
         // sealed sender: from/token на проводе пустые (gateway уже аутентифицировал)
         id = g_messenger->sendContent(std::string(), toStd, sealed->content, std::string(),
-                                      std::nullopt, std::nullopt, copies);
+                                      std::nullopt, std::nullopt, copies, e2eSigner());
         g_seen.insert(id);
     } catch (const std::exception &e) {
         LOGE("sendText: %s", e.what());

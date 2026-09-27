@@ -503,9 +503,11 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
-  function sendAck(messageId: string, sealedSender: string) {
+  // P-05: ack без `sender` — получатель не раскрывает серверу расшифрованного
+  // отправителя; адрес для delivered сервер берёт из своей БД
+  function sendAck(messageId: string) {
     const store = deps.getStore();
-    const ack = buildWireEvent(store.self, deps.getToken(), { message_id: messageId, sender: sealedSender });
+    const ack = buildWireEvent(store.self, deps.getToken(), { message_id: messageId });
     try {
       deps.getConnection()?.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
     } catch {
@@ -676,7 +678,7 @@ export function createSyncController(deps: SyncDependencies) {
     const { stored, wasSealed, hidden, verify } = unsealStored(rawStored);
     const store = deps.getStore();
     if (hidden) {
-      if (shouldAckIncoming) sendAck(rawStored.id, stored.from);
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     if (verify) {
@@ -686,7 +688,7 @@ export function createSyncController(deps: SyncDependencies) {
         // заявленному адресу. НЕ показываем и НЕ роутим в его чат. Подтверждаем
         // приём (anonymous ack), чтобы сервер не гонял повтор
         deps.log(`ОТКЛОНЕНО: подмена отправителя ${verify.claimedFrom} в ${rawStored.id}`);
-        if (shouldAckIncoming) sendAck(rawStored.id, '');
+        if (shouldAckIncoming) sendAck(rawStored.id);
         return;
       }
       if (verdict === 'unknown') {
@@ -710,7 +712,7 @@ export function createSyncController(deps: SyncDependencies) {
     // Приём подтверждаем, чтобы сервер не гонял повтор
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
       && deps.localState.isBlocked(stored.from)) {
-      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     // Если после unseal контент всё ещё зашифрован — расшифровать не удалось
@@ -720,13 +722,13 @@ export function createSyncController(deps: SyncDependencies) {
       sawUndecryptable = true;
       undecryptableUuids.add(stored.id);
       deps.log(`сообщение ${stored.id} не расшифровано — пропущено`);
-      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     await refreshGroupsIfUnknownChat(stored);
     if (handlePollContent(stored)) {
       if (shouldAckIncoming && stored.from !== store.self) {
-        sendAck(rawStored.id, wasSealed ? stored.from : '');
+        sendAck(rawStored.id);
       }
       return;
     }
@@ -752,7 +754,7 @@ export function createSyncController(deps: SyncDependencies) {
         deps.sendUpdate({ '@type': 'deleteMessages', ids: [existing.id], chatId: existing.chatId });
       }
       if (shouldAckIncoming && stored.from && stored.from !== store.self) {
-        sendAck(rawStored.id, wasSealed ? stored.from : '');
+        sendAck(rawStored.id);
       }
       return;
     }
@@ -763,7 +765,7 @@ export function createSyncController(deps: SyncDependencies) {
     // кэша (shouldAck=false) не переписывает само себя
     if (shouldAckIncoming) persistHistory(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
-    if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id, wasSealed ? stored.from : '');
+    if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id);
 
     if (!isKnown) {
       if (!message.isOutgoing && stored.from) announcePeer(stored.from);

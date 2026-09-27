@@ -103,6 +103,17 @@
       "prekeySignatureRequiredInDeviceList": true,
       "legacyBundleWithoutSigningKeyAccepted": true,
       "allDevicesRejectedVerdict": "unknown"
+    },
+    {
+      "id": "SEND-1",
+      "title": "Отправка E2E подписана ключом отправителя; ack без sender; правка только тем же E2E-видом",
+      "sendStatement": "send:<message_id>:<ciphertext>",
+      "signatureRequiredWhen": "content.sender_signing_key непустой",
+      "selfCopiesRequireProvenKey": true,
+      "syncByKeyScopedToSenderUser": true,
+      "ackCarriesSender": false,
+      "editKeepsKind": true,
+      "gatewayRejectsPlaintextEdit": true
     }
   ]
 }

@@ -866,6 +866,12 @@ pub struct SendPayload {
     /// весь шифртекст в `content`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copies: Vec<MessageDeviceCopy>,
+    /// P-10 (правило SEND-1): Ed25519-подпись строки `send:<message_id>:<ciphertext>`
+    /// ключом `sender_signing_key` из `content`. Без неё sealed/группововое
+    /// сообщение с `sender_signing_key` отклоняется: иначе чужой публичный
+    /// ключ давал бы выборку сообщения в чужом подписанном sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -884,10 +890,10 @@ pub struct InboxPush {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckPayload {
     pub message_id: Uuid,
-    /// Sealed sender: у сообщения нет открытого `from`, поэтому получатель,
-    /// расшифровав, сам указывает адрес отправителя — куда слать delivered.
-    /// Пусто — обычный путь (delivered по messages.from_user).
-    #[serde(default)]
+    /// Устарело (P-05): сервер больше не читает это поле — адрес отправителя
+    /// для delivered берётся из БД (`from_user`, для sealed — `sender_user`
+    /// из токена отправителя). Клиенты шлют пустую строку/не шлют вовсе.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sender: String,
 }
 
@@ -1822,8 +1828,7 @@ mod tests {
                 to: "bob@local".to_string(),
                 content: MessageContent::Text { text: "hi".to_string(), entities: vec![], webpage: None },
                 reply_to: None,
-                copies: vec![],
-            },
+                copies: vec![], signature: None },
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: ParvaneEvent<SendPayload> = serde_json::from_str(&json).unwrap();

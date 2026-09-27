@@ -79,11 +79,20 @@ struct SendPayload {
     json content;                          // обычно textContent(...)
     std::optional<std::string> reply_to;   // id сообщения-родителя
     json copies = json::array();           // per-device копии (MessageDeviceCopy[])
+    // P-10 (SEND-1): Ed25519-подпись `send:<message_id>:<ciphertext>` ключом
+    // sender_signing_key из content — доказательство владения ключом.
+    std::string signature;
+
+    // Строка, которую подписывает отправитель E2E-сообщения.
+    static std::string signedStatement(const std::string &messageId, const std::string &ciphertext) {
+        return "send:" + messageId + ":" + ciphertext;
+    }
 
     json toJson() const {
         json j{{"to", to}, {"content", content}};
         if (reply_to) j["reply_to"] = *reply_to;
         if (copies.is_array() && !copies.empty()) j["copies"] = copies;
+        if (!signature.empty()) j["signature"] = signature;
         return j;
     }
 };
