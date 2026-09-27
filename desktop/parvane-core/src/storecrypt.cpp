@@ -155,9 +155,18 @@ std::string deriveKey(const std::string &secret) {
     return std::string(reinterpret_cast<const char *>(digest), sizeof(digest));
 }
 
+// Бинарный формат: "PVSE1" + '\0' + iv(12) + ct + tag(16). Разделитель '\0'
+// делает формат однозначным: раньше сразу после магии шёл случайный iv, и файл,
+// чей iv начинался с ':', принимался за line-формат/plain (1/256 записей) —
+// при миграции шифровался повторно и терялся. Старые бинарные файлы (без '\0')
+// читаются по-прежнему.
 bool isSealed(const std::string &blob) {
     return blob.size() > kMagicLen && blob.compare(0, kMagicLen, kMagic) == 0
         && blob[kMagicLen] != ':';
+}
+
+bool hasBinarySeparator(const std::string &blob) {
+    return blob.size() > kMagicLen && blob[kMagicLen] == '\0';
 }
 
 std::string seal(const std::string &plain) {
@@ -169,7 +178,7 @@ std::string seal(const std::string &plain) {
     if (!sealed) {
         return plain; // RAND/EVP отказали — не теряем данные, но и не врём о шифровании
     }
-    return std::string(kMagic) + *sealed;
+    return std::string(kMagic) + '\0' + *sealed;
 }
 
 std::optional<std::string> open(const std::string &blob) {
@@ -180,7 +189,7 @@ std::optional<std::string> open(const std::string &blob) {
     if (key.empty()) {
         return std::nullopt;
     }
-    return gcmOpen(key, blob.substr(kMagicLen));
+    return gcmOpen(key, blob.substr(hasBinarySeparator(blob) ? kMagicLen + 1 : kMagicLen));
 }
 
 std::string sealLine(const std::string &plain) {
@@ -301,6 +310,9 @@ int migrateDir(const std::string &dir, const std::string &skipPrefix) {
     }
     int n = 0;
     std::error_code ec;
+    // Сначала собираем список, потом переписываем: rename tmp→файл во время
+    // обхода каталога заставляет readdir пропускать записи (файл оставался plain).
+    std::vector<std::string> files;
     for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
         if (!entry.is_regular_file(ec)) {
             continue;
@@ -312,7 +324,10 @@ int migrateDir(const std::string &dir, const std::string &skipPrefix) {
         if (name.size() > 4 && name.compare(name.size() - 4, 4, ".tmp") == 0) {
             continue;
         }
-        n += migrateFile(entry.path().string());
+        files.push_back(entry.path().string());
+    }
+    for (const auto &path : files) {
+        n += migrateFile(path);
     }
     return n;
 }

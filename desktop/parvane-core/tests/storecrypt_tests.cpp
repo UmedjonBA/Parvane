@@ -87,6 +87,27 @@ int main() {
     check(sc::readLines((dir / "k.jsonl").string()).empty(), "без ключа строки → пусто");
 
     std::filesystem::remove_all(dir);
+    // P-13: бинарный формат однозначен — разделитель '\0' после магии; legacy
+    // (iv сразу после магии) читается; line-формат ("PVSE1:") не путается с бинарным.
+    {
+        using namespace parvane::storecrypt;
+        setKey(deriveKey("sep-key"));
+        const std::string plain = "{\"k\":1}";
+        const auto sealed = seal(plain);
+        check(sealed.size() > 6 && sealed[5] == '\0', "seal: разделитель \\0 после магии");
+        check(isSealed(sealed) && open(sealed).value_or("") == plain, "open: новый формат");
+        const auto legacy = sealed.substr(0, 5) + sealed.substr(6);
+        check(open(legacy).value_or("") == plain, "open: legacy-бинарный без разделителя читается");
+        check(!isSealed("PVSE1:abcd"), "line-формат не считается бинарным sealed");
+        // 300 запечатываний подряд: ни одно не путается с line-форматом (раньше ~1/256)
+        bool allOk = true;
+        for (int i = 0; i < 300; ++i) {
+            const auto s2 = seal(plain);
+            if (!isSealed(s2) || open(s2).value_or("") != plain) allOk = false;
+        }
+        check(allOk, "300 seal/open без ложного plain");
+    }
+
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;
 }
