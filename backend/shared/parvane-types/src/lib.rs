@@ -109,6 +109,8 @@ pub mod topics {
     pub const GROUP_REMOVE_MEMBER: &str = "group.removemember";
     pub const GROUP_SET_ROLE: &str = "group.setrole";
     pub const GROUP_LIST: &str = "group.list";
+    /// P-34: отзыв инвайт-ссылки (owner/admin).
+    pub const GROUP_INVITE_REVOKE: &str = "group.invite.revoke";
     pub const GROUP_INFO: &str = "group.info";
     pub const GROUP_BAN: &str = "group.ban";
     pub const GROUP_UNBAN: &str = "group.unban";
@@ -1538,17 +1540,12 @@ pub struct IceServersResponse {
 // ── группы и каналы ───────────────────────────────────────────────────────────
 
 /// Тип объединения: группа (все участники пишут) или канал (пишут owner/admin).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupKind {
+    #[default]
     Group,
     Channel,
-}
-
-impl Default for GroupKind {
-    fn default() -> Self {
-        GroupKind::Group
-    }
 }
 
 /// Создать группу/канал. Создатель становится owner; `members` — начальные
@@ -1705,6 +1702,21 @@ pub struct GroupMuteRequest {
 pub struct GroupInviteCreateRequest {
     pub token: String,
     pub group_id: String,
+    /// P-34: срок жизни ссылки в секундах (0/None — по умолчанию 7 дней,
+    /// не больше 30 дней).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<i64>,
+    /// P-34: сколько раз ссылкой можно воспользоваться (None — по умолчанию 100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uses: Option<i64>,
+}
+
+/// P-34: отзыв инвайт-ссылки группы (owner/admin).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInviteRevokeRequest {
+    pub token: String,
+    pub group_id: String,
+    pub invite: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

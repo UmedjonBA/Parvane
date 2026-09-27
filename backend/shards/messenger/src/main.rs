@@ -7,7 +7,7 @@ use parvane_types::{
     AckPayload, ClearPayload, ClearedIds, ClearedNotice, DeletePayload, DeliveredPayload, EditPayload, GroupActionResponse,
     GroupCreateRequest, GroupCreateResponse, GroupInfo, GroupInfoRequest, GroupKind,
     GroupDeleteRequest, GroupListRequest, GroupListResponse, GroupMember, GroupMemberRequest,
-    GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest,
+    GroupRenameRequest, GroupSetRoleRequest, GroupMuteRequest, GroupInviteCreateRequest, GroupInviteRevokeRequest,
     GroupInviteCreateResponse, GroupJoinRequest, GroupJoinResponse,
     MessageContent, MessageDeviceCopy,
     ParvaneEvent, PinPayload, ReactPayload, ReadPayload, ReaderEntry, ReadersPayload,
@@ -15,7 +15,7 @@ use parvane_types::{
     SyncRequestPayload, SyncResponsePayload, VerifyRequest, VerifyResponse,
     topics::{
         GROUP_ADD_MEMBER, GROUP_BAN, GROUP_CREATE, GROUP_DELETE, GROUP_INFO,
-        GROUP_INVITE_CREATE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
+        GROUP_INVITE_CREATE, GROUP_INVITE_REVOKE, GROUP_JOIN, GROUP_LIST, GROUP_MUTE, GROUP_REMOVE_MEMBER,
         GROUP_RENAME, GROUP_SET_ROLE, GROUP_UNBAN,
         IDENTITY_VERIFY, MSG_ACK, MSG_CLEAR, MSG_SETNOTIFY, MSG_DELETE, MSG_EDIT, MSG_PIN, MSG_READ, MSG_READERS, MSG_REACT, MSG_SEND,
         MSG_SYNC_REQUEST, msg_inbox,
@@ -45,10 +45,8 @@ async fn main() -> Result<()> {
     let db_path = std::env::var("PARVANE_DB_PATH")
         .unwrap_or_else(|_| "./messenger.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url)
-        .await
-        .context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -81,6 +79,7 @@ async fn main() -> Result<()> {
     let mut gunban_sub = nc.subscribe(GROUP_UNBAN).await?;
     let mut gmute_sub = nc.subscribe(GROUP_MUTE).await?;
     let mut ginvite_sub = nc.subscribe(GROUP_INVITE_CREATE).await?;
+    let mut invite_revoke_sub = nc.subscribe(GROUP_INVITE_REVOKE).await?;
     let mut gjoin_sub = nc.subscribe(GROUP_JOIN).await?;
     let mut grename_sub = nc.subscribe(GROUP_RENAME).await?;
     let mut gdelete_sub = nc.subscribe(GROUP_DELETE).await?;
@@ -149,6 +148,7 @@ async fn main() -> Result<()> {
             Some(msg) = ginvite_sub.next() => {
                 handle_group_invite_create(&nc, &pool, msg).await;
             }
+            Some(msg) = invite_revoke_sub.next() => handle_group_invite_revoke(&nc, &pool, msg).await,
             Some(msg) = gjoin_sub.next() => {
                 handle_group_join(&nc, &pool, msg).await;
             }
@@ -213,6 +213,7 @@ fn validate_sender(jwt_sub: &str, claimed_from: &str) -> Result<()> {
 
 /// Сохранить сообщение. Идемпотентно по `id` (INSERT OR IGNORE).
 /// `content` хранится как JSON `MessageContent`, `kind` — для фильтрации.
+#[cfg(test)]
 async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i64) -> Result<()> {
     store_message_from(pool, ev, now, &ev.from).await
 }
@@ -742,6 +743,56 @@ async fn set_pinned(pool: &SqlitePool, message_id: &str, pin: bool, now: i64) ->
 
 /// Создать группу/канал: создатель — owner, плюс начальные участники. Возвращает
 /// group_id (адрес переписки: сообщения шлют с to_user = group_id).
+/// P-34: потолок участников группы (PARVANE_GROUP_MAX_MEMBERS, по умолчанию 200).
+fn max_group_members() -> i64 {
+    std::env::var("PARVANE_GROUP_MAX_MEMBERS").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(200)
+}
+
+/// P-34: пользователь может запретить добавлять себя в группы без согласия —
+/// поле `group_add: "nobody"` в его блобе настроек (msg.chat.setnotify).
+/// Тогда попасть в группу он может только сам, по инвайт-ссылке.
+async fn allows_group_add(pool: &SqlitePool, member: &str) -> Result<bool> {
+    let blob: Option<String> = sqlx::query_scalar("SELECT notify_json FROM user_settings WHERE user = ?")
+        .bind(member)
+        .fetch_optional(pool)
+        .await?;
+    let Some(blob) = blob else { return Ok(true) };
+    let v: serde_json::Value = serde_json::from_str(&blob).unwrap_or(serde_json::Value::Null);
+    Ok(v.get("group_add").and_then(|g| g.as_str()) != Some("nobody"))
+}
+
+/// P-34: частота групповых действий на актора (в памяти): создание групп и
+/// добавление участников — против спам-групп на N адресов.
+fn group_action_rate_ok(scope: &str, actor: &str, limit: usize) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static L: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    let now = now_unix();
+    let map = L.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() > 50_000 {
+        guard.retain(|_, hits| {
+            hits.retain(|&t| now - t < 60);
+            !hits.is_empty()
+        });
+    }
+    let key = format!("{scope}:{}", actor.chars().take(128).collect::<String>());
+    let hits = guard.entry(key).or_default();
+    hits.retain(|&t| now - t < 60);
+    if hits.len() >= limit {
+        return false;
+    }
+    hits.push(now);
+    true
+}
+
+async fn member_count(pool: &SqlitePool, group_id: &str) -> Result<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM group_members WHERE group_id = ? AND role != 'banned'")
+        .bind(group_id)
+        .fetch_one(pool)
+        .await?)
+}
+
 async fn create_group(
     pool: &SqlitePool,
     name: &str,
@@ -750,6 +801,12 @@ async fn create_group(
     members: &[String],
     now: i64,
 ) -> Result<String> {
+    if members.len() as i64 >= max_group_members() {
+        anyhow::bail!("слишком много участников (максимум {})", max_group_members());
+    }
+    if !group_action_rate_ok("create", creator, 10) {
+        anyhow::bail!("слишком много созданных групп, попробуйте позже");
+    }
     let gid = Uuid::now_v7().to_string();
     let kind_str = match kind {
         GroupKind::Channel => "channel",
@@ -773,6 +830,10 @@ async fn create_group(
     .await?;
     for m in members {
         if m == creator {
+            continue;
+        }
+        // P-34: согласие — кто запретил добавление, в группу не попадает
+        if !allows_group_add(pool, m).await? {
             continue;
         }
         sqlx::query(
@@ -813,6 +874,16 @@ async fn add_group_member(
     }
     if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
         return Ok(false);
+    }
+    // P-34: потолок размера, согласие участника, частота добавлений
+    if member_count(pool, group_id).await? >= max_group_members() {
+        anyhow::bail!("группа переполнена (максимум {})", max_group_members());
+    }
+    if !allows_group_add(pool, member).await? {
+        anyhow::bail!("пользователь запретил добавлять себя в группы");
+    }
+    if !group_action_rate_ok("add", actor, 60) {
+        anyhow::bail!("слишком много добавлений, попробуйте позже");
     }
     sqlx::query(
         "INSERT OR IGNORE INTO group_members (group_id, member, role) VALUES (?, ?, 'member')",
@@ -2171,6 +2242,57 @@ async fn handle_group_mute(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
+/// P-34: сроки/число использований инвайт-ссылок.
+const INVITE_DEFAULT_TTL_SECS: i64 = 7 * 86_400;
+const INVITE_MAX_TTL_SECS: i64 = 30 * 86_400;
+const INVITE_DEFAULT_MAX_USES: i64 = 100;
+const INVITE_MAX_USES: i64 = 10_000;
+
+/// Инвайт годен: не отозван, не истёк, лимит использований не исчерпан.
+/// Возвращает group_id и атомарно учитывает использование.
+async fn consume_invite(pool: &SqlitePool, invite: &str, now: i64) -> Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "UPDATE group_invites SET uses = uses + 1
+          WHERE token = ? AND revoked = 0
+            AND (expires_at = 0 OR expires_at > ?)
+            AND (max_uses = 0 OR uses < max_uses)
+          RETURNING group_id",
+    )
+    .bind(invite)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(g,)| g))
+}
+
+/// P-34: отзыв ссылки owner'ом/admin'ом группы.
+async fn revoke_invite(pool: &SqlitePool, group_id: &str, actor: &str, invite: &str) -> Result<bool> {
+    let role = member_role(pool, group_id, actor).await?;
+    if !matches!(role.as_deref(), Some("owner") | Some("admin")) {
+        return Ok(false);
+    }
+    let res = sqlx::query("UPDATE group_invites SET revoked = 1 WHERE token = ? AND group_id = ?")
+        .bind(invite)
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+async fn handle_group_invite_revoke(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else { return };
+    let resp = async {
+        let req: GroupInviteRevokeRequest =
+            serde_json::from_slice(&msg.payload).context("JSON group.invite.revoke")?;
+        let actor = verify_token(nc, &req.token).await?;
+        let ok = revoke_invite(pool, &req.group_id, &actor, &req.invite).await?;
+        anyhow::Ok(GroupActionResponse { ok, error: if ok { None } else { Some("нет прав или ссылка не найдена".into()) } })
+    }
+    .await
+    .unwrap_or_else(|e| GroupActionResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
 async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else { return };
     let resp = async {
@@ -2186,14 +2308,21 @@ async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: async_n
             });
         }
         let token = Uuid::now_v7().simple().to_string();
+        // P-34: ссылка живёт ограниченно (по умолчанию 7 дней, максимум 30) и
+        // ограниченное число раз (по умолчанию 100) — утёкшая ссылка не вечный вход
+        let ttl = req.ttl_secs.filter(|&t| t > 0).unwrap_or(INVITE_DEFAULT_TTL_SECS).min(INVITE_MAX_TTL_SECS);
+        let max_uses = req.max_uses.filter(|&n| n > 0).unwrap_or(INVITE_DEFAULT_MAX_USES).min(INVITE_MAX_USES);
+        let now = now_unix();
         sqlx::query(
-            "INSERT INTO group_invites (token, group_id, created_by, created_at)
-             VALUES (?, ?, ?, ?)",
+            "INSERT INTO group_invites (token, group_id, created_by, created_at, expires_at, max_uses, uses)
+             VALUES (?, ?, ?, ?, ?, ?, 0)",
         )
         .bind(&token)
         .bind(&req.group_id)
         .bind(&actor)
-        .bind(now_unix())
+        .bind(now)
+        .bind(now + ttl)
+        .bind(max_uses)
         .execute(pool)
         .await?;
         debug!("Инвайт для {} создан ({})", req.group_id, actor);
@@ -2214,13 +2343,21 @@ async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
         let req: GroupJoinRequest =
             serde_json::from_slice(&msg.payload).context("JSON group.join")?;
         let user = verify_token(nc, &req.token).await?;
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT group_id FROM group_invites WHERE token = ? AND revoked = 0",
+        // Уже участник — не тратим использование ссылки
+        let existing: Option<(String,)> = sqlx::query_as(
+            "SELECT i.group_id FROM group_invites i
+              JOIN group_members m ON m.group_id = i.group_id AND m.member = ? AND m.role != 'banned'
+             WHERE i.token = ?",
         )
+        .bind(&user)
         .bind(&req.invite)
         .fetch_optional(pool)
         .await?;
-        let Some((group_id,)) = row else {
+        let row = match existing {
+            Some(r) => Some(r.0),
+            None => consume_invite(pool, &req.invite, now_unix()).await?,
+        };
+        let Some(group_id) = row else {
             return anyhow::Ok(GroupJoinResponse {
                 ok: false,
                 group_id: None,
@@ -2237,6 +2374,14 @@ async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
                 group_id: None,
                 name: None,
                 error: Some("вы забанены в этой группе".into()),
+            });
+        }
+        if member_count(pool, &group_id).await? >= max_group_members() {
+            return anyhow::Ok(GroupJoinResponse {
+                ok: false,
+                group_id: None,
+                name: None,
+                error: Some("группа переполнена".into()),
             });
         }
         sqlx::query(
@@ -3015,6 +3160,47 @@ mod tests {
     }
 
     // ── группы и каналы ──
+
+    // P-34: инвайты — срок, число использований, отзыв; потолок размера; согласие
+    #[tokio::test]
+    async fn invites_expire_are_limited_and_revocable() {
+        let pool = test_pool().await;
+        let gid = create_group(&pool, "g", GroupKind::Group, "owner@local", &[], 1).await.unwrap();
+        sqlx::query("INSERT INTO group_invites (token, group_id, created_by, created_at, expires_at, max_uses, uses) VALUES ('t1', ?, 'owner@local', 1, 100, 2, 0)")
+            .bind(&gid).execute(&pool).await.unwrap();
+        assert_eq!(consume_invite(&pool, "t1", 50).await.unwrap().as_deref(), Some(gid.as_str()));
+        assert_eq!(consume_invite(&pool, "t1", 60).await.unwrap().as_deref(), Some(gid.as_str()));
+        assert!(consume_invite(&pool, "t1", 70).await.unwrap().is_none(), "лимит использований");
+        sqlx::query("INSERT INTO group_invites (token, group_id, created_by, created_at, expires_at, max_uses, uses) VALUES ('t2', ?, 'owner@local', 1, 100, 0, 0)")
+            .bind(&gid).execute(&pool).await.unwrap();
+        assert!(consume_invite(&pool, "t2", 200).await.unwrap().is_none(), "истёкшая ссылка");
+        assert!(consume_invite(&pool, "t2", 90).await.unwrap().is_some());
+        assert!(!revoke_invite(&pool, &gid, "stranger@local", "t2").await.unwrap(), "чужой не отзывает");
+        assert!(revoke_invite(&pool, &gid, "owner@local", "t2").await.unwrap());
+        assert!(consume_invite(&pool, "t2", 91).await.unwrap().is_none(), "отозванная не работает");
+        // Legacy-строки (expires_at/max_uses = 0) остаются рабочими
+        sqlx::query("INSERT INTO group_invites (token, group_id, created_by, created_at) VALUES ('t3', ?, 'owner@local', 1)")
+            .bind(&gid).execute(&pool).await.unwrap();
+        assert!(consume_invite(&pool, "t3", 1_000_000).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn group_add_respects_consent_and_size_cap() {
+        let pool = test_pool().await;
+        let gid = create_group(&pool, "g", GroupKind::Group, "owner@local", &["a@local".into()], 1).await.unwrap();
+        sqlx::query("INSERT INTO user_settings (user, notify_json, updated_at) VALUES ('shy@local', '{\"group_add\":\"nobody\"}', 1)")
+            .execute(&pool).await.unwrap();
+        assert!(!allows_group_add(&pool, "shy@local").await.unwrap());
+        assert!(allows_group_add(&pool, "a@local").await.unwrap());
+        assert!(add_group_member(&pool, &gid, "owner@local", "shy@local").await.is_err(), "без согласия — отказ");
+        assert!(add_group_member(&pool, &gid, "owner@local", "b@local").await.unwrap());
+        let gid2 = create_group(&pool, "g2", GroupKind::Group, "owner@local", &["shy@local".into(), "c@local".into()], 1).await.unwrap();
+        assert!(member_role(&pool, &gid2, "shy@local").await.unwrap().is_none(), "не добавлен при создании");
+        assert!(member_role(&pool, &gid2, "c@local").await.unwrap().is_some());
+        std::env::set_var("PARVANE_GROUP_MAX_MEMBERS", "3");
+        assert!(add_group_member(&pool, &gid, "owner@local", "d@local").await.is_err(), "переполнение (owner,a,b)");
+        std::env::remove_var("PARVANE_GROUP_MAX_MEMBERS");
+    }
 
     #[tokio::test]
     async fn create_group_owner_and_members() {

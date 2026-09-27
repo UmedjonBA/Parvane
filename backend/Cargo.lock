@@ -259,6 +259,7 @@ dependencies = [
  "async-nats",
  "dotenvy",
  "futures",
+ "parvane-db",
  "parvane-types",
  "serde",
  "serde_json",
@@ -279,6 +280,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "hmac",
+ "parvane-db",
  "parvane-types",
  "serde",
  "serde_json",
@@ -381,6 +383,7 @@ dependencies = [
  "base64 0.22.1",
  "dotenvy",
  "futures",
+ "parvane-db",
  "parvane-types",
  "serde",
  "serde_json",
@@ -1488,6 +1491,7 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "lettre",
+ "parvane-db",
  "parvane-types",
  "rand",
  "serde",
@@ -1862,6 +1866,7 @@ dependencies = [
  "dotenvy",
  "ed25519-dalek",
  "futures",
+ "parvane-db",
  "parvane-types",
  "serde",
  "serde_json",
@@ -1927,6 +1932,7 @@ dependencies = [
  "async-nats",
  "dotenvy",
  "futures",
+ "parvane-db",
  "parvane-types",
  "serde",
  "serde_json",
@@ -2123,6 +2129,16 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "parvane-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sqlx",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2403,6 +2419,7 @@ dependencies = [
  "base64 0.22.1",
  "dotenvy",
  "futures",
+ "parvane-db",
  "parvane-types",
  "reqwest",
  "scraper",
@@ -2475,6 +2492,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "p256",
+ "parvane-db",
  "parvane-types",
  "rand",
  "serde",
@@ -2483,6 +2501,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "web-push",
 ]
 

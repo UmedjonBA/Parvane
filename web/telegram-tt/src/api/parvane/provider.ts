@@ -98,6 +98,7 @@ import {
   TOPIC_IDENTITY_SETNAME,
   TOPIC_IDENTITY_TWOFA,
   TOPIC_IDENTITY_PASSWORD_CHANGE,
+  TOPIC_GROUP_INVITE_REVOKE,
   TOPIC_LINK_CHALLENGE,
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
@@ -140,11 +141,26 @@ let token = '';
 
 // Публикует весь блок настроек уведомлений (умолчания + исключения по чатам,
 // включая мут) на messenger — синхронизация между своими устройствами.
+// P-34: «кто может добавлять меня в группы» — часть блоба настроек
+// (messenger читает `group_add`), хранится локально рядом с остальными
+function groupAddPolicyKey(user: string) {
+  return `parvane:group_add:${user}`;
+}
+
+function readGroupAddPolicy(): 'anyone' | 'nobody' {
+  try {
+    return localStorage.getItem(groupAddPolicyKey(store.self)) === 'nobody' ? 'nobody' : 'anyone';
+  } catch {
+    return 'anyone';
+  }
+}
+
 function pushNotifySettings() {
   if (!connection) return;
   const payload = JSON.stringify({
     defaults: localState.loadNotifyDefaults(),
     exceptions: localState.loadNotifyExceptions(),
+    group_add: readGroupAddPolicy(),
   });
   try {
     connection.publish(
@@ -1945,6 +1961,34 @@ const methods = {
 
   // P-07: смена пароля (identity.password.change): JWT + старый пароль; сервер
   // сбрасывает доверие устройств 2FA. Обновляем сохранённый пароль.
+  // P-34: согласие на добавление в группы
+  parvaneGetGroupAddPolicy() {
+    return Promise.resolve({ policy: readGroupAddPolicy() });
+  },
+
+  parvaneSetGroupAddPolicy({ policy }: { policy: 'anyone' | 'nobody' }) {
+    try {
+      localStorage.setItem(groupAddPolicyKey(store.self), policy);
+    } catch {
+      // приватный режим — настройка не переживёт reload
+    }
+    pushNotifySettings();
+    return Promise.resolve(true);
+  },
+
+  // P-34: отзыв инвайт-ссылки группы (owner/admin)
+  async parvaneRevokeGroupInvite({ groupId, invite }: { groupId: string; invite: string }) {
+    if (!connection) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_GROUP_INVITE_REVOKE, JSON.stringify({
+        token, group_id: groupId, invite,
+      }));
+      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+
   // P-39: опциональный PIN хранилища E2E/сессии
   async parvaneGetStoragePin() {
     if (!store.self) return { enabled: false };

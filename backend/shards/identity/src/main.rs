@@ -295,10 +295,8 @@ async fn main() -> Result<()> {
     let db_path = std::env::var("PARVANE_DB_PATH")
         .unwrap_or_else(|_| "./identity.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url)
-        .await
-        .context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -344,76 +342,128 @@ async fn main() -> Result<()> {
         confirm_mode().as_str()
     );
 
+    // 4.5: обработчики в tokio::spawn под семафором — один медленный запрос
+    // (argon2, SMTP, Telegram) больше не стопорит все остальные.
+    let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
     loop {
         tokio::select! {
             Some(msg) = issue_sub.next() => {
-                handle_issue(&nc, &pool, &encoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let encoding = encoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_issue(&nc, &pool, &encoding, msg).await; });
             }
             Some(msg) = register_sub.next() => {
-                handle_register(&nc, &pool, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone();
+                tokio::spawn(async move { let _permit = permit; handle_register(&nc, &pool, msg).await; });
             }
             Some(msg) = email_confirm_sub.next() => {
-                handle_email_confirm(&nc, &pool, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone();
+                tokio::spawn(async move { let _permit = permit; handle_email_confirm(&nc, &pool, msg).await; });
             }
             Some(msg) = server_info_sub.next() => {
-                handle_server_info(&nc, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone();
+                tokio::spawn(async move { let _permit = permit; handle_server_info(&nc, msg).await; });
             }
             Some(msg) = telegram_confirm_sub.next() => {
-                handle_telegram_confirm(&nc, &pool, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone();
+                tokio::spawn(async move { let _permit = permit; handle_telegram_confirm(&nc, &pool, msg).await; });
             }
             Some(msg) = register_status_sub.next() => {
-                handle_register_status(&nc, &pool, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone();
+                tokio::spawn(async move { let _permit = permit; handle_register_status(&nc, &pool, msg).await; });
             }
             Some(msg) = twofa_sub.next() => {
-                handle_twofa(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_twofa(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = password_change_sub.next() => {
-                handle_password_change(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_password_change(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = verify_sub.next() => {
-                handle_verify(&nc, &decoding, &pool, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let decoding = decoding.clone(); let pool = pool.clone();
+                tokio::spawn(async move { let _permit = permit; handle_verify(&nc, &decoding, &pool, msg).await; });
             }
             Some(msg) = search_sub.next() => {
-                handle_search(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_search(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = setname_sub.next() => {
-                handle_setname(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_setname(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = setavatar_sub.next() => {
-                handle_setavatar(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_setavatar(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = setkey_sub.next() => {
-                handle_setkey(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_setkey(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = resolve_sub.next() => {
-                handle_resolve(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_resolve(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = pkpub_sub.next() => {
-                handle_prekeys_publish(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_prekeys_publish(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = pkfetch_sub.next() => {
-                handle_prekeys_fetch(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_prekeys_fetch(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = devlist_sub.next() => {
-                handle_device_list(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_device_list(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = devrevoke_sub.next() => {
-                handle_device_revoke(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_device_revoke(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = linkoffer_sub.next() => {
-                handle_link_offer(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_link_offer(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = linkpoll_sub.next() => {
-                handle_link_poll(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_link_poll(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = linkgrant_sub.next() => {
-                handle_link_grant(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_link_grant(&nc, &pool, &decoding, msg).await; });
             }
             Some(msg) = linkchallenge_sub.next() => {
-                handle_link_challenge(&nc, &pool, &decoding, msg).await;
+                let permit = handlers.clone().acquire_owned().await;
+                let nc = nc.clone(); let pool = pool.clone(); let decoding = decoding.clone();
+                tokio::spawn(async move { let _permit = permit; handle_link_challenge(&nc, &pool, &decoding, msg).await; });
             }
         }
     }
+}
+
+/// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 64).
+fn handler_concurrency() -> usize {
+    std::env::var("PARVANE_HANDLER_CONCURRENCY").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(64)
 }
 
 // ── адреса: домен сервера и правила ников ─────────────────────────────────────
@@ -883,8 +933,20 @@ fn empty_bundle_response(error: Option<String>) -> FetchBundleResponse {
 /// без гонки); для известных (сессия уже есть) one-time не расходуется.
 /// Верхнеуровневые legacy-поля — бандл «primary»-устройства ('' приоритетно,
 /// иначе самое свежее) для одно-девайсных клиентов. Если ключей нет — ok=false.
+#[cfg(test)]
 async fn fetch_bundle(
     pool: &SqlitePool,
+    username: &str,
+    known_devices: &[String],
+) -> Result<FetchBundleResponse> {
+    fetch_bundle_for(pool, "", username, known_devices).await
+}
+
+/// `requester` — кто запрашивает (для кэша повторной выдачи one-time, P-21);
+/// пустой — без кэша (тесты/внутренние вызовы).
+async fn fetch_bundle_for(
+    pool: &SqlitePool,
+    requester: &str,
     username: &str,
     known_devices: &[String],
 ) -> Result<FetchBundleResponse> {
@@ -905,8 +967,14 @@ async fn fetch_bundle(
     for (device_id, signing_key, reg, ik, spid, sp, sig) in rows {
         let otp: Option<(i64, String)> = if known_devices.contains(&device_id) {
             None
+        } else if let Some(cached) = (!requester.is_empty())
+            .then(|| cached_otk(requester, username, &device_id))
+            .flatten()
+        {
+            // P-21: та же пара в окне — та же one-time, новую не сжигаем
+            Some(cached)
         } else {
-            sqlx::query_as(
+            let fresh: Option<(i64, String)> = sqlx::query_as(
                 "UPDATE one_time_prekeys SET consumed = 1
                  WHERE rowid = (SELECT rowid FROM one_time_prekeys
                                 WHERE username = ? AND device_id = ? AND consumed = 0
@@ -917,7 +985,26 @@ async fn fetch_bundle(
             .bind(&device_id)
             .fetch_optional(pool)
             .await
-            .unwrap_or(None)
+            .unwrap_or(None);
+            if let Some((key_id, public_key)) = fresh.as_ref() {
+                if !requester.is_empty() {
+                    remember_otk(requester, username, &device_id, *key_id, public_key);
+                }
+                // P-21: алерт об исчерпании — иначе деградация до signed-prekey-only
+                // происходила бы молча
+                let left: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM one_time_prekeys WHERE username = ? AND device_id = ? AND consumed = 0",
+                )
+                .bind(username)
+                .bind(&device_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                if left <= OTK_LOW_WATERMARK {
+                    warn!("one-time prekeys устройства '{}' пользователя {} на исходе: {}", device_id, username, left);
+                }
+            }
+            fresh
         };
         devices.push(parvane_types::DeviceBundle {
             device_id,
@@ -1407,7 +1494,7 @@ async fn handle_prekeys_fetch(
                         "слишком много запросов ключей, попробуйте позже".into(),
                     ))
                 } else {
-                    fetch_bundle(pool, &req.user, &req.known_devices)
+                    fetch_bundle_for(pool, &requester, &req.user, &req.known_devices)
                         .await
                         .unwrap_or_else(|e| empty_bundle_response(Some(e.to_string())))
                 }
@@ -2366,8 +2453,9 @@ fn rate_ok(user: &str) -> bool {
     }
 
     let map = LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = map.lock().unwrap();
-    let hits = guard.entry(user.to_string()).or_default();
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    evict_stale_buckets(&mut guard, now);
+    let hits = guard.entry(limiter_key(user)).or_default();
     hits.retain(|&t| now - t < 60);
     if hits.len() >= limit {
         return false;
@@ -2387,13 +2475,39 @@ fn window_rate_ok(scope: &str, key: &str, limit: usize) -> bool {
     let now = now_unix();
     let map = MAP.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
-    let hits = guard.entry(format!("{scope}:{key}")).or_default();
+    evict_stale_buckets(&mut guard, now);
+    let hits = guard.entry(format!("{scope}:{}", limiter_key(key))).or_default();
     hits.retain(|&t| now - t < 60);
     if hits.len() >= limit {
         return false;
     }
     hits.push(now);
     true
+}
+
+/// P-37: ключи лимитеров приходят от клиента (логин до 4 МиБ, IP) — ограничиваем
+/// длину: длинные заменяем SHA-256-хэшем, чтобы карта не росла на байты атакующего.
+const LIMITER_KEY_MAX: usize = 128;
+fn limiter_key(key: &str) -> String {
+    if key.len() <= LIMITER_KEY_MAX {
+        return key.to_string();
+    }
+    let digest = Sha256::digest(key.as_bytes());
+    format!("h:{}", B64.encode(digest))
+}
+
+/// P-37: выселение пустых/устаревших корзин, чтобы память лимитеров не росла
+/// на уникальных ключах. Зовётся при каждом обращении, но чистит не чаще
+/// чем при превышении порога записей.
+const LIMITER_MAX_ENTRIES: usize = 50_000;
+fn evict_stale_buckets<K: std::hash::Hash + Eq>(map: &mut std::collections::HashMap<K, Vec<i64>>, now: i64) {
+    if map.len() < LIMITER_MAX_ENTRIES {
+        return;
+    }
+    map.retain(|_, hits| {
+        hits.retain(|&t| now - t < 60);
+        !hits.is_empty()
+    });
 }
 
 /// Dummy argon2-хэш постоянного времени: verify по нему для несуществующего
@@ -2487,17 +2601,65 @@ fn prekey_fetch_rate_ok(requester: &str, target: &str) -> bool {
     use std::sync::{Mutex, OnceLock};
     static L: OnceLock<Mutex<HashMap<(String, String), Vec<i64>>>> = OnceLock::new();
     let limit = env_u64("PARVANE_PREKEY_FETCH_RATE", 20) as usize;
+    // P-21: суточный кап на пару (PARVANE_PREKEY_FETCH_DAILY, по умолчанию 200):
+    // 20/мин без него вычерпывали бы one-time жертвы за минуты.
+    let daily = env_u64("PARVANE_PREKEY_FETCH_DAILY", 200) as usize;
     let now = now_unix();
     let map = L.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
-    let hits = guard.entry((requester.to_string(), target.to_string())).or_default();
-    hits.retain(|&t| now - t < 60);
-    if hits.len() >= limit {
+    if guard.len() >= LIMITER_MAX_ENTRIES {
+        guard.retain(|_, hits| {
+            hits.retain(|&t| now - t < 86_400);
+            !hits.is_empty()
+        });
+    }
+    let hits = guard.entry((limiter_key(requester), limiter_key(target))).or_default();
+    hits.retain(|&t| now - t < 86_400);
+    if hits.len() >= daily || hits.iter().filter(|&&t| now - t < 60).count() >= limit {
         return false;
     }
     hits.push(now);
     true
 }
+
+/// P-21: повторный фетч той же парой (requester → устройство цели) в течение
+/// окна возвращает УЖЕ выданную one-time — иначе каждый повтор сжигал бы новую.
+/// Окно PARVANE_PREKEY_REUSE_SECS (по умолчанию 600 с).
+/// (requester, target, device_id) → (key_id, public_key, ts)
+type OtkReuseMap = std::collections::HashMap<(String, String, String), (i64, String, i64)>;
+fn otk_reuse_cache() -> &'static std::sync::Mutex<OtkReuseMap> {
+    use std::sync::{Mutex, OnceLock};
+    static C: OnceLock<Mutex<OtkReuseMap>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(OtkReuseMap::new()))
+}
+
+fn otk_reuse_window() -> i64 {
+    env_u64("PARVANE_PREKEY_REUSE_SECS", 600) as i64
+}
+
+fn cached_otk(requester: &str, target: &str, device_id: &str) -> Option<(i64, String)> {
+    let now = now_unix();
+    let mut guard = otk_reuse_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() >= LIMITER_MAX_ENTRIES {
+        let window = otk_reuse_window();
+        guard.retain(|_, (_, _, ts)| now - *ts < window);
+    }
+    guard
+        .get(&(requester.to_string(), target.to_string(), device_id.to_string()))
+        .filter(|(_, _, ts)| now - ts < otk_reuse_window())
+        .map(|(id, key, _)| (*id, key.clone()))
+}
+
+fn remember_otk(requester: &str, target: &str, device_id: &str, key_id: i64, public_key: &str) {
+    let mut guard = otk_reuse_cache().lock().unwrap_or_else(|e| e.into_inner());
+    guard.insert(
+        (requester.to_string(), target.to_string(), device_id.to_string()),
+        (key_id, public_key.to_string(), now_unix()),
+    );
+}
+
+/// P-21: предупреждение об исчерпании one-time у устройства (алерт оператору).
+const OTK_LOW_WATERMARK: i64 = 5;
 
 async fn handle_verify(
     nc: &Client,
@@ -3681,6 +3843,43 @@ mod tests {
         let (stored,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
             .bind("alice@local").fetch_one(&pool).await.unwrap();
         assert!(stored.is_empty());
+    }
+
+    // P-37: длинные ключи лимитеров сворачиваются в хэш, выселение работает
+    #[test]
+    fn limiter_keys_are_bounded_and_buckets_evicted() {
+        let long = "x".repeat(10_000);
+        let k = limiter_key(&long);
+        assert!(k.len() < 80 && k.starts_with("h:"));
+        assert_eq!(limiter_key("short"), "short");
+        let mut map: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+        for i in 0..LIMITER_MAX_ENTRIES + 10 {
+            map.insert(format!("k{i}"), vec![0]);
+        }
+        evict_stale_buckets(&mut map, 1_000_000);
+        assert!(map.is_empty(), "устаревшие корзины выселены");
+        // Уникальные длинные логины не растят карту на их размер
+        for i in 0..5 {
+            assert!(window_rate_ok("p37", &format!("{}{}", "y".repeat(5_000), i), 3));
+        }
+    }
+
+    // P-21: повторный фетч той же парой в окне отдаёт ту же one-time
+    #[tokio::test]
+    async fn repeated_prekey_fetch_reuses_one_time_key() {
+        let pool = test_pool().await;
+        let (_enc, _dec) = make_keys();
+        insert_user(&pool, "reuse@local").await;
+        store_prekeys(&pool, "reuse@local", &sample_publish_device("dev-r", 1, &[(1, "o1"), (2, "o2"), (3, "o3")])).await.unwrap();
+        let a = fetch_bundle_for(&pool, "asker@local", "reuse@local", &[]).await.unwrap();
+        let b = fetch_bundle_for(&pool, "asker@local", "reuse@local", &[]).await.unwrap();
+        assert_eq!(a.one_time_id, b.one_time_id, "тот же requester → та же one-time");
+        let (left,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM one_time_prekeys WHERE username = 'reuse@local' AND consumed = 0",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(left, 2, "сожжена одна, не две");
+        let c = fetch_bundle_for(&pool, "other@local", "reuse@local", &[]).await.unwrap();
+        assert_ne!(c.one_time_id, a.one_time_id, "другой requester — другая one-time");
     }
 
     // P-19: LIKE-экранирование и минимальная длина запроса

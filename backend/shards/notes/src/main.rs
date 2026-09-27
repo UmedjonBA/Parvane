@@ -32,8 +32,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./notes.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url).await.context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
