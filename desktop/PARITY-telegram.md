@@ -544,6 +544,14 @@ MTProto, а завершать локально (по образцу `ChatFilter
    «Слишком много действий» на `rate_limited` от gateway
    (`GatewayTransport::setUnaddressedErrorHandler`). e2e `verify_security_keys.sh`.
 
+Android, spec 005 (2026-09-27): форк Telegram X доведён до паритета с web/desktop по
+стикерам/GIF/кастом-эмодзи (общий кодек PVPK1 `parvane-core/src/pack_archive.cpp`),
+опросам (оба формата полей, `parvane-core/include/parvane/poll.h`), TTL/отложенным/
+черновикам/архиву/папкам, превью ссылок, карте (MAP-1), профилю и поиску; правила
+conformance закрыты для всех трёх клиентов. Десктоп попутно: `AUTOSTICKER` берёт стикер
+только из локальных стикер-паков, лог профиля несёт `birthday=`, читатели опросов
+принимают web-формат.
+
 Смежное (не десктоп): всё закоммичено 7–8 сен 2026 (веб/бэкенд/десктоп/Android);
 Android приостановлен по решению пользователя — состояние и как возобновить в
 `android/BUILD-android.md`.

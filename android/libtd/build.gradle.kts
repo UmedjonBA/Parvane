@@ -4,6 +4,8 @@ plugins {
 }
 
 android {
+    // JVM-тесты шва зовут android.util.Log (сервисы стикеров и т.п.) — заглушки вместо «not mocked»
+    testOptions { unitTests.isReturnDefaultValues = true }
     namespace = "org.parvane.libtd"
     compileSdk = 34
     ndkVersion = "27.2.12479018"

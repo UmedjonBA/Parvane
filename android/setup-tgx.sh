@@ -27,8 +27,8 @@ echo "== оверлей tdlib: наш шов вместо TDLib =="
 TDLIB="$TGX/tdlib/src/main/java/org/drinkless/tdlib"
 mkdir -p "$TDLIB" "$TGX/tdlib/src/main/java/org/parvane/core"
 rm -f "$TDLIB/Client.java"
-cp "$ROOT/libtd/src/main/java/org/drinkless/tdlib/Client.kt" "$TDLIB/"
-cp "$ROOT/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt" "$TDLIB/"
+# все Kotlin-файлы шва (spec 005 добавил Stickers/PackIndex/PollStore/… — раньше копировались два)
+cp "$ROOT/libtd/src/main/java/org/drinkless/tdlib/"*.kt "$TDLIB/"
 cp "$ROOT/libtd/src/main/java/org/parvane/core/ParvaneCore.kt" "$TGX/tdlib/src/main/java/org/parvane/core/"
 # TdApi: у бандла X тот же коммит TDLib (tdlib/version.txt); если версии разойдутся —
 # перегенерировать наш (android/BUILD-android.md) и подложить сюда
@@ -81,13 +81,25 @@ DR="$TGX/app/src/main/java/org/thunderdog/challegram/navigation/DrawerController
 # боковое меню: «Пригласить друзей», «Помощь» (Telegram FAQ), «Звонки» (на Android пока нет), «Добавить аккаунт», прокси
 perl -0pi -e 's/^\s*items\.add\(new ListItem\(ListItem\.TYPE_DRAWER_ITEM, R\.id\.btn_(invite|help|addAccount), [^\n]*\n//mg; s/^\s*items\.add\(new ListItem\(ListItem\.TYPE_DRAWER_ITEM, R\.id\.btn_calls, [^\n]*\n//mg; s/^\s*items\.add\(proxyItem\);\n//mg' "$DR"
 SC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/SettingsController.java"
+# файл восстанавливается из git перед патчами: все правки к нему — ниже в этом скрипте,
+# иначе блок «код-пароль/устройства/ключи» дублировался на каждый прогон (27 сен 2026: 14 строк вместо 2)
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/ui/SettingsController.java
 # настройки: строки, за которыми Telegram-сервисы (вопрос, FAQ, политика, обновления, бета, исходники),
-# и разделы без логики в шве (стикеры, папки, устройства, приватность, телефон) — вместе с разделителем перед ними
-perl -0pi -e 's/^\s*items\.add\(new ListItem\(ListItem\.TYPE_SEPARATOR\)\);\n(?=\s*items\.add\(new ListItem\([^\n]*R\.id\.btn_(help|faq|privacyPolicy|checkUpdates|subscribeToBeta|sourceCode|sourceCodeChanges|stickerSettingsAndEmoji|chatFolders|devices|privacySettings|phone)\b)//mg; s/^\s*items\.add\(new ListItem\([^\n]*R\.id\.btn_(help|faq|privacyPolicy|checkUpdates|subscribeToBeta|sourceCode|sourceCodeChanges|stickerSettingsAndEmoji|chatFolders|devices|privacySettings|phone)\b[^\n]*\n(\s*\.set[^\n]*\n)*//mg' "$SC"
+# и разделы без логики в шве (устройства, приватность) — вместе с разделителем перед ними;
+# стикеры/эмодзи, папки и телефон остаются (spec 005)
+perl -0pi -e 's/^\s*items\.add\(new ListItem\(ListItem\.TYPE_SEPARATOR\)\);\n(?=\s*items\.add\(new ListItem\([^\n]*R\.id\.btn_(help|faq|privacyPolicy|checkUpdates|subscribeToBeta|sourceCode|sourceCodeChanges|devices|privacySettings)\b)//mg; s/^\s*items\.add\(new ListItem\([^\n]*R\.id\.btn_(help|faq|privacyPolicy|checkUpdates|subscribeToBeta|sourceCode|sourceCodeChanges|devices|privacySettings)\b[^\n]*\n(\s*\.set[^\n]*\n)*//mg' "$SC"
 grep -c "btn_faq\|btn_privacyPolicy" "$SC" | sed 's/^/   осталось упоминаний faq\/policy в настройках: /'
 ML="$TGX/app/src/main/java/org/thunderdog/challegram/component/attach/MediaLayout.java"
-# меню вложений: пятая вкладка «Опрос»/«Инлайн-бот» (опросов в шве пока нет, ботов не будет)
-perl -0pi -e 's/^\s*needVote \?\n\s*new MediaBottomBar\.BarItem\([^\n]*CreatePoll[^\n]*\n\s*new MediaBottomBar\.BarItem\([^\n]*InlineBot[^\n]*\)(,)?\n//mg' "$ML"
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/component/attach/MediaLayout.java
+# меню вложений (spec 005): пятая вкладка — всегда «Опрос» (инлайн-ботов не будет); без права
+# на опросы (needVote=false, GROUP-2) тап ничего не открывает
+perl -0pi -e 's/new MediaBottomBar\.BarItem\(R\.drawable\.deproko_baseline_bots_24, R\.string\.InlineBot, ColorId\.attachInlineBot\)/new MediaBottomBar.BarItem(R.drawable.baseline_poll_24, R.string.CreatePoll, ColorId.attachInlineBot)/g; s/(      case 4: \{\n        if \(needVote\) \{.*?\n          return false;\n        \}\n)(        break;)/$1        return false; \/\/ Parvane: без права на опросы вкладка не открывает инлайн-ботов/s' "$ML"
+# Parvane: опросы разрешены и в личных чатах (web/desktop шлют их 1-на-1) — у Telegram только с ботами;
+# без этого вкладка «Опрос» в меню вложений молчит (needVote=false), 27 сен 2026
+TDL="$TGX/app/src/main/java/org/thunderdog/challegram/telegram/Tdlib.java"
+perl -0pi -e 's/return \/\*isSelfChat\(chatId\) \|\|\*\/ isBotChat\(chatId\);/return !isSelfChat(chatId); \/\/ Parvane: опросы в личных чатах/' "$TDL"
+echo "   polls in private chats: $(grep -c 'Parvane: опросы в личных чатах' "$TDL") (ожидается 1)"
+echo "   attach: poll tabs $(grep -c 'R.string.CreatePoll' "$ML") (ожидается 4), inline-bot $(grep -c 'R.string.InlineBot' "$ML") (ожидается 0)"
 PC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/ProfileController.java"
 # профиль, меню «…»: «Секретный чат» (у нас всё E2E), «Приватность» (экрана нет)
 perl -0pi -e 's/^\s*if \(mode == Mode\.USER && user\.id != myUserId && !TD\.isBot\(user\)\) \{\n\s*ids\.append\(R\.id\.btn_newSecretChat\);\n\s*strings\.append\(R\.string\.StartEncryptedChat\);\n\s*\}\n//m; s/^\s*if \(!tdlib\.chatFullyBlocked\((?:chatId|getChatId\(\))\)\) \{\n\s*ids\.append\(R\.id\.more_btn_privacy\);\n\s*strings\.append\(R\.string\.EditPrivacy\);\n\s*\}\n//mg' "$PC"
@@ -117,6 +129,11 @@ SS="$TGX/app/src/main/java/org/thunderdog/challegram/ui/SettingsSessionsControll
 # экран устройств: «Scan QR» (вход по QR — MTProto) и «завершать старые сессии через…» (identity этого не умеет)
 perl -0pi -e 's/if \(tdlib\.allowQrLoginCamera\(\)\) \{\n\s*items\.add\(new ListItem\(ListItem\.TYPE_VALUED_SETTING_COMPACT, R\.id\.btn_qrLogin,[^\n]*\n\s*items\.add\(new ListItem\(ListItem\.TYPE_SEPARATOR_FULL\)\);\n\s*\}\n//; s/^\s*items\.add\(new ListItem\(ListItem\.TYPE_VALUED_SETTING, R\.id\.btn_sessionTtl, 0, R\.string\.SessionTerminateTtl\)\);\n\s*items\.add\(new ListItem\(ListItem\.TYPE_SHADOW_BOTTOM\)\);\n//m' "$SS"
 echo "   sessions: qr/ttl rows left: $(grep -c 'R.id.btn_qrLogin,\|R.id.btn_sessionTtl, 0' "$SS")"
+# Телефон профиля (spec 005): тап по строке — нативный диалог ввода X (openInputAlert),
+# значение уходит в шов SetOption("x_parvane_phone") → identity.user.setname phone
+# (как простой бокс на desktop); пусто — убрать номер
+perl -0pi -e 's/(  public void onClick \(View v\) \{\n    cancelSupportOpen\(\);\n)/$1    if (v.getId() == R.id.btn_phone) { \/\/ Parvane: телефон без SMS-потока MTProto\n      openInputAlert(Lang.getString(R.string.PhoneNumber), Lang.getString(R.string.Phone), R.string.Save, R.string.Cancel, myPhone, (inputView, result) -> {\n        final String phone = result == null ? "" : result.trim();\n        tdlib.client().send(new TdApi.SetOption("x_parvane_phone", new TdApi.OptionValueString(phone)), ignored -> {});\n        myPhone = phone; originalPhoneNumber = phone;\n        runOnUiThreadOptional(() -> adapter.updateValuedSettingById(R.id.btn_phone));\n        return true;\n      }, true);\n      return;\n    }\n/' "$SC"
+echo "   settings phone dialog: $(grep -c 'x_parvane_phone' "$SC") (ожидается 1), phone row: $(grep -c 'R.id.btn_phone, ' "$SC")"
 echo "   settings parvane rows: $(grep -c 'btn_parvaneKeysExport' "$SC") (ожидается 2)"
 echo "   attach InlineBot: $(grep -c 'R.string.InlineBot' "$ML"), profile newSecretChat/privacy: $(grep -c 'btn_newSecretChat\|more_btn_privacy' "$PC")"
 

@@ -88,7 +88,7 @@ xlog "сообщение [0-9a-f-]{36} → чат -[0-9]+ \(вх\)" 90 && ok "GR
 
 sleep 3; ad exec-out screencap -p > "$OUT/01-list.png"
 ad logcat -d -v time > "$OUT/logcat.txt"
-grep -q "AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"
+grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"
 stop_pid "$BP"; stop_pid "$CP"
 echo "GROUP_MANAGE_E2E_DONE rc=$RC"
 finish "TGX GROUP MANAGE"

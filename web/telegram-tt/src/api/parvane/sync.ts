@@ -7,6 +7,7 @@ import { MAIN_THREAD_ID } from '../types';
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { isContentAllowedForMember } from './groups';
+import { readPollFields } from './polls';
 import { buildWebPage, type ParvaneStore } from './store';
 import {
   buildWireEvent,
@@ -324,17 +325,19 @@ export function createSyncController(deps: SyncDependencies) {
         chatAddress,
         store.isGroupAddress(chatAddress) ? 'group' : 'user',
       );
+      // spec 005: оба набора имён (web options/is_*, desktop answers/public/…)
+      const fields = readPollFields(content);
       deps.polls.register(
         stored.id,
         chatId,
-        content.question || '',
-        (content.options || []).map(String),
+        fields.question,
+        fields.options,
         {
-          isPublic: Boolean(content.is_public),
-          isMultiple: Boolean(content.is_multiple),
-          isQuiz: Boolean(content.is_quiz),
-          correct: content.correct,
-          solution: content.solution,
+          isPublic: fields.isPublic,
+          isMultiple: fields.isMultiple,
+          isQuiz: fields.isQuiz,
+          correct: fields.correct,
+          solution: fields.solution,
         },
       );
       return false;

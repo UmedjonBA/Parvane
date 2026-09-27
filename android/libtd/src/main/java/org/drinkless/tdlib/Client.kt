@@ -67,6 +67,12 @@ class Client private constructor(
         @Volatile
         var gatewayUrl: String = "wss://parvane.duckdns.org:20443/ws"
 
+        // Кэш поля chatId по классу апдейта — в companion: postUpdate зовётся из init{} раньше
+        // инициализации полей экземпляра (NPE при первом create, 27 сен 2026). ConcurrentHashMap не
+        // хранит null → для классов без chatId лежит noChatId.
+        private val chatIdFields = ConcurrentHashMap<Class<*>, Any>()
+        private val noChatId = Any()
+
         @JvmStatic
         fun create(
             updateHandler: ResultHandler?,
@@ -173,6 +179,8 @@ class Client private constructor(
     // Фиксированный пул: cached-пул плодил по потоку на каждый резолв/скачивание (память на 16 ГБ-эмуляторе и телефоне)
     private val io = Executors.newFixedThreadPool(4) { r -> Thread(r, "parvane-io") }
     private val store = ParvaneStore()
+    // spec 005: стикеры/GIF/кастом-эмодзи (панель X) — каталог ядра известен после SetTdlibParameters
+    private val stickers by lazy { Stickers(store, java.io.File(boundDir), ::postUpdate) }
 
     @Volatile private var authState: TdApi.AuthorizationState = TdApi.AuthorizationStateWaitTdlibParameters()
     @Volatile private var pendingNick: String = ""
@@ -212,10 +220,19 @@ class Client private constructor(
 
     private fun postUpdate(update: TdApi.Update) {
         val h = updateHandler ?: run { Log.w(TAG, "апдейт ${update.javaClass.simpleName} до подписки X — потерян"); return }
+        // X (Config.CRASH_CHAT_NOT_FOUND в debug) падает на апдейте по чату, которого не получал updateNewChat:
+        // такие апдейты пропускаем с логом — чат придёт с реплеем журнала, а состояние он несёт в себе
+        if (update !is TdApi.UpdateNewChat) chatIdOf(update)?.let { cid ->
+            if (!announcedChats.contains(cid)) { Log.w(TAG, "апдейт ${update.javaClass.simpleName} для необъявленного чата $cid — пропущен"); return }
+        }
         if (update is TdApi.UpdateNewChat || update is TdApi.UpdateChatLastMessage || update is TdApi.UpdateChatPosition
             // группы (spec 003/004): маркеры для tgx_group_manage_flow.sh
             || update is TdApi.UpdateChatPermissions || update is TdApi.UpdateBasicGroupFullInfo
-            || update is TdApi.UpdateChatPendingJoinRequests || update is TdApi.UpdateChatPhoto)
+            || update is TdApi.UpdateChatPendingJoinRequests || update is TdApi.UpdateChatPhoto
+            // spec 005: опросы/TTL/отложенные/черновики/архив/папки/соединение
+            || update is TdApi.UpdateMessageContent || update is TdApi.UpdateDeleteMessages || update is TdApi.UpdateChatMessageAutoDeleteTime
+            || update is TdApi.UpdateChatHasScheduledMessages || update is TdApi.UpdateChatDraftMessage || update is TdApi.UpdateChatFolders
+            || update is TdApi.UpdateConnectionState || update is TdApi.UpdateInstalledStickerSets)
             Log.d(TAG, "→ X ${update.javaClass.simpleName}")
         handlerThread.execute {
             try {
@@ -224,6 +241,12 @@ class Client private constructor(
                 exceptionHandler?.onException(e)
             }
         }
+    }
+
+    /** chatId апдейта (поле `chatId` бандла TdApi у UpdateChat… и UpdateMessage…), иначе null. */
+    private fun chatIdOf(update: TdApi.Update): Long? {
+        val f = chatIdFields.getOrPut(update.javaClass) { try { update.javaClass.getField("chatId") } catch (e: NoSuchFieldException) { noChatId } }
+        return (f as? java.lang.reflect.Field)?.let { try { it.getLong(update) } catch (e: Throwable) { null } }
     }
 
     private fun setAuth(state: TdApi.AuthorizationState) {
@@ -236,8 +259,9 @@ class Client private constructor(
         is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream, is TdApi.SetLogTagVerbosityLevel,
         is TdApi.AddLogMessage -> TdApi.Ok()
         is TdApi.GetOption -> optionValue(f.name)
-        is TdApi.SetOption -> { // language_pack_id — единственная опция с состоянием (выбор языка в Settings → Language)
+        is TdApi.SetOption -> { // language_pack_id — выбор языка; x_parvane_phone — телефон профиля (диалог оверлея, spec 005)
             if (f.name == "language_pack_id") languagePackId = (f.value as? TdApi.OptionValueString)?.value ?: ""
+            if (f.name == "x_parvane_phone") setProfile(JSONObject().put("phone", ((f.value as? TdApi.OptionValueString)?.value ?: "").trim().take(32)))
             TdApi.Ok()
         }
         is TdApi.GetLocalizationTargetInfo -> TdApi.LocalizationTargetInfo(arrayOf(ruPackInfo()))
@@ -314,7 +338,6 @@ class Client private constructor(
         // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
         is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
             .let { TdApi.MessageSenders(it.size, it.toTypedArray()) }
-        is TdApi.ClearAllDraftMessages -> TdApi.Ok()
         is TdApi.GetPasswordState -> TdApi.PasswordState(false, "", false, false, null, "", 0)
         is TdApi.GetAccountTtl -> TdApi.AccountTtl(365)
         // Без этого X считает, что сообщение нельзя переслать/закрепить/ответить (кнопок в панели выбора нет)
@@ -459,7 +482,8 @@ class Client private constructor(
             val member = store.addressOf(f.userId) ?: return@withGroup TdApi.Error(404, "user not found")
             groupResult(ParvaneCore.groupRequestDecide(g.gid, member, f.approve))
         }
-        is TdApi.GetChat -> store.chatById(f.chatId)?.copyForUi() ?: TdApi.Error(404, "chat not found")
+        // Как TDLib: чат, которого X ещё не получал, сначала объявляется updateNewChat (иначе апдейты по нему отбрасываются в postUpdate)
+        is TdApi.GetChat -> store.chatById(f.chatId)?.let { c -> if (announcedChats.add(c.id)) { postUpdate(TdApi.UpdateNewChat(c.copyForUi())); announceScheduled(c.id) }; c.copyForUi() } ?: TdApi.Error(404, "chat not found")
         is TdApi.LoadChats -> {
             // Первый запрос списка = X готов принимать чаты: реплей журнала истории
             // (апдейты встанут в очередь ДО ответа 404). Все чаты объявляются
@@ -486,7 +510,13 @@ class Client private constructor(
         }
         is TdApi.EditMessageText -> editMessage(f)
         is TdApi.DeleteMessages -> {
-            val uuids = f.messageIds.toList().mapNotNull { id -> store.uuidOf(f.chatId, id) }
+            val sched = f.messageIds.filter { scheduledQueue.isScheduledId(it) }
+            if (sched.isNotEmpty()) { // spec 005: удаление отложенных — из очереди
+                sched.forEach { scheduledQueue.remove(it); scheduledMsgs.remove(it) }
+                postUpdate(TdApi.UpdateDeleteMessages(f.chatId, sched.toLongArray(), true, false))
+                if (scheduledQueue.forChat(f.chatId).isEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(f.chatId, false))
+            }
+            val uuids = f.messageIds.filter { !scheduledQueue.isScheduledId(it) }.mapNotNull { id -> store.uuidOf(f.chatId, id) }
             uuids.forEach { ParvaneCore.delete(it) }
             store.removeMessages(uuids).forEach { postUpdate(it) }
             TdApi.Ok()
@@ -546,8 +576,7 @@ class Client private constructor(
         is TdApi.SearchCallMessages -> TdApi.FoundMessages(0, arrayOf(), "")
         is TdApi.GetCountryCode -> TdApi.Text("")
         is TdApi.GetActiveSessions -> TdApi.Sessions(arrayOf(), 0)
-        is TdApi.SearchBackground, is TdApi.SearchStickerSet, is TdApi.GetEmojiReaction,
-        is TdApi.GetMapThumbnailFile -> TdApi.Error(404, "Not Found") // карта в пузыре гео — как на десктопе, нет
+        is TdApi.SearchBackground, is TdApi.GetEmojiReaction -> TdApi.Error(404, "Not Found")
         // Открытый чат: X спрашивает счётчики/локации/админов/полный профиль
         is TdApi.GetChatMessageCount -> TdApi.Count(store.history(f.chatId, 0, 0, Int.MAX_VALUE).messages.count { matchesFilter(it, f.filter) })
         is TdApi.SearchChatMessages -> { // локальный поиск по истории чата: текст + фильтр (медиа/файлы/ссылки/закреп — вкладки профиля)
@@ -559,27 +588,147 @@ class Client private constructor(
             TdApi.FoundChatMessages(all.size, found, found.lastOrNull()?.id ?: 0L)
         }
         is TdApi.SearchChatRecentLocationMessages -> TdApi.Messages(0, arrayOf())
+        // spec 005 / история 4: папки (локальные), глобальный поиск, превью ссылок, карта, поля профиля
+        is TdApi.GetChatFolder -> store.local?.folders?.get(f.chatFolderId)?.toTd() ?: TdApi.Error(404, "folder not found")
+        is TdApi.CreateChatFolder -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            val fo = l.folders.create(f.folder)
+            Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
+            postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            fo.toInfo()
+        }
+        is TdApi.EditChatFolder -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            val fo = l.folders.edit(f.chatFolderId, f.folder) ?: return@run TdApi.Error(404, "folder not found")
+            Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
+            postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            fo.toInfo()
+        }
+        is TdApi.DeleteChatFolder -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            if (!l.folders.delete(f.chatFolderId)) return@run TdApi.Error(404, "folder not found")
+            for (id in store.chatIds()) postUpdate(TdApi.UpdateChatPosition(id, TdApi.ChatPosition(TdApi.ChatListFolder(f.chatFolderId), 0L, false, null)))
+            refreshFolderPositions()
+            Log.i(TAG, "папка ${f.chatFolderId} удалена")
+            postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            TdApi.Ok()
+        }
+        is TdApi.ReorderChatFolders -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            l.folders.reorder(f.chatFolderIds ?: IntArray(0), f.mainChatListPosition)
+            postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            TdApi.Ok()
+        }
+        is TdApi.GetRecommendedChatFolders -> TdApi.RecommendedChatFolders(arrayOf())
+        is TdApi.SearchMessages -> { // локально по всем чатам (топика поиска нет — как web/desktop)
+            val q = (f.query ?: "").trim().lowercase()
+            val all = store.chatIds().flatMap { store.history(it, 0, 0, Int.MAX_VALUE).messages.toList() }
+                .filter { m -> matchesFilter(m, f.filter) && (q.isEmpty() || messageText(m).lowercase().contains(q)) }
+                .sortedByDescending { it.date }
+            val from = (f.offset ?: "").toIntOrNull() ?: 0
+            val page = all.drop(from).take(if (f.limit > 0) f.limit else 50)
+            Log.i(TAG, "поиск «$q»: ${all.size} совпадений")
+            TdApi.FoundMessages(all.size, page.toTypedArray(), if (from + page.size < all.size) (from + page.size).toString() else "")
+        }
+        is TdApi.GetLinkPreview -> run { // только через шард preview (как web/desktop); отключено → 404
+            if (f.linkPreviewOptions?.isDisabled == true) return@run TdApi.Error(404, "link preview disabled")
+            val url = f.linkPreviewOptions?.url?.takeIf { it.isNotEmpty() } ?: Entities.firstUrl(f.text?.text, f.text?.entities) ?: return@run TdApi.Error(404, "no url")
+            val wp = ParvaneCore.previewFetch(url, 1500)
+            Log.i(TAG, "превью $url → ${wp.optString("site_name")}")
+            LinkPreviews.linkPreviewOf(wp) ?: TdApi.Error(404, "no preview")
+        }
+        is TdApi.GetMapThumbnailFile -> mapThumbnail(f.location, f.zoom, f.width, f.height, f.scale)
+        is TdApi.SetBirthdate -> { // identity.user.setname birthday=YYYY-MM-DD, пусто — убрать
+            val b = f.birthdate
+            val iso = if (b == null || b.month == 0 || b.day == 0) "" else "%04d-%02d-%02d".format(java.util.Locale.ROOT, if (b.year > 0) b.year else 1900, b.month, b.day)
+            val r = setProfile(JSONObject().put("birthday", iso))
+            if (r is TdApi.Ok) postUpdate(TdApi.UpdateUserFullInfo(store.idOf(store.self), userFullInfo(store.self)))
+            r
+        }
+        // spec 005 / история 3: TTL чата, отложенные, черновики, архив — локально (как web/desktop)
+        is TdApi.SetChatMessageAutoDeleteTime -> run {
+            val address = store.addressOf(f.chatId) ?: return@run TdApi.Error(404, "chat not found")
+            store.local?.setTtl(address, f.messageAutoDeleteTime)
+            store.chatById(f.chatId)?.messageAutoDeleteTime = f.messageAutoDeleteTime
+            Log.i(TAG, "ttl $address = ${f.messageAutoDeleteTime}")
+            postUpdate(TdApi.UpdateChatMessageAutoDeleteTime(f.chatId, f.messageAutoDeleteTime))
+            TdApi.Ok()
+        }
+        is TdApi.GetChatScheduledMessages -> TdApi.Messages(scheduledQueue.forChat(f.chatId).size, scheduledQueue.forChat(f.chatId).mapNotNull { scheduledMsgs[it.id] }.toTypedArray())
+        is TdApi.EditMessageSchedulingState -> run {
+            val item = scheduledQueue.get(f.messageId) ?: return@run TdApi.Error(404, "scheduled message not found")
+            val st = f.schedulingState
+            if (st == null) { scheduledQueue.remove(item.id); fireScheduled(item) }
+            else if (st is TdApi.MessageSchedulingStateSendAtDate) { scheduledQueue.reschedule(item.id, st.sendDate.toLong()); scheduledMsgs[item.id] = scheduledMessage(item) }
+            else return@run TdApi.Error(400, "unsupported scheduling state")
+            TdApi.Ok()
+        }
+        is TdApi.SetChatDraftMessage -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            val json = l.draftJson(f.draftMessage)
+            l.setDraft(f.chatId, json)
+            val chat = store.chatById(f.chatId)
+            chat?.draftMessage = l.tdDraft(f.chatId)
+            Log.i(TAG, if (json != null) "черновик ${f.chatId} сохранён" else "черновик ${f.chatId} снят")
+            postUpdate(TdApi.UpdateChatDraftMessage(f.chatId, chat?.draftMessage, chat?.positions ?: arrayOf()))
+            TdApi.Ok()
+        }
+        is TdApi.ClearAllDraftMessages -> { store.local?.clearDrafts(); TdApi.Ok() }
+        is TdApi.AddChatToList -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            val toArchive = f.chatList is TdApi.ChatListArchive
+            val chat = store.chatById(f.chatId) ?: return@run TdApi.Error(404, "chat not found")
+            val order = chat.positions.firstOrNull()?.order ?: 0L
+            val oldList: TdApi.ChatList = if (l.isArchived(f.chatId)) TdApi.ChatListArchive() else TdApi.ChatListMain()
+            l.setArchived(f.chatId, toArchive)
+            chat.positions = store.positionsFor(f.chatId, order)
+            Log.i(TAG, "чат ${f.chatId} → ${if (toArchive) "архив" else "главный список"}")
+            postUpdate(TdApi.UpdateChatPosition(f.chatId, TdApi.ChatPosition(oldList, 0L, false, null)))
+            postUpdate(TdApi.UpdateChatPosition(f.chatId, chat.positions[0]))
+            TdApi.Ok()
+        }
+        // spec 005: опросы — голос/закрытие как отдельные sealed-сообщения, агрегат локальный (PollStore)
+        is TdApi.SetPollAnswer -> pollVote(f.chatId, f.messageId, f.optionIds?.toList() ?: emptyList())
+        is TdApi.StopPoll -> pollStop(f.chatId, f.messageId)
+        is TdApi.GetPollVoters -> {
+            val uuid = store.uuidOf(f.chatId, f.messageId)
+            val voters = uuid?.let { store.polls.voters(it, f.optionId) } ?: emptyList()
+            val page = voters.drop(f.offset.coerceAtLeast(0)).take(if (f.limit > 0) f.limit else 50)
+            TdApi.MessageSenders(voters.size, page.map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }.toTypedArray())
+        }
         is TdApi.GetChatAdministrators -> TdApi.ChatAdministrators(arrayOf())
         is TdApi.GetUserFullInfo -> {
             val address = store.addressOf(f.userId)
             if (address == null) TdApi.Error(404, "user not found") else {
-                val info = TdApi.UserFullInfo().apply {
-                    canBeCalled = false // звонков на Android пока нет — кнопка звонка в шапке не показывается
-                    supportsVideoCalls = false
-                    bio = TdApi.FormattedText(store.profileField(address, "bio"), arrayOf())
-                    blockList = if (store.blocked.contains(address)) TdApi.BlockListMain() else null
-                    giftSettings = null
-                }
+                val info = userFullInfo(address)
                 // X (TdlibCache) игнорирует ответ и ждёт updateUserFullInfo, как от TDLib — иначе «Loading information…»
                 postUpdate(TdApi.UpdateUserFullInfo(f.userId, info))
                 info
             }
         }
-        // стикеры/GIF/эмодзи-статусы: пустые наборы вместо ошибки 501 (X показывал тост «не реализовано»)
-        is TdApi.GetInstalledStickerSets, is TdApi.GetArchivedStickerSets -> TdApi.StickerSets(0, arrayOf())
+        // spec 005: стикеры/GIF/кастом-эмодзи из локального индекса паков (PACK-1/EMOJI-1);
+        // каталога для поиска нет (как web) — трендовые/поиск/категории пусты
+        is TdApi.GetInstalledStickerSets -> stickers.installedSets(f.stickerType)
+        is TdApi.GetArchivedStickerSets -> stickers.archivedSets(f.stickerType)
+        is TdApi.GetStickerSet -> stickers.stickerSet(f.setId)
+        is TdApi.SearchStickerSet -> stickers.searchSet(f.name)
+        is TdApi.GetStickers -> stickers.stickersByEmoji(f.stickerType, f.query, f.limit)
+        is TdApi.SearchStickers -> TdApi.Stickers(arrayOf())
         is TdApi.GetTrendingStickerSets -> TdApi.TrendingStickerSets(0, arrayOf(), false)
-        is TdApi.GetRecentStickers, is TdApi.GetFavoriteStickers, is TdApi.GetStickers -> TdApi.Stickers(arrayOf())
-        is TdApi.GetSavedAnimations -> TdApi.Animations(arrayOf())
+        is TdApi.GetEmojiCategories -> TdApi.EmojiCategories(arrayOf()) // иной источник категории роняет X (Td.unsupported)
+        is TdApi.GetCustomEmojiStickers -> stickers.customEmoji(f.customEmojiIds)
+        is TdApi.ChangeStickerSet -> stickers.change(f.setId, f.isInstalled, f.isArchived)
+        is TdApi.GetFavoriteStickers -> stickers.favorites()
+        is TdApi.GetRecentStickers -> stickers.recents()
+        is TdApi.AddFavoriteSticker -> stickers.addFavorite(f.sticker)
+        is TdApi.RemoveFavoriteSticker -> stickers.removeFavorite(f.sticker)
+        is TdApi.RemoveRecentSticker -> stickers.removeRecent(f.sticker)
+        is TdApi.GetSavedAnimations -> stickers.savedAnimations()
+        is TdApi.AddSavedAnimation -> stickers.addSavedAnimation(f.animation)
+        is TdApi.RemoveSavedAnimation -> stickers.removeSavedAnimation(f.animation)
+        is TdApi.SearchEmojis -> TdApi.EmojiKeywords(arrayOf())
+        is TdApi.GetKeywordEmojis -> TdApi.Emojis(arrayOf())
+        is TdApi.CreateNewStickerSet, is TdApi.AddStickerToSet -> TdApi.Error(501, "Parvane: создание паков — из файлов на web/desktop")
         is TdApi.GetInstalledBackgrounds -> TdApi.Backgrounds(arrayOf()) // фоны чата: только встроенные в X
         // Settings → Data and Storage: честные цифры по каталогу медиа/кэша ядра; сетевой статистики ядро не ведёт
         is TdApi.GetStorageStatisticsFast -> storageFast()
@@ -648,6 +797,13 @@ class Client private constructor(
                 TdApi.NotificationSettingsScopeGroupChats(), TdApi.NotificationSettingsScopeChannelChats()))
             postUpdate(TdApi.UpdateScopeNotificationSettings(scope, store.scopeSettings(scopeKey(scope))))
         io.execute { syncGroups() }
+        // spec 005: встроенные паки ParvaneEmoji/ParvaneStickers (Canvas при первом старте)
+        io.execute { if (!stickers.ensureBuiltin()) Log.w(TAG, "встроенные паки не нарисованы") }
+        // spec 005 / история 3: локальное состояние чатов, очередь отложенных, e2e-хук команд
+        if (store.local == null) store.local = ChatLocalState(java.io.File(boundDir))
+        store.local?.folders?.let { if (it.all().isNotEmpty()) postUpdate(TdApi.UpdateChatFolders(it.infos(), it.mainPosition, false)) }
+        startScheduled()
+        startE2eHook()
     }
 
     /** Группы с сервера → basic group + чат в UI (idempotent). */
@@ -664,6 +820,7 @@ class Client private constructor(
             }
             members.forEach { ensurePeer(it, announce = true) } // участники — пользователи для UI
             val gid = g.optString("group_id")
+            store.groupKind[gid] = g.optString("kind", "group") // для папок (группа/канал)
             val ref = store.group(gid)
             val previousVersion = ref?.version ?: -1L
             val previousAvatar = ref?.avatarFileId ?: ""
@@ -676,7 +833,7 @@ class Client private constructor(
             }
             val (chat, basic, created) = ensured
             postUpdate(TdApi.UpdateBasicGroup(basic))
-            if (created && announcedChats.add(chat.id)) postUpdate(TdApi.UpdateNewChat(chat.copyForUi()))
+            if (created && announcedChats.add(chat.id)) { postUpdate(TdApi.UpdateNewChat(chat.copyForUi())); announceScheduled(chat.id) }
             else postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
             val version = g.optLong("version", -1L)
             if (!created && version >= 0 && version == previousVersion) continue
@@ -715,7 +872,10 @@ class Client private constructor(
 
     // ── spec 004: хелперы экранов управления ────────────────────────────────
     /** Функции, которым запрещена молчаливая Ok-заглушка (управление группой). */
-    private val NO_OK_STUB = setOf("SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
+    private val NO_OK_STUB = setOf("DeleteChatFolder", "ReorderChatFolders", "SetBirthdate", "SetAccentColor", "SetProfileAccentColor", "SetPersonalChat",
+        "SetChatMessageAutoDeleteTime", "EditMessageSchedulingState", "SetChatDraftMessage", "AddChatToList",
+        "SetPollAnswer", "StopPoll", "ChangeStickerSet", "AddFavoriteSticker", "RemoveFavoriteSticker", "RemoveRecentSticker", "AddSavedAnimation", "RemoveSavedAnimation",
+        "SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
         "DeleteRevokedChatInviteLink", "DeleteAllRevokedChatInviteLinks", "EditChatInviteLink", "SetChatMemberStatus")
 
     private inline fun withGroup(chatId: Long, block: (ParvaneStore.GroupRef) -> TdApi.Object): TdApi.Object =
@@ -744,6 +904,9 @@ class Client private constructor(
             "declined" -> if (ru) "Ваша заявка отклонена. Попробуйте позже" else "Your join request was declined. Try again later"
             "invite_edit_unsupported" -> if (ru) "Правка ссылки не поддерживается — отзовите её и создайте новую" else "Editing a link is not supported — revoke it and create a new one"
             "restrict_unsupported" -> if (ru) "Частичные ограничения не поддерживаются — участника можно только удалить" else "Partial restrictions are not supported — you can only remove a member"
+            "sticker_not_found" -> if (ru) "Стикер не найден в установленных паках" else "Sticker not found in installed packs"
+            "rate_limited" -> if (ru) "Слишком много действий, помедленнее" else "Too many actions, slow down"
+            "session_expired" -> if (ru) "Сессия истекла — войдите снова" else "Session expired — sign in again"
             else -> fallback.ifEmpty { code }
         }
     }
@@ -806,60 +969,224 @@ class Client private constructor(
         return store.messageByUuid(uuid) ?: TdApi.Error(404, "message not found")
     }
 
+    // ── профиль / папки / карта (spec 005 / история 4) ──────────────────────
+    private fun userFullInfo(address: String): TdApi.UserFullInfo = TdApi.UserFullInfo().apply {
+        canBeCalled = false // звонков на Android пока нет (спек 006) — кнопка звонка в шапке не показывается
+        supportsVideoCalls = false
+        bio = TdApi.FormattedText(store.profileField(address, "bio"), arrayOf())
+        blockList = if (store.blocked.contains(address)) TdApi.BlockListMain() else null
+        giftSettings = null
+        // день рождения YYYY-MM-DD и личный канал (если группа известна) — как web/desktop
+        Regex("^(\\d{4})-(\\d{2})-(\\d{2})$").find(store.profileField(address, "birthday"))?.let { m ->
+            val (y, mo, d) = m.destructured
+            birthdate = TdApi.Birthdate(d.toInt(), mo.toInt(), y.toInt().let { if (it <= 1900) 0 else it })
+        }
+        store.profileField(address, "personal_channel").takeIf { it.isNotEmpty() }?.let { gid -> store.group(gid)?.let { personalChatId = it.chatId } }
+    }
+    /** Пересчитать позиции всех чатов по папкам; вернуть id папок, в которые попали чаты (для подсчёта). */
+    private fun refreshFolderPositions(): List<Int> {
+        val out = ArrayList<Int>()
+        for (id in store.chatIds()) {
+            val chat = store.chatById(id) ?: continue
+            chat.positions = store.positionsFor(id, chat.positions.firstOrNull()?.order ?: 0L)
+            chat.positions.forEach { p -> postUpdate(TdApi.UpdateChatPosition(id, p)); (p.list as? TdApi.ChatListFolder)?.let { out.add(it.chatFolderId) } }
+        }
+        return out
+    }
+    /** Карта в пузыре геолокации: тайлы только через preview.map.tile (MAP-1), склейка Canvas → media/map-*.png. */
+    private fun mapThumbnail(loc: TdApi.Location?, zoom: Int, width: Int, height: Int, scale: Int): TdApi.Object {
+        if (loc == null || width <= 0 || height <= 0) return TdApi.Error(400, "bad map request")
+        val z = if (zoom <= 0) MapGeometry.DEFAULT_ZOOM else zoom
+        val name = MapGeometry.fileName(loc.latitude, loc.longitude, z, width, height, scale.toDouble())
+        val out = java.io.File(java.io.File(boundDir, "media"), name)
+        if (out.exists() && out.length() > 0) return store.fileFor("map:$name", "", "", out.length(), "image/png", out.absolutePath)
+        val g = MapGeometry.compute(loc.latitude, loc.longitude, z, width, height, scale.toDouble())
+        if (g.tiles.isEmpty()) return TdApi.Error(404, "no tiles")
+        return try {
+            val bmp = android.graphics.Bitmap.createBitmap(g.canvasWidth, g.canvasHeight, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp); canvas.drawColor(0xFFE8E6E1.toInt())
+            var okTiles = 0
+            for (t in g.tiles) {
+                val png = ParvaneCore.mapTile(t.z, t.x, t.y); if (png.isEmpty()) continue
+                val tile = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size) ?: continue
+                canvas.drawBitmap(tile, null, android.graphics.Rect(t.dstX, t.dstY, t.dstX + t.dstSize, t.dstY + t.dstSize), null); okTiles++
+            }
+            Log.i(TAG, "карта %.5f,%.5f z%d %dx%d тайлов=%d/%d".format(java.util.Locale.ROOT, loc.latitude, loc.longitude, z, width, height, okTiles, g.tiles.size))
+            if (okTiles == 0) return TdApi.Error(404, "no tiles")
+            out.parentFile?.mkdirs()
+            out.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            store.fileFor("map:$name", "", "", out.length(), "image/png", out.absolutePath)
+        } catch (e: Throwable) { Log.w(TAG, "карта: ${e.message}"); TdApi.Error(500, "map render failed") }
+    }
+
+    // ── сессия (spec 005 / FAIL-1) ───────────────────────────────────────────
+    @Volatile private var lastSentUuid = ""
+    /** Истёкший/отозванный JWT: экран входа как у X (LoggingOut → WaitPhoneNumber, без Closed — тот стирает данные), ключи и журнал на месте. */
+    private fun sessionExpired() {
+        Log.i(TAG, "сессия истекла → экран входа")
+        try { ParvaneCore.sessionExpired() } catch (e: Throwable) { Log.w(TAG, "sessionExpired: ${e.message}") }
+        store.clear(); announcedChats.clear(); journalReplayed.set(false) // как LogOut; журнал на диске цел — реплей при следующем входе
+        setAuth(TdApi.AuthorizationStateLoggingOut())
+        setAuth(TdApi.AuthorizationStateWaitPhoneNumber())
+    }
+
+    // ── опросы (spec 005) ────────────────────────────────────────────────────
+    private fun pollUpdate(uuid: String): TdApi.Update? {
+        val msg = store.messageByUuid(uuid) ?: return null
+        val poll = store.polls.toTdPoll(uuid, store.self, store::idOf) ?: return null
+        val content = TdApi.MessagePoll(poll, null, null, false)
+        msg.content = content
+        return TdApi.UpdateMessageContent(msg.chatId, msg.id, content)
+    }
+    private fun onPollService(content: JSONObject, from: String) {
+        val uuid = content.optString("poll"); if (uuid.isEmpty()) return
+        val changed = if (content.optString("kind") == "poll_close") {
+            Log.i(TAG, "опрос $uuid закрыт"); store.polls.close(uuid)
+        } else {
+            val idx = content.optJSONArray("options")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
+            Log.i(TAG, "голос $from → опрос $uuid $idx"); store.polls.applyVote(uuid, from, idx)
+        }
+        if (changed) pollUpdate(uuid)?.let { postUpdate(it) }
+    }
+    private fun pollVote(chatId: Long, messageId: Long, optionIds: List<Int>): TdApi.Object {
+        val uuid = store.uuidOf(chatId, messageId) ?: return TdApi.Error(404, "message not found")
+        val address = store.addressOf(chatId) ?: return TdApi.Error(404, "chat not found")
+        if (store.polls.get(uuid) == null) return TdApi.Error(404, "poll not found")
+        if (store.polls.get(uuid)!!.closed) return TdApi.Error(400, "poll closed")
+        val sent = ParvaneCore.sendContent(address, PollStore.voteContent(uuid, optionIds).toString(), "")
+        if (sent.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
+        store.polls.applyVote(uuid, store.self, optionIds)
+        Log.i(TAG, "голос ${store.self} → опрос $uuid $optionIds")
+        pollUpdate(uuid)?.let { postUpdate(it) }
+        return TdApi.Ok()
+    }
+    private fun pollStop(chatId: Long, messageId: Long): TdApi.Object {
+        val uuid = store.uuidOf(chatId, messageId) ?: return TdApi.Error(404, "message not found")
+        val address = store.addressOf(chatId) ?: return TdApi.Error(404, "chat not found")
+        val e = store.polls.get(uuid) ?: return TdApi.Error(404, "poll not found")
+        if (e.owner != store.self) return TdApi.Error(400, uiText("forbidden"))
+        val sent = ParvaneCore.sendContent(address, PollStore.closeContent(uuid).toString(), "")
+        if (sent.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
+        store.polls.close(uuid); Log.i(TAG, "опрос $uuid закрыт")
+        pollUpdate(uuid)?.let { postUpdate(it) }
+        return TdApi.Ok()
+    }
+
+    /** Получатели для ACL cloud (PACK-1): собеседник или участники группы без себя. */
+    private fun recipientsOf(address: String): List<String> =
+        store.group(address)?.members?.filter { it != store.self } ?: listOf(address)
+
     private fun localPath(input: TdApi.InputFile?): String? = when (input) {
         is TdApi.InputFileLocal -> input.path
         is TdApi.InputFileGenerated -> input.originalPath // X сжимает фото генерацией — берём оригинал
         else -> null
     }
 
-    private fun sendMessage(f: TdApi.SendMessage): TdApi.Object {
-        val address = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
-        val replyUuid = (f.replyTo as? TdApi.InputMessageReplyToMessage)?.let { store.uuidOf(f.chatId, it.messageId) } ?: ""
-        val c = f.inputMessageContent
+    /** Подготовленный контент: JSON провода + локальный файл (медиа) или null. */
+    private class Prepared(val content: JSONObject, val localPath: String?, val echo: Boolean)
+
+    /** InputMessageContent X → контент провода (без отправки). Ошибка — TdApi.Error. */
+    private fun prepareContent(c: TdApi.InputMessageContent?, address: String): Any {
         fun cap(t: TdApi.FormattedText?): String = t?.text ?: ""
-        val uuid: String
-        var echoContent: JSONObject? = null
-        when (c) {
+        return when (c) {
             is TdApi.InputMessageText -> {
                 val content = JSONObject().put("kind", "text").put("text", c.text?.text ?: "")
-                echoContent = content
-                uuid = ParvaneCore.sendContent(address, content.toString(), replyUuid)
+                // spec 005: сущности провода + emoji_packs (≤4) для кастом-эмодзи (PACK-1 по получателям)
+                val wireEntities: org.json.JSONArray? = Entities.toWire(c.text?.entities)
+                if (wireEntities != null) content.put("entities", wireEntities)
+                val emojiIds: List<Long> = Entities.customEmojiIds(c.text?.entities)
+                if (emojiIds.isNotEmpty()) {
+                    val packs: org.json.JSONArray? = stickers.emojiPacksFor(emojiIds, recipientsOf(address))
+                    if (packs != null) content.put("emoji_packs", packs)
+                }
+                // превью ссылки делает отправитель (spec 005, как web/desktop) — только через шард preview
+                val url = Entities.firstUrl(c.text?.text, c.text?.entities)
+                val disabled = c.linkPreviewOptions?.isDisabled == true
+                if (url != null && !disabled) {
+                    val wp = try { ParvaneCore.previewFetch(url, 1500) } catch (e: Throwable) { null }
+                    if (wp != null && wp.has("url")) { content.put("webpage", wp); Log.i(TAG, "превью $url → ${wp.optString("site_name")}") }
+                }
+                Prepared(content, null, true)
             }
-            is TdApi.InputMessageLocation -> { // как десктоп/веб: {kind:location, lat, long}
-                val content = JSONObject().put("kind", "location").put("lat", c.location?.latitude ?: 0.0).put("long", c.location?.longitude ?: 0.0)
-                echoContent = content
-                uuid = ParvaneCore.sendContent(address, content.toString(), replyUuid)
+            is TdApi.InputMessageSticker -> { // из панели X: InputFileId → файл пака; pack_ref для не встроенного (PACK-1)
+                val resolved = stickers.resolveInput(c.sticker?.sticker) ?: return TdApi.Error(404, uiText("sticker_not_found"))
+                val pack = resolved.pack; val pf = resolved.file
+                val content = JSONObject().put("kind", "sticker").put("filename", (c.emoji ?: "").ifEmpty { pf.emoji })
+                    .put("mime", pf.mime).put("width", pf.width).put("height", pf.height)
+                stickers.packRefForSend(pack, recipientsOf(address))?.let { content.put("pack_ref", it) }
+                stickers.noteRecent(pack, pf)
+                content.put("_pack", if (pack.builtin) "builtin" else pack.rawName)
+                Prepared(content, resolved.path, false)
             }
+            is TdApi.InputMessagePoll -> { // spec 005: kind=poll с обоими наборами имён (web+desktop)
+                val quiz = c.type as? TdApi.InputPollTypeQuiz
+                Prepared(PollStore.buildContent(c.question?.text ?: "", (c.options ?: arrayOf<TdApi.InputPollOption>()).map { it.text?.text ?: "" }.filter { it.isNotEmpty() },
+                    !c.isAnonymous, c.allowsMultipleAnswers, quiz != null, quiz?.correctOptionIds?.toList() ?: emptyList(), quiz?.explanation?.text ?: ""), null, true)
+            }
+            is TdApi.InputMessageAnimation -> {
+                val path = localPath(c.animation?.animation) ?: return TdApi.Error(400, "нет файла")
+                val ext = path.substringAfterLast('.', "").lowercase()
+                val mime = when (ext) { "gif" -> "image/gif"; "mp4" -> "video/mp4"; else -> "video/webm" }
+                Prepared(JSONObject().put("kind", "gif").put("mime", mime).put("filename", path.substringAfterLast('/'))
+                    .put("width", c.animation.width).put("height", c.animation.height).put("duration_secs", c.animation.duration).put("caption", cap(c.caption)), path, false)
+            }
+            is TdApi.InputMessageLocation -> // как десктоп/веб: {kind:location, lat, long}
+                Prepared(JSONObject().put("kind", "location").put("lat", c.location?.latitude ?: 0.0).put("long", c.location?.longitude ?: 0.0), null, true)
             is TdApi.InputMessageContact -> { // телефонных контактов нет — делимся ником текстом
                 val uidAddr = c.contact?.userId?.let { store.addressOf(it) }
-                val content = JSONObject().put("kind", "text").put("text", uidAddr?.let { "@" + it.substringBefore('@') } ?: (c.contact?.firstName ?: ""))
-                echoContent = content
-                uuid = ParvaneCore.sendContent(address, content.toString(), replyUuid)
+                Prepared(JSONObject().put("kind", "text").put("text", uidAddr?.let { "@" + it.substringBefore('@') } ?: (c.contact?.firstName ?: "")), null, true)
             }
-            is TdApi.InputMessagePhoto -> uuid = ParvaneCore.sendMedia(address, localPath(c.photo?.photo) ?: return TdApi.Error(400, "нет файла"),
-                JSONObject().put("kind", "photo").put("mime", "image/jpeg").put("width", c.photo.width).put("height", c.photo.height).put("caption", cap(c.caption)).toString(), replyUuid)
-            is TdApi.InputMessageVideo -> uuid = ParvaneCore.sendMedia(address, localPath(c.video?.video) ?: return TdApi.Error(400, "нет файла"),
-                JSONObject().put("kind", "video").put("mime", "video/mp4").put("width", c.video.width).put("height", c.video.height).put("duration_secs", c.video.duration).put("caption", cap(c.caption)).toString(), replyUuid)
+            is TdApi.InputMessagePhoto -> Prepared(JSONObject().put("kind", "photo").put("mime", "image/jpeg").put("width", c.photo.width).put("height", c.photo.height).put("caption", cap(c.caption)),
+                localPath(c.photo?.photo) ?: return TdApi.Error(400, "нет файла"), false)
+            is TdApi.InputMessageVideo -> Prepared(JSONObject().put("kind", "video").put("mime", "video/mp4").put("width", c.video.width).put("height", c.video.height).put("duration_secs", c.video.duration).put("caption", cap(c.caption)),
+                localPath(c.video?.video) ?: return TdApi.Error(400, "нет файла"), false)
             is TdApi.InputMessageDocument -> {
                 val path = localPath(c.document?.document) ?: return TdApi.Error(400, "нет файла")
                 val name = path.substringAfterLast('/')
                 val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
-                uuid = ParvaneCore.sendMedia(address, path, JSONObject().put("kind", "file").put("mime", mime).put("filename", name).put("caption", cap(c.caption)).toString(), replyUuid)
+                Prepared(JSONObject().put("kind", "file").put("mime", mime).put("filename", name).put("caption", cap(c.caption)), path, false)
             }
-            is TdApi.InputMessageVoiceNote -> uuid = ParvaneCore.sendMedia(address, localPath(c.voiceNote?.voiceNote) ?: return TdApi.Error(400, "нет файла"),
-                JSONObject().put("kind", "voice").put("mime", "audio/ogg").put("duration_secs", c.voiceNote.duration).put("caption", cap(c.caption)).toString(), replyUuid)
-            is TdApi.InputMessageVideoNote -> uuid = ParvaneCore.sendMedia(address, localPath(c.videoNote?.videoNote) ?: return TdApi.Error(400, "нет файла"),
-                JSONObject().put("kind", "video_note").put("mime", "video/mp4").put("duration_secs", c.videoNote.duration).put("width", c.videoNote.length).toString(), replyUuid)
-            else -> return TdApi.Error(400, "Parvane: тип сообщения не поддерживается ${c?.javaClass?.simpleName}")
+            is TdApi.InputMessageVoiceNote -> Prepared(JSONObject().put("kind", "voice").put("mime", "audio/ogg").put("duration_secs", c.voiceNote.duration).put("caption", cap(c.caption)),
+                localPath(c.voiceNote?.voiceNote) ?: return TdApi.Error(400, "нет файла"), false)
+            is TdApi.InputMessageVideoNote -> Prepared(JSONObject().put("kind", "video_note").put("mime", "video/mp4").put("duration_secs", c.videoNote.duration).put("width", c.videoNote.length),
+                localPath(c.videoNote?.videoNote) ?: return TdApi.Error(400, "нет файла"), false)
+            else -> TdApi.Error(400, "Parvane: тип сообщения не поддерживается ${c?.javaClass?.simpleName}")
         }
+    }
+
+    /** Отправить подготовленный контент штатным путём ядра; "" — не отправлено. */
+    private fun sendPrepared(address: String, p: Prepared, replyUuid: String): String {
+        val content = JSONObject(p.content.toString()).also { it.remove("_pack") }
+        // TTL (spec 005): таймер чата → ttl_secs каждого исходящего (как web/desktop)
+        val ttlSecs = store.local?.ttlOf(address) ?: 0
+        if (ttlSecs > 0 && !PollStore.isService(content.optString("kind"))) content.put("ttl_secs", ttlSecs)
+        val uuid = if (p.localPath != null) ParvaneCore.sendMedia(address, p.localPath, content.toString(), replyUuid)
+                   else ParvaneCore.sendContent(address, content.toString(), replyUuid)
+        if (uuid.isNotEmpty() && p.content.has("_pack")) Log.i(TAG, "стикер отправлен $uuid pack=${p.content.optString("_pack")}")
+        return uuid
+    }
+
+    private fun sendMessage(f: TdApi.SendMessage): TdApi.Object {
+        val address = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
+        val replyUuid = (f.replyTo as? TdApi.InputMessageReplyToMessage)?.let { store.uuidOf(f.chatId, it.messageId) } ?: ""
+        val prepared = when (val r = prepareContent(f.inputMessageContent, address)) { is Prepared -> r; else -> return r as TdApi.Object }
+        // spec 005: отложенная отправка — локальная очередь (сервер не знает)
+        val sendAt = (f.options?.schedulingState as? TdApi.MessageSchedulingStateSendAtDate)?.sendDate ?: 0
+        if (sendAt > 0) return scheduleMessage(f.chatId, address, prepared, replyUuid, sendAt.toLong())
+        val uuid = sendPrepared(address, prepared, replyUuid)
         if (uuid.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
+        lastSentUuid = uuid
         // Медиа: эхо со всеми полями (file_id, local_path) эмитит ядро само; текст
         // кладём здесь. При дубликате возвращаем уже сохранённое (X иначе не
         // очищал поле и показывал тост «#500: дубликат», 10 сен 2026).
-        if (echoContent != null) {
-            val msg = store.putMessage(uuid, store.self, address, System.currentTimeMillis() / 1000, echoContent, out = true,
+        if (prepared.echo) {
+            val echo = JSONObject(prepared.content.toString())
+            val ttlSecs = store.local?.ttlOf(address) ?: 0
+            if (ttlSecs > 0) echo.put("ttl_secs", ttlSecs)
+            val msg = store.putMessage(uuid, store.self, address, System.currentTimeMillis() / 1000, echo, out = true,
                 replyUuid = replyUuid.ifEmpty { null })
             if (msg != null) {
+                armTtl(msg, uuid, echo)
                 announceMessage(msg)
                 return msg
             }
@@ -870,6 +1197,101 @@ class Client private constructor(
             Thread.sleep(100)
         }
         return TdApi.Error(500, "сообщение не сохранено")
+    }
+
+    // ── TTL (spec 005 / история 3) ─────────────────────────────────────────
+    private val ttlTimers by lazy { TtlScheduler(onExpire = ::onTtlExpire) }
+    /** Сообщение с ttl_secs: пометить таймером для X и взвести удаление на ts+ttl. */
+    private fun armTtl(msg: TdApi.Message, uuid: String, content: JSONObject) {
+        val ttl = content.optInt("ttl_secs", 0); if (ttl <= 0) return
+        msg.selfDestructType = TdApi.MessageSelfDestructTypeTimer(ttl)
+        ttlTimers.arm(uuid, msg.date.toLong() + ttl)
+        Log.i(TAG, "ttl: взведено $uuid на ${msg.date + ttl}")
+    }
+    private fun onTtlExpire(uuid: String) {
+        val fileId = store.contentOf(uuid)?.optString("file_id") ?: ""
+        store.removeMessages(listOf(uuid)).forEach { postUpdate(it) }
+        try { ParvaneCore.forget(uuid, fileId) } catch (e: Throwable) { }
+        Log.i(TAG, "ttl: удалено $uuid")
+    }
+
+    // ── отложенные (spec 005 / история 3) ───────────────────────────────────
+    private val scheduledQueue by lazy { ScheduledQueue(java.io.File(boundDir)) }
+    private val scheduledMsgs = ConcurrentHashMap<Long, TdApi.Message>()
+    private val scheduledTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-scheduled").apply { isDaemon = true } }
+    private fun scheduledMessage(it: ScheduledQueue.Item): TdApi.Message = TdApi.Message().apply {
+        id = it.id; chatId = it.chatId; senderId = TdApi.MessageSenderUser(store.idOf(store.self)); isOutgoing = true
+        date = it.createdAt.toInt(); schedulingState = TdApi.MessageSchedulingStateSendAtDate(it.due.toInt(), 0); canBeSaved = true
+        content = store.contentFrom(JSONObject(it.content.toString()).also { c -> if (it.localPath != null) c.put("local_path", it.localPath) })
+    }
+    private fun scheduleMessage(chatId: Long, address: String, p: Prepared, replyUuid: String, due: Long): TdApi.Object {
+        val item = scheduledQueue.add(java.util.UUID.randomUUID().toString(), chatId, address, JSONObject(p.content.toString()).also { it.remove("_pack") }, p.localPath, replyUuid.ifEmpty { null }, due)
+        val msg = scheduledMessage(item); scheduledMsgs[item.id] = msg
+        Log.i(TAG, "отложено ${item.uuid} на $due")
+        postUpdate(TdApi.UpdateChatHasScheduledMessages(chatId, true))
+        return msg
+    }
+    private fun fireScheduled(it: ScheduledQueue.Item) {
+        val uuid = sendPrepared(it.to, Prepared(it.content, it.localPath, it.localPath == null), it.replyTo ?: "")
+        scheduledMsgs.remove(it.id)
+        postUpdate(TdApi.UpdateDeleteMessages(it.chatId, longArrayOf(it.id), true, false))
+        if (scheduledQueue.forChat(it.chatId).isEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(it.chatId, false))
+        if (uuid.isEmpty()) { Log.w(TAG, "отложенное ${it.uuid} не отправлено"); return }
+        Log.i(TAG, "отложенное ${it.uuid} отправлено")
+        if (it.localPath == null) {
+            store.putMessage(uuid, store.self, it.to, System.currentTimeMillis() / 1000, it.content, out = true, replyUuid = it.replyTo)?.let { m -> announceMessage(m) }
+        }
+    }
+    /** Чат объявлен X → сообщить о его отложенных (если есть). */
+    private fun announceScheduled(chatId: Long) {
+        if (announcedChats.contains(chatId) && scheduledQueue.forChat(chatId).isNotEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(chatId, true))
+    }
+    private fun startScheduled() {
+        val restored = scheduledQueue.all()
+        restored.forEach { scheduledMsgs[it.id] = scheduledMessage(it) }
+        Log.i(TAG, "отложенных восстановлено: ${restored.size}")
+        // Флаг «есть отложенные» уходит в X только для уже объявленного чата (announceScheduled из
+        // ensurePeer/syncGroups): при подъёме сессии чаты X ещё не получил, и debug-сборка X падала
+        // «updateChat not received … UpdateChatHasScheduledMessages», после чего уходила в recovery-режим
+        // без SetTdlibParameters (27 сен 2026, tgx_ttl_scheduled_flow.sh)
+        restored.map { it.chatId }.distinct().forEach { announceScheduled(it) }
+        scheduledTick.scheduleWithFixedDelay({ try { scheduledQueue.takeDue().forEach { fireScheduled(it) } } catch (e: Throwable) { Log.w(TAG, "scheduled tick: ${e.message}") } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    // ── e2e-хук команд (только для сценариев эмулятора: /data/local/tmp/parvane-e2e-cmd) ──
+    private val e2eTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-e2e").apply { isDaemon = true } }
+    @Volatile private var lastE2eCmd = ""
+    private fun startE2eHook() {
+        val f = java.io.File("/data/local/tmp/parvane-e2e-cmd")
+        e2eTick.scheduleWithFixedDelay({
+            try {
+                if (!f.canRead()) return@scheduleWithFixedDelay
+                // adbd эмулятора — root, файл после `adb push` принадлежит root и приложением не удаляется:
+                // без дедупа по (mtime, текст) команда выполнялась каждые 3 с (повторные send/folder, 27 сен 2026)
+                val text = f.readText(); val key = "${f.lastModified()}:$text"
+                if (key == lastE2eCmd) return@scheduleWithFixedDelay
+                lastE2eCmd = key
+                val cmd = JSONObject(text); f.delete()
+                val chatId = store.ensurePeer(cmd.optString("peer")).second.id
+                val r: TdApi.Object = when (cmd.optString("op")) {
+                    "ttl" -> handle(TdApi.SetChatMessageAutoDeleteTime(chatId, cmd.optInt("secs")))
+                    "send" -> handle(TdApi.SendMessage(chatId, null, null, null, null, TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
+                    "schedule" -> handle(TdApi.SendMessage(chatId, null, null, TdApi.MessageSendOptions().apply { schedulingState = TdApi.MessageSchedulingStateSendAtDate(cmd.optInt("due"), 0) }, null,
+                        TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
+                    "draft" -> handle(TdApi.SetChatDraftMessage(chatId, null, cmd.optString("text").takeIf { it.isNotEmpty() }?.let { t -> TdApi.DraftMessage(null, 0, TdApi.DraftMessageContentText(TdApi.FormattedText(t, arrayOf()), null), 0L, null) })) // пустой текст — снять черновик
+                    "archive" -> handle(TdApi.AddChatToList(chatId, if (cmd.optBoolean("on")) TdApi.ChatListArchive() else TdApi.ChatListMain()))
+                    "folder" -> handle(TdApi.CreateChatFolder(TdApi.ChatFolder(TdApi.ChatFolderName(TdApi.FormattedText(cmd.optString("title", "Work"), arrayOf()), false),
+                        TdApi.ChatFolderIcon("💼"), 3, false, LongArray(0), longArrayOf(chatId), LongArray(0), false, false, false, false, false, false, false, false)))
+                    "resolve" -> { resolvedAt.remove(cmd.optString("peer")); resolveLater(cmd.optString("peer")); TdApi.Ok() }
+                    "birthday" -> handle(TdApi.SetBirthdate(TdApi.Birthdate(cmd.optInt("day"), cmd.optInt("month"), cmd.optInt("year"))))
+                    "search" -> handle(TdApi.SearchMessages(null, cmd.optString("query"), "", 50, null, null, 0, 0))
+                    // голос в опросе по uuid сообщения — тот же путь, что тап по варианту в X (варианты рисуются на canvas, uiautomator их не видит)
+                    "vote" -> store.messageByUuid(cmd.optString("uuid"))?.let { m -> handle(TdApi.SetPollAnswer(m.chatId, m.id, intArrayOf(cmd.optInt("option")))) } ?: TdApi.Error(404, "poll not found")
+                    else -> TdApi.Error(400, "unknown op")
+                }
+                Log.i(TAG, "e2e-cmd ${cmd.optString("op")} → ${r.javaClass.simpleName}")
+            } catch (e: Throwable) { Log.w(TAG, "e2e-cmd: ${e.message}") }
+        }, 3, 3, java.util.concurrent.TimeUnit.SECONDS)
     }
 
     /** DownloadFile: блоб из cloud (io), UpdateFile по готовности. */
@@ -1062,8 +1484,27 @@ class Client private constructor(
         if (announce && announcedChats.add(chat.id)) {
             postUpdate(TdApi.UpdateUser(user))
             postUpdate(TdApi.UpdateNewChat(chat.copyForUi()))
-            if (!store.hasProfile(address)) resolveLater(address)
+            announceScheduled(chat.id)
+            if (chat.draftMessage != null) Log.i(TAG, "черновик ${chat.id} восстановлен")
+            if (store.local?.isArchived(chat.id) == true) Log.i(TAG, "позиция ${chat.id}: archive")
         }
+        if (!store.hasProfile(address) || profileStale(address)) resolveLater(address)
+    }
+
+    // conformance PROFILE-1 (spec 005): профиль перечитывается по TTL (10 мин; для e2e —
+    // /data/local/tmp/parvane-profile-ttl в мс), а не один раз за сессию; тик раз в 60 с
+    private val resolvedAt = ConcurrentHashMap<String, Long>()
+    private val profileTtlMs: Long = java.io.File("/data/local/tmp/parvane-profile-ttl").takeIf { it.canRead() }
+        ?.readText()?.trim()?.toLongOrNull() ?: (10L * 60 * 1000)
+    private fun profileStale(address: String): Boolean = (System.currentTimeMillis() - (resolvedAt[address] ?: 0L)) > profileTtlMs
+    private val profileTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-profile-ttl").apply { isDaemon = true } }.also { ex ->
+        ex.scheduleWithFixedDelay({
+            try {
+                if (detached || store.self.isEmpty()) return@scheduleWithFixedDelay
+                for (id in store.knownUserIds()) { val a = store.addressOf(id) ?: continue; if (profileStale(a)) resolveLater(a) }
+                if (profileStale(store.self)) resolveLater(store.self)
+            } catch (e: Throwable) { Log.w(TAG, "profile tick: ${e.message}") }
+        }, 60, 60, java.util.concurrent.TimeUnit.SECONDS)
     }
 
     private val resolving = ConcurrentHashMap.newKeySet<String>()
@@ -1077,6 +1518,8 @@ class Client private constructor(
                     val a = u.optString("username")
                     if (a.isEmpty()) continue
                     store.setProfile(a, u)
+                    resolvedAt[a] = System.currentTimeMillis()
+                    Log.i(TAG, "профиль $a: birthday=${u.optString("birthday")} color=${u.optInt("name_color", -1)} phone=${u.optString("phone")}")
                     val (user, chat, _) = store.ensurePeer(a)
                     postUpdate(TdApi.UpdateUser(user))
                     if (announcedChats.contains(chat.id)) postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
@@ -1122,6 +1565,7 @@ class Client private constructor(
                 }
                 val content = event.optJSONObject("content")
                     ?: JSONObject().put("kind", "text").put("text", event.optString("text"))
+                if (PollStore.isService(content.optString("kind"))) { onPollService(content, from); return }
                 // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
                 // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
                 if (event.optBoolean("group") && !out) {
@@ -1138,6 +1582,9 @@ class Client private constructor(
                     edited = event.optBoolean("edited"), pinned = event.optBoolean("pinned"),
                     reactions = event.optJSONArray("reactions"),
                 ) ?: return
+                stickers.onReceived(content) // spec 005: pack_ref/emoji_packs → индекс паков, gif → сохранённые
+                if (content.optString("kind") == "poll") Log.i(TAG, "опрос ${event.optString("id")}: ${store.polls.get(event.optString("id"))?.options?.size ?: 0} вариантов")
+                armTtl(msg, event.optString("id"), content) // spec 005: ttl_secs → таймер и удаление в срок
                 Log.i(TAG, "сообщение ${event.optString("id")} → чат ${msg.chatId} (${if (out) "исх" else "вх"})")
                 announceMessage(msg)
             }
@@ -1182,8 +1629,16 @@ class Client private constructor(
             "link" -> Log.i(TAG, "линковка: ${event.optString("state")} ${event.optString("code")} ${event.optInt("count")}")
             "session" -> if (event.optString("state") == "failed") {
                 Log.w(TAG, "сессия: ${event.optString("error")}")
+                if (event.optString("reason") == "auth") sessionExpired()
             }
-            "error" -> Log.w(TAG, "ядро: ${event.optString("text")}")
+            // spec 005 / FAIL-1: rate_limited на publish → последнее исходящее «не отправлено» (честно, без своих тостов)
+            "error" -> if (event.optString("code") == "rate_limited") {
+                Log.i(TAG, "gateway rate_limited (${event.optString("subject")})")
+                val uuid = lastSentUuid
+                val msg = if (uuid.isEmpty()) null else store.messageByUuid(uuid)
+                if (msg != null) postUpdate(TdApi.UpdateMessageSendFailed(msg, msg.id, TdApi.Error(429, uiText("rate_limited"))))
+            } else Log.w(TAG, "ядро: ${event.optString("text")}")
+            "connection" -> postUpdate(TdApi.UpdateConnectionState(if (event.optString("state") == "ready") TdApi.ConnectionStateReady() else TdApi.ConnectionStateConnecting()))
         }
     }
 }

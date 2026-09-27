@@ -152,3 +152,23 @@ export class PollStore {
     };
   }
 }
+
+// spec 005: desktop исторически пишет answers/public/multiple/quiz, web —
+// options/is_public/is_multiple/is_quiz. Читаем оба набора (android пишет оба).
+export function readPollFields(content: Record<string, unknown>) {
+  const list = (
+    Array.isArray(content.options) ? content.options
+      : Array.isArray(content.answers) ? content.answers
+        : []
+  ) as unknown[];
+  const flag = (web: string, desk: string) => Boolean(content[web] ?? content[desk]);
+  return {
+    question: typeof content.question === 'string' ? content.question : '',
+    options: list.map(String),
+    isPublic: flag('is_public', 'public'),
+    isMultiple: flag('is_multiple', 'multiple'),
+    isQuiz: flag('is_quiz', 'quiz'),
+    correct: Array.isArray(content.correct) ? (content.correct as number[]) : undefined,
+    solution: typeof content.solution === 'string' ? content.solution : undefined,
+  };
+}

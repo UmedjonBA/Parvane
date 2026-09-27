@@ -258,8 +258,34 @@ class ParvaneStore {
     // optString отдаёт строку "null" для JSON null — в списке чатов светилось «null» (10 сен 2026)
     private fun caption(c: JSONObject) = TdApi.FormattedText(if (c.isNull("caption")) "" else c.optString("caption"), arrayOf())
 
-    /** TdApi-контент по нашему JSON (kind: text | photo | video | file | voice | video_note). */
-    fun contentFrom(c: JSONObject): TdApi.MessageContent {
+    /** Опросы (spec 005): агрегат локальный, uuid сообщения = id опроса. */
+    val polls = PollStore()
+    /** Вид группы (group|channel) по gid — из сведений сервера (для папок). */
+    val groupKind = HashMap<String, String>()
+    /** Локальное состояние чатов (spec 005): TTL/черновики/архив; ставится Client'ом, когда известен каталог ядра. */
+    @Volatile var local: ChatLocalState? = null
+    fun positionsFor(chatId: Long, order: Long): Array<TdApi.ChatPosition> =
+        local?.positionsFor(chatId, order, chatFacts(chatId)) ?: arrayOf(TdApi.ChatPosition(TdApi.ChatListMain(), order, false, null))
+    /** Признаки чата для членства в папках (группа/канал/контакт/мут/прочитан/архив). */
+    fun chatFacts(chatId: Long): Folders.ChatFacts {
+        val chat = chats[chatId]
+        val g = groupsByChatId[chatId]
+        val muted = (chat?.notificationSettings?.muteFor ?: 0) > 0
+        val kind = g?.let { groupKind[it.gid] } ?: ""
+        return Folders.ChatFacts(isGroup = g != null && kind != "channel", isChannel = kind == "channel", isContact = g == null,
+            isMuted = muted, isRead = (chat?.unreadCount ?: 0) == 0, isArchived = local?.isArchived(chatId) == true)
+    }
+    /** Применить TTL/черновик к чату из локального состояния (при создании и при восстановлении). */
+    fun applyLocal(chat: TdApi.Chat) {
+        val l = local ?: return
+        val address = addressOf(chat.id)
+        if (address != null && !isGroup(address)) chat.messageAutoDeleteTime = l.ttlOf(address)
+        chat.draftMessage = l.tdDraft(chat.id)
+        chat.positions = positionsFor(chat.id, chat.positions.firstOrNull()?.order ?: 0L)
+    }
+
+    /** TdApi-контент по нашему JSON (kind: text | photo | video | file | voice | video_note | sticker | gif | poll | location). */
+    fun contentFrom(c: JSONObject, uuid: String = ""): TdApi.MessageContent {
         val kind = c.optString("kind")
         val fid = c.optString("file_id")
         val size = c.optLong("size_bytes")
@@ -291,12 +317,30 @@ class ParvaneStore {
                 TdApi.MessageVideoNote(TdApi.VideoNote(c.optInt("duration_secs"), ByteArray(0), c.optInt("width", 240), null, null, null, f), false, false)
             }
             "location" -> TdApi.MessageLocation(TdApi.Location(c.optDouble("lat"), c.optDouble("long"), 0.0))
+            "poll" -> polls.toTdPoll(uuid, self, ::idOf)?.let { TdApi.MessagePoll(it, null, null, false) } ?: textContent(c)
+            // spec 005: стикер/GIF — тот же контент, что web/desktop; format по mime обязателен для X
+            "sticker" -> {
+                val f = file() ?: return textContent(c)
+                val w = c.optInt("width", 512); val h = c.optInt("height", 512)
+                val ref = c.optJSONObject("pack_ref")
+                val setId = ref?.optString("name")?.takeIf { it.isNotEmpty() }?.let { EmojiDocId.packSetId(EmojiDocId.sanitizeName(it)) } ?: 0L
+                val emoji = if (c.isNull("filename")) "🙂" else c.optString("filename").ifEmpty { "🙂" }
+                TdApi.MessageSticker(TdApi.Sticker(f.id.toLong(), setId, w, h, emoji, PackIndex.formatFor(mime), TdApi.StickerFullTypeRegular(null),
+                    TdApi.Thumbnail(PackIndex.thumbnailFormatFor(mime), w, h, f), f), false)
+            }
+            "gif" -> {
+                val f = file() ?: return textContent(c)
+                TdApi.MessageAnimation(TdApi.Animation(c.optInt("duration_secs", 1), c.optInt("width", 240), c.optInt("height", 240),
+                    c.optString("filename", "animation.webm"), mime.ifEmpty { "video/webm" }, false, null, null, f), caption(c), false, false, false)
+            }
             else -> textContent(c)
         }
     }
 
+    /** Текст с сущностями провода (bold/italic/…/custom_emoji — spec 005) и превью ссылки отправителя (`webpage`). */
     private fun textContent(c: JSONObject): TdApi.MessageText =
-        TdApi.MessageText(TdApi.FormattedText(if (c.isNull("text")) "" else c.optString("text"), arrayOf()), null, null)
+        TdApi.MessageText(TdApi.FormattedText(if (c.isNull("text")) "" else c.optString("text"), Entities.fromWire(c.optJSONArray("entities"))), LinkPreviews.linkPreviewOf(c.optJSONObject("webpage")), null)
+
 
     private fun reactionsFrom(arr: JSONArray?): TdApi.MessageInteractionInfo? {
         if (arr == null || arr.length() == 0) return null
@@ -321,6 +365,7 @@ class ParvaneStore {
             lastName = ""
             usernames = TdApi.Usernames(arrayOf(nick), arrayOf<String>(), nick, arrayOf<String>())
             phoneNumber = profiles[address]?.optString("phone").orEmpty()
+            accentColorId = (profiles[address]?.optInt("name_color", -1) ?: -1).let { if (it in 0..6) it else 0 } // цвет имени (web/desktop name_color)
             status = old?.status ?: TdApi.UserStatusOffline(0)
             profilePhoto = old?.profilePhoto
             type = TdApi.UserTypeRegular()
@@ -342,6 +387,7 @@ class ParvaneStore {
             isTranslatable = false
             clientData = ""
         }
+        if (!existed) applyLocal(chat)
         chat.title = user.firstName
         chat.photo = user.profilePhoto?.let { TdApi.ChatPhotoInfo(it.small, it.big, it.minithumbnail, false, false) }
         chats[id] = chat
@@ -453,6 +499,7 @@ class ParvaneStore {
         val group = groupsByGid[to]
         val chat = if (group != null) chats[group.chatId] ?: return null else ensurePeer(if (out) to else from).second
         val msgId = nextMessageId++ shl 20 // как серверные id TDLib (кратны 2^20)
+        if (content.optString("kind") == "poll") polls.register(uuid, from, content) // spec 005: до contentFrom
         val msg = TdApi.Message().apply {
             id = msgId
             chatId = chat.id
@@ -462,7 +509,7 @@ class ParvaneStore {
             editDate = if (edited) ts.toInt() else 0
             isPinned = pinned
             canBeSaved = true
-            this.content = contentFrom(content)
+            this.content = contentFrom(content, uuid)
             interactionInfo = reactionsFrom(reactions)
             val replied = replyUuid?.let { msgByUuid[it] }
             this.replyTo = if (replied != null) TdApi.MessageReplyToMessage(replied.chatId, replied.id, null, 0, null, null, 0, null) else null
@@ -475,7 +522,7 @@ class ParvaneStore {
         uuidByMsg[key(chat.id, msgId)] = uuid
         contentByUuid[uuid] = content
         chat.lastMessage = msg
-        chat.positions = arrayOf(TdApi.ChatPosition(TdApi.ChatListMain(), ts, false, null))
+        chat.positions = positionsFor(chat.id, ts)
         if (!out && !read) chat.unreadCount += 1
         if (!out && read && msgId > chat.lastReadInboxMessageId) chat.lastReadInboxMessageId = msgId
         if (out && read) chat.lastReadOutboxMessageId = msgId

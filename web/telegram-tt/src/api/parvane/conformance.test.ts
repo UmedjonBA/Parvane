@@ -199,6 +199,22 @@ describe('MAP-1: фрагменты карты — только через ша�
     }
   });
 
+  it('android берёт тайлы через ядро (preview.map.tile) и не знает картографических хостов', () => {
+    const client = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt');
+    expect(client).toMatch(/ParvaneCore\.mapTile\(/);
+    const jni = readRepo('android/jni/parvane_jni.cpp');
+    expect(jni).toMatch(/nativeMapTile/);
+    for (const file of [
+      'android/libtd/src/main/java/org/drinkless/tdlib/Client.kt',
+      'android/libtd/src/main/java/org/drinkless/tdlib/MapGeometry.kt',
+      'android/jni/parvane_jni.cpp',
+    ]) {
+      const source = readRepo(file);
+      for (const host of hosts) expect(source, file).not.toContain(host);
+    }
+    expect(String(map.clients!.android)).toContain('tgx_folders_preview_flow.sh');
+  });
+
   it('зум статичной карты совпадает на web и desktop', () => {
     const location = readFileSync(
       path.join(process.cwd(), 'src/components/middle/message/Location.tsx'),
