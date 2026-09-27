@@ -6,6 +6,9 @@
 #include "base/timer.h"
 #include "main/main_session.h"
 #include "main/main_account.h"       // forcedLogOut при отказе авторизации
+#include "main/main_domain.h"         // локальный ключ tdesktop для storecrypt (P-13)
+#include "storage/storage_account.h"  // peekLegacyLocalKey
+#include "mtproto/mtproto_auth_key.h"
 #include "parvane/keybackup.h"        // резервная копия ключей (формат веба)
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -72,6 +75,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QDateTime>
 #include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
+#include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
 #include <parvane/messenger_client.h> // parvane-core
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -119,6 +123,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <filesystem>              // миграция tdata/parvane-* (P-13)
 #include <set>
 #include <string>
 #include <vector>
@@ -429,6 +434,87 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 	});
 }
 
+// ── Шифрование tdata/parvane-* (P-13) ─────────────────────────────────────────
+// Ключ хранилища — производная от локального ключа tdesktop (тот лежит под
+// паскодом): SHA-256("parvane-store-v1" || AuthKey). Все файлы parvane-*
+// (JWT, секрет доверия, кэш расшифровки, журнал истории, курсоры, ключ
+// звонков, Olm-стор ядра) пишутся шифртекстом; plain прежних версий читается
+// и перешифровывается при первом доступе. Без ключа (домен ещё не стартовал)
+// хелперы работают как раньше — plain, и миграция догоняет позже.
+std::once_flag g_storeMigrated;
+
+void EnsureStoreKey() {
+	if (parvane::storecrypt::enabled()) {
+		return;
+	}
+	if (!Core::App().domain().started()) {
+		return;
+	}
+	const auto key = Core::App().domain().active().local().peekLegacyLocalKey();
+	if (!key) {
+		return;
+	}
+	const auto &data = key->data();
+	parvane::storecrypt::setKey(parvane::storecrypt::deriveKey(
+		std::string(reinterpret_cast<const char *>(data.data()), data.size())));
+	std::call_once(g_storeMigrated, [] {
+		const auto dir = (cWorkingDir() + u"tdata"_q).toStdString();
+		auto migrated = 0;
+		std::error_code ec;
+		for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+			const auto name = entry.path().filename().string();
+			if (name.rfind("parvane-", 0) != 0) {
+				continue;
+			}
+			if (entry.is_regular_file(ec)) {
+				migrated += parvane::storecrypt::migrateFile(entry.path().string());
+			} else if (entry.is_directory(ec)) {
+				migrated += parvane::storecrypt::migrateDir(entry.path().string());
+			}
+		}
+		if (migrated) {
+			LOG(("Parvane: хранилище — перешифровано %1 файлов tdata/parvane-*").arg(migrated));
+		}
+	});
+}
+
+[[nodiscard]] QByteArray StoreRead(const QString &path) {
+	EnsureStoreKey();
+	return QByteArray::fromStdString(parvane::storecrypt::readFile(path.toStdString()));
+}
+
+bool StoreWrite(const QString &path, const QByteArray &data) {
+	EnsureStoreKey();
+	return parvane::storecrypt::writeFile(path.toStdString(), data.toStdString());
+}
+
+[[nodiscard]] QStringList StoreReadLines(const QString &path) {
+	EnsureStoreKey();
+	auto out = QStringList();
+	for (const auto &line : parvane::storecrypt::readLines(path.toStdString())) {
+		const auto trimmed = QString::fromStdString(line).trimmed();
+		if (!trimmed.isEmpty()) {
+			out.push_back(trimmed);
+		}
+	}
+	return out;
+}
+
+bool StoreAppendLine(const QString &path, const QString &line) {
+	EnsureStoreKey();
+	return parvane::storecrypt::appendLine(path.toStdString(), line.toStdString());
+}
+
+bool StoreWriteLines(const QString &path, const QStringList &lines) {
+	EnsureStoreKey();
+	auto raw = std::vector<std::string>();
+	raw.reserve(lines.size());
+	for (const auto &line : lines) {
+		raw.push_back(line.toStdString());
+	}
+	return parvane::storecrypt::writeLines(path.toStdString(), raw);
+}
+
 // ── локальный журнал истории (Фаза 2 доводка) ────────────────────────────────
 // Свои исходящие sealed на сервер как «свои» не попадают (from_user=''), а входящие
 // инкрементальный курсор при рестарте не пере-запрашивает → история терялась.
@@ -452,27 +538,14 @@ void HistoryAppend(const parvane::StoredMessage &sm) {
 	if (sm.id.empty()) {
 		return;
 	}
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
-	f.write(QString::fromStdString(sm.toJson().dump()).toUtf8());
-	f.write("\n");
+	StoreAppendLine(HistoryPath(), QString::fromStdString(sm.toJson().dump()));
 }
 
 // Воспроизвести локальную историю в UI при старте (до первого sync). Дедуп по
 // uuid делает injectOnMain; live=false → без ack и без пере-записи в журнал.
 void ReplayHistory() {
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
 	std::vector<parvane::StoredMessage> msgs;
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(HistoryPath())) {
 		try {
 			msgs.push_back(parvane::StoredMessage::fromJson(
 				nlohmann::json::parse(line.toStdString())));
@@ -517,26 +590,14 @@ QSet<QString> g_clearedUuids; // под g_sessionMutex
 // он берёт тот же мьютекс (дедлок).
 void LoadClearedLocked() {
 	g_clearedUuids.clear();
-	QFile f(ClearedPathFor(g_selfAddress));
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (!line.isEmpty()) {
-			g_clearedUuids.insert(line);
-		}
+	for (const auto &line : StoreReadLines(ClearedPathFor(g_selfAddress))) {
+		g_clearedUuids.insert(line);
 	}
 }
 
 void AppendCleared(const QStringList &uuids) {
-	QFile f(ClearedPath());
-	if (!f.open(QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
 	for (const auto &u : uuids) {
-		f.write(u.toUtf8());
-		f.write("\n");
+		StoreAppendLine(ClearedPath(), u);
 	}
 }
 
@@ -547,18 +608,9 @@ void AppendCleared(const QStringList &uuids) {
 
 // Переписать журнал истории без скрытых сообщений (иначе воскреснут при старте).
 void RewriteHistoryWithout(const QSet<QString> &uuids) {
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	QByteArray kept;
+	QStringList kept;
 	auto dropped = 0;
-	while (!f.atEnd()) {
-		const auto raw = f.readLine();
-		const auto line = QString::fromUtf8(raw).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(HistoryPath())) {
 		auto id = QString();
 		try {
 			const auto j = nlohmann::json::parse(line.toStdString());
@@ -569,17 +621,12 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 			++dropped;
 			continue;
 		}
-		kept += line.toUtf8();
-		kept += '\n';
+		kept.push_back(line);
 	}
-	f.close();
 	if (!dropped) {
 		return;
 	}
-	QFile out(HistoryPath());
-	if (out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		out.write(kept);
-	}
+	StoreWriteLines(HistoryPath(), kept);
 }
 
 // Журнал истории хранит `read` на момент записи, а он append-only: receipt
@@ -590,40 +637,26 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 std::mutex g_historyFileMutex;
 void MarkHistoryRead(const QSet<QString> &uuids) {
 	std::lock_guard<std::mutex> lk(g_historyFileMutex);
-	QFile f(HistoryPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	QByteArray kept;
+	QStringList kept;
 	auto changed = 0;
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(HistoryPath())) {
 		try {
 			auto j = nlohmann::json::parse(line.toStdString());
 			const auto id = QString::fromStdString(j.value("id", std::string()));
 			if (!id.isEmpty() && uuids.contains(id) && !j.value("read", false)) {
 				j["read"] = true;
 				++changed;
-				kept += QByteArray::fromStdString(j.dump());
-				kept += '\n';
+				kept.push_back(QString::fromStdString(j.dump()));
 				continue;
 			}
 		} catch (const std::exception &) {
 		}
-		kept += line.toUtf8();
-		kept += '\n';
+		kept.push_back(line);
 	}
-	f.close();
 	if (!changed) {
 		return;
 	}
-	QFile out(HistoryPath());
-	if (out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		out.write(kept);
-	}
+	StoreWriteLines(HistoryPath(), kept);
 }
 
 // Локально забыть скрытые сообщения (карты uuid, медиа-контент, кэш расшифровки)
@@ -712,18 +745,15 @@ void SaveTtlStore() {
 			}
 		}
 	}
-	QFile f(TtlStorePath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		f.write(QString::fromStdString(j.dump()).toUtf8());
-	}
+	StoreWrite(TtlStorePath(), QString::fromStdString(j.dump()).toUtf8());
 }
 void LoadTtlStore() {
-	QFile f(TtlStorePath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(TtlStorePath());
+	if (raw.isEmpty()) {
 		return;
 	}
 	try {
-		auto j = nlohmann::json::parse(QString::fromUtf8(f.readAll()).toStdString());
+		auto j = nlohmann::json::parse(raw.toStdString());
 		if (j.is_object()) {
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			for (auto it = j.begin(); it != j.end(); ++it) {
@@ -1229,9 +1259,8 @@ std::unique_ptr<parvane::ITransport> MakeTransport(const QString &token) {
 
 // Звать ПОД g_sessionMutex (например из StartSession) — сама не лочит.
 void LoadCursorsLocked() {
-	QFile f(CursorsPath());
-	if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	if (const auto raw = StoreRead(CursorsPath()); !raw.isEmpty()) {
+		const auto lines = QString::fromUtf8(raw).split('\n');
 		if (lines.size() > 0) {
 			g_lastSeenId = lines[0].trimmed().toStdString();
 		}
@@ -1260,14 +1289,8 @@ void LoadCursorsLocked() {
 
 // Значения передаются аргументами (зовётся с worker после захвата под локом).
 void SaveCursors(const std::string &lastSeen, std::int64_t sinceUpdated) {
-	QFile f(CursorsPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
-	f.write(QString::fromStdString(lastSeen).toUtf8());
-	f.write("\n");
-	f.write(QString::number(sinceUpdated).toUtf8());
-	f.write("\n");
+	StoreWrite(CursorsPath(), QString::fromStdString(lastSeen).toUtf8() + "\n"
+		+ QString::number(sinceUpdated).toUtf8() + "\n");
 }
 
 // ── очередь починки нерасшифрованного ───────────────────────────────────────
@@ -1287,11 +1310,7 @@ constexpr int kRepairAttempts = 3;
 
 [[nodiscard]] QHash<QString, int> LoadPending() {
 	auto out = QHash<QString, int>();
-	QFile f(PendingPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return out;
-	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts);
+	const auto lines = QString::fromUtf8(StoreRead(PendingPath())).split('\n', Qt::SkipEmptyParts);
 	for (const auto &line : lines) {
 		const auto parts = line.trimmed().split(' ');
 		if (parts.size() == 2) {
@@ -1302,16 +1321,11 @@ constexpr int kRepairAttempts = 3;
 }
 
 void SavePending(const QHash<QString, int> &pending) {
-	QFile f(PendingPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
+	QByteArray data;
 	for (auto it = pending.constBegin(); it != pending.constEnd(); ++it) {
-		f.write(it.key().toUtf8());
-		f.write(" ");
-		f.write(QString::number(it.value()).toUtf8());
-		f.write("\n");
+		data += it.key().toUtf8() + " " + QString::number(it.value()).toUtf8() + "\n";
 	}
+	StoreWrite(PendingPath(), data);
 }
 
 // Учитывает провалы прохода. Возвращает true, если дисковый курсор двигать
@@ -1350,25 +1364,16 @@ void SavePending(const QHash<QString, int> &pending) {
 
 // main-поток, ДО воспроизведения журнала истории (AfterSessionReady).
 void LoadReadJournal() {
-	QFile f(ReadJournalPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts);
+	const auto lines = StoreReadLines(ReadJournalPath());
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	for (const auto &line : lines) {
-		g_reportedRead.insert(line.trimmed());
+		g_reportedRead.insert(line);
 	}
 }
 
 void AppendReadJournal(const std::vector<std::string> &ids) { // worker
-	QFile f(ReadJournalPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
 	for (const auto &id : ids) {
-		f.write(id.data(), qint64(id.size()));
-		f.write("\n");
+		StoreAppendLine(ReadJournalPath(), QString::fromStdString(id));
 	}
 }
 
@@ -1462,18 +1467,15 @@ void RetryUnconfirmedReads(
 }
 
 void SaveNotifyState() { // main
-	QFile f(NotifyStatePath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		f.write(NotifyBlob().toUtf8());
-	}
+	StoreWrite(NotifyStatePath(), NotifyBlob().toUtf8());
 }
 
 void LoadNotifyState() { // main
-	QFile f(NotifyStatePath());
-	if (!f.open(QIODevice::ReadOnly)) {
+	const auto raw = StoreRead(NotifyStatePath());
+	if (raw.isEmpty()) {
 		return;
 	}
-	const auto j = nlohmann::json::parse(f.readAll().toStdString(), nullptr, false);
+	const auto j = nlohmann::json::parse(raw.toStdString(), nullptr, false);
 	if (!j.is_object()) {
 		return;
 	}
@@ -1495,17 +1497,14 @@ void LoadNotifyState() { // main
 }
 
 [[nodiscard]] QString ReadTrustSecret(const QString &user) {
-	QFile f(TrustSecretPath(user));
-	return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()).trimmed() : QString();
+	return QString::fromUtf8(StoreRead(TrustSecretPath(user))).trimmed();
 }
 
 void WriteTrustSecret(const QString &user, const QString &secret) {
 	if (user.isEmpty() || secret.isEmpty()) {
 		return;
 	}
-	QFile f(TrustSecretPath(user));
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		f.write(secret.toUtf8());
+	if (StoreWrite(TrustSecretPath(user), secret.toUtf8())) {
 		LOG(("Parvane: получен секрет доверия устройства (2FA) для %1").arg(user));
 	}
 }
@@ -1519,23 +1518,16 @@ void WriteTrustSecret(const QString &user, const QString &secret) {
 }
 
 void SaveSessionCreds(const QString &address, const QString &token) {
-	QFile f(SessionCredsPath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
-	f.write(address.toUtf8());
-	f.write("\n");
-	f.write(token.toUtf8());
-	f.write("\n");
+	StoreWrite(SessionCredsPath(), address.toUtf8() + "\n" + token.toUtf8() + "\n");
 }
 
 // Восстановить self+token с диска (для рестарта). true — восстановлено.
 bool RestoreSessionCreds() {
-	QFile f(SessionCredsPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(SessionCredsPath());
+	if (raw.isEmpty()) {
 		return false;
 	}
-	const auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	const auto lines = QString::fromUtf8(raw).split('\n');
 	if (lines.size() < 2 || lines[0].trimmed().isEmpty()) {
 		return false;
 	}
@@ -1558,15 +1550,7 @@ bool RestoreSessionCreds() {
 
 // Загрузить кэш. Звать ПОД g_sessionMutex (из StartSession).
 void LoadDecCacheLocked() {
-	QFile f(DecCachePath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		return;
-	}
-	while (!f.atEnd()) {
-		const auto line = QString::fromUtf8(f.readLine()).trimmed();
-		if (line.isEmpty()) {
-			continue;
-		}
+	for (const auto &line : StoreReadLines(DecCachePath())) {
 		try {
 			const auto j = nlohmann::json::parse(line.toStdString());
 			const auto id = QString::fromStdString(j.value("id", std::string()));
@@ -1590,13 +1574,8 @@ void DecCachePut(const QString &id, const QString &inner) {
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_decCache.insert(id, inner);
 	}
-	QFile f(DecCachePath());
-	if (!f.open(QIODevice::Append | QIODevice::Text)) {
-		return;
-	}
 	const nlohmann::json j = {{"id", id.toStdString()}, {"inner", inner.toStdString()}};
-	f.write(QString::fromStdString(j.dump()).toUtf8());
-	f.write("\n");
+	StoreAppendLine(DecCachePath(), QString::fromStdString(j.dump()));
 }
 
 // Удалить запись (TTL-эфемерка не должна лежать плейнтекстом вечно): память +
@@ -1610,16 +1589,13 @@ void DecCacheRemove(const QString &id) {
 		}
 		snapshot = g_decCache;
 	}
-	QFile f(DecCachePath());
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		return;
-	}
+	QStringList lines;
 	for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
 		const nlohmann::json j = {{"id", it.key().toStdString()},
 			{"inner", it.value().toStdString()}};
-		f.write(QString::fromStdString(j.dump()).toUtf8());
-		f.write("\n");
+		lines.push_back(QString::fromStdString(j.dump()));
 	}
+	StoreWriteLines(DecCachePath(), lines);
 }
 
 [[nodiscard]] bool DecCacheEmpty() {
@@ -2091,6 +2067,7 @@ bool StartSession() {
 		auto messenger = std::make_unique<parvane::MessengerClient>(*transport);
 		g_transport = std::move(transport);
 		g_messenger = std::move(messenger);
+		EnsureStoreKey();     // P-13: ключ шифрования tdata/parvane-* до чтения файлов
 		LoadCursorsLocked();  // курсоры инкрементального синка (Фаза 1)
 		LoadDecCacheLocked(); // кэш расшифрованного E2E (пережить рестарт/пере-синк)
 		LoadClearedLocked();  // скрытые «для меня» сообщения (удалённые чаты)
@@ -6481,10 +6458,7 @@ void SaveScheduledLocked() {
 		if (it.replyTo) j["reply_to"] = *it.replyTo;
 		arr.push_back(std::move(j));
 	}
-	QFile f(ScheduledPath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		f.write(QString::fromStdString(arr.dump()).toUtf8());
-	}
+	StoreWrite(ScheduledPath(), QString::fromStdString(arr.dump()).toUtf8());
 }
 
 // Отправить одно запланированное сообщение сейчас (main-поток): локальное эхо
@@ -6594,11 +6568,11 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 
 // Загрузить очередь с диска и взвести таймеры (на старте сессии).
 void RestoreScheduled() {
-	QFile f(ScheduledPath());
-	if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(ScheduledPath());
+	if (raw.isEmpty()) {
 		return;
 	}
-	const auto arr = nlohmann::json::parse(f.readAll().toStdString(), nullptr, false);
+	const auto arr = nlohmann::json::parse(raw.toStdString(), nullptr, false);
 	if (!arr.is_array()) {
 		return;
 	}
@@ -7766,20 +7740,17 @@ void SaveFolders(not_null<Main::Session*> session) {
 		o["pinned"] = peers(f.pinned());
 		arr.push_back(std::move(o));
 	}
-	QFile file(FoldersPath());
-	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-		file.write(QString::fromStdString(arr.dump()).toUtf8());
-	}
+	StoreWrite(FoldersPath(), QString::fromStdString(arr.dump()).toUtf8());
 }
 
 void LoadFolders(not_null<Main::Session*> session) {
-	QFile file(FoldersPath());
-	if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	const auto raw = StoreRead(FoldersPath());
+	if (raw.isEmpty()) {
 		return;
 	}
 	nlohmann::json arr;
 	try {
-		arr = nlohmann::json::parse(QString::fromUtf8(file.readAll()).toStdString());
+		arr = nlohmann::json::parse(raw.toStdString());
 	} catch (const std::exception &) {
 		return;
 	}

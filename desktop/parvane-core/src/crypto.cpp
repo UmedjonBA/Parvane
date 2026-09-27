@@ -1,5 +1,6 @@
 // Parvane fork: реализация crypto.h — Ed25519 через OpenSSL EVP + base64.
 #include "parvane/crypto.h"
+#include "parvane/storecrypt.h"
 
 #include <array>
 #include <cstdint>
@@ -117,23 +118,22 @@ std::optional<SigningKey> SigningKey::fromSeedB64(const std::string &seedB64) {
     return key;
 }
 
+// P-13: seed — через storecrypt (шифртекст под ключом ОС; plain прежних
+// версий читается и перешифровывается).
 SigningKey SigningKey::loadOrCreate(const std::string &path) {
     if (!path.empty()) {
-        std::ifstream in(path);
-        if (in) {
-            std::string seed;
-            std::getline(in, seed);
-            if (auto k = fromSeedB64(seed)) return *k;
+        auto seed = storecrypt::readFile(path);
+        if (const auto nl = seed.find('\n'); nl != std::string::npos) seed.resize(nl);
+        if (!seed.empty()) {
+            if (auto k = fromSeedB64(seed)) {
+                storecrypt::migrateFile(path);
+                return *k;
+            }
         }
     }
     SigningKey key = generate();
     if (!path.empty() && !key.seedB64_.empty()) {
-        std::ofstream out(path, std::ios::trunc);
-        out << key.seedB64_ << "\n";
-        out.close();
-#if defined(__unix__) || defined(__APPLE__)
-        ::chmod(path.c_str(), 0600); // секрет — только владельцу
-#endif
+        storecrypt::writeFile(path, key.seedB64_ + "\n"); // права 0600 внутри
     }
     return key;
 }

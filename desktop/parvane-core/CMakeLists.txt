@@ -52,6 +52,7 @@ add_library(parvane_core STATIC
     src/e2e.cpp
     src/linking.cpp
     src/blobcrypt.cpp
+    src/storecrypt.cpp
     src/keybackup.cpp
     src/messenger_client.cpp
     src/cloud_client.cpp
@@ -103,6 +104,9 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_blobcrypt_tests tests/blobcrypt_tests.cpp)
     target_link_libraries(parvane_blobcrypt_tests PRIVATE parvane_core)
 
+    add_executable(parvane_storecrypt_tests tests/storecrypt_tests.cpp)
+    target_link_libraries(parvane_storecrypt_tests PRIVATE parvane_core)
+
     add_executable(parvane_linking_tests tests/linking_tests.cpp)
     target_link_libraries(parvane_linking_tests PRIVATE parvane_core)
 
@@ -132,6 +136,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME call COMMAND parvane_call_tests)
     add_test(NAME crypto COMMAND parvane_crypto_tests)
     add_test(NAME linking COMMAND parvane_linking_tests)
+    add_test(NAME storecrypt COMMAND parvane_storecrypt_tests)
     add_test(NAME e2e COMMAND parvane_e2e_tests)
     add_test(NAME call_session COMMAND parvane_call_session_tests)
     add_test(NAME call_manager COMMAND parvane_call_manager_tests)
