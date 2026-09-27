@@ -413,13 +413,12 @@ describe('SEND-1: подпись отправки, ack без sender, правк
     expect(messengerStore).toMatch(/content\.kind\(\) != stored_content\.kind\(\)/);
     expect(messengerStore).toMatch(/AND kind NOT IN \('encrypted', 'group_encrypted'\)/);
     const gateway = readFileSync(
-      path.join(REPO_ROOT, 'backend/shards/gateway/src/main.rs'),
+      path.join(REPO_ROOT, 'backend/shards/gateway/src/acl.rs'),
       'utf8',
     );
     // 4.10: субъекты — константами из parvane-types, не литералами
     expect(gateway).toMatch(/subject == MSG_SEND \|\| subject == MSG_EDIT/);
-    const gatewayCode = gateway.split('#[cfg(test)]')[0];
-    expect(gatewayCode).not.toMatch(/"msg\.(chat|typing)\.|"presence\."/);
+    expect(gateway).not.toMatch(/"msg\.(chat|typing)\.|"presence\."/);
   });
 });
 
@@ -442,7 +441,8 @@ describe('EPHEMERAL-1: typing только свой/по членству, prese
     const web = readFileSync(path.join(REPO_ROOT, files[0]), 'utf8');
     expect(web).toMatch(/subscribe\(buildPresenceTopic\(peerId\)/);
     expect(web).not.toMatch(/subscribe\(`presence\./);
-    const gateway = readFileSync(path.join(REPO_ROOT, 'backend/shards/gateway/src/main.rs'), 'utf8');
+    // 4.7: ACL gateway живёт в acl.rs
+    const gateway = readFileSync(path.join(REPO_ROOT, 'backend/shards/gateway/src/acl.rs'), 'utf8');
     expect(gateway).toMatch(/is_own_ephemeral_subject\(user, MSG_TYPING_PREFIX, subject\)/);
     expect(gateway).toMatch(/async fn group_typing_allowed/);
   });
