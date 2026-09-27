@@ -171,6 +171,29 @@ identity отказывает после `PARVANE_REGISTER_RATE_IP=30` реги�
 по логину). При прямом NATS (dev без gateway) поле пусто — лимит по IP не
 применяется.
 
+## Переменные окружения лимитов и защит (после ревью 2026-09-27)
+Все — необязательные, значения по умолчанию в скобках; задаются в `environment`
+соответствующего сервиса compose.
+
+| Переменная | Шард | Смысл |
+|---|---|---|
+| `PARVANE_HANDLER_CONCURRENCY` (32) | identity, cloud, preview, push | сколько обработчиков запросов работают параллельно (spawn под семафором, п. 4.5) |
+| `PARVANE_PREKEY_FETCH_RATE` (20) / `PARVANE_PREKEY_FETCH_DAILY` (200) | identity | фетчей prekey-бандла на пару запросивший→цель за минуту / за сутки (P-21) |
+| `PARVANE_PREKEY_REUSE_SECS` (600) | identity | окно, в котором повторный фетч той же пары отдаёт тот же one-time prekey (P-21) |
+| `PARVANE_REGISTER_RATE_IP` (30) / `PARVANE_LOGIN_RATE_IP` (120) | identity | лимиты по IP за минуту (P-43) |
+| `PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS` (256) | cloud | верхняя граница чанков одного download-запроса (P-28) |
+| `PARVANE_PREVIEW_RATE` (60) | preview | запросов превью и тайлов на пользователя за минуту (P-30, P-23) |
+| `PARVANE_PREVIEW_TILE_CACHE_MAX` (20000) | preview | кап кэша тайлов карты, старые выселяются (P-23) |
+| `PARVANE_PUSH_MAX_SUBSCRIPTIONS` (8) | push | web-push подписок на пользователя (P-17) |
+| `PARVANE_GROUP_MAX_MEMBERS` (200) | messenger | участников в группе (P-34) |
+| `PARVANE_GATEWAY_REVERIFY_SECS` (300) | gateway | период переверификации JWT открытой сессии (P-06) |
+| `PARVANE_GATEWAY_MAX_CONNS` / `PARVANE_GATEWAY_MAX_CONNS_PER_IP` | gateway | лимиты соединений (P-37) |
+| `PARVANE_GATEWAY_ORIGIN` | web build | origin gateway для `connect-src` в CSP (P-32); по умолчанию `'self'` |
+| `PARVANE_DEV=1` | identity | dev-режим: код подтверждения в лог, `identity.server.info` без ограничений — только в тестах |
+
+Ошибки клиенту (п. 4.10): SQLite/IO-ошибки уходят как `internal_error`, ошибки
+разбора JSON — `bad_request`; детали только в логах шарда.
+
 ## Сверка ключей безопасности
 Профиль собеседника → «Ключ безопасности»: отпечатки identity-ключей его
 устройств (SHA-256, 12 групп hex); Settings → Privacy → «Ваш ключ
