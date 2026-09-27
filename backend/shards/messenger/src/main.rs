@@ -1482,6 +1482,12 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                 warn!("Отклонено: {} не может писать в {}", sender, event.payload.to);
                 return anyhow::Ok(());
             }
+        } else {
+            // P-40: sealed 1-на-1 тоже обязан пройти verify_token. Отправитель
+            // скрыт (from=""), но токен принадлежит живой, не отозванной сессии —
+            // иначе отозванное устройство слало бы sealed-сообщения до истечения
+            // JWT. Identity отклонит отозванный/протухший токен.
+            verify_token(nc, &event.token).await?;
         }
 
         let now = now_unix();
