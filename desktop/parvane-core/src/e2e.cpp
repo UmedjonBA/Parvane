@@ -8,6 +8,7 @@
 #include "parvane_e2e.h" // C-FFI vodozemac (backend/shared/parvane-e2e/include)
 #include "parvane/itransport.h"
 #include "parvane/linking.h"
+#include "parvane/storecrypt.h"
 #include "parvane/topics.h"
 
 #include <nlohmann/json.hpp>
@@ -125,18 +126,13 @@ std::string hexName(const std::string &s) {
     }
     return out;
 }
+// P-13: все файлы стора — через storecrypt (шифртекст под ключом ОС, если
+// клиент его установил; plain читается для миграции).
 std::string readFile(const std::string &path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        return {};
-    }
-    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return storecrypt::readFile(path);
 }
 void writeFile(const std::string &path, const std::string &data) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (f) {
-        f.write(data.data(), static_cast<std::streamsize>(data.size()));
-    }
+    storecrypt::writeFile(path, data);
 }
 std::string generateDeviceId() {
     auto id = linking::b64encode(linking::randomBytes(12));
@@ -803,6 +799,8 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
             loadGroupRecipients();
             loadLegacy();
             loadTransfers();
+            // P-13: догнать шифрование файлов, записанных до включения ключа
+            storecrypt::migrateDir(g_storeDir);
         }
         if (!g_account) {
             g_account = parvane_e2e_account_new();
@@ -1370,6 +1368,45 @@ void forgetOwnDevice(const std::string &deviceId) {
 void rotateGroupsWith(const std::string &contact) {
     std::lock_guard<std::mutex> lk(g_mu);
     rotateGroupsWithLocked(contact);
+}
+
+void resetInMemory() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (g_account) {
+        parvane_e2e_account_free(g_account);
+        g_account = nullptr;
+    }
+    for (auto &[_, s] : g_sessions) {
+        parvane_e2e_session_free(s);
+    }
+    g_sessions.clear();
+    for (auto &[_, g] : g_ownGroups) {
+        parvane_e2e_group_free(g);
+    }
+    g_ownGroups.clear();
+    for (auto &[_, g] : g_inGroups) {
+        parvane_e2e_inbound_group_free(g);
+    }
+    g_inGroups.clear();
+    for (auto *acc : g_legacy) {
+        parvane_e2e_account_free(acc);
+    }
+    g_legacy.clear();
+    g_transfers.clear();
+    g_contactId.clear();
+    g_seenIds.clear();
+    g_contactDevices.clear();
+    g_contactFetchedAt.clear();
+    g_ownGroupEpoch.clear();
+    g_inGroupEpoch.clear();
+    g_groupRecipients.clear();
+    g_identityB64.clear();
+    g_signingB64.clear();
+    g_deviceId.clear();
+    g_published = false;
+    g_otkNext = 1;
+    g_self.clear();
+    g_storeDir.clear();
 }
 
 bool needsHistoryLink(bool decCacheEmpty) {

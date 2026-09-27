@@ -50,7 +50,10 @@ object ParvaneCore {
         }
     }
 
-    fun init(gatewayUrl: String, storeDir: String) = nativeInit(gatewayUrl, storeDir)
+    // P-13: локальное хранилище ядра (Olm-pickle, сессии, JWT, кэш расшифровки,
+    // журнал) шифруется случайным ключом, завёрнутым ключом Android Keystore.
+    fun init(gatewayUrl: String, storeDir: String) =
+        nativeInit(gatewayUrl, storeDir, StoreKey.load(java.io.File(storeDir)))
     fun serverDomain(): String = nativeServerDomain()
     fun login(user: String, password: String, loginToken: String = ""): JSONObject = JSONObject(nativeLogin(user, password, loginToken))
     // identity: сервер/регистрация/подтверждение (зовёт и Java-оверлей X: ParvaneRegisterController)
@@ -95,7 +98,7 @@ object ParvaneCore {
     fun self(): String = nativeSelf()
     fun logout() = nativeLogout()
 
-    @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String)
+    @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String, storeKey: ByteArray)
     @JvmStatic private external fun nativeServerDomain(): String
     @JvmStatic private external fun nativeLogin(user: String, password: String, loginToken: String): String
     @JvmStatic private external fun nativeServerInfo(): String

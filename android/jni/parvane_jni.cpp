@@ -28,6 +28,7 @@
 #include <parvane/ids.h>
 #include <parvane/keybackup.h>
 #include <parvane/linking.h>
+#include <parvane/storecrypt.h>
 #include <parvane/messenger.h>
 #include <parvane/messenger_client.h>
 #include <parvane/topics.h>
@@ -108,20 +109,20 @@ std::atomic<bool> g_replaying{false};
 bool journaledType(const std::string &t) {
     return t == "message" || t == "edited" || t == "deleted" || t == "cleared" || t == "meta" || t == "outbox_read" || t == "read";
 }
+// P-13: журнал/кэш/сессия/курсоры/секрет доверия — через storecrypt (шифртекст
+// под ключом Android Keystore; plain-файлы прежних версий читаются и
+// перешифровываются при старте).
 void journalAppend(const json &event) {
     if (g_replaying || g_storeDir.empty()) return;
     std::lock_guard<std::mutex> lk(g_journalMu);
-    std::ofstream f(journalPath(), std::ios::app);
-    f << event.dump() << '\n';
+    parvane::storecrypt::appendLine(journalPath(), event.dump());
 }
 // Свёртка журнала → сообщения в порядке первого появления (с применёнными мутациями).
 std::vector<json> journalFold() {
     std::vector<std::string> order;
     std::map<std::string, json> msgs;
     std::lock_guard<std::mutex> lk(g_journalMu);
-    std::ifstream f(journalPath());
-    std::string line;
-    while (std::getline(f, line)) {
+    for (const auto &line : parvane::storecrypt::readLines(journalPath())) {
         auto e = json::parse(line, nullptr, false);
         if (!e.is_object()) continue;
         const auto t = e.value("type", "");
@@ -192,8 +193,9 @@ void journalReplay() {
     g_replaying = false;
     {
         std::lock_guard<std::mutex> lk(g_journalMu);
-        std::ofstream f(journalPath(), std::ios::trunc);
-        for (const auto &m : msgs) f << m.dump() << '\n';
+        std::vector<std::string> lines;
+        for (const auto &m : msgs) lines.push_back(m.dump());
+        parvane::storecrypt::writeLines(journalPath(), lines);
     }
     LOGI("журнал: восстановлено %zu сообщений", msgs.size());
 }
@@ -223,52 +225,46 @@ bool isGroupLocked(const std::string &address) { return g_groupMembers.count(add
 void loadDecCache() {
     g_decCache.clear();
     std::size_t lines = 0;
-    {
-        std::ifstream f(decCachePath());
-        std::string line;
-        while (std::getline(f, line)) {
-            ++lines;
-            auto j = json::parse(line, nullptr, false);
-            if (j.is_object() && j.contains("id") && j.contains("inner")) g_decCache[j["id"]] = j["inner"];
-        }
+    for (const auto &line : parvane::storecrypt::readLines(decCachePath())) {
+        ++lines;
+        auto j = json::parse(line, nullptr, false);
+        if (j.is_object() && j.contains("id") && j.contains("inner")) g_decCache[j["id"]] = j["inner"];
     }
     // Компакция: файл append-only (импорт линковки, правки пишут те же id заново) —
     // без неё рос бесконечно; переписываем, когда дублей больше четверти.
     if (lines > g_decCache.size() + g_decCache.size() / 4 + 16) {
-        std::ofstream f(decCachePath(), std::ios::trunc);
-        for (const auto &[id, inner] : g_decCache) f << json{{"id", id}, {"inner", inner}}.dump() << "\n";
+        std::vector<std::string> out;
+        for (const auto &[id, inner] : g_decCache) out.push_back(json{{"id", id}, {"inner", inner}}.dump());
+        parvane::storecrypt::writeLines(decCachePath(), out);
         LOGI("dec-cache: компакция %zu → %zu записей", lines, g_decCache.size());
     }
 }
 void decCachePut(const std::string &id, const json &inner) {
     if (g_decCache.count(id)) return;
     g_decCache[id] = inner;
-    std::ofstream f(decCachePath(), std::ios::app);
-    f << json{{"id", id}, {"inner", inner}}.dump() << "\n";
+    parvane::storecrypt::appendLine(decCachePath(), json{{"id", id}, {"inner", inner}}.dump());
 }
 
 void saveSession() {
-    std::ofstream f(sessionPath());
-    f << json{{"self", g_self}, {"token", g_token}}.dump();
+    parvane::storecrypt::writeFile(sessionPath(), json{{"self", g_self}, {"token", g_token}}.dump());
 }
 void loadSession() {
-    std::ifstream f(sessionPath());
-    if (!f) return;
-    auto j = json::parse(f, nullptr, false);
+    const auto raw = parvane::storecrypt::readFile(sessionPath());
+    if (raw.empty()) return;
+    auto j = json::parse(raw, nullptr, false);
     if (j.is_object()) {
         g_self = j.value("self", "");
         g_token = j.value("token", "");
     }
 }
 void saveCursors() {
-    std::ofstream f(cursorsPath());
-    f << json{{"id", g_cursorId}, {"upd", g_cursorUpd}}.dump();
+    parvane::storecrypt::writeFile(cursorsPath(), json{{"id", g_cursorId}, {"upd", g_cursorUpd}}.dump());
 }
 void loadCursors() {
-    std::ifstream f(cursorsPath());
     g_cursorId = parvane::MessengerClient::zeroCursor();
-    if (!f) return;
-    auto j = json::parse(f, nullptr, false);
+    const auto raw = parvane::storecrypt::readFile(cursorsPath());
+    if (raw.empty()) return;
+    auto j = json::parse(raw, nullptr, false);
     if (j.is_object()) {
         g_cursorId = j.value("id", std::string(parvane::MessengerClient::zeroCursor()));
         g_cursorUpd = j.value("upd", std::int64_t(0));
@@ -727,13 +723,33 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
     return g_onEvent ? JNI_VERSION_1_6 : JNI_ERR;
 }
 
+// storeKey — 32 байта ключа хранилища (P-13), развёрнутого Kotlin из Android
+// Keystore; пустой массив — без шифрования (только тесты/legacy).
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
-        JNIEnv *env, jclass, jstring gatewayUrl, jstring storeDir) {
+        JNIEnv *env, jclass, jstring gatewayUrl, jstring storeDir, jbyteArray storeKey) {
     std::lock_guard<std::mutex> lk(g_mu);
     g_gatewayUrl = jstr(env, gatewayUrl);
     g_storeDir = jstr(env, storeDir);
+    std::string key;
+    if (storeKey) {
+        const auto n = env->GetArrayLength(storeKey);
+        if (n == 32) {
+            key.resize(32);
+            env->GetByteArrayRegion(storeKey, 0, 32, reinterpret_cast<jbyte *>(key.data()));
+        }
+    }
+    parvane::storecrypt::setKey(key);
+    if (parvane::storecrypt::enabled()) {
+        // Догнать шифрование файлов прежних версий (session/cursors/journal/
+        // dec-cache/trust; каталоги e2e-* мигрирует initDevice ядра).
+        const int migrated = parvane::storecrypt::migrateDir(g_storeDir);
+        if (migrated) LOGI("хранилище: перешифровано %d файлов", migrated);
+    } else {
+        LOGE("хранилище: ключ шифрования не установлен — файлы plain (P-13)");
+    }
     loadSession();
-    LOGI("init: gateway=%s store=%s self=%s", g_gatewayUrl.c_str(), g_storeDir.c_str(), g_self.empty() ? "-" : "set");
+    LOGI("init: gateway=%s store=%s self=%s encrypted=%d", g_gatewayUrl.c_str(), g_storeDir.c_str(),
+         g_self.empty() ? "-" : "set", parvane::storecrypt::enabled() ? 1 : 0);
 }
 
 // TdApi.Object/Function.toString() в бандле Telegram X объявлены native (жили
@@ -767,10 +783,12 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeServerDomain(J
 // однажды подтверждённое в Telegram, при следующих входах не спрашивает подтверждения.
 std::string trustPath(const std::string &address) { return g_storeDir + "/trust-" + address + ".txt"; }
 std::string readTrust(const std::string &address) {
-    std::ifstream f(trustPath(address)); std::string s; std::getline(f, s); return s;
+    auto s = parvane::storecrypt::readFile(trustPath(address));
+    if (const auto nl = s.find('\n'); nl != std::string::npos) s.resize(nl);
+    return s;
 }
 void writeTrust(const std::string &address, const std::string &secret) {
-    std::ofstream f(trustPath(address), std::ios::trunc); f << secret;
+    parvane::storecrypt::writeFile(trustPath(address), secret);
 }
 std::string canonicalAddress(std::string address) {
     if (address.find('@') == std::string::npos) {

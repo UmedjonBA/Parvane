@@ -5,6 +5,7 @@
 // процесс), поэтому «второе устройство» моделируется напрямую через FFI
 // vodozemac как получатель копии.
 #include "parvane/e2e.h"
+#include "parvane/storecrypt.h"
 #include "parvane/itransport.h"
 #include "parvane/topics.h"
 #include "parvane_e2e.h"
@@ -12,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
+#include <fstream>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -334,6 +336,45 @@ int main() {
     check(extra.size() == 1 && extra[0].first == old.signing
               && parvane_e2e_ed25519_verify(old.signing.c_str(), "sync:0:0", extra[0].second.c_str()) == 1,
           "extraSignatures: подпись legacy-ключом прежнего устройства");
+
+    // P-13: с ключом хранилища файлы стора (Olm-pickle, сессии, каталоги)
+    // лежат шифртекстом; plain прежних версий мигрирует при initDevice.
+    {
+        namespace sc = parvane::storecrypt;
+        auto rawOf = [](const std::filesystem::path &p) {
+            std::ifstream f(p, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        };
+        const auto accountFile = dir / "account.json";
+        check(std::filesystem::exists(accountFile) && !sc::isSealed(rawOf(accountFile)),
+              "P-13: без ключа account.json — plain (legacy)");
+        const auto beforeIdentity = e2e::myIdentity();
+        sc::setKey(sc::deriveKey("os-local-key"));
+        e2e::resetInMemory();
+        e2e::initDevice(t, "alice@local", "tok", dir.string()); // тот же стор, теперь с ключом
+        check(e2e::myIdentity() == beforeIdentity, "P-13: после включения ключа — та же identity (миграция)");
+        check(sc::isSealed(rawOf(accountFile)), "P-13: account.json перешифрован (магия PVSE1)");
+        bool anyPlain = false;
+        for (const auto &entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) continue;
+            const auto raw = rawOf(entry.path());
+            if (!raw.empty() && !sc::isSealed(raw)) anyPlain = true;
+        }
+        check(!anyPlain, "P-13: в сторе не осталось plain-файлов");
+        check(rawOf(accountFile).find("ed25519") == std::string::npos, "P-13: pickle не читается с диска");
+        // Тот же ключ после «рестарта» — стор читается.
+        e2e::resetInMemory();
+        e2e::initDevice(t, "alice@local", "tok", dir.string());
+        check(e2e::myIdentity() == beforeIdentity, "P-13: с ключом после рестарта — та же identity");
+        // Чужой ключ — шифртекст не открывается: pickle недоступен, identity другая.
+        sc::setKey(sc::deriveKey("wrong-key"));
+        check(sc::readFile(accountFile.string()).empty(), "P-13: чужой ключ не открывает account.json");
+        e2e::resetInMemory();
+        e2e::initDevice(t, "alice@local", "tok", dir.string());
+        check(e2e::myIdentity() != beforeIdentity, "P-13: чужой ключ → стор недоступен (новая identity)");
+        sc::setKey("");
+        e2e::resetInMemory();
+    }
 
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;
