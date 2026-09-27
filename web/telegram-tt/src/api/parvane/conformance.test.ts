@@ -447,3 +447,31 @@ describe('EPHEMERAL-1: typing только свой/по членству, prese
     expect(gateway).toMatch(/async fn group_typing_allowed/);
   });
 });
+
+describe('BLOB-1: чанковый AEAD медиа-блобов', () => {
+  it('правило задокументировано с вектором', () => {
+    const r = rule('BLOB-1') as unknown as { chunkSizeDefault: number; vector: { headHex: string } };
+    expect(r.chunkSizeDefault).toBe(262144);
+    expect(r.vector.headHex.startsWith('50564232')).toBe(true);
+  });
+
+  it('web и parvane-core реализуют один формат, окна без тега больше не расшифровываются', () => {
+    const web = readFileSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/blobcrypt.ts'), 'utf8');
+    expect(web).not.toMatch(/AES-CTR/);
+    expect(web).toMatch(/const MAGIC = \[0x50, 0x56, 0x42, 0x32\]/);
+    expect(web).toMatch(/export async function decryptBlobChunks/);
+    const media = readFileSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/media.ts'), 'utf8');
+    expect(media).not.toMatch(/decryptRange/);
+    expect(media).toMatch(/decryptBlobChunks\(window, keys\.keyB64, keys\.nonceB64, header, blobFrom, totalBlobChunks\)/);
+    const core = readFileSync(path.join(REPO_ROOT, 'desktop/parvane-core/src/blobcrypt.cpp'), 'utf8');
+    expect(core).toMatch(/constexpr char kMagic\[4\] = \{'P', 'V', 'B', '2'\}/);
+    expect(core).toMatch(/std::optional<std::string> decryptChunks/);
+    const coreTests = readFileSync(path.join(REPO_ROOT, 'desktop/parvane-core/tests/blobcrypt_tests.cpp'), 'utf8');
+    const webTests = readFileSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/blobcrypt.test.ts'), 'utf8');
+    const r = rule('BLOB-1') as unknown as { vector: { headHex: string; tailHex: string }; legacyVector: { ciphertextB64: string } };
+    expect(webTests).toContain(r.vector.headHex);
+    expect(webTests).toContain(r.vector.tailHex);
+    expect(webTests).toContain(r.legacyVector.ciphertextB64);
+    expect(coreTests).toContain(r.legacyVector.ciphertextB64);
+  });
+});

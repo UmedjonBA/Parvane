@@ -742,15 +742,14 @@ export class E2eEngine {
       v: number; iterations?: number; salt: string; iv: string; data: string;
     };
     if (parsed.v !== EXPORT_VERSION) throw new Error(`Unsupported key backup version: ${parsed.v}.`);
-    // Число итераций из файла не ниже минимума: подделанный бэкап с iterations=1
-    // делал бы перебор пароля тривиальным
-    const key = await deriveExportKey(
-      password, base64ToBytes(parsed.salt), Math.max(parsed.iterations ?? EXPORT_MIN_ITERATIONS, EXPORT_MIN_ITERATIONS),
-    );
+    // P-48: границы конверта — иначе чужой файл с iterations=10^9 вешает вкладку,
+    // а соль/iv неверной длины делают KDF/GCM бессмысленными
+    const envelope = validateBackupEnvelope(parsed);
+    const key = await deriveExportKey(password, envelope.salt, envelope.iterations);
     const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: toStandaloneBuffer(base64ToBytes(parsed.iv)) },
+      { name: 'AES-GCM', iv: toStandaloneBuffer(envelope.iv) },
       key,
-      toStandaloneBuffer(base64ToBytes(parsed.data)),
+      toStandaloneBuffer(envelope.data),
     );
     const state = JSON.parse(new TextDecoder().decode(plaintext)) as PersistedE2eState;
 
@@ -1177,6 +1176,40 @@ function stripBase64Padding(value: string) {
 
 const EXPORT_VERSION = 1;
 const EXPORT_MIN_ITERATIONS = 310000;
+// P-48: верхняя граница итераций PBKDF2 при импорте (защита от DoS чужим файлом)
+export const EXPORT_MAX_ITERATIONS = 5_000_000;
+const EXPORT_SALT_MIN = 16;
+const EXPORT_SALT_MAX = 64;
+const EXPORT_IV_LEN = 12;
+export const EXPORT_DATA_MAX = 16 * 1024 * 1024;
+
+/** P-48: проверка конверта бэкапа до KDF: число итераций в [min, max], соль 16..64 байт,
+ *  iv 12 байт, данные ≤ 16 МиБ. Число итераций из файла не ниже минимума — подделанный
+ *  бэкап с iterations=1 делал бы перебор пароля тривиальным. */
+export function validateBackupEnvelope(parsed: {
+  iterations?: number; salt: string; iv: string; data: string;
+}): { iterations: number; salt: Uint8Array; iv: Uint8Array; data: Uint8Array } {
+  const raw = parsed.iterations ?? EXPORT_MIN_ITERATIONS;
+  if (!Number.isInteger(raw) || raw > EXPORT_MAX_ITERATIONS) {
+    throw new Error('Key backup: unsupported PBKDF2 iteration count.');
+  }
+  const iterations = Math.max(raw, EXPORT_MIN_ITERATIONS);
+  if (typeof parsed.salt !== 'string' || typeof parsed.iv !== 'string' || typeof parsed.data !== 'string') {
+    throw new Error('Key backup: malformed envelope.');
+  }
+  if (parsed.data.length > Math.ceil(EXPORT_DATA_MAX / 3) * 4 + 4) {
+    throw new Error('Key backup: payload too large.');
+  }
+  const salt = base64ToBytes(parsed.salt);
+  const iv = base64ToBytes(parsed.iv);
+  const data = base64ToBytes(parsed.data);
+  if (salt.length < EXPORT_SALT_MIN || salt.length > EXPORT_SALT_MAX) {
+    throw new Error('Key backup: bad salt length.');
+  }
+  if (iv.length !== EXPORT_IV_LEN) throw new Error('Key backup: bad iv length.');
+  if (data.length < 16 || data.length > EXPORT_DATA_MAX) throw new Error('Key backup: bad payload length.');
+  return { iterations, salt, iv, data };
+}
 const PERSIST_DEBOUNCE_MS = 250;
 // OWASP-2023 минимум для PBKDF2-SHA256. Импорт читает iterations из самого
 // бэкапа — старые экспорты на 310k остаются читаемыми

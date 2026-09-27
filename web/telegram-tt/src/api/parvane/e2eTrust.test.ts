@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { E2eEngine, verifyPrekeySignature } from './e2e';
+import {
+  E2eEngine, EXPORT_MAX_ITERATIONS, validateBackupEnvelope, verifyPrekeySignature,
+} from './e2e';
 
 // P-04 (TOFU): смена identity-ключа контакта определяется по множеству уже
 // виденных ключей, которое каталог НЕ засевает после первого знакомства —
@@ -137,5 +139,28 @@ describe('P-25: signed_prekey принимается только с подпи�
     const stripped = bundleOf(alice, 'a1', { signing_key: '', signed_prekey_sig: '' });
     const fetchStripped = () => Promise.resolve({ ok: true, devices: [stripped] });
     expect(await bob.encryptForDevices('p25c-alice@local', { kind: 'text', text: 'x' }, fetchStripped)).toBeUndefined();
+  });
+});
+
+// P-48: границы конверта бэкапа ключей до KDF
+describe('P-48: импорт бэкапа ограничен', () => {
+  const b64 = (n: number, fill = 7) => Buffer.from(new Uint8Array(n).fill(fill)).toString('base64');
+  const good = { iterations: 600000, salt: b64(16), iv: b64(12), data: b64(64) };
+
+  it('нормальный конверт проходит, итерации не ниже минимума', () => {
+    const env = validateBackupEnvelope(good);
+    expect(env.iterations).toBe(600000);
+    expect(validateBackupEnvelope({ ...good, iterations: 1 }).iterations).toBe(310000);
+    expect(env.salt.length).toBe(16);
+  });
+
+  it('слишком много итераций, плохая соль/iv/данные отклоняются', () => {
+    expect(() => validateBackupEnvelope({ ...good, iterations: EXPORT_MAX_ITERATIONS + 1 })).toThrow(/iteration/);
+    expect(() => validateBackupEnvelope({ ...good, iterations: 1e12 })).toThrow(/iteration/);
+    expect(() => validateBackupEnvelope({ ...good, salt: b64(8) })).toThrow(/salt/);
+    expect(() => validateBackupEnvelope({ ...good, salt: b64(65) })).toThrow(/salt/);
+    expect(() => validateBackupEnvelope({ ...good, iv: b64(16) })).toThrow(/iv/);
+    expect(() => validateBackupEnvelope({ ...good, data: b64(8) })).toThrow(/payload/);
+    expect(() => validateBackupEnvelope({ ...good, data: 'x'.repeat(30 * 1024 * 1024) })).toThrow(/too large/);
   });
 });

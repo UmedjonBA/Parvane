@@ -238,6 +238,31 @@ desktop/android — `fnv48(<gid>)`). Подписка на чужой 1-на-1 t
 (`ensurePresenceSub`). Тесты: gateway `group_typing_ids_match_both_client_schemes`
 и права подписки; web `conformance.test.ts` (`EPHEMERAL-1`).
 
+## BLOB-1. Медиа-блоб — чанковый AEAD, окна плеера только из проверенных чанков
+
+**P-24.** Раньше блоб шифровался одним AES-256-GCM целиком, а прогрессивный
+плеер web расшифровывал окно как AES-CTR *без тега*: cloud/сервер бит-флипами
+формировал произвольный вход медиа-декодера до проверки целого файла. Формат v2:
+`"PVB2" | u32be chunkSize | for i in 0..n: ct_i | tag_i(16)`, где каждый чанк
+(по умолчанию 256 КиБ; допустимо 1 КиБ…8 МиБ) — отдельный AES-256-GCM с
+`nonce_i = nonce XOR (0^8 || u32be i)` и `AAD_i = "PVB2" | chunkSize | i | n`
+(индекс и число чанков в AAD ловят перестановку и усечение). Ключ/nonce по-прежнему
+едут в E2E-контенте (`file_key`/`file_nonce`), формат контента не меняется:
+версия читается из заголовка блоба. Legacy v1 (`data || tag`) читается только
+целиком после проверки тега; окно из v1 без проверки не отдаётся.
+
+Вектор (`sync-rules.json → BLOB-1.vector`): ключ 32×0x01, nonce 12×0x02,
+chunkSize 1024, plaintext 1500×`a` → 1540 байт, первые 24 байта
+`505642320000040066b7a8282b36a09cb2addda93dc6a3d3`, последние 16
+`297636bc1b79f4f72284144a0b0be7e8`. Legacy-вектор: `BLOB-1.legacyVector`.
+
+Реализации: web `blobcrypt.ts` (`encryptBlobWithKey`, `decryptBlobChunks`,
+`parseBlobHeader`; `media.ts` `downloadRange`), parvane-core `blobcrypt.cpp`
+(`encryptWithKey`, `decryptChunks`, `parseHeader`; desktop и android зовут
+`encrypt`/`decrypt`, версия определяется по заголовку). Тесты: web
+`blobcrypt.test.ts`, parvane-core `blobcrypt_tests` (ctest `blobcrypt`),
+`conformance.test.ts` (`BLOB-1`).
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в
