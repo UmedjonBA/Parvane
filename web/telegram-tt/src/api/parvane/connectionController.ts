@@ -3,6 +3,7 @@ import type { createCallController } from './calls';
 import type { PollStore } from './polls';
 
 import { E2eEngine } from './e2e';
+import { loadTrustSecret, saveTrustSecret } from './secureStorage';
 import { GatewayConnection, getGatewayUrl } from './gateway';
 import { ParvaneStore } from './store';
 import {
@@ -28,6 +29,8 @@ type ConnectionDependencies = {
   setE2e: (engine: E2eEngine | undefined) => void;
   getStore: () => ParvaneStore;
   setStore: (store: ParvaneStore) => void;
+  // P-39: хранилище под PIN — разблокировать до открытия E2E
+  unlockStorage?: (user: string) => Promise<void>;
   getToken: () => string;
   setToken: (token: string) => void;
   setCallIdentityReady: (isReady: boolean) => void;
@@ -108,6 +111,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // Групповые typing-топики (msg.typing.<groupChatId>), на которые подписаны —
   // переустанавливаются на каждом (пере)подключении
   const subscribedTypingGroups = new Set<string>();
+  // P-18: presence — только конкретных собеседников (presence.<id>), а не
+  // presence.* всех пользователей сервера; gateway wildcard больше не даёт
+  const subscribedPresence = new Set<string>();
 
   function deviceMirrorKey(user: string) {
     return `parvane:device:${user}`;
@@ -122,6 +128,31 @@ export function createConnectionController(deps: ConnectionDependencies) {
     return `parvane:trust:${user}`;
   }
 
+  // P-14: секрет доверия — в шифрованном хранилище (SecureE2eStorage), не в
+  // localStorage. Старое значение из localStorage переносится и стирается
+  async function readTrustSecretAsync(user: string) {
+    try {
+      const legacy = localStorage.getItem(trustMirrorKey(user)) || '';
+      if (legacy) {
+        await saveTrustSecret(user, legacy);
+        localStorage.removeItem(trustMirrorKey(user));
+        return legacy;
+      }
+    } catch {
+      // приватный режим
+    }
+    return (await loadTrustSecret(user).catch(() => undefined)) || '';
+  }
+
+  async function writeTrustSecretAsync(user: string, secret: string) {
+    if (!secret) return;
+    try {
+      await saveTrustSecret(user, secret);
+    } catch (error) {
+      deps.log(`секрет доверия не сохранён: ${String(error)}`);
+    }
+  }
+
   function readDeviceIdMirror(user: string) {
     try {
       return localStorage.getItem(deviceMirrorKey(user)) || '';
@@ -130,21 +161,6 @@ export function createConnectionController(deps: ConnectionDependencies) {
     }
   }
 
-  function readTrustSecret(user: string) {
-    try {
-      return localStorage.getItem(trustMirrorKey(user)) || '';
-    } catch {
-      return '';
-    }
-  }
-
-  function writeTrustSecret(user: string, secret: string) {
-    try {
-      if (secret) localStorage.setItem(trustMirrorKey(user), secret);
-    } catch {
-      // приватный режим — вход через Telegram будет спрашиваться каждый раз
-    }
-  }
 
   function writeDeviceIdMirror(user: string, deviceId: string) {
     try {
@@ -177,7 +193,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
           password,
           device_id: deviceId || undefined,
           login_token: loginToken || undefined,
-          trust_secret: readTrustSecret(user) || undefined,
+          trust_secret: (await readTrustSecretAsync(user)) || undefined,
         }),
       );
       const parsed = JSON.parse(raw) as {
@@ -189,7 +205,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
         telegram_bot?: string;
         trust_secret?: string;
       };
-      if (parsed.trust_secret) writeTrustSecret(user, parsed.trust_secret);
+      if (parsed.trust_secret) await writeTrustSecretAsync(user, parsed.trust_secret);
       return parsed;
     };
 
@@ -270,7 +286,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
     activeConnection.onClose = () => handleClose(activeConnection, user, generation);
     activeConnection.subscribe(buildMsgInboxTopic(user), deps.handleInboxFrame);
     activeConnection.subscribe(`msg.typing.${deps.selfId()}`, handleTypingFrame);
-    activeConnection.subscribe('presence.*', handlePresenceFrame);
+    subscribedPresence.forEach((peerId) => {
+      activeConnection.subscribe(`presence.${peerId}`, handlePresenceFrame);
+    });
     activeConnection.subscribe(buildCallInboxTopic(user), deps.calls.handleFrame);
     activeConnection.subscribe(buildCallInboxTopic(`gcall:${user}`), deps.calls.handleGroupFrame);
     // Переустанавливаем подписки на typing-топики известных групп
@@ -278,6 +296,14 @@ export function createConnectionController(deps: ConnectionDependencies) {
       activeConnection.subscribe(`msg.typing.${groupChatId}`, handleTypingFrame);
     });
     deps.calls.setup();
+  }
+
+  // Подписка на presence собеседника (идемпотентно): зовётся при появлении
+  // адреса пользователя в сторе; на reconnect переустанавливается в `activate`
+  function ensurePresence(peerId: string) {
+    if (!peerId || peerId.startsWith('-') || subscribedPresence.has(peerId)) return;
+    subscribedPresence.add(peerId);
+    deps.getConnection()?.subscribe(`presence.${peerId}`, handlePresenceFrame);
   }
 
   // Подписка на групповой typing-топик (идемпотентно). Вызывается при
@@ -361,10 +387,17 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // `input` — ник или полный адрес; голый ник дополняется доменом сервера
   // (server.info запрашивается на этом же соединении — лишних сокетов нет).
   // Возвращает полный адрес аккаунта
-  async function connectAndLogin(input: string, password: string, loginToken = ''): Promise<string> {
+  // P-39: возобновление сессии по сохранённому JWT (без пароля). Токен
+  // проверяется identity через gateway auth; протухший/отозванный → ошибка
+  async function connectWithToken(user: string, savedToken: string): Promise<string> {
+    return connectAndLogin(user, '', '', savedToken);
+  }
+
+  async function connectAndLogin(input: string, password: string, loginToken = '', savedToken = ''): Promise<string> {
     cancelReconnect();
     // Новая сессия — состав групп (и их typing-подписки) будет пересобран синком
     subscribedTypingGroups.clear();
+    subscribedPresence.clear();
     const generation = ++sessionGeneration;
     deps.calls.teardown();
     deps.getConnection()?.close();
@@ -381,7 +414,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
       lastServerInfo = info;
       const user = canonicalAddress(input, info.domain);
 
-      const nextToken = await issueToken(activeConnection, user, password, info.confirm === 'none', loginToken);
+      const nextToken = savedToken
+        || await issueToken(activeConnection, user, password, info.confirm === 'none', loginToken);
       deps.setToken(nextToken);
       deps.log('JWT получен');
       await activeConnection.authorize(nextToken);
@@ -396,6 +430,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
       deps.setCallIdentityReady(false);
       try {
+        await deps.unlockStorage?.(user);
         const nextE2e = await E2eEngine.create(user, readDeviceIdMirror(user));
         deps.setE2e(nextE2e);
         writeDeviceIdMirror(user, nextE2e.deviceId);
@@ -600,13 +635,15 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   return {
     connectAndLogin,
-    writeTrustSecret,
+    writeTrustSecret: writeTrustSecretAsync,
     registerAccount,
     confirmEmail,
     fetchServerInfo,
     getLastServerInfo,
     fetchRegisterStatus,
     ensureGroupTyping,
+    ensurePresence,
+    connectWithToken,
     shutdown,
   };
 }

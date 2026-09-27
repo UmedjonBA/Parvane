@@ -310,7 +310,9 @@ rpl::lifetime g_foldersLifetime;          // время жизни подпис�
 FullMsgId g_lastOwnFullId;                 // последнее своё исходящее (debug-хуки)
 QString g_lastOwnUuid;                     // его uuid — переживает сброс сессии
 QString g_firstOwnUuid;                    // первое своё за процесс (хуки: headless шлёт autosend при каждой пересборке сессии)
-bool g_presenceSubscribed = false;        // подписка на presence.* (once)
+bool g_presenceSubscribed = false;        // presence: хартбит + подписки по пирам (once)
+// P-18: presence — только конкретных собеседников (presence.<id>), не presence.*
+QSet<quint64> g_presenceSubscribedIds;      // под g_sessionMutex
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
 
 // Курсоры инкрементального синка (Фаза 1): двигаются ТОЛЬКО по результатам
@@ -1905,12 +1907,40 @@ std::uint64_t IdForAddress(const QString &address) {
 	return h ? h : 1;
 }
 
+void HandlePresencePayload(const std::string &payload);
+
+// P-18: подписка на presence конкретного собеседника (идемпотентно). Зовётся
+// при регистрации пира и для всех известных пиров при старте сессии.
+void EnsurePresenceSubscription(const QString &address) {
+	if (address.isEmpty() || address == SelfAddress()) {
+		return;
+	}
+	parvane::ITransport *t = nullptr;
+	const auto id = quint64(IdForAddress(address));
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (!g_presenceSubscribed || g_presenceSubscribedIds.contains(id)) {
+			return;
+		}
+		t = g_transport.get();
+		if (!t) {
+			return;
+		}
+		g_presenceSubscribedIds.insert(id);
+	}
+	t->subscribe("presence." + std::to_string(id),
+		[](std::string, std::string payload) { HandlePresencePayload(payload); });
+}
+
 void RegisterPeer(const QString &address) {
 	if (address.isEmpty()) {
 		return;
 	}
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	g_idToAddress.insert(quint64(IdForAddress(address)), address);
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_idToAddress.insert(quint64(IdForAddress(address)), address);
+	}
+	EnsurePresenceSubscription(address);
 }
 
 QString AddressForId(std::uint64_t userId) {
@@ -3143,7 +3173,9 @@ void MirrorOutgoingFile(
 			fileNonce = enc.nonceB64;
 			parvane::CloudClient cloud(*t);
 			// Таймаут щедрый: fsync шарда на медленном диске может стоить секунды.
-			const auto fileId = cloud.upload(from, token, filenameStd, mimeStd,
+			// P-29: имя E2E-вложения серверу не сообщаем — оно едет внутри
+			// E2E-контента (buildMediaContent), cloud видит только «blob»
+			const auto fileId = cloud.upload(from, token, "blob", mimeStd,
 				uploadBytes, cloudRecipients(to), false, 256 * 1024, 20000);
 			auto content = buildMediaContent(
 				type, fileId, filenameStd, mimeStd, bytesStd.size(),
@@ -6156,6 +6188,35 @@ void injectOnMain(
 	}
 }
 
+// Приём presence.<id> собеседника: OnlineTill(now+90) известному пиру.
+void HandlePresencePayload(const std::string &payload) {
+	std::string from;
+	try {
+		from = parvane::json::parse(payload).value("from", std::string());
+	} catch (const std::exception &) {
+		return;
+	}
+	if (from.empty()) {
+		return;
+	}
+	const auto fromQ = QString::fromStdString(from);
+	crl::on_main([fromQ] {
+		const auto session = g_sessionWeak.get();
+		if (!session || fromQ == SelfAddress()) {
+			return;
+		}
+		const auto id = IdForAddress(fromQ);
+		const auto user = session->data().userLoaded(UserId(BareId(id)));
+		if (!user) {
+			return; // присутствие незнакомого пира игнорируем
+		}
+		if (user->updateLastseen(
+				Data::LastseenStatus::OnlineTill(base::unixtime::now() + 90))) {
+			session->changes().peerUpdated(user, Data::PeerUpdate::Flag::OnlineStatus);
+		}
+	});
+}
+
 // Публикует хартбит присутствия на presence.<мой id> (эфемерно). Зовётся с main
 // (таймер). Подписчики ставят пиру OnlineTill(now+90); без нового хартбита за
 // 90с статус сам «протухает» → «был(а) недавно» (offline-таймер не нужен).
@@ -8123,50 +8184,20 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			}
 		}
 
-		// Присутствие (real online): подписка на presence.* + хартбит своего
-		// присутствия каждые 30с. На приёме ставим пиру OnlineTill(now+90).
+		// Присутствие (real online): подписки на presence.<id> известных
+		// собеседников (P-18: не presence.* всех) + хартбит своего присутствия
+		// каждые 30с. На приёме ставим пиру OnlineTill(now+90).
 		if (!g_presenceSubscribed) {
-			g_presenceSubscribed = true;
-			parvane::ITransport *t = nullptr;
+			QList<QString> known;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
-				t = g_transport.get();
+				g_presenceSubscribed = true;
+				known = g_idToAddress.values();
 			}
-			if (t) {
-				t->subscribe("presence.*",
-					[](std::string, std::string payload) {
-						std::string from;
-						try {
-							from = parvane::json::parse(payload)
-								.value("from", std::string());
-						} catch (const std::exception &) {
-							return;
-						}
-						if (from.empty()) {
-							return;
-						}
-						const auto fromQ = QString::fromStdString(from);
-						crl::on_main([fromQ] {
-							const auto session = g_sessionWeak.get();
-							if (!session || fromQ == SelfAddress()) {
-								return;
-							}
-							const auto id = IdForAddress(fromQ);
-							const auto user = session->data().userLoaded(
-								UserId(BareId(id)));
-							if (!user) {
-								return; // присутствие незнакомого пира игнорируем
-							}
-							if (user->updateLastseen(
-									Data::LastseenStatus::OnlineTill(
-										base::unixtime::now() + 90))) {
-								session->changes().peerUpdated(user,
-									Data::PeerUpdate::Flag::OnlineStatus);
-							}
-						});
-					});
-				LOG(("Parvane: подписка на presence.*"));
+			for (const auto &address : known) {
+				EnsurePresenceSubscription(address);
 			}
+			LOG(("Parvane: presence — подписки на %1 собеседников").arg(known.size()));
 			g_presenceTimer = std::make_unique<base::Timer>(
 				[] { publishPresenceHeartbeat(); });
 			g_presenceTimer->callEach(30000);

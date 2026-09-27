@@ -414,3 +414,27 @@ describe('SEND-1: подпись отправки, ack без sender, правк
     expect(gateway).toMatch(/subject == "msg\.chat\.send" \|\| subject == "msg\.chat\.edit"/);
   });
 });
+
+describe('EPHEMERAL-1: typing только свой/по членству, presence по собеседникам', () => {
+  it('правило задокументировано', () => {
+    const r = rule('EPHEMERAL-1') as unknown as { presenceSubscribe: string };
+    expect(r.presenceSubscribe).toContain('presence.* forbidden');
+  });
+
+  it('ни один клиент не подписывается на presence.*', () => {
+    const files = [
+      'web/telegram-tt/src/api/parvane/connectionController.ts',
+      'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp',
+      'android/jni/parvane_jni.cpp',
+    ];
+    files.forEach((file) => {
+      const source = readFileSync(path.join(REPO_ROOT, file), 'utf8');
+      expect(source, file).not.toMatch(/subscribe\(['"]presence\.\*['"]/);
+    });
+    const web = readFileSync(path.join(REPO_ROOT, files[0]), 'utf8');
+    expect(web).toMatch(/subscribe\(`presence\.\$\{peerId\}`/);
+    const gateway = readFileSync(path.join(REPO_ROOT, 'backend/shards/gateway/src/main.rs'), 'utf8');
+    expect(gateway).toMatch(/is_own_ephemeral_subject\(user, "msg\.typing\.", subject\)/);
+    expect(gateway).toMatch(/async fn group_typing_allowed/);
+  });
+});

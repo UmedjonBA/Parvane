@@ -663,6 +663,10 @@ pub struct SetKeyRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchUsersRequest {
     pub query: String,
+    /// Токен запрашивающего (подставляет gateway). Пока не влияет на выдачу,
+    /// но нужен для будущих настроек видимости (P-19).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -699,6 +703,10 @@ pub struct SetNameResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolveRequest {
     pub usernames: Vec<String>,
+    /// Токен запрашивающего (подставляет gateway): приватные поля профиля
+    /// (телефон) отдаются только владельцу (P-19).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
