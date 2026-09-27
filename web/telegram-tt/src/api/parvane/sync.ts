@@ -113,6 +113,21 @@ export function createSyncController(deps: SyncDependencies) {
     return (hash >>> 0).toString(16);
   }
 
+  // E2E-1: разворачивает Megolm-plaintext. Канонический формат — голый
+  // WireMessageContent; legacy-клиенты слали обёртку {from, content}. Возвращаем
+  // сам content; поле from обёртки игнорируется (автор берётся из wire `from`).
+  function unwrapMegolmContent(parsed: unknown): WireMessageContent {
+    if (
+      parsed && typeof parsed === 'object'
+      && 'content' in parsed && 'from' in parsed
+      && typeof (parsed as { content: unknown }).content === 'object'
+      && (parsed as { content: unknown }).content !== null
+    ) {
+      return (parsed as { content: WireMessageContent }).content;
+    }
+    return parsed as WireMessageContent;
+  }
+
   const buildWireFlags = (stored: WireStoredMessage): WireFlags => ({
     read: Boolean(stored.read),
     deleted: Boolean(stored.deleted),
@@ -198,7 +213,11 @@ export function createSyncController(deps: SyncDependencies) {
       const plain = e2e.groupDecrypt(content.group, content.sender_identity, content.ciphertext);
       if (!plain) return { stored, wasSealed: false };
       try {
-        const inner = JSON.parse(plain) as WireMessageContent;
+        // E2E-1: канонический Megolm-plaintext — ГОЛЫЙ content, автор = wire
+        // `stored.from` (его ставит gateway). Принимаем и legacy-обёртку
+        // {from, content} от старых клиентов, но inner.from НИКОГДА не
+        // используется как автор (иначе подмена отправителя в группе — P-02).
+        const inner = unwrapMegolmContent(JSON.parse(plain));
         e2e.cacheInner(stored.id, {
           from: stored.from, content: inner, senderIdentity: content.sender_identity,
         });
@@ -668,9 +687,15 @@ export function createSyncController(deps: SyncDependencies) {
         return;
       }
       if (verdict === 'unknown') {
-        // Каталог отправителя недоступен — подтвердить нельзя. Показываем, но
-        // помечаем в логе; не запоминаем связку contact↔identity до подтверждения
-        deps.log(`не подтверждён отправитель ${verify.claimedFrom} в ${rawStored.id} (каталог недоступен)`);
+        // E2E-1: каталог отправителя недоступен — подтвердить нельзя. НЕ
+        // показываем и НЕ ack'аем; помечаем нерасшифрованным, чтобы sync
+        // повторил, а дисковый курсор не ушёл вперёд (SYNC-1). Ранее сообщение
+        // показывалось без подтверждения — окно для спуфа при недоступном
+        // identity-шарде (P-26).
+        deps.log(`отправитель ${verify.claimedFrom} в ${rawStored.id} не подтверждён (каталог недоступен) — откладываем`);
+        sawUndecryptable = true;
+        undecryptableUuids.add(rawStored.id);
+        return;
       } else if (verify.claimedFrom !== store.self) {
         if (deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity)) {
           announceKeyChange(verify.claimedFrom);

@@ -157,3 +157,76 @@ describe('FAIL-1: ожидание без ответа запрещено', () =
     expect(source).not.toMatch(/_loadRequestId = api\.request\(MTPmessages_GetDialogFilters/);
   });
 });
+
+describe('E2E-1: автор из провода, SKDM из identity конверта, unknown не показывается', () => {
+  const webSync = readFileSync(
+    path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/sync.ts'),
+    'utf8',
+  );
+
+  it('правило E2E-1 задокументировано в sync-rules.json', () => {
+    const r = rule('E2E-1') as unknown as {
+      groupAuthor: string; megolmPlaintext: string;
+      skdmBoundToEnvelopeIdentity: boolean;
+      unknownVerdict: { show: boolean; ack: boolean };
+    };
+    expect(r.groupAuthor).toBe('wireFrom');
+    expect(r.megolmPlaintext).toBe('bareContent');
+    expect(r.skdmBoundToEnvelopeIdentity).toBe(true);
+    expect(r.unknownVerdict.show).toBe(false);
+    expect(r.unknownVerdict.ack).toBe(false);
+  });
+
+  it('web разворачивает Megolm-plaintext, не доверяя inner.from как автору', () => {
+    // Группа берёт автора из wire stored.from, а content — через unwrapMegolmContent
+    expect(webSync).toMatch(/function unwrapMegolmContent/);
+    expect(webSync).toMatch(/const inner = unwrapMegolmContent\(JSON\.parse\(plain\)\)/);
+    // В групповой ветке verify.claimedFrom — это stored.from (wire), не inner.from
+    expect(webSync).toMatch(/claimedFrom: stored\.from, senderIdentity: content\.sender_identity/);
+  });
+
+  it('web: SKDM принимается только при совпадении sender_identity с конвертом', () => {
+    expect(webSync).toMatch(/inner\.content\.sender_identity === content\.sender_identity/);
+  });
+
+  it('web: вердикт unknown не показывает и не ack-ает сообщение (retry)', () => {
+    const idx = webSync.indexOf("verdict === 'unknown'");
+    expect(idx).toBeGreaterThan(0);
+    const block = webSync.slice(idx, idx + 400);
+    expect(block).toMatch(/sawUndecryptable = true/);
+    expect(block).toMatch(/undecryptableUuids\.add/);
+    // между началом ветки и её return не должно быть sendAck
+    const untilReturn = block.slice(0, block.indexOf('return'));
+    expect(untilReturn).not.toMatch(/sendAck/);
+  });
+
+  it('desktop: groupSeal шлёт голый content, приём не доверяет inner.from в группе', () => {
+    const e2e = readFileSync(
+      path.join(REPO_ROOT, 'desktop/parvane-core/src/e2e.cpp'),
+      'utf8',
+    );
+    // groupSeal больше не оборачивает в {from, content}
+    const seal = e2e.slice(e2e.indexOf('std::string groupSeal'));
+    expect(seal.slice(0, 400)).not.toMatch(/\{\{"from", g_self\}, \{"content"/);
+    const client = readDesktopSource();
+    expect(client).toMatch(/const auto author = direct \? claimedFrom : wireFrom;/);
+    // unknown в prepareIncoming держит сообщение (continue), не показывает
+    const uk = client.indexOf('Verdict::Unknown');
+    expect(uk).toBeGreaterThan(0);
+    expect(client.slice(uk, uk + 400)).toMatch(/continue;/);
+  });
+
+  it('android: автор группы = wire from, SKDM привязан к identity конверта', () => {
+    const jni = readFileSync(
+      path.join(REPO_ROOT, 'android/jni/parvane_jni.cpp'),
+      'utf8',
+    );
+    // В группе inner.from больше не назначается автором
+    const grp = jni.slice(jni.indexOf('group_encrypted'));
+    expect(grp.slice(0, 900)).not.toMatch(/author = inner\["from"\]/);
+    // SKDM привязан к envelope senderIdentity
+    expect(jni).toMatch(/skdmIdentity == senderIdentity/);
+    // unknown откладывает (return без ack)
+    expect(jni).toMatch(/не подтверждён — откладываем/);
+  });
+});

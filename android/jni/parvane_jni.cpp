@@ -401,6 +401,12 @@ void deliverStored(parvane::StoredMessage sm, bool live) {
                 if (live && g_messenger) g_messenger->ack(g_self, sm.id, g_token, sm.from);
                 return;
             }
+            if (v == parvane::e2e::Verdict::Unknown) {
+                // E2E-1: каталог недоступен — подтвердить нельзя. НЕ показываем и
+                // НЕ ack'аем; sync повторит, курсор не двигается (SYNC-1).
+                LOGE("отправитель %s в %s не подтверждён — откладываем", claimed.c_str(), sm.id.c_str());
+                return;
+            }
             if (v == parvane::e2e::Verdict::Ok && claimed != g_self) {
                 parvane::e2e::rememberContactIdentity(claimed, senderIdentity);
             }
@@ -408,22 +414,32 @@ void deliverStored(parvane::StoredMessage sm, bool live) {
         if (!claimed.empty()) author = claimed;
         if (inner.contains("content")) sm.content = inner["content"];
         if (parvane::contentKind(sm.content) == "skdm") { // ключ группы от участника
-            parvane::e2e::groupAcceptKey(sm.content.value("group", std::string()),
-                sm.content.value("sender_identity", std::string()),
-                sm.content.value("session_key", std::string()),
-                sm.content.value("epoch", std::uint64_t(0)));
+            // P-02: ключ группы привязываем к identity Olm-КОНВЕРТА (реально
+            // расшифровавшего сообщение), а не к самозаявленному внутри SKDM —
+            // иначе участник затирал бы Megolm-канал другого, назвав его identity.
+            const auto skdmIdentity = sm.content.value("sender_identity", std::string());
+            if (skdmIdentity == senderIdentity) {
+                parvane::e2e::groupAcceptKey(sm.content.value("group", std::string()),
+                    senderIdentity,
+                    sm.content.value("session_key", std::string()),
+                    sm.content.value("epoch", std::uint64_t(0)));
+            } else {
+                LOGE("SKDM с чужим sender_identity в %s — отклонён", sm.id.c_str());
+            }
             g_seen.insert(sm.id);
             if (live && g_messenger) g_messenger->ack(g_self, sm.id, g_token, sm.from);
             return;
         }
     } else if (parvane::contentKind(sm.content) == "group_encrypted") {
+        // Автор группового сообщения — ТОЛЬКО wire sm.from (его ставит gateway).
+        const auto senderIdentity = sm.content.value("sender_identity", std::string());
         json inner;
         const auto cached = g_decCache.find(sm.id);
         if (cached != g_decCache.end() && !(seen && sm.edited)) {
             inner = cached->second;
         } else {
             const auto dec = parvane::e2e::groupOpen(sm.content.value("group", std::string()),
-                sm.content.value("sender_identity", std::string()),
+                senderIdentity,
                 sm.content.value("ciphertext", std::string()));
             if (dec.empty()) {
                 LOGE("группа: не расшифровано %s (ждём ключ)", sm.id.c_str());
@@ -435,8 +451,25 @@ void deliverStored(parvane::StoredMessage sm, bool live) {
             }
         }
         if (!inner.is_object()) return;
-        if (inner.contains("from") && inner["from"].is_string()) author = inner["from"].get<std::string>();
-        if (inner.contains("content")) sm.content = inner["content"];
+        // P-02/E2E-1: автор = wire sm.from, НЕ inner.from. Принимаем канонический
+        // голый content и legacy-обёртку {from, content}.
+        if (inner.contains("content") && inner.contains("from") && inner["content"].is_object())
+            sm.content = inner["content"];
+        else
+            sm.content = inner;
+        // Верифицируем, что identity Megolm-конверта принадлежит автору (wire from).
+        if (!senderIdentity.empty() && author != g_self && g_transport) {
+            const auto v = parvane::e2e::verifySender(author, senderIdentity, *g_transport, g_token);
+            if (v == parvane::e2e::Verdict::Spoofed) {
+                LOGE("ОТКЛОНЕНО: подмена отправителя %s в группе %s", author.c_str(), sm.id.c_str());
+                if (live && g_messenger) g_messenger->ack(g_self, sm.id, g_token, sm.from);
+                return;
+            }
+            if (v == parvane::e2e::Verdict::Unknown) {
+                LOGE("группа: отправитель %s в %s не подтверждён — откладываем", author.c_str(), sm.id.c_str());
+                return; // E2E-1: не показываем, не ack — sync повторит
+            }
+        }
     }
     const bool out = (author == g_self);
     if (seen) { // мутации уже показанного: правка, реакции, закреп, ✓✓
