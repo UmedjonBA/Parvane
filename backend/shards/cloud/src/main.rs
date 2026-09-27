@@ -4,10 +4,11 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use futures::StreamExt;
 use parvane_types::{
     topics::{
-        FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE,
-        IDENTITY_VERIFY,
+        FILE_DELETE, FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST, FILE_UPLOAD_CHUNK,
+        FILE_UPLOAD_COMPLETE, IDENTITY_VERIFY,
     },
-    DownloadRequest, DownloadResponse, FileEntry, FileListPayload, FileListResponse, ParvaneEvent,
+    DownloadRequest, DownloadResponse, FileDeleteRequest, FileDeleteResponse, FileEntry,
+    FileListPayload, FileListResponse, ParvaneEvent,
     UploadChunkPayload, UploadCompletePayload, UploadCompleteResponse, VerifyRequest,
     VerifyResponse,
 };
@@ -56,11 +57,34 @@ async fn main() -> Result<()> {
     let mut complete_sub = nc.subscribe(FILE_UPLOAD_COMPLETE).await?;
     let mut download_sub = nc.subscribe(FILE_DOWNLOAD_REQUEST).await?;
     let mut list_sub = nc.subscribe(FILE_LIST_REQUEST).await?;
+    let mut delete_sub = nc.subscribe(FILE_DELETE).await?;
 
     info!(
-        "Cloud шард запущен. Слушаю: {}, {}, {}, {}",
-        FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST
+        "Cloud шард запущен. Слушаю: {}, {}, {}, {}, {}",
+        FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST, FILE_DELETE
     );
+
+    // P-08: чистим брошенные незавершённые аплоады при старте и раз в час.
+    match purge_stale_uploads(&pool).await {
+        Ok(n) if n > 0 => info!("очищено брошенных аплоадов при старте: {}", n),
+        Err(e) => warn!("очистка аплоадов при старте не удалась: {}", e),
+        _ => {}
+    }
+    {
+        let pool_gc = pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                match purge_stale_uploads(&pool_gc).await {
+                    Ok(n) if n > 0 => info!("GC: очищено брошенных аплоадов: {}", n),
+                    Err(e) => warn!("GC аплоадов не удался: {}", e),
+                    _ => {}
+                }
+            }
+        });
+    }
 
     loop {
         tokio::select! {
@@ -68,6 +92,7 @@ async fn main() -> Result<()> {
             Some(msg) = complete_sub.next() => handle_complete(&nc, &pool, msg).await,
             Some(msg) = download_sub.next() => handle_download(&nc, &pool, msg).await,
             Some(msg) = list_sub.next() => handle_list(&nc, &pool, msg).await,
+            Some(msg) = delete_sub.next() => handle_delete(&nc, &pool, msg).await,
         }
     }
 }
@@ -95,9 +120,20 @@ async fn verify_token(nc: &Client, token: &str) -> Result<String> {
 // ── квоты (защита от заполнения диска шарда) ─────────────────────────────────
 
 /// Верхняя граница размера одного чанка после декодирования (клиент шлёт по
-/// 192 КиБ — берём с запасом). PARVANE_CLOUD_MAX_CHUNK_BYTES.
+/// 192 КиБ). Держим ≤ 700 КиБ: чанк + base64 + JSON при отдаче должен уместиться
+/// в NATS max_payload (P-52). PARVANE_CLOUD_MAX_CHUNK_BYTES.
 fn max_chunk_bytes() -> usize {
-    env_usize("PARVANE_CLOUD_MAX_CHUNK_BYTES", 1024 * 1024)
+    env_usize("PARVANE_CLOUD_MAX_CHUNK_BYTES", 700 * 1024)
+}
+/// Максимум незавершённых аплоадов на владельца (P-08): без лимита можно занять
+/// диск множеством начатых и не завершённых загрузок.
+fn max_pending_uploads() -> i64 {
+    env_usize("PARVANE_CLOUD_MAX_PENDING_UPLOADS", 32) as i64
+}
+/// Возраст, после которого незавершённый аплоад считается брошенным и чистится
+/// (сек). PARVANE_CLOUD_UPLOAD_TTL_SECS.
+fn upload_ttl_secs() -> i64 {
+    env_usize("PARVANE_CLOUD_UPLOAD_TTL_SECS", 24 * 3600) as i64
 }
 /// Верхняя граница размера одного файла. PARVANE_CLOUD_MAX_FILE_BYTES.
 fn max_file_bytes() -> i64 {
@@ -141,6 +177,27 @@ async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> 
     if finalized.is_some() {
         anyhow::bail!("файл уже завершён");
     }
+    let is_new_upload = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM uploads WHERE file_id = ?",
+    )
+    .bind(&file_id)
+    .fetch_one(&mut *tx)
+    .await?
+    .0 == 0;
+    if is_new_upload {
+        // P-08: лимит числа незавершённых аплоадов на владельца.
+        let (pending,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM uploads WHERE owner = ?")
+                .bind(owner)
+                .fetch_one(&mut *tx)
+                .await?;
+        if pending >= max_pending_uploads() {
+            anyhow::bail!(
+                "слишком много незавершённых загрузок (лимит {})",
+                max_pending_uploads()
+            );
+        }
+    }
     sqlx::query(
         "INSERT OR IGNORE INTO uploads (file_id, owner, total_chunks, created_at) VALUES (?, ?, ?, ?)",
     )
@@ -157,6 +214,26 @@ async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> 
             .await?;
     if claim.0 != owner || claim.1 != i64::from(p.total_chunks) {
         anyhow::bail!("file_id принадлежит другому upload");
+    }
+    // P-08: незавершённые чанки тоже считаем в квоту владельца — иначе диск
+    // забивался начатыми и не завершёнными загрузками в обход квоты файлов.
+    let quota = owner_quota_bytes();
+    if quota > 0 {
+        let (finished,): (i64,) =
+            sqlx::query_as("SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE owner = ?")
+                .bind(owner)
+                .fetch_one(&mut *tx)
+                .await?;
+        let (pending_bytes,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(SUM(LENGTH(c.data)), 0) FROM chunks c
+             JOIN uploads u ON u.file_id = c.file_id WHERE u.owner = ?",
+        )
+        .bind(owner)
+        .fetch_one(&mut *tx)
+        .await?;
+        if finished + pending_bytes + raw.len() as i64 > quota {
+            anyhow::bail!("превышена квота хранилища владельца ({} байт)", quota);
+        }
     }
     sqlx::query("INSERT OR REPLACE INTO chunks (file_id, chunk_index, data) VALUES (?, ?, ?)")
         .bind(&file_id)
@@ -184,6 +261,17 @@ async fn finalize_file(
     }
     if p.size_bytes as i64 > max_file_bytes() {
         anyhow::bail!("файл больше лимита {} байт", max_file_bytes());
+    }
+    // P-52: лимиты полей метаданных (иначе — тысячи INSERT в одной транзакции
+    // и неограниченные строки в БД).
+    if p.filename.len() > 255 {
+        anyhow::bail!("имя файла длиннее 255 байт");
+    }
+    if p.mime_type.len() > 128 {
+        anyhow::bail!("mime_type длиннее 128 байт");
+    }
+    if p.recipients.len() > 256 {
+        anyhow::bail!("слишком много получателей (лимит 256)");
     }
     let file_id = p.file_id.to_string();
     let mut tx = pool.begin().await?;
@@ -536,6 +624,31 @@ async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
 
 // ── file.list.request ─────────────────────────────────────────────────────────
 
+async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
+    let Some(reply) = msg.reply.clone() else {
+        warn!("file.delete: нет reply-топика");
+        return;
+    };
+    let result = async {
+        let event: ParvaneEvent<FileDeleteRequest> =
+            serde_json::from_slice(&msg.payload).context("неверный JSON в file.delete")?;
+        let owner = verify_token(nc, &event.token).await?;
+        let deleted = delete_file(pool, &owner, &event.payload.file_id.to_string()).await?;
+        if deleted {
+            info!("Файл удалён owner={} ({})", owner, event.payload.file_id);
+            Ok(FileDeleteResponse { ok: true, error: None })
+        } else {
+            Ok::<_, anyhow::Error>(FileDeleteResponse {
+                ok: false,
+                error: Some("файл не найден или не принадлежит вам".into()),
+            })
+        }
+    }
+    .await;
+    let resp = result.unwrap_or_else(|e| FileDeleteResponse { ok: false, error: Some(e.to_string()) });
+    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
 async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
     let Some(reply) = msg.reply.clone() else {
         warn!("file.list.request: нет reply-топика");
@@ -565,6 +678,48 @@ async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
                 .await;
         }
     }
+}
+
+/// P-08: удалить брошенные незавершённые аплоады (старше upload_ttl_secs) и их
+/// чанки. Вызывается при старте и периодически.
+async fn purge_stale_uploads(pool: &SqlitePool) -> Result<u64> {
+    let cutoff = now_unix() - upload_ttl_secs();
+    sqlx::query(
+        "DELETE FROM chunks WHERE file_id IN (SELECT file_id FROM uploads WHERE created_at < ?)",
+    )
+    .bind(cutoff)
+    .execute(pool)
+    .await?;
+    let r = sqlx::query("DELETE FROM uploads WHERE created_at < ?")
+        .bind(cutoff)
+        .execute(pool)
+        .await?;
+    Ok(r.rows_affected())
+}
+
+/// P-52/C2: удалить файл владельца — метаданные, чанки и гранты. Возвращает
+/// true, если файл принадлежал `owner` и был удалён.
+async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    let res = sqlx::query("DELETE FROM files WHERE id = ? AND owner = ?")
+        .bind(file_id)
+        .bind(owner)
+        .execute(&mut *tx)
+        .await?;
+    if res.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM chunks WHERE file_id = ?")
+        .bind(file_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM file_grants WHERE file_id = ?")
+        .bind(file_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 fn now_unix() -> i64 {
@@ -908,5 +1063,58 @@ mod tests {
         let bob = list_files(&pool, "bob@local").await.unwrap();
         assert_eq!(bob.len(), 1);
         assert_eq!(bob[0].file_id, b1);
+    }
+
+    #[tokio::test]
+    async fn delete_file_only_by_owner_and_purges_chunks() {
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        store_chunk(&pool, "alice@local", &chunk(id, 0, 1, b"hello")).await.unwrap();
+        finalize_file(&pool, "alice@local", &complete(id, 1, 5)).await.unwrap();
+        // Чужой не удалит.
+        assert!(!delete_file(&pool, "bob@local", &id.to_string()).await.unwrap());
+        assert!(load_file_for_user(&pool, &id.to_string(), "alice@local").await.unwrap().is_some());
+        // Владелец удаляет — файла и чанков больше нет.
+        assert!(delete_file(&pool, "alice@local", &id.to_string()).await.unwrap());
+        assert!(load_file_for_user(&pool, &id.to_string(), "alice@local").await.unwrap().is_none());
+        let (chunks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
+            .bind(id.to_string()).fetch_one(&pool).await.unwrap();
+        assert_eq!(chunks, 0, "чанки удалённого файла вычищены");
+    }
+
+    #[tokio::test]
+    async fn purge_removes_only_stale_uploads() {
+        let pool = test_pool().await;
+        let fresh = Uuid::now_v7();
+        store_chunk(&pool, "alice@local", &chunk(fresh, 0, 2, b"aaa")).await.unwrap();
+        // Искусственно состарим один незавершённый аплоад.
+        let stale = Uuid::now_v7();
+        store_chunk(&pool, "alice@local", &chunk(stale, 0, 2, b"bbb")).await.unwrap();
+        sqlx::query("UPDATE uploads SET created_at = ? WHERE file_id = ?")
+            .bind(now_unix() - upload_ttl_secs() - 10)
+            .bind(stale.to_string())
+            .execute(&pool).await.unwrap();
+        let removed = purge_stale_uploads(&pool).await.unwrap();
+        assert_eq!(removed, 1, "удалён только просроченный аплоад");
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
+            .bind(stale.to_string()).fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 0, "чанки просроченного аплоада вычищены");
+        // Свежий на месте.
+        let (m,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
+            .bind(fresh.to_string()).fetch_one(&pool).await.unwrap();
+        assert_eq!(m, 1);
+    }
+
+    #[tokio::test]
+    async fn pending_uploads_count_toward_quota() {
+        // Квота 10 байт: незавершённый аплоад на 6 байт + ещё 6 байт → отказ.
+        std::env::set_var("PARVANE_CLOUD_OWNER_QUOTA_BYTES", "10");
+        let pool = test_pool().await;
+        let a = Uuid::now_v7();
+        store_chunk(&pool, "q2@local", &chunk(a, 0, 1, b"aaaaaa")).await.unwrap();
+        let b = Uuid::now_v7();
+        let err = store_chunk(&pool, "q2@local", &chunk(b, 0, 1, b"bbbbbb")).await;
+        std::env::remove_var("PARVANE_CLOUD_OWNER_QUOTA_BYTES");
+        assert!(err.is_err(), "незавершённые чанки учитываются в квоте");
     }
 }

@@ -9,6 +9,7 @@ import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import {
   buildWireEvent,
+  TOPIC_FILE_DELETE,
   TOPIC_FILE_DOWNLOAD_REQUEST,
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
@@ -197,6 +198,26 @@ export function createMediaService(deps: MediaDependencies) {
     if (cache.size > RANGE_CHUNK_CACHE_LIMIT) {
       const oldest = cache.keys().next().value;
       if (oldest !== undefined) cache.delete(oldest);
+    }
+  }
+
+  // P-52: удаление своего файла в cloud (чанки, гранты, метаданные). Токен
+  // подставляет gateway; сервер удаляет только файлы владельца.
+  async function deleteFile(fileId: string): Promise<boolean> {
+    const store = deps.getStore();
+    const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId });
+    try {
+      const raw = await requireConnection().request(TOPIC_FILE_DELETE, JSON.stringify(event));
+      const resp = JSON.parse(raw) as { ok?: boolean; error?: string };
+      if (!resp.ok) diagLog('file.delete', { fileId, error: resp.error || 'отказ' });
+      return Boolean(resp.ok);
+    } catch (error) {
+      diagLog('file.delete', { fileId, error: String(error) });
+      return false;
+    } finally {
+      cacheByFileId.delete(fileId);
+      chunkCacheByFileId.delete(fileId);
+      metaByFileId.delete(fileId);
     }
   }
 
@@ -765,6 +786,7 @@ export function createMediaService(deps: MediaDependencies) {
   return {
     buildLocalContent,
     cacheBlob,
+    deleteFile,
     cacheBlobIfAbsent,
     clearCache: () => {
       cacheByFileId.clear();

@@ -45,6 +45,7 @@ inline constexpr auto FileDownloadRequest = "file.download.request";
 inline constexpr auto FileDownloadResponse = "file.download.response";
 inline constexpr auto FileListRequest = "file.list.request";
 inline constexpr auto FileListResponse = "file.list.response";
+inline constexpr auto FileDelete = "file.delete";
 
 // notes
 inline constexpr auto NoteCreate = "note.create";
