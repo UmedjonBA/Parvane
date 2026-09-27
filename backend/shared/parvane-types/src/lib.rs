@@ -24,6 +24,8 @@ pub mod topics {
     pub const IDENTITY_REGISTER_STATUS: &str = "identity.register.status";
     /// Двухфакторный вход через привязанный Telegram: прочитать/переключить (JWT).
     pub const IDENTITY_TWOFA: &str = "identity.user.twofa";
+    /// Смена пароля (JWT + старый пароль). Сбрасывает доверие устройств 2FA.
+    pub const IDENTITY_PASSWORD_CHANGE: &str = "identity.password.change";
     /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
@@ -242,6 +244,9 @@ pub struct RegisterResponse {
 pub struct EmailConfirmRequest {
     pub user: String,
     pub code: String,
+    /// Подмешивает gateway (pre-auth) для IP-лимита; клиентское значение перезаписывается.
+    #[serde(default)]
+    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,6 +287,9 @@ pub struct TelegramConfirmRequest {
     /// Имя/username для лога (необязательно).
     #[serde(default)]
     pub telegram_name: String,
+    /// Подмешивает gateway (pre-auth) для IP-лимита перебора секрета.
+    #[serde(default)]
+    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +312,10 @@ pub struct TwoFactorRequest {
     pub token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// P-07: выключение 2FA требует пароль (один украденный JWT не должен
+    /// снимать второй фактор).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +330,21 @@ pub struct TwoFactorResponse {
     /// При включении 2FA — секрет доверия для устройства, которое включило.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust_secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordChangeRequest {
+    #[serde(default)]
+    pub token: String,
+    pub old_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordChangeResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Клиент опрашивает, подтверждён ли его pending-аккаунт (токен — доказательство
@@ -456,6 +483,9 @@ pub struct DeviceListResponse {
 pub struct DeviceRevokeRequest {
     pub token: String,
     pub device_id: String,
+    /// P-07: отзыв устройства требует пароль.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -579,6 +609,9 @@ pub struct SetAvatarRequest {
 pub struct SetKeyRequest {
     pub token: String,
     pub pubkey: String,
+    /// P-07: смена публичного ключа требует пароль.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 /// Поиск пользователей по подстроке имени/адреса (каталог = таблица users).

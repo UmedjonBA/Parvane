@@ -92,6 +92,7 @@ import {
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
   TOPIC_IDENTITY_TWOFA,
+  TOPIC_IDENTITY_PASSWORD_CHANGE,
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
@@ -754,11 +755,13 @@ async function pollHistoryLinkGrant(generation: number) {
 // Отзыв устройства: identity выкидывает его бандл из каталога (fan-out новых
 // сообщений его больше не включает), локально — чистка каталога self и ротация
 // групповых ключей (forgetOwnDevice)
-async function revokeOwnDevice(deviceId: string) {
+async function revokeOwnDevice(deviceId: string, password?: string) {
   if (!connection || !e2e) return undefined;
   try {
+    // P-07: отзыв устройства требует текущий пароль; без явного берём сохранённый.
+    const pw = password || await loadSecureCredential(store.self).catch(() => undefined);
     const raw = await connection.request(TOPIC_DEVICE_REVOKE, JSON.stringify({
-      token, device_id: deviceId,
+      token, device_id: deviceId, password: pw,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     e2e.forgetOwnDevice(deviceId);
@@ -1807,9 +1810,12 @@ const methods = {
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
   },
 
-  async parvaneSetTwoFactor({ enabled }: { enabled: boolean }) {
+  // P-07: выключение 2FA требует текущий пароль (один украденный JWT не должен
+  // снимать второй фактор). Если пароль не передан — берём сохранённый.
+  async parvaneSetTwoFactor({ enabled, password }: { enabled: boolean; password?: string }) {
     if (!connection) return undefined;
-    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled }));
+    const pw = !enabled ? (password || await loadSecureCredential(store.self).catch(() => undefined)) : undefined;
+    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled, password: pw }));
     const response = JSON.parse(raw) as {
       ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string; trust_secret?: string;
     };
@@ -1818,6 +1824,21 @@ const methods = {
     // следующей загрузке оно само попросило бы подтверждение в Telegram
     if (response.trust_secret) connectionController.writeTrustSecret(store.self, response.trust_secret);
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
+  },
+
+  // P-07: смена пароля (identity.password.change): JWT + старый пароль; сервер
+  // сбрасывает доверие устройств 2FA. Обновляем сохранённый пароль.
+  async parvaneChangePassword({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) {
+    if (!connection) throw new Error('нет соединения');
+    const raw = await connection.request(
+      TOPIC_IDENTITY_PASSWORD_CHANGE,
+      JSON.stringify({ token, old_password: oldPassword, new_password: newPassword }),
+    );
+    const response = JSON.parse(raw) as { ok: boolean; error?: string };
+    if (!response.ok) throw new Error(response.error || 'identity отклонил смену пароля');
+    const saved = await loadSecureCredential(store.self).catch(() => undefined);
+    if (saved) await saveSecureCredential(store.self, newPassword).catch(() => undefined);
+    return true;
   },
 
   provideAuthPhoneNumber(input: string) {

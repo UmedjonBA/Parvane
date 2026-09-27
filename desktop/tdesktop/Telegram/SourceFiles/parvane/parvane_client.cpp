@@ -1807,7 +1807,9 @@ bool RegisterStatus(const QString &user, const QString &token) {
 
 namespace {
 
-TwoFactorState RequestTwoFactor(const std::optional<bool> &enabled) {
+TwoFactorState RequestTwoFactor(
+		const std::optional<bool> &enabled,
+		const QString &password = QString()) {
 	TwoFactorState out;
 	try {
 		auto transport = MakeTransport(Token());
@@ -1815,7 +1817,11 @@ TwoFactorState RequestTwoFactor(const std::optional<bool> &enabled) {
 		if (enabled) {
 			req["enabled"] = *enabled;
 		}
-		const auto raw = transport->request("identity.user.twofa", req.dump(), 5000);
+		// P-07: выключение 2FA — только с паролем.
+		if (!password.isEmpty()) {
+			req["password"] = password.toStdString();
+		}
+		const auto raw = transport->request(parvane::topics::IdentityTwoFa, req.dump(), 5000);
 		const auto resp = nlohmann::json::parse(raw);
 		out.ok = resp.value("ok", false);
 		out.enabled = resp.value("enabled", false);
@@ -1841,8 +1847,8 @@ TwoFactorState FetchTwoFactor() {
 	return RequestTwoFactor(std::nullopt);
 }
 
-TwoFactorState SetTwoFactor(bool enabled) {
-	return RequestTwoFactor(enabled);
+TwoFactorState SetTwoFactor(bool enabled, const QString &password) {
+	return RequestTwoFactor(enabled, password);
 }
 
 ConfirmResult ConfirmEmail(const QString &user, const QString &code) {
@@ -1977,7 +1983,7 @@ void RegisterCallKey(const QString &pub, const QString &token) {
 			return;
 		}
 		try {
-			t->request("identity.user.setkey", req, 3000);
+			t->request(parvane::topics::IdentitySetKey, req, 3000);
 			LOG(("Parvane: зарегистрирован ключ звонков %1…")
 				.arg(pub.left(12)));
 		} catch (const std::exception &) {
@@ -9105,8 +9111,9 @@ void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 	});
 }
 
-void RevokeDevice(const QString &deviceId, Fn<void(bool)> done) {
+void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &password) {
 	const auto devStd = deviceId.toStdString();
+	const auto pwStd = password.toStdString();
 	crl::async([=] {
 		parvane::ITransport *t = nullptr;
 		std::string token;
@@ -9118,8 +9125,13 @@ void RevokeDevice(const QString &deviceId, Fn<void(bool)> done) {
 		bool ok = false;
 		if (t && devStd != parvane::e2e::deviceId()) {
 			try {
+				// P-07: отзыв устройства требует текущий пароль.
+				parvane::json body{{"token", token}, {"device_id", devStd}};
+				if (!pwStd.empty()) {
+					body["password"] = pwStd;
+				}
 				const auto raw = t->request(parvane::topics::IdentityDeviceRevoke,
-					parvane::json{{"token", token}, {"device_id", devStd}}.dump(), 5000);
+					body.dump(), 5000);
 				ok = parvane::json::parse(raw, nullptr, false).value("ok", false);
 			} catch (const std::exception &e) {
 				LOG(("Parvane: device.revoke ошибка: %1").arg(QString::fromUtf8(e.what())));

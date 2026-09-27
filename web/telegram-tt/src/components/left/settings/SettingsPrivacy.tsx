@@ -19,6 +19,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Island, { IslandTitle } from '../../gili/layout/Island';
+import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
 
@@ -147,15 +148,59 @@ const SettingsPrivacy = ({
     if (ownFingerprint) copyTextToClipboard(ownFingerprint);
   });
 
-  const handleTwoFactorChange = useLastCallback(async (enabled: boolean) => {
+  // P-07: выключение 2FA требует текущий пароль — показываем поле ввода и
+  // отправляем пароль вместе с запросом (один украденный JWT второй фактор не
+  // снимет). Включение — как раньше, по JWT.
+  const [disablePassword, setDisablePassword] = useState('');
+  const [isDisablePromptOpen, setIsDisablePromptOpen] = useState(false);
+
+  const applyTwoFactor = useLastCallback(async (enabled: boolean, password?: string) => {
     setIsTwoFactorBusy(true);
     try {
-      const state = await (callParvane('parvaneSetTwoFactor', { enabled }) as Promise<TwoFactorState | undefined>);
+      const state = await (callParvane('parvaneSetTwoFactor', { enabled, password }) as Promise<TwoFactorState | undefined>);
       if (state) setTwoFactor(state);
+      setIsDisablePromptOpen(false);
+      setDisablePassword('');
     } catch {
       showNotification({ message: oldLang('ParvaneTwoFactorFailed') });
     } finally {
       setIsTwoFactorBusy(false);
+    }
+  });
+
+  const handleTwoFactorChange = useLastCallback((enabled: boolean) => {
+    if (!enabled) {
+      setIsDisablePromptOpen(true);
+      return;
+    }
+    void applyTwoFactor(true);
+  });
+
+  const handleConfirmDisable = useLastCallback(() => {
+    if (!disablePassword) return;
+    void applyTwoFactor(false, disablePassword);
+  });
+
+  // P-07: смена пароля (identity.password.change) — старый + новый (≥ 8 символов).
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordRepeat, setNewPasswordRepeat] = useState('');
+  const [isPasswordBusy, setIsPasswordBusy] = useState(false);
+  const canChangePassword = Boolean(oldPassword) && newPassword.length >= 8 && newPassword === newPasswordRepeat;
+
+  const handleChangePassword = useLastCallback(async () => {
+    if (!canChangePassword) return;
+    setIsPasswordBusy(true);
+    try {
+      await callParvane('parvaneChangePassword', { oldPassword, newPassword });
+      setOldPassword('');
+      setNewPassword('');
+      setNewPasswordRepeat('');
+      showNotification({ message: oldLang('ParvaneChangePasswordDone') });
+    } catch (error) {
+      showNotification({ message: `${oldLang('ParvaneChangePasswordFailed')}: ${String((error as Error)?.message || error)}` });
+    } finally {
+      setIsPasswordBusy(false);
     }
   });
 
@@ -248,6 +293,57 @@ const SettingsPrivacy = ({
           disabled={!twoFactor || !twoFactor.telegramLinked || isTwoFactorBusy}
           onCheck={handleTwoFactorChange}
         />
+        {isDisablePromptOpen && (
+          <div className="settings-item">
+            <input
+              type="password"
+              className="form-control"
+              placeholder={oldLang('ParvanePasswordConfirm')}
+              value={disablePassword}
+              onChange={(e) => setDisablePassword(e.currentTarget.value)}
+              disabled={isTwoFactorBusy}
+            />
+            <Button size="smaller" disabled={!disablePassword || isTwoFactorBusy} onClick={handleConfirmDisable}>
+              {oldLang('ParvaneTwoFactorDisableConfirm')}
+            </Button>
+          </div>
+        )}
+      </Island>
+
+      {/* Parvane: смена пароля (P-07) */}
+      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+        {oldLang('ParvaneChangePasswordTitle')}
+      </IslandTitle>
+      <Island>
+        <div className="settings-item">
+          <input
+              type="password"
+              className="form-control"
+              placeholder={oldLang('ParvaneChangePasswordOld')}
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.currentTarget.value)}
+              disabled={isPasswordBusy}
+            />
+          <input
+              type="password"
+              className="form-control"
+              placeholder={oldLang('ParvaneChangePasswordNew')}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.currentTarget.value)}
+              disabled={isPasswordBusy}
+            />
+          <input
+              type="password"
+              className="form-control"
+              placeholder={oldLang('ParvaneChangePasswordRepeat')}
+              value={newPasswordRepeat}
+              onChange={(e) => setNewPasswordRepeat(e.currentTarget.value)}
+              disabled={isPasswordBusy}
+            />
+          <Button size="smaller" disabled={!canChangePassword || isPasswordBusy} onClick={handleChangePassword}>
+            {oldLang('ParvaneChangePasswordButton')}
+          </Button>
+        </div>
       </Island>
 
       <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>

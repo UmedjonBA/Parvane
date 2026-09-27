@@ -17,6 +17,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "main/main_session.h"
 #include "parvane/parvane_client.h" // Parvane: устройства из identity.device.*
+#include "boxes/abstract_box.h" // Parvane: Ui::show — запрос пароля при отзыве
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/fields/password_input.h"
+#include "settings/cloud_password/settings_cloud_password_common.h" // Parvane: AddPasswordField
 
 namespace Api {
 namespace {
@@ -212,6 +216,9 @@ void Authorizations::requestTerminate(
 		const auto weak = std::weak_ptr<bool>(parvaneAlive);
 		const auto shared = std::make_shared<Fn<void(const MTPBool&)>>(std::move(done));
 		const auto step = std::make_shared<Fn<void(size_t)>>();
+		// P-07: отзыв устройства требует текущий пароль — запрашиваем один раз
+		// на всю пачку тем же password-box, что и копия ключей.
+		const auto password = std::make_shared<QString>();
 		*step = [=](size_t i) {
 			if (i >= ids.size()) {
 				if (!weak.expired()) {
@@ -229,9 +236,36 @@ void Authorizations::requestTerminate(
 				(*shared)(MTP_boolTrue());
 				return;
 			}
-			Parvane::RevokeDevice(ids[i], [=](bool) { (*step)(i + 1); });
+			Parvane::RevokeDevice(ids[i], [=](bool) { (*step)(i + 1); }, *password);
 		};
-		(*step)(0);
+		if (ids.empty()) {
+			(*step)(0);
+			return;
+		}
+		Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(rpl::single(u"Отозвать устройство"_q));
+			const auto field = Settings::CloudPassword::AddPasswordField(
+				box->verticalLayout(),
+				rpl::single(u"Текущий пароль"_q),
+				QString());
+			box->setFocusCallback([=] { field->setFocus(); });
+			const auto submit = [=] {
+				const auto value = field->getLastText();
+				if (value.isEmpty()) {
+					field->showError();
+					return;
+				}
+				*password = value;
+				box->closeBox();
+				(*step)(0);
+			};
+			QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
+			box->addButton(rpl::single(u"Отозвать"_q), submit);
+			box->addButton(tr::lng_cancel(), [=] {
+				box->closeBox();
+				(*shared)(MTP_boolFalse());
+			});
+		}));
 		return;
 	}
 	const auto send = [&](auto request) {
