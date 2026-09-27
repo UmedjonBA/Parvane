@@ -340,3 +340,77 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     expect(core).toMatch(/if \(rejected && next\.empty\(\)\) \{\s*return;/);
   });
 });
+
+describe('SEND-1: подпись отправки, ack без sender, правка только тем же E2E-видом', () => {
+  const r = rule('SEND-1') as unknown as {
+    sendStatement: string; ackCarriesSender: boolean; editKeepsKind: boolean;
+  };
+  const messages = readFileSync(
+    path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/messages.ts'),
+    'utf8',
+  );
+  const webSync = readFileSync(
+    path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/sync.ts'),
+    'utf8',
+  );
+
+  it('правило SEND-1 задокументировано в sync-rules.json', () => {
+    expect(r.sendStatement).toBe('send:<message_id>:<ciphertext>');
+    expect(r.ackCarriesSender).toBe(false);
+    expect(r.editKeepsKind).toBe(true);
+  });
+
+  it('web подписывает каждую E2E-отправку строкой из правила', () => {
+    expect(messages).toContain('engine.signCallData(`send:${messageId}:${ciphertext}`)');
+    const publishes = messages.match(/publishOrThrow\(TOPIC_MSG_SEND/g) || [];
+    const signed = messages.match(/signature: signSend\(/g) || [];
+    expect(publishes.length).toBeGreaterThan(0);
+    expect(signed.length).toBe(publishes.length);
+  });
+
+  it('web: ack без sender', () => {
+    const idx = webSync.indexOf('function sendAck(messageId: string)');
+    expect(idx).toBeGreaterThan(0);
+    expect(webSync.slice(idx, idx + 300)).not.toMatch(/sender:/);
+    expect(webSync).not.toMatch(/sendAck\([^)]*,\s*[^)]+\)/);
+  });
+
+  it('desktop и android подписывают send той же строкой и шлют ack без sender', () => {
+    const core = readFileSync(
+      path.join(REPO_ROOT, 'desktop/parvane-core/include/parvane/messenger.h'),
+      'utf8',
+    );
+    expect(core).toContain('return "send:" + messageId + ":" + ciphertext;');
+    const client = readFileSync(
+      path.join(REPO_ROOT, 'desktop/parvane-core/src/messenger_client.cpp'),
+      'utf8',
+    );
+    expect(client).toMatch(/const json payload\{\{"message_id", messageId\}\};/);
+    const desktop = readFileSync(
+      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
+      'utf8',
+    );
+    const sends = desktop.match(/m->sendContent\(/g) || [];
+    const signers = desktop.match(/E2eSigner\(\)\);/g) || [];
+    expect(signers.length).toBe(sends.length);
+    const android = readFileSync(path.join(REPO_ROOT, 'android/jni/parvane_jni.cpp'), 'utf8');
+    const androidSends = android.match(/g_messenger->sendContent\(/g) || [];
+    const androidSigners = android.match(/e2eSigner\(\)\);/g) || [];
+    expect(androidSigners.length).toBe(androidSends.length);
+  });
+
+  it('messenger и gateway: подпись send обязательна, правка не понижает E2E', () => {
+    const messenger = readFileSync(
+      path.join(REPO_ROOT, 'backend/shards/messenger/src/main.rs'),
+      'utf8',
+    );
+    expect(messenger).toMatch(/let statement = format!\("send:\{message_id\}:\{ciphertext\}"\);/);
+    expect(messenger).toMatch(/content\.kind\(\) != stored_content\.kind\(\)/);
+    expect(messenger).toMatch(/AND kind NOT IN \('encrypted', 'group_encrypted'\)/);
+    const gateway = readFileSync(
+      path.join(REPO_ROOT, 'backend/shards/gateway/src/main.rs'),
+      'utf8',
+    );
+    expect(gateway).toMatch(/subject == "msg\.chat\.send" \|\| subject == "msg\.chat\.edit"/);
+  });
+});

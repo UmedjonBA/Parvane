@@ -44,7 +44,8 @@ std::string MessengerClient::sendContent(
         const std::string &token,
         const std::optional<std::string> &replyTo,
         const std::optional<std::string> &id,
-        const json &copies) {
+        const json &copies,
+        const std::function<std::string(const std::string &)> &signer) {
     SendPayload payload;
     payload.to = to;
     payload.content = contentJson;
@@ -52,6 +53,11 @@ std::string MessengerClient::sendContent(
     payload.copies = copies;
 
     const std::string idStr = id.value_or(uuid4());
+    if (signer && contentJson.is_object() && contentJson.contains("ciphertext")
+        && contentJson["ciphertext"].is_string()) {
+        payload.signature = signer(
+            SendPayload::signedStatement(idStr, contentJson["ciphertext"].get<std::string>()));
+    }
     const json ev = makeEvent(idStr, from, nowUnix(), token, payload.toJson());
     _t.publish(topics::MsgSend, ev.dump());
     return idStr;
@@ -288,9 +294,11 @@ void MessengerClient::onInbox(const std::string &self,
                  });
 }
 
+// P-05: `sender` больше не отправляется — получатель не раскрывает серверу
+// расшифрованного отправителя (delivered сервер адресует по своей БД).
 void MessengerClient::ack(const std::string &from, const std::string &messageId,
-                          const std::string &token, const std::string &sender) {
-    const json payload{{"message_id", messageId}, {"sender", sender}};
+                          const std::string &token, const std::string &) {
+    const json payload{{"message_id", messageId}};
     _t.publish(topics::MsgAck,
                makeEvent(uuid4(), from, nowUnix(), token, payload).dump());
 }

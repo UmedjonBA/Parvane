@@ -56,7 +56,11 @@ public:
         // как в sendText). Иначе генерируется uuid7.
         const std::optional<std::string> &id = std::nullopt,
         // Мультидевайс: per-device копии шифртекста (MessageDeviceCopy[]).
-        const json &copies = json::array());
+        const json &copies = json::array(),
+        // P-10: подписант E2E-отправки (sender_signing_key устройства) —
+        // signer(SendPayload::signedStatement(id, ciphertext)). Обязателен для
+        // encrypted/group_encrypted с sender_signing_key, иначе сервер отклонит.
+        const std::function<std::string(const std::string &)> &signer = {});
 
     // Подписанный sync (мультидевайс): device_id, signing_key + подпись строки
     // SyncRequestPayload::signedPayload(), доказанные ключи прежних устройств.

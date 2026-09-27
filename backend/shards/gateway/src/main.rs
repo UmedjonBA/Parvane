@@ -753,7 +753,9 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
         .ok_or_else(|| anyhow!("payload должен быть JSON-объектом"))?;
 
     if GATEWAY_EVENT_SUBJECTS.contains(&subject) {
-        if subject == "msg.chat.send" {
+        // P-22: и отправка, и ПРАВКА принимают только E2E-контент — иначе
+        // автор переводил бы E2E-сообщение в открытый текст на сервере правкой.
+        if subject == "msg.chat.send" || subject == "msg.chat.edit" {
             let kind = object
                 .get("payload")
                 .and_then(|payload| payload.get("content"))
@@ -761,7 +763,7 @@ fn bind_client_payload(user: &str, token: &str, subject: &str, payload: &str) ->
                 .and_then(Value::as_str);
             if !matches!(kind, Some("encrypted" | "group_encrypted")) {
                 return Err(anyhow!(
-                    "plaintext msg.chat.send запрещён: E2E-сообщение не отправлено"
+                    "plaintext {subject} запрещён: E2E-сообщение не отправлено"
                 ));
             }
         }
@@ -1127,6 +1129,24 @@ mod tests {
                 "валидный адрес {good:?} должен проходить"
             );
         }
+    }
+
+    #[test]
+    // P-22: правка тоже только E2E — plaintext-edit и legacy text-edit отвергаются
+    #[test]
+    fn plaintext_edits_are_rejected_fail_closed() {
+        let mid = "00000000-0000-7000-8000-000000000e01";
+        for payload in [
+            serde_json::json!({"message_id": mid, "text": "plain"}),
+            serde_json::json!({"message_id": mid, "content": {"kind": "text", "text": "plain"}}),
+        ] {
+            let raw = serde_json::json!({"id": mid, "from": "alice@local", "ts": 1, "token": "t", "payload": payload});
+            let error = bind_client_payload("alice@local", "tok", "msg.chat.edit", &raw.to_string()).unwrap_err();
+            assert!(error.to_string().contains("plaintext"), "{error}");
+        }
+        let raw = serde_json::json!({"id": mid, "from": "alice@local", "ts": 1, "token": "t",
+            "payload": {"message_id": mid, "content": {"kind": "encrypted", "ciphertext": "x", "sender_signing_key": "k"}, "signature": "s"}});
+        assert!(bind_client_payload("alice@local", "tok", "msg.chat.edit", &raw.to_string()).is_ok());
     }
 
     #[test]

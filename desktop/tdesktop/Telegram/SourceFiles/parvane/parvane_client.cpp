@@ -875,6 +875,12 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 	return recipients;
 }
 
+// P-10 (SEND-1): подписант E2E-отправки — Ed25519 устройства
+// (`send:<message_id>:<ciphertext>`), сервер проверяет владение sender_signing_key.
+[[nodiscard]] std::function<std::string(const std::string &)> E2eSigner() {
+	return [](const std::string &statement) { return parvane::e2e::sign(statement); };
+}
+
 // 1-на-1 sealed-отправка с fan-out копий по устройствам получателя и своим
 // устройствам (мультидевайс). "" — E2E не удался (ничего не отправлено).
 // На проводе from/token ПУСТЫЕ (sealed sender; gateway уже аутентифицировал).
@@ -895,7 +901,7 @@ std::string sendSealedDirect(
 		copies.push_back(c.toJson());
 	}
 	return m->sendContent(std::string(), to, sealed->content, std::string(),
-		replyTo, preId, copies);
+		replyTo, preId, copies, E2eSigner());
 }
 
 // Своё исходящее — в кэш расшифровки (как у web): так оно попадает в экспорт
@@ -987,7 +993,7 @@ void sendTextAsync(
 					? std::optional<std::string>{}
 					: std::optional<std::string>{preId};
 				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
-					replyToUuid, pre);
+					replyToUuid, pre, parvane::json::array(), E2eSigner());
 			} else {
 				LOG(("Parvane: E2E недоступен для %1 — сообщение НЕ отправлено")
 					.arg(QString::fromStdString(to)));
@@ -1096,7 +1102,8 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 					return;
 				}
 				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token);
+					nlohmann::json::parse(sealed), token, std::nullopt, std::nullopt,
+					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1157,7 +1164,8 @@ void sendInnerAsync(
 					? std::optional<std::string>{}
 					: std::optional<std::string>{preId};
 				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token, std::nullopt, pre);
+					nlohmann::json::parse(sealed), token, std::nullopt, pre,
+					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -3158,7 +3166,8 @@ void MirrorOutgoingFile(
 						.arg(QString::fromStdString(to)));
 					return;
 				}
-				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token);
+				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
+					std::nullopt, std::nullopt, parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -3466,7 +3475,8 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 					return;
 				}
 				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token);
+					nlohmann::json::parse(sealed), token, std::nullopt, std::nullopt,
+					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);

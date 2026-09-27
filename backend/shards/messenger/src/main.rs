@@ -214,6 +214,18 @@ fn validate_sender(jwt_sub: &str, claimed_from: &str) -> Result<()> {
 /// Сохранить сообщение. Идемпотентно по `id` (INSERT OR IGNORE).
 /// `content` хранится как JSON `MessageContent`, `kind` — для фильтрации.
 async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i64) -> Result<()> {
+    store_message_from(pool, ev, now, &ev.from).await
+}
+
+/// `sender_user` — владелец по токену сессии (P-10/P-05): для sealed-сообщений
+/// `from` пуст, но выборка по signing-ключам в sync и delivered-квитанция
+/// опираются на реального владельца, а не на самозаявленные поля.
+async fn store_message_from(
+    pool: &SqlitePool,
+    ev: &ParvaneEvent<SendPayload>,
+    now: i64,
+    sender_user: &str,
+) -> Result<()> {
     let content_json = serde_json::to_string(&ev.payload.content).context("сериализация content")?;
     // legacy-колонка `text` объявлена NOT NULL: для Text кладём сам текст, для
     // медиа — пустую строку (источник истины — `content`).
@@ -233,8 +245,8 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
     // выполнялись с контентом атакующего под легитимным id.
     let res = sqlx::query(
         "INSERT OR IGNORE INTO messages
-           (id, from_user, to_user, text, kind, content, ts, created_at, reply_to, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+           (id, from_user, to_user, text, kind, content, ts, created_at, reply_to, updated_at, sender_user)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(ev.id.to_string())
     .bind(&ev.from)
@@ -246,6 +258,7 @@ async fn store_message(pool: &SqlitePool, ev: &ParvaneEvent<SendPayload>, now: i
     .bind(now)
     .bind(reply_to)
     .bind(now)
+    .bind(sender_user)
     .execute(pool)
     .await
     .context("сохранение сообщения")?;
@@ -353,7 +366,8 @@ async fn edit_message(pool: &SqlitePool, message_id: &str, author: &str, text: &
     let res = sqlx::query(
         "UPDATE messages
             SET text = ?, kind = 'text', content = ?, edited = 1, updated_at = ?
-          WHERE id = ? AND from_user = ? AND deleted = 0",
+          WHERE id = ? AND from_user = ? AND deleted = 0
+            AND kind NOT IN ('encrypted', 'group_encrypted')",
     )
     .bind(text)
     .bind(&content_json)
@@ -393,6 +407,30 @@ fn verify_mutation_signature(signing_key: &str, payload: &str, signature: &str) 
         return false;
     };
     key.verify(payload.as_bytes(), &signature).is_ok()
+}
+
+/// P-10 (SEND-1): при отправке владение `sender_signing_key` доказывается
+/// подписью `send:<message_id>:<ciphertext>`. Без ключа в content — legacy
+/// (никаких привилегий по ключу), но тогда и self-копии с `signing_key`
+/// запрещены: их выборка в sync тоже идёт по ключу.
+fn authenticate_send(payload: &SendPayload, message_id: &str) -> Result<()> {
+    match encrypted_mutation_metadata(&payload.content) {
+        Some((ciphertext, signing_key)) => {
+            let Some(signature) = payload.signature.as_deref() else {
+                anyhow::bail!("P-10: отправка с sender_signing_key без подписи send");
+            };
+            let statement = format!("send:{message_id}:{ciphertext}");
+            if !verify_mutation_signature(signing_key, &statement, signature) {
+                anyhow::bail!("P-10: подпись send не соответствует sender_signing_key");
+            }
+        }
+        None => {
+            if payload.copies.iter().any(|copy| !copy.signing_key.is_empty()) {
+                anyhow::bail!("P-10: self-копии с signing_key без доказанного sender_signing_key");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn authenticated_sync_signing_key(payload: &SyncRequestPayload) -> Option<&str> {
@@ -457,9 +495,18 @@ async fn replace_message_content(
     let Some((stored_author, stored_json)) = current else {
         return Ok(false);
     };
+    let stored_content: MessageContent = serde_json::from_str(&stored_json)?;
+    // P-22: E2E-сообщение правится только тем же E2E-видом. Понижение до
+    // plaintext (или смена encrypted ↔ group_encrypted) отклоняется — иначе
+    // автор/скомпрометированный клиент переводил бы историю в открытый текст
+    // на сервере.
+    if !matches!(content.kind(), "encrypted" | "group_encrypted")
+        || content.kind() != stored_content.kind()
+    {
+        return Ok(false);
+    }
 
     if stored_author.is_empty() {
-        let stored_content: MessageContent = serde_json::from_str(&stored_json)?;
         let Some((_, stored_signing_key)) = encrypted_mutation_metadata(&stored_content) else {
             return Ok(false);
         };
@@ -1146,11 +1193,13 @@ async fn fetch_missed_with_keys(
          WHERE (m.to_user = ? OR m.from_user = ?
                 OR m.to_user IN (SELECT group_id FROM group_members
                                  WHERE member = ? AND role != 'banned')
-                OR COALESCE(json_extract(m.content, '$.sender_signing_key'), '')
-                   IN (SELECT value FROM json_each(?))
-                OR EXISTS(SELECT 1 FROM message_device_copies c
-                           WHERE c.message_id = m.id
-                             AND c.signing_key IN (SELECT value FROM json_each(?))))
+                OR ((m.sender_user = ? OR m.sender_user = '')
+                    AND COALESCE(json_extract(m.content, '$.sender_signing_key'), '')
+                        IN (SELECT value FROM json_each(?)))
+                OR ((m.sender_user = ? OR m.sender_user = '')
+                    AND EXISTS(SELECT 1 FROM message_device_copies c
+                                WHERE c.message_id = m.id
+                                  AND c.signing_key IN (SELECT value FROM json_each(?)))))
            AND (m.rowid > COALESCE((SELECT rowid FROM messages WHERE id = ?), 0)
                 OR m.updated_at > ?)
            AND NOT EXISTS(SELECT 1 FROM hidden_messages h
@@ -1164,7 +1213,11 @@ async fn fetch_missed_with_keys(
     .bind(user)
     .bind(user)
     .bind(user)
+    // P-10: выборка по ключам только среди сообщений этого же владельца
+    // (sender_user по токену); '' — строки до миграции 0012
+    .bind(user)
     .bind(&keys_json)
+    .bind(user)
     .bind(&keys_json)
     .bind(last_seen_id)
     .bind(since_updated)
@@ -1533,23 +1586,29 @@ async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         // подлинность отправителя получатель проверяет криптографически (Olm).
         // Иначе — обычный путь: верификация токена + антиспуф + право постинга.
         let sealed = event.from.is_empty();
-        if !sealed {
+        let sender = if !sealed {
             let sender = verify_token(nc, &event.token).await?;
             validate_sender(&sender, &event.from)?;
             if !can_post(pool, &event.payload.to, &sender).await? {
                 warn!("Отклонено: {} не может писать в {}", sender, event.payload.to);
                 return anyhow::Ok(());
             }
+            sender
         } else {
             // P-40: sealed 1-на-1 тоже обязан пройти verify_token. Отправитель
             // скрыт (from=""), но токен принадлежит живой, не отозванной сессии —
             // иначе отозванное устройство слало бы sealed-сообщения до истечения
             // JWT. Identity отклонит отозванный/протухший токен.
-            verify_token(nc, &event.token).await?;
+            verify_token(nc, &event.token).await?
+        };
+        // P-10: владение sender_signing_key доказывается подписью send
+        if let Err(e) = authenticate_send(&event.payload, &event.id.to_string()) {
+            warn!("Отклонено: {} → {} ({}): {}", sender, event.payload.to, event.id, e);
+            return anyhow::Ok(());
         }
 
         let now = now_unix();
-        store_message(pool, &event, now).await?;
+        store_message_from(pool, &event, now, &sender).await?;
         info!("Сообщение сохранено: {} → {} ({})", event.from, event.payload.to, event.id);
 
         // Раскладываем по инбоксам получателей + офлайн-очередь (Фаза 1).
@@ -1591,21 +1650,19 @@ async fn handle_ack(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
         // Снять из очереди этого получателя; при первом снятии — уведомить
         // отправителя о доставке (delivered-галочка).
         if ack_delivered(pool, &reader, &mid).await? {
-            // Отправитель берётся из БД (авторитетно), чтобы получатель не мог
-            // подставить произвольный адрес в delivered-receipt. Клиентский
-            // `payload.sender` — только фолбэк для sealed-сообщений, где открытого
-            // `from_user` в БД нет (его знает лишь расшифровавший получатель).
+            // Отправитель берётся ТОЛЬКО из БД (P-05): from_user, а для sealed —
+            // sender_user по токену отправителя. Клиентское `payload.sender`
+            // не читается: получатель раскрывал бы серверу расшифрованного
+            // отправителя и мог подставить произвольный адрес.
             let sender: Option<String> = sqlx::query_as::<_, (String,)>(
-                "SELECT from_user FROM messages WHERE id = ?",
+                "SELECT CASE WHEN from_user <> '' THEN from_user ELSE sender_user END
+                   FROM messages WHERE id = ?",
             )
             .bind(&mid)
             .fetch_optional(pool)
             .await?
             .map(|(s,)| s)
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                Some(event.payload.sender.clone()).filter(|s| !s.is_empty())
-            });
+            .filter(|s| !s.is_empty());
             if let Some(sender) = sender {
                 let delivered = ParvaneEvent {
                     id: Uuid::now_v7(),
@@ -2351,7 +2408,7 @@ mod tests {
             from: from.into(),
             ts: 1_000_000,
             token: "tok".into(),
-            payload: SendPayload { to: to.into(), content, reply_to: None, copies: vec![] },
+            payload: SendPayload { to: to.into(), content, reply_to: None, copies: vec![], signature: None },
         }
     }
 
@@ -3300,6 +3357,106 @@ mod tests {
         let other = SigningKey::from_bytes(&[12_u8; 32]);
         let bad = STANDARD_NO_PAD.encode(other.sign(payload.as_bytes()).to_bytes());
         assert!(!can_mutate_message(&pool, mid, "alice@local", Some(&bad), &payload, false).await.unwrap());
+    }
+
+    // P-10 (SEND-1): владение sender_signing_key доказывается подписью
+    // `send:<id>:<ciphertext>`; self-копии с signing_key без ключа — отказ.
+    #[test]
+    fn authenticate_send_requires_signature_over_send_statement() {
+        let mid = "00000000-0000-7000-8000-0000000000f1";
+        let signing = SigningKey::from_bytes(&[21_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let content = MessageContent::Encrypted {
+            ciphertext: "cipher-1".into(),
+            ctype: 0,
+            sender_identity: "curve".into(),
+            sender_signing_key: signing_key.clone(),
+        };
+        let mut payload = SendPayload { to: "bob@local".into(), content, reply_to: None, copies: vec![], signature: None };
+        assert!(authenticate_send(&payload, mid).is_err(), "без подписи — отказ");
+        payload.signature = Some("bad".into());
+        assert!(authenticate_send(&payload, mid).is_err(), "мусорная подпись — отказ");
+        let other = SigningKey::from_bytes(&[22_u8; 32]);
+        payload.signature = Some(STANDARD_NO_PAD.encode(other.sign(format!("send:{mid}:cipher-1").as_bytes()).to_bytes()));
+        assert!(authenticate_send(&payload, mid).is_err(), "подпись чужим ключом — отказ (чужой sender_signing_key)");
+        payload.signature = Some(STANDARD_NO_PAD.encode(signing.sign(format!("send:{mid}:cipher-2").as_bytes()).to_bytes()));
+        assert!(authenticate_send(&payload, mid).is_err(), "подпись другого шифртекста — отказ");
+        payload.signature = Some(STANDARD_NO_PAD.encode(signing.sign(format!("send:{mid}:cipher-1").as_bytes()).to_bytes()));
+        assert!(authenticate_send(&payload, mid).is_ok(), "верная подпись — ок");
+        assert!(authenticate_send(&payload, "00000000-0000-7000-8000-0000000000f2").is_err(), "подпись привязана к id");
+
+        // Legacy без sender_signing_key: подпись не нужна, но self-копии с ключом запрещены
+        let legacy = MessageContent::Encrypted {
+            ciphertext: "c".into(), ctype: 0, sender_identity: "curve".into(), sender_signing_key: String::new(),
+        };
+        let mut legacy_payload = SendPayload { to: "bob@local".into(), content: legacy, reply_to: None, copies: vec![], signature: None };
+        assert!(authenticate_send(&legacy_payload, mid).is_ok());
+        legacy_payload.copies.push(MessageDeviceCopy {
+            recipient: String::new(), signing_key: signing_key.clone(), device_id: "d".into(), ciphertext: "x".into(), ctype: 0,
+        });
+        assert!(authenticate_send(&legacy_payload, mid).is_err(), "self-копия с чужим ключом без доказательства — отказ");
+    }
+
+    // P-10: выборка по signing-ключу в sync — только среди сообщений того же
+    // владельца (sender_user по токену): чужое сообщение с моим публичным
+    // ключом в content не попадает в мою ленту.
+    #[tokio::test]
+    async fn sync_by_signing_key_requires_same_sender_user() {
+        let pool = test_pool().await;
+        let signing = SigningKey::from_bytes(&[23_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let content = |c: &str| MessageContent::Encrypted {
+            ciphertext: c.into(), ctype: 0, sender_identity: "curve".into(), sender_signing_key: signing_key.clone(),
+        };
+        let mine = "00000000-0000-7000-8000-0000000000f3";
+        let forged = "00000000-0000-7000-8000-0000000000f4";
+        store_message_from(&pool, &send_content(mine, "", "bob@local", content("c1")), 1, "alice@local").await.unwrap();
+        store_message_from(&pool, &send_content(forged, "", "carol@local", content("c2")), 2, "mallory@evil").await.unwrap();
+        let page = fetch_missed_for_signing_key(&pool, "alice@local", "0", 0, &signing_key, "").await.unwrap();
+        let ids: Vec<String> = page.iter().map(|m| m.id.to_string()).collect();
+        assert!(ids.contains(&mine.to_string()), "своё sealed-исходящее по ключу видно");
+        assert!(!ids.contains(&forged.to_string()), "чужое сообщение с моим ключом в content не выбирается");
+        // Self-копии по signing_key — то же правило
+        let forged_copy = "00000000-0000-7000-8000-0000000000f5";
+        let mut ev = send_content(forged_copy, "", "carol@local", MessageContent::Encrypted {
+            ciphertext: "c3".into(), ctype: 0, sender_identity: "curve".into(), sender_signing_key: String::new(),
+        });
+        ev.payload.copies.push(MessageDeviceCopy {
+            recipient: String::new(), signing_key: signing_key.clone(), device_id: "dev-a".into(), ciphertext: "x".into(), ctype: 0,
+        });
+        store_message_from(&pool, &ev, 3, "mallory@evil").await.unwrap();
+        let page = fetch_missed_for_signing_key(&pool, "alice@local", "0", 0, &signing_key, "dev-a").await.unwrap();
+        assert!(!page.iter().any(|m| m.id.to_string() == forged_copy), "чужая self-копия с моим ключом не выбирается");
+    }
+
+    // P-22: E2E-сообщение нельзя понизить до plaintext правкой (ни legacy
+    // text-правкой, ни заменой content на Text, ни сменой вида E2E).
+    #[tokio::test]
+    async fn edit_cannot_downgrade_encrypted_to_plaintext() {
+        let pool = test_pool().await;
+        let mid = "00000000-0000-7000-8000-0000000000f6";
+        let signing = SigningKey::from_bytes(&[24_u8; 32]);
+        let signing_key = STANDARD_NO_PAD.encode(signing.verifying_key().to_bytes());
+        let original = MessageContent::GroupEncrypted {
+            ciphertext: "g-cipher".into(), group: "grp".into(), sender_identity: "curve".into(),
+            sender_signing_key: signing_key.clone(),
+        };
+        store_message(&pool, &send_content(mid, "alice@local", "grp", original), 1).await.unwrap();
+        assert!(!edit_message(&pool, mid, "alice@local", "plain text", 2).await.unwrap(), "legacy text-правка E2E — отказ");
+        let plain = MessageContent::Text { text: "plain".into(), entities: vec![], webpage: None };
+        assert!(!replace_message_content(&pool, mid, "alice@local", &plain, None, &[], 3).await.unwrap(), "замена на Text — отказ");
+        let other_kind = MessageContent::Encrypted {
+            ciphertext: "x".into(), ctype: 0, sender_identity: "curve".into(), sender_signing_key: signing_key.clone(),
+        };
+        let sig = STANDARD_NO_PAD.encode(signing.sign(format!("edit:{mid}:x").as_bytes()).to_bytes());
+        assert!(!replace_message_content(&pool, mid, "alice@local", &other_kind, Some(&sig), &[], 4).await.unwrap(), "смена вида E2E — отказ");
+        let same_kind = MessageContent::GroupEncrypted {
+            ciphertext: "g-cipher-2".into(), group: "grp".into(), sender_identity: "curve".into(),
+            sender_signing_key: signing_key.clone(),
+        };
+        assert!(replace_message_content(&pool, mid, "alice@local", &same_kind, None, &[], 5).await.unwrap(), "тот же вид от автора — ок");
+        let kind: String = sqlx::query_scalar("SELECT kind FROM messages WHERE id = ?").bind(mid).fetch_one(&pool).await.unwrap();
+        assert_eq!(kind, "group_encrypted");
     }
 
     #[tokio::test]

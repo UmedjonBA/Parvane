@@ -189,6 +189,36 @@ android использует то же ядро через `jni/parvane_jni.cpp`
 `e2eTrust.test.ts` + `conformance.test.ts` (`KEY-1`), desktop
 `tests/e2e_tests.cpp` (rememberContactIdentity, P-25).
 
+## SEND-1. Отправка E2E подписана, ack без sender, правка только тем же E2E-видом
+
+**P-10.** В `msg.chat.send` E2E-сообщение с `sender_signing_key` несёт
+`signature` — Ed25519-подпись строки `send:<message_id>:<ciphertext>` этим
+ключом (`ciphertext` — из `content`, не из per-device копий). Messenger
+отклоняет отправку без валидной подписи; без `sender_signing_key` (legacy)
+подпись не нужна, но тогда запрещены self-копии с `signing_key`. Выборка
+«своих исходящих» по signing-ключам в `msg.sync.request` ограничена
+сообщениями того же владельца (`sender_user` по токену): чужой публичный ключ
+в чужом сообщении в мою ленту не попадает.
+
+**P-05.** `msg.chat.ack` не содержит `sender`: получатель не раскрывает серверу
+расшифрованного отправителя; адрес для delivered сервер берёт из своей БД.
+
+**P-22.** Правка E2E-сообщения принимает только тот же вид (`encrypted` ↔
+`encrypted`, `group_encrypted` ↔ `group_encrypted`); понижение до plaintext
+и legacy text-правка отклоняются и messenger'ом, и gateway'ем.
+
+Реализации: web `messages.ts` (`signSend`), `sync.ts` (`sendAck`); desktop
+`parvane-core` `SendPayload::signedStatement`, `MessengerClient::sendContent`
+(параметр `signer`), `MessengerClient::ack`; tdesktop `E2eSigner()`; android
+`jni/parvane_jni.cpp` (`e2eSigner`). Сервер: messenger `authenticate_send`,
+`store_message_from`, `replace_message_content`, `edit_message`; gateway
+`bind_client_payload`. Тесты: messenger
+`authenticate_send_requires_signature_over_send_statement`,
+`sync_by_signing_key_requires_same_sender_user`,
+`edit_cannot_downgrade_encrypted_to_plaintext`; gateway
+`plaintext_edits_are_rejected_fail_closed`; web `conformance.test.ts`
+(`SEND-1`); desktop `tests/messenger_tests.cpp` (подпись send).
+
 ## Обязательный сценарий: устройство отсутствовало
 
 Все e2e гоняются на чистом стеке, где оба клиента онлайн и устройства уже в
