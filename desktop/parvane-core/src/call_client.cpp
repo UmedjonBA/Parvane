@@ -7,15 +7,7 @@
 
 namespace parvane {
 
-namespace {
-
-// Персональный инбокс сигналов звонка. Зеркалит call_inbox() из parvane-types:
-// точный субъект call.user.<addr> (@ в токене субъекта допустим).
-std::string callInbox(const std::string &user) {
-    return "call.user." + user;
-}
-
-} // namespace
+using parvane::topics::callInbox;
 
 void CallClient::send(const std::string &from, const std::string &to,
                       const std::string &token, const json &signal) {

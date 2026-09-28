@@ -542,6 +542,91 @@
         ],
         "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (файл участника без права скрыт, с правом показан)"
       }
+    },
+    {
+      "id": "E2E-1",
+      "title": "Автор из провода, SKDM из identity конверта, неподтверждённое не показывается",
+      "groupAuthor": "wireFrom",
+      "megolmPlaintext": "bareContent",
+      "acceptsLegacyWrapper": true,
+      "skdmBoundToEnvelopeIdentity": true,
+      "unknownVerdict": {
+        "show": false,
+        "ack": false,
+        "retry": true
+      }
+    },
+    {
+      "id": "LINK-1",
+      "title": "Линковка v2: обязательство, challenge, SAS от пары ключей, без приватного аккаунта",
+      "sasDigits": 12,
+      "sasInfo": "parvane-link-sas-v2",
+      "commitment": "base64(sha256(raw eph_pub))",
+      "exportLinkVersion": 2,
+      "exportContainsPrivateAccount": false,
+      "transferStatement": "link-transfer:<user>:<old_signing_key>:<new_signing_key>",
+      "acceptsLegacyOffers": false,
+      "vectors": {
+        "newPubB64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "oldPubB64": "BAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "commitmentOfNew": "mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=",
+        "sas": "5659 7031 8371"
+      }
+    },
+    {
+      "id": "KEY-1",
+      "title": "Смена ключа контакта — по виденным identity (TOFU); signed_prekey только с подписью signing_key",
+      "keyChangeSource": "seenIdentities",
+      "catalogSeedsSeenOnlyOnFirstContact": true,
+      "prekeySignatureRequiredInDeviceList": true,
+      "legacyBundleWithoutSigningKeyAccepted": true,
+      "allDevicesRejectedVerdict": "unknown"
+    },
+    {
+      "id": "SEND-1",
+      "title": "Отправка E2E подписана ключом отправителя; ack без sender; правка только тем же E2E-видом",
+      "sendStatement": "send:<message_id>:<ciphertext>",
+      "signatureRequiredWhen": "content.sender_signing_key непустой",
+      "selfCopiesRequireProvenKey": true,
+      "syncByKeyScopedToSenderUser": true,
+      "ackCarriesSender": false,
+      "editKeepsKind": true,
+      "gatewayRejectsPlaintextEdit": true
+    },
+    {
+      "id": "EPHEMERAL-1",
+      "title": "Typing — только свой topic и группы по членству; presence — по конкретным собеседникам",
+      "typingSubscribe": "own msg.typing.<id(self)> + msg.typing.<id(group)> only for members (gateway checks group.list)",
+      "presenceSubscribe": "presence.<id(peer)> per known peer; presence.* forbidden",
+      "presencePublish": "presence.<id(self)> only"
+    },
+    {
+      "id": "BLOB-1",
+      "title": "Медиа-блоб — чанковый AEAD v2 (PVB2); окна плеера только из проверенных чанков",
+      "format": "\"PVB2\" | u32be chunkSize | for i in 0..n: ct_i (<= chunkSize) | tag_i (16)",
+      "chunkSizeDefault": 262144,
+      "chunkSizeRange": [
+        1024,
+        8388608
+      ],
+      "nonce": "nonce_i = nonce XOR (0^8 || u32be i)",
+      "aad": "\"PVB2\" | u32be chunkSize | u32be i | u32be n",
+      "legacyV1": "data || tag without header: accepted for whole-file decrypt only, never for unverified range playback",
+      "vector": {
+        "key": "32 x 0x01",
+        "nonce": "12 x 0x02",
+        "chunkSize": 1024,
+        "plaintext": "1500 x 'a'",
+        "cipherLength": 1540,
+        "headHex": "505642320000040066b7a8282b36a09cb2addda93dc6a3d3",
+        "tailHex": "297636bc1b79f4f72284144a0b0be7e8"
+      },
+      "legacyVector": {
+        "key": "32 x 0x01",
+        "nonce": "12 x 0x02",
+        "plaintext": "parvane blob v1",
+        "ciphertextB64": "d7e7Pys5pN2xoNOqfNHzVpFQwpooOo/gVIDan1UXaA=="
+      }
     }
   ]
 }

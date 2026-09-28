@@ -22,11 +22,16 @@ PARVANE_TURN_SECRET=<hex>                                # ephemeral REST (TURN 
 ```bash
 cd backend/infra/turn
 go build -o parvane-turn .
-TURN_PUBLIC_IP=<внешний_IP> TURN_USER=parvane TURN_PASS=parvane ./parvane-turn
+TURN_PUBLIC_IP=<внешний_IP> TURN_SECRET="$(openssl rand -hex 24)" ./parvane-turn
+# TURN_SECRET — тот же, что PARVANE_TURN_SECRET у call-шарда: клиенты получают
+# краткоживущие креды по JWT. Статический TURN_USER/TURN_PASS не задавайте (P-50).
 ```
 
 Переменные: `TURN_PUBLIC_IP` (обязательно реальный публичный IP для релея),
-`TURN_PORT` (3478), `TURN_REALM` (parvane), `TURN_USER`/`TURN_PASS`.
+`TURN_PORT` (3478), `TURN_REALM` (parvane), `TURN_SECRET` (краткоживущие креды).
+`TURN_USER`/`TURN_PASS` — только для локальной отладки, на проде пусто.
+Relay на loopback/приватные/link-local/multicast адреса запрещён (P-16,
+`PermissionHandler`; для coturn — `denied-peer-ip` в `coturn.conf`).
 
 Проверка: `bash backend/infra/turn/verify_turn.sh` → должно быть `RELAY OK` + `STUN mapped`.
 

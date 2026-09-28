@@ -3,7 +3,9 @@
 Контракт, который форк tdesktop будет реализовывать в Фазе 2-3."""
 import json, subprocess, sys, time, uuid
 
-NATS = "/home/ub/.local/bin/nats"
+import os, shutil
+# nats CLI: из PATH или ~/.local/bin (раньше был захардкожен путь одного разработчика)
+NATS = shutil.which("nats") or os.path.expanduser("~/.local/bin/nats")
 
 def req(topic, payload, timeout="3s"):
     p = subprocess.run([NATS, "req", topic, json.dumps(payload), "--timeout", timeout, "-r"],
@@ -16,6 +18,22 @@ def pub(topic, payload):
     p = subprocess.run([NATS, "pub", topic, json.dumps(payload)], capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(f"nats pub {topic} failed: {p.stderr.strip()}")
+
+PASSWORD = "e2e-Test-pass-2026"  # политика паролей (P-43): не короче 8 символов
+
+def issue(user):
+    """Логин; если пользователя нет — регистрирует (dev-режим без подтверждения)."""
+    r = json.loads(req("identity.token.issue", {"user": user, "password": PASSWORD}))
+    if not r.get("ok"):
+        registered = json.loads(req("identity.user.register", {
+            "user": user, "password": PASSWORD, "invite": "",
+        }))
+        if not registered.get("ok") and "существ" not in registered.get("error", ""):
+            raise RuntimeError(f"register {user} failed: {registered}")
+        r = json.loads(req("identity.token.issue", {"user": user, "password": PASSWORD}))
+    if not (r.get("ok") and r.get("token")):
+        raise RuntimeError(f"issue {user} failed: {r}")
+    return r["token"]
 
 def now(): return int(time.time())
 def newid(): return str(uuid.uuid4())
@@ -30,8 +48,8 @@ print("=== Parvane backend e2e ===")
 
 # 1. issue JWT для alice
 print("[1] identity.token.issue (alice)")
-r = json.loads(req("identity.token.issue", {"user": "alice@local", "password": "test"}))
-jwt = r.get("token")
+jwt = issue("alice@local")
+r = {"ok": True, "token": jwt}
 check("issue ok", r.get("ok") and jwt, f"len={len(jwt) if jwt else 0}")
 
 # 2. verify токена
@@ -56,8 +74,7 @@ check("send published", True, mid[:8])
 # 4. sync для bob — ПОЛНЫЙ ParvaneEvent<SyncRequestPayload>
 print("[4] msg.sync.request (bob, last_seen_id=0)")
 # bob тоже логинится, чтобы получить валидный токен для своей выборки
-rb = json.loads(req("identity.token.issue", {"user": "bob@local", "password": "test"}))
-jwt_bob = rb["token"]
+jwt_bob = issue("bob@local")
 sync_ev = {
     "id": newid(), "from": "bob@local", "ts": now(), "token": jwt_bob,
     "payload": {"last_seen_id": "00000000-0000-0000-0000-000000000000",

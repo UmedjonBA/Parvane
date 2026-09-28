@@ -66,6 +66,10 @@ export class ParvaneStore {
   // эхо с провалившейся отправкой считалось «известным»
   private storedUuids = new Set<string>();
 
+  // P-18: первое появление адреса пользователя — повод подписаться на его
+  // presence (вместо presence.* всех). Устанавливает провайдер
+  onUserRegistered?: (peerId: string, address: string) => void;
+
   getIdForAddress(address: string, kind: PeerKind = 'user'): string {
     const existingKind = this.kindByAddress.get(address);
     const actualKind = existingKind || kind;
@@ -73,7 +77,9 @@ export class ParvaneStore {
 
     const raw = buildHashedId(actualKind === 'user' ? address : `group:${address}`);
     const id = actualKind === 'user' ? raw : `-${raw}`;
+    const isNew = !this.addressById.has(id);
     this.addressById.set(id, address);
+    if (isNew && actualKind === 'user' && address !== this.self) this.onUserRegistered?.(id, address);
     return id;
   }
 
@@ -446,7 +452,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       // подтянет архив из cloud и отдаст документы по docId из entities
       content.emoji_packs?.forEach((ref) => registerReceivedEmojiPackRef(ref, stored.from));
       return {
-        text: { text: content.text || '', entities: wireEntitiesToApi(content.entities) },
+        text: { text: content.text || '', entities: wireEntitiesToApi(content.entities, (content.text || '').length) },
         webPage: content.webpage ? { id: `wp${stored.id}` } : undefined,
       };
     case 'photo':

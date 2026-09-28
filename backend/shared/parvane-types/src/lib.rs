@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod address;
 pub mod nats;
 pub mod topic_contract;
 
@@ -23,6 +24,8 @@ pub mod topics {
     pub const IDENTITY_REGISTER_STATUS: &str = "identity.register.status";
     /// Двухфакторный вход через привязанный Telegram: прочитать/переключить (JWT).
     pub const IDENTITY_TWOFA: &str = "identity.user.twofa";
+    /// Смена пароля (JWT + старый пароль). Сбрасывает доверие устройств 2FA.
+    pub const IDENTITY_PASSWORD_CHANGE: &str = "identity.password.change";
     /// E2E (Фаза 2): клиент публикует свою пачку публичных prekey-бандлов.
     pub const IDENTITY_PREKEYS_PUBLISH: &str = "identity.prekeys.publish";
     /// E2E: получить бандл собеседника для X3DH (одна one-time помечается consumed).
@@ -40,6 +43,9 @@ pub mod topics {
     /// Линковка: старое устройство передаёт целевому ECDH-бокс с координатами
     /// зашифрованного экспорта в cloud.
     pub const IDENTITY_LINK_GRANT: &str = "identity.link.grant";
+    /// Линковка v2: старое устройство отвечает на оффер своим эфемерным ключом
+    /// (challenge) ДО раскрытия ключа нового — SAS считается от обоих ключей.
+    pub const IDENTITY_LINK_CHALLENGE: &str = "identity.link.challenge";
     pub const IDENTITY_SEARCH: &str = "identity.user.search";
     pub const IDENTITY_SETNAME: &str = "identity.user.setname";
     pub const IDENTITY_SETAVATAR: &str = "identity.user.setavatar";
@@ -76,6 +82,8 @@ pub mod topics {
     pub const FILE_DOWNLOAD_RESPONSE: &str = "file.download.response";
     pub const FILE_LIST_REQUEST: &str = "file.list.request";
     pub const FILE_LIST_RESPONSE: &str = "file.list.response";
+    /// Удаление своего файла (owner из токена): чистит чанки, гранты, метаданные.
+    pub const FILE_DELETE: &str = "file.delete";
 
     pub const NOTE_CREATE: &str = "note.create";
     pub const NOTE_UPDATE: &str = "note.update";
@@ -139,18 +147,51 @@ pub mod topics {
     /// (sealed sender) и не разбирает — только факт доставки.
     pub const MSG_USER_WILDCARD: &str = "msg.user.>";
 
+    // ── Префиксы субъектов (4.10: без строковых литералов в шардах) ──
+    /// Префикс request/reply-субъектов мессенджера (`msg.chat.*`).
+    pub const MSG_CHAT_PREFIX: &str = "msg.chat.";
+    /// Префикс личного инбокса (`msg.user.<addr>`); см. [`msg_inbox`].
+    pub const MSG_USER_PREFIX: &str = "msg.user.";
+    /// Префикс инбокса сигналов звонка (`call.user.<addr>`); см. [`call_inbox`].
+    pub const CALL_USER_PREFIX: &str = "call.user.";
+    /// Эфемерный typing-субъект: `msg.typing.<числовой id клиента>` (P-18).
+    pub const MSG_TYPING_PREFIX: &str = "msg.typing.";
+    /// Эфемерный presence-субъект: `presence.<числовой id клиента>` (P-18).
+    pub const PRESENCE_PREFIX: &str = "presence.";
+    /// Wildcard'ы эфемерных субъектов для ACL gateway/NATS.
+    pub const CALL_USER_WILDCARD: &str = "call.user.>";
+    pub const MSG_TYPING_WILDCARD: &str = "msg.typing.>";
+    pub const PRESENCE_WILDCARD: &str = "presence.>";
+    /// Маршрут группового mesh-звонка в поле `to` сигнала: `gcall:<user>`.
+    pub const GROUP_CALL_ROUTE_PREFIX: &str = "gcall:";
+
+    /// `msg.typing.<id>` — typing-субъект клиента/группы.
+    pub fn msg_typing(id: &str) -> String {
+        format!("{MSG_TYPING_PREFIX}{id}")
+    }
+
+    /// `presence.<id>` — presence-субъект пользователя.
+    pub fn presence(id: &str) -> String {
+        format!("{PRESENCE_PREFIX}{id}")
+    }
+
+    /// `gcall:<user>` — маршрут группового звонка (см. [`GROUP_CALL_ROUTE_PREFIX`]).
+    pub fn group_call_route(user: &str) -> String {
+        format!("{GROUP_CALL_ROUTE_PREFIX}{user}")
+    }
+
     /// Персональный инбокс пользователя для входящих сигналов звонка.
     /// Получатель подписывается на этот же точный субъект (`@` в субъекте NATS
     /// допустим). Например: `call.user.bob@local`.
     pub fn call_inbox(user: &str) -> String {
-        format!("call.user.{user}")
+        format!("{CALL_USER_PREFIX}{user}")
     }
 
     /// Персональный инбокс пользователя для входящих сообщений и уведомлений
     /// (delivered/receipts). Получатель подписывается на точный субъект.
     /// Пример: `msg.user.alice@local`. Изоляция «людей» — на gateway.
     pub fn msg_inbox(user: &str) -> String {
-        format!("msg.user.{user}")
+        format!("{MSG_USER_PREFIX}{user}")
     }
 }
 
@@ -249,6 +290,9 @@ pub struct RegisterResponse {
 pub struct EmailConfirmRequest {
     pub user: String,
     pub code: String,
+    /// Подмешивает gateway (pre-auth) для IP-лимита; клиентское значение перезаписывается.
+    #[serde(default)]
+    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +333,9 @@ pub struct TelegramConfirmRequest {
     /// Имя/username для лога (необязательно).
     #[serde(default)]
     pub telegram_name: String,
+    /// Подмешивает gateway (pre-auth) для IP-лимита перебора секрета.
+    #[serde(default)]
+    pub client_ip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +358,10 @@ pub struct TwoFactorRequest {
     pub token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// P-07: выключение 2FA требует пароль (один украденный JWT не должен
+    /// снимать второй фактор).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +376,21 @@ pub struct TwoFactorResponse {
     /// При включении 2FA — секрет доверия для устройства, которое включило.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust_secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordChangeRequest {
+    #[serde(default)]
+    pub token: String,
+    pub old_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordChangeResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Клиент опрашивает, подтверждён ли его pending-аккаунт (токен — доказательство
@@ -463,6 +529,9 @@ pub struct DeviceListResponse {
 pub struct DeviceRevokeRequest {
     pub token: String,
     pub device_id: String,
+    /// P-07: отзыв устройства требует пароль.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -480,7 +549,20 @@ pub struct DeviceRevokeResponse {
 pub struct LinkOfferRequest {
     pub token: String,
     pub device_id: String,
-    pub eph_pub: String, // base64 эфемерный публичный ключ ECDH
+    /// base64 эфемерный публичный ключ ECDH. В протоколе v2 (P-03) сначала
+    /// публикуется ТОЛЬКО commitment, а eph_pub раскрывается после challenge.
+    #[serde(default)]
+    pub eph_pub: String,
+    /// v2: base64 SHA-256(eph_pub raw) — обязательство на ключ до раскрытия.
+    #[serde(default)]
+    pub commitment: String,
+    /// v2: Ed25519 signing-ключ нового устройства — старое подпишет перенос
+    /// владения своими исходящими (link-transfer), не отдавая приватный аккаунт.
+    #[serde(default)]
+    pub signing_key: String,
+    /// Отзыв собственного оффера (история получена другим путём).
+    #[serde(default)]
+    pub revoke: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,8 +583,16 @@ pub struct LinkPollRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkOfferInfo {
     pub device_id: String,
+    /// Пусто, пока новое устройство не раскрыло ключ (v2).
     pub eph_pub: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub commitment: String,
+    #[serde(default)]
+    pub signing_key: String,
+    /// Эфемерный ключ старого устройства, уже приложенный к офферу (v2).
+    #[serde(default)]
+    pub challenge_pub: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +608,27 @@ pub struct LinkPollResponse {
     pub offers: Vec<LinkOfferInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<LinkGrantInfo>,
+    /// v2: challenge (эфемерный ключ старого устройства) к СОБСТВЕННОМУ офферу
+    /// запрашивающего — сигнал раскрыть eph_pub и считать SAS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge: Option<String>,
+    pub error: Option<String>,
+}
+
+/// v2: старое устройство прикладывает свой эфемерный ключ к офферу целевого.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkChallengeRequest {
+    #[serde(default)]
+    pub token: String,
+    /// ЦЕЛЕВОЕ (новое) устройство
+    pub device_id: String,
+    pub eph_pub: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkChallengeResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -586,12 +697,19 @@ pub struct SetAvatarRequest {
 pub struct SetKeyRequest {
     pub token: String,
     pub pubkey: String,
+    /// P-07: смена публичного ключа требует пароль.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 /// Поиск пользователей по подстроке имени/адреса (каталог = таблица users).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchUsersRequest {
     pub query: String,
+    /// Токен запрашивающего (подставляет gateway). Пока не влияет на выдачу,
+    /// но нужен для будущих настроек видимости (P-19).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -628,6 +746,10 @@ pub struct SetNameResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolveRequest {
     pub usernames: Vec<String>,
+    /// Токен запрашивающего (подставляет gateway): приватные поля профиля
+    /// (телефон) отдаются только владельцу (P-19).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -795,6 +917,12 @@ pub struct SendPayload {
     /// весь шифртекст в `content`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copies: Vec<MessageDeviceCopy>,
+    /// P-10 (правило SEND-1): Ed25519-подпись строки `send:<message_id>:<ciphertext>`
+    /// ключом `sender_signing_key` из `content`. Без неё sealed/группововое
+    /// сообщение с `sender_signing_key` отклоняется: иначе чужой публичный
+    /// ключ давал бы выборку сообщения в чужом подписанном sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -813,10 +941,10 @@ pub struct InboxPush {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckPayload {
     pub message_id: Uuid,
-    /// Sealed sender: у сообщения нет открытого `from`, поэтому получатель,
-    /// расшифровав, сам указывает адрес отправителя — куда слать delivered.
-    /// Пусто — обычный путь (delivered по messages.from_user).
-    #[serde(default)]
+    /// Устарело (P-05): сервер больше не читает это поле — адрес отправителя
+    /// для delivered берётся из БД (`from_user`, для sealed — `sender_user`
+    /// из токена отправителя). Клиенты шлют пустую строку/не шлют вовсе.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sender: String,
 }
 
@@ -972,6 +1100,19 @@ pub struct SyncRequestPayload {
     /// `sync:<last_seen_id>:<since_updated>`. Отсутствует у legacy-клиентов.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_signing: Vec<SyncExtraSigning>,
+    /// Линковка v2 (P-48): перенос владения исходящими ПРЕЖНЕГО устройства
+    /// без передачи его приватного аккаунта. Прежнее устройство подписало
+    /// `link-transfer:<user>:<old_signing_key>:<new_signing_key>` своим
+    /// Ed25519-ключом; new_signing_key обязан совпасть с доказанным
+    /// sender_signing_key этого запроса.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfers: Vec<SyncTransfer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncTransfer {
+    pub old_signing_key: String,
+    pub signature: String,
 }
 
 /// Одно доказательство владения дополнительным signing-ключом в sync.
@@ -1114,6 +1255,20 @@ pub struct FileEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileListPayload {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDeleteRequest {
+    #[serde(default)]
+    pub token: String,
+    pub file_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDeleteResponse {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileListResponse {
@@ -1426,17 +1581,12 @@ pub struct IceServersResponse {
 // ── группы и каналы ───────────────────────────────────────────────────────────
 
 /// Тип объединения: группа (все участники пишут) или канал (пишут owner/admin).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupKind {
+    #[default]
     Group,
     Channel,
-}
-
-impl Default for GroupKind {
-    fn default() -> Self {
-        GroupKind::Group
-    }
 }
 
 /// Создать группу/канал. Создатель становится owner; `members` — начальные
@@ -2012,6 +2162,27 @@ mod tests {
         assert_eq!(back, v);
     }
 
+    // 4.10: префиксы субъектов и хелперы согласованы (клиенты зеркалят их)
+    #[test]
+    fn subject_prefix_helpers_are_consistent() {
+        use topics::*;
+        assert_eq!(msg_inbox("a@local"), "msg.user.a@local");
+        assert!(msg_inbox("a@local").starts_with(MSG_USER_PREFIX));
+        assert!(call_inbox("a@local").starts_with(CALL_USER_PREFIX));
+        assert_eq!(msg_typing("42"), "msg.typing.42");
+        assert_eq!(presence("42"), "presence.42");
+        assert_eq!(group_call_route("bob@local"), "gcall:bob@local");
+        assert!(MSG_SEND.starts_with(MSG_CHAT_PREFIX) && MSG_EDIT.starts_with(MSG_CHAT_PREFIX));
+        for (prefix, wildcard) in [
+            (MSG_USER_PREFIX, MSG_USER_WILDCARD),
+            (CALL_USER_PREFIX, CALL_USER_WILDCARD),
+            (MSG_TYPING_PREFIX, MSG_TYPING_WILDCARD),
+            (PRESENCE_PREFIX, PRESENCE_WILDCARD),
+        ] {
+            assert_eq!(wildcard, format!("{prefix}>"));
+        }
+    }
+
     #[test]
     fn call_inbox_subject() {
         assert_eq!(topics::call_inbox("bob@local"), "call.user.bob@local");
@@ -2059,8 +2230,7 @@ mod tests {
                 to: "bob@local".to_string(),
                 content: MessageContent::Text { text: "hi".to_string(), entities: vec![], webpage: None },
                 reply_to: None,
-                copies: vec![],
-            },
+                copies: vec![], signature: None },
         };
         let json = serde_json::to_string(&event).unwrap();
         let decoded: ParvaneEvent<SendPayload> = serde_json::from_str(&json).unwrap();

@@ -284,10 +284,24 @@ function setViteEnv(env: Record<string, string>) {
   });
 }
 
+// P-32: connect-src — только свой origin (WSS gateway по /ws на том же хосте)
+// и явно заданный PARVANE_GATEWAY_ORIGIN (wss://host[:port]); никаких
+// http:/https:/ws:/wss: wildcard'ов — при XSS ключи не утекут на чужой хост.
+// В development добавляются локальные ws://localhost/127.0.0.1 для стенда.
+function gatewayOrigins(appEnv: string) {
+  const explicit = (process.env.PARVANE_GATEWAY_ORIGIN || '')
+    .split(/[\s,]+/)
+    .filter((origin) => /^wss?:\/\/[^\s/]+$/.test(origin));
+  const dev = appEnv === 'development'
+    ? ['ws://localhost:*', 'ws://127.0.0.1:*', 'wss://localhost:*', 'wss://127.0.0.1:*', 'http://localhost:*', 'http://127.0.0.1:*']
+    : [];
+  return [...explicit, ...dev].join(' ');
+}
+
 function buildCsp(appEnv: string) {
   return `
   default-src 'self';
-  connect-src 'self' wss://*.web.telegram.org blob: http: https: ws: wss: ${appEnv === 'development' ? 'ipc:' : ''};
+  connect-src 'self' blob: ${gatewayOrigins(appEnv)} ${appEnv === 'development' ? 'ipc:' : ''};
   script-src 'self' 'wasm-unsafe-eval'
     https://t.me/_websync_ https://telegram.me/_websync_ https://telegram.dog/_websync_;
   worker-src 'self'${appEnv === 'development' ? ' blob:' : ''};
@@ -296,9 +310,7 @@ function buildCsp(appEnv: string) {
   img-src 'self' data: blob: https://ss3.4sqi.net/img/categories_v2/;
   media-src 'self' blob: data:;
   object-src 'none';
-  frame-src http: https:
-    bitkeep: bnc: bybitapp: echooo: imtokenv2: mytonwallet-tc:
-    nicegram-tc: safepal-tc: tonkeeper-pro-tc: tonkeeper-tc:;
+  frame-src 'none';
   base-uri 'none';
   form-action 'none';`
     .replace(/\s+/g, ' ').trim();

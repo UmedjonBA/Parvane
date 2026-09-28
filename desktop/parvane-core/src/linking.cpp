@@ -19,6 +19,7 @@ namespace parvane::linking {
 namespace {
 
 constexpr char kInfo[] = "parvane-link-v1";
+constexpr char kSasV2Info[] = "parvane-link-sas-v2";
 constexpr int kIvLen = 12;
 constexpr int kTagLen = 16;
 
@@ -301,18 +302,42 @@ std::optional<std::string> EphemeralKey::open(const std::string &peerPubB64,
     return out;
 }
 
-std::string sasCode(const std::string &ephPubB64) {
+std::string commitment(const std::string &ephPubB64) {
     const auto raw = b64decode(ephPubB64);
-    if (!raw) {
+    if (!raw || raw->empty()) {
         return {};
     }
     unsigned char digest[SHA256_DIGEST_LENGTH];
     SHA256(reinterpret_cast<const unsigned char *>(raw->data()), raw->size(), digest);
-    const std::uint32_t v = (std::uint32_t(digest[0]) << 24) | (std::uint32_t(digest[1]) << 16)
-        | (std::uint32_t(digest[2]) << 8) | std::uint32_t(digest[3]);
-    char buf[8];
-    std::snprintf(buf, sizeof(buf), "%06u", static_cast<unsigned>(v % 1000000u));
-    return buf;
+    return b64encode(std::string(reinterpret_cast<const char *>(digest), sizeof(digest)));
+}
+
+bool commitmentMatches(const std::string &ephPubB64, const std::string &commitmentB64) {
+    if (ephPubB64.empty() || commitmentB64.empty()) {
+        return false;
+    }
+    const auto want = commitment(ephPubB64);
+    return !want.empty() && want == commitmentB64;
+}
+
+std::string sasCodeV2(const std::string &newPubB64, const std::string &oldPubB64) {
+    const auto newRaw = b64decode(newPubB64);
+    const auto oldRaw = b64decode(oldPubB64);
+    if (!newRaw || !oldRaw || newRaw->empty() || oldRaw->empty()) {
+        return {};
+    }
+    const std::string input = std::string(kSasV2Info) + *newRaw + *oldRaw;
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char *>(input.data()), input.size(), digest);
+    std::uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) {
+        v = (v << 8) | std::uint64_t(digest[i]);
+    }
+    v %= 1000000000000ULL; // 10^12
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%012llu", static_cast<unsigned long long>(v));
+    std::string code(buf);
+    return code.substr(0, 4) + " " + code.substr(4, 4) + " " + code.substr(8, 4);
 }
 
 } // namespace parvane::linking

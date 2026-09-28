@@ -49,6 +49,12 @@ export class SecureE2eStorage {
 
   static async open(user: string) {
     const encrypted = await get<EncryptedRecord>(stateId(user), STORAGE);
+    if (await get<PinRecord>(pinId(user), STORAGE)) {
+      // P-39: хранилище под PIN — ключ только из памяти после unlockStorageWithPin
+      const unlocked = unlockedKeys.get(user);
+      if (!unlocked) throw new Error('E2E storage is protected by a PIN and is locked.');
+      return new SecureE2eStorage(user, unlocked);
+    }
     let protectionKey = await get<CryptoKey>(keyId(user), STORAGE);
     if (encrypted && !protectionKey) {
       throw new Error('Encrypted E2E state exists, but its non-extractable protection key is missing.');
@@ -174,9 +180,11 @@ export class SecureE2eStorage {
   }
 
   static async clear(user: string) {
+    unlockedKeys.delete(user);
     await Promise.all([
       del(stateId(user), STORAGE),
       del(keyId(user), STORAGE),
+      del(pinId(user), STORAGE),
       SecureE2eStorage.clearRecords(user),
     ]);
   }
@@ -188,61 +196,180 @@ export class SecureE2eStorage {
   }
 }
 
-// ── «Keep me signed in»: пароль под тем же non-extractable AES-GCM, что и
-// E2E-состояние. Риск не растёт: у кого есть доступ выполнять JS в этом origin
-// и читать IndexedDB, у того и так уже E2E-ключи (= доступ ко всем сообщениям).
-// Отдельные id, чтобы не пересекаться с E2E-состоянием.
-function credKeyId(user: string) {
-  return `credkey:${user}`;
+// ── P-39: опциональный PIN хранилища ────────────────────────────────────────
+// Без PIN защитный ключ — non-extractable AES-GCM в IndexedDB рядом с
+// шифртекстом: от XSS/расширения в этом origin он не спасает. С PIN ключ
+// выводится PBKDF2-SHA256 (310k итераций) из PIN + соль и живёт только в
+// памяти вкладки после разблокировки; в IndexedDB остаётся лишь соль и
+// проверочная запись. Ключ из IndexedDB при этом удаляется.
+const PIN_ITERATIONS = 310_000;
+const PIN_CHECK_PLAINTEXT = 'parvane-pin-check-v1';
+
+type PinRecord = { version: number; salt: ArrayBuffer; check: EncryptedRecord };
+
+function pinId(user: string) {
+  return `pin:${user}`;
 }
 
-function credId(user: string) {
-  return `cred:${user}`;
+// Разблокированные PIN-ключи (на время жизни вкладки)
+const unlockedKeys = new Map<string, CryptoKey>();
+
+async function derivePinKey(pin: string, salt: ArrayBuffer) {
+  const material = await crypto.subtle.importKey('raw', encoder.encode(pin).buffer, 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PIN_ITERATIONS },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
-function credAad(user: string) {
-  return encoder.encode(`parvane-cred-storage:${STORAGE_VERSION}:${user}`).buffer;
-}
-
-export async function saveSecureCredential(user: string, password: string) {
-  let protectionKey = await get<CryptoKey>(credKeyId(user), STORAGE);
-  if (!protectionKey) {
-    protectionKey = await generateProtectionKey();
-    await set(credKeyId(user), protectionKey, STORAGE);
-  }
+async function encryptWith(key: CryptoKey, aad: ArrayBuffer, value: unknown): Promise<EncryptedRecord> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: credAad(user) },
-    protectionKey,
-    encoder.encode(password).buffer,
+    { name: 'AES-GCM', iv, additionalData: aad }, key, encoder.encode(JSON.stringify(value)).buffer,
   );
-  await set(credId(user), { version: STORAGE_VERSION, iv: iv.buffer, ciphertext } satisfies EncryptedRecord, STORAGE);
+  return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
 }
 
-export async function loadSecureCredential(user: string): Promise<string | undefined> {
-  const record = await get<EncryptedRecord>(credId(user), STORAGE);
-  const protectionKey = await get<CryptoKey>(credKeyId(user), STORAGE);
-  if (!record || !protectionKey || record.version !== STORAGE_VERSION) return undefined;
+async function decryptWith<T>(key: CryptoKey, aad: ArrayBuffer, record: EncryptedRecord | undefined): Promise<T | undefined> {
+  if (!record || record.version !== STORAGE_VERSION) return undefined;
   try {
     const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: record.iv, additionalData: credAad(user) },
-      protectionKey,
-      record.ciphertext,
+      { name: 'AES-GCM', iv: record.iv, additionalData: aad }, key, record.ciphertext,
     );
-    return decoder.decode(plaintext);
+    return JSON.parse(decoder.decode(plaintext)) as T;
   } catch {
     return undefined;
   }
 }
 
-export async function clearSecureCredential(user: string) {
-  await Promise.all([del(credId(user), STORAGE), del(credKeyId(user), STORAGE)]);
+// Ключ пользователя: разблокированный PIN-ключ, иначе IndexedDB-ключ
+// (создаётся при первом обращении, как в SecureE2eStorage.open)
+async function resolveProtectionKey(user: string): Promise<CryptoKey | undefined> {
+  const unlocked = unlockedKeys.get(user);
+  if (unlocked) return unlocked;
+  if (await get<PinRecord>(pinId(user), STORAGE)) return undefined; // нужен PIN
+  let key = await get<CryptoKey>(keyId(user), STORAGE);
+  if (!key) {
+    key = await generateProtectionKey();
+    await set(keyId(user), key, STORAGE);
+  }
+  return key;
+}
+
+export async function hasStoragePin(user: string) {
+  return Boolean(await get<PinRecord>(pinId(user), STORAGE));
+}
+
+export function isStorageUnlocked(user: string) {
+  return unlockedKeys.has(user);
+}
+
+// Разблокировать хранилище PIN-ом. false — PIN неверен
+export async function unlockStorageWithPin(user: string, pin: string): Promise<boolean> {
+  const record = await get<PinRecord>(pinId(user), STORAGE);
+  if (!record) return true;
+  const key = await derivePinKey(pin, record.salt);
+  const check = await decryptWith<string>(key, additionalData(user, 'pin-check'), record.check);
+  if (check !== PIN_CHECK_PLAINTEXT) return false;
+  unlockedKeys.set(user, key);
+  return true;
+}
+
+export function lockStorage(user: string) {
+  unlockedKeys.delete(user);
+}
+
+// Перешифровать все записи пользователя с ключа `from` на ключ `to`
+async function rekeyAll(user: string, from: CryptoKey, to: CryptoKey) {
+  const state = await get<EncryptedRecord>(stateId(user), STORAGE);
+  if (state) {
+    const plain = await decryptWith<unknown>(from, additionalData(user), state);
+    if (plain === undefined) throw new Error('E2E state cannot be re-keyed: current key does not open it.');
+    await set(stateId(user), await encryptWith(to, additionalData(user), plain), STORAGE);
+  }
+  const prefix = recordId(user, '');
+  const userKeys = (await keys(STORAGE)).filter((key) => typeof key === 'string' && key.startsWith(prefix)) as string[];
+  for (const fullKey of userKeys) {
+    const name = fullKey.slice(prefix.length);
+    const record = await get<EncryptedRecord>(fullKey, STORAGE);
+    const plain = await decryptWith<unknown>(from, additionalData(user, name), record);
+    if (plain === undefined) continue;
+    await set(fullKey, await encryptWith(to, additionalData(user, name), plain), STORAGE);
+  }
+}
+
+// Установить PIN (пусто — снять). Требует разблокированного хранилища
+export async function setStoragePin(user: string, pin: string) {
+  const current = await resolveProtectionKey(user);
+  if (!current) throw new Error('Storage is locked: unlock with the current PIN first.');
+  if (!pin) {
+    // Снятие PIN: обратно на IndexedDB-ключ
+    const fresh = await generateProtectionKey();
+    await rekeyAll(user, current, fresh);
+    await set(keyId(user), fresh, STORAGE);
+    await del(pinId(user), STORAGE);
+    unlockedKeys.delete(user);
+    return;
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
+  const next = await derivePinKey(pin, salt);
+  await rekeyAll(user, current, next);
+  const check = await encryptWith(next, additionalData(user, 'pin-check'), PIN_CHECK_PLAINTEXT);
+  await set(pinId(user), { version: STORAGE_VERSION, salt, check } satisfies PinRecord, STORAGE);
+  await del(keyId(user), STORAGE);
+  unlockedKeys.set(user, next);
+}
+
+// ── Именованные секреты сессии под тем же ключом хранилища ─────────────────
+// P-14: секрет доверия 2FA — раньше лежал в localStorage открытым текстом.
+// P-39: пароль аккаунта НЕ сохраняется вовсе; «keep me signed in» держит
+// JWT (живёт сутки, отзываемый, привязан к устройству) — им сессия
+// возобновляется после reload без ввода пароля.
+async function saveSecret(user: string, name: string, value: string) {
+  const key = await resolveProtectionKey(user);
+  if (!key) throw new Error('Storage is locked.');
+  await set(recordId(user, name), await encryptWith(key, additionalData(user, name), value), STORAGE);
+}
+
+async function loadSecret(user: string, name: string): Promise<string | undefined> {
+  const key = await resolveProtectionKey(user);
+  if (!key) return undefined;
+  const value = await decryptWith<string>(key, additionalData(user, name), await get<EncryptedRecord>(recordId(user, name), STORAGE));
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+export async function saveTrustSecret(user: string, secret: string) {
+  await saveSecret(user, 'trust-secret', secret);
+}
+
+export async function loadTrustSecret(user: string) {
+  return loadSecret(user, 'trust-secret');
+}
+
+export async function clearTrustSecret(user: string) {
+  await del(recordId(user, 'trust-secret'), STORAGE);
+}
+
+export async function saveSecureSession(user: string, token: string) {
+  await saveSecret(user, 'session-token', token);
+}
+
+export async function loadSecureSession(user: string) {
+  return loadSecret(user, 'session-token');
+}
+
+export async function clearSecureSession(user: string) {
+  await del(recordId(user, 'session-token'), STORAGE);
 }
 
 export const secureStorageInternals = {
-  additionalData,
+  store: STORAGE,
   keyId,
   stateId,
-  store: STORAGE,
-  version: STORAGE_VERSION,
+  pinId,
+  recordId,
+  additionalData,
 };

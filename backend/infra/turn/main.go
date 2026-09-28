@@ -3,23 +3,24 @@
 // turn:host:port + PARVANE_TURN_USER/PARVANE_TURN_PASS. Также раздаёт STUN.
 //
 // Конфиг через окружение:
-//   TURN_PUBLIC_IP  — внешний IP сервера (в relay-кандидатах). По умолч. 127.0.0.1
-//   TURN_PORT       — UDP-порт (по умолч. 3478)
-//   TURN_TCP_PORT   — дополнительно слушать TURN по TCP (мобильные VPN/сети,
-//                     режущие UDP); пусто — только UDP
-//   TURN_MIN_PORT/TURN_MAX_PORT — диапазон relay-портов (для проброса через NAT);
-//                     без них relay берёт случайные эфемерные порты
-//   TURN_RELAY_PORT_OFFSET — сдвиг между портом, на который relay БИНДИТСЯ, и
-//                     портом, который сообщается клиенту (XOR-RELAYED-ADDRESS).
-//                     Для NAT хостера с range-DNAT «внешний 20160..20200 →
-//                     внутренний 49160..49200» биндимся на 49160+k, а клиенту
-//                     отдаём 20160+k: OFFSET=-29000. 0/пусто — без сдвига.
-//   TURN_REALM      — realm (по умолч. parvane)
-//   TURN_USER/TURN_PASS — статические креды (по умолч. parvane/parvane)
-//   TURN_SECRET     — включает краткоживущие креды (TURN REST): username
-//                     "<expiry>:<user>", password = base64(HMAC-SHA1(secret, username)).
-//                     Выдаёт их call-шард по call.ice.request. Статический
-//                     пользователь продолжает работать параллельно.
+//
+//	TURN_PUBLIC_IP  — внешний IP сервера (в relay-кандидатах). По умолч. 127.0.0.1
+//	TURN_PORT       — UDP-порт (по умолч. 3478)
+//	TURN_TCP_PORT   — дополнительно слушать TURN по TCP (мобильные VPN/сети,
+//	                  режущие UDP); пусто — только UDP
+//	TURN_MIN_PORT/TURN_MAX_PORT — диапазон relay-портов (для проброса через NAT);
+//	                  без них relay берёт случайные эфемерные порты
+//	TURN_RELAY_PORT_OFFSET — сдвиг между портом, на который relay БИНДИТСЯ, и
+//	                  портом, который сообщается клиенту (XOR-RELAYED-ADDRESS).
+//	                  Для NAT хостера с range-DNAT «внешний 20160..20200 →
+//	                  внутренний 49160..49200» биндимся на 49160+k, а клиенту
+//	                  отдаём 20160+k: OFFSET=-29000. 0/пусто — без сдвига.
+//	TURN_REALM      — realm (по умолч. parvane)
+//	TURN_USER/TURN_PASS — статические креды (по умолч. parvane/parvane)
+//	TURN_SECRET     — включает краткоживущие креды (TURN REST): username
+//	                  "<expiry>:<user>", password = base64(HMAC-SHA1(secret, username)).
+//	                  Выдаёт их call-шард по call.ice.request. Статический
+//	                  пользователь продолжает работать параллельно.
 package main
 
 import (
@@ -51,6 +52,46 @@ func restAuthKey(secret, username, realm string) ([]byte, bool) {
 	mac.Write([]byte(username))
 	password := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	return turn.GenerateAuthKey(username, realm, password), true
+}
+
+// P-16: relay только на публичные адреса. Без фильтра любой авторизованный
+// пользователь через TURN слал бы UDP/TCP на 127.0.0.1, 10.x, 169.254.169.254
+// (метаданные облака) и другие внутренние адреса VPS.
+func peerAllowed(peer net.IP) bool {
+	if peer == nil || peer.IsUnspecified() || peer.IsLoopback() || peer.IsMulticast() ||
+		peer.IsLinkLocalUnicast() || peer.IsLinkLocalMulticast() || peer.IsInterfaceLocalMulticast() ||
+		peer.IsPrivate() {
+		return false
+	}
+	if v4 := peer.To4(); v4 != nil {
+		switch {
+		case v4[0] == 0: // 0.0.0.0/8
+			return false
+		case v4[0] == 100 && v4[1]&0xc0 == 64: // CGNAT 100.64.0.0/10
+			return false
+		case v4[0] == 192 && v4[1] == 0 && v4[2] == 0: // 192.0.0.0/24
+			return false
+		case v4[0] == 198 && v4[1]&0xfe == 18: // benchmarking 198.18.0.0/15
+			return false
+		case v4[0] >= 224: // multicast + reserved + broadcast
+			return false
+		}
+		return true
+	}
+	// IPv6: ULA fc00::/7 покрыт IsPrivate; 6to4/Teredo/NAT64 несут v4 внутри
+	switch {
+	case peer[0] == 0x20 && peer[1] == 0x02: // 6to4 2002::/16
+		return peerAllowed(net.IPv4(peer[2], peer[3], peer[4], peer[5]))
+	case peer[0] == 0x20 && peer[1] == 0x01 && peer[2] == 0 && peer[3] == 0: // Teredo 2001::/32
+		return peerAllowed(net.IPv4(peer[12]^0xff, peer[13]^0xff, peer[14]^0xff, peer[15]^0xff))
+	case peer[0] == 0 && peer[1] == 0x64 && peer[2] == 0xff && peer[3] == 0x9b: // NAT64 64:ff9b::/96
+		return peerAllowed(net.IPv4(peer[12], peer[13], peer[14], peer[15]))
+	case peer[0] == 0xfe && peer[1]&0xc0 == 0xc0: // site-local fec0::/10 (deprecated)
+		return false
+	case peer[0] == 0x20 && peer[1] == 0x01 && peer[2] == 0x0d && peer[3] == 0xb8: // documentation
+		return false
+	}
+	return true
 }
 
 func env(k, def string) string {
@@ -102,6 +143,15 @@ func main() {
 		relayGen = &offsetRelayGen{inner: relayGen, offset: off}
 	}
 
+	// P-16: запрет relay на внутренние адреса (peer-фильтр) — на каждом слушателе
+	permissionHandler := func(clientAddr net.Addr, peerIP net.IP) bool {
+		if !peerAllowed(peerIP) {
+			log.Printf("TURN permission отказ: peer=%s client=%s", peerIP, clientAddr)
+			return false
+		}
+		return true
+	}
+
 	var listenerConfigs []turn.ListenerConfig
 	tcpPort := env("TURN_TCP_PORT", "")
 	if tcpPort != "" {
@@ -112,6 +162,7 @@ func main() {
 		listenerConfigs = []turn.ListenerConfig{{
 			Listener:              tcpListener,
 			RelayAddressGenerator: relayGen,
+			PermissionHandler:     permissionHandler,
 		}}
 	}
 
@@ -132,6 +183,7 @@ func main() {
 		PacketConnConfigs: []turn.PacketConnConfig{{
 			PacketConn:            udpListener,
 			RelayAddressGenerator: relayGen,
+			PermissionHandler:     permissionHandler,
 		}},
 		ListenerConfigs: listenerConfigs,
 	})

@@ -50,7 +50,10 @@ object ParvaneCore {
         }
     }
 
-    fun init(gatewayUrl: String, storeDir: String) = nativeInit(gatewayUrl, storeDir)
+    // P-13: локальное хранилище ядра (Olm-pickle, сессии, JWT, кэш расшифровки,
+    // журнал) шифруется случайным ключом, завёрнутым ключом Android Keystore.
+    fun init(gatewayUrl: String, storeDir: String) =
+        nativeInit(gatewayUrl, storeDir, StoreKey.load(java.io.File(storeDir)))
     fun serverDomain(): String = nativeServerDomain()
     fun login(user: String, password: String, loginToken: String = ""): JSONObject = JSONObject(nativeLogin(user, password, loginToken))
     // identity: сервер/регистрация/подтверждение (зовёт и Java-оверлей X: ParvaneRegisterController)
@@ -60,7 +63,8 @@ object ParvaneCore {
     @JvmStatic fun confirmEmail(user: String, code: String): JSONObject = JSONObject(nativeConfirmEmail(user, code))
     // устройства аккаунта
     fun listDevices(): org.json.JSONArray = org.json.JSONArray(nativeListDevices())
-    fun revokeDevice(deviceId: String): Boolean = nativeRevokeDevice(deviceId)
+    /** P-07: отзыв устройства требует текущий пароль; без него сервер откажет. */
+    fun revokeDevice(deviceId: String, password: String = ""): Boolean = nativeRevokeDevice(deviceId, password)
     // копия ключей под паролем (формат веба); import → число записей, −1 пароль/файл, −2 E2E не готов
     @JvmStatic fun exportKeys(password: String): String = nativeExportKeys(password)
     @JvmStatic fun importKeys(fileJson: String, password: String): Int = nativeImportKeys(fileJson, password)
@@ -117,7 +121,7 @@ object ParvaneCore {
     fun logout() = nativeLogout()
     fun sessionExpired() = nativeSessionExpired()
 
-    @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String)
+    @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String, storeKey: ByteArray)
     @JvmStatic private external fun nativeServerDomain(): String
     @JvmStatic private external fun nativeLogin(user: String, password: String, loginToken: String): String
     @JvmStatic private external fun nativeServerInfo(): String
@@ -125,7 +129,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeRegisterStatus(user: String, token: String): Boolean
     @JvmStatic private external fun nativeConfirmEmail(user: String, code: String): String
     @JvmStatic private external fun nativeListDevices(): String
-    @JvmStatic private external fun nativeRevokeDevice(deviceId: String): Boolean
+    @JvmStatic private external fun nativeRevokeDevice(deviceId: String, password: String): Boolean
     @JvmStatic private external fun nativeExportKeys(password: String): String
     @JvmStatic private external fun nativeImportKeys(fileJson: String, password: String): Int
     @JvmStatic private external fun nativeForward(to: String, uuid: String): String

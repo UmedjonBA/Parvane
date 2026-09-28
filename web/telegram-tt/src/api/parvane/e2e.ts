@@ -38,6 +38,9 @@ export type WireDeviceBundle = {
   signing_key?: string;
   identity_key: string;
   signed_prekey?: string;
+  // P-25: подпись signed_prekey Ed25519-ключом устройства (signing_key);
+  // бандл из каталога без валидной подписи не используется
+  signed_prekey_sig?: string;
   one_time?: string;
 };
 
@@ -52,8 +55,10 @@ export async function fingerprintOf(key: string): Promise<string> {
 
 type BundleFetcher = (user: string) => Promise<{
   ok: boolean;
+  signing_key?: string;
   identity_key?: string;
   signed_prekey?: string;
+  signed_prekey_sig?: string;
   one_time?: string;
   devices?: WireDeviceBundle[];
 } | undefined>;
@@ -102,9 +107,30 @@ type PersistedE2eState = {
   // Следующий key_id для пополнения one-time prekeys: сервер дедупит по
   // (username, device_id, key_id), повтор старых id был бы тихим no-op
   oneTimeKeyIdNext?: number;
-  // Авто-линковка: Olm-pickle прежних устройств (под НАШИМ pickleKey) — только
-  // для подписи sync (extra_signing), их sealed-исходящие видны и нам
+  // Авто-линковка (legacy v1): Olm-pickle прежних устройств (под НАШИМ pickleKey) —
+  // только для подписи sync (extra_signing), их sealed-исходящие видны и нам.
+  // v2 (P-48) приватные аккаунты больше не переезжают — см. transfers.
   legacyAccounts?: string[];
+  // v2: подписанные прежними устройствами переносы владения их исходящими
+  // (`link-transfer:<user>:<old>:<new>`), отправляются в каждом sync.
+  transfers?: { old_signing_key: string; signature: string }[];
+  // P-04: УЖЕ ВИДЕННЫЕ identity контактов (TOFU). Каталог их не засевает
+  // после первого знакомства — иначе сервер подменил бы ключ без предупреждения.
+  seenIdentities?: Record<string, string[]>;
+};
+
+// v2-экспорт при линковке (P-48): ТОЛЬКО история и входящие групповые ключи,
+// без приватного Olm-аккаунта, Olm-сессий, исходящих Megolm и pickleKey.
+export type LinkExportState = {
+  linkVersion: 2;
+  decCache: PersistedE2eState['decCache'];
+  groupIn: Record<string, { exported: string; epoch: number }>;
+  contacts: Record<string, string>;
+  contactDevices?: Record<string, Record<string, ContactDevice>>;
+  groupRecipients?: Record<string, string[]>;
+  // подписанные переносы, унаследованные старым устройством от его предков
+  transfers?: { old_signing_key: string; signature: string }[];
+  seenIdentities?: Record<string, string[]>;
 };
 
 // Как часто перепроверять список устройств контакта перед отправкой (обнаружение
@@ -136,6 +162,9 @@ export class E2eEngine {
   private sessionsByIdentity = new Map<string, Olm.Session>();
 
   private identityByContact: Record<string, string> = {};
+  // P-04: виденные identity по контакту — смена ключа определяется по ним,
+  // а не по identityByContact (его перезаписывает каталог до проверки)
+  private seenIdentities = new Map<string, Set<string>>();
 
   // Мультидевайс: contact → deviceId → {identity, signing}. Sessions остаются
   // keyed по identity (он уникален на устройство)
@@ -163,6 +192,8 @@ export class E2eEngine {
   // Аккаунты прежних устройств (авто-линковка): используются ТОЛЬКО для
   // подписи sync-запросов, никаких сессий/шифрования от их имени
   private legacySigners: Olm.Account[] = [];
+  // v2 (P-48): переносы владения исходящими прежних устройств.
+  private transfers: { old_signing_key: string; signature: string }[] = [];
 
   identityKey = '';
 
@@ -235,6 +266,20 @@ export class E2eEngine {
     Object.entries(state.contactDevices || {}).forEach(([contact, devices]) => {
       this.devicesByContact.set(contact, devices);
     });
+    if (state.seenIdentities) {
+      Object.entries(state.seenIdentities).forEach(([contact, ids]) => {
+        this.seenIdentities.set(contact, new Set(ids));
+      });
+    } else {
+      // Миграция снапшота без seenIdentities: всё, что знали до сих пор,
+      // считаем виденным — иначе первое же сообщение выглядело бы сменой ключа
+      Object.entries(this.identityByContact).forEach(([contact, identity]) => {
+        this.markSeen(contact, identity);
+      });
+      this.devicesByContact.forEach((devices, contact) => {
+        Object.values(devices).forEach((device) => this.markSeen(contact, device.identity));
+      });
+    }
     // Миграция до-мультидевайсного снапшота: единственная известная identity
     // контакта — его legacy-primary устройство ''
     Object.entries(this.identityByContact).forEach(([contact, identity]) => {
@@ -260,6 +305,7 @@ export class E2eEngine {
     });
     this.published = Boolean(state.published);
     this.oneTimeKeyIdNext = state.oneTimeKeyIdNext ?? ONE_TIME_BATCH + 1;
+    this.transfers = (state.transfers || []).filter((t) => t.old_signing_key && t.signature);
     (state.legacyAccounts || []).forEach((accountPickle) => {
       try {
         const legacy = new Olm.Account();
@@ -338,6 +384,8 @@ export class E2eEngine {
       contactDevices: Object.fromEntries(this.devicesByContact),
       oneTimeKeyIdNext: this.oneTimeKeyIdNext,
       legacyAccounts: this.legacySigners.map((legacy) => legacy.pickle(this.pickleKey)),
+      transfers: this.transfers,
+      seenIdentities: this.seenIdentitiesSnapshot(),
     };
   }
 
@@ -484,15 +532,7 @@ export class E2eEngine {
   }
 
   verifyCallData(publicKey: string, data: string, signature: string) {
-    const utility = new Olm.Utility();
-    try {
-      utility.ed25519_verify(stripBase64Padding(publicKey), data, stripBase64Padding(signature));
-      return true;
-    } catch {
-      return false;
-    } finally {
-      utility.free();
-    }
+    return ed25519Verify(publicKey, data, signature);
   }
 
   getCachedInner(uuid: string): StoredInner | undefined {
@@ -556,8 +596,83 @@ export class E2eEngine {
     return JSON.stringify(this.buildState());
   }
 
-  importLinkedHistory(stateJson: string) {
-    const state = JSON.parse(stateJson) as PersistedE2eState;
+  // v2 (P-48): экспорт для линковки БЕЗ приватного материала — новое устройство
+  // остаётся самостоятельным (свой Olm-аккаунт и сессии); ему передаём только
+  // историю, входящие групповые ключи (экспорт на текущем индексе), каталоги и
+  // уже накопленные переносы владения.
+  exportLinkStateJson(): string {
+    const groupIn: LinkExportState['groupIn'] = {};
+    this.groupIn.forEach(({ session, epoch }, key) => {
+      try {
+        groupIn[key] = { exported: session.export_session(session.first_known_index()), epoch };
+      } catch {
+        // сессию без экспорта пропускаем
+      }
+    });
+    const state: LinkExportState = {
+      linkVersion: 2,
+      decCache: this.decCache,
+      groupIn,
+      contacts: this.identityByContact,
+      contactDevices: Object.fromEntries(this.devicesByContact),
+      groupRecipients: Object.fromEntries(this.groupRecipients),
+      transfers: this.transfers,
+      seenIdentities: this.seenIdentitiesSnapshot(),
+    };
+    return JSON.stringify(state);
+  }
+
+  // v2 (P-48): старое устройство подписывает перенос владения своими исходящими
+  // конкретному новому устройству; приватный ключ никуда не уезжает.
+  signLinkTransfer(self: string, newSigningKey: string): { old_signing_key: string; signature: string } {
+    const statement = `link-transfer:${self}:${this.signingKey}:${newSigningKey}`;
+    return { old_signing_key: this.signingKey, signature: this.account.sign(statement) };
+  }
+
+  // Переносы владения для sync (transfers) — сервер отдаёт исходящие прежних
+  // устройств только по валидной подписи над `link-transfer:<user>:<old>:<new>`.
+  syncTransfers(): { old_signing_key: string; signature: string }[] {
+    return this.transfers;
+  }
+
+  private addTransfer(transfer: { old_signing_key: string; signature: string } | undefined) {
+    if (!transfer || !transfer.old_signing_key || !transfer.signature) return;
+    if (transfer.old_signing_key === this.signingKey) return;
+    if (this.transfers.some((t) => t.old_signing_key === transfer.old_signing_key)) return;
+    this.transfers.push(transfer);
+  }
+
+  importLinkedHistory(stateJson: string, transfer?: { old_signing_key: string; signature: string }) {
+    const parsed = JSON.parse(stateJson) as Partial<PersistedE2eState> & Partial<LinkExportState>;
+    if (parsed.linkVersion === 2) {
+      // v2: без приватного материала
+      const state = parsed as LinkExportState;
+      Object.entries(state.decCache || {}).forEach(([uuid, inner]) => {
+        if (!(uuid in this.decCache)) this.decCache[uuid] = inner;
+      });
+      Object.entries(state.groupIn || {}).forEach(([key, { exported, epoch }]) => {
+        if (this.groupIn.has(key) || !exported) return;
+        try {
+          const session = new Olm.InboundGroupSession();
+          session.import_session(exported);
+          this.groupIn.set(key, { session, epoch });
+        } catch {
+          // битый экспорт — пропускаем
+        }
+      });
+      Object.entries(state.contacts || {}).forEach(([contact, identity]) => {
+        if (!(contact in this.identityByContact)) this.identityByContact[contact] = identity;
+        this.markSeen(contact, identity);
+      });
+      Object.entries(state.seenIdentities || {}).forEach(([contact, ids]) => {
+        ids.forEach((identity) => this.markSeen(contact, identity));
+      });
+      (state.transfers || []).forEach((t) => this.addTransfer(t));
+      this.addTransfer(transfer);
+      this.queuePersist();
+      return;
+    }
+    const state = parsed as PersistedE2eState;
     Object.entries(state.decCache || {}).forEach(([uuid, inner]) => {
       if (!(uuid in this.decCache)) this.decCache[uuid] = inner;
     });
@@ -618,7 +733,8 @@ export class E2eEngine {
     return this.sessionsByIdentity.size === 0
       && !Object.keys(this.decCache).length
       && this.groupIn.size === 0
-      && this.legacySigners.length === 0;
+      && this.legacySigners.length === 0
+      && this.transfers.length === 0;
   }
 
   static async importEncrypted(self: string, payload: string, password: string): Promise<E2eEngine> {
@@ -626,15 +742,14 @@ export class E2eEngine {
       v: number; iterations?: number; salt: string; iv: string; data: string;
     };
     if (parsed.v !== EXPORT_VERSION) throw new Error(`Unsupported key backup version: ${parsed.v}.`);
-    // Число итераций из файла не ниже минимума: подделанный бэкап с iterations=1
-    // делал бы перебор пароля тривиальным
-    const key = await deriveExportKey(
-      password, base64ToBytes(parsed.salt), Math.max(parsed.iterations ?? EXPORT_MIN_ITERATIONS, EXPORT_MIN_ITERATIONS),
-    );
+    // P-48: границы конверта — иначе чужой файл с iterations=10^9 вешает вкладку,
+    // а соль/iv неверной длины делают KDF/GCM бессмысленными
+    const envelope = validateBackupEnvelope(parsed);
+    const key = await deriveExportKey(password, envelope.salt, envelope.iterations);
     const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: toStandaloneBuffer(base64ToBytes(parsed.iv)) },
+      { name: 'AES-GCM', iv: toStandaloneBuffer(envelope.iv) },
       key,
-      toStandaloneBuffer(base64ToBytes(parsed.data)),
+      toStandaloneBuffer(envelope.data),
     );
     const state = JSON.parse(new TextDecoder().decode(plaintext)) as PersistedE2eState;
 
@@ -700,12 +815,15 @@ export class E2eEngine {
       return;
     }
     if (!bundle?.ok) return;
-    const devices: WireDeviceBundle[] = bundle.devices?.length ? bundle.devices : (
+    const fromDeviceList = Boolean(bundle.devices?.length);
+    const devices: WireDeviceBundle[] = fromDeviceList ? bundle.devices! : (
       // Legacy identity без списка устройств — считаем его primary ('')
       bundle.identity_key ? [{
         device_id: '',
+        signing_key: bundle.signing_key,
         identity_key: bundle.identity_key,
         signed_prekey: bundle.signed_prekey,
+        signed_prekey_sig: bundle.signed_prekey_sig,
         one_time: bundle.one_time,
       }] : []
     );
@@ -713,9 +831,20 @@ export class E2eEngine {
 
     const next: Record<string, ContactDevice> = {};
     let accountChanged = false;
+    let rejected = 0;
     devices.forEach((device) => {
       // Своё текущее устройство в списке самого себя — сессия не нужна
       if (!device.identity_key || device.identity_key === this.identityKey) return;
+      // P-25: signed_prekey обязан быть подписан signing_key устройства —
+      // иначе сервер подсовывает свой SPK (тихий DoS сессий). В списке
+      // устройств подпись обязательна; legacy-бандл без signing_key
+      // проверить нечем, принимаем как раньше
+      if (fromDeviceList || device.signing_key || device.signed_prekey_sig) {
+        if (!verifyPrekeySignature(device)) {
+          rejected++;
+          return;
+        }
+      }
       next[device.device_id] = { identity: device.identity_key, signing: device.signing_key || '' };
       if (this.sessionsByIdentity.has(device.identity_key)) return;
       const oneTimeKey = device.one_time || device.signed_prekey;
@@ -725,9 +854,18 @@ export class E2eEngine {
       this.sessionsByIdentity.set(device.identity_key, session);
       accountChanged = true;
     });
+    // Каталог целиком без валидных подписей — как недоступный: ничего не
+    // перезаписываем, вердикт по такому контакту останется `unknown`
+    if (rejected && !Object.keys(next).length) return;
     const previous = this.devicesByContact.get(contact);
     this.devicesByContact.set(contact, next);
     this.deviceListFetchedAt.set(contact, now);
+    // P-04: первое знакомство с каталогом — текущие identity считаем
+    // виденными (TOFU). Позже каталог множество НЕ засевает: принудительная
+    // перечитка при промахе verifySender иначе спрятала бы смену ключа
+    if (!this.seenIdentities.get(contact)?.size) {
+      Object.values(next).forEach((device) => this.markSeen(contact, device.identity));
+    }
     // Устройство контакта исчезло из каталога (отозвано) — ротируем общие
     // группы: групповой шифртекст рассылается всем, и без ротации отозванное
     // устройство продолжало бы читать НАШИ новые сообщения старым session key
@@ -813,13 +951,47 @@ export class E2eEngine {
 
   // true — ключ собеседника СМЕНИЛСЯ (был другой): повод предупредить
   // пользователя, как «safety number changed» в Signal
+  // P-04: смена определяется по множеству УЖЕ ВИДЕННЫХ identity контакта,
+  // а не по identityByContact — его перезаписывает refreshContactDevices ещё
+  // до этой проверки. Новое устройство контакта тоже считается сменой ключа
+  // (как safety number в Signal) — пользователь сверяет отпечатки заново
   rememberContactIdentity(contact: string, identity: string): boolean {
-    const previous = this.identityByContact[contact];
-    if (previous === identity) return false;
-    this.identityByContact[contact] = identity;
-    const changed = Boolean(previous);
+    if (!contact || !identity || contact === this.self) return false;
+    if (this.identityByContact[contact] !== identity) {
+      this.identityByContact[contact] = identity;
+    }
+    const seen = this.seenIdentities.get(contact);
+    if (seen?.has(identity)) {
+      this.persistContacts();
+      return false;
+    }
+    const changed = Boolean(seen?.size);
+    this.markSeen(contact, identity);
     this.persistContacts();
     return changed;
+  }
+
+  // Виденные identity контакта (для UI/тестов)
+  getSeenIdentities(contact: string): string[] {
+    return Array.from(this.seenIdentities.get(contact) || []);
+  }
+
+  private markSeen(contact: string, identity: string) {
+    if (!contact || !identity || identity === this.identityKey) return;
+    let seen = this.seenIdentities.get(contact);
+    if (!seen) {
+      seen = new Set();
+      this.seenIdentities.set(contact, seen);
+    }
+    seen.add(identity);
+  }
+
+  private seenIdentitiesSnapshot(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    this.seenIdentities.forEach((ids, contact) => {
+      out[contact] = Array.from(ids);
+    });
+    return out;
   }
 
   // Аутентичность отправителя sealed-сообщения: sender_identity ОБЯЗАН
@@ -977,12 +1149,67 @@ export class E2eEngine {
   }
 }
 
+// Ed25519-проверка подписи base64-строки (Olm.Utility); false — невалидна
+function ed25519Verify(publicKey: string, data: string, signature: string): boolean {
+  if (!publicKey || !signature) return false;
+  const utility = new Olm.Utility();
+  try {
+    utility.ed25519_verify(stripBase64Padding(publicKey), data, stripBase64Padding(signature));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    utility.free();
+  }
+}
+
+// P-25: signed_prekey бандла подписан signing_key устройства (подпись — над
+// base64-строкой ключа, как при публикации buildPrekeysPayload)
+export function verifyPrekeySignature(device: WireDeviceBundle): boolean {
+  if (!device.signing_key || !device.signed_prekey || !device.signed_prekey_sig) return false;
+  return ed25519Verify(device.signing_key, device.signed_prekey, device.signed_prekey_sig);
+}
+
 function stripBase64Padding(value: string) {
   return value.replace(/=+$/, '');
 }
 
 const EXPORT_VERSION = 1;
 const EXPORT_MIN_ITERATIONS = 310000;
+// P-48: верхняя граница итераций PBKDF2 при импорте (защита от DoS чужим файлом)
+export const EXPORT_MAX_ITERATIONS = 5_000_000;
+const EXPORT_SALT_MIN = 16;
+const EXPORT_SALT_MAX = 64;
+const EXPORT_IV_LEN = 12;
+export const EXPORT_DATA_MAX = 16 * 1024 * 1024;
+
+/** P-48: проверка конверта бэкапа до KDF: число итераций в [min, max], соль 16..64 байт,
+ *  iv 12 байт, данные ≤ 16 МиБ. Число итераций из файла не ниже минимума — подделанный
+ *  бэкап с iterations=1 делал бы перебор пароля тривиальным. */
+export function validateBackupEnvelope(parsed: {
+  iterations?: number; salt: string; iv: string; data: string;
+}): { iterations: number; salt: Uint8Array; iv: Uint8Array; data: Uint8Array } {
+  const raw = parsed.iterations ?? EXPORT_MIN_ITERATIONS;
+  if (!Number.isInteger(raw) || raw > EXPORT_MAX_ITERATIONS) {
+    throw new Error('Key backup: unsupported PBKDF2 iteration count.');
+  }
+  const iterations = Math.max(raw, EXPORT_MIN_ITERATIONS);
+  if (typeof parsed.salt !== 'string' || typeof parsed.iv !== 'string' || typeof parsed.data !== 'string') {
+    throw new Error('Key backup: malformed envelope.');
+  }
+  if (parsed.data.length > Math.ceil(EXPORT_DATA_MAX / 3) * 4 + 4) {
+    throw new Error('Key backup: payload too large.');
+  }
+  const salt = base64ToBytes(parsed.salt);
+  const iv = base64ToBytes(parsed.iv);
+  const data = base64ToBytes(parsed.data);
+  if (salt.length < EXPORT_SALT_MIN || salt.length > EXPORT_SALT_MAX) {
+    throw new Error('Key backup: bad salt length.');
+  }
+  if (iv.length !== EXPORT_IV_LEN) throw new Error('Key backup: bad iv length.');
+  if (data.length < 16 || data.length > EXPORT_DATA_MAX) throw new Error('Key backup: bad payload length.');
+  return { iterations, salt, iv, data };
+}
 const PERSIST_DEBOUNCE_MS = 250;
 // OWASP-2023 минимум для PBKDF2-SHA256. Импорт читает iterations из самого
 // бэкапа — старые экспорты на 310k остаются читаемыми

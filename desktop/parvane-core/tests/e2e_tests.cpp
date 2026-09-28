@@ -5,6 +5,7 @@
 // процесс), поэтому «второе устройство» моделируется напрямую через FFI
 // vodozemac как получатель копии.
 #include "parvane/e2e.h"
+#include "parvane/storecrypt.h"
 #include "parvane/itransport.h"
 #include "parvane/topics.h"
 #include "parvane_e2e.h"
@@ -12,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
+#include <fstream>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -41,11 +43,15 @@ struct FakeDevice {
     std::string device_id;
     std::map<std::string, ParvaneE2ESession *> sessions; // sender identity → сессия
 
+    // P-25: подмена SPK/подписи сервером (для негативных тестов)
+    std::string spkOverride, sigOverride;
     json bundle() {
+        const auto spk = spkOverride.empty() ? fallback : spkOverride;
+        const auto sig = sigOverride.empty() ? take(parvane_e2e_account_sign(acc, fallback.c_str())) : sigOverride;
         json d = {{"device_id", device_id}, {"signing_key", signing},
                   {"registration_id", 1}, {"identity_key", identity},
-                  {"signed_prekey_id", 1}, {"signed_prekey", fallback},
-                  {"signed_prekey_sig", ""}};
+                  {"signed_prekey_id", 1}, {"signed_prekey", spk},
+                  {"signed_prekey_sig", sig}};
         if (!otks.empty()) {
             d["one_time_id"] = otks[0]["key_id"];
             d["one_time"] = otks[0]["public_key"];
@@ -196,6 +202,34 @@ int main() {
           "verifySender: чужой ключ под именем bob → Spoofed (каталог есть)");
     check(e2e::verifySender("nobody@local", mallory.identity, t, "tok") == e2e::Verdict::Unknown,
           "verifySender: нет каталога → Unknown");
+
+    // P-25: сервер подменил signed_prekey устройства (подпись не сходится) —
+    // устройство не принимается: сессии нет, вердикт Unknown (не Spoofed).
+    {
+        FakeDevice carol;
+        carol.device_id = "c1";
+        FakeDevice evil;
+        carol.spkOverride = evil.fallback;
+        t.catalog["carol@local"] = {&carol};
+        check(e2e::prekeySignatureValid(carol.bundle()) == false, "prekeySignatureValid: чужой SPK → false");
+        check(e2e::verifySender("carol@local", carol.identity, t, "tok") == e2e::Verdict::Unknown,
+              "verifySender: каталог без валидных подписей → Unknown");
+        check(!e2e::sealForAddress("carol@local", "{}", t, "tok").has_value(),
+              "sealForAddress: с подменённым SPK сессия не устанавливается");
+        carol.spkOverride.clear();
+        carol.sigOverride = take(parvane_e2e_account_sign(evil.acc, carol.fallback.c_str()));
+        check(!e2e::prekeySignatureValid(carol.bundle()), "prekeySignatureValid: подпись чужим ключом → false");
+        check(e2e::verifySender("carol@local", carol.identity, t, "tok") == e2e::Verdict::Unknown,
+              "verifySender: подпись чужим ключом → Unknown");
+        carol.sigOverride.clear();
+        check(e2e::prekeySignatureValid(carol.bundle()), "prekeySignatureValid: честный бандл → true");
+        check(e2e::verifySender("carol@local", carol.identity, t, "tok") == e2e::Verdict::Ok,
+              "verifySender: честный бандл → Ok");
+        auto stripped = carol.bundle();
+        stripped["signing_key"] = "";
+        stripped["signed_prekey_sig"] = "";
+        check(!e2e::prekeySignatureValid(stripped), "prekeySignatureValid: без подписи → false");
+    }
     // Смена ключа: identity из первого каталога bob — «виденные» (свой отпечаток
     // без входящего), поэтому известное устройство — не смена, новое — смена.
     check(!e2e::rememberContactIdentity("bob@local", bob1.identity),
@@ -222,33 +256,128 @@ int main() {
     const auto genc = json::parse(e2e::groupSeal("g1", content, epoch));
     check(genc.value("sender_signing_key", "") == e2e::signingKey(), "group_encrypted + signing key");
     e2e::groupAcceptKey("g1", bob2.identity, skey, 7); // чужая входящая (тот же ключ — для теста)
-    check(!e2e::groupOpen("g1", bob2.identity, genc["ciphertext"]).empty(),
-          "groupOpen по принятому ключу");
+    const auto gplain = e2e::groupOpen("g1", bob2.identity, genc["ciphertext"]);
+    check(!gplain.empty(), "groupOpen по принятому ключу");
+    // E2E-1: Megolm-plaintext — ГОЛЫЙ content (kind внутри), без обёртки
+    // {from, content}. Автор группового сообщения — только wire `from`.
+    {
+        const auto gp = json::parse(gplain, nullptr, false);
+        check(gp.is_object() && gp.contains("kind") && !gp.contains("from"),
+              "groupSeal шлёт голый content без inner.from (E2E-1)");
+    }
 
-    // Линковка: экспорт → слияние в «другое устройство» (эмулируем: экспорт
-    // содержит legacy-аккаунт = наш; import в себя же даёт dup → 0 legacy).
+    // Резервная копия ключей: полный экспорт (с account) остаётся для keybackup.
     const auto exported = e2e::exportStateJson(json{{"u1", {{"from", "bob@local"}}}});
     const auto st = json::parse(exported);
     check(st.value("version", 0) == 2 && st.contains("account") && st["groupIn"].contains("g1|" + bob2.identity),
-          "exportStateJson: версия 2, account (libolm), groupIn exported");
+          "exportStateJson (keybackup): версия 2, account (libolm), groupIn exported");
     check(!e2e::needsHistoryLink(true), "needsHistoryLink=false — есть сессии");
+
+    // P-48 / LINK-1: экспорт для ЛИНКОВКИ — без приватного материала.
+    const auto linkExport = e2e::exportLinkStateJson(json{{"u1", {{"from", "bob@local"}}}});
+    const auto ls = json::parse(linkExport);
+    check(ls.value("linkVersion", 0) == 2 && !ls.contains("account") && !ls.contains("pickleKey")
+              && !ls.contains("legacyAccounts") && linkExport.find("pickle") == std::string::npos,
+          "exportLinkStateJson: linkVersion=2, без account/pickleKey/legacyAccounts");
+    check(ls["groupIn"].contains("g1|" + bob2.identity) && ls["groupIn"]["g1|" + bob2.identity].contains("exported"),
+          "exportLinkStateJson: входящие Megolm как exported");
+    check(ls.contains("decCache") && ls["decCache"].contains("u1") && ls.contains("contacts")
+              && ls.contains("transfers") && ls["transfers"].is_array(),
+          "exportLinkStateJson: decCache, contacts, transfers");
     int dec = 0;
-    const bool imported = e2e::importLinkedHistory(exported, [&](const std::string &id, const json &) {
+    const bool imported = e2e::importLinkedHistory(linkExport, [&](const std::string &id, const json &) {
         dec += (id == "u1");
     });
-    check(imported && dec == 1, "importLinkedHistory: decCache через колбэк");
-    check(e2e::extraSignatures("sync:0:0").empty(), "свой аккаунт не становится legacy");
+    check(imported && dec == 1, "importLinkedHistory v2: decCache через колбэк");
+    check(e2e::extraSignatures("sync:0:0").empty() && e2e::syncTransfers().empty(),
+          "importLinkedHistory v2: свой экспорт не даёт ни legacy, ни transfers");
 
-    // Чужой аккаунт как legacy-подписант (libolm-pickle под pickleKey экспорта).
+    // P-48: подписанный перенос владения — проверяемая подпись над
+    // `link-transfer:<self>:<old>:<new>`; старое устройство подписывает своим ключом.
+    FakeDevice newDev;
+    const auto tr = e2e::signLinkTransfer("alice@local", newDev.signing);
+    check(tr.first == e2e::signingKey() && !tr.second.empty(), "signLinkTransfer: old_signing_key = свой ключ");
+    const std::string statement = "link-transfer:alice@local:" + tr.first + ":" + newDev.signing;
+    check(parvane_e2e_ed25519_verify(tr.first.c_str(), statement.c_str(), tr.second.c_str()) == 1,
+          "signLinkTransfer: подпись проверяется");
+    check(parvane_e2e_ed25519_verify(tr.first.c_str(), ("link-transfer:alice@local:" + tr.first + ":OTHER").c_str(),
+              tr.second.c_str()) != 1,
+          "signLinkTransfer: привязан к конкретному новому ключу");
+    check(e2e::signLinkTransfer("", newDev.signing).first.empty(), "signLinkTransfer: без self — пусто");
+
+    // Импорт с transfer из бокса → попадает в syncTransfers; свой ключ и дубли — нет.
     FakeDevice old;
-    json st2 = st;
-    st2["account"] = take(parvane_e2e_account_to_libolm_pickle(old.acc, st.value("pickleKey", "").c_str()));
+    const std::string oldStatement = "link-transfer:alice@local:" + old.signing + ":" + e2e::signingKey();
+    const auto oldSig = take(parvane_e2e_account_sign(old.acc, oldStatement.c_str()));
+    json st2 = ls;
     st2["groupIn"] = json::object();
-    check(e2e::importLinkedHistory(st2.dump(), nullptr), "импорт с чужим аккаунтом");
+    st2["transfers"] = json::array({{{"old_signing_key", "chain-key"}, {"signature", "chain-sig"}}});
+    check(e2e::importLinkedHistory(st2.dump(), nullptr, {old.signing, oldSig}), "импорт v2 с transfer");
+    const auto transfers = e2e::syncTransfers();
+    check(transfers.size() == 2 && transfers[0].first == "chain-key" && transfers[1].first == old.signing
+              && transfers[1].second == oldSig,
+          "syncTransfers: цепочка из экспорта + transfer из бокса");
+    check(e2e::importLinkedHistory(st2.dump(), nullptr, {e2e::signingKey(), "x"}) && e2e::syncTransfers().size() == 2,
+          "syncTransfers: свой ключ и дубликаты не добавляются");
+    check(!e2e::needsHistoryLink(true), "needsHistoryLink=false — есть transfers");
+    // v2-экспорт с подсунутым account НЕ становится legacy-подписантом.
+    json st3 = ls;
+    st3["pickleKey"] = st.value("pickleKey", "");
+    st3["account"] = st["account"];
+    check(e2e::importLinkedHistory(st3.dump(), nullptr) && e2e::extraSignatures("sync:0:0").empty(),
+          "importLinkedHistory v2: account в экспорте игнорируется");
+
+    // Legacy v1 (с account) по-прежнему принимается: чужой аккаунт → legacy-подписант.
+    json st4 = st;
+    st4["account"] = take(parvane_e2e_account_to_libolm_pickle(old.acc, st.value("pickleKey", "").c_str()));
+    st4["groupIn"] = json::object();
+    check(e2e::importLinkedHistory(st4.dump(), nullptr), "импорт legacy v1 с чужим аккаунтом");
     const auto extra = e2e::extraSignatures("sync:0:0");
     check(extra.size() == 1 && extra[0].first == old.signing
               && parvane_e2e_ed25519_verify(old.signing.c_str(), "sync:0:0", extra[0].second.c_str()) == 1,
           "extraSignatures: подпись legacy-ключом прежнего устройства");
+
+    // P-13: с ключом хранилища файлы стора (Olm-pickle, сессии, каталоги)
+    // лежат шифртекстом; plain прежних версий мигрирует при initDevice.
+    {
+        namespace sc = parvane::storecrypt;
+        auto rawOf = [](const std::filesystem::path &p) {
+            std::ifstream f(p, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        };
+        const auto accountFile = dir / "account.json";
+        check(std::filesystem::exists(accountFile) && !sc::isSealed(rawOf(accountFile)),
+              "P-13: без ключа account.json — plain (legacy)");
+        const auto beforeIdentity = e2e::myIdentity();
+        sc::setKey(sc::deriveKey("os-local-key"));
+        e2e::resetInMemory();
+        e2e::initDevice(t, "alice@local", "tok", dir.string()); // тот же стор, теперь с ключом
+        check(e2e::myIdentity() == beforeIdentity, "P-13: после включения ключа — та же identity (миграция)");
+        check(sc::isSealed(rawOf(accountFile)), "P-13: account.json перешифрован (магия PVSE1)");
+        bool anyPlain = false;
+        for (const auto &entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) continue;
+            const auto raw = rawOf(entry.path());
+            if (!raw.empty() && !sc::isSealed(raw)) {
+                anyPlain = true;
+                std::printf("  plain: %s (%zu байт, head=%.12s)\n", entry.path().filename().string().c_str(), raw.size(), raw.c_str());
+            }
+        }
+        check(!anyPlain, "P-13: в сторе не осталось plain-файлов");
+        check(rawOf(accountFile).find("ed25519") == std::string::npos, "P-13: pickle не читается с диска");
+        // Тот же ключ после «рестарта» — стор читается.
+        e2e::resetInMemory();
+        e2e::initDevice(t, "alice@local", "tok", dir.string());
+        check(e2e::myIdentity() == beforeIdentity, "P-13: с ключом после рестарта — та же identity");
+        // Чужой ключ — шифртекст не открывается: pickle недоступен, identity другая.
+        sc::setKey(sc::deriveKey("wrong-key"));
+        check(sc::readFile(accountFile.string()).empty(), "P-13: чужой ключ не открывает account.json");
+        e2e::resetInMemory();
+        e2e::initDevice(t, "alice@local", "tok", dir.string());
+        check(e2e::myIdentity() != beforeIdentity, "P-13: чужой ключ → стор недоступен (новая identity)");
+        sc::setKey("");
+        e2e::resetInMemory();
+    }
 
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;

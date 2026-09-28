@@ -15,7 +15,7 @@
     "build:production": "vite build",
     "build:stats": "cross-env BUNDLE_STATS=1 vite build",
     "build:stats:visualizer": "cross-env BUNDLE_STATS_VISUALIZER=1 vite build",
-    "web:release:production": "npm i && npm run build:production && git add -A && git commit -a -m '[Build]' --no-verify && git push",
+    "web:release:production": "npm ci && npm run build:production",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
@@ -36,7 +36,7 @@
     "test:playwright:run": "playwright test",
     "test:record": "playwright codegen localhost:1235",
     "postinstall": "node -e \"require('fs').rmSync('.cache', { recursive: true, force: true })\"",
-    "postversion": "echo $(node -p \"require('./package.json').version\") > public/version.txt && git commit --amend --no-verify --no-edit public/version.txt"
+    "postversion": "echo $(node -p \"require('./package.json').version\") > public/version.txt"
   },
   "engines": {
     "node": "^24.11 || ^26",

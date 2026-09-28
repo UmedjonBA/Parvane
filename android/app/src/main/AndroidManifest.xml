@@ -6,7 +6,7 @@
         android:icon="@drawable/ic_parvane"
         android:theme="@style/Theme.Parvane"
         android:allowBackup="false"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

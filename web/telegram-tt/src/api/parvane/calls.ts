@@ -11,7 +11,7 @@ import {
   GROUP_CALL_MAX_PARTICIPANTS, GroupCallEngine, type GroupPeerState, type WireGroupInvite,
 } from './groupcall';
 import {
-  buildWireEvent,
+  buildGroupCallRoute, buildWireEvent,
   TOPIC_CALL_HISTORY_REQUEST,
   TOPIC_CALL_ICE_REQUEST,
   TOPIC_CALL_SIGNAL,
@@ -358,7 +358,7 @@ export function createCallController(deps: CallDependencies) {
         const store = deps.getStore();
         // Реальный from (шард сверяет с JWT), gcall:-префикс только в to
         const envelope = buildWireEvent(store.self, deps.getToken(), {
-          to: `gcall:${peer}`, signal,
+          to: buildGroupCallRoute(peer), signal,
         });
         deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
       },

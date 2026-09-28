@@ -32,6 +32,8 @@ describe('E2E decrypt durability', () => {
       ok: true,
       identity_key: prekeys.identity_key as string,
       signed_prekey: prekeys.signed_prekey as string,
+      signed_prekey_sig: prekeys.signed_prekey_sig as string,
+      signing_key: prekeys.signing_key as string,
       one_time: oneTime,
     });
     const innerJson = JSON.stringify({ from: 'dur-alice@local', content: { kind: 'text', text: 'restore me' } });

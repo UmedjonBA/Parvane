@@ -37,3 +37,5 @@ __pycache__/
 /android/.build/
 /android/prebuilt/
 /android/_study/
+# адрес/логин прод-сервера для deploy.sh (P-50)
+backend/infra/deploy/.deploy.env
