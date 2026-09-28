@@ -8,7 +8,9 @@ name = "push"
 path = "src/main.rs"
 
 [dependencies]
+url = "2"
 parvane-types = { path = "../../shared/parvane-types" }
+parvane-db = { path = "../../shared/parvane-db" }
 tokio = { workspace = true }
 async-nats = { workspace = true }
 serde = { workspace = true }
@@ -20,6 +22,10 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
-web-push = "0.10"
-p256 = { version = "0.13", features = ["pkcs8", "pem"] }
+# P-51: web-push-native без фичи `vapid` (jwt-simple → rsa, RUSTSEC-2023-0071);
+# VAPID-JWT подписываем сами через p256/ecdsa, HTTP — reqwest/rustls.
+web-push-native = { version = "0.5", default-features = false }
+http = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+p256 = { version = "0.13", features = ["pkcs8", "pem", "ecdsa"] }
 base64 = "0.22"

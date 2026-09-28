@@ -27,3 +27,39 @@ pub async fn connect(url: &str) -> Result<async_nats::Client, async_nats::Connec
         _ => opts.connect(url).await,
     }
 }
+
+/// Проверка, что строка безопасна как ЧАСТЬ NATS-subject: непустая, без
+/// пробельных символов (в т.ч. CR/LF — иначе кадр `PUB <subj> <len>` можно
+/// разорвать и внедрить второй `PUB`/`SUB`), без разделителя токенов `.` на
+/// краях и без wildcard-символов `*`/`>`. Применяется во всех шардах ПЕРЕД
+/// каждым `publish` с subject, собранным из пользовательского ввода.
+pub fn is_valid_subject_token(token: &str) -> bool {
+    !token.is_empty()
+        && !token.starts_with('.')
+        && !token.ends_with('.')
+        && token.bytes().all(|b| {
+            !b.is_ascii_whitespace() && b != b'*' && b != b'>' && b != 0
+        })
+}
+
+#[cfg(test)]
+mod subject_tests {
+    use super::is_valid_subject_token;
+
+    #[test]
+    fn rejects_injection_and_wildcards() {
+        assert!(is_valid_subject_token("bob@local"));
+        assert!(is_valid_subject_token("gcall:alice@local"));
+        // Инъекция кадра через пробел/CRLF
+        assert!(!is_valid_subject_token("bob@s 0\r\n\r\nPUB msg.user.bob@s 3"));
+        assert!(!is_valid_subject_token("bob@s\tx"));
+        assert!(!is_valid_subject_token("bob\r@s"));
+        assert!(!is_valid_subject_token("bob\n@s"));
+        // Wildcards и пустое
+        assert!(!is_valid_subject_token(">"));
+        assert!(!is_valid_subject_token("*"));
+        assert!(!is_valid_subject_token(""));
+        assert!(!is_valid_subject_token(".bob"));
+        assert!(!is_valid_subject_token("bob."));
+    }
+}

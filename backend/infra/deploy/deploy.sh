@@ -11,8 +11,16 @@ set -Eeuo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"   # корень репозитория
 BACKEND="$REPO/backend"                                         # Cargo workspace + infra
-SSH_PORT=2240
-SSH_DEST=umejon@185.81.248.52
+# P-50: адрес/порт/логин прод-сервера — НЕ в репозитории. Задаются в
+# окружении оператора (например, backend/infra/deploy/.deploy.env, в .gitignore):
+#   PARVANE_DEPLOY_SSH_DEST=user@host   PARVANE_DEPLOY_SSH_PORT=22
+#   PARVANE_DEPLOY_PUBLIC_HOST=host.example  (внешний хост для .env при первом деплое)
+DEPLOY_ENV="$(dirname "${BASH_SOURCE[0]}")/.deploy.env"
+[[ -f "$DEPLOY_ENV" ]] && source "$DEPLOY_ENV"
+: "${PARVANE_DEPLOY_SSH_DEST:?задайте PARVANE_DEPLOY_SSH_DEST=user@host}"
+: "${PARVANE_DEPLOY_PUBLIC_HOST:?задайте PARVANE_DEPLOY_PUBLIC_HOST}"
+SSH_PORT="${PARVANE_DEPLOY_SSH_PORT:-22}"
+SSH_DEST="$PARVANE_DEPLOY_SSH_DEST"
 SSH=(ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_DEST")
 REMOTE_DIR=parvane
 
@@ -49,14 +57,15 @@ tar -C "$REPO/web/telegram-tt/dist" -czf - . \
 "${SSH[@]}" "cd $REMOTE_DIR && docker compose restart caddy >/dev/null 2>&1 || true"
 
 log "Секреты (.env генерируется один раз) и запуск"
-"${SSH[@]}" bash -s <<'REMOTE'
+"${SSH[@]}" PARVANE_DEPLOY_PUBLIC_HOST="$PARVANE_DEPLOY_PUBLIC_HOST" bash -s <<'REMOTE'
 set -Eeuo pipefail
 cd parvane
 if [[ ! -f .env ]]; then
   gen() { openssl rand -hex 24; }
   relay_ip="$(hostname -I | awk '{print $1}')"
+  umask 077
   cat > .env <<EOF
-PARVANE_PUBLIC_HOST=185.81.248.52
+PARVANE_PUBLIC_HOST=$PARVANE_DEPLOY_PUBLIC_HOST
 PARVANE_PUBLIC_HTTPS_PORT=20443
 PARVANE_TURN_PUBLIC_PORT=20478
 PARVANE_TURN_RELAY_IP=$relay_ip
@@ -85,4 +94,4 @@ docker compose up -d --remove-orphans
 docker compose ps
 REMOTE
 
-log "Готово: https://185.81.248.52:20443"
+log "Готово: https://$PARVANE_DEPLOY_PUBLIC_HOST:${PARVANE_DEPLOY_PUBLIC_HTTPS_PORT:-20443}"

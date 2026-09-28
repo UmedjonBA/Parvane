@@ -22,6 +22,7 @@ function bundleOf(engine: E2eEngine, deviceId: string) {
     signing_key: prekeys.signing_key as string,
     identity_key: prekeys.identity_key as string,
     signed_prekey: prekeys.signed_prekey as string,
+    signed_prekey_sig: prekeys.signed_prekey_sig as string,
     one_time: (prekeys.one_time as { public_key: string }[])[0].public_key,
   };
 }

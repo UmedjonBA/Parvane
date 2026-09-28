@@ -158,18 +158,22 @@ try {
     'sealed history must be unreadable before linking',
   );
 
+  // v2 (LINK-1): код появляется только после challenge старого устройства —
+  // сначала оба открывают Настройки → Устройства, потом сверяем 12 цифр.
   const dev2Screen = await openDevicesScreen(bobDevice2.page);
-  const pendingText = dev2Screen.getByText(/confirm code \d{6}/);
+  await dev2Screen.getByText(/Waiting for your other device/)
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const dev1Screen = await openDevicesScreen(bobDevice1.page);
+  const pendingText = dev2Screen.getByText(/confirm code \d{4} \d{4} \d{4}/);
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const dev2Code = (await pendingText.textContent()).match(/(\d{6})/)[1];
+  const dev2Code = (await pendingText.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
 
   // ── Старое устройство видит запрос с тем же кодом и подтверждает ──────────
-  const dev1Screen = await openDevicesScreen(bobDevice1.page);
-  const offerItem = dev1Screen.locator('.ListItem').filter({ hasText: 'Code:' }).first();
+  const offerItem = dev1Screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const offerText = await offerItem.textContent();
-  // Именно из «Code: NNNNNN» — device_id в заголовке тоже содержит цифры
-  const dev1Code = offerText.match(/Code: (\d{6})/)[1];
+  // Именно из «Code: NNNN NNNN NNNN» — device_id в заголовке тоже содержит цифры
+  const dev1Code = offerText.match(/Code: (\d{4} \d{4} \d{4})/)[1];
   assert.equal(dev1Code, dev2Code, 'SAS codes must match on both devices');
 
   await offerItem.locator('.ListItem-button').click();

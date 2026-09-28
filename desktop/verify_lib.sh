@@ -2,6 +2,8 @@
 # Parvane — общая обвязка desktop-e2e (мультидевайс/линковка/devices/email/edit).
 # Поднимает nats + шарды (identity, messenger, cloud, call) + gateway в $SB,
 # даёт ok/bad/start_client/wait_log/stop_all. Источник: . verify_lib.sh
+# ВАЖНО: бинарь tdesktop должен быть собран с -DPARVANE_DEV=ON — иначе
+# PARVANE_AUTOLOGIN/AUTOSEND/PARVANE_GATEWAY_URL=host:port игнорируются (P-45/P-46).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 RC=0
 ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }

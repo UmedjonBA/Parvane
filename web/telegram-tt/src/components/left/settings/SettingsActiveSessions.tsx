@@ -35,7 +35,7 @@ type StateProps = GlobalState['activeSessions'];
 // Parvane: авто-линковка истории — статус собственного оффера и запросы
 // других устройств опрашиваются, пока экран открыт
 type LinkStatus = { isPending: boolean; code?: string };
-type LinkOffer = { deviceId: string; code: string };
+type LinkOffer = { deviceId: string; code?: string };
 const LINK_UI_POLL_MS = 5000;
 
 const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
@@ -249,7 +249,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   }
 
   // Parvane: новое устройство ждёт передачу истории — показываем код сверки
-  function renderLinkPending(code: string) {
+  function renderLinkPending(code?: string) {
     return (
       <>
         <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
@@ -257,7 +257,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
         </IslandTitle>
         <Island>
           <p className="settings-item-description-larger">
-            {oldLang('ParvaneLinkPendingText', code)}
+            {code ? oldLang('ParvaneLinkPendingText', code) : oldLang('ParvaneLinkPendingWait')}
           </p>
         </Island>
       </>
@@ -278,13 +278,16 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
               icon="key"
               narrow
               ripple
+              disabled={!offer.code}
               onClick={() => setConfirmingOffer(offer)}
             >
               <div className="multiline-item full-size" dir="auto">
                 <span className="title">
                   {offer.deviceId ? `Web ${offer.deviceId.slice(0, 8)}` : 'Desktop'}
                 </span>
-                <span className="subtitle">{oldLang('ParvaneLinkOfferCode', offer.code)}</span>
+                <span className="subtitle">
+                  {offer.code ? oldLang('ParvaneLinkOfferCode', offer.code) : oldLang('ParvaneLinkOfferWait')}
+                </span>
               </div>
             </ListItem>
           ))}
@@ -332,7 +335,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   return (
     <div className="settings-content custom-scroll SettingsActiveSessions">
       {currentSession && renderCurrentSession(currentSession)}
-      {Boolean(linkStatus?.isPending && linkStatus.code) && renderLinkPending(linkStatus!.code!)}
+      {Boolean(linkStatus?.isPending) && renderLinkPending(linkStatus.code)}
       {Boolean(linkOffers.length) && renderLinkOffers()}
       {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
       {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
@@ -352,7 +355,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
       <ConfirmDialog
         isOpen={Boolean(confirmingOffer)}
         onClose={() => setConfirmingOffer(undefined)}
-        text={confirmingOffer ? oldLang('ParvaneLinkConfirm', confirmingOffer.code) : ''}
+        text={confirmingOffer?.code ? oldLang('ParvaneLinkConfirm', confirmingOffer.code) : ''}
         confirmLabel={oldLang('ParvaneLinkConfirmAction')}
         confirmHandler={handleGrantLink}
       />

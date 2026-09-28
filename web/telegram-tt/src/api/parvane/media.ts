@@ -1,5 +1,6 @@
 import type { SendMessageParams } from '../../types';
 import type { ApiMessage } from '../types';
+import type { BlobHeader } from './blobcrypt';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
@@ -10,13 +11,20 @@ import {
   registerBudgetConsumer,
   totalDecryptedBytes,
 } from '../../util/parvaneMediaBudget';
-import { decryptBlob, decryptRange, encryptBlob } from './blobcrypt';
+import {
+  blobChunkCount,
+  blobChunkOffset,
+  blobPlaintextSize,
+  decryptBlob,
+  decryptBlobChunks,
+  encryptBlob,
+  parseBlobHeader,
+} from './blobcrypt';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
-import { createStreamingGcmVerifier } from './gcmVerifyClient';
-import { createMediaIntegrity } from './mediaIntegrity';
 import {
   buildWireEvent,
+  TOPIC_FILE_DELETE,
   TOPIC_FILE_DOWNLOAD_REQUEST,
   TOPIC_FILE_UPLOAD_CHUNK,
   TOPIC_FILE_UPLOAD_COMPLETE,
@@ -64,9 +72,10 @@ const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
 // (Telegram отдаёт картинку со своего сервера). Мы склеиваем OSM-тайлы,
 // полученные через шард preview (наружу ходит сервер, а не браузер)
 const MAP_TILE_SIZE = 256;
+// P-23: максимальный zoom статичной карты (совпадает с TILE_MAX_ZOOM шарда preview)
+const MAP_MAX_ZOOM = 15;
 // Range-стриминг: кэш шифртекст-чанков на файл (сколько держим в памяти)
 const RANGE_CHUNK_CACHE_LIMIT = 96;
-const GCM_TAG_BYTES = 16;
 // Лимиты на серверные метаданные (size_bytes/chunk_bytes/данные чанка): без
 // них подделанный ответ cloud заставлял бы вкладку выделить произвольный объём
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -125,14 +134,21 @@ function concatBytes(parts: Uint8Array[]) {
   return out;
 }
 
+// P-44: MIME для Blob — из allowlist'а. Тип приходит от отправителя (E2E) или
+// от cloud; blob: URL живёт в нашем origin, и text/html или svg с активным
+// содержимым выполнялся бы с правами приложения. Всё прочее — octet-stream
+const SAFE_BLOB_MIME = /^(image\/(png|jpeg|jpg|gif|webp|avif|bmp)|video\/(mp4|webm|quicktime|ogg)|audio\/(mpeg|mp3|ogg|opus|wav|webm|mp4|aac|x-m4a|flac)|application\/pdf)$/i;
+export function safeBlobMime(mime?: string) {
+  const normalized = (mime || '').split(';')[0].trim().toLowerCase();
+  return SAFE_BLOB_MIME.test(normalized) ? normalized : 'application/octet-stream';
+}
+
 export function createMediaService(deps: MediaDependencies) {
   const cacheByFileId = new Map<string, Promise<CachedMedia>>();
   // Ключи и настоящий mime приходят внутри E2E content; cloud видит только
   // нейтральный application/octet-stream.
   const keysByFileId = new Map<string, { keyB64: string; nonceB64: string }>();
   const mimeByFileId = new Map<string, string>();
-  // Размер открытого текста из E2E-контента — сверка с размером в облаке
-  const plainSizeByFileId = new Map<string, number>();
 
   function requireConnection() {
     const connection = deps.getConnection();
@@ -166,6 +182,9 @@ export function createMediaService(deps: MediaDependencies) {
       mediaKeys = { keyB64: encrypted.keyB64, nonceB64: encrypted.nonceB64 };
     }
     const cloudMime = encrypt ? 'application/octet-stream' : mimeType;
+    // P-29: имя E2E-вложения серверу не сообщаем — настоящее имя едет внутри
+    // E2E-контента (fileName), cloud видит только непрозрачное
+    const cloudName = encrypt ? 'blob' : filename;
     const totalChunks = Math.max(1, Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES));
     for (let index = 0; index < totalChunks; index++) {
       const slice = bytes.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
@@ -174,14 +193,14 @@ export function createMediaService(deps: MediaDependencies) {
         chunk_index: index,
         total_chunks: totalChunks,
         data: encodeBase64(slice),
-        filename,
+        filename: cloudName,
         mime_type: cloudMime,
       });
       await connection.request(TOPIC_FILE_UPLOAD_CHUNK, JSON.stringify(chunkEvent), MEDIA_TIMEOUT_MS);
     }
     const completeEvent = buildWireEvent(store.self, deps.getToken(), {
       file_id: fileId,
-      filename,
+      filename: cloudName,
       total_chunks: totalChunks,
       size_bytes: bytes.length,
       mime_type: cloudMime,
@@ -208,47 +227,32 @@ export function createMediaService(deps: MediaDependencies) {
 
   // ── range-стриминг (прогрессивное видео) ─────────────────────────────────
   // Service worker просит байты [start,end]; качаем только нужные чанки
-  // (chunk_from/chunk_to), дешифруем окно AES-CTR по смещению GCM-потока.
-  // Метаданные (размер, размер чанка) приходят с любым чанком — берём с
-  // первого запроса. Окна идут без тега; целостность всего файла проверяет
-  // фоновая задача mediaIntegrity (шифртекст целиком, потоковый GHASH), а
-  // каждый фрагмент сверяется с эталонным SHA-256
+  // (chunk_from/chunk_to) и отдаём окно из чанков PVB2, каждый из которых
+  // проверен своим тегом (BLOB-1). Метаданные (размер, размер чанка) приходят
+  // с любым чанком — берём с первого запроса
   type FileMeta = { sizeBytes: number; chunkBytes: number; totalChunks: number; mimeType: string };
   const metaByFileId = new Map<string, FileMeta>();
   const chunkCacheByFileId = new Map<string, Map<number, Uint8Array>>();
+  // Разобранный заголовок PVB2 (false — legacy v1): чанк 0 может быть вытеснен
+  // из кэша окон, а заголовок нужен каждому окну
+  const blobHeaderByFileId = new Map<string, BlobHeader | false>();
   let rangeCacheBytes = 0;
 
-  const integrity = createMediaIntegrity({
-    fetchChunks: (fileId, from, to) => fetchChunkRange(fileId, from, to, { remember: false }),
-    createVerifier: async (fileId, geometry) => {
-      const keys = keysByFileId.get(fileId);
-      if (!keys) return undefined;
-      return createStreamingGcmVerifier(keys.keyB64, keys.nonceB64, geometry.sizeBytes);
-    },
-    onTampered: (fileId, reason) => forgetTamperedFile(fileId, reason),
-    // Проверку довести не удалось (шард недоступен, долгий офлайн): это НЕ
-    // подмена, и путать её с `parvane-media-integrity` нельзя — то событие
-    // означает доказанную подмену, снимает src у плеера и выбрасывает
-    // расшифрованные байты. Здесь байты честные, просто непроверенные:
-    // молча продолжать воспроизведение — против FR-022, рвать его —
-    // наказывать пользователя за обрыв сети. Поэтому отдельное событие
-    onUnverifiable: (fileId, reason) => noteUnverifiableFile(fileId, reason),
-    log: (message) => diagLog('media', message),
-  });
+  // Файлы, чей шифртекст не прошёл проверку тега: до конца сессии отдают
+  // MEDIA_INTEGRITY, плеер не ретраит (spec 002 FR-022)
+  const tamperedFileIds = new Set<string>();
 
-  // UI сообщает о настоящем старте воспроизведения — от него SC-003 отсчитывает
-  // пять секунд до начала фоновой докачки
-  if (typeof window !== 'undefined') {
-    window.addEventListener('parvane-media-playing', (event) => {
-      const fileId = (event as CustomEvent<{ fileId?: string }>).detail?.fileId;
-      if (fileId) integrity.notePlaybackStarted(fileId);
-    });
+  function markTampered(fileId: string, reason: string) {
+    if (tamperedFileIds.has(fileId)) return;
+    tamperedFileIds.add(fileId);
+    forgetTamperedFile(fileId, reason);
   }
 
   function forgetTamperedFile(fileId: string, reason: string) {
     diagLog('media', `файл ${fileId} отброшен: ${reason}`);
     dropRangeCache(fileId);
     metaByFileId.delete(fileId);
+    blobHeaderByFileId.delete(fileId);
     cacheByFileId.delete(fileId);
     thumbnailBytes -= thumbnailByFileId.get(fileId)?.size || 0;
     thumbnailByFileId.delete(fileId);
@@ -260,16 +264,6 @@ export function createMediaService(deps: MediaDependencies) {
     }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('parvane-media-integrity', { detail: { fileId } }));
-    }
-  }
-
-  // Файл не подменён, но и не проверен: попытки докачать шифртекст исчерпаны.
-  // Кэши не чистим и воспроизведение не рвём — файл остаётся рабочим, но
-  // перестаёт считаться проверенным, и UI об этом узнаёт (spec 002 FR-022)
-  function noteUnverifiableFile(fileId: string, reason: string) {
-    diagLog('media', `файл ${fileId} остался непроверенным: ${reason}`);
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('parvane-media-unverifiable', { detail: { fileId, reason } }));
     }
   }
 
@@ -306,8 +300,28 @@ export function createMediaService(deps: MediaDependencies) {
     enforceBudget();
   }
 
+  // P-52: удаление своего файла в cloud (чанки, гранты, метаданные). Токен
+  // подставляет gateway; сервер удаляет только файлы владельца.
+  async function deleteFile(fileId: string): Promise<boolean> {
+    const store = deps.getStore();
+    const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId });
+    try {
+      const raw = await requireConnection().request(TOPIC_FILE_DELETE, JSON.stringify(event));
+      const resp = JSON.parse(raw) as { ok?: boolean; error?: string };
+      if (!resp.ok) diagLog('file.delete', { fileId, error: resp.error || 'отказ' });
+      return Boolean(resp.ok);
+    } catch (error) {
+      diagLog('file.delete', { fileId, error: String(error) });
+      return false;
+    } finally {
+      cacheByFileId.delete(fileId);
+      dropRangeCache(fileId);
+      metaByFileId.delete(fileId);
+    }
+  }
+
   async function fetchChunkRange(
-    fileId: string, from: number, to: number, { remember = true }: { remember?: boolean } = {},
+    fileId: string, from: number, to: number,
   ): Promise<Map<number, Uint8Array> | undefined> {
     const store = deps.getStore();
     const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId, chunk_from: from, chunk_to: to });
@@ -326,7 +340,6 @@ export function createMediaService(deps: MediaDependencies) {
         const geometry = {
           sizeBytes: chunk.size_bytes, chunkBytes: chunk.chunk_bytes, totalChunks: chunk.total_chunks,
         };
-        if (!integrity.noteGeometry(fileId, geometry, plainSizeByFileId.get(fileId))) return undefined;
         if (!metaByFileId.has(fileId)) {
           metaByFileId.set(fileId, {
             ...geometry,
@@ -338,11 +351,8 @@ export function createMediaService(deps: MediaDependencies) {
       }
       if (chunk.data!.length > MAX_CHUNK_BASE64_LENGTH) continue;
       const bytes = decodeBase64(chunk.data!);
-      if (keysByFileId.has(fileId) && !await integrity.noteChunk(fileId, chunk.chunk_index!, bytes)) {
-        return undefined;
-      }
       fetched.set(chunk.chunk_index!, bytes);
-      if (remember) rememberChunk(fileId, chunk.chunk_index!, bytes);
+      rememberChunk(fileId, chunk.chunk_index!, bytes);
     }
     return fetched.size ? fetched : undefined;
   }
@@ -363,74 +373,108 @@ export function createMediaService(deps: MediaDependencies) {
     const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
     dropRangeCache(fileId);
     if (!plain) {
-      integrity.reportTampered(fileId, 'GCM-тег целого файла не сошёлся');
+      markTampered(fileId, 'GCM-тег целого файла не сошёлся');
       return 'bad';
     }
-    integrity.reportVerified(fileId);
-    const blob = new Blob([plain as BlobPart], { type: meta.mimeType });
-    cacheBlob(fileId, blob, meta.mimeType);
+    const safeType = safeBlobMime(meta.mimeType);
+    const blob = new Blob([plain as BlobPart], { type: safeType });
+    cacheBlob(fileId, blob, safeType);
     return blob;
   }
 
-  async function downloadRange(
-    fileId: string, start: number, end: number | undefined, isThumbnailRequest = false,
-  ) {
+  async function downloadRange(fileId: string, start: number, end: number | undefined) {
     const keys = keysByFileId.get(fileId);
     if (!keys) return undefined;
-    if (integrity.isTampered(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
-    if (!isThumbnailRequest) integrity.touch(fileId);
-    integrity.beginPlayerRequest();
-    try {
-      if (!metaByFileId.has(fileId)) await fetchChunkRange(fileId, 0, 0);
-      if (integrity.isTampered(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
-      const meta = metaByFileId.get(fileId);
-      if (!meta || !meta.chunkBytes) return undefined;
-      const fullSize = meta.sizeBytes - GCM_TAG_BYTES;
-      if (fullSize <= 0 || start >= fullSize) return undefined;
-      const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
-      const alignedStart = Math.floor(start / 16) * 16;
-      const chunkFrom = Math.floor(alignedStart / meta.chunkBytes);
-      const chunkTo = Math.floor(lastByte / meta.chunkBytes);
-      const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
-      let missingFrom: number | undefined;
-      for (let index = chunkFrom; index <= chunkTo; index++) {
-        if (!cache.has(index)) {
-          missingFrom = index;
-          break;
-        }
-      }
-      if (missingFrom !== undefined) {
-        const fetched = await fetchChunkRange(fileId, missingFrom, chunkTo);
-        if (integrity.isTampered(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
-        if (!fetched) return undefined;
-      }
-      const cached = chunkCacheByFileId.get(fileId);
-      if (!cached) return undefined;
-      if (cached.size >= meta.totalChunks) {
-        const verified = await verifyCompleteFile(fileId, meta, keys);
-        if (verified === 'bad') return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
-        if (verified) {
-          const buffer = await verified.slice(start, lastByte + 1).arrayBuffer();
-          return { arrayBuffer: buffer, mimeType: meta.mimeType, fullSize };
-        }
-      }
-      const window = new Uint8Array(lastByte - alignedStart + 1);
-      for (let index = chunkFrom; index <= chunkTo; index++) {
-        const bytes = cached.get(index);
-        if (!bytes) return undefined;
-        const chunkStart = index * meta.chunkBytes;
-        const copyFrom = Math.max(alignedStart, chunkStart);
-        const copyTo = Math.min(lastByte, chunkStart + bytes.length - 1);
-        if (copyTo < copyFrom) continue;
-        window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - alignedStart);
-      }
-      const plain = await decryptRange(window, keys.keyB64, keys.nonceB64, alignedStart);
-      if (!plain) return undefined;
-      const slice = plain.slice(start - alignedStart);
-      return { arrayBuffer: slice.buffer, mimeType: meta.mimeType, fullSize };
-    } finally {
-      integrity.endPlayerRequest();
+    if (tamperedFileIds.has(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+    let header = blobHeaderByFileId.get(fileId);
+    if (!metaByFileId.has(fileId) || header === undefined) await fetchChunkRange(fileId, 0, 0);
+    const meta = metaByFileId.get(fileId);
+    if (!meta || !meta.chunkBytes) return undefined;
+    if (header === undefined) {
+      const head = chunkCacheByFileId.get(fileId)?.get(0);
+      if (!head) return undefined;
+      header = parseBlobHeader(head) ?? false;
+      blobHeaderByFileId.set(fileId, header);
     }
+    const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
+    // P-24 / BLOB-1: окна отдаются декодеру только из проверенных чанков v2.
+    // Legacy v1 (без заголовка) — только целиком после проверки тега.
+    if (!header) {
+      const whole = await downloadWholeVerified(fileId, meta, keys);
+      if (tamperedFileIds.has(fileId)) return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+      if (!whole) return undefined;
+      const fullSize = whole.size;
+      if (start >= fullSize) return undefined;
+      const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1);
+      const buffer = await whole.slice(start, lastByte + 1).arrayBuffer();
+      return { arrayBuffer: buffer, mimeType: meta.mimeType, fullSize };
+    }
+    const totalBlobChunks = blobChunkCount(meta.sizeBytes, header);
+    const fullSize = blobPlaintextSize(meta.sizeBytes, header);
+    if (!totalBlobChunks || fullSize <= 0 || start >= fullSize) return undefined;
+    const lastByte = Math.min(end ?? fullSize - 1, fullSize - 1, start + MAX_RANGE_WINDOW_BYTES - 1);
+    const blobFrom = Math.floor(start / header.chunkSize);
+    const blobTo = Math.floor(lastByte / header.chunkSize);
+    // Байты шифртекста, покрывающие нужные чанки v2 → cloud-чанки
+    const cipherFrom = blobChunkOffset(blobFrom, header);
+    const cipherTo = Math.min(blobChunkOffset(blobTo + 1, header), meta.sizeBytes) - 1;
+    const chunkFrom = Math.floor(cipherFrom / meta.chunkBytes);
+    const chunkTo = Math.floor(cipherTo / meta.chunkBytes);
+    let missingFrom: number | undefined;
+    for (let index = chunkFrom; index <= chunkTo; index++) {
+      if (!cache.has(index)) {
+        missingFrom = index;
+        break;
+      }
+    }
+    if (missingFrom !== undefined) {
+      const fetched = await fetchChunkRange(fileId, missingFrom, chunkTo);
+      if (!fetched) return undefined;
+    }
+    const cached = chunkCacheByFileId.get(fileId);
+    if (!cached) return undefined;
+    if (cached.size >= meta.totalChunks) {
+      // Все чанки на руках — проверяем и кэшируем целиком
+      const verified = await verifyCompleteFile(fileId, meta, keys);
+      if (verified === 'bad') return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+      if (verified) {
+        const buffer = await verified.slice(start, lastByte + 1).arrayBuffer();
+        return { arrayBuffer: buffer, mimeType: meta.mimeType, fullSize };
+      }
+    }
+    const window = new Uint8Array(cipherTo - cipherFrom + 1);
+    for (let index = chunkFrom; index <= chunkTo; index++) {
+      const bytes = cached.get(index);
+      if (!bytes) return undefined;
+      const chunkStart = index * meta.chunkBytes;
+      const copyFrom = Math.max(cipherFrom, chunkStart);
+      const copyTo = Math.min(cipherTo, chunkStart + bytes.length - 1);
+      if (copyTo < copyFrom) continue;
+      window.set(bytes.subarray(copyFrom - chunkStart, copyTo - chunkStart + 1), copyFrom - cipherFrom);
+    }
+    const plain = await decryptBlobChunks(window, keys.keyB64, keys.nonceB64, header, blobFrom, totalBlobChunks);
+    if (!plain) {
+      // Тег чанка не сошёлся — шифртекст подменён: файл помечается навсегда (в
+      // сессии), плеер получает MEDIA_INTEGRITY и не ретраит (spec 002 FR-022)
+      markTampered(fileId, 'тег чанка не сошёлся — окно отброшено');
+      return { error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure;
+    }
+    const windowStart = blobFrom * header.chunkSize;
+    const slice = plain.slice(start - windowStart, lastByte - windowStart + 1);
+    return { arrayBuffer: slice.buffer, mimeType: meta.mimeType, fullSize };
+  }
+
+  /** Legacy v1: докачать всё, проверить тег целиком, отдать из кэша. */
+  async function downloadWholeVerified(
+    fileId: string, meta: FileMeta, keys: { keyB64: string; nonceB64: string },
+  ): Promise<Blob | undefined> {
+    const cache = chunkCacheByFileId.get(fileId) || new Map<number, Uint8Array>();
+    if (cache.size < meta.totalChunks) {
+      const fetched = await fetchChunkRange(fileId, 0, meta.totalChunks - 1);
+      if (!fetched) return undefined;
+    }
+    const verified = await verifyCompleteFile(fileId, meta, keys);
+    return verified === 'bad' ? undefined : verified;
   }
 
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
@@ -458,13 +502,13 @@ export function createMediaService(deps: MediaDependencies) {
     if (keys) {
       const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
       if (!plain) {
-        integrity.reportTampered(fileId, 'GCM-тег файла не сошёлся');
+        markTampered(fileId, 'GCM-тег файла не сошёлся');
         return undefined;
       }
-      const mimeType = mimeByFileId.get(fileId) || 'application/octet-stream';
+      const mimeType = safeBlobMime(mimeByFileId.get(fileId));
       return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
     }
-    const mimeType = chunks[0].mime_type || 'application/octet-stream';
+    const mimeType = safeBlobMime(chunks[0].mime_type);
     return { blob: new Blob(parts, { type: mimeType }), mimeType };
   }
 
@@ -484,7 +528,7 @@ export function createMediaService(deps: MediaDependencies) {
       // ретраить запрос по кругу
       const thumbFileId = normalizedUrl.match(MEDIA_URL_REGEX)?.[1];
       if (!thumbFileId) return Promise.resolve(buildThumbPlaceholder());
-      if (integrity.isTampered(thumbFileId)) return Promise.resolve(buildThumbPlaceholder());
+      if (tamperedFileIds.has(thumbFileId)) return Promise.resolve(buildThumbPlaceholder());
       if (mimeByFileId.get(thumbFileId)?.startsWith('video/')) {
         return getVideoThumbnail(thumbFileId).then((blob) => (blob
           ? { dataBlob: blob, mimeType: 'image/jpeg' }
@@ -502,15 +546,14 @@ export function createMediaService(deps: MediaDependencies) {
     }
     const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
     if (!fileId) return Promise.resolve(undefined);
-    if (integrity.isTampered(fileId)) {
+    if (tamperedFileIds.has(fileId)) {
       return Promise.resolve({ error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure);
     }
 
     // Прогрессивный плеер: качаем окно, а не файл целиком (кроме уже
-    // скачанных целиком — тогда режем локальный блоб). `thumb=1` — запрос
-    // генератора миниатюр: фоновую проверку не запускает
+    // скачанных целиком — тогда режем локальный блоб)
     if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT && !cacheByFileId.has(fileId) && keysByFileId.has(fileId)) {
-      return downloadRange(fileId, start || 0, end, /[?&]thumb=1/.test(normalizedUrl));
+      return downloadRange(fileId, start || 0, end);
     }
     let cached = cacheByFileId.get(fileId);
     if (!cached) {
@@ -542,8 +585,8 @@ export function createMediaService(deps: MediaDependencies) {
 
   // ── миниатюры видео ───────────────────────────────────────────────────────
   // Скрытый <video> вне DOM на progressive-URL с маркером thumb=1: сервис-
-  // воркер отдаёт только нужные окна (в т.ч. moov из хвоста), фоновая проверка
-  // целостности от этого не стартует. Кадр ≈ 0.1 с → canvas → JPEG в памяти
+  // воркер отдаёт только нужные окна (в т.ч. moov из хвоста). Кадр ≈ 0.1 с →
+  // canvas → JPEG в памяти
   const thumbnailInFlight = new Map<string, Promise<Blob | undefined>>();
   const thumbWaiters: Array<() => void> = [];
   // Файлы, которым пузырь уже отдал заглушку: не уложились в бюджет SC-004.
@@ -664,7 +707,7 @@ export function createMediaService(deps: MediaDependencies) {
       }
     }).then((blob) => {
       thumbnailInFlight.delete(fileId);
-      if (blob && !integrity.isTampered(fileId)) {
+      if (blob && !tamperedFileIds.has(fileId)) {
         thumbnailByFileId.set(fileId, blob);
         thumbnailBytes += blob.size;
         enforceBudget();
@@ -740,7 +783,8 @@ export function createMediaService(deps: MediaDependencies) {
     const long = Number(params.get('long'));
     const width = Number(params.get('w')) || 400;
     const height = Number(params.get('h')) || 300;
-    const zoom = Math.min(19, Math.max(0, Math.round(Number(params.get('zoom')) || 16)));
+    // P-23: zoom не выше MAP_MAX_ZOOM — серверу и OSM уходит окрестность (~1 км), а не точка
+    const zoom = Math.min(MAP_MAX_ZOOM, Math.max(0, Math.round(Number(params.get('zoom')) || MAP_MAX_ZOOM)));
     const scale = Math.min(3, Math.max(1, Number(params.get('scale')) || 1));
     if (!Number.isFinite(lat) || !Number.isFinite(long)) return undefined;
     // Web Mercator: центр в «тайловых пикселях»
@@ -788,7 +832,6 @@ export function createMediaService(deps: MediaDependencies) {
     if (content.file_id && content.file_key && content.file_nonce) {
       keysByFileId.set(content.file_id, { keyB64: content.file_key, nonceB64: content.file_nonce });
       if (content.mime) mimeByFileId.set(content.file_id, content.mime);
-      if (content.size_bytes && content.size_bytes > 0) plainSizeByFileId.set(content.file_id, content.size_bytes);
     }
   }
 
@@ -1136,6 +1179,7 @@ export function createMediaService(deps: MediaDependencies) {
   return {
     buildLocalContent,
     cacheBlob,
+    deleteFile,
     cacheBlobIfAbsent,
     clearCache: () => {
       cacheByFileId.clear();
@@ -1148,15 +1192,15 @@ export function createMediaService(deps: MediaDependencies) {
       thumbnailByFileId.clear();
       thumbnailBytes = 0;
       thumbBudgetMissed.clear();
-      plainSizeByFileId.clear();
-      integrity.reset();
+      tamperedFileIds.clear();
+      blobHeaderByFileId.clear();
     },
     detectWebPage,
     fetchWebPagePreview,
     downloadBlob,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),
-    isTampered: (fileId: string) => integrity.isTampered(fileId),
+    isTampered: (fileId: string) => tamperedFileIds.has(fileId),
     getMediaKeys: (fileId: string) => keysByFileId.get(fileId),
     getCloudRecipients,
     isPhotoAttachment,

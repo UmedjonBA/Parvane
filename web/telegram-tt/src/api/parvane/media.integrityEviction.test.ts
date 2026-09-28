@@ -7,7 +7,7 @@ import type { ParvaneStore } from './store';
 import { ApiMediaFormat } from '../types';
 
 import * as mediaLoader from '../../util/mediaLoader';
-import { encryptBlob } from './blobcrypt';
+import { encryptBlobWithKey } from './blobcrypt';
 import { createMediaService } from './media';
 
 // `util/browser/windowEnvironment.ts` (его тянет mediaLoader) опрашивает на
@@ -30,12 +30,13 @@ vi.mock('../gramjs', () => ({
   cancelApiProgress: () => undefined,
 }));
 
-// Фоновая проверка целостности и эталоны фрагментов не зависят от кэша окон:
-// фрагмент, вытесненный из кэша (лимит 96 фрагментов на файл), при повторной
-// выдаче с другими байтами — провал целостности (spec 002 SC-006, FR-022)
+// Каждое окно собирается из чанков PVB2 со своим тегом (BLOB-1): фрагмент,
+// вытесненный из кэша (лимит 96 фрагментов на файл), при повторной выдаче с
+// другими байтами — провал целостности (spec 002 SC-006, FR-022)
 
-const CHUNK_BYTES = 64;
-const TOTAL_CHUNKS = 120; // больше лимита кэша фрагментов одного файла
+const BLOB_CHUNK = 1024; // чанк PVB2 (минимум по BLOB-1)
+const PLAIN_CHUNKS = 120;
+const CHUNK_BYTES = BLOB_CHUNK + 16; // облачный фрагмент — не кратен чанку PVB2
 const FILE_ID = 'f-evict';
 const PROGRESSIVE = 1;
 
@@ -54,8 +55,18 @@ function toBase64(bytes: Uint8Array) {
 }
 
 async function setup() {
-  const plain = crypto.getRandomValues(new Uint8Array(CHUNK_BYTES * TOTAL_CHUNKS - 16));
-  const { ciphertext, keyB64, nonceB64 } = await encryptBlob(plain);
+  const plain = new Uint8Array(BLOB_CHUNK * PLAIN_CHUNKS);
+  // getRandomValues — не больше 64 КБ за вызов
+  for (let offset = 0; offset < plain.length; offset += 65536) {
+    crypto.getRandomValues(plain.subarray(offset, offset + 65536));
+  }
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await encryptBlobWithKey(plain, rawKey, nonce, BLOB_CHUNK);
+  const keyB64 = toBase64(rawKey);
+  const nonceB64 = toBase64(nonce);
+  // больше лимита кэша фрагментов одного файла
+  const TOTAL_CHUNKS = Math.ceil(ciphertext.length / CHUNK_BYTES);
   const server: Server = { chunks: [], tampered: new Map(), requested: [] };
   for (let index = 0; index < TOTAL_CHUNKS; index++) {
     server.chunks.push(ciphertext.slice(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES));
@@ -95,8 +106,8 @@ async function setup() {
   const readChunk = (index: number) => service.downloadMedia({
     url: `http://127.0.0.1/progressive/document${FILE_ID}`,
     mediaFormat: PROGRESSIVE,
-    start: index * CHUNK_BYTES,
-    end: index * CHUNK_BYTES + CHUNK_BYTES - 1,
+    start: index * BLOB_CHUNK,
+    end: index * BLOB_CHUNK + BLOB_CHUNK - 1,
   }) as Promise<{ arrayBuffer?: ArrayBuffer; error?: string } | undefined>;
   return {
     plain, server, service, readChunk,
@@ -105,7 +116,7 @@ async function setup() {
 
 function flipped(bytes: Uint8Array) {
   const copy = bytes.slice();
-  copy[5] ^= 0xff;
+  copy[20] ^= 0xff; // за заголовком PVB2 — внутри шифртекста чанка 0
   return copy;
 }
 
@@ -124,7 +135,7 @@ describe('media integrity after chunk cache eviction', () => {
     const before = server.requested.length;
     const again = await readChunk(0);
     expect(server.requested.length).toBe(before + 1); // чанк 0 вытеснен — снова из сети
-    expect(new Uint8Array(again!.arrayBuffer!)).toEqual(plain.slice(0, CHUNK_BYTES));
+    expect(new Uint8Array(again!.arrayBuffer!)).toEqual(plain.slice(0, BLOB_CHUNK));
     expect(service.isTampered(FILE_ID)).toBe(false);
   });
 
@@ -139,22 +150,6 @@ describe('media integrity after chunk cache eviction', () => {
     const requests = server.requested.length;
     expect((await readChunk(3))?.error).toBeTruthy();
     expect(server.requested.length).toBe(requests);
-  });
-
-  it('background verification catches a chunk tampered after the player saw it and it was evicted', async () => {
-    const { server, service, readChunk } = await setup();
-    for (let index = 0; index <= 100; index++) await readChunk(index);
-    server.tampered.set(2, flipped(server.chunks[2]));
-    // Задача стартует через 5 с после окна плеера и докачивает шифртекст целиком.
-    // GCM считается через `crypto.subtle` в реальном пуле потоков — вне фейковых
-    // таймеров, поэтому на каждом шаге уступаем очереди макрозадач: иначе под
-    // нагрузкой (параллельные файлы vitest) 400 тиков не хватало и тест плавал
-    for (let step = 0; step < 2000 && !service.isTampered(FILE_ID); step++) {
-      await vi.advanceTimersByTimeAsync(50);
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    expect(service.isTampered(FILE_ID)).toBe(true);
-    expect(server.requested.some(([from, to]) => from <= 2 && to >= 2 && to - from > 0)).toBe(true);
   });
 
   // FR-022: после подмены расшифрованных байт не должно остаться нигде. Запись
@@ -204,30 +199,5 @@ describe('media integrity after chunk cache eviction', () => {
     const url = 'documentf-tampered';
     await expect(mediaLoader.fetch(url, ApiMediaFormat.BlobUrl)).resolves.toBeUndefined();
     expect(mediaLoader.getFromMemory(url)).toBeUndefined();
-  });
-
-  it('background verification fetches a whole intact file larger than the chunk cache', async () => {
-    const { server, service, readChunk } = await setup();
-    for (let index = 0; index <= 100; index++) await readChunk(index);
-    const requestsBefore = server.requested.length;
-    // Старт задачи — по фейковому таймеру; докачка и GHASH идут на WebCrypto,
-    // поэтому ждём в реальном времени (таймер простоя остаётся фейковым)
-    await vi.advanceTimersByTimeAsync(5100);
-    vi.useRealTimers();
-    const batches = Math.ceil(TOTAL_CHUNKS / 24);
-    const deadline = Date.now() + 5000;
-    while (server.requested.length < requestsBefore + batches && Date.now() < deadline) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    const jobRequests = server.requested.slice(requestsBefore);
-    expect(jobRequests).toEqual(Array.from({ length: batches }, (_, batch) => [
-      batch * 24, Math.min(TOTAL_CHUNKS - 1, batch * 24 + 23),
-    ]));
-    expect(service.isTampered(FILE_ID)).toBe(false);
   });
 });

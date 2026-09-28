@@ -94,6 +94,8 @@ export function createSyncController(deps: SyncDependencies) {
     // Авто-линковка: доказательства владения ключами прежних устройств —
     // сервер включает в выдачу их sealed-исходящие
     const extraSigning = e2e?.signExtraSync(signedPayload);
+    // v2 (P-48): переносы владения исходящими прежних устройств
+    const transfers = e2e?.syncTransfers();
     return {
       last_seen_id: lastSeenId,
       since_updated: updatedSince,
@@ -101,6 +103,7 @@ export function createSyncController(deps: SyncDependencies) {
       sender_signing_key: e2e?.signingKey,
       signature: e2e?.signCallData(signedPayload),
       extra_signing: extraSigning?.length ? extraSigning : undefined,
+      transfers: transfers?.length ? transfers : undefined,
     };
   }
 
@@ -116,6 +119,21 @@ export function createSyncController(deps: SyncDependencies) {
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
     return (hash >>> 0).toString(16);
+  }
+
+  // E2E-1: разворачивает Megolm-plaintext. Канонический формат — голый
+  // WireMessageContent; legacy-клиенты слали обёртку {from, content}. Возвращаем
+  // сам content; поле from обёртки игнорируется (автор берётся из wire `from`).
+  function unwrapMegolmContent(parsed: unknown): WireMessageContent {
+    if (
+      parsed && typeof parsed === 'object'
+      && 'content' in parsed && 'from' in parsed
+      && typeof (parsed as { content: unknown }).content === 'object'
+      && (parsed as { content: unknown }).content !== null
+    ) {
+      return (parsed as { content: WireMessageContent }).content;
+    }
+    return parsed as WireMessageContent;
   }
 
   const buildWireFlags = (stored: WireStoredMessage): WireFlags => ({
@@ -203,7 +221,11 @@ export function createSyncController(deps: SyncDependencies) {
       const plain = e2e.groupDecrypt(content.group, content.sender_identity, content.ciphertext);
       if (!plain) return { stored, wasSealed: false };
       try {
-        const inner = JSON.parse(plain) as WireMessageContent;
+        // E2E-1: канонический Megolm-plaintext — ГОЛЫЙ content, автор = wire
+        // `stored.from` (его ставит gateway). Принимаем и legacy-обёртку
+        // {from, content} от старых клиентов, но inner.from НИКОГДА не
+        // используется как автор (иначе подмена отправителя в группе — P-02).
+        const inner = unwrapMegolmContent(JSON.parse(plain));
         e2e.cacheInner(stored.id, {
           from: stored.from, content: inner, senderIdentity: content.sender_identity,
         });
@@ -317,14 +339,8 @@ export function createSyncController(deps: SyncDependencies) {
 
   function handlePollContent(stored: WireStoredMessage) {
     const content = stored.content;
-    const store = deps.getStore();
     if (content.kind === 'poll') {
-      const chatAddress = store.isGroupAddress(stored.to) ? stored.to
-        : (stored.from && stored.from !== store.self ? stored.from : stored.to);
-      const chatId = store.getIdForAddress(
-        chatAddress,
-        store.isGroupAddress(chatAddress) ? 'group' : 'user',
-      );
+      const chatId = pollChatIdOf(stored);
       // spec 005: оба набора имён (web options/is_*, desktop answers/public/…)
       const fields = readPollFields(content);
       deps.polls.register(
@@ -333,6 +349,7 @@ export function createSyncController(deps: SyncDependencies) {
         fields.question,
         fields.options,
         {
+          author: stored.from,
           isPublic: fields.isPublic,
           isMultiple: fields.isMultiple,
           isQuiz: fields.isQuiz,
@@ -345,7 +362,9 @@ export function createSyncController(deps: SyncDependencies) {
     if (content.kind === 'poll_vote') {
       const pollUuid = content.poll;
       const options = (content.options || []).map(Number).filter((idx) => !Number.isNaN(idx));
-      if (pollUuid && stored.from) {
+      // P-44: голос — только из чата опроса (иначе участник другого чата
+      // голосовал бы в чужом опросе по uuid)
+      if (pollUuid && stored.from && deps.polls.isInChat(pollUuid, pollChatIdOf(stored))) {
         deps.polls.applyVote(pollUuid, stored.from, options);
         deps.refreshPollMessage(pollUuid);
       }
@@ -353,13 +372,23 @@ export function createSyncController(deps: SyncDependencies) {
     }
     if (content.kind === 'poll_close') {
       const pollUuid = content.poll;
-      if (pollUuid) {
+      // P-44: закрыть опрос может только автор, и только из того же чата
+      if (pollUuid && stored.from && deps.polls.canClose(pollUuid, stored.from)
+        && deps.polls.isInChat(pollUuid, pollChatIdOf(stored))) {
         deps.polls.close(pollUuid);
         deps.refreshPollMessage(pollUuid);
       }
       return true;
     }
     return false;
+  }
+
+  // Чат, к которому относится сообщение (для опросов: группа или 1-1 собеседник)
+  function pollChatIdOf(stored: WireStoredMessage) {
+    const store = deps.getStore();
+    const chatAddress = store.isGroupAddress(stored.to) ? stored.to
+      : (stored.from && stored.from !== store.self ? stored.from : stored.to);
+    return store.getIdForAddress(chatAddress, store.isGroupAddress(chatAddress) ? 'group' : 'user');
   }
 
   async function resolveDisplayNames(addresses: string[]) {
@@ -515,9 +544,11 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
-  function sendAck(messageId: string, sealedSender: string) {
+  // P-05: ack без `sender` — получатель не раскрывает серверу расшифрованного
+  // отправителя; адрес для delivered сервер берёт из своей БД
+  function sendAck(messageId: string) {
     const store = deps.getStore();
-    const ack = buildWireEvent(store.self, deps.getToken(), { message_id: messageId, sender: sealedSender });
+    const ack = buildWireEvent(store.self, deps.getToken(), { message_id: messageId });
     try {
       deps.getConnection()?.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
     } catch {
@@ -699,10 +730,10 @@ export function createSyncController(deps: SyncDependencies) {
 
   async function applyStoredUpdateUnserialized(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
     trackCursors(rawStored);
-    const { stored, wasSealed, hidden, verify } = unsealStored(rawStored);
+    const { stored, hidden, verify } = unsealStored(rawStored);
     const store = deps.getStore();
     if (hidden) {
-      if (shouldAckIncoming) sendAck(rawStored.id, stored.from);
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     if (verify) {
@@ -712,13 +743,19 @@ export function createSyncController(deps: SyncDependencies) {
         // заявленному адресу. НЕ показываем и НЕ роутим в его чат. Подтверждаем
         // приём (anonymous ack), чтобы сервер не гонял повтор
         deps.log(`ОТКЛОНЕНО: подмена отправителя ${verify.claimedFrom} в ${rawStored.id}`);
-        if (shouldAckIncoming) sendAck(rawStored.id, '');
+        if (shouldAckIncoming) sendAck(rawStored.id);
         return;
       }
       if (verdict === 'unknown') {
-        // Каталог отправителя недоступен — подтвердить нельзя. Показываем, но
-        // помечаем в логе; не запоминаем связку contact↔identity до подтверждения
-        deps.log(`не подтверждён отправитель ${verify.claimedFrom} в ${rawStored.id} (каталог недоступен)`);
+        // E2E-1: каталог отправителя недоступен — подтвердить нельзя. НЕ
+        // показываем и НЕ ack'аем; помечаем нерасшифрованным, чтобы sync
+        // повторил, а дисковый курсор не ушёл вперёд (SYNC-1). Ранее сообщение
+        // показывалось без подтверждения — окно для спуфа при недоступном
+        // identity-шарде (P-26).
+        deps.log(`отправитель ${verify.claimedFrom} в ${rawStored.id} не подтверждён (каталог недоступен) — откладываем`);
+        sawUndecryptable = true;
+        undecryptableUuids.add(rawStored.id);
+        return;
       } else if (verify.claimedFrom !== store.self) {
         if (deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity)) {
           announceKeyChange(verify.claimedFrom);
@@ -730,7 +767,7 @@ export function createSyncController(deps: SyncDependencies) {
     // Приём подтверждаем, чтобы сервер не гонял повтор
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
       && deps.localState.isBlocked(stored.from)) {
-      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     // Права по типу содержимого (spec 003, FR-009): сервер видит шифртекст и
@@ -738,7 +775,7 @@ export function createSyncController(deps: SyncDependencies) {
     // обход композера, у остальных не показывается. Решение принято —
     // курсор двигается как за применённым (не сбой расшифровки)
     if (isHiddenByGroupPermissions(stored)) {
-      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     // Если после unseal контент всё ещё зашифрован — расшифровать не удалось
@@ -757,13 +794,13 @@ export function createSyncController(deps: SyncDependencies) {
       deps.sendUpdate({
         '@type': 'newMessage', chatId: placeholder.chatId, id: placeholder.id, message: placeholder,
       });
-      if (shouldAckIncoming) sendAck(rawStored.id, wasSealed ? stored.from : '');
+      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     await refreshGroupsIfUnknownChat(stored);
     if (handlePollContent(stored)) {
       if (shouldAckIncoming && stored.from !== store.self) {
-        sendAck(rawStored.id, wasSealed ? stored.from : '');
+        sendAck(rawStored.id);
       }
       return;
     }
@@ -789,7 +826,7 @@ export function createSyncController(deps: SyncDependencies) {
         deps.sendUpdate({ '@type': 'deleteMessages', ids: [existing.id], chatId: existing.chatId });
       }
       if (shouldAckIncoming && stored.from && stored.from !== store.self) {
-        sendAck(rawStored.id, wasSealed ? stored.from : '');
+        sendAck(rawStored.id);
       }
       return;
     }
@@ -800,7 +837,7 @@ export function createSyncController(deps: SyncDependencies) {
     // кэша (shouldAck=false) не переписывает само себя
     if (shouldAckIncoming) persistHistory(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
-    if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id, wasSealed ? stored.from : '');
+    if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id);
 
     if (!isKnown) {
       if (!message.isOutgoing && stored.from) announcePeer(stored.from);

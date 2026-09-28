@@ -17,10 +17,10 @@ use parvane_types::{
     GroupVersionResponse, InviteLink, JoinRequestInfo, ParvaneEvent,
 };
 use sqlx::SqlitePool;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
-use super::{group_info, member_role, now_unix, verify_token};
+use crate::{group_info, max_group_members, member_count, member_role, now_unix, verify_token};
 
 /// Лимиты (data-model.md).
 pub const MAX_ABOUT_CHARS: usize = 255;
@@ -372,13 +372,13 @@ pub async fn handle_group_setinfo(nc: &Client, pool: &SqlitePool, msg: async_nat
         )
         .await?;
         if r.ok {
-            info!("Группа {}: сведения обновлены (v{}) {}", req.group_id, r.version, actor);
+            debug!("Группа {}: сведения обновлены (v{}) {}", req.group_id, r.version, actor);
             notify_group(nc, pool, &req.group_id, "info", r.version, GroupRecipients::AllMembers).await;
         }
         anyhow::Ok(r)
     }
     .await
-    .unwrap_or_else(|e| vfail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| vfail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 
@@ -417,13 +417,13 @@ pub async fn handle_group_setperms(nc: &Client, pool: &SqlitePool, msg: async_na
         let actor = verify_token(nc, &req.token).await?;
         let r = set_perms(pool, &req.group_id, &actor, &req.default_permissions).await?;
         if r.ok {
-            info!("Группа {}: права по умолчанию обновлены (v{}) {}", req.group_id, r.version, actor);
+            debug!("Группа {}: права по умолчанию обновлены (v{}) {}", req.group_id, r.version, actor);
             notify_group(nc, pool, &req.group_id, "perms", r.version, GroupRecipients::AllMembers).await;
         }
         anyhow::Ok(r)
     }
     .await
-    .unwrap_or_else(|e| vfail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| vfail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 
@@ -512,13 +512,13 @@ pub async fn handle_group_setadmin(nc: &Client, pool: &SqlitePool, msg: async_na
         let actor = verify_token(nc, &req.token).await?;
         let r = set_admin(pool, &req.group_id, &actor, &req.member, req.rights.as_ref()).await?;
         if r.ok {
-            info!("Группа {}: админ {} → {:?} (v{}) {}", req.group_id, req.member, req.rights.is_some(), r.version, actor);
+            debug!("Группа {}: админ {} → {:?} (v{}) {}", req.group_id, req.member, req.rights.is_some(), r.version, actor);
             notify_group(nc, pool, &req.group_id, "admin", r.version, GroupRecipients::AllMembers).await;
         }
         anyhow::Ok(r)
     }
     .await
-    .unwrap_or_else(|e| vfail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| vfail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 
@@ -715,7 +715,7 @@ pub async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: asy
         )
         .await?;
         if r.ok {
-            info!("Инвайт для {} создан ({})", req.group_id, actor);
+            debug!("Инвайт для {} создан ({})", req.group_id, actor);
             let v = current_version(pool, &req.group_id).await.unwrap_or(0);
             notify_group(nc, pool, &req.group_id, "invites", v, GroupRecipients::InviteManagers).await;
         }
@@ -725,7 +725,7 @@ pub async fn handle_group_invite_create(nc: &Client, pool: &SqlitePool, msg: asy
     .unwrap_or_else(|e| GroupInviteCreateResponse {
         ok: false,
         invite: None,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
         error_code: Some("bad_request".into()),
         link: None,
     });
@@ -752,7 +752,7 @@ pub async fn handle_group_invite_list(nc: &Client, pool: &SqlitePool, msg: async
     .unwrap_or_else(|e| GroupInviteListResponse {
         ok: false,
         links: vec![],
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
         error_code: Some("bad_request".into()),
     });
     reply(nc, &msg, &resp).await;
@@ -801,14 +801,14 @@ pub async fn handle_group_invite_revoke(nc: &Client, pool: &SqlitePool, msg: asy
         let actor = verify_token(nc, &req.token).await?;
         let r = revoke_invite(pool, &req.group_id, &actor, &req.invite, now_unix()).await?;
         if r.ok {
-            info!("Инвайт {} группы {} отозван ({})", req.invite, req.group_id, actor);
+            debug!("Инвайт {} группы {} отозван ({})", req.invite, req.group_id, actor);
             let v = current_version(pool, &req.group_id).await.unwrap_or(0);
             notify_group(nc, pool, &req.group_id, "invites", v, GroupRecipients::InviteManagers).await;
         }
         anyhow::Ok(r)
     }
     .await
-    .unwrap_or_else(|e| fail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| fail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 
@@ -825,7 +825,7 @@ pub async fn handle_group_invite_delete(nc: &Client, pool: &SqlitePool, msg: asy
         anyhow::Ok(r)
     }
     .await
-    .unwrap_or_else(|e| fail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| fail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 
@@ -895,7 +895,7 @@ pub async fn handle_group_invite_check(nc: &Client, pool: &SqlitePool, msg: asyn
     .await
     .unwrap_or_else(|e| GroupInviteCheckResponse {
         ok: false,
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
         error_code: Some("bad_request".into()),
         ..Default::default()
     });
@@ -995,6 +995,10 @@ pub async fn join_by_invite(
         .await?;
         return Ok((ok_resp(true), JoinOutcome::Pending));
     }
+    // P-34: потолок размера группы
+    if member_count(pool, &group_id).await? >= max_group_members() {
+        return Ok((join_fail("limit", "группа переполнена"), JoinOutcome::Rejected));
+    }
     let mut tx = pool.begin().await?;
     let n = sqlx::query(
         "UPDATE group_invites SET uses = uses + 1
@@ -1033,12 +1037,12 @@ pub async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::
         if let Some(gid) = resp.group_id.as_deref() {
             match outcome {
                 JoinOutcome::Joined { version, was_member: false } => {
-                    info!("{} вступил в {} по инвайту", user, gid);
+                    debug!("{} вступил в {} по инвайту", user, gid);
                     notify_group(nc, pool, gid, "members", version, GroupRecipients::AllMembers).await;
                     notify_group(nc, pool, gid, "invites", version, GroupRecipients::InviteManagers).await;
                 }
                 JoinOutcome::Pending => {
-                    info!("{} подал заявку в {}", user, gid);
+                    debug!("{} подал заявку в {}", user, gid);
                     let v = current_version(pool, gid).await.unwrap_or(0);
                     notify_group(nc, pool, gid, "requests", v, GroupRecipients::InviteManagers).await;
                 }
@@ -1048,7 +1052,7 @@ pub async fn handle_group_join(nc: &Client, pool: &SqlitePool, msg: async_nats::
         anyhow::Ok(resp)
     }
     .await
-    .unwrap_or_else(|e| join_fail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| join_fail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 
@@ -1092,7 +1096,7 @@ pub async fn handle_group_request_list(nc: &Client, pool: &SqlitePool, msg: asyn
     .unwrap_or_else(|e| GroupRequestListResponse {
         ok: false,
         requests: vec![],
-        error: Some(e.to_string()),
+        error: Some(parvane_db::public_error(&e)),
         error_code: Some("bad_request".into()),
     });
     reply(nc, &msg, &resp).await;
@@ -1122,6 +1126,10 @@ pub async fn decide_request(
     };
     if status != "pending" {
         return Ok(vfail("bad_request", "заявка уже решена"));
+    }
+    // P-34: потолок размера группы
+    if approve && member_count(pool, group_id).await? >= max_group_members() {
+        return Ok(vfail("limit", "группа переполнена"));
     }
     let mut tx = pool.begin().await?;
     let version = if approve {
@@ -1169,7 +1177,7 @@ pub async fn handle_group_request_decide(nc: &Client, pool: &SqlitePool, msg: as
         let actor = verify_token(nc, &req.token).await?;
         let r = decide_request(pool, &req.group_id, &actor, &req.member, req.approve, now_unix()).await?;
         if r.ok {
-            info!("Заявка {} в {}: {} ({})", req.member, req.group_id, if req.approve { "одобрена" } else { "отклонена" }, actor);
+            debug!("Заявка {} в {}: {} ({})", req.member, req.group_id, if req.approve { "одобрена" } else { "отклонена" }, actor);
             if req.approve {
                 notify_group(nc, pool, &req.group_id, "members", r.version, GroupRecipients::AllMembers).await;
                 notify_group(nc, pool, &req.group_id, "invites", r.version, GroupRecipients::InviteManagers).await;
@@ -1179,7 +1187,7 @@ pub async fn handle_group_request_decide(nc: &Client, pool: &SqlitePool, msg: as
         anyhow::Ok(r)
     }
     .await
-    .unwrap_or_else(|e| vfail("bad_request", &e.to_string()));
+    .unwrap_or_else(|e| vfail("bad_request", &parvane_db::public_error(&e)));
     reply(nc, &msg, &resp).await;
 }
 

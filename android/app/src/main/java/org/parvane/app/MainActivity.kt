@@ -14,13 +14,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Дымовой тест/дев-стенд: gateway из extra запуска, ДО создания VM
+        // Дымовой тест/дев-стенд: gateway и dev-хуки из extras запуска — ТОЛЬКО в
+        // debug-сборке (P-12). Activity экспортирована (LAUNCHER), и в release любое
+        // приложение могло бы стартовать нас с gateway=ws://attacker (уводя JWT)
+        // или autosend=… (отправка от имени пользователя).
         //   adb shell am start -n org.parvane.app/.MainActivity --es gateway ws://10.0.2.2:9222/ws
-        intent?.getStringExtra("gateway")?.takeIf { it.isNotBlank() }?.let { Client.gatewayUrl = it }
-        // Dev-хуки дымового теста (как PARVANE_AUTOLOGIN/AUTOSEND у десктопа):
         //   --es autologin user@server:пароль  --es autosend peer@server:текст
-        DevHooks.autologin = intent?.getStringExtra("autologin")
-        DevHooks.autosend = intent?.getStringExtra("autosend")
+        if (BuildConfig.DEBUG) {
+            intent?.getStringExtra("gateway")?.takeIf { it.isNotBlank() }?.let { Client.gatewayUrl = it }
+            DevHooks.autologin = intent?.getStringExtra("autologin")
+            DevHooks.autosend = intent?.getStringExtra("autosend")
+        }
         setContent {
             MaterialTheme {
                 Surface { ParvaneApp(vm) }

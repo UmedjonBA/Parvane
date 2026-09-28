@@ -7,7 +7,7 @@ use futures::StreamExt;
 use parvane_types::{
     CallHistoryResponse, CallMedia, CallRecord, CallSignal, CallSignalPayload, IceServer,
     IceServersResponse, ParvaneEvent, VerifyRequest, VerifyResponse,
-    topics::{CALL_HISTORY_REQUEST, CALL_ICE_REQUEST, CALL_SIGNAL, IDENTITY_VERIFY, call_inbox},
+    topics::{CALL_HISTORY_REQUEST, CALL_ICE_REQUEST, CALL_SIGNAL, GROUP_CALL_ROUTE_PREFIX, IDENTITY_VERIFY, call_inbox},
 };
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,8 +31,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./call.db".to_string());
 
-    let db_url = format!("sqlite://{}?mode=rwc", db_path);
-    let pool = SqlitePool::connect(&db_url).await.context("подключение к SQLite")?;
+    // P-38: общий коннект (WAL, busy_timeout 30 с) — см. parvane-db
+    let pool = parvane_db::connect(&db_path).await?;
     sqlx::migrate!("./migrations").run(&pool).await.context("миграции")?;
     info!("SQLite готов: {}", db_path);
 
@@ -83,7 +83,42 @@ fn media_str(m: CallMedia) -> &'static str {
 }
 
 fn route_principal(route: &str) -> &str {
-    route.strip_prefix("gcall:").unwrap_or(route)
+    route.strip_prefix(GROUP_CALL_ROUTE_PREFIX).unwrap_or(route)
+}
+
+/// P-35: лимиты сигналов звонка.
+const MAX_SDP_BYTES: usize = 64 * 1024;
+const MAX_CANDIDATE_BYTES: usize = 4 * 1024;
+/// Минимальный интервал между invite одной пары (from → to), с.
+const INVITE_COOLDOWN_SECS: i64 = 5;
+/// Не более стольких ringing-звонков у одного вызывающего за окно.
+const MAX_RINGING_PER_CALLER: i64 = 3;
+/// P-35: не больше стольких invite от одного инициатора за минуту.
+const INVITES_PER_MINUTE: i64 = 20;
+const RINGING_WINDOW_SECS: i64 = 120;
+
+/// Cooldown invite по паре (from → to): по последней записи в `calls`, т.е.
+/// детерминированно и без состояния в памяти.
+async fn invite_cooldown_ok(pool: &SqlitePool, from: &str, to: &str, now: i64) -> Result<bool> {
+    // Повторный дозвон после reject/hangup — легитимен; ограничиваем только
+    // «дребезг» invite'ов, пока предыдущий звонок этому же абоненту ещё звонит…
+    let last_ringing: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(started_at) FROM calls WHERE caller = ? AND callee = ? AND status = 'ringing'",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_one(pool)
+    .await?;
+    if last_ringing.is_some_and(|t| now - t < INVITE_COOLDOWN_SECS) {
+        return Ok(false);
+    }
+    // …и общий темп invite'ов инициатора (обзвон каталога).
+    let recent: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM calls WHERE caller = ? AND started_at > ?")
+        .bind(from)
+        .bind(now - 60)
+        .fetch_one(pool)
+        .await?;
+    Ok(recent < INVITES_PER_MINUTE)
 }
 
 /// Проверить, что сигнал идёт между участниками конкретного звонка, и обновить
@@ -114,12 +149,38 @@ async fn record_signal(
         anyhow::bail!("пустой call_id");
     }
     let call_id = signal.call_id().to_string();
+    // P-35: размеры SDP/кандидатов ограничены — иначе строка в calls и релей
+    // раздувались бы произвольно
+    match signal {
+        CallSignal::Invite { sdp, .. } | CallSignal::Answer { sdp, .. } if sdp.len() > MAX_SDP_BYTES => {
+            anyhow::bail!("SDP больше лимита {} байт", MAX_SDP_BYTES);
+        }
+        CallSignal::Ice { candidate, .. } if candidate.len() > MAX_CANDIDATE_BYTES => {
+            anyhow::bail!("ICE-кандидат больше лимита {} байт", MAX_CANDIDATE_BYTES);
+        }
+        _ => {}
+    }
 
     if let CallSignal::Invite { media, sdp, sig, .. } = signal {
         if sdp.is_empty() || sig.is_empty() {
             anyhow::bail!("invite должен содержать подписанный SDP");
         }
-        let is_group = to.starts_with("gcall:");
+        // P-35: cooldown по паре и потолок одновременных ringing у вызывающего —
+        // 20 «звонков»/с жертве больше невозможны
+        if !invite_cooldown_ok(pool, from, target, now).await? {
+            anyhow::bail!("слишком частые звонки этому адресату");
+        }
+        let ringing: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM calls WHERE caller = ? AND status = 'ringing' AND started_at > ?",
+        )
+        .bind(from)
+        .bind(now - RINGING_WINDOW_SECS)
+        .fetch_one(pool)
+        .await?;
+        if ringing >= MAX_RINGING_PER_CALLER {
+            anyhow::bail!("слишком много незавершённых звонков");
+        }
+        let is_group = to.starts_with(GROUP_CALL_ROUTE_PREFIX);
         sqlx::query(
             "INSERT INTO calls (id, caller, callee, media, status, started_at, is_group)
              VALUES (?, ?, ?, ?, 'ringing', ?, ?)",
@@ -166,7 +227,11 @@ async fn record_signal(
                 anyhow::bail!("звонок уже завершён");
             }
         }
-        CallSignal::Invite { .. } | CallSignal::GroupInvite { .. } => unreachable!(),
+        // 4.14: invite обрабатывается выше; сюда попасть не должен, но пользовательский
+        // ввод не паникует — возвращаем ошибку.
+        CallSignal::Invite { .. } | CallSignal::GroupInvite { .. } => {
+            anyhow::bail!("invite не является переходом состояния");
+        }
     }
 
     if let Some(new_status) = next_status(Some(&current), signal) {
@@ -247,6 +312,12 @@ async fn handle_signal(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
 
         let to = event.payload.to.clone();
         let signal = event.payload.signal.clone();
+
+        // P-01: `to` уходит в NATS-subject `call.user.<to>`; отвергаем адрес с
+        // пробелом/CRLF/wildcard до публикации (иначе инъекция кадра в шину).
+        if !parvane_types::address::is_valid_route(&to) {
+            anyhow::bail!("недопустимый адрес получателя сигнала");
+        }
 
         record_signal(pool, &event.from, &to, &signal, now_unix()).await?;
 
@@ -575,6 +646,29 @@ mod tests {
         assert!(record_signal(&pool, "alice@local", "bob@local", &answer, 2).await.is_err());
         assert!(record_signal(&pool, "bob@local", "mallory@evil", &answer, 2).await.is_err());
         assert_eq!(status_of(&pool, &id.to_string()).await, "ringing");
+    }
+
+    #[tokio::test]
+    async fn oversized_signals_and_invite_floods_are_rejected() {
+        let pool = test_pool().await;
+        let big_sdp = "x".repeat(MAX_SDP_BYTES + 1);
+        let id = Uuid::now_v7();
+        let invite = |sdp: String, id: Uuid| CallSignal::Invite {
+            call_id: id, media: CallMedia::Audio, sdp, sig: "sig".into(),
+        };
+        assert!(record_signal(&pool, "flood@local", "victim@local", &invite(big_sdp, id), 1).await.is_err(), "SDP > 64 КиБ");
+        // Первый invite проходит, второй той же паре в cooldown — нет
+        assert!(record_signal(&pool, "flood@local", "victim@local", &invite("offer".into(), Uuid::now_v7()), 10).await.is_ok());
+        assert!(record_signal(&pool, "flood@local", "victim@local", &invite("offer".into(), Uuid::now_v7()), 11).await.is_err(), "cooldown по паре");
+        // Другие адресаты: не более MAX_RINGING_PER_CALLER ringing за окно
+        let mut ok = 0;
+        for i in 0..5 {
+            let r = record_signal(&pool, "flood@local", &format!("v{i}@local"), &invite("offer".into(), Uuid::now_v7()), 20 + i).await;
+            if r.is_ok() { ok += 1; }
+        }
+        assert!(ok as i64 <= MAX_RINGING_PER_CALLER && ok < 5, "потолок ringing у вызывающего: {ok}");
+        let big_candidate = CallSignal::Ice { call_id: id, candidate: "c".repeat(MAX_CANDIDATE_BYTES + 1) };
+        assert!(record_signal(&pool, "flood@local", "victim@local", &big_candidate, 30).await.is_err(), "ICE > 4 КиБ");
     }
 
     #[tokio::test]

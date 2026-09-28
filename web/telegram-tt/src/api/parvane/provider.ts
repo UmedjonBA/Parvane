@@ -50,8 +50,10 @@ import { langPackMethods } from './langPacks';
 import {
   exportLinkPublicKey,
   generateLinkKeyPair,
+  linkCommitment,
+  linkCommitmentMatches,
   openLinkBox,
-  sasCodeForEphPub,
+  sasCodeV2,
   sealLinkBox,
 } from './linking';
 import { createLocalState } from './localState';
@@ -60,7 +62,8 @@ import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
 import {
-  clearSecureCredential, loadSecureCredential, saveSecureCredential, SecureE2eStorage,
+  clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, saveSecureSession,
+  SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
 import {
   buildApiCustomEmojiSetFromPack,
@@ -95,10 +98,13 @@ import {
   buildWireEvent as buildWireEventNotify,
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
+  TOPIC_GROUP_INVITE_REVOKE,
+  TOPIC_IDENTITY_PASSWORD_CHANGE,
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
   TOPIC_IDENTITY_TWOFA,
+  TOPIC_LINK_CHALLENGE,
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
@@ -142,11 +148,26 @@ let token = '';
 
 // Публикует весь блок настроек уведомлений (умолчания + исключения по чатам,
 // включая мут) на messenger — синхронизация между своими устройствами.
+// P-34: «кто может добавлять меня в группы» — часть блоба настроек
+// (messenger читает `group_add`), хранится локально рядом с остальными
+function groupAddPolicyKey(user: string) {
+  return `parvane:group_add:${user}`;
+}
+
+function readGroupAddPolicy(): 'anyone' | 'nobody' {
+  try {
+    return localStorage.getItem(groupAddPolicyKey(store.self)) === 'nobody' ? 'nobody' : 'anyone';
+  } catch {
+    return 'anyone';
+  }
+}
+
 function pushNotifySettings() {
   if (!connection) return;
   const payload = JSON.stringify({
     defaults: localState.loadNotifyDefaults(),
     exceptions: localState.loadNotifyExceptions(),
+    group_add: readGroupAddPolicy(),
   });
   try {
     connection.publish(
@@ -268,6 +289,7 @@ const callController = createCallController({
 // Forward-ref: подписку на групповой typing реализует connectionController,
 // который создаётся ниже. Устанавливается после его создания
 let subscribeGroupTyping: (groupChatId: string) => void = () => {};
+let subscribePresence: (peerId: string) => void = () => {};
 
 const groupController = createGroupController({
   getConnection: () => connection,
@@ -351,7 +373,12 @@ const connectionController = createConnectionController({
   getE2e: () => e2e,
   setE2e: setE2eEngine,
   getStore: () => store,
-  setStore: (nextStore) => { store = nextStore; },
+  setStore: (nextStore) => {
+    store = nextStore;
+    // P-18: presence — по конкретным собеседникам, подписка при появлении адреса
+    store.onUserRegistered = (peerId) => subscribePresence(peerId);
+  },
+  unlockStorage: (user) => ensureStorageUnlocked(user),
   getToken: () => token,
   setToken: (nextToken) => { token = nextToken; },
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
@@ -386,6 +413,7 @@ const connectionController = createConnectionController({
 });
 
 subscribeGroupTyping = connectionController.ensureGroupTyping;
+subscribePresence = connectionController.ensurePresence;
 
 export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialArgs) {
   onUpdate = _onUpdate;
@@ -401,29 +429,25 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     const savedAddress = readLoginAddress();
     if (savedAddress) {
       pendingLoginAddress = savedAddress;
-      // «Keep me signed in»: если пароль сохранён (зашифрован в IndexedDB) —
-      // авто-логин без экрана пароля. Иначе (или при просроченном/битом
-      // credential) показываем экран пароля.
+      // «Keep me signed in» (P-39): пароль НЕ хранится — сессия возобновляется
+      // сохранённым JWT (сутки, отзываемый, привязан к устройству). Протухший
+      // или отозванный токен → экран пароля.
       if (readRememberMe() && isSessionExpired()) {
         // Сутки без активности — пароль просим заново
-        await clearSecureCredential(savedAddress).catch(() => undefined);
+        await clearSecureSession(savedAddress).catch(() => undefined);
       } else if (readRememberMe()) {
-        const savedPassword = await loadSecureCredential(savedAddress).catch(() => undefined);
-        if (savedPassword) {
+        await ensureStorageUnlocked(savedAddress);
+        const savedToken = await loadSecureSession(savedAddress).catch(() => undefined);
+        if (savedToken) {
           try {
-            await connectionController.connectAndLogin(savedAddress, savedPassword);
+            await connectionController.connectWithToken(savedAddress, savedToken);
             saveLoginAddress(savedAddress);
             touchSessionActivity();
             return;
           } catch (err) {
-            if (err instanceof TwoFactorRequiredError) {
-              // Устройство ещё не доверенное — экран подтверждения входа
-              startTelegramConfirmation(savedAddress, savedPassword, err.loginToken, 'login');
-              return;
-            }
             // eslint-disable-next-line no-console
-            console.error('[parvane] авто-логин не удался, спрашиваем пароль:', err);
-            await clearSecureCredential(savedAddress).catch(() => undefined);
+            console.error('[parvane] возобновление сессии по токену не удалось, спрашиваем пароль:', err);
+            await clearSecureSession(savedAddress).catch(() => undefined);
           }
         }
       }
@@ -541,15 +565,29 @@ function logDebug(message: string) {
   diagLog('log', message);
 }
 
-// «Keep me signed in»: при включённом флаге сохраняем пароль (зашифрованным),
-// чтобы reload не спрашивал его снова. При выключенном — стираем сохранённое.
-async function persistSessionCredential(user: string, password: string) {
+// P-39: хранилище под PIN — спрашиваем PIN до открытия E2E/сессии.
+// Минимальный UI: нативный prompt (3 попытки); при отказе хранилище остаётся
+// закрытым — E2E и сохранённая сессия недоступны до перезагрузки
+async function ensureStorageUnlocked(user: string) {
+  if (!(await hasStoragePin(user).catch(() => false)) || isStorageUnlocked(user)) return;
+  const prompts = buildOldLangPack('en');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const pin = window.prompt(prompts.ParvaneStoragePinPrompt as string, '');
+    if (pin === null) return;
+    if (await unlockStorageWithPin(user, pin).catch(() => false)) return;
+  }
+}
+
+// «Keep me signed in» (P-39): при включённом флаге сохраняем JWT сессии
+// (зашифрованным, под ключом хранилища/PIN), чтобы reload не спрашивал
+// пароль. Сам пароль на диск не попадает. При выключенном — стираем.
+async function persistSessionCredential(user: string, _password: string) {
   try {
-    if (readRememberMe()) {
-      await saveSecureCredential(user, password);
+    if (readRememberMe() && token) {
+      await saveSecureSession(user, token);
       touchSessionActivity();
     } else {
-      await clearSecureCredential(user);
+      await clearSecureSession(user);
     }
   } catch {
     // Хранилище недоступно (приватный режим) — просто будем спрашивать пароль
@@ -673,21 +711,46 @@ const LINK_OFFER_LIFETIME_MS = 10 * 60 * 1000;
 type LinkRuntime = {
   generation: number;
   keyPair?: CryptoKeyPair;
+  ephPub?: string;
+  commitment?: string;
+  // v2 (P-03): эфемерный ключ СТАРОГО устройства, приложенный к нашему офферу;
+  // SAS считается от обоих ключей, грант принимается только под этот ключ
+  challenge?: string;
   code?: string;
   timer?: number;
 };
 
 const linkRuntime: LinkRuntime = { generation: 0 };
 
+// Старое устройство: свой эфемерный ключ на каждый challenge (по целевому
+// устройству). Приватный ключ живёт только в памяти вкладки.
+type LinkChallengeState = { keyPair: CryptoKeyPair; pub: string };
+const linkChallenges = new Map<string, LinkChallengeState>();
+
+type LinkOfferWire = {
+  device_id: string;
+  eph_pub: string;
+  created_at: number;
+  commitment?: string;
+  signing_key?: string;
+  challenge_pub?: string;
+};
+
 function stopHistoryLink() {
   linkRuntime.generation++;
   window.clearInterval(linkRuntime.timer);
   linkRuntime.timer = undefined;
   linkRuntime.keyPair = undefined;
+  linkRuntime.ephPub = undefined;
+  linkRuntime.commitment = undefined;
+  linkRuntime.challenge = undefined;
   linkRuntime.code = undefined;
 }
 
-// Новое устройство: оффер + опрос гранта до успеха или истечения срока
+// Новое устройство (протокол v2, P-03/P-48): публикуем ОБЯЗАТЕЛЬСТВО на
+// эфемерный ключ и свой signing-ключ; сам ключ раскрываем только после
+// challenge старого устройства, SAS — от обоих ключей. Опрос до гранта или
+// истечения срока.
 async function startHistoryLinkOffer() {
   stopHistoryLink();
   const engine = e2e;
@@ -695,19 +758,20 @@ async function startHistoryLinkOffer() {
   const generation = linkRuntime.generation;
   const keyPair = await generateLinkKeyPair();
   const ephPub = await exportLinkPublicKey(keyPair);
-  const code = await sasCodeForEphPub(ephPub);
+  const commitment = await linkCommitment(ephPub);
   if (generation !== linkRuntime.generation) return;
   linkRuntime.keyPair = keyPair;
-  linkRuntime.code = code;
+  linkRuntime.ephPub = ephPub;
+  linkRuntime.commitment = commitment;
   try {
     const raw = await connection.request(TOPIC_LINK_OFFER, JSON.stringify({
-      token, device_id: engine.deviceId, eph_pub: ephPub,
+      token, device_id: engine.deviceId, commitment, signing_key: engine.signingKey,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
   } catch {
     return;
   }
-  logDebug('линковка: оффер опубликован');
+  logDebug('линковка: оффер (обязательство) опубликован');
   const startedAt = Date.now();
   linkRuntime.timer = window.setInterval(() => {
     if (generation !== linkRuntime.generation) return;
@@ -723,14 +787,16 @@ async function pollHistoryLinkGrant(generation: number) {
   const engine = e2e;
   const activeConnection = connection;
   const keyPair = linkRuntime.keyPair;
-  if (!engine || !activeConnection || !keyPair) return;
+  const ephPub = linkRuntime.ephPub;
+  const commitment = linkRuntime.commitment;
+  if (!engine || !activeConnection || !keyPair || !ephPub || !commitment) return;
   // История появилась другим путём (живая переписка) — отзываем оффер, чтобы
   // другие устройства не видели висящий запрос
   if (!engine.needsHistoryLink()) {
     stopHistoryLink();
     try {
       await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
-        token, device_id: engine.deviceId, eph_pub: '',
+        token, device_id: engine.deviceId, revoke: true,
       }));
     } catch {
       // сервер вычистит по TTL
@@ -738,6 +804,7 @@ async function pollHistoryLinkGrant(generation: number) {
     return;
   }
   let grant: { box_payload: string; eph_pub: string } | undefined;
+  let challenge: string | undefined;
   try {
     const raw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
       token, device_id: engine.deviceId,
@@ -745,13 +812,40 @@ async function pollHistoryLinkGrant(generation: number) {
     const response = JSON.parse(raw) as {
       ok: boolean;
       grant?: { box_payload: string; eph_pub: string };
+      challenge?: string;
     };
-    if (!response.ok || !response.grant) return;
+    if (!response.ok) return;
     grant = response.grant;
+    challenge = response.challenge;
   } catch {
     return;
   }
   if (generation !== linkRuntime.generation) return;
+
+  // Challenge пришёл — раскрываем ключ (сервер сверяет его с обязательством)
+  // и показываем SAS от пары ключей. Challenge фиксируется один раз: подмена
+  // стороны сервером означала бы другой код на старом устройстве.
+  if (challenge && !linkRuntime.challenge) {
+    try {
+      const raw = await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
+        token, device_id: engine.deviceId, eph_pub: ephPub, commitment, signing_key: engine.signingKey,
+      }));
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
+    } catch {
+      return;
+    }
+    if (generation !== linkRuntime.generation) return;
+    linkRuntime.challenge = challenge;
+    linkRuntime.code = await sasCodeV2(ephPub, challenge);
+    logDebug('линковка: ключ раскрыт, код сверки готов');
+  }
+  if (!grant) return;
+  if (!linkRuntime.challenge || grant.eph_pub !== linkRuntime.challenge) {
+    // Грант не под тот ключ, с которым считался SAS — игнорируем (это либо
+    // гонка двух старых устройств, либо попытка подмены)
+    logDebug('линковка: грант под чужой эфемерный ключ — отклонён');
+    return;
+  }
   stopHistoryLink();
 
   const boxPayload = await openLinkBox(keyPair.privateKey, grant.eph_pub, grant.box_payload);
@@ -771,27 +865,65 @@ async function pollHistoryLinkGrant(generation: number) {
     return;
   }
   try {
-    engine.importLinkedHistory(await media.blob.text());
+    engine.importLinkedHistory(await media.blob.text(), boxPayload.transfer);
     await engine.flushStorage();
   } catch (err) {
     logDebug(`линковка: импорт не удался: ${String(err)}`);
     return;
   }
   // Полный ресинк: пропущенная как нечитаемая история теперь расшифруется
-  // из привезённого decCache/групповых сессий
+  // из привезённого decCache/групповых сессий, а исходящие старого устройства
+  // сервер отдаст по подписанному переносу владения (transfers)
   syncController.reset();
   sendUpdate({ '@type': 'requestSync' });
   logDebug('линковка: история получена и импортирована');
 }
 
+// Старое устройство: код сверки для оффера v2 — только после того, как наш
+// challenge приложен и ключ нового устройства раскрыт и совпал с обязательством.
+// Legacy-офферы (v1, без обязательства) не обслуживаются: их код зависел
+// только от ключа, который сервер мог подменить.
+async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: string; code?: string } | undefined> {
+  if (!offer.commitment) return undefined;
+  const own = linkChallenges.get(offer.device_id);
+  if (offer.challenge_pub && own && offer.challenge_pub !== own.pub) {
+    // Challenge выставило другое наше устройство — грант отсюда невозможен
+    return undefined;
+  }
+  if (!own || !offer.challenge_pub) {
+    // Нет challenge (или новое устройство переофферило — сервер его сбросил):
+    // шлём свой ключ; при повторе — тот же (сервер принимает идемпотентно)
+    const keyPair = own?.keyPair || await generateLinkKeyPair();
+    const pub = own?.pub || await exportLinkPublicKey(keyPair);
+    try {
+      const raw = await connection!.request(TOPIC_LINK_CHALLENGE, JSON.stringify({
+        token, device_id: offer.device_id, eph_pub: pub,
+      }));
+      if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
+    } catch {
+      return undefined;
+    }
+    linkChallenges.set(offer.device_id, { keyPair, pub });
+    return { deviceId: offer.device_id };
+  }
+  if (!offer.eph_pub) return { deviceId: offer.device_id };
+  if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) {
+    logDebug(`линковка: ключ оффера ${offer.device_id} не соответствует обязательству`);
+    return undefined;
+  }
+  return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub) };
+}
+
 // Отзыв устройства: identity выкидывает его бандл из каталога (fan-out новых
 // сообщений его больше не включает), локально — чистка каталога self и ротация
 // групповых ключей (forgetOwnDevice)
-async function revokeOwnDevice(deviceId: string) {
+async function revokeOwnDevice(deviceId: string, password?: string) {
   if (!connection || !e2e) return undefined;
   try {
+    // P-07: отзыв устройства требует текущий пароль; без явного берём сохранённый.
+    const pw = password; // P-39: сохранённого пароля больше нет — только ввод
     const raw = await connection.request(TOPIC_DEVICE_REVOKE, JSON.stringify({
-      token, device_id: deviceId,
+      token, device_id: deviceId, password: pw,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     e2e.forgetOwnDevice(deviceId);
@@ -1679,36 +1811,37 @@ const methods = {
   // Новое устройство: статус собственного оффера (код показывается в UI,
   // пользователь сверяет его на старом устройстве перед подтверждением)
   parvaneGetLinkStatus() {
-    const isPending = Boolean(linkRuntime.timer && linkRuntime.code && e2e?.needsHistoryLink());
+    // v2: код появляется только после challenge старого устройства
+    const isPending = Boolean(linkRuntime.timer && e2e?.needsHistoryLink());
     return Promise.resolve({ isPending, code: isPending ? linkRuntime.code : undefined });
   },
 
-  // Старое устройство: запросы линковки от других устройств аккаунта
+  // Старое устройство: запросы линковки от других устройств аккаунта. На
+  // каждый оффер v2 отправляем свой challenge; код появляется после раскрытия
+  // ключа новым устройством.
   async parvaneListLinkOffers() {
     if (!connection || !e2e) return undefined;
     try {
       const raw = await connection.request(TOPIC_LINK_POLL, JSON.stringify({
         token, device_id: e2e.deviceId,
       }));
-      const response = JSON.parse(raw) as {
-        ok: boolean;
-        offers?: { device_id: string; eph_pub: string; created_at: number }[];
-      };
+      const response = JSON.parse(raw) as { ok: boolean; offers?: LinkOfferWire[] };
       if (!response.ok || !response.offers) return undefined;
-      return {
-        offers: await Promise.all(response.offers.map(async (offer) => ({
-          deviceId: offer.device_id,
-          code: await sasCodeForEphPub(offer.eph_pub),
-        }))),
-      };
+      const live = new Set(response.offers.map((offer) => offer.device_id));
+      Array.from(linkChallenges.keys()).forEach((deviceId) => {
+        if (!live.has(deviceId)) linkChallenges.delete(deviceId);
+      });
+      const described = await Promise.all(response.offers.map(describeLinkOffer));
+      return { offers: described.filter(Boolean) };
     } catch {
       return undefined;
     }
   },
 
   // Старое устройство: подтверждённая передача истории целевому устройству.
-  // Экспорт шифруется случайным ключом и уезжает в cloud (owner-only),
-  // координаты и ключ — в ECDH-боксе под эфемерным ключом оффера
+  // Экспорт (без приватного Olm-аккаунта, P-48) шифруется случайным ключом и
+  // уезжает в cloud (owner-only); координаты, ключ и подписанный перенос
+  // владения исходящими — в ECDH-боксе под парой эфемерных ключей (P-03).
   async parvaneGrantLink({ deviceId }: { deviceId: string }) {
     const engine = e2e;
     const activeConnection = connection;
@@ -1717,31 +1850,31 @@ const methods = {
       const pollRaw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
         token, device_id: engine.deviceId,
       }));
-      const poll = JSON.parse(pollRaw) as {
-        ok: boolean;
-        offers?: { device_id: string; eph_pub: string }[];
-      };
+      const poll = JSON.parse(pollRaw) as { ok: boolean; offers?: LinkOfferWire[] };
       const offer = poll.ok ? poll.offers?.find((entry) => entry.device_id === deviceId) : undefined;
-      if (!offer) return undefined;
+      const own = linkChallenges.get(deviceId);
+      if (!offer || !own || !offer.commitment || !offer.eph_pub || offer.challenge_pub !== own.pub) return undefined;
+      if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) return undefined;
 
       await engine.flushStorage();
-      const exportJson = engine.exportStateJson();
+      const exportJson = engine.exportLinkStateJson();
       const upload = await mediaService.uploadBlob(
         new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },
       );
       if (!upload.mediaKeys) return undefined;
 
-      const keyPair = await generateLinkKeyPair();
-      const ephPub = await exportLinkPublicKey(keyPair);
-      const box = await sealLinkBox(keyPair.privateKey, offer.eph_pub, {
+      const box = await sealLinkBox(own.keyPair.privateKey, offer.eph_pub, {
         file_id: upload.fileId,
         file_key: upload.mediaKeys.keyB64,
         file_nonce: upload.mediaKeys.nonceB64,
+        transfer: offer.signing_key ? engine.signLinkTransfer(store.self, offer.signing_key) : undefined,
       });
       const grantRaw = await activeConnection.request(TOPIC_LINK_GRANT, JSON.stringify({
-        token, device_id: deviceId, box_payload: box, eph_pub: ephPub,
+        token, device_id: deviceId, box_payload: box, eph_pub: own.pub,
       }));
-      return (JSON.parse(grantRaw) as { ok?: boolean }).ok ? true : undefined;
+      const ok = (JSON.parse(grantRaw) as { ok?: boolean }).ok;
+      if (ok) linkChallenges.delete(deviceId);
+      return ok ? true : undefined;
     } catch (err) {
       logDebug(`линковка: грант не удался: ${String(err)}`);
       return undefined;
@@ -2020,9 +2153,12 @@ const methods = {
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
   },
 
-  async parvaneSetTwoFactor({ enabled }: { enabled: boolean }) {
+  // P-07: выключение 2FA требует текущий пароль (один украденный JWT не должен
+  // снимать второй фактор). Если пароль не передан — берём сохранённый.
+  async parvaneSetTwoFactor({ enabled, password }: { enabled: boolean; password?: string }) {
     if (!connection) return undefined;
-    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled }));
+    const pw = !enabled ? password : undefined; // P-39: только введённый пароль
+    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled, password: pw }));
     const response = JSON.parse(raw) as {
       ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string; trust_secret?: string;
     };
@@ -2031,6 +2167,67 @@ const methods = {
     // следующей загрузке оно само попросило бы подтверждение в Telegram
     if (response.trust_secret) connectionController.writeTrustSecret(store.self, response.trust_secret);
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
+  },
+
+  // P-07: смена пароля (identity.password.change): JWT + старый пароль; сервер
+  // сбрасывает доверие устройств 2FA. Обновляем сохранённый пароль.
+  // P-34: согласие на добавление в группы
+  parvaneGetGroupAddPolicy() {
+    return Promise.resolve({ policy: readGroupAddPolicy() });
+  },
+
+  parvaneSetGroupAddPolicy({ policy }: { policy: 'anyone' | 'nobody' }) {
+    try {
+      localStorage.setItem(groupAddPolicyKey(store.self), policy);
+    } catch {
+      // приватный режим — настройка не переживёт reload
+    }
+    pushNotifySettings();
+    return Promise.resolve(true);
+  },
+
+  // P-34: отзыв инвайт-ссылки группы (owner/admin)
+  async parvaneRevokeGroupInvite({ groupId, invite }: { groupId: string; invite: string }) {
+    if (!connection) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_GROUP_INVITE_REVOKE, JSON.stringify({
+        token, group_id: groupId, invite,
+      }));
+      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+
+  // P-39: опциональный PIN хранилища E2E/сессии
+  async parvaneGetStoragePin() {
+    if (!store.self) return { enabled: false };
+    return { enabled: await hasStoragePin(store.self).catch(() => false) };
+  },
+
+  async parvaneSetStoragePin({ pin }: { pin: string }) {
+    if (!store.self) return undefined;
+    try {
+      await ensureStorageUnlocked(store.self);
+      await setStoragePin(store.self, pin);
+      if (!pin) lockStorage(store.self);
+      return true;
+    } catch (err) {
+      logDebug(`PIN хранилища: ${String(err)}`);
+      return undefined;
+    }
+  },
+
+  async parvaneChangePassword({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) {
+    if (!connection) throw new Error('нет соединения');
+    const raw = await connection.request(
+      TOPIC_IDENTITY_PASSWORD_CHANGE,
+      JSON.stringify({ token, old_password: oldPassword, new_password: newPassword }),
+    );
+    const response = JSON.parse(raw) as { ok: boolean; error?: string };
+    if (!response.ok) throw new Error(response.error || 'identity отклонил смену пароля');
+    // P-39: пароль не хранится — обновлять нечего
+    return true;
   },
 
   provideAuthPhoneNumber(input: string) {
@@ -2412,7 +2609,7 @@ const methods = {
         }
         localState.clearUserData(user);
         await E2eEngine.clear(user);
-        await clearSecureCredential(user).catch(() => undefined);
+        await clearSecureSession(user).catch(() => undefined);
       }
     }
     return undefined;

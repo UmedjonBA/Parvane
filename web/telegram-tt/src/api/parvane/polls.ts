@@ -7,6 +7,7 @@
 import type { ApiMessagePoll } from '../types';
 
 type PollEntry = {
+  author?: string;
   question: string;
   options: string[];
   chatId: string;
@@ -43,12 +44,15 @@ export class PollStore {
 
   register(uuid: string, chatId: string, question: string, options: string[], opts?: {
     isPublic?: boolean; isMultiple?: boolean; isQuiz?: boolean; correct?: number[]; solution?: string;
+    // P-44: автор опроса — только он может закрыть
+    author?: string;
   }) {
     if (this.byUuid.has(uuid)) return;
     this.byUuid.set(uuid, {
       question,
       options,
       chatId,
+      author: opts?.author,
       closed: false,
       isPublic: Boolean(opts?.isPublic),
       isMultiple: Boolean(opts?.isMultiple),
@@ -65,6 +69,18 @@ export class PollStore {
 
   getChatId(uuid: string) {
     return this.byUuid.get(uuid)?.chatId;
+  }
+
+  // P-44: закрыть опрос может только его автор
+  canClose(uuid: string, actor: string) {
+    const entry = this.byUuid.get(uuid);
+    return Boolean(entry && entry.author && entry.author === actor);
+  }
+
+  // P-44: голос принимается только из того чата, где опубликован опрос
+  isInChat(uuid: string, chatId: string) {
+    const entry = this.byUuid.get(uuid);
+    return Boolean(entry && entry.chatId === chatId);
   }
 
   applyVote(uuid: string, voter: string, options: number[]) {

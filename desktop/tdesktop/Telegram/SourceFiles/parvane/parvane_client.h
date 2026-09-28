@@ -104,7 +104,8 @@ struct TwoFactorState {
 	QString error;
 };
 [[nodiscard]] TwoFactorState FetchTwoFactor();
-[[nodiscard]] TwoFactorState SetTwoFactor(bool enabled);
+// P-07: выключение 2FA требует текущий пароль (сервер отклонит без него).
+[[nodiscard]] TwoFactorState SetTwoFactor(bool enabled, const QString &password = QString());
 
 // БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
 [[nodiscard]] RegisterResult Register(
@@ -129,7 +130,8 @@ struct DeviceEntry {
 	bool current = false;
 };
 void ListDevices(Fn<void(std::vector<DeviceEntry>)> done);
-void RevokeDevice(const QString &deviceId, Fn<void(bool)> done);
+// P-07: отзыв устройства требует текущий пароль (сервер отклонит без него).
+void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &password = QString());
 
 // Прочитавшие сообщение (msg.chat.readers) — для нативного «Seen by»/«read at».
 struct ReaderEntry {

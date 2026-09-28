@@ -23,6 +23,9 @@
 #include "parvane/topics.h"
 #include "parvane/transport.h"
 
+// Пароль тестовых аккаунтов по политике сервера (P-43: не короче 8 символов).
+constexpr auto kTestPassword = "e2e-Test-pass-2026";
+
 using parvane::CallClient;
 using parvane::CallRecord;
 using parvane::CallSignalIn;
@@ -47,7 +50,7 @@ static void sleepMs(int ms) {
 }
 
 static std::string issue(parvane::Transport &tr, const std::string &user) {
-    parvane::IssueRequest req{user, "test"};
+    parvane::IssueRequest req{user, kTestPassword};
     tr.request(parvane::topics::IdentityRegister, req.toJson().dump()); // регистрируем (идемпотентно)
     auto resp = parvane::IssueResponse::fromJson(
         json::parse(tr.request(parvane::topics::IdentityIssue, req.toJson().dump())));

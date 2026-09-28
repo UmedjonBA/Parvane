@@ -37,6 +37,7 @@ import {
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
 import {
+  buildTypingTopic,
   buildWireEvent,
   CLEAR_MAX_IDS,
   newMessageId,
@@ -178,6 +179,13 @@ export function createMessageController(deps: MessageDependencies) {
     | { isLocalOnly: true; content?: undefined; copies: WireDeviceCopy[] }
     | { isLocalOnly: false; content: WireMessageContent; copies: WireDeviceCopy[] };
 
+  // P-10 (SEND-1): подпись отправки — доказательство владения
+  // sender_signing_key: `send:<message_id>:<ciphertext>`. Без неё сервер
+  // отклонит сообщение (чужой публичный ключ давал бы выборку в чужом sync)
+  function signSend(engine: E2eEngine, messageId: string, ciphertext: string) {
+    return engine.signCallData(`send:${messageId}:${ciphertext}`);
+  }
+
   async function sealForAddress(toAddress: string, innerJson: string): Promise<SealResult> {
     const engine = requireE2e(deps.getE2e());
     const self = store().self;
@@ -266,8 +274,9 @@ export function createMessageController(deps: MessageDependencies) {
       const sealed = await engine.encryptForDevices(member, innerJson, fetchPrekeyBundle);
       if (!sealed) return false;
       const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
+      const id = newMessageId();
       publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id: newMessageId(),
+        id,
         from: '',
         ts: Math.floor(Date.now() / 1000),
         token: token(),
@@ -283,6 +292,7 @@ export function createMessageController(deps: MessageDependencies) {
           copies: sealed.copies.map((copy) => ({
             recipient: member, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
           })),
+          signature: signSend(engine, id, primary.ciphertext),
         },
       }));
       return true;
@@ -300,8 +310,9 @@ export function createMessageController(deps: MessageDependencies) {
       const sealed = await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId);
       if (!sealed) return;
       const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
+      const id = newMessageId();
       publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id: newMessageId(),
+        id,
         from: '',
         ts: Math.floor(Date.now() / 1000),
         token: token(),
@@ -317,6 +328,7 @@ export function createMessageController(deps: MessageDependencies) {
           copies: sealed.copies.map((copy) => ({
             recipient: self, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
           })),
+          signature: signSend(engine, id, primary.ciphertext),
         },
       }));
     } catch {
@@ -388,6 +400,7 @@ export function createMessageController(deps: MessageDependencies) {
             kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: engine.identityKey,
             sender_signing_key: engine.signingKey,
           },
+          signature: signSend(engine, uuid, ciphertext),
         },
       }));
       if (!isEphemeral) {
@@ -412,6 +425,7 @@ export function createMessageController(deps: MessageDependencies) {
           to: toAddress,
           content: sealed.content,
           copies: sealed.copies,
+          signature: signSend(engine, uuid, sealed.content.ciphertext ?? ''),
         },
       }));
     }
@@ -698,6 +712,7 @@ export function createMessageController(deps: MessageDependencies) {
     const isQuiz = Boolean(newPoll.summary.isQuiz);
     const uuid = newMessageId();
     deps.polls.register(uuid, chat.id, question, options, {
+      author: currentStore.self,
       isPublic: Boolean(newPoll.summary.isPublic),
       isMultiple: Boolean(newPoll.summary.isMultipleChoice),
       isQuiz,
@@ -990,6 +1005,7 @@ export function createMessageController(deps: MessageDependencies) {
               sender_signing_key: engine.signingKey,
             },
             reply_to: replyToUuid,
+            signature: signSend(engine, uuid, ciphertext),
           },
         }));
         if (!ttlSecs) {
@@ -1035,7 +1051,11 @@ export function createMessageController(deps: MessageDependencies) {
           ts,
           token: token(),
           payload: {
-            to: toAddress, content: sealed.content, reply_to: replyToUuid, copies: sealed.copies,
+            to: toAddress,
+            content: sealed.content,
+            reply_to: replyToUuid,
+            copies: sealed.copies,
+            signature: signSend(engine, uuid, sealed.content.ciphertext ?? ''),
           },
         }));
       } catch (error) {
@@ -1435,7 +1455,7 @@ export function createMessageController(deps: MessageDependencies) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(peer.id);
       if (!toAddress) return Promise.resolve(undefined);
-      publishFrame(`msg.typing.${peer.id}`, JSON.stringify({ from: currentStore.self, to: toAddress }));
+      publishFrame(buildTypingTopic(peer.id), JSON.stringify({ from: currentStore.self, to: toAddress }));
       return Promise.resolve(undefined);
     },
 

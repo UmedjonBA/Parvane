@@ -24,14 +24,34 @@ const API_TO_WIRE: Record<string, string> = Object.fromEntries(
   Object.entries(WIRE_TO_API).map(([wire, api]) => [api, wire]),
 );
 
-export function wireEntitiesToApi(entities?: WireTextEntity[]): ApiMessageEntity[] | undefined {
+// P-44: text_url — только http(s)/mailto; `javascript:`/`tg:`/data: и прочие
+// схемы из чужого сообщения не должны становиться кликабельными
+const SAFE_URL_SCHEME = /^(https?:|mailto:)/i;
+export function isSafeEntityUrl(url?: string) {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return SAFE_URL_SCHEME.test(trimmed) && !/[\u0000-\u001f\s]/.test(trimmed);
+}
+
+// `textLength` — длина текста сообщения: offset/length из чужого сообщения
+// обрезаются под него (иначе битые диапазоны ломали рендер).
+export function wireEntitiesToApi(entities?: WireTextEntity[], textLength?: number): ApiMessageEntity[] | undefined {
   if (!entities?.length) return undefined;
   const result: ApiMessageEntity[] = [];
-  entities.forEach((e) => {
-    const type = WIRE_TO_API[e.type];
+  entities.slice(0, 200).forEach((raw) => {
+    const type = WIRE_TO_API[raw.type];
     if (!type) return;
+    const offset = Math.max(0, Math.floor(Number(raw.offset) || 0));
+    let length = Math.max(0, Math.floor(Number(raw.length) || 0));
+    if (textLength !== undefined) {
+      if (offset >= textLength) return;
+      length = Math.min(length, textLength - offset);
+    }
+    if (!length) return;
+    const e = { ...raw, offset, length };
     if (type === ApiMessageEntityTypes.TextUrl) {
-      result.push({ type, offset: e.offset, length: e.length, url: e.data || '' });
+      if (!isSafeEntityUrl(e.data)) return;
+      result.push({ type, offset: e.offset, length: e.length, url: (e.data || '').trim() });
     } else if (type === ApiMessageEntityTypes.CustomEmoji) {
       result.push({
         type, offset: e.offset, length: e.length, documentId: e.data || '',

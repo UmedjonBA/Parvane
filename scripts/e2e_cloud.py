@@ -11,7 +11,9 @@
 Требует запущенные nats + identity + cloud (их поднимает run_all_tests.sh)."""
 import base64, json, subprocess, sys, time, uuid
 
-NATS = "/home/ub/.local/bin/nats"
+import os, shutil
+# nats CLI: из PATH или ~/.local/bin (раньше был захардкожен путь одного разработчика)
+NATS = shutil.which("nats") or os.path.expanduser("~/.local/bin/nats")
 
 
 def req(topic, payload, timeout="3s"):
@@ -22,8 +24,18 @@ def req(topic, payload, timeout="3s"):
     return p.stdout.strip()
 
 
+PASSWORD = "e2e-Test-pass-2026"  # политика паролей (P-43): не короче 8 символов
+
 def issue(user):
-    r = json.loads(req("identity.token.issue", {"user": user, "password": "test"}))
+    """Логин; если пользователя нет — регистрирует (dev-режим без подтверждения)."""
+    r = json.loads(req("identity.token.issue", {"user": user, "password": PASSWORD}))
+    if not r.get("ok"):
+        registered = json.loads(req("identity.user.register", {
+            "user": user, "password": PASSWORD, "invite": "",
+        }))
+        if not registered.get("ok") and "существ" not in registered.get("error", ""):
+            raise RuntimeError(f"register {user} failed: {registered}")
+        r = json.loads(req("identity.token.issue", {"user": user, "password": PASSWORD}))
     if not (r.get("ok") and r.get("token")):
         raise RuntimeError(f"issue {user} failed: {r}")
     return r["token"]
