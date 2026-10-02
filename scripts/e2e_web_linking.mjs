@@ -85,6 +85,9 @@ async function openGroupChat(page, title) {
   const item = page.locator('#LeftColumn .ListItem').filter({ hasText: title }).first();
   await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await item.locator('.ListItem-button').click();
+  // Композер предыдущего чата уже в DOM: без ожидания шапки ввод уходил в него
+  await page.locator('.MiddleHeader').getByText(title).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 

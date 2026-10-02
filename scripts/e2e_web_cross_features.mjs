@@ -22,6 +22,7 @@ import {
   openPrivateChatStrict,
   preparePage,
   relogin,
+  terminateSessionWithPassword,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-xfeat-e2e-password';
@@ -170,10 +171,7 @@ try {
   const desktopSession = sessionsScreen.locator('.ListItem').filter({ hasText: /Web |Desktop/ }).first();
   await desktopSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const logBeforeRevoke = readDesktopLog(desktopWorkdir).length;
-  await desktopSession.locator('.ListItem-button').click();
-  const terminateButton = bobWeb.page.getByRole('button', { name: 'Terminate Session' });
-  await terminateButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await terminateButton.click();
+  await terminateSessionWithPassword(bobWeb.page, desktopSession, PASSWORD);
   await sessionsScreen.getByText('Active sessions').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   await relogin(bobWeb.page, PASSWORD);
 

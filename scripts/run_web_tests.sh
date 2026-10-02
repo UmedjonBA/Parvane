@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+# CSP (P-32): сборка для e2e ходит в локальный gateway — только loopback
+export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://localhost:*}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_ROOT="$ROOT/web/telegram-tt"

@@ -207,7 +207,12 @@ try {
   await aliceSession.page.locator('#LeftColumn').hover();
   await aliceSession.page.getByRole('button', { name: 'New Message' }).click();
   await aliceSession.page.getByRole('menuitem', { name: 'New Channel' }).click();
-  // Шаг 1: выбор подписчиков, floating-стрелка — далее
+  // Шаг 1: выбор подписчиков, floating-стрелка — далее. Пикер, как в Telegram,
+  // показывает контакты; bob — участник удалённой группы без личной переписки,
+  // его находят поиском (как в «New Group», см. createGroupViaUi)
+  const channelSearch = aliceSession.page.locator('#new-group-picker-search');
+  await channelSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await channelSearch.fill(bobName);
   await selectPickerRow(aliceSession.page, '#LeftColumn', bobName);
   await aliceSession.page.locator('#LeftColumn .FloatingActionButton').click();
   // Шаг 2: имя канала (label tt не связан с input — берём поле напрямую),

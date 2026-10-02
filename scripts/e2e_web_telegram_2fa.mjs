@@ -1,9 +1,12 @@
 // Двухфакторный вход через Telegram (по желанию, Settings → Privacy):
-// регистрация с подтверждением ботом (tg 1001) → включаем 2FA → выход →
-// вход по паролю ведёт на экран «Подтвердите вход» с deep link → чужой
-// Telegram (1002) отклонён → привязанный (1001) подтверждает → вход; reload
-// на том же устройстве — без Telegram (доверенное устройство); новый браузер
-// (другое устройство) — снова подтверждение; выключение 2FA — обычный вход.
+// регистрация с подтверждением ботом (tg 2001) → включаем 2FA → устройство
+// получает секрет доверия (в шифрованном хранилище, НЕ в localStorage — P-14)
+// и входит по паролю без Telegram; без секрета тот же device_id не доверенный:
+// экран «Подтвердите вход» с deep link → чужой Telegram (2002) отклонён →
+// привязанный (2001) подтверждает → вход, секрет выдан заново; полный выход
+// стирает хранилище устройства вместе с секретом — снова подтверждение; новый
+// браузер (другое устройство) — подтверждение; выключение 2FA требует текущий
+// пароль (P-07), после него — обычный вход.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -85,12 +88,74 @@ async function waitTelegramScreen(page, expectedTitle) {
 
 const signedIn = (page) => page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-async function loginWithPassword(page, nick) {
-  await submitNick(page, nick);
+async function enterPassword(page) {
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
   await passwordScreen.getByRole('button', { name: 'Next' }).click();
+}
+
+async function loginWithPassword(page, nick) {
+  await submitNick(page, nick);
+  await enterPassword(page);
+}
+
+// Шифрованное хранилище устройства (`secureStorage.ts`): IndexedDB
+// `parvane-e2e-v2` / `secure-state`, именованные записи `rec:<адрес>:<имя>`.
+// Значения — шифртекст под non-extractable ключом; сценарию достаточно знать,
+// есть ли запись, и уметь её удалить
+const secureRecordKey = (address, name) => `rec:${address}:${name}`;
+
+function hasSecureRecord(page, address, name) {
+  return page.evaluate((key) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('parvane-e2e-v2');
+    // Базы ещё нет — не создаём пустую (приложение ждёт в ней своё хранилище)
+    open.onupgradeneeded = () => open.transaction.abort();
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const request = open.result.transaction('secure-state').objectStore('secure-state').get(key);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        open.result.close();
+        resolve(request.result !== undefined);
+      };
+    };
+  }), secureRecordKey(address, name));
+}
+
+async function waitSecureRecord(page, address, name, message) {
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  while (!(await hasSecureRecord(page, address, name))) {
+    assert(Date.now() < deadline, message);
+    await page.waitForTimeout(200);
+  }
+}
+
+function dropSecureRecords(page, address, names) {
+  return page.evaluate((keys) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('parvane-e2e-v2');
+    // Базы ещё нет — не создаём пустую (приложение ждёт в ней своё хранилище)
+    open.onupgradeneeded = () => open.transaction.abort();
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction('secure-state', 'readwrite');
+      keys.forEach((key) => tx.objectStore('secure-state').delete(key));
+      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => {
+        open.result.close();
+        resolve();
+      };
+    };
+  }), names.map((name) => secureRecordKey(address, name)));
+}
+
+// Вход по паролю на том же устройстве: сохранённый JWT сессии («keep me signed
+// in») убран, поэтому reload ведёт на экран пароля — как после суток без
+// активности. Ключи E2E и (если не указано иное) секрет доверия остаются
+async function reloadToPasswordLogin(page, address, { dropTrustSecret = false } = {}) {
+  await dropSecureRecords(page, address, dropTrustSecret ? ['session-token', 'trust-secret'] : ['session-token']);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await enterPassword(page);
 }
 
 async function openPrivacySettings(page) {
@@ -102,23 +167,62 @@ async function openPrivacySettings(page) {
   return toggle;
 }
 
-async function setTwoFactor(page, enabled) {
+const waitToggle = async (page, toggle, enabled) => page.waitForFunction(
+  ([el, want]) => el && !el.disabled && el.checked === want,
+  [await toggle.elementHandle(), enabled],
+  { timeout: LOGIN_TIMEOUT_MS },
+);
+
+async function enableTwoFactor(page) {
   const toggle = await openPrivacySettings(page);
   // состояние подтягивается с сервера — ждём, пока чекбокс станет активным
   await page.waitForFunction((el) => el && !el.disabled, await toggle.elementHandle(), { timeout: LOGIN_TIMEOUT_MS });
-  if ((await toggle.isChecked()) !== enabled) {
+  if (!(await toggle.isChecked())) {
     await toggle.click({ force: true });
-    await page.waitForFunction(
-      ([el, want]) => el && el.checked === want, [await toggle.elementHandle(), enabled], { timeout: LOGIN_TIMEOUT_MS },
-    );
+    await waitToggle(page, toggle, true);
   }
-  await page.waitForTimeout(1000);
+}
+
+// Настройка 2FA на сервере (identity.twofa по JWT сессии) — источник истины:
+// нативный чекбокс после клика снимается в DOM сам, ещё до подтверждения
+function serverTwoFactor(page) {
+  return page.evaluate(async () => (await window.__parvaneDiagCallApi('parvaneFetchTwoFactor'))?.enabled);
+}
+
+// P-07: выключение 2FA — только с текущим паролем (украденный JWT второй
+// фактор не снимает). Неверный пароль отклоняется, настройка остаётся
+async function disableTwoFactor(page) {
+  const toggle = await openPrivacySettings(page);
+  await waitToggle(page, toggle, true);
+  await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
+    timeout: LOGIN_TIMEOUT_MS,
+  });
+  await toggle.click({ force: true });
+  // Поле пароля — то, что рядом с кнопкой выключения: такой же placeholder
+  // у поля «Текущий пароль» в секции смены пароля ниже
+  const confirmButton = page.getByRole('button', { name: 'Disable two-factor', exact: true });
+  const passwordInput = page.locator('.settings-item').filter({ has: confirmButton }).locator('input[type="password"]');
+  await passwordInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await serverTwoFactor(page), true, '2FA выключился без ввода пароля');
+  assert.equal(await confirmButton.isDisabled(), true, 'подтверждение доступно без пароля');
+
+  await passwordInput.fill(`${PASSWORD}-wrong`);
+  await confirmButton.click();
+  await page.locator('.Notification-container').getByText('Could not change the two-factor setting').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await serverTwoFactor(page), true, '2FA выключился с неверным паролем');
+
+  await passwordInput.fill(PASSWORD);
+  await confirmButton.click();
+  await confirmButton.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await serverTwoFactor(page), false, '2FA не выключился с верным паролем');
 }
 
 const browser = await chromium.launch();
 try {
   const suffix = `${Date.now()}-${process.pid}`;
   const nick = `tfa-${suffix}`;
+  const address = `${nick}@local`;
 
   // ── Регистрация + привязка Telegram (владелец 2001) ──
   const ctx1 = await browser.newContext();
@@ -133,26 +237,27 @@ try {
   await signedIn(s1.page);
 
   // ── Включаем 2FA в Settings → Privacy ──
-  await setTwoFactor(s1.page, true);
+  await enableTwoFactor(s1.page);
   console.log('OK: двухфакторный вход включён в настройках');
 
-  // ── Устройство, включившее 2FA, получило секрет доверия: после выхода
-  // входит по паролю без Telegram (как и десктоп) ──
-  await logOut(s1.page);
-  await loginWithPassword(s1.page, nick);
+  // ── Устройство, включившее 2FA, получило секрет доверия — в шифрованное
+  // хранилище, а не в localStorage (P-14) ──
+  const trustMirrors = () => s1.page.evaluate(
+    () => Object.keys(localStorage).filter((key) => key.startsWith('parvane:trust:')),
+  );
+  await waitSecureRecord(s1.page, address, 'trust-secret', 'секрет доверия не сохранён в шифрованном хранилище');
+  assert.deepEqual(await trustMirrors(), [], 'секрет доверия лежит в localStorage открытым текстом');
+
+  // …и входит по паролю без Telegram (как и десктоп)
+  await reloadToPasswordLogin(s1.page, address);
   await signedIn(s1.page);
   assert.equal(await s1.page.locator('#auth-telegram-form').count(), 0);
-  // После повторного входа — список чатов, а не экран Settings, с которого вышли
-  await s1.page.getByRole('button', { name: 'Open menu' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  console.log('OK: устройство, включившее 2FA, входит без повторного подтверждения (на список чатов)');
+  assert.deepEqual(await trustMirrors(), [], 'секрет доверия попал в localStorage после входа');
+  console.log('OK: устройство, включившее 2FA, входит по паролю без повторного подтверждения');
 
   // ── Без секрета доверия голый device_id НЕ доверенный (device_id публичен):
-  // стираем только секрет, зеркало device_id остаётся → подтверждение ──
-  await logOut(s1.page);
-  await s1.page.evaluate(() => {
-    Object.keys(localStorage).filter((k) => k.startsWith('parvane:trust:')).forEach((k) => localStorage.removeItem(k));
-  });
-  await loginWithPassword(s1.page, nick);
+  // стираем только секрет, device_id и ключи остаются → подтверждение ──
+  await reloadToPasswordLogin(s1.page, address, { dropTrustSecret: true });
   const { telegramScreen, token: loginToken } = await waitTelegramScreen(s1.page, 'Confirm sign-in');
   assert.notEqual(loginToken, regToken);
   assert.equal(await s1.page.locator('#LeftColumn').count(), 0, 'без подтверждения входа быть не должно');
@@ -167,12 +272,27 @@ try {
   await signedIn(s1.page);
   console.log('OK: без секрета device_id не доверяется; вход подтверждён только привязанным Telegram');
 
-  // ── То же устройство: reload без Telegram (секрет выдан заново) ──
-  await s1.page.waitForTimeout(1500);
-  await s1.page.reload({ waitUntil: 'domcontentloaded' });
+  // ── То же устройство: вход по паролю без Telegram (секрет выдан заново) ──
+  await waitSecureRecord(s1.page, address, 'trust-secret',
+    'после подтверждения в Telegram секрет доверия не выдан заново');
+  await reloadToPasswordLogin(s1.page, address);
   await signedIn(s1.page);
   assert.equal(await s1.page.locator('#auth-telegram-form').count(), 0);
   console.log('OK: доверенное устройство входит без повторного подтверждения');
+
+  // ── Полный выход стирает хранилище устройства вместе с секретом доверия:
+  // следующий вход на нём снова требует Telegram ──
+  await logOut(s1.page);
+  assert.equal(await hasSecureRecord(s1.page, address, 'trust-secret'), false,
+    'секрет доверия пережил полный выход');
+  await loginWithPassword(s1.page, nick);
+  const { token: reloginToken } = await waitTelegramScreen(s1.page, 'Confirm sign-in');
+  assert.equal(await s1.page.locator('#LeftColumn').count(), 0, 'после выхода вход прошёл без подтверждения');
+  assert.equal((await botConfirm(reloginToken, TG_OWNER)).ok, true);
+  await signedIn(s1.page);
+  // После повторного входа — список чатов, а не экран Settings, с которого вышли
+  await s1.page.getByRole('button', { name: 'Open menu' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: после полного выхода вход снова подтверждается в Telegram (на список чатов)');
 
   // ── Новое устройство (другой контекст): снова подтверждение ──
   const ctx2 = await browser.newContext();
@@ -183,8 +303,9 @@ try {
   await signedIn(s2.page);
   console.log('OK: новое устройство подтверждает вход заново');
 
-  // ── Выключаем 2FA — вход без Telegram на третьем устройстве ──
-  await setTwoFactor(s2.page, false);
+  // ── Выключаем 2FA (с паролем) — вход без Telegram на третьем устройстве ──
+  await disableTwoFactor(s2.page);
+  console.log('OK: выключение 2FA требует текущий пароль');
   const ctx3 = await browser.newContext();
   const s3 = await openStartPage(ctx3);
   await loginWithPassword(s3.page, nick);

@@ -142,15 +142,14 @@ try {
   const right = bobWeb.page.locator('#RightColumn');
   await right.getByText(bio, { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: web-bob видит bio с десктопа');
-  const phoneDigits = phone.replace(/\D/g, '');
-  await bobWeb.page.waitForFunction(
-    ([sel, digits]) => (document.querySelector(sel)?.textContent || '').replace(/\D/g, '').includes(digits),
-    ['#RightColumn', phoneDigits],
-    { timeout: LOGIN_TIMEOUT_MS },
-  );
-  console.log('OK: web-bob видит телефон с десктопа');
   await right.getByText(groupTitle, { exact: true }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: web-bob видит личный канал alice (секция Channel)');
+  // P-19: телефон каталог отдаёт только владельцу. Bio и личный канал уже
+  // доехали — значит, и телефон доехал бы, будь он отдан
+  const phoneDigits = phone.replace(/\D/g, '');
+  const rightDigits = ((await right.textContent()) || '').replace(/\D/g, '');
+  assert(!rightDigits.includes(phoneDigits), 'web-bob видит телефон alice (P-19: только владельцу)');
+  console.log('OK: телефон alice web-bob не виден');
 
   const aliceNick = alice.split('@')[0];
   const nameColor = await bobWeb.page.evaluate((nick) => {
@@ -192,11 +191,14 @@ try {
   await waitDesktopLog(desktopWorkdir, /E2E-устройство готово/, 90000, desktop);
   await openPrivateChatStrict(bobWeb.page, alice);
   await sendText(bobWeb.page, `after-profile-${suffix}`);
+  // Телефон bob десктоп-alice не получает (P-19) — в маркере поле пустое
   const bobProfileLine = new RegExp(
-    `профиль ${esc(bob)}: bio=${esc(bobBio)} phone=${esc(bobPhone)} color=2 channel=${esc(groupId)}`,
+    `профиль ${esc(bob)}: bio=${esc(bobBio)} phone= color=2 channel=${esc(groupId)}`,
   );
   await waitDesktopLog(desktopWorkdir, bobProfileLine, 90000, desktop);
-  console.log('OK: desktop видит bio, телефон, цвет и личный канал, заданные в вебе');
+  assert(!new RegExp(`профиль ${esc(bob)}: .*phone=${esc(bobPhone)}`).test(readDesktopLog(desktopWorkdir)),
+    'desktop-alice получила телефон bob (P-19: только владельцу)');
+  console.log('OK: desktop видит bio, цвет и личный канал, заданные в вебе; телефон ему не отдан');
 
   console.log('OK: кросс-клиентский профиль desktop → web и web → desktop');
 } finally {

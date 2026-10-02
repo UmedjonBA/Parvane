@@ -60,9 +60,21 @@ try {
   await page.getByRole('button', { name: 'Create New Contact' }).click();
   const nickInput = page.getByLabel('Nickname').last();
   await nickInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await nickInput.fill(nick(bob));
-  await page.getByLabel('First name (required)').last().fill('Bob');
-  await page.getByRole('button', { name: 'Done' }).last().click();
+  // Модалка при открытии сбрасывает поля эффектом — ввод, попавший в тот же
+  // кадр, стирается, и «Done» остаётся выключенной. Вводим, пока форма не
+  // примет оба значения (кнопка включилась)
+  const firstNameInput = page.getByLabel('First name (required)').last();
+  const doneButton = page.getByRole('button', { name: 'Done' }).last();
+  const formDeadline = Date.now() + LOGIN_TIMEOUT_MS;
+  for (;;) {
+    await nickInput.fill(nick(bob));
+    await firstNameInput.fill('Bob');
+    const isReady = await doneButton.isEnabled({ timeout: 2000 }).catch(() => false);
+    if (isReady && await nickInput.inputValue() === nick(bob) && await firstNameInput.inputValue() === 'Bob') break;
+    assert(Date.now() < formDeadline, 'new contact form never accepted the nickname and the first name');
+    await page.waitForTimeout(300);
+  }
+  await doneButton.click();
   await nickInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   // importContact открывает чат с добавленным; экран контактов остаётся открыт
   await page.locator('#MiddleColumn').getByText(nick(bob)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

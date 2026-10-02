@@ -91,6 +91,7 @@
       "tileTopic": "preview.map.tile",
       "tileSize": 256,
       "defaultZoom": 16,
+      "maxZoom": 15,
       "forbiddenHosts": [
         "tile.openstreetmap.org",
         "tile.osm.org",
@@ -566,6 +567,12 @@
       "exportContainsPrivateAccount": false,
       "transferStatement": "link-transfer:<user>:<old_signing_key>:<new_signing_key>",
       "acceptsLegacyOffers": false,
+      "v2Grant": {
+        "boxField": "v2",
+        "boxCoords": ["file_id", "file_key", "file_nonce"],
+        "materialKeys": ["dk", "gen", "log", "sk", "skv", "ssk"],
+        "secondDeviceCreatesRoot": false
+      },
       "vectors": {
         "newPubB64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         "oldPubB64": "BAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
@@ -626,6 +633,167 @@
         "nonce": "12 x 0x02",
         "plaintext": "parvane blob v1",
         "ciphertextB64": "d7e7Pys5pN2xoNOqfNHzVpFQwpooOo/gVIDan1UXaA=="
+      }
+    },
+    {
+      "id": "STATE-1",
+      "title": "Личное состояние сводится детерминированно: LWW по (lamport, device_id, op_id, sha256(операции)), итог не зависит от порядка и повторов",
+      "journal": "state.append / state.sync (шифртекст; сервер не читает)",
+      "record": "aead_ciphertext = nonce(12) | ChaCha20-Poly1305(StateOp)",
+      "aad": "\"parvane/v2/state\\0\" | user | op_id(16)",
+      "stampOrder": [
+        "lamport",
+        "device_id",
+        "op_id",
+        "sha256(StateOp)"
+      ],
+      "tombstones": true,
+      "scheduledSentSticky": true,
+      "scheduledSendOpId": "op_id отложенного = op_id отправляемого сообщения; устройство отправляет op_id не более одного раза (SendGuard), затем пишет scheduled_sent",
+      "maxLamport": 9007199254740991,
+      "rejectedOpsLeaveStateUnchanged": true,
+      "engine": "backend/protocol/src/state.rs (PersonalState, seal_op/open_record, claim_due, migrate_snapshot)",
+      "vectors": "proto/parvane/vectors/state/ (merge.json — STATE-1: ops_hex + orders (перестановки, повторы) → одинаковые snapshot/rejected/max_lamport; aead.json, scheduled.json, migration.json)",
+      "engineTest": "backend/protocol/tests/state_vectors.rs",
+      "vectorCases": [
+        "ничья лампорта → больший device_id",
+        "ничья (lamport, device_id) → больший op_id; одинаковый op_id с разным содержимым → больший sha256",
+        "удаление — надгробие с меткой; надгробие раньше записи; воскрешение большей меткой",
+        "scheduled_sent необратим и сильнее любой метки",
+        "повторы записей идемпотентны",
+        "некорректные операции отвергаются одинаково при любом порядке; неизвестный вид — пропуск"
+      ],
+      "server": {
+        "shard": "messenger (backend/shards/messenger/src/v2_state.rs, журнал user_state_log в <PARVANE_DB_PATH>-v2.db)",
+        "seq": "на пользователя, монотонный, не переиспользуется; общий для всех устройств пользователя",
+        "retrySameOpId": "тот же op_id и тот же шифртекст → тот же seq (повтор после обрыва безопасен)",
+        "conflictingOpId": "тот же op_id с другим шифртекстом → DUPLICATE",
+        "limits": "запись ≤ 262144 байт и ≥ 28 (nonce+тег); на пользователя PARVANE_STATE_MAX_RECORDS (100000) и PARVANE_STATE_MAX_BYTES (64 МиБ) → LIMIT",
+        "syncPage": "state.sync {after_seq, max_bytes}: бюджет ≤ 716800, ≤ 1024 записей, хотя бы одна запись; more=true — есть ещё",
+        "cursor": "курсор клиента = seq последней ПРИМЕНЁННОЙ записи (SYNC-1/SYNC-2 через parvane_protocol::sync::Cursor)",
+        "liveTest": "backend/tests/integration/tests/v2_state_live.rs"
+      },
+      "status": "open: движок, сервер и web готовы; правило закрывается, когда векторы merge.json проходят и в desktop, и в android через обвязку движка (T098/T099)",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/stateVectors.test.ts — merge.json через WASM-движок (набор state/merge в backend/protocol/src/conformance.rs, runConformanceVectors); журнал state в клиенте — src/api/parvane/v2/stateJournal.ts (папки, блок-лист, черновики, отложенные, архив/закреп; миграция localState при первом запуске v2)",
+        "desktop": [
+          "desktop/parvane-core/tests/protocol_vectors_tests.cpp — ctest protocol_vectors, набор state/merge (merge.json через C ABI pv_run_conformance_vectors)",
+          "desktop/parvane-core/tests/v2_session_tests.cpp — живой: миграция локальных папок, своя правка, чтение журнала после рестарта (tests/run_v2_session_live.sh)",
+          "desktop/verify_protocol_v2_groups.sh — папка из журнала после потери локального файла; журнал в клиенте — parvane_client.cpp (папки Data::ChatFilters, отложенные g_scheduled)"
+        ],
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt (state/merge через JNI → C ABI движка) + StateJournalTest.kt (папки/блок-лист/черновики/архив/отложенные ↔ StateSnapshot); журнал в шве — StateJournal.kt + Client.kt"
+      }
+    },
+    {
+      "id": "SEAL-1",
+      "title": "Скрытый отправитель: sealed-конверт вскрывает только адресат",
+      "hpke": "RFC 9180 base, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305",
+      "info": "\"parvane/v2/sealed\\0\" | address | \"\\0\" | device_id",
+      "l2Buckets": [
+        512,
+        2048,
+        8192,
+        32768
+      ],
+      "onePerRecipient": true,
+      "vectors": "proto/parvane/vectors/seal/sealed.json",
+      "engineSuite": "seal/sealed",
+      "engineTest": "backend/protocol/tests/vectors_seal.rs",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts",
+        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt"
+      }
+    },
+    {
+      "id": "GSEAL-1",
+      "title": "Групповой конверт эпохи: AEAD на ключе конверта, подпись ключом отправки эпохи, рассылка всем",
+      "nonceBytes": 16,
+      "serverErrors": {
+        "staleEpoch": "Expired",
+        "badSignature": "BadSignature",
+        "replayNonce": "Duplicate"
+      },
+      "vectors": "proto/parvane/vectors/seal/group.json",
+      "engineSuite": "seal/group",
+      "engineTest": "backend/protocol/tests/vectors_seal.rs",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts",
+        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt"
+      }
+    },
+    {
+      "id": "CONTENT-1",
+      "title": "Вид содержимого одинаков во всех клиентах: байты, лимиты, показ/заглушка, содержимое UI",
+      "classes": {
+        "message": "сообщение чата: перекладка в содержимое UI совпадает по полям `client.v1`",
+        "mutation": "правка, удаление, реакция, закреп, квитанция — не сообщение",
+        "service": "ключи групп/доставки/состояния/контейнеров, сигналы звонка — в чат не попадают",
+        "stub": "вид, который клиент не умеет показать, пустое содержимое, неизвестный вид или критичное поле — нативная заглушка"
+      },
+      "vectors": "proto/parvane/vectors/content/kinds.json",
+      "engineSuite": "content/kinds",
+      "engineTest": "backend/protocol/tests/vectors_content.rs",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts",
+        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt"
+      }
+    },
+    {
+      "id": "L2-1",
+      "title": "Режим «усиленная приватность»: конверты на сетке, согласование участниками, без typing/presence, виден участникам",
+      "grid": [
+        512,
+        2048,
+        8192,
+        32768
+      ],
+      "gridBeyond": "кратно 32768",
+      "negotiation": {
+        "direct": "режим активен, пока включён хотя бы у одного участника; предпочтение — Content.chat_mode, новее по метке операции, при равных метках выигрывает включение",
+        "group": "политика — запись журнала группы set_privacy_mode, право как у изменения сведений (change_info); chat_mode в группе не действует"
+      },
+      "ephemeral": {
+        "typing": "не слать и не показывать в чате с активным режимом",
+        "presencePeer": "не подписываться и не показывать «в сети» собеседника L2-чата",
+        "presenceOwn": "не публиковать, пока режим активен хотя бы в одном чате"
+      },
+      "uiContent": {
+        "kind": "chat_mode",
+        "l2": "bool"
+      },
+      "vectors": "proto/parvane/vectors/l2/mode.json",
+      "engineSuite": "l2/mode",
+      "engineTest": "backend/protocol/tests/vectors_l2.rs",
+      "serverTest": "backend/tests/integration/tests/v2_l2_live.rs",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts",
+        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt"
+      },
+      "behaviourTests": {
+        "web": "web/telegram-tt/src/api/parvane/l2.test.ts",
+        "desktop": "desktop/parvane-core/tests/v2_tests.cpp",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/L2PrivacySeamTest.kt"
+      }
+    },
+    {
+      "id": "OP-SIG",
+      "title": "Каноничная подпись операций v2",
+      "signingBytes": "\"parvane/v2/op\" | u8(len) | domain | u8(len) | op_type | body",
+      "vectors": "proto/parvane/vectors/sign/ops.json",
+      "engineTest": "backend/protocol/tests/vectors_sign.rs"
+    },
+    {
+      "id": "PROTO-1",
+      "title": "Протокол v2 разбирает только движок; неизвестное — нативная заглушка",
+      "vectors": "proto/parvane/vectors/codec/frames.json",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/conformance.test.ts (PROTO-1)",
+        "desktop": "desktop/parvane-core: разбор только через parvane_protocol.h",
+        "android": "android/jni: разбор только через C ABI движка"
       }
     }
   ]
