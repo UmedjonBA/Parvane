@@ -2,6 +2,8 @@
 // msg.user.> — по факту доставки будит зарегистрированные подписки браузеров.
 // Контента он не видит и не разбирает (sealed sender): payload пуша —
 // генерический «New message». SW клиента сам гасит пуш, если приложение открыто.
+// Протокол v2 (push.wake.*, пустые пробуждения по журналу v2.inbox.>) — в v2.rs
+// и библиотеке (src/wake.rs); v1-путь от него не зависит.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -9,7 +11,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use async_nats::Client;
-use base64::Engine;
 use futures::StreamExt;
 use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use parvane_types::{
@@ -18,8 +19,11 @@ use parvane_types::{
     topics::{IDENTITY_VERIFY, MSG_USER_PREFIX, MSG_USER_WILDCARD, PUSH_REGISTER, PUSH_UNREGISTER, PUSH_VAPID_GET},
 };
 use sqlx::{Row, SqlitePool};
+use push::vapid::*;
 use tracing::{info, warn};
 use web_push_native::{Auth, WebPushBuilder};
+
+mod v2;
 
 /// Не дребезжим: не чаще одного пуша на пользователя за интервал.
 const PUSH_COOLDOWN_SECS: u64 = 30;
@@ -59,8 +63,10 @@ async fn main() -> Result<()> {
     let mut inbox_sub = nc.subscribe(MSG_USER_WILDCARD).await?;
     info!("Push шард запущен. Слушаю: {}/{}/{} + {}", PUSH_VAPID_GET, PUSH_REGISTER, PUSH_UNREGISTER, MSG_USER_WILDCARD);
 
-    let push_client = Arc::new(build_http_client()?);
     let vapid = Arc::new(vapid);
+    // Протокол v2 (spec 007 US6): push.wake.* и пробуждения по v2.inbox.>.
+    let v2_pool = v2::open_store(&db_path).await?;
+    v2::run(nc.clone(), v2_pool, vapid.clone()).await?;
     let last_push_at: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // 4.5/P-17: отправка web-push (внешние POST) — в tokio::spawn под семафором,
@@ -82,8 +88,8 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move { let _p = permit; handle_unregister(&nc2, &pool2, msg).await });
             }
             Some(msg) = inbox_sub.next() => {
-                let (pool2, client2, vapid2, last2) = (pool.clone(), push_client.clone(), vapid.clone(), last_push_at.clone());
-                tokio::spawn(async move { let _p = permit; handle_inbox(&pool2, &client2, &vapid2, &last2, msg).await });
+                let (pool2, vapid2, last2) = (pool.clone(), vapid.clone(), last_push_at.clone());
+                tokio::spawn(async move { let _p = permit; handle_inbox(&pool2, &vapid2, &last2, msg).await });
             }
         }
     }
@@ -102,61 +108,26 @@ fn max_subscriptions_per_user() -> i64 {
 }
 
 /// P-17: endpoint web-push — только https:// на публичный хост: без userinfo,
-/// не IP-литерал приватного/loopback/link-local диапазона, не localhost.
-/// (DNS-rebinding после проверки остаётся вне модели — push-сервисы браузеров
-/// это публичные HTTPS-хосты.)
+/// не IP-литерал непубличного диапазона, не localhost/однословное имя.
+/// Фильтр — общий parvane-netguard (T106), порт любой.
 fn endpoint_is_public_https(endpoint: &str) -> bool {
-    let Ok(url) = url::Url::parse(endpoint) else { return false };
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-        return false;
-    }
-    let Some(host) = url.host_str() else { return false };
-    let host = host.trim_matches(|c| c == '[' || c == ']');
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") || host.ends_with(".local") || !host.contains('.') && host.parse::<std::net::IpAddr>().is_err() {
-        return false;
-    }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return ip_is_public(&ip);
-    }
-    true
-}
-
-fn ip_is_public(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
-                || v4.is_broadcast() || v4.is_documentation() || v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
-                || v4.octets()[0] == 0 || v4.octets()[0] >= 224)
-        }
-        std::net::IpAddr::V6(v6) => {
-            !(v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 || v6.to_ipv4_mapped().is_some_and(|v4| !ip_is_public(&std::net::IpAddr::V4(v4))))
-        }
-    }
+    parvane_netguard::check_url(endpoint, &parvane_netguard::UrlPolicy::HTTPS).is_ok()
 }
 
 /// P-17: резолв хоста endpoint'а при регистрации — все адреса обязаны быть
 /// публичными (SSRF во внутреннюю сеть через подписку).
 async fn endpoint_resolves_public(endpoint: &str) -> bool {
     let Ok(parsed) = url::Url::parse(endpoint) else { return false };
-    let Some(host) = parsed.host_str().map(str::to_string) else { return false };
-    if host.parse::<std::net::IpAddr>().is_ok() {
-        return true; // литерал уже проверен endpoint_is_public_https
-    }
-    let port = parsed.port_or_known_default().unwrap_or(443);
-    drop(parsed);
-    match tokio::time::timeout(Duration::from_secs(5), tokio::net::lookup_host((host, port))).await {
-        Ok(Ok(addrs)) => {
-            let addrs: Vec<_> = addrs.collect();
-            !addrs.is_empty() && addrs.iter().all(|a| ip_is_public(&a.ip()))
-        }
-        _ => false,
-    }
+    parvane_netguard::resolve_url(&parsed).await.is_ok()
 }
 
-struct VapidKeys {
-    private_pem: String,
-    public_b64url: String,
+/// Клиент для одного POST на push-сервис: endpoint перепроверяется общим
+/// фильтром, адреса хоста резолвятся заново и фиксируются (анти-rebinding
+/// между регистрацией и отправкой).
+async fn pinned_push_client(endpoint: &str) -> Result<reqwest::Client> {
+    let parsed = parvane_netguard::check_url(endpoint, &parvane_netguard::UrlPolicy::HTTPS)?;
+    let (host, addrs) = parvane_netguard::resolve_url(&parsed).await?;
+    build_http_client(parvane_netguard::pinned_client_builder(&host, &addrs))
 }
 
 /// P-11: приватный VAPID-ключ живёт в файле PARVANE_VAPID_KEY_FILE (PKCS#8 PEM,
@@ -191,15 +162,6 @@ fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
-}
-
-fn vapid_from_pem(private_pem: &str) -> Result<VapidKeys> {
-    use p256::pkcs8::DecodePrivateKey;
-    let secret = p256::SecretKey::from_pkcs8_pem(private_pem)
-        .map_err(|e| anyhow::anyhow!("VAPID PEM: {e}"))?;
-    let public_point = secret.public_key().to_sec1_bytes();
-    let public_b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_point);
-    Ok(VapidKeys { private_pem: private_pem.to_string(), public_b64url })
 }
 
 async fn ensure_vapid_keys(pool: &SqlitePool, db_path: &str) -> Result<VapidKeys> {
@@ -368,7 +330,6 @@ async fn handle_unregister(nc: &Client, pool: &SqlitePool, msg: async_nats::Mess
 
 async fn handle_inbox(
     pool: &SqlitePool,
-    push_client: &reqwest::Client,
     vapid: &VapidKeys,
     last_push_at: &Mutex<HashMap<String, Instant>>,
     msg: async_nats::Message,
@@ -429,6 +390,13 @@ async fn handle_inbox(
             }
         };
 
+        let push_client = match pinned_push_client(&endpoint).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("endpoint подписки {} отклонён фильтром: {}", user, e);
+                continue;
+            }
+        };
         match push_client.execute(request).await {
             Ok(resp) if resp.status().is_success() => info!("push отправлен: {}", user),
             Ok(resp)
@@ -448,12 +416,11 @@ async fn handle_inbox(
     }
 }
 
-/// P-51: HTTP-клиент для push-сервисов: rustls, без редиректов (endpoint уже
-/// проверен на публичный https — редирект не должен увести на внутренний адрес),
+/// P-51: HTTP-клиент для push-сервисов: rustls, без редиректов и без прокси
+/// (база — parvane-netguard; редирект не должен увести на внутренний адрес),
 /// короткий таймаут, чтобы медленный push-сервис не держал воркер.
-fn build_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+    builder
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
         .user_agent("parvane-push/0.1")
@@ -463,61 +430,6 @@ fn build_http_client() -> Result<reqwest::Client> {
 
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
-/// Срок действия VAPID-JWT (RFC 8292 §2: не более 24 ч).
-const VAPID_JWT_TTL_SECS: u64 = 12 * 60 * 60;
-/// Контакт оператора в claim `sub` (RFC 8292 §2.1).
-const VAPID_SUBJECT: &str = "mailto:admin@parvane.local";
-
-fn b64url(bytes: &[u8]) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-/// base64url с паддингом или без (браузеры отдают `p256dh`/`auth` по-разному).
-fn b64url_decode(s: &str) -> Result<Vec<u8>> {
-    let trimmed = s.trim_end_matches('=');
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(trimmed)
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(trimmed))
-        .map_err(|e| anyhow::anyhow!("base64url: {e}"))
-}
-
-/// `aud` для VAPID: только scheme://host[:port] endpoint'а (RFC 8292 §2).
-fn vapid_audience(endpoint: &url::Url) -> Result<String> {
-    let host = endpoint.host_str().context("endpoint без host")?;
-    Ok(match endpoint.port() {
-        Some(port) => format!("{}://{}:{}", endpoint.scheme(), host, port),
-        None => format!("{}://{}", endpoint.scheme(), host),
-    })
-}
-
-/// ES256-JWT для VAPID: header `{"typ":"JWT","alg":"ES256"}`, подпись r||s (64 байта),
-/// собранный руками поверх p256 — без jwt-simple/rsa.
-fn vapid_jwt(vapid: &VapidKeys, audience: &str, now: u64) -> Result<String> {
-    use p256::ecdsa::signature::Signer;
-    use p256::pkcs8::DecodePrivateKey;
-
-    let secret = p256::SecretKey::from_pkcs8_pem(&vapid.private_pem)
-        .map_err(|e| anyhow::anyhow!("VAPID PEM: {e}"))?;
-    let signing_key = p256::ecdsa::SigningKey::from(&secret);
-
-    let header = b64url(br#"{"typ":"JWT","alg":"ES256"}"#);
-    let claims = serde_json::json!({
-        "aud": audience,
-        "exp": now + VAPID_JWT_TTL_SECS,
-        "sub": VAPID_SUBJECT,
-    });
-    let claims = b64url(serde_json::to_string(&claims)?.as_bytes());
-    let signing_input = format!("{header}.{claims}");
-    let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
-    Ok(format!("{signing_input}.{}", b64url(&signature.to_bytes())))
-}
-
-/// Заголовок `Authorization: vapid t=<jwt>, k=<публичный ключ>` (RFC 8292 §3).
-fn vapid_authorization(vapid: &VapidKeys, endpoint: &url::Url, now: u64) -> Result<String> {
-    let jwt = vapid_jwt(vapid, &vapid_audience(endpoint)?, now)?;
-    Ok(format!("vapid t={}, k={}", jwt, vapid.public_b64url))
 }
 
 /// Ключи подписки браузера: `p256dh` — несжатая точка P-256 (65 байт), `auth` — 16 байт.
@@ -560,6 +472,7 @@ fn build_push_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use sqlx::sqlite::SqlitePoolOptions;
 
     // P-17: endpoint — только публичный https без userinfo и приватных IP
@@ -588,6 +501,30 @@ mod tests {
             assert!(!endpoint_is_public_https(bad), "{bad}");
         }
         assert!(max_subscriptions_per_user() >= 1);
+    }
+
+    /// Класс 14: единый набор адресов netguard через проверку endpoint'а push.
+    #[test]
+    fn netguard_address_set_blocks_push_endpoints() {
+        use parvane_netguard::test_addrs::{ALLOWED, BLOCKED};
+        let url_of = |a: &str| match a.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V6(_)) => format!("https://[{a}]/push"),
+            _ => format!("https://{a}/push"),
+        };
+        for a in BLOCKED {
+            assert!(!endpoint_is_public_https(&url_of(a)), "{a}");
+        }
+        for a in ALLOWED {
+            assert!(endpoint_is_public_https(&url_of(a)), "{a}");
+        }
+    }
+
+    #[tokio::test]
+    async fn send_path_rechecks_endpoint() {
+        assert!(pinned_push_client("https://127.0.0.1/push").await.is_err());
+        assert!(pinned_push_client("https://[::1]/push").await.is_err());
+        assert!(pinned_push_client("http://8.8.8.8/push").await.is_err());
+        assert!(pinned_push_client("https://8.8.8.8/push").await.is_ok());
     }
 
     fn test_vapid() -> VapidKeys {

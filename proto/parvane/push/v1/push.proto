@@ -1,0 +1,72 @@
+// Пробуждение мобильных и web: регистрация канала и пустые пробуждения
+// (без id чата/отправителя/содержимого), не более 1 на устройство за 30 с.
+// Только публичный https, ≤ 8 регистраций на пользователя.
+syntax = "proto3";
+
+package parvane.push.v1;
+
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service WakeService {
+  rpc Describe(DescribeRequest) returns (DescribeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "push.wake.describe"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "push"
+    };
+  }
+  rpc Register(RegisterRequest) returns (RegisterResponse) {
+    option (parvane.core.v2.method) = {
+      name: "push.wake.register"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "push"
+    };
+  }
+  rpc Unregister(UnregisterRequest) returns (UnregisterResponse) {
+    option (parvane.core.v2.method) = {
+      name: "push.wake.unregister"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "push"
+    };
+  }
+}
+
+enum WakeKind {
+  WAKE_KIND_UNSPECIFIED = 0;
+  WAKE_KIND_WEB_PUSH = 1;
+  WAKE_KIND_UNIFIED_PUSH = 2;
+  WAKE_KIND_FCM = 3;
+  WAKE_KIND_APNS = 4;
+}
+
+message WakeRegistration {
+  WakeKind kind = 1;
+  string endpoint = 2 [(parvane.core.v2.max_len) = 2048];
+  // RFC 8291 (web push): ключ и секрет получателя.
+  bytes p256dh = 3 [(parvane.core.v2.max_len) = 65];
+  bytes auth = 4 [(parvane.core.v2.max_len) = 16];
+}
+
+message DescribeRequest {}
+message DescribeResponse {
+  // VAPID-ключ сервера (для web push).
+  bytes vapid_public_key = 1 [(parvane.core.v2.max_len) = 65];
+  repeated WakeKind supported = 2 [(parvane.core.v2.max_items) = 8];
+}
+
+message RegisterRequest {
+  WakeRegistration registration = 1;
+}
+message RegisterResponse {}
+
+message UnregisterRequest {
+  string endpoint = 1 [(parvane.core.v2.max_len) = 2048];
+}
+message UnregisterResponse {}

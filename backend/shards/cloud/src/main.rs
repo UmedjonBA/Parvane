@@ -17,6 +17,8 @@ use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
+mod v2;
+
 // ── main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -50,6 +52,19 @@ async fn main() -> Result<()> {
         .context("подключение к NATS")?;
 
     info!("NATS подключён: {}", nats_url);
+
+    // Протокол v2 (spec 007, T052/T123): методы реестра роли cloud. Блобы —
+    // в общих v1-таблицах (файл из v2 виден v1-клиенту по file_id), новые
+    // данные (capability_hash) — в отдельной `<PARVANE_DB_PATH>-v2.db` со
+    // своими миграциями: откат бинарника на v1 не упирается в миграции.
+    let v2_path = v2::db_path(&db_path);
+    let pool_v2 = parvane_db::connect(&v2_path).await?;
+    sqlx::migrate!("./migrations_v2")
+        .run(&pool_v2)
+        .await
+        .context("миграции v2")?;
+    info!("SQLite v2 готов: {}", v2_path);
+    v2::run(nc.clone(), std::sync::Arc::new(v2::V2Ctx { pool: pool.clone(), pool_v2 })).await?;
 
     let mut chunk_sub = nc.subscribe(FILE_UPLOAD_CHUNK).await?;
     let mut complete_sub = nc.subscribe(FILE_UPLOAD_COMPLETE).await?;
@@ -112,14 +127,14 @@ async fn main() -> Result<()> {
 }
 
 /// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 32).
-fn handler_concurrency() -> usize {
+pub(crate) fn handler_concurrency() -> usize {
     env_usize("PARVANE_HANDLER_CONCURRENCY", 32)
 }
 
 /// P-28: максимум чанков за один download (окно range-стриминга). Целый файл
 /// в 512 МиБ больше не поднимается в память: чанки читаются и отдаются по
 /// одному, а клиент запрашивает окнами.
-fn max_download_chunks() -> u32 {
+pub(crate) fn max_download_chunks() -> u32 {
     env_usize("PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS", 256) as u32
 }
 
@@ -148,7 +163,7 @@ async fn verify_token(nc: &Client, token: &str) -> Result<String> {
 /// Верхняя граница размера одного чанка после декодирования (клиент шлёт по
 /// 192 КиБ). Держим ≤ 700 КиБ: чанк + base64 + JSON при отдаче должен уместиться
 /// в NATS max_payload (P-52). PARVANE_CLOUD_MAX_CHUNK_BYTES.
-fn max_chunk_bytes() -> usize {
+pub(crate) fn max_chunk_bytes() -> usize {
     env_usize("PARVANE_CLOUD_MAX_CHUNK_BYTES", 700 * 1024)
 }
 /// Максимум незавершённых аплоадов на владельца (P-08): без лимита можно занять
@@ -162,16 +177,20 @@ fn upload_ttl_secs() -> i64 {
     env_usize("PARVANE_CLOUD_UPLOAD_TTL_SECS", 24 * 3600) as i64
 }
 /// Верхняя граница размера одного файла. PARVANE_CLOUD_MAX_FILE_BYTES.
-fn max_file_bytes() -> i64 {
+pub(crate) fn max_file_bytes() -> i64 {
     env_usize("PARVANE_CLOUD_MAX_FILE_BYTES", 512 * 1024 * 1024) as i64
 }
 /// Верхняя граница числа чанков в одном файле (против взрывного роста строк).
-fn max_total_chunks() -> u32 {
+pub(crate) fn max_total_chunks() -> u32 {
     env_usize("PARVANE_CLOUD_MAX_TOTAL_CHUNKS", 100_000) as u32
 }
 /// Суммарная квота хранилища на владельца (0 = без лимита).
 /// PARVANE_CLOUD_OWNER_QUOTA_BYTES.
 fn owner_quota_bytes() -> i64 {
+    #[cfg(test)]
+    if let Some(q) = tests::QUOTA_OVERRIDE.with(|c| c.get()) {
+        return q;
+    }
     env_usize("PARVANE_CLOUD_OWNER_QUOTA_BYTES", 4 * 1024 * 1024 * 1024) as i64
 }
 
@@ -181,32 +200,74 @@ fn env_usize(key: &str, default: usize) -> usize {
 
 // ── DB-слой (без NATS — покрыт unit-тестами) ────────────────────────────────────
 
+/// Класс отказа хранилища: v1 отдаёт клиенту текст (как раньше), v2 — код
+/// ошибки. Ошибки SQLite/IO сюда не попадают — они идут как есть и наружу
+/// уходят только как `internal_error` / `UNAVAILABLE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RejectKind {
+    Invalid,
+    Forbidden,
+    NotFound,
+    Limit,
+}
+
+#[derive(Debug)]
+pub(crate) struct Rejected {
+    pub kind: RejectKind,
+    msg: String,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for Rejected {}
+
+fn reject(kind: RejectKind, msg: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(Rejected { kind, msg: msg.into() })
+}
+
 /// Сохранить один чанк файла. Декодирует base64 и пишет BLOB в `chunks`.
 /// Идемпотентно (INSERT OR REPLACE) — повторная доставка чанка безопасна.
 async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> Result<()> {
     if p.total_chunks == 0 || p.chunk_index >= p.total_chunks {
-        anyhow::bail!("некорректный индекс чанка");
+        return Err(reject(RejectKind::Invalid, "некорректный индекс чанка"));
     }
     if p.total_chunks > max_total_chunks() {
-        anyhow::bail!("слишком много чанков (лимит {})", max_total_chunks());
+        return Err(reject(RejectKind::Limit, format!("слишком много чанков (лимит {})", max_total_chunks())));
     }
     let raw = B64.decode(&p.data).context("base64 decode")?;
+    store_chunk_raw(pool, owner, &p.file_id.to_string(), p.chunk_index, p.total_chunks, raw).await
+}
+
+/// Общая часть записи чанка (v1 и v2). `total_chunks` — заявленное число
+/// чанков загрузки; 0 — загрузка v2, где число чанков известно только на
+/// complete (v1 ноль не пропускает, поэтому чужую загрузку не подхватит).
+pub(crate) async fn store_chunk_raw(
+    pool: &SqlitePool,
+    owner: &str,
+    file_id: &str,
+    chunk_index: u32,
+    total_chunks: u32,
+    raw: Vec<u8>,
+) -> Result<()> {
     if raw.len() > max_chunk_bytes() {
-        anyhow::bail!("чанк больше лимита {} байт", max_chunk_bytes());
+        return Err(reject(RejectKind::Limit, format!("чанк больше лимита {} байт", max_chunk_bytes())));
     }
-    let file_id = p.file_id.to_string();
     let mut tx = pool.begin().await?;
     let finalized: Option<(String,)> = sqlx::query_as("SELECT owner FROM files WHERE id = ?")
-        .bind(&file_id)
+        .bind(file_id)
         .fetch_optional(&mut *tx)
         .await?;
     if finalized.is_some() {
-        anyhow::bail!("файл уже завершён");
+        return Err(reject(RejectKind::Invalid, "файл уже завершён"));
     }
     let is_new_upload = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM uploads WHERE file_id = ?",
     )
-    .bind(&file_id)
+    .bind(file_id)
     .fetch_one(&mut *tx)
     .await?
     .0 == 0;
@@ -218,28 +279,28 @@ async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> 
                 .fetch_one(&mut *tx)
                 .await?;
         if pending >= max_pending_uploads() {
-            anyhow::bail!(
-                "слишком много незавершённых загрузок (лимит {})",
-                max_pending_uploads()
-            );
+            return Err(reject(
+                RejectKind::Limit,
+                format!("слишком много незавершённых загрузок (лимит {})", max_pending_uploads()),
+            ));
         }
     }
     sqlx::query(
         "INSERT OR IGNORE INTO uploads (file_id, owner, total_chunks, created_at) VALUES (?, ?, ?, ?)",
     )
-    .bind(&file_id)
+    .bind(file_id)
     .bind(owner)
-    .bind(p.total_chunks)
+    .bind(total_chunks)
     .bind(now_unix())
     .execute(&mut *tx)
     .await?;
     let claim: (String, i64) =
         sqlx::query_as("SELECT owner, total_chunks FROM uploads WHERE file_id = ?")
-            .bind(&file_id)
+            .bind(file_id)
             .fetch_one(&mut *tx)
             .await?;
-    if claim.0 != owner || claim.1 != i64::from(p.total_chunks) {
-        anyhow::bail!("file_id принадлежит другому upload");
+    if claim.0 != owner || claim.1 != i64::from(total_chunks) {
+        return Err(reject(RejectKind::Forbidden, "file_id принадлежит другому upload"));
     }
     // P-08: незавершённые чанки тоже считаем в квоту владельца — иначе диск
     // забивался начатыми и не завершёнными загрузками в обход квоты файлов.
@@ -258,12 +319,15 @@ async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> 
         .fetch_one(&mut *tx)
         .await?;
         if finished + pending_bytes + raw.len() as i64 > quota {
-            anyhow::bail!("превышена квота хранилища владельца ({} байт)", quota);
+            return Err(reject(
+                RejectKind::Limit,
+                format!("превышена квота хранилища владельца ({} байт)", quota),
+            ));
         }
     }
     sqlx::query("INSERT OR REPLACE INTO chunks (file_id, chunk_index, data) VALUES (?, ?, ?)")
-        .bind(&file_id)
-        .bind(p.chunk_index)
+        .bind(file_id)
+        .bind(chunk_index)
         .bind(raw)
         .execute(&mut *tx)
         .await
@@ -279,55 +343,93 @@ async fn finalize_file(
     owner: &str,
     p: &UploadCompletePayload,
 ) -> Result<uuid::Uuid> {
+    finalize_upload(
+        pool,
+        owner,
+        &Finalize {
+            file_id: p.file_id.to_string(),
+            claimed_total: p.total_chunks,
+            total_chunks: p.total_chunks,
+            size_bytes: p.size_bytes,
+            filename: &p.filename,
+            mime_type: &p.mime_type,
+            recipients: &p.recipients,
+            public_access: p.public_access,
+        },
+    )
+    .await?;
+    Ok(p.file_id)
+}
+
+/// Параметры завершения загрузки (общие для v1 и v2).
+pub(crate) struct Finalize<'a> {
+    pub file_id: String,
+    /// `total_chunks`, с которым загрузка заведена в `uploads` (0 — v2).
+    pub claimed_total: u32,
+    pub total_chunks: u32,
+    pub size_bytes: u64,
+    pub filename: &'a str,
+    pub mime_type: &'a str,
+    pub recipients: &'a [String],
+    pub public_access: bool,
+}
+
+pub(crate) async fn finalize_upload(pool: &SqlitePool, owner: &str, p: &Finalize<'_>) -> Result<()> {
     if p.total_chunks == 0 {
-        anyhow::bail!("total_chunks не может быть 0");
+        return Err(reject(RejectKind::Invalid, "total_chunks не может быть 0"));
     }
     if p.total_chunks > max_total_chunks() {
-        anyhow::bail!("слишком много чанков (лимит {})", max_total_chunks());
+        return Err(reject(RejectKind::Limit, format!("слишком много чанков (лимит {})", max_total_chunks())));
     }
-    if p.size_bytes as i64 > max_file_bytes() {
-        anyhow::bail!("файл больше лимита {} байт", max_file_bytes());
+    if p.size_bytes > max_file_bytes() as u64 {
+        return Err(reject(RejectKind::Limit, format!("файл больше лимита {} байт", max_file_bytes())));
     }
     // P-52: лимиты полей метаданных (иначе — тысячи INSERT в одной транзакции
     // и неограниченные строки в БД).
     if p.filename.len() > 255 {
-        anyhow::bail!("имя файла длиннее 255 байт");
+        return Err(reject(RejectKind::Invalid, "имя файла длиннее 255 байт"));
     }
     if p.mime_type.len() > 128 {
-        anyhow::bail!("mime_type длиннее 128 байт");
+        return Err(reject(RejectKind::Invalid, "mime_type длиннее 128 байт"));
     }
     if p.recipients.len() > 256 {
-        anyhow::bail!("слишком много получателей (лимит 256)");
+        return Err(reject(RejectKind::Limit, "слишком много получателей (лимит 256)"));
     }
-    let file_id = p.file_id.to_string();
+    let file_id = p.file_id.as_str();
     let mut tx = pool.begin().await?;
     let claim: Option<(String, i64)> =
         sqlx::query_as("SELECT owner, total_chunks FROM uploads WHERE file_id = ?")
-            .bind(&file_id)
+            .bind(file_id)
             .fetch_optional(&mut *tx)
             .await?;
     let Some((claimed_owner, claimed_total)) = claim else {
-        anyhow::bail!("upload не найден");
+        return Err(reject(RejectKind::NotFound, "upload не найден"));
     };
-    if claimed_owner != owner || claimed_total != i64::from(p.total_chunks) {
-        anyhow::bail!("upload принадлежит другому владельцу или изменён total_chunks");
+    if claimed_owner != owner || claimed_total != i64::from(p.claimed_total) {
+        return Err(reject(
+            RejectKind::Forbidden,
+            "upload принадлежит другому владельцу или изменён total_chunks",
+        ));
     }
 
-    let (received, actual_size): (i64, i64) = sqlx::query_as(
-        "SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0) FROM chunks WHERE file_id = ?",
+    let (received, actual_size, max_index): (i64, i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0), COALESCE(MAX(chunk_index), -1)
+         FROM chunks WHERE file_id = ?",
     )
-    .bind(&file_id)
+    .bind(file_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    if received != p.total_chunks as i64 {
-        anyhow::bail!("получено {}/{} чанков", received, p.total_chunks);
+    // Индексы уникальны (PK), поэтому count == total и max == total-1 значат
+    // «ровно 0..total-1» — v2-загрузка не знает total заранее.
+    if received != p.total_chunks as i64 || max_index != p.total_chunks as i64 - 1 {
+        return Err(reject(RejectKind::Invalid, format!("получено {}/{} чанков", received, p.total_chunks)));
     }
     if actual_size != p.size_bytes as i64 {
-        anyhow::bail!(
-            "размер чанков {actual_size} не совпадает с заявленным {}",
-            p.size_bytes
-        );
+        return Err(reject(
+            RejectKind::Invalid,
+            format!("размер чанков {actual_size} не совпадает с заявленным {}", p.size_bytes),
+        ));
     }
 
     // Квота владельца: сумма его завершённых файлов + этот не должна превышать
@@ -340,7 +442,10 @@ async fn finalize_file(
                 .fetch_one(&mut *tx)
                 .await?;
         if used + actual_size > quota {
-            anyhow::bail!("превышена квота хранилища владельца ({} байт)", quota);
+            return Err(reject(
+                RejectKind::Limit,
+                format!("превышена квота хранилища владельца ({} байт)", quota),
+            ));
         }
     }
 
@@ -348,10 +453,10 @@ async fn finalize_file(
         "INSERT INTO files (id, owner, filename, mime_type, size_bytes, total_chunks, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&file_id)
+    .bind(file_id)
     .bind(owner)
-    .bind(&p.filename)
-    .bind(&p.mime_type)
+    .bind(p.filename)
+    .bind(p.mime_type)
     .bind(p.size_bytes as i64)
     .bind(p.total_chunks)
     .bind(now_unix())
@@ -371,19 +476,19 @@ async fn finalize_file(
         sqlx::query(
             "INSERT OR IGNORE INTO file_grants (file_id, principal, granted_at) VALUES (?, ?, ?)",
         )
-        .bind(&file_id)
+        .bind(file_id)
         .bind(principal)
         .bind(now_unix())
         .execute(&mut *tx)
         .await?;
     }
     sqlx::query("DELETE FROM uploads WHERE file_id = ?")
-        .bind(&file_id)
+        .bind(file_id)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
 
-    Ok(p.file_id)
+    Ok(())
 }
 
 /// Собранный файл для отдачи: метаданные + все чанки по порядку.
@@ -409,15 +514,15 @@ async fn load_file_for_user(
 
 /// Метаданные файла без чанков (ACL — как у целого файла). P-28: download
 /// читает чанки по одному, не поднимая файл целиком.
-struct FileMeta {
+pub(crate) struct FileMeta {
     filename: String,
     mime_type: String,
-    size_bytes: i64,
-    total_chunks: i64,
+    pub size_bytes: i64,
+    pub total_chunks: i64,
     chunk_bytes: i64,
 }
 
-async fn file_meta_for_user(pool: &SqlitePool, file_id: &str, user: &str) -> Result<Option<FileMeta>> {
+pub(crate) async fn file_meta_for_user(pool: &SqlitePool, file_id: &str, user: &str) -> Result<Option<FileMeta>> {
     let meta: Option<(String, String, i64, i64)> = sqlx::query_as(
         "SELECT f.filename, f.mime_type, f.size_bytes, f.total_chunks
          FROM files f
@@ -443,6 +548,21 @@ async fn file_meta_for_user(pool: &SqlitePool, file_id: &str, user: &str) -> Res
     .fetch_optional(pool)
     .await?;
     Ok(Some(FileMeta { filename, mime_type, size_bytes, total_chunks, chunk_bytes: chunk_bytes.unwrap_or(0) }))
+}
+
+/// Метаданные файла по id БЕЗ проверки личности — только для capability-пути
+/// v2 (`cloud.blob.download_cap`), где доступ уже подтверждён секретом.
+pub(crate) async fn file_meta_any(pool: &SqlitePool, file_id: &str) -> Result<Option<FileMeta>> {
+    let meta: Option<(String, String, i64, i64)> = sqlx::query_as(
+        "SELECT filename, mime_type, size_bytes, total_chunks FROM files WHERE id = ?",
+    )
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((filename, mime_type, size_bytes, total_chunks)) = meta else {
+        return Ok(None);
+    };
+    Ok(Some(FileMeta { filename, mime_type, size_bytes, total_chunks, chunk_bytes: 0 }))
 }
 
 /// Загрузить файл или диапазон его чанков (включительно) — range-стриминг
@@ -780,7 +900,7 @@ async fn purge_stale_uploads(pool: &SqlitePool) -> Result<u64> {
 
 /// P-52/C2: удалить файл владельца — метаданные, чанки и гранты. Возвращает
 /// true, если файл принадлежал `owner` и был удалён.
-async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -> Result<bool> {
+pub(crate) async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -> Result<bool> {
     let mut tx = pool.begin().await?;
     let res = sqlx::query("DELETE FROM files WHERE id = ? AND owner = ?")
         .bind(file_id)
@@ -803,7 +923,7 @@ async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -> Result<bo
     Ok(true)
 }
 
-fn now_unix() -> i64 {
+pub(crate) fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -817,6 +937,12 @@ mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
+
+    thread_local! {
+        /// Квота владельца для теста текущего потока (tokio::test —
+        /// однопоточный рантайм на тест).
+        pub(crate) static QUOTA_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+    }
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -1193,13 +1319,15 @@ mod tests {
     #[tokio::test]
     async fn pending_uploads_count_toward_quota() {
         // Квота 10 байт: незавершённый аплоад на 6 байт + ещё 6 байт → отказ.
-        std::env::set_var("PARVANE_CLOUD_OWNER_QUOTA_BYTES", "10");
+        // Квота — через переопределение потока теста, а не env: env общий
+        // для параллельных тестов и ронял бы соседние загрузки.
+        QUOTA_OVERRIDE.with(|c| c.set(Some(10)));
         let pool = test_pool().await;
         let a = Uuid::now_v7();
         store_chunk(&pool, "q2@local", &chunk(a, 0, 1, b"aaaaaa")).await.unwrap();
         let b = Uuid::now_v7();
         let err = store_chunk(&pool, "q2@local", &chunk(b, 0, 1, b"bbbbbb")).await;
-        std::env::remove_var("PARVANE_CLOUD_OWNER_QUOTA_BYTES");
+        QUOTA_OVERRIDE.with(|c| c.set(None));
         assert!(err.is_err(), "незавершённые чанки учитываются в квоте");
     }
 }

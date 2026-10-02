@@ -39,6 +39,7 @@ use parvane_types::{
 mod limits;
 mod acl;
 mod session;
+mod v2;
 pub(crate) use limits::*;
 pub(crate) use acl::*;
 pub(crate) use session::*;
@@ -79,12 +80,16 @@ async fn main() -> Result<()> {
     let user = env("PARVANE_NATS_USER", "gateway");
     let pass = std::env::var("PARVANE_NATS_PASS").unwrap_or_default();
 
-    let mut opts = async_nats::ConnectOptions::new();
+    // Шина может подняться позже gateway (compose, раннеры тестов) — повторяем
+    // первичное подключение вместо немедленного выхода.
+    let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
     if !pass.is_empty() {
         opts = opts.user_and_password(user, pass);
     }
     let nats = Arc::new(opts.connect(&nats_url).await.context("подключение к NATS")?);
     info!("NATS подключён: {}", nats_url);
+    // Протокол v2 (spec 007): общее состояние (описатель сервера, отзывы).
+    let v2 = v2::Shared::start(nats.clone()).await.context("v2: подписка на отзывы")?;
 
     let max_conns = std::env::var("PARVANE_GATEWAY_MAX_CONNS")
         .ok()
@@ -107,6 +112,7 @@ async fn main() -> Result<()> {
     {
         let nats = nats.clone();
         let limits = limits.clone();
+        let v2 = v2.clone();
         tokio::spawn(async move {
             loop {
                 match tcp.accept().await {
@@ -116,9 +122,10 @@ async fn main() -> Result<()> {
                             continue; // stream дропается → сокет закрыт
                         };
                         let nats = nats.clone();
+                        let v2 = v2.clone();
                         tokio::spawn(async move {
                             let _guard = guard;
-                            if let Err(e) = handle_tcp(stream, nats).await {
+                            if let Err(e) = handle_tcp(stream, nats, v2).await {
                                 warn!("tcp {}: {}", peer, e);
                             }
                         });
@@ -139,9 +146,10 @@ async fn main() -> Result<()> {
             continue;
         };
         let nats = nats.clone();
+        let v2 = v2.clone();
         tokio::spawn(async move {
             let _guard = guard;
-            if let Err(e) = handle_ws(stream, nats).await {
+            if let Err(e) = handle_ws(stream, nats, v2).await {
                 warn!("ws {}: {}", peer, e);
             }
         });

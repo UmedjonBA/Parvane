@@ -1,0 +1,39 @@
+// Коды ошибок протокола. Текста сервера клиенту нет (инвариант 18): клиент
+// показывает свою локализованную строку по коду.
+syntax = "proto3";
+
+package parvane.core.v2;
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  // Запрос не прошёл проверку схемы, лимитов или значений.
+  ERROR_CODE_INVALID = 1;
+  // Нет права на операцию/подписку.
+  ERROR_CODE_FORBIDDEN = 2;
+  ERROR_CODE_NOT_FOUND = 3;
+  // Повтор op_id / двойная трата жетона.
+  ERROR_CODE_DUPLICATE = 4;
+  // Превышен класс частоты; см. retry_after_ms.
+  ERROR_CODE_RATE_LIMITED = 5;
+  // Версия клиента ниже min_supported сервера.
+  ERROR_CODE_UPGRADE_REQUIRED = 6;
+  // Устройство или сессия отозваны.
+  ERROR_CODE_REVOKED = 7;
+  // Опасная операция требует свежего подтверждения паролем (класс 15).
+  ERROR_CODE_REAUTH_REQUIRED = 8;
+  // Превышена квота/лимит объёма.
+  ERROR_CODE_LIMIT = 9;
+  // Адресат на чужом домене, а федерации нет.
+  ERROR_CODE_FEDERATION_UNAVAILABLE = 10;
+  // Временная недоступность сервиса.
+  ERROR_CODE_UNAVAILABLE = 11;
+  // Срок действия (токена, приглашения, жетона) истёк.
+  ERROR_CODE_EXPIRED = 12;
+  // Пользователь заблокирован/забанен для этой операции.
+  ERROR_CODE_BANNED = 13;
+}
+
+message Error {
+  ErrorCode code = 1;
+  uint32 retry_after_ms = 2;
+}

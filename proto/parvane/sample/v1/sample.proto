@@ -1,0 +1,30 @@
+// Тестовый домен каркаса (SC-005, T093): LWW-карта key → value, без UI и
+// клиентов. Контейнер с domain = "sample.v1"; открытый текст ContainerOp —
+// SampleOp, открытый текст Snapshot — SampleSnapshot. Сведение детерминировано:
+// у каждого ключа побеждает запись с большей меткой (lamport, device_id),
+// при равенстве — большая пара (deleted, value) (backend/protocol/src/domain.rs,
+// LwwMap). Метка не может обогнать виденный максимум больше чем на 2^20 (D-16).
+syntax = "proto3";
+
+package parvane.sample.v1;
+
+import "parvane/core/v2/domain.proto";
+import "parvane/core/v2/options.proto";
+
+message SampleEntry {
+  string key = 1 [(parvane.core.v2.max_len) = 256];
+  bytes value = 2 [(parvane.core.v2.max_len) = 4096];
+  // Удаление ключа (надгробие; value пусто).
+  bool deleted = 3;
+  parvane.core.v2.LwwStamp stamp = 4;
+}
+
+// Одна операция журнала: пакет записей одного устройства.
+message SampleOp {
+  repeated SampleEntry entries = 1 [(parvane.core.v2.max_items) = 64];
+}
+
+// Снимок: все ключи (с надгробиями) на момент upto_seq.
+message SampleSnapshot {
+  repeated SampleEntry entries = 1 [(parvane.core.v2.max_items) = 4096];
+}

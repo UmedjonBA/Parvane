@@ -1,4 +1,5 @@
 mod calls;
+mod v2;
 
 use anyhow::{Context, Result};
 use async_nats::Client;
@@ -39,11 +40,14 @@ async fn main() -> Result<()> {
     let nc = parvane_types::nats::connect(&nats_url).await.context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
 
-    let ice_config = IceConfig::from_env();
+    let ice_config = std::sync::Arc::new(IceConfig::from_env());
 
     let mut signal_sub = nc.subscribe(CALL_SIGNAL).await?;
     let mut history_sub = nc.subscribe(CALL_HISTORY_REQUEST).await?;
     let mut ice_sub = nc.subscribe(CALL_ICE_REQUEST).await?;
+
+    // Протокол v2 (spec 007, T078): call.signal_sealed (ANON) и call.ice_config.
+    v2::run(nc.clone(), ice_config.clone()).await.context("v2: подписки")?;
 
     info!(
         "Call шард запущен. Слушаю: {}, {}, {}",

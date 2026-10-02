@@ -3,6 +3,10 @@ name = "push"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "push"
+path = "src/lib.rs"
+
 [[bin]]
 name = "push"
 path = "src/main.rs"
@@ -11,6 +15,10 @@ path = "src/main.rs"
 url = "2"
 parvane-types = { path = "../../shared/parvane-types" }
 parvane-db = { path = "../../shared/parvane-db" }
+parvane-netguard = { path = "../../shared/parvane-netguard" }
+parvane-protocol = { path = "../../protocol" }
+parvane-v2rt = { path = "../../shared/parvane-v2rt" }
+prost = "0.14"
 tokio = { workspace = true }
 async-nats = { workspace = true }
 serde = { workspace = true }

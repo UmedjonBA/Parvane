@@ -1,0 +1,28 @@
+[package]
+name = "parvane-protocol-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WASM-обвязка движка parvane-protocol для web (telegram-tt)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+parvane-protocol = { path = ".." }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+serde_json = { workspace = true }
+prost = "0.14"
+hex = "0.4"
+zeroize = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Случайность в браузере — crypto.getRandomValues.
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+vodozemac = { version = "0.11", features = ["wasm_js"] }
+uuid = { version = "1", features = ["v7", "js"] }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]

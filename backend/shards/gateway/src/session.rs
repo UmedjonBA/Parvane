@@ -2,9 +2,31 @@
 
 use crate::*;
 
-pub(crate) async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
+pub(crate) async fn handle_tcp(stream: TcpStream, nats: Arc<Client>, v2: Arc<crate::v2::Shared>) -> Result<()> {
     let client_ip = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     let (mut rd, mut wr) = stream.into_split();
+    // Двойной стек (spec 007): v2-соединение начинается с преамбулы `PVN2`,
+    // v1 — с построчного JSON (`{`). Первые байты читаются до решения.
+    let mut pre: Vec<u8> = Vec::new();
+    {
+        let mut b = [0u8; 8192];
+        let deadline = Instant::now() + Duration::from_secs(AUTH_TIMEOUT_SECS);
+        while pre.len() < 4 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(remaining, rd.read(&mut b)).await {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => pre.extend_from_slice(&b[..n]),
+            }
+            if pre.first().is_some_and(|c| *c != parvane_protocol::codec::TCP_MAGIC[0]) {
+                break;
+            }
+        }
+    }
+    if pre.starts_with(parvane_protocol::codec::TCP_MAGIC) {
+        let rest = pre[4..].to_vec();
+        crate::v2::run_tcp(rest, rd, wr, v2, client_ip).await;
+        return Ok(());
+    }
     let (in_tx, in_rx) = mpsc::channel::<String>(CHANNEL_CAP);
     // Построчное чтение с жёстким лимитом длины кадра: кадр без разделителя,
     // превысивший MAX_FRAME_BYTES, рвёт соединение (защита от OOM). Ранее
@@ -12,13 +34,18 @@ pub(crate) async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<(
     tokio::spawn(async move {
         let mut acc: Vec<u8> = Vec::new();
         let mut buf = [0u8; 8192];
+        let mut first = Some(pre);
         loop {
-            let n = match rd.read(&mut buf).await {
-                Ok(0) => break, // EOF
-                Ok(n) => n,
-                Err(_) => break,
+            let chunk: Vec<u8> = if let Some(p) = first.take() {
+                p
+            } else {
+                match rd.read(&mut buf).await {
+                    Ok(0) => break, // EOF
+                    Ok(n) => buf[..n].to_vec(),
+                    Err(_) => break,
+                }
             };
-            for &byte in &buf[..n] {
+            for &byte in &chunk {
                 if byte == b'\n' {
                     let line = String::from_utf8_lossy(&acc).trim().to_string();
                     acc.clear();
@@ -48,7 +75,7 @@ pub(crate) async fn handle_tcp(stream: TcpStream, nats: Arc<Client>) -> Result<(
     Ok(())
 }
 
-pub(crate) async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()> {
+pub(crate) async fn handle_ws(stream: TcpStream, nats: Arc<Client>, v2: Arc<crate::v2::Shared>) -> Result<()> {
     // Ограничиваем размер сообщения/кадра WS на уровне протокола (симметрично TCP).
     let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
     config.max_message_size = Some(MAX_FRAME_BYTES);
@@ -75,7 +102,24 @@ pub(crate) async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()
     .context("WS handshake")?;
     let client_ip = client_ip_from(peer_ip, forwarded.as_deref());
     let (mut write, mut read) = ws.split();
+    // Двойной стек (spec 007): первый кадр решает версию — двоичный Hello → v2,
+    // текст `{"op":"auth"…}` → v1 без изменений.
+    let first = match tokio::time::timeout(Duration::from_secs(AUTH_TIMEOUT_SECS), read.next()).await {
+        Ok(Some(Ok(m))) => m,
+        _ => return Ok(()),
+    };
+    let first_text = match first {
+        WsMessage::Binary(b) => {
+            crate::v2::run_ws(b, read, write, v2, client_ip).await;
+            return Ok(());
+        }
+        WsMessage::Text(t) => t,
+        _ => return Ok(()),
+    };
     let (in_tx, in_rx) = mpsc::channel::<String>(CHANNEL_CAP);
+    if in_tx.send(first_text).await.is_err() {
+        return Ok(());
+    }
     tokio::spawn(async move {
         while let Some(m) = read.next().await {
             match m {
@@ -102,12 +146,48 @@ pub(crate) async fn handle_ws(stream: TcpStream, nats: Arc<Client>) -> Result<()
     Ok(())
 }
 
+/// Режим v1-пути (E6, T110): `PARVANE_V1_MODE` = `normal` (по умолчанию) |
+/// `notice` (после входа — кадр `{"op":"notice","kind":"upgrade_available"}`) |
+/// `disabled` (v1-соединение сразу получает `upgrade_required` и закрывается).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum V1Mode {
+    Normal,
+    Notice,
+    Disabled,
+}
+
+pub(crate) fn parse_v1_mode(v: Option<&str>) -> V1Mode {
+    match v.map(str::trim) {
+        Some("notice") => V1Mode::Notice,
+        Some("disabled") => V1Mode::Disabled,
+        _ => V1Mode::Normal,
+    }
+}
+
+pub(crate) fn v1_mode() -> V1Mode {
+    static MODE: std::sync::OnceLock<V1Mode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        let m = parse_v1_mode(std::env::var("PARVANE_V1_MODE").ok().as_deref());
+        if m != V1Mode::Normal {
+            info!("gateway: v1-путь в режиме {:?}", m);
+        }
+        m
+    })
+}
+
+pub(crate) const V1_UPGRADE_REQUIRED: &str = "upgrade_required";
+
 pub(crate) async fn serve(
     mut in_rx: mpsc::Receiver<String>,
     tx: mpsc::Sender<String>,
     nats: Arc<Client>,
     client_ip: String,
 ) {
+    // E6: v1 отключён — клиент получает код и показывает «обновите приложение»
+    if v1_mode() == V1Mode::Disabled {
+        let _ = tx.send(json!({"op":"err","error":V1_UPGRADE_REQUIRED}).to_string()).await;
+        return;
+    }
     // 1) pre-auth: до авторизации разрешены ТОЛЬКО bootstrap-запросы (логин и
     // регистрация — иначе получить токен через gateway было бы невозможно).
     // Всё остальное — после auth с валидным JWT. На всю фазу — idle-timeout:
@@ -129,6 +209,9 @@ pub(crate) async fn serve(
                 Ok(u) => {
                     let token = v["token"].as_str().unwrap_or("").to_string();
                     let _ = tx.send(json!({"op":"auth_ok","user":u}).to_string()).await;
+                    if v1_mode() == V1Mode::Notice {
+                        let _ = tx.send(json!({"op":"notice","kind":"upgrade_available"}).to_string()).await;
+                    }
                     break (u, token);
                 }
                 Err(e) => {

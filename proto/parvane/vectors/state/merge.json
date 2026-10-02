@@ -1,0 +1,5388 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "max_lamport": 3,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "folders": [
+            {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 2,
+              "include_peers": [
+                {
+                  "user": {
+                    "address": "carol@x"
+                  }
+                }
+              ],
+              "title": "Work"
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 2,
+              "include_peers": [
+                {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                }
+              ],
+              "title": "Работа"
+            },
+            "lamport": "3",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 2,
+              "include_peers": [
+                {
+                  "user": {
+                    "address": "carol@x"
+                  }
+                }
+              ],
+              "title": "Work"
+            },
+            "lamport": "3",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 2,
+              "title": "Старое"
+            },
+            "lamport": "2",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110031a056465762d612080d095ffbc31522e0802120cd0a0d0b0d0b1d0bed182d0b01a04f09f92bc22090a070a05626f624078480178ffffffffffffffffff01",
+          "0a100202020202020202020202020202020210031a056465762d622080d095ffbc31522808021204576f726b1a04f09f92bc220b0a090a076361726f6c4078480178ffffffffffffffffff01",
+          "0a100303030303030303030303030303030310021a056465762d612080d095ffbc3152230802120cd0a1d182d0b0d180d0bed0b51a04f09f92bc480178ffffffffffffffffff01"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            0,
+            2,
+            1
+          ],
+          [
+            1,
+            0,
+            2
+          ],
+          [
+            1,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1
+          ],
+          [
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "папка: конкурентная правка, ничья лампорта → больший device_id"
+    },
+    {
+      "expect": {
+        "max_lamport": 6,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "folder_order": {
+            "ids": [
+              5,
+              3
+            ]
+          },
+          "folders": [
+            {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 5,
+              "include_peers": [
+                {
+                  "group": {
+                    "domain": "x",
+                    "id": "BwcHBwcHBwcHBwcHBwcHBw=="
+                  }
+                }
+              ],
+              "title": "Каналы"
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 3,
+              "include_peers": [
+                {
+                  "user": {
+                    "address": "mom@x"
+                  }
+                }
+              ],
+              "title": "Семья"
+            },
+            "lamport": "2",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_remove": {
+              "id": 3
+            },
+            "lamport": "4",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 3,
+              "title": "Семья+"
+            },
+            "lamport": "3",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "folder_remove": {
+              "id": 5
+            },
+            "lamport": "1",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 5,
+              "include_peers": [
+                {
+                  "group": {
+                    "domain": "x",
+                    "id": "BwcHBwcHBwcHBwcHBwcHBw=="
+                  }
+                }
+              ],
+              "title": "Каналы"
+            },
+            "lamport": "2",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "folder_order": {
+              "ids": [
+                5,
+                3
+              ]
+            },
+            "lamport": "6",
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_order": {
+              "ids": [
+                3,
+                5
+              ]
+            },
+            "lamport": "5",
+            "op_id": "BwcHBwcHBwcHBwcHBwcHBw==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110021a056465762d612080d095ffbc31522c0803120ad0a1d0b5d0bcd18cd18f1a04f09f92bc22090a070a056d6f6d4078480178ffffffffffffffffff01",
+          "0a100202020202020202020202020202020210041a056465762d612080d095ffbc315a020803",
+          "0a100303030303030303030303030303030310031a056465762d622080d095ffbc3152220803120bd0a1d0b5d0bcd18cd18f2b1a04f09f92bc480178ffffffffffffffffff01",
+          "0a100404040404040404040404040404040410011a056465762d622080d095ffbc315a020805",
+          "0a100505050505050505050505050505050510021a056465762d612080d095ffbc31523c0805120cd09ad0b0d0bdd0b0d0bbd18b1a04f09f92bc221712150a0178121007070707070707070707070707070707480178ffffffffffffffffff01",
+          "0a100606060606060606060606060606060610061a056465762d622080d095ffbc31620408050803",
+          "0a100707070707070707070707070707070710051a056465762d612080d095ffbc31620408030805"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          [
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            6,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            6,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            6,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            6,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            6,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            1,
+            3,
+            5,
+            0,
+            2,
+            4,
+            6
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "папка: удаление против правки, порядок папок"
+    },
+    {
+      "expect": {
+        "max_lamport": 3,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "blocked": [
+            {
+              "blocked_at_ms": "13",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AQEBAQEBAQEBAQEBAQEBAQ=="
+                }
+              }
+            },
+            {
+              "blocked_at_ms": "11",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "block_set": {
+              "blocked_at_ms": "10",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "11",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_remove": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "2",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "12",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "2",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "13",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AQEBAQEBAQEBAQEBAQEBAQ=="
+                }
+              }
+            },
+            "device_id": "dev-c",
+            "lamport": "3",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc316a0d0a090a070a05626f624078100a",
+          "0a100202020202020202020202020202020210011a056465762d622080d095ffbc316a0f0a0b0a090a076361726f6c4078100b",
+          "0a100303030303030303030303030303030310021a056465762d622080d095ffbc31720b0a090a070a05626f624078",
+          "0a100404040404040404040404040404040410021a056465762d612080d095ffbc316a0d0a090a070a05626f624078100c",
+          "0a100505050505050505050505050505050510031a056465762d632080d095ffbc316a1b0a1712150a0178121001010101010101010101010101010101100d"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            4,
+            3
+          ],
+          [
+            0,
+            1,
+            3,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            3,
+            4,
+            2
+          ],
+          [
+            0,
+            1,
+            4,
+            2,
+            3
+          ],
+          [
+            0,
+            1,
+            4,
+            3,
+            2
+          ],
+          [
+            0,
+            2,
+            1,
+            3,
+            4
+          ],
+          [
+            0,
+            2,
+            1,
+            4,
+            3
+          ],
+          [
+            0,
+            2,
+            3,
+            1,
+            4
+          ],
+          [
+            0,
+            2,
+            3,
+            4,
+            1
+          ],
+          [
+            0,
+            2,
+            4,
+            1,
+            3
+          ],
+          [
+            0,
+            2,
+            4,
+            3,
+            1
+          ],
+          [
+            0,
+            3,
+            1,
+            2,
+            4
+          ],
+          [
+            0,
+            3,
+            1,
+            4,
+            2
+          ],
+          [
+            0,
+            3,
+            2,
+            1,
+            4
+          ],
+          [
+            0,
+            3,
+            2,
+            4,
+            1
+          ],
+          [
+            0,
+            3,
+            4,
+            1,
+            2
+          ],
+          [
+            0,
+            3,
+            4,
+            2,
+            1
+          ],
+          [
+            0,
+            4,
+            1,
+            2,
+            3
+          ],
+          [
+            0,
+            4,
+            1,
+            3,
+            2
+          ],
+          [
+            0,
+            4,
+            2,
+            1,
+            3
+          ],
+          [
+            0,
+            4,
+            2,
+            3,
+            1
+          ],
+          [
+            0,
+            4,
+            3,
+            1,
+            2
+          ],
+          [
+            0,
+            4,
+            3,
+            2,
+            1
+          ],
+          [
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            0,
+            2,
+            4,
+            3
+          ],
+          [
+            1,
+            0,
+            3,
+            2,
+            4
+          ],
+          [
+            1,
+            0,
+            3,
+            4,
+            2
+          ],
+          [
+            1,
+            0,
+            4,
+            2,
+            3
+          ],
+          [
+            1,
+            0,
+            4,
+            3,
+            2
+          ],
+          [
+            1,
+            2,
+            0,
+            3,
+            4
+          ],
+          [
+            1,
+            2,
+            0,
+            4,
+            3
+          ],
+          [
+            1,
+            2,
+            3,
+            0,
+            4
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          [
+            1,
+            2,
+            4,
+            0,
+            3
+          ],
+          [
+            1,
+            2,
+            4,
+            3,
+            0
+          ],
+          [
+            1,
+            3,
+            0,
+            2,
+            4
+          ],
+          [
+            1,
+            3,
+            0,
+            4,
+            2
+          ],
+          [
+            1,
+            3,
+            2,
+            0,
+            4
+          ],
+          [
+            1,
+            3,
+            2,
+            4,
+            0
+          ],
+          [
+            1,
+            3,
+            4,
+            0,
+            2
+          ],
+          [
+            1,
+            3,
+            4,
+            2,
+            0
+          ],
+          [
+            1,
+            4,
+            0,
+            2,
+            3
+          ],
+          [
+            1,
+            4,
+            0,
+            3,
+            2
+          ],
+          [
+            1,
+            4,
+            2,
+            0,
+            3
+          ],
+          [
+            1,
+            4,
+            2,
+            3,
+            0
+          ],
+          [
+            1,
+            4,
+            3,
+            0,
+            2
+          ],
+          [
+            1,
+            4,
+            3,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1,
+            3,
+            4
+          ],
+          [
+            2,
+            0,
+            1,
+            4,
+            3
+          ],
+          [
+            2,
+            0,
+            3,
+            1,
+            4
+          ],
+          [
+            2,
+            0,
+            3,
+            4,
+            1
+          ],
+          [
+            2,
+            0,
+            4,
+            1,
+            3
+          ],
+          [
+            2,
+            0,
+            4,
+            3,
+            1
+          ],
+          [
+            2,
+            1,
+            0,
+            3,
+            4
+          ],
+          [
+            2,
+            1,
+            0,
+            4,
+            3
+          ],
+          [
+            2,
+            1,
+            3,
+            0,
+            4
+          ],
+          [
+            2,
+            1,
+            3,
+            4,
+            0
+          ],
+          [
+            2,
+            1,
+            4,
+            0,
+            3
+          ],
+          [
+            2,
+            1,
+            4,
+            3,
+            0
+          ],
+          [
+            2,
+            3,
+            0,
+            1,
+            4
+          ],
+          [
+            2,
+            3,
+            0,
+            4,
+            1
+          ],
+          [
+            2,
+            3,
+            1,
+            0,
+            4
+          ],
+          [
+            2,
+            3,
+            1,
+            4,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          [
+            2,
+            3,
+            4,
+            1,
+            0
+          ],
+          [
+            2,
+            4,
+            0,
+            1,
+            3
+          ],
+          [
+            2,
+            4,
+            0,
+            3,
+            1
+          ],
+          [
+            2,
+            4,
+            1,
+            0,
+            3
+          ],
+          [
+            2,
+            4,
+            1,
+            3,
+            0
+          ],
+          [
+            2,
+            4,
+            3,
+            0,
+            1
+          ],
+          [
+            2,
+            4,
+            3,
+            1,
+            0
+          ],
+          [
+            3,
+            0,
+            1,
+            2,
+            4
+          ],
+          [
+            3,
+            0,
+            1,
+            4,
+            2
+          ],
+          [
+            3,
+            0,
+            2,
+            1,
+            4
+          ],
+          [
+            3,
+            0,
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            0,
+            4,
+            1,
+            2
+          ],
+          [
+            3,
+            0,
+            4,
+            2,
+            1
+          ],
+          [
+            3,
+            1,
+            0,
+            2,
+            4
+          ],
+          [
+            3,
+            1,
+            0,
+            4,
+            2
+          ],
+          [
+            3,
+            1,
+            2,
+            0,
+            4
+          ],
+          [
+            3,
+            1,
+            2,
+            4,
+            0
+          ],
+          [
+            3,
+            1,
+            4,
+            0,
+            2
+          ],
+          [
+            3,
+            1,
+            4,
+            2,
+            0
+          ],
+          [
+            3,
+            2,
+            0,
+            1,
+            4
+          ],
+          [
+            3,
+            2,
+            0,
+            4,
+            1
+          ],
+          [
+            3,
+            2,
+            1,
+            0,
+            4
+          ],
+          [
+            3,
+            2,
+            1,
+            4,
+            0
+          ],
+          [
+            3,
+            2,
+            4,
+            0,
+            1
+          ],
+          [
+            3,
+            2,
+            4,
+            1,
+            0
+          ],
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          [
+            3,
+            4,
+            0,
+            2,
+            1
+          ],
+          [
+            3,
+            4,
+            1,
+            0,
+            2
+          ],
+          [
+            3,
+            4,
+            1,
+            2,
+            0
+          ],
+          [
+            3,
+            4,
+            2,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            2,
+            1,
+            0
+          ],
+          [
+            4,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          [
+            4,
+            0,
+            2,
+            1,
+            3
+          ],
+          [
+            4,
+            0,
+            2,
+            3,
+            1
+          ],
+          [
+            4,
+            0,
+            3,
+            1,
+            2
+          ],
+          [
+            4,
+            0,
+            3,
+            2,
+            1
+          ],
+          [
+            4,
+            1,
+            0,
+            2,
+            3
+          ],
+          [
+            4,
+            1,
+            0,
+            3,
+            2
+          ],
+          [
+            4,
+            1,
+            2,
+            0,
+            3
+          ],
+          [
+            4,
+            1,
+            2,
+            3,
+            0
+          ],
+          [
+            4,
+            1,
+            3,
+            0,
+            2
+          ],
+          [
+            4,
+            1,
+            3,
+            2,
+            0
+          ],
+          [
+            4,
+            2,
+            0,
+            1,
+            3
+          ],
+          [
+            4,
+            2,
+            0,
+            3,
+            1
+          ],
+          [
+            4,
+            2,
+            1,
+            0,
+            3
+          ],
+          [
+            4,
+            2,
+            1,
+            3,
+            0
+          ],
+          [
+            4,
+            2,
+            3,
+            0,
+            1
+          ],
+          [
+            4,
+            2,
+            3,
+            1,
+            0
+          ],
+          [
+            4,
+            3,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            3,
+            0,
+            2,
+            1
+          ],
+          [
+            4,
+            3,
+            1,
+            0,
+            2
+          ],
+          [
+            4,
+            3,
+            1,
+            2,
+            0
+          ],
+          [
+            4,
+            3,
+            2,
+            0,
+            1
+          ],
+          [
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "блок-лист: объединение, снятие, повторная блокировка"
+    },
+    {
+      "expect": {
+        "max_lamport": 4,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "notify": [
+            {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AgICAgICAgICAgICAgICAg=="
+                }
+              },
+              "settings": {}
+            },
+            {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "settings": {
+                "show_previews": false,
+                "sound": "bell"
+              }
+            }
+          ],
+          "notify_defaults": {
+            "groups": {
+              "silent": true
+            }
+          }
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "notify_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "settings": {
+                "mute_until_ms": "9223372036854775807"
+              }
+            },
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "3",
+            "notify_remove": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "4",
+            "notify_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "settings": {
+                "show_previews": false,
+                "sound": "bell"
+              }
+            },
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "2",
+            "notify_defaults": {
+              "groups": {
+                "mute_until_ms": "5"
+              },
+              "users": {
+                "mute_until_ms": "0"
+              }
+            },
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "2",
+            "notify_defaults": {
+              "groups": {
+                "silent": true
+              }
+            },
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-c",
+            "lamport": "1",
+            "notify_set": {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AgICAgICAgICAgICAgICAg=="
+                }
+              }
+            },
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc317a170a090a070a05626f624078120a08ffffffffffffffff7f",
+          "0a100202020202020202020202020202020210031a056465762d622080d095ffbc3182010b0a090a070a05626f624078",
+          "0a100303030303030303030303030303030310041a056465762d612080d095ffbc317a150a090a070a05626f6240781208120462656c6c1800",
+          "0a100404040404040404040404040404040410021a056465762d612080d095ffbc318a01080a02080012020805",
+          "0a100505050505050505050505050505050510021a056465762d622080d095ffbc318a010412022001",
+          "0a100606060606060606060606060606060610011a056465762d632080d095ffbc317a190a1712150a0178121002020202020202020202020202020202"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            3,
+            5,
+            0,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "уведомления: по собеседнику и умолчания"
+    },
+    {
+      "expect": {
+        "max_lamport": 3,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "archived": [
+            {
+              "user": {
+                "address": "spam@x"
+              }
+            }
+          ],
+          "drafts": [
+            {
+              "date_ms": "101",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                }
+              },
+              "text": "CgF4"
+            }
+          ],
+          "pinned": [
+            {
+              "list": "PIN_LIST_MAIN",
+              "peers": [
+                {
+                  "group": {
+                    "domain": "x",
+                    "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                  }
+                }
+              ]
+            },
+            {
+              "list": "PIN_LIST_ARCHIVE",
+              "peers": [
+                {
+                  "user": {
+                    "address": "spam@x"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "draft_set": {
+              "date_ms": "100",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "reply_to_op_id": "CQkJCQkJCQkJCQkJCQkJCQ==",
+              "text": "CgNoZXk="
+            },
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "draft_remove": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "lamport": "2",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "draft_set": {
+              "date_ms": "101",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                }
+              },
+              "text": "CgF4"
+            },
+            "lamport": "1",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "archive_set": {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "archive_remove": {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "2",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "archive_set": {
+              "peer": {
+                "user": {
+                  "address": "spam@x"
+                }
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "3",
+            "op_id": "BwcHBwcHBwcHBwcHBwcHBw==",
+            "pinned_order": {
+              "list": "PIN_LIST_MAIN",
+              "peers": [
+                {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                {
+                  "group": {
+                    "domain": "x",
+                    "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                  }
+                }
+              ]
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "3",
+            "op_id": "CAgICAgICAgICAgICAgICA==",
+            "pinned_order": {
+              "list": "PIN_LIST_MAIN",
+              "peers": [
+                {
+                  "group": {
+                    "domain": "x",
+                    "id": "AwMDAwMDAwMDAwMDAwMDAw=="
+                  }
+                }
+              ]
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "CQkJCQkJCQkJCQkJCQkJCQ==",
+            "pinned_order": {
+              "list": "PIN_LIST_ARCHIVE",
+              "peers": [
+                {
+                  "user": {
+                    "address": "spam@x"
+                  }
+                }
+              ]
+            },
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc319201260a090a070a05626f62407812050a036865791a10090909090909090909090909090909092064",
+          "0a100202020202020202020202020202020210021a056465762d622080d095ffbc319a010b0a090a070a05626f624078",
+          "0a100303030303030303030303030303030310011a056465762d622080d095ffbc319201200a1712150a017812100303030303030303030303030303030312030a01782065",
+          "0a100404040404040404040404040404040410011a056465762d612080d095ffbc31ba01190a1712150a0178121003030303030303030303030303030303",
+          "0a100505050505050505050505050505050510021a056465762d612080d095ffbc31c201190a1712150a0178121003030303030303030303030303030303",
+          "0a100606060606060606060606060606060610011a056465762d622080d095ffbc31ba010c0a0a0a080a067370616d4078",
+          "0a100707070707070707070707070707070710031a056465762d612080d095ffbc31ca0126080112090a070a05626f624078121712150a0178121003030303030303030303030303030303",
+          "0a100808080808080808080808080808080810031a056465762d622080d095ffbc31ca011b0801121712150a0178121003030303030303030303030303030303",
+          "0a100909090909090909090909090909090910011a056465762d612080d095ffbc31ca010e0802120a0a080a067370616d4078"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          [
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            6,
+            7,
+            8,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            6,
+            7,
+            8,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            6,
+            7,
+            8,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            7,
+            8,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          [
+            8,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          [
+            1,
+            3,
+            5,
+            7,
+            0,
+            2,
+            4,
+            6,
+            8
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "черновики, архив, закреп"
+    },
+    {
+      "expect": {
+        "max_lamport": 4,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "scheduled": [
+            {
+              "content": "CgIKAw==",
+              "op_id": "o6Ojo6Ojo6Ojo6Ojo6Ojow==",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              },
+              "send_at_ms": "4000"
+            }
+          ],
+          "scheduled_sent": [
+            "oaGhoaGhoaGhoaGhoaGhoQ=="
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "scheduled_set": {
+              "content": "CgIKAQ==",
+              "op_id": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "send_at_ms": "1000"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "2",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "scheduled_set": {
+              "content": "CgIKAQ==",
+              "op_id": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "send_at_ms": "2000"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "scheduled_sent": {
+              "op_id": "oaGhoaGhoaGhoaGhoaGhoQ=="
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "scheduled_set": {
+              "content": "CgIKAg==",
+              "op_id": "oqKioqKioqKioqKioqKiog==",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BAQEBAQEBAQEBAQEBAQEBA=="
+                }
+              },
+              "send_at_ms": "3000"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "3",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "scheduled_remove": {
+              "op_id": "oqKioqKioqKioqKioqKiog=="
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "4",
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "scheduled_set": {
+              "content": "CgIKAw==",
+              "op_id": "o6Ojo6Ojo6Ojo6Ojo6Ojow==",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              },
+              "send_at_ms": "4000"
+            },
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc31a201260a10a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a112090a070a05626f62407818e80722040a020a01",
+          "0a100202020202020202020202020202020210021a056465762d622080d095ffbc31a201260a10a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a112090a070a05626f62407818d00f22040a020a01",
+          "0a100303030303030303030303030303030310011a056465762d622080d095ffbc31b201120a10a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "0a100404040404040404040404040404040410011a056465762d612080d095ffbc31a201340a10a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2121712150a017812100404040404040404040404040404040418b81722040a020a02",
+          "0a100505050505050505050505050505050510031a056465762d612080d095ffbc31aa01120a10a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "0a100606060606060606060606060606060610041a056465762d622080d095ffbc31a201280a10a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3120b0a090a076361726f6c407818a01f22040a020a03"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            3,
+            5,
+            0,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "отложенные: перенос, отмена, отметка отправки необратима"
+    },
+    {
+      "expect": {
+        "max_lamport": 5,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "calls": [
+            {
+              "call_id": "wcHBwcHBwcHBwcHBwcHBwQ==",
+              "duration_s": 10,
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "reason": "HANGUP_REASON_NORMAL",
+              "started_ms": "5001"
+            },
+            {
+              "call_id": "w8PDw8PDw8PDw8PDw8PDww==",
+              "duration_s": 30,
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BQUFBQUFBQUFBQUFBQUFBQ=="
+                }
+              },
+              "reason": "HANGUP_REASON_DECLINED",
+              "started_ms": "5003"
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "call_set": {
+              "call_id": "wcHBwcHBwcHBwcHBwcHBwQ==",
+              "duration_s": 10,
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "reason": "HANGUP_REASON_NORMAL",
+              "started_ms": "5001"
+            },
+            "device_id": "dev-a",
+            "lamport": "2",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "call_remove": {
+              "call_id": "wcHBwcHBwcHBwcHBwcHBwQ=="
+            },
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "call_set": {
+              "call_id": "wsLCwsLCwsLCwsLCwsLCwg==",
+              "duration_s": 20,
+              "outgoing": true,
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              },
+              "reason": "HANGUP_REASON_MISSED",
+              "started_ms": "5002",
+              "video": true
+            },
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "call_remove": {
+              "call_id": "wsLCwsLCwsLCwsLCwsLCwg=="
+            },
+            "device_id": "dev-a",
+            "lamport": "5",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "call_set": {
+              "call_id": "w8PDw8PDw8PDw8PDw8PDww==",
+              "duration_s": 30,
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BQUFBQUFBQUFBQUFBQUFBQ=="
+                }
+              },
+              "reason": "HANGUP_REASON_DECLINED",
+              "started_ms": "5003"
+            },
+            "device_id": "dev-a",
+            "lamport": "3",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110021a056465762d612080d095ffbc31d201240a10c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c112090a070a05626f6240782801308927380a",
+          "0a100202020202020202020202020202020210011a056465762d622080d095ffbc31da01120a10c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+          "0a100303030303030303030303030303030310011a056465762d622080d095ffbc31d2012a0a10c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2120b0a090a076361726f6c4078180120012804308a273814",
+          "0a100404040404040404040404040404040410051a056465762d612080d095ffbc31da01120a10c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+          "0a100505050505050505050505050505050510031a056465762d612080d095ffbc31d201320a10c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3121712150a01781210050505050505050505050505050505052802308b27381e"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            4,
+            3
+          ],
+          [
+            0,
+            1,
+            3,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            3,
+            4,
+            2
+          ],
+          [
+            0,
+            1,
+            4,
+            2,
+            3
+          ],
+          [
+            0,
+            1,
+            4,
+            3,
+            2
+          ],
+          [
+            0,
+            2,
+            1,
+            3,
+            4
+          ],
+          [
+            0,
+            2,
+            1,
+            4,
+            3
+          ],
+          [
+            0,
+            2,
+            3,
+            1,
+            4
+          ],
+          [
+            0,
+            2,
+            3,
+            4,
+            1
+          ],
+          [
+            0,
+            2,
+            4,
+            1,
+            3
+          ],
+          [
+            0,
+            2,
+            4,
+            3,
+            1
+          ],
+          [
+            0,
+            3,
+            1,
+            2,
+            4
+          ],
+          [
+            0,
+            3,
+            1,
+            4,
+            2
+          ],
+          [
+            0,
+            3,
+            2,
+            1,
+            4
+          ],
+          [
+            0,
+            3,
+            2,
+            4,
+            1
+          ],
+          [
+            0,
+            3,
+            4,
+            1,
+            2
+          ],
+          [
+            0,
+            3,
+            4,
+            2,
+            1
+          ],
+          [
+            0,
+            4,
+            1,
+            2,
+            3
+          ],
+          [
+            0,
+            4,
+            1,
+            3,
+            2
+          ],
+          [
+            0,
+            4,
+            2,
+            1,
+            3
+          ],
+          [
+            0,
+            4,
+            2,
+            3,
+            1
+          ],
+          [
+            0,
+            4,
+            3,
+            1,
+            2
+          ],
+          [
+            0,
+            4,
+            3,
+            2,
+            1
+          ],
+          [
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            0,
+            2,
+            4,
+            3
+          ],
+          [
+            1,
+            0,
+            3,
+            2,
+            4
+          ],
+          [
+            1,
+            0,
+            3,
+            4,
+            2
+          ],
+          [
+            1,
+            0,
+            4,
+            2,
+            3
+          ],
+          [
+            1,
+            0,
+            4,
+            3,
+            2
+          ],
+          [
+            1,
+            2,
+            0,
+            3,
+            4
+          ],
+          [
+            1,
+            2,
+            0,
+            4,
+            3
+          ],
+          [
+            1,
+            2,
+            3,
+            0,
+            4
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          [
+            1,
+            2,
+            4,
+            0,
+            3
+          ],
+          [
+            1,
+            2,
+            4,
+            3,
+            0
+          ],
+          [
+            1,
+            3,
+            0,
+            2,
+            4
+          ],
+          [
+            1,
+            3,
+            0,
+            4,
+            2
+          ],
+          [
+            1,
+            3,
+            2,
+            0,
+            4
+          ],
+          [
+            1,
+            3,
+            2,
+            4,
+            0
+          ],
+          [
+            1,
+            3,
+            4,
+            0,
+            2
+          ],
+          [
+            1,
+            3,
+            4,
+            2,
+            0
+          ],
+          [
+            1,
+            4,
+            0,
+            2,
+            3
+          ],
+          [
+            1,
+            4,
+            0,
+            3,
+            2
+          ],
+          [
+            1,
+            4,
+            2,
+            0,
+            3
+          ],
+          [
+            1,
+            4,
+            2,
+            3,
+            0
+          ],
+          [
+            1,
+            4,
+            3,
+            0,
+            2
+          ],
+          [
+            1,
+            4,
+            3,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1,
+            3,
+            4
+          ],
+          [
+            2,
+            0,
+            1,
+            4,
+            3
+          ],
+          [
+            2,
+            0,
+            3,
+            1,
+            4
+          ],
+          [
+            2,
+            0,
+            3,
+            4,
+            1
+          ],
+          [
+            2,
+            0,
+            4,
+            1,
+            3
+          ],
+          [
+            2,
+            0,
+            4,
+            3,
+            1
+          ],
+          [
+            2,
+            1,
+            0,
+            3,
+            4
+          ],
+          [
+            2,
+            1,
+            0,
+            4,
+            3
+          ],
+          [
+            2,
+            1,
+            3,
+            0,
+            4
+          ],
+          [
+            2,
+            1,
+            3,
+            4,
+            0
+          ],
+          [
+            2,
+            1,
+            4,
+            0,
+            3
+          ],
+          [
+            2,
+            1,
+            4,
+            3,
+            0
+          ],
+          [
+            2,
+            3,
+            0,
+            1,
+            4
+          ],
+          [
+            2,
+            3,
+            0,
+            4,
+            1
+          ],
+          [
+            2,
+            3,
+            1,
+            0,
+            4
+          ],
+          [
+            2,
+            3,
+            1,
+            4,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          [
+            2,
+            3,
+            4,
+            1,
+            0
+          ],
+          [
+            2,
+            4,
+            0,
+            1,
+            3
+          ],
+          [
+            2,
+            4,
+            0,
+            3,
+            1
+          ],
+          [
+            2,
+            4,
+            1,
+            0,
+            3
+          ],
+          [
+            2,
+            4,
+            1,
+            3,
+            0
+          ],
+          [
+            2,
+            4,
+            3,
+            0,
+            1
+          ],
+          [
+            2,
+            4,
+            3,
+            1,
+            0
+          ],
+          [
+            3,
+            0,
+            1,
+            2,
+            4
+          ],
+          [
+            3,
+            0,
+            1,
+            4,
+            2
+          ],
+          [
+            3,
+            0,
+            2,
+            1,
+            4
+          ],
+          [
+            3,
+            0,
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            0,
+            4,
+            1,
+            2
+          ],
+          [
+            3,
+            0,
+            4,
+            2,
+            1
+          ],
+          [
+            3,
+            1,
+            0,
+            2,
+            4
+          ],
+          [
+            3,
+            1,
+            0,
+            4,
+            2
+          ],
+          [
+            3,
+            1,
+            2,
+            0,
+            4
+          ],
+          [
+            3,
+            1,
+            2,
+            4,
+            0
+          ],
+          [
+            3,
+            1,
+            4,
+            0,
+            2
+          ],
+          [
+            3,
+            1,
+            4,
+            2,
+            0
+          ],
+          [
+            3,
+            2,
+            0,
+            1,
+            4
+          ],
+          [
+            3,
+            2,
+            0,
+            4,
+            1
+          ],
+          [
+            3,
+            2,
+            1,
+            0,
+            4
+          ],
+          [
+            3,
+            2,
+            1,
+            4,
+            0
+          ],
+          [
+            3,
+            2,
+            4,
+            0,
+            1
+          ],
+          [
+            3,
+            2,
+            4,
+            1,
+            0
+          ],
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          [
+            3,
+            4,
+            0,
+            2,
+            1
+          ],
+          [
+            3,
+            4,
+            1,
+            0,
+            2
+          ],
+          [
+            3,
+            4,
+            1,
+            2,
+            0
+          ],
+          [
+            3,
+            4,
+            2,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            2,
+            1,
+            0
+          ],
+          [
+            4,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          [
+            4,
+            0,
+            2,
+            1,
+            3
+          ],
+          [
+            4,
+            0,
+            2,
+            3,
+            1
+          ],
+          [
+            4,
+            0,
+            3,
+            1,
+            2
+          ],
+          [
+            4,
+            0,
+            3,
+            2,
+            1
+          ],
+          [
+            4,
+            1,
+            0,
+            2,
+            3
+          ],
+          [
+            4,
+            1,
+            0,
+            3,
+            2
+          ],
+          [
+            4,
+            1,
+            2,
+            0,
+            3
+          ],
+          [
+            4,
+            1,
+            2,
+            3,
+            0
+          ],
+          [
+            4,
+            1,
+            3,
+            0,
+            2
+          ],
+          [
+            4,
+            1,
+            3,
+            2,
+            0
+          ],
+          [
+            4,
+            2,
+            0,
+            1,
+            3
+          ],
+          [
+            4,
+            2,
+            0,
+            3,
+            1
+          ],
+          [
+            4,
+            2,
+            1,
+            0,
+            3
+          ],
+          [
+            4,
+            2,
+            1,
+            3,
+            0
+          ],
+          [
+            4,
+            2,
+            3,
+            0,
+            1
+          ],
+          [
+            4,
+            2,
+            3,
+            1,
+            0
+          ],
+          [
+            4,
+            3,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            3,
+            0,
+            2,
+            1
+          ],
+          [
+            4,
+            3,
+            1,
+            0,
+            2
+          ],
+          [
+            4,
+            3,
+            1,
+            2,
+            0
+          ],
+          [
+            4,
+            3,
+            2,
+            0,
+            1
+          ],
+          [
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "история звонков (D-08)"
+    },
+    {
+      "expect": {
+        "max_lamport": 7,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "blocked": [
+            {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            }
+          ],
+          "folders": [
+            {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 9,
+              "title": "B"
+            }
+          ],
+          "scheduled_sent": [
+            "qampqampqampqampqampqQ=="
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "block_set": {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 9,
+              "title": "A"
+            },
+            "lamport": "5",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 9,
+              "title": "B"
+            },
+            "lamport": "5",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "7",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "scheduled_sent": {
+              "op_id": "qampqampqampqampqampqQ=="
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "7",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "scheduled_sent": {
+              "op_id": "qampqampqampqampqampqQ=="
+            },
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc316a0d0a090a070a05626f6240781001",
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc316a0d0a090a070a05626f6240781001",
+          "0a100202020202020202020202020202020210051a056465762d612080d095ffbc31521808091201411a04f09f92bc480178ffffffffffffffffff01",
+          "0a100202020202020202020202020202020210051a056465762d612080d095ffbc31521808091201421a04f09f92bc480178ffffffffffffffffff01",
+          "0a100303030303030303030303030303030310071a056465762d622080d095ffbc31b201120a10a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9",
+          "0a100303030303030303030303030303030310071a056465762d622080d095ffbc31b201120a10a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            3,
+            5,
+            0,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "повторы записей и одинаковый op_id с разным содержимым"
+    },
+    {
+      "expect": {
+        "max_lamport": 4,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "drafts": [
+            {
+              "date_ms": "3",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+                }
+              },
+              "text": "CgFj"
+            },
+            {
+              "date_ms": "2",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "text": "CgFi"
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "draft_set": {
+              "date_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "text": "CgFh"
+            },
+            "lamport": "4",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "draft_set": {
+              "date_ms": "2",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "text": "CgFi"
+            },
+            "lamport": "4",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "draft_remove": {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+                }
+              }
+            },
+            "lamport": "4",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "draft_set": {
+              "date_ms": "3",
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+                }
+              },
+              "text": "CgFj"
+            },
+            "lamport": "4",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-z",
+            "draft_remove": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "lamport": "3",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110041a056465762d612080d095ffbc319201120a090a070a05626f62407812030a01612001",
+          "0a100202020202020202020202020202020210041a056465762d612080d095ffbc319201120a090a070a05626f62407812030a01622002",
+          "0a100303030303030303030303030303030310041a056465762d612080d095ffbc319a01190a1712150a0178121006060606060606060606060606060606",
+          "0a100404040404040404040404040404040410041a056465762d612080d095ffbc319201200a1712150a017812100606060606060606060606060606060612030a01632003",
+          "0a100505050505050505050505050505050510031a056465762d7a2080d095ffbc319a010b0a090a070a05626f624078"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            4,
+            3
+          ],
+          [
+            0,
+            1,
+            3,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            3,
+            4,
+            2
+          ],
+          [
+            0,
+            1,
+            4,
+            2,
+            3
+          ],
+          [
+            0,
+            1,
+            4,
+            3,
+            2
+          ],
+          [
+            0,
+            2,
+            1,
+            3,
+            4
+          ],
+          [
+            0,
+            2,
+            1,
+            4,
+            3
+          ],
+          [
+            0,
+            2,
+            3,
+            1,
+            4
+          ],
+          [
+            0,
+            2,
+            3,
+            4,
+            1
+          ],
+          [
+            0,
+            2,
+            4,
+            1,
+            3
+          ],
+          [
+            0,
+            2,
+            4,
+            3,
+            1
+          ],
+          [
+            0,
+            3,
+            1,
+            2,
+            4
+          ],
+          [
+            0,
+            3,
+            1,
+            4,
+            2
+          ],
+          [
+            0,
+            3,
+            2,
+            1,
+            4
+          ],
+          [
+            0,
+            3,
+            2,
+            4,
+            1
+          ],
+          [
+            0,
+            3,
+            4,
+            1,
+            2
+          ],
+          [
+            0,
+            3,
+            4,
+            2,
+            1
+          ],
+          [
+            0,
+            4,
+            1,
+            2,
+            3
+          ],
+          [
+            0,
+            4,
+            1,
+            3,
+            2
+          ],
+          [
+            0,
+            4,
+            2,
+            1,
+            3
+          ],
+          [
+            0,
+            4,
+            2,
+            3,
+            1
+          ],
+          [
+            0,
+            4,
+            3,
+            1,
+            2
+          ],
+          [
+            0,
+            4,
+            3,
+            2,
+            1
+          ],
+          [
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            0,
+            2,
+            4,
+            3
+          ],
+          [
+            1,
+            0,
+            3,
+            2,
+            4
+          ],
+          [
+            1,
+            0,
+            3,
+            4,
+            2
+          ],
+          [
+            1,
+            0,
+            4,
+            2,
+            3
+          ],
+          [
+            1,
+            0,
+            4,
+            3,
+            2
+          ],
+          [
+            1,
+            2,
+            0,
+            3,
+            4
+          ],
+          [
+            1,
+            2,
+            0,
+            4,
+            3
+          ],
+          [
+            1,
+            2,
+            3,
+            0,
+            4
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          [
+            1,
+            2,
+            4,
+            0,
+            3
+          ],
+          [
+            1,
+            2,
+            4,
+            3,
+            0
+          ],
+          [
+            1,
+            3,
+            0,
+            2,
+            4
+          ],
+          [
+            1,
+            3,
+            0,
+            4,
+            2
+          ],
+          [
+            1,
+            3,
+            2,
+            0,
+            4
+          ],
+          [
+            1,
+            3,
+            2,
+            4,
+            0
+          ],
+          [
+            1,
+            3,
+            4,
+            0,
+            2
+          ],
+          [
+            1,
+            3,
+            4,
+            2,
+            0
+          ],
+          [
+            1,
+            4,
+            0,
+            2,
+            3
+          ],
+          [
+            1,
+            4,
+            0,
+            3,
+            2
+          ],
+          [
+            1,
+            4,
+            2,
+            0,
+            3
+          ],
+          [
+            1,
+            4,
+            2,
+            3,
+            0
+          ],
+          [
+            1,
+            4,
+            3,
+            0,
+            2
+          ],
+          [
+            1,
+            4,
+            3,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1,
+            3,
+            4
+          ],
+          [
+            2,
+            0,
+            1,
+            4,
+            3
+          ],
+          [
+            2,
+            0,
+            3,
+            1,
+            4
+          ],
+          [
+            2,
+            0,
+            3,
+            4,
+            1
+          ],
+          [
+            2,
+            0,
+            4,
+            1,
+            3
+          ],
+          [
+            2,
+            0,
+            4,
+            3,
+            1
+          ],
+          [
+            2,
+            1,
+            0,
+            3,
+            4
+          ],
+          [
+            2,
+            1,
+            0,
+            4,
+            3
+          ],
+          [
+            2,
+            1,
+            3,
+            0,
+            4
+          ],
+          [
+            2,
+            1,
+            3,
+            4,
+            0
+          ],
+          [
+            2,
+            1,
+            4,
+            0,
+            3
+          ],
+          [
+            2,
+            1,
+            4,
+            3,
+            0
+          ],
+          [
+            2,
+            3,
+            0,
+            1,
+            4
+          ],
+          [
+            2,
+            3,
+            0,
+            4,
+            1
+          ],
+          [
+            2,
+            3,
+            1,
+            0,
+            4
+          ],
+          [
+            2,
+            3,
+            1,
+            4,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          [
+            2,
+            3,
+            4,
+            1,
+            0
+          ],
+          [
+            2,
+            4,
+            0,
+            1,
+            3
+          ],
+          [
+            2,
+            4,
+            0,
+            3,
+            1
+          ],
+          [
+            2,
+            4,
+            1,
+            0,
+            3
+          ],
+          [
+            2,
+            4,
+            1,
+            3,
+            0
+          ],
+          [
+            2,
+            4,
+            3,
+            0,
+            1
+          ],
+          [
+            2,
+            4,
+            3,
+            1,
+            0
+          ],
+          [
+            3,
+            0,
+            1,
+            2,
+            4
+          ],
+          [
+            3,
+            0,
+            1,
+            4,
+            2
+          ],
+          [
+            3,
+            0,
+            2,
+            1,
+            4
+          ],
+          [
+            3,
+            0,
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            0,
+            4,
+            1,
+            2
+          ],
+          [
+            3,
+            0,
+            4,
+            2,
+            1
+          ],
+          [
+            3,
+            1,
+            0,
+            2,
+            4
+          ],
+          [
+            3,
+            1,
+            0,
+            4,
+            2
+          ],
+          [
+            3,
+            1,
+            2,
+            0,
+            4
+          ],
+          [
+            3,
+            1,
+            2,
+            4,
+            0
+          ],
+          [
+            3,
+            1,
+            4,
+            0,
+            2
+          ],
+          [
+            3,
+            1,
+            4,
+            2,
+            0
+          ],
+          [
+            3,
+            2,
+            0,
+            1,
+            4
+          ],
+          [
+            3,
+            2,
+            0,
+            4,
+            1
+          ],
+          [
+            3,
+            2,
+            1,
+            0,
+            4
+          ],
+          [
+            3,
+            2,
+            1,
+            4,
+            0
+          ],
+          [
+            3,
+            2,
+            4,
+            0,
+            1
+          ],
+          [
+            3,
+            2,
+            4,
+            1,
+            0
+          ],
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          [
+            3,
+            4,
+            0,
+            2,
+            1
+          ],
+          [
+            3,
+            4,
+            1,
+            0,
+            2
+          ],
+          [
+            3,
+            4,
+            1,
+            2,
+            0
+          ],
+          [
+            3,
+            4,
+            2,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            2,
+            1,
+            0
+          ],
+          [
+            4,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          [
+            4,
+            0,
+            2,
+            1,
+            3
+          ],
+          [
+            4,
+            0,
+            2,
+            3,
+            1
+          ],
+          [
+            4,
+            0,
+            3,
+            1,
+            2
+          ],
+          [
+            4,
+            0,
+            3,
+            2,
+            1
+          ],
+          [
+            4,
+            1,
+            0,
+            2,
+            3
+          ],
+          [
+            4,
+            1,
+            0,
+            3,
+            2
+          ],
+          [
+            4,
+            1,
+            2,
+            0,
+            3
+          ],
+          [
+            4,
+            1,
+            2,
+            3,
+            0
+          ],
+          [
+            4,
+            1,
+            3,
+            0,
+            2
+          ],
+          [
+            4,
+            1,
+            3,
+            2,
+            0
+          ],
+          [
+            4,
+            2,
+            0,
+            1,
+            3
+          ],
+          [
+            4,
+            2,
+            0,
+            3,
+            1
+          ],
+          [
+            4,
+            2,
+            1,
+            0,
+            3
+          ],
+          [
+            4,
+            2,
+            1,
+            3,
+            0
+          ],
+          [
+            4,
+            2,
+            3,
+            0,
+            1
+          ],
+          [
+            4,
+            2,
+            3,
+            1,
+            0
+          ],
+          [
+            4,
+            3,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            3,
+            0,
+            2,
+            1
+          ],
+          [
+            4,
+            3,
+            1,
+            0,
+            2
+          ],
+          [
+            4,
+            3,
+            1,
+            2,
+            0
+          ],
+          [
+            4,
+            3,
+            2,
+            0,
+            1
+          ],
+          [
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "ничья (lamport, device_id) → больший op_id; надгробие в ничьей; больший device_id не спасает меньший лампорт"
+    },
+    {
+      "expect": {
+        "max_lamport": 6,
+        "ok": true,
+        "rejected": [],
+        "snapshot": {
+          "blocked": [
+            {
+              "blocked_at_ms": "21",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            }
+          ],
+          "folder_order": {
+            "ids": [
+              8
+            ]
+          }
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "block_remove": {
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "5",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "20",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "4",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "21",
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "6",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_order": {
+              "ids": [
+                7
+              ]
+            },
+            "lamport": "2",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_order": {
+              "ids": [
+                8
+              ]
+            },
+            "lamport": "2",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110051a056465762d622080d095ffbc31720d0a0b0a090a076361726f6c4078",
+          "0a100202020202020202020202020202020210041a056465762d612080d095ffbc316a0f0a0b0a090a076361726f6c40781014",
+          "0a100303030303030303030303030303030310061a056465762d612080d095ffbc316a0f0a0b0a090a076361726f6c40781015",
+          "0a100404040404040404040404040404040410021a056465762d612080d095ffbc3162020807",
+          "0a100505050505050505050505050505050510021a056465762d612080d095ffbc3162020808"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            4,
+            3
+          ],
+          [
+            0,
+            1,
+            3,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            3,
+            4,
+            2
+          ],
+          [
+            0,
+            1,
+            4,
+            2,
+            3
+          ],
+          [
+            0,
+            1,
+            4,
+            3,
+            2
+          ],
+          [
+            0,
+            2,
+            1,
+            3,
+            4
+          ],
+          [
+            0,
+            2,
+            1,
+            4,
+            3
+          ],
+          [
+            0,
+            2,
+            3,
+            1,
+            4
+          ],
+          [
+            0,
+            2,
+            3,
+            4,
+            1
+          ],
+          [
+            0,
+            2,
+            4,
+            1,
+            3
+          ],
+          [
+            0,
+            2,
+            4,
+            3,
+            1
+          ],
+          [
+            0,
+            3,
+            1,
+            2,
+            4
+          ],
+          [
+            0,
+            3,
+            1,
+            4,
+            2
+          ],
+          [
+            0,
+            3,
+            2,
+            1,
+            4
+          ],
+          [
+            0,
+            3,
+            2,
+            4,
+            1
+          ],
+          [
+            0,
+            3,
+            4,
+            1,
+            2
+          ],
+          [
+            0,
+            3,
+            4,
+            2,
+            1
+          ],
+          [
+            0,
+            4,
+            1,
+            2,
+            3
+          ],
+          [
+            0,
+            4,
+            1,
+            3,
+            2
+          ],
+          [
+            0,
+            4,
+            2,
+            1,
+            3
+          ],
+          [
+            0,
+            4,
+            2,
+            3,
+            1
+          ],
+          [
+            0,
+            4,
+            3,
+            1,
+            2
+          ],
+          [
+            0,
+            4,
+            3,
+            2,
+            1
+          ],
+          [
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            0,
+            2,
+            4,
+            3
+          ],
+          [
+            1,
+            0,
+            3,
+            2,
+            4
+          ],
+          [
+            1,
+            0,
+            3,
+            4,
+            2
+          ],
+          [
+            1,
+            0,
+            4,
+            2,
+            3
+          ],
+          [
+            1,
+            0,
+            4,
+            3,
+            2
+          ],
+          [
+            1,
+            2,
+            0,
+            3,
+            4
+          ],
+          [
+            1,
+            2,
+            0,
+            4,
+            3
+          ],
+          [
+            1,
+            2,
+            3,
+            0,
+            4
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          [
+            1,
+            2,
+            4,
+            0,
+            3
+          ],
+          [
+            1,
+            2,
+            4,
+            3,
+            0
+          ],
+          [
+            1,
+            3,
+            0,
+            2,
+            4
+          ],
+          [
+            1,
+            3,
+            0,
+            4,
+            2
+          ],
+          [
+            1,
+            3,
+            2,
+            0,
+            4
+          ],
+          [
+            1,
+            3,
+            2,
+            4,
+            0
+          ],
+          [
+            1,
+            3,
+            4,
+            0,
+            2
+          ],
+          [
+            1,
+            3,
+            4,
+            2,
+            0
+          ],
+          [
+            1,
+            4,
+            0,
+            2,
+            3
+          ],
+          [
+            1,
+            4,
+            0,
+            3,
+            2
+          ],
+          [
+            1,
+            4,
+            2,
+            0,
+            3
+          ],
+          [
+            1,
+            4,
+            2,
+            3,
+            0
+          ],
+          [
+            1,
+            4,
+            3,
+            0,
+            2
+          ],
+          [
+            1,
+            4,
+            3,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1,
+            3,
+            4
+          ],
+          [
+            2,
+            0,
+            1,
+            4,
+            3
+          ],
+          [
+            2,
+            0,
+            3,
+            1,
+            4
+          ],
+          [
+            2,
+            0,
+            3,
+            4,
+            1
+          ],
+          [
+            2,
+            0,
+            4,
+            1,
+            3
+          ],
+          [
+            2,
+            0,
+            4,
+            3,
+            1
+          ],
+          [
+            2,
+            1,
+            0,
+            3,
+            4
+          ],
+          [
+            2,
+            1,
+            0,
+            4,
+            3
+          ],
+          [
+            2,
+            1,
+            3,
+            0,
+            4
+          ],
+          [
+            2,
+            1,
+            3,
+            4,
+            0
+          ],
+          [
+            2,
+            1,
+            4,
+            0,
+            3
+          ],
+          [
+            2,
+            1,
+            4,
+            3,
+            0
+          ],
+          [
+            2,
+            3,
+            0,
+            1,
+            4
+          ],
+          [
+            2,
+            3,
+            0,
+            4,
+            1
+          ],
+          [
+            2,
+            3,
+            1,
+            0,
+            4
+          ],
+          [
+            2,
+            3,
+            1,
+            4,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          [
+            2,
+            3,
+            4,
+            1,
+            0
+          ],
+          [
+            2,
+            4,
+            0,
+            1,
+            3
+          ],
+          [
+            2,
+            4,
+            0,
+            3,
+            1
+          ],
+          [
+            2,
+            4,
+            1,
+            0,
+            3
+          ],
+          [
+            2,
+            4,
+            1,
+            3,
+            0
+          ],
+          [
+            2,
+            4,
+            3,
+            0,
+            1
+          ],
+          [
+            2,
+            4,
+            3,
+            1,
+            0
+          ],
+          [
+            3,
+            0,
+            1,
+            2,
+            4
+          ],
+          [
+            3,
+            0,
+            1,
+            4,
+            2
+          ],
+          [
+            3,
+            0,
+            2,
+            1,
+            4
+          ],
+          [
+            3,
+            0,
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            0,
+            4,
+            1,
+            2
+          ],
+          [
+            3,
+            0,
+            4,
+            2,
+            1
+          ],
+          [
+            3,
+            1,
+            0,
+            2,
+            4
+          ],
+          [
+            3,
+            1,
+            0,
+            4,
+            2
+          ],
+          [
+            3,
+            1,
+            2,
+            0,
+            4
+          ],
+          [
+            3,
+            1,
+            2,
+            4,
+            0
+          ],
+          [
+            3,
+            1,
+            4,
+            0,
+            2
+          ],
+          [
+            3,
+            1,
+            4,
+            2,
+            0
+          ],
+          [
+            3,
+            2,
+            0,
+            1,
+            4
+          ],
+          [
+            3,
+            2,
+            0,
+            4,
+            1
+          ],
+          [
+            3,
+            2,
+            1,
+            0,
+            4
+          ],
+          [
+            3,
+            2,
+            1,
+            4,
+            0
+          ],
+          [
+            3,
+            2,
+            4,
+            0,
+            1
+          ],
+          [
+            3,
+            2,
+            4,
+            1,
+            0
+          ],
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          [
+            3,
+            4,
+            0,
+            2,
+            1
+          ],
+          [
+            3,
+            4,
+            1,
+            0,
+            2
+          ],
+          [
+            3,
+            4,
+            1,
+            2,
+            0
+          ],
+          [
+            3,
+            4,
+            2,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            2,
+            1,
+            0
+          ],
+          [
+            4,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          [
+            4,
+            0,
+            2,
+            1,
+            3
+          ],
+          [
+            4,
+            0,
+            2,
+            3,
+            1
+          ],
+          [
+            4,
+            0,
+            3,
+            1,
+            2
+          ],
+          [
+            4,
+            0,
+            3,
+            2,
+            1
+          ],
+          [
+            4,
+            1,
+            0,
+            2,
+            3
+          ],
+          [
+            4,
+            1,
+            0,
+            3,
+            2
+          ],
+          [
+            4,
+            1,
+            2,
+            0,
+            3
+          ],
+          [
+            4,
+            1,
+            2,
+            3,
+            0
+          ],
+          [
+            4,
+            1,
+            3,
+            0,
+            2
+          ],
+          [
+            4,
+            1,
+            3,
+            2,
+            0
+          ],
+          [
+            4,
+            2,
+            0,
+            1,
+            3
+          ],
+          [
+            4,
+            2,
+            0,
+            3,
+            1
+          ],
+          [
+            4,
+            2,
+            1,
+            0,
+            3
+          ],
+          [
+            4,
+            2,
+            1,
+            3,
+            0
+          ],
+          [
+            4,
+            2,
+            3,
+            0,
+            1
+          ],
+          [
+            4,
+            2,
+            3,
+            1,
+            0
+          ],
+          [
+            4,
+            3,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            3,
+            0,
+            2,
+            1
+          ],
+          [
+            4,
+            3,
+            1,
+            0,
+            2
+          ],
+          [
+            4,
+            3,
+            1,
+            2,
+            0
+          ],
+          [
+            4,
+            3,
+            2,
+            0,
+            1
+          ],
+          [
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "надгробие раньше записи, воскрешение большей меткой; ничья регистра → больший op_id"
+    },
+    {
+      "expect": {
+        "max_lamport": 9,
+        "ok": true,
+        "rejected": [
+          0,
+          1,
+          2,
+          3,
+          5,
+          6
+        ],
+        "snapshot": {
+          "archived": [
+            {
+              "user": {
+                "address": "bob@x"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "block_set": {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "not an address"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "block_set": {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "folder_set": {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 1,
+              "title": "Архив"
+            },
+            "lamport": "1",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "pinned_order": {},
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-c",
+            "lamport": "9",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "archive_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev a",
+            "lamport": "2",
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "archive_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "9007199254740992",
+            "op_id": "BwcHBwcHBwcHBwcHBwcHBw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "archive_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "2",
+            "op_id": "CAgICAgICAgICAgICAgICA==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc316a160a120a100a0e6e6f7420616e20616464726573731001",
+          "0a10020202020202020202020202020202021a056465762d612080d095ffbc316a0d0a090a070a05626f6240781001",
+          "0a100303030303030303030303030303030310011a056465762d612080d095ffbc3152210801120ad090d180d185d0b8d0b21a04f09f92bc480178ffffffffffffffffff01",
+          "0a100404040404040404040404040404040410011a056465762d612080d095ffbc31ca0100",
+          "0a100505050505050505050505050505050510091a056465762d632080d095ffbc31",
+          "0a100606060606060606060606060606060610021a0564657620612080d095ffbc31ba010b0a090a070a05626f624078",
+          "0a10070707070707070707070707070707071080808080808080101a056465762d612080d095ffbc31ba010b0a090a070a05626f624078",
+          "0a100808080808080808080808080808080810021a056465762d622080d095ffbc31ba010b0a090a070a05626f624078"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          [
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            6,
+            7,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            6,
+            7,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            6,
+            7,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            6,
+            7,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            7,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          [
+            1,
+            3,
+            5,
+            7,
+            0,
+            2,
+            4,
+            6
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "некорректные операции отвергаются одинаково; неизвестный вид — пропуск"
+    }
+  ],
+  "description": "STATE-1: сведение личного состояния LWW (lamport, device_id, op_id, sha256(операции)); каждый порядок из orders (индексы в ops_hex, возможны повторы) даёт тот же snapshot и тот же набор отвергнутых индексов",
+  "suite": "state"
+}

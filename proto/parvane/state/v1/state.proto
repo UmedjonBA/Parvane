@@ -1,0 +1,250 @@
+// Личное состояние пользователя (R10): зашифрованный журнал, общий для его
+// устройств. Сервер хранит только шифртекст (StateRecord); объекты состояния
+// (папки, блок-лист, настройки уведомлений, черновики, отложенные, архив/закреп,
+// история звонков — D-08) живут ВНУТРИ шифрования: запись журнала — StateOp,
+// зашифрованная AEAD на ключе личного состояния (движок: protocol/src/state.rs).
+//
+// Сведение (STATE-1): каждый объект — LWW-регистр или LWW-карта по ключу; метка
+// операции — (lamport, device_id, op_id), побеждает большая. Удаление —
+// надгробие с меткой. Итог не зависит от порядка и повторов записей.
+syntax = "proto3";
+
+package parvane.state.v1;
+
+import "parvane/call/v2/call.proto";
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service StateService {
+  rpc Append(AppendRequest) returns (AppendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "state.append"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc Sync(SyncRequest) returns (SyncResponse) {
+    option (parvane.core.v2.method) = {
+      name: "state.sync"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+}
+
+// Запись журнала: AEAD на ключе личного состояния.
+message StateRecord {
+  uint64 seq = 1 [(parvane.core.v2.actor) = ACTOR_SERVER_SET];
+  bytes op_id = 2 [(parvane.core.v2.max_len) = 16];
+  bytes aead_ciphertext = 3 [(parvane.core.v2.max_len) = 262144];
+}
+
+message AppendRequest {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  bytes aead_ciphertext = 2 [(parvane.core.v2.max_len) = 262144];
+}
+message AppendResponse {
+  uint64 seq = 1;
+}
+
+message SyncRequest {
+  // Курсор: записи с seq > after_seq.
+  uint64 after_seq = 1;
+  // Байтовый бюджет страницы (как msg.inbox.sync); 0 — по умолчанию,
+  // сервер ограничивает ≤ 716800. Хотя бы одна запись на страницу.
+  uint32 max_bytes = 2;
+}
+message SyncResponse {
+  repeated StateRecord records = 1 [(parvane.core.v2.max_items) = 1024];
+  bool more = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Ключ личного состояния (32 байта), общий для устройств пользователя.
+// Передаётся новому устройству внутри E2E при линковке/восстановлении.
+message StateKeyShare {
+  parvane.core.v2.UserRef user = 1;
+  bytes state_key = 2 [(parvane.core.v2.max_len) = 32];
+  // Версия ключа (смена ключа — новая версия; журнал перешифровывается клиентом).
+  uint32 key_version = 3;
+}
+
+// Собеседник: пользователь или группа.
+message Peer {
+  oneof kind {
+    parvane.core.v2.UserRef user = 1;
+    parvane.core.v2.Ref group = 2;
+  }
+}
+
+// Ключ карты по собеседнику (удаление записи).
+message PeerKey {
+  Peer peer = 1;
+}
+
+// Папка чатов (как dialogFilter Telegram). Ключ карты — id.
+message Folder {
+  // 0 и 1 зарезервированы («все чаты», архив).
+  uint32 id = 1;
+  string title = 2 [(parvane.core.v2.max_len) = 128];
+  string emoticon = 3 [(parvane.core.v2.max_len) = 32];
+  repeated Peer include_peers = 4 [(parvane.core.v2.max_items) = 200];
+  repeated Peer exclude_peers = 5 [(parvane.core.v2.max_items) = 200];
+  repeated Peer pinned_peers = 6 [(parvane.core.v2.max_items) = 200];
+  bool contacts = 7;
+  bool non_contacts = 8;
+  bool groups = 9;
+  bool channels = 10;
+  bool bots = 11;
+  bool exclude_muted = 12;
+  bool exclude_read = 13;
+  bool exclude_archived = 14;
+  // Цвет метки папки; -1 — без цвета.
+  int32 color = 15;
+}
+
+message FolderRef {
+  uint32 id = 1;
+}
+
+// Порядок папок (LWW-регистр).
+message FolderOrder {
+  repeated uint32 ids = 1 [(parvane.core.v2.max_items) = 256];
+}
+
+// Блок-лист (LWW-карта по собеседнику).
+message BlockEntry {
+  Peer peer = 1;
+  int64 blocked_at_ms = 2;
+}
+
+// Настройки уведомлений. Отсутствующее поле — наследуется от умолчаний.
+message NotifySettings {
+  // До какого момента без звука (мс эпохи); 0 — не заглушено.
+  optional int64 mute_until_ms = 1;
+  optional string sound = 2 [(parvane.core.v2.max_len) = 256];
+  optional bool show_previews = 3;
+  optional bool silent = 4;
+}
+
+// Настройки уведомлений собеседника (LWW-карта по собеседнику).
+message PeerNotify {
+  Peer peer = 1;
+  NotifySettings settings = 2;
+}
+
+// Умолчания уведомлений (LWW-регистр).
+message NotifyDefaults {
+  NotifySettings users = 1;
+  NotifySettings groups = 2;
+  NotifySettings channels = 3;
+}
+
+// Черновик (LWW-карта по собеседнику).
+message Draft {
+  Peer peer = 1;
+  // Сериализованный parvane.msg.v2.Text (текст + entities).
+  bytes text = 2 [(parvane.core.v2.max_len) = 131072];
+  // Ответ на сообщение: op_id исходной операции; пусто — без ответа.
+  bytes reply_to_op_id = 3 [(parvane.core.v2.max_len) = 16];
+  int64 date_ms = 4;
+}
+
+// Отложенное сообщение (LWW-карта по op_id). op_id — будущий op_id самого
+// сообщения: повторная отправка тем же op_id отсекается как дубль.
+message ScheduledMessage {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  Peer peer = 2;
+  int64 send_at_ms = 3;
+  // Сериализованный parvane.msg.v2.Content.
+  bytes content = 4 [(parvane.core.v2.max_len) = 262144];
+}
+
+message ScheduledRef {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+}
+
+enum PinList {
+  PIN_LIST_UNSPECIFIED = 0;
+  // Основной список чатов.
+  PIN_LIST_MAIN = 1;
+  // Архив.
+  PIN_LIST_ARCHIVE = 2;
+}
+
+// Порядок закреплённых чатов списка (LWW-регистр по списку).
+message PinnedOrder {
+  PinList list = 1;
+  repeated Peer peers = 2 [(parvane.core.v2.max_items) = 200];
+}
+
+// Запись истории звонков (D-08: сервер её не ведёт). LWW-карта по call_id.
+message CallRecord {
+  bytes call_id = 1 [(parvane.core.v2.max_len) = 16];
+  Peer peer = 2;
+  bool outgoing = 3;
+  bool video = 4;
+  parvane.call.v2.HangupReason reason = 5;
+  int64 started_ms = 6;
+  uint32 duration_s = 7;
+}
+
+message CallRef {
+  bytes call_id = 1 [(parvane.core.v2.max_len) = 16];
+}
+
+// Операция журнала личного состояния — открытый текст записи StateRecord.
+// op_id совпадает с op_id записи (входит в AAD).
+message StateOp {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  uint64 lamport = 2;
+  string device_id = 3 [(parvane.core.v2.max_len) = 64];
+  // Время создания (только отображение, в сведении не участвует).
+  int64 ts_ms = 4;
+  // Неизвестный вид (новее клиента) — пропускается, лампорт учитывается.
+  oneof op {
+    Folder folder_set = 10;
+    FolderRef folder_remove = 11;
+    FolderOrder folder_order = 12;
+    BlockEntry block_set = 13;
+    PeerKey block_remove = 14;
+    PeerNotify notify_set = 15;
+    PeerKey notify_remove = 16;
+    NotifyDefaults notify_defaults = 17;
+    Draft draft_set = 18;
+    PeerKey draft_remove = 19;
+    ScheduledMessage scheduled_set = 20;
+    ScheduledRef scheduled_remove = 21;
+    // Отправлено: необратимо (выигрывает у любой метки).
+    ScheduledRef scheduled_sent = 22;
+    PeerKey archive_set = 23;
+    PeerKey archive_remove = 24;
+    PinnedOrder pinned_order = 25;
+    CallRecord call_set = 26;
+    CallRef call_remove = 27;
+  }
+}
+
+// Сведённое состояние (каноничный вид: карты отсортированы по ключу) и
+// локальный снимок для миграции v1 → журнал состояния.
+message StateSnapshot {
+  repeated Folder folders = 1 [(parvane.core.v2.max_items) = 256];
+  FolderOrder folder_order = 2;
+  repeated BlockEntry blocked = 3 [(parvane.core.v2.max_items) = 100000];
+  repeated PeerNotify notify = 4 [(parvane.core.v2.max_items) = 100000];
+  NotifyDefaults notify_defaults = 5;
+  repeated Draft drafts = 6 [(parvane.core.v2.max_items) = 10000];
+  repeated ScheduledMessage scheduled = 7 [(parvane.core.v2.max_items) = 10000];
+  repeated bytes scheduled_sent = 8 [
+    (parvane.core.v2.max_items) = 100000,
+    (parvane.core.v2.max_len) = 16
+  ];
+  repeated Peer archived = 9 [(parvane.core.v2.max_items) = 100000];
+  repeated PinnedOrder pinned = 10 [(parvane.core.v2.max_items) = 2];
+  repeated CallRecord calls = 11 [(parvane.core.v2.max_items) = 10000];
+}

@@ -1,0 +1,4 @@
+language = "C"
+include_guard = "PARVANE_PROTOCOL_H"
+autogen_warning = "/* Сгенерировано cbindgen из backend/protocol/ffi — не править руками. */"
+cpp_compat = true

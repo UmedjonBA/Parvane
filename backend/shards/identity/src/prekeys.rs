@@ -16,7 +16,13 @@ pub(crate) async fn store_prekeys(pool: &SqlitePool, username: &str, req: &Publi
             .fetch_optional(pool)
             .await
             .context("чтение прежнего identity_key")?;
-    let device_changed = prev.map(|(k,)| k != req.identity_key).unwrap_or(false);
+    let device_changed = prev.as_ref().map(|(k,)| k != &req.identity_key).unwrap_or(false);
+    // T048 (spec 007, защита от downgrade): у пользователя с журналом устройств
+    // v2 новое v1-устройство без сертификата (или смена ключей v1-устройства)
+    // не регистрируется — иначе сервер мог бы «понизить» переписку до v1.
+    if (prev.is_none() || device_changed) && crate::v2::user_has_v2(username).await {
+        anyhow::bail!("устройство без сертификата v2 запрещено для этого аккаунта");
+    }
     if device_changed {
         sqlx::query("DELETE FROM one_time_prekeys WHERE username = ? AND device_id = ?")
             .bind(username)
@@ -93,14 +99,30 @@ pub(crate) async fn fetch_bundle(
     username: &str,
     known_devices: &[String],
 ) -> Result<FetchBundleResponse> {
-    fetch_bundle_for(pool, "", username, known_devices).await
+    fetch_bundle_for(pool, "", "", username, known_devices).await
+}
+
+/// Olm-аккаунт запросившего для кэша повторной выдачи one-time (P-21):
+/// устройство токена и его текущий identity-ключ из каталога. Смена ключей
+/// устройства (выход и вход заново) даёт другой аккаунт.
+pub(crate) async fn requester_account(pool: &SqlitePool, requester: &str, device_id: &str) -> String {
+    let identity_key: Option<(String,)> =
+        sqlx::query_as("SELECT identity_key FROM device_keys WHERE username = ? AND device_id = ?")
+            .bind(requester)
+            .bind(device_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+    format!("{device_id}:{}", identity_key.map(|(key,)| key).unwrap_or_default())
 }
 
 /// `requester` — кто запрашивает (для кэша повторной выдачи one-time, P-21);
-/// пустой — без кэша (тесты/внутренние вызовы).
+/// пустой — без кэша (тесты/внутренние вызовы). `account` — его Olm-аккаунт
+/// (`requester_account`): выданную one-time повторно получает только он.
 pub(crate) async fn fetch_bundle_for(
     pool: &SqlitePool,
     requester: &str,
+    account: &str,
     username: &str,
     known_devices: &[String],
 ) -> Result<FetchBundleResponse> {
@@ -119,14 +141,20 @@ pub(crate) async fn fetch_bundle_for(
 
     let mut devices = Vec::with_capacity(rows.len());
     for (device_id, signing_key, reg, ik, spid, sp, sig) in rows {
+        let reuse = if requester.is_empty() || known_devices.contains(&device_id) {
+            OtkReuse::Miss
+        } else {
+            cached_otk(requester, account, username, &device_id)
+        };
         let otp: Option<(i64, String)> = if known_devices.contains(&device_id) {
             None
-        } else if let Some(cached) = (!requester.is_empty())
-            .then(|| cached_otk(requester, username, &device_id))
-            .flatten()
-        {
+        } else if let OtkReuse::Same(key_id, public_key) = reuse {
             // P-21: та же пара в окне — та же one-time, новую не сжигаем
-            Some(cached)
+            Some((key_id, public_key))
+        } else if matches!(reuse, OtkReuse::OtherAccount) {
+            // Ключ, выданный в окне другому Olm-аккаунту запросившего, цель уже
+            // могла израсходовать — сессия строится на signed prekey
+            None
         } else {
             let fresh: Option<(i64, String)> = sqlx::query_as(
                 "UPDATE one_time_prekeys SET consumed = 1
@@ -142,7 +170,7 @@ pub(crate) async fn fetch_bundle_for(
             .unwrap_or(None);
             if let Some((key_id, public_key)) = fresh.as_ref() {
                 if !requester.is_empty() {
-                    remember_otk(requester, username, &device_id, *key_id, public_key);
+                    remember_otk(requester, account, username, &device_id, *key_id, public_key);
                 }
                 // P-21: алерт об исчерпании — иначе деградация до signed-prekey-only
                 // происходила бы молча
@@ -222,14 +250,17 @@ pub(crate) async fn handle_prekeys_fetch(
 ) {
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match serde_json::from_slice::<FetchBundleRequest>(&msg.payload) {
-        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(requester) => {
+        Ok(req) => match verify_active(pool, decoding, &req.token).await {
+            Ok(claims) => {
+                let requester = claims.sub;
                 if !prekey_fetch_rate_ok(&requester, &req.user) {
                     empty_bundle_response(Some(
                         "слишком много запросов ключей, попробуйте позже".into(),
                     ))
                 } else {
-                    fetch_bundle_for(pool, &requester, &req.user, &req.known_devices)
+                    let account =
+                        requester_account(pool, &requester, claims.dev.as_deref().unwrap_or("")).await;
+                    fetch_bundle_for(pool, &requester, &account, &req.user, &req.known_devices)
                         .await
                         .unwrap_or_else(|e| empty_bundle_response(Some(e.to_string())))
                 }

@@ -1,0 +1,309 @@
+// Ссылки, подписанные операции, сертификаты устройств, конверты скрытого
+// отправителя, журнал состояния группы, описатель сервера.
+syntax = "proto3";
+
+package parvane.core.v2;
+
+import "parvane/core/v2/options.proto";
+
+// ── ссылки ──────────────────────────────────────────────────────────────────
+
+// Ссылка на объект (группа, контейнер, сообщение, звонок). Домен — в каждой
+// ссылке (задел федерации); id — 16 случайных байт.
+message Ref {
+  string domain = 1 [(max_len) = 128];
+  bytes id = 2 [(max_len) = 16];
+}
+
+// Адрес пользователя user@domain (правила Address v1).
+message UserRef {
+  string address = 1 [(max_len) = 255];
+}
+
+message DeviceRef {
+  string address = 1 [(max_len) = 255];
+  string device_id = 2 [(max_len) = 64];
+}
+
+// ── подписанные операции ────────────────────────────────────────────────────
+
+// Подписываемые байты (D-10): "parvane/v2/op" ‖ u8(len(domain)) ‖ domain ‖
+// u8(len(op_type)) ‖ op_type ‖ body, domain/op_type — [a-z0-9_.]{1,32}.
+// Проверка — над ПРИСЛАННЫМИ байтами body, затем body разбирается как ОДНО
+// сообщение OpBody, и header.domain/op_type сверяются с префиксом и
+// ожидаемыми. Пересборка для проверки запрещена (backend/protocol/src/sign.rs).
+// signer_key — подсказка; источник истины — сертификат/журнал.
+message SignedOp {
+  // Сериализованный OpBody.
+  bytes body = 1 [(max_len) = 270336];
+  // Ed25519, 64 байта.
+  bytes signature = 2 [(max_len) = 64];
+  // Ключ устройства или ключ отправки эпохи группы, 32 байта.
+  bytes signer_key = 3 [(max_len) = 32];
+}
+
+message OpBody {
+  OpHeader header = 1;
+  // Полезная нагрузка: тип задаёт пара domain/op_type. Содержимое ≤ 256 КиБ (v1).
+  bytes payload = 2 [(max_len) = 262144];
+}
+
+message OpHeader {
+  // [a-z0-9_.], 1..32 — без \0 (однозначность подписываемых байт).
+  string domain = 1 [(max_len) = 32];
+  string op_type = 2 [(max_len) = 32];
+  uint32 proto_minor = 3;
+  // UUIDv7, 16 байт; уникален на журнал (повтор → DUPLICATE).
+  bytes op_id = 4 [(max_len) = 16];
+  // Объект/сообщение/звонок.
+  Ref target = 5;
+  // Кому адресовано (SDP — адресат; sync — своё устройство). Копий ≤ 64 (v1).
+  repeated DeviceRef audience = 6 [(max_items) = 64];
+  int64 ts_ms = 7;
+  // Номера полей payload, без понимания которых нельзя показывать (FR-004).
+  repeated uint32 critical_fields = 8 [(max_items) = 16];
+  // D-09: контекст беседы обязателен для msg.*: получатель отвергает
+  // операцию, чей контекст не совпадает с чатом, откуда она пришла.
+  oneof conversation {
+    // Личный чат: собеседник-получатель.
+    UserRef direct_peer = 9;
+    GroupContext group = 10;
+  }
+}
+
+// D-03: голова журнала группы у отправителя — для обнаружения форка.
+message GroupContext {
+  Ref group = 1;
+  uint64 epoch = 2;
+  uint64 state_version = 3;
+  bytes state_head_hash = 4 [(max_len) = 32];
+}
+
+// ── личность и устройства ───────────────────────────────────────────────────
+
+message DeviceCertificate {
+  UserRef user = 1;
+  string device_id = 2 [(max_len) = 64];
+  bytes olm_curve25519 = 3 [(max_len) = 32];
+  bytes olm_ed25519 = 4 [(max_len) = 32];
+  // Ключ внешнего sealed-слоя (HPKE X25519).
+  bytes hpke_x25519 = 5 [(max_len) = 32];
+  uint32 proto_major = 6;
+  uint32 proto_minor = 7;
+  repeated string features = 8 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+  int64 created_ms = 9;
+  // D-11: монотонный номер выпуска; клиенты хранят максимум и отвергают откат.
+  uint64 serial = 10;
+  // C1-01: доказательство владения ключами устройства — подпись olm_ed25519
+  // над "parvane/v2/device-pop\0" ‖ user ‖ "\0" ‖ device_id ‖ "\0" ‖ root_key ‖
+  // olm_curve25519 ‖ olm_ed25519 ‖ hpke_x25519. Не покрывает serial/features:
+  // пересертификация новым SSK (D-12) переносит подпись без приватного ключа
+  // устройства. Без неё сертификат отвергается.
+  bytes possession_signature = 11 [(max_len) = 64];
+}
+
+// Цепочка root → self-signing → устройство (кросс-подпись). Корень хранится
+// только в резервной копии пользователя; TOFU — по корню (KEY-1 v2).
+message SignedDeviceCertificate {
+  // Сериализованный DeviceCertificate.
+  bytes certificate = 1 [(max_len) = 4096];
+  // Подпись self-signing-ключа над контекстом "parvane/v2/device-cert\0" ‖ certificate.
+  bytes self_signing_signature = 2 [(max_len) = 64];
+  bytes self_signing_key = 3 [(max_len) = 32];
+  // Подпись корня над контекстом "parvane/v2/self-signing\0" ‖ user ‖ "\0" ‖ self_signing_key.
+  bytes root_signature_over_self_signing = 4 [(max_len) = 64];
+  bytes root_key = 5 [(max_len) = 32];
+}
+
+// ── журнал устройств пользователя (D-01, D-11, D-12) ────────────────────────
+// Хэш-цепочка записей; каждая — SignedOp (domain "identity", op_type
+// "device_log") c payload = UserDeviceLogEntry, подписанный self-signing-ключом
+// (смена SSK — корнем). Клиенты проверяют цепочку, хранят (version, head_hash)
+// собеседника и отвергают откат. entry_hash = SHA-256("parvane/v2/device-log\0"
+// ‖ body ‖ signature).
+message UserDeviceLogEntry {
+  UserRef user = 1;
+  uint64 version = 2;
+  // SHA-256 предыдущей записи (для version = 1 — 32 нуля); подписывается.
+  bytes prev_hash = 3 [(max_len) = 32];
+  oneof change {
+    SignedDeviceCertificate add_device = 4;
+    string revoke_device_id = 5 [(max_len) = 64];
+    // Новый SSK и подпись корня над ним (SELF_SIGNING); сертификаты старого SSK
+    // недействительны.
+    RotateSelfSigning rotate_self_signing_key = 6;
+    // D-01: v1-устройства, признанные владельцем (публикуется первым
+    // v2-устройством; список может только сокращаться).
+    LegacyDeviceSet legacy_devices = 7;
+  }
+  // Корневой ключ пользователя (генезис/смена корня; иначе пусто).
+  bytes root_key = 8 [(max_len) = 32];
+}
+
+message RotateSelfSigning {
+  bytes self_signing_key = 1 [(max_len) = 32];
+  bytes root_signature = 2 [(max_len) = 64];
+}
+
+message LegacyDeviceSet {
+  repeated LegacyDevice devices = 1 [(max_items) = 64];
+}
+
+message LegacyDevice {
+  string device_id = 1 [(max_len) = 64];
+  bytes olm_curve25519 = 2 [(max_len) = 32];
+  bytes olm_ed25519 = 3 [(max_len) = 32];
+}
+
+// ── личные сообщения: скрытый отправитель ───────────────────────────────────
+
+// Слепой жетон (RFC 9474, RSABSSA-SHA384-PSS-Randomized). Подписанное
+// сообщение: "parvane/v2/token\0" ‖ key_id ‖ nonce.
+// D-06: key_id = SHA-256(SPKI ключа выпуска); принимаются только ключи из
+// SignedTokenKeyList, одинакового для всех и сверенного по анонимному каналу.
+message AnonToken {
+  bytes key_id = 1 [(max_len) = 32];
+  bytes nonce = 2 [(max_len) = 32];
+  // Для RSA-4096 — 512 байт.
+  bytes signature = 3 [(max_len) = 512];
+  // Рандомизатор RSABSSA (32 байта).
+  bytes msg_randomizer = 4 [(max_len) = 32];
+}
+
+message TokenKey {
+  bytes key_id = 1 [(max_len) = 32];
+  // SPKI DER.
+  bytes rsa_public_key = 2 [(max_len) = 1024];
+  int64 valid_from_ms = 3;
+  int64 valid_until_ms = 4;
+}
+
+message TokenKeyList {
+  repeated TokenKey keys = 1 [(max_items) = 16];
+  int64 issued_ms = 2;
+}
+
+message SignedTokenKeyList {
+  // Сериализованный TokenKeyList.
+  bytes list = 1 [(max_len) = 32768];
+  // Ed25519 ключом сервера над "parvane/v2/token-keys\0" ‖ list.
+  bytes server_signature = 2 [(max_len) = 64];
+}
+
+// Внешний слой HPKE (RFC 9180 base, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
+// ChaCha20-Poly1305), info = "parvane/v2/sealed\0" ‖ address ‖ "\0" ‖ device_id.
+message SealedEnvelope {
+  DeviceRef recipient = 1;
+  oneof access {
+    // Ключ доступа к доставке (сервер хранит SHA-256).
+    bytes delivery_key = 2 [(max_len) = 32];
+    AnonToken anon_token = 3;
+  }
+  bytes hpke_enc = 4 [(max_len) = 32];
+  // В L2 — выравнивание по сетке 512/2048/8192/32768.
+  bytes ciphertext = 5 [(max_len) = 327680];
+}
+
+// После снятия HPKE.
+message SealedInner {
+  SignedDeviceCertificate sender = 1;
+  // Olm; внутри — SignedOp с Content.
+  bytes olm_message = 2 [(max_len) = 300000];
+  // 0 — pre-key, 1 — normal.
+  uint32 olm_type = 3;
+  // Заполнение до сетки L2 (игнорируется). Запас на пропуск корзины, в
+  // которую точно попасть нельзя (см. `seal::l2_padding_len`).
+  bytes padding = 4 [(max_len) = 65536];
+}
+
+// ── группы: журнал состояния и эпохи ────────────────────────────────────────
+
+// Внешние group/version/prev_hash — только индекс для сервера; подписанные
+// значения — в payload (group.v2.GroupStateChange) и обязаны совпадать (D-02).
+// entry_hash = SHA-256("parvane/v2/group-entry\0" ‖ change.body ‖ change.signature).
+// Генезис (version = 1, prev_hash = 32 нуля) задаёт id группы:
+// id = первые 16 байт SHA-256("parvane/v2/group-genesis\0" ‖ genesis change.body).
+message GroupStateEntry {
+  Ref group = 1;
+  // Ревизия GROUP-1.
+  uint64 version = 2;
+  bytes prev_hash = 3 [(max_len) = 32];
+  // Подписано участником с правом по состоянию version-1.
+  SignedOp change = 4;
+}
+
+message GroupSendKeyAnnounce {
+  Ref group = 1;
+  uint64 epoch = 2;
+  bytes send_public_key = 3 [(max_len) = 32];
+}
+
+// Ссылка-приглашение (D-04): пара Ed25519; приватная часть — только во
+// фрагменте URL, сервер знает link_id = SHA-256(link_public_key).
+message GroupInviteKeyAnnounce {
+  bytes link_public_key = 1 [(max_len) = 32];
+  int64 expires_ms = 2;
+  uint32 usage_limit = 3;
+  bool requires_approval = 4;
+  string title = 5 [(max_len) = 64];
+}
+
+// Групповое сообщение. Сервер проверяет подпись ключом отправки текущей эпохи
+// («вправе писать»), не зная автора. D-07: всё, что связывает сообщения
+// одного автора (id Megolm-сессии, индекс), — внутри AEAD на ключе конверта
+// эпохи; рассылка всем участникам, включая устройства автора.
+message GroupEnvelope {
+  Ref group = 1;
+  uint64 epoch = 2;
+  // ChaCha20-Poly1305(ключ конверта эпохи, AAD = domain ‖ id ‖ epoch ‖ nonce):
+  // GroupEnvelopeInner.
+  bytes epoch_aead_ciphertext = 3 [(max_len) = 327680];
+  // 16 случайных байт; сервер отвергает повтор (group, epoch, nonce).
+  bytes envelope_nonce = 4 [(max_len) = 16];
+  // Ed25519 ключом отправки эпохи над "parvane/v2/group-env\0" ‖ domain ‖ "\0"
+  // ‖ id ‖ epoch(u64 BE) ‖ envelope_nonce ‖ SHA-256(epoch_aead_ciphertext).
+  bytes epoch_signature = 5 [(max_len) = 64];
+}
+
+// Внутри AEAD конверта эпохи.
+message GroupEnvelopeInner {
+  bytes megolm_session_id = 1 [(max_len) = 64];
+  // Megolm; внутри — SignedOp автора (с GroupContext) + сертификат.
+  bytes megolm_message = 2 [(max_len) = 300000];
+  // Заполнение до сетки L2 (запас — как у SealedInner.padding).
+  bytes padding = 3 [(max_len) = 65536];
+}
+
+// Расшифрованное Megolm-сообщение группы.
+message GroupPlaintext {
+  SignedDeviceCertificate sender = 1;
+  SignedOp op = 2;
+}
+
+// ── сервер ──────────────────────────────────────────────────────────────────
+
+message ServerDescriptor {
+  string domain = 1 [(max_len) = 128];
+  bytes server_key = 2 [(max_len) = 32];
+  uint32 proto_major = 3;
+  uint32 proto_minor = 4;
+  repeated string features = 5 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+  repeated string endpoints = 6 [
+    (max_items) = 16,
+    (max_len) = 512
+  ];
+  int64 issued_ms = 7;
+}
+
+message SignedServerDescriptor {
+  // Сериализованный ServerDescriptor.
+  bytes descriptor = 1 [(max_len) = 3072];
+  // Ed25519 ключом сервера над "parvane/v2/server-descriptor\0" ‖ descriptor.
+  bytes signature = 2 [(max_len) = 64];
+}

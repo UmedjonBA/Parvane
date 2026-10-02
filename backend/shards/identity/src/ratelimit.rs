@@ -187,8 +187,27 @@ pub(crate) fn prekey_fetch_rate_ok(requester: &str, target: &str) -> bool {
 /// P-21: повторный фетч той же парой (requester → устройство цели) в течение
 /// окна возвращает УЖЕ выданную one-time — иначе каждый повтор сжигал бы новую.
 /// Окно PARVANE_PREKEY_REUSE_SECS (по умолчанию 600 с).
-/// (requester, target, device_id) → (key_id, public_key, ts)
-pub(crate) type OtkReuseMap = std::collections::HashMap<(String, String, String), (i64, String, i64)>;
+///
+/// Выданная one-time принадлежит Olm-аккаунту, который её получил: цель
+/// стирает ключ при первой же входящей сессии. Поэтому повторно её получает
+/// только ТОТ ЖЕ аккаунт запросившего (`account` — устройство + его
+/// identity-ключ). Другое устройство того же пользователя или то же устройство
+/// с новыми ключами (выход и вход заново) в окне one-time не получает вовсе и
+/// строит сессию на signed prekey: отдать ему уже израсходованный ключ значило
+/// бы сделать его первые сообщения нечитаемыми, а выдать свежий — снять
+/// ограничение P-21 сменой ключей.
+/// (requester, target, device_id) → (key_id, public_key, ts, account)
+pub(crate) type OtkReuseMap = std::collections::HashMap<(String, String, String), (i64, String, i64, String)>;
+
+/// Что отдать запросившему из кэша повторной выдачи.
+pub(crate) enum OtkReuse {
+    /// Тот же Olm-аккаунт в окне — та же one-time.
+    Same(i64, String),
+    /// В окне one-time уже выдана другому Olm-аккаунту этого пользователя.
+    OtherAccount,
+    /// Записи нет (или окно истекло) — выдаём свежую.
+    Miss,
+}
 pub(crate) fn otk_reuse_cache() -> &'static std::sync::Mutex<OtkReuseMap> {
     use std::sync::{Mutex, OnceLock};
     static C: OnceLock<Mutex<OtkReuseMap>> = OnceLock::new();
@@ -199,23 +218,34 @@ pub(crate) fn otk_reuse_window() -> i64 {
     env_u64("PARVANE_PREKEY_REUSE_SECS", 600) as i64
 }
 
-pub(crate) fn cached_otk(requester: &str, target: &str, device_id: &str) -> Option<(i64, String)> {
+pub(crate) fn cached_otk(requester: &str, account: &str, target: &str, device_id: &str) -> OtkReuse {
     let now = now_unix();
     let mut guard = otk_reuse_cache().lock().unwrap_or_else(|e| e.into_inner());
     if guard.len() >= LIMITER_MAX_ENTRIES {
         let window = otk_reuse_window();
-        guard.retain(|_, (_, _, ts)| now - *ts < window);
+        guard.retain(|_, (_, _, ts, _)| now - *ts < window);
     }
-    guard
+    match guard
         .get(&(requester.to_string(), target.to_string(), device_id.to_string()))
-        .filter(|(_, _, ts)| now - ts < otk_reuse_window())
-        .map(|(id, key, _)| (*id, key.clone()))
+        .filter(|(_, _, ts, _)| now - ts < otk_reuse_window())
+    {
+        Some((id, key, _, owner)) if owner == account => OtkReuse::Same(*id, key.clone()),
+        Some(_) => OtkReuse::OtherAccount,
+        None => OtkReuse::Miss,
+    }
 }
 
-pub(crate) fn remember_otk(requester: &str, target: &str, device_id: &str, key_id: i64, public_key: &str) {
+pub(crate) fn remember_otk(
+    requester: &str,
+    account: &str,
+    target: &str,
+    device_id: &str,
+    key_id: i64,
+    public_key: &str,
+) {
     let mut guard = otk_reuse_cache().lock().unwrap_or_else(|e| e.into_inner());
     guard.insert(
         (requester.to_string(), target.to_string(), device_id.to_string()),
-        (key_id, public_key.to_string(), now_unix()),
+        (key_id, public_key.to_string(), now_unix(), account.to_string()),
     );
 }

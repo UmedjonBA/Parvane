@@ -23,3 +23,7 @@ jsonwebtoken = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 parvane-types = { path = "../../shared/parvane-types" }
+parvane-protocol = { path = "../../protocol", features = ["test-inject"] }
+prost = "0.14"
+sha2 = "0.10"
+base64 = "0.22"

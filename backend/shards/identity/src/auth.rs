@@ -312,15 +312,16 @@ pub(crate) async fn handle_verify(
 
     let resp = match do_verify(decoding, &msg.payload) {
         Ok(claims) => match is_device_revoked(pool, &claims.sub, claims.dev.as_deref()).await {
-            Ok(false) => VerifyResponse { ok: true, user: Some(claims.sub), error: None },
+            Ok(false) => VerifyResponse { ok: true, user: Some(claims.sub), error: None, device: claims.dev },
             Ok(true) => VerifyResponse {
                 ok: false,
                 user: None,
                 error: Some("устройство отозвано".to_string()),
+                device: None,
             },
-            Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)) },
+            Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)), device: None },
         },
-        Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)) },
+        Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)), device: None },
     };
 
     let json = serde_json::to_vec(&resp).unwrap_or_default();

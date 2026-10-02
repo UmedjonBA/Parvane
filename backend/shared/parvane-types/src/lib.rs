@@ -762,6 +762,9 @@ pub struct VerifyResponse {
     pub ok: bool,
     pub user: Option<String>,
     pub error: Option<String>,
+    /// Устройство токена (claim `dev`); gateway v2 требует его (класс 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
 }
 
 // ── messenger payloads ───────────────────────────────────────────────────────

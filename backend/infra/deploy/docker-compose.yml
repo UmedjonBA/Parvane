@@ -53,6 +53,7 @@ services:
     command: ["/usr/local/bin/identity"]
     volumes:
       - db-identity:/data
+      - well-known:/well-known
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
@@ -60,6 +61,9 @@ services:
       PARVANE_DB_PATH: /data/identity.db
       # P-11: ключ подписи JWT (Ed25519, PKCS#8 PEM, 0600) — вне SQLite
       PARVANE_JWT_KEY_FILE: /data/identity-jwt-ed25519.pem
+      # Протокол v2: ключ сервера (Ed25519, 0600) и описатель для /.well-known/parvane
+      PARVANE_SERVER_KEY_FILE: /data/identity-server-ed25519.pem
+      PARVANE_WELL_KNOWN_FILE: /well-known/parvane.json
       PARVANE_LOG_LEVEL: info
       # Домен адресов: ник на экране входа → ник@домен; регистрация на чужой
       # домен отклоняется
@@ -88,6 +92,8 @@ services:
       PARVANE_NATS_USER: messenger
       PARVANE_NATS_PASS: ${PARVANE_MESSENGER_PASS}
       PARVANE_DB_PATH: /data/messenger.db
+      # Протокол v2: домен адресов и ссылок (как у identity)
+      PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
       PARVANE_LOG_LEVEL: info
 
   cloud:
@@ -193,6 +199,7 @@ services:
       - ./web-dist:/srv/dist:ro
       - caddy-data:/data
       - caddy-config:/config
+      - well-known:/srv/well-known:ro
 
   # TURN/STUN вынесен на VPS 213.155.15.139 (см. OPERATIONS.md «TURN на VPS»):
   # relay хостера снаружи недостижим. Локальный контейнер turn удалён.
@@ -206,3 +213,4 @@ volumes:
   db-push:
   caddy-data:
   caddy-config:
+  well-known:

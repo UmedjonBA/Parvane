@@ -1,0 +1,44 @@
+[package]
+name = "parvane-protocol-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+parvane-protocol = { path = ".." }
+
+# Отдельный workspace: fuzz собирается nightly-тулчейном cargo-fuzz.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "frame_decode"
+path = "fuzz_targets/frame_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope_open"
+path = "fuzz_targets/envelope_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group_state"
+path = "fuzz_targets/group_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "legacy_v1"
+path = "fuzz_targets/legacy_v1.rs"
+test = false
+doc = false
+bench = false

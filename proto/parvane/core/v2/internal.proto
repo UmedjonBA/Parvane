@@ -1,0 +1,120 @@
+// Внутренние сообщения шины gateway ↔ шарды (NATS). Клиенты их не шлют и не
+// получают: в реестре методов их нет, публиковать в subject'ы методов вправе
+// только gateway (ACL NATS).
+syntax = "proto3";
+
+package parvane.core.v2;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/errors.proto";
+import "parvane/core/v2/options.proto";
+
+// Запрос метода от gateway к шарду.
+message ShardRequest {
+  string method = 1 [(max_len) = 96];
+  // Идентифицированная сессия: пользователь и устройство из проверенного JWT.
+  // Пусто для PRE и ANON (анонимный канал не несёт личности, класс 11).
+  string user = 2 [(max_len) = 255];
+  string device_id = 3 [(max_len) = 64];
+  // JWT сессии — для проверки шардом (вторая линия защиты); пусто для PRE/ANON.
+  string token = 4 [(max_len) = 4096];
+  // IP клиента — только для PRE-методов (лимиты входа/регистрации).
+  string client_ip = 5 [(max_len) = 64];
+  // Тело запроса (тип — по реестру), уже проверенное по лимитам схемы.
+  bytes body = 6 [(max_len) = 4194304];
+  // Сессия недавно подтвердила пароль (методы с reauth).
+  bool reauth_fresh = 7;
+  // Роль оператора (server.stats.*).
+  bool operator = 8;
+}
+
+message ShardResponse {
+  oneof result {
+    bytes ok = 1 [(max_len) = 4194304];
+    Error error = 2;
+  }
+}
+
+// Часть потока ответа (METHOD_KIND_STREAM).
+message ShardStreamChunk {
+  uint32 index = 1;
+  bool last = 2;
+  bytes data = 3 [(max_len) = 716800];
+  Error error = 4;
+}
+
+// Отзыв устройства: gateway закрывает идентифицированные сессии ≤ 1 с (класс 5).
+message RevokedNotice {
+  string user = 1 [(max_len) = 255];
+  string device_id = 2 [(max_len) = 64];
+}
+
+// ── запросы messenger → identity (subject'ы v2.internal.identity.*) ─────────
+
+// Устройства пользователя: v2 (с сертификатом в журнале) и легаси v1.
+message DevicesOfRequest {
+  string user = 1 [(max_len) = 255];
+}
+message DevicesOfResponse {
+  repeated string v2_device_ids = 1 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+  repeated string legacy_device_ids = 2 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+  // У пользователя есть журнал устройств (корень).
+  bool has_v2 = 3;
+  // Ключи подписи v2-устройств (olm_ed25519), в порядке v2_device_ids.
+  repeated bytes v2_ed25519 = 4 [
+    (max_items) = 64,
+    (max_len) = 32
+  ];
+}
+
+// Проверка права доставки по ключу доступа (сервер хранит только SHA-256).
+message DeliveryKeyCheckRequest {
+  string user = 1 [(max_len) = 255];
+  bytes key_hash = 2 [(max_len) = 32];
+}
+message DeliveryKeyCheckResponse {
+  bool key_ok = 1;
+  // Получатель принимает сообщения от незнакомых (по жетону).
+  bool strangers_allowed = 2;
+}
+
+// Владелец ключа подписи устройства (проверка записей журнала группы).
+message KeyOwnerRequest {
+  bytes ed25519 = 1 [(max_len) = 32];
+}
+message KeyOwnerResponse {
+  bool found = 1;
+  string user = 2 [(max_len) = 255];
+  string device_id = 3 [(max_len) = 64];
+  bytes root_key = 4 [(max_len) = 32];
+}
+
+// Проверка слепого жетона ключами выпуска identity (одноразовость — в messenger).
+message TokenCheckRequest {
+  AnonToken token = 1;
+}
+message TokenCheckResponse {
+  ErrorCode code = 1;
+}
+
+// Явные настройки приватности пользователя (identity.privacy.set, FR-040) —
+// messenger проверяет «кто может добавлять в группы» (T096; до E6 — вместе с
+// полем group_add блоба v1 `msg.chat.setnotify`).
+message PrivacyOfRequest {
+  string user = 1 [(max_len) = 255];
+}
+message PrivacyOfResponse {
+  // false — пользователь не выставлял настройки через v2.
+  bool found = 1;
+  // Значения parvane.identity.v2.Audience (1 — все, 2 — контакты, 3 — никто).
+  uint32 group_add = 2;
+  bool messages_from_strangers = 3;
+  uint32 calls_from = 4;
+  uint32 presence_visibility = 5;
+}

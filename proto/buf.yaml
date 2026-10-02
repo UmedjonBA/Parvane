@@ -1,0 +1,14 @@
+# Схема протокола Parvane v2 — единственный источник истины (spec 007).
+# Корень модуля — каталог proto/: пакет parvane.core.v2 лежит в parvane/core/v2.
+version: v2
+modules:
+  - path: .
+    excludes:
+      - parvane/vectors
+lint:
+  use:
+    - STANDARD
+    - FIELD_LOWER_SNAKE_CASE
+breaking:
+  use:
+    - FILE

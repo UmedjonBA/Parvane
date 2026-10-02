@@ -37,7 +37,7 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
   log "Сборка образа шардов (podman, baseline x86-64)"
   podman build --http-proxy=false -f "$BACKEND/infra/deploy/Dockerfile.shards" \
     --ignorefile "$BACKEND/infra/deploy/shards.dockerignore" \
-    -t parvane-shards "$BACKEND"
+    -t parvane-shards "$REPO"
 
   log "Заливка образов на сервер (docker load)"
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'

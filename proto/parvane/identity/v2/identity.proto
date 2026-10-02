@@ -1,0 +1,687 @@
+// Домен identity: сессии, аккаунт, корневые ключи и сертификаты устройств,
+// линковка, профиль, ключи доступа к доставке, слепые жетоны, приватность.
+// Правила аккаунта (argon2id, политика пароля, IP-лимиты, карточка без
+// телефона, поиск без wildcard) переносятся из v1 без изменений.
+syntax = "proto3";
+
+package parvane.identity.v2;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service IdentityService {
+  // ── до входа ──
+  rpc SessionIssue(SessionIssueRequest) returns (SessionIssueResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.session.issue"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc AccountRegister(AccountRegisterRequest) returns (AccountRegisterResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.register"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc AccountConfirmEmail(AccountConfirmEmailRequest) returns (AccountConfirmEmailResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.confirm_email"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc AccountConfirmTelegram(AccountConfirmTelegramRequest) returns (AccountConfirmTelegramResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.confirm_telegram"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc AccountRegisterStatus(AccountRegisterStatusRequest) returns (AccountRegisterStatusResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.register_status"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc ServerDescribe(ServerDescribeRequest) returns (ServerDescribeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "server.describe"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── сессия ──
+  // Свежее подтверждение паролем для методов с reauth (≤ 5 мин).
+  rpc SessionReauth(SessionReauthRequest) returns (SessionReauthResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.session.reauth"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── устройства и корень ──
+  rpc DevicePublishCertificate(DevicePublishCertificateRequest) returns (DevicePublishCertificateResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.publish_certificate"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceFetchBundle(DeviceFetchBundleRequest) returns (DeviceFetchBundleResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.fetch_bundle"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceFetchBundleAnon(DeviceFetchBundleAnonRequest) returns (DeviceFetchBundleAnonResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.fetch_bundle_anon"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceLogSync(DeviceLogSyncRequest) returns (DeviceLogSyncResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.log_sync"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceLogSyncAnon(DeviceLogSyncAnonRequest) returns (DeviceLogSyncAnonResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.log_sync_anon"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceLogAppend(DeviceLogAppendRequest) returns (DeviceLogAppendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.log_append"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceList(DeviceListRequest) returns (DeviceListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DeviceRevoke(DeviceRevokeRequest) returns (DeviceRevokeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.device.revoke"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc RootRotate(RootRotateRequest) returns (RootRotateResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.root.rotate"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── аккаунт ──
+  rpc AccountSet2fa(AccountSet2faRequest) returns (AccountSet2faResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.set_2fa"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc AccountChangePassword(AccountChangePasswordRequest) returns (AccountChangePasswordResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.change_password"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── линковка (LINK-1 v2) ──
+  rpc LinkOffer(LinkOfferRequest) returns (LinkOfferResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.link.offer"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc LinkPoll(LinkPollRequest) returns (LinkPollResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.link.poll"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc LinkChallenge(LinkChallengeRequest) returns (LinkChallengeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.link.challenge"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc LinkGrant(LinkGrantRequest) returns (LinkGrantResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.link.grant"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── профиль и каталог ──
+  rpc ProfileResolve(ProfileResolveRequest) returns (ProfileResolveResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.profile.resolve"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc ProfileSetName(ProfileSetNameRequest) returns (ProfileSetNameResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.profile.set_name"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc ProfileSetAvatar(ProfileSetAvatarRequest) returns (ProfileSetAvatarResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.profile.set_avatar"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc DirectorySearch(DirectorySearchRequest) returns (DirectorySearchResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.directory.search"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── доступ к доставке и приватность ──
+  rpc DeliveryKeySet(DeliveryKeySetRequest) returns (DeliveryKeySetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.delivery_key.set"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc TokensIssueBlinded(TokensIssueBlindedRequest) returns (TokensIssueBlindedResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.tokens.issue_blinded"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc TokensKeyList(TokensKeyListRequest) returns (TokensKeyListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.tokens.key_list"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc PrivacySet(PrivacySetRequest) returns (PrivacySetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.privacy.set"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  // ── оператор ──
+  rpc ServerStatsVersions(ServerStatsVersionsRequest) returns (ServerStatsVersionsResponse) {
+    option (parvane.core.v2.method) = {
+      name: "server.stats.versions"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+      operator_only: true
+    };
+  }
+}
+
+// ── до входа ────────────────────────────────────────────────────────────────
+// Правила v1 без изменений (argon2id, политика пароля, IP-лимиты, 2FA через
+// Telegram, подтверждение почты/Telegram).
+
+message SessionIssueRequest {
+  // Ник или адрес.
+  string login = 1 [(parvane.core.v2.max_len) = 255];
+  string password = 2 [(parvane.core.v2.max_len) = 1024];
+  // Устройство, для которого выпускается токен (claim dev обязателен).
+  string device_id = 3 [(parvane.core.v2.max_len) = 64];
+  // Второй шаг 2FA: токен входа, подтверждённый в Telegram.
+  string login_token = 4 [(parvane.core.v2.max_len) = 128];
+  // Секрет доверенного устройства (пропуск 2FA).
+  string trust_secret = 5 [(parvane.core.v2.max_len) = 128];
+}
+message SessionIssueResponse {
+  string token = 1 [(parvane.core.v2.max_len) = 4096];
+  // Нужен второй фактор: подтвердить вход в Telegram и повторить с login_token.
+  bool twofa_required = 2;
+  string login_token = 3 [(parvane.core.v2.max_len) = 128];
+  string telegram_bot = 4 [(parvane.core.v2.max_len) = 64];
+  string trust_secret = 5 [(parvane.core.v2.max_len) = 128];
+}
+
+message AccountRegisterRequest {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  string password = 2 [(parvane.core.v2.max_len) = 1024];
+  string invite = 3 [(parvane.core.v2.max_len) = 128];
+  string email = 4 [(parvane.core.v2.max_len) = 255];
+}
+message AccountRegisterResponse {
+  // Нужно подтверждение (почта или Telegram).
+  bool confirm_required = 1;
+  // Для подтверждения через Telegram: токен deep link и опроса статуса.
+  string telegram_token = 2 [(parvane.core.v2.max_len) = 128];
+}
+
+message AccountConfirmEmailRequest {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  string code = 2 [(parvane.core.v2.max_len) = 16];
+}
+message AccountConfirmEmailResponse {}
+
+// Вызывает бот подтверждения (общий секрет).
+message AccountConfirmTelegramRequest {
+  string secret = 1 [(parvane.core.v2.max_len) = 256];
+  string token = 2 [(parvane.core.v2.max_len) = 128];
+  int64 telegram_id = 3;
+  string telegram_name = 4 [(parvane.core.v2.max_len) = 128];
+}
+message AccountConfirmTelegramResponse {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  // "registered" | "login" | …
+  string action = 2 [(parvane.core.v2.max_len) = 32];
+}
+
+message AccountRegisterStatusRequest {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  string token = 2 [(parvane.core.v2.max_len) = 128];
+}
+message AccountRegisterStatusResponse {
+  bool confirmed = 1;
+}
+
+message ServerDescribeRequest {}
+message ServerDescribeResponse {
+  parvane.core.v2.SignedServerDescriptor descriptor = 1;
+  // Способ подтверждения регистрации: пусто | "email" | "telegram".
+  repeated string registration = 2 [
+    (parvane.core.v2.max_items) = 8,
+    (parvane.core.v2.max_len) = 32
+  ];
+  string domain = 3 [(parvane.core.v2.max_len) = 128];
+  string telegram_bot = 4 [(parvane.core.v2.max_len) = 64];
+}
+
+// ── сессия ──────────────────────────────────────────────────────────────────
+
+message SessionReauthRequest {
+  string password = 1 [(parvane.core.v2.max_len) = 1024];
+}
+message SessionReauthResponse {
+  // До какого момента методы с reauth разрешены этой сессии.
+  int64 valid_until_ms = 1;
+}
+
+// ── устройства и корень ─────────────────────────────────────────────────────
+
+// Одноразовый прекей Olm, подписанный ключом устройства.
+message OneTimeKey {
+  bytes key_id = 1 [(parvane.core.v2.max_len) = 16];
+  bytes curve25519 = 2 [(parvane.core.v2.max_len) = 32];
+  // Ed25519 устройства над "parvane/v2/otk\0" ‖ key_id ‖ curve25519.
+  bytes signature = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+// Сертификат публикуется записью журнала устройств (add_device), подписанной
+// SSK (D-11); прекеи — отдельно, подписаны ключом устройства.
+message DevicePublishCertificateRequest {
+  parvane.core.v2.SignedOp log_entry = 1;
+  repeated OneTimeKey one_time_keys = 2 [(parvane.core.v2.max_items) = 100];
+  // Резервный прекей (fallback), подписанный ключом устройства.
+  OneTimeKey fallback_key = 3;
+}
+message DevicePublishCertificateResponse {
+  uint32 one_time_keys_stored = 1;
+}
+
+message DeviceFetchBundleRequest {
+  parvane.core.v2.UserRef user = 1;
+}
+message DeviceBundle {
+  parvane.core.v2.SignedDeviceCertificate certificate = 1;
+  // Выдаётся и расходуется атомарно; пусто → fallback_key.
+  OneTimeKey one_time_key = 2;
+  OneTimeKey fallback_key = 3;
+}
+message DeviceFetchBundleResponse {
+  repeated DeviceBundle devices = 1 [(parvane.core.v2.max_items) = 64];
+  // Легаси-устройства v1 (без сертификата) — только id; получают легаси-копии.
+  repeated string legacy_device_ids = 2 [
+    (parvane.core.v2.max_items) = 64,
+    (parvane.core.v2.max_len) = 64
+  ];
+}
+
+// Бандл по анонимному каналу (D-08): запрос бандла не выдаёт пару.
+message DeviceFetchBundleAnonRequest {
+  parvane.core.v2.UserRef user = 1;
+}
+message DeviceFetchBundleAnonResponse {
+  repeated DeviceBundle devices = 1 [(parvane.core.v2.max_items) = 64];
+}
+
+message DeviceLogSyncRequest {
+  parvane.core.v2.UserRef user = 1;
+  uint64 after_version = 2;
+}
+message DeviceLogSyncResponse {
+  // Записи журнала устройств — SignedOp c payload UserDeviceLogEntry.
+  repeated parvane.core.v2.SignedOp entries = 1 [(parvane.core.v2.max_items) = 256];
+  bool more = 2;
+}
+message DeviceLogSyncAnonRequest {
+  parvane.core.v2.UserRef user = 1;
+  uint64 after_version = 2;
+}
+message DeviceLogSyncAnonResponse {
+  repeated parvane.core.v2.SignedOp entries = 1 [(parvane.core.v2.max_items) = 256];
+  bool more = 2;
+}
+
+message DeviceLogAppendRequest {
+  parvane.core.v2.SignedOp entry = 1;
+}
+message DeviceLogAppendResponse {
+  uint64 version = 1;
+}
+
+message DeviceListRequest {}
+message DeviceInfo {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  bool legacy = 2;
+  bool revoked = 3;
+  int64 created_ms = 4;
+  int64 last_seen_ms = 5;
+  string client_kind = 6 [(parvane.core.v2.max_len) = 16];
+  uint32 proto_major = 7;
+  uint32 proto_minor = 8;
+}
+message DeviceListResponse {
+  repeated DeviceInfo devices = 1 [(parvane.core.v2.max_items) = 64];
+}
+
+message DeviceRevokeRequest {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message DeviceRevokeResponse {}
+
+// Смена корня = новый журнал устройств (генезис, подписанный новым корнем);
+// собеседники видят предупреждение KEY-1.
+message RootRotateRequest {
+  parvane.core.v2.SignedOp genesis = 1;
+}
+message RootRotateResponse {}
+
+// ── аккаунт ─────────────────────────────────────────────────────────────────
+
+// 2FA через Telegram (как v1). Без enabled — только прочитать состояние.
+message AccountSet2faRequest {
+  optional bool enabled = 1;
+  string password = 2 [(parvane.core.v2.max_len) = 1024];
+}
+message AccountSet2faResponse {
+  bool enabled = 1;
+  bool telegram_linked = 2;
+  string telegram_bot = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+message AccountChangePasswordRequest {
+  string old_password = 1 [(parvane.core.v2.max_len) = 1024];
+  string new_password = 2 [(parvane.core.v2.max_len) = 1024];
+}
+message AccountChangePasswordResponse {}
+
+// ── линковка (LINK-1 v2) ────────────────────────────────────────────────────
+// Смысл LINK-1 сохраняется: обязательство, challenge, SAS 12 цифр от пары
+// ключей, грант только на ключ challenge. Форматы полей — как в v1 (base64/hex
+// строки), чтобы правила проверки LINK-1 не менялись. Результат — сертификат нового
+// устройства (запись журнала устройств, подписанная SSK) и ключ личного
+// состояния внутри зашифрованного гранта. Устройство — из сессии.
+
+message LinkOfferRequest {
+  // Эфемерный ключ нового устройства (P-256, несжатый).
+  string eph_pub = 1 [(parvane.core.v2.max_len) = 512];
+  // Обязательство (SHA-256 ключа challenge).
+  string commitment = 2 [(parvane.core.v2.max_len) = 512];
+  string signing_key = 3 [(parvane.core.v2.max_len) = 512];
+  // Отозвать своё предложение.
+  bool revoke = 4;
+}
+message LinkOfferResponse {}
+
+message LinkOffer {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  string eph_pub = 2 [(parvane.core.v2.max_len) = 512];
+  string commitment = 3 [(parvane.core.v2.max_len) = 512];
+  string signing_key = 4 [(parvane.core.v2.max_len) = 512];
+  int64 created_ms = 5;
+  string challenge_pub = 6 [(parvane.core.v2.max_len) = 512];
+}
+
+message LinkGrant {
+  string from_device_id = 1 [(parvane.core.v2.max_len) = 64];
+  string box_payload = 2 [(parvane.core.v2.max_len) = 131072];
+  string eph_pub = 3 [(parvane.core.v2.max_len) = 512];
+}
+
+message LinkPollRequest {}
+message LinkPollResponse {
+  // Предложения других устройств (видит старое устройство).
+  repeated LinkOffer offers = 1 [(parvane.core.v2.max_items) = 16];
+  // Грант для этого устройства (видит новое).
+  LinkGrant grant = 2;
+  // Ключ challenge старого устройства для этого устройства.
+  string challenge = 3 [(parvane.core.v2.max_len) = 512];
+}
+
+message LinkChallengeRequest {
+  // Целевое (новое) устройство.
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  string eph_pub = 2 [(parvane.core.v2.max_len) = 512];
+}
+message LinkChallengeResponse {}
+
+message LinkGrantRequest {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  // Шифртекст на ключ challenge: сертификат нового устройства + ключ состояния.
+  string box_payload = 2 [(parvane.core.v2.max_len) = 131072];
+  string eph_pub = 3 [(parvane.core.v2.max_len) = 512];
+}
+message LinkGrantResponse {}
+
+// ── профиль и каталог ───────────────────────────────────────────────────────
+
+// Публичная карточка: без телефона и почты.
+message PublicProfile {
+  parvane.core.v2.UserRef user = 1;
+  string display_name = 2 [(parvane.core.v2.max_len) = 128];
+  string avatar_file_id = 3 [(parvane.core.v2.max_len) = 64];
+  // Корневой ключ — для TOFU (KEY-1 v2); пусто у пользователя без v2.
+  bytes root_key = 4 [(parvane.core.v2.max_len) = 32];
+  string bio = 5 [(parvane.core.v2.max_len) = 512];
+  string birthday = 6 [(parvane.core.v2.max_len) = 32];
+  int64 name_color = 7;
+  string personal_channel = 8 [(parvane.core.v2.max_len) = 128];
+}
+
+message ProfileResolveRequest {
+  repeated parvane.core.v2.UserRef users = 1 [(parvane.core.v2.max_items) = 100];
+}
+message ProfileResolveResponse {
+  repeated PublicProfile profiles = 1 [(parvane.core.v2.max_items) = 100];
+}
+
+// Поле не задано (optional) — не менять.
+message ProfileSetNameRequest {
+  string display_name = 1 [(parvane.core.v2.max_len) = 128];
+  optional string bio = 2 [(parvane.core.v2.max_len) = 512];
+  optional string birthday = 3 [(parvane.core.v2.max_len) = 32];
+  optional int64 name_color = 4;
+  optional string personal_channel = 5 [(parvane.core.v2.max_len) = 128];
+  // Телефон виден только владельцу (в публичную карточку не попадает).
+  optional string phone = 6 [(parvane.core.v2.max_len) = 32];
+}
+message ProfileSetNameResponse {}
+
+message ProfileSetAvatarRequest {
+  string avatar_file_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message ProfileSetAvatarResponse {}
+
+message DirectorySearchRequest {
+  // Точное имя/префикс, без wildcard.
+  string query = 1 [(parvane.core.v2.max_len) = 128];
+}
+message DirectorySearchResponse {
+  repeated PublicProfile results = 1 [(parvane.core.v2.max_items) = 50];
+}
+
+// ── доступ к доставке и приватность ─────────────────────────────────────────
+
+message DeliveryKeySetRequest {
+  // Сервер хранит только SHA-256.
+  bytes delivery_key = 1 [(parvane.core.v2.max_len) = 32];
+}
+message DeliveryKeySetResponse {}
+
+message TokensIssueBlindedRequest {
+  // Ослеплённые сообщения; ≤ 50 жетонов в сутки на аккаунт.
+  repeated bytes blinded = 1 [
+    (parvane.core.v2.max_items) = 50,
+    (parvane.core.v2.max_len) = 512
+  ];
+}
+message TokensIssueBlindedResponse {
+  // key_id = SHA-256(SPKI); клиент сверяет со списком, полученным анонимно (D-06).
+  bytes key_id = 1 [(parvane.core.v2.max_len) = 32];
+  bytes public_key = 2 [(parvane.core.v2.max_len) = 1024];
+  repeated bytes blind_signatures = 3 [
+    (parvane.core.v2.max_items) = 50,
+    (parvane.core.v2.max_len) = 512
+  ];
+}
+
+message TokensKeyListRequest {}
+message TokensKeyListResponse {
+  parvane.core.v2.SignedTokenKeyList list = 1;
+}
+
+enum Audience {
+  AUDIENCE_UNSPECIFIED = 0;
+  AUDIENCE_EVERYBODY = 1;
+  AUDIENCE_CONTACTS = 2;
+  AUDIENCE_NOBODY = 3;
+}
+
+// Явные серверные поля приватности (FR-040).
+message PrivacySettings {
+  Audience group_add = 1;
+  bool messages_from_strangers = 2;
+  Audience calls_from = 3;
+  Audience presence_visibility = 4;
+}
+message PrivacySetRequest {
+  PrivacySettings settings = 1;
+}
+message PrivacySetResponse {}
+
+// ── оператор ────────────────────────────────────────────────────────────────
+
+message VersionCount {
+  uint32 proto_major = 1;
+  uint32 proto_minor = 2;
+  string client_kind = 3 [(parvane.core.v2.max_len) = 16];
+  uint64 devices = 4;
+}
+message ServerStatsVersionsRequest {}
+message ServerStatsVersionsResponse {
+  repeated VersionCount versions = 1 [(parvane.core.v2.max_items) = 256];
+  uint64 legacy_devices = 2;
+}

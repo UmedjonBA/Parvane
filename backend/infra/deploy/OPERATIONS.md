@@ -199,12 +199,76 @@ Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи 
 действий»), в логах gateway `rate limit: <user> pub/req <subject>`.
 Проверка: `scripts/run_gateway_rate_limit_e2e.sh`.
 
+Протокол v2, анонимный канал (spec 007, T123, D-08/D-17): анонимные соединения
+одноразовые, поэтому лимит считается на IP-источник (ключ — SipHash адреса с
+ключом процесса, IPv6 — по /64; только память gateway, IP не журналируется и
+не уходит в шину): все ANON-запросы `GATEWAY_RATE_ANON_IP_BURST=600` /
+`GATEWAY_RATE_ANON_IP_PER_SEC=60`, бандлы ключей
+`identity.device.fetch_bundle_anon` отдельно `GATEWAY_RATE_BUNDLE_IP_BURST=60` /
+`GATEWAY_RATE_BUNDLE_IP_PER_SEC=1`. Превышение — `RATE_LIMITED` с
+`retry_after_ms`. В identity `PARVANE_V2_BUNDLE_RATE=60` — бандлов одного
+адресата в минуту с расходом OTK; сверх него отдаётся только fallback-ключ
+(не отказ: чужой флуд не блокирует первый контакт).
+
 Лимиты identity по источнику: gateway подставляет `client_ip` (X-Forwarded-For
 за Caddy, иначе адрес пира) в `identity.user.register` и `identity.token.issue`;
 identity отказывает после `PARVANE_REGISTER_RATE_IP=30` регистраций или
 `PARVANE_LOGIN_RATE_IP=120` логинов в минуту с одного IP (в дополнение к лимитам
 по логину). При прямом NATS (dev без gateway) поле пусто — лимит по IP не
 применяется.
+
+## Отключение v1 (E6)
+
+Протокол v1 (JSON-кадры gateway) выключается оператором по статистике версий
+устройств, в три шага. Режим задаёт переменная gateway `PARVANE_V1_MODE`
+(`environment` сервиса `gateway`, читается при старте — после смены
+`docker compose up -d gateway`). На v2-соединения режим не влияет ни в одном
+значении: Hello → Welcome → Auth работают как раньше.
+
+1. **Смотреть статистику.** Метод оператора `server.stats.versions` (v2,
+   идентифицированный канал; аккаунт оператора перечислен в
+   `PARVANE_OPERATORS` gateway, остальным — `FORBIDDEN`). Ответ: `versions[]` —
+   число неотозванных v2-устройств по `proto_major.proto_minor`, и
+   `legacy_devices` — устройства, у которых есть ключи v1, но нет сертификата
+   v2. То же напрямую из БД identity (том `parvane_db-identity`):
+
+   ```bash
+   docker run --rm -v parvane_db-identity:/data alpine sh -c 'apk add -q sqlite;
+     sqlite3 /data/identity.db-v2.db "SELECT proto_major, proto_minor, COUNT(*) FROM device_state WHERE revoked = 0 GROUP BY 1, 2;";
+     sqlite3 /data/identity.db "ATTACH \"/data/identity.db-v2.db\" AS v2;
+       SELECT COUNT(*) FROM device_keys k WHERE NOT EXISTS
+         (SELECT 1 FROM v2.device_state d WHERE d.user = k.username AND d.device_id = k.device_id);"'
+   ```
+
+   Переходить к шагу 2, когда `legacy_devices` перестал убывать сам (активные
+   клиенты обновились, остались редкие и заброшенные устройства).
+2. **`PARVANE_V1_MODE=notice`.** v1 продолжает работать; после каждого входа
+   по v1 gateway шлёт кадр `{"op":"notice","kind":"upgrade_available"}`.
+   Клиенты показывают нативное уведомление «доступна новая версия» (web —
+   уведомление, desktop и android — сообщение в чате служебных уведомлений,
+   один раз за запуск). Держать режим, пока `legacy_devices` снижается.
+3. **`PARVANE_V1_MODE=disabled`.** Любое v1-соединение на первый же свой кадр
+   получает `{"op":"err","error":"upgrade_required"}` и закрывается. Клиенты
+   показывают «обновите приложение», учётные данные и ключи не трогают и не
+   крутят переподключение (повторная проба — не чаще раза в 5 минут). В логе
+   gateway при первом v1-соединении: «v1-путь в режиме Disabled».
+
+**Откат** на любом шаге — вернуть `PARVANE_V1_MODE=normal` (или убрать
+переменную) и перезапустить gateway: старые клиенты подключатся при следующей
+пробе (до 5 минут) или после перезапуска приложения. Данные v1 при этом не
+затрагиваются (`scripts/protocol_rollback_check.sh`).
+
+Не путать с `PARVANE_V2_MIN_MINOR` — это нижняя граница минорной версии v2
+(`UPGRADE_REQUIRED` для старых v2-клиентов), к v1 она не относится.
+
+**Удаление кода v1** (v1-обработчики шардов, JSON-путь gateway, libolm в web,
+`e2e.cpp` в parvane-core) — отдельное изменение ПОСЛЕ того, как режим
+`disabled` простоял без обращений пользователей; этим разделом не покрывается.
+
+Проверка: `cargo test -p parvane-integration --test v1_mode_live` (три gateway
+в режимах normal/notice/disabled на одном стеке, v1-кадры и рукопожатие v2),
+разбор кадров клиентами — `desktop/parvane-core/tests/gateway_upgrade_tests.cpp`
+(ctest `gateway_upgrade`), android `L2PrivacySeamTest` (тесты `upgrade*`).
 
 ## Переменные окружения лимитов и защит (после ревью 2026-09-27)
 Все — необязательные, значения по умолчанию в скобках; задаются в `environment`
