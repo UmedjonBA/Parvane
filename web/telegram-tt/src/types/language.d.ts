@@ -212,6 +212,38 @@ export interface LangPair {
   'CallStatusWaiting': undefined;
   'CallStatusExchanging': undefined;
   'ParvaneCallSecurityError': undefined;
+  'ParvaneInviteInvalid': undefined;
+  'ParvaneMediaTampered': undefined;
+  'ParvaneMediaUnverified': undefined;
+  'ParvaneUndecryptable': undefined;
+  'ParvaneCallNoDevice': undefined;
+  'ParvaneGroupCallIncoming': undefined;
+  'ParvaneGroupPeerBusy': undefined;
+  'ParvaneNameColor': undefined;
+  'ParvaneNameColorDefault': undefined;
+  'ParvanePersonalChannel': undefined;
+  'ParvanePersonalChannelRemove': undefined;
+  'ParvanePhone': undefined;
+  'ParvaneInviteBanned': undefined;
+  'ParvaneInviteFailed': undefined;
+  'ParvaneProfileSaveFailed': undefined;
+  'ParvaneInviteOffline': undefined;
+  'ParvaneInviteLinkFailed': undefined;
+  'ParvaneInviteRevoked': undefined;
+  'ParvaneInviteExpired': undefined;
+  'ParvaneInviteExhausted': undefined;
+  'ParvaneInviteRequested': undefined;
+  'ParvaneInviteDeclined': undefined;
+  'ParvaneUpgradeRequired': undefined;
+  'ParvaneDeviceLegacy': undefined;
+  'ParvaneInviteEditUnsupported': undefined;
+  'ParvaneInviteImportersUnavailable': undefined;
+  'ParvaneGroupAboutTooLong': undefined;
+  'Channel.Persmission.Denied.SendMessages.DefaultRestrictedText': undefined;
+  'Channel.Persmission.Denied.SendMessages.Forever': undefined;
+  'MemberRequests.RequestToJoinGroup': undefined;
+  'MemberRequests.RequestToJoinChannel': undefined;
+  'ParvaneBackgroundFailed': undefined;
   'CallMuteAudio': undefined;
   'CallUnmuteAudio': undefined;
   'CallStopVideo': undefined;
@@ -2224,6 +2256,8 @@ export interface LangPair {
   'ParvaneTelegramLoginTitle': undefined;
   'ParvaneTelegramLoginText': undefined;
   'ParvaneTelegramLoginExpired': undefined;
+  'ParvaneL2EnabledYou': undefined;
+  'ParvaneL2DisabledYou': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -2338,6 +2372,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'SpeakingWithVolume': {
     'volume': V;
+  };
+  'ParvaneCallTooManyMembers': {
+    'count': V;
+  };
+  'ParvaneGroupCallIncomingNamed': {
+    'group': V;
+  };
+  'ParvaneRecoveryKey': {
+    'key': V;
+  };
+  'Channel.Persmission.Denied.SendMessages.Until': {
+    '0': V;
   };
   'CallEmojiKeyTooltip': {
     'user': V;
@@ -3911,6 +3957,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'UnofficialSecurityRisk': {
     'peer': V;
+  };
+  'ParvaneSecurityKeyChanged': {
+    'user': V;
+  };
+  'ParvaneGroupUnconfirmedMember': {
+    'user': V;
+  };
+  'ParvaneL2Enabled': {
+    'user': V;
+  };
+  'ParvaneL2Disabled': {
+    'user': V;
   };
 }
 

@@ -19,6 +19,8 @@ const testLocalStorage = {
   setItem: (key: string, value: string) => localValues.set(key, String(value)),
 };
 
+const INNER_JSON = JSON.stringify({ kind: 'text', text: 'x' });
+
 // buildPrekeysPayload отдаёт бандл один раз (published) — кэшируем по движку
 const prekeysCache = new WeakMap<E2eEngine, Record<string, unknown>>();
 function bundleOf(engine: E2eEngine, deviceId: string, tamper?: Partial<Record<string, string>>) {
@@ -123,12 +125,12 @@ describe('P-25: signed_prekey принимается только с подпи�
     // Сервер подменил SPK alice на свой (подпись alice под ним не сходится)
     const swapped = bundleOf(alice, 'a1', { signed_prekey: bundleOf(mallory, 'm').signed_prekey });
     const fetchSwapped = () => Promise.resolve({ ok: true, devices: [swapped] });
-    expect(await bob.encryptForDevices('p25b-alice@local', { kind: 'text', text: 'x' }, fetchSwapped)).toBeUndefined();
+    expect(await bob.encryptForDevices('p25b-alice@local', INNER_JSON, fetchSwapped)).toBeUndefined();
     expect(await bob.verifySenderIdentity('p25b-alice@local', alice.identityKey, fetchSwapped)).toBe('unknown');
 
     // Честный каталог — сессия устанавливается
     const fetchGood = () => Promise.resolve({ ok: true, devices: [bundleOf(alice, 'a1')] });
-    const sealed = await bob.encryptForDevices('p25b-alice@local', { kind: 'text', text: 'x' }, fetchGood);
+    const sealed = await bob.encryptForDevices('p25b-alice@local', INNER_JSON, fetchGood);
     expect(sealed?.copies.map((c) => c.deviceId)).toEqual(['a1']);
     expect(await bob.verifySenderIdentity('p25b-alice@local', alice.identityKey, fetchGood)).toBe('ok');
   });
@@ -138,7 +140,7 @@ describe('P-25: signed_prekey принимается только с подпи�
     const bob = await E2eEngine.create('p25c-bob@local');
     const stripped = bundleOf(alice, 'a1', { signing_key: '', signed_prekey_sig: '' });
     const fetchStripped = () => Promise.resolve({ ok: true, devices: [stripped] });
-    expect(await bob.encryptForDevices('p25c-alice@local', { kind: 'text', text: 'x' }, fetchStripped)).toBeUndefined();
+    expect(await bob.encryptForDevices('p25c-alice@local', INNER_JSON, fetchStripped)).toBeUndefined();
   });
 });
 

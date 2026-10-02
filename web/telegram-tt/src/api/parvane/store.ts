@@ -24,6 +24,20 @@ function buildHashedId(value: string): string {
   return String(hash >>> 1);
 }
 
+// Ключи локализации служебного сообщения о режиме «усиленная приватность»
+// (L2) и тексты на случай, когда языковой пакет ещё не загружен
+const CHAT_MODE_KEYS = {
+  own: { on: 'ParvaneL2EnabledYou', off: 'ParvaneL2DisabledYou' },
+  peer: { on: 'ParvaneL2Enabled', off: 'ParvaneL2Disabled' },
+} as const;
+
+const CHAT_MODE_FALLBACK: Record<string, string> = {
+  ParvaneL2EnabledYou: 'You enabled enhanced privacy',
+  ParvaneL2DisabledYou: 'You disabled enhanced privacy',
+  ParvaneL2Enabled: '{user} enabled enhanced privacy',
+  ParvaneL2Disabled: '{user} disabled enhanced privacy',
+};
+
 export class ParvaneStore {
   self = '';
 
@@ -69,6 +83,10 @@ export class ParvaneStore {
   // P-18: первое появление адреса пользователя — повод подписаться на его
   // presence (вместо presence.* всех). Устанавливает провайдер
   onUserRegistered?: (peerId: string, address: string) => void;
+
+  // Строка локализации для служебных сообщений чата. Устанавливает провайдер:
+  // импорт lang-провайдера в этот слой тянет UI-модули
+  getLangString?: (key: string) => string | undefined;
 
   getIdForAddress(address: string, kind: PeerKind = 'user'): string {
     const existingKind = this.kindByAddress.get(address);
@@ -369,12 +387,15 @@ export class ParvaneStore {
     const isOutgoing = stored.from === this.self;
 
     const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;
+    const isChatMode = stored.content.kind === 'chat_mode';
 
     return {
       id,
       chatId,
-      content: buildMessageContent(stored),
+      content: isChatMode ? this.buildChatModeContent(stored, isOutgoing) : buildMessageContent(stored),
       date: stored.ts,
+      // Служебное сообщение о режиме чата не шумит (без звука уведомления)
+      isSilent: isChatMode ? true : undefined,
       isForwardingAllowed: true,
       isOutgoing,
       senderId: stored.from ? this.getIdForAddress(stored.from) : undefined,
@@ -392,6 +413,20 @@ export class ParvaneStore {
         fromChatId: this.getIdForAddress(stored.content.forwarded_from),
         hiddenUserName: stored.content.forwarded_name,
       } : undefined,
+    };
+  }
+
+  // Режим «усиленная приватность» (L2, протокол v2): нативное служебное
+  // сообщение чата — «{user} включил(а)…», своё — «Вы включили…»
+  private buildChatModeContent(stored: WireStoredMessage, isOutgoing: boolean): ApiMessage['content'] {
+    const key = CHAT_MODE_KEYS[isOutgoing ? 'own' : 'peer'][stored.content.l2 ? 'on' : 'off'];
+    const template = this.getLangString?.(key) || CHAT_MODE_FALLBACK[key];
+    return {
+      action: {
+        mediaType: 'action',
+        type: 'customAction',
+        message: template.replace('{user}', this.getDisplayName(stored.from)),
+      },
     };
   }
 }
@@ -577,6 +612,10 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           noSound: true,
         },
       };
+    case 'unsupported':
+      // Вид, который эта версия не знает (протокол v2, spec 007): пустое
+      // содержимое — нативная заглушка Web A `MessageUnsupported`
+      return {};
     case 'encrypted':
     case 'group_encrypted':
       // Сюда попадают sealed-сообщения без ключа этого устройства (например,

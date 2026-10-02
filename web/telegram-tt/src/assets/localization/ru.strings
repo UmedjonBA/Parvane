@@ -29,7 +29,7 @@
 "UserActionChooseSticker" = "{user} выбирает стикер {eyes}";
 "ActionWatchingAnimations" = "смотрит {emoji}";
 "SendMessage" = "Написать сообщение";
-"MessageUnsupported" = "Это сообщение не поддерживается в веб-версии Parvane";
+"MessageUnsupported" = "Это сообщение не поддерживается вашей версией Parvane. Обновите приложение, чтобы увидеть его";
 "PageContentUnsupported" = "Неподдерживаемое содержимое";
 "ContextArchiveCollapse" = "Свернуть";
 "ContextArchiveExpand" = "Развернуть";
@@ -120,6 +120,9 @@
 "ParvaneInviteExhausted" = "Ссылка-приглашение исчерпана";
 "ParvaneInviteRequested" = "Заявка на вступление отправлена — её рассмотрит администратор";
 "ParvaneInviteDeclined" = "Заявка на вступление отклонена";
+"ParvaneUpgradeRequired" = "Сервер больше не поддерживает эту версию Parvane. Обновите приложение, чтобы продолжить общение.";
+"ParvaneRecoveryKey" = "Сохраните ключ восстановления: {key}\nОн восстановит ключи аккаунта на новом устройстве. Его нет больше ни у кого, даже у сервера, — храните его надёжно.";
+"ParvaneDeviceLegacy" = "(старая версия)";
 "ParvaneInviteEditUnsupported" = "Ссылки не редактируются — отзовите её и создайте новую";
 "ParvaneInviteImportersUnavailable" = "Сервер хранит только число вступивших";
 "ParvaneGroupAboutTooLong" = "Описание — не длиннее 255 символов";
@@ -1122,3 +1125,8 @@
 "ParvaneTelegramLoginText" = "Включена двухфакторная аутентификация. Откройте нашего Telegram-бота и нажмите Start — подтвердить вход может только Telegram, привязанный к этому аккаунту.";
 "ParvaneTelegramLoginExpired" = "Ссылка для входа истекла. Введите пароль ещё раз.";
 "ParvaneSecurityKeyChanged" = "Ключ безопасности {user} изменился. Если вы этого не ожидали, сверьте отпечаток ключа в профиле.";
+"ParvaneGroupUnconfirmedMember" = "Сервер показывает {user} в составе группы, но это не подтверждено записью администратора. Ключи шифрования этому участнику не передаются.";
+"ParvaneL2Enabled" = "{user} включил(а) усиленную приватность";
+"ParvaneL2Disabled" = "{user} выключил(а) усиленную приватность";
+"ParvaneL2EnabledYou" = "Вы включили усиленную приватность";
+"ParvaneL2DisabledYou" = "Вы выключили усиленную приватность";

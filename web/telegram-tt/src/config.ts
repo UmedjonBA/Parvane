@@ -9,6 +9,8 @@ import type {
 export const APP_CODE_NAME = 'A';
 export const APP_ENV = import.meta.env.TG_APP_ENV;
 export const APP_NAME = import.meta.env.TG_APP_NAME || 'Parvane';
+// Метка `appVersion` устройства вне журнала устройств v2 (spec 007)
+export const PARVANE_LEGACY_APP_VERSION = 'parvane-legacy-v1';
 
 export const PRODUCTION_HOSTNAME = 'web.telegram.org';
 export const PRODUCTION_URL = 'https://web.telegram.org/a';

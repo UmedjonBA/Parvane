@@ -233,7 +233,9 @@ async function encryptWith(key: CryptoKey, aad: ArrayBuffer, value: unknown): Pr
   return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
 }
 
-async function decryptWith<T>(key: CryptoKey, aad: ArrayBuffer, record: EncryptedRecord | undefined): Promise<T | undefined> {
+async function decryptWith<T>(
+  key: CryptoKey, aad: ArrayBuffer, record: EncryptedRecord | undefined,
+): Promise<T | undefined> {
   if (!record || record.version !== STORAGE_VERSION) return undefined;
   try {
     const plaintext = await crypto.subtle.decrypt(
@@ -337,7 +339,8 @@ async function saveSecret(user: string, name: string, value: string) {
 async function loadSecret(user: string, name: string): Promise<string | undefined> {
   const key = await resolveProtectionKey(user);
   if (!key) return undefined;
-  const value = await decryptWith<string>(key, additionalData(user, name), await get<EncryptedRecord>(recordId(user, name), STORAGE));
+  const record = await get<EncryptedRecord>(recordId(user, name), STORAGE);
+  const value = await decryptWith<string>(key, additionalData(user, name), record);
   return typeof value === 'string' && value ? value : undefined;
 }
 

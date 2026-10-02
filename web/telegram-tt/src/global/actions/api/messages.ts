@@ -60,7 +60,7 @@ import { parseTranslationCacheKey } from '../../../util/keys/translationKey';
 import { getTranslationFn, type RegularLangFnParameters } from '../../../util/localization';
 import { formatStarsAsText } from '../../../util/localization/format';
 import { oldTranslate } from '../../../util/oldLangProvider';
-import { matchInviteHash } from '../../../util/routing';
+import { matchInviteHash, matchV2InviteUrl } from '../../../util/routing';
 import { debounce, onTickEnd, rafPromise } from '../../../util/schedulers';
 import { getServerTime } from '../../../util/serverTime';
 import { callApi, cancelApiProgress } from '../../../api/gramjs';
@@ -2665,6 +2665,14 @@ addActionHandler('openUrl', async (global, actions, payload): Promise<void> => {
       actions.checkChatInvite({ hash: inviteHash, tabId });
       return;
     }
+  }
+
+  // Ссылка-приглашение v2 `https://<домен>/join/<link_id>#<секрет>` — вступление
+  // в группу v2 по ссылке целиком (секрет — во фрагменте)
+  const v2Invite = matchV2InviteUrl(urlWithProtocol);
+  if (v2Invite) {
+    actions.checkChatInvite({ hash: v2Invite, tabId });
+    return;
   }
 
   // Сейчас ссылки выдаются как `<origin>/#+<токен>` — тот же вид, что понимает

@@ -30,6 +30,7 @@ const SAFE_URL_SCHEME = /^(https?:|mailto:)/i;
 export function isSafeEntityUrl(url?: string) {
   if (!url) return false;
   const trimmed = url.trim();
+  // eslint-disable-next-line no-control-regex
   return SAFE_URL_SCHEME.test(trimmed) && !/[\u0000-\u001f\s]/.test(trimmed);
 }
 

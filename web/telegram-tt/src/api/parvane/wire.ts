@@ -79,6 +79,9 @@ export type WireMessageContent = {
   correct?: number[];
   solution?: string;
   poll?: string;
+  // kind=chat_mode (протокол v2, FR-036): участник включил/выключил режим
+  // «усиленная приватность» (L2) — служебное сообщение чата
+  l2?: boolean;
 };
 
 // Per-device sealed-копия (мультидевайс): recipient пуст у self-копий
@@ -107,6 +110,9 @@ export type WireStoredMessage = {
   // Заполнено только в live-пуше инбокса: копии адресата, устройство выбирает
   // свою по device_id (в sync-ответах сервер уже подменил ciphertext)
   copies?: WireDeviceCopy[];
+  // Строка собрана из события движка v2 (spec 007), а не пришла с v1-сервера:
+  // её id выбирает отправитель, поэтому v1-курсор синка по ней не двигается
+  origin?: 'v2';
 };
 
 // Права участников по умолчанию (spec 003): позитивные флаги «разрешено».

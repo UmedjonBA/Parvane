@@ -293,7 +293,10 @@ function gatewayOrigins(appEnv: string) {
     .split(/[\s,]+/)
     .filter((origin) => /^wss?:\/\/[^\s/]+$/.test(origin));
   const dev = appEnv === 'development'
-    ? ['ws://localhost:*', 'ws://127.0.0.1:*', 'wss://localhost:*', 'wss://127.0.0.1:*', 'http://localhost:*', 'http://127.0.0.1:*']
+    ? [
+      'ws://localhost:*', 'ws://127.0.0.1:*', 'wss://localhost:*', 'wss://127.0.0.1:*',
+      'http://localhost:*', 'http://127.0.0.1:*',
+    ]
     : [];
   return [...explicit, ...dev].join(' ');
 }

@@ -1,7 +1,7 @@
 import type { FC } from '../../../lib/teact/teact';
 import {
   memo,
-  useCallback, useEffect, useState,
+  useCallback, useEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
@@ -57,6 +57,10 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
   });
 
   const [title, setTitle] = useState('');
+  // Parvane: название, введённое пользователем, не затирается сгенерированным
+  // «A & B» — эффект ниже срабатывает и при смене `lang` (пакет языка
+  // подгружается асинхронно), и группа создавалась с чужим названием
+  const isTitleTouchedRef = useRef(false);
   const [about, setAbout] = useState('');
   const [photo, setPhoto] = useState<File | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -69,6 +73,9 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
 
   useEffect(() => {
     if (isChannel) {
+      return;
+    }
+    if (isTitleTouchedRef.current) {
       return;
     }
     if (!memberIds.length || memberIds.length > MAX_MEMBERS_FOR_GENERATE_CHAT_NAME) {
@@ -90,6 +97,7 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
     const { value } = e.currentTarget;
     const newValue = value.replace(/^\s+/, '');
 
+    isTitleTouchedRef.current = true;
     setTitle(newValue);
 
     if (newValue !== value) {
@@ -136,6 +144,7 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
 
   useEffect(() => {
     if (creationProgress === ChatCreationProgress.Complete) {
+      isTitleTouchedRef.current = false;
       onReset(true);
     }
   }, [creationProgress, onReset]);

@@ -98,3 +98,21 @@ executed one at a time; `scripts/run_web_tests.sh` lists every scenario.
   no H.264). During the A4 gate a real cross-engine bug was fixed: a failed push
   unsubscribe used to abort the whole sign-out cleanup, leaving keys and the
   login address in storage.
+
+## Protocol v2 (spec 007) — rows for the v2 stack
+
+The web client runs both stacks: v1 for v1 peers, v2 (WASM engine) for peers
+with a v2 device log, enabled by `parvane:proto=v2` in localStorage or
+`VITE_PARVANE_PROTO_V2`.
+
+| Area | Happy path | Reload / reconnect | Permission / error | Current evidence | Next gap |
+| --- | --- | --- | --- | --- | --- |
+| 1-on-1 text and mutations over v2 | Automated: text both ways, reply, reaction, pin, edit, delete | Automated: history and own edit survive reload (cache without a v1 cursor) | Automated: unknown content kind → native unsupported stub, next message delivered | `scripts/run_protocol_mixed_e2e.sh web2-web2`, `… unknown-kinds` | — |
+| Mixed v2 ↔ v1 peers | Automated: v2 client talks to a v1 client over v1 (text, photo, voice, v1 group with a v2 and a v1 member) | Automated: the v1 client switches to v2 on the same device and still reads the 1-on-1 and group history created before the switch | — | `scripts/run_protocol_mixed_e2e.sh web2-web1`, `… web2-desktop1` | `web2-android1` pair |
+| Media over v2 | Automated: photo and voice both ways, the recipient decrypts the blob and the voice message really plays | Blob fetch after reload via the v1 cloud path | — | `scripts/run_protocol_mixed_e2e.sh web2-web2` | download by capability over the anonymous channel |
+| Groups over v2 | Automated: group with a signed state log, join by a v2 link, ban → new epoch, banned member cannot read new messages | — | Automated: banned member keeps the pre-ban history only | `scripts/run_protocol_mixed_e2e.sh web2-groups` | join requests over v2 |
+| Enhanced privacy mode (L2) | Automated: toggle in the chat profile, native service message on both sides, typing/presence neither sent nor shown while active | Automated: own service messages survive reload | — | `scripts/run_protocol_mixed_e2e.sh web2-web2`, `src/api/parvane/l2.test.ts` | group L2 e2e, per-device group preference in UI |
+| Second v2 device and personal state | Automated: a second device does not create its own root, links through the LINK-1 flow with the engine grant, both devices receive new messages | Automated: a folder and a block made on one device appear on the other within 10 s (measured 3.8 s and 5.6 s) | Automated: the folder title is absent from every server database | `scripts/run_protocol_mixed_e2e.sh state-sync`, `src/api/parvane/v2Link.test.ts` | not verified: whether messages received over v2 before linking reach the newly linked device |
+| Calls over v2 | Server and engine ready (`call.signal_sealed`, `call.ring_sealed`) | — | — | `backend/tests/integration/tests/v2_us2_live.rs` | web call engine on sealed signalling |
+| Version gate | Automated: `UPGRADE_REQUIRED` → native dialog | — | — | `scripts/run_web_protocol_upgrade_e2e.sh` | — |
+| Conformance vectors | Automated: SEAL-1, GSEAL-1, STATE-1, CONTENT-1, L2-1, invite links through the WASM engine; LINK-1 v2 grant keys | — | — | `src/api/parvane/protocol.vectors.test.ts`, `stateVectors.test.ts`, `conformance.test.ts` (PROTO-1) | — |

@@ -13,7 +13,8 @@ const config: PlaywrightTestConfig = {
   webServer: {
     command: `npm run build:production && vite preview --host 127.0.0.1 --port ${webPort} --strictPort`,
     port: webPort,
-    timeout: 120 * 1000,
+    // Сборка production под нагрузкой бывает дольше 2 мин — раннер может поднять
+    timeout: Number(process.env.PARVANE_E2E_WEBSERVER_TIMEOUT_MS || 120 * 1000),
     reuseExistingServer: false,
   },
   use: {

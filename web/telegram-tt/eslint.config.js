@@ -28,6 +28,7 @@ export default defineConfig(
     'src/lib/rlottie/**',
     'src/lib/video-preview/polyfill',
     'src/lib/fasttextweb/**',
+    'src/lib/parvane-protocol/**',
     'src/lib/gramjs/tl/',
     'src/lib/lovely-chart/**',
     'src/lib/music-metadata-browser',

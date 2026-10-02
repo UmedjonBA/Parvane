@@ -2432,8 +2432,11 @@ export interface ActionPayloads {
   loadAuthorizations: undefined;
   terminateAuthorization: {
     hash: string;
-  };
-  terminateAllAuthorizations: undefined;
+    password?: string;
+  } & WithTabId;
+  terminateAllAuthorizations: ({
+    password?: string;
+  } & WithTabId) | undefined;
 
   loadWebAuthorizations: undefined;
   terminateWebAuthorization: {

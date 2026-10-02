@@ -9,6 +9,7 @@ import type { GlobalState } from '../../../global/types';
 
 import { formatPastTimeShort } from '../../../util/dates/oldDateFormat';
 import { callApi } from '../../../api/gramjs';
+import getSessionAppLine from './helpers/getSessionAppLine';
 import getSessionIcon from './helpers/getSessionIcon';
 
 import useFlag from '../../../hooks/useFlag';
@@ -46,7 +47,6 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   ttlDays,
 }) => {
   const {
-    terminateAuthorization,
     terminateAllAuthorizations,
     changeSessionTtl,
     showNotification,
@@ -142,14 +142,24 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     return options;
   }, [lang, ttlDays]);
 
-  const handleTerminateSessionClick = useCallback((hash: string) => {
-    terminateAuthorization({ hash });
-  }, [terminateAuthorization]);
+  // Parvane (P-07): отзыв устройства требует текущий пароль — «завершить все»
+  // спрашивает его в диалоге подтверждения, отзыв одного — в модалке сеанса
+  const [terminateAllPassword, setTerminateAllPassword] = useState('');
+
+  const handleTerminateAllPasswordChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setTerminateAllPassword(e.currentTarget.value);
+  }, []);
+
+  const handleCloseTerminateAllDialog = useCallback(() => {
+    setTerminateAllPassword('');
+    closeConfirmTerminateAllDialog();
+  }, [closeConfirmTerminateAllDialog]);
 
   const handleTerminateAllSessions = useCallback(() => {
-    closeConfirmTerminateAllDialog();
-    terminateAllAuthorizations();
-  }, [closeConfirmTerminateAllDialog, terminateAllAuthorizations]);
+    if (!terminateAllPassword) return;
+    terminateAllAuthorizations({ password: terminateAllPassword });
+    handleCloseTerminateAllDialog();
+  }, [handleCloseTerminateAllDialog, terminateAllAuthorizations, terminateAllPassword]);
 
   const handleOpenSessionModal = useCallback((hash: string) => {
     setOpenedSessionHash(hash);
@@ -191,7 +201,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           <ListItem narrow inactive icon={`device-${getSessionIcon(session)}`} iconClassName="icon-device">
             <div className="multiline-item full-size" dir="auto">
               <span className="title" dir="auto">{session.deviceModel}</span>
-              <span className="subtitle black tight">{getAppLine(session)}</span>
+              <span className="subtitle black tight">{getSessionAppLine(lang, session)}</span>
               {Boolean(session.ip || getLocation(session)) && (
                 <span className="subtitle">
                   {[session.ip, getLocation(session)].filter(Boolean).join(' - ')}
@@ -309,7 +319,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           icon: 'stop',
           destructive: true,
           handler: () => {
-            handleTerminateSessionClick(session.hash);
+            handleOpenSessionModal(session.hash);
           },
         }]}
         icon={`device-${getSessionIcon(session)}`}
@@ -321,7 +331,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
             {session.deviceModel}
             <span className="date">{formatPastTimeShort(oldLang, session.dateActive * 1000)}</span>
           </span>
-          <span className="subtitle black tight">{getAppLine(session)}</span>
+          <span className="subtitle black tight">{getSessionAppLine(lang, session)}</span>
           {Boolean(session.ip || getLocation(session)) && (
             <span className="subtitle">
               {[session.ip, getLocation(session)].filter(Boolean).join(' ')}
@@ -344,13 +354,24 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
       {hasOtherSessions && (
         <ConfirmDialog
           isOpen={isConfirmTerminateAllDialogOpen}
-          onClose={closeConfirmTerminateAllDialog}
+          onClose={handleCloseTerminateAllDialog}
           text={lang('AreYouSureSessions')}
           confirmLabel={lang('TerminateAllSessions')}
           confirmHandler={handleTerminateAllSessions}
           confirmIsDestructive
+          isConfirmDisabled={!terminateAllPassword}
           areButtonsInColumn
-        />
+        >
+          <input
+            type="password"
+            className="form-control"
+            autoComplete="current-password"
+            placeholder={oldLang('ParvanePasswordConfirm')}
+            aria-label={oldLang('ParvanePasswordConfirm')}
+            value={terminateAllPassword}
+            onChange={handleTerminateAllPasswordChange}
+          />
+        </ConfirmDialog>
       )}
       <ConfirmDialog
         isOpen={Boolean(confirmingOffer)}
@@ -366,15 +387,6 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
 
 function getLocation(session: ApiSession) {
   return [session.region, session.country].filter(Boolean).join(', ');
-}
-
-// Parvane: часть полей пуста (сервер не хранит метаданные устройств) —
-// собираем строку только из заполненных, без висячих запятых
-function getAppLine(session: ApiSession) {
-  return [
-    [session.appName, session.appVersion].filter(Boolean).join(' '),
-    [session.platform, session.systemVersion].filter(Boolean).join(' '),
-  ].filter(Boolean).join(', ');
 }
 
 export default memo(withGlobal<OwnProps>(

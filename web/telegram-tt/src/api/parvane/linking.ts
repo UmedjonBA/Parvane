@@ -21,6 +21,10 @@ export type LinkBoxPayload = {
   // (`link-transfer:<user>:<old_signing_key>:<new_signing_key>`) — вместо
   // передачи приватного Olm-аккаунта.
   transfer?: { old_signing_key: string; signature: string };
+  // Протокол v2 (LINK-1 v2): материал гранта движка (SSK, журнал устройств,
+  // ключ доставки, ключ личного состояния) — отдельным зашифрованным блобом
+  // в cloud; в боксе только его координаты (бокс ограничен 8 КБ)
+  v2?: { file_id: string; file_key: string; file_nonce: string };
 };
 
 export async function generateLinkKeyPair() {

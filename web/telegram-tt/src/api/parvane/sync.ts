@@ -32,11 +32,14 @@ type SyncDependencies = {
   getToken: () => string;
   groups: {
     register: (info: WireGroupInfo) => void;
+    // Группы v2 из кэша сведений — до разбора истории (сообщения ложатся в их чаты)
+    registerCachedV2?: () => void;
     refreshMemberships: () => Promise<void>;
     applyNotice: (notice: WireGroupNotice) => Promise<void>;
   };
   localState: {
     readOwnJournal: () => Promise<WireStoredMessage[]>;
+    updateOwnJournalEntry: (stored: WireStoredMessage) => void;
     // Кэш истории (расшифрованные строки) + курсор синка — в шифрованном IDB,
     // чтобы вход не тянул всю историю с сервера и не расшифровывал её заново
     saveHistoryRecord: (stored: WireStoredMessage) => void;
@@ -72,6 +75,8 @@ type WireFlags = { read: boolean; deleted: boolean; pinned: boolean; snapshot: s
 type SenderCheck = { claimedFrom: string; senderIdentity: string };
 type UnsealResult = {
   stored: WireStoredMessage; wasSealed: boolean; hidden?: boolean; verify?: SenderCheck;
+  // Собственный исходящий конверт: скрыт, приём не подтверждается (ack — дело получателя)
+  isOwnEnvelope?: boolean;
 };
 
 const SYNC_TIMEOUT_MS = 15000;
@@ -129,7 +134,7 @@ export function createSyncController(deps: SyncDependencies) {
       parsed && typeof parsed === 'object'
       && 'content' in parsed && 'from' in parsed
       && typeof (parsed as { content: unknown }).content === 'object'
-      && (parsed as { content: unknown }).content !== null
+      && Boolean((parsed as { content: unknown }).content)
     ) {
       return (parsed as { content: WireMessageContent }).content;
     }
@@ -167,6 +172,9 @@ export function createSyncController(deps: SyncDependencies) {
   }
 
   function trackCursors(stored: WireStoredMessage) {
+    // C1-05: id v2-строки задаёт отправитель — UUIDv7 «из будущего» навсегда
+    // отрезал бы v1-доставку
+    if (stored.origin === 'v2') return;
     if (stored.id > lastSeenUuid) lastSeenUuid = stored.id;
     const updatedAt = stored.updated_at || 0;
     if (updatedAt > sinceUpdated) sinceUpdated = updatedAt;
@@ -259,6 +267,19 @@ export function createSyncController(deps: SyncDependencies) {
       };
     }
     if (!e2e || !content.ciphertext || !content.sender_identity) return { stored, wasSealed: false };
+
+    // Собственное исходящее ЭТОГО устройства, адресованное другому: шифртекст
+    // предназначен устройству получателя, своей Olm-сессией он не открывается.
+    // Обычные сообщения сюда не доходят (inner кэшируется при отправке), остаются
+    // служебные конверты без кэша — раздача группового ключа (SKDM). Sync
+    // возвращает их отправителю по `sender_signing_key`; без этой ветки после
+    // каждой раздачи ключа в личном чате с участником группы появлялась
+    // заглушка «не удалось расшифровать» с бейджем непрочитанного
+    if (content.sender_identity === e2e.identityKey && stored.to !== store.self) {
+      return {
+        stored, wasSealed: true, hidden: true, isOwnEnvelope: true,
+      };
+    }
 
     const plain = e2e.decryptFrom(content.sender_identity, content.ctype || 0, content.ciphertext);
     if (!plain) return { stored, wasSealed: false };
@@ -561,6 +582,8 @@ export function createSyncController(deps: SyncDependencies) {
   function isHiddenByGroupPermissions(stored: WireStoredMessage) {
     const store = deps.getStore();
     if (!stored.from || stored.from === store.self || !store.isGroupAddress(stored.to)) return false;
+    // Служебное сообщение о режиме группы собрано из её проверенного журнала
+    if (stored.content.kind === 'chat_mode') return false;
     const info = store.getGroupInfo(stored.to);
     const role = info?.members.find(({ address }) => address === stored.from)?.role;
     if (!info || role !== 'member') return false;
@@ -568,6 +591,13 @@ export function createSyncController(deps: SyncDependencies) {
     diagLog('group-perm-hidden', { uuid: stored.id, kind: stored.content.kind, from: stored.from });
     deps.log(`сообщение ${stored.id} (${stored.content.kind}) от ${stored.from} скрыто правами группы`);
     return true;
+  }
+
+  // Служебное сообщение о режиме «усиленная приватность» (L2) собирает только
+  // v2-контроллер — из события, проверенного движком, или журнала группы. Тот
+  // же вид, пришедший v1-путём, — подделка: чат выглядел бы защищённым
+  function isForgedChatMode(stored: WireStoredMessage, origin: WireStoredMessage['origin']) {
+    return stored.content.kind === 'chat_mode' && origin !== 'v2';
   }
 
   async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
@@ -716,11 +746,13 @@ export function createSyncController(deps: SyncDependencies) {
   // сообщение попадало в ленту дважды
   const inFlightByUuid = new Map<string, Promise<void>>();
 
-  function applyStoredUpdate(rawStored: WireStoredMessage, shouldAckIncoming: boolean): Promise<void> {
+  function applyStoredUpdate(
+    rawStored: WireStoredMessage, shouldAckIncoming: boolean, shouldPersist = shouldAckIncoming,
+  ): Promise<void> {
     const previous = inFlightByUuid.get(rawStored.id) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => applyStoredUpdateUnserialized(rawStored, shouldAckIncoming));
+      .then(() => applyStoredUpdateUnserialized(rawStored, shouldAckIncoming, shouldPersist));
     inFlightByUuid.set(rawStored.id, next);
     void next.finally(() => {
       if (inFlightByUuid.get(rawStored.id) === next) inFlightByUuid.delete(rawStored.id);
@@ -728,12 +760,16 @@ export function createSyncController(deps: SyncDependencies) {
     return next;
   }
 
-  async function applyStoredUpdateUnserialized(rawStored: WireStoredMessage, shouldAckIncoming: boolean) {
+  async function applyStoredUpdateUnserialized(
+    rawStored: WireStoredMessage, shouldAckIncoming: boolean, shouldPersist = shouldAckIncoming,
+  ) {
     trackCursors(rawStored);
-    const { stored, hidden, verify } = unsealStored(rawStored);
+    const {
+      stored, hidden, verify, isOwnEnvelope,
+    } = unsealStored(rawStored);
     const store = deps.getStore();
     if (hidden) {
-      if (shouldAckIncoming) sendAck(rawStored.id);
+      if (shouldAckIncoming && !isOwnEnvelope) sendAck(rawStored.id);
       return;
     }
     if (verify) {
@@ -752,7 +788,9 @@ export function createSyncController(deps: SyncDependencies) {
         // повторил, а дисковый курсор не ушёл вперёд (SYNC-1). Ранее сообщение
         // показывалось без подтверждения — окно для спуфа при недоступном
         // identity-шарде (P-26).
-        deps.log(`отправитель ${verify.claimedFrom} в ${rawStored.id} не подтверждён (каталог недоступен) — откладываем`);
+        deps.log(
+          `отправитель ${verify.claimedFrom} в ${rawStored.id} не подтверждён (каталог недоступен) — откладываем`,
+        );
         sawUndecryptable = true;
         undecryptableUuids.add(rawStored.id);
         return;
@@ -774,7 +812,7 @@ export function createSyncController(deps: SyncDependencies) {
     // тип не проверяет — участник без роли, приславший запрещённый тип в
     // обход композера, у остальных не показывается. Решение принято —
     // курсор двигается как за применённым (не сбой расшифровки)
-    if (isHiddenByGroupPermissions(stored)) {
+    if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, rawStored.origin)) {
       if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
@@ -833,9 +871,9 @@ export function createSyncController(deps: SyncDependencies) {
 
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
-    // Кэш истории: только серверные строки (shouldAck) — восстановление из
-    // кэша (shouldAck=false) не переписывает само себя
-    if (shouldAckIncoming) persistHistory(stored);
+    // Кэш истории: только серверные строки (shouldAck) и строки протокола v2
+    // — восстановление из кэша (shouldPersist=false) не переписывает само себя
+    if (shouldPersist) persistHistory(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
     if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id);
 
@@ -853,6 +891,9 @@ export function createSyncController(deps: SyncDependencies) {
       if (!message.isOutgoing && store.isMentionOfSelf(message)) {
         pushMentionState(message.chatId);
       }
+      // tt на newMessage с чужим senderId прибавляет +1 к непрочитанному;
+      // служебное сообщение прочитать нельзя — счётчик к честному значению
+      if (!message.isOutgoing && message.content.action) pushReadState(message.chatId);
       // Первичный sync: pinnedIds наполняется ТОЛЬКО через updatePinnedIds, а не
       // из message.isPinned — без этого закреплённые не восстанавливаются на
       // свежем входе (панель пинов пуста до нового пина). Эмитим для уже
@@ -886,6 +927,7 @@ export function createSyncController(deps: SyncDependencies) {
 
   // Строка кэша: расшифрованный stored без TTL и без tombstone
   function persistHistory(stored: WireStoredMessage) {
+    if (stored.from === deps.getStore().self) deps.localState.updateOwnJournalEntry(stored);
     if (stored.content.ttl_secs) return;
     if (stored.deleted) {
       deps.localState.deleteHistoryRecord(stored.id);
@@ -933,7 +975,6 @@ export function createSyncController(deps: SyncDependencies) {
   async function restoreFromCache(): Promise<boolean> {
     if (!deps.getE2e()) return false;
     const cursor = await deps.localState.loadSyncCursor();
-    if (!cursor?.lastSeenUuid) return false;
     const records = await deps.localState.loadHistoryRecords();
     if (!records.length) return false;
     // «Избранное» без других устройств живёт ТОЛЬКО в журнале исходящих (на
@@ -946,6 +987,12 @@ export function createSyncController(deps: SyncDependencies) {
       .sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
     for (const stored of ordered) {
       await applyStoredUpdate(stored, false);
+    }
+    // Протокол v2 (spec 007): переписка только по v2 не двигает v1-курсор —
+    // кэш показан, а v1-история догоняется полным синком
+    if (!cursor?.lastSeenUuid) {
+      deps.log(`история из кэша без v1-курсора: ${records.length} сообщений, полный синк`);
+      return false;
     }
     lastSeenUuid = cursor.lastSeenUuid;
     sinceUpdated = cursor.sinceUpdated;
@@ -961,7 +1008,8 @@ export function createSyncController(deps: SyncDependencies) {
     const token = deps.getToken();
     const groupsRaw = await connection.request(TOPIC_GROUP_LIST, JSON.stringify({ token }));
     const groups = (JSON.parse(groupsRaw) as { groups?: WireGroupInfo[] }).groups || [];
-    groups.forEach(deps.groups.register);
+    groups.forEach((info) => deps.groups.register(info));
+    deps.groups.registerCachedV2?.();
 
     if (await restoreFromCache()) {
       isSynced = true;
@@ -1007,7 +1055,7 @@ export function createSyncController(deps: SyncDependencies) {
         && deps.localState.isBlocked(stored.from)) {
         continue;
       }
-      if (isHiddenByGroupPermissions(stored)) continue;
+      if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, rawStored.origin)) continue;
       // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
@@ -1213,7 +1261,14 @@ export function createSyncController(deps: SyncDependencies) {
     });
   }
 
+  // Протокол v2 (spec 007): строка, собранная из события движка, — тот же
+  // конвейер отображения, без v1-подтверждений (у v2 свой ack журнала).
+  function applyExternal(stored: WireStoredMessage) {
+    return applyStoredUpdate({ ...stored, origin: 'v2' }, false, true);
+  }
+
   return {
+    applyExternal,
     announcePeer,
     collectUnreadMentions,
     ensureSynced,

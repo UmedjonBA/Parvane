@@ -305,11 +305,12 @@ export async function fetchAuthorizations() {
   };
 }
 
-export function terminateAuthorization(hash: string) {
+// `password` использует только провайдер Parvane (отзыв устройства требует пароль)
+export function terminateAuthorization(hash: string, password?: string) {
   return invokeRequest(new GramJs.account.ResetAuthorization({ hash: BigInt(hash) }));
 }
 
-export function terminateAllAuthorizations() {
+export function terminateAllAuthorizations(password?: string) {
   return invokeRequest(new GramJs.auth.ResetAuthorizations());
 }
 

@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
@@ -111,6 +111,10 @@ const SettingsEditProfile = ({
   const currentUsername = firstEditableUsername?.username || '';
   const [isUsernameTouched, setIsUsernameTouched] = useState(false);
   const [isProfileFieldsTouched, setIsProfileFieldsTouched] = useState(false);
+  // Синхронная отметка «пользователь уже печатает»: ответ `loadCurrentUser`
+  // приходит асинхронно и мог затереть введённое в том же кадре (в поле текст
+  // оставался, а в состоянии — пусто, и сохранялось пустое значение)
+  const areProfileFieldsDirtyRef = useRef(false);
   const [error, setError] = useState<string | undefined>();
 
   const [photo, setPhoto] = useState<File | undefined>();
@@ -161,6 +165,7 @@ const SettingsEditProfile = ({
   }, [currentAvatarBlobUrl]);
 
   useEffect(() => {
+    if (areProfileFieldsDirtyRef.current) return;
     setFirstName(currentFirstName || '');
     setLastName(currentLastName || '');
     setBio(currentBio || '');
@@ -177,6 +182,7 @@ const SettingsEditProfile = ({
 
   useEffect(() => {
     if (progress === ProfileEditProgress.Complete) {
+      areProfileFieldsDirtyRef.current = false;
       setIsProfileFieldsTouched(false);
       setIsUsernameTouched(false);
       setError(undefined);
@@ -201,16 +207,19 @@ const SettingsEditProfile = ({
 
   const handleFirstNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setFirstName(e.target.value);
+    areProfileFieldsDirtyRef.current = true;
     setIsProfileFieldsTouched(true);
   });
 
   const handleLastNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setLastName(e.target.value);
+    areProfileFieldsDirtyRef.current = true;
     setIsProfileFieldsTouched(true);
   });
 
   const handleBioChange = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setBio(e.target.value);
+    areProfileFieldsDirtyRef.current = true;
     setIsProfileFieldsTouched(true);
   });
 

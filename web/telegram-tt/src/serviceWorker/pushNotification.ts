@@ -48,12 +48,20 @@ type CloseNotificationData = {
 };
 
 let lastSyncAt = new Date().valueOf();
+// Текст пробуждения v2 — как у v1-пуша шарда push (содержимого сервер не знает)
+const WAKE_DESCRIPTION = 'New message';
 const shownNotifications = new Set();
 const clickBuffer: Record<string, NotificationData> = {};
 
 function getPushData(e: PushEvent | Notification): PushData | undefined {
   try {
-    return e.data.json();
+    const data = e.data.json() as PushData;
+    // Пробуждение протокола v2 (`push.wake.*`) — пустой объект: сервер не
+    // знает ни чата, ни текста, показываем то же, что и v1-пуш
+    if (!data.custom) {
+      return { ...data, description: data.description || WAKE_DESCRIPTION, custom: {} };
+    }
+    return data;
   } catch (error) {
     if (DEBUG) {
       // eslint-disable-next-line no-console
