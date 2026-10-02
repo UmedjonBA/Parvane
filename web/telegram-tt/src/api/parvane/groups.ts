@@ -1,10 +1,11 @@
 import type {
   ApiChat, ApiChatAdminRights, ApiChatBannedRights, ApiChatInviteImporter, ApiChatInviteInfo, ApiChatMember,
-  ApiExportedInvite, ApiPhoto, ApiUpdate, ApiUser,
+  ApiExportedInvite, ApiMessage, ApiPhoto, ApiUpdate, ApiUser,
 } from '../types';
 import type { E2eEngine } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
+import type { createV2Controller, V2InviteRecord } from './v2/controller';
 import type {
   WireDefaultPermissions, WireGroupInfo, WireGroupMember, WireGroupNotice, WireInviteCheck, WireInviteLink,
   WireJoinRequest, WireMessageContent,
@@ -123,7 +124,17 @@ type GroupDependencies = {
   forgetInviteLink?: (groupId: string) => void;
   // ApiPhoto из file_id открытого объекта cloud (фото группы в превью ссылки)
   buildAvatarPhoto?: (fileId: string) => ApiPhoto;
+  // Протокол v2 (spec 007): группы с подписанным журналом состояния
+  getV2?: () => V2Groups | undefined;
+  // Шаблон служебного сообщения из языкового пакета (`{user}` — участник)
+  getUnconfirmedTemplate?: () => string | undefined;
 };
+
+type V2Groups = ReturnType<typeof createV2Controller>;
+
+// Mute «навсегда» в журнале группы v2: until_ms = 2^53 − 1 (0 — снять mute)
+const V2_MUTE_FOREVER_MS = '9007199254740991';
+const MS_IN_SECOND = 1000;
 
 type ActionResponse = { ok?: boolean; error?: string; error_code?: string; version?: number };
 
@@ -131,11 +142,26 @@ export function createGroupController(deps: GroupDependencies) {
   const inviteLinkByGroupId = new Map<string, InviteLinkRecord>();
   // Незавершённые запросы создания основной ссылки — по одному на группу
   const inviteRequestByGroupId = new Map<string, Promise<InviteLinkRecord | undefined>>();
+  const v2PrimaryRequests = new Map<string, Promise<V2InviteRecord | undefined>>();
+
+  function v2Of(address: string) {
+    const v2 = deps.getV2?.();
+    return v2?.isV2GroupAddress(address) ? v2 : undefined;
+  }
 
   // Применить сведения группы. false — пришедшая ревизия старее известной
-  // (GROUP-1), сведения пропущены
-  function register(info: WireGroupInfo): boolean {
+  // (GROUP-1), сведения пропущены. Группа v2: состав задаёт только журнал
+  // (`isVerified`); сведения от сервера лишь сверяются с ним (FR-028, T080) —
+  // участник, которого сервер показывает без подтверждённой записи
+  // администратора, в состав не попадает и ключей не получает
+  function register(info: WireGroupInfo, isVerified?: boolean): boolean {
     const store = deps.getStore();
+    const v2 = v2Of(info.group_id);
+    if (v2 && !isVerified) {
+      v2.reportUnconfirmed(info.group_id, getActiveGroupMemberAddresses(info.members));
+      const verified = v2.groupInfo(info.group_id);
+      return verified ? register(verified, true) : false;
+    }
     if (!store.registerGroup(info)) {
       const known = store.getGroupVersion(info.group_id);
       deps.log(`сведения группы ${info.group_id} v${info.version ?? 0} устарели (известна v${known}), пропущены`);
@@ -145,7 +171,8 @@ export function createGroupController(deps: GroupDependencies) {
     // «печатает…» в группе никто не услышит
     deps.onGroupRegistered(store.getIdForAddress(info.group_id, 'group'));
     const e2e = deps.getE2e();
-    if (!e2e || !store.self) return true;
+    // Ключи группы v2 — эпохи движка, не Megolm-сессия v1
+    if (v2 || !e2e || !store.self) return true;
     const activeMembers = getActiveGroupMemberAddresses(info.members);
     if (e2e.syncGroupRecipients(info.group_id, activeMembers, store.self)) {
       deps.log(`состав ${info.group_id} сократился, групповой ключ ротирован`);
@@ -171,6 +198,12 @@ export function createGroupController(deps: GroupDependencies) {
   }
 
   async function refresh(groupId: string) {
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const verified = v2.groupInfo(groupId);
+      if (verified) register(verified, true);
+      return verified;
+    }
     const connection = deps.getConnection();
     if (!connection) return undefined;
     const raw = await connection.request(
@@ -264,9 +297,10 @@ export function createGroupController(deps: GroupDependencies) {
           pushGroupUpdates(info, !previous);
         }
       });
-      // Исчезнувшие группы: удалены владельцем либо нас выгнали
+      // Исчезнувшие группы: удалены владельцем либо нас выгнали (группы v2
+      // в v1-списке не бывают — их состав ведёт журнал)
       store.getGroupAddresses()
-        .filter((address) => !listed.has(address))
+        .filter((address) => !listed.has(address) && !v2Of(address))
         .forEach((address) => {
           store.unregisterGroup(address);
           deps.sendUpdate({ '@type': 'updateChatLeave', id: store.getIdForAddress(address) });
@@ -330,6 +364,23 @@ export function createGroupController(deps: GroupDependencies) {
     if (!connection) return undefined;
     const store = deps.getStore();
     const members = users.map((user) => store.getAddressForId(user.id)).filter(Boolean);
+    // Протокол v2: стек поднят и ВСЕ участники — v2-собеседники — группа с
+    // подписанным журналом; иначе v1, как раньше
+    const v2 = deps.getV2?.();
+    if (v2?.isReady()) {
+      try {
+        const v2Info = await v2.createGroup(title, members, kind);
+        if (v2Info) {
+          register(v2Info, true);
+          const v2Chat = store.buildApiChatForGroup(v2Info);
+          deps.sendUpdate({ '@type': 'updateChat', id: v2Chat.id, chat: v2Chat });
+          return v2Chat;
+        }
+      } catch (error) {
+        deps.log(`группа v2 не создана: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+    }
     const raw = await connection.request(TOPIC_GROUP_CREATE, JSON.stringify({
       token: deps.getToken(), name: title, kind, members,
     }));
@@ -388,6 +439,17 @@ export function createGroupController(deps: GroupDependencies) {
     if (!groupId || !member) return undefined;
     const rights = adminRights ? toWireAdminRights(adminRights) : undefined;
     const isPromotion = Boolean(rights && Object.values(rights).some(Boolean));
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const isDone = await v2.changeGroup(groupId, {
+        set_role: {
+          member: { address: member },
+          role: isPromotion ? 'ROLE_ADMIN' : 'ROLE_MEMBER',
+          rights: isPromotion ? rights : {},
+        },
+      });
+      return isDone || undefined;
+    }
     const response = await requestAction(TOPIC_GROUP_SETADMIN, {
       group_id: groupId, member, rights: isPromotion ? rights : undefined,
     });
@@ -410,6 +472,14 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(chat.id);
     if (!groupId) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const current = v2.groupInfo(groupId);
+      const isDone = await v2.changeGroup(groupId, {
+        set_info: { name: title, about: current?.about || '', avatar_file_id: current?.avatar || '' },
+      });
+      return isDone || undefined;
+    }
     const response = await requestAction(TOPIC_GROUP_RENAME, { group_id: groupId, name: title });
     if (!response.ok) return undefined;
     const info = await refresh(groupId);
@@ -423,6 +493,18 @@ export function createGroupController(deps: GroupDependencies) {
     groupId: string,
     patch: { about?: string; avatarFileId?: string; clearAvatar?: boolean },
   ) {
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const current = v2.groupInfo(groupId);
+      if (!current) return false;
+      return v2.changeGroup(groupId, {
+        set_info: {
+          name: current.name,
+          about: patch.about ?? current.about ?? '',
+          avatar_file_id: patch.clearAvatar ? '' : (patch.avatarFileId || current.avatar || ''),
+        },
+      });
+    }
     const response = await requestAction(TOPIC_GROUP_SETINFO, {
       group_id: groupId,
       ...(patch.about !== undefined ? { about: patch.about } : {}),
@@ -450,6 +532,13 @@ export function createGroupController(deps: GroupDependencies) {
   }) {
     const groupId = deps.getStore().getAddressForId(chat.id);
     if (!groupId) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const isDone = await v2.changeGroup(groupId, {
+        set_permissions: { default_permissions: fromBannedRights(bannedRights) },
+      });
+      return isDone || undefined;
+    }
     const response = await requestAction(TOPIC_GROUP_SETPERMS, {
       group_id: groupId, default_permissions: fromBannedRights(bannedRights),
     });
@@ -466,8 +555,13 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(chatId);
     if (!groupId) return undefined;
-    const response = await requestAction(TOPIC_GROUP_REMOVE_MEMBER, { group_id: groupId, member: store.self });
-    if (!response.ok) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      if (!(await v2.changeGroup(groupId, { leave: {} }))) return undefined;
+    } else {
+      const response = await requestAction(TOPIC_GROUP_REMOVE_MEMBER, { group_id: groupId, member: store.self });
+      if (!response.ok) return undefined;
+    }
     forgetInviteLink(groupId);
     store.unregisterGroup(groupId);
     deps.sendUpdate({ '@type': 'updateChatLeave', id: chatId });
@@ -478,8 +572,13 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(chatId);
     if (!groupId) return undefined;
-    const response = await requestAction(TOPIC_GROUP_DELETE, { group_id: groupId });
-    if (!response.ok) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      if (!(await v2.changeGroup(groupId, { delete_group: {} }))) return undefined;
+    } else {
+      const response = await requestAction(TOPIC_GROUP_DELETE, { group_id: groupId });
+      if (!response.ok) return undefined;
+    }
     forgetInviteLink(groupId);
     store.unregisterGroup(groupId);
     deps.sendUpdate({ '@type': 'updateChatLeave', id: chatId });
@@ -494,6 +593,8 @@ export function createGroupController(deps: GroupDependencies) {
     if (!store.isGroupAddress(address)) {
       return { fullInfo: { canViewMembers: false }, chats: [], userStatusesById: {} };
     }
+    const v2 = v2Of(address);
+    if (v2) return fetchFullChatV2(v2, address);
 
     const raw = await connection.request(
       TOPIC_GROUP_INFO,
@@ -520,6 +621,102 @@ export function createGroupController(deps: GroupDependencies) {
       userStatusesById: {},
       membersCount: members.length,
     };
+  }
+
+  async function fetchFullChatV2(v2: V2Groups, address: string) {
+    const info = v2.groupInfo(address);
+    if (!info) return undefined;
+    register(info, true);
+    const store = deps.getStore();
+    const members = buildMembers(info.members.filter(({ role }) => role !== 'banned'));
+    const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
+    const selfMember = info.members.find(({ address: member }) => member === store.self);
+    const inviteLink = isInviteManager(selfMember) ? (await ensureV2Primary(v2, address))?.url : undefined;
+    return {
+      fullInfo: {
+        members,
+        adminMembersById: Object.fromEntries(adminMembers.map((member) => [member.userId, member])),
+        canViewMembers: true,
+        inviteLink,
+        about: info.about || undefined,
+      },
+      chats: [store.buildApiChatForGroup(info)],
+      userStatusesById: {},
+      membersCount: members.length,
+    };
+  }
+
+  // Основная ссылка группы v2: первая без параметров, созданная этим
+  // устройством (секрет ссылки есть только у создателя); нет — создаём
+  async function ensureV2Primary(v2: V2Groups, address: string) {
+    const inFlight = v2PrimaryRequests.get(address);
+    if (inFlight) return inFlight;
+    const request = (async () => {
+      const links = await v2.listInvites(address);
+      return links.find((link) => !link.title && !link.expiresAt && !link.usageLimit && !link.isRequestNeeded)
+        || v2.createInvite(address, {});
+    })().finally(() => v2PrimaryRequests.delete(address));
+    v2PrimaryRequests.set(address, request);
+    return request;
+  }
+
+  function buildV2ExportedInvite(record: V2InviteRecord, isPrimary?: boolean, isRevoked?: boolean): ApiExportedInvite {
+    return {
+      link: record.url,
+      date: record.date,
+      title: record.title,
+      isPermanent: isPrimary ? true : undefined,
+      isRevoked: isRevoked ? true : undefined,
+      expireDate: record.expiresAt,
+      usageLimit: record.usageLimit,
+      isRequestNeeded: record.isRequestNeeded,
+      adminId: deps.selfId(),
+    };
+  }
+
+  // FR-028 (T080): нативное служебное сообщение в чате группы — участник без
+  // подтверждённой записи администратора ключей не получает
+  function announceUnconfirmed(address: string, members: string[]) {
+    const store = deps.getStore();
+    if (!store.isGroupAddress(address)) return;
+    const chatId = store.getIdForAddress(address, 'group');
+    const ts = Math.floor(Date.now() / MS_IN_SECOND);
+    const template = deps.getUnconfirmedTemplate?.()
+      || '{user} is listed by the server, but no admin record confirms it. Encryption keys are not shared with them.';
+    members.forEach((member) => {
+      const id = store.allocateMessageId(chatId, `unconfirmed:${address}:${member}`, ts);
+      const message: ApiMessage = {
+        id,
+        chatId,
+        date: ts,
+        isOutgoing: false,
+        content: {
+          action: {
+            mediaType: 'action',
+            type: 'customAction',
+            message: template.replace('{user}', store.getDisplayName(member)),
+          },
+        },
+      };
+      store.putMessage(message);
+      deps.sendUpdate({ '@type': 'newMessage', chatId, id, message });
+    });
+  }
+
+  function registerCachedV2() {
+    deps.getV2?.()?.cachedGroups().forEach((info) => register(info, true));
+  }
+
+  // Группа v2 изменилась по журналу (из v2-контроллера)
+  function applyV2Group(info: WireGroupInfo, isNew: boolean) {
+    if (register(info, true)) pushGroupUpdates(info, isNew);
+  }
+
+  function removeV2Group(address: string) {
+    const store = deps.getStore();
+    forgetInviteLink(address);
+    store.unregisterGroup(address);
+    deps.sendUpdate({ '@type': 'updateChatLeave', id: store.getIdForAddress(address, 'group') });
   }
 
   // Участники группы для нативных экранов: пользователи отправляются апдейтом
@@ -685,9 +882,16 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(chat.id);
     if (!groupId) return undefined;
+    const v2 = v2Of(groupId);
     for (const user of users) {
       const member = store.getAddressForId(user.id);
       if (!member) continue;
+      if (v2) {
+        // Добавить в группу v2 можно только v2-собеседника (ключи эпохи — по v2)
+        if (!(await v2.isV2Chat(member).catch(() => false))) return undefined;
+        if (!(await v2.changeGroup(groupId, { add_member: { member: { address: member } } }))) return undefined;
+        continue;
+      }
       const response = await requestAction(TOPIC_GROUP_ADD_MEMBER, { group_id: groupId, member });
       if (!response.ok) return undefined;
     }
@@ -700,6 +904,10 @@ export function createGroupController(deps: GroupDependencies) {
     const groupId = store.getAddressForId(chat.id);
     const member = store.getAddressForId(user.id);
     if (!groupId || !member) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      return (await v2.changeGroup(groupId, { remove_member: { member: { address: member } } })) || undefined;
+    }
     const response = await requestAction(TOPIC_GROUP_REMOVE_MEMBER, { group_id: groupId, member });
     if (!response.ok) return undefined;
     registerExclusion(groupId, member, false);
@@ -719,6 +927,22 @@ export function createGroupController(deps: GroupDependencies) {
     const groupId = store.getAddressForId(chat.id);
     const member = store.getAddressForId(user.id);
     if (!groupId || !member) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const ref = { member: { address: member } };
+      let change: Record<string, unknown>;
+      if (bannedRights.viewMessages) {
+        change = { ban: ref };
+      } else if (bannedRights.sendMessages) {
+        change = { mute: { ...ref, until_ms: untilDate ? String(untilDate * MS_IN_SECOND) : V2_MUTE_FOREVER_MS } };
+      } else {
+        const isBanned = v2.groupInfo(groupId)?.members.some(
+          ({ address, role }) => address === member && role === 'banned',
+        );
+        change = isBanned ? { unban: ref } : { mute: { ...ref, until_ms: '0' } };
+      }
+      return (await v2.changeGroup(groupId, change)) || undefined;
+    }
 
     if (bannedRights.viewMessages) {
       const response = await requestAction(TOPIC_GROUP_BAN, { group_id: groupId, member });
@@ -746,6 +970,15 @@ export function createGroupController(deps: GroupDependencies) {
     const selfMember = await getSelfMember(groupId);
     if (!isInviteManager(selfMember)) return undefined;
     const hasParams = Boolean(title || expireDate || usageLimit || isRequestNeeded);
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const record = hasParams
+        ? await v2.createInvite(groupId, {
+          title, expireDate, usageLimit, isRequestNeeded,
+        })
+        : await ensureV2Primary(v2, groupId);
+      return record ? buildV2ExportedInvite(record, !hasParams) : undefined;
+    }
     if (!hasParams) {
       const record = await ensureInviteRecord(groupId, selfMember);
       if (!record) return undefined;
@@ -784,6 +1017,16 @@ export function createGroupController(deps: GroupDependencies) {
     if (!groupId) return { invites: [] };
     const selfMember = await getSelfMember(groupId);
     if (!isInviteManager(selfMember)) return { invites: [] };
+    const v2 = v2Of(groupId);
+    if (v2) {
+      // Отозванная ссылка v2 уходит из журнала — списка отозванных нет
+      if (isRevoked) return { invites: [] };
+      const primary = await ensureV2Primary(v2, groupId);
+      const links = await v2.listInvites(groupId);
+      return {
+        invites: links.map((record) => buildV2ExportedInvite(record, record.url === primary?.url)),
+      };
+    }
     let links: WireInviteLink[] | undefined;
     try {
       links = await listInvites(groupId, Boolean(isRevoked));
@@ -834,6 +1077,16 @@ export function createGroupController(deps: GroupDependencies) {
     expireDate?: number; usageLimit?: number; isRequestNeeded?: boolean; title?: string;
   }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
+    const v2 = groupId ? v2Of(groupId) : undefined;
+    if (v2 && groupId) {
+      if (!isRevoked) {
+        reportInviteError(undefined, 'editUnsupported');
+        return undefined;
+      }
+      const record = (await v2.listInvites(groupId)).find((item) => item.url === link);
+      if (!record || !(await v2.revokeInvite(groupId, link))) return undefined;
+      return { oldInvite: buildV2ExportedInvite(record), newInvite: buildV2ExportedInvite(record, false, true) };
+    }
     const token = inviteTokenFromLink(link);
     if (!groupId || !token) return undefined;
     if (!isRevoked) {
@@ -851,6 +1104,8 @@ export function createGroupController(deps: GroupDependencies) {
 
   async function deleteExportedChatInvite({ peer, link }: { peer: ApiChat; link: string }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
+    // Отозванной ссылки v2 уже нет в журнале — удалять нечего
+    if (groupId && v2Of(groupId)) return true;
     const token = inviteTokenFromLink(link);
     if (!groupId || !token) return undefined;
     const response = await requestAction(TOPIC_GROUP_INVITE_DELETE, { group_id: groupId, invite: token });
@@ -860,6 +1115,7 @@ export function createGroupController(deps: GroupDependencies) {
   async function deleteRevokedExportedChatInvites({ peer }: { peer: ApiChat; admin?: unknown }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
     if (!groupId) return undefined;
+    if (v2Of(groupId)) return true;
     const revoked = await listInvites(groupId, true).catch(() => undefined);
     if (!revoked) return undefined;
     for (const link of revoked) {
@@ -887,7 +1143,7 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(peer.id);
     if (!groupId) return undefined;
-    if (!isRequested) return { importers: [] };
+    if (!isRequested || v2Of(groupId)) return { importers: [] };
     const requests = await listJoinRequests(groupId).catch(() => undefined);
     if (!requests) return undefined;
     const token = link ? inviteTokenFromLink(link) : undefined;
@@ -948,6 +1204,8 @@ export function createGroupController(deps: GroupDependencies) {
   // «Join group» с именем, фото, числом участников и «Request to Join»;
   // участнику — сразу чат; недействительная — тост с причиной
   async function checkChatInvite(hash: string) {
+    const v2 = deps.getV2?.();
+    if (v2?.isV2InviteUrl(hash)) return checkChatInviteV2(v2, hash);
     const connection = deps.getConnection();
     if (!connection) {
       reportInviteError();
@@ -980,6 +1238,53 @@ export function createGroupController(deps: GroupDependencies) {
     }
   }
 
+  // Ссылка v2 `https://<домен>/join/<link_id>#<секрет>`: превью по link_id
+  // (секрет серверу не уходит); участнику — сразу чат
+  async function checkChatInviteV2(v2: V2Groups, url: string) {
+    const check = await v2.checkInvite(url);
+    if (!check) {
+      reportInviteError(undefined, 'invalid');
+      return undefined;
+    }
+    if ('error' in check) {
+      reportInviteError(undefined, check.error.status === 'error' ? check.error.code : 'failed');
+      return undefined;
+    }
+    const invite: ApiChatInviteInfo = {
+      title: check.name,
+      participantsCount: check.membersCount,
+      isRequestNeeded: check.isRequestNeeded ? true : undefined,
+      isChannel: check.isChannel ? true : undefined,
+      isBroadcast: check.isChannel ? true : undefined,
+      color: 0,
+    };
+    const info = check.isMember ? v2.groupInfo(check.address) : undefined;
+    if (info) {
+      register(info, true);
+      const chat = deps.getStore().buildApiChatForGroup(info);
+      deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+      return { invite, chat, users: [] };
+    }
+    return { invite, users: [] };
+  }
+
+  async function importChatInviteV2(v2: V2Groups, url: string) {
+    const result = await v2.joinByInvite(url);
+    if (!result) {
+      reportInviteError(undefined, 'invalid');
+      return undefined;
+    }
+    if (result.status === 'requested') return { type: 'requested' as const };
+    if (result.status === 'error') {
+      reportInviteError(undefined, result.code);
+      return undefined;
+    }
+    register(result.info, true);
+    pushGroupUpdates(result.info, true);
+    const groupChat = deps.getStore().buildApiChatForGroup(result.info);
+    return { type: 'ok' as const, chat: groupChat };
+  }
+
   function buildInviteInfo(check: WireInviteCheck): ApiChatInviteInfo {
     return {
       title: check.name || '',
@@ -997,6 +1302,8 @@ export function createGroupController(deps: GroupDependencies) {
   // Отказ (бан, отозвана, истекла, исчерпана, отклонена, сеть) — событие для
   // тоста; заявка «по одобрению» — pending без чата (тост показывает tt)
   async function importChatInvite({ hash }: { hash: string }) {
+    const v2 = deps.getV2?.();
+    if (v2?.isV2InviteUrl(hash)) return importChatInviteV2(v2, hash);
     const connection = deps.getConnection();
     if (!connection) {
       reportInviteError();
@@ -1043,6 +1350,10 @@ export function createGroupController(deps: GroupDependencies) {
 
   return {
     reset,
+    announceUnconfirmed,
+    applyV2Group,
+    registerCachedV2,
+    removeV2Group,
     addChatMembers,
     applyNotice,
     checkChatInvite,

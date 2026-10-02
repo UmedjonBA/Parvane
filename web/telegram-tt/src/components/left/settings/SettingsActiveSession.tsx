@@ -1,15 +1,17 @@
 import type { FC } from '../../../lib/teact/teact';
-import { memo, useCallback } from '../../../lib/teact/teact';
+import { memo, useCallback, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiSession } from '../../../api/types';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatDateTimeToString } from '../../../util/dates/oldDateFormat';
+import getSessionAppLine from './helpers/getSessionAppLine';
 import getSessionIcon from './helpers/getSessionIcon';
 
 import useCurrentOrPrev from '../../../hooks/useCurrentOrPrev';
 import useLang from '../../../hooks/useLang';
+import useOldLang from '../../../hooks/useOldLang';
 
 import Button from '../../ui/Button';
 import Modal from '../../ui/Modal';
@@ -31,13 +33,27 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 }) => {
   const { terminateAuthorization } = getActions();
   const lang = useLang();
+  const oldLang = useOldLang();
 
   const renderingSession = useCurrentOrPrev(session, true);
 
-  const handleTerminateSessionClick = useCallback(() => {
-    terminateAuthorization({ hash: session!.hash });
+  // Parvane (P-07): сервер отзывает устройство только с текущим паролем
+  const [password, setPassword] = useState('');
+
+  const handlePasswordChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setPassword(e.currentTarget.value);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setPassword('');
     onClose();
-  }, [onClose, session, terminateAuthorization]);
+  }, [onClose]);
+
+  const handleTerminateSessionClick = useCallback(() => {
+    if (!password) return;
+    terminateAuthorization({ hash: session!.hash, password });
+    handleClose();
+  }, [handleClose, password, session, terminateAuthorization]);
 
   if (!renderingSession) {
     return undefined;
@@ -51,7 +67,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
           color="translucent"
           size="tiny"
           ariaLabel={lang('Close')}
-          onClick={onClose}
+          onClick={handleClose}
           iconName="close"
         />
         <div className="modal-title">{lang('SessionPreviewTitle')}</div>
@@ -64,7 +80,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
       header={renderHeader()}
       isOpen={isOpen}
       hasCloseButton
-      onClose={onClose}
+      onClose={handleClose}
       className={styles.SettingsActiveSession}
     >
       <div className={buildClassName(
@@ -79,7 +95,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
       <dl className={styles.box}>
         <dt>{lang('SessionPreviewApp')}</dt>
-        <dd>{getAppLine(renderingSession)}</dd>
+        <dd>{getSessionAppLine(lang, renderingSession)}</dd>
         {renderingSession?.ip && (
           <>
             <dt>{lang('SessionPreviewIp')}</dt>
@@ -97,11 +113,22 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
       {/* Parvane: IP/гео сервер не хранит, per-session тумблеры звонков и
           секретных чатов не поддерживаются — примечание и переключатели скрыты */}
+      <p className={buildClassName(styles.note, 'mb-2')}>{oldLang('ParvaneSessionPasswordHint')}</p>
+      <input
+        type="password"
+        className="form-control"
+        autoComplete="current-password"
+        placeholder={oldLang('ParvanePasswordConfirm')}
+        aria-label={oldLang('ParvanePasswordConfirm')}
+        value={password}
+        onChange={handlePasswordChange}
+      />
       <div className="dialog-buttons mt-2">
         <Button
           color="danger"
           className="confirm-dialog-button"
           isText
+          disabled={!password}
           onClick={handleTerminateSessionClick}
         >
           {lang('SessionPreviewTerminateSession')}
@@ -113,16 +140,6 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
 function getLocation(session: ApiSession) {
   return [session.region, session.country].filter(Boolean).join(', ');
-}
-
-// Parvane: часть полей пуста (сервер не хранит метаданные устройств) —
-// собираем строку только из заполненных, без висячих запятых
-function getAppLine(session?: ApiSession) {
-  if (!session) return '';
-  return [
-    [session.appName, session.appVersion].filter(Boolean).join(' '),
-    [session.platform, session.systemVersion].filter(Boolean).join(' '),
-  ].filter(Boolean).join(', ');
 }
 
 export default memo(withGlobal<OwnProps>((global, { hash }) => {

@@ -27,6 +27,7 @@ import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
 import useOldLang from '../../../hooks/useOldLang';
+import useParvaneChatL2 from '../../../hooks/useParvaneChatL2';
 
 import Island, { IslandDescription } from '../../gili/layout/Island';
 import Switch from '../../gili/primitives/Switch';
@@ -141,6 +142,9 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   const isPublicGroup = useMemo(() => isChatPublic(chat), [chat]);
   const lang = useOldLang();
   const isPreHistoryHiddenCheckboxRef = useRef<HTMLDivElement>();
+  // Parvane: политика «усиленная приватность» (L2) группы протокола v2 —
+  // меняет тот, кто вправе менять сведения группы
+  const [groupL2, handleToggleL2] = useParvaneChatL2(canChangeInfo ? chatId : undefined, 'isActive');
 
   useHistoryBack({
     isActive,
@@ -466,6 +470,15 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
                 />
               </ListItem>
               <IslandDescription>{lang('ForumToggleDescription')}</IslandDescription>
+            </>
+          )}
+          {groupL2?.isAvailable && (
+            <>
+              <ListItem icon="lock" ripple onClick={handleToggleL2}>
+                <span>{lang('ParvaneL2Toggle')}</span>
+                <Switch checked={Boolean(groupL2.isActive)} />
+              </ListItem>
+              <IslandDescription>{lang('ParvaneL2Info')}</IslandDescription>
             </>
           )}
         </Island>

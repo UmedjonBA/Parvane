@@ -28,9 +28,15 @@ import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireUserInfo } from './wire';
 import { MAIN_THREAD_ID } from '../types';
 
-import { ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, UNMUTE_TIMESTAMP } from '../../config';
+import {
+  ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, PARVANE_LEGACY_APP_VERSION, UNMUTE_TIMESTAMP,
+} from '../../config';
+import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { DEFAULT_APP_CONFIG } from '../../limits';
+import { createV2Controller } from './v2/controller';
+import { isV2Enabled } from './v2/engine';
+import { createStateJournal } from './v2/stateJournal';
 import {
   clearLoginStorage,
   consumeLegacyCredentials,
@@ -44,12 +50,14 @@ import {
 import { createCallController } from './calls';
 import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
 import { E2eEngine } from './e2e';
+import { getGatewayUrl } from './gateway';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
 import { langPackMethods } from './langPacks';
 import {
   exportLinkPublicKey,
   generateLinkKeyPair,
+  type LinkBoxPayload,
   linkCommitment,
   linkCommitmentMatches,
   openLinkBox,
@@ -162,6 +170,25 @@ function readGroupAddPolicy(): 'anyone' | 'nobody' {
   }
 }
 
+function strangersPolicyKey(user: string) {
+  return `parvane:strangers:${user}`;
+}
+
+function readStrangersAllowed() {
+  try {
+    return localStorage.getItem(strangersPolicyKey(store.self)) !== 'nobody';
+  } catch {
+    return true;
+  }
+}
+
+// Приватность v2 целиком (T079): identity.privacy.set перезаписывает все поля
+function pushV2Privacy() {
+  if (!v2Controller.isReady()) return;
+  void v2Controller.setPrivacy({ groupAdd: readGroupAddPolicy(), strangers: readStrangersAllowed() })
+    .catch((err: unknown) => logDebug(`v2: приватность не сохранена: ${String(err)}`));
+}
+
 function pushNotifySettings() {
   if (!connection) return;
   const payload = JSON.stringify({
@@ -254,8 +281,8 @@ function rememberSavedGifFromSync(gif: ApiVideo) {
   messageController.rememberSavedGif(gif);
 }
 
-async function sendMessageFromSchedule(params: SendMessageParams): Promise<unknown> {
-  return methods.sendMessage(params);
+async function sendMessageFromSchedule(params: SendMessageParams, uuid?: string): Promise<unknown> {
+  return uuid ? messageController.sendMessageWithUuid(params, uuid) : methods.sendMessage(params);
 }
 
 const mediaService = createMediaService({
@@ -272,6 +299,14 @@ const localState = createLocalState({
   sendUpdate,
   buildLocalContent: mediaService.buildLocalContent,
   sendMessage: sendMessageFromSchedule,
+});
+
+// Журнал личного состояния v2 (T098): подключается, когда поднят v2-стек
+const stateJournal = createStateJournal({
+  localState,
+  getStore: () => store,
+  sendUpdate,
+  log: logDebug,
 });
 
 const callController = createCallController({
@@ -309,6 +344,8 @@ const groupController = createGroupController({
     localState.saveInviteLinks(rest);
   },
   buildAvatarPhoto,
+  getV2: () => v2Controller,
+  getUnconfirmedTemplate: () => getLangStringByKey('ParvaneGroupUnconfirmedMember'),
 });
 
 // Кросс-таб синхронизация черновиков: другая вкладка сохранила/очистила
@@ -344,7 +381,58 @@ const syncController = createSyncController({
   log: logDebug,
 });
 
+// Ключ восстановления нового корня v2 (D-12): отдаётся UI ровно один раз
+let pendingRecoveryKey: string | undefined;
+// Сервер ответил UPGRADE_REQUIRED (v2) — UI показывает диалог при монтировании
+let isUpgradeRequired = false;
+
+// E6 (spec 007): v1-путь сервера отключён — на экране входа ошибка
+// «обновите приложение» (после входа — диалог в Main)
+window.addEventListener('parvane-upgrade-required', () => {
+  sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneUpgradeRequired' } });
+});
+
+// Протокол v2 (spec 007, E2): второй стек для собеседников с журналом
+// устройств v2; включается флагом (`VITE_PARVANE_PROTO_V2` / localStorage)
+const v2Controller = createV2Controller({
+  getToken: () => token,
+  getSelf: () => store.self,
+  gatewayUrl: getGatewayUrl,
+  applyExternal: (stored) => syncController.applyExternal(stored),
+  isEnabled: () => isV2Enabled(),
+  onRecoveryKey: (recoveryKey) => {
+    // Main может быть ещё не смонтирован — ключ ждёт, пока его заберут
+    pendingRecoveryKey = recoveryKey;
+    window.dispatchEvent(new CustomEvent('parvane-recovery-key'));
+  },
+  onUpgradeRequired: () => {
+    // Как и ключ восстановления — Main мог ещё не смонтироваться
+    isUpgradeRequired = true;
+    window.dispatchEvent(new CustomEvent('parvane-upgrade-required'));
+  },
+  onNewOwnDevices: (deviceIds) => {
+    window.dispatchEvent(new CustomEvent('parvane-new-device', { detail: { count: deviceIds.length } }));
+  },
+  // Журнал устройств v2 у аккаунта есть, а этого устройства в нём нет: оффер
+  // линковки нужен, даже если история v1 на устройстве уже есть
+  onNeedsLinking: () => {
+    if (!linkRuntime.timer) void startHistoryLinkOffer();
+  },
+  onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),
+  onGroupLeft: (address) => groupController.removeV2Group(address),
+  onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
+  onStateReady: (host) => stateJournal.attach(host),
+  onL2Changed: (address) => applyL2Change(address),
+  recordOwn: (stored) => localState.appendOwnJournal({ ...stored, origin: 'v2' }),
+  loadHistory: async () => [
+    ...await localState.loadHistoryRecords(),
+    ...await localState.readOwnJournal(),
+  ],
+  log: logDebug,
+});
+
 messageController = createMessageController({
+  v2: v2Controller,
   getConnection: () => connection,
   getE2e: () => e2e,
   awaitE2e,
@@ -377,6 +465,7 @@ const connectionController = createConnectionController({
     store = nextStore;
     // P-18: presence — по конкретным собеседникам, подписка при появлении адреса
     store.onUserRegistered = (peerId) => subscribePresence(peerId);
+    store.getLangString = getLangStringByKey;
   },
   unlockStorage: (user) => ensureStorageUnlocked(user),
   getToken: () => token,
@@ -384,6 +473,8 @@ const connectionController = createConnectionController({
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
   polls,
   onNewSession: () => {
+    stateJournal.reset();
+    v2Controller.reset();
     stopHistoryLink();
     syncController.reset();
     resetPackRegistries();
@@ -396,6 +487,7 @@ const connectionController = createConnectionController({
   },
   onSessionReady: () => {
     void startHistoryLinkOffer();
+    if (isV2Enabled()) void v2Controller.start().then(registerV2Wake);
   },
   isSynced: syncController.isSynced,
   resetSyncPromise: syncController.resetPromise,
@@ -410,10 +502,19 @@ const connectionController = createConnectionController({
   selfId,
   sendUpdate,
   log: logDebug,
+  v2: v2Controller,
 });
 
 subscribeGroupTyping = connectionController.ensureGroupTyping;
 subscribePresence = connectionController.ensurePresence;
+
+// Режим «усиленная приватность» (L2) чата сменился: typing/presence (правило
+// L2-1) и открытые экраны — профиль чата, управление группой
+function applyL2Change(address: string) {
+  connectionController.refreshEphemeral(address);
+  const chatId = store.getIdForAddress(address, store.isGroupAddress(address) ? 'group' : 'user');
+  window.dispatchEvent(new CustomEvent('parvane-l2-changed', { detail: { chatId } }));
+}
 
 export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialArgs) {
   onUpdate = _onUpdate;
@@ -573,6 +674,7 @@ async function ensureStorageUnlocked(user: string) {
   const prompts = buildOldLangPack('en');
   for (let attempt = 0; attempt < 3; attempt++) {
     const pin = window.prompt(prompts.ParvaneStoragePinPrompt as string, '');
+    // eslint-disable-next-line no-null/no-null
     if (pin === null) return;
     if (await unlockStorageWithPin(user, pin).catch(() => false)) return;
   }
@@ -651,6 +753,22 @@ async function resolveCustomPack(setId: string): Promise<{ pack: StoredPack; isI
 // Метаданных об устройствах сервер не хранит (только ключи и updated_at) —
 // человекочитаемые поля синтезируем: для текущего устройства из UA, для
 // остальных по device_id ('' — legacy-primary: desktop или прежний web)
+// Уже выданная подписка web-push → регистрация пробуждения v2 (T102):
+// registerDevice мог отработать раньше, чем поднялся v2-стек
+async function registerV2Wake() {
+  if (!v2Controller.isReady() || !('serviceWorker' in navigator)) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = await registration?.pushManager.getSubscription();
+    if (!subscription) return;
+    await v2Controller.pushRegister(
+      subscription.toJSON() as Parameters<typeof v2Controller.pushRegister>[0],
+    );
+  } catch (err) {
+    logDebug(`v2: пробуждение не зарегистрировано: ${String(err)}`);
+  }
+}
+
 function buildDeviceSession(
   device: { device_id: string; updated_at: number },
   currentDeviceId: string,
@@ -721,6 +839,10 @@ type LinkRuntime = {
 };
 
 const linkRuntime: LinkRuntime = { generation: 0 };
+// Грант сервер отдаёт ОДИН раз в любом `identity.link.poll` — и в опросе чужих
+// офферов (экран «Устройства») тоже. Такой грант не теряем: его заберёт
+// ближайший опрос своего оффера
+let pendingLinkGrant: { box_payload: string; eph_pub: string } | undefined;
 
 // Старое устройство: свой эфемерный ключ на каждый challenge (по целевому
 // устройству). Приватный ключ живёт только в памяти вкладки.
@@ -745,16 +867,22 @@ function stopHistoryLink() {
   linkRuntime.commitment = undefined;
   linkRuntime.challenge = undefined;
   linkRuntime.code = undefined;
+  pendingLinkGrant = undefined;
 }
 
 // Новое устройство (протокол v2, P-03/P-48): публикуем ОБЯЗАТЕЛЬСТВО на
 // эфемерный ключ и свой signing-ключ; сам ключ раскрываем только после
 // challenge старого устройства, SAS — от обоих ключей. Опрос до гранта или
 // истечения срока.
+// Оффер нужен, пока нет истории v1 ИЛИ устройство не записано в журнал v2
+function needsDeviceLink(engine: { needsHistoryLink: () => boolean }) {
+  return engine.needsHistoryLink() || v2Controller.needsLinking();
+}
+
 async function startHistoryLinkOffer() {
   stopHistoryLink();
   const engine = e2e;
-  if (!connection || !engine || !engine.needsHistoryLink()) return;
+  if (!connection || !engine || !needsDeviceLink(engine)) return;
   const generation = linkRuntime.generation;
   const keyPair = await generateLinkKeyPair();
   const ephPub = await exportLinkPublicKey(keyPair);
@@ -792,7 +920,7 @@ async function pollHistoryLinkGrant(generation: number) {
   if (!engine || !activeConnection || !keyPair || !ephPub || !commitment) return;
   // История появилась другим путём (живая переписка) — отзываем оффер, чтобы
   // другие устройства не видели висящий запрос
-  if (!engine.needsHistoryLink()) {
+  if (!needsDeviceLink(engine)) {
     stopHistoryLink();
     try {
       await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
@@ -815,7 +943,7 @@ async function pollHistoryLinkGrant(generation: number) {
       challenge?: string;
     };
     if (!response.ok) return;
-    grant = response.grant;
+    grant = response.grant || pendingLinkGrant;
     challenge = response.challenge;
   } catch {
     return;
@@ -877,6 +1005,27 @@ async function pollHistoryLinkGrant(generation: number) {
   syncController.reset();
   sendUpdate({ '@type': 'requestSync' });
   logDebug('линковка: история получена и импортирована');
+  await joinV2WithLinkGrant(boxPayload.v2);
+}
+
+// LINK-1 v2: материал гранта движка лежит отдельным блобом; по нему устройство
+// записывает себя в журнал устройств и получает ключ личного состояния
+async function joinV2WithLinkGrant(coords: LinkBoxPayload['v2']) {
+  if (!coords || !isV2Enabled()) return;
+  // Грант мог прийти раньше, чем запуск v2 выяснил «нужна линковка»
+  await v2Controller.start();
+  if (!v2Controller.needsLinking()) return;
+  mediaService.rememberKeys({
+    kind: 'file', file_id: coords.file_id, file_key: coords.file_key, file_nonce: coords.file_nonce,
+  });
+  const media = await mediaService.downloadBlob(coords.file_id);
+  if (!media) {
+    logDebug('линковка: грант v2 не скачался из cloud');
+    return;
+  }
+  const material = new Uint8Array(await media.blob.arrayBuffer());
+  if (await v2Controller.joinWithGrant(material)) registerV2Wake();
+  else logDebug('линковка: вступление в журнал устройств v2 не удалось');
 }
 
 // Старое устройство: код сверки для оффера v2 — только после того, как наш
@@ -920,10 +1069,10 @@ async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: stri
 async function revokeOwnDevice(deviceId: string, password?: string) {
   if (!connection || !e2e) return undefined;
   try {
-    // P-07: отзыв устройства требует текущий пароль; без явного берём сохранённый.
-    const pw = password; // P-39: сохранённого пароля больше нет — только ввод
+    // P-07: отзыв устройства требует текущий пароль. P-39: сохранённого
+    // пароля нет — только введённый пользователем
     const raw = await connection.request(TOPIC_DEVICE_REVOKE, JSON.stringify({
-      token, device_id: deviceId, password: pw,
+      token, device_id: deviceId, password,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     e2e.forgetOwnDevice(deviceId);
@@ -1779,9 +1928,15 @@ const methods = {
       };
       if (!response.ok || !response.devices) return undefined;
       const currentDeviceId = e2e.deviceId;
+      const v2Devices = v2Controller.logDevices(store.self);
       const authorizations: Record<string, ApiSession> = {};
       response.devices.forEach((device) => {
-        authorizations[device.device_id] = buildDeviceSession(device, currentDeviceId);
+        const session = buildDeviceSession(device, currentDeviceId);
+        // Журнал v2 есть, а устройства в нём нет — оно на старой версии
+        if (v2Devices && !v2Devices.v2.includes(device.device_id)) {
+          session.appVersion = PARVANE_LEGACY_APP_VERSION;
+        }
+        authorizations[device.device_id] = session;
       });
       return { authorizations, ttlDays: undefined };
     } catch {
@@ -1791,18 +1946,20 @@ const methods = {
 
   // hash = device_id ('' — legacy-primary: desktop или прежняя web-установка).
   // Текущее устройство не отзываем — UI его и не предлагает
-  async terminateAuthorization(hash: string) {
+  // P-07: сервер отзывает устройство только с текущим паролем — UI спрашивает
+  // его перед отзывом (сохранённого пароля нет, P-39)
+  async terminateAuthorization(hash: string, password?: string) {
     if (!e2e || hash === e2e.deviceId) return undefined;
-    return revokeOwnDevice(hash);
+    return revokeOwnDevice(hash, password);
   },
 
-  async terminateAllAuthorizations() {
+  async terminateAllAuthorizations(password?: string) {
     if (!connection || !e2e) return undefined;
     const list = await methods.fetchAuthorizations();
     if (!list) return undefined;
     const others = Object.keys(list.authorizations)
       .filter((deviceId) => deviceId !== e2e!.deviceId);
-    const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId)));
+    const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId, password)));
     return results.every(Boolean) ? true : undefined;
   },
 
@@ -1812,7 +1969,7 @@ const methods = {
   // пользователь сверяет его на старом устройстве перед подтверждением)
   parvaneGetLinkStatus() {
     // v2: код появляется только после challenge старого устройства
-    const isPending = Boolean(linkRuntime.timer && e2e?.needsHistoryLink());
+    const isPending = Boolean(linkRuntime.timer && e2e && needsDeviceLink(e2e));
     return Promise.resolve({ isPending, code: isPending ? linkRuntime.code : undefined });
   },
 
@@ -1825,7 +1982,11 @@ const methods = {
       const raw = await connection.request(TOPIC_LINK_POLL, JSON.stringify({
         token, device_id: e2e.deviceId,
       }));
-      const response = JSON.parse(raw) as { ok: boolean; offers?: LinkOfferWire[] };
+      const response = JSON.parse(raw) as {
+        ok: boolean; offers?: LinkOfferWire[]; grant?: { box_payload: string; eph_pub: string };
+      };
+      // Свой грант пришёл в опросе чужих офферов — оставляем опросу своего оффера
+      if (response.ok && response.grant && linkRuntime.timer) pendingLinkGrant = response.grant;
       if (!response.ok || !response.offers) return undefined;
       const live = new Set(response.offers.map((offer) => offer.device_id));
       Array.from(linkChallenges.keys()).forEach((deviceId) => {
@@ -1863,11 +2024,23 @@ const methods = {
       );
       if (!upload.mediaKeys) return undefined;
 
+      // LINK-1 v2: грант движка — вторым блобом (в бокс не помещается)
+      const v2Material = v2Controller.linkGrantMaterial();
+      const v2Upload = v2Material && await mediaService.uploadBlob(
+        new Blob([v2Material.slice()]), 'link-grant-v2', 'application/octet-stream', { encrypt: true },
+      );
+      v2Material?.fill(0);
+
       const box = await sealLinkBox(own.keyPair.privateKey, offer.eph_pub, {
         file_id: upload.fileId,
         file_key: upload.mediaKeys.keyB64,
         file_nonce: upload.mediaKeys.nonceB64,
         transfer: offer.signing_key ? engine.signLinkTransfer(store.self, offer.signing_key) : undefined,
+        v2: v2Upload?.mediaKeys ? {
+          file_id: v2Upload.fileId,
+          file_key: v2Upload.mediaKeys.keyB64,
+          file_nonce: v2Upload.mediaKeys.nonceB64,
+        } : undefined,
       });
       const grantRaw = await activeConnection.request(TOPIC_LINK_GRANT, JSON.stringify({
         token, device_id: deviceId, box_payload: box, eph_pub: own.pub,
@@ -1905,6 +2078,11 @@ const methods = {
         token,
         subscription,
       }));
+      // Протокол v2: журнал v2 будит устройство своей регистрацией
+      if (v2Controller.isReady()) {
+        void v2Controller.pushRegister(subscription as Parameters<typeof v2Controller.pushRegister>[0])
+          .catch((err: unknown) => logDebug(`v2: push.wake.register не удался: ${String(err)}`));
+      }
       return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
     } catch {
       return undefined;
@@ -1919,6 +2097,9 @@ const methods = {
         token,
         endpoint: subscription.endpoint,
       }));
+      if (v2Controller.isReady() && subscription.endpoint) {
+        void v2Controller.pushUnregister(subscription.endpoint).catch(() => undefined);
+      }
       return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
     } catch {
       return undefined;
@@ -2183,7 +2364,63 @@ const methods = {
       // приватный режим — настройка не переживёт reload
     }
     pushNotifySettings();
+    pushV2Privacy();
     return Promise.resolve(true);
+  },
+
+  // Протокол v2: «сообщения от незнакомых» (T079). Настройка есть только у
+  // v2-стека — экран показывает её, когда он поднят
+  parvaneIsUpgradeRequired() {
+    return Promise.resolve(isUpgradeRequired);
+  },
+
+  parvaneTakeRecoveryKey() {
+    const recoveryKey = pendingRecoveryKey;
+    pendingRecoveryKey = undefined;
+    return Promise.resolve(recoveryKey ? { recoveryKey } : undefined);
+  },
+
+  parvaneGetStrangersPolicy() {
+    return Promise.resolve({ isAvailable: v2Controller.isReady(), isAllowed: readStrangersAllowed() });
+  },
+
+  parvaneSetStrangersPolicy({ isAllowed }: { isAllowed: boolean }) {
+    try {
+      localStorage.setItem(strangersPolicyKey(store.self), isAllowed ? 'anyone' : 'nobody');
+    } catch {
+      // приватный режим — настройка не переживёт reload
+    }
+    pushV2Privacy();
+    return Promise.resolve(true);
+  },
+
+  // Протокол v2: режим чата «усиленная приватность» (L2, FR-036). Личный чат —
+  // своё предпочтение (`isMine`), режим активен, пока включён хотя бы у одного;
+  // группа v2 — политика в журнале группы. Пункта нет, пока собеседник не на
+  // v2 или стек не поднят
+  async parvaneGetChatL2({ chatId }: { chatId: string }) {
+    const address = store.getAddressForId(chatId);
+    if (!address || address === store.self || !v2Controller.isReady()) return { isAvailable: false };
+    const isGroup = v2Controller.isV2GroupAddress(address);
+    if (!isGroup && (store.isGroupAddress(address) || !(await v2Controller.isV2Peer(address).catch(() => false)))) {
+      return { isAvailable: false };
+    }
+    const state = v2Controller.l2State(address);
+    if (!state) return { isAvailable: false };
+    return { isAvailable: true, isActive: state.active, isMine: state.mine };
+  },
+
+  async parvaneSetChatL2({ chatId, isEnabled }: { chatId: string; isEnabled: boolean }) {
+    const address = store.getAddressForId(chatId);
+    if (!address) return false;
+    try {
+      return await (v2Controller.isV2GroupAddress(address)
+        ? v2Controller.setGroupL2(address, isEnabled)
+        : v2Controller.setDirectL2(address, isEnabled));
+    } catch (err) {
+      logDebug(`v2: режим «усиленная приватность» не изменён: ${String(err)}`);
+      return false;
+    }
   },
 
   // P-34: отзыв инвайт-ссылки группы (owner/admin)
@@ -2532,8 +2769,15 @@ const methods = {
     return { photo: buildAvatarPhoto(fileId) };
   },
 
-  fetchCurrentUser() {
-    return Promise.resolve(undefined);
+  // tt зовёт это при каждом открытии Edit profile и ждёт `updateCurrentUser`
+  // с полной информацией: раньше провайдер молчал, и после перезагрузки форма
+  // показывала пустые bio/дату рождения/канал (сохранение затёрло бы их)
+  async fetchCurrentUser() {
+    if (!store.self) return undefined;
+    const user = store.buildApiUser(store.self);
+    const full = await methods.fetchFullUser({ id: user.id });
+    sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: full?.fullInfo || {} });
+    return undefined;
   },
 
   // Профиль: bio, дата рождения, личный канал, телефон, цвет имени хранятся в

@@ -137,6 +137,7 @@ function concatBytes(parts: Uint8Array[]) {
 // P-44: MIME для Blob — из allowlist'а. Тип приходит от отправителя (E2E) или
 // от cloud; blob: URL живёт в нашем origin, и text/html или svg с активным
 // содержимым выполнялся бы с правами приложения. Всё прочее — octet-stream
+// eslint-disable-next-line @stylistic/max-len
 const SAFE_BLOB_MIME = /^(image\/(png|jpeg|jpg|gif|webp|avif|bmp)|video\/(mp4|webm|quicktime|ogg)|audio\/(mpeg|mp3|ogg|opus|wav|webm|mp4|aac|x-m4a|flac)|application\/pdf)$/i;
 export function safeBlobMime(mime?: string) {
   const normalized = (mime || '').split(';')[0].trim().toLowerCase();

@@ -92,7 +92,7 @@
 "PremiumLimitAccountsNoPremium" = "You have reached your current limit of connected accounts. You can free one more place by subscribing to Telegram Premium.";
 "PremiumLimitAccounts" = "You have reached your current limit of connected accounts. You can free one more place by subscribing to Telegram Premium with one of these connected accounts.";
 "SendMessage" = "Send Message";
-"MessageUnsupported" = "This message is not supported on the web version of Parvane";
+"MessageUnsupported" = "This message is not supported by your version of Parvane. Update the app to see it";
 "PageContentUnsupported" = "Unsupported content";
 "PageContentEmbed" = "Embedded content";
 "ConversationDefaultRestrictedMedia" = "Sending media isn't allowed in this group.";
@@ -271,6 +271,9 @@
 "ParvaneInviteExhausted" = "This invite link has reached its usage limit";
 "ParvaneInviteRequested" = "Join request sent — an admin will review it";
 "ParvaneInviteDeclined" = "Your join request was declined";
+"ParvaneUpgradeRequired" = "This version of Parvane is no longer supported by the server. Update the app to keep chatting.";
+"ParvaneRecoveryKey" = "Save your recovery key: {key}\nIt restores your account keys on a new device. Nobody else has it, not even the server — keep it somewhere safe.";
+"ParvaneDeviceLegacy" = "(old version)";
 "ParvaneInviteEditUnsupported" = "Links cannot be edited — revoke it and create a new one";
 "ParvaneInviteImportersUnavailable" = "The server keeps only the number of people who joined";
 "ParvaneGroupAboutTooLong" = "Description is limited to 255 characters";
@@ -3080,3 +3083,8 @@
 "ParvaneTelegramLoginText" = "Two-factor authentication is on. Open our Telegram bot and press Start — only the Telegram account linked to this profile can confirm the sign-in.";
 "ParvaneTelegramLoginExpired" = "The sign-in link has expired. Please enter your password again.";
 "ParvaneSecurityKeyChanged" = "The security key of {user} has changed. If you did not expect this, verify the key fingerprint in the profile.";
+"ParvaneGroupUnconfirmedMember" = "{user} is listed in the group by the server, but no admin record confirms it. Encryption keys are not shared with them.";
+"ParvaneL2Enabled" = "{user} enabled enhanced privacy";
+"ParvaneL2Disabled" = "{user} disabled enhanced privacy";
+"ParvaneL2EnabledYou" = "You enabled enhanced privacy";
+"ParvaneL2DisabledYou" = "You disabled enhanced privacy";

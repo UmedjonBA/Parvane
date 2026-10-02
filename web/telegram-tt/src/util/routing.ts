@@ -13,17 +13,42 @@ let initialLocationHash = window.location.hash;
 // потребляется после синка (Main.tsx)
 const PENDING_INVITE_KEY = 'parvane:pending-invite';
 const INVITE_HASH_REGEX = /^#\+([0-9a-f]{32})$/;
+// Ссылка-приглашение v2 (spec 007, T084): `https://<домен>/join/<link_id>#<секрет>`;
+// секрет — во фрагменте, серверу не уходит. Вступление — по ссылке целиком
+const V2_INVITE_PATH_REGEX = /^\/join\/([A-Za-z0-9_-]{43})$/;
+const V2_INVITE_SECRET_REGEX = /^#[A-Za-z0-9_-]{43}$/;
+const V2_INVITE_URL_REGEX = /^https:\/\/[^/\s]+\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/;
+
+export function matchV2InviteUrl(url: string) {
+  const trimmed = url.trim();
+  return V2_INVITE_URL_REGEX.test(trimmed) ? trimmed : undefined;
+}
 
 export function rememberPendingInvite(hash: string) {
   const match = hash.match(INVITE_HASH_REGEX);
   if (!match) return;
+  savePendingInvite(match[1]);
+}
+
+function savePendingInvite(invite: string) {
   try {
-    sessionStorage.setItem(PENDING_INVITE_KEY, match[1]);
+    sessionStorage.setItem(PENDING_INVITE_KEY, invite);
   } catch {
     // приватный режим — вступление сработает только без перезагрузки
   }
 }
 
+// Ссылка v2 открыта в адресной строке (сервер отдаёт приложение и для /join/…):
+// ссылка целиком ждёт синка, адрес приложения — обратно на корень
+function rememberV2InviteFromLocation() {
+  const { pathname, hash, host } = window.location;
+  if (!V2_INVITE_PATH_REGEX.test(pathname) || !V2_INVITE_SECRET_REGEX.test(hash)) return;
+  savePendingInvite(`https://${host}${pathname}${hash}`);
+  initialLocationHash = '';
+  window.history.replaceState(window.history.state, '', '/');
+}
+
+rememberV2InviteFromLocation();
 rememberPendingInvite(initialLocationHash);
 
 // Вставка `#+<токен>` в адрес уже открытой вкладки меняет только хэш —

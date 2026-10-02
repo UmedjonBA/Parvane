@@ -5,17 +5,33 @@ import type { ParvaneStore } from './store';
 import type { WireStoredMessage } from './wire';
 
 import { SecureE2eStorage } from './secureStorage';
+import { newMessageId } from './wire';
 
 type ScheduledEntry = {
   id: number;
   chatId: string;
   scheduledAt: number;
+  // op_id отложенного в журнале личного состояния (T098) = uuid сообщения при
+  // отправке: дубль с другого устройства отсекается по нему
+  opId?: string;
   text?: string;
   entities?: SendMessageParams['entities'];
   replyToMsgId?: number;
   // Медиа/опрос/стикер нельзя восстановить из localStorage, поэтому полные
   // параметры живут только до конца текущей вкладки.
   params?: SendMessageParams;
+};
+
+// Вид локальных данных, изменённых пользователем (журнал личного состояния, T098)
+export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned';
+
+// Текстовое отложенное сообщение в виде для журнала личного состояния
+export type JournalScheduled = {
+  opId: string;
+  chatId: string;
+  scheduledAt: number;
+  text?: string;
+  entities?: SendMessageParams['entities'];
 };
 
 type LocalStateDependencies = {
@@ -25,7 +41,7 @@ type LocalStateDependencies = {
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
   buildLocalContent: (uuid: string, params: SendMessageParams) => ApiMessage['content'];
-  sendMessage: (params: SendMessageParams) => Promise<unknown>;
+  sendMessage: (params: SendMessageParams, uuid?: string) => Promise<unknown>;
 };
 
 const SCHEDULED_CHECK_INTERVAL_MS = 5000;
@@ -44,6 +60,27 @@ export function createLocalState(deps: LocalStateDependencies) {
   let scheduledNextId = SCHEDULED_ID_BASE;
 
   const storageKey = (part: string) => `parvane:${part}:${deps.getStore().self}`;
+
+  // Журнал личного состояния (T098) слушает правки пользователя; запись
+  // пришедшего из журнала (applyingJournal) слушателя не будит
+  let changeListener: ((kind: LocalStateKind) => void) | undefined;
+  let applyingJournal = false;
+  // Перед отправкой отложенного журнал проверяет, не отправило ли его другое устройство
+  let scheduledGate: ((opId: string) => Promise<boolean>) | undefined;
+  let scheduledSent: ((opId: string) => void) | undefined;
+
+  function notifyChange(kind: LocalStateKind) {
+    if (!applyingJournal) changeListener?.(kind);
+  }
+
+  function applyFromJournal(fn: () => void) {
+    applyingJournal = true;
+    try {
+      fn();
+    } finally {
+      applyingJournal = false;
+    }
+  }
 
   // ── шифрованные записи (журнал исходящих, черновики) ──────────────────────
   // Исходящий журнал несёт ОТКРЫТЫЙ текст сообщений и file_key/file_nonce
@@ -326,11 +363,18 @@ export function createLocalState(deps: LocalStateDependencies) {
     });
     persistScheduledQueue();
     deps.sendUpdate({ '@type': 'deleteScheduledMessages', ids, chatId });
+    notifyChange('scheduled');
   }
 
   async function fireScheduled(entry: ScheduledEntry) {
+    // Отложенное из журнала: первое устройство, заметившее срок, отправляет его
+    // с op_id отложенного; другое устройство уже отправило — только убрать
+    if (entry.opId && scheduledGate && !(await scheduledGate(entry.opId))) {
+      applyFromJournal(() => removeScheduled(entry.chatId, [entry.id]));
+      return;
+    }
     const chat = entry.params?.chat || rebuildChatForScheduled(entry.chatId);
-    removeScheduled(entry.chatId, [entry.id]);
+    applyFromJournal(() => removeScheduled(entry.chatId, [entry.id]));
     if (!chat) return;
     const params: SendMessageParams = entry.params
       ? { ...entry.params, scheduledAt: undefined }
@@ -340,7 +384,8 @@ export function createLocalState(deps: LocalStateDependencies) {
         entities: entry.entities,
         replyInfo: entry.replyToMsgId ? { type: 'message', replyToMsgId: entry.replyToMsgId } : undefined,
       };
-    await deps.sendMessage(params);
+    await deps.sendMessage(params, entry.opId);
+    if (entry.opId) scheduledSent?.(entry.opId);
   }
 
   function scheduleMessage(params: SendMessageParams) {
@@ -355,6 +400,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       entities: params.entities,
       replyToMsgId: params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined,
       params: hasMedia ? { ...params } : undefined,
+      opId: hasMedia ? undefined : newMessageId(),
     };
     scheduledQueue.push(entry);
     persistScheduledQueue();
@@ -363,6 +409,60 @@ export function createLocalState(deps: LocalStateDependencies) {
       chatId: chat.id,
       id: entry.id,
       message: buildScheduledApiMessage(entry),
+    });
+    notifyChange('scheduled');
+  }
+
+  // Текстовые отложенные для журнала (медиа живут только во вкладке)
+  function listJournalScheduled(): JournalScheduled[] {
+    loadScheduledQueue();
+    return scheduledQueue.filter((entry) => entry.opId && !entry.params).map((entry) => ({
+      opId: entry.opId!,
+      chatId: entry.chatId,
+      scheduledAt: entry.scheduledAt,
+      text: entry.text,
+      entities: entry.entities,
+    }));
+  }
+
+  // Сведённые журналом отложенные: новые — в очередь, пропавшие — убрать,
+  // перенесённые — новый срок
+  function applyJournalScheduled(list: JournalScheduled[]) {
+    loadScheduledQueue();
+    applyFromJournal(() => {
+      const byOpId = new Map(list.map((item) => [item.opId, item]));
+      scheduledQueue
+        .filter((entry) => entry.opId && !entry.params && !byOpId.has(entry.opId))
+        .forEach((entry) => removeScheduled(entry.chatId, [entry.id]));
+      list.forEach((item) => {
+        const existing = scheduledQueue.find((entry) => entry.opId === item.opId);
+        if (existing) {
+          if (existing.scheduledAt === item.scheduledAt && existing.text === item.text) return;
+          existing.scheduledAt = item.scheduledAt;
+          existing.text = item.text;
+          existing.entities = item.entities;
+          deps.sendUpdate({
+            '@type': 'updateScheduledMessage',
+            chatId: existing.chatId,
+            id: existing.id,
+            message: buildScheduledApiMessage(existing),
+          });
+          return;
+        }
+        const entry: ScheduledEntry = {
+          id: scheduledNextId++,
+          chatId: item.chatId,
+          scheduledAt: item.scheduledAt,
+          text: item.text,
+          entities: item.entities,
+          opId: item.opId,
+        };
+        scheduledQueue.push(entry);
+        deps.sendUpdate({
+          '@type': 'newScheduledMessage', chatId: entry.chatId, id: entry.id, message: buildScheduledApiMessage(entry),
+        });
+      });
+      persistScheduledQueue();
     });
   }
 
@@ -401,6 +501,18 @@ export function createLocalState(deps: LocalStateDependencies) {
     // подписью, `scripts/e2e_web_media_ttl.mjs`). Правки/удаление своих
     // сообщений догоняются по `updated_at` и перезаписывают запись
     saveHistoryRecord(entry);
+  }
+
+  // Своё сообщение изменилось (правка/удаление, протокол v2 — без серверной
+  // v1-строки): журнал сливается с выдачей полного синка, и старая запись
+  // журнала откатила бы правку после reload
+  function updateOwnJournalEntry(stored: WireStoredMessage) {
+    if (!journalCache) return;
+    const index = journalCache.findIndex((entry) => entry.id === stored.id);
+    if (index < 0) return;
+    if (stored.deleted) journalCache.splice(index, 1);
+    else journalCache[index] = stored;
+    scheduleRecordSave('journal');
   }
 
   // Очистка истории: убрать свои исходящие из журнала СРАЗУ (журнал сливается
@@ -475,6 +587,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveBlocked(list: string[]) {
     localStorage.setItem(storageKey('blocked'), JSON.stringify(list));
+    notifyChange('blocked');
   }
 
   function isBlocked(address: string) {
@@ -594,6 +707,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveFolders(folders: { id: number; [key: string]: unknown }[]) {
     localStorage.setItem(storageKey('folders'), JSON.stringify(folders));
+    notifyChange('folders');
   }
 
   // Черновики: chatId → draft (сериализованный ApiDraft). localStorage общий
@@ -613,6 +727,13 @@ export function createLocalState(deps: LocalStateDependencies) {
     else delete drafts[chatId];
     draftsCache = drafts;
     scheduleRecordSave('drafts');
+    notifyChange('drafts');
+  }
+
+  // Черновики, сведённые журналом (T098): заменяют локальные целиком
+  function replaceDrafts(drafts: Record<string, Record<string, unknown>>) {
+    draftsCache = drafts;
+    scheduleRecordSave('drafts');
   }
 
   // Закреплённые чаты (адреса пиров, порядок = порядок пина) и архив
@@ -628,6 +749,11 @@ export function createLocalState(deps: LocalStateDependencies) {
     const pinned = loadPinned().filter((a) => a !== address);
     if (shouldPin) pinned.unshift(address);
     localStorage.setItem(storageKey('pinned'), JSON.stringify(pinned));
+    notifyChange('pinned');
+  }
+
+  function savePinnedList(list: string[]) {
+    localStorage.setItem(storageKey('pinned'), JSON.stringify(list));
   }
 
   function loadArchived(): string[] {
@@ -642,6 +768,11 @@ export function createLocalState(deps: LocalStateDependencies) {
     const archived = loadArchived().filter((a) => a !== address);
     if (shouldArchive) archived.push(address);
     localStorage.setItem(storageKey('archived'), JSON.stringify(archived));
+    notifyChange('archived');
+  }
+
+  function saveArchivedList(list: string[]) {
+    localStorage.setItem(storageKey('archived'), JSON.stringify(list));
   }
 
   // Notify-настройки чатов (mute/превью) по адресу пира/группы
@@ -724,9 +855,23 @@ export function createLocalState(deps: LocalStateDependencies) {
       id: entry.id,
       message: buildScheduledApiMessage(entry),
     });
+    notifyChange('scheduled');
   }
 
   return {
+    applyFromJournal,
+    applyJournalScheduled,
+    listJournalScheduled,
+    replaceDrafts,
+    saveArchivedList,
+    savePinnedList,
+    setChangeListener: (listener?: (kind: LocalStateKind) => void) => {
+      changeListener = listener;
+    },
+    setScheduledHooks: (hooks?: { gate: (opId: string) => Promise<boolean>; sent: (opId: string) => void }) => {
+      scheduledGate = hooks?.gate;
+      scheduledSent = hooks?.sent;
+    },
     hydrate,
     reset,
     saveHistoryRecord,
@@ -735,6 +880,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveSyncCursor,
     loadSyncCursor,
     appendOwnJournal,
+    updateOwnJournalEntry,
     clearUserData,
     deleteScheduledMessages: removeScheduled,
     fetchScheduledHistory,

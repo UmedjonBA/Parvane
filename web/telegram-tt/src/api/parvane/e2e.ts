@@ -1,16 +1,22 @@
-// E2E-шифрование текста (Olm: X3DH + double ratchet) — как Фаза 2 десктопа,
-// но на @matrix-org/olm (WASM). Wire-контракт тот же: kind=encrypted
-// {ciphertext, ctype, sender_identity}, внутри — JSON {from, content}
-// (sealed sender: сервер не знает отправителя). Прекеи — каталог identity.
+// E2E-шифрование v1 (Olm: X3DH + double ratchet, Megolm для групп) — как у
+// десктопа. Криптография — движок `parvane-protocol` через `olmCompat.ts`;
+// здесь остаётся диалект v1: kind=encrypted {ciphertext, ctype,
+// sender_identity}, внутри — JSON {from, content} (sealed sender: сервер не
+// знает отправителя). Прекеи — каталог identity.
 //
 // ВАЖНО: Olm-сессия не может расшифровать старое сообщение повторно (ratchet
 // уехал), а веб фулл-синкает историю на каждом старте — поэтому расшифрованное
 // кэшируется в localStorage по uuid (аналог parvane-dec-cache десктопа).
 
-import Olm from '@matrix-org/olm';
-// Vite отдаёт путь к wasm-файлу как URL
-import olmWasmPath from '@matrix-org/olm/olm.wasm?url';
+import type {
+  MegolmInbound, MegolmOutbound, OlmAccount, OlmSession,
+} from './olmCompat';
 
+import {
+  createAccount, createInboundGroup, createInboundSession, createOutboundGroup, decryptGroup, encryptOlm,
+  importInboundGroup, loadOlm, unpickleAccount, unpickleInboundGroup, unpickleOutboundGroup, unpickleSession,
+  verifyEd25519,
+} from './olmCompat';
 import { SecureE2eStorage } from './secureStorage';
 
 // Только для одноразового чтения старого localStorage при переходе на v2.
@@ -22,16 +28,6 @@ const STORAGE_VERSION = 2;
 const LEGACY_STORAGE_PARTS = [
   'account', 'sessions', 'contacts', 'dec', 'gout', 'gin', 'grecip', 'published',
 ];
-
-function locateOlmWasm() {
-  const nodeProcess = (globalThis as {
-    process?: { cwd?: () => string; versions?: { node?: string } };
-  }).process;
-  if (nodeProcess?.versions?.node && nodeProcess.cwd && olmWasmPath.startsWith('/node_modules/')) {
-    return `${nodeProcess.cwd()}${olmWasmPath}`;
-  }
-  return olmWasmPath;
-}
 
 export type WireDeviceBundle = {
   device_id: string;
@@ -95,8 +91,8 @@ type PersistedE2eState = {
   contacts: Record<string, string>;
   decCache: Record<string, StoredInner>;
   groupOut: Record<string, { pickle: string; epoch: number }>;
-  // exported — ключ в формате libolm export_session (так экспортирует desktop,
-  // у vodozemac нет libolm-pickle для входящих Megolm); pickle — свой формат.
+  // exported — ключ в формате libolm export_session (переносимый: так пишут
+  // desktop и копия ключей); pickle — формат хранилища (см. olmCompat.ts).
   groupIn: Record<string, { pickle?: string; exported?: string; epoch: number }>;
   groupRecipients: Record<string, string[]>;
   published: boolean;
@@ -107,7 +103,7 @@ type PersistedE2eState = {
   // Следующий key_id для пополнения one-time prekeys: сервер дедупит по
   // (username, device_id, key_id), повтор старых id был бы тихим no-op
   oneTimeKeyIdNext?: number;
-  // Авто-линковка (legacy v1): Olm-pickle прежних устройств (под НАШИМ pickleKey) —
+  // Авто-линковка (legacy v1): pickle аккаунтов прежних устройств (под НАШИМ pickleKey) —
   // только для подписи sync (extra_signing), их sealed-исходящие видны и нам.
   // v2 (P-48) приватные аккаунты больше не переезжают — см. transfers.
   legacyAccounts?: string[];
@@ -137,8 +133,6 @@ export type LinkExportState = {
 // новых устройств). Известные устройства не расходуют one-time при fetch
 const DEVICE_LIST_TTL_MS = 15000;
 
-let isOlmReady = false;
-
 // Живые движки по пользователю: pagehide-хук страхует несохранённые снапшоты
 // (очередь персиста асинхронная — закрытие вкладки могло терять хвост)
 const enginesBySelf = new Map<string, E2eEngine>();
@@ -157,9 +151,9 @@ export class E2eEngine {
 
   private storageError: unknown;
 
-  private account!: Olm.Account;
+  private account!: OlmAccount;
 
-  private sessionsByIdentity = new Map<string, Olm.Session>();
+  private sessionsByIdentity = new Map<string, OlmSession>();
 
   private identityByContact: Record<string, string> = {};
   // P-04: виденные identity по контакту — смена ключа определяется по ним,
@@ -177,9 +171,9 @@ export class E2eEngine {
 
   // Megolm: своя исходящая group-сессия на группу (+ эпоха для ротации) и
   // входящие сессии от участников, ключ = `${group}|${senderIdentity}`
-  private groupOut = new Map<string, { session: Olm.OutboundGroupSession; epoch: number }>();
+  private groupOut = new Map<string, { session: MegolmOutbound; epoch: number }>();
 
-  private groupIn = new Map<string, { session: Olm.InboundGroupSession; epoch: number }>();
+  private groupIn = new Map<string, { session: MegolmInbound; epoch: number }>();
 
   private groupRecipients = new Map<string, string[]>();
 
@@ -191,7 +185,7 @@ export class E2eEngine {
 
   // Аккаунты прежних устройств (авто-линковка): используются ТОЛЬКО для
   // подписи sync-запросов, никаких сессий/шифрования от их имени
-  private legacySigners: Olm.Account[] = [];
+  private legacySigners: OlmAccount[] = [];
   // v2 (P-48): переносы владения исходящими прежних устройств.
   private transfers: { old_signing_key: string; signature: string }[] = [];
 
@@ -209,12 +203,7 @@ export class E2eEngine {
   // свежая установка берёт его, а не генерирует свой, иначе отзыв устройства
   // не гасил бы токен первой сессии
   static async create(self: string, presetDeviceId?: string) {
-    if (!isOlmReady) {
-      // Emscripten-сборка olm читает глобаль OLM_OPTIONS и падает без неё
-      (globalThis as { OLM_OPTIONS?: object }).OLM_OPTIONS = {};
-      await Olm.init({ locateFile: locateOlmWasm });
-      isOlmReady = true;
-    }
+    await loadOlm();
     const engine = new E2eEngine();
     engine.self = self;
     engine.presetDeviceId = presetDeviceId || '';
@@ -251,14 +240,19 @@ export class E2eEngine {
       throw new Error(`Unsupported E2E state version: ${state.version}.`);
     }
     this.pickleKey = pickleKey;
-    this.account = new Olm.Account();
-    this.account.unpickle(pickleKey, state.account);
+    // Pickle читается в обоих форматах (libolm прежних версий и нынешний);
+    // сохраняется состояние уже только в нынешнем (см. buildState)
+    this.account = unpickleAccount(state.account, pickleKey);
     this.loadIdentityKeys();
 
+    // Битая сессия не должна лишать пользователя всего E2E: без неё пропадает
+    // только ратчет с одним устройством, он пересоздаётся pre-key сообщением
     Object.entries(state.sessions || {}).forEach(([identity, pickle]) => {
-      const session = new Olm.Session();
-      session.unpickle(pickleKey, pickle);
-      this.sessionsByIdentity.set(identity, session);
+      try {
+        this.sessionsByIdentity.set(identity, unpickleSession(pickle, pickleKey));
+      } catch {
+        // Пропускаем
+      }
     });
     this.identityByContact = state.contacts || {};
     this.decCache = state.decCache || {};
@@ -288,17 +282,22 @@ export class E2eEngine {
       }
     });
 
+    // Исходящая сессия, которую не удалось прочитать, заменяется ротацией:
+    // следующая отправка создаст новую с большей эпохой и разошлёт ключ
     Object.entries(state.groupOut || {}).forEach(([group, { pickle, epoch }]) => {
-      const session = new Olm.OutboundGroupSession();
-      session.unpickle(pickleKey, pickle);
-      this.groupOut.set(group, { session, epoch });
+      try {
+        this.groupOut.set(group, { session: unpickleOutboundGroup(pickle, pickleKey), epoch });
+      } catch {
+        // Пропускаем
+      }
     });
     Object.entries(state.groupIn || {}).forEach(([key, { pickle, exported, epoch }]) => {
-      const session = new Olm.InboundGroupSession();
-      if (exported) session.import_session(exported);
-      else if (pickle) session.unpickle(pickleKey, pickle);
-      else return;
-      this.groupIn.set(key, { session, epoch });
+      try {
+        if (exported) this.groupIn.set(key, { session: importInboundGroup(exported), epoch });
+        else if (pickle) this.groupIn.set(key, { session: unpickleInboundGroup(pickle, pickleKey), epoch });
+      } catch {
+        // Пропускаем
+      }
     });
     Object.entries(state.groupRecipients || {}).forEach(([group, recipients]) => {
       this.groupRecipients.set(group, recipients);
@@ -308,9 +307,7 @@ export class E2eEngine {
     this.transfers = (state.transfers || []).filter((t) => t.old_signing_key && t.signature);
     (state.legacyAccounts || []).forEach((accountPickle) => {
       try {
-        const legacy = new Olm.Account();
-        legacy.unpickle(pickleKey, accountPickle);
-        this.legacySigners.push(legacy);
+        this.legacySigners.push(unpickleAccount(accountPickle, pickleKey));
       } catch {
         // битый pickle — теряем только подпись старых исходящих
       }
@@ -323,8 +320,7 @@ export class E2eEngine {
     if (!accountPickle) {
       // Совсем новая установка: свой Olm-аккаунт и свой device_id — не
       // перетирает ключи других устройств этого пользователя на сервере
-      this.account = new Olm.Account();
-      this.account.create();
+      this.account = createAccount();
       this.loadIdentityKeys();
       this.deviceId = this.presetDeviceId || crypto.randomUUID();
       E2eEngine.clearLegacyState(this.self);
@@ -386,6 +382,23 @@ export class E2eEngine {
       legacyAccounts: this.legacySigners.map((legacy) => legacy.pickle(this.pickleKey)),
       transfers: this.transfers,
       seenIdentities: this.seenIdentitiesSnapshot(),
+    };
+  }
+
+  // Переносимое состояние для копии ключей: приватные аккаунты — libolm-pickle,
+  // входящие групповые ключи — экспорт с первого известного индекса; их читают
+  // и desktop/android (`parvane-e2e`). Olm-сессии и исходящие Megolm остаются
+  // в формате хранилища — они нужны только web при восстановлении
+  private buildPortableState(): PersistedE2eState {
+    const groupIn: PersistedE2eState['groupIn'] = {};
+    this.groupIn.forEach(({ session, epoch }, key) => {
+      groupIn[key] = { exported: session.exportSession(session.firstKnownIndex()), epoch };
+    });
+    return {
+      ...this.buildState(),
+      account: this.account.toLibolmPickle(this.pickleKey),
+      groupIn,
+      legacyAccounts: this.legacySigners.map((legacy) => legacy.toLibolmPickle(this.pickleKey)),
     };
   }
 
@@ -462,18 +475,13 @@ export class E2eEngine {
   buildPrekeysPayload(token: string): Record<string, unknown> | undefined {
     if (this.published) return undefined;
 
-    this.account.generate_fallback_key();
-    const fallback = JSON.parse(this.account.fallback_key()) as { curve25519: Record<string, string> };
-    const fallbackKey = Object.values(fallback.curve25519)[0];
-
-    this.account.generate_one_time_keys(ONE_TIME_BATCH);
-    const oneTime = JSON.parse(this.account.one_time_keys()) as { curve25519: Record<string, string> };
+    // Оба вызова помечают выданные ключи опубликованными
+    const fallbackKey = this.account.generateFallbackKey()!;
     let counter = 1;
-    const one_time = Object.values(oneTime.curve25519).map((publicKey) => ({
+    const one_time = this.account.generateOneTimeKeys(ONE_TIME_BATCH).map((publicKey) => ({
       key_id: counter++,
       public_key: publicKey,
     }));
-    this.account.mark_keys_as_published();
     this.published = true;
     this.oneTimeKeyIdNext = one_time.length + 1;
     this.persistAccount();
@@ -494,24 +502,18 @@ export class E2eEngine {
   // Пополнение one-time prekeys, когда серверный остаток просел (X3DH без
   // one-time — деградация PFS первого сообщения). Нумерация key_id продолжается
   // с персистентного счётчика: сервер дедупит по (username, device_id, key_id),
-  // и повтор старых id был бы тихим no-op. Fallback-ключ перегенерируется (olm
-  // держит и предыдущий — прекей-сообщения в полёте расшифруются)
+  // и повтор старых id был бы тихим no-op. Fallback-ключ перегенерируется
+  // (аккаунт держит и предыдущий — прекей-сообщения в полёте расшифруются)
   buildTopUpPrekeysPayload(token: string): Record<string, unknown> | undefined {
     if (!this.published) return undefined;
 
-    this.account.generate_fallback_key();
-    const fallback = JSON.parse(this.account.fallback_key()) as { curve25519: Record<string, string> };
-    const fallbackKey = Object.values(fallback.curve25519)[0];
-
-    this.account.generate_one_time_keys(ONE_TIME_BATCH);
-    const oneTime = JSON.parse(this.account.one_time_keys()) as { curve25519: Record<string, string> };
-    const keys = Object.values(oneTime.curve25519);
+    const fallbackKey = this.account.generateFallbackKey();
+    const keys = this.account.generateOneTimeKeys(ONE_TIME_BATCH);
     if (!keys.length || !fallbackKey) return undefined;
     const one_time = keys.map((publicKey) => ({
       key_id: this.oneTimeKeyIdNext++,
       public_key: publicKey,
     }));
-    this.account.mark_keys_as_published();
     this.persistAccount();
 
     return {
@@ -532,7 +534,7 @@ export class E2eEngine {
   }
 
   verifyCallData(publicKey: string, data: string, signature: string) {
-    return ed25519Verify(publicKey, data, signature);
+    return verifyEd25519(publicKey, data, signature);
   }
 
   getCachedInner(uuid: string): StoredInner | undefined {
@@ -569,7 +571,7 @@ export class E2eEngine {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveExportKey(password, salt);
-    const plaintext = encoder.encode(JSON.stringify(this.buildState()));
+    const plaintext = encoder.encode(JSON.stringify(this.buildPortableState()));
     const ciphertext = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv: toStandaloneBuffer(iv) }, key, toStandaloneBuffer(plaintext),
     );
@@ -593,7 +595,7 @@ export class E2eEngine {
   // в ECDH-бокс + cloud-шифртекст
 
   exportStateJson(): string {
-    return JSON.stringify(this.buildState());
+    return JSON.stringify(this.buildPortableState());
   }
 
   // v2 (P-48): экспорт для линковки БЕЗ приватного материала — новое устройство
@@ -604,7 +606,7 @@ export class E2eEngine {
     const groupIn: LinkExportState['groupIn'] = {};
     this.groupIn.forEach(({ session, epoch }, key) => {
       try {
-        groupIn[key] = { exported: session.export_session(session.first_known_index()), epoch };
+        groupIn[key] = { exported: session.exportSession(session.firstKnownIndex()), epoch };
       } catch {
         // сессию без экспорта пропускаем
       }
@@ -653,9 +655,7 @@ export class E2eEngine {
       Object.entries(state.groupIn || {}).forEach(([key, { exported, epoch }]) => {
         if (this.groupIn.has(key) || !exported) return;
         try {
-          const session = new Olm.InboundGroupSession();
-          session.import_session(exported);
-          this.groupIn.set(key, { session, epoch });
+          this.groupIn.set(key, { session: importInboundGroup(exported), epoch });
         } catch {
           // битый экспорт — пропускаем
         }
@@ -679,11 +679,8 @@ export class E2eEngine {
     Object.entries(state.groupIn || {}).forEach(([key, { pickle, exported, epoch }]) => {
       if (this.groupIn.has(key)) return;
       try {
-        const session = new Olm.InboundGroupSession();
-        if (exported) session.import_session(exported);
-        else if (pickle) session.unpickle(state.pickleKey, pickle);
-        else return;
-        this.groupIn.set(key, { session, epoch });
+        if (exported) this.groupIn.set(key, { session: importInboundGroup(exported), epoch });
+        else if (pickle) this.groupIn.set(key, { session: unpickleInboundGroup(pickle, state.pickleKey), epoch });
       } catch {
         // битый pickle — пропускаем, остальное импортируем
       }
@@ -700,14 +697,10 @@ export class E2eEngine {
 
   private adoptLegacySigner(accountPickle: string, pickleKey: string) {
     try {
-      const legacy = new Olm.Account();
-      legacy.unpickle(pickleKey, accountPickle);
-      const keys = JSON.parse(legacy.identity_keys()) as { ed25519: string };
-      const isDuplicate = keys.ed25519 === this.signingKey
-        || this.legacySigners.some((signer) => {
-          const existing = JSON.parse(signer.identity_keys()) as { ed25519: string };
-          return existing.ed25519 === keys.ed25519;
-        });
+      const legacy = unpickleAccount(accountPickle, pickleKey);
+      const signingKey = legacy.signingKey();
+      const isDuplicate = signingKey === this.signingKey
+        || this.legacySigners.some((signer) => signer.signingKey() === signingKey);
       if (isDuplicate) {
         legacy.free();
         return;
@@ -720,10 +713,9 @@ export class E2eEngine {
 
   // Подписи sync-строки всеми legacy-подписантами (extra_signing в sync)
   signExtraSync(payload: string): { signing_key: string; signature: string }[] {
-    return this.legacySigners.map((legacy) => {
-      const keys = JSON.parse(legacy.identity_keys()) as { ed25519: string };
-      return { signing_key: keys.ed25519, signature: legacy.sign(payload) };
-    });
+    return this.legacySigners.map((legacy) => ({
+      signing_key: legacy.signingKey(), signature: legacy.sign(payload),
+    }));
   }
 
   // Прокси «свежей неслинкованной установки»: ни одной Olm-сессии, пустой
@@ -753,6 +745,7 @@ export class E2eEngine {
     );
     const state = JSON.parse(new TextDecoder().decode(plaintext)) as PersistedE2eState;
 
+    await loadOlm();
     const engine = new E2eEngine();
     engine.self = self;
     engine.storage = await SecureE2eStorage.open(self);
@@ -849,9 +842,9 @@ export class E2eEngine {
       if (this.sessionsByIdentity.has(device.identity_key)) return;
       const oneTimeKey = device.one_time || device.signed_prekey;
       if (!oneTimeKey) return;
-      const session = new Olm.Session();
-      session.create_outbound(this.account, device.identity_key, oneTimeKey);
-      this.sessionsByIdentity.set(device.identity_key, session);
+      this.sessionsByIdentity.set(
+        device.identity_key, this.account.createOutboundSession(device.identity_key, oneTimeKey),
+      );
       accountChanged = true;
     });
     // Каталог целиком без валидных подписей — как недоступный: ничего не
@@ -909,7 +902,7 @@ export class E2eEngine {
       if (skipDeviceId !== undefined && deviceId === skipDeviceId) return;
       const session = this.sessionsByIdentity.get(device.identity);
       if (!session) return;
-      const encrypted = session.encrypt(innerJson) as { type: number; body: string };
+      const encrypted = encryptOlm(session, innerJson);
       copies.push({
         deviceId, deviceSigningKey: device.signing, ciphertext: encrypted.body, ctype: encrypted.type,
       });
@@ -932,15 +925,12 @@ export class E2eEngine {
       if (ctype === 0) {
         // Повторный prekey к уже установленной сессии — расшифровываем ею,
         // НЕ создавая новую (иначе one-time израсходован и inbound падает)
-        if (existing && existing.matches_inbound(ciphertext)) {
+        if (existing?.matchesInbound(ciphertext)) {
           return existing.decrypt(ctype, ciphertext);
         }
-        const session = new Olm.Session();
-        session.create_inbound_from(this.account, senderIdentity, ciphertext);
-        this.account.remove_one_time_keys(session);
-        const plain = session.decrypt(ctype, ciphertext);
+        const { session, plaintext } = createInboundSession(this.account, senderIdentity, ciphertext);
         this.sessionsByIdentity.set(senderIdentity, session);
-        return plain;
+        return plaintext;
       }
       if (!existing) return undefined;
       return existing.decrypt(ctype, ciphertext);
@@ -1026,9 +1016,8 @@ export class E2eEngine {
   }
 
   private loadIdentityKeys() {
-    const keys = JSON.parse(this.account.identity_keys()) as { curve25519: string; ed25519: string };
-    this.identityKey = keys.curve25519;
-    this.signingKey = keys.ed25519;
+    this.identityKey = this.account.identityKey();
+    this.signingKey = this.account.signingKey();
   }
 
   // ── Megolm (группы) ──────────────────────────────────────────────────────
@@ -1064,13 +1053,11 @@ export class E2eEngine {
   getGroupSessionKey(group: string) {
     let entry = this.groupOut.get(group);
     if (!entry) {
-      const session = new Olm.OutboundGroupSession();
-      session.create();
-      entry = { session, epoch: Date.now() };
+      entry = { session: createOutboundGroup(), epoch: Date.now() };
       this.groupOut.set(group, entry);
       this.persistGroupOut();
     }
-    return { sessionKey: entry.session.session_key(), epoch: entry.epoch };
+    return { sessionKey: entry.session.sessionKey(), epoch: entry.epoch };
   }
 
   async groupEncrypt(group: string, plaintext: string, expectedEpoch?: number) {
@@ -1087,11 +1074,9 @@ export class E2eEngine {
   // membership changes в одной миллисекунде.
   rotateGroup(group: string) {
     const previous = this.groupOut.get(group);
-    const session = new Olm.OutboundGroupSession();
-    session.create();
     const epoch = Math.max(Date.now(), (previous?.epoch || 0) + 1);
     previous?.session.free();
-    this.groupOut.set(group, { session, epoch });
+    this.groupOut.set(group, { session: createOutboundGroup(), epoch });
     this.persistGroupOut();
   }
 
@@ -1127,9 +1112,7 @@ export class E2eEngine {
     const existing = this.groupIn.get(key);
     if (existing && epoch <= existing.epoch) return;
     try {
-      const session = new Olm.InboundGroupSession();
-      session.create(sessionKey);
-      this.groupIn.set(key, { session, epoch });
+      this.groupIn.set(key, { session: createInboundGroup(sessionKey), epoch });
       this.persistGroupIn();
     } catch {
       // битый ключ — игнор
@@ -1140,7 +1123,7 @@ export class E2eEngine {
     const entry = this.groupIn.get(`${group}|${senderIdentity}`);
     if (!entry) return undefined;
     try {
-      const { plaintext } = entry.session.decrypt(ciphertext);
+      const { plaintext } = decryptGroup(entry.session, ciphertext);
       this.persistGroupIn();
       return plaintext;
     } catch {
@@ -1149,29 +1132,11 @@ export class E2eEngine {
   }
 }
 
-// Ed25519-проверка подписи base64-строки (Olm.Utility); false — невалидна
-function ed25519Verify(publicKey: string, data: string, signature: string): boolean {
-  if (!publicKey || !signature) return false;
-  const utility = new Olm.Utility();
-  try {
-    utility.ed25519_verify(stripBase64Padding(publicKey), data, stripBase64Padding(signature));
-    return true;
-  } catch {
-    return false;
-  } finally {
-    utility.free();
-  }
-}
-
 // P-25: signed_prekey бандла подписан signing_key устройства (подпись — над
 // base64-строкой ключа, как при публикации buildPrekeysPayload)
 export function verifyPrekeySignature(device: WireDeviceBundle): boolean {
   if (!device.signing_key || !device.signed_prekey || !device.signed_prekey_sig) return false;
-  return ed25519Verify(device.signing_key, device.signed_prekey, device.signed_prekey_sig);
-}
-
-function stripBase64Padding(value: string) {
-  return value.replace(/=+$/, '');
+  return verifyEd25519(device.signing_key, device.signed_prekey, device.signed_prekey_sig);
 }
 
 const EXPORT_VERSION = 1;

@@ -85,10 +85,12 @@ addActionHandler('loadAuthorizations', async (global): Promise<void> => {
 });
 
 addActionHandler('terminateAuthorization', async (global, actions, payload): Promise<void> => {
-  const { hash } = payload;
+  const { hash, password, tabId = getCurrentTabId() } = payload;
 
-  const result = await callApi('terminateAuthorization', hash);
+  const result = await callApi('terminateAuthorization', hash, password);
   if (!result) {
+    // Parvane: отзыв устройства требует текущий пароль — отказ показываем явно
+    actions.showNotification({ message: oldTranslate('ParvaneSessionTerminateFailed'), tabId });
     return;
   }
 
@@ -106,9 +108,12 @@ addActionHandler('terminateAuthorization', async (global, actions, payload): Pro
   setGlobal(global);
 });
 
-addActionHandler('terminateAllAuthorizations', async (global): Promise<void> => {
-  const result = await callApi('terminateAllAuthorizations');
+addActionHandler('terminateAllAuthorizations', async (global, actions, payload): Promise<void> => {
+  const { password, tabId = getCurrentTabId() } = payload || {};
+
+  const result = await callApi('terminateAllAuthorizations', password);
   if (!result) {
+    actions.showNotification({ message: oldTranslate('ParvaneSessionTerminateFailed'), tabId });
     return;
   }
 

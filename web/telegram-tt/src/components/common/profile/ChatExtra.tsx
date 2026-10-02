@@ -57,6 +57,7 @@ import useEffectWithPrevDeps from '../../../hooks/useEffectWithPrevDeps';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
+import useParvaneChatL2 from '../../../hooks/useParvaneChatL2';
 
 import Island from '../../gili/layout/Island';
 import Switch from '../../gili/primitives/Switch';
@@ -352,6 +353,12 @@ const ChatExtra = ({
     if (text) copyTextToClipboard(text);
   });
 
+  // Parvane: режим «усиленная приватность» (L2) личного чата — переключатель
+  // своего предпочтения; пункт есть, когда собеседник на протоколе v2
+  const [chatL2, handleToggleL2] = useParvaneChatL2(
+    showSecurityKey && !isOwnProfile && !isInSettings ? chatId : undefined, 'isMine',
+  );
+
   const appTermsInfo = lang('ProfileOpenAppAbout', {
     terms: (
       <SafeLink
@@ -568,6 +575,21 @@ const ChatExtra = ({
               checked={!isMuted}
               className={styles.switch}
             />
+          </ListItem>
+        )}
+        {chatL2?.isAvailable && (
+          <ListItem
+            icon="lock"
+            multiline
+            narrow
+            ripple
+            rightElement={<Switch checked={Boolean(chatL2.isMine)} className={styles.switch} />}
+            onClick={handleToggleL2}
+          >
+            <span className="title" dir="auto">{oldLang('ParvaneL2Toggle')}</span>
+            <span className="subtitle">
+              {oldLang(chatL2.isActive && !chatL2.isMine ? 'ParvaneL2ByPeer' : 'ParvaneL2Info')}
+            </span>
           </ListItem>
         )}
         {businessWorkHours && (

@@ -23,11 +23,14 @@ const rules = JSON.parse(
     tileTopic?: string;
     tileSize?: number;
     defaultZoom?: number;
+    maxZoom?: number;
     forbiddenHosts?: string[];
     noticeField?: string;
     changes?: string[];
     contentKinds?: Record<string, string[]>;
     clients?: { web: string; desktop: string | string[]; android: string };
+    vectors?: string;
+    engineSuite?: string;
   }[];
 };
 
@@ -253,8 +256,40 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     sasDigits: number; sasInfo: string; exportLinkVersion: number;
     exportContainsPrivateAccount: boolean; acceptsLegacyOffers: boolean;
     transferStatement: string;
+    v2Grant: { boxField: string; boxCoords: string[]; materialKeys: string[]; secondDeviceCreatesRoot: boolean };
     vectors: { newPubB64: string; oldPubB64: string; commitmentOfNew: string; sas: string };
   };
+
+  it('грант v2: материал движка отдельным блобом, второе устройство корень не создаёт', async () => {
+    expect(r.v2Grant.secondDeviceCreatesRoot).toBe(false);
+    // Материал движка (WASM; формат общий с C ABI) — ровно ключи из правила
+    const { PvClient } = await import('../../lib/parvane-protocol/parvane_protocol');
+    const first = new PvClient('alice@local', 'd1', 'local');
+    first.createIdentity(1);
+    first.ensureStateKey();
+    const material = JSON.parse(new TextDecoder().decode(first.linkGrantMaterial())) as Record<string, unknown>;
+    expect(Object.keys(material).sort()).toEqual(r.v2Grant.materialKeys);
+    first.free();
+
+    const coords = r.v2Grant.boxCoords.map((key) => `"${key}"`);
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('await joinV2WithLinkGrant(boxPayload.v2)');
+    expect(provider).toContain('v2Controller.linkGrantMaterial()');
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('client.joinWithGrant(material, OTK_COUNT)');
+    expect(controller).toContain('deps.onNeedsLinking?.()');
+    // desktop: выдача и приём; android (шов): приём
+    const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    expect(desktop).toContain(`boxPlain["${r.v2Grant.boxField}"] = {{${coords[0]}, v2File}`);
+    expect(desktop).toContain(`box.contains("${r.v2Grant.boxField}")`);
+    expect(desktop).toContain('s->joinWithGrant(std::move(*material))');
+    const core = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(core).toContain('c->joinWithGrant(linkMaterial_, cfg_.otkCount)');
+    expect(core).toContain('{"type", "needsLinking"}');
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toContain(`box.contains("${r.v2Grant.boxField}")`);
+    expect(android).toContain('s->joinWithGrant(std::move(*material))');
+  });
 
   it('правило LINK-1 задокументировано в sync-rules.json', () => {
     expect(r.sasDigits).toBe(12);
@@ -280,6 +315,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     const body = webE2e.slice(idx, webE2e.indexOf('signLinkTransfer(', idx));
     expect(body).toMatch(/linkVersion: 2/);
     expect(body).not.toMatch(/pickle|account:/);
+    // eslint-disable-next-line no-template-curly-in-string
     expect(webE2e).toContain('`link-transfer:${self}:${this.signingKey}:${newSigningKey}`');
     expect(r.transferStatement).toBe('link-transfer:<user>:<old_signing_key>:<new_signing_key>');
   });
@@ -340,7 +376,9 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     const webBody = webE2e.slice(webIdx, webIdx + 700);
     expect(webBody).toMatch(/this\.seenIdentities\.get\(contact\)/);
     expect(webBody).toMatch(/const changed = Boolean\(seen\?\.size\)/);
-    const coreIdx = core.indexOf('bool rememberContactIdentity(const std::string &contact, const std::string &identity) {');
+    const coreIdx = core.indexOf(
+      'bool rememberContactIdentity(const std::string &contact, const std::string &identity) {',
+    );
     expect(coreIdx).toBeGreaterThan(0);
     expect(core.slice(coreIdx, coreIdx + 700)).toMatch(/auto &seen = g_seenIds\[contact\]/);
   });
@@ -378,6 +416,7 @@ describe('SEND-1: подпись отправки, ack без sender, правк
   });
 
   it('web подписывает каждую E2E-отправку строкой из правила', () => {
+    // eslint-disable-next-line no-template-curly-in-string
     expect(messages).toContain('engine.signCallData(`send:${messageId}:${ciphertext}`)');
     const publishes = messages.match(/publishOrThrow\(TOPIC_MSG_SEND/g) || [];
     const signed = messages.match(/signature: signSend\(/g) || [];
@@ -479,13 +518,18 @@ describe('BLOB-1: чанковый AEAD медиа-блобов', () => {
     expect(web).toMatch(/export async function decryptBlobChunks/);
     const media = readFileSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/media.ts'), 'utf8');
     expect(media).not.toMatch(/decryptRange/);
-    expect(media).toMatch(/decryptBlobChunks\(window, keys\.keyB64, keys\.nonceB64, header, blobFrom, totalBlobChunks\)/);
+    expect(media).toContain(
+      'decryptBlobChunks(window, keys.keyB64, keys.nonceB64, header, blobFrom, totalBlobChunks)',
+    );
     const core = readFileSync(path.join(REPO_ROOT, 'desktop/parvane-core/src/blobcrypt.cpp'), 'utf8');
     expect(core).toMatch(/constexpr char kMagic\[4\] = \{'P', 'V', 'B', '2'\}/);
     expect(core).toMatch(/std::optional<std::string> decryptChunks/);
     const coreTests = readFileSync(path.join(REPO_ROOT, 'desktop/parvane-core/tests/blobcrypt_tests.cpp'), 'utf8');
     const webTests = readFileSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/blobcrypt.test.ts'), 'utf8');
-    const r = rule('BLOB-1') as unknown as { vector: { headHex: string; tailHex: string }; legacyVector: { ciphertextB64: string } };
+    const r = rule('BLOB-1') as unknown as {
+      vector: { headHex: string; tailHex: string };
+      legacyVector: { ciphertextB64: string };
+    };
     expect(webTests).toContain(r.vector.headHex);
     expect(webTests).toContain(r.vector.tailHex);
     expect(webTests).toContain(r.legacyVector.ciphertextB64);
@@ -542,6 +586,15 @@ describe('MAP-1: фрагменты карты — только через ша�
     const header = readRepo('desktop/parvane-core/include/parvane/map_tiles.h');
     expect(header).toMatch(new RegExp(`kDefaultZoom = ${map.defaultZoom};`));
     expect(header).toMatch(new RegExp(`kTileSize = ${map.tileSize};`));
+  });
+
+  it('зум обрезается до серверного предела во всех клиентах и на сервере (P-23)', () => {
+    expect(readRepo('backend/shards/preview/src/main.rs')).toMatch(new RegExp(`TILE_MAX_ZOOM: u32 = ${map.maxZoom};`));
+    expect(readRepo('web/telegram-tt/src/api/parvane/media.ts')).toMatch(new RegExp(`MAP_MAX_ZOOM = ${map.maxZoom};`));
+    expect(readRepo('desktop/parvane-core/include/parvane/map_tiles.h'))
+      .toContain(`kMaxZoom = ${map.maxZoom};`);
+    expect(readRepo('android/libtd/src/main/java/org/drinkless/tdlib/MapGeometry.kt'))
+      .toMatch(new RegExp(`MAX_ZOOM = ${map.maxZoom}\\b`));
   });
 });
 
@@ -749,5 +802,72 @@ describe('GROUP-2: права по типу содержимого соблюд�
     const client = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt');
     expect(client).toMatch(/isContentAllowedForMember\(/);
     expect(String(rule2.clients!.android)).toContain('ParvaneStorePermsTest');
+  });
+});
+
+describe('PROTO-1: в клиенте нет собственного разбора протокола v2 (spec 007, T086)', () => {
+  const V2_DIR = 'web/telegram-tt/src/api/parvane/v2';
+  const v2Files = ['controller.ts', 'contentMap.ts', 'engine.ts', 'transport.ts', 'stateJournal.ts'];
+
+  it('движок подключается только в v2/engine.ts', () => {
+    const offenders = v2Files
+      .filter((file) => file !== 'engine.ts')
+      .filter((file) => /lib\/parvane-protocol/.test(readRepo(`${V2_DIR}/${file}`)));
+    expect(offenders).toEqual([]);
+  });
+
+  it('кадры и тела не разбираются вручную: только через движок', () => {
+    v2Files.forEach((file) => {
+      const source = readRepo(`${V2_DIR}/${file}`);
+      // Ручной разбор protobuf/кадров: varint, DataView, байтовые поля по тегам
+      expect(source, file).not.toMatch(/new DataView|>>> 7|& 0x7f/);
+      // JSON разбирается только из ответов движка (proto3-JSON pbjson) и своих настроек
+      const parses = source.match(/JSON\.parse\(([^)]*)/g) || [];
+      parses.forEach((call) => {
+        // (журнал состояния: `session` — сессия движка, `host.decode` — движок)
+        expect(call, `${file}: ${call}`)
+          .toMatch(/JSON\.parse\((pv\.|client\.|session\.|host\.decode|String\(e$|localStorage\.)/);
+      });
+    });
+  });
+});
+
+describe('SEAL-1 / GSEAL-1 / CONTENT-1 / L2-1: общие векторы движка прогоняет каждый клиент (spec 007)', () => {
+  it.each(['SEAL-1', 'GSEAL-1', 'CONTENT-1', 'L2-1'])('%s', (id) => {
+    const item = rule(id);
+    const vectors = JSON.parse(readRepo(item.vectors!)) as { cases: unknown[] };
+    expect(vectors.cases.length).toBeGreaterThan(2);
+    // Правило закрыто, только когда набор движка назван в тесте КАЖДОГО клиента
+    (['web', 'desktop', 'android'] as const).forEach((client) => {
+      const file = String(item.clients![client]);
+      expect(readRepo(file), `${id}: ${client} (${file})`).toContain(item.engineSuite!);
+    });
+  });
+
+  // L2-1 (T079): кроме векторов — поведение клиента: typing/presence закрыты
+  // в чате с активным режимом, смена режима — служебное сообщение чата
+  it('L2-1: тест поведения есть в каждом клиенте, сетка в правиле — та же, что в векторах', () => {
+    const item = rule('L2-1') as ReturnType<typeof rule> & {
+      grid: number[]; behaviourTests: Record<'web' | 'desktop' | 'android', string>;
+    };
+    (['web', 'desktop', 'android'] as const).forEach((client) => {
+      expect(readRepo(item.behaviourTests[client]), `L2-1: ${client}`).toContain('chat_mode');
+    });
+    const vectors = JSON.parse(readRepo(item.vectors!)) as { cases: { name: string; expect: { len?: number } }[] };
+    const sizes = vectors.cases.map((c) => c.expect.len).filter((len): len is number => len !== undefined);
+    expect(sizes.length).toBeGreaterThan(20);
+    sizes.forEach((len) => {
+      expect(item.grid.includes(len) || (len > 32768 && len % 32768 === 0), `размер ${len} на сетке`).toBe(true);
+    });
+    // desktop: решение «не слать typing / не публиковать присутствие» — в клиенте
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('L2Active(address)');
+    expect(desktop).toContain('g_l2PresenceAllowed');
+  });
+
+  it('android: наборы идут через C ABI движка, а не свой разбор', () => {
+    const test = readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt');
+    expect(test).toContain('ParvaneProtocol.runConformanceVectors');
+    expect(readRepo('desktop/parvane-core/tests/protocol_vectors_tests.cpp')).toContain('pv_run_conformance_vectors');
   });
 });

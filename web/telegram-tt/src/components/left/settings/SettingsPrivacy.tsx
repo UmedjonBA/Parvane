@@ -167,7 +167,9 @@ const SettingsPrivacy = ({
   const applyTwoFactor = useLastCallback(async (enabled: boolean, password?: string) => {
     setIsTwoFactorBusy(true);
     try {
-      const state = await (callParvane('parvaneSetTwoFactor', { enabled, password }) as Promise<TwoFactorState | undefined>);
+      const state = await (
+        callParvane('parvaneSetTwoFactor', { enabled, password }) as Promise<TwoFactorState | undefined>
+      );
       if (state) setTwoFactor(state);
       setIsDisablePromptOpen(false);
       setDisablePassword('');
@@ -208,7 +210,8 @@ const SettingsPrivacy = ({
       setNewPasswordRepeat('');
       showNotification({ message: oldLang('ParvaneChangePasswordDone') });
     } catch (error) {
-      showNotification({ message: `${oldLang('ParvaneChangePasswordFailed')}: ${String((error as Error)?.message || error)}` });
+      const reason = String((error as Error)?.message || error);
+      showNotification({ message: `${oldLang('ParvaneChangePasswordFailed')}: ${reason}` });
     } finally {
       setIsPasswordBusy(false);
     }
@@ -223,6 +226,17 @@ const SettingsPrivacy = ({
   const handleGroupAddChange = useLastCallback((allowed: boolean) => {
     setAllowGroupAdd(allowed);
     void callParvane('parvaneSetGroupAddPolicy', { policy: allowed ? 'anyone' : 'nobody' });
+  });
+
+  // Протокол v2 (spec 007, T079): сообщения от незнакомых (анонимные жетоны)
+  const [strangers, setStrangers] = useState<{ isAvailable: boolean; isAllowed: boolean }>();
+  useEffect(() => {
+    void (callParvane('parvaneGetStrangersPolicy', {}) as Promise<{ isAvailable: boolean; isAllowed: boolean }>)
+      .then(setStrangers);
+  }, []);
+  const handleStrangersChange = useLastCallback((isAllowed: boolean) => {
+    setStrangers({ isAvailable: true, isAllowed });
+    void callParvane('parvaneSetStrangersPolicy', { isAllowed });
   });
 
   // P-39: опциональный PIN хранилища (E2E-ключи + сохранённая сессия).
@@ -405,6 +419,14 @@ const SettingsPrivacy = ({
           checked={allowGroupAdd}
           onCheck={handleGroupAddChange}
         />
+        {strangers?.isAvailable && (
+          <Checkbox
+            label={oldLang('ParvaneStrangersToggle')}
+            subLabel={oldLang('ParvaneStrangersInfo')}
+            checked={strangers.isAllowed}
+            onCheck={handleStrangersChange}
+          />
+        )}
       </Island>
 
       {/* Parvane: PIN хранилища E2E-ключей и сессии (P-39) */}

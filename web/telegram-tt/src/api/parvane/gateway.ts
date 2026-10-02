@@ -14,6 +14,7 @@ type GatewayFrame = {
   timeout_ms?: number;
   error?: string;
   user?: string;
+  kind?: string;
 };
 
 type PendingRequest = {
@@ -233,8 +234,15 @@ export class GatewayConnection {
         if ((frame.error || '').startsWith('rate_limited')) {
           window.dispatchEvent(new CustomEvent('parvane-rate-limited', { detail: frame.subject || '' }));
         }
+        // E6 (spec 007): сервер отключил v1-путь — нужна новая версия клиента
+        if (frame.error === 'upgrade_required') {
+          window.dispatchEvent(new CustomEvent('parvane-upgrade-required'));
+        }
         break;
       }
+      case 'notice':
+        if (frame.kind === 'upgrade_available') window.dispatchEvent(new CustomEvent('parvane-upgrade-available'));
+        break;
       case 'msg': {
         const subject = frame.subject || '';
         const handler = this.handlersBySubject.get(subject)

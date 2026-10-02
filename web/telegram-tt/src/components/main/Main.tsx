@@ -57,6 +57,7 @@ import {
   resetLocationHash,
 } from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
+import { callApi } from '../../api/gramjs';
 
 import useInterval from '../../hooks/schedulers/useInterval';
 import useTimeout from '../../hooks/schedulers/useTimeout';
@@ -301,6 +302,7 @@ const Main = ({
     openChatByUsername,
     checkChatInvite,
     showNotification,
+    showDialog,
   } = getActions();
 
   if (DEBUG && !DEBUG_isLogged) {
@@ -468,6 +470,54 @@ const Main = ({
     };
     window.addEventListener('parvane-rate-limited', handleRateLimited);
     return () => window.removeEventListener('parvane-rate-limited', handleRateLimited);
+  }, [showNotification]);
+
+  // Parvane: в журнале устройств появилось новое своё устройство (spec 007)
+  useEffect(() => {
+    const handleNewDevice = () => {
+      showNotification({ message: oldTranslate('ParvaneNewDevice') });
+    };
+    window.addEventListener('parvane-new-device', handleNewDevice);
+    return () => window.removeEventListener('parvane-new-device', handleNewDevice);
+  }, [showNotification]);
+
+  // Parvane: сервер не принимает эту версию протокола — нативный диалог ошибки
+  useEffect(() => {
+    const handleUpgradeRequired = () => {
+      showDialog({ data: { type: 'localized', text: { key: 'ParvaneUpgradeRequired' } } });
+    };
+    void (callApi as unknown as (name: string) => Promise<boolean | undefined>)('parvaneIsUpgradeRequired')
+      .then((isRequired) => {
+        if (isRequired) handleUpgradeRequired();
+      });
+    window.addEventListener('parvane-upgrade-required', handleUpgradeRequired);
+    return () => window.removeEventListener('parvane-upgrade-required', handleUpgradeRequired);
+  }, [showDialog]);
+
+  // Parvane: ключ восстановления корня (spec 007, D-12) — показать один раз
+  useEffect(() => {
+    const handleRecoveryKey = async () => {
+      const result = await (callApi as unknown as (name: string) => Promise<{ recoveryKey: string } | undefined>)(
+        'parvaneTakeRecoveryKey',
+      );
+      if (!result) return;
+      showDialog({
+        data: { type: 'localized', text: { key: 'ParvaneRecoveryKey', variables: { key: result.recoveryKey } } },
+      });
+    };
+    // Ключ мог появиться до монтирования Main
+    void handleRecoveryKey();
+    window.addEventListener('parvane-recovery-key', handleRecoveryKey);
+    return () => window.removeEventListener('parvane-recovery-key', handleRecoveryKey);
+  }, [showDialog]);
+
+  // Parvane: сервер скоро отключит эту версию (E6) — мягкое напоминание
+  useEffect(() => {
+    const handleUpgradeAvailable = () => {
+      showNotification({ message: oldTranslate('ParvaneUpgradeAvailable') });
+    };
+    window.addEventListener('parvane-upgrade-available', handleUpgradeAvailable);
+    return () => window.removeEventListener('parvane-upgrade-available', handleUpgradeAvailable);
   }, [showNotification]);
 
   // Parvane: перенести старые открытые обои в шифрованное хранилище. Только

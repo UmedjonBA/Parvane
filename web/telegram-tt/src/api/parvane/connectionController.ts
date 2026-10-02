@@ -51,6 +51,13 @@ type ConnectionDependencies = {
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
   log: (message: string) => void;
+  // Протокол v2, режим «усиленная приватность» (правило L2-1): в чате с
+  // активным режимом typing/presence не шлются и не показываются, своё
+  // присутствие не публикуется, пока режим активен хотя бы в одном чате
+  v2?: {
+    ephemeralAllowed: (address: string) => boolean;
+    presenceAllowed: () => boolean;
+  };
 };
 
 // Остаток one-time prekeys на сервере, ниже которого доливаем свежую пачку
@@ -257,6 +264,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
     } else if (to && to !== store.self) {
       return;
     }
+    // L2-1: в чате с режимом «усиленная приватность» typing не показывается
+    if (!isEphemeralAllowed(isGroup ? to! : from)) return;
     // Групповой typing: печатает участник — показываем в групповом чате (по
     // `to`). Личный: показываем в 1-1 чате собеседника (по `from`)
     const chatId = isGroup
@@ -285,11 +294,45 @@ export function createConnectionController(deps: ConnectionDependencies) {
     }
     const store = deps.getStore();
     if (!from || from === store.self) return;
+    // L2-1: собеседник чата с режимом «усиленная приватность» «в сети» не показывается
+    if (!isEphemeralAllowed(from)) return;
     deps.sendUpdate({
       '@type': 'updateUserStatus',
       userId: store.getIdForAddress(from),
       status: { type: 'userStatusOnline', expires: Math.floor(Date.now() / 1000) + PRESENCE_TTL_SECS },
     });
+  }
+
+  function isEphemeralAllowed(address: string) {
+    return deps.v2?.ephemeralAllowed(address) ?? true;
+  }
+
+  function isPresenceWanted(peerId: string) {
+    const address = deps.getStore().getAddressForId(peerId);
+    return !address || isEphemeralAllowed(address);
+  }
+
+  // Режим L2 чата сменился. Включён: убрать показанные «печатает»/«в сети» и
+  // больше не слушать presence собеседника. Выключен: подписаться заново
+  function refreshEphemeral(address: string) {
+    const store = deps.getStore();
+    const isGroup = store.isGroupAddress(address);
+    const chatId = store.getIdForAddress(address, isGroup ? 'group' : 'user');
+    if (isEphemeralAllowed(address)) {
+      if (!isGroup) ensurePresence(chatId);
+    } else {
+      window.clearTimeout(typingClearTimers.get(chatId));
+      typingClearTimers.delete(chatId);
+      deps.sendUpdate({
+        '@type': 'updateChatTypingStatus', id: chatId, peerId: chatId, typingStatus: undefined,
+      });
+      // Отписки у gateway нет: кадры presence собеседника гасит обработчик
+      if (!isGroup) {
+        deps.sendUpdate({ '@type': 'updateUserStatus', userId: chatId, status: { type: 'userStatusRecently' } });
+      }
+    }
+    // Своё присутствие одно на аккаунт: режим сняли везде — публикуем сразу
+    publishPresence();
   }
 
   function activate(activeConnection: GatewayConnection, user: string, generation: number) {
@@ -298,6 +341,11 @@ export function createConnectionController(deps: ConnectionDependencies) {
     activeConnection.subscribe(buildMsgInboxTopic(user), deps.handleInboxFrame);
     activeConnection.subscribe(buildTypingTopic(deps.selfId()), handleTypingFrame);
     subscribedPresence.forEach((peerId) => {
+      // L2-1: на новом соединении presence собеседника L2-чата не слушаем
+      if (!isPresenceWanted(peerId)) {
+        subscribedPresence.delete(peerId);
+        return;
+      }
       activeConnection.subscribe(buildPresenceTopic(peerId), handlePresenceFrame);
     });
     activeConnection.subscribe(buildCallInboxTopic(user), deps.calls.handleFrame);
@@ -313,6 +361,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // адреса пользователя в сторе; на reconnect переустанавливается в `activate`
   function ensurePresence(peerId: string) {
     if (!peerId || peerId.startsWith('-') || subscribedPresence.has(peerId)) return;
+    // L2-1: на presence собеседника L2-чата не подписываемся
+    if (!isPresenceWanted(peerId)) return;
     subscribedPresence.add(peerId);
     deps.getConnection()?.subscribe(buildPresenceTopic(peerId), handlePresenceFrame);
   }
@@ -388,6 +438,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
   function publishPresence() {
     const connection = deps.getConnection();
     if (!connection) return;
+    // L2-1: присутствие одно на аккаунт — молчим, пока режим активен хоть в одном чате
+    if (deps.v2 && !deps.v2.presenceAllowed()) return;
     try {
       connection.publish(buildPresenceTopic(deps.selfId()), JSON.stringify({ from: deps.getStore().self }));
     } catch {
@@ -462,18 +514,26 @@ export function createConnectionController(deps: ConnectionDependencies) {
       // fire-and-forget, вход не тормозим
       void replenishOneTimePrekeys(activeConnection, nextToken);
 
+      // Ключ подписи звонков. Собеседники проверяют подпись по signing-ключам
+      // устройств из каталога прекеев и по `pubkey` из identity, поэтому
+      // устройство готово к звонкам, как только его ключ опубликован в каталоге
+      // (выше). `setkey` записывает «ключ последнего вошедшего» для клиентов,
+      // читающих только `pubkey`: замену уже записанного ключа сервер принимает
+      // лишь с паролем (P-07), а при возобновлении сессии по токену пароля нет
+      // (P-39) — раньше отказ выключал звонки на втором устройстве целиком
       const nextE2e = deps.getE2e();
       if (nextE2e) {
+        deps.setCallIdentityReady(true);
         try {
           const raw = await activeConnection.request(TOPIC_IDENTITY_SETKEY, JSON.stringify({
             token: nextToken,
             pubkey: nextE2e.signingKey,
+            password: password || undefined,
           }));
           const response = JSON.parse(raw) as { ok?: boolean; error?: string };
           if (!response.ok) throw new Error(response.error || 'Call identity key registration failed');
-          deps.setCallIdentityReady(true);
         } catch (error) {
-          deps.log(`Ключ аутентификации звонков не зарегистрирован: ${String(error)}`);
+          deps.log(`pubkey в identity не обновлён (звонки идут по ключу устройства из каталога): ${String(error)}`);
         }
       }
 
@@ -654,6 +714,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     fetchRegisterStatus,
     ensureGroupTyping,
     ensurePresence,
+    refreshEphemeral,
     connectWithToken,
     shutdown,
   };

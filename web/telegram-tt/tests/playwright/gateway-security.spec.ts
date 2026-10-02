@@ -90,7 +90,8 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
     };
 
     const ownId = webUserId(user);
-    socket.send(JSON.stringify({ op: 'sub', subject: 'presence.*' }));
+    // P-18: presence — только конкретный presence.<id>; wildcard проверяется ниже
+    socket.send(JSON.stringify({ op: 'sub', subject: `presence.${ownId}` }));
     socket.send(JSON.stringify({ op: 'sub', subject: `msg.typing.${ownId}` }));
     socket.send(JSON.stringify({ op: 'sub', subject: `msg.user.${user}` }));
     await new Promise((resolve) => window.setTimeout(resolve, 100));
@@ -157,6 +158,9 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
     };
     const wildcardError = await subscribe('_INBOX.>');
     const concreteError = await subscribe('_INBOX.mallory-secret');
+    const presenceWildcardError = await subscribe('presence.*');
+    const presenceTailWildcardError = await subscribe('presence.>');
+    const foreignTypingError = await subscribe(`msg.typing.${webUserId('victim@local')}`);
     const verify = await request('identity.token.verify', { token: issue.token });
     socket.close();
 
@@ -176,6 +180,9 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
       plaintextError,
       foreignPresenceError,
       typingWildcardError,
+      presenceWildcardError,
+      presenceTailWildcardError,
+      foreignTypingError,
     };
   }, {
     url: gatewayUrl,
@@ -192,4 +199,7 @@ test('gateway binds Mallory to her session and denies private NATS subjects', as
   expect(result.plaintextError).toContain('plaintext');
   expect(result.foreignPresenceError).toContain('запрещ');
   expect(result.typingWildcardError).toContain('запрещ');
+  expect(result.presenceWildcardError).toContain('запрещ');
+  expect(result.presenceTailWildcardError).toContain('запрещ');
+  expect(result.foreignTypingError).toContain('запрещ');
 });

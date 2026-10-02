@@ -1,12 +1,9 @@
-import Olm from '@matrix-org/olm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { E2eEngine } from './e2e';
+import fixture from './e2eLibolmFixture.json';
 
-const TEST_USERS = [
-  'alice@local', 'bob@local', 'mallory@local', 'owner@local',
-  'legacy-bootstrap@local', 'legacy@local',
-];
+const TEST_USERS = ['alice@local', 'bob@local', 'mallory@local', 'owner@local', 'legacy@local'];
 const localValues = new Map<string, string>();
 const testLocalStorage = {
   get length() { return localValues.size; },
@@ -86,14 +83,9 @@ describe('E2E group-key rotation', () => {
   });
 
   it('re-pickles legacy localStorage state and removes its decrypted cache', async () => {
-    await E2eEngine.create('legacy-bootstrap@local'); // Инициализирует Olm WASM.
-    const legacyAccount = new Olm.Account();
-    legacyAccount.create();
-    const identity = (JSON.parse(legacyAccount.identity_keys()) as { curve25519: string }).curve25519;
-    localStorage.setItem(
-      'parvane:e2e:legacy@local:account',
-      legacyAccount.pickle('parvane-web-pickle'),
-    );
+    // Аккаунт из фикстуры libolm под общим ключом прежнего localStorage-формата
+    const identity = fixture.alice.identityKey;
+    localStorage.setItem('parvane:e2e:legacy@local:account', fixture.alice.accountUnderLegacyCommonKey);
     localStorage.setItem(
       'parvane:e2e:legacy@local:dec',
       JSON.stringify({ message: { from: 'bob@local', content: 'legacy plaintext' } }),
@@ -103,6 +95,7 @@ describe('E2E group-key rotation', () => {
     const migrated = await E2eEngine.create('legacy@local');
     await migrated.flushStorage();
     expect(migrated.identityKey).toBe(identity);
+    expect(migrated.signCallData(fixture.alice.signed.message)).toBe(fixture.alice.signed.signature);
     expect(Object.keys(localStorage).filter((key) => key.startsWith('parvane:e2e:legacy@local:'))).toEqual([]);
 
     const restored = await E2eEngine.create('legacy@local');
@@ -110,6 +103,5 @@ describe('E2E group-key rotation', () => {
     expect(restored.getCachedInner('message')).toEqual({
       from: 'bob@local', content: 'legacy plaintext',
     });
-    legacyAccount.free();
   });
 });
