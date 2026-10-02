@@ -27,7 +27,7 @@ EOF
 
 req() { "$NATS" --server "$URL" req "$1" "$2" 2>/dev/null | grep -o '{.*}' | head -1; }
 token_of() {
-  req identity.token.issue "{\"user\":\"$1\",\"password\":\"test\"}" \
+  req identity.token.issue "{\"user\":\"$1\",\"password\":\"${PV_PASSWORD:-test-pass-2026}\"}" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null
 }
 group_info() { # <token> → JSON GroupInfo

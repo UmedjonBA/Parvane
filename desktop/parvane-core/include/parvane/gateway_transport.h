@@ -15,6 +15,13 @@
 //   {"op":"reply","id":..,"payload":..} | {"op":"reply_end","id":..}
 //   {"op":"msg","subject":..,"payload":..}
 //   {"op":"err","id"?:..,"error":..}
+// Переход на протокол v2 (E6, T110; env gateway PARVANE_V1_MODE):
+//   {"op":"notice","kind":"upgrade_available"} — после auth_ok (режим notice):
+//       v1 ещё работает, клиент показывает «доступно обновление»;
+//   {"op":"err","error":"upgrade_required"} без id — ответом на первый же
+//       кадр любого v1-соединения (режим disabled; протокол соединения gateway
+//       узнаёт по первым байтам клиента), затем gateway закрывает соединение:
+//       клиент показывает «обновите приложение» и не крутит переподключение.
 #pragma once
 
 #include "parvane/itransport.h"
@@ -90,6 +97,20 @@ public:
     using ReconnectHandler = std::function<void(bool ok, const std::string &error)>;
     static void setReconnectHandler(ReconnectHandler handler);
 
+    // E6 (T110): сервер переводит клиентов на v2. Один обработчик на процесс,
+    // зовётся на потоке reader на каждый такой кадр (клиент сам решает, что
+    // показать один раз за запуск).
+    enum class Upgrade { None, Available, Required };
+    using UpgradeHandler = std::function<void(Upgrade)>;
+    static void setUpgradeHandler(UpgradeHandler handler);
+    // Вид кадра gateway: Available / Required / None (любой другой кадр).
+    [[nodiscard]] static Upgrade upgradeKindOf(const std::string &line);
+    // Сервер отвечает upgrade_required: v1-путь отключён. Пока флаг стоит,
+    // переподключение — не чаще раза в kUpgradeRetryGapMs (оператор мог
+    // вернуть v1: `PARVANE_V1_MODE=normal`); флаг снимает первый успешный вход.
+    [[nodiscard]] static bool upgradeRequired();
+    static constexpr std::int64_t kUpgradeRetryGapMs = 5 * 60 * 1000;
+
 protected:
     // Состояние одного pending-запроса (single или many).
     struct Pending {
@@ -141,6 +162,8 @@ protected:
     int lastPort_ = 0;
     std::string lastToken_;
     std::atomic<bool> closedByUser_{false}; // явный close(): не переподключаться
+    // Это соединение получило upgrade_required (сбрасывается при connect).
+    std::atomic<bool> upgradeRequiredConn_{false};
     std::mutex reconnMu_;
     std::chrono::steady_clock::time_point lastReconnectTry_{};
 };

@@ -754,6 +754,10 @@ bool prekeySignatureValid(const json &device) {
     return prekeySigOk(device);
 }
 
+void refreshContact(const std::string &contact, ITransport &t, const std::string &token) {
+    refreshContactDevices(contact, t, token, true);
+}
+
 std::vector<std::string> contactSigningKeys(const std::string &contact) {
     std::vector<std::string> out;
     std::lock_guard<std::mutex> lk(g_mu);

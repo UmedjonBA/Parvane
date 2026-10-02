@@ -146,6 +146,10 @@ void resetInMemory();
 // Ed25519 signing-ключи известных устройств контакта (из каталога prekeys):
 // для проверки подписи сигналов звонка с любого устройства собеседника.
 [[nodiscard]] std::vector<std::string> contactSigningKeys(const std::string &contact);
+// Перечитать каталог устройств контакта сейчас (минуя TTL): перед звонком —
+// ответить может устройство, которого в кэше ещё нет. Блокирующий запрос,
+// звать с рабочего потока.
+void refreshContact(const std::string &contact, ITransport &t, const std::string &token);
 // Ротировать группы, где есть контакт (его устройство исчезло из каталога).
 void rotateGroupsWith(const std::string &contact);
 

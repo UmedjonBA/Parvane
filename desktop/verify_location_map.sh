@@ -20,15 +20,17 @@ wait_log "$SB/preview.log" "Preview шард запущен" 20 && ok "preview �
 # проверка «та же точка не пересобирается»)
 P0="55.751244,37.618423"
 L0="55.7520,37.6190"; M1="55.7530,37.6200"; M2="55.7540,37.6210"; M3="55.7540,37.6210"
-P4="55.7600,37.6300"  # точка для сценария «preview недоступен → повтор склейки»
-P5="55.7700,37.6400"  # точка для сценария «устройство отсутствовало» (bob офлайн при отправке)
+# P4/P5 — далеко от остальных: на z15 близкая точка делит тайл с уже собранными, он
+# берётся из LRU, и карта «собирается частично» вместо «не собрана» (1 окт 2026).
+P4="55.8000,37.7000"  # точка для сценария «preview недоступен → повтор склейки»
+P5="55.8500,37.7700"  # точка для сценария «устройство отсутствовало» (bob офлайн при отправке)
 
-# Засев кэша тайлов: все тайлы z16 вокруг точек (±1 тайл) — таблица map_tiles создана
+# Засев кэша тайлов: все тайлы z15 вокруг точек (±1 тайл) — таблица map_tiles создана
 # миграцией шарда при старте; fetched_at=now попадает в TTL 7 дней.
 python3 - "$SB/preview.db" "$P0" "$L0" "$M1" "$M2" "$P4" "$P5" <<'PY'
 import math, sqlite3, struct, sys, time, zlib
 db = sys.argv[1]; points = [tuple(map(float, p.split(','))) for p in sys.argv[2:]]
-Z = 16; N = 2 ** Z
+Z = 15; N = 2 ** Z  # P-23: клиент запрашивает не выше z15 (TILE_MAX_ZOOM шарда preview)
 def png_rgb(w, h, rgb):
     raw = b''.join(b'\x00' + bytes(rgb) * w for _ in range(h))
     def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
@@ -104,24 +106,24 @@ sleep 5
 stop_pid "$PREVIEW_PID"; sleep 1
 stop_pid "$PA"; sleep 1
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:retry" PARVANE_AUTOLOCATION="bob@local:$P4")
-wait_log "$B/td/log.txt" "карта локации не собрана 55.76" 60 && ok "bob: без preview карта не собрана (ожидаемо, пузырь с фоном)" || bad "bob: нет маркера «не собрана» без preview"
+wait_log "$B/td/log.txt" "карта локации не собрана 55.8,37.7" 60 && ok "bob: без preview карта не собрана (ожидаемо, пузырь с фоном)" || bad "bob: нет маркера «не собрана» без preview"
 PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/preview.db" \
   PARVANE_LOG_LEVEL=info "$SHARD/preview" >>"$SB/preview.log" 2>&1 & PREVIEW_PID=$!; PIDS+=($PREVIEW_PID)
 sleep 3
 # повтор по таймеру (30 с) — карта появляется без рестарта клиента
-wait_log "$B/td/log.txt" "карта локации собрана 55.76" 75 && ok "bob: карта собрана повтором после восстановления preview" || bad "bob: повтор склейки не сработал"
-grep -q "повтор склейки карты 55.76" "$B/td/log.txt" && ok "bob: маркер повтора склейки есть" || bad "bob: нет маркера повтора"
-wait_log "$A/td/log.txt" "карта локации собрана 55.76" 30 && ok "alice: собственный пузырь тоже собран повтором" || bad "alice: повтор не сработал"
+wait_log "$B/td/log.txt" "карта локации собрана 55.8,37.7" 75 && ok "bob: карта собрана повтором после восстановления preview" || bad "bob: повтор склейки не сработал"
+grep -q "повтор склейки карты 55.8,37.7" "$B/td/log.txt" && ok "bob: маркер повтора склейки есть" || bad "bob: нет маркера повтора"
+wait_log "$A/td/log.txt" "карта локации собрана 55.8,37.7" 30 && ok "alice: собственный пузырь тоже собран повтором" || bad "alice: повтор не сработал"
 
 # ── устройство отсутствовало: bob офлайн, alice шлёт точку, bob поднимается → синк → карта ──
 stop_pid "$PB"; sleep 1
 stop_pid "$PA"; sleep 1
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:offline" PARVANE_AUTOLOCATION="bob@local:$P5")
-wait_log "$A/td/log.txt" "геолокация → bob@local \(55.77" 40 && ok "alice отправила точку, пока bob офлайн" || bad "alice не отправила точку без bob"
-wait_log "$A/td/log.txt" "карта локации собрана 55.77" 60 && ok "alice: исходящий пузырь собран без получателя" || bad "alice: карта без bob не собрана"
+wait_log "$A/td/log.txt" "геолокация → bob@local \(55.85" 40 && ok "alice отправила точку, пока bob офлайн" || bad "alice не отправила точку без bob"
+wait_log "$A/td/log.txt" "карта локации собрана 55.85,37.77" 60 && ok "alice: исходящий пузырь собран без получателя" || bad "alice: карта без bob не собрана"
 sleep 2
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "карта локации собрана 55.77" 60 && ok "bob после офлайна: карта для сообщения из синка" || bad "bob после офлайна: карты нет"
+wait_log "$B/td/log.txt" "карта локации собрана 55.85,37.77" 60 && ok "bob после офлайна: карта для сообщения из синка" || bad "bob после офлайна: карты нет"
 
 # ── MAP-1: статическая проверка — картографических хостов в клиентском коде нет ──
 HOSTS=$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["rules"][-1]["forbiddenHosts"] if False else [h for r in json.load(open(sys.argv[1]))["rules"] if r["id"]=="MAP-1" for h in r["forbiddenHosts"]]))' "$ROOT/../conformance/sync-rules.json")

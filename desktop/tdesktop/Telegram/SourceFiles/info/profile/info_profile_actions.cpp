@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_contact_box.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "boxes/peers/edit_peer_info_box.h"
+#include "parvane/parvane_client.h" // Parvane: режим «усиленная приватность» (T079)
 #include "boxes/peers/verify_peers_box.h"
 #include "boxes/report_messages_box.h"
 #include "boxes/share_box.h"
@@ -1287,6 +1288,7 @@ private:
 	void addShareContactAction(not_null<UserData*> user);
 	void addEditContactAction(not_null<UserData*> user);
 	void addDeleteContactAction(not_null<UserData*> user);
+	void addEnhancedPrivacyAction(not_null<UserData*> user);
 	void addBotCommandActions(not_null<UserData*> user);
 	void addFastButtonsMode(not_null<UserData*> user);
 	void addReportAction();
@@ -2783,6 +2785,79 @@ void ActionsFiller::addDeleteContactAction(not_null<UserData*> user) {
 		&st::infoIconDelete);
 }
 
+// Parvane (T079, правило L2-1): режим «усиленная приватность» личного чата.
+// Переключатель — своё предпочтение; режим активен, пока он включён хотя бы
+// у одного участника (тогда подпись «включена собеседником»). Пункт виден,
+// когда собеседник на протоколе v2.
+void ActionsFiller::addEnhancedPrivacyAction(not_null<UserData*> user) {
+	Parvane::RefreshChatL2(user);
+
+	const auto wrap = _wrap->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			_wrap,
+			object_ptr<Ui::VerticalLayout>(_wrap)));
+	const auto inner = wrap->entity();
+	const auto button = inner->add(object_ptr<Ui::SettingsButton>(
+		inner,
+		tr::lng_parvane_enhanced_privacy(),
+		st::infoSharedMediaButton));
+	object_ptr<Info::Profile::FloatingIcon>(
+		button,
+		st::menuIconLock,
+		st::infoSharedMediaButtonIconPosition);
+
+	struct State {
+		rpl::variable<Parvane::ChatL2> value;
+		rpl::event_stream<bool> revert;
+	};
+	const auto state = button->lifetime().make_state<State>();
+	const auto refresh = [=] {
+		state->value = Parvane::ChatL2State(user);
+	};
+	refresh();
+	Parvane::ChatL2Updates(
+	) | rpl::on_next(refresh, button->lifetime());
+
+	AddSkip(inner);
+	AddDividerText(
+		inner,
+		state->value.value(
+		) | rpl::map([](const Parvane::ChatL2 &value) {
+			return (value.active && !value.mine)
+				? tr::lng_parvane_enhanced_privacy_by_peer()
+				: tr::lng_parvane_enhanced_privacy_about();
+		}) | rpl::flatten_latest());
+	AddSkip(inner);
+
+	wrap->toggleOn(state->value.value(
+	) | rpl::map([](const Parvane::ChatL2 &value) {
+		return value.available;
+	}));
+	wrap->finishAnimating();
+
+	button->toggleOn(rpl::merge(
+		state->value.value(
+		) | rpl::map([](const Parvane::ChatL2 &value) {
+			return value.mine;
+		}),
+		state->revert.events()));
+
+	const auto show = _controller->parentController()->uiShow();
+	button->toggledValue(
+	) | rpl::filter([=](bool value) {
+		return value != state->value.current().mine;
+	}) | rpl::on_next([=](bool value) {
+		const auto weak = base::make_weak(button);
+		Parvane::SetChatL2(user, value, [=](bool ok) {
+			if (ok || !weak.get()) {
+				return; // успех придёт обновлением состояния (ChatL2Updates)
+			}
+			state->revert.fire(!value);
+			show->showToast(tr::lng_parvane_enhanced_privacy_failed(tr::now));
+		});
+	}, button->lifetime());
+}
+
 void ActionsFiller::addFastButtonsMode(not_null<UserData*> user) {
 	Expects(user->isBot());
 
@@ -3014,6 +3089,9 @@ void ActionsFiller::fillUserActions(not_null<UserData*> user) {
 	if (!user->isSelf()) {
 		addEditContactAction(user);
 		addDeleteContactAction(user);
+		if (!user->isBot()) {
+			addEnhancedPrivacyAction(user); // Parvane: режим L2 чата
+		}
 	}
 	if (!user->isSelf() && !user->isSupport() && !user->isVerifyCodes()) {
 		if (user->isBot()) {

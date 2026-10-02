@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
 # Parvane Фаза 3b — e2e-проверка врезки отправки.
-# Поднимает подписчика на msg.chat.send, запускает форк headless с
-# PARVANE_AUTOLOGIN (логин через identity) + PARVANE_AUTOSEND (синтетическая
-# отправка после готовности сессии), затем проверяет:
-#   1) лог форка содержит "autosend" и "Parvane: отправлено" (путь публикации);
-#   2) подписчик поймал событие msg.chat.send с нужным текстом и адресатом.
+# Поднимает подписчика на msg.chat.send (NATS за gateway), запускает форк
+# headless с PARVANE_AUTOLOGIN + PARVANE_AUTOSEND (синтетическая отправка после
+# готовности сессии), затем проверяет:
+#   1) лог форка содержит "autosend" и "Parvane: отправлено … [E2E]" (путь публикации);
+#   2) подписчик поймал событие msg.chat.send с нужным адресатом;
+#   3) на проводе — E2E-конверт: kind=encrypted, sealed (from пуст), текста нет.
+# До E2E сценарий искал текст в событии открытым; теперь открытый текст в шине
+# был бы дефектом (gateway такой msg.chat.send отвергает, P-22).
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
-WORKDIR="$(mktemp -d /tmp/parvane-3b.XXXXXX)"
-SUBLOG="$WORKDIR/sub.log"
-FORKLOG="$WORKDIR/fork.log"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
+stack_start "${SCRATCH:-/tmp/parvane-3b}"
+URL="nats://127.0.0.1:4222"
+SUBLOG="$SB/sub.log"
 SELF="alice@local"
 PEER="bob@local"
 TEXT="phase3b-$(date +%s)"
-RC=0
+A="$SB/alice"; B="$SB/bob"
 
-ok()   { printf '\033[32mok  \033[0m %s\n' "$*"; }
-bad()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
-
-[ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
+# получатель публикует устройство: sealed-конверт шифруется под его prekeys
+PB=$(start_client "$B" "$PEER" PARVANE_NO_LINK_OFFER=1)
+wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob не поднялся"
+stop_pid "$PB"
 
 # 1. подписчик на msg.chat.send
 nats --server "$URL" sub msg.chat.send >"$SUBLOG" 2>&1 &
@@ -29,36 +30,27 @@ sleep 1
 
 # 2. запуск форка headless: логин + автосенд.
 # ВАЖНО: tdesktop пишет LOG() в <workdir>/log.txt, а НЕ в stdout — проверяем его.
-TDLOG="$WORKDIR/td/log.txt"
-QT_QPA_PLATFORM=offscreen \
-PARVANE_NATS_URL="$URL" \
-PARVANE_AUTOLOGIN="$SELF:test" \
-PARVANE_AUTOSEND="$PEER:$TEXT" \
-  "$BIN" -workdir "$WORKDIR/td" >"$FORKLOG" 2>&1 &
-FORKPID=$!
-
-# ждём до 25с появления autosend-лога, потом гасим форк
-for i in $(seq 1 25); do
-    grep -q "Parvane: autosend" "$TDLOG" 2>/dev/null && break
-    sleep 1
-done
-sleep 2
-kill "$FORKPID" 2>/dev/null; wait "$FORKPID" 2>/dev/null
+TDLOG="$A/td/log.txt"
+PA=$(start_client "$A" "$SELF" PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="$PEER:$TEXT")
+wait_log "$TDLOG" "Parvane: отправлено msg" 40
+wait_log "$SUBLOG" "\"to\":\"$PEER\"" 10
+stop_pid "$PA"
 kill "$SUBPID" 2>/dev/null; wait "$SUBPID" 2>/dev/null
 
 echo "── лог форка (Parvane, из log.txt) ──"
-grep -i parvane "$TDLOG" 2>/dev/null || echo "(нет строк Parvane!)"
+grep -aE "Parvane: (login|сессия|autosend|отправлено)" "$TDLOG" 2>/dev/null || echo "(нет строк Parvane!)"
 echo "── подписчик msg.chat.send ──"
-cat "$SUBLOG"
+cut -c1-300 "$SUBLOG"
 echo "────────────────────────────"
 
-grep -q "Parvane: login OK"  "$TDLOG" && ok "логин прошёл"            || bad "логин не прошёл"
-grep -q "Parvane: сессия поднята" "$TDLOG" && ok "сессия поднята"     || bad "сессия не поднялась"
-grep -q "Parvane: autosend"  "$TDLOG" && ok "autosend-хук сработал"   || bad "autosend-хук не сработал"
-grep -q "Parvane: отправлено" "$TDLOG" && ok "публикация выполнена"   || bad "публикации в логе нет"
-grep -q "$TEXT" "$SUBLOG" && ok "msg.chat.send пойман подписчиком ($TEXT)" || bad "событие msg.chat.send не поймано"
-grep -q "\"to\":\"$PEER\"" "$SUBLOG" && ok "адресат в payload = $PEER"  || bad "адресат в payload неверен"
+grep -qa "Parvane: login OK"  "$TDLOG" && ok "логин прошёл"            || bad "логин не прошёл"
+grep -qa "Parvane: сессия поднята" "$TDLOG" && ok "сессия поднята"     || bad "сессия не поднялась"
+grep -qa "Parvane: autosend"  "$TDLOG" && ok "autosend-хук сработал"   || bad "autosend-хук не сработал"
+grep -qa "Parvane: отправлено msg .* \[E2E\]" "$TDLOG" && ok "публикация выполнена [E2E]" || bad "публикации [E2E] в логе нет"
+grep -qa "\"to\":\"$PEER\"" "$SUBLOG" && ok "msg.chat.send пойман подписчиком, адресат = $PEER" || bad "событие msg.chat.send не поймано"
+grep -qa '"kind":"encrypted"' "$SUBLOG" && ok "на проводе E2E-конверт (kind=encrypted)" || bad "на проводе нет kind=encrypted"
+grep -qa '"from":""' "$SUBLOG" && ok "sealed sender: from на проводе пуст" || bad "from на проводе не пуст"
+grep -qa "$TEXT" "$SUBLOG" && bad "ТЕКСТ сообщения виден в шине открытым" || ok "текста сообщения в шине нет"
 
-rm -rf "$WORKDIR"
-[ "$RC" -eq 0 ] && printf '\033[32mФАЗА 3b: OK\033[0m\n' || printf '\033[31mФАЗА 3b: ЕСТЬ ПРОВАЛЫ\033[0m\n'
-exit "$RC"
+stack_stop
+finish "ФАЗА 3b"

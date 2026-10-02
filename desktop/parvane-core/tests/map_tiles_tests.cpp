@@ -46,11 +46,12 @@ int main() {
     // Москва, размер пузыря tdesktop 320×240, scale 1
     {
         const auto g = computeGeometry(55.751244, 37.618423, kDefaultZoom, 320, 240, 1.0);
-        check(g.zoom == 16, "Москва: зум 16 (паритет с web)");
+        check(g.zoom == kMaxZoom && kMaxZoom == 15,
+              "Москва: запрошенный z16 срезан до 15 (P-23, паритет с web)");
         check(g.canvasWidth() == 320 && g.canvasHeight() == 240, "Москва: канвас 320x240");
         check(g.tiles.size() >= 4 && g.tiles.size() <= 9, "Москва: 2x2…3x3 тайла");
         // центр покрыт: тайл центра из независимой формулы есть в наборе
-        const auto [cx, cy] = osmTile(55.751244, 37.618423, 16);
+        const auto [cx, cy] = osmTile(55.751244, 37.618423, kMaxZoom);
         bool found = false;
         for (const auto &t : g.tiles) {
             if (t.key.x == static_cast<std::uint32_t>(cx)
@@ -69,7 +70,7 @@ int main() {
         std::set<std::string> keys;
         for (const auto &t : g.tiles) keys.insert(t.key.str());
         check(keys.size() == g.tiles.size(), "Москва: ключи тайлов уникальны");
-        check(g.tiles[0].key.str().rfind("16/", 0) == 0, "TileKey::str() = z/x/y");
+        check(g.tiles[0].key.str().rfind("15/", 0) == 0, "TileKey::str() = z/x/y");
     }
 
     // scale 2 (HiDPI): канвас вдвое больше, размер тайла на канвасе 512
@@ -79,18 +80,18 @@ int main() {
         check(!g.tiles.empty() && g.tiles[0].dstSize == 512, "scale 2: тайл 512 px на канвасе");
     }
 
-    // Граница даты: долгота 179.999 (0,18 тайла до края на z16) — часть тайлов
+    // Граница даты: долгота 179.999 (0,09 тайла до края на z15) — часть тайлов
     // оборачивается на x=0…
     {
         const auto g = computeGeometry(10.0, 179.999, 16, 320, 240, 1.0);
-        const std::uint32_t n = 1u << 16;
+        const std::uint32_t n = 1u << kMaxZoom;
         bool allInRange = true, hasWrapped = false, hasLast = false;
         for (const auto &t : g.tiles) {
             if (t.key.x >= n) allInRange = false;
             if (t.key.x == 0) hasWrapped = true;
             if (t.key.x == n - 1) hasLast = true;
         }
-        check(allInRange, "179.999: все x < 2^16 (обёрнуты)");
+        check(allInRange, "179.999: все x < 2^z (обёрнуты)");
         check(hasWrapped && hasLast, "179.999: есть тайлы x=n-1 и x=0 (переход через дату)");
         // dstX по необёрнутому tx: обёрнутый x=0 лежит правее x=n-1
         int dstLast = 0, dstWrapped = 0;
@@ -106,8 +107,8 @@ int main() {
         const auto g = computeGeometry(80.0, 20.0, 16, 320, 240, 1.0);
         check(!g.tiles.empty(), "80°: покрытие есть");
         bool ok = true;
-        for (const auto &t : g.tiles) if (t.key.y >= (1u << 16)) ok = false;
-        check(ok, "80°: все y < 2^16");
+        for (const auto &t : g.tiles) if (t.key.y >= (1u << kMaxZoom)) ok = false;
+        check(ok, "80°: все y < 2^z");
     }
 
     // Полюс: широта 89 clamp'ится до 85.05, тайлы с ty < 0 пропущены

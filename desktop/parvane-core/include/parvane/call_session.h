@@ -82,6 +82,12 @@ public:
         std::function<std::vector<std::string>()> peerPubkeys;
         // Смена состояния звонка (для UI).
         std::function<void(CallState)> onState;
+        // Своя подпись данных звонка вместо key: нужна устройству, чей ключ
+        // звонков identity не принял (на аккаунте уже ключ другого устройства,
+        // замена — только с паролем, P-07) — такое устройство подписывает
+        // signing-ключом из каталога prekeys, его собеседник найдёт через
+        // peerPubkeys. Пустой результат → подписывает key.
+        std::function<std::string(const std::string &data)> sign;
     };
 
     // key — наш ключ подписи (может быть nullptr: тогда шлём без подписи).

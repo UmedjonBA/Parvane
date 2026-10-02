@@ -34,6 +34,9 @@ void CallManager::newSession(const std::string &peer) {
     scb.peerPubkeys = [this] {
         return cb_.peerPubkeys ? cb_.peerPubkeys(peer_) : std::vector<std::string>{};
     };
+    if (cb_.sign) {
+        scb.sign = cb_.sign;
+    }
     scb.onState = [this](CallState s) {
         if (cb_.onState) cb_.onState(s);
     };

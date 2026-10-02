@@ -9,6 +9,7 @@
 
 #include "parvane/gateway_transport.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -38,6 +39,19 @@ public:
     };
     [[nodiscard]] static Endpoint parseUrl(const std::string &url);
 
+    // Протокол v2 (spec 007): двоичный режим. Соединение v2 gateway узнаёт по
+    // первому двоичному кадру (Hello); такое соединение живёт отдельно от v1.
+    // С обработчиком входящие ДВОИЧНЫЕ сообщения уходят в него (на потоке
+    // reader), текстовые по-прежнему разбираются как JSON-кадры v1. Задавать
+    // до connectUrl. Содержимое кадров транспорт не разбирает.
+    using BinaryHandler = std::function<void(std::string frame)>;
+    using ClosedHandler = std::function<void()>;
+    void setBinaryHandler(BinaryHandler handler) { binaryHandler_ = std::move(handler); }
+    // Зовётся на потоке reader, когда соединение закрылось (сервер/сеть).
+    void setClosedHandler(ClosedHandler handler) { closedHandler_ = std::move(handler); }
+    // Отправить одно двоичное WebSocket-сообщение. Бросает GatewayError.
+    void sendBinary(const std::string &frame);
+
 protected:
     void readerLoop() override;
     void sendLine(const std::string &frame) override;
@@ -55,6 +69,8 @@ private:
     SSL *ssl_ = nullptr;
     bool tls_ = false;
     std::string lastUrl_; // для reopen()
+    BinaryHandler binaryHandler_;
+    ClosedHandler closedHandler_;
 };
 
 } // namespace parvane

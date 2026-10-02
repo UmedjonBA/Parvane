@@ -231,14 +231,43 @@ bool writeFile(const std::string &path, const std::string &data) {
     return rawWrite(path, seal(data));
 }
 
-std::vector<std::string> readLines(const std::string &path) {
-    std::vector<std::string> out;
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        return out;
+// Строки файла-журнала в любом исторически возможном виде. Журналы с именем не
+// *.jsonl (список v2-сообщений, журнал прочитанного READ-1, отметки очищенных
+// чатов) старая миграция принимала за обычный файл и запечатывала ЦЕЛИКОМ, а
+// appendLine потом дописывал строки следом за двоичным блобом — такой файл
+// читался как мусор, записи терялись при каждом рестарте (2 окт 2026).
+std::vector<std::string> linesOf(const std::string &blob) {
+    std::string text;
+    if (isSealed(blob)) {
+        std::optional<std::string> head = open(blob);
+        size_t tailAt = blob.size();
+        if (!head) {
+            // Целиком запечатанная голова + дописанные строки: граница — первое
+            // вхождение префикса строки, до которого блоб проходит проверку GCM.
+            for (auto p = blob.find(kLinePrefix, kMagicLen + 1); p != std::string::npos;
+                 p = blob.find(kLinePrefix, p + 1)) {
+                if (auto part = open(blob.substr(0, p))) {
+                    head = std::move(part);
+                    tailAt = p;
+                    break;
+                }
+            }
+        }
+        if (!head) {
+            return {};
+        }
+        text = std::move(*head);
+        if (!text.empty() && text.back() != '\n') {
+            text += '\n';
+        }
+        text += blob.substr(tailAt);
+    } else {
+        text = blob;
     }
+    std::vector<std::string> out;
+    std::istringstream in(text);
     std::string line;
-    while (std::getline(f, line)) {
+    while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
@@ -250,6 +279,10 @@ std::vector<std::string> readLines(const std::string &path) {
         }
     }
     return out;
+}
+
+std::vector<std::string> readLines(const std::string &path) {
+    return linesOf(rawRead(path));
 }
 
 bool appendLine(const std::string &path, const std::string &line) {
@@ -298,8 +331,27 @@ int migrateFile(const std::string &path) {
         }
         return writeLines(path, readLines(path)) ? 1 : 0;
     }
+    // Журнал с именем не *.jsonl узнаём по содержимому: в нём есть запечатанные строки.
+    const bool hasLines = blob.find(kLinePrefix) != std::string::npos;
     if (isSealed(blob)) {
-        return 0;
+        if (!hasLines || open(blob)) {
+            return 0; // обычный запечатанный файл
+        }
+        // Запечатанная целиком голова + дописанные строки — чиним в построчный вид.
+        const auto lines = linesOf(blob);
+        return (!lines.empty() && writeLines(path, lines)) ? 1 : 0;
+    }
+    if (hasLines) {
+        bool anyPlain = false;
+        std::istringstream in(blob);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.compare(0, kLinePrefix.size(), kLinePrefix) != 0) {
+                anyPlain = true;
+                break;
+            }
+        }
+        return (anyPlain && writeLines(path, readLines(path))) ? 1 : 0;
     }
     return rawWrite(path, seal(blob)) ? 1 : 0;
 }

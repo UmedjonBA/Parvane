@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "main/main_session.h"
 #include "main/main_app_config.h"
+#include "parvane/parvane_client.h" // Parvane: «сообщения от незнакомых» (T079)
 
 namespace Api {
 
@@ -50,22 +51,16 @@ void GlobalPrivacy::reload(Fn<void()> callback) {
 	if (callback) {
 		_callbacks.push_back(std::move(callback));
 	}
-	if (_requestId) {
-		return;
+	// Parvane: MTProto нет (account.getGlobalPrivacySettings не шлём).
+	// «Кто может писать мне» (нативный пункт Privacy → Messages) — настройка
+	// «сообщения от незнакомых» протокола v2 (T079), хранится на устройстве;
+	// остальные поля — локальные значения.
+	if (Parvane::StrangersPolicyAvailable()) {
+		_newRequirePremium = !Parvane::StrangersAllowed();
 	}
-	_requestId = _api.request(MTPaccount_GetGlobalPrivacySettings(
-	)).done([=](const MTPGlobalPrivacySettings &result) {
-		_requestId = 0;
-		apply(result);
-		for (const auto &callback : base::take(_callbacks)) {
-			callback();
-		}
-	}).fail([=] {
-		_requestId = 0;
-		for (const auto &callback : base::take(_callbacks)) {
-			callback();
-		}
-	}).send();
+	for (const auto &callback : base::take(_callbacks)) {
+		callback();
+	}
 
 	_session->appConfig().value(
 	) | rpl::on_next([=] {
@@ -225,6 +220,20 @@ void GlobalPrivacy::update(
 		bool newRequirePremium,
 		int newChargeStars,
 		DisallowedGiftTypes disallowedGiftTypes) {
+	// Parvane: серверной части MTProto нет. «Кто может писать мне» уходит в
+	// identity.privacy.set (T079); остальные поля — только локально.
+	if (Parvane::StrangersPolicyAvailable()
+		&& newRequirePremium != _newRequirePremium.current()) {
+		Parvane::SetStrangersAllowed(!newRequirePremium);
+	}
+	_archiveAndMute = archiveAndMute;
+	_unarchiveOnNewMessage = unarchiveOnNewMessage;
+	_hideReadTime = hideReadTime;
+	_newRequirePremium = newRequirePremium;
+	_newChargeStars = 0;
+	_disallowedGiftTypes = disallowedGiftTypes;
+	return;
+
 	using Flag = MTPDglobalPrivacySettings::Flag;
 	using DisallowedFlag = MTPDdisallowedGiftsSettings::Flag;
 

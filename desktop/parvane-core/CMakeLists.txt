@@ -44,6 +44,18 @@ add_custom_target(parvane_e2e_build ALL
     BYPRODUCTS ${PARVANE_E2E_LIB}
     COMMENT "cargo build parvane-e2e (vodozemac staticlib)")
 
+# ── parvane-protocol-ffi (Rust staticlib, движок протокола v2, spec 007) ──────
+# C ABI движка: кадры, конверты, журналы устройств, состояние клиента. Кадры
+# и тела v2 разбирает и собирает ТОЛЬКО он (своего protobuf в C++ нет).
+# parvane-e2e остаётся: v1-стек живёт до E6 (двойной стек, как в вебе).
+# Заголовок parvane_protocol.h генерирует cbindgen при cargo build.
+set(PARVANE_PROTOCOL_LIB ${PARVANE_BACKEND_DIR}/target/debug/libparvane_protocol_ffi.a)
+add_custom_target(parvane_protocol_build ALL
+    COMMAND ${CARGO_EXE} build -p parvane-protocol-ffi
+    WORKING_DIRECTORY ${PARVANE_BACKEND_DIR}
+    BYPRODUCTS ${PARVANE_PROTOCOL_LIB}
+    COMMENT "cargo build parvane-protocol-ffi (движок v2, staticlib)")
+
 # ── parvane_core ─────────────────────────────────────────────────────────────
 add_library(parvane_core STATIC
     src/transport.cpp
@@ -63,24 +75,32 @@ add_library(parvane_core STATIC
     src/call_session.cpp
     src/call_manager.cpp
     src/group_client.cpp
-    src/group_call_manager.cpp)
-add_dependencies(parvane_core parvane_e2e_build)
+    src/group_call_manager.cpp
+    src/v2_engine.cpp
+    src/v2_content.cpp
+    src/v2_link.cpp
+    src/v2_session.cpp)
+add_dependencies(parvane_core parvane_e2e_build parvane_protocol_build)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
            ${PARVANE_BACKEND_DIR}/shared/parvane-e2e/include
+           ${PARVANE_BACKEND_DIR}/protocol/ffi/include
     PRIVATE ${cnats_SOURCE_DIR}/src)
 target_link_libraries(parvane_core
     PUBLIC nlohmann_json::nlohmann_json
     PRIVATE nats_static OpenSSL::SSL OpenSSL::Crypto
-            ${PARVANE_E2E_LIB} pthread dl m)
+            ${PARVANE_E2E_LIB} ${PARVANE_PROTOCOL_LIB} pthread dl m)
 
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
 # P-45/P-46: dev-хуки (PARVANE_WSS_INSECURE, ws:// к gateway, PARVANE_AUTO* в
 # tdesktop) компилируются ТОЛЬКО с -DPARVANE_DEV=ON. В релизе их нет вовсе —
 # переменная окружения в прод-запуске не отключит проверку TLS.
 option(PARVANE_DEV "Compile dev/e2e hooks (insecure TLS, ws://, PARVANE_AUTO*)" OFF)
+# PRIVATE: заголовки ядра PARVANE_DEV не используют; потребителям (tdesktop)
+# определение ставится точечно на файлы с хуками — иначе смена флага
+# пересобирает все ~3600 объектов Telegram.
 if (PARVANE_DEV)
-    target_compile_definitions(parvane_core PUBLIC PARVANE_DEV=1)
+    target_compile_definitions(parvane_core PRIVATE PARVANE_DEV=1)
 endif()
 
 option(PARVANE_CORE_BUILD_PROBE "Build standalone NATS probe + tests" ON)
@@ -141,6 +161,23 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_executable(parvane_poll_tests tests/poll_tests.cpp)
     target_link_libraries(parvane_poll_tests PRIVATE parvane_core)
 
+    # Протокол v2 (spec 007): C ABI движка и отображение содержимого — без
+    # стека; v2-сессия против живого стека — parvane_v2_session_tests.
+    add_executable(parvane_v2_tests tests/v2_tests.cpp)
+    target_link_libraries(parvane_v2_tests PRIVATE parvane_core)
+    add_executable(parvane_v2_session_tests tests/v2_session_tests.cpp)
+    target_link_libraries(parvane_v2_session_tests PRIVATE parvane_core)
+    # Общие векторы conformance v2 (SEAL-1, GSEAL-1, приглашения) через C ABI
+    add_executable(parvane_protocol_vectors_tests tests/protocol_vectors_tests.cpp)
+    target_link_libraries(parvane_protocol_vectors_tests PRIVATE parvane_core)
+    target_include_directories(parvane_protocol_vectors_tests PRIVATE ${PARVANE_BACKEND_DIR}/protocol/ffi/include)
+    target_compile_definitions(parvane_protocol_vectors_tests PRIVATE
+        PARVANE_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors")
+
+    # Кадры перехода на v2 (E6, T110) на v1-транспорте — локальный TCP-сервер, без стека.
+    add_executable(parvane_gateway_upgrade_tests tests/gateway_upgrade_tests.cpp)
+    target_link_libraries(parvane_gateway_upgrade_tests PRIVATE parvane_core)
+
     # Живой e2e gateway (нужен запущенный стек nats+identity+messenger+gateway).
     add_executable(parvane_gateway_probe probe/gateway_probe.cpp)
     target_link_libraries(parvane_gateway_probe PRIVATE parvane_core)
@@ -163,4 +200,8 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME map_tiles COMMAND parvane_map_tiles_tests)
     add_test(NAME pack COMMAND parvane_pack_tests)
     add_test(NAME poll COMMAND parvane_poll_tests)
+    add_test(NAME v2 COMMAND parvane_v2_tests)
+    add_test(NAME v2_session COMMAND parvane_v2_session_tests)
+    add_test(NAME protocol_vectors COMMAND parvane_protocol_vectors_tests)
+    add_test(NAME gateway_upgrade COMMAND parvane_gateway_upgrade_tests)
 endif()

@@ -22,19 +22,21 @@ wait_log "$A/td/log.txt" "ключ безопасности с bob@local в пр
 A_SEES=$(grep -oE "ключ безопасности с bob@local в профиле: $FP_RE" "$A/td/log.txt" | head -1 | sed 's/.*: //')
 [ -n "$BOB_FP" ] && [ "$A_SEES" = "$BOB_FP" ] && ok "отпечаток bob у alice = свой отпечаток bob ($BOB_FP)" || bad "отпечатки расходятся: alice видит «$A_SEES», bob свой «$BOB_FP»"
 # bob «переустановился»: новый identity-ключ (персист E2E стёрт) → у alice
-# смена ключа известного контакта → служебное сообщение
+# смена ключа известного контакта → служебное сообщение. Сессию стираем тоже:
+# JWT привязан к device_id (claim dev), и identity не примет prekeys нового
+# устройства по токену старого — настоящая переустановка начинается со входа.
 stop_pid "$BP"
-rm -rf "$B"/td/tdata/parvane-e2e-*
+rm -rf "$B"/td/tdata/parvane-e2e-* "$B"/td/tdata/parvane-session.txt
 BP=$(start_client "$B" bob@local PARVANE_AUTOSEND="alice@local:newkey-$STAMP")
 wait_log "$A/td/log.txt" "входящее msg .*bob@local.*newkey-$STAMP" 60 && ok "alice получила сообщение с нового ключа bob" || bad "alice не получила сообщение с нового ключа"
 wait_log "$A/td/log.txt" "ключ безопасности bob@local изменился — служебное сообщение" 20 && ok "alice: служебное сообщение о смене ключа" || bad "alice: нет сообщения о смене ключа"
 NEW_FP=$(grep -oE "свой ключ безопасности \(отпечаток\): $FP_RE" "$B/td/log.txt" | head -1 | sed 's/.*: //')
 [ -n "$NEW_FP" ] && [ "$NEW_FP" != "$BOB_FP" ] && ok "у bob действительно новый отпечаток" || bad "отпечаток bob не изменился"
-wait_log "$A/td/log.txt" "ключ безопасности с bob@local в профиле: $NEW_FP" 20 && ok "alice: в профиле уже новый отпечаток bob" || bad "alice: профиль не обновился на новый отпечаток"
+wait_log "$A/td/log.txt" "ключ безопасности с bob@local в профиле: .*$NEW_FP" 20 && ok "alice: в профиле уже новый отпечаток bob" || bad "alice: профиль не обновился на новый отпечаток"
 stop_pid "$AP"; stop_pid "$BP"
-# лимит частоты: gateway почти без бюджета на сообщения; autosend в headless
-# шлёт повторно при каждом пере-логине → быстро упирается в rate_limited
-PV_GATEWAY_ENV="GATEWAY_RATE_MSG_BURST=1 GATEWAY_RATE_MSG_PER_SEC=0.01" gateway_restart
+# лимит частоты: gateway без бюджета на сообщения (всплеск 0) — первая же
+# отправка autosend упирается в rate_limited
+PV_GATEWAY_ENV="GATEWAY_RATE_MSG_BURST=0 GATEWAY_RATE_MSG_PER_SEC=0.01" gateway_restart
 AP=$(start_client "$A" alice@local PARVANE_AUTOSEND="bob@local:flood-$STAMP")
 wait_log "$A/td/log.txt" "gateway rate_limited" 60 && ok "alice: rate_limited от gateway замечен (тост)" || bad "alice: rate_limited не замечен"
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" && bad "фатальные ошибки" || ok "без фатальных ошибок"
