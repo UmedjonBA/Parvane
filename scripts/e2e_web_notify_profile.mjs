@@ -223,25 +223,49 @@ try {
   const profileSavedAt = Date.now();
   await closeSettings(aliceDev1.page);
 
-  // ── bob видит все поля (и после reload) ───────────────────────────────────
+  // ── bob видит публичные поля (и после reload); телефон — НЕ видит ─────────
+  // P-19: телефон каталог отдаёт только владельцу. Дата рождения, цвет имени
+  // и личный канал — публичная часть профиля
+  const phoneDigits = phone.replace(/\D/g, '');
   const expectProfile = async (label) => {
     await bobSession.page.waitForFunction(({
-      nick, digits, title, color,
+      nick, title, color,
     }) => {
       const global = window.__parvaneGetGlobal?.();
       const user = Object.values(global?.users.byId || {})
         .find((candidate) => (candidate.usernames || []).some((entry) => entry.username === nick));
       const full = user ? global.users.fullInfoById?.[user.id] : undefined;
       const text = document.querySelector('#RightColumn')?.textContent || '';
-      return user?.color?.color === color && (user.phoneNumber || '').replace(/\D/g, '').includes(digits)
+      return user?.color?.color === color
         && full?.birthday?.day === 15 && full?.birthday?.month === 3 && full?.birthday?.year === 1990
         && text.includes(title);
     }, {
-      nick: aliceNick, digits: phone.replace(/\D/g, ''), title: channelTitle, color: chosenColor,
+      nick: aliceNick, title: channelTitle, color: chosenColor,
     }, { timeout: LOGIN_TIMEOUT_MS })
       .catch(async (error) => {
         throw new Error(`${label}: ${error.message}; profile=${JSON.stringify(await readAliceProfile(bobSession.page, aliceNick))}`);
       });
+    // Остальные поля уже доехали — значит, и телефон доехал бы, будь он отдан
+    const seen = await readAliceProfile(bobSession.page, aliceNick);
+    assert.equal(seen.phone || '', '', `${label}: bob получил телефон alice (P-19: только владельцу)`);
+    assert(!seen.text.replace(/\D/g, '').includes(phoneDigits), `${label}: телефон alice показан в профиле у bob`);
+  };
+  // Телефон в форме своего профиля: значение приходит с сервера после reload.
+  // Bio служит маркером «профиль перечитан» — иначе пустое поле телефона
+  // неотличимо от ещё не загруженного
+  const expectOwnPhone = async (page, expected, label) => {
+    await relogin(page, PASSWORD);
+    await openEditProfile(page);
+    const bioInput = page.getByLabel('Bio');
+    const phoneInput = page.getByLabel('Phone', { exact: true });
+    const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+    for (;;) {
+      const seen = { bio: await bioInput.inputValue(), phone: await phoneInput.inputValue() };
+      if (seen.bio === bio && seen.phone === expected) break;
+      assert(Date.now() < deadline, `${label}: form=${JSON.stringify(seen)}, expected phone "${expected}"`);
+      await page.waitForTimeout(300);
+    }
+    await closeSettings(page);
   };
   await bobSession.page.keyboard.press('Escape');
   await openPrivateChatStrict(bobSession.page, alice);
@@ -259,7 +283,9 @@ try {
   await openPrivateChatStrict(bobSession.page, alice);
   await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').first().click();
   await expectProfile('bob after reload');
-  console.log('OK: bob видит дату рождения, цвет имени, телефон и личный канал alice');
+  console.log('OK: bob видит дату рождения, цвет имени и личный канал alice, телефон от него скрыт');
+  await expectOwnPhone(aliceDev1.page, phone, 'alice own phone');
+  console.log('OK: владелец видит свой телефон после reload');
 
   // ── Сброс даты рождения и цвета ───────────────────────────────────────────
   await openEditProfile(aliceDev1.page);
@@ -285,7 +311,8 @@ try {
     const user = Object.values(global?.users.byId || {})
       .find((candidate) => (candidate.usernames || []).some((entry) => entry.username === nick));
     const full = user ? global.users.fullInfoById?.[user.id] : undefined;
-    // Сброшены все четыре поля: дата, цвет, телефон и личный канал (FR-071)
+    // Сброшены публичные поля: дата, цвет и личный канал (FR-071). Телефон bob
+    // не видит вовсе (P-19) — его сброс проверяется у владельца ниже
     return user && full && !full.birthday
       && user.color?.color === Number(user.id) % 7
       && !user.phoneNumber
@@ -294,7 +321,9 @@ try {
     const profile = await readAliceProfile(bobSession.page, aliceNick);
     throw new Error(`reset not visible to bob: ${error.message}; profile=${JSON.stringify({ ...profile, text: undefined })}`);
   });
-  console.log('OK: сброс даты рождения, цвета, телефона и личного канала виден bob после reload');
+  console.log('OK: сброс даты рождения, цвета и личного канала виден bob после reload');
+  await expectOwnPhone(aliceDev1.page, '', 'alice own phone after reset');
+  console.log('OK: телефон сброшен и у владельца');
 
   // ── dev1 мутит bob навсегда ───────────────────────────────────────────────
   assert.equal(await mutedChatCount(aliceDev1.page), 0, 'до мута замученных нет');

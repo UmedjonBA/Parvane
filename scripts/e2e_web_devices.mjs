@@ -1,6 +1,6 @@
 // Settings → Devices: один аккаунт (bob) на двух устройствах. Проверяем:
 // (1) список устройств показывает оба (текущее + второе «Web …»);
-// (2) отзыв второго устройства убирает его из списка;
+// (2) отзыв второго устройства (с текущим паролем, P-07) убирает его из списка;
 // (3) новые 1-на-1 сообщения после отзыва НЕ читаются на отозванном
 //     устройстве (fan-out его больше не включает);
 // (4) новые групповые сообщения после отзыва НЕ читаются на отозванном
@@ -15,10 +15,12 @@ import {
   relogin,
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  expectToast,
   findMessage,
   openPrivateChatStrict,
   preparePage,
   sendText,
+  terminateSessionWithPassword,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-devices-e2e-password';
@@ -76,6 +78,9 @@ async function openGroupChat(page, title) {
   const item = page.locator('#LeftColumn .ListItem').filter({ hasText: title }).first();
   await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await item.locator('.ListItem-button').click();
+  // Композер предыдущего чата уже в DOM: без ожидания шапки ввод уходил в него
+  await page.locator('.MiddleHeader').getByText(title).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
@@ -136,11 +141,12 @@ try {
   const otherSession = sessionsScreen.locator('.ListItem').filter({ hasText: 'Web ' }).first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-  // Клик по устройству → модалка → Terminate Session
-  await otherSession.locator('.ListItem-button').click();
-  const terminateButton = bobDevice1.page.getByRole('button', { name: 'Terminate Session' });
-  await terminateButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await terminateButton.click();
+  // Клик по устройству → модалка → пароль → Terminate Session. Отзыв требует
+  // текущий пароль (P-07): с неверным устройство остаётся в списке
+  await terminateSessionWithPassword(bobDevice1.page, otherSession, `${PASSWORD}-wrong`);
+  await expectToast(bobDevice1.page, 'Could not terminate the session');
+  await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await terminateSessionWithPassword(bobDevice1.page, otherSession, PASSWORD);
   // Второе устройство исчезло из списка (секция Active sessions скрывается)
   await sessionsScreen.getByText('Active sessions')
     .waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });

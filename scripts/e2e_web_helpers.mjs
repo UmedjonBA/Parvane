@@ -154,17 +154,14 @@ export async function preparePage(context, user, password, { seedLocalStorage, s
   // адрес в той же вкладке, проверяя переживание sessionStorage)
   if (beforeLogin) await beforeLogin(page);
 
-  await submitNick(page, user);
-
-  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const passwordScreen = await submitNickUntilPassword(page, user);
   await passwordScreen.locator('#sign-in-password').fill(password);
   await clickUntil(
     passwordScreen.getByRole('button', { name: 'Next' }),
     () => page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
     { settleMs: 15000 },
   );
-  await page.waitForFunction(() => globalThis.__parvaneE2eSockets?.opened === 1);
+  await page.waitForFunction(() => globalThis.__parvaneE2eSockets?.opened >= 1);
   return { page, errors };
 }
 
@@ -205,6 +202,27 @@ export async function submitNick(page, user) {
     if (await hidden()) return;
   }
   await addressScreen.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Ник → экран пароля. Под нагрузкой экран ника перемонтируется уже ПОСЛЕ
+// отправки (провайдер повторно шлёт WaitPhoneNumber) и возвращается пустым —
+// тогда ник вводится заново, пока не откроется экран пароля
+export async function submitNickUntilPassword(page, user) {
+  const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
+  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  for (;;) {
+    await submitNick(page, user);
+    const isPassword = await Promise.race([
+      passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).then(() => true),
+      addressScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).then(() => false),
+    ]).catch(() => undefined);
+    if (isPassword) return passwordScreen;
+    if (isPassword === undefined || Date.now() > deadline) {
+      await passwordScreen.waitFor({ state: 'visible', timeout: 1000 });
+      return passwordScreen;
+    }
+  }
 }
 
 export async function openPrivateChat(page, address) {
@@ -388,10 +406,27 @@ export function assertNoPageErrors(sessions) {
   }
 }
 
-// Reload + вход. keep-signed-in (92e73322): пароль сохранён и вход после
-// reload автоматический; форма пароля появляется только без сохранённой сессии
+// Reload, переживающий чужую навигацию. tt закрывает оверлеи (звонок, меню,
+// модалки) через history.back(); если такой переход ещё в полёте, Chromium
+// обрывает reload с net::ERR_ABORTED («maybe frame was detached») — ждём, пока
+// страница успокоится, и повторяем. Любая другая ошибка пробрасывается
+export async function reloadPage(page) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      return;
+    } catch (err) {
+      if (attempt >= 2 || !/ERR_ABORTED|frame was detached/.test(String(err?.message))) throw err;
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+    }
+  }
+}
+
+// Reload + вход. keep-signed-in: сессия возобновляется сохранённым JWT (P-39,
+// пароль на диск не пишется), вход после reload автоматический; форма пароля
+// появляется только без сохранённой сессии
 export async function relogin(page, password) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reloadPage(page);
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   const leftColumn = page.locator('#LeftColumn');
   await Promise.race([
@@ -424,8 +459,9 @@ export async function readDiagJournal(page) {
 }
 
 // Журнал действий клиента (web util/parvaneDiag, localStorage parvane:diag:v2)
-// — при падении сценария печатаем хвост: видно апдейты/ошибки провайдера
-export async function dumpDiagJournal(page, label, limit = 40) {
+// — при падении сценария печатаем хвост: видно апдейты/ошибки провайдера.
+// PARVANE_E2E_DIAG_LINES — длина хвоста (журнал кольцевой, до 800 записей)
+export async function dumpDiagJournal(page, label, limit = Number(process.env.PARVANE_E2E_DIAG_LINES) || 40) {
   const lines = await page.evaluate(({ max, key }) => {
     try {
       const raw = localStorage.getItem(key);
@@ -671,25 +707,40 @@ export async function openGroupChatByTitle(page, title) {
 // админов одного владельца — одна и та же основная ссылка группы
 export async function readInvitesScreen(page, title, { keepOpen = false } = {}) {
   await openGroupChatByTitle(page, title);
-  await page.locator('.MiddleHeader .ChatInfo').click();
   const right = page.locator('#RightColumn');
   const invitesItem = right.locator('.ListItem').filter({ hasText: 'Invite Links' }).first();
   const editButton = right.getByRole('button', { name: 'Edit' });
-  // После полного выхода и входа tt восстанавливает правую колонку сразу на
-  // экране управления (там кнопки Edit нет) — в профиль заходим, только если
-  // открылся он
-  await Promise.race([
-    invitesItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-    editButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-  ]);
-  if (!(await invitesItem.isVisible())) await editButton.click();
-  await invitesItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Вечное «Loading» (нет fetchExportedChatInvites) держало пункт disabled
-  await right.locator('.ListItem').filter({ hasText: 'Invite Links' }).filter({ hasText: /\d/ }).first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await invitesItem.click();
   const screen = right.locator('.ManageInvites');
-  await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Повторный заход: колонка могла ещё закрываться (клик по шапке попадал в
+  // уходящую колонку) или tt восстанавливал её сразу на экране управления либо
+  // на самом экране ссылок — тогда пункта «Invite Links» в ней нет вовсе.
+  // Шапку кликаем, только если колонка не показывает ни одного из трёх состояний
+  const isShown = async (locator) => locator.isVisible().catch(() => false);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (!(await isShown(screen)) && !(await isShown(invitesItem)) && !(await isShown(editButton))) {
+        await page.locator('.MiddleHeader .ChatInfo').click();
+      }
+      await Promise.race([
+        screen.waitFor({ state: 'visible', timeout: 20000 }),
+        invitesItem.waitFor({ state: 'visible', timeout: 20000 }),
+        editButton.waitFor({ state: 'visible', timeout: 20000 }),
+      ]);
+      if (!(await isShown(screen))) {
+        if (!(await isShown(invitesItem))) await editButton.click();
+        await invitesItem.waitFor({ state: 'visible', timeout: 20000 });
+        // Вечное «Loading» (нет fetchExportedChatInvites) держало пункт disabled
+        await right.locator('.ListItem').filter({ hasText: 'Invite Links' }).filter({ hasText: /\d/ }).first()
+          .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+        await invitesItem.click({ timeout: 8000 });
+        await screen.waitFor({ state: 'visible', timeout: 8000 });
+      }
+      break;
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      await page.waitForTimeout(1000);
+    }
+  }
   // Основная ссылка — значение readonly-поля LinkField (getByText его не видит)
   const linkInput = screen.locator('input[readonly]');
   await linkInput.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -810,6 +861,19 @@ export async function callProviderForChat(page, method, chatTitle, userName, ext
   }, { method, title: chatTitle, name: userName, args: extra });
 }
 
+// Settings → Devices: строка устройства → модалка сеанса → пароль →
+// «Terminate Session». Отзыв устройства сервер выполняет только с текущим
+// паролем (P-07), поэтому без него кнопка выключена
+export async function terminateSessionWithPassword(page, sessionRow, password) {
+  await sessionRow.locator('.ListItem-button').click();
+  const terminateButton = page.getByRole('button', { name: 'Terminate Session' });
+  await terminateButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await terminateButton.isDisabled(), true, 'Terminate Session is enabled without the password');
+  await page.locator('.Modal input[type="password"]:visible').first().fill(password);
+  await terminateButton.click();
+  await terminateButton.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+}
+
 // Тост (`.Notification-container`) с текстом
 export async function expectToast(page, text, timeout = LOGIN_TIMEOUT_MS) {
   await page.locator('.Notification-container').getByText(text).first().waitFor({ state: 'visible', timeout });
@@ -845,4 +909,19 @@ export function buildPngBuffer(size = 64, rgb = [0x2a, 0xab, 0xee]) {
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
   ]);
+}
+
+// Протокол v2 (spec 007, D-12): при первом создании корня web показывает
+// ключ восстановления нативным диалогом — сценарии его запоминают и закрывают
+export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
+  const dialog = page.locator('.Modal .modal-dialog').filter({ hasText: /recovery key|ключ восстановления/i });
+  try {
+    await dialog.waitFor({ state: 'visible', timeout });
+  } catch {
+    return undefined;
+  }
+  const text = await dialog.innerText();
+  await dialog.getByRole('button', { name: 'OK' }).click();
+  await dialog.waitFor({ state: 'detached', timeout: 10000 }).catch(() => undefined);
+  return text;
 }

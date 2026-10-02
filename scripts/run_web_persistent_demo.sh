@@ -6,6 +6,8 @@
 set -Eeuo pipefail
 # Хуки window.__parvane* для пробников — только в e2e/demo-сборках
 export VITE_PARVANE_DIAG_HOOKS=1
+# CSP (P-32): демо ходит в локальный gateway — разрешаем только loopback
+export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://localhost:*}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_ROOT="$ROOT/web/telegram-tt"

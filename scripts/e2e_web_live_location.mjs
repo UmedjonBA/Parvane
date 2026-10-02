@@ -14,7 +14,7 @@ import {
   LOGIN_TIMEOUT_MS,
 } from './e2e_web_helpers.mjs';
 
-const PASSWORD = 'pw1';
+const PASSWORD = 'Parvane-live-location-e2e-password';
 const LIVE_UPDATE_TIMEOUT_MS = 60000;
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext({

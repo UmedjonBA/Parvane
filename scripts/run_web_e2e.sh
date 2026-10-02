@@ -3,6 +3,9 @@
 set -Eeuo pipefail
 # Хуки window.__parvane* для пробников — только в e2e/demo-сборках
 export VITE_PARVANE_DIAG_HOOKS=1
+# CSP (P-32): диагностическая сборка e2e ходит в локальный gateway на
+# динамическом порту — разрешаем только loopback
+export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://localhost:*}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_ROOT="$ROOT/web/telegram-tt"
@@ -57,7 +60,8 @@ log() {
 }
 
 preserve_failure_logs() {
-  local destination="$WEB_ROOT/test-results/backend"
+  # Параллельные прогоны затирали общий каталог — его можно переопределить
+  local destination="${PARVANE_E2E_FAILURE_LOG_DIR:-$WEB_ROOT/test-results/backend}"
   mkdir -p "$destination"
   cp -R "$TEMP_ROOT"/. "$destination"/
   printf 'Backend logs: %s\n' "$destination"
@@ -99,7 +103,7 @@ wait_for_log() {
   local pid="$3"
   local log_file="$TEMP_ROOT/$name.log"
 
-  for _attempt in {1..300}; do
+  for _attempt in {1..900}; do
     if rg -q "$pattern" "$log_file" 2>/dev/null; then
       return
     fi
@@ -208,6 +212,7 @@ env \
   PARVANE_GATEWAY_BIND="127.0.0.1:$GATEWAY_WS_PORT" \
   PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$GATEWAY_TCP_PORT" \
   PARVANE_LOG_LEVEL=info \
+  ${PARVANE_E2E_GATEWAY_ENV:-} \
   "$ROOT/backend/target/debug/gateway" >"$TEMP_ROOT/gateway.log" 2>&1 &
 PIDS+=("$!")
 wait_for_log gateway 'Gateway WebSocket' "${PIDS[-1]}"
