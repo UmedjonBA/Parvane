@@ -1,0 +1,105 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "parvane.example",
+          "kind": "v2",
+          "link_id_hex": "34750f98bd59fcfc946da45aaabe933be154a4b5094e1c4abf42866505f3c97e"
+        }
+      },
+      "input": {
+        "domain": "parvane.example",
+        "seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+        "url": "https://parvane.example/join/NHUPmL1Z_PyUbaRaqr6TO-FUpLUJThxKv0KGZQXzyX4#AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+      },
+      "name": "v2-parvane.example"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "local",
+          "kind": "v2",
+          "link_id_hex": "6a3803d5f059902a1c6dafbc9ba4729212f7caac08634cc3ae76b27529f03827"
+        }
+      },
+      "input": {
+        "domain": "local",
+        "seed_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+        "url": "https://local/join/ajgD1fBZkCocba-8m6RykhL3yqwIY0zDrnaydSnwOCc#AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      },
+      "name": "v2-local"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "chat.example.org",
+          "kind": "v2",
+          "link_id_hex": "b62e867fa2f33afe62d5d6b1642e1621d543307846b2a57b897e710919b76709"
+        }
+      },
+      "input": {
+        "domain": "chat.example.org",
+        "seed_hex": "0303030303030303030303030303030303030303030303030303030303030303",
+        "url": "https://chat.example.org/join/ti6Gf6LzOv5i1daxZC4WIdVDMHhGsqV7iX5xCRm3Zwk#AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM"
+      },
+      "name": "v2-chat.example.org"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "kind": "legacy_v1",
+          "token": "AbC-12_x"
+        }
+      },
+      "input": {
+        "url": "https://parvane.example/#+AbC-12_x"
+      },
+      "name": "legacy-web-hash"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "kind": "legacy_v1",
+          "token": "tok123"
+        }
+      },
+      "input": {
+        "url": "https://parvane.invite/tok123"
+      },
+      "name": "legacy-desktop"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "url": "https://parvane.example/join/AAAA"
+      },
+      "name": "no-secret"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "url": "http://parvane.example/join/AAAA#BBBB"
+      },
+      "name": "http"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "url": "https://x/#+bad token"
+      },
+      "name": "bad-legacy"
+    }
+  ]
+}

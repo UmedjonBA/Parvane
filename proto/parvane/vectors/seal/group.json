@@ -1,0 +1,38 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "megolm_message_hex": "6d65676f6c6d2d6279746573",
+          "megolm_session_id_hex": "73657373"
+        }
+      },
+      "input": {
+        "envelope_hex": "0a150a017812100707070707070707070707070707070710031a24adb30d2d1ff19229c7f99288cb7c3aaec4e9afad412686c940a1a975ade28ccbe8f95dd9221008d215ae9c22d511521f973a98bdc7ef2a40ca572f84daacea2705a87b05162b6b0f6932e525394acb227619b4c1c1ef5400c646f158903e5ed629aa3295d1ef0e25a06a2de653e4c8d18f3085fb0caf8304"
+      },
+      "name": "verify-and-open"
+    },
+    {
+      "expect": {
+        "error": "BadSignature"
+      },
+      "input": {
+        "envelope_hex": "0a150a017812100707070707070707070707070707070710031a24acb30d2d1ff19229c7f99288cb7c3aaec4e9afad412686c940a1a975ade28ccbe8f95dd9221008d215ae9c22d511521f973a98bdc7ef2a40ca572f84daacea2705a87b05162b6b0f6932e525394acb227619b4c1c1ef5400c646f158903e5ed629aa3295d1ef0e25a06a2de653e4c8d18f3085fb0caf8304"
+      },
+      "name": "tampered-ciphertext"
+    },
+    {
+      "expect": {
+        "error": "Expired"
+      },
+      "input": {
+        "envelope_hex": "0a150a017812100707070707070707070707070707070710041a24adb30d2d1ff19229c7f99288cb7c3aaec4e9afad412686c940a1a975ade28ccbe8f95dd9221008d215ae9c22d511521f973a98bdc7ef2a40ca572f84daacea2705a87b05162b6b0f6932e525394acb227619b4c1c1ef5400c646f158903e5ed629aa3295d1ef0e25a06a2de653e4c8d18f3085fb0caf8304"
+      },
+      "name": "stale-epoch"
+    }
+  ],
+  "envelope_key_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "send_public_key_hex": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+  "state_epoch": 3
+}

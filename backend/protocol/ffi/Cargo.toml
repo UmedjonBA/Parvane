@@ -1,0 +1,15 @@
+[package]
+name = "parvane-protocol-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI движка parvane-protocol для desktop (parvane-core) и android (jni)"
+
+# staticlib — линкуется в C++; rlib — чтобы шли тесты.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+parvane-protocol = { path = ".." }
+
+[build-dependencies]
+cbindgen = { version = "0.29", default-features = false }

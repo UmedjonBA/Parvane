@@ -1,0 +1,124 @@
+// Звонки. Сигналинг (SDP/ICE) — содержимое sealed-конверта: SignedOp с
+// header.target = звонок (Ref с call_id) и header.audience = устройство
+// адресата (класс 6: SDP, переадресованный другому, не проходит проверку).
+// ICE — единый формат CALL-1: candidate, sdp_mid, sdp_mline_index.
+// D-08: серверной истории звонков в v2 нет — она в личном состоянии (CallRecord).
+syntax = "proto3";
+
+package parvane.call.v2;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service CallService {
+  rpc SignalSealed(SignalSealedRequest) returns (SignalSealedResponse) {
+    option (parvane.core.v2.method) = {
+      name: "call.signal_sealed"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "call"
+    };
+  }
+  // Первый сигнал звонка (Offer) — тот же sealed-конверт, отдельный метод
+  // только ради лимитов P-35 (cooldown 5 с на соединение, ≤ 3 одновременных
+  // вызова на адресата). Тело — только конверты (класс 17); тип остальных
+  // сигналов сервер не видит, отправителя — тоже.
+  rpc RingSealed(RingSealedRequest) returns (RingSealedResponse) {
+    option (parvane.core.v2.method) = {
+      name: "call.ring_sealed"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "call"
+    };
+  }
+  rpc IceConfig(IceConfigRequest) returns (IceConfigResponse) {
+    option (parvane.core.v2.method) = {
+      name: "call.ice_config"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "call"
+    };
+  }
+}
+
+message CallSignal {
+  bytes call_id = 1 [(parvane.core.v2.max_len) = 16];
+  oneof signal {
+    Offer offer = 2;
+    Answer answer = 3;
+    IceCandidate ice = 4;
+    Hangup hangup = 5;
+    Ringing ringing = 6;
+  }
+}
+
+message Offer {
+  string sdp = 1 [(parvane.core.v2.max_len) = 65536];
+  bool video = 2;
+  // Групповой mesh-звонок: группа.
+  parvane.core.v2.Ref group = 3;
+}
+
+message Answer {
+  string sdp = 1 [(parvane.core.v2.max_len) = 65536];
+}
+
+message IceCandidate {
+  string candidate = 1 [(parvane.core.v2.max_len) = 4096];
+  string sdp_mid = 2 [(parvane.core.v2.max_len) = 64];
+  uint32 sdp_mline_index = 3;
+}
+
+enum HangupReason {
+  HANGUP_REASON_UNSPECIFIED = 0;
+  HANGUP_REASON_NORMAL = 1;
+  HANGUP_REASON_DECLINED = 2;
+  HANGUP_REASON_BUSY = 3;
+  HANGUP_REASON_MISSED = 4;
+  HANGUP_REASON_FAILED = 5;
+}
+
+message Hangup {
+  HangupReason reason = 1;
+  uint32 duration_s = 2;
+}
+
+message Ringing {}
+
+message SignalSealedRequest {
+  // Копии всем устройствам адресата (≤ 64).
+  repeated parvane.core.v2.SealedEnvelope envelopes = 1 [(parvane.core.v2.max_items) = 64];
+}
+// Сигналы эфемерны: публикуются живым событием в журналы устройств адресата
+// (`InboxRecord.seq = 0`, без записи в БД) — офлайн-устройство звонок не
+// получает; «пропущенный» фиксирует звонивший обычным sealed-сообщением.
+message SignalSealedResponse {
+  // Число устройств, которым сигнал опубликован.
+  uint32 delivered = 1;
+}
+
+message RingSealedRequest {
+  // Копии всем устройствам адресата (≤ 64); внутри — Offer.
+  repeated parvane.core.v2.SealedEnvelope envelopes = 1 [(parvane.core.v2.max_items) = 64];
+}
+message RingSealedResponse {
+  uint32 delivered = 1;
+}
+
+message IceConfigRequest {}
+message IceServer {
+  repeated string urls = 1 [
+    (parvane.core.v2.max_items) = 8,
+    (parvane.core.v2.max_len) = 512
+  ];
+  string username = 2 [(parvane.core.v2.max_len) = 256];
+  string credential = 3 [(parvane.core.v2.max_len) = 256];
+}
+message IceConfigResponse {
+  repeated IceServer servers = 1 [(parvane.core.v2.max_items) = 8];
+  int64 expires_ms = 2;
+}

@@ -341,3 +341,12 @@ fn plaintext_messages_are_rejected_fail_closed() {
         assert!(error.to_string().contains("plaintext"));
     }
 }
+
+#[test]
+fn v1_mode_parses_e6_flag() {
+    use crate::session::{parse_v1_mode, V1Mode};
+    assert_eq!(parse_v1_mode(None), V1Mode::Normal);
+    assert_eq!(parse_v1_mode(Some("notice")), V1Mode::Notice);
+    assert_eq!(parse_v1_mode(Some(" disabled ")), V1Mode::Disabled);
+    assert_eq!(parse_v1_mode(Some("bogus")), V1Mode::Normal);
+}

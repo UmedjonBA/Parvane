@@ -1,0 +1,34 @@
+// Межсерверный кадр (S2S, задел федерации R12/FR-051). Транспорт S2S вне
+// объёма v2: схема и проверка есть, передачи между серверами нет — запрос к
+// чужому домену получает Error{FEDERATION_UNAVAILABLE}.
+//
+// Доверие ограничено доменом: кадр подписан ключом сервера-отправителя
+// (server_key из его SignedServerDescriptor, опубликованного по
+// https://<origin_domain>/.well-known/parvane), и сервер-получатель верит ему
+// только в том, что касается пользователей и объектов origin_domain.
+syntax = "proto3";
+
+package parvane.core.v2;
+
+import "parvane/core/v2/options.proto";
+
+message S2SFrame {
+  // Домен сервера-отправителя (он же домен его описателя).
+  string origin_domain = 1 [(max_len) = 128];
+  // Домен сервера-получателя: кадр не проходит как адресованный другому.
+  string dest_domain = 2 [(max_len) = 128];
+  // Время выпуска по часам отправителя (мс Unix) — свежесть кадра.
+  int64 issued_ms = 3;
+  // 16 случайных байт: вместе с origin_domain — ключ защиты от повтора.
+  bytes nonce = 4 [(max_len) = 16];
+  // Полное имя protobuf-типа полезной нагрузки (`[A-Za-z0-9_.]{1,128}`):
+  // одна подпись не проходит как кадр другого вида.
+  string payload_type = 5 [(max_len) = 128];
+  // Сериализованная полезная нагрузка (E2E-содержимое остаётся шифртекстом).
+  bytes payload = 6 [(max_len) = 4000000];
+  // Ed25519 ключом сервера-отправителя над
+  // "parvane/v2/s2s\0" ‖ u8(len(origin_domain)) ‖ origin_domain
+  // ‖ u8(len(dest_domain)) ‖ dest_domain ‖ issued_ms(i64 BE) ‖ nonce(16)
+  // ‖ u8(len(payload_type)) ‖ payload_type ‖ SHA-256(payload).
+  bytes signature = 7 [(max_len) = 64];
+}

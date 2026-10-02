@@ -32,6 +32,8 @@ mod devices;
 mod link;
 mod login;
 mod register;
+mod server_key;
+mod v2;
 pub(crate) use auth::*;
 pub(crate) use ratelimit::*;
 pub(crate) use users::*;
@@ -91,6 +93,30 @@ async fn main() -> Result<()> {
         .context("подключение к NATS")?;
 
     info!("NATS подключён: {}", nats_url);
+
+    // Протокол v2 (spec 007, E1): ключ сервера, описатель, методы реестра.
+    let server_key = server_key::load_or_create_server_key(&db_path)?;
+    server_key::write_well_known(&server_key);
+    let v2_pool = v2::open_store(&db_path).await?;
+    let token_dir = std::env::var("PARVANE_TOKEN_KEY_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(&db_path).parent().unwrap_or(std::path::Path::new(".")).join("token-keys"));
+    v2::run(
+        nc.clone(),
+        std::sync::Arc::new(v2::V2Ctx {
+            pool: pool.clone(),
+            v2: v2_pool,
+            server_key,
+            encoding: encoding.clone(),
+            decoding: decoding.clone(),
+            nc: nc.clone(),
+            token_dir,
+            issuers: tokio::sync::RwLock::new(Vec::new()),
+        }),
+    )
+    .await?;
 
     let mut issue_sub = nc.subscribe(IDENTITY_ISSUE).await?;
     let mut register_sub = nc.subscribe(IDENTITY_REGISTER).await?;

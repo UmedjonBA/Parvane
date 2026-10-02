@@ -1,0 +1,295 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "content": {
+          "text": {
+            "text": "click"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "text": {
+            "entities": [
+              {
+                "length": 5,
+                "offset": 0,
+                "type": "ENTITY_TYPE_TEXT_URL",
+                "url": "javascript:alert(1)"
+              }
+            ],
+            "text": "click"
+          }
+        }
+      },
+      "name": "text-javascript-url"
+    },
+    {
+      "expect": {
+        "content": {
+          "text": {
+            "text": "open"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "text": {
+            "entities": [
+              {
+                "length": 4,
+                "offset": 0,
+                "type": "ENTITY_TYPE_TEXT_URL",
+                "url": "tg://resolve?domain=x"
+              }
+            ],
+            "text": "open"
+          }
+        }
+      },
+      "name": "text-tg-url"
+    },
+    {
+      "expect": {
+        "content": {
+          "text": {
+            "entities": [
+              {
+                "length": 4,
+                "type": "ENTITY_TYPE_TEXT_URL",
+                "url": "https://example.org"
+              }
+            ],
+            "text": "site"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "text": {
+            "entities": [
+              {
+                "length": 4,
+                "offset": 0,
+                "type": "ENTITY_TYPE_TEXT_URL",
+                "url": "https://example.org"
+              }
+            ],
+            "text": "site"
+          }
+        }
+      },
+      "name": "text-https-url-kept"
+    },
+    {
+      "expect": {
+        "content": {
+          "text": {
+            "entities": [
+              {
+                "length": 5,
+                "offset": 2,
+                "type": "ENTITY_TYPE_BOLD"
+              }
+            ],
+            "text": "héllo😀"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "text": {
+            "entities": [
+              {
+                "length": 1000,
+                "offset": 2,
+                "type": "ENTITY_TYPE_BOLD"
+              },
+              {
+                "length": 1,
+                "offset": 50,
+                "type": "ENTITY_TYPE_ITALIC"
+              }
+            ],
+            "text": "héllo😀"
+          }
+        }
+      },
+      "name": "entity-overflow-clamped"
+    },
+    {
+      "expect": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_FILE",
+            "mime": "application/octet-stream",
+            "name": "index.html"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_FILE",
+            "mime": "text/html",
+            "name": "index.html"
+          }
+        }
+      },
+      "name": "media-html-mime"
+    },
+    {
+      "expect": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_PHOTO",
+            "mime": "application/octet-stream"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_PHOTO",
+            "mime": "image/svg+xml"
+          }
+        }
+      },
+      "name": "media-svg-mime"
+    },
+    {
+      "expect": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_PHOTO",
+            "mime": "image/jpeg"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_PHOTO",
+            "mime": "Image/JPEG; q=1"
+          }
+        }
+      },
+      "name": "media-mime-case"
+    },
+    {
+      "expect": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_FILE",
+            "mime": "application/octet-stream",
+            "name": "passwd"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "media": {
+            "kind": "MEDIA_KIND_FILE",
+            "mime": "application/pdf",
+            "name": "../../etc/passwd"
+          }
+        }
+      },
+      "name": "media-path-traversal"
+    },
+    {
+      "expect": {
+        "content": {
+          "text": {
+            "text": "x"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "text": {
+            "preview": {
+              "title": "t",
+              "url": "data:text/html,<script>"
+            },
+            "text": "x"
+          }
+        }
+      },
+      "name": "preview-data-url-dropped"
+    },
+    {
+      "expect": {
+        "content": {
+          "sticker": {
+            "media": {
+              "kind": "MEDIA_KIND_PHOTO",
+              "mime": "application/octet-stream"
+            },
+            "pack": "p"
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "sticker": {
+            "media": {
+              "kind": "MEDIA_KIND_PHOTO",
+              "mime": "application/javascript"
+            },
+            "pack": "p"
+          }
+        }
+      },
+      "name": "sticker-media-sanitized"
+    },
+    {
+      "expect": {
+        "content": {
+          "edit": {
+            "text": {
+              "entities": [
+                {
+                  "length": 2,
+                  "type": "ENTITY_TYPE_CODE"
+                }
+              ],
+              "text": "ab"
+            }
+          }
+        },
+        "ok": true
+      },
+      "input": {
+        "content": {
+          "edit": {
+            "text": {
+              "entities": [
+                {
+                  "length": 9,
+                  "offset": 0,
+                  "type": "ENTITY_TYPE_CODE"
+                }
+              ],
+              "text": "ab"
+            }
+          }
+        }
+      },
+      "name": "edit-entities-clamped"
+    }
+  ],
+  "description": "обезвреживание содержимого у получателя: MIME, URL-схемы, entities, имена файлов",
+  "suite": "content_guard"
+}

@@ -35,6 +35,9 @@ mod delivery;
 mod groups;
 mod group_mgmt;
 mod handlers;
+mod v2;
+mod v2_groups;
+mod v2_state;
 pub(crate) use auth::*;
 pub(crate) use store::*;
 pub(crate) use delivery::*;
@@ -76,6 +79,10 @@ async fn main() -> Result<()> {
         .context("подключение к NATS")?;
 
     info!("NATS подключён: {}", nats_url);
+
+    // Протокол v2 (spec 007, E1): журналы seq, sealed/group-доставка, мост v1.
+    let v2_pool = v2::open_store(&db_path).await?;
+    v2::run(nc.clone(), pool.clone(), v2_pool).await?;
 
     let mut send_sub = nc.subscribe(MSG_SEND).await?;
     let mut ack_sub = nc.subscribe(MSG_ACK).await?;

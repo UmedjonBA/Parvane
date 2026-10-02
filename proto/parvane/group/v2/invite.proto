@@ -1,0 +1,23 @@
+// Ссылка-приглашение в группу v2 (T084): ОДИН формат во всех клиентах
+//
+//   https://<domain>/join/<link_id>#<seed>
+//
+// domain  — сервер группы (там живёт её журнал);
+// link_id — base64url без выравнивания от SHA-256(link_public_key): сервер
+//           знает только его (D-04) и по нему отвечает group.invite.check;
+// seed    — base64url без выравнивания от 32 байт Ed25519-секрета ссылки.
+//           Лежит во фрагменте URL: браузер не отправляет его серверу.
+//
+// Прежние формы (`<app>#+<token>`, `https://parvane.invite/<token>`)
+// принимаются только как вход в v1-группы (переходный период, до E6).
+syntax = "proto3";
+
+package parvane.group.v2;
+
+import "parvane/core/v2/options.proto";
+
+message InviteLinkParts {
+  string domain = 1 [(parvane.core.v2.max_len) = 253];
+  bytes link_id = 2 [(parvane.core.v2.max_len) = 32];
+  bytes seed = 3 [(parvane.core.v2.max_len) = 32];
+}

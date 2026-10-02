@@ -3,7 +3,12 @@ resolver = "2"
 members = [
     "shared/parvane-types",
     "shared/parvane-e2e",
+    "protocol",
+    "protocol/ffi",
+    "protocol/wasm",
     "shared/parvane-db",
+    "shared/parvane-v2rt",
+    "shared/parvane-netguard",
     "shards/identity",
     "shards/messenger",
     "shards/cloud",
@@ -13,6 +18,7 @@ members = [
     "shards/preview",
     "shards/push",
     "shards/gateway",
+    "shards/domains",
     "tests/integration",
 ]
 
@@ -49,3 +55,12 @@ anyhow = "1"
 
 # config
 dotenvy = "0.15"
+
+# WASM-движок для web (spec 007, T054): размер важнее скорости сборки.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,724 @@
+//! Хост-API клиентского ядра для нативных обвязок (C ABI: desktop
+//! parvane-core, android jni). Всё на границе — JSON-строки и байты: запросы
+//! `{"chan","method","body"(base64)}`, события — как у WASM-обвязки, ошибки —
+//! `{"need":{...}}` / `{"error":"<вид>"}`. Разбор протокола на стороне C++/
+//! Kotlin не нужен (класс 10).
+
+use base64::Engine as _;
+use prost::Message;
+use serde_json::{json, Value};
+
+use crate::client::{Chan, Client, ClientError, Event, L2View, LogVerdict, Need, OutRequest};
+use crate::codec::{self, decode_checked};
+use crate::error::ProtoError;
+use crate::limits::Origin;
+use crate::pb::parvane::core::v2::{frame, response, Auth, Channel, ClientInfo, ErrorCode, Frame, Hello, Ping, Ref, Request};
+use crate::pb::parvane::group::v2 as gpb;
+use crate::pb::parvane::identity::v2 as ipb;
+use crate::pb::parvane::msg::v2::{Content, InboxSyncResponse};
+use crate::unknown::Disposition;
+
+fn b64(b: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(b)
+}
+
+fn unb64(s: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD.decode(s).map_err(|_| err(ProtoError::Malformed))
+}
+
+pub fn err(e: ProtoError) -> String {
+    json!({"error": e.kind()}).to_string()
+}
+
+fn need_json(n: &Need) -> Value {
+    match n {
+        Need::PeerLog { user, after } => json!({"kind": "peerLog", "user": user, "after": after}),
+        Need::Bundle { user } => json!({"kind": "bundle", "user": user}),
+        Need::Token { user } => json!({"kind": "token", "user": user}),
+        Need::RootChanged { user } => json!({"kind": "rootChanged", "user": user}),
+        Need::GroupLog { group, after } => json!({"kind": "groupLog", "group": hex::encode(group), "after": after}),
+        Need::GroupKeys { group, epoch } => json!({"kind": "groupKeys", "group": hex::encode(group), "epoch": epoch}),
+        Need::Forbidden => json!({"kind": "forbidden"}),
+    }
+}
+
+fn cerr(e: ClientError) -> String {
+    match e {
+        ClientError::Need(n) => json!({"need": need_json(&n)}).to_string(),
+        ClientError::Proto(p) => err(p),
+    }
+}
+
+fn req_json(r: &OutRequest) -> Value {
+    json!({"chan": match r.chan { Chan::Id => "id", Chan::Anon => "anon" }, "method": r.method, "body": b64(&r.body)})
+}
+
+fn reqs_json(rs: &[OutRequest]) -> String {
+    Value::Array(rs.iter().map(req_json).collect()).to_string()
+}
+
+fn uuid_str(b: &[u8]) -> String {
+    let h = hex::encode(b);
+    if h.len() != 32 {
+        return h;
+    }
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
+fn disp(d: Disposition) -> &'static str {
+    match d {
+        Disposition::Show => "show",
+        Disposition::Stub => "stub",
+        Disposition::Skip => "skip",
+    }
+}
+
+fn event_json(e: &Event) -> Value {
+    let content = |c: &Content| serde_json::to_value(c).unwrap_or(Value::Null);
+    match e {
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition } => json!({
+            "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
+            "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
+        }),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition } => json!({
+            "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
+            "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
+        }),
+        Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
+        Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
+        Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
+        Event::DeviceAdded { device_id, log_version } => json!({"type": "deviceAdded", "deviceId": device_id, "logVersion": log_version}),
+        Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
+        Event::Internal { seq } => json!({"type": "internal", "seq": seq}),
+        Event::Skipped { seq } => json!({"type": "skipped", "seq": seq}),
+    }
+}
+
+fn events(ev: &[Event]) -> String {
+    Value::Array(ev.iter().map(event_json).collect()).to_string()
+}
+
+/// Состояние L2 чата → `{"active","mine","enabledBy","pad","ephemeralAllowed"}`.
+pub fn l2_view_json(v: &L2View) -> String {
+    json!({"active": v.active, "mine": v.mine, "enabledBy": v.enabled_by, "pad": v.pad, "ephemeralAllowed": v.ephemeral_allowed}).to_string()
+}
+
+fn op_id(s: &str) -> Result<Vec<u8>, String> {
+    if s.is_empty() {
+        return Ok(crate::sign::new_op_id());
+    }
+    let h: String = s.chars().filter(|c| *c != '-').collect();
+    let b = hex::decode(h).map_err(|_| err(ProtoError::InvalidField("op_id")))?;
+    if !crate::sign::is_valid_op_id(&b) {
+        return Err(err(ProtoError::InvalidField("op_id")));
+    }
+    Ok(b)
+}
+
+fn key32(b: &[u8]) -> Result<[u8; 32], String> {
+    b.try_into().map_err(|_| err(ProtoError::InvalidField("key")))
+}
+
+/// Обёртка клиента для нативных хостов.
+pub struct HostClient {
+    pub inner: Client,
+}
+
+impl HostClient {
+    pub fn new(user: &str, device: &str, domain: &str) -> Result<Self, String> {
+        Client::new(user, device, domain).map(|inner| Self { inner }).map_err(err)
+    }
+
+    pub fn import(blob: &[u8], key: &[u8]) -> Result<Self, String> {
+        Client::import(blob, &key32(key)?).map(|inner| Self { inner }).map_err(err)
+    }
+
+    pub fn export(&self, key: &[u8]) -> Result<Vec<u8>, String> {
+        self.inner.export(&key32(key)?).map_err(err)
+    }
+
+    /// Импорт Olm-аккаунта v1 (JSON-pickle parvane-e2e) — то же устройство.
+    pub fn import_v1_account_json(&mut self, pickle_json: &str) -> Result<(), String> {
+        let acc = crate::olm::OlmAccount::from_parvane_e2e_json(pickle_json).map_err(err)?;
+        self.inner.import_v1_account(acc);
+        Ok(())
+    }
+
+    pub fn create_identity(&mut self, otk: usize) -> Result<String, String> {
+        let (reqs, root) = self.inner.create_identity(otk).map_err(err)?;
+        Ok(json!({"requests": serde_json::from_str::<Value>(&reqs_json(&reqs)).unwrap_or(Value::Null), "rootSecret": b64(&root.root.to_bytes())}).to_string())
+    }
+
+    /// C1-06: резервная копия корня (`root_secret` — 32 байта из
+    /// create_identity) под ключом восстановления из [`generate_recovery_key`].
+    pub fn export_root_backup(&self, root_secret: &[u8], recovery_key: &str) -> Result<Vec<u8>, String> {
+        let key = crate::recovery::RecoveryKey::parse(recovery_key).map_err(err)?;
+        let root = zeroize::Zeroizing::new(key32(root_secret)?);
+        self.inner.export_root_backup(&root, &key).map_err(err)
+    }
+
+    /// Корень из копии (сверен с журналом устройств).
+    pub fn import_root_backup(&self, blob: &[u8], recovery_key: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+        let key = crate::recovery::RecoveryKey::parse(recovery_key).map_err(err)?;
+        self.inner.import_root_backup(blob, &key).map_err(err)
+    }
+
+    /// D-03: версия журнала группы, от которой отстаём (None — не отстаём).
+    pub fn group_behind(&self, group_hex: &str) -> Result<Option<u64>, String> {
+        let id = hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))?;
+        Ok(self.inner.group_behind(&id))
+    }
+
+    pub fn link_grant_material(&self) -> Result<String, String> {
+        let (ssk, entries, dk, gen) = self.inner.link_grant_material().map_err(err)?;
+        let log = ipb::DeviceLogSyncResponse { entries, more: false };
+        let mut m = json!({"ssk": hex::encode(ssk), "log": hex::encode(log.encode_to_vec()), "dk": hex::encode(dk), "gen": gen});
+        // Ключ личного состояния — тем же грантом (R: «передаётся при линковке»)
+        if let Some((k, v)) = self.inner.state_key() {
+            m["sk"] = json!(hex::encode(k.as_bytes()));
+            m["skv"] = json!(v);
+        }
+        Ok(m.to_string())
+    }
+
+    pub fn join_with_grant(&mut self, material: &str, otk: usize) -> Result<String, String> {
+        let v: Value = serde_json::from_str(material).map_err(|_| err(ProtoError::Malformed))?;
+        let h = |k: &str| hex::decode(v[k].as_str().unwrap_or("")).map_err(|_| err(ProtoError::Malformed));
+        let log = ipb::DeviceLogSyncResponse::decode(h("log")?.as_slice()).map_err(|_| err(ProtoError::Malformed))?;
+        let reqs = self
+            .inner
+            .join_with_ssk(key32(&h("ssk")?)?, log.entries, key32(&h("dk")?)?, v["gen"].as_u64().unwrap_or(1), otk)
+            .map_err(err)?;
+        if v.get("sk").is_some_and(|s| s.is_string()) {
+            let k = crate::state::StateKey::from_bytes(&h("sk")?).map_err(|_| err(ProtoError::Malformed))?;
+            self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
+        }
+        Ok(reqs_json(&reqs))
+    }
+
+    pub fn otk_request(&mut self, n: usize) -> String {
+        req_json(&self.inner.otk_request(n)).to_string()
+    }
+
+    pub fn sync_request(&self) -> String {
+        req_json(&self.inner.sync_request()).to_string()
+    }
+
+    pub fn ack_request(&self) -> String {
+        req_json(&self.inner.ack_request()).to_string()
+    }
+
+    pub fn log_version(&self, user: &str) -> u64 {
+        self.inner.log_version(user)
+    }
+
+    pub fn ingest_log(&mut self, user: &str, resp: &[u8]) -> Result<String, String> {
+        let r: ipb::DeviceLogSyncAnonResponse = decode_checked(resp, Origin::Server).map_err(err)?;
+        let v = self.inner.ingest_log(user, r.entries).map_err(err)?;
+        Ok(match v {
+            LogVerdict::New => "new",
+            LogVerdict::Known => "known",
+            LogVerdict::RootChanged => "rootChanged",
+        }
+        .into())
+    }
+
+    pub fn ingest_bundle(&mut self, user: &str, resp: &[u8]) -> Result<usize, String> {
+        let r: ipb::DeviceFetchBundleAnonResponse = decode_checked(resp, Origin::Server).map_err(err)?;
+        self.inner.ingest_bundle(user, r.devices).map_err(err)
+    }
+
+    pub fn set_peer_delivery_key(&mut self, user: &str, key: &[u8], generation: u64) {
+        self.inner.set_peer_delivery_key(user, key.to_vec(), generation);
+    }
+
+    pub fn token_request(&mut self, key_list_resp: &[u8], server_key: &[u8], count: usize) -> Result<String, String> {
+        let r: ipb::TokensKeyListResponse = decode_checked(key_list_resp, Origin::Server).map_err(err)?;
+        let list = r.list.ok_or_else(|| err(ProtoError::InvalidField("list")))?;
+        self.inner.token_request(&list, server_key, count).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    pub fn token_response(&mut self, resp: &[u8]) -> Result<usize, String> {
+        let r: ipb::TokensIssueBlindedResponse = decode_checked(resp, Origin::Server).map_err(err)?;
+        self.inner.token_response(&r).map_err(err)
+    }
+
+    pub fn prepare_direct(&mut self, peer: &str, content_json: &str, id: &str) -> Result<String, String> {
+        let c: Content = serde_json::from_str(content_json).map_err(|_| err(ProtoError::Malformed))?;
+        self.inner.prepare_direct_id(peer, &c, op_id(id)?).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    pub fn open_record(&mut self, record: &[u8]) -> Result<String, String> {
+        self.inner.open_record(record).map(|e| events(&e)).map_err(cerr)
+    }
+
+    pub fn drain_ready(&mut self) -> String {
+        events(&self.inner.drain_ready())
+    }
+
+    pub fn last_error(&self) -> Option<&'static str> {
+        self.inner.last_error.as_ref().map(ProtoError::kind)
+    }
+
+    pub fn group_create(&mut self, kind: i32, name: &str, members_json: &str, perms_json: &str) -> Result<String, String> {
+        let members: Vec<String> = serde_json::from_str(members_json).map_err(|_| err(ProtoError::Malformed))?;
+        let perms: gpb::Permissions = serde_json::from_str(perms_json).map_err(|_| err(ProtoError::Malformed))?;
+        let kind = gpb::GroupKind::try_from(kind).map_err(|_| err(ProtoError::InvalidField("kind")))?;
+        let (g, r) = self.inner.group_create(kind, name, &members, perms).map_err(err)?;
+        Ok(json!({"group": {"domain": g.domain, "id": hex::encode(&g.id)}, "request": req_json(&r)}).to_string())
+    }
+
+    pub fn group_ingest(&mut self, domain: &str, group_hex: &str, resp: &[u8]) -> Result<u64, String> {
+        let r: gpb::StateSyncResponse = decode_checked(resp, Origin::Server).map_err(err)?;
+        let id = hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))?;
+        self.inner.group_ingest_hinted(&Ref { domain: domain.into(), id }, r.entries, &r.signer_hints).map_err(cerr)
+    }
+
+    pub fn group_change(&mut self, group_hex: &str, change_json: &str) -> Result<String, String> {
+        let ch: gpb::GroupChange = serde_json::from_str(change_json).map_err(|_| err(ProtoError::Malformed))?;
+        let c = ch.change.ok_or_else(|| err(ProtoError::InvalidField("change")))?;
+        let id = hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))?;
+        self.inner.group_change(&id, c).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    pub fn group_rotate_epoch(&mut self, group_hex: &str) -> Result<String, String> {
+        let id = hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))?;
+        self.inner.group_rotate_epoch(&id).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    pub fn prepare_group(&mut self, group_hex: &str, content_json: &str, id: &str) -> Result<String, String> {
+        let c: Content = serde_json::from_str(content_json).map_err(|_| err(ProtoError::Malformed))?;
+        let gid = hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))?;
+        self.inner.prepare_group_id(&gid, &c, op_id(id)?).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    // ── группы: чтение журнала, ссылки (как WASM-обвязка) ──
+
+    pub fn group_version(&self, group_hex: &str) -> Result<u64, String> {
+        Ok(self.inner.group_version(&group_id(group_hex)?))
+    }
+
+    /// Забыть журнал группы (локальная запись отвергнута сервером).
+    pub fn group_forget(&mut self, group_hex: &str) -> Result<(), String> {
+        self.inner.group_forget(&group_id(group_hex)?);
+        Ok(())
+    }
+
+    /// Группы, журнал которых известен устройству — JSON-массив hex id.
+    pub fn group_list(&self) -> String {
+        Value::Array(self.inner.group_ids().iter().map(|g| Value::String(hex::encode(g))).collect()).to_string()
+    }
+
+    /// FR-028 (T080): участники по данным сервера (`claimed_json` — массив
+    /// адресов) без подтверждённой записи журнала → JSON-массив адресов.
+    pub fn group_unconfirmed(&self, group_hex: &str, claimed_json: &str) -> Result<String, String> {
+        let claimed: Vec<String> = if claimed_json.trim().is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str(claimed_json).map_err(|_| err(ProtoError::Malformed))?
+        };
+        Ok(json!(self.inner.group_unconfirmed(&group_id(group_hex)?, &claimed)).to_string())
+    }
+
+    /// Сведения группы по журналу (тот же JSON, что `groupInfo` WASM).
+    pub fn group_info(&self, group_hex: &str) -> Result<String, String> {
+        let s = self.inner.group_state(&group_id(group_hex)?).ok_or_else(|| err(ProtoError::NotFound))?;
+        let members: Vec<Value> = s
+            .members
+            .iter()
+            .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
+            .collect();
+        Ok(json!({
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id,
+            "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
+            "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
+            "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
+            "l2": s.l2, "l2By": s.l2_by,
+        })
+        .to_string())
+    }
+
+    // ── режим «усиленная приватность» (L2, T079) ──
+
+    /// Включить/выключить L2 в личном чате → запросы (как `prepare_direct`);
+    /// `id` — id служебного сообщения в UI (пусто — новый).
+    pub fn l2_set_direct(&mut self, peer: &str, enabled: bool, id: &str) -> Result<String, String> {
+        self.inner.l2_set_direct_id(peer, enabled, op_id(id)?).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    /// Состояние L2 личного чата (см. [`l2_view_json`]).
+    pub fn l2_direct(&self, peer: &str) -> String {
+        l2_view_json(&self.inner.l2_direct(peer))
+    }
+
+    /// Состояние L2 группы: политика журнала + личное предпочтение.
+    pub fn l2_group(&self, group_hex: &str) -> Result<String, String> {
+        Ok(l2_view_json(&self.inner.l2_group(&group_id(group_hex)?)))
+    }
+
+    /// Личное предпочтение L2 в группе (свои исходящие выравниваются).
+    pub fn l2_set_group_pref(&mut self, group_hex: &str, enabled: bool) -> Result<(), String> {
+        self.inner.l2_set_group_pref(&group_id(group_hex)?, enabled);
+        Ok(())
+    }
+
+    /// Чаты с активным L2 → `{"direct":[адреса],"groups":[hex id]}`.
+    pub fn l2_active_chats(&self) -> String {
+        let (direct, groups) = self.inner.l2_active_chats();
+        json!({"direct": direct, "groups": groups.iter().map(hex::encode).collect::<Vec<_>>()}).to_string()
+    }
+
+    /// Публиковать ли своё присутствие (L2 не активен ни в одном чате).
+    pub fn presence_allowed(&self) -> bool {
+        self.inner.presence_allowed()
+    }
+
+    /// Новая ссылка-приглашение → `{"request", "url", "linkId"}` (секрет — только в url).
+    pub fn group_invite_create(&mut self, group_hex: &str, title: &str, expires_ms: i64, usage_limit: u32, requires_approval: bool) -> Result<String, String> {
+        let (r, parts) = self
+            .inner
+            .group_invite_create(&group_id(group_hex)?, title, expires_ms, usage_limit, requires_approval)
+            .map_err(err)?;
+        let url = crate::invite::format(&parts).map_err(err)?;
+        Ok(json!({"request": req_json(&r), "url": url, "linkId": hex::encode(&parts.link_id)}).to_string())
+    }
+
+    /// Вступить по ссылке v2 (журнал группы уже принят group_ingest) → запрос `group.join`.
+    pub fn group_join(&mut self, url: &str) -> Result<String, String> {
+        let crate::invite::ParsedInvite::V2(parts) = crate::invite::parse(url).map_err(err)? else {
+            return Err(err(ProtoError::InvalidField("invite")));
+        };
+        self.inner.group_join(&parts).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// Устройства пользователя по журналу → `{"v2": [...], "legacy": [...]}`.
+    pub fn log_devices(&self, user: &str) -> String {
+        let (v2, legacy) = self.inner.log_devices(user);
+        json!({ "v2": v2, "legacy": legacy }).to_string()
+    }
+
+    pub fn token_count(&self) -> usize {
+        self.inner.token_count()
+    }
+
+    // ── журнал личного состояния (T098) ──
+
+    pub fn has_state_key(&self) -> bool {
+        self.inner.state_key().is_some()
+    }
+
+    /// Первое устройство без ключа личного состояния — создать (версия 1).
+    /// true — ключ создан сейчас (состояние клиента надо сохранить).
+    pub fn ensure_state_key(&mut self) -> bool {
+        if self.inner.state_key().is_some() {
+            return false;
+        }
+        self.inner.set_state_key(crate::state::StateKey::generate(), 1);
+        true
+    }
+
+    /// Сессия журнала личного состояния на текущем ключе (None — ключа нет).
+    pub fn state_session(&self) -> Option<HostState> {
+        let (k, _) = self.inner.state_key()?;
+        Some(HostState {
+            user: self.inner.user.clone(),
+            device_id: self.inner.device_id.clone(),
+            key: k.clone(),
+            state: crate::state::PersonalState::new(),
+            clock: crate::state::LamportClock::default(),
+            cursor: 0,
+            guard: crate::state::SendGuard::new(),
+        })
+    }
+}
+
+fn group_id(group_hex: &str) -> Result<Vec<u8>, String> {
+    hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// Разобрать ссылку-приглашение → `{"kind":"v2","domain","linkId"(hex)}` |
+/// `{"kind":"legacy","token"}`; ошибка — не ссылка-приглашение.
+pub fn parse_invite(url: &str) -> Result<String, String> {
+    match crate::invite::parse(url).map_err(err)? {
+        crate::invite::ParsedInvite::V2(p) => Ok(json!({"kind": "v2", "domain": p.domain, "linkId": hex::encode(&p.link_id)}).to_string()),
+        crate::invite::ParsedInvite::LegacyV1 { token } => Ok(json!({"kind": "legacy", "token": token}).to_string()),
+    }
+}
+
+/// Журнал личного состояния устройства (R10, T098) для нативных хостов — то
+/// же, что `PvState` WASM-обвязки: сведение LWW (STATE-1), шифрование записей
+/// ключом личного состояния (ключ не выходит наружу). Курсор — в памяти:
+/// при запуске журнал читается с начала. Тела `state.append` — байты
+/// `AppendRequest`, наружу — JSON-массив base64.
+pub struct HostState {
+    user: String,
+    device_id: String,
+    key: crate::state::StateKey,
+    state: crate::state::PersonalState,
+    clock: crate::state::LamportClock,
+    cursor: u64,
+    guard: crate::state::SendGuard,
+}
+
+impl HostState {
+    /// Тело `state.sync` от курсора.
+    pub fn sync_request(&self) -> Vec<u8> {
+        crate::pb::parvane::state::v1::SyncRequest { after_seq: self.cursor, max_bytes: 0 }.encode_to_vec()
+    }
+
+    /// Ответ `state.sync` → `{"more","applied","rejected"}`. Нерасшифрованные
+    /// и отвергнутые записи пропускаются — одинаково во всех клиентах.
+    pub fn ingest(&mut self, resp: &[u8]) -> Result<String, String> {
+        use crate::pb::parvane::state::v1::SyncResponse;
+        let r: SyncResponse = decode_checked(resp, Origin::Server).map_err(err)?;
+        let (mut applied, mut rejected) = (0usize, 0usize);
+        for rec in &r.records {
+            self.cursor = self.cursor.max(rec.seq);
+            match crate::state::open_state_record(&self.key, &self.user, rec) {
+                Ok(op) if self.state.apply(&op).is_ok() => applied += 1,
+                _ => rejected += 1,
+            }
+        }
+        self.clock.observe(self.state.max_lamport());
+        Ok(json!({"more": r.more && !r.records.is_empty(), "applied": applied, "rejected": rejected}).to_string())
+    }
+
+    /// Сведённое состояние: proto3-JSON `state.v1.StateSnapshot`.
+    pub fn snapshot(&self) -> String {
+        serde_json::to_string(&self.state.snapshot()).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Хост хочет состояние `desired_json` (StateSnapshot) по видам
+    /// `kinds_json` (JSON-массив имён): операции разницы применяются локально,
+    /// наружу — тела `state.append` (JSON-массив base64).
+    pub fn diff(&mut self, desired_json: &str, kinds_json: &str) -> Result<String, String> {
+        let desired: crate::pb::parvane::state::v1::StateSnapshot = serde_json::from_str(desired_json).map_err(|_| err(ProtoError::Malformed))?;
+        let kinds: Vec<String> = serde_json::from_str(kinds_json).map_err(|_| err(ProtoError::Malformed))?;
+        let m = crate::state::Managed::from_names(kinds.iter().map(String::as_str));
+        let ops = crate::state::diff_ops(&self.state.snapshot(), &desired, m);
+        self.seal_ops(ops)
+    }
+
+    /// Первый запуск: локальные данные (StateSnapshot) → начальные записи.
+    pub fn migrate(&mut self, local_json: &str) -> Result<String, String> {
+        let local: crate::pb::parvane::state::v1::StateSnapshot = serde_json::from_str(local_json).map_err(|_| err(ProtoError::Malformed))?;
+        let ops = crate::state::migrate_snapshot(&local, &self.device_id, &mut self.clock, now_ms()).map_err(err)?;
+        let mut out = Vec::new();
+        for op in ops {
+            if self.state.apply(&op).is_ok() {
+                let r = crate::state::seal_op(&self.key, &self.user, &op).map_err(err)?;
+                out.push(Value::String(b64(&r.encode_to_vec())));
+            }
+        }
+        Ok(Value::Array(out).to_string())
+    }
+
+    /// Отложенные, которые ЭТО устройство отправляет сейчас (proto3-JSON
+    /// `ScheduledMessage[]`); отправить с op_id отложенного, затем `mark_sent`.
+    pub fn claim_due(&mut self, now_ms: i64) -> String {
+        let due = self.state.claim_due(now_ms, &mut self.guard);
+        serde_json::to_string(&due).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Отметка «отложенное отправлено» (op_id — base64 из снимка).
+    pub fn mark_sent(&mut self, op_id_b64: &str) -> Result<String, String> {
+        let s: crate::pb::parvane::state::v1::ScheduledRef =
+            serde_json::from_value(json!({ "op_id": op_id_b64 })).map_err(|_| err(ProtoError::Malformed))?;
+        self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::ScheduledSent(s)])
+    }
+
+    /// Локальный журнал уже отправленных этим устройством (JSON-массив hex).
+    pub fn sent_guard(&self) -> String {
+        json!(self.guard.to_list().iter().map(hex::encode).collect::<Vec<_>>()).to_string()
+    }
+
+    pub fn load_sent_guard(&mut self, ids_json: &str) {
+        let ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
+        let bytes: Vec<Vec<u8>> = ids.iter().filter_map(|h| hex::decode(h).ok()).collect();
+        self.guard = crate::state::SendGuard::from_list(bytes.iter().map(Vec::as_slice));
+    }
+
+    fn seal_ops(&mut self, ops: Vec<crate::pb::parvane::state::v1::state_op::Op>) -> Result<String, String> {
+        let mut out = Vec::new();
+        let now = now_ms();
+        for kind in ops {
+            let op = crate::state::make_op(&mut self.clock, &self.device_id, now, kind).map_err(err)?;
+            if self.state.apply(&op).is_err() {
+                continue;
+            }
+            let r = crate::state::seal_op(&self.key, &self.user, &op).map_err(err)?;
+            out.push(Value::String(b64(&r.encode_to_vec())));
+        }
+        Ok(Value::Array(out).to_string())
+    }
+}
+
+/// C1-06: новый ключ восстановления (≥ 128 бит, строка для пользователя).
+pub fn generate_recovery_key() -> zeroize::Zeroizing<String> {
+    crate::recovery::RecoveryKey::generate().to_display()
+}
+
+// ── кадры ───────────────────────────────────────────────────────────────────
+
+pub fn encode_hello(channel: i32, kind: &str, version: &str) -> Vec<u8> {
+    codec::encode_frame(frame::Kind::Hello(Hello {
+        proto_minor: crate::PROTO_MINOR,
+        features: vec![],
+        client: Some(ClientInfo { kind: kind.into(), version: version.into() }),
+        channel: Channel::try_from(channel).unwrap_or(Channel::Identified) as i32,
+    }))
+}
+
+pub fn encode_auth(token: &str) -> Vec<u8> {
+    codec::encode_frame(frame::Kind::Auth(Auth { token: token.into() }))
+}
+
+pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32) -> Vec<u8> {
+    codec::encode_frame(frame::Kind::Request(Request { id, method: method.into(), body: body.to_vec(), timeout_ms }))
+}
+
+pub fn encode_ping(nonce: u64) -> Vec<u8> {
+    codec::encode_frame(frame::Kind::Ping(Ping { nonce }))
+}
+
+fn error_name(code: i32) -> &'static str {
+    ErrorCode::try_from(code).map(|c| c.as_str_name()).unwrap_or("ERROR_CODE_UNSPECIFIED")
+}
+
+/// Кадр сервера → JSON (тела — base64).
+pub fn decode_frame(bytes: &[u8]) -> Result<String, String> {
+    let f: Frame = codec::decode_frame(bytes, Origin::Server).map_err(err)?;
+    let v = match f.kind {
+        Some(frame::Kind::Welcome(w)) => json!({"kind": "welcome", "minSupportedMinor": w.min_supported_minor, "features": w.features, "serverDescriptor": b64(&w.server_descriptor)}),
+        Some(frame::Kind::AuthOk(a)) => json!({"kind": "authOk", "user": a.user, "deviceId": a.device_id}),
+        Some(frame::Kind::Response(r)) => match r.result {
+            Some(response::Result::Ok(b)) => json!({"kind": "response", "id": r.id, "ok": b64(&b)}),
+            Some(response::Result::Error(e)) => json!({"kind": "response", "id": r.id, "error": error_name(e.code), "retryAfterMs": e.retry_after_ms}),
+            None => json!({"kind": "response", "id": r.id, "error": "ERROR_CODE_UNSPECIFIED"}),
+        },
+        Some(frame::Kind::Event(e)) => json!({"kind": "event", "subscription": e.subscription, "eventKind": e.kind, "seq": e.seq, "body": b64(&e.body)}),
+        Some(frame::Kind::StreamChunk(c)) => json!({"kind": "chunk", "id": c.id, "index": c.index, "last": c.last, "data": b64(&c.data), "error": c.error.map(|e| error_name(e.code))}),
+        Some(frame::Kind::Ping(p)) => json!({"kind": "ping", "nonce": p.nonce}),
+        Some(frame::Kind::Pong(p)) => json!({"kind": "pong", "nonce": p.nonce}),
+        _ => json!({"kind": "unknown"}),
+    };
+    Ok(v.to_string())
+}
+
+pub fn verify_server_descriptor(bytes: &[u8]) -> Result<String, String> {
+    let (d, k) = crate::client::verify_server_descriptor(bytes).map_err(err)?;
+    Ok(json!({"domain": d, "serverKey": hex::encode(k)}).to_string())
+}
+
+/// Страница `msg.inbox.sync` → JSON {records: [base64], more}.
+pub fn split_sync_response(bytes: &[u8]) -> Result<String, String> {
+    let r: InboxSyncResponse = decode_checked(bytes, Origin::Server).map_err(err)?;
+    Ok(json!({"records": r.records.iter().map(|x| b64(&x.encode_to_vec())).collect::<Vec<_>>(), "more": r.more}).to_string())
+}
+
+pub fn device_log_entries(bytes: &[u8]) -> Result<usize, String> {
+    let r: ipb::DeviceLogSyncAnonResponse = decode_checked(bytes, Origin::Server).map_err(err)?;
+    Ok(r.entries.len())
+}
+
+/// Тело запроса из proto3-JSON по имени типа (для методов, которые хост
+/// вызывает сам: вход, профиль, журналы, бандлы, облако).
+pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, String> {
+    macro_rules! enc {
+        ($($name:literal => $t:ty),* $(,)?) => {
+            match type_name {
+                $($name => {
+                    let m: $t = serde_json::from_str(json_text).map_err(|_| err(ProtoError::Malformed))?;
+                    Ok(m.encode_to_vec())
+                })*
+                _ => Err(err(ProtoError::UnknownMethod)),
+            }
+        };
+    }
+    enc! {
+        "parvane.identity.v2.SessionIssueRequest" => ipb::SessionIssueRequest,
+        "parvane.identity.v2.AccountRegisterRequest" => ipb::AccountRegisterRequest,
+        "parvane.identity.v2.AccountConfirmEmailRequest" => ipb::AccountConfirmEmailRequest,
+        "parvane.identity.v2.AccountRegisterStatusRequest" => ipb::AccountRegisterStatusRequest,
+        "parvane.identity.v2.SessionReauthRequest" => ipb::SessionReauthRequest,
+        "parvane.identity.v2.AccountSet2faRequest" => ipb::AccountSet2faRequest,
+        "parvane.identity.v2.AccountChangePasswordRequest" => ipb::AccountChangePasswordRequest,
+        "parvane.identity.v2.ProfileResolveRequest" => ipb::ProfileResolveRequest,
+        "parvane.identity.v2.ProfileSetNameRequest" => ipb::ProfileSetNameRequest,
+        "parvane.identity.v2.ProfileSetAvatarRequest" => ipb::ProfileSetAvatarRequest,
+        "parvane.identity.v2.DirectorySearchRequest" => ipb::DirectorySearchRequest,
+        "parvane.identity.v2.DeviceLogSyncAnonRequest" => ipb::DeviceLogSyncAnonRequest,
+        "parvane.identity.v2.DeviceLogSyncRequest" => ipb::DeviceLogSyncRequest,
+        "parvane.identity.v2.DeviceFetchBundleAnonRequest" => ipb::DeviceFetchBundleAnonRequest,
+        "parvane.identity.v2.DeviceRevokeRequest" => ipb::DeviceRevokeRequest,
+        "parvane.identity.v2.PrivacySetRequest" => ipb::PrivacySetRequest,
+        "parvane.group.v2.StateSyncRequest" => gpb::StateSyncRequest,
+        "parvane.group.v2.InviteCheckRequest" => gpb::InviteCheckRequest,
+        "parvane.msg.v2.Text" => crate::pb::parvane::msg::v2::Text,
+        "parvane.msg.v2.Content" => Content,
+        "parvane.group.v2.InviteListRequest" => gpb::InviteListRequest,
+        "parvane.group.v2.RequestListRequest" => gpb::RequestListRequest,
+        "parvane.cloud.v1.UploadChunkRequest" => crate::pb::parvane::cloud::v1::UploadChunkRequest,
+        "parvane.cloud.v1.UploadCompleteRequest" => crate::pb::parvane::cloud::v1::UploadCompleteRequest,
+        "parvane.cloud.v1.DownloadRequest" => crate::pb::parvane::cloud::v1::DownloadRequest,
+        "parvane.cloud.v1.DownloadCapRequest" => crate::pb::parvane::cloud::v1::DownloadCapRequest,
+        "parvane.preview.v2.LinkRequest" => crate::pb::parvane::preview::v2::LinkRequest,
+        "parvane.preview.v2.MapTileRequest" => crate::pb::parvane::preview::v2::MapTileRequest,
+        "parvane.push.v1.RegisterRequest" => crate::pb::parvane::push::v1::RegisterRequest,
+        "parvane.push.v1.UnregisterRequest" => crate::pb::parvane::push::v1::UnregisterRequest,
+    }
+}
+
+/// Байты ответа → proto3-JSON по полному имени типа (ответы методов,
+/// которые хост разбирает сам: проверка ссылки, вступление, тексты черновиков).
+pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
+    macro_rules! dec {
+        ($($name:literal => $t:ty),* $(,)?) => {
+            match type_name {
+                $($name => {
+                    let m: $t = decode_checked(bytes, Origin::Server).map_err(err)?;
+                    serde_json::to_string(&m).map_err(|_| err(ProtoError::Malformed))
+                })*
+                _ => Err(err(ProtoError::UnknownMethod)),
+            }
+        };
+    }
+    dec! {
+        "parvane.identity.v2.SessionIssueResponse" => ipb::SessionIssueResponse,
+        "parvane.identity.v2.AccountRegisterResponse" => ipb::AccountRegisterResponse,
+        "parvane.identity.v2.AccountRegisterStatusResponse" => ipb::AccountRegisterStatusResponse,
+        "parvane.identity.v2.ServerDescribeResponse" => ipb::ServerDescribeResponse,
+        "parvane.identity.v2.SessionReauthResponse" => ipb::SessionReauthResponse,
+        "parvane.identity.v2.AccountSet2faResponse" => ipb::AccountSet2faResponse,
+        "parvane.identity.v2.ProfileResolveResponse" => ipb::ProfileResolveResponse,
+        "parvane.identity.v2.DirectorySearchResponse" => ipb::DirectorySearchResponse,
+        "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,
+        "parvane.msg.v2.InboxSyncResponse" => crate::pb::parvane::msg::v2::InboxSyncResponse,
+        "parvane.msg.v2.InboxSubscribeResponse" => crate::pb::parvane::msg::v2::InboxSubscribeResponse,
+        "parvane.msg.v2.DeliverSealedResponse" => crate::pb::parvane::msg::v2::DeliverSealedResponse,
+        "parvane.group.v2.InviteCheckResponse" => gpb::InviteCheckResponse,
+        "parvane.group.v2.JoinResponse" => gpb::JoinResponse,
+        "parvane.msg.v2.Text" => crate::pb::parvane::msg::v2::Text,
+        "parvane.msg.v2.Content" => Content,
+        "parvane.group.v2.InviteListResponse" => gpb::InviteListResponse,
+        "parvane.group.v2.RequestListResponse" => gpb::RequestListResponse,
+        "parvane.cloud.v1.UploadChunkResponse" => crate::pb::parvane::cloud::v1::UploadChunkResponse,
+        "parvane.cloud.v1.UploadCompleteResponse" => crate::pb::parvane::cloud::v1::UploadCompleteResponse,
+        "parvane.cloud.v1.DownloadResponse" => crate::pb::parvane::cloud::v1::DownloadResponse,
+        "parvane.preview.v2.LinkResponse" => crate::pb::parvane::preview::v2::LinkResponse,
+        "parvane.preview.v2.MapTileResponse" => crate::pb::parvane::preview::v2::MapTileResponse,
+        "parvane.push.v1.DescribeResponse" => crate::pb::parvane::push::v1::DescribeResponse,
+    }
+}
+
+/// base64 → байты (помощник для хостов без своей base64).
+pub fn from_b64(s: &str) -> Result<Vec<u8>, String> {
+    unb64(s)
+}

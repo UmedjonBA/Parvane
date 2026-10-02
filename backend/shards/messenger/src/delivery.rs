@@ -11,6 +11,8 @@ pub(crate) async fn publish_inbox(nc: &Client, addr: &str, bytes: Vec<u8>) -> Re
         tracing::warn!("отклонён publish в инбокс: недопустимый адрес");
         return Ok(());
     }
+    // Протокол v2 (T046): тот же кадр — в журналы v2-устройств пользователя.
+    crate::v2::bridge(addr, &bytes);
     nc.publish(msg_inbox(addr), bytes.into()).await?;
     Ok(())
 }

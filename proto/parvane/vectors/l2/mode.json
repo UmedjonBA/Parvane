@@ -1,0 +1,859 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "olm_len": 0,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-0"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "olm_len": 1,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-1"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "olm_len": 100,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-100"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "olm_len": 400,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-400"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "olm_len": 506,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-506"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 507,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-507"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 508,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-508"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 509,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-509"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 510,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-510"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 600,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-600"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 2000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-2000"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "olm_len": 2040,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-2040"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "olm_len": 2045,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-2045"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "olm_len": 3000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-3000"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "olm_len": 8100,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-8100"
+    },
+    {
+      "expect": {
+        "len": 32768
+      },
+      "input": {
+        "olm_len": 8190,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-8190"
+    },
+    {
+      "expect": {
+        "len": 32768
+      },
+      "input": {
+        "olm_len": 9000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-9000"
+    },
+    {
+      "expect": {
+        "len": 32768
+      },
+      "input": {
+        "olm_len": 20000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-20000"
+    },
+    {
+      "expect": {
+        "len": 32768
+      },
+      "input": {
+        "olm_len": 32700,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-32700"
+    },
+    {
+      "expect": {
+        "len": 65536
+      },
+      "input": {
+        "olm_len": 32768,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-32768"
+    },
+    {
+      "expect": {
+        "len": 65536
+      },
+      "input": {
+        "olm_len": 40000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-40000"
+    },
+    {
+      "expect": {
+        "len": 98304
+      },
+      "input": {
+        "olm_len": 70000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-70000"
+    },
+    {
+      "expect": {
+        "len": 131072
+      },
+      "input": {
+        "olm_len": 100000,
+        "op": "pad_direct"
+      },
+      "name": "pad-direct-100000"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 0,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-0"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 10,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-10"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 350,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-350"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 400,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-400"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 459,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-459"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 460,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-460"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "message_len": 461,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-461"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "message_len": 462,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-462"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "message_len": 463,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-463"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "message_len": 600,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-600"
+    },
+    {
+      "expect": {
+        "len": 2048
+      },
+      "input": {
+        "message_len": 1990,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-1990"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "message_len": 1998,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-1998"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "message_len": 3000,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-3000"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "message_len": 8140,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-8140"
+    },
+    {
+      "expect": {
+        "len": 32768
+      },
+      "input": {
+        "message_len": 9000,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-9000"
+    },
+    {
+      "expect": {
+        "len": 32768
+      },
+      "input": {
+        "message_len": 32700,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-32700"
+    },
+    {
+      "expect": {
+        "len": 65536
+      },
+      "input": {
+        "message_len": 40000,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-40000"
+    },
+    {
+      "expect": {
+        "len": 98304
+      },
+      "input": {
+        "message_len": 70000,
+        "op": "pad_group",
+        "session_id_len": 43
+      },
+      "name": "pad-group-70000"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": false
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": []
+      },
+      "name": "direct-default-off"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "b@x"
+          }
+        ]
+      },
+      "name": "direct-peer-enabled"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "a@x"
+          }
+        ]
+      },
+      "name": "direct-self-enabled"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "b@x"
+          },
+          {
+            "enabled": false,
+            "ts_ms": 5,
+            "user": "b@x"
+          }
+        ]
+      },
+      "name": "direct-stale-disable-ignored"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": false
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "b@x"
+          },
+          {
+            "enabled": false,
+            "ts_ms": 20,
+            "user": "b@x"
+          }
+        ]
+      },
+      "name": "direct-newer-disable"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": false,
+            "ts_ms": 20,
+            "user": "b@x"
+          },
+          {
+            "enabled": true,
+            "ts_ms": 20,
+            "user": "b@x"
+          },
+          {
+            "enabled": false,
+            "ts_ms": 20,
+            "user": "b@x"
+          }
+        ]
+      },
+      "name": "direct-equal-ts-enable-wins"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "a@x"
+          },
+          {
+            "enabled": true,
+            "ts_ms": 11,
+            "user": "b@x"
+          },
+          {
+            "enabled": false,
+            "ts_ms": 12,
+            "user": "a@x"
+          }
+        ]
+      },
+      "name": "direct-one-off-other-on"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": false
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "a@x"
+          },
+          {
+            "enabled": true,
+            "ts_ms": 11,
+            "user": "b@x"
+          },
+          {
+            "enabled": false,
+            "ts_ms": 12,
+            "user": "a@x"
+          },
+          {
+            "enabled": false,
+            "ts_ms": 13,
+            "user": "b@x"
+          }
+        ]
+      },
+      "name": "direct-both-off"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": false
+      },
+      "input": {
+        "chat": "direct",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 10,
+            "user": "eve@x"
+          }
+        ]
+      },
+      "name": "direct-outsider-ignored"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": false
+      },
+      "input": {
+        "chat": "group",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x",
+          "c@x"
+        ],
+        "prefs": []
+      },
+      "name": "group-default-off"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": true
+      },
+      "input": {
+        "chat": "group",
+        "group_policy": [],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x",
+          "c@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 1,
+            "user": "a@x"
+          }
+        ]
+      },
+      "name": "group-personal-pref-pads-own"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": false
+      },
+      "input": {
+        "chat": "group",
+        "group_policy": [],
+        "me": "b@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x",
+          "c@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 1,
+            "user": "a@x"
+          }
+        ]
+      },
+      "name": "group-other-member-pref"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "group",
+        "group_policy": [
+          {
+            "enabled": true,
+            "ts_ms": 2
+          }
+        ],
+        "me": "b@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x",
+          "c@x"
+        ],
+        "prefs": []
+      },
+      "name": "group-policy-on"
+    },
+    {
+      "expect": {
+        "active": true,
+        "ephemeral": false,
+        "pad": true
+      },
+      "input": {
+        "chat": "group",
+        "group_policy": [
+          {
+            "enabled": true,
+            "ts_ms": 2
+          },
+          {
+            "enabled": false,
+            "ts_ms": 1
+          }
+        ],
+        "me": "b@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x",
+          "c@x"
+        ],
+        "prefs": []
+      },
+      "name": "group-policy-stale-off-ignored"
+    },
+    {
+      "expect": {
+        "active": false,
+        "ephemeral": true,
+        "pad": true
+      },
+      "input": {
+        "chat": "group",
+        "group_policy": [
+          {
+            "enabled": true,
+            "ts_ms": 2
+          },
+          {
+            "enabled": false,
+            "ts_ms": 3
+          }
+        ],
+        "me": "a@x",
+        "op": "negotiate",
+        "participants": [
+          "a@x",
+          "b@x",
+          "c@x"
+        ],
+        "prefs": [
+          {
+            "enabled": true,
+            "ts_ms": 1,
+            "user": "a@x"
+          }
+        ]
+      },
+      "name": "group-policy-off-pref-on"
+    }
+  ],
+  "description": "режим «усиленная приватность» (L2-1): сетка выравнивания личных и групповых конвертов, согласование режима участниками, запрет typing/presence",
+  "suite": "l2"
+}

@@ -252,6 +252,18 @@ fn permission_set(block: &str, permission: &str) -> BTreeSet<String> {
         + marker.len()..];
     let array = &tail[tail.find('[').expect("начало массива ACL") + 1..];
     let array = &array[..array.find(']').expect("конец массива ACL")];
+    // v2-блоки (между маркерами) генерируются из реестра и сверяются отдельно
+    // (v2_acl_is_generated_from_registry).
+    let mut v1_only = String::new();
+    let mut rest_lines = array;
+    while let Some(open) = rest_lines.find("# >>> v2") {
+        v1_only.push_str(&rest_lines[..open]);
+        let after = &rest_lines[open..];
+        let close = after.find("# <<< v2").map(|i| i + "# <<< v2".len()).unwrap_or(after.len());
+        rest_lines = &after[close..];
+    }
+    v1_only.push_str(rest_lines);
+    let array = v1_only.as_str();
 
     let mut values = BTreeSet::new();
     let mut rest = array;
@@ -415,5 +427,19 @@ fn gateway_runtime_allowlist_is_covered_by_its_nats_acl() {
             GATEWAY_SOURCE.contains(name),
             "gateway не использует {name}"
         );
+    }
+}
+
+/// Протокол v2 (T031): блоки ACL между маркерами `# >>> v2 …` в обоих
+/// конфигах NATS совпадают с тем, что генерирует реестр методов.
+#[test]
+fn v2_acl_is_generated_from_registry() {
+    for (name, text) in [("server.conf", DEV_NATS), ("server.prod.conf", PROD_NATS)] {
+        let generated = parvane_protocol::registry_gen::apply_conf(text).expect("маркеры v2 на месте");
+        assert_eq!(generated, text, "{name}: v2-блоки ACL устарели — cargo run -p parvane-protocol --bin gen_registry");
+    }
+    // v1-топики не пересекаются с пространством v2.
+    for m in parvane_protocol::schema::METHODS {
+        assert!(m.subject.starts_with("v2."), "{}", m.name);
     }
 }

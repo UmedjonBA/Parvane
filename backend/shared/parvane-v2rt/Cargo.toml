@@ -1,0 +1,13 @@
+[package]
+name = "parvane-v2rt"
+version = "0.1.0"
+edition = "2021"
+description = "Рантайм методов протокола v2 для шардов: подписки из реестра, ShardRequest → ShardResponse"
+
+[dependencies]
+parvane-protocol = { path = "../../protocol" }
+async-nats = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+prost = "0.14"

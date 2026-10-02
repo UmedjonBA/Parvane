@@ -1,0 +1,52 @@
+// Превью ссылок и тайлы карты (MAP-1: тайлы только через шард preview).
+// Общий SSRF-фильтр: ≤ 3 редиректов, тело ≤ 256 КиБ, только html, фиксация
+// IP, без прокси; зум тайлов ≤ 15.
+syntax = "proto3";
+
+package parvane.preview.v2;
+
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service PreviewService {
+  rpc Link(LinkRequest) returns (LinkResponse) {
+    option (parvane.core.v2.method) = {
+      name: "preview.link"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "preview"
+    };
+  }
+  rpc MapTile(MapTileRequest) returns (MapTileResponse) {
+    option (parvane.core.v2.method) = {
+      name: "preview.map_tile"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "preview"
+    };
+  }
+}
+
+message LinkRequest {
+  string url = 1 [(parvane.core.v2.max_len) = 2048];
+}
+message LinkResponse {
+  string url = 1 [(parvane.core.v2.max_len) = 2048];
+  string site_name = 2 [(parvane.core.v2.max_len) = 256];
+  string title = 3 [(parvane.core.v2.max_len) = 512];
+  string description = 4 [(parvane.core.v2.max_len) = 2048];
+  bytes image = 5 [(parvane.core.v2.max_len) = 262144];
+  string image_mime = 6 [(parvane.core.v2.max_len) = 64];
+}
+
+message MapTileRequest {
+  uint32 zoom = 1;
+  uint32 x = 2;
+  uint32 y = 3;
+}
+message MapTileResponse {
+  // Как v1: тайл до 512 КиБ.
+  bytes png = 1 [(parvane.core.v2.max_len) = 524288];
+}

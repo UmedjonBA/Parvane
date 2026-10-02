@@ -3,7 +3,8 @@
 // централизуется SSRF-защита. Модель приватности прежняя: превью генерирует
 // отправитель и кладёт внутрь E2E-контента; шард лишь помогает добыть метаданные.
 
-use std::net::IpAddr;
+mod v2;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -18,8 +19,9 @@ use parvane_types::{
 use sqlx::SqlitePool;
 use tracing::{debug, info, warn};
 
-// Лимиты (согласованы с desktop-эталоном parvane_client.cpp)
-const MAX_REDIRECTS: u8 = 3;
+// Лимиты (согласованы с desktop-эталоном parvane_client.cpp); редиректы и
+// фильтр адресов — общий parvane-netguard (T106)
+use parvane_netguard::{UrlPolicy, MAX_REDIRECTS};
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const CONNECT_TIMEOUT_MS: u64 = 2000;
 const TOTAL_TIMEOUT_MS: u64 = 5000;
@@ -65,6 +67,9 @@ async fn main() -> Result<()> {
 
     let nc = parvane_types::nats::connect(&nats_url).await.context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
+
+    // Протокол v2 (spec 007 T053): preview.link / preview.map_tile из реестра
+    v2::run(nc.clone(), pool.clone()).await?;
 
     let mut fetch_sub = nc.subscribe(PREVIEW_FETCH).await?;
     let mut tile_sub = nc.subscribe(PREVIEW_MAP_TILE).await?;
@@ -185,7 +190,7 @@ async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
             serde_json::from_slice(&msg.payload).context("неверный JSON preview.map.tile")?;
         let user = verify_token(nc, &event.token).await?;
         let MapTileRequest { z, x, y, .. } = event.payload;
-        if z > TILE_MAX_ZOOM || x >= (1u32 << z) || y >= (1u32 << z) {
+        if !tile_in_range(z, x, y) {
             anyhow::bail!("тайл вне диапазона");
         }
         // P-23: per-user темп (общая корзина с превью), координаты в лог не пишем
@@ -202,6 +207,11 @@ async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
     });
     let json = serde_json::to_vec(&resp).unwrap_or_default();
     let _ = nc.publish(reply, json.into()).await;
+}
+
+/// Координаты тайла допустимы: зум ≤ TILE_MAX_ZOOM, x/y внутри сетки зума.
+fn tile_in_range(z: u32, x: u32, y: u32) -> bool {
+    z <= TILE_MAX_ZOOM && x < (1u32 << z) && y < (1u32 << z)
 }
 
 async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u8>> {
@@ -321,112 +331,23 @@ async fn store_cache(pool: &SqlitePool, url: &str, resp: &PreviewFetchResponse) 
     .await;
 }
 
-/// Один resolved-IP безопасен для исходящего запроса (не приватный/зарезервированный).
-fn is_public_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            !(v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_unspecified()
-                || v4.is_multicast()
-                // CGNAT 100.64.0.0/10
-                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
-                // IETF protocol assignments 192.0.0.0/24 (P-49)
-                || (v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0)
-                // 0.0.0.0/8
-                || v4.octets()[0] == 0
-                // benchmarking 198.18.0.0/15
-                || (v4.octets()[0] == 198 && (v4.octets()[1] & 0xfe) == 18)
-                // reserved/class E 240.0.0.0/4 (incl. 255.* broadcast)
-                || v4.octets()[0] >= 240)
-        }
-        IpAddr::V6(v6) => {
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // ULA fc00::/7
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                // link-local fe80::/10
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-                // documentation 2001:db8::/32
-                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
-                // P-49: site-local fec0::/10 (deprecated, но маршрутизируется внутрь)
-                || (v6.segments()[0] & 0xffc0) == 0xfec0
-                // P-49: 6to4 2002::/16 — встроенный IPv4 в сегментах 1-2
-                || (v6.segments()[0] == 0x2002 && !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
-                    (v6.segments()[1] >> 8) as u8, v6.segments()[1] as u8,
-                    (v6.segments()[2] >> 8) as u8, v6.segments()[2] as u8))))
-                // P-49: Teredo 2001::/32 — IPv4 сервера/клиента (клиент — инвертирован в последних 32 битах)
-                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0 && (
-                    !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
-                        (v6.segments()[2] >> 8) as u8, v6.segments()[2] as u8,
-                        (v6.segments()[3] >> 8) as u8, v6.segments()[3] as u8)))
-                    || !is_public_ip(&IpAddr::V4(std::net::Ipv4Addr::new(
-                        !(v6.segments()[6] >> 8) as u8, !(v6.segments()[6] as u8),
-                        !(v6.segments()[7] >> 8) as u8, !(v6.segments()[7] as u8))))))
-                // P-49: discard-only 100::/64
-                || (v6.segments()[0] == 0x0100 && v6.segments()[1] == 0 && v6.segments()[2] == 0 && v6.segments()[3] == 0)
-                // NAT64 well-known 64:ff9b::/96 (встраивает IPv4 — SSRF-риск)
-                || (v6.segments()[0] == 0x0064
-                    && v6.segments()[1] == 0xff9b
-                    && v6.segments()[2] == 0
-                    && v6.segments()[3] == 0
-                    && v6.segments()[4] == 0
-                    && v6.segments()[5] == 0)
-                // IPv4-mapped ::ffff:0:0/96 — проверяем вложенный v4
-                || v6.to_ipv4_mapped().map(|v4| !is_public_ip(&IpAddr::V4(v4))).unwrap_or(false))
-        }
-    }
-}
-
-/// Резолвит host и возвращает первый безопасный IP; ошибка, если любой resolved
-/// адрес приватный (fail-closed против split-horizon и rebinding).
-async fn safe_resolve(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    let addrs = tokio::net::lookup_host((host, port))
-        .await
-        .context("dns resolve failed")?
-        .collect::<Vec<_>>();
-    if addrs.is_empty() {
-        anyhow::bail!("no dns records");
-    }
-    for addr in &addrs {
-        if !is_public_ip(&addr.ip()) {
-            anyhow::bail!("blocked_private_ip");
-        }
-    }
-    Ok(addrs[0])
-}
-
 async fn fetch_preview(input_url: &str) -> Result<WebPagePreview> {
-    let mut current = reqwest::Url::parse(input_url).context("invalid url")?;
+    // Схема/порт/хост — общим фильтром (http/https на 80/443, без userinfo)
+    let mut current = parvane_netguard::check_url(input_url, &UrlPolicy::LINK)?;
     let mut seen: Vec<String> = Vec::new();
 
     for _ in 0..=MAX_REDIRECTS {
-        if !matches!(current.scheme(), "http" | "https") {
-            anyhow::bail!("unsupported_scheme");
-        }
-        let host = current.host_str().context("no host")?.to_string();
-        let port = current.port_or_known_default().context("no port")?;
-        if !matches!(port, 80 | 443) {
-            anyhow::bail!("blocked_port");
-        }
-        // Пиним проверенный IP — reqwest не будет резолвить повторно (анти-rebinding)
-        let pinned = safe_resolve(&host, port).await?;
+        // Все адреса имени публичные (fail-closed), фиксируем их в клиенте —
+        // reqwest не будет резолвить повторно (анти-rebinding)
+        let (host, pinned) = parvane_netguard::resolve_url(&current).await?;
         let normalized = current.as_str().to_string();
         if seen.contains(&normalized) {
             anyhow::bail!("too_many_redirects");
         }
         seen.push(normalized);
 
-        let client = reqwest::Client::builder()
-            .no_proxy()
-        // P-49: без HTTPS_PROXY из окружения — иначе резолв/пиннинг обходились бы через прокси
-        .no_proxy()
-            .resolve(&host, pinned)
-            .redirect(reqwest::redirect::Policy::none())
+        // P-49: без прокси из окружения и без авто-редиректов — в netguard
+        let client = parvane_netguard::pinned_client_builder(&host, &pinned)
             .connect_timeout(Duration::from_millis(CONNECT_TIMEOUT_MS))
             .timeout(Duration::from_millis(TOTAL_TIMEOUT_MS))
             .user_agent(USER_AGENT)
@@ -442,7 +363,8 @@ async fn fetch_preview(input_url: &str) -> Result<WebPagePreview> {
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .context("redirect without location")?;
-            current = current.join(location).context("bad redirect location")?;
+            // Каждый хоп — снова через фильтр (схема/порт/хост), резолв — на следующем круге
+            current = parvane_netguard::follow_redirect(&current, location, &UrlPolicy::LINK)?;
             continue;
         }
         if !status.is_success() {
@@ -527,7 +449,41 @@ mod tests {
         assert_eq!(super::TILE_MAX_ZOOM, 15);
     }
     use super::*;
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    /// Фильтр адресов — общий parvane-netguard; старые проверки preview
+    /// прогоняются через него же.
+    fn is_public_ip(ip: &IpAddr) -> bool {
+        parvane_netguard::is_public_ip(*ip)
+    }
+
+    /// Класс 14: единый набор адресов через URL-путь превью (литералы в URL).
+    #[test]
+    fn netguard_address_set_blocks_preview_urls() {
+        use parvane_netguard::test_addrs::{ALLOWED, BLOCKED};
+        let url_of = |a: &str| match a.parse::<IpAddr>() {
+            Ok(IpAddr::V6(_)) => format!("https://[{a}]/"),
+            _ => format!("https://{a}/"),
+        };
+        for a in BLOCKED {
+            assert!(parvane_netguard::check_url(&url_of(a), &UrlPolicy::LINK).is_err(), "{a}");
+        }
+        for a in ALLOWED {
+            assert!(parvane_netguard::check_url(&url_of(a), &UrlPolicy::LINK).is_ok(), "{a}");
+        }
+        assert!(parvane_netguard::check_url("https://example.com:8080/", &UrlPolicy::LINK).is_err());
+        assert!(parvane_netguard::check_url("ftp://example.com/", &UrlPolicy::LINK).is_err());
+    }
+
+    #[test]
+    fn tile_range_is_checked() {
+        assert!(tile_in_range(0, 0, 0));
+        assert!(tile_in_range(15, 32767, 32767));
+        assert!(!tile_in_range(16, 0, 0));
+        assert!(!tile_in_range(15, 32768, 0));
+        assert!(!tile_in_range(2, 0, 4));
+        assert!(!tile_in_range(u32::MAX, 0, 0));
+    }
 
     #[test]
     fn private_ipv4_is_blocked() {

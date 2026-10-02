@@ -1,0 +1,78 @@
+// Реестр методов v2. Каждый метод — rpc в сервисе своего доменного пакета
+// (identity/v2, msg/v2, group/v2, …) с опцией (parvane.core.v2.method).
+// Сервисы — только носители реестра: транспорт один (Request/Response в
+// frame.proto), gRPC не используется.
+//
+// Из реестра генерируются (backend/protocol/build.rs → таблица METHODS;
+// gen_registry — ACL gateway/NATS и константы subject'ов):
+//   - список методов, разрешённых gateway, с каналом, reauth и классом частоты;
+//   - NATS-subject метода (по умолчанию "v2." + name);
+//   - типы тела запроса/ответа для проверки лимитов до разбора.
+//
+// Правила генератора (ошибка сборки):
+//   - у каждого rpc есть опция method с непустым name, каналом и классом;
+//   - name уникально, из [a-z0-9_.], 3..96 байт;
+//   - у метода канала ANON класс частоты только ANON, reauth запрещён;
+//   - у метода канала PRE класс частоты только PRE.
+syntax = "proto3";
+
+package parvane.core.v2;
+
+import "google/protobuf/descriptor.proto";
+import "parvane/core/v2/options.proto";
+
+// Какое соединение вправе вызывать метод.
+enum MethodChannel {
+  METHOD_CHANNEL_UNSPECIFIED = 0;
+  // До входа (регистрация, выпуск сессии, описатель сервера).
+  METHOD_CHANNEL_PRE = 1;
+  // Идентифицированная сессия (после Auth).
+  METHOD_CHANNEL_ID = 2;
+  // Анонимный канал доставки (без личности).
+  METHOD_CHANNEL_ANON = 3;
+}
+
+// Класс лимита частоты (backend/shards/gateway/src/v2/limits.rs).
+enum RateClass {
+  RATE_CLASS_UNSPECIFIED = 0;
+  // Сообщения и мутации: 30 за 3 с.
+  RATE_CLASS_MSG = 1;
+  // Загрузка чанков: 400 за 40 с.
+  RATE_CLASS_UPLOAD = 2;
+  // Прочие запросы: 120 за 20 с.
+  RATE_CLASS_REQ = 3;
+  // Анонимная доставка: лимит на соединение и IP, право — ключ/жетон.
+  RATE_CLASS_ANON = 4;
+  // До входа: по IP.
+  RATE_CLASS_PRE = 5;
+}
+
+enum MethodKind {
+  METHOD_KIND_UNSPECIFIED = 0;
+  // Запрос → один Response.
+  METHOD_KIND_CALL = 1;
+  // Запрос → Response с id подписки, затем Event'ы.
+  METHOD_KIND_SUBSCRIBE = 2;
+  // Запрос → поток StreamChunk (скачивание).
+  METHOD_KIND_STREAM = 3;
+}
+
+message MethodSpec {
+  // Имя на проводе: "msg.inbox.sync".
+  string name = 1 [(max_len) = 96];
+  MethodChannel channel = 2;
+  // Требует свежего подтверждения паролем (≤ 5 мин), иначе REAUTH_REQUIRED.
+  bool reauth = 3;
+  RateClass rate = 4;
+  MethodKind kind = 5;
+  // Шард-обработчик (для ACL NATS): "identity", "messenger", "cloud", …
+  string shard = 6 [(max_len) = 32];
+  // NATS-subject; пусто → "v2." + name.
+  string subject = 7 [(max_len) = 128];
+  // Только для операторской роли (server.stats.*).
+  bool operator_only = 8;
+}
+
+extend google.protobuf.MethodOptions {
+  MethodSpec method = 50010;
+}

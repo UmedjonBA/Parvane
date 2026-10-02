@@ -1,0 +1,378 @@
+// Группы и каналы: подписанный журнал состояния (класс 19) и эпохи ключей
+// отправки (R8). Модель прав spec 003 (права по умолчанию, права админов,
+// инвайты, заявки) переносится в записи журнала без изменения смысла.
+//
+// Запись журнала: GroupStateEntry (core/v2) с change = SignedOp,
+// header.domain = "group", header.op_type = "state", header.target = группа,
+// payload = GroupStateChange (позиция записи подписана — D-02).
+syntax = "proto3";
+
+package parvane.group.v2;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service GroupService {
+  rpc StateAppend(StateAppendRequest) returns (StateAppendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.state.append"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc StateSync(StateSyncRequest) returns (StateSyncResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.state.sync"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc EpochPublishSendKey(EpochPublishSendKeyRequest) returns (EpochPublishSendKeyResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.epoch.publish_send_key"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InviteCreate(InviteCreateRequest) returns (InviteCreateResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.invite.create"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InviteList(InviteListRequest) returns (InviteListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.invite.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InviteRevoke(InviteRevokeRequest) returns (InviteRevokeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.invite.revoke"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InviteDelete(InviteDeleteRequest) returns (InviteDeleteResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.invite.delete"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InviteCheck(InviteCheckRequest) returns (InviteCheckResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.invite.check"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc Join(JoinRequest) returns (JoinResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.join"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc RequestList(RequestListRequest) returns (RequestListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.request.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc RequestDecide(RequestDecideRequest) returns (RequestDecideResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.request.decide"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+}
+
+enum GroupKind {
+  GROUP_KIND_UNSPECIFIED = 0;
+  GROUP_KIND_GROUP = 1;
+  GROUP_KIND_CHANNEL = 2;
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_MEMBER = 1;
+  ROLE_ADMIN = 2;
+  ROLE_OWNER = 3;
+}
+
+// Права участников по умолчанию (spec 003). Всегда передаются целиком.
+message Permissions {
+  bool send_messages = 1;
+  bool send_media = 2;
+  bool send_stickers_gifs = 3;
+  bool send_polls = 4;
+  bool embed_links = 5;
+  bool invite_users = 6;
+  bool pin_messages = 7;
+  bool change_info = 8;
+}
+
+message AdminRights {
+  bool change_info = 1;
+  bool delete_messages = 2;
+  bool ban_users = 3;
+  bool invite_users = 4;
+  bool pin_messages = 5;
+  bool add_admins = 6;
+}
+
+// Подписанная позиция записи + изменение (D-02): group/version/prev_hash
+// обязаны совпадать с внешними полями GroupStateEntry.
+message GroupStateChange {
+  parvane.core.v2.Ref group = 1;
+  uint64 version = 2;
+  bytes prev_hash = 3 [(parvane.core.v2.max_len) = 32];
+  GroupChange change = 4;
+}
+
+message GroupChange {
+  oneof change {
+    Create create = 1;
+    AddMember add_member = 2;
+    RemoveMember remove_member = 3;
+    SetRole set_role = 4;
+    Ban ban = 5;
+    Unban unban = 6;
+    Mute mute = 7;
+    SetInfo set_info = 8;
+    SetPermissions set_permissions = 9;
+    NewEpoch new_epoch = 10;
+    JoinByInvite join_by_invite = 11;
+    Leave leave = 12;
+    DeleteGroup delete_group = 13;
+    parvane.core.v2.GroupInviteKeyAnnounce invite_key = 14;
+    InviteKeyRevoke invite_key_revoke = 15;
+    SetPrivacyMode set_privacy_mode = 16;
+  }
+}
+
+// Отзыв ссылки: link_id = SHA-256(link_public_key).
+message InviteKeyRevoke {
+  bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+
+message Create {
+  GroupKind kind = 1;
+  string name = 2 [(parvane.core.v2.max_len) = 255];
+  string about = 3 [(parvane.core.v2.max_len) = 1024];
+  Permissions default_permissions = 4;
+  // Начальные участники (без владельца — он подписант).
+  repeated parvane.core.v2.UserRef members = 5 [(parvane.core.v2.max_items) = 200];
+}
+
+message AddMember {
+  parvane.core.v2.UserRef member = 1;
+}
+
+message RemoveMember {
+  parvane.core.v2.UserRef member = 1;
+}
+
+message SetRole {
+  parvane.core.v2.UserRef member = 1;
+  Role role = 2;
+  AdminRights rights = 3;
+}
+
+message Ban {
+  parvane.core.v2.UserRef member = 1;
+}
+
+message Unban {
+  parvane.core.v2.UserRef member = 1;
+}
+
+message Mute {
+  parvane.core.v2.UserRef member = 1;
+  // 0 — снять мьют.
+  int64 until_ms = 2;
+}
+
+message SetInfo {
+  string name = 1 [(parvane.core.v2.max_len) = 255];
+  string about = 2 [(parvane.core.v2.max_len) = 1024];
+  // Фото группы — объект, зашифрованный ключом эпохи.
+  string avatar_file_id = 3 [(parvane.core.v2.max_len) = 64];
+  bytes avatar_key = 4 [(parvane.core.v2.max_len) = 32];
+}
+
+message SetPermissions {
+  Permissions default_permissions = 1;
+}
+
+// Политика «усиленная приватность» (L2, FR-036) группы: выравнивание размеров
+// конвертов по сетке и отказ от typing в группе — для всех участников. Право —
+// как у изменения сведений группы (`change_info`). Новой эпохи не требует.
+message SetPrivacyMode {
+  bool l2 = 1;
+}
+
+// Новая эпоха: публичный ключ отправки. Приватная часть раздаётся по E2E
+// (GroupKeyShare) только тем, кто вправе писать. Не чаще 1 раза в 10 с.
+message NewEpoch {
+  uint64 epoch = 1;
+  bytes send_public_key = 2 [(parvane.core.v2.max_len) = 32];
+}
+
+// Вступление по ссылке (D-04): запись подписана устройством вступающего;
+// право — подпись приватным ключом ссылки над
+// "parvane/v2/group-join\0" ‖ group.domain ‖ "\0" ‖ group.id ‖ version(u64 BE)
+// ‖ prev_hash ‖ joiner_root_key. Сервер без секрета ссылки её не создаст.
+message JoinByInvite {
+  bytes link_public_key = 1 [(parvane.core.v2.max_len) = 32];
+  bytes joiner_root_key = 2 [(parvane.core.v2.max_len) = 32];
+  bytes link_signature = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+message Leave {}
+
+message DeleteGroup {}
+
+message StateAppendRequest {
+  parvane.core.v2.GroupStateEntry entry = 1;
+}
+message StateAppendResponse {
+  uint64 version = 1;
+}
+
+message StateSyncRequest {
+  parvane.core.v2.Ref group = 1;
+  // Записи с version > after_version.
+  uint64 after_version = 2;
+  // Вступающий по ссылке (ещё не участник): link_id действующей ссылки этой
+  // группы — журнал нужен, чтобы подписать вступление над головой (D-04) и
+  // проверить состав до вступления. link_id знает только держатель ссылки.
+  bytes invite_link_id = 3 [(parvane.core.v2.max_len) = 32];
+}
+message StateSyncResponse {
+  repeated parvane.core.v2.GroupStateEntry entries = 1 [(parvane.core.v2.max_items) = 1024];
+  bool more = 2;
+  // Подсказка сервера: адрес подписанта каждой записи (параллельно entries).
+  // Не доверяется: клиент лишь узнаёт, чей журнал устройств добрать, а
+  // подписанта проверяет по ключу устройства из этого журнала.
+  repeated string signer_hints = 3 [
+    (parvane.core.v2.max_items) = 1024,
+    (parvane.core.v2.max_len) = 255
+  ];
+}
+
+message EpochPublishSendKeyRequest {
+  parvane.core.v2.GroupStateEntry entry = 1;
+}
+message EpochPublishSendKeyResponse {
+  uint64 epoch = 1;
+}
+
+// Сервер знает только link_id = SHA-256(link_public_key) (D-04).
+message Invite {
+  bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
+  parvane.core.v2.UserRef creator = 2;
+  int64 expires_ms = 3;
+  uint32 usage_limit = 4;
+  uint32 usage_count = 5;
+  bool requires_approval = 6;
+  bool revoked = 7;
+  string title = 8 [(parvane.core.v2.max_len) = 64];
+}
+
+// Создание ссылки = запись журнала GroupInviteKeyAnnounce; клиент собирает
+// ссылку https://<domain>/join/<link_id>#<секрет> сам (секрет серверу не уходит).
+message InviteCreateRequest {
+  parvane.core.v2.GroupStateEntry entry = 1;
+}
+message InviteCreateResponse {
+  Invite invite = 1;
+}
+
+message InviteListRequest {
+  parvane.core.v2.Ref group = 1;
+}
+message InviteListResponse {
+  repeated Invite invites = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// Отзыв = запись журнала InviteKeyRevoke.
+message InviteRevokeRequest {
+  parvane.core.v2.GroupStateEntry entry = 1;
+}
+message InviteRevokeResponse {}
+
+message InviteDeleteRequest {
+  parvane.core.v2.Ref group = 1;
+  bytes link_id = 2 [(parvane.core.v2.max_len) = 32];
+}
+message InviteDeleteResponse {}
+
+message InviteCheckRequest {
+  bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message InviteCheckResponse {
+  parvane.core.v2.Ref group = 1;
+  string name = 2 [(parvane.core.v2.max_len) = 255];
+  uint32 members = 3;
+  bool requires_approval = 4;
+  GroupKind kind = 5;
+}
+
+message JoinRequest {
+  // Запись журнала JoinByInvite, подписанная вступающим.
+  parvane.core.v2.GroupStateEntry entry = 1;
+}
+message JoinResponse {
+  // true — заявка ждёт решения админа.
+  bool pending = 1;
+  uint64 version = 2;
+}
+
+message JoinRequestInfo {
+  parvane.core.v2.UserRef user = 1;
+  int64 requested_ms = 2;
+}
+message RequestListRequest {
+  parvane.core.v2.Ref group = 1;
+}
+message RequestListResponse {
+  repeated JoinRequestInfo requests = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+message RequestDecideRequest {
+  parvane.core.v2.Ref group = 1;
+  parvane.core.v2.UserRef user = 2;
+  bool approve = 3;
+  // При одобрении — запись AddMember, подписанная админом.
+  parvane.core.v2.GroupStateEntry entry = 4;
+}
+message RequestDecideResponse {}

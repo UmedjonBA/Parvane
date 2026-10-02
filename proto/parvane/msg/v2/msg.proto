@@ -1,0 +1,310 @@
+// Доставка и журнал инбокса устройства. Мутации (правки, удаления, реакции,
+// квитанции, закреп) — содержимое sealed/group-сообщений, а не серверные
+// операции с автором (FR-035).
+syntax = "proto3";
+
+package parvane.msg.v2;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service MsgService {
+  // Личное sealed-сообщение: без токена и без `from` (класс 11).
+  rpc DeliverSealed(DeliverSealedRequest) returns (DeliverSealedResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.deliver_sealed"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  // Групповое сообщение: право — подпись ключом отправки эпохи (R8).
+  rpc DeliverGroup(DeliverGroupRequest) returns (DeliverGroupResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.deliver_group"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  // Легаси-копия формата v1 — только устройствам получателя из его
+  // LegacyDeviceSet (D-01); сервер хранит её как v1-сообщение для v1-клиентов.
+  rpc DeliverLegacy(DeliverLegacyRequest) returns (DeliverLegacyResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.deliver_legacy"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InboxSync(InboxSyncRequest) returns (InboxSyncResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.inbox.sync"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InboxAck(InboxAckRequest) returns (InboxAckResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.inbox.ack"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc InboxHide(InboxHideRequest) returns (InboxHideResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.inbox.hide"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  // Подписка на журнал СВОЕГО устройства (устройство — из сессии).
+  rpc InboxSubscribe(InboxSubscribeRequest) returns (InboxSubscribeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "msg.inbox.subscribe"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_SUBSCRIBE
+      shard: "gateway"
+    };
+  }
+  // Эфемерные каналы: секретные 128-битные id (R12); выключены в L2.
+  rpc EphemeralTyping(EphemeralTypingRequest) returns (EphemeralTypingResponse) {
+    option (parvane.core.v2.method) = {
+      name: "ephemeral.typing"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "gateway"
+    };
+  }
+  rpc EphemeralPresence(EphemeralPresenceRequest) returns (EphemeralPresenceResponse) {
+    option (parvane.core.v2.method) = {
+      name: "ephemeral.presence"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "gateway"
+    };
+  }
+  // D-07: «печатает» в группе — анонимно, подпись ключом отправки эпохи.
+  rpc EphemeralGroupTyping(EphemeralGroupTypingRequest) returns (EphemeralGroupTypingResponse) {
+    option (parvane.core.v2.method) = {
+      name: "ephemeral.group_typing"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "gateway"
+    };
+  }
+  rpc EphemeralSubscribe(EphemeralSubscribeRequest) returns (EphemeralSubscribeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "ephemeral.subscribe"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_SUBSCRIBE
+      shard: "gateway"
+    };
+  }
+}
+
+message DeliverSealedRequest {
+  // Копии устройствам ОДНОГО пользователя-получателя (D-05); копии своим
+  // устройствам и другим получателям — отдельными запросами. ≤ 64 (v1).
+  repeated parvane.core.v2.SealedEnvelope envelopes = 1 [(parvane.core.v2.max_items) = 64];
+}
+message DeliverSealedResponse {
+  // Число принятых копий.
+  uint32 accepted = 1;
+}
+
+message DeliverGroupRequest {
+  parvane.core.v2.GroupEnvelope envelope = 1;
+}
+message DeliverGroupResponse {}
+
+message DeliverLegacyRequest {
+  // id v1-сообщения (UUID).
+  string message_id = 1 [(parvane.core.v2.max_len) = 36];
+  // JSON v1 SendPayload (только виды encrypted/group_encrypted).
+  bytes send_payload_json = 2 [(parvane.core.v2.max_len) = 1048576];
+}
+message DeliverLegacyResponse {}
+
+// Запись журнала инбокса устройства. Сервер не хранит отправителя.
+message InboxRecord {
+  uint64 seq = 1 [(parvane.core.v2.actor) = ACTOR_SERVER_SET];
+  // В L2-журналах округлено.
+  int64 received_ms = 2 [(parvane.core.v2.actor) = ACTOR_SERVER_SET];
+  oneof item {
+    parvane.core.v2.SealedEnvelope sealed = 10;
+    parvane.core.v2.GroupEnvelope group = 11;
+    // v1-строка (история до перехода и сообщения v1-клиентов).
+    LegacyV1Record legacy_v1 = 12;
+    // Новая запись журнала состояния группы (уведомление, без тела).
+    GroupStateNotice group_state = 13;
+    // Отзыв одного из устройств пользователя.
+    DeviceRevokedNotice device_revoked = 14;
+    // Новое устройство в журнале устройств пользователя (T119): живое
+    // событие без записи в журнал (seq = 0); офлайн-устройства узнают о нём
+    // из собственного журнала устройств при синхронизации.
+    DeviceAddedNotice device_added = 15;
+  }
+}
+
+message LegacyV1Record {
+  bytes json = 1 [(parvane.core.v2.max_len) = 1048576];
+}
+
+message GroupStateNotice {
+  parvane.core.v2.Ref group = 1;
+  uint64 version = 2;
+}
+
+message DeviceRevokedNotice {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+
+message DeviceAddedNotice {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  // Версия журнала устройств, в которой устройство добавлено.
+  uint64 log_version = 2;
+}
+
+message InboxSyncRequest {
+  // Курсор: записи с seq > after_seq.
+  uint64 after_seq = 1;
+  // Байтовый бюджет страницы; сервер ограничивает ≤ 716800.
+  uint32 max_bytes = 2;
+}
+message InboxSyncResponse {
+  // Бюджет страницы ≤ 716800 байт.
+  repeated InboxRecord records = 1 [(parvane.core.v2.max_items) = 4096];
+  bool more = 2;
+}
+
+message InboxAckRequest {
+  // Всё до up_to_seq включительно применено (SYNC-1).
+  uint64 up_to_seq = 1;
+}
+message InboxAckResponse {}
+
+message InboxHideRequest {
+  repeated uint64 seqs = 1 [(parvane.core.v2.max_items) = 500];
+}
+message InboxHideResponse {}
+
+message InboxSubscribeRequest {}
+message InboxSubscribeResponse {
+  uint64 subscription = 1;
+}
+
+message EphemeralTypingRequest {
+  bytes channel_id = 1 [(parvane.core.v2.max_len) = 16];
+  // Шифртекст на ключ канала (кто печатает, действие).
+  bytes payload = 2 [(parvane.core.v2.max_len) = 256];
+}
+message EphemeralTypingResponse {}
+
+message EphemeralPresenceRequest {
+  bytes channel_id = 1 [(parvane.core.v2.max_len) = 16];
+  bytes payload = 2 [(parvane.core.v2.max_len) = 256];
+}
+message EphemeralPresenceResponse {}
+
+message EphemeralGroupTypingRequest {
+  parvane.core.v2.Ref group = 1;
+  uint64 epoch = 2;
+  // Шифртекст на ключ конверта эпохи.
+  bytes payload = 3 [(parvane.core.v2.max_len) = 256];
+  bytes nonce = 4 [(parvane.core.v2.max_len) = 16];
+  // Ключ отправки эпохи над "parvane/v2/group-typing\0" ‖ domain ‖ "\0" ‖ id ‖
+  // epoch(u64 BE) ‖ nonce ‖ payload.
+  bytes epoch_signature = 5 [(parvane.core.v2.max_len) = 64];
+  // Канал «печатает» группы: id, выведенный клиентами из ключа конверта эпохи
+  // (ephemeral.rs, `EphChannel::group_typing`). Подписью не покрыт: payload
+  // запечатан на ключ канала с AAD = id, перенос в другой канал не расшифруется.
+  bytes channel_id = 6 [(parvane.core.v2.max_len) = 16];
+}
+message EphemeralGroupTypingResponse {}
+
+message EphemeralSubscribeRequest {
+  repeated bytes channel_ids = 1 [
+    (parvane.core.v2.max_items) = 64,
+    (parvane.core.v2.max_len) = 16
+  ];
+}
+message EphemeralSubscribeResponse {
+  uint64 subscription = 1;
+}
+
+// ── содержимое эфемерных каналов (под AEAD ключа канала, R12) ───────────────
+
+// Открытый текст payload каналов typing/presence. Сериализация дополняется
+// `padding` до фиксированного размера (ephemeral.rs), чтобы длина шифртекста
+// не выдавала адрес/действие.
+message EphemeralInner {
+  // Кто: для группы — автор (подпись ключом эпохи доказывает только право
+  // писать; подмена автора внутри группы — косметика, как в Signal).
+  parvane.core.v2.UserRef from = 1;
+  oneof signal {
+    TypingSignal typing = 2;
+    PresenceSignal presence = 3;
+  }
+  int64 ts_ms = 4;
+  bytes padding = 5 [(parvane.core.v2.max_len) = 256];
+}
+
+enum TypingAction {
+  TYPING_ACTION_UNSPECIFIED = 0;
+  TYPING_ACTION_TYPING = 1;
+  TYPING_ACTION_CANCEL = 2;
+  TYPING_ACTION_RECORDING_VOICE = 3;
+  TYPING_ACTION_RECORDING_VIDEO = 4;
+  TYPING_ACTION_UPLOADING_MEDIA = 5;
+  TYPING_ACTION_CHOOSING_STICKER = 6;
+}
+
+message TypingSignal {
+  TypingAction action = 1;
+}
+
+message PresenceSignal {
+  bool online = 1;
+  int64 last_seen_ms = 2;
+}
+
+// Секрет эфемерного канала для раздачи по E2E (личное состояние / профиль
+// собеседнику). Знание id = право подписки; ключ — расшифровка payload.
+message EphemeralChannelSecret {
+  bytes channel_id = 1 [(parvane.core.v2.max_len) = 16];
+  bytes key = 2 [(parvane.core.v2.max_len) = 32];
+  // Поколение (ротация при отзыве устройства/ключа доставки).
+  uint32 generation = 3;
+}
+
+// ── внутренний запрос gateway → messenger (v2.internal.messenger.group_epoch) ─
+
+// ephemeral.group_typing: gateway проверяет подпись ключом отправки ТЕКУЩЕЙ
+// эпохи, не зная автора (D-07). Не клиентский тип.
+message GroupEpochQuery {
+  parvane.core.v2.Ref group = 1;
+}
+message GroupEpochInfo {
+  bool found = 1;
+  uint64 epoch = 2;
+  bytes send_public_key = 3 [(parvane.core.v2.max_len) = 32];
+  // Состав/права изменились, новой эпохи ещё нет (ключ мог утечь исключённому).
+  bool stale = 4;
+  bool deleted = 5;
+}

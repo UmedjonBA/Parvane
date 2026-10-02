@@ -1,0 +1,303 @@
+// Содержимое сообщений. Разбирается ТОЛЬКО у получателя, после расшифровки
+// (сервер видит шифртекст). Лежит в payload SignedOp с
+// header.domain = "msg", header.op_type = "content".
+//
+// Одно имя и один формат на поле (класс 10): легаси-варианты v1 живут только в
+// модуле legacy_v1 движка. Неизвестный вид (oneof не распознан) или
+// неизвестный номер из header.critical_fields → нативная заглушка
+// «сообщение не поддерживается», курсор идёт дальше (FR-004).
+syntax = "proto3";
+
+package parvane.msg.v2;
+
+import "parvane/call/v2/call.proto";
+import "parvane/core/v2/domain.proto";
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/state/v1/state.proto";
+
+message Content {
+  oneof kind {
+    Text text = 1;
+    Media media = 2;
+    Sticker sticker = 3;
+    Location location = 4;
+    Poll poll = 5;
+    PollVote poll_vote = 6;
+    PollClose poll_close = 7;
+    Receipt receipt = 8;
+    Edit edit = 9;
+    Delete delete = 10;
+    Reaction reaction = 11;
+    Pin pin = 12;
+    parvane.call.v2.CallSignal call = 13;
+    GroupKeyShare group_key = 14;
+    DeliveryKeyShare delivery_key = 15;
+    Contact contact = 16;
+    // Ключ эпохи контейнера домена (облако/заметки/…) — раздача по E2E (R11).
+    parvane.core.v2.ContainerKeyShare container_key = 17;
+    // Ключ личного состояния — только своим устройствам (линковка, ротация
+    // после отзыва устройства, D-11/D-16).
+    parvane.state.v1.StateKeyShare state_key = 18;
+    // Режим «усиленная приватность» (L2, FR-036) личного чата: предпочтение
+    // подписавшего участника. Видимое служебное сообщение чата.
+    ChatMode chat_mode = 19;
+  }
+  // D-09: LegacyV1 не может быть содержимым v2-конверта — v1-записи приходят
+  // только записью журнала LegacyV1Record (msg.proto).
+  reserved 99;
+  reserved "legacy_v1";
+  // Самоуничтожение: секунд после прочтения; 0 — нет.
+  uint32 ttl_secs = 100;
+  // Ответ на сообщение.
+  MessageRef reply_to = 101;
+  // Пересланное: исходный автор/чат (только отображение).
+  ForwardInfo forward = 102;
+  // Без звука у получателя.
+  bool silent = 103;
+}
+
+// Ссылка на сообщение: op_id исходной операции (UUIDv7, 16 байт).
+message MessageRef {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+}
+
+message ForwardInfo {
+  parvane.core.v2.UserRef from_user = 1;
+  string from_name = 2 [(parvane.core.v2.max_len) = 128];
+  int64 original_ts_ms = 3;
+}
+
+enum EntityType {
+  ENTITY_TYPE_UNSPECIFIED = 0;
+  ENTITY_TYPE_BOLD = 1;
+  ENTITY_TYPE_ITALIC = 2;
+  ENTITY_TYPE_UNDERLINE = 3;
+  ENTITY_TYPE_STRIKE = 4;
+  ENTITY_TYPE_SPOILER = 5;
+  ENTITY_TYPE_CODE = 6;
+  ENTITY_TYPE_PRE = 7;
+  ENTITY_TYPE_TEXT_URL = 8;
+  ENTITY_TYPE_URL = 9;
+  ENTITY_TYPE_MENTION = 10;
+  ENTITY_TYPE_MENTION_NAME = 11;
+  ENTITY_TYPE_HASHTAG = 12;
+  ENTITY_TYPE_EMAIL = 13;
+  ENTITY_TYPE_PHONE = 14;
+  ENTITY_TYPE_BLOCKQUOTE = 15;
+  ENTITY_TYPE_CUSTOM_EMOJI = 16;
+}
+
+// Смещения/длины — в UTF-16 единицах (как в Telegram); у получателя
+// обрезаются по длине текста (content_guard, класс 16).
+message Entity {
+  EntityType type = 1;
+  uint32 offset = 2;
+  uint32 length = 3;
+  // Для TEXT_URL: только http/https (иначе нейтрализуется у получателя).
+  string url = 4 [(parvane.core.v2.max_len) = 2048];
+  // Для MENTION_NAME.
+  parvane.core.v2.UserRef user = 5;
+  // Для PRE.
+  string language = 6 [(parvane.core.v2.max_len) = 32];
+  // Для CUSTOM_EMOJI.
+  string custom_emoji_id = 7 [(parvane.core.v2.max_len) = 64];
+}
+
+message Text {
+  string text = 1 [(parvane.core.v2.max_len) = 65536];
+  repeated Entity entities = 2 [(parvane.core.v2.max_items) = 1024];
+  // Превью ссылки, собранное отправителем.
+  LinkPreview preview = 3;
+  // Наборы кастом-эмодзи, на которые ссылаются entity CUSTOM_EMOJI (PACK-1/EMOJI-1).
+  repeated PackRef emoji_packs = 4 [(parvane.core.v2.max_items) = 4];
+}
+
+// Ссылка на набор стикеров/эмодзи (PVPK1-блоб в cloud, PACK-1).
+message PackRef {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  string name = 2 [(parvane.core.v2.max_len) = 64];
+  uint32 count = 3;
+  bytes key = 4 [(parvane.core.v2.max_len) = 32];
+  bytes nonce = 5 [(parvane.core.v2.max_len) = 24];
+  // Секрет скачивания блоба набора (D-08): `cloud.blob.download_cap` через
+  // анонимный канал; сервер хранит только SHA-256. Пусто — публичный блоб.
+  bytes capability = 6 [(parvane.core.v2.max_len) = 32];
+}
+
+message LinkPreview {
+  string url = 1 [(parvane.core.v2.max_len) = 2048];
+  string site_name = 2 [(parvane.core.v2.max_len) = 256];
+  string title = 3 [(parvane.core.v2.max_len) = 512];
+  string description = 4 [(parvane.core.v2.max_len) = 2048];
+  Media image = 5;
+}
+
+enum MediaKind {
+  MEDIA_KIND_UNSPECIFIED = 0;
+  MEDIA_KIND_PHOTO = 1;
+  MEDIA_KIND_VIDEO = 2;
+  MEDIA_KIND_VOICE = 3;
+  MEDIA_KIND_VIDEO_NOTE = 4;
+  MEDIA_KIND_FILE = 5;
+  MEDIA_KIND_AUDIO = 6;
+  MEDIA_KIND_ANIMATION = 7;
+}
+
+// Блоб — PVB2 (BLOB-1) в шарде cloud. Имя, MIME, размеры — внутри шифрования.
+message Media {
+  MediaKind kind = 1;
+  string file_id = 2 [(parvane.core.v2.max_len) = 64];
+  // Встраивание/воспроизведение — только по белому списку content_guard;
+  // остальное у получателя — application/octet-stream (только скачивание).
+  string mime = 3 [(parvane.core.v2.max_len) = 128];
+  uint64 size = 4;
+  uint32 duration_ms = 5;
+  uint32 width = 6;
+  uint32 height = 7;
+  // Голосовые: 5-битные отсчёты (формат Telegram).
+  bytes waveform = 8 [(parvane.core.v2.max_len) = 256];
+  // Ключ и nonce PVB2.
+  bytes file_key = 9 [(parvane.core.v2.max_len) = 32];
+  bytes file_nonce = 10 [(parvane.core.v2.max_len) = 24];
+  string name = 11 [(parvane.core.v2.max_len) = 255];
+  string caption = 12 [(parvane.core.v2.max_len) = 4096];
+  repeated Entity caption_entities = 13 [(parvane.core.v2.max_items) = 256];
+  // Миниатюра (JPEG ≤ 16 КиБ), внутри шифрования.
+  bytes thumbnail = 14 [(parvane.core.v2.max_len) = 16384];
+  bool spoiler = 15;
+  // Группировка в альбом.
+  bytes album_id = 16 [(parvane.core.v2.max_len) = 16];
+  // Аудиофайл: название и исполнитель.
+  string title = 17 [(parvane.core.v2.max_len) = 256];
+  string performer = 18 [(parvane.core.v2.max_len) = 256];
+  // Секрет скачивания блоба вложения (D-08): получатель качает его через
+  // `cloud.blob.download_cap` в анонимном канале, без гранта на себя;
+  // сервер хранит только SHA-256 (UploadCompleteRequest.capability_hash).
+  bytes capability = 19 [(parvane.core.v2.max_len) = 32];
+}
+
+message Sticker {
+  // Короткое имя набора.
+  string pack = 1 [(parvane.core.v2.max_len) = 64];
+  string sticker_id = 2 [(parvane.core.v2.max_len) = 64];
+  string emoji = 3 [(parvane.core.v2.max_len) = 32];
+  Media media = 4;
+  // Набор целиком (PACK-1): получатель может добавить его себе.
+  PackRef pack_ref = 5;
+}
+
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+  uint32 accuracy_m = 3;
+  // > 0 — трансляция геопозиции.
+  uint32 live_period_s = 4;
+  // Для места (venue).
+  string title = 5 [(parvane.core.v2.max_len) = 256];
+  string address = 6 [(parvane.core.v2.max_len) = 512];
+  // Курс live-локации, градусы (0 — не задан).
+  uint32 heading = 7;
+}
+
+// Предпочтение участника личного чата по режиму «усиленная приватность» (L2):
+// выравнивание размеров конвертов по сетке, без typing/presence. Подписанная
+// E2E-операция участника (сервер режима не знает); у каждого участника своё
+// предпочтение, новее — по метке времени операции (`OpHeader.ts_ms`). Режим
+// чата активен, пока включён хотя бы у одного участника. Уходит собеседнику и
+// своим устройствам. В группе режим задаёт журнал состояния группы
+// (`GroupChange.set_privacy_mode`), содержимое `chat_mode` там не действует.
+message ChatMode {
+  bool l2 = 1;
+}
+
+message Contact {
+  string first_name = 1 [(parvane.core.v2.max_len) = 128];
+  string last_name = 2 [(parvane.core.v2.max_len) = 128];
+  string phone = 3 [(parvane.core.v2.max_len) = 32];
+  parvane.core.v2.UserRef user = 4;
+}
+
+message PollOption {
+  string text = 1 [(parvane.core.v2.max_len) = 400];
+}
+
+message Poll {
+  string question = 1 [(parvane.core.v2.max_len) = 1024];
+  repeated PollOption options = 2 [(parvane.core.v2.max_items) = 12];
+  // Не анонимный опрос (видно, кто за что голосовал).
+  bool is_public = 3;
+  bool is_multiple = 4;
+  bool is_quiz = 5;
+  // Индексы правильных ответов (викторина).
+  repeated uint32 correct = 6 [(parvane.core.v2.max_items) = 12];
+  string solution = 7 [(parvane.core.v2.max_len) = 800];
+  int64 close_ms = 8;
+}
+
+message PollVote {
+  MessageRef poll = 1;
+  // Пусто — отзыв голоса.
+  repeated uint32 option_indexes = 2 [(parvane.core.v2.max_items) = 12];
+}
+
+message PollClose {
+  MessageRef poll = 1;
+}
+
+enum ReceiptKind {
+  RECEIPT_KIND_UNSPECIFIED = 0;
+  RECEIPT_KIND_DELIVERED = 1;
+  RECEIPT_KIND_READ = 2;
+}
+
+// Квитанции — E2E-содержимое (FR-035), а не серверные операции с автором.
+message Receipt {
+  ReceiptKind kind = 1;
+  repeated MessageRef messages = 2 [(parvane.core.v2.max_items) = 500];
+}
+
+message Edit {
+  MessageRef target = 1;
+  // Новый текст (для медиа — подпись).
+  Text text = 2;
+  // Обновление live-локации (позиция/период).
+  Location location = 3;
+}
+
+message Delete {
+  repeated MessageRef targets = 1 [(parvane.core.v2.max_items) = 500];
+  // Удалить у всех (иначе — только у своих устройств).
+  bool for_everyone = 2;
+}
+
+message Reaction {
+  MessageRef target = 1;
+  // Эмодзи или id кастомного эмодзи (EMOJI-1).
+  string emoji = 2 [(parvane.core.v2.max_len) = 64];
+  bool remove = 3;
+}
+
+message Pin {
+  MessageRef target = 1;
+  bool unpin = 2;
+  bool silent = 3;
+}
+
+// Раздача ключей группы по E2E (только участникам по проверенному журналу).
+// D-03: несёт голову журнала отправителя (GroupContext).
+message GroupKeyShare {
+  parvane.core.v2.GroupContext context = 1;
+  // Ключ конверта эпохи (AEAD GroupEnvelope), всем читающим участникам.
+  bytes envelope_key = 2 [(parvane.core.v2.max_len) = 32];
+  // Экспорт сессии Megolm отправителя.
+  bytes megolm_session_key = 3 [(parvane.core.v2.max_len) = 1024];
+  // Приватная часть ключа отправки эпохи — только тем, кто вправе писать.
+  bytes send_private_key = 4 [(parvane.core.v2.max_len) = 32];
+}
+
+message DeliveryKeyShare {
+  bytes delivery_key = 1 [(parvane.core.v2.max_len) = 32];
+  // Растёт при ротации; устаревший ключ заменяется.
+  uint64 generation = 2;
+}

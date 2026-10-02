@@ -10,10 +10,15 @@ pub(crate) fn max_group_members() -> i64 {
     std::env::var("PARVANE_GROUP_MAX_MEMBERS").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(200)
 }
 
-/// P-34: пользователь может запретить добавлять себя в группы без согласия —
-/// поле `group_add: "nobody"` в его блобе настроек (msg.chat.setnotify).
-/// Тогда попасть в группу он может только сам, по инвайт-ссылке.
+/// P-34: пользователь может запретить добавлять себя в группы без согласия.
+/// Источник — явная настройка v2 `identity.privacy.set` (FR-040), если он её
+/// выставлял; иначе (v1-клиенты, до E6) — поле `group_add: "nobody"` в блобе
+/// настроек `msg.chat.setnotify`. Тогда попасть в группу он может только сам,
+/// по инвайт-ссылке.
 pub(crate) async fn allows_group_add(pool: &SqlitePool, member: &str) -> Result<bool> {
+    if let Some(v2) = crate::v2_state::privacy_group_add(member).await? {
+        return Ok(v2);
+    }
     let blob: Option<String> = sqlx::query_scalar("SELECT notify_json FROM user_settings WHERE user = ?")
         .bind(member)
         .fetch_optional(pool)

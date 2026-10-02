@@ -1,0 +1,129 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true,
+        "op_hex": "0a100101010101010101010101010101010110071a056465762d612080d095ffbc316a0d0a090a070a05626f624078102a"
+      },
+      "input": {
+        "aead_hex": "070707070707070707070707da7bf4a5a0304f99454c61aaaebed53ef08fec9d9210cb4b1f89207c23512955bd41ed3622d49fe1983a6b5b3b769191ca5ffb60c073e85207c3561a3b973ff04c",
+        "op_id_hex": "01010101010101010101010101010101",
+        "user": "alice@x"
+      },
+      "name": "верная запись"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "aead_hex": "070707070707070707070707da7bf4a5a0304f99454c61aaaebed53ef08fec9d9210cb4b1f89207c23512955bd41ed3622d49fe1983a6b5b3b769191ca5ffb60c073e85207c3561a3b973ff04c",
+        "op_id_hex": "01010101010101010101010101010101",
+        "user": "eve@x"
+      },
+      "name": "чужой журнал (другой user в AAD)"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "aead_hex": "070707070707070707070707da7bf4a5a0304f99454c61aaaebed53ef08fec9d9210cb4b1f89207c23512955bd41ed3622d49fe1983a6b5b3b769191ca5ffb60c073e85207c3561a3b973ff04c",
+        "op_id_hex": "02020202020202020202020202020202",
+        "user": "alice@x"
+      },
+      "name": "перенос под другой op_id"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "aead_hex": "070707070707070707070707da7bf4a5a0304f99454c61aaaebed53ef08fec9d9210cb4b1f89207c23512955bd41ed3622d49fe1983a6b5b3b769191ca5ffb60c073e85207c3561a3b973ff04d",
+        "op_id_hex": "01010101010101010101010101010101",
+        "user": "alice@x"
+      },
+      "name": "порча тега"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "aead_hex": "070707070707070707070707da7bf4a5a0304f99",
+        "op_id_hex": "01010101010101010101010101010101",
+        "user": "alice@x"
+      },
+      "name": "короче nonce+тега"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "aead_hex": "080808080808080808080808e346bca9ee62a656443ccc927e0b88f469f39ef544e25faa15f02ae7166dc643e94af9e58235b6760f33c86fc0a8de96426dcca6ab60d63b6a0a5a3dc0b13b393c",
+        "op_id_hex": "02020202020202020202020202020202",
+        "user": "alice@x"
+      },
+      "name": "op_id внутри не совпадает с записью"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "aead_hex": "0909090909090909090909093cad72bbf760d46b87802bf8705c4599a3f825afbd68ec54bf043d4f1b302c3e176cdca099d93b611a8eabeba61da807d6450ade0a181182bae582f32e9016",
+        "op_id_hex": "01010101010101010101010101010101",
+        "user": "alice@x"
+      },
+      "name": "lamport = 0"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "aead_hex": "070707070707070707070707da7bf4a5a0304f99454c61aaaebed53ef08fec9d9210cb4b1f89207c23512955bd41ed3622d49fe1983a6b5b3b769191ca5ffb60c073e85207c3561a3b973ff04c",
+        "op_id_hex": "0101010101010101",
+        "user": "alice@x"
+      },
+      "name": "op_id записи не 16 байт"
+    }
+  ],
+  "description": "записи журнала состояния: aead = nonce(12) ‖ ChaCha20-Poly1305(StateOp), AAD = \"parvane/v2/state\\0\" ‖ user ‖ op_id; обёртка ключа StateKeyShare",
+  "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "key_share_cases": [
+    {
+      "expect": {
+        "key_version": 3,
+        "ok": true
+      },
+      "input": {
+        "expected_user": "alice@x",
+        "share_hex": "0a090a07616c6963654078122042424242424242424242424242424242424242424242424242424242424242421803"
+      },
+      "name": "своя обёртка"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "expected_user": "bob@x",
+        "share_hex": "0a090a07616c6963654078122042424242424242424242424242424242424242424242424242424242424242421803"
+      },
+      "name": "обёртка чужого аккаунта"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "expected_user": "alice@x",
+        "share_hex": "0a090a07616c6963654078121f424242424242424242424242424242424242424242424242424242424242421803"
+      },
+      "name": "ключ 31 байт"
+    }
+  ],
+  "suite": "state"
+}

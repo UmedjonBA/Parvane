@@ -1,0 +1,1128 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "plain": {
+              "text": {
+                "text": "привет"
+              }
+            }
+          },
+          "deleted": false,
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "pinned": false,
+          "reply_to": null,
+          "to": "bob@x",
+          "ts": 1727500000
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f80\",\"from\":\"alice@x\",\"to\":\"bob@x\",\"content\":{\"kind\":\"text\",\"text\":\"привет\"},\"ts\":1727500000,\"reply_to\":null,\"edited\":false,\"deleted\":false}",
+        "layer": "stored"
+      },
+      "name": "stored-plain-text"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "plain": {
+              "media": {
+                "file_id": "01923f4e-8c1a-7b2d-9e3f-0a1b2c3d4e60",
+                "height": 960,
+                "kind": "MEDIA_KIND_PHOTO",
+                "mime": "image/jpeg",
+                "size": "201344",
+                "width": 1280
+              }
+            }
+          },
+          "deleted": false,
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f81",
+          "pinned": false,
+          "reply_to": null,
+          "to": "bob@x",
+          "ts": 1
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f81\",\"from\":\"alice@x\",\"to\":\"bob@x\",\"content\":{\"kind\":\"photo\",\"file_id\":\"01923f4e-8c1a-7b2d-9e3f-0a1b2c3d4e60\",\"width\":1280,\"height\":960,\"mime\":\"image/jpeg\",\"size_bytes\":201344,\"caption\":null},\"ts\":1}",
+        "layer": "stored"
+      },
+      "name": "stored-photo-caption-null"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "olm": {
+              "ciphertext_hex": "030a202b7266",
+              "ctype_candidates": [
+                0
+              ],
+              "sender_identity": "q3Zb6o0dGQJmQ5x1kC0y7aH0mXW8Qm5wTzq1P3cV9Ts",
+              "sender_signing_key": "b4mYx7N0y4Q2pC1q6d8Hk9Qm0sZ3rT5vW7xY9aB1cD2"
+            }
+          },
+          "deleted": false,
+          "edited": true,
+          "from": "",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f82",
+          "pinned": true,
+          "reply_to": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "to": "bob@x",
+          "ts": 1
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f82\",\"from\":\"\",\"to\":\"bob@x\",\"content\":{\"kind\":\"encrypted\",\"ciphertext\":\"AwogK3Jm\",\"ctype\":0,\"sender_identity\":\"q3Zb6o0dGQJmQ5x1kC0y7aH0mXW8Qm5wTzq1P3cV9Ts\",\"sender_signing_key\":\"b4mYx7N0y4Q2pC1q6d8Hk9Qm0sZ3rT5vW7xY9aB1cD2\"},\"ts\":1,\"reply_to\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f80\",\"edited\":true,\"pinned\":true}",
+        "layer": "stored"
+      },
+      "name": "stored-encrypted"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "olm": {
+              "ciphertext_hex": "030a202b7266",
+              "ctype_candidates": [
+                0,
+                1
+              ],
+              "sender_identity": "q3Zb",
+              "sender_signing_key": ""
+            }
+          },
+          "deleted": false,
+          "edited": false,
+          "from": "",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f83",
+          "pinned": false,
+          "reply_to": null,
+          "to": "bob@x",
+          "ts": 1
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f83\",\"from\":\"\",\"to\":\"bob@x\",\"content\":{\"kind\":\"encrypted\",\"ciphertext\":\"AwogK3Jm\",\"sender_identity\":\"q3Zb\"},\"ts\":1}",
+        "layer": "stored"
+      },
+      "name": "stored-encrypted-no-ctype"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f84\",\"from\":\"alice@x\",\"to\":\"01923f40-0000-7000-8000-000000000001\",\"content\":{\"kind\":\"group_encrypted\",\"ciphertext\":\"AwgAEpABm3kq0dJ6yR3vQ\",\"group\":\"01923f40-0000-7000-8000-000000000001\",\"sender_identity\":\"q3Zb\"},\"ts\":1}",
+        "layer": "stored"
+      },
+      "name": "stored-group"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "tombstone": true
+          },
+          "deleted": true,
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f85",
+          "pinned": false,
+          "reply_to": null,
+          "to": "bob@x",
+          "ts": 1
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f85\",\"from\":\"alice@x\",\"to\":\"bob@x\",\"content\":{\"kind\":\"encrypted\",\"ciphertext\":\"AwogK3Jm\",\"ctype\":1,\"sender_identity\":\"q3Zb\"},\"ts\":1,\"deleted\":true}",
+        "layer": "stored"
+      },
+      "name": "stored-deleted"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "tombstone": true
+          },
+          "deleted": false,
+          "edited": false,
+          "from": "",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f86",
+          "pinned": false,
+          "reply_to": null,
+          "to": "bob@x",
+          "ts": 1
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f86\",\"from\":\"\",\"to\":\"bob@x\",\"content\":{\"kind\":\"encrypted\",\"ciphertext\":\"\",\"ctype\":0,\"sender_identity\":\"q3Zb\"},\"ts\":1}",
+        "layer": "stored"
+      },
+      "name": "stored-tombstone-empty-ct"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "body": {
+            "tombstone": true
+          },
+          "deleted": false,
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f87",
+          "pinned": false,
+          "reply_to": null,
+          "to": "bob@x",
+          "ts": 1
+        }
+      },
+      "input": {
+        "json": "{\"id\":\"01923f4e-9a00-7c11-8a22-3b4c5d6e7f87\",\"from\":\"alice@x\",\"to\":\"bob@x\",\"content\":{\"kind\":\"text\",\"text\":\"\"},\"ts\":1}",
+        "layer": "stored"
+      },
+      "name": "stored-tombstone-empty-text"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "json": "{\"from\":\"alice@x\",\"content\":{\"kind\":\"text\",\"text\":\"x\"}}",
+        "layer": "stored"
+      },
+      "name": "stored-no-id"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "author": "alice@parvane.duckdns.org",
+          "inner": {
+            "content": {
+              "text": {
+                "text": "привет"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"from\":\"alice@parvane.duckdns.org\",\"content\":{\"kind\":\"text\",\"text\":\"привет\"}}",
+        "layer": "olm"
+      },
+      "name": "olm-web-order"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "author": "alice@parvane.duckdns.org",
+          "inner": {
+            "content": {
+              "text": {
+                "text": "привет"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"content\":{\"kind\":\"text\",\"text\":\"привет\"},\"from\":\"alice@parvane.duckdns.org\"}",
+        "layer": "olm"
+      },
+      "name": "olm-nlohmann-order"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"привет\"}",
+        "layer": "olm"
+      },
+      "name": "olm-bare-rejected"
+    },
+    {
+      "expect": {
+        "error": "BadAddress"
+      },
+      "input": {
+        "json": "{\"from\":\"alice@x>\",\"content\":{\"kind\":\"text\",\"text\":\"x\"}}",
+        "layer": "olm"
+      },
+      "name": "olm-bad-from"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "text": {
+                "entities": [
+                  {
+                    "length": 4,
+                    "type": "ENTITY_TYPE_MENTION"
+                  }
+                ],
+                "text": "всем привет"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"всем привет\",\"entities\":[{\"type\":\"mention\",\"offset\":0,\"length\":4}]}",
+        "layer": "megolm"
+      },
+      "name": "megolm-bare"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "text": {
+                "entities": [
+                  {
+                    "length": 4,
+                    "type": "ENTITY_TYPE_MENTION"
+                  }
+                ],
+                "text": "всем привет"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"from\":\"mallory@x\",\"content\":{\"kind\":\"text\",\"text\":\"всем привет\",\"entities\":[{\"type\":\"mention\",\"offset\":0,\"length\":4}]}}",
+        "layer": "megolm"
+      },
+      "name": "megolm-legacy-wrapper"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "author": "alice@x",
+          "inner": {
+            "skdm": {
+              "epoch": 1727500000123,
+              "group": "01923f40-0000-7000-8000-000000000001",
+              "sender_identity": "q3Zb",
+              "session_key": "AgAAAABx"
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"from\":\"alice@x\",\"content\":{\"kind\":\"skdm\",\"group\":\"01923f40-0000-7000-8000-000000000001\",\"session_key\":\"AgAAAABx\",\"sender_identity\":\"q3Zb\",\"epoch\":1727500000123}}",
+        "layer": "olm"
+      },
+      "name": "skdm"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "text": {
+                "entities": [
+                  {
+                    "length": 6,
+                    "type": "ENTITY_TYPE_BOLD"
+                  },
+                  {
+                    "custom_emoji_id": "5368324170671202286",
+                    "length": 2,
+                    "offset": 7,
+                    "type": "ENTITY_TYPE_CUSTOM_EMOJI"
+                  },
+                  {
+                    "length": 19,
+                    "offset": 7,
+                    "type": "ENTITY_TYPE_TEXT_URL",
+                    "url": "https://example.org"
+                  }
+                ],
+                "preview": {
+                  "description": "This domain is for use in examples.",
+                  "site_name": "example.org",
+                  "title": "Example Domain",
+                  "url": "https://example.org"
+                },
+                "text": "смотри https://example.org"
+              },
+              "ttl_secs": 86400
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"смотри https://example.org\",\"entities\":[{\"type\":\"bold\",\"offset\":0,\"length\":6},{\"type\":\"custom_emoji\",\"offset\":7,\"length\":2,\"data\":\"5368324170671202286\"},{\"type\":\"text_url\",\"offset\":7,\"length\":19,\"data\":\"https://example.org\"}],\"webpage\":{\"url\":\"https://example.org\",\"site_name\":\"example.org\",\"title\":\"Example Domain\",\"description\":\"This domain is for use in examples.\"},\"ttl_secs\":86400}",
+        "layer": "megolm"
+      },
+      "name": "text-web-full"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "text": {
+                "entities": [
+                  {
+                    "length": 19,
+                    "type": "ENTITY_TYPE_URL"
+                  }
+                ],
+                "text": "https://example.org"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"https://example.org\",\"entities\":[{\"offset\":0,\"length\":19,\"type\":\"url\"}]}",
+        "layer": "megolm"
+      },
+      "name": "text-android-url-entity"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "text": {
+                "text": "abc"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"abc\",\"entities\":[{\"type\":\"marquee\",\"offset\":0,\"length\":3}]}",
+        "layer": "megolm"
+      },
+      "name": "text-unknown-entity-dropped"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "file_id": "01923f4e-bbbb-7000-8000-000000000001",
+                "file_key": "Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=",
+                "file_nonce": "MDEyMzQ1Njc4OWFi",
+                "height": 960,
+                "kind": "MEDIA_KIND_PHOTO",
+                "mime": "image/jpeg",
+                "size": "201344",
+                "width": 1280
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"photo\",\"file_id\":\"01923f4e-bbbb-7000-8000-000000000001\",\"width\":1280,\"height\":960,\"mime\":\"image/jpeg\",\"size_bytes\":201344,\"file_key\":\"Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=\",\"file_nonce\":\"MDEyMzQ1Njc4OWFi\"}",
+        "layer": "megolm"
+      },
+      "name": "photo-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "file_id": "01923f4e-bbbb-7000-8000-000000000001",
+                "file_key": "Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=",
+                "file_nonce": "MDEyMzQ1Njc4OWFi",
+                "height": 960,
+                "kind": "MEDIA_KIND_PHOTO",
+                "mime": "image/jpeg",
+                "size": "201344",
+                "width": 1280
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"caption\":null,\"file_id\":\"01923f4e-bbbb-7000-8000-000000000001\",\"file_key\":\"Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=\",\"file_nonce\":\"MDEyMzQ1Njc4OWFi\",\"height\":960,\"kind\":\"photo\",\"mime\":\"image/jpeg\",\"size_bytes\":201344,\"width\":1280}",
+        "layer": "megolm"
+      },
+      "name": "photo-desktop"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "file_id": "01923f4e-bbbb-7000-8000-000000000001",
+                "file_key": "Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=",
+                "file_nonce": "MDEyMzQ1Njc4OWFi",
+                "height": 960,
+                "kind": "MEDIA_KIND_PHOTO",
+                "mime": "image/jpeg",
+                "size": "201344",
+                "width": 1280
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"photo\",\"mime\":\"image/jpeg\",\"width\":1280,\"height\":960,\"caption\":\"\",\"file_id\":\"01923f4e-bbbb-7000-8000-000000000001\",\"size_bytes\":201344,\"file_key\":\"Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=\",\"file_nonce\":\"MDEyMzQ1Njc4OWFi\"}",
+        "layer": "megolm"
+      },
+      "name": "photo-android"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "duration_ms": 4000,
+                "file_id": "01923f4e-cccc-7000-8000-000000000001",
+                "file_key": "Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=",
+                "file_nonce": "MDEyMzQ1Njc4OWFi",
+                "kind": "MEDIA_KIND_VOICE",
+                "mime": "audio/ogg",
+                "size": "15872",
+                "waveform": "ACGEEEII"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"voice\",\"file_id\":\"01923f4e-cccc-7000-8000-000000000001\",\"duration_secs\":4,\"mime\":\"audio/ogg\",\"size_bytes\":15872,\"waveform\":[0,33,132,16,66,8],\"file_key\":\"Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=\",\"file_nonce\":\"MDEyMzQ1Njc4OWFi\"}",
+        "layer": "megolm"
+      },
+      "name": "voice-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "duration_ms": 4000,
+                "file_id": "01923f4e-cccc-7000-8000-000000000001",
+                "file_key": "Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=",
+                "file_nonce": "MDEyMzQ1Njc4OWFi",
+                "kind": "MEDIA_KIND_VOICE",
+                "mime": "audio/ogg",
+                "size": "15872"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"duration_secs\":4,\"file_id\":\"01923f4e-cccc-7000-8000-000000000001\",\"file_key\":\"Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=\",\"file_nonce\":\"MDEyMzQ1Njc4OWFi\",\"kind\":\"voice\",\"mime\":\"audio/ogg\",\"size_bytes\":15872}",
+        "layer": "megolm"
+      },
+      "name": "voice-desktop"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "duration_ms": 9000,
+                "file_id": "01923f4e-dddd-7000-8000-000000000002",
+                "file_key": "Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=",
+                "file_nonce": "MDEyMzQ1Njc4OWFi",
+                "height": 384,
+                "kind": "MEDIA_KIND_VIDEO_NOTE",
+                "mime": "video/mp4",
+                "size": "712004",
+                "width": 384
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"video_note\",\"mime\":\"video/mp4\",\"duration_secs\":9,\"width\":384,\"file_id\":\"01923f4e-dddd-7000-8000-000000000002\",\"size_bytes\":712004,\"file_key\":\"Qm9vYmFyYmF6cXV4cXV1eHh5enp6YWFhYWJiYmJjY2M=\",\"file_nonce\":\"MDEyMzQ1Njc4OWFi\"}",
+        "layer": "megolm"
+      },
+      "name": "video-note-android"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "duration_ms": 3000,
+                "file_id": "01923f4e-eeee-7000-8000-000000000001",
+                "height": 240,
+                "kind": "MEDIA_KIND_ANIMATION",
+                "mime": "video/webm",
+                "name": "pvgif-7.webm",
+                "size": "88112",
+                "width": 240
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"gif\",\"file_id\":\"01923f4e-eeee-7000-8000-000000000001\",\"filename\":\"pvgif-7.webm\",\"mime\":\"video/webm\",\"width\":240,\"height\":240,\"duration_secs\":3,\"size_bytes\":88112}",
+        "layer": "megolm"
+      },
+      "name": "gif-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "duration_ms": 215000,
+                "file_id": "01923f4e-ffff-7000-8000-000000000001",
+                "kind": "MEDIA_KIND_AUDIO",
+                "mime": "audio/mpeg",
+                "name": "song.mp3",
+                "performer": "Band",
+                "size": "4210000",
+                "title": "Song"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"file\",\"file_id\":\"01923f4e-ffff-7000-8000-000000000001\",\"filename\":\"song.mp3\",\"mime\":\"audio/mpeg\",\"size_bytes\":4210000,\"duration_secs\":215,\"audio_title\":\"Song\",\"audio_performer\":\"Band\"}",
+        "layer": "megolm"
+      },
+      "name": "file-audio-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "media": {
+                "file_id": "01923f4e-ffff-7000-8000-000000000002",
+                "kind": "MEDIA_KIND_FILE",
+                "mime": "application/pdf",
+                "name": "report.pdf",
+                "size": "88213"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"caption\":null,\"file_id\":\"01923f4e-ffff-7000-8000-000000000002\",\"filename\":\"report.pdf\",\"kind\":\"file\",\"mime\":\"application/pdf\",\"size_bytes\":88213}",
+        "layer": "megolm"
+      },
+      "name": "file-doc-desktop"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "sticker": {
+                "emoji": "😺",
+                "media": {
+                  "file_id": "01923f4e-1111-7000-8000-000000000001",
+                  "height": 512,
+                  "kind": "MEDIA_KIND_PHOTO",
+                  "mime": "image/webp",
+                  "name": "😺",
+                  "width": 512
+                },
+                "pack": "my_cats",
+                "pack_ref": {
+                  "count": 12,
+                  "file_id": "01923f4e-aaaa-7000-8000-000000000010",
+                  "name": "my_cats"
+                },
+                "sticker_id": "01923f4e-1111-7000-8000-000000000001"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"sticker\",\"file_id\":\"01923f4e-1111-7000-8000-000000000001\",\"filename\":\"😺\",\"mime\":\"image/webp\",\"width\":512,\"height\":512,\"pack_ref\":{\"file_id\":\"01923f4e-aaaa-7000-8000-000000000010\",\"name\":\"my_cats\",\"count\":12}}",
+        "layer": "megolm"
+      },
+      "name": "sticker-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "location": {
+                "latitude": 55.751244,
+                "longitude": 37.618423
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"location\",\"lat\":55.751244,\"long\":37.618423}",
+        "layer": "megolm"
+      },
+      "name": "location-static"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "location": {
+                "accuracy_m": 12,
+                "heading": 270,
+                "latitude": 55.751244,
+                "live_period_s": 900,
+                "longitude": 37.618423
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"location\",\"lat\":55.751244,\"long\":37.618423,\"live_period\":900,\"heading\":270,\"accuracy\":12}",
+        "layer": "megolm"
+      },
+      "name": "location-live-web"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "json": "{\"kind\":\"location\",\"lat\":123.0,\"long\":37.6}",
+        "layer": "megolm"
+      },
+      "name": "location-out-of-range"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll": {
+                "is_multiple": true,
+                "is_public": true,
+                "options": [
+                  {
+                    "text": "Кино"
+                  },
+                  {
+                    "text": "Парк"
+                  },
+                  {
+                    "text": "Дом"
+                  }
+                ],
+                "question": "Куда идём?"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll\",\"question\":\"Куда идём?\",\"options\":[\"Кино\",\"Парк\",\"Дом\"],\"is_public\":true,\"is_multiple\":true}",
+        "layer": "megolm"
+      },
+      "name": "poll-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll": {
+                "is_multiple": true,
+                "is_public": true,
+                "options": [
+                  {
+                    "text": "Кино"
+                  },
+                  {
+                    "text": "Парк"
+                  },
+                  {
+                    "text": "Дом"
+                  }
+                ],
+                "question": "Куда идём?"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"answers\":[\"Кино\",\"Парк\",\"Дом\"],\"kind\":\"poll\",\"multiple\":true,\"public\":true,\"question\":\"Куда идём?\",\"quiz\":false}",
+        "layer": "megolm"
+      },
+      "name": "poll-desktop"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll": {
+                "is_multiple": true,
+                "is_public": true,
+                "options": [
+                  {
+                    "text": "Кино"
+                  },
+                  {
+                    "text": "Парк"
+                  },
+                  {
+                    "text": "Дом"
+                  }
+                ],
+                "question": "Куда идём?"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll\",\"question\":\"Куда идём?\",\"options\":[\"Кино\",\"Парк\",\"Дом\"],\"is_public\":true,\"is_multiple\":true,\"is_quiz\":false,\"answers\":[\"Кино\",\"Парк\",\"Дом\"],\"public\":true,\"multiple\":true,\"quiz\":false}",
+        "layer": "megolm"
+      },
+      "name": "poll-android"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll": {
+                "correct": [
+                  1
+                ],
+                "is_quiz": true,
+                "options": [
+                  {
+                    "text": "3"
+                  },
+                  {
+                    "text": "4"
+                  },
+                  {
+                    "text": "5"
+                  }
+                ],
+                "question": "2+2?",
+                "solution": "Арифметика"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll\",\"question\":\"2+2?\",\"options\":[\"3\",\"4\",\"5\"],\"is_quiz\":true,\"correct\":[1],\"solution\":\"Арифметика\"}",
+        "layer": "megolm"
+      },
+      "name": "quiz-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll": {
+                "correct": [
+                  1
+                ],
+                "is_quiz": true,
+                "options": [
+                  {
+                    "text": "3"
+                  },
+                  {
+                    "text": "4"
+                  },
+                  {
+                    "text": "5"
+                  }
+                ],
+                "question": "2+2?",
+                "solution": "Арифметика"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"answers\":[\"3\",\"4\",\"5\"],\"correct\":[1],\"kind\":\"poll\",\"multiple\":false,\"public\":false,\"question\":\"2+2?\",\"quiz\":true,\"solution\":\"Арифметика\"}",
+        "layer": "megolm"
+      },
+      "name": "quiz-desktop"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll_vote": {
+                "option_indexes": [
+                  0,
+                  2
+                ],
+                "poll": {
+                  "op_id": "AZI/TiIicACAAAAAAAAAAQ=="
+                }
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll_vote\",\"poll\":\"01923f4e-2222-7000-8000-000000000001\",\"options\":[0,2]}",
+        "layer": "megolm"
+      },
+      "name": "poll-vote"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll_vote": {
+                "option_indexes": [
+                  0,
+                  2
+                ],
+                "poll": {
+                  "op_id": "AZI/TiIicACAAAAAAAAAAQ=="
+                }
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll_vote\",\"poll\":\"01923f4e-2222-7000-8000-000000000001\",\"options\":[\"0\",\"2\"]}",
+        "layer": "megolm"
+      },
+      "name": "poll-vote-strings"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll_vote": {
+                "poll": {
+                  "op_id": "AZI/TiIicACAAAAAAAAAAQ=="
+                }
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll_vote\",\"poll\":\"01923f4e-2222-7000-8000-000000000001\",\"options\":[]}",
+        "layer": "megolm"
+      },
+      "name": "poll-vote-retract"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll_close": {
+                "poll": {
+                  "op_id": "AZI/TiIicACAAAAAAAAAAQ=="
+                }
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll_close\",\"poll\":\"01923f4e-2222-7000-8000-000000000001\"}",
+        "layer": "megolm"
+      },
+      "name": "poll-close"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "forward": {
+                "from_name": "Carol",
+                "from_user": {
+                  "address": "carol@x"
+                }
+              },
+              "text": {
+                "text": "x"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"x\",\"forwarded_from\":\"carol@x\",\"forwarded_name\":\"Carol\"}",
+        "layer": "megolm"
+      },
+      "name": "forward-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "forward": {
+                "from_name": "carol"
+              },
+              "text": {
+                "text": "x"
+              }
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"text\",\"text\":\"x\",\"forwarded_name\":\"carol\"}",
+        "layer": "megolm"
+      },
+      "name": "forward-android"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "content": {
+              "poll": {
+                "options": [
+                  {
+                    "text": "a"
+                  },
+                  {
+                    "text": "b"
+                  }
+                ],
+                "question": "?"
+              },
+              "ttl_secs": 60
+            }
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"poll\",\"question\":\"?\",\"options\":[\"a\",\"b\"],\"ttl_secs\":60}",
+        "layer": "megolm"
+      },
+      "name": "ttl-on-poll-android"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "inner": {
+            "unknown": true
+          }
+        }
+      },
+      "input": {
+        "json": "{\"kind\":\"hologram\",\"data\":1}",
+        "layer": "megolm"
+      },
+      "name": "unknown-kind"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "candidate": "candidate:842163049 1 udp 1677729535 203.0.113.7 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0",
+          "sdp_mid": "0"
+        }
+      },
+      "input": {
+        "json": "{\"candidate\":\"candidate:842163049 1 udp 1677729535 203.0.113.7 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0,\"usernameFragment\":\"a1b2\"}",
+        "layer": "ice"
+      },
+      "name": "ice-web"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "result": {
+          "candidate": "candidate:842163049 1 udp 1677729535 203.0.113.7 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0",
+          "sdp_mid": "0"
+        }
+      },
+      "input": {
+        "json": "{\"idx\":0,\"mid\":\"0\",\"sdp\":\"candidate:842163049 1 udp 1677729535 203.0.113.7 51234 typ srflx raddr 0.0.0.0 rport 0 generation 0\"}",
+        "layer": "ice"
+      },
+      "name": "ice-desktop"
+    }
+  ],
+  "description": "v1-сообщения web/desktop/android → v2 (только чтение истории)",
+  "suite": "legacy_v1"
+}

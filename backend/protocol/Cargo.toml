@@ -1,0 +1,44 @@
+[package]
+name = "parvane-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Протокольный движок Parvane v2: кодек, лимиты, подписи, sealed sender, жетоны, группы, журналы"
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+# Узкая тестовая точка (T041): Client::prepare_direct_raw — отправка
+# произвольных байтов Content (вид из будущей версии). Выключена по умолчанию;
+# включается только dev-зависимостью parvane-integration.
+test-inject = []
+
+[dependencies]
+prost = "0.14"
+pbjson = "0.9"
+pbjson-types = "0.9"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+vodozemac = "0.11"
+hpke = { version = "0.14", default-features = false, features = ["alloc", "getrandom", "x25519", "chacha", "hkdfsha2"] }
+blind-rsa-signatures = "0.18"
+ed25519-dalek = { workspace = true }
+sha2 = "0.10"
+hkdf = "0.12"
+uuid = { version = "1", features = ["v7"] }
+rand = { workspace = true }
+base64 = "0.22"
+hex = "0.4"
+zeroize = "1"
+chacha20poly1305 = "0.10"
+
+[build-dependencies]
+prost-build = "0.14"
+pbjson-build = "0.9"
+prost-reflect = "0.16"
+
+[dev-dependencies]
+hex = "0.4"
+proptest = "1"

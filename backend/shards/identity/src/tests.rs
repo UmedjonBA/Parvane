@@ -1107,15 +1107,41 @@ async fn repeated_prekey_fetch_reuses_one_time_key() {
     let (_enc, _dec) = make_keys();
     insert_user(&pool, "reuse@local").await;
     store_prekeys(&pool, "reuse@local", &sample_publish_device("dev-r", 1, &[(1, "o1"), (2, "o2"), (3, "o3")])).await.unwrap();
-    let a = fetch_bundle_for(&pool, "asker@local", "reuse@local", &[]).await.unwrap();
-    let b = fetch_bundle_for(&pool, "asker@local", "reuse@local", &[]).await.unwrap();
+    let a = fetch_bundle_for(&pool, "asker@local", "dev-1:ik-1", "reuse@local", &[]).await.unwrap();
+    let b = fetch_bundle_for(&pool, "asker@local", "dev-1:ik-1", "reuse@local", &[]).await.unwrap();
     assert_eq!(a.one_time_id, b.one_time_id, "тот же requester → та же one-time");
     let (left,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM one_time_prekeys WHERE username = 'reuse@local' AND consumed = 0",
     ).fetch_one(&pool).await.unwrap();
     assert_eq!(left, 2, "сожжена одна, не две");
-    let c = fetch_bundle_for(&pool, "other@local", "reuse@local", &[]).await.unwrap();
+    let c = fetch_bundle_for(&pool, "other@local", "dev-9:ik-9", "reuse@local", &[]).await.unwrap();
     assert_ne!(c.one_time_id, a.one_time_id, "другой requester — другая one-time");
+}
+
+// P-21 + одноразовость: one-time, выданную одному Olm-аккаунту запросившего,
+// другой его аккаунт (второе устройство или то же после смены ключей) в окне
+// не получает — цель могла её уже израсходовать, и первое сообщение нового
+// аккаунта не расшифровалось бы. Свежая при этом тоже не сжигается.
+#[tokio::test]
+async fn reused_one_time_key_is_bound_to_requester_account() {
+    let pool = test_pool().await;
+    insert_user(&pool, "bound@local").await;
+    store_prekeys(&pool, "bound@local", &sample_publish_device("dev-b", 1, &[(1, "o1"), (2, "o2"), (3, "o3")])).await.unwrap();
+    let first = fetch_bundle_for(&pool, "sender@local", "dev-1:ik-old", "bound@local", &[]).await.unwrap();
+    assert!(first.one_time.is_some(), "первый аккаунт получает one-time");
+
+    let rekeyed = fetch_bundle_for(&pool, "sender@local", "dev-1:ik-new", "bound@local", &[]).await.unwrap();
+    assert!(rekeyed.ok && rekeyed.signed_prekey.is_some(), "бандл выдан — сессия строится на signed prekey");
+    assert_eq!(rekeyed.one_time, None, "то же устройство с новыми ключами не получает выданную one-time");
+    let sibling = fetch_bundle_for(&pool, "sender@local", "dev-2:ik-2", "bound@local", &[]).await.unwrap();
+    assert_eq!(sibling.one_time, None, "второе устройство запросившего — тоже");
+
+    let again = fetch_bundle_for(&pool, "sender@local", "dev-1:ik-old", "bound@local", &[]).await.unwrap();
+    assert_eq!(again.one_time_id, first.one_time_id, "исходный аккаунт по-прежнему получает свою one-time");
+    let (left,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM one_time_prekeys WHERE username = 'bound@local' AND consumed = 0",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(left, 2, "смена ключей запросившего не сжигает новые one-time (P-21)");
 }
 
 // P-19: LIKE-экранирование и минимальная длина запроса
@@ -1256,4 +1282,29 @@ async fn twofa_cannot_be_enabled_without_telegram() {
     let err = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap_err();
     assert!(err.to_string().contains("привяжите Telegram"), "{err}");
     assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(); (e, l) }, (false, false));
+}
+
+// ── протокол v2: ключ и описатель сервера (T036) ─────────────────────────────
+
+#[test]
+fn v2_server_descriptor_is_signed_and_key_file_private() {
+    use parvane_protocol::pb::parvane::core::v2::ServerDescriptor;
+    use prost::Message;
+    let dir = std::env::temp_dir().join(format!("pv-srvkey-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("identity.db");
+    let key = crate::server_key::load_or_create_server_key(db.to_str().unwrap()).unwrap();
+    let again = crate::server_key::load_or_create_server_key(db.to_str().unwrap()).unwrap();
+    assert_eq!(key.to_bytes(), again.to_bytes(), "ключ переживает перезапуск");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join("identity-server-ed25519.pem")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "файл ключа сервера 0600");
+    }
+    let signed = crate::server_key::signed_descriptor(&key);
+    let d = ServerDescriptor::decode(signed.descriptor.as_slice()).unwrap();
+    parvane_protocol::sign::verify_ctx(&d.server_key, &signed.signature, parvane_protocol::sign::ctx::SERVER_DESCRIPTOR, &[&signed.descriptor]).unwrap();
+    assert_eq!(d.proto_major, 2);
+    std::fs::remove_dir_all(&dir).ok();
 }

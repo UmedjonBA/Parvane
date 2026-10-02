@@ -1,0 +1,128 @@
+// Кадры транспорта клиент↔gateway. WebSocket — двоичные сообщения, один кадр
+// на сообщение; TCP — кадры с префиксом длины (varint). Кадр целиком ≤ 4 МиБ,
+// размер проверяется ДО разбора (backend/protocol/src/codec.rs).
+syntax = "proto3";
+
+package parvane.core.v2;
+
+import "parvane/core/v2/errors.proto";
+import "parvane/core/v2/options.proto";
+
+message Frame {
+  // Всегда 2 для этой схемы; иное значение — отказ кодека.
+  uint32 proto_major = 1;
+  oneof kind {
+    Hello hello = 10;
+    Welcome welcome = 11;
+    Auth auth = 12;
+    AuthOk auth_ok = 13;
+    Request request = 20;
+    Response response = 21;
+    Event event = 22;
+    // Замена reqmany v1 (скачивание чанков облака).
+    StreamChunk stream_chunk = 23;
+    Ping ping = 30;
+    Pong pong = 31;
+  }
+}
+
+// Вид соединения.
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  // Обычная сессия: после Hello — Auth с JWT.
+  CHANNEL_IDENTIFIED = 1;
+  // Анонимный канал sealed-доставки: без Auth, без токена и без `from`.
+  CHANNEL_ANONYMOUS_DELIVERY = 2;
+}
+
+// Первый кадр клиента.
+message Hello {
+  uint32 proto_minor = 1;
+  repeated string features = 2 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+  ClientInfo client = 3;
+  Channel channel = 4;
+}
+
+message ClientInfo {
+  // "web" | "desktop" | "android" | …
+  string kind = 1 [(max_len) = 16];
+  string version = 2 [(max_len) = 32];
+}
+
+// Ответ сервера на Hello (или Error с UPGRADE_REQUIRED в Response id=0).
+message Welcome {
+  uint32 proto_minor = 1;
+  uint32 min_supported_major = 2;
+  uint32 min_supported_minor = 3;
+  repeated string features = 4 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+  // Сериализованный SignedServerDescriptor (envelope.proto).
+  bytes server_descriptor = 5 [(max_len) = 4096];
+}
+
+// JWT с обязательными claims dev, iss, aud. Только в канале IDENTIFIED.
+message Auth {
+  string token = 1 [(max_len) = 4096];
+}
+
+message AuthOk {
+  string user = 1 [
+    (max_len) = 255,
+    (actor) = ACTOR_SERVER_SET
+  ];
+  string device_id = 2 [
+    (max_len) = 64,
+    (actor) = ACTOR_SERVER_SET
+  ];
+}
+
+message Request {
+  // Корреляция; выбирает клиент.
+  uint64 id = 1;
+  // Имя метода — только из реестра (registry.proto).
+  string method = 2 [(max_len) = 96];
+  // Тип тела задаёт реестр; тело проверяется по лимитам своего типа.
+  bytes body = 3 [(max_len) = 4194304];
+  // ≤ 30000.
+  uint32 timeout_ms = 4;
+}
+
+message Response {
+  uint64 id = 1;
+  oneof result {
+    bytes ok = 2 [(max_len) = 4194304];
+    Error error = 3;
+  }
+}
+
+// Событие подписки. Вид — явным тегом (замена угадывания по имени поля v1).
+message Event {
+  uint64 subscription = 1;
+  string kind = 2 [(max_len) = 96];
+  // Позиция в журнале (курсор синхронизации).
+  uint64 seq = 3;
+  bytes body = 4 [(max_len) = 4194304];
+}
+
+message StreamChunk {
+  uint64 id = 1;
+  uint32 index = 2;
+  bool last = 3;
+  // Не больше чанка облака v1.
+  bytes data = 4 [(max_len) = 716800];
+  // Сбой посреди потока (last = true, данных нет).
+  Error error = 5;
+}
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}

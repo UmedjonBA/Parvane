@@ -1,13 +1,22 @@
 # Все Rust-шарды Parvane в одном образе (каждый сервис compose запускает свой бинарь).
-# Контекст сборки — backend/ (Cargo workspace), ignorefile — shards.dockerignore.
+# Контекст сборки — КОРЕНЬ репозитория (нужны backend/ и схема proto/ для
+# parvane-protocol), ignorefile — backend/infra/deploy/shards.dockerignore.
 # ВАЖНО: target-cpu=x86-64 (baseline) — прод-сервер m60-7 на Xeon 5160 без SSE4.2/AVX.
 
 FROM rust:1-bookworm AS builder
+# protoc — генерация типов протокола v2 из proto/ (build.rs parvane-protocol).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 ENV RUSTFLAGS="-C target-cpu=x86-64"
-COPY Cargo.toml Cargo.lock ./
-COPY shared ./shared
-COPY shards ./shards
+COPY proto ./proto
+COPY backend/Cargo.toml backend/Cargo.lock ./backend/
+COPY backend/shared ./backend/shared
+COPY backend/shards ./backend/shards
+COPY backend/protocol ./backend/protocol
+COPY backend/tests ./backend/tests
+WORKDIR /src/backend
 RUN cargo build --release --locked \
     -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
 
@@ -18,12 +27,12 @@ RUN apt-get update \
     # P-31: шарды не под root; /data — каталог тома (ownership наследуется
     # именованным томом при первом создании)
     && groupadd -r -g 10001 parvane && useradd -r -u 10001 -g parvane -d /nonexistent -s /usr/sbin/nologin parvane \
-    && mkdir -p /data && chown parvane:parvane /data
-COPY --from=builder /src/target/release/identity /usr/local/bin/identity
-COPY --from=builder /src/target/release/messenger /usr/local/bin/messenger
-COPY --from=builder /src/target/release/cloud /usr/local/bin/cloud
-COPY --from=builder /src/target/release/call /usr/local/bin/call
-COPY --from=builder /src/target/release/preview /usr/local/bin/preview
-COPY --from=builder /src/target/release/push /usr/local/bin/push
-COPY --from=builder /src/target/release/gateway /usr/local/bin/gateway
+    && mkdir -p /data /well-known && chown parvane:parvane /data /well-known
+COPY --from=builder /src/backend/target/release/identity /usr/local/bin/identity
+COPY --from=builder /src/backend/target/release/messenger /usr/local/bin/messenger
+COPY --from=builder /src/backend/target/release/cloud /usr/local/bin/cloud
+COPY --from=builder /src/backend/target/release/call /usr/local/bin/call
+COPY --from=builder /src/backend/target/release/preview /usr/local/bin/preview
+COPY --from=builder /src/backend/target/release/push /usr/local/bin/push
+COPY --from=builder /src/backend/target/release/gateway /usr/local/bin/gateway
 USER parvane

@@ -1,0 +1,258 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "clock": 20,
+        "ok": true,
+        "ops_hex": [
+          "0a1000000000000000000000000000000001100b1a056465762d6d522f0804120cd0a0d0b0d0b1d0bed182d0b01a04f09f92bc220a0a080a06626f73734078480178ffffffffffffffffff01",
+          "0a1000000000000000000000000000000003100c1a056465762d6d62020804",
+          "0a1000000000000000000000000000000004100d1a056465762d6d6a0e0a0a0a080a067370616d40781001",
+          "0a1000000000000000000000000000000006100e1a056465762d6d7a250a1712150a0178121002020202020202020202020202020202120a08ffffffffffffffff7f",
+          "0a1000000000000000000000000000000007100f1a056465762d6d8a01040a021801",
+          "0a100000000000000000000000000000000810101a056465762d6d9201130a090a070a05626f62407812040a0268692005",
+          "0a100000000000000000000000000000000910111a056465762d6da201260a10a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a112090a070a05626f62407818890622040a020a01",
+          "0a100000000000000000000000000000000a10121a056465762d6dba010b0a090a070a056f6c644078",
+          "0a100000000000000000000000000000000b10131a056465762d6dca010d080112090a070a05626f624078",
+          "0a100000000000000000000000000000000c10141a056465762d6dd201250a10c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c112090a070a05626f624078180128013001383c"
+        ],
+        "snapshot": {
+          "archived": [
+            {
+              "user": {
+                "address": "old@x"
+              }
+            }
+          ],
+          "blocked": [
+            {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "spam@x"
+                }
+              }
+            }
+          ],
+          "calls": [
+            {
+              "call_id": "wcHBwcHBwcHBwcHBwcHBwQ==",
+              "duration_s": 60,
+              "outgoing": true,
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "reason": "HANGUP_REASON_NORMAL",
+              "started_ms": "1"
+            }
+          ],
+          "drafts": [
+            {
+              "date_ms": "5",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "text": "CgJoaQ=="
+            }
+          ],
+          "folder_order": {
+            "ids": [
+              4
+            ]
+          },
+          "folders": [
+            {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 4,
+              "include_peers": [
+                {
+                  "user": {
+                    "address": "boss@x"
+                  }
+                }
+              ],
+              "title": "Работа"
+            }
+          ],
+          "notify": [
+            {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AgICAgICAgICAgICAgICAg=="
+                }
+              },
+              "settings": {
+                "mute_until_ms": "9223372036854775807"
+              }
+            }
+          ],
+          "notify_defaults": {
+            "users": {
+              "show_previews": true
+            }
+          },
+          "pinned": [
+            {
+              "list": "PIN_LIST_MAIN",
+              "peers": [
+                {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                }
+              ]
+            }
+          ],
+          "scheduled": [
+            {
+              "content": "CgIKAQ==",
+              "op_id": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "send_at_ms": "777"
+            }
+          ]
+        }
+      },
+      "input": {
+        "clock": 10,
+        "device_id": "dev-m",
+        "local": {
+          "archived": [
+            {
+              "user": {
+                "address": "old@x"
+              }
+            }
+          ],
+          "blocked": [
+            {
+              "blocked_at_ms": "1",
+              "peer": {
+                "user": {
+                  "address": "spam@x"
+                }
+              }
+            },
+            {
+              "blocked_at_ms": "2",
+              "peer": {
+                "user": {
+                  "address": "испорченный"
+                }
+              }
+            }
+          ],
+          "calls": [
+            {
+              "call_id": "wcHBwcHBwcHBwcHBwcHBwQ==",
+              "duration_s": 60,
+              "outgoing": true,
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "reason": "HANGUP_REASON_NORMAL",
+              "started_ms": "1"
+            }
+          ],
+          "drafts": [
+            {
+              "date_ms": "5",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "text": "CgJoaQ=="
+            }
+          ],
+          "folder_order": {
+            "ids": [
+              4
+            ]
+          },
+          "folders": [
+            {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 4,
+              "include_peers": [
+                {
+                  "user": {
+                    "address": "boss@x"
+                  }
+                }
+              ],
+              "title": "Работа"
+            },
+            {
+              "color": -1,
+              "emoticon": "💼",
+              "groups": true,
+              "id": 1,
+              "title": "зарезервирован — пропуск"
+            }
+          ],
+          "notify": [
+            {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "AgICAgICAgICAgICAgICAg=="
+                }
+              },
+              "settings": {
+                "mute_until_ms": "9223372036854775807"
+              }
+            }
+          ],
+          "notify_defaults": {
+            "users": {
+              "show_previews": true
+            }
+          },
+          "pinned": [
+            {
+              "list": "PIN_LIST_MAIN",
+              "peers": [
+                {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                }
+              ]
+            }
+          ],
+          "scheduled": [
+            {
+              "content": "CgIKAQ==",
+              "op_id": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "send_at_ms": "777"
+            }
+          ]
+        }
+      },
+      "name": "локальные папки/блок-лист/уведомления/черновики/отложенные/архив/закреп/звонки"
+    }
+  ],
+  "description": "миграция: локальный снимок v1 (proto3-JSON StateSnapshot) → начальные операции устройства dev-m с часов 10 и op_id = счётчик 1,2,… (u128 big-endian); испорченные записи пропускаются",
+  "suite": "state"
+}

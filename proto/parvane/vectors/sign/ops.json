@@ -1,0 +1,229 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true,
+        "payload_hex": "7061796c6f6164"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6164",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece208",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "valid"
+    },
+    {
+      "expect": {
+        "error": "BadSignature"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "edit",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6164",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece208",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "cross-op-type"
+    },
+    {
+      "expect": {
+        "error": "BadSignature"
+      },
+      "input": {
+        "expect_domain": "call",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6164",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece208",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "cross-domain"
+    },
+    {
+      "expect": {
+        "error": "BadSignature"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6165",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece208",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "tampered-body"
+    },
+    {
+      "expect": {
+        "error": "BadSignature"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6164",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece2",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "short-signature"
+    },
+    {
+      "expect": {
+        "error": "BadSignature"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "expect_signer_hex": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6164",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece208",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "expected-signer-mismatch"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a280a0463616c6c1207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a332",
+          "signature_hex": "9af4dc1256c6eef779b04066cc0a044607d9498a148faedabdd284af0685393f0b682d1e6e5331a6d658ebff1b814d8769c6f425112cf620669675349374570b",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "header-disagrees-with-context"
+    },
+    {
+      "expect": {
+        "error": "DuplicateField"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a3320a240a036d7367120465646974221001923f4e9a007c118a223b4c5d6e7f803880b698b8a332",
+          "signature_hex": "0bea6a578ce14be4b1a2d1f730e422691c81a5e265ea13c0761f100d35760159c8d072eaba5caf1ed7c370d3082402a0fcad0aa2cf69052cf309c5481d54a90b",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "glued-bodies"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "expect_domain": "msg",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e742210000000000000000000000000000000003880b698b8a332",
+          "signature_hex": "57b276f7fc17c8c69d4ee0e33556b897dc02e5c08cebf02f50536327f9f9f5f08324aee73916bb3c5e26bf64d8bf9819d420bab2f9aaa09eccf2ef9e213a3206",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "op-id-not-v7"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "expect_domain": "MSG",
+        "expect_op_type": "content",
+        "op": {
+          "body_hex": "0a270a036d73671207636f6e74656e74221001923f4e9a007c118a223b4c5d6e7f803880b698b8a33212077061796c6f6164",
+          "signature_hex": "780169bc728d59c8eab2e5e2d144fbb3aedcadd2d9fca44d1d2ad8fa23393b7d8b750990158c0003e35291893cf2196eb7c0730afaf6d6dd1d5966632aece208",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "bad-context-name"
+    },
+    {
+      "expect": {
+        "ok": true
+      },
+      "input": {
+        "audience": {
+          "address": "bob@x",
+          "device_id": "d1"
+        },
+        "expect_domain": "call",
+        "expect_op_type": "signal",
+        "op": {
+          "body_hex": "0a4b0a0463616c6c12067369676e616c221001923f4e9a007c118a223b4c5d6e7f802a150a0178121007070707070707070707070707070707320b0a05626f624078120264313880b698b8a3321203763d30",
+          "signature_hex": "2096cb4d19b08fbc9b65bdadafc40a73ce3fff1a990e7dcca8bd286c2ccaefbd7614fc3e90445cf13cbc56f7836d3afae82158e303f308796ab166e89766b90b",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        },
+        "target": {
+          "domain": "x",
+          "id_hex": "07070707070707070707070707070707"
+        }
+      },
+      "name": "sdp-right-callee"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "audience": {
+          "address": "carol@x",
+          "device_id": "c1"
+        },
+        "expect_domain": "call",
+        "expect_op_type": "signal",
+        "op": {
+          "body_hex": "0a4b0a0463616c6c12067369676e616c221001923f4e9a007c118a223b4c5d6e7f802a150a0178121007070707070707070707070707070707320b0a05626f624078120264313880b698b8a3321203763d30",
+          "signature_hex": "2096cb4d19b08fbc9b65bdadafc40a73ce3fff1a990e7dcca8bd286c2ccaefbd7614fc3e90445cf13cbc56f7836d3afae82158e303f308796ab166e89766b90b",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        }
+      },
+      "name": "sdp-forwarded-to-other"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "expect_domain": "call",
+        "expect_op_type": "signal",
+        "op": {
+          "body_hex": "0a4b0a0463616c6c12067369676e616c221001923f4e9a007c118a223b4c5d6e7f802a150a0178121007070707070707070707070707070707320b0a05626f624078120264313880b698b8a3321203763d30",
+          "signature_hex": "2096cb4d19b08fbc9b65bdadafc40a73ce3fff1a990e7dcca8bd286c2ccaefbd7614fc3e90445cf13cbc56f7836d3afae82158e303f308796ab166e89766b90b",
+          "signer_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+        },
+        "target": {
+          "domain": "x",
+          "id_hex": "08080808080808080808080808080808"
+        }
+      },
+      "name": "sdp-other-call"
+    }
+  ],
+  "description": "подписываемые байты \"parvane/v2/op\" ‖ u8(len) ‖ domain ‖ u8(len) ‖ op_type ‖ body; проверка над присланными байтами",
+  "keys": {
+    "alice": {
+      "public_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "seed_hex": "0101010101010101010101010101010101010101010101010101010101010101"
+    },
+    "bob": {
+      "public_hex": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "seed_hex": "0202020202020202020202020202020202020202020202020202020202020202"
+    }
+  },
+  "suite": "sign"
+}

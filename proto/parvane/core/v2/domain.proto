@@ -1,0 +1,280 @@
+// Каркас доменов (R11, US4, T090): контейнеры (папка/блокнот/календарь),
+// журнал зашифрованных операций контейнера, гранты и снимки. Сервер (шард
+// domains) хранит журнал, гранты и снимки, проверяет право записи по грантам и
+// НЕ читает содержимое: операции и снимки — AEAD на ключе эпохи контейнера,
+// ключ раздаётся участникам по E2E (ContainerKeyShare). Сведение изменений
+// (CRDT) — внутри шифрования по схеме домена (parvane.sample.v1, cloud.v1, …).
+//
+// Все подписи — SignedOp с header.domain = "domain", header.target = ссылка на
+// контейнер и op_type — имя операции каркаса:
+//   "container" — генезис, payload = Container (подписан устройством владельца);
+//   "op"        — автор операции журнала, payload = SealDigest;
+//   "snapshot"  — автор снимка, payload = SealDigest;
+//   "grant"     — выдача/смена уровня, payload = Grant (подписан админом);
+//   "revoke"    — отзыв, payload = Grant (key_epoch = текущая + 1).
+// Реализация — backend/protocol/src/domain.rs.
+syntax = "proto3";
+
+package parvane.core.v2;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service DomainService {
+  rpc DomainContainerCreate(DomainContainerCreateRequest) returns (DomainContainerCreateResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.container.create"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainContainerGet(DomainContainerGetRequest) returns (DomainContainerGetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.container.get"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainOpAppend(DomainOpAppendRequest) returns (DomainOpAppendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.op.append"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainOpSync(DomainOpSyncRequest) returns (DomainOpSyncResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.op.sync"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainGrantSet(DomainGrantSetRequest) returns (DomainGrantSetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.grant.set"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainGrantRevoke(DomainGrantRevokeRequest) returns (DomainGrantRevokeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.grant.revoke"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainGrantList(DomainGrantListRequest) returns (DomainGrantListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.grant.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainSnapshotPut(DomainSnapshotPutRequest) returns (DomainSnapshotPutResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.snapshot.put"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  rpc DomainSnapshotGet(DomainSnapshotGetRequest) returns (DomainSnapshotGetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.snapshot.get"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+}
+
+// Уровень доступа к контейнеру. Владелец — всегда ADMIN.
+enum GrantLevel {
+  GRANT_LEVEL_UNSPECIFIED = 0;
+  // Только чтение журнала и снимков (domain.op.sync, domain.snapshot.get).
+  GRANT_LEVEL_READ = 1;
+  // Чтение + запись операций и снимков (domain.op.append, domain.snapshot.put).
+  GRANT_LEVEL_WRITE = 2;
+  // Запись + управление грантами (domain.grant.*).
+  GRANT_LEVEL_ADMIN = 3;
+}
+
+// Контейнер домена. В генезисе (SignedOp "container") key_epoch = 1; в ответах
+// сервера — текущая эпоха.
+message Container {
+  // Ссылка контейнера: домен сервера + 16 случайных байт.
+  Ref ref = 1;
+  // Схема домена: "sample.v1", "cloud.v1", … ([a-z0-9_.], 1..32).
+  string domain = 2 [(max_len) = 32];
+  UserRef owner = 3;
+  uint64 key_epoch = 4;
+}
+
+// Подписанный дайджест зашифрованной операции/снимка (payload SignedOp
+// "op"/"snapshot"): автор подписывает эпоху и SHA-256 шифртекста; op_id — в
+// заголовке SignedOp и в AAD.
+message SealDigest {
+  uint64 key_epoch = 1;
+  bytes ciphertext_sha256 = 2 [(max_len) = 32];
+  // Только для снимка: последний seq журнала, покрытый снимком.
+  uint64 upto_seq = 3;
+}
+
+// Операция журнала контейнера. aead_ciphertext = nonce(12) ‖ ChaCha20-Poly1305
+// с AAD = контекст контейнера + эпоха + op_id (domain.rs).
+message ContainerOp {
+  Ref container = 1;
+  uint64 key_epoch = 2;
+  bytes aead_ciphertext = 3 [(max_len) = 262172];
+  SignedOp author = 4;
+  // Позиция в журнале; ставит только сервер.
+  uint64 seq = 5 [(actor) = ACTOR_SERVER_SET];
+}
+
+// Грант доступа — запись журнала грантов контейнера (хэш-цепочка от генезиса).
+message Grant {
+  Ref container = 1;
+  oneof grantee {
+    UserRef user = 2;
+    // Группа (Ref группы v2): доступ всем её участникам.
+    Ref group = 3;
+  }
+  // Для отзыва — UNSPECIFIED.
+  GrantLevel level = 4;
+  // Эпоха ключа после записи: grant — текущая, revoke — текущая + 1.
+  uint64 key_epoch = 5;
+  // Позиция в журнале грантов (1, 2, …) и хэш предыдущей записи (для
+  // version = 1 — хэш генезиса). Подписаны вместе с грантом (как D-02).
+  uint64 version = 6;
+  bytes prev_hash = 7 [(max_len) = 32];
+}
+
+// Снимок состояния контейнера (compaction), пишет клиент. aead_ciphertext —
+// как у ContainerOp, AAD — контекст снимка + эпоха + upto_seq + op_id.
+message Snapshot {
+  Ref container = 1;
+  uint64 upto_seq = 2;
+  uint64 key_epoch = 3;
+  bytes aead_ciphertext = 4 [(max_len) = 1048604];
+  SignedOp author = 5;
+}
+
+// Раздача ключа эпохи участнику по E2E (как GroupKeyShare). Встраивание в
+// msg Content — отдельной задачей; до тех пор передаётся как сериализованное
+// сообщение. grant_version/grant_head_hash — голова журнала грантов у
+// раздающего (D-03): получатель сверяет её со своей и при форке ключ не берёт.
+message ContainerKeyShare {
+  Ref container = 1;
+  string domain = 2 [(max_len) = 32];
+  uint64 key_epoch = 3;
+  bytes key = 4 [(max_len) = 32];
+  uint64 grant_version = 5;
+  bytes grant_head_hash = 6 [(max_len) = 32];
+}
+
+// Метка LWW-регистра (R10/R11): порядок (lamport, device_id); общая для доменов.
+message LwwStamp {
+  uint64 lamport = 1;
+  string device_id = 2 [(max_len) = 64];
+}
+
+// ── методы ──────────────────────────────────────────────────────────────────
+
+message DomainContainerCreateRequest {
+  // SignedOp "container" с payload Container (owner = вызывающий).
+  SignedOp genesis = 1;
+}
+message DomainContainerCreateResponse {
+  Container container = 1;
+}
+
+message DomainContainerGetRequest {
+  Ref container = 1;
+}
+message DomainContainerGetResponse {
+  Container container = 1;
+  SignedOp genesis = 2;
+  // Уровень вызывающего.
+  GrantLevel level = 3;
+  // Последний seq журнала операций.
+  uint64 head_seq = 4;
+  // Последняя версия журнала грантов.
+  uint64 grant_version = 5;
+}
+
+message DomainOpAppendRequest {
+  ContainerOp op = 1;
+}
+message DomainOpAppendResponse {
+  uint64 seq = 1;
+}
+
+message DomainOpSyncRequest {
+  Ref container = 1;
+  uint64 after_seq = 2;
+  // Байтовый бюджет страницы (0 — по умолчанию; ≤ 716800).
+  uint32 max_bytes = 3;
+}
+message DomainOpSyncResponse {
+  repeated ContainerOp ops = 1 [(max_items) = 1024];
+  bool more = 2;
+}
+
+message DomainGrantSetRequest {
+  // SignedOp "grant" с payload Grant.
+  SignedOp grant = 1;
+}
+message DomainGrantSetResponse {
+  uint64 version = 1;
+}
+
+message DomainGrantRevokeRequest {
+  // SignedOp "revoke" с payload Grant (key_epoch = текущая + 1).
+  SignedOp grant = 1;
+}
+message DomainGrantRevokeResponse {
+  uint64 version = 1;
+  uint64 key_epoch = 2;
+}
+
+message DomainGrantListRequest {
+  Ref container = 1;
+  // Записи журнала грантов с version > after_version.
+  uint64 after_version = 2;
+}
+message DomainGrantListResponse {
+  SignedOp genesis = 1;
+  // Записи журнала грантов по порядку version.
+  repeated SignedOp entries = 2 [(max_items) = 1024];
+  bool more = 3;
+}
+
+message DomainSnapshotPutRequest {
+  Snapshot snapshot = 1;
+}
+message DomainSnapshotPutResponse {}
+
+message DomainSnapshotGetRequest {
+  Ref container = 1;
+}
+message DomainSnapshotGetResponse {
+  // Пусто, если снимка нет.
+  Snapshot snapshot = 1;
+}

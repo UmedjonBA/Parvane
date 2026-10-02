@@ -169,7 +169,11 @@ async fn start_stack() -> Option<(Stack, async_nats::Client)> {
     // gateway: ждём открытия TCP-порта
     let start = Instant::now();
     while TcpStream::connect(&stack.gateway_tcp).is_err() {
-        assert!(start.elapsed() < Duration::from_secs(60), "gateway не слушает");
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "gateway не слушает; лог:\n{}",
+            std::fs::read_to_string(stack.dir.join("gateway.log")).unwrap_or_default()
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Some((stack, nc))
