@@ -254,7 +254,7 @@ class Stickers(
     private fun loadState() {
         if (!stateFile.exists()) return
         try {
-            val o = JSONObject(stateFile.readText())
+            val o = JSONObject(SeamFiles.read(stateFile))
             o.optJSONArray("recent")?.let { a -> for (i in 0 until a.length()) recent.add(a.getString(i)) }
             o.optJSONArray("favorite")?.let { a -> for (i in 0 until a.length()) favorite.add(a.getString(i)) }
             o.optJSONArray("savedGifs")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { savedGifs.add(it) } }
@@ -263,7 +263,7 @@ class Stickers(
     private fun saveState() {
         try {
             root.mkdirs()
-            stateFile.writeText(JSONObject().put("recent", JSONArray(recent)).put("favorite", JSONArray(favorite)).put("savedGifs", JSONArray(savedGifs)).toString())
+            SeamFiles.write(stateFile, JSONObject().put("recent", JSONArray(recent)).put("favorite", JSONArray(favorite)).put("savedGifs", JSONArray(savedGifs)).toString())
         } catch (e: Exception) { /* в памяти */ }
     }
 

@@ -31,6 +31,7 @@ class ChatLocalState(private val dir: File) {
     // ── архив ──
     @Synchronized fun isArchived(chatId: Long) = chatId in archived
     @Synchronized fun setArchived(chatId: Long, on: Boolean) { if (on) archived.add(chatId) else archived.remove(chatId); saveLists() }
+    @Synchronized fun archivedChatIds(): List<Long> = archived.toList()
 
     /** Папки (spec 005 / история 4) — тот же каталог, `folders.json`. */
     val folders = Folders(dir)
@@ -63,11 +64,11 @@ class ChatLocalState(private val dir: File) {
     }
 
     private fun load() {
-        try { File(dir, "ttl.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(f.readText()); o.keys().forEach { k -> ttl[k] = o.optInt(k) } } } catch (e: Exception) { }
-        try { File(dir, "drafts.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(f.readText()); o.keys().forEach { k -> k.toLongOrNull()?.let { id -> o.optJSONObject(k)?.let { drafts[id] = it } } } } } catch (e: Exception) { }
-        try { File(dir, "chatlists.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(f.readText()); o.keys().forEach { k -> if (o.optString(k) == "archive") k.toLongOrNull()?.let { archived.add(it) } } } } catch (e: Exception) { }
+        try { File(dir, "ttl.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> ttl[k] = o.optInt(k) } } } catch (e: Exception) { }
+        try { File(dir, "drafts.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> k.toLongOrNull()?.let { id -> o.optJSONObject(k)?.let { drafts[id] = it } } } } } catch (e: Exception) { }
+        try { File(dir, "chatlists.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> if (o.optString(k) == "archive") k.toLongOrNull()?.let { archived.add(it) } } } } catch (e: Exception) { }
     }
-    private fun write(name: String, text: String) { try { dir.mkdirs(); File(dir, name).writeText(text) } catch (e: Exception) { } }
+    private fun write(name: String, text: String) { try { dir.mkdirs(); SeamFiles.write(File(dir, name), text) } catch (e: Exception) { } }
     private fun saveTtl() = write("ttl.json", JSONObject(ttl as Map<*, *>).toString())
     private fun saveDrafts() = write("drafts.json", JSONObject().also { o -> drafts.forEach { (k, v) -> o.put(k.toString(), v) } }.toString())
     private fun saveLists() = write("chatlists.json", JSONObject().also { o -> archived.forEach { o.put(it.toString(), "archive") } }.toString())

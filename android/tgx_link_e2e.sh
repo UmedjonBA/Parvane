@@ -13,7 +13,7 @@ wait_log "$A/td/log.txt" "E2E-устройство готово" 90 && ok "alice
 stop_pid "$BP"; BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:history-$STAMP")
 wait_log "$A/td/log.txt" "входящее msg .*bob@local.*history-$STAMP" 60 && ok "у alice есть история от bob" || bad "alice не получила от bob"
 echo "STACK_SB=$SB"
-AVD=parvane33 WAIT_SECS=20 ./tgx_session_flow.sh /tmp/pv-tgx-session alice@local test
+AVD=parvane33 WAIT_SECS=20 ./tgx_session_flow.sh /tmp/pv-tgx-session alice@local "$PV_PASSWORD"
 ad() { timeout 25 adb "$@"; }
 timeout 120 bash -c 'until adb logcat -d 2>/dev/null | grep -q "линковка: история получена"; do sleep 3; done' && ok "X: история импортирована по линковке" || bad "X: линковка не завершилась"
 grep -a "линковка" "$A/td/log.txt" | tail -3 | cut -c1-140

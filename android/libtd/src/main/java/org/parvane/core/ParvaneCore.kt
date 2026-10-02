@@ -110,6 +110,9 @@ object ParvaneCore {
         JSONObject(nativeResolve(org.json.JSONArray(addresses).toString()))
     fun search(query: String): JSONObject = JSONObject(nativeSearch(query))
     fun markRead(uuid: String) = nativeMarkRead(uuid)
+    // Файлы локального состояния шва — через шифрованное хранилище ядра (P-13); читает и старые plain
+    fun storeRead(path: String): String = nativeStoreRead(path)
+    fun storeWrite(path: String, text: String): Boolean = nativeStoreWrite(path, text)
     // spec 005: паки (PVPK1/PACK-1), превью ссылок, тайлы карты, забыть сообщение (TTL)
     fun packFetch(refJson: String): JSONObject = JSONObject(nativePackFetch(refJson))
     fun packRefFor(dir: String, rawName: String, recipients: List<String>): JSONObject =
@@ -120,7 +123,36 @@ object ParvaneCore {
     fun self(): String = nativeSelf()
     fun logout() = nativeLogout()
     fun sessionExpired() = nativeSessionExpired()
+    /** Протокол v2 (spec 007): двойной стек — до [startSession]; по умолчанию выключен. */
+    fun setProtoV2(enabled: Boolean) = nativeSetProtoV2(enabled)
+    /** {"enabled","ready","needsLinking","engine"} */
+    fun v2Status(): JSONObject = JSONObject(nativeV2Status())
 
+    // ── приватность v2 (T079, FR-040) и режим «усиленная приватность» (L2-1) ──
+    /** identity.privacy.set целиком; false — не отправлено сейчас (v2 выключен или сессия дошлёт при готовности). */
+    fun setPrivacy(groupAddNobody: Boolean, strangersAllowed: Boolean): Boolean = nativeSetPrivacy(groupAddNobody, strangersAllowed)
+    /** Режим доступен в чате (v2-сессия готова, чат — v2). Блокирующий — звать с io-потока. */
+    fun l2Available(chat: String): Boolean = nativeL2Available(chat)
+    /** Включить/выключить режим: {"ok","id"?,"error_code"?,"error"?}; chat — собеседник или "v2g:<hex>". */
+    fun setL2(chat: String, enabled: Boolean): JSONObject = JSONObject(nativeSetL2(chat, enabled))
+    @JvmStatic private external fun nativeSetPrivacy(groupAddNobody: Boolean, strangersAllowed: Boolean): Boolean
+    @JvmStatic private external fun nativeL2Available(chat: String): Boolean
+    @JvmStatic private external fun nativeSetL2(chat: String, enabled: Boolean): String
+
+    // ── журнал личного состояния v2 (T098): "" — журнал недоступен ──
+    /** Прочитать журнал; первый запуск переносит локальный снимок. → сведённый снимок или null. */
+    fun stateAttach(localJson: String): JSONObject? = nativeStateAttach(localJson).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** Своя правка → записи, затем чужие. → {"changed","snapshot"} или null. */
+    fun stateSync(desiredJson: String, kinds: List<String>): JSONObject? =
+        nativeStateSync(desiredJson, org.json.JSONArray(kinds).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    fun stateScheduledSent(opIdB64: String): Boolean = nativeStateScheduledSent(opIdB64)
+    fun stateMarkSent(opIdB64: String) = nativeStateMarkSent(opIdB64)
+    @JvmStatic private external fun nativeStateAttach(localJson: String): String
+    @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String): String
+    @JvmStatic private external fun nativeStateScheduledSent(opIdB64: String): Boolean
+    @JvmStatic private external fun nativeStateMarkSent(opIdB64: String)
+    @JvmStatic private external fun nativeSetProtoV2(enabled: Boolean)
+    @JvmStatic private external fun nativeV2Status(): String
     @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String, storeKey: ByteArray)
     @JvmStatic private external fun nativeServerDomain(): String
     @JvmStatic private external fun nativeLogin(user: String, password: String, loginToken: String): String
@@ -166,6 +198,8 @@ object ParvaneCore {
     @JvmStatic private external fun nativeResolve(addressesJson: String): String
     @JvmStatic private external fun nativeSearch(query: String): String
     @JvmStatic private external fun nativeMarkRead(uuid: String)
+    @JvmStatic private external fun nativeStoreRead(path: String): String
+    @JvmStatic private external fun nativeStoreWrite(path: String, text: String): Boolean
     @JvmStatic private external fun nativePackFetch(refJson: String): String
     @JvmStatic private external fun nativePackRefFor(dir: String, rawName: String, recipientsJson: String): String
     @JvmStatic private external fun nativePreviewFetch(url: String, timeoutMs: Int): String

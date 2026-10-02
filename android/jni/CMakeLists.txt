@@ -3,8 +3,9 @@
 #  - без cnats (src/transport.cpp исключён): на Android транспорт только WSS
 #    (GatewayWsTransport), прямой NATS не нужен;
 #  - nlohmann/json — вендоренный single-header (без сети/FetchContent);
-#  - OpenSSL и libparvane_e2e.a берутся из готовых префиксов под ABI
-#    (PARVANE_OPENSSL_DIR, PARVANE_E2E_LIB), собранных заранее скриптами.
+#  - OpenSSL, libparvane_e2e.a и libparvane_protocol_ffi.a (движок протокола v2,
+#    spec 007) берутся из готовых префиксов под ABI (PARVANE_OPENSSL_DIR,
+#    PARVANE_E2E_LIB, PARVANE_PROTOCOL_LIB), собранных заранее build-core.sh.
 cmake_minimum_required(VERSION 3.22)
 project(parvane_core_android LANGUAGES C CXX)
 
@@ -33,11 +34,18 @@ if(NOT DEFINED PARVANE_E2E_LIB)
   endif()
   set(PARVANE_E2E_LIB ${BACKEND}/target/${_rust}/release/libparvane_e2e.a)
 endif()
+if(NOT DEFINED PARVANE_PROTOCOL_LIB)
+  get_filename_component(_rustdir ${PARVANE_E2E_LIB} DIRECTORY)
+  set(PARVANE_PROTOCOL_LIB ${_rustdir}/libparvane_protocol_ffi.a)
+endif()
 if(NOT EXISTS ${PARVANE_OPENSSL_DIR}/lib/libcrypto.a)
   message(FATAL_ERROR "нет OpenSSL под ${ANDROID_ABI}: ${PARVANE_OPENSSL_DIR} (android/build-openssl.sh)")
 endif()
 if(NOT EXISTS ${PARVANE_E2E_LIB})
   message(FATAL_ERROR "нет libparvane_e2e.a: ${PARVANE_E2E_LIB} (android/build-core.sh)")
+endif()
+if(NOT EXISTS ${PARVANE_PROTOCOL_LIB})
+  message(FATAL_ERROR "нет libparvane_protocol_ffi.a: ${PARVANE_PROTOCOL_LIB} (android/build-core.sh)")
 endif()
 
 add_library(parvane_core STATIC
@@ -46,6 +54,7 @@ add_library(parvane_core STATIC
     ${CORE}/src/e2e.cpp
     ${CORE}/src/linking.cpp
     ${CORE}/src/blobcrypt.cpp
+    ${CORE}/src/storecrypt.cpp
     ${CORE}/src/keybackup.cpp
     ${CORE}/src/map_tiles.cpp
     ${CORE}/src/pack_archive.cpp
@@ -56,11 +65,17 @@ add_library(parvane_core STATIC
     ${CORE}/src/call_session.cpp
     ${CORE}/src/call_manager.cpp
     ${CORE}/src/group_client.cpp
-    ${CORE}/src/group_call_manager.cpp)
+    ${CORE}/src/group_call_manager.cpp
+    # протокол v2 (spec 007): двойной стек, как desktop (PARVANE_PROTO_V2)
+    ${CORE}/src/v2_engine.cpp
+    ${CORE}/src/v2_content.cpp
+    ${CORE}/src/v2_link.cpp
+    ${CORE}/src/v2_session.cpp)
 
 target_include_directories(parvane_core PUBLIC
     ${CORE}/include
     ${BACKEND}/shared/parvane-e2e/include
+    ${BACKEND}/protocol/ffi/include                    # parvane_protocol.h (cbindgen)
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party        # nlohmann/json.hpp
     ${PARVANE_OPENSSL_DIR}/include)
 
@@ -71,10 +86,13 @@ target_link_libraries(parvane_core PUBLIC
     ${PARVANE_OPENSSL_DIR}/lib/libssl.a
     ${PARVANE_OPENSSL_DIR}/lib/libcrypto.a
     ${PARVANE_E2E_LIB}
+    ${PARVANE_PROTOCOL_LIB}
     log)
 
 # ── JNI-фасад для shim'а org.drinkless.tdlib.Client (libparvane_jni.so) ──────
-add_library(parvane_jni SHARED ${CMAKE_CURRENT_SOURCE_DIR}/parvane_jni.cpp)
+add_library(parvane_jni SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/parvane_jni.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/protocol_jni.cpp)   # ParvaneProtocol (движок v2 без сети)
 target_link_libraries(parvane_jni PRIVATE parvane_core log)
 # Символы JNI наружу, остальное — скрыть (меньше .so, нет конфликтов)
 target_compile_options(parvane_jni PRIVATE -fvisibility=hidden)

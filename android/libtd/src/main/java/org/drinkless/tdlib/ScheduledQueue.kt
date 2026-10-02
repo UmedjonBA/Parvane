@@ -57,7 +57,7 @@ class ScheduledQueue(private val dir: File, private val now: () -> Long = { Syst
     private fun load() {
         if (!file.exists()) return
         try {
-            val root = JSONObject(file.readText())
+            val root = JSONObject(SeamFiles.read(file))
             nextId = maxOf(ID_BASE, root.optLong("next", ID_BASE))
             val arr = root.optJSONArray("items") ?: JSONArray()
             for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { val it = Item.fromJson(it); items[it.id] = it; if (it.id >= nextId) nextId = it.id + 1 }
@@ -66,7 +66,7 @@ class ScheduledQueue(private val dir: File, private val now: () -> Long = { Syst
     private fun save() {
         try {
             dir.mkdirs()
-            file.writeText(JSONObject().put("next", nextId).put("items", JSONArray().also { a -> items.values.forEach { a.put(it.toJson()) } }).toString())
+            SeamFiles.write(file, JSONObject().put("next", nextId).put("items", JSONArray().also { a -> items.values.forEach { a.put(it.toJson()) } }).toString())
         } catch (e: Exception) { }
     }
 

@@ -21,6 +21,15 @@ RU = {
     "NoOtherSessionsInfo": "Войти в Parvane можно с других телефонов, планшетов и компьютеров по тому же нику. Ключи и история переносятся линковкой или копией ключей.",
     "TerminateAllSessions": "Завершить все другие сессии", "TerminateSessionQuestion": "Завершить эту сессию?",
     "TerminateSession": "Завершить сессию", "UnknownLocation": "Местоположение неизвестно",
+    # ── приватность (spec 007, T079): экран «Конфиденциальность» — чёрный список и «кто может писать мне» ──
+    "BlockedSenders": "Чёрный список",
+    "PrivacyMessage": "Сообщения", "PrivacyMessageTitle": "Сообщения",
+    "WhoCanSendMessages": "Кто может писать мне?",
+    "PrivacyMessageEverybody": "Писать могут все",
+    "PrivacyMessageContactsPremium": "Только те, кому писали вы",
+    "MyContactsAndPremium": "Только те, кому писал(а) я",
+    "NewChatsPrivacyDesc": "При ограничении писать вам могут только те, кому писали вы.",
+    "AppUpdateRequiredTitle": "Требуется обновление", "AppUpdateOk": "Обновить",
     # ── общее ──
     "Message": "Сообщение",  # словарь десктопа давал «Чат» — подсказка поля ввода
     "NotificationsEnabled": "Включены", "NotificationsDisabled": "Выключены",
@@ -100,6 +109,9 @@ RU = {
     "MediaSpoilerHint": "Медиа будет размыто в чате и откроется по дополнительному нажатию.",
     "MediaRestricted": "Медиа недоступно",
     "ShareContentUnsupported": "Этот тип медиа пока не поддерживается.",
+    # протокол v2 (spec 007): заглушка для незнакомого вида сообщения (TdApi.MessageUnsupported)
+    "UnsupportedMessage": "Сообщение не поддерживается",
+    "MessageUnsupportedHint": "Это сообщение не поддерживается установленной версией Parvane.",
     "ShareContact": "Поделиться контактом",
     "ShareMyContactInfo": "Поделиться моим контактом",
     "SharePhoneNumber": "Поделиться номером",

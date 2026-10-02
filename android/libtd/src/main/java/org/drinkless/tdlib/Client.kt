@@ -4,6 +4,7 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import org.parvane.core.ParvaneCore
+import org.parvane.core.ParvaneProtocol
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -63,9 +64,9 @@ class Client private constructor(
         }
 
         /** Gateway по умолчанию — тестовый прод; приложение может переопределить. */
+        const val DEFAULT_GATEWAY_URL = "wss://parvane.duckdns.org:20443/ws"
         @JvmStatic
         @Volatile
-        const val DEFAULT_GATEWAY_URL = "wss://parvane.duckdns.org:20443/ws"
         var gatewayUrl: String = DEFAULT_GATEWAY_URL
 
         // Кэш поля chatId по классу апдейта — в companion: postUpdate зовётся из init{} раньше
@@ -157,6 +158,10 @@ class Client private constructor(
             return TdApi.LanguagePackStrings(out.toTypedArray())
         }
 
+        // Протокол v2 включён (spec 007): X показывает пункт «Сообщения» экрана приватности только по
+        // опции can_set_new_chat_privacy_settings — настройка «сообщения от незнакомых» есть лишь у v2 (T079)
+        @Volatile private var v2Enabled = false
+
         private const val PARVANE_VERSION = "0.1-parvane"
         private const val TDLIB_VERSION = "1.8.53"
 
@@ -169,6 +174,7 @@ class Client private constructor(
             "message_caption_length_max" -> TdApi.OptionValueInteger(1024)
             "is_premium", "is_premium_available", "can_ignore_sensitive_content_restrictions",
             "disable_top_chats", "test_mode", "expect_blocking" -> TdApi.OptionValueBoolean(false)
+            "can_set_new_chat_privacy_settings" -> TdApi.OptionValueBoolean(v2Enabled)
             "localization_target" -> TdApi.OptionValueString("android")
             "language_pack_id" -> TdApi.OptionValueString(languagePackId)
             else -> TdApi.OptionValueEmpty()
@@ -261,8 +267,11 @@ class Client private constructor(
     private fun handle(f: TdApi.Function<*>): TdApi.Object = when (f) {
         is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream, is TdApi.SetLogTagVerbosityLevel,
         is TdApi.AddLogMessage -> TdApi.Ok()
-        is TdApi.GetOption -> optionValue(f.name)
-        is TdApi.SetOption -> { // language_pack_id — выбор языка; x_parvane_phone — телефон профиля (диалог оверлея, spec 005)
+        // x_parvane_l2:<chatId> — режим «усиленная приватность» чата (строка-переключатель оверлея X, L2-1)
+        is TdApi.GetOption -> if (f.name?.startsWith(L2Mode.OPTION_PREFIX) == true) l2Option(f.name) else optionValue(f.name)
+        is TdApi.SetOption -> if (f.name?.startsWith(L2Mode.OPTION_PREFIX) == true) {
+            setL2Option(f.name, (f.value as? TdApi.OptionValueBoolean)?.value ?: false)
+        } else { // language_pack_id — выбор языка; x_parvane_phone — телефон профиля (диалог оверлея, spec 005)
             if (f.name == "language_pack_id") languagePackId = (f.value as? TdApi.OptionValueString)?.value ?: ""
             if (f.name == "x_parvane_phone") setProfile(JSONObject().put("phone", ((f.value as? TdApi.OptionValueString)?.value ?: "").trim().take(32)))
             TdApi.Ok()
@@ -306,6 +315,15 @@ class Client private constructor(
                     gatewayUrl = DEFAULT_GATEWAY_URL
                 }
                 ParvaneCore.init(gatewayUrl, f.databaseDirectory)
+                // Файлы локального состояния шва — через шифрованное хранилище ядра (P-13)
+                SeamFiles.codec = object : SeamFiles.Codec {
+                    override fun read(path: String) = ParvaneCore.storeRead(path)
+                    override fun write(path: String, text: String) = ParvaneCore.storeWrite(path, text)
+                }
+                // Протокол v2 (spec 007): двойной стек по флагу, по умолчанию выключен.
+                // Флаг — файл <databaseDirectory>/parvane-proto-v2 (читает ядро) или,
+                // только в debug, /data/local/tmp/parvane-proto-v2 (сценарии эмулятора).
+                ParvaneCore.setProtoV2(org.parvane.libtd.BuildConfig.DEBUG && java.io.File("/data/local/tmp/parvane-proto-v2").canRead())
                 if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                     onSessionReady(ParvaneCore.self())
                 } else {
@@ -337,6 +355,8 @@ class Client private constructor(
                 // статус опрашиваем каждые 2 с, после подтверждения — issue с login_token.
                 startTwoFactor(r.optString("address"), f.password ?: "", r.optString("login_token"))
                 TdApi.Ok()
+            } else if (upgrade.required || UpgradeNotices.isUpgradeError(r.optString("error"))) {
+                TdApi.Error(406, uiText("upgrade_required")) // E6: сервер отключил v1 — вход этой версией невозможен
             } else {
                 TdApi.Error(400, r.optString("error", "неверный логин или пароль"))
             }
@@ -357,6 +377,14 @@ class Client private constructor(
         // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
         is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
             .let { TdApi.MessageSenders(it.size, it.toTypedArray()) }
+        // «Сообщения от незнакомых» (T079, FR-040): нативный экран X «Who can send me messages?»
+        // (Settings → Privacy → Messages); allowNewChatsFromUnknownUsers ↔ messages_from_strangers
+        is TdApi.GetNewChatPrivacySettings -> privacy.newChatSettings(store.self)
+        is TdApi.SetNewChatPrivacySettings -> setStrangersPolicy(f.settings)
+        // экран X вместе с настройкой читает исключения платных сообщений — их нет (пустые правила)
+        is TdApi.GetUserPrivacySettingRules -> if (f.setting is TdApi.UserPrivacySettingAllowUnpaidMessages) TdApi.UserPrivacySettingRules(arrayOf())
+            else TdApi.Error(501, "Parvane: не реализовано ${f.javaClass.simpleName}")
+        is TdApi.GetConnectedWebsites -> TdApi.ConnectedWebsites(arrayOf()) // экран приватности X спрашивает при открытии
         is TdApi.GetPasswordState -> TdApi.PasswordState(false, "", false, false, null, "", 0)
         is TdApi.GetAccountTtl -> TdApi.AccountTtl(365)
         // Без этого X считает, что сообщение нельзя переслать/закрепить/ответить (кнопок в панели выбора нет)
@@ -365,6 +393,7 @@ class Client private constructor(
             TdApi.Error(400, "Parvane: кодов нет — вход по нику и паролю")
         is TdApi.LogOut -> {
             if (!detached) ParvaneCore.logout()
+            l2.clear()
             store.clear()
             announcedChats.clear()
             setAuth(TdApi.AuthorizationStateLoggingOut())
@@ -524,7 +553,8 @@ class Client private constructor(
         is TdApi.GetFile -> store.fileRef(f.fileId)?.let { store.tdFile(it) } ?: TdApi.Error(404, "file not found")
         is TdApi.DownloadFile -> downloadFile(f.fileId, f.synchronous)
         is TdApi.SendChatAction -> {
-            if (f.action is TdApi.ChatActionTyping) store.addressOf(f.chatId)?.let { ParvaneCore.sendTyping(it) }
+            // L2-1: в чате с усиленной приватностью «печатает» не передаётся
+            if (f.action is TdApi.ChatActionTyping) store.addressOf(f.chatId)?.let { if (l2.ephemeralAllowed(it)) ParvaneCore.sendTyping(it) }
             TdApi.Ok()
         }
         is TdApi.EditMessageText -> editMessage(f)
@@ -614,6 +644,7 @@ class Client private constructor(
             val fo = l.folders.create(f.folder)
             Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            scheduleStateFlush()
             fo.toInfo()
         }
         is TdApi.EditChatFolder -> run {
@@ -621,6 +652,7 @@ class Client private constructor(
             val fo = l.folders.edit(f.chatFolderId, f.folder) ?: return@run TdApi.Error(404, "folder not found")
             Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            scheduleStateFlush()
             fo.toInfo()
         }
         is TdApi.DeleteChatFolder -> run {
@@ -630,12 +662,14 @@ class Client private constructor(
             refreshFolderPositions()
             Log.i(TAG, "папка ${f.chatFolderId} удалена")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            scheduleStateFlush()
             TdApi.Ok()
         }
         is TdApi.ReorderChatFolders -> run {
             val l = store.local ?: return@run TdApi.Error(500, "no local state")
             l.folders.reorder(f.chatFolderIds ?: IntArray(0), f.mainChatListPosition)
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
+            scheduleStateFlush()
             TdApi.Ok()
         }
         is TdApi.GetRecommendedChatFolders -> TdApi.RecommendedChatFolders(arrayOf())
@@ -677,9 +711,10 @@ class Client private constructor(
         is TdApi.EditMessageSchedulingState -> run {
             val item = scheduledQueue.get(f.messageId) ?: return@run TdApi.Error(404, "scheduled message not found")
             val st = f.schedulingState
-            if (st == null) { scheduledQueue.remove(item.id); fireScheduled(item) }
+            if (st == null) { scheduledQueue.remove(item.id); fireScheduledGated(item) }
             else if (st is TdApi.MessageSchedulingStateSendAtDate) { scheduledQueue.reschedule(item.id, st.sendDate.toLong()); scheduledMsgs[item.id] = scheduledMessage(item) }
             else return@run TdApi.Error(400, "unsupported scheduling state")
+            scheduleStateFlush()
             TdApi.Ok()
         }
         is TdApi.SetChatDraftMessage -> run {
@@ -690,6 +725,7 @@ class Client private constructor(
             chat?.draftMessage = l.tdDraft(f.chatId)
             Log.i(TAG, if (json != null) "черновик ${f.chatId} сохранён" else "черновик ${f.chatId} снят")
             postUpdate(TdApi.UpdateChatDraftMessage(f.chatId, chat?.draftMessage, chat?.positions ?: arrayOf()))
+            scheduleStateFlush()
             TdApi.Ok()
         }
         is TdApi.ClearAllDraftMessages -> { store.local?.clearDrafts(); TdApi.Ok() }
@@ -704,6 +740,7 @@ class Client private constructor(
             Log.i(TAG, "чат ${f.chatId} → ${if (toArchive) "архив" else "главный список"}")
             postUpdate(TdApi.UpdateChatPosition(f.chatId, TdApi.ChatPosition(oldList, 0L, false, null)))
             postUpdate(TdApi.UpdateChatPosition(f.chatId, chat.positions[0]))
+            scheduleStateFlush()
             TdApi.Ok()
         }
         // spec 005: опросы — голос/закрытие как отдельные sealed-сообщения, агрегат локальный (PollStore)
@@ -763,6 +800,7 @@ class Client private constructor(
             val uid = (f.senderId as? TdApi.MessageSenderUser)?.userId
             val address = uid?.let { store.addressOf(it) }
             if (address != null) { if (f.blockList == null) store.blocked.remove(address) else store.blocked.add(address) }
+            scheduleStateFlush() // журнал личного состояния v2 (T098)
             TdApi.Ok()
         }
         is TdApi.DeleteChatHistory -> { // «для меня»: скрыть на сервере (msg.chat.clear) и убрать локально
@@ -815,6 +853,12 @@ class Client private constructor(
         for (scope in listOf<TdApi.NotificationSettingsScope>(TdApi.NotificationSettingsScopePrivateChats(),
                 TdApi.NotificationSettingsScopeGroupChats(), TdApi.NotificationSettingsScopeChannelChats()))
             postUpdate(TdApi.UpdateScopeNotificationSettings(scope, store.scopeSettings(scopeKey(scope))))
+        // spec 007 (T079): настройка «сообщения от незнакомых» есть только у v2 — пункт экрана приватности X
+        // появляется по опции; сама настройка уходит в identity, ТОЛЬКО если её задавали на этом устройстве
+        v2Enabled = try { ParvaneCore.v2Status().optBoolean("enabled") } catch (e: Throwable) { false }
+        postUpdate(TdApi.UpdateOption("can_set_new_chat_privacy_settings", TdApi.OptionValueBoolean(v2Enabled)))
+        store.groupAddPolicy = privacy.groupAdd(self)
+        if (v2Enabled) io.execute { pushPrivacy() }
         io.execute { syncGroups() }
         // spec 005: встроенные паки ParvaneEmoji/ParvaneStickers (Canvas при первом старте)
         io.execute { if (!stickers.ensureBuiltin()) Log.w(TAG, "встроенные паки не нарисованы") }
@@ -895,6 +939,7 @@ class Client private constructor(
         "SetChatMessageAutoDeleteTime", "EditMessageSchedulingState", "SetChatDraftMessage", "AddChatToList",
         "SetPollAnswer", "StopPoll", "ChangeStickerSet", "AddFavoriteSticker", "RemoveFavoriteSticker", "RemoveRecentSticker", "AddSavedAnimation", "RemoveSavedAnimation",
         "SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
+        "SetNewChatPrivacySettings", "SetUserPrivacySettingRules",
         "DeleteRevokedChatInviteLink", "DeleteAllRevokedChatInviteLinks", "EditChatInviteLink", "SetChatMemberStatus")
 
     private inline fun withGroup(chatId: Long, block: (ParvaneStore.GroupRef) -> TdApi.Object): TdApi.Object =
@@ -925,8 +970,16 @@ class Client private constructor(
             "restrict_unsupported" -> if (ru) "Частичные ограничения не поддерживаются — участника можно только удалить" else "Partial restrictions are not supported — you can only remove a member"
             "sticker_not_found" -> if (ru) "Стикер не найден в установленных паках" else "Sticker not found in installed packs"
             "rate_limited" -> if (ru) "Слишком много действий, помедленнее" else "Too many actions, slow down"
+            "v2_recovery_key" -> if (ru) "Ключ восстановления аккаунта (протокол v2). Сохраните его в надёжном месте — он показывается один раз и нужен, чтобы восстановить доступ без других устройств:\n%s"
+                else "Account recovery key (protocol v2). Store it somewhere safe — it is shown only once and is needed to regain access without your other devices:\n%s"
             "session_expired" -> if (ru) "Сессия истекла — войдите снова" else "Session expired — sign in again"
-            else -> fallback.ifEmpty { code }
+            // spec 007: T080 — участник группы v2 без записи администратора; T119 — новое своё устройство
+            "v2_unconfirmed_member" -> if (ru) "Сервер показывает %s в составе группы, но это не подтверждено записью администратора. Ключи шифрования этому участнику не передаются."
+                else "%s is listed in the group by the server, but no admin record confirms it. Encryption keys are not shared with them."
+            "v2_new_device" -> if (ru) "К вашему аккаунту добавлено новое устройство. Если это были не вы, удалите его в Настройки > Устройства."
+                else "A new device was added to your account. If it wasn't you, remove it in Settings > Devices."
+            // spec 007: режим L2, кадры перехода на v2 — SeamText (общий с чистыми классами шва и тестами)
+            else -> SeamText.of(code, ru) ?: fallback.ifEmpty { code }
         }
     }
     /** Список ссылок (активные/отозванные) → ChatInviteLink[]; null — отказ сервера. */
@@ -1030,12 +1083,68 @@ class Client private constructor(
                 val tile = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size) ?: continue
                 canvas.drawBitmap(tile, null, android.graphics.Rect(t.dstX, t.dstY, t.dstX + t.dstSize, t.dstY + t.dstSize), null); okTiles++
             }
-            Log.i(TAG, "карта %.5f,%.5f z%d %dx%d тайлов=%d/%d".format(java.util.Locale.ROOT, loc.latitude, loc.longitude, z, width, height, okTiles, g.tiles.size))
+            Log.i(TAG, "карта %.5f,%.5f z%d %dx%d тайлов=%d/%d".format(java.util.Locale.ROOT, loc.latitude, loc.longitude, g.zoom, width, height, okTiles, g.tiles.size)) // фактический зум (P-23: ≤ z15)
             if (okTiles == 0) return TdApi.Error(404, "no tiles")
             out.parentFile?.mkdirs()
             out.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             store.fileFor("map:$name", "", "", out.length(), "image/png", out.absolutePath)
         } catch (e: Throwable) { Log.w(TAG, "карта: ${e.message}"); TdApi.Error(500, "map render failed") }
+    }
+
+    // ── приватность v2 и режим «усиленная приватность» (spec 007, T079; правило L2-1) ──────
+    private val privacy by lazy { PrivacyPrefs(java.io.File(boundDir)) }
+    private val l2 = L2Mode()
+    private val upgrade = UpgradeNotices()
+
+    /** identity.privacy.set (целиком) — только если настройку задавали на этом устройстве: метода
+     *  чтения у сервера нет, умолчание затёрло бы выбор с другого устройства (web шлёт так же — при изменении). */
+    private fun pushPrivacy() {
+        val p = privacy.toPush(store.self) ?: return
+        val sent = try { ParvaneCore.setPrivacy(p.first, p.second) } catch (e: Throwable) { Log.w(TAG, "приватность v2: ${e.message}"); false }
+        Log.i(TAG, "приватность v2: незнакомые ${if (p.second) "да" else "нет"}, добавление в группы ${if (p.first) "никто" else "все"} → ${if (sent) "отправлено" else "уйдёт при готовности сессии"}")
+    }
+    private fun setStrangersPolicy(settings: TdApi.NewChatPrivacySettings?): TdApi.Object {
+        if (settings == null) return TdApi.Error(400, "bad request")
+        if (!v2Enabled) return TdApi.Error(400, uiText("l2_unavailable", "v2 disabled"))
+        if (settings.incomingPaidMessageStarCount > 0) return TdApi.Error(400, uiText("paid_messages_unsupported"))
+        privacy.setStrangersAllowed(store.self, settings.allowNewChatsFromUnknownUsers)
+        pushPrivacy()
+        return TdApi.Ok()
+    }
+
+    /** Опция `x_parvane_l2:<chatId>` → биты состояния строки-переключателя; Empty — режима в чате нет (строку не показывать). */
+    private fun l2Option(name: String): TdApi.OptionValue {
+        val chatId = L2Mode.chatIdOfOption(name) ?: return TdApi.OptionValueEmpty()
+        val address = store.addressOf(chatId) ?: return TdApi.OptionValueEmpty()
+        if (address == store.self) return TdApi.OptionValueEmpty()
+        val group = store.group(address)
+        if (group != null && !address.startsWith(StateJournal.V2_GROUP_PREFIX)) return TdApi.OptionValueEmpty() // v1-группа
+        val available = try { ParvaneCore.l2Available(address) } catch (e: Throwable) { false }
+        if (!available && !l2.isActive(address)) return TdApi.OptionValueEmpty()
+        val canChange = available && (group == null || L2Mode.canChangeGroup(store.roleOf(group, store.self), group.adminRights[store.self], group.permissions))
+        return TdApi.OptionValueInteger(l2.optionBits(address, group != null, canChange))
+    }
+    /** Включить/выключить режим в чате (личный — своё предпочтение, группа — политика). */
+    private fun setL2Option(name: String, enabled: Boolean): TdApi.Object {
+        val chatId = L2Mode.chatIdOfOption(name) ?: return TdApi.Error(400, "bad option")
+        val address = store.addressOf(chatId) ?: return TdApi.Error(404, "chat not found")
+        val since = l2.version()
+        val r = try { ParvaneCore.setL2(address, enabled) } catch (e: Throwable) { JSONObject().put("ok", false).put("error_code", "failed") }
+        if (!r.optBoolean("ok")) {
+            val code = r.optString("error_code")
+            Log.w(TAG, "режим L2 чата $chatId: отказ $code")
+            return TdApi.Error(if (code == "forbidden") 403 else 400, uiText(when (code) { "forbidden" -> "forbidden"; "unavailable" -> "l2_unavailable"; else -> "l2_failed" }))
+        }
+        // состояние (и служебное сообщение) придут событиями ядра — ждём недолго, чтобы строка X перечитала уже новое
+        l2.awaitChange(since, 2000)
+        Log.i(TAG, "режим L2 чата $chatId: ${if (enabled) "включён" else "выключен"} (своё действие)")
+        return TdApi.Ok()
+    }
+    /** Состояние режима в лог (e2e-хук `l2state`; без текста сообщений — P-46). */
+    private fun logL2State(chatId: Long, address: String) {
+        Log.i(TAG, "l2 состояние чата $chatId: active=${l2.isActive(address)} mine=${l2.isMine(address)} " +
+            "by_peer=${l2.isActive(address) && !l2.isMine(address) && store.group(address) == null} " +
+            "typing=${l2.ephemeralAllowed(address)} presence=${l2.presenceAllowed}")
     }
 
     // ── сессия (spec 005 / FAIL-1) ───────────────────────────────────────────
@@ -1044,6 +1153,7 @@ class Client private constructor(
     private fun sessionExpired() {
         Log.i(TAG, "сессия истекла → экран входа")
         try { ParvaneCore.sessionExpired() } catch (e: Throwable) { Log.w(TAG, "sessionExpired: ${e.message}") }
+        l2.clear()
         store.clear(); announcedChats.clear(); journalReplayed.set(false) // как LogOut; журнал на диске цел — реплей при следующем входе
         setAuth(TdApi.AuthorizationStateLoggingOut())
         setAuth(TdApi.AuthorizationStateWaitPhoneNumber())
@@ -1248,6 +1358,7 @@ class Client private constructor(
         val msg = scheduledMessage(item); scheduledMsgs[item.id] = msg
         Log.i(TAG, "отложено ${item.uuid} на $due")
         postUpdate(TdApi.UpdateChatHasScheduledMessages(chatId, true))
+        scheduleStateFlush()
         return msg
     }
     private fun fireScheduled(it: ScheduledQueue.Item) {
@@ -1274,7 +1385,88 @@ class Client private constructor(
         // «updateChat not received … UpdateChatHasScheduledMessages», после чего уходила в recovery-режим
         // без SetTdlibParameters (27 сен 2026, tgx_ttl_scheduled_flow.sh)
         restored.map { it.chatId }.distinct().forEach { announceScheduled(it) }
-        scheduledTick.scheduleWithFixedDelay({ try { scheduledQueue.takeDue().forEach { fireScheduled(it) } } catch (e: Throwable) { Log.w(TAG, "scheduled tick: ${e.message}") } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
+        scheduledTick.scheduleWithFixedDelay({ try { scheduledQueue.takeDue().forEach { fireScheduledGated(it) } } catch (e: Throwable) { Log.w(TAG, "scheduled tick: ${e.message}") } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
+    }
+    /** Отложенное отправляет первое устройство, заметившее срок (web canSendScheduled/markScheduledSent). */
+    private fun fireScheduledGated(it: ScheduledQueue.Item) {
+        val op = if (stateAttached && it.localPath == null) StateJournal.uuidToB64(it.uuid) else null
+        if (op != null && ParvaneCore.stateScheduledSent(op)) {
+            Log.i(TAG, "отложенное ${it.uuid} уже отправлено другим устройством")
+            scheduledMsgs.remove(it.id)
+            postUpdate(TdApi.UpdateDeleteMessages(it.chatId, longArrayOf(it.id), true, false))
+            if (scheduledQueue.forChat(it.chatId).isEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(it.chatId, false))
+        } else {
+            fireScheduled(it)
+            if (op != null) ParvaneCore.stateMarkSent(op)
+        }
+        scheduleStateFlush()
+    }
+
+    // ── журнал личного состояния v2 (spec 007, T098): папки/черновики/архив/отложенные ──
+    private val stateJournal by lazy {
+        StateJournal(ParvaneProtocol.stateCodec, object : StateJournal.Resolver {
+            override fun addressOf(chatId: Long): String? = store.addressOf(chatId)
+            override fun chatIdOf(address: String): Long? =
+                if (address.contains('@')) { ensurePeer(address, announce = true); store.idOf(address) } else store.group(address)?.chatId
+            override fun domain(): String = store.self.substringAfter('@', "")
+            override fun isKnownV2Group(hex: String): Boolean = store.group(StateJournal.V2_GROUP_PREFIX + hex) != null
+        })
+    }
+    @Volatile private var stateAttached = false
+    @Volatile private var stateTimerStarted = false
+    private fun attachStateJournal() {
+        val l = store.local ?: return
+        val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
+        if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
+        stateAttached = true
+        applyState(snap)
+        Log.i(TAG, "журнал личного состояния подключён (${StateJournal.KINDS.joinToString()})")
+        if (!stateTimerStarted) {
+            stateTimerStarted = true
+            scheduledTick.scheduleWithFixedDelay({ try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "синк журнала состояния: ${e.message}") } }, 8, 8, java.util.concurrent.TimeUnit.SECONDS) // SC-009: ≤ 10 с, как web
+        }
+    }
+    /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
+    private val stateLock = Any()
+    private fun stateSyncNow() {
+        synchronized(stateLock) {
+            if (!stateAttached || detached) return
+            val l = store.local ?: return
+            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked).toString(), StateJournal.KINDS) ?: return
+            if (r.optBoolean("changed")) r.optJSONObject("snapshot")?.let { applyState(it) }
+        }
+    }
+    private fun scheduleStateFlush() { if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } } }
+    /** Сведённый снимок → локальные файлы шва и апдейты X. */
+    private fun applyState(snap: JSONObject) {
+        val l = store.local ?: return
+        val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked)
+        if (!ch.any()) return
+        ch.blocked.forEach { a ->
+            val id = store.idOf(a)
+            postUpdate(TdApi.UpdateChatBlockList(id, if (store.blocked.contains(a)) TdApi.BlockListMain() else null))
+        }
+        Log.i(TAG, "журнал состояния → блок=${ch.blocked.size} папки=${ch.folders} черновики=${ch.drafts.size} архив=${ch.archived.size} отложенные=+${ch.scheduledAdded.size}/-${ch.scheduledRemoved.size}")
+        if (ch.folders) { refreshFolderPositions(); postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false)) }
+        ch.drafts.forEach { id ->
+            val chat = store.chatById(id) ?: return@forEach
+            chat.draftMessage = l.tdDraft(id)
+            postUpdate(TdApi.UpdateChatDraftMessage(id, chat.draftMessage, chat.positions))
+        }
+        ch.archived.forEach { id ->
+            val chat = store.chatById(id) ?: return@forEach
+            val order = chat.positions.firstOrNull()?.order ?: 0L
+            val oldList: TdApi.ChatList = if (l.isArchived(id)) TdApi.ChatListMain() else TdApi.ChatListArchive()
+            chat.positions = store.positionsFor(id, order)
+            postUpdate(TdApi.UpdateChatPosition(id, TdApi.ChatPosition(oldList, 0L, false, null)))
+            postUpdate(TdApi.UpdateChatPosition(id, chat.positions[0]))
+        }
+        ch.scheduledAdded.forEach { scheduledMsgs[it.id] = scheduledMessage(it); announceScheduled(it.chatId) }
+        ch.scheduledRemoved.forEach {
+            scheduledMsgs.remove(it.id)
+            postUpdate(TdApi.UpdateDeleteMessages(it.chatId, longArrayOf(it.id), true, false))
+            if (scheduledQueue.forChat(it.chatId).isEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(it.chatId, false))
+        }
     }
 
     // ── e2e-хук команд (только для сценариев эмулятора: /data/local/tmp/parvane-e2e-cmd) ──
@@ -1291,8 +1483,13 @@ class Client private constructor(
                 if (key == lastE2eCmd) return@scheduleWithFixedDelay
                 lastE2eCmd = key
                 val cmd = JSONObject(text); f.delete()
-                val chatId = store.ensurePeer(cmd.optString("peer")).second.id
+                val peer = cmd.optString("peer")
+                val chatId = store.group(peer)?.chatId ?: store.ensurePeer(peer).second.id // peer — адрес собеседника или группы
                 val r: TdApi.Object = when (cmd.optString("op")) {
+                    // spec 007: режим L2 (тот же путь шва, что строка-переключатель X), его состояние в лог, «сообщения от незнакомых»
+                    "l2" -> handle(TdApi.SetOption(L2Mode.OPTION_PREFIX + chatId, TdApi.OptionValueBoolean(cmd.optBoolean("on"))))
+                    "l2state" -> { logL2State(chatId, peer); handle(TdApi.GetOption(L2Mode.OPTION_PREFIX + chatId)) }
+                    "privacy" -> handle(TdApi.SetNewChatPrivacySettings(TdApi.NewChatPrivacySettings(cmd.optBoolean("strangers", true), 0)))
                     "ttl" -> handle(TdApi.SetChatMessageAutoDeleteTime(chatId, cmd.optInt("secs")))
                     "send" -> handle(TdApi.SendMessage(chatId, null, null, null, null, TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
                     "schedule" -> handle(TdApi.SendMessage(chatId, null, null, TdApi.MessageSendOptions().apply { schedulingState = TdApi.MessageSchedulingStateSendAtDate(cmd.optInt("due"), 0) }, null,
@@ -1574,20 +1771,27 @@ class Client private constructor(
                 val from = event.optString("from")
                 val to = event.optString("to")
                 val peer = if (out) to else from
-                if (peer.isEmpty()) return
+                val content = event.optJSONObject("content")
+                    ?: JSONObject().put("kind", "text").put("text", event.optString("text"))
+                // L2-1: смена режима «усиленная приватность» — служебное сообщение чата (не пузырь)
+                val chatMode = L2Mode.isChatMode(content)
+                if (peer.isEmpty() && !(chatMode && event.optBoolean("group"))) return
                 if (!out && store.blocked.contains(from)) return // заблокирован — не показываем
+                var sender = from
                 if (event.optBoolean("group")) {
                     if (store.group(to) == null) syncGroups() // группа завелась на другом устройстве
-                    ensurePeer(from, announce = true) // отправитель — пользователь для UI
+                    if (chatMode && sender.isEmpty()) { // автор записи журнала неизвестен — сообщение без имени, от владельца группы
+                        sender = store.group(to)?.createdBy ?: return
+                        content.put("anon", true)
+                    }
+                    ensurePeer(sender, announce = true) // отправитель — пользователь для UI
                 } else {
                     ensurePeer(peer, announce = true)
                 }
-                val content = event.optJSONObject("content")
-                    ?: JSONObject().put("kind", "text").put("text", event.optString("text"))
                 if (PollStore.isService(content.optString("kind"))) { onPollService(content, from); return }
                 // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
                 // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
-                if (event.optBoolean("group") && !out) {
+                if (event.optBoolean("group") && !out && !chatMode) { // смена режима — запись журнала группы, не содержимое участника
                     val g = store.group(to)
                     if (store.roleOf(g, from) == "member"
                         && !ParvaneStore.isContentAllowedForMember(g?.permissions, content.optString("kind", "text"), ParvaneStore.contentHasLink(content))) {
@@ -1596,7 +1800,7 @@ class Client private constructor(
                     }
                 }
                 val msg = store.putMessage(
-                    event.optString("id"), from, to, event.optLong("ts"), content, out,
+                    event.optString("id"), sender, to, event.optLong("ts"), content, out,
                     read = event.optBoolean("read"), replyUuid = if (event.isNull("reply_to")) null else event.optString("reply_to").ifEmpty { null },
                     edited = event.optBoolean("edited"), pinned = event.optBoolean("pinned"),
                     reactions = event.optJSONArray("reactions"),
@@ -1605,6 +1809,7 @@ class Client private constructor(
                 if (content.optString("kind") == "poll") Log.i(TAG, "опрос ${event.optString("id")}: ${store.polls.get(event.optString("id"))?.options?.size ?: 0} вариантов")
                 armTtl(msg, event.optString("id"), content) // spec 005: ttl_secs → таймер и удаление в срок
                 Log.i(TAG, "сообщение ${event.optString("id")} → чат ${msg.chatId} (${if (out) "исх" else "вх"})")
+                if (chatMode) Log.i(TAG, "режим L2 чата ${msg.chatId}: ${if (content.optBoolean("l2")) "включён" else "выключен"} (служебное ${event.optString("id")}, ${if (out) "своё" else "чужое"})")
                 announceMessage(msg)
             }
             // ReadNotice / read_message_ids: Я прочитал на другом устройстве → входящие
@@ -1626,21 +1831,31 @@ class Client private constructor(
                 val from = event.optString("from"); if (from.isEmpty()) return
                 ensurePeer(from, announce = true)
                 val to = event.optString("to")
+                // L2-1: входящий typing чата с усиленной приватностью игнорируем
+                if (!l2.ephemeralAllowed(if (store.group(to) != null) to else from)) return
                 val chatId = store.group(to)?.chatId ?: store.idOf(from)
                 postUpdate(TdApi.UpdateChatAction(chatId, null, TdApi.MessageSenderUser(store.idOf(from)), TdApi.ChatActionTyping()))
             }
             "presence" -> {
                 val from = event.optString("from"); if (from.isEmpty()) return
+                if (!l2.ephemeralAllowed(from)) return // L2-1: «в сети» собеседника L2-чата не показываем
                 store.setOnline(from, (System.currentTimeMillis() / 1000 + 90).toInt())?.let { postUpdate(it) }
             }
             "notify" -> try {
                 store.applyNotifyBlob(JSONObject(event.optString("blob"))).forEach { postUpdate(it) }
+                privacy.noteGroupAdd(store.self, store.groupAddPolicy) // P-34 с другого устройства — для приватности v2 (T079)
             } catch (e: Exception) { Log.w(TAG, "notify blob: ${e.message}") }
             // Изменение группы (spec 003, GROUP-1): перечитать группы — сведения
             // применяются по ревизии; неизвестный вид изменения — тоже перечитать
             "group" -> {
                 val change = event.optString("change")
                 Log.i(TAG, "группа ${event.optString("group_id")}: $change v${event.optLong("version")}")
+                if (change == "removed") { // группа v2: исключены/забанены или удалена — убрать из списков
+                    store.group(event.optString("group_id"))?.let { g ->
+                        store.chatById(g.chatId)?.positions?.forEach { p -> postUpdate(TdApi.UpdateChatPosition(g.chatId, TdApi.ChatPosition(p.list, 0L, false, null))) }
+                    }
+                    return
+                }
                 syncGroups()
                 // spec 004: ссылки изменились — обновить основную в BasicGroupFullInfo (если уже читали)
                 if (change == "invites") store.group(event.optString("group_id"))?.takeIf { it.primaryInviteLink != null }?.let { refreshPrimaryLink(it) }
@@ -1660,6 +1875,54 @@ class Client private constructor(
                         TdApi.MessageText(TdApi.FormattedText(it, arrayOf()), null, null)))
                 }
             }
+            // T080 (FR-028): сервер показывает участника группы v2 без подтверждённой записи
+            // администратора — нативное служебное сообщение в чате группы
+            "group_unconfirmed" -> {
+                val gid = event.optString("group_id")
+                if (store.group(gid) == null) syncGroups()
+                val members = event.optJSONArray("members") ?: return
+                for (i in 0 until members.length()) {
+                    val member = members.optString(i)
+                    ensurePeer(member, announce = true)
+                    val name = store.userById(store.idOf(member))?.let { listOf(it.firstName, it.lastName).filter { s -> !s.isNullOrEmpty() }.joinToString(" ") }?.ifEmpty { null } ?: member
+                    val id = java.util.UUID.nameUUIDFromBytes("unconfirmed:$gid:$member".toByteArray()).toString()
+                    val content = JSONObject().put("kind", "service").put("text", uiText("v2_unconfirmed_member").replace("%s", name))
+                    store.putMessage(id, member, gid, System.currentTimeMillis() / 1000, content, out = false, read = true)?.let { announceMessage(it) }
+                    Log.i(TAG, "группа $gid: участник без подтверждённой записи — служебное сообщение")
+                }
+            }
+            // T119: в журнале своих устройств появилось новое — сервисное уведомление (как «новый вход»)
+            "new_device" -> {
+                Log.i(TAG, "v2: новое своё устройство (${event.optInt("count")})")
+                postUpdate(TdApi.UpdateServiceNotification("parvane_new_device",
+                    TdApi.MessageText(TdApi.FormattedText(uiText("v2_new_device"), arrayOf()), null, null)))
+            }
+            // L2-1: набор чатов с активным режимом (v2-сессия: при готовности и при каждом изменении) — кэш для
+            // typing/presence и строки-переключателя; собеседник L2-чата больше не «в сети»
+            "l2_state" -> {
+                val changed = l2.apply(event)
+                Log.i(TAG, "режим L2: активных чатов ${l2.activeCount()}, присутствие ${if (l2.presenceAllowed) "публикуется" else "не публикуется"}")
+                changed.filter { l2.isActive(it) && store.group(it) == null }.forEach { peer -> store.setOffline(peer)?.let { postUpdate(it) } }
+            }
+            // E6 (T110): сервер переводит клиентов на v2 — один раз за запуск (UpgradeNotices)
+            "upgrade_available" -> upgrade.onAvailable().forEach { Log.i(TAG, "доступна новая версия → X ${it.javaClass.simpleName}"); postUpdate(it) }
+            // До Ready (старт с сохранённой сессией: кадр приходит в первые миллисекунды) у X ещё нет экрана,
+            // на котором открыть диалог, — уведомление уходит с задержкой
+            "upgrade_required" -> upgrade.onRequired().forEach { u ->
+                Log.i(TAG, "v1 отключён сервером → X ${u.javaClass.simpleName}")
+                if (u is TdApi.UpdateServiceNotification && authState !is TdApi.AuthorizationStateReady)
+                    scheduledTick.schedule({ postUpdate(u) }, 1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                else postUpdate(u)
+            }
+            // T098: журнал личного состояния готов (после подъёма v2 и смены ключа состояния)
+            "state_ready" -> io.execute { attachStateJournal() }
+            // C1-06 (spec 007): ключ восстановления нового v2-устройства — показать один раз
+            // (в logcat не пишем — P-46)
+            "recovery_key" -> {
+                val key = event.optString("key")
+                if (key.isNotEmpty()) postUpdate(TdApi.UpdateServiceNotification("parvane_recovery_key",
+                    TdApi.MessageText(TdApi.FormattedText(uiText("v2_recovery_key").replace("%s", key), arrayOf()), null, null)))
+            }
             "session" -> if (event.optString("state") == "failed") {
                 Log.w(TAG, "сессия: ${event.optString("error")}")
                 if (event.optString("reason") == "auth") sessionExpired()
@@ -1671,7 +1934,10 @@ class Client private constructor(
                 val msg = if (uuid.isEmpty()) null else store.messageByUuid(uuid)
                 if (msg != null) postUpdate(TdApi.UpdateMessageSendFailed(msg, msg.id, TdApi.Error(429, uiText("rate_limited"))))
             } else Log.w(TAG, "ядро: ${event.optString("text")}")
-            "connection" -> postUpdate(TdApi.UpdateConnectionState(if (event.optString("state") == "ready") TdApi.ConnectionStateReady() else TdApi.ConnectionStateConnecting()))
+            "connection" -> {
+                if (event.optString("state") == "ready") upgrade.onConnected() // v1 снова принимает
+                postUpdate(TdApi.UpdateConnectionState(if (event.optString("state") == "ready") TdApi.ConnectionStateReady() else TdApi.ConnectionStateConnecting()))
+            }
         }
     }
 }

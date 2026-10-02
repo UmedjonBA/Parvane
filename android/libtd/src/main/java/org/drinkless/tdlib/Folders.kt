@@ -42,7 +42,9 @@ class Folders(private val dir: File) {
     class ChatFacts(val isGroup: Boolean, val isChannel: Boolean, val isContact: Boolean, val isMuted: Boolean, val isRead: Boolean, val isArchived: Boolean)
 
     private val folders = LinkedHashMap<Int, Folder>()
-    private var nextId = 1
+    // id 0 и 1 зарезервированы («все чаты», архив) — как в журнале личного
+    // состояния v2 (spec 007, T098) и у web/desktop; новые папки — с 2
+    private var nextId = FIRST_ID
     var mainPosition = 0; private set
     private val file get() = File(dir, "folders.json")
 
@@ -56,6 +58,10 @@ class Folders(private val dir: File) {
     @Synchronized fun reorder(ids: IntArray, main: Int) {
         val re = LinkedHashMap<Int, Folder>(); ids.forEach { id -> folders[id]?.let { re[id] = it } }; folders.values.forEach { if (!re.containsKey(it.id)) re[it.id] = it }
         folders.clear(); folders.putAll(re); mainPosition = main; save()
+    }
+    /** Весь список из журнала состояния (spec 007, T098): порядок — как в [list]. */
+    @Synchronized fun replaceAll(list: List<Folder>) {
+        folders.clear(); list.forEach { folders[it.id] = it; if (it.id >= nextId) nextId = it.id + 1 }; save()
     }
     @Synchronized fun infos(): Array<TdApi.ChatFolderInfo> = folders.values.map { it.toInfo() }.toTypedArray()
 
@@ -76,13 +82,22 @@ class Folders(private val dir: File) {
     private fun load() {
         if (!file.exists()) return
         try {
-            val root = JSONObject(file.readText())
+            val root = JSONObject(SeamFiles.read(file))
             nextId = root.optInt("next", 1); mainPosition = root.optInt("main", 0)
             val arr = root.optJSONArray("folders") ?: JSONArray()
             for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { val f = Folder.fromJson(it); folders[f.id] = f; if (f.id >= nextId) nextId = f.id + 1 }
+            nextId = maxOf(nextId, FIRST_ID)
+            // Папка с зарезервированным id (старые файлы начинали с 1) — новый id, порядок тот же
+            if (folders.keys.any { it < FIRST_ID }) {
+                val re = LinkedHashMap<Int, Folder>()
+                folders.values.forEach { f -> val id = if (f.id < FIRST_ID) nextId++ else f.id; re[id] = if (id == f.id) f else Folder.fromJson(f.toJson().put("id", id)) }
+                folders.clear(); folders.putAll(re); save()
+            }
         } catch (e: Exception) { }
     }
+    companion object { const val FIRST_ID = 2 }
+
     private fun save() {
-        try { dir.mkdirs(); file.writeText(JSONObject().put("next", nextId).put("main", mainPosition).put("folders", JSONArray().also { a -> folders.values.forEach { a.put(it.toJson()) } }).toString()) } catch (e: Exception) { }
+        try { dir.mkdirs(); SeamFiles.write(file, JSONObject().put("next", nextId).put("main", mainPosition).put("folders", JSONArray().also { a -> folders.values.forEach { a.put(it.toJson()) } }).toString()) } catch (e: Exception) { }
     }
 }

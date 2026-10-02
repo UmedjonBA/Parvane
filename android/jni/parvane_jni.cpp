@@ -35,10 +35,18 @@
 #include <parvane/messenger.h>
 #include <parvane/messenger_client.h>
 #include <parvane/topics.h>
+#include <parvane/v2_content.h>
+#include <parvane/v2_engine.h>
+#include <parvane/v2_session.h>
+
+#include "jni_utf.h"
+#include "v2_bridge.h"
 
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <cctype>
+#include <cstring>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -95,13 +103,9 @@ std::int64_t nowMs() {
                std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-std::string jstr(JNIEnv *env, jstring s) {
-    if (!s) return {};
-    const char *c = env->GetStringUTFChars(s, nullptr);
-    std::string out = c ? c : "";
-    env->ReleaseStringUTFChars(s, c);
-    return out;
-}
+// Стандартный UTF-8 (эмодзи вне BMP — 4 байта), а не модифицированный UTF-8 JNI:
+// иначе реакции/текст с эмодзи не принимал движок v2 (jni_utf.h).
+std::string jstr(JNIEnv *env, jstring s) { return parvane::jniutf::fromJava(env, s); }
 
 // P-10 (SEND-1): подписант E2E-отправки (`send:<message_id>:<ciphertext>`).
 std::function<std::string(const std::string &)> e2eSigner() {
@@ -182,7 +186,7 @@ void callOnEvent(const std::string &s) {
         if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
         attached = true;
     }
-    jstring js = env->NewStringUTF(s.c_str());
+    jstring js = parvane::jniutf::toJava(env, s); // стандартный UTF-8 → UTF-16 (эмодзи)
     env->CallStaticVoidMethod(g_coreClass, g_onEvent, js);
     env->DeleteLocalRef(js);
     if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); } // видно в logcat как W/System.err
@@ -315,16 +319,62 @@ std::int64_t nowSec() {
     return std::chrono::duration_cast<std::chrono::seconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
 }
+// ── режим «усиленная приватность» (L2, правило L2-1; spec 007, T079) ──────────
+// Кэш из события v2-сессии l2State: чаты с активным режимом (собеседник или
+// "v2g:<hex>"), из них включённые мной, и «можно ли публиковать присутствие».
+// Горячие пути typing/presence (поток читателя транспорта, потоки Kotlin) смотрят
+// ТОЛЬКО в кэш: методы сессии ждут мьютекс движка, занятый на время сетевых
+// операций. Кэш переживает рестарт (l2-chats.json под storecrypt) — до готовности
+// v2-сессии действует последнее известное состояние.
+std::mutex g_l2Mu;
+std::set<std::string> g_l2Chats;
+std::set<std::string> g_l2Mine;
+std::atomic<bool> g_l2PresenceAllowed{true};
+std::string l2CachePath() { return g_storeDir + "/l2-chats.json"; }
+bool l2Active(const std::string &chat) {
+    std::lock_guard<std::mutex> lk(g_l2Mu);
+    return g_l2Chats.count(chat) > 0;
+}
+// Кэш → событие ядра "l2_state" (тот же вид, что v2_bridge.h l2StateEvent).
+json l2CacheEvent() {
+    std::lock_guard<std::mutex> lk(g_l2Mu);
+    return json{{"type", "l2_state"}, {"chats", g_l2Chats}, {"mine", g_l2Mine},
+                {"presence_allowed", g_l2PresenceAllowed.load()}};
+}
+// Принять состояние (событие ядра "l2_state"); save — записать на диск.
+void l2Store(const json &state, bool save) {
+    {
+        std::lock_guard<std::mutex> lk(g_l2Mu);
+        g_l2Chats.clear();
+        g_l2Mine.clear();
+        for (const auto &c : state.value("chats", json::array())) if (c.is_string()) g_l2Chats.insert(c.get<std::string>());
+        for (const auto &c : state.value("mine", json::array())) if (c.is_string()) g_l2Mine.insert(c.get<std::string>());
+        g_l2PresenceAllowed = state.value("presence_allowed", true);
+    }
+    if (save && !g_storeDir.empty()) parvane::storecrypt::writeFile(l2CachePath(), state.dump());
+}
+void l2Load() {
+    const auto raw = parvane::storecrypt::readFile(l2CachePath());
+    const auto j = raw.empty() ? json() : json::parse(raw, nullptr, false);
+    l2Store(j.is_object() ? j : json::object(), /*save=*/false);
+}
+void l2Forget() {
+    l2Store(json::object(), /*save=*/false);
+    std::remove(l2CachePath().c_str());
+}
+
 std::atomic<bool> g_presenceRunning{false};
 // P-18: presence по конкретным собеседникам. Под g_mu.
 std::set<std::string> g_presencePeers;      // адреса, чьё присутствие нужно
 std::set<std::string> g_presenceSubscribed; // уже подписаны в этой сессии
 void subscribePresenceLocked(const std::string &peer) {
     if (!g_transport || peer.empty() || peer == g_self || g_presenceSubscribed.count(peer)) return;
+    if (l2Active(peer)) return; // L2-1: в чате с усиленной приватностью присутствие не запрашиваем
     g_presenceSubscribed.insert(peer);
     g_transport->subscribe(parvane::topics::presence(std::to_string(idForAddress(peer))), [](std::string, std::string payload) {
         auto j = json::parse(payload, nullptr, false);
         if (j.is_object() && j.value("from", "") != g_self) {
+            if (l2Active(j.value("from", ""))) return; // L2-1: подписка осталась с времён до включения режима
             static std::set<std::string> logged;
             if (logged.insert(j.value("from", "")).second) LOGI("присутствие: +1 онлайн"); // без адреса (P-46)
             emit(json{{"type", "presence"}, {"from", j.value("from", "")}});
@@ -341,7 +391,10 @@ void ensurePresenceSub(const std::string &peer) {
 // Группы: group_id → участники (без banned); typing-подписки по группам
 std::map<std::string, std::vector<std::string>> g_groupMembers;
 std::set<std::string> g_groupTypingSubscribed;
-bool isGroupLocked(const std::string &address) { return g_groupMembers.count(address) > 0; }
+// Группа v2 ("v2g:<hex>", spec 007) — группа, даже пока её состав не прочитан.
+bool isGroupLocked(const std::string &address) {
+    return g_groupMembers.count(address) > 0 || parvane::v2::isGroupAddress(address);
+}
 void loadDecCache() {
     g_decCache.clear();
     std::size_t lines = 0;
@@ -394,8 +447,22 @@ void loadCursors() {
     loadPending(); loadRead();
 }
 
+// E6 (T110): сервер отключил v1 (кадр upgrade_required). Транспорт сам не
+// переподключается чаще раза в kUpgradeRetryGapMs, но эта пауза живёт в объекте
+// транспорта — цикл, создающий НОВЫЙ транспорт на каждый запрос (опрос 2FA,
+// повторный вход), обошёл бы её. Поэтому новый транспорт не создаётся, пока с
+// последнего кадра upgrade_required не прошла та же пауза (оператор мог вернуть v1).
+std::atomic<std::int64_t> g_upgradeSeenMs{0}; // steady-время последнего кадра upgrade_required; 0 — не было
+bool upgradeBlocked() {
+    const auto seen = g_upgradeSeenMs.load();
+    return seen != 0 && parvane::GatewayTransport::upgradeRequired()
+        && nowMs() - seen < parvane::GatewayTransport::kUpgradeRetryGapMs;
+}
+bool isUpgradeError(const std::string &what) { return what.find("upgrade_required") != std::string::npos; }
+
 // Одноразовый транспорт для bootstrap-запросов (issue/server.info) или с токеном.
 std::unique_ptr<parvane::GatewayWsTransport> makeTransport(const std::string &token) {
+    if (upgradeBlocked()) throw std::runtime_error("gateway: upgrade_required");
     auto t = std::make_unique<parvane::GatewayWsTransport>();
     t->connectUrl(g_gatewayUrl);
     if (!token.empty()) t->authenticate(token);
@@ -412,6 +479,483 @@ std::string serverDomain() {
         LOGE("server.info: %s", e.what());
     }
     return {};
+}
+
+// ── Протокол v2 (spec 007, T066): двойной стек, как desktop (T063) и web ─────
+// v1-стек (parvane-e2e) обслуживает v1-собеседников, v2-сессия parvane-core —
+// собеседников с журналом устройств v2 (формат выбирается по подписанному
+// журналу собеседника, D-13; для v2-собеседника формат не понижается). Группы —
+// пока по v1. Включение: PARVANE_PROTO_V2=1, флаг из Kotlin (nativeSetProtoV2:
+// файл <store>/parvane-proto-v2, в debug — ещё /data/local/tmp/parvane-proto-v2)
+// или файл-флаг в каталоге стора; по умолчанию выключено. События движка
+// перекладываются в ТЕ ЖЕ события Kotlin, что и v1-входящие (message/edited/
+// deleted/meta/outbox_read/read), — шов не знает, по какому протоколу пришло.
+// Блокировки: g_v2Mu — только данные v2 (никогда не держится во время сети);
+// обработчик событий v2 зовётся рабочим потоком сессии ВНЕ её мьютекса
+// движка, поэтому может брать g_mu.
+std::mutex g_v2Mu;
+std::shared_ptr<parvane::v2::Session> g_v2;
+std::string g_v2Token;
+bool g_v2Flag = false;                              // из Kotlin (nativeSetProtoV2)
+std::map<std::string, std::string> g_v2Ids;         // uuid → собеседник (сообщение v2)
+std::map<std::string, std::map<std::string, std::string>> g_v2Reactions; // uuid → автор → эмодзи
+std::map<std::string, bool> g_v2Pinned;             // uuid → закреп
+bool g_v2IdsLoaded = false;
+
+std::string v2IdsPath() { return g_storeDir + "/v2-ids.txt"; }
+std::string v2FlagPath() { return g_storeDir + "/parvane-proto-v2"; }
+
+bool v2Enabled() {
+    if (const char *v = std::getenv("PARVANE_PROTO_V2"); v && *v) return std::strcmp(v, "0") != 0;
+    {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        if (g_v2Flag) return true;
+    }
+    std::error_code ec;
+    return !g_storeDir.empty() && std::filesystem::exists(v2FlagPath(), ec);
+}
+
+// Список v2-сообщений (uuid → собеседник) переживает рестарт: мутации
+// сообщений v2-чата уходят по v2 и после перезапуска.
+void loadV2Ids() {
+    std::lock_guard<std::mutex> lk(g_v2Mu);
+    if (g_v2IdsLoaded) return;
+    g_v2IdsLoaded = true;
+    for (const auto &line : parvane::storecrypt::readLines(v2IdsPath())) {
+        const auto sp = line.find(' ');
+        if (sp != std::string::npos && sp > 0) g_v2Ids[line.substr(0, sp)] = line.substr(sp + 1);
+    }
+}
+
+void v2NoteMessage(const std::string &uuid, const std::string &peer) {
+    bool fresh = false;
+    {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        fresh = g_v2Ids.emplace(uuid, peer).second;
+    }
+    if (fresh) parvane::storecrypt::appendLine(v2IdsPath(), uuid + " " + peer);
+}
+
+// Собеседник v2-сообщения ("" — сообщение v1).
+std::string v2PeerOf(const std::string &uuid) {
+    std::lock_guard<std::mutex> lk(g_v2Mu);
+    const auto it = g_v2Ids.find(uuid);
+    return it == g_v2Ids.end() ? std::string() : it->second;
+}
+
+std::shared_ptr<parvane::v2::Session> v2Ready() {
+    std::lock_guard<std::mutex> lk(g_v2Mu);
+    return (g_v2 && g_v2->isReady()) ? g_v2 : nullptr;
+}
+
+// Сессия v2 ждёт грант линковки (LINK-1 v2): журнал устройств у аккаунта есть,
+// этого устройства в нём нет. До гранта шов работает по v1.
+std::shared_ptr<parvane::v2::Session> v2NeedsLinking() {
+    std::lock_guard<std::mutex> lk(g_v2Mu);
+    return (g_v2 && g_v2->needsLinking()) ? g_v2 : nullptr;
+}
+// Для приёма гранта: грант может прийти раньше, чем запуск сессии выяснил
+// «нужна линковка», — дожидаемся исхода запуска (флаг ставится до событий сессии,
+// поэтому ожидание под g_mu не блокирует сам запуск).
+std::shared_ptr<parvane::v2::Session> v2AwaitNeedsLinking() {
+    std::shared_ptr<parvane::v2::Session> s;
+    { std::lock_guard<std::mutex> lk(g_v2Mu); s = g_v2; }
+    if (!s) return nullptr;
+    if (!s->isReady() && !s->needsLinking()) s->waitReady(15000);
+    return s->needsLinking() ? s : nullptr;
+}
+void startLinkOffer();
+
+// Отправить содержимое собеседнику по v2. "" — собеседник не на v2 (или вид
+// не поддержан v2): идти по v1. Бросает при сбое v2-отправки v2-собеседнику
+// (формат не понижается — D-13). Под g_mu (сеть — под мьютексом движка).
+std::string trySendV2Locked(const std::string &to, const json &content, const std::optional<std::string> &replyTo) {
+    const auto kind = parvane::contentKind(content);
+    // Группа v2 — только v2 (конверт эпохи, T056): v1-пути у неё нет.
+    const bool v2Group = parvane::v2::isGroupAddress(to);
+    if (kind == "skdm" || kind.empty() || to == g_self || (!v2Group && isGroupLocked(to))) return {};
+    const auto s = v2Ready();
+    if (v2Group && !s) throw std::runtime_error("группа v2: сессия v2 не готова");
+    if (!s || (!v2Group && !s->isV2Peer(to))) return {};
+    const auto mapped = parvane::v2::toV2(content, replyTo.value_or(std::string()));
+    if (!mapped) {
+        if (v2Group) throw std::runtime_error("вид " + kind + " не поддержан v2 (группа v2)");
+        LOGI("v2: вид %s не поддержан v2 — по v1", kind.c_str());
+        return {};
+    }
+    const auto id = parvane::v2::newUuidV7();
+    s->sendContent(to, *mapped, id);
+    v2NoteMessage(id, to);
+    LOGI("v2 → msg %s (%s)", id.c_str(), kind.c_str());
+    return id;
+}
+
+// Мутация сообщения v2-чата (правка/удаление/реакция/закреп/прочтение) —
+// E2E-содержимым v2 собеседнику, в фоне (сеть не под g_mu). false — сообщение
+// не v2 (идти по v1).
+bool tryMutateV2(const std::string &uuid, const json &content) {
+    const auto peer = v2PeerOf(uuid);
+    if (peer.empty()) return false;
+    std::thread([peer, content, uuid] {
+        const auto s = v2Ready();
+        if (!s) { LOGE("v2: мутация %s не отправлена — сессия v2 не готова", uuid.c_str()); return; }
+        try {
+            s->sendContent(peer, content, parvane::v2::newUuidV7());
+            LOGI("v2 → %s для %s", parvane::v2::v2Kind(content).c_str(), uuid.c_str());
+        } catch (const std::exception &e) {
+            LOGE("v2: мутация %s не отправлена: %s", uuid.c_str(), e.what());
+        }
+    }).detach();
+    return true;
+}
+
+// Сводка реакций сообщения (под g_v2Mu) — формат reactionsJson v1.
+json v2ReactionsLocked(const std::string &uuid) {
+    std::map<std::string, json> by;
+    for (const auto &[author, emoji] : g_v2Reactions[uuid]) {
+        auto &r = by[emoji];
+        if (r.is_null()) r = json{{"emoji", emoji}, {"count", 0}, {"mine", false}};
+        r["count"] = r["count"].get<int>() + 1;
+        if (author == g_self) r["mine"] = true;
+    }
+    auto arr = json::array();
+    for (auto &[e, r] : by) arr.push_back(r);
+    return arr;
+}
+
+// ── группы v2 и журнал состояния (spec 007: T056/T080/T084/T098/T119) ──────
+// Протокол целиком — в v2-сессии parvane-core (порт web controller.ts); здесь —
+// перекладка в тот же JSON, что у v1-групп (refreshGroupsLocked), чтобы шов
+// Kotlin синтезировал basic group TdApi одним путём. Адрес группы — "v2g:<hex>".
+std::string v2GroupsCachePath() { return g_storeDir + "/v2-groups.json"; }
+
+bool v2IsMember(const json &info, const std::string &self) {
+    if (!info.is_object() || info.value("deleted", false)) return false;
+    for (const auto &m : info.value("members", json::array())) {
+        if (m.value("user", std::string()) == self) return true;
+    }
+    return false;
+}
+
+// Сведения журнала (groupInfo движка) → запись списка групп, как у v1.
+json v2GroupJson(const std::string &address, const json &info) {
+    const auto flag = [](const json &o, const char *k) { return o.is_object() && o.value(k, false); };
+    auto members = json::array();
+    for (const auto &m : info.value("members", json::array())) {
+        const auto role = m.value("role", 1);
+        json e{{"address", m.value("user", std::string())},
+               {"role", role == 3 ? "owner" : role == 2 ? "admin" : "member"}};
+        if (role == 2) {
+            const auto r = m.value("rights", json::object());
+            e["admin_rights"] = json{{"change_info", flag(r, "change_info")}, {"delete_messages", flag(r, "delete_messages")},
+                                     {"ban_users", flag(r, "ban_users")}, {"invite_users", flag(r, "invite_users")},
+                                     {"pin_messages", flag(r, "pin_messages")}, {"add_admins", flag(r, "add_admins")}};
+        }
+        members.push_back(std::move(e));
+    }
+    const auto p = info.value("defaultPermissions", json::object());
+    json perms = json::object();
+    for (const char *k : {"send_messages", "send_media", "send_stickers_gifs", "send_polls", "embed_links", "invite_users",
+                          "pin_messages", "change_info"}) {
+        perms[k] = flag(p, k);
+    }
+    return json{{"group_id", address}, {"name", info.value("name", std::string())},
+                {"kind", info.value("kind", 1) == 2 ? "channel" : "group"}, {"created_by", info.value("owner", std::string())},
+                {"members", members}, {"avatar", info.value("avatarFileId", std::string())}, {"about", info.value("about", std::string())},
+                {"default_permissions", perms}, {"version", info.value("version", std::uint64_t(0))}, {"pending_requests", -1},
+                {"proto", 2}};
+}
+
+json v2LoadGroupCache() {
+    auto all = json::parse(parvane::storecrypt::readFile(v2GroupsCachePath()), nullptr, false);
+    return all.is_object() ? all : json::object();
+}
+
+// Сведения v2-групп переживают рестарт (реплей журнала раньше, чем поднимется
+// v2-сессия): только метаданные, под storecrypt. Под g_v2Mu.
+void v2CacheGroupLocked(const std::string &address, const json *info) {
+    auto all = v2LoadGroupCache();
+    if (info) all[address] = *info; else all.erase(address);
+    parvane::storecrypt::writeFile(v2GroupsCachePath(), all.dump());
+}
+
+// Список групп v2 (без g_mu): из журнала готовой сессии, иначе — из кэша.
+json v2GroupList(const std::string &self) {
+    auto out = json::array();
+    const auto s = v2Ready();
+    json source = json::object();
+    if (s) {
+        for (const auto &address : s->groupAddresses()) {
+            const auto info = s->groupInfo(address);
+            if (v2IsMember(info, self)) source[address] = info;
+        }
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        parvane::storecrypt::writeFile(v2GroupsCachePath(), source.dump());
+    } else {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        source = v2LoadGroupCache();
+    }
+    for (auto it = source.begin(); it != source.end(); ++it) out.push_back(v2GroupJson(it.key(), it.value()));
+    return out;
+}
+
+// Изменение группы v2 записью журнала → ответ в виде ответа сервера {ok, error_code}.
+json v2Change(const std::string &gid, const std::function<json(const json &info)> &build) {
+    const auto s = v2Ready();
+    if (!s) return json{{"ok", false}, {"error_code", "failed"}, {"error", "сессия v2 не готова"}};
+    try {
+        const auto change = build(s->groupInfo(gid));
+        if (change.is_null()) return json{{"ok", false}, {"error_code", "bad_request"}, {"error", "изменение не собрано"}};
+        const bool ok = s->changeGroup(gid, change);
+        LOGI("группа v2 %s: %s → %s", gid.c_str(), change.begin().key().c_str(), ok ? "ok" : "отказ");
+        return ok ? json{{"ok", true}} : json{{"ok", false}, {"error_code", "forbidden"}, {"error", "отклонено журналом"}};
+    } catch (const std::exception &e) {
+        LOGE("группа v2 %s: %s", gid.c_str(), e.what());
+        return json{{"ok", false}, {"error_code", "failed"}, {"error", e.what()}};
+    }
+}
+
+json v2SetInfo(const json &info, std::optional<std::string> name, std::optional<std::string> about, std::optional<std::string> avatar) {
+    if (!info.is_object()) return nullptr;
+    return json{{"set_info", {{"name", name.value_or(info.value("name", std::string()))},
+                              {"about", about.value_or(info.value("about", std::string()))},
+                              {"avatar_file_id", avatar.value_or(info.value("avatarFileId", std::string()))}}}};
+}
+
+json v2MemberRef(const std::string &member) { return json{{"member", {{"address", member}}}}; }
+
+// Запись ссылки v2 (хранится на устройстве, секрет — в url) → InviteLink v1 (token = url).
+json v2InviteLinkJson(const json &r, const std::string &self) {
+    const auto title = r.value("title", std::string());
+    const auto expires = r.value("expiresAt", std::int64_t(0));
+    const auto limit = r.value("usageLimit", 0);
+    const auto approval = r.value("isRequestNeeded", false);
+    return json{{"token", r.value("url", std::string())}, {"created_by", self}, {"title", title}, {"state", "active"},
+                {"created_at", r.value("date", std::int64_t(0))}, {"expires_at", expires}, {"max_uses", limit}, {"uses", 0},
+                {"pending_requests", 0}, {"request_needed", approval}, {"revoked", false},
+                {"is_primary", title.empty() && !expires && !limit && !approval}};
+}
+
+// События v2-сессии (не сообщения) → события ядра. true — обработано.
+bool handleV2SessionEvent(const json &ev) {
+    const auto type = ev.value("type", std::string());
+    const auto address = ev.value("address", std::string());
+    if (type == "groupUpdated") {
+        const auto info = ev.value("info", json::object());
+        {
+            std::lock_guard<std::mutex> lk(g_v2Mu);
+            v2CacheGroupLocked(address, &info);
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            auto &mem = g_groupMembers[address];
+            mem.clear();
+            for (const auto &m : info.value("members", json::array())) mem.push_back(m.value("user", std::string()));
+        }
+        LOGI("группа v2 %s %s (v%llu)", address.c_str(), ev.value("isNew", false) ? "появилась" : "обновлена",
+             static_cast<unsigned long long>(info.value("version", std::uint64_t(0))));
+        emit(json{{"type", "group"}, {"group_id", address}, {"change", "v2"}, {"version", info.value("version", std::uint64_t(0))}});
+        return true;
+    }
+    if (type == "groupLeft") {
+        {
+            std::lock_guard<std::mutex> lk(g_v2Mu);
+            v2CacheGroupLocked(address, nullptr);
+        }
+        { std::lock_guard<std::mutex> lk(g_mu); g_groupMembers.erase(address); }
+        LOGI("группа v2 %s снята (исключены или удалена)", address.c_str());
+        emit(json{{"type", "group"}, {"group_id", address}, {"change", "removed"}});
+        return true;
+    }
+    if (type == "groupUnconfirmed") {
+        // T080 (FR-028): участник без подтверждённой записи администратора
+        LOGI("группа v2 %s: участники без подтверждённой записи — %zu", address.c_str(),
+             ev.value("members", json::array()).size());
+        emit(json{{"type", "group_unconfirmed"}, {"group_id", address}, {"members", ev.value("members", json::array())}});
+        return true;
+    }
+    if (type == "ownDevicesAdded") {
+        // T119: новое своё устройство в журнале устройств
+        LOGI("v2: новое своё устройство (%zu)", ev.value("devices", json::array()).size());
+        emit(json{{"type", "new_device"}, {"count", ev.value("devices", json::array()).size()}});
+        return true;
+    }
+    if (type == "stateReady") {
+        emit(json{{"type", "state_ready"}});
+        return true;
+    }
+    if (type == "needsLinking") {
+        // Оффер линковки нужен, даже если история v1 на устройстве уже есть
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_linkActive && !getenv("PARVANE_NO_LINK_OFFER")) {
+            LOGI("линковка: журнал устройств v2 уже есть — публикую оффер");
+            startLinkOffer();
+        }
+        return true;
+    }
+    if (type == "l2State") {
+        // L2-1: набор чатов с активным режимом изменился (или сессия готова) — кэш
+        // для typing/presence; собеседники, вышедшие из режима, снова получают подписку
+        const auto state = parvane::android_v2::l2StateEvent(ev);
+        l2Store(state, /*save=*/true);
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            for (const auto &peer : g_presencePeers) subscribePresenceLocked(peer);
+        }
+        LOGI("режим L2: активных чатов %zu, присутствие %s", state["chats"].size(),
+             state.value("presence_allowed", true) ? "публикуется" : "не публикуется");
+        emit(state);
+        return true;
+    }
+    if (type == "groupL2") {
+        // Политика L2 группы изменилась (или мы вошли в L2-группу) — служебное
+        // сообщение чата группы; журналируется как сообщение (переживает рестарт)
+        std::string self;
+        { std::lock_guard<std::mutex> lk(g_mu); self = g_self; }
+        const auto msg = parvane::android_v2::groupL2Event(ev, self, nowSec());
+        const auto id = msg.value("id", std::string());
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            if (id.empty() || !g_seen.insert(id).second) return true;
+        }
+        LOGI("группа v2 %s: режим L2 %s (%s)", address.c_str(), ev.value("enabled", false) ? "включён" : "выключен", id.c_str());
+        emit(msg);
+        return true;
+    }
+    return false;
+}
+
+// Событие движка (рабочий поток v2-сессии) → события Kotlin, как у v1.
+void handleV2Event(const json &ev) {
+    if (handleV2SessionEvent(ev)) return;
+    std::string self;
+    { std::lock_guard<std::mutex> lk(g_mu); self = g_self; }
+    const auto in = parvane::v2::interpretDirect(ev, self);
+    using Kind = parvane::v2::Incoming::Kind;
+    if (in.kind == Kind::None) { LOGI("v2: событие %s без сообщения", ev.value("type", std::string()).c_str()); return; }
+    if (in.kind == Kind::Message || in.kind == Kind::Stub) {
+        const bool out = in.from == self;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            if (!g_seen.insert(in.id).second) return; // повтор (sync после события)
+            ensurePresenceSub(in.chat);
+            decCachePut(in.id, json{{"from", in.from}, {"content", in.content}});
+        }
+        v2NoteMessage(in.id, in.chat);
+        const auto kind = parvane::contentKind(in.content);
+        // P-46: в logcat — только id и вид
+        LOGI("v2 ← %s msg %s (%s)", out ? "своё" : "входящее", in.id.c_str(), kind.c_str());
+        emit(parvane::android_v2::messageEvent(in, self, nowSec())); // тот же вид, что у v1 (v2_bridge.h)
+        return;
+    }
+    if (in.kind == Kind::Read && in.from == self) {
+        // Я прочитал на другом своём устройстве → входящие прочитаны
+        if (!in.targets.empty()) emit(json{{"type", "read"}, {"ids", in.targets}});
+        return;
+    }
+    for (const auto &uuid : in.targets) {
+        if (v2PeerOf(uuid).empty()) { LOGI("v2: мутация для неизвестного %s — пропуск", uuid.c_str()); continue; }
+        json row;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            const auto it = g_decCache.find(uuid);
+            if (it != g_decCache.end()) row = it->second;
+        }
+        const auto author = row.value("from", std::string());
+        switch (in.kind) {
+        case Kind::Edit: {
+            if (author != in.from || !in.content.is_object()) continue; // править можно только своё
+            auto content = row.value("content", json::object());
+            const auto nk = parvane::contentKind(in.content);
+            if (nk == "location") {
+                for (auto f = in.content.begin(); f != in.content.end(); ++f) content[f.key()] = f.value();
+            } else if (parvane::contentKind(content) == "text") {
+                content["text"] = in.content.value("text", std::string());
+                content["entities"] = in.content.contains("entities") ? in.content["entities"] : json::array();
+            } else {
+                content["caption"] = in.content.value("text", std::string());
+                content["entities"] = in.content.contains("entities") ? in.content["entities"] : json::array();
+            }
+            { std::lock_guard<std::mutex> lk(g_mu); g_decCache[uuid] = json{{"from", author}, {"content", content}}; }
+            emit(json{{"type", "edited"}, {"id", uuid}, {"content", content}, {"edit_date", nowSec()}});
+        } break;
+        case Kind::Delete:
+            if (author != in.from) continue; // удалить у всех можно только своё
+            emit(json{{"type", "deleted"}, {"id", uuid}});
+            break;
+        case Kind::Reaction:
+        case Kind::Pin: {
+            json meta;
+            {
+                std::lock_guard<std::mutex> lk(g_v2Mu);
+                if (in.kind == Kind::Reaction) {
+                    if (in.remove) g_v2Reactions[uuid].erase(in.from);
+                    else g_v2Reactions[uuid][in.from] = in.emoji;
+                } else {
+                    g_v2Pinned[uuid] = !in.unpin;
+                }
+                meta = json{{"type", "meta"}, {"id", uuid}, {"reactions", v2ReactionsLocked(uuid)}, {"pinned", g_v2Pinned[uuid]}};
+            }
+            emit(meta);
+        } break;
+        case Kind::Read:
+            if (author != self) continue; // квитанция собеседника о МОЁМ сообщении
+            emit(json{{"type", "outbox_read"}, {"id", uuid}});
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+// Поднять v2-сессию (под g_mu из nativeStartSession: адрес и JWT уже есть).
+void startV2Locked() {
+    if (!v2Enabled()) return;
+    if (g_gatewayUrl.empty()) return;
+    {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        g_v2Token = g_token;
+        if (g_v2) return;
+    }
+    loadV2Ids();
+    parvane::v2::SessionConfig cfg;
+    cfg.gatewayUrl = g_gatewayUrl;
+    cfg.self = g_self;
+    cfg.token = [] {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        return g_v2Token;
+    };
+    std::string safe;
+    for (const char ch : g_self) safe.push_back((std::isalnum(static_cast<unsigned char>(ch)) || ch == '@' || ch == '.' || ch == '-') ? ch : '_');
+    cfg.stateDir = g_storeDir + "/v2-" + safe;
+    cfg.clientVersion = "android";
+    cfg.log = [](const std::string &m) { LOGI("%s", m.c_str()); };
+    cfg.onEvent = [](const json &ev) { handleV2Event(ev); };
+    // C1-06 / D-12: корень нового v2-устройства на телефоне не лежит — только
+    // копия под ключом восстановления; ключ показывается пользователю один раз
+    // (в logcat не пишем — P-46).
+    cfg.onRecoveryKey = [](const std::string &key) {
+        LOGI("v2: ключ восстановления выдан — показ пользователю");
+        emit(json{{"type", "recovery_key"}, {"key", key}});
+    };
+    auto s = std::make_shared<parvane::v2::Session>(std::move(cfg));
+    {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        g_v2 = s;
+    }
+    s->start();
+    LOGI("v2: сессия запускается (движок %s)", parvane::v2::engineVersion().c_str());
+}
+
+void stopV2() {
+    std::shared_ptr<parvane::v2::Session> s;
+    {
+        std::lock_guard<std::mutex> lk(g_v2Mu);
+        s = std::move(g_v2);
+        g_v2Reactions.clear();
+        g_v2Pinned.clear();
+    }
+    if (s) s->stop();
 }
 
 // Входящее/синк: расшифровать sealed-конверт, сверить отправителя, отдать событие.
@@ -467,7 +1011,7 @@ json refreshGroupsLocked() {
             const auto gid = gi.group_id;
             g_transport->subscribe(parvane::topics::msgTyping(std::to_string(idForAddress(gid))), [gid](std::string, std::string payload) {
                 auto j = json::parse(payload, nullptr, false);
-                if (j.is_object() && j.value("from", "") != g_self)
+                if (j.is_object() && j.value("from", "") != g_self && !l2Active(gid))
                     emit(json{{"type", "typing"}, {"from", j.value("from", "")}, {"to", gid}});
             });
         }
@@ -612,6 +1156,15 @@ Deliver deliverStored(parvane::StoredMessage sm, bool live) {
             }
         }
     }
+    // L2-1: смена режима «усиленная приватность» — только подписанная операция
+    // v2 (состояние ведёт движок). Присланное по v1 (старый или злонамеренный
+    // клиент) не показываем — иначе собеседник нарисовал бы «режим включён».
+    if (parvane::contentKind(sm.content) == parvane::v2::kChatModeKind) {
+        LOGE("chat_mode по v1 отброшен: %s", sm.id.c_str());
+        if (live && author != g_self && g_messenger) g_messenger->ack(g_self, sm.id, g_token, author);
+        g_seen.insert(sm.id);
+        return Deliver::Skipped;
+    }
     const bool out = (author == g_self);
     if (seen) { // мутации уже показанного: правка, реакции, закреп, ✓✓
         if (sm.edited) emit(json{{"type", "edited"}, {"id", sm.id}, {"content", sm.content}, {"edit_date", sm.updated_at}});
@@ -637,6 +1190,12 @@ Deliver deliverStored(parvane::StoredMessage sm, bool live) {
 std::string sendSealedLocked(const std::string &to, const json &content, const std::optional<std::string> &replyTo) {
     if (!g_messenger || !g_transport) throw std::runtime_error("нет сессии");
     ensurePresenceSub(to);
+    // Протокол v2: собеседник с журналом устройств v2 — по v2 (двойной стек)
+    if (const auto v2id = trySendV2Locked(to, content, replyTo); !v2id.empty()) {
+        g_seen.insert(v2id);
+        decCachePut(v2id, json{{"from", g_self}, {"content", content}});
+        return v2id;
+    }
     if (!parvane::e2e::ready()) throw std::runtime_error("E2E не готов");
     if (isGroupLocked(to)) { // группа: Megolm-конверт, from/token настоящие
         const auto sealed = sealGroupLocked(to, content);
@@ -738,7 +1297,7 @@ bool pollLinkGrantOnce() {
         retractLinkOffer();
         return true;
     }
-    if (!parvane::e2e::needsHistoryLink(g_decCache.empty())) {
+    if (!parvane::e2e::needsHistoryLink(g_decCache.empty()) && !v2NeedsLinking()) {
         LOGI("линковка: история появилась сама — отзываю оффер");
         retractLinkOffer();
         return true;
@@ -785,6 +1344,29 @@ bool pollLinkGrantOnce() {
     if (!plain) { LOGE("линковка: бокс не расшифровался"); return true; }
     const auto box = json::parse(*plain, nullptr, false);
     if (!box.is_object()) return true;
+    // LINK-1 v2: материал гранта движка (SSK, журнал устройств, ключ доставки,
+    // ключ личного состояния) — отдельным блобом, как на desktop и web
+    if (box.contains("v2") && box["v2"].is_object()) {
+        if (const auto s = v2AwaitNeedsLinking()) {
+            try {
+                const auto &coords = box["v2"];
+                parvane::CloudClient cloud(*g_transport);
+                auto d = cloud.download(g_self, g_token, coords.value("file_id", std::string()), 30000);
+                auto material = d.ok
+                    ? parvane::blobcrypt::decrypt(d.bytes, coords.value("file_key", std::string()),
+                                                  coords.value("file_nonce", std::string()))
+                    : std::nullopt;
+                if (material) {
+                    LOGI("линковка: грант v2 получен — устройство вступает в журнал устройств");
+                    s->joinWithGrant(std::move(*material));
+                } else {
+                    LOGE("линковка: грант v2 не скачался или не расшифровался");
+                }
+            } catch (const std::exception &e) {
+                LOGE("линковка: грант v2: %s", e.what());
+            }
+        }
+    }
     std::string stateJson;
     try {
         parvane::CloudClient cloud(*g_transport);
@@ -872,14 +1454,22 @@ void pumpLoop() {
             LOGE("sync ошибка: %s", what.c_str());
             // FAIL-1 (spec 005): истёкший/отозванный JWT — не крутить синк по кругу, а
             // отдать Kotlin «сессия истекла» (экран входа; ключи и журнал остаются)
-            if (what.find("отказ авторизации") != std::string::npos || what.find("просроченный JWT") != std::string::npos
-                || what.find("устройство отозвано") != std::string::npos) {
+            // E6 (T110): сервер отключил v1 (upgrade_required) — учётные данные в порядке,
+            // разлогинивать НЕЛЬЗЯ. Транспорт сам пробует не чаще раза в 5 минут (запросы до
+            // тех пор бросают сразу, без сети); здесь — редкий опрос без потока ошибок в Kotlin.
+            const bool upgrade = isUpgradeError(what);
+            if (!upgrade && (what.find("отказ авторизации") != std::string::npos || what.find("просроченный JWT") != std::string::npos
+                || what.find("устройство отозвано") != std::string::npos)) {
                 emit(json{{"type", "session"}, {"state", "failed"}, {"reason", "auth"}, {"error", what}});
                 g_running = false;
                 break;
             }
-            emitError(std::string("sync: ") + what);
-            backoff = std::min(backoff * 2, std::chrono::seconds(30));
+            if (upgrade) {
+                backoff = std::chrono::seconds(30);
+            } else {
+                emitError(std::string("sync: ") + what);
+                backoff = std::min(backoff * 2, std::chrono::seconds(30));
+            }
         }
         for (int i = 0; i < backoff.count() * 10 && g_running; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -920,6 +1510,18 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
             emit(json{{"type", "error"}, {"code", "rate_limited"}, {"subject", subject}, {"text", error}});
         }
     });
+    // E6 (T110): кадры перехода на v2 (поток читателя транспорта → очередь событий).
+    // Обработчик зовётся на КАЖДЫЙ такой кадр; «один раз за запуск» решает шов.
+    parvane::GatewayWsTransport::setUpgradeHandler([](parvane::GatewayTransport::Upgrade u) {
+        if (u == parvane::GatewayTransport::Upgrade::Required) {
+            g_upgradeSeenMs = nowMs();
+            LOGI("gateway: v1 отключён сервером (upgrade_required) — нужна новая версия приложения");
+            emit(json{{"type", "upgrade_required"}});
+        } else if (u == parvane::GatewayTransport::Upgrade::Available) {
+            LOGI("gateway: доступна новая версия (upgrade_available)");
+            emit(json{{"type", "upgrade_available"}});
+        }
+    });
     std::lock_guard<std::mutex> lk(g_mu);
     g_gatewayUrl = jstr(env, gatewayUrl);
     g_storeDir = jstr(env, storeDir);
@@ -935,7 +1537,9 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
     if (parvane::storecrypt::enabled()) {
         // Догнать шифрование файлов прежних версий (session/cursors/journal/
         // dec-cache/trust; каталоги e2e-* мигрирует initDevice ядра).
-        const int migrated = parvane::storecrypt::migrateDir(g_storeDir);
+        // store.key (ключ, завёрнутый Keystore, — StoreKey.kt) НЕ трогаем: зашифрованный
+        // им же самим он больше не разворачивается (Km -30 на втором старте, 29 сен 2026)
+        const int migrated = parvane::storecrypt::migrateDir(g_storeDir, "store.key");
         if (migrated) LOGI("хранилище: перешифровано %d файлов", migrated);
     } else {
         LOGE("хранилище: ключ шифрования не установлен — файлы plain (P-13)");
@@ -1021,6 +1625,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeLogin(
             g_self = address;
             g_token = *resp.token;
             saveSession();
+            { std::lock_guard<std::mutex> vk(g_v2Mu); g_v2Token = g_token; }
             out["ok"] = true;
             out["address"] = address;
         }
@@ -1153,6 +1758,9 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
         parvane::e2e::initDevice(*g_transport, g_self, g_token, e2eDir(g_self));
         loadCursors();
         loadDecCache();
+        // L2-1: последнее известное состояние режима — до готовности v2-сессии
+        l2Load();
+        if (const auto cached = l2CacheEvent(); !cached["chats"].empty()) emit(cached);
         // Новое устройство без истории → просим ключи/историю у других устройств
         if (parvane::e2e::needsHistoryLink(g_decCache.empty()) && !getenv("PARVANE_NO_LINK_OFFER")) {
             startLinkOffer();
@@ -1181,6 +1789,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
             [](std::string, std::string payload) {
                 auto j = json::parse(payload, nullptr, false);
                 if (j.is_object() && j.value("from", "") != g_self) {
+                    if (l2Active(j.value("from", ""))) return; // L2-1: typing чата с усиленной приватностью игнорируем
                     LOGI("typing"); // адрес в лог не пишем (P-46)
                     emit(json{{"type", "typing"}, {"from", j.value("from", "")}, {"to", j.value("to", "")}});
                 }
@@ -1193,7 +1802,8 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
                 while (g_presenceRunning) {
                     {
                         std::lock_guard<std::mutex> lk(g_mu);
-                        if (g_transport && !g_self.empty()) {
+                        // L2-1: присутствие одно на аккаунт — не публикуем, пока режим активен хоть в одном чате
+                        if (g_transport && !g_self.empty() && g_l2PresenceAllowed) {
                             try { g_transport->publish(parvane::topics::presence(std::to_string(idForAddress(g_self))), json{{"from", g_self}}.dump()); } catch (...) {}
                         }
                     }
@@ -1204,6 +1814,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
         g_running = true;
         g_pump = std::thread(pumpLoop);
         g_pump.detach();
+        startV2Locked(); // протокол v2 рядом с v1 (флаг; по умолчанию выключен)
         emit(json{{"type", "session"}, {"state", "ready"}, {"self", g_self}});
         LOGI("сессия поднята для %s", g_self.c_str());
         return JNI_TRUE;
@@ -1211,7 +1822,10 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
         LOGE("startSession: %s", e.what());
         g_messenger.reset();
         g_transport.reset();
-        emit(json{{"type", "session"}, {"state", "failed"}, {"error", e.what()}});
+        // E6: upgrade_required — не отказ авторизации (session.json остаётся), причина отдельная
+        json failed{{"type", "session"}, {"state", "failed"}, {"error", e.what()}};
+        if (isUpgradeError(e.what())) failed["reason"] = "upgrade";
+        emit(failed);
         return JNI_FALSE;
     }
 }
@@ -1224,8 +1838,13 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendText(
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_messenger || !g_transport) throw std::runtime_error("нет сессии");
-        if (!parvane::e2e::ready()) throw std::runtime_error("E2E не готов");
         const auto content = parvane::textContent(body);
+        if (const auto v2id = trySendV2Locked(toStd, content, std::nullopt); !v2id.empty()) {
+            id = v2id;
+            g_seen.insert(id);
+            decCachePut(id, json{{"from", g_self}, {"content", content}});
+        } else {
+        if (!parvane::e2e::ready()) throw std::runtime_error("E2E не готов");
         const auto sealed = parvane::e2e::sealForAddress(toStd, content.dump(), *g_transport, g_token);
         if (!sealed) throw std::runtime_error("E2E: нет устройств получателя");
         auto copies = json::array();
@@ -1234,6 +1853,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendText(
         id = g_messenger->sendContent(std::string(), toStd, sealed->content, std::string(),
                                       std::nullopt, std::nullopt, copies, e2eSigner());
         g_seen.insert(id);
+        }
     } catch (const std::exception &e) {
         LOGE("sendText: %s", e.what());
         emitError(std::string("send: ") + e.what());
@@ -1408,13 +2028,29 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
     return env->NewStringUTF(path.c_str());
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeListGroups(JNIEnv *env, jclass) {
+    json out = json::array();
+    std::string self;
     try {
         std::lock_guard<std::mutex> lk(g_mu);
-        return env->NewStringUTF(refreshGroupsLocked().dump().c_str());
+        self = g_self;
+        out = refreshGroupsLocked();
     } catch (const std::exception &e) {
         LOGE("listGroups: %s", e.what());
-        return env->NewStringUTF("[]");
     }
+    // Группы v2 — из проверенного журнала (сессия v2) или кэша; сеть не под g_mu.
+    try {
+        const auto v2 = v2GroupList(self);
+        std::lock_guard<std::mutex> lk(g_mu);
+        for (const auto &g : v2) {
+            auto &mem = g_groupMembers[g.value("group_id", std::string())];
+            mem.clear();
+            for (const auto &m : g.value("members", json::array())) mem.push_back(m.value("address", std::string()));
+            out.push_back(g);
+        }
+    } catch (const std::exception &e) {
+        LOGE("listGroups v2: %s", e.what());
+    }
+    return parvane::jniutf::toJava(env, out.dump());
 }
 // Создать группу (kind group|channel) с участниками → group_id ("" при ошибке)
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCreateGroup(
@@ -1423,6 +2059,23 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCreateGroup(
         std::vector<std::string> members;
         auto arr = json::parse(jstr(env, membersJson), nullptr, false);
         if (arr.is_array()) for (const auto &m : arr) if (m.is_string()) members.push_back(m.get<std::string>());
+        // Протокол v2: все участники на v2 — группа v2 (журнал, эпохи); иначе — v1.
+        if (const auto s = v2Ready()) {
+            const auto address = s->createGroup(jstr(env, name), members, jstr(env, kind) == "channel");
+            if (!address.empty()) {
+                LOGI("группа v2 создана %s", address.c_str());
+                const auto info = s->groupInfo(address);
+                {
+                    std::lock_guard<std::mutex> vk(g_v2Mu);
+                    v2CacheGroupLocked(address, &info);
+                }
+                std::lock_guard<std::mutex> lk(g_mu);
+                auto &mem = g_groupMembers[address];
+                mem = members;
+                mem.push_back(g_self);
+                return env->NewStringUTF(address.c_str());
+            }
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         parvane::GroupClient gc(*g_transport);
@@ -1440,6 +2093,26 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCreateGroup(
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupAction(
         JNIEnv *env, jclass, jstring groupId, jstring action, jstring arg) {
     const auto gid = jstr(env, groupId), act = jstr(env, action), a = jstr(env, arg);
+    if (parvane::v2::isGroupAddress(gid)) {
+        // Группа v2: действие — запись журнала (исключение/бан → новая эпоха)
+        const auto r = v2Change(gid, [&](const json &info) -> json {
+            if (act == "add") {
+                const auto s = v2Ready();
+                if (!s || !s->isV2Peer(a)) return nullptr; // ключи эпохи — только v2-собеседнику
+                return json{{"add_member", v2MemberRef(a)}};
+            }
+            if (act == "remove") return a == g_self ? json{{"leave", json::object()}} : json{{"remove_member", v2MemberRef(a)}};
+            if (act == "leave") return json{{"leave", json::object()}};
+            if (act == "rename") return v2SetInfo(info, a, std::nullopt, std::nullopt);
+            if (act == "remove_group") return json{{"delete_group", json::object()}};
+            if (act == "admin") return json{{"set_role", {{"member", {{"address", a}}}, {"role", "ROLE_ADMIN"}, {"rights", parvane::AdminRights().toJson()}}}};
+            if (act == "member") return json{{"set_role", {{"member", {{"address", a}}}, {"role", "ROLE_MEMBER"}, {"rights", json::object()}}}};
+            if (act == "ban") return json{{"ban", v2MemberRef(a)}};
+            if (act == "unban") return json{{"unban", v2MemberRef(a)}};
+            return nullptr;
+        });
+        return env->NewStringUTF(r.value("ok", false) ? "" : r.value("error", std::string("отказ")).c_str());
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1475,6 +2148,13 @@ json jfail(const char *code, const std::string &text) {
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetInfo(
         JNIEnv *env, jclass, jstring groupId, jstring about, jboolean clearAvatar) {
+    if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+        const auto ab = about ? std::optional<std::string>(jstr(env, about)) : std::nullopt;
+        const bool clear = clearAvatar == JNI_TRUE;
+        return jreply(env, v2Change(gid, [&](const json &info) {
+            return v2SetInfo(info, std::nullopt, ab, clear ? std::optional<std::string>(std::string()) : std::nullopt);
+        }));
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1501,6 +2181,18 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPhoto(
         parvane::CloudClient cloud(*g_transport);
         const auto fileId = cloud.upload(g_self, g_token, "group.jpg", "image/jpeg", bytes, {}, true, 256 * 1024, 60000);
         if (fileId.empty()) throw std::runtime_error("cloud не принял");
+        if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+            // Группа v2: фото — поле set_info записи журнала
+            auto out = v2Change(gid, [&](const json &info) { return v2SetInfo(info, std::nullopt, std::nullopt, fileId); });
+            if (out.value("ok", false)) {
+                std::error_code ec; std::filesystem::create_directories(mediaDir(), ec);
+                const auto local = mediaDir() + "/" + fileId;
+                std::ofstream o(local, std::ios::binary); o << bytes;
+                out["file_id"] = fileId;
+                out["path"] = local;
+            }
+            return jreply(env, out);
+        }
         parvane::GroupClient gc(*g_transport);
         const auto r = gc.setInfo(g_token, jstr(env, groupId), std::nullopt, fileId, false);
         auto out = r.toJson();
@@ -1523,6 +2215,10 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPerms(
     try {
         const auto pj = json::parse(jstr(env, permsJson), nullptr, false);
         if (!pj.is_object()) throw std::runtime_error("права: не объект");
+        if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+            const auto perms = parvane::DefaultPermissions::fromJson(pj).toJson();
+            return jreply(env, v2Change(gid, [&](const json &) { return json{{"set_permissions", {{"default_permissions", perms}}}}; }));
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         parvane::GroupClient gc(*g_transport);
@@ -1544,6 +2240,13 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetAdmin(
             if (!rj.is_object()) throw std::runtime_error("права админа: не объект");
             rights = parvane::AdminRights::fromJson(rj);
         }
+        if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+            const auto mem = jstr(env, member);
+            return jreply(env, v2Change(gid, [&](const json &) {
+                return json{{"set_role", {{"member", {{"address", mem}}}, {"role", rights ? "ROLE_ADMIN" : "ROLE_MEMBER"},
+                                          {"rights", rights ? rights->toJson() : json::object()}}}};
+            }));
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         parvane::GroupClient gc(*g_transport);
@@ -1557,6 +2260,15 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetAdmin(
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInvites(
         JNIEnv *env, jclass, jstring groupId, jboolean revoked) {
+    if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+        // Ссылки v2 хранятся на устройстве (секрет — в url); отозванные из журнала исчезают
+        json links = json::array();
+        const auto s = v2Ready();
+        std::string self;
+        { std::lock_guard<std::mutex> lk(g_mu); self = g_self; }
+        if (s && revoked != JNI_TRUE) for (const auto &r : s->listInvites(gid)) links.push_back(v2InviteLinkJson(r, self));
+        return jreply(env, json{{"ok", s != nullptr}, {"links", links}, {"error_code", s ? "" : "failed"}});
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1578,6 +2290,15 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteCre
         p.expires_at = expiresAt;
         p.max_uses = maxUses;
         p.request_needed = requestNeeded == JNI_TRUE;
+        if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+            const auto s = v2Ready();
+            const auto r = s ? s->createInvite(gid, p.title, p.expires_at, static_cast<std::uint32_t>(std::max<jint>(maxUses, 0)), p.request_needed) : json();
+            if (!r.is_object()) return jreply(env, jfail("failed", "ссылка v2 не создана"));
+            std::string self;
+            { std::lock_guard<std::mutex> lk(g_mu); self = g_self; }
+            const auto link = v2InviteLinkJson(r, self);
+            return jreply(env, json{{"ok", true}, {"invite", link.value("token", std::string())}, {"link", link}});
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
         parvane::GroupClient gc(*g_transport);
@@ -1592,6 +2313,11 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteCre
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteRevoke(
         JNIEnv *env, jclass, jstring groupId, jstring token) {
+    if (const auto gid = jstr(env, groupId); parvane::v2::isGroupAddress(gid)) {
+        const auto s = v2Ready();
+        const bool ok = s && s->revokeInvite(gid, jstr(env, token));
+        return jreply(env, ok ? json{{"ok", true}} : jfail("failed", "ссылка v2 не отозвана"));
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1604,6 +2330,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteRev
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteDelete(
         JNIEnv *env, jclass, jstring groupId, jstring token) {
+    if (parvane::v2::isGroupAddress(jstr(env, groupId))) return jreply(env, json{{"ok", true}}); // отозванная v2 не хранится
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1615,6 +2342,17 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteDel
     }
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteCheck(JNIEnv *env, jclass, jstring token) {
+    if (const auto url = jstr(env, token); parvane::v2::Session::isInviteUrl(url)) {
+        // Ссылка v2: group.invite.check по link_id (секрет серверу не уходит)
+        const auto s = v2Ready();
+        const auto r = s ? s->checkInvite(url) : json();
+        if (!r.is_object()) return jreply(env, jfail("failed", "сессия v2 не готова"));
+        if (r.contains("error")) return jreply(env, jfail(r.value("error", std::string("failed")).c_str(), "ссылка v2"));
+        return jreply(env, json{{"ok", true}, {"group_id", r.value("address", std::string())}, {"name", r.value("name", std::string())},
+                                {"kind", r.value("isChannel", false) ? "channel" : "group"}, {"avatar", ""}, {"about", ""},
+                                {"members_count", r.value("membersCount", std::int64_t(0))}, {"request_needed", r.value("isRequestNeeded", false)},
+                                {"already_member", r.value("isMember", false)}, {"pending", false}});
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1626,6 +2364,15 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteChe
     }
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupJoin(JNIEnv *env, jclass, jstring token) {
+    if (const auto url = jstr(env, token); parvane::v2::Session::isInviteUrl(url)) {
+        // Вступление v2: журнал по link_id + запись, подписанная ключом ссылки
+        const auto s = v2Ready();
+        const auto r = s ? s->joinByInvite(url) : json();
+        const auto status = r.is_object() ? r.value("status", std::string()) : std::string();
+        if (status == "ok") return jreply(env, json{{"ok", true}, {"group_id", r.value("address", std::string())}, {"pending", false}});
+        if (status == "requested") return jreply(env, json{{"ok", true}, {"group_id", ""}, {"pending", true}});
+        return jreply(env, jfail(r.is_object() ? r.value("code", std::string("failed")).c_str() : "failed", "вступление v2"));
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1639,6 +2386,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupJoin(JNIE
     }
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequests(JNIEnv *env, jclass, jstring groupId) {
+    if (parvane::v2::isGroupAddress(jstr(env, groupId))) return jreply(env, json{{"ok", true}, {"requests", json::array()}}); // заявки v2 — не сделано (как web)
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1654,6 +2402,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequests(
 }
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequestDecide(
         JNIEnv *env, jclass, jstring groupId, jstring member, jboolean approve) {
+    if (parvane::v2::isGroupAddress(jstr(env, groupId))) return jreply(env, jfail("bad_request", "заявки v2 не поддержаны"));
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_transport) throw std::runtime_error("нет сессии");
@@ -1736,6 +2485,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeClearMessages
 }
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSendTyping(JNIEnv *env, jclass, jstring to) {
     const auto toStd = jstr(env, to);
+    if (l2Active(toStd)) return; // L2-1: в чате с усиленной приватностью «печатает» не передаётся
     std::lock_guard<std::mutex> lk(g_mu);
     if (!g_transport) return;
     try { g_transport->publish(parvane::topics::msgTyping(std::to_string(idForAddress(toStd))), json{{"from", g_self}, {"to", toStd}}.dump()); } catch (...) {}
@@ -1745,6 +2495,20 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(
     const auto id = jstr(env, uuid), toStd = jstr(env, to);
     try {
         auto content = json::parse(jstr(env, contentJson), nullptr, false);
+        if (!v2PeerOf(id).empty() && content.is_object()) {
+            // Сообщение v2-чата: правка — E2E-содержимым v2 (Edit{target,text|location})
+            auto edit = json{{"target", parvane::v2::ref(id)}};
+            const auto kind = parvane::contentKind(content);
+            if (kind == "location") {
+                if (const auto m = parvane::v2::toV2(content)) edit["location"] = (*m)["location"];
+            } else {
+                const auto text = (kind == "text") ? content.value("text", std::string()) : content.value("caption", std::string());
+                if (const auto m = parvane::v2::toV2(parvane::textContent(text, parvane::contentEntities(content)))) edit["text"] = (*m)["text"];
+            }
+            { std::lock_guard<std::mutex> lk(g_mu); g_decCache[id] = json{{"from", g_self}, {"content", content}}; }
+            LOGI("правка msg %s [v2]", id.c_str());
+            return tryMutateV2(id, json{{"edit", edit}}) ? JNI_TRUE : JNI_FALSE;
+        }
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_messenger || !g_transport || !parvane::e2e::ready()) throw std::runtime_error("нет сессии");
         const auto sealed = parvane::e2e::sealForAddress(toStd, content.dump(), *g_transport, g_token);
@@ -1763,6 +2527,10 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(
 }
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeDelete(JNIEnv *env, jclass, jstring uuid) {
     const auto id = jstr(env, uuid);
+    if (tryMutateV2(id, json{{"delete", {{"targets", json::array({parvane::v2::ref(id)})}, {"for_everyone", true}}}})) {
+        LOGI("удаление своего msg %s [v2]", id.c_str());
+        return JNI_TRUE;
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_messenger) throw std::runtime_error("нет сессии");
@@ -1775,6 +2543,23 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeDelete(JNIEnv
 }
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeReact(JNIEnv *env, jclass, jstring uuid, jstring emoji) {
     const auto id = jstr(env, uuid), em = jstr(env, emoji);
+    if (!v2PeerOf(id).empty()) {
+        // v2: реакция — E2E-содержимым v2; повтор той же = снять (как v1-сервер)
+        std::string self;
+        { std::lock_guard<std::mutex> lk(g_mu); self = g_self; }
+        json meta;
+        bool remove = em.empty();
+        {
+            std::lock_guard<std::mutex> lk(g_v2Mu);
+            auto &mine = g_v2Reactions[id];
+            if (!remove && mine.count(self) && mine[self] == em) remove = true;
+            if (remove) mine.erase(self); else mine[self] = em;
+            meta = json{{"type", "meta"}, {"id", id}, {"reactions", v2ReactionsLocked(id)}, {"pinned", g_v2Pinned[id]}};
+        }
+        tryMutateV2(id, json{{"reaction", {{"target", parvane::v2::ref(id)}, {"emoji", remove ? std::string() : em}, {"remove", remove}}}});
+        emit(meta);
+        return JNI_TRUE;
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_messenger) throw std::runtime_error("нет сессии");
@@ -1787,6 +2572,16 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeReact(JNIEnv 
 }
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativePin(JNIEnv *env, jclass, jstring uuid, jboolean pinned) {
     const auto id = jstr(env, uuid);
+    if (tryMutateV2(id, json{{"pin", {{"target", parvane::v2::ref(id)}, {"unpin", pinned != JNI_TRUE}}}})) {
+        json meta;
+        {
+            std::lock_guard<std::mutex> lk(g_v2Mu);
+            g_v2Pinned[id] = pinned == JNI_TRUE;
+            meta = json{{"type", "meta"}, {"id", id}, {"reactions", v2ReactionsLocked(id)}, {"pinned", g_v2Pinned[id]}};
+        }
+        emit(meta);
+        return JNI_TRUE;
+    }
     try {
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_messenger) throw std::runtime_error("нет сессии");
@@ -1827,6 +2622,17 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSearch(
     }
 }
 
+// Файлы локального состояния шва (черновики, отложенные, папки, архив, приватность,
+// индекс паков) лежат в каталоге хранилища ядра и шифруются тем же storecrypt (P-13).
+// Раньше Kotlin писал их открыто, migrateDir при следующем старте запечатывал, а Kotlin
+// читал шифртекст как JSON — состояние терялось после каждого перезапуска (2 окт 2026).
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreRead(JNIEnv *env, jclass, jstring pathJ) {
+    return env->NewStringUTF(parvane::storecrypt::readFile(jstr(env, pathJ)).c_str());
+}
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreWrite(JNIEnv *env, jclass, jstring pathJ, jstring textJ) {
+    return parvane::storecrypt::writeFile(jstr(env, pathJ), jstr(env, textJ)) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeMarkRead(JNIEnv *env, jclass, jstring uuid) {
     const auto id = jstr(env, uuid);
     std::lock_guard<std::mutex> lk(g_mu);
@@ -1835,6 +2641,12 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeMarkRead(JNIEnv *
         saveRead();
         journalAppend(json{{"type", "read"}, {"ids", json::array({id})}});
         LOGI("прочитано локально %s", id.c_str());
+    }
+    // v2-сообщение: квитанция прочтения — E2E-содержимым v2 его автору; её
+    // доставляет движок (READ-1: отчитано, v1-повторы не нужны)
+    if (tryMutateV2(id, json{{"receipt", {{"kind", "RECEIPT_KIND_READ"}, {"messages", json::array({parvane::v2::ref(id)})}}}})) {
+        LOGI("read подтверждён %s [v2]", id.c_str());
+        return;
     }
     g_unconfirmedRead.emplace(id, 0);
     if (g_messenger) g_messenger->markRead(g_self, id, g_token);
@@ -2029,6 +2841,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNI
 // dec-cache, курсоры и read.json остаются — повторный вход тем же ником продолжает историю.
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSessionExpired(JNIEnv *, jclass) {
     g_presenceRunning = false;
+    stopV2();
     std::lock_guard<std::mutex> lk(g_mu);
     g_running = false;
     g_messenger.reset();
@@ -2042,6 +2855,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSessionExpired(JN
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, jclass) {
     g_presenceRunning = false;
+    stopV2();
     std::lock_guard<std::mutex> lk(g_mu);
     g_running = false;
     g_messenger.reset();
@@ -2053,6 +2867,137 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, 
     std::remove(sessionPath().c_str());
     std::remove(cursorsPath().c_str());
     std::remove(journalPath().c_str());
+    l2Forget();
+    {
+        std::lock_guard<std::mutex> vk(g_v2Mu);
+        g_v2Ids.clear();
+        g_v2IdsLoaded = false;
+    }
+    std::remove(v2IdsPath().c_str());
+}
+
+// ── журнал личного состояния v2 (T098): папки/черновики/архив/отложенные ──
+// Сведение (STATE-1) и шифрование — в движке; Kotlin отдаёт свои данные
+// снимком proto3-JSON StateSnapshot и получает сведённый. "" — журнал недоступен.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateAttach(JNIEnv *env, jclass, jstring localJson) {
+    const auto s = v2Ready();
+    if (!s) return env->NewStringUTF("");
+    try {
+        const auto local = json::parse(jstr(env, localJson), nullptr, false);
+        const auto snap = s->stateAttach(local.is_object() ? local : json::object());
+        return parvane::jniutf::toJava(env, snap.is_object() ? snap.dump() : std::string());
+    } catch (const std::exception &e) {
+        LOGE("журнал состояния: %s", e.what());
+        return env->NewStringUTF("");
+    }
+}
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSync(JNIEnv *env, jclass, jstring desiredJson, jstring kindsJson) {
+    const auto s = v2Ready();
+    if (!s) return env->NewStringUTF("");
+    try {
+        const auto desired = json::parse(jstr(env, desiredJson), nullptr, false);
+        const auto kindsJ = json::parse(jstr(env, kindsJson), nullptr, false);
+        std::vector<std::string> kinds;
+        if (kindsJ.is_array()) for (const auto &k : kindsJ) if (k.is_string()) kinds.push_back(k.get<std::string>());
+        const auto r = s->stateSync(desired.is_object() ? desired : json(), kinds);
+        return parvane::jniutf::toJava(env, r.is_object() ? r.dump() : std::string());
+    } catch (const std::exception &e) {
+        LOGE("синк журнала состояния: %s", e.what());
+        return env->NewStringUTF("");
+    }
+}
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateScheduledSent(JNIEnv *env, jclass, jstring opIdB64) {
+    const auto s = v2Ready();
+    if (!s) return JNI_FALSE;
+    try { return s->stateScheduledSent(jstr(env, opIdB64)) ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &) { return JNI_FALSE; }
+}
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeStateMarkSent(JNIEnv *env, jclass, jstring opIdB64) {
+    if (const auto s = v2Ready()) s->stateMarkSent(jstr(env, opIdB64));
+}
+// ── приватность v2 (T079, FR-040) и режим «усиленная приватность» (L2-1) ──
+// identity.privacy.set уходит целиком (перезаписывает все поля). false — не
+// отправлено сейчас: v2 выключен, либо сессия ещё не готова (тогда она дошлёт
+// сама при готовности — значения запоминает parvane::v2::Session).
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeSetPrivacy(
+        JNIEnv *, jclass, jboolean groupAddNobody, jboolean strangersAllowed) {
+    std::shared_ptr<parvane::v2::Session> s;
+    { std::lock_guard<std::mutex> lk(g_v2Mu); s = g_v2; }
+    if (!s) return JNI_FALSE;
+    try {
+        return s->setPrivacy(groupAddNobody == JNI_TRUE, strangersAllowed == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception &e) {
+        LOGE("приватность v2: %s", e.what());
+        return JNI_FALSE;
+    }
+}
+// Режим доступен в чате: v2-сессия готова и чат — v2 (группа "v2g:" или
+// собеседник с журналом устройств v2). Блокирующий (сеть при промахе кэша) —
+// звать с io-потока.
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeL2Available(JNIEnv *env, jclass, jstring chat) {
+    const auto c = jstr(env, chat);
+    const auto s = v2Ready();
+    if (!s || c.empty()) return JNI_FALSE;
+    try {
+        if (parvane::v2::isGroupAddress(c)) return s->groupInfo(c).is_object() ? JNI_TRUE : JNI_FALSE;
+        return s->isV2Peer(c) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception &) {
+        return JNI_FALSE;
+    }
+}
+// Включить/выключить режим. Личный чат — своё предпочтение (операция ChatMode
+// собеседнику и своим устройствам); своё служебное сообщение показываем сами,
+// с id операции, — эхо не приходит. Группа — политика записью журнала (право
+// как у изменения сведений); служебное сообщение придёт событием groupL2.
+// Ответ: {"ok":bool,"id":uuid?,"error_code":"unavailable|forbidden|failed","error":текст}.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSetL2(JNIEnv *env, jclass, jstring chat, jboolean enabled) {
+    const auto c = jstr(env, chat);
+    const bool on = enabled == JNI_TRUE;
+    json out{{"ok", false}};
+    const auto s = v2Ready();
+    if (!s || c.empty()) {
+        out["error_code"] = "unavailable";
+        return env->NewStringUTF(out.dump().c_str());
+    }
+    try {
+        if (parvane::v2::isGroupAddress(c)) {
+            const bool ok = s->setGroupL2(c, on);
+            out["ok"] = ok;
+            if (!ok) out["error_code"] = "forbidden";
+            LOGI("режим L2 группы %s: %s → %s", c.c_str(), on ? "включить" : "выключить", ok ? "ok" : "отказ");
+        } else {
+            const auto opId = parvane::v2::newUuidV7();
+            s->setDirectL2(c, on, opId);
+            std::string self;
+            {
+                std::lock_guard<std::mutex> lk(g_mu);
+                self = g_self;
+                g_seen.insert(opId);
+            }
+            LOGI("режим L2 личного чата: %s (%s)", on ? "включён" : "выключен", opId.c_str());
+            emit(parvane::android_v2::ownChatModeEvent(self, c, on, opId, nowSec()));
+            out["ok"] = true;
+            out["id"] = opId;
+        }
+    } catch (const std::exception &e) {
+        LOGE("режим L2: %s", e.what());
+        out["error_code"] = "failed";
+        out["error"] = e.what();
+    }
+    return env->NewStringUTF(out.dump().c_str());
+}
+// Протокол v2 (spec 007): флаг двойного стека — до startSession; по умолчанию выключен.
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSetProtoV2(JNIEnv *, jclass, jboolean enabled) {
+    std::lock_guard<std::mutex> lk(g_v2Mu);
+    g_v2Flag = enabled == JNI_TRUE;
+}
+// Состояние v2: {"enabled","ready","needsLinking","engine"} — для диагностики/тестов.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeV2Status(JNIEnv *env, jclass) {
+    const bool enabled = v2Enabled();
+    std::shared_ptr<parvane::v2::Session> s;
+    { std::lock_guard<std::mutex> lk(g_v2Mu); s = g_v2; }
+    const json j{{"enabled", enabled}, {"ready", s && s->isReady()}, {"needsLinking", s && s->needsLinking()},
+                 {"engine", parvane::v2::engineVersion()}};
+    return env->NewStringUTF(j.dump().c_str());
 }
 
 } // extern "C"

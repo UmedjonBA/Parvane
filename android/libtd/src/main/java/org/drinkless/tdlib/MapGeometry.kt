@@ -13,14 +13,15 @@ import kotlin.math.tan
 /**
  * spec 005 / MAP-1: геометрия статичной карты — порт `parvane-core/map_tiles.cpp
  * computeGeometry` (= web `renderStaticMap`): Web Mercator, тайл 256 px, зум по
- * умолчанию 16 (как web/desktop, не 13 как у TDLib), clamp зума [0,19], scale [1,3],
+ * умолчанию 16 (как web/desktop, не 13 как у TDLib), clamp зума [0,15] (P-23: шард
+ * preview не отдаёт тайлы выше z15 — MAP-1 `maxZoom`), scale [1,3],
  * широты ±85.05; покрытие по floor, ty вне [0, 2^z) пропускается, x оборачивается;
  * dstX — по НЕобёрнутому tx. Тайлы — только через `preview.map.tile`.
  */
 object MapGeometry {
     const val TILE = 256
     const val DEFAULT_ZOOM = 16
-    const val MAX_ZOOM = 19
+    const val MAX_ZOOM = 15
     private const val MAX_LAT = 85.05
 
     class Tile(val z: Int, val x: Int, val y: Int, val dstX: Int, val dstY: Int, val dstSize: Int) { val key get() = "$z/$x/$y" }
