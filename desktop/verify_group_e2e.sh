@@ -8,7 +8,7 @@
 #   4) SKDM sealed (from_user пуст у kind=encrypted — раздача ключа скрыта);
 #   5) без фатальных ошибок.
 set -u
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 SB="${SCRATCH:-/tmp/parvane-grpe2e}"; rm -rf "$SB"; mkdir -p "$SB"
 STAMP="$(date +%s)"
 A_WORK="$SB/alice"; B_WORK="$SB/bob"; mkdir -p "$A_WORK/td" "$B_WORK/td"
@@ -20,22 +20,15 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
 
-nats-server -p 4222 >"$SB/nats.log" 2>&1 & NATS=$!
-sleep 1
-for s in identity messenger; do
-  PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/$s.db" PARVANE_LOG_LEVEL=warn "$SHARD/$s" >"$SB/$s.log" 2>&1 &
-done
-PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 \
-  PARVANE_GATEWAY_BIND=127.0.0.1:9222 PARVANE_LOG_LEVEL=info "$SHARD/gateway" >"$SB/gateway.log" 2>&1 & GW=$!
-sleep 2
+stack_up "$SB"
 
 # bob первым (успеет опубликовать prekeys + подхватить группу до отправки).
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
-  PARVANE_AUTOLOGIN='bob@local:test' \
+  PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 & B_PID=$!
 sleep 2
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
-  PARVANE_AUTOLOGIN='alice@local:test' PARVANE_AUTOGROUP="$GNAME:bob@local" \
+  PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOGROUP="$GNAME:bob@local" \
   PARVANE_AUTOGROUPSEND="$GNAME:$SECRET" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout.log" 2>&1 & A_PID=$!
 
@@ -81,6 +74,6 @@ else
 fi
 grep -qiE "Fatal|Unexpected in " "$A_LOG" "$B_LOG" 2>/dev/null && bad "фатальная ошибка в логе" || ok "без фатальных"
 
-kill "$GW" "$NATS" 2>/dev/null; pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null
+clients_kill "$SB"; stack_stop
 [ "$RC" -eq 0 ] && printf '\033[32mФАЗА 3 E2E ГРУПП: OK\033[0m\n' || printf '\033[31mФАЗА 3 E2E ГРУПП: ПРОВАЛЫ\033[0m\n'
 exit "$RC"

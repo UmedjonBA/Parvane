@@ -12,6 +12,8 @@
 
 #include "data/data_chat_participant_status.h" // ChatAdminRights (spec 004)
 
+#include <rpl/producer.h>
+
 class PeerData;
 class ChatData;
 class UserData;
@@ -106,6 +108,38 @@ struct TwoFactorState {
 [[nodiscard]] TwoFactorState FetchTwoFactor();
 // P-07: выключение 2FA требует текущий пароль (сервер отклонит без него).
 [[nodiscard]] TwoFactorState SetTwoFactor(bool enabled, const QString &password = QString());
+
+// Протокол v2 (T079, FR-040): «сообщения от незнакомых» — нативный пункт
+// Settings → Privacy → Messages. Настройка хранится на устройстве и уходит в
+// identity.privacy.set при изменении и при готовности v2-сессии.
+[[nodiscard]] bool StrangersPolicyAvailable(); // v2 включён
+[[nodiscard]] bool StrangersAllowed();
+void SetStrangersAllowed(bool allowed);
+
+// Режим чата «усиленная приватность» (L2, T079; правило conformance L2-1):
+// выравнивание размеров конвертов, без typing/presence, виден участникам.
+// Личный чат — своё предпочтение (режим активен, пока включён хотя бы у
+// одного участника); группа v2 — политика журнала (право как у изменения
+// сведений). Состояние — из кэша события l2State v2-сессии (main).
+struct ChatL2 {
+	bool available = false; // пункт показывать (v2-собеседник / группа v2)
+	bool active = false;    // режим чата активен
+	bool mine = false;      // личный чат: включён мной; группа: = active
+	bool canChange = false; // право менять (группа — canEditInformation)
+
+	friend inline bool operator==(const ChatL2 &, const ChatL2 &) = default;
+};
+[[nodiscard]] ChatL2 ChatL2State(not_null<PeerData*> peer);
+// Кэш изменился (или стало известно, что собеседник на v2) — перечитать.
+[[nodiscard]] rpl::producer<> ChatL2Updates();
+// Узнать (на воркере), на v2 ли собеседник; итог — через ChatL2Updates.
+void RefreshChatL2(not_null<PeerData*> peer);
+// Включить/выключить; done(ok) — на main. Служебное сообщение чата — само.
+void SetChatL2(not_null<PeerData*> peer, bool enabled, Fn<void(bool ok)> done);
+
+// E6 (T110): сервер отключил протокол v1 (кадр upgrade_required) — клиент
+// показывает «обновите приложение» и не крутит переподключение.
+[[nodiscard]] bool UpgradeRequired();
 
 // БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
 [[nodiscard]] RegisterResult Register(

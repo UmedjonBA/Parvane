@@ -25,7 +25,7 @@ open(sys.argv[1], 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack(
 EOF
 req() { "$NATS" --server "$URL" req "$1" "$2" 2>/dev/null | grep -o '{.*}' | head -1; }
 token_of() {
-  req identity.token.issue "{\"user\":\"$1\",\"password\":\"test\"}" \
+  req identity.token.issue "{\"user\":\"$1\",\"password\":\"${PV_PASSWORD:-test-pass-2026}\"}" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null
 }
 last_token() { grep -a "AUTOGROUPINVITE '$GNAME' create → ok" "$1" | tail -1 | grep -oE 'ok [0-9a-f]{32}' | cut -d' ' -f2; }

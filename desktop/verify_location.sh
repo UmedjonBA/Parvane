@@ -11,21 +11,19 @@ wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob 
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:метка-места" PARVANE_AUTOLOCATION="bob@local:55.751244,37.618423")
 wait_log "$A/td/log.txt" "геолокация → bob@local \(55" 40 && ok "alice отправила геолокацию" || bad "alice не отправила геолокацию"
 wait_log "$B/td/log.txt" "инъецировано" 60
-# bob расшифровал location: content kind=location в кэше расшифровки
-sleep 3
-if python3 - "$B/td/tdata/parvane-dec-cache.jsonl" <<'PY'
-import sys, json
-found=False
-for l in open(sys.argv[1]):
-    l=l.strip()
-    if not l: continue
-    inner=json.loads(json.loads(l)["inner"]) if '"inner"' in l else {}
-    c=inner.get("content",{})
-    if c.get("kind")=="location" and abs(c.get("lat",0)-55.751244)<1e-4:
-        found=True
-sys.exit(0 if found else 1)
-PY
-then ok "bob расшифровал location (lat=55.75 в кэше)"; else bad "bob не получил location"; fi
+# bob расшифровал location: пузырь с картой строится по координатам из
+# расшифрованного content (preview в этом сценарии не поднят — «не собрана»
+# тоже годится, важны координаты). Кэш расшифровки на диске зашифрован (P-13),
+# читать его напрямую больше нельзя — заодно проверяем и это.
+wait_log "$B/td/log.txt" "карта локации (не )?собрана 55\.7512,37\.6184" 40 \
+  && ok "bob расшифровал location (пузырь карты с lat=55.7512 lon=37.6184)" || bad "bob не получил location"
+DC="$B/td/tdata/parvane-dec-cache.jsonl"
+if [ -s "$DC" ]; then
+  head -c 5 "$DC" | grep -q '^PVSE1' && ! grep -qa '"kind":"location"' "$DC" \
+    && ok "кэш расшифровки на диске зашифрован (PVSE1)" || bad "кэш расшифровки лежит открытым текстом"
+else
+  bad "нет кэша расшифровки у bob"
+fi
 K=$(sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM messages WHERE kind='location';")
 [ "${K:-0}" = "0" ] && ok "на сервере location скрыт (нет kind=location)" || bad "location на сервере открыт"
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" && bad "фатальная ошибка" || ok "без фатальных ошибок"

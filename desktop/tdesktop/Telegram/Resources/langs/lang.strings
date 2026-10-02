@@ -1585,8 +1585,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_messages_privacy_title" = "Messages";
 "lng_messages_privacy_subtitle" = "Who can send me messages";
 "lng_messages_privacy_everyone" = "Everybody";
-"lng_messages_privacy_restricted" = "My Contacts and Premium Users";
-"lng_messages_privacy_about" = "You can restrict messages from users who are not in your contacts and don't have Premium.";
+"lng_messages_privacy_restricted" = "People I've messaged";
+"lng_messages_privacy_about" = "You can restrict messages from people you haven't written to first.";
 "lng_messages_privacy_premium_button" = "Subscribe to Telegram Premium";
 "lng_messages_privacy_premium_about" = "Subscribe now to change this setting and get access to other exclusive features of Telegram Premium.";
 "lng_messages_privacy_premium" = "Only subscribers of {link} can select this option.";
@@ -2745,6 +2745,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_invite_request_sent" = "Join request sent.";
 "lng_parvane_invite_edit_unsupported" = "Editing a link is not supported — revoke it and create a new one.";
 "lng_parvane_restrict_unsupported" = "Partial restrictions are not supported here — you can only remove a member.";
+"lng_parvane_group_unconfirmed_member" = "{user} is listed in the group by the server, but no admin record confirms it. Encryption keys are not shared with them.";
+"lng_parvane_new_own_device" = "A new device was added to your account. If it wasn't you, remove it in Settings > Devices.";
+"lng_parvane_enhanced_privacy" = "Enhanced privacy";
+"lng_parvane_enhanced_privacy_about" = "Message sizes are padded to a fixed grid; typing and online status are not sent in this chat. The mode is visible to all participants.";
+"lng_parvane_enhanced_privacy_by_peer" = "Turned on by the other participant.";
+"lng_parvane_enhanced_privacy_failed" = "Could not change enhanced privacy. Try again later.";
+"lng_parvane_chat_mode_on" = "{user} enabled enhanced privacy";
+"lng_parvane_chat_mode_off" = "{user} disabled enhanced privacy";
+"lng_parvane_chat_mode_on_you" = "You enabled enhanced privacy";
+"lng_parvane_chat_mode_off_you" = "You disabled enhanced privacy";
+"lng_parvane_upgrade_available" = "A new version of Parvane is available. Please update the app — this version will stop working soon.";
+"lng_parvane_upgrade_required" = "This version of Parvane is no longer supported. Update the app to continue.";
 
 "lng_group_invite_members#one" = "{count} member, among them:";
 "lng_group_invite_members#other" = "{count} members, among them:";

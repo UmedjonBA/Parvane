@@ -53,6 +53,7 @@ void GatewayTransport::connect(const std::string &host, int port) {
     }
 
     fd_ = fd;
+    upgradeRequiredConn_ = false;
     running_ = true;
     reader_ = std::thread(&GatewayTransport::readerLoop, this);
     lastHost_ = host;
@@ -67,7 +68,37 @@ void GatewayTransport::reopen() { connect(lastHost_, lastPort_); }
 namespace {
 std::mutex g_reconnMu;
 GatewayTransport::ReconnectHandler g_reconnHandler;
+std::mutex g_upgradeMu;
+GatewayTransport::UpgradeHandler g_upgradeHandler;
+std::atomic<bool> g_upgradeRequired{false};
+constexpr const char *kUpgradeRequiredError = "upgrade_required";
 } // namespace
+
+void GatewayTransport::setUpgradeHandler(UpgradeHandler handler) {
+    std::lock_guard<std::mutex> lk(g_upgradeMu);
+    g_upgradeHandler = std::move(handler);
+}
+
+bool GatewayTransport::upgradeRequired() { return g_upgradeRequired.load(); }
+
+GatewayTransport::Upgrade GatewayTransport::upgradeKindOf(const std::string &line) {
+    const json v = json::parse(line, nullptr, /*allow_exceptions=*/false);
+    if (v.is_discarded() || !v.is_object() || !v.contains("op") || !v["op"].is_string()) {
+        return Upgrade::None;
+    }
+    const auto text = [&](const char *k) {
+        return v.contains(k) && v[k].is_string() ? v[k].get<std::string>() : std::string();
+    };
+    const auto op = text("op");
+    if (op == "notice" && text("kind") == "upgrade_available") {
+        return Upgrade::Available;
+    }
+    // Адресная ошибка запроса (с id) — не режим сервера.
+    if (op == "err" && text("error") == kUpgradeRequiredError && text("id").empty()) {
+        return Upgrade::Required;
+    }
+    return Upgrade::None;
+}
 
 void GatewayTransport::setReconnectHandler(ReconnectHandler handler) {
     std::lock_guard<std::mutex> lk(g_reconnMu);
@@ -86,6 +117,10 @@ void GatewayTransport::ensureConnected() {
         return; // переподключил параллельный вызов
     }
     const auto now = std::chrono::steady_clock::now();
+    // E6: сервер отключил v1 — не крутим переподключение, редкая проба.
+    if (g_upgradeRequired && now - lastReconnectTry_ < std::chrono::milliseconds(kUpgradeRetryGapMs)) {
+        throw GatewayError(std::string("gateway: ") + kUpgradeRequiredError);
+    }
     if (now - lastReconnectTry_ < std::chrono::milliseconds(kReconnectMinGapMs)) {
         throw GatewayError("gateway: не подключено (ждём паузу перед переподключением)");
     }
@@ -239,9 +274,35 @@ void GatewayTransport::dispatch(const std::string &line) {
     }
     const std::string op = v.value("op", "");
 
+    if (const auto up = upgradeKindOf(line); up != Upgrade::None) {
+        if (up == Upgrade::Required) {
+            g_upgradeRequired = true;
+            upgradeRequiredConn_ = true;
+            // Ждущий авторизации получает отказ сразу, а не по таймауту.
+            {
+                std::lock_guard<std::mutex> lk(authMu_);
+                authState_ = -1;
+                authErr_ = kUpgradeRequiredError;
+                authCv_.notify_all();
+            }
+            // Запросы в полёте (вход/регистрация до auth) — тот же ответ.
+            abortPending(std::string("gateway: ") + kUpgradeRequiredError);
+        }
+        UpgradeHandler h;
+        {
+            std::lock_guard<std::mutex> lk(g_upgradeMu);
+            h = g_upgradeHandler;
+        }
+        if (h) {
+            h(up);
+        }
+        return;
+    }
+
     if (op == "auth_ok" || op == "auth_err") {
         std::lock_guard<std::mutex> lk(authMu_);
         if (op == "auth_ok") {
+            g_upgradeRequired = false; // v1 снова принимает (оператор вернул режим)
             authState_ = 1;
             authUser_ = v.value("user", "");
         } else {
@@ -325,8 +386,20 @@ void GatewayTransport::authenticate(const std::string &token, std::int64_t timeo
         authUser_.clear();
         authErr_.clear();
     }
+    // Кадр upgrade_required приходит первым, до нашего auth: не ждать таймаута.
+    if (upgradeRequiredConn_) {
+        throw GatewayError(std::string("gateway: ") + kUpgradeRequiredError);
+    }
     json f = {{"op", "auth"}, {"token", token}};
-    sendLine(f.dump());
+    try {
+        sendLine(f.dump());
+    } catch (const GatewayError &) {
+        // Сервер уже закрыл соединение после upgrade_required.
+        if (upgradeRequiredConn_) {
+            throw GatewayError(std::string("gateway: ") + kUpgradeRequiredError);
+        }
+        throw;
+    }
 
     std::unique_lock<std::mutex> lk(authMu_);
     if (!authCv_.wait_for(lk, std::chrono::milliseconds(timeoutMs),
@@ -334,6 +407,11 @@ void GatewayTransport::authenticate(const std::string &token, std::int64_t timeo
         throw GatewayError("gateway: таймаут авторизации");
     }
     if (authState_ != 1) {
+        // Не «отказ авторизации»: клиенты по этому тексту разлогинивают (JWT
+        // отвергнут), а здесь сервер отключил v1 — учётные данные в порядке.
+        if (authErr_ == kUpgradeRequiredError) {
+            throw GatewayError(std::string("gateway: ") + kUpgradeRequiredError);
+        }
         throw GatewayError("gateway: отказ авторизации: " + authErr_);
     }
 }

@@ -9,17 +9,48 @@ RC=0
 ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 PIDS=()
-stack_start() { # stack_start <scratch> [env-для-identity]
+# Гасит ТОЛЬКО стек desktop-e2e: nats на 4222 и шарды, подключённые к нему.
+# Не по имени процесса (`pkill -x identity`) — рядом могут идти web-e2e со своими
+# шардами из тех же бинарей на других портах.
+stack_pids() { # stack_pids <имя-шарда|все>
+  local p names="${1:-identity|messenger|cloud|call|gateway|preview|push}"
+  for p in $(pgrep -x "$names" 2>/dev/null); do
+    tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null \
+      | grep -qx 'PARVANE_NATS_URL=nats://127.0.0.1:4222' && echo "$p"
+  done
+}
+stack_reap() {
+  local p
+  for p in $(stack_pids); do kill "$p" 2>/dev/null; done
+  for p in $(pgrep -x nats-server 2>/dev/null); do
+    tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q -- '-p 4222 ' && kill "$p" 2>/dev/null
+  done
+  for _ in $(seq 1 25); do
+    (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null || return 0
+    sleep 0.2
+  done
+}
+# ждём, пока порт начнёт принимать соединения (вместо sleep наугад)
+wait_port() { # wait_port <port> [попыток по 0.2 с = 50]
+  for _ in $(seq 1 "${2:-50}"); do
+    (exec 3<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null && return 0
+    sleep 0.2
+  done
+  return 1
+}
+# stack_up <scratch> [env-для-identity] — поднять стек, НЕ очищая каталог
+# (скрипт уже разложил в нём профили/файлы); stack_start — то же с очисткой.
+stack_up() {
   SB="$1"; shift
-  # зомби прошлого прогона с тем же -workdir перехватит новый старт через локальный сокет
-  pkill -9 -f -- "-workdir $SB/" 2>/dev/null; sleep 0.5
-  rm -rf "$SB"; mkdir -p "$SB"
+  mkdir -p "$SB"
   [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
   for s in identity messenger cloud call gateway; do
     [ -x "$SHARD/$s" ] || { echo "нет шарда $SHARD/$s — cargo build"; exit 2; }
   done
+  command -v nats-server >/dev/null || { echo "нет nats-server в PATH"; exit 2; }
+  stack_reap   # хвост прошлого прогона на тех же портах
   nats-server -p 4222 >"$SB/nats.log" 2>&1 & PIDS+=($!)
-  sleep 1
+  wait_port 4222 || { echo "nats-server не поднялся (см. $SB/nats.log)"; exit 2; }
   # headless-клиенты перелогиниваются ~1-2 раза/с с 127.0.0.1 — лимиты по IP
   # и логину (identity) для e2e снимаем, иначе через ~15 с интро замирает
   env PARVANE_LOGIN_RATE=100000 PARVANE_LOGIN_RATE_IP=100000 \
@@ -31,7 +62,15 @@ stack_start() { # stack_start <scratch> [env-для-identity]
       PARVANE_LOG_LEVEL=info "$SHARD/$s" >"$SB/$s.log" 2>&1 & PIDS+=($!)
   done
   gateway_start
+  wait_port 9223
   sleep 2
+}
+stack_start() { # stack_start <scratch> [env-для-identity]
+  local sb="$1"; shift
+  # зомби прошлого прогона с тем же -workdir перехватит новый старт через локальный сокет
+  pkill -9 -f -- "-workdir $sb/" 2>/dev/null; sleep 0.5
+  rm -rf "$sb"
+  stack_up "$sb" "$@"
 }
 # gateway отдельно (перезапуск с другими лимитами: PV_GATEWAY_ENV="A=1 B=2")
 GW_PID=""
@@ -46,19 +85,24 @@ gateway_start() {
 # после tgx_link_e2e.sh «перезапускал» gateway, а новый экземпляр падал на занятом порту, 27 сен 2026)
 gateway_restart() {
   if [ -n "$GW_PID" ]; then kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null
-  else pkill -f "target/debug/[g]ateway" 2>/dev/null; fi
-  for _ in $(seq 1 50); do pgrep -f "target/debug/[g]ateway" >/dev/null || break; sleep 0.2; done
+  else for _p in $(stack_pids gateway); do kill "$_p" 2>/dev/null; done; fi
+  for _ in $(seq 1 50); do [ -z "$(stack_pids gateway)" ] && break; sleep 0.2; done
   sleep 1; gateway_start; sleep 2
   if ! kill -0 "$GW_PID" 2>/dev/null || tail -3 "$SB/gateway.log" | grep -aq "Address already in use"; then bad "gateway не перезапустился (см. $SB/gateway.log)"; fi
 }
+# Пароль тестовых аккаунтов: сервер требует не короче 8 символов (P-43),
+# прежний «test» больше не регистрируется.
+PV_PASSWORD="${PV_PASSWORD:-test-pass-2026}"
 # start_client <workdir> <user@server> [ENV=VAL ...] → pid; лог: <workdir>/td/log.txt
 start_client() {
   local work="$1" user="$2"; shift 2
   mkdir -p "$work/td"
   # tdesktop переписывает log.txt при каждом старте — прошлый прогон сохраняем
   [ -f "$work/td/log.txt" ] && mv "$work/td/log.txt" "$work/td/log.$(date +%s%N).txt"
-  env "$@" QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
-    PARVANE_AUTOLOGIN="$user:test" "$BIN" -workdir "$work/td" \
+  # ENV из аргументов — после умолчаний: вызывающий может их переопределить
+  # (например PARVANE_GATEWAY_URL=ws://127.0.0.1:9222/ws для WebSocket)
+  env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
+    PARVANE_AUTOLOGIN="$user:$PV_PASSWORD" "$@" "$BIN" -workdir "$work/td" \
     >>"$work/stdout.log" 2>&1 &
   echo $!
 }
@@ -80,7 +124,13 @@ stop_pid() {
   for _ in $(seq 1 50); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.2; done
   kill -9 "$1" 2>/dev/null; sleep 0.5
 }
-stack_stop() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; }
+# клиенты этого прогона (по -workdir внутри каталога прогона)
+clients_kill() { # clients_kill <каталог>...
+  local d
+  for d in "$@"; do [ -n "$d" ] && pkill -9 -f -- "-workdir $d/" 2>/dev/null; done
+  return 0
+}
+stack_stop() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; PIDS=(); }
 finish() { # finish <имя>
   [ "$RC" -eq 0 ] && printf '\033[32m%s: OK\033[0m\n' "$1" || printf '\033[31m%s: ЕСТЬ ПРОВАЛЫ\033[0m\n' "$1"
   exit "$RC"

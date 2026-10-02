@@ -194,6 +194,60 @@ int main() {
               "hangup → Ended + медиа закрыто");
     }
 
+    // ── 8. Второе устройство: свой ключ звонков в identity не принят → подпись
+    //       ключом устройства (Callbacks::sign); собеседник находит его среди
+    //       ключей устройств (peerPubkeys), а ключ из identity — чужой ──────────
+    {
+        auto callKey = SigningKey::generate();   // локальный ключ звонков (не опубликован)
+        auto deviceKey = SigningKey::generate(); // signing-ключ устройства из каталога
+        auto firstDevice = SigningKey::generate(); // ключ первого устройства в identity
+        auto sink = std::make_shared<Sink>();
+        CallSession::Callbacks cb;
+        cb.sendSignal = [sink](json j) { (*sink)(std::move(j)); };
+        cb.peerPubkey = [] { return std::string(); };
+        cb.sign = [&](const std::string &data) { return deviceKey.sign(data); };
+        CallSession s("bob@l", "alice@l", &callKey, std::make_unique<FakeMedia>(),
+                      std::move(cb));
+        s.start("audio");
+        const json *inv = sink->last("invite");
+        check(inv != nullptr, "sign-колбэк: invite отправлен");
+        if (inv) {
+            const auto data = callSignedData(s.callId(), "OFFER-SDP");
+            check(crypto::verify(deviceKey.publicB64(), data, inv->value("sig", "")),
+                  "sign-колбэк: invite подписан ключом устройства");
+            check(!crypto::verify(callKey.publicB64(), data, inv->value("sig", "")),
+                  "sign-колбэк: ключ звонков не использован");
+            // Принимающая сторона: в identity ключ первого устройства, ключ
+            // второго — только среди устройств → подпись принята.
+            auto sink2 = std::make_shared<Sink>();
+            CallSession::Callbacks rcb;
+            rcb.sendSignal = [sink2](json j) { (*sink2)(std::move(j)); };
+            rcb.peerPubkey = [&] { return firstDevice.publicB64(); };
+            rcb.peerPubkeys = [&] {
+                return std::vector<std::string>{deviceKey.publicB64()};
+            };
+            auto peerKey = SigningKey::generate();
+            CallSession r("alice@l", "bob@l", &peerKey, std::make_unique<FakeMedia>(),
+                          std::move(rcb));
+            r.onSignal(CallSignalIn::fromJson(*inv));
+            check(r.state() == CallState::Incoming && r.peerAuth() == PeerAuth::Verified,
+                  "подпись второго устройства принята по ключу из списка устройств");
+        }
+        // Пустой ответ колбэка → подписывает key (первое устройство, обычный путь).
+        auto sink3 = std::make_shared<Sink>();
+        CallSession::Callbacks cb3;
+        cb3.sendSignal = [sink3](json j) { (*sink3)(std::move(j)); };
+        cb3.sign = [](const std::string &) { return std::string(); };
+        CallSession s3("bob@l", "alice@l", &callKey, std::make_unique<FakeMedia>(),
+                       std::move(cb3));
+        s3.start("audio");
+        const json *inv3 = sink3->last("invite");
+        check(inv3 && crypto::verify(callKey.publicB64(),
+                                     callSignedData(s3.callId(), "OFFER-SDP"),
+                                     inv3->value("sig", "")),
+              "пустой sign-колбэк → подпись ключом звонков");
+    }
+
     std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

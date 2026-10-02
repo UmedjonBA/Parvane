@@ -6,36 +6,26 @@
 #   video_note → кружок. Плюс скриншот для ручного просмотра.
 # Так ловятся баги, которые не видны через отправку из content (буфер/запись).
 #
-# Поднимает свой чистый backend на временных БД (nats переиспользует).
+# Поднимает свой чистый backend на временных БД (verify_lib.sh: stack_up).
 set -u
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 export PATH="$HOME/.local/bin:$PATH"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 URL="nats://127.0.0.1:4222"
 TMP="$(mktemp -d /tmp/parvane-mediaall.XXXXXX)"
 PORT=5950
-RC=0
-PIDS=()
+CLIENTS=()
 
-ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
-bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 cleanup() {
-    for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null; done
-    pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null; pkill -x cloud 2>/dev/null
+    for p in "${CLIENTS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
+    stack_stop
     rm -rf "$TMP"
 }
 trap cleanup EXIT
 
-[ -x "$BIN" ] || { echo "нет бинаря $BIN"; exit 2; }
-
-# чистый backend (гасим дубли — иначе JWT-рассинхрон разных identity)
-pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null; pkill -x cloud 2>/dev/null; sleep 1
-pgrep -x nats-server >/dev/null || { setsid nohup nats-server >"$TMP/nats.log" 2>&1 </dev/null & disown; sleep 1; }
-setsid nohup env PARVANE_DB_PATH="$TMP/id.db"    "$SHARD/identity"  >"$TMP/id.log"    2>&1 </dev/null & disown
-setsid nohup env PARVANE_DB_PATH="$TMP/msg.db"   "$SHARD/messenger" >"$TMP/msg.log"   2>&1 </dev/null & disown
-setsid nohup env PARVANE_DB_PATH="$TMP/cloud.db" "$SHARD/cloud"     >"$TMP/cloud.log" 2>&1 </dev/null & disown
-sleep 2.5
-grep -q "NATS подключён" "$TMP/msg.log" || { echo "backend не поднялся"; exit 2; }
+# чистый backend на временных БД (общий подъём стека из verify_lib.sh)
+stack_up "$TMP/stack"
+wait_log "$TMP/stack/messenger.log" "NATS подключён" 10 || { echo "backend не поднялся"; exit 2; }
 
 # тестовые файлы
 ffmpeg -y -f lavfi -i "sine=frequency=440:duration=2" -c:a libopus "$TMP/v.ogg" >/dev/null 2>&1
@@ -46,9 +36,9 @@ printf 'parvane doc \x00\x01 %s' "$(date +%s)" > "$TMP/d.bin"
 # VNC-приёмник rob
 WD="$TMP/rob"; mkdir -p "$WD"
 setsid nohup env QT_QPA_PLATFORM="vnc:port=$PORT,size=1280x800" QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1 \
-  XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" PARVANE_NATS_URL="$URL" PARVANE_AUTOLOGIN='rob@local:test' \
+  XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" PARVANE_NATS_URL="$URL" PARVANE_AUTOLOGIN="rob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$WD/td" >"$WD/o.log" 2>&1 </dev/null & disown
-PIDS+=($!)
+CLIENTS+=($!)
 sleep 6
 
 # шлём все типы от sam

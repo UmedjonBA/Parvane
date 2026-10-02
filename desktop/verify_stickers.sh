@@ -7,9 +7,7 @@
 #   4) без фатальных ошибок.
 # Пользователи: A_USER/B_USER (default alice/bob@local, пароль test).
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 A_USER="${A_USER:-alice@local}"
 B_USER="${B_USER:-bob@local}"
 A_WORK="$(mktemp -d /tmp/parvane-stk-alice.XXXXXX)"
@@ -22,8 +20,9 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-nats --server "$URL" req identity.token.issue "{\"user\":\"$A_USER\",\"password\":\"test\"}" \
-    >/dev/null 2>&1 || { echo "identity не отвечает — запусти шарды"; exit 2; }
+# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
+# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+STACK="$(mktemp -d /tmp/parvane-stickers-stack.XXXXXX)"; stack_up "$STACK"
 
 # Тестовый пак: 3 PNG-стикера генерируются на лету.
 PACKS="$A_WORK/packs"
@@ -58,17 +57,17 @@ echo "alice workdir: $A_WORK"
 echo "bob   workdir: $B_WORK"
 
 # bob первым (prekeys ДО отправки ему — см. verify_two_instances.sh).
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" \
-  PARVANE_AUTOLOGIN="$B_USER:test" \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
+  PARVANE_AUTOLOGIN="$B_USER:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 &
 B_PID=$!
 for i in $(seq 1 30); do
     grep -q "Parvane: E2E-устройство готово" "$B_LOG" 2>/dev/null && break
     sleep 1
 done
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_STICKERS_DIR="$PACKS" \
-  PARVANE_AUTOLOGIN="$A_USER:test" PARVANE_AUTOSTICKER="$B_USER" \
+  PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSTICKER="$B_USER" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout.log" 2>&1 &
 A_PID=$!
 
@@ -93,6 +92,7 @@ grep -qE "kind=sticker.*→ скачивание" "$B_LOG"                    &&
 grep -q "Parvane: получено медиа" "$B_LOG"                        && ok "bob: стикер скачан и инъецирован" || bad "bob: стикер не инъецирован"
 grep -qiE "Fatal|Unexpected in " "$A_LOG" "$B_LOG"                && bad "фатальная ошибка в логе"        || ok "без фатальных ошибок"
 
-rm -rf "$A_WORK" "$B_WORK"
+[ "$RC" -eq 0 ] && rm -rf "$A_WORK" "$B_WORK" || echo "логи: $A_WORK $B_WORK"
 [ "$RC" -eq 0 ] && printf '\033[32mСТИКЕРЫ E2E: OK\033[0m\n' || printf '\033[31mСТИКЕРЫ E2E: ЕСТЬ ПРОВАЛЫ\033[0m\n'
+stack_stop
 exit "$RC"

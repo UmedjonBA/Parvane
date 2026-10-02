@@ -1105,12 +1105,14 @@ void BuildPrivacySection(SectionBuilder &builder) {
 		privacy->newRequirePremium(),
 		privacy->newChargeStars()
 	) | rpl::map([=](bool requirePremium, int chargeStars) {
+		// Parvane: ограничение — «только те, кому писал(а) я» (T079).
 		return chargeStars
 			? tr::lng_edit_privacy_paid()
 			: requirePremium
-			? tr::lng_edit_privacy_contacts_and_premium()
+			? tr::lng_messages_privacy_restricted()
 			: tr::lng_edit_privacy_everyone();
 	}) | rpl::flatten_latest();
+	privacy->reload(); // Parvane: значение — из локальной настройки
 
 	const auto messagesPremium = !session->appConfig().newRequirePremiumFree();
 	const auto messagesButton = builder.addButton({
@@ -1122,6 +1124,8 @@ void BuildPrivacySection(SectionBuilder &builder) {
 			controller->show(Box(EditMessagesPrivacyBox, controller, QString()));
 		},
 		.keywords = { u"messages"_q, u"new"_q, u"unknown"_q },
+		// Parvane: настройка есть только у протокола v2 (T079)
+		.shown = rpl::single(Parvane::StrangersPolicyAvailable()),
 	});
 	if (messagesPremium && messagesButton) {
 		AddPrivacyPremiumStar(

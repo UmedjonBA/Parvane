@@ -33,7 +33,7 @@ done
 wait_log "$B/td/log.txt" "группа $GID обновлена \(v0, список\)" 40 \
   && ok "bob получил группу из списка с ревизией v0" || bad "bob не получил группу из списка"
 
-TOKEN=$("$NATS" --server "$URL" req identity.token.issue '{"user":"alice@local","password":"test"}' 2>/dev/null \
+TOKEN=$("$NATS" --server "$URL" req identity.token.issue '{"user":"alice@local","password":"'"${PV_PASSWORD:-test-pass-2026}"'"}' 2>/dev/null \
   | grep -o '{.*}' | head -1 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
 [ -n "$TOKEN" ] && ok "токен alice получен" || bad "нет токена alice"
 req() { "$NATS" --server "$URL" req "$1" "$2" 2>/dev/null | grep -o '{.*}' | head -1; }

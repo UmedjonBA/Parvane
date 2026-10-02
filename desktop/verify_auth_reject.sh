@@ -27,7 +27,12 @@ sleep 2; stop_pid "$BP"; stop_pid "$P"
 [ -s "$CREDS" ] && ok "учётные данные на диске" || bad "нет $CREDS"
 
 # 2) битый JWT → отказ авторизации без падения, экран входа, повторный вход
-ADDR=$(head -1 "$CREDS"); printf '%s\nexpired.jwt.token\n' "$ADDR" > "$CREDS"
+# После P-13 файл зашифрован (PVSE1) — адрес берём из лога, а битый токен
+# кладём plain: чтение storecrypt принимает plain (миграция старых профилей),
+# так что это тот же «подменённый/просроченный JWT на диске».
+ADDR=$(grep -aoE "сессия поднята для [^ ]+" "$A/td/log.txt" | tail -1 | awk '{print $NF}')
+grep -aq "^PVSE1" "$CREDS" && ok "учётные данные на диске зашифрованы (P-13)" || bad "учётные данные лежат открыто"
+printf '%s\nexpired.jwt.token\n' "${ADDR:-alice@local}" > "$CREDS"
 P=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$A/td/log.txt" "логин-состояние восстановлено с диска" 40 || bad "сессия не восстановилась с диска"
 wait_log "$A/td/log.txt" "авторизация отклонена .*на экран входа" 40 && ok "отказ JWT распознан" || bad "отказ JWT не распознан"

@@ -39,8 +39,13 @@ void CallSession::setState(CallState s) {
 }
 
 std::string CallSession::signSdp(const std::string &sdp) const {
+    const auto data = callSignedData(callId_, sdp);
+    if (cb_.sign) {
+        auto own = cb_.sign(data);
+        if (!own.empty()) return own;
+    }
     if (!key_) return "";
-    return key_->sign(callSignedData(callId_, sdp));
+    return key_->sign(data);
 }
 
 bool CallSession::authenticateSdp(const std::string &sdp, const std::string &sig) {

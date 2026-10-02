@@ -14,7 +14,7 @@ BP=$(start_client "$B" bob@local)
 wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob: устройство не готово"
 # alice — по WebSocket
 env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='ws://127.0.0.1:9222/ws' \
-  PARVANE_AUTOLOGIN="alice@local:test" PARVANE_AUTOSEND="bob@local:ws-hello-$STAMP" \
+  PARVANE_AUTOLOGIN="alice@local:$PV_PASSWORD" PARVANE_AUTOSEND="bob@local:ws-hello-$STAMP" \
   "$BIN" -workdir "$A/td" >>"$A/stdout.log" 2>&1 & AP=$!
 wait_log "$A/td/log.txt" "E2E-устройство готово" 40 && ok "alice: логин и устройство через WebSocket" || bad "alice: нет устройства через WS"
 grep -q "транспорт gateway WebSocket ws://127.0.0.1:9222/ws" "$A/td/log.txt" && ok "alice: транспорт WebSocket в логе" || bad "alice: в логе нет WebSocket-транспорта"

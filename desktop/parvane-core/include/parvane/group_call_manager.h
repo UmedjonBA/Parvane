@@ -28,6 +28,8 @@ public:
         std::function<std::string(std::string peer)> peerPubkey;
         // Ключи подписи всех устройств собеседника (см. CallSession::Callbacks)
         std::function<std::vector<std::string>(std::string peer)> peerPubkeys;
+        // Своя подпись вместо key (см. CallSession::Callbacks::sign); "" → key.
+        std::function<std::string(const std::string &data)> sign;
     };
 
     GroupCallManager(CallClient &calls, std::string selfAddr, std::string token,

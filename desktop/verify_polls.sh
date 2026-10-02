@@ -8,9 +8,7 @@
 #   5) без фатальных ошибок.
 # Пользователи переопределяются: A_USER=palice@local B_USER=pbob@local ./verify_polls.sh
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 A_USER="${A_USER:-alice@local}"
 B_USER="${B_USER:-bob@local}"
 STAMP="$(date +%s)"
@@ -25,20 +23,21 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-nats --server "$URL" req identity.token.issue "{\"user\":\"$A_USER\",\"password\":\"test\"}" \
-    >/dev/null 2>&1 || { echo "identity не отвечает — запусти шарды"; exit 2; }
+# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
+# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+STACK="$(mktemp -d /tmp/parvane-polls-stack.XXXXXX)"; stack_up "$STACK"
 
 echo "alice workdir: $A_WORK"
 echo "bob   workdir: $B_WORK"
 
 # Сначала bob (его prekeys должны быть опубликованы до sealFor у alice).
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" \
-  PARVANE_AUTOLOGIN="$B_USER:test" PARVANE_AUTOVOTE='1' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
+  PARVANE_AUTOLOGIN="$B_USER:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOVOTE='1' \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 &
 B_PID=$!
 sleep 4
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" \
-  PARVANE_AUTOLOGIN="$A_USER:test" \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
+  PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOPOLL="$B_USER:$QUESTION:вариант А,вариант Б,вариант В" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout.log" 2>&1 &
 A_PID=$!
@@ -66,8 +65,8 @@ grep -qiE "Fatal|Unexpected in " "$A_LOG" "$B_LOG"        && bad "фатальн
 
 # ── Фаза 2: рестарт alice — опрос и голос переживают рестарт (журнал) ────────
 mv "$A_LOG" "$A_WORK/td/log.first.txt"
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" \
-  PARVANE_AUTOLOGIN="$A_USER:test" \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
+  PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout2.log" 2>&1 &
 A_PID=$!
 for i in $(seq 1 30); do
@@ -80,6 +79,7 @@ kill "$A_PID" 2>/dev/null; wait "$A_PID" 2>/dev/null
 grep -q "Parvane: опрос .* инъецирован" "$A_LOG"            && ok "alice: опрос восстановлен после рестарта" || bad "alice: опрос НЕ восстановлен"
 grep -q "Parvane: опрос .* — poll_vote от $B_USER" "$A_LOG" && ok "alice: голос восстановлен после рестарта" || bad "alice: голос НЕ восстановлен"
 
-rm -rf "$A_WORK" "$B_WORK"
+[ "$RC" -eq 0 ] && rm -rf "$A_WORK" "$B_WORK" || echo "логи: $A_WORK $B_WORK"
 [ "$RC" -eq 0 ] && printf '\033[32mОПРОСЫ E2E: OK\033[0m\n' || printf '\033[31mОПРОСЫ E2E: ЕСТЬ ПРОВАЛЫ\033[0m\n'
+stack_stop
 exit "$RC"

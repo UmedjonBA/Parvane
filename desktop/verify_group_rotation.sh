@@ -9,7 +9,7 @@
 #   4) carol НЕ получила msg2 (удалена: и сервером не фанится, и ключа новой сессии нет);
 #   5) плейнтекста msg2 нет в messenger.db.
 set -u
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 URL="nats://127.0.0.1:4222"
 SB="${SCRATCH:-/tmp/parvane-grprot}"; rm -rf "$SB"; mkdir -p "$SB"
 STAMP="$(date +%s)"; GNAME="РотГруппа"
@@ -20,20 +20,15 @@ RC=0
 ok(){ printf '\033[32mok  \033[0m %s\n' "$*"; }; bad(){ printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 [ -x "$BIN" ] || { echo "нет бинаря $BIN"; exit 2; }
 
-nats-server -p 4222 >"$SB/nats.log" 2>&1 & NATS=$!; sleep 1
-for s in identity messenger; do
-  PARVANE_NATS_URL="$URL" PARVANE_DB_PATH="$SB/$s.db" PARVANE_LOG_LEVEL=warn "$SHARD/$s" >"$SB/$s.log" 2>&1 &
-done
-PARVANE_NATS_URL="$URL" PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 PARVANE_GATEWAY_BIND=127.0.0.1:9222 \
-  PARVANE_LOG_LEVEL=warn "$SHARD/gateway" >"$SB/gw.log" 2>&1 & GW=$!; sleep 2
+stack_up "$SB"
 
 # bob и carol первыми (успеют опубликовать prekeys + подхватить группу).
-QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN='bob@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B" >"$B/out.log" 2>&1 & BP=$!
-QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN='carol@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="carol@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$C" >"$C/out.log" 2>&1 & CP=$!
 sleep 2
-QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN='alice@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOGROUP="$GNAME:bob@local,carol@local" \
   PARVANE_AUTOGROUPSEND="$GNAME:$M1" PARVANE_AUTOGROUPSEND2="$GNAME:$M2" \
   "$BIN" -workdir "$A" >"$A/out.log" 2>&1 & AP=$!
@@ -51,7 +46,7 @@ GID=$(grep -a "группа '$GNAME' создана" "$AL" 2>/dev/null | grep -o
 [ -n "$GID" ] && ok "группа создана ($GID)" || bad "GID не найден"
 
 # Удаляем carol (owner alice): берём её токен и шлём group.removemember.
-TOKRESP=$(nats --server "$URL" req identity.token.issue '{"user":"alice@local","password":"test"}' 2>/dev/null | grep -o '{.*}' | head -1)
+TOKRESP=$(nats --server "$URL" req identity.token.issue '{"user":"alice@local","password":"'"${PV_PASSWORD:-test-pass-2026}"'"}' 2>/dev/null | grep -o '{.*}' | head -1)
 TOKEN=$(printf '%s' "$TOKRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
 if [ -n "$TOKEN" ] && [ -n "$GID" ]; then
   nats --server "$URL" req group.removemember \
@@ -88,6 +83,6 @@ else
   ok "плейнтекст msg2 отсутствует в messenger.db"
 fi
 
-kill "$GW" "$NATS" 2>/dev/null; pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null
+clients_kill "$SB"; stack_stop
 [ "$RC" -eq 0 ] && printf '\033[32mРОТАЦИЯ ГРУПП: OK\033[0m\n' || printf '\033[31mРОТАЦИЯ ГРУПП: ПРОВАЛЫ\033[0m\n'
 exit "$RC"

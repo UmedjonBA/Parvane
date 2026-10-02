@@ -168,6 +168,13 @@ void CallPanel::paintBody(QPainter &p) {
 void CallPanel::layout() {
 	const auto w = _gl.widget()->width();
 	const auto h = _gl.widget()->height();
+	if (w <= 0 || h <= 0) {
+		// Тело ещё без размера (первое значение sizeValue до раскладки окна;
+		// в offscreen-прогоне — всегда): VideoBubble::updateGeometry требует
+		// непустой прямоугольник, иначе Expects роняет процесс — видеозвонок
+		// падал сразу после открытия панели. Раскладка повторится по sizeValue.
+		return;
+	}
 	// Позиции берём из общего стиля родной панели звонка (calls.style).
 	const auto &body = st::callBodyLayout;
 	// Область кнопок снизу; тело (аватар/имя/статус) центрируем над ней.
@@ -198,8 +205,7 @@ void CallPanel::layout() {
 			body.muteStroke);
 	}
 	// Своя камера — небольшая врезка снизу справа (self-preview).
-	if (_localVideo) {
-		const int pw = w / 5, ph = pw * 3 / 4;
+	if (const int pw = w / 5, ph = pw * 3 / 4; _localVideo && pw > 0 && ph > 0) {
 		_localVideo->updateGeometry(
 			Calls::VideoBubble::DragMode::None,
 			QRect(w - pw - 16, h - buttonsArea - ph - 16, pw, ph));

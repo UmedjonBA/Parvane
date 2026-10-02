@@ -108,6 +108,59 @@ int main() {
         check(allOk, "300 seal/open без ложного plain");
     }
 
+    {
+        // Журналы с именем не *.jsonl (v2-ids, READ-1, очищенные чаты): миграция
+        // не запечатывает их целиком, а уже испорченные — читает и чинит.
+        namespace sc = parvane::storecrypt;
+        sc::setKey(sc::deriveKey("os-secret"));
+        const auto rawOf = [](const std::string &path) {
+            std::ifstream f(path, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        };
+        const auto put = [](const std::string &path, const std::string &data) {
+            std::ofstream f(path, std::ios::binary | std::ios::trunc);
+            f << data;
+        };
+        const auto base = std::filesystem::temp_directory_path() / "pv-storecrypt-lines";
+        std::filesystem::remove_all(base);
+        std::filesystem::create_directories(base);
+
+        // (а) обычный путь: строки дописаны запечатанными, рестарт (миграция), ещё строка
+        const auto ids = (base / "v2-ids.txt").string();
+        check(sc::appendLine(ids, "uuid-1 bob@local") && sc::appendLine(ids, "uuid-2 bob@local"), "журнал .txt: appendLine");
+        check(sc::migrateFile(ids) == 0, "журнал .txt: миграция не трогает построчный файл");
+        check(rawOf(ids).rfind("PVSE1:", 0) == 0, "журнал .txt: остался построчным");
+        check(sc::appendLine(ids, "uuid-3 bob@local"), "журнал .txt: дозапись после рестарта");
+        auto got = sc::readLines(ids);
+        check(got.size() == 3 && got[0] == "uuid-1 bob@local" && got[2] == "uuid-3 bob@local", "журнал .txt: все строки читаются");
+
+        // (б) файл, испорченный прежней миграцией: голова запечатана целиком, следом строки
+        const auto read = (base / "read.txt").string();
+        const std::string head = rawOf(ids); // три запечатанные строки
+        put(read, sc::seal(head));
+        check(sc::appendLine(read, "uuid-4 bob@local"), "испорченный журнал: дозапись строки");
+        got = sc::readLines(read);
+        check(got.size() == 4 && got[0] == "uuid-1 bob@local" && got[3] == "uuid-4 bob@local",
+              "испорченный журнал: голова и дописанные строки читаются");
+        check(sc::migrateFile(read) == 1 && rawOf(read).rfind("PVSE1:", 0) == 0, "испорченный журнал: починен в построчный вид");
+        check(sc::readLines(read).size() == 4 && sc::migrateFile(read) == 0, "починенный журнал: строки на месте, повторной миграции нет");
+
+        // (в) старый plain-журнал: первая миграция запечатала целиком, потом дозапись
+        const auto cleared = (base / "cleared.txt").string();
+        put(cleared, "alice@local 100\nbob@local 200\n");
+        check(sc::migrateFile(cleared) == 1, "plain-журнал: первая миграция");
+        check(sc::readLines(cleared).size() == 2, "plain-журнал: читается после миграции");
+        check(sc::appendLine(cleared, "carol@local 300"), "plain-журнал: дозапись");
+        got = sc::readLines(cleared);
+        check(got.size() == 3 && got[0] == "alice@local 100" && got[2] == "carol@local 300", "plain-журнал: все строки читаются");
+        check(sc::migrateFile(cleared) == 1 && sc::readLines(cleared).size() == 3, "plain-журнал: починен при следующем запуске");
+
+        // обычный файл целиком по-прежнему не трогается
+        const auto whole = (base / "session.txt").string();
+        check(sc::writeFile(whole, "token") && sc::migrateFile(whole) == 0 && sc::readFile(whole) == "token", "обычный файл: без изменений");
+        std::filesystem::remove_all(base);
+    }
+
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;
 }

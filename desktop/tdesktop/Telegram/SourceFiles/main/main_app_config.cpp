@@ -554,9 +554,9 @@ std::vector<int64> AppConfig::getInt64Array(
 }
 
 bool AppConfig::newRequirePremiumFree() const {
-	return get<bool>(
-		u"new_noncontact_peers_require_premium_without_ownpremium"_q,
-		false);
+	// Parvane: Premium нет — ограничение «кто может писать мне» (T079,
+	// identity.privacy.set) доступно всем.
+	return true;
 }
 
 auto AppConfig::groupCallColorings() const -> std::vector<StarsColoring> {

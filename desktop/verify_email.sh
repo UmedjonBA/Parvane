@@ -4,7 +4,8 @@
 # отклоняется; релогин подтверждённого — без кода.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
-stack_start "${SCRATCH:-/tmp/parvane-email}" PARVANE_EMAIL_REQUIRED=1
+# P-42: identity пишет код в лог только в dev-режиме (PARVANE_DEV=1)
+stack_start "${SCRATCH:-/tmp/parvane-email}" PARVANE_EMAIL_REQUIRED=1 PARVANE_DEV=1
 C="$SB/carol"; CODEF="$SB/code.txt"
 PC=$(start_client "$C" carol@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOEMAIL=carol@example.com PARVANE_AUTOCODE_FILE="$CODEF")
 wait_log "$SB/identity.log" "код подтверждения для carol@example.com: [0-9]{6}" 40 && ok "identity выслал код (dev-режим)" || bad "кода нет в логе identity"

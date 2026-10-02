@@ -126,6 +126,7 @@ void GatewayWsTransport::connectUrl(const std::string &url) {
         fd_ = -1;
         throw;
     }
+    upgradeRequiredConn_ = false;
     running_ = true;
     reader_ = std::thread(&GatewayWsTransport::readerLoop, this);
     lastUrl_ = url;
@@ -281,9 +282,16 @@ void GatewayWsTransport::sendLine(const std::string &frame) {
     sendFrame(0x1, frame);
 }
 
+void GatewayWsTransport::sendBinary(const std::string &frame) {
+    std::lock_guard<std::mutex> lk(writeMu_);
+    if (fd_ < 0 || !running_) throw GatewayError("gateway ws: не подключено");
+    sendFrame(0x2, frame);
+}
+
 void GatewayWsTransport::readerLoop() {
     std::string acc;
     std::string message; // сборка фрагментированного сообщения
+    unsigned messageOpcode = 0; // опкод первого фрагмента (1 — текст, 2 — двоичное)
     char buf[16384];
     while (running_) {
         const int n = readRaw(buf, sizeof(buf));
@@ -334,9 +342,14 @@ void GatewayWsTransport::readerLoop() {
             }
             if (opcode == 0xA) continue; // pong
             if (opcode == 0x1 || opcode == 0x2 || opcode == 0x0) {
+                if (opcode != 0x0) messageOpcode = opcode;
                 message += payload;
                 if (fin) {
-                    dispatch(message);
+                    if (messageOpcode == 0x2 && binaryHandler_) {
+                        binaryHandler_(std::move(message));
+                    } else {
+                        dispatch(message);
+                    }
                     message.clear();
                 }
             }
@@ -344,6 +357,7 @@ void GatewayWsTransport::readerLoop() {
     }
     running_ = false;
     abortPending("соединение с gateway потеряно"); // ждущие request не висят до таймаута
+    if (closedHandler_) closedHandler_();
 }
 
 void GatewayWsTransport::close() {

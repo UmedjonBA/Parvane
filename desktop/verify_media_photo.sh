@@ -9,11 +9,9 @@
 #   4) без фатальных ошибок.
 # Визуальный inline-рендер подтверждается в GUI — headless проверяет контракт.
 #
-# Требует запущенные nats + identity + messenger + cloud и собранный бинарь.
+# Стек поднимает сам (verify_lib.sh); нужен собранный бинарь.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 NATS="${NATS_BIN:-$HOME/.local/bin/nats}"
 A_WD="$(mktemp -d /tmp/pv-ph-alice.XXXXXX)"; B_WD="$(mktemp -d /tmp/pv-ph-bob.XXXXXX)"
 A_LOG="$A_WD/td/log.txt"; B_LOG="$B_WD/td/log.txt"
@@ -24,8 +22,9 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-"$NATS" --server "$URL" req identity.token.issue '{"user":"alice@local","password":"test"}' \
-    >/dev/null 2>&1 || { echo "identity не отвечает — запусти шарды"; exit 2; }
+# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
+# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+STACK="$(mktemp -d /tmp/parvane-media-photo-stack.XXXXXX)"; stack_up "$STACK"
 
 # Настоящий PNG 320x240 (без внешних либ).
 python3 - "$PNG" <<'PY'
@@ -51,18 +50,18 @@ echo "PNG: $(stat -c%s "$PNG") байт (320x240)"
 # bob стартует и делает полный ресинк (since=0) — он реплеит СТАРЫЕ фото из
 # истории мессенджера. Поэтому изолируемся: даём ресинку осесть, считаем фото-
 # строки ДО отправки, потом ждём прироста именно от нашего PNG.
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_AUTOLOGIN='bob@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WD/td" >"$B_WD/out.log" 2>&1 &
 BPID=$!
 sleep 6  # дать стартовому ресинку слить старую историю
-BEFORE=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || echo 0)
+BEFORE=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || true); BEFORE=${BEFORE:-0}
 
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_AUTOLOGIN='alice@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOSENDFILE="bob@local:$PNG" "$BIN" -workdir "$A_WD/td" >"$A_WD/out.log" 2>&1 &
 APID=$!
 # ждём отправку у alice И новую фото-строку у bob (сверх BEFORE).
 for i in $(seq 1 30); do
-    AFTER=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || echo 0)
+    AFTER=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || true); AFTER=${AFTER:-0}
     [ "$AFTER" -gt "$BEFORE" ] \
         && grep -q "Parvane: медиа отправлено" "$A_LOG" 2>/dev/null && break
     sleep 1
@@ -70,7 +69,7 @@ done
 sleep 1
 kill "$APID" "$BPID" 2>/dev/null; wait "$APID" "$BPID" 2>/dev/null
 
-AFTER=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || echo 0)
+AFTER=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || true); AFTER=${AFTER:-0}
 echo "── BOB (новые фото за прогон: $((AFTER-BEFORE))) ──"
 grep "Parvane: получено фото.*alice@local" "$B_LOG" 2>/dev/null | tail -1
 
@@ -82,6 +81,7 @@ echo "$PHOTO_LINE" | grep -q "320x240" && ok "размеры картинки р
 grep -qiE "Fatal|Unexpected in |ошибка скачивания|не записать" "$A_LOG" "$B_LOG" 2>/dev/null \
     && bad "ошибка в логе" || ok "без фатальных ошибок"
 
-rm -rf "$A_WD" "$B_WD"
+[ "$RC" -eq 0 ] && rm -rf "$A_WD" "$B_WD" || echo "логи: $A_WD $B_WD"
 [ "$RC" -eq 0 ] && printf '\033[32mINLINE-ФОТО: OK\033[0m\n' || printf '\033[31mINLINE-ФОТО: ЕСТЬ ПРОВАЛЫ\033[0m\n'
+stack_stop
 exit "$RC"

@@ -19,7 +19,10 @@ constexpr int kTileSize = 256;
 // Зум статичной карты — как DEFAULT_MAP_CONFIG.zoom в web Location.tsx.
 // Штатный tdesktop просит z13; берём зум веба, чтобы карты совпадали.
 constexpr int kDefaultZoom = 16;
-constexpr int kMaxZoom = 19;          // TILE_MAX_ZOOM шарда preview
+// P-23: предел зума = TILE_MAX_ZOOM шарда preview и MAP_MAX_ZOOM web (media.ts):
+// серверу и OSM уходит окрестность (~1 км), а не точка. Запрошенный z16
+// computeGeometry срезает до 15; тайл z16 шард отвергает («тайл вне диапазона»).
+constexpr int kMaxZoom = 15;
 constexpr int kTileCacheLimit = 200;  // TILE_CACHE_LIMIT web
 constexpr int kTileTimeoutMs = 15000; // MAP_TILE_TIMEOUT_MS web (холодный тайл > 3 с)
 constexpr int kTileRetryMs = 1500;    // MAP_TILE_RETRY_MS web

@@ -4,8 +4,10 @@
 # Проверяет: авто-регистрация+логин+auth через gateway, отправка, приём
 # (inbox push Фазы 1), двусторонний обмен.
 set -u
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
-SB="${SCRATCH:-/tmp/parvane-p0c}"; mkdir -p "$SB"; rm -f "$SB"/*.db*
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
+# каталог чистим целиком: профили клиентов прошлого прогона (сессия, Olm-сессии)
+# против свежих серверных БД дают «НЕ расшифровано» — второй прогон подряд падал
+SB="${SCRATCH:-/tmp/parvane-p0c}"; rm -rf "$SB"; mkdir -p "$SB"
 STAMP="$(date +%s)"
 A_WORK="$SB/alice"; B_WORK="$SB/bob"; mkdir -p "$A_WORK/td" "$B_WORK/td"
 A_LOG="$A_WORK/td/log.txt"; B_LOG="$B_WORK/td/log.txt"
@@ -16,21 +18,14 @@ bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 [ -x "$BIN" ] || { echo "нет бинаря $BIN"; exit 2; }
 
 # стек
-nats-server -p 4222 >"$SB/nats.log" 2>&1 & NATS=$!
-sleep 1
-for s in identity messenger; do
-  PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/$s.db" PARVANE_LOG_LEVEL=warn "$SHARD/$s" >"$SB/$s.log" 2>&1 &
-done
-PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 \
-  PARVANE_GATEWAY_BIND=127.0.0.1:9222 PARVANE_LOG_LEVEL=info "$SHARD/gateway" >"$SB/gateway.log" 2>&1 & GW=$!
-sleep 2
+stack_up "$SB"
 
 # два форка ТОЛЬКО через gateway (PARVANE_NATS_URL НЕ задаём)
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
-  PARVANE_AUTOLOGIN='alice@local:test' PARVANE_AUTOSEND="bob@local:$A_TEXT" \
+  PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="bob@local:$A_TEXT" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout.log" 2>&1 & A_PID=$!
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
-  PARVANE_AUTOLOGIN='bob@local:test' PARVANE_AUTOSEND="alice@local:$B_TEXT" \
+  PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="alice@local:$B_TEXT" \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 & B_PID=$!
 
 for i in $(seq 1 45); do
@@ -51,7 +46,6 @@ grep -q "(alice@local): $A_TEXT" "$B_LOG" && ok "bob получил (через 
 grep -q "(bob@local): $B_TEXT"   "$A_LOG" && ok "alice получила (через gateway)"|| bad "alice не получила"
 grep -qiE "Fatal|Unexpected in " "$A_LOG" "$B_LOG" && bad "фатальная ошибка" || ok "без фатальных"
 
-kill "$GW" "$NATS" 2>/dev/null
-pkill -x identity 2>/dev/null; pkill -x messenger 2>/dev/null
+clients_kill "$SB"; stack_stop
 [ "$RC" -eq 0 ] && printf '\033[32mФАЗА 0/1 КЛИЕНТ (gateway): OK\033[0m\n' || printf '\033[31mФАЗА 0/1 КЛИЕНТ: ПРОВАЛЫ\033[0m\n'
 exit "$RC"

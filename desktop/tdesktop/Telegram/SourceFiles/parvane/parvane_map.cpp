@@ -223,6 +223,18 @@ void RequestLocationMap(
 				.arg(lat).arg(lon).arg(geometry.zoom)
 				.arg(canvas.width()).arg(canvas.height())
 				.arg(ok).arg(total));
+			if (ok < total) {
+				// Часть тайлов не пришла (preview/сеть): показываем что есть и
+				// ставим точку в очередь повторов — иначе пузырь оставался с
+				// дырами до рестарта (готовые тайлы повтор берёт из LRU).
+				LOG(("Parvane: карта локации собрана частично %1,%2 — повтор")
+					.arg(lat).arg(lon));
+				{
+					std::lock_guard<std::mutex> lk(g_mapMutex);
+					g_requested.erase(key);
+				}
+				noteFailed(sessionPtr, imagePtr, key);
+			}
 		});
 	});
 }

@@ -1,7 +1,8 @@
 // Parvane fork: живой e2e gateway + доставка Фазы 1. Проверяет:
 //  1) register+login+auth через gateway;
-//  2) ДОСТАВКА: alice→bob, bob получает push в свой инбокс и шлёт ack,
-//     отправитель alice получает delivered после ack;
+//  2) ДОСТАВКА: alice→bob (E2E-конверт; plaintext gateway отвергает, P-22),
+//     bob получает push в свой инбокс и шлёт ack, отправитель alice получает
+//     delivered после ack;
 //  3) ИЗОЛЯЦИЯ: carol НЕ может слушать инбокс bob (gateway отвергает подписку).
 // Нужен запущенный стек: nats + identity + messenger + gateway (TCP).
 // Использование: parvane_gateway_probe [host] [tcp_port]
@@ -44,9 +45,9 @@ int main(int argc, char **argv) {
         bob.connect(host, port);
         carol.connect(host, port);
 
-        const auto aliceToken = tokenFor(alice, "alice@local", "pw-alice");
-        const auto bobToken = tokenFor(bob, "bob@local", "pw-bob");
-        const auto carolToken = tokenFor(carol, "carol@local", "pw-carol");
+        const auto aliceToken = tokenFor(alice, "alice@local", "probe-pass-alice");
+        const auto bobToken = tokenFor(bob, "bob@local", "probe-pass-bob");
+        const auto carolToken = tokenFor(carol, "carol@local", "probe-pass-carol");
         alice.authenticate(aliceToken);
         bob.authenticate(bobToken);
         carol.authenticate(carolToken);
@@ -84,12 +85,29 @@ int main(int argc, char **argv) {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-        // alice → bob
+        // alice → bob открытым текстом: gateway принимает в msg.chat.send только
+        // E2E-контент (P-22) — plaintext до шины дойти не должен.
+        json plain = {
+            {"id", "00000000-0000-7000-8000-000000000ab0"},
+            {"from", "alice@local"}, {"ts", 1}, {"token", aliceToken},
+            {"payload", {{"to", "bob@local"},
+                         {"content", {{"kind", "text"}, {"text", "привет из Фазы 1"}}},
+                         {"reply_to", nullptr}}},
+        };
+        alice.publish("msg.chat.send", plain.dump());
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        const bool plaintextDelivered = bobGotMsg.load();
+
+        // alice → bob E2E-конвертом (шифртекст серверу непрозрачен — проверяем
+        // доставку, а не крипто: его покрывают parvane_e2e_tests).
         json ev = {
             {"id", "00000000-0000-7000-8000-000000000abc"},
             {"from", "alice@local"}, {"ts", 1}, {"token", aliceToken},
             {"payload", {{"to", "bob@local"},
-                         {"content", {{"kind", "text"}, {"text", "привет из Фазы 1"}}},
+                         {"content", {{"kind", "encrypted"},
+                                      {"ciphertext", "cHJvYmUtY2lwaGVydGV4dA"},
+                                      {"ctype", 0},
+                                      {"sender_identity", "cHJvYmUtaWRlbnRpdHk"}}},
                          {"reply_to", nullptr}}},
         };
         alice.publish("msg.chat.send", ev.dump());
@@ -101,7 +119,9 @@ int main(int argc, char **argv) {
             std::cout << (cond ? "[ok] " : "[FAIL] ") << (cond ? okMsg : failMsg) << "\n";
             if (!cond) pass = false;
         };
-        check(bobGotMsg, "bob получил сообщение в свой инбокс (push)",
+        check(!plaintextDelivered, "plaintext msg.chat.send отвергнут gateway (P-22)",
+              "plaintext msg.chat.send ДОШЁЛ до bob — gateway пропустил открытый текст!");
+        check(bobGotMsg, "bob получил E2E-сообщение в свой инбокс (push)",
               "bob НЕ получил сообщение");
         check(aliceGotDelivered, "alice получила delivered после ack bob'а",
               "alice НЕ получила delivered");

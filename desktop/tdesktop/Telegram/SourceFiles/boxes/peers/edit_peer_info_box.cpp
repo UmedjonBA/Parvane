@@ -452,6 +452,7 @@ private:
 	void fillAutoTranslateButton();
 	void fillSignaturesButton();
 	void fillHistoryVisibilityButton();
+	void fillEnhancedPrivacyButton(); // Parvane: политика L2 группы v2
 	void fillManageSection();
 	void fillPendingRequestsButton();
 
@@ -1310,6 +1311,62 @@ void Controller::fillAutoTranslateButton() {
 	}, _controls.buttonsLayout->lifetime());
 }
 
+// Parvane (T079, правило L2-1): политика «усиленная приватность» группы v2 —
+// запись журнала группы (видна всем участникам служебным сообщением); право —
+// как у изменения сведений группы.
+void Controller::fillEnhancedPrivacyButton() {
+	Expects(_controls.buttonsLayout != nullptr);
+
+	const auto l2 = Parvane::ChatL2State(_peer);
+	if (!l2.available || !l2.canChange) {
+		return;
+	}
+	const auto peer = _peer;
+	const auto button = _controls.buttonsLayout->add(
+		EditPeerInfoBox::CreateButton(
+			_controls.buttonsLayout,
+			tr::lng_parvane_enhanced_privacy(),
+			rpl::single(QString()),
+			[] {},
+			st::manageGroupTopicsButton,
+			{ &st::menuIconLock }));
+	struct State {
+		rpl::event_stream<bool> toggled;
+		bool saved = false;
+	};
+	const auto state = button->lifetime().make_state<State>();
+	state->saved = l2.active;
+	button->toggleOn(rpl::single(
+		l2.active
+	) | rpl::then(state->toggled.events()));
+
+	Parvane::ChatL2Updates(
+	) | rpl::on_next([=] {
+		const auto now = Parvane::ChatL2State(peer).active;
+		if (now != state->saved) {
+			state->saved = now;
+			state->toggled.fire_copy(now);
+		}
+	}, button->lifetime());
+
+	const auto show = _navigation->uiShow();
+	button->toggledValue(
+	) | rpl::filter([=](bool value) {
+		return value != state->saved;
+	}) | rpl::on_next([=](bool value) {
+		const auto weak = base::make_weak(button);
+		state->saved = value;
+		Parvane::SetChatL2(peer, value, [=](bool ok) {
+			if (ok || !weak.get()) {
+				return;
+			}
+			state->saved = !value;
+			state->toggled.fire(!value);
+			show->showToast(tr::lng_parvane_enhanced_privacy_failed(tr::now));
+		});
+	}, button->lifetime());
+}
+
 void Controller::fillSignaturesButton() {
 	Expects(_controls.buttonsLayout != nullptr);
 
@@ -1535,6 +1592,7 @@ void Controller::fillManageSection() {
 	if (canEditAutoTranslate) {
 		fillAutoTranslateButton();
 	}
+	fillEnhancedPrivacyButton(); // Parvane: сам проверяет группу v2 и право
 	if (canEditSignatures) {
 		fillSignaturesButton();
 	} else if (canEditPreHistoryHidden

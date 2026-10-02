@@ -29,6 +29,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../parvane-core parvane-core)
 get_filename_component(src_loc SourceFiles REALPATH)
 get_filename_component(res_loc Resources REALPATH)
 
+# Parvane: dev/e2e-хуки (PARVANE_AUTO*, ws://, TCP к gateway) — только в
+# parvane_client.cpp; определение не распространяется на весь Telegram.
+if (PARVANE_DEV)
+    set_source_files_properties(${src_loc}/parvane/parvane_client.cpp
+        PROPERTIES COMPILE_DEFINITIONS PARVANE_DEV=1)
+endif()
+
 # Parvane fork: glue-модуль клиента (мост tdesktop ↔ parvane-core).
 target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_client.cpp

@@ -9,11 +9,9 @@
 #   4) скачанный на диск блоб побайтово равен исходному файлу;
 #   5) ни в одном логе нет фатальных ошибок / ошибок скачивания.
 #
-# Требует запущенные nats + identity + messenger + cloud и собранный бинарь.
+# Стек поднимает сам (verify_lib.sh); нужен собранный бинарь.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 NATS="${NATS_BIN:-$HOME/.local/bin/nats}"
 MEDIA_DIR="${TMPDIR:-/tmp}/parvane-media"
 A_WD="$(mktemp -d /tmp/pv-2m-alice.XXXXXX)"
@@ -27,8 +25,9 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-"$NATS" --server "$URL" req identity.token.issue '{"user":"alice@local","password":"test"}' \
-    >/dev/null 2>&1 || { echo "identity не отвечает — запусти шарды"; exit 2; }
+# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
+# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+STACK="$(mktemp -d /tmp/parvane-media-two-instances-stack.XXXXXX)"; stack_up "$STACK"
 
 # Бинарь с нулевым/0xff байтами — проверяем целостность.
 printf 'RECV MEDIA 2INST \x00\xff\x01 %s' "$STAMP" > "$SRC"
@@ -36,11 +35,11 @@ SZ=$(stat -c%s "$SRC")
 echo "файл: $SZ байт; stamp=$STAMP"
 
 # bob слушает; alice логинится и шлёт файл.
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_AUTOLOGIN='bob@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WD/td" >"$B_WD/out.log" 2>&1 &
 BPID=$!
 sleep 3
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_AUTOLOGIN='alice@local:test' \
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOSENDFILE="bob@local:$SRC" \
   "$BIN" -workdir "$A_WD/td" >"$A_WD/out.log" 2>&1 &
 APID=$!
@@ -75,6 +74,7 @@ fi
 grep -qiE "Fatal|Unexpected in |ошибка скачивания медиа|не записать медиа" "$A_LOG" "$B_LOG" 2>/dev/null \
     && bad "ошибка в логе" || ok "без фатальных ошибок"
 
-rm -rf "$A_WD" "$B_WD"
+[ "$RC" -eq 0 ] && rm -rf "$A_WD" "$B_WD" || echo "логи: $A_WD $B_WD"
 [ "$RC" -eq 0 ] && printf '\033[32mМЕДИА 2 ЭКЗЕМПЛЯРА: OK\033[0m\n' || printf '\033[31mМЕДИА 2 ЭКЗЕМПЛЯРА: ЕСТЬ ПРОВАЛЫ\033[0m\n'
+stack_stop
 exit "$RC"

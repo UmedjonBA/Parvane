@@ -5,28 +5,27 @@
 # устанавливается ICE/DTLS-соединение (оба доходят до Active из webrtc-колбэка
 # OnConnectionChange(kConnected)). САМ ЗВУК headless не проверить — только связь.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/build-probe/bin/Telegram"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
 RC=0
 ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-nats --server "$URL" req identity.token.issue '{"user":"alice@local","password":"test"}' \
+# стек поднимаем сами (раньше скрипт ждал вручную запущенные nats+шарды)
+STACK="$(mktemp -d /tmp/parvane-call-real-stack.XXXXXX)"; stack_up "$STACK"
+nats --server "$URL" req identity.token.issue '{"user":"alice@local","password":"'"${PV_PASSWORD:-test-pass-2026}"'"}' \
     >/dev/null 2>&1 || { echo "identity не отвечает — запусти nats+identity+call"; exit 2; }
 
-pkill -9 -f 'bin/Telegram -workdir' 2>/dev/null
-sleep 2
 BOB=$(mktemp -d /tmp/pv-rcall-bob.XXXXXX); ALICE=$(mktemp -d /tmp/pv-rcall-alice.XXXXXX)
 
 QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_REAL_MEDIA=1 \
-  PARVANE_AUTOLOGIN='bob@local:test' PARVANE_AUTOACCEPT='1' \
+  PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOACCEPT='1' \
   "$BIN" -workdir "$BOB/td" >"$BOB/out.log" 2>&1 &
 BOBPID=$!
 sleep 7
 QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_REAL_MEDIA=1 \
-  PARVANE_AUTOLOGIN='alice@local:test' PARVANE_AUTOCALL='bob@local' \
+  PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOCALL='bob@local' \
   "$BIN" -workdir "$ALICE/td" >"$ALICE/out.log" 2>&1 &
 ALICEPID=$!
 
@@ -47,4 +46,5 @@ grep -qa 'звонок → Active' "$BL" && ok "bob → Active (ICE/DTLS уст�
 kill -9 "$BOBPID" "$ALICEPID" 2>/dev/null
 if [ "$RC" -eq 0 ]; then printf '\033[32mРЕАЛЬНЫЙ ЗВОНОК e2e: СВЯЗЬ УСТАНОВЛЕНА (звук — проверять вживую)\033[0m\n'
 else printf '\033[31mРЕАЛЬНЫЙ ЗВОНОК e2e: ЕСТЬ ПРОВАЛЫ\033[0m\n'; fi
+stack_stop
 exit $RC

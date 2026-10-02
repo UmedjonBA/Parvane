@@ -26,7 +26,16 @@ def pub(topic, payload):
 
 
 def issue(u):
-    r = json.loads(req("identity.token.issue", {"user": u, "password": "test"}))
+    pw = os.environ.get("PV_PASSWORD", "test-pass-2026")
+    # На чистом стеке отправителя ещё нет — заводим (повторная регистрация
+    # существующего аккаунта просто вернёт ошибку, её игнорируем).
+    try:
+        req("identity.user.register", {"user": u, "password": pw})
+    except SystemExit:
+        pass
+    r = json.loads(req("identity.token.issue", {"user": u, "password": pw}))
+    if not r.get("token"):
+        raise SystemExit(f"identity.token.issue {u}: {r.get('error')}")
     return r["token"]
 
 
@@ -55,7 +64,10 @@ def main():
     assert ack.get("ok"), f"chunk ack: {ack}"
     cr = json.loads(req("file.upload.complete", env(frm, tok, {
         "file_id": fid, "filename": fname, "total_chunks": 1,
-        "size_bytes": len(data), "mime_type": mime})))
+        "size_bytes": len(data), "mime_type": mime,
+        # файл в cloud — owner-only: скачать его получатель сможет только по
+        # явному гранту (recipients), иначе «файл не найден или доступ запрещён»
+        "recipients": [to]})))
     assert cr.get("ok"), f"complete: {cr}"
 
     # content по kind

@@ -55,6 +55,9 @@
 #include <parvane/events.h>          // parvane-core
 #include <parvane/poll.h>            // parvane-core: опросы в обоих форматах (spec 005)
 #include <parvane/topics.h>          // parvane-core
+#include <parvane/v2_content.h>      // parvane-core: содержимое протокола v2 (spec 007)
+#include <parvane/v2_engine.h>       // parvane-core: C ABI движка v2
+#include <parvane/v2_session.h>      // parvane-core: v2-сессия (двойной стек)
 
 // P-45/P-46: dev/e2e-хуки из окружения (PARVANE_AUTO*, прямой NATS) существуют
 // только в сборке с -DPARVANE_DEV=ON (см. parvane-core/CMakeLists.txt). В релизе
@@ -119,6 +122,7 @@
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
+#include <rpl/event_stream.h>
 #include <rpl/lifetime.h>
 #include <rpl/producer.h>
 
@@ -132,6 +136,9 @@
 #include <filesystem>              // миграция tdata/parvane-* (P-13)
 #include <set>
 #include <string>
+#include <thread>
+#include <chrono>
+#include <cstring>
 #include <vector>
 
 namespace Parvane {
@@ -147,8 +154,20 @@ void ApplyNotifyBlob(const QString &json);   // fwd: настройки увед
 void NoteReported(const std::vector<std::string> &ids);     // fwd (READ-1)
 void NoteConfirmedRead(const std::vector<std::string> &ids); // fwd (READ-1, сервер уже знает)
 void AppendReadJournal(const std::vector<std::string> &ids); // fwd (worker)
+[[nodiscard]] QString GatewayUrl();                          // fwd: адрес gateway (v2-сессия)
+void SaveFolders(not_null<Main::Session*> session);          // fwd: папки → tdata (журнал состояния v2)
+// fwd: изменение группы v2 записью журнала (раздел «Протокол v2: группы…»).
+bool RunV2GroupChange(
+	const QString &tag,
+	const QString &gid,
+	std::function<nlohmann::json(const nlohmann::json &info)> change,
+	GroupOpDone done);
 
 namespace {
+
+// Протокол v2 (определены ниже, раздел «Протокол v2»).
+void LoadV2Ids();
+void V2CacheReplayed(const std::vector<parvane::StoredMessage> &msgs);
 
 // true — проход применил всё; false — что-то не расшифровалось (нет ключа,
 // нет копии для устройства, E2E не поднялся). Дисковый курсор при false НЕ
@@ -371,6 +390,26 @@ bool g_presenceSubscribed = false;        // presence: хартбит + подп
 // P-18: presence — только конкретных собеседников (presence.<id>), не presence.*
 QSet<quint64> g_presenceSubscribedIds;      // под g_sessionMutex
 std::unique_ptr<base::Timer> g_presenceTimer; // хартбит присутствия (main)
+
+// Режим «усиленная приватность» (L2, T079; правило L2-1): кэш из события
+// l2State v2-сессии. typing/presence решаются по нему без вызова сессии — её
+// методы ждут мьютекс движка, занятый на время сетевых операций.
+std::mutex g_l2Mutex;
+QSet<QString> g_l2Chats;   // чаты с активным режимом (собеседник или v2g:<hex>)
+QSet<QString> g_l2Mine;    // личные чаты, где режим включён мной
+QSet<QString> g_l2V2Peers; // собеседники на v2 (пункт в профиле показывается им)
+std::atomic<bool> g_l2PresenceAllowed{ true };
+rpl::event_stream<> g_l2Updates; // main: кэш изменился
+
+[[nodiscard]] bool L2Active(const QString &chat) {
+	std::lock_guard<std::mutex> lk(g_l2Mutex);
+	return g_l2Chats.contains(chat);
+}
+
+// Переход на протокол v2 (E6, T110): кадры gateway upgrade_available /
+// upgrade_required на v1-транспорте.
+std::atomic<qint64> g_upgradeRequiredAtMs{ 0 };
+std::atomic<bool> g_upgradeAvailablePending{ false };
 
 // Курсоры инкрементального синка (Фаза 1): двигаются ТОЛЬКО по результатам
 // sync (не по push — иначе можно перескочить невиденное). Оба обязательны:
@@ -614,6 +653,8 @@ void ReplayHistory() {
 	if (msgs.empty()) {
 		return;
 	}
+	LoadV2Ids();
+	V2CacheReplayed(msgs); // правки/реакции v2 после рестарта находят сообщение
 	const auto n = int(msgs.size());
 	crl::on_main([msgs = std::move(msgs)]() mutable {
 		if (const auto session = g_sessionWeak.get()) {
@@ -940,9 +981,508 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 	return [](const std::string &statement) { return parvane::e2e::sign(statement); };
 }
 
+// ── Протокол v2 (spec 007, T063): двойной стек, как в вебе ──────────────────
+// v1-стек (parvane-e2e) обслуживает v1-собеседников, v2-сессия parvane-core —
+// собеседников с журналом устройств v2 (формат выбирается по подписанному
+// журналу собеседника, D-13). Включение — PARVANE_PROTO_V2=1 или файл-флаг
+// tdata/parvane-proto-v2 (как localStorage parvane:proto=v2 в вебе); по
+// умолчанию выключено. События движка перекладываются в те же
+// parvane::StoredMessage, что и v1-входящие, и идут в injectOnMain — UI не
+// знает, по какому протоколу пришло сообщение. Группы — пока по v1.
+std::mutex g_v2Mutex; // g_v2, g_v2Token, g_v2Ids, g_v2Cache, g_v2Reactions
+std::shared_ptr<parvane::v2::Session> g_v2;
+std::string g_v2Token;
+QHash<QString, QString> g_v2Ids;                        // uuid → собеседник (сообщение v2)
+QHash<QString, parvane::StoredMessage> g_v2Cache;       // uuid → строка (правки/реакции)
+QHash<QString, QHash<QString, QString>> g_v2Reactions; // uuid → (автор → эмодзи)
+bool g_v2IdsLoaded = false;
+
+[[nodiscard]] bool V2Enabled() {
+	if (const char *v = std::getenv("PARVANE_PROTO_V2"); v && *v) {
+		return std::strcmp(v, "0") != 0;
+	}
+	return QFile::exists(cWorkingDir() + u"tdata/parvane-proto-v2"_q);
+}
+
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> V2Ready() {
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	return (g_v2 && g_v2->isReady()) ? g_v2 : nullptr;
+}
+
+// Сессия v2 ждёт грант линковки: у аккаунта есть журнал устройств, а этого
+// устройства в нём нет (LINK-1 v2). До гранта устройство работает по v1.
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> V2NeedsLinking() {
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	return (g_v2 && g_v2->needsLinking()) ? g_v2 : nullptr;
+}
+
+// То же для приёма гранта: грант может прийти раньше, чем запуск сессии
+// выяснил «нужна линковка», — дожидаемся исхода запуска. Блокирующий (воркер).
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> V2AwaitNeedsLinking() {
+	std::shared_ptr<parvane::v2::Session> s;
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		s = g_v2;
+	}
+	if (!s) {
+		return nullptr;
+	}
+	if (!s->isReady() && !s->needsLinking()) {
+		s->waitReady(30000);
+	}
+	return s->needsLinking() ? s : nullptr;
+}
+
+[[nodiscard]] QString V2IdsPath() {
+	return cWorkingDir() + u"tdata/parvane-v2-ids.txt"_q;
+}
+
+// Список v2-сообщений (uuid → собеседник) переживает рестарт: мутации
+// сообщений v2-чата уходят по v2 и после перезапуска.
+void LoadV2Ids() {
+	// Второй вызывающий ЖДЁТ конца чтения. Раньше флаг ставился до чтения файла:
+	// запуск v2-сессии (воркер) и воспроизведение журнала (main) стартуют
+	// одновременно, и реплей видел пустой список — служебные сообщения режима L2
+	// после рестарта отбрасывались как «chat_mode по v1» (2 окт 2026).
+	static std::mutex loadMutex;
+	std::lock_guard<std::mutex> load(loadMutex);
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		if (g_v2IdsLoaded) {
+			return;
+		}
+	}
+	const auto lines = StoreReadLines(V2IdsPath());
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	for (const auto &line : lines) {
+		const auto sp = line.indexOf(' ');
+		if (sp > 0 && !g_v2Ids.contains(line.left(sp))) {
+			g_v2Ids.insert(line.left(sp), line.mid(sp + 1));
+		}
+	}
+	g_v2IdsLoaded = true;
+}
+
+void V2NoteMessage(const parvane::StoredMessage &sm, const QString &peer) {
+	const auto uuid = QString::fromStdString(sm.id);
+	bool fresh = false;
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		fresh = !g_v2Ids.contains(uuid);
+		g_v2Ids.insert(uuid, peer);
+		g_v2Cache.insert(uuid, sm);
+	}
+	if (fresh) {
+		StoreAppendLine(V2IdsPath(), uuid + u' ' + peer);
+	}
+}
+
+// Собеседник v2-сообщения ("" — сообщение v1).
+[[nodiscard]] QString V2PeerOf(const QString &uuid) {
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	return g_v2Ids.value(uuid);
+}
+
+[[nodiscard]] bool IsV2Message(const std::string &uuid) {
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	return g_v2Ids.contains(QString::fromStdString(uuid));
+}
+
+// Строка журнала после рестарта — в кэш правок/реакций, если она из v2.
+void V2CacheReplayed(const std::vector<parvane::StoredMessage> &msgs) {
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	for (const auto &sm : msgs) {
+		const auto uuid = QString::fromStdString(sm.id);
+		if (g_v2Ids.contains(uuid) && !g_v2Cache.contains(uuid)) {
+			g_v2Cache.insert(uuid, sm);
+		}
+	}
+}
+
+// Отправить содержимое собеседнику на v2. "" — собеседник не на v2 (или вид
+// не поддержан v2): идти по v1. Бросает при сбое v2-отправки v2-собеседнику
+// (формат не понижается — D-13).
+std::string TrySendV2(
+		const std::string &to,
+		const parvane::json &content,
+		const std::optional<std::string> &replyTo,
+		const std::optional<std::string> &preId) {
+	const auto kind = parvane::contentKind(content);
+	if (kind == "skdm" || kind.empty()) {
+		return {}; // ключи групп v1 и служебное — только v1
+	}
+	// Группа v2 — только v2 (конверт эпохи): v1-пути у неё нет.
+	const auto isGroup = parvane::v2::isGroupAddress(to);
+	const auto s = V2Ready();
+	if (isGroup && !s) {
+		throw std::runtime_error("группа v2, а сессия v2 не готова");
+	}
+	if (!s || (!isGroup && !s->isV2Peer(to))) {
+		return {};
+	}
+	const auto mapped = parvane::v2::toV2(content, replyTo.value_or(std::string()));
+	if (!mapped) {
+		if (isGroup) {
+			throw std::runtime_error("вид " + kind + " не поддержан v2 (группа v2)");
+		}
+		LOG(("Parvane: v2: вид %1 не поддержан v2 — по v1")
+			.arg(QString::fromStdString(kind)));
+		return {};
+	}
+	const auto id = (preId && !preId->empty()) ? *preId : parvane::v2::newUuidV7();
+	s->sendContent(to, *mapped, id);
+	parvane::StoredMessage sm;
+	sm.id = id;
+	sm.from = SelfAddress().toStdString();
+	sm.to = to;
+	sm.ts = QDateTime::currentSecsSinceEpoch();
+	sm.content = content;
+	sm.reply_to = replyTo;
+	V2NoteMessage(sm, QString::fromStdString(to));
+	LOG(("Parvane: v2 → %1 msg %2 (%3)")
+		.arg(QString::fromStdString(to), QString::fromStdString(id), QString::fromStdString(kind)));
+	return id;
+}
+
+// Мутация сообщения v2-чата (правка/удаление/реакция/закреп/прочтение) —
+// E2E-содержимым v2 собеседнику. false — сообщение не v2 (идти по v1).
+bool TryMutateV2(const QString &uuid, const parvane::json &content) {
+	const auto peer = V2PeerOf(uuid);
+	if (peer.isEmpty()) {
+		return false;
+	}
+	const auto peerStd = peer.toStdString();
+	crl::async([peerStd, content, uuid] {
+		const auto s = V2Ready();
+		if (!s) {
+			LOG(("Parvane: v2: мутация %1 не отправлена — сессия v2 не готова").arg(uuid));
+			return;
+		}
+		try {
+			s->sendContent(peerStd, content, parvane::v2::newUuidV7());
+			LOG(("Parvane: v2 → %1 %2 для %3")
+				.arg(QString::fromStdString(peerStd),
+					QString::fromStdString(parvane::v2::v2Kind(content)), uuid));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: мутация %1 не отправлена: %2")
+				.arg(uuid, QString::fromUtf8(e.what())));
+		}
+	});
+	return true;
+}
+
+// Сводка реакций сообщения из известных v2-реакций (под g_v2Mutex).
+std::vector<parvane::ReactionSummary> V2ReactionsLocked(const QString &uuid, const std::string &self) {
+	std::map<std::string, parvane::ReactionSummary> by;
+	const auto users = g_v2Reactions.value(uuid);
+	for (auto it = users.cbegin(); it != users.cend(); ++it) {
+		auto &r = by[it.value().toStdString()];
+		r.emoji = it.value().toStdString();
+		++r.count;
+		if (it.key().toStdString() == self) {
+			r.mine = true;
+		}
+	}
+	auto out = std::vector<parvane::ReactionSummary>();
+	for (auto &[emoji, r] : by) {
+		out.push_back(r);
+	}
+	return out;
+}
+
+// События v2-сессии (группы, свои устройства, журнал состояния) — ниже по
+// файлу, раздел «Протокол v2: группы и журнал состояния».
+[[nodiscard]] bool HandleV2SessionEvent(const parvane::json &ev);
+void ScheduleStateFlush();                                  // журнал состояния: своя правка
+void LoadV2GroupCache(not_null<Main::Session*> session);    // группы v2 до подъёма сессии
+
+// Групповое сообщение: группа v2 → движок (конверт эпохи, T056), иначе
+// Megolm v1. "" — не отправлено (причина в логе).
+std::string sendGroupContent(
+		parvane::MessengerClient *m,
+		parvane::ITransport *t,
+		const std::string &to,
+		const parvane::json &content,
+		const std::string &token,
+		const std::optional<std::string> &replyTo = std::nullopt,
+		const std::optional<std::string> &preId = std::nullopt) {
+	if (parvane::v2::isGroupAddress(to)) {
+		try {
+			return TrySendV2(to, content, replyTo, preId);
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2-отправка в группу %1 не удалась: %2 — НЕ отправлено")
+				.arg(QString::fromStdString(to), QString::fromUtf8(e.what())));
+			return {};
+		}
+	}
+	const auto sealed = sealGroup(m, t, to, content, token);
+	if (sealed.empty()) {
+		return {};
+	}
+	// Групповое v1: from ВИДЕН (сервер проверяет членство), content —
+	// group_encrypted (Megolm), непрозрачен для сервера.
+	return m->sendContent(SelfAddress().toStdString(), to, nlohmann::json::parse(sealed), token,
+		replyTo, preId, parvane::json::array(), E2eSigner());
+}
+
+// Событие движка (рабочий поток v2-сессии) → строки конвейера UI.
+void HandleV2Event(const parvane::json &ev) {
+	if (HandleV2SessionEvent(ev)) {
+		return;
+	}
+	const auto self = SelfAddress().toStdString();
+	const auto in = parvane::v2::interpretDirect(ev, self);
+	using Kind = parvane::v2::Incoming::Kind;
+	if (in.kind == Kind::None) {
+		return;
+	}
+	auto out = std::vector<parvane::StoredMessage>();
+	if (in.kind == Kind::Message || in.kind == Kind::Stub) {
+		parvane::StoredMessage sm;
+		sm.id = in.id;
+		sm.from = in.from;
+		sm.to = in.to;
+		sm.ts = in.ts ? in.ts : QDateTime::currentSecsSinceEpoch();
+		sm.content = in.content;
+		if (!in.replyTo.empty()) {
+			sm.reply_to = in.replyTo;
+		}
+		V2NoteMessage(sm, QString::fromStdString(in.chat));
+		LOG(("Parvane: v2 ← %1 msg %2 (%3)")
+			.arg(QString::fromStdString(in.from), QString::fromStdString(in.id),
+				QString::fromStdString(parvane::contentKind(in.content))));
+		out.push_back(std::move(sm));
+	} else {
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		for (const auto &target : in.targets) {
+			const auto uuid = QString::fromStdString(target);
+			auto it = g_v2Cache.find(uuid);
+			if (it == g_v2Cache.end()) {
+				LOG(("Parvane: v2: мутация для неизвестного %1 — пропуск").arg(uuid));
+				continue;
+			}
+			auto sm = it.value();
+			switch (in.kind) {
+			case Kind::Edit: {
+				if (sm.from != in.from || !in.content.is_object()) {
+					continue; // править можно только своё
+				}
+				const auto nk = parvane::contentKind(in.content);
+				if (nk == "location") {
+					for (auto f = in.content.begin(); f != in.content.end(); ++f) {
+						sm.content[f.key()] = f.value();
+					}
+				} else if (parvane::contentKind(sm.content) == "text") {
+					sm.content["text"] = in.content.value("text", std::string());
+					sm.content["entities"] = in.content.contains("entities")
+						? in.content["entities"] : parvane::json::array();
+				} else {
+					sm.content["caption"] = in.content.value("text", std::string());
+					sm.content["entities"] = in.content.contains("entities")
+						? in.content["entities"] : parvane::json::array();
+				}
+				sm.edited = true;
+			} break;
+			case Kind::Delete:
+				if (sm.from != in.from) {
+					continue; // удалить у всех можно только своё
+				}
+				sm.deleted = true;
+				break;
+			case Kind::Reaction: {
+				auto &users = g_v2Reactions[uuid];
+				const auto author = QString::fromStdString(in.from);
+				if (in.remove) {
+					users.remove(author);
+				} else {
+					users.insert(author, QString::fromStdString(in.emoji));
+				}
+				sm.reactions = V2ReactionsLocked(uuid, self);
+			} break;
+			case Kind::Pin:
+				sm.pinned = !in.unpin;
+				break;
+			case Kind::Read:
+				if (sm.from != self || in.from == self) {
+					continue; // квитанция собеседника о МОЁМ сообщении
+				}
+				sm.read = true;
+				break;
+			default:
+				continue;
+			}
+			it.value() = sm;
+			out.push_back(sm);
+		}
+	}
+	if (out.empty()) {
+		return;
+	}
+	crl::on_main([out = std::move(out)] {
+		if (const auto session = g_sessionWeak.get()) {
+			injectOnMain(session, out, /*live=*/true);
+		}
+	});
+}
+
+// ── Приватность v2 (T079, FR-040): «сообщения от незнакомых» ───────────────
+// identity.privacy.set перезаписывает ВСЕ поля, метода чтения нет: настройка
+// хранится на устройстве (tdata/parvane-privacy.json, под storecrypt) и
+// уходит на сервер при изменении и при готовности v2-сессии — но только если
+// пользователь задавал её на ЭТОМ устройстве (иначе умолчание затёрло бы
+// выбор, сделанный на другом устройстве).
+struct PrivacyLocal {
+	bool set = false;            // задано на этом устройстве
+	bool strangers = true;       // сообщения от незнакомых разрешены
+	bool groupAddNobody = false; // «никто не может добавлять меня в группы»
+};
+
+[[nodiscard]] QString PrivacyPath() {
+	return cWorkingDir() + u"tdata/parvane-privacy.json"_q;
+}
+
+[[nodiscard]] PrivacyLocal LoadPrivacyLocal(const QString &self) {
+	auto out = PrivacyLocal();
+	const auto j = parvane::json::parse(StoreRead(PrivacyPath()).toStdString(), nullptr, false);
+	if (j.is_object() && j.value("self", std::string()) == self.toStdString()) {
+		out.set = true;
+		out.strangers = j.value("strangers", true);
+		out.groupAddNobody = (j.value("group_add", std::string()) == "nobody");
+	}
+	return out;
+}
+
+void SavePrivacyLocal(const QString &self, const PrivacyLocal &p) {
+	const parvane::json j{
+		{ "self", self.toStdString() },
+		{ "strangers", p.strangers },
+		{ "group_add", p.groupAddNobody ? "nobody" : "anyone" },
+	};
+	StoreWrite(PrivacyPath(), QString::fromStdString(j.dump()).toUtf8());
+}
+
+// Режим L2 между запусками (L2-1): последнее известное состояние действует с
+// запуска — до готовности v2-сессии присутствие уже могло бы уйти в сеть.
+[[nodiscard]] QString L2CachePath() {
+	return cWorkingDir() + u"tdata/parvane-l2.json"_q;
+}
+
+void SaveL2Cache(const QString &self, const QSet<QString> &chats, const QSet<QString> &mine, bool presence) {
+	auto list = [](const QSet<QString> &set) {
+		auto out = parvane::json::array();
+		for (const auto &item : set) out.push_back(item.toStdString());
+		return out;
+	};
+	const parvane::json j{
+		{ "self", self.toStdString() },
+		{ "chats", list(chats) },
+		{ "mine", list(mine) },
+		{ "presence", presence },
+	};
+	StoreWrite(L2CachePath(), QString::fromStdString(j.dump()).toUtf8());
+}
+
+void LoadL2Cache(const QString &self) {
+	const auto j = parvane::json::parse(StoreRead(L2CachePath()).toStdString(), nullptr, false);
+	if (!j.is_object() || j.value("self", std::string()) != self.toStdString()) {
+		return;
+	}
+	const auto list = [&](const char *key) {
+		auto out = QSet<QString>();
+		if (j.contains(key) && j[key].is_array()) {
+			for (const auto &c : j[key]) {
+				if (c.is_string()) out.insert(QString::fromStdString(c.get<std::string>()));
+			}
+		}
+		return out;
+	};
+	{
+		std::lock_guard<std::mutex> lk(g_l2Mutex);
+		g_l2Chats = list("chats");
+		g_l2Mine = list("mine");
+	}
+	g_l2PresenceAllowed = j.value("presence", true);
+}
+
+// Поднять v2-сессию (под g_sessionMutex из StartSession: адрес и JWT уже есть).
+void StartV2Locked() {
+	if (!V2Enabled()) {
+		return;
+	}
+	const auto url = GatewayUrl();
+	if (url.isEmpty()) {
+		LOG(("Parvane: v2 включён, но нет gateway (прямой NATS) — только v1"));
+		return;
+	}
+	const auto self = g_selfAddress.toStdString();
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		if (g_v2) {
+			return;
+		}
+		g_v2Token = g_token.toStdString();
+	}
+	LoadV2Ids();
+	LoadL2Cache(g_selfAddress); // режим L2 — с запуска, до готовности сессии
+	parvane::v2::SessionConfig cfg;
+	cfg.gatewayUrl = url.toStdString();
+	cfg.self = self;
+	cfg.token = [] {
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		return g_v2Token;
+	};
+	QString safe;
+	for (const auto ch : g_selfAddress) {
+		safe += (ch.isLetterOrNumber() || ch == '@' || ch == '.' || ch == '-')
+			? ch : QChar('_');
+	}
+	cfg.stateDir = (cWorkingDir() + u"tdata/parvane-v2-"_q + safe).toStdString();
+	cfg.clientVersion = "desktop";
+	cfg.log = [](const std::string &m) {
+		LOG(("Parvane: %1").arg(QString::fromStdString(m)));
+	};
+	cfg.onEvent = [](const parvane::json &ev) { HandleV2Event(ev); };
+	auto s = std::make_shared<parvane::v2::Session>(std::move(cfg));
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		g_v2 = s;
+	}
+	// Приватность, заданная на этом устройстве, — сессия отправит при готовности.
+	if (const auto privacy = LoadPrivacyLocal(g_selfAddress); privacy.set) {
+		s->setPrivacy(privacy.groupAddNobody, privacy.strangers);
+	}
+	s->start();
+	LOG(("Parvane: v2: сессия запускается (%1, движок %2)")
+		.arg(url, QString::fromStdString(parvane::v2::engineVersion())));
+}
+
+void StopV2() {
+	std::shared_ptr<parvane::v2::Session> s;
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		s = std::move(g_v2);
+		g_v2Cache.clear();
+		g_v2Reactions.clear();
+	}
+	if (s) {
+		s->stop();
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_l2Mutex);
+		g_l2Chats.clear();
+		g_l2Mine.clear();
+		g_l2V2Peers.clear();
+	}
+	g_l2PresenceAllowed = true;
+}
+
 // 1-на-1 sealed-отправка с fan-out копий по устройствам получателя и своим
 // устройствам (мультидевайс). "" — E2E не удался (ничего не отправлено).
-// На проводе from/token ПУСТЫЕ (sealed sender; gateway уже аутентифицировал).
+// На проводе from ПУСТОЙ (sealed sender). Токен передаём: messenger требует
+// его и для sealed (P-40 — отозванное устройство не должно слать до истечения
+// JWT). Gateway всё равно подставляет токен сессии сам; на прямом NATS
+// (dev-транспорт) без него сервер отвергал отправку («неверный или
+// просроченный JWT») — 1-на-1 и раздача ключей групп (SKDM) не доходили.
 std::string sendSealedDirect(
 		parvane::MessengerClient *m,
 		parvane::ITransport *t,
@@ -951,6 +1491,16 @@ std::string sendSealedDirect(
 		const std::string &token,
 		const std::optional<std::string> &replyTo,
 		const std::optional<std::string> &preId) {
+	// Протокол v2: собеседник с журналом устройств v2 — по v2 (двойной стек).
+	try {
+		if (auto id = TrySendV2(to, content, replyTo, preId); !id.empty()) {
+			return id;
+		}
+	} catch (const std::exception &e) {
+		LOG(("Parvane: v2-отправка %1 не удалась: %2 — НЕ отправлено")
+			.arg(QString::fromStdString(to), QString::fromUtf8(e.what())));
+		return {};
+	}
 	const auto sealed = parvane::e2e::sealForAddress(to, content.dump(), *t, token);
 	if (!sealed) {
 		return {};
@@ -959,7 +1509,7 @@ std::string sendSealedDirect(
 	for (const auto &c : sealed->copies) {
 		copies.push_back(c.toJson());
 	}
-	return m->sendContent(std::string(), to, sealed->content, std::string(),
+	return m->sendContent(std::string(), to, sealed->content, token,
 		replyTo, preId, copies, E2eSigner());
 }
 
@@ -1012,8 +1562,8 @@ void sendTextAsync(
 						cloudRecipients(to)); !packs.empty()) {
 					content["emoji_packs"] = packs;
 				}
-				// Sealed sender: from и token ПУСТЫЕ на проводе (отправитель скрыт;
-				// gateway уже аутентифицировал, подлинность — крипто Olm).
+				// Sealed sender: from ПУСТОЙ на проводе (отправитель скрыт от
+				// получателей; подлинность — крипто Olm), токен — см. sendSealedDirect.
 				id = sendSealedDirect(m, t, to, content, token, replyToUuid,
 					preId.empty() ? std::optional<std::string>{} : std::optional<std::string>{preId});
 				if (id.empty()) {
@@ -1039,20 +1589,16 @@ void sendTextAsync(
 						cloudRecipients(to)); !packs.empty()) {
 					content["emoji_packs"] = packs;
 				}
-				const auto sealed = sealGroup(m, t, to, content, token);
-				if (sealed.empty()) {
-					LOG(("Parvane: E2E группы не удался для %1 — НЕ отправлено")
-						.arg(QString::fromStdString(to)));
-					return;
-				}
-				// Групповое: from ВИДЕН (сервер проверяет членство), token есть;
-				// content — group_encrypted (Megolm), непрозрачен для сервера.
 				// Пустой preId → nullopt (иначе event.id="" — невалидный uuid).
 				const auto pre = preId.empty()
 					? std::optional<std::string>{}
 					: std::optional<std::string>{preId};
-				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
-					replyToUuid, pre, parvane::json::array(), E2eSigner());
+				id = sendGroupContent(m, t, to, content, token, replyToUuid, pre);
+				if (id.empty()) {
+					LOG(("Parvane: E2E группы не удался для %1 — НЕ отправлено")
+						.arg(QString::fromStdString(to)));
+					return;
+				}
 			} else {
 				LOG(("Parvane: E2E недоступен для %1 — сообщение НЕ отправлено")
 					.arg(QString::fromStdString(to)));
@@ -1154,15 +1700,12 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 					return;
 				}
 			} else {
-				const auto sealed = sealGroup(m, t, to, content, token);
-				if (sealed.empty()) {
+				id = sendGroupContent(m, t, to, content, token);
+				if (id.empty()) {
 					LOG(("Parvane: E2E пересылки группы не удался для %1 — не отправлено")
 						.arg(toAddress));
 					return;
 				}
-				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token, std::nullopt, std::nullopt,
-					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1213,18 +1756,15 @@ void sendInnerAsync(
 					return;
 				}
 			} else {
-				const auto sealed = sealGroup(m, t, to, content, token);
-				if (sealed.empty()) {
+				const auto pre = preId.empty()
+					? std::optional<std::string>{}
+					: std::optional<std::string>{preId};
+				id = sendGroupContent(m, t, to, content, token, std::nullopt, pre);
+				if (id.empty()) {
 					LOG(("Parvane: E2E группы не удался для %1 — НЕ отправлено")
 						.arg(toAddress));
 					return;
 				}
-				const auto pre = preId.empty()
-					? std::optional<std::string>{}
-					: std::optional<std::string>{preId};
-				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token, std::nullopt, pre,
-					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1279,11 +1819,86 @@ QString GatewayUrl() {
 	return QString::fromUtf8(kDefaultGatewayWss);
 }
 
+namespace {
+
+// E6 (T110): сервер переводит клиентов на v2 (gateway PARVANE_V1_MODE).
+//  - upgrade_available (режим notice): нативное сервисное уведомление в чате
+//    служебных уведомлений (как T119), один раз за запуск;
+//  - upgrade_required (режим disabled): v1 отключён — нативный диалог
+//    «обновите приложение», один раз за запуск. Учётные данные в порядке —
+//    не разлогиниваем. Транспорт ядра сам не переподключается чаще раза в
+//    5 минут; новых соединений в это время не открываем и здесь.
+void ShowUpgradeAvailableIfPending() {
+	if (!g_upgradeAvailablePending) {
+		return;
+	}
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return; // покажем из AfterSessionReady
+	}
+	g_upgradeAvailablePending = false;
+	const auto history = session->data().history(PeerData::kServiceNotificationsId);
+	if (!history->folderKnown()) {
+		history->clearFolder(); // иначе requestDialogEntry ушёл бы в MTProto
+	}
+	session->data().serviceNotification(
+		TextWithEntities{ tr::lng_parvane_upgrade_available(tr::now) });
+	LOG(("Parvane: сервер сообщает о новой версии (upgrade_available) — сервисное уведомление"));
+}
+
+void EnsureUpgradeHandler() {
+	static const auto installed = [] {
+		parvane::GatewayTransport::setUpgradeHandler([](parvane::GatewayTransport::Upgrade kind) {
+			using Upgrade = parvane::GatewayTransport::Upgrade;
+			if (kind == Upgrade::Available) {
+				static std::atomic<bool> shown{ false };
+				if (shown.exchange(true)) {
+					return;
+				}
+				g_upgradeAvailablePending = true;
+				crl::on_main([] { ShowUpgradeAvailableIfPending(); });
+			} else if (kind == Upgrade::Required) {
+				g_upgradeRequiredAtMs = QDateTime::currentMSecsSinceEpoch();
+				static std::atomic<bool> shown{ false };
+				if (shown.exchange(true)) {
+					return;
+				}
+				LOG(("Parvane: сервер отключил протокол v1 (upgrade_required) — нужна новая версия приложения"));
+				crl::on_main([] {
+					Ui::show(Ui::MakeInformBox(tr::lng_parvane_upgrade_required()));
+				});
+			}
+		});
+		return true;
+	}();
+	(void)installed;
+}
+
+// v1 отключён сервером, и это подтверждалось недавно — соединений не открываем.
+[[nodiscard]] bool UpgradeBlocked() {
+	if (!parvane::GatewayTransport::upgradeRequired()) {
+		return false;
+	}
+	const auto at = g_upgradeRequiredAtMs.load();
+	return at && (QDateTime::currentMSecsSinceEpoch() - at
+		< parvane::GatewayTransport::kUpgradeRetryGapMs);
+}
+
+} // namespace
+
+bool UpgradeRequired() {
+	return parvane::GatewayTransport::upgradeRequired();
+}
+
 // Создать и подключить транспорт по окружению: gateway (TCP, с authenticate,
 // если задан token) либо прямой NATS (cnats). Бросает при ошибке соединения.
 // token пустой — bootstrap-режим (до логина gateway пускает только issue/register).
 std::unique_ptr<parvane::ITransport> MakeTransport(const QString &token) {
 	const auto gw = GatewayUrl();
+	EnsureUpgradeHandler();
+	if (!gw.isEmpty() && UpgradeBlocked()) {
+		throw parvane::GatewayError("gateway: upgrade_required");
+	}
 	if (gw.startsWith(u"wss://"_q) || gw.startsWith(u"ws://"_q)) {
 		auto t = std::make_unique<parvane::GatewayWsTransport>();
 		t->connectUrl(gw.toStdString());
@@ -1773,7 +2388,13 @@ IssueResult Issue(
 		parvane::IssueRequest req{user.toStdString(), password.toStdString()};
 		// device_id этой установки (тот же каталог, что initDevice ниже) →
 		// claim dev в JWT: отозванное устройство теряет токен сразу. Для
-		// свежей установки id создаётся здесь же — иначе первый токен без dev
+		// свежей установки id создаётся здесь же — иначе первый токен без dev.
+		// Ключ хранилища (P-13) — ДО чтения device.json: вход со свежего старта
+		// процесса шёл раньше первого StoreRead, зашифрованный device.json без
+		// ключа не читался, и устройство каждый раз получало НОВЫЙ device_id
+		// (в каталоге копились «призраки» с тем же identity-ключом, доверенное
+		// устройство 2FA переставало узнаваться).
+		EnsureStoreKey();
 		req.deviceId = parvane::e2e::ensureDeviceId(
 			(cWorkingDir() + u"tdata/parvane-e2e-"_q + user).toStdString());
 		auto reqJson = req.toJson();
@@ -1943,8 +2564,12 @@ ConfirmResult ConfirmEmail(const QString &user, const QString &code) {
 }
 
 void SetToken(const QString &token) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	g_token = token;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_token = token;
+	}
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	g_v2Token = token.toStdString(); // v2-сессия берёт JWT при переподключении
 }
 
 QString Token() {
@@ -1964,12 +2589,20 @@ std::uint64_t IdForAddress(const QString &address) {
 	return h ? h : 1;
 }
 
+namespace {
+// Определена ниже в анонимном пространстве (приём presence.<id>).
 void HandlePresencePayload(const std::string &payload);
+} // namespace
 
 // P-18: подписка на presence конкретного собеседника (идемпотентно). Зовётся
 // при регистрации пира и для всех известных пиров при старте сессии.
 void EnsurePresenceSubscription(const QString &address) {
 	if (address.isEmpty() || address == SelfAddress()) {
+		return;
+	}
+	// L2-1: в чате с усиленной приватностью присутствие собеседника не
+	// запрашиваем (подписка появится, когда режим снимут, — событие l2State).
+	if (L2Active(address)) {
 		return;
 	}
 	parvane::ITransport *t = nullptr;
@@ -2023,6 +2656,10 @@ void SetSelf(const QString &address, const QString &token) {
 		g_token = token;
 		g_freshLogin = true; // см. LoadCursorsLocked
 	}
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		g_v2Token = token.toStdString();
+	}
 	RegisterPeer(address);
 	SaveSessionCreds(address, token); // пережить рестарт (tdesktop минует логин)
 }
@@ -2055,11 +2692,24 @@ bool SessionActive() {
 	return "?";
 }
 
+// identity не принял наш ключ звонков: на аккаунте уже ключ другого устройства,
+// а замена — только с паролем (P-07), которого у запущенной сессии нет. Такое
+// устройство подписывает сигналы звонка signing-ключом устройства из каталога
+// prekeys (как веб) — собеседник находит его среди ключей устройств контакта.
+std::atomic<bool> g_callKeyForeign{ false };
+
+// Подпись данных звонка для CallManager/GroupCallManager: "" → подпишет ключ
+// звонков (обычный путь первого устройства).
+[[nodiscard]] std::string SignCallData(const std::string &data) {
+	return g_callKeyForeign.load() ? parvane::e2e::sign(data) : std::string();
+}
+
 // Публикует наш публичный ключ звонков в каталоге identity (identity.user.setkey),
 // чтобы собеседник мог проверять подпись SDP. Неблокирующая (worker). Значения
 // передаются аргументами (НЕ лочим g_sessionMutex: зовётся из StartSession,
 // который его уже держит — иначе дедлок).
 void RegisterCallKey(const QString &pub, const QString &token) {
+	g_callKeyForeign = false;
 	if (pub.isEmpty() || token.isEmpty()) {
 		return;
 	}
@@ -2076,9 +2726,18 @@ void RegisterCallKey(const QString &pub, const QString &token) {
 			return;
 		}
 		try {
-			t->request(parvane::topics::IdentitySetKey, req, 3000);
-			LOG(("Parvane: зарегистрирован ключ звонков %1…")
-				.arg(pub.left(12)));
+			const auto raw = t->request(parvane::topics::IdentitySetKey, req, 3000);
+			const auto resp = parvane::json::parse(raw, nullptr, false);
+			if (resp.is_object() && resp.value("ok", false)) {
+				LOG(("Parvane: зарегистрирован ключ звонков %1…")
+					.arg(pub.left(12)));
+			} else if (resp.is_object()) {
+				// Отказ по существу (не сбой сети): ключ аккаунта принадлежит
+				// другому устройству.
+				g_callKeyForeign = true;
+				LOG(("Parvane: ключ звонков не принят identity (на аккаунте ключ "
+					"другого устройства) — сигналы звонка подписывает ключ устройства"));
+			}
 		} catch (const std::exception &) {
 		}
 	});
@@ -2088,6 +2747,7 @@ void RegisterCallKey(const QString &pub, const QString &token) {
 // request), берёт транспорт/токен под локом и отпускает — НЕ звать под
 // g_sessionMutex напрямую (initDevice блокирующий).
 void StartHistoryLinking();
+void StartDeviceLinkOfferForV2();
 
 void InitE2E() {
 	crl::async([] {
@@ -2279,6 +2939,7 @@ bool StartSession() {
 		ccb.peerPubkeys = [](std::string peer) {
 			return parvane::e2e::contactSigningKeys(peer);
 		};
+		ccb.sign = SignCallData;
 		// Входящий звонок (прошёл аутентификацию). Пока — лог + опц. авто-приём
 		// (headless e2e). UI-панель — Э4-b2. НЕ звать accept() синхронно (дедлок
 		// мьютекса менеджера) — откладываем на main.
@@ -2411,6 +3072,7 @@ bool StartSession() {
 		gcb.peerPubkeys = [](std::string peer) {
 			return parvane::e2e::contactSigningKeys(peer);
 		};
+		gcb.sign = SignCallData;
 		gcb.onPeerState = [](std::string peer, parvane::CallState s) {
 			LOG(("Parvane: groupcall %1 → %2")
 				.arg(QString::fromStdString(peer)).arg(CallStateName(s)));
@@ -2422,6 +3084,7 @@ bool StartSession() {
 
 		RegisterCallKey(QString::fromStdString(g_callKey->publicB64()), g_token);
 		InitE2E(); // E2E: аккаунт + публикация prekeys (Фаза 2), на воркере
+		StartV2Locked(); // протокол v2 (двойной стек), если включён
 
 		LOG(("Parvane: сессия поднята для %1").arg(g_selfAddress));
 		return true;
@@ -2459,6 +3122,7 @@ void OnAuthRejected(const QString &reason) {
 
 void StopSession() {
 	ResetLocationMaps(); // склейки карт и кэш тайлов — на сессию
+	StopV2(); // до g_sessionMutex: рабочий поток v2 берёт его в обработчиках
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	g_messenger.reset();
 	g_transport.reset();
@@ -2544,8 +3208,15 @@ void MirrorOutgoing(
 	g_pendingOwnUuids.enqueue(QString::fromStdString(preId));
 	auto entitiesJson = entitiesToJson(textWithEntities.entities);
 	// @упоминания: авто-детект @user@server → mention-entities (поверх форматирования).
+	auto mentionCount = 0;
 	for (auto &me : detectMentions(text)) {
 		entitiesJson.push_back(std::move(me));
+		++mentionCount;
+	}
+	if (mentionCount > 0) {
+		// Журнал на диске зашифрован (P-13) — e2e сверяет round-trip по логу.
+		LOG(("Parvane: исходящее msg %1: mention-entity ×%2")
+			.arg(QString::fromStdString(preId)).arg(mentionCount));
 	}
 	const auto url = firstUrlInText(text);
 	if (url.isEmpty()) {
@@ -2785,6 +3456,12 @@ void MirrorReact(not_null<HistoryItem*> item, const QString &emoji) {
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	const auto emojiStd = emoji.toStdString();
+	if (TryMutateV2(it.value(), parvane::json{{"reaction", {
+			{"target", parvane::v2::ref(uuid)},
+			{"emoji", emojiStd},
+			{"remove", emojiStd.empty()}}}})) {
+		return; // сообщение v2-чата: реакция — E2E-содержимым v2
+	}
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
 		{
@@ -2810,6 +3487,11 @@ void MirrorPin(not_null<HistoryItem*> item, bool pin) {
 	const auto uuid = it.value().toStdString();
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
+	if (TryMutateV2(it.value(), parvane::json{{"pin", {
+			{"target", parvane::v2::ref(uuid)},
+			{"unpin", !pin}}}})) {
+		return;
+	}
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
 		{
@@ -2843,6 +3525,10 @@ void MirrorTyping(PeerData *peer) {
 		address = GroupIdForChat(peer);
 	}
 	if (address.isEmpty()) {
+		return;
+	}
+	// L2-1: в чате с усиленной приватностью «печатает» не передаётся.
+	if (L2Active(address)) {
 		return;
 	}
 	// Эфемерно (fire-and-forget) на msg.typing.<id>; шард не нужен.
@@ -2890,6 +3576,11 @@ void handleTypingFrame(const std::string &payload) {
 	const auto toQ = QString::fromStdString(to);
 	if (fromQ == SelfAddress()) {
 		return; // своё эхо не показываем
+	}
+	// L2-1: «печатает» в чате с усиленной приватностью не показываем, даже
+	// если собеседник (старый клиент) его прислал.
+	if (L2Active((!toQ.isEmpty() && toQ != SelfAddress()) ? toQ : fromQ)) {
+		return;
 	}
 	crl::on_main([fromQ, toQ] {
 		const auto session = g_sessionWeak.get();
@@ -2953,6 +3644,12 @@ void MirrorDelete(std::int64_t msgId) {
 	const auto uuid = it.value().toStdString();
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
+	if (TryMutateV2(it.value(), parvane::json{{"delete", {
+			{"targets", parvane::json::array({ parvane::v2::ref(uuid) })},
+			{"for_everyone", true}}}})) {
+		LOG(("Parvane: удаление своего msg %1 [v2]").arg(it.value()));
+		return;
+	}
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
 		{
@@ -2980,6 +3677,34 @@ void publishEditAsync(
 		const parvane::json &content) {
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
+	if (const auto uuidQ = QString::fromStdString(uuid); !V2PeerOf(uuidQ).isEmpty()) {
+		// Сообщение v2-чата: правка — E2E-содержимым v2 (Edit{target,text|location}).
+		auto edit = parvane::json{{"target", parvane::v2::ref(uuid)}};
+		const auto kind = parvane::contentKind(content);
+		if (kind == "location") {
+			if (const auto m = parvane::v2::toV2(content)) {
+				edit["location"] = (*m)["location"];
+			}
+		} else {
+			const auto text = (kind == "text")
+				? content.value("text", std::string())
+				: content.value("caption", std::string());
+			if (const auto m = parvane::v2::toV2(parvane::textContent(
+					text, parvane::contentEntities(content)))) {
+				edit["text"] = (*m)["text"];
+			}
+		}
+		{
+			std::lock_guard<std::mutex> lk(g_v2Mutex);
+			if (auto it = g_v2Cache.find(uuidQ); it != g_v2Cache.end()) {
+				it.value().content = content;
+				it.value().edited = true;
+			}
+		}
+		cacheOwnOutgoing(uuid, from, content);
+		TryMutateV2(uuidQ, parvane::json{{"edit", edit}});
+		return;
+	}
 	crl::async([=] {
 		parvane::MessengerClient *m = nullptr;
 		parvane::ITransport *t = nullptr;
@@ -3080,10 +3805,47 @@ void MirrorRead(std::int64_t peerId) {
 		return;
 	}
 	auto ids = std::vector<std::string>();
+	// v2-сообщения: квитанция прочтения — E2E-содержимым v2 их автору.
+	auto v2ByPeer = QHash<QString, parvane::json>();
 	for (const auto &u : it.value()) {
+		if (const auto peer = V2PeerOf(u); !peer.isEmpty()) {
+			auto &list = v2ByPeer[peer];
+			if (!list.is_array()) {
+				list = parvane::json::array();
+			}
+			list.push_back(parvane::v2::ref(u.toStdString()));
+			continue;
+		}
 		ids.push_back(u.toStdString());
 	}
 	it.value().clear();
+	if (!v2ByPeer.isEmpty()) {
+		auto v2ids = std::vector<std::string>();
+		for (auto p = v2ByPeer.cbegin(); p != v2ByPeer.cend(); ++p) {
+			for (const auto &r : p.value()) {
+				if (const auto u = parvane::v2::b64ToUuid(r.value("op_id", std::string()))) {
+					v2ids.push_back(*u);
+				}
+			}
+		}
+		// READ-1: отчитано (квитанцию доставит движок, v1-повторы не нужны).
+		crl::async([v2ids] {
+			NoteConfirmedRead(v2ids);
+			AppendReadJournal(v2ids);
+		});
+	}
+	for (auto p = v2ByPeer.cbegin(); p != v2ByPeer.cend(); ++p) {
+		const auto first = p.value().empty()
+			? QString()
+			: QString::fromStdString(parvane::v2::b64ToUuid(
+				p.value()[0].value("op_id", std::string())).value_or(std::string()));
+		TryMutateV2(first, parvane::json{{"receipt", {
+			{"kind", "RECEIPT_KIND_READ"},
+			{"messages", p.value()}}}});
+	}
+	if (ids.empty()) {
+		return;
+	}
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	crl::async([=] {
@@ -3305,14 +4067,12 @@ void MirrorOutgoingFile(
 					return;
 				}
 			} else {
-				const auto sealed = sealGroup(m, t, to, content, token);
-				if (sealed.empty()) {
+				id = sendGroupContent(m, t, to, content, token);
+				if (id.empty()) {
 					LOG(("Parvane: E2E медиа группы не удался для %1 — не отправлено")
 						.arg(QString::fromStdString(to)));
 					return;
 				}
-				id = m->sendContent(from, to, nlohmann::json::parse(sealed), token,
-					std::nullopt, std::nullopt, parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -3641,15 +4401,12 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 					return;
 				}
 			} else {
-				const auto sealed = sealGroup(m, t, to, content, token);
-				if (sealed.empty()) {
+				id = sendGroupContent(m, t, to, content, token);
+				if (id.empty()) {
 					LOG(("Parvane: E2E стикера группы не удался для %1")
 						.arg(QString::fromStdString(to)));
 					return;
 				}
-				id = m->sendContent(from, to,
-					nlohmann::json::parse(sealed), token, std::nullopt, std::nullopt,
-					parvane::json::array(), E2eSigner());
 			}
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -4344,7 +5101,9 @@ bool ApplyGroupInfo(
 	for (const auto &member : mem) {
 		recipients.push_back(member.toStdString());
 	}
-	if (parvane::e2e::groupSyncRecipients(gid.toStdString(), recipients)) {
+	// Группа v2: ключи — эпохи движка (новая эпоха по записи журнала), не Megolm v1.
+	if (!parvane::v2::isGroupAddress(gi.group_id)
+			&& parvane::e2e::groupSyncRecipients(gid.toStdString(), recipients)) {
 		LOG(("Parvane: участник выбыл из %1 → ротация ключа группы").arg(gid));
 	}
 	if (!chat) {
@@ -4553,8 +5312,32 @@ void runGroupOp(const QString &tag, Op op, GroupOpDone done) {
 	return QString();
 }
 
+// Группа v2: set_info целиком (имя/описание/фото — одна запись журнала).
+[[nodiscard]] nlohmann::json V2SetInfo(
+		const nlohmann::json &info,
+		std::optional<std::string> name,
+		std::optional<std::string> about,
+		std::optional<std::string> avatar) {
+	if (!info.is_object()) {
+		return nullptr;
+	}
+	return { { "set_info", {
+		{ "name", name.value_or(info.value("name", std::string())) },
+		{ "about", about.value_or(info.value("about", std::string())) },
+		{ "avatar_file_id", avatar.value_or(info.value("avatarFileId", std::string())) } } } };
+}
+
+[[nodiscard]] nlohmann::json V2MemberRef(const QString &member) {
+	return { { "member", { { "address", member.toStdString() } } } };
+}
+
 // ── US1: описание и фото группы ──────────────────────────────────────────────
 void SetGroupAbout(const QString &groupId, const QString &about, GroupOpDone done) {
+	if (RunV2GroupChange(u"SETINFO about '%1'"_q.arg(groupId), groupId, [text = about.toStdString()](const nlohmann::json &info) {
+			return V2SetInfo(info, std::nullopt, text, std::nullopt);
+		}, done)) {
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	const auto text = about.toStdString();
 	runGroupOp(u"SETINFO about '%1'"_q.arg(groupId), [gid, text](parvane::GroupClient &g, const std::string &token) {
@@ -4563,6 +5346,11 @@ void SetGroupAbout(const QString &groupId, const QString &about, GroupOpDone don
 }
 
 void ClearGroupPhoto(const QString &groupId, GroupOpDone done) {
+	if (RunV2GroupChange(u"SETINFO clear_avatar '%1'"_q.arg(groupId), groupId, [](const nlohmann::json &info) {
+			return V2SetInfo(info, std::nullopt, std::nullopt, std::string());
+		}, done)) {
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	runGroupOp(u"SETINFO clear_avatar '%1'"_q.arg(groupId), [gid](parvane::GroupClient &g, const std::string &token) {
 		return g.setInfo(token, gid, std::nullopt, std::nullopt, true);
@@ -4595,6 +5383,15 @@ void SetGroupAdmin(const QString &groupId, const QString &member, ChatAdminRight
 	const auto isPromotion = !demote && (wire.change_info || wire.delete_messages || wire.ban_users
 		|| wire.invite_users || wire.pin_messages || wire.add_admins);
 	const auto opt = isPromotion ? std::optional<parvane::AdminRights>(wire) : std::nullopt;
+	if (RunV2GroupChange(u"SETADMIN '%1' %2 %3"_q.arg(groupId, member, isPromotion ? u"rights"_q : u"demote"_q),
+			groupId, [member, isPromotion, wire](const nlohmann::json &) {
+				return nlohmann::json{ { "set_role", {
+					{ "member", { { "address", member.toStdString() } } },
+					{ "role", isPromotion ? "ROLE_ADMIN" : "ROLE_MEMBER" },
+					{ "rights", isPromotion ? wire.toJson() : nlohmann::json::object() } } } };
+			}, done)) {
+		return;
+	}
 	runGroupOp(u"SETADMIN '%1' %2 %3"_q.arg(groupId, member, isPromotion ? u"rights"_q : u"demote"_q),
 		[gid, mem, opt](parvane::GroupClient &g, const std::string &token) {
 			return g.setAdmin(token, gid, mem, opt);
@@ -4605,6 +5402,11 @@ void SetGroupAdmin(const QString &groupId, const QString &member, ChatAdminRight
 void SetGroupPerms(const QString &groupId, ChatRestrictions rights, GroupOpDone done) {
 	const auto gid = groupId.toStdString();
 	const auto perms = permsFromRestrictions(rights);
+	if (RunV2GroupChange(u"SETPERMS '%1'"_q.arg(groupId), groupId, [perms](const nlohmann::json &) {
+			return nlohmann::json{ { "set_permissions", { { "default_permissions", perms.toJson() } } } };
+		}, done)) {
+		return;
+	}
 	runGroupOp(u"SETPERMS '%1'"_q.arg(groupId), [gid, perms](parvane::GroupClient &g, const std::string &token) {
 		return g.setPerms(token, gid, perms);
 	}, std::move(done));
@@ -4652,6 +5454,11 @@ void SetGroupPhoto(const QString &groupId, const QImage &image, GroupOpDone done
 					done(false, u"upload_failed"_q);
 				}
 			});
+			return;
+		}
+		if (RunV2GroupChange(u"SETINFO avatar '%1'"_q.arg(groupId), groupId, [fileId](const nlohmann::json &info) {
+				return V2SetInfo(info, std::nullopt, std::nullopt, fileId);
+			}, done)) {
 			return;
 		}
 		runGroupOp(u"SETINFO avatar '%1'"_q.arg(groupId), [gid, fileId](parvane::GroupClient &g, const std::string &token) {
@@ -4798,8 +5605,14 @@ not_null<UserData*> ensurePeerUser(
 			}
 			// setAbout вернёт true только при реальном изменении → лог однократно.
 			if (result->setAbout(about)) {
+				// Все устройства: после переустановки у собеседника их два (старое
+				// не отозвано), порядок — по device_id, первым бывает и старое.
+				auto all = QStringList();
+				for (const auto &fp : fps) {
+					all.push_back(QString::fromStdString(fp.fingerprint));
+				}
 				LOG(("Parvane: ключ безопасности с %1 в профиле: %2")
-					.arg(address, QString::fromStdString(fps.front().fingerprint)));
+					.arg(address, all.join(u"; "_q)));
 			}
 		}
 	}
@@ -6228,6 +7041,75 @@ bool prepareIncoming(
 }
 
 // Инъекция результатов sync в Data::Session. Только main-поток. Дедуп по UUID.
+// T079 (правило L2-1, CONTENT-1): содержимое {"kind":"chat_mode","l2":bool} —
+// нативное служебное сообщение чата «… включил(а)/выключил(а) усиленную
+// приватность». Личный чат: автор — участник (операция ChatMode); группа v2:
+// автор — тот, кто задал политику (событие сессии groupL2).
+void injectChatModeMessage(
+		not_null<Main::Session*> session,
+		const parvane::StoredMessage &sm) {
+	const auto self = SelfAddress();
+	const auto from = QString::fromStdString(sm.from);
+	const auto to = QString::fromStdString(sm.to);
+	const auto uuid = QString::fromStdString(sm.id);
+	const auto enabled = sm.content.is_object() && sm.content.value("l2", false);
+	const auto isOwn = (from == self);
+	auto dialog = PeerId();
+	auto chatAddress = QString();
+	if (g_knownGroups.contains(to)) {
+		ensureGroupChat(session, to, g_knownGroups.value(to), 0);
+		dialog = peerFromChat(ChatId(BareId(IdForAddress(to))));
+		chatAddress = to;
+	} else {
+		chatAddress = isOwn ? to : from;
+		if (chatAddress.isEmpty() || parvane::v2::isGroupAddress(chatAddress.toStdString())) {
+			g_uuidToMsgId.insert(uuid, 0); // группа ещё не известна — не показываем
+			return;
+		}
+		RegisterPeer(chatAddress);
+		const auto peerId = IdForAddress(chatAddress);
+		ensurePeerUser(session, peerId, chatAddress);
+		dialog = peerFromUser(UserId(BareId(peerId)));
+	}
+	auto text = QString();
+	if (isOwn) {
+		text = enabled
+			? tr::lng_parvane_chat_mode_on_you(tr::now)
+			: tr::lng_parvane_chat_mode_off_you(tr::now);
+	} else if (from.isEmpty()) {
+		text = tr::lng_parvane_enhanced_privacy(tr::now);
+	} else {
+		const auto user = ensurePeerUser(session, IdForAddress(from), from);
+		text = enabled
+			? tr::lng_parvane_chat_mode_on(tr::now, lt_user, user->name())
+			: tr::lng_parvane_chat_mode_off(tr::now, lt_user, user->name());
+	}
+	const auto msgId = MsgId(g_nextMsgId++);
+	g_uuidToMsgId.insert(uuid, msgId.bare);
+	g_msgIdToUuid.insert(msgId.bare, uuid);
+	const auto item = session->data().addNewMessage(
+		msgId,
+		MTP_messageService(
+			MTP_flags(MTPDmessageService::Flags(0)),
+			MTP_int(0),
+			MTPPeer(),                  // from_id
+			peerToMTP(dialog),
+			MTPPeer(),                  // saved_peer_id
+			MTPMessageReplyHeader(),
+			MTP_int(int(sm.ts ? sm.ts : QDateTime::currentSecsSinceEpoch())),
+			MTP_messageActionCustomAction(MTP_string(text)),
+			MTPMessageReactions(),
+			MTPint()),                  // ttl_period
+		MessageFlags(),
+		NewMessageType::Unread);
+	if (item && !item->history()->folderKnown()) {
+		item->history()->clearFolder();
+	}
+	LOG(("Parvane: режим L2 чата %1: %2 (%3) — служебное сообщение msg %4")
+		.arg(chatAddress, enabled ? u"включён"_q : u"выключен"_q,
+			isOwn ? u"мной"_q : from, uuid));
+}
+
 void injectOnMain(
 		not_null<Main::Session*> session,
 		const std::vector<parvane::StoredMessage> &msgs,
@@ -6290,7 +7172,8 @@ void injectOnMain(
 		// (sealed: указываем реального отправителя из конверта). Идемпотентно.
 		// При воспроизведении журнала (live=false) НЕ ackаем (сообщение уже давно
 		// обработано; ack сорвал бы офлайн-очередь для реально новых).
-		if (live && sm.from != selfStd) {
+		// v2-сообщения подтверждает движок (msg.inbox.ack) — v1-ack не шлём.
+		if (live && sm.from != selfStd && !IsV2Message(sm.id)) {
 			const auto mid = sm.id;
 			const auto sender = sm.from;
 			crl::async([mid, sender] {
@@ -6461,6 +7344,22 @@ void injectOnMain(
 			base::call_delayed(ttl * crl::time(1000), [uuid] {
 				DecCacheRemove(uuid);
 			});
+		}
+		// Режим «усиленная приватность» (T079, L2-1): смена режима — нативное
+		// служебное сообщение чата (личный чат и группа v2), не пузырь.
+		if (parvane::contentKind(sm.content) == parvane::v2::kChatModeKind) {
+			// Только подписанная операция v2 (состояние ведёт движок): присланное
+			// по v1 (старый или злонамеренный клиент) не показываем — иначе
+			// собеседник нарисовал бы «режим включён».
+			LoadV2Ids();
+			if (!IsV2Message(sm.id)) {
+				LOG(("Parvane: chat_mode по v1 отброшен msg %1").arg(uuid));
+				g_uuidToMsgId.insert(uuid, 0);
+				continue;
+			}
+			injectChatModeMessage(session, sm);
+			++added;
+			continue;
 		}
 		// Опросы: голос/закрытие — служебные события (в агрегат, не в историю);
 		// сам опрос — отдельная инъекция (медиа-poll, 1-на-1 и группа).
@@ -6646,6 +7545,28 @@ void injectOnMain(
 		}
 		const auto authorId = isOwn ? selfId : peerId;
 		const auto out = isOwn;
+		if (parvane::contentKind(sm.content) == "unsupported") {
+			// Протокол v2: вид, которого клиент не знает (или движок пометил
+			// заглушкой), — штатное «сообщение не поддерживается» tdesktop
+			// (messageMediaUnsupported → UnsupportedMessageText), курсор идёт.
+			RegisterPeer(peerAddress);
+			ensurePeerUser(session, peerId, peerAddress);
+			const auto msgId = MsgId(g_nextMsgId++);
+			g_uuidToMsgId.insert(uuid, msgId.bare);
+			g_msgIdToUuid.insert(msgId.bare, uuid);
+			const auto item = session->data().addNewMessage(
+				msgId,
+				buildMessage(authorId, peerId, out, sm.ts, QString(),
+					MTP_messageMediaUnsupported(), /*hasMedia=*/true),
+				MessageFlags(),
+				NewMessageType::Unread);
+			if (item && !item->history()->folderKnown()) {
+				item->history()->clearFolder();
+			}
+			++added;
+			LOG(("Parvane: заглушка unsupported msg %1 (%2)").arg(uuid, peerAddress));
+			continue;
+		}
 		const auto maybeText = sm.text();
 		if (!maybeText) {
 			// Медиа (Фаза 4b): резервируем msgId и уходим качать блоб на воркер;
@@ -6742,6 +7663,9 @@ void injectOnMain(
 		const auto ttl = TtlFromContent(sm.content);
 		const auto mentionsSelf = !out && MentionsSelf(
 			text, parvane::contentEntities(sm.content), self);
+		if (mentionsSelf) {
+			LOG(("Parvane: msg %1: mention-entity этого аккаунта → f_mentioned").arg(uuid));
+		}
 		const auto item = session->data().addNewMessage(
 			msgId,
 			buildMessage(authorId, peerId, out, sm.ts, text,
@@ -6831,6 +7755,9 @@ void HandlePresencePayload(const std::string &payload) {
 		return;
 	}
 	const auto fromQ = QString::fromStdString(from);
+	if (L2Active(fromQ)) {
+		return; // L2-1: «в сети» собеседника L2-чата не показываем
+	}
 	crl::on_main([fromQ] {
 		const auto session = g_sessionWeak.get();
 		if (!session || fromQ == SelfAddress()) {
@@ -6854,6 +7781,11 @@ void HandlePresencePayload(const std::string &payload) {
 void publishPresenceHeartbeat() {
 	const auto self = SelfAddress();
 	if (self.isEmpty()) {
+		return;
+	}
+	// L2-1: присутствие одно на аккаунт — не публикуем, пока усиленная
+	// приватность активна хотя бы в одном чате.
+	if (!g_l2PresenceAllowed) {
 		return;
 	}
 	const auto selfStd = self.toStdString();
@@ -7145,6 +8077,9 @@ struct ScheduledItem {
 	qint64 dueAt = 0;  // unix-секунды
 };
 std::vector<ScheduledItem> g_scheduled; // под g_sessionMutex
+namespace {
+void FireScheduledGated(const ScheduledItem &item); // журнал состояния v2 (ниже)
+} // namespace
 QSet<QString> g_scheduledArmed;         // id, для которых таймер уже взведён (main)
 
 QString ScheduledPath() { return cWorkingDir() + u"tdata/parvane-scheduled.json"_q; }
@@ -7201,24 +8136,18 @@ void ArmScheduledTimers() {
 			(it.dueAt <= now ? due : pending).push_back(it);
 		}
 	}
-	const auto pop = [](const QString &id) {
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		g_scheduled.erase(std::remove_if(g_scheduled.begin(), g_scheduled.end(),
-			[&](const auto &s) { return s.id == id; }), g_scheduled.end());
-		SaveScheduledLocked();
-	};
+	// Снятие из очереди + отправка; снятое журналом состояния (удалено или
+	// отправлено другим устройством) не уходит (FireScheduledGated).
 	for (const auto &it : due) {
-		FireScheduled(it);
-		pop(it.id);
+		FireScheduledGated(it);
 	}
 	for (const auto &it : pending) {
 		// Клампим задержку (защита от переполнения при испорченном далёком due
 		// на диске): максимум ~24 дня.
 		const auto secs = std::clamp<qint64>(
 			it.dueAt - QDateTime::currentSecsSinceEpoch(), 0, qint64(2000000));
-		base::call_delayed(std::max<crl::time>(crl::time(secs * 1000), 1), [it, pop] {
-			FireScheduled(it);
-			pop(it.id);
+		base::call_delayed(std::max<crl::time>(crl::time(secs * 1000), 1), [it] {
+			FireScheduledGated(it);
 		});
 	}
 }
@@ -7266,6 +8195,7 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 	LOG(("Parvane: сообщение запланировано → %1 на %2")
 		.arg(address).arg(QDateTime::fromSecsSinceEpoch(dueAt).toString(Qt::ISODate)));
 	ArmScheduledTimers();
+	ScheduleStateFlush(); // журнал личного состояния v2 (T098)
 }
 
 // Загрузить очередь с диска и взвести таймеры (на старте сессии).
@@ -7314,6 +8244,991 @@ namespace {
 }
 
 } // namespace
+
+// ── Протокол v2: группы, T080/T119 и журнал личного состояния (spec 007) ─────
+// Порт web `src/api/parvane/v2/controller.ts` (группы, ссылки, свои
+// устройства) и `stateJournal.ts` (папки/отложенные). Протокол целиком — в
+// v2-сессии parvane-core; здесь — перекладка в нативные объекты tdesktop:
+// сведения группы из проверенного журнала → тот же parvane::GroupInfo, что у
+// v1-групп (ApplyGroupInfo → синтетический ChatData), адрес группы в
+// клиентах — "v2g:<hex id>" (как в вебе).
+namespace {
+
+[[nodiscard]] QString V2GroupsCachePath() {
+	return cWorkingDir() + u"tdata/parvane-v2-groups.json"_q;
+}
+
+// Права/разрешения движка (proto3-JSON, ложные поля опущены) → структуры v1.
+[[nodiscard]] parvane::AdminRights V2AdminRights(const parvane::json &r) {
+	auto a = parvane::AdminRights::none();
+	if (!r.is_object()) {
+		return a;
+	}
+	a.change_info = r.value("change_info", false);
+	a.delete_messages = r.value("delete_messages", false);
+	a.ban_users = r.value("ban_users", false);
+	a.invite_users = r.value("invite_users", false);
+	a.pin_messages = r.value("pin_messages", false);
+	a.add_admins = r.value("add_admins", false);
+	return a;
+}
+
+[[nodiscard]] parvane::DefaultPermissions V2Permissions(const parvane::json &p) {
+	auto d = parvane::DefaultPermissions();
+	const auto get = [&](const char *k) {
+		return p.is_object() && p.value(k, false);
+	};
+	d.send_messages = get("send_messages");
+	d.send_media = get("send_media");
+	d.send_stickers_gifs = get("send_stickers_gifs");
+	d.send_polls = get("send_polls");
+	d.embed_links = get("embed_links");
+	d.invite_users = get("invite_users");
+	d.pin_messages = get("pin_messages");
+	d.change_info = get("change_info");
+	return d;
+}
+
+// Сведения группы из журнала (groupInfo движка) → parvane::GroupInfo.
+[[nodiscard]] parvane::GroupInfo V2GroupInfo(const QString &address, const parvane::json &g) {
+	auto gi = parvane::GroupInfo();
+	gi.group_id = address.toStdString();
+	gi.name = g.value("name", std::string());
+	gi.kind = (g.value("kind", 1) == 2) ? "channel" : "group";
+	gi.created_by = g.value("owner", std::string());
+	if (g.contains("members") && g["members"].is_array()) {
+		for (const auto &m : g["members"]) {
+			auto gm = parvane::GroupMember();
+			gm.address = m.value("user", std::string());
+			const auto role = m.value("role", 1);
+			gm.role = (role == 3) ? "owner" : (role == 2) ? "admin" : "member";
+			if (role == 2) {
+				gm.admin_rights = V2AdminRights(m.value("rights", parvane::json()));
+			}
+			gi.members.push_back(std::move(gm));
+		}
+	}
+	if (g.contains("banned") && g["banned"].is_array()) {
+		for (const auto &b : g["banned"]) {
+			if (b.is_string()) {
+				auto gm = parvane::GroupMember();
+				gm.address = b.get<std::string>();
+				gm.role = "banned";
+				gi.members.push_back(std::move(gm));
+			}
+		}
+	}
+	gi.avatar = g.value("avatarFileId", std::string());
+	gi.about = g.value("about", std::string());
+	gi.default_permissions = V2Permissions(g.value("defaultPermissions", parvane::json()));
+	gi.version = g.value("version", std::uint64_t(0));
+	gi.pending_requests = -1;
+	return gi;
+}
+
+// Сведения v2-групп переживают рестарт: история из журнала кладётся в чат
+// группы, только если группа уже известна (до подъёма v2-сессии). Только
+// метаданные (как web `parvane:v2groups:<self>`).
+void SaveV2GroupCache(const QString &address, const parvane::json *info) {
+	auto all = parvane::json::parse(StoreRead(V2GroupsCachePath()).toStdString(), nullptr, false);
+	if (!all.is_object()) {
+		all = parvane::json::object();
+	}
+	if (info) {
+		all[address.toStdString()] = *info;
+	} else {
+		all.erase(address.toStdString());
+	}
+	StoreWrite(V2GroupsCachePath(), QString::fromStdString(all.dump()).toUtf8());
+}
+
+void LoadV2GroupCache(not_null<Main::Session*> session) {
+	const auto all = parvane::json::parse(StoreRead(V2GroupsCachePath()).toStdString(), nullptr, false);
+	if (!all.is_object()) {
+		return;
+	}
+	auto n = 0;
+	for (auto it = all.begin(); it != all.end(); ++it) {
+		if (parvane::v2::isGroupAddress(it.key()) && it.value().is_object()) {
+			ApplyGroupInfo(session, V2GroupInfo(QString::fromStdString(it.key()), it.value()), u"v2 кэш"_q);
+			++n;
+		}
+	}
+	if (n) {
+		LOG(("Parvane: v2: группы из кэша: %1").arg(n));
+	}
+}
+
+// T080 (FR-028): сервер показывает участника без подтверждённой записи
+// администратора — ключей он не получает; нативное служебное сообщение в чате.
+void AnnounceUnconfirmed(const QString &address, const QStringList &members) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	const auto chat = ensureGroupChat(session, address, g_knownGroups.value(address), 0);
+	if (!chat) {
+		return;
+	}
+	for (const auto &member : members) {
+		const auto user = ensurePeerUser(session, IdForAddress(member), member);
+		const auto text = tr::lng_parvane_group_unconfirmed_member(tr::now, lt_user, user->name());
+		session->data().addNewMessage(
+			MsgId(g_nextMsgId++),
+			MTP_messageService(
+				MTP_flags(MTPDmessageService::Flags(0)),
+				MTP_int(0),
+				MTPPeer(),                  // from_id
+				peerToMTP(chat->id),
+				MTPPeer(),                  // saved_peer_id
+				MTPMessageReplyHeader(),
+				MTP_int(int(QDateTime::currentSecsSinceEpoch())),
+				MTP_messageActionCustomAction(MTP_string(text)),
+				MTPMessageReactions(),
+				MTPint()),                  // ttl_period
+			MessageFlags(),
+			NewMessageType::Unread);
+		LOG(("Parvane: v2: в группе %1 участник %2 без подтверждённой записи администратора — служебное сообщение")
+			.arg(address, member));
+	}
+}
+
+// T119: в своём журнале устройств появилось новое устройство — нативное
+// сервисное уведомление (как «новый вход» в Telegram).
+void AnnounceNewOwnDevices(int count) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	const auto history = session->data().history(PeerData::kServiceNotificationsId);
+	if (!history->folderKnown()) {
+		history->clearFolder(); // иначе requestDialogEntry ушёл бы в MTProto
+	}
+	session->data().serviceNotification(TextWithEntities{ tr::lng_parvane_new_own_device(tr::now) });
+	LOG(("Parvane: v2: новое своё устройство (%1) — сервисное уведомление").arg(count));
+}
+
+void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	SaveV2GroupCache(address, &info);
+	ApplyGroupInfo(session, V2GroupInfo(address, info), isNew ? u"v2 новая"_q : u"v2 журнал"_q);
+	LOG(("Parvane: v2: группа %1 %2 (v%3, эпоха %4, участников %5)")
+		.arg(address, isNew ? u"появилась"_q : u"обновлена"_q)
+		.arg(info.value("version", std::uint64_t(0)))
+		.arg(info.value("epoch", std::uint64_t(0)))
+		.arg(int(info.value("members", parvane::json::array()).size())));
+}
+
+// ── журнал личного состояния (T098): папки и отложенные ─────────────────────
+// Рабочая копия — нативные данные tdesktop (фильтры Data::ChatFilters,
+// очередь g_scheduled); правка пользователя → разница со сведённым снимком →
+// записи журнала; записи других устройств → снимок → нативные объекты.
+// Черновики tdesktop хранит в своём локальном хранилище, блок-лист и архив у
+// десктопа локально не ведутся (MTProto заглушён) — эти виды журнал не трогает.
+const std::vector<std::string> kV2StateKinds{ "folders", "scheduled" };
+bool g_stateAttached = false;    // main
+bool g_stateApplying = false;    // main: применяем снимок — не зеркалить назад
+bool g_stateFlushQueued = false; // main
+std::unique_ptr<base::Timer> g_stateTimer;
+
+[[nodiscard]] QString StateDomain() {
+	const auto self = SelfAddress();
+	const auto at = self.indexOf('@');
+	return (at >= 0) ? self.mid(at + 1) : QString();
+}
+
+[[nodiscard]] parvane::json StatePeerOf(const QString &address) {
+	if (address.contains('@')) {
+		return { { "user", { { "address", address.toStdString() } } } };
+	}
+	auto hex = parvane::v2::isGroupAddress(address.toStdString())
+		? QString::fromStdString(parvane::v2::groupHex(address.toStdString()))
+		: QString(address).remove('-').toLower();
+	static const auto re = QRegularExpression(u"^[0-9a-f]{32}$"_q);
+	if (!re.match(hex).hasMatch()) {
+		return nullptr;
+	}
+	return { { "group", {
+		{ "domain", StateDomain().toStdString() },
+		{ "id", parvane::v2::hexToB64(hex.toStdString()) } } } };
+}
+
+// Группа v2 — зарегистрированная `v2g:<hex>`; иначе UUIDv7 группы v1.
+[[nodiscard]] QString StateAddressOf(const parvane::json &peer) {
+	if (!peer.is_object()) {
+		return QString();
+	}
+	if (peer.contains("user") && peer["user"].is_object()) {
+		return QString::fromStdString(peer["user"].value("address", std::string()));
+	}
+	if (!peer.contains("group") || !peer["group"].is_object()) {
+		return QString();
+	}
+	const auto hex = QString::fromStdString(
+		parvane::v2::b64ToHex(peer["group"].value("id", std::string())));
+	if (hex.size() != 32) {
+		return QString();
+	}
+	const auto v2 = u"v2g:"_q + hex;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (g_knownGroups.contains(v2)) {
+			return v2;
+		}
+	}
+	const auto isUuidV7 = hex[12] == '7' && QString(u"89ab"_q).contains(hex[16]);
+	return isUuidV7
+		? (hex.mid(0, 8) + '-' + hex.mid(8, 4) + '-' + hex.mid(12, 4) + '-'
+			+ hex.mid(16, 4) + '-' + hex.mid(20))
+		: v2;
+}
+
+[[nodiscard]] QString HistoryAddress(not_null<History*> history) {
+	const auto peer = history->peer;
+	if (peer->isUser()) {
+		return peer->isSelf()
+			? SelfAddress()
+			: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	} else if (peer->isChat()) {
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		return g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
+	}
+	return QString();
+}
+
+[[nodiscard]] History *HistoryForAddress(not_null<Main::Session*> session, const QString &address) {
+	if (address.isEmpty()) {
+		return nullptr;
+	}
+	if (address == SelfAddress()) {
+		return session->data().history(session->user());
+	}
+	if (address.contains('@')) {
+		RegisterPeer(address);
+		return session->data().history(ensurePeerUser(session, IdForAddress(address), address));
+	}
+	QString name;
+	bool known = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		known = g_knownGroups.contains(address);
+		name = g_knownGroups.value(address);
+	}
+	if (known) {
+		if (const auto chat = ensureGroupChat(session, address, name, 0)) {
+			return session->data().history(chat);
+		}
+	}
+	return session->data().history(peerFromChat(ChatId(BareId(IdForAddress(address)))));
+}
+
+// Нативные данные → proto3-JSON StateSnapshot по видам kV2StateKinds.
+[[nodiscard]] parvane::json BuildLocalState(not_null<Main::Session*> session) {
+	using Flag = Data::ChatFilter::Flag;
+	const auto peers = [](const auto &histories) {
+		auto a = parvane::json::array();
+		for (const auto &h : histories) {
+			if (auto p = StatePeerOf(HistoryAddress(h)); !p.is_null()) {
+				a.push_back(std::move(p));
+			}
+		}
+		return a;
+	};
+	auto folders = parvane::json::array();
+	auto order = parvane::json::array();
+	for (const auto &f : session->data().chatsFilters().list()) {
+		if (f.id() <= 1) {
+			continue; // 0 и 1 зарезервированы журналом («все чаты», архив) — не трогаем
+		}
+		const auto flags = f.flags();
+		folders.push_back({
+			{ "id", f.id() },
+			{ "title", f.title().text.text.toStdString() },
+			{ "emoticon", f.iconEmoji().toStdString() },
+			{ "include_peers", peers(f.always()) },
+			{ "exclude_peers", peers(f.never()) },
+			{ "pinned_peers", peers(f.pinned()) },
+			{ "contacts", bool(flags & Flag::Contacts) },
+			{ "non_contacts", bool(flags & Flag::NonContacts) },
+			{ "groups", bool(flags & Flag::Groups) },
+			{ "channels", bool(flags & Flag::Channels) },
+			{ "bots", bool(flags & Flag::Bots) },
+			{ "exclude_muted", bool(flags & Flag::NoMuted) },
+			{ "exclude_read", bool(flags & Flag::NoRead) },
+			{ "exclude_archived", bool(flags & Flag::NoArchived) },
+			{ "color", f.colorIndex() ? int(*f.colorIndex()) : -1 },
+		});
+		order.push_back(f.id());
+	}
+	auto scheduled = parvane::json::array();
+	auto items = std::vector<ScheduledItem>();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		items = g_scheduled;
+	}
+	for (const auto &it : items) {
+		auto peer = StatePeerOf(it.address);
+		const auto content = parvane::v2::toV2(
+			parvane::textContent(it.text.toStdString(), it.entities),
+			it.replyTo.value_or(std::string()));
+		if (peer.is_null() || !content) {
+			continue;
+		}
+		try {
+			scheduled.push_back({
+				{ "op_id", parvane::v2::uuidToB64(it.id.toStdString()) },
+				{ "peer", std::move(peer) },
+				{ "send_at_ms", std::to_string(it.dueAt * 1000) },
+				{ "content", parvane::v2::toBase64(
+					parvane::v2::encodeMessage("parvane.msg.v2.Content", *content)) },
+			});
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: отложенное %1 не в журнал: %2").arg(it.id, QString::fromUtf8(e.what())));
+		}
+	}
+	return {
+		{ "folders", std::move(folders) },
+		{ "folder_order", { { "ids", std::move(order) } } },
+		{ "scheduled", std::move(scheduled) },
+	};
+}
+
+void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap) {
+	using Flag = Data::ChatFilter::Flag;
+	auto &filters = session->data().chatsFilters();
+	const auto current = BuildLocalState(session)["folders"];
+	auto currentById = std::map<int, parvane::json>();
+	for (const auto &f : current) {
+		currentById[f.value("id", 0)] = f;
+	}
+	const auto list = snap.contains("folders") && snap["folders"].is_array()
+		? snap["folders"] : parvane::json::array();
+	auto wanted = std::set<int>();
+	auto changed = 0;
+	for (const auto &f : list) {
+		const auto id = f.value("id", 0);
+		if (id <= 1) {
+			continue;
+		}
+		wanted.insert(id);
+		// Сравнение в нормализованном виде (как BuildLocalState).
+		auto norm = parvane::json{
+			{ "id", id },
+			{ "title", f.value("title", std::string()) },
+			{ "emoticon", f.value("emoticon", std::string()) },
+			{ "include_peers", f.value("include_peers", parvane::json::array()) },
+			{ "exclude_peers", f.value("exclude_peers", parvane::json::array()) },
+			{ "pinned_peers", f.value("pinned_peers", parvane::json::array()) },
+			{ "contacts", f.value("contacts", false) },
+			{ "non_contacts", f.value("non_contacts", false) },
+			{ "groups", f.value("groups", false) },
+			{ "channels", f.value("channels", false) },
+			{ "bots", f.value("bots", false) },
+			{ "exclude_muted", f.value("exclude_muted", false) },
+			{ "exclude_read", f.value("exclude_read", false) },
+			{ "exclude_archived", f.value("exclude_archived", false) },
+			{ "color", f.value("color", -1) },
+		};
+		if (const auto i = currentById.find(id); i != currentById.end() && i->second == norm) {
+			continue;
+		}
+		const auto set = [&](const char *k) {
+			auto s = base::flat_set<not_null<History*>>();
+			for (const auto &p : norm[k]) {
+				if (const auto h = HistoryForAddress(session, StateAddressOf(p))) {
+					s.emplace(h);
+				}
+			}
+			return s;
+		};
+		auto pinned = std::vector<not_null<History*>>();
+		for (const auto &p : norm["pinned_peers"]) {
+			if (const auto h = HistoryForAddress(session, StateAddressOf(p))) {
+				pinned.push_back(h);
+			}
+		}
+		auto flags = Data::ChatFilter::Flags();
+		if (norm["contacts"].get<bool>()) flags |= Flag::Contacts;
+		if (norm["non_contacts"].get<bool>()) flags |= Flag::NonContacts;
+		if (norm["groups"].get<bool>()) flags |= Flag::Groups;
+		if (norm["channels"].get<bool>()) flags |= Flag::Channels;
+		if (norm["bots"].get<bool>()) flags |= Flag::Bots;
+		if (norm["exclude_muted"].get<bool>()) flags |= Flag::NoMuted;
+		if (norm["exclude_read"].get<bool>()) flags |= Flag::NoRead;
+		if (norm["exclude_archived"].get<bool>()) flags |= Flag::NoArchived;
+		const auto color = norm["color"].get<int>();
+		filters.set(Data::ChatFilter(
+			FilterId(id),
+			Data::ChatFilterTitle{
+				TextWithEntities{ QString::fromStdString(norm["title"].get<std::string>()) },
+				false },
+			QString::fromStdString(norm["emoticon"].get<std::string>()),
+			(color >= 0) ? std::optional<uint8>(uint8(color)) : std::nullopt,
+			flags,
+			set("include_peers"),
+			std::move(pinned),
+			set("exclude_peers")));
+		++changed;
+	}
+	for (const auto &[id, f] : currentById) {
+		if (!wanted.contains(id)) {
+			filters.remove(FilterId(id));
+			++changed;
+		}
+	}
+	// Порядок папок (LWW-регистр); «все чаты» (id 0) — на своём месте в начале.
+	if (snap.contains("folder_order") && snap["folder_order"].contains("ids")) {
+		auto ids = QVector<MTPint>();
+		auto localOrder = std::vector<int>();
+		for (const auto &f : filters.list()) {
+			if (!f.id()) {
+				ids.push_back(MTP_int(0));
+			} else {
+				localOrder.push_back(f.id());
+			}
+		}
+		auto wantOrder = std::vector<int>();
+		for (const auto &v : snap["folder_order"]["ids"]) {
+			if (v.is_number_integer() && wanted.contains(v.get<int>())
+				&& ranges::find(localOrder, v.get<int>()) != localOrder.end()) {
+				wantOrder.push_back(v.get<int>());
+			}
+		}
+		for (const auto id : localOrder) {
+			if (ranges::find(wantOrder, id) == wantOrder.end()) {
+				wantOrder.push_back(id);
+			}
+		}
+		if (wantOrder != localOrder) {
+			for (const auto id : wantOrder) {
+				ids.push_back(MTP_int(id));
+			}
+			filters.apply(MTP_updateDialogFilterOrder(MTP_vector<MTPint>(ids)));
+			++changed;
+		}
+	}
+	if (changed) {
+		LOG(("Parvane: v2: журнал состояния → папки (%1 изменений)").arg(changed));
+	}
+}
+
+void ProjectScheduled(const parvane::json &snap) {
+	auto sent = std::set<std::string>();
+	if (snap.contains("scheduled_sent") && snap["scheduled_sent"].is_array()) {
+		for (const auto &id : snap["scheduled_sent"]) {
+			if (id.is_string()) sent.insert(id.get<std::string>());
+		}
+	}
+	auto next = std::vector<ScheduledItem>();
+	if (snap.contains("scheduled") && snap["scheduled"].is_array()) {
+		for (const auto &s : snap["scheduled"]) {
+			const auto opB64 = s.value("op_id", std::string());
+			const auto id = parvane::v2::b64ToUuid(opB64);
+			const auto address = StateAddressOf(s.value("peer", parvane::json()));
+			if (!id || address.isEmpty() || sent.contains(opB64)) {
+				continue;
+			}
+			auto item = ScheduledItem();
+			item.id = QString::fromStdString(*id);
+			item.address = address;
+			try {
+				item.dueAt = std::stoll(s.value("send_at_ms", std::string("0"))) / 1000;
+				const auto raw = parvane::v2::fromBase64Safe(s.value("content", std::string()));
+				const auto content = raw
+					? parvane::v2::decodeMessage("parvane.msg.v2.Content", *raw)
+					: parvane::json();
+				const auto v1 = parvane::v2::fromV2(content);
+				if (!v1 || parvane::contentKind(*v1) != "text") {
+					continue;
+				}
+				item.text = QString::fromStdString(v1->value("text", std::string()));
+				item.entities = v1->contains("entities") ? (*v1)["entities"] : parvane::json::array();
+				if (content.contains("reply_to")) {
+					if (const auto r = parvane::v2::b64ToUuid(content["reply_to"].value("op_id", std::string()))) {
+						item.replyTo = *r;
+					}
+				}
+			} catch (const std::exception &) {
+				continue;
+			}
+			next.push_back(std::move(item));
+		}
+	}
+	auto changed = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		const auto ids = [](const std::vector<ScheduledItem> &v) {
+			auto r = std::vector<QString>();
+			for (const auto &i : v) r.push_back(i.id + ':' + QString::number(i.dueAt) + ':' + i.text);
+			ranges::sort(r);
+			return r;
+		};
+		changed = ids(next) != ids(g_scheduled);
+		if (changed) {
+			g_scheduled = std::move(next);
+			SaveScheduledLocked();
+		}
+	}
+	if (changed) {
+		LOG(("Parvane: v2: журнал состояния → отложенные"));
+		ArmScheduledTimers();
+	}
+}
+
+void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
+	if (!snap.is_object()) {
+		return;
+	}
+	g_stateApplying = true;
+	ProjectFolders(session, snap);
+	ProjectScheduled(snap);
+	g_stateApplying = false;
+	SaveFolders(session);
+}
+
+// Своя правка — сначала в журнал, затем чужие записи (web syncNow).
+void StateSyncNow() {
+	const auto session = g_sessionWeak.get();
+	if (!g_stateAttached || !session) {
+		return;
+	}
+	if (!V2Ready()) {
+		return;
+	}
+	const auto desired = BuildLocalState(session);
+	crl::async([desired] {
+		const auto s = V2Ready();
+		if (!s) {
+			return;
+		}
+		parvane::json r;
+		try {
+			r = s->stateSync(desired, kV2StateKinds);
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: синк журнала состояния: %1").arg(QString::fromUtf8(e.what())));
+			return;
+		}
+		if (!r.is_object() || !r.value("changed", false)) {
+			return;
+		}
+		crl::on_main([snap = r["snapshot"]] {
+			if (const auto session = g_sessionWeak.get()) {
+				ProjectState(session, snap);
+			}
+		});
+	});
+}
+
+void ScheduleStateFlush() {
+	if (!g_stateAttached || g_stateApplying || g_stateFlushQueued) {
+		return;
+	}
+	g_stateFlushQueued = true;
+	base::call_delayed(crl::time(700), [] {
+		g_stateFlushQueued = false;
+		StateSyncNow();
+	});
+}
+
+// Подключить журнал (событие stateReady v2-сессии): первый запуск переносит
+// локальные папки/отложенные в журнал, дальше — синк раз в 8 с и по правке.
+void AttachStateJournal() {
+	const auto session = g_sessionWeak.get();
+	if (!session || !V2Ready()) {
+		return;
+	}
+	const auto local = BuildLocalState(session);
+	crl::async([local] {
+		const auto s = V2Ready();
+		if (!s) {
+			return;
+		}
+		parvane::json snap;
+		try {
+			snap = s->stateAttach(local);
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: журнал состояния не прочитан: %1").arg(QString::fromUtf8(e.what())));
+			return;
+		}
+		if (!snap.is_object()) {
+			return;
+		}
+		crl::on_main([snap] {
+			const auto session = g_sessionWeak.get();
+			if (!session) {
+				return;
+			}
+			g_stateAttached = true;
+			ProjectState(session, snap);
+			if (!g_stateTimer) {
+				g_stateTimer = std::make_unique<base::Timer>([] { StateSyncNow(); });
+			}
+			// SC-009: правка с другого устройства видна ≤ 10 с (как web, 8 с)
+			g_stateTimer->callEach(8 * crl::time(1000));
+			LOG(("Parvane: v2: журнал личного состояния подключён (папки, отложенные)"));
+		});
+	});
+}
+
+// Отложенное: отправляет первое устройство, заметившее срок (web
+// canSendScheduled/markScheduledSent); без журнала — как раньше.
+void FireScheduledGated(const ScheduledItem &item) {
+	auto existed = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		const auto before = g_scheduled.size();
+		g_scheduled.erase(std::remove_if(g_scheduled.begin(), g_scheduled.end(),
+			[&](const auto &s) { return s.id == item.id; }), g_scheduled.end());
+		existed = (g_scheduled.size() != before);
+		if (existed) {
+			SaveScheduledLocked();
+		}
+	}
+	if (!existed) {
+		return; // снято журналом (удалено/отправлено другим устройством)
+	}
+	if (!g_stateAttached) {
+		FireScheduled(item);
+		return;
+	}
+	const auto opId = parvane::v2::uuidToB64(item.id.toStdString());
+	crl::async([item, opId] {
+		auto sent = false;
+		if (const auto s = V2Ready()) {
+			try {
+				sent = s->stateScheduledSent(opId);
+			} catch (const std::exception &) {
+			}
+		}
+		crl::on_main([item, opId, sent] {
+			if (sent) {
+				LOG(("Parvane: v2: отложенное %1 уже отправлено другим устройством").arg(item.id));
+			} else {
+				FireScheduled(item);
+				crl::async([opId] {
+					if (const auto s = V2Ready()) {
+						s->stateMarkSent(opId);
+					}
+				});
+			}
+			ScheduleStateFlush();
+		});
+	});
+}
+
+// Событие v2-сессии (рабочий поток) → main.
+bool HandleV2SessionEvent(const parvane::json &ev) {
+	const auto type = ev.is_object() ? ev.value("type", std::string()) : std::string();
+	const auto address = QString::fromStdString(ev.value("address", std::string()));
+	if (type == "groupUpdated") {
+		crl::on_main([address, info = ev.value("info", parvane::json()), isNew = ev.value("isNew", false)] {
+			ApplyV2Group(address, info, isNew);
+		});
+		return true;
+	}
+	if (type == "groupLeft") {
+		crl::on_main([address] {
+			SaveV2GroupCache(address, nullptr);
+			if (const auto session = g_sessionWeak.get()) {
+				DropGroupLocally(session, address, u"v2: исключены или группа удалена"_q);
+			}
+		});
+		return true;
+	}
+	if (type == "groupUnconfirmed") {
+		auto members = QStringList();
+		for (const auto &m : ev.value("members", parvane::json::array())) {
+			if (m.is_string()) members.push_back(QString::fromStdString(m.get<std::string>()));
+		}
+		crl::on_main([address, members] { AnnounceUnconfirmed(address, members); });
+		return true;
+	}
+	if (type == "ownDevicesAdded") {
+		const auto count = int(ev.value("devices", parvane::json::array()).size());
+		crl::on_main([count] { AnnounceNewOwnDevices(count); });
+		return true;
+	}
+	if (type == "stateReady") {
+		crl::on_main([] { AttachStateJournal(); });
+		return true;
+	}
+	if (type == "needsLinking") {
+		crl::async([] { StartDeviceLinkOfferForV2(); });
+		return true;
+	}
+	if (type == "l2State") {
+		// Кэш чатов с активной «усиленной приватностью» (L2-1): по нему не
+		// шлём typing, не публикуем присутствие и рисуем переключатели.
+		const auto list = [&](const char *key) {
+			auto out = QSet<QString>();
+			if (ev.contains(key) && ev[key].is_array()) {
+				for (const auto &c : ev[key]) {
+					if (c.is_string()) out.insert(QString::fromStdString(c.get<std::string>()));
+				}
+			}
+			return out;
+		};
+		const auto chats = list("chats");
+		const auto mine = list("mine");
+		auto entered = QSet<QString>();
+		auto released = QSet<QString>();
+		{
+			std::lock_guard<std::mutex> lk(g_l2Mutex);
+			entered = chats - g_l2Chats;
+			released = g_l2Chats - chats;
+			g_l2Chats = chats;
+			g_l2Mine = mine;
+		}
+		const auto presence = ev.value("presenceAllowed", true);
+		g_l2PresenceAllowed = presence;
+		SaveL2Cache(SelfAddress(), chats, mine, presence);
+		LOG(("Parvane: v2: режим L2 — активных чатов %1, присутствие %2")
+			.arg(chats.size()).arg(presence ? u"публикуется"_q : u"не публикуется"_q));
+		crl::on_main([entered, released] {
+			const auto session = g_sessionWeak.get();
+			for (const auto &chat : entered) {
+				// «В сети» собеседника L2-чата больше не показываем.
+				if (!session || parvane::v2::isGroupAddress(chat.toStdString())) {
+					continue;
+				}
+				const auto user = session->data().userLoaded(UserId(BareId(IdForAddress(chat))));
+				if (user && user->updateLastseen(Data::LastseenStatus::Recently())) {
+					session->changes().peerUpdated(user, Data::PeerUpdate::Flag::OnlineStatus);
+				}
+			}
+			for (const auto &chat : released) {
+				if (!parvane::v2::isGroupAddress(chat.toStdString())) {
+					EnsurePresenceSubscription(chat); // режим снят
+				}
+			}
+			g_l2Updates.fire({});
+		});
+		return true;
+	}
+	if (type == "groupL2") {
+		// Политика L2 группы изменилась по журналу — служебное сообщение в чате
+		// группы от имени того, кто её задал (в журнал истории, как сообщение).
+		parvane::StoredMessage sm;
+		sm.id = ev.value("id", std::string());
+		sm.from = ev.value("by", std::string());
+		sm.to = address.toStdString();
+		sm.ts = ev.value("tsMs", std::int64_t(0)) / 1000;
+		sm.content = parvane::v2::chatModeContent(ev.value("enabled", false));
+		if (sm.id.empty() || sm.to.empty()) {
+			return true;
+		}
+		V2NoteMessage(sm, address); // id не v1: без v1-ack
+		LOG(("Parvane: v2: политика L2 группы %1: %2 (задал %3)")
+			.arg(address, ev.value("enabled", false) ? u"включена"_q : u"выключена"_q,
+				QString::fromStdString(sm.from)));
+		crl::on_main([sm] {
+			if (const auto session = g_sessionWeak.get()) {
+				injectOnMain(session, { sm }, /*live=*/true);
+			}
+		});
+		return true;
+	}
+	return false;
+}
+
+} // namespace
+
+// ── T079: приватность «сообщения от незнакомых» и режим L2 (публичное) ─────
+
+bool StrangersPolicyAvailable() {
+	return V2Enabled();
+}
+
+bool StrangersAllowed() {
+	return LoadPrivacyLocal(SelfAddress()).strangers;
+}
+
+void SetStrangersAllowed(bool allowed) {
+	const auto self = SelfAddress();
+	if (self.isEmpty()) {
+		return;
+	}
+	auto privacy = LoadPrivacyLocal(self);
+	privacy.set = true;
+	privacy.strangers = allowed;
+	SavePrivacyLocal(self, privacy);
+	LOG(("Parvane: приватность: сообщения от незнакомых — %1")
+		.arg(allowed ? u"разрешены"_q : u"запрещены"_q));
+	crl::async([privacy] {
+		std::shared_ptr<parvane::v2::Session> s;
+		{
+			std::lock_guard<std::mutex> lk(g_v2Mutex);
+			s = g_v2;
+		}
+		if (s) {
+			s->setPrivacy(privacy.groupAddNobody, privacy.strangers); // не готова — дошлёт сама
+		}
+	});
+}
+
+ChatL2 ChatL2State(not_null<PeerData*> peer) {
+	auto out = ChatL2();
+	if (!V2Enabled()) {
+		return out;
+	}
+	if (const auto user = peer->asUser()) {
+		const auto address = AddressForId(peerToUser(user->id).bare);
+		if (address.isEmpty() || address == SelfAddress()) {
+			return out;
+		}
+		std::lock_guard<std::mutex> lk(g_l2Mutex);
+		out.active = g_l2Chats.contains(address);
+		out.mine = g_l2Mine.contains(address);
+		out.available = out.active || g_l2V2Peers.contains(address);
+		out.canChange = out.available;
+	} else if (const auto chat = peer->asChat()) {
+		const auto gid = GroupIdForChat(peer);
+		if (!parvane::v2::isGroupAddress(gid.toStdString())) {
+			return out;
+		}
+		std::lock_guard<std::mutex> lk(g_l2Mutex);
+		out.available = true;
+		out.active = g_l2Chats.contains(gid);
+		out.mine = out.active;
+		out.canChange = chat->canEditInformation();
+	}
+	return out;
+}
+
+rpl::producer<> ChatL2Updates() {
+	return g_l2Updates.events();
+}
+
+void RefreshChatL2(not_null<PeerData*> peer) {
+	const auto user = peer->asUser();
+	if (!user || !V2Enabled()) {
+		return;
+	}
+	const auto address = AddressForId(peerToUser(user->id).bare);
+	if (address.isEmpty() || address == SelfAddress()) {
+		return;
+	}
+	crl::async([address] {
+		const auto s = V2Ready();
+		if (!s || !s->isV2Peer(address.toStdString())) {
+			return;
+		}
+		{
+			std::lock_guard<std::mutex> lk(g_l2Mutex);
+			if (g_l2V2Peers.contains(address)) {
+				return;
+			}
+			g_l2V2Peers.insert(address);
+		}
+		crl::on_main([] { g_l2Updates.fire({}); });
+	});
+}
+
+void SetChatL2(not_null<PeerData*> peer, bool enabled, Fn<void(bool ok)> done) {
+	const auto finish = [done](bool ok) {
+		crl::on_main([done, ok] {
+			if (done) {
+				done(ok);
+			}
+		});
+	};
+	if (const auto user = peer->asUser()) {
+		const auto address = AddressForId(peerToUser(user->id).bare).toStdString();
+		const auto self = SelfAddress().toStdString();
+		if (address.empty() || address == self) {
+			finish(false);
+			return;
+		}
+		const auto id = parvane::v2::newUuidV7();
+		crl::async([=] {
+			const auto s = V2Ready();
+			if (!s) {
+				LOG(("Parvane: режим L2 не изменён — сессия v2 не готова"));
+				finish(false);
+				return;
+			}
+			try {
+				s->setDirectL2(address, enabled, id);
+			} catch (const std::exception &e) {
+				LOG(("Parvane: режим L2 чата %1 не изменён: %2")
+					.arg(QString::fromStdString(address), QString::fromUtf8(e.what())));
+				finish(false);
+				return;
+			}
+			// Своё служебное сообщение — локально (эхо своей операции не приходит);
+			// в журнал истории оно попадёт как обычное сообщение.
+			parvane::StoredMessage sm;
+			sm.id = id;
+			sm.from = self;
+			sm.to = address;
+			sm.ts = QDateTime::currentSecsSinceEpoch();
+			sm.content = parvane::v2::chatModeContent(enabled);
+			V2NoteMessage(sm, QString::fromStdString(address));
+			crl::on_main([sm] {
+				if (const auto session = g_sessionWeak.get()) {
+					injectOnMain(session, { sm }, /*live=*/true);
+				}
+			});
+			finish(true);
+		});
+		return;
+	}
+	const auto gid = GroupIdForChat(peer).toStdString();
+	if (!parvane::v2::isGroupAddress(gid)) {
+		finish(false);
+		return;
+	}
+	crl::async([=] {
+		const auto s = V2Ready();
+		// Служебное сообщение придёт событием сессии groupL2 (всем участникам).
+		const auto ok = s && s->setGroupL2(gid, enabled);
+		if (!ok) {
+			LOG(("Parvane: политика L2 группы %1 не изменена").arg(QString::fromStdString(gid)));
+		}
+		finish(ok);
+	});
+}
+
+// Изменение группы v2 записью журнала (на воркере); change строится по
+// текущим сведениям журнала. false — группа не v2 (идти по v1).
+bool RunV2GroupChange(
+		const QString &tag,
+		const QString &gid,
+		std::function<parvane::json(const parvane::json &info)> change,
+		GroupOpDone done) {
+	if (!parvane::v2::isGroupAddress(gid.toStdString())) {
+		return false;
+	}
+	crl::async([=] {
+		auto ok = false;
+		auto error = u"failed"_q;
+		if (const auto s = V2Ready()) {
+			try {
+				const auto info = s->groupInfo(gid.toStdString());
+				const auto body = change(info);
+				ok = !body.is_null() && s->changeGroup(gid.toStdString(), body);
+			} catch (const std::exception &e) {
+				error = QString::fromUtf8(e.what());
+			}
+		} else {
+			error = u"v2 не готов"_q;
+		}
+		if (ok) {
+			LOG(("Parvane: %1 → ok (v2)").arg(tag));
+		} else {
+			LOG(("Parvane: %1 → отказ v2 %2").arg(tag, error));
+		}
+		crl::on_main([=] {
+			if (done) {
+				done(ok, ok ? QString() : error);
+			}
+		});
+	});
+	return true;
+}
 
 bool MirrorLocationIfOurs(
 		PeerData *peer,
@@ -7950,11 +9865,21 @@ void PlaceCall(const QString &peer, bool video) {
 	const auto media = std::string(video ? "video" : "audio");
 	crl::async([p, media] {
 		parvane::CallManager *m = nullptr;
+		parvane::ITransport *t = nullptr;
+		std::string token;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			m = g_callManager.get();
+			t = g_transport.get();
+			token = g_token.toStdString();
 		}
 		if (m) {
+			// Ответить может любое устройство собеседника, в т.ч. то, чей ключ
+			// звонков identity не принял (оно подписывает ключом устройства) —
+			// перечитываем каталог его устройств до invite.
+			if (t) {
+				parvane::e2e::refreshContact(p, *t, token);
+			}
 			m->placeCall(p, media);
 			LOG(("Parvane: исходящий звонок → %1 (%2)")
 				.arg(QString::fromStdString(p), QString::fromStdString(media)));
@@ -8040,7 +9965,8 @@ void StartGroupCall(const QString &groupId, bool video) {
 	}
 	const auto gidStd = groupId.toStdString();
 	const auto media = std::string(video ? "video" : "audio");
-	crl::async([groupId, gidStd, token, media] {
+	const auto self = SelfAddress();
+	crl::async([groupId, gidStd, token, media, self] {
 		// Участники: из кэша, иначе — запрос group.info.
 		QStringList members;
 		parvane::GroupClient *gc = nullptr;
@@ -8068,6 +9994,15 @@ void StartGroupCall(const QString &groupId, bool video) {
 			LOG(("Parvane: групповой звонок — нет участников для %1").arg(groupId));
 			return;
 		}
+		// Список в group_invite — ПОЛНЫЙ состав звонка, включая инициатора, без
+		// повторов: шард call отвергает приглашение, где нет отправителя
+		// («некорректное групповое приглашение»), а кэш участников группы,
+		// созданной на этом устройстве, себя не содержит — остальные участники
+		// тогда не узнавали друг о друге и mesh между ними не строился.
+		if (!self.isEmpty() && !members.contains(self)) {
+			members.push_back(self);
+		}
+		members.removeDuplicates();
 		// Подтягиваем pubkey участников (для проверки подписи их SDP).
 		ResolveNames(members);
 		std::vector<std::string> parts;
@@ -8156,6 +10091,34 @@ void CreateGroup(const QString &name, const QStringList &members, bool channel) 
 	const auto nameStd = name.toStdString();
 	const auto kind = std::string(channel ? "channel" : "group");
 	crl::async([token, nameStd, kind, mem] {
+		// Протокол v2: все участники на v2 — группа v2 (журнал состояния,
+		// эпохи); иначе — v1. Чат группы синтезирует событие groupUpdated.
+		// Сессия v2 ещё поднимается (сразу после входа) — дождаться, а не
+		// создать молча v1-группу (как web isV2Peer ждёт starting).
+		{
+			std::shared_ptr<parvane::v2::Session> starting;
+			{
+				std::lock_guard<std::mutex> lk(g_v2Mutex);
+				starting = g_v2;
+			}
+			if (starting && !starting->isReady() && !starting->needsLinking()) {
+				starting->waitReady(30000);
+			}
+		}
+		if (const auto s = V2Ready()) {
+			try {
+				const auto address = s->createGroup(nameStd, mem, kind == "channel");
+				if (!address.empty()) {
+					LOG(("Parvane: группа v2 '%1' создана: %2")
+						.arg(QString::fromStdString(nameStd), QString::fromStdString(address)));
+					return;
+				}
+			} catch (const std::exception &e) {
+				LOG(("Parvane: группа v2 не создана: %1 — НЕ создана")
+					.arg(QString::fromUtf8(e.what())));
+				return;
+			}
+		}
 		parvane::GroupClient *g = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -8208,6 +10171,33 @@ void groupAdminAction(const QString &groupId, const QString &member, const QStri
 	const auto mem = member.toStdString();
 	const auto act = action.toStdString();
 	if (token.empty() || gid.empty() || mem.empty()) {
+		return;
+	}
+	// Группа v2: add/remove/роль/выход — записи журнала (исключение → новая эпоха).
+	if (parvane::v2::isGroupAddress(gid)) {
+		const auto self = SelfAddress();
+		RunV2GroupChange(u"админ-действие '%1' над %2 в %3"_q.arg(action, member, groupId), groupId,
+			[=](const nlohmann::json &) -> nlohmann::json {
+				const auto ref = V2MemberRef(member);
+				if (action == u"add"_q) {
+					const auto s = V2Ready();
+					// Добавить в группу v2 можно только v2-собеседника (ключи эпохи — по v2).
+					if (!s || !s->isV2Peer(member.toStdString())) {
+						LOG(("Parvane: %1 не на v2 — в группу v2 не добавить").arg(member));
+						return nullptr;
+					}
+					return { { "add_member", ref } };
+				} else if (action == u"remove"_q) {
+					return (member == self)
+						? nlohmann::json{ { "leave", nlohmann::json::object() } }
+						: nlohmann::json{ { "remove_member", ref } };
+				}
+				return { { "set_role", {
+					{ "member", ref["member"] },
+					{ "role", action == u"admin"_q ? "ROLE_ADMIN" : "ROLE_MEMBER" },
+					{ "rights", action == u"admin"_q
+						? parvane::AdminRights().toJson() : nlohmann::json::object() } } } };
+			}, nullptr);
 		return;
 	}
 	crl::async([token, gid, mem, act] {
@@ -8265,6 +10255,14 @@ void SetMemberRole(const QString &groupId, const QString &member, bool admin) {
 }
 
 void BanMember(const QString &groupId, const QString &member, bool ban) {
+	// Группа v2: бан — запись журнала, движок помечает эпоху устаревшей →
+	// новая эпоха (исключённый ключей не получает).
+	if (RunV2GroupChange(u"%1 %2 в %3"_q.arg(ban ? u"бан"_q : u"разбан"_q, member, groupId), groupId,
+			[member, ban](const nlohmann::json &) {
+				return nlohmann::json{ { ban ? "ban" : "unban", V2MemberRef(member) } };
+			}, nullptr)) {
+		return;
+	}
 	const auto token = Token().toStdString();
 	const auto gid = groupId.toStdString();
 	const auto mem = member.toStdString();
@@ -8316,6 +10314,13 @@ void MuteMember(const QString &groupId, const QString &member, int minutes) {
 	const auto until = (minutes > 0)
 		? (QDateTime::currentSecsSinceEpoch() + qint64(minutes) * 60)
 		: qint64(0);
+	if (RunV2GroupChange(u"мьют %1 в %2"_q.arg(member, groupId), groupId, [member, until](const nlohmann::json &) {
+			auto ref = V2MemberRef(member);
+			ref["until_ms"] = std::to_string(until * 1000);
+			return nlohmann::json{ { "mute", ref } };
+		}, nullptr)) {
+		return;
+	}
 	crl::async([token, gid, mem, until] {
 		parvane::GroupClient *g = nullptr;
 		{
@@ -8389,13 +10394,26 @@ void runGroupQuery(Op op, Done done) {
 }
 
 QString GroupInviteUrl(const QString &token) {
+	// Ссылка v2 (T084): токен — сама ссылка https://<domain>/join/<link_id>#<seed>.
+	if (token.startsWith(u"https://"_q)) {
+		return token;
+	}
 	return u"https://parvane.invite/"_q + token;
+}
+
+// Ссылка v2 (D-04/T084) — формат https://<domain>/join/<link_id>#<seed>;
+// формы v1 (parvane.invite/<t>, …#+<t>, голый hex) — только как вход v1.
+[[nodiscard]] bool IsV2InviteLink(const QString &link) {
+	return parvane::v2::Session::isInviteUrl(link.trimmed().toStdString());
 }
 
 QString GroupInviteToken(const QString &linkOrToken) {
 	static const auto hex = QRegularExpression(u"^[0-9a-f]{32}$"_q);
 	static const auto hash = QRegularExpression(u"#\\+([0-9a-f]{32})"_q);
 	const auto u = linkOrToken.trimmed();
+	if (IsV2InviteLink(u)) {
+		return u;
+	}
 	if (hex.match(u).hasMatch()) {
 		return u;
 	}
@@ -8423,8 +10441,39 @@ QString InviteErrorText(const QString &code) {
 	return tr::lng_group_invite_bad_link(tr::now); // invalid и всё прочее
 }
 
+// Запись ссылки v2 (хранится на устройстве, секрет — в url) → GroupInviteLink.
+[[nodiscard]] GroupInviteLink V2InviteLink(const nlohmann::json &r) {
+	auto l = GroupInviteLink();
+	l.token = QString::fromStdString(r.value("url", std::string()));
+	l.createdBy = SelfAddress();
+	l.title = QString::fromStdString(r.value("title", std::string()));
+	l.state = u"active"_q;
+	l.date = int(r.value("date", std::int64_t(0)));
+	l.expireDate = int(r.value("expiresAt", std::int64_t(0)));
+	l.usageLimit = int(r.value("usageLimit", 0));
+	l.requestApproval = r.value("isRequestNeeded", false);
+	// Основная (FR-040) — без параметров.
+	l.permanent = l.title.isEmpty() && !l.expireDate && !l.usageLimit && !l.requestApproval;
+	return l;
+}
+
 void ListGroupInvites(const QString &groupId, bool revoked,
 		Fn<void(bool ok, std::vector<GroupInviteLink> links, const QString &error)> done) {
+	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
+		// Отозванные ссылки v2 из журнала исчезают (сервер знает только link_id).
+		crl::async([=] {
+			auto links = std::vector<GroupInviteLink>();
+			const auto s = V2Ready();
+			if (s && !revoked) {
+				for (const auto &r : s->listInvites(groupId.toStdString())) {
+					links.push_back(V2InviteLink(r));
+				}
+			}
+			LOG(("Parvane: ссылки v2 %1: %2").arg(groupId).arg(int(links.size())));
+			crl::on_main([=] { done(s != nullptr, links, s ? QString() : u"failed"_q); });
+		});
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	runGroupQuery([gid, revoked](parvane::GroupClient &g, const std::string &token) {
 		return g.inviteList(token, gid, revoked);
@@ -8451,6 +10500,21 @@ void ListGroupInvites(const QString &groupId, bool revoked,
 void CreateGroupInvite(const QString &groupId, const QString &title, int expireDate,
 		int usageLimit, bool requestApproval,
 		Fn<void(bool ok, GroupInviteLink link, const QString &error)> done) {
+	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
+		crl::async([=] {
+			const auto s = V2Ready();
+			const auto r = s
+				? s->createInvite(groupId.toStdString(), title.toStdString(), expireDate,
+					std::uint32_t(std::max(usageLimit, 0)), requestApproval)
+				: nlohmann::json();
+			const auto ok = r.is_object();
+			LOG(("Parvane: INVITE create '%1' → %2 (v2)").arg(groupId, ok ? u"ok"_q : u"отказ"_q));
+			crl::on_main([=] {
+				done(ok, ok ? V2InviteLink(r) : GroupInviteLink(), ok ? QString() : u"failed"_q);
+			});
+		});
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	auto params = parvane::InviteParams();
 	params.title = title.toStdString();
@@ -8532,6 +10596,20 @@ void ListGroupInvitesWithPrimary(const QString &groupId,
 }
 
 void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone done) {
+	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
+		// Отзыв ссылки v2 — запись журнала invite_key_revoke.
+		crl::async([=] {
+			const auto s = V2Ready();
+			const auto ok = s && s->revokeInvite(groupId.toStdString(), token.toStdString());
+			LOG(("Parvane: INVITE revoke %1 → %2 (v2)").arg(token, ok ? u"ok"_q : u"отказ"_q));
+			crl::on_main([=] {
+				if (done) {
+					done(ok, ok ? QString() : u"failed"_q);
+				}
+			});
+		});
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	const auto t = token.toStdString();
 	runGroupOp(u"INVITE revoke %1"_q.arg(token), [gid, t](parvane::GroupClient &g, const std::string &jwt) {
@@ -8540,6 +10618,12 @@ void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone
 }
 
 void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone done) {
+	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
+		if (done) {
+			done(true, QString()); // отозванная ссылка v2 уже не хранится
+		}
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	const auto t = token.toStdString();
 	runGroupOp(u"INVITE delete %1"_q.arg(token), [gid, t](parvane::GroupClient &g, const std::string &jwt) {
@@ -8549,6 +10633,30 @@ void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone
 
 void CheckGroupInvite(const QString &token,
 		Fn<void(bool ok, GroupInvitePreview preview, const QString &error)> done) {
+	if (IsV2InviteLink(token)) {
+		// Ссылка v2: group.invite.check по link_id (секрет серверу не уходит).
+		crl::async([=] {
+			const auto s = V2Ready();
+			const auto r = s ? s->checkInvite(token.toStdString()) : nlohmann::json();
+			auto p = GroupInvitePreview();
+			auto error = QString();
+			if (!r.is_object()) {
+				error = u"failed"_q;
+			} else if (r.contains("error")) {
+				error = QString::fromStdString(r.value("error", std::string()));
+			} else {
+				p.groupId = QString::fromStdString(r.value("address", std::string()));
+				p.name = QString::fromStdString(r.value("name", std::string()));
+				p.kind = r.value("isChannel", false) ? u"channel"_q : u"group"_q;
+				p.members = int(r.value("membersCount", std::int64_t(0)));
+				p.requestNeeded = r.value("isRequestNeeded", false);
+				p.alreadyMember = r.value("isMember", false);
+			}
+			LOG(("Parvane: INVITE check v2 → %1").arg(error.isEmpty() ? p.name : (u"отказ "_q + error)));
+			crl::on_main([=] { done(error.isEmpty(), p, error); });
+		});
+		return;
+	}
 	const auto t = token.toStdString();
 	runGroupQuery([t](parvane::GroupClient &g, const std::string &jwt) {
 		return g.inviteCheck(jwt, t);
@@ -8577,6 +10685,27 @@ void CheckGroupInvite(const QString &token,
 
 void JoinGroupByInvite(const QString &token,
 		Fn<void(bool ok, const QString &groupId, bool pending, const QString &error)> done) {
+	if (IsV2InviteLink(token)) {
+		// Вступление v2: журнал по link_id + запись, подписанная ключом ссылки.
+		crl::async([=] {
+			const auto s = V2Ready();
+			const auto r = s ? s->joinByInvite(token.toStdString()) : nlohmann::json();
+			const auto status = r.is_object() ? r.value("status", std::string()) : std::string("error");
+			const auto gid = QString::fromStdString(r.is_object() ? r.value("address", std::string()) : std::string());
+			const auto code = QString::fromStdString(r.is_object() ? r.value("code", std::string("failed")) : std::string("failed"));
+			LOG(("Parvane: INVITE join v2 → %1 %2").arg(QString::fromStdString(status), gid));
+			crl::on_main([=] {
+				if (status == "ok") {
+					done(true, gid, false, QString());
+				} else if (status == "requested") {
+					done(true, QString(), true, QString());
+				} else {
+					done(false, QString(), false, code);
+				}
+			});
+		});
+		return;
+	}
 	const auto t = token.toStdString();
 	runGroupQuery([t](parvane::GroupClient &g, const std::string &jwt) {
 		return g.joinByInvite(jwt, t);
@@ -8598,6 +10727,10 @@ void JoinGroupByInvite(const QString &token,
 
 void ListJoinRequests(const QString &groupId,
 		Fn<void(bool ok, std::vector<GroupJoinRequest> requests, const QString &error)> done) {
+	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
+		done(true, {}, QString()); // заявки на вступление v2 — не сделано (как в вебе)
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	runGroupQuery([gid](parvane::GroupClient &g, const std::string &token) {
 		return g.requestList(token, gid);
@@ -8620,6 +10753,12 @@ void ListJoinRequests(const QString &groupId,
 }
 
 void DecideJoinRequest(const QString &groupId, const QString &member, bool approve, GroupOpDone done) {
+	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
+		if (done) {
+			done(false, u"unsupported"_q);
+		}
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	const auto mem = member.toStdString();
 	runGroupOp(u"REQUEST %1 %2"_q.arg(approve ? u"approve"_q : u"decline"_q, member),
@@ -9012,6 +11151,64 @@ void ResetSessionBoundState() {
 	LOG(("Parvane: новая сессия — состояние прежней Data::Session сброшено"));
 }
 
+namespace {
+
+// Шаг хука PARVANE_AUTOL2 (main): найти чат и переключить режим штатным путём.
+void AutoL2Step(
+		base::weak_ptr<Main::Session> weak,
+		const QString &chatSpec,
+		bool enabled,
+		int attempt) {
+	const auto session = weak.get();
+	if (!session) {
+		return;
+	}
+	const auto retry = [=] {
+		if (attempt < 60) {
+			base::call_delayed(2 * crl::time(1000), [=] {
+				AutoL2Step(weak, chatSpec, enabled, attempt + 1);
+			});
+		} else {
+			LOG(("Parvane: autol2 → %1: не удалось (%2)")
+				.arg(chatSpec, enabled ? u"on"_q : u"off"_q));
+		}
+	};
+	auto peer = (PeerData*)nullptr;
+	if (chatSpec.startsWith(u"group="_q) || parvane::v2::isGroupAddress(chatSpec.toStdString())) {
+		auto gid = chatSpec;
+		if (chatSpec.startsWith(u"group="_q)) {
+			gid = QString();
+			const auto name = chatSpec.mid(6);
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			for (auto it = g_knownGroups.constBegin(); it != g_knownGroups.constEnd(); ++it) {
+				if (it.value() == name && parvane::v2::isGroupAddress(it.key().toStdString())) {
+					gid = it.key();
+					break;
+				}
+			}
+		}
+		if (!gid.isEmpty()) {
+			peer = session->data().chatLoaded(ChatId(BareId(IdForAddress(gid))));
+		}
+	} else {
+		RegisterPeer(chatSpec);
+		peer = session->data().user(UserId(BareId(IdForAddress(chatSpec))));
+	}
+	if (!peer) {
+		retry();
+		return;
+	}
+	SetChatL2(peer, enabled, [=](bool ok) {
+		if (ok) {
+			LOG(("Parvane: autol2 → %1: %2").arg(chatSpec, enabled ? u"on"_q : u"off"_q));
+		} else {
+			retry();
+		}
+	});
+}
+
+} // namespace
+
 void AfterSessionReady(not_null<Main::Session*> session) {
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
@@ -9025,6 +11222,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		session->lifetime().add([] { previousEnded = true; });
 		g_sessionWeak = weak;
+		ShowUpgradeAvailableIfPending(); // E6: кадр notice пришёл до сессии
 		// Рестарт: tdesktop возобновил кэшированную сессию, минуя экран логина
 		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
 		// диска, иначе Parvane-слой поднимется без личности (отправка/приём/E2E
@@ -9197,6 +11395,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			) | rpl::on_next([weak] {
 				if (const auto s = weak.get()) {
 					SaveFolders(s);
+					ScheduleStateFlush(); // журнал личного состояния v2 (T098)
 				}
 			}, g_foldersLifetime);
 		}
@@ -9215,6 +11414,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// Воспроизводим локальную историю (свои + принятые) ДО первого sync —
 		// восстанавливает переписку после рестарта/релогина; новые сообщения sync
 		// добавит поверх (дедуп по uuid).
+		LoadV2GroupCache(session); // группы v2 — до истории (её сообщения идут в их чаты)
 		ReplayHistory();
 		RestoreScheduled(); // запланированные сообщения: восстановить очередь+таймеры
 		// Первичный приём: подтягиваем то, что уже лежит в шарде (офлайн-бэклог).
@@ -9293,9 +11493,16 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// вход (identity.user.twofa) как тумблер в настройках; результат — в лог.
 		if (const char *tv = ParvaneDevEnv("PARVANE_AUTOTWOFA"); tv && *tv) {
 			const auto enable = (QString::fromUtf8(tv) == u"on"_q);
-			base::call_delayed(2 * crl::time(1000), [enable] {
-				crl::async([enable] {
-					const auto st = SetTwoFactor(enable);
+			// P-07: выключение 2FA сервер принимает только с текущим паролем —
+			// берём его из PARVANE_AUTOLOGIN (user:pass), как AUTOREVOKE_OTHERS.
+			const auto login = QString::fromUtf8(ParvaneDevEnv("PARVANE_AUTOLOGIN")
+				? ParvaneDevEnv("PARVANE_AUTOLOGIN") : "");
+			const auto password = login.contains(':')
+				? login.mid(login.indexOf(':') + 1)
+				: QString();
+			base::call_delayed(2 * crl::time(1000), [enable, password] {
+				crl::async([enable, password] {
+					const auto st = SetTwoFactor(enable, password);
 					LOG(("Parvane: autotwofa → enabled=%1 ok=%2 linked=%3 err=%4")
 						.arg(st.enabled ? 1 : 0).arg(st.ok ? 1 : 0)
 						.arg(st.telegramLinked ? 1 : 0).arg(st.error));
@@ -9588,10 +11795,17 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 							.arg(d.current ? u" [текущее]"_q : QString())
 							.arg(d.oneTimeAvailable));
 						if (!d.current) {
+							// P-07: отзыв требует текущий пароль — хук берёт его из
+							// PARVANE_AUTOLOGIN (user:pass); без него сервер отказывал,
+							// и android tgx_conformance_flow.sh (FAIL-1) краснел.
+							const auto login = QString::fromUtf8(ParvaneDevEnv("PARVANE_AUTOLOGIN")
+								? ParvaneDevEnv("PARVANE_AUTOLOGIN") : "");
+							const auto colon = login.indexOf(':');
+							const auto password = (colon > 0) ? login.mid(colon + 1) : QString();
 							RevokeDevice(d.deviceId, [id = d.deviceId](bool ok) {
 								LOG(("Parvane: autorevoke %1 → %2")
 									.arg(id, ok ? u"ok"_q : u"fail"_q));
-							});
+							}, password);
 						}
 					}
 				});
@@ -9673,7 +11887,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					RegisterPeer(peerAddr);
 					const auto hist = s->data().history(
 						peerFromUser(UserId(BareId(IdForAddress(peerAddr)))));
-					auto newId = 1;
+					auto newId = 2; // как нативный редактор (0/1 зарезервированы)
 					for (const auto &f : s->data().chatsFilters().list()) {
 						if (f.id() >= newId) {
 							newId = f.id() + 1;
@@ -10142,6 +12356,121 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			});
 		}
 
+		// Протокол v2 (e2e, spec 007): PARVANE_AUTOSEND_V2=peer:msg1|msg2|… —
+		// ждёт готовности v2-сессии и журнала устройств собеседника (до 120 с),
+		// затем шлёт по одному в секунду ШТАТНЫМ путём отправки (маршрутизация
+		// по журналу, как у человека). Элемент, начинающийся с «{», — сырое
+		// содержимое v2 (proto3-JSON Content) прямо в v2-сессию: так у
+		// получателя проверяется заглушка вида, которого клиент не знает.
+		if (const char *v2v = ParvaneDevEnv("PARVANE_AUTOSEND_V2"); v2v && *v2v) {
+			const auto spec = QString::fromUtf8(v2v);
+			const auto sep = spec.indexOf(':');
+			if (sep > 0) {
+				const auto peerAddr = spec.left(sep);
+				const auto items = spec.mid(sep + 1).split(u'|', Qt::SkipEmptyParts);
+				crl::async([weak, peerAddr, items] {
+					const auto peerStd = peerAddr.toStdString();
+					auto ready = false;
+					for (auto i = 0; i < 120 && !ready; ++i) {
+						if (const auto s = V2Ready(); s && s->isV2Peer(peerStd)) {
+							ready = true;
+							break;
+						}
+						std::this_thread::sleep_for(std::chrono::seconds(1));
+					}
+					if (!ready) {
+						LOG(("Parvane: autosend-v2 → %1: собеседник не на v2 (таймаут)").arg(peerAddr));
+						return;
+					}
+					LOG(("Parvane: autosend-v2: %1 на v2").arg(peerAddr));
+					for (const auto &item : items) {
+						if (item.startsWith(u'{')) {
+							const auto content = nlohmann::json::parse(item.toStdString(), nullptr, false);
+							const auto s = V2Ready();
+							if (s && content.is_object()) {
+								try {
+									s->sendContent(peerStd, content, parvane::v2::newUuidV7());
+									LOG(("Parvane: autosend-v2 raw → %1: %2").arg(peerAddr, item));
+								} catch (const std::exception &e) {
+									LOG(("Parvane: autosend-v2 raw не отправлено: %1").arg(QString::fromUtf8(e.what())));
+								}
+							}
+						} else {
+							crl::on_main([weak, peerAddr, item] {
+								const auto s = weak.get();
+								if (!s) {
+									return;
+								}
+								RegisterPeer(peerAddr);
+								const auto user = s->data().user(
+									UserId(BareId(IdForAddress(peerAddr))));
+								auto message = Api::MessageToSend(
+									Api::SendAction(s->data().history(user)));
+								message.textWithTags = TextWithTags{ item, TextWithTags::Tags() };
+								s->api().sendMessage(std::move(message));
+								LOG(("Parvane: autosend-v2 → %1: %2").arg(peerAddr, item));
+							});
+						}
+						std::this_thread::sleep_for(std::chrono::seconds(1));
+					}
+				});
+			}
+		}
+
+		// Режим «усиленная приватность» (e2e, T079): PARVANE_AUTOL2=<чат>:<шаг>[,<шаг>…],
+		// шаг — on|off[@сек]; чат — адрес собеседника, адрес группы v2
+		// (v2g:<hex>) или group=<имя группы>. Каждый шаг зовёт штатный
+		// SetChatL2 (тот же путь, что переключатель в профиле/управлении
+		// группой), при неготовой сессии повторяет раз в 2 с до 2 минут.
+		if (const char *l2v = ParvaneDevEnv("PARVANE_AUTOL2"); l2v && *l2v) {
+			const auto spec = QString::fromUtf8(l2v);
+			const auto sep = spec.lastIndexOf(u':'); // адрес группы сам содержит ':'
+			if (sep > 0) {
+				const auto chatSpec = spec.left(sep);
+				for (const auto &step : spec.mid(sep + 1).split(u',', Qt::SkipEmptyParts)) {
+					const auto at = step.indexOf(u'@');
+					const auto enabled = ((at < 0) ? step : step.left(at)) == u"on"_q;
+					const auto delay = (at < 0) ? 0 : step.mid(at + 1).toInt();
+					base::call_delayed(delay * crl::time(1000), [weak, chatSpec, enabled] {
+						AutoL2Step(weak, chatSpec, enabled, 0);
+					});
+				}
+			}
+		}
+
+		// «Печатает» (e2e, L2-1): PARVANE_AUTOTYPING=<собеседник>@сек[,…] — зовёт
+		// штатный MirrorTyping и пишет, ушёл ли он (в L2-чате — подавлен).
+		if (const char *tv = ParvaneDevEnv("PARVANE_AUTOTYPING"); tv && *tv) {
+			for (const auto &item : QString::fromUtf8(tv).split(u',', Qt::SkipEmptyParts)) {
+				const auto at = item.lastIndexOf(u'@');
+				const auto address = (at > 0) ? item.left(at) : item;
+				const auto delay = (at > 0) ? item.mid(at + 1).toInt() : 0;
+				base::call_delayed(delay * crl::time(1000), [weak, address] {
+					const auto s = weak.get();
+					if (!s) {
+						return;
+					}
+					RegisterPeer(address);
+					const auto user = s->data().user(UserId(BareId(IdForAddress(address))));
+					const auto suppressed = L2Active(address);
+					MirrorTyping(user);
+					LOG(("Parvane: autotyping → %1: %2")
+						.arg(address, suppressed ? u"подавлен (L2)"_q : u"отправлен"_q));
+				});
+			}
+		}
+
+		// «Сообщения от незнакомых» (e2e, T079): PARVANE_AUTOSTRANGERS=on|off[@сек].
+		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOSTRANGERS"); pv && *pv) {
+			const auto spec = QString::fromUtf8(pv);
+			const auto at = spec.indexOf(u'@');
+			const auto allowed = ((at < 0) ? spec : spec.left(at)) == u"on"_q;
+			const auto delay = (at < 0) ? 0 : spec.mid(at + 1).toInt();
+			base::call_delayed(delay * crl::time(1000), [allowed] {
+				SetStrangersAllowed(allowed);
+			});
+		}
+
 		// Debug-autosticker для e2e стикеров: PARVANE_AUTOSTICKER=peer@server —
 		// шлёт первый стикер первого локального пака нативным путём
 		// (SendExistingDocument → врезка MirrorOutgoingSticker). Отложен за
@@ -10543,6 +12872,11 @@ std::vector<IceServer> FetchIceServers() {
 
 // ── Группы: переименование / удаление ────────────────────────────────────────
 void RenameGroup(const QString &groupId, const QString &name) {
+	if (RunV2GroupChange(u"group.rename %1"_q.arg(groupId), groupId, [nm = name.trimmed().toStdString()](const nlohmann::json &info) {
+			return V2SetInfo(info, nm, std::nullopt, std::nullopt);
+		}, nullptr)) {
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	const auto nm = name.trimmed().toStdString();
 	const auto token = Token().toStdString();
@@ -10567,6 +12901,11 @@ void RenameGroup(const QString &groupId, const QString &name) {
 }
 
 void DeleteGroup(const QString &groupId) {
+	if (RunV2GroupChange(u"group.delete %1"_q.arg(groupId), groupId, [](const nlohmann::json &) {
+			return nlohmann::json{ { "delete_group", nlohmann::json::object() } };
+		}, nullptr)) {
+		return;
+	}
 	const auto gid = groupId.toStdString();
 	const auto token = Token().toStdString();
 	crl::async([=] {
@@ -10608,6 +12947,10 @@ std::string g_linkChallenge; // эфемерный ключ старого ус�
 QString g_linkCode;
 std::int64_t g_linkStartedMs = 0;
 bool g_linkActive = false;
+// Грант сервер отдаёт ОДИН раз в любом identity.link.poll — и в опросе чужих
+// офферов тоже. Грант, пришедший туда, ждёт здесь ближайшего опроса своего
+// оффера (иначе терялся: опрос офферов каждые 10 с съедал его раньше).
+parvane::json g_linkPendingGrant;
 // Старое устройство: свой эфемерный ключ на каждый challenge (device_id → ключ)
 // и офферы, уже показанные пользователю (device_id → раскрытый eph_pub).
 std::map<QString, parvane::linking::EphemeralKey> g_linkChallenges;
@@ -10669,6 +13012,7 @@ void StartHistoryLinkOffer() {
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_linkEph = std::move(eph);
 		g_linkCommitment = commitment;
+		g_linkPendingGrant = nullptr;
 		g_linkChallenge.clear();
 		g_linkCode.clear();
 		g_linkStartedMs = NowMs();
@@ -10685,6 +13029,7 @@ void RetractHistoryLinkOffer() {
 		t = g_transport.get();
 		token = g_token.toStdString();
 		g_linkActive = false;
+		g_linkPendingGrant = nullptr;
 		g_linkEph.reset();
 		g_linkCommitment.clear();
 		g_linkChallenge.clear();
@@ -10728,7 +13073,7 @@ bool PollLinkGrantOnce() {
 		RetractHistoryLinkOffer();
 		return true;
 	}
-	if (!parvane::e2e::needsHistoryLink(DecCacheEmpty())) {
+	if (!parvane::e2e::needsHistoryLink(DecCacheEmpty()) && !V2NeedsLinking()) {
 		LOG(("Parvane: линковка: история появилась сама — отзываю оффер"));
 		RetractHistoryLinkOffer();
 		return true;
@@ -10745,6 +13090,11 @@ bool PollLinkGrantOnce() {
 		newChallenge = resp.value("challenge", std::string());
 		if (resp.contains("grant") && resp["grant"].is_object()) {
 			grant = resp["grant"];
+		} else {
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (g_linkPendingGrant.is_object()) {
+				grant = g_linkPendingGrant;
+			}
 		}
 	} catch (const std::exception &) {
 		return false;
@@ -10810,6 +13160,30 @@ bool PollLinkGrantOnce() {
 	const auto box = parvane::json::parse(*plain, nullptr, false);
 	if (!box.is_object()) {
 		return true;
+	}
+	// LINK-1 v2: материал гранта движка (SSK, журнал устройств, ключ доставки,
+	// ключ личного состояния) лежит отдельным блобом — как web joinV2WithLinkGrant.
+	if (box.contains("v2") && box["v2"].is_object()) {
+		if (const auto s = V2AwaitNeedsLinking()) {
+			try {
+				const auto &coords = box["v2"];
+				parvane::CloudClient cloud(*t);
+				auto d = cloud.download(self, token, coords.value("file_id", std::string()), 30000);
+				auto material = d.ok
+					? parvane::blobcrypt::decrypt(d.bytes,
+						coords.value("file_key", std::string()),
+						coords.value("file_nonce", std::string()))
+					: std::nullopt;
+				if (material) {
+					LOG(("Parvane: линковка: грант v2 получен — устройство вступает в журнал устройств"));
+					s->joinWithGrant(std::move(*material));
+				} else {
+					LOG(("Parvane: линковка: грант v2 не скачался или не расшифровался"));
+				}
+			} catch (const std::exception &e) {
+				LOG(("Parvane: линковка: грант v2: %1").arg(QString::fromUtf8(e.what())));
+			}
+		}
 	}
 	std::string stateJson;
 	try {
@@ -10910,6 +13284,19 @@ void GrantLink(const QString &deviceId, const QString &ephPub, const QString &si
 				boxPlain["transfer"] = {{"old_signing_key", tr.first}, {"signature", tr.second}};
 			}
 		}
+		// LINK-1 v2: грант движка — вторым блобом (бокс ограничен 8 КБ).
+		if (const auto s = V2Ready()) {
+			auto material = s->linkGrantMaterial();
+			if (!material.empty()) {
+				auto encV2 = parvane::blobcrypt::encrypt(material);
+				std::fill(material.begin(), material.end(), '\0');
+				const auto v2File = cloud.upload(self, token, "link-grant-v2",
+					"application/octet-stream", encV2.ciphertext, {}, false, 192 * 1024, 30000);
+				boxPlain["v2"] = {{"file_id", v2File},
+					{"file_key", encV2.keyB64}, {"file_nonce", encV2.nonceB64}};
+				LOG(("Parvane: линковка: грант v2 приложен"));
+			}
+		}
 		const auto box = own->seal(ephPub.toStdString(), boxPlain.dump());
 		if (!box) {
 			return;
@@ -10950,6 +13337,14 @@ void PollLinkOffersOnce() {
 		const auto raw = t->request(parvane::topics::IdentityLinkPoll,
 			parvane::json{{"token", token}, {"device_id", parvane::e2e::deviceId()}}.dump(), 5000);
 		const auto resp = parvane::json::parse(raw, nullptr, false);
+		if (resp.is_object() && resp.value("ok", false)
+			&& resp.contains("grant") && resp["grant"].is_object()) {
+			// Свой грант пришёл в опросе чужих офферов — оставляем опросу своего оффера.
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (g_linkActive) {
+				g_linkPendingGrant = resp["grant"];
+			}
+		}
 		if (!resp.is_object() || !resp.value("ok", false) || !resp.contains("offers")) {
 			return;
 		}
@@ -11033,6 +13428,10 @@ void PollLinkOffersOnce() {
 		const auto code = QString::fromStdString(
 			parvane::linking::sasCodeV2(eph.toStdString(), own->publicB64()));
 		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код готов").arg(dev));
+#ifdef PARVANE_DEV
+		// Только dev-сборка: headless e2e сверяет код с кодом нового устройства.
+		LOG(("Parvane: линковка (dev): код сверки %1 для устройства %2").arg(code, dev));
+#endif
 		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI (только dev-сборка).
 		if (const char *ag = ParvaneDevEnv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
 			GrantLink(dev, eph, signingKey);
@@ -11149,10 +13548,39 @@ bool ImportKeyBackup(const QString &path, const QString &password, QString *erro
 	return true;
 }
 
+// Воркер: сессии v2 нужен грант линковки (событие `needsLinking`) — оффер
+// публикуется, даже если история v1 на устройстве уже есть.
+void StartDeviceLinkOfferForV2() {
+	if (std::getenv("PARVANE_NO_LINK_OFFER")) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (g_linkActive) {
+			return;
+		}
+	}
+	LOG(("Parvane: линковка: журнал устройств v2 уже есть — публикую оффер"));
+	StartHistoryLinkOffer();
+	bool active = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		active = g_linkActive;
+	}
+	if (active) {
+		ScheduleLinkGrantPoll();
+	}
+}
+
 // Воркер, после initDevice: новое устройство без истории публикует оффер и
 // ждёт грант; любое устройство опрашивает чужие офферы (роль «старого»).
 void StartHistoryLinking() {
-	if (parvane::e2e::needsHistoryLink(DecCacheEmpty())
+	bool offered = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		offered = g_linkActive; // оффер уже опубликован по событию v2 `needsLinking`
+	}
+	if (!offered && parvane::e2e::needsHistoryLink(DecCacheEmpty())
 		&& !std::getenv("PARVANE_NO_LINK_OFFER")) {
 		StartHistoryLinkOffer();
 		bool active = false;

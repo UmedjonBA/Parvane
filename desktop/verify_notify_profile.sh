@@ -4,8 +4,9 @@
 #      канал (PARVANE_AUTOPROFILE) и мутит bob и группу (PARVANE_AUTOMUTE);
 #   2) alice(dev2) — второе устройство того же аккаунта — получает блоб
 #      уведомлений из sync (notify_settings): bob и группа замучены навсегда;
-#   3) bob резолвит alice через identity и видит bio/телефон/цвет/личный канал
-#      (personal_channel = group_id группы, в которой он состоит).
+#   3) bob резолвит alice через identity и видит bio/цвет/личный канал
+#      (personal_channel = group_id группы, в которой он состоит); телефон
+#      identity отдаёт только владельцу (P-19) — его видит alice(dev2), не bob.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 SB="${SCRATCH:-$(mktemp -d /tmp/pv-notify.XXXXXX)}"
@@ -43,10 +44,15 @@ wait_log "$A2/td/log.txt" "уведомления с другого устрой
   && ok "dev2: мут группы долетел" || bad "dev2: мут группы не долетел"
 wait_log "$A2/td/log.txt" "группа синтезирована $GID" 30 && ok "dev2: группа синтезирована (мут лёг на её чат)" || bad "dev2: группа не синтезирована"
 
-# bob: резолв alice → профильные поля и личный канал
+# владелец на втором устройстве видит свой телефон (P-19: телефон отдаётся только владельцу)
+wait_log "$A2/td/log.txt" "профиль alice@local: bio=$BIO phone=$PHONE_RE color=5 channel=$GID" 40 \
+  && ok "dev2: свой профиль целиком, включая телефон" || bad "dev2: свой профиль без телефона ($(grep -a 'профиль alice@local' "$A2/td/log.txt" | tail -1))"
+
+# bob: резолв alice → публичные поля и личный канал; телефон чужому НЕ отдаётся (P-19)
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:hi-$STAMP")
-wait_log "$B/td/log.txt" "профиль alice@local: bio=$BIO phone=$PHONE_RE color=5 channel=$GID" 60 \
-  && ok "bob видит bio/телефон/цвет/личный канал alice" || bad "bob не получил профиль alice ($(grep -a 'профиль alice@local' "$B/td/log.txt" | tail -1))"
+wait_log "$B/td/log.txt" "профиль alice@local: bio=$BIO phone= color=5 channel=$GID" 60 \
+  && ok "bob видит bio/цвет/личный канал alice, телефон скрыт" || bad "bob не получил профиль alice ($(grep -a 'профиль alice@local' "$B/td/log.txt" | tail -1))"
+grep -aq "профиль alice@local: .*phone=$PHONE_RE" "$B/td/log.txt" && bad "телефон alice виден bob (P-19)" || ok "P-19: телефон alice bob не виден"
 wait_log "$A1/td/log.txt" "входящее msg .*bob@local.*hi-$STAMP" 40 && ok "переписка живая" || bad "alice не получила сообщение bob"
 
 grep -qiE "Fatal|Unexpected in " "$A1/td/log.txt" "$A2/td/log.txt" "$B/td/log.txt" && bad "фатальные ошибки" || ok "без фатальных ошибок"

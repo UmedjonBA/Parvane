@@ -5161,7 +5161,7 @@
 "lng_message_stars_ph#other" = "Сообщение за {count} звезды";
 "lng_message_tagged_with" = "Добавлен тег {emoji}";
 "lng_message_unsupported" = "Это сообщение не поддерживается в Вашей версии Parvane. Пожалуйста, обновитесь до последней версии через Настройки > Продвинутые настройки или установите её по ссылке {link}. Если Вы уже используете свежую версию приложения, возможно, в сообщении используется нововведение, которое пока не поддерживается.";
-"lng_messages_privacy_about" = "Вы можете запретить входящие сообщения от пользователей, которых нет в Вашем списке контактов и которым Вы не писали сами.";
+"lng_messages_privacy_about" = "Вы можете запретить входящие сообщения от тех, кому Вы не писали сами.";
 "lng_messages_privacy_charge" = "Сообщения за звёзды";
 "lng_messages_privacy_charge_about" = "Вы сможете брать плату за входящие сообщения от пользователей, которых нет в Вашем списке контактов, и тех, кто пишет Вам первым.";
 "lng_messages_privacy_everyone" = "Все";
@@ -5174,7 +5174,7 @@
 "lng_messages_privacy_price_about" = "Вы получите {percent} от выбранной суммы ({amount}) за каждое входящее сообщение.";
 "lng_messages_privacy_remove_about" = "Вы можете добавить пользователей или целые группы, которые смогут писать Вам бесплатно.";
 "lng_messages_privacy_remove_fee" = "Бесплатная отправка";
-"lng_messages_privacy_restricted" = "Контакты и Premium-подписчики";
+"lng_messages_privacy_restricted" = "Те, кому я писал(а)";
 "lng_messages_privacy_subtitle" = "Кто может отправлять мне сообщения";
 "lng_messages_privacy_title" = "Сообщения";
 "lng_mini_apps_disclaimer_button" = "Я принимаю {link}";
@@ -8921,3 +8921,15 @@
 "lng_parvane_invite_request_sent" = "Заявка на вступление отправлена.";
 "lng_parvane_invite_edit_unsupported" = "Правка ссылки не поддерживается — отзовите её и создайте новую.";
 "lng_parvane_restrict_unsupported" = "Частичные ограничения здесь не поддерживаются — участника можно только удалить.";
+"lng_parvane_group_unconfirmed_member" = "Сервер показывает {user} в составе группы, но это не подтверждено записью администратора. Ключи шифрования этому участнику не передаются.";
+"lng_parvane_new_own_device" = "К вашему аккаунту добавлено новое устройство. Если это были не вы, удалите его в Настройки > Устройства.";
+"lng_parvane_enhanced_privacy" = "Усиленная приватность";
+"lng_parvane_enhanced_privacy_about" = "Размеры сообщений выравниваются по фиксированной сетке, «печатает» и статус «в сети» в этом чате не передаются. Режим виден всем участникам.";
+"lng_parvane_enhanced_privacy_by_peer" = "Включена собеседником.";
+"lng_parvane_enhanced_privacy_failed" = "Не удалось изменить режим усиленной приватности. Попробуйте позже.";
+"lng_parvane_chat_mode_on" = "{user} включил(а) усиленную приватность";
+"lng_parvane_chat_mode_off" = "{user} выключил(а) усиленную приватность";
+"lng_parvane_chat_mode_on_you" = "Вы включили усиленную приватность";
+"lng_parvane_chat_mode_off_you" = "Вы выключили усиленную приватность";
+"lng_parvane_upgrade_available" = "Доступна новая версия Parvane. Обновите приложение — эта версия скоро перестанет работать.";
+"lng_parvane_upgrade_required" = "Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.";
