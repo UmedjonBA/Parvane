@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Собирает libparvane_core.a под один Android ABI:
-#  1) cargo-ndk → libparvane_e2e.a (Rust vodozemac) под target;
+#  1) cargo-ndk → libparvane_e2e.a (Rust vodozemac, v1) и libparvane_protocol_ffi.a
+#     (движок протокола v2, spec 007, C ABI) под target;
 #  2) cmake+ninja (android/jni) → libparvane_core.a, линкует OpenSSL(ABI)+e2e.
 # Требует: ANDROID_NDK_HOME, cargo-ndk, собранный OpenSSL (build-openssl.sh).
 set -Eeuo pipefail
@@ -20,11 +21,14 @@ case "$ABI" in
   *) echo "неизвестный ABI: $ABI"; exit 2 ;;
 esac
 
-echo "== 1/2 cargo-ndk: parvane-e2e для $ABI ($RUST_TARGET) =="
+echo "== 1/2 cargo-ndk: parvane-e2e + parvane-protocol-ffi для $ABI ($RUST_TARGET) =="
 cd "$REPO/backend"
-cargo ndk -t "$ABI" --platform "$API" build -p parvane-e2e --release
+# Один вызов cargo — одна сборка общих зависимостей; -j по CARGO_JOBS (16 ГБ ОЗУ)
+cargo ndk -t "$ABI" --platform "$API" build -p parvane-e2e -p parvane-protocol-ffi --release -j "${CARGO_JOBS:-4}"
 E2E_LIB="$REPO/backend/target/$RUST_TARGET/release/libparvane_e2e.a"
+PROTO_LIB="$REPO/backend/target/$RUST_TARGET/release/libparvane_protocol_ffi.a"
 [ -f "$E2E_LIB" ] || { echo "нет $E2E_LIB"; exit 3; }
+[ -f "$PROTO_LIB" ] || { echo "нет $PROTO_LIB"; exit 3; }
 
 echo "== 2/2 cmake+ninja: parvane_core для $ABI =="
 BUILD="$ROOT/.build/core-$ABI"
@@ -35,6 +39,7 @@ cmake -S "$ROOT/jni" -B "$BUILD" -G Ninja \
   -DANDROID_PLATFORM="android-$API" \
   -DPARVANE_OPENSSL_DIR="$OSSL" \
   -DPARVANE_E2E_LIB="$E2E_LIB" \
+  -DPARVANE_PROTOCOL_LIB="$PROTO_LIB" \
   -DCMAKE_BUILD_TYPE=Release
 ninja -C "$BUILD"
 echo "== готово =="

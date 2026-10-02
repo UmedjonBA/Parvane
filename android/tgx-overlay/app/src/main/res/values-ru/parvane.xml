@@ -25,4 +25,10 @@
   <string name="ParvaneKeysImported">Копия восстановлена, сообщений добавлено:</string>
   <string name="ParvaneKeysImportFailed">Неверный пароль или повреждённый файл</string>
   <string name="ParvaneKeysNotReady">Ключи ещё не готовы, подождите несколько секунд после входа</string>
+  <string name="ParvaneL2Toggle">Усиленная приватность</string>
+  <string name="ParvaneL2Info">Размеры сообщений выравниваются по фиксированной сетке, «печатает» и статус «в сети» в этом чате не передаются. Режим виден всем участникам.</string>
+  <string name="ParvaneL2ByPeer">Включена собеседником</string>
+  <string name="ParvaneL2On">Включена</string>
+  <string name="ParvaneL2Off">Выключена</string>
+  <string name="ParvaneL2NoRights">Менять режим могут участники с правом изменять сведения группы</string>
 </resources>

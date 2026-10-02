@@ -4,6 +4,7 @@
   <item type="id" name="btn_parvaneKeysExport" />
   <item type="id" name="btn_parvaneKeysImport" />
   <item type="id" name="btn_parvaneSignUp" />
+  <item type="id" name="btn_parvaneL2" />
   <string name="ParvaneSignUp">Create account</string>
   <string name="ParvaneSignUpHint">Nickname and password. If the server confirms by Telegram or e-mail, a confirmation step follows.</string>
   <string name="ParvaneSignInHint">Sign in with nickname and password.</string>
@@ -29,4 +30,11 @@
   <string name="ParvaneKeysImported">Backup restored, messages merged:</string>
   <string name="ParvaneKeysImportFailed">Wrong password or damaged file</string>
   <string name="ParvaneKeysNotReady">Keys are not ready yet, wait a few seconds after sign-in</string>
+  <!-- spec 007: режим «усиленная приватность» (L2) — строка-переключатель в профиле чата и управлении группой -->
+  <string name="ParvaneL2Toggle">Enhanced privacy</string>
+  <string name="ParvaneL2Info">Message sizes are padded to a fixed grid; typing and online status are not sent in this chat. The mode is visible to all participants.</string>
+  <string name="ParvaneL2ByPeer">Turned on by the other participant</string>
+  <string name="ParvaneL2On">On</string>
+  <string name="ParvaneL2Off">Off</string>
+  <string name="ParvaneL2NoRights">Only members who can change group info can switch this mode</string>
 </resources>

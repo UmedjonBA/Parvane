@@ -31,18 +31,30 @@ PKG=org.parvane.tgx; ACT="$PKG/org.thunderdog.challegram.MainActivity"
 x_restart() { x_force_stop $PKG || bad "X не остановился (force-stop)"; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1; }
 x_files() { ad shell run-as $PKG ls files/tdlib/ 2>/dev/null | tr -d '\r'; }
 
+# P-46: в logcat X — только id и вид сообщения, без текста. Сверка — по uuid из лога
+# отправителя (десктоп пишет «отправлено msg <uuid> → …»); прежняя сверка по тексту
+# после ревью безопасности всегда «теряла» сообщения (29 сен 2026).
+sent_uuid() { grep -aoE "отправлено msg [0-9a-f-]{36} → alice@local" "$B/td/log.txt" 2>/dev/null | tail -1 | awk '{print $3}'; }
+ad shell rm -f /data/local/tmp/parvane-e2e-cmd # команда прошлого сценария не должна выполниться при старте X
+
 # 1. устройство отсутствовало (SYNC-1)
 x_force_stop $PKG
 kill $(pgrep -f "workdir $SB/bob/t[d]") 2>/dev/null; sleep 2
+OFF=()
 for i in 1 2 3; do
   BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:offline-$STAMP-$i")
-  wait_log "$B/td/log.txt" "отправлено msg .*→ alice@local|msg .* → alice@local" 60 || wait_log "$A/td/log.txt" "offline-$STAMP-$i" 60 || bad "bob: сообщение $i не отправлено"
+  wait_log "$B/td/log.txt" "отправлено msg [0-9a-f-]{36} → alice@local" 60 || bad "bob: сообщение $i не отправлено"
+  OFF+=("$(sent_uuid)")
   stop_pid "$BP"
 done
-ok "bob отправил 3 сообщения, пока X был выключен"
+ok "bob отправил 3 сообщения, пока X был выключен (${OFF[*]})"
 ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1
 xlog "сессия поднята" 60 || bad "X не поднял сессию"
-for i in 1 2 3; do xlog "offline-$STAMP-$i" 90 && ok "SYNC-1 (X): сообщение $i доставлено после включения" || bad "SYNC-1 (X): сообщение $i потеряно"; done
+for i in 0 1 2; do
+  U="${OFF[$i]}"
+  [ -n "$U" ] && xlog "сообщение $U → чат [0-9]+ \\(вх\\)" 90 && ok "SYNC-1 (X): сообщение $((i+1)) доставлено после включения" \
+    || bad "SYNC-1 (X): сообщение $((i+1)) ($U) потеряно"
+done
 xlog "курсор: [0-9a-f-]{36} применён" 30 && ok "SYNC-1 (X): курсор двигается за применённым" || bad "SYNC-1 (X): нет маркера курсора"
 [ "$(xcount 'курсор придержан')" = "0" ] && ok "SYNC-1 (X): ничего не придержано (всё расшифровано)" || bad "SYNC-1 (X): курсор придержан на чистом сценарии"
 x_files | grep -q cursors.json && ok "cursors.json на месте" || bad "нет cursors.json"
@@ -74,9 +86,10 @@ stop_pid "$BP"
 kill $(pgrep -f "workdir $SB/alice/t[d]") 2>/dev/null; sleep 2
 # Токен X из tgx_session_flow.sh выдан без device_id (claim dev пуст) — identity не считает его
 # отозванным (is_device_revoked(None) = false), и отзыв X не замечал. Перевыпускаем под device_id ядра X.
-XDEV=$(ad shell run-as $PKG cat files/tdlib/e2e-alice@local/device.json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("device_id",""))' 2>/dev/null)
+# device.json теперь под storecrypt — id берём из tgx_session_flow.sh (он задаёт его заранее)
+XDEV=$(cat /tmp/pv-tgx-session/device_id 2>/dev/null)
 [ -n "$XDEV" ] && ok "device_id X: $XDEV" || bad "нет device.json у X"
-TOKEN="$(nats --server nats://127.0.0.1:4222 req identity.token.issue "{\"user\":\"alice@local\",\"password\":\"test\",\"device_id\":\"$XDEV\"}" --raw 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')"
+TOKEN="$(nats --server nats://127.0.0.1:4222 req identity.token.issue "{\"user\":\"alice@local\",\"password\":\"$PV_PASSWORD\",\"device_id\":\"$XDEV\"}" --raw 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')"
 printf '{"self":"%s","token":"%s"}' alice@local "$TOKEN" > "$OUT/session.json"
 ad push "$OUT/session.json" /data/local/tmp/parvane-session.json >/dev/null 2>&1
 ad shell run-as $PKG cp /data/local/tmp/parvane-session.json files/tdlib/session.json
@@ -89,16 +102,31 @@ x_files | grep -q journal.jsonl && ok "FAIL-1 (X): журнал сохранён
 x_files | grep -q 'e2e-' && ok "FAIL-1 (X): ключи сохранены" || bad "FAIL-1 (X): ключи стёрты"
 x_files | grep -q session.json && bad "FAIL-1 (X): session.json остался" || ok "FAIL-1 (X): session.json снят"
 
-# 5. реконнект gateway (сессия X поднимается заново через session.json, как в tgx_session_flow.sh)
-TOKEN="$(nats --server nats://127.0.0.1:4222 req identity.token.issue '{"user":"alice@local","password":"test"}' --raw 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')"
+# 5. реконнект gateway (сессия X поднимается заново через session.json, как в tgx_session_flow.sh).
+# Устройство X в шаге 4 ОТОЗВАНО: доставки на него больше нет by design — X входит
+# новым устройством (свой device_id, токен под него, прежние ключи E2E стёрты).
+XDEV2="$(python3 -c 'import secrets,string; a=string.ascii_letters+string.digits; print("".join(secrets.choice(a) for _ in range(16)))')"
+TOKEN="$(nats --server nats://127.0.0.1:4222 req identity.token.issue "{\"user\":\"alice@local\",\"password\":\"$PV_PASSWORD\",\"device_id\":\"$XDEV2\"}" --raw 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')"
 printf '{"self":"%s","token":"%s"}' alice@local "$TOKEN" > "$OUT/session.json"
 ad push "$OUT/session.json" /data/local/tmp/parvane-session.json >/dev/null 2>&1
+x_force_stop $PKG
+ad shell run-as $PKG rm -rf files/tdlib/e2e-alice@local
+ad shell run-as $PKG mkdir -p files/tdlib/e2e-alice@local
+printf '{"device_id":"%s","published":false,"otk_next":1}' "$XDEV2" > "$OUT/device.json"
+ad push "$OUT/device.json" /data/local/tmp/parvane-device.json >/dev/null 2>&1
+ad shell run-as $PKG cp /data/local/tmp/parvane-device.json files/tdlib/e2e-alice@local/device.json
 ad shell run-as $PKG cp /data/local/tmp/parvane-session.json files/tdlib/session.json
 x_restart; xlog "сессия поднята" 60 && ok "X снова в сессии (новый токен)" || bad "X не поднял новую сессию"
 gateway_restart
 xlog "gateway переподключён" 90 && ok "FAIL-1 (X): транспорт переподключился после рестарта gateway" || bad "FAIL-1 (X): нет реконнекта"
+# messenger кэширует устройства получателя 30 с (DEVICES_TTL) — новое устройство X
+# в этом окне sealed-копию не получило бы
+sleep 32
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:after-reconnect-$STAMP")
-xlog "after-reconnect-$STAMP" 90 && ok "FAIL-1 (X): сообщение после реконнекта доставлено" || bad "FAIL-1 (X): сообщение после реконнекта не пришло"
+wait_log "$B/td/log.txt" "отправлено msg [0-9a-f-]{36} → alice@local" 60 || bad "bob: сообщение после реконнекта не отправлено"
+U="$(sent_uuid)"
+[ -n "$U" ] && xlog "сообщение $U → чат [0-9]+ \\(вх\\)" 90 && ok "FAIL-1 (X): сообщение после реконнекта доставлено" \
+  || bad "FAIL-1 (X): сообщение после реконнекта ($U) не пришло"
 
 ad logcat -d -v time > "$OUT/logcat.txt"
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"

@@ -38,7 +38,7 @@ wait_log "$SB/preview.log" "Preview шард запущен" 20 && ok "preview �
 python3 - "$SB/preview.db" "$P0" <<'PY'
 import math, sqlite3, struct, sys, time, zlib
 db = sys.argv[1]; points = [tuple(map(float, p.split(','))) for p in sys.argv[2:]]
-Z = 16; N = 2 ** Z
+Z = 15; N = 2 ** Z
 def png_rgb(w, h, rgb):
     raw = b''.join(b'\x00' + bytes(rgb) * w for _ in range(h))
     def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
@@ -65,12 +65,16 @@ xlog "→ X UpdateChatFolders" 30 && ok "X: папки восстановлен�
 sleep 3; ad exec-out screencap -p > "$OUT/01-folders.png"
 
 # 2. превью ссылок
+IN_BEFORE=$(adb logcat -d 2>/dev/null | grep -acE "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)")
 kill $(pgrep -f "workdir $SB/bob/t[d]") 2>/dev/null; sleep 2
 # PARVANE_AUTOTTL=…:0 — десктоп помнит таймер чата из tgx_ttl_scheduled_flow.sh (10 с): без сброса
 # текст со ссылкой самоуничтожался и глобальный поиск его не находил (27 сен 2026)
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOTTL="alice@local:0" PARVANE_AUTOSEND="alice@local:смотри https://example.com/page-$STAMP")
 wait_log "$B/td/log.txt" "page-$STAMP" 60 && ok "bob отправил текст со ссылкой" || bad "bob не отправил"
-xlog "page-$STAMP" 60 && ok "X: текст со ссылкой принят" || bad "X: текст не принят"
+# P-46: текста сообщений в logcat нет — приём сверяем по числу входящих (сам текст проверяет поиск в шаге 5)
+IN_NOW=0
+for _ in $(seq 1 20); do IN_NOW=$(adb logcat -d 2>/dev/null | grep -acE "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)"); [ "$IN_NOW" -gt "$IN_BEFORE" ] && break; sleep 3; done
+[ "$IN_NOW" -gt "$IN_BEFORE" ] && ok "X: текст со ссылкой принят" || bad "X: текст не принят"
 x_cmd "{\"op\":\"send\",\"peer\":\"bob@local\",\"text\":\"ответ https://example.org/x-$STAMP\"}"
 xlog "превью https://example.org/x-$STAMP → " 40 && ok "X: превью запрошено у preview при отправке (FAIL-1: с деградацией)" || bad "X: превью не запрошено"
 wait_log "$B/td/log.txt" "x-$STAMP" 60 && ok "bob получил текст из X" || bad "bob не получил"
@@ -82,16 +86,17 @@ BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice
 wait_log "$B/td/log.txt" "геолокация → alice@local" 60 && ok "bob отправил локацию" || bad "bob не отправил локацию"
 xlog "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)" 60 >/dev/null
 ui_reset; ad shell input tap 540 330; sleep 6; ad exec-out screencap -p > "$OUT/02-location.png"
-xlog "карта 55\.7558[0-9]*,37\.617[0-9]* z16 [0-9]+x[0-9]+ тайлов=[1-9][0-9]*/[0-9]+" 60 && ok "MAP-1 (X): карта собрана из тайлов preview" || bad "MAP-1 (X): карта не собрана (см. $OUT/02-location.png)"
-xlog "тайл 16/[0-9]+/[0-9]+ через preview" 10 && ok "MAP-1 (X): тайлы шли через preview" || bad "MAP-1 (X): нет маркера «через preview»"
+xlog "карта 55\.7558[0-9]*,37\.617[0-9]* z15 [0-9]+x[0-9]+ тайлов=[1-9][0-9]*/[0-9]+" 60 && ok "MAP-1 (X): карта собрана из тайлов preview" || bad "MAP-1 (X): карта не собрана (см. $OUT/02-location.png)"
+xlog "тайл 15/[0-9]+/[0-9]+ через preview" 10 && ok "MAP-1 (X): тайлы шли через preview" || bad "MAP-1 (X): нет маркера «через preview»"
 ad exec-out screencap -p > "$OUT/03-map.png"
 
 # 4. профиль в обе стороны
 stop_pid "$BP"
-BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOPROFILE="bio=bio-$STAMP;phone=+7000$STAMP:3")
+BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOPROFILE="bio=bio-$STAMP;phone=+7000$STAMP;color=3:3")
 wait_log "$B/td/log.txt" "autoprofile применён" 60 && ok "bob сменил bio/телефон" || bad "bob не сменил профиль"
 x_cmd "{\"op\":\"resolve\",\"peer\":\"bob@local\"}"
-xlog "профиль bob@local: birthday=.* color=.* phone=\+7000$STAMP" 90 && ok "X: телефон bob виден в профиле" || bad "X: профиль bob не перечитан"
+# P-19: телефон отдаётся только владельцу — у alice он пуст; «профиль перечитан» сверяем по цвету имени
+xlog "профиль bob@local: birthday=.* color=3 phone=\$" 90 && ok "X: профиль bob перечитан, чужой телефон не виден (P-19)" || bad "X: профиль bob не перечитан"
 x_cmd "{\"op\":\"birthday\",\"peer\":\"bob@local\",\"day\":7,\"month\":3,\"year\":1990}"
 xlog "e2e-cmd birthday → Ok" 30 && ok "X: день рождения задан (SetBirthdate → identity)" || bad "X: день рождения не задан"
 stop_pid "$BP"

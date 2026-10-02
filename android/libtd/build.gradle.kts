@@ -43,3 +43,20 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }
+
+// Протокол v2 (spec 007, T067): JVM-тесты шва гоняют движок через хостовую
+// libparvane_protocol_jni.so (тот же protocol_jni.cpp/v2_bridge.h, что в
+// libparvane_jni.so) — собирается android/build-host-jni.sh перед тестами.
+val hostProtocolJni = rootProject.layout.projectDirectory.file(".build/host-jni/libparvane_protocol_jni.so").asFile
+val buildHostProtocolJni by tasks.registering(Exec::class) {
+    description = "Хостовая JNI-библиотека движка v2 для JVM-тестов шва"
+    commandLine(rootProject.layout.projectDirectory.file("build-host-jni.sh").asFile.absolutePath)
+    outputs.file(hostProtocolJni)
+    outputs.upToDateWhen { false } // решают cargo/ninja: без изменений — секунды
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(buildHostProtocolJni)
+    systemProperty("parvane.protocol.jni", hostProtocolJni.absolutePath)
+    systemProperty("parvane.vectors.dir", rootProject.layout.projectDirectory.dir("../proto/parvane/vectors").asFile.absolutePath)
+}
+

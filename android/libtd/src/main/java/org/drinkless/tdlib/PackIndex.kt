@@ -115,13 +115,13 @@ class PackIndex(private val dir: File) {
     private fun load() {
         val f = indexFile
         if (!f.exists()) return
-        val arr = try { JSONArray(f.readText()) } catch (e: Exception) { return }
+        val arr = try { JSONArray(SeamFiles.read(f)) } catch (e: Exception) { return }
         for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { val p = Pack.fromJson(it); packs[p.setId] = p }
     }
     private fun save() {
         try {
             dir.mkdirs()
-            indexFile.writeText(JSONArray().also { a -> packs.values.forEach { a.put(it.toJson()) } }.toString())
+            SeamFiles.write(indexFile, JSONArray().also { a -> packs.values.forEach { a.put(it.toJson()) } }.toString())
         } catch (e: Exception) { /* диск недоступен — индекс живёт в памяти до следующей записи */ }
     }
 

@@ -2,10 +2,10 @@
 # Форк Telegram X в эмуляторе с ЗАРАНЕЕ выданной сессией (минуя экран пароля, на
 # котором падает хостовый qemu): токен через nats → files/tdlib/session.json
 # приложения (run-as, debug-сборка) → запуск → Ready → список чатов.
-#   ./tgx_session_flow.sh [OUT_DIR] [user=alice@local] [password=test]
+#   ./tgx_session_flow.sh [OUT_DIR] [user=alice@local] [password=$PV_PASSWORD]
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT="${1:-/tmp/pv-tgx-session}"; USER_="${2:-alice@local}"; PASS="${3:-test}"; mkdir -p "$OUT"
+OUT="${1:-/tmp/pv-tgx-session}"; USER_="${2:-alice@local}"; PASS="${3:-${PV_PASSWORD:-test-pass-2026}}"; mkdir -p "$OUT"
 . "$ROOT/../desktop/verify_lib.sh"
 export ANDROID_HOME=/mnt/hdd/ub/android/sdk JAVA_HOME=/mnt/hdd/ub/android/jdk-17
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"
@@ -26,7 +26,12 @@ TGX="${TGX_DIR:-/mnt/hdd/ub/android/tgx}"
 APK="$(find "$TGX/app/build/outputs/apk" -name "*-x64-debug.apk" | head -1)"
 a() { timeout 25 adb "$@"; }
 pgrep -x nats-server >/dev/null || { echo "нет локального стека (tgx_login_flow.sh поднимает)"; exit 2; }
-TOKEN="$(nats --server nats://127.0.0.1:4222 req identity.token.issue "{\"user\":\"$USER_\",\"password\":\"$PASS\"}" --raw 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')"
+# После ревью безопасности identity принимает ключи устройства (prekeys) только под JWT
+# с claim dev этого устройства: токен без device_id → ключи X не публикуются, собеседники
+# отвергают его сообщения («подмена отправителя»). device_id задаём заранее: plain
+# device.json в каталоге E2E (ядро подхватит и перешифрует) + токен под этот id.
+XDEV="$(python3 -c 'import secrets,string; a=string.ascii_letters+string.digits; print("".join(secrets.choice(a) for _ in range(16)))')"
+TOKEN="$(nats --server nats://127.0.0.1:4222 req identity.token.issue "{\"user\":\"$USER_\",\"password\":\"$PASS\",\"device_id\":\"$XDEV\"}" --raw 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')"
 [ -n "$TOKEN" ] && ok "токен для $USER_ выдан" || { bad "identity не выдал токен"; finish "TGX SESSION"; }
 if [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; then
   pkill -f "emulator -avd ${AVD:-parvane}" 2>/dev/null; sleep 2
@@ -55,6 +60,15 @@ a push "$OUT/session.json" /data/local/tmp/parvane-session.json >/dev/null 2>&1
 # run-as: по одной команде (sh -c с && через adb ломает кавычки)
 a shell run-as org.parvane.tgx mkdir -p files/tdlib
 a shell run-as org.parvane.tgx cp /data/local/tmp/parvane-session.json files/tdlib/session.json && ok "session.json подложен" || bad "run-as не сработал"
+printf '{"device_id":"%s","published":false,"otk_next":1}' "$XDEV" > "$OUT/device.json"
+a push "$OUT/device.json" /data/local/tmp/parvane-device.json >/dev/null 2>&1
+a shell run-as org.parvane.tgx mkdir -p "files/tdlib/e2e-$USER_"
+a shell run-as org.parvane.tgx cp /data/local/tmp/parvane-device.json "files/tdlib/e2e-$USER_/device.json" && ok "device.json подложен (device_id $XDEV)" || bad "device.json не подложен"
+echo "$XDEV" > "$OUT/device_id"
+# Команда e2e-хука, оставшаяся от прошлого сценария (файл root, приложение его не
+# удалит), выполнилась бы при старте: X отправлял «send», своё сообщение появлялось в
+# истории и линковка отзывала оффер («история появилась сама») — 29 сен 2026.
+a shell rm -f /data/local/tmp/parvane-e2e-cmd
 a logcat -c
 adb logcat -v time > "$OUT/logcat.txt" 2>&1 & LCP=$!
 a shell am start -n org.parvane.tgx/org.thunderdog.challegram.MainActivity >/dev/null 2>&1

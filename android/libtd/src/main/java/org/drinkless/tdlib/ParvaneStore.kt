@@ -18,10 +18,14 @@ class ParvaneStore {
         const val INVITE_HOST = "https://parvane.invite/"
         private val HEX32 = Regex("^[0-9a-f]{32}$")
         private val HASH_TOKEN = Regex("#\\+([0-9a-f]{32})")
-        fun buildInviteLink(token: String) = INVITE_HOST + token
+        /** Ссылка v2 (spec 007, T084): токен — сама ссылка https://<domain>/join/<link_id>#<seed>. */
+        fun buildInviteLink(token: String) = if (V2_INVITE.matches(token)) token else INVITE_HOST + token
+        /** Ссылка-приглашение v2 (D-04): https://<domain>/join/<link_id>#<seed> (base64url, 32 байта). */
+        private val V2_INVITE = Regex("^https://[^/\\s]+/join/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$")
         /** Токен из ссылки любого формата: parvane.invite/<t>, …#+<t>, голый 32 hex; null — не наша. */
         fun inviteTokenOf(linkOrToken: String?): String? {
             val u = linkOrToken?.trim() ?: return null
+            if (V2_INVITE.matches(u)) return u // v2 — сама ссылка (формы v1 — только как вход v1)
             if (HEX32.matches(u)) return u
             HASH_TOKEN.find(u)?.let { return it.groupValues[1] }
             for (prefix in listOf("https://parvane.invite/", "http://parvane.invite/", "parvane.invite/")) {
@@ -284,8 +288,9 @@ class ParvaneStore {
         chat.positions = positionsFor(chat.id, chat.positions.firstOrNull()?.order ?: 0L)
     }
 
-    /** TdApi-контент по нашему JSON (kind: text | photo | video | file | voice | video_note | sticker | gif | poll | location). */
-    fun contentFrom(c: JSONObject, uuid: String = ""): TdApi.MessageContent {
+    /** TdApi-контент по нашему JSON (kind: text | photo | video | file | voice | video_note | sticker | gif | poll | location; иное → MessageUnsupported).
+     *  [from]/[out] — автор и «своё»: нужны служебному сообщению о смене режима L2 (kind=chat_mode). */
+    fun contentFrom(c: JSONObject, uuid: String = "", from: String = "", out: Boolean = false): TdApi.MessageContent {
         val kind = c.optString("kind")
         val fid = c.optString("file_id")
         val size = c.optLong("size_bytes")
@@ -333,7 +338,16 @@ class ParvaneStore {
                 TdApi.MessageAnimation(TdApi.Animation(c.optInt("duration_secs", 1), c.optInt("width", 240), c.optInt("height", 240),
                     c.optString("filename", "animation.webm"), mime.ifEmpty { "video/webm" }, false, null, null, f), caption(c), false, false, false)
             }
-            else -> textContent(c)
+            // "" — старые события без kind (текст); незнакомый вид (в т.ч. заглушка
+            // движка v2 "unsupported", spec 007) — нативная заглушка X «не поддерживается»
+            "text", "" -> textContent(c)
+            // Служебное сообщение шва в чате (T080: участник группы v2 без записи администратора)
+            "service" -> TdApi.MessageCustomServiceAction(c.optString("text"))
+            // Режим «усиленная приватность» (L2-1): смена режима — видимое служебное сообщение чата,
+            // текст EN/RU по локали; `anon` — автор записи группы неизвестен
+            L2Mode.CONTENT_KIND -> TdApi.MessageCustomServiceAction(
+                L2Mode.serviceText(c, out, if (from.isEmpty() || c.optBoolean("anon")) "" else displayName(from)))
+            else -> TdApi.MessageUnsupported()
         }
     }
 
@@ -509,7 +523,7 @@ class ParvaneStore {
             editDate = if (edited) ts.toInt() else 0
             isPinned = pinned
             canBeSaved = true
-            this.content = contentFrom(content, uuid)
+            this.content = contentFrom(content, uuid, from, out)
             interactionInfo = reactionsFrom(reactions)
             val replied = replyUuid?.let { msgByUuid[it] }
             this.replyTo = if (replied != null) TdApi.MessageReplyToMessage(replied.chatId, replied.id, null, 0, null, null, 0, null) else null
@@ -538,7 +552,7 @@ class ParvaneStore {
     @Synchronized
     fun applyEdit(uuid: String, content: JSONObject, editDate: Long): List<TdApi.Update> {
         val msg = msgByUuid[uuid] ?: return emptyList()
-        msg.content = contentFrom(content)
+        msg.content = contentFrom(content, uuid, addressById[(msg.senderId as? TdApi.MessageSenderUser)?.userId ?: 0L] ?: "", msg.isOutgoing)
         msg.editDate = editDate.toInt()
         contentByUuid[uuid] = content
         return listOf(TdApi.UpdateMessageContent(msg.chatId, msg.id, msg.content),
@@ -633,6 +647,12 @@ class ParvaneStore {
     // ── уведомления (блоб веба: {defaults:{users|groups|channels:{mutedUntil,hasSound}}, exceptions:{address:{…}}}) ──
     val notifyDefaults = JSONObject()
     val notifyExceptions = JSONObject()
+    /** «Кто может добавлять меня в группы» из блоба (P-34): "anyone" | "nobody" | "" — не приходило.
+     *  Своего экрана в шве нет: значение с другого устройства сохраняется в исходящем блобе
+     *  (иначе мут чата с Android стирал бы его на сервере) и уходит в приватность v2 (T079). */
+    @Volatile var groupAddPolicy: String = ""
+    private fun notifyBlob(): String = JSONObject().put("defaults", notifyDefaults).put("exceptions", notifyExceptions)
+        .also { if (groupAddPolicy.isNotEmpty()) it.put("group_add", groupAddPolicy) }.toString()
     private fun muteFor(s: JSONObject?): Int {
         if (s == null || !s.has("mutedUntil") || s.isNull("mutedUntil")) return 0
         val until = s.optLong("mutedUntil")
@@ -657,6 +677,7 @@ class ParvaneStore {
     @Synchronized
     fun applyNotifyBlob(blob: JSONObject): List<TdApi.Update> {
         val out = ArrayList<TdApi.Update>()
+        blob.optString("group_add").let { if (it == "anyone" || it == "nobody") groupAddPolicy = it }
         blob.optJSONObject("defaults")?.let { d -> d.keys().forEach { k -> notifyDefaults.put(k, d.optJSONObject(k)) } }
         blob.optJSONObject("exceptions")?.let { ex ->
             ex.keys().forEach { address ->
@@ -678,13 +699,13 @@ class ParvaneStore {
         val until = when { muteFor <= 0 -> 0L; muteFor >= 365 * 24 * 3600 -> 2147483647L; else -> System.currentTimeMillis() / 1000 + muteFor }
         notifyExceptions.put(address, JSONObject().put("mutedUntil", until))
         (groupsByGid[address]?.chatId ?: idByAddress[address])?.let { chats[it]?.notificationSettings = chatNotifySettings(address) }
-        return JSONObject().put("defaults", notifyDefaults).put("exceptions", notifyExceptions).toString()
+        return notifyBlob()
     }
     @Synchronized
     fun setScopeMute(scope: String, muteFor: Int): String {
         val until = when { muteFor <= 0 -> 0L; muteFor >= 365 * 24 * 3600 -> 2147483647L; else -> System.currentTimeMillis() / 1000 + muteFor }
         notifyDefaults.put(scope, JSONObject().put("mutedUntil", until))
-        return JSONObject().put("defaults", notifyDefaults).put("exceptions", notifyExceptions).toString()
+        return notifyBlob()
     }
 
     /** Статус онлайн пира (presence-хартбит → online до now+90). */
@@ -692,6 +713,15 @@ class ParvaneStore {
     fun setOnline(address: String, expires: Int): TdApi.Update? {
         val user = users[idOf(address)] ?: return null
         user.status = TdApi.UserStatusOnline(expires)
+        return TdApi.UpdateUserStatus(user.id, user.status)
+    }
+
+    /** Режим L2 включён в чате с пиром: «в сети» больше не показываем (L2-1); null — и так не в сети. */
+    @Synchronized
+    fun setOffline(address: String): TdApi.Update? {
+        val user = users[idOf(address)] ?: return null
+        if (user.status !is TdApi.UserStatusOnline) return null
+        user.status = TdApi.UserStatusOffline(0)
         return TdApi.UpdateUserStatus(user.id, user.status)
     }
 }
