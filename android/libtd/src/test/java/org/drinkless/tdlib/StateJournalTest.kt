@@ -27,6 +27,51 @@ class StateJournalTest {
 
     private fun tmp() = Files.createTempDirectory("pv-state").toFile()
 
+    /** T132 (FR-039, правило STATE-2): настройки уведомлений — вид журнала, чужие поля записи не стираются. */
+    @Test
+    fun notifySettingsRoundTripThroughSnapshot() {
+        val a = tmp()
+        val j = StateJournal(ParvaneProtocol.stateCodec, resolver())
+        val mine = StateJournal.NotifyView(
+            JSONObject().put("groups", JSONObject().put("mutedUntil", 2147483647L)),
+            JSONObject().put("bob@local", JSONObject().put("mutedUntil", 1900000000L)))
+        val snap = j.build(ChatLocalState(a), ScheduledQueue(a) { 1000L }, emptySet(), mine)
+        val entry = snap.getJSONArray("notify").getJSONObject(0)
+        assertEquals("bob@local", entry.getJSONObject("peer").getJSONObject("user").getString("address"))
+        assertEquals("1900000000000", entry.getJSONObject("settings").getString("mute_until_ms"))
+        assertEquals("2147483647000", snap.getJSONObject("notify_defaults").getJSONObject("groups").getString("mute_until_ms"))
+        assertFalse("умолчание, которого нет ни у шва, ни в журнале, не выдумывается", snap.getJSONObject("notify_defaults").has("users"))
+        assertTrue(j.hasNotify(snap))
+        assertFalse(j.hasNotify(JSONObject()))
+
+        // Другое «устройство» без настроек: журнал → блоб для applyNotifyBlob
+        val b = tmp()
+        val other = StateJournal(ParvaneProtocol.stateCodec, resolver())
+        val empty = StateJournal.NotifyView(JSONObject(), JSONObject())
+        val ch = other.project(snap, ChatLocalState(b), ScheduledQueue(b) { 1000L }, HashSet(), empty)
+        assertEquals(1900000000L, ch.notify!!.getJSONObject("exceptions").getJSONObject("bob@local").getLong("mutedUntil"))
+        assertEquals(2147483647L, ch.notify!!.getJSONObject("defaults").getJSONObject("groups").getLong("mutedUntil"))
+        // То же состояние — изменений нет; без вида notify (null) проекция настройки не трогает
+        assertFalse(other.project(snap, ChatLocalState(b), ScheduledQueue(b) { 1000L }, HashSet(), mine).any())
+        assertFalse(other.project(snap, ChatLocalState(b), ScheduledQueue(b) { 1000L }, HashSet(), null).any())
+
+        // Запись другого клиента с полями, которых шов не ведёт (звук, тихий режим): правка мута их сохраняет
+        val web = JSONObject(snap.toString())
+        web.getJSONArray("notify").getJSONObject(0).getJSONObject("settings").put("sound", "chime").put("silent", true)
+        other.project(web, ChatLocalState(b), ScheduledQueue(b) { 1000L }, HashSet(), mine)
+        val unmuted = StateJournal.NotifyView(JSONObject(), JSONObject().put("bob@local", JSONObject().put("mutedUntil", 0L)))
+        val rebuilt = other.build(ChatLocalState(b), ScheduledQueue(b) { 1000L }, emptySet(), unmuted)
+            .getJSONArray("notify").getJSONObject(0).getJSONObject("settings")
+        assertEquals("0", rebuilt.getString("mute_until_ms"))
+        assertEquals("chime", rebuilt.getString("sound"))
+        assertTrue(rebuilt.getBoolean("silent"))
+
+        // Исключение, которого в журнале больше нет, снимается
+        val gone = other.project(JSONObject(), ChatLocalState(b), ScheduledQueue(b) { 1000L }, HashSet(), mine)
+        assertEquals(0L, gone.notify!!.getJSONObject("exceptions").getJSONObject("bob@local").getLong("mutedUntil"))
+        a.deleteRecursively(); b.deleteRecursively()
+    }
+
     @Test
     fun localStateRoundTripsThroughSnapshot() {
         val a = tmp()

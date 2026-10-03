@@ -135,6 +135,12 @@ object ParvaneCore {
     fun l2Available(chat: String): Boolean = nativeL2Available(chat)
     /** Включить/выключить режим: {"ok","id"?,"error_code"?,"error"?}; chat — собеседник или "v2g:<hex>". */
     fun setL2(chat: String, enabled: Boolean): JSONObject = JSONObject(nativeSetL2(chat, enabled))
+    /** Отзыв доступа у собеседника (T133, FR-033) — при блокировке: новый ключ доступа всем, кроме него. Блокирующий. */
+    fun revokeContactAccess(peer: String): Boolean = nativeRevokeContactAccess(peer)
+    /** У аккаунта есть v1-устройства в подписанном списке (LEGACY-1) — им нужен полный v1-блоб настроек. */
+    fun hasLegacyDevices(): Boolean = nativeHasLegacyDevices()
+    @JvmStatic private external fun nativeRevokeContactAccess(peer: String): Boolean
+    @JvmStatic private external fun nativeHasLegacyDevices(): Boolean
     @JvmStatic private external fun nativeSetPrivacy(groupAddNobody: Boolean, strangersAllowed: Boolean): Boolean
     @JvmStatic private external fun nativeL2Available(chat: String): Boolean
     @JvmStatic private external fun nativeSetL2(chat: String, enabled: Boolean): String

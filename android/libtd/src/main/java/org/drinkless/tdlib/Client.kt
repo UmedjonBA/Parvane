@@ -581,7 +581,8 @@ class Client private constructor(
                 val n = f.notificationSettings
                 val blob = store.setChatMute(address, if (n == null || n.useDefaultMuteFor) 0 else n.muteFor)
                 postUpdate(TdApi.UpdateChatNotificationSettings(f.chatId, store.chatNotifySettings(address)))
-                io.execute { ParvaneCore.setNotify(blob) }
+                io.execute { ParvaneCore.setNotify(notifyBlobToPublish(blob)) }
+                scheduleStateFlush() // журнал личного состояния v2 (T132)
                 TdApi.Ok()
             }
         }
@@ -589,7 +590,8 @@ class Client private constructor(
         is TdApi.SetScopeNotificationSettings -> {
             val blob = store.setScopeMute(scopeKey(f.scope), f.notificationSettings?.muteFor ?: 0)
             postUpdate(TdApi.UpdateScopeNotificationSettings(f.scope, store.scopeSettings(scopeKey(f.scope))))
-            io.execute { ParvaneCore.setNotify(blob) }
+            io.execute { ParvaneCore.setNotify(notifyBlobToPublish(blob)) }
+            scheduleStateFlush() // журнал личного состояния v2 (T132)
             TdApi.Ok()
         }
         // профиль → identity (display_name обязателен; остальное — что прислали)
@@ -801,6 +803,12 @@ class Client private constructor(
             val address = uid?.let { store.addressOf(it) }
             if (address != null) { if (f.blockList == null) store.blocked.remove(address) else store.blocked.add(address) }
             scheduleStateFlush() // журнал личного состояния v2 (T098)
+            // FR-033 (T133, правило ACCESS-1): блокировка сама ключ доступа к доставке не отнимает —
+            // новый ключ всем, кроме заблокированного
+            if (address != null && f.blockList != null && v2Enabled) io.execute {
+                try { if (ParvaneCore.revokeContactAccess(address)) Log.i(TAG, "v2: доступ заблокированного отозван (ключ доступа сменён)") }
+                catch (e: Throwable) { Log.w(TAG, "v2: отзыв доступа: ${e.message}") }
+            }
             TdApi.Ok()
         }
         is TdApi.DeleteChatHistory -> { // «для меня»: скрыть на сервере (msg.chat.clear) и убрать локально
@@ -1096,8 +1104,8 @@ class Client private constructor(
     private val l2 = L2Mode()
     private val upgrade = UpgradeNotices()
 
-    /** identity.privacy.set (целиком) — только если настройку задавали на этом устройстве: метода
-     *  чтения у сервера нет, умолчание затёрло бы выбор с другого устройства (web шлёт так же — при изменении). */
+    /** identity.privacy.set (целиком) — только неподтверждённая правка этого устройства; без неё сессия сама
+     *  читает серверное значение (`identity.privacy.get` → событие `privacy`), умолчание чужой выбор не затирает. */
     private fun pushPrivacy() {
         val p = privacy.toPush(store.self) ?: return
         val sent = try { ParvaneCore.setPrivacy(p.first, p.second) } catch (e: Throwable) { Log.w(TAG, "приватность v2: ${e.message}"); false }
@@ -1416,32 +1424,46 @@ class Client private constructor(
     @Volatile private var stateTimerStarted = false
     private fun attachStateJournal() {
         val l = store.local ?: return
-        val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
+        val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
         if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
         stateAttached = true
-        applyState(snap)
+        // Вид `notify` появился позже первого переноса состояния (T132): пока журнал его не содержит,
+        // пустая проекция не должна снять локальные муты — они уйдут в журнал следующим синком
+        val marker = java.io.File(boundDir, "notify-journaled")
+        val keepLocalNotify = !marker.exists() && !stateJournal.hasNotify(snap)
+        if (!marker.exists()) try { marker.writeText("1") } catch (e: Exception) { }
+        applyState(snap, projectNotify = !keepLocalNotify)
+        if (keepLocalNotify) scheduleStateFlush()
         Log.i(TAG, "журнал личного состояния подключён (${StateJournal.KINDS.joinToString()})")
         if (!stateTimerStarted) {
             stateTimerStarted = true
             scheduledTick.scheduleWithFixedDelay({ try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "синк журнала состояния: ${e.message}") } }, 8, 8, java.util.concurrent.TimeUnit.SECONDS) // SC-009: ≤ 10 с, как web
         }
     }
+    /** v1-блоб настроек уведомлений (STATE-2): журнал подключён и v1-устройств у аккаунта нет — без списка
+     *  заглушённых (только `group_add`); иначе полный. Блокирующий (JNI ждёт движок) — звать с io-потока. */
+    private fun notifyBlobToPublish(full: String): String =
+        if (stateAttached && !ParvaneCore.hasLegacyDevices()) store.minimalNotifyBlob() else full
     /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
     private val stateLock = Any()
     private fun stateSyncNow() {
         synchronized(stateLock) {
             if (!stateAttached || detached) return
             val l = store.local ?: return
-            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked).toString(), StateJournal.KINDS) ?: return
+            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString(), StateJournal.KINDS) ?: return
             if (r.optBoolean("changed")) r.optJSONObject("snapshot")?.let { applyState(it) }
         }
     }
     private fun scheduleStateFlush() { if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } } }
     /** Сведённый снимок → локальные файлы шва и апдейты X. */
-    private fun applyState(snap: JSONObject) {
+    private fun applyState(snap: JSONObject, projectNotify: Boolean = true) {
         val l = store.local ?: return
-        val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked)
+        val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null)
         if (!ch.any()) return
+        ch.notify?.let { blob ->
+            store.applyNotifyBlob(blob).forEach { postUpdate(it) }
+            Log.i(TAG, "журнал состояния → уведомления (${blob.optJSONObject("exceptions")?.length() ?: 0} чатов, ${blob.optJSONObject("defaults")?.length() ?: 0} умолчаний)")
+        }
         ch.blocked.forEach { a ->
             val id = store.idOf(a)
             postUpdate(TdApi.UpdateChatBlockList(id, if (store.blocked.contains(a)) TdApi.BlockListMain() else null))
@@ -1916,6 +1938,12 @@ class Client private constructor(
             }
             // T098: журнал личного состояния готов (после подъёма v2 и смены ключа состояния)
             "state_ready" -> io.execute { attachStateJournal() }
+            // FR-040 (правило STATE-2): приватность хранит сервер — значение, прочитанное сессией при готовности
+            "privacy" -> if (privacy.applyServer(store.self, event.optBoolean("group_add_nobody"), event.optBoolean("strangers_allowed", true))) {
+                store.groupAddPolicy = privacy.groupAdd(store.self)
+                Log.i(TAG, "приватность с сервера: незнакомые ${if (privacy.strangersAllowed(store.self)) "да" else "нет"}, добавление в группы ${if (privacy.groupAddNobody(store.self)) "никто" else "все"}")
+            }
+            "privacy_saved" -> privacy.notePushed(store.self)
             // C1-06 (spec 007): ключ восстановления нового v2-устройства — показать один раз
             // (в logcat не пишем — P-46)
             "recovery_key" -> {

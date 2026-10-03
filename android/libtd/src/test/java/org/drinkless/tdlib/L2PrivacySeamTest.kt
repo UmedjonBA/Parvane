@@ -312,6 +312,19 @@ class L2PrivacySeamTest {
             assertEquals(Pair(true, false), PrivacyPrefs(dir).toPush(self))
             again.setStrangersAllowed(self, true)
             assertEquals(Pair(true, true), PrivacyPrefs(dir).toPush(self))
+
+            // FR-040: источник истины — сервер. Подтверждённая правка больше не досылается,
+            // серверное значение принимается; неподтверждённая своя — сильнее прочитанного
+            val synced = PrivacyPrefs(dir)
+            assertFalse("своя правка ещё в пути — серверное значение не применяется", synced.applyServer(self, false, false))
+            synced.notePushed(self)
+            assertNull("подтверждено сервером — при запуске не досылаем", PrivacyPrefs(dir).toPush(self))
+            assertTrue(synced.applyServer(self, false, false))
+            assertFalse("то же значение — без записи", synced.applyServer(self, false, false))
+            val fresh = PrivacyPrefs(dir)
+            assertFalse(fresh.strangersAllowed(self))
+            assertEquals("anyone", fresh.groupAdd(self))
+            assertNull("значение с сервера — не своя правка", fresh.toPush(self))
         } finally {
             dir.deleteRecursively()
         }

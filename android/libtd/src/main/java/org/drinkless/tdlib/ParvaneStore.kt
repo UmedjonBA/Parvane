@@ -653,6 +653,13 @@ class ParvaneStore {
     @Volatile var groupAddPolicy: String = ""
     private fun notifyBlob(): String = JSONObject().put("defaults", notifyDefaults).put("exceptions", notifyExceptions)
         .also { if (groupAddPolicy.isNotEmpty()) it.put("group_add", groupAddPolicy) }.toString()
+    /** Копия настроек уведомлений для журнала личного состояния (T132). */
+    @Synchronized
+    fun notifyView(): StateJournal.NotifyView =
+        StateJournal.NotifyView(JSONObject(notifyDefaults.toString()), JSONObject(notifyExceptions.toString()))
+    /** v1-блоб, когда настройки уведомлений ведёт журнал личного состояния (STATE-2): только то, что исполняет
+     *  сервер (`group_add`), — списка заглушённых чатов в открытом блобе нет. */
+    fun minimalNotifyBlob(): String = JSONObject().also { if (groupAddPolicy.isNotEmpty()) it.put("group_add", groupAddPolicy) }.toString()
     private fun muteFor(s: JSONObject?): Int {
         if (s == null || !s.has("mutedUntil") || s.isNull("mutedUntil")) return 0
         val until = s.optLong("mutedUntil")

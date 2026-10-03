@@ -86,6 +86,24 @@ if [ "$V2" = 1 ]; then
   wait_log "$BL" "v2 → alice@local msg [0-9a-f-]+ \(text\)" 90 && ok "bob → X ушло по v2 (журнал alice v2)" || bad "bob → X не ушло по v2"
   xlog "v2 ← входящее msg [0-9a-f-]+ \(text\)" 90 && ok "X: текст bob принят движком v2" || bad "X: нет v2-приёма текста"
   xlog "v2 ← входящее msg [0-9a-f-]+ \(unsupported\)" 60 && ok "X: незнакомый вид → заглушка unsupported" || bad "X: нет заглушки unsupported"
+  # SC-007 (T139): 10 неизвестных видов подряд от Rust-инжектора — 10 заглушек, журнал не застревает
+  UNK_BEFORE=$(adb logcat -d | grep -acE "v2 ← входящее msg [0-9a-f-]+ \(unsupported\)")
+  (cd "$HERE/../backend" && cargo test -q -p parvane-integration --test v2_inject --no-run >"$OUT/inject-build.log" 2>&1 \
+    && PARVANE_INJECT_GATEWAY_TCP=127.0.0.1:9223 PARVANE_INJECT_FROM="inj$S@local" PARVANE_INJECT_TO=alice@local \
+       PARVANE_INJECT_TEXT="после-неизвестных-$S" PARVANE_INJECT_COUNT=10 \
+       timeout 300 cargo test -q -p parvane-integration --test v2_inject -- --ignored --nocapture >"$OUT/inject.log" 2>&1)
+  grep -q "INJECT OK" "$OUT/inject.log" && ok "инжектор: 10 неизвестных + текст" || bad "инжектор не отработал (см. $OUT/inject.log)"
+  for _ in $(seq 1 30); do
+    [ "$(adb logcat -d | grep -acE "v2 ← входящее msg [0-9a-f-]+ \(unsupported\)")" -ge $((UNK_BEFORE + 10)) ] && break; sleep 3
+  done
+  UNK_AFTER=$(adb logcat -d | grep -acE "v2 ← входящее msg [0-9a-f-]+ \(unsupported\)")
+  [ "$UNK_AFTER" -ge $((UNK_BEFORE + 10)) ] && ok "X: 10 заглушек unsupported подряд (SC-007)" || bad "X: заглушек $((UNK_AFTER - UNK_BEFORE)) из 10"
+  # текст после них дошёл: последняя v2-строка от инжектора — text, после всех заглушек
+  LAST_UNK=$(adb logcat -d | grep -anE "v2 ← входящее msg [0-9a-f-]+ \(unsupported\)" | tail -1 | cut -d: -f1)
+  xlog "v2 ← входящее msg [0-9a-f-]+ \(text\)" 5 >/dev/null
+  TEXT_AT=$(adb logcat -d | grep -anE "v2 ← входящее msg [0-9a-f-]+ \(text\)" | tail -1 | cut -d: -f1)
+  [ -n "$LAST_UNK" ] && [ -n "$TEXT_AT" ] && [ "$TEXT_AT" -gt "$LAST_UNK" ] \
+    && ok "X: текст после неизвестных доставлен (журнал не застрял)" || bad "X: текст после неизвестных не пришёл"
 else
   wait_log "$BL" "autosend → alice@local" 60 && ok "bob отправил alice" || bad "bob не отправил"
   grep -qE "v2 → alice@local msg" "$BL" && bad "bob → alice ушло по v2, хотя у alice нет журнала v2" || ok "bob → alice по v1 (у alice нет журнала v2, D-13)"
