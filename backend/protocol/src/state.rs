@@ -32,7 +32,7 @@ use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
-    peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, NotifyDefaults, Peer,
+    peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, GroupInvite, NotifyDefaults, Peer,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -288,7 +288,18 @@ pub struct PersonalState {
     calls: BTreeMap<OpId, Lww<CallRecord>>,
     // Граница очистки чата: только растёт (max), метка LWW не нужна.
     cleared: BTreeMap<String, ChatCleared>,
+    // Ссылки-приглашения групп v2 по link_id (T160).
+    invites: BTreeMap<Vec<u8>, Lww<GroupInvite>>,
     max_lamport: u64,
+}
+
+const LINK_ID_LEN: usize = 32;
+
+fn link_id32(b: &[u8]) -> Result<Vec<u8>> {
+    if b.len() != LINK_ID_LEN {
+        return Err(ProtoError::InvalidField("link_id"));
+    }
+    Ok(b.to_vec())
 }
 
 fn op_id16(b: &[u8], field: &'static str) -> Result<OpId> {
@@ -452,6 +463,17 @@ impl PersonalState {
                 let id = op_id16(&r.call_id, "call_id")?;
                 put(&mut self.calls, id, &stamp, None);
             }
+            Some(Op::GroupInviteSet(i)) => {
+                if i.group_id.is_empty() || i.url.is_empty() {
+                    return Err(ProtoError::InvalidField("group_invite"));
+                }
+                let id = link_id32(&i.link_id)?;
+                put(&mut self.invites, id, &stamp, Some(i.clone()));
+            }
+            Some(Op::GroupInviteRemove(r)) => {
+                let id = link_id32(&r.link_id)?;
+                put(&mut self.invites, id, &stamp, None);
+            }
             Some(Op::ChatCleared(c)) => {
                 let k = opt_peer_key(&c.peer)?;
                 if c.cleared_until_ms <= 0 {
@@ -489,6 +511,7 @@ impl PersonalState {
             pinned: live(&self.pinned),
             calls: live(&self.calls),
             cleared: self.cleared.values().cloned().collect(),
+            invites: live(&self.invites),
         }
     }
 
@@ -594,6 +617,7 @@ pub fn migrate_snapshot_with(
     kinds.extend(snapshot.pinned.iter().cloned().map(Op::PinnedOrder));
     kinds.extend(snapshot.calls.iter().cloned().map(Op::CallSet));
     kinds.extend(snapshot.cleared.iter().cloned().map(Op::ChatCleared));
+    kinds.extend(snapshot.invites.iter().cloned().map(Op::GroupInviteSet));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());
@@ -794,6 +818,37 @@ mod tests {
         assert_eq!(k2.as_bytes(), key.as_bytes());
         assert_eq!(v, 1);
         assert_eq!(StateKey::from_share(&share, "bob@x").unwrap_err(), ProtoError::ContextMismatch);
+    }
+
+    #[test]
+    fn group_invite_shared_and_removed() {
+        use crate::pb::parvane::state::v1::GroupInviteRef;
+        let invite = GroupInvite {
+            group_id: vec![1; 16],
+            link_id: vec![2; 32],
+            url: "https://x/join/abc#secret".into(),
+            created_ms: 5,
+            ..Default::default()
+        };
+        let mut c1 = LamportClock::default();
+        let set = make_op(&mut c1, "d1", 0, Op::GroupInviteSet(invite.clone())).unwrap();
+        let remove = make_op(&mut c1, "d1", 0, Op::GroupInviteRemove(GroupInviteRef { link_id: vec![2; 32] })).unwrap();
+        // Порядок применения не важен: снятие новее записи.
+        let mut a = PersonalState::new();
+        a.apply(&set).unwrap();
+        assert_eq!(a.snapshot().invites, vec![invite.clone()]);
+        a.apply(&remove).unwrap();
+        let mut b = PersonalState::new();
+        b.apply(&remove).unwrap();
+        b.apply(&set).unwrap();
+        assert!(a.snapshot().invites.is_empty());
+        assert!(b.snapshot().invites.is_empty());
+        // link_id не той длины и запись без секрета отклоняются.
+        let mut c2 = LamportClock::default();
+        let bad = make_op(&mut c2, "d1", 0, Op::GroupInviteSet(GroupInvite { link_id: vec![2; 8], ..invite.clone() })).unwrap();
+        assert!(PersonalState::new().apply(&bad).is_err());
+        let empty = make_op(&mut c2, "d1", 0, Op::GroupInviteSet(GroupInvite { url: String::new(), ..invite })).unwrap();
+        assert!(PersonalState::new().apply(&empty).is_err());
     }
 
     #[test]
