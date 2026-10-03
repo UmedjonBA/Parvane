@@ -308,13 +308,52 @@ describe('L2-1: исходящий typing (messages.ts)', () => {
       getConnection: () => connection,
       getStore: () => store,
       getToken: () => 'jwt',
-      v2: { ephemeralAllowed: (address: string) => !blocked.has(address) },
+      v2: {
+        ephemeralAllowed: (address: string) => !blocked.has(address),
+        isV2GroupAddress: () => false,
+        // Собеседники не на v2 — «печатает» идёт v1-кадром
+        trySendTyping: () => Promise.resolve(false),
+      },
     } as never);
     const peerId = store.getIdForAddress(PEER);
     const otherId = store.getIdForAddress(OTHER);
     await controller.methods.sendMessageAction({ peer: { id: peerId }, action: { type: 'typing' } });
     await controller.methods.sendMessageAction({ peer: { id: otherId }, action: { type: 'typing' } });
+    await Promise.resolve();
     expect(gateway.state.published.map(({ subject }) => subject)).toEqual([buildTypingTopic(otherId)]);
+  });
+
+  it('T127: в чат v2 typing v1-кадром не уходит — только эфемерным каналом v2', async () => {
+    const store = new ParvaneStore();
+    store.self = SELF;
+    const connection = new gateway.FakeGateway() as unknown as GatewayConnection;
+    const sentV2: string[] = [];
+    const publishedBefore = gateway.state.published.length;
+    const controller = createMessageController({
+      getConnection: () => connection,
+      getStore: () => store,
+      getToken: () => 'jwt',
+      v2: {
+        ephemeralAllowed: () => true,
+        isV2GroupAddress: () => false,
+        trySendTyping: (address: string) => {
+          sentV2.push(address);
+          // v2-чат: сигнал взят на себя, даже если канала ещё нет
+          return address === PEER ? Promise.resolve(true) : Promise.reject(new Error('v2 unavailable'));
+        },
+      },
+    } as never);
+    await controller.methods.sendMessageAction({
+      peer: { id: store.getIdForAddress(PEER) }, action: { type: 'typing' },
+    });
+    // Сбой v2 у «липкого» v2-собеседника не понижает до v1
+    await controller.methods.sendMessageAction({
+      peer: { id: store.getIdForAddress(OTHER) }, action: { type: 'typing' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sentV2).toEqual([PEER, OTHER]);
+    expect(gateway.state.published.slice(publishedBefore)).toEqual([]);
   });
 });
 

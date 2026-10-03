@@ -7,6 +7,8 @@
 
 import type { CallMedia, WireCallSignal } from './callengine';
 
+import { decodeIceCandidate, encodeIceCandidate } from './iceCandidate';
+
 export type WireGroupInvite = {
   type: 'group_invite';
   group_call_id: string;
@@ -134,12 +136,13 @@ class MeshPeerSession {
         break;
       case 'ice':
         if (signal.call_id !== this.callId) return;
-        try {
-          const candidate = JSON.parse(signal.candidate) as RTCIceCandidateInit;
+        {
+          // CALL-1: понимаем канонический вид и прежние виды web и desktop;
+          // битый кандидат не должен валить звонок
+          const candidate = decodeIceCandidate(signal.candidate);
+          if (!candidate) break;
           if (this.pc && this.remoteReady) await this.pc.addIceCandidate(candidate).catch(() => undefined);
           else this.pendingCandidates.push(candidate);
-        } catch {
-          // Битые кандидаты не должны валить сессию
         }
         break;
       case 'reject':
@@ -203,7 +206,7 @@ class MeshPeerSession {
     pc.onicecandidate = (e) => {
       if (this.pc === pc && e.candidate && this.callId) {
         this.cb.sendSignal(this.peer, {
-          type: 'ice', call_id: this.callId, candidate: JSON.stringify(e.candidate.toJSON()),
+          type: 'ice', call_id: this.callId, candidate: encodeIceCandidate(e.candidate.toJSON()),
         });
       }
     };

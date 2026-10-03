@@ -23,7 +23,7 @@ type ScheduledEntry = {
 };
 
 // Вид локальных данных, изменённых пользователем (журнал личного состояния, T098)
-export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned';
+export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned' | 'notify';
 
 // Текстовое отложенное сообщение в виде для журнала личного состояния
 export type JournalScheduled = {
@@ -786,6 +786,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveNotifyExceptions(map: Record<string, Record<string, unknown>>) {
     localStorage.setItem(storageKey('notify'), JSON.stringify(map));
+    notifyChange('notify');
   }
 
   // Дефолты уведомлений по типам чатов (users/groups/channels)
@@ -799,6 +800,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveNotifyDefaults(map: Record<string, Record<string, unknown>>) {
     localStorage.setItem(storageKey('notifydefaults'), JSON.stringify(map));
+    notifyChange('notify');
   }
 
   // `invites` намеренно НЕ стирается: сервер не умеет отзывать ссылки, и на

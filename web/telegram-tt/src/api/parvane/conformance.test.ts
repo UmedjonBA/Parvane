@@ -257,8 +257,52 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     exportContainsPrivateAccount: boolean; acceptsLegacyOffers: boolean;
     transferStatement: string;
     v2Grant: { boxField: string; boxCoords: string[]; materialKeys: string[]; secondDeviceCreatesRoot: boolean };
+    v2History: {
+      exportField: string; rowKeys: string[]; limit: number; skips: string[];
+      incomingRead: boolean; groupRowsWaitForGroup: boolean;
+    };
     vectors: { newPubB64: string; oldPubB64: string; commitmentOfNew: string; sas: string };
   };
+
+  it('п. 8: история v2-эпохи едет в экспорте линковки и применяется во всех клиентах', async () => {
+    const { collectV2History, parseV2History, V2_HISTORY_LIMIT } = await import('./v2/linkHistory');
+    expect(r.v2History.exportField).toBe('v2History');
+    expect(V2_HISTORY_LIMIT).toBe(r.v2History.limit);
+    expect(r.v2History.incomingRead).toBe(true);
+    expect(r.v2History.groupRowsWaitForGroup).toBe(true);
+    // web: строка экспорта несёт обязательные ключи правила и читается обратно
+    const row = {
+      id: 'u1', from: 'a@local', to: 'b@local', ts: 5, content: { kind: 'text', text: 'x' }, origin: 'v2' as const,
+    };
+    const [exported] = collectV2History([row]);
+    r.v2History.rowKeys.forEach((key) => expect(exported).toHaveProperty(key));
+    const state = JSON.stringify({ [r.v2History.exportField]: [exported] });
+    expect(parseV2History(state).map((m) => m.id)).toEqual(['u1']);
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('engine.exportLinkStateJson(collectV2History(');
+    expect(provider).toContain('v2History = parseV2History(stateJson)');
+    expect(provider).toContain('isV2GroupAddress(stored.to) && !store.isGroupAddress(stored.to)');
+    expect(provider).toContain('stored.from === owner ? stored : { ...stored, read: true }');
+    // desktop: выдача и приём
+    const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    expect(desktop).toContain(`kV2HistoryLimit = std::size_t(${r.v2History.limit})`);
+    expect(desktop).toContain(`state["${r.v2History.exportField}"] = std::move(rows)`);
+    expect(desktop).toContain('exported = WithV2History(exported)');
+    expect(desktop).toContain('ImportV2History(stateJson)');
+    expect(desktop).toContain('if (group && !known) {');
+    expect(desktop).toContain('sm.read = true; // история, а не новые входящие');
+    // android (шов): приём
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toContain(`kV2HistoryLimit = ${r.v2History.limit}`);
+    expect(android).toContain(`st["${r.v2History.exportField}"]`);
+    expect(android).toContain('importV2HistoryLocked(stateJson)');
+    expect(android).toContain('if (in.group && !g_groupMembers.count(to))');
+    expect(android).toContain('flushLinkedGroupRowsLocked(address)');
+    r.v2History.skips.filter((kind) => kind.includes('encrypted')).forEach((kind) => {
+      expect(desktop).toContain(`kind == "${kind}"`);
+      expect(android).toContain(`kind == "${kind}"`);
+    });
+  });
 
   it('грант v2: материал движка отдельным блобом, второе устройство корень не создаёт', async () => {
     expect(r.v2Grant.secondDeviceCreatesRoot).toBe(false);
@@ -291,6 +335,24 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(android).toContain('s->joinWithGrant(std::move(*material))');
   });
 
+  it('п. 9: группы v2 новому своему устройству пересылает движок по событию журнала устройств', () => {
+    const rule9 = (r as unknown as {
+      ownDeviceGroups: { engineMethod: string; shareFields: string[]; megolmExportedOnlyFromOwnAccount: boolean };
+    }).ownDeviceGroups;
+    expect(rule9.megolmExportedOnlyFromOwnAccount).toBe(true);
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('await shareGroupsWithOwnDevices(added);');
+    expect(controller).toContain(`client!.${rule9.engineMethod}(JSON.stringify(devices))`);
+    const core = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(core).toContain(`client_->${rule9.engineMethod}(added)`);
+    const engine = readRepo('backend/protocol/src/client.rs');
+    expect(engine).toContain('pub fn share_groups_with_own_devices(&mut self, devices: &[String])');
+    expect(engine).toContain('if !own || gk.megolm_owner.is_empty() {');
+    expect(engine).toContain('if !(admin || own) || ctx.epoch != state.epoch {');
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    rule9.shareFields.forEach((field) => expect(proto).toMatch(new RegExp(`(bytes|string) ${field} = \\d+`)));
+  });
+
   it('правило LINK-1 задокументировано в sync-rules.json', () => {
     expect(r.sasDigits).toBe(12);
     expect(r.sasInfo).toBe('parvane-link-sas-v2');
@@ -310,7 +372,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
       path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'),
       'utf8',
     );
-    const idx = webE2e.indexOf('exportLinkStateJson(): string {');
+    const idx = webE2e.indexOf('exportLinkStateJson(v2History?: WireStoredMessage[]): string {');
     expect(idx).toBeGreaterThan(0);
     const body = webE2e.slice(idx, webE2e.indexOf('signLinkTransfer(', idx));
     expect(body).toMatch(/linkVersion: 2/);
@@ -418,8 +480,10 @@ describe('SEND-1: подпись отправки, ack без sender, правк
   it('web подписывает каждую E2E-отправку строкой из правила', () => {
     // eslint-disable-next-line no-template-curly-in-string
     expect(messages).toContain('engine.signCallData(`send:${messageId}:${ciphertext}`)');
-    const publishes = messages.match(/publishOrThrow\(TOPIC_MSG_SEND/g) || [];
+    // Плюс легаси-копии v1-устройствам от v2-отправителя (`msg.deliver_legacy`)
+    const publishes = messages.match(/publishOrThrow\(TOPIC_MSG_SEND|v2!\.deliverLegacy\(/g) || [];
     const signed = messages.match(/signature: signSend\(/g) || [];
+    expect(messages).toContain('v2!.deliverLegacy(');
     expect(publishes.length).toBeGreaterThan(0);
     expect(signed.length).toBe(publishes.length);
   });
@@ -805,6 +869,53 @@ describe('GROUP-2: права по типу содержимого соблюд�
   });
 });
 
+describe('CALL-1: ICE-кандидат звонка — один формат во всех клиентах', () => {
+  const r = rule('CALL-1') as unknown as {
+    canonicalFields: string[];
+    legacyAliases: { web: string[]; desktop: string[] };
+    vectors: {
+      decode: { name: string; raw: string; candidate: string; mid: string; index: number }[];
+      reject: string[];
+    };
+  };
+
+  it('web пишет канонические поля и прежние имена, читает все виды из правила', async () => {
+    const { decodeIceCandidate, encodeIceCandidate } = await import('./iceCandidate');
+    const encoded = JSON.parse(encodeIceCandidate({ candidate: 'candidate:x', sdpMid: '0', sdpMLineIndex: 0 }));
+    [...r.canonicalFields, ...r.legacyAliases.web, ...r.legacyAliases.desktop].forEach((field) => {
+      expect(encoded, field).toHaveProperty(field);
+    });
+    r.vectors.decode.forEach((vector) => {
+      expect(decodeIceCandidate(vector.raw), vector.name).toMatchObject({
+        candidate: vector.candidate, sdpMid: vector.mid, sdpMLineIndex: vector.index,
+      });
+    });
+    r.vectors.reject.forEach((raw) => expect(decodeIceCandidate(raw), raw).toBeUndefined());
+  });
+
+  it('web: оба движка звонков ходят через общий кодек', () => {
+    ['callengine.ts', 'groupcall.ts'].forEach((file) => {
+      const source = readRepo(`web/telegram-tt/src/api/parvane/${file}`);
+      expect(source, file).toContain('decodeIceCandidate(signal.candidate)');
+      expect(source, file).toContain('encodeIceCandidate(e.candidate.toJSON())');
+      expect(source, file).not.toContain('JSON.parse(signal.candidate)');
+    });
+  });
+
+  it('desktop: общий кодек ядра и звук в ответе на вызов', () => {
+    const core = readRepo('desktop/parvane-core/include/parvane/call.h');
+    [...r.canonicalFields, ...r.legacyAliases.web, ...r.legacyAliases.desktop].forEach((field) => {
+      expect(core, field).toContain(`"${field}"`);
+    });
+    const backend = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_webrtc_backend.cpp');
+    expect(backend).toContain('parvane::parseIceCandidate(candidate)');
+    expect(backend).toContain('parvane::iceCandidateJson(');
+    // Трек — через AddTrack: иначе отвечающая сторона давала a=recvonly
+    expect(backend).toContain('_pc->AddTrack(_track, { "stream0" })');
+    expect(backend).not.toContain('_pc->AddTransceiver(_track');
+  });
+});
+
 describe('PROTO-1: в клиенте нет собственного разбора протокола v2 (spec 007, T086)', () => {
   const V2_DIR = 'web/telegram-tt/src/api/parvane/v2';
   const v2Files = ['controller.ts', 'contentMap.ts', 'engine.ts', 'transport.ts', 'stateJournal.ts'];
@@ -869,5 +980,365 @@ describe('SEAL-1 / GSEAL-1 / CONTENT-1 / L2-1: общие векторы дви�
     const test = readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt');
     expect(test).toContain('ParvaneProtocol.runConformanceVectors');
     expect(readRepo('desktop/parvane-core/tests/protocol_vectors_tests.cpp')).toContain('pv_run_conformance_vectors');
+  });
+});
+
+describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
+  const r = rule('LEGACY-1') as unknown as {
+    deliverMethod: string;
+    listEntry: string;
+    sendSignature: string;
+    editSignature: string;
+    cases: {
+      name: string; kind: string; ciphertext: string; senderIdentity: string; ownCopy: boolean; skip: boolean;
+    }[];
+  };
+  // Зеркало решения web sync.ts (unsealStored) и ядра e2e::isForeignLegacyCopy
+  const isForeign = (c: { kind: string; ciphertext: string; senderIdentity: string; ownCopy: boolean }) => (
+    c.kind === 'encrypted' && !c.ownCopy && !c.ciphertext && Boolean(c.senderIdentity)
+  );
+
+  it.each(r.cases)('$name', (testCase) => {
+    expect(isForeign(testCase)).toBe(testCase.skip);
+  });
+
+  it('web: список публикуется из каталога, копии — только устройствам списка, чужая копия пропускается', () => {
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('client.legacyDevicesRequest(JSON.stringify(next))');
+    expect(controller).toContain('client.legacyDeliverRequest(uuid, sendPayloadJson)');
+    // Свой журнал запись получает синком, а не при подготовке запроса
+    expect(controller).toMatch(/legacyDevicesRequest[\s\S]{0,300}await checkOwnDevices\(\);/);
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toContain('fetchPrekeyBundle, undefined, peerLegacy)');
+    expect(messages).toContain('fetchPrekeyBundle, engine.deviceId, ownLegacy)');
+    expect(messages).toContain('signature: signSend(sealed.engine, uuid, \'\')');
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(messages).toContain('signCallData(`edit:${uuid}:`)');
+    const e2e = readRepo('web/telegram-tt/src/api/parvane/e2e.ts');
+    expect(e2e).toContain('if (only && only.get(deviceId) !== device.identity.replace(/=+$/, \'\')) return;');
+    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
+    expect(sync).toContain('if (!cached && !ownCopy && !content.ciphertext && content.sender_identity) {');
+  });
+
+  it('движок: метод доставки и запись списка из правила; журнал не меняется до подтверждения', () => {
+    const client = readRepo('backend/protocol/src/client.rs');
+    expect(client).toContain(`"${r.deliverMethod}"`);
+    expect(client).toContain(`DevChange::LegacyDevices(${r.listEntry} { devices })`);
+    expect(client).toContain('self.own_log.clone().apply(&op)?;');
+  });
+
+  it('desktop и android: общее ядро — список, копии по подписанным спискам, пропуск чужой копии', () => {
+    const legacy = readRepo('desktop/parvane-core/src/v2_legacy.cpp');
+    expect(legacy).toContain('e2e::sealLegacyCopies(to, content.dump(), t, token, peer, own)');
+    expect(legacy).toContain(`e2e::sign("${r.sendSignature.replace('<id>:', '')}" + id + ":")`);
+    expect(legacy).toContain(`e2e::sign("${r.editSignature.replace('<id>:', '')}" + id + ":")`);
+    const e2e = readRepo('desktop/parvane-core/src/e2e.cpp');
+    expect(e2e).toContain('want->second != stripB64Padding(info.identity)');
+    expect(e2e).toContain('{"ciphertext", ""},');
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('parvane::v2::sendLegacyCopies(*s, *t, token, to, content, id, replyTo)');
+    expect(desktop).toContain('parvane::v2::publishLegacySet(*s, *t, token)');
+    expect(desktop).toContain('parvane::e2e::isForeignLegacyCopy(sm.content)');
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toContain('parvane::v2::sendLegacyCopies(*s, *g_transport, g_token, to, content, id, replyTo)');
+    expect(android).toContain('s->syncLegacySet(catalog)');
+    expect(android).toContain('parvane::e2e::isForeignLegacyCopy(');
+  });
+});
+
+describe('TYPING-1: «печатает» в чате v2 — только эфемерным каналом v2', () => {
+  const r = rule('TYPING-1') as unknown as {
+    methods: { direct: string; group: string; subscribe: string };
+    v1Topic: string;
+    maxAgeMs: number;
+  };
+
+  it('движок: методы и срок жизни сигнала из правила', () => {
+    const client = readRepo('backend/protocol/src/client.rs');
+    Object.values(r.methods).forEach((method) => expect(client, method).toContain(`"${method}"`));
+    expect(client).toContain(`const EPH_MAX_AGE_MS: i64 = ${r.maxAgeMs.toLocaleString('en-US').replace(/,/g, '_')};`);
+  });
+
+  it('web: v1-кадр — только если чат не v2; сбой v2 не понижает до v1', () => {
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toMatch(/deps\.v2\.trySendTyping\(toAddress\)\.then\(\(isHandled\) => \{/);
+    expect(messages).toMatch(/if \(!isHandled\) publishV1\(\);\s*\}, \(\) => undefined\);/);
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('if (ev.eventKind === \'ephemeral\') applyEphemeral(ev.body);');
+    expect(controller).toContain('if (!l2Gate.ephemeralAllowed(to)) return true;');
+  });
+
+  it('desktop и android: «печатает» берёт на себя ядро, v1 — только для чата не на v2', () => {
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(session).toContain('if (!group && !isV2Peer(chat)) return false;');
+    expect(session).toContain('if (!ready_ || !client_) return true; // чат v2: по v1 не понижаем');
+    [readDesktopSource(), readRepo('android/jni/parvane_jni.cpp')].forEach((source) => {
+      expect(source).toMatch(/if \(s->sendTyping\(to(Std)?\)\) \{?\s*return;/);
+      expect(source).toMatch(/\} else if \(parvane::v2::isGroupAddress\(to(Std)?\)\) \{\s*return;/);
+    });
+  });
+});
+
+describe('REVOKE-1: отзыв своего устройства на v2', () => {
+  const r = rule('REVOKE-1') as unknown as {
+    v1Topic: string;
+    logEntryMethod: string;
+    grantRootBackupField: string;
+    sskResults: string[];
+  };
+
+  it('движок: запись журнала первой, копия корня в гранте, смена SSK по секрету корня', () => {
+    const client = readRepo('backend/protocol/src/client.rs');
+    expect(client).toContain('o.requests.insert(0, req);');
+    expect(client).toContain(`OutRequest::id("${r.logEntryMethod}"`);
+    expect(client).toContain('pub fn rotate_ssk_with_secret(');
+    const host = readRepo('backend/protocol/src/host.rs');
+    expect(host).toContain(`v["${r.grantRootBackupField}"] = json!(hex::encode(backup));`);
+    // Устройство только из журнала v2: v1-отзыв (пароль, тумбстоун JWT) принят
+    const devices = readRepo('backend/shards/identity/src/devices.rs');
+    expect(devices).toContain('Ok(false) if crate::v2::log_has_device(&username, &req.device_id).await');
+  });
+
+  it('web: список с устройствами журнала v2; v1-отзыв, затем журнал и ротации; SSK — ключом восстановления', () => {
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('(v2Devices?.v2 || []).forEach((deviceId) => {');
+    expect(provider).toMatch(/TOPIC_DEVICE_REVOKE[\s\S]{0,700}await v2Controller\.revokeDevice\(deviceId\)/);
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    // Первый запрос — запись журнала: отказ поднимает состояние заново
+    expect(controller).toContain('const [entry, ...rotations] = outcome.requests;');
+    expect(controller).toMatch(/await call\(entry\.chan[\s\S]{0,400}idConn\?\.close\(\);\s*throw e;/);
+    expect(controller).toContain('client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);');
+    expect(controller).toContain('client?.forgetRoot();');
+    expect(controller).toContain('pv.grantWithRootBackup(material, unb64(rootBackupB64))');
+    expect(controller).toContain('pv.grantRootBackup(material)');
+    r.sskResults.forEach((result) => expect(controller, result).toContain(`'${result}'`));
+    // Смена ключа состояния: отзывавшее устройство переносит состояние, прочие ждут
+    expect(controller).toContain('deps.onStateReady?.(stateHost, \'self\');');
+    expect(controller).toContain('deps.onStateReady?.(stateHost, \'peer\');');
+    const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
+    expect(journal).toContain('const carried = rekey === \'self\' && session ? session.snapshot() : undefined;');
+    expect(journal).toContain('} else if (rekey && !isReadable) {');
+  });
+
+  it('desktop и android: общее ядро — отзыв, смена SSK, перенос журнала состояния', () => {
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(session).toContain('runRequestsLocked(json::array({requests[0]}));');
+    expect(session).toContain('if (stateRekeyed_ && !readable) {');
+    expect(session).toContain('grantWithRootBackup(material, backup)');
+    expect(session).toContain('grantRootBackup(linkMaterial_)');
+    r.sskResults.forEach((result) => expect(session, result).toContain(`"${result}"`));
+    const desktop = readDesktopSource();
+    expect(desktop).toMatch(/IdentityDeviceRevoke[\s\S]{0,1500}s->revokeDevice\(devStd\)/);
+    expect(desktop).toContain('for (const auto &id : s->ownDevices()) {');
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toMatch(/IdentityDeviceRevoke[\s\S]{0,900}s->revokeDevice\(dev\)/);
+    expect(android).toContain('for (const auto &id : s->ownDevices()) {');
+  });
+});
+
+describe('RECOVER-1: смена корня собеседника, восстановление по ключу, сброс личности', () => {
+  const r = rule('RECOVER-1') as unknown as {
+    logVerdicts: string[];
+    genesisField: string;
+    backupMethods: { set: string; get: string };
+    resetMethod: string;
+    reauthMethod: string;
+    recoverResults: string[];
+    resetResults: string[];
+  };
+
+  it('движок и сервер: отпечаток журнала, вердикты, методы копии корня и сброса', () => {
+    const host = readRepo('backend/protocol/src/host.rs');
+    r.logVerdicts.forEach((verdict) => expect(host, verdict).toContain(`=> "${verdict}"`));
+    expect(host).toContain(`c.ingest_log_sync(user, r.entries, &r.${r.genesisField})`);
+    const client = readRepo('backend/protocol/src/client.rs');
+    expect(client).toContain(`OutRequest::id("${r.resetMethod}"`);
+    // Тот же корень, а журнал другой — откат/форк: не принимается
+    expect(client).toMatch(/TrustVerdict::Changed => \{[\s\S]{0,200}LogVerdict::RootChanged/);
+    expect(client).toMatch(/LogVerdict::RootChanged\)[\s\S]{0,200}_ => Err\(ProtoError::BrokenChain\)/);
+    const identity = readRepo('backend/shards/identity/src/v2.rs');
+    [r.backupMethods.set, r.backupMethods.get].forEach((method) => expect(identity).toContain(`"${method}" =>`));
+    expect(identity).toContain(`DeviceLogSyncAnonResponse { entries, more, ${r.genesisField} }`);
+    const proto = readRepo('proto/parvane/identity/v2/identity.proto');
+    [r.backupMethods.set, r.backupMethods.get, r.resetMethod, r.reauthMethod].forEach((method) => {
+      expect(proto, method).toContain(`name: "${method}"`);
+    });
+  });
+
+  it('web: KEY-1 v2, повтор со слепым жетоном, вход нового устройства', () => {
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain(
+      'if (verdict === \'replaced\') verdict = client.ingestLog(user, await syncFrom(\'0\'));',
+    );
+    expect(controller).toContain('if (verdict === \'rootChanged\') return acceptPeerRoot(user);');
+    expect(controller).toMatch(/client\?\.acceptRootChange\(user\)[\s\S]{0,300}deps\.onPeerRootChanged\?\.\(user\);/);
+    expect(controller).toContain('if (!isForbidden(e) || !client?.deliveryKeyRejected(to)) throw e;');
+    expect(controller).toMatch(/client\.ingestLog\(self, (resp|ownLog)\) === 'replaced'/);
+    [r.backupMethods.set, r.backupMethods.get, r.reauthMethod].forEach((method) => {
+      expect(controller, method).toContain(`'${method}'`);
+    });
+    expect(controller).toContain('fresh.importRootBackupFor(backup, recoveryKey.trim());');
+    expect(controller).toContain('fresh.recoverWithRoot(ownLog, OTK_COUNT)');
+    expect(controller).toContain('fresh.resetIdentity(OTK_COUNT)');
+    [...r.recoverResults, ...r.resetResults].forEach((result) => expect(controller, result).toContain(`'${result}'`));
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('onPeerRootChanged: (user) => syncController.announceKeyChange(user),');
+  });
+
+  it('desktop и android: общее ядро и событие смены корня', () => {
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(session).toContain('if (verdict == "rootChanged") return acceptPeerRootLocked(user);');
+    expect(session).toContain('outbox_.push_back(json{{"type", "peerRootChanged"}, {"user", user}});');
+    expect(session).toContain('if (!forbidden || !client_ || !client_->deliveryKeyRejected(peer)) throw;');
+    expect(session).toContain('if (client_->ingestLog(cfg_.self, resp) == "replaced") {');
+    [r.backupMethods.set, r.backupMethods.get, r.reauthMethod].forEach((method) => {
+      expect(session, method).toContain(`"${method}"`);
+    });
+    [...r.recoverResults, ...r.resetResults].forEach((result) => expect(session, result).toContain(`"${result}"`));
+    expect(readDesktopSource()).toMatch(/type == "peerRootChanged"[\s\S]{0,500}AnnounceKeyChange\(user\)/);
+    expect(readRepo('android/jni/parvane_jni.cpp')).toContain('emit(json{{"type", "peer_root_changed"}');
+  });
+});
+
+describe('CAP-1: блобы вложений v2-чата — по секрету capability', () => {
+  const r = rule('CAP-1') as unknown as {
+    uploadMethods: string[];
+    downloadMethod: string;
+    capabilityBytes: number;
+    contentField: string;
+    maxChunksPerRequest: number;
+  };
+
+  it('web: без гранта получателю в чате v2 без v1-устройств; скачивание анонимным каналом', () => {
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toMatch(
+      /isV2Chat && !v2!\.legacyDevices\(toAddress\)\.size && !v2!\.legacyDevices\(store\(\)\.self\)\.size/,
+    );
+    expect(messages).toContain('return { encrypt: true, withCapability: true };');
+    // Старого вызова с грантами в местах отправки не осталось
+    expect(messages.match(/recipients: deps\.media\.getCloudRecipients\(toAddress\)/g) || []).toHaveLength(1);
+    const media = readRepo('web/telegram-tt/src/api/parvane/media.ts');
+    expect(media).toContain(`crypto.getRandomValues(new Uint8Array(${r.capabilityBytes}))`);
+    expect(media).toContain(`const CAP_DOWNLOAD_BATCH = ${r.maxChunksPerRequest};`);
+    expect(media).toContain(
+      `if (content.${r.contentField}) capByFileId.set(content.file_id, content.${r.contentField});`,
+    );
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    r.uploadMethods.forEach((method) => expect(controller, method).toContain(`'id', '${method}'`));
+    expect(controller).toContain(`const method = '${r.downloadMethod}';`);
+    expect(controller).toContain('const conn = await openAnon(plan.conn);');
+    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
+    expect(map).toContain(`${r.contentField}: c.${r.contentField},`);
+    expect(map).toContain(`${r.contentField}: m.${r.contentField} || undefined,`);
+  });
+
+  it('desktop и android: общее ядро, секрет в содержимом, анонимное скачивание', () => {
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    r.uploadMethods.forEach((method) => expect(session, method).toContain(`"${method}"`));
+    expect(session).toContain(`conn.requestStream("${r.downloadMethod}"`);
+    expect(session).toContain('conn.open(kChannelAnonymous, cfg_.clientVersion);');
+    expect(session).toContain(`constexpr std::uint32_t kBatch = ${r.maxChunksPerRequest};`);
+    const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
+    expect(content).toContain(`if (has(c, "${r.contentField}")) m["${r.contentField}"] = str(c, "${r.contentField}");`);
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('s->legacyDevices(to).empty() && s->legacyDevices(self).empty()');
+    expect(desktop).toContain('s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap))');
+    // Прямое v1-скачивание осталось одно — запасной путь внутри DownloadChatBlob
+    expect(desktop.match(/cloud\.download\(/g) || []).toHaveLength(1);
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toContain('s->legacyDevices(toStd).empty() && s->legacyDevices(g_self).empty()');
+    expect(android).toContain('d.bytes = s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap));');
+    expect(android).toContain('rememberBlobCaps(inner["content"]);');
+  });
+});
+
+describe('STATE-2: личное состояние — целиком в журнале, приватность — с сервера', () => {
+  const r = rule('STATE-2') as unknown as {
+    kinds: string[];
+    mainPinList: string;
+    notifyFields: string[];
+    syncIntervalMs: number;
+    v1BlobWhenJournaled: string[];
+    privacyGetMethod: string;
+    privacySetMethod: string;
+  };
+
+  it('web: виды журнала, v1-блоб без списка заглушённых, приватность читается с сервера', () => {
+    const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
+    const managed = journal.match(/const MANAGED_KINDS: LocalStateKind\[\] = \[([\s\S]*?)\];/)![1];
+    r.kinds.forEach((kind) => expect(managed, kind).toContain(`'${kind}'`));
+    expect(journal).toContain(`const PIN_LIST_MAIN = '${r.mainPinList}';`);
+    expect(journal).toContain(`const SYNC_INTERVAL_MS = ${r.syncIntervalMs};`);
+    const notifyType = journal.match(/type SNotify = \{([^}]*)\}/)![1];
+    r.notifyFields.forEach((field) => expect(notifyType, field).toContain(`${field}?:`));
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(r.v1BlobWhenJournaled).toEqual(['group_add']);
+    expect(provider).toContain('JSON.stringify(isJournaled ? { group_add: readGroupAddPolicy() } : {');
+    expect(provider).toContain(
+      'const isJournaled = stateJournal.isAttached() && !v2Controller.legacyDevices(store.self).size;',
+    );
+    expect(provider).toMatch(/async parvaneGetStrangersPolicy\(\) \{\s+await refreshV2Privacy\(\);/);
+    expect(provider).toMatch(/async parvaneGetGroupAddPolicy\(\) \{\s+await refreshV2Privacy\(\);/);
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain(`'id', '${r.privacyGetMethod}'`);
+    expect(controller).toContain(`'id', '${r.privacySetMethod}'`);
+  });
+
+  it('desktop: те же виды в журнале, приватность — событие сессии, своя правка сильнее', () => {
+    const desktop = readDesktopSource();
+    const kinds = desktop.match(/const std::vector<std::string> kV2StateKinds\{([\s\S]*?)\};/)![1];
+    // Черновики tdesktop ведёт сам — в журнал десктоп их не пишет
+    r.kinds.forEach((kind) => expect(kinds, kind).toContain(`"${kind}"`));
+    expect(desktop).toContain(`{ "list", "${r.mainPinList}" }`);
+    expect(desktop).toContain('if (!QFile::exists(NotifyJournaledPath())) {');
+    expect(desktop).toContain(
+      'if (const auto s = V2Ready(); s && s->legacyDevices(SelfAddress().toStdString()).empty()) {',
+    );
+    expect(desktop).toMatch(/if \(privacy\.dirty\) \{\s+return; \/\/ своя правка новее/);
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(session).toContain(`call(false, "${r.privacyGetMethod}"`);
+    expect(session).toContain(`call(false, "${r.privacySetMethod}"`);
+    expect(session).toMatch(/if \(privacySet_\) \{\s+pushPrivacyLocked\(\);\s+\} else \{\s+fetchPrivacyLocked\(\);/);
+    expect(readRepo('android/jni/parvane_jni.cpp')).toContain('type == "privacy" ? "privacy" : "privacy_saved"');
+  });
+});
+
+describe('ACCESS-1: блокировка отзывает ключ доступа; жетоны — по расписанию', () => {
+  const r = rule('ACCESS-1') as unknown as {
+    engineCall: string;
+    keySetMethod: string;
+    tokenBatch: number;
+    tokenCheckIntervalMs: number;
+  };
+
+  it('движок: новый ключ всем, кроме заблокированного', () => {
+    const engine = readRepo('backend/protocol/src/client.rs');
+    expect(engine).toContain(`pub fn ${r.engineCall}(&mut self, peer: &str)`);
+    expect(engine).toContain('let targets = self.dk.rotate(&[peer.to_string()]);');
+    expect(engine).toContain(`OutRequest::id("${r.keySetMethod}"`);
+  });
+
+  it('web: блокировка зовёт отзыв; партия жетонов — по расписанию движка', () => {
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toMatch(
+      /localState\.saveBlocked\(blocked\);[\s\S]{0,300}void v2Controller\.revokeContactAccess\(address\)/,
+    );
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('client!.revokeContactAccess(peer)');
+    expect(controller).toContain(`const TOKEN_BATCH = ${r.tokenBatch};`);
+    expect(r.tokenCheckIntervalMs).toBe(60 * 60 * 1000);
+    expect(controller).toContain('const TOKEN_CHECK_MS = 60 * 60 * 1000;');
+    expect(controller).toContain('if (!client || !serverKey || !ready || !client.tokenRefillDue()) return;');
+    expect(controller).toContain('setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS)');
+  });
+
+  it('desktop и android: общее ядро', () => {
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(session).toContain('client_->revokeContactAccess(peer)');
+    expect(session).toContain(`constexpr std::size_t kTokenBatch = ${r.tokenBatch};`);
+    expect(session).toContain('constexpr std::int64_t kTokenCheckMs = 60 * 60 * 1000;');
+    expect(session).toContain('if (!client_ || serverKey_.empty() || !client_->tokenRefillDue()) return;');
+    expect(readDesktopSource()).toMatch(/if \(blocked\) \{[\s\S]{0,500}s->revokeContactAccess\(to\)/);
+    expect(readRepo('android/jni/parvane_jni.cpp')).toContain('s->revokeContactAccess(jstr(env, peer))');
   });
 });

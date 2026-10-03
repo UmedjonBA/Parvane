@@ -32,6 +32,12 @@ type CallDependencies = {
   sendUpdate: (update: ApiUpdate) => void;
   // Пересчёт непрочитанного чата после инъекции входящей записи о звонке
   pushReadState: (chatId: string) => void;
+  // Протокол v2: сигнал личного звонка собеседнику с журналом устройств v2 —
+  // запечатанным конвертом (true — ушёл по v2; false — собеседник на v1)
+  sendV2Signal?: (to: string, signal: WireCallSignal) => Promise<boolean>;
+  // Завершённый звонок по v2 — в журнал личного состояния: серверной истории у
+  // v2-звонков нет (D-08)
+  recordV2Call?: (record: WireCallRecord) => void;
   log: (message: string) => void;
 };
 
@@ -209,8 +215,15 @@ export function createCallController(deps: CallDependencies) {
       deps.log(`История звонков недоступна: ${String(error)}`);
       return;
     }
-    // Сервер отдаёт новые первыми; вставляем старые первыми и только терминальные
-    for (const record of records.reverse()) {
+    // Сервер отдаёт новые первыми; вставляем старые первыми
+    applyCallRecords(records.reverse());
+  }
+
+  /** Записи о звонках (история шарда call или журнал личного состояния) → сообщения чатов. */
+  function applyCallRecords(records: WireCallRecord[]) {
+    const store = deps.getStore();
+    // Только терминальные
+    for (const record of records) {
       if (record.is_group) continue;
       if (record.status !== 'ended' && record.status !== 'missed' && record.status !== 'rejected') continue;
       if (store.hasMessage(record.call_id)) continue;
@@ -284,6 +297,7 @@ export function createCallController(deps: CallDependencies) {
     callWindow.parvaneCall = { state: 'ended' };
     const emit = () => window.dispatchEvent(new CustomEvent('parvane-call'));
     listeners.onState = (state) => {
+      noteV2CallState(state);
       callWindow.parvaneCall!.state = state;
       callWindow.parvaneCall!.hasSecurityError = state === 'security_failed';
       callWindow.parvaneCall!.localStream = engine?.getLocalStream();
@@ -335,11 +349,7 @@ export function createCallController(deps: CallDependencies) {
     }
 
     engine = new CallEngine({
-      sendSignal: (to, signal) => {
-        const store = deps.getStore();
-        const envelope = buildWireEvent(store.self, deps.getToken(), { to, signal });
-        deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
-      },
+      sendSignal: sendDirectSignal,
       getPeerSigningKeys: fetchSigningKeys,
       getIceServers,
       getIceTransportPolicy,
@@ -403,6 +413,43 @@ export function createCallController(deps: CallDependencies) {
     });
   }
 
+  // Сигналы личного звонка уходят строго по порядку (оффер раньше кандидатов):
+  // выбор пути v2/v1 асинхронный, поэтому — через очередь
+  let signalQueue: Promise<void> = Promise.resolve();
+
+  function sendDirectSignal(to: string, signal: WireCallSignal) {
+    signalQueue = signalQueue.then(async () => {
+      try {
+        if (await deps.sendV2Signal?.(to, signal)) {
+          if (signal.type === 'invite') trackV2Call(signal.call_id, to, true, signal.media);
+          return;
+        }
+      } catch (error) {
+        // Собеседник на v2, а v2 недоступен: по v1 не понижаем (D-13)
+        deps.log(`Сигнал звонка по v2 не отправлен: ${String(error)}`);
+        return;
+      }
+      const connection = deps.getConnection();
+      if (!connection) return;
+      const store = deps.getStore();
+      const envelope = buildWireEvent(store.self, deps.getToken(), { to, signal });
+      connection.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
+    });
+  }
+
+  // Сигнал личного звонка, принятый по v2 (отправитель уже проверен движком)
+  function handleV2Signal(from: string, signal: WireCallSignal) {
+    // Блокировку отрабатывает onIncoming (авто-отбой), как и на v1-пути
+    if (!engine) return;
+    if (signal.type === 'invite' && !engine.currentCallId && !deps.isBlocked(from)) {
+      trackV2Call(signal.call_id, from, false, signal.media);
+    }
+    if (signal.type === 'reject' && v2Call?.callId === signal.call_id) v2Call.isRejected = true;
+    void engine.handleSignal(from, signal, true).catch((error) => {
+      deps.log(`Ошибка сигналинга звонка (v2): ${String(error)}`);
+    });
+  }
+
   function teardown() {
     try {
       engine?.hangUp();
@@ -412,6 +459,51 @@ export function createCallController(deps: CallDependencies) {
     }
     engine = undefined;
     groupEngine = undefined;
+    v2Call = undefined;
+  }
+
+  // ── звонок по v2: своя запись истории (сервер её не ведёт, D-08) ───────────
+
+  type V2CallTrack = {
+    callId: string;
+    peer: string;
+    isOutgoing: boolean;
+    media: CallMedia;
+    startedAt: number;
+    activeAt?: number;
+    isRejected?: boolean;
+  };
+  let v2Call: V2CallTrack | undefined;
+
+  function trackV2Call(callId: string, peer: string, isOutgoing: boolean, media: CallMedia) {
+    v2Call = {
+      callId, peer, isOutgoing, media, startedAt: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  function noteV2CallState(state: string) {
+    if (!v2Call) return;
+    if (state === 'active') {
+      v2Call.activeAt = v2Call.activeAt || Math.floor(Date.now() / 1000);
+      return;
+    }
+    if (state === 'busy') v2Call.isRejected = true;
+    if (state !== 'ended' && state !== 'busy' && state !== 'security_failed') return;
+    const call = v2Call;
+    v2Call = undefined;
+    const self = deps.getStore().self;
+    const endedAt = Math.floor(Date.now() / 1000);
+    const record: WireCallRecord = {
+      call_id: call.callId,
+      caller: call.isOutgoing ? self : call.peer,
+      callee: call.isOutgoing ? call.peer : self,
+      media: call.media,
+      status: call.activeAt ? 'ended' : call.isRejected ? 'rejected' : 'missed',
+      started_at: call.activeAt || call.startedAt,
+      ended_at: call.activeAt ? Math.max(endedAt, call.activeAt + 1) : undefined,
+    };
+    applyCallRecords([record]);
+    deps.recordV2Call?.(record);
   }
 
   function handleFrame(payload: string) {
@@ -705,16 +797,22 @@ export function createCallController(deps: CallDependencies) {
   }
 
   return {
+    applyCallRecords,
     acceptIncoming: () => {
       if (pendingGroupInvite) return acceptGroupInvite();
       return engine?.acceptIncoming();
     },
     handleFrame,
     handleGroupFrame,
+    handleV2Signal,
     hangUp: () => {
       if (pendingGroupInvite) declineGroupInvite();
       else if (groupEngine?.currentGroupCallId) groupEngine.leave();
-      else engine?.hangUp();
+      else {
+        // Входящий по v2, сброшенный без ответа, — «отклонён», а не «пропущен»
+        if (v2Call && !v2Call.isOutgoing && !v2Call.activeAt) v2Call.isRejected = true;
+        engine?.hangUp();
+      }
     },
     placeCall,
     setup,

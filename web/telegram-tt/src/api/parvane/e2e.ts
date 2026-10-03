@@ -11,6 +11,7 @@
 import type {
   MegolmInbound, MegolmOutbound, OlmAccount, OlmSession,
 } from './olmCompat';
+import type { WireStoredMessage } from './wire';
 
 import {
   createAccount, createInboundGroup, createInboundSession, createOutboundGroup, decryptGroup, encryptOlm,
@@ -127,6 +128,8 @@ export type LinkExportState = {
   // подписанные переносы, унаследованные старым устройством от его предков
   transfers?: { old_signing_key: string; signature: string }[];
   seenIdentities?: Record<string, string[]>;
+  // LINK-1 п. 8 (T138): расшифрованные строки v2-эпохи — см. v2/linkHistory.ts
+  v2History?: WireStoredMessage[];
 };
 
 // Как часто перепроверять список устройств контакта перед отправкой (обнаружение
@@ -602,7 +605,7 @@ export class E2eEngine {
   // остаётся самостоятельным (свой Olm-аккаунт и сессии); ему передаём только
   // историю, входящие групповые ключи (экспорт на текущем индексе), каталоги и
   // уже накопленные переносы владения.
-  exportLinkStateJson(): string {
+  exportLinkStateJson(v2History?: WireStoredMessage[]): string {
     const groupIn: LinkExportState['groupIn'] = {};
     this.groupIn.forEach(({ session, epoch }, key) => {
       try {
@@ -620,6 +623,7 @@ export class E2eEngine {
       groupRecipients: Object.fromEntries(this.groupRecipients),
       transfers: this.transfers,
       seenIdentities: this.seenIdentitiesSnapshot(),
+      v2History: v2History?.length ? v2History : undefined,
     };
     return JSON.stringify(state);
   }
@@ -887,11 +891,16 @@ export class E2eEngine {
   // `skipDeviceId` — не шифровать для этого устройства (своё текущее при
   // fan-out самому себе). Частичное покрытие (часть устройств без сессии) —
   // не ошибка: копии получают те, до кого дотянулись
+  // `only` — шифровать лишь для перечисленных устройств (id → identity-ключ) и
+  // только если ключ устройства в каталоге совпал с ожидаемым: так v2-клиент
+  // шлёт легаси-копии v1-устройствам из ПОДПИСАННОГО списка собеседника, а не
+  // тем, кого назвал сервер (FR-058)
   async encryptForDevices(
     contact: string,
     innerJson: string,
     fetchBundle: BundleFetcher,
     skipDeviceId?: string,
+    only?: Map<string, string>,
   ): Promise<{ copies: DeviceCiphertext[]; senderIdentity: string } | undefined> {
     await this.refreshContactDevices(contact, fetchBundle);
     const devices = this.devicesByContact.get(contact);
@@ -900,6 +909,7 @@ export class E2eEngine {
     const copies: DeviceCiphertext[] = [];
     Object.entries(devices).forEach(([deviceId, device]) => {
       if (skipDeviceId !== undefined && deviceId === skipDeviceId) return;
+      if (only && only.get(deviceId) !== device.identity.replace(/=+$/, '')) return;
       const session = this.sessionsByIdentity.get(device.identity);
       if (!session) return;
       const encrypted = encryptOlm(session, innerJson);

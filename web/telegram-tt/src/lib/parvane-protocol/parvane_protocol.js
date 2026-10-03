@@ -108,6 +108,28 @@ export class PvClient {
         wasm.__wbg_pvclient_free(ptr, 0);
     }
     /**
+     * KEY-1 v2: принять смену корня собеседника (после предупреждения).
+     * @param {string} user
+     * @returns {boolean}
+     */
+    acceptRootChange(user) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(user, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_acceptRootChange(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 !== 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @returns {any}
      */
     ackRequest() {
@@ -144,6 +166,19 @@ export class PvClient {
         return BigInt.asUintN(64, ret);
     }
     /**
+     * Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
+     * ключ (отзыв устройства, восстановление) — дальше слепым жетоном. true —
+     * ключ был и сброшен (отправку стоит повторить).
+     * @param {string} peer
+     * @returns {boolean}
+     */
+    deliveryKeyRejected(peer) {
+        const ptr0 = passStringToWasm0(peer, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pvclient_deliveryKeyRejected(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
      * @returns {string}
      */
     drainReady() {
@@ -169,6 +204,103 @@ export class PvClient {
     ensureStateKey() {
         const ret = wasm.pvclient_ensureStateKey(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Событие подписки `ephemeral` → JSON-массив событий `typing`/`presence`.
+     * @param {Uint8Array} body
+     * @returns {string}
+     */
+    ephOpen(body) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(body, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_ephOpen(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Своё присутствие → запросы (пусто — L2 активен в каком-то чате).
+     * @param {boolean} online
+     * @param {number} last_seen_ms
+     * @returns {Array<any>}
+     */
+    ephPresence(online, last_seen_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_ephPresence(retptr, this.__wbg_ptr, online, last_seen_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Соединение пересоздано — подписок на эфемерные каналы больше нет.
+     */
+    ephReset() {
+        wasm.pvclient_ephReset(this.__wbg_ptr);
+    }
+    /**
+     * Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →
+     * запросы `ephemeral.subscribe` (только новые каналы).
+     * @param {string} chats_json
+     * @returns {Array<any>}
+     */
+    ephSubscribe(chats_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chats_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_ephSubscribe(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * «Печатает»: `chat` — адрес собеседника либо hex группы, `action` — номер
+     * `TypingAction`. Запросы (пусто — канала нет или чат в L2).
+     * @param {string} chat
+     * @param {number} action
+     * @returns {Array<any>}
+     */
+    ephTyping(chat, action) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(chat, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_ephTyping(retptr, this.__wbg_ptr, ptr0, len0, action);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Экспорт состояния (шифруется ключом хранилища, 32 байта).
@@ -596,6 +728,30 @@ export class PvClient {
         }
     }
     /**
+     * Корень из копии под ключом восстановления на устройстве БЕЗ журнала
+     * (восстановление): сверка с журналом — в `recoverWithRoot`. Корень
+     * остаётся в памяти до `forgetRoot()`.
+     * @param {Uint8Array} blob
+     * @param {string} recovery_key
+     */
+    importRootBackupFor(blob, recovery_key) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(blob, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(recovery_key, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_importRootBackupFor(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Восстановить из зашифрованного состояния.
      * @param {Uint8Array} blob
      * @param {Uint8Array} key
@@ -646,7 +802,9 @@ export class PvClient {
         }
     }
     /**
-     * Ответ `identity.device.log_sync(_anon)` → вердикт "new" | "known" | "rootChanged".
+     * Ответ `identity.device.log_sync(_anon)` → вердикт "new" | "known" |
+     * "rootChanged" (KEY-1: показать предупреждение и `acceptRootChange`) |
+     * "replaced" (журнал на сервере начат заново — перечитать с версии 0).
      * @param {string} user
      * @param {Uint8Array} sync_response
      * @returns {string}
@@ -826,6 +984,56 @@ export class PvClient {
         }
     }
     /**
+     * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
+     * для v1-устройств из подписанных списков собеседника и своего.
+     * @param {string} message_id
+     * @param {string} send_payload_json
+     * @returns {any}
+     */
+    legacyDeliverRequest(message_id, send_payload_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(message_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(send_payload_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_legacyDeliverRequest(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Опубликовать/сократить свой список v1-устройств (FR-058): JSON
+     * `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
+     * Первая публикация задаёт список, дальше он только сокращается.
+     * @param {string} devices_json
+     * @returns {any}
+     */
+    legacyDevicesRequest(devices_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(devices_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_legacyDevicesRequest(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Материал гранта линковки: JSON {ssk, entries[], deliveryKey, gen} (hex/байты).
      * @returns {Uint8Array}
      */
@@ -949,6 +1157,41 @@ export class PvClient {
         return takeObject(ret);
     }
     /**
+     * Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
+     * @returns {boolean}
+     */
+    ownSskExposed() {
+        const ret = wasm.pvclient_ownSskExposed(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
+     * `call.v2.CallSignal`; оффер уходит методом `call.ring_sealed`, остальное —
+     * `call.signal_sealed`, оба анонимным каналом.
+     * @param {string} peer
+     * @param {string} signal_json
+     * @returns {Array<any>}
+     */
+    prepareCall(peer, signal_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(peer, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(signal_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_prepareCall(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Личное сообщение: содержимое — proto3-JSON `msg.v2.Content`;
      * `op_id` — UUID сообщения хоста (строка) или пусто.
      * @param {string} peer
@@ -1013,6 +1256,122 @@ export class PvClient {
         return ret !== 0;
     }
     /**
+     * T130: восстановление на новом устройстве по корню (в памяти после
+     * `importRootBackupFor`); `log_response` — ответ `identity.device.log_sync`
+     * с версии 0. Запросы выполнять по порядку.
+     * @param {Uint8Array} log_response
+     * @param {number} otk_count
+     * @returns {Array<any>}
+     */
+    recoverWithRoot(log_response, otk_count) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(log_response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_recoverWithRoot(retptr, this.__wbg_ptr, ptr0, len0, otk_count);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * T130: сброс личности — новый корень взамен прежнего. Как
+     * `createIdentity`; первый запрос — `identity.root.rotate` (нужна свежая
+     * переаутентификация).
+     * @param {number} otk_count
+     * @returns {any}
+     */
+    resetIdentity(otk_count) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_resetIdentity(retptr, this.__wbg_ptr, otk_count);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Отозвать ключ доступа у собеседника (FR-033; блокировка) →
+     * `{requests, pendingKeyShares: [адрес]}`; пустой `requests` — ключа у
+     * собеседника не было.
+     * @param {string} peer
+     * @returns {any}
+     */
+    revokeContactAccess(peer) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(peer, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_revokeContactAccess(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Отозвать своё другое устройство и выполнить последствия →
+     * `{requests, pendingKeyShares: [адрес], pendingEpochs: [hex],
+     * epochsNeedAdmin: [hex], sskRotationRequired, stateKeyVersion?}`. Первый
+     * запрос — запись журнала (обязателен), остальные — ротации ключей.
+     * @param {string} device_id
+     * @returns {any}
+     */
+    revokeDevice(device_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(device_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_revokeDevice(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Сменить SSK корнем (D-12): корень — в памяти после `importRootBackup`;
+     * после успеха хост зовёт `forgetRoot()`.
+     * @returns {Array<any>}
+     */
+    rotateSsk() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_rotateSsk(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @param {string} user
      * @param {Uint8Array} key
      * @param {bigint} generation
@@ -1023,6 +1382,51 @@ export class PvClient {
         const ptr1 = passArray8ToWasm0(key, wasm.__wbindgen_export);
         const len1 = WASM_VECTOR_LEN;
         wasm.pvclient_setPeerDeliveryKey(this.__wbg_ptr, ptr0, len0, ptr1, len1, generation);
+    }
+    /**
+     * Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+     * @param {string} peer
+     * @returns {Array<any>}
+     */
+    shareDeliveryKey(peer) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(peer, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_shareDeliveryKey(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Группы v2 — своим новым устройствам (T142): ключи текущей эпохи и
+     * входящие сессии Megolm. `devices_json` — JSON-массив id устройств.
+     * @param {string} devices_json
+     * @returns {Array<any>}
+     */
+    shareGroupsWithOwnDevices(devices_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(devices_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_shareGroupsWithOwnDevices(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
@@ -1040,11 +1444,28 @@ export class PvClient {
         return takeObject(ret);
     }
     /**
+     * Размер партии — вся суточная квота.
+     * @returns {number}
+     */
+    tokenBatchSize() {
+        const ret = wasm.pvclient_tokenBatchSize(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * @returns {number}
      */
     tokenCount() {
         const ret = wasm.pvclient_tokenCount(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Пора получать суточную партию жетонов (FR-063: по расписанию, не перед
+     * тратой).
+     * @returns {boolean}
+     */
+    tokenRefillDue() {
+        const ret = wasm.pvclient_tokenRefillDue(this.__wbg_ptr);
+        return ret !== 0;
     }
     /**
      * Запрос жетонов: ответ `identity.tokens.key_list` (анонимно) + ключ сервера.
@@ -1867,6 +2288,29 @@ export class PvState {
         wasm.__wbg_pvstate_free(ptr, 0);
     }
     /**
+     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+     * @param {string} record_json
+     * @returns {Array<any>}
+     */
+    callSet(record_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(record_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstate_callSet(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Отложенные, которые ЭТО устройство отправляет сейчас (proto3-JSON
      * `ScheduledMessage[]`); отправлять с op_id отложенного, затем `markSent`.
      * @param {number} now_ms
@@ -2289,6 +2733,59 @@ export function generateRecoveryKey() {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * Копия корня из материала гранта (`undefined` — гранта без копии).
+ * @param {Uint8Array} material
+ * @returns {Uint8Array | undefined}
+ */
+export function grantRootBackup(material) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(material, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.grantRootBackup(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        let v2;
+        if (r0 !== 0) {
+            v2 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        }
+        return v2;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * Материал гранта линковки + копия корня под ключом восстановления (поле `rb`).
+ * @param {Uint8Array} material
+ * @param {Uint8Array} backup
+ * @returns {Uint8Array}
+ */
+export function grantWithRootBackup(material, backup) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(material, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(backup, wasm.__wbindgen_export);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.grantWithRootBackup(retptr, ptr0, len0, ptr1, len1);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        if (r3) {
+            throw takeObject(r2);
+        }
+        var v3 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v3;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
     }
 }
 

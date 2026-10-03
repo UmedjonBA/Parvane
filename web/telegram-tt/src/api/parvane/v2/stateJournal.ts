@@ -10,6 +10,7 @@
 import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../../types';
 import type { createLocalState, JournalScheduled, LocalStateKind } from '../localState';
 import type { ParvaneStore } from '../store';
+import type { WireCallRecord } from '../wire';
 import type { PvState } from './engine';
 import { MAIN_THREAD_ID } from '../../types';
 
@@ -36,6 +37,8 @@ type Deps = {
   localState: LocalState;
   getStore: () => ParvaneStore;
   sendUpdate: (update: ApiUpdate) => void;
+  /** История звонков из журнала (D-08: сервер её не ведёт) — записи в чаты. */
+  applyCallRecords?: (records: WireCallRecord[]) => void;
   log: (message: string) => void;
 };
 
@@ -61,6 +64,15 @@ type SFolder = {
 type SDraft = { peer?: SPeer; text?: string; reply_to_op_id?: string; date_ms?: string };
 type SScheduled = { op_id?: string; peer?: SPeer; send_at_ms?: string; content?: string };
 type SPinned = { list?: string | number; peers?: SPeer[] };
+type SCall = {
+  call_id?: string;
+  peer?: SPeer;
+  outgoing?: boolean;
+  video?: boolean;
+  reason?: string | number;
+  started_ms?: string;
+  duration_s?: number;
+};
 type SSnapshot = {
   folders?: SFolder[];
   folder_order?: { ids?: number[] };
@@ -70,11 +82,27 @@ type SSnapshot = {
   scheduled_sent?: string[];
   archived?: SPeer[];
   pinned?: SPinned[];
+  calls?: SCall[];
+  notify?: { peer?: SPeer; settings?: SNotify }[];
+  notify_defaults?: { users?: SNotify; groups?: SNotify; channels?: SNotify };
   [key: string]: unknown;
 };
+// `state.v1.NotifySettings`: без звука до момента (мс эпохи, int64 — строкой)
+type SNotify = { mute_until_ms?: string; sound?: string; show_previews?: boolean; silent?: boolean };
+// Локальный вид настроек уведомлений чата (поля ApiPeerNotifySettings)
+type LocalNotify = Record<string, unknown>;
+const NOTIFY_DEFAULT_TYPES = ['users', 'groups', 'channels'] as const;
 
-const MANAGED_KINDS: LocalStateKind[] = ['folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned'];
+const MANAGED_KINDS: LocalStateKind[] = [
+  'folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned', 'notify',
+];
 const PIN_LIST_MAIN = 'PIN_LIST_MAIN';
+// Причина завершения звонка (`call.v2.HangupReason`): имя и числовое значение
+const HANGUP_NORMAL = 'HANGUP_REASON_NORMAL';
+const HANGUP_DECLINED = 'HANGUP_REASON_DECLINED';
+const HANGUP_BUSY = 'HANGUP_REASON_BUSY';
+const HANGUP_MISSED = 'HANGUP_REASON_MISSED';
+const HANGUP_BY_NUMBER = [undefined, HANGUP_NORMAL, HANGUP_DECLINED, HANGUP_BUSY, HANGUP_MISSED];
 const PIN_LIST_MAIN_NUMBER = 1;
 const NO_COLOR = -1;
 const ALL_CHATS_FOLDER_ID = 0;
@@ -114,6 +142,42 @@ export function createStateJournal(deps: Deps) {
     }
   }
 
+  // Вид `notify` (T132) появился позже первого переноса: на устройстве, уже
+  // перенёсшем состояние, локальные настройки уведомлений уходят в журнал один
+  // раз — иначе первая же проекция журнала (в нём их ещё нет) стёрла бы их
+  function kindMigratedKey(kind: LocalStateKind) {
+    return `${migratedKey()}:${kind}`;
+  }
+
+  function markKindMigrated(kind: LocalStateKind) {
+    try {
+      localStorage.setItem(kindMigratedKey(kind), '1');
+    } catch {
+      // приватный режим — перенос повторится и сойдётся (LWW)
+    }
+  }
+
+  async function migrateNotify() {
+    if (!session) return;
+    try {
+      if (localStorage.getItem(kindMigratedKey('notify')) === '1') return;
+    } catch {
+      // приватный режим — переносим
+    }
+    const current = readSnapshot();
+    if (!current.notify?.length && !current.notify_defaults) {
+      const desired = buildDesired(current);
+      const bodies = session.diff(
+        JSON.stringify({ ...current, notify: desired.notify, notify_defaults: desired.notify_defaults }),
+        ['notify'],
+      );
+      pendingAppends.push(...bodies);
+      await pushAppends();
+      if (bodies.length) deps.log(`v2: настройки уведомлений перенесены в журнал (${bodies.length} записей)`);
+    }
+    markKindMigrated('notify');
+  }
+
   function markMigrated() {
     try {
       localStorage.setItem(migratedKey(), '1');
@@ -122,7 +186,12 @@ export function createStateJournal(deps: Deps) {
     }
   }
 
-  async function attach(nextHost: StateJournalHost) {
+  // `rekey` — ключ личного состояния сменён (отзыв устройства, D-16):
+  // 'self' — этим устройством: сведённое состояние переносится записями под
+  // новым ключом (старые записи новым ключом не читаются); 'peer' — другим
+  // своим устройством: ждём его записей, локальное состояние не трогаем
+  async function attach(nextHost: StateJournalHost, rekey?: 'self' | 'peer') {
+    const carried = rekey === 'self' && session ? session.snapshot() : undefined;
     detach();
     const nextSession = nextHost.openSession();
     if (!nextSession) {
@@ -132,15 +201,27 @@ export function createStateJournal(deps: Deps) {
     host = nextHost;
     session = nextSession;
     await serial(async () => {
-      await pullRemote();
+      const isReadable = await pullRemote();
+      if (carried) {
+        const bodies = session!.migrate(carried);
+        pendingAppends.push(...bodies);
+        await pushAppends();
+        deps.log(`v2: журнал состояния перенесён под новый ключ (${bodies.length} записей)`);
+      } else if (rekey && !isReadable) {
+        // Записей под новым ключом ещё нет: пустой снимок стёр бы локальные
+        // папки и блок-лист — проекция после первого удачного синка
+        return;
+      }
       if (!isMigrated()) {
         // Первый запуск на v2: локальные данные — начальными записями журнала
         const bodies = session!.migrate(JSON.stringify(buildDesired({})));
         pendingAppends.push(...bodies);
         await pushAppends();
         markMigrated();
+        markKindMigrated('notify');
         deps.log(`v2: локальное состояние перенесено в журнал (${bodies.length} записей)`);
       }
+      await migrateNotify();
       project();
     }).catch((e: unknown) => deps.log(`v2: журнал состояния не прочитан: ${String(e)}`));
     deps.localState.setChangeListener(scheduleFlush);
@@ -149,6 +230,10 @@ export function createStateJournal(deps: Deps) {
       void syncNow().catch((e: unknown) => deps.log(`v2: синк журнала состояния: ${String(e)}`));
     }, SYNC_INTERVAL_MS);
     deps.log('v2: журнал состояния подключён');
+  }
+
+  function isAttached() {
+    return Boolean(session);
   }
 
   function detach() {
@@ -233,6 +318,61 @@ export function createStateJournal(deps: Deps) {
     }).catch((e: unknown) => deps.log(`v2: отметка отправки отложенного: ${String(e)}`));
   }
 
+  // ── история звонков (D-08): явная запись, не разница снимков ──────────────
+
+  /** Завершённый звонок по v2 — в журнал: виден на всех своих устройствах и после reload. */
+  function recordCall(record: WireCallRecord) {
+    void serial(async () => {
+      if (!session) return;
+      const body = callToState(record);
+      if (!body) return;
+      pendingAppends.push(...session.callSet(JSON.stringify(body)));
+      await pushAppends();
+    }).catch((e: unknown) => deps.log(`v2: запись звонка в журнал состояния: ${String(e)}`));
+  }
+
+  function callToState(record: WireCallRecord): SCall | undefined {
+    const self = deps.getStore().self;
+    const isOutgoing = record.caller === self;
+    const peer = peerOf(isOutgoing ? record.callee : record.caller);
+    if (!peer?.user) return undefined;
+    const isEnded = record.status === 'ended';
+    return {
+      call_id: uuidToB64(record.call_id),
+      peer,
+      outgoing: isOutgoing,
+      video: record.media === 'video',
+      reason: isEnded ? HANGUP_NORMAL : record.status === 'rejected' ? HANGUP_DECLINED : HANGUP_MISSED,
+      started_ms: String(record.started_at * MS_IN_SECOND),
+      duration_s: isEnded && record.ended_at ? Math.max(1, record.ended_at - record.started_at) : 0,
+    };
+  }
+
+  function stateToCall(call: SCall): WireCallRecord | undefined {
+    const callId = b64ToUuid(call.call_id);
+    const peer = call.peer?.user?.address;
+    if (!callId || !peer) return undefined;
+    const self = deps.getStore().self;
+    const reason = typeof call.reason === 'number' ? HANGUP_BY_NUMBER[call.reason] : call.reason;
+    const startedAt = Math.floor(Number(call.started_ms || 0) / MS_IN_SECOND);
+    const status = reason === HANGUP_MISSED ? 'missed'
+      : (reason === HANGUP_DECLINED || reason === HANGUP_BUSY) ? 'rejected' : 'ended';
+    return {
+      call_id: callId,
+      caller: call.outgoing ? self : peer,
+      callee: call.outgoing ? peer : self,
+      media: call.video ? 'video' : 'audio',
+      status,
+      started_at: startedAt,
+      ended_at: status === 'ended' ? startedAt + (call.duration_s || 0) : undefined,
+    };
+  }
+
+  function projectCalls(snap: SSnapshot) {
+    const records = (snap.calls || []).map(stateToCall).filter((r): r is WireCallRecord => Boolean(r));
+    if (records.length) deps.applyCallRecords?.(records.sort((a, b) => a.started_at - b.started_at));
+  }
+
   // ── локальные данные → желаемый снимок ───────────────────────────────────
 
   function buildDesired(current: SSnapshot): SSnapshot {
@@ -254,6 +394,12 @@ export function createStateJournal(deps: Deps) {
       scheduled: localState.listJournalScheduled().map((entry) => scheduledToState(entry, store))
         .filter((x): x is SScheduled => Boolean(x)),
       archived: localState.loadArchived().map(peerOf).filter(isPeer),
+      // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам,
+      // сервер этого не видит (v1-блоб `msg.chat.setnotify` был открытым)
+      notify: Object.entries(localState.loadNotifyExceptions())
+        .map(([address, settings]) => ({ peer: peerOf(address), settings: notifyToState(settings) }))
+        .filter((entry): entry is { peer: SPeer; settings: SNotify } => Boolean(entry.peer)),
+      notify_defaults: notifyDefaultsToState(localState.loadNotifyDefaults()),
       pinned: [
         { list: PIN_LIST_MAIN, peers: localState.loadPinned().map(peerOf).filter(isPeer) },
         ...pinnedOther,
@@ -316,11 +462,13 @@ export function createStateJournal(deps: Deps) {
     deps.localState.applyFromJournal(() => {
       projectFolders(snap);
       projectBlocked(snap);
+      projectNotify(snap);
       projectArchived(snap);
       projectPinned(snap);
       projectDrafts(snap);
     });
     projectScheduled(snap);
+    projectCalls(snap);
   }
 
   function projectFolders(snap: SSnapshot) {
@@ -366,6 +514,38 @@ export function createStateJournal(deps: Deps) {
       excludeArchived: f.exclude_archived ? true : undefined,
       color: f.color === undefined || f.color === NO_COLOR ? undefined : f.color,
     };
+  }
+
+  // Настройки уведомлений из журнала: исключения по чатам и умолчания по типам
+  function projectNotify(snap: SSnapshot) {
+    const { localState } = deps;
+    const store = deps.getStore();
+    const before = localState.loadNotifyExceptions();
+    const next: Record<string, LocalNotify> = {};
+    (snap.notify || []).forEach((entry) => {
+      const address = addressOf(entry.peer);
+      if (address) next[address] = notifyFromState(entry.settings, before[address]);
+    });
+    if (JSON.stringify(before) !== JSON.stringify(next)) {
+      localState.saveNotifyExceptions(next);
+      new Set([...Object.keys(before), ...Object.keys(next)]).forEach((address) => {
+        if (JSON.stringify(before[address]) === JSON.stringify(next[address])) return;
+        deps.sendUpdate({
+          '@type': 'updateChatNotifySettings',
+          chatId: store.getIdForAddress(address, store.isGroupAddress(address) ? 'group' : 'user'),
+          settings: next[address] || { mutedUntil: 0 },
+        });
+      });
+    }
+    const defaultsBefore = localState.loadNotifyDefaults();
+    const defaultsNext: Record<string, LocalNotify> = {};
+    NOTIFY_DEFAULT_TYPES.forEach((type) => {
+      const settings = snap.notify_defaults?.[type];
+      if (settings) defaultsNext[type] = notifyFromState(settings, defaultsBefore[type]);
+    });
+    if (snap.notify_defaults && JSON.stringify(defaultsBefore) !== JSON.stringify(defaultsNext)) {
+      localState.saveNotifyDefaults(defaultsNext);
+    }
   }
 
   function projectBlocked(snap: SSnapshot) {
@@ -519,9 +699,36 @@ export function createStateJournal(deps: Deps) {
 
   return {
     attach,
+    isAttached,
+    recordCall,
     reset: detach,
     syncNow,
   };
+}
+
+// Настройки уведомлений: локальный вид (секунды эпохи, поля tt) ↔ журнал
+function notifyToState(settings: LocalNotify): SNotify {
+  const mutedUntil = typeof settings.mutedUntil === 'number' ? settings.mutedUntil : 0;
+  return {
+    mute_until_ms: String(Math.max(0, mutedUntil) * 1000),
+    show_previews: typeof settings.shouldShowPreviews === 'boolean' ? settings.shouldShowPreviews : undefined,
+    silent: typeof settings.isSilentPosting === 'boolean' ? settings.isSilentPosting : undefined,
+  };
+}
+
+function notifyFromState(settings: SNotify | undefined, previous: LocalNotify | undefined): LocalNotify {
+  const out: LocalNotify = { ...previous, mutedUntil: Math.floor(Number(settings?.mute_until_ms || 0) / 1000) };
+  if (typeof settings?.show_previews === 'boolean') out.shouldShowPreviews = settings.show_previews;
+  if (typeof settings?.silent === 'boolean') out.isSilentPosting = settings.silent;
+  return out;
+}
+
+function notifyDefaultsToState(defaults: Record<string, LocalNotify>) {
+  const out: NonNullable<SSnapshot['notify_defaults']> = {};
+  NOTIFY_DEFAULT_TYPES.forEach((type) => {
+    if (defaults[type]) out[type] = notifyToState(defaults[type]);
+  });
+  return out;
 }
 
 function isPeer(peer: SPeer | undefined): peer is SPeer {

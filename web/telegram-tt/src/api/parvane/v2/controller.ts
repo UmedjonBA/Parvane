@@ -8,6 +8,7 @@
 // в WireStoredMessage и идёт в ТОТ ЖЕ конвейер отображения, что и v1
 // (sync.applyExternal) — UI не знает, по какому протоколу пришло сообщение.
 
+import type { WireCallSignal } from '../callengine';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
@@ -16,6 +17,7 @@ import type { Protocol, PvClient } from './engine';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
+import { callSignalFromV2, callSignalToV2, type V2CallSignal } from './callMap';
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
@@ -49,7 +51,22 @@ type Deps = {
   /** FR-028 (T080): участники без подтверждённой записи администратора. */
   onUnconfirmedMembers: (address: string, members: string[]) => void;
   /** Стек поднят: журнал личного состояния (T098) можно читать. */
-  onStateReady?: (host: StateJournalHost) => void;
+  onStateReady?: (host: StateJournalHost, rekey?: 'self' | 'peer') => void;
+  /** Свои устройства по каталогу v1 (id и ключи) — для подписанного списка
+   * v1-устройств, которым v2-клиенты шлют легаси-копии (FR-058). */
+  listOwnV1Devices?: () => Promise<{ deviceId: string; identity: string; signing: string }[]>;
+  /** У собеседника сменился корень личности (KEY-1 v2, T129): служебное
+   * сообщение «ключ безопасности изменился» в чате с ним. */
+  onPeerRootChanged?: (user: string) => void;
+  /** Отозвано устройство, державшее SSK (T128, D-12): до смены SSK корнем
+   * (ключ восстановления) новые устройства в журнал не принимаются. */
+  onSskRotationNeeded?: () => void;
+  /** «Печатает» по эфемерному каналу v2 (T127): `chat` — адрес собеседника
+   * либо группы v2, `from` — кто печатает. */
+  onTyping?: (chat: string, from: string) => void;
+  /** Сигнал личного звонка от v2-собеседника: отправитель и привязка к звонку уже
+   * проверены движком (сертификат устройства, подпись, аудитория, цель). */
+  onCallSignal?: (from: string, signal: WireCallSignal) => void;
   /** Режим «усиленная приватность» (L2) чата изменился — typing/presence и UI. */
   onL2Changed?: (address: string) => void;
   /** Своё служебное сообщение — в журнал исходящих (v2 своей операции не возвращает). */
@@ -104,6 +121,28 @@ export type V2JoinResult =
 
 type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array };
+// Итог отзыва устройства (движок: `revokeDevice`)
+type RevokeOutcome = {
+  requests: OutReq[];
+  pendingKeyShares: string[];
+  pendingEpochs: string[];
+  epochsNeedAdmin: string[];
+  sskRotationRequired: boolean;
+  stateKeyVersion?: number;
+};
+export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
+// Скачивание/загрузка блобов (чанки до 700 КиБ)
+const BLOB_TIMEOUT_MS = 60000;
+// parvane.msg.v2.TypingAction
+const TYPING_ACTION_TYPING = 1;
+const TYPING_ACTION_CANCEL = 2;
+type LogDevices = {
+  v2: string[];
+  legacy: string[];
+  legacySet: boolean;
+  legacyKeys: { deviceId: string; identity: string; signing: string }[];
+};
+
 type EngineEvent = {
   type: string;
   seq: number;
@@ -116,6 +155,7 @@ type EngineEvent = {
   disposition?: string;
   group?: { domain: string; id: string };
   json?: string;
+  signal?: V2CallSignal;
 };
 
 const STATE_RECORD = 'v2-engine';
@@ -140,9 +180,19 @@ const EPOCH_RETRY_MS = 11000;
 const EPOCH_RETRY_ATTEMPTS = 6;
 // Запас слепых жетонов перед раздачей ключей группы незнакомым участникам
 const TOKEN_RESERVE = 2;
+// FR-063: срок партии жетонов задаёт движок; здесь — шаг проверки расписания
+const TOKEN_CHECK_MS = 60 * 60 * 1000;
+// Партия меньше суточной квоты: квота на аккаунт, её делят все его устройства
+const TOKEN_BATCH = 20;
+// Квота — на аккаунт и сутки: если партия целиком в остаток не влезает (его
+// выбрали другие устройства аккаунта), сервер отвечает LIMIT на весь запрос —
+// просим остаток партией поменьше, иначе устройство останется без жетонов
+const TOKEN_BATCH_STEPS = [TOKEN_BATCH, 10, 5, 2, 1];
 const GROUP_SYNC_PAGES = 50;
 const OWN_DEVICES_RECORD = 'v2-own-devices';
 const ROOT_BACKUP_RECORD = 'v2-root-backup';
+// Какая копия корня уже лежит на сервере (чтобы не слать при каждом запуске)
+const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
 const KEY_RECORD = 'v2-storage-key';
 const OTK_COUNT = 50;
 // «Не на v2» кэшируется на 10 мин; у собеседника на v2 журнал устройств
@@ -181,9 +231,14 @@ export function createV2Controller(deps: Deps) {
   // Линковка второго устройства (LINK-1 v2): журнал у аккаунта есть, грант ещё
   // не получен; материал гранта живёт в памяти только до вступления
   let needsLinking = false;
+  // Копия корня под ключом восстановления (не секрет без ключа): едет в гранте
+  // линковки, чтобы любое своё устройство могло сменить SSK
+  let rootBackupB64: string | undefined;
   let linkMaterial: Uint8Array | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const peers = new Map<string, { v2: boolean; at: number }>();
+  // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение)
+  const ephChats = new Set<string>();
   const messages = new Map<string, WireStoredMessage>();
   const reactions = new Map<string, Map<string, string>>();
   // Домен сервера из описателя (группы v2 живут на нём)
@@ -191,6 +246,7 @@ export function createV2Controller(deps: Deps) {
   // Группы, уже показанные UI (новая — с updateChatJoin)
   const publishedGroups = new Set<string>();
   const rotateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let tokenTimer: ReturnType<typeof setInterval> | undefined;
   const warnedUnconfirmed = new Set<string>();
   // Режим «усиленная приватность» (L2-1): решение для typing/presence
   const l2Gate = createL2Gate({
@@ -270,14 +326,18 @@ export function createV2Controller(deps: Deps) {
     switch (need.kind) {
       case 'peerLog': {
         const user = need.user!;
-        const body = pv.encodeMessage('parvane.identity.v2.DeviceLogSyncAnonRequest', JSON.stringify({
-          user: { address: user }, after_version: String(client.logVersion(user)),
-        }));
-        const resp = await call('anon', 'identity.device.log_sync_anon', body);
-        const verdict = client.ingestLog(user, resp);
-        if (verdict === 'rootChanged') deps.log(`v2: у ${user} сменился корневой ключ — нужно подтверждение`);
-        return verdict !== 'rootChanged';
+        const syncFrom = (after: string) => call('anon', 'identity.device.log_sync_anon', pv!.encodeMessage(
+          'parvane.identity.v2.DeviceLogSyncAnonRequest',
+          JSON.stringify({ user: { address: user }, after_version: after }),
+        ));
+        let verdict = client.ingestLog(user, await syncFrom(String(client.logVersion(user))));
+        // Журнал на сервере начат заново (другой генезис) — перечитать целиком
+        if (verdict === 'replaced') verdict = client.ingestLog(user, await syncFrom('0'));
+        if (verdict === 'rootChanged') return acceptPeerRoot(user);
+        return verdict !== 'replaced';
       }
+      case 'rootChanged':
+        return acceptPeerRoot(need.user!);
       case 'bundle': {
         const user = need.user!;
         const body = pv.encodeMessage(
@@ -289,10 +349,7 @@ export function createV2Controller(deps: Deps) {
       }
       case 'token': {
         if (!serverKey) return false;
-        const list = await call('anon', 'identity.tokens.key_list', new Uint8Array());
-        const req = client.tokenRequest(list, serverKey, 20) as OutReq;
-        const resp = await call(req.chan, req.method, req.body);
-        client.tokenResponse(resp);
+        await requestTokens(TOKEN_BATCH);
         return true;
       }
       case 'groupLog': {
@@ -323,6 +380,18 @@ export function createV2Controller(deps: Deps) {
     throw new Error('v2: данные не сошлись');
   }
 
+  // KEY-1 v2 (T129, FR-019): у собеседника сменился корень личности (он начал
+  // журнал устройств заново). Как в v1: предупреждение «ключ безопасности
+  // изменился» в чате, новый журнал принимается, прежние сессии отбрасываются
+  async function acceptPeerRoot(user: string): Promise<boolean> {
+    if (!client?.acceptRootChange(user)) return false;
+    peers.delete(user);
+    await persist();
+    deps.log(`v2: у ${user} сменился корневой ключ — предупреждение показано, новый журнал принят`);
+    deps.onPeerRootChanged?.(user);
+    return true;
+  }
+
   // ── запуск ────────────────────────────────────────────────────────────────
 
   async function start() {
@@ -348,6 +417,7 @@ export function createV2Controller(deps: Deps) {
       ownDeviceId = auth.deviceId;
       idConn.onEvent = (ev) => {
         if (ev.eventKind === 'inbox.record') void serial(() => openRecord(ev.body));
+        if (ev.eventKind === 'ephemeral') applyEphemeral(ev.body);
         if (ev.eventKind === 'session.revoked') deps.log('v2: сессия отозвана');
       };
       idConn.onClose = () => {
@@ -363,6 +433,16 @@ export function createV2Controller(deps: Deps) {
       const saved = await storage.loadRecord<string>(STATE_RECORD);
       if (saved) {
         client = pv.PvClient.importState(unb64(saved), storageKey);
+        // Пока устройство было выключено, личность аккаунта могли сбросить
+        // (новый корень и журнал, T130): тогда оно вне неё — только линковка
+        const ownLog = await call('id', 'identity.device.log_sync', pv.encodeMessage(
+          'parvane.identity.v2.DeviceLogSyncRequest',
+          JSON.stringify({ user: { address: self }, after_version: String(client.logVersion(self)) }),
+        )).catch(() => undefined);
+        if (ownLog && client.ingestLog(self, ownLog) === 'replaced') {
+          await dropIdentity();
+          return;
+        }
       } else {
         client = new pv.PvClient(self, auth.deviceId, desc.domain);
         // Первое v2-устройство пользователя — корень и журнал устройств.
@@ -389,6 +469,13 @@ export function createV2Controller(deps: Deps) {
           linkMaterial = undefined;
           try {
             await run(client.joinWithGrant(material, OTK_COUNT) as OutReq[]);
+            // Копия корня под ключом восстановления (поле `rb`): с ней и это
+            // устройство сможет сменить SSK после отзыва другого (D-12)
+            const rootBackup = pv.grantRootBackup(material);
+            if (rootBackup) {
+              rootBackupB64 = b64(rootBackup);
+              await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+            }
           } finally {
             material.fill(0);
           }
@@ -403,7 +490,8 @@ export function createV2Controller(deps: Deps) {
           // пользователю один раз
           const recoveryKey = pv.generateRecoveryKey();
           const backup = client.exportRootBackup(recoveryKey, created.rootSecret);
-          await storage.saveRecord(ROOT_BACKUP_RECORD, b64(backup));
+          rootBackupB64 = b64(backup);
+          await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
           client.forgetRoot();
           created.rootSecret.fill(0);
           deps.onRecoveryKey(recoveryKey);
@@ -414,8 +502,11 @@ export function createV2Controller(deps: Deps) {
       // связанное получает от своего устройства (StateKeyShare)
       const ownDevices = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
       if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persist();
+      rootBackupB64 = rootBackupB64 || await storage.loadRecord<string>(ROOT_BACKUP_RECORD);
       await call('id', 'msg.inbox.subscribe', new Uint8Array());
       ready = true;
+      void serial(refillTokens);
+      tokenTimer = tokenTimer || setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS);
       // Группы v2 из состояния движка — в UI до разбора инбокса
       client.groupList().forEach((hex) => publishGroup(hex));
       await serial(syncAll);
@@ -423,8 +514,11 @@ export function createV2Controller(deps: Deps) {
       l2Gate.reconcile([...loadStickyPeers(), ...publishedGroups])
         .forEach((address) => deps.onL2Changed?.(address));
       deps.log('v2: готов');
+      // «Печатает» по v2: каналы известных v2-собеседников и групп
+      void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
       deps.onStateReady?.(stateHost);
-      void checkOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
+      void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
+      void uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
     })().catch((e: unknown) => {
       starting = undefined;
       deps.log(`v2: запуск не удался: ${String(e)}`);
@@ -506,6 +600,11 @@ export function createV2Controller(deps: Deps) {
   }
 
   async function applyEvent(ev: EngineEvent) {
+    if (ev.type === 'call') {
+      const signal = ev.from && ev.signal ? callSignalFromV2(ev.signal) : undefined;
+      if (signal) deps.onCallSignal?.(ev.from!, signal);
+      return;
+    }
     if (ev.type === 'groupChanged' && ev.group) {
       await syncGroup(ev.group.id);
       return;
@@ -518,6 +617,8 @@ export function createV2Controller(deps: Deps) {
       const author = ev.from;
       // Группа: сообщение кладётся в чат группы, автор — из проверенной подписи
       const to = isGroup ? groupAddress(ev.group!.id) : (author === self ? chat : self);
+      // Ключ доставки собеседника мог прийти только что — канал «печатает» чата
+      void ensureEphemeral([isGroup ? to : chat]);
       if (ev.disposition === 'stub') {
         const stub: WireStoredMessage = {
           id: ev.opId, from: author, to, ts: Math.floor((ev.tsMs || 0) / 1000), content: { kind: 'unsupported' },
@@ -600,9 +701,18 @@ export function createV2Controller(deps: Deps) {
       if (c.chat_mode) announceL2(author === self ? chat : author);
       return;
     }
-    if (ev.type === 'deviceAdded') await checkOwnDevices();
+    if (ev.type === 'deviceAdded') {
+      await checkOwnDevices();
+      await syncLegacySet();
+    }
+    // Отозвано своё устройство (другим своим устройством): журнал — заново;
+    // ротации ключей делает отзывавшее устройство и раздаёт по E2E
+    if (ev.type === 'deviceRevoked') {
+      await checkOwnDevices();
+      if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
+    }
     // Своё устройство передало (новый) ключ личного состояния — журнал заново
-    if (ev.type === 'stateKeyRotated') deps.onStateReady?.(stateHost);
+    if (ev.type === 'stateKeyRotated') deps.onStateReady?.(stateHost, 'peer');
   }
 
   // Новое своё устройство (T119): свой журнал устройств — источник истины,
@@ -615,7 +725,12 @@ export function createV2Controller(deps: Deps) {
       'parvane.identity.v2.DeviceLogSyncRequest',
       JSON.stringify({ user: { address: self }, after_version: String(client.logVersion(self)) }),
     ));
-    client.ingestLog(self, resp);
+    if (client.ingestLog(self, resp) === 'replaced') {
+      // Личность аккаунта сброшена другим устройством (новый корень, новый
+      // журнал): это устройство в неё не входит — только линковка заново
+      await dropIdentity();
+      return;
+    }
     const current = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
     const known = await storage.loadRecord<string[]>(OWN_DEVICES_RECORD);
     await storage.saveRecord(OWN_DEVICES_RECORD, current);
@@ -623,7 +738,286 @@ export function createV2Controller(deps: Deps) {
     // Первая проверка на этом устройстве — запоминаем, не уведомляем
     if (!known) return;
     const added = current.filter((id) => !known.includes(id) && id !== ownDeviceId);
-    if (added.length) deps.onNewOwnDevices(added);
+    if (!added.length) return;
+    deps.onNewOwnDevices(added);
+    await shareGroupsWithOwnDevices(added);
+  }
+
+  // T142: грант линковки несёт только ключи устройства — группы v2 новому
+  // своему устройству пересылает то, что в них уже состоит (ключи текущей
+  // эпохи и входящие сессии Megolm участников)
+  async function shareGroupsWithOwnDevices(devices: string[]) {
+    if (!client) return;
+    try {
+      const reqs = await withNeeds(() => client!.shareGroupsWithOwnDevices(JSON.stringify(devices)) as OutReq[]);
+      await run(reqs);
+      await persist();
+      if (reqs.length) deps.log(`v2: группы пересланы новому своему устройству (записей ${reqs.length})`);
+    } catch (e) {
+      deps.log(`v2: группы новому своему устройству не пересланы: ${String(e)}`);
+    }
+  }
+
+  /** v1-копии сообщения для v1-устройств из подписанных списков (FR-054):
+   * готовый v1 SendPayload уходит методом `msg.deliver_legacy`. */
+  async function deliverLegacy(uuid: string, sendPayloadJson: string) {
+    if (!client || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const req = client.legacyDeliverRequest(uuid, sendPayloadJson) as OutReq;
+    await call(req.chan, req.method, req.body);
+  }
+
+  // ── Новое устройство без других устройств (T130, FR-066) ───────────────────
+
+  async function dropIdentity() {
+    deps.log('v2: личность аккаунта сброшена другим устройством — нужна линковка этого устройства');
+    ready = false;
+    await storage?.deleteRecord(STATE_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(ROOT_BACKUP_RECORD).catch(() => undefined);
+    rootBackupB64 = undefined;
+    client?.free();
+    client = undefined;
+    needsLinking = true;
+    deps.onNeedsLinking?.();
+  }
+
+  /** Перезапуск стека из сохранённого состояния (как после гранта линковки). */
+  async function restart() {
+    if (idConn) {
+      idConn.onClose = undefined;
+      idConn.close();
+    }
+    client?.free();
+    client = undefined;
+    starting = undefined;
+    await start();
+    return ready;
+  }
+
+  /** Копия корня под ключом восстановления — на сервер (FR-066): по ней новое
+   * устройство восстановит корень, когда других устройств не осталось. */
+  async function uploadRootBackup() {
+    if (!pv || !rootBackupB64 || !storage) return;
+    if (await storage.loadRecord<string>(ROOT_BACKUP_SENT_RECORD) === rootBackupB64) return;
+    await call('id', 'identity.root.backup_set', pv.encodeMessage(
+      'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ backup: rootBackupB64 }),
+    ));
+    await storage.saveRecord(ROOT_BACKUP_SENT_RECORD, rootBackupB64);
+  }
+
+  /** Восстановление по ключу восстановления: корень — из копии на сервере,
+   * новый SSK, прежние устройства отзываются, это устройство входит в журнал. */
+  async function recoverWithKey(recoveryKey: string): Promise<SskRotationResult> {
+    if (starting) await starting.catch(() => undefined);
+    if (!pv || !storage || !storageKey || !needsLinking || ready || !ownDeviceId) return 'failed';
+    const self = deps.getSelf();
+    let backup: Uint8Array;
+    try {
+      const got = JSON.parse(pv.decodeMessage(
+        'parvane.identity.v2.RootBackupGetResponse',
+        await call('id', 'identity.root.backup_get', new Uint8Array()),
+      )) as { backup?: string };
+      if (!got.backup) return 'no_backup';
+      backup = unb64(got.backup);
+    } catch (e) {
+      deps.log(`v2: копия корня не получена: ${String(e)}`);
+      return 'failed';
+    }
+    const fresh = new pv.PvClient(self, ownDeviceId, serverDomain);
+    try {
+      fresh.importRootBackupFor(backup, recoveryKey.trim());
+    } catch {
+      fresh.free();
+      return 'bad_key';
+    }
+    try {
+      const ownLog = await call('id', 'identity.device.log_sync', pv.encodeMessage(
+        'parvane.identity.v2.DeviceLogSyncRequest',
+        JSON.stringify({ user: { address: self }, after_version: '0' }),
+      ));
+      await run(fresh.recoverWithRoot(ownLog, OTK_COUNT) as OutReq[]);
+      fresh.forgetRoot();
+      await storage.saveRecord(STATE_RECORD, b64(fresh.export(storageKey)));
+      rootBackupB64 = b64(backup);
+      await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+      needsLinking = false;
+      deps.log('v2: устройство восстановлено ключом восстановления (прежние устройства отозваны)');
+    } catch (e) {
+      deps.log(`v2: восстановление по ключу не удалось: ${String(e)}`);
+      return 'failed';
+    } finally {
+      fresh.free();
+    }
+    return (await restart()) ? 'ok' : 'failed';
+  }
+
+  /** Сброс личности: новый корень и журнал взамен прежних (ключа восстановления
+   * нет). Собеседники увидят смену ключа безопасности; прежняя переписка v2
+   * этим устройством не читается. Нужен пароль (переаутентификация). */
+  async function resetIdentity(password: string): Promise<'ok' | 'bad_password' | 'failed'> {
+    if (starting) await starting.catch(() => undefined);
+    if (!pv || !storage || !storageKey || !needsLinking || ready || !ownDeviceId) return 'failed';
+    try {
+      await call('id', 'identity.session.reauth', pv.encodeMessage(
+        'parvane.identity.v2.SessionReauthRequest', JSON.stringify({ password }),
+      ));
+    } catch {
+      return 'bad_password';
+    }
+    const fresh = new pv.PvClient(deps.getSelf(), ownDeviceId, serverDomain);
+    let recoveryKey: string;
+    try {
+      const created = fresh.resetIdentity(OTK_COUNT) as { requests: OutReq[]; rootSecret: Uint8Array };
+      await run(created.requests);
+      recoveryKey = pv.generateRecoveryKey();
+      rootBackupB64 = b64(fresh.exportRootBackup(recoveryKey, created.rootSecret));
+      fresh.forgetRoot();
+      created.rootSecret.fill(0);
+      await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+      await storage.saveRecord(STATE_RECORD, b64(fresh.export(storageKey)));
+      needsLinking = false;
+      deps.log('v2: личность сброшена — новый корень и журнал устройств');
+    } catch (e) {
+      deps.log(`v2: сброс личности не удался: ${String(e)}`);
+      return 'failed';
+    } finally {
+      fresh.free();
+    }
+    if (!(await restart())) return 'failed';
+    deps.onRecoveryKey(recoveryKey);
+    return 'ok';
+  }
+
+  // ── Отзыв своего устройства (T128, FR-066; D-11, D-12, D-16) ───────────────
+
+  /** Отозвать своё v2-устройство: запись в журнале устройств, затем ротации —
+   * ключ доступа к доставке (сервер + свои устройства + собеседники), ключ
+   * личного состояния, новые эпохи групп, где мы админ. false — устройство не
+   * в журнале v2 (только v1-отзыв). Бросает, если запись журнала не принята. */
+  async function revokeDevice(deviceId: string): Promise<boolean> {
+    if (!client || !ready) return false;
+    if (!logDevices(deps.getSelf())?.v2.includes(deviceId) || deviceId === ownDeviceId) return false;
+    await serial(async () => {
+      const outcome = await withNeeds(() => client!.revokeDevice(deviceId) as RevokeOutcome);
+      const [entry, ...rotations] = outcome.requests;
+      try {
+        await call(entry.chan, entry.method, entry.body);
+      } catch (e) {
+        // Сервер запись не принял, а движок её уже применил — поднять состояние
+        // заново из сохранённого (переподключение читает его с диска)
+        idConn?.close();
+        throw e;
+      }
+      for (const r of rotations) {
+        await call(r.chan, r.method, r.body)
+          .catch((e: unknown) => deps.log(`v2: ротация после отзыва (${r.method}): ${String(e)}`));
+      }
+      await persist();
+      // Отложенное: собеседники, которым новый ключ доступа не ушёл, и группы,
+      // где эпоху сменить не удалось (добор данных/частота)
+      for (const peer of outcome.pendingKeyShares) {
+        try {
+          await run(await withNeeds(() => client!.shareDeliveryKey(peer) as OutReq[]));
+        } catch (e) {
+          deps.log(`v2: ключ доступа ${peer} не роздан: ${String(e)}`);
+        }
+      }
+      for (const hex of outcome.pendingEpochs) {
+        await rotateEpoch(hex).then(() => publishGroup(hex))
+          .catch((e: unknown) => deps.log(`v2: новая эпоха группы ${hex} после отзыва: ${String(e)}`));
+      }
+      await persist();
+      deps.log(`v2: устройство отозвано (ротаций ${rotations.length}, эпох ждут админа ${
+        outcome.epochsNeedAdmin.length})`);
+      // Ключ личного состояния сменён — журнал состояния заново под новым ключом
+      if (outcome.stateKeyVersion !== undefined) deps.onStateReady?.(stateHost, 'self');
+    });
+    if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
+    return true;
+  }
+
+  /**
+   * Отзыв доступа у одного собеседника (FR-033) — при блокировке: сама она ключ
+   * доступа к доставке не отнимает. Новый ключ — серверу, своим устройствам и
+   * остальным собеседникам. false — ключа у собеседника не было.
+   */
+  async function revokeContactAccess(peer: string): Promise<boolean> {
+    if (!client || !ready || !peer || peer === deps.getSelf()) return false;
+    return serial(async () => {
+      const outcome = await withNeeds(() => client!.revokeContactAccess(peer) as {
+        requests: OutReq[]; pendingKeyShares: string[];
+      });
+      const [keySet, ...shares] = outcome.requests;
+      if (!keySet) return false;
+      try {
+        await call(keySet.chan, keySet.method, keySet.body);
+      } catch (e) {
+        // Сервер новый ключ не принял, а движок уже сменил — поднять состояние
+        // заново из сохранённого
+        idConn?.close();
+        throw e;
+      }
+      for (const r of shares) {
+        await call(r.chan, r.method, r.body)
+          .catch((e: unknown) => deps.log(`v2: раздача ключа доступа (${r.method}): ${String(e)}`));
+      }
+      await persist();
+      for (const other of outcome.pendingKeyShares) {
+        try {
+          await run(await withNeeds(() => client!.shareDeliveryKey(other) as OutReq[]));
+        } catch (e) {
+          deps.log(`v2: ключ доступа ${other} не роздан: ${String(e)}`);
+        }
+      }
+      await persist();
+      deps.log(`v2: доступ собеседника отозван — ключ доступа сменён (раздач ${shares.length})`);
+      return true;
+    });
+  }
+
+  /** SSK раскрыт отзывом устройства и ещё не сменён; есть ли копия корня. */
+  function sskState() {
+    return {
+      isRotationNeeded: Boolean(ready && client?.ownSskExposed()),
+      hasBackup: Boolean(rootBackupB64),
+    };
+  }
+
+  /** Сменить SSK корнем (D-12): корень — из копии под ключом восстановления,
+   * в памяти только на время операции. */
+  async function rotateSsk(recoveryKey: string): Promise<SskRotationResult> {
+    if (!client || !ready) return 'failed';
+    if (!rootBackupB64) return 'no_backup';
+    try {
+      client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);
+    } catch {
+      return 'bad_key';
+    }
+    try {
+      await serial(async () => {
+        const reqs = client!.rotateSsk() as OutReq[];
+        try {
+          await run(reqs);
+        } catch (e) {
+          idConn?.close();
+          throw e;
+        }
+        await persist();
+      });
+      deps.log('v2: SSK сменён корнем');
+      await serial(syncLegacySet);
+      return 'ok';
+    } catch (e) {
+      deps.log(`v2: смена SSK не удалась: ${String(e)}`);
+      return 'failed';
+    } finally {
+      client?.forgetRoot();
+    }
+  }
+
+  /** Журнал своих устройств и список v1-устройств — после запуска и по событию. */
+  async function refreshOwnDevices() {
+    await checkOwnDevices();
+    await serial(syncLegacySet);
   }
 
   // ── маршрутизация ─────────────────────────────────────────────────────────
@@ -695,11 +1089,23 @@ export function createV2Controller(deps: Deps) {
         const reqs = await withNeeds(() => client!.prepareGroup(hex, JSON.stringify(content), uuid) as OutReq[]);
         await run(reqs);
       } else {
-        const reqs = await withNeeds(() => client!.prepareDirect(to, JSON.stringify(content), uuid) as OutReq[]);
-        await run(reqs);
+        await runDirect(to, () => client!.prepareDirect(to, JSON.stringify(content), uuid) as OutReq[]);
       }
       await persist();
     });
+  }
+
+  /** Запросы личного чата. Сервер отверг ключ доступа собеседника (FORBIDDEN:
+   * он сменил ключ — отзыв устройства, восстановление, сброс личности) —
+   * повтор со слепым жетоном; новый ключ придёт с его следующим сообщением. */
+  async function runDirect(to: string, prepare: () => OutReq[]) {
+    try {
+      await run(await withNeeds(prepare));
+    } catch (e) {
+      if (!isForbidden(e) || !client?.deliveryKeyRejected(to)) throw e;
+      deps.log('v2: ключ доступа собеседника отвергнут — повтор со слепым жетоном');
+      await run(await withNeeds(prepare));
+    }
   }
 
   /** Чат идёт по v2: группа v2 или собеседник с журналом устройств v2. */
@@ -710,6 +1116,140 @@ export function createV2Controller(deps: Deps) {
       return true;
     }
     return isV2Peer(address);
+  }
+
+  /** Сигнал личного звонка v2-собеседнику (D-08): запечатанным конвертом по
+   * анонимному каналу, сервер не видит ни сторон, ни SDP. false — не v2 (идти по v1). */
+  async function trySendCall(to: string, signal: WireCallSignal): Promise<boolean> {
+    if (isV2GroupAddress(to) || !(await isV2Peer(to))) return false;
+    const v2Signal = callSignalToV2(signal);
+    // Собеседник на v2, а сигнал по v2 не выразить — по v1 не понижаем (D-13)
+    if (!v2Signal) throw new V2Error('ERROR_CODE_INVALID');
+    await serial(async () => {
+      await runDirect(to, () => client!.prepareCall(to, JSON.stringify(v2Signal)) as OutReq[]);
+      await persist();
+    });
+    return true;
+  }
+
+  // ── Блобы вложений по capability (T131, FR-062, D-08) ──────────────────────
+  // Блоб сообщения v2-чата загружается без per-recipient гранта: сервер хранит
+  // SHA-256 секрета, сам секрет едет внутри E2E-содержимого. Получатель качает
+  // блоб анонимным каналом — записи «отправитель → получатель» в cloud нет
+
+  /** Загрузить шифртекст блоба; возвращает file_id. */
+  async function uploadBlob(bytes: Uint8Array, capability: Uint8Array, chunkBytes: number): Promise<string> {
+    if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', capability as BufferSource));
+    const total = Math.max(1, Math.ceil(bytes.length / chunkBytes));
+    let uploadId = '';
+    for (let index = 0; index < total; index++) {
+      const data = bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes);
+      const resp = await call('id', 'cloud.blob.upload_chunk', pv.encodeMessage(
+        'parvane.cloud.v1.UploadChunkRequest', JSON.stringify({ upload_id: uploadId, index, data: b64(data) }),
+      ));
+      const got = JSON.parse(pv.decodeMessage('parvane.cloud.v1.UploadChunkResponse', resp)) as {
+        uploadId?: string; upload_id?: string;
+      };
+      uploadId = got.uploadId || got.upload_id || uploadId;
+    }
+    const done = JSON.parse(pv.decodeMessage('parvane.cloud.v1.UploadCompleteResponse', await call(
+      'id', 'cloud.blob.upload_complete', pv.encodeMessage('parvane.cloud.v1.UploadCompleteRequest', JSON.stringify({
+        upload_id: uploadId,
+        chunks: total,
+        size: String(bytes.length),
+        visibility: 'VISIBILITY_PRIVATE',
+        capability_hash: b64(hash),
+      })),
+    ))) as { fileId?: string; file_id?: string };
+    const fileId = done.fileId || done.file_id;
+    if (!fileId) throw new V2Error('ERROR_CODE_INVALID');
+    return fileId;
+  }
+
+  /** Скачать чанки блоба по секрету: анонимный канал, одноразовое соединение
+   * (живёт до последнего чанка потока). */
+  async function downloadBlobCap(fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number) {
+    if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const method = 'cloud.blob.download_cap';
+    const body = pv.encodeMessage('parvane.cloud.v1.DownloadCapRequest', JSON.stringify({
+      file_id: fileId, capability: capabilityB64, first_chunk: firstChunk, chunk_count: chunkCount,
+    }));
+    anonPlanner = anonPlanner || new pv.PvAnonPlanner();
+    const plan = anonPlanner.assign(method, body, Date.now()) as { conn: number };
+    const conn = await openAnon(plan.conn);
+    try {
+      const parts = new Map<number, Uint8Array>();
+      let streamError: string | undefined;
+      let finish: NoneToVoidFunction | undefined;
+      const isDone = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const meta = JSON.parse(pv.decodeMessage('parvane.cloud.v1.DownloadCapResponse', await conn.stream(
+        method,
+        body,
+        (chunk) => {
+          if (chunk.error) streamError = chunk.error;
+          else if (chunk.data.length) parts.set(chunk.index, chunk.data);
+          if (chunk.last) finish?.();
+        },
+        BLOB_TIMEOUT_MS,
+      ))) as { size?: string | number; chunks?: number };
+      // Метаданные приходят первыми; чанки — следом кадрами того же запроса
+      const expected = Math.min(chunkCount, Math.max(0, (meta.chunks || 0) - firstChunk));
+      if (expected > 0 && parts.size < expected && !streamError) {
+        await Promise.race([isDone, pause(BLOB_TIMEOUT_MS)]);
+      }
+      if (streamError) throw new V2Error(streamError);
+      return { size: Number(meta.size || 0), chunks: meta.chunks || 0, parts };
+    } finally {
+      closeAnon(plan.conn);
+    }
+  }
+
+  // ── Эфемерные каналы: «печатает» (T127, FR-013/FR-064) ─────────────────────
+  // Канал чата — секретный id из ключей доставки (личный чат) либо из ключа
+  // конверта эпохи (группа); сервер пересылает шифртекст и не видит `{from, to}`
+
+  /** Подписаться на каналы чата (идемпотентно: движок отдаёт только новые). */
+  async function ensureEphemeral(addresses: string[]) {
+    addresses.forEach((address) => ephChats.add(address));
+    if (!client || !ready) return;
+    const chats = {
+      peers: addresses.filter((address) => !isV2GroupAddress(address)),
+      groups: addresses.filter(isV2GroupAddress).map(groupHex),
+    };
+    try {
+      await run(client.ephSubscribe(JSON.stringify(chats)) as OutReq[]);
+    } catch (e) {
+      deps.log(`v2: подписка на «печатает»: ${String(e)}`);
+    }
+  }
+
+  function applyEphemeral(body: Uint8Array) {
+    if (!client) return;
+    const events = JSON.parse(client.ephOpen(body)) as {
+      type: string; chat: string; group?: string; from: string; action: number;
+    }[];
+    events.forEach((ev) => {
+      if (ev.type !== 'typing' || ev.action === TYPING_ACTION_CANCEL) return;
+      deps.onTyping?.(ev.group ? groupAddress(ev.group) : ev.from, ev.from);
+    });
+  }
+
+  /** «Печатает» в v2-чате. false — чат не v2 (идти по v1); true — по v1 не
+   * слать, даже если сигнал не ушёл (нет канала, L2): иначе `{from, to}` увидит сервер. */
+  async function trySendTyping(to: string): Promise<boolean> {
+    if (!(await isV2Chat(to))) return false;
+    if (!l2Gate.ephemeralAllowed(to)) return true;
+    await ensureEphemeral([to]);
+    try {
+      const chat = isV2GroupAddress(to) ? groupHex(to) : to;
+      await run(client!.ephTyping(chat, TYPING_ACTION_TYPING) as OutReq[]);
+    } catch (e) {
+      deps.log(`v2: «печатает» не отправлено: ${String(e)}`);
+    }
+    return true;
   }
 
   /** Отправить сообщение v2-собеседнику. Возвращает false — не v2 (идти по v1). */
@@ -926,6 +1466,8 @@ export function createV2Controller(deps: Deps) {
     }
     const isNew = !publishedGroups.has(address);
     publishedGroups.add(address);
+    // Канал «печатает» выводится из ключа эпохи — после смены эпохи он новый
+    void ensureEphemeral([address]);
     deps.onGroupUpdated(info, isNew);
     reportUnconfirmed(hex, []);
     noteGroupL2(hex, g);
@@ -941,6 +1483,39 @@ export function createV2Controller(deps: Deps) {
     fresh.forEach((member) => warnedUnconfirmed.add(`${hex}:${member}`));
     deps.log(`v2: в группе ${hex} участники без подтверждённой записи администратора: ${fresh.join(', ')}`);
     deps.onUnconfirmedMembers(groupAddress(hex), fresh);
+  }
+
+  /** Партия жетонов не больше `limit`; при исчерпанной квоте аккаунта — остаток. */
+  async function requestTokens(limit: number) {
+    if (!client || !serverKey) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const list = await call('anon', 'identity.tokens.key_list', new Uint8Array());
+    const steps = TOKEN_BATCH_STEPS.filter((count) => count <= limit);
+    if (!steps.length) steps.push(Math.max(1, limit));
+    for (let i = 0; i < steps.length; i++) {
+      try {
+        const req = client.tokenRequest(list, serverKey, steps[i]) as OutReq;
+        client.tokenResponse(await call(req.chan, req.method, req.body));
+        return;
+      } catch (err) {
+        if (!isQuotaExceeded(err) || i === steps.length - 1) throw err;
+      }
+    }
+  }
+
+  /**
+   * Партия жетонов по расписанию движка (FR-063): заранее, а не перед тратой —
+   * иначе выдача (с личностью) связывается по времени с анонимной доставкой.
+   */
+  async function refillTokens() {
+    if (!client || !serverKey || !ready || !client.tokenRefillDue()) return;
+    try {
+      await requestTokens(Math.min(TOKEN_BATCH, client.tokenBatchSize()));
+      deps.log(`v2: жетоны — партия по расписанию получена (запас ${client.tokenCount()})`);
+    } catch (err) {
+      // Срок следующей партии движок уже сдвинул — «дозапроса» не будет (D-06)
+      deps.log(`v2: жетоны — партия по расписанию не получена: ${String(err)}`);
+    }
+    await persist();
   }
 
   /** Жетоны на раздачу ключей незнакомым участникам — до операции движка. */
@@ -1251,10 +1826,54 @@ export function createV2Controller(deps: Deps) {
 
   // Устройства пользователя по журналу v2 (T059): то, чего нет в `v2`, —
   // устройство старой версии. `undefined` — журнала нет или движок не готов
-  function logDevices(user: string): { v2: string[]; legacy: string[] } | undefined {
+  function logDevices(user: string): LogDevices | undefined {
     if (!client || !ready) return undefined;
-    const devices = JSON.parse(client.logDevices(user)) as { v2: string[]; legacy: string[] };
+    const devices = JSON.parse(client.logDevices(user)) as LogDevices;
     return devices.v2.length ? devices : undefined;
+  }
+
+  /** Подписанный список v1-устройств пользователя: id → identity-ключ (FR-058). */
+  function legacyDevices(user: string): Map<string, string> {
+    return new Map((logDevices(user)?.legacyKeys || []).map((d) => [d.deviceId, d.identity]));
+  }
+
+  // Свой список v1-устройств (FR-054/FR-058): первое v2-устройство публикует
+  // его в журнале устройств, и v2-собеседники шлют этим устройствам копии по
+  // v1. Дальше список только сокращается (устройство перешло на v2 или
+  // исчезло) — появившееся позже v1-устройство копий не получит
+  async function syncLegacySet() {
+    if (!client || !ready || !deps.listOwnV1Devices) return;
+    const own = logDevices(deps.getSelf());
+    if (!own) return;
+    const stripPadding = (key: string) => key.replace(/=+$/, '');
+    let candidates: { deviceId: string; identity: string; signing: string }[];
+    try {
+      candidates = (await deps.listOwnV1Devices())
+        .filter((d) => d.deviceId && d.identity && d.signing && !own.v2.includes(d.deviceId))
+        .map((d) => ({ deviceId: d.deviceId, identity: stripPadding(d.identity), signing: stripPadding(d.signing) }));
+    } catch {
+      return;
+    }
+    let next: typeof candidates;
+    if (!own.legacySet) {
+      if (!candidates.length) return;
+      next = candidates;
+    } else {
+      next = own.legacyKeys.filter((k) => (
+        candidates.some((d) => d.deviceId === k.deviceId && d.identity === k.identity)
+      ));
+      if (next.length === own.legacyKeys.length) return;
+    }
+    try {
+      const req = client.legacyDevicesRequest(JSON.stringify(next)) as OutReq;
+      await call(req.chan, req.method, req.body);
+      // Запись попадает в свой журнал синком — только после подтверждения сервера
+      await checkOwnDevices();
+      deps.log(`v2: список v1-устройств опубликован (${next.length})`);
+    } catch (e) {
+      // Нет SSK на этом устройстве либо журнал ушёл вперёд — догонит другое устройство
+      deps.log(`v2: список v1-устройств не опубликован: ${String(e)}`);
+    }
   }
 
   // Пробуждение v2 (`push.wake.*`, T102): тот же VAPID, что у v1; журнал
@@ -1286,6 +1905,20 @@ export function createV2Controller(deps: Deps) {
     return true;
   }
 
+  // Свои настройки с сервера (FR-040): заданное на другом устройстве не должно
+  // перетираться локальным значением этого. `undefined` — ни разу не задавались
+  async function getPrivacy() {
+    if (!pv || !ready) return undefined;
+    const got = JSON.parse(pv.decodeMessage('parvane.identity.v2.PrivacyGetResponse', await call(
+      'id', 'identity.privacy.get', pv.encodeMessage('parvane.identity.v2.PrivacyGetRequest', '{}'),
+    ))) as { settings?: { group_add?: string; messages_from_strangers?: boolean }; is_set?: boolean };
+    if (!got.is_set) return undefined;
+    return {
+      groupAdd: got.settings?.group_add === 'AUDIENCE_NOBODY' ? 'nobody' as const : 'anyone' as const,
+      strangers: Boolean(got.settings?.messages_from_strangers),
+    };
+  }
+
   async function pushUnregister(endpoint: string) {
     if (!pv || !ready) return false;
     await call('id', 'push.wake.unregister', pv.encodeMessage(
@@ -1298,7 +1931,12 @@ export function createV2Controller(deps: Deps) {
   function linkGrantMaterial(): Uint8Array | undefined {
     if (!ready || !client) return undefined;
     try {
-      return client.linkGrantMaterial();
+      const material = client.linkGrantMaterial();
+      if (!rootBackupB64 || !pv) return material;
+      // Копия корня под ключом восстановления — вместе с грантом (поле `rb`)
+      const withBackup = pv.grantWithRootBackup(material, unb64(rootBackupB64));
+      material.fill(0);
+      return withBackup;
     } catch (e) {
       deps.log(`v2: грант линковки недоступен: ${String(e)}`);
       return undefined;
@@ -1329,6 +1967,12 @@ export function createV2Controller(deps: Deps) {
     needsLinking: () => needsLinking,
     linkGrantMaterial,
     joinWithGrant,
+    revokeDevice,
+    revokeContactAccess,
+    sskState,
+    rotateSsk,
+    recoverWithKey,
+    resetIdentity,
     cachedGroups,
     changeGroup,
     checkInvite,
@@ -1345,9 +1989,12 @@ export function createV2Controller(deps: Deps) {
     isV2Chat,
     isV2InviteUrl: (url: string) => Boolean(parseV2Invite(url)) || V2_INVITE_REGEX.test(url.trim()),
     logDevices,
+    legacyDevices,
+    deliverLegacy,
     pushRegister,
     pushUnregister,
     setPrivacy,
+    getPrivacy,
     // Режим «усиленная приватность» (L2): состояние чата и правило L2-1
     l2State: l2Gate.state,
     ephemeralAllowed: l2Gate.ephemeralAllowed,
@@ -1356,6 +2003,10 @@ export function createV2Controller(deps: Deps) {
     setGroupL2,
     isV2Peer,
     trySend,
+    trySendCall,
+    uploadBlob,
+    downloadBlobCap,
+    trySendTyping,
     tryEdit,
     tryDelete: (to: string, uuids: string[]) => tryMutation(to, {
       delete: { targets: uuids.map(ref), for_everyone: true },
@@ -1373,6 +2024,7 @@ export function createV2Controller(deps: Deps) {
       needsLinking = false;
       linkMaterial?.fill(0);
       linkMaterial = undefined;
+      rootBackupB64 = undefined;
       idConn?.close();
       [...anonConns.keys()].forEach(closeAnon);
       anonPlanner?.free();
@@ -1385,6 +2037,8 @@ export function createV2Controller(deps: Deps) {
       publishedGroups.clear();
       rotateTimers.forEach((timer) => clearTimeout(timer));
       rotateTimers.clear();
+      if (tokenTimer) clearInterval(tokenTimer);
+      tokenTimer = undefined;
       warnedUnconfirmed.clear();
     },
   };
@@ -1403,6 +2057,14 @@ function groupHex(address: string) {
 
 function groupAddress(hex: string) {
   return `${V2_GROUP_PREFIX}${hex}`;
+}
+
+function isForbidden(e: unknown) {
+  return /Forbidden|FORBIDDEN/.test(e instanceof V2Error ? e.code : String(e));
+}
+
+function isQuotaExceeded(e: unknown) {
+  return /ERROR_CODE_LIMIT\b/.test(e instanceof V2Error ? e.code : String(e));
 }
 
 function isRateLimited(e: unknown) {

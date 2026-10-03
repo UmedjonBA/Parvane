@@ -24,6 +24,8 @@ export type WirePackRef = {
   count: number;
   key?: string;
   nonce?: string;
+  // Секрет скачивания блоба (v2, D-08): только в E2E-содержимом v2-чата
+  capability?: string;
 };
 
 export type WireMessageContent = {
@@ -51,6 +53,9 @@ export type WireMessageContent = {
   sender_identity?: string;
   sender_signing_key?: string;
   file_key?: string;
+  // Секрет скачивания блоба вложения (v2, FR-062/D-08): сервер хранит только
+  // SHA-256, получатель качает блоб анонимным каналом без гранта на себя
+  capability?: string;
   file_nonce?: string;
   group?: string;
   session_key?: string;
