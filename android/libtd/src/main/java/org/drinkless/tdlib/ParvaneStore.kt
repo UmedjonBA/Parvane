@@ -210,6 +210,11 @@ class ParvaneStore {
     val blocked = java.util.Collections.synchronizedSet(HashSet<String>())
     /** Все uuid чата (для очистки «для меня»). */
     fun uuidsOfChat(chatId: Long): List<String> = (messages[chatId] ?: emptyList<TdApi.Message>()).mapNotNull { uuidOf(chatId, it.id) }
+    /** Сообщения чата не позже момента (сек) — очистка чата с другого своего устройства (T145). */
+    fun uuidsOfChatUntil(chatId: Long, untilSec: Long): List<String> =
+        (messages[chatId] ?: emptyList<TdApi.Message>()).filter { it.date.toLong() <= untilSec }.mapNotNull { uuidOf(chatId, it.id) }
+    /** Время самого позднего сообщения чата (сек), 0 — сообщений нет. */
+    fun lastDateOfChat(chatId: Long): Long = (messages[chatId] ?: emptyList<TdApi.Message>()).maxOfOrNull { it.date.toLong() } ?: 0L
     /** Убрать чат из списка (удаление чата): позиция order=0 → X скрывает. */
     @Synchronized
     fun removeChat(chatId: Long): List<TdApi.Update> {
