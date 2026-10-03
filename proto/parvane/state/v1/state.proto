@@ -206,6 +206,25 @@ message ChatCleared {
   int64 cleared_until_ms = 2;
 }
 
+// Ссылка-приглашение группы v2 (T160). Секрет ссылки (он в `url`) знает только
+// создавшее её устройство — запись делит ссылку между своими устройствами, как
+// в v1, где основная ссылка у аккаунта одна. Карта по link_id, LWW.
+message GroupInvite {
+  bytes group_id = 1 [(parvane.core.v2.max_len) = 32];
+  // SHA-256 открытого ключа ссылки (как в group.v2).
+  bytes link_id = 2 [(parvane.core.v2.max_len) = 32];
+  string url = 3 [(parvane.core.v2.max_len) = 512];
+  int64 created_ms = 4;
+  string title = 5 [(parvane.core.v2.max_len) = 128];
+  int64 expires_ms = 6;
+  uint32 usage_limit = 7;
+  bool requires_approval = 8;
+}
+
+message GroupInviteRef {
+  bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+
 // Операция журнала личного состояния — открытый текст записи StateRecord.
 // op_id совпадает с op_id записи (входит в AAD).
 message StateOp {
@@ -236,6 +255,8 @@ message StateOp {
     CallRecord call_set = 26;
     CallRef call_remove = 27;
     ChatCleared chat_cleared = 28;
+    GroupInvite group_invite_set = 29;
+    GroupInviteRef group_invite_remove = 30;
   }
 }
 
@@ -257,4 +278,5 @@ message StateSnapshot {
   repeated PinnedOrder pinned = 10 [(parvane.core.v2.max_items) = 2];
   repeated CallRecord calls = 11 [(parvane.core.v2.max_items) = 10000];
   repeated ChatCleared cleared = 12 [(parvane.core.v2.max_items) = 100000];
+  repeated GroupInvite invites = 13 [(parvane.core.v2.max_items) = 10000];
 }

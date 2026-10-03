@@ -879,6 +879,23 @@ impl PvState {
         self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::CallSet(rec)])
     }
 
+    /// Ссылка-приглашение группы v2 (T160): proto3-JSON `state.v1.GroupInvite`
+    /// → тела `state.append`. LWW по `link_id`.
+    #[wasm_bindgen(js_name = groupInviteSet)]
+    pub fn group_invite_set(&mut self, invite_json: &str) -> Result<Array, JsValue> {
+        let i: parvane_protocol::pb::parvane::state::v1::GroupInvite =
+            serde_json::from_str(invite_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::GroupInviteSet(i)])
+    }
+
+    /// Ссылка снята (отозвана или удалена): `link_id` — base64.
+    #[wasm_bindgen(js_name = groupInviteRemove)]
+    pub fn group_invite_remove(&mut self, link_id_b64: &str) -> Result<Array, JsValue> {
+        let r: parvane_protocol::pb::parvane::state::v1::GroupInviteRef =
+            serde_json::from_value(json!({ "link_id": link_id_b64 })).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::GroupInviteRemove(r)])
+    }
+
     /// Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
     /// → тела `state.append`. Граница по собеседнику только растёт.
     #[wasm_bindgen(js_name = chatCleared)]

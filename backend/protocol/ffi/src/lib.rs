@@ -866,6 +866,25 @@ pub unsafe extern "C" fn pv_state_call_set(s: *mut PvStateSession, record_json: 
     })
 }
 
+/// Ссылка-приглашение группы v2 (T160): proto3-JSON
+/// `parvane.state.v1.GroupInvite` → JSON-массив base64 тел `state.append`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_state_group_invite_set(s: *mut PvStateSession, invite_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let s = s.as_mut().ok_or_else(bad_arg)?;
+        s.inner.group_invite_set(str_arg(invite_json).ok_or_else(bad_arg)?).map(cstring)
+    })
+}
+
+/// Ссылка-приглашение снята: `link_id` — base64 → JSON-массив base64 тел `state.append`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_state_group_invite_remove(s: *mut PvStateSession, link_id_b64: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let s = s.as_mut().ok_or_else(bad_arg)?;
+        s.inner.group_invite_remove(str_arg(link_id_b64).ok_or_else(bad_arg)?).map(cstring)
+    })
+}
+
 /// Чат очищен «у себя» до момента (T145): proto3-JSON
 /// `parvane.state.v1.ChatCleared` → JSON-массив base64 тел `state.append`.
 #[no_mangle]

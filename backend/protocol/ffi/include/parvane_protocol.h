@@ -518,6 +518,19 @@ char *pv_state_mark_sent(struct PvStateSession *s,
 char *pv_state_call_set(struct PvStateSession *s, const char *record_json, char **err);
 
 /**
+ * Ссылка-приглашение группы v2 (T160): proto3-JSON
+ * `parvane.state.v1.GroupInvite` → JSON-массив base64 тел `state.append`.
+ */
+char *pv_state_group_invite_set(struct PvStateSession *s, const char *invite_json, char **err);
+
+/**
+ * Ссылка-приглашение снята: `link_id` — base64 → JSON-массив base64 тел `state.append`.
+ */
+char *pv_state_group_invite_remove(struct PvStateSession *s,
+                                   const char *link_id_b64,
+                                   char **err);
+
+/**
  * Чат очищен «у себя» до момента (T145): proto3-JSON
  * `parvane.state.v1.ChatCleared` → JSON-массив base64 тел `state.append`.
  */
