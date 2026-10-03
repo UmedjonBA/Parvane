@@ -329,8 +329,10 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── T145: «удалить чат у себя» на bob1 → чат очищен и на bob2 ≤ 10 с ────────
-  // Сообщений v2 сервер v1 не знает (нотиса `cleared` не будет): граница
-  // очистки едет журналом личного состояния. У alice переписка остаётся
+  // Граница очистки едет журналом личного состояния. Нотис `cleared` v1-шарда
+  // обычно успевает раньше (сервер записывает скрытие и для неизвестных ему id
+  // сообщений v2), поэтому путь журнала сверяется по самой границе на bob2,
+  // а не по записи «скрыто N сообщений». У alice переписка остаётся
   const chatMessageCount = (page, peerNick) => page.evaluate((nick) => {
     const g = window.__parvaneGetGlobal();
     const user = Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
@@ -351,8 +353,38 @@ try {
     return user && !Object.keys(g.messages.byChatId[user.id]?.byId || {}).length;
   }, aliceNick, { timeout: STATE_SYNC_BUDGET_MS, polling: 500 });
   console.log(`очистка чата на втором устройстве через ${Date.now() - clearStarted} мс`);
-  await waitLog('bob2', 'очищен на другом устройстве');
+  await bob2Page.waitForFunction(({ self, peer }) => {
+    const map = JSON.parse(localStorage.getItem(`parvane:cleareduntil:${self}`) || '{}');
+    return map[peer] > 0;
+  }, { self: bob, peer: alice }, { timeout: STATE_SYNC_BUDGET_MS * 2, polling: 500 });
+  console.log(`граница очистки на втором устройстве через ${Date.now() - clearStarted} мс`);
   assert.equal(await chatMessageCount(alicePage, bob.split('@')[0]), aliceBefore, 'у alice пропали сообщения после очистки у bob');
+
+  // ── T160: ссылка-приглашение группы одна на всех своих устройствах ─────────
+  // Секрет ссылки знает только создавшее её устройство — запись едет журналом
+  // личного состояния; основная ссылка на bob2 сходится к ссылке bob1
+  const ownGroup = `BG-${suffix.slice(-6)}`;
+  await createGroupViaUi(bob1Page, ownGroup, [alice.split('@')[0]]);
+  await waitLog('bob1', 'v2: группа создана');
+  const primaryOf = async (page) => {
+    const got = await callProviderForChat(page, 'exportChatInvite', ownGroup, undefined, { peer: '$chat' }).catch(() => undefined);
+    return got?.result?.link;
+  };
+  const bob1Link = await primaryOf(bob1Page);
+  assert.ok(bob1Link, 'bob1: основная ссылка группы не создана');
+  await bob2Page.locator('#LeftColumn .ListItem').filter({ hasText: ownGroup }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const inviteStarted = Date.now();
+  let bob2Link;
+  while (Date.now() - inviteStarted < STATE_SYNC_BUDGET_MS * 3) {
+    // eslint-disable-next-line no-await-in-loop
+    bob2Link = await primaryOf(bob2Page);
+    if (bob2Link === bob1Link) break;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => { setTimeout(r, 1000); });
+  }
+  assert.equal(bob2Link, bob1Link, 'bob2: основная ссылка группы отличается от ссылки bob1');
+  console.log(`ссылка-приглашение на втором устройстве через ${Date.now() - inviteStarted} мс`);
 
   // Сервер хранит только шифртекст журнала состояния
   assert.deepEqual(serverFilesContaining(folderName), [], 'название папки лежит в БД сервера открытым');
@@ -371,6 +403,17 @@ try {
     // eslint-disable-next-line no-await-in-loop
     await dumpDiagJournal(session.page, who);
     console.error(`консоль ${who}:\n${consoleTail[who].join('\n')}`);
+    // eslint-disable-next-line no-await-in-loop
+    const state = await session.page.evaluate(() => {
+      const g = window.__parvaneGetGlobal();
+      const texts = Object.entries(g.messages.byChatId).map(([chatId, chat]) => (
+        `${chatId}: ${Object.values(chat.byId || {}).map((m) => `${m.id}${m.isOutgoing ? '>' : '<'}${(m.content?.text?.text || '').slice(0, 24)}`).join(', ')}`
+      ));
+      const local = Object.keys(localStorage).filter((k) => /cleareduntil|deletedchats/.test(k))
+        .map((k) => `${k}=${localStorage.getItem(k)}`);
+      return [...texts, ...local].join('\n');
+    }).catch((e) => `state unavailable: ${e.message}`);
+    console.error(`состояние ${who}:\n${state}`);
     console.error(`журнал ${who}: ${logs[who].join('\n')}`);
   }
   throw error;

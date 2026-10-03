@@ -314,15 +314,32 @@ async function closeLeftSearch(page) {
 // openPrivateChat мог оставить композер предыдущего чата (текст уходил не туда)
 export async function openPrivateChatStrict(page, address) {
   const name = address.split('@')[0];
+  let lastError;
   for (let attempt = 0; attempt < 3; attempt++) {
-    await openPrivateChat(page, address).catch(() => {});
+    await openPrivateChat(page, address).catch((err) => { lastError = err; });
     const isOpen = await page.locator('.MiddleHeader').getByText(name).first()
       .isVisible().catch(() => false);
     if (isOpen) return;
+    // Снимок ДО Escape: после него панель поиска закрыта и причины уже не видно
+    if (attempt === 2) {
+      const shot = new URL('../web/telegram-tt/test-results/open-chat-failed.png', import.meta.url).pathname;
+      await page.screenshot({ path: shot }).catch(() => {});
+      const searchState = await page.evaluate((nick) => {
+        const g = window.__parvaneGetGlobal?.();
+        if (!g) return 'no global';
+        const tab = Object.values(g.byTabId || {})[0];
+        const user = Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
+        return JSON.stringify({ globalSearch: tab?.globalSearch, user: user && { id: user.id, firstName: user.firstName } });
+      }, name).catch((e) => `unavailable: ${e.message}`);
+      console.error(`--- search state (${name}) ---\n${String(searchState).slice(0, 2000)}`);
+    }
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
   }
-  throw new Error(`chat with ${address} did not open`);
+  // Причина последней попытки — в тексте: иначе по «did not open» не понять,
+  // не нашёлся ли собеседник поиском или не открылся композер
+  const reason = lastError ? String(lastError.message || lastError).split('\n').slice(0, 3).join(' | ') : 'header mismatch';
+  throw new Error(`chat with ${address} did not open: ${reason}`);
 }
 
 export async function sendText(page, text) {
@@ -382,6 +399,11 @@ export async function addReaction(page, text, emoji) {
     .getByRole('button', { name: emoji, exact: true });
   await reaction.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await reaction.click();
+  // Меню закрывается с анимацией, и её конец снимает контейнер меню целиком.
+  // Правый клик по тому же сообщению раньше этого (pinMessage сразу после
+  // реакции) открывал новое меню в старом контейнере — и окно «Pin» исчезало
+  // вместе с ним, не дождавшись клика
+  await page.locator('.MessageContextMenu').first().waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
 }
 
 export async function pinMessage(page, text) {
