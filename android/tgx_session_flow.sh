@@ -52,6 +52,13 @@ a shell pm disable-user --user 0 com.google.android.inputmethod.latin >/dev/null
 a shell settings put secure show_ime_with_hard_keyboard 0 >/dev/null 2>&1
 ok "гость: автозаполнение и Gboard выключены (обход падения qemu)"
 echo "ws://10.0.2.2:9222/ws" > "$OUT/gw"; a push "$OUT/gw" /data/local/tmp/parvane-gateway >/dev/null 2>&1; a shell chmod 644 /data/local/tmp/parvane-gateway
+# Протокол v2 включён по умолчанию (T135); TGX_PROTO_V1=1 — X остаётся на v1 (файл-флаг
+# читает debug-сборка шва). Без переменной флаг снимается: хвост прошлого сценария не мешает.
+if [ "${TGX_PROTO_V1:-0}" = 1 ]; then
+  echo 1 > "$OUT/v1flag"; a push "$OUT/v1flag" /data/local/tmp/parvane-proto-v1 >/dev/null 2>&1; a shell chmod 644 /data/local/tmp/parvane-proto-v1
+else
+  a shell rm -f /data/local/tmp/parvane-proto-v1 >/dev/null 2>&1
+fi
 a install -r "$APK" >/dev/null 2>&1 && ok "APK установлен" || bad "APK не установился"
 a shell pm clear org.parvane.tgx >/dev/null 2>&1
 a shell pm grant org.parvane.tgx android.permission.POST_NOTIFICATIONS >/dev/null 2>&1  # без системного диалога

@@ -6,6 +6,33 @@
 # PARVANE_AUTOLOGIN/AUTOSEND/PARVANE_GATEWAY_URL=host:port игнорируются (P-45/P-46).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 RC=0
+# ── протокол клиентов сценария (T135) ────────────────────────────────────────
+# v2 включён по умолчанию; PV_PROTO=v1 — весь сценарий на прежнем протоколе
+# (клиентам уходит PARVANE_PROTO_V2=0). Проверки, привязанные к v1 (ответы
+# шарда group.*, таблицы messenger.db, каталог устройств v1), идут только при
+# PV_PROTO=v1; для v2 рядом стоят проверки по журналам клиентов и БД v2.
+PV_PROTO="${PV_PROTO:-v2}"
+if [ "$PV_PROTO" = v1 ]; then export PARVANE_PROTO_V2=0; else export PARVANE_PROTO_V2=1; fi
+is_v2() { [ "$PV_PROTO" != v1 ]; }
+# Адрес группы по имени из лога создателя: UUID (v1) либо v2g:<hex> (v2).
+group_gid() { # group_gid <log> <имя>
+  grep -a "группа \(v2 \)\?'$2' создана" "$1" 2>/dev/null \
+    | grep -oE 'v2g:[0-9a-f]{32}|[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}' | head -1
+}
+# Последняя строка «группа <gid> обновлена (…)» в логе клиента: версия, права,
+# роль самого клиента, заявки и админы — состояние группы глазами участника.
+group_line() { # group_line <log> <gid>
+  grep -a "Parvane: группа $2 обновлена" "$1" 2>/dev/null | tail -1
+}
+# Окружение устройств одного аккаунта. v2: второе устройство обязано быть
+# привязано (LINK-1 v2) — старое выдаёт грант без UI (PARVANE_AUTOLINK_GRANT=1),
+# новое публикует оффер само. v1: второе устройство работает и без линковки —
+# офферы выключены, как в сценариях до v2.
+if is_v2; then PV_DEV_OLD=(PARVANE_AUTOLINK_GRANT=1); PV_DEV_NEW=(PARVANE_AUTOLINK_GRANT=1)
+else PV_DEV_OLD=(PARVANE_NO_LINK_OFFER=1); PV_DEV_NEW=(PARVANE_NO_LINK_OFFER=1); fi
+wait_linked() { # wait_linked <log нового устройства> [сек=90]
+  wait_log "$1" "v2: устройство привязано грантом линковки" "${2:-90}" && wait_log "$1" "v2: готов" 60
+}
 ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 PIDS=()

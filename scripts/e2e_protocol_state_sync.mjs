@@ -328,6 +328,32 @@ try {
   await findMessageContainer(alicePage, `st-blocked-${suffix}`).locator('.MessageOutgoingStatus--failed')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── T145: «удалить чат у себя» на bob1 → чат очищен и на bob2 ≤ 10 с ────────
+  // Сообщений v2 сервер v1 не знает (нотиса `cleared` не будет): граница
+  // очистки едет журналом личного состояния. У alice переписка остаётся
+  const chatMessageCount = (page, peerNick) => page.evaluate((nick) => {
+    const g = window.__parvaneGetGlobal();
+    const user = Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
+    return user ? Object.keys(g.messages.byChatId[user.id]?.byId || {}).length : -1;
+  }, peerNick);
+  const aliceNick = alice.split('@')[0];
+  assert.ok(await chatMessageCount(bob2Page, aliceNick) > 0, 'bob2: перед очисткой в чате с alice нет сообщений');
+  const aliceBefore = await chatMessageCount(alicePage, bob.split('@')[0]);
+  await bob1Page.evaluate(async (nick) => {
+    const g = window.__parvaneGetGlobal();
+    const user = Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
+    await window.__parvaneDiagCallApi('deleteHistory', { chat: g.chats.byId[user.id], shouldDeleteForAll: false });
+  }, aliceNick);
+  const clearStarted = Date.now();
+  await bob2Page.waitForFunction((nick) => {
+    const g = window.__parvaneGetGlobal();
+    const user = Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
+    return user && !Object.keys(g.messages.byChatId[user.id]?.byId || {}).length;
+  }, aliceNick, { timeout: STATE_SYNC_BUDGET_MS, polling: 500 });
+  console.log(`очистка чата на втором устройстве через ${Date.now() - clearStarted} мс`);
+  await waitLog('bob2', 'очищен на другом устройстве');
+  assert.equal(await chatMessageCount(alicePage, bob.split('@')[0]), aliceBefore, 'у alice пропали сообщения после очистки у bob');
+
   // Сервер хранит только шифртекст журнала состояния
   assert.deepEqual(serverFilesContaining(folderName), [], 'название папки лежит в БД сервера открытым');
 

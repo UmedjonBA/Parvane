@@ -60,6 +60,10 @@ export async function clickUntil(locator, isDone, { attempts = 4, settleMs = 300
   await isDone();
 }
 
+// Сколько ждать исхода запуска v2 после входа и появления диалога ключа после него
+const V2_STARTUP_TIMEOUT_MS = 30000;
+const RECOVERY_DIALOG_SETTLE_MS = 3000;
+
 export function requireEnv() {
   const baseUrl = process.env.PARVANE_E2E_BASE_URL;
   const gatewayUrl = process.env.PARVANE_E2E_GATEWAY_URL;
@@ -68,11 +72,31 @@ export function requireEnv() {
   return { baseUrl, gatewayUrl };
 }
 
-export async function preparePage(context, user, password, { seedLocalStorage, startUrl, beforeLogin } = {}) {
+export async function preparePage(context, user, password, options = {}) {
+  const { startUrl, beforeLogin } = options;
+  // PARVANE_E2E_PROTO=v1 — весь сценарий на прежнем протоколе (он проверяет
+  // модель v1-шарда: токены ссылок, таблицы messenger.db); явный seed важнее
+  const seedLocalStorage = process.env.PARVANE_E2E_PROTO === 'v1'
+    ? { 'parvane:proto': 'v1', ...options.seedLocalStorage }
+    : options.seedLocalStorage;
   const { baseUrl, gatewayUrl } = requireEnv();
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
+  // Исход запуска v2 (готов / нужна линковка / сбой) — по журналу провайдера
+  const v2Outcome = { isKnown: false };
+  // Журнал провайдера (`[parvane] …`) — для разбора падений: session.logs
+  const logs = [];
+  page.on('console', (message) => {
+    const text = message.text();
+    if (text.includes('[parvane]') && !text.includes('метод не реализован')) {
+      logs.push(text.slice(0, 300));
+      if (logs.length > 400) logs.shift();
+    }
+    if (/\[parvane\] v2: (готов|у аккаунта уже есть журнал устройств|запуск не удался)/.test(text)) {
+      v2Outcome.isKnown = true;
+    }
+  });
   await page.addInitScript(({ gatewayUrl: url, seed }) => {
     localStorage.setItem('parvane:gateway', url);
     Object.entries(seed || {}).forEach(([key, value]) => {
@@ -149,6 +173,11 @@ export async function preparePage(context, user, password, { seedLocalStorage, s
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
     await route.fulfill({ contentType: 'application/javascript', body: '' });
   });
+  // Протокол v2 включён по умолчанию (T135): при первом создании корня web
+  // показывает диалог ключа восстановления — в произвольный момент после входа.
+  // Обычные сценарии (без явного `parvane:proto` в seed) закрывают его
+  // автоматически; сценарии протокола читают ключ сами (dismissRecoveryKeyDialog).
+  const isAutoRecoveryDialog = !seedLocalStorage || !('parvane:proto' in seedLocalStorage);
   await page.goto(startUrl || baseUrl, { waitUntil: 'domcontentloaded' });
   // Хук между открытием страницы и вводом ника (например, уйти на другой
   // адрес в той же вкладке, проверяя переживание sessionStorage)
@@ -162,7 +191,20 @@ export async function preparePage(context, user, password, { seedLocalStorage, s
     { settleMs: 15000 },
   );
   await page.waitForFunction(() => globalThis.__parvaneE2eSockets?.opened >= 1);
-  return { page, errors };
+  if (isAutoRecoveryDialog) {
+    // Диалог ключа закрываем ДО возврата: появившись посреди шага сценария, он
+    // отбирает фокус (сбрасывается поиск, ввод уходит мимо). Ждём исхода
+    // запуска v2; у второго устройства и при сбое диалога не будет
+    const deadline = Date.now() + V2_STARTUP_TIMEOUT_MS;
+    while (!v2Outcome.isKnown && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await page.waitForTimeout(200);
+    }
+    await dismissRecoveryKeyDialog(page, RECOVERY_DIALOG_SETTLE_MS);
+    // Запасной путь: диалог появился позже (корень создан после линковки/сброса)
+    await autoDismissRecoveryKeyDialog(page);
+  }
+  return { page, errors, logs };
 }
 
 // Экран входа: ввести ник (или полный адрес) и нажать Next. Экран может
@@ -756,13 +798,14 @@ export async function readInvitesScreen(page, title, { keepOpen = false } = {}) 
   const linkInput = screen.locator('input[readonly]');
   await linkInput.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForFunction(
-    () => /#\+[0-9a-f]{32}/.test(document.querySelector('.ManageInvites input[readonly]')?.value || ''),
+    () => /#\+[0-9a-f]{32}|\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}/
+      .test(document.querySelector('.ManageInvites input[readonly]')?.value || ''),
     undefined,
     { timeout: LOGIN_TIMEOUT_MS },
   );
   const links = await linkInput.evaluateAll((inputs) => inputs.map((input) => input.value));
   assert.equal(links.length, 1, `expected one primary invite link field, got ${links}`);
-  assert.match(links[0], /#\+[0-9a-f]{32}/, 'invite link field is empty');
+  assert.match(links[0], /#\+[0-9a-f]{32}|\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}/, 'invite link field is empty');
   assert.equal(await screen.getByText(/FolderLinkScreen|LinkActionShare/).count(), 0, 'raw lang key on the share button');
   await screen.getByText('Create a New Link').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const link = links[0].trim();
@@ -776,6 +819,16 @@ export async function readInvitesScreen(page, title, { keepOpen = false } = {}) 
 }
 
 // Токен из ссылки-приглашения
+// Адрес, который открывает ссылку-приглашение в приложении под тестом: v1 —
+// `#+<токен>`, v2 — путь `/join/<link_id>#<секрет>` (домен ссылки — домен
+// сервера, а приложение сценария живёт на baseUrl)
+export function inviteAppUrl(baseUrl, link) {
+  const v2 = String(link).match(/\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/);
+  if (v2) return `${baseUrl.replace(/\/$/, '')}${v2[0]}`;
+  const token = inviteTokenOf(link);
+  return token ? `${baseUrl}#+${token}` : undefined;
+}
+
 export function inviteTokenOf(link) {
   return link.match(/#\+([0-9a-f]{32})/)?.[1];
 }
@@ -924,6 +977,87 @@ export function buildPngBuffer(size = 64, rgb = [0x2a, 0xab, 0xee]) {
 
 // Протокол v2 (spec 007, D-12): при первом создании корня web показывает
 // ключ восстановления нативным диалогом — сценарии его запоминают и закрывают
+// Протокол v2: звонок (и доставка по ключу доступа, а не по жетону) возможны
+// только между теми, кто уже переписывался в обе стороны, — собеседники
+// обмениваются ключами доступа (D-08). Сценариям звонков нужен этот шаг перед
+// первым вызовом; в v1 он безвреден
+export async function exchangeMessages(aPage, aAddress, bPage, bAddress, tag) {
+  const fromA = `hello-from-a-${tag}`;
+  const fromB = `hello-from-b-${tag}`;
+  await openPrivateChatStrict(aPage, bAddress);
+  await sendText(aPage, fromA);
+  await openPrivateChatStrict(bPage, aAddress);
+  await findMessage(bPage, fromA).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await sendText(bPage, fromB);
+  await findMessage(aPage, fromB).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Настройки → Устройства (экран `SettingsActiveSessions`)
+export async function openDevicesScreen(page) {
+  await page.getByRole('button', { name: 'Open menu' }).first().click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Devices' }).click();
+  const screen = page.locator('.SettingsActiveSessions');
+  await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  return screen;
+}
+
+// Из настроек — обратно к списку чатов
+export async function closeSettings(page) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await page.locator('#telegram-search-input').isVisible()) return;
+    // eslint-disable-next-line no-await-in-loop
+    await page.keyboard.press('Escape');
+    // eslint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(500);
+  }
+  throw new Error('не удалось вернуться из настроек к списку чатов');
+}
+
+// Протокол v2 включён по умолчанию (T135): второе устройство аккаунта обязано
+// быть привязано (LINK-1 v2) — без линковки оно не входит в журнал устройств и
+// ничего не получает. Оба устройства открывают Настройки → Устройства, коды
+// сверки совпадают, старое подтверждает перенос; ждём подъёма v2 на новом
+const LINK_DEVICE_TIMEOUT_MS = 90000;
+
+export async function linkSecondDevice(oldPage, newPage) {
+  const newScreen = await openDevicesScreen(newPage);
+  await newScreen.getByText(/Waiting for your other device/)
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const oldScreen = await openDevicesScreen(oldPage);
+  const pendingText = newScreen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const newCode = (await pendingText.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
+  const offerItem = oldScreen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const oldCode = (await offerItem.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  assert.equal(oldCode, newCode, 'коды сверки на устройствах не совпали');
+  const isLinked = newPage.waitForEvent('console', {
+    predicate: (message) => message.text().includes('[parvane] v2: готов'),
+    timeout: LINK_DEVICE_TIMEOUT_MS,
+  });
+  await offerItem.locator('.ListItem-button').click();
+  const transferButton = oldPage.getByRole('button', { name: 'Transfer', exact: true });
+  await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await transferButton.click();
+  await oldPage.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await isLinked;
+  await closeSettings(newPage);
+  await closeSettings(oldPage);
+}
+
+const recoveryKeyDialog = (page) => page.locator('.Modal .modal-dialog')
+  .filter({ hasText: /recovery key|ключ восстановления/i });
+
+// Диалог ключа восстановления перекрывает интерфейс — обработчик закрывает его
+// перед любым действием Playwright, когда бы он ни появился
+export async function autoDismissRecoveryKeyDialog(page) {
+  await page.addLocatorHandler(recoveryKeyDialog(page), async (dialog) => {
+    await dialog.getByRole('button', { name: 'OK' }).click();
+  });
+}
+
 export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
   const dialog = page.locator('.Modal .modal-dialog').filter({ hasText: /recovery key|ключ восстановления/i });
   try {

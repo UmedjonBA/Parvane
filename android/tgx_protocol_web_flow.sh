@@ -34,9 +34,10 @@ wait_log "$A/td/log.txt" "E2E-устройство готово" 90 && ok "alice
 stop_pid "$AP"
 
 # X как устройство alice (сессия подкладывается — экран пароля роняет qemu), v2 выключен
-AVD="${AVD:-parvane33}" WAIT_SECS=20 "$HERE/tgx_session_flow.sh" "$OUT/session" alice@local "$PV_PASSWORD" >"$OUT/session-flow.log" 2>&1
+# файл-флагом parvane-proto-v1 (v2 включён по умолчанию, T135)
+TGX_PROTO_V1=1 AVD="${AVD:-parvane33}" WAIT_SECS=20 "$HERE/tgx_session_flow.sh" "$OUT/session" alice@local "$PV_PASSWORD" >"$OUT/session-flow.log" 2>&1
 grep -q "сессия поднята (ядро)" "$OUT/session-flow.log" && ok "X: сессия alice поднята" || { bad "X: сессия не поднялась (см. $OUT/session-flow.log)"; stack_stop; finish "TGX PROTO web2-android1"; }
-ad shell rm -f /data/local/tmp/parvane-proto-v2 /data/local/tmp/parvane-e2e-cmd
+ad shell rm -f /data/local/tmp/parvane-e2e-cmd
 x_force_stop $PKG; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1
 xlog "сессия поднята" 60 && ok "X перезапущен" || bad "X не поднял сессию после перезапуска"
 sleep 8
@@ -62,6 +63,7 @@ ad logcat -d -v time > "$OUT/logcat.txt"; ad exec-out screencap -p > "$OUT/final
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "X: краш (AndroidRuntime)" || ok "X без крашей"
 grep -aqE "запись не открыта|E2E не удался" "$OUT/logcat.txt" && bad "сбои E2E в logcat" || ok "сбоев E2E нет"
 pkill -P "$WEB_PID" 2>/dev/null; kill "$WEB_PID" 2>/dev/null; pkill -f "vite preview --host 127.0.0.1 --port $WEB_PORT" 2>/dev/null
+ad shell rm -f /data/local/tmp/parvane-proto-v1
 stack_stop
 echo "STACK_SB=$SB OUT=$OUT"
 finish "TGX PROTO web2-android1"

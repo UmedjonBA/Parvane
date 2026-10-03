@@ -4,7 +4,7 @@
 #   desktop2-android1 — bob desktop на v2 (PARVANE_PROTO_V2=1), alice — X на v1
 #                       (флаг v2 выключен): у alice нет журнала устройств v2 →
 #                       bob шлёт по v1 (D-13), текст в обе стороны, v2 не задействован;
-#   desktop2-android2 — оба на v2: X с флагом (/data/local/tmp/parvane-proto-v2,
+#   desktop2-android2 — оба на v2: X без флага v1 (/data/local/tmp/parvane-proto-v1,
 #                       debug) и JWT с claim dev → v2-сессия шва (устройство,
 #                       журнал, ключ восстановления), bob → X по v2, X → bob по v2,
 #                       незнакомый X вид (контакт) → TdApi.MessageUnsupported.
@@ -41,7 +41,7 @@ wait_log "$SB/identity.log" "Identity шард запущен" 60 || bad "identi
 wait_log "$SB/messenger.log" "Messenger шард запущен" 60 || bad "messenger не поднялся"
 A="$SB/alice"; B="$SB/bob"; BL="$B/td/log.txt"
 # alice регистрируется десктопом на v1 (журнала устройств v2 у неё не будет) и гасится
-AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
+AP=$(start_client "$A" alice@local PARVANE_PROTO_V2=0 PARVANE_NO_LINK_OFFER=1)
 wait_log "$A/td/log.txt" "E2E-устройство готово" 90 && ok "alice зарегистрирована (desktop v1)" || bad "alice не поднялась"
 stop_pid "$AP"
 BP=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
@@ -49,14 +49,15 @@ wait_log "$BL" "v2: готов" 90 && ok "bob: v2-сессия desktop гото�
 
 # X как устройство alice (сессия подкладывается — экран пароля роняет qemu)
 [ "$PAIR" = "desktop2-android2" ] && V2=1 || V2=0
-AVD="${AVD:-parvane33}" WAIT_SECS=20 "$HERE/tgx_session_flow.sh" "$OUT/session" alice@local "$PV_PASSWORD" >"$OUT/session-flow.log" 2>&1
+TGX_PROTO_V1=$((1 - V2)) AVD="${AVD:-parvane33}" WAIT_SECS=20 "$HERE/tgx_session_flow.sh" "$OUT/session" alice@local "$PV_PASSWORD" >"$OUT/session-flow.log" 2>&1
 grep -q "сессия поднята (ядро)" "$OUT/session-flow.log" && ok "X: сессия alice поднята" || { bad "X: сессия не поднялась (см. $OUT/session-flow.log)"; stop_pid "$BP"; stack_stop; finish "TGX PROTO $PAIR"; }
 if [ "$V2" = 1 ]; then
   # v2 требует JWT с claim dev: перевыпуск под device_id ядра X (как FAIL-1 в tgx_conformance_flow.sh)
   # JWT X уже с claim dev (tgx_session_flow.sh задаёт device_id заранее) — v2 его требует
-  echo 1 > "$OUT/flag"; ad push "$OUT/flag" /data/local/tmp/parvane-proto-v2 >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-proto-v2
+  # v2 включён по умолчанию (T135); остаться на v1 — файл-флаг parvane-proto-v1
+  ad shell rm -f /data/local/tmp/parvane-proto-v1
 else
-  ad shell rm -f /data/local/tmp/parvane-proto-v2
+  echo 1 > "$OUT/flag"; ad push "$OUT/flag" /data/local/tmp/parvane-proto-v1 >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-proto-v1
 fi
 ad shell rm -f /data/local/tmp/parvane-e2e-cmd # команда прошлого прогона (root-файл) выполнилась бы при старте
 x_force_stop $PKG; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1
@@ -188,7 +189,7 @@ fi
 ad logcat -d -v time > "$OUT/logcat.txt"; ad exec-out screencap -p > "$OUT/final.png"
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "X: краш (AndroidRuntime)" || ok "X без крашей"
 grep -aqE "запись не открыта|E2E не удался" "$OUT/logcat.txt" "$BL" && bad "сбои записей/E2E в логах" || ok "сбоев записей v2/E2E нет"
-ad shell rm -f /data/local/tmp/parvane-proto-v2
+ad shell rm -f /data/local/tmp/parvane-proto-v1
 stop_pid "$BP"; stack_stop
 echo "STACK_SB=$SB OUT=$OUT"
 finish "TGX PROTO $PAIR"

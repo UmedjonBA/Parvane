@@ -55,9 +55,13 @@ wait_log "$L2" "входящее msg [0-9a-f-]+ \(bob@local\): после-сбр
 P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
 wait_log "$L1" "авторизация отклонена .*устройство отозвано" 90 \
   && ok "alice1: прежнее устройство отозвано сбросом личности" || bad "alice1 по-прежнему входит"
+# В каталоге v1 — только устройство новой личности (его v1-бандл принят как
+# бандл устройства журнала v2, T146); прежнее удалено и в список v1-устройств
+# новой личности не попадёт
 N=$(sqlite3 "$SB/identity.db" "SELECT COUNT(*) FROM device_keys WHERE username='alice@local';")
-[ "$N" = "0" ] && ok "каталог v1: прежнее устройство удалено (в список v1-устройств новой личности не попадёт)" \
-  || bad "device_keys alice: $N"
+OLD=$(sqlite3 "$SB/identity.db" "ATTACH '$SB/identity.db-v2.db' AS v2; SELECT COUNT(*) FROM device_keys k WHERE k.username='alice@local' AND k.device_id NOT IN (SELECT device_id FROM v2.device_state WHERE user='alice@local' AND revoked=0);")
+[ "$N" -le 1 ] && [ "$OLD" = "0" ] && ok "каталог v1: прежнее устройство удалено (устройств: $N, вне журнала v2: 0)" \
+  || bad "device_keys alice: $N (вне журнала v2: $OLD)"
 grep -q "список v1-устройств опубликован" "$L2" && bad "новая личность внесла потерянное устройство в список v1-устройств" \
   || ok "список v1-устройств новой личности пуст"
 sleep 3

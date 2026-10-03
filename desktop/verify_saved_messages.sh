@@ -9,10 +9,18 @@ stack_start "$SB"
 STAMP="$(date +%s)"
 A="$SB/devA"; B="$SB/devB"; mkdir -p "$A/td" "$B/td"
 # B входит первым (публикует устройство), без автосенда
-BP=$(start_client "$B" alice@local)
+BP=$(start_client "$B" alice@local "${PV_DEV_OLD[@]}")
 wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "B: устройство не готово"
+if is_v2; then
+  # v2 (по умолчанию, T135/T147): A — второе устройство, сначала привязывается
+  # грантом линковки; «Избранное» идёт по v2 копиями своим устройствам журнала
+  wait_log "$B/td/log.txt" "v2: готов" 60 || bad "B: v2 не поднялся"
+  AP=$(start_client "$A" alice@local "${PV_DEV_NEW[@]}")
+  wait_linked "$A/td/log.txt" && ok "A привязан грантом линковки" || bad "A не привязан"
+  stop_pid "$AP"
+fi
 # A входит и шлёт САМ СЕБЕ (alice@local → alice@local)
-AP=$(start_client "$A" alice@local PARVANE_AUTOSEND="alice@local:saved-$STAMP")
+AP=$(start_client "$A" alice@local "${PV_DEV_NEW[@]}" PARVANE_AUTOSEND="alice@local:saved-$STAMP")
 wait_log "$A/td/log.txt" "отправлено msg .*alice@local" 40 && ok "A отправил в Избранное" || bad "A не отправил себе"
 # B должен получить копию (сообщение самому себе) в self-диалог
 wait_log "$B/td/log.txt" "saved-$STAMP" 40 && ok "B получил Избранное с устройства A" || bad "B НЕ получил Избранное (кросс-девайс не работает)"

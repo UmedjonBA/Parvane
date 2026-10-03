@@ -41,12 +41,13 @@ BP=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 "PAR
 wait_log "$AL" "входящее msg [0-9a-f-]+ \(bob@local\): до-линковки-$S" 90 && ok "alice-desktop получила текст bob по v2" || bad "alice-desktop не получила текст bob"
 wait_log "$AL" "группа v2 '$G' создана: v2g:[0-9a-f]{32}" 60 && ok "alice-desktop: группа v2 создана" || bad "alice-desktop: группа v2 не создана"
 
-# X как устройство alice: сессия подкладывается (экран пароля роняет qemu), сначала БЕЗ флага v2
-AVD="${AVD:-parvane33}" WAIT_SECS=20 "$HERE/tgx_session_flow.sh" "$OUT/session" alice@local "$PV_PASSWORD" >"$OUT/session-flow.log" 2>&1
+# X как устройство alice: сессия подкладывается (экран пароля роняет qemu), сначала на v1
+# (v2 включён по умолчанию, T135 — на v1 держит файл-флаг parvane-proto-v1)
+TGX_PROTO_V1=1 AVD="${AVD:-parvane33}" WAIT_SECS=20 "$HERE/tgx_session_flow.sh" "$OUT/session" alice@local "$PV_PASSWORD" >"$OUT/session-flow.log" 2>&1
 grep -q "сессия поднята (ядро)" "$OUT/session-flow.log" && ok "X: сессия alice поднята" || { bad "X: сессия не поднялась (см. $OUT/session-flow.log)"; stop_pid "$AP"; stop_pid "$BP"; stack_stop; finish "TGX PROTO LINK"; }
 
-# Флаг v2 и перезапуск: журнал устройств у аккаунта уже есть → нужна линковка
-echo 1 > "$OUT/flag"; ad push "$OUT/flag" /data/local/tmp/parvane-proto-v2 >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-proto-v2
+# Флаг v1 снят, перезапуск: журнал устройств у аккаунта уже есть → нужна линковка
+ad shell rm -f /data/local/tmp/parvane-proto-v1
 ad shell rm -f /data/local/tmp/parvane-e2e-cmd
 x_force_stop $PKG; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1
 xlog "сессия поднята" 60 && ok "X перезапущен с флагом v2" || bad "X не поднял сессию после перезапуска"
@@ -77,7 +78,7 @@ xlog "v2 ← входящее msg [0-9a-f-]+ \(text\)" 90 && ok "X (новое �
 ad logcat -d -v time > "$OUT/logcat.txt"; ad exec-out screencap -p > "$OUT/final.png"
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "X: краш (AndroidRuntime)" || ok "X без крашей"
 grep -aqE "запись не открыта|E2E не удался" "$OUT/logcat.txt" "$AL" "$BL" && bad "сбои записей/E2E в логах" || ok "сбоев записей v2/E2E нет"
-ad shell rm -f /data/local/tmp/parvane-proto-v2
+ad shell rm -f /data/local/tmp/parvane-proto-v1
 stop_pid "$AP"; stop_pid "$BP"; stack_stop
 echo "STACK_SB=$SB OUT=$OUT"
 finish "TGX PROTO LINK"

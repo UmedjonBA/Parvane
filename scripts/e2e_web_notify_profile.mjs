@@ -19,6 +19,7 @@ import {
   preparePage,
   relogin,
   sendText,
+  linkSecondDevice,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-notify-e2e-password';
@@ -333,6 +334,9 @@ try {
 
   // ── dev2 (чистый контекст, тот же аккаунт) видит мут из sync ──────────────
   const aliceDev2 = await preparePage(aliceDev2Context, alice, PASSWORD);
+  // v2 (по умолчанию, T135): мут едет журналом личного состояния — его ключ
+  // второе устройство получает привязкой (LINK-1 v2)
+  await linkSecondDevice(aliceDev1.page, aliceDev2.page);
   await waitMuted(aliceDev2.page, SIBLING_SYNC_TIMEOUT_MS);
   console.log('OK: dev2 получил мут с первого устройства');
 

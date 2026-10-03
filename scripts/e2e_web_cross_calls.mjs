@@ -79,7 +79,7 @@ try {
   const bob = `ccb-${suffix}@local`;
 
   const aliceSession = await preparePage(aliceContext, alice, PASSWORD, {
-    seedLocalStorage: isV2 ? { 'parvane:proto': 'v2' } : {},
+    seedLocalStorage: { 'parvane:proto': isV2 ? 'v2' : 'v1' },
   });
   if (isV2) await dismissRecoveryKeyDialog(aliceSession.page);
   const { page } = aliceSession;
@@ -91,7 +91,7 @@ try {
     PARVANE_REAL_MEDIA: '1',
     PARVANE_NO_LINK_OFFER: '1',
     ...(isV2 ? { PARVANE_PROTO_V2: '1', PARVANE_AUTOSEND_V2: `${alice}:${hello}` }
-      : { PARVANE_AUTOSEND: `${alice}:${hello}` }),
+      : { PARVANE_PROTO_V2: '0', PARVANE_AUTOSEND: `${alice}:${hello}` }),
   });
   await waitDesktopLog(bobWorkdir, isV2 ? /v2: готов/ : /E2E-устройство готово/, 90000, desktop);
   // Переписка до звонка: чат и ключи собеседника известны обеим сторонам
@@ -121,7 +121,7 @@ try {
     PARVANE_REAL_MEDIA: '1',
     PARVANE_NO_LINK_OFFER: '1',
     PARVANE_AUTOCALL: alice,
-    ...(isV2 ? { PARVANE_PROTO_V2: '1' } : {}),
+    PARVANE_PROTO_V2: isV2 ? '1' : '0',
   });
   await waitDesktopLog(bobWorkdir, /AUTOCALL → /, 90000, desktop, { since: restartFrom });
   await page.getByText('is calling you...', { exact: true }).waitFor({ state: 'visible', timeout: CALL_TIMEOUT_MS });

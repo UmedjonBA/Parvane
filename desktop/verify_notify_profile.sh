@@ -7,6 +7,9 @@
 #   3) bob резолвит alice через identity и видит bio/цвет/личный канал
 #      (personal_channel = group_id группы, в которой он состоит); телефон
 #      identity отдаёт только владельцу (P-19) — его видит alice(dev2), не bob.
+# Протокол v2 (по умолчанию, T135): dev2 привязывается грантом линковки от dev1;
+# муты приходят журналом личного состояния (STATE-2), группа v2 — пересылкой
+# ключей своему новому устройству (LINK-1 п. 9). PV_PROTO=v1 — прежний путь.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 SB="${SCRATCH:-$(mktemp -d /tmp/pv-notify.XXXXXX)}"
@@ -24,12 +27,12 @@ wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob:
 stop_pid "$BP"
 
 # alice dev1: группа через ~4с, профиль через 8с, мут bob + группы через 11с
-P1=$(start_client "$A1" alice@local PARVANE_NO_LINK_OFFER=1 \
+P1=$(start_client "$A1" alice@local "${PV_DEV_OLD[@]}" \
   PARVANE_AUTOGROUP="$GNAME:bob@local" \
   PARVANE_AUTOPROFILE="bio=$BIO;phone=$PHONE;color=5;channel=$GNAME:8" \
   PARVANE_AUTOMUTE="bob@local,group:$GNAME:11")
-wait_log "$A1/td/log.txt" "группа '$GNAME' создана" 40 && ok "alice создала группу" || bad "alice не создала группу"
-GID=$(grep -a "группа '$GNAME' создана" "$A1/td/log.txt" | grep -oE '[0-9a-f-]{36}' | head -1)
+wait_log "$A1/td/log.txt" "группа (v2 )?'$GNAME' создана" 40 && ok "alice создала группу" || bad "alice не создала группу"
+GID=$(group_gid "$A1/td/log.txt" "$GNAME")
 wait_log "$A1/td/log.txt" "autoprofile применён" 40 && ok "alice: профиль отправлен" || bad "alice: autoprofile не сработал"
 wait_log "$A1/td/log.txt" "профиль обновлён .*personal_channel" 20 && ok "alice: identity принял профиль с личным каналом" || bad "alice: identity не подтвердил профиль"
 wait_log "$A1/td/log.txt" "automute → bob@local" 40 && ok "alice: bob замучен" || bad "alice: мут bob не сработал"
@@ -37,7 +40,8 @@ wait_log "$A1/td/log.txt" "automute → group:$GNAME" 20 && ok "alice: груп�
 sleep 2
 
 # alice dev2: чистое второе устройство → sync отдаёт notify_settings
-P2=$(start_client "$A2" alice@local PARVANE_NO_LINK_OFFER=1)
+P2=$(start_client "$A2" alice@local "${PV_DEV_NEW[@]}")
+if is_v2; then wait_linked "$A2/td/log.txt" && ok "dev2 привязан грантом линковки" || bad "dev2 не привязан"; fi
 wait_log "$A2/td/log.txt" "уведомления с другого устройства: bob@local mutedUntil=2147483647" 60 \
   && ok "dev2: мут bob долетел (навсегда)" || bad "dev2: мут bob не долетел"
 wait_log "$A2/td/log.txt" "уведомления с другого устройства: $GID mutedUntil=2147483647" 30 \

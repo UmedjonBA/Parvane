@@ -44,7 +44,7 @@ echo "── ALICE ──"; grep -iE "Parvane: (AUTOGROUP|группа|отпр�
 echo "── BOB ──";   grep -iE "Parvane: (группа синт|групповое|НЕ расшифров)" "$B_LOG" 2>/dev/null | head
 echo "──────────"
 
-GID=$(grep -a "группа '$GNAME' создана" "$A_LOG" 2>/dev/null | grep -oE '[0-9a-f-]{36}' | head -1)
+GID=$(group_gid "$A_LOG" "$GNAME")
 [ -n "$GID" ] && ok "alice создала группу ($GID)" || bad "alice не создала группу"
 grep -qa "группа синтезирована $GID" "$B_LOG" 2>/dev/null && ok "bob подхватил группу" || bad "bob не подхватил группу"
 grep -qa "отправлено msg .* \[E2E\]" "$A_LOG" 2>/dev/null && ok "alice шифровала групповое (send [E2E])" || bad "нет [E2E] у alice"
@@ -55,22 +55,32 @@ grep -qa "групповое E2E НЕ расшифровано" "$B_LOG" 2>/dev/
   && bad "у bob были нерасшифрованные групповые (гонка SKDM?)" \
   || ok "у bob нет нерасшифрованных групповых"
 
-# ГЛАВНОЕ: плейнтекст секрета НЕ в messenger.db
-if grep -qa "$SECRET" "$SB/messenger.db" 2>/dev/null; then
-  bad "ПЛЕЙНТЕКСТ '$SECRET' найден в messenger.db — НЕ зашифровано!"
+# ГЛАВНОЕ: плейнтекст секрета НЕ в БД messenger (v1 и v2)
+if grep -qa "$SECRET" "$SB"/messenger.db* 2>/dev/null; then
+  bad "ПЛЕЙНТЕКСТ '$SECRET' найден в БД messenger — НЕ зашифровано!"
 else
-  ok "плейнтекст ОТСУТСТВУЕТ в messenger.db (E2E групп держится)"
+  ok "плейнтекст ОТСУТСТВУЕТ в БД messenger (E2E групп держится)"
 fi
-# content kind в БД — group_encrypted (не открытый text)
-KINDS=$(sqlite3 "$SB/messenger.db" "SELECT DISTINCT kind FROM messages;" 2>/dev/null | tr '\n' ' ')
-echo "kinds в БД: $KINDS"
-echo "$KINDS" | grep -qw group_encrypted && ok "в БД есть group_encrypted" || bad "нет group_encrypted в БД"
-# SKDM sealed: раздача ключа — kind=encrypted с пустым from_user
-SKDM_FROM=$(sqlite3 "$SB/messenger.db" "SELECT DISTINCT from_user FROM messages WHERE kind='encrypted';" 2>/dev/null)
-if [ -z "$SKDM_FROM" ]; then
-  ok "SKDM sealed: from_user пуст у encrypted (раздача ключа скрыта)"
+if is_v2; then
+  # Группа v2: сообщение — групповой конверт эпохи в журналах v2, в таблицы v1
+  # не попадает ничего; автор серверу не виден (GSEAL-1)
+  [[ "$GID" == v2g:* ]] && ok "группа создана по v2 ($GID)" || bad "группа создана не по v2 ($GID)"
+  N1=$(sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM messages;" 2>/dev/null)
+  [ "${N1:-0}" = 0 ] && ok "в таблице сообщений v1 пусто (всё ушло по v2)" || bad "в messages v1 записей: $N1"
+  NG=$(sqlite3 "$SB/messenger.db-v2.db" "SELECT COUNT(*) FROM group_state_log;" 2>/dev/null)
+  [ "${NG:-0}" -ge 1 ] && ok "журнал группы v2 на сервере ($NG записей)" || bad "журнала группы v2 на сервере нет"
 else
-  bad "from_user НЕ пуст у encrypted: '$SKDM_FROM'"
+  # content kind в БД — group_encrypted (не открытый text)
+  KINDS=$(sqlite3 "$SB/messenger.db" "SELECT DISTINCT kind FROM messages;" 2>/dev/null | tr '\n' ' ')
+  echo "kinds в БД: $KINDS"
+  echo "$KINDS" | grep -qw group_encrypted && ok "в БД есть group_encrypted" || bad "нет group_encrypted в БД"
+  # SKDM sealed: раздача ключа — kind=encrypted с пустым from_user
+  SKDM_FROM=$(sqlite3 "$SB/messenger.db" "SELECT DISTINCT from_user FROM messages WHERE kind='encrypted';" 2>/dev/null)
+  if [ -z "$SKDM_FROM" ]; then
+    ok "SKDM sealed: from_user пуст у encrypted (раздача ключа скрыта)"
+  else
+    bad "from_user НЕ пуст у encrypted: '$SKDM_FROM'"
+  fi
 fi
 grep -qiE "Fatal|Unexpected in " "$A_LOG" "$B_LOG" 2>/dev/null && bad "фатальная ошибка в логе" || ok "без фатальных"
 

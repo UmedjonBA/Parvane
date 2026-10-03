@@ -5,6 +5,12 @@
 // забаненного, недействительной, исчерпанной и отозванной ссылки; отзыв,
 // раздел «Revoked Links» и удаление; обычный участник управления не видит.
 import assert from 'node:assert/strict';
+
+// Сценарий проверяет модель ссылок v1-шарда (токены `#+<hex>`, состояния
+// active/expired/exhausted/revoked, список отозванных, declined, записи
+// group_invites) — клиенты идут по v1. Ссылки и заявки группы v2 —
+// scripts/e2e_protocol_groups.mjs (пара web2-groups)
+process.env.PARVANE_E2E_PROTO = 'v1';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 

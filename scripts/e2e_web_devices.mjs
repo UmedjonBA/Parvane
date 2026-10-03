@@ -21,6 +21,7 @@ import {
   preparePage,
   sendText,
   terminateSessionWithPassword,
+  linkSecondDevice,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-devices-e2e-password';
@@ -104,6 +105,9 @@ try {
   const aliceSession = await preparePage(aliceContext, alice, PASSWORD);
   const bobDevice1 = await preparePage(bobDevice1Context, bob, PASSWORD);
   const bobDevice2 = await preparePage(bobDevice2Context, bob, PASSWORD);
+  // v2 (по умолчанию, T135): второе устройство входит в журнал устройств
+  // только привязкой — без неё ему ничего не доставляется
+  await linkSecondDevice(bobDevice1.page, bobDevice2.page);
 
   // Отправитель обнаруживает второе устройство после истечения TTL кэша списка
   await aliceSession.page.waitForTimeout(DEVICE_LIST_TTL_WAIT_MS);

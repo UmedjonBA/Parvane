@@ -11,6 +11,7 @@ import {
   openPrivateChat,
   preparePage,
   sendText,
+  autoDismissRecoveryKeyDialog,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-content-ux-e2e-password';
@@ -52,6 +53,7 @@ try {
 
   // ── Кросс-таб: вторая вкладка того же пользователя видит черновик ──────────
   const aliceTab2 = await aliceContext.newPage();
+  await autoDismissRecoveryKeyDialog(aliceTab2); // v2 по умолчанию (T135)
   await aliceTab2.goto(aliceSession.page.url(), { waitUntil: 'domcontentloaded' });
   // Вторая вкладка стартует из кэша; черновик уже в localStorage
   const passwordScreen = aliceTab2.locator('.Transition_slide-active > #auth-password-form');

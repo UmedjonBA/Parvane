@@ -31,6 +31,9 @@ const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
 const bobContext = await browser.newContext();
 
+// Сессии для разбора падения (журнал провайдера — session.logs)
+const diagSessions = {};
+
 try {
   const suffix = `${Date.now()}-${process.pid}`;
   const alice = `sync-alice-${suffix}@local`;
@@ -41,6 +44,7 @@ try {
 
   const aliceSession = await preparePage(aliceContext, alice);
   const bobSession = await preparePage(bobContext, bob);
+  Object.assign(diagSessions, { alice: aliceSession, bob: bobSession });
   await openPrivateChat(aliceSession.page, bob);
   await openPrivateChat(bobSession.page, alice);
 
@@ -188,6 +192,13 @@ try {
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 
   console.log('OK: two-browser reconnect, mutations, receipts, presence, typing, multi-forward and search');
+} catch (err) {
+  const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
+  for (const [who, session] of Object.entries(diagSessions)) {
+    await session.page.screenshot({ path: `${dir}sync-${who}.png` }).catch(() => {});
+    console.error(`журнал ${who}:\n${session.logs.slice(-60).join('\n')}`);
+  }
+  throw err;
 } finally {
   await aliceContext.close();
   await bobContext.close();
