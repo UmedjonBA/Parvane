@@ -718,9 +718,15 @@ struct DeviceCopy {
 
 // Зашифровать inner для всех устройств контакта (кроме skipDeviceId). Вне лока
 // сеть (refresh), под локом — шифрование.
+std::string stripB64Padding(std::string s) {
+    while (!s.empty() && s.back() == '=') s.pop_back();
+    return s;
+}
+
 std::vector<DeviceCopy> encryptForDevices(const std::string &contact, const std::string &innerJson,
                                           ITransport &t, const std::string &token,
-                                          const std::optional<std::string> &skipDeviceId) {
+                                          const std::optional<std::string> &skipDeviceId,
+                                          const DeviceFilter *only = nullptr) {
     refreshContactDevices(contact, t, token, false);
     std::vector<DeviceCopy> out;
     std::lock_guard<std::mutex> lk(g_mu);
@@ -732,6 +738,12 @@ std::vector<DeviceCopy> encryptForDevices(const std::string &contact, const std:
     for (const auto &[devId, info] : it->second) {
         if (skipDeviceId && devId == *skipDeviceId) {
             continue;
+        }
+        if (only) {
+            const auto want = only->find(devId);
+            if (want == only->end() || want->second != stripB64Padding(info.identity)) {
+                continue;
+            }
         }
         auto *sess = getSession(info.identity);
         if (!sess) {
@@ -990,6 +1002,80 @@ std::optional<Sealed> sealForAddress(const std::string &to, const std::string &c
         for (const auto &c : selfCopies) {
             out.copies.push_back({std::string(), c.signing, c.deviceId, c.ciphertext, c.ctype});
         }
+    }
+    return out;
+}
+
+std::optional<Sealed> sealLegacyCopies(const std::string &to, const std::string &contentJson,
+                                       ITransport &t, const std::string &token,
+                                       const DeviceFilter &peerDevices,
+                                       const DeviceFilter &ownDevices) {
+    std::string self, identity, signing, ownDevice;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_account) {
+            return std::nullopt;
+        }
+        self = g_self;
+        identity = g_identityB64;
+        signing = g_signingB64;
+        ownDevice = g_deviceId;
+    }
+    std::string innerStr;
+    try {
+        innerStr = json{{"from", self}, {"content", json::parse(contentJson)}}.dump();
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+    Sealed out;
+    if (to != self && !peerDevices.empty()) {
+        for (const auto &c : encryptForDevices(to, innerStr, t, token, std::nullopt, &peerDevices)) {
+            out.copies.push_back({to, std::string(), c.deviceId, c.ciphertext, c.ctype});
+        }
+    }
+    if (!ownDevices.empty()) {
+        for (const auto &c : encryptForDevices(self, innerStr, t, token, ownDevice, &ownDevices)) {
+            out.copies.push_back({std::string(), c.signing, c.deviceId, c.ciphertext, c.ctype});
+        }
+    }
+    if (out.copies.empty()) {
+        return std::nullopt;
+    }
+    out.content = {
+        {"kind", "encrypted"},
+        {"ciphertext", ""},
+        {"ctype", 0},
+        {"sender_identity", identity},
+        {"sender_signing_key", signing},
+    };
+    return out;
+}
+
+bool isForeignLegacyCopy(const json &content) {
+    return content.is_object() && content.value("kind", std::string()) == "encrypted"
+        && content.value("ciphertext", std::string("x")).empty()
+        && !content.value("sender_identity", std::string()).empty();
+}
+
+json ownDeviceCatalog(ITransport &t, const std::string &token) {
+    json out = json::array();
+    json resp;
+    try {
+        resp = json::parse(t.request(topics::IdentityDeviceList, json{{"token", token}}.dump(), 5000));
+    } catch (const std::exception &) {
+        return out;
+    }
+    if (!resp.is_object() || !resp.value("ok", false) || !resp.contains("devices")
+        || !resp["devices"].is_array()) {
+        return out;
+    }
+    for (const auto &d : resp["devices"]) {
+        if (!d.is_object()) {
+            continue;
+        }
+        out.push_back({{"deviceId", d.value("device_id", std::string())},
+                       {"identity", d.value("identity_key", std::string())},
+                       {"signing", d.value("signing_key", std::string())}});
     }
     return out;
 }

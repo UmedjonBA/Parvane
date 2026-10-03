@@ -222,17 +222,13 @@ public:
 
 	void addRemoteIce(const std::string &candidate) override {
 		if (!_pc || candidate.empty()) return;
-		try {
-			const auto j = json::parse(candidate);
-			webrtc::SdpParseError err;
-			std::unique_ptr<webrtc::IceCandidateInterface> c(
-				webrtc::CreateIceCandidate(
-					j.value("mid", std::string()),
-					j.value("idx", 0),
-					j.value("sdp", std::string()), &err));
-			if (c) _pc->AddIceCandidate(c.get());
-		} catch (...) {
-		}
+		// CALL-1: понимаем канонический вид и прежние виды web и desktop.
+		const auto parsed = parvane::parseIceCandidate(candidate);
+		if (!parsed) return;
+		webrtc::SdpParseError err;
+		std::unique_ptr<webrtc::IceCandidateInterface> c(
+			webrtc::CreateIceCandidate(parsed->mid, parsed->mlineIndex, parsed->sdp, &err));
+		if (c) _pc->AddIceCandidate(c.get());
 	}
 
 	void setWantVideo(bool on) override { _wantVideo = on; }
@@ -283,9 +279,11 @@ private:
 			if (!c) return;
 			std::string sdp;
 			c->ToString(&sdp);
-			const json j{ { "sdp", sdp }, { "mid", c->sdp_mid() },
-				{ "idx", c->sdp_mline_index() } };
-			if (_b->onLocalIce) _b->onLocalIce(j.dump());
+			// CALL-1: канонические поля + прежние имена для выпущенных клиентов.
+			if (_b->onLocalIce) {
+				_b->onLocalIce(parvane::iceCandidateJson(
+					{ sdp, c->sdp_mid(), c->sdp_mline_index() }));
+			}
 		}
 		void OnConnectionChange(
 				webrtc::PeerConnectionInterface::PeerConnectionState s) override {
@@ -357,9 +355,10 @@ private:
 		cricket::AudioOptions opts;
 		auto source = g.factory->CreateAudioSource(opts);
 		_track = g.factory->CreateAudioTrack("audio0", source.get());
-		webrtc::RtpTransceiverInit init;
-		init.stream_ids = { "stream0" };
-		_pc->AddTransceiver(_track, init);
+		// AddTrack, а не AddTransceiver: трансивер, созданный AddTransceiver, не
+		// привязывается к m-секции ВХОДЯЩЕГО оффера (JSEP) — отвечающая сторона
+		// давала answer с a=recvonly и свой звук не отправляла вовсе.
+		_pc->AddTrack(_track, { "stream0" });
 		// Видео (по запросу): камера → видео-трек. Нет камеры → recvonly (всё равно
 		// принимаем удалённое видео). _remoteVideoSink считает входящие кадры.
 		if (_wantVideo) {
@@ -371,9 +370,7 @@ private:
 			if (ok) {
 				_cameraSource = cam;
 				auto videoTrack = g.factory->CreateVideoTrack(cam, "video0");
-				webrtc::RtpTransceiverInit vinit;
-				vinit.stream_ids = { "stream0" };
-				_pc->AddTransceiver(videoTrack, vinit);
+				_pc->AddTrack(videoTrack, { "stream0" });
 				LOG(("Parvane: видео-трек добавлен (камера)"));
 			} else {
 				_pc->AddTransceiver(cricket::MediaType::MEDIA_TYPE_VIDEO);

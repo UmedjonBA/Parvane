@@ -1,6 +1,7 @@
 // Parvane fork: отображение содержимого v2 ↔ v1 (см. v2_content.h).
 #include "parvane/v2_content.h"
 
+#include "parvane/call.h"
 #include "parvane/poll.h"
 
 #include <openssl/evp.h>
@@ -120,13 +121,16 @@ json packToV2(const json &p) {
     if (p.contains("count") && p["count"].is_number()) o["count"] = p["count"];
     if (has(p, "key")) o["key"] = str(p, "key");
     if (has(p, "nonce")) o["nonce"] = str(p, "nonce");
+    if (has(p, "capability")) o["capability"] = str(p, "capability");
     return o;
 }
 
 std::optional<json> packFromV2(const json &p) {
     if (str(p, "file_id").empty()) return std::nullopt;
-    return json{{"file_id", str(p, "file_id")}, {"name", str(p, "name")},
-                {"count", p.value("count", 0)}, {"key", str(p, "key")}, {"nonce", str(p, "nonce")}};
+    json out{{"file_id", str(p, "file_id")}, {"name", str(p, "name")},
+             {"count", p.value("count", 0)}, {"key", str(p, "key")}, {"nonce", str(p, "nonce")}};
+    if (!str(p, "capability").empty()) out["capability"] = str(p, "capability");
+    return out;
 }
 
 // ── медиа ───────────────────────────────────────────────────────────────────
@@ -173,6 +177,8 @@ json mediaToV2(const json &c, const std::string &kind) {
     }
     if (has(c, "file_key")) m["file_key"] = str(c, "file_key");
     if (has(c, "file_nonce")) m["file_nonce"] = str(c, "file_nonce");
+    // Секрет скачивания блоба (T131, D-08): только в E2E-содержимом v2-чата.
+    if (has(c, "capability")) m["capability"] = str(c, "capability");
     if (has(c, "filename")) m["name"] = str(c, "filename");
     if (!str(c, "caption").empty()) m["caption"] = str(c, "caption");
     if (c.contains("entities") && c["entities"].is_array() && !c["entities"].empty()) {
@@ -214,6 +220,7 @@ json mediaFromV2(const json &m) {
     }
     if (!str(m, "file_key").empty()) c["file_key"] = str(m, "file_key");
     if (!str(m, "file_nonce").empty()) c["file_nonce"] = str(m, "file_nonce");
+    if (!str(m, "capability").empty()) c["capability"] = str(m, "capability");
     if (!str(m, "name").empty()) c["filename"] = str(m, "name");
     if (!str(m, "caption").empty()) c["caption"] = str(m, "caption");
     if (m.contains("caption_entities")) {
@@ -279,6 +286,90 @@ std::string uuidToB64(const std::string &uuid) {
         bytes.push_back(static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)));
     }
     return b64encode(bytes);
+}
+
+namespace {
+
+constexpr auto kReasonNormal = "HANGUP_REASON_NORMAL";
+constexpr auto kReasonDeclined = "HANGUP_REASON_DECLINED";
+constexpr auto kReasonBusy = "HANGUP_REASON_BUSY";
+constexpr auto kReasonMissed = "HANGUP_REASON_MISSED";
+constexpr auto kReasonFailed = "HANGUP_REASON_FAILED";
+
+// Поле proto3-JSON: движок отдаёт camelCase, принимает и snake_case.
+const json *field(const json &j, const char *camel, const char *snake) {
+    if (auto it = j.find(camel); it != j.end()) return &*it;
+    if (auto it = j.find(snake); it != j.end()) return &*it;
+    return nullptr;
+}
+
+} // namespace
+
+std::optional<json> callSignalToV2(const json &v1) {
+    if (!v1.is_object()) return std::nullopt;
+    const auto type = v1.value("type", std::string());
+    const auto callId = uuidToB64(v1.value("call_id", std::string()));
+    if (callId.empty()) return std::nullopt;
+    json out{{"call_id", callId}};
+    if (type == "invite") {
+        out["offer"] = {{"sdp", v1.value("sdp", std::string())}, {"video", v1.value("media", std::string()) == "video"}};
+    } else if (type == "answer") {
+        out["answer"] = {{"sdp", v1.value("sdp", std::string())}};
+    } else if (type == "ice") {
+        const auto cand = parseIceCandidate(v1.value("candidate", std::string()));
+        if (!cand) return std::nullopt;
+        out["ice"] = {{"candidate", cand->sdp}, {"sdp_mid", cand->mid}, {"sdp_mline_index", cand->mlineIndex}};
+    } else if (type == "reject") {
+        const auto reason = v1.contains("reason") && v1["reason"].is_string() ? v1["reason"].get<std::string>() : std::string();
+        out["hangup"] = {{"reason", reason == "busy" ? kReasonBusy
+            : (reason == "auth_failed" || reason == "media_failed") ? kReasonFailed : kReasonDeclined}};
+    } else if (type == "hangup") {
+        out["hangup"] = {{"reason", kReasonNormal}};
+    } else {
+        return std::nullopt; // групповые сигналы — v1-путём
+    }
+    return out;
+}
+
+std::optional<json> callSignalFromV2(const json &v2) {
+    if (!v2.is_object()) return std::nullopt;
+    const auto *id = field(v2, "callId", "call_id");
+    const auto callId = id && id->is_string() ? b64ToUuid(id->get<std::string>()) : std::nullopt;
+    if (!callId) return std::nullopt;
+    if (auto it = v2.find("offer"); it != v2.end() && it->is_object()) {
+        return json{{"type", "invite"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())},
+                    {"media", it->value("video", false) ? "video" : "audio"}};
+    }
+    if (auto it = v2.find("answer"); it != v2.end() && it->is_object()) {
+        return json{{"type", "answer"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())}};
+    }
+    if (auto it = v2.find("ice"); it != v2.end() && it->is_object()) {
+        IceCandidate c;
+        c.sdp = it->value("candidate", std::string());
+        if (c.sdp.empty()) return std::nullopt;
+        if (const auto *mid = field(*it, "sdpMid", "sdp_mid"); mid && mid->is_string()) c.mid = mid->get<std::string>();
+        if (const auto *idx = field(*it, "sdpMlineIndex", "sdp_mline_index"); idx && idx->is_number_integer()) c.mlineIndex = idx->get<int>();
+        return json{{"type", "ice"}, {"call_id", *callId}, {"candidate", iceCandidateJson(c)}};
+    }
+    if (auto it = v2.find("hangup"); it != v2.end() && it->is_object()) {
+        std::string reason;
+        if (auto r = it->find("reason"); r != it->end()) {
+            if (r->is_string()) {
+                reason = r->get<std::string>();
+            } else if (r->is_number_integer()) {
+                static const char *const kByNumber[] = {"", kReasonNormal, kReasonDeclined, kReasonBusy, kReasonMissed, kReasonFailed};
+                const auto n = r->get<int>();
+                if (n >= 0 && n < 6) reason = kByNumber[n];
+            }
+        }
+        if (reason == kReasonBusy) return json{{"type", "reject"}, {"call_id", *callId}, {"reason", "busy"}};
+        if (reason == kReasonDeclined || reason == kReasonMissed) {
+            return json{{"type", "reject"}, {"call_id", *callId}, {"reason", "declined"}};
+        }
+        if (reason == kReasonFailed) return json{{"type", "reject"}, {"call_id", *callId}, {"reason", "media_failed"}};
+        return json{{"type", "hangup"}, {"call_id", *callId}};
+    }
+    return std::nullopt; // ringing и неизвестное — клиенту не нужно
 }
 
 std::optional<std::string> b64ToUuid(const std::string &b64) {

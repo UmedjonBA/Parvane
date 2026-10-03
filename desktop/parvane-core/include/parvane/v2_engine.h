@@ -85,6 +85,15 @@ struct OutRequest {
 
 // C1-06: новый ключ восстановления (≥ 128 бит) — показать пользователю один раз.
 [[nodiscard]] std::string generateRecoveryKey();
+// Материал гранта линковки + копия корня под ключом восстановления (поле `rb`);
+// исходный материал при сбое.
+[[nodiscard]] std::string grantWithRootBackup(const std::string &material, const std::string &backup);
+// T130: корень (32 байта) из копии под ключом восстановления на устройстве
+// без журнала. Бросает EngineError (неверный ключ/копия).
+[[nodiscard]] std::string importRootBackupFor(const std::string &user, const std::string &blob,
+                                              const std::string &recoveryKey);
+// Копия корня из материала гранта ("" — гранта без копии).
+[[nodiscard]] std::string grantRootBackup(const std::string &material);
 
 // C2-01 (D-05): планировщик соединений анонимного канала (sans-IO, движок).
 // Соединение — одному получателю (пользователь/группа) и в серии ≤ 60 с с
@@ -150,6 +159,10 @@ public:
     std::size_t tokenResponse(const std::string &resp);
     // content — proto3-JSON parvane.msg.v2.Content; opId — UUID ("" — новый).
     // → массив запросов. Бросает EngineError (в т.ч. need).
+    // Сигнал личного звонка (D-08): proto3-JSON parvane.call.v2.CallSignal →
+    // массив запросов (оффер — call.ring_sealed, прочее — call.signal_sealed,
+    // анонимный канал). Бросает (need — как prepareDirect).
+    [[nodiscard]] json prepareCall(const std::string &peer, const json &signal);
     [[nodiscard]] json prepareDirect(const std::string &peer, const json &content,
                                      const std::string &opId);
     // Запись журнала инбокса (байты InboxRecord) → массив событий.
@@ -199,8 +212,62 @@ public:
     // Вступление по ссылке v2 → запрос group.join. Бросает.
     [[nodiscard]] json groupJoin(const std::string &url);
     // Устройства пользователя по журналу → {"v2":[…],"legacy":[…]}.
+    // + "legacySet" (список v1-устройств публиковался) и "legacyKeys"
+    // ([{deviceId, identity, signing}] — подписанный список, FR-058).
     [[nodiscard]] json logDevices(const std::string &user) const;
+    // Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): дальше —
+    // слепым жетоном. true — ключ был и сброшен (отправку стоит повторить).
+    bool deliveryKeyRejected(const std::string &peer);
+    // KEY-1 v2 (T129): принять смену корня собеседника (после предупреждения).
+    bool acceptRootChange(const std::string &user);
+    // T130: восстановление на новом устройстве по корню (32 байта) и ответу
+    // identity.device.log_sync с версии 0 → запросы. Бросает.
+    [[nodiscard]] json recoverWithRoot(const std::string &root32, const std::string &logResp, std::size_t otk);
+    // T130: сброс личности → {"requests":[…],"rootSecret":base64}; первый
+    // запрос — identity.root.rotate. Бросает.
+    [[nodiscard]] json resetIdentity(std::size_t otk);
+
+    // ── отзыв своего устройства (T128; D-11, D-12, D-16) ──
+    // Запись отзыва в журнале + ротации → {"requests":[…],"pendingKeyShares":
+    // [адрес…],"pendingEpochs":[hex…],"epochsNeedAdmin":[hex…],
+    // "sskRotationRequired":bool,"stateKeyVersion":n|null}. Первый запрос —
+    // запись журнала (обязателен). Бросает (в т.ч. need — добор данных).
+    [[nodiscard]] json revokeDevice(const std::string &deviceId);
+    // Отозвать ключ доступа у собеседника (FR-033; блокировка): новый ключ всем,
+    // кроме него → {"requests":[…],"pendingKeyShares":[…]}; пустой requests —
+    // ключа у собеседника не было. Бросает (в т.ч. need).
+    [[nodiscard]] json revokeContactAccess(const std::string &peer);
+    // Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+    [[nodiscard]] json shareDeliveryKey(const std::string &peer);
+    // T142: группы v2 — своим новым устройствам (JSON-массив запросов).
+    [[nodiscard]] json shareGroupsWithOwnDevices(const json &devices);
+    // Сменить SSK корнем (32 байта секрета) → запросы. Бросает.
+    [[nodiscard]] json rotateSsk(const std::string &root32);
+    // Свой SSK раскрыт отзывом державшего его устройства и ещё не сменён.
+    [[nodiscard]] bool ownSskExposed() const;
+
+    // ── эфемерные каналы: «печатает» и присутствие (T127) ──
+    // Подписка на каналы чатов {"peers":[адрес…],"groups":[hex…]} → запросы
+    // ephemeral.subscribe (только новые каналы).
+    [[nodiscard]] json ephSubscribe(const json &chats);
+    // Соединение пересоздано — подписок больше нет.
+    void ephReset();
+    // «Печатает»: chat — адрес собеседника либо hex группы; action — номер
+    // TypingAction. Запросы (пусто — канала нет или чат в L2).
+    [[nodiscard]] json ephTyping(const std::string &chat, int action) const;
+    // Событие подписки ephemeral → события typing/presence (см. host.rs).
+    [[nodiscard]] json ephOpen(const std::string &body) const;
+    // Опубликовать/сократить свой список v1-устройств → запрос
+    // identity.device.log_append. Свой журнал запись получает синком.
+    [[nodiscard]] json legacyDevicesRequest(const json &devices);
+    // v1 SendPayload (JSON) с копиями для v1-устройств → запрос msg.deliver_legacy.
+    [[nodiscard]] json legacyDeliverRequest(const std::string &messageId,
+                                            const std::string &sendPayloadJson) const;
     [[nodiscard]] std::size_t tokenCount() const;
+    // FR-063: пора получать суточную партию жетонов (хост проверяет таймером, не
+    // перед тратой) и её размер — вся суточная квота.
+    [[nodiscard]] bool tokenRefillDue() const;
+    [[nodiscard]] std::size_t tokenBatchSize() const;
 
     // ── режим «усиленная приватность» (L2, T079) ──
     // Включить/выключить L2 в личном чате: операция ChatMode собеседнику и

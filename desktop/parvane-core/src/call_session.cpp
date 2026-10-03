@@ -103,7 +103,9 @@ void CallSession::onSignal(const CallSignalIn &sig) {
         callId_ = sig.call_id;
         media_ = sig.media.empty() ? "audio" : sig.media;
         remoteOffer_ = sig.sdp;
-        if (!authenticateSdp(sig.sdp, sig.sig)) {
+        if (sig.authenticated) {
+            peerAuth_ = PeerAuth::Verified;
+        } else if (!authenticateSdp(sig.sdp, sig.sig)) {
             // MITM/невалидная подпись → сразу отклоняем.
             if (cb_.sendSignal) cb_.sendSignal(rejectSignal(callId_, "auth_failed"));
             setState(CallState::Ended);
@@ -114,7 +116,9 @@ void CallSession::onSignal(const CallSignalIn &sig) {
     } else if (sig.type == "answer") {
         // Наш исходящий приняли. Проверяем подпись answer и заводим медиа.
         if (state_ != CallState::Outgoing) return;
-        if (!authenticateSdp(sig.sdp, sig.sig)) {
+        if (sig.authenticated) {
+            peerAuth_ = PeerAuth::Verified;
+        } else if (!authenticateSdp(sig.sdp, sig.sig)) {
             if (cb_.sendSignal) cb_.sendSignal(hangupSignal(callId_));
             if (media_engine_) media_engine_->close();
             setState(CallState::Ended);

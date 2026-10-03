@@ -248,6 +248,26 @@ int main() {
               "пустой sign-колбэк → подпись ключом звонков");
     }
 
+    {
+        // CALL-1: один формат ICE-кандидата для всех клиентов, приём прежних видов.
+        const parvane::IceCandidate c{"candidate:1 1 udp 2122260223 127.0.0.1 5000 typ host", "0", 0};
+        const auto j = json::parse(parvane::iceCandidateJson(c));
+        check(j.value("candidate", "") == c.sdp && j.value("sdp_mid", "") == "0" && j.value("sdp_mline_index", -1) == 0,
+              "CALL-1: канонические поля candidate/sdp_mid/sdp_mline_index");
+        check(j.value("sdpMid", "") == "0" && j.value("sdpMLineIndex", -1) == 0 && j.value("sdp", "") == c.sdp
+                  && j.value("mid", "") == "0" && j.value("idx", -1) == 0,
+              "CALL-1: прежние имена web и desktop рядом");
+        const auto web = parvane::parseIceCandidate(
+            R"({"candidate":"candidate:w","sdpMid":"audio","sdpMLineIndex":1,"usernameFragment":"ab"})");
+        check(web && web->sdp == "candidate:w" && web->mid == "audio" && web->mlineIndex == 1, "CALL-1: разбор вида web");
+        const auto old = parvane::parseIceCandidate(R"({"sdp":"candidate:d","mid":"0","idx":0})");
+        check(old && old->sdp == "candidate:d" && old->mid == "0" && old->mlineIndex == 0, "CALL-1: разбор прежнего вида desktop");
+        const auto canon = parvane::parseIceCandidate(R"({"candidate":"candidate:c","sdp_mid":"1","sdp_mline_index":2})");
+        check(canon && canon->mid == "1" && canon->mlineIndex == 2, "CALL-1: разбор канонического вида");
+        check(!parvane::parseIceCandidate("cand-plain") && !parvane::parseIceCandidate(R"({"sdpMid":"0"})"),
+              "CALL-1: не JSON и объект без кандидата отвергаются");
+    }
+
     std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

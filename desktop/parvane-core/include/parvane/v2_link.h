@@ -80,6 +80,15 @@ public:
     // Метод реестра: тело запроса → тело ответа. Бросает V2Error.
     std::string request(const std::string &method, const std::string &body,
                         std::int64_t timeoutMs = 15000);
+    // Поточный метод (скачивание блоба): тело ответа (метаданные) + чанки по
+    // индексу до кадра last. Возвращается после последнего чанка. Бросает
+    // V2Error (в т.ч. ошибка посреди потока).
+    struct StreamResult {
+        std::string body;
+        std::map<std::uint32_t, std::string> chunks;
+    };
+    StreamResult requestStream(const std::string &method, const std::string &body,
+                               std::int64_t timeoutMs = 60000);
 
     void setEventHandler(std::function<void(const Event &)> h);
     void setClosedHandler(std::function<void()> h);
@@ -92,6 +101,10 @@ private:
         std::string body;
         std::string error;
         std::uint32_t retryAfterMs = 0;
+        // Поточный запрос: ответ — не конец, ждём кадр chunk с last.
+        bool stream = false;
+        bool responded = false;
+        std::map<std::uint32_t, std::string> chunks;
     };
     void onFrame(const std::string &bytes);
     void onClosed();

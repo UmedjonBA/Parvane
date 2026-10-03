@@ -381,6 +381,9 @@ void ApiWrap::checkFilterInvite(
 }
 
 void ApiWrap::savePinnedOrder(Data::Folder *folder) {
+	if (!folder) {
+		Parvane::MirrorDialogPins(_session); // Parvane: порядок закрепа — в журнал
+	}
 	const auto &order = _session->data().pinnedChatsOrder(folder);
 	const auto input = [](Dialogs::Key key) {
 		if (const auto history = key.history()) {
@@ -453,6 +456,25 @@ void ApiWrap::toggleHistoryArchived(
 		not_null<History*> history,
 		bool archived,
 		Fn<void()> callback) {
+	// Parvane: архив — локально (MTProto folders.editPeerFolders заглушён и
+	// отвечает отказом) + журнал личного состояния.
+	{
+		const auto isPinned = history->isPinnedDialog(0);
+		if (archived) {
+			history->setFolder(_session->data().folder(Data::Folder::kId));
+		} else {
+			history->clearFolder();
+		}
+		Parvane::MirrorArchive(history, archived);
+		if (callback) {
+			callback();
+		}
+		if (isPinned) {
+			_session->data().notifyPinnedDialogsOrderUpdated();
+			Parvane::MirrorDialogPins(_session);
+		}
+		return;
+	}
 	if (const auto already = _historyArchivedRequests.take(history)) {
 		request(already->first).cancel();
 	}

@@ -379,6 +379,19 @@ int main() {
         e2e::resetInMemory();
     }
 
+    // ── FR-054: легаси-копия v2-отправителя не для этого устройства ──
+    {
+        const json foreign = {{"kind", "encrypted"}, {"ciphertext", ""}, {"ctype", 0},
+                              {"sender_identity", "id"}, {"sender_signing_key", "sk"}};
+        check(e2e::isForeignLegacyCopy(foreign), "legacy: пустой шифртекст без своей копии — пропуск");
+        auto mine = foreign;
+        mine["ciphertext"] = "ct";
+        check(!e2e::isForeignLegacyCopy(mine), "legacy: со своей копией — обычная расшифровка");
+        check(!e2e::isForeignLegacyCopy(json{{"kind", "encrypted"}, {"ciphertext", ""}}),
+              "legacy: tombstone без отправителя — не легаси-копия");
+        check(!e2e::isForeignLegacyCopy(json{{"kind", "text"}, {"text", ""}}), "legacy: открытый вид — не легаси-копия");
+    }
+
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;
 }

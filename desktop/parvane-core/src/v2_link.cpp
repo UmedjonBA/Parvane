@@ -328,6 +328,38 @@ std::string Connection::request(const std::string &method, const std::string &bo
     return p.body;
 }
 
+Connection::StreamResult Connection::requestStream(const std::string &method, const std::string &body,
+                                                   std::int64_t timeoutMs) {
+    if (!open_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    const auto id = nextId_++;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        Pending p;
+        p.stream = true;
+        pending_[id] = std::move(p);
+    }
+    try {
+        sendFrame(encodeRequest(id, method, body,
+            static_cast<std::uint32_t>(std::min<std::int64_t>(timeoutMs, 30000))));
+    } catch (...) {
+        std::lock_guard<std::mutex> lk(mu_);
+        pending_.erase(id);
+        throw;
+    }
+    std::unique_lock<std::mutex> lk(mu_);
+    const bool got = cv_.wait_for(lk, std::chrono::milliseconds(timeoutMs + 500), [&] {
+        const auto it = pending_.find(id);
+        return it == pending_.end() || it->second.done;
+    });
+    auto it = pending_.find(id);
+    if (it == pending_.end()) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    Pending p = std::move(it->second);
+    pending_.erase(it);
+    if (!got || !p.done) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    if (!p.error.empty()) throw V2Error(p.error, p.retryAfterMs);
+    return StreamResult{std::move(p.body), std::move(p.chunks)};
+}
+
 void Connection::onFrame(const std::string &bytes) {
     json f;
     try {
@@ -366,8 +398,30 @@ void Connection::onFrame(const std::string &bytes) {
                     it->second.error = "ERROR_CODE_UNSPECIFIED";
                 }
             }
-            it->second.done = true;
+            // Поточный запрос: успешный ответ — только метаданные, конец — чанк last.
+            it->second.responded = true;
+            if (!it->second.stream || !it->second.error.empty()) it->second.done = true;
             cv_.notify_all();
+            return;
+        }
+        if (kind == "chunk") {
+            const auto id = f.value("id", std::uint64_t(0));
+            auto it = pending_.find(id);
+            if (it == pending_.end() || !it->second.stream) return;
+            if (f.contains("error") && f["error"].is_string()) {
+                it->second.error = f["error"].get<std::string>();
+            } else {
+                try {
+                    auto data = fromBase64(f.value("data", std::string()));
+                    if (!data.empty()) it->second.chunks[f.value("index", std::uint32_t(0))] = std::move(data);
+                } catch (const std::exception &) {
+                    it->second.error = "ERROR_CODE_UNSPECIFIED";
+                }
+            }
+            if (f.value("last", false) || !it->second.error.empty()) {
+                it->second.done = true;
+                cv_.notify_all();
+            }
             return;
         }
     }

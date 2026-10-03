@@ -432,6 +432,7 @@ void TogglePinnedThread(
 	}
 
 	owner->setChatPinned(entry, FilterId(), isPinned);
+	Parvane::MirrorDialogPins(&owner->session()); // Parvane: закреп — на диск и в журнал
 	if (const auto history = entry->asHistory()) {
 		const auto flags = isPinned
 			? MTPmessages_ToggleDialogPin::Flag::f_pinned

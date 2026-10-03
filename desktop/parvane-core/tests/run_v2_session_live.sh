@@ -12,7 +12,7 @@ TEST_BIN="${PARVANE_V2_TEST_BIN:-$HERE/../build/parvane_v2_session_tests}"
 export PATH="$HOME/.local/bin:$PATH"
 command -v nats-server >/dev/null || { echo "нет nats-server"; exit 2; }
 [ -x "$TEST_BIN" ] || { echo "нет $TEST_BIN — cmake --build parvane-core/build --target parvane_v2_session_tests"; exit 2; }
-for s in identity messenger gateway; do
+for s in identity messenger cloud gateway; do
   [ -x "$SHARD/$s" ] || { echo "нет шарда $SHARD/$s — cargo build -p $s"; exit 2; }
 done
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
@@ -30,6 +30,9 @@ env PARVANE_LOGIN_RATE=100000 PARVANE_LOGIN_RATE_IP=100000 PARVANE_REGISTER_RATE
   PARVANE_LOG_LEVEL=info "$SHARD/identity" >"$SB/identity.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS" PARVANE_DB_PATH="$SB/messenger.db" PARVANE_LOG_LEVEL=info \
   "$SHARD/messenger" >"$SB/messenger.log" 2>&1 & PIDS+=($!)
+# cloud — блобы вложений по capability (T131)
+PARVANE_NATS_URL="$NATS" PARVANE_DB_PATH="$SB/cloud.db" PARVANE_LOG_LEVEL=info \
+  "$SHARD/cloud" >"$SB/cloud.log" 2>&1 & PIDS+=($!)
 PARVANE_NATS_URL="$NATS" PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$TP" PARVANE_GATEWAY_BIND="127.0.0.1:$WP" \
   PARVANE_V2_FEATURES=sealed PARVANE_LOG_LEVEL=info "$SHARD/gateway" >"$SB/gateway.log" 2>&1 & PIDS+=($!)
 for _ in $(seq 1 60); do
@@ -42,7 +45,7 @@ PARVANE_GATEWAY_TCP="127.0.0.1:$TP" PARVANE_V2_WS_URL="ws://127.0.0.1:$WP/ws" "$
 RC=$?
 if [ "$RC" -ne 0 ]; then
   echo "--- хвосты логов стека ($SB) ---"
-  for f in identity messenger gateway; do echo "## $f"; tail -15 "$SB/$f.log"; done
+  for f in identity messenger cloud gateway; do echo "## $f"; tail -15 "$SB/$f.log"; done
 else
   rm -rf "$SB"
 fi

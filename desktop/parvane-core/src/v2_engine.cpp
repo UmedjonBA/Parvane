@@ -240,6 +240,12 @@ std::size_t Client::tokenResponse(const std::string &resp) {
     return static_cast<std::size_t>(std::stoull(result(out, err)));
 }
 
+json Client::prepareCall(const std::string &peer, const json &signal) {
+    char *err = nullptr;
+    char *out = pv_client_prepare_call(c_, peer.c_str(), signal.dump().c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
 json Client::prepareDirect(const std::string &peer, const json &content, const std::string &opId) {
     char *err = nullptr;
     const auto text = content.dump();
@@ -286,6 +292,25 @@ std::string Client::importRootBackup(const std::string &blob, const std::string 
 }
 
 std::string generateRecoveryKey() { return take(pv_generate_recovery_key()); }
+
+std::string grantWithRootBackup(const std::string &material, const std::string &backup) {
+    char *out = pv_grant_with_root_backup(material.c_str(), u8(backup), backup.size());
+    return out ? take(out) : material;
+}
+
+std::string importRootBackupFor(const std::string &user, const std::string &blob, const std::string &recoveryKey) {
+    char *err = nullptr;
+    auto b = pv_import_root_backup_for(user.c_str(), u8(blob), blob.size(), recoveryKey.c_str(), &err);
+    if (err) {
+        parvane_protocol_bytes_free(b);
+        check(err);
+    }
+    return takeBytes(b);
+}
+
+std::string grantRootBackup(const std::string &material) {
+    return takeBytes(pv_grant_root_backup(material.c_str()));
+}
 
 json decodeMessage(const std::string &typeName, const std::string &bytes) {
     char *err = nullptr;
@@ -431,7 +456,96 @@ json Client::logDevices(const std::string &user) const {
     return v.is_object() ? v : json{{"v2", json::array()}, {"legacy", json::array()}};
 }
 
+bool Client::deliveryKeyRejected(const std::string &peer) {
+    return pv_client_delivery_key_rejected(c_, peer.c_str());
+}
+
+bool Client::acceptRootChange(const std::string &user) {
+    char *err = nullptr;
+    const bool ok = pv_client_accept_root_change(c_, user.c_str(), &err);
+    check(err);
+    return ok;
+}
+
+json Client::recoverWithRoot(const std::string &root32, const std::string &logResp, std::size_t otk) {
+    char *err = nullptr;
+    char *out = pv_client_recover_with_root(c_, u8(root32), root32.size(), u8(logResp), logResp.size(), otk, &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::resetIdentity(std::size_t otk) {
+    char *err = nullptr;
+    char *out = pv_client_reset_identity(c_, otk, &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::revokeDevice(const std::string &deviceId) {
+    char *err = nullptr;
+    char *out = pv_client_revoke_device(c_, deviceId.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::revokeContactAccess(const std::string &peer) {
+    char *err = nullptr;
+    char *out = pv_client_revoke_contact_access(c_, peer.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::shareDeliveryKey(const std::string &peer) {
+    char *err = nullptr;
+    char *out = pv_client_share_delivery_key(c_, peer.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::shareGroupsWithOwnDevices(const json &devices) {
+    char *err = nullptr;
+    char *out = pv_client_share_groups_with_own_devices(c_, devices.dump().c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::rotateSsk(const std::string &root32) {
+    char *err = nullptr;
+    char *out = pv_client_rotate_ssk(c_, u8(root32), root32.size(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+bool Client::ownSskExposed() const { return pv_client_own_ssk_exposed(c_); }
+
+json Client::ephSubscribe(const json &chats) {
+    char *err = nullptr;
+    char *out = pv_client_eph_subscribe(c_, chats.dump().c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+void Client::ephReset() { pv_client_eph_reset(c_); }
+
+json Client::ephTyping(const std::string &chat, int action) const {
+    char *err = nullptr;
+    char *out = pv_client_eph_typing(c_, chat.c_str(), action, &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::ephOpen(const std::string &body) const {
+    auto v = json::parse(take(pv_client_eph_open(c_, reinterpret_cast<const std::uint8_t *>(body.data()), body.size())),
+                         nullptr, false);
+    return v.is_array() ? v : json::array();
+}
+
+json Client::legacyDevicesRequest(const json &devices) {
+    char *err = nullptr;
+    char *out = pv_client_legacy_devices_request(c_, devices.dump().c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::legacyDeliverRequest(const std::string &messageId, const std::string &sendPayloadJson) const {
+    char *err = nullptr;
+    char *out = pv_client_legacy_deliver_request(c_, messageId.c_str(), sendPayloadJson.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
 std::size_t Client::tokenCount() const { return pv_client_token_count(c_); }
+bool Client::tokenRefillDue() const { return pv_client_token_refill_due(c_); }
+std::size_t Client::tokenBatchSize() const { return pv_client_token_batch_size(c_); }
 
 // ── режим «усиленная приватность» (L2) ──────────────────────────────────────
 
