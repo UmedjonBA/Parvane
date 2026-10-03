@@ -377,6 +377,12 @@ json Client::groupChange(const std::string &groupHex, const json &change) {
     return parseOrThrow(result(out, err));
 }
 
+json Client::groupRequestDecide(const std::string &groupHex, const std::string &user, bool approve) {
+    char *err = nullptr;
+    char *out = pv_client_group_request_decide(c_, groupHex.c_str(), user.c_str(), approve, &err);
+    return parseOrThrow(result(out, err));
+}
+
 json Client::groupRotateEpoch(const std::string &groupHex) {
     char *err = nullptr;
     char *out = pv_client_group_rotate_epoch(c_, groupHex.c_str(), &err);
@@ -454,6 +460,17 @@ json Client::groupJoin(const std::string &url) {
 json Client::logDevices(const std::string &user) const {
     auto v = json::parse(take(pv_client_log_devices(c_, user.c_str())), nullptr, false);
     return v.is_object() ? v : json{{"v2", json::array()}, {"legacy", json::array()}};
+}
+
+json Client::readers(const std::string &opId) const {
+    char *err = nullptr;
+    char *out = pv_client_readers(c_, opId.c_str(), &err);
+    auto v = json::parse(result(out, err), nullptr, false);
+    return v.is_array() ? v : json::array();
+}
+
+bool Client::hasPeerDeliveryKey(const std::string &peer) const {
+    return pv_client_has_peer_delivery_key(c_, peer.c_str());
 }
 
 bool Client::deliveryKeyRejected(const std::string &peer) {
@@ -648,6 +665,12 @@ json StateSession::claimDue(std::int64_t nowMs) {
 std::vector<std::string> StateSession::markSent(const std::string &opIdB64) {
     char *err = nullptr;
     char *out = pv_state_mark_sent(s_, opIdB64.c_str(), &err);
+    return bodies(result(out, err));
+}
+
+std::vector<std::string> StateSession::chatCleared(const json &cleared) {
+    char *err = nullptr;
+    char *out = pv_state_chat_cleared(s_, cleared.dump().c_str(), &err);
     return bodies(result(out, err));
 }
 

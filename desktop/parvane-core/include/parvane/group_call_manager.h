@@ -30,6 +30,11 @@ public:
         std::function<std::vector<std::string>(std::string peer)> peerPubkeys;
         // Своя подпись вместо key (см. CallSession::Callbacks::sign); "" → key.
         std::function<std::string(const std::string &data)> sign;
+        // Протокол v2 (T141): сигнал участнику запечатанным конвертом.
+        // groupCallId пуст у самого приглашения (group_invite). true — сигнал
+        // ушёл по v2; false — идти v1-инбоксом gcall:<адрес>.
+        std::function<bool(const std::string &peer, const json &signal,
+                           const std::string &groupCallId)> sendV2;
     };
 
     GroupCallManager(CallClient &calls, std::string selfAddr, std::string token,
@@ -39,6 +44,10 @@ public:
 
     // Подписаться на инбокс call.user.<self>.
     void start();
+
+    // Сигнал группового звонка, принятый по протоколу v2 (отправитель проверен
+    // движком) — тот же путь, что у сигнала с шины, без проверки подписи SDP.
+    void handleV2Signal(const std::string &from, const json &signal);
 
     // Инициировать групповой звонок: разослать group_invite всем участникам и
     // самому войти в mesh. participants — полный список (включая себя).
@@ -55,6 +64,8 @@ public:
 
 private:
     void handleSignal(const std::string &from, const CallSignalIn &sig);
+    // Сигнал участнику: v2, если возможно, иначе инбокс gcall:<адрес>.
+    void sendTo(const std::string &peer, const json &signal);
     // Войти в mesh: создать сессии ко всем участникам; оффер — тем, чей адрес
     // больше нашего. Звать под mutex_.
     void joinMesh(const std::string &gcid, const std::vector<std::string> &participants,
@@ -70,6 +81,10 @@ private:
     Callbacks cb_;
 
     std::mutex mutex_;
+    // Копия gcid_ для отправки: колбэки сессий зовутся и под mutex_, и с
+    // потоков медиа-движка (ICE-кандидаты) — свой замок, без рекурсии.
+    std::mutex sendMutex_;
+    std::string sendGcid_;
     std::string gcid_;
     std::string media_ = "audio";
     std::map<std::string, std::unique_ptr<CallSession>> peers_;

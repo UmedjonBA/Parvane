@@ -187,6 +187,10 @@ public:
                               const std::string &resp);
     // Изменение группы (proto3-JSON group.v2.GroupChange) → запрос. Бросает.
     [[nodiscard]] json groupChange(const std::string &groupHex, const json &change);
+    // Решение по заявке на вступление → запрос group.request.decide
+    // (одобрение — запись AddMember, локальный журнал продвинут). Бросает.
+    [[nodiscard]] json groupRequestDecide(const std::string &groupHex, const std::string &user,
+                                          bool approve);
     // Новая эпоха → [publish, …ключи участникам]. Бросает (need).
     [[nodiscard]] json groupRotateEpoch(const std::string &groupHex);
     // Групповое сообщение → массив запросов. Бросает (need).
@@ -218,6 +222,11 @@ public:
     // Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): дальше —
     // слепым жетоном. true — ключ был и сброшен (отправку стоит повторить).
     bool deliveryKeyRejected(const std::string &peer);
+    // Известен ли ключ доступа собеседника (сигнал звонка сервер принимает
+    // только с ним — слепой жетон для звонков не годится).
+    [[nodiscard]] bool hasPeerDeliveryKey(const std::string &peer) const;
+    // Кто прочитал своё сообщение (по E2E-квитанциям): [{"user","tsMs"}].
+    [[nodiscard]] json readers(const std::string &opId) const;
     // KEY-1 v2 (T129): принять смену корня собеседника (после предупреждения).
     bool acceptRootChange(const std::string &user);
     // T130: восстановление на новом устройстве по корню (32 байта) и ответу
@@ -319,6 +328,9 @@ public:
     // Отложенные к отправке этим устройством (ScheduledMessage[]).
     [[nodiscard]] json claimDue(std::int64_t nowMs);
     [[nodiscard]] std::vector<std::string> markSent(const std::string &opIdB64);
+    // Чат очищен «у себя» до момента (proto3-JSON state.v1.ChatCleared) →
+    // тела state.append. Бросает.
+    [[nodiscard]] std::vector<std::string> chatCleared(const json &cleared);
 
 private:
     explicit StateSession(PvStateSession *s) : s_(s) {}

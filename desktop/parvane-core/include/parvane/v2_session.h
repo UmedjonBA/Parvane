@@ -118,7 +118,25 @@ public:
     // call); true — сигнал взят на себя v2 (при сбое отправки по v1 НЕ понижаем,
     // D-13: ошибка — в логе). Блокирующий. Входящие — событие
     // {"type":"callSignal","from":…,"signal":<v1 JSON>} (отправитель проверен движком).
-    bool sendCallSignal(const std::string &peer, const json &signal);
+    // Групповой звонок (T141): `group_invite` и попарные сигналы mesh
+    // (`groupCallId` — id группового звонка) идут по v2 только участнику с
+    // известным ключом доступа; false — и при сбое отправки (идти v1-инбоксом
+    // gcall:). У входящего события группового сигнала "group": true.
+    // Корневой ключ личности пользователя по проверенному журналу устройств
+    // (base64 без дополнения; свой — по своему журналу); "" — журнала нет. Из
+    // этой строки клиент выводит «ключ безопасности» (e2e::fingerprintOf, T153).
+    // Блокирующий (мьютекс движка) — не с UI-потока.
+    [[nodiscard]] std::string rootKeyOf(const std::string &user);
+
+    // Кто прочитал своё сообщение чата v2 — (адрес, unix-секунды) по
+    // E2E-квитанциям (сервер v2 этого не знает; «Просмотрено», T151).
+    [[nodiscard]] std::vector<std::pair<std::string, std::int64_t>> readers(const std::string &uuid);
+
+    // error (если задан): причина, по которой сигнал ЛИЧНОГО звонка не ушёл —
+    // "forbidden" (нет ключа доступа адресата: звонить можно только тому, кто
+    // тебе уже писал, D-08) либо "failed"; пусто — отправлен.
+    bool sendCallSignal(const std::string &peer, const json &signal,
+                        const std::string &groupCallId = std::string(), std::string *error = nullptr);
 
     // LINK-1 v2. Старое устройство: материал гранта движка для своего нового
     // устройства (пусто — сессия не готова или у устройства нет SSK). Блокирующий.
@@ -209,7 +227,11 @@ public:
     // Изменение группы записью журнала (proto3-JSON group.v2.GroupChange:
     // {"remove_member":{"member":{"address":…}}}, {"ban":…}, {"set_info":…},
     // …). Смена состава/прав → новая эпоха. false — отклонено.
-    bool changeGroup(const std::string &address, const json &change);
+    // Правка сведений — {"set_info_patch": {name?, about?, avatar_file_id?}}:
+    // недостающие поля сессия берёт из журнала сама (атомарно с записью).
+    // errorCode (если задан) при отказе получает код, как у v1-шарда group.*:
+    // "forbidden" | "bad_request" | "not_found" | "rate_limited" | "failed".
+    bool changeGroup(const std::string &address, const json &change, std::string *errorCode = nullptr);
     // Сведения группы по журналу (JSON движка) или null.
     json groupInfo(const std::string &address);
     // Адреса известных групп v2.
@@ -232,6 +254,13 @@ public:
     // | {"status":"error","code"}.
     json joinByInvite(const std::string &url);
     [[nodiscard]] static bool isInviteUrl(const std::string &url);
+    // Заявки на вступление (ссылка с одобрением, T143). Список — массив
+    // {"user","date"}; null — не v2-группа, сессия не готова или сбой; пустой —
+    // заявок нет либо нет права приглашать. Число заявок едет в сведениях
+    // группы события groupUpdated (поле "pendingRequests", только решающему).
+    json listJoinRequests(const std::string &address);
+    // Одобрение — запись AddMember и новая эпоха; false — отклонено.
+    bool decideJoinRequest(const std::string &address, const std::string &user, bool approve);
 
     // ── приватность (T079, FR-040) ──
     // identity.privacy.set перезаписывает ВСЕ поля — настройки уходят целиком:
@@ -274,6 +303,10 @@ public:
     // Отложенное (op_id base64) уже отправлено каким-то устройством? (синк журнала)
     bool stateScheduledSent(const std::string &opIdB64);
     void stateMarkSent(const std::string &opIdB64);
+    // «Удалить чат у себя» (T145): граница очистки чата с собеседником/группой —
+    // запись журнала состояния; остальные свои устройства скрывают сообщения
+    // не позже untilMs (поле снимка "cleared": [{"peer","cleared_until_ms"}]).
+    void stateChatCleared(const std::string &address, std::int64_t untilMs);
 
 private:
     using Task = std::function<void()>;
@@ -312,6 +345,8 @@ private:
     void fetchPrivacyLocked();
     void reportUnconfirmedLocked(const std::string &hex, const std::vector<std::string> &claimed);
     bool canRotateLocked(const std::string &hex);
+    bool canDecideRequestsLocked(const std::string &hex);
+    json listJoinRequestsLocked(const std::string &hex);
     void ensureTokensLocked(std::size_t recipients);
     // FR-063: партия жетонов по расписанию движка (при готовности и раз в час).
     void refillTokensLocked();
@@ -358,6 +393,7 @@ private:
     std::vector<json> outbox_;       // под engineMu_: события наружу по порядку
     std::recursive_mutex flushMu_;   // один отдающий за раз (порядок onEvent)
     std::set<std::string> publishedGroups_;
+    std::map<std::string, int> pendingRequests_; // hex группы → число заявок на вступление
     // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение).
     std::set<std::string> ephChats_;
     std::set<std::string> warnedUnconfirmed_;

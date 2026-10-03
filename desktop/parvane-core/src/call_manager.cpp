@@ -46,7 +46,10 @@ void CallManager::newSession(const std::string &peer) {
 }
 
 void CallManager::sendTo(const std::string &peer, const json &signal) {
-    if (cb_.sendV2 && cb_.sendV2(peer, signal)) return;
+    if (cb_.sendV2 && cb_.sendV2(peer, signal)) {
+        // LEGACY-1: v1-устройствам собеседника — тот же сигнал v1-путём
+        if (!cb_.hasLegacyDevices || !cb_.hasLegacyDevices(peer)) return;
+    }
     calls_.send(self_, peer, token_, signal);
 }
 
@@ -65,6 +68,10 @@ void CallManager::placeCall(const std::string &peer, const std::string &media) {
 void CallManager::handleSignal(const std::string &from, const CallSignalIn &sig) {
     std::lock_guard<std::mutex> lk(mutex_);
     if (sig.type == "invite") {
+        // Тот же вызов вторым путём (v2 и v1, LEGACY-1) — уже обрабатывается.
+        if (session_ && from == peer_ && sig.call_id == session_->callId()) {
+            return;
+        }
         // Заняты другим активным звонком → busy.
         const bool busy = session_ && session_->state() != CallState::Ended
                           && session_->state() != CallState::Idle;

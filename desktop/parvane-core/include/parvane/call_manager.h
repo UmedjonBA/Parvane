@@ -35,6 +35,10 @@ public:
         // Протокол v2: отправить сигнал собеседнику запечатанным конвертом.
         // true — сигнал взят v2 (по v1 не дублировать), false — собеседник на v1.
         std::function<bool(const std::string &peer, const json &signal)> sendV2;
+        // У собеседника на v2 остались v1-устройства (подписанный список,
+        // LEGACY-1): сигнал, ушедший по v2, дублируется им v1-путём — иначе они
+        // не зазвонят. Его v2-устройства повтор с тем же call_id отбрасывают.
+        std::function<bool(const std::string &peer)> hasLegacyDevices;
     };
 
     CallManager(CallClient &calls, std::string selfAddr, std::string token,
