@@ -271,6 +271,12 @@ public:
     // готовности читает серверное значение (identity.privacy.get) и отдаёт
     // событие `privacy{groupAddNobody,strangersAllowed}`. true — отправлено сейчас.
     bool setPrivacy(bool groupAddNobody, bool strangersAllowed);
+    // FR-040 (T137): «кто может звонить» и «кто видит, что я в сети». Сервер v2 не
+    // видит ни звонящего, ни зрителя — настройку хранит он, соблюдает клиент
+    // владельца. Правка уходит так же, как setPrivacy; поля, которые это
+    // устройство не правило, перед записью берутся с сервера (privacy.set
+    // заменяет все поля разом — иначе правка одного стирала бы остальные).
+    bool setCallsPresencePrivacy(bool callsNobody, bool presenceNobody);
 
     // ── режим «усиленная приватность» (L2, T079; правило L2-1) ──
     // Включить/выключить своё предпочтение в личном чате: операция ChatMode
@@ -343,6 +349,8 @@ private:
     void noteL2StateLocked(bool force = false);
     void pushPrivacyLocked();
     void fetchPrivacyLocked();
+    bool readPrivacyLocked(json *settings);
+    bool savePrivacyLocked();
     void reportUnconfirmedLocked(const std::string &hex, const std::vector<std::string> &claimed);
     bool canRotateLocked(const std::string &hex);
     bool canDecideRequestsLocked(const std::string &hex);
@@ -359,6 +367,10 @@ private:
     std::vector<std::string> groupMembersLocked(const std::string &hex);
     json inviteGroupLocked(const std::string &linkIdHex);
     json loadInvites() const;
+    // T160: ссылки-приглашения делятся между своими устройствами журналом
+    // личного состояния (секрет ссылки знает только создавшее её устройство).
+    void shareInviteLocked(const std::string &address, const json &record);
+    void mergeSharedInvitesLocked();
     // Свои устройства (T119).
     void checkOwnDevicesLocked();
     // Запросы личного чата; при отказе по ключу доступа собеседника (он сменил
@@ -403,6 +415,10 @@ private:
     bool privacySet_ = false;
     bool privacyGroupAddNobody_ = false;
     bool privacyStrangers_ = true;
+    bool privacyCallsNobody_ = false;
+    bool privacyPresenceNobody_ = false;
+    // Какие поля правило это устройство и ещё не сохранило (маска kPrivacy*).
+    unsigned privacyDirty_ = 0;
     std::unique_ptr<StateSession> state_;
     // Ключ личного состояния сменён (D-16): старые записи новым ключом не
     // читаются. stateRekeyed_ — следующий stateAttach не отдаёт хосту пустой

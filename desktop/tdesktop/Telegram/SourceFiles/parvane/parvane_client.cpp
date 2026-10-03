@@ -117,6 +117,9 @@
 #include "core/core_settings.h"
 #include "boxes/abstract_box.h"      // Ui::show() — бокс входящего звонка
 #include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
+#include "ui/layers/generic_box.h"   // Parvane: диалог ключа восстановления (T140)
+#include "ui/widgets/labels.h"
+#include "styles/style_layers.h"
 #include "settings.h"                // cWorkingDir() — путь для ключа звонков
 
 #include <QtCore/QFile>
@@ -405,6 +408,10 @@ QSet<QString> g_l2Chats;   // чаты с активным режимом (со�
 QSet<QString> g_l2Mine;    // личные чаты, где режим включён мной
 QSet<QString> g_l2V2Peers; // собеседники на v2 (пункт в профиле показывается им)
 std::atomic<bool> g_l2PresenceAllowed{ true };
+// FR-040 (T137): «звонки — никто» и «не показывать, что я в сети». Соблюдает
+// клиент владельца; значения — из tdata/parvane-privacy.json (SavePrivacyLocal).
+std::atomic<bool> g_privacyCallsNobody{ false };
+std::atomic<bool> g_privacyPresenceHidden{ false };
 rpl::event_stream<> g_l2Updates; // main: кэш изменился
 
 [[nodiscard]] bool L2Active(const QString &chat) {
@@ -1672,8 +1679,11 @@ void HandleV2Event(const parvane::json &ev) {
 struct PrivacyLocal {
 	bool set = false;            // значение известно (с сервера или задано здесь)
 	bool dirty = false;          // правка этого устройства ещё не на сервере
+	bool dirtyCallsPresence = false; // то же для звонков/присутствия (T137)
 	bool strangers = true;       // сообщения от незнакомых разрешены
 	bool groupAddNobody = false; // «никто не может добавлять меня в группы»
+	bool callsNobody = false;    // «никто не может мне звонить»
+	bool presenceNobody = false; // «никто не видит, что я в сети»
 };
 
 [[nodiscard]] QString PrivacyPath() {
@@ -1688,7 +1698,12 @@ struct PrivacyLocal {
 		out.strangers = j.value("strangers", true);
 		out.groupAddNobody = (j.value("group_add", std::string()) == "nobody");
 		out.dirty = j.value("dirty", false);
+		out.callsNobody = (j.value("calls_from", std::string()) == "nobody");
+		out.presenceNobody = (j.value("presence_visibility", std::string()) == "nobody");
+		out.dirtyCallsPresence = j.value("dirty_calls_presence", false);
 	}
+	g_privacyCallsNobody = out.callsNobody;
+	g_privacyPresenceHidden = out.presenceNobody;
 	return out;
 }
 
@@ -1698,7 +1713,12 @@ void SavePrivacyLocal(const QString &self, const PrivacyLocal &p) {
 		{ "strangers", p.strangers },
 		{ "group_add", p.groupAddNobody ? "nobody" : "anyone" },
 		{ "dirty", p.dirty },
+		{ "calls_from", p.callsNobody ? "nobody" : "anyone" },
+		{ "presence_visibility", p.presenceNobody ? "nobody" : "anyone" },
+		{ "dirty_calls_presence", p.dirtyCallsPresence },
 	};
+	g_privacyCallsNobody = p.callsNobody;
+	g_privacyPresenceHidden = p.presenceNobody;
 	StoreWrite(PrivacyPath(), QString::fromStdString(j.dump()).toUtf8());
 }
 
@@ -1745,6 +1765,80 @@ void LoadL2Cache(const QString &self) {
 	g_l2PresenceAllowed = j.value("presence", true);
 }
 
+// ── ключ восстановления (T140, FR-066; D-12, C1-06) ────────────────────────
+// Корень личности нового аккаунта на диске не хранится: остаётся его копия под
+// ключом восстановления, а сам ключ показывается один раз. Сценарии e2e
+// (PARVANE_AUTOLOGIN) диалог не показывают: с PARVANE_RECOVERY_KEY_FILE ключ
+// пишется в этот файл, без него остаётся прежняя схема — корень в файле `root`.
+QString g_pendingRecoveryKey; // только main
+
+[[nodiscard]] QString RecoveryKeyFileForE2e() {
+	const char *path = ParvaneDevEnv("PARVANE_RECOVERY_KEY_FILE");
+	return (path && *path) ? QString::fromUtf8(path) : QString();
+}
+
+void ShowPendingRecoveryKey(int attempt) {
+	if (g_pendingRecoveryKey.isEmpty()) {
+		return;
+	}
+	if (!Core::App().activeWindow() || !g_sessionWeak.get()) {
+		// Окно ещё не готово (вход в процессе) — ключ ждёт, терять его нельзя.
+		if (attempt < 150) {
+			base::call_delayed(crl::time(2000), [=] { ShowPendingRecoveryKey(attempt + 1); });
+		}
+		return;
+	}
+	const auto key = base::take(g_pendingRecoveryKey);
+	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"Ключ восстановления"_q));
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box,
+			rpl::single(u"Сохраните этот ключ в надёжном месте — он показывается один раз. "
+				"Им вы войдёте в аккаунт, если потеряете все устройства, и подтвердите "
+				"смену ключа подписи после отзыва устройства. Сервер ключа не знает."_q),
+			st::boxLabel));
+		const auto label = box->addRow(
+			object_ptr<Ui::FlatLabel>(box, rpl::single(key), st::boxLabel),
+			st::boxRowPadding + QMargins(0, st::boxLittleSkip, 0, 0));
+		label->setSelectable(true);
+		box->addButton(rpl::single(u"Я сохранил(а) ключ"_q), [=] { box->closeBox(); });
+		box->addLeftButton(rpl::single(u"Скопировать"_q), [=] {
+			QGuiApplication::clipboard()->setText(key);
+			box->showToast(u"Ключ восстановления скопирован"_q);
+		});
+	}));
+	LOG(("Parvane: v2: ключ восстановления показан"));
+}
+
+void HandleRecoveryKey(const std::string &key) {
+	const auto text = QString::fromStdString(key);
+	if (const auto path = RecoveryKeyFileForE2e(); !path.isEmpty()) {
+		QFile file(path);
+		if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+			file.write(text.toUtf8());
+		}
+		LOG(("Parvane: v2: ключ восстановления записан в файл e2e"));
+		return;
+	}
+	crl::on_main([text] {
+		g_pendingRecoveryKey = text;
+		ShowPendingRecoveryKey(0);
+	});
+}
+
+[[nodiscard]] QString RecoveryKeyFromE2eFile() {
+	const auto path = RecoveryKeyFileForE2e();
+	if (path.isEmpty()) {
+		return QString();
+	}
+	QFile file(path);
+	return file.open(QIODevice::ReadOnly)
+		? QString::fromUtf8(file.readAll()).trimmed()
+		: QString();
+}
+
 // Поднять v2-сессию (под g_sessionMutex из StartSession: адрес и JWT уже есть).
 void StartV2Locked() {
 	if (!V2Enabled()) {
@@ -1783,6 +1877,9 @@ void StartV2Locked() {
 		LOG(("Parvane: %1").arg(QString::fromStdString(m)));
 	};
 	cfg.onEvent = [](const parvane::json &ev) { HandleV2Event(ev); };
+	if (!ParvaneDevEnv("PARVANE_AUTOLOGIN") || !RecoveryKeyFileForE2e().isEmpty()) {
+		cfg.onRecoveryKey = [](const std::string &key) { HandleRecoveryKey(key); };
+	}
 	auto s = std::make_shared<parvane::v2::Session>(std::move(cfg));
 	{
 		std::lock_guard<std::mutex> lk(g_v2Mutex);
@@ -1790,8 +1887,13 @@ void StartV2Locked() {
 	}
 	// Несохранённая правка приватности — сессия отправит при готовности; без неё
 	// сессия сама прочитает серверное значение (событие `privacy`).
-	if (const auto privacy = LoadPrivacyLocal(g_selfAddress); privacy.set && privacy.dirty) {
-		s->setPrivacy(privacy.groupAddNobody, privacy.strangers);
+	if (const auto privacy = LoadPrivacyLocal(g_selfAddress); privacy.set) {
+		if (privacy.dirty) {
+			s->setPrivacy(privacy.groupAddNobody, privacy.strangers);
+		}
+		if (privacy.dirtyCallsPresence) {
+			s->setCallsPresencePrivacy(privacy.callsNobody, privacy.presenceNobody);
+		}
 	}
 	s->start();
 	LOG(("Parvane: v2: сессия запускается (%1, движок %2)")
@@ -3439,8 +3541,12 @@ bool StartSession() {
 					}
 					const auto u = session->data().userLoaded(
 						UserId(BareId(IdForAddress(peerQ))));
-					if (u && u->isBlocked()) {
-						LOG(("Parvane: входящий звонок от заблокированного %1 — отклонён")
+					// «Звонки — никто» (FR-040, T137): как от заблокированного.
+					const auto nobody = g_privacyCallsNobody.load();
+					if ((u && u->isBlocked()) || nobody) {
+						LOG((nobody
+							? "Parvane: входящий звонок от %1 — отклонён (звонки: никто)"
+							: "Parvane: входящий звонок от заблокированного %1 — отклонён")
 							.arg(peerQ));
 						StopRingtone();
 						Parvane::CloseNativeCallPanel();
@@ -8366,6 +8472,10 @@ void publishPresenceHeartbeat() {
 	if (!g_l2PresenceAllowed) {
 		return;
 	}
+	// FR-040 (T137): «не показывать, что я в сети» — присутствие не публикуется.
+	if (g_privacyPresenceHidden) {
+		return;
+	}
 	const auto selfStd = self.toStdString();
 	const auto id = IdForAddress(self);
 	crl::async([selfStd, id] {
@@ -9656,13 +9766,16 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 		uuids.subtract(g_clearedUuids);
 		g_clearedUuids.unite(uuids);
 	}
+	// Нотис `cleared` v1-шарда обычно приходит раньше журнала (сервер записывает
+	// скрытие и для неизвестных ему id сообщений v2) — тогда скрывать уже нечего,
+	// но граница применена, и запись о ней нужна сценарию и разбору.
+	LOG(("Parvane: v2: журнал состояния → очистка чатов (%1), скрыто %2 сообщений")
+		.arg(fresh.size()).arg(uuids.size()));
 	if (uuids.isEmpty()) {
 		return;
 	}
 	AppendCleared(QStringList(uuids.begin(), uuids.end()));
 	ForgetClearedOnMain(session, uuids);
-	LOG(("Parvane: v2: журнал состояния → очистка чатов (%1), скрыто %2 сообщений")
-		.arg(fresh.size()).arg(uuids.size()));
 }
 
 void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
@@ -9939,7 +10052,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	if (type == "sskRotationNeeded") {
 		// Отозвано устройство, державшее SSK (D-12). Корень на этом устройстве —
 		// меняем сразу; иначе ждём устройство с корнем либо ключ восстановления
-		// (вводится в web: Settings → Devices).
+		// (Settings → Privacy and Security → «Ключ восстановления», T140).
 		crl::async([] {
 			const auto s = V2Ready();
 			if (!s) {
@@ -9952,8 +10065,19 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 			if (state.value("hasRoot", false)) {
 				LOG(("Parvane: v2: смена SSK корнем: %1")
 					.arg(QString::fromStdString(s->rotateSsk(std::string()))));
+			} else if (const auto key = RecoveryKeyFromE2eFile(); !key.isEmpty()) {
+				LOG(("Parvane: v2: смена SSK ключом восстановления: %1")
+					.arg(QString::fromStdString(s->rotateSsk(key.toStdString()))));
 			} else {
 				LOG(("Parvane: v2: SSK ждёт смены — корня на этом устройстве нет"));
+				if (state.value("hasBackup", false)) {
+					crl::on_main([] {
+						if (const auto window = Core::App().activeWindow()) {
+							window->showToast(u"Устройство отозвано: смените ключ подписи устройств "
+								"в настройках приватности (нужен ключ восстановления)."_q);
+						}
+					});
+				}
 			}
 		});
 		return true;
@@ -9964,6 +10088,8 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		const auto saved = (type == "privacySaved");
 		const auto strangers = ev.value("strangersAllowed", true);
 		const auto groupAddNobody = ev.value("groupAddNobody", false);
+		const auto callsNobody = ev.value("callsNobody", false);
+		const auto presenceNobody = ev.value("presenceNobody", false);
 		crl::on_main([=] {
 			const auto self = SelfAddress();
 			if (self.isEmpty()) {
@@ -9971,21 +10097,30 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 			}
 			auto privacy = LoadPrivacyLocal(self);
 			if (saved) {
-				if (privacy.dirty) {
+				if (privacy.dirty || privacy.dirtyCallsPresence) {
 					privacy.dirty = false;
+					privacy.dirtyCallsPresence = false;
 					SavePrivacyLocal(self, privacy);
 				}
 				return;
 			}
-			if (privacy.dirty) {
-				return; // своя правка новее — она уже в пути
-			}
+			// Своя несохранённая правка новее серверного значения — она в пути;
+			// остальные поля берём с сервера (их могло сменить другое устройство).
 			privacy.set = true;
-			privacy.strangers = strangers;
-			privacy.groupAddNobody = groupAddNobody;
+			if (!privacy.dirty) {
+				privacy.strangers = strangers;
+				privacy.groupAddNobody = groupAddNobody;
+			}
+			if (!privacy.dirtyCallsPresence) {
+				privacy.callsNobody = callsNobody;
+				privacy.presenceNobody = presenceNobody;
+			}
 			SavePrivacyLocal(self, privacy);
-			LOG(("Parvane: приватность с сервера: незнакомые %1, добавление в группы %2")
-				.arg(strangers ? u"да"_q : u"нет"_q, groupAddNobody ? u"никто"_q : u"все"_q));
+			LOG(("Parvane: приватность с сервера: незнакомые %1, добавление в группы %2, звонки %3, присутствие %4")
+				.arg(privacy.strangers ? u"да"_q : u"нет"_q,
+					privacy.groupAddNobody ? u"никто"_q : u"все"_q,
+					privacy.callsNobody ? u"никто"_q : u"все"_q,
+					privacy.presenceNobody ? u"скрыто"_q : u"видно"_q));
 		});
 		return true;
 	}
@@ -10197,6 +10332,123 @@ void SetStrangersAllowed(bool allowed) {
 		}
 		if (s) {
 			s->setPrivacy(privacy.groupAddNobody, privacy.strangers); // не готова — дошлёт сама
+		}
+	});
+}
+
+// ── T140: ключ восстановления (публичное, для Settings → Privacy) ──────────
+
+RecoveryState FetchRecoveryState() {
+	auto out = RecoveryState();
+	std::shared_ptr<parvane::v2::Session> s;
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		s = g_v2;
+	}
+	if (!s) {
+		return out;
+	}
+	out.available = true;
+	out.needsLinking = s->needsLinking();
+	if (s->isReady()) {
+		const auto state = s->sskState();
+		out.rotationNeeded = state.value("rotationNeeded", false);
+		out.hasRoot = state.value("hasRoot", false);
+		out.hasBackup = state.value("hasBackup", false);
+	}
+	return out;
+}
+
+QString RotateSskWithKey(const QString &recoveryKey) {
+	const auto s = V2Ready();
+	if (!s) {
+		return u"failed"_q;
+	}
+	const auto result = QString::fromStdString(s->rotateSsk(recoveryKey.trimmed().toStdString()));
+	LOG(("Parvane: v2: смена SSK ключом восстановления: %1").arg(result));
+	return result;
+}
+
+QString RecoverWithKey(const QString &recoveryKey) {
+	std::shared_ptr<parvane::v2::Session> s;
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		s = g_v2;
+	}
+	if (!s || !s->needsLinking()) {
+		return u"failed"_q;
+	}
+	const auto result = QString::fromStdString(s->recoverWithKey(recoveryKey.trimmed().toStdString()));
+	LOG(("Parvane: v2: вход по ключу восстановления: %1").arg(result));
+	return result;
+}
+
+QString ResetIdentityWithPassword(const QString &password) {
+	std::shared_ptr<parvane::v2::Session> s;
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		s = g_v2;
+	}
+	if (!s || !s->needsLinking()) {
+		return u"failed"_q;
+	}
+	const auto result = QString::fromStdString(s->resetIdentity(password.toStdString()));
+	LOG(("Parvane: v2: сброс личности: %1").arg(result));
+	return result;
+}
+
+// FR-040 (T137): нативные пункты Settings → Privacy «Last seen & online»,
+// «Calls», «Groups & channels». У Parvane два значения — «все» и «никто».
+bool PrivacyAudienceNobody(PrivacyAudience which) {
+	const auto privacy = LoadPrivacyLocal(SelfAddress());
+	switch (which) {
+	case PrivacyAudience::Calls: return privacy.callsNobody;
+	case PrivacyAudience::Presence: return privacy.presenceNobody;
+	case PrivacyAudience::GroupAdd: return privacy.groupAddNobody;
+	}
+	return false;
+}
+
+void SetPrivacyAudienceNobody(PrivacyAudience which, bool nobody) {
+	const auto self = SelfAddress();
+	if (self.isEmpty()) {
+		return;
+	}
+	auto privacy = LoadPrivacyLocal(self);
+	privacy.set = true;
+	const auto name = [&] {
+		switch (which) {
+		case PrivacyAudience::Calls:
+			privacy.callsNobody = nobody;
+			privacy.dirtyCallsPresence = true;
+			return u"звонки"_q;
+		case PrivacyAudience::Presence:
+			privacy.presenceNobody = nobody;
+			privacy.dirtyCallsPresence = true;
+			return u"присутствие"_q;
+		case PrivacyAudience::GroupAdd:
+			privacy.groupAddNobody = nobody;
+			privacy.dirty = true;
+			return u"добавление в группы"_q;
+		}
+		return QString();
+	}();
+	SavePrivacyLocal(self, privacy);
+	LOG(("Parvane: приватность: %1 — %2").arg(name, nobody ? u"никто"_q : u"все"_q));
+	crl::async([privacy, which] {
+		std::shared_ptr<parvane::v2::Session> s;
+		{
+			std::lock_guard<std::mutex> lk(g_v2Mutex);
+			s = g_v2;
+		}
+		if (!s) {
+			return;
+		}
+		// не готова — дошлёт сама
+		if (which == PrivacyAudience::GroupAdd) {
+			s->setPrivacy(privacy.groupAddNobody, privacy.strangers);
+		} else {
+			s->setCallsPresencePrivacy(privacy.callsNobody, privacy.presenceNobody);
 		}
 	});
 }
@@ -11793,6 +12045,8 @@ void CheckGroupInvite(const QString &token,
 			} else {
 				p.groupId = QString::fromStdString(r.value("address", std::string()));
 				p.name = QString::fromStdString(r.value("name", std::string()));
+				p.about = QString::fromStdString(r.value("about", std::string()));
+				p.avatar = QString::fromStdString(r.value("avatar", std::string()));
 				p.kind = r.value("isChannel", false) ? u"channel"_q : u"group"_q;
 				p.members = int(r.value("membersCount", std::int64_t(0)));
 				p.requestNeeded = r.value("isRequestNeeded", false);
@@ -13665,6 +13919,28 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			base::call_delayed(delay * crl::time(1000), [allowed] {
 				SetStrangersAllowed(allowed);
 			});
+		}
+
+		// Приватность звонков/присутствия/добавления в группы (e2e, T137):
+		// PARVANE_AUTOAUDIENCE=<calls|presence|groupadd>:<nobody|all>@сек[,…].
+		if (const char *av = ParvaneDevEnv("PARVANE_AUTOAUDIENCE"); av && *av) {
+			for (const auto &part : QString::fromUtf8(av).split(QChar(','), Qt::SkipEmptyParts)) {
+				const auto colon = part.indexOf(u':');
+				const auto at = part.lastIndexOf(u'@');
+				if (colon <= 0 || at <= colon) {
+					continue;
+				}
+				const auto name = part.left(colon);
+				const auto which = (name == u"calls"_q)
+					? PrivacyAudience::Calls
+					: (name == u"presence"_q)
+					? PrivacyAudience::Presence
+					: PrivacyAudience::GroupAdd;
+				const auto nobody = (part.mid(colon + 1, at - colon - 1) == u"nobody"_q);
+				base::call_delayed(part.mid(at + 1).toInt() * crl::time(1000), [=] {
+					SetPrivacyAudienceNobody(which, nobody);
+				});
+			}
 		}
 
 		// Личное состояние (e2e, T132): PARVANE_AUTOSTATE=<op>:<адрес>@сек[,…],

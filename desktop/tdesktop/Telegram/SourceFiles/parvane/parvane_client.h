@@ -116,6 +116,27 @@ struct TwoFactorState {
 [[nodiscard]] bool StrangersPolicyAvailable(); // v2 включён
 [[nodiscard]] bool StrangersAllowed();
 void SetStrangersAllowed(bool allowed);
+// FR-040 (T137): «кто может звонить», «кто видит, что я в сети», «кто может
+// добавлять в группы» — «все» или «никто». Доступно при StrangersPolicyAvailable().
+enum class PrivacyAudience { Calls, Presence, GroupAdd };
+[[nodiscard]] bool PrivacyAudienceNobody(PrivacyAudience which);
+void SetPrivacyAudienceNobody(PrivacyAudience which, bool nobody);
+
+// Ключ восстановления (T140, FR-066): смена ключа подписи устройств после
+// отзыва, вход на новом устройстве без других устройств, сброс личности.
+// Результаты — как у ядра: "ok" | "bad_key" | "no_backup" | "bad_password" |
+// "failed". Вызовы блокирующие (сеть) — не с main.
+struct RecoveryState {
+	bool available = false;      // v2-сессия есть
+	bool needsLinking = false;   // устройство не привязано к аккаунту v2
+	bool rotationNeeded = false; // ключ подписи устройств раскрыт отзывом
+	bool hasRoot = false;        // корень лежит на этом устройстве (старая схема)
+	bool hasBackup = false;      // есть копия корня под ключом восстановления
+};
+[[nodiscard]] RecoveryState FetchRecoveryState();
+[[nodiscard]] QString RotateSskWithKey(const QString &recoveryKey);
+[[nodiscard]] QString RecoverWithKey(const QString &recoveryKey);
+[[nodiscard]] QString ResetIdentityWithPassword(const QString &password);
 
 // Режим чата «усиленная приватность» (L2, T079; правило conformance L2-1):
 // выравнивание размеров конвертов, без typing/presence, виден участникам.

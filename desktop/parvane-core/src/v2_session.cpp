@@ -1619,18 +1619,66 @@ void Session::noteL2StateLocked(bool force) {
 
 // ── приватность и режим L2 (T079) ──────────────────────────────────────────
 
+namespace {
+constexpr unsigned kPrivacyGroupAdd = 1;
+constexpr unsigned kPrivacyStrangers = 2;
+constexpr unsigned kPrivacyCalls = 4;
+constexpr unsigned kPrivacyPresence = 8;
+constexpr unsigned kPrivacyAll = kPrivacyGroupAdd | kPrivacyStrangers | kPrivacyCalls | kPrivacyPresence;
+
+bool audienceNobody(const json &settings, const char *field) {
+    return settings.value(field, std::string()) == "AUDIENCE_NOBODY";
+}
+const char *audienceName(bool nobody) {
+    return nobody ? "AUDIENCE_NOBODY" : "AUDIENCE_EVERYBODY";
+}
+} // namespace
+
+// Серверные настройки. false — ни разу не задавались (settings не тронут).
+bool Session::readPrivacyLocked(json *settings) {
+    const auto got = decodeMessage(
+        "parvane.identity.v2.PrivacyGetResponse",
+        call(false, "identity.privacy.get",
+             encodeMessage("parvane.identity.v2.PrivacyGetRequest", json::object())));
+    if (!got.is_object() || !got.value("is_set", false)) return false;
+    *settings = got.value("settings", json::object());
+    return true;
+}
+
 void Session::pushPrivacyLocked() {
     if (!privacySet_ || !ready_) return;
     try {
+        // privacy.set заменяет все поля: те, что это устройство не правило,
+        // берём с сервера — их могло задать другое устройство.
+        if (privacyDirty_ != kPrivacyAll) {
+            json remote;
+            if (readPrivacyLocked(&remote)) {
+                if (!(privacyDirty_ & kPrivacyGroupAdd)) privacyGroupAddNobody_ = audienceNobody(remote, "group_add");
+                if (!(privacyDirty_ & kPrivacyStrangers)) privacyStrangers_ = remote.value("messages_from_strangers", false);
+                if (!(privacyDirty_ & kPrivacyCalls)) privacyCallsNobody_ = audienceNobody(remote, "calls_from");
+                if (!(privacyDirty_ & kPrivacyPresence)) privacyPresenceNobody_ = audienceNobody(remote, "presence_visibility");
+            }
+        }
         call(false, "identity.privacy.set",
              encodeMessage("parvane.identity.v2.PrivacySetRequest",
                            json{{"settings",
-                                 {{"group_add", privacyGroupAddNobody_ ? "AUDIENCE_NOBODY" : "AUDIENCE_EVERYBODY"},
-                                  {"messages_from_strangers", privacyStrangers_}}}}));
+                                 {{"group_add", audienceName(privacyGroupAddNobody_)},
+                                  {"messages_from_strangers", privacyStrangers_},
+                                  {"calls_from", audienceName(privacyCallsNobody_)},
+                                  {"presence_visibility", audienceName(privacyPresenceNobody_)}}}}));
         log(std::string("приватность сохранена: незнакомые ") + (privacyStrangers_ ? "да" : "нет")
-            + ", добавление в группы " + (privacyGroupAddNobody_ ? "никто" : "все"));
+            + ", добавление в группы " + (privacyGroupAddNobody_ ? "никто" : "все")
+            + ", звонки " + (privacyCallsNobody_ ? "никто" : "все")
+            + ", присутствие " + (privacyPresenceNobody_ ? "скрыто" : "видно"));
         privacySet_ = false; // правка на сервере; дальше источник истины — он
+        privacyDirty_ = 0;
         outbox_.push_back(json{{"type", "privacySaved"}});
+        // Итог целиком — хосту: недостающие поля могли прийти с сервера
+        outbox_.push_back(json{{"type", "privacy"},
+                               {"groupAddNobody", privacyGroupAddNobody_},
+                               {"strangersAllowed", privacyStrangers_},
+                               {"callsNobody", privacyCallsNobody_},
+                               {"presenceNobody", privacyPresenceNobody_}});
     } catch (const std::exception &e) {
         log(std::string("приватность не сохранена: ") + e.what());
         throw;
@@ -1639,28 +1687,25 @@ void Session::pushPrivacyLocked() {
 
 void Session::fetchPrivacyLocked() {
     try {
-        const auto got = decodeMessage(
-            "parvane.identity.v2.PrivacyGetResponse",
-            call(false, "identity.privacy.get",
-                 encodeMessage("parvane.identity.v2.PrivacyGetRequest", json::object())));
-        if (!got.is_object() || !got.value("is_set", false)) return;
-        const auto settings = got.value("settings", json::object());
-        privacyGroupAddNobody_ = (settings.value("group_add", std::string()) == "AUDIENCE_NOBODY");
+        json settings;
+        if (!readPrivacyLocked(&settings)) return;
+        privacyGroupAddNobody_ = audienceNobody(settings, "group_add");
         privacyStrangers_ = settings.value("messages_from_strangers", false);
+        privacyCallsNobody_ = audienceNobody(settings, "calls_from");
+        privacyPresenceNobody_ = audienceNobody(settings, "presence_visibility");
         outbox_.push_back(json{{"type", "privacy"},
                                {"groupAddNobody", privacyGroupAddNobody_},
-                               {"strangersAllowed", privacyStrangers_}});
+                               {"strangersAllowed", privacyStrangers_},
+                               {"callsNobody", privacyCallsNobody_},
+                               {"presenceNobody", privacyPresenceNobody_}});
     } catch (const std::exception &e) {
         log(std::string("приватность не прочитана: ") + e.what());
         throw;
     }
 }
 
-bool Session::setPrivacy(bool groupAddNobody, bool strangersAllowed) {
-    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+bool Session::savePrivacyLocked() {
     privacySet_ = true;
-    privacyGroupAddNobody_ = groupAddNobody;
-    privacyStrangers_ = strangersAllowed;
     if (!ready_ || !client_) return false; // уйдёт при готовности сессии
     try {
         pushPrivacyLocked();
@@ -1669,6 +1714,22 @@ bool Session::setPrivacy(bool groupAddNobody, bool strangersAllowed) {
     } catch (const std::exception &) {
         return false;
     }
+}
+
+bool Session::setPrivacy(bool groupAddNobody, bool strangersAllowed) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    privacyGroupAddNobody_ = groupAddNobody;
+    privacyStrangers_ = strangersAllowed;
+    privacyDirty_ |= kPrivacyGroupAdd | kPrivacyStrangers;
+    return savePrivacyLocked();
+}
+
+bool Session::setCallsPresencePrivacy(bool callsNobody, bool presenceNobody) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    privacyCallsNobody_ = callsNobody;
+    privacyPresenceNobody_ = presenceNobody;
+    privacyDirty_ |= kPrivacyCalls | kPrivacyPresence;
+    return savePrivacyLocked();
 }
 
 void Session::setDirectL2(const std::string &peer, bool enabled, const std::string &opId) {
@@ -2035,9 +2096,91 @@ json Session::createInvite(const std::string &address, const std::string &title,
         writeStateFile("invites", all.dump());
         persistLocked();
         publishGroupLocked(hex);
+        shareInviteLocked(address, record);
     }
     flushAsync();
     return record;
+}
+
+void Session::shareInviteLocked(const std::string &address, const json &record) {
+    if (!state_) return; // журнал не подключён — ссылка уйдёт при следующем сведении
+    try {
+        json invite{{"group_id", hexToB64(groupHex(address))},
+                    {"link_id", hexToB64(record.value("linkId", std::string()))},
+                    {"url", record.value("url", std::string())},
+                    {"created_ms", std::to_string(record.value("date", std::int64_t(0)) * 1000)}};
+        if (record.contains("title")) invite["title"] = record["title"];
+        if (record.contains("expiresAt")) {
+            invite["expires_ms"] = std::to_string(record.value("expiresAt", std::int64_t(0)) * 1000);
+        }
+        if (record.contains("usageLimit")) invite["usage_limit"] = record["usageLimit"];
+        if (record.value("isRequestNeeded", false)) invite["requires_approval"] = true;
+        for (const auto &b : state_->groupInviteSet(invite)) pendingAppends_.push_back(b);
+        pushAppendsLocked();
+    } catch (const std::exception &e) {
+        log(std::string("ссылка-приглашение в журнале состояния: ") + e.what());
+    }
+}
+
+// Снимок журнала → локальный список ссылок (добавляются чужие); действующие
+// ссылки этого устройства, которых в журнале нет (созданы до T160), дописываются.
+void Session::mergeSharedInvitesLocked() {
+    if (!state_ || !client_) return;
+    try {
+        const auto int64Of = [](const json &v) -> std::int64_t {
+            if (v.is_string()) return std::strtoll(v.get<std::string>().c_str(), nullptr, 10);
+            return v.is_number() ? v.get<std::int64_t>() : 0;
+        };
+        const auto snap = state_->snapshot();
+        auto all = loadInvites();
+        std::set<std::string> shared;
+        int added = 0;
+        if (snap.contains("invites") && snap["invites"].is_array()) {
+            for (const auto &i : snap["invites"]) {
+                const auto linkId = b64ToHex(i.value("link_id", std::string()));
+                const auto hex = b64ToHex(i.value("group_id", std::string()));
+                const auto url = i.value("url", std::string());
+                if (linkId.empty() || hex.empty() || url.empty()) continue;
+                shared.insert(linkId);
+                const auto address = groupAddress(hex);
+                if (!all.contains(address) || !all[address].is_array()) all[address] = json::array();
+                bool known = false;
+                for (const auto &r : all[address]) {
+                    if (r.value("linkId", std::string()) == linkId) known = true;
+                }
+                if (known) continue;
+                json record{{"url", url}, {"linkId", linkId},
+                            {"date", int64Of(i.value("created_ms", json(0))) / 1000}};
+                if (const auto title = i.value("title", std::string()); !title.empty()) record["title"] = title;
+                if (const auto expires = int64Of(i.value("expires_ms", json(0))); expires > 0) {
+                    record["expiresAt"] = expires / 1000;
+                }
+                if (const auto limit = i.value("usage_limit", 0u); limit > 0) record["usageLimit"] = limit;
+                if (i.value("requires_approval", false)) record["isRequestNeeded"] = true;
+                all[address].push_back(record);
+                ++added;
+            }
+        }
+        if (added > 0) {
+            writeStateFile("invites", all.dump());
+            log("ссылки-приглашения с других своих устройств: " + std::to_string(added));
+        }
+        for (auto it = all.begin(); it != all.end(); ++it) {
+            if (!isGroupAddress(it.key()) || !it.value().is_array()) continue;
+            std::set<std::string> active;
+            if (const auto g = client_->groupInfo(groupHex(it.key())); g && g->contains("inviteLinks")) {
+                for (const auto &id : (*g)["inviteLinks"]) {
+                    if (id.is_string()) active.insert(id.get<std::string>());
+                }
+            }
+            for (const auto &r : it.value()) {
+                const auto linkId = r.value("linkId", std::string());
+                if (active.count(linkId) && !shared.count(linkId)) shareInviteLocked(it.key(), r);
+            }
+        }
+    } catch (const std::exception &e) {
+        log(std::string("ссылки-приглашения из журнала состояния: ") + e.what());
+    }
 }
 
 json Session::listInvites(const std::string &address) {
@@ -2057,6 +2200,11 @@ json Session::listInvites(const std::string &address) {
             if (active.count(r.value("linkId", std::string()))) out.push_back(r);
         }
     }
+    // Порядок один на всех своих устройствах (T160): по нему выбирается основная ссылка.
+    std::sort(out.begin(), out.end(), [](const json &a, const json &b) {
+        const auto da = a.value("date", std::int64_t(0)), db = b.value("date", std::int64_t(0));
+        return da != db ? da < db : a.value("linkId", std::string()) < b.value("linkId", std::string());
+    });
     return out;
 }
 
@@ -2072,7 +2220,17 @@ bool Session::revokeInvite(const std::string &address, const std::string &url) {
         }
     }
     if (linkId.empty()) return false;
-    return changeGroup(address, json{{"invite_key_revoke", {{"link_id", hexToB64(linkId)}}}});
+    if (!changeGroup(address, json{{"invite_key_revoke", {{"link_id", hexToB64(linkId)}}}})) return false;
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (state_) {
+        try {
+            for (const auto &b : state_->groupInviteRemove(hexToB64(linkId))) pendingAppends_.push_back(b);
+            pushAppendsLocked();
+        } catch (const std::exception &e) {
+            log(std::string("снятие ссылки-приглашения в журнале состояния: ") + e.what());
+        }
+    }
+    return true;
 }
 
 bool Session::isInviteUrl(const std::string &url) {
@@ -2222,8 +2380,25 @@ json Session::checkInvite(const std::string &url) {
             if (m == cfg_.self) isMember = true;
         }
         const auto members = check.value("members", json(0));
+        // Описание и фото (T159) — из подписанного журнала группы (сервер отдаёт
+        // его по ссылке), а не со слов сервера; журнал не-участника не храним.
+        std::string about, avatar;
+        if (!isMember && !hex.empty()) {
+            try {
+                syncGroupLocked(hex, parsed->value("linkId", std::string()));
+                if (const auto info = client_->groupInfo(hex)) {
+                    about = info->value("about", std::string());
+                    avatar = info->value("avatarFileId", std::string());
+                }
+            } catch (const std::exception &e) {
+                log(std::string("превью ссылки: журнал группы не прочитан: ") + e.what());
+            }
+            client_->groupForget(hex);
+        }
         return json{{"address", groupAddress(hex)},
                     {"name", check.value("name", std::string())},
+                    {"about", about},
+                    {"avatar", avatar},
                     {"membersCount", members.is_number() ? members.get<std::int64_t>() : 0},
                     {"isRequestNeeded", check.value("requires_approval", false)},
                     {"isChannel", check.value("kind", std::string()) == "GROUP_KIND_CHANNEL"},
@@ -2377,6 +2552,7 @@ json Session::stateAttach(const json &local) {
         log("локальное состояние перенесено в журнал (" + std::to_string(bodies.size()) + " записей)");
     }
     log("журнал состояния подключён");
+    mergeSharedInvitesLocked();
     return state_->snapshot();
 }
 
@@ -2413,6 +2589,7 @@ json Session::stateSync(const json &desired, const std::vector<std::string> &kin
     // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её).
     pushAppendsLocked();
     const bool changed = pullStateLocked();
+    if (changed) mergeSharedInvitesLocked();
     return json{{"changed", changed}, {"snapshot", state_->snapshot()}};
 }
 
