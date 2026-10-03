@@ -16,11 +16,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "main/main_session.h"
 #include "settings/sections/settings_premium.h" // Settings::ShowPremium.
+#include "parvane/parvane_client.h"
 
 namespace Api {
 namespace {
 
 constexpr auto kMaxRules = 3; // Allow users, disallow users, Option.
+
+// Parvane: ключи нативной приватности, за которыми стоят настройки протокола v2.
+[[nodiscard]] std::optional<Parvane::PrivacyAudience> ParvaneAudience(
+		UserPrivacy::Key key) {
+	if (!Parvane::StrangersPolicyAvailable()) {
+		return std::nullopt;
+	}
+	switch (key) {
+	case UserPrivacy::Key::Calls: return Parvane::PrivacyAudience::Calls;
+	case UserPrivacy::Key::LastSeen: return Parvane::PrivacyAudience::Presence;
+	case UserPrivacy::Key::Invites: return Parvane::PrivacyAudience::GroupAdd;
+	default: return std::nullopt;
+	}
+}
 
 using TLInputRules = MTPVector<MTPInputPrivacyRule>;
 using TLRules = MTPVector<MTPPrivacyRule>;
@@ -261,6 +276,17 @@ UserPrivacy::UserPrivacy(not_null<ApiWrap*> api)
 void UserPrivacy::save(
 		Key key,
 		const UserPrivacy::Rule &rule) {
+	// Parvane (FR-040, T137): звонки, присутствие и добавление в группы —
+	// настройки протокола v2 («все» / «никто», без исключений).
+	if (const auto audience = ParvaneAudience(key)) {
+		const auto nobody = (rule.option == Option::Nobody);
+		Parvane::SetPrivacyAudienceNobody(*audience, nobody);
+		const auto &saved = (_privacyValues[key] = Rule{
+			.option = nobody ? Option::Nobody : Option::Everyone,
+		});
+		_privacyChanges[key].fire_copy(saved);
+		return;
+	}
 	const auto tlKey = KeyToTL(key);
 	const auto keyTypeId = tlKey.type();
 	const auto it = _privacySaveRequests.find(keyTypeId);
@@ -307,6 +333,15 @@ void UserPrivacy::apply(
 }
 
 void UserPrivacy::reload(Key key) {
+	if (const auto audience = ParvaneAudience(key)) {
+		const auto &saved = (_privacyValues[key] = Rule{
+			.option = Parvane::PrivacyAudienceNobody(*audience)
+				? Option::Nobody
+				: Option::Everyone,
+		});
+		_privacyChanges[key].fire_copy(saved);
+		return;
+	}
 	if (_privacyRequestIds.contains(key)) {
 		return;
 	}

@@ -331,6 +331,10 @@ public:
     // Чат очищен «у себя» до момента (proto3-JSON state.v1.ChatCleared) →
     // тела state.append. Бросает.
     [[nodiscard]] std::vector<std::string> chatCleared(const json &cleared);
+    // Ссылка-приглашение группы v2 (proto3-JSON state.v1.GroupInvite) и её
+    // снятие (link_id — base64) → тела state.append. Бросают.
+    [[nodiscard]] std::vector<std::string> groupInviteSet(const json &invite);
+    [[nodiscard]] std::vector<std::string> groupInviteRemove(const std::string &linkIdB64);
 
 private:
     explicit StateSession(PvStateSession *s) : s_(s) {}

@@ -674,6 +674,18 @@ std::vector<std::string> StateSession::chatCleared(const json &cleared) {
     return bodies(result(out, err));
 }
 
+std::vector<std::string> StateSession::groupInviteSet(const json &invite) {
+    char *err = nullptr;
+    char *out = pv_state_group_invite_set(s_, invite.dump().c_str(), &err);
+    return bodies(result(out, err));
+}
+
+std::vector<std::string> StateSession::groupInviteRemove(const std::string &linkIdB64) {
+    char *err = nullptr;
+    char *out = pv_state_group_invite_remove(s_, linkIdB64.c_str(), &err);
+    return bodies(result(out, err));
+}
+
 AnonPlanner::AnonPlanner() : p_(pv_anon_planner_new()) {}
 
 AnonPlanner::~AnonPlanner() { pv_anon_planner_free(p_); }
