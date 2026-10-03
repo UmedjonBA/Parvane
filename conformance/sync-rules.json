@@ -569,9 +569,58 @@
       "acceptsLegacyOffers": false,
       "v2Grant": {
         "boxField": "v2",
-        "boxCoords": ["file_id", "file_key", "file_nonce"],
-        "materialKeys": ["dk", "gen", "log", "sk", "skv", "ssk"],
+        "boxCoords": [
+          "file_id",
+          "file_key",
+          "file_nonce"
+        ],
+        "materialKeys": [
+          "dk",
+          "gen",
+          "log",
+          "sk",
+          "skv",
+          "ssk"
+        ],
         "secondDeviceCreatesRoot": false
+      },
+      "v2History": {
+        "exportField": "v2History",
+        "rowKeys": [
+          "id",
+          "from",
+          "to",
+          "ts",
+          "content"
+        ],
+        "optionalRowKeys": [
+          "reply_to",
+          "edited",
+          "reactions",
+          "pinned",
+          "read"
+        ],
+        "limit": 20000,
+        "skips": [
+          "deleted",
+          "ttl",
+          "encrypted",
+          "group_encrypted"
+        ],
+        "incomingRead": true,
+        "groupRowsWaitForGroup": true
+      },
+      "ownDeviceGroups": {
+        "engineMethod": "shareGroupsWithOwnDevices",
+        "trigger": "new device in own device log",
+        "shareFields": [
+          "envelope_key",
+          "send_private_key",
+          "megolm_exported",
+          "megolm_owner"
+        ],
+        "megolmExportedOnlyFromOwnAccount": true,
+        "epochKeyFromAdminOrOwnAccount": true
       },
       "vectors": {
         "newPubB64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -777,6 +826,245 @@
         "web": "web/telegram-tt/src/api/parvane/l2.test.ts",
         "desktop": "desktop/parvane-core/tests/v2_tests.cpp",
         "android": "android/libtd/src/test/java/org/drinkless/tdlib/L2PrivacySeamTest.kt"
+      }
+    },
+    {
+      "id": "CALL-1",
+      "title": "ICE-кандидат звонка: один формат во всех клиентах, приём прежних видов",
+      "canonicalFields": [
+        "candidate",
+        "sdp_mid",
+        "sdp_mline_index"
+      ],
+      "legacyAliases": {
+        "web": [
+          "sdpMid",
+          "sdpMLineIndex"
+        ],
+        "desktop": [
+          "sdp",
+          "mid",
+          "idx"
+        ]
+      },
+      "answerCarriesAudio": true,
+      "vectors": {
+        "decode": [
+          {
+            "name": "canonical",
+            "raw": "{\"candidate\":\"candidate:c\",\"sdp_mid\":\"1\",\"sdp_mline_index\":2}",
+            "candidate": "candidate:c",
+            "mid": "1",
+            "index": 2
+          },
+          {
+            "name": "web",
+            "raw": "{\"candidate\":\"candidate:w\",\"sdpMid\":\"audio\",\"sdpMLineIndex\":1,\"usernameFragment\":\"ab\"}",
+            "candidate": "candidate:w",
+            "mid": "audio",
+            "index": 1
+          },
+          {
+            "name": "desktop-legacy",
+            "raw": "{\"sdp\":\"candidate:d\",\"mid\":\"0\",\"idx\":0}",
+            "candidate": "candidate:d",
+            "mid": "0",
+            "index": 0
+          }
+        ],
+        "reject": [
+          "cand-plain",
+          "{\"sdpMid\":\"0\"}",
+          "null"
+        ]
+      },
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/iceCandidate.ts (+ iceCandidate.test.ts)",
+        "desktop": "desktop/parvane-core/include/parvane/call.h (+ tests/call_session_tests.cpp), tdesktop parvane_webrtc_backend.cpp",
+        "android": "звонков нет (спека 006)"
+      }
+    },
+    {
+      "id": "LEGACY-1",
+      "title": "v1-устройства аккаунта на v2: подписанный список, копии только им, чужая копия пропускается",
+      "deliverMethod": "msg.deliver_legacy",
+      "listEntry": "LegacyDeviceSet",
+      "primaryCiphertext": "",
+      "sendSignature": "send:<id>:",
+      "editSignature": "edit:<id>:",
+      "cases": [
+        {
+          "name": "своя копия есть",
+          "kind": "encrypted",
+          "ciphertext": "",
+          "senderIdentity": "id",
+          "ownCopy": true,
+          "skip": false
+        },
+        {
+          "name": "чужая легаси-копия",
+          "kind": "encrypted",
+          "ciphertext": "",
+          "senderIdentity": "id",
+          "ownCopy": false,
+          "skip": true
+        },
+        {
+          "name": "обычное sealed-сообщение",
+          "kind": "encrypted",
+          "ciphertext": "ct",
+          "senderIdentity": "id",
+          "ownCopy": false,
+          "skip": false
+        },
+        {
+          "name": "надгробие без отправителя",
+          "kind": "encrypted",
+          "ciphertext": "",
+          "senderIdentity": "",
+          "ownCopy": false,
+          "skip": false
+        }
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/messages.ts (sealLegacy), sync.ts, v2/controller.ts (syncLegacySet)",
+        "desktop": "desktop/parvane-core/src/v2_legacy.cpp, e2e.cpp (sealLegacyCopies, isForeignLegacyCopy); tdesktop parvane_client.cpp",
+        "android": "android/jni/parvane_jni.cpp (то же ядро: sendLegacyCopies, publishLegacySetAsync, isForeignLegacyCopy)"
+      }
+    },
+    {
+      "id": "TYPING-1",
+      "title": "«Печатает» в чате v2 — только эфемерным каналом v2, без понижения до v1",
+      "methods": {
+        "direct": "ephemeral.typing",
+        "group": "ephemeral.group_typing",
+        "subscribe": "ephemeral.subscribe"
+      },
+      "v1Topic": "msg.typing.",
+      "maxAgeMs": 30000,
+      "noDowngrade": true,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (trySendTyping), messages.ts (sendMessageAction)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (sendTyping); tdesktop parvane_client.cpp (MirrorTyping)",
+        "android": "android/jni/parvane_jni.cpp (nativeSendTyping → то же ядро)"
+      }
+    },
+    {
+      "id": "REVOKE-1",
+      "title": "Отзыв своего устройства на v2: запись журнала, ротации ключей, смена SSK корнем",
+      "v1Topic": "identity.device.revoke",
+      "logEntryMethod": "identity.device.log_append",
+      "rotations": [
+        "identity.delivery_key.set",
+        "state key",
+        "group epoch"
+      ],
+      "grantRootBackupField": "rb",
+      "sskResults": [
+        "ok",
+        "bad_key",
+        "no_backup",
+        "failed"
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (revokeDevice, rotateSsk), provider.ts (fetchAuthorizations, revokeOwnDevice), v2/stateJournal.ts (attach rekey)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (revokeDevice, rotateSsk, ownDevices); tdesktop parvane_client.cpp (ListDevices, RevokeDevice)",
+        "android": "android/jni/parvane_jni.cpp (nativeListDevices, nativeRevokeDevice → то же ядро)"
+      }
+    },
+    {
+      "id": "RECOVER-1",
+      "title": "Смена корня собеседника (KEY-1 v2), восстановление по ключу и сброс личности на новом устройстве",
+      "logVerdicts": [
+        "new",
+        "known",
+        "rootChanged",
+        "replaced"
+      ],
+      "genesisField": "genesis_hash",
+      "backupMethods": {
+        "set": "identity.root.backup_set",
+        "get": "identity.root.backup_get"
+      },
+      "resetMethod": "identity.root.rotate",
+      "reauthMethod": "identity.session.reauth",
+      "recoverResults": [
+        "ok",
+        "bad_key",
+        "no_backup",
+        "failed"
+      ],
+      "resetResults": [
+        "ok",
+        "bad_password",
+        "failed"
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (acceptPeerRoot, runDirect, dropIdentity, recoverWithKey, resetIdentity), SettingsActiveSessions.tsx",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (acceptPeerRootLocked, runDirectLocked, dropIdentityLocked, recoverWithKey, resetIdentity); tdesktop parvane_client.cpp (peerRootChanged)",
+        "android": "android/jni/parvane_jni.cpp (peer_root_changed; то же ядро)"
+      }
+    },
+    {
+      "id": "CAP-1",
+      "title": "Блобы вложений v2-чата — по секрету capability (без гранта получателю), скачивание анонимным каналом",
+      "uploadMethods": [
+        "cloud.blob.upload_chunk",
+        "cloud.blob.upload_complete"
+      ],
+      "downloadMethod": "cloud.blob.download_cap",
+      "capabilityBytes": 32,
+      "contentField": "capability",
+      "maxChunksPerRequest": 256,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/media.ts, messages.ts (mediaUploadOptions), v2/controller.ts (uploadBlob, downloadBlobCap)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (uploadBlob, downloadBlobCap), v2_link.cpp (requestStream); tdesktop parvane_client.cpp (UploadBlobWith, DownloadChatBlob)",
+        "android": "android/jni/parvane_jni.cpp (rememberBlobCaps, downloadChatBlob, отправка медиа)"
+      }
+    },
+    {
+      "id": "STATE-2",
+      "title": "Личное состояние — целиком в журнале (уведомления, блок-лист, архив, закреп); v1-блоб без списка заглушённых; приватность — с сервера",
+      "kinds": [
+        "folders",
+        "blocked",
+        "scheduled",
+        "archived",
+        "pinned",
+        "notify"
+      ],
+      "mainPinList": "PIN_LIST_MAIN",
+      "notifyFields": [
+        "mute_until_ms",
+        "sound",
+        "show_previews",
+        "silent"
+      ],
+      "syncIntervalMs": 8000,
+      "v1BlobWhenJournaled": [
+        "group_add"
+      ],
+      "privacyGetMethod": "identity.privacy.get",
+      "privacySetMethod": "identity.privacy.set",
+      "status": "open: web и desktop готовы; android ведёт в журнале блок-лист и архив, уведомления и закреп — нет",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/stateJournal.ts (notify), provider.ts (pushNotifySettings, refreshV2Privacy), v2/controller.ts (getPrivacy)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (fetchPrivacyLocked); tdesktop parvane_client.cpp (kV2StateKinds, ProjectNotify, ProjectBlocked, ProjectDialogs); desktop/verify_protocol_v2_state.sh",
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/StateJournal.kt (блок-лист, архив); JNI — события privacy / privacy_saved"
+      }
+    },
+    {
+      "id": "ACCESS-1",
+      "title": "Блокировка отзывает у собеседника ключ доступа к доставке; слепые жетоны — партиями по расписанию, не перед тратой",
+      "engineCall": "revoke_contact_access",
+      "keySetMethod": "identity.delivery_key.set",
+      "tokenBatch": 20,
+      "tokenCheckIntervalMs": 3600000,
+      "status": "open: web и desktop готовы; android — JNI nativeRevokeContactAccess есть, Kotlin при блокировке его не зовёт",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (revokeContactAccess, refillTokens), provider.ts (blockUser)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (revokeContactAccess, refillTokensLocked); tdesktop parvane_client.cpp (NoteBlock); desktop/verify_protocol_v2_state.sh",
+        "android": "android/jni/parvane_jni.cpp (nativeRevokeContactAccess; партия жетонов — общее ядро)"
       }
     },
     {

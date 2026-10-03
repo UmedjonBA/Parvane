@@ -337,6 +337,36 @@ content) + `parvane_client.cpp` `prepareIncoming`/`injectOnMain`; android
    состояния. До гранта устройство работает по v1. Негодный материал не
    повторяется: устройство снова ждёт линковку. Клиент без v2 поле `v2`
    игнорирует.
+8. **История v2-эпохи (spec 007, T138, SC-002)** — сообщения v2 запечатаны под
+   устройства, существовавшие в момент отправки: новому устройству сервер их не
+   отдаст, а материал гранта несёт только ключи. Поэтому старое устройство
+   кладёт в экспорт линковки (тот же блоб, что `decCache`) поле `v2History` —
+   массив уже расшифрованных строк v2 в формате хранимого сообщения:
+   `{id, from, to, ts, content, reply_to?, edited?, reactions?, pinned?, read?}`
+   (личные чаты и группы `v2g:<hex>`; не больше 20 000 самых свежих строк; без
+   удалённых, без сообщений с TTL, без нерасшифрованных `encrypted`/
+   `group_encrypted`). Новое устройство применяет строки как сообщения v2
+   (v1-курсор синка по ним не двигается, v1-подтверждений нет), дубль по `id`
+   пропускает, битые строки пропускает. Входящие из истории считаются
+   прочитанными; `read` своих исходящих — как знает старое устройство. Строки
+   группы v2 применяются только когда группа уже известна устройству (из
+   журнала группы после вступления в журнал устройств), до этого ждут. Клиент,
+   не знающий поля, его игнорирует.
+9. **Группы v2 новому устройству (spec 007, T142)** — материал гранта несёт
+   только ключи устройства. Устройство аккаунта, увидевшее в СВОЁМ журнале
+   устройств новое устройство (то же место, где показывается уведомление «новое
+   устройство»), вызывает движок `shareGroupsWithOwnDevices([id…])` и отправляет
+   полученные запросы: по каждой группе v2, где аккаунт состоит и есть ключи
+   текущей эпохи, — `GroupKeyShare` с `envelope_key` (+ `send_private_key`, если
+   есть право писать) и по одному `GroupKeyShare` с `megolm_exported` +
+   `megolm_owner` на каждую известную входящую сессию Megolm текущей эпохи
+   (экспорт с первого известного индекса). Конверты запечатаны только под
+   перечисленные свои устройства. Приём (движок): ключ эпохи принимается от
+   админа, создавшего эпоху, ЛИБО от устройства своего аккаунта; `megolm_exported`
+   — только от устройства своего аккаунта (иначе `FORBIDDEN`), известную сессию
+   не заменяет. Группу, которой новое устройство ещё не знает, оно дочитывает
+   само по журналу группы (ключи ждут в очереди). Хост ничего из этого не
+   разбирает (PROTO-1).
 
 Legacy-офферы v1 (без `commitment`, 6-значный код от одного ключа) не
 обслуживаются старым устройством. Код сверки не пишется в логи release-сборок.
@@ -347,13 +377,22 @@ Legacy-офферы v1 (без `commitment`, 6-значный код от одн
 
 Реализации: web `api/parvane/linking.ts` (`linkCommitment`, `sasCodeV2`) +
 `provider.ts` (`startHistoryLinkOffer`, `describeLinkOffer`, `parvaneGrantLink`) +
-`e2e.ts` (`exportLinkStateJson`, `signLinkTransfer`, `importLinkedHistory`);
+`e2e.ts` (`exportLinkStateJson`, `signLinkTransfer`, `importLinkedHistory`) +
+`v2/linkHistory.ts` (`collectV2History`, `parseV2History`);
 desktop `parvane-core` `linking.cpp`/`e2e.cpp` + `parvane_client.cpp`
-(`StartHistoryLinkOffer`, `PollLinkOffersOnce`, `GrantLink`); android
-`jni/parvane_jni.cpp` (`startLinkOffer`, `pollLinkGrantOnce`). Сервер:
+(`StartHistoryLinkOffer`, `PollLinkOffersOnce`, `GrantLink`, `WithV2History`,
+`ImportV2History`); android `jni/parvane_jni.cpp` (`startLinkOffer`,
+`pollLinkGrantOnce`, `importV2HistoryLocked` — шов только принимает). Группы
+новому устройству (п. 9): движок `share_groups_with_own_devices` /
+`accept_group_key`; web `controller.ts` (`shareGroupsWithOwnDevices` из
+`checkOwnDevices`); desktop и android — общее ядро `v2_session.cpp`
+(`checkOwnDevicesLocked`). Тесты п. 9: движок
+`client_flow.rs linked_device_gets_groups_from_own_device`, сценарии
+`e2e_protocol_state_sync.mjs`, `desktop/verify_protocol_v2_link.sh`. Сервер:
 `identity` (`store_link_offer`, `store_link_challenge`), `messenger`
-(`authenticated_transfer_keys`). Тесты: web `linking.test.ts` +
-`conformance.test.ts` (`LINK-1`), desktop `tests/linking_tests.cpp` +
+(`authenticated_transfer_keys`). Тесты: web `linking.test.ts`, `v2LinkHistory.test.ts` +
+`conformance.test.ts` (`LINK-1`), сценарий `scripts/e2e_protocol_state_sync.mjs`
+(история до линковки видна на втором устройстве), desktop `tests/linking_tests.cpp` +
 `tests/e2e_tests.cpp`, identity `link_v2_*`, messenger
 `link_transfer_proves_old_key_only_with_valid_statement`.
 
@@ -641,6 +680,308 @@ sealed- и групповых записей он округляет до мин
 `src/api/parvane/l2.test.ts`, desktop `desktop/parvane-core/tests/v2_tests.cpp`
 (состояние, содержимое) и `desktop/verify_protocol_v2.sh` (шаги L2), android
 `L2PrivacySeamTest.kt` и `android/tgx_protocol_v2_flow.sh`.
+
+## CALL-1. ICE-кандидат звонка: один формат во всех клиентах
+
+Сигнал `{"type":"ice","call_id":…,"candidate":"<JSON-строка>"}` (личные и
+групповые звонки). Внутри строки — объект кандидата:
+
+- канонические поля: `candidate` (строка `candidate:…`), `sdp_mid`,
+  `sdp_mline_index` — те же имена, что в `proto/parvane/call/v2/call.proto`;
+- клиент ПИШЕТ рядом прежние имена — web `sdpMid`, `sdpMLineIndex`
+  (`RTCIceCandidateInit`) и desktop `sdp`, `mid`, `idx`, — чтобы выпущенные
+  версии продолжали понимать новые;
+- клиент ЧИТАЕТ любой из трёх видов; не JSON-объект или объект без строки
+  кандидата молча пропускается, звонок от этого не рвётся.
+
+До 2 окт 2026 web писал только вид `RTCIceCandidateInit`, desktop — только
+`{sdp, mid, idx}`, и чужих кандидатов клиенты не понимали: звонок web ↔
+desktop не соединялся (ICE оставался в `new`), а автоматического сценария
+такого звонка не было. Вторая часть правила — ответ на вызов обязан нести
+звук отвечающего (`a=sendrecv`): desktop добавлял трек через `AddTransceiver`,
+который не привязывается к секции входящего оффера, и отвечал `a=recvonly`.
+
+Реализации: web `src/api/parvane/iceCandidate.ts` (`encodeIceCandidate`,
+`decodeIceCandidate`; `callengine.ts`, `groupcall.ts`), desktop и ядро
+`parvane-core/include/parvane/call.h` (`iceCandidateJson`, `parseIceCandidate`;
+`parvane_webrtc_backend.cpp`). В Android звонков нет (спека 006). Тесты: web
+`iceCandidate.test.ts`, ядро `call_session_tests.cpp`, сторож
+`conformance.test.ts`, сценарий `scripts/run_web_cross_calls_e2e.sh`.
+
+## LEGACY-1. v1-устройства аккаунта, перешедшего на v2
+
+**Spec 007, FR-054/FR-058 (2 окт 2026).** Пока у аккаунта остаются устройства
+на v1, сообщение v2-отправителя обязано дойти и до них — и ни до кого больше.
+
+1. **Список.** Первое v2-устройство аккаунта публикует в журнале устройств
+   запись `LegacyDeviceSet` — свои v1-устройства из каталога identity
+   (`identity.device.list`: `device_id`, identity- и signing-ключ), подписанную
+   SSK. Дальше список только сокращается (устройство перешло на v2 или исчезло
+   из каталога); появившееся позже v1-устройство копий не получает. Свой журнал
+   запись получает синком — после подтверждения сервера.
+2. **Отправка.** После v2-отправки личного сообщения клиент шифрует ту же
+   запись (v1 `MessageContent`, тот же id) по v1 (Olm) ТОЛЬКО для устройств из
+   подписанных списков собеседника и своего, у которых identity-ключ в каталоге
+   v1 совпал с ключом из списка, и отправляет методом v2 `msg.deliver_legacy`
+   (v1 `SendPayload`: `content.kind = encrypted`, **основной `ciphertext`
+   пуст**, всё адресное — в `copies`; подпись SEND-1 — `send:<id>:`). Сбой
+   копии не роняет отправку. Правка и удаление «у всех» дублируются v1-топиками
+   `msg.chat.edit` (пустой основной шифртекст + копии, подпись `edit:<id>:`) и
+   `msg.chat.delete`.
+3. **Приём.** Запись v1 вида `encrypted` с пустым основным шифртекстом, для
+   которой у устройства нет своей копии, — чужая легаси-копия: устройство её
+   молча пропускает (подтверждает приём, заглушку «не расшифровано» не рисует,
+   курсор SYNC-1 не держит). Это же относится к её надгробию.
+
+Реализации: движок `legacy_devices_request` / `legacy_deliver_request` /
+`log_devices_json` (`legacySet`, `legacyKeys`); web `v2/controller.ts`
+(`syncLegacySet`, `deliverLegacy`), `messages.ts` (`sealLegacy`), `sync.ts`
+(пропуск); ядро `parvane-core` `v2_legacy.{h,cpp}`, `e2e.cpp`
+(`sealLegacyCopies`, `isForeignLegacyCopy`), `v2_session.cpp`
+(`syncLegacySet`); tdesktop и Android JNI зовут ядро. Тесты: движок
+`client_flow.rs legacy_device_set_is_signed_and_only_shrinks`, ядро
+`v2_tests.cpp`, `e2e_tests.cpp`, сторож `conformance.test.ts`, сценарий
+`scripts/run_protocol_mixed_e2e.sh mixed-devices`.
+
+## TYPING-1. «Печатает» в чате v2 — только эфемерным каналом v2
+
+**Spec 007, FR-013/FR-064, D-07 (2 окт 2026).** Кадр v1 `msg.typing.<chatId>`
+несёт серверу открытые `{from, to}` из сессии с личностью. В чате v2
+(собеседник с журналом устройств либо группа `v2g:`) клиент шлёт «печатает»
+только эфемерным каналом v2:
+
+- личный чат — `ephemeral.typing` в канал, выведенный из ключей доставки обоих
+  собеседников; группа — `ephemeral.group_typing` анонимным каналом, канал из
+  ключа конверта текущей эпохи, подпись ключом отправки эпохи;
+- payload запечатан на ключ канала и дополнен до фиксированного размера;
+  автора проверяет движок (в личном канале — только собеседник, в группе —
+  участник), сигнал старше 30 с отбрасывается;
+- **понижения до v1 нет**: канала ещё нет (ключ доставки собеседника не
+  получен), сбой v2 или чат в L2 — «печатает» не уходит никак;
+- подписка — `ephemeral.subscribe` на каналы известных чатов, заново после
+  переподключения и после смены эпохи группы.
+
+Присутствие (`presence.<id>`, только свой адрес) в переходный период остаётся
+на v1; движок уже умеет канал присутствия v2 (`presence_request`).
+
+Реализации: движок `client.rs` (`eph_subscribe`, `typing_request`,
+`group_typing_request`, `open_ephemeral`), обвязки `ephSubscribe/ephTyping/
+ephOpen` (WASM) и `pv_client_eph_*` (C ABI); web `v2/controller.ts`
+(`trySendTyping`, `ensureEphemeral`), `messages.ts` (`sendMessageAction`);
+ядро `v2_session.cpp` (`sendTyping`); tdesktop `MirrorTyping`, Android JNI
+`nativeSendTyping`. Тесты: движок `client_flow.rs
+ephemeral_typing_and_presence`, ядро `v2_session_tests.cpp` (живой), web
+`l2.test.ts`, сторож `conformance.test.ts`, сценарии
+`scripts/run_protocol_mixed_e2e.sh web2-web2` и `web2-groups` (нет кадров
+`msg.typing.*`).
+
+## REVOKE-1. Отзыв своего устройства на v2
+
+**Spec 007, FR-066; D-11, D-12, D-16 (2 окт 2026).** Отзыв устройства — не
+только v1-топик: устройство держало ключи, и они обязаны смениться.
+
+1. **Список.** Settings → Devices показывает каталог v1 ПЛЮС устройства
+   журнала v2: у аккаунта на v2 новое устройство в каталог v1 не попадает
+   (защита от downgrade, T048), иначе его не видно и не отозвать.
+2. **Отзыв.** Сначала `identity.device.revoke` (проверка пароля P-07, тумбстоун
+   JWT; для устройства только из журнала v2 сервер отвечает `ok`), затем движок
+   `revoke_device`: первый запрос — запись отзыва в журнале устройств
+   (обязателен; при отказе клиент поднимает состояние движка заново из
+   сохранённого), остальные — ротации: ключ доступа к доставке (сервер, свои
+   устройства, собеседники), ключ личного состояния, новые эпохи групп, где мы
+   админ. Отложенное (`pendingKeyShares`, `pendingEpochs`) клиент доделывает
+   сам. Сбой v2-части устройство не «возвращает».
+3. **Журнал состояния.** После смены ключа состояния старые записи новым
+   ключом не читаются. Отзывавшее устройство переносит сведённое состояние
+   записями под новым ключом; остальные свои устройства НЕ применяют пустой
+   снимок — ждут записей под новым ключом (либо переносят своё локальное).
+4. **SSK.** Отозвано устройство, державшее SSK (любое привязанное грантом) —
+   журнал не принимает новые устройства и список v1-устройств, пока SSK не
+   сменён корнем (`rotate_ssk`). Корень: на первом устройстве без ключа
+   восстановления (desktop) — в файле, меняется сразу; иначе — из копии под
+   ключом восстановления, которую ввёл пользователь (web: Settings → Devices,
+   блок «Device signing key»). Копия корня едет в гранте линковки (поле `rb`,
+   функции движка `grant_with_root_backup` / `grant_root_backup`), чтобы SSK
+   мог сменить не только первый клиент. Неверный ключ отклоняется; корень в
+   памяти — только на время операции.
+
+Реализации: движок `client.rs` (`revoke_device`, `rotate_ssk_with_secret`,
+`own_ssk_exposed`), обвязки `revokeDevice/shareDeliveryKey/rotateSsk/
+ownSskExposed/grantWithRootBackup/grantRootBackup` (WASM) и `pv_client_revoke_device`,
+`pv_client_share_delivery_key`, `pv_client_rotate_ssk`, `pv_client_own_ssk_exposed`,
+`pv_grant_*` (C ABI); identity `devices.rs` + `v2::log_has_device`; web
+`v2/controller.ts` (`revokeDevice`, `rotateSsk`, `sskState`), `provider.ts`
+(`fetchAuthorizations`, `revokeOwnDevice`), `v2/stateJournal.ts` (`attach(host,
+rekey)`), `SettingsActiveSessions.tsx`; ядро `v2_session.cpp` (`revokeDevice`,
+`rotateSsk`, `sskState`, `ownDevices`, `stateRekeyed_`); tdesktop `ListDevices`/
+`RevokeDevice`, Android JNI `nativeListDevices`/`nativeRevokeDevice`. Тесты:
+движок `revocation_flow.rs`, ffi `grant_carries_root_backup`, ядро
+`v2_session_tests.cpp` (живой, T128), сторож `conformance.test.ts`, сценарий
+`scripts/run_protocol_mixed_e2e.sh revoke`.
+
+## RECOVER-1. Смена корня собеседника и новое устройство без других устройств
+
+**Spec 007, FR-019/FR-066; D-11, D-12 (2 окт 2026).**
+
+1. **Отпечаток журнала.** Ответ `identity.device.log_sync(_anon)` несёт
+   `genesis_hash` — SHA-256 первой записи текущего журнала устройств. Клиент,
+   знающий другой генезис, получает от движка вердикт `replaced` и перечитывает
+   журнал с версии 0; полный журнал с ДРУГИМ корнем — `rootChanged`, с прежним
+   корнем — отказ (откат/форк, D-11).
+2. **KEY-1 v2.** На `rootChanged` (и на потребность движка `rootChanged`)
+   клиент показывает в чате то же служебное сообщение, что при смене ключа в v1
+   («ключ безопасности изменился»), и принимает новый журнал
+   (`accept_root_change`); прежние сессии с собеседником отбрасываются. Молча
+   журнал с новым корнем не принимается никогда.
+3. **Прежние устройства при сбросе.** Сервер на `identity.root.rotate`
+   отзывает все устройства прежнего журнала (тумбстоун JWT, запись каталога
+   v1, сессии v2) — иначе новое первое устройство внесло бы «потерянные»
+   устройства в подписанный список v1-устройств (LEGACY-1), и им продолжали бы
+   уходить копии сообщений. Клиент, увидевший, что его журнал заменён (вердикт
+   `replaced` для своего адреса — при запуске и по ходу работы), стирает
+   состояние движка и переходит в «нужна линковка».
+4. **Ключ доступа отвергнут.** `FORBIDDEN` на запечатанной доставке личного
+   чата = собеседник сменил ключ доступа (отзыв устройства, восстановление,
+   сброс): клиент зовёт `delivery_key_rejected` и повторяет отправку со слепым
+   жетоном; без этого отправка такому собеседнику падала навсегда.
+5. **Копия корня на сервере.** Устройство, у которого есть копия корня под
+   ключом восстановления, кладёт её на сервер (`identity.root.backup_set`;
+   пишет только активное устройство журнала). Сервер хранит шифртекст.
+6. **Новое устройство, других устройств нет** (состояние «нужна линковка»):
+   - *ключ восстановления* — `identity.root.backup_get` → корень из копии →
+     `recover_with_root`: корень назначает новый SSK, прежние устройства
+     отзываются записями журнала, устройство сертифицирует себя, ключ доступа
+     новый; собеседники KEY-1 НЕ видят (корень прежний). Неверный ключ
+     отклоняется, без копии — `no_backup`;
+   - *сброс личности* — `identity.session.reauth` (пароль) → `reset_identity`:
+     первый запрос `identity.root.rotate` (новый генезис взамен журнала), новый
+     ключ восстановления показывается пользователю; собеседники видят KEY-1.
+
+Реализации: движок `client.rs` (`ingest_log_sync`, `log_genesis`,
+`accept_pending_root`, `recover_with_root`, `reset_identity`), обвязки
+`ingestLog` (вердикт `replaced`), `acceptRootChange`, `deliveryKeyRejected`,
+`importRootBackupFor`, `recoverWithRoot`, `resetIdentity` (WASM) и
+`pv_client_accept_root_change`, `pv_client_delivery_key_rejected`,
+`pv_import_root_backup_for`, `pv_client_recover_with_root`,
+`pv_client_reset_identity` (C ABI); identity `v2.rs` (`genesis_hash`,
+`identity.root.backup_set/get`, миграция `0003_root_backup.sql`); web
+`v2/controller.ts` (`acceptPeerRoot`, `runDirect`, `dropIdentity`,
+`uploadRootBackup`, `recoverWithKey`, `resetIdentity`), блок «No other
+device?» в `SettingsActiveSessions.tsx`; ядро `v2_session.cpp`
+(`acceptPeerRootLocked`, `runDirectLocked`, `dropIdentityLocked`,
+`uploadRootBackupLocked`, `recoverWithKey`, `resetIdentity`), tdesktop — событие
+`peerRootChanged` → `AnnounceKeyChange`, Android JNI — событие
+`peer_root_changed`. Ввод ключа восстановления и сброс в UI desktop/Android —
+T140 (на десктопе пока хуки `PARVANE_AUTORECOVER` / `PARVANE_AUTORESET`).
+Тесты: движок `revocation_flow.rs` (`recovery_with_root_replaces_devices`,
+`identity_reset_is_seen_as_root_change`), ядро `v2_session_tests.cpp` (живой,
+T129/T130), сторож `conformance.test.ts`, сценарии
+`scripts/run_protocol_mixed_e2e.sh recovery`, `desktop/verify_protocol_v2_reset.sh`.
+
+## CAP-1. Блобы вложений v2-чата — по секрету capability, без гранта получателю
+
+**Spec 007, FR-062, D-08 (2 окт 2026).** Грант «файл → получатель» в cloud —
+серверная запись «отправитель–получатель» в обход скрытого отправителя.
+
+1. **Когда.** Чат v2 (собеседник с журналом устройств либо группа `v2g:`) и ни
+   у собеседника, ни у себя нет v1-устройств в подписанных списках (LEGACY-1).
+   Иначе (чат v1, «Избранное», есть v1-устройства) — как раньше: v1-загрузка с
+   грантами получателям.
+2. **Загрузка.** Шифртекст блоба (blobcrypt, BLOB-1) уходит методами v2
+   `cloud.blob.upload_chunk` / `cloud.blob.upload_complete` (ID-канал,
+   `VISIBILITY_PRIVATE`) с `capability_hash = SHA-256(capability)`;
+   `capability` — 32 случайных байта. Получатели серверу не называются.
+3. **Содержимое.** Секрет едет ТОЛЬКО внутри E2E: `content.capability`
+   (base64; в схеме v2 — `Media.capability`), у ссылки на пак —
+   `pack_ref.capability` / `emoji_packs[].capability` (`PackRef.capability`).
+   При пересылке блоб перезаливается с новым секретом.
+4. **Скачивание.** Клиент, знающий секрет файла, качает его
+   `cloud.blob.download_cap` анонимным каналом, одноразовое соединение на
+   запрос (≤ 256 чанков); v1-скачивание — только если секрета нет (свой файл
+   либо файл с грантом). Реестр `file_id → секрет` восстанавливается из
+   расшифрованного содержимого после перезапуска.
+
+Реализации: web `media.ts` (`uploadBlob({withCapability})`,
+`fetchChunkRangeCap`, `downloadBlobByCap`, `rememberKeys`), `messages.ts`
+(`mediaUploadOptions`), `v2/controller.ts` (`uploadBlob`, `downloadBlobCap`),
+`v2/contentMap.ts`; ядро `v2_link.cpp` (`Connection::requestStream`),
+`v2_session.cpp` (`uploadBlob`, `downloadBlobCap`), `v2_content.cpp`; tdesktop
+`BlobRecipientsFor` / `UploadBlobWith` / `DownloadChatBlob` / `RememberBlobCaps`;
+Android JNI `rememberBlobCaps` / `downloadChatBlob` и ветка capability в
+отправке медиа (архивы паков с Android — пока с грантами: получателей задаёт
+Kotlin). Тесты: ядро `v2_session_tests.cpp` (живой, T131), сторож
+`conformance.test.ts`, сценарий `scripts/run_protocol_mixed_e2e.sh web2-web2`
+(в `cloud.db` нет строк `file_grants`).
+
+## STATE-2. Личное состояние — целиком в журнале, открытому серверу не отдаётся
+
+**Spec 007, FR-039, FR-040 (2 окт 2026).** До правила настройки уведомлений
+(кто заглушён) лежали на сервере открытым v1-блобом `msg.chat.setnotify`,
+блокировка и архив на десктопе жили только в памяти, а приватность каждое
+устройство держало у себя и перетирало чужой выбор.
+
+1. **Виды журнала.** Клиент, подключивший журнал личного состояния (STATE-1),
+   ведёт в нём: папки, блок-лист, отложенные, архив, закреп основного списка
+   (`PIN_LIST_MAIN`) и настройки уведомлений (`notify` — исключения по чатам,
+   `notify_defaults` — умолчания по типам; `state.v1.NotifySettings`:
+   `mute_until_ms`, `sound`, `show_previews`, `silent`). Правка на одном
+   устройстве видна на другом ≤ 10 с (опрос `state.sync` раз в 8 с).
+2. **v1-блоб.** Пока у аккаунта нет v1-устройств (LEGACY-1), в
+   `msg.chat.setnotify` уходит только то, что обязан исполнять сервер
+   (`group_add`); списка заглушённых чатов в нём нет. Есть v1-устройства — блоб
+   полный (иначе они потеряют настройки).
+3. **Новый вид на старой установке.** Вид, которого журнал ещё не содержит,
+   переносится из локальных данных один раз (маркер на устройстве); пустая
+   проекция такого вида локальные данные не стирает.
+4. **Приватность — на сервере.** `identity.privacy.set` перезаписывает все
+   поля; устройство при готовности сессии читает `identity.privacy.get` и
+   принимает серверное значение. Своя правка, не дошедшая до сервера,
+   досылается и сильнее прочитанного. Экран настройки перед показом
+   перечитывает значение.
+
+Реализации: web `v2/stateJournal.ts` (`notifyToState`/`notifyFromState`,
+`projectNotify`, `migrateNotify`), `provider.ts` (`pushNotifySettings`,
+`refreshV2Privacy`), `v2/controller.ts` (`getPrivacy`); ядро `v2_session.cpp`
+(`fetchPrivacyLocked`, события `privacy`/`privacySaved`); tdesktop
+`parvane_client.cpp` (`kV2StateKinds`, `ProjectNotify`, `ProjectBlocked`,
+`ProjectDialogs`, `MirrorBlock`/`MirrorArchive`/`MirrorDialogPins`,
+`PublishNotifyBlob`, `PrivacyLocal.dirty`); Android — блок-лист и архив в
+`StateJournal.kt`, уведомления и закреп — ещё нет (правило открыто). Тесты:
+ядро `v2_session_tests.cpp` (FR-040, живой), сторож `conformance.test.ts`,
+сценарии `scripts/run_protocol_mixed_e2e.sh state-sync` и
+`desktop/verify_protocol_v2_state.sh`.
+
+## ACCESS-1. Блокировка отзывает ключ доступа; жетоны — партиями по расписанию
+
+**Spec 007, FR-033, FR-063, D-06 (2 окт 2026).** Блокировка на клиенте только
+скрывала входящие: заблокированный по-прежнему держал ключ доступа к доставке
+и писал «как контакт», мимо анти-спам квот. Жетоны клиенты просили прямо перед
+тратой — выдача (с личностью) связывалась по времени с анонимной доставкой.
+
+1. **Блокировка.** Клиент, блокируя собеседника в чате v2, зовёт движок
+   `revoke_contact_access(peer)`: новый ключ доступа → `identity.delivery_key.set`
+   → своим устройствам → всем, кому раздавался прежний, КРОМЕ заблокированного.
+   Собеседнику, у которого ключа не было, отзывать нечего. Сервер новый ключ не
+   принял — состояние движка поднимается заново из сохранённого.
+2. **После отзыва.** Заблокированный может писать только как незнакомый
+   (анонимный жетон), а при запрете «сообщения от незнакомых» — никак.
+   Разблокировка ключ не возвращает: он раздаётся со следующим своим сообщением.
+3. **Жетоны.** Партия запрашивается, когда наступил срок по расписанию движка
+   (`token_refill_due`; проверка при готовности сессии и раз в час), размером
+   не больше 20 (квота на аккаунт делится между его устройствами). Неудача
+   повтор не ускоряет. Запрос перед тратой остаётся только запасным путём при
+   пустом запасе.
+
+Реализации: движок `client.rs` (`revoke_contact_access`), обвязки
+`revokeContactAccess` / `pv_client_revoke_contact_access`, `tokenRefillDue` /
+`tokenBatchSize`; web `v2/controller.ts` (`revokeContactAccess`,
+`refillTokens`), `provider.ts` (`blockUser`); ядро `v2_session.cpp`
+(`revokeContactAccess`, `refillTokensLocked`, `scheduleTokenCheck`); tdesktop
+`NoteBlock`; Android JNI `nativeRevokeContactAccess` (Kotlin его ещё не зовёт —
+правило открыто). Тесты: движок `revocation_flow.rs`
+(`contact_access_revocation_excludes_one_peer`), ядро `v2_session_tests.cpp`
+(T133, живой), сторож `conformance.test.ts`, сценарии `state-sync` и
+`desktop/verify_protocol_v2_state.sh`.
 
 ## OP-SIG. Каноничная подпись операций
 

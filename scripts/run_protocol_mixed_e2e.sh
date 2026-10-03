@@ -8,16 +8,29 @@
 #   state-sync  — второе web-устройство аккаунта: линковка v2 по гранту
 #                 (LINK-1), сообщения на оба устройства, папка и блок-лист
 #                 с одного устройства на другом ≤ 10 с (SC-009);
+#   mixed-devices — у аккаунта v2- и v1-устройство: подписанный список
+#                 v1-устройств в журнале, сообщение v2-отправителя доходит и до
+#                 v1-устройства (легаси-копия, FR-054/FR-058), без дублей;
+#   revoke      — отзыв своего v2-устройства (запись журнала + ротации ключей)
+#                 и обновление ключа подписи устройств ключом восстановления
+#                 (T128/T130, FR-066);
+#   recovery    — новое устройство без других устройств: вход по ключу
+#                 восстановления (копия корня на сервере), сброс личности;
+#                 собеседник видит смену корня (KEY-1 v2) (T129/T130);
 #   web2-groups — группа v2 из трёх web: создание, вступление по ссылке v2,
 #                 бан → новая эпоха, забаненный не читает новое (T056/T084);
 #   unknown-kinds — Rust-инжектор v2 (tests/v2_inject.rs, фича test-inject)
 #                 шлёт web v2 10 записей неизвестного вида + текст (T041);
+#   state-sync-desktop — личное состояние web → desktop одного аккаунта (T139)
 #   web2-desktop2 — web v2 с desktop v2 (PARVANE_PROTO_V2=1; нужен бинарь
 #                 desktop/build-probe/bin/Telegram с -DPARVANE_DEV=ON);
 #   web2-desktop1 — web v2 с desktop v1;
 #   web2-android1 — web v2 с Telegram X (шов) на v1, в эмуляторе: текст и фото
 #                 web → X, ответ X → web (android/tgx_protocol_web_flow.sh: свой
 #                 стек, готовый web dist, AVD);
+#   call-web-desktop, call-web2-desktop2 — звонок web ↔ desktop в обе стороны
+#                 (аудио, настоящий движок на десктопе): первая пара — v1-путём
+#                 шарда call, вторая — запечатанными конвертами v2 (T089);
 #   desktop2-android1 — desktop v2 с Telegram X (шов) на v1, в эмуляторе;
 #   desktop2-android2 — desktop v2 с Telegram X на v2 (флаг шва), в эмуляторе
 #                 (обе — android/tgx_protocol_v2_flow.sh: свой стек на 4222/9222,
@@ -32,10 +45,15 @@ PAIR="${1:-web2-web2}"
 case "$PAIR" in
   desktop2-android1|desktop2-android2) exec "$ROOT/android/tgx_protocol_v2_flow.sh" "$PAIR" ;;
   web2-android1) exec "$ROOT/android/tgx_protocol_web_flow.sh" ;;
+  call-web-desktop|call-web2-desktop2) exec "$ROOT/scripts/run_web_cross_calls_e2e.sh" "$PAIR" ;;
   desktop2-groups) exec "$ROOT/desktop/verify_protocol_v2_groups.sh" ;;
   web2-web2|web2-web1) SCRIPT="$ROOT/scripts/e2e_protocol_mixed.mjs" ;;
   web2-groups) SCRIPT="$ROOT/scripts/e2e_protocol_groups.mjs" ;;
+  mixed-devices) SCRIPT="$ROOT/scripts/e2e_protocol_legacy_devices.mjs" ;;
+  revoke) SCRIPT="$ROOT/scripts/e2e_protocol_revoke.mjs" ;;
+  recovery) SCRIPT="$ROOT/scripts/e2e_protocol_recovery.mjs" ;;
   state-sync) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync.mjs" ;;
+  state-sync-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync_desktop.mjs" ;;
   web2-desktop2|web2-desktop1) SCRIPT="$ROOT/scripts/e2e_protocol_mixed_desktop.mjs" ;;
   unknown-kinds)
     SCRIPT="$ROOT/scripts/e2e_protocol_unknown_kinds.mjs"

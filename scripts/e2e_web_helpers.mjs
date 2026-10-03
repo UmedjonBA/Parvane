@@ -376,8 +376,19 @@ export async function editText(page, sourceText, editedText) {
   await page.locator('.ComposerEmbeddedMessage').filter({ hasText: sourceText })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const input = page.locator('#editable-message-text');
+  // Плашка «Edit message» появляется раньше, чем композер входит в режим
+  // правки (состояние главной кнопки выводится на кадр-два позже): до этого
+  // Enter уходил обычной отправкой, и вместо правки появлялось новое сообщение
+  const editButton = page.locator('.main-button.edit');
+  await editButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForFunction((expected) => {
+    return Array.from(document.querySelectorAll('#editable-message-text'))
+      .some((field) => (field.textContent || '').includes(expected));
+  }, sourceText, { timeout: LOGIN_TIMEOUT_MS });
   await input.fill(editedText);
+  await editButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await input.press('Enter');
+  await page.locator('.ComposerEmbeddedMessage').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
 export async function deleteMessage(page, text) {

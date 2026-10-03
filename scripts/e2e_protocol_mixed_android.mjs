@@ -3,7 +3,9 @@
 // обязан говорить с ней по v1 (D-13). Запускается из
 // `android/tgx_protocol_web_flow.sh` (стек, эмулятор и vite preview уже подняты).
 // Проверяет: текст и фото web → X (по маркеру входящего в logcat — текста
-// сообщений там нет, P-46), ответ X → web через e2e-хук шва.
+// сообщений там нет, P-46), ответ X → web через e2e-хук шва. T139: голосовое
+// web → X и группа web → X (web обязан собрать группу v1 — у alice нет v2;
+// входящее в группу — чат с отрицательным id TDLib).
 // Строки `ok …` / `FAIL …` в stdout разбирает раннер.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -14,11 +16,13 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   buildPngBuffer,
+  createGroupViaUi,
   dismissRecoveryKeyDialog,
   dumpDiagJournal,
   findMessage,
   findMessageContainer,
   LOGIN_TIMEOUT_MS,
+  openGroupChatByTitle,
   openPrivateChatStrict,
   preparePage,
   sendText,
@@ -30,20 +34,22 @@ const OUT = process.env.PV_ANDROID_OUT;
 const STAMP = process.env.PV_STAMP || String(Date.now());
 const ALICE = 'alice@local';
 const INCOMING = /сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)/g;
+const GROUP_INCOMING = /сообщение [0-9a-f-]{36} → чат -[0-9]+ \(вх\)/g;
+const VOICE_RECORD_MS = 2500;
 const X_TIMEOUT_MS = 90000;
 
 function adb(...args) {
   return execFileSync('adb', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 60000 });
 }
 
-function incomingCount() {
-  return (adb('logcat', '-d').match(INCOMING) || []).length;
+function incomingCount(re = INCOMING) {
+  return (adb('logcat', '-d').match(re) || []).length;
 }
 
-async function waitIncoming(before, label) {
+async function waitIncoming(before, label, re = INCOMING) {
   const start = Date.now();
   while (Date.now() - start < X_TIMEOUT_MS) {
-    if (incomingCount() > before) return;
+    if (incomingCount(re) > before) return;
     // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => { setTimeout(r, 3000); });
   }
@@ -62,8 +68,10 @@ function ok(text) {
   console.log(`ok ${text}`);
 }
 
-const browser = await chromium.launch();
-const context = await browser.newContext();
+const browser = await chromium.launch({
+  args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+});
+const context = await browser.newContext({ permissions: ['microphone'] });
 const logs = [];
 const consoleTail = [];
 context.on('page', (page) => {
@@ -119,6 +127,30 @@ try {
   await findMessageContainer(page, caption).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await waitIncoming(before, 'фото');
   ok('X: фото от web v2 принято');
+
+  // web → X: голосовое (fake-микрофон; E2E-блоб в cloud)
+  before = incomingCount();
+  await page.getByRole('button', { name: 'Record voice message' }).click();
+  const sendButton = page.getByRole('button', { name: 'Send Message', exact: true });
+  await sendButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(VOICE_RECORD_MS);
+  await sendButton.click();
+  await waitIncoming(before, 'голосовое');
+  ok('X: голосовое от web v2 принято');
+
+  // web → X: группа (v1 — у alice нет журнала устройств v2, D-13)
+  const title = `WX-${STAMP.slice(-6)}`;
+  await createGroupViaUi(page, title, ['alice']);
+  await openGroupChatByTitle(page, title);
+  before = incomingCount(GROUP_INCOMING);
+  const groupText = `web-group-${STAMP}`;
+  const composer = page.locator('.Transition_slide-active #editable-message-text[contenteditable="true"]').last();
+  await composer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await composer.fill(groupText);
+  await composer.press('Enter');
+  await waitIncoming(before, 'группа', GROUP_INCOMING);
+  assert.ok(!logs.some((l) => l.includes('v2: группа создана')), 'web создал группу v2 с участником на v1');
+  ok('X: групповое от web v2 пришло в чат группы');
 
   assert.ok(!logs.some((l) => l.includes('запуск не удался')), `web: ${logs.join(' | ')}`);
   console.log('e2e_protocol_mixed_android: OK');
