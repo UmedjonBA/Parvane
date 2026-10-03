@@ -163,6 +163,27 @@ service IdentityService {
       shard: "identity"
     };
   }
+  // FR-066 (D-12): копия корня под ключом восстановления — на сервере, чтобы
+  // новое устройство без других устройств могло восстановить корень. Сервер
+  // хранит шифртекст; без ключа восстановления (≥ 128 бит) он ничего не даёт.
+  rpc RootBackupSet(RootBackupSetRequest) returns (RootBackupSetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.root.backup_set"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc RootBackupGet(RootBackupGetRequest) returns (RootBackupGetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.root.backup_get"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
 
   // ── аккаунт ──
   rpc AccountSet2fa(AccountSet2faRequest) returns (AccountSet2faResponse) {
@@ -293,6 +314,16 @@ service IdentityService {
   rpc PrivacySet(PrivacySetRequest) returns (PrivacySetResponse) {
     option (parvane.core.v2.method) = {
       name: "identity.privacy.set"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
+  rpc PrivacyGet(PrivacyGetRequest) returns (PrivacyGetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.privacy.get"
       channel: METHOD_CHANNEL_ID
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
@@ -455,6 +486,10 @@ message DeviceLogSyncResponse {
   // Записи журнала устройств — SignedOp c payload UserDeviceLogEntry.
   repeated parvane.core.v2.SignedOp entries = 1 [(parvane.core.v2.max_items) = 256];
   bool more = 2;
+  // SHA-256 первой записи текущего журнала (пусто — журнала нет). Клиент,
+  // знающий другой генезис, видит, что журнал начат заново (смена корня,
+  // KEY-1 v2), и перечитывает его с версии 0.
+  bytes genesis_hash = 3 [(parvane.core.v2.max_len) = 32];
 }
 message DeviceLogSyncAnonRequest {
   parvane.core.v2.UserRef user = 1;
@@ -463,6 +498,8 @@ message DeviceLogSyncAnonRequest {
 message DeviceLogSyncAnonResponse {
   repeated parvane.core.v2.SignedOp entries = 1 [(parvane.core.v2.max_items) = 256];
   bool more = 2;
+  // Как в DeviceLogSyncResponse.
+  bytes genesis_hash = 3 [(parvane.core.v2.max_len) = 32];
 }
 
 message DeviceLogAppendRequest {
@@ -498,6 +535,17 @@ message RootRotateRequest {
   parvane.core.v2.SignedOp genesis = 1;
 }
 message RootRotateResponse {}
+
+message RootBackupSetRequest {
+  // Копия корня под ключом восстановления (recovery.rs export_root_backup).
+  bytes backup = 1 [(parvane.core.v2.max_len) = 1024];
+}
+message RootBackupSetResponse {}
+message RootBackupGetRequest {}
+message RootBackupGetResponse {
+  // Пусто — копии на сервере нет.
+  bytes backup = 1 [(parvane.core.v2.max_len) = 1024];
+}
 
 // ── аккаунт ─────────────────────────────────────────────────────────────────
 
@@ -671,6 +719,14 @@ message PrivacySetRequest {
   PrivacySettings settings = 1;
 }
 message PrivacySetResponse {}
+// Свои настройки приватности (FR-040): устройство читает их при запуске, чтобы
+// настройка, заданная на другом устройстве, не перетиралась локальной.
+message PrivacyGetRequest {}
+message PrivacyGetResponse {
+  PrivacySettings settings = 1;
+  // false — настройки ни разу не задавались (в settings значения по умолчанию).
+  bool is_set = 2;
+}
 
 // ── оператор ────────────────────────────────────────────────────────────────
 

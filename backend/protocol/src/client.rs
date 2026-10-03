@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 
 use crate::access::{OwnDeliveryKey, TokenStock};
 use crate::codec::decode_checked;
+use crate::ephemeral::{self, EphChannel};
 use crate::error::{ProtoError, Result};
 use crate::group::{self, ContextVerdict, GroupState, SignerInfo};
 use crate::identity::{self, DeviceLog, LogPin, RootIdentity, RootTrust, TrustVerdict, VerifiedDevice};
@@ -39,6 +40,7 @@ use crate::pb::parvane::core::v2::{
     GroupEnvelope, GroupEnvelopeInner, GroupStateEntry, Ref, SealedInner, SignedDeviceCertificate, SignedOp,
     TokenKey, UserRef,
 };
+use crate::pb::parvane::call::v2 as cpb;
 use crate::pb::parvane::group::v2::{self as gpb, group_change::Change};
 use crate::pb::parvane::identity::v2::{self as ipb, OneTimeKey};
 use crate::pb::parvane::msg::v2::{self as mpb, content, inbox_record, Content, DeliveryKeyShare, GroupKeyShare};
@@ -128,12 +130,19 @@ pub enum Event {
     GroupChanged { seq: u64, group: Ref, version: u64 },
     /// Отозвано одно из своих устройств.
     DeviceRevoked { seq: u64, device_id: String },
+    /// Сигнал звонка от собеседника (D-08): живое событие мимо журнала.
+    Call { from: String, device: String, call_id: Vec<u8>, ts_ms: i64, signal: cpb::CallSignal },
     /// Новое устройство в журнале своего пользователя (T119): живое событие,
     /// хосту — перечитать свой журнал и показать уведомление.
     DeviceAdded { device_id: String, log_version: u64 },
     /// Своё другое устройство сменило ключ личного состояния (после отзыва
     /// устройства): хост перешифровывает журнал состояния новым ключом.
     StateKeyRotated { seq: u64, key_version: u32 },
+    /// «Печатает» по эфемерному каналу v2 (T127): `chat` — собеседник либо
+    /// группа (`group` задан). Живое событие, в журнал не пишется.
+    Typing { chat: String, group: Option<Vec<u8>>, from: String, action: i32, ts_ms: i64 },
+    /// Присутствие собеседника по эфемерному каналу v2.
+    Presence { from: String, online: bool, last_seen_ms: i64, ts_ms: i64 },
     /// Служебное (ключи) — применено внутри, показывать нечего.
     Internal { seq: u64 },
     /// Запись пропущена (неизвестный вид/не расшифровалась после попыток).
@@ -201,6 +210,8 @@ pub enum LogVerdict {
     New,
     Known,
     RootChanged,
+    /// На сервере — другой журнал (другой генезис): перечитать с версии 0.
+    Replaced,
 }
 
 #[derive(Default)]
@@ -304,9 +315,27 @@ pub struct Client {
     /// Личное предпочтение L2 в группах (только это устройство; политика
     /// группы — в журнале группы).
     l2_group_pref: BTreeMap<Vec<u8>, L2Pref>,
+    /// Подписанные эфемерные каналы этого соединения (T127; не сохраняется).
+    eph: BTreeMap<[u8; ephemeral::CHANNEL_ID_LEN], (EphChannel, EphTarget)>,
     /// Последняя ошибка разбора записи (диагностика хоста; клиенту не показывается).
     pub last_error: Option<ProtoError>,
 }
+
+/// Чей это эфемерный канал (T127).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EphTarget {
+    /// Присутствие собеседника.
+    Presence(String),
+    /// «Печатает» в личном чате с собеседником.
+    Direct(String),
+    /// «Печатает» в группе (эпоха, на ключ которой выведен канал).
+    Group(Vec<u8>, u64),
+}
+
+/// Потолок подписанных эфемерных каналов на соединение (gateway — 256 подписок).
+const EPH_MAX_CHANNELS: usize = 240;
+/// Сигнал старше — отброшен (повтор старого через канал ничего не даёт).
+const EPH_MAX_AGE_MS: i64 = 30_000;
 
 fn rand32() -> [u8; 32] {
     let mut k = [0u8; 32];
@@ -365,6 +394,7 @@ impl Client {
             token_req: None,
             l2_direct: BTreeMap::new(),
             l2_group_pref: BTreeMap::new(),
+            eph: BTreeMap::new(),
             last_error: None,
         })
     }
@@ -521,6 +551,68 @@ impl Client {
         Ok(reqs)
     }
 
+    /// T130 (FR-066): восстановление на новом устройстве, когда других устройств
+    /// аккаунта не осталось. Корень — из копии под ключом восстановления;
+    /// `own_entries` — журнал устройств с сервера (с версии 1). Корень назначает
+    /// новый SSK (сертификаты прежнего SSK недействительны), прежние устройства
+    /// отзываются записями журнала (сервер гасит их сессии), это устройство
+    /// сертифицирует себя; ключ доступа к доставке — новый. Ключ личного
+    /// состояния не восстанавливается (его держали только устройства).
+    pub fn recover_with_root(&mut self, root_secret: &[u8; 32], own_entries: Vec<SignedOp>, otk_count: usize) -> Result<Vec<OutRequest>> {
+        let mut log = DeviceLog::new(&self.user)?;
+        for e in &own_entries {
+            log.apply(e)?;
+        }
+        let root = SigningKey::from_bytes(root_secret);
+        if log.version == 0 || root.verifying_key().to_bytes() != log.root_key {
+            return Err(ProtoError::RootMismatch);
+        }
+        let old_devices: Vec<String> = log.devices.keys().filter(|id| *id != &self.device_id).cloned().collect();
+        let new_ssk = sign::generate_signing_key();
+        let (rotate, _) = identity::rotate_ssk_entry(&root, &self.user, log.version + 1, log.head_hash, &new_ssk)?;
+        log.apply(&rotate)?;
+        let mut entries = own_entries;
+        entries.push(rotate.clone());
+        let mut reqs = vec![OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(rotate) })];
+        for id in old_devices {
+            let e = identity::device_log_entry(&self.user, log.version + 1, log.head_hash, DevChange::RevokeDeviceId(id), None);
+            let op = identity::sign_device_log_entry(&new_ssk, &e)?;
+            log.apply(&op)?;
+            entries.push(op.clone());
+            reqs.push(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }));
+        }
+        self.own_log = log;
+        self.own_entries = entries;
+        self.ssk = Some(new_ssk);
+        self.dk = OwnDeliveryKey::new();
+        self.trust.accept(&self.user.clone(), &self.own_log.root_key);
+        reqs.extend(self.certify_self_requests(otk_count, None)?);
+        Ok(reqs)
+    }
+
+    /// T130: сброс личности — новый корень и новый журнал устройств взамен
+    /// прежнего (ключа восстановления нет, устройств не осталось). Первый
+    /// запрос — `identity.root.rotate` (нужна свежая переаутентификация
+    /// паролем); собеседники увидят смену корня (KEY-1), прежняя переписка v2
+    /// этим устройством не читается.
+    pub fn reset_identity(&mut self, otk_count: usize) -> Result<(Vec<OutRequest>, RootIdentity)> {
+        self.own_log = DeviceLog::new(&self.user)?;
+        self.own_entries.clear();
+        self.ssk = None;
+        self.my_cert = None;
+        self.dk = OwnDeliveryKey::new();
+        let (mut reqs, root) = self.create_identity(otk_count)?;
+        let genesis = self.own_entries.first().cloned().ok_or(ProtoError::BrokenChain)?;
+        match reqs.first_mut() {
+            Some(first) if first.method == "identity.device.log_append" => {
+                *first = OutRequest::id("identity.root.rotate", &ipb::RootRotateRequest { genesis: Some(genesis) });
+            }
+            _ => return Err(ProtoError::BrokenChain),
+        }
+        self.trust.accept(&self.user.clone(), &self.own_log.root_key);
+        Ok((reqs, root))
+    }
+
     /// C1-06: резервная копия корня под ключом восстановления (≥ 128 бит,
     /// [`crate::recovery::RecoveryKey::generate`]). Корень сверяется с журналом
     /// устройств; после подтверждения копии хост удаляет корень с устройства.
@@ -595,6 +687,47 @@ impl Client {
         (v2, legacy)
     }
 
+    /// Подписанный список v1-устройств пользователя (D-01, FR-058): `None` —
+    /// список не публиковался. Только им можно слать легаси-копии.
+    pub fn legacy_devices(&self, user: &str) -> Option<Vec<crate::pb::parvane::core::v2::LegacyDevice>> {
+        let log = if user == self.user { Some(&self.own_log) } else { self.peers.get(user).and_then(|p| p.log.as_ref()) };
+        log.and_then(|l| l.legacy.clone())
+    }
+
+    /// Опубликовать/сократить свой список v1-устройств (запись журнала, подпись
+    /// SSK). Первая публикация задаёт список, дальше он только сокращается —
+    /// v1-устройство, появившееся позже, легаси-копий не получит (FR-058).
+    pub fn legacy_devices_request(&mut self, devices: Vec<crate::pb::parvane::core::v2::LegacyDevice>) -> Result<OutRequest> {
+        use crate::pb::parvane::core::v2::LegacyDeviceSet;
+        let ssk = self.ssk.as_ref().ok_or(ProtoError::Forbidden)?;
+        let entry = identity::device_log_entry(
+            &self.user,
+            self.own_log.version + 1,
+            self.own_log.head_hash,
+            DevChange::LegacyDevices(LegacyDeviceSet { devices }),
+            None,
+        );
+        let op = identity::sign_device_log_entry(ssk, &entry)?;
+        // Проверяем на копии журнала (список только сокращается); сам журнал
+        // запись получит синком после подтверждения сервера — при отказе
+        // (гонка версий с другим устройством) локальное состояние не расходится.
+        self.own_log.clone().apply(&op)?;
+        Ok(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }))
+    }
+
+    /// Легаси-копии v1-устройствам (FR-054): готовый v1 `SendPayload` (JSON) с
+    /// тем же id, что у v2-сообщения, — запрос `msg.deliver_legacy`. Сервер
+    /// проводит его как v1-отправку и не мостит обратно в журналы v2-устройств.
+    pub fn legacy_deliver_request(&self, message_id: &str, send_payload_json: &[u8]) -> Result<OutRequest> {
+        if message_id.len() != 36 || send_payload_json.is_empty() {
+            return Err(ProtoError::InvalidField("legacy"));
+        }
+        Ok(OutRequest::id(
+            "msg.deliver_legacy",
+            &mpb::DeliverLegacyRequest { message_id: message_id.into(), send_payload_json: send_payload_json.to_vec() },
+        ))
+    }
+
     /// Принять записи журнала устройств (после `log_sync(_anon)` с after = log_version).
     pub fn ingest_log(&mut self, user: &str, entries: Vec<SignedOp>) -> Result<LogVerdict> {
         if user == self.user {
@@ -645,6 +778,56 @@ impl Client {
         }
         peer.log = Some(log);
         Ok(verdict)
+    }
+
+    /// SHA-256 первой записи известного журнала пользователя («отпечаток
+    /// журнала»): другой отпечаток на сервере — журнал начат заново.
+    pub fn log_genesis(&self, user: &str) -> Option<[u8; 32]> {
+        let first = if user == self.user { self.own_entries.first() } else { self.peers.get(user).and_then(|p| p.entries.first()) };
+        first.map(identity::device_log_hash)
+    }
+
+    /// Ответ `identity.device.log_sync(_anon)` с отпечатком журнала сервера
+    /// (T129). Отпечаток совпал или неизвестен — обычный [`Client::ingest_log`].
+    /// Другой отпечаток — журнал начат заново (смена корня): по дельте —
+    /// `Replaced` (хост перечитывает журнал с версии 0); по полному журналу —
+    /// `RootChanged` (чужой: ждёт [`Client::accept_pending_root`]) либо отказ,
+    /// если корень прежний (откат/форк, D-11). Свой журнал заменён — всегда
+    /// `Replaced`: это устройство в новой личности не состоит.
+    pub fn ingest_log_sync(&mut self, user: &str, entries: Vec<SignedOp>, genesis_hash: &[u8]) -> Result<LogVerdict> {
+        let known = self.log_genesis(user);
+        let replaced = genesis_hash.len() == 32 && known.is_some_and(|k| k[..] != *genesis_hash);
+        if !replaced {
+            return self.ingest_log(user, entries);
+        }
+        if user == self.user {
+            return Ok(LogVerdict::Replaced);
+        }
+        let from_start = entries.first().is_some_and(|e| identity::device_log_hash(e)[..] == *genesis_hash);
+        if !from_start {
+            return Ok(LogVerdict::Replaced);
+        }
+        let mut log = DeviceLog::new(user)?;
+        for e in &entries {
+            log.apply(e)?;
+        }
+        match self.trust.observe(user, &log.root_key) {
+            TrustVerdict::Changed => {
+                self.peers.entry(user.to_string()).or_default().pending_root = Some(entries);
+                Ok(LogVerdict::RootChanged)
+            }
+            // Корень прежний, а журнал другой — откат/форк: не принимаем.
+            _ => Err(ProtoError::BrokenChain),
+        }
+    }
+
+    /// KEY-1 v2: принять смену корня собеседника, замеченную синком журнала
+    /// (хост показал предупреждение «ключ безопасности изменился»).
+    pub fn accept_pending_root(&mut self, user: &str) -> Result<bool> {
+        let Some(entries) = self.peers.get_mut(user).and_then(|p| p.pending_root.take()) else { return Ok(false) };
+        self.accept_root_change(user, entries)?;
+        self.sticky.mark(user);
+        Ok(true)
     }
 
     /// Смена корня собеседника (KEY-1): пользователь подтвердил — принять новый
@@ -869,6 +1052,54 @@ impl Client {
         self.peers.get(peer).is_some_and(|p| p.delivery_key.is_some())
     }
 
+    /// Сигнал звонка собеседнику (D-08): тот же sealed-конверт на каждое его
+    /// устройство, анонимным каналом; оффер — `call.ring_sealed` (будит
+    /// устройства), остальное — `call.signal_sealed`. В журнал не пишется, своим
+    /// устройствам копия не идёт. `Need` — как у личного сообщения.
+    pub fn prepare_call(&mut self, peer: &str, signal: &cpb::CallSignal) -> CResult<Vec<OutRequest>> {
+        if peer == self.user || signal.call_id.len() != msg::CALL_ID_LEN {
+            return Err(ProtoError::InvalidField("call").into());
+        }
+        self.check_peer(peer)?;
+        let log = self.peer_log(peer).cloned().ok_or(ProtoError::BadCertificate)?;
+        let cert = self.my_cert.clone().ok_or(ProtoError::BadCertificate)?;
+        let devices: Vec<String> = log.devices.keys().cloned().collect();
+        for d in &devices {
+            if policy::choose(&mut self.sticky, peer, Some(&log), d, None, &[]) != SendFormat::SealedV2 {
+                return Err(ClientError::Need(Need::Forbidden));
+            }
+        }
+        let audience: Vec<DeviceRef> = devices.iter().map(|d| DeviceRef { address: peer.into(), device_id: d.clone() }).collect();
+        let call = Ref { domain: self.domain.clone(), id: signal.call_id.clone() };
+        let op = msg::sign_call(&self.acc, signal, call, audience, now_ms())?;
+        let access = self.access_for(peer)?;
+        let mut envelopes = vec![];
+        for d in &devices {
+            let Some(dev) = log.active(d) else { continue };
+            let sealed = (|| -> Result<_> {
+                let hpke = dev.hpke_x25519()?;
+                let Some(sess) = self.sessions.get_mut(&(peer.to_string(), d.clone())) else { return Ok(None) };
+                let inner = msg::seal_inner(&cert, sess, &op)?;
+                seal::seal(&DeviceRef { address: peer.into(), device_id: d.clone() }, &hpke, access.clone(), inner, false).map(Some)
+            })();
+            match sealed {
+                Ok(Some(env)) => envelopes.push(env),
+                Ok(None) => {}
+                Err(e) => {
+                    self.return_access(access);
+                    return Err(e.into());
+                }
+            }
+        }
+        if envelopes.is_empty() {
+            self.return_access(access);
+            return Err(ClientError::Need(Need::Bundle { user: peer.into() }));
+        }
+        let ring = matches!(signal.signal, Some(cpb::call_signal::Signal::Offer(_)));
+        let method = if ring { "call.ring_sealed" } else { "call.signal_sealed" };
+        Ok(vec![OutRequest::anon(method, &cpb::SignalSealedRequest { envelopes })])
+    }
+
     /// Подготовить личное сообщение: копии устройствам собеседника и своим
     /// другим устройствам (отдельными запросами, D-05) + раздача своего ключа
     /// доставки собеседнику, если он его ещё не получал.
@@ -1000,6 +1231,35 @@ impl Client {
         Ok(out)
     }
 
+    /// Отозвать ключ доступа у одного собеседника (FR-033; блокировка): новый
+    /// ключ — на сервер, своим устройствам и всем, кому раздавался прежний,
+    /// КРОМЕ `peer`. Дальше `peer` может писать только как незнакомый
+    /// (анонимные жетоны, если получатель их принимает). Собеседнику, у
+    /// которого ключа не было, отзывать нечего — пустой итог.
+    pub fn revoke_contact_access(&mut self, peer: &str) -> CResult<RevocationOutcome> {
+        if peer == self.user {
+            return Err(ClientError::Proto(ProtoError::Forbidden));
+        }
+        if !self.dk.shared().contains_key(peer) {
+            return Ok(RevocationOutcome::default());
+        }
+        // Сессии со своими устройствами — до смены ключа (иначе добор посреди
+        // раздачи оставил бы их со старым).
+        self.check_peer(&self.user.clone())?;
+        let mut o = RevocationOutcome::default();
+        let targets = self.dk.rotate(&[peer.to_string()]);
+        o.requests.push(OutRequest::id("identity.delivery_key.set", &ipb::DeliveryKeySetRequest { delivery_key: self.dk.key().to_vec() }));
+        let dkc = self.delivery_key_content();
+        o.requests.extend(self.seal_to_own_devices(&dkc)?);
+        for p in targets {
+            match self.share_delivery_key(&p) {
+                Ok(r) => o.requests.extend(r),
+                Err(_) => o.pending_key_shares.push(p),
+            }
+        }
+        Ok(o)
+    }
+
     /// Собеседники, которым раздавался ключ доступа, но не текущее поколение.
     pub fn pending_delivery_key_shares(&self) -> Vec<String> {
         self.dk.shared().iter().filter(|(_, g)| **g != self.dk.generation()).map(|(u, _)| u.clone()).collect()
@@ -1124,6 +1384,142 @@ impl Client {
     /// пока L2 не активен ни в одном чате.
     pub fn presence_allowed(&self) -> bool {
         l2::presence_allowed(self.l2_any_active())
+    }
+
+    // ── эфемерные каналы: «печатает» и присутствие (T127, FR-013/FR-064) ─────
+
+    fn eph_direct_channel(&self, peer: &str) -> Option<EphChannel> {
+        if peer == self.user || !self.l2_direct(peer).ephemeral_allowed {
+            return None;
+        }
+        let (dk, _) = self.peers.get(peer)?.delivery_key.as_ref()?;
+        EphChannel::direct_typing(self.dk.key(), dk, 0).ok()
+    }
+
+    fn eph_presence_channel(&self, peer: &str) -> Option<EphChannel> {
+        let (dk, _) = self.peers.get(peer)?.delivery_key.as_ref()?;
+        EphChannel::presence(dk, 0).ok()
+    }
+
+    fn eph_group_channel(&self, group_id: &[u8]) -> Option<(EphChannel, u64)> {
+        let state = self.group_state(group_id)?;
+        if state.epoch_stale || !self.l2_group(group_id).ephemeral_allowed {
+            return None;
+        }
+        let ek = self.epoch_keys.get(&(group_id.to_vec(), state.epoch))?;
+        EphChannel::group_typing(&ek.envelope_key, &state.group, state.epoch).ok().map(|c| (c, state.epoch))
+    }
+
+    /// Подписаться на эфемерные каналы чатов: у собеседника (нужен его ключ
+    /// доставки) — присутствие и «печатает» личного чата, у группы — «печатает»
+    /// текущей эпохи. Возвращает запросы `ephemeral.subscribe` только на ещё не
+    /// подписанные каналы; каналы L2-чатов не подписываются. После смены эпохи
+    /// группы или ключа доставки собеседника вызвать снова.
+    pub fn eph_subscribe(&mut self, peers: &[String], groups: &[Vec<u8>]) -> Vec<OutRequest> {
+        let mut fresh: Vec<(EphChannel, EphTarget)> = vec![];
+        for p in peers {
+            if let Some(c) = self.eph_presence_channel(p) {
+                fresh.push((c, EphTarget::Presence(p.clone())));
+            }
+            if let Some(c) = self.eph_direct_channel(p) {
+                fresh.push((c, EphTarget::Direct(p.clone())));
+            }
+        }
+        for g in groups {
+            if let Some((c, epoch)) = self.eph_group_channel(g) {
+                fresh.push((c, EphTarget::Group(g.clone(), epoch)));
+            }
+        }
+        let mut ids = vec![];
+        for (c, t) in fresh {
+            if self.eph.contains_key(&c.id) || self.eph.len() >= EPH_MAX_CHANNELS {
+                continue;
+            }
+            ids.push(c.id.to_vec());
+            self.eph.insert(c.id, (c, t));
+        }
+        ids.chunks(64).map(|chunk| OutRequest::id("ephemeral.subscribe", &mpb::EphemeralSubscribeRequest { channel_ids: chunk.to_vec() })).collect()
+    }
+
+    /// Соединение пересоздано — подписок больше нет.
+    pub fn eph_reset(&mut self) {
+        self.eph.clear();
+    }
+
+    /// «Печатает» собеседнику личного чата. `None` — канала нет (ключ доставки
+    /// собеседника неизвестен) или чат в L2: сигнал не шлётся НИКАК (в v1 тоже).
+    pub fn typing_request(&self, peer: &str, action: mpb::TypingAction) -> Result<Option<OutRequest>> {
+        let Some(c) = self.eph_direct_channel(peer) else { return Ok(None) };
+        let payload = c.seal(&ephemeral::typing(&self.user, action, now_ms()))?;
+        Ok(Some(OutRequest::id("ephemeral.typing", &mpb::EphemeralTypingRequest { channel_id: c.id.to_vec(), payload })))
+    }
+
+    /// «Печатает» в группе: анонимно, подпись ключом отправки текущей эпохи (D-07).
+    pub fn group_typing_request(&self, group_id: &[u8], action: mpb::TypingAction) -> Result<Option<OutRequest>> {
+        let Some((c, epoch)) = self.eph_group_channel(group_id) else { return Ok(None) };
+        let Some(state) = self.group_state(group_id) else { return Ok(None) };
+        let Some(send) = self.epoch_keys.get(&(group_id.to_vec(), epoch)).and_then(|ek| ek.send_sk.as_ref()) else { return Ok(None) };
+        let send = SigningKey::from_bytes(&send.to_bytes());
+        let payload = c.seal(&ephemeral::typing(&self.user, action, now_ms()))?;
+        let mut nonce = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+        let epoch_signature = group::sign_group_typing(&send, &state.group, epoch, &nonce, &payload);
+        Ok(Some(OutRequest::anon(
+            "ephemeral.group_typing",
+            &mpb::EphemeralGroupTypingRequest { group: Some(state.group.clone()), epoch, payload, nonce: nonce.to_vec(), epoch_signature, channel_id: c.id.to_vec() },
+        )))
+    }
+
+    /// Своё присутствие — в канал из своего ключа доставки (его знают только
+    /// те, кому ключ роздан). `None` — пока L2 активен хоть в одном чате.
+    pub fn presence_request(&self, online: bool, last_seen_ms: i64) -> Result<Option<OutRequest>> {
+        if !self.presence_allowed() {
+            return Ok(None);
+        }
+        let c = EphChannel::presence(self.dk.key(), 0)?;
+        let payload = c.seal(&ephemeral::presence(&self.user, online, last_seen_ms, now_ms()))?;
+        Ok(Some(OutRequest::id("ephemeral.presence", &mpb::EphemeralPresenceRequest { channel_id: c.id.to_vec(), payload })))
+    }
+
+    /// Событие подписки `ephemeral` (тело — пересланный gateway запрос
+    /// публикации). `None` — не наш канал, не открылось, устарело, своё эхо,
+    /// автор не тот, чей это канал, либо чат в L2.
+    pub fn open_ephemeral(&self, body: &[u8]) -> Option<Event> {
+        let (id, payload) = match decode_checked::<mpb::EphemeralTypingRequest>(body, Origin::Client) {
+            Ok(r) if r.channel_id.len() == ephemeral::CHANNEL_ID_LEN => (r.channel_id, r.payload),
+            _ => {
+                let r: mpb::EphemeralGroupTypingRequest = decode_checked(body, Origin::Client).ok()?;
+                (r.channel_id, r.payload)
+            }
+        };
+        let id: [u8; ephemeral::CHANNEL_ID_LEN] = id.as_slice().try_into().ok()?;
+        let (channel, target) = self.eph.get(&id)?;
+        let inner = channel.open(&payload).ok()?;
+        let from = inner.from.as_ref()?.address.clone();
+        if from == self.user {
+            return None;
+        }
+        let l2_active = match target {
+            EphTarget::Presence(_) => false,
+            EphTarget::Direct(p) => !self.l2_direct(p).ephemeral_allowed,
+            EphTarget::Group(g, _) => !self.l2_group(g).ephemeral_allowed,
+        };
+        if !ephemeral::accept(&inner, l2_active, now_ms(), EPH_MAX_AGE_MS) {
+            return None;
+        }
+        use mpb::ephemeral_inner::Signal;
+        match (target, inner.signal?) {
+            (EphTarget::Presence(p), Signal::Presence(s)) if *p == from => {
+                Some(Event::Presence { from, online: s.online, last_seen_ms: s.last_seen_ms, ts_ms: inner.ts_ms })
+            }
+            (EphTarget::Direct(p), Signal::Typing(s)) if *p == from => {
+                Some(Event::Typing { chat: p.clone(), group: None, from, action: s.action, ts_ms: inner.ts_ms })
+            }
+            (EphTarget::Group(g, _), Signal::Typing(s)) if self.group_state(g).is_some_and(|st| st.members.contains_key(&from)) => {
+                Some(Event::Typing { chat: hex::encode(g), group: Some(g.clone()), from, action: s.action, ts_ms: inner.ts_ms })
+            }
+            _ => None,
+        }
     }
 
     // ── квитанции (T074) ────────────────────────────────────────────────────
@@ -1313,6 +1709,19 @@ impl Client {
         Ok(out)
     }
 
+    /// То же по секрету корня (хост получает его из резервной копии под
+    /// ключом восстановления и сразу стирает).
+    pub fn rotate_ssk_with_secret(&mut self, root_secret: &[u8; 32]) -> Result<Vec<OutRequest>> {
+        let root = RootIdentity { user: self.user.clone(), root: SigningKey::from_bytes(root_secret), self_signing: sign::generate_signing_key() };
+        self.rotate_ssk(&root)
+    }
+
+    /// Свой SSK раскрыт (отозвано устройство, державшее его) и ещё не сменён:
+    /// новые устройства и список v1-устройств не принимаются до `rotate_ssk`.
+    pub fn own_ssk_exposed(&self) -> bool {
+        self.own_log.ssk_exposed
+    }
+
     /// D-12: у пользователя отозвано устройство, державшее SSK, а SSK ещё не
     /// сменён — показать предупреждение KEY-1 (для себя — напоминание сменить).
     pub fn ssk_pending(&self, user: &str) -> bool {
@@ -1354,6 +1763,12 @@ impl Client {
         if seq == 0 {
             if let Some(inbox_record::Item::DeviceAdded(d)) = &rec.item {
                 return Ok(vec![Event::DeviceAdded { device_id: d.device_id.clone(), log_version: d.log_version }]);
+            }
+            // Сигнал звонка (D-08) — тоже мимо журнала. Обычное сообщение без
+            // места в журнале не принимаем: его источник — только журнал.
+            if let Some(inbox_record::Item::Sealed(env)) = &rec.item {
+                let events = self.open_sealed(0, env)?;
+                return Ok(events.into_iter().filter(|e| matches!(e, Event::Call { .. })).collect());
             }
         }
         if self.cursor.is_done(seq) {
@@ -1474,7 +1889,24 @@ impl Client {
             Ok(pt)
         };
         let mut seen = SeenAdapter { c: &mut self.seen, list: &mut self.seen_list };
-        let opened = msg::open_direct(&inner, &me, &|_d: &VerifiedDevice| true, &mut decrypt, &mut seen)?;
+        let opened = match msg::open_sealed_op(&inner, &me, &|_d: &VerifiedDevice| true, &mut decrypt, &mut seen)? {
+            msg::OpenedSealed::Message(m) => *m,
+            msg::OpenedSealed::Call(call) => {
+                // Звонок — только от собеседника и только своего сервера (цель
+                // операции подписана вместе с доменом).
+                let target_ok = call.op.header.target.as_ref().is_some_and(|t| t.domain == self.domain);
+                if sender == self.user || !target_ok {
+                    return Err(ClientError::Proto(ProtoError::ContextMismatch));
+                }
+                return Ok(vec![Event::Call {
+                    from: sender,
+                    device: dev_id,
+                    call_id: call.signal.call_id.clone(),
+                    ts_ms: call.op.header.ts_ms,
+                    signal: call.signal,
+                }]);
+            }
+        };
         let chat = match &opened.op.header.conversation {
             Some(crate::pb::parvane::core::v2::op_header::Conversation::DirectPeer(p)) if sender == self.user => p.address.clone(),
             _ => sender.clone(),
@@ -1807,6 +2239,7 @@ impl Client {
                 envelope_key: envelope_key.to_vec(),
                 megolm_session_key: vec![],
                 send_private_key: if writers.contains(m) { send.to_bytes().to_vec() } else { vec![] },
+                ..Default::default()
             };
             let c = Content { kind: Some(content::Kind::GroupKey(share)), ..Default::default() };
             out.extend(self.share_group_key(m, &c, pad)?);
@@ -1849,10 +2282,13 @@ impl Client {
         if !state.members.contains_key(sender) {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
+        // Своё устройство (тот же аккаунт; автор проверен по своему журналу
+        // устройств) пересылает то, что уже получило само, — T142.
+        let own = sender == self.user;
         if !gk.envelope_key.is_empty() {
-            // Ключи эпохи раздаёт админ, создавший эпоху.
+            // Ключи эпохи раздаёт админ, создавший эпоху, либо своё устройство.
             let admin = state.owner == sender || state.members.get(sender).is_some_and(|m| m.role == gpb::Role::Admin);
-            if !admin || ctx.epoch != state.epoch {
+            if !(admin || own) || ctx.epoch != state.epoch {
                 return Err(ClientError::Proto(ProtoError::Forbidden));
             }
             let ek: [u8; 32] = gk.envelope_key.as_slice().try_into().map_err(|_| ProtoError::InvalidField("envelope_key"))?;
@@ -1872,7 +2308,67 @@ impl Client {
             let inb = MegolmInbound::from_session_key(&gk.megolm_session_key)?;
             self.megolm_in.insert(inb.session_id(), Inbound { group: g.id.clone(), epoch: ctx.epoch, sender: sender.to_string(), session: inb });
         }
+        if !gk.megolm_exported.is_empty() {
+            // Чужую сессию Megolm вправе переслать только своё устройство; уже
+            // известную сессию (с более раннего индекса) экспорт не заменяет.
+            if !own || gk.megolm_owner.is_empty() {
+                return Err(ClientError::Proto(ProtoError::Forbidden));
+            }
+            let inb = MegolmInbound::import(&gk.megolm_exported)?;
+            let id = inb.session_id();
+            if !self.megolm_in.contains_key(&id) {
+                self.megolm_in.insert(id, Inbound { group: g.id.clone(), epoch: ctx.epoch, sender: gk.megolm_owner.clone(), session: inb });
+            }
+        }
         Ok(())
+    }
+
+    /// Группы v2 — своим новым устройствам (T142): грант линковки несёт только
+    /// ключи устройства, поэтому устройство, уже состоящее в группах, пересылает
+    /// каждому из `devices` ключи текущей эпохи и входящие сессии Megolm всех
+    /// участников (с текущего индекса). Получив ключи группы, которой ещё не
+    /// знает, новое устройство само дочитывает её журнал (`Need::GroupLog`).
+    /// Устройства не из своего журнала и своё собственное пропускаются.
+    pub fn share_groups_with_own_devices(&mut self, devices: &[String]) -> CResult<Vec<OutRequest>> {
+        let own: Vec<String> = devices.iter().filter(|d| **d != self.device_id && self.own_log.devices.contains_key(*d)).cloned().collect();
+        if own.is_empty() {
+            return Ok(vec![]);
+        }
+        let me = self.user.clone();
+        // Olm-сессии со своими устройствами — до сборки (иначе конверт для
+        // устройства без сессии молча пропускается): Need::Bundle доберёт хост.
+        self.check_peer(&me)?;
+        let mut shares = vec![];
+        for gid in self.group_ids() {
+            let Some(state) = self.group_state(&gid).cloned() else { continue };
+            if !state.members.contains_key(&me) {
+                continue;
+            }
+            let Some(keys) = self.epoch_keys.get(&(gid.clone(), state.epoch)) else { continue };
+            let pad = self.group_l2_state(&gid, &state).must_pad(&me, &[]);
+            shares.push((pad, GroupKeyShare {
+                context: Some(state.context()),
+                envelope_key: keys.envelope_key.to_vec(),
+                send_private_key: keys.send_sk.as_ref().map(|k| k.to_bytes().to_vec()).unwrap_or_default(),
+                ..Default::default()
+            }));
+            for inb in self.megolm_in.values().filter(|i| i.group == gid && i.epoch == state.epoch) {
+                shares.push((pad, GroupKeyShare {
+                    context: Some(state.context()),
+                    megolm_exported: inb.session.export().to_vec(),
+                    megolm_owner: inb.sender.clone(),
+                    ..Default::default()
+                }));
+            }
+        }
+        let mut out = vec![];
+        for (pad, share) in shares {
+            let c = Content { kind: Some(content::Kind::GroupKey(share)), ..Default::default() };
+            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: pad || self.direct_must_pad(&me) };
+            let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
+            out.push(OutRequest::anon("msg.deliver_sealed", &r));
+        }
+        Ok(out)
     }
 
     /// После `group_ingest`: применить отложенные ключи и открыть отложенные
@@ -1953,7 +2449,7 @@ impl Client {
             if self.megolm_shared.contains(&(group_id.to_vec(), epoch, m.clone())) {
                 continue;
             }
-            let share = GroupKeyShare { context: Some(state.context()), envelope_key: vec![], megolm_session_key: session_key.to_vec(), send_private_key: vec![] };
+            let share = GroupKeyShare { context: Some(state.context()), envelope_key: vec![], megolm_session_key: session_key.to_vec(), ..Default::default() };
             let sc = Content { kind: Some(content::Kind::GroupKey(share)), ..Default::default() };
             out.extend(self.share_group_key(m, &sc, pad)?);
             shared_now.push(m.clone());

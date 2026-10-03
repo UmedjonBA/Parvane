@@ -108,6 +108,11 @@ impl Server {
                 let q: ipb::DeviceLogAppendRequest = decode_checked(&r.body, Origin::Client).unwrap();
                 self.append_log(user, q.entry.unwrap());
             }
+            // Сброс личности: журнал пользователя начинается заново с нового генезиса.
+            "identity.root.rotate" => {
+                let q: ipb::RootRotateRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                self.logs.insert(user.into(), vec![q.genesis.unwrap()]);
+            }
             "identity.device.publish_certificate" => {
                 let q: ipb::DevicePublishCertificateRequest = decode_checked(&r.body, Origin::Client).unwrap();
                 if let Some(op) = q.log_entry.filter(|e| !e.body.is_empty()) {
@@ -451,8 +456,12 @@ fn revocation_rotates_keys_epochs_and_ssk() {
     assert!(texts(&got).is_empty() && texts(&alice2.drain_ready()).is_empty(), "отозванное устройство прочитало эпоху 2");
 
     // ── смена SSK корнем ──
-    let reqs = alice.rotate_ssk(&root).unwrap();
+    // Хост даёт секрет корня из резервной копии под ключом восстановления (T128).
+    assert!(alice.own_ssk_exposed(), "отозван держатель SSK — нужна смена");
+    assert!(alice.rotate_ssk_with_secret(&[9u8; 32]).is_err(), "чужой корень принят");
+    let reqs = alice.rotate_ssk_with_secret(&root.root.to_bytes()).unwrap();
     exec(&mut srv, &alice, &reqs);
+    assert!(!alice.own_ssk_exposed());
     assert!(!alice.ssk_pending("alice@local"));
     sync_peer_log(&srv, &mut bob, "alice@local");
     assert!(!bob.ssk_pending("alice@local"), "после смены SSK предупреждения нет");
@@ -754,4 +763,183 @@ fn exposed_ssk_cannot_add_device_after_revocation() {
     // Боб по-прежнему пишет только d1.
     let (v2, _) = bob.log_devices("alice@local");
     assert_eq!(v2, vec!["d1".to_string()]);
+}
+
+/// T130 (FR-066): новое устройство без других устройств — восстановление по
+/// корню (из копии под ключом восстановления). Прежние устройства отзываются,
+/// SSK меняется, собеседник продолжает переписку без предупреждения о корне.
+#[test]
+fn recovery_with_root_replaces_devices() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, root) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let mut alice2 = link(&mut srv, &mut alice, "d2");
+    bob.set_peer_delivery_key("alice@local", alice.delivery_key().to_vec(), 1);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("до потери")));
+    assert!(texts(&drain(&mut srv, &mut alice)).contains(&("bob@local".into(), "до потери".into())));
+    drain(&mut srv, &mut alice2);
+
+    // Оба устройства потеряны; новое устройство d9 с корнем из копии.
+    let mut alice9 = Client::new("alice@local", "d9", "local").unwrap();
+    let entries = srv.logs["alice@local"].clone();
+    assert!(alice9.recover_with_root(&[7u8; 32], entries.clone(), 20).is_err(), "чужой корень принят");
+    let mut alice9 = Client::new("alice@local", "d9", "local").unwrap();
+    let reqs = alice9.recover_with_root(&root.root.to_bytes(), entries, 20).unwrap();
+    assert_eq!(reqs[0].method, "identity.device.log_append", "первой — смена SSK корнем");
+    assert!(reqs.iter().any(|r| r.method == "identity.delivery_key.set"), "новый ключ доступа к доставке");
+    exec(&mut srv, &alice9, &reqs);
+    let (v2, _) = alice9.log_devices("alice@local");
+    assert_eq!(v2, vec!["d9".to_string()], "в журнале осталось только новое устройство");
+    assert!(!alice9.own_ssk_exposed());
+
+    // Боб догоняет журнал: корень тот же — без KEY-1; пишет новому устройству.
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    assert!(!bob.ssk_pending("alice@local"));
+    // Ключ доступа у Алисы новый (прежний держали потерянные устройства).
+    bob.set_peer_delivery_key("alice@local", alice9.delivery_key().to_vec(), 2);
+    advance(1_000);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("после восстановления")));
+    assert!(texts(&drain(&mut srv, &mut alice9)).contains(&("bob@local".into(), "после восстановления".into())));
+    assert!(!texts(&drain(&mut srv, &mut alice)).iter().any(|t| t.1 == "после восстановления"), "прежнее устройство читает");
+    // Ключ доступа Боба новое устройство не знает (в жизни — слепой жетон).
+    alice9.set_peer_delivery_key("bob@local", bob.delivery_key().to_vec(), 1);
+    run(&mut srv, &mut alice9, &mut |c| c.prepare_direct("bob@local", &text("я вернулась")));
+    assert!(texts(&drain(&mut srv, &mut bob)).contains(&("alice@local".into(), "я вернулась".into())));
+}
+
+/// T129/T130 (FR-019, KEY-1 v2): сброс личности — новый корень и журнал взамен
+/// прежних. Собеседник по отпечатку журнала видит замену, перечитывает журнал
+/// целиком, получает «корень сменился», принимает после предупреждения.
+#[test]
+fn identity_reset_is_seen_as_root_change() {
+    use parvane_protocol::client::LogVerdict;
+    use parvane_protocol::identity::device_log_hash;
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    bob.set_peer_delivery_key("alice@local", alice.delivery_key().to_vec(), 1);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("привет")));
+    drain(&mut srv, &mut alice);
+    let old_genesis = bob.log_genesis("alice@local").unwrap();
+    assert_eq!(old_genesis, device_log_hash(&srv.logs["alice@local"][0]));
+
+    // Отпечаток прежний — обычный синк.
+    assert_eq!(bob.ingest_log_sync("alice@local", vec![], &old_genesis).unwrap(), LogVerdict::Known);
+
+    // Новое устройство Алисы сбрасывает личность (ни устройств, ни ключа восстановления).
+    let mut alice9 = Client::new("alice@local", "d9", "local").unwrap();
+    let (reqs, new_root) = alice9.reset_identity(20).unwrap();
+    assert_eq!(reqs[0].method, "identity.root.rotate");
+    exec(&mut srv, &alice9, &reqs);
+    let new_genesis = device_log_hash(&srv.logs["alice@local"][0]);
+    assert_ne!(new_genesis, old_genesis);
+    assert_eq!(alice9.log_genesis("alice@local").unwrap(), new_genesis);
+    assert!(alice9.export_root_backup(&new_root.root.to_bytes(), &parvane_protocol::recovery::RecoveryKey::generate()).is_ok());
+
+    // Прежнее устройство Алисы: свой журнал заменён — оно вне новой личности.
+    assert_eq!(alice.ingest_log_sync("alice@local", vec![], &new_genesis).unwrap(), LogVerdict::Replaced);
+
+    // Боб: по дельте — «заменён»; по полному журналу — «корень сменился».
+    let after = bob.log_version("alice@local") as usize;
+    let delta = srv.logs["alice@local"].get(after..).map(<[_]>::to_vec).unwrap_or_default();
+    assert_eq!(bob.ingest_log_sync("alice@local", delta, &new_genesis).unwrap(), LogVerdict::Replaced);
+    let full = srv.logs["alice@local"].clone();
+    assert_eq!(bob.ingest_log_sync("alice@local", full, &new_genesis).unwrap(), LogVerdict::RootChanged);
+    // До подтверждения отправка стоит.
+    assert!(matches!(bob.prepare_direct("alice@local", &text("кто ты")), Err(ClientError::Need(Need::RootChanged { .. }))));
+    assert!(bob.accept_pending_root("alice@local").unwrap());
+    assert!(!bob.accept_pending_root("alice@local").unwrap(), "повторно принимать нечего");
+    assert_eq!(bob.log_genesis("alice@local").unwrap(), new_genesis);
+    bob.set_peer_delivery_key("alice@local", alice9.delivery_key().to_vec(), 2);
+    advance(1_000);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("после сброса")));
+    assert!(texts(&drain(&mut srv, &mut alice9)).contains(&("bob@local".into(), "после сброса".into())));
+
+    // Тот же корень, но другой журнал (откат/форк) — не принимается.
+    let (carol, _) = setup(&mut srv, "carol@local");
+    sync_peer_log(&srv, &mut bob, "carol@local");
+    let carol_genesis = device_log_hash(&srv.logs["carol@local"][0]);
+    // Сервер называет другой отпечаток, а отдаёт журнал прежнего корня.
+    let fake = [0xAAu8; 32];
+    let own_log = srv.logs["carol@local"].clone();
+    assert_eq!(bob.ingest_log_sync("carol@local", own_log.clone(), &fake).unwrap(), LogVerdict::Replaced, "журнал не с названного генезиса");
+    // Журнал начат заново тем же корнем (форк): записи после генезиса — другие.
+    let mut fork = Client::new("carol@local", "d1", "local").unwrap();
+    let _ = &carol;
+    assert!(fork.reset_identity(1).is_ok());
+    assert_eq!(bob.log_genesis("carol@local").unwrap(), carol_genesis, "закреплённый журнал не тронут");
+}
+
+/// FR-033 (T133): отзыв ключа доступа у одного собеседника. Блокировка сама
+/// ключ не отнимает — нужен новый ключ, розданный всем, кроме заблокированного.
+#[test]
+fn contact_access_revocation_excludes_one_peer() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let (mut carol, _) = setup(&mut srv, "carol@local");
+    let mut alice2 = link(&mut srv, &mut alice, "d2");
+    for (peer, hello) in [(&mut bob, "привет от bob"), (&mut carol, "привет от carol")] {
+        peer.set_peer_delivery_key("alice@local", alice.delivery_key().to_vec(), 1);
+        run(&mut srv, peer, &mut |c| c.prepare_direct("alice@local", &text(hello)));
+    }
+    drain(&mut srv, &mut alice);
+    drain(&mut srv, &mut alice2);
+    // Ответы раздают ключ доступа Алисы обоим собеседникам.
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("bob, привет")));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("carol@local", &text("carol, привет")));
+    drain(&mut srv, &mut bob);
+    drain(&mut srv, &mut carol);
+    drain(&mut srv, &mut alice2);
+    let old_dk = *alice.delivery_key();
+    let gen0 = alice.delivery_key_generation();
+
+    // Собеседнику, которому ключ не раздавался, отзывать нечего.
+    assert_eq!(alice.revoke_contact_access("nobody@local").unwrap(), RevocationOutcome::default());
+    assert_eq!(alice.delivery_key_generation(), gen0);
+
+    let mut outcome = None;
+    for _ in 0..10 {
+        match alice.revoke_contact_access("bob@local") {
+            Ok(o) => {
+                exec(&mut srv, &alice, &o.requests);
+                outcome = Some(o);
+                break;
+            }
+            Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    let o = outcome.expect("отзыв доступа");
+    assert!(o.requests.iter().any(|r| r.method == "identity.delivery_key.set"));
+    assert!(o.pending_key_shares.is_empty() && !o.ssk_rotation_required && o.state_key_version.is_none(), "{o:?}");
+    assert_ne!(*alice.delivery_key(), old_dk);
+    assert_eq!(alice.delivery_key_generation(), gen0 + 1);
+    assert!(!alice.pending_delivery_key_shares().contains(&"bob@local".to_string()));
+    // Повтор: ключа у Боба уже нет — ничего не происходит.
+    assert_eq!(alice.revoke_contact_access("bob@local").unwrap(), RevocationOutcome::default());
+
+    // Своё второе устройство получило новый ключ по E2E.
+    drain(&mut srv, &mut alice2);
+    assert_eq!(alice2.delivery_key(), alice.delivery_key());
+
+    // Кэрол получила новый ключ и пишет по нему.
+    drain(&mut srv, &mut carol);
+    run(&mut srv, &mut carol, &mut |c| c.prepare_direct("alice@local", &text("carol после отзыва")));
+    assert!(texts(&drain(&mut srv, &mut alice)).contains(&("carol@local".into(), "carol после отзыва".into())));
+
+    // Боб нового ключа не получил: доставка по прежнему — отказ сервера, дальше
+    // только как незнакомый (жетон).
+    assert!(drain(&mut srv, &mut bob).is_empty(), "заблокированному новый ключ не раздаётся");
+    let reqs = bob.prepare_direct("alice@local", &text("bob после отзыва")).unwrap();
+    let refused = reqs.iter().any(|r| srv.handle("bob@local", &bob.device_id, r) == Err(SrvErr::Forbidden));
+    assert!(refused, "прежний ключ доступа сервер больше не принимает");
+    bob.on_delivery_key_rejected("alice@local");
+    assert!(
+        matches!(bob.prepare_direct("alice@local", &text("ещё раз")), Err(ClientError::Need(Need::Token { .. }))),
+        "без ключа доступа — только анонимный жетон"
+    );
 }

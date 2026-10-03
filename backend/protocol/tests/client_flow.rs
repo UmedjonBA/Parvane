@@ -67,6 +67,8 @@ impl Server {
                 let q: ipb::DeliveryKeySetRequest = decode_checked(&r.body, Origin::Client).unwrap();
                 self.dk.insert(user.into(), Sha256::digest(&q.delivery_key).into());
             }
+            // Сигналы звонка: анонимный канал, в журнал не пишутся (D-08)
+            "call.ring_sealed" | "call.signal_sealed" => assert_eq!(r.chan, Chan::Anon),
             "msg.deliver_sealed" => {
                 assert_eq!(r.chan, Chan::Anon);
                 let q: mpb::DeliverSealedRequest = decode_checked(&r.body, Origin::Client).unwrap();
@@ -355,6 +357,67 @@ fn direct_group_multidevice_and_restore() {
     run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("группа после восстановления")));
     let ev = drain(&mut srv, &mut bob);
     assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "группа после восстановления".into())), "{ev:?}");
+}
+
+/// T142: устройство, привязанное ПОСЛЕ создания группы, узнаёт о группе и
+/// получает ключи текущей эпохи и сессии Megolm участников от своего старого
+/// устройства — читает новые сообщения участников и пишет само.
+#[test]
+fn linked_device_gets_groups_from_own_device() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("привет")));
+    drain(&mut srv, &mut bob);
+
+    let perms = Permissions { send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "До линковки", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("от алисы")));
+    drain(&mut srv, &mut bob);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_group(&g.id, &text("от боба")));
+    drain(&mut srv, &mut alice);
+
+    // Второе устройство Алисы — после группы и первых сообщений.
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    assert!(alice2.group_ids().is_empty(), "грант групп не несёт");
+
+    // Чужому и своему же устройству пересылать нечего.
+    assert!(alice.share_groups_with_own_devices(&["d1".into(), "нет-такого".into()]).unwrap().is_empty());
+    let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
+    // ключи эпохи + по сессии Megolm на каждого писавшего (alice, bob)
+    assert_eq!(shared.len(), 3, "пересылок: {}", shared.len());
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(ev.iter().any(|e| matches!(e, Event::GroupChanged { .. })), "{ev:?} {:?}", alice2.last_error);
+    assert_eq!(alice2.group_ids(), vec![g.id.clone()], "{:?}", alice2.last_error);
+
+    // Сообщения участников в текущей эпохе читаются (сессии Megolm пересланы).
+    run(&mut srv, &mut bob, &mut |c| c.prepare_group(&g.id, &text("боб после линковки")));
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(texts(&ev).contains(&("group".into(), "bob@local".into(), "боб после линковки".into())), "{ev:?} {:?}", alice2.last_error);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("алиса-1 после линковки")));
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "алиса-1 после линковки".into())), "{ev:?} {:?}", alice2.last_error);
+
+    // Новое устройство пишет в группу само (ключ отправки эпохи переслан).
+    // Ключ доступа Боба новому устройству грант не несёт — в жизни тут жетон.
+    bob_learn(&mut alice2, "bob@local", bob_dk);
+    run(&mut srv, &mut alice2, &mut |c| c.prepare_group(&g.id, &text("со второго устройства")));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "со второго устройства".into())), "{ev:?} {:?}", bob.last_error);
+    let ev = drain(&mut srv, &mut alice);
+    assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "со второго устройства".into())), "{ev:?} {:?}", alice.last_error);
+
+    // Пересылку чужой сессии Megolm от НЕ своего устройства движок не принимает:
+    // у Боба нет способа выдать её за сессию Алисы (проверка в accept_group_key).
 }
 
 /// Передать Алисе ключ доступа Боба сообщением Боба (как в жизни: первый
@@ -709,4 +772,209 @@ fn l2_mode_direct_and_group() {
     assert!(!a.iter().all(|n| on_grid(*n)), "{a:?}");
     bob.l2_set_group_pref(&g.id, false);
     assert!(!bob.l2_group(&g.id).pad);
+}
+
+// ── звонки (D-08): сигнал в sealed-конверте мимо журнала ─────────────────────
+
+fn call_offer(call_id: &[u8], sdp: &str) -> parvane_protocol::pb::parvane::call::v2::CallSignal {
+    use parvane_protocol::pb::parvane::call::v2::{call_signal::Signal, CallSignal, Offer};
+    CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Offer(Offer { sdp: sdp.into(), video: false, group: None })) }
+}
+
+/// Конверты запроса звонка как живые записи без места в журнале (seq = 0).
+fn live_records(req: &OutRequest) -> Vec<Vec<u8>> {
+    use parvane_protocol::pb::parvane::call::v2::SignalSealedRequest;
+    let q: SignalSealedRequest = decode_checked(&req.body, Origin::Client).unwrap();
+    q.envelopes
+        .into_iter()
+        .map(|e| InboxRecord { seq: 0, received_ms: 0, item: Some(inbox_record::Item::Sealed(e)) }.encode_to_vec())
+        .collect()
+}
+
+#[test]
+fn call_signal_sealed_roundtrip() {
+    use parvane_protocol::pb::parvane::call::v2::{call_signal::Signal, Answer, CallSignal};
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    // Переписка до звонка: журналы, сессии и ключи доступа известны обеим сторонам.
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("привет")));
+    drain(&mut srv, &mut bob);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("и тебе")));
+    drain(&mut srv, &mut alice);
+
+    // Оффер: анонимный канал, метод «звонок будит устройства», SDP серверу не виден.
+    let call_id = [7u8; 16];
+    let offer = call_offer(&call_id, "v=0 SDP-OFFER");
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@local", &offer));
+    assert_eq!(reqs.len(), 1);
+    assert_eq!((reqs[0].chan, reqs[0].method), (Chan::Anon, "call.ring_sealed"));
+    assert!(!reqs[0].body.windows(13).any(|w| w == b"v=0 SDP-OFFER"), "SDP виден серверу");
+    assert!(!reqs[0].body.windows(11).any(|w| w == b"alice@local"), "отправитель виден серверу");
+
+    // Боб открывает живую запись: событие звонка с отправителем и тем же сигналом.
+    let records = live_records(&reqs[0]);
+    assert_eq!(records.len(), 1);
+    let ev = bob.open_record(&records[0]).unwrap();
+    match ev.as_slice() {
+        [Event::Call { from, device, call_id: id, signal, .. }] => {
+            assert_eq!((from.as_str(), device.as_str(), id.as_slice()), ("alice@local", "d1", &call_id[..]));
+            assert_eq!(signal, &offer);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Повтор того же конверта не даёт второго события.
+    assert!(!matches!(bob.open_record(&records[0]), Ok(ev) if !ev.is_empty()), "повтор сигнала принят");
+
+    // Ответ и прочие сигналы — без пробуждения устройств.
+    let answer = CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Answer(Answer { sdp: "v=0 SDP-ANSWER".into() })) };
+    let reqs = run_collect(&mut srv, &mut bob, &mut |c| c.prepare_call("alice@local", &answer));
+    assert_eq!(reqs[0].method, "call.signal_sealed");
+    let ev = alice.open_record(&live_records(&reqs[0])[0]).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Call { from, signal, .. }] if from == "bob@local" && signal == &answer), "{ev:?}");
+
+    // Обычное сообщение без места в журнале (seq = 0) не принимается.
+    let msg_reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("мимо журнала")));
+    let q: mpb::DeliverSealedRequest = decode_checked(&msg_reqs[0].body, Origin::Client).unwrap();
+    let rec = InboxRecord { seq: 0, received_ms: 0, item: Some(inbox_record::Item::Sealed(q.envelopes[0].clone())) }.encode_to_vec();
+    assert!(bob.open_record(&rec).map(|e| e.is_empty()).unwrap_or(true), "сообщение мимо журнала принято");
+
+    // Негодные вызовы: звонок себе, id звонка не 16 байт.
+    assert!(alice.prepare_call("alice@local", &offer).is_err());
+    assert!(alice.prepare_call("bob@local", &call_offer(&[1u8; 8], "x")).is_err());
+}
+
+// ── переходный период (FR-058): подписанный список v1-устройств ──────────────
+
+#[test]
+fn legacy_device_set_is_signed_and_only_shrinks() {
+    use parvane_protocol::pb::parvane::core::v2::LegacyDevice;
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let old = |id: &str, b: u8| LegacyDevice { device_id: id.into(), olm_curve25519: vec![b; 32], olm_ed25519: vec![b + 1; 32] };
+    assert!(alice.legacy_devices("alice@local").is_none(), "список до публикации");
+
+    // Алиса публикует свои v1-устройства; Боб видит их по её журналу.
+    let req = alice.legacy_devices_request(vec![old("desk", 5), old("phone", 7)]).unwrap();
+    assert_eq!(req.method, "identity.device.log_append");
+    srv.handle("alice@local", "d1", &req);
+    // Свой журнал запись получает синком, а не при подготовке запроса.
+    assert!(alice.legacy_devices("alice@local").is_none(), "журнал изменён до подтверждения сервера");
+    let sync_own = |c: &mut Client, srv: &Server| {
+        let known = c.log_version("alice@local") as usize;
+        c.ingest_log("alice@local", srv.logs["alice@local"][known..].to_vec()).unwrap();
+    };
+    sync_own(&mut alice, &srv);
+    let alice_log = srv.logs["alice@local"].clone();
+    bob.ingest_log("alice@local", alice_log).unwrap();
+    let seen = bob.legacy_devices("alice@local").unwrap();
+    assert_eq!(seen.iter().map(|d| d.device_id.as_str()).collect::<Vec<_>>(), vec!["desk", "phone"]);
+    assert_eq!(bob.log_devices("alice@local").1, vec!["desk".to_string(), "phone".to_string()]);
+
+    // Сократить можно (устройство перешло на v2 или отозвано), расширить — нет.
+    let req = alice.legacy_devices_request(vec![old("desk", 5)]).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    sync_own(&mut alice, &srv);
+    assert!(alice.legacy_devices_request(vec![old("desk", 5), old("late", 9)]).is_err(), "список расширен");
+    assert_eq!(alice.legacy_devices("alice@local").unwrap().len(), 1);
+    // Чужое устройство без SSK этого пользователя список не публикует.
+    let mut stranger = Client::new("alice@local", "d9", "local").unwrap();
+    assert!(stranger.legacy_devices_request(vec![]).is_err());
+}
+
+/// T127 (FR-013/FR-064): «печатает» и присутствие v2-собеседнику идут
+/// эфемерными каналами — секретный id, payload под ключом канала, без `{from, to}`.
+#[test]
+fn ephemeral_typing_and_presence() {
+    use parvane_protocol::group::verify_group_typing;
+    use parvane_protocol::pb::parvane::msg::v2::TypingAction;
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let carol = setup(&mut srv, "carol@local");
+    // До обмена ключами доставки канала нет: сигнал не шлётся никак.
+    assert!(alice.typing_request("bob@local", TypingAction::Typing).unwrap().is_none());
+    assert!(alice.eph_subscribe(&["bob@local".to_string()], &[]).is_empty());
+
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("привет")));
+    drain(&mut srv, &mut bob);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("и тебе")));
+    drain(&mut srv, &mut alice);
+
+    // Подписка: присутствие собеседника + «печатает» чата; повтор — без запросов.
+    let subs = alice.eph_subscribe(&["bob@local".to_string()], &[]);
+    assert_eq!(subs.len(), 1);
+    assert_eq!((subs[0].chan, subs[0].method), (Chan::Id, "ephemeral.subscribe"));
+    let sub: mpb::EphemeralSubscribeRequest = decode_checked(&subs[0].body, Origin::Client).unwrap();
+    assert_eq!(sub.channel_ids.len(), 2);
+    assert!(alice.eph_subscribe(&["bob@local".to_string()], &[]).is_empty(), "повторная подписка");
+    assert_eq!(bob.eph_subscribe(&["alice@local".to_string()], &[]).len(), 1);
+
+    // «Печатает»: сервер видит только id канала и шифртекст фиксированной длины.
+    let typing = alice.typing_request("bob@local", TypingAction::Typing).unwrap().unwrap();
+    assert_eq!((typing.chan, typing.method), (Chan::Id, "ephemeral.typing"));
+    assert!(!typing.body.windows(11).any(|w| w == b"alice@local"), "автор виден серверу");
+    assert!(!typing.body.windows(9).any(|w| w == b"bob@local"), "адресат виден серверу");
+    let q: mpb::EphemeralTypingRequest = decode_checked(&typing.body, Origin::Client).unwrap();
+    assert!(sub.channel_ids.contains(&q.channel_id), "канал чата не тот, на который подписан собеседник");
+    match bob.open_ephemeral(&typing.body) {
+        Some(Event::Typing { chat, group: None, from, action, .. }) => {
+            assert_eq!((chat.as_str(), from.as_str(), action), ("alice@local", "alice@local", TypingAction::Typing as i32));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(alice.open_ephemeral(&typing.body).is_none(), "своё эхо принято");
+    assert!(carol.open_ephemeral(&typing.body).is_none(), "посторонний открыл канал");
+
+    // Присутствие: свой канал из своего ключа доставки.
+    let presence = alice.presence_request(true, 0).unwrap().unwrap();
+    assert_eq!(presence.method, "ephemeral.presence");
+    assert!(matches!(bob.open_ephemeral(&presence.body), Some(Event::Presence { from, online: true, .. }) if from == "alice@local"));
+    // Боб не может выдать себя за Алису в её канале присутствия: автор не тот.
+    let forged = bob.presence_request(true, 0).unwrap().unwrap();
+    let mut fq: mpb::EphemeralPresenceRequest = decode_checked(&forged.body, Origin::Client).unwrap();
+    fq.channel_id = decode_checked::<mpb::EphemeralPresenceRequest>(&presence.body, Origin::Client).unwrap().channel_id;
+    assert!(bob.open_ephemeral(&fq.encode_to_vec()).is_none());
+    // Старый сигнал (повтор) не принимается.
+    advance_clock(60_000);
+    assert!(bob.open_ephemeral(&typing.body).is_none(), "устаревший сигнал принят");
+
+    // Группа: анонимно, подпись ключом отправки эпохи, автор — внутри шифртекста.
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Семья", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("всем привет")));
+    drain(&mut srv, &mut bob);
+    assert_eq!(bob.eph_subscribe(&[], &[g.id.clone()]).len(), 1);
+    let gt = alice.group_typing_request(&g.id, TypingAction::RecordingVoice).unwrap().unwrap();
+    assert_eq!((gt.chan, gt.method), (Chan::Anon, "ephemeral.group_typing"));
+    assert!(!gt.body.windows(11).any(|w| w == b"alice@local"), "автор виден серверу");
+    let gq: mpb::EphemeralGroupTypingRequest = decode_checked(&gt.body, Origin::Client).unwrap();
+    let send_pk = bob.group_state(&g.id).unwrap().send_public_key.unwrap();
+    verify_group_typing(&send_pk, &g, gq.epoch, &gq.nonce, &gq.payload, &gq.epoch_signature).unwrap();
+    match bob.open_ephemeral(&gt.body) {
+        Some(Event::Typing { group: Some(id), from, action, .. }) => {
+            assert_eq!((id, from.as_str(), action), (g.id.clone(), "alice@local", TypingAction::RecordingVoice as i32));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(carol.open_ephemeral(&gt.body).is_none());
+
+    // L2 в личном чате: ни «печатает», ни присутствия (оно одно на аккаунт).
+    run(&mut srv, &mut alice, &mut |c| c.l2_set_direct("bob@local", true));
+    drain(&mut srv, &mut bob);
+    assert!(alice.typing_request("bob@local", TypingAction::Typing).unwrap().is_none(), "«печатает» в L2");
+    assert!(alice.presence_request(true, 0).unwrap().is_none(), "присутствие в L2");
+    assert!(bob.typing_request("alice@local", TypingAction::Typing).unwrap().is_none(), "собеседник шлёт «печатает» в L2");
+    // После переподключения подписки строятся заново; каналы L2-чата — нет.
+    alice.eph_reset();
+    let again = alice.eph_subscribe(&["bob@local".to_string()], &[]);
+    let ids: Vec<Vec<u8>> = again.iter().flat_map(|r| decode_checked::<mpb::EphemeralSubscribeRequest>(&r.body, Origin::Client).unwrap().channel_ids).collect();
+    assert_eq!(ids.len(), 1, "в L2 остаётся только канал присутствия собеседника");
 }

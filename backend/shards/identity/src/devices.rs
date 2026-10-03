@@ -101,6 +101,13 @@ pub(crate) async fn handle_device_revoke(
                     info!("{} отозвал устройство '{}'", username, req.device_id);
                     DeviceRevokeResponse { ok: true, error: None }
                 }
+                // Устройство только в журнале v2 (в каталог v1 оно не попадало,
+                // T048): пароль проверен, тумбстоун JWT поставлен — отзыв принят;
+                // запись в журнал устройств клиент вносит методом v2.
+                Ok(false) if crate::v2::log_has_device(&username, &req.device_id).await => {
+                    info!("{} отозвал v2-устройство '{}' (сессии v1)", username, req.device_id);
+                    DeviceRevokeResponse { ok: true, error: None }
+                }
                 Ok(false) => DeviceRevokeResponse {
                     ok: false,
                     error: Some("устройство не найдено".into()),

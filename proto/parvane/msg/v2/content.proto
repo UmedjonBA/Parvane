@@ -294,6 +294,11 @@ message GroupKeyShare {
   bytes megolm_session_key = 3 [(parvane.core.v2.max_len) = 1024];
   // Приватная часть ключа отправки эпохи — только тем, кто вправе писать.
   bytes send_private_key = 4 [(parvane.core.v2.max_len) = 32];
+  // Пересылка СВОЕМУ новому устройству (T142): экспорт входящей сессии Megolm
+  // участника `megolm_owner` с текущего индекса (формат export_session, без
+  // подписи). Принимается только от устройства своего же аккаунта.
+  bytes megolm_exported = 5 [(parvane.core.v2.max_len) = 1024];
+  string megolm_owner = 6 [(parvane.core.v2.max_len) = 320];
 }
 
 message DeliveryKeyShare {

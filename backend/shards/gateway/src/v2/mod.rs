@@ -43,8 +43,10 @@ mod tests;
 
 use limits::{Access, AnonIpLimits, RingCooldown, V2Rate, REAUTH_WINDOW_MS};
 
-/// Потолок подписок v2 на сессию (как P-33).
-pub(crate) const MAX_SUBS: usize = 64;
+/// Потолок подписок v2 на сессию (как P-33): инбокс + эфемерные каналы — по
+/// два на собеседника (присутствие, «печатает») и один на группу; движок
+/// клиента держит не больше 240 каналов.
+pub(crate) const MAX_SUBS: usize = 256;
 /// Кэш описателя сервера.
 const DESCRIPTOR_TTL: Duration = Duration::from_secs(600);
 

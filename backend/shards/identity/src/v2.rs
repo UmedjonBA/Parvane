@@ -74,6 +74,20 @@ pub(crate) async fn user_has_v2(user: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Устройство числится в журнале устройств v2 пользователя (в т.ч. уже
+/// отозванным): у аккаунта на v2 новые устройства в каталог v1 не попадают
+/// (T048), и v1-отзыв такого устройства каталог не меняет.
+pub(crate) async fn log_has_device(user: &str, device_id: &str) -> bool {
+    let Some(pool) = V2_POOL.get() else { return false };
+    sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM device_state WHERE user = ? AND device_id = ?")
+        .bind(user)
+        .bind(device_id)
+        .fetch_one(pool)
+        .await
+        .map(|(n,)| n > 0)
+        .unwrap_or(false)
+}
+
 pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     ctx.rotate_token_keys().await;
     let c2 = ctx.clone();
@@ -546,13 +560,17 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.device.log_sync" => {
             require_user(&req)?;
             let r: pb::DeviceLogSyncRequest = body(&req)?;
-            let (entries, more) = log_sync(ctx, &r.user.map(|u| u.address).unwrap_or_default(), r.after_version).await?;
-            Ok(pb::DeviceLogSyncResponse { entries, more }.encode_to_vec())
+            let user = r.user.map(|u| u.address).unwrap_or_default();
+            let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
+            let genesis_hash = log_genesis_hash(ctx, &user).await;
+            Ok(pb::DeviceLogSyncResponse { entries, more, genesis_hash }.encode_to_vec())
         }
         "identity.device.log_sync_anon" => {
             let r: pb::DeviceLogSyncAnonRequest = body(&req)?;
-            let (entries, more) = log_sync(ctx, &r.user.map(|u| u.address).unwrap_or_default(), r.after_version).await?;
-            Ok(pb::DeviceLogSyncAnonResponse { entries, more }.encode_to_vec())
+            let user = r.user.map(|u| u.address).unwrap_or_default();
+            let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
+            let genesis_hash = log_genesis_hash(ctx, &user).await;
+            Ok(pb::DeviceLogSyncAnonResponse { entries, more, genesis_hash }.encode_to_vec())
         }
         "identity.device.publish_certificate" => {
             require_user(&req)?;
@@ -590,7 +608,39 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 return Err(ErrorCode::ReauthRequired);
             }
             let r: pb::RootRotateRequest = body(&req)?;
-            root_rotate(ctx, &req.user, &r.genesis.ok_or(ErrorCode::Invalid)?).await
+            root_rotate(ctx, &req.user, &req.device_id, &r.genesis.ok_or(ErrorCode::Invalid)?).await
+        }
+        // FR-066 (T130): копия корня под ключом восстановления — шифртекст.
+        "identity.root.backup_set" => {
+            require_user(&req)?;
+            let r: pb::RootBackupSetRequest = body(&req)?;
+            if r.backup.is_empty() {
+                return Err(ErrorCode::Invalid);
+            }
+            // Пишет только активное устройство журнала: сессия без устройства
+            // (пароль утёк) не должна затирать копию.
+            let log = load_log(ctx, &req.user).await?;
+            if log.active(&req.device_id).is_none() {
+                return Err(ErrorCode::Forbidden);
+            }
+            sqlx::query("INSERT OR REPLACE INTO root_backup (user, backup, updated_at) VALUES (?, ?, ?)")
+                .bind(&req.user)
+                .bind(&r.backup)
+                .bind(now_unix())
+                .execute(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            Ok(pb::RootBackupSetResponse {}.encode_to_vec())
+        }
+        "identity.root.backup_get" => {
+            require_user(&req)?;
+            let _: pb::RootBackupGetRequest = body(&req)?;
+            let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT backup FROM root_backup WHERE user = ?")
+                .bind(&req.user)
+                .fetch_optional(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            Ok(pb::RootBackupGetResponse { backup: row.map(|(b,)| b).unwrap_or_default() }.encode_to_vec())
         }
 
         // ── доступ к доставке, жетоны, приватность ──
@@ -633,6 +683,33 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             .await
             .map_err(db_err)?;
             Ok(pb::PrivacySetResponse {}.encode_to_vec())
+        }
+        "identity.privacy.get" => {
+            require_user(&req)?;
+            let row: Option<(i64, i64, i64, i64)> = sqlx::query_as(
+                "SELECT group_add, messages_from_strangers, calls_from, presence_visibility FROM privacy WHERE user = ?",
+            )
+            .bind(&req.user)
+            .fetch_optional(&ctx.v2)
+            .await
+            .map_err(db_err)?;
+            let aud = |v: i64| i32::try_from(v).unwrap_or(1);
+            let (settings, is_set) = match row {
+                Some((g, s, c, p)) => (
+                    pb::PrivacySettings {
+                        group_add: aud(g),
+                        messages_from_strangers: s != 0,
+                        calls_from: aud(c),
+                        presence_visibility: aud(p),
+                    },
+                    true,
+                ),
+                None => (
+                    pb::PrivacySettings { group_add: 1, messages_from_strangers: true, calls_from: 1, presence_visibility: 1 },
+                    false,
+                ),
+            };
+            Ok(pb::PrivacyGetResponse { settings: Some(settings), is_set }.encode_to_vec())
         }
 
         // ── оператор ──
@@ -835,6 +912,19 @@ async fn log_sync(ctx: &V2Ctx, user: &str, after: u64) -> Result<(Vec<SignedOp>,
     Ok((entries, more))
 }
 
+/// SHA-256 первой записи журнала пользователя (пусто — журнала нет): по нему
+/// собеседники замечают, что журнал начат заново (смена корня, T129).
+async fn log_genesis_hash(ctx: &V2Ctx, user: &str) -> Vec<u8> {
+    sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM device_log WHERE user = ? AND version = 1")
+        .bind(user)
+        .fetch_optional(&ctx.v2)
+        .await
+        .ok()
+        .flatten()
+        .map(|(h,)| h)
+        .unwrap_or_default()
+}
+
 async fn publish_certificate(ctx: &V2Ctx, req: &ShardRequest, r: pb::DevicePublishCertificateRequest) -> Reply {
     if let Some(entry) = r.log_entry.filter(|e| !e.body.is_empty()) {
         log_append(ctx, &req.user, &entry).await?;
@@ -1029,7 +1119,7 @@ async fn device_revoke(ctx: &V2Ctx, user: &str, device_id: &str) -> Reply {
     Ok(pb::DeviceRevokeResponse {}.encode_to_vec())
 }
 
-async fn root_rotate(ctx: &V2Ctx, user: &str, genesis: &SignedOp) -> Reply {
+async fn root_rotate(ctx: &V2Ctx, user: &str, device: &str, genesis: &SignedOp) -> Reply {
     let mut fresh = DeviceLog::new(user).map_err(|_| ErrorCode::Invalid)?;
     fresh.apply(genesis).map_err(|e| e.code())?;
     let old = load_log(ctx, user).await?;
@@ -1041,6 +1131,8 @@ async fn root_rotate(ctx: &V2Ctx, user: &str, genesis: &SignedOp) -> Reply {
         .await
         .map_err(db_err)?;
     sqlx::query("DELETE FROM device_log WHERE user = ?").bind(user).execute(&mut *tx).await.map_err(db_err)?;
+    // Копия прежнего корня больше не нужна (новый корень — новая копия).
+    sqlx::query("DELETE FROM root_backup WHERE user = ?").bind(user).execute(&mut *tx).await.map_err(db_err)?;
     sqlx::query("INSERT INTO device_log (user, version, entry, hash, created_at) VALUES (?, 1, ?, ?, ?)")
         .bind(user)
         .bind(genesis.encode_to_vec())
@@ -1051,10 +1143,13 @@ async fn root_rotate(ctx: &V2Ctx, user: &str, genesis: &SignedOp) -> Reply {
         .map_err(db_err)?;
     store_state(&mut tx, user, &fresh).await?;
     tx.commit().await.map_err(db_err)?;
-    // Все устройства прежнего корня должны пересертифицироваться.
-    for id in old.devices.keys() {
-        let n = RevokedNotice { user: user.to_string(), device_id: id.clone() };
-        let _ = ctx.nc.publish(REVOKED_SUBJECT.to_string(), n.encode_to_vec().into()).await;
+    // Устройства прежнего корня в новую личность не входят: их сессии v1 и v2
+    // гасятся, а записи каталога v1 удаляются — иначе новое первое устройство
+    // внесло бы «потерянные» устройства в подписанный список v1-устройств
+    // (LEGACY-1), и им продолжали бы уходить копии сообщений. Вернуться они
+    // могут только линковкой. Устройство, выполняющее сброс, не трогаем.
+    for id in old.devices.keys().filter(|id| id.as_str() != device) {
+        revoke_effects(ctx, user, id).await;
     }
     warn!("v2: смена корня у {} (журнал устройств начат заново)", user);
     Ok(pb::RootRotateResponse {}.encode_to_vec())
