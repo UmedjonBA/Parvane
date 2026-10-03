@@ -53,7 +53,21 @@ message CallSignal {
     IceCandidate ice = 4;
     Hangup hangup = 5;
     Ringing ringing = 6;
+    // Приглашение в групповой звонок (FR-062): `call_id` — id группового
+    // звонка. Сами соединения — попарные сигналы с `group_call_id`.
+    GroupRing group_ring = 7;
   }
+  // Сигнал попарного соединения внутри группового звонка (mesh): id этого
+  // группового звонка. Пусто — личный звонок.
+  bytes group_call_id = 8 [(parvane.core.v2.max_len) = 16];
+}
+
+// Приглашение в групповой звонок: состав mesh на момент приглашения.
+message GroupRing {
+  repeated parvane.core.v2.UserRef participants = 1 [(parvane.core.v2.max_items) = 32];
+  bool video = 2;
+  // Группа, в чате которой начат звонок (если есть).
+  parvane.core.v2.Ref group = 3;
 }
 
 message Offer {

@@ -161,6 +161,21 @@ bool pv_client_delivery_key_rejected(struct PvClient *c,
                                      const char *peer);
 
 /**
+ * Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
+ * `[{"user","tsMs"}]` («Просмотрено» в чате v2, T151).
+ */
+char *pv_client_readers(const struct PvClient *c,
+                        const char *id,
+                        char **err);
+
+/**
+ * Известен ли ключ доступа собеседника: сигнал звонка сервер принимает только
+ * с ним (слепой жетон для звонков не годится).
+ */
+bool pv_client_has_peer_delivery_key(const struct PvClient *c,
+                                     const char *peer);
+
+/**
  * Отозвать своё другое устройство и выполнить последствия → JSON
  * `{"requests":[…],"pendingKeyShares":[…],"pendingEpochs":[hex…],
  * "epochsNeedAdmin":[hex…],"sskRotationRequired":bool,"stateKeyVersion":n|null}`.
@@ -274,6 +289,16 @@ char *pv_client_group_change(struct PvClient *c,
                              const char *group,
                              const char *change_json,
                              char **err);
+
+/**
+ * Решение по заявке на вступление в группу: JSON запроса `group.request.decide`
+ * (одобрение — запись `AddMember`, локальный журнал уже продвинут).
+ */
+char *pv_client_group_request_decide(struct PvClient *c,
+                                     const char *group,
+                                     const char *user,
+                                     bool approve,
+                                     char **err);
 
 char *pv_client_group_rotate_epoch(struct PvClient *c, const char *group, char **err);
 
@@ -491,6 +516,12 @@ char *pv_state_mark_sent(struct PvStateSession *s,
  * `parvane.state.v1.CallRecord` → JSON-массив base64 тел `state.append`.
  */
 char *pv_state_call_set(struct PvStateSession *s, const char *record_json, char **err);
+
+/**
+ * Чат очищен «у себя» до момента (T145): proto3-JSON
+ * `parvane.state.v1.ChatCleared` → JSON-массив base64 тел `state.append`.
+ */
+char *pv_state_chat_cleared(struct PvStateSession *s, const char *cleared_json, char **err);
 
 /**
  * Уже отправленные этим устройством отложенные (JSON-массив hex; хранит хост).

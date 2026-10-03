@@ -223,6 +223,20 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     Ok(next)
 }
 
+/// Заявка на вступление появилась или снята: админам с правом приглашать —
+/// уведомление о группе БЕЗ смены версии (клиент перечитывает список заявок;
+/// отдельного вида записи в инбоксе для заявок нет).
+async fn notify_invite_admins(ctx: &V2, s: &GroupState) {
+    let notice = GroupStateNotice { group: Some(s.group.clone()), version: s.version };
+    for u in s.members.keys().filter(|u| invite_admin(s, u)) {
+        if let Ok(devs) = ctx.devices_of(u).await {
+            for d in &devs.v2_device_ids {
+                let _ = ctx.append(u, d, inbox_record::Item::GroupState(notice.clone())).await;
+            }
+        }
+    }
+}
+
 fn is_member(s: &GroupState, u: &str) -> bool {
     s.members.contains_key(u)
 }
@@ -443,6 +457,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                     .execute(&ctx.v2)
                     .await
                     .map_err(db_err)?;
+                notify_invite_admins(ctx, &s).await;
                 return Ok(gpb::JoinResponse { pending: true, version: s.version }.encode_to_vec());
             }
             let s2 = append(ctx, &user, e).await?;
@@ -480,6 +495,10 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                 append(ctx, &user, e).await?;
             }
             sqlx::query("DELETE FROM group_join_requests_v2 WHERE group_id = ? AND user = ?").bind(&g.id).bind(&who).execute(&ctx.v2).await.map_err(db_err)?;
+            if !r.approve {
+                // Одобрение уведомляет всех записью журнала; отказ — только админов
+                notify_invite_admins(ctx, &s).await;
+            }
             Ok(gpb::RequestDecideResponse {}.encode_to_vec())
         }
         _ => Err(ErrorCode::Unavailable),

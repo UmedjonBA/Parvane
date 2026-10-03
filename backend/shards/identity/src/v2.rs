@@ -88,6 +88,19 @@ pub(crate) async fn log_has_device(user: &str, device_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Устройство действует в журнале устройств v2 пользователя (есть сертификат,
+/// не отозвано) — ему разрешён и v1-бандл в каталоге устройств (T146).
+pub(crate) async fn log_has_active_device(user: &str, device_id: &str) -> bool {
+    let Some(pool) = V2_POOL.get() else { return false };
+    sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM device_state WHERE user = ? AND device_id = ? AND revoked = 0")
+        .bind(user)
+        .bind(device_id)
+        .fetch_one(pool)
+        .await
+        .map(|(n,)| n > 0)
+        .unwrap_or(false)
+}
+
 pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     ctx.rotate_token_keys().await;
     let c2 = ctx.clone();

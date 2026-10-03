@@ -308,6 +308,27 @@ pub unsafe extern "C" fn pv_client_delivery_key_rejected(c: *mut PvClient, peer:
     }
 }
 
+/// Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
+/// `[{"user","tsMs"}]` («Просмотрено» в чате v2, T151).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_readers(c: *const PvClient, id: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.readers(str_arg(id).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Известен ли ключ доступа собеседника: сигнал звонка сервер принимает только
+/// с ним (слепой жетон для звонков не годится).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_has_peer_delivery_key(c: *const PvClient, peer: *const c_char) -> bool {
+    match (c.as_ref(), str_arg(peer)) {
+        (Some(c), Some(p)) => c.inner.has_peer_delivery_key(p),
+        _ => false,
+    }
+}
+
 // ── отзыв своего устройства (T128; D-11, D-12, D-16) ────────────────────────
 
 /// Отозвать своё другое устройство и выполнить последствия → JSON
@@ -492,6 +513,17 @@ pub unsafe extern "C" fn pv_client_group_change(c: *mut PvClient, group: *const 
     guard(err, ptr::null_mut(), || {
         let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
         let r: Result<String, String> = c.group_change(str_arg(group).ok_or_else(bad_arg)?, str_arg(change_json).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Решение по заявке на вступление в группу: JSON запроса `group.request.decide`
+/// (одобрение — запись `AddMember`, локальный журнал уже продвинут).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_group_request_decide(c: *mut PvClient, group: *const c_char, user: *const c_char, approve: bool, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.group_request_decide(str_arg(group).ok_or_else(bad_arg)?, str_arg(user).ok_or_else(bad_arg)?, approve);
         r.map(cstring)
     })
 }
@@ -831,6 +863,16 @@ pub unsafe extern "C" fn pv_state_call_set(s: *mut PvStateSession, record_json: 
     guard(err, ptr::null_mut(), || {
         let s = s.as_mut().ok_or_else(bad_arg)?;
         s.inner.call_set(str_arg(record_json).ok_or_else(bad_arg)?).map(cstring)
+    })
+}
+
+/// Чат очищен «у себя» до момента (T145): proto3-JSON
+/// `parvane.state.v1.ChatCleared` → JSON-массив base64 тел `state.append`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_state_chat_cleared(s: *mut PvStateSession, cleared_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let s = s.as_mut().ok_or_else(bad_arg)?;
+        s.inner.chat_cleared(str_arg(cleared_json).ok_or_else(bad_arg)?).map(cstring)
     })
 }
 

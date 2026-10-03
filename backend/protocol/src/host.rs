@@ -61,6 +61,8 @@ fn reqs_json(rs: &[OutRequest]) -> String {
 /// `legacy` — id подписанного списка v1-устройств, `legacySet` — список
 /// публиковался, `legacyKeys` — его ключи (base64 без дополнения, как в Olm):
 /// легаси-копию шлют только устройству с ТЕМ ЖЕ identity-ключом (FR-058).
+/// `root` — корневой ключ личности (base64 без дополнения; нет журнала — поля
+/// нет): клиенты выводят из этой строки «ключ безопасности» собеседника на v2.
 pub fn log_devices_json(c: &Client, user: &str) -> String {
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use base64::Engine as _;
@@ -71,7 +73,11 @@ pub fn log_devices_json(c: &Client, user: &str) -> String {
         .flatten()
         .map(|d| json!({"deviceId": d.device_id, "identity": STANDARD_NO_PAD.encode(&d.olm_curve25519), "signing": STANDARD_NO_PAD.encode(&d.olm_ed25519)}))
         .collect();
-    json!({ "v2": v2, "legacy": legacy, "legacySet": set.is_some(), "legacyKeys": keys }).to_string()
+    let mut out = json!({ "v2": v2, "legacy": legacy, "legacySet": set.is_some(), "legacyKeys": keys });
+    if let Some(root) = c.log_root_key(user) {
+        out["root"] = json!(STANDARD_NO_PAD.encode(root));
+    }
+    out.to_string()
 }
 
 /// JSON `[{"deviceId","identity","signing"}]` (ключи — base64, с дополнением или
@@ -232,6 +238,22 @@ pub fn l2_view_json(v: &L2View) -> String {
     json!({"active": v.active, "mine": v.mine, "enabledBy": v.enabled_by, "pad": v.pad, "ephemeralAllowed": v.ephemeral_allowed}).to_string()
 }
 
+/// Поле `pk` материала гранта линковки: ключи доступа собеседников старого
+/// устройства `[{"u": адрес, "k": hex, "g": поколение}]` (общее для C ABI и WASM).
+pub fn grant_peer_keys(c: &Client) -> Value {
+    Value::Array(c.peer_delivery_keys().into_iter().map(|(u, k, g)| json!({"u": u, "k": hex::encode(k), "g": g})).collect())
+}
+
+/// Принять `pk` материала гранта (нет поля — грант прежней версии).
+pub fn apply_grant_peer_keys(c: &mut Client, material: &Value) {
+    for p in material.get("pk").and_then(Value::as_array).into_iter().flatten() {
+        let (Some(u), Some(k)) = (p["u"].as_str(), p["k"].as_str().and_then(|k| hex::decode(k).ok())) else { continue };
+        if crate::address::is_valid_address(u) {
+            c.set_peer_delivery_key(u, k, p["g"].as_u64().unwrap_or(1));
+        }
+    }
+}
+
 fn op_id(s: &str) -> Result<Vec<u8>, String> {
     if s.is_empty() {
         return Ok(crate::sign::new_op_id());
@@ -307,6 +329,7 @@ impl HostClient {
             m["sk"] = json!(hex::encode(k.as_bytes()));
             m["skv"] = json!(v);
         }
+        m["pk"] = grant_peer_keys(&self.inner);
         Ok(m.to_string())
     }
 
@@ -322,6 +345,7 @@ impl HostClient {
             let k = crate::state::StateKey::from_bytes(&h("sk")?).map_err(|_| err(ProtoError::Malformed))?;
             self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
         }
+        apply_grant_peer_keys(&mut self.inner, &v);
         Ok(reqs_json(&reqs))
     }
 
@@ -451,6 +475,11 @@ impl HostClient {
         let c = ch.change.ok_or_else(|| err(ProtoError::InvalidField("change")))?;
         let id = hex::decode(group_hex).map_err(|_| err(ProtoError::InvalidField("group")))?;
         self.inner.group_change(&id, c).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// Решение по заявке на вступление: запрос `group.request.decide`.
+    pub fn group_request_decide(&mut self, group_hex: &str, user: &str, approve: bool) -> Result<String, String> {
+        self.inner.group_request_decide(&group_id(group_hex)?, user, approve).map(|r| req_json(&r).to_string()).map_err(err)
     }
 
     pub fn group_rotate_epoch(&mut self, group_hex: &str) -> Result<String, String> {
@@ -588,6 +617,19 @@ impl HostClient {
         let had = self.inner.has_peer_delivery_key(peer);
         self.inner.on_delivery_key_rejected(peer);
         had
+    }
+
+    /// Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
+    /// `[{"user","tsMs"}]`. Серверу v2 это неизвестно («Просмотрено», T151).
+    pub fn readers(&self, id: &str) -> Result<String, String> {
+        let list: Vec<serde_json::Value> = self.inner.readers(&op_id(id)?).into_iter().map(|(user, ts)| json!({"user": user, "tsMs": ts})).collect();
+        Ok(serde_json::Value::Array(list).to_string())
+    }
+
+    /// Известен ли ключ доступа собеседника: сигнал звонка сервер принимает
+    /// только с ним (слепой жетон для звонков не годится).
+    pub fn has_peer_delivery_key(&self, peer: &str) -> bool {
+        self.inner.has_peer_delivery_key(peer)
     }
 
     // ── отзыв своего устройства (T128; D-11, D-12, D-16) ──
@@ -782,6 +824,13 @@ impl HostState {
     pub fn call_set(&mut self, record_json: &str) -> Result<String, String> {
         let rec: crate::pb::parvane::state::v1::CallRecord = serde_json::from_str(record_json).map_err(|_| err(ProtoError::Malformed))?;
         self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::CallSet(rec)])
+    }
+
+    /// Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
+    /// → тела `state.append`. Граница по собеседнику только растёт.
+    pub fn chat_cleared(&mut self, cleared_json: &str) -> Result<String, String> {
+        let c: crate::pb::parvane::state::v1::ChatCleared = serde_json::from_str(cleared_json).map_err(|_| err(ProtoError::Malformed))?;
+        self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::ChatCleared(c)])
     }
 
     /// Локальный журнал уже отправленных этим устройством (JSON-массив hex).
