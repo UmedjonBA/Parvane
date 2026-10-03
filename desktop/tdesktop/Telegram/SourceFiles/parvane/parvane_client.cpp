@@ -35,6 +35,7 @@
 #include "data/data_histories.h"
 #include "base/call_delayed.h"
 #include <QtCore/QQueue>
+#include <QtCore/QThread>
 #include <atomic>
 #include <QtCore/QSet>
 #include <QtCore/QBuffer>
@@ -726,6 +727,9 @@ void ReplayHistory() {
 // (HistoryPath) воспроизвёл бы их при старте → журнал переписываем без них, а
 // набор персистим на случай гонки (sync до перезаписи, второе устройство).
 QSet<QString> g_clearedUuids; // под g_sessionMutex
+// Применённая граница очистки чата из журнала личного состояния v2 (T145):
+// адрес → время (мс), не позже которого сообщения скрыты. Под g_sessionMutex.
+QHash<QString, qint64> g_clearedUntilMs;
 
 [[nodiscard]] QString ClearedPathFor(QString self) {
 	if (self.isEmpty()) {
@@ -1041,9 +1045,9 @@ void SetPeerTtlLocal(const QString &address, int secs) {
 // ── Протокол v2 (spec 007, T063): двойной стек, как в вебе ──────────────────
 // v1-стек (parvane-e2e) обслуживает v1-собеседников, v2-сессия parvane-core —
 // собеседников с журналом устройств v2 (формат выбирается по подписанному
-// журналу собеседника, D-13). Включение — PARVANE_PROTO_V2=1 или файл-флаг
-// tdata/parvane-proto-v2 (как localStorage parvane:proto=v2 в вебе); по
-// умолчанию выключено. События движка перекладываются в те же
+// журналу собеседника, D-13). Включён по умолчанию (T135, FR-055); остаться на
+// v1 — PARVANE_PROTO_V2=0 или файл-флаг tdata/parvane-proto-v1 (как localStorage
+// parvane:proto=v1 в вебе). События движка перекладываются в те же
 // parvane::StoredMessage, что и v1-входящие, и идут в injectOnMain — UI не
 // знает, по какому протоколу пришло сообщение. Группы — пока по v1.
 std::mutex g_v2Mutex; // g_v2, g_v2Token, g_v2Ids, g_v2Cache, g_v2Reactions
@@ -1058,7 +1062,7 @@ bool g_v2IdsLoaded = false;
 	if (const char *v = std::getenv("PARVANE_PROTO_V2"); v && *v) {
 		return std::strcmp(v, "0") != 0;
 	}
-	return QFile::exists(cWorkingDir() + u"tdata/parvane-proto-v2"_q);
+	return !QFile::exists(cWorkingDir() + u"tdata/parvane-proto-v1"_q);
 }
 
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2Ready() {
@@ -1176,6 +1180,74 @@ void AttachBlobCap(parvane::json &target, const std::string &fileId) {
 	return cloud.download(self, token, fileId, timeoutMs);
 }
 
+// «Ключ безопасности» собеседника на v2 (T153) — отпечаток корневого ключа его
+// личности из проверенного журнала устройств (один на аккаунт, а не по
+// устройствам, как в v1). Журнал читает движок под своим мьютексом, поэтому
+// отпечаток считается на воркере и кладётся в кэш; профиль (main) берёт из кэша.
+std::mutex g_v2RootMutex;
+QHash<QString, QString> g_v2RootFp;
+
+[[nodiscard]] QString V2RootFingerprint(const QString &address) {
+	std::lock_guard<std::mutex> lk(g_v2RootMutex);
+	return g_v2RootFp.value(address);
+}
+
+void V2NoteRoot(const std::shared_ptr<parvane::v2::Session> &s, const std::string &user) {
+	if (!s || user.empty() || parvane::v2::isGroupAddress(user)) {
+		return;
+	}
+	const auto root = s->rootKeyOf(user);
+	if (root.empty()) {
+		return;
+	}
+	const auto address = QString::fromStdString(user);
+	const auto fp = QString::fromStdString(parvane::e2e::fingerprintOf(root));
+	{
+		std::lock_guard<std::mutex> lk(g_v2RootMutex);
+		if (g_v2RootFp.value(address) == fp) {
+			return;
+		}
+		g_v2RootFp.insert(address, fp);
+	}
+	if (address == SelfAddress()) {
+		LOG(("Parvane: свой ключ безопасности v2 (отпечаток): %1").arg(fp));
+		return;
+	}
+	// Профиль собеседника (about) обновляет main — ensurePeerUser читает кэш
+	crl::on_main([address] {
+		if (const auto session = g_sessionWeak.get()) {
+			ensurePeerUser(session, IdForAddress(address), address);
+		}
+	});
+}
+
+// Сессия v2 для ОТПРАВКИ: если она ещё поднимается (вход, рестарт), отправка
+// ждёт исхода запуска, а не уходит по v1 — иначе сообщение v2-собеседнику сразу
+// после входа молча понижалось до v1 и не доходило до его устройств, которых
+// нет в каталоге v1 (D-13; найдено сценарием verify_linking.sh, T135). Ждём
+// только на воркере: главный поток не блокируем.
+constexpr auto kV2SendStartupWaitMs = 20000;
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> V2ReadyForSend() {
+	const auto worker = (QThread::currentThread() != QCoreApplication::instance()->thread());
+	const auto current = [] {
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		return g_v2;
+	};
+	auto s = current();
+	// Сессию создаёт вход; отправка сразу после него может её опередить
+	for (auto i = 0; !s && worker && V2Enabled() && SessionActive() && i != 30; ++i) {
+		QThread::msleep(100);
+		s = current();
+	}
+	if (!s) {
+		return nullptr;
+	}
+	if (!s->isReady() && !s->needsLinking() && worker) {
+		s->waitReady(kV2SendStartupWaitMs);
+	}
+	return s->isReady() ? s : nullptr;
+}
+
 // Сессия v2 ждёт грант линковки: у аккаунта есть журнал устройств, а этого
 // устройства в нём нет (LINK-1 v2). До гранта устройство работает по v1.
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2NeedsLinking() {
@@ -1280,12 +1352,24 @@ std::string TrySendV2(
 	}
 	// Группа v2 — только v2 (конверт эпохи): v1-пути у неё нет.
 	const auto isGroup = parvane::v2::isGroupAddress(to);
-	const auto s = V2Ready();
+	const auto s = V2ReadyForSend();
 	if (isGroup && !s) {
 		throw std::runtime_error("группа v2, а сессия v2 не готова");
 	}
-	if (!s || (!isGroup && !s->isV2Peer(to))) {
+	// Устройство ещё не в журнале устройств аккаунта (ждёт привязки, восстановления
+	// или сброса): у него нет сертификата, v1-бандл identity не принимает — его
+	// v1-сообщение собеседники отвергли бы или не получили. Отправка — после привязки.
+	if (!s && V2NeedsLinking()) {
+		throw std::runtime_error("устройство не привязано к аккаунту — отправка недоступна до привязки");
+	}
+	// «Избранное» (чат с собой, T147) — по v2: копии своим устройствам журнала;
+	// по v1 оно не дошло бы до привязанных устройств вне каталога v1.
+	const auto isSelf = (to == SelfAddress().toStdString());
+	if (!s || (!isGroup && !isSelf && !s->isV2Peer(to))) {
 		return {};
+	}
+	if (!isGroup && !isSelf) {
+		V2NoteRoot(s, to);
 	}
 	const auto mapped = parvane::v2::toV2(content, replyTo.value_or(std::string()));
 	if (!mapped) {
@@ -1323,6 +1407,30 @@ std::string TrySendV2(
 		}
 	}
 	return id;
+}
+
+// T146: сессия v2 готова — устройство в журнале устройств. Если identity при
+// входе отверг его v1-бандл (у аккаунта на v2 устройство без сертификата в
+// каталог v1 не попадает), публикация повторяется: v1-собеседники шлют копии
+// только устройствам каталога.
+void RepublishDeviceIfRefused() {
+	crl::async([] {
+		if (!parvane::e2e::ready() || parvane::e2e::published()) {
+			return;
+		}
+		parvane::ITransport *t = nullptr;
+		std::string token;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+			token = g_token.toStdString();
+		}
+		if (t && !token.empty()) {
+			const auto ok = parvane::e2e::republishDevice(*t, token);
+			LOG(("Parvane: v1-бандл устройства после привязки к журналу v2 — %1")
+				.arg(ok ? u"опубликован"_q : u"не принят"_q));
+		}
+	});
 }
 
 // Свой подписанный список v1-устройств (FR-058): публикует первое
@@ -1476,6 +1584,9 @@ void HandleV2Event(const parvane::json &ev) {
 			sm.reply_to = in.replyTo;
 		}
 		V2NoteMessage(sm, QString::fromStdString(in.chat));
+		if (in.from != self) {
+			V2NoteRoot(V2Ready(), in.from);
+		}
 		LOG(("Parvane: v2 ← %1 msg %2 (%3)")
 			.arg(QString::fromStdString(in.from), QString::fromStdString(in.id),
 				QString::fromStdString(parvane::contentKind(in.content))));
@@ -2624,6 +2735,12 @@ void DecCacheRemove(const QString &id) {
 	return out;
 }
 
+// Язык интерфейса — русский (пакет Parvane) или нет: для коротких уведомлений,
+// которым не заведён ключ lang.strings (новый ключ — пересборка ~100 объектов).
+[[nodiscard]] bool IsRussianUi() {
+	return tr::lng_parvane_enhanced_privacy(tr::now) != u"Enhanced privacy"_q;
+}
+
 void EnsureDefaultLanguage() {
 	const char *lf = std::getenv("PARVANE_LANG_FILE");
 	if (!lf || !*lf) {
@@ -3188,6 +3305,12 @@ bool StartSession() {
 					return;
 				}
 				const auto gid = QString::fromStdString(n.group_id);
+				if (parvane::v2::isGroupAddress(n.group_id)) {
+					// Группа v2 — только журнал: v1-нотис не меняет и не снимает её
+					LOG(("Parvane: v1-нотис о группе v2 %1 (%2) отброшен")
+						.arg(gid, QString::fromStdString(n.change)));
+					return;
+				}
 				if (n.change == "removed" || n.change == "deleted") {
 					DropGroupLocally(session, gid, QString::fromStdString(n.change));
 					return;
@@ -3260,13 +3383,40 @@ bool StartSession() {
 		// видит ни сторон, ни SDP; false — v1-путём шарда call.
 		ccb.sendV2 = [](const std::string &peer, const parvane::json &signal) {
 			const auto s = V2Ready();
-			if (!s || !s->sendCallSignal(peer, signal)) {
+			auto error = std::string();
+			if (!s || !s->sendCallSignal(peer, signal, std::string(), &error)) {
 				return false;
+			}
+			if (!error.empty() && signal.value("type", std::string()) == "invite") {
+				// Вызов по v2 не ушёл: не висеть «звоним», сказать причину (T148).
+				// Менеджер держит свой мьютекс — отбой с главного потока.
+				LOG(("Parvane: звонок %1 не начат (%2)").arg(
+					QString::fromStdString(peer), QString::fromStdString(error)));
+				crl::on_main([notContact = (error == "forbidden")] {
+					HangupCall();
+					if (const auto window = Core::App().activeWindow()) {
+						const auto ru = IsRussianUi();
+						window->showToast(notContact
+							? (ru
+								? u"Позвонить можно после того, как собеседник ответит на ваше сообщение"_q
+								: u"You can call this person after they reply to your message"_q)
+							: (ru
+								? u"Не удалось позвонить. Попробуйте позже"_q
+								: u"The call could not be placed. Try again later"_q));
+					}
+				});
+				return true;
 			}
 			LOG(("Parvane: v2 → %1 сигнал звонка (%2)").arg(
 				QString::fromStdString(peer),
 				QString::fromStdString(signal.value("type", std::string()))));
 			return true;
+		};
+		// LEGACY-1: у собеседника на v2 есть v1-устройства — сигнал дублируется
+		// им v1-путём шарда call (иначе звонок на них не приходит)
+		ccb.hasLegacyDevices = [](const std::string &peer) {
+			const auto s = V2Ready();
+			return s && !s->legacyDevices(peer).empty();
 		};
 		// Входящий звонок (прошёл аутентификацию). Пока — лог + опц. авто-приём
 		// (headless e2e). UI-панель — Э4-b2. НЕ звать accept() синхронно (дедлок
@@ -3401,6 +3551,19 @@ bool StartSession() {
 			return parvane::e2e::contactSigningKeys(peer);
 		};
 		gcb.sign = SignCallData;
+		// Протокол v2 (T141, FR-062): приглашение в групповой звонок и попарные
+		// сигналы mesh — запечатанными конвертами участникам с известным ключом
+		// доступа; остальным — инбоксом gcall: шарда call.
+		gcb.sendV2 = [](const std::string &peer, const parvane::json &signal, const std::string &groupCallId) {
+			const auto s = V2Ready();
+			if (!s || !s->sendCallSignal(peer, signal, groupCallId)) {
+				return false;
+			}
+			LOG(("Parvane: v2 → %1 сигнал группового звонка (%2)").arg(
+				QString::fromStdString(peer),
+				QString::fromStdString(signal.value("type", std::string()))));
+			return true;
+		};
 		gcb.onPeerState = [](std::string peer, parvane::CallState s) {
 			LOG(("Parvane: groupcall %1 → %2")
 				.arg(QString::fromStdString(peer)).arg(CallStateName(s)));
@@ -3598,31 +3761,29 @@ void MirrorClearHistory(not_null<PeerData*> peer) {
 	const auto session = &peer->session();
 	const auto peerAddr = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
 	const auto self = SelfAddress();
+	// Граница очистки для журнала личного состояния v2 (T145): время самого
+	// позднего скрываемого сообщения — остальные свои устройства скрывают всё,
+	// что не позже неё.
+	auto clearedUntilMs = std::int64_t(0);
 	// uuid всех сообщений этого диалога берём из локального журнала (HistoryPath):
 	// именно он воспроизводит переписку при старте и переживает пере-создание
 	// сессии в headless, тогда как HistoryItem'ы и реестр nonChannelMessage
 	// эфемерны. Диалог сообщения — собеседник (для своих исходящих это `to`).
 	auto uuids = QSet<QString>();
-	{
-		QFile jf(HistoryPath());
-		if (jf.open(QIODevice::ReadOnly | QIODevice::Text)) {
-			while (!jf.atEnd()) {
-				const auto line = QString::fromUtf8(jf.readLine()).trimmed();
-				if (line.isEmpty()) {
-					continue;
-				}
-				try {
-					const auto j = nlohmann::json::parse(line.toStdString());
-					const auto id = QString::fromStdString(j.value("id", std::string()));
-					const auto from = QString::fromStdString(j.value("from", std::string()));
-					const auto to = QString::fromStdString(j.value("to", std::string()));
-					const auto dialog = (from == self) ? to : from;
-					if (!id.isEmpty() && dialog == peerAddr) {
-						uuids.insert(id);
-					}
-				} catch (const std::exception &) {
-				}
-			}
+	// Журнал истории зашифрован построчно (P-13) — читать через хранилище
+	// (чтение файла напрямую после P-13 не находило ни одной строки).
+	for (const auto &line : StoreReadLines(HistoryPath())) {
+		const auto j = nlohmann::json::parse(line.toStdString(), nullptr, false);
+		if (!j.is_object()) {
+			continue;
+		}
+		const auto id = QString::fromStdString(j.value("id", std::string()));
+		const auto from = QString::fromStdString(j.value("from", std::string()));
+		const auto to = QString::fromStdString(j.value("to", std::string()));
+		const auto dialog = (from == self) ? to : from;
+		if (!id.isEmpty() && dialog == peerAddr) {
+			uuids.insert(id);
+			clearedUntilMs = std::max(clearedUntilMs, j.value("ts", std::int64_t(0)) * 1000 + 999);
 		}
 	}
 	// Плюс всё, что уже инъецировано в текущей сессии (на случай сообщений,
@@ -3659,6 +3820,18 @@ void MirrorClearHistory(not_null<PeerData*> peer) {
 	RewriteHistoryWithout(uuids);
 	LOG(("Parvane: очистка чата %1 — скрыто %2 сообщений")
 		.arg(peerAddr).arg(uuids.size()));
+	// Свои устройства на v2 узнают об очистке из журнала личного состояния:
+	// сообщений v2 сервер v1 не знает, и нотис `cleared` до них не дойдёт.
+	if (const auto s = V2Ready()) {
+		const auto until = clearedUntilMs ? clearedUntilMs : QDateTime::currentMSecsSinceEpoch();
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_clearedUntilMs[peerAddr] = std::max(g_clearedUntilMs.value(peerAddr), qint64(until));
+		}
+		crl::async([s, address = peerAddr.toStdString(), until] {
+			s->stateChatCleared(address, until);
+		});
+	}
 	const auto from = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	auto ids = std::vector<std::string>();
@@ -5420,6 +5593,14 @@ bool ApplyGroupInfo(
 		const parvane::GroupInfo &gi,
 		const QString &source) {
 	const auto gid = QString::fromStdString(gi.group_id);
+	// Группа v2: сведения — только из подписанного журнала (FR-028). Нотис или
+	// список v1-шарда о ней (сервер мог бы подменить состав, роли, права) не
+	// применяются — найдено сценарием verify_conformance_group.sh (T135).
+	if (parvane::v2::isGroupAddress(gi.group_id) && !source.startsWith(u"v2"_q)) {
+		LOG(("Parvane: сведения группы %1 из v1 (%2) отброшены — группа v2 ведётся по журналу")
+			.arg(gid, source));
+		return false;
+	}
 	if (gid.isEmpty()) {
 		return false;
 	}
@@ -5674,10 +5855,13 @@ void runGroupOp(const QString &tag, Op op, GroupOpDone done) {
 	if (!info.is_object()) {
 		return nullptr;
 	}
-	return { { "set_info", {
-		{ "name", name.value_or(info.value("name", std::string())) },
-		{ "about", about.value_or(info.value("about", std::string())) },
-		{ "avatar_file_id", avatar.value_or(info.value("avatarFileId", std::string())) } } } };
+	// Только изменяемые поля: остальные сессия берёт из журнала атомарно с
+	// записью (иначе название и описание с одного экрана откатывали друг друга)
+	auto patch = nlohmann::json::object();
+	if (name) patch["name"] = *name;
+	if (about) patch["about"] = *about;
+	if (avatar) patch["avatar_file_id"] = *avatar;
+	return { { "set_info_patch", std::move(patch) } };
 }
 
 [[nodiscard]] nlohmann::json V2MemberRef(const QString &member) {
@@ -5686,6 +5870,15 @@ void runGroupOp(const QString &tag, Op op, GroupOpDone done) {
 
 // ── US1: описание и фото группы ──────────────────────────────────────────────
 void SetGroupAbout(const QString &groupId, const QString &about, GroupOpDone done) {
+	// Схема v2 меряет описание байтами (1024) — предел в символах, как у
+	// v1-шарда (255), держит клиент: поведение экрана одно для обеих версий.
+	if (parvane::v2::isGroupAddress(groupId.toStdString()) && about.toUcs4().size() > 255) {
+		LOG(("Parvane: SETINFO about '%1' → отказ bad_request (описание длиннее 255 символов)").arg(groupId));
+		if (done) {
+			done(false, u"bad_request"_q);
+		}
+		return;
+	}
 	if (RunV2GroupChange(u"SETINFO about '%1'"_q.arg(groupId), groupId, [text = about.toStdString()](const nlohmann::json &info) {
 			return V2SetInfo(info, std::nullopt, text, std::nullopt);
 		}, done)) {
@@ -5954,7 +6147,15 @@ not_null<UserData*> ensurePeerUser(
 	// Формат тот же, что в веб-клиенте (отпечаток SHA-256 identity-ключа
 	// каждого устройства собеседника), чтобы сверять между клиентами. Появляется,
 	// как только известен каталог/identity контакта. Нативный профиль рендерит about().
-	if (address != SelfAddress()) {
+	if (const auto rootFp = (address != SelfAddress()) ? V2RootFingerprint(address) : QString();
+			!rootFp.isEmpty()) {
+		// Собеседник на v2: ключ безопасности — отпечаток корня его личности
+		// (сверяется с «своим ключом v2» на его устройстве)
+		const auto about = u"\xF0\x9F\x94\x92 Ключ безопасности (сверьте с устройством собеседника):\n"_q + rootFp;
+		if (result->setAbout(about)) {
+			LOG(("Parvane: ключ безопасности с %1 в профиле: %2").arg(address, rootFp));
+		}
+	} else if (address != SelfAddress()) {
 		const auto fps = parvane::e2e::contactFingerprints(address.toStdString());
 		if (!fps.empty()) {
 			auto about = u"\xF0\x9F\x94\x92 Ключ безопасности (сверьте с устройством собеседника):"_q;
@@ -8699,7 +8900,8 @@ namespace {
 	gi.about = g.value("about", std::string());
 	gi.default_permissions = V2Permissions(g.value("defaultPermissions", parvane::json()));
 	gi.version = g.value("version", std::uint64_t(0));
-	gi.pending_requests = -1;
+	// Число заявок на вступление сессия кладёт только решающему (T143)
+	gi.pending_requests = g.value("pendingRequests", -1);
 	return gi;
 }
 
@@ -9404,11 +9606,71 @@ void ProjectDialogs(not_null<Main::Session*> session, const parvane::json &snap)
 		.arg(g_archivedAddrs.size()).arg(g_pinnedAddrs.size()));
 }
 
+// «Удалить чат у себя» на другом своём устройстве (T145): в снимке — граница
+// очистки по собеседнику; скрываем сообщения диалога не позже неё тем же путём,
+// что нотис `cleared` v1 (g_clearedUuids, журнал скрытых, удаление из UI).
+void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap) {
+	if (!snap.contains("cleared") || !snap["cleared"].is_array()) {
+		return;
+	}
+	const auto self = SelfAddress();
+	auto fresh = QHash<QString, qint64>();
+	for (const auto &entry : snap["cleared"]) {
+		const auto address = StateAddressOf(entry.value("peer", parvane::json()));
+		const auto raw = entry.contains("cleared_until_ms") ? entry["cleared_until_ms"]
+			: entry.value("clearedUntilMs", parvane::json(0));
+		const auto until = raw.is_string() ? QString::fromStdString(raw.get<std::string>()).toLongLong()
+			: raw.is_number() ? qint64(raw.get<std::int64_t>()) : qint64(0);
+		if (address.isEmpty() || !address.contains('@') || until <= 0) {
+			continue;
+		}
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (g_clearedUntilMs.value(address) < until) {
+			g_clearedUntilMs[address] = until;
+			fresh.insert(address, until);
+		}
+	}
+	if (fresh.isEmpty()) {
+		return;
+	}
+	auto uuids = QSet<QString>();
+	// Журнал истории зашифрован построчно (P-13) — читать через хранилище
+	for (const auto &line : StoreReadLines(HistoryPath())) {
+		const auto j = nlohmann::json::parse(line.toStdString(), nullptr, false);
+		if (!j.is_object()) {
+			continue;
+		}
+		const auto id = QString::fromStdString(j.value("id", std::string()));
+		const auto from = QString::fromStdString(j.value("from", std::string()));
+		const auto to = QString::fromStdString(j.value("to", std::string()));
+		const auto dialog = (from == self) ? to : from;
+		const auto found = fresh.constFind(dialog);
+		if (id.isEmpty() || found == fresh.constEnd()
+			|| j.value("ts", std::int64_t(0)) * 1000 > found.value()) {
+			continue;
+		}
+		uuids.insert(id);
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		uuids.subtract(g_clearedUuids);
+		g_clearedUuids.unite(uuids);
+	}
+	if (uuids.isEmpty()) {
+		return;
+	}
+	AppendCleared(QStringList(uuids.begin(), uuids.end()));
+	ForgetClearedOnMain(session, uuids);
+	LOG(("Parvane: v2: журнал состояния → очистка чатов (%1), скрыто %2 сообщений")
+		.arg(fresh.size()).arg(uuids.size()));
+}
+
 void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	if (!snap.is_object()) {
 		return;
 	}
 	g_stateApplying = true;
+	ProjectCleared(session, snap);
 	ProjectFolders(session, snap);
 	ProjectScheduled(snap);
 	ProjectNotify(snap);
@@ -9670,6 +9932,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		// служебное сообщение «ключ безопасности изменился», что в v1.
 		const auto user = QString::fromStdString(ev.value("user", std::string()));
 		LOG(("Parvane: v2: у %1 сменился корневой ключ — предупреждение в чате").arg(user));
+		V2NoteRoot(V2Ready(), user.toStdString());
 		crl::on_main([user] { AnnounceKeyChange(user); });
 		return true;
 	}
@@ -9744,6 +10007,8 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	if (type == "stateReady") {
 		crl::on_main([] { AttachStateJournal(); });
 		PublishLegacySet();
+		RepublishDeviceIfRefused();
+		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
 		return true;
 	}
 	if (type == "needsLinking") {
@@ -9784,6 +10049,21 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		// зовём БЕЗ g_sessionMutex (его колбэки берут этот мьютекс сами).
 		const auto from = ev.value("from", std::string());
 		const auto signal = ev.contains("signal") ? ev["signal"] : parvane::json::object();
+		if (ev.value("group", false)) {
+			// Групповой звонок (T141): приглашение либо попарный сигнал mesh
+			parvane::GroupCallManager *g = nullptr;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g = g_groupCallManager.get();
+			}
+			if (g && !from.empty() && signal.is_object()) {
+				LOG(("Parvane: v2 ← %1 сигнал группового звонка (%2)").arg(
+					QString::fromStdString(from),
+					QString::fromStdString(signal.value("type", std::string()))));
+				g->handleV2Signal(from, signal);
+			}
+			return true;
+		}
 		parvane::CallManager *m = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -10061,7 +10341,12 @@ bool RunV2GroupChange(
 			try {
 				const auto info = s->groupInfo(gid.toStdString());
 				const auto body = change(info);
-				ok = !body.is_null() && s->changeGroup(gid.toStdString(), body);
+				auto code = std::string("failed");
+				ok = !body.is_null() && s->changeGroup(gid.toStdString(), body, &code);
+				if (!ok) {
+					// Код отказа — как у v1-шарда (forbidden, bad_request, …)
+					error = QString::fromStdString(code);
+				}
 			} catch (const std::exception &e) {
 				error = QString::fromUtf8(e.what());
 			}
@@ -11589,7 +11874,35 @@ void JoinGroupByInvite(const QString &token,
 void ListJoinRequests(const QString &groupId,
 		Fn<void(bool ok, std::vector<GroupJoinRequest> requests, const QString &error)> done) {
 	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
-		done(true, {}, QString()); // заявки на вступление v2 — не сделано (как в вебе)
+		// Заявки v2 (T143): список отдаёт сервер владельцу и админам с правом
+		// приглашать; по какой ссылке пришла заявка, он не сообщает
+		crl::async([=] {
+			auto ok = false;
+			auto list = std::vector<GroupJoinRequest>();
+			auto log = QStringList();
+			if (const auto s = V2Ready()) {
+				const auto requests = s->listJoinRequests(groupId.toStdString());
+				if (requests.is_array()) {
+					ok = true;
+					for (const auto &q : requests) {
+						list.push_back({
+							QString::fromStdString(q.value("user", std::string())),
+							QString(),
+							int(q.value("date", std::int64_t(0))),
+						});
+						log.push_back(list.back().member + ':');
+					}
+				}
+			}
+			if (ok) {
+				LOG(("Parvane: заявки %1: %2").arg(groupId, log.isEmpty() ? u"-"_q : log.join(';')));
+			} else {
+				LOG(("Parvane: заявки %1 → отказ v2").arg(groupId));
+			}
+			crl::on_main([=, list = std::move(list)]() mutable {
+				done(ok, std::move(list), ok ? QString() : u"failed"_q);
+			});
+		});
 		return;
 	}
 	const auto gid = groupId.toStdString();
@@ -11615,9 +11928,22 @@ void ListJoinRequests(const QString &groupId,
 
 void DecideJoinRequest(const QString &groupId, const QString &member, bool approve, GroupOpDone done) {
 	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
-		if (done) {
-			done(false, u"unsupported"_q);
-		}
+		// Заявка v2 (T143): одобрение — запись AddMember журнала и новая эпоха
+		const auto tag = u"REQUEST %1 %2"_q.arg(approve ? u"approve"_q : u"decline"_q, member);
+		crl::async([=] {
+			const auto s = V2Ready();
+			const auto ok = s && s->decideJoinRequest(groupId.toStdString(), member.toStdString(), approve);
+			if (ok) {
+				LOG(("Parvane: %1 → ok (v2)").arg(tag));
+			} else {
+				LOG(("Parvane: %1 → отказ v2 %2").arg(tag, s ? u"failed"_q : u"v2 не готов"_q));
+			}
+			crl::on_main([=] {
+				if (done) {
+					done(ok, ok ? QString() : u"failed"_q);
+				}
+			});
+		});
 		return;
 	}
 	const auto gid = groupId.toStdString();
@@ -12954,7 +13280,8 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			if (parts.size() >= 2) {
 				const auto gname = parts[0];
 				const auto actionSpec = parts[1];
-				const auto arg = (parts.size() >= 3) ? parts[2] : QString();
+				// Аргумент — всё после второго двоеточия: ссылка v2 — это URL
+				const auto arg = (parts.size() >= 3) ? spec.section(':', 2) : QString();
 				base::call_delayed(11 * crl::time(1000), [=] {
 					const auto gid = findGroupIdByName(gname);
 					if (gid.isEmpty()) {
@@ -13668,8 +13995,12 @@ void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 	crl::async([=, uuid = uuid.toStdString()] {
 		std::vector<ReaderEntry> out;
 		try {
-			const auto signature = parvane::e2e::sign("readers:" + uuid);
-			for (const auto &[address, ts] : m->readers(self, uuid, token, signature)) {
+			// Сообщение v2: прочтения — E2E-квитанции, их знает только движок
+			// (серверу не видно, кто что прочитал); v1 — список шарда.
+			const auto v2 = IsV2Message(uuid) ? V2Ready() : nullptr;
+			const auto signature = v2 ? std::string() : parvane::e2e::sign("readers:" + uuid);
+			const auto list = v2 ? v2->readers(uuid) : m->readers(self, uuid, token, signature);
+			for (const auto &[address, ts] : list) {
 				if (address == self || address.empty()) {
 					continue;
 				}

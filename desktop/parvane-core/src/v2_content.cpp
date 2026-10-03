@@ -305,12 +305,30 @@ const json *field(const json &j, const char *camel, const char *snake) {
 
 } // namespace
 
-std::optional<json> callSignalToV2(const json &v1) {
+std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallId) {
     if (!v1.is_object()) return std::nullopt;
     const auto type = v1.value("type", std::string());
+    if (type == "group_invite") {
+        const auto id = uuidToB64(v1.value("group_call_id", std::string()));
+        if (id.empty()) return std::nullopt;
+        json participants = json::array();
+        if (auto it = v1.find("participants"); it != v1.end() && it->is_array()) {
+            for (const auto &p : *it) {
+                if (p.is_string()) participants.push_back(json{{"address", p.get<std::string>()}});
+            }
+        }
+        return json{{"call_id", id},
+                    {"group_ring", {{"participants", participants},
+                                    {"video", v1.value("media", std::string()) == "video"}}}};
+    }
     const auto callId = uuidToB64(v1.value("call_id", std::string()));
     if (callId.empty()) return std::nullopt;
     json out{{"call_id", callId}};
+    if (!groupCallId.empty()) {
+        const auto group = uuidToB64(groupCallId);
+        if (group.empty()) return std::nullopt;
+        out["group_call_id"] = group;
+    }
     if (type == "invite") {
         out["offer"] = {{"sdp", v1.value("sdp", std::string())}, {"video", v1.value("media", std::string()) == "video"}};
     } else if (type == "answer") {
@@ -326,22 +344,46 @@ std::optional<json> callSignalToV2(const json &v1) {
     } else if (type == "hangup") {
         out["hangup"] = {{"reason", kReasonNormal}};
     } else {
-        return std::nullopt; // групповые сигналы — v1-путём
+        return std::nullopt;
     }
     return out;
 }
+
+namespace {
+
+// Попарный сигнал внутри группового звонка: id группового звонка — в v1-JSON.
+json withGroupCall(json signal, const json &v2) {
+    const auto *g = field(v2, "groupCallId", "group_call_id");
+    if (g && g->is_string()) {
+        if (const auto id = b64ToUuid(g->get<std::string>())) signal["group_call_id"] = *id;
+    }
+    return signal;
+}
+
+} // namespace
 
 std::optional<json> callSignalFromV2(const json &v2) {
     if (!v2.is_object()) return std::nullopt;
     const auto *id = field(v2, "callId", "call_id");
     const auto callId = id && id->is_string() ? b64ToUuid(id->get<std::string>()) : std::nullopt;
     if (!callId) return std::nullopt;
+    if (const auto *ring = field(v2, "groupRing", "group_ring"); ring && ring->is_object()) {
+        std::vector<std::string> participants;
+        if (auto it = ring->find("participants"); it != ring->end() && it->is_array()) {
+            for (const auto &p : *it) {
+                const auto address = p.is_object() ? p.value("address", std::string()) : std::string();
+                if (!address.empty()) participants.push_back(address);
+            }
+        }
+        return json{{"type", "group_invite"}, {"group_call_id", *callId}, {"participants", participants},
+                    {"media", ring->value("video", false) ? "video" : "audio"}};
+    }
     if (auto it = v2.find("offer"); it != v2.end() && it->is_object()) {
-        return json{{"type", "invite"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())},
-                    {"media", it->value("video", false) ? "video" : "audio"}};
+        return withGroupCall(json{{"type", "invite"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())},
+                                  {"media", it->value("video", false) ? "video" : "audio"}}, v2);
     }
     if (auto it = v2.find("answer"); it != v2.end() && it->is_object()) {
-        return json{{"type", "answer"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())}};
+        return withGroupCall(json{{"type", "answer"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())}}, v2);
     }
     if (auto it = v2.find("ice"); it != v2.end() && it->is_object()) {
         IceCandidate c;
@@ -349,7 +391,7 @@ std::optional<json> callSignalFromV2(const json &v2) {
         if (c.sdp.empty()) return std::nullopt;
         if (const auto *mid = field(*it, "sdpMid", "sdp_mid"); mid && mid->is_string()) c.mid = mid->get<std::string>();
         if (const auto *idx = field(*it, "sdpMlineIndex", "sdp_mline_index"); idx && idx->is_number_integer()) c.mlineIndex = idx->get<int>();
-        return json{{"type", "ice"}, {"call_id", *callId}, {"candidate", iceCandidateJson(c)}};
+        return withGroupCall(json{{"type", "ice"}, {"call_id", *callId}, {"candidate", iceCandidateJson(c)}}, v2);
     }
     if (auto it = v2.find("hangup"); it != v2.end() && it->is_object()) {
         std::string reason;
@@ -362,12 +404,14 @@ std::optional<json> callSignalFromV2(const json &v2) {
                 if (n >= 0 && n < 6) reason = kByNumber[n];
             }
         }
-        if (reason == kReasonBusy) return json{{"type", "reject"}, {"call_id", *callId}, {"reason", "busy"}};
+        if (reason == kReasonBusy) return withGroupCall(json{{"type", "reject"}, {"call_id", *callId}, {"reason", "busy"}}, v2);
         if (reason == kReasonDeclined || reason == kReasonMissed) {
-            return json{{"type", "reject"}, {"call_id", *callId}, {"reason", "declined"}};
+            return withGroupCall(json{{"type", "reject"}, {"call_id", *callId}, {"reason", "declined"}}, v2);
         }
-        if (reason == kReasonFailed) return json{{"type", "reject"}, {"call_id", *callId}, {"reason", "media_failed"}};
-        return json{{"type", "hangup"}, {"call_id", *callId}};
+        if (reason == kReasonFailed) {
+            return withGroupCall(json{{"type", "reject"}, {"call_id", *callId}, {"reason", "media_failed"}}, v2);
+        }
+        return withGroupCall(json{{"type", "hangup"}, {"call_id", *callId}}, v2);
     }
     return std::nullopt; // ringing и неизвестное — клиенту не нужно
 }

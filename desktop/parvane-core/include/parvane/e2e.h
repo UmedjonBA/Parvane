@@ -32,6 +32,15 @@ namespace parvane::e2e {
 void initDevice(ITransport &t, const std::string &self, const std::string &token,
                 const std::string &storeDir);
 
+// Переопубликовать бандл устройства (T146). У аккаунта на v2 устройство попадает
+// в каталог v1 только с сертификатом журнала устройств: публикация при входе
+// нового устройства отвергается, а после привязки (линковка, восстановление)
+// её надо повторить — иначе v1-отправители этому устройству копий не шлют.
+// true — identity принял бандл.
+bool republishDevice(ITransport &t, const std::string &token);
+// Принял ли identity бандл этого устройства (false — отвергнут либо не слали).
+[[nodiscard]] bool published();
+
 [[nodiscard]] bool ready();
 
 // Свой identity-ключ (Curve25519, base64), device_id и Ed25519 signing_key.

@@ -851,20 +851,55 @@ bool Session::acceptPeerRootLocked(const std::string &user) {
     return true;
 }
 
-bool Session::sendCallSignal(const std::string &peer, const json &signal) {
+std::string Session::rootKeyOf(const std::string &user) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!client_) return {};
+    return client_->logDevices(user).value("root", std::string());
+}
+
+std::vector<std::pair<std::string, std::int64_t>> Session::readers(const std::string &uuid) {
+    std::vector<std::pair<std::string, std::int64_t>> out;
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!client_) return out;
+    try {
+        for (const auto &r : client_->readers(uuid)) {
+            const auto user = r.value("user", std::string());
+            if (!user.empty()) out.emplace_back(user, r.value("tsMs", std::int64_t(0)) / 1000);
+        }
+    } catch (const std::exception &e) {
+        log(std::string("прочитавшие: ") + e.what());
+    }
+    return out;
+}
+
+bool Session::sendCallSignal(const std::string &peer, const json &signal, const std::string &groupCallId,
+                             std::string *error) {
+    if (error) error->clear();
     if (isGroupAddress(peer) || !isV2Peer(peer)) return false;
-    const auto v2Signal = callSignalToV2(signal);
+    const bool group = !groupCallId.empty() || signal.value("type", std::string()) == "group_invite";
+    const auto v2Signal = callSignalToV2(signal, groupCallId);
     if (!v2Signal) {
+        if (group) return false;
         log("сигнал звонка по v2 не выражается — не отправлен (D-13)");
         return true;
     }
     try {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+        // Сигнал звонка сервер принимает только по ключу доступа адресата:
+        // участнику группового звонка без него — прежним путём
+        if (group && !client_->hasPeerDeliveryKey(peer)) return false;
         runDirectLocked(peer, [&] { return client_->prepareCall(peer, *v2Signal); });
         persistLocked();
     } catch (const std::exception &e) {
         log(std::string("сигнал звонка не отправлен: ") + e.what());
+        // Личный звонок по v1 не понижается (D-13); групповой — идёт v1-инбоксом
+        if (group) return false;
+        if (error) {
+            const std::string what = e.what();
+            *error = (what.find("orbidden") != std::string::npos || what.find("FORBIDDEN") != std::string::npos)
+                ? "forbidden" : "failed";
+        }
     }
     return true;
 }
@@ -1370,6 +1405,16 @@ void Session::absorbLocked(std::vector<json> events) {
                         outbox_.push_back(json{{"type", "groupLeft"}, {"address", address}});
                     }
                 }
+                continue;
+            }
+            // Уведомление без смены версии — заявка на вступление появилась или снята
+            if (canDecideRequestsLocked(hex)) {
+                const auto g = client_->groupInfo(hex);
+                if (g && g->contains("inviteLinks") && !(*g)["inviteLinks"].empty()) {
+                    listJoinRequestsLocked(hex);
+                }
+            } else if (pendingRequests_.erase(hex)) {
+                publishGroupLocked(hex);
             }
             continue;
         }
@@ -1398,7 +1443,11 @@ void Session::absorbLocked(std::vector<json> events) {
             // Сигнал звонка: отправителя и привязку к звонку проверил движок.
             const auto signal = ev.contains("signal") ? callSignalFromV2(ev["signal"]) : std::nullopt;
             if (signal) {
-                outbox_.push_back(json{{"type", "callSignal"}, {"from", ev.value("from", std::string())}, {"signal", *signal}});
+                // Приглашение в групповой звонок и попарные сигналы mesh — групповому менеджеру
+                const bool group = signal->value("type", std::string()) == "group_invite"
+                    || signal->contains("group_call_id");
+                outbox_.push_back(json{{"type", "callSignal"}, {"from", ev.value("from", std::string())},
+                                       {"signal", *signal}, {"group", group}});
             }
             continue;
         }
@@ -1510,7 +1559,12 @@ void Session::publishGroupLocked(const std::string &hex) {
     const bool isNew = publishedGroups_.insert(address).second;
     // Канал «печатает» выводится из ключа эпохи — после смены эпохи он новый.
     ensureEphemeralLocked({address});
-    outbox_.push_back(json{{"type", "groupUpdated"}, {"address", address}, {"isNew", isNew}, {"info", *g}});
+    auto info = *g;
+    // Число заявок на вступление — только тому, кто вправе их решать (T143)
+    if (const auto it = pendingRequests_.find(hex); it != pendingRequests_.end()) {
+        info["pendingRequests"] = it->second;
+    }
+    outbox_.push_back(json{{"type", "groupUpdated"}, {"address", address}, {"isNew", isNew}, {"info", info}});
     noteGroupL2Locked(hex, *g);
     reportUnconfirmedLocked(hex, {});
     // Новую эпоху начинает владелец (или админ, сделавший изменение, — сразу).
@@ -1833,18 +1887,55 @@ std::string Session::createGroup(const std::string &title, const std::vector<std
     return address;
 }
 
-bool Session::changeGroup(const std::string &address, const json &change) {
+namespace {
+
+// Код отказа изменения группы — те же слова, что отдаёт v1-шард group.* (их
+// ждут экраны управления): отказ движка (имя вида ошибки в тексте) либо сервера.
+std::string groupErrorCode(const std::exception &e) {
+    std::string text = e.what();
+    if (const auto *v = dynamic_cast<const V2Error *>(&e)) text = v->code();
+    const auto has = [&](const char *needle) { return text.find(needle) != std::string::npos; };
+    if (has("FORBIDDEN") || has("Forbidden") || has("forbidden")) return "forbidden";
+    if (has("NOT_FOUND") || has("NotFound")) return "not_found";
+    if (has("RATE") || has("RateLimited")) return "rate_limited";
+    if (has("INVALID") || has("LIMIT") || has("FieldLimit") || has("InvalidField") || has("Malformed")) {
+        return "bad_request";
+    }
+    return "failed";
+}
+
+} // namespace
+
+bool Session::changeGroup(const std::string &address, const json &change, std::string *errorCode) {
+    if (errorCode) *errorCode = "failed";
     if (!ready_ || !isGroupAddress(address)) return false;
     const auto hex = groupHex(address);
     bool ok = false;
     {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         if (!client_) return false;
+        // {"set_info_patch": {name?, about?, avatar_file_id?}} — правка сведений:
+        // недостающие поля берутся из журнала ЗДЕСЬ, под мьютексом движка. Две
+        // правки подряд (название и описание с одного экрана), собранные хостом
+        // по снимку «до», откатывали друг друга.
+        json resolved = change;
+        if (change.is_object() && change.contains("set_info_patch")) {
+            const auto g = client_->groupInfo(hex);
+            if (!g) return false;
+            const auto &p = change["set_info_patch"];
+            const auto pick = [&](const char *key, const char *have) {
+                return (p.is_object() && p.contains(key) && p[key].is_string())
+                    ? p[key].get<std::string>() : g->value(have, std::string());
+            };
+            resolved = json{{"set_info", {{"name", pick("name", "name")}, {"about", pick("about", "about")},
+                                          {"avatar_file_id", pick("avatar_file_id", "avatarFileId")}}}};
+        }
         json reqJson;
         try {
-            reqJson = client_->groupChange(hex, change);
+            reqJson = client_->groupChange(hex, resolved);
         } catch (const std::exception &e) {
             log(std::string("изменение группы отклонено движком: ") + e.what());
+            if (errorCode) *errorCode = groupErrorCode(e);
             return false;
         }
         try {
@@ -1853,6 +1944,7 @@ bool Session::changeGroup(const std::string &address, const json &change) {
             ok = true;
         } catch (const std::exception &e) {
             log(std::string("изменение группы отклонено сервером: ") + e.what());
+            if (errorCode) *errorCode = groupErrorCode(e);
             resyncGroupLocked(hex);
         }
         if (ok) {
@@ -2007,6 +2099,114 @@ json Session::inviteGroupLocked(const std::string &linkIdHex) {
     const auto resp = call(false, "group.invite.check",
         encodeMessage("parvane.group.v2.InviteCheckRequest", json{{"link_id", hexToB64(linkIdHex)}}));
     return decodeMessage("parvane.group.v2.InviteCheckResponse", resp);
+}
+
+// ── заявки на вступление (ссылка с одобрением, D-04; T143) ───────────────────
+// Сервер держит список заявок и отдаёт его владельцу и админам с правом
+// приглашать; одобрение — запись AddMember внутри group.request.decide. О новой
+// заявке сервер сообщает уведомлением о группе без смены версии.
+
+bool Session::canDecideRequestsLocked(const std::string &hex) {
+    if (!client_) return false;
+    const auto g = client_->groupInfo(hex);
+    if (!g || g->value("deleted", false) || !g->contains("members")) return false;
+    if (g->value("owner", std::string()) == cfg_.self) return true;
+    for (const auto &m : (*g)["members"]) {
+        if (m.value("user", std::string()) != cfg_.self) continue;
+        return m.value("role", 0) == kRoleAdmin && m.contains("rights") && m["rights"].is_object()
+            && m["rights"].value("invite_users", false);
+    }
+    return false;
+}
+
+json Session::listJoinRequestsLocked(const std::string &hex) {
+    json out = json::array();
+    if (!canDecideRequestsLocked(hex)) return out;
+    try {
+        const json req{{"group", {{"domain", domain_}, {"id", hexToB64(hex)}}}};
+        const auto resp = call(false, "group.request.list",
+                               encodeMessage("parvane.group.v2.RequestListRequest", req));
+        const auto list = decodeMessage("parvane.group.v2.RequestListResponse", resp);
+        if (list.contains("requests") && list["requests"].is_array()) {
+            for (const auto &r : list["requests"]) {
+                const auto user = r.contains("user") && r["user"].is_object()
+                    ? r["user"].value("address", std::string()) : std::string();
+                if (user.empty()) continue;
+                // int64 в proto3-JSON — строка
+                const auto &ms = r.contains("requested_ms") ? r["requested_ms"] : r.value("requestedMs", json(0));
+                const auto at = ms.is_string() ? std::atoll(ms.get<std::string>().c_str())
+                    : ms.is_number() ? ms.get<long long>() : 0LL;
+                out.push_back(json{{"user", user}, {"date", at / 1000}});
+            }
+        }
+    } catch (const std::exception &e) {
+        log("список заявок группы " + hex + " не получен: " + e.what());
+        return nullptr;
+    }
+    const auto count = static_cast<int>(out.size());
+    const auto it = pendingRequests_.find(hex);
+    if (it == pendingRequests_.end() || it->second != count) {
+        pendingRequests_[hex] = count;
+        publishGroupLocked(hex);
+    }
+    return out;
+}
+
+json Session::listJoinRequests(const std::string &address) {
+    if (!ready_ || !isGroupAddress(address)) return nullptr;
+    json out;
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!client_) return nullptr;
+        out = listJoinRequestsLocked(groupHex(address));
+    }
+    flushAsync();
+    return out;
+}
+
+bool Session::decideJoinRequest(const std::string &address, const std::string &user, bool approve) {
+    if (!ready_ || !isGroupAddress(address)) return false;
+    const auto hex = groupHex(address);
+    bool ok = false;
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!client_) return false;
+        json reqJson;
+        try {
+            reqJson = client_->groupRequestDecide(hex, user, approve);
+        } catch (const std::exception &e) {
+            log(std::string("решение по заявке отклонено движком: ") + e.what());
+            return false;
+        }
+        try {
+            const auto req = parseRequest(reqJson);
+            call(req.anon, req.method, req.body);
+            ok = true;
+        } catch (const std::exception &e) {
+            log(std::string("решение по заявке отклонено сервером: ") + e.what());
+            if (approve) resyncGroupLocked(hex);
+        }
+        if (ok) {
+            log("заявка " + user + " в группу " + hex + (approve ? " — одобрена" : " — отклонена"));
+            // Новый участник — ключи прежней эпохи ему не отдаются, нужна новая.
+            const auto g = client_->groupInfo(hex);
+            if (approve && g && g->value("epochStale", false) && canRotateLocked(hex)) {
+                try {
+                    rotateEpochLocked(hex);
+                } catch (const std::exception &e) {
+                    log(std::string("новая эпоха после одобрения заявки не начата: ") + e.what());
+                    scheduleRotate(hex, kEpochRetryMs);
+                }
+            }
+            persistLocked();
+            if (const auto it = pendingRequests_.find(hex); it != pendingRequests_.end() && it->second > 0) {
+                --it->second;
+            }
+            publishGroupLocked(hex);
+        }
+    }
+    flushAsync();
+    return ok;
 }
 
 json Session::checkInvite(const std::string &url) {
@@ -2225,6 +2425,22 @@ bool Session::stateScheduledSent(const std::string &opIdB64) {
         if (id.is_string() && id.get<std::string>() == opIdB64) return true;
     }
     return false;
+}
+
+void Session::stateChatCleared(const std::string &address, std::int64_t untilMs) {
+    if (address.empty() || untilMs <= 0) return;
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!openStateLocked()) return;
+    try {
+        const json peer = isGroupAddress(address)
+            ? json{{"group", {{"domain", domain_}, {"id", hexToB64(groupHex(address))}}}}
+            : json{{"user", {{"address", address}}}};
+        const json cleared{{"peer", peer}, {"cleared_until_ms", std::to_string(untilMs)}};
+        for (const auto &b : state_->chatCleared(cleared)) pendingAppends_.push_back(b);
+        pushAppendsLocked();
+    } catch (const std::exception &e) {
+        log(std::string("очистка чата в журнале состояния: ") + e.what());
+    }
 }
 
 void Session::stateMarkSent(const std::string &opIdB64) {

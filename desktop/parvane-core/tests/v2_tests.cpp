@@ -423,9 +423,32 @@ int main() {
         check(busy && busy->value("type", "") == "reject" && busy->value("reason", "") == "busy"
                   && bye && bye->value("type", "") == "hangup",
               "callSignalFromV2: причина завершения → reject/hangup");
-        check(!v2::callSignalToV2(json{{"type", "group_invite"}, {"call_id", id}})
-                  && !v2::callSignalToV2(json{{"type", "invite"}, {"call_id", "not-a-uuid"}}),
-              "callSignalToV2: групповой сигнал и id не-UUID по v2 не идут");
+        check(!v2::callSignalToV2(json{{"type", "invite"}, {"call_id", "not-a-uuid"}}),
+              "callSignalToV2: id не-UUID по v2 не идёт");
+        // Групповой звонок (T141): приглашение ↔ group_ring, попарный сигнал mesh
+        // несёт id группового звонка
+        const std::string gid = "01a0f945-1263-7d48-b3a1-ae3da31ccee0";
+        const auto ring = v2::callSignalToV2(parvane::groupInviteSignal(gid, {"alice@local", "bob@local"}, "video"));
+        check(ring && ring->contains("group_ring") && (*ring)["group_ring"].value("video", false)
+                  && (*ring)["group_ring"]["participants"].size() == 2
+                  && (*ring)["group_ring"]["participants"][1].value("address", "") == "bob@local"
+                  && !ring->contains("group_call_id"),
+              "callSignalToV2: group_invite → group_ring с составом");
+        const auto ringBack = v2::callSignalFromV2(json{{"callId", (*ring)["call_id"]}, {"groupRing", (*ring)["group_ring"]}});
+        check(ringBack && ringBack->value("type", "") == "group_invite" && ringBack->value("group_call_id", "") == gid
+                  && ringBack->value("media", "") == "video" && (*ringBack)["participants"].size() == 2,
+              "callSignalFromV2: group_ring → group_invite");
+        const auto mesh = v2::callSignalToV2(json{{"type", "invite"}, {"call_id", id}, {"media", "audio"}, {"sdp", "v=0"}}, gid);
+        check(mesh && mesh->contains("group_call_id") && mesh->contains("offer"),
+              "callSignalToV2: попарный оффер mesh несёт group_call_id");
+        const auto meshBack = v2::callSignalFromV2(json{{"callId", (*mesh)["call_id"]}, {"groupCallId", (*mesh)["group_call_id"]},
+            {"offer", {{"sdp", "v=0"}}}});
+        check(meshBack && meshBack->value("type", "") == "invite" && meshBack->value("group_call_id", "") == gid,
+              "callSignalFromV2: попарный сигнал mesh отдаёт id группового звонка");
+        check(back && !back->contains("group_call_id"), "callSignalFromV2: у личного звонка поля группового нет");
+        check(!v2::callSignalToV2(json{{"type", "hangup"}, {"call_id", id}}, "not-a-uuid")
+                  && !v2::callSignalToV2(json{{"type", "group_invite"}, {"group_call_id", "bad"}}),
+              "callSignalToV2: id группового звонка не-UUID по v2 не идёт");
         auto c = v2::Client::create("alice@local", "d1", "local");
         (void)c->createIdentity(1);
         bool refused = false;

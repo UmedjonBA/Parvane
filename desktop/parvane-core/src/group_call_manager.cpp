@@ -34,6 +34,25 @@ void GroupCallManager::start() {
     });
 }
 
+void GroupCallManager::sendTo(const std::string &peer, const json &signal) {
+    if (cb_.sendV2) {
+        std::string gcid;
+        if (signal.value("type", std::string()) != "group_invite") {
+            std::lock_guard<std::mutex> lk(sendMutex_);
+            gcid = sendGcid_;
+        }
+        if (cb_.sendV2(peer, signal, gcid)) return;
+    }
+    // from — реальный (шард сверяет с JWT); префикс только в `to` (инбокс).
+    calls_.send(self_, gAddr(peer), token_, signal);
+}
+
+void GroupCallManager::handleV2Signal(const std::string &from, const json &signal) {
+    auto sig = CallSignalIn::fromJson(signal);
+    sig.authenticated = true;
+    handleSignal(from, sig);
+}
+
 CallSession *GroupCallManager::ensureSession(const std::string &peer,
                                              const std::string &media) {
     auto it = peers_.find(peer);
@@ -42,8 +61,7 @@ CallSession *GroupCallManager::ensureSession(const std::string &peer,
     }
     CallSession::Callbacks scb;
     scb.sendSignal = [this, peer](json sig) {
-        // from — реальный (шард сверяет с JWT); префикс только в `to` (инбокс).
-        calls_.send(self_, gAddr(peer), token_, sig);
+        sendTo(peer, sig);
     };
     scb.peerPubkey = [this, peer] {
         return cb_.peerPubkey ? cb_.peerPubkey(peer) : std::string();
@@ -69,6 +87,10 @@ void GroupCallManager::joinMesh(const std::string &gcid,
                                 const std::vector<std::string> &participants,
                                 const std::string &media) {
     gcid_ = gcid;
+    {
+        std::lock_guard<std::mutex> lk(sendMutex_);
+        sendGcid_ = gcid;
+    }
     media_ = media.empty() ? "audio" : media;
     for (const auto &peer : participants) {
         if (peer == self_) {
@@ -89,9 +111,8 @@ void GroupCallManager::startCall(const std::string &groupCallId,
     // Разослать приглашение всем другим участникам (в групповой инбокс).
     for (const auto &peer : participants) {
         if (peer != self_) {
-            calls_.send(self_, gAddr(peer), token_,
-                        groupInviteSignal(groupCallId, participants,
-                                          media.empty() ? "audio" : media));
+            sendTo(peer, groupInviteSignal(groupCallId, participants,
+                                           media.empty() ? "audio" : media));
         }
     }
     std::lock_guard<std::mutex> lk(mutex_);
@@ -130,6 +151,8 @@ void GroupCallManager::leave() {
     }
     peers_.clear();
     gcid_.clear();
+    std::lock_guard<std::mutex> sl(sendMutex_);
+    sendGcid_.clear();
 }
 
 int GroupCallManager::connectedCount() {

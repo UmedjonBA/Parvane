@@ -881,6 +881,31 @@ void initDevice(ITransport &t, const std::string &self, const std::string &token
     }
 }
 
+bool published() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_published;
+}
+
+bool republishDevice(ITransport &t, const std::string &token) {
+    json publish;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_account) return false;
+        publish = buildPublishPayloadLocked(token);
+        persistDevice();
+    }
+    try {
+        const auto resp = json::parse(t.request(topics::IdentityPrekeysPublish, publish.dump(), 5000));
+        if (!resp.value("ok", false)) return false;
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_published = true;
+        persistDevice();
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
 bool ready() {
     std::lock_guard<std::mutex> lk(g_mu);
     return g_account != nullptr;
