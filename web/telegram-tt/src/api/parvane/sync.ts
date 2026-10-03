@@ -47,6 +47,7 @@ type SyncDependencies = {
     loadHistoryRecords: () => Promise<WireStoredMessage[]>;
     flushHistoryNow: () => Promise<void>;
     markChatDeleted: (address: string) => void;
+    loadClearedUntil?: () => Record<string, number>;
     removeOwnJournalEntries: (uuids: string[]) => Promise<void>;
     saveSyncCursor: (cursor: { lastSeenUuid: string; sinceUpdated: number }) => void;
     loadSyncCursor: () => Promise<{ lastSeenUuid: string; sinceUpdated: number } | undefined>;
@@ -79,6 +80,7 @@ type UnsealResult = {
   isOwnEnvelope?: boolean;
 };
 
+const MS_IN_SECOND = 1000;
 const SYNC_TIMEOUT_MS = 15000;
 
 export function createSyncController(deps: SyncDependencies) {
@@ -584,6 +586,16 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
+  // Чат очищен «у себя» (T145) позже этого сообщения. Сервер v1 очищенное не
+  // присылает сам, а копия v2 (эхо своего сообщения, повтор доставки) приходит
+  // мимо него — без отсева она воскрешала только что удалённый чат
+  function isClearedForMe(stored: WireStoredMessage) {
+    const clearedUntil = deps.localState.loadClearedUntil?.();
+    if (!clearedUntil) return false;
+    const until = clearedUntil[deps.getStore().resolveChatAddress(stored)];
+    return Boolean(until) && stored.ts * MS_IN_SECOND <= until;
+  }
+
   // Групповое сообщение участника без роли с типом содержимого, запрещённым
   // текущими правами по умолчанию (владелец и админы правам не подчиняются)
   function isHiddenByGroupPermissions(stored: WireStoredMessage) {
@@ -821,6 +833,10 @@ export function createSyncController(deps: SyncDependencies) {
     // курсор двигается как за применённым (не сбой расшифровки)
     if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, rawStored.origin)) {
       if (shouldAckIncoming) sendAck(rawStored.id);
+      return;
+    }
+    if (isClearedForMe(stored)) {
+      if (shouldAckIncoming && !isOwnEnvelope) sendAck(rawStored.id);
       return;
     }
     // Если после unseal контент всё ещё зашифрован — расшифровать не удалось
@@ -1063,6 +1079,7 @@ export function createSyncController(deps: SyncDependencies) {
         continue;
       }
       if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, rawStored.origin)) continue;
+      if (isClearedForMe(stored)) continue;
       // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
       // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
       if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {

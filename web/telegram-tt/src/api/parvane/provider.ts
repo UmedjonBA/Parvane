@@ -369,6 +369,11 @@ const stateJournal = createStateJournal({
   // callController создаётся ниже; вызывается только после подключения журнала
   applyCallRecords: (records) => callController.applyCallRecords(records),
   applyChatCleared: (address, untilMs) => applyChatCleared(address, untilMs),
+  // v2Controller создаётся ниже; вызывается только после подключения журнала
+  sharedInvites: {
+    list: () => v2Controller.allInvites(),
+    merge: (invites) => v2Controller.mergeSharedInvites(invites),
+  },
   log: logDebug,
 });
 
@@ -483,6 +488,8 @@ const v2Controller = createV2Controller({
   gatewayUrl: getGatewayUrl,
   applyExternal: (stored) => syncController.applyExternal(stored),
   isEnabled: () => isV2Enabled(),
+  onInviteCreated: (address, record) => stateJournal.recordGroupInvite({ address, record }),
+  onInviteRevoked: (linkId) => stateJournal.removeGroupInvite(linkId),
   onRecoveryKey: (recoveryKey) => {
     // Main может быть ещё не смонтирован — ключ ждёт, пока его заберут
     pendingRecoveryKey = recoveryKey;
@@ -1125,6 +1132,9 @@ async function pollHistoryLinkGrant(generation: number) {
   sendUpdate({ '@type': 'requestSync' });
   logDebug('линковка: история получена и импортирована');
   await joinV2WithLinkGrant(boxPayload.v2);
+  // Строки истории — после полного ресинка, а не вперемешку с ним: применённая
+  // посреди ресинка строка (замечено на своих исходящих) временами не доходила до UI
+  await syncController.ensureSynced().catch(() => undefined);
   await applyLinkedV2History(v2History, store.self);
 }
 
