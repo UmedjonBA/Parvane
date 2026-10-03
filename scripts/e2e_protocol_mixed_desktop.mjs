@@ -153,7 +153,7 @@ try {
     ...(desktopIsV2 ? {
       PARVANE_PROTO_V2: '1',
       PARVANE_AUTOSEND_V2: `${alice}:${desktopToWeb}`,
-    } : { PARVANE_AUTOSEND: `${alice}:${desktopToWeb}` }),
+    } : { PARVANE_PROTO_V2: '0', PARVANE_AUTOSEND: `${alice}:${desktopToWeb}` }),
     PARVANE_AUTOSENDFILE: `${alice}:${desktopFile}`,
   });
   await waitDesktopLog(bobWorkdir, desktopIsV2 ? /v2: готов/ : /E2E-устройство готово/, 90000, desktop);

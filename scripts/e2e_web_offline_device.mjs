@@ -29,6 +29,7 @@ import {
   relogin,
   requireEnv,
   sendText,
+  autoDismissRecoveryKeyDialog,
 } from './e2e_web_helpers.mjs';
 
 async function attachVideo(page, path, caption) {
@@ -81,6 +82,7 @@ const preparePage = (context, user) => preparePageShared(context, user, PASSWORD
 async function reopenDevice(context) {
   const { baseUrl } = requireEnv();
   const page = await context.newPage();
+  await autoDismissRecoveryKeyDialog(page); // v2 по умолчанию (T135)
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });

@@ -12,6 +12,7 @@ import {
   LOGIN_TIMEOUT_MS,
   callMediaStats,
   dumpDiagJournal,
+  exchangeMessages,
   expectMediaFlowing,
   openPrivateChat,
   preparePage,
@@ -386,7 +387,11 @@ try {
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Занят: Боб в личном звонке с Дейвом — групповой вызов его не прерывает ─
-  await openPrivateChat(daveSession.page, bob);
+  // v2 (по умолчанию, T135): личный звонок принимается только от того, кому
+  // адресат уже отвечал (ключ доступа, D-08) — сначала переписка в обе стороны
+  // (Дейв позже звонит и Алисе — знакомим обе пары сейчас, пока никто не в звонке)
+  await exchangeMessages(daveSession.page, dave, aliceSession.page, alice, `gc-da-${suffix}`);
+  await exchangeMessages(daveSession.page, dave, bobSession.page, bob, `gc-db-${suffix}`);
   await daveSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await bobSession.page.getByRole('button', { name: 'Accept' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' }).click();

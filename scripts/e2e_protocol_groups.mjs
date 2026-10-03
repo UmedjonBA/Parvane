@@ -3,6 +3,9 @@
 // Кэрол вступает по ссылке v2 `https://<домен>/join/<link_id>#<секрет>` (клик
 // в личке → нативная модалка «Join Group»), сообщение доходит всем троим;
 // Алиса банит Кэрол — новая эпоха, Кэрол новое сообщение не читает, Боб читает.
+// Заявки на вступление (T143): Дейв просит вступить по ссылке с одобрением,
+// Алиса видит заявку (счётчик и список), отклоняет, после повторной — одобряет;
+// Дейв получает группу и читает сообщения новой эпохи.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -29,7 +32,7 @@ const EPOCH_TIMEOUT_MS = 60000;
 const BAN_SETTLE_MS = 15000;
 
 const browser = await chromium.launch();
-const names = ['alice', 'bob', 'carol'];
+const names = ['alice', 'bob', 'carol', 'dave'];
 const contexts = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await browser.newContext()])));
 const logs = Object.fromEntries(names.map((n) => [n, []]));
 const consoleTail = Object.fromEntries(names.map((n) => [n, []]));
@@ -136,6 +139,8 @@ try {
   await waitLog('alice', 'v2: новая эпоха группы');
   await openGroupChatByTitle(sessions.bob.page, title);
   const first = `g2-first-${suffix}`;
+  // Композер лички ещё в DOM после создания группы — открываем группу явно
+  await openGroupChatByTitle(alicePage, title);
   await sendText(alicePage, first);
   await findMessage(sessions.bob.page, first).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
@@ -195,6 +200,77 @@ try {
   const carolHello = `g2-carol-${suffix}`;
   await sendInActiveChat(carolPage, carolHello);
   await findMessage(alicePage, carolHello).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── Заявки на вступление в группу v2 (T143) ────────────────────────────────
+  const approval = await callProviderForChat(alicePage, 'exportChatInvite', title, undefined, {
+    peer: '$chat', isRequestNeeded: true, title: 'by-request',
+  });
+  const approvalUrl = approval?.result?.link;
+  assert.match(String(approvalUrl), V2_LINK, `ссылка с одобрением не v2: ${JSON.stringify(approval)}`);
+  assert.equal(approval.result.isRequestNeeded, true, 'ссылка создана без одобрения');
+  await openPrivateChatStrict(alicePage, address('dave'));
+  await sendText(alicePage, approvalUrl);
+  const davePage = sessions.dave.page;
+  await openPrivateChatStrict(davePage, address('alice'));
+  const requestJoin = async () => {
+    const requestLink = davePage.locator('.Transition_slide-active > .MessageList a[href*="/join/"]').first();
+    await requestLink.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await requestLink.click();
+    const requestModal = davePage.locator('.Modal .modal-dialog').filter({ hasText: title }).first();
+    await requestModal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await requestModal.getByRole('button', { name: /request to join/i }).first().click();
+    await requestModal.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
+  };
+  const pendingCount = () => alicePage.evaluate((t) => {
+    const g = globalThis.__parvaneGetGlobal?.();
+    const chat = g && Object.values(g.chats.byId).find((candidate) => candidate.title === t);
+    return (chat && g.chats.fullInfoById[chat.id]?.requestsPending) || 0;
+  }, title);
+  const waitPending = (count) => alicePage.waitForFunction(({ t, n }) => {
+    const g = globalThis.__parvaneGetGlobal?.();
+    const chat = g && Object.values(g.chats.byId).find((candidate) => candidate.title === t);
+    return ((chat && g.chats.fullInfoById[chat.id]?.requestsPending) || 0) === n;
+  }, { t: title, n: count }, { timeout: LOGIN_TIMEOUT_MS });
+  const listRequests = async () => {
+    const got = await callProviderForChat(alicePage, 'fetchChatInviteImporters', title, undefined, {
+      peer: '$chat', isRequested: true,
+    });
+    return got?.result?.importers || [];
+  };
+
+  await requestJoin();
+  // Заявка доходит админу живым уведомлением о группе (без смены версии журнала)
+  await waitPending(1);
+  assert.equal((await listRequests()).length, 1, 'alice: в списке заявок нет Дейва');
+  assert.equal(await hasMessageText(davePage, welcome), false, 'Дейв читает группу до одобрения заявки');
+  // Отказ: журнал группы не меняется, заявка снята
+  const declined = await callProviderForChat(alicePage, 'hideChatJoinRequest', title, nick('dave'), {
+    peer: '$chat', user: '$user', isApproved: false,
+  });
+  assert.ok(declined?.result, `отказ по заявке не прошёл: ${JSON.stringify(declined)}`);
+  await waitLog('alice', 'отклонена');
+  assert.equal((await listRequests()).length, 0, 'alice: заявка осталась после отказа');
+  assert.equal(await pendingCount(), 0, 'alice: счётчик заявок не обнулился после отказа');
+
+  // Повторная заявка → одобрение: запись AddMember, новая эпоха, Дейв в группе
+  await requestJoin();
+  await waitPending(1);
+  await listRequests();
+  const approved = await callProviderForChat(alicePage, 'hideChatJoinRequest', title, nick('dave'), {
+    peer: '$chat', user: '$user', isApproved: true,
+  });
+  assert.ok(approved?.result, `одобрение заявки не прошло: ${JSON.stringify(approved)}`);
+  await waitLog('alice', 'одобрена');
+  await waitPending(0);
+  await openGroupChatByTitle(davePage, title);
+  const afterApprove = `g2-after-approve-${suffix}`;
+  await openGroupChatByTitle(alicePage, title);
+  await sendText(alicePage, afterApprove);
+  await findMessage(davePage, afterApprove).waitFor({ state: 'visible', timeout: EPOCH_TIMEOUT_MS });
+  await findMessage(sessions.bob.page, afterApprove).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const daveHello = `g2-dave-${suffix}`;
+  await sendInActiveChat(davePage, daveHello);
+  await findMessage(alicePage, daveHello).waitFor({ state: 'visible', timeout: EPOCH_TIMEOUT_MS });
 
   // ── Бан Кэрол: новая эпоха без неё ──────────────────────────────────────────
   const ban = await callProviderForChat(alicePage, 'updateChatMemberBannedRights', title, nick('carol'), {

@@ -400,7 +400,10 @@ try {
     const requestLog = (await bobBytes.requests()).map((request) => `${request.from}-${request.to}`).join(' ');
     console.log(`${label}: requests before playing: ${requestLog}`);
     console.log(`${label}: seek to middle played in ${Math.round(seekMs)} ms, downloaded ${downloadedAtStart} of ${fixture.size}`);
-    assert(downloadedAtStart <= fixture.size * 0.25, `${label}: downloaded ${downloadedAtStart} > 25% before playing`);
+    // Смысл проверки — файл не качается целиком. Доля зависит от скорости
+    // канала: блобы v2 идут двоичными кадрами и за время до перемотки плеер
+    // успевает добуферить больше, чем по v1 (base64 в JSON)
+    assert(downloadedAtStart <= fixture.size * 0.4, `${label}: downloaded ${downloadedAtStart} > 40% before playing`);
 
     // ── Многократная перемотка без зависаний ──────────────────────────────────
     for (const fraction of [0.1, 0.8, 0.3, 0.9, 0.05]) {

@@ -578,6 +578,7 @@
           "dk",
           "gen",
           "log",
+          "pk",
           "sk",
           "skv",
           "ssk"
@@ -1065,6 +1066,24 @@
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (revokeContactAccess, refillTokens), provider.ts (blockUser)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (revokeContactAccess, refillTokensLocked); tdesktop parvane_client.cpp (NoteBlock); desktop/verify_protocol_v2_state.sh",
         "android": "android/jni/parvane_jni.cpp (nativeRevokeContactAccess; партия жетонов — общее ядро)"
+      }
+    },
+    {
+      "id": "GROUP-3",
+      "title": "Группа v2: сведения — только из подписанного журнала; правка сведений атомарна; заявки решает админ записью AddMember",
+      "v1NoticeApplied": false,
+      "setInfoFields": [
+        "name",
+        "about",
+        "avatar_file_id"
+      ],
+      "aboutMaxChars": 255,
+      "requestDecideMethod": "group.request.decide",
+      "approveEntry": "AddMember",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupInfo, listJoinRequests, decideJoinRequest), groups.ts (register: isVerified)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (changeGroup: set_info_patch, listJoinRequests, decideJoinRequest); tdesktop parvane_client.cpp (ApplyGroupInfo, V2SetInfo); desktop/verify_conformance_group.sh, verify_protocol_v2_invites.sh",
+        "android": "android/jni/parvane_jni.cpp (v2SetInfo, onGroupNotice, nativeGroupRequests, nativeGroupRequestDecide)"
       }
     },
     {

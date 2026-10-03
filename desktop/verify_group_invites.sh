@@ -8,7 +8,11 @@
 #     delete отозванной → ok; старая ссылка (без параметров, через nats) работает.
 #  §2 заявки: dave по ссылке «по одобрению» → pending; у alice pending=1 и
 #     список; approve → dave видит группу; erin decline → повтор → declined.
+# Сценарий проверяет модель ссылок v1-шарда (токены в трёх записях, состояния
+# active/expired/exhausted/revoked, список отозванных, удаление, declined) —
+# клиенты идут по v1. Ссылки и заявки группы v2 — verify_protocol_v2_invites.sh.
 set -u
+PV_PROTO=v1
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 stack_start "${SCRATCH:-/tmp/parvane-group-invites}"
 A="$SB/alice"; B="$SB/bob"; C="$SB/carol"; D="$SB/dave"; E="$SB/erin"

@@ -49,6 +49,9 @@ const contexts = await Promise.all(
   Array.from({ length: 3 }, () => browser.newContext()),
 );
 
+// Сессии для разбора падения (журнал провайдера — session.logs)
+const diagSessions = {};
+
 try {
   const suffix = `${Date.now()}-${process.pid}`;
   const alice = `ga-alice-${suffix}@local`;
@@ -66,6 +69,7 @@ try {
     preparePage(contexts[1], bob, PASSWORD),
     preparePage(contexts[2], carol, PASSWORD),
   ]);
+  Object.assign(diagSessions, { alice: aliceSession, bob: bobSession, carol: carolSession });
   await openPrivateChat(aliceSession.page, bob);
   await openPrivateChat(aliceSession.page, carol);
 
@@ -243,6 +247,9 @@ try {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   await Promise.all(contexts.map((context, index) => context.pages()[0]
     ?.screenshot({ path: `${dir}group-admin-${index}.png` }).catch(() => {})));
+  for (const [who, session] of Object.entries(diagSessions)) {
+    console.error(`журнал ${who}:\n${(session?.logs || []).slice(-60).join('\n')}`);
+  }
   throw err;
 } finally {
   await browser.close();

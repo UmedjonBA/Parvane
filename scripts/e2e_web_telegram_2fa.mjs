@@ -13,6 +13,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   LOGIN_TIMEOUT_MS, assertNoPageErrors, logOut, requireEnv, submitNick,
+  autoDismissRecoveryKeyDialog,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-telegram-2fa-password';
@@ -50,6 +51,7 @@ async function botConfirm(token, telegramId) {
 async function openStartPage(context) {
   const { baseUrl, gatewayUrl } = requireEnv();
   const page = await context.newPage();
+  await autoDismissRecoveryKeyDialog(page); // v2 по умолчанию (T135)
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
   await page.addInitScript((url) => { localStorage.setItem('parvane:gateway', url); }, gatewayUrl);

@@ -15,7 +15,9 @@ sleep 2
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOGROUP="$GNAME:bob@local" PARVANE_AUTOGROUPSEND="$GNAME:$SECRET")
 wait_log "$A/td/log.txt" "группа синтезирована" 40 && ok "alice создала группу" || bad "группа не создана"
 # bob должен ПОДХВАТИТЬ группу (периодический RefreshGroups после её создания)
-wait_log "$B/td/log.txt" "групп синхронизировано: [1-9]" 60 && ok "bob синхронизировал группу (подписка на групповой typing взведена)" || bad "bob не подхватил группу"
+# v1 — периодический RefreshGroups; v2 — группа приходит уведомлением журнала
+if is_v2; then GOT="группа синтезирована v2g:[0-9a-f]{32}"; else GOT="групп синхронизировано: [1-9]"; fi
+wait_log "$B/td/log.txt" "$GOT" 60 && ok "bob синхронизировал группу (подписка на групповой typing взведена)" || bad "bob не подхватил группу"
 # групповое сообщение доходит (маршрут группы жив после typing-правок)
 wait_log "$B/td/log.txt" "$SECRET" 40 && ok "bob расшифровал+показал сообщение группы" || bad "bob не получил сообщение группы"
 grep -qiE "нужна авторизация|запрещ|ACL" "$SB/gateway.log" && bad "gateway отклонил подписку/публикацию" || ok "gateway без ACL-отказов (групповой typing разрешён)"

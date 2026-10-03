@@ -20,7 +20,7 @@ import {
   dumpDiagJournal,
   expectToast,
   findMessage,
-  inviteTokenOf,
+  inviteAppUrl,
   openGroupChatByTitle,
   openGroupManagement,
   openPrivateChatStrict,
@@ -29,6 +29,7 @@ import {
   relogin,
   requireEnv,
   sendText,
+  autoDismissRecoveryKeyDialog,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-group-info-e2e-password';
@@ -40,6 +41,7 @@ const preparePage = (context, user, options) => preparePageShared(context, user,
 async function reopenDevice(context) {
   const { baseUrl } = requireEnv();
   const page = await context.newPage();
+  await autoDismissRecoveryKeyDialog(page); // v2 по умолчанию (T135)
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
@@ -229,10 +231,10 @@ try {
 
   // Вступивший позже (dave, по ссылке) видит фото и описание сразу
   const invite = await callProviderForChat(alicePage, 'exportChatInvite', groupTitle, undefined, { peer: '$chat' });
-  const primaryToken = inviteTokenOf(invite.result.link);
-  assert(primaryToken, `no primary link: ${JSON.stringify(invite)}`);
+  const primaryUrl = inviteAppUrl(baseUrl, invite.result.link);
+  assert(primaryUrl, `no primary link: ${JSON.stringify(invite)}`);
   sessions.dave = await preparePage(contexts.dave, address('dave'));
-  await sessions.dave.page.goto(`${baseUrl}#+${primaryToken}`, { waitUntil: 'domcontentloaded' });
+  await sessions.dave.page.goto(primaryUrl, { waitUntil: 'domcontentloaded' });
   // Модалка приглашения показывает фото и описание группы до вступления
   const daveModal = sessions.dave.page.locator('.Modal .modal-dialog').filter({ hasText: groupTitle }).first();
   await daveModal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
@@ -398,10 +400,10 @@ try {
   const approval = await callProviderForChat(alicePage, 'exportChatInvite', groupTitle, undefined, {
     peer: '$chat', title: 'approve', isRequestNeeded: true,
   });
-  const approvalToken = inviteTokenOf(approval.result?.link || '');
-  assert(approvalToken, `approval link not created: ${JSON.stringify(approval)}`);
+  const approvalUrl = inviteAppUrl(baseUrl, approval.result?.link || '');
+  assert(approvalUrl, `approval link not created: ${JSON.stringify(approval)}`);
   // carol (уже не участник) подаёт заявку через модалку «Request to Join»
-  await sessions.carol.page.goto(`${baseUrl}#+${approvalToken}`, { waitUntil: 'domcontentloaded' });
+  await sessions.carol.page.goto(approvalUrl, { waitUntil: 'domcontentloaded' });
   await acceptInviteModal(sessions.carol.page, /request to join/i);
   await expectToast(sessions.carol.page, /approves your request/);
   await sessions.carol.page.waitForTimeout(1500);

@@ -80,7 +80,8 @@ try {
 
   sessions.alice = await preparePage(contexts.alice, alice, PASSWORD, { seedLocalStorage: V2_SEED });
   // Первое устройство bob — на v1
-  sessions.bob1 = await preparePage(contexts.bob1, bob, PASSWORD);
+  // v2 включён по умолчанию (T135) — bob1 остаётся v1-устройством явно
+  sessions.bob1 = await preparePage(contexts.bob1, bob, PASSWORD, { seedLocalStorage: { 'parvane:proto': 'v1' } });
   await waitLog('alice', 'v2: готов');
   assert.ok(await dismissRecoveryKeyDialog(sessions.alice.page), 'alice: не показан ключ восстановления v2');
   const alicePage = sessions.alice.page;

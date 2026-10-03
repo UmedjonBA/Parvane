@@ -10,6 +10,13 @@
 // принимает одно, второе замолкает по своему таймауту вызова (≤ 45 с, в тесте
 // 10 с) — и его поздний отказ НЕ роняет разговор принявшего устройства.
 import assert from 'node:assert/strict';
+
+// Сценарий проверяет мультидевайс v1: общая основная ссылка-приглашение из
+// списка шарда (таблица group_invites), fan-out копий и SKDM, история,
+// нечитаемая без линковки. Клиенты идут по v1. Мультидевайс v2 (линковка,
+// журнал состояния, группы на привязанном устройстве) —
+// scripts/e2e_protocol_state_sync.mjs (пара state-sync)
+process.env.PARVANE_E2E_PROTO = 'v1';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 

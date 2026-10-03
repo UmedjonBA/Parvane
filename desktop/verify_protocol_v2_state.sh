@@ -47,7 +47,8 @@ wait_log "$L2" "журнал личного состояния подключё�
 stop_pid "$P1"
 P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 \
   "PARVANE_AUTOSTRANGERS=off@14" "PARVANE_AUTOMUTE=bob@local:18" \
-  "PARVANE_AUTOSTATE=pin:bob@local@28,archive:bob@local@40,block:bob@local@52")
+  "PARVANE_AUTOSTATE=pin:bob@local@28,archive:bob@local@40,block:bob@local@52" \
+  "PARVANE_AUTOCLEARCHAT=bob@local:64")
 wait_log "$L1" "журнал личного состояния подключён" 90 && ok "alice1: журнал состояния подключён после рестарта" \
   || bad "alice1: журнал состояния не подключён"
 wait_log "$L1" "приватность сохранена: незнакомые нет" 60 && ok "alice1: приватность сохранена на сервере" \
@@ -72,6 +73,14 @@ wait_log "$L2" "журнал состояния → блок-лист \(1 изм
   || bad "alice2: блок-лист из журнала не пришёл"
 wait_log "$L1" "доступ заблокированного отозван \(ключ доступа сменён\)" 30 \
   && ok "alice1: ключ доступа к доставке сменён (FR-033)" || bad "alice1: доступ заблокированного не отозван"
+
+# ── T145: «удалить чат у себя» на alice1 → чат очищен и на alice2 ≤ 10 с ─────
+# Сообщений v2 сервер v1 не знает (нотиса `cleared` нет) — граница очистки едет
+# журналом личного состояния
+wait_log "$L1" "очистка чата bob@local — скрыто [1-9][0-9]* сообщений" 60 && ok "alice1: чат с bob очищен" \
+  || bad "alice1: очистка чата не сработала"
+wait_log "$L2" "журнал состояния → очистка чатов \(1\), скрыто [1-9][0-9]* сообщений" 12 \
+  && ok "alice2: очистка чата пришла из журнала ≤ 10 с" || bad "alice2: очистка чата из журнала не пришла"
 
 # v1-блоб настроек уведомлений не раскрывает серверу, кто заглушён (FR-039)
 if command -v sqlite3 >/dev/null; then

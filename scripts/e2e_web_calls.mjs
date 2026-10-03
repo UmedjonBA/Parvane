@@ -9,15 +9,20 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   relogin,
   LOGIN_TIMEOUT_MS,
+  exchangeMessages,
   expectMediaFlowing,
+  findMessage,
   openPrivateChat,
   openPrivateChatStrict,
   preparePage,
   remoteCallVideoLuma,
+  sendText,
   waitLuma,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-calls-e2e-password';
+// Сценарий идёт на протоколе по умолчанию (v2); PARVANE_E2E_PROTO=v1 — прежний
+const IS_V1 = process.env.PARVANE_E2E_PROTO === 'v1';
 
 const browser = await chromium.launch({
   args: [
@@ -46,7 +51,30 @@ try {
   const aliceSession = await preparePage(aliceContext, alice, PASSWORD);
   const bobSession = await preparePage(bobContext, bob, PASSWORD);
   await openPrivateChat(aliceSession.page, bob);
+
+  // ── Протокол v2 (по умолчанию, T135): звонок принимается только от того, кому
+  // адресат уже отвечал (ключ доступа, D-08). Незнакомцу — понятное уведомление,
+  // а не бесконечное «ringing»
+  await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+  await aliceSession.page.getByText('You can call this person after they reply to your message')
+    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.getByText('ringing...', { exact: true })
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  // Переписка в обе стороны — собеседники обменялись ключами доступа
+  await sendText(aliceSession.page, `call-hi-${suffix}`);
   await openPrivateChat(bobSession.page, alice);
+  await findMessage(bobSession.page, `call-hi-${suffix}`).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await sendText(bobSession.page, `call-hello-${suffix}`);
+  await findMessage(aliceSession.page, `call-hello-${suffix}`).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // Третий участник (шаг «занято») знакомится с Алисой заранее: во время её
+  // звонка с Бобом переписку уже не устроить
+  const carolContext = await browser.newContext({ permissions: ['microphone'] });
+  const carolSession = await preparePage(carolContext, `call-carol-${suffix}@local`, PASSWORD);
+  await exchangeMessages(carolSession.page, `call-carol-${suffix}@local`, aliceSession.page, alice, `carol-${suffix}`);
+  await openPrivateChat(aliceSession.page, bob);
 
   // ── Исходящий вызов и входящий оверлей ─────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
@@ -77,8 +105,6 @@ try {
   assert.equal(aliceSasText, bobSasText, 'SAS emoji differ between the two peers');
 
   // ── Busy: третий пользователь звонит занятой стороне и видит «занято» ──────
-  const carolContext = await browser.newContext({ permissions: ['microphone'] });
-  const carolSession = await preparePage(carolContext, `call-carol-${suffix}@local`, PASSWORD);
   await openPrivateChat(carolSession.page, alice);
   await carolSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await carolSession.page.getByText('Line busy', { exact: true })
@@ -199,8 +225,7 @@ try {
       const daveSession = await preparePage(daveContext, dave, PASSWORD, {
         seedLocalStorage: forceRelaySeed,
       });
-      await openPrivateChat(carolSession.page, dave);
-      await openPrivateChat(daveSession.page, carol);
+      await exchangeMessages(carolSession.page, carol, daveSession.page, dave, `turn-${suffix}`);
       await carolSession.page.getByRole('button', { name: 'Call', exact: true }).click();
       await daveSession.page.getByRole('button', { name: 'Accept' })
         .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -230,8 +255,7 @@ try {
     const frank = `call-frank-${suffix}@local`;
     const erinSession = await preparePage(erinContext, erin, PASSWORD, { seedLocalStorage: shortRing });
     const frankSession = await preparePage(frankContext, frank, PASSWORD, { seedLocalStorage: shortRing });
-    await openPrivateChatStrict(erinSession.page, frank);
-    await openPrivateChatStrict(frankSession.page, erin);
+    await exchangeMessages(erinSession.page, erin, frankSession.page, frank, `ring-${suffix}`);
     await erinSession.page.getByRole('button', { name: 'Call', exact: true }).click();
     await frankSession.page.getByText('is calling you...', { exact: true })
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -261,11 +285,19 @@ try {
     assert.equal(await erinSession.page.getByText('Line busy', { exact: true }).count(), 0, 'blocked call shows busy');
     await ringWatcher;
     assert.equal(frankRang, false, 'blocked caller rang on the callee');
-    await erinSession.page.waitForFunction((count) => Array.from(
+    // Звонящий видит отказ: запись «Declined Call» (клиент заблокировавшего
+    // отбил вызов) либо — в v2, когда отзыв ключа доступа уже дошёл до шарда
+    // call (ACCESS-1; кэш ключей 60 с), — уведомление как при звонке незнакомцу
+    const declined = erinSession.page.waitForFunction((count) => Array.from(
       document.querySelectorAll('.Transition_slide-active > .MessageList .Message'),
     ).filter((element) => element.textContent.includes('Declined Call')).length > count, declinedBefore, {
       timeout: LOGIN_TIMEOUT_MS,
     });
+    const refused = erinSession.page.getByText('You can call this person after they reply to your message')
+      .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    declined.catch(() => {});
+    refused.catch(() => {});
+    await Promise.any(IS_V1 ? [declined] : [declined, refused]);
 
     // ── Неверная подпись сигналинга: предложение звонка отвергается ──────────
     const mallory = `call-mallory-${suffix}@local`;

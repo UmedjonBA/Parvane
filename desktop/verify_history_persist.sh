@@ -19,8 +19,12 @@ info(){ printf '\033[36m--  \033[0m %s\n' "$*"; }
 stack_up "$SB"
 
 # ── РАН 1: alice → bob T1 ──
-QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="bob@local:$T1" "$BIN" -workdir "$A" >"$SB/a1.out" 2>&1 & AP=$!
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" "$BIN" -workdir "$B" >"$SB/b1.out" 2>&1 & BP=$!
+# Получатель — первым и до готовности: отправка незарегистрированному адресату
+# теряется (в v2 — ещё и журнал устройств bob должен существовать)
+if is_v2; then READY="v2: готов"; else READY="E2E-устройство готово"; fi
+wait_log "$B/log.txt" "$READY" 60 || bad "ран1: bob не поднялся"
+QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="bob@local:$T1" "$BIN" -workdir "$A" >"$SB/a1.out" 2>&1 & AP=$!
 for i in $(seq 1 40); do grep -q "(alice@local): $T1" "$B/log.txt" 2>/dev/null && break; sleep 1; done
 grep -q "(alice@local): $T1" "$B/log.txt" && ok "ран1: bob получил T1" || bad "ран1: bob НЕ получил T1"
 kill "$AP" "$BP" 2>/dev/null; wait "$AP" "$BP" 2>/dev/null; sleep 3

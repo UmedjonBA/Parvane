@@ -36,6 +36,8 @@ import {
 const PASSWORD = 'Parvane-v2-e2e-password';
 const PAIR = process.env.PARVANE_E2E_PAIR || 'web2-web2';
 const V2_SEED = { 'parvane:proto': 'v2' };
+// v2 включён по умолчанию (T135) — роль v1 задаётся явно
+const V1_SEED = { 'parvane:proto': 'v1' };
 
 // Фото (T040): те же помощники, что в e2e_web_media_ttl.mjs
 function crc32(bytes) {
@@ -347,7 +349,7 @@ try {
   const bobIsV2 = PAIR === 'web2-web2';
 
   aliceSession = await preparePage(aliceContext, alice, PASSWORD, { seedLocalStorage: V2_SEED });
-  bobSession = await preparePage(bobContext, bob, PASSWORD, { seedLocalStorage: bobIsV2 ? V2_SEED : {} });
+  bobSession = await preparePage(bobContext, bob, PASSWORD, { seedLocalStorage: bobIsV2 ? V2_SEED : V1_SEED });
   await waitLog('alice', 'v2: готов');
   if (bobIsV2) await waitLog('bob', 'v2: готов');
   const aliceRecovery = await dismissRecoveryKeyDialog(aliceSession.page);
@@ -446,7 +448,9 @@ try {
   // (личка и группа v1), читается; переписка после перехода идёт в обе стороны
   if (!bobIsV2) {
     const bobPage = bobSession.page;
-    await bobPage.evaluate(() => localStorage.setItem('parvane:proto', 'v2'));
+    // Сид v1 ставится init-скриптом при каждой загрузке — переход на v2 тоже
+    // init-скриптом (выполняются по порядку регистрации)
+    await bobPage.addInitScript(() => localStorage.setItem('parvane:proto', 'v2'));
     await reloadPage(bobPage);
     await waitLog('bob', 'v2: готов');
     await dismissRecoveryKeyDialog(bobPage);

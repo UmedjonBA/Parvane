@@ -12,6 +12,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   LOGIN_TIMEOUT_MS, assertNoPageErrors, preparePage, requireEnv, submitNick,
+  autoDismissRecoveryKeyDialog,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-email-e2e-password';
@@ -35,6 +36,7 @@ async function fetchLatestCode(email, { notEqualTo } = {}) {
 async function openStartPage(context) {
   const { baseUrl, gatewayUrl } = requireEnv();
   const page = await context.newPage();
+  await autoDismissRecoveryKeyDialog(page); // v2 по умолчанию (T135)
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
   await page.addInitScript((url) => {
