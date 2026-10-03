@@ -11,6 +11,7 @@ import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../..
 import type { createLocalState, JournalScheduled, LocalStateKind } from '../localState';
 import type { ParvaneStore } from '../store';
 import type { WireCallRecord } from '../wire';
+import type { V2SharedInvite } from './controller';
 import type { PvState } from './engine';
 import { MAIN_THREAD_ID } from '../../types';
 
@@ -41,6 +42,12 @@ type Deps = {
   applyCallRecords?: (records: WireCallRecord[]) => void;
   /** Чат очищен на другом своём устройстве: скрыть сообщения не позже границы (мс). */
   applyChatCleared?: (address: string, untilMs: number) => void;
+  /** Ссылки-приглашения групп v2 (T160): действующие ссылки этого устройства и
+   * приём ссылок, созданных другими своими устройствами. */
+  sharedInvites?: {
+    list: () => Promise<V2SharedInvite[]>;
+    merge: (invites: V2SharedInvite[]) => Promise<void>;
+  };
   log: (message: string) => void;
 };
 
@@ -86,9 +93,21 @@ type SSnapshot = {
   pinned?: SPinned[];
   calls?: SCall[];
   cleared?: { peer?: SPeer; cleared_until_ms?: string }[];
+  invites?: SInvite[];
   notify?: { peer?: SPeer; settings?: SNotify }[];
   notify_defaults?: { users?: SNotify; groups?: SNotify; channels?: SNotify };
   [key: string]: unknown;
+};
+// `state.v1.GroupInvite`: ссылка-приглашение группы v2 (bytes — base64)
+type SInvite = {
+  group_id?: string;
+  link_id?: string;
+  url?: string;
+  created_ms?: string;
+  title?: string;
+  expires_ms?: string;
+  usage_limit?: number;
+  requires_approval?: boolean;
 };
 // `state.v1.NotifySettings`: без звука до момента (мс эпохи, int64 — строкой)
 type SNotify = { mute_until_ms?: string; sound?: string; show_previews?: boolean; silent?: boolean };
@@ -369,6 +388,35 @@ export function createStateJournal(deps: Deps) {
     }).catch((e: unknown) => deps.log(`v2: запись очистки чата в журнал состояния: ${String(e)}`));
   }
 
+  // ── ссылки-приглашения групп v2 (T160) ─────────────────────────────────────
+  // Секрет ссылки знает только создавшее её устройство: запись журнала делит
+  // ссылку между своими устройствами (в v1 основная ссылка у аккаунта одна).
+
+  function recordGroupInvite({ address, record }: V2SharedInvite) {
+    void serial(async () => {
+      if (!session || !isV2GroupAddress(address)) return;
+      pendingAppends.push(...session.groupInviteSet(JSON.stringify(inviteToState(address, record))));
+      await pushAppends();
+    }).catch((e: unknown) => deps.log(`v2: запись ссылки-приглашения в журнал состояния: ${String(e)}`));
+  }
+
+  function removeGroupInvite(linkId: string) {
+    void serial(async () => {
+      if (!session) return;
+      pendingAppends.push(...session.groupInviteRemove(hexToB64(linkId)));
+      await pushAppends();
+    }).catch((e: unknown) => deps.log(`v2: снятие ссылки-приглашения в журнале состояния: ${String(e)}`));
+  }
+
+  async function projectInvites(snap: SSnapshot) {
+    if (!deps.sharedInvites) return;
+    const shared = (snap.invites || []).map(inviteFromState).filter((item): item is V2SharedInvite => Boolean(item));
+    await deps.sharedInvites.merge(shared);
+    // Ссылки этого устройства, которых в журнале ещё нет (созданы до T160)
+    const known = new Set(shared.map(({ record }) => record.linkId));
+    (await deps.sharedInvites.list()).filter(({ record }) => !known.has(record.linkId)).forEach(recordGroupInvite);
+  }
+
   function projectCleared(snap: SSnapshot) {
     (snap.cleared || []).forEach((entry) => {
       const address = addressOf(entry.peer);
@@ -517,6 +565,8 @@ export function createStateJournal(deps: Deps) {
     projectScheduled(snap);
     projectCalls(snap);
     projectCleared(snap);
+    void projectInvites(snap)
+      .catch((e: unknown) => deps.log(`v2: ссылки-приглашения из журнала состояния: ${String(e)}`));
   }
 
   function projectFolders(snap: SSnapshot) {
@@ -750,6 +800,8 @@ export function createStateJournal(deps: Deps) {
     isAttached,
     recordCall,
     recordChatCleared,
+    recordGroupInvite,
+    removeGroupInvite,
     reset: detach,
     syncNow,
   };
@@ -822,6 +874,35 @@ function bytesToB64(bytes: Uint8Array) {
 
 function b64ToBytes(b64: string) {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+function inviteToState(address: string, record: V2SharedInvite['record']): SInvite {
+  return {
+    group_id: hexToB64(address.slice(V2_GROUP_PREFIX.length)),
+    link_id: hexToB64(record.linkId),
+    url: record.url,
+    created_ms: String(record.date * MS_IN_SECOND),
+    title: record.title,
+    expires_ms: record.expiresAt ? String(record.expiresAt * MS_IN_SECOND) : undefined,
+    usage_limit: record.usageLimit,
+    requires_approval: record.isRequestNeeded,
+  };
+}
+
+function inviteFromState(invite: SInvite): V2SharedInvite | undefined {
+  if (!invite.group_id || !invite.link_id || !invite.url) return undefined;
+  return {
+    address: `${V2_GROUP_PREFIX}${b64ToHex(invite.group_id)}`,
+    record: {
+      url: invite.url,
+      linkId: b64ToHex(invite.link_id),
+      date: Math.floor(Number(invite.created_ms || 0) / MS_IN_SECOND),
+      title: invite.title || undefined,
+      expiresAt: Number(invite.expires_ms || 0) ? Math.floor(Number(invite.expires_ms) / MS_IN_SECOND) : undefined,
+      usageLimit: invite.usage_limit || undefined,
+      isRequestNeeded: invite.requires_approval || undefined,
+    },
+  };
 }
 
 function hexToB64(hex: string) {

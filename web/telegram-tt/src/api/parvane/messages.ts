@@ -1569,12 +1569,14 @@ export function createMessageController(deps: MessageDependencies) {
         deps.localState.markChatDeleted(address);
         deps.localState.saveDraft(address, undefined);
       }
-      await deps.sync.forgetMessages(uuids);
       // Сообщений v2 сервер v1 не знает — нотис `cleared` до других своих
-      // устройств не дойдёт; граница очистки едет журналом личного состояния
+      // устройств не дойдёт; граница очистки едет журналом личного состояния.
+      // Ставится ДО локального удаления: эхо своей копии v2, пришедшее следом,
+      // отсеивается по ней (sync.isClearedForMe)
       if (address) {
         deps.recordChatCleared?.(address, lastDate ? lastDate * MS_IN_SECOND + (MS_IN_SECOND - 1) : Date.now());
       }
+      await deps.sync.forgetMessages(uuids);
       deps.sendUpdate({ '@type': 'deleteHistory', chatId: chat.id });
       return undefined;
     },

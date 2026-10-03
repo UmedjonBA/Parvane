@@ -55,6 +55,9 @@ type Deps = {
   onUnconfirmedMembers: (address: string, members: string[]) => void;
   /** Стек поднят: журнал личного состояния (T098) можно читать. */
   onStateReady?: (host: StateJournalHost, rekey?: 'self' | 'peer') => void;
+  /** Ссылка-приглашение создана/отозвана здесь — остальным своим устройствам (T160). */
+  onInviteCreated?: (address: string, record: V2InviteRecord) => void;
+  onInviteRevoked?: (linkId: string) => void;
   /** Свои устройства по каталогу v1 (id и ключи) — для подписанного списка
    * v1-устройств, которым v2-клиенты шлют легаси-копии (FR-058). */
   listOwnV1Devices?: () => Promise<{ deviceId: string; identity: string; signing: string }[]>;
@@ -120,9 +123,13 @@ export type V2InviteRecord = {
   isRequestNeeded?: boolean;
 };
 
+/** Ссылка вместе с группой — вид, которым ссылки делятся между своими устройствами (T160). */
+export type V2SharedInvite = { address: string; record: V2InviteRecord };
+
 export type V2InviteCheck = {
   address: string;
   about?: string;
+  avatar?: string;
   name: string;
   membersCount: number;
   isRequestNeeded: boolean;
@@ -183,6 +190,22 @@ const V2_GROUP_PREFIX = 'v2g:';
 const GROUP_KIND_GROUP = 1;
 const GROUP_KIND_CHANNEL = 2;
 const ROLE_NAMES: Record<number, string> = { 1: 'member', 2: 'admin', 3: 'owner' };
+// Движок отдаёт права в proto3-JSON: `false` опущен. На проводе v1 пропуск
+// означает «по умолчанию» (разрешено), поэтому набор раскрывается явно —
+// иначе запрет в группе v2 читался бы как разрешение
+const PERMISSION_FIELDS = [
+  'send_messages', 'send_media', 'send_stickers_gifs', 'send_polls',
+  'embed_links', 'invite_users', 'pin_messages', 'change_info',
+] as const;
+const ADMIN_RIGHT_FIELDS = [
+  'change_info', 'delete_messages', 'ban_users', 'invite_users', 'pin_messages', 'add_admins',
+] as const;
+
+function expandFlags<K extends string>(fields: readonly K[], value?: Partial<Record<K, boolean>>) {
+  const out = {} as Record<K, boolean>;
+  for (const field of fields) out[field] = Boolean(value?.[field]);
+  return out;
+}
 // Права группы по умолчанию (как у новой группы Telegram); канал — только админы
 const DEFAULT_GROUP_PERMISSIONS: WireDefaultPermissions = {
   send_messages: true,
@@ -590,12 +613,25 @@ export function createV2Controller(deps: Deps) {
         // молча терять остальные и само событие: пишем причину; журнал группы
         // дочитается повтором
         deps.log(`v2: событие ${ev.type} не применено: ${String(e)}`);
-        if (ev.type === 'groupChanged' && ev.group) scheduleGroupResync(ev.group.id);
+        if (ev.type !== 'groupChanged' || !ev.group) continue;
+        // Журнал больше не отдают (нас исключили/забанили, группа удалена) —
+        // сервер дальше не пустит: группа снимается у клиента, как в desktop
+        if (isForbidden(e) || /NOT_FOUND/.test(String(e))) dropGroup(ev.group.id);
+        else scheduleGroupResync(ev.group.id);
       }
     }
     const err = client.lastError();
     if (err) deps.log(`v2: ошибка записи: ${err}`);
     await persist();
+  }
+
+  function dropGroup(hex: string) {
+    const g = readGroup(hex);
+    const address = groupAddress(hex);
+    client?.groupForget(hex);
+    if (g) saveGroupCache(toWireGroupInfo(hex, g), false);
+    l2Gate.forget(address);
+    if (publishedGroups.delete(address)) deps.onGroupLeft(address);
   }
 
   // Журнал группы не дочитался по уведомлению — повтор с нуля (локальная копия
@@ -1368,7 +1404,18 @@ export function createV2Controller(deps: Deps) {
   }
 
   /** Отправить сообщение v2-собеседнику. Возвращает false — не v2 (идти по v1). */
+  // Отправка обязана знать исход запуска v2 (T149): сообщение, ушедшее по v1,
+  // пока стек поднимается, не дошло бы до v2-устройств собеседника вне каталога
+  // v1. Устройство аккаунта v2, ещё не привязанное к журналу устройств (T156),
+  // не отправляет вовсе — по v1 собеседники такое сообщение отвергают (D-13)
+  async function ensureSendable() {
+    if (!deps.isEnabled()) return;
+    if (!ready && starting) await starting.catch(() => undefined);
+    if (needsLinking && !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+  }
+
   async function trySend(to: string, wire: WireMessageContent, uuid: string, replyTo?: string): Promise<boolean> {
+    await ensureSendable();
     if (!(await isV2Chat(to))) return false;
     await sendContent(to, wireToV2(wire, replyTo), uuid);
     const stored: WireStoredMessage = {
@@ -1558,13 +1605,13 @@ export function createV2Controller(deps: Deps) {
         ...g.members.map((m) => ({
           address: m.user,
           role: ROLE_NAMES[m.role] || 'member',
-          admin_rights: m.role === 2 ? (m.rights || {}) : undefined,
+          admin_rights: m.role === 2 ? expandFlags(ADMIN_RIGHT_FIELDS, m.rights) : undefined,
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],
       avatar: g.avatarFileId || undefined,
       about: g.about || undefined,
-      default_permissions: g.defaultPermissions || {},
+      default_permissions: expandFlags(PERMISSION_FIELDS, g.defaultPermissions),
       version: Number(g.version),
       pending_requests: pendingRequests.get(hex) || undefined,
     };
@@ -1829,7 +1876,37 @@ export function createV2Controller(deps: Deps) {
   async function listInvites(address: string): Promise<V2InviteRecord[]> {
     if (!client || !isV2GroupAddress(address)) return [];
     const active = new Set(readGroup(groupHex(address))?.inviteLinks || []);
-    return ((await loadInvites())[address] || []).filter(({ linkId }) => active.has(linkId));
+    // Порядок один на всех своих устройствах (T160): по нему выбирается основная ссылка
+    return ((await loadInvites())[address] || []).filter(({ linkId }) => active.has(linkId)).sort(compareInvites);
+  }
+
+  /** Все действующие ссылки этого устройства — для журнала личного состояния (T160). */
+  async function allInvites(): Promise<V2SharedInvite[]> {
+    if (!client) return [];
+    const out: V2SharedInvite[] = [];
+    Object.entries(await loadInvites()).forEach(([address, records]) => {
+      const active = new Set(readGroup(groupHex(address))?.inviteLinks || []);
+      records.filter(({ linkId }) => active.has(linkId)).forEach((record) => out.push({ address, record }));
+    });
+    return out;
+  }
+
+  /** Ссылки, созданные другими своими устройствами (секрет знает только создатель). */
+  async function mergeSharedInvites(shared: V2SharedInvite[]) {
+    if (!storage || !shared.length) return;
+    await serial(async () => {
+      const all = await loadInvites();
+      let added = 0;
+      shared.forEach(({ address, record }) => {
+        const list = all[address] || [];
+        if (list.some(({ linkId }) => linkId === record.linkId)) return;
+        all[address] = [...list, record];
+        added += 1;
+      });
+      if (!added) return;
+      await storage!.saveRecord(INVITES_RECORD, all);
+      deps.log(`v2: ссылки-приглашения с других своих устройств: ${added}`);
+    });
   }
 
   async function createInvite(address: string, params: {
@@ -1869,6 +1946,7 @@ export function createV2Controller(deps: Deps) {
       await storage?.saveRecord(INVITES_RECORD, all);
       await persist();
       publishGroup(hex);
+      deps.onInviteCreated?.(address, record);
       return record;
     });
   }
@@ -1876,7 +1954,9 @@ export function createV2Controller(deps: Deps) {
   async function revokeInvite(address: string, url: string) {
     const record = (await loadInvites())[address]?.find((item) => item.url === url);
     if (!record) return false;
-    return changeGroup(address, { invite_key_revoke: { link_id: hexToB64(record.linkId) } });
+    const isDone = await changeGroup(address, { invite_key_revoke: { link_id: hexToB64(record.linkId) } });
+    if (isDone) deps.onInviteRevoked?.(record.linkId);
+    return isDone;
   }
 
   // ── заявки на вступление (ссылка с одобрением, D-04; T143) ──────────────────
@@ -1994,20 +2074,21 @@ export function createV2Controller(deps: Deps) {
       const check = await inviteGroup(parsed.linkId);
       const hex = b64ToHex(check.group?.id || '');
       const self = deps.getSelf();
-      // Описание — из подписанного журнала группы (сервер отдаёт его по ссылке),
-      // а не со слов сервера; журнал не-участника после чтения не храним
-      let about: string | undefined;
+      // Описание и фото — из подписанного журнала группы (сервер отдаёт его по
+      // ссылке), а не со слов сервера; журнал не-участника после чтения не храним
+      let preview: { about?: string; avatar?: string } | undefined;
       if (hex && !readGroup(hex)?.members.some(({ user }) => user === self)) {
-        about = await serial(async () => {
+        preview = await serial(async () => {
           await syncGroup(hex, parsed.linkId);
-          const text = readGroup(hex)?.about;
+          const g = readGroup(hex);
           client!.groupForget(hex);
-          return text || undefined;
+          return { about: g?.about || undefined, avatar: g?.avatarFileId || undefined };
         }).catch(() => undefined);
       }
       return {
         address: groupAddress(hex),
-        about,
+        about: preview?.about,
+        avatar: preview?.avatar,
         name: check.name || '',
         membersCount: check.members || 0,
         isRequestNeeded: Boolean(check.requires_approval),
@@ -2241,6 +2322,8 @@ export function createV2Controller(deps: Deps) {
     groupInfo,
     joinByInvite,
     listInvites,
+    allInvites,
+    mergeSharedInvites,
     listJoinRequests,
     decideJoinRequest,
     reportUnconfirmed: (address: string, claimed: string[]) => {
@@ -2323,6 +2406,10 @@ function groupHex(address: string) {
 
 function groupAddress(hex: string) {
   return `${V2_GROUP_PREFIX}${hex}`;
+}
+
+function compareInvites(a: V2InviteRecord, b: V2InviteRecord) {
+  return a.date - b.date || (a.linkId < b.linkId ? -1 : 1);
 }
 
 function isForbidden(e: unknown) {

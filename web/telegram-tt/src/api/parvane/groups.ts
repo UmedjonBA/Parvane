@@ -1284,6 +1284,7 @@ export function createGroupController(deps: GroupDependencies) {
     const invite: ApiChatInviteInfo = {
       title: check.name,
       about: check.about,
+      photo: check.avatar && deps.buildAvatarPhoto ? deps.buildAvatarPhoto(check.avatar) : undefined,
       participantsCount: check.membersCount,
       isRequestNeeded: check.isRequestNeeded ? true : undefined,
       isChannel: check.isChannel ? true : undefined,
