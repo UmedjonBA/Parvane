@@ -23,9 +23,10 @@ use crate::group::{ContextVerdict, GroupState};
 use crate::identity::{verify_certificate, VerifiedDevice};
 use crate::limits::Origin;
 use crate::olm::OlmAccount;
+use crate::pb::parvane::call::v2::CallSignal;
 use crate::pb::parvane::core::v2::{
-    op_header::Conversation, DeviceRef, GroupContext, GroupPlaintext, OpHeader, SealedInner, SignedDeviceCertificate,
-    SignedOp, UserRef,
+    op_header::Conversation, DeviceRef, GroupContext, GroupPlaintext, OpHeader, Ref, SealedInner,
+    SignedDeviceCertificate, SignedOp, UserRef,
 };
 use crate::pb::parvane::msg::v2::{content, Content, Delete, Edit, MessageRef, Pin, Reaction, Receipt, ReceiptKind, Text};
 use crate::sign::{self, VerifiedOp};
@@ -33,6 +34,11 @@ use crate::unknown::{self, Disposition};
 
 pub const MSG_DOMAIN: &str = "msg";
 pub const CONTENT_OP: &str = "content";
+/// Сигнал звонка (D-08): тот же sealed-конверт, что у личного сообщения, но
+/// домен `call` и цель — звонок; в журнал инбокса не пишется.
+pub const CALL_DOMAIN: &str = "call";
+pub const CALL_SIGNAL_OP: &str = "signal";
+pub const CALL_ID_LEN: usize = 16;
 
 /// Хранилище «уже видели» (персистентное у клиента; в тестах — память).
 pub trait SeenStore {
@@ -77,6 +83,25 @@ pub fn sign_direct_with_id(device: &OlmAccount, content: &Content, peer: &str, a
     sign::sign_op(device, header, content.encode_to_vec())
 }
 
+/// Подписать сигнал звонка: цель операции — звонок (`call.id` == `signal.call_id`),
+/// аудитория — устройства адресата. Привязка к цели и аудитории не даёт
+/// переслать подписанный SDP в другой звонок или другому устройству (класс 6).
+pub fn sign_call(device: &OlmAccount, signal: &CallSignal, call: Ref, audience: Vec<DeviceRef>, ts_ms: i64) -> Result<SignedOp> {
+    if signal.call_id.len() != CALL_ID_LEN || call.id != signal.call_id {
+        return Err(ProtoError::InvalidField("call_id"));
+    }
+    let header = OpHeader {
+        domain: CALL_DOMAIN.into(),
+        op_type: CALL_SIGNAL_OP.into(),
+        op_id: sign::new_op_id(),
+        target: Some(call),
+        audience,
+        ts_ms,
+        ..Default::default()
+    };
+    sign::sign_op(device, header, signal.encode_to_vec())
+}
+
 /// Собрать внутренний слой sealed-конверта: SignedOp под Olm + сертификат.
 pub fn seal_inner(sender_cert: &SignedDeviceCertificate, olm: &mut crate::olm::OlmSession, op: &SignedOp) -> Result<SealedInner> {
     let (t, ct) = olm.encrypt(&op.encode_to_vec())?;
@@ -110,11 +135,21 @@ fn finish(sender: VerifiedDevice, op: VerifiedOp) -> Result<Opened> {
     Ok(Opened { sender, op, content, disposition })
 }
 
-/// Проверить личное сообщение после снятия HPKE.
-///
-/// `device_active` — устройство активно по журналу устройств отправителя.
-/// `decrypt(identity, olm_type, bytes)` — расшифровать сессией с этим
-/// identity-ключом (для pre-key — создать входящую).
+/// Открытый сигнал звонка: отправитель проверен, подпись, аудитория и привязка
+/// к звонку сошлись.
+pub struct OpenedCall {
+    pub sender: VerifiedDevice,
+    pub op: VerifiedOp,
+    pub signal: CallSignal,
+}
+
+/// Что лежало в sealed-конверте.
+pub enum OpenedSealed {
+    Message(Box<Opened>),
+    Call(Box<OpenedCall>),
+}
+
+/// Проверить личное сообщение после снятия HPKE (сигнал звонка — отказ).
 pub fn open_direct(
     inner: &SealedInner,
     me: &DeviceRef,
@@ -122,6 +157,25 @@ pub fn open_direct(
     decrypt: &mut OlmDecrypt<'_>,
     seen: &mut dyn SeenStore,
 ) -> Result<Opened> {
+    match open_sealed_op(inner, me, device_active, decrypt, seen)? {
+        OpenedSealed::Message(m) => Ok(*m),
+        OpenedSealed::Call(_) => Err(ProtoError::ContextMismatch),
+    }
+}
+
+/// Проверить содержимое sealed-конверта после снятия HPKE: личное сообщение
+/// или сигнал звонка.
+///
+/// `device_active` — устройство активно по журналу устройств отправителя.
+/// `decrypt(identity, olm_type, bytes)` — расшифровать сессией с этим
+/// identity-ключом (для pre-key — создать входящую).
+pub fn open_sealed_op(
+    inner: &SealedInner,
+    me: &DeviceRef,
+    device_active: &dyn Fn(&VerifiedDevice) -> bool,
+    decrypt: &mut OlmDecrypt<'_>,
+    seen: &mut dyn SeenStore,
+) -> Result<OpenedSealed> {
     let cert = inner.sender.as_ref().ok_or(ProtoError::InvalidField("sender"))?;
     let sender = verify_certificate(cert, None)?;
     if !device_active(&sender) {
@@ -134,7 +188,22 @@ pub fn open_direct(
     let pt = decrypt(&identity, inner.olm_type, &inner.olm_message)?;
     let op: SignedOp = decode_checked(&pt, Origin::Client)?;
     let signer = sender.olm_ed25519()?;
-    let v = sign::verify_op(&op, MSG_DOMAIN, CONTENT_OP, Some(&signer))?;
+    let v = match sign::verify_op(&op, MSG_DOMAIN, CONTENT_OP, Some(&signer)) {
+        Ok(v) => v,
+        Err(not_message) => {
+            // Не сообщение — сигнал звонка (домен call) либо отказ с исходной ошибкой.
+            let v = sign::verify_op(&op, CALL_DOMAIN, CALL_SIGNAL_OP, Some(&signer)).map_err(|_| not_message)?;
+            v.require_audience(me)?;
+            let signal: CallSignal = decode_checked(&v.payload, Origin::Client)?;
+            // Цель операции — именно этот звонок: SDP из другого звонка не подставить.
+            match &v.header.target {
+                Some(t) if t.id.len() == CALL_ID_LEN && t.id == signal.call_id => {}
+                _ => return Err(ProtoError::ContextMismatch),
+            }
+            seen.insert_once(&seen_key(&[sender.user().as_bytes(), sender.cert.device_id.as_bytes(), &v.header.op_id]))?;
+            return Ok(OpenedSealed::Call(Box::new(OpenedCall { sender, op: v, signal })));
+        }
+    };
     // Контекст беседы: мне — direct_peer == я; копия с моего другого устройства —
     // отправитель я сам.
     let own_copy = sender.user() == me.address;
@@ -144,7 +213,7 @@ pub fn open_direct(
     }
     v.require_audience(me)?;
     seen.insert_once(&seen_key(&[sender.user().as_bytes(), sender.cert.device_id.as_bytes(), &v.header.op_id]))?;
-    finish(sender, v)
+    finish(sender, v).map(|m| OpenedSealed::Message(Box::new(m)))
 }
 
 /// Подписать содержимое группового сообщения (с головой журнала, D-03).

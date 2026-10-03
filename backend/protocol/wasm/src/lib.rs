@@ -109,7 +109,12 @@ fn event_json(e: &Event) -> Value {
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
         Event::DeviceAdded { device_id, log_version } => json!({"type": "deviceAdded", "deviceId": device_id, "logVersion": log_version}),
+        Event::Call { from, device, call_id, ts_ms, signal } => json!({
+            "type": "call", "from": from, "device": device, "callId": hex::encode(call_id), "tsMs": ts_ms,
+            "signal": serde_json::to_value(signal).unwrap_or(Value::Null)
+        }),
         Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
+        Event::Typing { .. } | Event::Presence { .. } => parvane_protocol::host::eph_event_json(e),
         Event::Internal { seq } => json!({"type": "internal", "seq": seq}),
         Event::Skipped { seq } => json!({"type": "skipped", "seq": seq}),
     }
@@ -253,7 +258,7 @@ impl PvClient {
     #[wasm_bindgen(js_name = linkGrantMaterial)]
     pub fn link_grant_material(&self) -> Result<Vec<u8>, JsValue> {
         let (ssk, entries, dk, gen) = self.inner.link_grant_material().map_err(err_proto)?;
-        let resp = ipb::DeviceLogSyncResponse { entries, more: false };
+        let resp = ipb::DeviceLogSyncResponse { entries, more: false, genesis_hash: vec![] };
         let mut m = json!({"ssk": hex::encode(ssk), "log": hex::encode(resp.encode_to_vec()), "dk": hex::encode(dk), "gen": gen});
         // Ключ личного состояния — тем же грантом (формат общий с C ABI, host.rs)
         if let Some((k, v)) = self.inner.state_key() {
@@ -309,21 +314,71 @@ impl PvClient {
     /// Устройства пользователя по журналу (JSON `{"v2": [...], "legacy": [...]}`).
     #[wasm_bindgen(js_name = logDevices)]
     pub fn log_devices(&self, user: &str) -> String {
-        let (v2, legacy) = self.inner.log_devices(user);
-        json!({ "v2": v2, "legacy": legacy }).to_string()
+        parvane_protocol::host::log_devices_json(&self.inner, user)
     }
 
-    /// Ответ `identity.device.log_sync(_anon)` → вердикт "new" | "known" | "rootChanged".
+    /// Опубликовать/сократить свой список v1-устройств (FR-058): JSON
+    /// `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
+    /// Первая публикация задаёт список, дальше он только сокращается.
+    #[wasm_bindgen(js_name = legacyDevicesRequest)]
+    pub fn legacy_devices_request(&mut self, devices_json: &str) -> Result<JsValue, JsValue> {
+        let devices = parvane_protocol::host::parse_legacy_devices(devices_json).map_err(err_proto)?;
+        self.inner.legacy_devices_request(devices).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
+    /// для v1-устройств из подписанных списков собеседника и своего.
+    #[wasm_bindgen(js_name = legacyDeliverRequest)]
+    pub fn legacy_deliver_request(&self, message_id: &str, send_payload_json: &str) -> Result<JsValue, JsValue> {
+        self.inner.legacy_deliver_request(message_id, send_payload_json.as_bytes()).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Ответ `identity.device.log_sync(_anon)` → вердикт "new" | "known" |
+    /// "rootChanged" (KEY-1: показать предупреждение и `acceptRootChange`) |
+    /// "replaced" (журнал на сервере начат заново — перечитать с версии 0).
     #[wasm_bindgen(js_name = ingestLog)]
     pub fn ingest_log(&mut self, user: &str, sync_response: &[u8]) -> Result<String, JsValue> {
-        let r: ipb::DeviceLogSyncAnonResponse = decode_checked(sync_response, Origin::Server).map_err(err_proto)?;
-        let v = self.inner.ingest_log(user, r.entries).map_err(err_proto)?;
-        Ok(match v {
-            LogVerdict::New => "new",
-            LogVerdict::Known => "known",
-            LogVerdict::RootChanged => "rootChanged",
-        }
-        .into())
+        parvane_protocol::host::ingest_log_verdict(&mut self.inner, user, sync_response).map(str::to_string).map_err(err_proto)
+    }
+
+    /// KEY-1 v2: принять смену корня собеседника (после предупреждения).
+    #[wasm_bindgen(js_name = acceptRootChange)]
+    pub fn accept_root_change(&mut self, user: &str) -> Result<bool, JsValue> {
+        self.inner.accept_pending_root(user).map_err(err_proto)
+    }
+
+    /// T130: восстановление на новом устройстве по корню (в памяти после
+    /// `importRootBackupFor`); `log_response` — ответ `identity.device.log_sync`
+    /// с версии 0. Запросы выполнять по порядку.
+    #[wasm_bindgen(js_name = recoverWithRoot)]
+    pub fn recover_with_root(&mut self, log_response: &[u8], otk_count: usize) -> Result<Array, JsValue> {
+        let root = self.root.clone().ok_or_else(|| err_proto(ProtoError::NotFound))?;
+        let r: ipb::DeviceLogSyncResponse = decode_checked(log_response, Origin::Server).map_err(err_proto)?;
+        self.inner.recover_with_root(&root, r.entries, otk_count).map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Корень из копии под ключом восстановления на устройстве БЕЗ журнала
+    /// (восстановление): сверка с журналом — в `recoverWithRoot`. Корень
+    /// остаётся в памяти до `forgetRoot()`.
+    #[wasm_bindgen(js_name = importRootBackupFor)]
+    pub fn import_root_backup_for(&mut self, blob: &[u8], recovery_key: &str) -> Result<(), JsValue> {
+        let key = parvane_protocol::recovery::RecoveryKey::parse(recovery_key).map_err(err_proto)?;
+        let secret = parvane_protocol::recovery::import_root_backup(blob, &self.inner.user, &key).map_err(err_proto)?;
+        self.root = Some(secret);
+        Ok(())
+    }
+
+    /// T130: сброс личности — новый корень взамен прежнего. Как
+    /// `createIdentity`; первый запрос — `identity.root.rotate` (нужна свежая
+    /// переаутентификация).
+    #[wasm_bindgen(js_name = resetIdentity)]
+    pub fn reset_identity(&mut self, otk_count: usize) -> Result<JsValue, JsValue> {
+        let (reqs, root) = self.inner.reset_identity(otk_count).map_err(err_proto)?;
+        let o = Object::new();
+        set(&o, "requests", &reqs_js(&reqs).into());
+        set(&o, "rootSecret", &Uint8Array::from(root.root.to_bytes().as_slice()).into());
+        self.root = Some(zeroize::Zeroizing::new(root.root.to_bytes()));
+        Ok(o.into())
     }
 
     /// Ответ `identity.device.fetch_bundle_anon` → число открытых сессий.
@@ -357,6 +412,19 @@ impl PvClient {
         self.inner.token_count()
     }
 
+    /// Пора получать суточную партию жетонов (FR-063: по расписанию, не перед
+    /// тратой).
+    #[wasm_bindgen(js_name = tokenRefillDue)]
+    pub fn token_refill_due(&self) -> bool {
+        self.inner.token_refill_due(parvane_protocol::time::now_ms())
+    }
+
+    /// Размер партии — вся суточная квота.
+    #[wasm_bindgen(js_name = tokenBatchSize)]
+    pub fn token_batch_size(&self) -> usize {
+        self.inner.token_batch_size()
+    }
+
     /// Личное сообщение: содержимое — proto3-JSON `msg.v2.Content`;
     /// `op_id` — UUID сообщения хоста (строка) или пусто.
     #[wasm_bindgen(js_name = prepareDirect)]
@@ -364,6 +432,124 @@ impl PvClient {
         let c = parse_content(content_json)?;
         let id = op_id_bytes(op_id)?;
         self.inner.prepare_direct_id(peer, &c, id).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
+    /// `call.v2.CallSignal`; оффер уходит методом `call.ring_sealed`, остальное —
+    /// `call.signal_sealed`, оба анонимным каналом.
+    #[wasm_bindgen(js_name = prepareCall)]
+    pub fn prepare_call(&mut self, peer: &str, signal_json: &str) -> Result<Array, JsValue> {
+        let signal: parvane_protocol::pb::parvane::call::v2::CallSignal =
+            serde_json::from_str(signal_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.prepare_call(peer, &signal).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
+    /// ключ (отзыв устройства, восстановление) — дальше слепым жетоном. true —
+    /// ключ был и сброшен (отправку стоит повторить).
+    #[wasm_bindgen(js_name = deliveryKeyRejected)]
+    pub fn delivery_key_rejected(&mut self, peer: &str) -> bool {
+        let had = self.inner.has_peer_delivery_key(peer);
+        self.inner.on_delivery_key_rejected(peer);
+        had
+    }
+
+    // ── отзыв своего устройства (T128; D-11, D-12, D-16) ──
+
+    /// Отозвать своё другое устройство и выполнить последствия →
+    /// `{requests, pendingKeyShares: [адрес], pendingEpochs: [hex],
+    /// epochsNeedAdmin: [hex], sskRotationRequired, stateKeyVersion?}`. Первый
+    /// запрос — запись журнала (обязателен), остальные — ротации ключей.
+    #[wasm_bindgen(js_name = revokeDevice)]
+    pub fn revoke_device(&mut self, device_id: &str) -> Result<JsValue, JsValue> {
+        let out = self.inner.revoke_device(device_id).map_err(err_client)?;
+        let strings = |items: Vec<String>| -> JsValue { items.iter().map(|s| JsValue::from_str(s)).collect::<Array>().into() };
+        let o = Object::new();
+        set(&o, "requests", &reqs_js(&out.requests).into());
+        set(&o, "pendingKeyShares", &strings(out.pending_key_shares.clone()));
+        set(&o, "pendingEpochs", &strings(out.pending_epochs.iter().map(hex::encode).collect()));
+        set(&o, "epochsNeedAdmin", &strings(out.epochs_need_admin.iter().map(hex::encode).collect()));
+        set(&o, "sskRotationRequired", &JsValue::from_bool(out.ssk_rotation_required));
+        if let Some(v) = out.state_key_version {
+            set(&o, "stateKeyVersion", &JsValue::from_f64(f64::from(v)));
+        }
+        Ok(o.into())
+    }
+
+    /// Отозвать ключ доступа у собеседника (FR-033; блокировка) →
+    /// `{requests, pendingKeyShares: [адрес]}`; пустой `requests` — ключа у
+    /// собеседника не было.
+    #[wasm_bindgen(js_name = revokeContactAccess)]
+    pub fn revoke_contact_access(&mut self, peer: &str) -> Result<JsValue, JsValue> {
+        let out = self.inner.revoke_contact_access(peer).map_err(err_client)?;
+        let o = Object::new();
+        set(&o, "requests", &reqs_js(&out.requests).into());
+        let pending: JsValue = out.pending_key_shares.iter().map(|s| JsValue::from_str(s)).collect::<Array>().into();
+        set(&o, "pendingKeyShares", &pending);
+        Ok(o.into())
+    }
+
+    /// Группы v2 — своим новым устройствам (T142): ключи текущей эпохи и
+    /// входящие сессии Megolm. `devices_json` — JSON-массив id устройств.
+    #[wasm_bindgen(js_name = shareGroupsWithOwnDevices)]
+    pub fn share_groups_with_own_devices(&mut self, devices_json: &str) -> Result<Array, JsValue> {
+        let devices: Vec<String> = serde_json::from_str(devices_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.inner.share_groups_with_own_devices(&devices).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+    #[wasm_bindgen(js_name = shareDeliveryKey)]
+    pub fn share_delivery_key(&mut self, peer: &str) -> Result<Array, JsValue> {
+        self.inner.share_delivery_key(peer).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Сменить SSK корнем (D-12): корень — в памяти после `importRootBackup`;
+    /// после успеха хост зовёт `forgetRoot()`.
+    #[wasm_bindgen(js_name = rotateSsk)]
+    pub fn rotate_ssk(&mut self) -> Result<Array, JsValue> {
+        let root = self.root.clone().ok_or_else(|| err_proto(ProtoError::NotFound))?;
+        self.inner.rotate_ssk_with_secret(&root).map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
+    #[wasm_bindgen(js_name = ownSskExposed)]
+    pub fn own_ssk_exposed(&self) -> bool {
+        self.inner.own_ssk_exposed()
+    }
+
+    // ── эфемерные каналы: «печатает» и присутствие (T127) ──
+
+    /// Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →
+    /// запросы `ephemeral.subscribe` (только новые каналы).
+    #[wasm_bindgen(js_name = ephSubscribe)]
+    pub fn eph_subscribe(&mut self, chats_json: &str) -> Result<Array, JsValue> {
+        parvane_protocol::host::eph_subscribe_reqs(&mut self.inner, chats_json).map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Соединение пересоздано — подписок на эфемерные каналы больше нет.
+    #[wasm_bindgen(js_name = ephReset)]
+    pub fn eph_reset(&mut self) {
+        self.inner.eph_reset();
+    }
+
+    /// «Печатает»: `chat` — адрес собеседника либо hex группы, `action` — номер
+    /// `TypingAction`. Запросы (пусто — канала нет или чат в L2).
+    #[wasm_bindgen(js_name = ephTyping)]
+    pub fn eph_typing(&self, chat: &str, action: i32) -> Result<Array, JsValue> {
+        parvane_protocol::host::eph_typing_reqs(&self.inner, chat, action).map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Своё присутствие → запросы (пусто — L2 активен в каком-то чате).
+    #[wasm_bindgen(js_name = ephPresence)]
+    pub fn eph_presence(&self, online: bool, last_seen_ms: f64) -> Result<Array, JsValue> {
+        let req = self.inner.presence_request(online, last_seen_ms as i64).map_err(err_proto)?;
+        Ok(reqs_js(req.as_slice()))
+    }
+
+    /// Событие подписки `ephemeral` → JSON-массив событий `typing`/`presence`.
+    #[wasm_bindgen(js_name = ephOpen)]
+    pub fn eph_open(&self, body: &[u8]) -> String {
+        parvane_protocol::host::eph_open_json(&self.inner, body)
     }
 
     /// Открыть запись журнала инбокса → JSON-массив событий.
@@ -661,6 +847,15 @@ impl PvState {
         self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::ScheduledSent(s)])
     }
 
+    /// Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+    /// `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+    #[wasm_bindgen(js_name = callSet)]
+    pub fn call_set(&mut self, record_json: &str) -> Result<Array, JsValue> {
+        let rec: parvane_protocol::pb::parvane::state::v1::CallRecord =
+            serde_json::from_str(record_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::CallSet(rec)])
+    }
+
     /// Локальный журнал уже отправленных этим устройством (hex; хранит хост).
     #[wasm_bindgen(js_name = sentGuard)]
     pub fn sent_guard(&self) -> Vec<String> {
@@ -686,6 +881,18 @@ impl PvState {
         }
         Ok(out)
     }
+}
+
+/// Материал гранта линковки + копия корня под ключом восстановления (поле `rb`).
+#[wasm_bindgen(js_name = grantWithRootBackup)]
+pub fn grant_with_root_backup(material: &[u8], backup: &[u8]) -> Result<Vec<u8>, JsValue> {
+    parvane_protocol::host::grant_with_root_backup(material, backup).map_err(err_proto)
+}
+
+/// Копия корня из материала гранта (`undefined` — гранта без копии).
+#[wasm_bindgen(js_name = grantRootBackup)]
+pub fn grant_root_backup(material: &[u8]) -> Option<Vec<u8>> {
+    parvane_protocol::host::grant_root_backup(material)
 }
 
 /// C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
@@ -880,9 +1087,11 @@ pub fn encode_message(type_name: &str, json: &str) -> Result<Vec<u8>, JsValue> {
         "parvane.identity.v2.DirectorySearchRequest" => ipb::DirectorySearchRequest,
         "parvane.identity.v2.DeviceLogSyncAnonRequest" => ipb::DeviceLogSyncAnonRequest,
         "parvane.identity.v2.DeviceLogSyncRequest" => ipb::DeviceLogSyncRequest,
+        "parvane.identity.v2.RootBackupSetRequest" => ipb::RootBackupSetRequest,
         "parvane.identity.v2.DeviceFetchBundleAnonRequest" => ipb::DeviceFetchBundleAnonRequest,
         "parvane.identity.v2.DeviceRevokeRequest" => ipb::DeviceRevokeRequest,
         "parvane.identity.v2.PrivacySetRequest" => ipb::PrivacySetRequest,
+        "parvane.identity.v2.PrivacyGetRequest" => ipb::PrivacyGetRequest,
         "parvane.group.v2.StateSyncRequest" => gpb::StateSyncRequest,
         "parvane.group.v2.InviteCheckRequest" => gpb::InviteCheckRequest,
         "parvane.msg.v2.Text" => parvane_protocol::pb::parvane::msg::v2::Text,
@@ -924,6 +1133,8 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
         "parvane.identity.v2.ProfileResolveResponse" => ipb::ProfileResolveResponse,
         "parvane.identity.v2.DirectorySearchResponse" => ipb::DirectorySearchResponse,
         "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,
+        "parvane.identity.v2.RootBackupGetResponse" => ipb::RootBackupGetResponse,
+        "parvane.identity.v2.PrivacyGetResponse" => ipb::PrivacyGetResponse,
         "parvane.msg.v2.InboxSyncResponse" => parvane_protocol::pb::parvane::msg::v2::InboxSyncResponse,
         "parvane.msg.v2.InboxSubscribeResponse" => parvane_protocol::pb::parvane::msg::v2::InboxSubscribeResponse,
         "parvane.msg.v2.DeliverSealedResponse" => parvane_protocol::pb::parvane::msg::v2::DeliverSealedResponse,
@@ -936,6 +1147,7 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
         "parvane.cloud.v1.UploadChunkResponse" => parvane_protocol::pb::parvane::cloud::v1::UploadChunkResponse,
         "parvane.cloud.v1.UploadCompleteResponse" => parvane_protocol::pb::parvane::cloud::v1::UploadCompleteResponse,
         "parvane.cloud.v1.DownloadResponse" => parvane_protocol::pb::parvane::cloud::v1::DownloadResponse,
+        "parvane.cloud.v1.DownloadCapResponse" => parvane_protocol::pb::parvane::cloud::v1::DownloadCapResponse,
         "parvane.preview.v2.LinkResponse" => parvane_protocol::pb::parvane::preview::v2::LinkResponse,
         "parvane.preview.v2.MapTileResponse" => parvane_protocol::pb::parvane::preview::v2::MapTileResponse,
         "parvane.push.v1.DescribeResponse" => parvane_protocol::pb::parvane::push::v1::DescribeResponse,

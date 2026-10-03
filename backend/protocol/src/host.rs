@@ -57,6 +57,47 @@ fn reqs_json(rs: &[OutRequest]) -> String {
     Value::Array(rs.iter().map(req_json).collect()).to_string()
 }
 
+/// Устройства пользователя по проверенному журналу: `v2` — id устройств v2,
+/// `legacy` — id подписанного списка v1-устройств, `legacySet` — список
+/// публиковался, `legacyKeys` — его ключи (base64 без дополнения, как в Olm):
+/// легаси-копию шлют только устройству с ТЕМ ЖЕ identity-ключом (FR-058).
+pub fn log_devices_json(c: &Client, user: &str) -> String {
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
+    use base64::Engine as _;
+    let (v2, legacy) = c.log_devices(user);
+    let set = c.legacy_devices(user);
+    let keys: Vec<Value> = set
+        .iter()
+        .flatten()
+        .map(|d| json!({"deviceId": d.device_id, "identity": STANDARD_NO_PAD.encode(&d.olm_curve25519), "signing": STANDARD_NO_PAD.encode(&d.olm_ed25519)}))
+        .collect();
+    json!({ "v2": v2, "legacy": legacy, "legacySet": set.is_some(), "legacyKeys": keys }).to_string()
+}
+
+/// JSON `[{"deviceId","identity","signing"}]` (ключи — base64, с дополнением или
+/// без) → список v1-устройств для записи журнала.
+pub fn parse_legacy_devices(devices_json: &str) -> Result<Vec<crate::pb::parvane::core::v2::LegacyDevice>, ProtoError> {
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
+    use base64::Engine as _;
+    let list: Vec<Value> = serde_json::from_str(devices_json).map_err(|_| ProtoError::Malformed)?;
+    let key = |v: &Value, k: &str| -> Result<Vec<u8>, ProtoError> {
+        let raw = STANDARD_NO_PAD.decode(v[k].as_str().unwrap_or("").trim_end_matches('=')).map_err(|_| ProtoError::InvalidField("legacy_key"))?;
+        if raw.len() != 32 {
+            return Err(ProtoError::InvalidField("legacy_key"));
+        }
+        Ok(raw)
+    };
+    list.iter()
+        .map(|v| {
+            let device_id = v["deviceId"].as_str().unwrap_or("").to_string();
+            if !crate::address::is_valid_device_id(&device_id) {
+                return Err(ProtoError::InvalidField("device_id"));
+            }
+            Ok(crate::pb::parvane::core::v2::LegacyDevice { device_id, olm_curve25519: key(v, "identity")?, olm_ed25519: key(v, "signing")? })
+        })
+        .collect()
+}
+
 fn uuid_str(b: &[u8]) -> String {
     let h = hex::encode(b);
     if h.len() != 32 {
@@ -88,10 +129,98 @@ fn event_json(e: &Event) -> Value {
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
         Event::DeviceAdded { device_id, log_version } => json!({"type": "deviceAdded", "deviceId": device_id, "logVersion": log_version}),
+        Event::Call { from, device, call_id, ts_ms, signal } => json!({
+            "type": "call", "from": from, "device": device, "callId": hex::encode(call_id), "tsMs": ts_ms,
+            "signal": serde_json::to_value(signal).unwrap_or(Value::Null)
+        }),
         Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
+        Event::Typing { .. } | Event::Presence { .. } => eph_event_json(e),
         Event::Internal { seq } => json!({"type": "internal", "seq": seq}),
         Event::Skipped { seq } => json!({"type": "skipped", "seq": seq}),
     }
+}
+
+/// Разбор ответа синка журнала устройств (общий для C ABI и WASM, T129).
+pub fn ingest_log_verdict(c: &mut Client, user: &str, resp: &[u8]) -> Result<&'static str, ProtoError> {
+    let r: ipb::DeviceLogSyncAnonResponse = decode_checked(resp, Origin::Server)?;
+    Ok(match c.ingest_log_sync(user, r.entries, &r.genesis_hash)? {
+        LogVerdict::New => "new",
+        LogVerdict::Known => "known",
+        LogVerdict::RootChanged => "rootChanged",
+        LogVerdict::Replaced => "replaced",
+    })
+}
+
+/// Итог отзыва устройства (T128) — JSON для обвязок (тела запросов — base64).
+pub fn revocation_json(o: &crate::client::RevocationOutcome) -> String {
+    json!({
+        "requests": Value::Array(o.requests.iter().map(req_json).collect()),
+        "pendingKeyShares": o.pending_key_shares,
+        "pendingEpochs": o.pending_epochs.iter().map(hex::encode).collect::<Vec<_>>(),
+        "epochsNeedAdmin": o.epochs_need_admin.iter().map(hex::encode).collect::<Vec<_>>(),
+        "sskRotationRequired": o.ssk_rotation_required,
+        "stateKeyVersion": o.state_key_version,
+    })
+    .to_string()
+}
+
+// ── эфемерные каналы (T127): общий JSON-API для C ABI и WASM ────────────────
+
+/// События эфемерных каналов: `{"type":"typing","chat","group":hex|null,
+/// "from","action":<TypingAction>,"tsMs"}` и `{"type":"presence","from",
+/// "online","lastSeenMs","tsMs"}`.
+pub fn eph_event_json(e: &Event) -> Value {
+    match e {
+        Event::Typing { chat, group, from, action, ts_ms } => json!({
+            "type": "typing", "chat": chat, "group": group.as_ref().map(hex::encode), "from": from, "action": action, "tsMs": ts_ms
+        }),
+        Event::Presence { from, online, last_seen_ms, ts_ms } => {
+            json!({"type": "presence", "from": from, "online": online, "lastSeenMs": last_seen_ms, "tsMs": ts_ms})
+        }
+        _ => Value::Null,
+    }
+}
+
+/// Подписка на каналы чатов: `{"peers":[адрес…],"groups":[hex…]}` → массив
+/// запросов `ephemeral.subscribe` (только новые каналы).
+pub fn eph_subscribe_json(c: &mut Client, chats_json: &str) -> Result<String, ProtoError> {
+    eph_subscribe_reqs(c, chats_json).map(|r| reqs_json(&r))
+}
+
+/// То же, запросами (для WASM-обвязки: тела — байтами).
+pub fn eph_subscribe_reqs(c: &mut Client, chats_json: &str) -> Result<Vec<OutRequest>, ProtoError> {
+    let v: Value = serde_json::from_str(chats_json).map_err(|_| ProtoError::Malformed)?;
+    let strings = |k: &str| -> Vec<String> { v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default() };
+    let groups: Vec<Vec<u8>> = strings("groups").iter().filter_map(|h| hex::decode(h).ok()).collect();
+    Ok(c.eph_subscribe(&strings("peers"), &groups))
+}
+
+/// «Печатает»: `chat` — адрес собеседника либо hex группы; `action` — номер
+/// `TypingAction`. Массив запросов (пустой — канала нет или чат в L2).
+pub fn eph_typing_json(c: &Client, chat: &str, action: i32) -> Result<String, ProtoError> {
+    eph_typing_reqs(c, chat, action).map(|r| reqs_json(&r))
+}
+
+/// То же, запросами (для WASM-обвязки).
+pub fn eph_typing_reqs(c: &Client, chat: &str, action: i32) -> Result<Vec<OutRequest>, ProtoError> {
+    let action = crate::pb::parvane::msg::v2::TypingAction::try_from(action).map_err(|_| ProtoError::InvalidField("action"))?;
+    let req = if chat.contains('@') {
+        c.typing_request(chat, action)?
+    } else {
+        let gid = hex::decode(chat).map_err(|_| ProtoError::InvalidField("group"))?;
+        c.group_typing_request(&gid, action)?
+    };
+    Ok(req.into_iter().collect())
+}
+
+/// Своё присутствие. Массив запросов (пустой — пока L2 активен хоть в одном чате).
+pub fn eph_presence_json(c: &Client, online: bool, last_seen_ms: i64) -> Result<String, ProtoError> {
+    Ok(reqs_json(c.presence_request(online, last_seen_ms)?.as_slice()))
+}
+
+/// Событие подписки `ephemeral` → массив событий (пустой — не для показа).
+pub fn eph_open_json(c: &Client, body: &[u8]) -> String {
+    Value::Array(c.open_ephemeral(body).iter().map(eph_event_json).collect()).to_string()
 }
 
 fn events(ev: &[Event]) -> String {
@@ -171,7 +300,7 @@ impl HostClient {
 
     pub fn link_grant_material(&self) -> Result<String, String> {
         let (ssk, entries, dk, gen) = self.inner.link_grant_material().map_err(err)?;
-        let log = ipb::DeviceLogSyncResponse { entries, more: false };
+        let log = ipb::DeviceLogSyncResponse { entries, more: false, genesis_hash: vec![] };
         let mut m = json!({"ssk": hex::encode(ssk), "log": hex::encode(log.encode_to_vec()), "dk": hex::encode(dk), "gen": gen});
         // Ключ личного состояния — тем же грантом (R: «передаётся при линковке»)
         if let Some((k, v)) = self.inner.state_key() {
@@ -212,15 +341,32 @@ impl HostClient {
         self.inner.log_version(user)
     }
 
+    /// Ответ `identity.device.log_sync(_anon)` → "new" | "known" |
+    /// "rootChanged" (KEY-1: показать предупреждение и `accept_root_change`) |
+    /// "replaced" (журнал на сервере начат заново — перечитать с версии 0).
     pub fn ingest_log(&mut self, user: &str, resp: &[u8]) -> Result<String, String> {
-        let r: ipb::DeviceLogSyncAnonResponse = decode_checked(resp, Origin::Server).map_err(err)?;
-        let v = self.inner.ingest_log(user, r.entries).map_err(err)?;
-        Ok(match v {
-            LogVerdict::New => "new",
-            LogVerdict::Known => "known",
-            LogVerdict::RootChanged => "rootChanged",
-        }
-        .into())
+        ingest_log_verdict(&mut self.inner, user, resp).map(str::to_string).map_err(err)
+    }
+
+    /// KEY-1 v2: принять смену корня собеседника (после предупреждения).
+    pub fn accept_root_change(&mut self, user: &str) -> Result<bool, String> {
+        self.inner.accept_pending_root(user).map_err(err)
+    }
+
+    /// T130: восстановление на новом устройстве по корню (32 байта из копии под
+    /// ключом восстановления); `log_resp` — ответ `identity.device.log_sync`
+    /// с версии 0. JSON-массив запросов.
+    pub fn recover_with_root(&mut self, root_secret: &[u8], log_resp: &[u8], otk: usize) -> Result<String, String> {
+        let root = zeroize::Zeroizing::new(key32(root_secret)?);
+        let r: ipb::DeviceLogSyncResponse = decode_checked(log_resp, Origin::Server).map_err(err)?;
+        self.inner.recover_with_root(&root, r.entries, otk).map(|r| reqs_json(&r)).map_err(err)
+    }
+
+    /// T130: сброс личности (новый корень взамен прежнего) → как
+    /// `create_identity`; первый запрос — `identity.root.rotate`.
+    pub fn reset_identity(&mut self, otk: usize) -> Result<String, String> {
+        let (reqs, root) = self.inner.reset_identity(otk).map_err(err)?;
+        Ok(json!({"requests": serde_json::from_str::<Value>(&reqs_json(&reqs)).unwrap_or(Value::Null), "rootSecret": b64(&root.root.to_bytes())}).to_string())
     }
 
     pub fn ingest_bundle(&mut self, user: &str, resp: &[u8]) -> Result<usize, String> {
@@ -246,6 +392,32 @@ impl HostClient {
     pub fn prepare_direct(&mut self, peer: &str, content_json: &str, id: &str) -> Result<String, String> {
         let c: Content = serde_json::from_str(content_json).map_err(|_| err(ProtoError::Malformed))?;
         self.inner.prepare_direct_id(peer, &c, op_id(id)?).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    /// Сигнал звонка: proto3-JSON `parvane.call.v2.CallSignal` → запросы.
+    pub fn prepare_call(&mut self, peer: &str, signal_json: &str) -> Result<String, String> {
+        let signal: crate::pb::parvane::call::v2::CallSignal = serde_json::from_str(signal_json).map_err(|_| err(ProtoError::Malformed))?;
+        self.inner.prepare_call(peer, &signal).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    pub fn eph_subscribe(&mut self, chats_json: &str) -> Result<String, String> {
+        eph_subscribe_json(&mut self.inner, chats_json).map_err(err)
+    }
+
+    pub fn eph_reset(&mut self) {
+        self.inner.eph_reset();
+    }
+
+    pub fn eph_typing(&self, chat: &str, action: i32) -> Result<String, String> {
+        eph_typing_json(&self.inner, chat, action).map_err(err)
+    }
+
+    pub fn eph_presence(&self, online: bool, last_seen_ms: i64) -> Result<String, String> {
+        eph_presence_json(&self.inner, online, last_seen_ms).map_err(err)
+    }
+
+    pub fn eph_open(&self, body: &[u8]) -> String {
+        eph_open_json(&self.inner, body)
     }
 
     pub fn open_record(&mut self, record: &[u8]) -> Result<String, String> {
@@ -393,12 +565,83 @@ impl HostClient {
 
     /// Устройства пользователя по журналу → `{"v2": [...], "legacy": [...]}`.
     pub fn log_devices(&self, user: &str) -> String {
-        let (v2, legacy) = self.inner.log_devices(user);
-        json!({ "v2": v2, "legacy": legacy }).to_string()
+        log_devices_json(&self.inner, user)
+    }
+
+    /// Опубликовать/сократить свой список v1-устройств (FR-058): JSON
+    /// `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
+    pub fn legacy_devices_request(&mut self, devices_json: &str) -> Result<String, String> {
+        let devices = parse_legacy_devices(devices_json).map_err(err)?;
+        self.inner.legacy_devices_request(devices).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// Запрос `msg.deliver_legacy`: v1 `SendPayload` (JSON) для v1-устройств.
+    pub fn legacy_deliver_request(&self, message_id: &str, send_payload_json: &str) -> Result<String, String> {
+        self.inner.legacy_deliver_request(message_id, send_payload_json.as_bytes()).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
+    /// ключ (отзыв устройства, восстановление) — дальше слепым жетоном, пока
+    /// новый ключ не придёт по E2E. true — ключ был и сброшен (есть смысл
+    /// повторить отправку).
+    pub fn delivery_key_rejected(&mut self, peer: &str) -> bool {
+        let had = self.inner.has_peer_delivery_key(peer);
+        self.inner.on_delivery_key_rejected(peer);
+        had
+    }
+
+    // ── отзыв своего устройства (T128; D-11, D-12, D-16) ──
+
+    /// Отозвать своё другое устройство и выполнить последствия →
+    /// `{"requests":[…],"pendingKeyShares":[адрес…],"pendingEpochs":[hex…],
+    /// "epochsNeedAdmin":[hex…],"sskRotationRequired":bool,"stateKeyVersion":n|null}`.
+    /// Первый запрос — запись журнала (обязателен), остальные — ротации.
+    pub fn revoke_device(&mut self, device_id: &str) -> Result<String, String> {
+        self.inner.revoke_device(device_id).map(|o| revocation_json(&o)).map_err(cerr)
+    }
+
+    /// Отозвать ключ доступа у собеседника (FR-033) → тот же JSON итога, что
+    /// у `revoke_device` (заполнены `requests` и `pendingKeyShares`).
+    pub fn revoke_contact_access(&mut self, peer: &str) -> Result<String, String> {
+        self.inner.revoke_contact_access(peer).map(|o| revocation_json(&o)).map_err(cerr)
+    }
+
+    /// Группы v2 — своим новым устройствам (T142): `devices_json` — JSON-массив
+    /// id устройств. JSON-массив запросов (пустой — пересылать нечего).
+    pub fn share_groups_with_own_devices(&mut self, devices_json: &str) -> Result<String, String> {
+        let devices: Vec<String> = serde_json::from_str(devices_json).map_err(|e| e.to_string())?;
+        self.inner.share_groups_with_own_devices(&devices).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    /// Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+    pub fn share_delivery_key(&mut self, peer: &str) -> Result<String, String> {
+        self.inner.share_delivery_key(peer).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    /// Сменить SSK корнем (D-12) после отзыва устройства, державшего SSK.
+    pub fn rotate_ssk(&mut self, root_secret: &[u8]) -> Result<String, String> {
+        let root = zeroize::Zeroizing::new(key32(root_secret)?);
+        self.inner.rotate_ssk_with_secret(&root).map(|r| reqs_json(&r)).map_err(err)
+    }
+
+    /// Свой SSK раскрыт и ещё не сменён.
+    pub fn own_ssk_exposed(&self) -> bool {
+        self.inner.own_ssk_exposed()
     }
 
     pub fn token_count(&self) -> usize {
         self.inner.token_count()
+    }
+
+    /// Пора получать суточную партию жетонов (FR-063: по расписанию, хост
+    /// проверяет таймером — не перед тратой).
+    pub fn token_refill_due(&self) -> bool {
+        self.inner.token_refill_due(crate::time::now_ms())
+    }
+
+    /// Размер партии — вся суточная квота.
+    pub fn token_batch_size(&self) -> usize {
+        self.inner.token_batch_size()
     }
 
     // ── журнал личного состояния (T098) ──
@@ -534,6 +777,13 @@ impl HostState {
         self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::ScheduledSent(s)])
     }
 
+    /// Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+    /// `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+    pub fn call_set(&mut self, record_json: &str) -> Result<String, String> {
+        let rec: crate::pb::parvane::state::v1::CallRecord = serde_json::from_str(record_json).map_err(|_| err(ProtoError::Malformed))?;
+        self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::CallSet(rec)])
+    }
+
     /// Локальный журнал уже отправленных этим устройством (JSON-массив hex).
     pub fn sent_guard(&self) -> String {
         json!(self.guard.to_list().iter().map(hex::encode).collect::<Vec<_>>()).to_string()
@@ -558,6 +808,31 @@ impl HostState {
         }
         Ok(Value::Array(out).to_string())
     }
+}
+
+/// Материал гранта линковки + копия корня под ключом восстановления (поле
+/// `rb`, hex): с ней привязанное устройство сможет сменить SSK после отзыва
+/// другого (D-12). Копия без ключа восстановления ничего не раскрывает.
+pub fn grant_with_root_backup(material: &[u8], backup: &[u8]) -> Result<Vec<u8>, ProtoError> {
+    let mut v: Value = serde_json::from_slice(material).map_err(|_| ProtoError::Malformed)?;
+    if !v.is_object() || backup.is_empty() {
+        return Err(ProtoError::Malformed);
+    }
+    v["rb"] = json!(hex::encode(backup));
+    Ok(v.to_string().into_bytes())
+}
+
+/// Копия корня из материала гранта (поле `rb`); `None` — гранта без копии.
+pub fn grant_root_backup(material: &[u8]) -> Option<Vec<u8>> {
+    let v: Value = serde_json::from_slice(material).ok()?;
+    hex::decode(v["rb"].as_str()?).ok().filter(|b| !b.is_empty())
+}
+
+/// T130: корень из копии под ключом восстановления на устройстве БЕЗ журнала
+/// (восстановление): сверка с журналом — в `recover_with_root`.
+pub fn import_root_backup_for(user: &str, blob: &[u8], recovery_key: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+    let key = crate::recovery::RecoveryKey::parse(recovery_key).map_err(err)?;
+    crate::recovery::import_root_backup(blob, user, &key).map_err(err)
 }
 
 /// C1-06: новый ключ восстановления (≥ 128 бит, строка для пользователя).
@@ -656,9 +931,11 @@ pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, Strin
         "parvane.identity.v2.DirectorySearchRequest" => ipb::DirectorySearchRequest,
         "parvane.identity.v2.DeviceLogSyncAnonRequest" => ipb::DeviceLogSyncAnonRequest,
         "parvane.identity.v2.DeviceLogSyncRequest" => ipb::DeviceLogSyncRequest,
+        "parvane.identity.v2.RootBackupSetRequest" => ipb::RootBackupSetRequest,
         "parvane.identity.v2.DeviceFetchBundleAnonRequest" => ipb::DeviceFetchBundleAnonRequest,
         "parvane.identity.v2.DeviceRevokeRequest" => ipb::DeviceRevokeRequest,
         "parvane.identity.v2.PrivacySetRequest" => ipb::PrivacySetRequest,
+        "parvane.identity.v2.PrivacyGetRequest" => ipb::PrivacyGetRequest,
         "parvane.group.v2.StateSyncRequest" => gpb::StateSyncRequest,
         "parvane.group.v2.InviteCheckRequest" => gpb::InviteCheckRequest,
         "parvane.msg.v2.Text" => crate::pb::parvane::msg::v2::Text,
@@ -700,6 +977,8 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
         "parvane.identity.v2.ProfileResolveResponse" => ipb::ProfileResolveResponse,
         "parvane.identity.v2.DirectorySearchResponse" => ipb::DirectorySearchResponse,
         "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,
+        "parvane.identity.v2.RootBackupGetResponse" => ipb::RootBackupGetResponse,
+        "parvane.identity.v2.PrivacyGetResponse" => ipb::PrivacyGetResponse,
         "parvane.msg.v2.InboxSyncResponse" => crate::pb::parvane::msg::v2::InboxSyncResponse,
         "parvane.msg.v2.InboxSubscribeResponse" => crate::pb::parvane::msg::v2::InboxSubscribeResponse,
         "parvane.msg.v2.DeliverSealedResponse" => crate::pb::parvane::msg::v2::DeliverSealedResponse,
@@ -712,6 +991,7 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
         "parvane.cloud.v1.UploadChunkResponse" => crate::pb::parvane::cloud::v1::UploadChunkResponse,
         "parvane.cloud.v1.UploadCompleteResponse" => crate::pb::parvane::cloud::v1::UploadCompleteResponse,
         "parvane.cloud.v1.DownloadResponse" => crate::pb::parvane::cloud::v1::DownloadResponse,
+        "parvane.cloud.v1.DownloadCapResponse" => crate::pb::parvane::cloud::v1::DownloadCapResponse,
         "parvane.preview.v2.LinkResponse" => crate::pb::parvane::preview::v2::LinkResponse,
         "parvane.preview.v2.MapTileResponse" => crate::pb::parvane::preview::v2::MapTileResponse,
         "parvane.push.v1.DescribeResponse" => crate::pb::parvane::push::v1::DescribeResponse,

@@ -98,6 +98,34 @@ char *pv_client_ingest_log(struct PvClient *c,
                            uintptr_t len,
                            char **err);
 
+/**
+ * KEY-1 v2: принять смену корня собеседника (после предупреждения).
+ * true — ожидавшая смена принята.
+ */
+bool pv_client_accept_root_change(struct PvClient *c,
+                                  const char *user,
+                                  char **err);
+
+/**
+ * T130: восстановление на новом устройстве по корню (32 байта) и ответу
+ * `identity.device.log_sync` с версии 0 → JSON-массив запросов.
+ */
+char *pv_client_recover_with_root(struct PvClient *c,
+                                  const uint8_t *root,
+                                  uintptr_t root_len,
+                                  const uint8_t *log_resp,
+                                  uintptr_t log_len,
+                                  uintptr_t otk,
+                                  char **err);
+
+/**
+ * T130: сброс личности — как `pv_client_create_identity`; первый запрос —
+ * `identity.root.rotate`.
+ */
+char *pv_client_reset_identity(struct PvClient *c,
+                               uintptr_t otk,
+                               char **err);
+
 char *pv_client_ingest_bundle(struct PvClient *c,
                               const char *user,
                               const uint8_t *resp,
@@ -113,6 +141,108 @@ char *pv_client_token_request(struct PvClient *c,
                               char **err);
 
 char *pv_client_token_response(struct PvClient *c, const uint8_t *resp, uintptr_t len, char **err);
+
+/**
+ * Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
+ * `parvane.call.v2.CallSignal`. Запросы — как у `pv_client_prepare_direct`:
+ * оффер — `call.ring_sealed`, остальное — `call.signal_sealed` (анонимный канал).
+ */
+char *pv_client_prepare_call(struct PvClient *c,
+                             const char *peer,
+                             const char *signal_json,
+                             char **err);
+
+/**
+ * Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
+ * ключ — дальше слепым жетоном. true — ключ был и сброшен (отправку стоит
+ * повторить).
+ */
+bool pv_client_delivery_key_rejected(struct PvClient *c,
+                                     const char *peer);
+
+/**
+ * Отозвать своё другое устройство и выполнить последствия → JSON
+ * `{"requests":[…],"pendingKeyShares":[…],"pendingEpochs":[hex…],
+ * "epochsNeedAdmin":[hex…],"sskRotationRequired":bool,"stateKeyVersion":n|null}`.
+ * Первый запрос — запись журнала (обязателен), остальные — ротации ключей.
+ */
+char *pv_client_revoke_device(struct PvClient *c,
+                              const char *device_id,
+                              char **err);
+
+/**
+ * Отозвать ключ доступа у собеседника (FR-033; блокировка) → JSON итога как у
+ * `pv_client_revoke_device` (заполнены `requests` и `pendingKeyShares`).
+ */
+char *pv_client_revoke_contact_access(struct PvClient *c,
+                                      const char *peer,
+                                      char **err);
+
+/**
+ * Группы v2 — своим новым устройствам (T142): `devices_json` — JSON-массив id
+ * устройств. JSON-массив запросов (пустой — пересылать нечего).
+ */
+char *pv_client_share_groups_with_own_devices(struct PvClient *c,
+                                              const char *devices_json,
+                                              char **err);
+
+/**
+ * Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+ */
+char *pv_client_share_delivery_key(struct PvClient *c,
+                                   const char *peer,
+                                   char **err);
+
+/**
+ * Сменить SSK корнем (D-12): `root` — 32 байта секрета корня (из резервной
+ * копии под ключом восстановления). JSON-массив запросов.
+ */
+char *pv_client_rotate_ssk(struct PvClient *c,
+                           const uint8_t *root,
+                           uintptr_t root_len,
+                           char **err);
+
+/**
+ * Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
+ */
+bool pv_client_own_ssk_exposed(const struct PvClient *c);
+
+/**
+ * Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →
+ * JSON-массив запросов `ephemeral.subscribe` (только новые каналы).
+ */
+char *pv_client_eph_subscribe(struct PvClient *c,
+                              const char *chats_json,
+                              char **err);
+
+/**
+ * Соединение пересоздано — подписок на эфемерные каналы больше нет.
+ */
+void pv_client_eph_reset(struct PvClient *c);
+
+/**
+ * «Печатает»: `chat` — адрес собеседника либо hex группы, `action` — номер
+ * `TypingAction`. JSON-массив запросов (пустой — канала нет или чат в L2).
+ */
+char *pv_client_eph_typing(const struct PvClient *c,
+                           const char *chat,
+                           int32_t action,
+                           char **err);
+
+/**
+ * Своё присутствие → JSON-массив запросов (пустой — L2 активен в каком-то чате).
+ */
+char *pv_client_eph_presence(const struct PvClient *c,
+                             bool online,
+                             int64_t last_seen_ms,
+                             char **err);
+
+/**
+ * Событие подписки `ephemeral` → JSON-массив событий `typing`/`presence`.
+ */
+char *pv_client_eph_open(const struct PvClient *c,
+                         const uint8_t *body,
+                         uintptr_t len);
 
 char *pv_client_prepare_direct(struct PvClient *c,
                                const char *peer,
@@ -223,9 +353,36 @@ char *pv_client_log_devices(const struct PvClient *c,
                             const char *user);
 
 /**
+ * Опубликовать/сократить свой список v1-устройств (FR-058): JSON
+ * `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
+ */
+char *pv_client_legacy_devices_request(struct PvClient *c,
+                                       const char *devices_json,
+                                       char **err);
+
+/**
+ * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
+ * для v1-устройств из подписанных списков.
+ */
+char *pv_client_legacy_deliver_request(const struct PvClient *c,
+                                       const char *message_id,
+                                       const char *send_payload_json,
+                                       char **err);
+
+/**
  * Запас слепых жетонов.
  */
 uintptr_t pv_client_token_count(const struct PvClient *c);
+
+/**
+ * Пора получать суточную партию жетонов (FR-063: по расписанию, не перед тратой).
+ */
+bool pv_client_token_refill_due(const struct PvClient *c);
+
+/**
+ * Размер партии жетонов — вся суточная квота.
+ */
+uintptr_t pv_client_token_batch_size(const struct PvClient *c);
 
 /**
  * Включить/выключить L2 в личном чате: запросы как у `pv_client_prepare_direct`
@@ -330,6 +487,12 @@ char *pv_state_mark_sent(struct PvStateSession *s,
                          char **err);
 
 /**
+ * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+ * `parvane.state.v1.CallRecord` → JSON-массив base64 тел `state.append`.
+ */
+char *pv_state_call_set(struct PvStateSession *s, const char *record_json, char **err);
+
+/**
  * Уже отправленные этим устройством отложенные (JSON-массив hex; хранит хост).
  */
 char *pv_state_sent_guard(const struct PvStateSession *s);
@@ -390,6 +553,29 @@ int64_t pv_run_conformance_vectors(const char *suite,
  */
 struct PvBytes pv_from_base64(const char *s,
                               char **err);
+
+/**
+ * Материал гранта линковки (строка JSON) + копия корня под ключом
+ * восстановления (поле `rb`) → новая строка материала. NULL — ошибка.
+ */
+char *pv_grant_with_root_backup(const char *material,
+                                const uint8_t *backup,
+                                uintptr_t len);
+
+/**
+ * Копия корня из материала гранта (пустой буфер — гранта без копии).
+ */
+struct PvBytes pv_grant_root_backup(const char *material);
+
+/**
+ * T130: корень (32 байта) из копии под ключом восстановления на устройстве
+ * без журнала. Пустой буфер — ошибка (в `err`: неверный ключ/копия).
+ */
+struct PvBytes pv_import_root_backup_for(const char *user,
+                                         const uint8_t *blob,
+                                         uintptr_t len,
+                                         const char *recovery_key,
+                                         char **err);
 
 /**
  * Новый ключ восстановления (≥ 128 бит) — строка для показа пользователю

@@ -218,6 +218,46 @@ pub unsafe extern "C" fn pv_client_ingest_log(c: *mut PvClient, user: *const c_c
     })
 }
 
+/// KEY-1 v2: принять смену корня собеседника (после предупреждения).
+/// true — ожидавшая смена принята.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_accept_root_change(c: *mut PvClient, user: *const c_char, err: *mut *mut c_char) -> bool {
+    guard(err, false, || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        c.accept_root_change(str_arg(user).ok_or_else(bad_arg)?)
+    })
+}
+
+/// T130: восстановление на новом устройстве по корню (32 байта) и ответу
+/// `identity.device.log_sync` с версии 0 → JSON-массив запросов.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_recover_with_root(
+    c: *mut PvClient,
+    root: *const u8,
+    root_len: usize,
+    log_resp: *const u8,
+    log_len: usize,
+    otk: usize,
+    err: *mut *mut c_char,
+) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.recover_with_root(bytes_arg(root, root_len), bytes_arg(log_resp, log_len), otk);
+        r.map(cstring)
+    })
+}
+
+/// T130: сброс личности — как `pv_client_create_identity`; первый запрос —
+/// `identity.root.rotate`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_reset_identity(c: *mut PvClient, otk: usize, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.reset_identity(otk);
+        r.map(cstring)
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_ingest_bundle(c: *mut PvClient, user: *const c_char, resp: *const u8, len: usize, err: *mut *mut c_char) -> *mut c_char {
     guard(err, ptr::null_mut(), || {
@@ -243,6 +283,143 @@ pub unsafe extern "C" fn pv_client_token_response(c: *mut PvClient, resp: *const
         let r: Result<String, String> = c.token_response(bytes_arg(resp, len)).map(|n| n.to_string());
         r.map(cstring)
     })
+}
+
+/// Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
+/// `parvane.call.v2.CallSignal`. Запросы — как у `pv_client_prepare_direct`:
+/// оффер — `call.ring_sealed`, остальное — `call.signal_sealed` (анонимный канал).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_prepare_call(c: *mut PvClient, peer: *const c_char, signal_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.prepare_call(str_arg(peer).ok_or_else(bad_arg)?, str_arg(signal_json).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
+/// ключ — дальше слепым жетоном. true — ключ был и сброшен (отправку стоит
+/// повторить).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_delivery_key_rejected(c: *mut PvClient, peer: *const c_char) -> bool {
+    match (c.as_mut(), str_arg(peer)) {
+        (Some(c), Some(p)) => c.inner.delivery_key_rejected(p),
+        _ => false,
+    }
+}
+
+// ── отзыв своего устройства (T128; D-11, D-12, D-16) ────────────────────────
+
+/// Отозвать своё другое устройство и выполнить последствия → JSON
+/// `{"requests":[…],"pendingKeyShares":[…],"pendingEpochs":[hex…],
+/// "epochsNeedAdmin":[hex…],"sskRotationRequired":bool,"stateKeyVersion":n|null}`.
+/// Первый запрос — запись журнала (обязателен), остальные — ротации ключей.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_revoke_device(c: *mut PvClient, device_id: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.revoke_device(str_arg(device_id).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Отозвать ключ доступа у собеседника (FR-033; блокировка) → JSON итога как у
+/// `pv_client_revoke_device` (заполнены `requests` и `pendingKeyShares`).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_revoke_contact_access(c: *mut PvClient, peer: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.revoke_contact_access(str_arg(peer).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Группы v2 — своим новым устройствам (T142): `devices_json` — JSON-массив id
+/// устройств. JSON-массив запросов (пустой — пересылать нечего).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_share_groups_with_own_devices(c: *mut PvClient, devices_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.share_groups_with_own_devices(str_arg(devices_json).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_share_delivery_key(c: *mut PvClient, peer: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.share_delivery_key(str_arg(peer).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Сменить SSK корнем (D-12): `root` — 32 байта секрета корня (из резервной
+/// копии под ключом восстановления). JSON-массив запросов.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_rotate_ssk(c: *mut PvClient, root: *const u8, root_len: usize, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.rotate_ssk(bytes_arg(root, root_len));
+        r.map(cstring)
+    })
+}
+
+/// Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_own_ssk_exposed(c: *const PvClient) -> bool {
+    c.as_ref().map(|c| c.inner.own_ssk_exposed()).unwrap_or(false)
+}
+
+// ── эфемерные каналы: «печатает» и присутствие (T127) ───────────────────────
+
+/// Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →
+/// JSON-массив запросов `ephemeral.subscribe` (только новые каналы).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_eph_subscribe(c: *mut PvClient, chats_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.eph_subscribe(str_arg(chats_json).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Соединение пересоздано — подписок на эфемерные каналы больше нет.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_eph_reset(c: *mut PvClient) {
+    if let Some(c) = c.as_mut() {
+        c.inner.eph_reset();
+    }
+}
+
+/// «Печатает»: `chat` — адрес собеседника либо hex группы, `action` — номер
+/// `TypingAction`. JSON-массив запросов (пустой — канала нет или чат в L2).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_eph_typing(c: *const PvClient, chat: *const c_char, action: i32, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.eph_typing(str_arg(chat).ok_or_else(bad_arg)?, action);
+        r.map(cstring)
+    })
+}
+
+/// Своё присутствие → JSON-массив запросов (пустой — L2 активен в каком-то чате).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_eph_presence(c: *const PvClient, online: bool, last_seen_ms: i64, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.eph_presence(online, last_seen_ms);
+        r.map(cstring)
+    })
+}
+
+/// Событие подписки `ephemeral` → JSON-массив событий `typing`/`presence`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_eph_open(c: *const PvClient, body: *const u8, len: usize) -> *mut c_char {
+    let Some(c) = c.as_ref() else { return ptr::null_mut() };
+    let body = if body.is_null() { &[][..] } else { std::slice::from_raw_parts(body, len) };
+    cstring(c.inner.eph_open(body))
 }
 
 #[no_mangle]
@@ -443,10 +620,50 @@ pub unsafe extern "C" fn pv_client_log_devices(c: *const PvClient, user: *const 
     }
 }
 
+/// Опубликовать/сократить свой список v1-устройств (FR-058): JSON
+/// `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_legacy_devices_request(c: *mut PvClient, devices_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.legacy_devices_request(str_arg(devices_json).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
+/// Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
+/// для v1-устройств из подписанных списков.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_legacy_deliver_request(
+    c: *const PvClient,
+    message_id: *const c_char,
+    send_payload_json: *const c_char,
+    err: *mut *mut c_char,
+) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> =
+            c.legacy_deliver_request(str_arg(message_id).ok_or_else(bad_arg)?, str_arg(send_payload_json).ok_or_else(bad_arg)?);
+        r.map(cstring)
+    })
+}
+
 /// Запас слепых жетонов.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_token_count(c: *const PvClient) -> usize {
     c.as_ref().map(|c| c.inner.token_count()).unwrap_or(0)
+}
+
+/// Пора получать суточную партию жетонов (FR-063: по расписанию, не перед тратой).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_token_refill_due(c: *const PvClient) -> bool {
+    c.as_ref().map(|c| c.inner.token_refill_due()).unwrap_or(false)
+}
+
+/// Размер партии жетонов — вся суточная квота.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_token_batch_size(c: *const PvClient) -> usize {
+    c.as_ref().map(|c| c.inner.token_batch_size()).unwrap_or(0)
 }
 
 // ── режим «усиленная приватность» (L2, T079) ────────────────────────────────
@@ -607,6 +824,16 @@ pub unsafe extern "C" fn pv_state_mark_sent(s: *mut PvStateSession, op_id_b64: *
     })
 }
 
+/// Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+/// `parvane.state.v1.CallRecord` → JSON-массив base64 тел `state.append`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_state_call_set(s: *mut PvStateSession, record_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let s = s.as_mut().ok_or_else(bad_arg)?;
+        s.inner.call_set(str_arg(record_json).ok_or_else(bad_arg)?).map(cstring)
+    })
+}
+
 /// Уже отправленные этим устройством отложенные (JSON-массив hex; хранит хост).
 #[no_mangle]
 pub unsafe extern "C" fn pv_state_sent_guard(s: *const PvStateSession) -> *mut c_char {
@@ -712,6 +939,37 @@ pub unsafe extern "C" fn pv_from_base64(s: *const c_char, err: *mut *mut c_char)
 }
 
 // ── C1-06: резервная копия корня под ключом восстановления ────────────────────
+
+/// Материал гранта линковки (строка JSON) + копия корня под ключом
+/// восстановления (поле `rb`) → новая строка материала. NULL — ошибка.
+#[no_mangle]
+pub unsafe extern "C" fn pv_grant_with_root_backup(material: *const c_char, backup: *const u8, len: usize) -> *mut c_char {
+    let Some(m) = str_arg(material) else { return ptr::null_mut() };
+    match host::grant_with_root_backup(m.as_bytes(), bytes_arg(backup, len)) {
+        Ok(v) => cstring(String::from_utf8_lossy(&v).into_owned()),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Копия корня из материала гранта (пустой буфер — гранта без копии).
+#[no_mangle]
+pub unsafe extern "C" fn pv_grant_root_backup(material: *const c_char) -> PvBytes {
+    match str_arg(material).and_then(|m| host::grant_root_backup(m.as_bytes())) {
+        Some(v) => PvBytes::from_vec(v),
+        None => PvBytes::empty(),
+    }
+}
+
+/// T130: корень (32 байта) из копии под ключом восстановления на устройстве
+/// без журнала. Пустой буфер — ошибка (в `err`: неверный ключ/копия).
+#[no_mangle]
+pub unsafe extern "C" fn pv_import_root_backup_for(user: *const c_char, blob: *const u8, len: usize, recovery_key: *const c_char, err: *mut *mut c_char) -> PvBytes {
+    guard(err, PvBytes::empty(), || {
+        let user = str_arg(user).ok_or_else(bad_arg)?;
+        let key = str_arg(recovery_key).ok_or_else(bad_arg)?;
+        host::import_root_backup_for(user, bytes_arg(blob, len), key).map(|r| PvBytes::from_vec(r.to_vec()))
+    })
+}
 
 /// Новый ключ восстановления (≥ 128 бит) — строка для показа пользователю
 /// (освобождать `parvane_protocol_string_free`).
@@ -840,6 +1098,19 @@ mod tests {
             pv_client_free(c);
             pv_client_free(c2);
         }
+    }
+
+    #[test]
+    fn grant_carries_root_backup() {
+        // T128: копия корня под ключом восстановления едет с грантом линковки (`rb`).
+        let material = br#"{"ssk":"00","log":"","dk":"00","gen":1}"#;
+        assert!(host::grant_root_backup(material).is_none());
+        let with = host::grant_with_root_backup(material, &[1, 2, 3]).unwrap();
+        assert_eq!(host::grant_root_backup(&with).unwrap(), vec![1, 2, 3]);
+        let text = String::from_utf8(with).unwrap();
+        assert!(text.contains(r#""ssk":"00""#) && text.contains(r#""gen":1"#), "прежние поля гранта целы: {text}");
+        assert!(host::grant_with_root_backup(b"not json", &[1]).is_err());
+        assert!(host::grant_with_root_backup(material, &[]).is_err());
     }
 
     #[test]
