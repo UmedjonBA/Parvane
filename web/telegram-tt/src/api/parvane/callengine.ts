@@ -74,6 +74,8 @@ export class CallEngine {
 
   private remoteReady = false;
 
+  private isApplyingAnswer = false;
+
   private disconnectTimer?: number;
 
   private ringTimer?: number;
@@ -228,13 +230,20 @@ export class CallEngine {
         }, this.cb.getRingTimeoutMs?.() ?? RING_TIMEOUT_MS);
         break;
       case 'answer':
-        if (!this.pc || !this.isCaller || this.remoteReady
+        if (!this.pc || !this.isCaller || this.remoteReady || this.isApplyingAnswer
           || signal.call_id !== this.callId || from !== this.peer) return;
         if (!isAuthenticated && !this.verifySdp(signal.sdp, signal.sig)) {
           this.failSecurity('hangup');
           return;
         }
-        await this.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
+        // Ответ может прийти дважды (v2 и v1-путём, LEGACY-1) — второй, пока
+        // применяется первый, отбрасывается
+        this.isApplyingAnswer = true;
+        try {
+          await this.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
+        } finally {
+          this.isApplyingAnswer = false;
+        }
         this.remoteReady = true;
         this.flushCandidates();
         this.cb.onState('connecting');

@@ -83,6 +83,8 @@
 "ParvaneMediaUnverified" = "Не удалось проверить целостность файла — он открылся без проверки";
 "ParvaneUndecryptable" = "🔒 Не удалось расшифровать сообщение";
 "ParvaneCallNoDevice" = "Нет доступа к микрофону или камере";
+"ParvaneCallNotContact" = "Позвонить можно после того, как собеседник ответит на ваше сообщение";
+"ParvaneCallNotSent" = "Не удалось позвонить. Попробуйте позже";
 "ParvaneCallTooManyMembers" = "В групповом звонке не больше {count} участников";
 "ParvaneGroupCallIncoming" = "приглашает в групповой звонок...";
 "ParvaneGroupCallIncomingNamed" = "{group}: групповой звонок";

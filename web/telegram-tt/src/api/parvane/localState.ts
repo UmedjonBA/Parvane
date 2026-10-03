@@ -69,8 +69,45 @@ export function createLocalState(deps: LocalStateDependencies) {
   let scheduledGate: ((opId: string) => Promise<boolean>) | undefined;
   let scheduledSent: ((opId: string) => void) | undefined;
 
+  // Виды, правку которых журнал ещё не принял: переживают перезагрузку, чтобы
+  // подключение журнала сначала дослало их, а не затёрло снимком с сервера
+  // (блокировка, сделанная за секунду до reload или до подъёма v2, терялась)
+  let dirtyRevision = 0;
+
+  function loadDirtyKinds(): LocalStateKind[] {
+    try {
+      const kinds = JSON.parse(localStorage.getItem(storageKey('statedirty')) || '[]') as LocalStateKind[];
+      return Array.isArray(kinds) ? kinds : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function markDirty(kind: LocalStateKind) {
+    dirtyRevision += 1;
+    const kinds = loadDirtyKinds();
+    if (kinds.includes(kind)) return;
+    try {
+      localStorage.setItem(storageKey('statedirty'), JSON.stringify([...kinds, kind]));
+    } catch {
+      // Квота/приватный режим: правка уйдёт обычным путём, пока вкладка жива
+    }
+  }
+
+  /** Журнал принял всё, что было несохранённым на момент `revision`. */
+  function clearDirtyKinds(revision: number) {
+    if (revision !== dirtyRevision) return;
+    try {
+      localStorage.removeItem(storageKey('statedirty'));
+    } catch {
+      // См. markDirty
+    }
+  }
+
   function notifyChange(kind: LocalStateKind) {
-    if (!applyingJournal) changeListener?.(kind);
+    if (applyingJournal) return;
+    markDirty(kind);
+    changeListener?.(kind);
   }
 
   function applyFromJournal(fn: () => void) {
@@ -251,6 +288,31 @@ export function createLocalState(deps: LocalStateDependencies) {
   function markChatDeleted(address: string) {
     const list = loadDeletedChats();
     if (!list.includes(address)) localStorage.setItem(storageKey('deletedchats'), JSON.stringify([...list, address]));
+  }
+
+  // Граница очистки чата «у себя» (T145): адрес → время (мс), не позже
+  // которого сообщения скрыты. В v2 она едет журналом личного состояния на
+  // остальные свои устройства (в v1 — нотис `cleared` с id сообщений)
+  function loadClearedUntil(): Record<string, number> {
+    try {
+      const map = JSON.parse(localStorage.getItem(storageKey('cleareduntil')) || '{}') as Record<string, number>;
+      return map && typeof map === 'object' ? map : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** true — граница выросла (раньше была меньше либо не было). */
+  function saveClearedUntil(address: string, untilMs: number) {
+    const map = loadClearedUntil();
+    if ((map[address] || 0) >= untilMs) return false;
+    map[address] = untilMs;
+    try {
+      localStorage.setItem(storageKey('cleareduntil'), JSON.stringify(map));
+    } catch {
+      // Квота/приватный режим: граница живёт до перезагрузки
+    }
+    return true;
   }
 
   function unmarkChatDeleted(address: string) {
@@ -862,6 +924,9 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   return {
     applyFromJournal,
+    loadDirtyKinds,
+    getDirtyRevision: () => dirtyRevision,
+    clearDirtyKinds,
     applyJournalScheduled,
     listJournalScheduled,
     replaceDrafts,
@@ -896,6 +961,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadRepairAttempts,
     markChatDeleted,
     unmarkChatDeleted,
+    loadClearedUntil,
+    saveClearedUntil,
     removeOwnJournalEntries,
     flushHistoryNow: flushHistoryQueue,
     loadDrafts,

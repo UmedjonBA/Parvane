@@ -138,6 +138,9 @@ const MS_IN_SECOND = 1000;
 
 type ActionResponse = { ok?: boolean; error?: string; error_code?: string; version?: number };
 
+// Предел описания группы в символах (как GROUP_ABOUT_MAX у шарда messenger)
+const GROUP_ABOUT_MAX_CHARS = 255;
+
 export function createGroupController(deps: GroupDependencies) {
   const inviteLinkByGroupId = new Map<string, InviteLinkRecord>();
   // Незавершённые запросы создания основной ссылки — по одному на группу
@@ -473,13 +476,7 @@ export function createGroupController(deps: GroupDependencies) {
     const groupId = store.getAddressForId(chat.id);
     if (!groupId) return undefined;
     const v2 = v2Of(groupId);
-    if (v2) {
-      const current = v2.groupInfo(groupId);
-      const isDone = await v2.changeGroup(groupId, {
-        set_info: { name: title, about: current?.about || '', avatar_file_id: current?.avatar || '' },
-      });
-      return isDone || undefined;
-    }
+    if (v2) return (await v2.setGroupInfo(groupId, { name: title })) || undefined;
     const response = await requestAction(TOPIC_GROUP_RENAME, { group_id: groupId, name: title });
     if (!response.ok) return undefined;
     const info = await refresh(groupId);
@@ -497,12 +494,15 @@ export function createGroupController(deps: GroupDependencies) {
     if (v2) {
       const current = v2.groupInfo(groupId);
       if (!current) return false;
-      return v2.changeGroup(groupId, {
-        set_info: {
-          name: current.name,
-          about: patch.about ?? current.about ?? '',
-          avatar_file_id: patch.clearAvatar ? '' : (patch.avatarFileId || current.avatar || ''),
-        },
+      // Схема v2 меряет описание байтами (1024) — предел в символах, как у
+      // v1-шарда, держит клиент, чтобы поведение экрана было одним
+      if (patch.about !== undefined && [...patch.about].length > GROUP_ABOUT_MAX_CHARS) {
+        deps.log(`описание группы длиннее ${GROUP_ABOUT_MAX_CHARS} символов — отклонено`);
+        return false;
+      }
+      return v2.setGroupInfo(groupId, {
+        about: patch.about,
+        avatarFileId: patch.clearAvatar ? '' : (patch.avatarFileId || undefined),
       });
     }
     const response = await requestAction(TOPIC_GROUP_SETINFO, {
@@ -1023,8 +1023,15 @@ export function createGroupController(deps: GroupDependencies) {
       if (isRevoked) return { invites: [] };
       const primary = await ensureV2Primary(v2, groupId);
       const links = await v2.listInvites(groupId);
+      // Заявки сервер отдаёт общим списком группы — счётчик показываем на
+      // ссылках с одобрением
+      const hasApproval = links.some((record) => record.isRequestNeeded);
+      const requested = hasApproval ? (await v2.listJoinRequests(groupId))?.length : undefined;
       return {
-        invites: links.map((record) => buildV2ExportedInvite(record, record.url === primary?.url)),
+        invites: links.map((record) => ({
+          ...buildV2ExportedInvite(record, record.url === primary?.url),
+          requested: (record.isRequestNeeded && requested) || undefined,
+        })),
       };
     }
     let links: WireInviteLink[] | undefined;
@@ -1143,7 +1150,20 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(peer.id);
     if (!groupId) return undefined;
-    if (!isRequested || v2Of(groupId)) return { importers: [] };
+    if (!isRequested) return { importers: [] };
+    const v2 = v2Of(groupId);
+    if (v2) {
+      // Сервер v2 не сообщает, по какой ссылке пришла заявка, — список общий
+      const pending = await v2.listJoinRequests(groupId);
+      if (!pending) return undefined;
+      return {
+        importers: pending.map((request) => {
+          const user = store.buildApiUser(request.user);
+          deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
+          return { userId: user.id, date: request.date, isRequested: true as const };
+        }),
+      };
+    }
     const requests = await listJoinRequests(groupId).catch(() => undefined);
     if (!requests) return undefined;
     const token = link ? inviteTokenFromLink(link) : undefined;
@@ -1164,6 +1184,8 @@ export function createGroupController(deps: GroupDependencies) {
     const groupId = store.getAddressForId(peer.id);
     const member = store.getAddressForId(user.id);
     if (!groupId || !member) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) return (await v2.decideJoinRequest(groupId, member, isApproved)) ? true : undefined;
     const response = await requestAction(TOPIC_GROUP_REQUEST_DECIDE, {
       group_id: groupId, member, approve: isApproved,
     });
@@ -1179,6 +1201,15 @@ export function createGroupController(deps: GroupDependencies) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(peer.id);
     if (!groupId) return undefined;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      const pending = await v2.listJoinRequests(groupId);
+      if (!pending) return undefined;
+      for (const request of pending) {
+        await v2.decideJoinRequest(groupId, request.user, isApproved);
+      }
+      return true;
+    }
     const requests = await listJoinRequests(groupId).catch(() => undefined);
     if (!requests) return undefined;
     const token = link ? inviteTokenFromLink(link) : undefined;
@@ -1252,6 +1283,7 @@ export function createGroupController(deps: GroupDependencies) {
     }
     const invite: ApiChatInviteInfo = {
       title: check.name,
+      about: check.about,
       participantsCount: check.membersCount,
       isRequestNeeded: check.isRequestNeeded ? true : undefined,
       isChannel: check.isChannel ? true : undefined,

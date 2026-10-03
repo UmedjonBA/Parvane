@@ -41,9 +41,17 @@ function savePendingInvite(invite: string) {
 // Ссылка v2 открыта в адресной строке (сервер отдаёт приложение и для /join/…):
 // ссылка целиком ждёт синка, адрес приложения — обратно на корень
 function rememberV2InviteFromLocation() {
-  const { pathname, hash, host } = window.location;
-  if (!V2_INVITE_PATH_REGEX.test(pathname) || !V2_INVITE_SECRET_REGEX.test(hash)) return;
-  savePendingInvite(`https://${host}${pathname}${hash}`);
+  const {
+    pathname, hash, host, search,
+  } = window.location;
+  if (!V2_INVITE_SECRET_REGEX.test(hash)) return;
+  // Сервер переводит `/join/<link_id>` на `/?join=<link_id>` (приложение собрано
+  // с относительными путями ассетов и из вложенного пути не загружается)
+  const fromQuery = new URLSearchParams(search).get('join');
+  const path = V2_INVITE_PATH_REGEX.test(pathname) ? pathname
+    : (fromQuery && V2_INVITE_PATH_REGEX.test(`/join/${fromQuery}`) ? `/join/${fromQuery}` : undefined);
+  if (!path) return;
+  savePendingInvite(`https://${host}${path}${hash}`);
   initialLocationHash = '';
   window.history.replaceState(window.history.state, '', '/');
 }

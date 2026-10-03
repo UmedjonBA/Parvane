@@ -89,6 +89,7 @@ export default defineConfig(({ mode }): UserConfig => {
   const telegramApiHash = env.TELEGRAM_API_HASH || '';
   const workerReportBundles: ReportOutputBundle[] = [];
   const plugins: PluginOption[] = [
+    v2InviteRedirectPlugin(),
     buildGitInfoPlugin({
       appEnv,
       head: HEAD,
@@ -299,6 +300,38 @@ function gatewayOrigins(appEnv: string) {
     ]
     : [];
   return [...explicit, ...dev].join(' ');
+}
+
+// Ссылка-приглашение v2 `https://<домен>/join/<link_id>#<секрет>`: приложение
+// собрано с относительными путями ассетов и из `/join/…` не загрузится, поэтому
+// сервер переводит её на корень — `/?join=<link_id>`; фрагмент с секретом
+// браузер переносит сам, серверу он не уходит. То же правило — в Caddyfile прода.
+const V2_INVITE_PATH = /^\/join\/([A-Za-z0-9_-]{43})$/;
+
+function v2InviteRedirectPlugin(): Plugin {
+  type Middlewares = { use: (fn: (req: { url?: string }, res: {
+    statusCode: number; setHeader: (name: string, value: string) => void; end: () => void;
+  }, next: () => void) => void) => void; };
+  const install = (middlewares: Middlewares) => middlewares.use((req, res, next) => {
+    const linkId = (req.url || '').split('?')[0].match(V2_INVITE_PATH)?.[1];
+    if (!linkId) {
+      next();
+      return;
+    }
+    res.statusCode = 302;
+    res.setHeader('Location', `/?join=${linkId}`);
+    res.end();
+  });
+  return {
+    name: 'parvane-v2-invite-redirect',
+    // Тело в скобках: возвращённую функцию vite счёл бы пост-хуком и вызвал без аргументов
+    configureServer: (server) => {
+      install(server.middlewares);
+    },
+    configurePreviewServer: (server) => {
+      install(server.middlewares);
+    },
+  };
 }
 
 function buildCsp(appEnv: string) {

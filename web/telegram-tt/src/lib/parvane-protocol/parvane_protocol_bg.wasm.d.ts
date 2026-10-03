@@ -52,9 +52,11 @@ export const pvclient_groupIngest: (a: number, b: number, c: number, d: number, 
 export const pvclient_groupInviteCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const pvclient_groupJoin: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupList: (a: number, b: number) => void;
+export const pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const pvclient_groupRotateEpoch: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvclient_groupVersion: (a: number, b: number, c: number, d: number) => void;
+export const pvclient_hasPeerDeliveryKey: (a: number, b: number, c: number) => number;
 export const pvclient_hasRoot: (a: number) => number;
 export const pvclient_hasStateKey: (a: number) => number;
 export const pvclient_importLibolmAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -82,6 +84,7 @@ export const pvclient_prepareCall: (a: number, b: number, c: number, d: number, 
 export const pvclient_prepareDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const pvclient_prepareGroup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const pvclient_presenceAllowed: (a: number) => number;
+export const pvclient_readers: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_recoverWithRoot: (a: number, b: number, c: number, d: number, e: number) => void;
 export const pvclient_resetIdentity: (a: number, b: number, c: number) => void;
 export const pvclient_revokeContactAccess: (a: number, b: number, c: number, d: number) => void;
@@ -130,6 +133,7 @@ export const pvolmsession_pickle: (a: number, b: number, c: number, d: number) =
 export const pvolmsession_sessionId: (a: number, b: number) => void;
 export const pvolmsession_unpickle: (a: number, b: number, c: number, d: number, e: number) => void;
 export const pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
+export const pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
 export const pvstate_claimDue: (a: number, b: number, c: number) => void;
 export const pvstate_diff: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvstate_ingest: (a: number, b: number, c: number, d: number) => void;

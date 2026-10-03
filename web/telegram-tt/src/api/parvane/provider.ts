@@ -34,7 +34,7 @@ import {
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { DEFAULT_APP_CONFIG } from '../../limits';
-import { createV2Controller, isV2GroupAddress } from './v2/controller';
+import { createV2Controller, isV2GroupAddress, type V2DeviceBackup } from './v2/controller';
 import { isV2Enabled } from './v2/engine';
 import { collectV2History, parseV2History } from './v2/linkHistory';
 import { createStateJournal } from './v2/stateJournal';
@@ -50,7 +50,7 @@ import {
 } from './authStorage';
 import { createCallController } from './calls';
 import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
-import { E2eEngine } from './e2e';
+import { E2eEngine, fingerprintOf } from './e2e';
 import { getGatewayUrl } from './gateway';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
@@ -141,6 +141,7 @@ let startupCredentials = consumeStartupCredentials();
 // Активность для «оставаться в системе»: отметка обновляется, пока вкладка
 // видима (раз в минуту), при возвращении на вкладку и при уходе со страницы
 const SESSION_ACTIVITY_INTERVAL_MS = 60 * 1000;
+const MS_IN_SECOND = 1000;
 if (typeof window !== 'undefined') {
   const touchIfVisible = () => {
     if (document.visibilityState === 'visible' && store.self) touchSessionActivity();
@@ -183,10 +184,42 @@ function readStrangersAllowed() {
   }
 }
 
+// FR-040 (T137): «кто может мне звонить» и «кто видит, что я в сети». Значения
+// хранит сервер (identity.privacy.*), соблюдает клиент владельца: звонок при
+// «никто» отклоняется без звонка, присутствие при «никто» не публикуется
+function callsPolicyKey(user: string) {
+  return `parvane:calls_from:${user}`;
+}
+
+function presencePolicyKey(user: string) {
+  return `parvane:presence_visibility:${user}`;
+}
+
+function readAudience(key: string): 'anyone' | 'nobody' {
+  try {
+    return localStorage.getItem(key) === 'nobody' ? 'nobody' : 'anyone';
+  } catch {
+    return 'anyone';
+  }
+}
+
+function writeAudience(key: string, value: 'anyone' | 'nobody') {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // приватный режим — настройка не переживёт reload
+  }
+}
+
 // Приватность v2 целиком (T079): identity.privacy.set перезаписывает все поля
 function pushV2Privacy() {
   if (!v2Controller.isReady()) return;
-  void v2Controller.setPrivacy({ groupAdd: readGroupAddPolicy(), strangers: readStrangersAllowed() })
+  void v2Controller.setPrivacy({
+    groupAdd: readGroupAddPolicy(),
+    strangers: readStrangersAllowed(),
+    callsFrom: readAudience(callsPolicyKey(store.self)),
+    presence: readAudience(presencePolicyKey(store.self)),
+  })
     .catch((err: unknown) => logDebug(`v2: приватность не сохранена: ${String(err)}`));
 }
 
@@ -200,6 +233,8 @@ async function refreshV2Privacy() {
     const isGroupAddChanged = remote.groupAdd !== readGroupAddPolicy();
     localStorage.setItem(groupAddPolicyKey(store.self), remote.groupAdd);
     localStorage.setItem(strangersPolicyKey(store.self), remote.strangers ? 'anyone' : 'nobody');
+    writeAudience(callsPolicyKey(store.self), remote.callsFrom);
+    writeAudience(presencePolicyKey(store.self), remote.presence);
     // v1-messenger читает `group_add` из блоба настроек — держим его в ногу
     if (isGroupAddChanged) pushNotifySettings();
   } catch (err) {
@@ -333,8 +368,22 @@ const stateJournal = createStateJournal({
   sendUpdate,
   // callController создаётся ниже; вызывается только после подключения журнала
   applyCallRecords: (records) => callController.applyCallRecords(records),
+  applyChatCleared: (address, untilMs) => applyChatCleared(address, untilMs),
   log: logDebug,
 });
+
+// «Удалить чат у себя» на другом своём устройстве (T145): граница очистки
+// пришла журналом личного состояния — скрываем сообщения чата не позже неё
+function applyChatCleared(address: string, untilMs: number) {
+  const chatId = store.getIdForAddress(address, address.includes('@') ? 'user' : 'group');
+  const uuids = store.getMessages(chatId)
+    .filter((message) => message.date * MS_IN_SECOND <= untilMs)
+    .map((message) => store.getUuidForMessage(chatId, message.id))
+    .filter((uuid): uuid is string => Boolean(uuid));
+  if (!uuids.length) return;
+  logDebug(`v2: чат ${address} очищен на другом устройстве — скрыто ${uuids.length} сообщений`);
+  void syncController.forgetMessages(uuids);
+}
 
 const callController = createCallController({
   getConnection: () => connection,
@@ -342,11 +391,15 @@ const callController = createCallController({
   getStore: () => store,
   getToken: () => token,
   isIdentityReady: () => isCallIdentityReady,
-  isBlocked: localState.isBlocked,
+  // «Звонки — никто» (FR-040): входящий отклоняется так же, как от заблокированного
+  isBlocked: (address) => localState.isBlocked(address) || readAudience(callsPolicyKey(store.self)) === 'nobody',
   sendUpdate,
   pushReadState: (chatId) => syncController.pushReadState(chatId),
   // v2Controller создаётся ниже; вызывается только во время звонка
-  sendV2Signal: (to, signal) => (isV2Enabled() ? v2Controller.trySendCall(to, signal) : Promise.resolve(false)),
+  sendV2Signal: (to, signal, groupCallId) => (
+    isV2Enabled() ? v2Controller.trySendCall(to, signal, groupCallId) : Promise.resolve(false)
+  ),
+  hasLegacyDevices: (peer) => isV2Enabled() && v2Controller.legacyDevices(peer).size > 0,
   recordV2Call: (record) => stateJournal.recordCall(record),
   log: logDebug,
 });
@@ -453,10 +506,12 @@ const v2Controller = createV2Controller({
   onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
   onStateReady: (host, rekey) => {
     void refreshV2Privacy();
+    // Устройство в журнале v2 — его v1-бандл, отвергнутый при входе, пора дослать (T146)
+    if (connection && token) void connectionController.replenishDevicePrekeys(connection, token);
     return stateJournal.attach(host, rekey);
   },
   onL2Changed: (address) => applyL2Change(address),
-  onCallSignal: (from, signal) => callController.handleV2Signal(from, signal),
+  onCallSignal: (from, signal, groupCallId) => callController.handleV2Signal(from, signal, groupCallId),
   // KEY-1 v2: корень личности собеседника сменился — то же служебное
   // сообщение, что при смене ключа устройства в v1
   onPeerRootChanged: (user) => syncController.announceKeyChange(user),
@@ -487,6 +542,9 @@ const v2Controller = createV2Controller({
 
 messageController = createMessageController({
   v2: v2Controller,
+  recordChatCleared: (address, untilMs) => {
+    if (isV2Enabled()) stateJournal.recordChatCleared(address, untilMs);
+  },
   getConnection: () => connection,
   getE2e: () => e2e,
   awaitE2e,
@@ -509,6 +567,7 @@ messageController = createMessageController({
 });
 
 const connectionController = createConnectionController({
+  isPresenceHidden: () => readAudience(presencePolicyKey(store.self)) === 'nobody',
   calls: callController,
   getConnection: () => connection,
   setConnection: (nextConnection) => { connection = nextConnection; },
@@ -1075,7 +1134,10 @@ async function pollHistoryLinkGrant(generation: number) {
 async function applyLinkedV2History(rows: WireStoredMessage[], owner: string, attempt = 0) {
   if (!rows.length || store.self !== owner) return;
   const waiting: WireStoredMessage[] = [];
+  const clearedUntil = localState.loadClearedUntil();
   for (const stored of rows) {
+    // Чат очищен «у себя» позже этой строки — привезённая история её не воскрешает
+    if (stored.ts * MS_IN_SECOND <= (clearedUntil[store.resolveChatAddress(stored)] || 0)) continue;
     if (isV2GroupAddress(stored.to) && !store.isGroupAddress(stored.to)) {
       waiting.push(stored);
     } else {
@@ -2249,19 +2311,42 @@ const methods = {
   async parvaneExportE2eKeys({ password }: { password: string }) {
     if (!e2e) return undefined;
     await e2e.flushStorage();
-    return { payload: await e2e.exportEncrypted(password) };
+    // Копия несёт и устройство v2 с историей v2-эпохи: сервер v2 не отдаст её
+    // заново, а сообщения запечатаны под устройства журнала (T152)
+    await localState.flushHistoryNow();
+    const v2 = isV2Enabled() ? await v2Controller.exportBackup() : undefined;
+    const v2History = v2 ? collectV2History(
+      await localState.loadHistoryRecords(), await localState.readOwnJournal(),
+    ) : undefined;
+    return { payload: await e2e.exportEncrypted(password, v2 ? { v2, v2History } : undefined) };
   },
 
   async parvaneImportE2eKeys({ payload, password }: { payload: string; password: string }) {
     if (!store.self) return undefined;
     try {
-      const imported = await E2eEngine.importEncrypted(store.self, payload, password);
+      let extra: { v2?: V2DeviceBackup; v2History?: unknown } | undefined;
+      const imported = await E2eEngine.importEncrypted(store.self, payload, password, (value) => {
+        extra = value;
+      });
       setE2eEngine(imported);
+      if (extra?.v2 && isV2Enabled()) {
+        // Этот браузер становится тем же устройством v2 (со следующего входа —
+        // JWT выпустят под device_id из копии)
+        v2Controller.reset();
+        await v2Controller.importBackup(extra.v2);
+        // Следующий вход просит JWT под device_id из копии — иначе сессия v2
+        // представилась бы серверу другим устройством
+        connectionController.rememberDeviceId(store.self, imported.deviceId);
+      }
       // Полный ресинк с восстановленным состоянием: старая sealed-история
       // расшифруется из привезённого decCache
       syncController.reset();
       resetPackRegistries();
       sendUpdate({ '@type': 'requestSync' });
+      if (extra?.v2History && isV2Enabled()) {
+        await applyLinkedV2History(parseV2History(JSON.stringify({ v2History: extra.v2History })), store.self);
+        await localState.flushHistoryNow();
+      }
       return true;
     } catch (err) {
       logDebug(`импорт ключей не удался: ${String(err)}`);
@@ -2447,10 +2532,18 @@ const methods = {
   async parvaneFetchSecurityInfo({ chatId }: { chatId?: string }) {
     const engine = e2e;
     if (!engine) return undefined;
-    const own = await engine.getOwnFingerprint();
+    // v2 (T153): ключ безопасности — отпечаток корня личности из проверенного
+    // журнала устройств, один на аккаунт (в v1 — отпечаток каждого устройства).
+    // Свой показываем тем же способом, каким его увидит собеседник на v2
+    const ownRoot = isV2Enabled() && v2Controller.isReady() ? v2Controller.logDevices(store.self)?.root : undefined;
+    const own = ownRoot ? await fingerprintOf(ownRoot) : await engine.getOwnFingerprint();
     const address = chatId ? store.getAddressForId(chatId) : undefined;
     if (!address || address === store.self || store.isGroupAddress(address)) {
       return { own, devices: [] as { deviceId: string; fingerprint: string }[] };
+    }
+    if (ownRoot && await v2Controller.isV2Peer(address).catch(() => false)) {
+      const peerRoot = v2Controller.logDevices(address)?.root;
+      if (peerRoot) return { own, devices: [{ deviceId: 'v2', fingerprint: await fingerprintOf(peerRoot) }] };
     }
     const fetchBundle = async (user: string) => {
       const raw = await connection!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
@@ -2517,6 +2610,27 @@ const methods = {
     const recoveryKey = pendingRecoveryKey;
     pendingRecoveryKey = undefined;
     return Promise.resolve(recoveryKey ? { recoveryKey } : undefined);
+  },
+
+  async parvaneGetCallPresencePolicy() {
+    await refreshV2Privacy();
+    return {
+      isAvailable: v2Controller.isReady(),
+      areCallsAllowed: readAudience(callsPolicyKey(store.self)) !== 'nobody',
+      isPresenceShown: readAudience(presencePolicyKey(store.self)) !== 'nobody',
+    };
+  },
+
+  parvaneSetCallsPolicy({ isAllowed }: { isAllowed: boolean }) {
+    writeAudience(callsPolicyKey(store.self), isAllowed ? 'anyone' : 'nobody');
+    pushV2Privacy();
+    return Promise.resolve(true);
+  },
+
+  parvaneSetPresencePolicy({ isShown }: { isShown: boolean }) {
+    writeAudience(presencePolicyKey(store.self), isShown ? 'anyone' : 'nobody');
+    pushV2Privacy();
+    return Promise.resolve(true);
   },
 
   async parvaneGetStrangersPolicy() {

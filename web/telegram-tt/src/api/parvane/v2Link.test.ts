@@ -16,7 +16,7 @@ describe('v2: грант линковки второго устройства', 
     expect(first.ensureStateKey()).toBe(true);
     const material = first.linkGrantMaterial();
     const parsed = JSON.parse(new TextDecoder().decode(material)) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['dk', 'gen', 'log', 'sk', 'skv', 'ssk']);
+    expect(Object.keys(parsed).sort()).toEqual(['dk', 'gen', 'log', 'pk', 'sk', 'skv', 'ssk']);
 
     const second = new PvClient(SELF, 'd2', 'local');
     expect(second.hasStateKey()).toBe(false);

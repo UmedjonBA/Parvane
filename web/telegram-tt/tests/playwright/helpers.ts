@@ -17,6 +17,13 @@ export async function openApp(page: Page, gatewayUrl: string): Promise<string[]>
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
     await route.fulfill({ contentType: 'application/javascript', body: '' });
   });
+  // Протокол v2 по умолчанию (T135): диалог ключа восстановления появляется
+  // после первого входа в произвольный момент и перекрывает интерфейс
+  const recoveryDialog = page.locator('.Modal .modal-dialog')
+    .filter({ hasText: /recovery key|ключ восстановления/i });
+  await page.addLocatorHandler(recoveryDialog, async (dialog) => {
+    await dialog.getByRole('button', { name: 'OK' }).click();
+  });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   return pageErrors;
 }

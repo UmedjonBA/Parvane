@@ -77,9 +77,13 @@ type MessageDependencies = {
   primeCustomEmoji?: (docIds: string[]) => Promise<unknown>;
   // Протокол v2 (spec 007): стек для собеседников с журналом устройств v2
   v2?: ReturnType<typeof createV2Controller>;
+  // «Удалить чат у себя» — в журнал личного состояния v2 (T145): остальные свои
+  // устройства скрывают сообщения чата не позже границы (мс)
+  recordChatCleared?: (address: string, untilMs: number) => void;
 };
 
 const PACK_REF_CACHE_LIMIT = 64;
+const MS_IN_SECOND = 1000;
 
 type CachedPackRef = { recipients: string[]; ref: WirePackRef };
 
@@ -1255,6 +1259,14 @@ export function createMessageController(deps: MessageDependencies) {
     const uuid = currentStore.getUuidForMessage(chatId, messageId);
     const conn = connection();
     if (!uuid || !conn) return undefined;
+    // Чат v2: прочтения — E2E-квитанции, их знает только движок (серверу v2
+    // не видно, кто что прочитал). Сообщения этого чата из времён v1 — у шарда
+    const address = currentStore.getAddressForId(chatId);
+    if (address && isV2Routable(address) && await deps.v2?.isV2Chat(address).catch(() => false)) {
+      const v2Readers = deps.v2!.readers(uuid);
+      if (v2Readers?.length) return v2Readers;
+      if (deps.v2!.isV2GroupAddress(address)) return v2Readers;
+    }
     // Своё sealed-исходящее: сервер не знает автора (from пуст) — участие
     // доказывает подпись над `readers:<uuid>` (как у delete/react/pin)
     const signature = deps.getE2e()?.signCallData(`readers:${uuid}`);
@@ -1523,31 +1535,46 @@ export function createMessageController(deps: MessageDependencies) {
       const currentStore = store();
       const uuids: string[] = [];
       const ownUuids: string[] = [];
+      let lastDate = 0;
       currentStore.getMessages(chat.id).forEach((message) => {
         const uuid = currentStore.getUuidForMessage(chat.id, message.id);
         if (!uuid) return;
         uuids.push(uuid);
+        lastDate = Math.max(lastDate, message.date);
         if (message.isOutgoing) ownUuids.push(uuid);
       });
+      const chatAddress = currentStore.getAddressForId(chat.id);
       if (shouldDeleteForAll && ownUuids.length) {
-        const e2e = requireE2e(deps.getE2e());
-        ownUuids.forEach((uuid) => {
-          publishOrThrow(TOPIC_MSG_DELETE, JSON.stringify(buildWireEvent(currentStore.self, token(), {
-            message_id: uuid, signature: e2e.signCallData(`delete:${uuid}`),
-          })));
-        });
+        if (chatAddress && isV2Routable(chatAddress) && await deps.v2?.isV2Chat(chatAddress)) {
+          // Чат v2: удаление у всех — мутацией v2 (сервер v1 этих сообщений не знает),
+          // v1-устройствам из подписанных списков — их копией
+          await deps.v2!.tryDelete(chatAddress, ownUuids);
+          deleteLegacyCopies(chatAddress, ownUuids);
+        } else {
+          const e2e = requireE2e(deps.getE2e());
+          ownUuids.forEach((uuid) => {
+            publishOrThrow(TOPIC_MSG_DELETE, JSON.stringify(buildWireEvent(currentStore.self, token(), {
+              message_id: uuid, signature: e2e.signCallData(`delete:${uuid}`),
+            })));
+          });
+        }
       }
       for (let offset = 0; offset < uuids.length; offset += CLEAR_MAX_IDS) {
         publishOrThrow(TOPIC_MSG_CLEAR, JSON.stringify(buildWireEvent(currentStore.self, token(), {
           message_ids: uuids.slice(offset, offset + CLEAR_MAX_IDS),
         })));
       }
-      const address = currentStore.getAddressForId(chat.id);
+      const address = chatAddress;
       if (address && !currentStore.isGroupAddress(address)) {
         deps.localState.markChatDeleted(address);
         deps.localState.saveDraft(address, undefined);
       }
       await deps.sync.forgetMessages(uuids);
+      // Сообщений v2 сервер v1 не знает — нотис `cleared` до других своих
+      // устройств не дойдёт; граница очистки едет журналом личного состояния
+      if (address) {
+        deps.recordChatCleared?.(address, lastDate ? lastDate * MS_IN_SECOND + (MS_IN_SECOND - 1) : Date.now());
+      }
       deps.sendUpdate({ '@type': 'deleteHistory', chatId: chat.id });
       return undefined;
     },

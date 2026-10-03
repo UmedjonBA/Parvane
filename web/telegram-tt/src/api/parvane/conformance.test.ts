@@ -1342,3 +1342,48 @@ describe('ACCESS-1: блокировка отзывает ключ доступ�
     expect(readRepo('android/jni/parvane_jni.cpp')).toContain('s->revokeContactAccess(jstr(env, peer))');
   });
 });
+
+describe('GROUP-3: группа v2 — сведения только из журнала, атомарная правка, заявки записью админа', () => {
+  const r = rule('GROUP-3') as unknown as {
+    v1NoticeApplied: boolean;
+    setInfoFields: string[];
+    aboutMaxChars: number;
+    requestDecideMethod: string;
+    approveEntry: string;
+  };
+
+  it('движок и сервер: решение по заявке — запись AddMember в запросе, заявка локально не применяется', () => {
+    const client = readRepo('backend/protocol/src/client.rs');
+    expect(client).toContain(`OutRequest::id("${r.requestDecideMethod}"`);
+    expect(client).toContain(`Change::${r.approveEntry}(gpb::${r.approveEntry} { member: Some(member.clone()) })`);
+    expect(client).toMatch(/requires_approval\)\s*\{[\s\S]{0,260}return Ok\(OutRequest::id\("group\.join"/);
+    const server = readRepo('backend/shards/messenger/src/v2_groups.rs');
+    expect(server).toContain('notify_invite_admins(ctx, &s).await;');
+  });
+
+  it('web: правка сведений собирается внутри очереди, предел описания — на клиенте', () => {
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    const setInfo = controller.slice(controller.indexOf('async function setGroupInfo('));
+    expect(setInfo.indexOf('return serial(async () => {')).toBeLessThan(setInfo.indexOf('const current = readGroup(hex);'));
+    r.setInfoFields.forEach((field) => expect(setInfo.slice(0, 900)).toContain(`${field}:`));
+    expect(controller).toContain('client!.groupRequestDecide(hex, user, approve)');
+    const groups = readRepo('web/telegram-tt/src/api/parvane/groups.ts');
+    expect(groups).toContain(`const GROUP_ABOUT_MAX_CHARS = ${r.aboutMaxChars};`);
+    expect(groups).toContain('v2.setGroupInfo(groupId, { name: title })');
+  });
+
+  it('desktop и android: v1-сведения о группе v2 отбрасываются, правка — set_info_patch под мьютексом движка', () => {
+    expect(r.v1NoticeApplied).toBe(false);
+    const core = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(core).toContain('change.contains("set_info_patch")');
+    expect(core).toContain('client_->groupRequestDecide(hex, user, approve)');
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('parvane::v2::isGroupAddress(gi.group_id) && !source.startsWith(u"v2"_q)');
+    expect(desktop).toContain('return { { "set_info_patch", std::move(patch) } };');
+    expect(desktop).toContain(`about.toUcs4().size() > ${r.aboutMaxChars}`);
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toContain('if (parvane::v2::isGroupAddress(n.group_id)) return;');
+    expect(android).toContain('return json{{"set_info_patch", std::move(patch)}};');
+    expect(android).toContain('s->decideJoinRequest(gid, jstr(env, member), approve == JNI_TRUE)');
+  });
+});

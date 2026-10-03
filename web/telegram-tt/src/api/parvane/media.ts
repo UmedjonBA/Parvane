@@ -161,6 +161,28 @@ export function safeBlobMime(mime?: string) {
   return SAFE_BLOB_MIME.test(normalized) ? normalized : 'application/octet-stream';
 }
 
+// Учёт скачанного для сквозных сценариев (`trackDownloadedBytes` в
+// scripts/e2e_web_helpers.mjs): запросы v1 сценарий видит сам (JSON-кадры
+// WebSocket), запросы блобов v2 двоичные — отмечаем их здесь. Вне сценариев
+// журнала нет, и функция ничего не делает
+type E2eDownloadLog = {
+  bytesByFile: Record<string, number>;
+  requests: { fileId: string; from: number; to: number; at: number }[];
+};
+
+function noteE2eDownload(fileId: string, from: number, to: number, parts: Map<number, Uint8Array>) {
+  const log = (globalThis as { __parvaneE2eDownloads?: E2eDownloadLog }).__parvaneE2eDownloads;
+  if (!log) return;
+  log.requests.push({
+    fileId, from, to, at: Date.now(),
+  });
+  let bytes = 0;
+  parts.forEach((part) => {
+    bytes += part.length;
+  });
+  log.bytesByFile[fileId] = (log.bytesByFile[fileId] || 0) + bytes;
+}
+
 export function createMediaService(deps: MediaDependencies) {
   const cacheByFileId = new Map<string, Promise<CachedMedia>>();
   // Ключи и настоящий mime приходят внутри E2E content; cloud видит только
@@ -276,6 +298,7 @@ export function createMediaService(deps: MediaDependencies) {
     for (let first = from; first <= to; first += CAP_DOWNLOAD_BATCH) {
       const count = Math.min(CAP_DOWNLOAD_BATCH, to - first + 1);
       const got = await v2.downloadBlobCap(fileId, capability, first, count);
+      noteE2eDownload(fileId, first, first + count - 1, got.parts);
       if (!metaByFileId.has(fileId)) {
         const head = got.parts.get(0);
         if (!head || got.size > MAX_FILE_BYTES || head.length > MAX_CHUNK_BYTES || !got.chunks) return undefined;
@@ -561,9 +584,11 @@ export function createMediaService(deps: MediaDependencies) {
     v2: V2BlobTransport, fileId: string, capability: string,
   ): Promise<CachedMedia> {
     const head = await v2.downloadBlobCap(fileId, capability, 0, CAP_DOWNLOAD_BATCH);
+    noteE2eDownload(fileId, 0, CAP_DOWNLOAD_BATCH - 1, head.parts);
     const parts = new Map(head.parts);
     for (let first = CAP_DOWNLOAD_BATCH; first < head.chunks; first += CAP_DOWNLOAD_BATCH) {
       const next = await v2.downloadBlobCap(fileId, capability, first, CAP_DOWNLOAD_BATCH);
+      noteE2eDownload(fileId, first, first + CAP_DOWNLOAD_BATCH - 1, next.parts);
       next.parts.forEach((bytes, index) => parts.set(index, bytes));
     }
     const ordered: Uint8Array[] = [];
