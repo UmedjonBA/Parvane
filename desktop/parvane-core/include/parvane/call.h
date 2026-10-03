@@ -54,6 +54,45 @@ inline json rejectSignal(const std::string &callId,
 inline json iceSignal(const std::string &callId, const std::string &candidate) {
     return json{{"type", "ice"}, {"call_id", callId}, {"candidate", candidate}};
 }
+// CALL-1: ICE-кандидат в поле `candidate` сигнала — JSON-строка. Канонические
+// поля — `candidate`, `sdp_mid`, `sdp_mline_index`; для уже выпущенных клиентов
+// рядом кладутся прежние имена: web (RTCIceCandidateInit: `sdpMid`,
+// `sdpMLineIndex`) и desktop (`sdp`, `mid`, `idx`). До 2 окт 2026 web и desktop
+// писали каждый свой формат и чужих кандидатов не понимали — звонок между ними
+// не соединялся.
+struct IceCandidate {
+    std::string sdp; // строка кандидата ("candidate:…")
+    std::string mid;
+    int mlineIndex = 0;
+};
+inline std::string iceCandidateJson(const IceCandidate &c) {
+    return json{{"candidate", c.sdp}, {"sdp_mid", c.mid}, {"sdp_mline_index", c.mlineIndex},
+                {"sdpMid", c.mid}, {"sdpMLineIndex", c.mlineIndex},
+                {"sdp", c.sdp}, {"mid", c.mid}, {"idx", c.mlineIndex}}.dump();
+}
+// Разбор любого из трёх видов; nullopt — не JSON-объект или нет строки кандидата
+// (пустой кандидат «конец сбора» клиенты не шлют).
+inline std::optional<IceCandidate> parseIceCandidate(const std::string &raw) {
+    const auto j = json::parse(raw, nullptr, false);
+    if (!j.is_object()) return std::nullopt;
+    const auto str = [&](std::initializer_list<const char *> keys) {
+        for (const auto *k : keys) {
+            if (j.contains(k) && j[k].is_string()) return j[k].get<std::string>();
+        }
+        return std::string();
+    };
+    IceCandidate out;
+    out.sdp = str({"candidate", "sdp"});
+    if (out.sdp.empty()) return std::nullopt;
+    out.mid = str({"sdp_mid", "sdpMid", "mid"});
+    for (const auto *k : {"sdp_mline_index", "sdpMLineIndex", "idx"}) {
+        if (j.contains(k) && j[k].is_number_integer()) {
+            out.mlineIndex = j[k].get<int>();
+            break;
+        }
+    }
+    return out;
+}
 inline json hangupSignal(const std::string &callId) {
     return json{{"type", "hangup"}, {"call_id", callId}};
 }
@@ -79,6 +118,10 @@ struct CallSignalIn {
     std::optional<std::string> reason; // reject
     std::string group_call_id;              // group_invite
     std::vector<std::string> participants;  // group_invite
+    // Сигнал пришёл по протоколу v2: отправителя, аудиторию и привязку к звонку
+    // проверил движок — подпись SDP ключом звонков (`sig`) не требуется. Из JSON
+    // НЕ читается (fromJson), выставляет только CallManager::handleV2Signal.
+    bool authenticated = false;
 
     static CallSignalIn fromJson(const json &j) {
         CallSignalIn s;

@@ -79,6 +79,7 @@ add_library(parvane_core STATIC
     src/v2_engine.cpp
     src/v2_content.cpp
     src/v2_link.cpp
+    src/v2_legacy.cpp
     src/v2_session.cpp)
 add_dependencies(parvane_core parvane_e2e_build parvane_protocol_build)
 target_include_directories(parvane_core

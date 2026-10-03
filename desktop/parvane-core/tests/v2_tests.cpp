@@ -5,6 +5,7 @@
 #include <string>
 
 #include "parvane/poll.h"
+#include "parvane/call.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_engine.h"
 
@@ -397,6 +398,66 @@ int main() {
             refused = true;
         }
         check(refused, "устройство без SSK грант не выдаёт");
+    }
+
+    {
+        // Сигнал звонка v1 ↔ v2 (D-08) и сам запечатанный сигнал через C ABI.
+        const std::string id = "01a0f945-1263-7d48-b3a1-ae3da31ccea9";
+        const auto offer = v2::callSignalToV2(json{{"type", "invite"}, {"call_id", id}, {"media", "video"}, {"sdp", "v=0"}, {"sig", "x"}});
+        check(offer && (*offer)["offer"].value("video", false) && (*offer)["offer"].value("sdp", "") == "v=0"
+                  && !offer->dump().empty() && offer->dump().find("sig") == std::string::npos,
+              "callSignalToV2: invite → offer, подпись SDP не переносится");
+        const auto back = v2::callSignalFromV2(json{{"callId", (*offer)["call_id"]}, {"offer", {{"sdp", "v=0"}, {"video", true}}}});
+        check(back && back->value("type", "") == "invite" && back->value("call_id", "") == id && back->value("media", "") == "video",
+              "callSignalFromV2: offer → invite с тем же id");
+        const auto ice = v2::callSignalToV2(json{{"type", "ice"}, {"call_id", id},
+            {"candidate", R"({"candidate":"candidate:w","sdpMid":"0","sdpMLineIndex":0})"}});
+        check(ice && (*ice)["ice"].value("candidate", "") == "candidate:w" && (*ice)["ice"].value("sdp_mid", "") == "0",
+              "callSignalToV2: кандидат вида web → IceCandidate");
+        const auto iceBack = v2::callSignalFromV2(json{{"callId", (*offer)["call_id"]},
+            {"ice", {{"candidate", "candidate:w"}, {"sdpMid", "0"}, {"sdpMlineIndex", 0}}}});
+        const auto parsed = iceBack ? parvane::parseIceCandidate(iceBack->value("candidate", "")) : std::nullopt;
+        check(parsed && parsed->sdp == "candidate:w" && parsed->mid == "0", "callSignalFromV2: IceCandidate → кандидат CALL-1");
+        const auto busy = v2::callSignalFromV2(json{{"callId", (*offer)["call_id"]}, {"hangup", {{"reason", "HANGUP_REASON_BUSY"}}}});
+        const auto bye = v2::callSignalFromV2(json{{"callId", (*offer)["call_id"]}, {"hangup", {{"reason", 1}}}});
+        check(busy && busy->value("type", "") == "reject" && busy->value("reason", "") == "busy"
+                  && bye && bye->value("type", "") == "hangup",
+              "callSignalFromV2: причина завершения → reject/hangup");
+        check(!v2::callSignalToV2(json{{"type", "group_invite"}, {"call_id", id}})
+                  && !v2::callSignalToV2(json{{"type", "invite"}, {"call_id", "not-a-uuid"}}),
+              "callSignalToV2: групповой сигнал и id не-UUID по v2 не идут");
+        auto c = v2::Client::create("alice@local", "d1", "local");
+        (void)c->createIdentity(1);
+        bool refused = false;
+        try {
+            (void)c->prepareCall("bob@local", *offer); // журнал bob неизвестен → need
+        } catch (const std::exception &) {
+            refused = true;
+        }
+        check(refused, "prepareCall без журнала собеседника → need (как prepareDirect)");
+    }
+
+    // ── v1-устройства в переходный период (FR-054/FR-058) ──
+    {
+        auto c = v2::Client::create("alice@local", "d1", "local");
+        (void)c->createIdentity(1);
+        const auto before = c->logDevices("alice@local");
+        check(!before.value("legacySet", true) && before.value("legacyKeys", json::array()).empty(),
+              "legacy: до публикации списка v1-устройств нет");
+        const std::string key(43, 'A'); // 32 нулевых байта в base64 без дополнения
+        const auto req = c->legacyDevicesRequest(json::array({json{{"deviceId", "old"}, {"identity", key}, {"signing", key}}}));
+        check(req.value("method", "") == "identity.device.log_append", "legacy: список v1-устройств → identity.device.log_append");
+        check(!c->logDevices("alice@local").value("legacySet", true),
+              "legacy: свой журнал не меняется до подтверждения сервера");
+        bool refused = false;
+        try {
+            (void)c->legacyDevicesRequest(json::array({json{{"deviceId", "old"}, {"identity", "!"}, {"signing", key}}}));
+        } catch (const std::exception &) {
+            refused = true;
+        }
+        check(refused, "legacy: кривой ключ устройства отклонён");
+        const auto deliver = c->legacyDeliverRequest("0199b6a0-0000-7000-8000-000000000001", R"({"to":"bob@local"})");
+        check(deliver.value("method", "") == "msg.deliver_legacy", "legacy: копии v1-устройствам → msg.deliver_legacy");
     }
 
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);

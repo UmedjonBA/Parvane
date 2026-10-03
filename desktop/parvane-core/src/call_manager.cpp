@@ -26,7 +26,7 @@ void CallManager::newSession(const std::string &peer) {
     peer_ = peer;
     CallSession::Callbacks scb;
     scb.sendSignal = [this](json signal) {
-        calls_.send(self_, peer_, token_, signal);
+        sendTo(peer_, signal);
     };
     scb.peerPubkey = [this] {
         return cb_.peerPubkey ? cb_.peerPubkey(peer_) : std::string();
@@ -45,6 +45,17 @@ void CallManager::newSession(const std::string &peer) {
                                              std::move(scb));
 }
 
+void CallManager::sendTo(const std::string &peer, const json &signal) {
+    if (cb_.sendV2 && cb_.sendV2(peer, signal)) return;
+    calls_.send(self_, peer, token_, signal);
+}
+
+void CallManager::handleV2Signal(const std::string &from, const json &signal) {
+    auto sig = CallSignalIn::fromJson(signal);
+    sig.authenticated = true;
+    handleSignal(from, sig);
+}
+
 void CallManager::placeCall(const std::string &peer, const std::string &media) {
     std::lock_guard<std::mutex> lk(mutex_);
     newSession(peer);
@@ -58,7 +69,7 @@ void CallManager::handleSignal(const std::string &from, const CallSignalIn &sig)
         const bool busy = session_ && session_->state() != CallState::Ended
                           && session_->state() != CallState::Idle;
         if (busy) {
-            calls_.send(self_, from, token_, rejectSignal(sig.call_id, "busy"));
+            sendTo(from, rejectSignal(sig.call_id, "busy"));
             return;
         }
         newSession(from);

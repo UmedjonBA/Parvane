@@ -51,6 +51,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -104,11 +105,21 @@ public:
     void start();
     void stop();
     [[nodiscard]] bool isReady() const { return ready_; }
+    [[nodiscard]] const std::string &self() const { return cfg_.self; }
+    // Строка в лог сессии (для обвязок вокруг неё).
+    void logLine(const std::string &m) const { log(m); }
     // Дождаться готовности (для тестов/хуков). false — таймаут/остановлено.
     bool waitReady(std::int64_t timeoutMs);
     // Устройство не создано: у аккаунта уже есть журнал v2 — этому
     // устройству нужна линковка (до неё — только v1).
     [[nodiscard]] bool needsLinking() const { return needsLinking_; }
+    // Сигнал личного звонка (v1 JSON CallSignal) v2-собеседнику — запечатанным
+    // конвертом по анонимному каналу (D-08). false — не v2 (идти v1-путём шарда
+    // call); true — сигнал взят на себя v2 (при сбое отправки по v1 НЕ понижаем,
+    // D-13: ошибка — в логе). Блокирующий. Входящие — событие
+    // {"type":"callSignal","from":…,"signal":<v1 JSON>} (отправитель проверен движком).
+    bool sendCallSignal(const std::string &peer, const json &signal);
+
     // LINK-1 v2. Старое устройство: материал гранта движка для своего нового
     // устройства (пусто — сессия не готова или у устройства нет SSK). Блокирующий.
     [[nodiscard]] std::string linkGrantMaterial();
@@ -123,6 +134,69 @@ public:
     // Отправить содержимое (proto3-JSON parvane.msg.v2.Content) собеседнику.
     // opId — UUID операции ("" — новый). Бросает при неудаче.
     void sendContent(const std::string &peer, const json &content, const std::string &opId);
+
+    // ── блобы вложений по capability (T131, FR-062, D-08) ──
+    // Блоб сообщения v2-чата грузится без per-recipient гранта: сервер хранит
+    // SHA-256 секрета, сам секрет (32 байта) едет внутри E2E-содержимого.
+    // Загрузить шифртекст → file_id. Бросает. Блокирующий (сеть).
+    std::string uploadBlob(const std::string &bytes, const std::string &capability32,
+                           std::size_t chunkBytes = 192 * 1024);
+    // Скачать блоб целиком по секрету: анонимный канал, одноразовое соединение
+    // на запрос (≤ 256 чанков). Бросает.
+    std::string downloadBlobCap(const std::string &fileId, const std::string &capability32);
+
+    // ── новое устройство без других устройств (T130, FR-066) ──
+    // Сессия ждёт линковку (needsLinking), а других устройств аккаунта нет.
+    // Вход по ключу восстановления: корень — из копии на сервере, новый SSK,
+    // прежние устройства отзываются. "ok" | "bad_key" | "no_backup" | "failed".
+    std::string recoverWithKey(const std::string &recoveryKey);
+    // Сброс личности: новый корень и журнал взамен прежних (нужен пароль —
+    // переаутентификация). Собеседники увидят смену ключа безопасности.
+    // "ok" | "bad_password" | "failed".
+    std::string resetIdentity(const std::string &password);
+
+    // ── отзыв своего устройства (T128, FR-066; D-11, D-12, D-16) ──
+    // Запись отзыва в журнале устройств + ротации: ключ доступа к доставке
+    // (сервер, свои устройства, собеседники), ключ личного состояния, новые
+    // эпохи групп, где мы админ. false — устройство не в журнале v2. Бросает,
+    // если запись журнала не принята. Блокирующий (сеть).
+    bool revokeDevice(const std::string &deviceId);
+    // Отзыв доступа у одного собеседника (T133, FR-033) — звать при блокировке:
+    // сама блокировка ключ доступа к доставке не отнимает. Новый ключ уходит на
+    // сервер, своим устройствам и остальным собеседникам; заблокированный дальше
+    // пишет только как незнакомый (жетоны), а при запрете незнакомых — никак.
+    // false — ключа у собеседника не было (или сессия не готова). Бросает, если
+    // сервер не принял новый ключ. Блокирующий (сеть).
+    bool revokeContactAccess(const std::string &peer);
+    // Свои устройства по журналу v2 (id). У аккаунта на v2 новое устройство в
+    // каталог v1 не попадает (T048) — список устройств клиента дополняется этим.
+    [[nodiscard]] std::vector<std::string> ownDevices();
+    // {"rotationNeeded":bool,"hasRoot":bool,"hasBackup":bool}: SSK раскрыт
+    // отзывом и не сменён; корень лежит на устройстве (первое устройство без
+    // ключа восстановления) / есть копия корня под ключом восстановления.
+    [[nodiscard]] json sskState();
+    // Сменить SSK корнем (D-12). recoveryKey пуст — корень из файла `root`;
+    // иначе из копии под ключом восстановления. "ok" | "bad_key" |
+    // "no_backup" | "failed". Блокирующий.
+    std::string rotateSsk(const std::string &recoveryKey);
+
+    // «Печатает» в чате (собеседник либо группа v2) эфемерным каналом v2
+    // (T127): секретный id канала, шифртекст — сервер не видит {from, to}.
+    // false — чат не v2 (идти по v1); true — по v1 НЕ слать, даже если сигнал
+    // не ушёл (канала ещё нет, L2). Блокирующий (сеть). Входящие — событие
+    // {"type":"typing","chat":<адрес чата>,"from":<кто>}.
+    bool sendTyping(const std::string &chat);
+
+    // ── переходный период: v1-устройства (FR-054/FR-058) ──
+    // Подписанный список v1-устройств пользователя: device_id → identity-ключ
+    // (base64 без дополнения). Свой — по своему журналу, чужой — по кэшу
+    // журнала собеседника (после isV2Peer).
+    [[nodiscard]] std::map<std::string, std::string> legacyDevices(const std::string &user);
+    // Опубликовать (первое v2-устройство) или сократить свой список по каталогу
+    // v1 `[{deviceId, identity, signing}]`. Список только сокращается.
+    void syncLegacySet(const json &catalog);
+    // v1 SendPayload с копиями для v1-устройств — `msg.deliver_legacy`. Бросает.
+    void deliverLegacy(const std::string &messageId, const json &sendPayload);
 
     // Синхронизировать инбокс сейчас (блокирующий; на потоке вызывающего).
     void syncNow();
@@ -163,8 +237,10 @@ public:
     // identity.privacy.set перезаписывает ВСЕ поля — настройки уходят целиком:
     // groupAddNobody — «никто не может добавлять меня в группы»,
     // strangersAllowed — сообщения от незнакомых (по анонимным жетонам).
-    // Значения запоминаются и досылаются при каждой готовности сессии
-    // (запуск, переподключение). true — отправлено сейчас.
+    // Правка, не ушедшая сейчас (сессия не готова), досылается при готовности;
+    // после успеха — событие `privacySaved`. Без несохранённой правки сессия при
+    // готовности читает серверное значение (identity.privacy.get) и отдаёт
+    // событие `privacy{groupAddNobody,strangersAllowed}`. true — отправлено сейчас.
     bool setPrivacy(bool groupAddNobody, bool strangersAllowed);
 
     // ── режим «усиленная приватность» (L2, T079; правило L2-1) ──
@@ -233,9 +309,15 @@ private:
     void noteGroupL2Locked(const std::string &hex, const json &info);
     void noteL2StateLocked(bool force = false);
     void pushPrivacyLocked();
+    void fetchPrivacyLocked();
     void reportUnconfirmedLocked(const std::string &hex, const std::vector<std::string> &claimed);
     bool canRotateLocked(const std::string &hex);
     void ensureTokensLocked(std::size_t recipients);
+    // FR-063: партия жетонов по расписанию движка (при готовности и раз в час).
+    void refillTokensLocked();
+    void requestTokensLocked(std::size_t limit);
+    void scheduleTokenCheck();
+    bool tokenCheckScheduled_ = false;
     void rotateEpochLocked(const std::string &hex);
     void rotateEpochOnceLocked(const std::string &hex);
     void scheduleRotate(const std::string &hex, std::int64_t delayMs, int attempt = 0);
@@ -244,6 +326,17 @@ private:
     json loadInvites() const;
     // Свои устройства (T119).
     void checkOwnDevicesLocked();
+    // Запросы личного чата; при отказе по ключу доступа собеседника (он сменил
+    // ключ) — повтор со слепым жетоном.
+    void runDirectLocked(const std::string &peer, const std::function<json()> &prepare);
+    // KEY-1 v2: принять смену корня собеседника и сообщить хосту.
+    bool acceptPeerRootLocked(const std::string &user);
+    // Личность аккаунта сброшена другим устройством: это — вне неё.
+    void dropIdentityLocked();
+    // Копия корня под ключом восстановления — на сервер (FR-066).
+    void uploadRootBackupLocked();
+    // Подписаться на эфемерные каналы чатов (движок отдаёт только новые).
+    void ensureEphemeralLocked(const std::vector<std::string> &chats);
     // Журнал состояния.
     bool openStateLocked();
     bool pullStateLocked();
@@ -265,6 +358,8 @@ private:
     std::vector<json> outbox_;       // под engineMu_: события наружу по порядку
     std::recursive_mutex flushMu_;   // один отдающий за раз (порядок onEvent)
     std::set<std::string> publishedGroups_;
+    // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение).
+    std::set<std::string> ephChats_;
     std::set<std::string> warnedUnconfirmed_;
     std::set<std::string> syncingGroups_;
     // Приватность, заданная клиентом (под engineMu_): {groupAddNobody, strangers}.
@@ -273,6 +368,12 @@ private:
     bool privacyGroupAddNobody_ = false;
     bool privacyStrangers_ = true;
     std::unique_ptr<StateSession> state_;
+    // Ключ личного состояния сменён (D-16): старые записи новым ключом не
+    // читаются. stateRekeyed_ — следующий stateAttach не отдаёт хосту пустой
+    // снимок, а переносит состояние под новый ключ: stateCarry_ (сведённое до
+    // смены, если ключ менял это устройство) либо локальное состояние хоста.
+    bool stateRekeyed_ = false;
+    std::optional<json> stateCarry_;
     std::deque<std::string> pendingAppends_;
     std::atomic<bool> ready_{false};
     std::atomic<bool> needsLinking_{false};

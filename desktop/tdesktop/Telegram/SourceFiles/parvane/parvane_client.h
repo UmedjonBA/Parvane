@@ -18,6 +18,7 @@ class PeerData;
 class ChatData;
 class UserData;
 class HistoryItem;
+class History;
 class DocumentData;
 class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
@@ -181,7 +182,9 @@ struct IceServer {
 	std::string username;
 	std::string password;
 };
+// Кэш ICE-серверов; не блокирует (запрос — PrefetchIceServers на воркере).
 [[nodiscard]] std::vector<IceServer> FetchIceServers();
+void PrefetchIceServers();
 
 void RenameGroup(const QString &groupId, const QString &name);
 void DeleteGroup(const QString &groupId);
@@ -253,6 +256,11 @@ void SetProfileFields(const ProfileFields &fields);
 // тем же блобом, что у веба: {defaults, exceptions}. Звать с main-потока после
 // локального изменения (ApiWrap::updateNotifySettingsDelayed).
 void MirrorNotifySettings(not_null<const PeerData*> peer);
+// Блокировка собеседника (локальная): список на диск и в журнал состояния.
+void MirrorBlock(not_null<PeerData*> peer, bool blocked);
+// Архив и закреп чатов (локальные): адреса на диск и в журнал состояния.
+void MirrorArchive(not_null<History*> history, bool archived);
+void MirrorDialogPins(not_null<Main::Session*> session);
 void MirrorNotifyDefault(Data::DefaultNotify type);
 
 // Зеркалит исходящее текстовое сообщение (с форматированием) в шину. Адрес

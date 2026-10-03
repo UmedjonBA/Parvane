@@ -32,6 +32,9 @@ public:
         std::function<std::vector<std::string>(std::string peer)> peerPubkeys;
         // Своя подпись вместо key (см. CallSession::Callbacks::sign); "" → key.
         std::function<std::string(const std::string &data)> sign;
+        // Протокол v2: отправить сигнал собеседнику запечатанным конвертом.
+        // true — сигнал взят v2 (по v1 не дублировать), false — собеседник на v1.
+        std::function<bool(const std::string &peer, const json &signal)> sendV2;
     };
 
     CallManager(CallClient &calls, std::string selfAddr, std::string token,
@@ -41,6 +44,10 @@ public:
 
     // Подписаться на call.user.<self> (звать один раз после логина).
     void start();
+
+    // Сигнал личного звонка, принятый по протоколу v2 (отправитель проверен
+    // движком) — тот же путь, что у сигнала с шины, без проверки подписи SDP.
+    void handleV2Signal(const std::string &from, const json &signal);
 
     // Исходящий звонок. media: "audio"|"video".
     void placeCall(const std::string &peer, const std::string &media);
@@ -57,6 +64,8 @@ public:
 
 private:
     void handleSignal(const std::string &from, const CallSignalIn &sig);
+    // Сигнал собеседнику: по v2, если он на v2, иначе шардом call (под mutex_).
+    void sendTo(const std::string &peer, const json &signal);
     // Создаёт сессию с проводкой колбэков (звать под mutex_).
     void newSession(const std::string &peer);
 

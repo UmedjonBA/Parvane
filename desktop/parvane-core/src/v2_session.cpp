@@ -6,6 +6,7 @@
 #include "parvane/v2_engine.h"
 #include "parvane/v2_link.h"
 
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 
 #include <sys/stat.h>
@@ -23,11 +24,22 @@ namespace {
 constexpr auto kPeerPositiveTtl = std::chrono::seconds(15); // журнал устройств собеседника перечитывается
 constexpr auto kPeerNegativeTtl = std::chrono::seconds(30);
 constexpr int kNeedAttempts = 6;
+// parvane.msg.v2.TypingAction
+constexpr int kTypingTyping = 1;
+constexpr int kTypingCancel = 2;
 constexpr int kMaxSyncPages = 1000;
 constexpr int kGroupSyncPages = 50;
 constexpr int kStateSyncPages = 1000;
 // Смена эпохи — не чаще раза в 10 с (R8): повтор после отказа по частоте.
 constexpr std::int64_t kEpochRetryMs = 11000;
+// Проверка расписания партии жетонов (FR-063): срок задаёт движок, здесь — шаг.
+constexpr std::int64_t kTokenCheckMs = 60 * 60 * 1000;
+// Партия меньше суточной квоты: квота на аккаунт, её делят все его устройства.
+constexpr std::size_t kTokenBatch = 20;
+// Квота — на аккаунт и сутки: если партия целиком в остаток не влезает (его
+// выбрали другие устройства аккаунта), сервер отвечает LIMIT на весь запрос —
+// просим остаток партией поменьше, иначе устройство останется без жетонов.
+constexpr std::size_t kTokenBatchSteps[] = {kTokenBatch, 10, 5, 2, 1};
 constexpr int kEpochRetryAttempts = 6;
 // Запас слепых жетонов перед раздачей ключей группы незнакомым участникам.
 constexpr std::size_t kTokenReserve = 2;
@@ -36,6 +48,15 @@ constexpr int kGroupKindChannel = 2;
 constexpr int kRoleAdmin = 2;
 constexpr int kRoleOwner = 3;
 constexpr const char *kPinListMain = "PIN_LIST_MAIN";
+
+std::string sha256(const std::string &data) {
+    unsigned char h[EVP_MAX_MD_SIZE];
+    unsigned int len = 0;
+    if (EVP_Digest(data.data(), data.size(), h, &len, EVP_sha256(), nullptr) != 1 || len != 32) {
+        throw std::runtime_error("v2: SHA-256");
+    }
+    return std::string(reinterpret_cast<const char *>(h), len);
+}
 
 bool isRateLimited(const std::exception &e) {
     const std::string w = e.what();
@@ -245,10 +266,18 @@ void Session::connectOnce() {
             }
             absorbLocked(std::move(events));
             events.clear();
+            // «Печатает» по v2: каналы известных чатов (на новом соединении — заново).
+            ensureEphemeralLocked(std::vector<std::string>(ephChats_.begin(), ephChats_.end()));
             noteL2StateLocked(/*force=*/true);
-            // Приватность, заданная клиентом до готовности сессии (T079).
+            // Приватность (T079, FR-040): несохранённая правка этого устройства
+            // уходит на сервер, иначе читаем серверное значение — его могло
+            // сменить другое устройство.
             try {
-                pushPrivacyLocked();
+                if (privacySet_) {
+                    pushPrivacyLocked();
+                } else {
+                    fetchPrivacyLocked();
+                }
             } catch (const std::exception &) {
                 // в логе; повтор — при следующей готовности или смене настройки
             }
@@ -270,6 +299,16 @@ void Session::connectOnce() {
                     checkOwnDevicesLocked();
                 } catch (const std::exception &e) {
                     log(std::string("журнал своих устройств: ") + e.what());
+                }
+                try {
+                    uploadRootBackupLocked();
+                } catch (const std::exception &e) {
+                    log(std::string("копия корня на сервер не ушла: ") + e.what());
+                }
+                refillTokensLocked();
+                if (!tokenCheckScheduled_) {
+                    tokenCheckScheduled_ = true;
+                    scheduleTokenCheck();
                 }
             }
         }
@@ -295,7 +334,11 @@ std::string Session::linkGrantMaterial() {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!ready_ || !client_) return {};
     try {
-        return client_->linkGrantMaterial();
+        const auto material = client_->linkGrantMaterial();
+        // Копия корня под ключом восстановления — вместе с грантом (поле `rb`):
+        // привязанное устройство сможет сменить SSK после отзыва другого (D-12).
+        const auto backup = readStateFile("root-backup");
+        return backup.empty() ? material : grantWithRootBackup(material, backup);
     } catch (const std::exception &e) {
         log(std::string("грант линковки недоступен: ") + e.what());
         return {};
@@ -353,6 +396,23 @@ bool Session::connectLocked(std::string *error) {
                     }
                     flush();
                 });
+            } else if (ev.kind == "ephemeral") {
+                // «Печатает» по эфемерному каналу (T127): автор и чат проверены движком.
+                auto body = ev.body;
+                post([this, body] {
+                    {
+                        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+                        if (!client_) return;
+                        for (const auto &e : client_->ephOpen(body)) {
+                            if (e.value("type", std::string()) != "typing" || e.value("action", 0) == kTypingCancel) continue;
+                            const auto from = e.value("from", std::string());
+                            const auto group = e.contains("group") && e["group"].is_string()
+                                ? groupAddress(e["group"].get<std::string>()) : std::string();
+                            outbox_.push_back(json{{"type", "typing"}, {"chat", group.empty() ? from : group}, {"from", from}});
+                        }
+                    }
+                    flush();
+                });
             } else if (ev.kind == "session.revoked") {
                 log("сессия отозвана");
             } else {
@@ -378,6 +438,22 @@ bool Session::connectLocked(std::string *error) {
             if (!saved.empty() && savedDevice == auth.deviceId) {
                 client_ = Client::import(saved, storageKey_);
                 log("состояние устройства загружено");
+                // Пока устройство было выключено, личность аккаунта могли сбросить
+                // (новый корень и журнал, T130): тогда оно вне неё — только линковка.
+                try {
+                    const auto own = call(false, "identity.device.log_sync",
+                        encodeMessage("parvane.identity.v2.DeviceLogSyncRequest",
+                                      json{{"user", {{"address", cfg_.self}}},
+                                           {"after_version", std::to_string(client_->logVersion(cfg_.self))}}));
+                    if (client_->ingestLog(cfg_.self, own) == "replaced") {
+                        dropIdentityLocked();
+                        outbox_.pop_back(); // событие needsLinking отдаст connectOnce
+                        if (error) *error = "нужна линковка";
+                        return false;
+                    }
+                } catch (const V2Error &) {
+                    // сеть — свой журнал перечитается после готовности
+                }
             } else {
                 if (!saved.empty()) {
                     log("сохранённое состояние другого устройства (" + savedDevice + ") — не используется");
@@ -412,6 +488,9 @@ bool Session::connectLocked(std::string *error) {
                     client_ = std::move(c);
                     writeStateFile("publish", requests.dump());
                     writeStateFile("device", auth.deviceId);
+                    if (const auto backup = grantRootBackup(linkMaterial_); !backup.empty()) {
+                        writeStateFile("root-backup", backup);
+                    }
                     persistLocked();
                     std::fill(linkMaterial_.begin(), linkMaterial_.end(), '\0');
                     linkMaterial_.clear();
@@ -463,6 +542,8 @@ bool Session::connectLocked(std::string *error) {
             std::remove((cfg_.stateDir + "/publish").c_str());
         }
         id_->request("msg.inbox.subscribe", std::string());
+        // Подписки на эфемерные каналы жили в прежнем соединении — заново.
+        client_->ephReset();
         return true;
     } catch (const std::exception &e) {
         if (error) *error = e.what();
@@ -565,13 +646,17 @@ bool Session::satisfyLocked(const std::exception &ex) {
             encodeMessage("parvane.identity.v2.DeviceLogSyncAnonRequest",
                           json{{"user", {{"address", user}}},
                                {"after_version", std::to_string(client_->logVersion(user))}}));
-        const auto verdict = client_->ingestLog(user, resp);
-        if (verdict == "rootChanged") {
-            log("у " + user + " сменился корневой ключ — нужно подтверждение");
-            return false;
+        auto verdict = client_->ingestLog(user, resp);
+        if (verdict == "replaced") {
+            // Журнал на сервере начат заново (другой генезис) — перечитать целиком.
+            verdict = client_->ingestLog(user, call(true, "identity.device.log_sync_anon",
+                encodeMessage("parvane.identity.v2.DeviceLogSyncAnonRequest",
+                              json{{"user", {{"address", user}}}, {"after_version", "0"}})));
         }
-        return true;
+        if (verdict == "rootChanged") return acceptPeerRootLocked(user);
+        return verdict != "replaced";
     }
+    if (kind == "rootChanged") return acceptPeerRootLocked(user);
     if (kind == "bundle") {
         const auto resp = call(true, "identity.device.fetch_bundle_anon",
             encodeMessage("parvane.identity.v2.DeviceFetchBundleAnonRequest",
@@ -581,10 +666,7 @@ bool Session::satisfyLocked(const std::exception &ex) {
     }
     if (kind == "token") {
         if (serverKey_.empty()) return false;
-        const auto list = call(true, "identity.tokens.key_list", std::string());
-        const auto req = parseRequest(client_->tokenRequest(list, serverKey_, 20));
-        const auto resp = call(req.anon, req.method, req.body);
-        client_->tokenResponse(resp);
+        requestTokensLocked(kTokenBatch);
         return true;
     }
     if (kind == "groupLog") {
@@ -711,8 +793,14 @@ bool Session::isV2Peer(const std::string &address) {
         log("журнал " + address + " не получен: " + e.what());
         return false;
     }
-    std::lock_guard<std::mutex> lk(peersMu_);
-    peers_[address] = PeerInfo{v2, now};
+    {
+        std::lock_guard<std::mutex> lk(peersMu_);
+        peers_[address] = PeerInfo{v2, now};
+    }
+    if (v2) {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        ensureEphemeralLocked({address});
+    }
     return v2;
 }
 
@@ -725,13 +813,525 @@ void Session::sendContent(const std::string &peer, const json &content, const st
             const auto hex = groupHex(peer);
             ensureTokensLocked(groupMembersLocked(hex).size());
             reqs = withNeedsLocked([&] { return client_->prepareGroup(hex, content, opId); });
+            runRequestsLocked(reqs);
         } else {
-            reqs = withNeedsLocked([&] { return client_->prepareDirect(peer, content, opId); });
+            runDirectLocked(peer, [&] { return client_->prepareDirect(peer, content, opId); });
         }
-        runRequestsLocked(reqs);
         persistLocked();
     }
     flushAsync();
+}
+
+void Session::runDirectLocked(const std::string &peer, const std::function<json()> &prepare) {
+    try {
+        runRequestsLocked(withNeedsLocked(prepare));
+    } catch (const std::exception &e) {
+        // Ключ доступа собеседника отвергнут (он сменил ключ: отзыв устройства,
+        // восстановление, сброс личности) — повтор со слепым жетоном.
+        const std::string w = e.what();
+        const bool forbidden = w.find("FORBIDDEN") != std::string::npos || w.find("Forbidden") != std::string::npos;
+        if (!forbidden || !client_ || !client_->deliveryKeyRejected(peer)) throw;
+        log("ключ доступа собеседника отвергнут — повтор со слепым жетоном");
+        runRequestsLocked(withNeedsLocked(prepare));
+    }
+}
+
+// KEY-1 v2 (T129, FR-019): у собеседника сменился корень личности (журнал
+// устройств начат заново). Как в v1: хост показывает «ключ безопасности
+// изменился», новый журнал принимается, прежние сессии отбрасываются.
+bool Session::acceptPeerRootLocked(const std::string &user) {
+    if (!client_ || !client_->acceptRootChange(user)) return false;
+    {
+        std::lock_guard<std::mutex> lk(peersMu_);
+        peers_.erase(user);
+    }
+    persistLocked();
+    log("у " + user + " сменился корневой ключ — предупреждение, новый журнал принят");
+    outbox_.push_back(json{{"type", "peerRootChanged"}, {"user", user}});
+    return true;
+}
+
+bool Session::sendCallSignal(const std::string &peer, const json &signal) {
+    if (isGroupAddress(peer) || !isV2Peer(peer)) return false;
+    const auto v2Signal = callSignalToV2(signal);
+    if (!v2Signal) {
+        log("сигнал звонка по v2 не выражается — не отправлен (D-13)");
+        return true;
+    }
+    try {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+        runDirectLocked(peer, [&] { return client_->prepareCall(peer, *v2Signal); });
+        persistLocked();
+    } catch (const std::exception &e) {
+        log(std::string("сигнал звонка не отправлен: ") + e.what());
+    }
+    return true;
+}
+
+// ── блобы вложений по capability (T131, FR-062, D-08) ──────────────────────
+
+std::string Session::uploadBlob(const std::string &bytes, const std::string &capability32, std::size_t chunkBytes) {
+    if (capability32.size() != 32 || chunkBytes == 0) throw std::runtime_error("v2: capability/чанк");
+    if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    // Загрузка идёт ID-каналом (владелец блоба серверу известен — получатели нет).
+    const auto total = std::max<std::size_t>(1, (bytes.size() + chunkBytes - 1) / chunkBytes);
+    std::string uploadId;
+    for (std::size_t index = 0; index < total; ++index) {
+        const auto resp = decodeMessage("parvane.cloud.v1.UploadChunkResponse",
+            call(false, "cloud.blob.upload_chunk",
+                 encodeMessage("parvane.cloud.v1.UploadChunkRequest",
+                               json{{"upload_id", uploadId},
+                                    {"index", index},
+                                    {"data", toBase64(bytes.substr(index * chunkBytes, chunkBytes))}})));
+        const auto got = resp.value("uploadId", resp.value("upload_id", std::string()));
+        if (!got.empty()) uploadId = got;
+    }
+    const auto done = decodeMessage("parvane.cloud.v1.UploadCompleteResponse",
+        call(false, "cloud.blob.upload_complete",
+             encodeMessage("parvane.cloud.v1.UploadCompleteRequest",
+                           json{{"upload_id", uploadId},
+                                {"chunks", total},
+                                {"size", std::to_string(bytes.size())},
+                                {"visibility", "VISIBILITY_PRIVATE"},
+                                {"capability_hash", toBase64(sha256(capability32))}})));
+    const auto fileId = done.value("fileId", done.value("file_id", std::string()));
+    if (fileId.empty()) throw V2Error("ERROR_CODE_INVALID");
+    return fileId;
+}
+
+std::string Session::downloadBlobCap(const std::string &fileId, const std::string &capability32) {
+    if (capability32.size() != 32) throw std::runtime_error("v2: capability");
+    if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    constexpr std::uint32_t kBatch = 256;
+    std::string out;
+    std::uint32_t total = 0;
+    for (std::uint32_t first = 0;; first += kBatch) {
+        // Одноразовое анонимное соединение на запрос: серверу не связать
+        // скачивание ни с аккаунтом, ни с другими запросами (D-05).
+        Connection conn(cfg_.gatewayUrl);
+        conn.open(kChannelAnonymous, cfg_.clientVersion);
+        const auto got = conn.requestStream("cloud.blob.download_cap",
+            encodeMessage("parvane.cloud.v1.DownloadCapRequest",
+                          json{{"file_id", fileId},
+                               {"capability", toBase64(capability32)},
+                               {"first_chunk", first},
+                               {"chunk_count", kBatch}}));
+        conn.close();
+        const auto meta = decodeMessage("parvane.cloud.v1.DownloadCapResponse", got.body);
+        total = meta.value("chunks", std::uint32_t(0));
+        for (std::uint32_t index = first; index < std::min(total, first + kBatch); ++index) {
+            const auto it = got.chunks.find(index);
+            if (it == got.chunks.end()) throw V2Error("ERROR_CODE_UNAVAILABLE");
+            out += it->second;
+        }
+        if (first + kBatch >= total) break;
+    }
+    return out;
+}
+
+// ── новое устройство без других устройств (T130, FR-066) ───────────────────
+
+void Session::dropIdentityLocked() {
+    log("личность аккаунта сброшена другим устройством — нужна линковка этого устройства");
+    ready_ = false;
+    client_.reset();
+    state_.reset();
+    pendingAppends_.clear();
+    for (const char *name : {"state", "root", "root-backup", "root-backup-sent", "own-devices", "state-migrated"}) {
+        std::remove((cfg_.stateDir + "/" + name).c_str());
+    }
+    needsLinking_ = true;
+    outbox_.push_back(json{{"type", "needsLinking"}});
+}
+
+void Session::uploadRootBackupLocked() {
+    const auto backup = readStateFile("root-backup");
+    if (backup.empty() || !client_) return;
+    const auto mark = toBase64(backup);
+    if (readStateFile("root-backup-sent") == mark) return;
+    call(false, "identity.root.backup_set",
+         encodeMessage("parvane.identity.v2.RootBackupSetRequest", json{{"backup", mark}}));
+    writeStateFile("root-backup-sent", mark);
+}
+
+std::string Session::recoverWithKey(const std::string &recoveryKey) {
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (ready_ || !needsLinking_ || !id_ || storageKey_.size() != 32) return "failed";
+        std::string backup;
+        try {
+            const auto resp = decodeMessage("parvane.identity.v2.RootBackupGetResponse",
+                                            call(false, "identity.root.backup_get", std::string()));
+            backup = fromBase64(resp.value("backup", std::string()));
+        } catch (const std::exception &e) {
+            log(std::string("копия корня не получена: ") + e.what());
+            return "failed";
+        }
+        if (backup.empty()) return "no_backup";
+        std::string root;
+        try {
+            root = importRootBackupFor(cfg_.self, backup, recoveryKey);
+        } catch (const std::exception &) {
+            return "bad_key";
+        }
+        try {
+            auto c = Client::create(cfg_.self, deviceId_, domain_);
+            const auto ownLog = call(false, "identity.device.log_sync",
+                encodeMessage("parvane.identity.v2.DeviceLogSyncRequest",
+                              json{{"user", {{"address", cfg_.self}}}, {"after_version", "0"}}));
+            const auto requests = c->recoverWithRoot(root, ownLog, cfg_.otkCount);
+            std::fill(root.begin(), root.end(), '\0');
+            client_ = std::move(c);
+            // Порядок «диск → сеть», как у первого устройства и линковки.
+            writeStateFile("publish", requests.dump());
+            writeStateFile("device", deviceId_);
+            writeStateFile("root-backup", backup);
+            persistLocked();
+            runRequestsLocked(requests);
+            std::remove((cfg_.stateDir + "/publish").c_str());
+            needsLinking_ = false;
+            log("устройство восстановлено ключом восстановления (прежние устройства отозваны)");
+        } catch (const std::exception &e) {
+            std::fill(root.begin(), root.end(), '\0');
+            client_.reset();
+            std::remove((cfg_.stateDir + "/publish").c_str());
+            std::remove((cfg_.stateDir + "/state").c_str());
+            log(std::string("восстановление по ключу не удалось: ") + e.what());
+            return "failed";
+        }
+    }
+    post([this] {
+        if (!stopping_) connectOnce();
+    });
+    return "ok";
+}
+
+std::string Session::resetIdentity(const std::string &password) {
+    std::string recoveryKey;
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (ready_ || !needsLinking_ || !id_ || storageKey_.size() != 32) return "failed";
+        try {
+            call(false, "identity.session.reauth",
+                 encodeMessage("parvane.identity.v2.SessionReauthRequest", json{{"password", password}}));
+        } catch (const std::exception &) {
+            return "bad_password";
+        }
+        try {
+            auto c = Client::create(cfg_.self, deviceId_, domain_);
+            const auto created = c->resetIdentity(cfg_.otkCount);
+            // Первый запрос — замена журнала (нужна свежая переаутентификация):
+            // здесь «сеть → диск», повтор после рестарта без пароля не прошёл бы.
+            runRequestsLocked(created.value("requests", json::array()));
+            client_ = std::move(c);
+            auto root = fromBase64(created.value("rootSecret", std::string()));
+            if (cfg_.onRecoveryKey) {
+                recoveryKey = generateRecoveryKey();
+                writeStateFile("root-backup", client_->exportRootBackup(root, recoveryKey));
+                std::remove((cfg_.stateDir + "/root").c_str());
+            } else {
+                writeStateFile("root", root);
+                std::remove((cfg_.stateDir + "/root-backup").c_str());
+            }
+            std::fill(root.begin(), root.end(), '\0');
+            std::remove((cfg_.stateDir + "/root-backup-sent").c_str());
+            writeStateFile("device", deviceId_);
+            persistLocked();
+            needsLinking_ = false;
+            log("личность сброшена — новый корень и журнал устройств");
+        } catch (const std::exception &e) {
+            client_.reset();
+            log(std::string("сброс личности не удался: ") + e.what());
+            return "failed";
+        }
+    }
+    if (!recoveryKey.empty()) cfg_.onRecoveryKey(recoveryKey);
+    post([this] {
+        if (!stopping_) connectOnce();
+    });
+    return "ok";
+}
+
+// ── отзыв своего устройства (T128, FR-066; D-11, D-12, D-16) ───────────────
+
+bool Session::revokeContactAccess(const std::string &peer) {
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_ || peer.empty() || peer == cfg_.self) return false;
+        const auto outcome = withNeedsLocked([&] { return client_->revokeContactAccess(peer); });
+        const auto requests = outcome.value("requests", json::array());
+        if (requests.empty()) return false; // ключа у собеседника не было
+        try {
+            runRequestsLocked(json::array({requests[0]})); // identity.delivery_key.set
+        } catch (const std::exception &) {
+            // Сервер новый ключ не принял, а движок уже сменил — состояние
+            // поднимется заново из сохранённого при переподключении.
+            client_.reset();
+            state_.reset();
+            if (id_) id_->close();
+            throw;
+        }
+        for (std::size_t i = 1; i < requests.size(); ++i) {
+            try {
+                runRequestsLocked(json::array({requests[i]}));
+            } catch (const std::exception &e) {
+                log("раздача ключа доступа (" + requests[i].value("method", std::string()) + "): " + e.what());
+            }
+        }
+        persistLocked();
+        for (const auto &p : outcome.value("pendingKeyShares", json::array())) {
+            if (!p.is_string()) continue;
+            try {
+                runRequestsLocked(withNeedsLocked([&] { return client_->shareDeliveryKey(p.get<std::string>()); }));
+            } catch (const std::exception &e) {
+                log("ключ доступа " + p.get<std::string>() + " не роздан: " + e.what());
+            }
+        }
+        persistLocked();
+        log("доступ собеседника отозван: ключ доступа сменён (раздач " + std::to_string(requests.size() - 1) + ")");
+    }
+    flushAsync();
+    return true;
+}
+
+bool Session::revokeDevice(const std::string &deviceId) {
+    bool sskExposed = false;
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_ || deviceId.empty() || deviceId == deviceId_) return false;
+        const auto own = client_->logDevices(cfg_.self);
+        const auto v2 = own.contains("v2") && own["v2"].is_array() ? own["v2"] : json::array();
+        if (std::find(v2.begin(), v2.end(), json(deviceId)) == v2.end()) return false;
+        // Сведённое состояние — до смены ключа: потом старые записи не прочитать.
+        std::optional<json> carry;
+        if (state_) carry = state_->snapshot();
+        const auto outcome = withNeedsLocked([&] { return client_->revokeDevice(deviceId); });
+        const auto requests = outcome.value("requests", json::array());
+        if (requests.empty()) throw std::runtime_error("v2: отзыв без записи журнала");
+        try {
+            runRequestsLocked(json::array({requests[0]}));
+        } catch (const std::exception &) {
+            // Сервер запись не принял, а движок её уже применил — состояние
+            // поднимется заново из сохранённого при переподключении.
+            client_.reset();
+            state_.reset();
+            if (id_) id_->close();
+            throw;
+        }
+        for (std::size_t i = 1; i < requests.size(); ++i) {
+            try {
+                runRequestsLocked(json::array({requests[i]}));
+            } catch (const std::exception &e) {
+                log("ротация после отзыва (" + requests[i].value("method", std::string()) + "): " + e.what());
+            }
+        }
+        persistLocked();
+        // Отложенное: собеседники без нового ключа доступа и группы без новой эпохи.
+        for (const auto &peer : outcome.value("pendingKeyShares", json::array())) {
+            if (!peer.is_string()) continue;
+            try {
+                runRequestsLocked(withNeedsLocked([&] { return client_->shareDeliveryKey(peer.get<std::string>()); }));
+            } catch (const std::exception &e) {
+                log("ключ доступа " + peer.get<std::string>() + " не роздан: " + e.what());
+            }
+        }
+        // (scheduleRotate ждёт «устаревшую» эпоху журнала — отзыв устройства
+        // журнал группы не меняет, поэтому повтор — напрямую.)
+        for (const auto &h : outcome.value("pendingEpochs", json::array())) {
+            if (!h.is_string()) continue;
+            postDelayed(kEpochRetryMs, [this, hex = h.get<std::string>()] {
+                {
+                    std::lock_guard<std::recursive_mutex> lk2(engineMu_);
+                    if (!client_ || !ready_) return;
+                    try {
+                        rotateEpochLocked(hex);
+                        publishGroupLocked(hex);
+                    } catch (const std::exception &e) {
+                        log("новая эпоха группы " + hex + " после отзыва не начата: " + e.what());
+                    }
+                }
+                flush();
+            });
+        }
+        persistLocked();
+        if (outcome.contains("stateKeyVersion") && !outcome["stateKeyVersion"].is_null()) {
+            state_.reset();
+            pendingAppends_.clear();
+            stateRekeyed_ = true;
+            stateCarry_ = std::move(carry);
+            outbox_.push_back(json{{"type", "stateReady"}});
+        }
+        sskExposed = client_->ownSskExposed();
+        if (sskExposed) outbox_.push_back(json{{"type", "sskRotationNeeded"}});
+        log("устройство отозвано (ротаций " + std::to_string(requests.size() - 1) + ")");
+    }
+    flushAsync();
+    // Корень лежит на устройстве (первое устройство без ключа восстановления) —
+    // SSK меняется сразу, пользователя не спрашиваем.
+    if (sskExposed && !readStateFile("root").empty()) rotateSsk(std::string());
+    return true;
+}
+
+std::vector<std::string> Session::ownDevices() {
+    std::vector<std::string> out;
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_) return out;
+    const auto own = client_->logDevices(cfg_.self);
+    if (!own.contains("v2") || !own["v2"].is_array()) return out;
+    for (const auto &id : own["v2"]) {
+        if (id.is_string()) out.push_back(id.get<std::string>());
+    }
+    return out;
+}
+
+json Session::sskState() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    return json{{"rotationNeeded", ready_ && client_ && client_->ownSskExposed()},
+                {"hasRoot", !readStateFile("root").empty()},
+                {"hasBackup", !readStateFile("root-backup").empty()}};
+}
+
+std::string Session::rotateSsk(const std::string &recoveryKey) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_) return "failed";
+    std::string root;
+    if (recoveryKey.empty()) {
+        root = readStateFile("root");
+        if (root.empty()) return "no_backup";
+    } else {
+        const auto backup = readStateFile("root-backup");
+        if (backup.empty()) return "no_backup";
+        try {
+            root = client_->importRootBackup(backup, recoveryKey);
+        } catch (const std::exception &) {
+            return "bad_key";
+        }
+    }
+    std::string result = "ok";
+    try {
+        const auto reqs = client_->rotateSsk(root);
+        try {
+            runRequestsLocked(reqs);
+        } catch (const std::exception &) {
+            client_.reset();
+            state_.reset();
+            if (id_) id_->close();
+            throw;
+        }
+        persistLocked();
+        log("SSK сменён корнем");
+    } catch (const std::exception &e) {
+        log(std::string("смена SSK не удалась: ") + e.what());
+        result = "failed";
+    }
+    std::fill(root.begin(), root.end(), '\0');
+    return result;
+}
+
+// ── эфемерные каналы: «печатает» (T127, FR-013/FR-064) ─────────────────────
+
+void Session::ensureEphemeralLocked(const std::vector<std::string> &chats) {
+    json peers = json::array(), groups = json::array();
+    for (const auto &chat : chats) {
+        if (chat.empty() || chat == cfg_.self) continue;
+        ephChats_.insert(chat);
+        if (isGroupAddress(chat)) groups.push_back(groupHex(chat));
+        else peers.push_back(chat);
+    }
+    if (!ready_ || !client_ || (peers.empty() && groups.empty())) return;
+    try {
+        runRequestsLocked(client_->ephSubscribe(json{{"peers", peers}, {"groups", groups}}));
+    } catch (const std::exception &e) {
+        log(std::string("подписка на «печатает»: ") + e.what());
+    }
+}
+
+bool Session::sendTyping(const std::string &chat) {
+    const bool group = isGroupAddress(chat);
+    if (!group && !isV2Peer(chat)) return false;
+    try {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_) return true; // чат v2: по v1 не понижаем
+        ensureEphemeralLocked({chat});
+        runRequestsLocked(client_->ephTyping(group ? groupHex(chat) : chat, kTypingTyping));
+    } catch (const std::exception &e) {
+        log(std::string("«печатает» не отправлено: ") + e.what());
+    }
+    return true;
+}
+
+// ── переходный период: v1-устройства (FR-054/FR-058) ───────────────────────
+
+namespace {
+
+std::string stripPadding(std::string s) {
+    while (!s.empty() && s.back() == '=') s.pop_back();
+    return s;
+}
+
+} // namespace
+
+std::map<std::string, std::string> Session::legacyDevices(const std::string &user) {
+    std::map<std::string, std::string> out;
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_) return out;
+    const auto devices = client_->logDevices(user);
+    if (!devices.contains("legacyKeys") || !devices["legacyKeys"].is_array()) return out;
+    for (const auto &d : devices["legacyKeys"]) {
+        if (!d.is_object()) continue;
+        out[d.value("deviceId", std::string())] = d.value("identity", std::string());
+    }
+    return out;
+}
+
+void Session::syncLegacySet(const json &catalog) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_ || !catalog.is_array()) return;
+    const auto own = client_->logDevices(cfg_.self);
+    const auto v2 = own.contains("v2") && own["v2"].is_array() ? own["v2"] : json::array();
+    if (v2.empty()) return;
+    // Кандидаты: устройства каталога v1, которых нет в журнале v2.
+    json candidates = json::array();
+    for (const auto &d : catalog) {
+        if (!d.is_object()) continue;
+        const auto id = d.value("deviceId", std::string());
+        const auto identity = stripPadding(d.value("identity", std::string()));
+        const auto signing = stripPadding(d.value("signing", std::string()));
+        if (id.empty() || identity.empty() || signing.empty()) continue;
+        if (std::find(v2.begin(), v2.end(), json(id)) != v2.end()) continue;
+        candidates.push_back(json{{"deviceId", id}, {"identity", identity}, {"signing", signing}});
+    }
+    json next = json::array();
+    if (!own.value("legacySet", false)) {
+        if (candidates.empty()) return;
+        next = candidates;
+    } else {
+        const auto keys = own.contains("legacyKeys") && own["legacyKeys"].is_array() ? own["legacyKeys"] : json::array();
+        for (const auto &k : keys) {
+            const auto found = std::any_of(candidates.begin(), candidates.end(), [&](const json &d) {
+                return d["deviceId"] == k.value("deviceId", std::string())
+                    && d["identity"] == k.value("identity", std::string());
+            });
+            if (found) next.push_back(k);
+        }
+        if (next.size() == keys.size()) return;
+    }
+    try {
+        runRequestsLocked(json::array({client_->legacyDevicesRequest(next)}));
+        // Запись попадает в свой журнал синком — после подтверждения сервера.
+        checkOwnDevicesLocked();
+        log("список v1-устройств опубликован (" + std::to_string(next.size()) + ")");
+    } catch (const std::exception &e) {
+        // Нет SSK на этом устройстве либо журнал ушёл вперёд — догонит другое.
+        log(std::string("список v1-устройств не опубликован: ") + e.what());
+    }
+}
+
+void Session::deliverLegacy(const std::string &messageId, const json &sendPayload) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    runRequestsLocked(json::array({client_->legacyDeliverRequest(messageId, sendPayload.dump())}));
 }
 
 template <typename F>
@@ -773,11 +1373,16 @@ void Session::absorbLocked(std::vector<json> events) {
             }
             continue;
         }
-        if (type == "deviceAdded") {
+        if (type == "deviceAdded" || type == "deviceRevoked") {
+            // Отзыв делает другое своё устройство (оно же раздаёт новые ключи) —
+            // здесь только свой журнал заново.
             try {
                 checkOwnDevicesLocked();
             } catch (const std::exception &e) {
                 log(std::string("журнал своих устройств: ") + e.what());
+            }
+            if (type == "deviceRevoked" && client_ && client_->ownSskExposed()) {
+                outbox_.push_back(json{{"type", "sskRotationNeeded"}});
             }
             continue;
         }
@@ -785,10 +1390,26 @@ void Session::absorbLocked(std::vector<json> events) {
             // Своё устройство передало (новый) ключ личного состояния — журнал заново.
             state_.reset();
             pendingAppends_.clear();
+            stateRekeyed_ = true;
             outbox_.push_back(json{{"type", "stateReady"}});
             continue;
         }
+        if (type == "call") {
+            // Сигнал звонка: отправителя и привязку к звонку проверил движок.
+            const auto signal = ev.contains("signal") ? callSignalFromV2(ev["signal"]) : std::nullopt;
+            if (signal) {
+                outbox_.push_back(json{{"type", "callSignal"}, {"from", ev.value("from", std::string())}, {"signal", *signal}});
+            }
+            continue;
+        }
         if (type == "internal" || type == "skipped") continue;
+        // Ключ доставки собеседника / ключи эпохи могли прийти только что —
+        // канал «печатает» этого чата.
+        if (type == "direct") {
+            ensureEphemeralLocked({ev.value("chat", std::string())});
+        } else if (type == "group" && ev.contains("group") && ev["group"].is_object()) {
+            ensureEphemeralLocked({groupAddress(ev["group"].value("id", std::string()))});
+        }
         outbox_.push_back(std::move(ev));
     }
     // Входящая смена режима личного чата (chat_mode) уже в состоянии движка.
@@ -887,6 +1508,8 @@ void Session::publishGroupLocked(const std::string &hex) {
         return;
     }
     const bool isNew = publishedGroups_.insert(address).second;
+    // Канал «печатает» выводится из ключа эпохи — после смены эпохи он новый.
+    ensureEphemeralLocked({address});
     outbox_.push_back(json{{"type", "groupUpdated"}, {"address", address}, {"isNew", isNew}, {"info", *g}});
     noteGroupL2Locked(hex, *g);
     reportUnconfirmedLocked(hex, {});
@@ -952,8 +1575,29 @@ void Session::pushPrivacyLocked() {
                                   {"messages_from_strangers", privacyStrangers_}}}}));
         log(std::string("приватность сохранена: незнакомые ") + (privacyStrangers_ ? "да" : "нет")
             + ", добавление в группы " + (privacyGroupAddNobody_ ? "никто" : "все"));
+        privacySet_ = false; // правка на сервере; дальше источник истины — он
+        outbox_.push_back(json{{"type", "privacySaved"}});
     } catch (const std::exception &e) {
         log(std::string("приватность не сохранена: ") + e.what());
+        throw;
+    }
+}
+
+void Session::fetchPrivacyLocked() {
+    try {
+        const auto got = decodeMessage(
+            "parvane.identity.v2.PrivacyGetResponse",
+            call(false, "identity.privacy.get",
+                 encodeMessage("parvane.identity.v2.PrivacyGetRequest", json::object())));
+        if (!got.is_object() || !got.value("is_set", false)) return;
+        const auto settings = got.value("settings", json::object());
+        privacyGroupAddNobody_ = (settings.value("group_add", std::string()) == "AUDIENCE_NOBODY");
+        privacyStrangers_ = settings.value("messages_from_strangers", false);
+        outbox_.push_back(json{{"type", "privacy"},
+                               {"groupAddNobody", privacyGroupAddNobody_},
+                               {"strangersAllowed", privacyStrangers_}});
+    } catch (const std::exception &e) {
+        log(std::string("приватность не прочитана: ") + e.what());
         throw;
     }
 }
@@ -966,6 +1610,7 @@ bool Session::setPrivacy(bool groupAddNobody, bool strangersAllowed) {
     if (!ready_ || !client_) return false; // уйдёт при готовности сессии
     try {
         pushPrivacyLocked();
+        flushAsync();
         return true;
     } catch (const std::exception &) {
         return false;
@@ -1031,6 +1676,48 @@ bool Session::canRotateLocked(const std::string &hex) {
         return role == kRoleAdmin || role == kRoleOwner;
     }
     return false;
+}
+
+// Партия жетонов не больше limit; при исчерпанной квоте аккаунта — остаток.
+void Session::requestTokensLocked(std::size_t limit) {
+    const auto list = call(true, "identity.tokens.key_list", std::string());
+    std::vector<std::size_t> steps;
+    for (const auto count : kTokenBatchSteps) {
+        if (count <= limit) steps.push_back(count);
+    }
+    if (steps.empty()) steps.push_back(std::max<std::size_t>(1, limit));
+    for (std::size_t i = 0; i < steps.size(); ++i) {
+        try {
+            const auto req = parseRequest(client_->tokenRequest(list, serverKey_, steps[i]));
+            client_->tokenResponse(call(req.anon, req.method, req.body));
+            return;
+        } catch (const V2Error &e) {
+            if (e.code() != "ERROR_CODE_LIMIT" || i + 1 == steps.size()) throw;
+        }
+    }
+}
+
+void Session::refillTokensLocked() {
+    if (!client_ || serverKey_.empty() || !client_->tokenRefillDue()) return;
+    try {
+        requestTokensLocked(std::min(kTokenBatch, client_->tokenBatchSize()));
+        persistLocked();
+        log("жетоны: партия по расписанию получена (запас " + std::to_string(client_->tokenCount()) + ")");
+    } catch (const std::exception &e) {
+        // Срок следующей партии движок уже сдвинул — «дозапроса» не будет (D-06).
+        persistLocked();
+        log(std::string("жетоны: партия по расписанию не получена: ") + e.what());
+    }
+}
+
+void Session::scheduleTokenCheck() {
+    postDelayed(kTokenCheckMs, [this] {
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            if (ready_ && client_) refillTokensLocked();
+        }
+        scheduleTokenCheck();
+    });
 }
 
 void Session::ensureTokensLocked(std::size_t recipients) {
@@ -1397,7 +2084,10 @@ void Session::checkOwnDevicesLocked() {
         encodeMessage("parvane.identity.v2.DeviceLogSyncRequest",
                       json{{"user", {{"address", cfg_.self}}},
                            {"after_version", std::to_string(client_->logVersion(cfg_.self))}}));
-    client_->ingestLog(cfg_.self, resp);
+    if (client_->ingestLog(cfg_.self, resp) == "replaced") {
+        dropIdentityLocked();
+        return;
+    }
     const auto devices = client_->logDevices(cfg_.self);
     const auto current = devices.contains("v2") ? devices["v2"] : json::array();
     const auto known = json::parse(readStateFile("own-devices"), nullptr, false);
@@ -1413,6 +2103,17 @@ void Session::checkOwnDevicesLocked() {
     if (added.empty()) return;
     log("новые свои устройства: " + added.dump());
     outbox_.push_back(json{{"type", "ownDevicesAdded"}, {"devices", added}});
+    // T142: грант линковки несёт только ключи устройства — группы v2 новому
+    // своему устройству пересылает то, что в них уже состоит (ключи текущей
+    // эпохи и входящие сессии Megolm участников).
+    try {
+        const auto reqs = withNeedsLocked([&] { return client_->shareGroupsWithOwnDevices(added); });
+        runRequestsLocked(reqs);
+        persistLocked();
+        if (!reqs.empty()) log("группы пересланы новому своему устройству (записей " + std::to_string(reqs.size()) + ")");
+    } catch (const std::exception &e) {
+        log(std::string("группы новому своему устройству не пересланы: ") + e.what());
+    }
 }
 
 // ── журнал личного состояния (T098) ────────────────────────────────────────
@@ -1455,7 +2156,18 @@ json Session::stateAttach(const json &local) {
         log("журнал состояния недоступен — нет ключа личного состояния");
         return nullptr;
     }
-    pullStateLocked();
+    const bool readable = pullStateLocked();
+    if (stateRekeyed_ && !readable) {
+        // Ключ состояния сменён, записей под новым ключом ещё нет: пустой снимок
+        // стёр бы папки и блок-лист у хоста — переносим состояние под новый ключ.
+        const auto carry = stateCarry_ ? *stateCarry_ : (local.is_object() ? local : json::object());
+        const auto bodies = state_->migrate(carry);
+        for (const auto &b : bodies) pendingAppends_.push_back(b);
+        pushAppendsLocked();
+        log("журнал состояния перенесён под новый ключ (" + std::to_string(bodies.size()) + " записей)");
+    }
+    stateRekeyed_ = false;
+    stateCarry_.reset();
     if (readStateFile("state-migrated").empty()) {
         // Первый запуск на v2: локальные данные — начальными записями журнала.
         const auto bodies = state_->migrate(local.is_object() ? local : json::object());

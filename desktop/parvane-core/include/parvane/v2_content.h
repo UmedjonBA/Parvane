@@ -32,6 +32,12 @@ inline constexpr const char *kGroupPrefix = "v2g:";
 // UUID ("xxxxxxxx-xxxx-…") ↔ base64 16 байт (op_id в протоколе).
 [[nodiscard]] std::string uuidToB64(const std::string &uuid);
 [[nodiscard]] std::optional<std::string> b64ToUuid(const std::string &b64);
+// Сигнал личного звонка: v1 JSON (`{"type":"invite|answer|ice|reject|hangup",…}`)
+// ↔ proto3-JSON parvane.call.v2.CallSignal. Подписи SDP (`sig`) в v2 нет —
+// операцию подписывает ключ устройства, проверяет движок. nullopt — сигнал по
+// v2 не выражается (групповые сигналы, id звонка не UUID) / нечего передавать.
+[[nodiscard]] std::optional<json> callSignalToV2(const json &v1);
+[[nodiscard]] std::optional<json> callSignalFromV2(const json &v2);
 // MessageRef {"op_id": base64}.
 [[nodiscard]] json ref(const std::string &uuid);
 // Новый UUIDv7 (id служебных операций: мутации, квитанции).

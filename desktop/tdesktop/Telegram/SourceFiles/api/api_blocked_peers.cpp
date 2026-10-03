@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer_id.h"
 #include "data/data_session.h"
 #include "main/main_session.h"
+#include "parvane/parvane_client.h" // Parvane: блок-лист — на диск и в журнал состояния
 
 namespace Api {
 namespace {
@@ -81,6 +82,7 @@ void BlockedPeers::block(not_null<PeerData*> peer) {
 	}
 	// Parvane: блокируем локально — MTProto contacts.block заглушён (завис бы).
 	peer->setIsBlocked(true);
+	Parvane::MirrorBlock(peer, true);
 	if (_slice) {
 		_slice->list.insert(
 			_slice->list.begin(),
@@ -103,6 +105,7 @@ void BlockedPeers::unblock(
 	}
 	// Parvane: разблокируем локально (MTProto contacts.unblock заглушён).
 	peer->setIsBlocked(false);
+	Parvane::MirrorBlock(peer, false);
 	if (_slice) {
 		auto &list = _slice->list;
 		for (auto i = list.begin(); i != list.end(); ++i) {

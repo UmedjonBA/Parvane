@@ -10,6 +10,7 @@
 // линковки — его шифрует вызывающий).
 #pragma once
 
+#include <map>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -76,6 +77,25 @@ struct Sealed {
 [[nodiscard]] std::optional<Sealed> sealForAddress(const std::string &to,
                                                    const std::string &contentJson,
                                                    ITransport &t, const std::string &token);
+
+// Переходный период v2 (FR-054/FR-058): запечатать `contentJson` ТОЛЬКО для
+// перечисленных устройств (device_id → identity-ключ без дополнения) адресата
+// `to` и своих — и только если ключ устройства в каталоге совпал с ожидаемым
+// (списки подписаны владельцем в журнале устройств v2). Основной шифртекст
+// ПУСТ: всё адресное — в copies. nullopt — ни одной копии.
+using DeviceFilter = std::map<std::string, std::string>;
+[[nodiscard]] std::optional<Sealed> sealLegacyCopies(const std::string &to,
+                                                     const std::string &contentJson,
+                                                     ITransport &t, const std::string &token,
+                                                     const DeviceFilter &peerDevices,
+                                                     const DeviceFilter &ownDevices);
+// Запись v1 с пустым основным шифртекстом и без копии этого устройства —
+// легаси-копия v2-отправителя, адресованная другим устройствам: пропустить
+// молча (не «не расшифровано», курсор не держать). `content` — после pickOwnCopy.
+[[nodiscard]] bool isForeignLegacyCopy(const nlohmann::json &content);
+// Свои устройства по каталогу v1 → [{deviceId, identity, signing}] (one-time
+// prekeys не расходуются). Пустой массив при сбое.
+[[nodiscard]] nlohmann::json ownDeviceCatalog(ITransport &t, const std::string &token);
 
 // Расшифровать входящий Encrypted-JSON → внутренний конверт
 // {"from":<отправитель>,"content":<MessageContent>}. "" при ошибке.
