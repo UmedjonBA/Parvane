@@ -14,8 +14,11 @@ import java.io.File
  *    (экран показывает умолчание сервера — «разрешено»);
  *  - `group_add` — «кто может добавлять меня в группы» (P-34): своего экрана в шве нет,
  *    значение приходит блобом настроек уведомлений с другого устройства.
- * Метода чтения у сервера нет, поэтому устройство, где настройку НЕ задавали, ничего не шлёт —
- * иначе умолчание затёрло бы выбор, сделанный на другом устройстве ([toPush] → null).
+ * Источник истины — сервер (FR-040, правило STATE-2): сессия при готовности читает
+ * `identity.privacy.get` и шов принимает значение ([applyServer]). Своя правка помечается
+ * `dirty`, пока сервер её не подтвердил ([notePushed]), досылается при запуске и сильнее
+ * прочитанного; без неё устройство ничего не шлёт ([toPush] → null) — умолчание не затирает
+ * выбор, сделанный на другом устройстве.
  * Чистый JVM-класс.
  */
 class PrivacyPrefs(private val dir: File) {
@@ -36,8 +39,27 @@ class PrivacyPrefs(private val dir: File) {
     @Synchronized fun strangersAllowed(self: String): Boolean = entry(self)?.optBoolean("strangers", true) ?: true
     @Synchronized fun setStrangersAllowed(self: String, allowed: Boolean) {
         if (self.isEmpty()) return
-        entryForWrite(self).put("strangers", allowed)
+        entryForWrite(self).put("strangers", allowed).put("dirty", true)
         save()
+    }
+
+    /** Своя правка ещё не подтверждена сервером. */
+    @Synchronized fun dirty(self: String): Boolean = entry(self)?.optBoolean("dirty") == true
+    /** Сервер принял правку (событие `privacy_saved`). */
+    @Synchronized fun notePushed(self: String) {
+        val e = entry(self) ?: return
+        if (!e.optBoolean("dirty")) return
+        e.put("dirty", false)
+        save()
+    }
+    /** Значение с сервера (событие `privacy`); неподтверждённая своя правка сильнее. true — применено и изменилось. */
+    @Synchronized fun applyServer(self: String, groupAddNobody: Boolean, strangersAllowed: Boolean): Boolean {
+        if (self.isEmpty() || dirty(self)) return false
+        val policy = if (groupAddNobody) "nobody" else "anyone"
+        if (strangersSet(self) && this.strangersAllowed(self) == strangersAllowed && groupAdd(self) == policy) return false
+        entryForWrite(self).put("strangers", strangersAllowed).put("group_add", policy)
+        save()
+        return true
     }
 
     /** «Никто не может добавлять меня в группы» (из блоба настроек уведомлений; не известно — false). */
@@ -58,5 +80,5 @@ class PrivacyPrefs(private val dir: File) {
 
     /** Аргументы `Session::setPrivacy` (groupAddNobody, strangersAllowed); null — не отправлять. */
     @Synchronized fun toPush(self: String): Pair<Boolean, Boolean>? =
-        if (strangersSet(self)) Pair(groupAddNobody(self), strangersAllowed(self)) else null
+        if (strangersSet(self) && dirty(self)) Pair(groupAddNobody(self), strangersAllowed(self)) else null
 }

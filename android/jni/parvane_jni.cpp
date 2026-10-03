@@ -16,7 +16,10 @@
 // События: {"type":"message",id,from,to,ts,text,out,kind} | {"type":"delivered",id}
 //          | {"type":"read",ids:[]} | {"type":"session",state} | {"type":"error",text}
 #include <jni.h>
+#include <algorithm>
+#include <openssl/rand.h>
 #include <cstdlib>
+#include <ctime>
 #include <android/log.h>
 
 #include <parvane/e2e.h>
@@ -37,6 +40,7 @@
 #include <parvane/topics.h>
 #include <parvane/v2_content.h>
 #include <parvane/v2_engine.h>
+#include <parvane/v2_legacy.h>
 #include <parvane/v2_session.h>
 
 #include "jni_utf.h"
@@ -393,15 +397,48 @@ std::map<std::string, std::vector<std::string>> g_groupMembers;
 std::set<std::string> g_groupTypingSubscribed;
 // Группа v2 ("v2g:<hex>", spec 007) — группа, даже пока её состав не прочитан.
 bool isGroupLocked(const std::string &address) {
-    return g_groupMembers.count(address) > 0 || parvane::v2::isGroupAddress(address);
+    // Адрес группы — без «@» (UUID v1 или v2g:<hex>). Группа может быть ещё не
+    // известна шву: первое сообщение в новой группе обгоняет синхронизацию списка
+    // групп — без этого оно уходило в личный чат с автором (T139, 3 окт 2026);
+    // Kotlin по флагу group сам подтягивает неизвестную группу (syncGroups).
+    return g_groupMembers.count(address) > 0 || parvane::v2::isGroupAddress(address)
+        || (!address.empty() && address.find('@') == std::string::npos);
 }
+// ── блобы вложений по capability (T131, FR-062, D-08) ──
+// Секрет скачивания блоба v2-чата едет в E2E-содержимом (content.capability,
+// pack_ref.capability): сервер хранит только SHA-256 и гранта получателю не
+// даёт. Реестр file_id → секрет собирается из кэша расшифрованного содержимого
+// (он под storecrypt и переживает перезапуск).
+std::mutex g_blobCapMu;
+std::map<std::string, std::string> g_blobCaps;
+void rememberBlobCap(const std::string &fileId, const std::string &capB64) {
+    if (fileId.empty() || capB64.empty()) return;
+    std::lock_guard<std::mutex> lk(g_blobCapMu);
+    g_blobCaps[fileId] = capB64;
+}
+void rememberBlobCaps(const json &content) {
+    if (!content.is_object()) return;
+    rememberBlobCap(content.value("file_id", std::string()), content.value("capability", std::string()));
+    if (content.contains("pack_ref") && content["pack_ref"].is_object()) rememberBlobCaps(content["pack_ref"]);
+    if (content.contains("emoji_packs") && content["emoji_packs"].is_array())
+        for (const auto &ref : content["emoji_packs"]) rememberBlobCaps(ref);
+}
+std::string blobCapOf(const std::string &fileId) {
+    std::lock_guard<std::mutex> lk(g_blobCapMu);
+    const auto it = g_blobCaps.find(fileId);
+    return it == g_blobCaps.end() ? std::string() : it->second;
+}
+
 void loadDecCache() {
     g_decCache.clear();
     std::size_t lines = 0;
     for (const auto &line : parvane::storecrypt::readLines(decCachePath())) {
         ++lines;
         auto j = json::parse(line, nullptr, false);
-        if (j.is_object() && j.contains("id") && j.contains("inner")) g_decCache[j["id"]] = j["inner"];
+        if (j.is_object() && j.contains("id") && j.contains("inner")) {
+            g_decCache[j["id"]] = j["inner"];
+            if (j["inner"].is_object() && j["inner"].contains("content")) rememberBlobCaps(j["inner"]["content"]);
+        }
     }
     // Компакция: файл append-only (импорт линковки, правки пишут те же id заново) —
     // без неё рос бесконечно; переписываем, когда дублей больше четверти.
@@ -413,6 +450,7 @@ void loadDecCache() {
     }
 }
 void decCachePut(const std::string &id, const json &inner) {
+    if (inner.is_object() && inner.contains("content")) rememberBlobCaps(inner["content"]);
     if (g_decCache.count(id)) return;
     g_decCache[id] = inner;
     parvane::storecrypt::appendLine(decCachePath(), json{{"id", id}, {"inner", inner}}.dump());
@@ -587,6 +625,9 @@ std::string trySendV2Locked(const std::string &to, const json &content, const st
     s->sendContent(to, *mapped, id);
     v2NoteMessage(id, to);
     LOGI("v2 → msg %s (%s)", id.c_str(), kind.c_str());
+    // Переходный период (FR-054): та же запись — v1-устройствам из подписанных
+    // списков собеседника и своего
+    if (!v2Group && g_transport) parvane::v2::sendLegacyCopies(*s, *g_transport, g_token, to, content, id, replyTo);
     return id;
 }
 
@@ -607,6 +648,21 @@ bool tryMutateV2(const std::string &uuid, const json &content) {
         }
     }).detach();
     return true;
+}
+
+// Правка (content задан) или удаление v2-сообщения — и v1-устройствам,
+// получившим его легаси-копией (FR-054)
+void mirrorLegacyMutation(const std::string &uuid, std::optional<json> content) {
+    const auto peer = v2PeerOf(uuid);
+    if (peer.empty() || parvane::v2::isGroupAddress(peer)) return;
+    std::thread([peer, uuid, content = std::move(content)] {
+        const auto s = v2Ready();
+        if (!s) return;
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (!g_messenger || !g_transport) return;
+        if (content) parvane::v2::editLegacyCopies(*s, *g_transport, *g_messenger, g_token, peer, *content, uuid);
+        else parvane::v2::deleteLegacyCopies(*s, *g_messenger, g_token, peer, uuid);
+    }).detach();
 }
 
 // Сводка реакций сообщения (под g_v2Mu) — формат reactionsJson v1.
@@ -737,6 +793,46 @@ json v2InviteLinkJson(const json &r, const std::string &self) {
 }
 
 // События v2-сессии (не сообщения) → события ядра. true — обработано.
+// Свой подписанный список v1-устройств (FR-058): публикует первое
+// v2-устройство, дальше список только сокращается. Каталог v1 — под g_mu,
+// запись в журнал — без него (сеть v2 под мьютексом движка)
+void publishLegacySetAsync() {
+    std::thread([] {
+        const auto s = v2Ready();
+        if (!s) return;
+        json catalog = json::array();
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            if (!g_transport) return;
+            catalog = parvane::e2e::ownDeviceCatalog(*g_transport, g_token);
+        }
+        if (!catalog.empty()) s->syncLegacySet(catalog);
+    }).detach();
+}
+
+// Скачать блоб: известен секрет (T131) — анонимным каналом v2; иначе v1
+// (владелец или получатель гранта)
+parvane::CloudClient::Downloaded downloadChatBlob(parvane::CloudClient &cloud, const std::string &self,
+                                                  const std::string &token, const std::string &fileId, int timeoutMs) {
+    if (const auto cap = blobCapOf(fileId); !cap.empty()) {
+        if (const auto s = v2Ready()) {
+            parvane::CloudClient::Downloaded d;
+            try {
+                d.bytes = s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap));
+                d.ok = true;
+            } catch (const std::exception &e) {
+                d.error = e.what();
+            }
+            return d;
+        }
+    }
+    return cloud.download(self, token, fileId, timeoutMs);
+}
+
+// LINK-1 п. 8: привезённые при линковке строки групп v2, ждущие появления группы
+std::map<std::string, std::vector<json>> g_linkedGroupRows; // под g_mu: адрес группы → события
+void flushLinkedGroupRowsLocked(const std::string &address);
+
 bool handleV2SessionEvent(const json &ev) {
     const auto type = ev.value("type", std::string());
     const auto address = ev.value("address", std::string());
@@ -755,6 +851,10 @@ bool handleV2SessionEvent(const json &ev) {
         LOGI("группа v2 %s %s (v%llu)", address.c_str(), ev.value("isNew", false) ? "появилась" : "обновлена",
              static_cast<unsigned long long>(info.value("version", std::uint64_t(0))));
         emit(json{{"type", "group"}, {"group_id", address}, {"change", "v2"}, {"version", info.value("version", std::uint64_t(0))}});
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            flushLinkedGroupRowsLocked(address); // LINK-1 п. 8: после события о группе
+        }
         return true;
     }
     if (type == "groupLeft") {
@@ -774,14 +874,46 @@ bool handleV2SessionEvent(const json &ev) {
         emit(json{{"type", "group_unconfirmed"}, {"group_id", address}, {"members", ev.value("members", json::array())}});
         return true;
     }
+    if (type == "peerRootChanged") {
+        // KEY-1 v2 (T129): у собеседника сменился корень личности — шву событие
+        // для предупреждения в чате (адрес в лог не пишем, P-46)
+        LOGI("v2: у собеседника сменился корневой ключ");
+        emit(json{{"type", "peer_root_changed"}, {"user", ev.value("user", std::string())}});
+        return true;
+    }
+    if (type == "sskRotationNeeded") {
+        // Отозвано устройство, державшее SSK (D-12): корня на телефоне нет
+        // (только копия под ключом восстановления) — шву событие для показа
+        LOGI("v2: ключ подписи устройств ждёт обновления");
+        emit(json{{"type", "ssk_rotation_needed"}});
+        return true;
+    }
+    if (type == "privacy" || type == "privacySaved") {
+        // FR-040: серверное значение приватности либо подтверждение своей правки
+        emit(json{{"type", type == "privacy" ? "privacy" : "privacy_saved"},
+                  {"group_add_nobody", ev.value("groupAddNobody", false)},
+                  {"strangers_allowed", ev.value("strangersAllowed", true)}});
+        return true;
+    }
+    if (type == "typing") {
+        // «Печатает» по эфемерному каналу v2 (T127): автор и чат проверены движком
+        const auto chat = ev.value("chat", std::string());
+        if (l2Active(chat)) return true;
+        LOGI("typing [v2]"); // адрес в лог не пишем (P-46)
+        emit(json{{"type", "typing"}, {"from", ev.value("from", std::string())},
+                  {"to", parvane::v2::isGroupAddress(chat) ? chat : g_self}});
+        return true;
+    }
     if (type == "ownDevicesAdded") {
         // T119: новое своё устройство в журнале устройств
         LOGI("v2: новое своё устройство (%zu)", ev.value("devices", json::array()).size());
         emit(json{{"type", "new_device"}, {"count", ev.value("devices", json::array()).size()}});
+        publishLegacySetAsync(); // устройство перешло на v2 — убрать из списка v1
         return true;
     }
     if (type == "stateReady") {
         emit(json{{"type", "state_ready"}});
+        publishLegacySetAsync();
         return true;
     }
     if (type == "needsLinking") {
@@ -1065,6 +1197,12 @@ Deliver deliverStored(parvane::StoredMessage sm, bool live) {
         // Правка приходит новым конвертом — кэш для неё устарел, открываем заново
         if (cached != g_decCache.end() && !(seen && sm.edited)) {
             inner = cached->second; // из кэша: свой прошлый декрипт или история по линковке
+        } else if (parvane::e2e::isForeignLegacyCopy(
+                       sm.content = parvane::e2e::pickOwnCopy(sm.content, sm.copies, g_self))) {
+            // Легаси-копия v2-отправителя для чужих v1-устройств (FR-054): нашей
+            // копии нет — запись не для этого устройства, курсор не держим
+            if (live && g_messenger) g_messenger->ack(g_self, sm.id, g_token, sm.from);
+            return Deliver::Skipped;
         } else {
             const auto dec = parvane::e2e::open(sm.from, sm.content.dump());
             if (dec.empty()) {
@@ -1290,6 +1428,72 @@ int importStateLocked(const std::string &stateJson, const std::pair<std::string,
     saveCursors();
     return merged;
 }
+// ── LINK-1 п. 8 (spec 007, T138, SC-002): история v2-эпохи при линковке ─────
+// Сообщения v2 запечатаны под устройства, существовавшие при отправке: новому
+// устройству сервер их не отдаст. Старое устройство (web/desktop) кладёт
+// расшифрованные строки v2 в экспорт линковки (поле `v2History`, формат строки —
+// StoredMessage); здесь они становятся обычными событиями "message" (proto 2).
+// Строки групп v2 ждут события groupUpdated этой группы (g_linkedGroupRows).
+constexpr std::size_t kV2HistoryLimit = 20000;
+
+bool v2HistoryRowOk(const json &row) {
+    if (!row.is_object() || !row.contains("content") || !row["content"].is_object()) return false;
+    for (const auto key : {"id", "from", "to"})
+        if (!row.contains(key) || !row[key].is_string() || row[key].get<std::string>().empty()) return false;
+    if (!row.contains("ts") || !row["ts"].is_number()) return false;
+    if (row.contains("deleted") && row["deleted"].is_boolean() && row["deleted"].get<bool>()) return false;
+    const auto &content = row["content"];
+    const auto kind = parvane::contentKind(content);
+    if (kind.empty() || kind == "encrypted" || kind == "group_encrypted") return false;
+    if (content.contains("ttl_secs") && content["ttl_secs"].is_number() && content["ttl_secs"].get<std::int64_t>() > 0)
+        return false; // эфемерное не переносится
+    return true;
+}
+// Под g_mu. Возвращает число принятых строк (вместе с отложенными до группы).
+int importV2HistoryLocked(const std::string &stateJson) {
+    const auto st = json::parse(stateJson, nullptr, false);
+    if (!st.is_object() || !st.contains("v2History") || !st["v2History"].is_array()) return 0;
+    int taken = 0;
+    for (const auto &row : st["v2History"]) {
+        if (static_cast<std::size_t>(taken) >= kV2HistoryLimit) break;
+        if (!v2HistoryRowOk(row)) continue;
+        parvane::v2::Incoming in;
+        in.kind = parvane::v2::Incoming::Kind::Message;
+        in.id = row["id"].get<std::string>();
+        in.from = row["from"].get<std::string>();
+        const auto to = row["to"].get<std::string>();
+        const bool out = in.from == g_self;
+        in.group = parvane::v2::isGroupAddress(to);
+        in.chat = in.group ? to : (out ? to : in.from);
+        in.to = in.group ? to : (out ? to : g_self);
+        in.ts = row["ts"].get<std::int64_t>();
+        in.content = row["content"];
+        if (row.contains("reply_to") && row["reply_to"].is_string()) in.replyTo = row["reply_to"].get<std::string>();
+        if (!g_seen.insert(in.id).second) continue;
+        decCachePut(in.id, json{{"from", in.from}, {"content", in.content}});
+        v2NoteMessage(in.id, in.chat);
+        auto ev = parvane::android_v2::messageEvent(in, g_self, nowSec());
+        // История, а не новые входящие; у своих — как знает старое устройство
+        ev["read"] = out ? (row.contains("read") && row["read"].is_boolean() && row["read"].get<bool>()) : true;
+        if (row.contains("edited") && row["edited"].is_boolean()) ev["edited"] = row["edited"];
+        if (row.contains("pinned") && row["pinned"].is_boolean()) ev["pinned"] = row["pinned"];
+        ++taken;
+        if (in.group && !g_groupMembers.count(to)) {
+            g_linkedGroupRows[to].push_back(std::move(ev));
+            continue;
+        }
+        if (!in.group) ensurePresenceSub(in.chat);
+        emit(ev);
+    }
+    return taken;
+}
+// Под g_mu: группа v2 появилась — отдать её привезённые строки.
+void flushLinkedGroupRowsLocked(const std::string &address) {
+    const auto it = g_linkedGroupRows.find(address);
+    if (it == g_linkedGroupRows.end()) return;
+    for (const auto &ev : it->second) emit(ev);
+    g_linkedGroupRows.erase(it);
+}
 bool pollLinkGrantOnce() {
     if (!g_linkActive || !g_transport || !g_linkEph) return true;
     if (nowMs() - g_linkStartedMs > kLinkOfferLifetimeMs) {
@@ -1387,6 +1591,8 @@ bool pollLinkGrantOnce() {
     if (merged < 0) { LOGE("линковка: импорт не удался"); return true; }
     LOGI("линковка: история получена и импортирована (%d сообщений в кэше) — пере-синк с нуля", merged);
     emit(json{{"type", "link"}, {"state", "imported"}, {"count", merged}});
+    if (const int v2Rows = importV2HistoryLocked(stateJson); v2Rows > 0)
+        LOGI("линковка: история v2 перенесена (%d сообщений)", v2Rows);
     return true;
 }
 void pumpLoop() {
@@ -1705,6 +1911,16 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeListDevices(JN
                                    {"one_time_available", d.value("one_time_available", 0)}, {"current", id == mine}});
             }
         }
+        // Устройства только из журнала v2: у аккаунта на v2 новое устройство в
+        // каталог v1 не попадает (T048) — иначе его не видно и не отозвать
+        if (const auto s = v2Ready()) {
+            for (const auto &id : s->ownDevices()) {
+                const auto known = std::any_of(out.begin(), out.end(), [&](const json &d) { return d.value("device_id", std::string()) == id; });
+                if (known) continue;
+                out.push_back(json{{"device_id", id}, {"updated_at", std::int64_t(std::time(nullptr))},
+                                   {"one_time_available", 0}, {"current", id == mine}});
+            }
+        }
     } catch (const std::exception &e) { LOGE("device.list: %s", e.what()); }
     return env->NewStringUTF(out.dump().c_str());
 }
@@ -1712,14 +1928,27 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeDevice(
     const auto dev = jstr(env, deviceId);
     const auto pw = password ? jstr(env, password) : std::string();
     try {
-        std::lock_guard<std::mutex> lk(g_mu);
-        if (!g_transport) throw std::runtime_error("нет сессии");
-        if (dev == parvane::e2e::deviceId()) return JNI_FALSE; // себя не отзываем
-        // P-07: отзыв устройства требует текущий пароль (сервер отклонит без него).
-        json body{{"token", g_token}, {"device_id", dev}};
-        if (!pw.empty()) body["password"] = pw;
-        const auto resp = json::parse(g_transport->request(parvane::topics::IdentityDeviceRevoke, body.dump(), 5000), nullptr, false);
-        return resp.value("ok", false) ? JNI_TRUE : JNI_FALSE;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            if (!g_transport) throw std::runtime_error("нет сессии");
+            if (dev == parvane::e2e::deviceId()) return JNI_FALSE; // себя не отзываем
+            // P-07: отзыв устройства требует текущий пароль (сервер отклонит без него).
+            json body{{"token", g_token}, {"device_id", dev}};
+            if (!pw.empty()) body["password"] = pw;
+            const auto resp = json::parse(g_transport->request(parvane::topics::IdentityDeviceRevoke, body.dump(), 5000), nullptr, false);
+            if (!resp.value("ok", false)) return JNI_FALSE;
+        }
+        // Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и ротации
+        // ключей, которые устройство держало. После v1-отзыва (он проверил
+        // пароль): сбой v2 устройство не возвращает
+        if (const auto s = v2Ready()) {
+            try {
+                if (s->revokeDevice(dev)) LOGI("v2: устройство отозвано в журнале устройств");
+            } catch (const std::exception &e) {
+                LOGE("v2: отзыв устройства в журнале не выполнен: %s", e.what());
+            }
+        }
+        return JNI_TRUE;
     } catch (const std::exception &e) { LOGE("device.revoke: %s", e.what()); return JNI_FALSE; }
 }
 // ── копия ключей под паролем (формат веб-клиента, parvane-core keybackup) ──
@@ -1906,8 +2135,23 @@ std::string sendMediaBytes(const std::string &toStd, const std::string &plain, j
         const auto mime = content.value("mime", std::string("application/octet-stream"));
         auto recipients = std::vector<std::string>{toStd};
         if (isGroupLocked(toStd)) recipients = g_groupMembers[toStd];
-        const auto fileId = cloud.upload(g_self, g_token, "blob", mime, enc.ciphertext,
-                                         recipients, false, 256 * 1024, 120000);
+        std::string fileId;
+        // Чат v2 без v1-устройств (T131, FR-062): блоб без гранта получателю —
+        // секрет скачивания едет внутри E2E-содержимого
+        const auto s = v2Ready();
+        const bool v2Chat = s && toStd != g_self
+            && (parvane::v2::isGroupAddress(toStd) || (!isGroupLocked(toStd) && s->isV2Peer(toStd)));
+        if (v2Chat && s->legacyDevices(toStd).empty() && s->legacyDevices(g_self).empty()) {
+            std::string capability(32, '\0');
+            if (RAND_bytes(reinterpret_cast<unsigned char *>(capability.data()), 32) != 1) throw std::runtime_error("rand");
+            fileId = s->uploadBlob(enc.ciphertext, capability);
+            content["capability"] = parvane::v2::toBase64(capability);
+            rememberBlobCap(fileId, content["capability"].get<std::string>());
+        } else {
+            content.erase("capability");
+            fileId = cloud.upload(g_self, g_token, "blob", mime, enc.ciphertext,
+                                  recipients, false, 256 * 1024, 120000);
+        }
         if (fileId.empty()) throw std::runtime_error("блоб не загрузился");
         content["file_id"] = fileId;
         content["size_bytes"] = plain.size();
@@ -1969,7 +2213,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeForward(
                 { std::lock_guard<std::mutex> lk(g_mu); self = g_self; token = g_token; }
                 auto own = makeTransport(token);
                 parvane::CloudClient cloud(*own);
-                auto d = cloud.download(self, token, fid, 120000);
+                auto d = downloadChatBlob(cloud, self, token, fid, 120000);
                 if (!d.ok) throw std::runtime_error(d.error);
                 auto dec = parvane::blobcrypt::decrypt(d.bytes, content.value("file_key", std::string()), content.value("file_nonce", std::string()));
                 if (!dec) throw std::runtime_error("blobcrypt: не расшифровался");
@@ -2010,7 +2254,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
         if (self.empty()) throw std::runtime_error("нет сессии");
         own = makeTransport(token);
         parvane::CloudClient cloud(*own);
-        auto d = cloud.download(self, token, fid, 120000);
+        auto d = downloadChatBlob(cloud, self, token, fid, 120000);
         if (!d.ok) throw std::runtime_error(d.error);
         std::string bytes = d.bytes;
         if (!k.empty()) {
@@ -2486,6 +2730,13 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeClearMessages
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSendTyping(JNIEnv *env, jclass, jstring to) {
     const auto toStd = jstr(env, to);
     if (l2Active(toStd)) return; // L2-1: в чате с усиленной приватностью «печатает» не передаётся
+    // Чат v2 — эфемерным каналом v2 (T127): кадр v1 несёт серверу {from, to}.
+    // Сбой v2 не понижает до v1 — «печатает» просто не уходит
+    if (const auto s = v2Ready()) {
+        if (s->sendTyping(toStd)) return;
+    } else if (parvane::v2::isGroupAddress(toStd)) {
+        return;
+    }
     std::lock_guard<std::mutex> lk(g_mu);
     if (!g_transport) return;
     try { g_transport->publish(parvane::topics::msgTyping(std::to_string(idForAddress(toStd))), json{{"from", g_self}, {"to", toStd}}.dump()); } catch (...) {}
@@ -2507,7 +2758,9 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(
             }
             { std::lock_guard<std::mutex> lk(g_mu); g_decCache[id] = json{{"from", g_self}, {"content", content}}; }
             LOGI("правка msg %s [v2]", id.c_str());
-            return tryMutateV2(id, json{{"edit", edit}}) ? JNI_TRUE : JNI_FALSE;
+            const bool sent = tryMutateV2(id, json{{"edit", edit}});
+            if (sent) mirrorLegacyMutation(id, content);
+            return sent ? JNI_TRUE : JNI_FALSE;
         }
         std::lock_guard<std::mutex> lk(g_mu);
         if (!g_messenger || !g_transport || !parvane::e2e::ready()) throw std::runtime_error("нет сессии");
@@ -2529,6 +2782,7 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeDelete(JNIEnv
     const auto id = jstr(env, uuid);
     if (tryMutateV2(id, json{{"delete", {{"targets", json::array({parvane::v2::ref(id)})}, {"for_everyone", true}}}})) {
         LOGI("удаление своего msg %s [v2]", id.c_str());
+        mirrorLegacyMutation(id, std::nullopt);
         return JNI_TRUE;
     }
     try {
@@ -2688,7 +2942,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackFetch(JNIE
             if (self.empty()) throw std::runtime_error("нет сессии");
             auto own = makeTransport(token);
             parvane::CloudClient cloud(*own);
-            auto d = cloud.download(self, token, fid, 120000);
+            auto d = downloadChatBlob(cloud, self, token, fid, 120000);
             if (!d.ok) throw std::runtime_error(d.error);
             auto dec = parvane::blobcrypt::decrypt(d.bytes, key, nonce);
             if (!dec) throw std::runtime_error("blobcrypt: архив не расшифровался");
@@ -2864,6 +3118,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, 
     g_self.clear();
     g_token.clear();
     g_seen.clear();
+    g_linkedGroupRows.clear();
     std::remove(sessionPath().c_str());
     std::remove(cursorsPath().c_str());
     std::remove(journalPath().c_str());
@@ -2913,6 +3168,30 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSchedule
 }
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeStateMarkSent(JNIEnv *env, jclass, jstring opIdB64) {
     if (const auto s = v2Ready()) s->stateMarkSent(jstr(env, opIdB64));
+}
+// Отзыв доступа у одного собеседника (T133, FR-033) — звать при блокировке:
+// новый ключ доступа к доставке всем, кроме него. Блокирующий (сеть).
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeContactAccess(
+        JNIEnv *env, jclass, jstring peer) {
+    const auto s = v2Ready();
+    if (!s) return JNI_FALSE;
+    try {
+        return s->revokeContactAccess(jstr(env, peer)) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception &e) {
+        LOGE("отзыв доступа v2: %s", e.what());
+        return JNI_FALSE;
+    }
+}
+// У аккаунта есть v1-устройства в подписанном списке (LEGACY-1): им нужен
+// полный v1-блоб настроек уведомлений (STATE-2). Без v2-сессии — true (v1).
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeHasLegacyDevices(JNIEnv *, jclass) {
+    const auto s = v2Ready();
+    if (!s) return JNI_TRUE;
+    try {
+        return s->legacyDevices(g_self).empty() ? JNI_FALSE : JNI_TRUE;
+    } catch (const std::exception &) {
+        return JNI_TRUE;
+    }
 }
 // ── приватность v2 (T079, FR-040) и режим «усиленная приватность» (L2-1) ──
 // identity.privacy.set уходит целиком (перезаписывает все поля). false — не

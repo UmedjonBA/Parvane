@@ -13,6 +13,8 @@ import org.json.JSONObject
  * устройств → сведённый снимок → [project] в локальные файлы и апдейты X.
  * Первый запуск переносит локальные данные в журнал (движок migrate_snapshot).
  * Блок-лист шва раньше жил только в памяти — теперь переживает рестарт через журнал.
+ * Настройки уведомлений (T132, FR-039) — тоже вид журнала: открытый v1-блоб
+ * `msg.chat.setnotify` списка заглушённых больше не несёт (правило STATE-2).
  * Порт web `src/api/parvane/v2/stateJournal.ts`. Чистый JVM-класс: движок и
  * адресация — через [Codec]/[Resolver].
  */
@@ -45,8 +47,25 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val scheduledRemoved = ArrayList<ScheduledQueue.Item>()
         /** Адреса, блокировка которых изменилась. */
         val blocked = HashSet<String>()
-        fun any() = blocked.isNotEmpty() || folders || drafts.isNotEmpty() || archived.isNotEmpty() || scheduledAdded.isNotEmpty() || scheduledRemoved.isNotEmpty()
+        /** Изменившиеся настройки уведомлений блобом веба (`{defaults, exceptions}`) — для `applyNotifyBlob`; null — без изменений. */
+        var notify: JSONObject? = null
+        fun any() = blocked.isNotEmpty() || folders || drafts.isNotEmpty() || archived.isNotEmpty() || scheduledAdded.isNotEmpty() || scheduledRemoved.isNotEmpty() || notify != null
     }
+
+    /**
+     * Настройки уведомлений шва (T132, FR-039) в виде блоба веба: `defaults` — `{users|groups|channels: {mutedUntil}}`,
+     * `exceptions` — `{адрес: {mutedUntil}}`, время — секунды эпохи. Копия на момент вызова (`ParvaneStore.notifyView`).
+     */
+    class NotifyView(val defaults: JSONObject, val exceptions: JSONObject)
+
+    /** Поля `state.v1.NotifySettings` из последнего снимка журнала: звук/превью/тихий режим шов не ведёт, но и не стирает. */
+    private val journalNotify = HashMap<String, JSONObject>()
+    private val journalNotifyDefaults = HashMap<String, JSONObject>()
+
+    private fun mutedUntil(s: JSONObject?): Long = if (s == null || s.isNull("mutedUntil")) 0L else s.optLong("mutedUntil")
+    private fun stateMutedUntil(st: JSONObject?): Long = (st?.optString("mute_until_ms")?.toLongOrNull() ?: 0L) / 1000
+    private fun notifyToState(local: JSONObject?, journal: JSONObject?): JSONObject =
+        (journal?.let { JSONObject(it.toString()) } ?: JSONObject()).put("mute_until_ms", (mutedUntil(local) * 1000).toString())
 
     // ── адресация ────────────────────────────────────────────────────────────
     fun peerOf(address: String): JSONObject? {
@@ -76,7 +95,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         if (peers == null) emptyList() else (0 until peers.length()).mapNotNull { addressOf(peers.optJSONObject(it))?.let(resolver::chatIdOf) }
 
     // ── локальные данные → желаемый снимок (виды [KINDS]) ───────────────────
-    fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet()): JSONObject {
+    fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(), notify: NotifyView? = null): JSONObject {
         val folders = JSONArray()
         val order = JSONArray()
         local.folders.all().forEach { f ->
@@ -112,13 +131,31 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         // Блок-лист: время блокировки подставляет ядро (из журнала или «сейчас»)
         val blocked = JSONArray()
         synchronized(blockedSet) { blockedSet.toList() }.sorted().forEach { a -> peerOf(a)?.let { blocked.put(JSONObject().put("peer", it)) } }
-        return JSONObject().put("folders", folders).put("folder_order", JSONObject().put("ids", order)).put("blocked", blocked)
+        val out = JSONObject().put("folders", folders).put("folder_order", JSONObject().put("ids", order)).put("blocked", blocked)
             .put("drafts", drafts).put("archived", archived).put("scheduled", scheduled)
+        // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам, сервер этого не видит
+        if (notify != null) {
+            val list = JSONArray()
+            val defaults = JSONObject()
+            synchronized(this) {
+                notify.exceptions.keys().asSequence().toList().sorted().forEach { address ->
+                    val peer = peerOf(address) ?: return@forEach
+                    list.put(JSONObject().put("peer", peer).put("settings", notifyToState(notify.exceptions.optJSONObject(address), journalNotify[address])))
+                }
+                NOTIFY_SCOPES.forEach { scope ->
+                    val d = notify.defaults.optJSONObject(scope)
+                    if (d != null || journalNotifyDefaults.containsKey(scope)) defaults.put(scope, notifyToState(d, journalNotifyDefaults[scope]))
+                }
+            }
+            out.put("notify", list).put("notify_defaults", defaults)
+        }
+        return out
     }
 
     // ── сведённый снимок → локальные данные ───────────────────────────────────
-    fun project(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, blockedSet: MutableSet<String> = HashSet()): Changes {
+    fun project(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, blockedSet: MutableSet<String> = HashSet(), notify: NotifyView? = null): Changes {
         val ch = Changes()
+        if (notify != null) projectNotify(snap, notify, ch)
         val bl = snap.optJSONArray("blocked") ?: JSONArray()
         val want = (0 until bl.length()).mapNotNull { addressOf(bl.optJSONObject(it)?.optJSONObject("peer")) }.filter { it.contains('@') }.toSet()
         synchronized(blockedSet) {
@@ -131,6 +168,41 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         projectArchived(snap, local, ch)
         projectScheduled(snap, local, queue, ch)
         return ch
+    }
+
+    /** В снимке журнала есть настройки уведомлений (вид `notify` уже вёл какой-то клиент). */
+    fun hasNotify(snap: JSONObject): Boolean =
+        (snap.optJSONArray("notify")?.length() ?: 0) > 0 || (snap.optJSONObject("notify_defaults")?.length() ?: 0) > 0
+
+    /** Журнал → изменившиеся настройки блобом веба; исключение, которого в журнале больше нет, снимается (мут = 0). */
+    private fun projectNotify(snap: JSONObject, notify: NotifyView, ch: Changes) {
+        val exceptions = JSONObject()
+        val defaults = JSONObject()
+        synchronized(this) {
+            journalNotify.clear(); journalNotifyDefaults.clear()
+            val list = snap.optJSONArray("notify") ?: JSONArray()
+            for (i in 0 until list.length()) {
+                val entry = list.optJSONObject(i) ?: continue
+                val address = addressOf(entry.optJSONObject("peer")) ?: continue
+                val settings = entry.optJSONObject("settings") ?: JSONObject()
+                journalNotify[address] = settings
+                val until = stateMutedUntil(settings)
+                if (!notify.exceptions.has(address) || mutedUntil(notify.exceptions.optJSONObject(address)) != until)
+                    exceptions.put(address, JSONObject().put("mutedUntil", until))
+            }
+            notify.exceptions.keys().asSequence().toList().forEach { address ->
+                if (!journalNotify.containsKey(address) && mutedUntil(notify.exceptions.optJSONObject(address)) != 0L)
+                    exceptions.put(address, JSONObject().put("mutedUntil", 0L))
+            }
+            val defs = snap.optJSONObject("notify_defaults") ?: JSONObject()
+            NOTIFY_SCOPES.forEach { scope ->
+                val st = defs.optJSONObject(scope) ?: return@forEach
+                journalNotifyDefaults[scope] = st
+                val until = stateMutedUntil(st)
+                if (mutedUntil(notify.defaults.optJSONObject(scope)) != until) defaults.put(scope, JSONObject().put("mutedUntil", until))
+            }
+        }
+        if (exceptions.length() > 0 || defaults.length() > 0) ch.notify = JSONObject().put("defaults", defaults).put("exceptions", exceptions)
     }
 
     private fun projectFolders(snap: JSONObject, local: ChatLocalState, ch: Changes) {
@@ -214,7 +286,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     companion object {
         /** Виды, которые ведёт шов (остальные виды журнала не трогаются). */
-        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled")
+        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify")
+        private val NOTIFY_SCOPES = listOf("users", "groups", "channels")
         const val V2_GROUP_PREFIX = "v2g:"
         private val HEX32 = Regex("^[0-9a-f]{32}$")
 
