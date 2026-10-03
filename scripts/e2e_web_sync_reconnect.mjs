@@ -9,6 +9,7 @@ import {
   addReaction,
   deleteMessage,
   disconnectWhileOffline,
+  dumpDiagJournal,
   editText,
   findMessage,
   findMessageContainer,
@@ -197,6 +198,7 @@ try {
   for (const [who, session] of Object.entries(diagSessions)) {
     await session.page.screenshot({ path: `${dir}sync-${who}.png` }).catch(() => {});
     console.error(`журнал ${who}:\n${session.logs.slice(-60).join('\n')}`);
+    await dumpDiagJournal(session.page, who, 120);
   }
   throw err;
 } finally {

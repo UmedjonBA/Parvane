@@ -545,10 +545,27 @@ try {
   const TAMPERED_CHUNK = 3;
   const seenByIndex = new Map();
   seenChunkReplies = seenByIndex;
+  const V2_CHUNK_FRAME_MIN_BYTES = 100000;
+  let v2ChunkFrames = 0;
   await eveContext.routeWebSocket(/.*/, (ws) => {
     const server = ws.connectToServer();
     ws.onMessage((message) => server.send(message));
     server.onMessage((message) => {
+      // Протокол v2: блоб по capability едет двоичными кадрами (схема, не JSON).
+      // Кадр с чанком узнаётся по размеру; eve — новый пользователь и качает
+      // только целевой файл. Байт в середине кадра лежит внутри данных чанка
+      if (typeof message !== 'string' && message.length > V2_CHUNK_FRAME_MIN_BYTES) {
+        v2ChunkFrames += 1;
+        if (v2ChunkFrames === TAMPERED_CHUNK + 1) {
+          seenByIndex.set(TAMPERED_CHUNK, 1);
+          const bytes = Buffer.from(message);
+          bytes[Math.floor(bytes.length / 2)] ^= 0xff;
+          ws.send(bytes);
+          return;
+        }
+        ws.send(message);
+        return;
+      }
       try {
         const frame = JSON.parse(String(message));
         if (frame.op === 'reply' && frame.payload) {

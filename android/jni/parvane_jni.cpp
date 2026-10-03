@@ -602,7 +602,7 @@ std::shared_ptr<parvane::v2::Session> v2ReadyForSend() {
 }
 
 // Сессия v2 ждёт грант линковки (LINK-1 v2): журнал устройств у аккаунта есть,
-// этого устройства в нём нет. До гранта шов работает по v1.
+// этого устройства в нём нет. До гранта шов принимает по v1, но не отправляет (T156).
 std::shared_ptr<parvane::v2::Session> v2NeedsLinking() {
     std::lock_guard<std::mutex> lk(g_v2Mu);
     return (g_v2 && g_v2->needsLinking()) ? g_v2 : nullptr;
@@ -629,6 +629,10 @@ std::string trySendV2Locked(const std::string &to, const json &content, const st
     if (kind == "skdm" || kind.empty() || (!v2Group && isGroupLocked(to))) return {};
     const auto s = v2ReadyForSend();
     if (v2Group && !s) throw std::runtime_error("группа v2: сессия v2 не готова");
+    // Устройство аккаунта v2, ещё не привязанное к журналу устройств (T156, D-13):
+    // по v1 собеседники его сообщение отвергают или не получают — до привязки
+    // отправки нет вовсе (как в desktop `TrySendV2` и web `ensureSendable`)
+    if (!s && v2NeedsLinking()) throw std::runtime_error("устройство не привязано к аккаунту v2");
     // «Избранное» (чат с собой, T147) — по v2: копии своим устройствам журнала
     if (!s || (!v2Group && to != g_self && !s->isV2Peer(to))) return {};
     const auto mapped = parvane::v2::toV2(content, replyTo.value_or(std::string()));
