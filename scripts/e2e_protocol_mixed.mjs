@@ -8,6 +8,8 @@
 // правило L2-1). Пара web2-web1 — группа из v2- и v1-участника (идёт по v1) и
 // переход второго клиента на v2: история до перехода читается (SC-002).
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import zlib from 'node:zlib';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -18,6 +20,7 @@ import {
   addReaction,
   createGroupViaUi,
   deleteMessage,
+  expectMediaFlowing,
   dumpDiagJournal,
   editText,
   findMessage,
@@ -97,6 +100,9 @@ const browser = await chromium.launch({
     '--use-fake-ui-for-media-stream',
     '--use-fake-device-for-media-stream',
     '--autoplay-policy=no-user-gesture-required',
+    // Звонок между двумя вкладками: без флага Chromium с выданным mic-разрешением
+    // фильтрует loopback-кандидаты
+    '--allow-loopback-in-peer-connection',
   ],
 });
 const aliceContext = await browser.newContext({ permissions: ['microphone'] });
@@ -119,6 +125,8 @@ const logs = { alice: [], bob: [] };
 const consoleTail = { alice: [], bob: [] };
 // Эфемерные публикации в v1-шину (typing/presence) — для правила L2-1
 const ephemeralSent = { alice: [], bob: [] };
+// Сигналы звонков, ушедшие v1-путём (call.signal): у пары v2 их быть не должно
+const callSignalsV1 = { alice: [], bob: [] };
 
 // Консоль слушаем с создания страницы (до входа): иначе ошибки входа не видны
 function trackContext(context, who) {
@@ -137,6 +145,7 @@ function trackContext(context, who) {
         if (frame.op === 'pub' && /^(msg\.typing\.|presence\.)/.test(frame.subject || '')) {
           ephemeralSent[who].push(frame.subject);
         }
+        if (frame.op === 'pub' && frame.subject === 'call.signal') callSignalsV1[who].push(frame.subject);
       } catch {
         // не JSON-кадр v1 — не наш случай
       }
@@ -188,6 +197,36 @@ async function sendVoiceAndCheck(senderPage, receiverPage, label) {
   );
   // Дальше по сценарию звук не нужен; пауза — чтобы следующий снимок был стабилен
   await receiverPage.evaluate(() => (globalThis.__parvaneE2eAudios || []).forEach((audio) => audio.pause()));
+}
+
+// Звонок между v2-клиентами (T089): сигналинг — запечатанными конвертами по
+// анонимному каналу (D-08), на v1-шину `call.signal` не уходит ничего. Звонок
+// соединяется, звук идёт в обе стороны, SAS совпадает
+async function runV2CallScenario(alicePage, bobPage) {
+  const before = { alice: callSignalsV1.alice.length, bob: callSignalsV1.bob.length };
+  await alicePage.getByRole('button', { name: 'Call', exact: true }).click();
+  await bobPage.getByText('is calling you...', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobPage.getByRole('button', { name: 'Accept' }).click();
+  const aliceSas = alicePage.locator('[title*="fully secure"]');
+  const bobSas = bobPage.locator('[title*="fully secure"]');
+  await aliceSas.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSas.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectMediaFlowing(alicePage, { audio: true });
+  await expectMediaFlowing(bobPage, { audio: true });
+  assert.equal((await aliceSas.innerText()).trim(), (await bobSas.innerText()).trim(), 'SAS звонка не совпал');
+  await alicePage.getByRole('button', { name: 'End Call' }).click();
+  await alicePage.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await bobPage.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  assert.deepEqual(callSignalsV1.alice.slice(before.alice), [], 'alice: сигналы звонка ушли v1-путём');
+  assert.deepEqual(callSignalsV1.bob.slice(before.bob), [], 'bob: сигналы звонка ушли v1-путём');
+  // История: сервер v2-звонки не записывает (D-08) — запись делает сам клиент
+  // и кладёт в журнал личного состояния
+  await callEntry(alicePage, 'Outgoing Call').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await callEntry(bobPage, 'Incoming Call').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+function callEntry(page, text) {
+  return page.locator('.Transition_slide-active > .MessageList .Message').filter({ hasText: text }).first();
 }
 
 // Композер открытого чата (после перехода между чатами в DOM их два)
@@ -290,6 +329,13 @@ async function runL2Scenario(alicePage, bobPage) {
   await typeDraft(alicePage, 'typing-after-l2');
   await typingStatus(bobPage).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await clearDraft(alicePage);
+
+  // T127: в v2-чате «печатает» идёт эфемерным каналом v2 — кадров v1 с открытыми
+  // `{from, to}` нет ни у кого
+  for (const who of ['alice', 'bob']) {
+    assert.deepEqual(ephemeralSent[who].filter((subject) => subject.startsWith('msg.typing.')), [],
+      `${who}: «печатает» ушло v1-кадром`);
+  }
 }
 
 let aliceSession;
@@ -346,7 +392,21 @@ try {
   await sendVoiceAndCheck(aliceSession.page, bobSession.page, 'alice → bob');
   await sendVoiceAndCheck(bobSession.page, aliceSession.page, 'bob → alice');
 
+  // T131 (FR-062): блобы v2-чата грузятся без per-recipient гранта — секрет
+  // скачивания внутри E2E, получатель качает анонимным каналом. В cloud нет
+  // записей «файл → получатель»; у пары с v1-участником гранты остаются
+  const backendDir = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+  if (backendDir) {
+    const count = (sql) => Number(execFileSync('sqlite3', [join(backendDir, 'cloud.db'), sql]).toString().trim());
+    const files = count('SELECT COUNT(*) FROM files');
+    const grants = count('SELECT COUNT(*) FROM file_grants');
+    assert.ok(files >= 3, `в cloud меньше трёх блобов (${files})`);
+    if (bobIsV2) assert.equal(grants, 0, `cloud хранит гранты получателям для блобов v2-чата (${grants})`);
+    else assert.ok(grants >= 1, 'пара с v1-участником: блоб без гранта получателю');
+  }
+
   if (bobIsV2) await runL2Scenario(aliceSession.page, bobSession.page);
+  if (bobIsV2) await runV2CallScenario(aliceSession.page, bobSession.page);
 
   // Группа из v2- и v1-участника: журнала устройств v2 у bob нет, группа обязана
   // создаться по v1 (Megolm) и работать в обе стороны
@@ -372,6 +432,8 @@ try {
   await aliceSession.page.reload();
   await openPrivateChatStrict(aliceSession.page, bob).catch(() => undefined);
   await findMessage(aliceSession.page, edited).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Запись о звонке по v2 возвращается из журнала личного состояния
+  if (bobIsV2) await callEntry(aliceSession.page, 'Outgoing Call').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Свои служебные сообщения о режиме переживают перезагрузку
   if (bobIsV2) {
     await serviceMessage(aliceSession.page, 'You enabled enhanced privacy')

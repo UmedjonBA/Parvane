@@ -16,10 +16,14 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  callProviderForChat,
+  createGroupViaUi,
   dismissRecoveryKeyDialog,
   dumpDiagJournal,
   findMessage,
+  findMessageContainer,
   LOGIN_TIMEOUT_MS,
+  openGroupChatByTitle,
   openPrivateChatStrict,
   preparePage,
   sendText,
@@ -60,6 +64,13 @@ async function waitLog(who, needle, timeout = LOGIN_TIMEOUT_MS) {
     await new Promise((r) => { setTimeout(r, 200); });
   }
   throw new Error(`${who}: нет записи «${needle}» (журнал: ${logs[who].join(' | ')})`);
+}
+
+async function sendInActiveChat(page, text) {
+  const composer = page.locator('.Transition_slide-active #editable-message-text[contenteditable="true"]').last();
+  await composer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await composer.fill(text);
+  await composer.press('Enter');
 }
 
 async function openDevicesScreen(page) {
@@ -134,6 +145,14 @@ function serverFilesContaining(needle) {
     });
 }
 
+// Сколько записей сервер принял в журналы инбокса v2 за всё время (счётчики
+// seq монотонны, подтверждение их не уменьшает)
+function sealedInboxCount() {
+  return Number(execFileSync('sqlite3', [
+    join(BACKEND_DIR, 'messenger.db-v2.db'), 'SELECT COALESCE(SUM(next_seq), 0) FROM inbox_device',
+  ]).toString().trim());
+}
+
 try {
   assert(BACKEND_DIR, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
   const suffix = `${Date.now()}-${process.pid}`;
@@ -156,6 +175,21 @@ try {
   await sendText(alicePage, before);
   await openPrivateChatStrict(bob1Page, alice);
   await findMessage(bob1Page, before).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Свой ответ по v2 — тоже история v2-эпохи (LINK-1 п. 8)
+  const beforeOwn = `st-before-own-${suffix}`;
+  await sendText(bob1Page, beforeOwn);
+  await findMessage(alicePage, beforeOwn).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // Группа v2 до второго устройства (T142): её и её историю bob2 должен получить
+  const groupTitle = `SG-${suffix.slice(-6)}`;
+  const groupBefore = `st-group-before-${suffix}`;
+  await createGroupViaUi(alicePage, groupTitle, [bob.split('@')[0]]);
+  await waitLog('alice', 'v2: группа создана');
+  await openGroupChatByTitle(alicePage, groupTitle);
+  await sendInActiveChat(alicePage, groupBefore);
+  await openGroupChatByTitle(bob1Page, groupTitle);
+  await findMessage(bob1Page, groupBefore).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await openPrivateChatStrict(bob1Page, alice);
 
   // ── Второе устройство: своего корня не создаёт, просит линковку ────────────
   sessions.bob2 = await preparePage(contexts.bob2, bob, PASSWORD, { seedLocalStorage: V2_SEED });
@@ -198,6 +232,28 @@ try {
   await findMessage(bob1Page, after).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openPrivateChatStrict(bob2Page, alice);
   await findMessage(bob2Page, after).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // ── T138 (SC-002, LINK-1 п. 8): история v2-эпохи на новом устройстве ────────
+  // Сообщения до линковки запечатаны под одно устройство bob1 — сервер их bob2
+  // не отдаст; они приезжают в экспорте линковки.
+  await waitLog('bob2', 'линковка: история v2 перенесена');
+  await findMessage(bob2Page, before).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findMessage(bob2Page, beforeOwn).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await findMessage(bob2Page, before).count(), 1, 'bob2: сообщение истории v2 задвоилось');
+  // ── T142: группы v2 на привязанном устройстве — bob1 пересылает bob2 ключи
+  // эпохи и сессии Megolm; группа появляется, история до линковки на месте,
+  // новое сообщение участника читается, bob2 пишет сам
+  await waitLog('bob1', 'v2: группы пересланы новому своему устройству');
+  await openGroupChatByTitle(bob2Page, groupTitle);
+  await findMessage(bob2Page, groupBefore).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const groupAfter = `st-group-after-${suffix}`;
+  await openGroupChatByTitle(alicePage, groupTitle);
+  await sendInActiveChat(alicePage, groupAfter);
+  await findMessage(bob2Page, groupAfter).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const groupFromBob2 = `st-group-bob2-${suffix}`;
+  await sendInActiveChat(bob2Page, groupFromBob2);
+  await findMessage(alicePage, groupFromBob2).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await openPrivateChatStrict(bob2Page, alice);
+  await openPrivateChatStrict(alicePage, bob);
   const own = `st-own-${suffix}`;
   await sendText(bob1Page, own);
   await findMessage(alicePage, own).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -213,6 +269,27 @@ try {
   await closeSettings(bob1Page);
 
   await openPrivateChatStrict(bob1Page, alice);
+
+  // ── Настройки уведомлений — тоже в журнале (T132, FR-039): мьют ≤ 10 с, а в
+  // открытом v1-блобе настроек списка заглушённых больше нет
+  const MUTE_FOREVER = 2147483647;
+  const muted = await callProviderForChat(bob1Page, 'updateChatNotifySettings', aliceName, undefined, {
+    chat: '$chat', settings: { mutedUntil: MUTE_FOREVER },
+  });
+  assert.ok(!muted.error, `bob1: мьют не выполнен: ${muted.error}`);
+  const muteStarted = Date.now();
+  await bob2Page.waitForFunction(({ name, until }) => {
+    const g = globalThis.__parvaneGetGlobal?.();
+    const user = g && Object.values(g.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+    return Boolean(user && g.chats.notifyExceptionById?.[user.id]?.mutedUntil === until);
+  }, { name: aliceName, until: MUTE_FOREVER }, { timeout: STATE_SYNC_BUDGET_MS });
+  console.log(`мьют на втором устройстве через ${Date.now() - muteStarted} мс`);
+  const notifyBlobs = execFileSync('sqlite3', [join(BACKEND_DIR, 'messenger.db'), 'SELECT notify_json FROM user_settings'])
+    .toString();
+  assert.ok(!notifyBlobs.includes(alice) && !notifyBlobs.includes('exceptions'),
+    `v1-блоб настроек на сервере несёт список заглушённых: ${notifyBlobs.slice(0, 200)}`);
+
   assert.equal(await isBlocked(bob2Page, aliceName), false, 'bob2: alice заблокирована до блокировки');
   await bob1Page.getByRole('button', { name: 'More actions' }).click();
   await bob1Page.getByRole('menuitem', { name: 'Block user' }).click();
@@ -224,6 +301,32 @@ try {
     return Boolean(user && g.blocked.ids.includes(user.id));
   }, aliceName, { timeout: STATE_SYNC_BUDGET_MS });
   console.log(`блокировка на втором устройстве через ${Date.now() - blockStarted} мс`);
+
+  // ── T133 (FR-033): блокировка отзывает у собеседника ключ доступа к доставке —
+  // новый ключ уходит на сервер и своему второму устройству
+  await waitLog('bob1', 'доступ собеседника отозван');
+
+  // ── FR-040: приватность хранит сервер — второе устройство читает её оттуда ──
+  await bob1Page.evaluate(() => window.__parvaneDiagCallApi('parvaneSetStrangersPolicy', { isAllowed: false }));
+  const privacyStarted = Date.now();
+  await bob2Page.waitForFunction(async () => {
+    const policy = await window.__parvaneDiagCallApi('parvaneGetStrangersPolicy');
+    return policy?.isAvailable && policy.isAllowed === false;
+  }, undefined, { timeout: STATE_SYNC_BUDGET_MS, polling: 1000 });
+  console.log(`приватность на втором устройстве через ${Date.now() - privacyStarted} мс`);
+
+  // Заблокированная пишет по прежнему ключу — сервер его не принимает; как
+  // незнакомая тоже не может (запрещено настройкой): сообщение не уходит
+  const sealedBefore = sealedInboxCount();
+  await openPrivateChatStrict(alicePage, bob);
+  await sendText(alicePage, `st-blocked-${suffix}`);
+  await waitLog('alice', 'ключ доступа собеседника отвергнут');
+  await new Promise((resolve) => { setTimeout(resolve, 3000); });
+  assert.equal(sealedInboxCount(), sealedBefore, 'сообщение заблокированной принято сервером в инбокс получателя');
+  // FR-033 у отправителя: отказ виден — сообщение помечено «не отправлено»,
+  // а не висит отправленным
+  await findMessageContainer(alicePage, `st-blocked-${suffix}`).locator('.MessageOutgoingStatus--failed')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // Сервер хранит только шифртекст журнала состояния
   assert.deepEqual(serverFilesContaining(folderName), [], 'название папки лежит в БД сервера открытым');

@@ -14,6 +14,7 @@ import {
   findMessage,
   LOGIN_TIMEOUT_MS,
   openGroupChatByTitle,
+  openGroupManagement,
   openPrivateChatStrict,
   preparePage,
   sendText,
@@ -34,6 +35,9 @@ const logs = Object.fromEntries(names.map((n) => [n, []]));
 const consoleTail = Object.fromEntries(names.map((n) => [n, []]));
 const sessions = {};
 
+// «Печатает», ушедшее v1-кадром с открытыми `{from, to}`: в группе v2 таких нет
+const typingV1 = Object.fromEntries(names.map((n) => [n, []]));
+
 names.forEach((who) => {
   contexts[who].on('page', (page) => {
     page.on('console', (m) => {
@@ -43,6 +47,15 @@ names.forEach((who) => {
       if (consoleTail[who].length > 80) consoleTail[who].shift();
     });
     page.on('pageerror', (e) => consoleTail[who].push(`pageerror: ${String(e).slice(0, 500)}`));
+    page.on('websocket', (ws) => ws.on('framesent', ({ payload }) => {
+      if (typeof payload !== 'string') return;
+      try {
+        const frame = JSON.parse(payload);
+        if (frame.op === 'pub' && /^msg\.typing\./.test(frame.subject || '')) typingV1[who].push(frame.subject);
+      } catch {
+        // не JSON-кадр v1
+      }
+    }));
   });
 });
 
@@ -72,6 +85,24 @@ async function sendInActiveChat(page, text) {
   await composer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await composer.fill(text);
   await composer.press('Enter');
+}
+
+const TYPING_SETTLE_MS = 4000;
+
+function serviceMessage(page, text) {
+  return page.locator('.Transition_slide-active > .MessageList .ActionMessage').filter({ hasText: text });
+}
+
+// Переключатель режима группы — в экране управления (только у админа с правом
+// менять сведения); после — обратно в чат группы
+async function toggleGroupL2(page, title) {
+  const right = await openGroupManagement(page, title);
+  const row = right.locator('.Management .ListItem').filter({ hasText: 'Enhanced privacy' });
+  await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await row.locator('.ListItem-button').click();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await openGroupChatByTitle(page, title);
 }
 
 try {
@@ -107,6 +138,34 @@ try {
   const first = `g2-first-${suffix}`;
   await sendText(alicePage, first);
   await findMessage(sessions.bob.page, first).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── «Печатает» в группе v2 (T127, FR-064): анонимно, канал из ключа эпохи ──
+  const draft = alicePage.locator('#editable-message-text[contenteditable="true"]');
+  await draft.click();
+  await draft.pressSequentially('typing-in-group', { delay: 120 });
+  await sessions.bob.page.locator('.MiddleHeader .typing-status')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await draft.fill('');
+  assert.deepEqual(typingV1.alice, [], 'alice: «печатает» группы v2 ушло v1-кадром');
+
+  // ── Групповой L2 (T139, L2-1): владелец включает режим в управлении группой —
+  // служебное сообщение у всех, «печатает» не показывается, сообщения ходят;
+  // выключение — снова служебное сообщение
+  await toggleGroupL2(alicePage, title);
+  await serviceMessage(sessions.bob.page, 'enabled enhanced privacy')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await draft.click();
+  await draft.pressSequentially('typing-under-group-l2', { delay: 120 });
+  await sessions.bob.page.waitForTimeout(TYPING_SETTLE_MS);
+  assert.equal(await sessions.bob.page.locator('.MiddleHeader .typing-status').count(), 0,
+    'bob: «печатает» в группе с L2 показывается');
+  await draft.fill('');
+  const underL2 = `g2-under-l2-${suffix}`;
+  await sendText(alicePage, underL2);
+  await findMessage(sessions.bob.page, underL2).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await toggleGroupL2(alicePage, title);
+  await serviceMessage(sessions.bob.page, 'disabled enhanced privacy')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Ссылка v2: создаёт Алиса, Кэрол вступает кликом в личке ────────────────
   const exported = await callProviderForChat(alicePage, 'exportChatInvite', title, undefined, { peer: '$chat' });
