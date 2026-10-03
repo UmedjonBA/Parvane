@@ -151,10 +151,13 @@ object ParvaneCore {
     /** Своя правка → записи, затем чужие. → {"changed","snapshot"} или null. */
     fun stateSync(desiredJson: String, kinds: List<String>): JSONObject? =
         nativeStateSync(desiredJson, org.json.JSONArray(kinds).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** «Удалить чат у себя» (T145): граница очистки чата — в журнал личного состояния. */
+    fun stateChatCleared(address: String, untilMs: Long) = nativeStateChatCleared(address, untilMs)
     fun stateScheduledSent(opIdB64: String): Boolean = nativeStateScheduledSent(opIdB64)
     fun stateMarkSent(opIdB64: String) = nativeStateMarkSent(opIdB64)
     @JvmStatic private external fun nativeStateAttach(localJson: String): String
     @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String): String
+    @JvmStatic private external fun nativeStateChatCleared(address: String, untilMs: Long)
     @JvmStatic private external fun nativeStateScheduledSent(opIdB64: String): Boolean
     @JvmStatic private external fun nativeStateMarkSent(opIdB64: String)
     @JvmStatic private external fun nativeSetProtoV2(enabled: Boolean)

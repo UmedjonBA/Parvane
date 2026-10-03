@@ -320,10 +320,10 @@ class Client private constructor(
                     override fun read(path: String) = ParvaneCore.storeRead(path)
                     override fun write(path: String, text: String) = ParvaneCore.storeWrite(path, text)
                 }
-                // Протокол v2 (spec 007): двойной стек по флагу, по умолчанию выключен.
-                // Флаг — файл <databaseDirectory>/parvane-proto-v2 (читает ядро) или,
-                // только в debug, /data/local/tmp/parvane-proto-v2 (сценарии эмулятора).
-                ParvaneCore.setProtoV2(org.parvane.libtd.BuildConfig.DEBUG && java.io.File("/data/local/tmp/parvane-proto-v2").canRead())
+                // Протокол v2 (spec 007): двойной стек, включён по умолчанию (T135).
+                // Остаться на v1 — файл <databaseDirectory>/parvane-proto-v1 (читает ядро)
+                // или, только в debug, /data/local/tmp/parvane-proto-v1 (сценарии эмулятора).
+                ParvaneCore.setProtoV2(!(org.parvane.libtd.BuildConfig.DEBUG && java.io.File("/data/local/tmp/parvane-proto-v1").canRead()))
                 if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                     onSessionReady(ParvaneCore.self())
                 } else {
@@ -517,7 +517,8 @@ class Client private constructor(
             if (!r.optBoolean("ok")) groupError(r) else {
                 val all = store.joinRequestsOf(r.optJSONArray("requests"))
                 val token = ParvaneStore.inviteTokenOf(f.inviteLink)
-                if (token == null) all else {
+                // Группа v2 (T143): сервер не сообщает, по какой ссылке пришла заявка — список общий
+                if (token == null || g.gid.startsWith("v2g:")) all else {
                     val arr = r.optJSONArray("requests")
                     val keep = HashSet<Long>()
                     if (arr != null) for (i in 0 until arr.length()) { val q = arr.getJSONObject(i); if (q.optString("invite") == token) keep += store.idOf(q.optString("member")) }
@@ -813,12 +814,14 @@ class Client private constructor(
         }
         is TdApi.DeleteChatHistory -> { // «для меня»: скрыть на сервере (msg.chat.clear) и убрать локально
             val uuids = store.uuidsOfChat(f.chatId)
+            recordChatCleared(f.chatId)
             if (uuids.isNotEmpty()) io.execute { ParvaneCore.clearMessages(uuids) }
             (if (f.removeFromChatList) store.removeChat(f.chatId) else store.removeMessages(uuids)).forEach { postUpdate(it) }
             TdApi.Ok()
         }
         is TdApi.DeleteChat -> {
             val uuids = store.uuidsOfChat(f.chatId)
+            recordChatCleared(f.chatId)
             if (uuids.isNotEmpty()) io.execute { ParvaneCore.clearMessages(uuids) }
             store.removeChat(f.chatId).forEach { postUpdate(it) }
             TdApi.Ok()
@@ -1455,8 +1458,36 @@ class Client private constructor(
         }
     }
     private fun scheduleStateFlush() { if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } } }
+    // «Удалить чат у себя» в v2 (T145): сообщений v2 сервер v1 не знает, нотис
+    // `cleared` до остальных своих устройств не дойдёт — граница очистки (мс) едет
+    // журналом личного состояния. Применённые границы: адрес → мс.
+    private val clearedUntilMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private fun recordChatCleared(chatId: Long) {
+        if (!stateAttached) return
+        val address = store.addressOf(chatId) ?: return
+        val last = store.lastDateOfChat(chatId)
+        val until = if (last > 0) last * 1000 + 999 else System.currentTimeMillis()
+        clearedUntilMs.merge(address, until) { a, b -> maxOf(a, b) }
+        io.execute { ParvaneCore.stateChatCleared(address, until) }
+    }
+    private fun projectCleared(snap: JSONObject) {
+        val list = snap.optJSONArray("cleared") ?: return
+        for (i in 0 until list.length()) {
+            val entry = list.optJSONObject(i) ?: continue
+            val address = stateJournal.addressOf(entry.optJSONObject("peer")) ?: continue
+            val until = entry.optString("cleared_until_ms").toLongOrNull() ?: entry.optLong("cleared_until_ms")
+            if (until <= 0 || (clearedUntilMs[address] ?: 0L) >= until) continue
+            clearedUntilMs[address] = until
+            val chatId = store.group(address)?.chatId ?: store.idOf(address)
+            val uuids = store.uuidsOfChatUntil(chatId, until / 1000)
+            if (uuids.isEmpty()) continue
+            store.removeMessages(uuids).forEach { postUpdate(it) }
+            Log.i(TAG, "журнал состояния → очистка чата, скрыто ${uuids.size} сообщений")
+        }
+    }
     /** Сведённый снимок → локальные файлы шва и апдейты X. */
     private fun applyState(snap: JSONObject, projectNotify: Boolean = true) {
+        projectCleared(snap)
         val l = store.local ?: return
         val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null)
         if (!ch.any()) return
