@@ -9,6 +9,7 @@
 // (sync.applyExternal) — UI не знает, по какому протоколу пришло сообщение.
 
 import type { WireCallSignal } from '../callengine';
+import type { WireGroupInvite } from '../groupcall';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
@@ -17,7 +18,9 @@ import type { Protocol, PvClient } from './engine';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
-import { callSignalFromV2, callSignalToV2, type V2CallSignal } from './callMap';
+import {
+  callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
+} from './callMap';
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
@@ -66,7 +69,8 @@ type Deps = {
   onTyping?: (chat: string, from: string) => void;
   /** Сигнал личного звонка от v2-собеседника: отправитель и привязка к звонку уже
    * проверены движком (сертификат устройства, подпись, аудитория, цель). */
-  onCallSignal?: (from: string, signal: WireCallSignal) => void;
+  // `groupCallId` — попарный сигнал внутри группового звонка (T141)
+  onCallSignal?: (from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string) => void;
   /** Режим «усиленная приватность» (L2) чата изменился — typing/presence и UI. */
   onL2Changed?: (address: string) => void;
   /** Своё служебное сообщение — в журнал исходящих (v2 своей операции не возвращает). */
@@ -94,6 +98,17 @@ type EngineGroupInfo = {
   l2By?: string;
 };
 
+/** Устройство v2 в ручной копии ключей (перенос устройства на другой браузер). */
+export type V2DeviceBackup = {
+  key: string;
+  state: string;
+  rootBackup?: string;
+  invites?: Record<string, V2InviteRecord[]>;
+};
+
+/** Заявка на вступление в группу v2 (ссылка с одобрением). */
+export type V2JoinRequest = { user: string; date: number };
+
 /** Ссылка-приглашение v2, созданная на этом устройстве (секрет — в url). */
 export type V2InviteRecord = {
   url: string;
@@ -107,6 +122,7 @@ export type V2InviteRecord = {
 
 export type V2InviteCheck = {
   address: string;
+  about?: string;
   name: string;
   membersCount: number;
   isRequestNeeded: boolean;
@@ -141,6 +157,8 @@ type LogDevices = {
   legacy: string[];
   legacySet: boolean;
   legacyKeys: { deviceId: string; identity: string; signing: string }[];
+  // Корневой ключ личности (base64 без дополнения) — из него «ключ безопасности»
+  root?: string;
 };
 
 type EngineEvent = {
@@ -159,6 +177,7 @@ type EngineEvent = {
 };
 
 const STATE_RECORD = 'v2-engine';
+const GROUP_RESYNC_MS = 3000;
 const INVITES_RECORD = 'v2-invites';
 const V2_GROUP_PREFIX = 'v2g:';
 const GROUP_KIND_GROUP = 1;
@@ -244,7 +263,11 @@ export function createV2Controller(deps: Deps) {
   // Домен сервера из описателя (группы v2 живут на нём)
   let serverDomain = '';
   // Группы, уже показанные UI (новая — с updateChatJoin)
+  // Устройство подменено копией ключей — ждём входа под его device_id (importBackup)
+  let isHalted = false;
   const publishedGroups = new Set<string>();
+  // Число заявок на вступление по группам (hex) — для админа с правом приглашать
+  const pendingRequests = new Map<string, number>();
   const rotateTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let tokenTimer: ReturnType<typeof setInterval> | undefined;
   const warnedUnconfirmed = new Set<string>();
@@ -399,7 +422,7 @@ export function createV2Controller(deps: Deps) {
     starting = (async () => {
       const self = deps.getSelf();
       const token = deps.getToken();
-      if (!self || !token) return;
+      if (!self || !token || isHalted) return;
       pv = await loadProtocol();
       storage = await SecureE2eStorage.open(self);
       const savedKey = await storage.loadRecord<string>(KEY_RECORD);
@@ -560,11 +583,37 @@ export function createV2Controller(deps: Deps) {
       }
     }
     for (const ev of events) {
-      await applyEvent(ev);
+      try {
+        await applyEvent(ev);
+      } catch (e) {
+        // Сбой одного события (например, журнал группы не дочитался) не должен
+        // молча терять остальные и само событие: пишем причину; журнал группы
+        // дочитается повтором
+        deps.log(`v2: событие ${ev.type} не применено: ${String(e)}`);
+        if (ev.type === 'groupChanged' && ev.group) scheduleGroupResync(ev.group.id);
+      }
     }
     const err = client.lastError();
     if (err) deps.log(`v2: ошибка записи: ${err}`);
     await persist();
+  }
+
+  // Журнал группы не дочитался по уведомлению — повтор с нуля (локальная копия
+  // могла разойтись с серверной), не чаще раза в GROUP_RESYNC_MS на группу
+  const groupResyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function scheduleGroupResync(hex: string) {
+    if (groupResyncTimers.has(hex)) return;
+    groupResyncTimers.set(hex, setTimeout(() => {
+      groupResyncTimers.delete(hex);
+      void serial(async () => {
+        if (!client || !ready) return;
+        client.groupForget(hex);
+        await syncGroup(hex);
+        await persist();
+        deps.log(`v2: журнал группы ${hex} перечитан заново`);
+      }).catch((e: unknown) => deps.log(`v2: журнал группы ${hex} не перечитан: ${String(e)}`));
+    }, GROUP_RESYNC_MS));
   }
 
   // ── приём: событие движка → строка конвейера UI ──────────────────────────
@@ -601,12 +650,25 @@ export function createV2Controller(deps: Deps) {
 
   async function applyEvent(ev: EngineEvent) {
     if (ev.type === 'call') {
-      const signal = ev.from && ev.signal ? callSignalFromV2(ev.signal) : undefined;
-      if (signal) deps.onCallSignal?.(ev.from!, signal);
+      if (!ev.from || !ev.signal) return;
+      const invite = groupInviteFromV2(ev.signal);
+      if (invite) {
+        deps.onCallSignal?.(ev.from, invite);
+        return;
+      }
+      const signal = callSignalFromV2(ev.signal);
+      if (signal) deps.onCallSignal?.(ev.from, signal, groupCallIdFromV2(ev.signal));
       return;
     }
     if (ev.type === 'groupChanged' && ev.group) {
       await syncGroup(ev.group.id);
+      // Уведомление без смены версии — заявка на вступление появилась или снята
+      const hex = ev.group.id;
+      if (canDecideRequests(hex) && readGroup(hex)?.inviteLinks.length) {
+        void listJoinRequests(groupAddress(hex));
+      } else if (pendingRequests.get(hex)) {
+        notePendingRequests(hex, 0);
+      }
       return;
     }
     const isGroup = ev.type === 'group' && Boolean(ev.group);
@@ -615,6 +677,9 @@ export function createV2Controller(deps: Deps) {
       const chat = ev.chat || ev.from;
       const c = ev.content;
       const author = ev.from;
+      // Собеседник написал по v2 — он «липкий» (D-13): наши ответы и мутации его
+      // сообщений идут только по v2, даже если стек в этот момент переподнимается
+      if (!isGroup && author !== self) rememberStickyPeer(author);
       // Группа: сообщение кладётся в чат группы, автор — из проверенной подписи
       const to = isGroup ? groupAddress(ev.group!.id) : (author === self ? chat : self);
       // Ключ доставки собеседника мог прийти только что — канал «печатает» чата
@@ -791,6 +856,40 @@ export function createV2Controller(deps: Deps) {
     starting = undefined;
     await start();
     return ready;
+  }
+
+  // ── ручная копия ключей (перенос устройства, как у v1) ─────────────────────
+  // Сообщения v2 запечатаны под устройства журнала: чтобы другой браузер читал
+  // новые сообщения после импорта копии, он должен стать ЭТИМ устройством —
+  // копия несёт состояние движка (ключи устройства, сессии, группы) под паролем
+  // копии. Истории v2 в состоянии движка нет — она едет строками (`v2History`).
+
+  async function exportBackup(): Promise<V2DeviceBackup | undefined> {
+    if (!ready || !client || !storage || !storageKey) return undefined;
+    await persist();
+    const state = await storage.loadRecord<string>(STATE_RECORD);
+    if (!state) return undefined;
+    return {
+      key: b64(storageKey),
+      state,
+      rootBackup: await storage.loadRecord<string>(ROOT_BACKUP_RECORD),
+      invites: await loadInvites(),
+    };
+  }
+
+  /** Положить устройство v2 из копии ключей. Стек до следующего входа не
+   * поднимается: текущий JWT выпущен под прежний device_id этого браузера. */
+  async function importBackup(backup: V2DeviceBackup) {
+    const self = deps.getSelf();
+    if (!self || typeof backup?.key !== 'string' || typeof backup.state !== 'string') return false;
+    isHalted = true;
+    const target = storage || await SecureE2eStorage.open(self);
+    await target.saveRecord(KEY_RECORD, backup.key);
+    await target.saveRecord(STATE_RECORD, backup.state);
+    if (backup.rootBackup) await target.saveRecord(ROOT_BACKUP_RECORD, backup.rootBackup);
+    if (backup.invites) await target.saveRecord(INVITES_RECORD, backup.invites);
+    deps.log('v2: устройство восстановлено из копии ключей');
+    return true;
   }
 
   /** Копия корня под ключом восстановления — на сервер (FR-066): по ней новое
@@ -1029,8 +1128,10 @@ export function createV2Controller(deps: Deps) {
     // получает — иначе сервер, оборвав v2-соединение, увидел бы отправителя.
     // v2 недоступен → ошибка отправки, а не тихий откат
     const isSticky = deps.isEnabled() && loadStickyPeers().has(address);
-    // Стек ещё поднимается (сразу после входа) — дождаться, а не отказать
-    if (isSticky && !ready && starting) await starting.catch(() => undefined);
+    // Стек ещё поднимается (сразу после входа) либо переподключается после
+    // обрыва — дождаться, а не отказать: мутация, ушедшая по v1, пропала бы
+    // (сервер v1 сообщений v2 не знает)
+    if (isSticky && !ready) await (starting || start()).catch(() => undefined);
     if (!ready || !client || !pv) {
       if (isSticky) throw new V2Error('ERROR_CODE_UNAVAILABLE');
       return false;
@@ -1115,14 +1216,28 @@ export function createV2Controller(deps: Deps) {
       if (!ready || !client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
       return true;
     }
+    // «Избранное» (чат с собой, T147): копии — своим устройствам журнала v2;
+    // по v1 оно не дошло бы до привязанных устройств вне каталога v1
+    if (address === deps.getSelf()) {
+      if (!ready && starting) await starting.catch(() => undefined);
+      return ready && Boolean(client);
+    }
     return isV2Peer(address);
   }
 
   /** Сигнал личного звонка v2-собеседнику (D-08): запечатанным конвертом по
    * анонимному каналу, сервер не видит ни сторон, ни SDP. false — не v2 (идти по v1). */
-  async function trySendCall(to: string, signal: WireCallSignal): Promise<boolean> {
+  async function trySendCall(
+    to: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string,
+  ): Promise<boolean> {
     if (isV2GroupAddress(to) || !(await isV2Peer(to))) return false;
-    const v2Signal = callSignalToV2(signal);
+    // Групповой звонок (T141): попарные сигналы идут запечатанными конвертами
+    // только тем участникам, чей ключ доступа известен (сервер не принимает для
+    // звонков слепые жетоны); остальным — прежним путём. Личный звонок по v1 не
+    // понижается (D-13)
+    const isGroup = signal.type === 'group_invite' || groupCallId !== undefined;
+    if (isGroup && !client?.hasPeerDeliveryKey(to)) return false;
+    const v2Signal = callSignalToV2(signal, groupCallId);
     // Собеседник на v2, а сигнал по v2 не выразить — по v1 не понижаем (D-13)
     if (!v2Signal) throw new V2Error('ERROR_CODE_INVALID');
     await serial(async () => {
@@ -1283,6 +1398,18 @@ export function createV2Controller(deps: Deps) {
     return true;
   }
 
+  /** Кто прочитал своё сообщение чата v2 (по E2E-квитанциям; сервер v2 этого
+   * не знает): адрес и время в секундах. `undefined` — движок не готов. */
+  function readers(uuid: string): { address: string; ts: number }[] | undefined {
+    if (!client || !ready) return undefined;
+    try {
+      const list = JSON.parse(client.readers(uuid)) as { user: string; tsMs: number }[];
+      return list.map(({ user, tsMs }) => ({ address: user, ts: Math.floor(tsMs / 1000) }));
+    } catch {
+      return undefined;
+    }
+  }
+
   // Своя мутация применяется локально тем же путём, что и входящая: у v2 нет
   // серверной v1-строки, которую догнал бы синк, — иначе после перезагрузки
   // кэш истории показывал бы сообщение до правки
@@ -1439,6 +1566,7 @@ export function createV2Controller(deps: Deps) {
       about: g.about || undefined,
       default_permissions: g.defaultPermissions || {},
       version: Number(g.version),
+      pending_requests: pendingRequests.get(hex) || undefined,
     };
   }
 
@@ -1608,32 +1736,58 @@ export function createV2Controller(deps: Deps) {
   async function changeGroup(address: string, change: Record<string, unknown>) {
     if (!ready || !client || !isV2GroupAddress(address)) return false;
     const hex = groupHex(address);
+    return serial(() => applyGroupChange(hex, change));
+  }
+
+  /**
+   * Имя, описание и фото группы — одна запись `set_info` со всеми тремя полями.
+   * Недостающие берутся из журнала ВНУТРИ очереди: две правки подряд (экран
+   * «Edit» шлёт название и описание одновременно), собранные по снимку «до»,
+   * откатывали друг друга — вторая возвращала прежнее название.
+   */
+  async function setGroupInfo(address: string, patch: { name?: string; about?: string; avatarFileId?: string }) {
+    if (!ready || !client || !isV2GroupAddress(address)) return false;
+    const hex = groupHex(address);
     return serial(async () => {
-      let req: OutReq;
-      try {
-        req = client!.groupChange(hex, JSON.stringify(change)) as OutReq;
-      } catch (e) {
-        deps.log(`v2: изменение группы отклонено движком: ${String(e)}`);
-        return false;
-      }
-      try {
-        await call(req.chan, req.method, req.body);
-      } catch (e) {
-        deps.log(`v2: изменение группы отклонено сервером: ${String(e)}`);
-        await resyncGroup(hex);
-        return false;
-      }
-      // Состав/права изменились — ключи прежней эпохи мог держать исключённый
-      if (readGroup(hex)?.epochStale && canRotate(hex)) {
-        await rotateEpoch(hex).catch((e: unknown) => {
-          deps.log(`v2: новая эпоха после изменения не начата: ${String(e)}`);
-          scheduleRotate(hex, EPOCH_RETRY_MS);
-        });
-      }
-      await persist();
-      publishGroup(hex);
-      return true;
+      const current = readGroup(hex);
+      if (!current) return false;
+      const next = {
+        name: patch.name ?? current.name,
+        about: patch.about ?? current.about ?? '',
+        avatar_file_id: patch.avatarFileId ?? current.avatarFileId ?? '',
+      };
+      const isSame = next.name === current.name && next.about === (current.about || '')
+        && next.avatar_file_id === (current.avatarFileId || '');
+      // Ничего не меняется — записи в журнале не будет (право всё равно проверил бы движок)
+      return isSame ? true : applyGroupChange(hex, { set_info: next });
     });
+  }
+
+  async function applyGroupChange(hex: string, change: Record<string, unknown>) {
+    let req: OutReq;
+    try {
+      req = client!.groupChange(hex, JSON.stringify(change)) as OutReq;
+    } catch (e) {
+      deps.log(`v2: изменение группы отклонено движком: ${String(e)}`);
+      return false;
+    }
+    try {
+      await call(req.chan, req.method, req.body);
+    } catch (e) {
+      deps.log(`v2: изменение группы отклонено сервером: ${String(e)}`);
+      await resyncGroup(hex);
+      return false;
+    }
+    // Состав/права изменились — ключи прежней эпохи мог держать исключённый
+    if (readGroup(hex)?.epochStale && canRotate(hex)) {
+      await rotateEpoch(hex).catch((e: unknown) => {
+        deps.log(`v2: новая эпоха после изменения не начата: ${String(e)}`);
+        scheduleRotate(hex, EPOCH_RETRY_MS);
+      });
+    }
+    await persist();
+    publishGroup(hex);
+    return true;
   }
 
   function groupInfo(address: string): WireGroupInfo | undefined {
@@ -1725,6 +1879,82 @@ export function createV2Controller(deps: Deps) {
     return changeGroup(address, { invite_key_revoke: { link_id: hexToB64(record.linkId) } });
   }
 
+  // ── заявки на вступление (ссылка с одобрением, D-04; T143) ──────────────────
+  // Сервер держит список заявок и отдаёт его админам с правом приглашать;
+  // одобрение — запись `AddMember` журнала внутри `group.request.decide`.
+  // О новой заявке сервер сообщает уведомлением о группе без смены версии.
+
+  function canDecideRequests(hex: string) {
+    const g = readGroup(hex);
+    const self = deps.getSelf();
+    const me = g?.members.find(({ user }) => user === self);
+    return Boolean(g && !g.deleted && me && (g.owner === self || (me.role === 2 && me.rights?.invite_users)));
+  }
+
+  function notePendingRequests(hex: string, count: number) {
+    if ((pendingRequests.get(hex) || 0) === count) return;
+    pendingRequests.set(hex, count);
+    publishGroup(hex);
+  }
+
+  async function listJoinRequests(address: string): Promise<V2JoinRequest[] | undefined> {
+    if (!ready || !client || !pv || !isV2GroupAddress(address)) return undefined;
+    const hex = groupHex(address);
+    if (!canDecideRequests(hex)) return [];
+    try {
+      const resp = await call('id', 'group.request.list', pv.encodeMessage(
+        'parvane.group.v2.RequestListRequest', JSON.stringify({ group: { domain: serverDomain, id: hexToB64(hex) } }),
+      ));
+      const list = JSON.parse(pv.decodeMessage('parvane.group.v2.RequestListResponse', resp)) as {
+        requests?: { user?: { address?: string }; requested_ms?: string | number; requestedMs?: string | number }[];
+      };
+      const requests = (list.requests || [])
+        .filter((item) => item.user?.address)
+        .map((item) => ({
+          user: item.user!.address!,
+          date: Math.floor(Number(item.requested_ms ?? item.requestedMs ?? 0) / 1000),
+        }));
+      notePendingRequests(hex, requests.length);
+      return requests;
+    } catch (e) {
+      deps.log(`v2: список заявок группы ${hex} не получен: ${String(e)}`);
+      return undefined;
+    }
+  }
+
+  async function decideJoinRequest(address: string, user: string, approve: boolean) {
+    if (!ready || !client || !isV2GroupAddress(address)) return false;
+    const hex = groupHex(address);
+    return serial(async () => {
+      let req: OutReq;
+      try {
+        req = client!.groupRequestDecide(hex, user, approve) as OutReq;
+      } catch (e) {
+        deps.log(`v2: решение по заявке отклонено движком: ${String(e)}`);
+        return false;
+      }
+      try {
+        await call(req.chan, req.method, req.body);
+      } catch (e) {
+        deps.log(`v2: решение по заявке отклонено сервером: ${String(e)}`);
+        if (approve) await resyncGroup(hex);
+        return false;
+      }
+      deps.log(`v2: заявка ${user} в группу ${hex} — ${approve ? 'одобрена' : 'отклонена'}`);
+      // Новый участник — ключи прежней эпохи ему не отдаются, нужна новая
+      if (approve && readGroup(hex)?.epochStale && canRotate(hex)) {
+        await rotateEpoch(hex).catch((e: unknown) => {
+          deps.log(`v2: новая эпоха после одобрения заявки не начата: ${String(e)}`);
+          scheduleRotate(hex, EPOCH_RETRY_MS);
+        });
+      }
+      await persist();
+      pendingRequests.set(hex, Math.max(0, (pendingRequests.get(hex) || 1) - 1));
+      publishGroup(hex);
+      return true;
+    });
+  }
+
   function parseV2Invite(url: string): { domain: string; linkId: string } | undefined {
     if (!pv) return undefined;
     try {
@@ -1764,8 +1994,20 @@ export function createV2Controller(deps: Deps) {
       const check = await inviteGroup(parsed.linkId);
       const hex = b64ToHex(check.group?.id || '');
       const self = deps.getSelf();
+      // Описание — из подписанного журнала группы (сервер отдаёт его по ссылке),
+      // а не со слов сервера; журнал не-участника после чтения не храним
+      let about: string | undefined;
+      if (hex && !readGroup(hex)?.members.some(({ user }) => user === self)) {
+        about = await serial(async () => {
+          await syncGroup(hex, parsed.linkId);
+          const text = readGroup(hex)?.about;
+          client!.groupForget(hex);
+          return text || undefined;
+        }).catch(() => undefined);
+      }
       return {
         address: groupAddress(hex),
+        about,
         name: check.name || '',
         membersCount: check.members || 0,
         isRequestNeeded: Boolean(check.requires_approval),
@@ -1894,12 +2136,17 @@ export function createV2Controller(deps: Deps) {
 
   // Приватность v2 (T079): сервер хранит её в identity и применяет к
   // доставке (жетоны незнакомцев) и добавлению в группы
-  async function setPrivacy(settings: { groupAdd: 'anyone' | 'nobody'; strangers: boolean }) {
+  async function setPrivacy(settings: {
+    groupAdd: 'anyone' | 'nobody'; strangers: boolean; callsFrom: 'anyone' | 'nobody'; presence: 'anyone' | 'nobody';
+  }) {
     if (!pv || !ready) return false;
+    const audience = (value: 'anyone' | 'nobody') => (value === 'nobody' ? 'AUDIENCE_NOBODY' : 'AUDIENCE_EVERYBODY');
     await call('id', 'identity.privacy.set', pv.encodeMessage('parvane.identity.v2.PrivacySetRequest', JSON.stringify({
       settings: {
-        group_add: settings.groupAdd === 'nobody' ? 'AUDIENCE_NOBODY' : 'AUDIENCE_EVERYBODY',
+        group_add: audience(settings.groupAdd),
         messages_from_strangers: settings.strangers,
+        calls_from: audience(settings.callsFrom),
+        presence_visibility: audience(settings.presence),
       },
     })));
     return true;
@@ -1911,11 +2158,21 @@ export function createV2Controller(deps: Deps) {
     if (!pv || !ready) return undefined;
     const got = JSON.parse(pv.decodeMessage('parvane.identity.v2.PrivacyGetResponse', await call(
       'id', 'identity.privacy.get', pv.encodeMessage('parvane.identity.v2.PrivacyGetRequest', '{}'),
-    ))) as { settings?: { group_add?: string; messages_from_strangers?: boolean }; is_set?: boolean };
+    ))) as {
+      settings?: {
+        group_add?: string; messages_from_strangers?: boolean; calls_from?: string; presence_visibility?: string;
+      };
+      is_set?: boolean;
+    };
     if (!got.is_set) return undefined;
+    const audience = (value?: string) => (value === 'AUDIENCE_NOBODY' ? 'nobody' as const : 'anyone' as const);
     return {
-      groupAdd: got.settings?.group_add === 'AUDIENCE_NOBODY' ? 'nobody' as const : 'anyone' as const,
+      groupAdd: audience(got.settings?.group_add),
       strangers: Boolean(got.settings?.messages_from_strangers),
+      // FR-040 (T137): «кто может звонить» и «кто видит, что я в сети» — их
+      // соблюдает клиент владельца (сервер v2 не видит ни звонящего, ни зрителя)
+      callsFrom: audience(got.settings?.calls_from),
+      presence: audience(got.settings?.presence_visibility),
     };
   }
 
@@ -1973,14 +2230,19 @@ export function createV2Controller(deps: Deps) {
     rotateSsk,
     recoverWithKey,
     resetIdentity,
+    exportBackup,
+    importBackup,
     cachedGroups,
     changeGroup,
+    setGroupInfo,
     checkInvite,
     createGroup,
     createInvite,
     groupInfo,
     joinByInvite,
     listInvites,
+    listJoinRequests,
+    decideJoinRequest,
     reportUnconfirmed: (address: string, claimed: string[]) => {
       if (client && isV2GroupAddress(address)) reportUnconfirmed(groupHex(address), claimed);
     },
@@ -2002,6 +2264,7 @@ export function createV2Controller(deps: Deps) {
     setDirectL2,
     setGroupL2,
     isV2Peer,
+    readers,
     trySend,
     trySendCall,
     uploadBlob,
@@ -2035,8 +2298,11 @@ export function createV2Controller(deps: Deps) {
       messages.clear();
       reactions.clear();
       publishedGroups.clear();
+      pendingRequests.clear();
       rotateTimers.forEach((timer) => clearTimeout(timer));
       rotateTimers.clear();
+      groupResyncTimers.forEach((timer) => clearTimeout(timer));
+      groupResyncTimers.clear();
       if (tokenTimer) clearInterval(tokenTimer);
       tokenTimer = undefined;
       warnedUnconfirmed.clear();

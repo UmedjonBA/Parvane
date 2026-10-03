@@ -574,6 +574,18 @@ const Main = ({
     return () => window.removeEventListener('parvane-call-media-error', handleCallMediaError);
   }, [showNotification]);
 
+  // Parvane: вызов по v2 не ушёл (собеседник ещё не отвечал — нет ключа доступа)
+  useEffect(() => {
+    const handleCallUnavailable = (event: Event) => {
+      const isNotContact = (event as CustomEvent<{ isNotContact?: boolean }>).detail?.isNotContact;
+      showNotification({
+        message: oldTranslate(isNotContact ? 'ParvaneCallNotContact' : 'ParvaneCallNotSent'),
+      });
+    };
+    window.addEventListener('parvane-call-unavailable', handleCallUnavailable);
+    return () => window.removeEventListener('parvane-call-unavailable', handleCallUnavailable);
+  }, [showNotification]);
+
   // Parvane: в групповом звонке больше участников, чем тянет mesh
   useEffect(() => {
     const handleTooMany = (event: Event) => {

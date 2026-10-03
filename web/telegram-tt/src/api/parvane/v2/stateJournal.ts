@@ -39,6 +39,8 @@ type Deps = {
   sendUpdate: (update: ApiUpdate) => void;
   /** История звонков из журнала (D-08: сервер её не ведёт) — записи в чаты. */
   applyCallRecords?: (records: WireCallRecord[]) => void;
+  /** Чат очищен на другом своём устройстве: скрыть сообщения не позже границы (мс). */
+  applyChatCleared?: (address: string, untilMs: number) => void;
   log: (message: string) => void;
 };
 
@@ -83,6 +85,7 @@ type SSnapshot = {
   archived?: SPeer[];
   pinned?: SPinned[];
   calls?: SCall[];
+  cleared?: { peer?: SPeer; cleared_until_ms?: string }[];
   notify?: { peer?: SPeer; settings?: SNotify }[];
   notify_defaults?: { users?: SNotify; groups?: SNotify; channels?: SNotify };
   [key: string]: unknown;
@@ -214,14 +217,17 @@ export function createStateJournal(deps: Deps) {
       }
       if (!isMigrated()) {
         // Первый запуск на v2: локальные данные — начальными записями журнала
+        const revision = deps.localState.getDirtyRevision();
         const bodies = session!.migrate(JSON.stringify(buildDesired({})));
         pendingAppends.push(...bodies);
         await pushAppends();
         markMigrated();
         markKindMigrated('notify');
+        deps.localState.clearDirtyKinds(revision);
         deps.log(`v2: локальное состояние перенесено в журнал (${bodies.length} записей)`);
       }
       await migrateNotify();
+      await flushDirty();
       project();
     }).catch((e: unknown) => deps.log(`v2: журнал состояния не прочитан: ${String(e)}`));
     deps.localState.setChangeListener(scheduleFlush);
@@ -267,10 +273,28 @@ export function createStateJournal(deps: Deps) {
 
   async function flushLocal() {
     if (!session) return;
+    const revision = deps.localState.getDirtyRevision();
     const current = readSnapshot();
     const bodies = session.diff(JSON.stringify(buildDesired(current)), MANAGED_KINDS);
     pendingAppends.push(...bodies);
     await pushAppends();
+    deps.localState.clearDirtyKinds(revision);
+  }
+
+  // Подключение журнала: правки, сделанные до него (перед перезагрузкой, пока
+  // v2 поднимался, без сети), уходят в журнал ДО проекции снимка — иначе снимок
+  // их затрёт. Только несохранённые виды: остальные могли смениться на другом
+  // устройстве, и локальная копия там устарела
+  async function flushDirty() {
+    if (!session) return;
+    const kinds = deps.localState.loadDirtyKinds().filter((kind) => MANAGED_KINDS.includes(kind));
+    if (!kinds.length) return;
+    const revision = deps.localState.getDirtyRevision();
+    const bodies = session.diff(JSON.stringify(buildDesired(readSnapshot())), kinds);
+    pendingAppends.push(...bodies);
+    await pushAppends();
+    deps.localState.clearDirtyKinds(revision);
+    deps.log(`v2: несохранённые правки (${kinds.join(', ')}) дописаны в журнал (${bodies.length} записей)`);
   }
 
   async function pushAppends() {
@@ -329,6 +353,29 @@ export function createStateJournal(deps: Deps) {
       pendingAppends.push(...session.callSet(JSON.stringify(body)));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: запись звонка в журнал состояния: ${String(e)}`));
+  }
+
+  // ── «удалить чат у себя» (T145): явная запись, граница только растёт ───────
+
+  /** Чат очищен на этом устройстве — остальные свои скроют сообщения не позже `untilMs`. */
+  function recordChatCleared(address: string, untilMs: number) {
+    deps.localState.saveClearedUntil(address, untilMs);
+    void serial(async () => {
+      if (!session) return;
+      const peer = peerOf(address);
+      if (!peer) return;
+      pendingAppends.push(...session.chatCleared(JSON.stringify({ peer, cleared_until_ms: String(untilMs) })));
+      await pushAppends();
+    }).catch((e: unknown) => deps.log(`v2: запись очистки чата в журнал состояния: ${String(e)}`));
+  }
+
+  function projectCleared(snap: SSnapshot) {
+    (snap.cleared || []).forEach((entry) => {
+      const address = addressOf(entry.peer);
+      const untilMs = Number(entry.cleared_until_ms || 0);
+      if (!address || !(untilMs > 0)) return;
+      if (deps.localState.saveClearedUntil(address, untilMs)) deps.applyChatCleared?.(address, untilMs);
+    });
   }
 
   function callToState(record: WireCallRecord): SCall | undefined {
@@ -469,6 +516,7 @@ export function createStateJournal(deps: Deps) {
     });
     projectScheduled(snap);
     projectCalls(snap);
+    projectCleared(snap);
   }
 
   function projectFolders(snap: SSnapshot) {
@@ -701,6 +749,7 @@ export function createStateJournal(deps: Deps) {
     attach,
     isAttached,
     recordCall,
+    recordChatCleared,
     reset: detach,
     syncNow,
   };

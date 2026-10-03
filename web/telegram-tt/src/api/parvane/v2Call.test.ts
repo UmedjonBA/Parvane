@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { WireCallSignal } from './callengine';
 
-import { callSignalFromV2, callSignalToV2 } from './v2/callMap';
+import {
+  callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2,
+} from './v2/callMap';
 import { decodeIceCandidate } from './iceCandidate';
 
 // Сигнал личного звонка v1 ↔ v2 (spec 007 D-08): по v2 он идёт запечатанным
@@ -58,5 +60,43 @@ describe('v2: сигнал звонка', () => {
     expect(callSignalFromV2({ call_id: 'AAAA' })).toBeUndefined();
     expect(callSignalFromV2({ callId: callSignalToV2({ type: 'hangup', call_id: CALL_ID })!.call_id, ringing: {} }))
       .toBeUndefined();
+  });
+
+  // Групповой звонок (T141): приглашение и попарные сигналы mesh — запечатанными
+  // конвертами; в v1 это отдельный инбокс `gcall:<адрес>`
+  const GROUP_CALL_ID = '01a0f945-1263-7d48-b3a1-ae3da31ccee0';
+
+  it('приглашение в групповой звонок → group_ring и обратно', () => {
+    const invite = {
+      type: 'group_invite' as const,
+      group_call_id: GROUP_CALL_ID,
+      participants: ['alice@local', 'bob@local', 'carol@local'],
+      media: 'video' as const,
+    };
+    const v2 = callSignalToV2(invite);
+    expect(v2?.group_ring).toEqual({
+      participants: [{ address: 'alice@local' }, { address: 'bob@local' }, { address: 'carol@local' }],
+      video: true,
+    });
+    expect(v2?.group_call_id).toBeUndefined();
+    expect(groupInviteFromV2(v2!)).toEqual(invite);
+    // Движок отдаёт camelCase
+    expect(groupInviteFromV2({ callId: v2!.call_id, groupRing: v2!.group_ring })).toEqual(invite);
+    expect(groupInviteFromV2({ call_id: v2!.call_id, offer: { sdp: 'v=0' } })).toBeUndefined();
+    expect(callSignalToV2({ ...invite, group_call_id: 'not-a-uuid' })).toBeUndefined();
+  });
+
+  it('попарный сигнал mesh несёт id группового звонка', () => {
+    const offer = callSignalToV2({
+      type: 'invite', call_id: CALL_ID, media: 'audio', sdp: 'v=0', sig: 'signature',
+    }, GROUP_CALL_ID);
+    expect(offer).toMatchObject({ offer: { sdp: 'v=0', video: false } });
+    expect(groupCallIdFromV2(offer!)).toBe(GROUP_CALL_ID);
+    expect(callSignalFromV2(offer!)).toEqual({ type: 'invite', call_id: CALL_ID, media: 'audio', sdp: 'v=0' });
+    expect(groupCallIdFromV2({ callId: offer!.call_id, groupCallId: offer!.group_call_id })).toBe(GROUP_CALL_ID);
+    // Личный звонок: поля нет
+    const direct = callSignalToV2({ type: 'hangup', call_id: CALL_ID });
+    expect(groupCallIdFromV2(direct!)).toBeUndefined();
+    expect(callSignalToV2({ type: 'hangup', call_id: CALL_ID }, 'not-a-uuid')).toBeUndefined();
   });
 });

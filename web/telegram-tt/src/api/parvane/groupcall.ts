@@ -94,11 +94,13 @@ class MeshPeerSession {
     return undefined;
   }
 
-  async acceptOffer(callId: string, media: CallMedia, offerSdp: string, sig?: string) {
+  // `isAuthenticated` — сигнал пришёл по v2: отправителя проверил движок
+  // (сертификат устройства, аудитория, привязка к звонку), подписи SDP в нём нет
+  async acceptOffer(callId: string, media: CallMedia, offerSdp: string, sig?: string, isAuthenticated = false) {
     this.callId = callId;
     try {
-      if (!await this.loadKey()) return this.fail();
-      if (!this.verify(offerSdp, sig)) return this.fail();
+      if (!isAuthenticated && !await this.loadKey()) return this.fail();
+      if (!isAuthenticated && !this.verify(offerSdp, sig)) return this.fail();
       const pc = await this.createPc(media);
       if (!pc) return undefined;
       await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
@@ -122,11 +124,11 @@ class MeshPeerSession {
     return undefined;
   }
 
-  async handleSignal(signal: WireCallSignal) {
+  async handleSignal(signal: WireCallSignal, isAuthenticated = false) {
     switch (signal.type) {
       case 'answer':
         if (!this.pc || this.remoteReady || signal.call_id !== this.callId) return;
-        if (!this.verify(signal.sdp, signal.sig)) {
+        if (!isAuthenticated && !this.verify(signal.sdp, signal.sig)) {
           this.fail();
           return;
         }
@@ -329,7 +331,7 @@ export class GroupCallEngine {
     }
   }
 
-  async handleSignal(from: string, signal: WireCallSignal | WireGroupInvite) {
+  async handleSignal(from: string, signal: WireCallSignal | WireGroupInvite, isAuthenticated = false) {
     if (signal.type === 'group_invite') {
       // Приглашение в идущий звонок (новые участники) — достраиваем mesh;
       // новое приглашение решает контроллер (согласие пользователя)
@@ -346,10 +348,10 @@ export class GroupCallEngine {
     if (!session) return;
     if (signal.type === 'invite') {
       // Mesh-инвайт внутри звонка, в который пользователь уже вошёл
-      await session.acceptOffer(signal.call_id, signal.media, signal.sdp, signal.sig);
+      await session.acceptOffer(signal.call_id, signal.media, signal.sdp, signal.sig, isAuthenticated);
       return;
     }
-    await session.handleSignal(signal);
+    await session.handleSignal(signal, isAuthenticated);
   }
 
   // Отказ/занятость на парный invite без входа в mesh (согласие не дано)

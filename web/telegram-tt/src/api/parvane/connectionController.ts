@@ -58,6 +58,8 @@ type ConnectionDependencies = {
     ephemeralAllowed: (address: string) => boolean;
     presenceAllowed: () => boolean;
   };
+  // FR-040: своя настройка «кто видит, что я в сети» — «никто»
+  isPresenceHidden?: () => boolean;
 };
 
 // Остаток one-time prekeys на сервере, ниже которого доливаем свежую пачку
@@ -453,6 +455,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
     if (!connection) return;
     // L2-1: присутствие одно на аккаунт — молчим, пока режим активен хоть в одном чате
     if (deps.v2 && !deps.v2.presenceAllowed()) return;
+    // FR-040: «кто видит, что я в сети — никто» — присутствие не публикуется вовсе
+    if (deps.isPresenceHidden?.()) return;
     try {
       connection.publish(buildPresenceTopic(deps.selfId()), JSON.stringify({ from: deps.getStore().self }));
     } catch {
@@ -513,8 +517,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
         const prekeys = nextE2e.buildPrekeysPayload(nextToken);
         if (prekeys) {
           await nextE2e.flushStorage();
-          await activeConnection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys));
-          deps.log('E2E готов, прекеи опубликованы');
+          const published = JSON.parse(
+            await activeConnection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys)),
+          ) as { ok?: boolean; error?: string };
+          // У аккаунта на v2 устройство без сертификата журнала в каталог v1 не
+          // попадает (T048) — бандл дошлётся после привязки (replenishDevicePrekeys)
+          deps.log(published.ok ? 'E2E готов, прекеи опубликованы'
+            : `E2E готов, прекеи identity не принял: ${published.error || 'отказ'}`);
         } else {
           deps.log('E2E готов (прекеи уже опубликованы ранее)');
         }
@@ -589,12 +598,18 @@ export function createConnectionController(deps: ConnectionDependencies) {
       };
       if (!response.ok) return;
       const own = response.devices?.find((device) => device.device_id === engine.deviceId);
-      if (!own || own.one_time_available >= OTK_REPLENISH_THRESHOLD) return;
+      // Устройства нет в каталоге: identity отверг бандл при входе (аккаунт на
+      // v2, устройство ещё не было в журнале устройств) — публикуем заново (T146)
+      if (own && own.one_time_available >= OTK_REPLENISH_THRESHOLD) return;
       const payload = engine.buildTopUpPrekeysPayload(token);
       if (!payload) return;
       await engine.flushStorage();
-      await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(payload));
-      deps.log(`one-time prekeys пополнены (остаток был ${own.one_time_available})`);
+      const published = JSON.parse(
+        await connection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(payload)),
+      ) as { ok?: boolean };
+      if (!published.ok) return;
+      deps.log(own ? `one-time prekeys пополнены (остаток был ${own.one_time_available})`
+        : 'бандл устройства опубликован в каталоге v1 (устройство в журнале v2)');
     } catch (error) {
       deps.log(`пополнение one-time prekeys не удалось: ${String(error)}`);
     }
@@ -730,6 +745,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
     refreshEphemeral,
     showV2Typing,
     connectWithToken,
+    replenishDevicePrekeys: replenishOneTimePrekeys,
+    rememberDeviceId: writeDeviceIdMirror,
     shutdown,
   };
 }

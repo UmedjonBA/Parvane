@@ -234,6 +234,22 @@ const SettingsPrivacy = ({
     void (callParvane('parvaneGetStrangersPolicy', {}) as Promise<{ isAvailable: boolean; isAllowed: boolean }>)
       .then(setStrangers);
   }, []);
+  // Parvane: «кто может звонить» и «кто видит, что я в сети» (FR-040)
+  type CallPresencePolicy = { isAvailable: boolean; areCallsAllowed: boolean; isPresenceShown: boolean };
+  const [callPresence, setCallPresence] = useState<CallPresencePolicy>();
+  useEffect(() => {
+    void (callParvane('parvaneGetCallPresencePolicy', {}) as Promise<CallPresencePolicy>).then(setCallPresence);
+  }, []);
+  const handleCallsChange = useLastCallback((isAllowed: boolean) => {
+    const isPresenceShown = callPresence?.isPresenceShown ?? true;
+    setCallPresence({ isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed });
+    void callParvane('parvaneSetCallsPolicy', { isAllowed });
+  });
+  const handlePresenceChange = useLastCallback((isShown: boolean) => {
+    const areCallsAllowed = callPresence?.areCallsAllowed ?? true;
+    setCallPresence({ isAvailable: true, areCallsAllowed, isPresenceShown: isShown });
+    void callParvane('parvaneSetPresencePolicy', { isShown });
+  });
   const handleStrangersChange = useLastCallback((isAllowed: boolean) => {
     setStrangers({ isAvailable: true, isAllowed });
     void callParvane('parvaneSetStrangersPolicy', { isAllowed });
@@ -425,6 +441,22 @@ const SettingsPrivacy = ({
             subLabel={oldLang('ParvaneStrangersInfo')}
             checked={strangers.isAllowed}
             onCheck={handleStrangersChange}
+          />
+        )}
+        {callPresence?.isAvailable && (
+          <Checkbox
+            label={oldLang('ParvaneCallsToggle')}
+            subLabel={oldLang('ParvaneCallsInfo')}
+            checked={callPresence.areCallsAllowed}
+            onCheck={handleCallsChange}
+          />
+        )}
+        {callPresence?.isAvailable && (
+          <Checkbox
+            label={oldLang('ParvanePresenceToggle')}
+            subLabel={oldLang('ParvanePresenceInfo')}
+            checked={callPresence.isPresenceShown}
+            onCheck={handlePresenceChange}
           />
         )}
       </Island>

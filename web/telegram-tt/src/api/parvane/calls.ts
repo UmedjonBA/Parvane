@@ -32,9 +32,15 @@ type CallDependencies = {
   sendUpdate: (update: ApiUpdate) => void;
   // Пересчёт непрочитанного чата после инъекции входящей записи о звонке
   pushReadState: (chatId: string) => void;
-  // Протокол v2: сигнал личного звонка собеседнику с журналом устройств v2 —
-  // запечатанным конвертом (true — ушёл по v2; false — собеседник на v1)
-  sendV2Signal?: (to: string, signal: WireCallSignal) => Promise<boolean>;
+  // Протокол v2: сигнал звонка собеседнику с журналом устройств v2 —
+  // запечатанным конвертом (true — ушёл по v2; false — идти по v1).
+  // `groupCallId` — попарный сигнал внутри группового звонка (T141)
+  sendV2Signal?: (
+    to: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string,
+  ) => Promise<boolean>;
+  // У собеседника на v2 остались v1-устройства (подписанный список LEGACY-1):
+  // сигнал личного звонка дублируется им v1-путём, иначе они не зазвонят
+  hasLegacyDevices?: (peer: string) => boolean;
   // Завершённый звонок по v2 — в журнал личного состояния: серверной истории у
   // v2-звонков нет (D-08)
   recordV2Call?: (record: WireCallRecord) => void;
@@ -95,7 +101,8 @@ export function createCallController(deps: CallDependencies) {
     groupCallId: string;
     participants: string[];
     media: CallMedia;
-    buffered: Array<{ from: string; signal: WireCallSignal }>;
+    // `isAuthenticated` — сигнал пришёл по v2 (отправителя проверил движок)
+    buffered: Array<{ from: string; signal: WireCallSignal; isAuthenticated?: boolean }>;
     timer?: number;
   };
   let pendingGroupInvite: PendingGroupInvite | undefined;
@@ -364,14 +371,7 @@ export function createCallController(deps: CallDependencies) {
     });
 
     groupEngine = new GroupCallEngine(deps.getStore().self, {
-      sendSignal: (peer, signal) => {
-        const store = deps.getStore();
-        // Реальный from (шард сверяет с JWT), gcall:-префикс только в to
-        const envelope = buildWireEvent(store.self, deps.getToken(), {
-          to: buildGroupCallRoute(peer), signal,
-        });
-        deps.getConnection()!.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
-      },
+      sendSignal: sendGroupSignal,
       getPeerSigningKeys: fetchSigningKeys,
       getIceServers,
       getIceTransportPolicy,
@@ -422,11 +422,14 @@ export function createCallController(deps: CallDependencies) {
       try {
         if (await deps.sendV2Signal?.(to, signal)) {
           if (signal.type === 'invite') trackV2Call(signal.call_id, to, true, signal.media);
-          return;
+          // LEGACY-1: v1-устройствам собеседника — тот же сигнал v1-путём (его
+          // v2-устройства повтор с тем же call_id отбрасывают)
+          if (!deps.hasLegacyDevices?.(to)) return;
         }
       } catch (error) {
         // Собеседник на v2, а v2 недоступен: по v1 не понижаем (D-13)
         deps.log(`Сигнал звонка по v2 не отправлен: ${String(error)}`);
+        if (signal.type === 'invite') abortUnsentCall(error);
         return;
       }
       const connection = deps.getConnection();
@@ -437,8 +440,64 @@ export function createCallController(deps: CallDependencies) {
     });
   }
 
-  // Сигнал личного звонка, принятый по v2 (отправитель уже проверен движком)
-  function handleV2Signal(from: string, signal: WireCallSignal) {
+  // Вызов по v2 не ушёл: звонок не должен висеть «ringing». Сервер принимает
+  // сигнал звонка только по ключу доступа адресата (D-08) — его получают после
+  // ответа собеседника на сообщение; пользователю говорим об этом прямо
+  function abortUnsentCall(error: unknown) {
+    try {
+      engine?.hangUp();
+    } catch (hangUpError) {
+      deps.log(`Ошибка завершения звонка: ${String(hangUpError)}`);
+    }
+    if (typeof window === 'undefined') return;
+    const isNotContact = /forbidden/i.test(String(error));
+    window.dispatchEvent(new CustomEvent('parvane-call-unavailable', { detail: { isNotContact } }));
+  }
+
+  // Сигналы группового звонка одному участнику уходят строго по порядку:
+  // выбор пути (v2 — запечатанным конвертом, иначе v1-инбокс `gcall:`) асинхронный
+  const groupSignalQueues = new Map<string, Promise<void>>();
+  // Попарный звонок mesh → групповой звонок: отказ на оффер шлётся, когда в
+  // звонок не вошли и id группового звонка движку неизвестен
+  const meshGroupByCall = new Map<string, string>();
+  const MESH_CALL_MEMORY = 256;
+
+  function sendGroupSignal(peer: string, signal: WireCallSignal | WireGroupInvite) {
+    const groupCallId = signal.type === 'group_invite' ? undefined : (
+      groupEngine?.currentGroupCallId || pendingGroupInvite?.groupCallId || meshGroupByCall.get(signal.call_id)
+    );
+    const queue = (groupSignalQueues.get(peer) || Promise.resolve()).then(async () => {
+      try {
+        if ((signal.type === 'group_invite' || groupCallId)
+          && await deps.sendV2Signal?.(peer, signal, groupCallId)) return;
+      } catch (error) {
+        // По v2 не ушло — прежним путём: стороны звонка серверу видны, как и у
+        // участников на v1 (сами SDP подписаны в обоих случаях)
+        deps.log(`Сигнал группового звонка по v2 не отправлен, иду по v1: ${String(error)}`);
+      }
+      const connection = deps.getConnection();
+      if (!connection) return;
+      // Реальный from (шард сверяет с JWT), gcall:-префикс только в to
+      const envelope = buildWireEvent(deps.getStore().self, deps.getToken(), {
+        to: buildGroupCallRoute(peer), signal,
+      });
+      connection.publish(TOPIC_CALL_SIGNAL, JSON.stringify(envelope));
+    });
+    groupSignalQueues.set(peer, queue);
+  }
+
+  // Сигнал звонка, принятый по v2 (отправитель уже проверен движком):
+  // приглашение в групповой звонок и попарные сигналы mesh (`groupCallId`) —
+  // в групповой движок, остальное — личный звонок
+  function handleV2Signal(from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string) {
+    if (signal.type === 'group_invite' || groupCallId) {
+      if (signal.type === 'invite' && groupCallId) {
+        if (meshGroupByCall.size >= MESH_CALL_MEMORY) meshGroupByCall.clear();
+        meshGroupByCall.set(signal.call_id, groupCallId);
+      }
+      handleGroupSignal(from, signal, true);
+      return;
+    }
     // Блокировку отрабатывает onIncoming (авто-отбой), как и на v1-пути
     if (!engine) return;
     if (signal.type === 'invite' && !engine.currentCallId && !deps.isBlocked(from)) {
@@ -617,8 +676,8 @@ export function createCallController(deps: CallDependencies) {
     clearPendingGroupInvite();
     ensureGroupWindowState(pending.groupCallId, pending.participants);
     groupEngine.joinMesh(pending.groupCallId, pending.participants, pending.media);
-    pending.buffered.forEach(({ from, signal }) => {
-      void groupEngine?.handleSignal(from, signal).catch((error) => {
+    pending.buffered.forEach(({ from, signal, isAuthenticated }) => {
+      void groupEngine?.handleSignal(from, signal, isAuthenticated).catch((error) => {
         deps.log(`Ошибка группового сигналинга: ${String(error)}`);
       });
     });
@@ -672,8 +731,14 @@ export function createCallController(deps: CallDependencies) {
       return;
     }
     const signal = event.payload;
-    if (!signal?.type || !groupEngine) return;
-    const from = event.from;
+    if (!signal?.type) return;
+    handleGroupSignal(event.from, signal, false);
+  }
+
+  // `isAuthenticated` — сигнал пришёл по v2: подписи SDP в нём нет, отправителя
+  // проверил движок. С v1-шины флаг не передаётся никогда
+  function handleGroupSignal(from: string, signal: WireCallSignal | WireGroupInvite, isAuthenticated: boolean) {
+    if (!groupEngine) return;
     if (signal.type === 'group_invite') {
       // Приглашение от заблокированного контакта: молча игнорируем, как и
       // личный вызов (listeners.onIncoming) — иначе заблокированный по-прежнему
@@ -707,7 +772,7 @@ export function createCallController(deps: CallDependencies) {
         }
         return;
       }
-      pendingGroupInvite.buffered.push({ from, signal });
+      pendingGroupInvite.buffered.push({ from, signal, isAuthenticated });
       return;
     }
     // Не в этом звонке (личный разговор / отклонили) — парный invite отбиваем
@@ -715,7 +780,7 @@ export function createCallController(deps: CallDependencies) {
       groupEngine.rejectInvite(from, signal.call_id, 'busy');
       return;
     }
-    void groupEngine.handleSignal(from, signal).catch((error) => {
+    void groupEngine.handleSignal(from, signal, isAuthenticated).catch((error) => {
       deps.log(`Ошибка группового сигналинга: ${String(error)}`);
     });
   }

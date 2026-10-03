@@ -569,12 +569,15 @@ export class E2eEngine {
   // PBKDF2-SHA256 → AES-GCM. Импорт на новом устройстве делает старую
   // sealed-историю читаемой (decCache) и сохраняет identity
 
-  async exportEncrypted(password: string): Promise<string> {
+  // `extra` — то, чего нет в состоянии v1: устройство v2 (состояние движка) и
+  // история v2-эпохи; едет в том же шифртексте полем `extra`, прежние версии
+  // клиента поле игнорируют
+  async exportEncrypted(password: string, extra?: Record<string, unknown>): Promise<string> {
     const encoder = new TextEncoder();
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveExportKey(password, salt);
-    const plaintext = encoder.encode(JSON.stringify(this.buildPortableState()));
+    const plaintext = encoder.encode(JSON.stringify({ ...this.buildPortableState(), extra }));
     const ciphertext = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv: toStandaloneBuffer(iv) }, key, toStandaloneBuffer(plaintext),
     );
@@ -733,7 +736,10 @@ export class E2eEngine {
       && this.transfers.length === 0;
   }
 
-  static async importEncrypted(self: string, payload: string, password: string): Promise<E2eEngine> {
+  // `onExtra` получает поле `extra` расшифрованной копии (см. exportEncrypted)
+  static async importEncrypted(
+    self: string, payload: string, password: string, onExtra?: (extra: Record<string, unknown>) => void,
+  ): Promise<E2eEngine> {
     const parsed = JSON.parse(payload) as {
       v: number; iterations?: number; salt: string; iv: string; data: string;
     };
@@ -747,7 +753,10 @@ export class E2eEngine {
       key,
       toStandaloneBuffer(envelope.data),
     );
-    const state = JSON.parse(new TextDecoder().decode(plaintext)) as PersistedE2eState;
+    const state = JSON.parse(new TextDecoder().decode(plaintext)) as PersistedE2eState & {
+      extra?: Record<string, unknown>;
+    };
+    if (state.extra && typeof state.extra === 'object') onExtra?.(state.extra);
 
     await loadOlm();
     const engine = new E2eEngine();

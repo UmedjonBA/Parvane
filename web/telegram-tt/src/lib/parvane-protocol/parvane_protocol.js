@@ -590,6 +590,32 @@ export class PvClient {
         }
     }
     /**
+     * Решение по заявке на вступление (одобрение — запись `AddMember`).
+     * @param {string} group
+     * @param {string} user
+     * @param {boolean} approve
+     * @returns {any}
+     */
+    groupRequestDecide(group, user, approve) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(user, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupRequestDecide(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, approve);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @param {string} group
      * @returns {Array<any>}
      */
@@ -659,6 +685,18 @@ export class PvClient {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
+    }
+    /**
+     * Известен ли ключ доступа собеседника: сигнал звонка сервер принимает
+     * только с ним (слепой жетон для звонков не годится).
+     * @param {string} peer
+     * @returns {boolean}
+     */
+    hasPeerDeliveryKey(peer) {
+        const ptr0 = passStringToWasm0(peer, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pvclient_hasPeerDeliveryKey(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
     }
     /**
      * Корень в памяти движка есть.
@@ -1254,6 +1292,38 @@ export class PvClient {
     presenceAllowed() {
         const ret = wasm.pvclient_presenceAllowed(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
+     * `[{"user","tsMs"}]`. Серверу v2 это неизвестно («Просмотрено», T151).
+     * @param {string} id
+     * @returns {string}
+     */
+    readers(id) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_readers(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr2 = r0;
+            var len2 = r1;
+            if (r3) {
+                ptr2 = 0; len2 = 0;
+                throw takeObject(r2);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
+        }
     }
     /**
      * T130: восстановление на новом устройстве по корню (в памяти после
@@ -2299,6 +2369,29 @@ export class PvState {
             const ptr0 = passStringToWasm0(record_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.pvstate_callSet(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
+     * → тела `state.append`. Граница по собеседнику только растёт.
+     * @param {string} cleared_json
+     * @returns {Array<any>}
+     */
+    chatCleared(cleared_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(cleared_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstate_chatCleared(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);

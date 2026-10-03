@@ -217,6 +217,8 @@ export interface LangPair {
   'ParvaneMediaUnverified': undefined;
   'ParvaneUndecryptable': undefined;
   'ParvaneCallNoDevice': undefined;
+  'ParvaneCallNotContact': undefined;
+  'ParvaneCallNotSent': undefined;
   'ParvaneGroupCallIncoming': undefined;
   'ParvaneGroupPeerBusy': undefined;
   'ParvaneNameColor': undefined;

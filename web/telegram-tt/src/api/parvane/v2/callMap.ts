@@ -1,8 +1,11 @@
 // Сигнал звонка v1 (`WireCallSignal`) ↔ v2 (`parvane.call.v2.CallSignal`,
-// proto3-JSON). По v2 идут только личные звонки; групповые (mesh) остаются на
-// v1-пути шарда call. Подписи SDP (`sig`) в v2 нет: операцию подписывает ключ
-// устройства, а движок сверяет сертификат, аудиторию и привязку к звонку.
+// proto3-JSON). Личный звонок — сигналы как есть; групповой (mesh, T141) —
+// приглашение `group_ring` и попарные сигналы с `group_call_id` (в v1 это
+// отдельный инбокс `gcall:<адрес>`). Подписи SDP (`sig`) в v2 нет: операцию
+// подписывает ключ устройства, а движок сверяет сертификат, аудиторию и
+// привязку к звонку.
 import type { WireCallSignal } from '../callengine';
+import type { WireGroupInvite } from '../groupcall';
 
 import { decodeIceCandidate, encodeIceCandidate } from '../iceCandidate';
 import { b64ToUuid, uuidToB64 } from './contentMap';
@@ -23,7 +26,13 @@ export type V2CallSignal = {
   };
   hangup?: V2Hangup;
   ringing?: Record<string, never>;
+  groupRing?: V2GroupRing;
+  group_ring?: V2GroupRing;
+  groupCallId?: string;
+  group_call_id?: string;
 };
+
+type V2GroupRing = { participants?: { address?: string }[]; video?: boolean };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REASON_NORMAL = 'HANGUP_REASON_NORMAL';
@@ -41,8 +50,28 @@ const REJECT_TO_V2: Record<string, string> = {
 // Числовые значения enum (pbjson отдаёт имена, но принимает и числа)
 const REASON_BY_NUMBER = [undefined, REASON_NORMAL, REASON_DECLINED, REASON_BUSY, REASON_MISSED, REASON_FAILED];
 
-/** `undefined` — такой сигнал по v2 не передаётся (идёт v1-путём или отбрасывается). */
-export function callSignalToV2(signal: WireCallSignal): V2CallSignal | undefined {
+/**
+ * `undefined` — такой сигнал по v2 не передаётся (идёт v1-путём или отбрасывается).
+ * `groupCallId` — сигнал попарного соединения внутри группового звонка.
+ */
+export function callSignalToV2(
+  signal: WireCallSignal | WireGroupInvite, groupCallId?: string,
+): V2CallSignal | undefined {
+  if (signal.type === 'group_invite') {
+    if (!UUID_REGEX.test(signal.group_call_id)) return undefined;
+    return {
+      call_id: uuidToB64(signal.group_call_id),
+      group_ring: {
+        participants: signal.participants.map((address) => ({ address })),
+        video: signal.media === 'video',
+      },
+    };
+  }
+  if (groupCallId !== undefined) {
+    if (!UUID_REGEX.test(groupCallId)) return undefined;
+    const pair = callSignalToV2(signal);
+    return pair && { ...pair, group_call_id: uuidToB64(groupCallId) };
+  }
   // id звонка в v2 — 16 байт: по v2 идут только звонки с UUID
   if (!UUID_REGEX.test(signal.call_id)) return undefined;
   const callId = uuidToB64(signal.call_id);
@@ -70,6 +99,24 @@ export function callSignalToV2(signal: WireCallSignal): V2CallSignal | undefined
     default:
       return undefined;
   }
+}
+
+/** Id группового звонка, к которому относится попарный сигнал; `undefined` — личный звонок. */
+export function groupCallIdFromV2(signal: V2CallSignal): string | undefined {
+  return b64ToUuid(signal.groupCallId || signal.group_call_id) || undefined;
+}
+
+/** Приглашение в групповой звонок из события движка; `undefined` — другой сигнал. */
+export function groupInviteFromV2(signal: V2CallSignal): WireGroupInvite | undefined {
+  const ring = signal.groupRing || signal.group_ring;
+  const groupCallId = b64ToUuid(signal.callId || signal.call_id);
+  if (!ring || !groupCallId) return undefined;
+  return {
+    type: 'group_invite',
+    group_call_id: groupCallId,
+    participants: (ring.participants || []).map(({ address }) => address || '').filter(Boolean),
+    media: ring.video ? 'video' : 'audio',
+  };
 }
 
 /** Событие движка `call` → сигнал для движка звонков; `undefined` — нечего передавать. */
