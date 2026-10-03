@@ -54,6 +54,13 @@
 		file_server
 	}
 
+	# Ссылка-приглашение v2 `/join/<link_id>#<секрет>`: web собран с относительными
+	# путями ассетов и из `/join/…` не загрузится — переводим на корень. Фрагмент
+	# с секретом браузер переносит сам, серверу он не уходит (то же делает
+	# плагин vite для dev/preview — web/telegram-tt/vite.config.ts).
+	@v2invite path_regexp v2invite ^/join/([A-Za-z0-9_-]{43})$
+	redir @v2invite /?join={re.v2invite.1} 302
+
 	handle {
 		root * /srv/dist
 		encode gzip

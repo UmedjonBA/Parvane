@@ -198,6 +198,14 @@ message CallRef {
   bytes call_id = 1 [(parvane.core.v2.max_len) = 16];
 }
 
+// Чат очищен «у себя» (удаление чата без «у всех»): сообщения с временем не
+// позже границы скрыты на ВСЕХ своих устройствах (в v1 — нотис `cleared`
+// инбокса). Карта по собеседнику; граница только растёт (побеждает большая).
+message ChatCleared {
+  Peer peer = 1;
+  int64 cleared_until_ms = 2;
+}
+
 // Операция журнала личного состояния — открытый текст записи StateRecord.
 // op_id совпадает с op_id записи (входит в AAD).
 message StateOp {
@@ -227,6 +235,7 @@ message StateOp {
     PinnedOrder pinned_order = 25;
     CallRecord call_set = 26;
     CallRef call_remove = 27;
+    ChatCleared chat_cleared = 28;
   }
 }
 
@@ -247,4 +256,5 @@ message StateSnapshot {
   repeated Peer archived = 9 [(parvane.core.v2.max_items) = 100000];
   repeated PinnedOrder pinned = 10 [(parvane.core.v2.max_items) = 2];
   repeated CallRecord calls = 11 [(parvane.core.v2.max_items) = 10000];
+  repeated ChatCleared cleared = 12 [(parvane.core.v2.max_items) = 100000];
 }

@@ -84,8 +84,15 @@ impl Server {
                     self.push(&rc.address, &rc.device_id, inbox_record::Item::Sealed(e));
                 }
             }
-            "group.state.append" | "group.epoch.publish_send_key" | "group.invite.create" | "group.join" => {
+            // Отказ по заявке: записи журнала нет, шард только снимает заявку.
+            "group.request.decide" if decode_checked::<gpb::RequestDecideRequest>(&r.body, Origin::Client).unwrap().entry.is_none() => {}
+            "group.state.append" | "group.epoch.publish_send_key" | "group.invite.create" | "group.join" | "group.request.decide" => {
                 let entry = match r.method {
+                    "group.request.decide" => {
+                        let q = decode_checked::<gpb::RequestDecideRequest>(&r.body, Origin::Client).unwrap();
+                        assert!(q.approve, "запись журнала — только при одобрении");
+                        q.entry.unwrap()
+                    }
                     "group.state.append" => decode_checked::<gpb::StateAppendRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                     "group.invite.create" => decode_checked::<gpb::InviteCreateRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                     "group.join" => decode_checked::<gpb::JoinRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
@@ -359,6 +366,58 @@ fn direct_group_multidevice_and_restore() {
     assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "группа после восстановления".into())), "{ev:?}");
 }
 
+/// Грант линковки несёт ключи доступа собеседников (поле `pk`): привязанное
+/// устройство пишет и звонит знакомым по ключу сразу — звонок по слепому жетону
+/// сервер не принимает, а жетонов всего 50 в сутки.
+#[test]
+fn link_grant_carries_peer_delivery_keys() {
+    use parvane_protocol::host::{apply_grant_peer_keys, grant_peer_keys};
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let bob = setup(&mut srv, "bob@local");
+    alice.set_peer_delivery_key("bob@local", bob.delivery_key().to_vec(), 3);
+    let material = serde_json::json!({ "pk": grant_peer_keys(&alice) });
+    assert_eq!(material["pk"][0]["u"], "bob@local");
+    assert_eq!(material["pk"][0]["g"], 3);
+
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    assert!(!alice2.has_peer_delivery_key("bob@local"));
+    apply_grant_peer_keys(&mut alice2, &material);
+    assert!(alice2.has_peer_delivery_key("bob@local"));
+    // Грант прежней версии (без поля) и мусор в поле принимаются без ошибки.
+    apply_grant_peer_keys(&mut alice2, &serde_json::json!({}));
+    apply_grant_peer_keys(&mut alice2, &serde_json::json!({ "pk": [{ "u": "не адрес", "k": "zz" }, 7] }));
+    assert_eq!(alice2.peer_delivery_keys().len(), 1);
+}
+
+/// «Избранное» (чат с собой, T147): сообщение самому себе уходит копиями своим
+/// другим устройствам журнала; у единственного устройства запросов нет вовсе.
+#[test]
+fn saved_messages_reach_own_devices() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+
+    // Одно устройство: слать некому — запись остаётся только у себя.
+    let alone = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_direct("alice@local", &text("заметка")));
+    assert!(alone.is_empty(), "единственное устройство не шлёт «Избранное» на сервер: {}", alone.len());
+
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_direct("alice@local", &text("в избранное")));
+    assert!(!reqs.is_empty() && reqs.iter().all(|r| r.method == "msg.deliver_sealed" && r.chan == Chan::Anon), "{:?}", reqs.iter().map(|r| r.method).collect::<Vec<_>>());
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(texts(&ev).contains(&("alice@local".into(), "alice@local".into(), "в избранное".into())), "{ev:?} {:?}", alice2.last_error);
+    // И обратно: со второго устройства — на первое.
+    run(&mut srv, &mut alice2, &mut |c| c.prepare_direct("alice@local", &text("с телефона")));
+    let ev = drain(&mut srv, &mut alice);
+    assert!(texts(&ev).contains(&("alice@local".into(), "alice@local".into(), "с телефона".into())), "{ev:?} {:?}", alice.last_error);
+}
+
 /// T142: устройство, привязанное ПОСЛЕ создания группы, узнаёт о группе и
 /// получает ключи текущей эпохи и сессии Megolm участников от своего старого
 /// устройства — читает новые сообщения участников и пишет само.
@@ -530,6 +589,71 @@ fn invite_join_and_ban() {
     assert!(texts(&ev).iter().any(|t| t.2 == "после бана"), "{ev:?}");
     assert!(carol.group_state(&g.id).unwrap().banned.contains("carol@local"));
     assert!(carol.group_unconfirmed(&g.id, &["mallory@local".to_string()]) == vec!["mallory@local".to_string()]);
+}
+
+/// Заявка на вступление (ссылка с одобрением, D-04): админ одобряет записью
+/// `AddMember` в запросе `group.request.decide`; отказ журнал не меняет.
+#[test]
+fn join_request_is_approved_by_add_member() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let mut carol = setup(&mut srv, "carol@local");
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, [0; 32]);
+    bob_learn(&mut alice, "bob@local", *bob.delivery_key());
+    bob_learn(&mut alice, "carol@local", *carol.delivery_key());
+    bob_learn(&mut carol, "alice@local", *alice.delivery_key());
+    bob_learn(&mut carol, "bob@local", *bob.delivery_key());
+    bob_learn(&mut bob, "carol@local", *carol.delivery_key());
+
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Клуб", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    drain(&mut srv, &mut bob);
+
+    // Кэрол просит вступить по ссылке «с одобрением»: запрос уходит, но её
+    // журнал группы не меняется — участником она станет только записью админа.
+    let (req, parts) = alice.group_invite_create(&g.id, "по одобрению", 0, 0, true).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    let url = parvane_protocol::invite::format(&parts).unwrap();
+    let parvane_protocol::invite::ParsedInvite::V2(back) = parvane_protocol::invite::parse(&url).unwrap() else { panic!("не v2") };
+    satisfy(&mut srv, &mut carol, Need::GroupLog { group: g.id.clone(), after: 0 });
+    let before = carol.group_version(&g.id);
+    let ask = carol.group_join(&back).unwrap();
+    assert_eq!(ask.method, "group.join");
+    let q: gpb::JoinRequest = decode_checked(&ask.body, Origin::Client).unwrap();
+    assert_eq!(q.entry.unwrap().version, before + 1, "заявка — запись вступления на следующую версию журнала");
+    assert_eq!(carol.group_version(&g.id), before, "заявка не меняет журнал у заявителя");
+    assert!(!carol.group_state(&g.id).unwrap().members.contains_key("carol@local"));
+    // (мини-сервер заявку не проводит — как шард: она ждёт решения админа)
+
+    // Отказ: запрос без записи, журнал на месте.
+    let version = alice.group_version(&g.id);
+    let no = alice.group_request_decide(&g.id, "carol@local", false).unwrap();
+    assert_eq!(no.method, "group.request.decide");
+    let q: gpb::RequestDecideRequest = decode_checked(&no.body, Origin::Client).unwrap();
+    assert!(!q.approve && q.entry.is_none() && q.user.unwrap().address == "carol@local");
+    srv.handle("alice@local", "d1", &no);
+    assert_eq!(alice.group_version(&g.id), version);
+
+    // Одобрение: запись AddMember внутри того же запроса; не-админ его собрать не может.
+    assert!(bob.group_request_decide(&g.id, "carol@local", true).is_err(), "участник без права приглашать");
+    let yes = alice.group_request_decide(&g.id, "carol@local", true).unwrap();
+    let q: gpb::RequestDecideRequest = decode_checked(&yes.body, Origin::Client).unwrap();
+    assert!(q.approve && q.entry.is_some() && q.group.unwrap().id == g.id);
+    srv.handle("alice@local", "d1", &yes);
+    assert_eq!(alice.group_version(&g.id), version + 1);
+    assert!(alice.group_state(&g.id).unwrap().members.contains_key("carol@local"));
+    assert!(alice.group_state(&g.id).unwrap().epoch_stale);
+
+    advance_clock(11_000);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("заявка одобрена")));
+    let ev = drain(&mut srv, &mut carol);
+    assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "заявка одобрена".into())), "{ev:?} {:?}", carol.last_error);
+    let ev = drain(&mut srv, &mut bob);
+    assert!(texts(&ev).iter().any(|t| t.2 == "заявка одобрена"), "{ev:?}");
 }
 
 /// Встречное начало переписки: оба пишут первыми до того, как получили
@@ -778,7 +902,7 @@ fn l2_mode_direct_and_group() {
 
 fn call_offer(call_id: &[u8], sdp: &str) -> parvane_protocol::pb::parvane::call::v2::CallSignal {
     use parvane_protocol::pb::parvane::call::v2::{call_signal::Signal, CallSignal, Offer};
-    CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Offer(Offer { sdp: sdp.into(), video: false, group: None })) }
+    CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Offer(Offer { sdp: sdp.into(), video: false, group: None })), group_call_id: vec![] }
 }
 
 /// Конверты запроса звонка как живые записи без места в журнале (seq = 0).
@@ -829,7 +953,7 @@ fn call_signal_sealed_roundtrip() {
     assert!(!matches!(bob.open_record(&records[0]), Ok(ev) if !ev.is_empty()), "повтор сигнала принят");
 
     // Ответ и прочие сигналы — без пробуждения устройств.
-    let answer = CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Answer(Answer { sdp: "v=0 SDP-ANSWER".into() })) };
+    let answer = CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Answer(Answer { sdp: "v=0 SDP-ANSWER".into() })), group_call_id: vec![] };
     let reqs = run_collect(&mut srv, &mut bob, &mut |c| c.prepare_call("alice@local", &answer));
     assert_eq!(reqs[0].method, "call.signal_sealed");
     let ev = alice.open_record(&live_records(&reqs[0])[0]).unwrap();
@@ -844,6 +968,68 @@ fn call_signal_sealed_roundtrip() {
     // Негодные вызовы: звонок себе, id звонка не 16 байт.
     assert!(alice.prepare_call("alice@local", &offer).is_err());
     assert!(alice.prepare_call("bob@local", &call_offer(&[1u8; 8], "x")).is_err());
+
+    // Групповой звонок (FR-062, T141): приглашение будит устройства, оффер пары
+    // внутри группового звонка — обычный сигнал; оба несут состав/id звонка
+    // только внутри конверта.
+    use parvane_protocol::pb::parvane::call::v2::GroupRing;
+    use parvane_protocol::pb::parvane::core::v2::UserRef;
+    let group_call = [9u8; 16];
+    let ring = CallSignal {
+        call_id: group_call.to_vec(),
+        signal: Some(Signal::GroupRing(GroupRing {
+            participants: ["alice@local", "bob@local", "carol@local"].iter().map(|a| UserRef { address: a.to_string() }).collect(),
+            video: true,
+            group: None,
+        })),
+        group_call_id: vec![],
+    };
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@local", &ring));
+    assert_eq!((reqs[0].chan, reqs[0].method), (Chan::Anon, "call.ring_sealed"));
+    assert!(!reqs[0].body.windows(11).any(|w| w == b"carol@local"), "состав звонка виден серверу");
+    let ev = bob.open_record(&live_records(&reqs[0])[0]).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Call { from, call_id: id, signal, .. }] if from == "alice@local" && id.as_slice() == group_call && signal == &ring), "{ev:?}");
+
+    let mut mesh = call_offer(&[3u8; 16], "v=0 MESH-OFFER");
+    mesh.group_call_id = group_call.to_vec();
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@local", &mesh));
+    assert_eq!(reqs[0].method, "call.signal_sealed", "оффер пары mesh не тратит лимит вызовов");
+    let ev = bob.open_record(&live_records(&reqs[0])[0]).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Call { signal, .. }] if signal.group_call_id == group_call), "{ev:?}");
+    let mut bad = call_offer(&[4u8; 16], "x");
+    bad.group_call_id = vec![1u8; 5];
+    assert!(alice.prepare_call("bob@local", &bad).is_err(), "id группового звонка не 16 байт");
+}
+
+/// Звонок тому, кто нам писал, а мы ему — нет: вызов сначала раздаёт адресату
+/// наш ключ доступа (иначе он принял бы звонок, но не смог бы ответить —
+/// сигналы звонка по слепому жетону сервер не принимает).
+#[test]
+fn call_ring_shares_delivery_key_first() {
+    use parvane_protocol::pb::parvane::call::v2::{call_signal::Signal, Answer, CallSignal};
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    // Боб написал Алисе (она знает его ключ доступа), Алиса не отвечала.
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, [0; 32]);
+    assert!(alice.has_peer_delivery_key("bob@local"));
+
+    let call_id = [5u8; 16];
+    let offer = call_offer(&call_id, "v=0 OFFER");
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@local", &offer));
+    let methods: Vec<&str> = reqs.iter().map(|r| r.method).collect();
+    assert_eq!(methods, ["msg.deliver_sealed", "call.ring_sealed"], "сначала свой ключ доступа, затем вызов");
+    // Повторный вызов ключ заново не раздаёт.
+    let again = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@local", &call_offer(&[6u8; 16], "v=0")));
+    assert_eq!(again.iter().map(|r| r.method).collect::<Vec<_>>(), ["call.ring_sealed"]);
+
+    // Боб получил ключ (запись журнала) и вызов — и может ответить.
+    drain(&mut srv, &mut bob);
+    let ring = reqs.iter().find(|r| r.method == "call.ring_sealed").unwrap();
+    assert!(matches!(bob.open_record(&live_records(ring)[0]).unwrap().as_slice(), [Event::Call { .. }]));
+    let answer = CallSignal { call_id: call_id.to_vec(), signal: Some(Signal::Answer(Answer { sdp: "v=0 ANSWER".into() })), group_call_id: vec![] };
+    let back = run_collect(&mut srv, &mut bob, &mut |c| c.prepare_call("alice@local", &answer));
+    assert_eq!(back.iter().map(|r| r.method).collect::<Vec<_>>(), ["call.signal_sealed"]);
 }
 
 // ── переходный период (FR-058): подписанный список v1-устройств ──────────────

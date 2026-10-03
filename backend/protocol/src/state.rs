@@ -32,7 +32,7 @@ use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
-    peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, Draft, Folder, FolderOrder, NotifyDefaults, Peer,
+    peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, NotifyDefaults, Peer,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -286,6 +286,8 @@ pub struct PersonalState {
     archived: BTreeMap<String, Lww<Peer>>,
     pinned: BTreeMap<i32, Lww<PinnedOrder>>,
     calls: BTreeMap<OpId, Lww<CallRecord>>,
+    // Граница очистки чата: только растёт (max), метка LWW не нужна.
+    cleared: BTreeMap<String, ChatCleared>,
     max_lamport: u64,
 }
 
@@ -450,6 +452,18 @@ impl PersonalState {
                 let id = op_id16(&r.call_id, "call_id")?;
                 put(&mut self.calls, id, &stamp, None);
             }
+            Some(Op::ChatCleared(c)) => {
+                let k = opt_peer_key(&c.peer)?;
+                if c.cleared_until_ms <= 0 {
+                    return Err(ProtoError::InvalidField("cleared_until_ms"));
+                }
+                match self.cleared.get(&k) {
+                    Some(cur) if cur.cleared_until_ms >= c.cleared_until_ms => {}
+                    _ => {
+                        self.cleared.insert(k, c.clone());
+                    }
+                }
+            }
         }
         self.max_lamport = self.max_lamport.max(op.lamport);
         Ok(())
@@ -474,6 +488,7 @@ impl PersonalState {
             archived: live(&self.archived),
             pinned: live(&self.pinned),
             calls: live(&self.calls),
+            cleared: self.cleared.values().cloned().collect(),
         }
     }
 
@@ -578,6 +593,7 @@ pub fn migrate_snapshot_with(
     );
     kinds.extend(snapshot.pinned.iter().cloned().map(Op::PinnedOrder));
     kinds.extend(snapshot.calls.iter().cloned().map(Op::CallSet));
+    kinds.extend(snapshot.cleared.iter().cloned().map(Op::ChatCleared));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());

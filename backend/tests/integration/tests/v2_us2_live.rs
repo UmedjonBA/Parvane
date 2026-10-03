@@ -502,7 +502,7 @@ async fn us2_calls_live() {
         f.check("inbox-subscribe", b.c.call("msg.inbox.subscribe", vec![]).is_ok(), "");
         // 1) Offer alice → bob через анонимный канал с ключом доступа Боба.
         let call_id = [7u8; 16];
-        let offer = cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Offer(cpb::Offer { sdp: "v=0 SDP-OFFER".into(), video: false, group: None })) };
+        let offer = cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Offer(cpb::Offer { sdp: "v=0 SDP-OFFER".into(), video: false, group: None })), group_call_id: vec![] };
         let req = seal_call(&addr, &a, &bob, Access::DeliveryKey(b.delivery_key.clone()), &call_id, offer.clone());
         let mut an = V2::connect(&addr, Channel::AnonymousDelivery);
         let r = call_ok::<cpb::RingSealedResponse>(&mut an, "call.ring_sealed", req.encode_to_vec());
@@ -538,7 +538,7 @@ async fn us2_calls_live() {
         // 4) Cooldown вызова на соединение → RATE_LIMITED; не-вызов на том же соединении проходит.
         let again = seal_call(&addr, &a, &bob, Access::DeliveryKey(b.delivery_key.clone()), &call_id, offer.clone());
         f.check("ring-cooldown", an.call("call.ring_sealed", again.encode_to_vec()) == Err(ErrorCode::RateLimited), "");
-        let ice = cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Ice(cpb::IceCandidate { candidate: "candidate:1 1 udp 1 1.2.3.4 5 typ host".into(), sdp_mid: "0".into(), sdp_mline_index: 0 })) };
+        let ice = cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Ice(cpb::IceCandidate { candidate: "candidate:1 1 udp 1 1.2.3.4 5 typ host".into(), sdp_mid: "0".into(), sdp_mline_index: 0 })), group_call_id: vec![] };
         let ice_req = seal_call(&addr, &a, &bob, Access::DeliveryKey(b.delivery_key.clone()), &call_id, ice);
         f.check("ice-after-ring", an.call("call.signal_sealed", ice_req.encode_to_vec()).is_ok(), "");
         // 5) Неверный ключ доступа → FORBIDDEN; жетон незнакомца → FORBIDDEN.
@@ -885,14 +885,14 @@ async fn leak_generate() {
         }
         // 2) Сигналы звонка alice → bob (D-08: без истории на сервере).
         let call_id = [0x42u8; 16];
-        let offer = cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Offer(cpb::Offer { sdp: "v=0 leak-offer".into(), ..Default::default() })) };
+        let offer = cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Offer(cpb::Offer { sdp: "v=0 leak-offer".into(), ..Default::default() })), group_call_id: vec![] };
         let mut calls = 0;
         let mut an = V2::connect(&addr, Channel::AnonymousDelivery);
         for i in 0..10 {
             let signal = if i == 0 {
                 offer.clone()
             } else {
-                cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Ice(cpb::IceCandidate { candidate: format!("candidate:{i} 1 udp 1 10.0.0.{i} 5000 typ host"), sdp_mid: "0".into(), sdp_mline_index: 0 })) }
+                cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Ice(cpb::IceCandidate { candidate: format!("candidate:{i} 1 udp 1 10.0.0.{i} 5000 typ host"), sdp_mid: "0".into(), sdp_mline_index: 0 })), group_call_id: vec![] }
             };
             let mut envelopes = vec![];
             for (dr, hpke, s) in sessions.iter_mut() {

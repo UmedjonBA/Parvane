@@ -704,9 +704,9 @@ async fn leak_generate_media() {
         let mut an = V2::connect(&addr, Channel::AnonymousDelivery);
         for i in 0..10 {
             let signal = if i == 0 {
-                cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Offer(cpb::Offer { sdp: "v=0 leak-media-offer".into(), ..Default::default() })) }
+                cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Offer(cpb::Offer { sdp: "v=0 leak-media-offer".into(), ..Default::default() })), group_call_id: vec![] }
             } else {
-                cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Ice(cpb::IceCandidate { candidate: format!("candidate:{i} 1 udp 1 10.0.1.{i} 5000 typ host"), sdp_mid: "0".into(), sdp_mline_index: 0 })) }
+                cpb::CallSignal { call_id: call_id.to_vec(), signal: Some(cpb::call_signal::Signal::Ice(cpb::IceCandidate { candidate: format!("candidate:{i} 1 udp 1 10.0.1.{i} 5000 typ host"), sdp_mid: "0".into(), sdp_mline_index: 0 })), group_call_id: vec![] }
             };
             let mut envelopes = vec![];
             for (dr, hpke, s) in sessions.iter_mut() {

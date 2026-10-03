@@ -687,6 +687,16 @@ impl Client {
         (v2, legacy)
     }
 
+    /// Корневой ключ личности пользователя по проверенному журналу устройств
+    /// (свой — по своему журналу): из него клиенты выводят «ключ безопасности»
+    /// (отпечаток для сверки вслух). `None` — журнала нет.
+    pub fn log_root_key(&self, user: &str) -> Option<[u8; 32]> {
+        if user == self.user {
+            return (self.own_log.version > 0).then_some(self.own_log.root_key);
+        }
+        self.peers.get(user).and_then(|p| p.log.as_ref()).map(|l| l.root_key)
+    }
+
     /// Подписанный список v1-устройств пользователя (D-01, FR-058): `None` —
     /// список не публиковался. Только им можно слать легаси-копии.
     pub fn legacy_devices(&self, user: &str) -> Option<Vec<crate::pb::parvane::core::v2::LegacyDevice>> {
@@ -905,6 +915,13 @@ impl Client {
         Ok(())
     }
 
+    /// Ключи доступа собеседников — в грант линковки: новое своё устройство
+    /// пишет и звонит знакомым по ключу сразу, а не слепым жетоном (звонок по
+    /// жетону сервер не принимает вовсе).
+    pub fn peer_delivery_keys(&self) -> Vec<(String, Vec<u8>, u64)> {
+        self.peers.iter().filter_map(|(u, p)| p.delivery_key.as_ref().map(|(k, g)| (u.clone(), k.clone(), *g))).collect()
+    }
+
     /// Ключ доступа собеседника, полученный вне журнала (профиль/QR).
     pub fn set_peer_delivery_key(&mut self, user: &str, key: Vec<u8>, generation: u64) {
         if key.len() == 32 {
@@ -1057,7 +1074,10 @@ impl Client {
     /// устройства), остальное — `call.signal_sealed`. В журнал не пишется, своим
     /// устройствам копия не идёт. `Need` — как у личного сообщения.
     pub fn prepare_call(&mut self, peer: &str, signal: &cpb::CallSignal) -> CResult<Vec<OutRequest>> {
-        if peer == self.user || signal.call_id.len() != msg::CALL_ID_LEN {
+        if peer == self.user
+            || signal.call_id.len() != msg::CALL_ID_LEN
+            || !(signal.group_call_id.is_empty() || signal.group_call_id.len() == msg::CALL_ID_LEN)
+        {
             return Err(ProtoError::InvalidField("call").into());
         }
         self.check_peer(peer)?;
@@ -1070,6 +1090,11 @@ impl Client {
             }
         }
         let audience: Vec<DeviceRef> = devices.iter().map(|d| DeviceRef { address: peer.into(), device_id: d.clone() }).collect();
+        // Сигнал звонка сервер принимает только по ключу доступа адресата
+        // (D-08): без него одноразовый жетон был бы потрачен на заведомый отказ.
+        if !self.has_peer_delivery_key(peer) {
+            return Err(ProtoError::Forbidden.into());
+        }
         let call = Ref { domain: self.domain.clone(), id: signal.call_id.clone() };
         let op = msg::sign_call(&self.acc, signal, call, audience, now_ms())?;
         let access = self.access_for(peer)?;
@@ -1095,9 +1120,25 @@ impl Client {
             self.return_access(access);
             return Err(ClientError::Need(Need::Bundle { user: peer.into() }));
         }
-        let ring = matches!(signal.signal, Some(cpb::call_signal::Signal::Offer(_)));
+        // Будит устройства первый сигнал звонка: оффер личного звонка либо
+        // приглашение в групповой. Оффер пары внутри группового звонка — обычный
+        // сигнал (согласие на звонок уже дано, лимит вызовов он не тратит).
+        let ring = match &signal.signal {
+            Some(cpb::call_signal::Signal::Offer(_)) => signal.group_call_id.is_empty(),
+            Some(cpb::call_signal::Signal::GroupRing(_)) => true,
+            _ => false,
+        };
         let method = if ring { "call.ring_sealed" } else { "call.signal_sealed" };
-        Ok(vec![OutRequest::anon(method, &cpb::SignalSealedRequest { envelopes })])
+        let mut out = vec![];
+        // Вызов: адресату нужен НАШ ключ доступа, чтобы ответить (answer, ICE —
+        // те же сигналы звонка, жетоном их не отправить). Не раздавали — раздаём
+        // перед вызовом, как с первым сообщением (иначе звонок тому, кто нам
+        // писал, а мы ему нет, звонил бы, но не соединялся).
+        if ring {
+            out.extend(self.share_delivery_key(peer)?);
+        }
+        out.push(OutRequest::anon(method, &cpb::SignalSealedRequest { envelopes }));
+        Ok(out)
     }
 
     /// Подготовить личное сообщение: копии устройствам собеседника и своим
@@ -2131,6 +2172,15 @@ impl Client {
             joiner_root_key: root.to_vec(),
             link_signature: group::sign_join(&link, &state, &root),
         };
+        // Ссылка «по одобрению»: запись вступления — это ЗАЯВКА. В журнал она
+        // не попадает (участником заявителя сделает админ записью `AddMember`),
+        // поэтому локально не применяется: сервер проверит подпись ключа ссылки
+        // и ответит `pending`.
+        let link_id = group::link_id(&join.link_public_key);
+        if state.invite_links.get(&link_id).is_some_and(|l| l.announce.requires_approval) {
+            let entry = group::build_entry(&self.acc, Some(&state), &self.domain, Change::JoinByInvite(join), now_ms())?;
+            return Ok(OutRequest::id("group.join", &gpb::JoinRequest { entry: Some(entry) }));
+        }
         self.group_change(&gid, Change::JoinByInvite(join))
     }
 
@@ -2173,16 +2223,10 @@ impl Client {
         Ok((g, OutRequest::id("group.state.append", &gpb::StateAppendRequest { entry: Some(entry) })))
     }
 
-    /// Изменение группы (состав/права/сведения/ссылки): запись журнала.
-    pub fn group_change(&mut self, group_id: &[u8], change: Change) -> Result<OutRequest> {
+    /// Запись журнала группы: собрать, проверить по своему состоянию и
+    /// применить локально (отказ сервера хост лечит пересинхронизацией).
+    fn group_entry(&mut self, group_id: &[u8], change: Change) -> Result<GroupStateEntry> {
         let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
-        let method = match &change {
-            Change::InviteKey(_) => "group.invite.create",
-            Change::InviteKeyRevoke(_) => "group.invite.revoke",
-            Change::JoinByInvite(_) => "group.join",
-            Change::NewEpoch(_) => "group.epoch.publish_send_key",
-            _ => "group.state.append",
-        };
         let entry = group::build_entry(&self.acc, Some(&state), &self.domain, change, now_ms())?;
         let next = {
             let resolve = self.signer_resolver();
@@ -2192,6 +2236,33 @@ impl Client {
             g.entries.push(entry.clone());
             g.state = Some(next);
         }
+        Ok(entry)
+    }
+
+    /// Решение по заявке на вступление (ссылка с одобрением, D-04):
+    /// одобрение — запись `AddMember`, которую сервер проводит и снимает
+    /// заявку одним запросом `group.request.decide`; отказ — без записи.
+    pub fn group_request_decide(&mut self, group_id: &[u8], user: &str, approve: bool) -> Result<OutRequest> {
+        let group = self.group_state(group_id).map(|s| s.group.clone()).ok_or(ProtoError::NotFound)?;
+        let member = UserRef { address: user.into() };
+        let entry = if approve {
+            Some(self.group_entry(group_id, Change::AddMember(gpb::AddMember { member: Some(member.clone()) }))?)
+        } else {
+            None
+        };
+        Ok(OutRequest::id("group.request.decide", &gpb::RequestDecideRequest { group: Some(group), user: Some(member), approve, entry }))
+    }
+
+    /// Изменение группы (состав/права/сведения/ссылки): запись журнала.
+    pub fn group_change(&mut self, group_id: &[u8], change: Change) -> Result<OutRequest> {
+        let method = match &change {
+            Change::InviteKey(_) => "group.invite.create",
+            Change::InviteKeyRevoke(_) => "group.invite.revoke",
+            Change::JoinByInvite(_) => "group.join",
+            Change::NewEpoch(_) => "group.epoch.publish_send_key",
+            _ => "group.state.append",
+        };
+        let entry = self.group_entry(group_id, change)?;
         let body = match method {
             "group.invite.create" => gpb::InviteCreateRequest { entry: Some(entry) }.encode_to_vec(),
             "group.invite.revoke" => gpb::InviteRevokeRequest { entry: Some(entry) }.encode_to_vec(),

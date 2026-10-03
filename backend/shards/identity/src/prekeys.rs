@@ -20,7 +20,13 @@ pub(crate) async fn store_prekeys(pool: &SqlitePool, username: &str, req: &Publi
     // T048 (spec 007, защита от downgrade): у пользователя с журналом устройств
     // v2 новое v1-устройство без сертификата (или смена ключей v1-устройства)
     // не регистрируется — иначе сервер мог бы «понизить» переписку до v1.
-    if (prev.is_none() || device_changed) && crate::v2::user_has_v2(username).await {
+    // Устройство, действующее в журнале v2 (привязано грантом, восстановлено),
+    // сертификат имеет: его v1-бандл принимается, иначе v1-собеседники не слали
+    // бы копий привязанным устройствам аккаунта (FR-054, T146).
+    if (prev.is_none() || device_changed)
+        && crate::v2::user_has_v2(username).await
+        && !crate::v2::log_has_active_device(username, &req.device_id).await
+    {
         anyhow::bail!("устройство без сертификата v2 запрещено для этого аккаунта");
     }
     if device_changed {

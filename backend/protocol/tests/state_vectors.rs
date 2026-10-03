@@ -22,7 +22,7 @@ use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::call::v2::HangupReason;
 use parvane_protocol::pb::parvane::core::v2::{Ref, UserRef};
 use parvane_protocol::pb::parvane::state::v1::{
-    peer, state_op::Op, BlockEntry, CallRecord, CallRef, Draft, Folder, FolderOrder, FolderRef, NotifyDefaults,
+    peer, state_op::Op, BlockEntry, CallRecord, CallRef, ChatCleared, Draft, Folder, FolderOrder, FolderRef, NotifyDefaults,
     NotifySettings, Peer, PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare,
     StateOp, StateSnapshot,
 };
@@ -235,6 +235,16 @@ fn gen_merge() -> Value {
             op(6, 2, "dev a", Op::ArchiveSet(pk(user("bob@x")))),
             op(7, 1 << 53, "dev-a", Op::ArchiveSet(pk(user("bob@x")))),
             op(8, 2, "dev-b", Op::ArchiveSet(pk(user("bob@x")))),
+        ],
+    ));
+    cases.push(merge_case(
+        "чат очищен «у себя»: граница по собеседнику только растёт, поздняя метка с меньшей границей её не откатывает",
+        vec![
+            op(1, 1, "dev-a", Op::ChatCleared(ChatCleared { peer: Some(user("bob@x")), cleared_until_ms: 5_000 })),
+            op(2, 9, "dev-b", Op::ChatCleared(ChatCleared { peer: Some(user("bob@x")), cleared_until_ms: 3_000 })),
+            op(3, 2, "dev-a", Op::ChatCleared(ChatCleared { peer: Some(group(7)), cleared_until_ms: 1 })),
+            op(4, 3, "dev-a", Op::ChatCleared(ChatCleared { peer: Some(user("bob@x")), cleared_until_ms: 0 })),
+            op(5, 4, "dev-b", Op::ChatCleared(ChatCleared { peer: None, cleared_until_ms: 9 })),
         ],
     ));
     json!({
@@ -454,6 +464,7 @@ fn gen_migration() -> Value {
         archived: vec![user("old@x")],
         pinned: vec![PinnedOrder { list: PinList::Main as i32, peers: vec![user("bob@x")] }],
         calls: vec![CallRecord { call_id: vec![0xc1; 16], peer: Some(user("bob@x")), outgoing: true, video: false, reason: HangupReason::Normal as i32, started_ms: 1, duration_s: 60 }],
+        cleared: vec![],
     };
     let mut clock = LamportClock::new(10);
     let ops = state::migrate_snapshot_with(&local, "dev-m", &mut clock, 0, counter_ids()).unwrap();
@@ -534,6 +545,7 @@ fn arb_kind() -> impl Strategy<Value = Op> {
         (0i32..3, prop::collection::vec(arb_peer(), 0..3)).prop_map(|(l, peers)| Op::PinnedOrder(PinnedOrder { list: l, peers })),
         (id16.clone(), arb_peer()).prop_map(|(c, p)| Op::CallSet(CallRecord { call_id: c, peer: Some(p), ..Default::default() })),
         id16.prop_map(|c| Op::CallRemove(CallRef { call_id: c })),
+        (arb_peer(), 0i64..4).prop_map(|(p, t)| Op::ChatCleared(ChatCleared { peer: Some(p), cleared_until_ms: t })),
     ]
 }
 

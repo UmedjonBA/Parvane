@@ -265,6 +265,7 @@ impl PvClient {
             m["sk"] = json!(hex::encode(k.as_bytes()));
             m["skv"] = json!(v);
         }
+        m["pk"] = parvane_protocol::host::grant_peer_keys(&self.inner);
         Ok(m.to_string().into_bytes())
     }
 
@@ -282,6 +283,7 @@ impl PvClient {
             let k = parvane_protocol::state::StateKey::from_bytes(&h("sk")?).map_err(|_| err_proto(ProtoError::Malformed))?;
             self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
         }
+        parvane_protocol::host::apply_grant_peer_keys(&mut self.inner, &v);
         Ok(reqs_js(&reqs))
     }
 
@@ -452,6 +454,21 @@ impl PvClient {
         let had = self.inner.has_peer_delivery_key(peer);
         self.inner.on_delivery_key_rejected(peer);
         had
+    }
+
+    /// Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
+    /// `[{"user","tsMs"}]`. Серверу v2 это неизвестно («Просмотрено», T151).
+    #[wasm_bindgen]
+    pub fn readers(&self, id: &str) -> Result<String, JsValue> {
+        let list: Vec<serde_json::Value> = self.inner.readers(&op_id_bytes(id)?).into_iter().map(|(user, ts)| json!({"user": user, "tsMs": ts})).collect();
+        Ok(serde_json::Value::Array(list).to_string())
+    }
+
+    /// Известен ли ключ доступа собеседника: сигнал звонка сервер принимает
+    /// только с ним (слепой жетон для звонков не годится).
+    #[wasm_bindgen(js_name = hasPeerDeliveryKey)]
+    pub fn has_peer_delivery_key(&self, peer: &str) -> bool {
+        self.inner.has_peer_delivery_key(peer)
     }
 
     // ── отзыв своего устройства (T128; D-11, D-12, D-16) ──
@@ -644,6 +661,12 @@ impl PvClient {
         let ch: gpb::GroupChange = serde_json::from_str(change_json).map_err(|_| err_proto(ProtoError::Malformed))?;
         let c = ch.change.ok_or_else(|| err_proto(ProtoError::InvalidField("change")))?;
         self.inner.group_change(&group_id(group)?, c).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Решение по заявке на вступление (одобрение — запись `AddMember`).
+    #[wasm_bindgen(js_name = groupRequestDecide)]
+    pub fn group_request_decide(&mut self, group: &str, user: &str, approve: bool) -> Result<JsValue, JsValue> {
+        self.inner.group_request_decide(&group_id(group)?, user, approve).map(|r| req_js(&r)).map_err(err_proto)
     }
 
     #[wasm_bindgen(js_name = groupRotateEpoch)]
@@ -854,6 +877,15 @@ impl PvState {
         let rec: parvane_protocol::pb::parvane::state::v1::CallRecord =
             serde_json::from_str(record_json).map_err(|_| err_proto(ProtoError::Malformed))?;
         self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::CallSet(rec)])
+    }
+
+    /// Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
+    /// → тела `state.append`. Граница по собеседнику только растёт.
+    #[wasm_bindgen(js_name = chatCleared)]
+    pub fn chat_cleared(&mut self, cleared_json: &str) -> Result<Array, JsValue> {
+        let c: parvane_protocol::pb::parvane::state::v1::ChatCleared =
+            serde_json::from_str(cleared_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::ChatCleared(c)])
     }
 
     /// Локальный журнал уже отправленных этим устройством (hex; хранит хост).
