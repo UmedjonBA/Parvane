@@ -17,7 +17,9 @@ export type V2Entity = {
   language?: string;
   custom_emoji_id?: string;
 };
-export type V2PackRef = { file_id?: string; name?: string; count?: number; key?: string; nonce?: string };
+export type V2PackRef = {
+  file_id?: string; name?: string; count?: number; key?: string; nonce?: string; capability?: string;
+};
 export type V2Media = {
   kind: string;
   file_id?: string;
@@ -36,6 +38,7 @@ export type V2Media = {
   spoiler?: boolean;
   title?: string;
   performer?: string;
+  capability?: string;
 };
 export type V2Text = {
   text?: string;
@@ -147,11 +150,16 @@ function entitiesFromV2(list?: V2Entity[]): WireTextEntity[] | undefined {
 }
 
 const packToV2 = (p?: WirePackRef): V2PackRef | undefined => (p ? {
-  file_id: p.file_id, name: p.name, count: p.count, key: p.key, nonce: p.nonce,
+  file_id: p.file_id, name: p.name, count: p.count, key: p.key, nonce: p.nonce, capability: p.capability,
 } : undefined);
 
 const packFromV2 = (p?: V2PackRef): WirePackRef | undefined => (p?.file_id ? {
-  file_id: p.file_id, name: p.name || '', count: p.count || 0, key: p.key || '', nonce: p.nonce || '',
+  file_id: p.file_id,
+  name: p.name || '',
+  count: p.count || 0,
+  key: p.key || '',
+  nonce: p.nonce || '',
+  capability: p.capability || undefined,
 } : undefined);
 
 // ── waveform: number[] (0..31) ↔ bytes ─────────────────────────────────────
@@ -199,6 +207,7 @@ function mediaToV2(c: WireMessageContent): V2Media {
     caption_entities: entitiesToV2(c.entities),
     title: c.audio_title,
     performer: c.audio_performer,
+    capability: c.capability,
   };
 }
 
@@ -229,6 +238,7 @@ function mediaFromV2(m: V2Media): WireMessageContent {
     entities: entitiesFromV2(m.caption_entities),
     audio_title: m.title || undefined,
     audio_performer: m.performer || undefined,
+    capability: m.capability || undefined,
   };
   return prune(out);
 }

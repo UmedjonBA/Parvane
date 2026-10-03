@@ -264,12 +264,25 @@ export function createConnectionController(deps: ConnectionDependencies) {
     } else if (to && to !== store.self) {
       return;
     }
+    showTyping(from, isGroup ? to : undefined);
+  }
+
+  // «Печатает» по эфемерному каналу v2 (T127): автор и чат уже проверены
+  // движком (канал знают только участники чата)
+  function showV2Typing(chat: string, from: string) {
+    const store = deps.getStore();
+    if (!from || from === store.self) return;
+    showTyping(from, store.isGroupAddress(chat) ? chat : undefined);
+  }
+
+  function showTyping(from: string, groupAddress?: string) {
+    const store = deps.getStore();
     // L2-1: в чате с режимом «усиленная приватность» typing не показывается
-    if (!isEphemeralAllowed(isGroup ? to! : from)) return;
-    // Групповой typing: печатает участник — показываем в групповом чате (по
-    // `to`). Личный: показываем в 1-1 чате собеседника (по `from`)
-    const chatId = isGroup
-      ? store.getIdForAddress(to!, 'group')
+    if (!isEphemeralAllowed(groupAddress || from)) return;
+    // Групповой typing: печатает участник — показываем в групповом чате.
+    // Личный: показываем в 1-1 чате собеседника (по `from`)
+    const chatId = groupAddress
+      ? store.getIdForAddress(groupAddress, 'group')
       : store.getIdForAddress(from);
     deps.sendUpdate({
       '@type': 'updateChatTypingStatus',
@@ -715,6 +728,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     ensureGroupTyping,
     ensurePresence,
     refreshEphemeral,
+    showV2Typing,
     connectWithToken,
     shutdown,
   };

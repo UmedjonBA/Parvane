@@ -102,6 +102,9 @@ export async function packRefCacheKey(setId: string, files: Array<{ data: ArrayB
 
 // PACK-1: архив в cloud доступен только получателям, названным при загрузке —
 // переиспользовать можно, только если все новые получатели в том наборе
+// Метка кэша ссылок на пак: ссылка с секретом скачивания (не привязана к получателям)
+const PACK_REF_CAPABILITY = 'capability:';
+
 export function shouldReusePackRef(cachedRecipients: string[], nextRecipients: string[]) {
   const cached = new Set(cachedRecipients);
   return nextRecipients.every((recipient) => cached.has(recipient));
@@ -192,6 +195,105 @@ export function createMessageController(deps: MessageDependencies) {
   // отклонит сообщение (чужой публичный ключ давал бы выборку в чужом sync)
   function signSend(engine: E2eEngine, messageId: string, ciphertext: string) {
     return engine.signCallData(`send:${messageId}:${ciphertext}`);
+  }
+
+  // Переходный период (FR-054/FR-058): сообщение v2-собеседнику ушло по v2, но
+  // у него (или у нас самих) остались v1-устройства из ПОДПИСАННОГО списка —
+  // им та же запись уходит v1-путём с тем же id. Устройства вне списка не
+  // получают ничего. Основной шифртекст ПУСТ: всё адресное — в copies;
+  // устройство без своей копии (v2 или не из списка) запись молча пропускает
+  async function sealLegacy(toAddress: string, content: WireMessageContent) {
+    const v2 = deps.v2;
+    const engine = deps.getE2e();
+    const self = store().self;
+    if (!v2 || !engine || v2.isV2GroupAddress(toAddress)) return undefined;
+    const peerLegacy = toAddress === self ? new Map<string, string>() : v2.legacyDevices(toAddress);
+    const ownLegacy = v2.legacyDevices(self);
+    if (!peerLegacy.size && !ownLegacy.size) return undefined;
+    const innerJson = JSON.stringify({ from: self, content });
+    const peerSealed = peerLegacy.size
+      ? await engine.encryptForDevices(toAddress, innerJson, fetchPrekeyBundle, undefined, peerLegacy) : undefined;
+    const ownSealed = ownLegacy.size
+      ? await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId, ownLegacy) : undefined;
+    const copies: WireDeviceCopy[] = [
+      ...(peerSealed?.copies || []).map((copy) => ({
+        recipient: toAddress, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
+      })),
+      ...(ownSealed?.copies || []).map((copy) => ({
+        recipient: '',
+        signing_key: copy.deviceSigningKey,
+        device_id: copy.deviceId,
+        ciphertext: copy.ciphertext,
+        ctype: copy.ctype,
+      })),
+    ];
+    if (!copies.length) return undefined;
+    return {
+      engine,
+      copies,
+      content: {
+        kind: 'encrypted',
+        ciphertext: '',
+        ctype: 0,
+        sender_identity: engine.identityKey,
+        sender_signing_key: engine.signingKey,
+      } satisfies WireMessageContent,
+      summary: `собеседника ${peerSealed?.copies.length || 0}, своим ${ownSealed?.copies.length || 0}`,
+    };
+  }
+
+  // Сбой копии не роняет отправку: по v2 сообщение доставлено
+  async function sendLegacyCopies(
+    toAddress: string, content: WireMessageContent, uuid: string, replyTo?: string,
+  ) {
+    try {
+      const sealed = await sealLegacy(toAddress, content);
+      if (!sealed) return;
+      await deps.v2!.deliverLegacy(uuid, JSON.stringify({
+        to: toAddress,
+        content: sealed.content,
+        reply_to: replyTo,
+        copies: sealed.copies,
+        signature: signSend(sealed.engine, uuid, ''),
+      }));
+      deps.log(`v2: легаси-копии v1-устройствам: ${sealed.summary}`);
+    } catch (error) {
+      deps.log(`v2: легаси-копии не отправлены: ${String(error)}`);
+    }
+  }
+
+  // Правка v2-сообщения — и v1-устройствам, получившим его легаси-копией
+  async function editLegacyCopies(toAddress: string, uuid: string, content: WireMessageContent) {
+    try {
+      const sealed = await sealLegacy(toAddress, content);
+      if (!sealed) return;
+      connection()?.publish(TOPIC_MSG_EDIT, JSON.stringify(
+        buildWireEvent(store().self, token(), {
+          message_id: uuid,
+          content: sealed.content,
+          signature: sealed.engine.signCallData(`edit:${uuid}:`),
+          copies: sealed.copies,
+        }),
+      ));
+      deps.log(`v2: правка v1-устройствам: ${sealed.summary}`);
+    } catch (error) {
+      deps.log(`v2: правка v1-устройствам не отправлена: ${String(error)}`);
+    }
+  }
+
+  // Удаление v2-сообщения — и у v1-устройств (надгробие v1 по тому же id)
+  function deleteLegacyCopies(toAddress: string, uuids: string[]) {
+    const v2 = deps.v2;
+    const engine = deps.getE2e();
+    const self = store().self;
+    if (!v2 || !engine || v2.isV2GroupAddress(toAddress)) return;
+    if (!v2.legacyDevices(toAddress).size && !v2.legacyDevices(self).size) return;
+    uuids.forEach((uuid) => {
+      publishFrame(TOPIC_MSG_DELETE, JSON.stringify(
+        buildWireEvent(self, token(), { message_id: uuid, signature: engine.signCallData(`delete:${uuid}`) }),
+      ));
+    });
+    deps.log(`v2: удаление v1-устройствам (${uuids.length})`);
   }
 
   async function sealForAddress(toAddress: string, innerJson: string): Promise<SealResult> {
@@ -346,6 +448,22 @@ export function createMessageController(deps: MessageDependencies) {
   }
 
   // Пересылка зашифрованного медиа в другой чат: скачать (или взять из кэша)
+  // Куда и как грузить блоб вложения. Чат v2 (собеседник или группа v2) без
+  // v1-устройств — без per-recipient гранта: секрет скачивания едет внутри
+  // E2E-содержимого, получатель качает блоб анонимным каналом (FR-062, T131).
+  // Есть v1-устройства (LEGACY-1) либо чат v1 — гранты получателям, как раньше
+  async function mediaUploadOptions(toAddress: string): Promise<{
+    encrypt: true; recipients?: string[]; withCapability?: boolean;
+  }> {
+    const v2 = deps.v2;
+    const isV2Chat = Boolean(v2 && isV2Routable(toAddress)
+      && await v2.isV2Chat(toAddress).catch(() => false));
+    if (isV2Chat && !v2!.legacyDevices(toAddress).size && !v2!.legacyDevices(store().self).size) {
+      return { encrypt: true, withCapability: true };
+    }
+    return { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) };
+  }
+
   // расшифрованный блоб и выгрузить заново с грантами для получателей
   // целевого чата. undefined — оставить как есть (блоб недоступен)
   async function reshareMedia(fileId: string, toAddress: string) {
@@ -353,13 +471,17 @@ export function createMessageController(deps: MessageDependencies) {
       || await deps.media.downloadBlob(fileId).catch(() => undefined);
     if (!cached) return undefined;
     const mimeType = cached.mimeType || cached.blob.type || 'application/octet-stream';
-    const upload = await deps.media.uploadBlob(cached.blob, `forward-${fileId}`, mimeType, {
-      encrypt: true, recipients: deps.media.getCloudRecipients(toAddress),
-    });
+    const upload = await deps.media.uploadBlob(
+      cached.blob, `forward-${fileId}`, mimeType, await mediaUploadOptions(toAddress),
+    );
     if (!upload.mediaKeys) return undefined;
     deps.media.cacheBlob(upload.fileId, cached.blob, mimeType);
     return {
-      oldId: fileId, fileId: upload.fileId, keyB64: upload.mediaKeys.keyB64, nonceB64: upload.mediaKeys.nonceB64,
+      oldId: fileId,
+      fileId: upload.fileId,
+      keyB64: upload.mediaKeys.keyB64,
+      nonceB64: upload.mediaKeys.nonceB64,
+      capability: upload.capability,
     };
   }
 
@@ -422,6 +544,7 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     if (await deps.v2?.trySend(toAddress, wireContent as unknown as WireMessageContent, uuid)) {
+      await sendLegacyCopies(toAddress, wireContent as unknown as WireMessageContent, uuid);
       if (!isEphemeral) {
         deps.localState.appendOwnJournal({
           id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts, origin: 'v2',
@@ -527,11 +650,11 @@ export function createMessageController(deps: MessageDependencies) {
       gif.blobUrl ? await fetch(gif.blobUrl).then((response) => response.blob()) : undefined
     );
     if (!blob) return;
-    const { fileId, mediaKeys } = await deps.media.uploadBlob(blob, `${gif.id}.webm`, 'video/webm', {
-      encrypt: true,
-      recipients: deps.media.getCloudRecipients(toAddress),
-    });
-    const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+    const { fileId, mediaKeys, capability } = await deps.media.uploadBlob(
+      blob, `${gif.id}.webm`, 'video/webm', await mediaUploadOptions(toAddress),
+    );
+    const mediaCrypto = mediaKeys
+      ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
     const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
     const wireContent: Record<string, unknown> = {
       kind: 'gif',
@@ -617,18 +740,21 @@ export function createMessageController(deps: MessageDependencies) {
   async function buildPackRefForSet(setId: string, toAddress: string): Promise<WirePackRef | undefined> {
     const pack = await findPackFiles(setId);
     if (!pack) return undefined;
-    const recipients = deps.media.getCloudRecipients(toAddress);
+    const uploadOptions = await mediaUploadOptions(toAddress);
+    // Ссылка с секретом скачивания годится любому v2-чату; с грантами — только
+    // тем же получателям
+    const recipients = uploadOptions.withCapability ? [PACK_REF_CAPABILITY] : uploadOptions.recipients || [];
     const cacheKey = await packRefCacheKey(setId, pack.files);
     const cachedRefs = uploadedPackRefs.get(cacheKey) || [];
     const reusable = cachedRefs.find((entry) => shouldReusePackRef(entry.recipients, recipients));
     if (reusable) return reusable.ref;
     const archive = buildPvpkArchive(pack.files);
     if (!archive) return undefined;
-    const { fileId, mediaKeys } = await deps.media.uploadBlob(
+    const { fileId, mediaKeys, capability } = await deps.media.uploadBlob(
       new Blob([archive as BlobPart], { type: 'application/octet-stream' }),
       'pack.pvpk',
       'application/octet-stream',
-      { encrypt: true, recipients },
+      uploadOptions,
     );
     // EMOJI-1: в ссылке — ровно то имя, от которого считались docId
     const isEmoji = pack.isEmoji || isEmojiPackSetId(setId);
@@ -639,6 +765,7 @@ export function createMessageController(deps: MessageDependencies) {
       count: pack.files.length,
       key: mediaKeys?.keyB64,
       nonce: mediaKeys?.nonceB64,
+      capability,
     };
     uploadedPackRefs.delete(cacheKey);
     uploadedPackRefs.set(cacheKey, [...cachedRefs, { recipients, ref }]);
@@ -660,13 +787,14 @@ export function createMessageController(deps: MessageDependencies) {
     if (!blob) return;
     const mime = cached.mimeType || 'image/png';
     const extension = EXT_BY_STICKER_MIME[mime] || 'png';
-    const { fileId, mediaKeys } = await deps.media.uploadBlob(
+    const { fileId, mediaKeys, capability } = await deps.media.uploadBlob(
       blob,
       `sticker-${sticker.id}.${extension}`,
       mime,
-      { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) },
+      await mediaUploadOptions(toAddress),
     );
-    const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+    const mediaCrypto = mediaKeys
+      ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
     const setId = 'id' in sticker.stickerSetInfo ? sticker.stickerSetInfo.id : undefined;
     const packRef = setId && isCustomPackSetId(setId)
       ? await buildPackRefForSet(setId, toAddress)
@@ -863,13 +991,16 @@ export function createMessageController(deps: MessageDependencies) {
         // ним до аплоада, иначе обращение до/после подмены контента упирается в
         // несуществующий file_id (у voice плеер фиксирует audio.src навсегда)
         deps.media.cacheBlob(uuid, blob, attachment.mimeType || 'application/octet-stream');
-        const { fileId, size, mediaKeys } = await deps.media.uploadBlob(
+        const {
+          fileId, size, mediaKeys, capability,
+        } = await deps.media.uploadBlob(
           blob,
           attachment.filename,
           attachment.mimeType,
-          { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) },
+          await mediaUploadOptions(toAddress),
         );
-        const mediaCrypto = mediaKeys ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64 } : {};
+        const mediaCrypto = mediaKeys
+          ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
         if (attachment.voice) {
           wireContent = {
             kind: 'voice',
@@ -1066,6 +1197,10 @@ export function createMessageController(deps: MessageDependencies) {
       if (!isSentViaV2) {
         const innerJson = JSON.stringify({ from: currentStore.self, content: wireContent });
         sealed = await sealForAddress(toAddress, innerJson);
+      } else {
+        await sendLegacyCopies(
+          toAddress, wireContent as unknown as WireMessageContent, uuid, replyToUuid,
+        );
       }
     } catch (error) {
       reportEncryptionSendFailure(chat.id, localMessage.id, error);
@@ -1164,6 +1299,7 @@ export function createMessageController(deps: MessageDependencies) {
       };
     } else {
       if (await deps.v2?.tryEdit(toAddress, uuid, plainContent)) {
+        await editLegacyCopies(toAddress, uuid, plainContent);
         engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
         return;
       }
@@ -1359,6 +1495,7 @@ export function createMessageController(deps: MessageDependencies) {
       if (address && isV2Routable(address) && await deps.v2?.isV2Chat(address)) {
         const uuids = messageIds.map((id) => currentStore.getUuidForMessage(chat.id, id)).filter(Boolean);
         await deps.v2!.tryDelete(address, uuids);
+        deleteLegacyCopies(address, uuids);
         uuids.forEach((uuid) => deps.sync.markDeleted(uuid));
         deps.sendUpdate({ '@type': 'deleteMessages', ids: messageIds, chatId: chat.id });
         return undefined;
@@ -1509,7 +1646,18 @@ export function createMessageController(deps: MessageDependencies) {
       if (!toAddress) return Promise.resolve(undefined);
       // L2-1: в чате с режимом «усиленная приватность» typing не шлём
       if (deps.v2 && !deps.v2.ephemeralAllowed(toAddress)) return Promise.resolve(undefined);
-      publishFrame(buildTypingTopic(peer.id), JSON.stringify({ from: currentStore.self, to: toAddress }));
+      const publishV1 = () => {
+        publishFrame(buildTypingTopic(peer.id), JSON.stringify({ from: currentStore.self, to: toAddress }));
+      };
+      // Чат v2 — эфемерным каналом v2 (T127): кадр v1 несёт серверу `{from, to}`.
+      // Сбой v2 не понижает до v1 — «печатает» просто не уходит
+      if (deps.v2 && isV2Routable(toAddress)) {
+        void deps.v2.trySendTyping(toAddress).then((isHandled) => {
+          if (!isHandled) publishV1();
+        }, () => undefined);
+        return Promise.resolve(undefined);
+      }
+      publishV1();
       return Promise.resolve(undefined);
     },
 
@@ -1671,6 +1819,7 @@ export function createMessageController(deps: MessageDependencies) {
             wireContent.file_id = reshared.fileId;
             wireContent.file_key = reshared.keyB64;
             wireContent.file_nonce = reshared.nonceB64;
+            wireContent.capability = reshared.capability;
             content = replaceMediaId(content, reshared.oldId, reshared.fileId);
           }
         }

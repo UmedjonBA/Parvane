@@ -481,6 +481,16 @@ const Main = ({
     return () => window.removeEventListener('parvane-new-device', handleNewDevice);
   }, [showNotification]);
 
+  // Parvane: отозвано устройство, державшее ключ подписи устройств — его надо
+  // обновить ключом восстановления (Settings → Devices)
+  useEffect(() => {
+    const handleSskRotation = () => {
+      showNotification({ message: oldTranslate('ParvaneSskRotationNotice') });
+    };
+    window.addEventListener('parvane-ssk-rotation', handleSskRotation);
+    return () => window.removeEventListener('parvane-ssk-rotation', handleSskRotation);
+  }, [showNotification]);
+
   // Parvane: сервер не принимает эту версию протокола — нативный диалог ошибки
   useEffect(() => {
     const handleUpgradeRequired = () => {

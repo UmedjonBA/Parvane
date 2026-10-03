@@ -3,6 +3,8 @@
 // SDP/ICE через call.signal → call.user.<to>. Wire-совместимо с десктопом:
 // CallSignal Invite/Answer/Ice/Hangup/Reject.
 
+import { decodeIceCandidate, encodeIceCandidate } from './iceCandidate';
+
 export type CallMedia = 'audio' | 'video';
 
 export type WireCallSignal =
@@ -181,7 +183,13 @@ export class CallEngine {
     }
   }
 
-  async handleSignal(from: string, signal: WireCallSignal) {
+  /**
+   * `isAuthenticated` — сигнал пришёл по протоколу v2: отправителя, аудиторию и
+   * привязку к звонку уже проверил движок (подпись операции ключом устройства из
+   * журнала устройств), поэтому подпись SDP ключом звонков (`sig`) не требуется.
+   * Для сигналов с v1-шины аргумент не передаётся никогда
+   */
+  async handleSignal(from: string, signal: WireCallSignal, isAuthenticated = false) {
     switch (signal.type) {
       case 'invite':
         if (!from || !signal.call_id || !signal.sdp || this.seenCallIds.has(signal.call_id)) return;
@@ -193,15 +201,17 @@ export class CallEngine {
         this.callId = signal.call_id;
         this.peer = from;
         this.isCaller = false;
-        if (!await this.loadPeerSigningKey(from, signal.call_id)
-          || this.callId !== signal.call_id
-          || this.peer !== from) {
-          if (this.callId === signal.call_id && this.peer === from) this.failSecurity('reject');
-          return;
-        }
-        if (!this.verifySdp(signal.sdp, signal.sig)) {
-          this.failSecurity('reject');
-          return;
+        if (!isAuthenticated) {
+          if (!await this.loadPeerSigningKey(from, signal.call_id)
+            || this.callId !== signal.call_id
+            || this.peer !== from) {
+            if (this.callId === signal.call_id && this.peer === from) this.failSecurity('reject');
+            return;
+          }
+          if (!this.verifySdp(signal.sdp, signal.sig)) {
+            this.failSecurity('reject');
+            return;
+          }
         }
         this.pendingOffer = signal.sdp;
         this.incomingFrom = from;
@@ -220,7 +230,7 @@ export class CallEngine {
       case 'answer':
         if (!this.pc || !this.isCaller || this.remoteReady
           || signal.call_id !== this.callId || from !== this.peer) return;
-        if (!this.verifySdp(signal.sdp, signal.sig)) {
+        if (!isAuthenticated && !this.verifySdp(signal.sdp, signal.sig)) {
           this.failSecurity('hangup');
           return;
         }
@@ -232,12 +242,13 @@ export class CallEngine {
         break;
       case 'ice':
         if (signal.call_id !== this.callId || from !== this.peer) return;
-        try {
-          const candidate = JSON.parse(signal.candidate) as RTCIceCandidateInit;
+        {
+          // CALL-1: понимаем канонический вид и прежние виды web и desktop;
+          // битый кандидат не должен валить звонок
+          const candidate = decodeIceCandidate(signal.candidate);
+          if (!candidate) break;
           if (this.pc && this.remoteReady) await this.pc.addIceCandidate(candidate).catch(() => undefined);
           else this.pendingCandidates.push(candidate);
-        } catch {
-          // Ignore malformed candidates without disturbing the active call
         }
         break;
       case 'reject':
@@ -303,7 +314,7 @@ export class CallEngine {
     pc.onicecandidate = (e) => {
       if (this.pc === pc && e.candidate && this.peer && this.callId) {
         this.cb.sendSignal(this.peer, {
-          type: 'ice', call_id: this.callId, candidate: JSON.stringify(e.candidate.toJSON()),
+          type: 'ice', call_id: this.callId, candidate: encodeIceCandidate(e.candidate.toJSON()),
         });
       }
     };

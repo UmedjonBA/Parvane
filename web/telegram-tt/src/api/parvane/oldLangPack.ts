@@ -212,6 +212,21 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneLinkPendingText: 'Waiting for your other device. Open Settings → Devices there and confirm code %@.',
   ParvaneLinkPendingWait: 'Waiting for your other device. Open Settings → Devices there — '
     + 'the verification code will appear on both devices.',
+  // Новое устройство без других устройств аккаунта (ключ восстановления / сброс)
+  ParvaneRecoverTitle: 'No other device?',
+  ParvaneRecoverText: 'If your other devices are gone, sign this device in with your recovery key. '
+    + 'Your old devices will be removed from the account.',
+  ParvaneRecoverAction: 'Use recovery key',
+  ParvaneRecoverDone: 'This device is now signed in with your recovery key.',
+  ParvaneRecoverNoBackup: 'No recovery copy is stored for this account.',
+  ParvaneResetAction: 'Reset secure identity',
+  ParvaneResetText: 'This creates a new secure identity for your account. Your contacts will see that your '
+    + 'security key has changed, and earlier encrypted messages will not be readable on this device. '
+    + 'Enter your password to continue.',
+  ParvaneResetConfirm: 'Reset',
+  ParvaneResetDone: 'Secure identity was reset. Save your new recovery key.',
+  ParvaneResetBadPassword: 'Wrong password.',
+  ParvaneResetFailed: 'Could not reset the secure identity. Try again later.',
   ParvaneLinkOfferWait: 'Waiting for the device to reveal its key…',
   ParvaneLinkRequests: 'History transfer requests',
   ParvaneLinkOfferCode: 'Code: %@',
@@ -501,6 +516,19 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'The mode is visible to all participants.',
   ParvaneL2ByPeer: 'Turned on by the other participant',
   ParvaneNewDevice: 'A new device was added to your account. If it wasn\'t you, revoke it in Settings → Devices.',
+  // Смена ключа подписи устройств после отзыва (Settings → Devices)
+  ParvaneSskRotationNotice: 'A device was removed. Enter your recovery key in Settings → Devices to renew '
+    + 'the device signing key.',
+  ParvaneSskRotationTitle: 'Device signing key',
+  ParvaneSskRotationText: 'A removed device held the key that signs your devices. Until it is renewed, '
+    + 'new devices cannot be added. Enter your recovery key to renew it.',
+  ParvaneSskRotationNoBackup: 'A removed device held the key that signs your devices. Renew it from the '
+    + 'device where your account was first set up — the recovery copy is stored there.',
+  ParvaneSskRotationAction: 'Renew key',
+  ParvaneSskRotationPlaceholder: 'Recovery key',
+  ParvaneSskRotationDone: 'Device signing key renewed.',
+  ParvaneSskRotationBadKey: 'This recovery key does not match.',
+  ParvaneSskRotationFailed: 'Could not renew the key. Try again later.',
   ParvaneInviteInvalid: 'This invite link is invalid',
   ParvaneMediaTampered: 'This media file is damaged or was tampered with',
   ParvaneMediaUnverified: 'Could not verify this file — it opened without an integrity check',
@@ -764,6 +792,20 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneLinkPendingText: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код %@.',
   ParvaneLinkPendingWait: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства — '
     + 'код сверки появится на обоих устройствах.',
+  ParvaneRecoverTitle: 'Нет другого устройства?',
+  ParvaneRecoverText: 'Если других устройств не осталось, войдите на этом устройстве по ключу восстановления. '
+    + 'Прежние устройства будут удалены из аккаунта.',
+  ParvaneRecoverAction: 'Ввести ключ восстановления',
+  ParvaneRecoverDone: 'Устройство подключено по ключу восстановления.',
+  ParvaneRecoverNoBackup: 'Для этого аккаунта нет копии для восстановления.',
+  ParvaneResetAction: 'Сбросить защищённую личность',
+  ParvaneResetText: 'Будет создана новая защищённая личность аккаунта. Собеседники увидят, что ваш ключ '
+    + 'безопасности изменился, а прежние зашифрованные сообщения на этом устройстве не прочитаются. '
+    + 'Введите пароль, чтобы продолжить.',
+  ParvaneResetConfirm: 'Сбросить',
+  ParvaneResetDone: 'Защищённая личность сброшена. Сохраните новый ключ восстановления.',
+  ParvaneResetBadPassword: 'Неверный пароль.',
+  ParvaneResetFailed: 'Не удалось сбросить защищённую личность. Попробуйте позже.',
   ParvaneLinkOfferWait: 'Ждём, пока устройство раскроет ключ…',
   ParvaneLinkRequests: 'Запросы на перенос истории',
   ParvaneLinkOfferCode: 'Код: %@',
@@ -1084,6 +1126,18 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneL2ByPeer: 'Включена собеседником',
   ParvaneNewDevice: 'К аккаунту добавлено новое устройство. Если это были не вы, '
     + 'отзовите его в Настройки → Устройства.',
+  ParvaneSskRotationNotice: 'Устройство удалено. Введите ключ восстановления в Настройки → Устройства, '
+    + 'чтобы обновить ключ подписи устройств.',
+  ParvaneSskRotationTitle: 'Ключ подписи устройств',
+  ParvaneSskRotationText: 'Удалённое устройство держало ключ, которым подписываются ваши устройства. '
+    + 'Пока он не обновлён, добавить новое устройство нельзя. Введите ключ восстановления, чтобы обновить его.',
+  ParvaneSskRotationNoBackup: 'Удалённое устройство держало ключ, которым подписываются ваши устройства. '
+    + 'Обновите его на устройстве, где аккаунт настраивался впервые, — копия для восстановления хранится там.',
+  ParvaneSskRotationAction: 'Обновить ключ',
+  ParvaneSskRotationPlaceholder: 'Ключ восстановления',
+  ParvaneSskRotationDone: 'Ключ подписи устройств обновлён.',
+  ParvaneSskRotationBadKey: 'Ключ восстановления не подходит.',
+  ParvaneSskRotationFailed: 'Не удалось обновить ключ. Попробуйте позже.',
   ParvaneInviteInvalid: 'Ссылка-приглашение недействительна',
   ParvaneMediaTampered: 'Файл повреждён или подменён',
   ParvaneMediaUnverified: 'Не удалось проверить целостность файла — он открылся без проверки',

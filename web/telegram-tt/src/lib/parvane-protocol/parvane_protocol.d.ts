@@ -35,6 +35,10 @@ export class PvAnonPlanner {
 export class PvClient {
     free(): void;
     [Symbol.dispose](): void;
+    /**
+     * KEY-1 v2: принять смену корня собеседника (после предупреждения).
+     */
+    acceptRootChange(user: string): boolean;
     ackRequest(): any;
     /**
      * Первое устройство: корень, генезис, сертификат, прекеи, ключ доставки.
@@ -45,11 +49,39 @@ export class PvClient {
      * Курсор журнала (применено до seq включительно).
      */
     cursor(): bigint;
+    /**
+     * Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
+     * ключ (отзыв устройства, восстановление) — дальше слепым жетоном. true —
+     * ключ был и сброшен (отправку стоит повторить).
+     */
+    deliveryKeyRejected(peer: string): boolean;
     drainReady(): string;
     /**
      * Первое устройство без ключа личного состояния — создать (версия 1).
      */
     ensureStateKey(): boolean;
+    /**
+     * Событие подписки `ephemeral` → JSON-массив событий `typing`/`presence`.
+     */
+    ephOpen(body: Uint8Array): string;
+    /**
+     * Своё присутствие → запросы (пусто — L2 активен в каком-то чате).
+     */
+    ephPresence(online: boolean, last_seen_ms: number): Array<any>;
+    /**
+     * Соединение пересоздано — подписок на эфемерные каналы больше нет.
+     */
+    ephReset(): void;
+    /**
+     * Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →
+     * запросы `ephemeral.subscribe` (только новые каналы).
+     */
+    ephSubscribe(chats_json: string): Array<any>;
+    /**
+     * «Печатает»: `chat` — адрес собеседника либо hex группы, `action` — номер
+     * `TypingAction`. Запросы (пусто — канала нет или чат в L2).
+     */
+    ephTyping(chat: string, action: number): Array<any>;
     /**
      * Экспорт состояния (шифруется ключом хранилища, 32 байта).
      */
@@ -129,6 +161,12 @@ export class PvClient {
      */
     importRootBackup(blob: Uint8Array, recovery_key: string): Uint8Array;
     /**
+     * Корень из копии под ключом восстановления на устройстве БЕЗ журнала
+     * (восстановление): сверка с журналом — в `recoverWithRoot`. Корень
+     * остаётся в памяти до `forgetRoot()`.
+     */
+    importRootBackupFor(blob: Uint8Array, recovery_key: string): void;
+    /**
      * Восстановить из зашифрованного состояния.
      */
     static importState(blob: Uint8Array, key: Uint8Array): PvClient;
@@ -137,7 +175,9 @@ export class PvClient {
      */
     ingestBundle(user: string, bundle_response: Uint8Array): number;
     /**
-     * Ответ `identity.device.log_sync(_anon)` → вердикт "new" | "known" | "rootChanged".
+     * Ответ `identity.device.log_sync(_anon)` → вердикт "new" | "known" |
+     * "rootChanged" (KEY-1: показать предупреждение и `acceptRootChange`) |
+     * "replaced" (журнал на сервере начат заново — перечитать с версии 0).
      */
     ingestLog(user: string, sync_response: Uint8Array): string;
     /**
@@ -166,6 +206,17 @@ export class PvClient {
     l2SetGroupPref(group: string, enabled: boolean): void;
     lastError(): string | undefined;
     /**
+     * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
+     * для v1-устройств из подписанных списков собеседника и своего.
+     */
+    legacyDeliverRequest(message_id: string, send_payload_json: string): any;
+    /**
+     * Опубликовать/сократить свой список v1-устройств (FR-058): JSON
+     * `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
+     * Первая публикация задаёт список, дальше он только сокращается.
+     */
+    legacyDevicesRequest(devices_json: string): any;
+    /**
      * Материал гранта линковки: JSON {ssk, entries[], deliveryKey, gen} (hex/байты).
      */
     linkGrantMaterial(): Uint8Array;
@@ -184,6 +235,16 @@ export class PvClient {
     openRecord(record: Uint8Array): string;
     otkRequest(n: number): any;
     /**
+     * Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
+     */
+    ownSskExposed(): boolean;
+    /**
+     * Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
+     * `call.v2.CallSignal`; оффер уходит методом `call.ring_sealed`, остальное —
+     * `call.signal_sealed`, оба анонимным каналом.
+     */
+    prepareCall(peer: string, signal_json: string): Array<any>;
+    /**
      * Личное сообщение: содержимое — proto3-JSON `msg.v2.Content`;
      * `op_id` — UUID сообщения хоста (строка) или пусто.
      */
@@ -193,13 +254,61 @@ export class PvClient {
      * Публиковать ли своё присутствие: false, пока L2 активен хотя бы в одном чате.
      */
     presenceAllowed(): boolean;
+    /**
+     * T130: восстановление на новом устройстве по корню (в памяти после
+     * `importRootBackupFor`); `log_response` — ответ `identity.device.log_sync`
+     * с версии 0. Запросы выполнять по порядку.
+     */
+    recoverWithRoot(log_response: Uint8Array, otk_count: number): Array<any>;
+    /**
+     * T130: сброс личности — новый корень взамен прежнего. Как
+     * `createIdentity`; первый запрос — `identity.root.rotate` (нужна свежая
+     * переаутентификация).
+     */
+    resetIdentity(otk_count: number): any;
+    /**
+     * Отозвать ключ доступа у собеседника (FR-033; блокировка) →
+     * `{requests, pendingKeyShares: [адрес]}`; пустой `requests` — ключа у
+     * собеседника не было.
+     */
+    revokeContactAccess(peer: string): any;
+    /**
+     * Отозвать своё другое устройство и выполнить последствия →
+     * `{requests, pendingKeyShares: [адрес], pendingEpochs: [hex],
+     * epochsNeedAdmin: [hex], sskRotationRequired, stateKeyVersion?}`. Первый
+     * запрос — запись журнала (обязателен), остальные — ротации ключей.
+     */
+    revokeDevice(device_id: string): any;
+    /**
+     * Сменить SSK корнем (D-12): корень — в памяти после `importRootBackup`;
+     * после успеха хост зовёт `forgetRoot()`.
+     */
+    rotateSsk(): Array<any>;
     setPeerDeliveryKey(user: string, key: Uint8Array, generation: bigint): void;
+    /**
+     * Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
+     */
+    shareDeliveryKey(peer: string): Array<any>;
+    /**
+     * Группы v2 — своим новым устройствам (T142): ключи текущей эпохи и
+     * входящие сессии Megolm. `devices_json` — JSON-массив id устройств.
+     */
+    shareGroupsWithOwnDevices(devices_json: string): Array<any>;
     /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      */
     stateSession(): PvState | undefined;
     syncRequest(): any;
+    /**
+     * Размер партии — вся суточная квота.
+     */
+    tokenBatchSize(): number;
     tokenCount(): number;
+    /**
+     * Пора получать суточную партию жетонов (FR-063: по расписанию, не перед
+     * тратой).
+     */
+    tokenRefillDue(): boolean;
     /**
      * Запрос жетонов: ответ `identity.tokens.key_list` (анонимно) + ключ сервера.
      */
@@ -340,6 +449,11 @@ export class PvState {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+     */
+    callSet(record_json: string): Array<any>;
+    /**
      * Отложенные, которые ЭТО устройство отправляет сейчас (proto3-JSON
      * `ScheduledMessage[]`); отправлять с op_id отложенного, затем `markSent`.
      */
@@ -419,6 +533,16 @@ export function encodeRequest(id: bigint, method: string, body: Uint8Array, time
 export function generateRecoveryKey(): string;
 
 /**
+ * Копия корня из материала гранта (`undefined` — гранта без копии).
+ */
+export function grantRootBackup(material: Uint8Array): Uint8Array | undefined;
+
+/**
+ * Материал гранта линковки + копия корня под ключом восстановления (поле `rb`).
+ */
+export function grantWithRootBackup(material: Uint8Array, backup: Uint8Array): Uint8Array;
+
+/**
  * Разобрать ссылку-приглашение → JSON `{kind: "v2", domain, linkId(hex)}` |
  * `{kind: "legacy", token}` (исключение — не ссылка-приглашение).
  */
@@ -480,6 +604,8 @@ export interface InitOutput {
     readonly encodePing: (a: number, b: bigint) => void;
     readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number) => void;
     readonly generateRecoveryKey: (a: number) => void;
+    readonly grantRootBackup: (a: number, b: number, c: number) => void;
+    readonly grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly parseInvite: (a: number, b: number, c: number) => void;
     readonly parseLegacyStored: (a: number, b: number, c: number) => void;
     readonly protoMajor: () => number;
@@ -488,11 +614,18 @@ export interface InitOutput {
     readonly pvanonplanner_expired: (a: number, b: number, c: number) => void;
     readonly pvanonplanner_new: () => number;
     readonly pvanonplanner_openCount: (a: number) => number;
+    readonly pvclient_acceptRootChange: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_ackRequest: (a: number) => number;
     readonly pvclient_createIdentity: (a: number, b: number, c: number) => void;
     readonly pvclient_cursor: (a: number) => bigint;
+    readonly pvclient_deliveryKeyRejected: (a: number, b: number, c: number) => number;
     readonly pvclient_drainReady: (a: number, b: number) => void;
     readonly pvclient_ensureStateKey: (a: number) => number;
+    readonly pvclient_ephOpen: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_ephPresence: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_ephReset: (a: number) => void;
+    readonly pvclient_ephSubscribe: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_ephTyping: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_export: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_exportRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_forgetRoot: (a: number) => void;
@@ -512,6 +645,7 @@ export interface InitOutput {
     readonly pvclient_hasStateKey: (a: number) => number;
     readonly pvclient_importLibolmAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_importRootBackupFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importState: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_ingestBundle: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_ingestLog: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -521,19 +655,32 @@ export interface InitOutput {
     readonly pvclient_l2SetDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_l2SetGroupPref: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_lastError: (a: number, b: number) => void;
+    readonly pvclient_legacyDeliverRequest: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_legacyDevicesRequest: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_linkGrantMaterial: (a: number, b: number) => void;
     readonly pvclient_logDevices: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_logVersion: (a: number, b: number, c: number) => bigint;
     readonly pvclient_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_openRecord: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_otkRequest: (a: number, b: number) => number;
+    readonly pvclient_ownSskExposed: (a: number) => number;
+    readonly pvclient_prepareCall: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_prepareDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_prepareGroup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_presenceAllowed: (a: number) => number;
+    readonly pvclient_recoverWithRoot: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvclient_resetIdentity: (a: number, b: number, c: number) => void;
+    readonly pvclient_revokeContactAccess: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_revokeDevice: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_rotateSsk: (a: number, b: number) => void;
     readonly pvclient_setPeerDeliveryKey: (a: number, b: number, c: number, d: number, e: number, f: bigint) => void;
+    readonly pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_stateSession: (a: number) => number;
     readonly pvclient_syncRequest: (a: number) => number;
+    readonly pvclient_tokenBatchSize: (a: number) => number;
     readonly pvclient_tokenCount: (a: number) => number;
+    readonly pvclient_tokenRefillDue: (a: number) => number;
     readonly pvclient_tokenRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
     readonly pvmegolminbound_create: (a: number, b: number, c: number) => void;
@@ -568,6 +715,7 @@ export interface InitOutput {
     readonly pvolmsession_pickle: (a: number, b: number, c: number, d: number) => void;
     readonly pvolmsession_sessionId: (a: number, b: number) => void;
     readonly pvolmsession_unpickle: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_claimDue: (a: number, b: number, c: number) => void;
     readonly pvstate_diff: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvstate_ingest: (a: number, b: number, c: number, d: number) => void;

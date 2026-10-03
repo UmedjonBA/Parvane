@@ -251,6 +251,13 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     if (content.kind !== 'encrypted') return { stored, wasSealed: false };
+    // Легаси-копия от v2-отправителя (FR-054): основной шифртекст пуст, всё
+    // адресное — в copies. Нашей копии нет — запись не для этого устройства
+    // (своё v2-сообщение пришло по v2): молча пропускаем, курсор не держим.
+    // Так же и её надгробие: удаление v2-устройству приходит по v2
+    if (!cached && !ownCopy && !content.ciphertext && content.sender_identity) {
+      return { stored, wasSealed: false, hidden: true };
+    }
     const sameCiphertext = Boolean(cached?.ctHash && content.ciphertext
       && cached.ctHash === hashCiphertext(content.ciphertext));
     if (cached && (!stored.edited || cached.from === store.self || sameCiphertext)) {
@@ -1274,6 +1281,7 @@ export function createSyncController(deps: SyncDependencies) {
     ensureSynced,
     forgetMessages,
     pushMentionState,
+    announceKeyChange,
     getFlags: (uuid: string) => wireFlagsByUuid.get(uuid),
     getReadOutboxMax: (chatId: string) => readOutboxMaxByChatId.get(chatId),
     handleInboxFrame,

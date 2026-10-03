@@ -35,8 +35,32 @@ type StateProps = GlobalState['activeSessions'];
 
 // Parvane: авто-линковка истории — статус собственного оффера и запросы
 // других устройств опрашиваются, пока экран открыт
-type LinkStatus = { isPending: boolean; code?: string };
+type LinkStatus = { isPending: boolean; code?: string; canRecover?: boolean };
 type LinkOffer = { deviceId: string; code?: string };
+// Parvane (T128, D-12): отозвано устройство, державшее ключ подписи устройств —
+// ключ обновляется корнем из копии под ключом восстановления
+type SskState = { isRotationNeeded: boolean; hasBackup: boolean };
+type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
+const SSK_RESULT_KEYS: Record<SskRotationResult, string> = {
+  ok: 'ParvaneSskRotationDone',
+  bad_key: 'ParvaneSskRotationBadKey',
+  no_backup: 'ParvaneSskRotationNoBackup',
+  failed: 'ParvaneSskRotationFailed',
+};
+// Parvane (T130): новое устройство без других устройств аккаунта — вход по
+// ключу восстановления либо сброс защищённой личности
+const RECOVER_RESULT_KEYS: Record<SskRotationResult, string> = {
+  ok: 'ParvaneRecoverDone',
+  bad_key: 'ParvaneSskRotationBadKey',
+  no_backup: 'ParvaneRecoverNoBackup',
+  failed: 'ParvaneSskRotationFailed',
+};
+type ResetResult = 'ok' | 'bad_password' | 'failed';
+const RESET_RESULT_KEYS: Record<ResetResult, string> = {
+  ok: 'ParvaneResetDone',
+  bad_password: 'ParvaneResetBadPassword',
+  failed: 'ParvaneResetFailed',
+};
 const LINK_UI_POLL_MS = 5000;
 
 const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
@@ -63,11 +87,77 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   const [linkOffers, setLinkOffers] = useState<LinkOffer[]>([]);
   const [confirmingOffer, setConfirmingOffer] = useState<LinkOffer | undefined>();
 
+  const [sskState, setSskState] = useState<SskState | undefined>();
+  const [isSskDialogOpen, openSskDialog, closeSskDialog] = useFlag();
+  const [recoveryKey, setRecoveryKey] = useState('');
+
   const refreshLinkState = useLastCallback(async () => {
     const status = await callParvane('parvaneGetLinkStatus') as LinkStatus | undefined;
     setLinkStatus(status);
     const offers = await callParvane('parvaneListLinkOffers') as { offers: LinkOffer[] } | undefined;
     setLinkOffers(offers?.offers || []);
+    setSskState(await callParvane('parvaneGetSskState') as SskState | undefined);
+  });
+
+  const handleRecoveryKeyChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setRecoveryKey(e.currentTarget.value);
+  });
+
+  const handleCloseSskDialog = useLastCallback(() => {
+    setRecoveryKey('');
+    closeSskDialog();
+  });
+
+  // Диалог ключа восстановления общий: обновление ключа подписи (T128) и вход
+  // нового устройства по ключу (T130)
+  const [isRecoverMode, setIsRecoverMode] = useState(false);
+  const [isResetDialogOpen, openResetDialog, closeResetDialog] = useFlag();
+  const [resetPassword, setResetPassword] = useState('');
+
+  const handleOpenRecover = useLastCallback(() => {
+    setIsRecoverMode(true);
+    openSskDialog();
+  });
+
+  const handleOpenRotate = useLastCallback(() => {
+    setIsRecoverMode(false);
+    openSskDialog();
+  });
+
+  const handleResetPasswordChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setResetPassword(e.currentTarget.value);
+  });
+
+  const handleCloseResetDialog = useLastCallback(() => {
+    setResetPassword('');
+    closeResetDialog();
+  });
+
+  const handleResetIdentity = useLastCallback(async () => {
+    const password = resetPassword;
+    handleCloseResetDialog();
+    if (!password) return;
+    const result = await callParvane('parvaneResetIdentity', { password }) as ResetResult | undefined;
+    showNotification({ message: oldLang(RESET_RESULT_KEYS[result || 'failed']) });
+    void refreshLinkState();
+  });
+
+  const handleRotateSsk = useLastCallback(async () => {
+    if (isRecoverMode) {
+      const key = recoveryKey;
+      handleCloseSskDialog();
+      if (!key) return;
+      const result = await callParvane('parvaneRecoverWithKey', { recoveryKey: key }) as SskRotationResult | undefined;
+      showNotification({ message: oldLang(RECOVER_RESULT_KEYS[result || 'failed']) });
+      void refreshLinkState();
+      return;
+    }
+    const key = recoveryKey;
+    handleCloseSskDialog();
+    if (!key) return;
+    const result = await callParvane('parvaneRotateSsk', { recoveryKey: key }) as SskRotationResult | undefined;
+    showNotification({ message: oldLang(SSK_RESULT_KEYS[result || 'failed']) });
+    void refreshLinkState();
   });
 
   useEffect(() => {
@@ -274,6 +364,49 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     );
   }
 
+  // Parvane: других устройств не осталось — ключ восстановления или сброс
+  function renderRecover() {
+    return (
+      <>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {oldLang('ParvaneRecoverTitle')}
+        </IslandTitle>
+        <Island>
+          <p className="settings-item-description-larger">
+            {oldLang('ParvaneRecoverText')}
+          </p>
+          <ListItem icon="key" narrow ripple onClick={handleOpenRecover}>
+            {oldLang('ParvaneRecoverAction')}
+          </ListItem>
+          <ListItem icon="delete" narrow ripple destructive onClick={openResetDialog}>
+            {oldLang('ParvaneResetAction')}
+          </ListItem>
+        </Island>
+      </>
+    );
+  }
+
+  // Parvane: ключ подписи устройств ждёт обновления после отзыва устройства
+  function renderSskRotation(hasBackup: boolean) {
+    return (
+      <>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {oldLang('ParvaneSskRotationTitle')}
+        </IslandTitle>
+        <Island>
+          <p className="settings-item-description-larger">
+            {oldLang(hasBackup ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup')}
+          </p>
+          {hasBackup && (
+            <ListItem icon="key" narrow ripple onClick={handleOpenRotate}>
+              {oldLang('ParvaneSskRotationAction')}
+            </ListItem>
+          )}
+        </Island>
+      </>
+    );
+  }
+
   // Parvane: запросы истории от других устройств аккаунта
   function renderLinkOffers() {
     return (
@@ -346,7 +479,9 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     <div className="settings-content custom-scroll SettingsActiveSessions">
       {currentSession && renderCurrentSession(currentSession)}
       {Boolean(linkStatus?.isPending) && renderLinkPending(linkStatus.code)}
+      {Boolean(linkStatus?.canRecover) && renderRecover()}
       {Boolean(linkOffers.length) && renderLinkOffers()}
+      {Boolean(sskState?.isRotationNeeded) && renderSskRotation(Boolean(sskState?.hasBackup))}
       {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
       {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
           показывается только когда бэкенд отдал ttlDays */}
@@ -380,6 +515,46 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
         confirmLabel={oldLang('ParvaneLinkConfirmAction')}
         confirmHandler={handleGrantLink}
       />
+      <ConfirmDialog
+        isOpen={isSskDialogOpen}
+        onClose={handleCloseSskDialog}
+        text={oldLang(isRecoverMode ? 'ParvaneRecoverText' : 'ParvaneSskRotationText')}
+        confirmLabel={oldLang(isRecoverMode ? 'ParvaneRecoverAction' : 'ParvaneSskRotationAction')}
+        confirmHandler={handleRotateSsk}
+        isConfirmDisabled={!recoveryKey}
+        areButtonsInColumn
+      >
+        <input
+          type="text"
+          className="form-control"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={oldLang('ParvaneSskRotationPlaceholder')}
+          aria-label={oldLang('ParvaneSskRotationPlaceholder')}
+          value={recoveryKey}
+          onChange={handleRecoveryKeyChange}
+        />
+      </ConfirmDialog>
+      <ConfirmDialog
+        isOpen={isResetDialogOpen}
+        onClose={handleCloseResetDialog}
+        text={oldLang('ParvaneResetText')}
+        confirmLabel={oldLang('ParvaneResetConfirm')}
+        confirmHandler={handleResetIdentity}
+        confirmIsDestructive
+        isConfirmDisabled={!resetPassword}
+        areButtonsInColumn
+      >
+        <input
+          type="password"
+          className="form-control"
+          autoComplete="current-password"
+          placeholder={oldLang('ParvanePasswordConfirm')}
+          aria-label={oldLang('ParvanePasswordConfirm')}
+          value={resetPassword}
+          onChange={handleResetPasswordChange}
+        />
+      </ConfirmDialog>
       <SettingsActiveSession isOpen={isModalOpen} hash={openedSessionHash} onClose={handleCloseSessionModal} />
     </div>
   );
