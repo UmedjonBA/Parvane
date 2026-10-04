@@ -457,10 +457,15 @@ impl HostClient {
     }
 
     pub fn group_create(&mut self, kind: i32, name: &str, members_json: &str, perms_json: &str) -> Result<String, String> {
+        self.group_create_from(kind, name, members_json, perms_json, "")
+    }
+
+    /// Группа, переводимая из v1 (T180): `migrated_from` — прежний `group_id`.
+    pub fn group_create_from(&mut self, kind: i32, name: &str, members_json: &str, perms_json: &str, migrated_from: &str) -> Result<String, String> {
         let members: Vec<String> = serde_json::from_str(members_json).map_err(|_| err(ProtoError::Malformed))?;
         let perms: gpb::Permissions = serde_json::from_str(perms_json).map_err(|_| err(ProtoError::Malformed))?;
         let kind = gpb::GroupKind::try_from(kind).map_err(|_| err(ProtoError::InvalidField("kind")))?;
-        let (g, r) = self.inner.group_create(kind, name, &members, perms).map_err(err)?;
+        let (g, r) = self.inner.group_create_from(kind, name, &members, perms, migrated_from).map_err(err)?;
         Ok(json!({"group": {"domain": g.domain, "id": hex::encode(&g.id)}, "request": req_json(&r)}).to_string())
     }
 
@@ -530,7 +535,7 @@ impl HostClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),

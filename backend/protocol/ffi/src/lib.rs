@@ -483,6 +483,22 @@ pub unsafe extern "C" fn pv_client_last_error(c: *mut PvClient, err: *mut *mut c
     })
 }
 
+/// Группа, переводимая из v1 (T180): `migrated_from` — прежний `group_id`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_group_create_from(c: *mut PvClient, kind: i32, name: *const c_char, members_json: *const c_char, perms_json: *const c_char, migrated_from: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.group_create_from(
+            kind,
+            str_arg(name).ok_or_else(bad_arg)?,
+            str_arg(members_json).ok_or_else(bad_arg)?,
+            str_arg(perms_json).ok_or_else(bad_arg)?,
+            str_arg(migrated_from).ok_or_else(bad_arg)?,
+        );
+        r.map(cstring)
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_group_create(c: *mut PvClient, kind: i32, name: *const c_char, members_json: *const c_char, perms_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
     guard(err, ptr::null_mut(), || {

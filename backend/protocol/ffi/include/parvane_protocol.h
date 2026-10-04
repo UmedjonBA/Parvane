@@ -271,6 +271,17 @@ char *pv_client_drain_ready(struct PvClient *c, char **err);
 
 char *pv_client_last_error(struct PvClient *c, char **err);
 
+/**
+ * Группа, переводимая из v1 (T180): `migrated_from` — прежний `group_id`.
+ */
+char *pv_client_group_create_from(struct PvClient *c,
+                                  int32_t kind,
+                                  const char *name,
+                                  const char *members_json,
+                                  const char *perms_json,
+                                  const char *migrated_from,
+                                  char **err);
+
 char *pv_client_group_create(struct PvClient *c,
                              int32_t kind,
                              const char *name,

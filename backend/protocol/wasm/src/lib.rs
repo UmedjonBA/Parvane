@@ -589,10 +589,11 @@ impl PvClient {
 
     /// Создать группу → {group: {domain, id}, request}.
     #[wasm_bindgen(js_name = groupCreate)]
-    pub fn group_create(&mut self, kind: i32, name: &str, members: Vec<String>, perms_json: &str) -> Result<JsValue, JsValue> {
+    pub fn group_create(&mut self, kind: i32, name: &str, members: Vec<String>, perms_json: &str, migrated_from: Option<String>) -> Result<JsValue, JsValue> {
         let perms: gpb::Permissions = serde_json::from_str(perms_json).map_err(|_| err_proto(ProtoError::Malformed))?;
         let kind = gpb::GroupKind::try_from(kind).map_err(|_| err_proto(ProtoError::InvalidField("kind")))?;
-        let (g, r) = self.inner.group_create(kind, name, &members, perms).map_err(err_proto)?;
+        // `migrated_from` — прежний `group_id` группы v1 (T180), обычная группа — без него
+        let (g, r) = self.inner.group_create_from(kind, name, &members, perms, migrated_from.as_deref().unwrap_or("")).map_err(err_proto)?;
         let o = Object::new();
         set(&o, "group", &JsValue::from_str(&json!({"domain": g.domain, "id": hex::encode(&g.id)}).to_string()));
         set(&o, "request", &req_js(&r));
@@ -691,7 +692,7 @@ impl PvClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
