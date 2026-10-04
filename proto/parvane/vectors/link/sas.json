@@ -1,0 +1,72 @@
+{
+  "suite": "link",
+  "description": "LINK-1: обязательство нового устройства commitment = base64(SHA-256(сырой эфемерный ключ)) и код сверки SAS = первые 8 байт SHA-256(\"parvane-link-sas-v2\" ‖ new ‖ old) как u64 BE mod 10^12, 12 цифр группами по 4 с ведущими нулями. Ключи — 65 байт несжатой точки P-256 (здесь произвольные байты: на кривую значения не проверяются). Считают клиенты (web linking.ts, parvane-core linking.cpp), движок сверяет формулу",
+  "cases": [
+    {
+      "name": "zero-and-ones",
+      "input": {
+        "new_pub_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "old_pub_b64": "BAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+      },
+      "expect": {
+        "commitment_of_new_b64": "mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=",
+        "sas": "5659 7031 8371"
+      }
+    },
+    {
+      "name": "swapped-order",
+      "input": {
+        "new_pub_b64": "BAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "old_pub_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      },
+      "expect": {
+        "commitment_of_new_b64": "taPq3iOv/j8YnZbhoTGKE/gTOpxk3V2LtkgsmuKUQxE=",
+        "sas": "7708 6991 6793"
+      }
+    },
+    {
+      "name": "pair-a",
+      "input": {
+        "new_pub_b64": "BB9A/JLaJBaUdQl57mz1gvLV19KOGDNd4Fq8VNBWDg9TAoYMZSvwjVYCUqpedCEFRvNp+7vOjBLPx5V7JlL+mnU=",
+        "old_pub_b64": "BFJndogi7mJNSPzhXsXKecvWAst/TCFXpRZVaZHyLvjHte97GNH/QcWTcO+whYZR1EqTbBG3sUTEj+BN88aj6No="
+      },
+      "expect": {
+        "commitment_of_new_b64": "ErI5xRXhxRRsRs9OifYuqunGPYTK4uVmzpzY0IPx3Pg=",
+        "sas": "1950 4936 8810"
+      }
+    },
+    {
+      "name": "pair-b",
+      "input": {
+        "new_pub_b64": "BKzCjbK+t7QrqhywJD1AHMtOP85E17AoeaUnmarf9UFSLYgiWYsvpmT51RVsAMkkgF11w4aL1Wwqy4HTfpjjWtw=",
+        "old_pub_b64": "BEj7ELFfPUSgncgtArBlgeDAxpR4yf0s+PkJNlkBmhaHuuzbs4yecrEhadxBSGkPh0Z/kVT1kxxd9mXGSWy/1fU="
+      },
+      "expect": {
+        "commitment_of_new_b64": "LbWkxL8NoFbQTlY8IgKCHHPHmEIOcqmVmuQf6sbUaSw=",
+        "sas": "8822 2646 8740"
+      }
+    },
+    {
+      "name": "same-key",
+      "input": {
+        "new_pub_b64": "BB9A/JLaJBaUdQl57mz1gvLV19KOGDNd4Fq8VNBWDg9TAoYMZSvwjVYCUqpedCEFRvNp+7vOjBLPx5V7JlL+mnU=",
+        "old_pub_b64": "BB9A/JLaJBaUdQl57mz1gvLV19KOGDNd4Fq8VNBWDg9TAoYMZSvwjVYCUqpedCEFRvNp+7vOjBLPx5V7JlL+mnU="
+      },
+      "expect": {
+        "commitment_of_new_b64": "ErI5xRXhxRRsRs9OifYuqunGPYTK4uVmzpzY0IPx3Pg=",
+        "sas": "5582 1402 2547"
+      }
+    },
+    {
+      "name": "leading-zero",
+      "input": {
+        "new_pub_b64": "BDv53hkDdBkgOph3tVC6VlycOIj+Rp4wJ1AhomxRS8+XIa5hvJK09CBebsQG7z9oj/L/+mwjZiySciIQWp8fxm8=",
+        "old_pub_b64": "BNTbpuXO0QUlI5/h0VMAtHC+WUz+yp7O2YuzaIdRYESkoukrQZaBOWiaRJEALD2qq3vTF62ybFaKkBdCleZFLq0="
+      },
+      "expect": {
+        "commitment_of_new_b64": "btH5S91KqSO+17yrvj1amEckKSHScmKhPuuwIxH3hiI=",
+        "sas": "0336 9274 9368"
+      }
+    }
+  ]
+}

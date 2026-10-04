@@ -1102,6 +1102,59 @@
         "desktop": "desktop/parvane-core: разбор только через parvane_protocol.h",
         "android": "android/jni: разбор только через C ABI движка"
       }
+    },
+    {
+      "id": "E6-1",
+      "title": "Клиент работоспособен без соединения v1 (сервер с PARVANE_V1_MODE=disabled)",
+      "serverMode": "PARVANE_V1_MODE=disabled",
+      "v1Frame": "upgrade_required",
+      "bridged": [
+        "identity.server.info",
+        "identity.token.issue",
+        "identity.user.register",
+        "identity.email.confirm",
+        "identity.register.status",
+        "identity.user.twofa",
+        "identity.password.change",
+        "identity.user.resolve",
+        "identity.user.search",
+        "identity.user.setname",
+        "identity.user.setavatar",
+        "identity.link.offer",
+        "identity.link.poll",
+        "identity.link.challenge",
+        "identity.link.grant",
+        "preview.link.fetch",
+        "preview.map.tile",
+        "call.ice.request",
+        "file.delete"
+      ],
+      "prefersV1": [
+        "identity.prekeys.publish",
+        "identity.prekeys.fetch",
+        "identity.user.setkey",
+        "identity.device.list",
+        "identity.device.revoke"
+      ],
+      "preAuthMethods": [
+        "server.describe",
+        "identity.session.issue",
+        "identity.account.register",
+        "identity.account.confirm_email",
+        "identity.account.register_status"
+      ],
+      "ownedBlobMethods": [
+        "cloud.blob.upload_chunk",
+        "cloud.blob.upload_complete",
+        "cloud.blob.download"
+      ],
+      "legacyEvent": "legacyV1",
+      "noUpgradeDialogOnV2": true,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/bridge.ts, v2/control.ts, gateway.ts (виртуальное соединение); сценарий scripts/e2e_protocol_v1_off.mjs (пара v1-off)",
+        "desktop": "desktop/parvane-core/src/v2_bridge.cpp, v2_control.cpp, cloud_client.cpp; tdesktop parvane_client.cpp (MakeTransport); сценарий desktop/verify_protocol_v2_v1off.sh",
+        "android": "android/jni/parvane_jni.cpp (makeTransport → BridgeTransport, v1Absent, legacyV1, presence); сценарий — блок disabled в android/tgx_protocol_v2_flow.sh desktop2-android2 (X отмечает отключение v1, диалога нет, сессия остаётся); переписка X при отключённом v1 отдельным сценарием не покрыта"
+      }
     }
   ]
 }

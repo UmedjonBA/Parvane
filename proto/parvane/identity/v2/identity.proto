@@ -196,6 +196,15 @@ service IdentityService {
       shard: "identity"
     };
   }
+  rpc AccountGet2fa(AccountGet2faRequest) returns (AccountSet2faResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.get_2fa"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
   rpc AccountChangePassword(AccountChangePasswordRequest) returns (AccountChangePasswordResponse) {
     option (parvane.core.v2.method) = {
       name: "identity.account.change_password"
@@ -366,6 +375,10 @@ message SessionIssueResponse {
   string login_token = 3 [(parvane.core.v2.max_len) = 128];
   string telegram_bot = 4 [(parvane.core.v2.max_len) = 64];
   string trust_secret = 5 [(parvane.core.v2.max_len) = 128];
+  // Аккаунт ждёт подтверждения (почта/Telegram): токена нет, клиент ведёт
+  // пользователя на шаг подтверждения. Текста ошибок в протоколе нет, а кодом
+  // FORBIDDEN этот случай не отличить от неверного пароля (T134).
+  bool confirm_required = 6;
 }
 
 message AccountRegisterRequest {
@@ -558,7 +571,14 @@ message AccountSet2faResponse {
   bool enabled = 1;
   bool telegram_linked = 2;
   string telegram_bot = 3 [(parvane.core.v2.max_len) = 64];
+  // Секрет доверия устройству, включившему 2FA: следующий вход с него — без
+  // подтверждения в Telegram (как SessionIssueResponse.trust_secret).
+  string trust_secret = 4 [(parvane.core.v2.max_len) = 128];
 }
+
+// Состояние второго фактора — чтение без свежего пароля (экран настроек
+// показывает переключатель до того, как пользователь что-то меняет).
+message AccountGet2faRequest {}
 
 message AccountChangePasswordRequest {
   string old_password = 1 [(parvane.core.v2.max_len) = 1024];
@@ -635,8 +655,11 @@ message PublicProfile {
   bytes root_key = 4 [(parvane.core.v2.max_len) = 32];
   string bio = 5 [(parvane.core.v2.max_len) = 512];
   string birthday = 6 [(parvane.core.v2.max_len) = 32];
-  int64 name_color = 7;
+  // Не задан — цвет имени не выбран (0 — действительный индекс цвета).
+  optional int64 name_color = 7;
   string personal_channel = 8 [(parvane.core.v2.max_len) = 128];
+  // Телефон профиля — только в ответе самому владельцу (P-19).
+  string phone = 9 [(parvane.core.v2.max_len) = 32];
 }
 
 message ProfileResolveRequest {

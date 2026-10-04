@@ -966,6 +966,17 @@ pub fn device_log_entries(bytes: &[u8]) -> Result<usize, String> {
     Ok(r.entries.len())
 }
 
+/// Тело запроса ЛЮБОГО метода реестра из proto3-JSON (T161): вход, профили,
+/// устройства, линковка, файлы, превью, push, ICE — хост зовёт их сам.
+pub fn encode_method_request(method: &str, json_text: &str) -> Result<Vec<u8>, String> {
+    crate::schema::method_codec::encode_request(method, json_text).unwrap_or(Err(ProtoError::UnknownMethod)).map_err(err)
+}
+
+/// Ответ метода реестра → proto3-JSON (байты проверены лимитами схемы).
+pub fn decode_method_response(method: &str, bytes: &[u8]) -> Result<String, String> {
+    crate::schema::method_codec::decode_response(method, bytes).unwrap_or(Err(ProtoError::UnknownMethod)).map_err(err)
+}
+
 /// Тело запроса из proto3-JSON по имени типа (для методов, которые хост
 /// вызывает сам: вход, профиль, журналы, бандлы, облако).
 pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, String> {

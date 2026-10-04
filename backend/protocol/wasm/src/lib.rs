@@ -1108,6 +1108,18 @@ pub fn run_conformance_vectors(suite: &str, json: &str) -> Result<usize, JsValue
     parvane_protocol::conformance::run(suite, json).map_err(|e| JsValue::from_str(&e))
 }
 
+/// Тело запроса любого метода реестра из proto3-JSON (T161).
+#[wasm_bindgen(js_name = encodeMethodRequest)]
+pub fn encode_method_request(method: &str, json: &str) -> Result<Vec<u8>, JsValue> {
+    parvane_protocol::host::encode_method_request(method, json).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Ответ любого метода реестра → proto3-JSON (T161).
+#[wasm_bindgen(js_name = decodeMethodResponse)]
+pub fn decode_method_response(method: &str, bytes: &[u8]) -> Result<String, JsValue> {
+    parvane_protocol::host::decode_method_response(method, bytes).map_err(|e| JsValue::from_str(&e))
+}
+
 /// proto3-JSON → байты сообщения по полному имени типа (тела запросов из JS).
 #[wasm_bindgen(js_name = encodeMessage)]
 pub fn encode_message(type_name: &str, json: &str) -> Result<Vec<u8>, JsValue> {

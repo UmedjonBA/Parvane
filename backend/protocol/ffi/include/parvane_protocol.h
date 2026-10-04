@@ -577,6 +577,19 @@ struct PvBytes pv_encode_message(const char *type_name, const char *json, char *
 char *pv_decode_message(const char *type_name, const uint8_t *bytes, uintptr_t len, char **err);
 
 /**
+ * Тело запроса любого метода реестра из proto3-JSON (T161).
+ */
+struct PvBytes pv_encode_method_request(const char *method, const char *json, char **err);
+
+/**
+ * Ответ любого метода реестра → proto3-JSON (T161).
+ */
+char *pv_decode_method_response(const char *method,
+                                const uint8_t *bytes,
+                                uintptr_t len,
+                                char **err);
+
+/**
  * Число записей в ответе `identity.device.log_sync_anon` (есть ли у
  * пользователя журнал устройств v2). -1 — ответ не разобран (подробности в err).
  */
