@@ -611,6 +611,13 @@ try {
   // второй, уже чистый ответ «вылечил» бы подменённый файл)
   const transitRequests = async () => (await eveBytes.requests()).filter((request) => request.fileId === targetFile).length;
   const transitRequestsBefore = await transitRequests();
+  // Escape из `closeViewer` иногда доходит уже после закрытия просмотрщика и
+  // закрывает сам чат — тогда пузыря нет и клик ниже уходит в пустоту
+  await sessions.eve.page.waitForTimeout(500);
+  if (!(await transitBubble.isVisible().catch(() => false))) {
+    await openPrivateChatStrict(sessions.eve.page, alice);
+    await transitBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  }
   await transitBubble.locator('.media-inner').first().click();
   await sessions.eve.page.locator('.MediaViewer, #MediaViewer').first()
     .waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
