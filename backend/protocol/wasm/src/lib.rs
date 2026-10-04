@@ -696,6 +696,8 @@ impl PvClient {
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
+            // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
+            "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
             "l2": s.l2, "l2By": s.l2_by,
         })
         .to_string())
