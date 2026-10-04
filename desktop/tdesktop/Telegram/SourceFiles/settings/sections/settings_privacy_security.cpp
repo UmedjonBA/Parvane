@@ -645,14 +645,14 @@ void BuildSecuritySection(
 						});
 					});
 				};
-				if (toggled) {
-					run(QString());
-					return;
-				}
-				// P-07: выключение 2FA — только с текущим паролем (украденный JWT
-				// второй фактор не снимает). Тот же password-box, что у копии ключей.
+				// P-07: смена настройки 2FA — только с текущим паролем (украденный
+				// JWT второй фактор не снимает; метод v2 без свежего пароля не
+				// включает и 2FA — без соединения v1 иначе настройка недоступна).
+				// Тот же password-box, что у копии ключей.
 				controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-					box->setTitle(rpl::single(u"Выключить двухфакторный вход"_q));
+					box->setTitle(rpl::single(toggled
+						? u"Включить двухфакторный вход"_q
+						: u"Выключить двухфакторный вход"_q));
 					const auto field = Settings::CloudPassword::AddPasswordField(
 						box->verticalLayout(),
 						rpl::single(u"Текущий пароль"_q),
@@ -668,7 +668,9 @@ void BuildSecuritySection(
 						run(value);
 					};
 					QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
-					box->addButton(rpl::single(u"Выключить"_q), submit);
+					box->addButton(
+						rpl::single(toggled ? u"Включить"_q : u"Выключить"_q),
+						submit);
 					box->addButton(tr::lng_cancel(), [=] {
 						// Отмена — тумблер обратно
 						twofa->enabled.force_assign(twofa->enabled.current());

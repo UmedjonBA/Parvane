@@ -327,6 +327,17 @@ void Session::connectOnce() {
     }
     if (stopping_) return;
     log("запуск не удался: " + error);
+    if (error.find("ERROR_CODE_REVOKED") != std::string::npos) {
+        // Сервер не принял JWT (истёк, отозван, подменён). Без соединения v1 это
+        // единственное место, где отказ виден (E6-1): повторять тем же токеном
+        // бессмысленно — хост снимает учётные данные и показывает экран входа.
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            outbox_.push_back(json{{"type", "authRejected"}});
+        }
+        flush();
+        return;
+    }
     onIdClosed();
 }
 
@@ -1956,7 +1967,72 @@ void Session::scheduleRotate(const std::string &hex, std::int64_t delayMs, int a
     });
 }
 
-std::string Session::createGroup(const std::string &title, const std::vector<std::string> &members, bool channel) {
+std::string Session::migratedGroup(const std::string &groupId) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!client_ || groupId.empty()) return {};
+    for (const auto &hex : client_->groupList()) {
+        const auto info = client_->groupInfo(hex);
+        if (info && info->value("migratedFrom", std::string()) == groupId) return groupAddress(hex);
+    }
+    return {};
+}
+
+std::string Session::migrateGroup(const json &v1) {
+    if (!ready_ || !client_ || !v1.is_object()) return {};
+    const auto groupId = v1.value("group_id", std::string());
+    if (groupId.empty() || v1.value("created_by", std::string()) != cfg_.self) return {};
+    if (!migratedGroup(groupId).empty()) return {};
+    std::vector<std::string> others;
+    std::vector<json> admins;
+    if (v1.contains("members") && v1["members"].is_array()) {
+        for (const auto &m : v1["members"]) {
+            const auto address = m.value("address", std::string());
+            const auto role = m.value("role", std::string());
+            if (address.empty() || role == "banned" || role == "left" || address == cfg_.self) continue;
+            others.push_back(address);
+            if (role == "admin") admins.push_back(m);
+        }
+    }
+    // Чьё-то v1-устройство сообщений группы v2 не получит — ждём, пока их не останется
+    if (!legacyDevices(cfg_.self).empty()) return {};
+    for (const auto &member : others) {
+        if (!isV2Peer(member) || !legacyDevices(member).empty()) return {};
+    }
+    const auto channel = v1.value("kind", std::string()) == "channel";
+    const auto address = createGroup(v1.value("name", std::string()), others, channel, groupId,
+                                     v1.value("default_permissions", json()));
+    if (address.empty()) return {};
+    log("группа v1 " + groupId + " переведена в " + address);
+    // Доводка сведений: сбой записи перевод не отменяет — владелец поправит руками
+    const auto step = [&](const std::string &what, const json &change) {
+        try {
+            if (!changeGroup(address, change)) log("перевод группы — " + what + " не перенесено");
+        } catch (const std::exception &e) {
+            log("перевод группы — " + what + " не перенесено: " + e.what());
+        }
+    };
+    const auto about = v1.value("about", std::string());
+    const auto avatar = v1.value("avatar", std::string());
+    if (!about.empty() || !avatar.empty()) {
+        auto patch = json::object();
+        if (!about.empty()) patch["about"] = about;
+        if (!avatar.empty()) patch["avatar_file_id"] = avatar;
+        step("описание и фото", json{{"set_info_patch", patch}});
+    }
+    for (const auto &m : admins) {
+        const auto rights = (m.contains("admin_rights") && m["admin_rights"].is_object())
+            ? m["admin_rights"]
+            : json{{"change_info", true}, {"delete_messages", true}, {"ban_users", true},
+                   {"invite_users", true}, {"pin_messages", true}, {"add_admins", true}};
+        step("админ " + m.value("address", std::string()),
+             json{{"set_role", {{"member", {{"address", m.value("address", std::string())}}},
+                                {"role", "ROLE_ADMIN"}, {"rights", rights}}}});
+    }
+    return address;
+}
+
+std::string Session::createGroup(const std::string &title, const std::vector<std::string> &members, bool channel,
+                                 const std::string &migratedFrom, const json &permissions) {
     if (!ready_ || !client_) return {};
     for (const auto &m : members) {
         if (!isV2Peer(m)) return {};
@@ -1965,9 +2041,14 @@ std::string Session::createGroup(const std::string &title, const std::vector<std
     {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         if (!client_) return {};
-        const auto perms = channel ? json::object() : defaultGroupPermissions();
+        // Права переводимой группы v1 — сразу в запись генезиса: отдельная запись
+        // `set_permissions` потребовала бы новой эпохи (не чаще раза в 10 с), и
+        // первые сообщения после перевода не уходили бы (ERROR_CODE_EXPIRED)
+        const auto perms = channel ? json::object()
+            : permissions.is_object() ? permissions : defaultGroupPermissions();
         const auto before = client_->groupList();
-        const auto created = client_->groupCreate(channel ? kGroupKindChannel : kGroupKindGroup, title, members, perms);
+        const auto created = client_->groupCreate(channel ? kGroupKindChannel : kGroupKindGroup, title, members, perms,
+                                                  migratedFrom);
         std::string hex;
         for (const auto &id : client_->groupList()) {
             if (std::find(before.begin(), before.end(), id) == before.end()) hex = id;

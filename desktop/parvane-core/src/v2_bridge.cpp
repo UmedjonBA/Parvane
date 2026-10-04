@@ -259,9 +259,9 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
             out = twofaToV1(c.call("identity.account.get_2fa", json::object()));
         } else {
             const auto password = str(p, "password");
-            // Свежий пароль нужен методу v2 всегда, а включение 2FA по v1 пароля не
-            // просило: без пароля — по v1, пока оно живо; без v1 сервер ответит
-            // REAUTH_REQUIRED («требуется пароль»).
+            // Свежий пароль нужен методу v2 всегда — тумблер настроек спрашивает его
+            // и при включении, и при выключении 2FA. Запрос без пароля (прежний
+            // вызов) — по v1, пока оно живо; без v1 сервер ответит REAUTH_REQUIRED.
             if (password.empty() && inner_) return false;
             reauth(c, password);
             out = twofaToV1(c.call("identity.account.set_2fa", json{{"enabled", p["enabled"]}, {"password", password}}));
