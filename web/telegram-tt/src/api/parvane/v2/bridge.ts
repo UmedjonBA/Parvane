@@ -276,9 +276,9 @@ export class V2Bridge {
         if (typeof p.enabled !== 'boolean') {
           return twofaToV1(await c.call('identity.account.get_2fa', {}));
         }
-        // Свежий пароль нужен методу v2 всегда, а экран настроек спрашивает его
-        // только при выключении 2FA: включение без пароля — по v1, пока оно живо;
-        // без v1 сервер ответит REAUTH_REQUIRED («требуется пароль»)
+        // Свежий пароль нужен методу v2 всегда — экран настроек спрашивает его и
+        // при включении, и при выключении 2FA. Запрос без пароля (прежний вызов) —
+        // по v1, пока оно живо; без v1 сервер ответит REAUTH_REQUIRED
         const password = str(p, 'password');
         if (!password && hasV1) return undefined;
         await this.reauth(password);

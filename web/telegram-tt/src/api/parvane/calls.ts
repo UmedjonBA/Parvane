@@ -41,6 +41,8 @@ type CallDependencies = {
   // У собеседника на v2 остались v1-устройства (подписанный список LEGACY-1):
   // сигнал личного звонка дублируется им v1-путём, иначе они не зазвонят
   hasLegacyDevices?: (peer: string) => boolean;
+  // Собеседник на v2 — личный звонок идёт запечатанными конвертами
+  isV2Peer?: (peer: string) => Promise<boolean>;
   // Завершённый звонок по v2 — в журнал личного состояния: серверной истории у
   // v2-звонков нет (D-08)
   recordV2Call?: (record: WireCallRecord) => void;
@@ -359,6 +361,7 @@ export function createCallController(deps: CallDependencies) {
     engine = new CallEngine({
       sendSignal: sendDirectSignal,
       getPeerSigningKeys: fetchSigningKeys,
+      isSealedPeer: (peer) => deps.isV2Peer?.(peer) ?? Promise.resolve(false),
       getIceServers,
       getIceTransportPolicy,
       getRingTimeoutMs,

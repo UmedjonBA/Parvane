@@ -158,21 +158,22 @@ const SettingsPrivacy = ({
     if (ownFingerprint) copyTextToClipboard(ownFingerprint);
   });
 
-  // P-07: выключение 2FA требует текущий пароль — показываем поле ввода и
+  // P-07: смена настройки 2FA требует текущий пароль — показываем поле ввода и
   // отправляем пароль вместе с запросом (один украденный JWT второй фактор не
-  // снимет). Включение — как раньше, по JWT.
-  const [disablePassword, setDisablePassword] = useState('');
-  const [isDisablePromptOpen, setIsDisablePromptOpen] = useState(false);
+  // снимет). Включение спрашивает пароль тоже: метод v2 `set_2fa` принимает
+  // только свежий пароль, без соединения v1 иначе 2FA не включить (E6-1).
+  const [twoFactorPassword, setTwoFactorPassword] = useState('');
+  const [pendingTwoFactor, setPendingTwoFactor] = useState<boolean | undefined>();
 
-  const applyTwoFactor = useLastCallback(async (enabled: boolean, password?: string) => {
+  const applyTwoFactor = useLastCallback(async (enabled: boolean, password: string) => {
     setIsTwoFactorBusy(true);
     try {
       const state = await (
         callParvane('parvaneSetTwoFactor', { enabled, password }) as Promise<TwoFactorState | undefined>
       );
       if (state) setTwoFactor(state);
-      setIsDisablePromptOpen(false);
-      setDisablePassword('');
+      setPendingTwoFactor(undefined);
+      setTwoFactorPassword('');
     } catch {
       showNotification({ message: oldLang('ParvaneTwoFactorFailed') });
     } finally {
@@ -181,19 +182,16 @@ const SettingsPrivacy = ({
   });
 
   const handleTwoFactorChange = useLastCallback((enabled: boolean) => {
-    if (!enabled) {
-      setIsDisablePromptOpen(true);
-      return;
-    }
-    void applyTwoFactor(true);
+    // повторный клик до подтверждения возвращает тумблер — запрос закрываем
+    setPendingTwoFactor(enabled === Boolean(twoFactor?.enabled) ? undefined : enabled);
+    setTwoFactorPassword('');
   });
 
-  const handleConfirmDisable = useLastCallback(() => {
-    if (!disablePassword) return;
-    void applyTwoFactor(false, disablePassword);
+  const handleConfirmTwoFactor = useLastCallback(() => {
+    if (!twoFactorPassword || pendingTwoFactor === undefined) return;
+    void applyTwoFactor(pendingTwoFactor, twoFactorPassword);
   });
 
-  // P-07: смена пароля (identity.password.change) — старый + новый (≥ 8 символов).
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPasswordRepeat, setNewPasswordRepeat] = useState('');
@@ -367,22 +365,22 @@ const SettingsPrivacy = ({
           subLabel={twoFactor && !twoFactor.telegramLinked
             ? oldLang('ParvaneTwoFactorNoTelegram')
             : oldLang('ParvaneTwoFactorInfo')}
-          checked={Boolean(twoFactor?.enabled)}
+          checked={pendingTwoFactor ?? Boolean(twoFactor?.enabled)}
           disabled={!twoFactor || !twoFactor.telegramLinked || isTwoFactorBusy}
           onCheck={handleTwoFactorChange}
         />
-        {isDisablePromptOpen && (
+        {pendingTwoFactor !== undefined && (
           <div className="settings-item">
             <input
               type="password"
               className="form-control"
               placeholder={oldLang('ParvanePasswordConfirm')}
-              value={disablePassword}
-              onChange={(e) => setDisablePassword(e.currentTarget.value)}
+              value={twoFactorPassword}
+              onChange={(e) => setTwoFactorPassword(e.currentTarget.value)}
               disabled={isTwoFactorBusy}
             />
-            <Button size="smaller" disabled={!disablePassword || isTwoFactorBusy} onClick={handleConfirmDisable}>
-              {oldLang('ParvaneTwoFactorDisableConfirm')}
+            <Button size="smaller" disabled={!twoFactorPassword || isTwoFactorBusy} onClick={handleConfirmTwoFactor}>
+              {oldLang(pendingTwoFactor ? 'ParvaneTwoFactorEnableConfirm' : 'ParvaneTwoFactorDisableConfirm')}
             </Button>
           </div>
         )}

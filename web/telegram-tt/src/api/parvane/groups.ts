@@ -140,6 +140,7 @@ type ActionResponse = { ok?: boolean; error?: string; error_code?: string; versi
 
 // Предел описания группы в символах (как GROUP_ABOUT_MAX у шарда messenger)
 const GROUP_ABOUT_MAX_CHARS = 255;
+const MIGRATION_RETRY_MS = 30 * 1000;
 
 export function createGroupController(deps: GroupDependencies) {
   const inviteLinkByGroupId = new Map<string, InviteLinkRecord>();
@@ -289,6 +290,9 @@ export function createGroupController(deps: GroupDependencies) {
       const store = deps.getStore();
       const listed = new Set(groups.map((info) => info.group_id));
       groups.forEach((info) => {
+        // Группа уже переведена в v2 (T180) — её ведёт журнал, сведения v1 не нужны
+        if (store.isMigratedGroup(info.group_id)) return;
+        void migrateToV2(info);
         // Изменения имени/состава/ролей/прав должны сходиться на всех клиентах
         // без full reload; новые группы — попадать в список чатов. Сравнение —
         // по ревизии сервера (GROUP-1): равная — ничего не изменилось
@@ -313,12 +317,33 @@ export function createGroupController(deps: GroupDependencies) {
     }
   }
 
+  // Перевод своей группы v1 в v2 (T180): владелец, все участники на v2 и без
+  // v1-устройств. Попытка — не чаще раза в 30 с на группу; чат остаётся прежним
+  const migrationTriedAt = new Map<string, number>();
+
+  async function migrateToV2(info: WireGroupInfo) {
+    const v2 = deps.getV2?.();
+    const store = deps.getStore();
+    if (!v2 || info.created_by !== store.self) return;
+    const triedAt = migrationTriedAt.get(info.group_id);
+    if (triedAt && Date.now() - triedAt < MIGRATION_RETRY_MS) return;
+    migrationTriedAt.set(info.group_id, Date.now());
+    try {
+      const migrated = await v2.migrateGroup(info);
+      if (migrated) applyV2Group(migrated, false);
+    } catch (error) {
+      deps.log(`перевод группы ${info.group_id} в v2 не выполнен: ${String(error)}`);
+    }
+  }
+
   // Уведомление об изменении группы из инбокса (GROUP-1). Для info/perms/
   // members/admin сервер вкладывает итоговые сведения — применяем по ревизии;
   // invites/requests несут только факт — открытые экраны перечитывают списки;
   // removed/deleted снимают группу; неизвестный вид — безопасный догон
   async function applyNotice(notice: WireGroupNotice) {
     const store = deps.getStore();
+    // Нотис v1 о группе, переведённой в v2 (T180): её сведения — только из журнала
+    if (store.isMigratedGroup(notice.group_id)) return;
     const chatId = store.getIdForAddress(notice.group_id, 'group');
     switch (notice.change) {
       case 'info':

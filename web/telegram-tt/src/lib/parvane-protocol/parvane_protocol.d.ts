@@ -111,7 +111,7 @@ export class PvClient {
     /**
      * Создать группу → {group: {domain, id}, request}.
      */
-    groupCreate(kind: number, name: string, members: string[], perms_json: string): any;
+    groupCreate(kind: number, name: string, members: string[], perms_json: string, migrated_from?: string | null): any;
     /**
      * Забыть журнал группы (запись отвергнута сервером — перечитать с начала).
      */
@@ -671,7 +671,7 @@ export interface InitOutput {
     readonly pvclient_forgetRoot: (a: number) => void;
     readonly pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly pvclient_groupForget: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupInfo: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupIngest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;

@@ -421,9 +421,10 @@ export class PvClient {
      * @param {string} name
      * @param {string[]} members
      * @param {string} perms_json
+     * @param {string | null} [migrated_from]
      * @returns {any}
      */
-    groupCreate(kind, name, members, perms_json) {
+    groupCreate(kind, name, members, perms_json, migrated_from) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
@@ -432,7 +433,9 @@ export class PvClient {
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passStringToWasm0(perms_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len2 = WASM_VECTOR_LEN;
-            wasm.pvclient_groupCreate(retptr, this.__wbg_ptr, kind, ptr0, len0, ptr1, len1, ptr2, len2);
+            var ptr3 = isLikeNone(migrated_from) ? 0 : passStringToWasm0(migrated_from, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len3 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupCreate(retptr, this.__wbg_ptr, kind, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);

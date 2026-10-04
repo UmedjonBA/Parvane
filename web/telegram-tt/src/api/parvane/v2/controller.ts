@@ -50,6 +50,8 @@ type Deps = {
   isEnabled: () => boolean;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
   onUpgradeRequired: () => void;
+  /** JWT не принят на соединении v2 — нужен повторный вход. */
+  onAuthRejected?: () => void;
   /** Группа v2 появилась/изменилась (сведения — из проверенного журнала). */
   onGroupUpdated: (info: WireGroupInfo, isNew: boolean) => void;
   /** Нас исключили/забанили или группа удалена. */
@@ -93,6 +95,7 @@ type EngineGroupInfo = {
   name: string;
   about: string;
   avatarFileId: string;
+  migratedFrom?: string;
   owner: string;
   members: { user: string; role: number; mutedUntilMs: number; rights?: WireAdminRights }[];
   banned: string[];
@@ -584,6 +587,9 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: запуск не удался: ${String(e)}`);
       // Сервер больше не принимает эту версию протокола (Welcome не пришёл)
       if (e instanceof V2Error && e.code === 'ERROR_CODE_UPGRADE_REQUIRED') deps.onUpgradeRequired();
+      // Сервер не принял JWT (истёк, отозван). Без соединения v1 отказ виден только
+      // здесь (E6-1): повторять тем же токеном бессмысленно — нужен повторный вход
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_REVOKED') deps.onAuthRejected?.();
     });
     return starting;
   }
@@ -1652,6 +1658,7 @@ export function createV2Controller(deps: Deps) {
       default_permissions: expandFlags(PERMISSION_FIELDS, g.defaultPermissions),
       version: Number(g.version),
       pending_requests: pendingRequests.get(hex) || undefined,
+      migrated_from: g.migratedFrom || undefined,
     };
   }
 
@@ -1785,16 +1792,21 @@ export function createV2Controller(deps: Deps) {
   }
 
   /** Создать группу на v2, если стек поднят и ВСЕ участники — v2 (иначе undefined → v1). */
-  async function createGroup(title: string, members: string[], kind: 'group' | 'channel') {
+  async function createGroup(
+    title: string, members: string[], kind: 'group' | 'channel',
+    migratedFrom?: string, permissions?: WireDefaultPermissions,
+  ) {
     if (!ready || !client || !pv) return undefined;
     for (const member of members) {
       if (!(await isV2Peer(member).catch(() => false))) return undefined;
     }
     return serial(async () => {
-      const perms = kind === 'channel' ? {} : DEFAULT_GROUP_PERMISSIONS;
+      // Права переводимой группы v1 — сразу в запись генезиса: отдельная запись
+      // `set_permissions` потребовала бы новой эпохи (не чаще раза в 10 с)
+      const perms = kind === 'channel' ? {} : (permissions || DEFAULT_GROUP_PERMISSIONS);
       const known = new Set(client!.groupList());
       const created = client!.groupCreate(
-        kind === 'channel' ? GROUP_KIND_CHANNEL : GROUP_KIND_GROUP, title, members, JSON.stringify(perms),
+        kind === 'channel' ? GROUP_KIND_CHANNEL : GROUP_KIND_GROUP, title, members, JSON.stringify(perms), migratedFrom,
       ) as { request: OutReq };
       const hex = client!.groupList().find((id) => !known.has(id))!;
       try {
@@ -1815,6 +1827,53 @@ export function createV2Controller(deps: Deps) {
       saveGroupCache(info, true);
       return info;
     });
+  }
+
+  /**
+   * Перевод группы v1 в v2 (T180). Делает владелец, когда все участники на v2 и ни
+   * у кого не осталось v1-устройств: группа v2 с тем же составом и записью о
+   * прежнем `group_id`, затем описание, фото, права и админы. Клиенты участников
+   * продолжают прежний чат. Возвращает сведения новой группы; undefined — рано
+   * (кто-то ещё на v1) либо перевод уже сделан.
+   */
+  async function migrateGroup(v1: WireGroupInfo) {
+    if (!ready || !client) return undefined;
+    const self = deps.getSelf();
+    if (v1.created_by !== self) return undefined;
+    const already = client.groupList().some((hex) => readGroup(hex)?.migratedFrom === v1.group_id);
+    if (already) return undefined;
+    const active = v1.members.filter(({ role }) => role !== 'banned' && role !== 'left');
+    const others = active.map(({ address }) => address).filter((address) => address !== self);
+    for (const member of [self, ...others]) {
+      if (legacyDevices(member).size) return undefined;
+    }
+    const created = await createGroup(v1.name, others, v1.kind, v1.group_id, v1.default_permissions);
+    if (!created) return undefined;
+    const address = created.group_id;
+    deps.log(`v2: группа v1 ${v1.group_id} переведена в ${address}`);
+    // Доводка сведений: сбой любой записи не отменяет перевод — владелец поправит руками
+    const step = async (what: string, apply: () => Promise<unknown>) => {
+      try {
+        await apply();
+      } catch (e) {
+        deps.log(`v2: перевод группы — ${what} не перенесено: ${String(e)}`);
+      }
+    };
+    if (v1.about || v1.avatar) {
+      await step('описание и фото', () => setGroupInfo(address, { about: v1.about, avatarFileId: v1.avatar }));
+    }
+    const fullRights = Object.fromEntries(ADMIN_RIGHT_FIELDS.map((field) => [field, true]));
+    for (const member of active) {
+      if (member.role !== 'admin' || member.address === self) continue;
+      await step(`админ ${member.address}`, () => changeGroup(address, {
+        set_role: {
+          member: { address: member.address },
+          role: 'ROLE_ADMIN',
+          rights: member.admin_rights || fullRights,
+        },
+      }));
+    }
+    return groupInfo(address);
   }
 
   /** Изменение группы записью журнала (proto3-JSON `group.v2.GroupChange`). */
@@ -2352,6 +2411,7 @@ export function createV2Controller(deps: Deps) {
     exportBackup,
     importBackup,
     cachedGroups,
+    migrateGroup,
     changeGroup,
     setGroupInfo,
     checkInvite,

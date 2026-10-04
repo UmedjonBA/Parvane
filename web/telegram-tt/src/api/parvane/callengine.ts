@@ -26,6 +26,11 @@ export const RING_TIMEOUT_MS = 45000;
 type CallCallbacks = {
   sendSignal: (to: string, signal: WireCallSignal) => void;
   getPeerSigningKeys: (peer: string) => Promise<string[]>;
+  // Собеседник на протоколе v2: сигналы идут запечатанными конвертами, отправителя
+  // проверяет движок — подпись SDP не нужна, и вызов без ключей подписи допустим
+  // (на сервере без v1 каталога этих ключей нет). Ответ, пришедший v1-путём,
+  // без ключей всё равно не пройдёт проверку
+  isSealedPeer?: (peer: string) => Promise<boolean>;
   // ICE-конфигурация с сервера (STUN + краткоживущие TURN-креды); при
   // недоступности возвращает фоллбэк
   getIceServers: () => Promise<RTCIceServer[]>;
@@ -101,8 +106,13 @@ export class CallEngine {
 
     try {
       if (!await this.loadPeerSigningKey(peer, callId)) {
-        if (this.isCurrentCall(peer, callId)) this.failSecurity();
-        return;
+        if (!this.isCurrentCall(peer, callId)) return;
+        const isSealed = Boolean(await this.cb.isSealedPeer?.(peer).catch(() => false));
+        if (!this.isCurrentCall(peer, callId)) return;
+        if (!isSealed) {
+          this.failSecurity();
+          return;
+        }
       }
       if (!await this.setupPeerConnection(media, callId)) return;
       const pc = this.pc!;
