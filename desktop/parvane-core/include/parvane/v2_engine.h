@@ -184,8 +184,10 @@ public:
     // ── группы v2 (журнал состояния группы, эпохи, ссылки) ──
     // kind: 1 — группа, 2 — канал; members — адреса без себя; perms —
     // proto3-JSON group.v2.Permissions. → {"group":{"domain","id"},"request"}.
+    // migratedFrom — прежний group_id группы v1, из которой эта переведена (T180).
     [[nodiscard]] json groupCreate(int kind, const std::string &name,
-                                   const std::vector<std::string> &members, const json &perms);
+                                   const std::vector<std::string> &members, const json &perms,
+                                   const std::string &migratedFrom = std::string());
     // Ответ group.state.sync → версия журнала после применения. Бросает (need).
     std::uint64_t groupIngest(const std::string &domain, const std::string &groupHex,
                               const std::string &resp);

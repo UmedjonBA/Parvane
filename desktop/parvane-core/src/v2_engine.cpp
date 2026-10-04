@@ -372,11 +372,13 @@ std::vector<std::string> bodies(const std::string &text) {
 // ── группы ──────────────────────────────────────────────────────────────────
 
 json Client::groupCreate(int kind, const std::string &name, const std::vector<std::string> &members,
-                         const json &perms) {
+                         const json &perms, const std::string &migratedFrom) {
     char *err = nullptr;
     const auto m = json(members).dump();
     const auto p = perms.dump();
-    char *out = pv_client_group_create(c_, kind, name.c_str(), m.c_str(), p.c_str(), &err);
+    char *out = migratedFrom.empty()
+        ? pv_client_group_create(c_, kind, name.c_str(), m.c_str(), p.c_str(), &err)
+        : pv_client_group_create_from(c_, kind, name.c_str(), m.c_str(), p.c_str(), migratedFrom.c_str(), &err);
     return parseOrThrow(result(out, err));
 }
 

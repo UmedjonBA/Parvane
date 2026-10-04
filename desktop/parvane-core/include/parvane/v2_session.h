@@ -235,7 +235,17 @@ public:
     // Создать группу, если сессия готова и ВСЕ участники на v2; "" — идти по
     // v1. Бросает при сбое создания v2-группы.
     std::string createGroup(const std::string &title, const std::vector<std::string> &members,
-                            bool channel);
+                            bool channel, const std::string &migratedFrom = std::string(),
+                            const json &permissions = json());
+    // Перевод группы v1 в v2 (T180). `v1` — сведения группы в виде провода v1
+    // (group_id, name, kind, created_by, members[{address, role, admin_rights}],
+    // about, avatar, default_permissions). Делает владелец, когда все участники на
+    // v2 и ни у кого нет v1-устройств: группа v2 с записью о прежнем group_id,
+    // затем описание, фото, права, админы. Возвращает адрес новой группы; "" —
+    // рано (кто-то ещё на v1) либо перевод уже сделан. Блокирующий (сеть).
+    std::string migrateGroup(const json &v1);
+    // Адрес группы v2, в которую переведена группа v1 `groupId`; "" — не переведена.
+    std::string migratedGroup(const std::string &groupId);
     // Изменение группы записью журнала (proto3-JSON group.v2.GroupChange:
     // {"remove_member":{"member":{"address":…}}}, {"ban":…}, {"set_info":…},
     // …). Смена состава/прав → новая эпоха. false — отклонено.

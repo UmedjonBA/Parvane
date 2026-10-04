@@ -39,6 +39,7 @@
 #include <atomic>
 #include <QtCore/QSet>
 #include <QtCore/QBuffer>
+#include <QtCore/QCryptographicHash>
 #include "history/history.h"
 #include "history/view/history_view_element.h"
 #include "history/history_item.h"
@@ -303,6 +304,8 @@ QHash<QString, quint64> g_groupVersions; // gid → version
 QHash<QString, parvane::GroupInfo> g_groupInfo;
 bool ApplyGroupInfo(not_null<Main::Session*> session, const parvane::GroupInfo &gi, const QString &source); // fwd
 void DropGroupLocally(not_null<Main::Session*> session, const QString &gid, const QString &why); // fwd
+void MigrateGroupIfOwner(const parvane::GroupInfo &gi); // fwd: перевод группы v1 в v2 (T180)
+void NoteV2GroupOrigin(not_null<Main::Session*> session, const QString &address, const parvane::json &g); // fwd
 // ── обмен стикер-паками ──────────────────────────────────────────────────────
 // Отправляемый стикер из локального пака несёт pack_ref = {file_id архива в
 // cloud, name, count, key, nonce}; архив грузится ОДИН раз за сессию на пак.
@@ -1541,7 +1544,8 @@ std::vector<parvane::ReactionSummary> V2ReactionsLocked(const QString &uuid, con
 // События v2-сессии (группы, свои устройства, журнал состояния) — ниже по
 // файлу, раздел «Протокол v2: группы и журнал состояния».
 [[nodiscard]] bool HandleV2SessionEvent(const parvane::json &ev);
-void ScheduleStateFlush();                                  // журнал состояния: своя правка
+void ScheduleStateFlush(const char *kind);
+void NoteStateEdited(const char *kind); // T150                                  // журнал состояния: своя правка
 void LoadV2GroupCache(not_null<Main::Session*> session);    // группы v2 до подъёма сессии
 
 // Групповое сообщение: группа v2 → движок (конверт эпохи, T056), иначе
@@ -3155,7 +3159,50 @@ QString Token() {
 }
 
 // ── identity/peer ────────────────────────────────────────────────────────────
-std::uint64_t IdForAddress(const QString &address) {
+namespace {
+
+// Группа v1, переведённая в v2 (T180): прежний group_id ↔ адрес группы v2. Чат в
+// UI остаётся прежним — id считается от прежнего адреса, история v1 лежит в нём;
+// всё новое (отправка, сведения, журнал) идёт по адресу v2.
+std::mutex g_migratedMutex;
+QHash<QString, QString> g_migratedTo;   // group_id v1 → v2g:…
+QHash<QString, QString> g_migratedFrom; // v2g:… → group_id v1
+
+[[nodiscard]] QString CanonicalGroup(const QString &address) {
+	std::lock_guard<std::mutex> lk(g_migratedMutex);
+	const auto it = g_migratedTo.constFind(address);
+	return (it != g_migratedTo.constEnd()) ? it.value() : address;
+}
+
+[[nodiscard]] bool IsMigratedGroup(const QString &address) {
+	std::lock_guard<std::mutex> lk(g_migratedMutex);
+	return g_migratedTo.contains(address);
+}
+
+// true — связь новая (чат прежней группы надо перевести на адрес v2).
+bool NoteGroupMigrated(const QString &from, const QString &to) {
+	if (from.isEmpty() || to.isEmpty()) {
+		return false;
+	}
+	std::lock_guard<std::mutex> lk(g_migratedMutex);
+	if (g_migratedTo.value(from) == to) {
+		return false;
+	}
+	g_migratedTo.insert(from, to);
+	g_migratedFrom.insert(to, from);
+	return true;
+}
+
+} // namespace
+
+std::uint64_t IdForAddress(const QString &rawAddress) {
+	auto address = rawAddress;
+	{
+		std::lock_guard<std::mutex> lk(g_migratedMutex);
+		if (const auto it = g_migratedFrom.constFind(rawAddress); it != g_migratedFrom.constEnd()) {
+			address = it.value(); // группа v2, переведённая из v1, — прежний чат
+		}
+	}
 	const auto utf8 = address.toUtf8();
 	std::uint64_t h = 1469598103934665603ULL; // FNV offset basis
 	for (const auto c : utf8) {
@@ -5628,9 +5675,10 @@ void applyAvatar(not_null<PeerData*> peer, const QString &address) {
 // memberCount — число участников (для «N members»). Регистрирует chatId↔gid.
 ChatData *ensureGroupChat(
 		not_null<Main::Session*> session,
-		const QString &gid,
+		const QString &rawGid,
 		const QString &name,
 		int memberCount) {
+	const auto gid = CanonicalGroup(rawGid); // группа, переведённая в v2 (T180)
 	const auto chatId = IdForAddress(gid);
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -5756,6 +5804,13 @@ bool ApplyGroupInfo(
 		LOG(("Parvane: сведения группы %1 из v1 (%2) отброшены — группа v2 ведётся по журналу")
 			.arg(gid, source));
 		return false;
+	}
+	// Группа v1, уже переведённая в v2 (T180): её ведёт журнал группы v2
+	if (IsMigratedGroup(gid)) {
+		return false;
+	}
+	if (!parvane::v2::isGroupAddress(gi.group_id)) {
+		MigrateGroupIfOwner(gi);
 	}
 	if (gid.isEmpty()) {
 		return false;
@@ -6174,6 +6229,9 @@ namespace {
 // Группа удалена или нас удалили/забанили (нотис removed/deleted): убрать из
 // реестров и пометить чат покинутым — tdesktop прячет его из списка.
 void DropGroupLocally(not_null<Main::Session*> session, const QString &gid, const QString &why) {
+	if (IsMigratedGroup(gid)) {
+		return; // нотис v1 о группе, переведённой в v2 (T180): чат продолжается по v2
+	}
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_knownGroups.remove(gid);
@@ -7841,6 +7899,10 @@ void injectOnMain(
 	int added = 0;
 	for (const auto &smOrig : msgs) {
 		auto sm = smOrig; // мутабельная копия — для расшифровки E2E-контента
+		// История группы v1, переведённой в v2 (T180), — в тот же чат
+		if (const auto to = QString::fromStdString(sm.to); IsMigratedGroup(to)) {
+			sm.to = CanonicalGroup(to).toStdString();
+		}
 		// E2E (Фаза 2): входящий Encrypted-контент → расшифровать в реальный
 		// MessageContent, дальше синтез как обычно. Свои исходящие (from==self)
 		// зашифрованы ДЛЯ собеседника — их не расшифровать, но они идут через
@@ -8938,7 +9000,7 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 	LOG(("Parvane: сообщение запланировано → %1 на %2")
 		.arg(address).arg(QDateTime::fromSecsSinceEpoch(dueAt).toString(Qt::ISODate)));
 	ArmScheduledTimers();
-	ScheduleStateFlush(); // журнал личного состояния v2 (T098)
+	ScheduleStateFlush("scheduled"); // журнал личного состояния v2 (T098)
 }
 
 // Загрузить очередь с диска и взвести таймеры (на старте сессии).
@@ -9033,6 +9095,68 @@ namespace {
 }
 
 // Сведения группы из журнала (groupInfo движка) → parvane::GroupInfo.
+// Группа v2 переведена из v1 (T180, поле журнала `migratedFrom`): связать адреса
+// и перевести уже существующий чат прежней группы на адрес v2.
+void NoteV2GroupOrigin(not_null<Main::Session*> session, const QString &address, const parvane::json &g) {
+	const auto from = QString::fromStdString(g.value("migratedFrom", std::string()));
+	if (!NoteGroupMigrated(from, address)) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_knownGroups.remove(from);
+		g_groupMembers.remove(from);
+	}
+	g_groupVersions.remove(from);
+	g_groupInfo.remove(from);
+	LOG(("Parvane: v2: группа %1 продолжает группу v1 %2 (тот же чат)").arg(address, from));
+}
+
+// Перевод своей группы v1 в v2 (T180): владелец, все участники на v2 и без
+// v1-устройств (проверяет ядро). Попытка — не чаще раза в минуту на группу.
+QHash<QString, crl::time> g_migrationTriedAt; // main
+
+void MigrateGroupIfOwner(const parvane::GroupInfo &gi) {
+	if (gi.created_by != SelfAddress().toStdString() || !V2Ready()) {
+		return;
+	}
+	const auto gid = QString::fromStdString(gi.group_id);
+	const auto now = crl::now();
+	if (const auto tried = g_migrationTriedAt.value(gid); tried && now - tried < 60 * crl::time(1000)) {
+		return;
+	}
+	g_migrationTriedAt.insert(gid, now);
+	auto members = parvane::json::array();
+	for (const auto &m : gi.members) {
+		members.push_back({
+			{ "address", m.address },
+			{ "role", m.role },
+			{ "admin_rights", m.admin_rights ? m.admin_rights->toJson() : parvane::json() },
+		});
+	}
+	const auto v1 = parvane::json{
+		{ "group_id", gi.group_id }, { "name", gi.name }, { "kind", gi.kind },
+		{ "created_by", gi.created_by }, { "members", std::move(members) },
+		{ "about", gi.about }, { "avatar", gi.avatar },
+		{ "default_permissions", gi.default_permissions.toJson() },
+	};
+	crl::async([v1, gid] {
+		const auto s = V2Ready();
+		if (!s) {
+			return;
+		}
+		try {
+			// Чат переводит событие groupUpdated новой группы (NoteV2GroupOrigin)
+			const auto address = s->migrateGroup(v1);
+			if (!address.empty()) {
+				LOG(("Parvane: v2: группа v1 %1 переведена в %2").arg(gid, QString::fromStdString(address)));
+			}
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: перевод группы %1 не выполнен: %2").arg(gid, QString::fromUtf8(e.what())));
+		}
+	});
+}
+
 [[nodiscard]] parvane::GroupInfo V2GroupInfo(const QString &address, const parvane::json &g) {
 	auto gi = parvane::GroupInfo();
 	gi.group_id = address.toStdString();
@@ -9094,6 +9218,7 @@ void LoadV2GroupCache(not_null<Main::Session*> session) {
 	auto n = 0;
 	for (auto it = all.begin(); it != all.end(); ++it) {
 		if (parvane::v2::isGroupAddress(it.key()) && it.value().is_object()) {
+			NoteV2GroupOrigin(session, QString::fromStdString(it.key()), it.value());
 			ApplyGroupInfo(session, V2GroupInfo(QString::fromStdString(it.key()), it.value()), u"v2 кэш"_q);
 			++n;
 		}
@@ -9158,6 +9283,7 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 		return;
 	}
 	SaveV2GroupCache(address, &info);
+	NoteV2GroupOrigin(session, address, info);
 	ApplyGroupInfo(session, V2GroupInfo(address, info), isNew ? u"v2 новая"_q : u"v2 журнал"_q);
 	LOG(("Parvane: v2: группа %1 %2 (v%3, эпоха %4, участников %5)")
 		.arg(address, isNew ? u"появилась"_q : u"обновлена"_q)
@@ -9391,6 +9517,125 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	};
 }
 
+// T150 (STATE-2): правка, не успевшая в журнал (сделана до подключения журнала
+// либо перед самым выходом), не должна затираться снимком при подключении.
+// После каждого сведения с журналом запоминаем отпечаток локального состояния
+// по видам; вид, чей отпечаток при следующем подключении другой, правился на
+// этом устройстве — он досылается в журнал до проекции снимка (web: `statedirty`).
+[[nodiscard]] QString StateSyncedPath() {
+	return cWorkingDir() + u"tdata/parvane-state-synced.json"_q;
+}
+
+[[nodiscard]] std::map<std::string, std::string> StateKindDigests(const parvane::json &local) {
+	// Списки-множества (блок-лист, архив, исключения уведомлений) собираются из
+	// QSet/QHash — порядок от запуска к запуску разный, в отпечаток идут сортированными.
+	const auto canon = [&](const char *field, bool ordered) {
+		if (!local.is_object() || !local.contains(field)) {
+			return std::string();
+		}
+		const auto &value = local[field];
+		if (ordered || !value.is_array()) {
+			return value.dump();
+		}
+		auto items = std::vector<std::string>();
+		for (const auto &item : value) {
+			items.push_back(item.dump());
+		}
+		std::sort(items.begin(), items.end());
+		auto out = std::string();
+		for (const auto &item : items) {
+			out += item;
+			out += '\n';
+		}
+		return out;
+	};
+	const auto digest = [](const std::string &text) {
+		return QCryptographicHash::hash(
+			QByteArray::fromStdString(text),
+			QCryptographicHash::Sha256).toHex().toStdString();
+	};
+	return {
+		{ "folders", digest(canon("folders", true) + canon("folder_order", true)) },
+		{ "scheduled", digest(canon("scheduled", false)) },
+		{ "notify", digest(canon("notify", false) + canon("notify_defaults", true)) },
+		{ "blocked", digest(canon("blocked", false)) },
+		{ "archived", digest(canon("archived", false)) },
+		{ "pinned", digest(canon("pinned", true)) },
+	};
+}
+
+std::string g_stateSyncedSaved; // main: последнее записанное — не писать файл каждые 8 с
+
+[[nodiscard]] parvane::json LoadStateSynced() { // main
+	auto saved = parvane::json::parse(StoreRead(StateSyncedPath()).toStdString(), nullptr, false);
+	if (!saved.is_object() || saved.value("self", std::string()) != SelfAddress().toStdString()) {
+		return parvane::json::object(); // файла нет либо он другого аккаунта
+	}
+	return saved;
+}
+
+// Пользователь правил вид на этом устройстве. Одного отличия отпечатка мало:
+// пропавший или нечитаемый локальный файл тоже меняет отпечаток, и «досылка»
+// стёрла бы состояние в журнале у всех устройств (так упал verify_protocol_v2_groups).
+void NoteStateEdited(const char *kind) { // main
+	auto saved = LoadStateSynced();
+	auto edited = saved.value("edited", parvane::json::array());
+	for (const auto &k : edited) {
+		if (k.is_string() && k.get<std::string>() == kind) {
+			return;
+		}
+	}
+	edited.push_back(kind);
+	saved["self"] = SelfAddress().toStdString();
+	saved["edited"] = std::move(edited);
+	g_stateSyncedSaved.clear();
+	StoreWrite(StateSyncedPath(), QByteArray::fromStdString(saved.dump()));
+}
+
+void SaveStateSynced(const parvane::json &local) { // main
+	auto j = parvane::json::object();
+	j["self"] = SelfAddress().toStdString();
+	for (const auto &[kind, digest] : StateKindDigests(local)) {
+		j[kind] = digest;
+	}
+	// Правка, сделанная, пока шёл синк, ещё ждёт своей отправки — отметки не снимаем
+	j["edited"] = g_stateFlushQueued
+		? LoadStateSynced().value("edited", parvane::json::array())
+		: parvane::json::array();
+	auto text = j.dump();
+	if (text == g_stateSyncedSaved) {
+		return;
+	}
+	if (StoreWrite(StateSyncedPath(), QByteArray::fromStdString(text))) {
+		g_stateSyncedSaved = std::move(text);
+	}
+}
+
+// Виды, которые правились на этом устройстве после последнего сведения с журналом.
+[[nodiscard]] std::vector<std::string> StateDirtyKinds(const parvane::json &local) { // main
+	auto out = std::vector<std::string>();
+	const auto saved = LoadStateSynced();
+	const auto edited = saved.value("edited", parvane::json::array());
+	const auto wasEdited = [&](const std::string &kind) {
+		for (const auto &k : edited) {
+			if (k.is_string() && k.get<std::string>() == kind) {
+				return true;
+			}
+		}
+		return false;
+	};
+	for (const auto &[kind, digest] : StateKindDigests(local)) {
+		// Вид правил пользователь И локальное состояние отличается от сведённого.
+		// Отпечатка ещё нет (журнал подключается впервые) — главнее журнал.
+		const auto differs = saved.contains(kind) && saved[kind].is_string()
+			&& saved[kind].get<std::string>() != digest;
+		if (wasEdited(kind) && differs) {
+			out.push_back(kind);
+		}
+	}
+	return out;
+}
+
 void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap) {
 	using Flag = Data::ChatFilter::Flag;
 	auto &filters = session->data().chatsFilters();
@@ -9587,7 +9832,7 @@ void ProjectNotify(const parvane::json &snap) {
 			marker.close();
 		}
 		if (!has) {
-			ScheduleStateFlush();
+			ScheduleStateFlush("notify");
 			return;
 		}
 	}
@@ -9870,12 +10115,20 @@ void StateSyncNow() {
 			LOG(("Parvane: v2: синк журнала состояния: %1").arg(QString::fromUtf8(e.what())));
 			return;
 		}
-		if (!r.is_object() || !r.value("changed", false)) {
+		if (!r.is_object()) {
+			return;
+		}
+		if (!r.value("changed", false)) {
+			// Журнал принял ровно `desired` — это и есть сведённое состояние (T150)
+			crl::on_main([desired] { SaveStateSynced(desired); });
 			return;
 		}
 		crl::on_main([snap = r["snapshot"]] {
 			if (const auto session = g_sessionWeak.get()) {
 				ProjectState(session, snap);
+				if (!g_stateFlushQueued) {
+					SaveStateSynced(BuildLocalState(session));
+				}
 			}
 		});
 	});
@@ -9898,7 +10151,7 @@ void NoteBlock(not_null<PeerData*> peer, bool blocked) {
 	}
 	SaveBlockedState();
 	LOG(("Parvane: %1 %2").arg(blocked ? u"заблокирован"_q : u"разблокирован"_q, address));
-	ScheduleStateFlush();
+	ScheduleStateFlush("blocked");
 	if (blocked) {
 		// FR-033 (T133): блокировка сама ключ доступа к доставке не отнимает —
 		// меняем ключ и раздаём всем, кроме заблокированного.
@@ -9935,7 +10188,8 @@ void NoteArchive(not_null<History*> history, bool archived) {
 	}
 	SaveDialogState();
 	LOG(("Parvane: чат %1 %2").arg(address, archived ? u"в архиве"_q : u"возвращён из архива"_q));
-	ScheduleStateFlush();
+	NoteStateEdited("pinned"); // архив снимает закреп
+	ScheduleStateFlush("archived");
 }
 
 // Пользователь закрепил/открепил чат или переставил закреплённые в основном
@@ -9968,11 +10222,15 @@ void NoteDialogPins(not_null<Main::Session*> session) {
 	g_pinnedAddrs = next;
 	SaveDialogState();
 	LOG(("Parvane: закреплено чатов: %1").arg(g_pinnedAddrs.size()));
-	ScheduleStateFlush();
+	ScheduleStateFlush("pinned");
 }
 
-void ScheduleStateFlush() {
-	if (!g_stateAttached || g_stateApplying || g_stateFlushQueued) {
+void ScheduleStateFlush(const char *kind) {
+	if (g_stateApplying) {
+		return;
+	}
+	NoteStateEdited(kind); // T150: правка пользователя — до журнала может не дойти
+	if (!g_stateAttached || g_stateFlushQueued) {
 		return;
 	}
 	g_stateFlushQueued = true;
@@ -9990,7 +10248,8 @@ void AttachStateJournal() {
 		return;
 	}
 	const auto local = BuildLocalState(session);
-	crl::async([local] {
+	const auto dirty = StateDirtyKinds(local);
+	crl::async([local, dirty] {
 		const auto s = V2Ready();
 		if (!s) {
 			return;
@@ -9998,6 +10257,20 @@ void AttachStateJournal() {
 		parvane::json snap;
 		try {
 			snap = s->stateAttach(local);
+			if (snap.is_object() && !dirty.empty()) {
+				// T150: локальная правка этих видов новее журнала — сначала она,
+				// затем снимок (иначе проекция её откатит)
+				const auto r = s->stateSync(local, dirty);
+				if (r.is_object() && r.contains("snapshot")) {
+					snap = r["snapshot"];
+					auto names = QStringList();
+					for (const auto &kind : dirty) {
+						names.push_back(QString::fromStdString(kind));
+					}
+					LOG(("Parvane: v2: несохранённая правка личного состояния дослана в журнал (%1)")
+						.arg(names.join(u", "_q)));
+				}
+			}
 		} catch (const std::exception &e) {
 			LOG(("Parvane: v2: журнал состояния не прочитан: %1").arg(QString::fromUtf8(e.what())));
 			return;
@@ -10012,6 +10285,7 @@ void AttachStateJournal() {
 			}
 			g_stateAttached = true;
 			ProjectState(session, snap);
+			SaveStateSynced(BuildLocalState(session));
 			if (!g_stateTimer) {
 				g_stateTimer = std::make_unique<base::Timer>([] { StateSyncNow(); });
 			}
@@ -10063,7 +10337,7 @@ void FireScheduledGated(const ScheduledItem &item) {
 					}
 				});
 			}
-			ScheduleStateFlush();
+			ScheduleStateFlush("scheduled");
 		});
 	});
 }
@@ -10206,6 +10480,13 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		PublishLegacySet();
 		RepublishDeviceIfRefused();
 		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
+		return true;
+	}
+	if (type == "authRejected") {
+		// JWT не принят на соединении v2. При живом v1 тот же отказ приходит и по
+		// нему; без v1 (E6-1) — только отсюда: иначе клиент молча оставался не в
+		// сети, переподключаясь тем же токеном (JWT живёт 24 ч).
+		OnAuthRejected(u"отказ авторизации (v2)"_q);
 		return true;
 	}
 	if (type == "legacyV1") {
@@ -11101,7 +11382,7 @@ void MirrorNotifySettings(not_null<const PeerData*> peer) {
 	g_notifyExceptions.insert(address, NotifyToWeb(peer->notify()));
 	SaveNotifyState();
 	PublishNotifyBlob();
-	ScheduleStateFlush();
+	ScheduleStateFlush("notify");
 }
 
 void MirrorNotifyDefault(Data::DefaultNotify type) {
@@ -11116,7 +11397,7 @@ void MirrorNotifyDefault(Data::DefaultNotify type) {
 		NotifyToWeb(session->data().notifySettings().defaultSettings(type)));
 	SaveNotifyState();
 	PublishNotifyBlob();
-	ScheduleStateFlush();
+	ScheduleStateFlush("notify");
 }
 
 void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
@@ -12931,7 +13212,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			) | rpl::on_next([weak] {
 				if (const auto s = weak.get()) {
 					SaveFolders(s);
-					ScheduleStateFlush(); // журнал личного состояния v2 (T098)
+					ScheduleStateFlush("folders"); // журнал личного состояния v2 (T098)
 				}
 			}, g_foldersLifetime);
 		}
