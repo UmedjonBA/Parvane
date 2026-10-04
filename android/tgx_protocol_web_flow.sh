@@ -29,7 +29,9 @@ wait_log "$SB/identity.log" "Identity шард запущен" 60 || bad "identi
 wait_log "$SB/messenger.log" "Messenger шард запущен" 60 || bad "messenger не поднялся"
 A="$SB/alice"
 # alice регистрируется десктопом на v1 (журнала устройств v2 у неё не будет) и гасится
-AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
+# PARVANE_PROTO_V2=0 — явно: v2 включён по умолчанию (T135), иначе этот запуск завёл бы alice журнал v2,
+# web писал бы ей по v2, а X на v1 (непривязанное устройство) не получил бы ничего
+AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_PROTO_V2=0)
 wait_log "$A/td/log.txt" "E2E-устройство готово" 90 && ok "alice зарегистрирована (desktop v1)" || bad "alice не поднялась"
 stop_pid "$AP"
 

@@ -11,6 +11,10 @@
 #   4. alice создаёт ссылку, carol вступает по ней → X: «группа <gid>: members»
 #      (GROUP-1, список участников обновлён без перезапуска);
 #   5. alice возвращает send_media → bob шлёт фото штатно → X показал.
+# ВНИМАНИЕ (T135, 4 окт 2026): сценарий сверяет модель v1 (нотисы и id v1-группы / курсор v1-синка и
+# «переустановка» с новым device_id) — закреплён за v1 и идёт связкой после tgx_link_e2e НА v1:
+#   PV_PROTO=v1 TGX_PROTO_V1=1 ./tgx_link_e2e.sh && PV_PROTO=v1 TGX_PROTO_V1=1 ./<этот сценарий>
+# После линковки на v2 по умолчанию он краснеет не из-за продукта.
 set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/mnt/hdd/ub/android/sdk/platform-tools:$PATH"
 . "$(dirname "${BASH_SOURCE[0]}")/../desktop/verify_lib.sh"
