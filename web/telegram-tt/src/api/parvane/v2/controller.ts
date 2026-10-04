@@ -41,6 +41,9 @@ type Deps = {
   /** У аккаунта уже есть журнал устройств, а это устройство в нём не записано:
    * нужен грант линковки от своего другого устройства (LINK-1 v2). */
   onNeedsLinking?: () => void;
+  /** Кадр инбокса v1, переложенный сервером в инбокс v2 (запись `LegacyV1`:
+   * история v1 при первом синке и живые кадры) — FR-053. */
+  onLegacyFrame?: (frame: string) => void;
   /** Ключ восстановления нового корня — показать пользователю один раз. */
   onRecoveryKey: (recoveryKey: string) => void;
   /** Включён ли v2-стек (флаг): липкость D-13 действует только при нём. */
@@ -70,6 +73,8 @@ type Deps = {
   /** «Печатает» по эфемерному каналу v2 (T127): `chat` — адрес собеседника
    * либо группы v2, `from` — кто печатает. */
   onTyping?: (chat: string, from: string) => void;
+  /** «В сети» по эфемерному каналу v2 (T134): автора проверил движок. */
+  onPresence?: (from: string) => void;
   /** Сигнал личного звонка от v2-собеседника: отправитель и привязка к звонку уже
    * проверены движком (сертификат устройства, подпись, аудитория, цель). */
   // `groupCallId` — попарный сигнал внутри группового звонка (T141)
@@ -376,10 +381,19 @@ export function createV2Controller(deps: Deps) {
           'parvane.identity.v2.DeviceLogSyncAnonRequest',
           JSON.stringify({ user: { address: user }, after_version: after }),
         ));
-        let verdict = client.ingestLog(user, await syncFrom(String(client.logVersion(user))));
+        const before = String(client.logVersion(user));
+        let verdict = client.ingestLog(user, await syncFrom(before));
         // Журнал на сервере начат заново (другой генезис) — перечитать целиком
         if (verdict === 'replaced') verdict = client.ingestLog(user, await syncFrom('0'));
         if (verdict === 'rootChanged') return acceptPeerRoot(user);
+        // Журнал не продвинулся, а движок просит его снова: собеседник прямо сейчас
+        // публикует первое устройство (корень записан, сертификат ещё нет) — дать
+        // ему дописать, а не сжечь все попытки за миллисекунды
+        if (verdict !== 'replaced' && before !== '0' && String(client?.logVersion(user)) === before) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 400);
+          });
+        }
         return verdict !== 'replaced';
       }
       case 'rootChanged':
@@ -685,6 +699,10 @@ export function createV2Controller(deps: Deps) {
   }
 
   async function applyEvent(ev: EngineEvent) {
+    if (ev.type === 'legacyV1') {
+      if (ev.json) deps.onLegacyFrame?.(ev.json);
+      return;
+    }
     if (ev.type === 'call') {
       if (!ev.from || !ev.signal) return;
       const invite = groupInviteFromV2(ev.signal);
@@ -1380,12 +1398,32 @@ export function createV2Controller(deps: Deps) {
   function applyEphemeral(body: Uint8Array) {
     if (!client) return;
     const events = JSON.parse(client.ephOpen(body)) as {
-      type: string; chat: string; group?: string; from: string; action: number;
+      type: string; chat: string; group?: string; from: string; action: number; online?: boolean;
     }[];
     events.forEach((ev) => {
+      if (ev.type === 'presence') {
+        if (ev.online) deps.onPresence?.(ev.from);
+        return;
+      }
       if (ev.type !== 'typing' || ev.action === TYPING_ACTION_CANCEL) return;
       deps.onTyping?.(ev.group ? groupAddress(ev.group) : ev.from, ev.from);
     });
+  }
+
+  /** Своё присутствие («в сети») эфемерным каналом v2 (T134): видят собеседники,
+   * знающие наш ключ доступа. Движок молчит, пока L2 активен хоть в одном чате. */
+  async function publishPresence() {
+    if (!client || !ready) return;
+    try {
+      await run(client.ephPresence(true, Date.now()) as OutReq[]);
+    } catch (e) {
+      deps.log(`v2: присутствие не отправлено: ${String(e)}`);
+    }
+  }
+
+  /** Подписаться на эфемерные каналы собеседника (его присутствие и «печатает»). */
+  function watchPresence(address: string) {
+    void ensureEphemeral([address]);
   }
 
   /** «Печатает» в v2-чате. false — чат не v2 (идти по v1); true — по v1 не
@@ -2353,6 +2391,8 @@ export function createV2Controller(deps: Deps) {
     uploadBlob,
     downloadBlobCap,
     trySendTyping,
+    publishPresence,
+    watchPresence,
     tryEdit,
     tryDelete: (to: string, uuids: string[]) => tryMutation(to, {
       delete: { targets: uuids.map(ref), for_everyone: true },

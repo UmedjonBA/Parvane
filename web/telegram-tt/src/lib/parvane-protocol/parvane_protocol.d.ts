@@ -483,6 +483,15 @@ export class PvState {
      */
     diff(desired_json: string, kinds: string[]): Array<any>;
     /**
+     * Ссылка снята (отозвана или удалена): `link_id` — base64.
+     */
+    groupInviteRemove(link_id_b64: string): Array<any>;
+    /**
+     * Ссылка-приглашение группы v2 (T160): proto3-JSON `state.v1.GroupInvite`
+     * → тела `state.append`. LWW по `link_id`.
+     */
+    groupInviteSet(invite_json: string): Array<any>;
+    /**
      * Ответ `state.sync` → JSON `{more, applied, rejected}`. Нерасшифрованные
      * (чужой ключ) и отвергнутые записи пропускаются — одинаково везде.
      */
@@ -521,6 +530,11 @@ export function decodeFrame(bytes: Uint8Array): any;
 export function decodeMessage(type_name: string, bytes: Uint8Array): string;
 
 /**
+ * Ответ любого метода реестра → proto3-JSON (T161).
+ */
+export function decodeMethodResponse(method: string, bytes: Uint8Array): string;
+
+/**
  * Число записей в ответе журнала устройств (0 — у пользователя нет v2).
  */
 export function deviceLogEntries(bytes: Uint8Array): number;
@@ -541,6 +555,11 @@ export function encodeHello(channel: number, client_kind: string, client_version
  * proto3-JSON → байты сообщения по полному имени типа (тела запросов из JS).
  */
 export function encodeMessage(type_name: string, json: string): Uint8Array;
+
+/**
+ * Тело запроса любого метода реестра из proto3-JSON (T161).
+ */
+export function encodeMethodRequest(method: string, json: string): Uint8Array;
 
 export function encodePing(nonce: bigint): Uint8Array;
 
@@ -615,11 +634,13 @@ export interface InitOutput {
     readonly __wbg_pvstate_free: (a: number, b: number) => void;
     readonly decodeFrame: (a: number, b: number, c: number) => void;
     readonly decodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly decodeMethodResponse: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly deviceLogEntries: (a: number, b: number, c: number) => void;
     readonly ed25519Verify: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly encodeAuth: (a: number, b: number, c: number) => void;
     readonly encodeHello: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly encodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly encodeMethodRequest: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly encodePing: (a: number, b: bigint) => void;
     readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number) => void;
     readonly generateRecoveryKey: (a: number) => void;
@@ -741,6 +762,8 @@ export interface InitOutput {
     readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_claimDue: (a: number, b: number, c: number) => void;
     readonly pvstate_diff: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvstate_groupInviteRemove: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstate_groupInviteSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_ingest: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_loadSentGuard: (a: number, b: number, c: number) => void;
     readonly pvstate_markSent: (a: number, b: number, c: number, d: number) => void;

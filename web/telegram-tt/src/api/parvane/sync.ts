@@ -626,6 +626,7 @@ export function createSyncController(deps: SyncDependencies) {
       return;
     }
     checkedGroupCandidates.add(stored.to);
+    if (deps.getConnection()?.hasV1 === false) return;
     try {
       const raw = await deps.getConnection()!.request(
         TOPIC_GROUP_LIST,
@@ -1029,7 +1030,10 @@ export function createSyncController(deps: SyncDependencies) {
     const store = deps.getStore();
     const connection = deps.getConnection()!;
     const token = deps.getToken();
-    const groupsRaw = await connection.request(TOPIC_GROUP_LIST, JSON.stringify({ token }));
+    // T134: соединения v1 нет (сервер его отключил) — списка v1-групп и синка v1
+    // нет; история — из локального журнала и инбокса v2 (в т.ч. записи LegacyV1)
+    const hasV1 = connection.hasV1 !== false;
+    const groupsRaw = hasV1 ? await connection.request(TOPIC_GROUP_LIST, JSON.stringify({ token })) : '{}';
     const groups = (JSON.parse(groupsRaw) as { groups?: WireGroupInfo[] }).groups || [];
     groups.forEach((info) => deps.groups.register(info));
     deps.groups.registerCachedV2?.();
@@ -1048,11 +1052,11 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     const syncEvent = buildWireEvent(store.self, token, buildSyncPayload('0', 0));
-    const syncRaw = await connection.request(
+    const syncRaw = hasV1 ? await connection.request(
       TOPIC_MSG_SYNC_REQUEST,
       JSON.stringify(syncEvent),
       SYNC_TIMEOUT_MS,
-    );
+    ) : '{}';
     const parsed = JSON.parse(syncRaw) as WireEvent<{
       messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
     }> & { error?: string };
@@ -1151,7 +1155,7 @@ export function createSyncController(deps: SyncDependencies) {
 
   async function runDeltaSync() {
     const connection = deps.getConnection();
-    if (!connection || !isSynced) return;
+    if (!connection || !isSynced || connection.hasV1 === false) return;
     sawUndecryptable = false;
     undecryptableUuids.clear();
     await deps.groups.refreshMemberships();

@@ -279,7 +279,7 @@ export function createGroupController(deps: GroupDependencies) {
 
   async function refreshMemberships() {
     const connection = deps.getConnection();
-    if (!connection) return;
+    if (!connection || connection.hasV1 === false) return; // списка v1-групп без v1 нет; группы v2 ведёт движок
     try {
       const raw = await connection.request(
         TOPIC_GROUP_LIST,

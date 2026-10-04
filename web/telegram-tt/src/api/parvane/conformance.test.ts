@@ -1294,7 +1294,11 @@ describe('STATE-2: личное состояние — целиком в жур�
     expect(desktop).toContain(
       'if (const auto s = V2Ready(); s && s->legacyDevices(SelfAddress().toStdString()).empty()) {',
     );
-    expect(desktop).toMatch(/if \(privacy\.dirty\) \{\s+return; \/\/ своя правка новее/);
+    // Своя несохранённая правка сильнее серверного значения — по группам полей
+    // (незнакомые/группы и звонки/присутствие, T137): серверным перезаписывается
+    // только то, что не правилось на этом устройстве
+    expect(desktop).toMatch(/if \(!privacy\.dirty\) \{\s+privacy\.strangers = strangers;/);
+    expect(desktop).toMatch(/if \(!privacy\.dirtyCallsPresence\) \{\s+privacy\.callsNobody = callsNobody;/);
     const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
     expect(session).toContain(`call(false, "${r.privacyGetMethod}"`);
     expect(session).toContain(`call(false, "${r.privacySetMethod}"`);
@@ -1364,7 +1368,8 @@ describe('GROUP-3: группа v2 — сведения только из жур
   it('web: правка сведений собирается внутри очереди, предел описания — на клиенте', () => {
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     const setInfo = controller.slice(controller.indexOf('async function setGroupInfo('));
-    expect(setInfo.indexOf('return serial(async () => {')).toBeLessThan(setInfo.indexOf('const current = readGroup(hex);'));
+    expect(setInfo.indexOf('return serial(async () => {'))
+      .toBeLessThan(setInfo.indexOf('const current = readGroup(hex);'));
     r.setInfoFields.forEach((field) => expect(setInfo.slice(0, 900)).toContain(`${field}:`));
     expect(controller).toContain('client!.groupRequestDecide(hex, user, approve)');
     const groups = readRepo('web/telegram-tt/src/api/parvane/groups.ts');
@@ -1385,5 +1390,76 @@ describe('GROUP-3: группа v2 — сведения только из жур
     expect(android).toContain('if (parvane::v2::isGroupAddress(n.group_id)) return;');
     expect(android).toContain('return json{{"set_info_patch", std::move(patch)}};');
     expect(android).toContain('s->decideJoinRequest(gid, jstr(env, member), approve == JNI_TRUE)');
+  });
+});
+
+describe('E6-1: клиент работоспособен без соединения v1', () => {
+  const r = rule('E6-1') as unknown as {
+    v1Frame: string;
+    bridged: string[];
+    prefersV1: string[];
+    preAuthMethods: string[];
+    ownedBlobMethods: string[];
+    legacyEvent: string;
+    clients: { web: string; desktop: string; android: string };
+  };
+  const webBridge = readRepo('web/telegram-tt/src/api/parvane/v2/bridge.ts');
+  const coreBridge = readRepo('desktop/parvane-core/src/v2_bridge.cpp');
+
+  it('мост web и ядра обслуживает один и тот же список запросов', () => {
+    r.bridged.forEach((subject) => {
+      expect(webBridge, subject).toContain(`case '${subject}':`);
+      expect(coreBridge, subject).toContain(`subject == "${subject}"`);
+    });
+    r.prefersV1.forEach((subject) => {
+      expect(webBridge, subject).toContain(`'${subject}'`);
+      expect(coreBridge, subject).toContain(`"${subject}"`);
+    });
+  });
+
+  it('вход и регистрация — методами канала PRE, свои блобы — методами cloud.blob', () => {
+    const webControl = readRepo('web/telegram-tt/src/api/parvane/v2/control.ts');
+    const coreControl = readRepo('desktop/parvane-core/src/v2_control.cpp');
+    r.preAuthMethods.forEach((method) => {
+      expect(webBridge, method).toContain(`'${method}'`);
+      expect(coreBridge, method).toContain(`"${method}"`);
+    });
+    r.ownedBlobMethods.forEach((method) => {
+      expect(webControl, method).toContain(`'${method}'`);
+      expect(coreControl, method).toContain(`"${method}"`);
+    });
+  });
+
+  it('web: отключённый v1 — виртуальное соединение без диалога и без переподключений', () => {
+    const gateway = readRepo('web/telegram-tt/src/api/parvane/gateway.ts');
+    expect(gateway).toContain(`if (frame.error === '${r.v1Frame}') {`);
+    expect(gateway).toMatch(/if \(isV2Enabled\(\)\) \{\s+v1DisabledAt = Date\.now\(\);\s+this\.becomeVirtual\(\);/);
+    expect(gateway).toContain('if (this.isVirtual) return Promise.reject(');
+    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
+    expect(sync).toContain('if (!connection || !isSynced || connection.hasV1 === false) return;');
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
+  });
+
+  it('desktop: транспорт — мост, запись LegacyV1 подаётся обработчикам инбокса', () => {
+    const desktop = readDesktopSource();
+    expect(desktop).toContain(
+      'return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg), std::move(inner));',
+    );
+    expect(desktop).toContain(`if (type == "${r.legacyEvent}") {`);
+    expect(desktop).toContain('bridge->deliver(std::string("msg.user.") + self, frame);');
+    expect(desktop).toContain('(upgrade_required) — работаем по v2');
+  });
+
+  it('сценарии с отключённым v1 есть у всех клиентов, мост подключён и в JNI', () => {
+    expect(readRepo('scripts/run_protocol_mixed_e2e.sh')).toContain('PARVANE_V1_MODE=disabled');
+    expect(readRepo('desktop/verify_protocol_v2_v1off.sh')).toContain('PARVANE_V1_MODE=disabled');
+    const jni = readRepo('android/jni/parvane_jni.cpp');
+    expect(jni).toContain(
+      'return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg), std::move(inner));',
+    );
+    expect(jni).toContain(`if (type == "${r.legacyEvent}") {`);
+    expect(readRepo('android/tgx_protocol_v2_flow.sh')).toContain('PARVANE_V1_MODE=disabled');
+    expect(r.clients.android).toContain('BridgeTransport');
   });
 });
