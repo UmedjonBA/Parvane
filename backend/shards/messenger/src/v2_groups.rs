@@ -420,6 +420,11 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             if l.announce.expires_ms > 0 && now_ms() > l.announce.expires_ms {
                 return Err(ErrorCode::Expired);
             }
+            // Исчерпанная ссылка — свой код: клиент показывает понятную причину,
+            // а не «ссылка недействительна» (как в v1, spec 003).
+            if l.announce.usage_limit > 0 && l.uses >= l.announce.usage_limit && !is_member(&s, &user) {
+                return Err(ErrorCode::Limit);
+            }
             if s.banned.contains(&user) {
                 return Err(ErrorCode::Banned);
             }

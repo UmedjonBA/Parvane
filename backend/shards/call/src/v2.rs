@@ -67,6 +67,7 @@ fn env_f64(key: &str, default: f64) -> f64 {
 pub(crate) struct RecipientLimits {
     burst: f64,
     per_sec: f64,
+    max_ringing: usize,
     map: HashMap<String, RecipientState>,
 }
 
@@ -78,12 +79,15 @@ struct RecipientState {
 
 impl RecipientLimits {
     pub(crate) fn new(burst: f64, per_sec: f64) -> Self {
-        Self { burst, per_sec, map: HashMap::new() }
+        Self { burst, per_sec, max_ringing: MAX_RINGING_PER_RECIPIENT, map: HashMap::new() }
     }
 
     pub(crate) fn from_env() -> Self {
         // ICE-кандидатов на звонок — десятки; всплеск с запасом на 3 звонка.
-        Self::new(env_f64("PARVANE_CALL_V2_RECIPIENT_BURST", 200.0), env_f64("PARVANE_CALL_V2_RECIPIENT_PER_SEC", 20.0))
+        let mut l = Self::new(env_f64("PARVANE_CALL_V2_RECIPIENT_BURST", 200.0), env_f64("PARVANE_CALL_V2_RECIPIENT_PER_SEC", 20.0));
+        // Потолок вызовов адресату за окно; сценарии звонят одному адресату чаще трёх раз в минуту.
+        l.max_ringing = env_f64("PARVANE_CALL_V2_RINGING_MAX", MAX_RINGING_PER_RECIPIENT as f64).max(1.0) as usize;
+        l
     }
 
     /// Допустить сигнал адресату `user`; `ring` — первый сигнал звонка.
@@ -99,7 +103,7 @@ impl RecipientLimits {
         while s.rings.front().is_some_and(|t| now.saturating_duration_since(*t) >= RINGING_WINDOW) {
             s.rings.pop_front();
         }
-        if ring && s.rings.len() >= MAX_RINGING_PER_RECIPIENT {
+        if ring && s.rings.len() >= self.max_ringing {
             return Err(ErrorCode::RateLimited);
         }
         if s.tokens < 1.0 {
