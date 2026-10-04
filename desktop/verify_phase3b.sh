@@ -9,6 +9,9 @@
 # До E2E сценарий искал текст в событии открытым; теперь открытый текст в шине
 # был бы дефектом (gateway такой msg.chat.send отвергает, P-22).
 set -u
+# Сценарий проверяет провод и хранилище ПРЕЖНЕГО протокола (Olm, msg.chat.send,
+# таблица messages) — закреплён за v1; путь v2 покрывают verify_protocol_v2*.sh.
+PV_PROTO=v1
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 stack_start "${SCRATCH:-/tmp/parvane-3b}"
 URL="nats://127.0.0.1:4222"

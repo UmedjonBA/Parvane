@@ -3,6 +3,9 @@
 # Проверяет: доставку в обе стороны И что контент ЗАШИФРОВАН (в messenger.db
 # нет плейнтекста; отправка помечена [E2E]).
 set -u
+# Сценарий проверяет провод и хранилище ПРЕЖНЕГО протокола (Olm, msg.chat.send,
+# таблица messages) — закреплён за v1; путь v2 покрывают verify_protocol_v2*.sh.
+PV_PROTO=v1
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 SB="${SCRATCH:-/tmp/parvane-p2c}"; rm -rf "$SB"; mkdir -p "$SB" # полная очистка (tdata тоже)
 STAMP="$(date +%s)"

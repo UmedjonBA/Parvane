@@ -318,6 +318,23 @@ json decodeMessage(const std::string &typeName, const std::string &bytes) {
     return parseOrThrow(result(out, err));
 }
 
+std::string encodeMethodRequest(const std::string &method, const json &request) {
+    char *err = nullptr;
+    const auto text = request.dump();
+    auto b = pv_encode_method_request(method.c_str(), text.c_str(), &err);
+    if (err) {
+        parvane_protocol_bytes_free(b);
+        check(err);
+    }
+    return takeBytes(b);
+}
+
+json decodeMethodResponse(const std::string &method, const std::string &bytes) {
+    char *err = nullptr;
+    char *out = pv_decode_method_response(method.c_str(), u8(bytes), bytes.size(), &err);
+    return parseOrThrow(result(out, err));
+}
+
 std::optional<json> parseInvite(const std::string &url) {
     char *err = nullptr;
     char *out = pv_parse_invite(url.c_str(), &err);
@@ -539,6 +556,12 @@ void Client::ephReset() { pv_client_eph_reset(c_); }
 json Client::ephTyping(const std::string &chat, int action) const {
     char *err = nullptr;
     char *out = pv_client_eph_typing(c_, chat.c_str(), action, &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::ephPresence(bool online, std::int64_t lastSeenMs) const {
+    char *err = nullptr;
+    char *out = pv_client_eph_presence(c_, online, lastSeenMs, &err);
     return parseOrThrow(result(out, err));
 }
 

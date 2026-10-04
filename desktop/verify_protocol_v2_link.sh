@@ -97,6 +97,14 @@ wait_log "$L1" "AUTOFOLDER создал папку 'Работа-$S'" 90 && ok "
 wait_log "$L2" "журнал состояния → папки \([1-9][0-9]* изменений\)" 10 && ok "alice2: папка пришла из журнала ≤ 10 с (SC-009)" \
   || bad "alice2: папка не пришла за 10 с"
 
+# ── T160: ссылка-приглашение группы одна на все свои устройства ──────────────
+stop_pid "$P1"
+P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOGROUPINVITE=$G:create")
+wait_log "$L1" "AUTOGROUPINVITE '$G' create → ok" 90 && ok "alice1: ссылка-приглашение создана" \
+  || bad "alice1: ссылка-приглашение не создана"
+wait_log "$L2" "v2: ссылки-приглашения с других своих устройств: [1-9]" 30 \
+  && ok "alice2: ссылка alice1 пришла из журнала личного состояния (T160)" || bad "alice2: ссылка alice1 не пришла"
+
 if grep -qE "запись не открыта|ошибка записи|E2E не удался" "$L1" "$L2" "$BL"; then
   bad "в логах есть сбои записей v2"
 else

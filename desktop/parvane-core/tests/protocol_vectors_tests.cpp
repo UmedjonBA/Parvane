@@ -10,6 +10,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <parvane/call.h>
+#include <parvane/linking.h>
 #include <parvane/v2_content.h>
 #include <parvane_protocol.h>
 
@@ -19,7 +21,7 @@
 
 static int g_total = 0, g_fail = 0;
 
-static void run(const std::string &suite, const std::string &file) {
+static void run(const std::string &suite, const std::string &file, long long least = 3) {
     ++g_total;
     const auto path = std::string(PARVANE_VECTORS_DIR) + "/" + file;
     std::ifstream f(path, std::ios::binary);
@@ -33,7 +35,7 @@ static void run(const std::string &suite, const std::string &file) {
     const auto json = ss.str();
     char *err = nullptr;
     const auto n = pv_run_conformance_vectors(suite.c_str(), json.c_str(), &err);
-    const bool ok = n > 2 && err == nullptr;
+    const bool ok = n >= least && err == nullptr;
     if (!ok) ++g_fail;
     std::printf("  %s  %s: %lld случаев%s%s\n", ok ? "ok  " : "FAIL", suite.c_str(),
                 static_cast<long long>(n), err ? " — " : "", err ? err : "");
@@ -119,6 +121,94 @@ static void runContentClient() {
     }
 }
 
+// T136: перекладка сигнала звонка v1 ↔ v2 в ядре — те же векторы, что у web
+// (`v2/callMap.ts`); proto3-JSON этих векторов движок сверяет со схемой.
+static void runCallClient() {
+    std::string raw;
+    ++g_total;
+    if (!readFile("call/signals.json", raw)) {
+        ++g_fail;
+        std::printf("  FAIL  call/signals (клиент) — нет файла\n");
+        return;
+    }
+    const auto file = nlohmann::json::parse(raw, nullptr, false);
+    int checked = 0, failed = 0;
+    const auto fail = [&](const std::string &name, const std::string &why) {
+        ++failed;
+        std::printf("  FAIL  call/signals (клиент) %s: %s\n", name.c_str(), why.c_str());
+    };
+    for (const auto &c : file.value("cases", nlohmann::json::array())) {
+        const auto name = c.value("name", std::string());
+        const auto &input = c["input"];
+        const auto &expect = c["expect"];
+        ++checked;
+        if (input.value("direction", std::string()) == "to_v2") {
+            const auto got = parvane::v2::callSignalToV2(input["v1"], input.value("group_call_id", std::string()));
+            if (expect["v2"].is_null() ? got.has_value() : (!got || *got != expect["v2"])) {
+                fail(name, got ? got->dump() : "nullopt");
+            }
+            continue;
+        }
+        const auto got = parvane::v2::callSignalFromV2(input["v2"]);
+        if (expect["v1"].is_null()) {
+            if (got) fail(name, got->dump());
+            continue;
+        }
+        if (!got || !subset(expect["v1"], *got)) {
+            fail(name, got ? got->dump() : "nullopt");
+            continue;
+        }
+        // id группового звонка попарного сигнала ядро кладёт в v1-JSON
+        if (expect["v1"].value("type", std::string()) != "group_invite"
+            && got->value("group_call_id", std::string()) != expect.value("group_call_id", std::string())) {
+            fail(name, "group_call_id " + got->value("group_call_id", std::string()));
+            continue;
+        }
+        if (expect.contains("ice")) {
+            const auto ice = parvane::parseIceCandidate(got->value("candidate", std::string()));
+            if (!ice || ice->sdp != expect["ice"].value("candidate", std::string())
+                || ice->mid != expect["ice"].value("mid", std::string()) || ice->mlineIndex != expect["ice"].value("index", -1)) {
+                fail(name, "кандидат " + got->value("candidate", std::string()));
+            }
+        }
+    }
+    if (failed || checked < 30) {
+        ++g_fail;
+        std::printf("  FAIL  call/signals (клиент): случаев %d, расхождений %d\n", checked, failed);
+    } else {
+        std::printf("  ok    call/signals (клиент): %d случаев\n", checked);
+    }
+}
+
+// T136 (T050): векторы LINK-1 — обязательство и код сверки считает ядро.
+static void runLinkClient() {
+    std::string raw;
+    ++g_total;
+    if (!readFile("link/sas.json", raw)) {
+        ++g_fail;
+        std::printf("  FAIL  link/sas (клиент) — нет файла\n");
+        return;
+    }
+    const auto file = nlohmann::json::parse(raw, nullptr, false);
+    int checked = 0, failed = 0;
+    for (const auto &c : file.value("cases", nlohmann::json::array())) {
+        const auto newPub = c["input"].value("new_pub_b64", std::string());
+        const auto oldPub = c["input"].value("old_pub_b64", std::string());
+        ++checked;
+        if (parvane::linking::commitment(newPub) != c["expect"].value("commitment_of_new_b64", std::string())
+            || parvane::linking::sasCodeV2(newPub, oldPub) != c["expect"].value("sas", std::string())) {
+            ++failed;
+            std::printf("  FAIL  link/sas (клиент) %s\n", c.value("name", std::string()).c_str());
+        }
+    }
+    if (failed || checked < 5) {
+        ++g_fail;
+        std::printf("  FAIL  link/sas (клиент): случаев %d, расхождений %d\n", checked, failed);
+    } else {
+        std::printf("  ok    link/sas (клиент): %d случаев\n", checked);
+    }
+}
+
 int main() {
     std::printf("=== parvane-core protocol vectors (C ABI, %s) ===\n", PARVANE_VECTORS_DIR);
     run("seal/sealed", "seal/sealed.json");
@@ -131,6 +221,18 @@ int main() {
     runContentClient();
     // L2-1 (T079): сетка выравнивания, согласование режима, запрет typing/presence
     run("l2/mode", "l2/mode.json");
+    // T136: наборы, которые раньше гонял только движок. Журналы — один случай
+    // из нескольких шагов.
+    run("codec/frames", "codec/frames.json", 20);
+    run("sign/ops", "sign/ops.json", 10); // OP-SIG
+    run("device_log/alice", "device_log/alice.json", 1);
+    run("group_log/group", "group_log/group.json", 1);
+    run("content_guard/content", "content_guard/content.json", 10);
+    run("legacy_v1/messages", "legacy_v1/messages.json", 40);
+    run("call/signals", "call/signals.json", 30);
+    runCallClient();
+    run("link/sas", "link/sas.json", 5);
+    runLinkClient();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

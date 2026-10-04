@@ -111,14 +111,19 @@ stop_pid "$PA"
 
 PV_GATEWAY_ENV="PARVANE_V2_FEATURES=sealed PARVANE_V1_MODE=disabled" gateway_restart
 PA=$(start_client "$A" alice@local "${V2[@]}")
-wait_log "$AL" "upgrade_required\) — нужна новая версия приложения" 90 && ok "disabled: клиент показал «обновите приложение»" \
-  || bad "disabled: нет состояния upgrade_required"
+# T134: клиент на v2 без v1 работоспособен — диалога «обновите приложение» нет,
+# он продолжает работать методами v2 (подробно — verify_protocol_v2_v1off.sh)
+wait_log "$AL" "upgrade_required\) — работаем по v2" 90 && ok "disabled: клиент отметил отключение v1 и работает по v2" \
+  || bad "disabled: нет отметки об отключении v1"
+wait_log "$AL" "v2: готов" 90 && ok "disabled: v2-сессия поднялась без соединения v1" || bad "disabled: v2 не поднялся"
 sleep 20
+grep -q "upgrade_required) — нужна новая версия" "$AL" && bad "disabled: клиент на v2 показал «обновите приложение»" \
+  || ok "disabled: диалога «обновите приложение» нет"
 grep -q "авторизация отклонена" "$AL" && bad "disabled: клиент разлогинился (учётные данные должны остаться)" \
   || ok "disabled: без разлогина"
 [ -s "$A/td/tdata/parvane-session.txt" ] && ok "disabled: учётные данные на диске" || bad "disabled: учётные данные пропали"
-[ "$(grep -c "upgrade_required) — нужна новая версия" "$AL")" = 1 ] && ok "disabled: диалог один раз, без цикла переподключений" \
-  || bad "disabled: диалог повторился"
+[ "$(grep -c "upgrade_required) — работаем по v2" "$AL")" = 1 ] && ok "disabled: отметка одна, без цикла переподключений v1" \
+  || bad "disabled: цикл переподключений v1"
 stop_pid "$PA"
 
 stack_stop
