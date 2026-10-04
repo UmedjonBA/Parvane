@@ -6,20 +6,36 @@
 //! `content/kinds` (T085: все виды `Content` — лимиты, каноничный JSON,
 //! обратное кодирование, показ/заглушка), `l2/mode` (L2-1: сетка
 //! выравнивания личных и групповых конвертов, согласование режима чата,
-//! запрет эфемерных каналов).
+//! запрет эфемерных каналов), а с T136 — и наборы, которые раньше гонял
+//! только движок: `codec/frames` (кадры и тела запросов: размер, лимиты,
+//! акторы, направление, реестр), `sign/ops` (OP-SIG), `device_log/alice` и
+//! `group_log/group` (журналы устройств и группы по шагам), `content_guard/content`
+//! (чистка содержимого), `legacy_v1/messages` (разбор v1-диалектов клиентов),
+//! `call/signals` (сигнал звонка v1 ↔ v2: перекладку делают клиенты, движок
+//! сверяет, что их proto3-JSON — допустимый `CallSignal`), `link/sas` (LINK-1:
+//! обязательство и код сверки считают клиенты, движок сверяет формулу).
 
 use serde_json::Value;
 
-use crate::codec::decode_checked;
+use prost::Message;
+
+use crate::codec::{self, decode_checked};
+use crate::content_guard;
 use crate::error::ProtoError;
-use crate::group;
+use crate::group::{self, SignerInfo};
+use crate::identity::DeviceLog;
+use crate::legacy_v1::{self, LegacyBody, LegacyInner};
 use crate::invite::{self, ParsedInvite};
 use crate::limits::Origin;
 use crate::l2::{self, ChatKind, L2Pref, L2State};
-use crate::pb::parvane::core::v2::{DeviceRef, GroupEnvelope, GroupEnvelopeInner, SealedEnvelope, SealedInner};
+use crate::pb::parvane::core::v2::{
+    frame, DeviceRef, Frame, GroupEnvelope, GroupEnvelopeInner, GroupStateEntry, Ref, Request, SealedEnvelope, SealedInner,
+    SignedOp, StreamChunk,
+};
 use crate::pb::parvane::msg::v2::Content;
 use crate::pb::parvane::state::v1::StateOp;
 use crate::seal;
+use crate::sign;
 use crate::state::PersonalState;
 use crate::unknown::{self, Disposition};
 
@@ -36,6 +52,14 @@ pub fn run(suite: &str, json: &str) -> Result<usize, String> {
             "state/merge" => state_merge_case(case),
             "content/kinds" => content_case(case),
             "l2/mode" => l2_case(case),
+            "codec/frames" => codec_case(case),
+            "sign/ops" => sign_case(case),
+            "device_log/alice" => device_log_case(&v, case),
+            "group_log/group" => group_log_case(&v, case),
+            "content_guard/content" => content_guard_case(case),
+            "legacy_v1/messages" => legacy_case(case),
+            "call/signals" => call_case(case),
+            "link/sas" => link_case(case),
             _ => return Err(format!("неизвестный набор {suite}")),
         };
         r.map_err(|e| format!("{suite}/{name}: {e}"))?;
@@ -261,6 +285,252 @@ fn state_merge_case(case: &Value) -> Result<(), String> {
     Ok(())
 }
 
+// ── наборы, которые до T136 гонял только движок ─────────────────────────────
+
+fn str_field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
+    v.get(key).and_then(Value::as_str).ok_or_else(|| format!("нет поля {key}"))
+}
+
+fn origin_of(input: &Value) -> Origin {
+    if input.get("origin").and_then(Value::as_str) == Some("server") {
+        Origin::Server
+    } else {
+        Origin::Client
+    }
+}
+
+fn codec_case(case: &Value) -> Result<(), String> {
+    let input = &case["input"];
+    match str_field(input, "kind")? {
+        "frame" => expect_outcome(&codec::decode_frame(&hex_field(input, "frame_hex")?, origin_of(input)), &case["expect"]),
+        // Большие кадры в файле не лежат — обвязка собирает их сама
+        "synthetic" => {
+            let len = input.get("len").and_then(Value::as_u64).ok_or("нет len")? as usize;
+            let bytes = match str_field(input, "what")? {
+                "stream_chunk" => Frame {
+                    proto_major: 2,
+                    kind: Some(frame::Kind::StreamChunk(StreamChunk { id: 1, index: 0, last: true, data: vec![0; len], error: None })),
+                }
+                .encode_to_vec(),
+                "raw_zeros" => vec![0; len],
+                w => return Err(format!("неизвестная синтетика {w}")),
+            };
+            expect_outcome(&codec::decode_frame(&bytes, origin_of(input)), &case["expect"])
+        }
+        "request" => {
+            let req = Request { id: 1, method: str_field(input, "method")?.into(), body: hex_field(input, "body_hex")?, timeout_ms: 1000 };
+            expect_outcome(&codec::check_request(&req, Origin::Client), &case["expect"])
+        }
+        k => Err(format!("неизвестный вид {k}")),
+    }
+}
+
+fn sign_case(case: &Value) -> Result<(), String> {
+    let input = &case["input"];
+    let op = SignedOp {
+        body: hex_field(&input["op"], "body_hex")?,
+        signature: hex_field(&input["op"], "signature_hex")?,
+        signer_key: hex_field(&input["op"], "signer_hex")?,
+    };
+    let expect_signer = match input.get("expect_signer_hex") {
+        Some(_) => Some(key32(input, "expect_signer_hex")?),
+        None => None,
+    };
+    let audience = match input.get("audience") {
+        Some(a) => Some(DeviceRef { address: str_field(a, "address")?.into(), device_id: str_field(a, "device_id")?.into() }),
+        None => None,
+    };
+    let target = match input.get("target") {
+        Some(t) => Some(Ref { domain: str_field(t, "domain")?.into(), id: hex_field(t, "id_hex")? }),
+        None => None,
+    };
+    let got = sign::verify_op(&op, str_field(input, "expect_domain")?, str_field(input, "expect_op_type")?, expect_signer.as_ref())
+        .and_then(|verified| {
+            if let Some(a) = &audience {
+                verified.require_audience(a)?;
+            }
+            if let Some(t) = &target {
+                verified.require_target(t)?;
+            }
+            Ok(verified)
+        });
+    expect_outcome(&got, &case["expect"])?;
+    if let (Ok(verified), Some(_)) = (&got, case["expect"].get("payload_hex")) {
+        eq_hex(&verified.payload, &case["expect"], "payload_hex")?;
+    }
+    Ok(())
+}
+
+fn steps_of(case: &Value) -> Result<&Vec<Value>, String> {
+    case["input"].get("steps").and_then(Value::as_array).ok_or_else(|| "нет steps".to_string())
+}
+
+fn device_log_case(v: &Value, case: &Value) -> Result<(), String> {
+    let mut log = DeviceLog::new(str_field(v, "user")?).map_err(|e| format!("журнал: {}", e.kind()))?;
+    for (i, step) in steps_of(case)?.iter().enumerate() {
+        let op: SignedOp =
+            decode_checked(&hex_field(step, "entry_hex")?, Origin::Client).map_err(|e| format!("шаг {i}: запись: {}", e.kind()))?;
+        expect_outcome(&log.apply(&op), &step["expect"]).map_err(|e| format!("шаг {i}: {e}"))?;
+    }
+    if Some(log.version) != v["final"].get("version").and_then(Value::as_u64) {
+        return Err(format!("версия журнала {}", log.version));
+    }
+    if !log.revoked.contains("d1") || log.active("d1").is_some() {
+        return Err("устройство d1 не отозвано".into());
+    }
+    if log.legacy.as_ref().map(Vec::len) != Some(1) {
+        return Err("список v1-устройств не из одной записи".into());
+    }
+    Ok(())
+}
+
+fn group_log_case(v: &Value, case: &Value) -> Result<(), String> {
+    let mut signers = std::collections::HashMap::new();
+    for (key, info) in v.get("signers").and_then(Value::as_object).ok_or("нет signers")? {
+        signers.insert(key.clone(), SignerInfo { user: str_field(info, "user")?.into(), root_key: key32(info, "root_hex")? });
+    }
+    let resolve = |k: &[u8; 32]| signers.get(&hex::encode(k)).cloned();
+    let mut state: Option<group::GroupState> = None;
+    for (i, step) in steps_of(case)?.iter().enumerate() {
+        let entry: GroupStateEntry =
+            decode_checked(&hex_field(step, "entry_hex")?, Origin::Client).map_err(|e| format!("шаг {i}: запись: {}", e.kind()))?;
+        let applied = group::apply(state.as_ref(), &entry, &resolve);
+        expect_outcome(&applied, &step["expect"]).map_err(|e| format!("шаг {i}: {e}"))?;
+        if let Ok(next) = applied {
+            state = Some(next);
+        }
+    }
+    let state = state.ok_or("журнал группы пуст")?;
+    if !state.banned.contains("bob@x") {
+        return Err("bob@x не забанен".into());
+    }
+    // Форк: та же версия, другой hash
+    let mut ctx = state.context();
+    eq_hex(&ctx.state_head_hash, &v["fork"], "head_hex")?;
+    ctx.state_head_hash = hex_field(&v["fork"], "other_head_hex")?;
+    if state.check_context(&ctx) != group::ContextVerdict::Fork {
+        return Err("форк журнала не распознан".into());
+    }
+    Ok(())
+}
+
+fn content_guard_case(case: &Value) -> Result<(), String> {
+    let mut content: Content =
+        serde_json::from_value(case["input"]["content"].clone()).map_err(|e| format!("JSON содержимого: {e}"))?;
+    content_guard::sanitize_content(&mut content);
+    let got = serde_json::to_value(&content).map_err(|e| e.to_string())?;
+    if got != case["expect"]["content"] {
+        return Err(format!("после чистки {got}"));
+    }
+    Ok(())
+}
+
+fn legacy_inner_json(inner: &LegacyInner) -> Result<Value, String> {
+    Ok(match inner {
+        LegacyInner::Content(c) => serde_json::json!({"content": serde_json::to_value(c.as_ref()).map_err(|e| e.to_string())?}),
+        LegacyInner::Skdm { group, session_key, sender_identity, epoch } => serde_json::json!({"skdm": {
+            "group": group, "session_key": session_key, "sender_identity": sender_identity, "epoch": epoch}}),
+        LegacyInner::Unknown(_) => serde_json::json!({"unknown": true}),
+    })
+}
+
+fn legacy_result(layer: &str, input: &str) -> Result<Result<Value, ProtoError>, String> {
+    let json = |v: Result<Value, String>| v.map(Ok);
+    Ok(match layer {
+        "stored" => match legacy_v1::parse_stored(input.as_bytes()) {
+            Err(e) => Err(e),
+            Ok(s) => {
+                let body = match &s.body {
+                    LegacyBody::Tombstone => serde_json::json!({"tombstone": true}),
+                    LegacyBody::Plain(c) => {
+                        serde_json::json!({"plain": serde_json::to_value(c.as_ref()).map_err(|e| e.to_string())?})
+                    }
+                    LegacyBody::Olm { ciphertext, ctype, sender_identity, sender_signing_key } => serde_json::json!({"olm": {
+                        "ciphertext_hex": hex::encode(ciphertext), "ctype_candidates": legacy_v1::ctype_candidates(*ctype),
+                        "sender_identity": sender_identity, "sender_signing_key": sender_signing_key}}),
+                    LegacyBody::Megolm { ciphertext, group, sender_identity, .. } => serde_json::json!({"megolm": {
+                        "ciphertext_hex": hex::encode(ciphertext), "group": group, "sender_identity": sender_identity}}),
+                };
+                Ok(serde_json::json!({"id": s.id, "from": s.from, "to": s.to, "ts": s.ts, "reply_to": s.reply_to,
+                    "edited": s.edited, "deleted": s.deleted, "pinned": s.pinned, "body": body}))
+            }
+        },
+        "olm" => match legacy_v1::parse_olm_plaintext(input.as_bytes()) {
+            Err(e) => Err(e),
+            Ok((from, inner)) => return json(legacy_inner_json(&inner).map(|i| serde_json::json!({"author": from, "inner": i}))),
+        },
+        "megolm" => match legacy_v1::parse_megolm_plaintext(input.as_bytes()) {
+            Err(e) => Err(e),
+            Ok(inner) => return json(legacy_inner_json(&inner).map(|i| serde_json::json!({"inner": i}))),
+        },
+        "ice" => match legacy_v1::normalize_ice(input) {
+            Err(e) => Err(e),
+            Ok(ice) => Ok(serde_json::to_value(ice).map_err(|e| e.to_string())?),
+        },
+        l => return Err(format!("неизвестный слой {l}")),
+    })
+}
+
+fn legacy_case(case: &Value) -> Result<(), String> {
+    let got = legacy_result(str_field(&case["input"], "layer")?, str_field(&case["input"], "json")?)?;
+    expect_outcome(&got, &case["expect"])?;
+    if let (Ok(result), Some(expect)) = (&got, case["expect"].get("result")) {
+        if result != expect {
+            return Err(format!("результат {result}"));
+        }
+    }
+    Ok(())
+}
+
+/// Сигнал звонка: перекладку v1 ↔ v2 делает клиент — движок сверяет, что
+/// proto3-JSON векторов разбирается как `CallSignal` и проходит лимиты схемы.
+fn call_case(case: &Value) -> Result<(), String> {
+    use crate::pb::parvane::call::v2::CallSignal;
+    let (json, sent) = match str_field(&case["input"], "direction")? {
+        "to_v2" => (&case["expect"]["v2"], true),
+        "from_v2" => (&case["input"]["v2"], false),
+        d => return Err(format!("неизвестное направление {d}")),
+    };
+    if json.is_null() {
+        return Ok(());
+    }
+    let signal: CallSignal = serde_json::from_value(json.clone()).map_err(|e| format!("не CallSignal: {e}"))?;
+    decode_checked::<CallSignal>(&signal.encode_to_vec(), Origin::Client).map_err(|e| format!("лимиты схемы: {}", e.kind()))?;
+    // Что клиент отдаёт движку на отправку — всегда с id звонка и ровно одним сигналом
+    if sent {
+        if signal.call_id.len() != 16 || signal.signal.is_none() {
+            return Err("сигнал на отправку без id звонка или без содержимого".into());
+        }
+        if !signal.group_call_id.is_empty() && signal.group_call_id.len() != 16 {
+            return Err("id группового звонка не 16 байт".into());
+        }
+    }
+    Ok(())
+}
+
+/// LINK-1: обязательство и код сверки считают клиенты — движок сверяет формулу.
+fn link_case(case: &Value) -> Result<(), String> {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+    let raw = |key: &str| -> Result<Vec<u8>, String> {
+        base64::engine::general_purpose::STANDARD
+            .decode(str_field(&case["input"], key)?)
+            .map_err(|_| format!("поле {key} не base64"))
+    };
+    let (new, old) = (raw("new_pub_b64")?, raw("old_pub_b64")?);
+    let commitment = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&new));
+    if commitment != str_field(&case["expect"], "commitment_of_new_b64")? {
+        return Err(format!("обязательство {commitment}"));
+    }
+    let digest = Sha256::new().chain_update(b"parvane-link-sas-v2").chain_update(&new).chain_update(&old).finalize();
+    let code = format!("{:012}", u64::from_be_bytes(digest[..8].try_into().map_err(|_| "digest")?) % 1_000_000_000_000);
+    let sas = format!("{} {} {}", &code[..4], &code[4..8], &code[8..]);
+    if sas != str_field(&case["expect"], "sas")? {
+        return Err(format!("код сверки {sas}"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +552,20 @@ mod tests {
         ] {
             let n = run(suite, &read(file)).unwrap();
             assert!(n >= 3, "{suite}: {n}");
+        }
+        // T136: журналы — по одному случаю из нескольких шагов
+        for (suite, file, least) in [
+            ("codec/frames", "codec/frames.json", 20),
+            ("sign/ops", "sign/ops.json", 10),
+            ("device_log/alice", "device_log/alice.json", 1),
+            ("group_log/group", "group_log/group.json", 1),
+            ("content_guard/content", "content_guard/content.json", 10),
+            ("legacy_v1/messages", "legacy_v1/messages.json", 40),
+            ("call/signals", "call/signals.json", 30),
+            ("link/sas", "link/sas.json", 5),
+        ] {
+            let n = run(suite, &read(file)).unwrap();
+            assert!(n >= least, "{suite}: {n}");
         }
         assert!(run("nope", "{\"cases\":[{\"name\":\"x\"}]}").is_err());
     }

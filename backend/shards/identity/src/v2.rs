@@ -299,6 +299,8 @@ fn v1_code(err: &str) -> ErrorCode {
     let e = err.to_lowercase();
     if e.contains("слишком много") || e.contains("попробуйте позже") || e.contains("часто") {
         ErrorCode::RateLimited
+    } else if e.contains("отозван") {
+        ErrorCode::Revoked
     } else if e.contains("не найден") || e.contains("нет такого") {
         ErrorCode::NotFound
     } else if e.contains("существует") || e.contains("занят") {
@@ -399,6 +401,11 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 }
                 .encode_to_vec());
             }
+            // Аккаунт ждёт подтверждения — не отказ, а шаг входа (текста ошибок
+            // в протоколе нет, кодом это от неверного пароля не отличить).
+            if s(&v, "error").contains("не подтвержд") {
+                return Ok(pb::SessionIssueResponse { confirm_required: true, ..Default::default() }.encode_to_vec());
+            }
             v1_ok(&v)?;
             Ok(pb::SessionIssueResponse { token: s(&v, "token"), trust_secret: s(&v, "trust_secret"), ..Default::default() }.encode_to_vec())
         }
@@ -446,6 +453,20 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 enabled: v["enabled"].as_bool().unwrap_or(false),
                 telegram_linked: v["telegram_linked"].as_bool().unwrap_or(false),
                 telegram_bot: telegram_bot().unwrap_or_default(),
+                trust_secret: s(&v, "trust_secret"),
+            }
+            .encode_to_vec())
+        }
+        // Чтение состояния 2FA — без свежего пароля (тот же v1-обработчик без `enabled`).
+        "identity.account.get_2fa" => {
+            require_user(&req)?;
+            let v = v1_call(nc, json!({"token": req.token}), |msg| handle_twofa(nc, pool, dec, msg)).await?;
+            v1_ok(&v)?;
+            Ok(pb::AccountSet2faResponse {
+                enabled: v["enabled"].as_bool().unwrap_or(false),
+                telegram_linked: v["telegram_linked"].as_bool().unwrap_or(false),
+                telegram_bot: telegram_bot().unwrap_or_default(),
+                trust_secret: String::new(),
             }
             .encode_to_vec())
         }
@@ -789,8 +810,9 @@ async fn profile_from_v1(ctx: &V2Ctx, u: &Value) -> pb::PublicProfile {
         avatar_file_id: s(u, "avatar"),
         bio: s(u, "bio"),
         birthday: s(u, "birthday"),
-        name_color: u["name_color"].as_i64().unwrap_or(0),
+        name_color: u["name_color"].as_i64(),
         personal_channel: s(u, "personal_channel"),
+        phone: s(u, "phone"),
     }
 }
 
@@ -1223,6 +1245,11 @@ impl V2Ctx {
     }
 
     async fn key_list(&self) -> parvane_protocol::pb::parvane::core::v2::SignedTokenKeyList {
+        // Сутки сменились раньше часового таймера — ключ нового дня по требованию
+        let today_ms = day_now() * 86_400_000;
+        if !self.issuers.read().await.iter().any(|i| i.valid_from_ms == today_ms) {
+            self.rotate_token_keys().await;
+        }
         let keys = self.issuers.read().await.iter().map(|i| i.token_key()).collect();
         parvane_protocol::tokens::sign_key_list(&self.server_key, keys, now_unix() * 1000)
     }
@@ -1234,7 +1261,16 @@ async fn issue_tokens(ctx: &V2Ctx, user: &str, r: pb::TokensIssueBlindedRequest)
         return Err(ErrorCode::Invalid);
     }
     let day = day_now();
-    let issuer = ctx.issuers.read().await.iter().find(|i| i.valid_from_ms == day * 86_400_000).cloned().ok_or(ErrorCode::Unavailable)?;
+    let today = |issuers: &[Arc<Issuer>]| issuers.iter().find(|i| i.valid_from_ms == day * 86_400_000).cloned();
+    let mut issuer = today(&ctx.issuers.read().await);
+    if issuer.is_none() {
+        // Сутки сменились, а ключи обновляет часовой таймер: до его срабатывания
+        // (до часа после полуночи UTC) жетонов не получал никто, и первое сообщение
+        // новому собеседнику не уходило. Ключ нового дня создаётся по требованию.
+        ctx.rotate_token_keys().await;
+        issuer = today(&ctx.issuers.read().await);
+    }
+    let issuer = issuer.ok_or(ErrorCode::Unavailable)?;
     let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
     let (used,): (i64,) = sqlx::query_as("SELECT COALESCE((SELECT count FROM token_issuance WHERE user = ? AND day = ?), 0)")
         .bind(user)

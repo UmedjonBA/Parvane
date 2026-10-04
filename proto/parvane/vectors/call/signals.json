@@ -1,0 +1,664 @@
+{
+  "suite": "call",
+  "description": "сигнал звонка v1 (JSON шарда call) ↔ v2 (proto3-JSON parvane.call.v2.CallSignal): to_v2 — что клиент отдаёт движку (null — по v2 не передаётся), from_v2 — что клиент отдаёт движку звонков из события движка (null — нечего передавать). Подпись SDP (sig) в v2 не переносится. У ICE кандидат v1 — строка в любом из диалектов CALL-1; в from_v2 сверяется разобранный кандидат (expect.ice), а не строка. group_call_id в expect — id группового звонка попарного сигнала (в v1 его несёт инбокс gcall:<адрес>)",
+  "cases": [
+    {
+      "name": "invite-audio",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "invite",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "media": "audio",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n",
+          "sig": "подпись-v1"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "offer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n",
+            "video": false
+          }
+        }
+      }
+    },
+    {
+      "name": "invite-video",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "invite",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "media": "video",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "offer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n",
+            "video": true
+          }
+        }
+      }
+    },
+    {
+      "name": "answer",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "answer",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "answer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "ice-canonical",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "ice",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "candidate": "{\"candidate\":\"candidate:c\",\"sdp_mid\":\"1\",\"sdp_mline_index\":2}"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ice": {
+            "candidate": "candidate:c",
+            "sdp_mid": "1",
+            "sdp_mline_index": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "ice-web-dialect",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "ice",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "candidate": "{\"candidate\":\"candidate:w\",\"sdpMid\":\"audio\",\"sdpMLineIndex\":1,\"usernameFragment\":\"ab\"}"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ice": {
+            "candidate": "candidate:w",
+            "sdp_mid": "audio",
+            "sdp_mline_index": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "ice-desktop-legacy",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "ice",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "candidate": "{\"sdp\":\"candidate:d\",\"mid\":\"0\",\"idx\":0}"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ice": {
+            "candidate": "candidate:d",
+            "sdp_mid": "0",
+            "sdp_mline_index": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "ice-unparsable",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "ice",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "candidate": "cand-plain"
+        }
+      },
+      "expect": {
+        "v2": null
+      }
+    },
+    {
+      "name": "reject-declined",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "declined"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_DECLINED"
+          }
+        }
+      }
+    },
+    {
+      "name": "reject-busy",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "busy"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_BUSY"
+          }
+        }
+      }
+    },
+    {
+      "name": "reject-auth-failed",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "auth_failed"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_FAILED"
+          }
+        }
+      }
+    },
+    {
+      "name": "reject-media-failed",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "media_failed"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_FAILED"
+          }
+        }
+      }
+    },
+    {
+      "name": "reject-no-reason",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_DECLINED"
+          }
+        }
+      }
+    },
+    {
+      "name": "hangup",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "hangup",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_NORMAL"
+          }
+        }
+      }
+    },
+    {
+      "name": "call-id-not-uuid",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "hangup",
+          "call_id": "call-1"
+        }
+      },
+      "expect": {
+        "v2": null
+      }
+    },
+    {
+      "name": "unknown-type",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "ringing",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        }
+      },
+      "expect": {
+        "v2": null
+      }
+    },
+    {
+      "name": "group-invite",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "group_invite",
+          "group_call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f81",
+          "participants": [
+            "alice@x",
+            "bob@x",
+            "carol@x"
+          ],
+          "media": "video"
+        }
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gQ==",
+          "group_ring": {
+            "participants": [
+              {
+                "address": "alice@x"
+              },
+              {
+                "address": "bob@x"
+              },
+              {
+                "address": "carol@x"
+              }
+            ],
+            "video": true
+          }
+        }
+      }
+    },
+    {
+      "name": "group-pair-offer",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "invite",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "media": "audio",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        },
+        "group_call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f81"
+      },
+      "expect": {
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "offer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n",
+            "video": false
+          },
+          "group_call_id": "AZI/TpoAfBGKIjtMXW5/gQ=="
+        }
+      }
+    },
+    {
+      "name": "group-pair-bad-group-id",
+      "input": {
+        "direction": "to_v2",
+        "v1": {
+          "type": "hangup",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        },
+        "group_call_id": "gcall-1"
+      },
+      "expect": {
+        "v2": null
+      }
+    },
+    {
+      "name": "offer-video",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "offer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n",
+            "video": true
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "invite",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "media": "video",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        }
+      }
+    },
+    {
+      "name": "offer-snake-case",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "call_id": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "offer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "invite",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "media": "audio",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        }
+      }
+    },
+    {
+      "name": "answer",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "answer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "answer",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        }
+      }
+    },
+    {
+      "name": "ice",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ice": {
+            "candidate": "candidate:c",
+            "sdpMid": "1",
+            "sdpMlineIndex": 2
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "ice",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        },
+        "ice": {
+          "candidate": "candidate:c",
+          "mid": "1",
+          "index": 2
+        }
+      }
+    },
+    {
+      "name": "ice-defaults-omitted",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ice": {
+            "candidate": "candidate:z"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "ice",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        },
+        "ice": {
+          "candidate": "candidate:z",
+          "mid": "",
+          "index": 0
+        }
+      }
+    },
+    {
+      "name": "ice-empty",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ice": {}
+        }
+      },
+      "expect": {
+        "v1": null
+      }
+    },
+    {
+      "name": "hangup-normal",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_NORMAL"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "hangup",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        }
+      }
+    },
+    {
+      "name": "hangup-no-reason",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {}
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "hangup",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80"
+        }
+      }
+    },
+    {
+      "name": "hangup-busy",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_BUSY"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "busy"
+        }
+      }
+    },
+    {
+      "name": "hangup-declined",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_DECLINED"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "declined"
+        }
+      }
+    },
+    {
+      "name": "hangup-missed",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": "HANGUP_REASON_MISSED"
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "declined"
+        }
+      }
+    },
+    {
+      "name": "hangup-failed-number",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "hangup": {
+            "reason": 5
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "reject",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "reason": "media_failed"
+        }
+      }
+    },
+    {
+      "name": "ringing-ignored",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "ringing": {}
+        }
+      },
+      "expect": {
+        "v1": null
+      }
+    },
+    {
+      "name": "call-id-wrong-length",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AAEC",
+          "hangup": {}
+        }
+      },
+      "expect": {
+        "v1": null
+      }
+    },
+    {
+      "name": "group-ring",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gQ==",
+          "groupRing": {
+            "participants": [
+              {
+                "address": "alice@x"
+              },
+              {
+                "address": "bob@x"
+              }
+            ],
+            "video": false
+          }
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "group_invite",
+          "group_call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f81",
+          "participants": [
+            "alice@x",
+            "bob@x"
+          ],
+          "media": "audio"
+        }
+      }
+    },
+    {
+      "name": "group-pair-answer",
+      "input": {
+        "direction": "from_v2",
+        "v2": {
+          "callId": "AZI/TpoAfBGKIjtMXW5/gA==",
+          "answer": {
+            "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+          },
+          "groupCallId": "AZI/TpoAfBGKIjtMXW5/gQ=="
+        }
+      },
+      "expect": {
+        "v1": {
+          "type": "answer",
+          "call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f80",
+          "sdp": "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n"
+        },
+        "group_call_id": "01923f4e-9a00-7c11-8a22-3b4c5d6e7f81"
+      }
+    }
+  ]
+}

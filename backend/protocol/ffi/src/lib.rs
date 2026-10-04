@@ -976,6 +976,20 @@ pub unsafe extern "C" fn pv_decode_message(type_name: *const c_char, bytes: *con
     guard(err, ptr::null_mut(), || host::decode_message(str_arg(type_name).ok_or_else(bad_arg)?, bytes_arg(bytes, len)).map(cstring))
 }
 
+/// Тело запроса любого метода реестра из proto3-JSON (T161).
+#[no_mangle]
+pub unsafe extern "C" fn pv_encode_method_request(method: *const c_char, json: *const c_char, err: *mut *mut c_char) -> PvBytes {
+    guard(err, PvBytes::empty(), || {
+        host::encode_method_request(str_arg(method).ok_or_else(bad_arg)?, str_arg(json).ok_or_else(bad_arg)?).map(PvBytes::from_vec)
+    })
+}
+
+/// Ответ любого метода реестра → proto3-JSON (T161).
+#[no_mangle]
+pub unsafe extern "C" fn pv_decode_method_response(method: *const c_char, bytes: *const u8, len: usize, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || host::decode_method_response(str_arg(method).ok_or_else(bad_arg)?, bytes_arg(bytes, len)).map(cstring))
+}
+
 /// Число записей в ответе `identity.device.log_sync_anon` (есть ли у
 /// пользователя журнал устройств v2). -1 — ответ не разобран (подробности в err).
 #[no_mangle]

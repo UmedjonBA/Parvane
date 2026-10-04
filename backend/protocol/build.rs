@@ -67,7 +67,8 @@ fn main() {
     let pool = DescriptorPool::decode(descriptor.as_slice()).expect("prost-reflect: дескрипторы");
     let mut errors = Vec::new();
     let table = build_schema_table(&pool, &mut errors);
-    let methods = build_methods(&pool, &table.index, &mut errors);
+    let mut codec = Vec::new();
+    let methods = build_methods(&pool, &table.index, &mut errors, &mut codec);
     if !errors.is_empty() {
         for e in &errors {
             println!("cargo:warning=схема: {e}");
@@ -77,6 +78,7 @@ fn main() {
 
     std::fs::write(out.join("schema_table.rs"), format!("{}\n{}", table.code, methods))
         .expect("schema_table.rs");
+    std::fs::write(out.join("method_codec.rs"), build_method_codec(&codec)).expect("method_codec.rs");
     std::fs::write(out.join("_pb.rs"), module_tree(&pool, &out)).expect("_pb.rs");
 }
 
@@ -248,7 +250,7 @@ fn valid_method_name(n: &str) -> bool {
         && !n.contains("..")
 }
 
-fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: &mut Vec<String>) -> String {
+fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: &mut Vec<String>, codec: &mut Vec<(String, String, String)>) -> String {
     let Some(ext) = pool.get_extension_by_name("parvane.core.v2.method") else {
         errors.push("нет расширения parvane.core.v2.method".into());
         return String::new();
@@ -328,6 +330,7 @@ fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: 
                 errors.push(format!("{full}: тип запроса/ответа вне схемы"));
                 continue;
             };
+            codec.push((name.clone(), m.input().full_name().to_string(), m.output().full_name().to_string()));
             rows.push((
                 name.clone(),
                 format!(
@@ -343,5 +346,47 @@ fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: 
         s.push('\n');
     }
     s.push_str("];\n");
+    s
+}
+
+/// Rust-путь типа по полному имени proto (`parvane.identity.v2.X` →
+/// `crate::pb::parvane::identity::v2::X`). Запросы и ответы методов — типы
+/// верхнего уровня, вложенных среди них нет.
+fn rust_path(full: &str) -> String {
+    format!("crate::pb::{}", full.replace('.', "::"))
+}
+
+/// Кодек методов реестра для хостов (T161): proto3-JSON запроса → байты и
+/// байты ответа → proto3-JSON по имени метода, для КАЖДОГО метода реестра.
+fn build_method_codec(codec: &[(String, String, String)]) -> String {
+    let mut rows = codec.to_vec();
+    rows.sort();
+    let mut s = String::from(
+        "/// proto3-JSON запроса метода → байты тела. `None` — метода нет в реестре.\n\
+         pub fn encode_request(method: &str, json: &str) -> Option<crate::error::Result<Vec<u8>>> {\n\
+         \x20   use prost::Message as _;\n\
+         \x20   Some(match method {\n",
+    );
+    for (name, req, _) in &rows {
+        s.push_str(&format!(
+            "        {name:?} => serde_json::from_str::<{}>(json).map(|m| m.encode_to_vec()).map_err(|_| crate::error::ProtoError::Malformed),\n",
+            rust_path(req)
+        ));
+    }
+    s.push_str("        _ => return None,\n    })\n}\n\n");
+    s.push_str(
+        "/// Байты ответа метода (проверенные лимитами схемы) → proto3-JSON. `None` — метода нет в реестре.\n\
+         pub fn decode_response(method: &str, bytes: &[u8]) -> Option<crate::error::Result<String>> {\n\
+         \x20   use crate::codec::decode_checked;\n\
+         \x20   use crate::limits::Origin;\n\
+         \x20   Some(match method {\n",
+    );
+    for (name, _, resp) in &rows {
+        s.push_str(&format!(
+            "        {name:?} => decode_checked::<{}>(bytes, Origin::Server).and_then(|m| serde_json::to_string(&m).map_err(|_| crate::error::ProtoError::Malformed)),\n",
+            rust_path(resp)
+        ));
+    }
+    s.push_str("        _ => return None,\n    })\n}\n");
     s
 }

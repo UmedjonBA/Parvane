@@ -1175,6 +1175,14 @@ impl Client {
         self.check_peer(peer)?;
         self.check_peer(&self.user.clone())?;
         let peer_devices: Vec<String> = self.peer_log(peer).map(|l| l.devices.keys().cloned().collect()).unwrap_or_default();
+        // Журнал собеседника уже есть, а устройств в нём ещё нет (его первое
+        // устройство публикуется прямо сейчас: корень записан, сертификат — нет):
+        // запечатывать некому. Раньше отправка «в ноль устройств» возвращала успех,
+        // и сообщение молча терялось — теперь хост перечитывает журнал и повторяет.
+        if peer != self.user && peer_devices.is_empty() {
+            let after = self.peer_log(peer).map(|l| l.version).unwrap_or(0);
+            return need(Need::PeerLog { user: peer.into(), after });
+        }
         // D-13: формат по подписанным данным и памяти «видел v2».
         let plog = self.peer_log(peer).cloned();
         for d in &peer_devices {

@@ -67,6 +67,11 @@ pub struct MethodInfo {
 
 include!(concat!(env!("OUT_DIR"), "/schema_table.rs"));
 
+/// Кодек тел запросов и ответов по имени метода — для хостов (T161).
+pub mod method_codec {
+    include!(concat!(env!("OUT_DIR"), "/method_codec.rs"));
+}
+
 /// Спецификация сообщения по полному имени (`parvane.core.v2.Frame`).
 pub fn message(full_name: &str) -> Option<&'static MsgSpec> {
     MESSAGES.binary_search_by(|m| m.name.cmp(full_name)).ok().and_then(|i| MESSAGES.get(i))
@@ -75,4 +80,24 @@ pub fn message(full_name: &str) -> Option<&'static MsgSpec> {
 /// Метод реестра по имени на проводе.
 pub fn method(name: &str) -> Option<&'static MethodInfo> {
     METHODS.binary_search_by(|m| m.name.cmp(name)).ok().and_then(|i| METHODS.get(i))
+}
+
+#[cfg(test)]
+mod method_codec_tests {
+    use super::{method_codec, METHODS};
+
+    /// T161: хост может позвать любой метод реестра — пустой запрос кодируется,
+    /// пустой ответ разбирается, незнакомое имя даёт `None`.
+    #[test]
+    fn every_registry_method_has_a_codec() {
+        assert!(METHODS.len() >= 80);
+        for m in METHODS {
+            let body = method_codec::encode_request(m.name, "{}").unwrap_or_else(|| panic!("{}: нет кодека запроса", m.name));
+            assert!(body.is_ok(), "{}: пустой запрос не кодируется", m.name);
+            let json = method_codec::decode_response(m.name, &[]).unwrap_or_else(|| panic!("{}: нет кодека ответа", m.name));
+            assert!(json.is_ok(), "{}: пустой ответ не разбирается", m.name);
+        }
+        assert!(method_codec::encode_request("nope.method", "{}").is_none());
+        assert!(matches!(method_codec::encode_request("identity.session.issue", "не json"), Some(Err(_))));
+    }
 }
