@@ -104,6 +104,7 @@ type EngineGroupInfo = {
   deleted: boolean;
   defaultPermissions?: WireDefaultPermissions;
   inviteLinks: string[];
+  inviteUses?: Record<string, number>;
   // Политика «усиленная приватность» (L2) и кто задал её последним
   l2?: boolean;
   l2By?: string;
@@ -128,6 +129,8 @@ export type V2InviteRecord = {
   title?: string;
   expiresAt?: number;
   usageLimit?: number;
+  /** Вступивших по ссылке — по журналу группы; в хранилище не пишется. */
+  usage?: number;
   isRequestNeeded?: boolean;
 };
 
@@ -148,7 +151,7 @@ export type V2InviteCheck = {
 export type V2JoinResult =
   | { status: 'ok'; info: WireGroupInfo }
   | { status: 'requested' }
-  | { status: 'error'; code: 'invalid' | 'banned' | 'expired' | 'rateLimited' | 'failed' };
+  | { status: 'error'; code: 'invalid' | 'banned' | 'expired' | 'exhausted' | 'rateLimited' | 'failed' };
 
 type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array };
@@ -2042,9 +2045,11 @@ export function createV2Controller(deps: Deps) {
 
   async function listInvites(address: string): Promise<V2InviteRecord[]> {
     if (!client || !isV2GroupAddress(address)) return [];
-    const active = new Set(readGroup(groupHex(address))?.inviteLinks || []);
+    const group = readGroup(groupHex(address));
+    const active = new Set(group?.inviteLinks || []);
     // Порядок один на всех своих устройствах (T160): по нему выбирается основная ссылка
-    return ((await loadInvites())[address] || []).filter(({ linkId }) => active.has(linkId)).sort(compareInvites);
+    return ((await loadInvites())[address] || []).filter(({ linkId }) => active.has(linkId)).sort(compareInvites)
+      .map((record) => ({ ...record, usage: group?.inviteUses?.[record.linkId] || undefined }));
   }
 
   /** Все действующие ссылки этого устройства — для журнала личного состояния (T160). */
@@ -2212,8 +2217,10 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  function inviteErrorCode(e: unknown): 'invalid' | 'banned' | 'expired' | 'rateLimited' | 'failed' {
+  function inviteErrorCode(e: unknown): 'invalid' | 'banned' | 'expired' | 'exhausted' | 'rateLimited' | 'failed' {
     const code = e instanceof V2Error ? e.code : String(e);
+    // ERROR_CODE_LIMIT — ссылка исчерпана (раньше ERROR_CODE_RATE_LIMITED: содержит «LIMIT»)
+    if (code.includes('CODE_LIMIT')) return 'exhausted';
     if (code.includes('NOT_FOUND') || code.includes('FORBIDDEN')) return 'invalid';
     if (code.includes('BANNED')) return 'banned';
     if (code.includes('EXPIRED')) return 'expired';

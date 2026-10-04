@@ -224,6 +224,11 @@ export function createLocalState(deps: LocalStateDependencies) {
   let historyFlushTimer: ReturnType<typeof setTimeout> | undefined;
   let cursorPending: { lastSeenUuid: string; sinceUpdated: number } | undefined;
 
+  // Записи идут строго одна пачка за другой: сброс очереди может быть вызван,
+  // пока предыдущая пачка ещё пишется (своё исходящее сбрасывается сразу), —
+  // иначе удаление обогнало бы незавершённое сохранение той же записи
+  let historyFlushChain: Promise<void> = Promise.resolve();
+
   function flushHistoryQueue(): Promise<void> {
     if (historyFlushTimer) clearTimeout(historyFlushTimer);
     historyFlushTimer = undefined;
@@ -231,16 +236,24 @@ export function createLocalState(deps: LocalStateDependencies) {
     historyWriteQueue.clear();
     const cursor = cursorPending;
     cursorPending = undefined;
-    if (!batch.length && !cursor) return Promise.resolve();
+    if (!batch.length && !cursor) return historyFlushChain;
     const pending = secureStorage();
-    if (!pending) return Promise.resolve();
-    return pending.then(async (storage) => {
+    if (!pending) return historyFlushChain;
+    historyFlushChain = historyFlushChain.then(() => pending).then(async (storage) => {
       for (const [uuid, stored] of batch) {
-        if (stored) await storage.saveRecord(`m:${uuid}`, stored);
-        else await storage.deleteRecord(`m:${uuid}`);
+        try {
+          if (stored) await storage.saveRecord(`m:${uuid}`, stored);
+          else await storage.deleteRecord(`m:${uuid}`);
+        } catch (err) {
+          // Сбой одной записи не должен ронять остаток пачки и не должен быть немым:
+          // сообщение без записи в кэше пропадает после перезагрузки
+          // eslint-disable-next-line no-console
+          console.warn(`[parvane] кэш истории: запись ${uuid} не сохранена: ${String(err)}`);
+        }
       }
       if (cursor) await storage.saveRecord(SYNC_CURSOR_RECORD, cursor);
     }).catch(() => undefined);
+    return historyFlushChain;
   }
 
   // Уход со страницы: дописать очередь кэша сразу (иначе удаление/очистка,
@@ -554,7 +567,12 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (journalCache.length > JOURNAL_MAX_ENTRIES) {
       journalCache.splice(0, journalCache.length - JOURNAL_MAX_ENTRIES);
     }
+    // Своё исходящее пишем на диск сразу, без отложенной записи: вкладка,
+    // закрытая в первую секунду после отправки, теряла сообщение — запись,
+    // начатая в pagehide, не успевает (шифрование и IndexedDB асинхронны), а
+    // сервер своё сообщение не вернёт (v2; v1 после отключения — тем более)
     scheduleRecordSave('journal');
+    flushRecordSaves();
     // Своё исходящее — сразу и в кэш истории. Сервер не шлёт эхо отправителю:
     // копия для своего устройства приходит только дельта-синком, а живые
     // входящие двигают курсор `last_seen_id` дальше неё — тогда синк своё
@@ -563,6 +581,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     // подписью, `scripts/e2e_web_media_ttl.mjs`). Правки/удаление своих
     // сообщений догоняются по `updated_at` и перезаписывают запись
     saveHistoryRecord(entry);
+    void flushHistoryQueue();
   }
 
   // Своё сообщение изменилось (правка/удаление, протокол v2 — без серверной

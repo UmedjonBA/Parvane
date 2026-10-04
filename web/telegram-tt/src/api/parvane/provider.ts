@@ -1174,9 +1174,10 @@ async function applyLinkedV2History(rows: WireStoredMessage[], owner: string, at
       waiting.push(stored);
     } else {
       // Входящие истории — прочитаны (иначе всё привезённое стало бы «новым»)
-      await syncController.applyExternal(stored.from === owner ? stored : { ...stored, read: true });
+      await syncController.applyExternal(stored.from === owner ? stored : { ...stored, read: true }, true);
     }
   }
+  await localState.flushHistoryNow();
   if (rows.length > waiting.length) {
     logDebug(`линковка: история v2 перенесена (${rows.length - waiting.length} сообщений)`);
   }
@@ -1342,6 +1343,12 @@ const methods = {
 
   fetchAvailableReactions() {
     return Promise.resolve(BUILTIN_REACTIONS);
+  },
+
+  // Рейтинга собеседников и ботов сервер не ведёт (ботов нет вовсе): tt просит его
+  // после синхронизации и на экране поиска — отвечаем «нет данных»
+  fetchTopPeers() {
+    return Promise.resolve(undefined);
   },
 
   async fetchChats({ archived }: { archived?: boolean }) {
