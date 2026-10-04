@@ -13,10 +13,14 @@ import assert from 'node:assert/strict';
 
 // Сценарий проверяет мультидевайс v1: общая основная ссылка-приглашение из
 // списка шарда (таблица group_invites), fan-out копий и SKDM, история,
-// нечитаемая без линковки. Клиенты идут по v1. Мультидевайс v2 (линковка,
-// журнал состояния, группы на привязанном устройстве) —
+// нечитаемая без линковки. Клиенты идут по v1. С PARVANE_E2E_PROTO=v2 (раннер
+// run_web_multidevice_v2_e2e.sh, T179) те же шаги идут по v2: второе устройство
+// привязывается (LINK-1 v2) и получает историю в экспорте линковки, ссылка
+// группы — запись журнала группы, одна на оба устройства; вместо таблицы шарда
+// сверяется список ссылок клиента. Журнал личного состояния v2 —
 // scripts/e2e_protocol_state_sync.mjs (пара state-sync)
-process.env.PARVANE_E2E_PROTO = 'v1';
+const IS_V2 = process.env.PARVANE_E2E_PROTO === 'v2';
+if (!IS_V2) process.env.PARVANE_E2E_PROTO = 'v1';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -26,8 +30,11 @@ import {
   relogin,
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  callProviderForChat,
   expectMediaFlowing,
   findMessage,
+  inviteAppUrl,
+  linkSecondDevice,
   openPrivateChat,
   preparePage,
   readInvitesScreen,
@@ -107,6 +114,7 @@ async function createGroup(page, memberName, title) {
 }
 
 function countInvitesCreatedBy(address) {
+  if (IS_V2) return undefined; // ссылки v2 — записи журнала группы, таблицы шарда нет
   const out = execFileSync('sqlite3', [
     join(BACKEND_DIR, 'messenger.db'),
     `SELECT count(*) FROM group_invites WHERE created_by = '${address.replace(/'/g, "''")}'`,
@@ -114,10 +122,13 @@ function countInvitesCreatedBy(address) {
   return Number(out.trim());
 }
 
+// Часть ссылки, по которой её сравнивают: v1 — токен, v2 — `/join/<link_id>#<секрет>`
 function inviteToken(url) {
-  const match = url.match(/#\+([0-9a-f]{32})/);
+  const match = IS_V2
+    ? url.match(/\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/)
+    : url.match(/#\+([0-9a-f]{32})/);
   assert(match, `no invite token in ${url}`);
-  return match[1];
+  return match[IS_V2 ? 0 : 1];
 }
 
 function membersCountLocator(page, count) {
@@ -225,8 +236,17 @@ try {
     0,
     'old sealed history must stay unreadable on a brand-new device',
   );
+  if (IS_V2) {
+    // v2: непривязанное устройство не получает ничего; после линковки (LINK-1 v2)
+    // история до неё приезжает в экспорте линковки
+    await linkSecondDevice(bobDevice1.page, bobDevice2.page);
+    await openPrivateChat(bobDevice2.page, alice);
+    await findMessage(bobDevice2.page, beforeSecondDevice).first()
+      .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
+  }
 
   // Отправитель обнаруживает новое устройство после истечения TTL кэша списка
+  // (v1 — список устройств контакта, v2 — журнал устройств собеседника, 15 с)
   await aliceSession.page.waitForTimeout(DEVICE_LIST_TTL_WAIT_MS);
 
   // ── Новое входящее приходит на ОБА устройства ──────────────────────────────
@@ -264,22 +284,28 @@ try {
   // ── Инвайт-ссылки: у группы ОДНА основная ссылка, общая для устройств ─────
   // spec 003: источник истины — список сервера (group.invite.list, is_primary),
   // поэтому второе устройство видит ту же ссылку и ничего не создаёт
+  // v1 — число записей в таблице шарда; v2 — число ссылок в списке клиента (журнал группы)
+  const assertSingleInvite = async (page, message) => {
+    if (!IS_V2) return assert.equal(countInvitesCreatedBy(bob), 1, message);
+    const listed = await callProviderForChat(page, 'fetchExportedChatInvites', inviteGroupTitle, undefined, { peer: '$chat' });
+    return assert.equal(listed.result?.invites?.length, 1, `${message}: ${JSON.stringify(listed)}`);
+  };
   const linkDevice1 = await readInvitesScreen(bobDevice1.page, inviteGroupTitle);
-  assert.equal(countInvitesCreatedBy(bob), 1, 'first device must hold exactly one invite');
+  await assertSingleInvite(bobDevice1.page, 'first device must hold exactly one invite');
   const linkDevice2 = await readInvitesScreen(bobDevice2.page, inviteGroupTitle);
-  assert.equal(countInvitesCreatedBy(bob), 1, 'second device must reuse the primary invite, not mint one');
+  await assertSingleInvite(bobDevice2.page, 'second device must reuse the primary invite, not mint one');
   assert.equal(inviteToken(linkDevice1), inviteToken(linkDevice2), 'devices must share the primary invite token');
   // Повторный заход на экран ссылку не меняет и новых не создаёт
   assert.equal(await readInvitesScreen(bobDevice1.page, inviteGroupTitle), linkDevice1,
     'first device link changed between visits');
   assert.equal(await readInvitesScreen(bobDevice2.page, inviteGroupTitle), linkDevice2,
     'second device link changed between visits');
-  assert.equal(countInvitesCreatedBy(bob), 1, 'repeat visits must not create new invites');
+  await assertSingleInvite(bobDevice1.page, 'repeat visits must not create new invites');
 
   // Ссылка рабочая с любого устройства: Чарли и Дейв входят через нативную
   // модалку приглашения (t.me/+hash-поведение)
-  const joinByLink = async (page, token) => {
-    await page.goto(`${baseUrl}#+${token}`, { waitUntil: 'domcontentloaded' });
+  const joinByLink = async (page, link) => {
+    await page.goto(inviteAppUrl(baseUrl, link), { waitUntil: 'domcontentloaded' });
     const modal = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: /join group/i }) }).first();
     await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
     await modal.getByRole('button', { name: /join group/i }).first().click();
@@ -287,9 +313,9 @@ try {
       .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
   };
   const charlieSession = await preparePage(charlieContext, charlie, PASSWORD);
-  await joinByLink(charlieSession.page, inviteToken(linkDevice2));
+  await joinByLink(charlieSession.page, linkDevice2);
   const daveSession = await preparePage(daveContext, dave, PASSWORD);
-  await joinByLink(daveSession.page, inviteToken(linkDevice1));
+  await joinByLink(daveSession.page, linkDevice1);
   // Оба устройства владельца видят вступивших (bob, alice, charlie, dave)
   await openGroupChat(bobDevice1.page, inviteGroupTitle);
   await membersCountLocator(bobDevice1.page, 4).waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
@@ -309,7 +335,7 @@ try {
   // …и своя ссылка устройства переживает рестарт, не плодя новых
   assert.equal(await readInvitesScreen(bobDevice2.page, inviteGroupTitle), linkDevice2,
     'second device link changed after restart');
-  assert.equal(countInvitesCreatedBy(bob), 1, 'restart must not create a new invite');
+  await assertSingleInvite(bobDevice2.page, 'restart must not create a new invite');
 
   // ── Групповой вызов звонит на ОБА устройства, входит только принявшее ──────
   // Снять звонок на остальных устройствах без нового сигнала протокола нельзя

@@ -619,8 +619,11 @@ try {
     await transitBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   }
   await transitBubble.locator('.media-inner').first().click();
+  // Клик по отброшенному файлу открывает просмотрщик либо (когда пузырь уже
+  // показывает кнопку загрузки) запускает повторную загрузку — в обоих случаях
+  // проверяется одно: в сеть за помеченным файлом клиент не ходит
   await sessions.eve.page.locator('.MediaViewer, #MediaViewer').first()
-    .waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+    .waitFor({ state: 'attached', timeout: 5000 }).catch(() => {});
   await sessions.eve.page.waitForTimeout(3000);
   await closeViewer(sessions.eve.page);
   assert.equal(await transitRequests(), transitRequestsBefore, 'file tampered in transit was requested again');
