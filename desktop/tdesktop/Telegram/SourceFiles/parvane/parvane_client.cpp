@@ -14734,15 +14734,29 @@ void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &p
 			// Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и
 			// ротации ключей, которые устройство держало. После v1-отзыва (он
 			// проверил пароль): сбой v2 устройство не возвращает.
+			auto journaled = false;
 			if (const auto s = V2Ready()) {
 				try {
 					if (s->revokeDevice(devStd)) {
+						journaled = true;
 						LOG(("Parvane: v2: устройство %1 отозвано в журнале устройств").arg(deviceId));
 					}
 				} catch (const std::exception &e) {
 					LOG(("Parvane: v2: отзыв устройства в журнале не выполнен: %1")
 						.arg(QString::fromUtf8(e.what())));
 				}
+			}
+			// Без соединения v1 (E6-1) отзыв — только запись журнала устройств: мост
+			// отвечает «ok» уже после проверки пароля. Записи нет (это устройство
+			// не привязано к журналу либо сервер её не принял) — отзыва не было.
+			auto v1Absent = false;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				v1Absent = V1AbsentLocked();
+			}
+			if (v1Absent && !journaled) {
+				LOG(("Parvane: устройство %1 не отозвано: без v1 нужна запись журнала устройств").arg(deviceId));
+				ok = false;
 			}
 		}
 		crl::on_main([done, ok] { done(ok); });
