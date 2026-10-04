@@ -1087,6 +1087,20 @@
       }
     },
     {
+      "id": "GROUP-4",
+      "title": "Группа v1 переводится в v2: запись генезиса несёт прежний group_id, чат в клиентах остаётся прежним",
+      "createField": "migrated_from",
+      "infoField": "migratedFrom",
+      "permissionsInGenesis": true,
+      "requires": "владелец; все участники на v2 и без v1-устройств",
+      "v1NoticeAppliedAfterMigration": false,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/store.ts (canonicalAddress, getIdForAddress, registerGroup), v2/controller.ts (migrateGroup), groups.ts (migrateToV2, applyNotice); scripts/e2e_protocol_group_migrate.mjs",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (migrateGroup, migratedGroup); tdesktop parvane_client.cpp (IdForAddress, CanonicalGroup, NoteV2GroupOrigin, MigrateGroupIfOwner); desktop/verify_protocol_v2_group_migrate.sh",
+        "android": "нет — T184 (Android после web и desktop): группа v2 с migrated_from приходит отдельным чатом"
+      }
+    },
+    {
       "id": "OP-SIG",
       "title": "Каноничная подпись операций v2",
       "signingBytes": "\"parvane/v2/op\" | u8(len) | domain | u8(len) | op_type | body",

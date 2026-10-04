@@ -377,6 +377,7 @@ export function createCallController(deps: CallDependencies) {
     groupEngine = new GroupCallEngine(deps.getStore().self, {
       sendSignal: sendGroupSignal,
       getPeerSigningKeys: fetchSigningKeys,
+      isSealedPeer: (peer) => deps.isV2Peer?.(peer) ?? Promise.resolve(false),
       getIceServers,
       getIceTransportPolicy,
       getRingTimeoutMs,

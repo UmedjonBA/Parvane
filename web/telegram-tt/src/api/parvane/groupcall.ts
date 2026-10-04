@@ -22,6 +22,9 @@ type GroupCallCallbacks = {
   // Контроллер сам добавляет gcall:-префикс к адресу получателя
   sendSignal: (peer: string, signal: WireCallSignal | WireGroupInvite) => void;
   getPeerSigningKeys: (peer: string) => Promise<string[]>;
+  // Участник на протоколе v2: попарные сигналы идут запечатанными конвертами,
+  // подпись SDP не нужна — оффер допустим и без v1-ключей подписи (сервер без v1)
+  isSealedPeer?: (peer: string) => Promise<boolean>;
   getIceServers: () => Promise<RTCIceServer[]>;
   getIceTransportPolicy: () => RTCIceTransportPolicy | undefined;
   // Сколько ждать соединения с участником, прежде чем закрыть его строку
@@ -74,7 +77,9 @@ class MeshPeerSession {
   async startOffer(media: CallMedia) {
     this.callId = crypto.randomUUID();
     try {
-      if (!await this.loadKey()) return this.fail();
+      if (!await this.loadKey() && !await this.cb.isSealedPeer?.(this.peer).catch(() => false)) {
+        return this.fail();
+      }
       const pc = await this.createPc(media);
       if (!pc) return undefined;
       const offer = await pc.createOffer();

@@ -7,6 +7,7 @@
 // вход в НЕподтверждённый аккаунт ведёт на экран Telegram с новым токеном;
 // вход под неизвестным ником — ошибка и «Create account» с заполненным ником.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
@@ -22,6 +23,22 @@ assert(SECRET && BOT, 'PARVANE_TELEGRAM_BOT/SECRET are required');
 
 // «Бот»: один запрос identity.telegram.confirm через gateway
 async function botConfirm(token, telegramId) {
+  // На сервере с отключённым v1 (PARVANE_E2E_V1_OFF, E6-1) JSON-соединения gateway
+  // нет — «бот» ходит в шину напрямую, как настоящий
+  if (process.env.PARVANE_E2E_V1_OFF === '1') {
+    const body = JSON.stringify({
+      secret: SECRET, token, telegram_id: telegramId, telegram_name: `tg${telegramId}`,
+    });
+    try {
+      const out = execFileSync('nats', [
+        '--server', process.env.PARVANE_E2E_NATS_URL, 'req', 'identity.telegram.confirm', body,
+        '--raw', '--timeout', '5s',
+      ]).toString();
+      return JSON.parse(out || '{}');
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
   const { gatewayUrl } = requireEnv();
   const ws = new WebSocket(gatewayUrl);
   await new Promise((resolve, reject) => {

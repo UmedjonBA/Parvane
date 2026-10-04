@@ -175,7 +175,11 @@ try {
   await sessionsScreen.getByText('Active sessions').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   await relogin(bobWeb.page, PASSWORD);
 
-  const syncError = await waitDesktopLog(desktopWorkdir, /sync ошибка: (.*)/, 120000, desktop, { after: logBeforeRevoke });
+  // Отзыв гасит JWT desktop: по v1 — «sync ошибка», по v2 (и без v1) — отказ
+  // соединения v2 и уход на экран входа
+  const syncError = await waitDesktopLog(
+    desktopWorkdir, /sync ошибка: (.*)|авторизация отклонена \((.*)\)/, 120000, desktop, { after: logBeforeRevoke },
+  );
   console.log(`[cross-features] desktop after revoke: ${syncError[0]}`);
 
   console.log('web cross-features e2e: OK');
