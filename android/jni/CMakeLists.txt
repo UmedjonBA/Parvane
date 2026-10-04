@@ -71,6 +71,8 @@ add_library(parvane_core STATIC
     ${CORE}/src/v2_content.cpp
     ${CORE}/src/v2_link.cpp
     ${CORE}/src/v2_legacy.cpp
+    ${CORE}/src/v2_control.cpp
+    ${CORE}/src/v2_bridge.cpp
     ${CORE}/src/v2_session.cpp)
 
 target_include_directories(parvane_core PUBLIC

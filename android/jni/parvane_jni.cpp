@@ -41,6 +41,7 @@
 #include <parvane/v2_content.h>
 #include <parvane/v2_engine.h>
 #include <parvane/v2_legacy.h>
+#include <parvane/v2_bridge.h>
 #include <parvane/v2_session.h>
 
 #include "jni_utf.h"
@@ -80,7 +81,7 @@ std::string g_gatewayUrl;
 std::string g_storeDir;
 std::string g_self;
 std::string g_token;
-std::unique_ptr<parvane::GatewayWsTransport> g_transport;
+std::unique_ptr<parvane::ITransport> g_transport; // при включённом v2 — мост (T134)
 std::unique_ptr<parvane::MessengerClient> g_messenger;
 std::thread g_pump;
 std::atomic<bool> g_running{false};
@@ -371,6 +372,7 @@ std::atomic<bool> g_presenceRunning{false};
 // P-18: presence по конкретным собеседникам. Под g_mu.
 std::set<std::string> g_presencePeers;      // адреса, чьё присутствие нужно
 std::set<std::string> g_presenceSubscribed; // уже подписаны в этой сессии
+std::shared_ptr<parvane::v2::Session> v2ReadyForSend();
 void subscribePresenceLocked(const std::string &peer) {
     if (!g_transport || peer.empty() || peer == g_self || g_presenceSubscribed.count(peer)) return;
     if (l2Active(peer)) return; // L2-1: в чате с усиленной приватностью присутствие не запрашиваем
@@ -384,6 +386,11 @@ void subscribePresenceLocked(const std::string &peer) {
             emit(json{{"type", "presence"}, {"from", j.value("from", "")}});
         }
     });
+    // Канал присутствия v2 этого собеседника (T134) — отдельным потоком: методы
+    // сессии ждут мьютекс движка, а мы под g_mu.
+    std::thread([peer] {
+        if (const auto s = v2ReadyForSend()) s->watchPeers({peer});
+    }).detach();
 }
 bool isGroupLocked(const std::string &address);
 // Собеседник появился (сообщение/чат) — подписка на его presence. Под g_mu.
@@ -498,13 +505,46 @@ bool upgradeBlocked() {
 }
 bool isUpgradeError(const std::string &what) { return what.find("upgrade_required") != std::string::npos; }
 
-// Одноразовый транспорт для bootstrap-запросов (issue/server.info) или с токеном.
-std::unique_ptr<parvane::GatewayWsTransport> makeTransport(const std::string &token) {
+bool v2Enabled();
+
+std::unique_ptr<parvane::ITransport> makeV1Transport(const std::string &token) {
     if (upgradeBlocked()) throw std::runtime_error("gateway: upgrade_required");
     auto t = std::make_unique<parvane::GatewayWsTransport>();
     t->connectUrl(g_gatewayUrl);
     if (!token.empty()) t->authenticate(token);
     return t;
+}
+
+// Одноразовый транспорт для bootstrap-запросов (issue/server.info) или с токеном.
+// T134: при включённом v2 — мост: вход, профили, устройства, линковка, превью и
+// свои/открытые файлы идут методами v2, соединение v1 нужно только переписке с
+// v1-собеседниками и может отсутствовать (сервер с PARVANE_V1_MODE=disabled).
+std::unique_ptr<parvane::ITransport> makeTransport(const std::string &token) {
+    if (!v2Enabled()) return makeV1Transport(token);
+    std::unique_ptr<parvane::ITransport> inner;
+    try {
+        inner = makeV1Transport(token);
+    } catch (const std::exception &e) {
+        if (!isUpgradeError(e.what()) && !parvane::GatewayTransport::upgradeRequired()) throw;
+        LOGI("соединения v1 нет (%s) — все запросы идут по v2", e.what());
+    }
+    parvane::v2::BridgeConfig cfg;
+    cfg.gatewayUrl = g_gatewayUrl;
+    cfg.token = token;
+    cfg.clientVersion = "android";
+    cfg.log = [](const std::string &line) { LOGI("%s", line.c_str()); };
+    return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg), std::move(inner));
+}
+
+// Соединения v1 нет (сервер его отключил): запросы переписки и групп v1 не шлём.
+bool v1Absent(parvane::ITransport *t) {
+    const auto *bridge = dynamic_cast<parvane::v2::BridgeTransport *>(t);
+    return bridge && !bridge->hasV1();
+}
+
+void closeTransport(parvane::ITransport *t) {
+    if (auto *bridge = dynamic_cast<parvane::v2::BridgeTransport *>(t)) t = bridge->inner();
+    if (auto *ws = dynamic_cast<parvane::GatewayWsTransport *>(t)) ws->close();
 }
 
 std::string serverDomain() {
@@ -921,6 +961,12 @@ bool handleV2SessionEvent(const json &ev) {
                   {"strangers_allowed", ev.value("strangersAllowed", true)}});
         return true;
     }
+    if (type == "presence") {
+        // «В сети» по эфемерному каналу v2 (T134): автора проверил движок
+        const auto from = ev.value("from", std::string());
+        if (ev.value("online", false) && !from.empty() && !l2Active(from)) emit(json{{"type", "presence"}, {"from", from}});
+        return true;
+    }
     if (type == "typing") {
         // «Печатает» по эфемерному каналу v2 (T127): автор и чат проверены движком
         const auto chat = ev.value("chat", std::string());
@@ -949,6 +995,20 @@ bool handleV2SessionEvent(const json &ev) {
             const bool ok = parvane::e2e::republishDevice(*g_transport, g_token);
             LOGI("v1-бандл устройства после привязки к журналу v2 — %s", ok ? "опубликован" : "не принят");
         }).detach();
+        return true;
+    }
+    if (type == "legacyV1") {
+        // Кадр инбокса v1, переложенный сервером в инбокс v2 (история v1 и живые кадры):
+        // без соединения v1 это единственный путь — подаём обработчикам инбокса (FR-053)
+        const auto frame = ev.value("json", std::string());
+        parvane::v2::BridgeTransport *bridge = nullptr;
+        std::string self;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            bridge = dynamic_cast<parvane::v2::BridgeTransport *>(g_transport.get());
+            self = g_self;
+        }
+        if (bridge && !bridge->hasV1() && !frame.empty() && !self.empty()) bridge->deliver(parvane::topics::msgInbox(self), frame);
         return true;
     }
     if (type == "needsLinking") {
@@ -1634,6 +1694,18 @@ void pumpLoop() {
     auto backoff = std::chrono::seconds(3);
     while (g_running) {
         try {
+            {
+                // T134: без соединения v1 синка v1 нет — всё приходит инбоксом v2
+                bool absent = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_mu);
+                    absent = v1Absent(g_transport.get());
+                }
+                if (absent) {
+                    std::this_thread::sleep_for(std::chrono::seconds(3));
+                    continue;
+                }
+            }
             parvane::MessengerClient::SyncAuth auth;
             auth.device_id = parvane::e2e::deviceId();
             auth.signing_key = parvane::e2e::signingKey();
@@ -1756,6 +1828,11 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
     parvane::GatewayWsTransport::setUpgradeHandler([](parvane::GatewayTransport::Upgrade u) {
         if (u == parvane::GatewayTransport::Upgrade::Required) {
             g_upgradeSeenMs = nowMs();
+            if (v2Enabled()) {
+                // T134: клиент на v2 без v1 работоспособен — «обновите приложение» не показываем
+                LOGI("gateway: v1 отключён сервером (upgrade_required) — работаем по v2");
+                return;
+            }
             LOGI("gateway: v1 отключён сервером (upgrade_required) — нужна новая версия приложения");
             emit(json{{"type", "upgrade_required"}});
         } else if (u == parvane::GatewayTransport::Upgrade::Available) {
@@ -2067,12 +2144,18 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
         if (!g_presenceRunning.exchange(true)) {
             std::thread([] {
                 while (g_presenceRunning) {
+                    bool allowed = false;
                     {
                         std::lock_guard<std::mutex> lk(g_mu);
+                        allowed = g_transport && !g_self.empty() && g_l2PresenceAllowed;
                         // L2-1: присутствие одно на аккаунт — не публикуем, пока режим активен хоть в одном чате
                         if (g_transport && !g_self.empty() && g_l2PresenceAllowed) {
                             try { g_transport->publish(parvane::topics::presence(std::to_string(idForAddress(g_self))), json{{"from", g_self}}.dump()); } catch (...) {}
                         }
+                    }
+                    // То же эфемерным каналом v2 (T134) — вне g_mu: без соединения v1 это единственный путь
+                    if (allowed) {
+                        if (const auto s = v2Ready()) s->sendPresence(true);
                     }
                     for (int i = 0; i < 300 && g_presenceRunning; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
@@ -2286,7 +2369,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
     const auto path = mediaDir() + "/" + fid;
     if (std::ifstream(path).good()) return env->NewStringUTF(path.c_str());
     try {
-        std::unique_ptr<parvane::GatewayWsTransport> own; // отдельный транспорт: не держим g_mu на долгой загрузке
+        std::unique_ptr<parvane::ITransport> own; // отдельный транспорт: не держим g_mu на долгой загрузке
         std::string self, token;
         { std::lock_guard<std::mutex> lk(g_mu); self = g_self; token = g_token; }
         if (self.empty()) throw std::runtime_error("нет сессии");
@@ -3159,7 +3242,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSessionExpired(JN
     std::lock_guard<std::mutex> lk(g_mu);
     g_running = false;
     g_messenger.reset();
-    if (g_transport) g_transport->close();
+    closeTransport(g_transport.get());
     g_transport.reset();
     g_self.clear();
     g_token.clear();
@@ -3173,7 +3256,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, 
     std::lock_guard<std::mutex> lk(g_mu);
     g_running = false;
     g_messenger.reset();
-    if (g_transport) g_transport->close();
+    closeTransport(g_transport.get());
     g_transport.reset();
     g_self.clear();
     g_token.clear();

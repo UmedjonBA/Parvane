@@ -46,6 +46,12 @@ class ProtocolV2SeamTest {
             val n = ParvaneProtocol.runConformanceVectors(suite, json)
             assertTrue("$suite: $n случаев", n > 2)
         }
+        // T136: наборы, которые раньше гонял только движок (журналы — один случай из нескольких шагов)
+        for ((suite, least) in listOf("codec/frames" to 20, "sign/ops" to 10, "device_log/alice" to 1, "group_log/group" to 1,
+                "content_guard/content" to 10, "legacy_v1/messages" to 40)) {
+            val n = ParvaneProtocol.runConformanceVectors(suite, File(vectors, "$suite.json").readText())
+            assertTrue("$suite: $n случаев", n >= least)
+        }
     }
 
     @Test

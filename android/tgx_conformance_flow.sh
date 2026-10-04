@@ -15,6 +15,10 @@
 #      → X: «сессия истекла → экран входа», journal.jsonl и e2e-* на месте, без крашей;
 #   5. реконнект: gateway_restart → «gateway переподключён» в ядре X, следующее
 #      сообщение доставлено (после повторного входа X сессией).
+# ВНИМАНИЕ (T135, 4 окт 2026): сценарий сверяет модель v1 (нотисы и id v1-группы / курсор v1-синка и
+# «переустановка» с новым device_id) — закреплён за v1 и идёт связкой после tgx_link_e2e НА v1:
+#   PV_PROTO=v1 TGX_PROTO_V1=1 ./tgx_link_e2e.sh && PV_PROTO=v1 TGX_PROTO_V1=1 ./<этот сценарий>
+# После линковки на v2 по умолчанию он краснеет не из-за продукта.
 set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/mnt/hdd/ub/android/sdk/platform-tools:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
