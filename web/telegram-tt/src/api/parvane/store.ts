@@ -43,6 +43,12 @@ export class ParvaneStore {
 
   private addressById = new Map<string, string>();
 
+  // Группа v1, переведённая в v2 (T180): прежний `group_id` → адрес группы v2.
+  // Чат в UI остаётся прежним (id считается от прежнего адреса), история v1 в нём
+  private migratedTo = new Map<string, string>();
+
+  private migratedFrom = new Map<string, string>();
+
   private kindByAddress = new Map<string, PeerKind>();
 
   private displayNameByAddress = new Map<string, string>();
@@ -88,12 +94,23 @@ export class ParvaneStore {
   // импорт lang-провайдера в этот слой тянет UI-модули
   getLangString?: (key: string) => string | undefined;
 
-  getIdForAddress(address: string, kind: PeerKind = 'user'): string {
+  // Адрес чата с учётом перевода группы из v1 в v2 (T180)
+  canonicalAddress(address: string) {
+    return this.migratedTo.get(address) ?? address;
+  }
+
+  isMigratedGroup(address: string) {
+    return this.migratedTo.has(address);
+  }
+
+  getIdForAddress(rawAddress: string, kind: PeerKind = 'user'): string {
+    const address = this.canonicalAddress(rawAddress);
     const existingKind = this.kindByAddress.get(address);
     const actualKind = existingKind || kind;
     if (!existingKind) this.kindByAddress.set(address, actualKind);
 
-    const raw = buildHashedId(actualKind === 'user' ? address : `group:${address}`);
+    const seed = this.migratedFrom.get(address) ?? address;
+    const raw = buildHashedId(actualKind === 'user' ? seed : `group:${seed}`);
     const id = actualKind === 'user' ? raw : `-${raw}`;
     const isNew = !this.addressById.has(id);
     this.addressById.set(id, address);
@@ -109,10 +126,22 @@ export class ParvaneStore {
   // нотис или список, догнавший более свежие сведения, не откатывает их.
   // Возвращает false, если пришедшая ревизия старее известной
   registerGroup(info: WireGroupInfo): boolean {
+    // Сведения v1 о группе, уже переведённой в v2, не применяются: её ведёт журнал v2
+    if (this.migratedTo.has(info.group_id)) return false;
     if (!shouldApplyGroupInfo(this.groupVersionByAddress.get(info.group_id), info.version)) {
       return false;
     }
-    this.kindByAddress.set(info.group_id, info.kind === 'channel' ? 'channel' : 'group');
+    const kind = info.kind === 'channel' ? 'channel' : 'group';
+    if (info.migrated_from && !this.migratedFrom.has(info.group_id)) {
+      this.migratedTo.set(info.migrated_from, info.group_id);
+      this.migratedFrom.set(info.group_id, info.migrated_from);
+      this.groupInfoByAddress.delete(info.migrated_from);
+      this.groupVersionByAddress.delete(info.migrated_from);
+      this.kindByAddress.set(info.group_id, kind);
+      // id чата теперь ведёт на адрес v2 (отправка, typing, сведения)
+      this.getIdForAddress(info.group_id, kind);
+    }
+    this.kindByAddress.set(info.group_id, kind);
     this.groupInfoByAddress.set(info.group_id, info);
     this.groupVersionByAddress.set(info.group_id, info.version ?? 0);
     this.displayNameByAddress.set(info.group_id, info.name);
@@ -124,11 +153,11 @@ export class ParvaneStore {
   }
 
   isGroupAddress(address: string) {
-    return this.groupInfoByAddress.has(address);
+    return this.groupInfoByAddress.has(this.canonicalAddress(address));
   }
 
   getGroupInfo(address: string) {
-    return this.groupInfoByAddress.get(address);
+    return this.groupInfoByAddress.get(this.canonicalAddress(address));
   }
 
   getGroupAddresses() {
@@ -197,7 +226,7 @@ export class ParvaneStore {
 
   // Куда (в какой чат) кладётся сообщение с точки зрения этого клиента
   resolveChatAddress(message: WireStoredMessage): string {
-    if (this.isGroupAddress(message.to)) return message.to;
+    if (this.isGroupAddress(message.to)) return this.canonicalAddress(message.to);
     if (message.from && message.from !== this.self) return message.from;
     return message.to;
   }

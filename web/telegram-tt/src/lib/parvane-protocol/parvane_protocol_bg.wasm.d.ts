@@ -47,7 +47,7 @@ export const pvclient_exportRootBackup: (a: number, b: number, c: number, d: num
 export const pvclient_forgetRoot: (a: number) => void;
 export const pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-export const pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+export const pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
 export const pvclient_groupForget: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupInfo: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupIngest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;

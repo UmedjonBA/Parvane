@@ -164,6 +164,8 @@ export type WireGroupInfo = {
   version?: number;
   // Только владельцу и админам с invite_users
   pending_requests?: number;
+  // Группа v2, переведённая из v1 (T180): прежний `group_id` — тот же чат в UI
+  migrated_from?: string;
 };
 
 // Инвайт-ссылка группы (group.invite.list / group.invite.create)

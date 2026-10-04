@@ -406,6 +406,7 @@ const callController = createCallController({
     isV2Enabled() ? v2Controller.trySendCall(to, signal, groupCallId) : Promise.resolve(false)
   ),
   hasLegacyDevices: (peer) => isV2Enabled() && v2Controller.legacyDevices(peer).size > 0,
+  isV2Peer: (peer) => (isV2Enabled() ? v2Controller.isV2Peer(peer).catch(() => false) : Promise.resolve(false)),
   recordV2Call: (record) => stateJournal.recordCall(record),
   log: logDebug,
 });
@@ -500,6 +501,15 @@ const v2Controller = createV2Controller({
     // Main может быть ещё не смонтирован — ключ ждёт, пока его заберут
     pendingRecoveryKey = recoveryKey;
     window.dispatchEvent(new CustomEvent('parvane-recovery-key'));
+  },
+  onAuthRejected: () => {
+    // При живом v1 протухший токен отвергает авторизация gateway, и вход идёт на
+    // экран пароля. Без v1 (E6-1) отказ приходит только отсюда: снимаем сохранённую
+    // сессию и перезагружаемся — запуск без токена спрашивает пароль (ключи и
+    // история остаются)
+    const self = store.self;
+    logDebug('v2: токен не принят сервером — нужен повторный вход');
+    void clearSecureSession(self).catch(() => undefined).then(() => window.location.reload());
   },
   onUpgradeRequired: () => {
     // Как и ключ восстановления — Main мог ещё не смонтироваться
@@ -2587,12 +2597,12 @@ const methods = {
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
   },
 
-  // P-07: выключение 2FA требует текущий пароль (один украденный JWT не должен
-  // снимать второй фактор). Если пароль не передан — берём сохранённый.
+  // P-07: смена настройки 2FA требует текущий пароль (один украденный JWT не
+  // должен снимать второй фактор; метод v2 без свежего пароля не включает и
+  // 2FA). P-39: только введённый пароль, сохранённого нет.
   async parvaneSetTwoFactor({ enabled, password }: { enabled: boolean; password?: string }) {
     if (!connection) return undefined;
-    const pw = !enabled ? password : undefined; // P-39: только введённый пароль
-    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled, password: pw }));
+    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token, enabled, password }));
     const response = JSON.parse(raw) as {
       ok: boolean; enabled?: boolean; telegram_linked?: boolean; error?: string; trust_secret?: string;
     };
