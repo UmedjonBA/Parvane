@@ -204,6 +204,21 @@ if rg -n 'Permissions Violation|authorization violation' "$TEMP_ROOT"/*.log; the
   exit 1
 fi
 
+# PARVANE_E2E_V1_OFF=1 — любой сценарий на сервере с отключённым v1 (E6-1, T178):
+# gateway отвечает на JSON-соединение `upgrade_required`; после сценария сверяется,
+# что по v1 не авторизовался никто
+if [[ "${PARVANE_E2E_V1_OFF:-0}" == "1" && "${PARVANE_E2E_GATEWAY_ENV:-}" != *PARVANE_V1_MODE=* ]]; then
+  PARVANE_E2E_GATEWAY_ENV="PARVANE_V1_MODE=disabled ${PARVANE_E2E_GATEWAY_ENV:-}"
+fi
+check_v1_unused() {
+  [[ "${PARVANE_E2E_V1_OFF:-0}" == "1" ]] || return 0
+  if grep -qa "gateway::session.*Клиент авторизован" "$TEMP_ROOT/gateway.log"; then
+    echo "E6-1: при отключённом v1 кто-то авторизовался по v1" >&2
+    return 1
+  fi
+  echo "OK: по соединению v1 не авторизовался никто (PARVANE_V1_MODE=disabled)"
+}
+
 log "Start gateway"
 env \
   PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \
@@ -236,10 +251,12 @@ if [[ -n "${PARVANE_E2E_EXTERNAL_BROWSER_SCRIPT:-}" ]]; then
   PARVANE_E2E_NATS_URL="nats://gateway:$GATEWAY_PASS@127.0.0.1:$NATS_PORT" \
   PARVANE_E2E_BACKEND_LOG_DIR="$TEMP_ROOT" \
   node "$PARVANE_E2E_EXTERNAL_BROWSER_SCRIPT"
+  check_v1_unused
 else
   log "Run browser e2e"
   cd "$WEB_ROOT"
   PARVANE_E2E_GATEWAY_URL="ws://127.0.0.1:$GATEWAY_WS_PORT" \
   PARVANE_E2E_WEB_PORT="$WEB_PORT" \
   npm run test:playwright:run -- "$@"
+  check_v1_unused
 fi

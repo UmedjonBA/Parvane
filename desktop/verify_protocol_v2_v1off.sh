@@ -2,8 +2,8 @@
 # Протокол v2 (spec 007, T134/T169, FR-056 — этап E6): сервер с ОТКЛЮЧЁННЫМ v1
 # (gateway PARVANE_V1_MODE=disabled). JSON-соединение v1 получает
 # `upgrade_required` и закрывается, поэтому всё, что клиент делает, идёт
-# методами v2: регистрация и вход, профиль, сообщение, файл, линковка второго
-# устройства, список устройств. Клиент при этом НЕ показывает «обновите
+# методами v2: регистрация и вход, профиль, сообщение, файл, группа v2 и её фото,
+# звонок, линковка второго устройства, список устройств. Клиент при этом НЕ показывает «обновите
 # приложение» — он работоспособен.
 # Бинарь tdesktop — с -DPARVANE_DEV=ON (хуки PARVANE_AUTO*).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
@@ -49,6 +49,42 @@ P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOSENDFI
 wait_log "$L1" "Parvane: медиа отправлено" 90 && ok "alice отправила файл" || bad "alice не отправила файл"
 wait_log "$BL" "получено медиа alice@local: .* \(70000 байт\)" 60 && ok "bob получил и расшифровал файл (70000 байт)" \
   || bad "bob не получил файл"
+
+# ── группа v2 и её фото: сведения — журналом группы, фото — открытым блобом ───
+G="Без-v1-$S"
+PNG="$SB/group.png"
+python3 - "$PNG" <<'PYEOF'
+import struct, sys, zlib
+w = h = 64
+raw = b''.join(b'\x00' + bytes([42, 171, 238]) * w for _ in range(h))
+def chunk(t, d):
+    return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d))
+open(sys.argv[1], 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+    + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+PYEOF
+stop_pid "$P1"
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOGROUP=$G:bob@local" \
+  "PARVANE_AUTOGROUPSEND=$G:группа-без-v1-$S")
+wait_log "$L1" "группа v2 '$G' создана: v2g:[0-9a-f]{32}" 60 && ok "alice создала группу v2" || bad "группа v2 не создана"
+GID=$(grep -oE "группа v2 '$G' создана: v2g:[0-9a-f]{32}" "$L1" | grep -oE 'v2g:[0-9a-f]{32}' | head -1)
+wait_log "$BL" "v2: группа $GID появилась" 60 && ok "bob: группа из журнала ($GID)" || bad "bob: группа v2 не появилась"
+wait_log "$BL" "групповое [0-9a-f-]+ в $GID от alice@local: группа-без-v1-$S" 60 && ok "bob прочитал групповое alice" \
+  || bad "bob не прочитал групповое"
+stop_pid "$P1"
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOGROUPINFO=$G:avatar=$PNG")
+wait_log "$L1" "AUTOGROUPINFO '$G' avatar → ok" 60 && ok "alice поставила фото группы (открытый блоб по v2)" \
+  || bad "фото группы не принято"
+wait_log "$BL" "группа $GID обновлена .* avatar=[0-9a-f-]{36}" 60 && ok "bob получил фото группы" \
+  || bad "фото группы не дошло до bob"
+
+# ── звонок: сигналы запечатанными конвертами, шард call по v1 не участвует ────
+stop_pid "$PB"; stop_pid "$P1"
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOACCEPT=1)
+sleep 8
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOCALL=bob@local")
+wait_log "$BL" "ВХОДЯЩИЙ звонок от alice@local" 60 && ok "bob получил входящий звонок" || bad "bob не получил звонок"
+wait_log "$L1" "звонок → Active" 40 && ok "alice: звонок соединён" || bad "alice не дошла до Active"
+wait_log "$BL" "звонок → Active" 40 && ok "bob: звонок соединён" || bad "bob не дошёл до Active"
 
 # ── второе устройство: линковка методами v2 ──────────────────────────────────
 P2=$(start_client "$A2" alice@local PARVANE_AUTOLINK_GRANT=1)

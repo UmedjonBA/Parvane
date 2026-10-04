@@ -2,8 +2,10 @@
 // (gateway PARVANE_V1_MODE=disabled). JSON-соединение v1 получает
 // `upgrade_required` и закрывается, поэтому всё, что делает клиент, идёт
 // методами v2: регистрация и вход, поиск собеседника, профиль, текст и фото в
-// обе стороны, возобновление сессии после перезагрузки. Клиент при этом НЕ
-// показывает «обновите приложение» — он работоспособен.
+// обе стороны, возобновление сессии после перезагрузки, превью ссылки (шард
+// preview), звонок (ICE-серверы и запечатанные сигналы), группа v2 и её фото
+// (открытый блоб). Клиент при этом НЕ показывает «обновите приложение» — он
+// работоспособен.
 // Запуск: scripts/run_protocol_mixed_e2e.sh v1-off
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -13,11 +15,16 @@ import zlib from 'node:zlib';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  closeRightColumn,
+  createGroupViaUi,
   dismissRecoveryKeyDialog,
   dumpDiagJournal,
+  expectMediaFlowing,
   findMessage,
   findMessageContainer,
   LOGIN_TIMEOUT_MS,
+  openGroupChatByTitle,
+  openGroupManagement,
   openPrivateChatStrict,
   preparePage,
   reloadPage,
@@ -81,9 +88,45 @@ async function attachFile(page, menuItemName, file, caption) {
   await captionInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
-const browser = await chromium.launch();
-const aliceContext = await browser.newContext();
-const bobContext = await browser.newContext();
+// Композер открытого чата (после создания группы в DOM два чата — переход)
+async function sendInActiveChat(page, text) {
+  const composer = page.locator('.Transition_slide-active #editable-message-text').last();
+  await composer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await composer.fill(text);
+  await composer.press('Enter');
+}
+
+// Фото группы — открытый блоб (без capability): в v2 его кладёт и отдаёт
+// метод v2, грантов v1 нет
+async function setGroupPhoto(page, title, file) {
+  const right = await openGroupManagement(page, title);
+  const input = right.locator('.AvatarEditable input[type="file"]');
+  await input.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+  await input.setInputFiles(file);
+  const cropDialog = page.locator('.Modal.CropModal .modal-dialog');
+  await cropDialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await cropDialog.locator('button').last().click();
+  await cropDialog.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await right.getByRole('button', { name: 'Save', exact: true }).last().click();
+  await page.waitForFunction(() => {
+    const fab = document.querySelector('#RightColumn .FloatingActionButton');
+    return !fab || !fab.classList.contains('revealed');
+  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+  await closeRightColumn(page);
+}
+
+const browser = await chromium.launch({
+  args: [
+    '--use-fake-ui-for-media-stream',
+    '--use-fake-device-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
+    // Звонок между двумя вкладками: без флага Chromium с выданным mic-разрешением
+    // фильтрует loopback-кандидаты
+    '--allow-loopback-in-peer-connection',
+  ],
+});
+const aliceContext = await browser.newContext({ permissions: ['microphone'] });
+const bobContext = await browser.newContext({ permissions: ['microphone'] });
 const logs = { alice: [], bob: [] };
 const consoleTail = { alice: [], bob: [] };
 // Кадры, ушедшие JSON-соединением v1 (op + subject): при отключённом v1 клиент
@@ -167,6 +210,54 @@ try {
   const afterReload = `off-after-reload-${suffix}`;
   await sendText(bobSession.page, afterReload);
   await findMessage(aliceSession.page, afterReload).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // Превью ссылки: запрос к шарду preview идёт методом v2 (машине нужен
+  // интернет). Первое сообщение прогревает кэш шарда, как в content_ux
+  await sendText(aliceSession.page, 'warm https://example.com first');
+  await aliceSession.page.waitForTimeout(3000);
+  await sendText(aliceSession.page, 'see https://example.com now');
+  const bobWebPage = bobSession.page.locator('.Transition_slide-active > .MessageList .Message .WebPage').last();
+  await bobWebPage.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.match(await bobWebPage.locator('.site-name').innerText(), /example\.com/, 'превью ссылки без имени сайта');
+
+  // Звонок: ICE-серверы — методом v2, сигналы — запечатанными конвертами;
+  // соединяется, звук идёт в обе стороны, SAS совпадает
+  await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+  await bobSession.page.getByText('is calling you...', { exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.getByRole('button', { name: 'Accept' }).click();
+  const aliceSas = aliceSession.page.locator('[title*="fully secure"]');
+  const bobSas = bobSession.page.locator('[title*="fully secure"]');
+  await aliceSas.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSas.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectMediaFlowing(aliceSession.page, { audio: true });
+  await expectMediaFlowing(bobSession.page, { audio: true });
+  assert.equal((await aliceSas.innerText()).trim(), (await bobSas.innerText()).trim(), 'SAS звонка не совпал');
+  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  for (const session of [aliceSession, bobSession]) {
+    await session.page.getByRole('button', { name: 'End Call' })
+      .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  }
+
+  // Группа v2: создание, сообщения в обе стороны, фото группы
+  const title = `Off-${suffix.slice(-6)}`;
+  await createGroupViaUi(aliceSession.page, title, [bob.split('@')[0]]);
+  await waitLog('alice', 'v2: группа создана');
+  await openGroupChatByTitle(bobSession.page, title);
+  await openGroupChatByTitle(aliceSession.page, title);
+  const groupHello = `off-group-${suffix}`;
+  await sendText(aliceSession.page, groupHello);
+  await findMessage(bobSession.page, groupHello).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const groupAnswer = `off-group-answer-${suffix}`;
+  await sendInActiveChat(bobSession.page, groupAnswer);
+  await findMessage(aliceSession.page, groupAnswer).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await setGroupPhoto(aliceSession.page, title, {
+    name: 'group.png', mimeType: 'image/png', buffer: makeSolidPng(96, [200, 80, 40]),
+  });
+  await bobSession.page.waitForFunction(() => {
+    const img = document.querySelector('.MiddleHeader .ChatInfo .Avatar img');
+    return Boolean(img && img.getAttribute('src'));
+  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
 
   // По проводу v1 не ушло ничего, кроме попытки авторизации
   for (const who of ['alice', 'bob']) {

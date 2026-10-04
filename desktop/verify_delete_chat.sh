@@ -30,8 +30,14 @@ wait_log "$A/td/log.txt" "очистка чата bob@local — скрыто [0-
 N=$(grep -oE "скрыто [0-9]+" "$A/td/log.txt" | tail -1 | grep -oE "[0-9]+"); [ "${N:-0}" -ge 2 ] && ok "скрыты оба сообщения (N=$N)" || bad "скрыто меньше двух (N=$N)"
 # Адреса в логах info+ после ревью безопасности не пишутся — сверяем по БД
 hidden_rows() { sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM hidden_messages WHERE user='alice@local'" 2>/dev/null || echo 0; }
-for _ in $(seq 1 20); do [ "$(hidden_rows)" -gt 0 ] 2>/dev/null && break; sleep 1; done
-[ "$(hidden_rows)" -gt 0 ] 2>/dev/null && ok "messenger: скрыл для alice" || bad "messenger не получил msg.chat.clear"
+if v1_off; then
+  # без v1 (E6-1) таблицы скрытых v1-шарда нет: граница очистки живёт в журнале
+  # личного состояния (T145), исход проверяет рестарт ниже
+  ok "без v1: очистка чата — границей в журнале личного состояния"
+else
+  for _ in $(seq 1 20); do [ "$(hidden_rows)" -gt 0 ] 2>/dev/null && break; sleep 1; done
+  [ "$(hidden_rows)" -gt 0 ] 2>/dev/null && ok "messenger: скрыл для alice" || bad "messenger не получил msg.chat.clear"
+fi
 sleep 2; stop_pid "$AP"
 # рестарт alice: ничего из диалога bob не должно вернуться
 AP=$(start_client "$A" alice@local)

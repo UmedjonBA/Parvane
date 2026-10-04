@@ -8,6 +8,9 @@
 // браузер (другое устройство) — подтверждение; выключение 2FA требует текущий
 // пароль (P-07), после него — обычный вход.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
@@ -23,7 +26,25 @@ assert(SECRET && BOT, 'PARVANE_TELEGRAM_BOT/SECRET are required');
 const TG_OWNER = 2001;
 const TG_STRANGER = 2002;
 
+// На сервере с отключённым v1 (`run_web_telegram_2fa_v1off_e2e.sh`, E6-1) JSON-
+// соединения gateway нет — «бот» ходит в шину напрямую, как настоящий
+const V1_OFF = process.env.PARVANE_E2E_V1_OFF === '1';
+
 async function botConfirm(token, telegramId) {
+  if (V1_OFF) {
+    const payload = JSON.stringify({
+      secret: SECRET, token, telegram_id: telegramId, telegram_name: `tg${telegramId}`,
+    });
+    try {
+      const out = execFileSync('nats', [
+        '--server', process.env.PARVANE_E2E_NATS_URL, 'req', 'identity.telegram.confirm', payload,
+        '--raw', '--timeout', '5s',
+      ]).toString();
+      return JSON.parse(out || '{}');
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
   const { gatewayUrl } = requireEnv();
   const ws = new WebSocket(gatewayUrl);
   await new Promise((resolve, reject) => {
@@ -181,7 +202,20 @@ async function enableTwoFactor(page) {
   await page.waitForFunction((el) => el && !el.disabled, await toggle.elementHandle(), { timeout: LOGIN_TIMEOUT_MS });
   if (!(await toggle.isChecked())) {
     await toggle.click({ force: true });
+    // включение тоже спрашивает текущий пароль (метод v2 без свежего пароля
+    // 2FA не включает — иначе без соединения v1 настройка недоступна)
+    const confirmButton = page.getByRole('button', { name: 'Enable two-factor', exact: true });
+    const passwordInput = page.locator('.settings-item').filter({ has: confirmButton }).locator('input[type="password"]');
+    await passwordInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
+      timeout: LOGIN_TIMEOUT_MS,
+    });
+    assert.equal(await serverTwoFactor(page), false, '2FA включился без ввода пароля');
+    await passwordInput.fill(PASSWORD);
+    await confirmButton.click();
+    await confirmButton.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
     await waitToggle(page, toggle, true);
+    assert.equal(await serverTwoFactor(page), true, '2FA не включился с верным паролем');
   }
 }
 
@@ -316,6 +350,12 @@ try {
   console.log('OK: после выключения 2FA обычный вход');
 
   assertNoPageErrors({ one: s1, two: s2, three: s3 });
+  if (V1_OFF) {
+    const gatewayLog = readFileSync(join(process.env.PARVANE_E2E_BACKEND_LOG_DIR, 'gateway.log'), 'utf8');
+    assert.match(gatewayLog, /v1-путь в режиме Disabled/, 'gateway не в режиме disabled');
+    assert.doesNotMatch(gatewayLog, /gateway::session.*Клиент авторизован/, 'кто-то авторизовался по v1');
+    console.log('OK: включение, вход и выключение 2FA — без соединения v1');
+  }
   console.log('OK: двухфакторный вход через Telegram');
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR;

@@ -22,8 +22,11 @@
 #   unknown-kinds — Rust-инжектор v2 (tests/v2_inject.rs, фича test-inject)
 #                 шлёт web v2 10 записей неизвестного вида + текст (T041);
 #   state-sync-desktop — личное состояние web → desktop одного аккаунта (T139)
+#   group-migrate — группа, созданная по v1, после перехода участников на v2
+#                 переводится владельцем в v2; чат и история остаются прежними (T180);
 #   v1-off      — сервер с отключённым v1 (PARVANE_V1_MODE=disabled): регистрация,
-#                 вход, поиск, текст и фото, перезагрузка — всё методами v2 (T134)
+#                 вход, поиск, текст и фото, перезагрузка, превью ссылки, звонок,
+#                 группа v2 и её фото — всё методами v2 (T134)
 #   web2-desktop2 — web v2 с desktop v2 (PARVANE_PROTO_V2=1; нужен бинарь
 #                 desktop/build-probe/bin/Telegram с -DPARVANE_DEV=ON);
 #   web2-desktop1 — web v2 с desktop v1;
@@ -56,6 +59,7 @@ case "$PAIR" in
   recovery) SCRIPT="$ROOT/scripts/e2e_protocol_recovery.mjs" ;;
   state-sync) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync.mjs" ;;
   state-sync-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync_desktop.mjs" ;;
+  group-migrate) SCRIPT="$ROOT/scripts/e2e_protocol_group_migrate.mjs" ;;
   v1-off)
     SCRIPT="$ROOT/scripts/e2e_protocol_v1_off.mjs"
     # T134: gateway отвечает на JSON-соединение v1 `upgrade_required` и закрывает его
