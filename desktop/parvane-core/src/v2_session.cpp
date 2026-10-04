@@ -404,6 +404,7 @@ bool Session::connectLocked(std::string *error) {
                             call(ack.anon, ack.method, ack.body);
                         } catch (const std::exception &) {
                         }
+                        reciprocateKeysLocked(); // T185: запись могла принести ключ участника группы
                     }
                     flush();
                 });
@@ -895,18 +896,87 @@ std::vector<std::pair<std::string, std::int64_t>> Session::readers(const std::st
     return out;
 }
 
+// Участники моих групп v2 (кроме меня).
+std::set<std::string> Session::coMembersLocked() {
+    std::set<std::string> out;
+    if (!client_) return out;
+    for (const auto &hex : client_->groupList()) {
+        const auto g = client_->groupInfo(hex);
+        if (!g || g->value("deleted", false) || !g->contains("members")) continue;
+        bool mine = false;
+        for (const auto &m : (*g)["members"]) mine = mine || m.value("user", std::string()) == cfg_.self;
+        if (!mine) continue;
+        for (const auto &m : (*g)["members"]) {
+            const auto user = m.value("user", std::string());
+            if (!user.empty() && user != cfg_.self) out.insert(user);
+        }
+    }
+    return out;
+}
+
+// Групповой звонок участнику, с которым не было переписки (T185): сигнал звонка
+// сервер принимает только по ключу доступа адресата. Раздаём свой ключ (обычным
+// сообщением — по жетону) и ждём встречный: клиент участника общей группы
+// отвечает своим сам (`reciprocateKeysLocked`). Без v1 иначе он не зазвонит.
+bool Session::acquirePeerKey(const std::string &peer) {
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_) return false;
+        if (client_->hasPeerDeliveryKey(peer)) return true;
+        if (!coMembersLocked().count(peer)) return false;
+        try {
+            runRequestsLocked(withNeedsLocked([&] { return client_->shareDeliveryKey(peer); }));
+            persistLocked();
+        } catch (const std::exception &e) {
+            log(std::string("ключ доступа участнику звонка не роздан: ") + e.what());
+            return false;
+        }
+    }
+    // Ждём без мьютекса движка: встречный ключ приносит запись инбокса
+    for (int i = 0; i < 27 && !stopping_; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (client_ && client_->hasPeerDeliveryKey(peer)) return true;
+    }
+    log("встречный ключ доступа участника звонка не пришёл");
+    return false;
+}
+
+// Участник общей группы прислал свой ключ доступа (собирается звонить) — отвечаем
+// своим: жетона это не стоит (его ключ у нас уже есть), делается один раз.
+void Session::reciprocateKeysLocked() {
+    if (!ready_ || !client_) return;
+    bool shared = false;
+    for (const auto &member : coMembersLocked()) {
+        if (reciprocated_.count(member) || !client_->hasPeerDeliveryKey(member)) continue;
+        reciprocated_.insert(member);
+        try {
+            const auto requests = withNeedsLocked([&] { return client_->shareDeliveryKey(member); });
+            if (requests.is_array() && requests.empty()) continue;
+            runRequestsLocked(requests);
+            shared = true;
+        } catch (const std::exception &e) {
+            log(std::string("встречная раздача ключа доступа: ") + e.what());
+        }
+    }
+    if (shared) persistLocked();
+}
+
 bool Session::sendCallSignal(const std::string &peer, const json &signal, const std::string &groupCallId,
                              std::string *error) {
     if (error) error->clear();
     if (isGroupAddress(peer) || !isV2Peer(peer)) return false;
     const bool group = !groupCallId.empty() || signal.value("type", std::string()) == "group_invite";
+    // Участнику группового звонка без известного ключа доступа — сперва обмен
+    // ключами (T185); не вышло — прежним путём (v1-инбокс, пока v1 жив)
+    if (group && !acquirePeerKey(peer)) return false;
     const auto v2Signal = callSignalToV2(signal, groupCallId);
     if (!v2Signal) {
         if (group) return false;
         log("сигнал звонка по v2 не выражается — не отправлен (D-13)");
         return true;
     }
-    try {
+    for (int attempt = 0;; ++attempt) try {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
         // Сигнал звонка сервер принимает только по ключу доступа адресата:
@@ -914,7 +984,13 @@ bool Session::sendCallSignal(const std::string &peer, const json &signal, const 
         if (group && !client_->hasPeerDeliveryKey(peer)) return false;
         runDirectLocked(peer, [&] { return client_->prepareCall(peer, *v2Signal); });
         persistLocked();
+        break;
     } catch (const std::exception &e) {
+        // Лимит частоты gateway — не повод терять сигнал: пауза (без мьютекса) и повтор
+        if (attempt < 4 && std::string(e.what()).find("RATE_LIMITED") != std::string::npos) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(700 * (attempt + 1)));
+            continue;
+        }
         log(std::string("сигнал звонка не отправлен: ") + e.what());
         // Личный звонок по v1 не понижается (D-13); групповой — идёт v1-инбоксом
         if (group) return false;
@@ -923,6 +999,7 @@ bool Session::sendCallSignal(const std::string &peer, const json &signal, const 
             *error = (what.find("orbidden") != std::string::npos || what.find("FORBIDDEN") != std::string::npos)
                 ? "forbidden" : "failed";
         }
+        break;
     }
     return true;
 }

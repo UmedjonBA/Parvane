@@ -227,6 +227,9 @@ const DEFAULT_GROUP_PERMISSIONS: WireDefaultPermissions = {
 };
 // Смена эпохи — не чаще раза в 10 с (R8): повтор после отказа по частоте
 const EPOCH_RETRY_MS = 11000;
+// T185: сколько ждать встречный ключ доступа участника группового звонка
+const CALL_KEY_WAIT_MS = 8000;
+const CALL_KEY_POLL_MS = 300;
 const EPOCH_RETRY_ATTEMPTS = 6;
 // Запас слепых жетонов перед раздачей ключей группы незнакомым участникам
 const TOKEN_RESERVE = 2;
@@ -613,6 +616,7 @@ export function createV2Controller(deps: Deps) {
 
   async function openRecord(bytes: Uint8Array) {
     if (!client) return;
+    scheduleReciprocate(); // T185: запись могла принести ключ доступа участника группы
     let events: EngineEvent[] = [];
     for (let i = 0; i < 6; i++) {
       try {
@@ -1287,6 +1291,72 @@ export function createV2Controller(deps: Deps) {
 
   /** Сигнал личного звонка v2-собеседнику (D-08): запечатанным конвертом по
    * анонимному каналу, сервер не видит ни сторон, ни SDP. false — не v2 (идти по v1). */
+  // Групповой звонок участнику, с которым не было переписки (T185): сигнал звонка
+  // сервер принимает только по ключу доступа адресата. Раздаём свой ключ (обычным
+  // сообщением — по жетону) и ждём встречный: клиент участника общей группы
+  // отвечает своим ключом сам (`reciprocateKeys`). Без v1 иначе он не зазвонит.
+  async function acquirePeerKey(peer: string): Promise<boolean> {
+    if (!client || !ready || !coMembers().has(peer)) return false;
+    try {
+      await serial(async () => {
+        await run(await withNeeds(() => client!.shareDeliveryKey(peer) as OutReq[]));
+        await persist();
+      });
+    } catch (e) {
+      deps.log(`v2: ключ доступа участнику звонка не роздан: ${String(e)}`);
+      return false;
+    }
+    const deadline = Date.now() + CALL_KEY_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (client?.hasPeerDeliveryKey(peer)) return true;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, CALL_KEY_POLL_MS);
+      });
+    }
+    deps.log('v2: встречный ключ доступа участника звонка не пришёл');
+    return Boolean(client?.hasPeerDeliveryKey(peer));
+  }
+
+  // Участники моих групп v2 (кроме меня)
+  function coMembers(): Set<string> {
+    const self = deps.getSelf();
+    const out = new Set<string>();
+    client?.groupList().forEach((hex) => {
+      const g = readGroup(hex);
+      if (!g || g.deleted || !g.members.some(({ user }) => user === self)) return;
+      g.members.filter(({ user }) => user !== self).forEach(({ user }) => out.add(user));
+    });
+    return out;
+  }
+
+  // Участник общей группы прислал свой ключ доступа (собирается звонить) — отвечаем
+  // своим: это не стоит жетона (у нас уже есть его ключ) и делается один раз
+  const reciprocated = new Set<string>();
+  let isReciprocateQueued = false;
+
+  function scheduleReciprocate() {
+    if (isReciprocateQueued || !ready) return;
+    isReciprocateQueued = true;
+    setTimeout(() => {
+      isReciprocateQueued = false;
+      void serial(reciprocateKeys).catch((e: unknown) => deps.log(`v2: встречная раздача ключа: ${String(e)}`));
+    }, 0);
+  }
+
+  async function reciprocateKeys() {
+    if (!client || !ready) return;
+    let isShared = false;
+    for (const member of coMembers()) {
+      if (reciprocated.has(member) || !client.hasPeerDeliveryKey(member)) continue;
+      reciprocated.add(member);
+      const requests = await withNeeds(() => client!.shareDeliveryKey(member) as OutReq[]);
+      if (!requests.length) continue;
+      await run(requests);
+      isShared = true;
+    }
+    if (isShared) await persist();
+  }
+
   async function trySendCall(
     to: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string,
   ): Promise<boolean> {
@@ -1296,7 +1366,7 @@ export function createV2Controller(deps: Deps) {
     // звонков слепые жетоны); остальным — прежним путём. Личный звонок по v1 не
     // понижается (D-13)
     const isGroup = signal.type === 'group_invite' || groupCallId !== undefined;
-    if (isGroup && !client?.hasPeerDeliveryKey(to)) return false;
+    if (isGroup && !client?.hasPeerDeliveryKey(to) && !(await acquirePeerKey(to))) return false;
     const v2Signal = callSignalToV2(signal, groupCallId);
     // Собеседник на v2, а сигнал по v2 не выразить — по v1 не понижаем (D-13)
     if (!v2Signal) throw new V2Error('ERROR_CODE_INVALID');

@@ -52,6 +52,9 @@ type CallDependencies = {
 // Даём runFullSync занять младшие message id, чтобы старые звонки не падали
 // в самый низ чата
 const INITIAL_HISTORY_DELAY_MS = 3000;
+// Повторы сигнала звонка по v2 при отказе gateway по частоте
+const V2_SIGNAL_RETRIES = 4;
+const V2_SIGNAL_RETRY_MS = 700;
 // Терминальный статус пишется шардом по hangup/reject — даём ему долететь
 const POST_CALL_HISTORY_DELAY_MS = 1500;
 // Обновляем TURN-креды заранее, до истечения срока
@@ -425,7 +428,7 @@ export function createCallController(deps: CallDependencies) {
   function sendDirectSignal(to: string, signal: WireCallSignal) {
     signalQueue = signalQueue.then(async () => {
       try {
-        if (await deps.sendV2Signal?.(to, signal)) {
+        if (await sendV2WithRetry(to, signal)) {
           if (signal.type === 'invite') trackV2Call(signal.call_id, to, true, signal.media);
           // LEGACY-1: v1-устройствам собеседника — тот же сигнал v1-путём (его
           // v2-устройства повтор с тем же call_id отбрасывают)
@@ -467,6 +470,21 @@ export function createCallController(deps: CallDependencies) {
   const meshGroupByCall = new Map<string, string>();
   const MESH_CALL_MEMORY = 256;
 
+  // Лимит частоты gateway на канале v2 — не повод терять сигнал (и тем более уходить
+  // на v1, которого может не быть): короткая пауза и повтор
+  async function sendV2WithRetry(peer: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await deps.sendV2Signal?.(peer, signal, groupCallId);
+      } catch (error) {
+        if (attempt >= V2_SIGNAL_RETRIES || !String(error).includes('RATE_LIMITED')) throw error;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, V2_SIGNAL_RETRY_MS * (attempt + 1));
+        });
+      }
+    }
+  }
+
   function sendGroupSignal(peer: string, signal: WireCallSignal | WireGroupInvite) {
     const groupCallId = signal.type === 'group_invite' ? undefined : (
       groupEngine?.currentGroupCallId || pendingGroupInvite?.groupCallId || meshGroupByCall.get(signal.call_id)
@@ -474,7 +492,7 @@ export function createCallController(deps: CallDependencies) {
     const queue = (groupSignalQueues.get(peer) || Promise.resolve()).then(async () => {
       try {
         if ((signal.type === 'group_invite' || groupCallId)
-          && await deps.sendV2Signal?.(peer, signal, groupCallId)) return;
+          && await sendV2WithRetry(peer, signal, groupCallId)) return;
       } catch (error) {
         // По v2 не ушло — прежним путём: стороны звонка серверу видны, как и у
         // участников на v1 (сами SDP подписаны в обоих случаях)
