@@ -210,7 +210,8 @@ export function createCallController(deps: CallDependencies) {
 
   async function syncHistory() {
     const connection = deps.getConnection();
-    if (!connection) return;
+    // Журнал v1-звонков ведёт шард call; без v1 записи о звонках — только из журнала состояния v2
+    if (!connection || connection.hasV1 === false) return;
     const store = deps.getStore();
     let records: WireCallRecord[];
     try {

@@ -94,13 +94,20 @@ const ChatResults: FC<OwnProps & StateProps> = ({
 }) => {
   const {
     openChat, addRecentlyFoundChatId, searchMessagesGlobal,
-    setGlobalSearchChatId, loadChannelRecommendations,
+    setGlobalSearchChatId, loadChannelRecommendations, loadContactList,
   } = getActions();
 
   const containerRef = useRef<HTMLDivElement>();
   const chatSelectionRef = useRef<HTMLDivElement>();
 
   const lang = useLang();
+
+  // Parvane: без списка контактов `withGlobal` ниже не отдаёт результатов вовсе, а
+  // запрашивается он один раз при старте — после сорвавшегося запроса поиск
+  // оставался пустым до перезагрузки
+  useEffect(() => {
+    if (!contactIds) loadContactList();
+  }, [contactIds]);
 
   const { isMobile } = useAppLayout();
   const [shouldShowMoreLocal, setShouldShowMoreLocal] = useState<boolean>(false);

@@ -57,6 +57,9 @@ type ConnectionDependencies = {
   v2?: {
     ephemeralAllowed: (address: string) => boolean;
     presenceAllowed: () => boolean;
+    // Присутствие эфемерным каналом v2 (T134): без соединения v1 — единственный путь
+    publishPresence?: () => void;
+    watchPresence?: (address: string) => void;
   };
   // FR-040: своя настройка «кто видит, что я в сети» — «никто»
   isPresenceHidden?: () => boolean;
@@ -271,6 +274,11 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   // «Печатает» по эфемерному каналу v2 (T127): автор и чат уже проверены
   // движком (канал знают только участники чата)
+  // «В сети» по эфемерному каналу v2 (T134): автора проверил движок
+  function showV2Presence(from: string) {
+    handlePresenceFrame(JSON.stringify({ from }));
+  }
+
   function showV2Typing(chat: string, from: string) {
     const store = deps.getStore();
     if (!from || from === store.self) return;
@@ -380,6 +388,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
     if (!isPresenceWanted(peerId)) return;
     subscribedPresence.add(peerId);
     deps.getConnection()?.subscribe(buildPresenceTopic(peerId), handlePresenceFrame);
+    const address = deps.getStore().getAddressForId(peerId);
+    if (address) deps.v2?.watchPresence?.(address);
   }
 
   // Подписка на групповой typing-топик (идемпотентно). Вызывается при
@@ -462,6 +472,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
     } catch {
       // onClose запустит reconnect; presence будет опубликован после auth.
     }
+    // То же эфемерным каналом v2: без соединения v1 это единственный путь
+    deps.v2?.publishPresence?.();
   }
 
   // `input` — ник или полный адрес; голый ник дополняется доменом сервера
@@ -514,8 +526,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
         const nextE2e = await E2eEngine.create(user, readDeviceIdMirror(user));
         deps.setE2e(nextE2e);
         writeDeviceIdMirror(user, nextE2e.deviceId);
-        const prekeys = nextE2e.buildPrekeysPayload(nextToken);
-        if (prekeys) {
+        // T134: соединения v1 нет (сервер его отключил) — каталог прекеев v1
+        // недоступен, движок v1 нужен локально (история, копия ключей, линковка)
+        const isV1Absent = activeConnection.hasV1 === false;
+        const prekeys = isV1Absent ? undefined : nextE2e.buildPrekeysPayload(nextToken);
+        if (isV1Absent) {
+          deps.log('E2E готов (v1 отключён сервером — прекеи v1 не публикуются)');
+        } else if (prekeys) {
           await nextE2e.flushStorage();
           const published = JSON.parse(
             await activeConnection.request(TOPIC_PREKEYS_PUBLISH, JSON.stringify(prekeys)),
@@ -546,6 +563,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
       const nextE2e = deps.getE2e();
       if (nextE2e) {
         deps.setCallIdentityReady(true);
+      }
+      if (nextE2e && activeConnection.hasV1 !== false) {
         try {
           const raw = await activeConnection.request(TOPIC_IDENTITY_SETKEY, JSON.stringify({
             token: nextToken,
@@ -589,7 +608,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // первого сообщения). Порог/пачка — OTK_REPLENISH_THRESHOLD/ONE_TIME_BATCH
   async function replenishOneTimePrekeys(connection: GatewayConnection, token: string) {
     const engine = deps.getE2e();
-    if (!engine) return;
+    if (!engine || connection.hasV1 === false) return;
     try {
       const raw = await connection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token }));
       const response = JSON.parse(raw) as {
@@ -744,6 +763,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     ensurePresence,
     refreshEphemeral,
     showV2Typing,
+    showV2Presence,
     connectWithToken,
     replenishDevicePrekeys: replenishOneTimePrekeys,
     rememberDeviceId: writeDeviceIdMirror,

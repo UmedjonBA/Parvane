@@ -104,6 +104,7 @@ import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
 import { buildBuiltinWallpapers } from './wallpapers';
 import {
+  buildMsgInboxTopic,
   buildWireEvent as buildWireEventNotify,
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
@@ -476,6 +477,11 @@ let isUpgradeRequired = false;
 
 // E6 (spec 007): v1-путь сервера отключён — на экране входа ошибка
 // «обновите приложение» (после входа — диалог в Main)
+// T134: сервер отключил v1 — клиент на v2 продолжает работать методами v2
+window.addEventListener('parvane-v1-disabled', () => {
+  logDebug('соединения v1 нет (сервер отключил v1) — все запросы идут по v2');
+});
+
 window.addEventListener('parvane-upgrade-required', () => {
   sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneUpgradeRequired' } });
 });
@@ -508,6 +514,11 @@ const v2Controller = createV2Controller({
   onNeedsLinking: () => {
     if (!linkRuntime.timer) void startHistoryLinkOffer();
   },
+  // Пока соединение v1 живо, те же кадры приходят по нему; без него (T134)
+  // запись LegacyV1 — единственный путь: подаём кадр обработчику инбокса
+  onLegacyFrame: (frame) => {
+    if (connection?.hasV1 === false && store.self) connection.deliver(buildMsgInboxTopic(store.self), frame);
+  },
   onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),
   onGroupLeft: (address) => groupController.removeV2Group(address),
   onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
@@ -526,6 +537,7 @@ const v2Controller = createV2Controller({
     window.dispatchEvent(new CustomEvent('parvane-ssk-rotation'));
   },
   onTyping: (chat, from) => connectionController.showV2Typing(chat, from),
+  onPresence: (from) => connectionController.showV2Presence(from),
   // Каталог своих устройств v1 (без расхода one-time prekeys) — для
   // подписанного списка v1-устройств (FR-058)
   listOwnV1Devices: async () => {
