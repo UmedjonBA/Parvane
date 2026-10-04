@@ -160,27 +160,32 @@ try {
   const moved = await waitDesktopLog(desktopWorkdir, /live-локация live_period=\d+ lat=48\.85\d+ long=2\.35\d+/, 60000, desktop, { after: logBeforeMove });
   console.log(`[cross-features] live location updated: ${moved[0]}`);
 
-  // ── отзыв desktop-устройства из web Settings→Devices ───────────────────────
-  bobWeb = await preparePage(bobWebContext, bob, PASSWORD);
-  await bobWeb.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await bobWeb.page.getByRole('menuitem', { name: 'Settings' }).click();
-  await bobWeb.page.getByRole('button', { name: 'Devices' }).click();
-  const sessionsScreen = bobWeb.page.locator('.SettingsActiveSessions');
-  await sessionsScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await sessionsScreen.getByText('THIS DEVICE').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const desktopSession = sessionsScreen.locator('.ListItem').filter({ hasText: /Web |Desktop/ }).first();
-  await desktopSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const logBeforeRevoke = readDesktopLog(desktopWorkdir).length;
-  await terminateSessionWithPassword(bobWeb.page, desktopSession, PASSWORD);
-  await sessionsScreen.getByText('Active sessions').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
-  await relogin(bobWeb.page, PASSWORD);
+  // Без v1 (PARVANE_E2E_V1_OFF) шаг пропускается: второе устройство здесь входит
+  // паролем и к журналу устройств v2 не привязано, а отзыв в v2 — запись журнала
+  // (по v1 его разрешал один пароль). Отзыв привязанным устройством — `devices`.
+  if (process.env.PARVANE_E2E_V1_OFF !== '1') {
+    // ── отзыв desktop-устройства из web Settings→Devices ───────────────────────
+    bobWeb = await preparePage(bobWebContext, bob, PASSWORD);
+    await bobWeb.page.getByRole('button', { name: 'Open menu' }).first().click();
+    await bobWeb.page.getByRole('menuitem', { name: 'Settings' }).click();
+    await bobWeb.page.getByRole('button', { name: 'Devices' }).click();
+    const sessionsScreen = bobWeb.page.locator('.SettingsActiveSessions');
+    await sessionsScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await sessionsScreen.getByText('THIS DEVICE').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    const desktopSession = sessionsScreen.locator('.ListItem').filter({ hasText: /Web |Desktop/ }).first();
+    await desktopSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    const logBeforeRevoke = readDesktopLog(desktopWorkdir).length;
+    await terminateSessionWithPassword(bobWeb.page, desktopSession, PASSWORD);
+    await sessionsScreen.getByText('Active sessions').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+    await relogin(bobWeb.page, PASSWORD);
 
-  // Отзыв гасит JWT desktop: по v1 — «sync ошибка», по v2 (и без v1) — отказ
-  // соединения v2 и уход на экран входа
-  const syncError = await waitDesktopLog(
-    desktopWorkdir, /sync ошибка: (.*)|авторизация отклонена \((.*)\)/, 120000, desktop, { after: logBeforeRevoke },
-  );
-  console.log(`[cross-features] desktop after revoke: ${syncError[0]}`);
+    // Отзыв гасит JWT desktop: по v1 — «sync ошибка», по v2 (и без v1) — отказ
+    // соединения v2 и уход на экран входа
+    const syncError = await waitDesktopLog(
+      desktopWorkdir, /sync ошибка: (.*)|авторизация отклонена \((.*)\)/, 120000, desktop, { after: logBeforeRevoke },
+    );
+    console.log(`[cross-features] desktop after revoke: ${syncError[0]}`);
+  }
 
   console.log('web cross-features e2e: OK');
 } catch (error) {

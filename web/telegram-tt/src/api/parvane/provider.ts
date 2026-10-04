@@ -1258,8 +1258,15 @@ async function revokeOwnDevice(deviceId: string, password?: string) {
     // Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и ротации
     // ключей, которые устройство держало. После v1-отзыва (он проверил пароль):
     // сбой v2 не возвращает устройство, а оставляет ротации на повтор
-    await v2Controller.revokeDevice(deviceId)
-      .catch((e: unknown) => logDebug(`v2: отзыв устройства в журнале не выполнен: ${String(e)}`));
+    const isJournaled = await v2Controller.revokeDevice(deviceId).catch((e: unknown) => {
+      logDebug(`v2: отзыв устройства в журнале не выполнен: ${String(e)}`);
+      return false;
+    });
+    // Без соединения v1 (E6-1) отзыв — это только запись журнала устройств: мост
+    // отвечает «ok» уже после проверки пароля. Записи нет (это устройство само не
+    // привязано к журналу либо сервер её не принял) — отзыва не было, об успехе не
+    // сообщаем: иначе сеанс «завершён» на экране, а устройство продолжает работать
+    if (connection.hasV1 === false && !isJournaled) return undefined;
     return true;
   } catch {
     return undefined;
