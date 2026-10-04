@@ -340,6 +340,11 @@ private:
     using Task = std::function<void()>;
     void post(Task t);
     void postDelayed(std::int64_t delayMs, Task t);
+    // T185: участники общих групп v2 и обмен ключами доступа для группового звонка
+    std::set<std::string> coMembersLocked();
+    bool acquirePeerKey(const std::string &peer);
+    void reciprocateKeysLocked();
+    std::set<std::string> reciprocated_;
     void workerLoop();
     void connectOnce();
     bool connectLocked(std::string *error);
