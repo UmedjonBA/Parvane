@@ -121,7 +121,8 @@ try {
   });
   await waitDesktopLog(desktopWorkdir, /E2E-устройство готово/, 90000, desktop);
   const created = await waitDesktopLog(
-    desktopWorkdir, new RegExp(`группа '${esc(groupTitle)}' создана.*?([0-9a-f-]{36})`), 60000, desktop,
+    desktopWorkdir, // v1 — UUID группы, v2 — `v2g:<hex>` (маркер «группа v2 '…' создана»)
+    new RegExp(`группа (?:v2 )?'${esc(groupTitle)}' создана.*?(v2g:[0-9a-f]{32}|[0-9a-f-]{36})`), 60000, desktop,
   );
   const groupId = created[1];
   await waitDesktopLog(desktopWorkdir, /autoprofile применён/, 60000, desktop);

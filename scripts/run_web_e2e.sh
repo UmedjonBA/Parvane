@@ -71,6 +71,10 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
 
+  # Перезапущенный посреди сценария gateway (см. gateway_restart_watch)
+  if [[ -s "$TEMP_ROOT/gateway.pid" ]]; then
+    kill "$(cat "$TEMP_ROOT/gateway.pid")" 2>/dev/null || true
+  fi
   for pid in "${PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
@@ -132,6 +136,7 @@ start_shard() {
     PARVANE_LOG_LEVEL=info \
     PARVANE_LOGIN_RATE_IP=100000 \
     PARVANE_REGISTER_RATE_IP=100000 \
+    PARVANE_CALL_V2_RINGING_MAX=100000 \
     "$ROOT/backend/target/debug/$shard" >"$TEMP_ROOT/$shard.log" 2>&1 &
   PIDS+=("$!")
 }
@@ -219,18 +224,50 @@ check_v1_unused() {
   echo "OK: по соединению v1 не авторизовался никто (PARVANE_V1_MODE=disabled)"
 }
 
+# $1 — дополнительное окружение gateway (строка «ИМЯ=значение …»)
+start_gateway() {
+  env \
+    PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \
+    PARVANE_NATS_USER=gateway \
+    PARVANE_NATS_PASS="$GATEWAY_PASS" \
+    PARVANE_GATEWAY_BIND="127.0.0.1:$GATEWAY_WS_PORT" \
+    PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$GATEWAY_TCP_PORT" \
+    PARVANE_LOG_LEVEL=info \
+    $1 \
+    "$ROOT/backend/target/debug/gateway" >>"$TEMP_ROOT/gateway.log" 2>&1 &
+  echo "$!" >"$TEMP_ROOT/gateway.pid"
+}
+
+# Перезапуск gateway посреди сценария (T182: сервер отключает v1, когда у аккаунтов
+# уже есть история v1). Сценарий пишет окружение нового gateway в файл
+# `gateway.restart` каталога PARVANE_E2E_BACKEND_LOG_DIR и ждёт файл `gateway.restarted`.
+# Журнал прежнего gateway остаётся в gateway.log, отметка — строка «== gateway restart»
+gateway_restart_watch() {
+  while sleep 0.3; do
+    [[ -f "$TEMP_ROOT/gateway.restart" ]] || continue
+    local extra
+    extra="$(cat "$TEMP_ROOT/gateway.restart")"
+    rm -f "$TEMP_ROOT/gateway.restart"
+    kill "$(cat "$TEMP_ROOT/gateway.pid")" 2>/dev/null || true
+    while kill -0 "$(cat "$TEMP_ROOT/gateway.pid")" 2>/dev/null; do sleep 0.1; done
+    printf '== gateway restart: %s\n' "$extra" >>"$TEMP_ROOT/gateway.log"
+    local lines
+    lines="$(wc -l <"$TEMP_ROOT/gateway.log")"
+    start_gateway "$extra"
+    for _attempt in {1..300}; do
+      tail -n +"$((lines + 1))" "$TEMP_ROOT/gateway.log" | rg -q 'Gateway WebSocket' && break
+      sleep 0.1
+    done
+    : >"$TEMP_ROOT/gateway.restarted"
+  done
+}
+
 log "Start gateway"
-env \
-  PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \
-  PARVANE_NATS_USER=gateway \
-  PARVANE_NATS_PASS="$GATEWAY_PASS" \
-  PARVANE_GATEWAY_BIND="127.0.0.1:$GATEWAY_WS_PORT" \
-  PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$GATEWAY_TCP_PORT" \
-  PARVANE_LOG_LEVEL=info \
-  ${PARVANE_E2E_GATEWAY_ENV:-} \
-  "$ROOT/backend/target/debug/gateway" >"$TEMP_ROOT/gateway.log" 2>&1 &
+: >"$TEMP_ROOT/gateway.log"
+start_gateway "${PARVANE_E2E_GATEWAY_ENV:-}"
+wait_for_log gateway 'Gateway WebSocket' "$(cat "$TEMP_ROOT/gateway.pid")"
+gateway_restart_watch &
 PIDS+=("$!")
-wait_for_log gateway 'Gateway WebSocket' "${PIDS[-1]}"
 
 if [[ -n "${PARVANE_E2E_EXTERNAL_BROWSER_SCRIPT:-}" ]]; then
   log "Build and start production Web"

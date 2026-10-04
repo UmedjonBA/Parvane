@@ -1092,3 +1092,30 @@ export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
   await dialog.waitFor({ state: 'detached', timeout: 10000 }).catch(() => undefined);
   return text;
 }
+
+// Отладка кэша истории: ключи записей `m:<uuid>` шифрованного хранилища (IndexedDB)
+// этого аккаунта — видно, какие сообщения записаны на диск
+export async function dumpHistoryCacheKeys(page, label) {
+  const keys = await page.evaluate(async () => {
+    const out = [];
+    for (const { name } of await indexedDB.databases()) {
+      const db = await new Promise((resolve, reject) => {
+        const req = indexedDB.open(name);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      for (const storeName of Array.from(db.objectStoreNames)) {
+        const all = await new Promise((resolve) => {
+          const req = db.transaction(storeName).objectStore(storeName).getAllKeys();
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve([]);
+        });
+        const records = all.map(String).filter((key) => /:m:/.test(key)).map((key) => key.split(':m:')[1]);
+        if (records.length) out.push(`${name}/${storeName}: ${records.length} — ${records.join(' ')}`);
+      }
+      db.close();
+    }
+    return out;
+  }).catch((e) => [`unavailable: ${e.message}`]);
+  console.log(`--- history cache ${label} ---\n${keys.join('\n')}`);
+}

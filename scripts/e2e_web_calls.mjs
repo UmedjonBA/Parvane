@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  dumpDiagJournal,
   relogin,
   LOGIN_TIMEOUT_MS,
   exchangeMessages,
@@ -206,8 +207,28 @@ try {
   await bobSession.page.keyboard.press('Escape');
   await relogin(bobSession.page, PASSWORD);
   await bobSession.page.keyboard.press('Escape');
-  await bobSession.page.waitForTimeout(6000);
+  // v2: записи о звонках приходят из журнала личного состояния (опрос раз в 8 с)
+  await bobSession.page.waitForTimeout(IS_V1 ? 6000 : 12000);
   assert.equal(await unreadBadge(aliceSession.page, bob).count(), 0, 'у Алисы бейдж после reload (последний — звонок)');
+  if (await unreadBadge(bobSession.page, alice).count()) {
+    // Что именно считается непрочитанным: состояние прочтения и хвост чата
+    const state = await bobSession.page.evaluate(() => {
+      const g = window.__parvaneGetGlobal?.();
+      if (!g) return 'no global';
+      return JSON.stringify(Object.entries(g.messages.byChatId).map(([chatId, m]) => ({
+        chatId,
+        read: m.threadsById?.[-1]?.readState,
+        chat: { unreadCount: g.chats.byId[chatId]?.unreadCount, hasUnreadMark: g.chats.byId[chatId]?.hasUnreadMark },
+        tail: Object.values(m.byId || {}).slice(-8).map((x) => ({
+          id: x.id, out: x.isOutgoing, sender: x.senderId, date: x.date,
+          kind: x.content?.action?.type || Object.keys(x.content || {}).join(','),
+          text: x.content?.text?.text?.slice(0, 30),
+        })),
+      })));
+    }).catch((e) => `unavailable: ${e.message}`);
+    console.error(`--- bob unread state ---\n${state}`);
+    await dumpDiagJournal(bobSession.page, 'bob', 120);
+  }
   assert.equal(await unreadBadge(bobSession.page, alice).count(), 0, 'у Боба бейдж после reload (последний — звонок)');
   console.log('OK: после reload записи о звонках не дают бейдж');
 

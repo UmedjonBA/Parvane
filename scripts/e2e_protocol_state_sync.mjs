@@ -375,15 +375,21 @@ try {
   await bob2Page.locator('#LeftColumn .ListItem').filter({ hasText: ownGroup }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const inviteStarted = Date.now();
+  // bob2 мог успеть создать свою ссылку до прихода ссылки bob1 (журнал состояния
+  // опрашивается раз в 8 с) — тогда оба устройства сходятся к той, что раньше по
+  // общему порядку (дата, затем link_id), и это может быть ссылка bob2
   let bob2Link;
+  let bob1Now = bob1Link;
   while (Date.now() - inviteStarted < STATE_SYNC_BUDGET_MS * 3) {
     // eslint-disable-next-line no-await-in-loop
     bob2Link = await primaryOf(bob2Page);
-    if (bob2Link === bob1Link) break;
+    // eslint-disable-next-line no-await-in-loop
+    bob1Now = await primaryOf(bob1Page);
+    if (bob2Link && bob2Link === bob1Now) break;
     // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => { setTimeout(r, 1000); });
   }
-  assert.equal(bob2Link, bob1Link, 'bob2: основная ссылка группы отличается от ссылки bob1');
+  assert.equal(bob2Link, bob1Now, 'основные ссылки группы на устройствах bob не сошлись');
   console.log(`ссылка-приглашение на втором устройстве через ${Date.now() - inviteStarted} мс`);
 
   // Сервер хранит только шифртекст журнала состояния
