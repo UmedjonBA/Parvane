@@ -17,12 +17,13 @@ wait_log "$B/td/log.txt" "инъецировано" 60
 # читать его напрямую больше нельзя — заодно проверяем и это.
 wait_log "$B/td/log.txt" "карта локации (не )?собрана 55\.7512,37\.6184" 40 \
   && ok "bob расшифровал location (пузырь карты с lat=55.7512 lon=37.6184)" || bad "bob не получил location"
-DC="$B/td/tdata/parvane-dec-cache.jsonl"
+# v1 — кэш расшифровки Olm; в v2 его нет, расшифрованное лежит в журнале истории
+if is_v2; then DC="$B/td/tdata/parvane-history-bob@local.jsonl"; else DC="$B/td/tdata/parvane-dec-cache.jsonl"; fi
 if [ -s "$DC" ]; then
-  head -c 5 "$DC" | grep -q '^PVSE1' && ! grep -qa '"kind":"location"' "$DC" \
-    && ok "кэш расшифровки на диске зашифрован (PVSE1)" || bad "кэш расшифровки лежит открытым текстом"
+  head -c 5 "$DC" | grep -q '^PVSE1' && ! grep -qa -e '"kind":"location"' -e '55\.7512' "$DC" \
+    && ok "расшифрованное на диске зашифровано (PVSE1)" || bad "расшифрованное лежит на диске открытым текстом"
 else
-  bad "нет кэша расшифровки у bob"
+  bad "нет расшифрованного на диске у bob ($DC)"
 fi
 K=$(sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM messages WHERE kind='location';")
 [ "${K:-0}" = "0" ] && ok "на сервере location скрыт (нет kind=location)" || bad "location на сервере открыт"

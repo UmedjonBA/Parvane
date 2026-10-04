@@ -404,6 +404,11 @@ bool Session::connectLocked(std::string *error) {
                         std::lock_guard<std::recursive_mutex> lk(engineMu_);
                         if (!client_) return;
                         for (const auto &e : client_->ephOpen(body)) {
+                            if (e.value("type", std::string()) == "presence") {
+                                outbox_.push_back(json{{"type", "presence"}, {"from", e.value("from", std::string())},
+                                                       {"online", e.value("online", false)}});
+                                continue;
+                            }
                             if (e.value("type", std::string()) != "typing" || e.value("action", 0) == kTypingCancel) continue;
                             const auto from = e.value("from", std::string());
                             const auto group = e.contains("group") && e["group"].is_string()
@@ -642,6 +647,7 @@ bool Session::satisfyLocked(const std::exception &ex) {
     const auto kind = need.value("kind", std::string());
     const auto user = need.value("user", std::string());
     if (kind == "peerLog") {
+        const auto before = client_->logVersion(user);
         const auto resp = call(true, "identity.device.log_sync_anon",
             encodeMessage("parvane.identity.v2.DeviceLogSyncAnonRequest",
                           json{{"user", {{"address", user}}},
@@ -654,6 +660,12 @@ bool Session::satisfyLocked(const std::exception &ex) {
                               json{{"user", {{"address", user}}}, {"after_version", "0"}})));
         }
         if (verdict == "rootChanged") return acceptPeerRootLocked(user);
+        // Журнал не продвинулся, а движок просит его снова: собеседник прямо
+        // сейчас публикует первое устройство (корень записан, сертификат ещё
+        // нет) — дать ему дописать, а не сжечь все попытки за миллисекунды.
+        if (verdict != "replaced" && before > 0 && client_->logVersion(user) == before && !stopping_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        }
         return verdict != "replaced";
     }
     if (kind == "rootChanged") return acceptPeerRootLocked(user);
@@ -1227,6 +1239,21 @@ json Session::sskState() {
                 {"hasBackup", !readStateFile("root-backup").empty()}};
 }
 
+json Session::deviceBackup() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_ || storageKey_.size() != 32) return nullptr;
+    json out;
+    try {
+        out = json{{"key", toBase64(storageKey_)}, {"state", toBase64(client_->exportState(storageKey_))}};
+    } catch (const std::exception &e) {
+        log(std::string("копия ключей: состояние не выгружено: ") + e.what());
+        return nullptr;
+    }
+    if (const auto backup = readStateFile("root-backup"); !backup.empty()) out["rootBackup"] = toBase64(backup);
+    if (const auto invites = loadInvites(); !invites.empty()) out["invites"] = invites;
+    return out;
+}
+
 std::string Session::rotateSsk(const std::string &recoveryKey) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!ready_ || !client_) return "failed";
@@ -1294,6 +1321,26 @@ bool Session::sendTyping(const std::string &chat) {
         log(std::string("«печатает» не отправлено: ") + e.what());
     }
     return true;
+}
+
+void Session::sendPresence(bool online) {
+    try {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_) return;
+        runRequestsLocked(client_->ephPresence(online, nowMs()));
+    } catch (const std::exception &e) {
+        log(std::string("присутствие не отправлено: ") + e.what());
+    }
+}
+
+void Session::watchPeers(const std::vector<std::string> &peers) {
+    try {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_) return;
+        ensureEphemeralLocked(peers);
+    } catch (const std::exception &e) {
+        log(std::string("подписка на присутствие: ") + e.what());
+    }
 }
 
 // ── переходный период: v1-устройства (FR-054/FR-058) ───────────────────────

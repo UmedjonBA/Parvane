@@ -57,6 +57,7 @@
 #include <parvane/events.h>          // parvane-core
 #include <parvane/poll.h>            // parvane-core: опросы в обоих форматах (spec 005)
 #include <parvane/topics.h>          // parvane-core
+#include <parvane/v2_bridge.h>       // parvane-core: мост «запросы клиента → методы v2» (T134)
 #include <parvane/v2_content.h>      // parvane-core: содержимое протокола v2 (spec 007)
 #include <parvane/v2_engine.h>       // parvane-core: C ABI движка v2
 #include <parvane/v2_legacy.h>       // parvane-core: v1-устройства в переходный период v2
@@ -1129,8 +1130,12 @@ void AttachBlobCap(parvane::json &target, const std::string &fileId) {
 // Получатели гранта для блоба чата `to`; {kBlobCapabilityMark} — чат v2 без
 // v1-устройств: грузить по capability. Сеть (журнал собеседника) — звать с
 // рабочего потока.
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> V2ReadyForSend();
+
 [[nodiscard]] std::vector<std::string> BlobRecipientsFor(const std::string &to) {
-	if (const auto s = V2Ready()) {
+	// Ждём исхода запуска v2 (как отправка текста, T149): файл, отправленный
+	// сразу после входа, иначе уходил с грантами v1 — а без v1 не уходил вовсе.
+	if (const auto s = V2ReadyForSend()) {
 		const auto self = SelfAddress().toStdString();
 		const auto v2Chat = parvane::v2::isGroupAddress(to) || (to != self && s->isV2Peer(to));
 		if (v2Chat && s->legacyDevices(to).empty() && s->legacyDevices(self).empty()) {
@@ -2307,6 +2312,11 @@ void EnsureUpgradeHandler() {
 				if (shown.exchange(true)) {
 					return;
 				}
+				if (V2Enabled()) {
+					// T134: клиент на v2 без v1 работоспособен — это не «обновите приложение»
+					LOG(("Parvane: сервер отключил протокол v1 (upgrade_required) — работаем по v2"));
+					return;
+				}
 				LOG(("Parvane: сервер отключил протокол v1 (upgrade_required) — нужна новая версия приложения"));
 				crl::on_main([] {
 					Ui::show(Ui::MakeInformBox(tr::lng_parvane_upgrade_required()));
@@ -2337,7 +2347,40 @@ bool UpgradeRequired() {
 // Создать и подключить транспорт по окружению: gateway (TCP, с authenticate,
 // если задан token) либо прямой NATS (cnats). Бросает при ошибке соединения.
 // token пустой — bootstrap-режим (до логина gateway пускает только issue/register).
+std::unique_ptr<parvane::ITransport> MakeV1Transport(const QString &token);
+
+// T134: при включённом v2 транспорт — мост: вход, профили, устройства,
+// линковка, превью, ICE и свои/открытые файлы идут методами v2, соединение v1
+// нужно только переписке с v1-собеседниками и может отсутствовать (сервер с
+// PARVANE_V1_MODE=disabled).
 std::unique_ptr<parvane::ITransport> MakeTransport(const QString &token) {
+	const auto gw = GatewayUrl();
+	if (gw.isEmpty() || !V2Enabled()) {
+		return MakeV1Transport(token);
+	}
+	auto inner = std::unique_ptr<parvane::ITransport>();
+	try {
+		inner = MakeV1Transport(token);
+	} catch (const std::exception &e) {
+		if (!UpgradeRequired()) {
+			throw;
+		}
+		static auto logged = false;
+		if (!logged) {
+			logged = true;
+			LOG(("Parvane: соединения v1 нет (%1) — все запросы идут по v2").arg(QString::fromUtf8(e.what())));
+		}
+	}
+	auto cfg = parvane::v2::BridgeConfig();
+	cfg.gatewayUrl = gw.toStdString();
+	cfg.token = token.toStdString();
+	cfg.log = [](const std::string &line) {
+		LOG(("Parvane: %1").arg(QString::fromStdString(line)));
+	};
+	return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg), std::move(inner));
+}
+
+std::unique_ptr<parvane::ITransport> MakeV1Transport(const QString &token) {
 	const auto gw = GatewayUrl();
 	EnsureUpgradeHandler();
 	if (!gw.isEmpty() && UpgradeBlocked()) {
@@ -3154,6 +3197,13 @@ void EnsurePresenceSubscription(const QString &address) {
 	}
 	t->subscribe(parvane::topics::presence(std::to_string(id)),
 		[](std::string, std::string payload) { HandlePresencePayload(payload); });
+	// Канал присутствия v2 этого собеседника (T134) — на воркере: методы сессии
+	// ждут мьютекс движка.
+	crl::async([peer = address.toStdString()] {
+		if (const auto s = V2ReadyForSend()) {
+			s->watchPeers({ peer });
+		}
+	});
 }
 
 void RegisterPeer(const QString &address) {
@@ -8492,6 +8542,11 @@ void publishPresenceHeartbeat() {
 			t->publish(parvane::topics::presence(std::to_string(id)), ev.dump());
 		} catch (const std::exception &) {
 		}
+		// То же эфемерным каналом v2 (T134): без соединения v1 это единственный
+		// путь, а собеседники на v2 без v1 слушают только его.
+		if (const auto s = V2Ready()) {
+			s->sendPresence(true);
+		}
 	});
 }
 
@@ -10124,6 +10179,13 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		});
 		return true;
 	}
+	if (type == "presence") {
+		// «В сети» по эфемерному каналу v2 (T134): автора проверил движок.
+		if (ev.value("online", false)) {
+			HandlePresencePayload(parvane::json{ { "from", ev.value("from", std::string()) } }.dump());
+		}
+		return true;
+	}
 	if (type == "typing") {
 		// «Печатает» по эфемерному каналу v2 (T127): автор и чат проверены движком.
 		const auto chat = ev.value("chat", std::string());
@@ -10144,6 +10206,24 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		PublishLegacySet();
 		RepublishDeviceIfRefused();
 		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
+		return true;
+	}
+	if (type == "legacyV1") {
+		// Кадр инбокса v1, переложенный сервером в инбокс v2 (история v1 при
+		// первом синке и живые кадры, T045/T046). Пока соединение v1 живо, те же
+		// кадры приходят по нему; без него (T134) это единственный путь — подаём
+		// кадр тем же обработчикам инбокса (FR-053).
+		const auto frame = ev.value("json", std::string());
+		parvane::v2::BridgeTransport *bridge = nullptr;
+		std::string self;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			bridge = dynamic_cast<parvane::v2::BridgeTransport*>(g_transport.get());
+			self = g_selfAddress.toStdString();
+		}
+		if (bridge && !bridge->hasV1() && !frame.empty() && !self.empty()) {
+			bridge->deliver(std::string("msg.user.") + self, frame);
+		}
 		return true;
 	}
 	if (type == "needsLinking") {
@@ -11094,12 +11174,22 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 	});
 }
 
+// T134: соединения v1 нет (сервер отключил v1) — запросы переписки и групп v1
+// не шлём вовсе: всё приходит инбоксом v2. Звать под g_sessionMutex.
+[[nodiscard]] bool V1AbsentLocked() {
+	const auto *bridge = dynamic_cast<parvane::v2::BridgeTransport*>(g_transport.get());
+	return bridge && !bridge->hasV1();
+}
+
 void PumpReceive() {
 	crl::async([] {
 		parvane::MessengerClient *m = nullptr;
 		std::string self, token;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (V1AbsentLocked()) {
+				return;
+			}
 			m = g_messenger.get();
 			self = g_selfAddress.toStdString();
 			token = g_token.toStdString();
@@ -11450,6 +11540,9 @@ void RefreshGroups() {
 		parvane::GroupClient *g = nullptr;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			if (V1AbsentLocked()) {
+				return; // списка v1-групп нет; группы v2 знает движок
+			}
 			g = g_groupClient.get();
 		}
 		if (!g) {
@@ -13320,6 +13413,26 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			}
 		}
 
+		// Копия ключей (T152): PARVANE_AUTOKEYBACKUP=export|import:<пароль>:<путь>
+		// через ~10 с. Маркер: «AUTOKEYBACKUP <действие> → ok» / «→ отказ <причина>».
+		if (const char *kb = ParvaneDevEnv("PARVANE_AUTOKEYBACKUP"); kb && *kb) {
+			const auto parts = QString::fromUtf8(kb).split(':');
+			if (parts.size() >= 3) {
+				const auto action = parts[0];
+				const auto password = parts[1];
+				const auto path = parts.mid(2).join(':');
+				base::call_delayed(10 * crl::time(1000), [action, password, path] {
+					crl::async([action, password, path] {
+						auto error = QString();
+						const auto ok = (action == u"import"_q)
+							? ImportKeyBackup(path, password, &error)
+							: ExportKeyBackup(path, password, &error);
+						LOG(("Parvane: AUTOKEYBACKUP %1 → %2").arg(action, ok ? u"ok"_q : u"отказ "_q + error));
+					});
+				});
+			}
+		}
+
 		// Debug-autofolder для папок: PARVANE_AUTOFOLDER=Имя:peer@server → создаёт
 		// папку с этим чатом (нативный ChatFilters::set) через ~6с. Персист свой.
 		if (const char *fv = ParvaneDevEnv("PARVANE_AUTOFOLDER"); fv && *fv) {
@@ -14577,9 +14690,9 @@ constexpr auto kLinkedGroupRetries = 40;
 	}
 }
 
-// Старое устройство: экспорт линковки + строки v2 из журнала истории (с
-// правками и реакциями из кэша v2).
-[[nodiscard]] std::string WithV2History(const std::string &exported) {
+// Строки v2 из журнала истории (с правками и реакциями из кэша v2) — для
+// экспорта линковки и ручной копии ключей.
+[[nodiscard]] nlohmann::json CollectV2HistoryRows() {
 	LoadV2Ids();
 	auto rows = nlohmann::json::array();
 	auto seen = std::set<std::string>();
@@ -14607,11 +14720,17 @@ constexpr auto kLinkedGroupRetries = 40;
 		} catch (const std::exception &) {
 		}
 	}
-	if (rows.empty()) {
-		return exported;
-	}
 	if (rows.size() > kV2HistoryLimit) {
 		rows.erase(rows.begin(), rows.begin() + (rows.size() - kV2HistoryLimit));
+	}
+	return rows;
+}
+
+// Старое устройство: экспорт линковки + история v2-эпохи.
+[[nodiscard]] std::string WithV2History(const std::string &exported) {
+	auto rows = CollectV2HistoryRows();
+	if (rows.empty()) {
+		return exported;
 	}
 	try {
 		auto state = nlohmann::json::parse(exported);
@@ -15218,10 +15337,30 @@ bool ExportKeyBackup(const QString &path, const QString &password, QString *erro
 		*error = u"Ключи ещё не готовы — подождите несколько секунд после входа"_q;
 		return false;
 	}
-	const auto state = parvane::e2e::exportStateJson(DecCacheSnapshot());
+	auto state = parvane::e2e::exportStateJson(DecCacheSnapshot());
 	if (state.empty()) {
 		*error = u"Нечего сохранять"_q;
 		return false;
+	}
+	// T152: копия несёт устройство v2 и историю v2-эпохи (поле `extra`, как в
+	// вебе) — сервер v2 историю заново не отдаст
+	if (const auto s = V2Ready()) {
+		try {
+			auto extra = nlohmann::json::object();
+			if (auto device = s->deviceBackup(); device.is_object()) {
+				extra["v2"] = std::move(device);
+			}
+			if (auto rows = CollectV2HistoryRows(); !rows.empty()) {
+				LOG(("Parvane: копия ключей: история v2 (%1 сообщений)").arg(int(rows.size())));
+				extra["v2History"] = std::move(rows);
+			}
+			if (!extra.empty()) {
+				auto parsed = nlohmann::json::parse(state);
+				parsed["extra"] = std::move(extra);
+				state = parsed.dump();
+			}
+		} catch (const std::exception &) {
+		}
 	}
 	const auto file = parvane::keybackup::exportEncrypted(state, password.toStdString());
 	if (file.empty()) {
@@ -15281,6 +15420,17 @@ bool ImportKeyBackup(const QString &path, const QString &password, QString *erro
 	}
 	LOG(("Parvane: копия ключей восстановлена, слито %1 сообщений — ресинк").arg(merged));
 	ResyncFromScratch();
+	// T152: история v2-эпохи из копии. Устройство v2 копии (`extra.v2`) десктоп
+	// не перенимает: копия здесь сливается, своя личность устройства сохраняется;
+	// в журнал устройств оно входит линковкой или ключом восстановления.
+	try {
+		const auto parsed = nlohmann::json::parse(*state);
+		if (const auto it = parsed.find("extra"); it != parsed.end() && it->is_object()
+			&& it->contains("v2History") && V2Enabled()) {
+			ImportV2History(nlohmann::json{ { "v2History", (*it)["v2History"] } }.dump());
+		}
+	} catch (const std::exception &) {
+	}
 	return true;
 }
 

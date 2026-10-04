@@ -70,6 +70,10 @@ private:
 [[nodiscard]] std::string fromBase64(const std::string &b64);
 // Байты ответа → proto3-JSON по полному имени типа. Бросает.
 [[nodiscard]] json decodeMessage(const std::string &typeName, const std::string &bytes);
+// Любой метод реестра (T161): proto3-JSON запроса → тело, тело ответа →
+// proto3-JSON. Бросают при незнакомом методе и негодном JSON/байтах.
+[[nodiscard]] std::string encodeMethodRequest(const std::string &method, const json &request);
+[[nodiscard]] json decodeMethodResponse(const std::string &method, const std::string &bytes);
 // Ссылка-приглашение → {"kind":"v2","domain","linkId"(hex)} |
 // {"kind":"legacy","token"}; nullopt — не ссылка-приглашение.
 [[nodiscard]] std::optional<json> parseInvite(const std::string &url);
@@ -264,6 +268,8 @@ public:
     // «Печатает»: chat — адрес собеседника либо hex группы; action — номер
     // TypingAction. Запросы (пусто — канала нет или чат в L2).
     [[nodiscard]] json ephTyping(const std::string &chat, int action) const;
+    // Своё присутствие. Запросы (пусто — пока L2 активен хоть в одном чате).
+    [[nodiscard]] json ephPresence(bool online, std::int64_t lastSeenMs) const;
     // Событие подписки ephemeral → события typing/presence (см. host.rs).
     [[nodiscard]] json ephOpen(const std::string &body) const;
     // Опубликовать/сократить свой список v1-устройств → запрос

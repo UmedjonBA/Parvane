@@ -1,5 +1,7 @@
 // Parvane fork: реализация CloudClient (см. cloud_client.h).
 #include "parvane/cloud_client.h"
+#include "parvane/v2_bridge.h"
+#include "parvane/v2_link.h"
 
 #include <algorithm>
 #include <array>
@@ -80,6 +82,23 @@ std::string CloudClient::upload(const std::string &from, const std::string &toke
                                 const std::string &bytes,
                                 const std::vector<std::string> &recipients,
                                 bool publicAccess, std::size_t chunkSize, int timeoutMs) {
+    // Мост v2 (T134): блоб без получателей (свой либо открытый: аватар, фото
+    // группы, блоб линковки своему устройству) грузится методами v2 — по v1
+    // остаются только блобы с грантами v1-получателям.
+    if (auto *bridge = dynamic_cast<v2::BridgeTransport *>(&_t)) {
+        const bool onlyOwner = std::all_of(recipients.begin(), recipients.end(),
+                                           [&](const std::string &r) { return r == from; });
+        if (onlyOwner) {
+            try {
+                return bridge->control(token).uploadBlob(bytes, publicAccess);
+            } catch (const v2::V2Error &e) {
+                throw std::runtime_error("cloud: загрузка по v2 отвергнута: " + e.code());
+            }
+        }
+        if (!bridge->hasV1()) {
+            throw std::runtime_error("cloud: гранты получателям доступны только по v1, а он отключён");
+        }
+    }
     if (chunkSize == 0) chunkSize = 256 * 1024;
     const std::string fileId = newUuidV7();
 
@@ -134,6 +153,22 @@ CloudClient::Downloaded CloudClient::download(const std::string &from,
                                               const std::string &token,
                                               const std::string &fileId,
                                               int timeoutMs) {
+    // Мост v2 (T134): свой, открытый либо выданный грантом блоб — методом v2;
+    // имени и MIME в ответе v2 нет (в сообщениях они едут в содержимом).
+    if (auto *bridge = dynamic_cast<v2::BridgeTransport *>(&_t)) {
+        Downloaded viaV2;
+        try {
+            viaV2.bytes = bridge->control(token).downloadBlob(fileId);
+            viaV2.ok = true;
+            return viaV2;
+        } catch (const std::exception &e) {
+            if (!bridge->hasV1()) {
+                viaV2.ok = false;
+                viaV2.error = e.what();
+                return viaV2;
+            }
+        }
+    }
     const json payload{{"file_id", fileId}};
     const json ev = makeEvent(newUuidV7(), from, nowUnix(), token, payload);
 

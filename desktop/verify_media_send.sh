@@ -14,6 +14,10 @@
 # как раз дефектом.
 # Стек поднимает сам (verify_lib.sh); нужен собранный бинарь.
 set -u
+# Сценарий сверяет модель ПРЕЖНЕГО протокола (строка в messages, грант получателю в
+# file_grants) — закреплён за v1; файл по v2 (блоб по секрету capability) проверяют
+# verify_protocol_v2_v1off.sh и пары scripts/run_protocol_mixed_e2e.sh.
+PV_PROTO=v1
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 stack_start "${SCRATCH:-/tmp/parvane-media-send}"
 A="$SB/alice"; B="$SB/bob"
