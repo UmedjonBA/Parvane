@@ -55,9 +55,14 @@ stop_pid "$AP"; stop_pid "$BP"
 # отправка autosend упирается в rate_limited. Это лимит v1-кадров gateway:
 # сообщение v2-собеседнику идёт двоичным каналом v2 со своими классами лимитов
 # (их проверяют живые тесты parvane-integration), поэтому шаг — на v1-клиенте.
-PV_GATEWAY_ENV="GATEWAY_RATE_MSG_BURST=0 GATEWAY_RATE_MSG_PER_SEC=0.01" gateway_restart
-AP=$(start_client "$A" alice@local PARVANE_PROTO_V2=0 PARVANE_AUTOSEND="bob@local:flood-$STAMP")
-wait_log "$A/td/log.txt" "gateway rate_limited" 60 && ok "alice: rate_limited от gateway замечен (тост)" || bad "alice: rate_limited не замечен"
+# На сервере без v1 (PV_V1_OFF) шаг пропускается: v1-клиента там нет.
+if v1_off; then
+  ok "без v1: лимит v1-кадров не проверяется (лимиты v2 — живые тесты parvane-integration)"
+else
+  PV_GATEWAY_ENV="GATEWAY_RATE_MSG_BURST=0 GATEWAY_RATE_MSG_PER_SEC=0.01" gateway_restart
+  AP=$(start_client "$A" alice@local PARVANE_PROTO_V2=0 PARVANE_AUTOSEND="bob@local:flood-$STAMP")
+  wait_log "$A/td/log.txt" "gateway rate_limited" 60 && ok "alice: rate_limited от gateway замечен (тост)" || bad "alice: rate_limited не замечен"
+fi
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" && bad "фатальные ошибки" || ok "без фатальных ошибок"
 stop_pid "$AP"; stack_stop
 [ "$RC" -eq 0 ] && rm -rf "$SB" || echo "логи: $SB"

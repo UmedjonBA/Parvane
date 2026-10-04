@@ -156,11 +156,17 @@ log "Language switch e2e"
 log "Email registration e2e"
 "$ROOT/scripts/run_web_email_e2e.sh"
 
+log "Email registration e2e, v1 disabled (E6-1)"
+"$ROOT/scripts/run_web_email_v1off_e2e.sh"
+
 log "Telegram bot registration e2e"
 "$ROOT/scripts/run_web_telegram_e2e.sh"
 
 log "Telegram two-factor login e2e"
 "$ROOT/scripts/run_web_telegram_2fa_e2e.sh"
+
+log "Telegram two-factor login e2e, v1 disabled (E6-1)"
+"$ROOT/scripts/run_web_telegram_2fa_v1off_e2e.sh"
 
 log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)"
 "$ROOT/scripts/run_web_honest_ui_e2e.sh"

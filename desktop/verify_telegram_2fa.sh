@@ -8,6 +8,7 @@
 #      чужой Telegram отклонён; свой — подтверждает → вход;
 #   4) то же устройство повторно — доверенное, без Telegram;
 #   5) выключение 2FA → обычный вход с нового устройства.
+# Без соединения v1: PV_GATEWAY_ENV="PARVANE_V2_FEATURES=sealed PARVANE_V1_MODE=disabled".
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 NATS="${NATS_BIN:-$HOME/.local/bin/nats}"
@@ -63,6 +64,14 @@ P3=$(start_client "$D3" "$USER")
 wait_log "$D3/td/log.txt" "E2E-устройство готово" 40 && ok "после выключения 2FA — обычный вход" || bad "обычный вход не прошёл"
 grep -q "ждём подтверждения" "$D3/td/log.txt" && bad "просит Telegram при выключенном 2FA" || true
 stop_pid "$P3"
+# Сервер с отключённым v1 (E6-1): PV_GATEWAY_ENV="… PARVANE_V1_MODE=disabled" — весь
+# сценарий (регистрация, включение/выключение 2FA с паролем, вход) идёт методами v2
+case " ${PV_GATEWAY_ENV:-} " in *" PARVANE_V1_MODE=disabled "*)
+  grep -qa "v1-путь в режиме Disabled" "$SB/gateway.log" && ok "gateway: v1 отключён" || bad "gateway не в режиме disabled"
+  grep -qa "gateway::session.*Клиент авторизован" "$SB/gateway.log" && bad "кто-то авторизовался по v1" \
+    || ok "по v1 не авторизовался никто"
+  ;;
+esac
 stack_stop
 [ "$RC" -eq 0 ] && rm -rf "$SB" || echo "логи: $SB"
 finish "TELEGRAM 2FA"

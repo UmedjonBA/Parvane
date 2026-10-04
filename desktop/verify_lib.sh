@@ -101,9 +101,15 @@ stack_start() { # stack_start <scratch> [env-для-identity]
 }
 # gateway отдельно (перезапуск с другими лимитами: PV_GATEWAY_ENV="A=1 B=2")
 GW_PID=""
+# PV_V1_OFF=1 — любой сценарий на сервере с отключённым v1 (E6-1, T178): gateway в
+# режиме PARVANE_V1_MODE=disabled, если сценарий сам режим не задал и идёт по v2;
+# `finish` сверяет, что по v1 не авторизовался никто.
+v1_off() { [ "${PV_V1_OFF:-0}" = 1 ] && is_v2; }
 gateway_start() {
+  local v1mode=""
+  if v1_off; then case " ${PV_GATEWAY_ENV:-} " in *PARVANE_V1_MODE=*) ;; *) v1mode="PARVANE_V1_MODE=disabled" ;; esac; fi
   # shellcheck disable=SC2086
-  env ${PV_GATEWAY_ENV:-} PARVANE_NATS_URL=nats://127.0.0.1:4222 \
+  env ${PV_GATEWAY_ENV:-} $v1mode PARVANE_NATS_URL=nats://127.0.0.1:4222 \
     PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 PARVANE_GATEWAY_BIND=127.0.0.1:9222 \
     PARVANE_LOG_LEVEL=info "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
   PIDS+=($GW_PID)
@@ -159,6 +165,12 @@ clients_kill() { # clients_kill <каталог>...
 }
 stack_stop() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; PIDS=(); }
 finish() { # finish <имя>
+  if v1_off && [ -n "${SB:-}" ] && [ -f "$SB/gateway.log" ]; then
+    grep -qa "v1-путь в режиме Disabled" "$SB/gateway.log" && ok "E6-1: gateway с отключённым v1" \
+      || echo "E6-1: gateway режим не отметил (сценарий без соединений v1 либо свой режим)"
+    grep -qa "gateway::session.*Клиент авторизован" "$SB/gateway.log" && bad "E6-1: кто-то авторизовался по v1" \
+      || ok "E6-1: по v1 не авторизовался никто"
+  fi
   [ "$RC" -eq 0 ] && printf '\033[32m%s: OK\033[0m\n' "$1" || printf '\033[31m%s: ЕСТЬ ПРОВАЛЫ\033[0m\n' "$1"
   exit "$RC"
 }
