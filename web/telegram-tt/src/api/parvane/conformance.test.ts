@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { isContentAllowedForMember } from './groups';
 import { packRefCacheKey, shouldReusePackRef } from './messages';
 import { buildEmojiDocId, getEmojiPackNames, sanitizePackName } from './stickerPacks';
-import { shouldApplyGroupInfo } from './store';
+import { ParvaneStore, shouldApplyGroupInfo } from './store';
 
 // Правила из conformance/ обязаны соблюдать ВСЕ клиенты. Тест сторожит две
 // вещи: логику веба и то, что константы десктопа не разъехались с документом.
@@ -1344,6 +1344,59 @@ describe('ACCESS-1: блокировка отзывает ключ доступ�
     expect(session).toContain('if (!client_ || serverKey_.empty() || !client_->tokenRefillDue()) return;');
     expect(readDesktopSource()).toMatch(/if \(blocked\) \{[\s\S]{0,500}s->revokeContactAccess\(to\)/);
     expect(readRepo('android/jni/parvane_jni.cpp')).toContain('s->revokeContactAccess(jstr(env, peer))');
+  });
+});
+
+describe('GROUP-4: группа v1 переводится в v2, чат остаётся прежним', () => {
+  const r = rule('GROUP-4') as unknown as { createField: string; infoField: string };
+
+  it('схема и движок: прежний group_id — в записи генезиса и в сведениях группы', () => {
+    expect(readRepo('proto/parvane/group/v2/group.proto')).toContain(`string ${r.createField} = 6`);
+    expect(readRepo('backend/protocol/src/client.rs')).toContain(`${r.createField}: ${r.createField}.into()`);
+    expect(readRepo('backend/protocol/src/host.rs')).toContain(`"${r.infoField}": s.${r.createField}`);
+    expect(readRepo('backend/protocol/wasm/src/lib.rs')).toContain(`"${r.infoField}": s.${r.createField}`);
+  });
+
+  it('web: id чата — от прежнего адреса, сведения v1 переведённой группы не применяются', () => {
+    const store = new ParvaneStore();
+    store.self = 'alice@local';
+    const members = [{ address: 'alice@local', role: 'owner' }, { address: 'bob@local', role: 'member' }];
+    const oldGid = '0190a0b0-0000-7000-8000-000000000001';
+    store.registerGroup({
+      group_id: oldGid, name: 'G', kind: 'group', created_by: 'alice@local', members, version: 4,
+    });
+    const chatId = store.getIdForAddress(oldGid, 'group');
+    const v2 = 'v2g:00112233445566778899aabbccddeeff';
+    expect(store.registerGroup({
+      group_id: v2, name: 'G', kind: 'group', created_by: 'alice@local', members, version: 1, migrated_from: oldGid,
+    })).toBe(true);
+    expect(store.getIdForAddress(v2, 'group')).toBe(chatId);
+    expect(store.getIdForAddress(oldGid, 'group')).toBe(chatId);
+    expect(store.getAddressForId(chatId)).toBe(v2);
+    expect(store.isGroupAddress(oldGid)).toBe(true);
+    expect(store.getGroupAddresses()).toEqual([v2]);
+    expect(store.isMigratedGroup(oldGid)).toBe(true);
+    // сведения v1 той же группы (список шарда, более свежая ревизия) — мимо
+    expect(store.registerGroup({
+      group_id: oldGid, name: 'подмена', kind: 'group', created_by: 'alice@local', members, version: 9,
+    })).toBe(false);
+    expect(store.getGroupInfo(oldGid)?.name).toBe('G');
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('createGroup(v1.name, others, v1.kind, v1.group_id, v1.default_permissions)');
+    const groups = readRepo('web/telegram-tt/src/api/parvane/groups.ts');
+    expect(groups).toContain('if (store.isMigratedGroup(notice.group_id)) return;');
+  });
+
+  it('desktop: id чата — от прежнего адреса, права — в генезисе, v1-нотис чат не снимает', () => {
+    const client = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    expect(client).toContain('g_migratedFrom.constFind(rawAddress)');
+    expect(client).toContain('const auto gid = CanonicalGroup(rawGid);');
+    expect(client).toMatch(/void DropGroupLocally\([^)]*\) \{\s*if \(IsMigratedGroup\(gid\)\) \{\s*return;/);
+    expect(client).toContain('NoteV2GroupOrigin(session, address, info);');
+    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(session).toContain('v1.value("default_permissions", json())');
+    expect(session).toContain('if (!isV2Peer(member) || !legacyDevices(member).empty()) return {};');
+    expect(readRepo('desktop/parvane-core/src/v2_engine.cpp')).toContain('pv_client_group_create_from(');
   });
 });
 

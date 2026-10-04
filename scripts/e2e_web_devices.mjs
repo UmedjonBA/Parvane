@@ -186,12 +186,19 @@ try {
     0,
     'revoked device must not read new group messages after Megolm rotation',
   );
-  // Старая история при этом на месте (отзыв не трогает уже полученное)
-  assert.equal(
-    await findMessage(bobDevice2.page, groupBefore).count(),
-    1,
-    'history received before revoke stays readable on the revoked device',
-  );
+  // В v2 отозванное устройство узнаёт об отзыве отказом соединения v2
+  // (`ERROR_CODE_REVOKED`) и уходит на экран пароля — как desktop; ключи и история
+  // остаются на устройстве до повторного входа. В v1 оно остаётся в чате
+  const isLoggedOut = await bobDevice2.page.locator('.Transition_slide-active > #auth-password-form')
+    .waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
+  if (!isLoggedOut) {
+    // Старая история при этом на месте (отзыв не трогает уже полученное)
+    assert.equal(
+      await findMessage(bobDevice2.page, groupBefore).count(),
+      1,
+      'history received before revoke stays readable on the revoked device',
+    );
+  }
 
   assertNoPageErrors({
     alice: aliceSession,
