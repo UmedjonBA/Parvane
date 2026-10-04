@@ -2214,12 +2214,18 @@ impl Client {
 
     /// Создать группу: запись генезиса (затем — `group_rotate_epoch`).
     pub fn group_create(&mut self, kind: gpb::GroupKind, name: &str, members: &[String], perms: gpb::Permissions) -> Result<(Ref, OutRequest)> {
+        self.group_create_from(kind, name, members, perms, "")
+    }
+
+    /// То же для группы, переводимой из v1 (T180): `migrated_from` — прежний `group_id`.
+    pub fn group_create_from(&mut self, kind: gpb::GroupKind, name: &str, members: &[String], perms: gpb::Permissions, migrated_from: &str) -> Result<(Ref, OutRequest)> {
         let create = gpb::Create {
             kind: kind as i32,
             name: name.into(),
             about: String::new(),
             default_permissions: Some(perms),
             members: members.iter().map(|m| UserRef { address: m.clone() }).collect(),
+            migrated_from: migrated_from.into(),
         };
         let entry = group::build_entry(&self.acc, None, &self.domain, Change::Create(create), now_ms())?;
         let g = entry.group.clone().ok_or(ProtoError::InvalidField("group"))?;

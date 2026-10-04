@@ -77,6 +77,8 @@ pub struct GroupState {
     pub name: String,
     pub about: String,
     pub avatar_file_id: String,
+    /// Прежний `group_id` группы v1, из которой эта переведена (T180); иначе пусто.
+    pub migrated_from: String,
     pub default_permissions: Permissions,
     pub owner: String,
     pub members: BTreeMap<String, Member>,
@@ -300,6 +302,7 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 name: cr.name.clone(),
                 about: cr.about.clone(),
                 avatar_file_id: String::new(),
+                migrated_from: cr.migrated_from.clone(),
                 default_permissions: cr.default_permissions.unwrap_or_default(),
                 owner: signer.user,
                 members,
@@ -690,6 +693,24 @@ mod tests {
 
     fn perms() -> Permissions {
         Permissions { send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true, invite_users: true, ..Default::default() }
+    }
+
+    #[test]
+    fn create_records_migrated_from() {
+        // T180: группа, переведённая из v1, несёт прежний group_id в записи генезиса —
+        // он входит в идентификатор группы и виден в состоянии
+        let w = World::new(&["alice@x"]);
+        let make = |from: &str| {
+            let create = Create { kind: GroupKind::Group as i32, name: "G".into(), default_permissions: Some(perms()), migrated_from: from.into(), ..Default::default() };
+            let e = build_entry(w.k("alice@x"), None, "x", Change::Create(create), 1).unwrap();
+            let st = apply(None, &e, &w.resolve()).unwrap();
+            (e.group.unwrap().id, st.migrated_from)
+        };
+        let (plain_id, plain_from) = make("");
+        let (moved_id, moved_from) = make("0190a0b0-0000-7000-8000-000000000001");
+        assert_eq!(plain_from, "");
+        assert_eq!(moved_from, "0190a0b0-0000-7000-8000-000000000001");
+        assert_ne!(plain_id, moved_id);
     }
 
     fn genesis(w: &World) -> GroupState {

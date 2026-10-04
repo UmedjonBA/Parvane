@@ -191,6 +191,10 @@ message Create {
   Permissions default_permissions = 4;
   // Начальные участники (без владельца — он подписант).
   repeated parvane.core.v2.UserRef members = 5 [(parvane.core.v2.max_items) = 200];
+  // Группа переведена из протокола v1 (T180): прежний `group_id`. Клиенты участников
+  // продолжают прежний чат (история v1 остаётся в нём), а не заводят второй. Поле
+  // входит в запись генезиса — значит, и в идентификатор группы; позже не меняется.
+  string migrated_from = 6 [(parvane.core.v2.max_len) = 64];
 }
 
 message AddMember {
