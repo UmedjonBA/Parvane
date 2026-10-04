@@ -576,6 +576,15 @@ addActionHandler('loadAllChats', async (global, actions, payload): Promise<void>
     setGlobal(global);
     global = getGlobal();
   }
+
+  // Parvane: список уже загружен целиком до старта sync — `loadTopChats` (его
+  // зовут апдейты чатов при восстановлении истории из кэша) успел раньше, и цикл
+  // не выполнился ни разу. Без вызова колбэка `sync` не выставлял `isSynced`:
+  // клиент оставался «не синхронизирован» до перезагрузки (ссылка-приглашение
+  // из адресной строки не открывалась, тост «нет соединения»)
+  if (!isCallbackFired) {
+    await whenFirstBatchDone?.();
+  }
 });
 
 addActionHandler('loadPinnedDialogs', async (global, actions, payload): Promise<void> => {

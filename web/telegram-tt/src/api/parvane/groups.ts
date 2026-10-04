@@ -694,6 +694,7 @@ export function createGroupController(deps: GroupDependencies) {
       isRevoked: isRevoked ? true : undefined,
       expireDate: record.expiresAt,
       usageLimit: record.usageLimit,
+      usage: record.usage,
       isRequestNeeded: record.isRequestNeeded,
       adminId: deps.selfId(),
     };

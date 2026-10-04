@@ -82,7 +82,17 @@ test('logs out through settings and clears the local session state', async ({ pa
   // После повторной навигации чистый storage детерминированно даёт экран
   // адреса (goto устойчивее reload, который может зависнуть в гонке с
   // пост-logout переинициализацией)
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  // Сам выход перезагружает страницу — навигация, начатая в тот же момент,
+  // обрывается (net::ERR_ABORTED); повторяем после его перезагрузки
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      break;
+    } catch (err) {
+      if (attempt >= 2 || !/ERR_ABORTED|frame was detached/.test(String((err as Error)?.message))) throw err;
+      await page.waitForLoadState('domcontentloaded').catch(() => undefined);
+    }
+  }
   await expect(page.locator('.Transition_slide-active > #auth-phone-number-form'))
     .toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
 

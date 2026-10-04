@@ -701,7 +701,13 @@ export function createSyncController(deps: SyncDependencies) {
   // newMessage с чужим senderId прибавляет +1 к непрочитанному (chats.ts,
   // addUnreadMessageToCounter), не глядя на lastReadInboxMessageId.
   function pushReadState(chatId: string) {
+    // tt отбрасывает `updateThreadReadState`, пока у чата нет основного треда
+    // (`updateThreadReadState` reducer: нет треда — нет изменений). Запись о
+    // звонке из журнала состояния могла прийти раньше объявления чата: «+1» от
+    // newMessage оставался, а исправление терялось — бейдж «1» после reload
     const store = deps.getStore();
+    // Пустой чат (история очищена, чат удалён «у себя») не объявляем заново
+    if (store.getMessages(chatId).length) ensureMainThread(chatId);
     let lastReadInbox = 0;
     let unreadCount = 0;
     store.getMessages(chatId).forEach((message) => {
@@ -1012,6 +1018,16 @@ export function createSyncController(deps: SyncDependencies) {
     for (const stored of ordered) {
       await applyStoredUpdate(stored, false);
     }
+    // Восстановление идёт апдейтами `newMessage`, а tt на каждое чужое сообщение
+    // прибавляет «+1 непрочитанное». Если список чатов уже загружен (чат объявлен
+    // раньше — например, записью о звонке из журнала состояния), исправить счётчик
+    // больше некому: возвращаем его к честному значению по стору
+    const restoredChatIds = new Set<string>();
+    ordered.forEach((stored) => {
+      const message = store.getMessageByUuid(stored.id);
+      if (message && !message.isOutgoing) restoredChatIds.add(message.chatId);
+    });
+    restoredChatIds.forEach((chatId) => pushReadState(chatId));
     // Протокол v2 (spec 007): переписка только по v2 не двигает v1-курсор —
     // кэш показан, а v1-история догоняется полным синком
     if (!cursor?.lastSeenUuid) {
@@ -1069,6 +1085,7 @@ export function createSyncController(deps: SyncDependencies) {
     const journal = (await deps.localState.readOwnJournal()).filter((message) => !knownIds.has(message.id));
     const ordered = serverMessages.concat(journal)
       .sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
+    deps.log(`полный синк: с сервера ${serverMessages.length}, из журнала ${journal.length}`);
 
     ordered.forEach((stored) => {
       if (stored.content.kind === 'encrypted') unsealStored(stored);
@@ -1136,8 +1153,10 @@ export function createSyncController(deps: SyncDependencies) {
     });
     groups.forEach((group) => group.members.forEach(({ address }) => peerAddresses.add(address)));
     peerAddresses.delete(store.self);
+    deps.log('полный синк: история применена');
     await resolveDisplayNames(Array.from(peerAddresses));
     isSynced = true;
+    deps.log('полный синк завершён');
     persistCursor();
     retryUnconfirmedReads();
   }
@@ -1291,8 +1310,14 @@ export function createSyncController(deps: SyncDependencies) {
 
   // Протокол v2 (spec 007): строка, собранная из события движка, — тот же
   // конвейер отображения, без v1-подтверждений (у v2 свой ack журнала).
-  function applyExternal(stored: WireStoredMessage) {
-    return applyStoredUpdate({ ...stored, origin: 'v2' }, false, true);
+  // Движок сохраняет свой курсор инбокса сразу после возврата отсюда и запись
+  // повторно не отдаст, поэтому сообщение к этому моменту обязано лежать в кэше
+  // истории на диске: запись в IndexedDB под нагрузкой на диск идёт секундами, и
+  // перезагрузка вкладки в это окно теряла сообщение навсегда (стикер с desktop в
+  // `cross_client` по v2). `isBulk` — пакетный перенос истории: один сброс в конце
+  async function applyExternal(stored: WireStoredMessage, isBulk?: boolean) {
+    await applyStoredUpdate({ ...stored, origin: 'v2' }, false, true);
+    if (!isBulk) await deps.localState.flushHistoryNow();
   }
 
   return {
