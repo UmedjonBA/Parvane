@@ -72,6 +72,9 @@ basic_auth в Caddyfile (архив в README, раздел «Регистрац
 
 ## Бэкапы
 - Автоматом: cron `0 4 * * *` → `~/parvane/backup.sh` → `~/parvane/backups/`, хранит 14 дней.
+  С 5 окт 2026 скрипт на сервере обходит тома шардов `parvane_db-<шард>` и снимает обе базы
+  каждого — v1 (`<шард>-<дата>.sqlite`) и v2 (`<шард>.db-v2-<дата>.sqlite`); прежний вариант
+  (общий том `parvane_db`) лежит рядом как `backup.sh.prev-20261005`. Файлы ключей в бэкап не входят.
 - Вручную: `~/parvane/backup.sh`
 - Проверить снимок: `docker run --rm -v ~/parvane/backups:/bak alpine sh -c 'apk add -q sqlite; sqlite3 /bak/messenger-<дата>.sqlite "PRAGMA integrity_check"'`
 
