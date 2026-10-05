@@ -606,6 +606,13 @@ try {
   await assertToastSoonAfterFailure(sessions.eve.page, eveIntegrityLog, targetFile, eveToastsBefore);
   assert(seenByIndex.get(TAMPERED_CHUNK) >= 1, 'the tampered chunk was never requested');
   await closeViewer(sessions.eve.page);
+  // Escape из `closeViewer` иногда доходит уже после закрытия просмотрщика и
+  // закрывает сам чат — тогда пузыря нет вовсе
+  await sessions.eve.page.waitForTimeout(500);
+  if (!(await transitBubble.isVisible().catch(() => false))) {
+    await openPrivateChatStrict(sessions.eve.page, alice);
+    await transitBubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  }
   await transitBubble.locator('.icon-message-failed').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Файл помечен до конца сессии: повторное открытие в сеть не ходит (иначе
   // второй, уже чистый ответ «вылечил» бы подменённый файл)

@@ -348,6 +348,20 @@ export async function sendText(page, text) {
   // placeholder «Text not allowed», а fill() на таком элементе падает сразу,
   // без авто-ожидания. Селектор с атрибутом заставляет Playwright дождаться
   const input = page.locator('#editable-message-text[contenteditable="true"]');
+  const bubbles = () => page.locator('.Transition_slide-active > .MessageList .Message').count();
+  const before = await bubbles();
+  await input.fill(text);
+  await input.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('#editable-message-text')?.textContent);
+  // Сразу после перехода в чат в DOM ещё живёт композер прежнего чата: текст,
+  // введённый в него, пропадает вместе с ним, и сообщение не уходит вовсе (так
+  // «терялось» первое сообщение в группе в `mixed:web2-groups`). Своё сообщение
+  // появляется в ленте сразу — если лента не выросла, вводим ещё раз
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    if (await bubbles() > before) return;
+    await page.waitForTimeout(200);
+  }
   await input.fill(text);
   await input.press('Enter');
   await page.waitForFunction(() => !document.querySelector('#editable-message-text')?.textContent);
