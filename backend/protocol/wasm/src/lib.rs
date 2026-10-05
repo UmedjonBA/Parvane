@@ -223,6 +223,19 @@ impl PvClient {
         self.inner.export_root_backup(&root, &key).map_err(err_proto)
     }
 
+    /// Копия корня для администратора сервера: корень — из памяти (после
+    /// createIdentity/importRootBackup) или `rootSecret`, запечатывается открытым
+    /// ключом администратора (32 байта из `server.describe`).
+    #[wasm_bindgen(js_name = exportRootEscrow)]
+    pub fn export_root_escrow(&self, escrow_public: &[u8], root_secret: Option<Vec<u8>>) -> Result<Vec<u8>, JsValue> {
+        let root = match (&root_secret, &self.root) {
+            (Some(r), _) => zeroize::Zeroizing::new(key32(r)?),
+            (None, Some(r)) => r.clone(),
+            (None, None) => return Err(err_proto(ProtoError::NotFound)),
+        };
+        self.inner.export_root_escrow(&root, &key32(escrow_public)?).map_err(err_proto)
+    }
+
     /// Восстановить корень из копии (сверяется с журналом устройств); корень
     /// остаётся в памяти до `forgetRoot()` и возвращается хосту.
     #[wasm_bindgen(js_name = importRootBackup)]

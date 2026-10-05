@@ -1079,6 +1079,17 @@ pub unsafe extern "C" fn pv_client_export_root_backup(c: *const PvClient, root: 
     })
 }
 
+/// Копия корня для администратора сервера (`escrow_public` — 32 байта из
+/// `server.describe`): страховка на случай потери устройств и ключа
+/// восстановления. Пустой буфер — ошибка (в `err`).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_export_root_escrow(c: *const PvClient, root: *const u8, root_len: usize, escrow_public: *const u8, escrow_public_len: usize, err: *mut *mut c_char) -> PvBytes {
+    guard(err, PvBytes::empty(), || {
+        let c = c.as_ref().ok_or_else(bad_arg)?;
+        c.inner.export_root_escrow(bytes_arg(root, root_len), bytes_arg(escrow_public, escrow_public_len)).map(PvBytes::from_vec)
+    })
+}
+
 /// Корень (32 байта) из копии, сверенный с журналом устройств. Буфер
 /// освобождать `parvane_protocol_bytes_free` (движок не обнуляет копию —
 /// вызывающий обнуляет её сам до освобождения).

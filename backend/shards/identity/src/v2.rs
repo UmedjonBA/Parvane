@@ -376,6 +376,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 },
                 domain: server_domain(),
                 telegram_bot: if mode == ConfirmMode::Telegram { telegram_bot().unwrap_or_default() } else { String::new() },
+                escrow_public_key: escrow_public_key().map(|k| k.to_vec()).unwrap_or_default(),
             }
             .encode_to_vec())
         }
@@ -648,7 +649,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.root.backup_set" => {
             require_user(&req)?;
             let r: pb::RootBackupSetRequest = body(&req)?;
-            if r.backup.is_empty() {
+            if r.backup.is_empty() && r.escrow.is_empty() {
                 return Err(ErrorCode::Invalid);
             }
             // Пишет только активное устройство журнала: сессия без устройства
@@ -657,13 +658,30 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if log.active(&req.device_id).is_none() {
                 return Err(ErrorCode::Forbidden);
             }
-            sqlx::query("INSERT OR REPLACE INTO root_backup (user, backup, updated_at) VALUES (?, ?, ?)")
-                .bind(&req.user)
-                .bind(&r.backup)
-                .bind(now_unix())
-                .execute(&ctx.v2)
-                .await
-                .map_err(db_err)?;
+            if !r.escrow.is_empty() {
+                // Копия для администратора — только для действующего корня журнала
+                // и только когда сервер объявил ключ администратора.
+                let root_pub = parvane_protocol::recovery::escrow_root_pub(&r.escrow).map_err(|_| ErrorCode::Invalid)?;
+                if escrow_public_key().is_none() || root_pub != log.root_key {
+                    return Err(ErrorCode::Invalid);
+                }
+                sqlx::query("INSERT OR REPLACE INTO root_escrow (user, escrow, updated_at) VALUES (?, ?, ?)")
+                    .bind(&req.user)
+                    .bind(&r.escrow)
+                    .bind(now_unix())
+                    .execute(&ctx.v2)
+                    .await
+                    .map_err(db_err)?;
+            }
+            if !r.backup.is_empty() {
+                sqlx::query("INSERT OR REPLACE INTO root_backup (user, backup, updated_at) VALUES (?, ?, ?)")
+                    .bind(&req.user)
+                    .bind(&r.backup)
+                    .bind(now_unix())
+                    .execute(&ctx.v2)
+                    .await
+                    .map_err(db_err)?;
+            }
             Ok(pb::RootBackupSetResponse {}.encode_to_vec())
         }
         "identity.root.backup_get" => {
@@ -1168,6 +1186,7 @@ async fn root_rotate(ctx: &V2Ctx, user: &str, device: &str, genesis: &SignedOp) 
     sqlx::query("DELETE FROM device_log WHERE user = ?").bind(user).execute(&mut *tx).await.map_err(db_err)?;
     // Копия прежнего корня больше не нужна (новый корень — новая копия).
     sqlx::query("DELETE FROM root_backup WHERE user = ?").bind(user).execute(&mut *tx).await.map_err(db_err)?;
+    sqlx::query("DELETE FROM root_escrow WHERE user = ?").bind(user).execute(&mut *tx).await.map_err(db_err)?;
     sqlx::query("INSERT INTO device_log (user, version, entry, hash, created_at) VALUES (?, 1, ?, ?, ?)")
         .bind(user)
         .bind(genesis.encode_to_vec())

@@ -431,6 +431,10 @@ message ServerDescribeResponse {
   ];
   string domain = 3 [(parvane.core.v2.max_len) = 128];
   string telegram_bot = 4 [(parvane.core.v2.max_len) = 64];
+  // Открытый ключ администратора для копии корня (X25519, HPKE): клиент
+  // запечатывает им корень личности и отдаёт серверу шифртекст (RootBackupSet.escrow).
+  // Закрытый ключ хранит администратор вне сервера; пусто — страховки нет.
+  bytes escrow_public_key = 5 [(parvane.core.v2.max_len) = 32];
 }
 
 // ── сессия ──────────────────────────────────────────────────────────────────
@@ -552,6 +556,11 @@ message RootRotateResponse {}
 message RootBackupSetRequest {
   // Копия корня под ключом восстановления (recovery.rs export_root_backup).
   bytes backup = 1 [(parvane.core.v2.max_len) = 1024];
+  // Копия корня, запечатанная ключом администратора сервера
+  // (recovery.rs seal_root_escrow): страховка на случай, когда потеряны и
+  // устройства, и ключ восстановления. Сервер без закрытого ключа администратора
+  // её не читает. Пусто — прежняя копия у сервера не меняется.
+  bytes escrow = 2 [(parvane.core.v2.max_len) = 256];
 }
 message RootBackupSetResponse {}
 message RootBackupGetRequest {}

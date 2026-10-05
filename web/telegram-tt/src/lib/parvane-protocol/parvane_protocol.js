@@ -360,6 +360,36 @@ export class PvClient {
         }
     }
     /**
+     * Копия корня для администратора сервера: корень — из памяти (после
+     * createIdentity/importRootBackup) или `rootSecret`, запечатывается открытым
+     * ключом администратора (32 байта из `server.describe`).
+     * @param {Uint8Array} escrow_public
+     * @param {Uint8Array | null} [root_secret]
+     * @returns {Uint8Array}
+     */
+    exportRootEscrow(escrow_public, root_secret) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(escrow_public, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            var ptr1 = isLikeNone(root_secret) ? 0 : passArray8ToWasm0(root_secret, wasm.__wbindgen_export);
+            var len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_exportRootEscrow(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v3 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v3;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Стереть корень из памяти движка.
      */
     forgetRoot() {

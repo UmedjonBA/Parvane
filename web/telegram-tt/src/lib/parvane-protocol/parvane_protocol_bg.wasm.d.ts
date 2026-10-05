@@ -44,6 +44,7 @@ export const pvclient_ephSubscribe: (a: number, b: number, c: number, d: number)
 export const pvclient_ephTyping: (a: number, b: number, c: number, d: number, e: number) => void;
 export const pvclient_export: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_exportRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const pvclient_exportRootEscrow: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvclient_forgetRoot: (a: number) => void;
 export const pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;

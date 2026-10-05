@@ -308,6 +308,13 @@ impl HostClient {
         self.inner.export_root_backup(&root, &key).map_err(err)
     }
 
+    /// Копия корня для администратора сервера (`escrow_public` — 32 байта из
+    /// `server.describe`): страховка на случай потери устройств и ключа восстановления.
+    pub fn export_root_escrow(&self, root_secret: &[u8], escrow_public: &[u8]) -> Result<Vec<u8>, String> {
+        let root = zeroize::Zeroizing::new(key32(root_secret)?);
+        self.inner.export_root_escrow(&root, &key32(escrow_public)?).map_err(err)
+    }
+
     /// Корень из копии (сверен с журналом устройств).
     pub fn import_root_backup(&self, blob: &[u8], recovery_key: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
         let key = crate::recovery::RecoveryKey::parse(recovery_key).map_err(err)?;

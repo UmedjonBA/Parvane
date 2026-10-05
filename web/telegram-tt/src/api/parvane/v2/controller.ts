@@ -24,6 +24,7 @@ import {
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
+import { preauth } from './control';
 import { loadProtocol, parseEngineError } from './engine';
 import { createL2Gate, type L2State, parseL2State } from './l2';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
@@ -261,6 +262,9 @@ const OWN_DEVICES_RECORD = 'v2-own-devices';
 const ROOT_BACKUP_RECORD = 'v2-root-backup';
 // Какая копия корня уже лежит на сервере (чтобы не слать при каждом запуске)
 const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
+// Копия корня, запечатанная ключом администратора сервера (страховка: потеряны
+// и устройства, и ключ восстановления)
+const ROOT_ESCROW_RECORD = 'v2-root-escrow';
 const KEY_RECORD = 'v2-storage-key';
 const OTK_COUNT = 50;
 // «Не на v2» кэшируется на 10 мин; у собеседника на v2 журнал устройств
@@ -302,6 +306,7 @@ export function createV2Controller(deps: Deps) {
   // Копия корня под ключом восстановления (не секрет без ключа): едет в гранте
   // линковки, чтобы любое своё устройство могло сменить SSK
   let rootBackupB64: string | undefined;
+  let escrowKey: Promise<Uint8Array | undefined> | undefined;
   let linkMaterial: Uint8Array | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const peers = new Map<string, { v2: boolean; at: number }>();
@@ -582,6 +587,7 @@ export function createV2Controller(deps: Deps) {
           const backup = client.exportRootBackup(recoveryKey, created.rootSecret);
           rootBackupB64 = b64(backup);
           await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+          await sealRootEscrow(client);
           client.forgetRoot();
           created.rootSecret.fill(0);
           deps.onRecoveryKey(recoveryKey);
@@ -927,6 +933,7 @@ export function createV2Controller(deps: Deps) {
     ready = false;
     await storage?.deleteRecord(STATE_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_BACKUP_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(ROOT_ESCROW_RECORD).catch(() => undefined);
     rootBackupB64 = undefined;
     client?.free();
     client = undefined;
@@ -985,11 +992,54 @@ export function createV2Controller(deps: Deps) {
    * устройство восстановит корень, когда других устройств не осталось. */
   async function uploadRootBackup() {
     if (!pv || !rootBackupB64 || !storage) return;
-    if (await storage.loadRecord<string>(ROOT_BACKUP_SENT_RECORD) === rootBackupB64) return;
+    const escrow = await storage.loadRecord<string>(ROOT_ESCROW_RECORD);
+    // Без копии для администратора отметка — прежнего вида (сама копия корня)
+    const sent = escrow ? `${rootBackupB64}|${escrow}` : rootBackupB64;
+    if (await storage.loadRecord<string>(ROOT_BACKUP_SENT_RECORD) === sent) return;
     await call('id', 'identity.root.backup_set', pv.encodeMessage(
-      'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ backup: rootBackupB64 }),
+      'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ backup: rootBackupB64, escrow }),
     ));
-    await storage.saveRecord(ROOT_BACKUP_SENT_RECORD, rootBackupB64);
+    await storage.saveRecord(ROOT_BACKUP_SENT_RECORD, sent);
+  }
+
+  /** Открытый ключ администратора сервера для копии корня (`server.describe`);
+   * сервер без ключа — страховки нет. */
+  function loadEscrowKey() {
+    if (!escrowKey) {
+      escrowKey = preauth(deps.gatewayUrl(), 'server.describe', {}).then((described) => {
+        const key = typeof described.escrow_public_key === 'string' ? described.escrow_public_key : '';
+        deps.log(`v2: копия корня для администратора — ${key ? 'сервер объявил ключ' : 'сервер ключ не объявил'}`);
+        return key ? unb64(key) : undefined;
+      }).catch((e: unknown) => {
+        escrowKey = undefined;
+        deps.log(`v2: описание сервера не получено: ${String(e)}`);
+        return undefined;
+      });
+    }
+    return escrowKey;
+  }
+
+  /** Пока корень в памяти движка (`holder`) — запечатать его ключом администратора
+   * сервера; копия уйдёт на сервер вместе с копией под ключом восстановления.
+   * Потерян ключ восстановления — администратор выпишет новый. */
+  async function sealRootEscrow(holder: PvClient) {
+    try {
+      const key = await loadEscrowKey();
+      if (!key || !storage) return;
+      await storage.saveRecord(ROOT_ESCROW_RECORD, b64(holder.exportRootEscrow(key)));
+    } catch (e) {
+      deps.log(`v2: копия корня для администратора не создана: ${String(e)}`);
+    }
+  }
+
+  /** Копия корня с сервера: администратор мог выписать новый ключ восстановления. */
+  async function fetchServerRootBackup() {
+    if (!pv) return undefined;
+    const got = JSON.parse(pv.decodeMessage(
+      'parvane.identity.v2.RootBackupGetResponse',
+      await call('id', 'identity.root.backup_get', new Uint8Array()),
+    )) as { backup?: string };
+    return got.backup;
   }
 
   /** Восстановление по ключу восстановления: корень — из копии на сервере,
@@ -1000,12 +1050,9 @@ export function createV2Controller(deps: Deps) {
     const self = deps.getSelf();
     let backup: Uint8Array;
     try {
-      const got = JSON.parse(pv.decodeMessage(
-        'parvane.identity.v2.RootBackupGetResponse',
-        await call('id', 'identity.root.backup_get', new Uint8Array()),
-      )) as { backup?: string };
-      if (!got.backup) return 'no_backup';
-      backup = unb64(got.backup);
+      const serverBackup = await fetchServerRootBackup();
+      if (!serverBackup) return 'no_backup';
+      backup = unb64(serverBackup);
     } catch (e) {
       deps.log(`v2: копия корня не получена: ${String(e)}`);
       return 'failed';
@@ -1023,6 +1070,7 @@ export function createV2Controller(deps: Deps) {
         JSON.stringify({ user: { address: self }, after_version: '0' }),
       ));
       await run(fresh.recoverWithRoot(ownLog, OTK_COUNT) as OutReq[]);
+      await sealRootEscrow(fresh);
       fresh.forgetRoot();
       await storage.saveRecord(STATE_RECORD, b64(fresh.export(storageKey)));
       rootBackupB64 = b64(backup);
@@ -1058,6 +1106,7 @@ export function createV2Controller(deps: Deps) {
       await run(created.requests);
       recoveryKey = pv.generateRecoveryKey();
       rootBackupB64 = b64(fresh.exportRootBackup(recoveryKey, created.rootSecret));
+      await sealRootEscrow(fresh);
       fresh.forgetRoot();
       created.rootSecret.fill(0);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
@@ -1178,9 +1227,20 @@ export function createV2Controller(deps: Deps) {
     try {
       client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);
     } catch {
-      return 'bad_key';
+      // Ключ мог быть выписан администратором заново: тогда копия под ним — на сервере
+      const serverBackup = await fetchServerRootBackup().catch(() => undefined);
+      if (!serverBackup || serverBackup === rootBackupB64) return 'bad_key';
+      try {
+        client.importRootBackup(unb64(serverBackup), recoveryKey.trim()).fill(0);
+      } catch {
+        return 'bad_key';
+      }
+      rootBackupB64 = serverBackup;
+      await storage?.saveRecord(ROOT_BACKUP_RECORD, serverBackup);
+      await storage?.saveRecord(ROOT_BACKUP_SENT_RECORD, serverBackup);
     }
     try {
+      await sealRootEscrow(client);
       await serial(async () => {
         const reqs = client!.rotateSsk() as OutReq[];
         try {
@@ -1192,6 +1252,7 @@ export function createV2Controller(deps: Deps) {
         await persist();
       });
       deps.log('v2: SSK сменён корнем');
+      void uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
       await serial(syncLegacySet);
       return 'ok';
     } catch (e) {
