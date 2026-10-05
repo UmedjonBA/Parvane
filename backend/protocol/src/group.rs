@@ -64,6 +64,28 @@ pub struct InviteLink {
     pub announce: GroupInviteKeyAnnounce,
     pub creator: String,
     pub uses: u32,
+    /// Время записи объявления (подписанное время записи журнала): по нему у всех
+    /// ведущих приглашения один порядок ссылок — значит, и одна основная.
+    pub created_ms: i64,
+}
+
+impl GroupState {
+    /// Действующие ссылки-приглашения для хоста (JSON-массив): метаданные из
+    /// журнала; секрет ссылки хост хранит сам.
+    pub fn invites_json(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.invite_links
+                .iter()
+                .map(|(id, l)| {
+                    serde_json::json!({
+                        "id": hex::encode(id), "creator": l.creator, "createdMs": l.created_ms, "title": l.announce.title,
+                        "expiresMs": l.announce.expires_ms, "usageLimit": l.announce.usage_limit,
+                        "requiresApproval": l.announce.requires_approval, "uses": l.uses,
+                    })
+                })
+                .collect(),
+        )
+    }
 }
 
 /// Состояние группы после проверки журнала.
@@ -89,11 +111,17 @@ pub struct GroupState {
     /// Смена состава/прав требует новой эпохи.
     pub epoch_stale: bool,
     pub invite_links: BTreeMap<[u8; 32], InviteLink>,
+    /// Отозванные ссылки (последние `MAX_REVOKED_LINKS`): по ним нельзя вступить, но
+    /// вступающему говорят «ссылка отозвана», а админ видит их отдельным списком.
+    pub revoked_links: BTreeMap<[u8; 32], InviteLink>,
     pub deleted: bool,
     /// Политика «усиленная приватность» (L2) группы и кто её задал последним.
     pub l2: bool,
     pub l2_by: String,
 }
+
+/// Сколько отозванных ссылок группа помнит (остальные неотличимы от несуществующих).
+pub const MAX_REVOKED_LINKS: usize = 200;
 
 fn full_rights() -> AdminRights {
     AdminRights { change_info: true, delete_messages: true, ban_users: true, invite_users: true, pin_messages: true, add_admins: true }
@@ -312,6 +340,7 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 last_epoch_ms: 0,
                 epoch_stale: true,
                 invite_links: BTreeMap::new(),
+                revoked_links: BTreeMap::new(),
                 deleted: false,
                 l2: false,
                 l2_by: String::new(),
@@ -490,7 +519,7 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             if !ok || a.link_public_key.len() != 32 {
                 return forbid();
             }
-            s.invite_links.insert(link_id(&a.link_public_key), InviteLink { announce: a.clone(), creator: actor, uses: 0 });
+            s.invite_links.insert(link_id(&a.link_public_key), InviteLink { announce: a.clone(), creator: actor, uses: 0, created_ms: now });
         }
         Change::InviteKeyRevoke(r) => {
             let id: [u8; 32] = r.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
@@ -498,7 +527,11 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             if !(s.admin_can(&actor, |r| r.invite_users) || creator == actor) {
                 return forbid();
             }
-            s.invite_links.remove(&id);
+            if let Some(link) = s.invite_links.remove(&id) {
+                if s.revoked_links.len() < MAX_REVOKED_LINKS {
+                    s.revoked_links.insert(id, link);
+                }
+            }
         }
         Change::JoinByInvite(j) => {
             let id = link_id(&j.link_public_key);

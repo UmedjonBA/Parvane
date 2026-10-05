@@ -514,6 +514,23 @@ impl PvClient {
         self.inner.share_groups_with_own_devices(&devices).map(|r| reqs_js(&r)).map_err(err_client)
     }
 
+    /// Секреты своих ссылок-приглашений — другим ведущим приглашения группы:
+    /// `links_json`, `recipients_json` — JSON-массивы ссылок и адресов.
+    #[wasm_bindgen(js_name = shareInviteLinks)]
+    pub fn share_invite_links(&mut self, group_hex: &str, links_json: &str, recipients_json: &str) -> Result<Array, JsValue> {
+        let gid = hex::decode(group_hex).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let links: Vec<String> = serde_json::from_str(links_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let to: Vec<String> = serde_json::from_str(recipients_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.inner.share_invite_links(&gid, &links, &to).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Принятые секреты ссылок-приглашений: JSON `[{"group": hex, "url": …}]`.
+    #[wasm_bindgen(js_name = takeSharedInvites)]
+    pub fn take_shared_invites(&mut self) -> String {
+        let list: Vec<_> = self.inner.take_shared_invites().into_iter().map(|(g, url)| serde_json::json!({ "group": hex::encode(g), "url": url })).collect();
+        serde_json::Value::Array(list).to_string()
+    }
+
     /// Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
     #[wasm_bindgen(js_name = shareDeliveryKey)]
     pub fn share_delivery_key(&mut self, peer: &str) -> Result<Array, JsValue> {
@@ -696,6 +713,8 @@ impl PvClient {
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
+            // Действующие ссылки с метаданными из журнала (секреты хост хранит сам)
+            "invites": s.invites_json(),
             // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
             "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
             "l2": s.l2, "l2By": s.l2_by,

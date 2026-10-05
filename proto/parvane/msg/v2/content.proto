@@ -299,6 +299,14 @@ message GroupKeyShare {
   // подписи). Принимается только от устройства своего же аккаунта.
   bytes megolm_exported = 5 [(parvane.core.v2.max_len) = 1024];
   string megolm_owner = 6 [(parvane.core.v2.max_len) = 320];
+  // Секреты ссылок-приглашений группы — тем, кто ведёт приглашения (владелец и
+  // админы с правом приглашать): у них общий список ссылок. Получатель
+  // принимает секрет, только если его link_id объявлен в журнале группы
+  // (SHA-256 публичного ключа секрета), — отправителю верить не нужно.
+  repeated bytes invite_seeds = 7 [
+    (parvane.core.v2.max_items) = 64,
+    (parvane.core.v2.max_len) = 32
+  ];
 }
 
 message DeliveryKeyShare {

@@ -539,6 +539,8 @@ impl HostClient {
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
+            // Действующие ссылки с метаданными из журнала (секреты хост хранит сам)
+            "invites": s.invites_json(),
             // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
             "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
             "l2": s.l2, "l2By": s.l2_by,
@@ -660,6 +662,20 @@ impl HostClient {
     pub fn share_groups_with_own_devices(&mut self, devices_json: &str) -> Result<String, String> {
         let devices: Vec<String> = serde_json::from_str(devices_json).map_err(|e| e.to_string())?;
         self.inner.share_groups_with_own_devices(&devices).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    /// Секреты своих ссылок-приглашений — другим ведущим приглашения группы:
+    /// `links_json`, `recipients_json` — JSON-массивы ссылок и адресов.
+    pub fn share_invite_links(&mut self, group_hex: &str, links_json: &str, recipients_json: &str) -> Result<String, String> {
+        let links: Vec<String> = serde_json::from_str(links_json).map_err(|e| e.to_string())?;
+        let to: Vec<String> = serde_json::from_str(recipients_json).map_err(|e| e.to_string())?;
+        self.inner.share_invite_links(&group_id(group_hex)?, &links, &to).map(|r| reqs_json(&r)).map_err(cerr)
+    }
+
+    /// Принятые секреты ссылок-приглашений: JSON `[{"group": hex, "url": …}]`.
+    pub fn take_shared_invites(&mut self) -> String {
+        let list: Vec<_> = self.inner.take_shared_invites().into_iter().map(|(g, url)| serde_json::json!({ "group": hex::encode(g), "url": url })).collect();
+        serde_json::Value::Array(list).to_string()
     }
 
     /// Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
