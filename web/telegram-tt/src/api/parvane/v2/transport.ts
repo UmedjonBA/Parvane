@@ -160,9 +160,29 @@ export class V2Connection {
     });
   }
 
+  // Ответ на Hello/Auth ждём не дольше обычного запроса: сервер, который принял
+  // соединение и молчит, иначе вешал вызывающего навсегда (а с ним — очередь
+  // операций движка); по таймауту соединение закрывается
   private waitFor(kind: string): Promise<Frame> {
     return new Promise((resolve, reject) => {
-      this.waiter = { kind, resolve, reject };
+      const timer = setTimeout(() => {
+        if (this.waiter?.resolve !== settle) return;
+        this.waiter = undefined;
+        reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
+        this.ws?.close();
+      }, DEFAULT_TIMEOUT_MS);
+      const settle = (frame: Frame) => {
+        clearTimeout(timer);
+        resolve(frame);
+      };
+      this.waiter = {
+        kind,
+        resolve: settle,
+        reject: (err: Error) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      };
     });
   }
 
