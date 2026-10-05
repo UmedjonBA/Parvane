@@ -9,11 +9,12 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  relogin,
-  LOGIN_TIMEOUT_MS,
+  closeSettings,
   findMessage,
+  LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
+  relogin,
   sendText,
 } from './e2e_web_helpers.mjs';
 
@@ -21,6 +22,11 @@ const PASSWORD = 'Parvane-keys-e2e-password';
 const BACKUP_PASSWORD = 'backup-secret-phrase';
 
 async function openPrivacySettings(page) {
+  // Непривязанное устройство web само открывает экран «Устройства» — назад к списку чатов
+  if (await page.locator('.SettingsActiveSessions').waitFor({ state: 'visible', timeout: 2500 })
+    .then(() => true, () => false)) {
+    await closeSettings(page);
+  }
   await page.getByRole('button', { name: 'Open menu' }).first().click();
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Privacy and Security' }).click();

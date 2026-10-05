@@ -243,17 +243,11 @@ try {
   });
   assert.equal(promoted.result, true, `promote failed: ${JSON.stringify(promoted)}`);
   const adminInviteUrl = await readInvitesScreen(sessions.bob.page, groupTitle);
-  if (IS_V2) {
-    // v2: секрет ссылки знает только создавший её (и его устройства, T160) —
-    // сервер и другие админы его не видят; у админа своя основная ссылка
-    // (как в Telegram), у владельца прежняя остаётся
-    assert.match(adminInviteUrl, /\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/, 'admin has no v2 invite link');
-    assert.notEqual(adminInviteUrl, inviteUrl, 'admin cannot know the secret of the owner link');
-    assert.equal(await readInvitesScreen(alicePage, groupTitle), inviteUrl, 'owner link changed after the admin made one');
-  } else {
-    assert.equal(adminInviteUrl, inviteUrl, 'admin must see the same primary link as the owner');
-    assert.equal(countInvitesCreatedBy(bob), 0, 'admin opening the screen must not mint a link');
-  }
+  // v1 — список сервера; v2 — секрет ссылки владельца передан админу служебной
+  // раздачей (общий список у ведущих приглашения), своей основной он не создаёт
+  assert.equal(adminInviteUrl, inviteUrl, 'admin must see the same primary link as the owner');
+  if (IS_V2) await assertSingleInvite('admin opening the screen must not mint a link');
+  else assert.equal(countInvitesCreatedBy(bob), 0, 'admin opening the screen must not mint a link');
 
   // ── Дейв (уже вошёл) открывает `#+<токен>` в адресной строке ──────────────
   sessions.dave = await preparePage(contexts.dave, address('dave'), PASSWORD);
@@ -367,9 +361,7 @@ try {
   assert.notEqual(newPrimary, inviteUrl, 'a new primary link must replace the revoked one');
   sessions.heidi = await preparePage(contexts.heidi, address('heidi'), PASSWORD);
   await openLinkInAddressBar(sessions.heidi.page, baseUrl, inviteUrl);
-  // v2: отозванная ссылка удалена из состояния группы записью отзыва — сервер
-  // не отличает её от несуществующей
-  await expectToast(sessions.heidi.page, IS_V2 ? 'This invite link is invalid' : 'This invite link was revoked');
+  await expectToast(sessions.heidi.page, 'This invite link was revoked');
   await sessions.heidi.page.waitForTimeout(1000);
   assert.equal(await sessions.heidi.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle }).count(), 0,
     'revoked link must not admit');

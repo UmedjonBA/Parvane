@@ -1016,6 +1016,10 @@ export async function exchangeMessages(aPage, aAddress, bPage, bAddress, tag) {
 
 // Настройки → Устройства (экран `SettingsActiveSessions`)
 export async function openDevicesScreen(page) {
+  // Непривязанное устройство web само открывает экран «Устройства» (код линковки,
+  // ключ восстановления) — тогда он уже на месте
+  const shown = page.locator('.SettingsActiveSessions');
+  if (await shown.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false)) return shown;
   await page.getByRole('button', { name: 'Open menu' }).first().click();
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Devices' }).click();
@@ -1069,8 +1073,11 @@ export async function linkSecondDevice(oldPage, newPage) {
   await closeSettings(oldPage);
 }
 
+// Диалог выхода с единственного устройства тоже упоминает ключ восстановления —
+// диалог самого ключа отличаем по кнопке OK
 const recoveryKeyDialog = (page) => page.locator('.Modal .modal-dialog')
-  .filter({ hasText: /recovery key|ключ восстановления/i });
+  .filter({ hasText: /recovery key|ключ восстановления/i })
+  .filter({ has: page.getByRole('button', { name: 'OK', exact: true }) });
 
 // Диалог ключа восстановления перекрывает интерфейс — обработчик закрывает его
 // перед любым действием Playwright, когда бы он ни появился
@@ -1081,7 +1088,7 @@ export async function autoDismissRecoveryKeyDialog(page) {
 }
 
 export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
-  const dialog = page.locator('.Modal .modal-dialog').filter({ hasText: /recovery key|ключ восстановления/i });
+  const dialog = recoveryKeyDialog(page);
   try {
     await dialog.waitFor({ state: 'visible', timeout });
   } catch {

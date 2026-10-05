@@ -114,6 +114,11 @@ async function openPrivateChatStrict(page, address) {
 }
 
 async function openDevicesScreen(page) {
+  // Непривязанное устройство web само открывает экран «Устройства» — тогда он уже на месте
+  if (await page.locator('.SettingsActiveSessions').waitFor({ state: 'visible', timeout: 2500 })
+    .then(() => true, () => false)) {
+    return page.locator('.SettingsActiveSessions');
+  }
   await page.getByRole('button', { name: 'Open menu' }).first().click();
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Devices' }).click();
