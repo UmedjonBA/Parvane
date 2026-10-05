@@ -178,6 +178,9 @@ log "v1 history after v1 is switched off: LegacyV1 records (T182)"
 log "Per-callee ring cap: the caller is told why the call did not go out"
 "$ROOT/scripts/run_web_call_limit_e2e.sh"
 
+log "Rejected saved token without v1: sign-in screen, then back to work (E6-1)"
+"$ROOT/scripts/run_web_auth_reject_v1off_e2e.sh"
+
 log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)"
 "$ROOT/scripts/run_web_honest_ui_e2e.sh"
 
