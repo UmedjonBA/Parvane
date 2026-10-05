@@ -158,6 +158,10 @@ docker compose exec -T caddy caddy hash-password --plaintext '<PW>'
   в .env, см. секцию выше). Rate-limit регистрации у identity — по
   логину, не по IP (gateway не прокидывает адрес клиента); при спаме — лимит
   в Caddy или PARVANE_INVITE_REQUIRED=1.
+- Потерянный ключ восстановления пользователя выписывает заново администратор
+  (`PARVANE_ESCROW_PUBLIC_KEY` в .env, закрытый ключ — вне сервера;
+  `scripts/admin_recover_user.sh`). Порядок — OPERATIONS.md, раздел
+  «Пользователь потерял ключ восстановления».
 - notes/calendar шарды не разворачиваются (к UI не подключены).
 - Desktop-клиент **теперь работает против прода** — ходит на `gateway` по WSS
   (`wss://<host>/ws`, `GatewayWsTransport`), TCP-гейтвей наружу по-прежнему не
