@@ -4,6 +4,34 @@ import {
 
 const STORAGE_VERSION = 2;
 const STORAGE = createStore('parvane-e2e-v2', 'secure-state');
+
+// Запись в IndexedDB, которая не завершается, молча останавливает всё, что стоит
+// за ней в очередях (состояние E2E, кэш истории, журнал исходящих): после
+// перезагрузки на диске оказывается устаревшее состояние. Долгую запись называем
+// в журнале — вместе с числом записей, идущих одновременно
+const SLOW_WRITE_MS = 3000;
+let writesInFlight = 0;
+
+async function timedWrite(name: string, bytes: number, write: () => Promise<void>) {
+  const started = Date.now();
+  writesInFlight += 1;
+  const watchdog = setTimeout(() => {
+    // eslint-disable-next-line no-console
+    console.warn(`[parvane] хранилище: запись «${name}» (${bytes} байт) идёт дольше ${SLOW_WRITE_MS} мс,`
+      + ` одновременно записей: ${writesInFlight}`);
+  }, SLOW_WRITE_MS);
+  try {
+    await write();
+  } finally {
+    clearTimeout(watchdog);
+    writesInFlight -= 1;
+    const took = Date.now() - started;
+    if (took >= SLOW_WRITE_MS) {
+      // eslint-disable-next-line no-console
+      console.warn(`[parvane] хранилище: запись «${name}» заняла ${took} мс`);
+    }
+  }
+}
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -117,7 +145,7 @@ export class SecureE2eStorage {
       iv: iv.buffer,
       ciphertext,
     };
-    await set(id, record, STORAGE);
+    await timedWrite(name, ciphertext.byteLength, () => set(id, record, STORAGE));
   }
 
   // Все записи с префиксом имени (кэш истории `m:<uuid>`): ключи IDB
@@ -158,7 +186,7 @@ export class SecureE2eStorage {
       plain.buffer,
     );
     const record: EncryptedRecord = { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
-    await set(recordId(this.user, name), record, STORAGE);
+    await timedWrite(name, ciphertext.byteLength, () => set(recordId(this.user, name), record, STORAGE));
   }
 
   async loadBytesRecord(name: string): Promise<Uint8Array | undefined> {
