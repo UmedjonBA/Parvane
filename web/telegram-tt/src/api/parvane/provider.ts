@@ -14,7 +14,7 @@ import type {
   ApiPeer,
   ApiPhoto,
   ApiSession,
-  ApiSticker, ApiThreadInfo,
+  ApiSticker, ApiStickerSet, ApiThreadInfo,
   ApiUpdate,
   ApiUser,
   ApiUserStatus,
@@ -2034,14 +2034,20 @@ const methods = {
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, getStickerBlobMime(id));
     });
-    const packs = await loadInstalledPacks(store.self);
+    // Наборы эмодзи сюда не входят (их отдаёт `fetchCustomEmojiSets`), а поле
+    // `stickers` у набора без содержимого опускается целиком: tt сливает ответ с
+    // уже загруженным набором (`{ ...existing, ...set }`), и явное `undefined`
+    // стирало содержимое — панель эмодзи показывала заголовок набора без эмодзи,
+    // когда этот ответ приходил позже ответа со списком наборов эмодзи
+    const withoutStickers = ({ stickers: _stickers, ...rest }: ApiStickerSet): ApiStickerSet => rest;
+    const packs = (await loadInstalledPacks(store.self)).filter((pack) => !pack.isEmoji);
     const customSets = packs.map((pack) => {
       const built = buildApiStickerSetFromPack(pack, INSTALLED_PACK_DATE);
       registerPackBlobs(built.blobs);
-      return { ...built.set, stickers: undefined, count: built.set.count };
+      return withoutStickers(built.set);
     });
     const hash = `1:${customSets.map(({ id }) => id).sort().join(',')}`;
-    return { hash, sets: [{ ...set, stickers: undefined, count: set.count }, ...customSets] };
+    return { hash, sets: [withoutStickers(set), ...customSets] };
   },
 
   async fetchStickerSet(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {

@@ -75,12 +75,23 @@ export function useStickerPickerObservers(
     rootRef: headerRef,
   });
 
+  // Parvane: заморозка наблюдателей — счётчик. Панель, закрытая раньше, чем истекла
+  // задержка разморозки (быстрое наведение и уход, открыл-закрыл), замораживала их
+  // второй раз, а размораживала один — наборы ниже первого экрана переставали
+  // отрисовываться до перезагрузки вкладки. Замораживаем не больше одного раза
+  const isFrozenRef = useRef(false);
+
   useSyncEffect(() => {
     if (isHidden) {
-      freezeForSet();
-      freezeForShowingItems();
+      if (!isFrozenRef.current) {
+        isFrozenRef.current = true;
+        freezeForSet();
+        freezeForShowingItems();
+      }
     } else {
       const timeout = window.setTimeout(() => {
+        if (!isFrozenRef.current) return;
+        isFrozenRef.current = false;
         unfreezeForShowingItems();
         unfreezeForSet();
       }, SLIDE_TRANSITION_DURATION);
