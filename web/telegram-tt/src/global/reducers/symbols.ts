@@ -108,10 +108,14 @@ export function updateCustomEmojiSets<T extends GlobalState>(
       added: {
         ...global.customEmojis.added,
         hash,
-        setIds: [
+        // Parvane: провайдер отдаёт список наборов при каждом запросе (ответа
+        // «без изменений» по `hash` у него нет), и идентификаторы дописывались
+        // повторно; с дубликатами панель эмодзи рисует заголовки наборов без
+        // содержимого
+        setIds: unique([
           ...(global.customEmojis.added.setIds || []),
           ...addedSetIds,
-        ],
+        ]),
       },
       byId: {
         ...global.customEmojis.byId,

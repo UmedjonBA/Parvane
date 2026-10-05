@@ -173,11 +173,17 @@ async function installPackFromMessage(page, container) {
   // Корень модалки — портал нулевого размера; ждём кнопку «Add N Emoji»
   const addButton = page.locator('.StickerSetModal button').filter({ hasText: /^Add \d+ Emoji$/ }).first();
   await addButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const addedBefore = await page.evaluate(() => window.__parvaneGetGlobal().customEmojis.added.setIds?.length || 0);
   await addButton.click();
-  // Установка — запись архива пака в шифрованное хранилище: кнопка «Add» пропадает,
-  // когда запись завершена. Без ожидания перезагрузка сразу после клика заставала
-  // запись в пути, и набора после неё не было
-  await addButton.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  // Установка — запись архива пака в шифрованное хранилище; модалка закрывается
+  // сразу по клику, а набор попадает в «добавленные» только когда запись завершена.
+  // Без ожидания перезагрузка сразу после клика заставала запись в пути, и набора
+  // после неё не было
+  await page.waitForFunction(
+    (count) => (window.__parvaneGetGlobal().customEmojis.added.setIds?.length || 0) > count,
+    addedBefore,
+    { timeout: LOGIN_TIMEOUT_MS },
+  );
   // Модалка после установки закрывается сама или остаётся с «Remove» — закрываем
   // кнопкой, а не Escape (Escape после закрытия модалки закрыл бы чат)
   const closeButton = page.locator('.StickerSetModal').getByRole('button', { name: 'Close' }).first();
@@ -322,11 +328,46 @@ try {
   await closeSymbolMenu(alicePage);
   // Эмодзи пака с сырым именем после перезагрузки — тот же docId
   const composer = alicePage.locator('#editable-message-text');
-  await openSymbolTab(alicePage, 'Custom Emoji');
-  await alicePage.locator('.SymbolMenu .symbol-set').filter({ hasText: /PvRaw77|Pv\.Raw!77/ }).first().scrollIntoViewIfNeeded()
-    .catch(() => {});
   const rawButton = alicePage.locator(`.SymbolMenu .symbol-set .StickerButton[data-sticker-id="${rawDocId}"]`).first();
-  await rawButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Панель при повторном открытии изредка показывает заголовки наборов без
+  // содержимого (ленивая отрисовка по пересечению не срабатывает) — тогда
+  // закрываем и открываем заново; попытка, вылечившая панель, печатается
+  for (let attempt = 1; ; attempt++) {
+    await openSymbolTab(alicePage, 'Custom Emoji');
+    await alicePage.locator('.SymbolMenu .symbol-set').filter({ hasText: /PvRaw77|Pv\.Raw!77/ }).first()
+      .scrollIntoViewIfNeeded().catch(() => {});
+    const isShown = await rawButton.waitFor({ state: 'visible', timeout: attempt < 4 ? 10000 : LOGIN_TIMEOUT_MS })
+      .then(() => true, () => false);
+    if (isShown) {
+      if (attempt > 1) console.log(`панель эмодзи отрисовала набор с попытки ${attempt}`);
+      break;
+    }
+    if (attempt >= 4) {
+      // Что знает клиент о наборах и что отрисовано в панели
+      const state = await alicePage.evaluate(() => {
+        const g = window.__parvaneGetGlobal();
+        const ids = g.customEmojis.added.setIds || [];
+        return JSON.stringify({
+          added: ids.map((id) => {
+            const set = g.stickers.setsById[id];
+            return {
+              id, title: set?.title, count: set?.count, stickers: set?.stickers?.length, hasKey: set ? 'stickers' in set : undefined,
+              installed: Boolean(set?.installedDate), firstId: set?.stickers?.[0]?.id,
+            };
+          }),
+          dom: Array.from(document.querySelectorAll('.SymbolMenu .symbol-set')).map((el) => ({
+            title: el.querySelector('.symbol-set-title, .symbol-set-header')?.textContent?.slice(0, 30),
+            buttons: el.querySelectorAll('.StickerButton').length,
+            ids: Array.from(el.querySelectorAll('.StickerButton')).slice(0, 3).map((b) => b.getAttribute('data-sticker-id')),
+            cls: el.className,
+          })),
+        });
+      }).catch((e) => `unavailable: ${e.message}`);
+      console.error(`--- emoji panel state (ждём ${rawDocId}) ---\n${state}`);
+    }
+    assert(attempt < 4, 'содержимое набора эмодзи после перезагрузки не отрисовалось и после повторного открытия панели');
+    await closeSymbolMenu(alicePage);
+  }
   // Клик во время перестройки панели теряется — повторяем, пока эмодзи не в композере
   await clickUntil(rawButton, () => composer.locator(`[data-document-id="${rawDocId}"]`).first()
     .waitFor({ state: 'attached', timeout: 3000 }))
