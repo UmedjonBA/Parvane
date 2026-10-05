@@ -1701,11 +1701,23 @@ export function createV2Controller(deps: Deps) {
   /** Догнать журнал группы (записи после своей версии) и применить отложенное. */
   async function syncGroup(hex: string, linkId?: string) {
     if (!client || !pv) return;
-    for (let page = 0; page < GROUP_SYNC_PAGES; page++) {
-      const before = client.groupVersion(hex);
-      const resp = await call('id', 'group.state.sync', groupRequestBody(hex, before, linkId));
-      await withNeeds(() => client!.groupIngest(serverDomain, hex, resp));
-      if (client.groupVersion(hex) === before) break;
+    const started = client.groupVersion(hex);
+    try {
+      for (let page = 0; page < GROUP_SYNC_PAGES; page++) {
+        const before = client.groupVersion(hex);
+        const resp = await call('id', 'group.state.sync', groupRequestBody(hex, before, linkId));
+        await withNeeds(() => client!.groupIngest(serverDomain, hex, resp));
+        if (client.groupVersion(hex) === before) break;
+      }
+    } catch (e) {
+      // Часть журнала уже применена движком (следующая страница не дочиталась):
+      // без публикации UI и смена эпохи о новом составе не узнали бы — вступивший
+      // по ссылке оставался без ключей, пока группу не перечитает что-то ещё
+      if (client?.groupVersion(hex) !== started) {
+        deps.log(`v2: журнал группы ${hex} дочитан не полностью: ${String(e)}`);
+        publishGroup(hex);
+      }
+      throw e;
     }
     // Чат группы — до отложенных сообщений (иначе они легли бы не в тот чат)
     publishGroup(hex);
@@ -1849,6 +1861,7 @@ export function createV2Controller(deps: Deps) {
       // Эпоха не чаще раза в 10 с (часы движка и сервера): подождать и
       // повторить один раз — отправка сразу после бана/вступления иначе упала бы
       if (!isRateLimited(e)) throw e;
+      deps.log(`v2: новая эпоха группы ${hex} — рано (не чаще раза в 10 с), повтор через ${EPOCH_RETRY_MS / 1000} с`);
       await pause(EPOCH_RETRY_MS);
       await rotateEpochOnce(hex);
     }
@@ -1874,11 +1887,16 @@ export function createV2Controller(deps: Deps) {
 
   function scheduleRotate(hex: string, delayMs: number, attempt = 0) {
     if (rotateTimers.has(hex)) return;
+    deps.log(`v2: новая эпоха группы ${hex} запланирована (через ${Math.round(delayMs / 1000)} с)`);
     rotateTimers.set(hex, setTimeout(() => {
       rotateTimers.delete(hex);
       void serial(async () => {
         const g = readGroup(hex);
-        if (!g?.epochStale || !canRotate(hex)) return;
+        if (!g?.epochStale || !canRotate(hex)) {
+          // Не молчим: «эпоха не началась» без строки в журнале не разобрать
+          deps.log(`v2: новая эпоха группы ${hex} не начинается: ${g?.epochStale ? 'нет права' : 'состав актуален'}`);
+          return;
+        }
         await rotateEpoch(hex);
         publishGroup(hex);
       }).catch((e: unknown) => {
