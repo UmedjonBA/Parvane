@@ -61,6 +61,7 @@ case "$PAIR" in
   mixed-devices) SCRIPT="$ROOT/scripts/e2e_protocol_legacy_devices.mjs" ;;
   revoke) SCRIPT="$ROOT/scripts/e2e_protocol_revoke.mjs" ;;
   relink) SCRIPT="$ROOT/scripts/e2e_protocol_relink.mjs" ;;
+  relink-v1) SCRIPT="$ROOT/scripts/e2e_protocol_relink_v1.mjs" ;;
   recovery) SCRIPT="$ROOT/scripts/e2e_protocol_recovery.mjs" ;;
   escrow)
     SCRIPT="$ROOT/scripts/e2e_protocol_escrow.mjs"

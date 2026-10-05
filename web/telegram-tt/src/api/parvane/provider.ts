@@ -2282,8 +2282,12 @@ const methods = {
       await engine.flushStorage();
       // LINK-1 п. 8: строки v2-эпохи новому устройству сервер не отдаст
       await localState.flushHistoryNow();
+      const historyRecords = await localState.loadHistoryRecords();
+      // Авторы показанной здесь истории могли писать с устройств, которые с тех
+      // пор отозваны: их ключи новое устройство по каталогу уже не подтвердит
+      engine.rememberHistoryIdentities(historyRecords.map((record) => record.id));
       const exportJson = engine.exportLinkStateJson(collectV2History(
-        await localState.loadHistoryRecords(), await localState.readOwnJournal(),
+        historyRecords, await localState.readOwnJournal(),
       ));
       const upload = await mediaService.uploadBlob(
         new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },

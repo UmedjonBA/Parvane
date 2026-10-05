@@ -980,6 +980,24 @@ export class E2eEngine {
     return changed;
   }
 
+  // Ключ устройства автора подтверждён по каталогу — запоминаем и для своих
+  // устройств (rememberContactIdentity их пропускает: смены ключа у себя нет)
+  rememberVerifiedIdentity(contact: string, identity: string) {
+    if (this.seenIdentities.get(contact)?.has(identity)) return;
+    this.markSeen(contact, identity);
+    this.persistContacts();
+  }
+
+  // Перед экспортом линковки: ключи авторов сообщений, которые это устройство
+  // показывает (значит, когда-то подтвердило), — их устройства могли быть
+  // отозваны, и новое устройство по каталогу их уже не проверит
+  rememberHistoryIdentities(messageIds: string[]) {
+    messageIds.forEach((id) => {
+      const cached = this.decCache[id];
+      if (cached?.from && cached.senderIdentity) this.rememberVerifiedIdentity(cached.from, cached.senderIdentity);
+    });
+  }
+
   // Виденные identity контакта (для UI/тестов)
   getSeenIdentities(contact: string): string[] {
     return Array.from(this.seenIdentities.get(contact) || []);
@@ -1013,11 +1031,17 @@ export class E2eEngine {
     claimedFrom: string,
     senderIdentity: string,
     fetchBundle: BundleFetcher,
+    isHistory = false,
   ): Promise<SenderVerdict> {
     if (!claimedFrom || !senderIdentity) return 'unknown';
     // Наше текущее устройство: подписывать себя может только self
     if (senderIdentity === this.identityKey) return claimedFrom === this.self ? 'ok' : 'spoofed';
     if (this.hasDeviceIdentity(claimedFrom, senderIdentity)) return 'ok';
+    // История (сообщение уже расшифровано раньше): устройство автора могло быть
+    // с тех пор отозвано и пропасть из каталога. Ключ, однажды подтверждённый по
+    // каталогу (этим устройством или привязавшим его), остаётся годным для
+    // СТАРЫХ сообщений; новые от отозванного устройства так не проходят
+    if (isHistory && this.seenIdentities.get(claimedFrom)?.has(senderIdentity)) return 'ok';
     await this.refreshContactDevices(claimedFrom, fetchBundle, true);
     if (this.hasDeviceIdentity(claimedFrom, senderIdentity)) return 'ok';
     // Каталог получен (есть список устройств), но ключа в нём нет — подмена.
