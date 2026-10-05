@@ -82,6 +82,9 @@ type UnsealResult = {
 
 const MS_IN_SECOND = 1000;
 const SYNC_TIMEOUT_MS = 15000;
+// Переносов владения два и больше — у устройства есть цепочка (третье поколение)
+const TRANSFER_CHAIN_MIN = 2;
+const TRANSFER_CHAIN_RESYNC_KEY = 'parvane:transfer-chain-resync';
 
 export function createSyncController(deps: SyncDependencies) {
   let isSynced = false;
@@ -1000,6 +1003,18 @@ export function createSyncController(deps: SyncDependencies) {
     deps.localState.saveSyncCursor({ lastSeenUuid, sinceUpdated });
   }
 
+  function needsTransferChainResync(self: string) {
+    if ((deps.getE2e()?.syncTransfers().length || 0) < TRANSFER_CHAIN_MIN) return false;
+    const key = `${TRANSFER_CHAIN_RESYNC_KEY}:${self}`;
+    try {
+      if (localStorage.getItem(key)) return false;
+      localStorage.setItem(key, '1');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Быстрый старт из локального кэша: восстановить историю без сервера и
   // догнать дельтой от сохранённого курсора. false — кэша нет (полный синк)
   async function restoreFromCache(): Promise<boolean> {
@@ -1032,6 +1047,12 @@ export function createSyncController(deps: SyncDependencies) {
     // кэш показан, а v1-история догоняется полным синком
     if (!cursor?.lastSeenUuid) {
       deps.log(`история из кэша без v1-курсора: ${records.length} сообщений, полный синк`);
+      return false;
+    }
+    // Сервер раньше не принимал цепочку переносов владения (устройство третьего
+    // поколения не получало свои исходящие первого) — один раз перечитываем всё
+    if (needsTransferChainResync(store.self)) {
+      deps.log('цепочка переносов владения: разовый полный синк');
       return false;
     }
     lastSeenUuid = cursor.lastSeenUuid;

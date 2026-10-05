@@ -984,6 +984,35 @@ fn link_transfer_proves_old_key_only_with_valid_statement() {
     assert!(authenticated_transfer_keys(&payload(sig), "alice@local", "").is_empty(), "без доказанного нового ключа — ничего");
 }
 
+#[test]
+fn link_transfer_chain_proves_keys_of_earlier_generations() {
+    use ed25519_dalek::{Signer, SigningKey};
+    // A привязало B, B привязало C (выход и повторный вход на первом устройстве)
+    let keys: Vec<SigningKey> = [21_u8, 22, 23].iter().map(|b| SigningKey::from_bytes(&[*b; 32])).collect();
+    let pubs: Vec<String> = keys.iter().map(|k| STANDARD_NO_PAD.encode(k.verifying_key().to_bytes())).collect();
+    let transfer = |from: usize, to: usize| {
+        let statement = format!("link-transfer:alice@local:{}:{}", pubs[from], pubs[to]);
+        parvane_types::SyncTransfer {
+            old_signing_key: pubs[from].clone(),
+            signature: STANDARD_NO_PAD.encode(keys[from].sign(statement.as_bytes()).to_bytes()),
+        }
+    };
+    let payload = |transfers: Vec<parvane_types::SyncTransfer>| SyncRequestPayload {
+        last_seen_id: "0".into(), device_id: String::new(), since_updated: 0,
+        sender_signing_key: None, signature: None, extra_signing: vec![], transfers,
+    };
+    // Порядок в запросе не важен: A→B доказывается после B→C
+    let mut proven = authenticated_transfer_keys(&payload(vec![transfer(0, 1), transfer(1, 2)]), "alice@local", &pubs[2]);
+    proven.sort();
+    let mut expected = vec![pubs[0].clone(), pubs[1].clone()];
+    expected.sort();
+    assert_eq!(proven, expected);
+    // Без среднего звена первое поколение не доказано
+    assert!(authenticated_transfer_keys(&payload(vec![transfer(0, 1)]), "alice@local", &pubs[2]).is_empty());
+    // Чужой пользователь — цепочка не принимается
+    assert!(authenticated_transfer_keys(&payload(vec![transfer(0, 1), transfer(1, 2)]), "bob@local", &pubs[2]).is_empty());
+}
+
 #[tokio::test]
 async fn linked_extra_signing_reveals_previous_device_outgoing() {
     let pool = test_pool().await;

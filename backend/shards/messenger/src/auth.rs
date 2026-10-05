@@ -105,21 +105,39 @@ pub(crate) fn authenticated_extra_signing_keys(payload: &SyncRequestPayload) -> 
 
 /// Линковка v2 (P-48): доказанные signing-ключи ПРЕЖНИХ устройств через
 /// подписанный ими перенос владения `link-transfer:<user>:<old>:<new>`, где
-/// `new` — уже доказанный sender_signing_key этого запроса. Приватный аккаунт
+/// `new` — уже доказанный ключ: sender_signing_key этого запроса либо ключ,
+/// доказанный другим переносом из того же запроса (цепочка: устройство A
+/// привязало B, B привязало C — C предъявляет A→B и B→C). Без цепочки
+/// устройство третьего поколения не получало исходящие первого: так терялись
+/// свои сообщения после выхода и повторной привязки. Приватный аккаунт
 /// прежнего устройства при этом на новое не переезжает.
 pub(crate) fn authenticated_transfer_keys(payload: &SyncRequestPayload, user: &str, new_signing_key: &str) -> Vec<String> {
     if new_signing_key.is_empty() {
         return vec![];
     }
-    payload
-        .transfers
-        .iter()
-        .take(MAX_EXTRA_SIGNING)
-        .filter(|t| !t.old_signing_key.is_empty() && t.old_signing_key != new_signing_key)
-        .filter(|t| {
-            let statement = format!("link-transfer:{}:{}:{}", user, t.old_signing_key, new_signing_key);
-            verify_mutation_signature(&t.old_signing_key, &statement, &t.signature)
-        })
-        .map(|t| t.old_signing_key.clone())
-        .collect()
+    let candidates: Vec<&parvane_types::SyncTransfer> =
+        payload.transfers.iter().take(MAX_EXTRA_SIGNING).filter(|t| !t.old_signing_key.is_empty()).collect();
+    let mut proven: Vec<String> = Vec::new();
+    // Каждый проход доказывает хотя бы один новый ключ либо завершает цикл
+    loop {
+        let mut found = None;
+        for t in &candidates {
+            if t.old_signing_key == new_signing_key || proven.contains(&t.old_signing_key) {
+                continue;
+            }
+            let is_proven = std::iter::once(new_signing_key).chain(proven.iter().map(String::as_str)).any(|target| {
+                let statement = format!("link-transfer:{}:{}:{}", user, t.old_signing_key, target);
+                verify_mutation_signature(&t.old_signing_key, &statement, &t.signature)
+            });
+            if is_proven {
+                found = Some(t.old_signing_key.clone());
+                break;
+            }
+        }
+        match found {
+            Some(key) => proven.push(key),
+            None => break,
+        }
+    }
+    proven
 }
