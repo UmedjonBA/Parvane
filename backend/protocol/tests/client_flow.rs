@@ -86,7 +86,7 @@ impl Server {
             }
             // Отказ по заявке: записи журнала нет, шард только снимает заявку.
             "group.request.decide" if decode_checked::<gpb::RequestDecideRequest>(&r.body, Origin::Client).unwrap().entry.is_none() => {}
-            "group.state.append" | "group.epoch.publish_send_key" | "group.invite.create" | "group.join" | "group.request.decide" => {
+            "group.state.append" | "group.epoch.publish_send_key" | "group.invite.create" | "group.invite.revoke" | "group.join" | "group.request.decide" => {
                 let entry = match r.method {
                     "group.request.decide" => {
                         let q = decode_checked::<gpb::RequestDecideRequest>(&r.body, Origin::Client).unwrap();
@@ -95,6 +95,7 @@ impl Server {
                     }
                     "group.state.append" => decode_checked::<gpb::StateAppendRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                     "group.invite.create" => decode_checked::<gpb::InviteCreateRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
+                    "group.invite.revoke" => decode_checked::<gpb::InviteRevokeRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                     "group.join" => decode_checked::<gpb::JoinRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                     _ => decode_checked::<gpb::EpochPublishSendKeyRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                 };
@@ -589,6 +590,77 @@ fn invite_join_and_ban() {
     assert!(texts(&ev).iter().any(|t| t.2 == "после бана"), "{ev:?}");
     assert!(carol.group_state(&g.id).unwrap().banned.contains("carol@local"));
     assert!(carol.group_unconfirmed(&g.id, &["mallory@local".to_string()]) == vec!["mallory@local".to_string()]);
+}
+
+/// Общий список ссылок у ведущих приглашения: секрет ссылки владельца доходит
+/// до админа с правом приглашать служебной раздачей и принимается по совпадению
+/// с объявленной в журнале ссылкой; участнику без права он не уходит, чужой
+/// секрет отбрасывается. Отозванная ссылка остаётся в состоянии как отозванная.
+#[test]
+fn invite_links_are_shared_with_invite_admins_and_revoked_are_kept() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let mut carol = setup(&mut srv, "carol@local");
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, [0; 32]);
+    bob_learn(&mut alice, "bob@local", *bob.delivery_key());
+    bob_learn(&mut alice, "carol@local", *carol.delivery_key());
+    bob_learn(&mut carol, "alice@local", *alice.delivery_key());
+    bob_learn(&mut carol, "bob@local", *bob.delivery_key());
+    bob_learn(&mut bob, "carol@local", *carol.delivery_key());
+    bob_learn(&mut bob, "alice@local", *alice.delivery_key());
+
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let members = ["bob@local".to_string(), "carol@local".to_string()];
+    let (g, req) = alice.group_create(GroupKind::Group, "Клуб", &members, perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    drain(&mut srv, &mut bob);
+    drain(&mut srv, &mut carol);
+    // bob — админ с правом приглашать; carol — обычный участник
+    let user = |a: &str| Some(parvane_protocol::pb::parvane::core::v2::UserRef { address: a.into() });
+    let promote = alice
+        .group_change(&g.id, gpb::group_change::Change::SetRole(gpb::SetRole {
+            member: user("bob@local"),
+            role: gpb::Role::Admin as i32,
+            rights: Some(gpb::AdminRights { invite_users: true, ..Default::default() }),
+        }))
+        .unwrap();
+    srv.handle("alice@local", "d1", &promote);
+    let (req, parts) = alice.group_invite_create(&g.id, "", 0, 0, false).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    let url = parvane_protocol::invite::format(&parts).unwrap();
+    drain(&mut srv, &mut bob);
+    drain(&mut srv, &mut carol);
+
+    // Раздача: адресат без права отсеивается движком, чужой группе секрет — тоже
+    let (_, stray) = parvane_protocol::invite::generate("local").unwrap();
+    let stray_url = parvane_protocol::invite::format(&stray).unwrap();
+    let to = ["bob@local".to_string(), "carol@local".to_string()];
+    let links = [url.clone(), stray_url.clone()];
+    run(&mut srv, &mut alice, &mut |c| c.share_invite_links(&g.id, &links, &to));
+    drain(&mut srv, &mut bob);
+    drain(&mut srv, &mut carol);
+    assert_eq!(bob.take_shared_invites(), vec![(g.id.clone(), url.clone())], "админ с правом приглашать получил секрет ссылки");
+    assert!(bob.take_shared_invites().is_empty(), "секреты забираются один раз");
+    assert!(carol.take_shared_invites().is_empty(), "участнику без права секрет не уходит");
+    // Только чужой секрет — слать нечего
+    let stray_only = [stray_url];
+    assert!(alice.share_invite_links(&g.id, &stray_only, &to).unwrap().is_empty());
+
+    // Отзыв: ссылка уходит из действующих в отозванные у всех, кто читает журнал
+    let id: [u8; 32] = parts.link_id.as_slice().try_into().unwrap();
+    let revoke = alice.group_change(&g.id, gpb::group_change::Change::InviteKeyRevoke(gpb::InviteKeyRevoke { link_id: id.to_vec() })).unwrap();
+    srv.handle("alice@local", "d1", &revoke);
+    drain(&mut srv, &mut bob);
+    for c in [&alice, &bob] {
+        let st = c.group_state(&g.id).unwrap();
+        assert!(!st.invite_links.contains_key(&id), "отозванная ссылка осталась действующей");
+        assert!(st.revoked_links.contains_key(&id), "отозванная ссылка не запомнена");
+    }
+    // Секрет отозванной ссылки больше не раздаётся
+    let revoked_only = [url];
+    assert!(alice.share_invite_links(&g.id, &revoked_only, &to).unwrap().is_empty());
 }
 
 /// Заявка на вступление (ссылка с одобрением, D-04): админ одобряет записью

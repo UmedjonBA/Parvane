@@ -191,13 +191,17 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
         .await
         .map_err(|_| ErrorCode::Duplicate)?;
     // C1-14: индекс ссылок-приглашений.
+    // Отозванная ссылка остаётся в индексе (по ней отвечают «отозвана» и показывают
+    // её в списке отозванных), пока админ не удалит её (`group.invite.delete`).
     let before: BTreeSet<[u8; 32]> = prev.as_ref().map(|p| p.invite_links.keys().copied().collect()).unwrap_or_default();
     let after: BTreeSet<[u8; 32]> = next.invite_links.keys().copied().collect();
     for id in after.difference(&before) {
         sqlx::query("INSERT OR REPLACE INTO group_links_v2 (link_id, group_id) VALUES (?, ?)").bind(id.to_vec()).bind(&g.id).execute(&mut *tx).await.map_err(db_err)?;
     }
     for id in before.difference(&after) {
-        sqlx::query("DELETE FROM group_links_v2 WHERE link_id = ?").bind(id.to_vec()).execute(&mut *tx).await.map_err(db_err)?;
+        if !next.revoked_links.contains_key(id) {
+            sqlx::query("DELETE FROM group_links_v2 WHERE link_id = ?").bind(id.to_vec()).execute(&mut *tx).await.map_err(db_err)?;
+        }
     }
     sqlx::query("DELETE FROM group_members_v2 WHERE group_id = ?").bind(&g.id).execute(&mut *tx).await.map_err(db_err)?;
     for m in next.members.keys() {
@@ -261,6 +265,13 @@ fn change_of(entry: &GroupStateEntry) -> Option<Change> {
     GroupStateChange::decode(b.payload.as_slice()).ok()?.change?.change
 }
 
+/// Ссылки группы, оставшиеся в индексе (отозванная и удалённая админом из него убрана).
+async fn indexed_links(ctx: &V2, group_id: &[u8]) -> Result<BTreeSet<Vec<u8>>, ErrorCode> {
+    let rows: Vec<(Vec<u8>,)> =
+        sqlx::query_as("SELECT link_id FROM group_links_v2 WHERE group_id = ?").bind(group_id).fetch_all(&ctx.v2).await.map_err(db_err)?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 fn invite_info(link_id: &[u8; 32], l: &group::InviteLink) -> gpb::Invite {
     gpb::Invite {
         link_id: link_id.to_vec(),
@@ -279,7 +290,7 @@ async fn find_link(ctx: &V2, link_id: &[u8]) -> Result<Option<(GroupState, [u8; 
     // C1-14: по индексу, без перебора всех групп.
     let gid: Option<(Vec<u8>,)> = sqlx::query_as("SELECT group_id FROM group_links_v2 WHERE link_id = ?").bind(id.to_vec()).fetch_optional(&ctx.v2).await.map_err(db_err)?;
     let Some((gid,)) = gid else { return Ok(None) };
-    Ok(load(ctx, &gid).await?.filter(|s| s.invite_links.contains_key(&id)).map(|s| (s, id)))
+    Ok(load(ctx, &gid).await?.filter(|s| s.invite_links.contains_key(&id) || s.revoked_links.contains_key(&id)).map(|s| (s, id)))
 }
 
 /// C1-14: индекс ссылок для журналов, принятых до миграции 0003 (один раз
@@ -387,13 +398,19 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             Ok(gpb::InviteRevokeResponse {}.encode_to_vec())
         }
         "group.invite.delete" => {
-            // Отозванная ссылка уже удалена из состояния записью отзыва.
+            // Удаление отозванной ссылки из списка: записи журнала у него нет —
+            // сервер перестаёт её помнить (по ней дальше отвечают «не найдена»).
             let r: gpb::InviteDeleteRequest = body(&req)?;
             let g = r.group.ok_or(ErrorCode::Invalid)?;
             let s = load(ctx, &g.id).await?.ok_or(ErrorCode::NotFound)?;
             if !invite_admin(&s, &user) {
                 return Err(ErrorCode::Forbidden);
             }
+            let id: [u8; 32] = r.link_id.as_slice().try_into().map_err(|_| ErrorCode::Invalid)?;
+            if s.invite_links.contains_key(&id) {
+                return Err(ErrorCode::Invalid); // действующую сперва отзывают
+            }
+            sqlx::query("DELETE FROM group_links_v2 WHERE link_id = ? AND group_id = ?").bind(id.to_vec()).bind(&g.id).execute(&ctx.v2).await.map_err(db_err)?;
             Ok(gpb::InviteDeleteResponse {}.encode_to_vec())
         }
         "group.invite.list" => {
@@ -404,19 +421,23 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                 return Err(ErrorCode::Forbidden);
             }
             let admin = invite_admin(&s, &user);
+            let kept = indexed_links(ctx, &g.id).await?;
+            let revoked = s.revoked_links.iter().filter(|(id, _)| kept.contains(id.as_slice())).map(|(id, l)| gpb::Invite { revoked: true, ..invite_info(id, l) });
             let invites = s
                 .invite_links
                 .iter()
-                .filter(|(_, l)| admin || l.creator == user)
-                .take(500)
                 .map(|(id, l)| invite_info(id, l))
+                .chain(revoked)
+                .filter(|i| admin || i.creator.as_ref().is_some_and(|c| c.address == user))
+                .take(500)
                 .collect();
             Ok(gpb::InviteListResponse { invites }.encode_to_vec())
         }
         "group.invite.check" => {
             let r: gpb::InviteCheckRequest = body(&req)?;
             let (s, id) = find_link(ctx, &r.link_id).await?.ok_or(ErrorCode::NotFound)?;
-            let l = s.invite_links.get(&id).ok_or(ErrorCode::NotFound)?;
+            // Отозванная (и ещё не удалённая админом) — своя причина, как в v1.
+            let l = s.invite_links.get(&id).ok_or(ErrorCode::Revoked)?;
             if l.announce.expires_ms > 0 && now_ms() > l.announce.expires_ms {
                 return Err(ErrorCode::Expired);
             }

@@ -309,10 +309,19 @@ export class PvClient {
      */
     shareGroupsWithOwnDevices(devices_json: string): Array<any>;
     /**
+     * Секреты своих ссылок-приглашений — другим ведущим приглашения группы:
+     * `links_json`, `recipients_json` — JSON-массивы ссылок и адресов.
+     */
+    shareInviteLinks(group_hex: string, links_json: string, recipients_json: string): Array<any>;
+    /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      */
     stateSession(): PvState | undefined;
     syncRequest(): any;
+    /**
+     * Принятые секреты ссылок-приглашений: JSON `[{"group": hex, "url": …}]`.
+     */
+    takeSharedInvites(): string;
     /**
      * Размер партии — вся суточная квота.
      */
@@ -719,8 +728,10 @@ export interface InitOutput {
     readonly pvclient_setPeerDeliveryKey: (a: number, b: number, c: number, d: number, e: number, f: bigint) => void;
     readonly pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_shareInviteLinks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_stateSession: (a: number) => number;
     readonly pvclient_syncRequest: (a: number) => number;
+    readonly pvclient_takeSharedInvites: (a: number, b: number) => void;
     readonly pvclient_tokenBatchSize: (a: number) => number;
     readonly pvclient_tokenCount: (a: number) => number;
     readonly pvclient_tokenRefillDue: (a: number) => number;

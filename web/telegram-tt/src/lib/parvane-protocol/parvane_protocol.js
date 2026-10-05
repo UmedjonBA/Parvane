@@ -1502,6 +1502,35 @@ export class PvClient {
         }
     }
     /**
+     * Секреты своих ссылок-приглашений — другим ведущим приглашения группы:
+     * `links_json`, `recipients_json` — JSON-массивы ссылок и адресов.
+     * @param {string} group_hex
+     * @param {string} links_json
+     * @param {string} recipients_json
+     * @returns {Array<any>}
+     */
+    shareInviteLinks(group_hex, links_json, recipients_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(links_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(recipients_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.pvclient_shareInviteLinks(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      * @returns {PvState | undefined}
      */
@@ -1515,6 +1544,26 @@ export class PvClient {
     syncRequest() {
         const ret = wasm.pvclient_syncRequest(this.__wbg_ptr);
         return takeObject(ret);
+    }
+    /**
+     * Принятые секреты ссылок-приглашений: JSON `[{"group": hex, "url": …}]`.
+     * @returns {string}
+     */
+    takeSharedInvites() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_takeSharedInvites(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Размер партии — вся суточная квота.

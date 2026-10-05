@@ -23,8 +23,8 @@
 //!   адресат, ответив, передаёт ему ключ доступа (это и есть «звонки от
 //!   контактов» по умолчанию; `calls_from = NOBODY` соблюдает клиент адресата).
 //! - **Лимиты без знания отправителя** (P-35): cooldown вызова 5 с — на
-//!   анонимное соединение в gateway (`call.ring_sealed`); «≤ 3 одновременных
-//!   ringing» — на АДРЕСАТА: не больше 3 вызовов за окно 60 с
+//!   анонимное соединение в gateway (`call.ring_sealed`); «≤ 10 одновременных
+//!   ringing» — на АДРЕСАТА: не больше 10 вызовов за окно 60 с
 //!   (дольше клиент не звонит); общий поток сигналов адресату — token bucket.
 //!   Состояние лимитов — только в памяти, ключ — адрес адресата.
 //! - `call.ice_config` (ID): STUN/TURN с эфемерными кредами TURN REST, как v1.
@@ -54,7 +54,7 @@ use crate::IceConfig;
 /// Окно «звонит» (клиент прекращает вызов раньше).
 pub(crate) const RINGING_WINDOW: Duration = Duration::from_secs(60);
 /// Одновременно звонящих одному адресату.
-pub(crate) const MAX_RINGING_PER_RECIPIENT: usize = 3;
+pub(crate) const MAX_RINGING_PER_RECIPIENT: usize = 10;
 const DK_CACHE_TTL: Duration = Duration::from_secs(60);
 const DEVICES_TTL: Duration = Duration::from_secs(30);
 const MAX_CACHE: usize = 50_000;

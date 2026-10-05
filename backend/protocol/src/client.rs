@@ -307,6 +307,10 @@ pub struct Client {
     /// Расшифрованные ключи группы, для которых ещё нет журнала группы
     /// (Olm-сообщение повторно не расшифровать — держим здесь).
     pending_keys: Vec<(String, GroupKeyShare)>,
+    /// Секреты ссылок-приглашений, принятые от других ведущих приглашения
+    /// (группа, ссылка): хост забирает их `take_shared_invites` сразу после
+    /// открытия записи и хранит сам; в экспорт состояния не входят.
+    shared_invites: Vec<(Vec<u8>, String)>,
     /// Запрос жетонов в полёте (не сохраняется).
     token_req: Option<(crate::tokens::TokenRequest, TokenKey)>,
     /// L2 личных чатов (ключ — собеседник): предпочтения участников из
@@ -391,6 +395,7 @@ impl Client {
             cursor: Cursor::default(),
             pending_group: vec![],
             pending_keys: vec![],
+            shared_invites: vec![],
             token_req: None,
             l2_direct: BTreeMap::new(),
             l2_group_pref: BTreeMap::new(),
@@ -2367,6 +2372,21 @@ impl Client {
         if !state.members.contains_key(sender) {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
+        // Секреты ссылок-приглашений: принимаются по совпадению с объявленной в
+        // журнале ссылкой (отозванные и неизвестные отбрасываются).
+        for seed in &gk.invite_seeds {
+            let Ok(seed) = <[u8; crate::invite::LINK_BYTES]>::try_from(seed.as_slice()) else { continue };
+            let Ok(parts) = crate::invite::from_seed(&g.domain, &seed) else { continue };
+            let Ok(id) = <[u8; 32]>::try_from(parts.link_id.as_slice()) else { continue };
+            if !state.invite_links.contains_key(&id) {
+                continue;
+            }
+            if let Ok(url) = crate::invite::format(&parts) {
+                if !self.shared_invites.iter().any(|(_, u)| *u == url) && self.shared_invites.len() < 256 {
+                    self.shared_invites.push((g.id.clone(), url));
+                }
+            }
+        }
         // Своё устройство (тот же аккаунт; автор проверен по своему журналу
         // устройств) пересылает то, что уже получило само, — T142.
         let own = sender == self.user;
@@ -2454,6 +2474,48 @@ impl Client {
             out.push(OutRequest::anon("msg.deliver_sealed", &r));
         }
         Ok(out)
+    }
+
+    /// Секреты своих ссылок-приглашений — другим ведущим приглашения группы
+    /// (владелец и админы с правом приглашать): у них общий список ссылок.
+    /// `links` — ссылки этой группы целиком (с секретом); чужие группе и
+    /// отозванные пропускаются. `recipients` — кому слать (хост выбирает сам:
+    /// всем при создании ссылки, новому админу при назначении).
+    pub fn share_invite_links(&mut self, group_id: &[u8], links: &[String], recipients: &[String]) -> CResult<Vec<OutRequest>> {
+        let state = self.group_state(group_id).cloned().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+        let mut seeds = vec![];
+        for link in links {
+            let Ok(crate::invite::ParsedInvite::V2(parts)) = crate::invite::parse(link) else { continue };
+            let Ok(id) = <[u8; 32]>::try_from(parts.link_id.as_slice()) else { continue };
+            if state.invite_links.contains_key(&id) && crate::invite::signing_key(&parts).is_ok() && seeds.len() < 64 {
+                seeds.push(parts.seed.clone());
+            }
+        }
+        let me = self.user.clone();
+        let to: Vec<String> = recipients
+            .iter()
+            .filter(|u| **u != me && (state.owner == **u || state.members.get(*u).is_some_and(|m| m.role == gpb::Role::Admin && m.rights.invite_users)))
+            .cloned()
+            .collect();
+        if seeds.is_empty() || to.is_empty() {
+            return Ok(vec![]);
+        }
+        for m in &to {
+            self.check_peer(m)?;
+        }
+        let pad = self.group_l2_state(group_id, &state).must_pad(&me, &[]);
+        let share = GroupKeyShare { context: Some(state.context()), invite_seeds: seeds, ..Default::default() };
+        let c = Content { kind: Some(content::Kind::GroupKey(share)), ..Default::default() };
+        let mut out = vec![];
+        for m in &to {
+            out.extend(self.share_group_key(m, &c, pad)?);
+        }
+        Ok(out)
+    }
+
+    /// Забрать принятые секреты ссылок-приглашений: пары (группа, ссылка).
+    pub fn take_shared_invites(&mut self) -> Vec<(Vec<u8>, String)> {
+        std::mem::take(&mut self.shared_invites)
     }
 
     /// После `group_ingest`: применить отложенные ключи и открыть отложенные
