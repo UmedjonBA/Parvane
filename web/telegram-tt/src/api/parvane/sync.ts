@@ -73,7 +73,7 @@ type SyncDependencies = {
 type WireFlags = { read: boolean; deleted: boolean; pinned: boolean; snapshot: string };
 // `verify` присутствует у sealed 1-1 сообщений, чью аутентичность отправителя
 // нужно подтвердить по каталогу identity перед показом (анти-имперсонация)
-type SenderCheck = { claimedFrom: string; senderIdentity: string };
+type SenderCheck = { claimedFrom: string; senderIdentity: string; isHistory?: boolean };
 type UnsealResult = {
   stored: WireStoredMessage; wasSealed: boolean; hidden?: boolean; verify?: SenderCheck;
   // Собственный исходящий конверт: скрыт, приём не подтверждается (ack — дело получателя)
@@ -224,7 +224,7 @@ export function createSyncController(deps: SyncDependencies) {
           stored: { ...stored, content: cached.content as WireMessageContent },
           wasSealed: true,
           verify: cached.senderIdentity && cached.from !== store.self
-            ? { claimedFrom: cached.from, senderIdentity: cached.senderIdentity }
+            ? { claimedFrom: cached.from, senderIdentity: cached.senderIdentity, isHistory: true }
             : undefined,
         };
       }
@@ -274,7 +274,7 @@ export function createSyncController(deps: SyncDependencies) {
         // доверялась бы вечно. Своё исходящее кэшируется без senderIdentity
         // (verify не ставится); self-копии сиблинг-устройств проверяются
         verify: cached.senderIdentity
-          ? { claimedFrom: cached.from, senderIdentity: cached.senderIdentity }
+          ? { claimedFrom: cached.from, senderIdentity: cached.senderIdentity, isHistory: true }
           : undefined,
       };
     }
@@ -364,7 +364,17 @@ export function createSyncController(deps: SyncDependencies) {
     const engine = deps.getE2e();
     if (!engine) return 'unknown';
     try {
-      return await engine.verifySenderIdentity(check.claimedFrom, check.senderIdentity, fetchBundleForVerify);
+      const verdict = await engine.verifySenderIdentity(
+        check.claimedFrom, check.senderIdentity, fetchBundleForVerify, check.isHistory,
+      );
+      // Свои устройства `rememberContactIdentity` не запоминает — а их история
+      // должна читаться и после отзыва устройства
+      // (у собеседников виденные ключи ведёт rememberContactIdentity — по ним же
+      // определяется смена ключа, сюда их не добавляем)
+      if (verdict === 'ok' && check.claimedFrom === deps.getStore().self) {
+        engine.rememberVerifiedIdentity(check.claimedFrom, check.senderIdentity);
+      }
+      return verdict;
     } catch {
       return 'unknown';
     }
