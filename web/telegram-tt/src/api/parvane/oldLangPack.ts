@@ -215,7 +215,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   // Новое устройство без других устройств аккаунта (ключ восстановления / сброс)
   ParvaneRecoverTitle: 'No other device?',
   ParvaneRecoverText: 'If your other devices are gone, sign this device in with your recovery key. '
-    + 'Your old devices will be removed from the account.',
+    + 'Your old devices will be removed from the account. '
+    + 'Lost the key? Ask the server administrator for a new one.',
   ParvaneRecoverAction: 'Use recovery key',
   ParvaneRecoverDone: 'This device is now signed in with your recovery key.',
   ParvaneRecoverNoBackup: 'No recovery copy is stored for this account.',
@@ -536,7 +537,7 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneSskRotationAction: 'Renew key',
   ParvaneSskRotationPlaceholder: 'Recovery key',
   ParvaneSskRotationDone: 'Device signing key renewed.',
-  ParvaneSskRotationBadKey: 'This recovery key does not match.',
+  ParvaneSskRotationBadKey: 'This recovery key does not match. Lost it? Ask the server administrator for a new one.',
   ParvaneSskRotationFailed: 'Could not renew the key. Try again later.',
   ParvaneInviteInvalid: 'This invite link is invalid',
   ParvaneMediaTampered: 'This media file is damaged or was tampered with',
@@ -806,7 +807,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'код сверки появится на обоих устройствах.',
   ParvaneRecoverTitle: 'Нет другого устройства?',
   ParvaneRecoverText: 'Если других устройств не осталось, войдите на этом устройстве по ключу восстановления. '
-    + 'Прежние устройства будут удалены из аккаунта.',
+    + 'Прежние устройства будут удалены из аккаунта. '
+    + 'Ключ утерян? Напишите администратору сервера — он выдаст новый.',
   ParvaneRecoverAction: 'Ввести ключ восстановления',
   ParvaneRecoverDone: 'Устройство подключено по ключу восстановления.',
   ParvaneRecoverNoBackup: 'Для этого аккаунта нет копии для восстановления.',
@@ -1157,7 +1159,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneSskRotationAction: 'Обновить ключ',
   ParvaneSskRotationPlaceholder: 'Ключ восстановления',
   ParvaneSskRotationDone: 'Ключ подписи устройств обновлён.',
-  ParvaneSskRotationBadKey: 'Ключ восстановления не подходит.',
+  ParvaneSskRotationBadKey: 'Ключ восстановления не подходит. '
+    + 'Утерян? Напишите администратору сервера — он выдаст новый.',
   ParvaneSskRotationFailed: 'Не удалось обновить ключ. Попробуйте позже.',
   ParvaneInviteInvalid: 'Ссылка-приглашение недействительна',
   ParvaneMediaTampered: 'Файл повреждён или подменён',

@@ -95,6 +95,12 @@ export class PvClient {
      */
     exportRootBackup(recovery_key: string, root_secret?: Uint8Array | null): Uint8Array;
     /**
+     * Копия корня для администратора сервера: корень — из памяти (после
+     * createIdentity/importRootBackup) или `rootSecret`, запечатывается открытым
+     * ключом администратора (32 байта из `server.describe`).
+     */
+    exportRootEscrow(escrow_public: Uint8Array, root_secret?: Uint8Array | null): Uint8Array;
+    /**
      * Стереть корень из памяти движка.
      */
     forgetRoot(): void;
@@ -677,6 +683,7 @@ export interface InitOutput {
     readonly pvclient_ephTyping: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_export: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_exportRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_exportRootEscrow: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_forgetRoot: (a: number) => void;
     readonly pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;

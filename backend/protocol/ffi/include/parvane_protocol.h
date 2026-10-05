@@ -662,6 +662,18 @@ struct PvBytes pv_client_export_root_backup(const struct PvClient *c,
                                             char **err);
 
 /**
+ * Копия корня для администратора сервера (`escrow_public` — 32 байта из
+ * `server.describe`): страховка на случай потери устройств и ключа
+ * восстановления. Пустой буфер — ошибка (в `err`).
+ */
+struct PvBytes pv_client_export_root_escrow(const struct PvClient *c,
+                                            const uint8_t *root,
+                                            uintptr_t root_len,
+                                            const uint8_t *escrow_public,
+                                            uintptr_t escrow_public_len,
+                                            char **err);
+
+/**
  * Корень (32 байта) из копии, сверенный с журналом устройств. Буфер
  * освобождать `parvane_protocol_bytes_free` (движок не обнуляет копию —
  * вызывающий обнуляет её сам до освобождения).

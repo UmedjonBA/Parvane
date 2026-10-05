@@ -147,6 +147,11 @@ async fn main() -> Result<()> {
         confirm_mode().as_str()
     );
 
+    info!(
+        "Копия корня для администратора: {}",
+        if escrow_public_key().is_some() { "включена (PARVANE_ESCROW_PUBLIC_KEY)" } else { "выключена" }
+    );
+
     // 4.5: обработчики в tokio::spawn под семафором — один медленный запрос
     // (argon2, SMTP, Telegram) больше не стопорит все остальные.
     let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
@@ -309,6 +314,27 @@ fn env_nonempty(name: &str) -> Option<String> {
 
 fn telegram_bot() -> Option<String> {
     env_nonempty("PARVANE_TELEGRAM_BOT").map(|b| b.trim_start_matches('@').to_string())
+}
+
+/// Открытый ключ администратора для копий корня (`PARVANE_ESCROW_PUBLIC_KEY`,
+/// base64url без дополнения, 32 байта; выдаёт `escrow_admin keygen`). Закрытого
+/// ключа на сервере нет. Не задан или испорчен — страховка выключена.
+fn escrow_public_key() -> Option<[u8; 32]> {
+    use base64::Engine as _;
+    let raw = env_nonempty("PARVANE_ESCROW_PUBLIC_KEY")?;
+    match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.trim_end_matches('=')) {
+        Ok(bytes) => match <[u8; 32]>::try_from(bytes.as_slice()) {
+            Ok(key) => Some(key),
+            Err(_) => {
+                tracing::error!("PARVANE_ESCROW_PUBLIC_KEY: нужен ключ в 32 байта, страховка корня выключена");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::error!("PARVANE_ESCROW_PUBLIC_KEY: не base64url ({e}), страховка корня выключена");
+            None
+        }
+    }
 }
 
 fn telegram_secret() -> Option<String> {

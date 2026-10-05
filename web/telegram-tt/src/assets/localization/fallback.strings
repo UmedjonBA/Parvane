@@ -275,7 +275,7 @@
 "ParvaneInviteRequested" = "Join request sent — an admin will review it";
 "ParvaneInviteDeclined" = "Your join request was declined";
 "ParvaneUpgradeRequired" = "This version of Parvane is no longer supported by the server. Update the app to keep chatting.";
-"ParvaneRecoveryKey" = "Save your recovery key: {key}\nIt restores your account keys on a new device. Nobody else has it, not even the server — keep it somewhere safe.";
+"ParvaneRecoveryKey" = "Save your recovery key: {key}\nIt restores your account keys on a new device. It is shown only once — keep it somewhere safe. If you lose it, ask the server administrator for a new one.";
 "ParvaneDeviceLegacy" = "(old version)";
 "ParvaneInviteEditUnsupported" = "Links cannot be edited — revoke it and create a new one";
 "ParvaneInviteImportersUnavailable" = "The server keeps only the number of people who joined";

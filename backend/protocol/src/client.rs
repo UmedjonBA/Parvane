@@ -628,6 +628,16 @@ impl Client {
         crate::recovery::export_root_backup(root_secret, &self.user, key)
     }
 
+    /// Копия корня для администратора сервера (страховка: потеряны устройства и
+    /// ключ восстановления): корень сверяется с журналом устройств и
+    /// запечатывается открытым ключом администратора.
+    pub fn export_root_escrow(&self, root_secret: &[u8; 32], escrow_public: &[u8; 32]) -> Result<Vec<u8>> {
+        if SigningKey::from_bytes(root_secret).verifying_key().to_bytes() != self.own_log.root_key {
+            return Err(ProtoError::RootMismatch);
+        }
+        crate::recovery::seal_root_escrow(root_secret, &self.user, escrow_public)
+    }
+
     /// Восстановить корень из копии (для смены SSK/корня); корень копии —
     /// текущий корень журнала устройств.
     pub fn import_root_backup(&self, blob: &[u8], key: &crate::recovery::RecoveryKey) -> Result<Zeroizing<[u8; 32]>> {

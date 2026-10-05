@@ -14,6 +14,8 @@
 #   revoke      — отзыв своего v2-устройства (запись журнала + ротации ключей)
 #                 и обновление ключа подписи устройств ключом восстановления
 #                 (T128/T130, FR-066);
+#   escrow      — ключ восстановления утерян: администратор своим ключом (вне
+#                 сервера) выписывает новый, вход по нему (scripts/admin_recover_user.sh);
 #   recovery    — новое устройство без других устройств: вход по ключу
 #                 восстановления (копия корня на сервере), сброс личности;
 #                 собеседник видит смену корня (KEY-1 v2) (T129/T130);
@@ -57,6 +59,16 @@ case "$PAIR" in
   mixed-devices) SCRIPT="$ROOT/scripts/e2e_protocol_legacy_devices.mjs" ;;
   revoke) SCRIPT="$ROOT/scripts/e2e_protocol_revoke.mjs" ;;
   recovery) SCRIPT="$ROOT/scripts/e2e_protocol_recovery.mjs" ;;
+  escrow)
+    SCRIPT="$ROOT/scripts/e2e_protocol_escrow.mjs"
+    # Ключ администратора — вне каталога стека; серверу отдаётся только открытый
+    cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p parvane-protocol --bin escrow_admin
+    ESCROW_DIR="$(mktemp -d)"
+    trap 'rm -rf "$ESCROW_DIR"' EXIT
+    export PARVANE_E2E_ESCROW_KEY_FILE="$ESCROW_DIR/admin.key"
+    PARVANE_ESCROW_PUBLIC_KEY="$("$ROOT/backend/target/debug/escrow_admin" keygen "$PARVANE_E2E_ESCROW_KEY_FILE")"
+    export PARVANE_ESCROW_PUBLIC_KEY
+    ;;
   state-sync) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync.mjs" ;;
   state-sync-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync_desktop.mjs" ;;
   group-migrate) SCRIPT="$ROOT/scripts/e2e_protocol_group_migrate.mjs" ;;

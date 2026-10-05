@@ -224,3 +224,138 @@ mod tests {
         }
     }
 }
+
+// ── копия корня у администратора сервера ────────────────────────────────────
+//
+// Страховка на случай, когда потеряны и все устройства, и ключ восстановления:
+// корень запечатывается открытым ключом администратора (HPKE RFC 9180, base,
+// DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 + ChaCha20-Poly1305,
+// `info = "parvane/v2/root-escrow\0" ‖ user`). Сервер хранит шифртекст; закрытый
+// ключ администратор держит вне сервера. Формат: `PVRE` ‖ версия ‖ root_pub(32)
+// ‖ enc(32) ‖ ct(32 + 16).
+
+const ESCROW_MAGIC: &[u8; 4] = b"PVRE";
+const ESCROW_VERSION: u8 = 1;
+const ESCROW_INFO: &[u8] = b"parvane/v2/root-escrow\0";
+const ESCROW_HEADER_LEN: usize = 4 + 1 + 32;
+/// Длина копии корня для администратора.
+pub const ESCROW_BLOB_LEN: usize = ESCROW_HEADER_LEN + 32 + 32 + 16;
+
+fn escrow_info(user: &str) -> Vec<u8> {
+    let mut v = ESCROW_INFO.to_vec();
+    v.extend_from_slice(user.as_bytes());
+    v
+}
+
+/// Пара ключей администратора для копий корня: (закрытый, открытый).
+pub fn generate_escrow_keypair() -> (Zeroizing<[u8; 32]>, [u8; 32]) {
+    crate::seal::generate_keypair()
+}
+
+/// Открытый ключ администратора по закрытому.
+pub fn escrow_public_key(escrow_secret: &[u8; 32]) -> Result<[u8; 32]> {
+    use hpke::{Deserializable, Kem as _, Serializable};
+    let sk = <hpke::kem::X25519HkdfSha256 as hpke::Kem>::PrivateKey::from_bytes(escrow_secret).map_err(|_| ProtoError::Crypto)?;
+    let pk = hpke::kem::X25519HkdfSha256::sk_to_pk(&sk);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&pk.to_bytes());
+    Ok(out)
+}
+
+/// Запечатать корень пользователя `user` открытым ключом администратора.
+pub fn seal_root_escrow(root_secret: &[u8; 32], user: &str, escrow_public: &[u8; 32]) -> Result<Vec<u8>> {
+    use hpke::{Deserializable, Serializable};
+    if !address::is_valid_address(user) {
+        return Err(ProtoError::BadAddress);
+    }
+    let pk = <hpke::kem::X25519HkdfSha256 as hpke::Kem>::PublicKey::from_bytes(escrow_public).map_err(|_| ProtoError::Crypto)?;
+    let root_pub = SigningKey::from_bytes(root_secret).verifying_key().to_bytes();
+    let mut out = Vec::with_capacity(ESCROW_BLOB_LEN);
+    out.extend_from_slice(ESCROW_MAGIC);
+    out.push(ESCROW_VERSION);
+    out.extend_from_slice(&root_pub);
+    let (enc, ct) = hpke::single_shot_seal::<hpke::aead::ChaCha20Poly1305, hpke::kdf::HkdfSha256, hpke::kem::X25519HkdfSha256>(
+        &hpke::OpModeS::Base,
+        &pk,
+        &escrow_info(user),
+        root_secret,
+        &out,
+    )
+    .map_err(|_| ProtoError::Crypto)?;
+    out.extend_from_slice(&enc.to_bytes());
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Публичный корень, для которого сделана копия (без ключа администратора).
+pub fn escrow_root_pub(blob: &[u8]) -> Result<[u8; 32]> {
+    if blob.len() != ESCROW_BLOB_LEN || &blob[..4] != ESCROW_MAGIC || blob[4] != ESCROW_VERSION {
+        return Err(ProtoError::Malformed);
+    }
+    blob[5..ESCROW_HEADER_LEN].try_into().map_err(|_| ProtoError::Malformed)
+}
+
+/// Открыть копию закрытым ключом администратора: корень пользователя `user`
+/// (сверен с root_pub копии).
+pub fn open_root_escrow(blob: &[u8], user: &str, escrow_secret: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
+    use hpke::Deserializable;
+    if !address::is_valid_address(user) {
+        return Err(ProtoError::BadAddress);
+    }
+    let root_pub = escrow_root_pub(blob)?;
+    let (header, rest) = blob.split_at(ESCROW_HEADER_LEN);
+    let (enc, ct) = rest.split_at(32);
+    let sk = <hpke::kem::X25519HkdfSha256 as hpke::Kem>::PrivateKey::from_bytes(escrow_secret).map_err(|_| ProtoError::Crypto)?;
+    let enc = <hpke::kem::X25519HkdfSha256 as hpke::Kem>::EncappedKey::from_bytes(enc).map_err(|_| ProtoError::Crypto)?;
+    let pt = Zeroizing::new(
+        hpke::single_shot_open::<hpke::aead::ChaCha20Poly1305, hpke::kdf::HkdfSha256, hpke::kem::X25519HkdfSha256>(
+            &hpke::OpModeR::Base,
+            &sk,
+            &enc,
+            &escrow_info(user),
+            ct,
+            header,
+        )
+        .map_err(|_| ProtoError::Crypto)?,
+    );
+    let mut root = Zeroizing::new([0u8; 32]);
+    if pt.len() != 32 {
+        return Err(ProtoError::Malformed);
+    }
+    root.copy_from_slice(&pt);
+    if SigningKey::from_bytes(&root).verifying_key().to_bytes() != root_pub {
+        return Err(ProtoError::RootMismatch);
+    }
+    Ok(root)
+}
+
+#[cfg(test)]
+mod escrow_tests {
+    use super::*;
+
+    #[test]
+    fn escrow_roundtrip_and_rejections() {
+        let (admin_sk, admin_pk) = generate_escrow_keypair();
+        assert_eq!(escrow_public_key(&admin_sk).unwrap(), admin_pk);
+        let root = [7u8; 32];
+        let blob = seal_root_escrow(&root, "alice@local", &admin_pk).unwrap();
+        assert_eq!(blob.len(), ESCROW_BLOB_LEN);
+        assert_eq!(escrow_root_pub(&blob).unwrap(), SigningKey::from_bytes(&root).verifying_key().to_bytes());
+        assert_eq!(*open_root_escrow(&blob, "alice@local", &admin_sk).unwrap(), root);
+        // чужой адрес, чужой ключ администратора, порча шифртекста и заголовка — отказ
+        assert!(open_root_escrow(&blob, "bob@local", &admin_sk).is_err());
+        let (other_sk, _) = generate_escrow_keypair();
+        assert!(open_root_escrow(&blob, "alice@local", &other_sk).is_err());
+        let mut bad = blob.clone();
+        *bad.last_mut().unwrap() ^= 1;
+        assert!(open_root_escrow(&bad, "alice@local", &admin_sk).is_err());
+        let mut bad = blob.clone();
+        bad[10] ^= 1;
+        assert!(open_root_escrow(&bad, "alice@local", &admin_sk).is_err());
+        // из открытой копии под ключом админа выписывается новый ключ восстановления
+        let key = RecoveryKey::generate();
+        let backup = export_root_backup(&open_root_escrow(&blob, "alice@local", &admin_sk).unwrap(), "alice@local", &key).unwrap();
+        assert_eq!(*import_root_backup(&backup, "alice@local", &key).unwrap(), root);
+    }
+}
+
