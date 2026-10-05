@@ -523,6 +523,8 @@ const v2Controller = createV2Controller({
   // линковки нужен, даже если история v1 на устройстве уже есть
   onNeedsLinking: () => {
     if (!linkRuntime.timer) void startHistoryLinkOffer();
+    // Экран «Устройства» покажет код линковки и вход по ключу восстановления
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-needs-linking'));
   },
   // Пока соединение v1 живо, те же кадры приходят по нему; без него (T134)
   // запись LegacyV1 — единственный путь: подаём кадр обработчику инбокса
@@ -2199,6 +2201,13 @@ const methods = {
       // кроме линковки, есть вход по ключу восстановления и сброс личности
       canRecover: v2Controller.needsLinking(),
     });
+  },
+
+  // Это единственное устройство аккаунта в журнале v2: выход с него стирает ключи,
+  // и следующий вход потребует ключ восстановления (или сброс личности)
+  parvaneIsLastDevice() {
+    const own = v2Controller.logDevices(store.self);
+    return Promise.resolve(Boolean(own && !v2Controller.needsLinking() && own.v2.length <= 1));
   },
 
   // ── Новое устройство без других устройств (T130, FR-066) ───────────────────

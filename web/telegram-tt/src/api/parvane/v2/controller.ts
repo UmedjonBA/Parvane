@@ -105,6 +105,11 @@ type EngineGroupInfo = {
   defaultPermissions?: WireDefaultPermissions;
   inviteLinks: string[];
   inviteUses?: Record<string, number>;
+  /** Действующие ссылки с метаданными из журнала группы (секрет — у клиентов). */
+  invites?: {
+    id: string; creator: string; createdMs: number; title?: string; expiresMs?: number;
+    usageLimit?: number; requiresApproval?: boolean; uses?: number;
+  }[];
   // Политика «усиленная приватность» (L2) и кто задал её последним
   l2?: boolean;
   l2By?: string;
@@ -120,6 +125,8 @@ export type V2DeviceBackup = {
 
 /** Заявка на вступление в группу v2 (ссылка с одобрением). */
 export type V2JoinRequest = { user: string; date: number };
+
+export type V2InviteErrorCode = 'invalid' | 'banned' | 'revoked' | 'expired' | 'exhausted' | 'rateLimited' | 'failed';
 
 /** Ссылка-приглашение v2, созданная на этом устройстве (секрет — в url). */
 export type V2InviteRecord = {
@@ -151,7 +158,7 @@ export type V2InviteCheck = {
 export type V2JoinResult =
   | { status: 'ok'; info: WireGroupInfo }
   | { status: 'requested' }
-  | { status: 'error'; code: 'invalid' | 'banned' | 'expired' | 'exhausted' | 'rateLimited' | 'failed' };
+  | { status: 'error'; code: V2InviteErrorCode };
 
 type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array };
@@ -196,7 +203,12 @@ type EngineEvent = {
 
 const STATE_RECORD = 'v2-engine';
 const GROUP_RESYNC_MS = 3000;
+// Через сколько сторож очереди движка сообщает о зависшей задаче
+const SERIAL_WATCHDOG_MS = 20000;
 const INVITES_RECORD = 'v2-invites';
+// Кому из ведущих приглашения уже переданы секреты каких ссылок: адрес группы →
+// пользователь → link_id. Повторная раздача после перезапуска не нужна
+const INVITES_SHARED_RECORD = 'v2-invites-shared';
 const V2_GROUP_PREFIX = 'v2g:';
 const GROUP_KIND_GROUP = 1;
 const GROUP_KIND_CHANNEL = 2;
@@ -318,7 +330,16 @@ export function createV2Controller(deps: Deps) {
 
   /** Сериализация работы с движком (один поток изменений состояния). */
   function serial<T>(fn: () => Promise<T>): Promise<T> {
-    const next = queue.then(fn, fn);
+    // Зависшая задача молча останавливает всё, что стоит за ней (новые эпохи,
+    // раздачу ключей, отправку): сторож называет её в журнале по месту постановки
+    const origin = new Error().stack?.split('\n').slice(2, 5).map((line) => line.trim()).join(' ← ');
+    const guarded = () => {
+      const watchdog = setTimeout(() => {
+        deps.log(`v2: задача очереди выполняется дольше ${SERIAL_WATCHDOG_MS / 1000} с: ${origin}`);
+      }, SERIAL_WATCHDOG_MS);
+      return fn().finally(() => clearTimeout(watchdog));
+    };
+    const next = queue.then(guarded, guarded);
     queue = next.catch(() => undefined);
     return next;
   }
@@ -649,6 +670,7 @@ export function createV2Controller(deps: Deps) {
     }
     const err = client.lastError();
     if (err) deps.log(`v2: ошибка записи: ${err}`);
+    await absorbSharedInvites();
     await persist();
   }
 
@@ -1766,6 +1788,8 @@ export function createV2Controller(deps: Deps) {
     noteGroupL2(hex, g);
     // Новую эпоху начинает владелец (или админ, сделавший изменение, — сразу)
     if (g.epochStale && g.owner === self) scheduleRotate(hex, 0);
+    // Состав ведущих приглашения мог измениться — секреты ссылок новым
+    if (g.invites?.length) scheduleInviteShare(hex);
   }
 
   function reportUnconfirmed(hex: string, claimed: string[]) {
@@ -2046,10 +2070,127 @@ export function createV2Controller(deps: Deps) {
   async function listInvites(address: string): Promise<V2InviteRecord[]> {
     if (!client || !isV2GroupAddress(address)) return [];
     const group = readGroup(groupHex(address));
-    const active = new Set(group?.inviteLinks || []);
-    // Порядок один на всех своих устройствах (T160): по нему выбирается основная ссылка
-    return ((await loadInvites())[address] || []).filter(({ linkId }) => active.has(linkId)).sort(compareInvites)
-      .map((record) => ({ ...record, usage: group?.inviteUses?.[record.linkId] || undefined }));
+    const known = new Map(((await loadInvites())[address] || []).map((record) => [record.linkId, record]));
+    // Метаданные — из журнала группы (одни у всех), секрет — из своего хранилища.
+    // Порядок (время объявления, затем link_id) один у всех ведущих приглашения и
+    // на всех устройствах: по нему выбирается основная ссылка
+    return (group?.invites || []).filter(({ id }) => known.has(id)).map((meta): V2InviteRecord => ({
+      url: known.get(meta.id)!.url,
+      linkId: meta.id,
+      date: Math.floor(meta.createdMs / 1000),
+      title: meta.title || undefined,
+      expiresAt: Math.floor((meta.expiresMs || 0) / 1000) || undefined,
+      usageLimit: meta.usageLimit || undefined,
+      usage: meta.uses || undefined,
+      isRequestNeeded: meta.requiresApproval || undefined,
+    })).sort(compareInvites);
+  }
+
+  /**
+   * В журнале группы есть обычная (без параметров) ссылка, секрета которой у нас
+   * ещё нет: её создал другой ведущий приглашения и секрет в пути. Создавать свою
+   * основную рано — подождать.
+   */
+  async function hasPendingPrimary(address: string) {
+    if (!client || !isV2GroupAddress(address)) return false;
+    const known = new Set(((await loadInvites())[address] || []).map(({ linkId }) => linkId));
+    return (readGroup(groupHex(address))?.invites || []).some((meta) => !known.has(meta.id)
+      && !meta.title && !meta.expiresMs && !meta.usageLimit && !meta.requiresApproval);
+  }
+
+  // Ведущие приглашения группы (владелец и админы с правом приглашать), кроме меня
+  function inviteManagers(g: EngineGroupInfo) {
+    const self = deps.getSelf();
+    return g.members
+      .filter(({ user, role, rights }) => user !== self && (user === g.owner || (role === 2 && rights?.invite_users)))
+      .map(({ user }) => user);
+  }
+
+  /**
+   * Общий список ссылок у ведущих приглашения: секреты своих (известных нам)
+   * ссылок — тем из них, кому ещё не передавали (новая ссылка, новый админ,
+   * админ, назначенный, пока нас не было). Передаёт движок служебной раздачей.
+   */
+  let isInviteShareQueued = false;
+  const inviteShareQueue = new Set<string>();
+
+  function scheduleInviteShare(hex: string) {
+    inviteShareQueue.add(hex);
+    if (isInviteShareQueued || !ready) return;
+    isInviteShareQueued = true;
+    setTimeout(() => {
+      isInviteShareQueued = false;
+      const groups = Array.from(inviteShareQueue);
+      inviteShareQueue.clear();
+      void serial(async () => {
+        for (const group of groups) await shareInvites(group);
+      }).catch((e: unknown) => deps.log(`v2: раздача ссылок-приглашений: ${String(e)}`));
+    }, 0);
+  }
+
+  async function shareInvites(hex: string) {
+    const g = readGroup(hex);
+    const self = deps.getSelf();
+    if (!client || !storage || !g || g.deleted) return;
+    const me = g.members.find(({ user }) => user === self);
+    if (!me || !(g.owner === self || (me.role === 2 && me.rights?.invite_users))) return;
+    const address = groupAddress(hex);
+    const active = new Set((g.invites || []).map(({ id }) => id));
+    const mine = ((await loadInvites())[address] || []).filter(({ linkId }) => active.has(linkId));
+    if (!mine.length) return;
+    const shared = (await storage.loadRecord<Record<string, Record<string, string[]>>>(INVITES_SHARED_RECORD)) || {};
+    const given = shared[address] || {};
+    let isChanged = false;
+    for (const manager of inviteManagers(g)) {
+      const missing = mine.filter(({ linkId }) => !given[manager]?.includes(linkId));
+      if (!missing.length) continue;
+      try {
+        const requests = await withNeeds(() => client!.shareInviteLinks(
+          hex, JSON.stringify(missing.map(({ url }) => url)), JSON.stringify([manager]),
+        ) as OutReq[]);
+        if (!requests.length) continue;
+        await run(requests);
+        given[manager] = [...(given[manager] || []), ...missing.map(({ linkId }) => linkId)];
+        isChanged = true;
+      } catch (e) {
+        // Не ушло (нет ключа доступа, сеть) — повторится при следующем изменении группы
+        deps.log(`v2: секрет ссылки-приглашения не передан ${manager}: ${String(e)}`);
+      }
+    }
+    if (!isChanged) return;
+    shared[address] = given;
+    await storage.saveRecord(INVITES_SHARED_RECORD, shared);
+    await persist();
+    deps.log(`v2: ссылки-приглашения переданы ведущим приглашения группы ${hex}`);
+  }
+
+  // Секреты ссылок, принятые движком от других ведущих приглашения, — в своё хранилище
+  async function absorbSharedInvites() {
+    if (!client) return;
+    let taken: { group: string; url: string }[];
+    try {
+      taken = JSON.parse(client.takeSharedInvites()) as { group: string; url: string }[];
+    } catch {
+      return;
+    }
+    const shared = taken.map(({ group, url }): V2SharedInvite | undefined => {
+      const parsed = parseV2Invite(url);
+      return parsed ? { address: groupAddress(group), record: { url, linkId: parsed.linkId, date: 0 } } : undefined;
+    }).filter((item): item is V2SharedInvite => Boolean(item));
+    if (!shared.length || !storage) return;
+    // Без общей очереди `serial`: запись инбокса может открываться изнутри неё
+    const all = await loadInvites();
+    let added = 0;
+    shared.forEach(({ address, record }) => {
+      const list = all[address] || [];
+      if (list.some(({ linkId }) => linkId === record.linkId)) return;
+      all[address] = [...list, record];
+      added += 1;
+    });
+    if (!added) return;
+    await storage.saveRecord(INVITES_RECORD, all);
+    deps.log(`v2: ссылки-приглашения от других ведущих приглашения: ${added}`);
+    shared.forEach(({ address }) => publishGroup(groupHex(address)));
   }
 
   /** Все действующие ссылки этого устройства — для журнала личного состояния (T160). */
@@ -2129,6 +2270,66 @@ export function createV2Controller(deps: Deps) {
     const isDone = await changeGroup(address, { invite_key_revoke: { link_id: hexToB64(record.linkId) } });
     if (isDone) deps.onInviteRevoked?.(record.linkId);
     return isDone;
+  }
+
+  /**
+   * Отозванные ссылки группы — их помнит сервер (состояние группы), пока админ не
+   * удалит. Секрет отозванной ссылки есть только у тех, кому он был известен;
+   * остальным она показывается адресом без секрета.
+   */
+  async function listRevokedInvites(address: string): Promise<V2InviteRecord[]> {
+    if (!ready || !client || !pv || !isV2GroupAddress(address)) return [];
+    const hex = groupHex(address);
+    try {
+      const resp = await call('id', 'group.invite.list', pv.encodeMethodRequest(
+        'group.invite.list', JSON.stringify({ group: { domain: serverDomain, id: hexToB64(hex) } }),
+      ));
+      const list = JSON.parse(pv.decodeMethodResponse('group.invite.list', resp)) as {
+        invites?: {
+          link_id?: string; revoked?: boolean; title?: string; expires_ms?: string | number;
+          usage_limit?: number; usage_count?: number; requires_approval?: boolean;
+        }[];
+      };
+      const known = (await loadInvites())[address] || [];
+      return (list.invites || []).filter((item) => item.revoked && item.link_id).map((item) => {
+        const linkId = b64ToHex(item.link_id!);
+        const local = known.find((record) => record.linkId === linkId);
+        return {
+          url: local?.url || `https://${serverDomain}/join/${hexToB64Url(linkId)}`,
+          linkId,
+          date: local?.date || 0,
+          title: item.title || local?.title || undefined,
+          expiresAt: Math.floor(Number(item.expires_ms || 0) / 1000) || undefined,
+          usageLimit: item.usage_limit || undefined,
+          usage: item.usage_count || undefined,
+          isRequestNeeded: item.requires_approval || undefined,
+        };
+      });
+    } catch (e) {
+      deps.log(`v2: список отозванных ссылок группы ${hex} не получен: ${String(e)}`);
+      return [];
+    }
+  }
+
+  /** Убрать отозванную ссылку из списка: сервер перестаёт её помнить. */
+  async function deleteRevokedInvite(address: string, linkId: string) {
+    if (!ready || !pv || !isV2GroupAddress(address)) return false;
+    try {
+      await call('id', 'group.invite.delete', pv.encodeMethodRequest(
+        'group.invite.delete',
+        JSON.stringify({ group: { domain: serverDomain, id: hexToB64(groupHex(address)) }, link_id: hexToB64(linkId) }),
+      ));
+    } catch (e) {
+      deps.log(`v2: отозванная ссылка не удалена: ${String(e)}`);
+      return false;
+    }
+    await serial(async () => {
+      const all = await loadInvites();
+      if (!all[address]?.some((record) => record.linkId === linkId)) return;
+      all[address] = all[address].filter((record) => record.linkId !== linkId);
+      await storage?.saveRecord(INVITES_RECORD, all);
+    });
+    return true;
   }
 
   // ── заявки на вступление (ссылка с одобрением, D-04; T143) ──────────────────
@@ -2217,8 +2418,9 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  function inviteErrorCode(e: unknown): 'invalid' | 'banned' | 'expired' | 'exhausted' | 'rateLimited' | 'failed' {
+  function inviteErrorCode(e: unknown): V2InviteErrorCode {
     const code = e instanceof V2Error ? e.code : String(e);
+    if (code.includes('REVOKED')) return 'revoked';
     // ERROR_CODE_LIMIT — ссылка исчерпана (раньше ERROR_CODE_RATE_LIMITED: содержит «LIMIT»)
     if (code.includes('CODE_LIMIT')) return 'exhausted';
     if (code.includes('NOT_FOUND') || code.includes('FORBIDDEN')) return 'invalid';
@@ -2505,6 +2707,9 @@ export function createV2Controller(deps: Deps) {
       if (client && isV2GroupAddress(address)) reportUnconfirmed(groupHex(address), claimed);
     },
     revokeInvite,
+    listRevokedInvites,
+    hasPendingPrimary,
+    deleteRevokedInvite,
     isV2GroupAddress,
     isV2Chat,
     isV2InviteUrl: (url: string) => Boolean(parseV2Invite(url)) || V2_INVITE_REGEX.test(url.trim()),
@@ -2609,6 +2814,11 @@ function pause(ms: number) {
 
 function b64ToHex(value: string) {
   return Array.from(atob(value), (c) => c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+}
+
+// link_id в адресе ссылки — base64url без дополнения
+function hexToB64Url(hex: string) {
+  return hexToB64(hex).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function hexToB64(hex: string) {

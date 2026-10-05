@@ -42,6 +42,10 @@ import {
 
 export type InviteLinkRecord = { link: string; date: number };
 
+// Сколько ждать секрет основной ссылки, созданной другим ведущим приглашения
+const V2_PRIMARY_WAIT_MS = 10000;
+const V2_PRIMARY_POLL_MS = 500;
+
 export type InviteErrorCode =
   | 'invalid' | 'banned' | 'revoked' | 'expired' | 'exhausted' | 'declined' | 'requested'
   | 'rateLimited' | 'failed';
@@ -676,13 +680,29 @@ export function createGroupController(deps: GroupDependencies) {
   async function ensureV2Primary(v2: V2Groups, address: string) {
     const inFlight = v2PrimaryRequests.get(address);
     if (inFlight) return inFlight;
+    const findPrimary = async () => (await v2.listInvites(address))
+      .find((link) => !link.title && !link.expiresAt && !link.usageLimit && !link.isRequestNeeded);
     const request = (async () => {
-      const links = await v2.listInvites(address);
-      return links.find((link) => !link.title && !link.expiresAt && !link.usageLimit && !link.isRequestNeeded)
-        || v2.createInvite(address, {});
+      let primary = await findPrimary();
+      // Основную ссылку уже создал другой ведущий приглашения, а её секрет ещё в
+      // пути (служебная раздача) — ждём его, а не плодим вторую основную
+      for (let waited = 0; !primary && waited < V2_PRIMARY_WAIT_MS && await v2.hasPendingPrimary(address);
+        waited += V2_PRIMARY_POLL_MS) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, V2_PRIMARY_POLL_MS);
+        });
+        primary = await findPrimary();
+      }
+      return primary || v2.createInvite(address, {});
     })().finally(() => v2PrimaryRequests.delete(address));
     v2PrimaryRequests.set(address, request);
     return request;
+  }
+
+  // Ссылка v2 сравнивается по адресу до секрета: отозванная чужая показывается без него
+  function isSameV2Link(left: string, right: string) {
+    const strip = (url: string) => url.replace(/^https?:\/\//, '').split('#')[0];
+    return strip(left) === strip(right);
   }
 
   function buildV2ExportedInvite(record: V2InviteRecord, isPrimary?: boolean, isRevoked?: boolean): ApiExportedInvite {
@@ -1045,8 +1065,11 @@ export function createGroupController(deps: GroupDependencies) {
     if (!isInviteManager(selfMember)) return { invites: [] };
     const v2 = v2Of(groupId);
     if (v2) {
-      // Отозванная ссылка v2 уходит из журнала — списка отозванных нет
-      if (isRevoked) return { invites: [] };
+      // Отозванные ссылки v2 помнит сервер, пока админ их не удалит
+      if (isRevoked) {
+        const revoked = await v2.listRevokedInvites(groupId);
+        return { invites: revoked.map((record) => buildV2ExportedInvite(record, false, true)) };
+      }
       const primary = await ensureV2Primary(v2, groupId);
       const links = await v2.listInvites(groupId);
       // Заявки сервер отдаёт общим списком группы — счётчик показываем на
@@ -1137,8 +1160,12 @@ export function createGroupController(deps: GroupDependencies) {
 
   async function deleteExportedChatInvite({ peer, link }: { peer: ApiChat; link: string }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
-    // Отозванной ссылки v2 уже нет в журнале — удалять нечего
-    if (groupId && v2Of(groupId)) return true;
+    const v2 = groupId ? v2Of(groupId) : undefined;
+    if (v2 && groupId) {
+      const revoked = (await v2.listRevokedInvites(groupId)).find((record) => isSameV2Link(record.url, link));
+      if (!revoked) return true; // уже удалена
+      return (await v2.deleteRevokedInvite(groupId, revoked.linkId)) ? true : undefined;
+    }
     const token = inviteTokenFromLink(link);
     if (!groupId || !token) return undefined;
     const response = await requestAction(TOPIC_GROUP_INVITE_DELETE, { group_id: groupId, invite: token });
@@ -1148,7 +1175,13 @@ export function createGroupController(deps: GroupDependencies) {
   async function deleteRevokedExportedChatInvites({ peer }: { peer: ApiChat; admin?: unknown }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
     if (!groupId) return undefined;
-    if (v2Of(groupId)) return true;
+    const v2 = v2Of(groupId);
+    if (v2) {
+      for (const record of await v2.listRevokedInvites(groupId)) {
+        await v2.deleteRevokedInvite(groupId, record.linkId);
+      }
+      return true;
+    }
     const revoked = await listInvites(groupId, true).catch(() => undefined);
     if (!revoked) return undefined;
     for (const link of revoked) {

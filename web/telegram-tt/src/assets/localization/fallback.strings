@@ -254,6 +254,7 @@
 "ParvaneCallNoDevice" = "No access to the microphone or camera";
 "ParvaneCallNotContact" = "You can call this person after they reply to your message";
 "ParvaneCallNotSent" = "The call could not be placed. Try again later";
+"ParvaneCallRateLimited" = "Too many calls to this person in the last minute. Wait a minute and try again";
 "ParvaneCallTooManyMembers" = "A group call is limited to {count} participants";
 "ParvaneGroupCallIncoming" = "is inviting you to a group call...";
 "ParvaneGroupCallIncomingNamed" = "{group}: group call";

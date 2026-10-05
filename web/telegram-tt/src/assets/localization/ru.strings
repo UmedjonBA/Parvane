@@ -85,6 +85,7 @@
 "ParvaneCallNoDevice" = "Нет доступа к микрофону или камере";
 "ParvaneCallNotContact" = "Позвонить можно после того, как собеседник ответит на ваше сообщение";
 "ParvaneCallNotSent" = "Не удалось позвонить. Попробуйте позже";
+"ParvaneCallRateLimited" = "Этому собеседнику слишком много звонили за последнюю минуту. Подождите минуту и позвоните снова";
 "ParvaneCallTooManyMembers" = "В групповом звонке не больше {count} участников";
 "ParvaneGroupCallIncoming" = "приглашает в групповой звонок...";
 "ParvaneGroupCallIncomingNamed" = "{group}: групповой звонок";

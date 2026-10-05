@@ -219,6 +219,7 @@ export interface LangPair {
   'ParvaneCallNoDevice': undefined;
   'ParvaneCallNotContact': undefined;
   'ParvaneCallNotSent': undefined;
+  'ParvaneCallRateLimited': undefined;
   'ParvaneGroupCallIncoming': undefined;
   'ParvaneGroupPeerBusy': undefined;
   'ParvaneNameColor': undefined;
