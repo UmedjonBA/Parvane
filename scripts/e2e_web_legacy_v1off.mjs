@@ -66,7 +66,8 @@ async function upgradeToV2(session) {
   await relogin(session.page, PASSWORD);
   await waitLog(session, 'v2: готов', V2_START_TIMEOUT_MS);
   // Первый корень v2 — диалог ключа восстановления
-  const dialog = session.page.locator('.Modal .modal-dialog').filter({ hasText: /recovery key|ключ восстановления/i });
+  const dialog = session.page.locator('.Modal .modal-dialog').filter({ hasText: /recovery key|ключ восстановления/i })
+    .filter({ has: session.page.getByRole('button', { name: 'OK', exact: true }) });
   await session.page.addLocatorHandler(dialog, async (shown) => {
     await shown.getByRole('button', { name: 'OK' }).click();
   });

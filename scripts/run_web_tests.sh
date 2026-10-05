@@ -175,6 +175,9 @@ log "Telegram two-factor login e2e, v1 disabled (E6-1)"
 log "v1 history after v1 is switched off: LegacyV1 records (T182)"
 "$ROOT/scripts/run_web_legacy_v1off_e2e.sh"
 
+log "Per-callee ring cap: the caller is told why the call did not go out"
+"$ROOT/scripts/run_web_call_limit_e2e.sh"
+
 log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)"
 "$ROOT/scripts/run_web_honest_ui_e2e.sh"
 

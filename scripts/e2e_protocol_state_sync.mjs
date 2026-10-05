@@ -37,6 +37,26 @@ const LINK_TIMEOUT_MS = 90000;
 // SC-009: правка видна на другом устройстве ≤ 10 с
 const STATE_SYNC_BUDGET_MS = 10000;
 
+// Текст подтверждения выхода (диалог закрывается без выхода)
+async function readLogoutWarning(page) {
+  await page.getByRole('button', { name: 'Open menu' }).first().click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  // «More actions» есть и в шапке чата — ждём сам экран настроек
+  await page.getByRole('button', { name: 'Edit profile' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first().click();
+  await page.getByRole('menuitem', { name: 'Log Out' }).click();
+  const dialog = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: 'Log Out' }) }).first();
+  await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(1500); // признак «единственное устройство» приходит ответом провайдера
+  const text = (await dialog.textContent()) || '';
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await dialog.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }).catch(() => {});
+  await closeSettings(page);
+  return text;
+}
+
 const browser = await chromium.launch();
 const names = ['alice', 'bob1', 'bob2'];
 const contexts = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await browser.newContext()])));
@@ -74,6 +94,11 @@ async function sendInActiveChat(page, text) {
 }
 
 async function openDevicesScreen(page) {
+  // Непривязанное устройство web само открывает экран «Устройства» — тогда он уже на месте
+  if (await page.locator('.SettingsActiveSessions').waitFor({ state: 'visible', timeout: 2500 })
+    .then(() => true, () => false)) {
+    return page.locator('.SettingsActiveSessions');
+  }
   await page.getByRole('button', { name: 'Open menu' }).first().click();
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Devices' }).click();
@@ -198,6 +223,11 @@ try {
   assert.equal(await dismissRecoveryKeyDialog(bob2Page, 3000), undefined,
     'bob2: второе устройство показало ключ восстановления — создан второй корень');
 
+  // Непривязанное устройство само ведёт на экран «Устройства» и объясняет, что делать
+  await bob2Page.locator('.SettingsActiveSessions').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })
+    .catch(() => assert.fail('bob2: непривязанное устройство не открыло экран «Устройства»'));
+  await bob2Page.locator('.Notification-container').getByText(/not linked to your account yet/).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const dev2Screen = await openDevicesScreen(bob2Page);
   await dev2Screen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -398,6 +428,13 @@ try {
   for (const who of names) {
     assert.ok(!logs[who].some((l) => l.includes('запуск не удался')), `${who}: ${logs[who].join(' | ')}`);
   }
+  // ── Выход: единственное устройство предупреждают про ключ восстановления ──
+  // (у alice устройство одно, у bob — два: ему обычный вопрос)
+  assert.match(await readLogoutWarning(alicePage), /only device.*recovery key/s,
+    'alice: выход с единственного устройства без предупреждения о ключе восстановления');
+  assert.doesNotMatch(await readLogoutWarning(bob1Page), /only device/,
+    'bob1: предупреждение о единственном устройстве при двух устройствах');
+
   console.log('e2e_protocol_state_sync: OK');
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR || 'web/telegram-tt/test-results';

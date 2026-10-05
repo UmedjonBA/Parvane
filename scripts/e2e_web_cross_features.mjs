@@ -16,9 +16,10 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  LOGIN_TIMEOUT_MS,
   dumpDiagJournal,
   findMessage,
+  LOGIN_TIMEOUT_MS,
+  openDevicesScreen,
   openPrivateChatStrict,
   preparePage,
   relogin,
@@ -166,11 +167,7 @@ try {
   if (process.env.PARVANE_E2E_V1_OFF !== '1') {
     // ── отзыв desktop-устройства из web Settings→Devices ───────────────────────
     bobWeb = await preparePage(bobWebContext, bob, PASSWORD);
-    await bobWeb.page.getByRole('button', { name: 'Open menu' }).first().click();
-    await bobWeb.page.getByRole('menuitem', { name: 'Settings' }).click();
-    await bobWeb.page.getByRole('button', { name: 'Devices' }).click();
-    const sessionsScreen = bobWeb.page.locator('.SettingsActiveSessions');
-    await sessionsScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    const sessionsScreen = await openDevicesScreen(bobWeb.page);
     await sessionsScreen.getByText('THIS DEVICE').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     const desktopSession = sessionsScreen.locator('.ListItem').filter({ hasText: /Web |Desktop/ }).first();
     await desktopSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

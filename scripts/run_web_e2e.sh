@@ -136,7 +136,7 @@ start_shard() {
     PARVANE_LOG_LEVEL=info \
     PARVANE_LOGIN_RATE_IP=100000 \
     PARVANE_REGISTER_RATE_IP=100000 \
-    PARVANE_CALL_V2_RINGING_MAX=100000 \
+    PARVANE_CALL_V2_RINGING_MAX="${PARVANE_E2E_RINGING_MAX:-100000}" \
     "$ROOT/backend/target/debug/$shard" >"$TEMP_ROOT/$shard.log" 2>&1 &
   PIDS+=("$!")
 }
