@@ -606,6 +606,11 @@ impl Client {
         self.ssk = None;
         self.my_cert = None;
         self.dk = OwnDeliveryKey::new();
+        // Сброс на работающем устройстве: собеседник, приняв новый корень,
+        // отбрасывает свои сессии с нами (accept_root_change) — прежние сессии
+        // здесь тоже не годятся, иначе первое же сообщение не расшифруется.
+        self.sessions.clear();
+        self.old_sessions.clear();
         let (mut reqs, root) = self.create_identity(otk_count)?;
         let genesis = self.own_entries.first().cloned().ok_or(ProtoError::BrokenChain)?;
         match reqs.first_mut() {

@@ -1091,6 +1091,7 @@ export function createV2Controller(deps: Deps) {
    * этим устройством не читается. Нужен пароль (переаутентификация). */
   async function resetIdentity(password: string): Promise<'ok' | 'bad_password' | 'failed'> {
     if (starting) await starting.catch(() => undefined);
+    if (ready && client) return resetWorkingIdentity(password);
     if (!pv || !storage || !storageKey || !needsLinking || ready || !ownDeviceId) return 'failed';
     try {
       await call('id', 'identity.session.reauth', pv.encodeMessage(
@@ -1209,6 +1210,46 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: доступ собеседника отозван — ключ доступа сменён (раздач ${shares.length})`);
       return true;
     });
+  }
+
+  /** Сброс личности на работающем устройстве (ключ восстановления утерян, а он
+   * нужен — например, сменить SSK после отзыва устройства): движок начинает
+   * журнал заново на месте, сессии, группы и история устройства остаются.
+   * Сервер гасит остальные устройства прежнего журнала, это — не трогает. */
+  async function resetWorkingIdentity(password: string): Promise<'ok' | 'bad_password' | 'failed'> {
+    if (!pv || !storage) return 'failed';
+    try {
+      await call('id', 'identity.session.reauth', pv.encodeMessage(
+        'parvane.identity.v2.SessionReauthRequest', JSON.stringify({ password }),
+      ));
+    } catch {
+      return 'bad_password';
+    }
+    const engine = pv;
+    const target = storage;
+    let recoveryKey = '';
+    try {
+      await serial(async () => {
+        const created = client!.resetIdentity(OTK_COUNT) as { requests: OutReq[]; rootSecret: Uint8Array };
+        await run(created.requests);
+        recoveryKey = engine.generateRecoveryKey();
+        rootBackupB64 = b64(client!.exportRootBackup(recoveryKey, created.rootSecret));
+        await target.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+        await sealRootEscrow(client!);
+        client!.forgetRoot();
+        created.rootSecret.fill(0);
+        await persist();
+      });
+      deps.log('v2: личность сброшена на работающем устройстве — новый корень и журнал устройств');
+    } catch (e) {
+      deps.log(`v2: сброс личности не удался: ${String(e)}`);
+      // Движок уже начал новый журнал, а сервер его не принял — возвращаемся к сохранённому состоянию
+      await restart().catch(() => undefined);
+      return 'failed';
+    }
+    if (!(await restart())) return 'failed';
+    deps.onRecoveryKey(recoveryKey);
+    return 'ok';
   }
 
   /** SSK раскрыт отзывом устройства и ещё не сменён; есть ли копия корня. */

@@ -402,6 +402,9 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
               {oldLang('ParvaneSskRotationAction')}
             </ListItem>
           )}
+          <ListItem icon="delete" narrow ripple destructive onClick={openResetDialog}>
+            {oldLang('ParvaneResetAction')}
+          </ListItem>
         </Island>
       </>
     );

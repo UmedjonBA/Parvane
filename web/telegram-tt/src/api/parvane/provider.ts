@@ -612,6 +612,11 @@ const connectionController = createConnectionController({
     store.getLangString = getLangStringByKey;
   },
   unlockStorage: (user) => ensureStorageUnlocked(user),
+  wipeDevice: async (user) => {
+    localState.clearUserData(user);
+    await E2eEngine.clear(user);
+    await clearSecureSession(user).catch(() => undefined);
+  },
   getToken: () => token,
   setToken: (nextToken) => { token = nextToken; },
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
@@ -3169,6 +3174,8 @@ const methods = {
         localState.clearUserData(user);
         await E2eEngine.clear(user);
         await clearSecureSession(user).catch(() => undefined);
+        // Ключи стёрты — следующий вход идёт новым устройством
+        connectionController.forgetDeviceId(user);
       }
     }
     return undefined;

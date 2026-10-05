@@ -16,6 +16,8 @@
 #                 (T128/T130, FR-066);
 #   escrow      — ключ восстановления утерян: администратор своим ключом (вне
 #                 сервера) выписывает новый, вход по нему (scripts/admin_recover_user.sh);
+#   relink      — выход и повторный вход на устройстве при живом втором: привязка
+#                 возвращает обе стороны переписки;
 #   recovery    — новое устройство без других устройств: вход по ключу
 #                 восстановления (копия корня на сервере), сброс личности;
 #                 собеседник видит смену корня (KEY-1 v2) (T129/T130);
@@ -58,6 +60,7 @@ case "$PAIR" in
   web2-groups) SCRIPT="$ROOT/scripts/e2e_protocol_groups.mjs" ;;
   mixed-devices) SCRIPT="$ROOT/scripts/e2e_protocol_legacy_devices.mjs" ;;
   revoke) SCRIPT="$ROOT/scripts/e2e_protocol_revoke.mjs" ;;
+  relink) SCRIPT="$ROOT/scripts/e2e_protocol_relink.mjs" ;;
   recovery) SCRIPT="$ROOT/scripts/e2e_protocol_recovery.mjs" ;;
   escrow)
     SCRIPT="$ROOT/scripts/e2e_protocol_escrow.mjs"

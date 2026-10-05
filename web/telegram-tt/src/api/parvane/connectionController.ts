@@ -34,6 +34,8 @@ type ConnectionDependencies = {
   setStore: (store: ParvaneStore) => void;
   // P-39: хранилище под PIN — разблокировать до открытия E2E
   unlockStorage?: (user: string) => Promise<void>;
+  /** Стереть локальные данные устройства (ключи, историю): оно отозвано. */
+  wipeDevice?: (user: string) => Promise<void>;
   getToken: () => string;
   setToken: (token: string) => void;
   setCallIdentityReady: (isReady: boolean) => void;
@@ -115,6 +117,9 @@ function fallbackServerInfo(): ServerInfo {
   };
 }
 
+// Текст отказа identity/gateway для токена отозванного устройства
+const DEVICE_REVOKED_PATTERN = /устройство отозвано/i;
+
 export function createConnectionController(deps: ConnectionDependencies) {
   let lastServerInfo: ServerInfo | undefined;
   let syncTimer: number | undefined;
@@ -181,6 +186,17 @@ export function createConnectionController(deps: ConnectionDependencies) {
       if (deviceId) localStorage.setItem(deviceMirrorKey(user), deviceId);
     } catch {
       // приватный режим — без зеркала (claim dev появится позже)
+    }
+  }
+
+  // Полный выход и отзыв устройства: следующий вход — новое устройство. Прежний
+  // идентификатор не годится: его ключи стёрты, а отозванный сервер не примет
+  // никогда (вход с верным паролем выглядел бы как «неверный пароль»)
+  function forgetDeviceId(user: string) {
+    try {
+      localStorage.removeItem(deviceMirrorKey(user));
+    } catch {
+      // приватный режим — зеркала и не было
     }
   }
 
@@ -485,7 +501,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
     return connectAndLogin(user, '', '', savedToken);
   }
 
-  async function connectAndLogin(input: string, password: string, loginToken = '', savedToken = ''): Promise<string> {
+  async function connectAndLogin(
+    input: string, password: string, loginToken = '', savedToken = '', isNewDeviceRetry = false,
+  ): Promise<string> {
     cancelReconnect();
     // Новая сессия — состав групп (и их typing-подписки) будет пересобран синком
     subscribedTypingGroups.clear();
@@ -510,7 +528,21 @@ export function createConnectionController(deps: ConnectionDependencies) {
         || await issueToken(activeConnection, user, password, info.confirm === 'none', loginToken);
       deps.setToken(nextToken);
       deps.log('JWT получен');
-      await activeConnection.authorize(nextToken);
+      try {
+        await activeConnection.authorize(nextToken);
+      } catch (error) {
+        // Пароль верный (токен выдан), а токен не принят — устройство отозвано
+        // другим («Завершить все другие сеансы»). Входим как новое устройство
+        // Только явный отказ «устройство отозвано»: обрыв связи посреди входа не
+        // должен стирать локальные ключи и историю
+        const isRevoked = DEVICE_REVOKED_PATTERN.test(String(error));
+        if (savedToken || isNewDeviceRetry || !isRevoked || !deps.wipeDevice) throw error;
+        deps.log('токен устройства не принят (устройство отозвано) — вход новым устройством');
+        await deps.wipeDevice(user);
+        forgetDeviceId(user);
+        // Отказ в авторизации gateway завершает закрытием соединения — входим заново
+        return await connectAndLogin(input, password, loginToken, '', true);
+      }
       deps.log(`авторизован: ${user}`);
 
       const store = new ParvaneStore();
@@ -767,6 +799,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     connectWithToken,
     replenishDevicePrekeys: replenishOneTimePrekeys,
     rememberDeviceId: writeDeviceIdMirror,
+    forgetDeviceId,
     shutdown,
   };
 }
