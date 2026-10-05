@@ -459,7 +459,14 @@ export function createCallController(deps: CallDependencies) {
     }
     if (typeof window === 'undefined') return;
     const isNotContact = /forbidden/i.test(String(error));
-    window.dispatchEvent(new CustomEvent('parvane-call-unavailable', { detail: { isNotContact } }));
+    const isRateLimited = /RATE_LIMITED/.test(String(error));
+    window.dispatchEvent(new CustomEvent('parvane-call-unavailable', { detail: { isNotContact, isRateLimited } }));
+  }
+
+  // Отказ по частоте без срока повтора — потолок вызовов адресату за минуту
+  // (лимиты gateway срок называют, их лечит короткая пауза)
+  function isCalleeRingLimit(error: unknown) {
+    return /RATE_LIMITED/.test(String(error)) && !(error as { retryAfterMs?: number })?.retryAfterMs;
   }
 
   // Сигналы группового звонка одному участнику уходят строго по порядку:
@@ -477,7 +484,10 @@ export function createCallController(deps: CallDependencies) {
       try {
         return await deps.sendV2Signal?.(peer, signal, groupCallId);
       } catch (error) {
-        if (attempt >= V2_SIGNAL_RETRIES || !String(error).includes('RATE_LIMITED')) throw error;
+        // Потолок вызовов адресату (шард call) пауза в секунды не лечит — отказ сразу
+        if (attempt >= V2_SIGNAL_RETRIES || !String(error).includes('RATE_LIMITED') || isCalleeRingLimit(error)) {
+          throw error;
+        }
         await new Promise<void>((resolve) => {
           setTimeout(resolve, V2_SIGNAL_RETRY_MS * (attempt + 1));
         });
@@ -496,6 +506,14 @@ export function createCallController(deps: CallDependencies) {
       } catch (error) {
         // По v2 не ушло — прежним путём: стороны звонка серверу видны, как и у
         // участников на v1 (сами SDP подписаны в обоих случаях)
+        // Участнику сейчас слишком много звонят: по v1 это не обойти — говорим звонящему
+        if (signal.type === 'group_invite' && isCalleeRingLimit(error)) {
+          deps.log(`Приглашение в групповой звонок не ушло: ${peer} получает слишком много вызовов`);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('parvane-call-unavailable', { detail: { isRateLimited: true } }));
+          }
+          return;
+        }
         deps.log(`Сигнал группового звонка по v2 не отправлен, иду по v1: ${String(error)}`);
       }
       const connection = deps.getConnection();

@@ -251,6 +251,10 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   'Conversation.GreetingText': 'Send a message to start the conversation',
   Close: 'Close',
   lng_sure_logout: 'Are you sure you want to log out?',
+  ParvaneLogoutLastDevice: 'This is the only device signed in to your account. Signing out erases its keys: to read '
+    + 'your chats again you will need your recovery key. Make sure you have saved it. Sign out?',
+  ParvaneNeedsLinkingNotice: 'This device is not linked to your account yet. Confirm it on another device or enter '
+    + 'your recovery key',
   'AccountSettings.Logout': 'Log Out',
   AccDescrGoBack: 'Go back',
 
@@ -541,6 +545,7 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneCallNoDevice: 'No access to the microphone or camera',
   ParvaneCallNotContact: 'You can call this person after they reply to your message',
   ParvaneCallNotSent: 'The call could not be placed. Try again later',
+  ParvaneCallRateLimited: 'Too many calls to this person in the last minute. Wait a minute and try again',
   ParvaneCallTooManyMembers: 'A group call is limited to %1$s participants',
   ParvaneNameColor: 'Name color',
   ParvaneNameColorDefault: 'Default',
@@ -837,6 +842,10 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'Conversation.GreetingText': 'Отправьте сообщение, чтобы начать разговор',
   Close: 'Закрыть',
   lng_sure_logout: 'Вы действительно хотите выйти?',
+  ParvaneLogoutLastDevice: 'Это единственное устройство вашего аккаунта. Выход сотрёт его ключи: чтобы снова читать '
+    + 'переписку, понадобится ключ восстановления. Убедитесь, что он сохранён. Выйти?',
+  ParvaneNeedsLinkingNotice: 'Это устройство ещё не привязано к аккаунту. Подтвердите его на другом устройстве или '
+    + 'введите ключ восстановления',
   'AccountSettings.Logout': 'Выйти',
   AccDescrGoBack: 'Назад',
 
@@ -1157,6 +1166,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneCallNoDevice: 'Нет доступа к микрофону или камере',
   ParvaneCallNotContact: 'Позвонить можно после того, как собеседник ответит на ваше сообщение',
   ParvaneCallNotSent: 'Не удалось позвонить. Попробуйте позже',
+  ParvaneCallRateLimited: 'Этому собеседнику слишком много звонили за последнюю минуту. '
+    + 'Подождите минуту и позвоните снова',
   ParvaneCallTooManyMembers: 'В групповом звонке не больше %1$s участников',
   ParvaneNameColor: 'Цвет имени',
   ParvaneNameColorDefault: 'По умолчанию',

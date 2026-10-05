@@ -6,6 +6,8 @@ import { getActions } from '../../../global';
 
 import { SettingsScreens } from '../../../types';
 
+import { callApi } from '../../../api/gramjs';
+
 import useAppLayout from '../../../hooks/useAppLayout';
 import useLang from '../../../hooks/useLang';
 import useMultiClick from '../../../hooks/useMultiClick';
@@ -42,8 +44,15 @@ const SettingsHeader: FC<OwnProps> = ({
     openSettingsScreen({ screen: SettingsScreens.Experimental });
   });
 
+  // Parvane: выход с единственного устройства стирает ключи — предупреждаем про
+  // ключ восстановления до подтверждения
+  const [isLastDevice, setIsLastDevice] = useState(false);
+
   const openSignOutConfirmation = useCallback(() => {
+    setIsLastDevice(false);
     setIsSignOutDialogOpen(true);
+    void (callApi as unknown as (name: string) => Promise<boolean | undefined>)('parvaneIsLastDevice')
+      .then((isLast) => setIsLastDevice(Boolean(isLast)));
   }, []);
 
   const closeSignOutConfirmation = useCallback(() => {
@@ -303,7 +312,7 @@ const SettingsHeader: FC<OwnProps> = ({
       <ConfirmDialog
         isOpen={isSignOutDialogOpen}
         onClose={closeSignOutConfirmation}
-        text={oldLang('lng_sure_logout')}
+        text={oldLang(isLastDevice ? 'ParvaneLogoutLastDevice' : 'lng_sure_logout')}
         confirmLabel={oldLang('AccountSettings.Logout')}
         confirmHandler={handleSignOutMessage}
         confirmIsDestructive

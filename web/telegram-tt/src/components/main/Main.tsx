@@ -11,6 +11,7 @@ import { getActions, getGlobal, withGlobal } from '../../global';
 import type { ApiChatFolder, ApiLimitTypeWithModal, ApiStarGiftAuctionState, ApiUser } from '../../api/types';
 import type { TabState } from '../../global/types';
 import type { ThemeKey } from '../../types';
+import { SettingsScreens } from '../../types';
 
 import { BASE_EMOJI_KEYWORD_LANG, DEBUG, FOLDERS_POSITION_LEFT, INACTIVE_MARKER } from '../../config';
 import { requestNextMutation } from '../../lib/fasterdom/fasterdom';
@@ -246,6 +247,7 @@ const Main = ({
     updateIsOnline,
     onTabFocusChange,
     loadTopPeers,
+    openSettingsScreen,
     loadEmojiKeywords,
     loadCountryList,
     loadAvailableReactions,
@@ -491,6 +493,22 @@ const Main = ({
     return () => window.removeEventListener('parvane-ssk-rotation', handleSskRotation);
   }, [showNotification]);
 
+  // Parvane: это устройство ещё не привязано к аккаунту (вход с нового устройства
+  // или после полного выхода): без привязки оно не получает сообщений — сразу
+  // ведём на экран «Устройства» (код для другого устройства, ключ восстановления)
+  useEffect(() => {
+    const handleNeedsLinking = () => {
+      openSettingsScreen({ screen: SettingsScreens.ActiveSessions });
+      showNotification({ message: oldTranslate('ParvaneNeedsLinkingNotice') });
+    };
+    void (callApi as unknown as (name: string) => Promise<{ canRecover?: boolean } | undefined>)('parvaneGetLinkStatus')
+      .then((status) => {
+        if (status?.canRecover) handleNeedsLinking();
+      });
+    window.addEventListener('parvane-needs-linking', handleNeedsLinking);
+    return () => window.removeEventListener('parvane-needs-linking', handleNeedsLinking);
+  }, [openSettingsScreen, showNotification]);
+
   // Parvane: сервер не принимает эту версию протокола — нативный диалог ошибки
   useEffect(() => {
     const handleUpgradeRequired = () => {
@@ -577,10 +595,10 @@ const Main = ({
   // Parvane: вызов по v2 не ушёл (собеседник ещё не отвечал — нет ключа доступа)
   useEffect(() => {
     const handleCallUnavailable = (event: Event) => {
-      const isNotContact = (event as CustomEvent<{ isNotContact?: boolean }>).detail?.isNotContact;
-      showNotification({
-        message: oldTranslate(isNotContact ? 'ParvaneCallNotContact' : 'ParvaneCallNotSent'),
-      });
+      const detail = (event as CustomEvent<{ isNotContact?: boolean; isRateLimited?: boolean }>).detail;
+      const key = detail?.isRateLimited ? 'ParvaneCallRateLimited'
+        : detail?.isNotContact ? 'ParvaneCallNotContact' : 'ParvaneCallNotSent';
+      showNotification({ message: oldTranslate(key) });
     };
     window.addEventListener('parvane-call-unavailable', handleCallUnavailable);
     return () => window.removeEventListener('parvane-call-unavailable', handleCallUnavailable);
