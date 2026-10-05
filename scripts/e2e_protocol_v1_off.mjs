@@ -264,6 +264,31 @@ try {
     const extra = v1Frames[who].filter((frame) => !frame.startsWith('auth'));
     assert.deepEqual(extra, [], `${who}: по соединению v1 ушли кадры`);
   }
+  // ── Аватар пользователя без v1: открытый блоб по v2, каталог отдаёт его собеседнику ──
+  const avatarSet = await aliceSession.page.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#e17076';
+    ctx.fillRect(0, 0, 64, 64);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    await window.__parvaneDiagCallApi('uploadProfilePhoto', new File([blob], 'me.png', { type: 'image/png' }));
+    const g = window.__parvaneGetGlobal();
+    return Boolean(g.users.byId[g.currentUserId]?.avatarPhotoId);
+  });
+  assert.ok(avatarSet, 'alice: аватар не выставлен без v1');
+  // bob перечитывает профиль собеседника при входе
+  await reloadPage(bobSession.page);
+  await bobSession.page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.waitForFunction((nick) => {
+    const g = window.__parvaneGetGlobal?.();
+    const user = g && Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
+    return Boolean(user?.avatarPhotoId);
+  }, alice.split('@')[0], { timeout: LOGIN_TIMEOUT_MS })
+    .catch(() => assert.fail('bob: аватар alice не виден без v1'));
+  console.log('аватар пользователя без v1: выставлен и виден собеседнику');
+
   // Диалога «обновите приложение» нет
   for (const [who, session] of [['alice', aliceSession], ['bob', bobSession]]) {
     assert.equal(await session.page.getByText(/update the app|обновите приложение/i).count(), 0,

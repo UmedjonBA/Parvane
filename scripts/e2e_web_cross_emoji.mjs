@@ -174,6 +174,10 @@ async function installPackFromMessage(page, container) {
   const addButton = page.locator('.StickerSetModal button').filter({ hasText: /^Add \d+ Emoji$/ }).first();
   await addButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await addButton.click();
+  // Установка — запись архива пака в шифрованное хранилище: кнопка «Add» пропадает,
+  // когда запись завершена. Без ожидания перезагрузка сразу после клика заставала
+  // запись в пути, и набора после неё не было
+  await addButton.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   // Модалка после установки закрывается сама или остаётся с «Remove» — закрываем
   // кнопкой, а не Escape (Escape после закрытия модалки закрыл бы чат)
   const closeButton = page.locator('.StickerSetModal').getByRole('button', { name: 'Close' }).first();
