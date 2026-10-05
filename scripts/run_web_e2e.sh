@@ -71,10 +71,12 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
 
-  # Перезапущенный посреди сценария gateway (см. gateway_restart_watch)
-  if [[ -s "$TEMP_ROOT/gateway.pid" ]]; then
-    kill "$(cat "$TEMP_ROOT/gateway.pid")" 2>/dev/null || true
-  fi
+  # Перезапущенные посреди сценария gateway и identity (см. gateway_restart_watch)
+  for restarted in gateway identity; do
+    if [[ -s "$TEMP_ROOT/$restarted.pid" ]]; then
+      kill "$(cat "$TEMP_ROOT/$restarted.pid")" 2>/dev/null || true
+    fi
+  done
   for pid in "${PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
@@ -137,8 +139,9 @@ start_shard() {
     PARVANE_LOGIN_RATE_IP=100000 \
     PARVANE_REGISTER_RATE_IP=100000 \
     PARVANE_CALL_V2_RINGING_MAX="${PARVANE_E2E_RINGING_MAX:-100000}" \
-    "$ROOT/backend/target/debug/$shard" >"$TEMP_ROOT/$shard.log" 2>&1 &
+    "$ROOT/backend/target/debug/$shard" >>"$TEMP_ROOT/$shard.log" 2>&1 &
   PIDS+=("$!")
+  echo "$!" >"$TEMP_ROOT/$shard.pid"
 }
 
 log "Build backend binaries"
@@ -242,8 +245,28 @@ start_gateway() {
 # уже есть история v1). Сценарий пишет окружение нового gateway в файл
 # `gateway.restart` каталога PARVANE_E2E_BACKEND_LOG_DIR и ждёт файл `gateway.restarted`.
 # Журнал прежнего gateway остаётся в gateway.log, отметка — строка «== gateway restart»
+# Так же перезапускается identity (файл `identity.restart` → `identity.restarted`):
+# сценарий перед этим удаляет `identity-jwt-ed25519.pem`, и шард поднимается с
+# новым ключом подписи JWT — все выданные токены перестают приниматься
+identity_restart_if_asked() {
+  [[ -f "$TEMP_ROOT/identity.restart" ]] || return 0
+  rm -f "$TEMP_ROOT/identity.restart"
+  kill "$(cat "$TEMP_ROOT/identity.pid")" 2>/dev/null || true
+  while kill -0 "$(cat "$TEMP_ROOT/identity.pid")" 2>/dev/null; do sleep 0.1; done
+  printf '== identity restart\n' >>"$TEMP_ROOT/identity.log"
+  local lines
+  lines="$(wc -l <"$TEMP_ROOT/identity.log")"
+  start_shard identity "$IDENTITY_PASS"
+  for _attempt in {1..300}; do
+    tail -n +"$((lines + 1))" "$TEMP_ROOT/identity.log" | rg -q 'Identity шард запущен' && break
+    sleep 0.1
+  done
+  : >"$TEMP_ROOT/identity.restarted"
+}
+
 gateway_restart_watch() {
   while sleep 0.3; do
+    identity_restart_if_asked
     [[ -f "$TEMP_ROOT/gateway.restart" ]] || continue
     local extra
     extra="$(cat "$TEMP_ROOT/gateway.restart")"

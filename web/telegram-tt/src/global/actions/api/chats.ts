@@ -537,7 +537,18 @@ addActionHandler('loadAllChats', async (global, actions, payload): Promise<void>
   let isCallbackFired = false;
   let i = 0;
 
-  while (!global.chats.isFullyLoaded[listType]) {
+  // Parvane: список мог быть загружен целиком ещё до старта sync — `loadTopChats`
+  // (его зовут апдейты чатов при восстановлении истории из кэша) успел раньше.
+  // Цикл тогда не выполнялся ни разу, колбэк `sync` не вызывался, и `isSynced` не
+  // выставлялся до перезагрузки (ссылка-приглашение не открывалась, тост «нет
+  // соединения»). Первая пачка для sync поэтому загружается всегда: колбэк стирает
+  // сообщения, а следом идущий `replaceMessages` возвращает последние из ответа —
+  // вызвать один колбэк без загрузки нельзя (лента открытого после этого чата
+  // оставалась в вечной загрузке)
+  let mustLoadFirstBatch = Boolean(whenFirstBatchDone);
+
+  while (mustLoadFirstBatch || !global.chats.isFullyLoaded[listType]) {
+    mustLoadFirstBatch = false;
     if (i++ >= INFINITE_LOOP_MARKER) {
       if (DEBUG) {
         // eslint-disable-next-line no-console
@@ -575,15 +586,6 @@ addActionHandler('loadAllChats', async (global, actions, payload): Promise<void>
 
     setGlobal(global);
     global = getGlobal();
-  }
-
-  // Parvane: список уже загружен целиком до старта sync — `loadTopChats` (его
-  // зовут апдейты чатов при восстановлении истории из кэша) успел раньше, и цикл
-  // не выполнился ни разу. Без вызова колбэка `sync` не выставлял `isSynced`:
-  // клиент оставался «не синхронизирован» до перезагрузки (ссылка-приглашение
-  // из адресной строки не открывалась, тост «нет соединения»)
-  if (!isCallbackFired) {
-    await whenFirstBatchDone?.();
   }
 });
 
