@@ -47,11 +47,14 @@ SSE4.2/AVX — target-cpu=native даст SIGILL) и уезжают через `
 
 - `https://parvane.duckdns.org:20443` — веб-клиент (серт Let's Encrypt, доверенный;
   сайт открыт, регистрация с кодом на почту).
-- Smoke против прода:
+- Smoke против прода (регистрация на проде подтверждается через Telegram-бота,
+  поэтому нужен сценарий `prod_v2_smoke`; `e2e_web_prod_smoke.mjs` годится только
+  для сервера без подтверждения):
   ```bash
   PARVANE_E2E_BASE_URL=https://parvane.duckdns.org:20443 \
   PARVANE_E2E_GATEWAY_URL=wss://parvane.duckdns.org:20443/ws \
-  node scripts/e2e_web_prod_smoke.mjs
+  PARVANE_TELEGRAM_BOT=<бот> PARVANE_TELEGRAM_SECRET=<секрет из .env сервера> \
+  node scripts/e2e_web_prod_v2_smoke.mjs
   ```
 - Логи: `ssh ... 'cd parvane && docker compose logs --tail 50 identity gateway caddy'`.
 
