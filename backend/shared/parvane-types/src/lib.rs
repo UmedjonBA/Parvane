@@ -227,6 +227,10 @@ pub struct IssueRequest {
     /// любому — второй фактор обходился при известном пароле.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust_secret: Option<String>,
+    /// Как устройство называет себя («Firefox, Linux») — подпись на экране
+    /// «Устройства» у владельца; ни на что больше не влияет.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
     /// IP клиента — подставляет gateway (X-Forwarded-For за прокси / пир);
     /// клиентское значение перезаписывается. Для лимитов по источнику.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -512,6 +516,12 @@ pub struct DeviceInfo {
     pub updated_at: i64,
     /// Сколько несожжённых one-time prekey осталось (для клиентского пополнения).
     pub one_time_available: i64,
+    /// Подпись устройства, названная им при входе («Firefox, Linux»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Unix-время последнего входа с этого устройства.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

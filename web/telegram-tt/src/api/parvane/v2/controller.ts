@@ -39,6 +39,8 @@ type Deps = {
   loadHistory: () => Promise<WireStoredMessage[]>;
   /** В журнале устройств появились новые свои устройства (T119). */
   onNewOwnDevices: (deviceIds: string[]) => void;
+  /** Состав своих устройств изменился (появилось, вышло, отозвано). */
+  onOwnDevicesChanged?: () => void;
   /** У аккаунта уже есть журнал устройств, а это устройство в нём не записано:
    * нужен грант линковки от своего другого устройства (LINK-1 v2). */
   onNeedsLinking?: () => void;
@@ -897,6 +899,7 @@ export function createV2Controller(deps: Deps) {
     await persist();
     // Первая проверка на этом устройстве — запоминаем, не уведомляем
     if (!known) return;
+    if (known.length !== current.length || current.some((id) => !known.includes(id))) deps.onOwnDevicesChanged?.();
     const added = current.filter((id) => !known.includes(id) && id !== ownDeviceId);
     if (!added.length) return;
     deps.onNewOwnDevices(added);
@@ -1250,6 +1253,26 @@ export function createV2Controller(deps: Deps) {
     if (!(await restart())) return 'failed';
     deps.onRecoveryKey(recoveryKey);
     return 'ok';
+  }
+
+  /** Выход: устройство убирает себя из журнала записью, подписанной своим
+   * ключом, — у остальных оно пропадает из списка, ключ восстановления им не
+   * нужен. Сервер после записи гасит сессию этого устройства. */
+  async function leave() {
+    if (!ready || !client) return;
+    try {
+      await serial(async () => {
+        await run(client!.leave() as OutReq[]);
+      });
+      deps.log('v2: устройство вышло из журнала устройств');
+    } catch (e) {
+      deps.log(`v2: выход из журнала устройств не выполнен: ${String(e)}`);
+    }
+  }
+
+  /** Сервер держит копию корня для администратора (потерянный ключ можно выписать заново). */
+  async function hasEscrow() {
+    return Boolean(await loadEscrowKey());
   }
 
   /** SSK раскрыт отзывом устройства и ещё не сменён; есть ли копия корня. */
@@ -2762,9 +2785,13 @@ export function createV2Controller(deps: Deps) {
   }
 
   /** Старое устройство: материал гранта линковки (только держатель SSK). */
-  function linkGrantMaterial(): Uint8Array | undefined {
+  async function linkGrantMaterial(): Promise<Uint8Array | undefined> {
     if (!ready || !client) return undefined;
     try {
+      // Грант несёт журнал устройств: если другое своё устройство только что
+      // вышло само, без перечитки новое записалось бы поверх его записи (отказ)
+      await serial(checkOwnDevices).catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
+      if (!client) return undefined;
       const material = client.linkGrantMaterial();
       if (!rootBackupB64 || !pv) return material;
       // Копия корня под ключом восстановления — вместе с грантом (поле `rb`)
@@ -2807,6 +2834,8 @@ export function createV2Controller(deps: Deps) {
     rotateSsk,
     recoverWithKey,
     resetIdentity,
+    leave,
+    hasEscrow,
     exportBackup,
     importBackup,
     cachedGroups,

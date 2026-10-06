@@ -113,7 +113,7 @@ try {
 
   // bob1 завершает сеанс bob2: ключа bob2 в каталоге больше нет
   const dev1 = await openDevicesScreen(bob1Page);
-  const otherSession = dev1.locator('.ListItem').filter({ hasText: 'Web ' }).first();
+  const otherSession = dev1.locator('.ListItem:has(.title-with-date)').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await terminateSessionWithPassword(bob1Page, otherSession, PASSWORD);
   await closeSettings(bob1Page);

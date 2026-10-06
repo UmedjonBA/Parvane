@@ -680,6 +680,20 @@ impl Client {
         Ok(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }))
     }
 
+    /// Выход: устройство убирает себя из журнала записью, подписанной СВОИМ
+    /// ключом (не SSK) — оставшимся устройствам не нужен ключ восстановления.
+    /// После этого состояние движка хост стирает.
+    pub fn leave_request(&mut self) -> Result<OutRequest> {
+        if self.own_log.active(&self.device_id).is_none() {
+            return Err(ProtoError::NotFound);
+        }
+        let entry = identity::device_log_entry(&self.user, self.own_log.version + 1, self.own_log.head_hash, DevChange::RevokeDeviceId(self.device_id.clone()), None);
+        let op = identity::sign_device_log_entry(&self.acc, &entry)?;
+        self.own_log.apply(&op)?;
+        self.own_entries.push(op.clone());
+        Ok(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }))
+    }
+
     /// Новый ключ доставки (раздаётся собеседникам со следующими сообщениями;
     /// сразу — через [`Client::share_delivery_key`] тем, кому раздавался прежний).
     pub fn rotate_delivery_key(&mut self) -> OutRequest {

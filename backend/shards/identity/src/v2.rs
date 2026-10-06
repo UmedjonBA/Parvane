@@ -392,6 +392,9 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if !r.trust_secret.is_empty() {
                 p["trust_secret"] = json!(r.trust_secret);
             }
+            if !r.client_kind.is_empty() {
+                p["client"] = json!(r.client_kind);
+            }
             let v = v1_call(nc, p, |msg| handle_issue(nc, pool, &ctx.encoding, msg)).await?;
             if v["twofa_required"].as_bool() == Some(true) {
                 return Ok(pb::SessionIssueResponse {
@@ -1132,6 +1135,8 @@ async fn delivery_key_check(ctx: &V2Ctx, r: &DeliveryKeyCheckRequest) -> Deliver
 
 async fn device_list(ctx: &V2Ctx, user: &str) -> Reply {
     let log = load_log(ctx, user).await?;
+    let labels = crate::devices::device_labels(&ctx.pool, user).await;
+    let label_of = |id: &str| labels.get(id).map(|(label, _)| label.clone()).unwrap_or_default();
     let mut devices: Vec<pb::DeviceInfo> = log
         .devices
         .values()
@@ -1139,9 +1144,10 @@ async fn device_list(ctx: &V2Ctx, user: &str) -> Reply {
             device_id: d.cert.device_id.clone(),
             legacy: false,
             revoked: false,
-            created_ms: d.cert.created_ms,
+            // Время входа (если устройство назвало себя), иначе — выпуска сертификата
+            created_ms: labels.get(&d.cert.device_id).map(|(_, at)| at * 1000).unwrap_or(d.cert.created_ms),
             last_seen_ms: 0,
-            client_kind: String::new(),
+            client_kind: label_of(&d.cert.device_id),
             proto_major: d.cert.proto_major,
             proto_minor: d.cert.proto_minor,
         })
@@ -1151,7 +1157,8 @@ async fn device_list(ctx: &V2Ctx, user: &str) -> Reply {
         if let Some(x) = devices.iter_mut().find(|x| x.device_id == d.device_id) {
             x.last_seen_ms = d.updated_at * 1000;
         } else if !log.revoked.contains(&d.device_id) {
-            devices.push(pb::DeviceInfo { device_id: d.device_id, legacy: true, last_seen_ms: d.updated_at * 1000, proto_major: 1, ..Default::default() });
+            let client_kind = label_of(&d.device_id);
+            devices.push(pb::DeviceInfo { device_id: d.device_id, legacy: true, last_seen_ms: d.updated_at * 1000, proto_major: 1, client_kind, ..Default::default() });
         }
     }
     devices.truncate(64);

@@ -654,6 +654,12 @@ impl HostClient {
     /// `{"requests":[…],"pendingKeyShares":[адрес…],"pendingEpochs":[hex…],
     /// "epochsNeedAdmin":[hex…],"sskRotationRequired":bool,"stateKeyVersion":n|null}`.
     /// Первый запрос — запись журнала (обязателен), остальные — ротации.
+    /// Выход: запись журнала, которой устройство убирает само себя (JSON
+    /// запросов). Оставшимся устройствам смена SSK не нужна.
+    pub fn leave(&mut self) -> Result<String, String> {
+        self.inner.leave_request().map(|r| reqs_json(&[r])).map_err(err)
+    }
+
     pub fn revoke_device(&mut self, device_id: &str) -> Result<String, String> {
         self.inner.revoke_device(device_id).map(|o| revocation_json(&o)).map_err(cerr)
     }

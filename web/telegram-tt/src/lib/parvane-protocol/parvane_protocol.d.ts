@@ -221,6 +221,11 @@ export class PvClient {
     l2SetGroupPref(group: string, enabled: boolean): void;
     lastError(): string | undefined;
     /**
+     * Выход: запрос с записью журнала, которой устройство убирает само себя
+     * (подписана ключом устройства — оставшимся смена SSK не нужна).
+     */
+    leave(): Array<any>;
+    /**
      * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
      * для v1-устройств из подписанных списков собеседника и своего.
      */
@@ -713,6 +718,7 @@ export interface InitOutput {
     readonly pvclient_l2SetDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_l2SetGroupPref: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_lastError: (a: number, b: number) => void;
+    readonly pvclient_leave: (a: number, b: number) => void;
     readonly pvclient_legacyDeliverRequest: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_legacyDevicesRequest: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_linkGrantMaterial: (a: number, b: number) => void;

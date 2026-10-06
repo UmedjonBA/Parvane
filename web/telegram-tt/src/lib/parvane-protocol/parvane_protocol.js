@@ -1055,6 +1055,26 @@ export class PvClient {
         }
     }
     /**
+     * Выход: запрос с записью журнала, которой устройство убирает само себя
+     * (подписана ключом устройства — оставшимся смена SSK не нужна).
+     * @returns {Array<any>}
+     */
+    leave() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_leave(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
      * для v1-устройств из подписанных списков собеседника и своего.
      * @param {string} message_id

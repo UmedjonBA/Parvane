@@ -344,6 +344,17 @@ pub unsafe extern "C" fn pv_client_revoke_device(c: *mut PvClient, device_id: *c
     })
 }
 
+/// Выход: JSON запросов с записью журнала, которой устройство убирает само
+/// себя (подписана ключом устройства — оставшимся смена SSK не нужна).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_leave(c: *mut PvClient, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        let r: Result<String, String> = c.leave();
+        r.map(cstring)
+    })
+}
+
 /// Отозвать ключ доступа у собеседника (FR-033; блокировка) → JSON итога как у
 /// `pv_client_revoke_device` (заполнены `requests` и `pendingKeyShares`).
 #[no_mangle]

@@ -142,7 +142,7 @@ try {
   // Текущее устройство — отдельным блоком, второе — в «Active sessions»
   await sessionsScreen.getByText('THIS DEVICE').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const otherSession = sessionsScreen.locator('.ListItem').filter({ hasText: 'Web ' }).first();
+  const otherSession = sessionsScreen.locator('.ListItem:has(.title-with-date)').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // Клик по устройству → модалка → пароль → Terminate Session. Отзыв требует

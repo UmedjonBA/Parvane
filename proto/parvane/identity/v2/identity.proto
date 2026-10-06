@@ -367,6 +367,9 @@ message SessionIssueRequest {
   string login_token = 4 [(parvane.core.v2.max_len) = 128];
   // Секрет доверенного устройства (пропуск 2FA).
   string trust_secret = 5 [(parvane.core.v2.max_len) = 128];
+  // Как устройство называет себя («Firefox, Linux») — подпись на экране
+  // «Устройства» у владельца аккаунта.
+  string client_kind = 6 [(parvane.core.v2.max_len) = 32];
 }
 message SessionIssueResponse {
   string token = 1 [(parvane.core.v2.max_len) = 4096];
@@ -533,7 +536,7 @@ message DeviceInfo {
   bool revoked = 3;
   int64 created_ms = 4;
   int64 last_seen_ms = 5;
-  string client_kind = 6 [(parvane.core.v2.max_len) = 16];
+  string client_kind = 6 [(parvane.core.v2.max_len) = 32];
   uint32 proto_major = 7;
   uint32 proto_minor = 8;
 }

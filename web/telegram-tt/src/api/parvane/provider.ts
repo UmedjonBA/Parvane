@@ -516,6 +516,9 @@ const v2Controller = createV2Controller({
     isUpgradeRequired = true;
     window.dispatchEvent(new CustomEvent('parvane-upgrade-required'));
   },
+  onOwnDevicesChanged: () => {
+    window.dispatchEvent(new CustomEvent('parvane-devices-changed'));
+  },
   onNewOwnDevices: (deviceIds) => {
     window.dispatchEvent(new CustomEvent('parvane-new-device', { detail: { count: deviceIds.length } }));
   },
@@ -612,6 +615,7 @@ const connectionController = createConnectionController({
     store.getLangString = getLangStringByKey;
   },
   unlockStorage: (user) => ensureStorageUnlocked(user),
+  describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
     localState.clearUserData(user);
     await E2eEngine.clear(user);
@@ -918,26 +922,33 @@ async function registerV2Wake() {
   }
 }
 
-function buildDeviceSession(
-  device: { device_id: string; updated_at: number },
-  currentDeviceId: string,
-): ApiSession {
+// Устройство каталога: `label` и `login_at` — как оно назвало себя при входе
+type DeviceRow = { device_id: string; updated_at: number; label?: string; login_at?: number };
+
+// Подпись этого устройства для экрана «Устройства» у владельца аккаунта
+function describeThisDevice() {
+  return `${detectBrowserName()}, ${detectPlatformName()}`;
+}
+
+function buildDeviceSession(device: DeviceRow, currentDeviceId: string): ApiSession {
   const isCurrent = device.device_id === currentDeviceId;
+  // «Firefox, Linux» → модель и платформа; устройства прежних версий себя не называли
+  const [labelModel, labelPlatform] = (device.label || '').split(',').map((part) => part.trim());
   const deviceModel = isCurrent
     ? detectBrowserName()
-    : (device.device_id ? `Web ${device.device_id.slice(0, 8)}` : 'Desktop');
+    : (labelModel || (device.device_id ? `Web ${device.device_id.slice(0, 8)}` : 'Desktop'));
   return {
     hash: device.device_id,
     isCurrent,
     isOfficialApp: true,
     isPasswordPending: false,
     deviceModel,
-    platform: isCurrent ? detectPlatformName() : '',
+    platform: isCurrent ? detectPlatformName() : (labelPlatform || ''),
     systemVersion: '',
     appName: 'Parvane',
     appVersion: '',
-    dateCreated: device.updated_at,
-    dateActive: device.updated_at,
+    dateCreated: device.login_at || device.updated_at,
+    dateActive: device.login_at || device.updated_at,
     ip: '',
     country: '',
     region: '',
@@ -2138,7 +2149,7 @@ const methods = {
       const raw = await connection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token }));
       const response = JSON.parse(raw) as {
         ok: boolean;
-        devices?: { device_id: string; updated_at: number }[];
+        devices?: DeviceRow[];
       };
       if (!response.ok || !response.devices) return undefined;
       const currentDeviceId = e2e.deviceId;
@@ -2205,13 +2216,14 @@ const methods = {
   parvaneGetLinkStatus() {
     // v2: код появляется только после challenge старого устройства
     const isPending = Boolean(linkRuntime.timer && e2e && needsDeviceLink(e2e));
-    return Promise.resolve({
+    return v2Controller.hasEscrow().then((hasEscrow) => ({
+      hasEscrow,
       isPending,
       code: isPending ? linkRuntime.code : undefined,
       // v2: у аккаунта есть журнал устройств, а это устройство в него не входит —
       // кроме линковки, есть вход по ключу восстановления и сброс личности
       canRecover: v2Controller.needsLinking(),
-    });
+    }));
   },
 
   // Это единственное устройство аккаунта в журнале v2: выход с него стирает ключи,
@@ -2295,7 +2307,7 @@ const methods = {
       if (!upload.mediaKeys) return undefined;
 
       // LINK-1 v2: грант движка — вторым блобом (в бокс не помещается)
-      const v2Material = v2Controller.linkGrantMaterial();
+      const v2Material = await v2Controller.linkGrantMaterial();
       const v2Upload = v2Material && await mediaService.uploadBlob(
         new Blob([v2Material.slice()]), 'link-grant-v2', 'application/octet-stream', { encrypt: true },
       );
@@ -2676,10 +2688,11 @@ const methods = {
     return Promise.resolve(isUpgradeRequired);
   },
 
-  parvaneTakeRecoveryKey() {
+  async parvaneTakeRecoveryKey() {
     const recoveryKey = pendingRecoveryKey;
     pendingRecoveryKey = undefined;
-    return Promise.resolve(recoveryKey ? { recoveryKey } : undefined);
+    if (!recoveryKey) return undefined;
+    return { recoveryKey, hasEscrow: await v2Controller.hasEscrow() };
   },
 
   async parvaneGetCallPresencePolicy() {
@@ -3159,6 +3172,9 @@ const methods = {
 
   async destroy(noSessionClear?: boolean) {
     const user = store.self || pendingLoginAddress || readLoginAddress();
+    // Полный выход: устройство убирает себя из аккаунта, пока соединение живо, —
+    // иначе у остальных устройств оставался бы «призрак» в списке
+    if (!noSessionClear) await v2Controller.leave();
     const currentE2e = connectionController.shutdown();
     mediaService.clearCache();
     // Стор прежнего аккаунта не должен отвечать на запросы между logout и

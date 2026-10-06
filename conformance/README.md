@@ -817,6 +817,17 @@ ephemeral_typing_and_presence`, ядро `v2_session_tests.cpp` (живой), we
    мог сменить не только первый клиент. Неверный ключ отклоняется; корень в
    памяти — только на время операции.
 
+N. **Выход устройства (6 окт 2026, T197).** При полном выходе устройство само
+   убирает себя из журнала: запись `RevokeDeviceId(свой id)`, подписанная КЛЮЧОМ
+   УСТРОЙСТВА (`olm_ed25519` сертификата), а не SSK. Такая запись SSK раскрытым
+   НЕ делает (ключ восстановления оставшимся устройствам не нужен); чужое
+   устройство своим ключом другое убрать не может. Идентификатор вышедшего
+   устройства назад не принимается — следующий вход идёт новым устройством.
+   Устройство, выдающее грант линковки, перед выдачей перечитывает свой журнал.
+   Движок `identity.rs` (`by_itself`), `Client::leave_request`; обвязки `leave`
+   (WASM), `pv_client_leave` (C ABI). Реализовано в web (`v2Controller.leave` в
+   `destroy`); desktop и android — T193.
+
 Реализации: движок `client.rs` (`revoke_device`, `rotate_ssk_with_secret`,
 `own_ssk_exposed`), обвязки `revokeDevice/shareDeliveryKey/rotateSsk/
 ownSskExposed/grantWithRootBackup/grantRootBackup` (WASM) и `pv_client_revoke_device`,

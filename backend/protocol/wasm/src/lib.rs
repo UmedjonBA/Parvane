@@ -484,6 +484,14 @@ impl PvClient {
         self.inner.has_peer_delivery_key(peer)
     }
 
+    /// Выход: запрос с записью журнала, которой устройство убирает само себя
+    /// (подписана ключом устройства — оставшимся смена SSK не нужна).
+    #[wasm_bindgen(js_name = leave)]
+    pub fn leave(&mut self) -> Result<Array, JsValue> {
+        let req = self.inner.leave_request().map_err(err_proto)?;
+        Ok(reqs_js(&[req]))
+    }
+
     // ── отзыв своего устройства (T128; D-11, D-12, D-16) ──
 
     /// Отозвать своё другое устройство и выполнить последствия →
