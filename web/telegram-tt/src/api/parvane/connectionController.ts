@@ -120,7 +120,7 @@ function fallbackServerInfo(): ServerInfo {
 }
 
 // Текст отказа identity/gateway для токена отозванного устройства
-const DEVICE_REVOKED_PATTERN = /устройство отозвано/i;
+const DEVICE_REVOKED_PATTERN = /устройство отозвано|ERROR_CODE_REVOKED/i;
 
 export function createConnectionController(deps: ConnectionDependencies) {
   let lastServerInfo: ServerInfo | undefined;
@@ -533,6 +533,15 @@ export function createConnectionController(deps: ConnectionDependencies) {
       deps.log('JWT получен');
       try {
         await activeConnection.authorize(nextToken);
+        // Без соединения v1 авторизация условна: отзыв устройства сервер сообщит
+        // лишь на первом запросе v2. Спрашиваем сразу, пока пароль под рукой, —
+        // иначе вход отозванного устройства зацикливался на экране пароля
+        if (activeConnection.hasV1 === false && !savedToken) {
+          const probe = JSON.parse(
+            await activeConnection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token: nextToken })),
+          ) as { ok?: boolean; error?: string };
+          if (!probe.ok && DEVICE_REVOKED_PATTERN.test(probe.error || '')) throw new Error(probe.error);
+        }
       } catch (error) {
         // Пароль верный (токен выдан), а токен не принят — устройство отозвано
         // другим («Завершить все другие сеансы»). Входим как новое устройство
