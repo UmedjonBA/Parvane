@@ -466,11 +466,10 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             require_user(&req)?;
             let v = v1_call(nc, json!({"token": req.token}), |msg| handle_twofa(nc, pool, dec, msg)).await?;
             v1_ok(&v)?;
-            Ok(pb::AccountSet2faResponse {
+            Ok(pb::AccountGet2faResponse {
                 enabled: v["enabled"].as_bool().unwrap_or(false),
                 telegram_linked: v["telegram_linked"].as_bool().unwrap_or(false),
                 telegram_bot: telegram_bot().unwrap_or_default(),
-                trust_secret: String::new(),
             }
             .encode_to_vec())
         }

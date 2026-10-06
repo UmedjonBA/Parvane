@@ -31,6 +31,9 @@ def newid():
     return str(uuid.uuid4())
 
 
+# Политика паролей (P-43): не короче 8 символов, заглавная и цифра
+PASSWORD = "e2e-Test-pass-2026"
+
 fails = 0
 total = 0
 
@@ -45,8 +48,8 @@ def check(name, ok, detail=""):
 
 def login(nick):
     """Регистрация (идемпотентно) + выдача JWT."""
-    req("identity.user.register", {"user": f"{nick}@local", "password": "test"})
-    r = req("identity.token.issue", {"user": f"{nick}@local", "password": "test"})
+    req("identity.user.register", {"user": f"{nick}@local", "password": PASSWORD})
+    r = req("identity.token.issue", {"user": f"{nick}@local", "password": PASSWORD})
     assert r.get("ok") and r.get("token"), f"login {nick}: {r}"
     return r["token"]
 
