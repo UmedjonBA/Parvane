@@ -24,14 +24,15 @@ Rust-сервисов («шардов»), каждый со своей встр�
 | `gateway` | Единая доверенная точка входа (TCP/WS), JWT-auth, изоляция инбоксов, лимиты частоты | ✅ готов |
 | `client` (`web/`) | **Основной** клиент — форк Telegram Web A (TS) | ✅ задеплоен на прод; мессенджер + звонки + **E2E по умолчанию**, паритет-фичи, русская локализация, 2FA через Telegram |
 | `client` (`desktop/`) | Клиент — форк Telegram Desktop (C++/Qt) | ✅ паритет с вебом; ходит на прод по **WSS** (`gateway`), вход по нику, 2FA |
-| `client` (`android/`) | Клиент — shim TDLib `Client` над `parvane-core` (JNI): свой Compose-клиент + форк Telegram X | 🟡 свой клиент: APK собирается, дымовой тест в эмуляторе зелёный (вход, E2E-текст); форк Telegram X собирается и стартует на шове, **разработка приостановлена 8 сен 2026** (см. `android/BUILD-android.md`) |
+| `client` (`android/`) | Клиент — форк Telegram X на шве TDLib `Client` поверх `parvane-core` (JNI); рядом свой минимальный Compose-клиент | 🟡 в работе: переписка 1-1 и группы по протоколу v2, медиа, стикеры, опросы, папки, привязка устройства; сценарии `android/tgx_*_flow.sh` в эмуляторе зелёные; звонков нет, на телефоне проверен мало |
 | `smarthome` | Умный дом, RBAC по устройствам | ⛔ заморожен |
 
-Клиентов три, все на общем контракте NATS/JSON: **веб** (основной, задеплоен),
+Клиентов три, все на общем контракте (JSON-протокол v1 и сменяющий его
+версионированный протокол v2, см. «Протокол v2»): **веб** (основной, задеплоен),
 **десктоп** (форк tdesktop) и **Android** (в работе). Принцип везде один — берём
 зрелый клиент Telegram и подменяем его сетевой слой на наш (`web`: провайдер
 вместо MTProto/GramJS; `desktop`: `parvane-core` вместо MTProto; `android`:
-планируется shim TDLib поверх `parvane-core`). Прод-путь клиентов — через
+shim TDLib поверх `parvane-core`). Прод-путь клиентов — через
 `gateway` по **WSS** (`wss://<host>/ws`); прямой NATS остаётся для дева.
 
 ### E2E-шифрование и безопасность (сделано)
@@ -89,14 +90,15 @@ crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conforma
 >
 > **Android** (`android/`) — шов TDLib: класс `org.drinkless.tdlib.Client` подменён
 > shim'ом поверх `parvane-core` (JNI, `libparvane_jni.so`), объекты `TdApi`
-> синтезируются из событий Parvane. Свой минимальный Compose-клиент (`android/app`)
-> работает end-to-end (вход по нику/паролю, E2E-текст с десктопом/вебом);
-> форк Telegram X (`setup-tgx.sh`, оверлей) собирается и стартует на том же шове —
-> доводка приостановлена 8 сен 2026. Подробности и как возобновить —
-> `android/BUILD-android.md`.
+> синтезируются из событий Parvane. Основной Android-клиент — форк Telegram X
+> (`setup-tgx.sh`, оверлей) на этом шве: переписка 1-1 и группы по протоколу v2,
+> медиа, стикеры, опросы, папки, привязка устройства; проверяется сценариями
+> `android/tgx_*_flow.sh` в эмуляторе. Звонков в Android пока нет. Свой
+> минимальный Compose-клиент (`android/app`) остаётся для дымового теста шва.
+> Тулчейн и сборка — `android/BUILD-android.md`.
 >
-> Прежний самодельный Tauri-клиент (React 18, Gruvbox-TUI) архивирован в ветке
-> **`tauri`**.
+> Прежний самодельный Tauri-клиент (React 18, Gruvbox-TUI) остался в истории
+> репозитория — коммит `25dce9ff` (ветка `tauri` удалена 6 окт 2026).
 >
 > **Состояние (общее для веба и десктопа):** мессенджер и звонки работают
 > end-to-end поверх шардов. Сделано:
@@ -210,7 +212,7 @@ crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conforma
   без изменений
 - **Лицензия**: GPLv3 (с OpenSSL-исключением), унаследована от tdesktop
 
-### Client (Android) — шов TDLib над parvane-core · ПРИОСТАНОВЛЕН (8 сен 2026)
+### Client (Android) — Telegram X на шве TDLib над parvane-core · в работе
 
 - **Шов**: `android/libtd` — `TdApi.java` (бандл Telegram X, TDLib d1085f9),
   `Client.kt` (`create/send/execute/close`, авторизация: ник = поле «телефон» →
@@ -220,30 +222,36 @@ crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conforma
 - **Свой клиент** `android/app` (Compose): вход, чаты, текст, «новый чат по нику»;
   APK arm64 ~11 МБ; дымовой тест в эмуляторе x86_64 `smoke_emulator.sh` — зелёный
 - **Telegram X**: оверлей `setup-tgx.sh` на внешний клон; собирается (arm64/x64),
-  стартует, экран входа по нику; дальше не доведено (падение хостового эмулятора
-  на экране пароля; на телефоне не проверялось)
+  вход по нику, чаты и группы по протоколу v2, медиа, стикеры/GIF, опросы,
+  папки, превью ссылок, привязка устройства; сценарии `tgx_*_flow.sh` в
+  эмуляторе; звонков нет
 - **Лицензия**: свой клиент — как проект; форк Telegram X — GPLv3
 
 > Прежний Tauri-клиент (React 18 + Babel-standalone, Gruvbox-TUI, Rust IPC-мост
-> с 17 командами) сохранён в ветке **`tauri`**.
+> с 17 командами) остался в истории репозитория: `git checkout 25dce9ff`.
 
 ---
 
 ## Структура репозитория
 
-Четыре самостоятельных каталога — у каждого свой `CLAUDE.md` с подробными
-знаниями о содержимом (корневой `CLAUDE.md` — общие правила и маршрутизация).
+Четыре самостоятельных каталога (бэкенд и три клиента) плюс общие схема
+протокола, правила для клиентов и сквозные сценарии.
 
 ```
 Parvane/
-├── README.md · CLAUDE.md · ARCHITECTURE.md · ROADMAP.md · specs/
+├── README.md · SECURITY-REVIEW.md
+├── proto/parvane/              ← схема протокола v2 (protobuf, `buf.yaml`) + тест-векторы
+├── conformance/                ← правила, обязательные для всех клиентов (README + sync-rules.json)
 ├── backend/                    ← БЭКЕНД: Rust-шарды на NATS + инфраструктура
 │   ├── Cargo.toml              ← workspace (шарды); target/ — артефакты (не в git)
+│   ├── protocol/               ← parvane-protocol: движок протокола v2 (сервер, WASM, C ABI)
 │   ├── shared/
 │   │   ├── parvane-types/      ← общие типы, топики, topic_contract (единый ACL)
-│   │   └── parvane-e2e/        ← Rust staticlib (vodozemac) для клиентов C++
+│   │   ├── parvane-e2e/        ← Rust staticlib (vodozemac) для клиентов C++
+│   │   └── parvane-db · parvane-netguard · parvane-v2rt  ← общий код шардов
 │   ├── shards/                 ← identity, messenger, cloud, call, preview, push,
-│   │                              gateway, notes (RGA CRDT), calendar (LWW CRDT)
+│   │                              gateway, domains, notes (RGA CRDT), calendar (LWW CRDT)
+│   ├── tests/integration/      ← parvane-integration: живые тесты стека
 │   └── infra/
 │       ├── nats/               ← server.conf (dev) / server.prod.conf — ACL по ролям
 │       ├── deploy/             ← docker compose + deploy.sh (прод за Caddy)
@@ -264,8 +272,8 @@ Parvane/
 │   ├── tdesktop/               ← вендоренный снапшот форка
 │   │   └── Telegram/SourceFiles/parvane/  ← parvane_client.{h,cpp}, intro_parvane
 │   └── verify_*.sh             ← e2e-скрипты (два реальных экземпляра)
-├── android/                    ← Android: шов TDLib над parvane-core (приостановлен)
-│   ├── BUILD-android.md        ← тулчейн, стадии 1–3, как возобновить
+├── android/                    ← Android: Telegram X на шве TDLib над parvane-core
+│   ├── BUILD-android.md        ← тулчейн, сборка, сценарии эмулятора
 │   ├── libtd/                  ← TdApi.java + Client.kt (shim) + ParvaneStore + ParvaneCore
 │   ├── app/                    ← свой Compose-клиент (APK, дымовой тест зелёный)
 │   ├── jni/                    ← CMake ядра (без cnats, WSS-only) + parvane_jni.cpp
@@ -416,7 +424,7 @@ Web и desktop работают и на сервере, где v1 уже отк�
   остальными клиенты перед вызовом обмениваются ключами доставки. В Android
   звонков нет.
 - Замер: трафик на сообщение на ~32% меньше v1, задержка +10%
-  (`specs/007-protocol-v2/bench.md`, release-сборка).
+  (локальный замер на release-сборке).
 
 ## Формат события
 
@@ -718,8 +726,8 @@ nats req call.history.request \
 - Свои исходящие sealed после релогина — восстанавливаются из локального журнала
   истории и подписанным sync по `sender_signing_key` (сервер отдаёт их только
   владельцу по токену — `sender_user`).
-- **Android-клиент в работе**: `parvane-core` собирается под NDK; JNI-shim TDLib,
-  установка SDK/JDK и сам UI — впереди (см. `android/BUILD-android.md`).
+- **Android-клиент в работе**: нет звонков, на реальном телефоне проверен мало
+  (см. `android/BUILD-android.md`).
 - Календарь/Дневник (шарды `notes`/`calendar` есть, к UI клиентов не подключены)
   — впереди.
 - `notes`/`calendar` шарды на прод не разворачиваются (пока не нужны клиентам).
