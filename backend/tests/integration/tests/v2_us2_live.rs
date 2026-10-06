@@ -487,6 +487,9 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 
 // ── T078: звонки v2 ──────────────────────────────────────────────────────────
 
+/// Потолок одновременных вызовов одному адресату (call shard, MAX_RINGING_PER_RECIPIENT).
+const RINGING_MAX: u8 = 10;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn us2_calls_live() {
     let Some((stack, _nc)) = start(None).await else { return };
@@ -552,14 +555,16 @@ async fn us2_calls_live() {
         other.recipient = Some(c.dev.clone());
         mixed.envelopes.push(other);
         f.check("mixed-recipients", V2::connect(&addr, Channel::AnonymousDelivery).call("call.signal_sealed", mixed.encode_to_vec()) == Err(ErrorCode::Invalid), "");
-        // 7) ≤ 3 одновременных вызова одному адресату (Кэрол) — даже с разных соединений.
+        // 7) ≤ 10 одновременных вызовов одному адресату (Кэрол) — даже с разных
+        //    соединений (потолок поднят с 3 до 10 решением пользователя 5 окт 2026).
         let carol = c.user.clone();
         let mut codes = vec![];
-        for i in 0..4u8 {
+        for i in 0..=RINGING_MAX {
             let r = seal_call(&addr, &a, &carol, Access::DeliveryKey(c.delivery_key.clone()), &[i; 16], offer.clone());
             codes.push(V2::connect(&addr, Channel::AnonymousDelivery).call("call.ring_sealed", r.encode_to_vec()).map(|_| ()));
         }
-        f.check("max-3-ringing-per-recipient", codes[..3].iter().all(|r| r.is_ok()) && codes[3] == Err(ErrorCode::RateLimited), &codes);
+        let limit = usize::from(RINGING_MAX);
+        f.check("max-ringing-per-recipient", codes[..limit].iter().all(|r| r.is_ok()) && codes[limit] == Err(ErrorCode::RateLimited), &codes);
         // 8) Каналы: ANON-метод в ID-сессии → FORBIDDEN; ice_config — ID.
         f.check("signal-in-id-session", a.c.call("call.signal_sealed", req.encode_to_vec()) == Err(ErrorCode::Forbidden), "");
         f.check("ring-in-id-session", a.c.call("call.ring_sealed", req.encode_to_vec()) == Err(ErrorCode::Forbidden), "");

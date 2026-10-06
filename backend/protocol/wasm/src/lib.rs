@@ -1234,6 +1234,7 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
         "parvane.identity.v2.ServerDescribeResponse" => ipb::ServerDescribeResponse,
         "parvane.identity.v2.SessionReauthResponse" => ipb::SessionReauthResponse,
         "parvane.identity.v2.AccountSet2faResponse" => ipb::AccountSet2faResponse,
+        "parvane.identity.v2.AccountGet2faResponse" => ipb::AccountGet2faResponse,
         "parvane.identity.v2.ProfileResolveResponse" => ipb::ProfileResolveResponse,
         "parvane.identity.v2.DirectorySearchResponse" => ipb::DirectorySearchResponse,
         "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,

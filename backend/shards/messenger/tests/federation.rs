@@ -65,6 +65,16 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         .stderr(Stdio::from(log))
         .spawn()
         .unwrap()];
+    // Сначала дождаться NATS: шард без соединения завершается сразу (под нагрузкой
+    // nats-server поднимался позже messenger, и тест ждал ответа все 60 с)
+    let t0 = Instant::now();
+    let nc = loop {
+        if let Ok(nc) = async_nats::connect(&nats_url).await {
+            break nc;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(20), "nats-server не поднялся");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
     let mlog = std::fs::File::create(dir.join("messenger.log")).unwrap();
     children.push(
         Command::new(env!("CARGO_BIN_EXE_messenger"))
@@ -79,14 +89,6 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
             .unwrap(),
     );
     let stack = Stack { children, dir };
-    let t0 = Instant::now();
-    let nc = loop {
-        if let Ok(nc) = async_nats::connect(&nats_url).await {
-            break nc;
-        }
-        assert!(t0.elapsed() < Duration::from_secs(20), "nats-server не поднялся");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
     Some((stack, nc))
 }
 

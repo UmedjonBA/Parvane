@@ -196,7 +196,7 @@ service IdentityService {
       shard: "identity"
     };
   }
-  rpc AccountGet2fa(AccountGet2faRequest) returns (AccountSet2faResponse) {
+  rpc AccountGet2fa(AccountGet2faRequest) returns (AccountGet2faResponse) {
     option (parvane.core.v2.method) = {
       name: "identity.account.get_2fa"
       channel: METHOD_CHANNEL_ID
@@ -581,6 +581,13 @@ message RootBackupGetResponse {
 message AccountSet2faRequest {
   optional bool enabled = 1;
   string password = 2 [(parvane.core.v2.max_len) = 1024];
+}
+// Те же номера полей, что у AccountSet2faResponse (без trust_secret): прежние
+// клиенты читают ответ как раньше.
+message AccountGet2faResponse {
+  bool enabled = 1;
+  bool telegram_linked = 2;
+  string telegram_bot = 3 [(parvane.core.v2.max_len) = 64];
 }
 message AccountSet2faResponse {
   bool enabled = 1;
