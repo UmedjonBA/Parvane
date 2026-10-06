@@ -68,8 +68,9 @@ CLAUDE.md), юнит-тесты `npx vitest run` в web/telegram-tt, `cargo test
 
 `desktop/PARITY-telegram.md` остаётся историей и инвентарём desktop-клиента.
 Этот файл является источником истины для приоритетов Web. Архитектурные решения
-и wire-контракты по-прежнему описываются в `ARCHITECTURE.md`, `ROADMAP.md` и
-`specs/`.
+и wire-контракты описываются в локальных `ARCHITECTURE.md`, `ROADMAP.md` и
+`specs/` (в репозиторий не входят), для читателя репозитория — в `README.md`,
+`conformance/README.md` и схеме `proto/parvane/`.
 
 ## 1. Обязательные правила
 
