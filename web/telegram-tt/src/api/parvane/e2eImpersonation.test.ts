@@ -71,4 +71,45 @@ describe('E2E sender authenticity', () => {
     // Собственный identity-ключ Bob не должен подтверждать чужой адрес
     expect(await bob.verifySenderIdentity('t4-alice@local', bob.identityKey, fetchNoop)).toBe('spoofed');
   });
+
+  // T196: история, отправленная со своего устройства, которое позже отозвали.
+  // Ключа отозванного устройства в каталоге уже нет, но оно было подтверждено
+  // раньше — старые сообщения должны читаться, новые от него — нет
+  it('keeps history from a revoked own device readable, but not new messages from it', async () => {
+    const self = 't5-bob@local';
+    const oldDevice = await E2eEngine.create(self);
+    const sibling = await E2eEngine.create('t5-sibling@local');
+    // Бандлы строим один раз: повторная сборка прекеев отдаёт уже опубликованные
+    const siblingBundle = bundleOf(sibling, 'sib');
+    const otherBundle = bundleOf(await E2eEngine.create('t5-other@local'), 'other');
+    const withSibling = () => Promise.resolve({ ok: true, devices: [siblingBundle] });
+    const withoutSibling = () => Promise.resolve({ ok: true, devices: [otherBundle] });
+
+    // Пока устройство в каталоге — подтверждено и запомнено
+    expect(await oldDevice.verifySenderIdentity(self, sibling.identityKey, withSibling)).toBe('ok');
+    oldDevice.rememberVerifiedIdentity(self, sibling.identityKey);
+    oldDevice.cacheInner('m-1', {
+      from: self, content: { kind: 'text', text: 'x' }, senderIdentity: sibling.identityKey,
+    });
+    // Устройство отозвано: старое устройство перечитало каталог, ключа в нём больше нет
+    expect(await oldDevice.verifySenderIdentity(self, 'unknown-key', withoutSibling)).toBe('spoofed');
+
+    // Новое устройство получает историю линковкой; отозванного устройства в каталоге нет
+    const newDevice = await E2eEngine.create('t5-bob-new@local');
+    oldDevice.rememberHistoryIdentities(['m-1']);
+    newDevice.importLinkedHistory(oldDevice.exportLinkStateJson());
+
+    expect(await newDevice.verifySenderIdentity(self, sibling.identityKey, withoutSibling, true)).toBe('ok');
+    expect(await newDevice.verifySenderIdentity(self, sibling.identityKey, withoutSibling)).toBe('spoofed');
+  });
+
+  it('does not accept an unknown identity as history', async () => {
+    const self = 't6-bob@local';
+    const device = await E2eEngine.create(self);
+    const mallory = await E2eEngine.create('t6-mallory@local');
+    const otherBundle = bundleOf(await E2eEngine.create('t6-other@local'), 'other');
+    const catalog = () => Promise.resolve({ ok: true, devices: [otherBundle] });
+
+    expect(await device.verifySenderIdentity(self, mallory.identityKey, catalog, true)).toBe('spoofed');
+  });
 });

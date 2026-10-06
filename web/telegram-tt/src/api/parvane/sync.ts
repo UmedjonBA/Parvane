@@ -863,6 +863,16 @@ export function createSyncController(deps: SyncDependencies) {
     // (нет ключа/сессии, продвинутый ратчет). Не рисуем «🔒» и не роутим в
     // «Избранное» — просто пропускаем, чтобы не мусорить в переписке
     if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
+      // Сообщение уже показано с содержимым (из кэша истории после перезагрузки),
+      // а повторная строка сервера не расшифровалась — например, правка своего
+      // исходящего, чей расшифрованный текст движок не успел сохранить до
+      // перезагрузки. Заглушка затёрла бы настоящее содержимое: оставляем как есть
+      // (заглушка прошлой попытки — не содержимое: её повторные попытки идут дальше)
+      if (store.getMessageByUuid(stored.id) && !undecryptableUuids.has(stored.id)) {
+        deps.log(`сообщение ${stored.id} не расшифровано повторно — оставлено показанное содержимое`);
+        if (shouldAckIncoming) sendAck(rawStored.id);
+        return;
+      }
       sawUndecryptable = true;
       undecryptableUuids.add(stored.id);
       deps.log(`сообщение ${stored.id} не расшифровано — показываем заглушку`);

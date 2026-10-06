@@ -1036,7 +1036,9 @@ export class E2eEngine {
     if (!claimedFrom || !senderIdentity) return 'unknown';
     // Наше текущее устройство: подписывать себя может только self
     if (senderIdentity === this.identityKey) return claimedFrom === this.self ? 'ok' : 'spoofed';
-    if (this.hasDeviceIdentity(claimedFrom, senderIdentity)) return 'ok';
+    // До перечитки каталога верим только списку устройств: запомненный
+    // primary-identity мог принадлежать устройству, которое уже отозвано
+    if (this.devicesByContact.has(claimedFrom) && this.hasDeviceIdentity(claimedFrom, senderIdentity)) return 'ok';
     // История (сообщение уже расшифровано раньше): устройство автора могло быть
     // с тех пор отозвано и пропасть из каталога. Ключ, однажды подтверждённый по
     // каталогу (этим устройством или привязавшим его), остаётся годным для
@@ -1051,9 +1053,9 @@ export class E2eEngine {
 
   private hasDeviceIdentity(contact: string, identity: string): boolean {
     const devices = this.devicesByContact.get(contact);
-    if (devices && Object.values(devices).some((device) => device.identity === identity)) {
-      return true;
-    }
+    // Список устройств известен — он и решает: запомненный primary-identity
+    // отозванного устройства не должен подтверждать его новые сообщения
+    if (devices) return Object.values(devices).some((device) => device.identity === identity);
     // Legacy-снапшоты держат только primary-identity контакта
     return this.identityByContact[contact] === identity;
   }

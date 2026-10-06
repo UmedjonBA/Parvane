@@ -138,6 +138,18 @@ try {
   const firstEscrow = escrowRow(bob);
   assert.match(firstEscrow, /^[0-9A-F]{234}$/, `на сервере нет копии корня bob для администратора: «${firstEscrow}»`);
 
+  // ── Аккаунт без копии (корень создан до включения страховки): экран «Устройства»
+  // предлагает создать её вводом ключа восстановления ──────────────────────────
+  execFileSync('sqlite3', ['-cmd', '.timeout 5000', IDENTITY_V2_DB, `DELETE FROM root_escrow WHERE user = '${bob}'`]);
+  const dev1 = await openDevicesScreen(sessions.bob1.page);
+  await dev1.getByText('Recovery key safety copy').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await submitDialog(sessions.bob1.page, dev1, 'Create safety copy', 'Recovery key', lostKey, 'Create safety copy');
+  await expectToast(sessions.bob1.page, 'Safety copy created.');
+  await dev1.getByText('Recovery key safety copy').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  assert.match(escrowRow(bob), /^[0-9A-F]{234}$/, 'страховочная копия после ввода ключа не появилась на сервере');
+  await closeSettings(sessions.bob1.page);
+  console.log('страховочная копия создана вводом ключа восстановления');
+
   // ── Устройство и ключ потеряны; администратор выписывает новый ключ ─────────
   await contexts.bob1.close();
   delete sessions.bob1;

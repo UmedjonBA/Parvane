@@ -570,6 +570,9 @@ message RootBackupGetRequest {}
 message RootBackupGetResponse {
   // Пусто — копии на сервере нет.
   bytes backup = 1 [(parvane.core.v2.max_len) = 1024];
+  // У сервера есть копия корня для администратора (RootBackupSet.escrow) —
+  // потерянный ключ восстановления можно выписать заново.
+  bool has_escrow = 2;
 }
 
 // ── аккаунт ─────────────────────────────────────────────────────────────────

@@ -157,7 +157,7 @@ try {
   // Диагностика линковки: клиентские логи нового устройства в stdout
   bobDevice2.page.on('console', (msg) => {
     const text = msg.text();
-    if (/линковк|расшифро/.test(text)) console.log('[dev2]', text);
+    if (text.includes('[parvane]') && !text.includes('метод не реализован')) console.log('[dev2]', text.slice(0, 260));
   });
   await bobDevice2.page.waitForTimeout(4000);
   assert.equal(

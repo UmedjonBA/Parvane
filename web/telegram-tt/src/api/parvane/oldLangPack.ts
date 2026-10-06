@@ -217,6 +217,11 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneRecoverText: 'If your other devices are gone, sign this device in with your recovery key. '
     + 'Your old devices will be removed from the account.',
   ParvaneLostKeyAdmin: 'Lost the recovery key? Ask the server administrator for a new one.',
+  ParvaneEscrowTitle: 'Recovery key safety copy',
+  ParvaneEscrowText: 'If you lose your recovery key, the server administrator can issue a new one — but only '
+    + 'after a safety copy is created. Enter your recovery key once to create it.',
+  ParvaneEscrowAction: 'Create safety copy',
+  ParvaneEscrowDone: 'Safety copy created.',
   ParvaneRecoverAction: 'Use recovery key',
   ParvaneRecoverDone: 'This device is now signed in with your recovery key.',
   ParvaneRecoverNoBackup: 'No recovery copy is stored for this account.',
@@ -809,6 +814,11 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneRecoverText: 'Если других устройств не осталось, войдите на этом устройстве по ключу восстановления. '
     + 'Прежние устройства будут удалены из аккаунта.',
   ParvaneLostKeyAdmin: 'Ключ восстановления утерян? Напишите администратору сервера — он выдаст новый.',
+  ParvaneEscrowTitle: 'Страховка ключа восстановления',
+  ParvaneEscrowText: 'Если вы потеряете ключ восстановления, администратор сервера сможет выдать новый — но '
+    + 'только после создания страховочной копии. Введите ключ восстановления один раз, чтобы её создать.',
+  ParvaneEscrowAction: 'Создать страховочную копию',
+  ParvaneEscrowDone: 'Страховочная копия создана.',
   ParvaneRecoverAction: 'Ввести ключ восстановления',
   ParvaneRecoverDone: 'Устройство подключено по ключу восстановления.',
   ParvaneRecoverNoBackup: 'Для этого аккаунта нет копии для восстановления.',

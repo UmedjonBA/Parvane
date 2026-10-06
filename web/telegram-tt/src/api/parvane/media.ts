@@ -122,6 +122,9 @@ const THUMB_CONCURRENCY = 2;
 // в очереди кто-то есть
 const THUMB_BUDGET_MS = 3000;
 const THUMB_FRAME_SECONDS = 0.1;
+// Пересъёмка пустого кадра: до 20 попыток через 150 мс (в пределах THUMB_TIMEOUT_MS)
+const THUMB_DRAW_ATTEMPTS = 20;
+const THUMB_DRAW_RETRY_MS = 150;
 const MAP_TILE_TIMEOUT_MS = 15000;
 const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
@@ -827,6 +830,15 @@ export function createMediaService(deps: MediaDependencies) {
     }
   }
 
+  // Кадр без картинки: все точки одного цвета (браузер ещё не отдал декодированный кадр)
+  function isBlankFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 4; i < data.length; i += 4) {
+      if (data[i] !== data[0] || data[i + 1] !== data[1] || data[i + 2] !== data[2]) return false;
+    }
+    return true;
+  }
+
   function captureVideoFrame(src: string, timeoutMs = THUMB_TIMEOUT_MS): Promise<Blob | undefined> {
     return new Promise((resolve) => {
       if (typeof document === 'undefined') {
@@ -869,8 +881,23 @@ export function createMediaService(deps: MediaDependencies) {
           finish(undefined);
           return;
         }
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => finish(blob || undefined), 'image/jpeg', 0.8);
+        // `seeked` приходит раньше, чем браузер отдаёт декодированный кадр на
+        // отрисовку (под нагрузкой — заметно раньше): сразу снятый кадр выходил
+        // сплошь чёрным. Пустой кадр переснимаем, пока не появится картинка;
+        // действительно чёрный кадр видео остаётся как есть после всех попыток
+        let attempt = 0;
+        const draw = () => {
+          if (isDone) return;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          attempt++;
+          const isPending = video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || isBlankFrame(ctx, canvas);
+          if (isPending && attempt < THUMB_DRAW_ATTEMPTS) {
+            window.setTimeout(draw, THUMB_DRAW_RETRY_MS);
+            return;
+          }
+          canvas.toBlob((blob) => finish(blob || undefined), 'image/jpeg', 0.8);
+        };
+        draw();
       });
       video.src = src;
     });

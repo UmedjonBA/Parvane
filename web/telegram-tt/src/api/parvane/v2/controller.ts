@@ -267,6 +267,7 @@ const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
 // Копия корня, запечатанная ключом администратора сервера (страховка: потеряны
 // и устройства, и ключ восстановления)
 const ROOT_ESCROW_RECORD = 'v2-root-escrow';
+const ESCROW_CHECK_TTL_MS = 60000;
 const KEY_RECORD = 'v2-storage-key';
 const OTK_COUNT = 50;
 // «Не на v2» кэшируется на 10 мин; у собеседника на v2 журнал устройств
@@ -309,6 +310,7 @@ export function createV2Controller(deps: Deps) {
   // линковки, чтобы любое своё устройство могло сменить SSK
   let rootBackupB64: string | undefined;
   let escrowKey: Promise<Uint8Array | undefined> | undefined;
+  let escrowCheck: { at: number; isMissing: boolean } | undefined;
   let linkMaterial: Uint8Array | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const peers = new Map<string, { v2: boolean; at: number }>();
@@ -1037,12 +1039,52 @@ export function createV2Controller(deps: Deps) {
 
   /** Копия корня с сервера: администратор мог выписать новый ключ восстановления. */
   async function fetchServerRootBackup() {
+    return (await fetchRootBackupState())?.backup;
+  }
+
+  async function fetchRootBackupState() {
     if (!pv) return undefined;
-    const got = JSON.parse(pv.decodeMessage(
+    return JSON.parse(pv.decodeMessage(
       'parvane.identity.v2.RootBackupGetResponse',
       await call('id', 'identity.root.backup_get', new Uint8Array()),
-    )) as { backup?: string };
-    return got.backup;
+    )) as { backup?: string; has_escrow?: boolean };
+  }
+
+  /** Сервер держит копии корня для администратора, а у этого аккаунта её нет
+   * (корень создан до включения страховки): её создаёт ввод ключа восстановления. */
+  async function isEscrowCopyMissing() {
+    if (!ready || !rootBackupB64 || !(await hasEscrow())) return false;
+    // Экран «Устройства» спрашивает по таймеру — сервер дёргаем не чаще раза в минуту
+    if (escrowCheck && Date.now() - escrowCheck.at < ESCROW_CHECK_TTL_MS) return escrowCheck.isMissing;
+    try {
+      escrowCheck = { at: Date.now(), isMissing: !(await fetchRootBackupState())?.has_escrow };
+      return escrowCheck.isMissing;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Создать копию корня для администратора: корень — из копии под ключом
+   * восстановления, в памяти только на время операции. */
+  async function storeEscrowCopy(recoveryKey: string): Promise<SskRotationResult> {
+    if (!client || !ready) return 'failed';
+    if (!rootBackupB64) return 'no_backup';
+    try {
+      client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);
+    } catch {
+      return 'bad_key';
+    }
+    try {
+      await sealRootEscrow(client);
+      await uploadRootBackup();
+      escrowCheck = undefined;
+      return (await fetchRootBackupState())?.has_escrow ? 'ok' : 'failed';
+    } catch (e) {
+      deps.log(`v2: копия корня для администратора не отправлена: ${String(e)}`);
+      return 'failed';
+    } finally {
+      client?.forgetRoot();
+    }
   }
 
   /** Восстановление по ключу восстановления: корень — из копии на сервере,
@@ -1253,6 +1295,14 @@ export function createV2Controller(deps: Deps) {
     if (!(await restart())) return 'failed';
     deps.onRecoveryKey(recoveryKey);
     return 'ok';
+  }
+
+  /** Экран «Устройства» открыт: перечитать журнал своих устройств. О выходе
+   * другого своего устройства сервер не извещает — узнаём опросом; при
+   * изменении состава уходит `onOwnDevicesChanged`. */
+  async function pollOwnDevices() {
+    if (!ready || !client) return;
+    await serial(checkOwnDevices).catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
   }
 
   /** Выход: устройство убирает себя из журнала записью, подписанной своим
@@ -2835,7 +2885,10 @@ export function createV2Controller(deps: Deps) {
     recoverWithKey,
     resetIdentity,
     leave,
+    pollOwnDevices,
     hasEscrow,
+    isEscrowCopyMissing,
+    storeEscrowCopy,
     exportBackup,
     importBackup,
     cachedGroups,
