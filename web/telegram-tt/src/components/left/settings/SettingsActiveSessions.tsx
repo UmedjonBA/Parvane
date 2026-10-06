@@ -35,7 +35,7 @@ type StateProps = GlobalState['activeSessions'];
 
 // Parvane: авто-линковка истории — статус собственного оффера и запросы
 // других устройств опрашиваются, пока экран открыт
-type LinkStatus = { isPending: boolean; code?: string; canRecover?: boolean };
+type LinkStatus = { isPending: boolean; code?: string; canRecover?: boolean; hasEscrow?: boolean };
 type LinkOffer = { deviceId: string; code?: string };
 // Parvane (T128, D-12): отозвано устройство, державшее ключ подписи устройств —
 // ключ обновляется корнем из копии под ключом восстановления
@@ -375,6 +375,9 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           <p className="settings-item-description-larger">
             {oldLang('ParvaneRecoverText')}
           </p>
+          {Boolean(linkStatus?.hasEscrow) && (
+            <p className="settings-item-description-larger">{oldLang('ParvaneLostKeyAdmin')}</p>
+          )}
           <ListItem icon="key" narrow ripple onClick={handleOpenRecover}>
             {oldLang('ParvaneRecoverAction')}
           </ListItem>
@@ -397,6 +400,9 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           <p className="settings-item-description-larger">
             {oldLang(hasBackup ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup')}
           </p>
+          {Boolean(linkStatus?.hasEscrow) && (
+            <p className="settings-item-description-larger">{oldLang('ParvaneLostKeyAdmin')}</p>
+          )}
           {hasBackup && (
             <ListItem icon="key" narrow ripple onClick={handleOpenRotate}>
               {oldLang('ParvaneSskRotationAction')}

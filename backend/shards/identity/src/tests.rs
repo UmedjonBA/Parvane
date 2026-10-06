@@ -183,7 +183,7 @@ async fn pubkey_overwrite_replaces() {
 
 fn issue_bytes_with_device(user: &str, password: &str, device: &str) -> Vec<u8> {
     serde_json::to_vec(&IssueRequest {
-        user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None, trust_secret: None,
+        user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None, trust_secret: None, client: None,
         client_ip: String::new(),
     })
     .unwrap()
@@ -192,14 +192,14 @@ fn issue_bytes_with_device(user: &str, password: &str, device: &str) -> Vec<u8> 
 fn issue_bytes_with_device_secret(user: &str, password: &str, device: &str, secret: &str) -> Vec<u8> {
     serde_json::to_vec(&IssueRequest {
         user: user.into(), password: password.into(), device_id: Some(device.into()), login_token: None,
-        trust_secret: Some(secret.into()), client_ip: String::new(),
+        trust_secret: Some(secret.into()), client: None, client_ip: String::new(),
     })
     .unwrap()
 }
 
 fn issue_bytes(user: &str, password: &str) -> Vec<u8> {
     serde_json::to_vec(&IssueRequest {
-        user: user.into(), password: password.into(), device_id: None, login_token: None, trust_secret: None,
+        user: user.into(), password: password.into(), device_id: None, login_token: None, trust_secret: None, client: None,
         client_ip: String::new(),
     })
     .unwrap()
@@ -1191,7 +1191,7 @@ fn issue_bytes_with_login_token(user: &str, password: &str, login_token: &str) -
         user: user.into(),
         password: password.into(),
         device_id: Some("dev-1".into()),
-        login_token: Some(login_token.into()), trust_secret: None,
+        login_token: Some(login_token.into()), trust_secret: None, client: None,
         client_ip: String::new(),
     })
     .unwrap()

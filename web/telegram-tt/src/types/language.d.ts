@@ -2385,6 +2385,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneRecoveryKey': {
     'key': V;
   };
+  'ParvaneRecoveryKeyAdmin': {
+    'key': V;
+  };
   'Channel.Persmission.Denied.SendMessages.Until': {
     '0': V;
   };

@@ -257,7 +257,7 @@ pub struct DeviceLog {
 }
 
 /// Подписать запись журнала устройств.
-pub fn sign_device_log_entry(key: &SigningKey, entry: &UserDeviceLogEntry) -> Result<SignedOp> {
+pub fn sign_device_log_entry(key: &dyn sign::OpSigner, entry: &UserDeviceLogEntry) -> Result<SignedOp> {
     let header = OpHeader {
         domain: DEVICE_LOG_DOMAIN.into(),
         op_type: DEVICE_LOG_OP.into(),
@@ -357,10 +357,16 @@ impl DeviceLog {
                     self.devices.insert(id, dev);
                 }
                 Change::RevokeDeviceId(id) => {
-                    if v.signer != self.ssk && v.signer != self.root_key {
+                    // Выход: устройство само убирает себя из журнала, подписав
+                    // запись своим ключом (olm_ed25519 сертификата). Это не отзыв
+                    // чужой рукой — устройство стирает ключи по воле владельца, —
+                    // поэтому SSK раскрытым не считается (иначе каждый выход
+                    // требовал бы ключ восстановления на оставшихся устройствах).
+                    let by_itself = self.devices.get(id).is_some_and(|d| d.cert.olm_ed25519.as_slice() == v.signer);
+                    if !by_itself && v.signer != self.ssk && v.signer != self.root_key {
                         return Err(ProtoError::BadSignature);
                     }
-                    if self.devices.remove(id).is_some_and(|d| holds_ssk(&d.cert)) {
+                    if self.devices.remove(id).is_some_and(|d| holds_ssk(&d.cert)) && !by_itself {
                         self.ssk_exposed = true;
                     }
                     self.revoked.insert(id.clone());
@@ -671,6 +677,28 @@ mod tests {
 
     /// C1-02 (инв. 31): после отзыва держателя SSK старый SSK не добавляет
     /// устройства и не меняет легаси-список; после смены SSK корнем — можно.
+    #[test]
+    fn device_leaving_by_itself_does_not_expose_ssk() {
+        let a = RootIdentity::generate("alice@x").unwrap();
+        let mut log = DeviceLog::new("alice@x").unwrap();
+        log.apply(&a.genesis_entry().unwrap()).unwrap();
+        log.apply(&a.add_device_entry(2, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d1", 1)).unwrap()).unwrap();
+        log.apply(&a.add_device_entry(3, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d2", 1)).unwrap()).unwrap();
+        // Чужой ключ устройства (d2) не может убрать d1.
+        let e = device_log_entry("alice@x", 4, log.head_hash, Change::RevokeDeviceId("d1".into()), None);
+        assert_eq!(log.apply(&sign_device_log_entry(&dev_key("d2"), &e).unwrap()), Err(ProtoError::BadSignature));
+        // d1 выходит сам: из журнала убран, вернуться под тем же id нельзя, SSK не раскрыт.
+        log.apply(&sign_device_log_entry(&dev_key("d1"), &e).unwrap()).unwrap();
+        assert!(log.active("d1").is_none());
+        assert!(log.revoked.contains("d1"));
+        assert!(!log.ssk_exposed);
+        // Новые устройства добавляются без смены SSK корнем.
+        log.apply(&a.add_device_entry(5, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d3", 1)).unwrap()).unwrap();
+        assert!(log.active("d3").is_some());
+        let back = a.add_device_entry(6, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d1", 2)).unwrap();
+        assert_eq!(log.apply(&back), Err(ProtoError::Forbidden));
+    }
+
     #[test]
     fn exposed_ssk_cannot_add_devices() {
         let a = RootIdentity::generate("alice@x").unwrap();

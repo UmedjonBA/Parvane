@@ -474,6 +474,13 @@ const Main = ({
     return () => window.removeEventListener('parvane-rate-limited', handleRateLimited);
   }, [showNotification]);
 
+  // Parvane: состав своих устройств изменился — открытый экран «Устройства» перечитывает список
+  useEffect(() => {
+    const handleDevicesChanged = () => loadAuthorizations();
+    window.addEventListener('parvane-devices-changed', handleDevicesChanged);
+    return () => window.removeEventListener('parvane-devices-changed', handleDevicesChanged);
+  }, [loadAuthorizations]);
+
   // Parvane: в журнале устройств появилось новое своё устройство (spec 007)
   useEffect(() => {
     const handleNewDevice = () => {
@@ -525,12 +532,19 @@ const Main = ({
   // Parvane: ключ восстановления корня (spec 007, D-12) — показать один раз
   useEffect(() => {
     const handleRecoveryKey = async () => {
-      const result = await (callApi as unknown as (name: string) => Promise<{ recoveryKey: string } | undefined>)(
-        'parvaneTakeRecoveryKey',
-      );
+      const result = await (callApi as unknown as (name: string) => Promise<{
+        recoveryKey: string; hasEscrow?: boolean;
+      } | undefined>)('parvaneTakeRecoveryKey');
       if (!result) return;
+      // Сервер держит копию корня для администратора — потерянный ключ выпишут заново
+      const variables = { key: result.recoveryKey };
       showDialog({
-        data: { type: 'localized', text: { key: 'ParvaneRecoveryKey', variables: { key: result.recoveryKey } } },
+        data: {
+          type: 'localized',
+          text: result.hasEscrow
+            ? { key: 'ParvaneRecoveryKeyAdmin', variables }
+            : { key: 'ParvaneRecoveryKey', variables },
+        },
       });
     };
     // Ключ мог появиться до монтирования Main

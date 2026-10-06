@@ -74,6 +74,7 @@ export const pvclient_l2Group: (a: number, b: number, c: number, d: number) => v
 export const pvclient_l2SetDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const pvclient_l2SetGroupPref: (a: number, b: number, c: number, d: number, e: number) => void;
 export const pvclient_lastError: (a: number, b: number) => void;
+export const pvclient_leave: (a: number, b: number) => void;
 export const pvclient_legacyDeliverRequest: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvclient_legacyDevicesRequest: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_linkGrantMaterial: (a: number, b: number) => void;

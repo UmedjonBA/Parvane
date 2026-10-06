@@ -155,7 +155,7 @@ try {
 
   // ── (1) bob1 завершает сеанс bob2 ───────────────────────────────────────────
   dev1Screen = await openDevicesScreen(bob1Page);
-  const otherSession = dev1Screen.locator('.ListItem').filter({ hasText: 'Web ' }).first();
+  const otherSession = dev1Screen.locator('.ListItem:has(.title-with-date)').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await terminateSessionWithPassword(bob1Page, otherSession, PASSWORD);
   await waitLog('bob1', 'v2: устройство отозвано');

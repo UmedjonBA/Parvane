@@ -184,6 +184,9 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
         dev: req.device_id.clone().filter(|d| !d.is_empty()),
     };
     let token = jwt_encode(encoding, &claims)?;
+    if let (Some(device_id), Some(label)) = (claims.dev.as_deref(), req.client.as_deref()) {
+        crate::devices::remember_device_label(pool, &req.user, device_id, label).await;
+    }
 
     info!("JWT выдан для: {}", req.user);
     Ok(IssueOutcome::Token { token, trust_secret: issued_trust_secret })

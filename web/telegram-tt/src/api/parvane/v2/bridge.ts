@@ -231,6 +231,7 @@ export class V2Bridge {
           device_id: str(p, 'device_id'),
           login_token: str(p, 'login_token'),
           trust_secret: str(p, 'trust_secret'),
+          client_kind: str(p, 'client'),
         });
         if (flag(r, 'twofaRequired', 'twofa_required')) {
           return {
@@ -324,6 +325,8 @@ export class V2Bridge {
           updated_at: Math.floor(int(d, 'lastSeenMs', 'last_seen_ms') / 1000),
           created_at: Math.floor(int(d, 'createdMs', 'created_ms') / 1000),
           legacy: flag(d, 'legacy'),
+          label: str(d, 'clientKind', 'client_kind') || undefined,
+          login_at: Math.floor(int(d, 'createdMs', 'created_ms') / 1000) || undefined,
         }));
         return { ok: true, devices };
       }

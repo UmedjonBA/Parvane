@@ -34,6 +34,8 @@ type ConnectionDependencies = {
   setStore: (store: ParvaneStore) => void;
   // P-39: хранилище под PIN — разблокировать до открытия E2E
   unlockStorage?: (user: string) => Promise<void>;
+  /** Как устройство называет себя на экране «Устройства» («Firefox, Linux»). */
+  describeDevice?: () => string;
   /** Стереть локальные данные устройства (ключи, историю): оно отозвано. */
   wipeDevice?: (user: string) => Promise<void>;
   getToken: () => string;
@@ -222,6 +224,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
           user,
           password,
           device_id: deviceId || undefined,
+          client: deps.describeDevice?.(),
           login_token: loginToken || undefined,
           trust_secret: (await readTrustSecretAsync(user)) || undefined,
         }),

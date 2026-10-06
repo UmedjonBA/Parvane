@@ -139,10 +139,24 @@ try {
   await expectMessages(bob2Page, 'bob2 (новые)', [after, afterIn]);
   console.log('повторная привязка: обе стороны переписки на месте');
 
+  // Выход bob1 убрал прежнее устройство из аккаунта: у bob2 в списке один другой
+  // сеанс (нынешний bob1), он назван браузером, а не кодом; ключ подписи устройств
+  // обновлять не просят (устройство вышло само, а не отозвано)
+  const devAfterRelink = await openDevicesScreen(bob2Page);
+  const otherRows = devAfterRelink.locator('.ListItem:has(.title-with-date)');
+  await otherRows.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bob2Page.waitForTimeout(3000);
+  assert.equal(await otherRows.count(), 1, `bob2: в списке устройств остался «призрак»: ${await otherRows.allTextContents()}`);
+  const rowText = await otherRows.first().textContent();
+  assert.doesNotMatch(rowText, /Web [0-9a-f]{8}/, `bob2: сеанс подписан кодом, а не браузером: ${rowText}`);
+  assert.equal(await devAfterRelink.getByText('Device signing key').count(), 0,
+    'bob2: после добровольного выхода bob1 просят обновить ключ подписи устройств');
+  await closeSettings(bob2Page);
+
   // ── bob2 завершает сеанс bob1; ключ восстановления утерян — сброс на месте ──
   const resetMark = logs.bob2.length;
   const dev2 = await openDevicesScreen(bob2Page);
-  const otherSession = dev2.locator('.ListItem').filter({ hasText: 'Web ' }).first();
+  const otherSession = dev2.locator('.ListItem:has(.title-with-date)').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await terminateSessionWithPassword(bob2Page, otherSession, PASSWORD);
   await dev2.getByText('Device signing key').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

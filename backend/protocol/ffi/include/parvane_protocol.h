@@ -186,6 +186,13 @@ char *pv_client_revoke_device(struct PvClient *c,
                               char **err);
 
 /**
+ * Выход: JSON запросов с записью журнала, которой устройство убирает само
+ * себя (подписана ключом устройства — оставшимся смена SSK не нужна).
+ */
+char *pv_client_leave(struct PvClient *c,
+                      char **err);
+
+/**
  * Отозвать ключ доступа у собеседника (FR-033; блокировка) → JSON итога как у
  * `pv_client_revoke_device` (заполнены `requests` и `pendingKeyShares`).
  */
