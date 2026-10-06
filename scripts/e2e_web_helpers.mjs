@@ -218,7 +218,14 @@ export async function submitNick(page, user) {
   const nextButton = addressScreen.getByRole('button', { name: 'Next' });
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await addressInput.fill(user);
+    await addressInput.fill(user).catch(async (err) => {
+      // Поле ника пропало посреди ввода — снимаем состояние страницы для разбора
+      const shot = `web/telegram-tt/test-results/submit-nick-${Date.now()}.png`;
+      await page.screenshot({ path: shot }).catch(() => {});
+      const text = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch((e) => String(e));
+      console.error(`submitNick: поле ника недоступно (${page.url()}); снимок ${shot}; текст страницы: ${text}`);
+      throw err;
+    });
     try {
       await nextButton.waitFor({ state: 'visible', timeout: 3000 });
       break;

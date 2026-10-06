@@ -695,7 +695,12 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 .fetch_optional(&ctx.v2)
                 .await
                 .map_err(db_err)?;
-            Ok(pb::RootBackupGetResponse { backup: row.map(|(b,)| b).unwrap_or_default() }.encode_to_vec())
+            let escrow: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM root_escrow WHERE user = ?")
+                .bind(&req.user)
+                .fetch_optional(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            Ok(pb::RootBackupGetResponse { backup: row.map(|(b,)| b).unwrap_or_default(), has_escrow: escrow.is_some() }.encode_to_vec())
         }
 
         // ── доступ к доставке, жетоны, приватность ──

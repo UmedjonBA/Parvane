@@ -111,8 +111,15 @@ try {
   console.log('до выхода: обе стороны переписки есть на обоих устройствах bob');
 
   // bob1 выходит и входит снова в том же браузере
+  // Экран «Устройства» у bob2 открыт заранее: список должен обновиться сам
+  const devOpen = await openDevicesScreen(bob2Page);
+  const openRows = devOpen.locator('.ListItem:has(.title-with-date)');
+  await openRows.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await openRows.count(), 1, 'bob2: до выхода bob1 в списке не один другой сеанс');
   const mark = logs.bob1.length;
   await logOut(bob1Page);
+  await openRows.first().waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS })
+    .catch(() => { throw new Error('bob2: открытый список устройств не обновился после выхода bob1'); });
   await submitNick(bob1Page, bob);
   const passwordScreen = bob1Page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

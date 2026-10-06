@@ -39,7 +39,7 @@ type LinkStatus = { isPending: boolean; code?: string; canRecover?: boolean; has
 type LinkOffer = { deviceId: string; code?: string };
 // Parvane (T128, D-12): отозвано устройство, державшее ключ подписи устройств —
 // ключ обновляется корнем из копии под ключом восстановления
-type SskState = { isRotationNeeded: boolean; hasBackup: boolean };
+type SskState = { isRotationNeeded: boolean; hasBackup: boolean; isEscrowCopyMissing?: boolean };
 type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
 const SSK_RESULT_KEYS: Record<SskRotationResult, string> = {
   ok: 'ParvaneSskRotationDone',
@@ -49,6 +49,23 @@ const SSK_RESULT_KEYS: Record<SskRotationResult, string> = {
 };
 // Parvane (T130): новое устройство без других устройств аккаунта — вход по
 // ключу восстановления либо сброс защищённой личности
+const ESCROW_RESULT_KEYS: Record<SskRotationResult, string> = {
+  ok: 'ParvaneEscrowDone',
+  bad_key: 'ParvaneSskRotationBadKey',
+  no_backup: 'ParvaneSskRotationNoBackup',
+  failed: 'ParvaneSskRotationFailed',
+};
+type KeyDialogMode = 'rotate' | 'recover' | 'escrow';
+const KEY_DIALOG_TEXT: Record<KeyDialogMode, string> = {
+  rotate: 'ParvaneSskRotationText',
+  recover: 'ParvaneRecoverText',
+  escrow: 'ParvaneEscrowText',
+};
+const KEY_DIALOG_ACTION: Record<KeyDialogMode, string> = {
+  rotate: 'ParvaneSskRotationAction',
+  recover: 'ParvaneRecoverAction',
+  escrow: 'ParvaneEscrowAction',
+};
 const RECOVER_RESULT_KEYS: Record<SskRotationResult, string> = {
   ok: 'ParvaneRecoverDone',
   bad_key: 'ParvaneSskRotationBadKey',
@@ -97,6 +114,8 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     const offers = await callParvane('parvaneListLinkOffers') as { offers: LinkOffer[] } | undefined;
     setLinkOffers(offers?.offers || []);
     setSskState(await callParvane('parvaneGetSskState') as SskState | undefined);
+    // Другое устройство могло выйти само — список перечитается по событию провайдера
+    void callParvane('parvanePollOwnDevices');
   });
 
   const handleRecoveryKeyChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -108,19 +127,24 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     closeSskDialog();
   });
 
-  // Диалог ключа восстановления общий: обновление ключа подписи (T128) и вход
-  // нового устройства по ключу (T130)
-  const [isRecoverMode, setIsRecoverMode] = useState(false);
+  // Диалог ключа восстановления общий: обновление ключа подписи (T128), вход
+  // нового устройства по ключу (T130) и страховочная копия для администратора
+  const [keyDialogMode, setKeyDialogMode] = useState<KeyDialogMode>('rotate');
   const [isResetDialogOpen, openResetDialog, closeResetDialog] = useFlag();
   const [resetPassword, setResetPassword] = useState('');
 
   const handleOpenRecover = useLastCallback(() => {
-    setIsRecoverMode(true);
+    setKeyDialogMode('recover');
     openSskDialog();
   });
 
   const handleOpenRotate = useLastCallback(() => {
-    setIsRecoverMode(false);
+    setKeyDialogMode('rotate');
+    openSskDialog();
+  });
+
+  const handleOpenEscrow = useLastCallback(() => {
+    setKeyDialogMode('escrow');
     openSskDialog();
   });
 
@@ -143,12 +167,21 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   });
 
   const handleRotateSsk = useLastCallback(async () => {
-    if (isRecoverMode) {
+    if (keyDialogMode === 'recover') {
       const key = recoveryKey;
       handleCloseSskDialog();
       if (!key) return;
       const result = await callParvane('parvaneRecoverWithKey', { recoveryKey: key }) as SskRotationResult | undefined;
       showNotification({ message: oldLang(RECOVER_RESULT_KEYS[result || 'failed']) });
+      void refreshLinkState();
+      return;
+    }
+    if (keyDialogMode === 'escrow') {
+      const key = recoveryKey;
+      handleCloseSskDialog();
+      if (!key) return;
+      const result = await callParvane('parvaneStoreEscrowCopy', { recoveryKey: key }) as SskRotationResult | undefined;
+      showNotification({ message: oldLang(ESCROW_RESULT_KEYS[result || 'failed']) });
       void refreshLinkState();
       return;
     }
@@ -416,6 +449,23 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     );
   }
 
+  // Parvane: сервер держит страховочные копии, а у этого аккаунта её ещё нет
+  function renderEscrowMissing() {
+    return (
+      <>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {oldLang('ParvaneEscrowTitle')}
+        </IslandTitle>
+        <Island>
+          <p className="settings-item-description-larger">{oldLang('ParvaneEscrowText')}</p>
+          <ListItem icon="key" narrow ripple onClick={handleOpenEscrow}>
+            {oldLang('ParvaneEscrowAction')}
+          </ListItem>
+        </Island>
+      </>
+    );
+  }
+
   // Parvane: запросы истории от других устройств аккаунта
   function renderLinkOffers() {
     return (
@@ -491,6 +541,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
       {Boolean(linkStatus?.canRecover) && renderRecover()}
       {Boolean(linkOffers.length) && renderLinkOffers()}
       {Boolean(sskState?.isRotationNeeded) && renderSskRotation(Boolean(sskState?.hasBackup))}
+      {Boolean(sskState?.isEscrowCopyMissing) && !sskState?.isRotationNeeded && renderEscrowMissing()}
       {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
       {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
           показывается только когда бэкенд отдал ttlDays */}
@@ -527,8 +578,8 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
       <ConfirmDialog
         isOpen={isSskDialogOpen}
         onClose={handleCloseSskDialog}
-        text={oldLang(isRecoverMode ? 'ParvaneRecoverText' : 'ParvaneSskRotationText')}
-        confirmLabel={oldLang(isRecoverMode ? 'ParvaneRecoverAction' : 'ParvaneSskRotationAction')}
+        text={oldLang(KEY_DIALOG_TEXT[keyDialogMode])}
+        confirmLabel={oldLang(KEY_DIALOG_ACTION[keyDialogMode])}
         confirmHandler={handleRotateSsk}
         isConfirmDisabled={!recoveryKey}
         areButtonsInColumn

@@ -1174,7 +1174,8 @@ async function pollHistoryLinkGrant(generation: number) {
   await joinV2WithLinkGrant(boxPayload.v2);
   // Строки истории — после полного ресинка, а не вперемешку с ним: применённая
   // посреди ресинка строка (замечено на своих исходящих) временами не доходила до UI
-  await syncController.ensureSynced().catch(() => undefined);
+  await syncController.ensureSynced()
+    .catch((err: unknown) => logDebug(`линковка: ресинк перед историей v2 не выполнен: ${String(err)}`));
   await applyLinkedV2History(v2History, store.self);
 }
 
@@ -2201,8 +2202,19 @@ const methods = {
 
   // Отозвано устройство, державшее SSK: до смены корнем новые устройства не
   // принимаются. Корень — только в копии под ключом восстановления
-  parvaneGetSskState() {
-    return Promise.resolve(v2Controller.sskState());
+  // Экран «Устройства»: состав своих устройств мог измениться без извещения
+  async parvanePollOwnDevices() {
+    await v2Controller.pollOwnDevices();
+    return true;
+  },
+
+  async parvaneGetSskState() {
+    return { ...v2Controller.sskState(), isEscrowCopyMissing: await v2Controller.isEscrowCopyMissing() };
+  },
+
+  // Копия корня для администратора у аккаунта, созданного до включения страховки
+  parvaneStoreEscrowCopy({ recoveryKey }: { recoveryKey: string }) {
+    return v2Controller.storeEscrowCopy(recoveryKey);
   },
 
   parvaneRotateSsk({ recoveryKey }: { recoveryKey: string }) {
