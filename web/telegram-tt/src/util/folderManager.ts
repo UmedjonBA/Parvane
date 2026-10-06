@@ -817,16 +817,22 @@ function buildFolderOrderedIds(folderId: number) {
 
   const isSavedFolder = folderId === SAVED_FOLDER_ID;
 
-  const sortedPinnedIds = chatIds ? orderedPinnedIds?.filter((id) => chatIds.has(id)) : orderedPinnedIds;
+  // Parvane: Saved Messages always stays first in every chat list that contains it
+  const selfId = isSavedFolder ? undefined : getGlobal().currentUserId;
+  const hasSelf = Boolean(selfId && chatIds?.has(selfId));
+
+  const sortedPinnedIds = (chatIds ? orderedPinnedIds?.filter((id) => chatIds.has(id)) : orderedPinnedIds)
+    ?.filter((id) => !hasSelf || id !== selfId);
   const allListIds = prevOrderedIds || (chatIds && Array.from(chatIds)) || [];
-  const notPinnedIds = pinnedChatIds ? allListIds.filter((id) => !pinnedChatIds.has(id)) : allListIds;
+  const notPinnedIds = allListIds.filter((id) => !pinnedChatIds?.has(id) && (!hasSelf || id !== selfId));
   const sortedNotPinnedIds = notPinnedIds.sort((chatId1: string, chatId2: string) => {
     return getOrderKey(chatId2, isSavedFolder) - getOrderKey(chatId1, isSavedFolder);
   });
 
   return {
-    pinnedCount: sortedPinnedIds?.length || 0,
+    pinnedCount: (sortedPinnedIds?.length || 0) + (hasSelf ? 1 : 0),
     orderedIds: [
+      ...(hasSelf ? [selfId!] : []),
       ...(sortedPinnedIds || []),
       ...sortedNotPinnedIds,
     ],

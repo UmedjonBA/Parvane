@@ -179,7 +179,7 @@ const useChatContextActions = ({
 
     if (isInSearch) {
       return compact([
-        actionOpenInNewTab, actionQuickPreview, actionPin, actionAddToFolder, actionMute,
+        actionOpenInNewTab, actionQuickPreview, !isSelf && actionPin, actionAddToFolder, actionMute,
       ]);
     }
 
@@ -216,7 +216,8 @@ const useChatContextActions = ({
       actionAddToFolder,
       actionMarkAsRead,
       actionMarkAsUnread,
-      actionPin,
+      // Parvane: Saved Messages is always first in the list, pinning it is not an option
+      !isSelf && actionPin,
       !isSelf && actionMute,
       !isSelf && !isServiceNotifications && !isInFolder && actionArchive,
       actionReport,
