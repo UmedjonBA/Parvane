@@ -123,3 +123,39 @@ export async function botConfirmV2(gatewayUrl, secret, token, telegramId, telegr
     ws.close();
   }
 }
+
+/** Один запрос метода v2 на соединении БЕЗ Auth (канал PRE): { ok } | { code }. */
+export async function v2RequestWithoutAuth(gatewayUrl, method, body, timeoutMs = 5000) {
+  const ws = new WebSocket(gatewayUrl);
+  ws.binaryType = 'arraybuffer';
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve, { once: true });
+    ws.addEventListener('error', () => reject(new Error('gateway ws error')), { once: true });
+  });
+  const frames = [];
+  let wake;
+  ws.addEventListener('message', (event) => {
+    if (event.data instanceof ArrayBuffer) frames.push(new Uint8Array(event.data));
+    wake?.();
+  });
+  const next = async () => {
+    const deadline = Date.now() + timeoutMs + 5000;
+    while (!frames.length) {
+      if (Date.now() > deadline) throw new Error(`gateway v2: нет ответа на ${method}`);
+      await new Promise((resolve) => { wake = resolve; setTimeout(resolve, 200); });
+    }
+    return frames.shift();
+  };
+  try {
+    ws.send(helloFrame());
+    const welcome = await next();
+    if (!fields(welcome).has(11)) throw new Error('gateway не ответил Welcome v2');
+    ws.send(requestFrame(1, method, body, timeoutMs));
+    for (;;) {
+      const parsed = parseResponse(await next(), 1);
+      if (parsed) return parsed;
+    }
+  } finally {
+    ws.close();
+  }
+}

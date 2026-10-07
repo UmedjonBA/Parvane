@@ -2,9 +2,8 @@
 // Web (alice, fake-микрофон) звонит desktop (bob, настоящий движок tg_owt,
 // PARVANE_REAL_MEDIA=1, авто-приём), затем desktop звонит web (PARVANE_AUTOCALL). Проверяется: desktop доходит до
 // Active (ICE/DTLS установлен), у web идёт таймер активного звонка и растёт
-// принятый звук. Пара задаётся PARVANE_E2E_PAIR: call-web-desktop — оба на v1,
-// call-web2-desktop2 — оба с включённым v2 (сигналинг звонка при этом v1-путём
-// шарда call, запечатанного сигналинга в клиентах нет).
+// принятый звук. Оба клиента на v2 (пара call-web2-desktop2): сигналинг идёт
+// запечатанными конвертами (D-08). Пара v1 удалена с T110 — сервер без v1.
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,8 +31,7 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-cross-calls-password';
-const PAIR = process.env.PARVANE_E2E_PAIR || 'call-web-desktop';
-const isV2 = PAIR === 'call-web2-desktop2';
+const PAIR = 'call-web2-desktop2';
 const CALL_TIMEOUT_MS = 60000;
 
 requireGatewayTcpUrl();
@@ -49,8 +47,6 @@ const browser = await chromium.launch({
 });
 const aliceContext = await browser.newContext({ permissions: ['microphone'] });
 const consoleTail = [];
-// Сигналы звонков, опубликованные web на v1-шину
-const callSignalsV1 = [];
 aliceContext.on('page', (page) => {
   page.on('console', (m) => {
     const t = m.text();
@@ -59,15 +55,6 @@ aliceContext.on('page', (page) => {
     if (consoleTail.length > 120) consoleTail.shift();
   });
   page.on('pageerror', (e) => consoleTail.push(`pageerror: ${String(e).slice(0, 300)}`));
-  page.on('websocket', (ws) => ws.on('framesent', ({ payload }) => {
-    if (typeof payload !== 'string') return;
-    try {
-      const frame = JSON.parse(payload);
-      if (frame.op === 'pub' && frame.subject === 'call.signal') callSignalsV1.push(frame.subject);
-    } catch {
-      // двоичный кадр v2 — не наш случай
-    }
-  }));
 });
 const bobWorkdir = mkdtempSync(join(tmpdir(), 'parvane-cross-calls-'));
 const libraryShim = buildLibraryShim(bobWorkdir);
@@ -79,9 +66,9 @@ try {
   const bob = `ccb-${suffix}@local`;
 
   const aliceSession = await preparePage(aliceContext, alice, PASSWORD, {
-    seedLocalStorage: { 'parvane:proto': isV2 ? 'v2' : 'v1' },
+    seedLocalStorage: { 'parvane:proto': 'v2' },
   });
-  if (isV2) await dismissRecoveryKeyDialog(aliceSession.page);
+  await dismissRecoveryKeyDialog(aliceSession.page);
   const { page } = aliceSession;
 
   const hello = `cc-hello-${suffix}`;
@@ -90,10 +77,10 @@ try {
     PARVANE_AUTOACCEPT: '1',
     PARVANE_REAL_MEDIA: '1',
     PARVANE_NO_LINK_OFFER: '1',
-    ...(isV2 ? { PARVANE_PROTO_V2: '1', PARVANE_AUTOSEND_V2: `${alice}:${hello}` }
-      : { PARVANE_PROTO_V2: '0', PARVANE_AUTOSEND: `${alice}:${hello}` }),
+    PARVANE_PROTO_V2: '1',
+    PARVANE_AUTOSEND_V2: `${alice}:${hello}`,
   });
-  await waitDesktopLog(bobWorkdir, isV2 ? /v2: готов/ : /E2E-устройство готово/, 90000, desktop);
+  await waitDesktopLog(bobWorkdir, /v2: готов/, 90000, desktop);
   // Переписка до звонка: чат и ключи собеседника известны обеим сторонам
   await openPrivateChatStrict(page, bob);
   await findMessage(page, hello).first().waitFor({ state: 'visible', timeout: 90000 });
@@ -121,7 +108,7 @@ try {
     PARVANE_REAL_MEDIA: '1',
     PARVANE_NO_LINK_OFFER: '1',
     PARVANE_AUTOCALL: alice,
-    PARVANE_PROTO_V2: isV2 ? '1' : '0',
+    PARVANE_PROTO_V2: '1',
   });
   await waitDesktopLog(bobWorkdir, /AUTOCALL → /, 90000, desktop, { since: restartFrom });
   await page.getByText('is calling you...', { exact: true }).waitFor({ state: 'visible', timeout: CALL_TIMEOUT_MS });
@@ -133,19 +120,12 @@ try {
   await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   console.log(`e2e_web_cross_calls (${PAIR}): desktop → web соединён, звук от desktop принят`);
 
-  // Путь сигналинга: у пары v2 — запечатанные конверты (D-08), на v1-шину web не
-  // публикует ни одного call.signal; у пары v1 — наоборот, v2-сигналов нет
+  // Путь сигналинга — запечатанные конверты v2 (D-08) в обе стороны
   const desktopLog = `${firstCallLog}\n${readDesktopLog(bobWorkdir)}`;
-  if (isV2) {
-    assert.match(desktopLog, /v2 ← .* сигнал звонка \(invite\)/, 'desktop: вызов web пришёл не по v2');
-    assert.match(desktopLog, /v2 → .* сигнал звонка \(answer\)/, 'desktop: ответ ушёл не по v2');
-    assert.match(desktopLog, /v2 → .* сигнал звонка \(invite\)/, 'desktop: свой вызов ушёл не по v2');
-    assert.deepEqual(callSignalsV1, [], 'web: сигналы звонка ушли v1-путём');
-  } else {
-    assert.doesNotMatch(desktopLog, /сигнал звонка \(/, 'desktop v1: сигнал звонка ушёл по v2');
-    assert.ok(callSignalsV1.length > 0, 'web v1: сигналы звонка не публиковались');
-  }
-  console.log(`e2e_web_cross_calls (${PAIR}): сигналинг шёл ${isV2 ? 'запечатанными конвертами v2' : 'v1-путём шарда call'}`);
+  assert.match(desktopLog, /v2 ← .* сигнал звонка \(invite\)/, 'desktop: вызов web пришёл не по v2');
+  assert.match(desktopLog, /v2 → .* сигнал звонка \(answer\)/, 'desktop: ответ ушёл не по v2');
+  assert.match(desktopLog, /v2 → .* сигнал звонка \(invite\)/, 'desktop: свой вызов ушёл не по v2');
+  console.log(`e2e_web_cross_calls (${PAIR}): сигналинг шёл запечатанными конвертами v2`);
   console.log(`e2e_web_cross_calls (${PAIR}): OK`);
 } catch (error) {
   // Состояние WebRTC на стороне web: где именно остановилось соединение

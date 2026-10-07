@@ -87,6 +87,7 @@ export function uniqueUser(prefix: string, projectName: string) {
 
 export type SecureStateSnapshot = {
   hasKey: boolean;
+  // Состояние движка v2 (запись `v2-engine` под тем же non-extractable ключом)
   hasState: boolean;
   hasLoginAddress: boolean;
   loginAddress?: string;
@@ -105,7 +106,9 @@ export async function readSecureStateSnapshot(page: Page, address: string): Prom
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const [key, state] = await Promise.all([read(`key:${user}`), read(`state:${user}`)]);
+    // Состояние движка v2 — именованная запись `rec:<адрес>:v2-engine`
+    // (secureStorage.ts, v2/controller.ts STATE_RECORD)
+    const [key, state] = await Promise.all([read(`key:${user}`), read(`rec:${user}:v2-engine`)]);
     db.close();
     const loginAddress = localStorage.getItem('parvane:login-address') ?? undefined;
     return {

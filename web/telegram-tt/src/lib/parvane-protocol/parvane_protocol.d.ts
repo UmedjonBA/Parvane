@@ -167,10 +167,6 @@ export class PvClient {
      */
     hasStateKey(): boolean;
     /**
-     * Импорт Olm-аккаунта v1 (libolm pickle web) — то же устройство.
-     */
-    importLibolmAccount(pickle: string, pickle_key: Uint8Array): void;
-    /**
      * Восстановить корень из копии (сверяется с журналом устройств); корень
      * остаётся в памяти до `forgetRoot()` и возвращается хосту.
      */
@@ -356,129 +352,6 @@ export class PvClient {
 }
 
 /**
- * Входящая Megolm-сессия участника группы.
- */
-export class PvMegolmInbound {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    /**
-     * Из ключа сессии (SKDM, base64).
-     */
-    static create(session_key: string): PvMegolmInbound;
-    /**
-     * Расшифровать base64 Megolm-сообщения: `{plaintext, messageIndex}`.
-     */
-    decrypt(ciphertext: string): any;
-    /**
-     * Экспорт ключа с индекса `index` (не раньше первого известного), base64.
-     */
-    exportSession(index: number): string;
-    firstKnownIndex(): number;
-    /**
-     * Из экспортированного ключа (формат libolm `export_session`, base64).
-     */
-    static importSession(exported: string): PvMegolmInbound;
-    pickle(key: string): string;
-    sessionId(): string;
-    static unpickle(pickle: string, key: string): PvMegolmInbound;
-}
-
-/**
- * Исходящая Megolm-сессия (своя на группу).
- */
-export class PvMegolmOutbound {
-    free(): void;
-    [Symbol.dispose](): void;
-    /**
-     * Зашифровать UTF-8 строку → base64 Megolm-сообщения.
-     */
-    encrypt(plaintext: string): string;
-    /**
-     * Индекс следующего сообщения.
-     */
-    messageIndex(): number;
-    constructor();
-    pickle(key: string): string;
-    sessionId(): string;
-    /**
-     * Ключ сессии на текущем индексе для раздачи участникам (base64).
-     */
-    sessionKey(): string;
-    static unpickle(pickle: string, key: string): PvMegolmOutbound;
-}
-
-/**
- * Olm-аккаунт устройства (identity-ключи, подпись, прекеи, сессии).
- */
-export class PvOlmAccount {
-    free(): void;
-    [Symbol.dispose](): void;
-    /**
-     * Входящая сессия из pre-key сообщения: `{session, plaintext}`.
-     * Использованный одноразовый ключ удаляется из аккаунта.
-     */
-    createInboundSession(sender_identity: string, body: string): any;
-    /**
-     * Исходящая сессия по бандлу собеседника (identity + one-time/fallback).
-     */
-    createOutboundSession(identity_key: string, one_time_key: string): PvOlmSession;
-    /**
-     * Новый резервный ключ (signed_prekey бандла), помечается опубликованным;
-     * предыдущий остаётся для pre-key сообщений в пути.
-     */
-    generateFallbackKey(): string | undefined;
-    /**
-     * Сгенерировать `count` одноразовых ключей: возвращает неопубликованные
-     * (base64) и помечает их опубликованными.
-     */
-    generateOneTimeKeys(count: number): string[];
-    /**
-     * Curve25519 identity-ключ (base64).
-     */
-    identityKey(): string;
-    constructor();
-    pickle(key: string): string;
-    /**
-     * Подпись UTF-8 строки ключом устройства (base64).
-     */
-    sign(message: string): string;
-    /**
-     * Ed25519-ключ подписи устройства (base64).
-     */
-    signingKey(): string;
-    /**
-     * libolm-pickle для переносимой копии ключей (её читают desktop/android).
-     */
-    toLibolmPickle(key: string): string;
-    /**
-     * Восстановить из pickle (`vz1:` — vodozemac, иначе libolm).
-     */
-    static unpickle(pickle: string, key: string): PvOlmAccount;
-}
-
-/**
- * Olm-сессия с одним устройством собеседника.
- */
-export class PvOlmSession {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    decrypt(message_type: number, body: string): string;
-    /**
-     * Зашифровать UTF-8 строку: `{type, body}` (type 0 — pre-key, 1 — обычное).
-     */
-    encrypt(plaintext: string): any;
-    /**
-     * Относится ли pre-key сообщение к этой сессии.
-     */
-    matchesInbound(body: string): boolean;
-    pickle(key: string): string;
-    sessionId(): string;
-    static unpickle(pickle: string, key: string): PvOlmSession;
-}
-
-/**
  * Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
  * шифрование записей ключом личного состояния из клиента (ключ не выходит
  * в JS). Курсор — в памяти: при запуске журнал читается с начала.
@@ -564,11 +437,6 @@ export function decodeMethodResponse(method: string, bytes: Uint8Array): string;
  */
 export function deviceLogEntries(bytes: Uint8Array): number;
 
-/**
- * Проверка подписи Ed25519 над UTF-8 строкой (ключ и подпись — base64).
- */
-export function ed25519Verify(public_key: string, message: string, signature: string): boolean;
-
 export function encodeAuth(token: string): Uint8Array;
 
 /**
@@ -652,16 +520,11 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_pvanonplanner_free: (a: number, b: number) => void;
     readonly __wbg_pvclient_free: (a: number, b: number) => void;
-    readonly __wbg_pvmegolminbound_free: (a: number, b: number) => void;
-    readonly __wbg_pvmegolmoutbound_free: (a: number, b: number) => void;
-    readonly __wbg_pvolmaccount_free: (a: number, b: number) => void;
-    readonly __wbg_pvolmsession_free: (a: number, b: number) => void;
     readonly __wbg_pvstate_free: (a: number, b: number) => void;
     readonly decodeFrame: (a: number, b: number, c: number) => void;
     readonly decodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly decodeMethodResponse: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly deviceLogEntries: (a: number, b: number, c: number) => void;
-    readonly ed25519Verify: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly encodeAuth: (a: number, b: number, c: number) => void;
     readonly encodeHello: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly encodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -711,7 +574,6 @@ export interface InitOutput {
     readonly pvclient_hasPeerDeliveryKey: (a: number, b: number, c: number) => number;
     readonly pvclient_hasRoot: (a: number) => number;
     readonly pvclient_hasStateKey: (a: number) => number;
-    readonly pvclient_importLibolmAccount: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importRootBackupFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importState: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -756,38 +618,6 @@ export interface InitOutput {
     readonly pvclient_tokenRefillDue: (a: number) => number;
     readonly pvclient_tokenRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
-    readonly pvmegolminbound_create: (a: number, b: number, c: number) => void;
-    readonly pvmegolminbound_decrypt: (a: number, b: number, c: number, d: number) => void;
-    readonly pvmegolminbound_exportSession: (a: number, b: number, c: number) => void;
-    readonly pvmegolminbound_firstKnownIndex: (a: number) => number;
-    readonly pvmegolminbound_importSession: (a: number, b: number, c: number) => void;
-    readonly pvmegolminbound_pickle: (a: number, b: number, c: number, d: number) => void;
-    readonly pvmegolminbound_sessionId: (a: number, b: number) => void;
-    readonly pvmegolminbound_unpickle: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly pvmegolmoutbound_encrypt: (a: number, b: number, c: number, d: number) => void;
-    readonly pvmegolmoutbound_messageIndex: (a: number) => number;
-    readonly pvmegolmoutbound_new: () => number;
-    readonly pvmegolmoutbound_pickle: (a: number, b: number, c: number, d: number) => void;
-    readonly pvmegolmoutbound_sessionId: (a: number, b: number) => void;
-    readonly pvmegolmoutbound_sessionKey: (a: number, b: number) => void;
-    readonly pvmegolmoutbound_unpickle: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly pvolmaccount_createInboundSession: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvolmaccount_createOutboundSession: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvolmaccount_generateFallbackKey: (a: number, b: number) => void;
-    readonly pvolmaccount_generateOneTimeKeys: (a: number, b: number, c: number) => void;
-    readonly pvolmaccount_identityKey: (a: number, b: number) => void;
-    readonly pvolmaccount_new: () => number;
-    readonly pvolmaccount_pickle: (a: number, b: number, c: number, d: number) => void;
-    readonly pvolmaccount_sign: (a: number, b: number, c: number, d: number) => void;
-    readonly pvolmaccount_signingKey: (a: number, b: number) => void;
-    readonly pvolmaccount_toLibolmPickle: (a: number, b: number, c: number, d: number) => void;
-    readonly pvolmaccount_unpickle: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly pvolmsession_decrypt: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly pvolmsession_encrypt: (a: number, b: number, c: number, d: number) => void;
-    readonly pvolmsession_matchesInbound: (a: number, b: number, c: number) => number;
-    readonly pvolmsession_pickle: (a: number, b: number, c: number, d: number) => void;
-    readonly pvolmsession_sessionId: (a: number, b: number) => void;
-    readonly pvolmsession_unpickle: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_claimDue: (a: number, b: number, c: number) => void;

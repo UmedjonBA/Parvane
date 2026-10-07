@@ -21,7 +21,6 @@ use prost::Message;
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::*;
 
-mod v1;
 
 /// Инициализация модуля: часы браузера для движка.
 #[wasm_bindgen(start)]
@@ -185,14 +184,6 @@ impl PvClient {
     #[wasm_bindgen(js_name = export)]
     pub fn export_state(&self, key: &[u8]) -> Result<Vec<u8>, JsValue> {
         self.inner.export(&key32(key)?).map_err(err_proto)
-    }
-
-    /// Импорт Olm-аккаунта v1 (libolm pickle web) — то же устройство.
-    #[wasm_bindgen(js_name = importLibolmAccount)]
-    pub fn import_libolm_account(&mut self, pickle: &str, pickle_key: &[u8]) -> Result<(), JsValue> {
-        let acc = parvane_protocol::olm::OlmAccount::from_libolm_pickle(pickle, pickle_key).map_err(err_proto)?;
-        self.inner.import_v1_account(acc);
-        Ok(())
     }
 
     /// Первое устройство: корень, генезис, сертификат, прекеи, ключ доставки.

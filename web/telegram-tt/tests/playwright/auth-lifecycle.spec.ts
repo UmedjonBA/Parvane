@@ -55,8 +55,10 @@ test('logs out through settings and clears the local session state', async ({ pa
   await openApp(page, gatewayUrl);
   await registerAndSignIn(page, user, PASSWORD);
 
-  const signedInState = await readSecureStateSnapshot(page, user);
-  expect(signedInState).toMatchObject({
+  // Состояние движка v2 записывается после входа — ждём
+  await expect.poll(async () => readSecureStateSnapshot(page, user), {
+    timeout: LOGIN_TIMEOUT_MS,
+  }).toMatchObject({
     hasKey: true,
     hasState: true,
     loginAddress: user,

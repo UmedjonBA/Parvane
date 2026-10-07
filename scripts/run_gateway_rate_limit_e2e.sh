@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Лимит частоты gateway: флуд publish отклоняется rate_limited, обычный темп проходит.
+# Лимит частоты gateway (v2): всплеск запросов до входа отклоняется RATE_LIMITED, обычный темп проходит.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

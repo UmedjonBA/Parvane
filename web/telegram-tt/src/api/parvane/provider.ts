@@ -389,8 +389,19 @@ let pendingRecoveryKey: string | undefined;
 let isUpgradeRequired = false;
 
 window.addEventListener('parvane-upgrade-required', () => {
+  isUpgradeRequired = true;
   sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneUpgradeRequired' } });
 });
+
+// Вход не удался, потому что сервер больше не поддерживает эту версию (T042,
+// UPGRADE_REQUIRED уже на канале PRE): на экране пароля — текст про обновление,
+// а не «неверный пароль». true — отказ объяснён
+function reportUpgradeRequiredAtLogin(): boolean {
+  if (!isUpgradeRequired) return false;
+  sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
+  sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneUpgradeRequired' } });
+  return true;
+}
 
 // Протокол v2 (spec 007): переписка, группы, звонки, присутствие (T110 —
 // единственный стек)
@@ -593,6 +604,7 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     // eslint-disable-next-line no-console
     console.error('[parvane] логин не удался:', err);
     pendingLoginAddress = creds.user;
+    if (reportUpgradeRequiredAtLogin()) return;
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
     sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
   }
@@ -2654,6 +2666,7 @@ const methods = {
       }
       const message = String(err);
       logDebug(`логин отклонён: ${message}`);
+      if (reportUpgradeRequiredAtLogin()) return;
       // Сервер требует регистрацию через почту: такого аккаунта нет — форма
       // регистрации с этим ником; аккаунт есть, но не подтверждён — сразу
       // экран кода (fallback-register в issueToken уже перевыслал код на

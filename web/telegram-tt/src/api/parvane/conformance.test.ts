@@ -1436,7 +1436,7 @@ describe('E6-1: клиент работоспособен без соедине�
   it('web: соединения v1 нет вовсе (T110) — все запросы мостом, записи LegacyV1 пропускаются', () => {
     const gateway = readRepo('web/telegram-tt/src/api/parvane/gateway.ts');
     expect(gateway).not.toMatch(/new WebSocket|hasV1|isVirtual|upgrade_required/);
-    expect(gateway).toContain('const viaV2 = await getV2Bridge().request(subject, payload);');
+    expect(gateway).toContain('viaV2 = await getV2Bridge().request(subject, payload);');
     const engine = readRepo('web/telegram-tt/src/api/parvane/v2/engine.ts');
     expect(engine).not.toMatch(/isV2Enabled|parvane:proto|VITE_PARVANE_PROTO_V2/);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
