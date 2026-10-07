@@ -38,10 +38,6 @@ vi.mock('./gateway', () => ({
   GatewayConnection: gateway.FakeGateway,
   getGatewayUrl: () => 'ws://test.invalid/ws',
 }));
-// Движок ключей устройства для эфемерных каналов не нужен
-vi.mock('./e2e', () => ({
-  E2eEngine: { create: () => Promise.reject(new Error('E2E в этом тесте не поднимается')) },
-}));
 // Языковой пакет тянет за собой весь провайдер — в тесте тексты задаёт стор
 vi.mock('../../util/localization', () => ({ getLangStringByKey: () => undefined }));
 
@@ -158,8 +154,6 @@ describe('L2-1: typing и presence (connectionController, эфемерные к�
       calls: { teardown: () => undefined, setup: () => undefined } as never,
       getConnection: () => connection,
       setConnection: (next) => { connection = next; },
-      getE2e: () => undefined,
-      setE2e: () => undefined,
       getStore: () => store,
       setStore: (next) => { store = next; },
       getToken: () => token,
@@ -289,7 +283,6 @@ describe('L2: служебное сообщение о смене режима',
     const saved: WireStoredMessage[] = [];
     const sync = createSyncController({
       getConnection: () => undefined,
-      getE2e: () => undefined,
       getStore: () => store,
       getToken: () => 'jwt',
       groups: { register: () => undefined },
@@ -366,17 +359,5 @@ describe('L2: служебное сообщение о смене режима',
       readState: { lastReadInboxMessageId: message.id, unreadCount: 0 },
     }));
     expect(sync.isUnreadIncoming(message.chatId, message)).toBe(false);
-  });
-
-  it('тот же вид кадром прежнего инбокса (LegacyV1) — подделка: служебное сообщение не показывается', async () => {
-    const { sync, saved, newMessages } = makeSync();
-    sync.handleInboxFrame(JSON.stringify({
-      payload: { message: chatMode('018f0000-0000-7000-8000-000000000005', PEER, SELF, true) },
-    }));
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(newMessages()).toHaveLength(0);
-    expect(saved).toHaveLength(0);
   });
 });

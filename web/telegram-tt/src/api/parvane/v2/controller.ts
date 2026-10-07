@@ -1,5 +1,5 @@
 // Протокол v2 в web (spec 007, E2: T055/T056). Двухстековый клиент на
-// переходный период: v1-стек провайдера (libolm) обслуживает v1-собеседников,
+// T110 (7 окт 2026): единственный стек переписки — v1-путь провайдера удалён;
 // этот контроллер — собеседников с журналом устройств v2 (WASM-движок,
 // отдельный Olm-аккаунт устройства). Формат выбирается по подписанному
 // журналу собеседника (D-13), не по флагам сервера.
@@ -44,9 +44,6 @@ type Deps = {
   /** У аккаунта уже есть журнал устройств, а это устройство в нём не записано:
    * нужен грант линковки от своего другого устройства (LINK-1 v2). */
   onNeedsLinking?: () => void;
-  /** Кадр инбокса v1, переложенный сервером в инбокс v2 (запись `LegacyV1`:
-   * история v1 при первом синке и живые кадры) — FR-053. */
-  onLegacyFrame?: (frame: string) => void;
   /** Ключ восстановления нового корня — показать пользователю один раз. */
   onRecoveryKey: (recoveryKey: string) => void;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
@@ -64,9 +61,6 @@ type Deps = {
   /** Ссылка-приглашение создана/отозвана здесь — остальным своим устройствам (T160). */
   onInviteCreated?: (address: string, record: V2InviteRecord) => void;
   onInviteRevoked?: (linkId: string) => void;
-  /** Свои устройства по каталогу v1 (id и ключи) — для подписанного списка
-   * v1-устройств, которым v2-клиенты шлют легаси-копии (FR-058). */
-  listOwnV1Devices?: () => Promise<{ deviceId: string; identity: string; signing: string }[]>;
   /** У собеседника сменился корень личности (KEY-1 v2, T129): служебное
    * сообщение «ключ безопасности изменился» в чате с ним. */
   onPeerRootChanged?: (user: string) => void;
@@ -742,7 +736,7 @@ export function createV2Controller(deps: Deps) {
 
   async function applyEvent(ev: EngineEvent) {
     if (ev.type === 'legacyV1') {
-      if (ev.json) deps.onLegacyFrame?.(ev.json);
+      // Кадр прежнего инбокса v1, оставшийся на сервере: читать его нечем (T110)
       return;
     }
     if (ev.type === 'call') {
@@ -873,7 +867,6 @@ export function createV2Controller(deps: Deps) {
     }
     if (ev.type === 'deviceAdded') {
       await checkOwnDevices();
-      await syncLegacySet();
     }
     // Отозвано своё устройство (другим своим устройством): журнал — заново;
     // ротации ключей делает отзывавшее устройство и раздаёт по E2E
@@ -927,14 +920,6 @@ export function createV2Controller(deps: Deps) {
     } catch (e) {
       deps.log(`v2: группы новому своему устройству не пересланы: ${String(e)}`);
     }
-  }
-
-  /** v1-копии сообщения для v1-устройств из подписанных списков (FR-054):
-   * готовый v1 SendPayload уходит методом `msg.deliver_legacy`. */
-  async function deliverLegacy(uuid: string, sendPayloadJson: string) {
-    if (!client || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
-    const req = client.legacyDeliverRequest(uuid, sendPayloadJson) as OutReq;
-    await call(req.chan, req.method, req.body);
   }
 
   // ── Новое устройство без других устройств (T130, FR-066) ───────────────────
@@ -1373,7 +1358,6 @@ export function createV2Controller(deps: Deps) {
       });
       deps.log('v2: SSK сменён корнем');
       void uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
-      await serial(syncLegacySet);
       return 'ok';
     } catch (e) {
       deps.log(`v2: смена SSK не удалась: ${String(e)}`);
@@ -1386,7 +1370,6 @@ export function createV2Controller(deps: Deps) {
   /** Журнал своих устройств и список v1-устройств — после запуска и по событию. */
   async function refreshOwnDevices() {
     await checkOwnDevices();
-    await serial(syncLegacySet);
   }
 
   // ── маршрутизация ─────────────────────────────────────────────────────────
@@ -2123,53 +2106,6 @@ export function createV2Controller(deps: Deps) {
     });
   }
 
-  /**
-   * Перевод группы v1 в v2 (T180). Делает владелец, когда все участники на v2 и ни
-   * у кого не осталось v1-устройств: группа v2 с тем же составом и записью о
-   * прежнем `group_id`, затем описание, фото, права и админы. Клиенты участников
-   * продолжают прежний чат. Возвращает сведения новой группы; undefined — рано
-   * (кто-то ещё на v1) либо перевод уже сделан.
-   */
-  async function migrateGroup(v1: WireGroupInfo) {
-    if (!ready || !client) return undefined;
-    const self = deps.getSelf();
-    if (v1.created_by !== self) return undefined;
-    const already = client.groupList().some((hex) => readGroup(hex)?.migratedFrom === v1.group_id);
-    if (already) return undefined;
-    const active = v1.members.filter(({ role }) => role !== 'banned' && role !== 'left');
-    const others = active.map(({ address }) => address).filter((address) => address !== self);
-    for (const member of [self, ...others]) {
-      if (legacyDevices(member).size) return undefined;
-    }
-    const created = await createGroup(v1.name, others, v1.kind, v1.group_id, v1.default_permissions);
-    if (!created) return undefined;
-    const address = created.group_id;
-    deps.log(`v2: группа v1 ${v1.group_id} переведена в ${address}`);
-    // Доводка сведений: сбой любой записи не отменяет перевод — владелец поправит руками
-    const step = async (what: string, apply: () => Promise<unknown>) => {
-      try {
-        await apply();
-      } catch (e) {
-        deps.log(`v2: перевод группы — ${what} не перенесено: ${String(e)}`);
-      }
-    };
-    if (v1.about || v1.avatar) {
-      await step('описание и фото', () => setGroupInfo(address, { about: v1.about, avatarFileId: v1.avatar }));
-    }
-    const fullRights = Object.fromEntries(ADMIN_RIGHT_FIELDS.map((field) => [field, true]));
-    for (const member of active) {
-      if (member.role !== 'admin' || member.address === self) continue;
-      await step(`админ ${member.address}`, () => changeGroup(address, {
-        set_role: {
-          member: { address: member.address },
-          role: 'ROLE_ADMIN',
-          rights: member.admin_rights || fullRights,
-        },
-      }));
-    }
-    return groupInfo(address);
-  }
-
   /** Изменение группы записью журнала (proto3-JSON `group.v2.GroupChange`). */
   async function changeGroup(address: string, change: Record<string, unknown>) {
     if (!ready || !client || !isV2GroupAddress(address)) return false;
@@ -2728,50 +2664,6 @@ export function createV2Controller(deps: Deps) {
     return devices.v2.length ? devices : undefined;
   }
 
-  /** Подписанный список v1-устройств пользователя: id → identity-ключ (FR-058). */
-  function legacyDevices(user: string): Map<string, string> {
-    return new Map((logDevices(user)?.legacyKeys || []).map((d) => [d.deviceId, d.identity]));
-  }
-
-  // Свой список v1-устройств (FR-054/FR-058): первое v2-устройство публикует
-  // его в журнале устройств, и v2-собеседники шлют этим устройствам копии по
-  // v1. Дальше список только сокращается (устройство перешло на v2 или
-  // исчезло) — появившееся позже v1-устройство копий не получит
-  async function syncLegacySet() {
-    if (!client || !ready || !deps.listOwnV1Devices) return;
-    const own = logDevices(deps.getSelf());
-    if (!own) return;
-    const stripPadding = (key: string) => key.replace(/=+$/, '');
-    let candidates: { deviceId: string; identity: string; signing: string }[];
-    try {
-      candidates = (await deps.listOwnV1Devices())
-        .filter((d) => d.deviceId && d.identity && d.signing && !own.v2.includes(d.deviceId))
-        .map((d) => ({ deviceId: d.deviceId, identity: stripPadding(d.identity), signing: stripPadding(d.signing) }));
-    } catch {
-      return;
-    }
-    let next: typeof candidates;
-    if (!own.legacySet) {
-      if (!candidates.length) return;
-      next = candidates;
-    } else {
-      next = own.legacyKeys.filter((k) => (
-        candidates.some((d) => d.deviceId === k.deviceId && d.identity === k.identity)
-      ));
-      if (next.length === own.legacyKeys.length) return;
-    }
-    try {
-      const req = client.legacyDevicesRequest(JSON.stringify(next)) as OutReq;
-      await call(req.chan, req.method, req.body);
-      // Запись попадает в свой журнал синком — только после подтверждения сервера
-      await checkOwnDevices();
-      deps.log(`v2: список v1-устройств опубликован (${next.length})`);
-    } catch (e) {
-      // Нет SSK на этом устройстве либо журнал ушёл вперёд — догонит другое устройство
-      deps.log(`v2: список v1-устройств не опубликован: ${String(e)}`);
-    }
-  }
-
   // Пробуждение v2 (`push.wake.*`, T102): тот же VAPID, что у v1; журнал
   // v2 будит устройство только через свою регистрацию
   async function pushRegister(subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) {
@@ -2908,6 +2800,9 @@ export function createV2Controller(deps: Deps) {
     sessionProof,
     isReady: () => ready,
     needsLinking: () => needsLinking,
+    deviceId: () => ownDeviceId,
+    /** Строка истории по id (своя отправка либо кэш истории) — для правки. */
+    storedMessage: knownMessage,
     linkGrantMaterial,
     joinWithGrant,
     revokeDevice,
@@ -2924,7 +2819,6 @@ export function createV2Controller(deps: Deps) {
     exportBackup,
     importBackup,
     cachedGroups,
-    migrateGroup,
     changeGroup,
     setGroupInfo,
     checkInvite,
@@ -2948,8 +2842,6 @@ export function createV2Controller(deps: Deps) {
     isV2Chat,
     isV2InviteUrl: (url: string) => Boolean(parseV2Invite(url)) || V2_INVITE_REGEX.test(url.trim()),
     logDevices,
-    legacyDevices,
-    deliverLegacy,
     pushRegister,
     pushUnregister,
     setPrivacy,

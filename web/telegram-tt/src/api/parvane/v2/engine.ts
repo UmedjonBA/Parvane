@@ -6,7 +6,7 @@ import wasmUrl from '../../../lib/parvane-protocol/parvane_protocol_bg.wasm?url'
 
 export type Protocol = typeof pv;
 export type {
-  PvClient, PvMegolmInbound, PvMegolmOutbound, PvOlmAccount, PvOlmSession, PvState,
+  PvClient, PvState,
 } from '../../../lib/parvane-protocol/parvane_protocol';
 
 let loading: Promise<Protocol> | undefined;

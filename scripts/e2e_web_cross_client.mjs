@@ -423,10 +423,8 @@ try {
   // ── Группа web → desktop (spec 003, GROUP-1): описание и фото группы,
   // заданные в вебе, доходят до десктопа нотисом и видны в логе ────────────
   // Группа — `v2g:<hex>`, сведения приходят записями журнала группы (источник
-  // «v2 новая» / «v2 журнал»); ревизия — версия журнала. T110: иначе не бывает,
-  // ветки `!IS_V2` (нотис и список v1-шарда) больше не выполняются
-  const IS_V2 = true;
-  const GID = IS_V2 ? 'v2g:[0-9a-f]{32}' : '[0-9a-f-]{36}';
+  // «v2 новая» / «v2 журнал»); ревизия — версия журнала
+  const GID = 'v2g:[0-9a-f]{32}';
   const groupTitle = `XC-${suffix.slice(-6)}`;
   const groupCreated = await aliceSession.page.evaluate(async ({ title, name }) => {
     const global = window.__parvaneGetGlobal();
@@ -438,15 +436,13 @@ try {
   }, { title: groupTitle, name: bob.split('@')[0] });
   assert(groupCreated.chatId, `group not created: ${JSON.stringify(groupCreated)}`);
   const beforeGroup = readDesktopLog(bobWorkdir).length;
-  await waitDesktopLog(bobWorkdir, new RegExp(IS_V2
-    ? `группа ${GID} обновлена \\(v\\d+, v2 (новая|журнал)\\)`
-    : `группа ${GID} обновлена \\(v0, список\\)`), 90000, desktop, { since: beforeGroup });
+  await waitDesktopLog(bobWorkdir, new RegExp(`группа ${GID} обновлена \\(v\\d+, v2 (новая|журнал)\\)`),
+    90000, desktop, { since: beforeGroup });
   const aboutText = `about-${suffix.slice(-6)}`;
   const aboutResult = await callProviderForChat(aliceSession.page, 'updateChatAbout', groupTitle, undefined, ['$chat', aboutText]);
   assert.equal(aboutResult.result, true, `updateChatAbout failed: ${JSON.stringify(aboutResult)}`);
-  await waitDesktopLog(bobWorkdir, new RegExp(IS_V2
-    ? `группа ${GID} обновлена \\(v\\d+, v2 журнал\\) about=${aboutText} avatar=-`
-    : `группа ${GID} обновлена \\(v1, нотис\\) about=${aboutText} avatar=-`), 30000, desktop, { since: beforeGroup });
+  await waitDesktopLog(bobWorkdir, new RegExp(`группа ${GID} обновлена \\(v\\d+, v2 журнал\\) about=${aboutText} avatar=-`),
+    30000, desktop, { since: beforeGroup });
   await aliceSession.page.evaluate(async ({ title }) => {
     const global = window.__parvaneGetGlobal();
     const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === title);
@@ -460,9 +456,9 @@ try {
     const file = new File([blob], 'group.png', { type: 'image/png' });
     return window.__parvaneDiagCallApi('editChatPhoto', { chatId: chat.id, photo: file });
   }, { title: groupTitle });
-  await waitDesktopLog(bobWorkdir, new RegExp(IS_V2
-    ? `группа ${GID} обновлена \\(v\\d+, v2 журнал\\) about=about-[0-9]+ avatar=[0-9A-Za-z_-]{8,}`
-    : `группа ${GID} обновлена \\(v2, нотис\\) about=about-[0-9]+ avatar=[0-9a-f-]{36}`), 30000, desktop, { since: beforeGroup });
+  await waitDesktopLog(bobWorkdir, new RegExp(
+    `группа ${GID} обновлена \\(v\\d+, v2 журнал\\) about=about-[0-9]+ avatar=[0-9A-Za-z_-]{8,}`,
+  ), 30000, desktop, { since: beforeGroup });
   await waitDesktopLog(bobWorkdir, new RegExp(`аватар применён для ${GID}`), 30000, desktop, { since: beforeGroup });
 
   // ── Группа desktop → web (spec 004, US6): описание, права и ссылка, заданные
@@ -471,7 +467,7 @@ try {
   const promote = await callProviderForChat(aliceSession.page, 'updateChatAdmin', groupTitle, bob.split('@')[0], {
     // v2: права по умолчанию меняет админ с правом «блокировать участников»
     // (запись `set_permissions` журнала группы), в v1 хватало `change_info`
-    chat: '$chat', user: '$user', adminRights: { changeInfo: true, inviteUsers: true, banUsers: IS_V2 || undefined },
+    chat: '$chat', user: '$user', adminRights: { changeInfo: true, inviteUsers: true, banUsers: true },
   });
   assert.equal(promote.result, true, `updateChatAdmin failed: ${JSON.stringify(promote)}`);
   await stopDesktop(desktop);
@@ -485,8 +481,6 @@ try {
   await waitDesktopLog(bobWorkdir, /AUTOGROUPINFO .* about → ok/, 60000, desktop, { since: beforeManage });
   await waitDesktopLog(bobWorkdir, /AUTOGROUPPERMS .* → ok/, 60000, desktop, { since: beforeManage });
   await waitDesktopLog(bobWorkdir, /AUTOGROUPINVITE .* create → ok \S+/, 60000, desktop, { since: beforeManage });
-  const desktopToken = readDesktopLog(bobWorkdir).match(/AUTOGROUPINVITE .* create → ok ([0-9a-f]{32})/)?.[1];
-  assert(IS_V2 || desktopToken, 'desktop did not report the created invite token');
   // web видит описание и права без reload (нотис GROUP-1)
   await aliceSession.page.waitForFunction(({ title }) => {
     const global = window.__parvaneGetGlobal();
@@ -494,18 +488,6 @@ try {
     const full = chat && global.chats.fullInfoById?.[chat.id];
     return Boolean(chat && full && full.about === 'from-desktop' && chat.defaultBannedRights?.sendPolls === true);
   }, { title: groupTitle }, { timeout: 30000 });
-  // web видит ссылку, созданную на десктопе, в списке ссылок группы
-  // (v2: секрет ссылки знает только создавшее её устройство — чужую ссылку
-  // владелец в списке не видит; проверяется только создание на десктопе)
-  if (!IS_V2) {
-    const invites = await callProviderForChat(aliceSession.page, 'fetchExportedChatInvites', groupTitle, undefined, {
-      chat: '$chat', isRevoked: false,
-    });
-    const desktopLink = invites.result?.invites?.find((invite) => invite.link.includes(desktopToken));
-    assert(desktopLink, `web does not list the desktop-created link: ${JSON.stringify(invites).slice(0, 300)}`);
-    assert.equal(desktopLink.title, 'from-desktop');
-    assert.equal(desktopLink.usageLimit, 3);
-  }
   // web → desktop: права, изменённые в web, перерисовывают сведения на десктопе
   const revert = await callProviderForChat(aliceSession.page, 'updateChatDefaultBannedRights', groupTitle, undefined, {
     chat: '$chat', bannedRights: { sendPolls: false },

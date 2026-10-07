@@ -1,6 +1,5 @@
 import type { SendMessageParams } from '../../types';
 import type { ApiChat, ApiMessage, ApiUpdate } from '../types';
-import type { E2eEngine } from './e2e';
 import type { ParvaneStore } from './store';
 import type { WireStoredMessage } from './wire';
 
@@ -36,7 +35,6 @@ export type JournalScheduled = {
 
 type LocalStateDependencies = {
   getStore: () => ParvaneStore;
-  getE2e: () => E2eEngine | undefined;
   isAuthorized: () => boolean;
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
@@ -643,11 +641,6 @@ export function createLocalState(deps: LocalStateDependencies) {
         return;
       }
       const store = deps.getStore();
-      // Снять расшифрованный inner из persisted-кэша ДО удаления сообщения
-      // (после removeMessage маппинг id→uuid теряется). Иначе plaintext
-      // «самоуничтожающегося» сообщения остаётся на диске навсегда
-      const uuid = store.getUuidForMessage(chatId, messageId);
-      if (uuid) deps.getE2e()?.dropCachedInner(uuid);
       store.removeMessage(chatId, messageId);
       deps.sendUpdate({ '@type': 'deleteMessages', ids: [messageId], chatId });
     }, delay));

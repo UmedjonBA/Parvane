@@ -555,6 +555,11 @@
         "show": false,
         "ack": false,
         "retry": true
+      },
+      "clients": {
+        "web": "web — с T110 Olm/Megolm-пути нет: автора и ключи проверяет движок v2 (сертификат устройства, подпись записи), строка приходит расшифрованной; шифртекст v1 (LegacyV1) пропускается (sync.ts)",
+        "desktop": "desktop/parvane-core/src/e2e.cpp, messenger_client.cpp — до T110 desktop",
+        "android": "android/jni/parvane_jni.cpp — до T110 android"
       }
     },
     {
@@ -628,6 +633,11 @@
         "oldPubB64": "BAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
         "commitmentOfNew": "mM5C3u9R1AJp1UL1MUvvLHRo1AGtXYUWi/q0wBCPdfc=",
         "sas": "5659 7031 8371"
+      },
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/linking.ts (ECDH, commitment, SAS v2), provider.ts (оффер/challenge/грант; экспорт — `{linkVersion: 2, v2History}` + грант движка вторым блобом; с T110 материала v1 и transfer нет), v2/linkHistory.ts, keyBackup.ts (ручная копия — устройство v2 + история)",
+        "desktop": "desktop/parvane-core/src/v2_link.cpp, tdesktop parvane_client.cpp (WithV2History, ImportV2History) — экспорт с материалом v1 до T110 desktop",
+        "android": "android/jni/parvane_jni.cpp (importV2HistoryLocked)"
       }
     },
     {
@@ -637,7 +647,12 @@
       "catalogSeedsSeenOnlyOnFirstContact": true,
       "prekeySignatureRequiredInDeviceList": true,
       "legacyBundleWithoutSigningKeyAccepted": true,
-      "allDevicesRejectedVerdict": "unknown"
+      "allDevicesRejectedVerdict": "unknown",
+      "clients": {
+        "web": "web — с T110 ключей устройств v1 нет: смена ключа собеседника — смена корня журнала устройств (RECOVER-1, provider.ts onPeerRootChanged → sync.ts announceKeyChange)",
+        "desktop": "desktop/parvane-core/src/e2e.cpp (rememberContactIdentity, g_seenIds, prekeySigOk) — до T110 desktop",
+        "android": "то же ядро — до T110 android"
+      }
     },
     {
       "id": "SEND-1",

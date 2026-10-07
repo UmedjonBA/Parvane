@@ -39,8 +39,10 @@ type CallCallbacks = {
   getRingTimeoutMs?: () => number;
   // Идёт групповой звонок — входящий личный отбиваем «занято»
   isBusy?: () => boolean;
-  sign: (data: string) => string;
-  verify: (publicKey: string, data: string, signature: string) => boolean;
+  // Подпись SDP ключом устройства (прежний v1-путь). Без неё сигнал уходит без
+  // `sig`: конверт v2 аутентифицирует отправителя сам (`isAuthenticated`)
+  sign?: (data: string) => string;
+  verify?: (publicKey: string, data: string, signature: string) => boolean;
   onState: (state: CallState) => void;
   onRemoteStream: (stream: MediaStream) => void;
   onIncoming: (from: string, callId: string, media: CallMedia) => void;
@@ -122,7 +124,7 @@ export class CallEngine {
       if (!this.isCurrentConnection(peer, callId, pc)) return;
       const sdp = offer.sdp || '';
       const signature = this.signSdp(sdp);
-      if (!signature) {
+      if (this.cb.sign && !signature) {
         this.failSecurity();
         return;
       }
@@ -160,7 +162,7 @@ export class CallEngine {
       if (!this.isCurrentConnection(from, callId, pc)) return;
       const sdp = answer.sdp || '';
       const signature = this.signSdp(sdp);
-      if (!signature) {
+      if (this.cb.sign && !signature) {
         this.failSecurity('reject');
         return;
       }
@@ -407,7 +409,7 @@ export class CallEngine {
 
   private signSdp(sdp: string) {
     try {
-      return this.callId ? this.cb.sign(buildSignedData(this.callId, sdp)) : '';
+      return this.callId && this.cb.sign ? this.cb.sign(buildSignedData(this.callId, sdp)) : '';
     } catch {
       return '';
     }
@@ -416,7 +418,7 @@ export class CallEngine {
   private verifySdp(sdp: string, signature?: string) {
     if (!this.callId || !signature) return false;
     const data = buildSignedData(this.callId, sdp);
-    return this.peerSigningKeys.some((key) => this.cb.verify(key, data, signature));
+    return this.peerSigningKeys.some((key) => this.cb.verify?.(key, data, signature));
   }
 
   private failSecurity(notifyPeer?: 'reject' | 'hangup') {
