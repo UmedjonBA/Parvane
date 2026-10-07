@@ -367,68 +367,13 @@ fn dev_and_production_acl_match_the_contract() {
         assert_acl("server.prod.conf", PROD_NATS, &role);
     }
 
-    // Прямой client существует только в dev и должен иметь тот же bus-периметр,
-    // что gateway. Изоляция пользователей всё равно выполняется gateway.
-    let client = RoleContract {
-        name: "client",
-        subscribe: GATEWAY_NATS_SUBSCRIBE,
-        publish: GATEWAY_NATS_PUBLISH,
-    };
-    assert_acl("server.conf", DEV_NATS, &client);
+    // Прямого пользователя `client` (v1 dev-путь десктопа в шину) больше нет
+    // нигде (T110): клиенты ходят только через gateway.
+    assert!(user_block(DEV_NATS, "client").is_none());
     assert!(user_block(PROD_NATS, "client").is_none());
     assert!(user_block(PROD_NATS, "dev").is_none());
 }
 
-#[test]
-fn gateway_runtime_allowlist_is_covered_by_its_nats_acl() {
-    for subject in GATEWAY_ALLOWED_PUBLISH
-        .iter()
-        .chain(GATEWAY_ALLOWED_REQUEST.iter())
-    {
-        assert!(
-            acl_covers(GATEWAY_NATS_PUBLISH, subject),
-            "gateway разрешает {subject}, но NATS publish ACL его блокирует"
-        );
-    }
-    for subject in ["msg.typing.42", "presence.42"] {
-        assert!(acl_covers(GATEWAY_NATS_PUBLISH, subject));
-    }
-    for subject in [
-        "msg.user.alice@local",
-        "call.user.alice@local",
-        "msg.typing.42",
-        "presence.*",
-        "_INBOX.random",
-    ] {
-        assert!(
-            acl_covers(GATEWAY_NATS_SUBSCRIBE, subject),
-            "gateway подписывается на {subject}, но NATS subscribe ACL его блокирует"
-        );
-    }
-
-    for subject in GATEWAY_EVENT_SUBJECTS {
-        assert!(
-            GATEWAY_ALLOWED_PUBLISH.contains(subject) || GATEWAY_ALLOWED_REQUEST.contains(subject),
-            "actor-binding содержит недоступный клиенту subject {subject}"
-        );
-    }
-    for subject in GATEWAY_TOKEN_REQUEST_SUBJECTS {
-        assert!(GATEWAY_ALLOWED_REQUEST.contains(subject));
-    }
-
-    // Gateway должен использовать центральные списки, а не локальные копии.
-    for name in [
-        "GATEWAY_ALLOWED_PUBLISH",
-        "GATEWAY_ALLOWED_REQUEST",
-        "GATEWAY_EVENT_SUBJECTS",
-        "GATEWAY_TOKEN_REQUEST_SUBJECTS",
-    ] {
-        assert!(
-            GATEWAY_SOURCE.contains(name),
-            "gateway не использует {name}"
-        );
-    }
-}
 
 /// Протокол v2 (T031): блоки ACL между маркерами `# >>> v2 …` в обоих
 /// конфигах NATS совпадают с тем, что генерирует реестр методов.

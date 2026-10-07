@@ -1,12 +1,7 @@
-//! Инструмент E6 (T110): режим v1-пути gateway `PARVANE_V1_MODE` против
-//! живого стека. Три gateway на одном NATS/identity:
-//! - `normal` — вход по v1 без дополнительных кадров;
-//! - `notice` — после `auth_ok` приходит `{"op":"notice","kind":"upgrade_available"}`,
-//!   v1 работает дальше;
-//! - `disabled` — любое v1-соединение на первый же свой кадр (протокол
-//!   соединения gateway узнаёт по первым байтам клиента) получает
-//!   `{"op":"err","error":"upgrade_required"}` и закрывается.
-//! Рукопожатие v2 (Hello → Welcome → Auth → AuthOk) во всех режимах работает.
+//! T110: протокол v1 удалён из gateway. Любое v1-соединение (JSON-строка по TCP)
+//! на первый же свой кадр получает `{"op":"err","error":"upgrade_required"}` и
+//! закрывается — при любом значении прежней переменной `PARVANE_V1_MODE`.
+//! Рукопожатие v2 (Hello → Welcome → Auth → AuthOk) на том же порту работает.
 //!
 //! Без `nats-server` тест печатает SKIP и проходит.
 
@@ -115,7 +110,7 @@ fn v2_handshake(addr: &str, token: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn v1_mode_notice_and_disabled_live() {
+async fn v1_frames_are_refused_live() {
     let Some(nats_bin) = find_nats_server() else {
         eprintln!("SKIP: nats-server не найден (PATH, ~/.local/bin)");
         return;
@@ -188,48 +183,23 @@ async fn v1_mode_notice_and_disabled_live() {
     let issued = req(&nc, IDENTITY_ISSUE, json!({"user": user, "password": PASSWORD, "device_id": "d1"})).await;
     let token = issued["token"].as_str().unwrap_or_else(|| panic!("issue: {issued}")).to_string();
 
-    let (normal, notice, disabled) = (addr["normal"].clone(), addr["notice"].clone(), addr["disabled"].clone());
+    let addrs: Vec<String> = addr.values().cloned().collect();
     tokio::task::spawn_blocking(move || {
-        // normal: вход без дополнительных кадров.
-        let mut gw = Gw::connect(&normal);
-        assert!(gw.send(json!({"op": "auth", "token": token})));
-        let ok = gw.recv().unwrap_or(Value::Null);
-        assert_eq!(ok["op"], "auth_ok", "{ok}");
-        assert!(gw.recv().is_none(), "normal: после auth_ok кадров нет");
-        assert!(v2_handshake(&normal, &token), "normal: рукопожатие v2");
-
-        // notice: сразу после auth_ok — кадр upgrade_available; v1 работает дальше.
-        let mut gw = Gw::connect(&notice);
-        assert!(gw.send(json!({"op": "auth", "token": token})));
-        let ok = gw.recv().unwrap_or(Value::Null);
-        assert_eq!(ok["op"], "auth_ok", "{ok}");
-        let n = gw.recv().unwrap_or(Value::Null);
-        assert_eq!(n, json!({"op": "notice", "kind": "upgrade_available"}), "notice: кадр после входа");
-        assert!(gw.send(json!({"op": "req", "id": "r1", "subject": IDENTITY_SERVER_INFO, "payload": "{}"})));
-        let r = gw.recv().unwrap_or(Value::Null);
-        assert!(r["op"] == "reply" && r["id"] == "r1", "notice: v1-запрос после кадра работает: {r}");
-        assert!(v2_handshake(&notice, &token), "notice: рукопожатие v2");
-        // До входа кадра notice нет (pre-auth запрос отвечает как обычно).
-        let mut pre = Gw::connect(&notice);
-        assert!(pre.send(json!({"op": "req", "id": "p1", "subject": IDENTITY_SERVER_INFO, "payload": "{}"})));
-        let r = pre.recv().unwrap_or(Value::Null);
-        assert!(r["op"] == "reply" && r["id"] == "p1", "notice: pre-auth запрос: {r}");
-
-        // disabled: на первый же v1-кадр (здесь — pre-auth запрос) приходит
-        // безадресный upgrade_required вместо ответа, затем закрытие.
-        let mut gw = Gw::connect(&disabled);
-        assert!(gw.send(json!({"op": "req", "id": "p1", "subject": IDENTITY_SERVER_INFO, "payload": "{}"})));
-        let e = gw.recv().unwrap_or(Value::Null);
-        assert_eq!(e, json!({"op": "err", "error": "upgrade_required"}), "disabled: первый кадр");
-        assert!(e.get("id").is_none(), "disabled: ошибка безадресная");
-        assert!(gw.closed(), "disabled: соединение закрыто сервером");
-        // Вход по v1 невозможен, v2 на том же порту работает.
-        let mut gw = Gw::connect(&disabled);
-        let _ = gw.send(json!({"op": "auth", "token": token}));
-        let first = gw.recv().unwrap_or(Value::Null);
-        assert_eq!(first["error"], "upgrade_required", "disabled: auth не принимается: {first}");
-        assert!(gw.closed(), "disabled: после отказа соединение закрыто (auth_ok не приходит)");
-        assert!(v2_handshake(&disabled, &token), "disabled: рукопожатие v2 работает");
+        for a in &addrs {
+            // На первый же v1-кадр — безадресный upgrade_required и закрытие.
+            let mut gw = Gw::connect(a);
+            assert!(gw.send(json!({"op": "req", "id": "p1", "subject": IDENTITY_SERVER_INFO, "payload": "{}"})));
+            let e = gw.recv().unwrap_or(Value::Null);
+            assert_eq!(e, json!({"op": "err", "error": "upgrade_required"}), "{a}: первый кадр v1");
+            assert!(gw.closed(), "{a}: соединение закрыто сервером");
+            // Вход по v1 невозможен, v2 на том же порту работает.
+            let mut gw = Gw::connect(a);
+            let _ = gw.send(json!({"op": "auth", "token": token}));
+            let first = gw.recv().unwrap_or(Value::Null);
+            assert_eq!(first["error"], "upgrade_required", "{a}: auth не принимается: {first}");
+            assert!(gw.closed(), "{a}: после отказа соединение закрыто");
+            assert!(v2_handshake(a, &token), "{a}: рукопожатие v2 работает");
+        }
     })
     .await
     .unwrap();

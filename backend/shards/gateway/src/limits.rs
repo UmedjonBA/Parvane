@@ -85,68 +85,12 @@ impl TokenBucket {
     }
 }
 
-/// Лимиты одной авторизованной сессии по классам операций.
-pub(crate) struct SessionRate {
-    pub(crate) messages: TokenBucket,
-    pub(crate) uploads: TokenBucket,
-    pub(crate) requests: TokenBucket,
-}
-
-impl SessionRate {
-    pub(crate) fn from_env() -> Self {
-        Self {
-            // сообщения/правки/реакции: всплеск 30, устойчиво 3 в секунду
-            messages: TokenBucket::new(env_f64("GATEWAY_RATE_MSG_BURST", 30.0), env_f64("GATEWAY_RATE_MSG_PER_SEC", 3.0)),
-            // чанки загрузки (256 КиБ): всплеск 400, устойчиво 40/с ≈ 10 МБ/с
-            uploads: TokenBucket::new(env_f64("GATEWAY_RATE_UPLOAD_BURST", 400.0), env_f64("GATEWAY_RATE_UPLOAD_PER_SEC", 40.0)),
-            // прочие request/reply: всплеск 120, устойчиво 20/с
-            requests: TokenBucket::new(env_f64("GATEWAY_RATE_REQ_BURST", 120.0), env_f64("GATEWAY_RATE_REQ_PER_SEC", 20.0)),
-        }
-    }
-
-    /// true — операция допущена; false — лимит исчерпан
-    pub(crate) fn allow(&mut self, subject: &str) -> bool {
-        if subject == FILE_UPLOAD_CHUNK || subject == FILE_UPLOAD_COMPLETE {
-            self.uploads.try_take()
-        } else if subject.starts_with(MSG_CHAT_PREFIX) {
-            self.messages.try_take()
-        } else {
-            self.requests.try_take()
-        }
-    }
-}
-
-pub(crate) const RATE_LIMITED: &str = "rate_limited: слишком часто, подождите";
-
-/// GW-01: потолок payload эфемерных кадров v1 (`msg.typing.*`, `presence.*`).
-pub(crate) const EPHEMERAL_MAX_BYTES: usize = 1024;
-/// GW-01: столько ждём, пока клиент заберёт кадр подписки; дольше — клиент не
-/// читает, сессия закрывается (очередь не копится в памяти gateway).
-pub(crate) const SLOW_READER_SECS: u64 = 10;
 /// Столько даём writer'у дослать хвост после завершения сессии (нечитающий
 /// клиент иначе держал бы задачу и слот соединения бессрочно).
 pub(crate) const WRITER_FLUSH_SECS: u64 = 5;
-
-/// GW-06: корзина запросов ДО входа (одна на соединение): bootstrap-запросы
-/// identity шли без лимита частоты.
-pub(crate) fn pre_auth_bucket() -> TokenBucket {
-    TokenBucket::new(env_f64("GATEWAY_RATE_PRE_BURST", 20.0), env_f64("GATEWAY_RATE_PRE_PER_SEC", 2.0))
-}
 
 /// GW-02: простой анонимного v2-соединения (секунды) до закрытия; раньше —
 /// сутки, и аноним занимал все слоты соединений молчащими сокетами.
 pub(crate) fn anon_idle_secs() -> u64 {
     std::env::var("PARVANE_GATEWAY_ANON_IDLE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30)
-}
-
-/// Bootstrap-запросы (регистрация/логин) идут до auth, поэтому identity не знает
-/// источник; подмешиваем `client_ip` в JSON-объект payload (поле клиента, если
-/// он его прислал, перезаписывается — подделать нельзя).
-/// P-33: потолок подписок на одну сессию.
-pub(crate) const MAX_SUBS_PER_SESSION: usize = 64;
-/// P-33: клиентский timeout_ms ограничен 30 с — иначе висящие reqmany/req
-/// держали бы задачи и inbox'ы NATS неограниченно.
-pub(crate) const MAX_TIMEOUT_MS: u64 = 30_000;
-pub(crate) fn clamp_timeout(timeout_ms: u64) -> u64 {
-    timeout_ms.clamp(100, MAX_TIMEOUT_MS)
 }

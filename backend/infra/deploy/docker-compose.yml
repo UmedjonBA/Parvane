@@ -189,9 +189,6 @@ services:
       # защита от abuse — на уровне conn-лимита и (позже) rate-limit в Caddy.
       PARVANE_GATEWAY_MAX_CONNS: "2000"
       PARVANE_GATEWAY_MAX_CONNS_PER_IP: "2000"
-      # E6: normal | notice | disabled (в .env сервера; при disabled по v1 проходит
-      # только запрос Telegram-бота identity.telegram.confirm)
-      PARVANE_V1_MODE: ${PARVANE_V1_MODE:-normal}
       PARVANE_LOG_LEVEL: info
     mem_limit: 1g
     pids_limit: 512
