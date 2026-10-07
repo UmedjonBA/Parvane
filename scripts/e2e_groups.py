@@ -28,7 +28,7 @@ def now():
 
 
 def newid():
-    return str(uuid.uuid4())
+    return str(uuid.uuid7())  # сервер требует UUID v7 в окне времени (MSG-04)
 
 
 # Политика паролей (P-43): не короче 8 символов, заглавная и цифра

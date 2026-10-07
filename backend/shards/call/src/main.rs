@@ -99,6 +99,40 @@ const INVITE_COOLDOWN_SECS: i64 = 5;
 const MAX_RINGING_PER_CALLER: i64 = 3;
 /// P-35: не больше стольких invite от одного инициатора за минуту.
 const INVITES_PER_MINUTE: i64 = 20;
+/// MSG-06: строки группового приглашения.
+const MAX_GROUP_CALL_ID_BYTES: usize = 128;
+const MAX_MEDIA_BYTES: usize = 32;
+/// MSG-06: групповых приглашений одной паре (from → to) за минуту.
+const GROUP_INVITES_PER_PAIR_PER_MINUTE: usize = 3;
+
+/// MSG-06: темп групповых приглашений в памяти (в `calls` они не записываются):
+/// по паре и по инициатору за 60 с; карта выселяется при росте.
+fn group_invite_rate_ok(from: &str, to: &str, now: i64) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static MAP: OnceLock<Mutex<HashMap<String, Vec<i64>>>> = OnceLock::new();
+    let map = MAP.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.len() > 50_000 {
+        guard.retain(|_, hits| {
+            hits.retain(|&t| now - t < 60);
+            !hits.is_empty()
+        });
+    }
+    let pair = guard.entry(format!("p:{from}\u{0}{to}")).or_default();
+    pair.retain(|&t| now - t < 60);
+    if pair.len() >= GROUP_INVITES_PER_PAIR_PER_MINUTE {
+        return false;
+    }
+    pair.push(now);
+    let own = guard.entry(format!("f:{from}")).or_default();
+    own.retain(|&t| now - t < 60);
+    if own.len() >= INVITES_PER_MINUTE as usize {
+        return false;
+    }
+    own.push(now);
+    true
+}
 const RINGING_WINDOW_SECS: i64 = 120;
 
 /// Cooldown invite по паре (from → to): по последней записи в `calls`, т.е.
@@ -140,12 +174,24 @@ async fn record_signal(
         anyhow::bail!("некорректные участники звонка");
     }
 
-    if let CallSignal::GroupInvite { group_call_id, participants, .. } = signal {
+    if let CallSignal::GroupInvite { group_call_id, participants, media } = signal {
         let unique: std::collections::HashSet<&str> = participants.iter().map(String::as_str).collect();
         if group_call_id.is_empty() || participants.len() < 2 || participants.len() > 32
             || unique.len() != participants.len() || !unique.contains(from) || !unique.contains(target)
         {
             anyhow::bail!("некорректное групповое приглашение");
+        }
+        // MSG-06: групповое приглашение шло мимо всех лимитов P-35 — любой аккаунт
+        // «звонил» любому до 20 раз в секунду кадром до 4 МиБ. Строки ограничены,
+        // темп — как у личного invite (по паре и по инициатору).
+        if group_call_id.len() > MAX_GROUP_CALL_ID_BYTES
+            || media.len() > MAX_MEDIA_BYTES
+            || participants.iter().any(|p| !parvane_types::address::is_valid_address(p))
+        {
+            anyhow::bail!("некорректное групповое приглашение");
+        }
+        if !group_invite_rate_ok(from, target, now) {
+            anyhow::bail!("слишком частые групповые приглашения");
         }
         return Ok(());
     }

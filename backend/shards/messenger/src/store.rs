@@ -31,6 +31,15 @@ pub(crate) async fn store_message_from(
     if content_json.len() > MAX_CONTENT_BYTES {
         anyhow::bail!("сообщение больше лимита {} байт", MAX_CONTENT_BYTES);
     }
+    // MSG-01: раньше копия сверх лимита пропускалась только при записи в БД, а в
+    // доставку (и в журнал v2-устройств получателя) кадр уходил целиком — одно
+    // такое сообщение заклинивало синк адресата навсегда. Отказ — всему сообщению.
+    if ev.payload.copies.len() > MAX_DEVICE_COPIES {
+        anyhow::bail!("слишком много device-копий (максимум {})", MAX_DEVICE_COPIES);
+    }
+    if ev.payload.copies.iter().any(|c| c.ciphertext.len() > MAX_COPY_BYTES) {
+        anyhow::bail!("device-копия больше лимита {} байт", MAX_COPY_BYTES);
+    }
     let reply_to = ev.payload.reply_to.map(|u| u.to_string());
     // P-09: повтор чужого/существующего id отклоняем ЦЕЛИКОМ. Раньше
     // INSERT OR IGNORE молча игнорировал вставку, но копии и доставка
@@ -74,6 +83,25 @@ pub(crate) const SYNC_PAGE_BYTE_BUDGET: usize = 700 * 1024;
 /// Лимит per-device копий на сообщение: устройства одного получателя + свои —
 /// десятков достаточно, а мусорный fan-out отсечёт.
 pub(crate) const MAX_DEVICE_COPIES: usize = 64;
+/// MSG-03: реакция — эмодзи, не произвольная строка (раньше до 4 МиБ попадало
+/// в каждую страницу синка участников).
+pub(crate) const MAX_REACTION_BYTES: usize = 64;
+/// MSG-04: id сообщения задаёт клиент (UUID v7), а курсор синка получателя —
+/// максимум увиденных id: id «из будущего» замораживал курсор навсегда.
+/// Допустимое окно метки времени в id относительно часов сервера.
+pub(crate) const MSG_ID_MAX_PAST_SECS: i64 = 30 * 86_400;
+pub(crate) const MSG_ID_MAX_FUTURE_SECS: i64 = 300;
+
+/// MSG-04: id сообщения — UUID v7 с меткой времени в допустимом окне.
+pub(crate) fn message_id_fresh(id: &Uuid, now: i64) -> bool {
+    if id.get_version_num() != 7 {
+        return false;
+    }
+    let Some(ts) = id.get_timestamp() else { return false };
+    let (secs, _) = ts.to_unix();
+    let secs = secs as i64;
+    secs >= now - MSG_ID_MAX_PAST_SECS && secs <= now + MSG_ID_MAX_FUTURE_SECS
+}
 
 /// Сохранить per-device sealed-копии (мультидевайс). Идемпотентно.
 pub(crate) async fn store_device_copies(
@@ -705,11 +733,6 @@ pub(crate) async fn fetch_missed_with_keys(
         // ответа не должен превысить NATS max_payload; лишнее уедет следующим
         // sync (курсор по rowid, порядок сохранён). Хотя бы одно сообщение
         // отдаём всегда (иначе крупное сообщение заклинит синк).
-        let row_bytes = content_json.as_ref().map(String::len).unwrap_or(0);
-        if !messages.is_empty() && budget_used + row_bytes > SYNC_PAGE_BYTE_BUDGET {
-            break;
-        }
-        budget_used += row_bytes;
         // content может быть NULL только для legacy-строк без миграции данных;
         // в норме всегда заполнен.
         let mut content = match content_json {
@@ -727,6 +750,16 @@ pub(crate) async fn fetch_missed_with_keys(
         }
         // Агрегат реакций: эмодзи → count, mine = реагировал ли запросивший.
         let reactions = reactions_for(pool, &id, user).await;
+        // MSG-02/MSG-03: бюджет считается по ИТОГОВОЙ строке — после подмены
+        // копией устройства (до 256 КиБ вместо сотен байт основного шифртекста)
+        // и с реакциями; иначе страница вылезала за max_payload NATS и синк
+        // получателя не двигался.
+        let row_bytes = serde_json::to_vec(&content).map(|v| v.len()).unwrap_or(0)
+            + reactions.iter().map(|r| r.emoji.len() + 24).sum::<usize>();
+        if !messages.is_empty() && budget_used + row_bytes > SYNC_PAGE_BYTE_BUDGET {
+            break;
+        }
+        budget_used += row_bytes;
         messages.push(StoredMessage {
             id: id.parse().unwrap_or(Uuid::nil()),
             from,

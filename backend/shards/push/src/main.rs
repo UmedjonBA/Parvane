@@ -268,11 +268,14 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         .bind(max - 1)
         .execute(pool)
         .await?;
-        sqlx::query(
+        // MSG-16: endpoint, уже записанный за ДРУГИМ пользователем, не
+        // перерегистрируется — иначе зная чужой URL подписки, его отбирали.
+        let res = sqlx::query(
             "INSERT INTO push_subscriptions (endpoint, user, subscription_json, created_at)
              VALUES (?, ?, ?, ?)
-             ON CONFLICT(endpoint) DO UPDATE SET user = excluded.user,
-                 subscription_json = excluded.subscription_json, created_at = excluded.created_at",
+             ON CONFLICT(endpoint) DO UPDATE SET
+                 subscription_json = excluded.subscription_json, created_at = excluded.created_at
+             WHERE push_subscriptions.user = excluded.user",
         )
         .bind(&req.subscription.endpoint)
         .bind(&user)
@@ -280,6 +283,9 @@ async fn handle_register(nc: &Client, pool: &SqlitePool, msg: async_nats::Messag
         .bind(now)
         .execute(pool)
         .await?;
+        if res.rows_affected() == 0 {
+            anyhow::bail!("endpoint уже зарегистрирован другим пользователем");
+        }
         info!("подписка зарегистрирована для {}", user);
         Ok(())
     }

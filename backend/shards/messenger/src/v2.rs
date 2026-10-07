@@ -282,6 +282,7 @@ impl V2 {
     }
 
     /// T046: живой v1-кадр инбокса пользователя → журналы его v2-устройств.
+    /// Потолок `LegacyV1Record.json` — `(max_len) = 1048576` в `msg.proto`.
     pub(crate) async fn bridge_v1_frame(&self, user: &str, bytes: &[u8]) {
         // Сообщения, созданные легаси-копией v2-отправителя, не мостим.
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
@@ -292,9 +293,26 @@ impl V2 {
                 }
             }
         }
+        // MSG-01: запись LegacyV1 ограничена схемой (json ≤ 1 МиБ); кадр больше
+        // клиент не разберёт, страница синка не применится и курсор встанет
+        // навсегда. Сначала снимаем device-копии (ими и раздувают кадр), если и
+        // без них велико — не мостим вовсе.
+        let mut bytes = bytes.to_vec();
+        if bytes.len() > LEGACY_V1_MAX_BYTES {
+            if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(m) = v.pointer_mut("/payload/message").and_then(|m| m.as_object_mut()) {
+                    m.remove("copies");
+                }
+                bytes = serde_json::to_vec(&v).unwrap_or_default();
+            }
+            if bytes.len() > LEGACY_V1_MAX_BYTES {
+                warn!("v2: v1-кадр инбокса {} больше лимита записи LegacyV1 — не мостим", user);
+                return;
+            }
+        }
         let Ok(devs) = self.devices_of(user).await else { return };
         for d in &devs.v2_device_ids {
-            let _ = self.append(user, d, inbox_record::Item::LegacyV1(mpb::LegacyV1Record { json: bytes.to_vec() })).await;
+            let _ = self.append(user, d, inbox_record::Item::LegacyV1(mpb::LegacyV1Record { json: bytes.clone() })).await;
         }
     }
 
@@ -435,6 +453,17 @@ impl V2 {
             MessageContent::GroupEncrypted { .. } => false,
             _ => return Err(ErrorCode::Invalid),
         };
+        // MSG-15: отметка «легаси-копия v2-отправителя» ставится только для НОВОГО
+        // id — иначе участник чата метил чужое существующее сообщение, и правки,
+        // удаления и реакции по нему переставали доходить до v2-устройств.
+        let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM messages WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?;
+        if exists.is_some() {
+            return Err(ErrorCode::Duplicate);
+        }
         sqlx::query("INSERT OR IGNORE INTO legacy_origin (message_id, created_at) VALUES (?, ?)")
             .bind(id.to_string())
             .bind(now_unix())
@@ -539,6 +568,13 @@ pub(crate) async fn append_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user
         inbox_record::Item::Sealed(_) | inbox_record::Item::Group(_) => parvane_protocol::l2::round_received_ms(now_unix() * 1000),
         _ => now_unix() * 1000,
     };
+    // MSG-01: запись, которую клиент не сможет разобрать по лимитам схемы, в
+    // журнал не попадает (иначе страница синка не применяется никогда).
+    if let inbox_record::Item::LegacyV1(l) = item {
+        if l.json.len() > LEGACY_V1_MAX_BYTES {
+            return Err(ErrorCode::Invalid);
+        }
+    }
     let bytes = InboxRecord { seq: 0, received_ms: 0, item: Some(item.clone()) }.encode_to_vec();
     // C1-07 (D-17): квота на записи, которые задают отправители.
     if matches!(item, inbox_record::Item::Sealed(_) | inbox_record::Item::Group(_)) {
@@ -705,3 +741,7 @@ mod spent_tests {
         assert_eq!(n, 4);
     }
 }
+
+/// MSG-01: потолок `LegacyV1Record.json` из схемы (`proto/parvane/msg/v2/msg.proto`,
+/// `max_len = 1048576`): запись больше клиент не разберёт.
+pub(crate) const LEGACY_V1_MAX_BYTES: usize = 1_048_576;
