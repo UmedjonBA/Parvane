@@ -504,7 +504,10 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             if e.epoch != s.epoch + 1 {
                 return Err(ProtoError::BrokenChain);
             }
-            if s.epoch > 0 && now - s.last_epoch_ms < EPOCH_MIN_INTERVAL_MS {
+            // ENG-09: `now` — метка клиента; крайнее значение переполняло вычитание
+            // (паника в debug-сборке клиента) и замораживало смену эпох навсегда.
+            // Интервал считается только вперёд по времени.
+            if s.epoch > 0 && now >= s.last_epoch_ms && now.saturating_sub(s.last_epoch_ms) < EPOCH_MIN_INTERVAL_MS {
                 return Err(ProtoError::RateLimited);
             }
             let k: [u8; 32] = e.send_public_key.as_slice().try_into().map_err(|_| ProtoError::InvalidField("send_public_key"))?;

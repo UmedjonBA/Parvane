@@ -451,7 +451,12 @@ pub unsafe extern "C" fn pv_client_eph_presence(c: *const PvClient, online: bool
 pub unsafe extern "C" fn pv_client_eph_open(c: *const PvClient, body: *const u8, len: usize) -> *mut c_char {
     let Some(c) = c.as_ref() else { return ptr::null_mut() };
     let body = if body.is_null() { &[][..] } else { std::slice::from_raw_parts(body, len) };
-    cstring(c.inner.eph_open(body))
+    // ENG-02/ENG-14: паника через границу C ABI завершает процесс клиента — здесь
+    // ввод от собеседника, поэтому перехватываем (null = не разобрано).
+    match catch_unwind(AssertUnwindSafe(|| c.inner.eph_open(body))) {
+        Ok(s) => cstring(s),
+        Err(_) => ptr::null_mut(),
+    }
 }
 
 #[no_mangle]

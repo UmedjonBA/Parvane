@@ -152,6 +152,18 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
     Ok(state)
 }
 
+/// MSG-14/ENG-09: допустимое расхождение метки времени записи журнала группы с
+/// часами сервера (10 минут).
+const ENTRY_TS_WINDOW_MS: i64 = 10 * 60 * 1000;
+
+/// Метка времени подписанной операции записи (из заголовка OpBody); None — не
+/// разобрать (тогда отказ даст сам `group::apply`).
+fn entry_ts_ms(entry: &GroupStateEntry) -> Option<i64> {
+    let op = entry.change.as_ref()?;
+    let body: OpBody = decode_checked(&op.body, Origin::Client).ok()?;
+    body.header.as_ref().map(|h| h.ts_ms)
+}
+
 /// Принять запись журнала от участника `actor` (подписант обязан совпасть с сессией).
 async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupState, ErrorCode> {
     let g = entry.group.clone().ok_or(ErrorCode::Invalid)?;
@@ -160,6 +172,15 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
         return Err(ErrorCode::FederationUnavailable);
     }
     let prev = load(ctx, &g.id).await?;
+    // MSG-14/ENG-09: метка времени записи — по часам клиента; сроки ссылок,
+    // мьютов и интервал эпох считаются по ней. Запись с меткой далеко от часов
+    // сервера не принимается (окно ±ENTRY_TS_WINDOW_MS).
+    if let Some(ts) = entry_ts_ms(&entry) {
+        let now_ms = now_unix() * 1000;
+        if (ts - now_ms).abs() > ENTRY_TS_WINDOW_MS {
+            return Err(ErrorCode::Invalid);
+        }
+    }
     let (next, signer) = apply_one(ctx, prev.as_ref(), &entry, None).await?;
     if signer.user != actor {
         return Err(ErrorCode::Forbidden);
@@ -168,6 +189,30 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     let grew = next.members.len() > prev.as_ref().map(|p| p.members.len()).unwrap_or(0);
     if grew && next.members.len() > max_members() {
         return Err(ErrorCode::Limit);
+    }
+    // MSG-10: «кто может добавлять меня в группы» (FR-040) соблюдалось только в
+    // группах v1. Новый участник, кроме самого актора (вступление по ссылке),
+    // подавшего заявку и состава переносимой v1-группы (GROUP-4), должен
+    // разрешать добавление.
+    let is_migration = prev.is_none() && !next.migrated_from.is_empty();
+    if grew && !is_migration {
+        for m in next.members.keys() {
+            if m == actor || prev.as_ref().is_some_and(|p| p.members.contains_key(m)) {
+                continue;
+            }
+            let asked: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM group_join_requests_v2 WHERE group_id = ? AND user = ?")
+                .bind(&g.id)
+                .bind(m)
+                .fetch_optional(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            if asked.is_some() {
+                continue;
+            }
+            if !crate::groups::allows_group_add(&ctx.pool, m).await.map_err(|_| ErrorCode::Unavailable)? {
+                return Err(ErrorCode::Forbidden);
+            }
+        }
     }
     // Частота смены эпохи по часам сервера (не только по ts_ms клиента).
     let is_epoch = next.epoch != prev.as_ref().map(|p| p.epoch).unwrap_or(0);

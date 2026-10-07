@@ -43,6 +43,13 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
 fi
 
+# WEB-07: раннер web-e2e собирает в тот же dist диагностическую сборку (хуки
+# window.__parvaneDiagCallApi, loopback в CSP) — её заливать нельзя.
+if grep -rqs '__parvaneDiagCallApi' "$REPO/web/telegram-tt/dist/assets" || grep -qs '127.0.0.1' "$REPO/web/telegram-tt/dist/index.html"; then
+  echo "dist — диагностическая сборка (e2e); пересоберите: npm run build:production" >&2
+  exit 1
+fi
+
 log "Заливка конфигов и web-dist (tar over ssh — rsync локально нет)"
 "${SSH[@]}" "mkdir -p $REMOTE_DIR/nats"
 scp -P "$SSH_PORT" -q "$BACKEND/infra/deploy/docker-compose.yml" \

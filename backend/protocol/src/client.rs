@@ -2389,6 +2389,16 @@ impl Client {
             Some(s) => s.clone(),
             None => return need(Need::GroupLog { group: g.id.clone(), after: 0 }),
         };
+        // ENG-03: членство отправителя — ДО отметки «отстали»: иначе любой, кто
+        // знает id группы, ставил флаг с version = MAX и блокировал отправку в
+        // группу навсегда. Неизвестный отправитель — дочитать журнал без флага
+        // (он мог вступить позже нашей копии).
+        if !state.members.contains_key(sender) {
+            if matches!(state.check_context(ctx), ContextVerdict::Behind) {
+                return need(Need::GroupLog { group: g.id.clone(), after: state.version });
+            }
+            return Err(ClientError::Proto(ProtoError::Forbidden));
+        }
         match state.check_context(ctx) {
             ContextVerdict::Ok => {}
             ContextVerdict::Behind => {
@@ -2397,9 +2407,6 @@ impl Client {
             }
             // D-03: форк журнала сервером — ключи не принимаем.
             _ => return Err(ClientError::Proto(ProtoError::ContextMismatch)),
-        }
-        if !state.members.contains_key(sender) {
-            return Err(ClientError::Proto(ProtoError::Forbidden));
         }
         // Секреты ссылок-приглашений: принимаются по совпадению с объявленной в
         // журнале ссылкой (отозванные и неизвестные отбрасываются).
