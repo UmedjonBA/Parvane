@@ -36,7 +36,7 @@ def issue(user):
     return r["token"]
 
 def now(): return int(time.time())
-def newid(): return str(uuid.uuid4())
+def newid(): return str(uuid.uuid7())  # сервер требует UUID v7 в окне времени (MSG-04)
 
 fails = 0
 def check(name, ok, detail=""):

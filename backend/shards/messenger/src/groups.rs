@@ -59,6 +59,9 @@ pub(crate) fn group_action_rate_ok(scope: &str, actor: &str, limit: usize) -> bo
     true
 }
 
+/// MSG-05: потолок названия группы v1 (как у ссылок/описания — ограниченная строка).
+pub(crate) const MAX_GROUP_NAME_CHARS: usize = 128;
+
 pub(crate) async fn member_count(pool: &SqlitePool, group_id: &str) -> Result<i64> {
     Ok(sqlx::query_scalar("SELECT COUNT(*) FROM group_members WHERE group_id = ? AND role != 'banned'")
         .bind(group_id)
@@ -76,6 +79,14 @@ pub(crate) async fn create_group(
 ) -> Result<String> {
     if members.len() as i64 >= max_group_members() {
         anyhow::bail!("слишком много участников (максимум {})", max_group_members());
+    }
+    // MSG-05: имя и адреса участников — ограниченные строки; иначе `group.list`
+    // жертвы раздувался за max_payload и переставал отвечать.
+    if name.chars().count() > MAX_GROUP_NAME_CHARS {
+        anyhow::bail!("слишком длинное название группы");
+    }
+    if let Some(bad) = members.iter().find(|m| !parvane_types::address::is_valid_address(m)) {
+        anyhow::bail!("некорректный адрес участника: {}", bad.chars().take(32).collect::<String>());
     }
     if !group_action_rate_ok("create", creator, group_action_limit(10)) {
         anyhow::bail!("слишком много созданных групп, попробуйте позже");
@@ -232,6 +243,9 @@ pub(crate) async fn set_group_role(
 
 /// Переименовать группу. Только owner/admin.
 pub(crate) async fn rename_group(pool: &SqlitePool, group_id: &str, actor: &str, name: &str) -> Result<bool> {
+    if name.chars().count() > MAX_GROUP_NAME_CHARS {
+        anyhow::bail!("слишком длинное название группы");
+    }
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.len() > 128 {
         return Ok(false);
@@ -521,6 +535,10 @@ pub(crate) async fn ban_group_member(
     member: &str,
     ban: bool,
 ) -> Result<bool> {
+    // MSG-05: бан не-участника заводит строку с произвольной строкой вместо адреса
+    if !parvane_types::address::is_valid_address(member) {
+        return Ok(false);
+    }
     let actor_role = member_role(pool, group_id, actor).await?;
     if !group_mgmt::has_group_right(pool, group_id, actor, group_mgmt::GroupRight::BanUsers, false).await? {
         return Ok(false);

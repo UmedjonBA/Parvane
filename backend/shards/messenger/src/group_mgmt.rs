@@ -460,16 +460,16 @@ pub async fn set_admin(
             if !admin_has(&own, GroupRight::AddAdmins) {
                 return Ok(vfail("forbidden", "нет права добавлять админов"));
             }
-            match rights {
-                Some(r) => {
-                    if !r.is_subset_of(&own) {
-                        return Ok(vfail("forbidden", "можно выдать только свои права"));
-                    }
-                }
-                None => {
-                    if promoted_by.as_deref() != Some(actor) {
-                        return Ok(vfail("forbidden", "снять можно только назначенного собой"));
-                    }
+            // MSG-07: чужого админа (назначенного владельцем или другим админом)
+            // не-владелец не трогает ни снятием, ни «урезанием» прав — раньше
+            // проверка стояла только в ветке `rights: null`, а пустой набор прав
+            // (подмножество любого) разжаловал кого угодно.
+            if target_role == "admin" && promoted_by.as_deref() != Some(actor) {
+                return Ok(vfail("forbidden", "менять можно только назначенного собой"));
+            }
+            if let Some(r) = rights {
+                if !r.is_subset_of(&own) {
+                    return Ok(vfail("forbidden", "можно выдать только свои права"));
                 }
             }
         }

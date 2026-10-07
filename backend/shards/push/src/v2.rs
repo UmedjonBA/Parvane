@@ -139,12 +139,14 @@ async fn register(ctx: &Ctx, req: &ShardRequest) -> Reply {
     .execute(&mut *tx)
     .await
     .map_err(db_err)?;
-    sqlx::query(
+    // MSG-16: чужой endpoint не перехватывается (см. v1)
+    let res = sqlx::query(
         "INSERT INTO wake_registrations (endpoint, user, device_id, inbox_token, kind, p256dh, auth, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(endpoint) DO UPDATE SET user = excluded.user, device_id = excluded.device_id,
+         ON CONFLICT(endpoint) DO UPDATE SET device_id = excluded.device_id,
              inbox_token = excluded.inbox_token, kind = excluded.kind, p256dh = excluded.p256dh,
-             auth = excluded.auth, created_at = excluded.created_at",
+             auth = excluded.auth, created_at = excluded.created_at
+         WHERE wake_registrations.user = excluded.user",
     )
     .bind(&reg.endpoint)
     .bind(user)
@@ -157,6 +159,9 @@ async fn register(ctx: &Ctx, req: &ShardRequest) -> Reply {
     .execute(&mut *tx)
     .await
     .map_err(db_err)?;
+    if res.rows_affected() == 0 {
+        return Err(ErrorCode::Forbidden);
+    }
     tx.commit().await.map_err(db_err)?;
     info!("v2: канал пробуждения зарегистрирован для {}", user);
     Ok(RegisterResponse {}.encode_to_vec())

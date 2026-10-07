@@ -84,6 +84,11 @@ pub(crate) async fn handle_send(nc: &Client, pool: &SqlitePool, msg: async_nats:
         }
 
         let now = now_unix();
+        // MSG-04: id вне окна времени (или не v7) ломал бы курсор получателя
+        if !message_id_fresh(&event.id, now) {
+            warn!("Отклонено: id сообщения вне допустимого окна времени ({})", event.id);
+            return anyhow::Ok(());
+        }
         store_message_from(pool, &event, now, &sender).await?;
         debug!("Сообщение сохранено: {} → {} ({})", event.from, event.payload.to, event.id);
 
@@ -206,6 +211,19 @@ pub(crate) async fn handle_edit(nc: &Client, pool: &SqlitePool, msg: async_nats:
         validate_sender(&author, &event.from)?;
 
         let message_id = event.payload.message_id.to_string();
+        // MSG-08: правка — тоже публикация в чат: забаненный, замьюченный или
+        // лишённый права писать участник не может «переписать» своё старое
+        // сообщение группы (получатели расшифруют его прежней Megolm-сессией).
+        let chat: Option<(String,)> = sqlx::query_as("SELECT to_user FROM messages WHERE id = ?")
+            .bind(&message_id)
+            .fetch_optional(pool)
+            .await?;
+        if let Some((to,)) = chat {
+            if !can_post(pool, &to, &author).await? {
+                warn!("Правка {} отклонена: {} не может писать в {}", message_id, author, to);
+                return anyhow::Ok(());
+            }
+        }
         let ok = if let Some(content) = event.payload.content.as_ref() {
             replace_message_content(
                 pool,
@@ -281,6 +299,11 @@ pub(crate) async fn handle_react(nc: &Client, pool: &SqlitePool, msg: async_nats
             .context("неверный JSON в msg.chat.react")?;
         let reactor = verify_token(nc, &event.token).await?;
         validate_sender(&reactor, &event.from)?;
+        // MSG-03: реакция — короткая строка
+        if event.payload.emoji.len() > MAX_REACTION_BYTES {
+            warn!("Реакция отклонена для {}: слишком длинная", reactor);
+            return anyhow::Ok(());
+        }
         let mid = event.payload.message_id.to_string();
         let signed_payload = format!("react:{mid}:{}", event.payload.emoji);
         if !can_mutate_message(

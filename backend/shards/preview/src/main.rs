@@ -157,6 +157,13 @@ async fn handle_fetch(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) 
         if !preview_rate_ok(&user) {
             anyhow::bail!("слишком много запросов превью");
         }
+        // CLD-01: длина и фильтр адреса — ДО кэша (путь v2 так и делал): иначе
+        // любая строка до 4 МиБ ложилась в `previews` отрицательным результатом.
+        if event.payload.url.len() > MAX_PREVIEW_URL_BYTES {
+            anyhow::bail!("слишком длинный адрес");
+        }
+        parvane_netguard::check_url(&event.payload.url, &parvane_netguard::UrlPolicy::LINK)
+            .map_err(|_| anyhow::anyhow!("адрес отклонён"))?;
         // P-42: URL в лог не пишем (это содержимое переписки)
         debug!("preview fetch для {}", user);
         let preview = tokio::time::timeout(
@@ -329,7 +336,29 @@ async fn store_cache(pool: &SqlitePool, url: &str, resp: &PreviewFetchResponse) 
     .bind(now_unix())
     .execute(pool)
     .await;
+    let _ = trim_preview_cache(pool, preview_cache_max()).await;
 }
+
+/// CLD-01: кэш превью рос без предела — держим не больше `max` строк,
+/// самые старые выселяются (как у тайлов).
+async fn trim_preview_cache(pool: &SqlitePool, max: i64) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM previews WHERE url IN (
+            SELECT url FROM previews ORDER BY fetched_at DESC, url LIMIT -1 OFFSET ?)",
+    )
+    .bind(max.max(1))
+    .execute(pool)
+    .await
+    .context("выселение превью")?;
+    Ok(())
+}
+
+fn preview_cache_max() -> i64 {
+    std::env::var("PARVANE_PREVIEW_CACHE_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000)
+}
+
+/// CLD-01: потолок длины URL в v1 (в v2 — `max_len` схемы, 2048).
+const MAX_PREVIEW_URL_BYTES: usize = 2048;
 
 async fn fetch_preview(input_url: &str) -> Result<WebPagePreview> {
     // Схема/порт/хост — общим фильтром (http/https на 80/443, без userinfo)
