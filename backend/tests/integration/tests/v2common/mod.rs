@@ -99,6 +99,18 @@ impl Conn {
     }
 }
 
+/// T110: регистрация и выдача токена — только методами v2 через gateway
+/// (`identity.account.register` + `identity.session.issue`, канал PRE).
+/// Регистрация уже существующего пользователя не считается ошибкой.
+pub fn register_token(addr: &str, user: &str, device_id: &str) -> String {
+    let (mut id, w) = Conn::connect(addr, Channel::Identified);
+    assert!(matches!(w.kind, Some(frame::Kind::Welcome(_))), "нет Welcome");
+    let _ = id.call("identity.account.register", ipb::AccountRegisterRequest { user: user.into(), password: PASSWORD.into(), ..Default::default() }.encode_to_vec());
+    id.call("identity.session.issue", ipb::SessionIssueRequest { login: user.into(), password: PASSWORD.into(), device_id: device_id.into(), ..Default::default() }.encode_to_vec())
+        .map(|b| ipb::SessionIssueResponse::decode(b.as_slice()).unwrap_or_default().token)
+        .unwrap_or_else(|e| panic!("session.issue {user}: {e:?}"))
+}
+
 /// Устройство v2: ядро + идентифицированная и анонимная сессии.
 pub struct Device {
     pub client: Client,

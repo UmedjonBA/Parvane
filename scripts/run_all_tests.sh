@@ -106,11 +106,7 @@ grep -q "NATS подключён" "$TMP/call.log"      || fail "call не ста
 # ── 2. e2e-контракт бэкенда ──────────────────────────────────────────────────
 # e2e_smoke.py / e2e_groups.py (контракт v1 identity+messenger) удалены с v1 (T110).
 
-log "2b. e2e_cloud.py (контракт cloud: upload/download/list)"
-if python3 scripts/e2e_cloud.py; then echo "e2e cloud: OK"; else fail "e2e_cloud.py"; fi
-
-log "2c. e2e_call.py (контракт call: relay сигнала + история)"
-if python3 scripts/e2e_call.py; then echo "e2e call: OK"; else fail "e2e_call.py"; fi
+# e2e_cloud.py / e2e_call.py (контракт v1 cloud/call) удалены с v1 (T110); живые тесты — cargo test -p parvane-integration.
 
 # ── 3. C++ transport-тесты parvane-core ──────────────────────────────────────
 log "3. parvane-core transport tests (C++)"

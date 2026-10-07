@@ -20,6 +20,8 @@ use parvane_protocol::pb::parvane::msg::v2::DeliverSealedRequest;
 use prost::Message;
 use serde_json::{json, Value};
 
+mod v2common;
+
 const PASSWORD: &str = "e2e-Test-pass-2026";
 
 struct Stack {
@@ -34,7 +36,10 @@ impl Drop for Stack {
             let _ = c.kill();
             let _ = c.wait();
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // Журналы стека нужны для разбора падения — при панике каталог остаётся
+        if !std::thread::panicking() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -122,7 +127,7 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     loop {
-        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("identity.server.info", "{}".into())).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("v2.server.describe", vec![].into())).await;
         if matches!(r, Ok(Ok(_))) {
             break;
         }
@@ -148,10 +153,6 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
     Some((stack, nc))
 }
 
-async fn nreq(nc: &async_nats::Client, subject: &str, body: Value) -> Value {
-    let r = nc.request(subject.to_string(), body.to_string().into()).await.unwrap();
-    serde_json::from_slice(&r.payload).unwrap_or(Value::Null)
-}
 
 /// v2-клиент по TCP.
 struct V2 {
@@ -223,18 +224,15 @@ impl Failures {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_dual_stack_live() {
-    let Some((stack, nc)) = start().await else { return };
+    let Some((stack, _nc)) = start().await else { return };
     let mut f = Failures(vec![]);
     let addr = stack.gateway_tcp.clone();
     let user = format!("v2u{}@local", free_port());
-    let r = nreq(&nc, "identity.user.register", json!({"user": user, "password": PASSWORD, "invite": "", "email": "", "client_ip": "127.0.0.1"})).await;
-    f.check("register", r["ok"] == true || r["error"].is_null(), &r);
-    let t = nreq(&nc, "identity.token.issue", json!({"user": user, "password": PASSWORD, "device_id": "dev1"})).await;
-    let token = t["token"].as_str().unwrap_or("").to_string();
-    let t2 = nreq(&nc, "identity.token.issue", json!({"user": user, "password": PASSWORD})).await;
-    let token_nodev = t2["token"].as_str().unwrap_or("").to_string();
+    let (addr_r, user_r) = (addr.clone(), user.clone());
+    let token = tokio::task::spawn_blocking(move || v2common::register_token(&addr_r, &user_r, "dev1")).await.unwrap();
+    f.check("register+issue-v2", !token.is_empty(), &token);
 
-    let (a, token, token_nodev) = tokio::task::spawn_blocking(move || {
+    let (a, token) = tokio::task::spawn_blocking(move || {
         let mut f = Failures(vec![]);
         // 1) Hello → Welcome с подписанным описателем.
         let (mut c, w) = V2::connect(&addr, Channel::Identified);
@@ -287,20 +285,15 @@ async fn v2_dual_stack_live() {
         let mut up = V2 { s, dec: TcpDecoder::new(), next_id: 0 };
         let upgrade = matches!(up.recv().and_then(|f| f.kind), Some(frame::Kind::Response(r)) if matches!(&r.result, Some(response::Result::Error(e)) if e.code == ErrorCode::UpgradeRequired as i32));
         f.check("upgrade-required", upgrade, "");
-        // 10) Токен без dev → отказ (класс 5).
-        let (mut c2, _) = V2::connect(&addr, Channel::Identified);
-        c2.send(frame::Kind::Auth(Auth { token: token_nodev.clone() }));
-        let denied = matches!(c2.recv().and_then(|f| f.kind), Some(frame::Kind::Response(r)) if matches!(&r.result, Some(response::Result::Error(e)) if e.code == ErrorCode::Forbidden as i32));
-        f.check("token-without-dev-denied", denied, "");
+        // 10) Токен без dev в v2 не выпускается (device_id обязателен) — проверка снята с v1 (T110).
         // 11) Анонимный канал: Auth запрещён, ID-методы запрещены.
         let (mut an, _) = V2::connect(&addr, Channel::AnonymousDelivery);
         f.check("anon-id-method", an.call("msg.inbox.sync", vec![]) == Err(ErrorCode::Forbidden), "");
         f.check("anon-pre-method", an.call("identity.session.issue", vec![]) == Err(ErrorCode::Forbidden), "");
-        (f, token, token_nodev)
+        (f, token)
     })
     .await
     .unwrap();
-    let _ = token_nodev;
     f.0.extend(a.0);
 
     // 12) v1-клиент на том же gateway получает отказ upgrade_required (T110).
@@ -616,17 +609,14 @@ async fn v2_messenger_live() {
     use msgv2::*;
     use parvane_protocol::pb::parvane::core::v2::sealed_envelope::Access;
     use parvane_protocol::pb::parvane::identity::v2 as ipb;
-    use parvane_protocol::pb::parvane::msg::v2::{self as mpb, inbox_record};
+    use parvane_protocol::pb::parvane::msg::v2::{self as mpb};
 
-    let Some((stack, nc)) = start().await else { return };
+    let Some((stack, _nc)) = start().await else { return };
     let addr = stack.gateway_tcp.clone();
     let p = free_port();
-    let (ua, ub, uc) = (format!("ma{p}@local"), format!("mb{p}@local"), format!("mc{p}@local"));
-    // carol — v1-клиент (прямой NATS).
-    let _ = nreq(&nc, "identity.user.register", json!({"user": uc, "password": PASSWORD, "invite": ""})).await;
-    let carol_tok = nreq(&nc, "identity.token.issue", json!({"user": uc, "password": PASSWORD})).await["token"].as_str().unwrap_or("").to_string();
+    let (ua, ub) = (format!("ma{p}@local"), format!("mb{p}@local"));
 
-    let (f, ub2, bob_dev) = tokio::task::spawn_blocking(move || {
+    let (f, _ub2, _bob_dev) = tokio::task::spawn_blocking(move || {
         let mut f = Failures(vec![]);
         let mut a = device(&addr, &ua);
         let mut b = device(&addr, &ub);
@@ -678,7 +668,7 @@ async fn v2_messenger_live() {
     })
     .await
     .unwrap();
-    let mut f = f;
+    let f = f;
     // 7) Мост v1 → v2 удалён вместе с v1 (T110).
     assert!(f.0.is_empty(), "провалены сценарии messenger v2: {:?} (логи: {})", f.0, stack.dir.display());
 }

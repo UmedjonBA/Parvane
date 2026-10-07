@@ -63,30 +63,7 @@ pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-/// У пользователя есть журнал устройств v2 (T048: защита от downgrade).
-pub(crate) async fn user_has_v2(user: &str) -> bool {
-    let Some(pool) = V2_POOL.get() else { return false };
-    sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM device_log WHERE user = ?")
-        .bind(user)
-        .fetch_one(pool)
-        .await
-        .map(|(n,)| n > 0)
-        .unwrap_or(false)
-}
 
-/// Устройство числится в журнале устройств v2 пользователя (в т.ч. уже
-/// отозванным): у аккаунта на v2 новые устройства в каталог v1 не попадают
-/// (T048), и v1-отзыв такого устройства каталог не меняет.
-pub(crate) async fn log_has_device(user: &str, device_id: &str) -> bool {
-    let Some(pool) = V2_POOL.get() else { return false };
-    sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM device_state WHERE user = ? AND device_id = ?")
-        .bind(user)
-        .bind(device_id)
-        .fetch_one(pool)
-        .await
-        .map(|(n,)| n > 0)
-        .unwrap_or(false)
-}
 
 /// Устройство действует в журнале устройств v2 пользователя (есть сертификат,
 /// не отозвано) — ему разрешён и v1-бандл в каталоге устройств (T146).

@@ -9,30 +9,9 @@ use crate::topics::*;
 
 pub const REQUEST_INBOX: &str = "_INBOX.>";
 
-pub const IDENTITY_NATS_SUBSCRIBE: &[&str] = &[
-    IDENTITY_ISSUE,
-    IDENTITY_VERIFY,
-    IDENTITY_REGISTER,
-    IDENTITY_EMAIL_CONFIRM,
-    IDENTITY_SERVER_INFO,
-    IDENTITY_TELEGRAM_CONFIRM,
-    IDENTITY_REGISTER_STATUS,
-    IDENTITY_TWOFA,
-    IDENTITY_PASSWORD_CHANGE,
-    IDENTITY_PREKEYS_PUBLISH,
-    IDENTITY_PREKEYS_FETCH,
-    IDENTITY_DEVICE_LIST,
-    IDENTITY_DEVICE_REVOKE,
-    IDENTITY_LINK_OFFER,
-    IDENTITY_LINK_POLL,
-    IDENTITY_LINK_GRANT,
-    IDENTITY_LINK_CHALLENGE,
-    IDENTITY_SEARCH,
-    IDENTITY_SETNAME,
-    IDENTITY_SETAVATAR,
-    IDENTITY_SETKEY,
-    IDENTITY_RESOLVE,
-];
+/// Identity: клиентские v1-subject'ы удалены (T110, 7 окт 2026) — осталась
+/// проверка JWT для gateway и шардов; методы v2 — в сгенерированных блоках.
+pub const IDENTITY_NATS_SUBSCRIBE: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 pub const IDENTITY_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
 /// Messenger говорит только методами v2 (ACL — сгенерированные блоки
@@ -41,23 +20,11 @@ pub const IDENTITY_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 pub const MESSENGER_NATS_SUBSCRIBE: &[&str] = &[REQUEST_INBOX];
 pub const MESSENGER_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
-pub const CLOUD_NATS_SUBSCRIBE: &[&str] = &[
-    FILE_UPLOAD_CHUNK,
-    FILE_UPLOAD_COMPLETE,
-    FILE_DOWNLOAD_REQUEST,
-    FILE_LIST_REQUEST,
-    FILE_DELETE,
-    REQUEST_INBOX,
-];
-pub const CLOUD_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+pub const CLOUD_NATS_SUBSCRIBE: &[&str] = &[REQUEST_INBOX];
+pub const CLOUD_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
-pub const CALL_NATS_SUBSCRIBE: &[&str] = &[
-    CALL_SIGNAL,
-    CALL_HISTORY_REQUEST,
-    CALL_ICE_REQUEST,
-    REQUEST_INBOX,
-];
-pub const CALL_NATS_PUBLISH: &[&str] = &["call.user.>", IDENTITY_VERIFY, REQUEST_INBOX];
+pub const CALL_NATS_SUBSCRIBE: &[&str] = &[REQUEST_INBOX];
+pub const CALL_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
 pub const NOTES_NATS_SUBSCRIBE: &[&str] = &[
     NOTE_CREATE,
@@ -77,17 +44,11 @@ pub const CALENDAR_NATS_SUBSCRIBE: &[&str] = &[
 ];
 pub const CALENDAR_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 
-pub const PREVIEW_NATS_SUBSCRIBE: &[&str] = &[PREVIEW_FETCH, PREVIEW_MAP_TILE, REQUEST_INBOX];
-pub const PREVIEW_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+pub const PREVIEW_NATS_SUBSCRIBE: &[&str] = &[REQUEST_INBOX];
+pub const PREVIEW_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
-pub const PUSH_NATS_SUBSCRIBE: &[&str] = &[
-    PUSH_VAPID_GET,
-    PUSH_REGISTER,
-    PUSH_UNREGISTER,
-    MSG_USER_WILDCARD,
-    REQUEST_INBOX,
-];
-pub const PUSH_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
+pub const PUSH_NATS_SUBSCRIBE: &[&str] = &[REQUEST_INBOX];
+pub const PUSH_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
 /// Bus-права доверенного gateway. Клиентские subject'ы v1 удалены (T110, 7 окт
 /// 2026): клиенты ходят только методами v2 (их ACL — сгенерированные блоки

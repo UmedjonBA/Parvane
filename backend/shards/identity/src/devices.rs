@@ -104,65 +104,7 @@ pub(crate) async fn revoke_device(pool: &SqlitePool, username: &str, device_id: 
     Ok(deleted > 0)
 }
 
-pub(crate) async fn handle_device_list(
-    nc: &Client,
-    pool: &SqlitePool,
-    decoding: &DecodingKey,
-    msg: async_nats::Message,
-) {
-    let Some(reply) = msg.reply.clone() else { return };
-    let resp = match serde_json::from_slice::<DeviceListRequest>(&msg.payload) {
-        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(username) => match list_devices(pool, &username).await {
-                Ok(devices) => DeviceListResponse { ok: true, devices, error: None },
-                Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(parvane_db::public_error(&e)) },
-            },
-            Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(parvane_db::public_error(&e)) },
-        },
-        Err(e) => DeviceListResponse { ok: false, devices: vec![], error: Some(parvane_db::public_error(&e)) },
-    };
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
-}
 
-pub(crate) async fn handle_device_revoke(
-    nc: &Client,
-    pool: &SqlitePool,
-    decoding: &DecodingKey,
-    msg: async_nats::Message,
-) {
-    let Some(reply) = msg.reply.clone() else { return };
-    let resp = match serde_json::from_slice::<DeviceRevokeRequest>(&msg.payload) {
-        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(username) => match async {
-                // P-07: отзыв устройства — только с паролем.
-                require_password(pool, &username, req.password.as_deref()).await?;
-                revoke_device(pool, &username, &req.device_id).await
-            }
-            .await
-            {
-                Ok(true) => {
-                    info!("{} отозвал устройство '{}'", username, req.device_id);
-                    DeviceRevokeResponse { ok: true, error: None }
-                }
-                // Устройство только в журнале v2 (в каталог v1 оно не попадало,
-                // T048): пароль проверен, тумбстоун JWT поставлен — отзыв принят;
-                // запись в журнал устройств клиент вносит методом v2.
-                Ok(false) if crate::v2::log_has_device(&username, &req.device_id).await => {
-                    info!("{} отозвал v2-устройство '{}' (сессии v1)", username, req.device_id);
-                    DeviceRevokeResponse { ok: true, error: None }
-                }
-                Ok(false) => DeviceRevokeResponse {
-                    ok: false,
-                    error: Some("устройство не найдено".into()),
-                },
-                Err(e) => DeviceRevokeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
-            },
-            Err(e) => DeviceRevokeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
-        },
-        Err(e) => DeviceRevokeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
-    };
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
-}
 
 // ── линковка: передача E2E-состояния на новое устройство ────────────────────
 // Сервер — слепой релей: видит эфемерные ПУБЛИЧНЫЕ ключи и ECDH-бокс

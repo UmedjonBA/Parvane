@@ -7,7 +7,11 @@
 
 /// Подключиться к NATS. Читает `PARVANE_NATS_TLS_CA` для TLS.
 pub async fn connect(url: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
-    let mut opts = async_nats::ConnectOptions::new();
+    // Шина может подняться позже шарда (compose, раннеры тестов, стенды):
+    // первичное подключение повторяется, а не завершает процесс. Раньше шарды
+    // «выигрывали» эту гонку только потому, что перед NATS успевали прогнать
+    // миграции SQLite (T110: messenger стал подключаться первым и падал в тестах).
+    let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
     if let (Ok(user), Ok(pass)) = (
         std::env::var("PARVANE_NATS_USER"),
         std::env::var("PARVANE_NATS_PASS"),

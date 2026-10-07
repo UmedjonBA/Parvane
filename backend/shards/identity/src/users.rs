@@ -46,24 +46,6 @@ pub(crate) fn validate_new_user(user: &str, domain: &str) -> Result<()> {
     Ok(())
 }
 
-// Публичные параметры сервера для экрана входа (pre-auth).
-pub(crate) async fn handle_server_info(nc: &Client, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        error!("server.info: нет reply-топика, игнорирую");
-        return;
-    };
-    let mode = confirm_mode();
-    let resp = ServerInfoResponse {
-        domain: server_domain(),
-        email_required: mode == ConfirmMode::Email,
-        confirm: mode.as_str().to_string(),
-        telegram_bot: if mode == ConfirmMode::Telegram { telegram_bot().unwrap_or_default() } else { String::new() },
-    };
-    let json = serde_json::to_vec(&resp).unwrap_or_default();
-    if let Err(e) = nc.publish(reply, json.into()).await {
-        error!("server.info: ошибка отправки ответа: {}", e);
-    }
-}
 
 // display_name с фолбэком на локальную часть адреса (для старых записей с '').
 pub(crate) fn name_or_default(username: &str, display_name: &str) -> String {
@@ -232,62 +214,7 @@ pub(crate) async fn handle_setavatar(
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }
 
-// Записать публичный ключ пользователя (чистая функция — для тестов).
-pub(crate) async fn store_pubkey(pool: &SqlitePool, username: &str, pubkey: &str) -> Result<()> {
-    let decoded = B64.decode(pubkey).or_else(|_| B64_NO_PAD.decode(pubkey))
-        .context("pubkey должен быть base64")?;
-    if decoded.len() != 32 {
-        anyhow::bail!("pubkey должен быть Ed25519-ключом длиной 32 байта");
-    }
-    sqlx::query("UPDATE users SET pubkey = ? WHERE username = ?")
-        .bind(pubkey)
-        .bind(username)
-        .execute(pool)
-        .await
-        .context("запись pubkey")?;
-    Ok(())
-}
 
-// Регистрация своего публичного Ed25519-ключа (username из проверенного токена).
-pub(crate) async fn handle_setkey(
-    nc: &Client,
-    pool: &SqlitePool,
-    decoding: &DecodingKey,
-    msg: async_nats::Message,
-) {
-    let Some(reply) = msg.reply.clone() else { return };
-    let resp = match serde_json::from_slice::<SetKeyRequest>(&msg.payload) {
-        Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(username) => match async {
-                // P-07: ЗАМЕНА уже зарегистрированного публичного ключа — только с
-                // паролем (украденный JWT не должен подменять ключ подписи
-                // сигналинга звонков). Первая регистрация и повторная публикация
-                // того же ключа (клиенты делают её при каждом входе) — по JWT.
-                let current: Option<(String,)> =
-                    sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-                        .bind(&username)
-                        .fetch_optional(pool)
-                        .await?;
-                let current = current.map(|(k,)| k).unwrap_or_default();
-                if !current.is_empty() && current != req.pubkey {
-                    require_password(pool, &username, req.password.as_deref()).await?;
-                }
-                store_pubkey(pool, &username, &req.pubkey).await
-            }
-            .await
-            {
-                Ok(()) => {
-                    info!("{} зарегистрировал pubkey ({}…)", username, &req.pubkey.chars().take(12).collect::<String>());
-                    SetNameResponse { ok: true, error: None }
-                }
-                Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
-            },
-            Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
-        },
-        Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
-    };
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
-}
 
 // Резолв display_name по списку адресов (для пиров из sync).
 pub(crate) async fn handle_resolve(nc: &Client, pool: &SqlitePool, decoding: &DecodingKey, msg: async_nats::Message) {

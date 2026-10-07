@@ -35,7 +35,10 @@ impl Drop for Stack {
             let _ = c.kill();
             let _ = c.wait();
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // Журналы стека нужны для разбора падения — при панике каталог остаётся
+        if !std::thread::panicking() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -122,9 +125,9 @@ async fn start() -> Option<Stack> {
         assert!(t.elapsed() < Duration::from_secs(20));
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    for subject in ["identity.server.info", "group.list"] {
+    for subject in ["v2.server.describe", "v2.msg.inbox.sync"] {
         loop {
-            let r = tokio::time::timeout(Duration::from_millis(300), nc.request(subject, "{}".into())).await;
+            let r = tokio::time::timeout(Duration::from_millis(300), nc.request(subject, vec![].into())).await;
             if matches!(r, Ok(Ok(_))) {
                 break;
             }

@@ -32,12 +32,13 @@ async fn main() -> Result<()> {
     let db_path = std::env::var("PARVANE_DB_PATH")
         .unwrap_or_else(|_| "./messenger.db".to_string());
 
+    let v2_pool = v2::open_store(&db_path).await?;
+
     let nc = parvane_types::nats::connect(&nats_url)
         .await
         .context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
 
-    let v2_pool = v2::open_store(&db_path).await?;
     v2::run(nc, v2_pool).await?;
     info!("Messenger шард запущен (протокол v2)");
 
