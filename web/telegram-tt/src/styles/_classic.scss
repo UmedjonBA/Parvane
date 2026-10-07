@@ -1,23 +1,15 @@
-// Parvane (spec 008): оформление «Классическое» — плоские колонки вплотную к
-// краям окна и друг к другу, без скруглений и теней (вид прежнего Telegram).
-// Включается классом `interface-classic` на <html> (util/interfaceStyle.ts).
-// «Панели» (вид по умолчанию) этим файлом не затрагиваются: каждое правило
-// начинается с `html.interface-classic`.
+// Parvane (spec 008): оформление «Классическое» — вид Telegram Web A до редизайна
+// «островов» (эталон — апстрим 12.0.30, коммит `0df85b8d`): плоские колонки
+// вплотную к краям окна и друг к другу, плоский заголовок чата, поле ввода —
+// «пузырь» с хвостиком и круглая кнопка. Включается классом `interface-classic`
+// на <html> (util/interfaceStyle.ts). «Панели» (вид по умолчанию) этим файлом не
+// затрагиваются: каждое правило начинается с `html.interface-classic`.
 
 html.interface-classic {
-  // ── токены «островов» ────────────────────────────────────────────────────
-  --border-radius-island: 0;
+  // Блоки-«острова» внутри колонок (настройки, профиль, вкладки) в 12.0.30 уже
+  // были скруглёнными карточками — их токены не трогаем, плоскими делаем колонки
   --border-radius-pane: 0;
-  --shadow-island: none;
   --shadow-pane: none;
-  --shadow-footer: none;
-  --shadow-chat-list-panel: none;
-  --border-radius-modal: 0.75rem;
-  --border-radius-toast: 0.5rem;
-  --border-radius-button: 0.5rem;
-  --border-radius-button-tiny: 0.375rem;
-  --border-radius-default: 0.625rem;
-  --border-radius-default-small: 0.375rem;
 
   // ── геометрия колонок ────────────────────────────────────────────────────
   --right-column-padding: 0rem;
@@ -26,23 +18,22 @@ html.interface-classic {
   --middle-header-gap: 0rem;
   --classic-divider: 1px solid var(--color-borders);
 
-  // ── композер: плоская полоса во всю ширину области переписки ────────────
-  --composer-pill-radius: 0;
-  --composer-bottom-gap: 0rem;
-  --composer-bottom-gap-mobile: 0rem;
-  --composer-top-gap: 0rem;
-}
+  // ── композер как в 12.0.30 ───────────────────────────────────────────────
+  --composer-pill-padding: 0rem;
+  --composer-pill-radius: var(--border-radius-messages);
+  --composer-bottom-gap: 1.25rem;
+  --composer-main-button-width: 3rem;
+  --composer-main-button-height: 3rem;
+  --composer-control-radius: 50%;
+  --composer-row-gap: 0.5rem;
+  --shadow-footer: 0 1px 2px var(--color-default-shadow);
+  --classic-composer-tail: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='17'%3E%3Cpath d='M6 17H0V0c.193 2.84.876 5.767 2.05 8.782.904 2.325 2.446 4.485 4.625 6.48A1 1 0 016 17z'/%3E%3C/svg%3E");
 
-html.interface-classic {
   #LeftColumn {
     margin: 0;
     border-inline-end: var(--classic-divider);
-
-    @media (min-width: 926px) {
-      .folders-sidebar-visible & {
-        margin-left: 0;
-      }
-    }
+    border-radius: 0;
+    box-shadow: none;
 
     @media (min-width: 601px) and (max-width: 925px) {
       top: 0;
@@ -52,10 +43,18 @@ html.interface-classic {
     }
   }
 
+  .folders-sidebar-visible #LeftColumn {
+    margin-left: 0;
+  }
+
   #RightColumn {
     top: 0;
     bottom: 0;
+
     border-inline-start: var(--classic-divider);
+    border-radius: 0;
+
+    box-shadow: none;
   }
 
   .has-call-header {
@@ -66,36 +65,83 @@ html.interface-classic {
     }
   }
 
-  // ── заголовок чата: плоская полоса ───────────────────────────────────────
+  // ── заголовок чата: плоская полоса во всю ширину ─────────────────────────
   .MiddleHeader {
     max-width: none;
     border-bottom: var(--classic-divider);
     border-radius: 0;
   }
 
-  // ── композер ─────────────────────────────────────────────────────────────
-  #MiddleColumn .middle-column-footer {
-    max-width: none;
-    padding: 0.125rem 0.5rem;
-    border-top: var(--classic-divider);
-    background: var(--color-background);
+  // ── композер: «пузырь» с хвостиком, рядом круглая кнопка ─────────────────
+  .Composer.is-chat-composer {
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+
+    .composer-wrapper {
+      border-radius: var(--border-radius-messages);
+      border-bottom-right-radius: 0;
+      background: var(--color-background);
+      box-shadow: var(--shadow-footer);
+
+      // Контур прежнего `svg-appendix`
+      &::after {
+        content: "";
+
+        position: absolute;
+        right: -0.5rem;
+        bottom: 0;
+
+        width: 0.5625rem;
+        height: 1.0625rem;
+
+        background: var(--color-background);
+
+        mask: var(--classic-composer-tail) no-repeat center / 100% 100%;
+      }
+    }
+
+    > .Button.main-button {
+      background: var(--color-background);
+      box-shadow: var(--shadow-footer);
+
+      .icon {
+        color: var(--color-primary);
+      }
+
+      &:hover,
+      &.recording {
+        background: var(--color-primary);
+
+        .icon {
+          color: white;
+        }
+      }
+    }
   }
 
-  // ── настройки: блоки во всю ширину колонки, между ними — полосы фона ─────
-  .settings-content {
-    padding-inline: 0;
+  // Узкое окно с панелью папок: колонки выезжают вплотную к краю, как в 12.0.30
+  @media (min-width: 601px) and (max-width: 925px) {
+    .folders-sidebar-visible #FoldersSidebar {
+      height: calc(var(--vh, 1vh) * 100);
+    }
+
+    .folders-sidebar-visible #LeftColumn {
+      left: 0 !important;
+    }
+
+    .folders-sidebar-visible.left-column-open #LeftColumn {
+      left: var(--folders-sidebar-width) !important;
+    }
   }
 
-  // Широкое окно: правая колонка не перекрывает переписку, а сужает её —
-  // заголовок и поле ввода занимают всю оставшуюся ширину
+  // Широкое окно: правая колонка не перекрывает заголовок, а сужает его
   @media (min-width: 1276px) {
-    .MiddleHeader,
-    #MiddleColumn .middle-column-footer {
+    .MiddleHeader {
       width: 100%;
     }
 
-    #Main.right-column-open .MiddleHeader,
-    #Main.right-column-open #MiddleColumn .middle-column-footer {
+    #Main.right-column-open .MiddleHeader {
       transform: none;
       width: calc(100% - var(--right-column-width));
       margin-inline: 0 auto;

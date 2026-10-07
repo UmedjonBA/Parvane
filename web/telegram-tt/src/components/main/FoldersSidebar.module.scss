@@ -137,7 +137,9 @@
   visibility: hidden;
 }
 
-// Parvane (spec 008): «Классическое» — сплошная полоса во всю высоту окна
+// Parvane (spec 008): «Классическое» — сплошная полоса во всю высоту окна, как в 12.0.30
 :global(html.interface-classic) .root {
   margin: 0;
+  border-radius: 0;
+  background-color: var(--color-background-sidebar);
 }

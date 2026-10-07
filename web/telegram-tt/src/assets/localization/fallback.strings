@@ -3095,4 +3095,4 @@
 "ParvaneInterfaceStyle" = "Interface style";
 "ParvaneInterfaceStyleClassic" = "Classic";
 "ParvaneInterfaceStylePanels" = "Panels";
-"ParvaneInterfaceStyleHint" = "Flat columns edge to edge, like earlier versions. Panels are the floating rounded layout.";
+"ParvaneInterfaceStyleHint" = "Classic is the look before the redesign: flat columns edge to edge. Panels are the floating rounded layout.";

@@ -57,6 +57,8 @@ function makeSolidPng(size: number, rgb: [number, number, number]): Buffer {
   ]);
 }
 
+const MENU_STEP_TIMEOUT_MS = 5000;
+
 test('edits the profile name and avatar, both survive relogin', async ({ page }, testInfo) => {
   // Playwright WebKit-движок на этом окружении спорадически падает (Target
   // crashed) и зависает в длинных сценариях; startup/login WebKit покрывает
@@ -72,8 +74,15 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
   await openApp(page, gatewayUrl);
   await registerAndSignIn(page, user, PASSWORD);
 
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  // Диалог ключа восстановления (v2) появляется в произвольный момент после
+  // входа и, закрываясь, уносит с собой открытое меню — открываем его заново
+  await expect(async () => {
+    const settingsItem = page.getByRole('menuitem', { name: 'Settings' });
+    if (!(await settingsItem.isVisible())) {
+      await page.getByRole('button', { name: 'Open menu' }).first().click({ timeout: MENU_STEP_TIMEOUT_MS });
+    }
+    await settingsItem.click({ timeout: MENU_STEP_TIMEOUT_MS });
+  }).toPass({ timeout: LOGIN_TIMEOUT_MS });
   await page.getByRole('button', { name: 'Edit profile' }).click();
 
   const firstNameInput = page.getByLabel('First name (required)');
