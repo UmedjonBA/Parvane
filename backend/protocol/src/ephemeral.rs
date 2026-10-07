@@ -268,7 +268,11 @@ pub fn presence(from: &str, online: bool, last_seen_ms: i64, ts_ms: i64) -> Ephe
 /// Принимать ли входящий сигнал: не в L2, не старше `max_age_ms` (повтор
 /// старого сигнала через канал ничего не даёт), не из будущего > 60 с.
 pub fn accept(inner: &EphemeralInner, l2_active: bool, now_ms: i64, max_age_ms: i64) -> bool {
-    allowed(l2_active) && inner.ts_ms <= now_ms + 60_000 && now_ms - inner.ts_ms <= max_age_ms
+    // ENG-02: `ts_ms` задаёт отправитель — крайнее значение переполняло вычитание
+    // и роняло клиентов с debug-движком одним сигналом «печатает»
+    allowed(l2_active)
+        && inner.ts_ms <= now_ms.saturating_add(60_000)
+        && now_ms.saturating_sub(inner.ts_ms) <= max_age_ms
 }
 
 #[cfg(test)]
@@ -362,5 +366,22 @@ mod tests {
         assert!(!accept(&t, true, 2_000, 10_000), "L2: сигналы не принимаются");
         assert!(!accept(&t, false, 100_000, 10_000), "старый сигнал");
         assert!(format!("{c:?}").find("key").is_none());
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn extreme_timestamps_do_not_overflow() {
+        // ENG-02: крайние метки времени от собеседника — отказ, не паника
+        let now = 1_700_000_000_000;
+        let min = EphemeralInner { ts_ms: i64::MIN, ..Default::default() };
+        let max = EphemeralInner { ts_ms: i64::MAX, ..Default::default() };
+        assert!(!accept(&min, false, now, 30_000));
+        assert!(!accept(&max, false, now, 30_000));
+        let fresh = EphemeralInner { ts_ms: now - 1000, ..Default::default() };
+        assert!(accept(&fresh, false, now, 30_000));
     }
 }

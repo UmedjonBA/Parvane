@@ -582,7 +582,22 @@ pub(crate) async fn append_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user
         let used: Option<(i64, i64)> = sqlx::query_as("SELECT records, bytes FROM inbox_device WHERE device = ?").bind(&dev).fetch_optional(&mut **tx).await.map_err(db_err)?;
         if let Some((n, b)) = used {
             if n >= max_records || b.saturating_add(bytes.len() as i64) > max_bytes {
-                return Err(ErrorCode::Limit);
+                // MSG-09: счётчики учитывают и подтверждённые записи (они живут ещё
+                // сутки до GC) — один собеседник серией конвертов закрывал устройству
+                // входящие на сутки, хотя оно всё уже прочитало. Квота — по
+                // НЕподтверждённым записям; счётчики остаются быстрым путём.
+                let (un, ub): (i64, i64) = sqlx::query_as(
+                    "SELECT COUNT(*), COALESCE(SUM(LENGTH(item)), 0) FROM inbox_log
+                      WHERE device = ? AND seq > (SELECT acked_seq FROM inbox_device WHERE device = ?)",
+                )
+                .bind(&dev)
+                .bind(&dev)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(db_err)?;
+                if un >= max_records || ub.saturating_add(bytes.len() as i64) > max_bytes {
+                    return Err(ErrorCode::Limit);
+                }
             }
         }
     }
@@ -720,6 +735,23 @@ mod spent_tests {
     }
 
     /// C1-07 (D-17): квота журнала устройства на записи отправителей.
+    #[tokio::test]
+    async fn inbox_quota_counts_only_unacked_records() {
+        // MSG-09: подтверждённые записи (acked_seq) квоту не занимают
+        let p = pool().await;
+        std::env::set_var("PARVANE_V2_INBOX_MAX_RECORDS", "3");
+        let mut tx = p.begin().await.unwrap();
+        for _ in 0..3 {
+            append_in(&mut tx, "carol@local", "d1", &big_group_item(10)).await.unwrap();
+        }
+        assert!(matches!(append_in(&mut tx, "carol@local", "d1", &big_group_item(10)).await, Err(ErrorCode::Limit)));
+        // устройство подтвердило всё прочитанное — место освобождается без GC
+        let dev = device_key("carol@local", "d1").unwrap();
+        sqlx::query("UPDATE inbox_device SET acked_seq = 3 WHERE device = ?").bind(&dev).execute(&mut *tx).await.unwrap();
+        append_in(&mut tx, "carol@local", "d1", &big_group_item(10)).await.unwrap();
+        std::env::remove_var("PARVANE_V2_INBOX_MAX_RECORDS");
+    }
+
     #[tokio::test]
     async fn inbox_quota_limits_sender_records() {
         let p = pool().await;

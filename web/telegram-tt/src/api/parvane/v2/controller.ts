@@ -781,6 +781,13 @@ export function createV2Controller(deps: Deps) {
       if (!isGroup && author !== self) rememberStickyPeer(author);
       // Группа: сообщение кладётся в чат группы, автор — из проверенной подписи
       const to = isGroup ? groupAddress(ev.group!.id) : (author === self ? chat : self);
+      // WEB-08: мутация (правка, удаление, реакция, закреп, квитанция) действует
+      // только на сообщение ЭТОГО чата — иначе участник группы личным сообщением
+      // закреплял или помечал прочитанным чужое сообщение по его uuid
+      const peer = author === self ? chat : author;
+      const inThisChat = (m: WireStoredMessage) => (isGroup
+        ? m.to === to
+        : ((m.from === peer && m.to === self) || (m.from === self && m.to === peer)));
       // Ключ доставки собеседника мог прийти только что — канал «печатает» чата
       void ensureEphemeral([isGroup ? to : chat]);
       if (ev.disposition === 'stub') {
@@ -795,7 +802,7 @@ export function createV2Controller(deps: Deps) {
         const target = b64ToUuid(c.edit.target.op_id);
         if (target) {
           await update(target, (m) => {
-            if (m.from !== author) return m;
+            if (m.from !== author || !inThisChat(m)) return m;
             const content = { ...m.content };
             if (c.edit!.text) {
               const t = v2ToWire({ text: c.edit!.text })!;
@@ -815,13 +822,14 @@ export function createV2Controller(deps: Deps) {
         for (const t of c.delete.targets) {
           const target = b64ToUuid(t.op_id);
 
-          if (target) await update(target, (m) => (m.from === author ? { ...m, deleted: true } : m));
+          if (target) await update(target, (m) => (m.from === author && inThisChat(m) ? { ...m, deleted: true } : m));
         }
         return;
       }
       if (c.reaction?.target) {
         const target = b64ToUuid(c.reaction.target.op_id);
-        if (target) {
+        const known = target ? await knownMessage(target) : undefined;
+        if (target && known && inThisChat(known)) {
           const byUser = reactions.get(target) || new Map<string, string>();
           if (c.reaction.remove || !c.reaction.emoji) byUser.delete(author);
           else byUser.set(author, c.reaction.emoji);
@@ -832,7 +840,7 @@ export function createV2Controller(deps: Deps) {
       }
       if (c.pin?.target) {
         const target = b64ToUuid(c.pin.target.op_id);
-        if (target) await update(target, (m) => ({ ...m, pinned: !c.pin!.unpin }));
+        if (target) await update(target, (m) => (inThisChat(m) ? { ...m, pinned: !c.pin!.unpin } : m));
         return;
       }
       if (c.receipt?.messages) {
@@ -840,7 +848,8 @@ export function createV2Controller(deps: Deps) {
           for (const t of c.receipt.messages) {
             const target = b64ToUuid(t.op_id);
 
-            if (target) await update(target, (m) => ({ ...m, read: true }));
+            // Квитанция — только на своё исходящее в этом чате
+            if (target) await update(target, (m) => (inThisChat(m) && m.from === self ? { ...m, read: true } : m));
           }
         }
         return;

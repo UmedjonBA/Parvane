@@ -105,7 +105,10 @@ export function isContentAllowedForMember(perms: WireDefaultPermissions | undefi
   if (!p.send_polls && content.kind === 'poll') return false;
   if (!p.embed_links && content.kind === 'text') {
     if (content.webpage) return false;
-    if (content.entities?.some((e) => e.type === 'MessageEntityUrl' || e.type === 'MessageEntityTextUrl')) {
+    // Сущности на проводе — короткие имена (`url`, `text_url`), в API — длинные;
+    // проверка должна ловить оба (WEB-06: ссылка-сущность проходила фильтр)
+    const linkTypes = ['MessageEntityUrl', 'MessageEntityTextUrl', 'url', 'text_url'];
+    if (content.entities?.some((e) => linkTypes.includes(e.type))) {
       return false;
     }
   }
