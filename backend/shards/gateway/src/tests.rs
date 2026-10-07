@@ -389,3 +389,18 @@ fn pre_auth_requests_are_rate_limited_per_connection() {
     assert!(ok <= 20, "всплеск до входа ограничен: {ok}");
     assert!(anon_idle_secs() <= 60, "анонимное соединение не живёт сутками");
 }
+
+#[test]
+fn disabled_v1_lets_only_bot_confirm_through() {
+    // E6: при отключённом v1 до входа проходит только identity.telegram.confirm
+    let ok: Value = serde_json::from_str(r#"{"op":"req","id":"1","subject":"identity.telegram.confirm","payload":"{}"}"#).unwrap();
+    assert!(is_bot_confirm_frame(&ok));
+    for bad in [
+        r#"{"op":"auth","token":"x"}"#,
+        r#"{"op":"req","id":"1","subject":"identity.token.issue","payload":"{}"}"#,
+        r#"{"op":"sub","subject":"msg.user.a@local"}"#,
+        r#"{"op":"req","id":"1","subject":"identity.server.info"}"#,
+    ] {
+        assert!(!is_bot_confirm_frame(&serde_json::from_str(bad).unwrap()), "{bad}");
+    }
+}

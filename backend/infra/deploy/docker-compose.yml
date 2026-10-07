@@ -61,6 +61,9 @@ services:
       - db-identity:/data
       - well-known:/well-known
     environment:
+      # ID-01: требовать доказательство ключа устройства при входе (включать, когда
+      # его шлют все клиенты: web — да, desktop/android — со своих сборок)
+      PARVANE_REQUIRE_DEVICE_PROOF: ${PARVANE_REQUIRE_DEVICE_PROOF:-0}
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}
@@ -186,6 +189,9 @@ services:
       # защита от abuse — на уровне conn-лимита и (позже) rate-limit в Caddy.
       PARVANE_GATEWAY_MAX_CONNS: "2000"
       PARVANE_GATEWAY_MAX_CONNS_PER_IP: "2000"
+      # E6: normal | notice | disabled (в .env сервера; при disabled по v1 проходит
+      # только запрос Telegram-бота identity.telegram.confirm)
+      PARVANE_V1_MODE: ${PARVANE_V1_MODE:-normal}
       PARVANE_LOG_LEVEL: info
     mem_limit: 1g
     pids_limit: 512
