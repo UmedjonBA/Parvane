@@ -1,47 +1,26 @@
 // Parvane gateway: единственная точка входа клиентов в шину. Клиент говорит с
-// gateway JSON-кадрами, gateway верифицирует JWT и пропускает только в СВОИ
-// subject'ы пользователя. Изоляция «людей» держится на gateway, а не на
-// NATS-правах (где все клиенты были одним логином `client`).
-//
-// Два транспорта, одинаковый JSON-протокол кадров:
-//  - TCP (построчный JSON, `\n`-разделитель) — для нативного клиента без
-//    зависимостей (parvane-core GatewayTransport);
-//  - WebSocket — для будущих браузер/мобильных клиентов.
-use anyhow::{anyhow, Context, Result};
-use async_nats::Client;
+// gateway кадрами протокола v2 (`v2/`), gateway верифицирует JWT и пропускает
+// только в СВОИ subject'ы пользователя. Изоляция «людей» держится на gateway,
+// а не на NATS-правах. Два транспорта: TCP (преамбула `PVN2`, varint-кадры) и
+// WebSocket (двоичные кадры). Протокол v1 (JSON-кадры) удалён 7 окт 2026 (T110):
+// его кадр получает `upgrade_required`.
+use anyhow::{Context, Result};
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{info, warn};
 
-use parvane_types::{
-    topic_contract::{
-        GATEWAY_ALLOWED_PUBLISH, GATEWAY_ALLOWED_REQUEST, GATEWAY_EVENT_SUBJECTS,
-        GATEWAY_TOKEN_REQUEST_SUBJECTS,
-    },
-    GroupListResponse,
-    topics::{
-        call_inbox, group_call_route, msg_inbox, FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, GROUP_LIST,
-        IDENTITY_EMAIL_CONFIRM, IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_REGISTER_STATUS,
-        IDENTITY_SERVER_INFO, IDENTITY_TELEGRAM_CONFIRM, IDENTITY_VERIFY, MSG_CHAT_PREFIX, MSG_EDIT,
-        MSG_SEND, MSG_TYPING_PREFIX, PRESENCE_PREFIX,
-    },
-    VerifyRequest, VerifyResponse,
-};
-
 mod limits;
-mod acl;
 mod session;
 mod v2;
 pub(crate) use limits::*;
-pub(crate) use acl::*;
 pub(crate) use session::*;
 
 #[cfg(test)]
@@ -110,11 +89,10 @@ async fn main() -> Result<()> {
     });
     info!("Лимиты соединений: всего {}, на IP {}", max_conns, max_per_ip);
 
-    // TCP-листенер (нативный клиент).
+    // TCP-листенер (нативный клиент, протокол v2 с преамбулой PVN2).
     let tcp = TcpListener::bind(&tcp_bind).await.context("bind TCP")?;
     info!("Gateway TCP на {}", tcp_bind);
     {
-        let nats = nats.clone();
         let limits = limits.clone();
         let v2 = v2.clone();
         tokio::spawn(async move {
@@ -125,11 +103,10 @@ async fn main() -> Result<()> {
                             warn!("tcp {}: соединение отклонено (лимит)", peer);
                             continue; // stream дропается → сокет закрыт
                         };
-                        let nats = nats.clone();
                         let v2 = v2.clone();
                         tokio::spawn(async move {
                             let _guard = guard;
-                            if let Err(e) = handle_tcp(stream, nats, v2).await {
+                            if let Err(e) = handle_tcp(stream, v2).await {
                                 warn!("tcp {}: {}", peer, e);
                             }
                         });
@@ -140,7 +117,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // WebSocket-листенер (будущие браузер/мобилки).
+    // WebSocket-листенер (web, desktop и android через WSS).
     let ws = TcpListener::bind(&ws_bind).await.context("bind WS")?;
     info!("Gateway WebSocket на {}", ws_bind);
     loop {
@@ -149,11 +126,10 @@ async fn main() -> Result<()> {
             warn!("ws {}: соединение отклонено (лимит)", peer);
             continue;
         };
-        let nats = nats.clone();
         let v2 = v2.clone();
         tokio::spawn(async move {
             let _guard = guard;
-            if let Err(e) = handle_ws(stream, nats, v2).await {
+            if let Err(e) = handle_ws(stream, v2).await {
                 warn!("ws {}: {}", peer, e);
             }
         });
