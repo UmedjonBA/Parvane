@@ -688,6 +688,36 @@ bool StoreWriteLines(const QString &path, const QStringList &lines) {
 // Пишем каждое ПОКАЗАННОЕ сообщение (своё при отправке, принятое в injectOnMain) в
 // РАСШИФРОВАННОМ виде в per-self journal и воспроизводим при старте. Переживает
 // и рестарт, и релогин (файл наш, не чистится логаутом tdesktop).
+// NAT-02/NAT-05: расшифрованные медиа — в tdata (не в общем /tmp, где файлы
+// читались всеми и жили вечно), каталог 0700, файлы 0600; имя и id файла из
+// сообщения — только безопасные символы (иначе `../` писал в домашний каталог).
+[[nodiscard]] QString MediaDir() {
+	const auto dir = cWorkingDir() + u"tdata/parvane-media"_q;
+	QDir().mkpath(dir);
+	QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+	return dir;
+}
+
+[[nodiscard]] bool IsSafeFileId(const QString &fileId) {
+	static const auto re = QRegularExpression(u"^[A-Za-z0-9_-]{1,64}$"_q);
+	return re.match(fileId).hasMatch();
+}
+
+[[nodiscard]] QString SafeFileName(const QString &name) {
+	auto base = QFileInfo(name).fileName();
+	static const auto bad = QRegularExpression(u"[\\\\/:*?\"<>|\\x00-\\x1f]"_q);
+	base.remove(bad);
+	while (base.startsWith('.')) {
+		base.remove(0, 1);
+	}
+	base = base.left(128).trimmed();
+	return base.isEmpty() ? u"file"_q : base;
+}
+
+void RestrictToOwner(const QString &path) {
+	QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+}
+
 [[nodiscard]] QString HistoryPath() {
 	auto self = SelfAddress();
 	if (self.isEmpty()) {
@@ -5604,15 +5634,15 @@ void AttachLocalOutgoingMedia(
 		// Свой файл — привязываем локальную копию, чтобы считался скачанным.
 		auto localPath = file->filepath;
 		if (localPath.isEmpty()) {
-			const auto dir = QDir::tempPath() + u"/parvane-media"_q;
-			QDir().mkpath(dir);
-			localPath = dir + u"/out_"_q + QString::number(docId) + u"_"_q
-				+ (file->filename.isEmpty() ? u"file"_q : file->filename);
+			localPath = MediaDir() + u"/out_"_q + QString::number(docId) + u"_"_q
+				+ SafeFileName(file->filename);
 			auto f = QFile(localPath);
 			if (!f.open(QIODevice::WriteOnly)
 				|| f.write(raw) != qint64(raw.size())) {
 				return;
 			}
+			f.close();
+			RestrictToOwner(localPath);
 		}
 		const auto ownDoc = session->data().document(docId);
 		ownDoc->setLocation(Core::FileLocation(localPath));
@@ -7285,9 +7315,11 @@ void pumpMediaDownload(
 			}
 			bytes = std::move(*dec);
 		}
-		const auto dir = QDir::tempPath() + u"/parvane-media"_q;
-		QDir().mkpath(dir);
-		const auto path = dir + u"/"_q + fileId + u"_"_q + filename;
+		if (!IsSafeFileId(fileId)) {
+			LOG(("Parvane: недопустимый file_id медиа — пропущено"));
+			return;
+		}
+		const auto path = MediaDir() + u"/"_q + fileId + u"_"_q + SafeFileName(filename);
 		{
 			auto f = QFile(path);
 			if (!f.open(QIODevice::WriteOnly)
@@ -7295,6 +7327,8 @@ void pumpMediaDownload(
 				LOG(("Parvane: не записать медиа-файл %1").arg(path));
 				return;
 			}
+			f.close();
+			RestrictToOwner(path);
 		}
 		const auto mediaId = docIdFromFileId(fileId);
 		crl::on_main([=] {
@@ -7673,9 +7707,16 @@ bool prepareIncoming(
 	for (auto &sm : msgs) {
 		const auto kind = parvane::contentKind(sm.content);
 		if (kind != "encrypted" && kind != "group_encrypted") {
+		try {
 			out.push_back(std::move(sm));
 			continue;
+		} catch (const std::exception &e) {
+			// NAT-01: содержимое от собеседника не должно ронять клиент (и
+			// повторно — при каждом запуске из журнала): запись пропускается
+			LOG(("Parvane: входящее (воркер) пропущено: %1").arg(QString::fromUtf8(e.what())));
+			continue;
 		}
+	}
 		if (!parvane::e2e::ready() || !t) {
 			clean = false; // из кэша может не найтись → курсор не двигаем
 			if (failed) { failed->push_back(sm.id); }
@@ -7901,8 +7942,15 @@ void injectOnMain(
 		auto sm = smOrig; // мутабельная копия — для расшифровки E2E-контента
 		// История группы v1, переведённой в v2 (T180), — в тот же чат
 		if (const auto to = QString::fromStdString(sm.to); IsMigratedGroup(to)) {
+		try {
 			sm.to = CanonicalGroup(to).toStdString();
+		} catch (const std::exception &e) {
+			// NAT-01: содержимое от собеседника не должно ронять клиент (и
+			// повторно — при каждом запуске из журнала): запись пропускается
+			LOG(("Parvane: входящее (вставка) пропущено: %1").arg(QString::fromUtf8(e.what())));
+			continue;
 		}
+	}
 		// E2E (Фаза 2): входящий Encrypted-контент → расшифровать в реальный
 		// MessageContent, дальше синтез как обычно. Свои исходящие (from==self)
 		// зашифрованы ДЛЯ собеседника — их не расшифровать, но они идут через

@@ -2366,6 +2366,14 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
         JNIEnv *env, jclass, jstring fileId, jstring key, jstring nonce) {
     const auto fid = jstr(env, fileId);
     const auto k = jstr(env, key), n = jstr(env, nonce);
+    // NAT-04: file_id приходит из сообщения — в путь только безопасное имя (UUID
+    // cloud: [A-Za-z0-9-], ≤ 64), иначе `../` вёл в соседние каталоги хранилища
+    const bool safeName = !fid.empty() && fid.size() <= 64
+        && std::all_of(fid.begin(), fid.end(), [](unsigned char ch) { return std::isalnum(ch) || ch == '-' || ch == '_'; });
+    if (!safeName) {
+        LOGE("downloadFile: недопустимый file_id");
+        return env->NewStringUTF("");
+    }
     const auto path = mediaDir() + "/" + fid;
     if (std::ifstream(path).good()) return env->NewStringUTF(path.c_str());
     try {
