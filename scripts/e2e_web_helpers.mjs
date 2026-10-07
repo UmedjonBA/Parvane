@@ -511,7 +511,13 @@ export async function reloadPage(page) {
     if (consoleTail.length > 60) consoleTail.shift();
   };
   page.on('console', onConsole);
-  await page.evaluate(() => { globalThis.__parvaneE2eReloadMarker = Date.now(); }).catch(() => undefined);
+  // Дождаться кадра: reload, выданный пока главный поток занят закрытием
+  // оверлея (history.back() после звонка), терялся — Playwright ждал нового
+  // документа 30 с (`calls` после T110: 3 красных из 4 без этого ожидания)
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+    globalThis.__parvaneE2eReloadMarker = Date.now();
+  })).catch(() => undefined);
   try {
     for (let attempt = 0; ; attempt++) {
       try {
