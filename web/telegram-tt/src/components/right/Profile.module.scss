@@ -316,14 +316,3 @@
 .savedGift {
   @include mixins.with-vt-type('profileGifts');
 }
-
-// Parvane (spec 008): «Классическое» — блоки профиля во всю ширину колонки
-:global(html.interface-classic) {
-  .chatExtraBlock {
-    margin-inline: 0;
-  }
-
-  .sharedMediaTabs {
-    padding-inline: 0;
-  }
-}

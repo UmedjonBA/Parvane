@@ -1,4 +1,4 @@
-// Оформление интерфейса (spec 008): «Панели» (вид по умолчанию) и «Классическое».
+// Оформление интерфейса (spec 008): «Панели» (вид по умолчанию) и «Классическое» (вид Web A 12.0.30).
 // Проверяется геометрия колонок (отступы от краёв окна, скругление, тень), выбор
 // на экране входа и в настройках, сохранение после перезагрузки и выхода, тёмная
 // тема и мобильная ширина. Запуск: scripts/run_web_interface_style_e2e.sh
@@ -58,8 +58,31 @@ async function expectStyle(page, style, label) {
     assert.equal(header.top, 0, `${label}: заголовок чата не у верхнего края: ${JSON.stringify(header)}`);
     assert.equal(header.right, 0, `${label}: заголовок чата не до правого края: ${JSON.stringify(header)}`);
     assert.equal(header.radius, 0, `${label}: заголовок чата скруглён`);
-    assert.equal(footer.bottom, 0, `${label}: поле ввода не у нижнего края: ${JSON.stringify(footer)}`);
-    assert.equal(footer.right, 0, `${label}: поле ввода не до правого края: ${JSON.stringify(footer)}`);
+    // Поле ввода как в Web A 12.0.30: «пузырь» (свой фон и скругление у обёртки,
+    // а не у всей строки) и круглая кнопка отправки рядом
+    // Кнопка отправки меняет размер с анимацией — ждём конечные 3rem
+    await page.waitForFunction(() => {
+      const button = document.querySelector('.Composer.is-chat-composer > .Button.main-button');
+      return button && Math.round(button.getBoundingClientRect().width) === 48;
+    }, undefined, { timeout: 5000 }).catch(() => undefined);
+    const composer = await page.evaluate(() => {
+      const row = getComputedStyle(document.querySelector('.Composer.is-chat-composer'));
+      const bubble = getComputedStyle(document.querySelector('.Composer.is-chat-composer .composer-wrapper'));
+      const button = document.querySelector('.Composer.is-chat-composer > .Button.main-button').getBoundingClientRect();
+      return {
+        rowHasShadow: row.boxShadow !== 'none',
+        bubbleRadius: parseFloat(bubble.borderTopLeftRadius) || 0,
+        bubbleTailCorner: parseFloat(bubble.borderBottomRightRadius) || 0,
+        bubbleHasShadow: bubble.boxShadow !== 'none',
+        button: [Math.round(button.width), Math.round(button.height)],
+      };
+    });
+    assert.deepEqual(
+      { ...composer, bubbleRadius: composer.bubbleRadius > 0 },
+      { rowHasShadow: false, bubbleRadius: true, bubbleTailCorner: 0, bubbleHasShadow: true, button: [48, 48] },
+      `${label}: поле ввода не «пузырь» с круглой кнопкой: ${JSON.stringify(composer)}`,
+    );
+    assert.ok(footer.bottom === 0, `${label}: нижняя полоса чата смещена: ${JSON.stringify(footer)}`);
   } else {
     // «Панели» — вид до фичи: отступ 1rem, скругление 1.5rem, тень
     assert.deepEqual(
