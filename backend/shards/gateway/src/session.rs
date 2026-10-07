@@ -71,8 +71,16 @@ pub(crate) async fn handle_tcp(stream: TcpStream, nats: Arc<Client>, v2: Arc<cra
         }
     });
     serve(in_rx, out_tx, nats, client_ip).await;
-    let _ = writer.await;
+    finish_writer(writer).await;
     Ok(())
+}
+
+/// Дослать хвост и завершить writer за ограниченное время (GW-02): клиент,
+/// не читающий сокет, не должен держать задачу и слот соединения.
+pub(crate) async fn finish_writer(mut writer: tokio::task::JoinHandle<()>) {
+    if tokio::time::timeout(Duration::from_secs(WRITER_FLUSH_SECS), &mut writer).await.is_err() {
+        writer.abort();
+    }
 }
 
 pub(crate) async fn handle_ws(stream: TcpStream, nats: Arc<Client>, v2: Arc<crate::v2::Shared>) -> Result<()> {
@@ -142,7 +150,7 @@ pub(crate) async fn handle_ws(stream: TcpStream, nats: Arc<Client>, v2: Arc<crat
         }
     });
     serve(in_rx, out_tx, nats, client_ip).await;
-    let _ = writer.await;
+    finish_writer(writer).await;
     Ok(())
 }
 
@@ -193,6 +201,7 @@ pub(crate) async fn serve(
     // Всё остальное — после auth с валидным JWT. На всю фазу — idle-timeout:
     // соединение, не авторизовавшееся за AUTH_TIMEOUT_SECS, закрывается.
     let auth_deadline = Instant::now() + Duration::from_secs(AUTH_TIMEOUT_SECS);
+    let mut pre = pre_auth_bucket();
     let (user, auth_token) = loop {
         let remaining = auth_deadline.saturating_duration_since(Instant::now());
         let text = match tokio::time::timeout(remaining, in_rx.recv()).await {
@@ -223,6 +232,10 @@ pub(crate) async fn serve(
             },
             "req" => {
                 let subject = v["subject"].as_str().unwrap_or("").to_string();
+                if !pre.try_take() {
+                    let _ = tx.send(err_frame(v["id"].as_str(), RATE_LIMITED)).await;
+                    continue;
+                }
                 if subject == IDENTITY_ISSUE
                     || subject == IDENTITY_REGISTER
                     || subject == IDENTITY_EMAIL_CONFIRM
@@ -267,6 +280,9 @@ pub(crate) async fn serve(
 
     // 2) основной цикл
     let mut rate = SessionRate::from_env();
+    // GW-01: задача подписки, не сумевшая отдать кадр клиенту за SLOW_READER_SECS,
+    // будит это уведомление — сессия закрывается, а не копит очередь.
+    let slow_reader = Arc::new(tokio::sync::Notify::new());
     // P-06: токен верифицируется не только при auth. Периодически (и по факту
     // истечения) перепроверяем его через identity; отозванное устройство или
     // протухший JWT рвут соединение, а не живут до 24 ч.
@@ -287,6 +303,10 @@ pub(crate) async fn serve(
                     break;
                 }
                 continue;
+            }
+            _ = slow_reader.notified() => {
+                warn!("клиент {} не читает кадры подписок — сессия закрыта", user);
+                break;
             }
         };
         let v: Value = match serde_json::from_str(&text) {
@@ -350,7 +370,11 @@ pub(crate) async fn serve(
                 // P-20: issue/register доступны и после auth — без client_ip identity
                 // считал их «прямым NATS» и не применял IP-лимит (password spraying
                 // из любого аккаунта). Подмешиваем IP и здесь.
-                let payload = if subject == IDENTITY_ISSUE || subject == IDENTITY_REGISTER {
+                let payload = if subject == IDENTITY_ISSUE
+                    || subject == IDENTITY_REGISTER
+                    || subject == IDENTITY_TELEGRAM_CONFIRM
+                    || subject == IDENTITY_EMAIL_CONFIRM
+                {
                     inject_client_ip(&payload, &client_ip)
                 } else {
                     payload
@@ -405,6 +429,12 @@ pub(crate) async fn serve(
                     let _ = tx.send(err_frame(None, "слишком много подписок на сессию")).await;
                     continue;
                 }
+                // GW-08: отклонённая подписка на чужой typing-канал каждый раз
+                // стоила запроса `group.list` — лимит частоты как у запросов
+                if !rate.allow(&subject) {
+                    let _ = tx.send(err_frame(None, RATE_LIMITED)).await;
+                    continue;
+                }
                 let allowed = allowed_sub(&user, &subject)
                     || (subject.starts_with(MSG_TYPING_PREFIX)
                         && group_typing_allowed(&nats, &auth_token, &subject).await);
@@ -416,14 +446,20 @@ pub(crate) async fn serve(
                     Ok(mut sub) => {
                         sub_subjects.insert(subject);
                         let tx2 = tx.clone();
+                        let slow = slow_reader.clone();
                         subs.push(tokio::spawn(async move {
                             while let Some(m) = sub.next().await {
                                 let p = String::from_utf8_lossy(&m.payload).to_string();
                                 let frame =
                                     json!({"op":"msg","subject":m.subject.as_str(),"payload":p})
                                         .to_string();
-                                if tx2.send(frame).await.is_err() {
-                                    break;
+                                match tokio::time::timeout(Duration::from_secs(SLOW_READER_SECS), tx2.send(frame)).await {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(_)) => break,
+                                    Err(_) => {
+                                        slow.notify_one();
+                                        break;
+                                    }
                                 }
                             }
                         }));

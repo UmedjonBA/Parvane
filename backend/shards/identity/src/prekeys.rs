@@ -268,12 +268,12 @@ pub(crate) async fn handle_prekeys_fetch(
                         requester_account(pool, &requester, claims.dev.as_deref().unwrap_or("")).await;
                     fetch_bundle_for(pool, &requester, &account, &req.user, &req.known_devices)
                         .await
-                        .unwrap_or_else(|e| empty_bundle_response(Some(e.to_string())))
+                        .unwrap_or_else(|e| empty_bundle_response(Some(parvane_db::public_error(&e))))
                 }
             }
-            Err(e) => empty_bundle_response(Some(e.to_string())),
+            Err(e) => empty_bundle_response(Some(parvane_db::public_error(&e))),
         },
-        Err(e) => empty_bundle_response(Some(e.to_string())),
+        Err(e) => empty_bundle_response(Some(parvane_db::public_error(&e))),
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
 }

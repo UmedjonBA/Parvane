@@ -350,3 +350,42 @@ fn v1_mode_parses_e6_flag() {
     assert_eq!(parse_v1_mode(Some(" disabled ")), V1Mode::Disabled);
     assert_eq!(parse_v1_mode(Some("bogus")), V1Mode::Normal);
 }
+
+// ── ревью безопасности 7 окт 2026: GW-01, GW-02, GW-04, GW-06 ────────────────
+
+#[test]
+fn client_ip_field_is_never_taken_from_client() {
+    // GW-04: клиентское client_ip вычищается для любого subject
+    let out = bind_client_payload("alice@local", "jwt", IDENTITY_TELEGRAM_CONFIRM,
+        r#"{"secret":"x","token":"t","telegram_id":1,"client_ip":"213.155.15.139"}"#).unwrap();
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert!(v.get("client_ip").is_none(), "client_ip клиента не проходит: {out}");
+    assert_eq!(v["token"], "t", "бутстрап-запрос не получает токен сессии вместо своего");
+    // после очистки gateway подмешивает свой адрес
+    let injected = inject_client_ip(&out, "10.0.0.7");
+    assert_eq!(serde_json::from_str::<Value>(&injected).unwrap()["client_ip"], "10.0.0.7");
+}
+
+#[test]
+fn ephemeral_frames_are_size_capped() {
+    // GW-01: «печатает»/«в сети» — короткие кадры
+    let small = r#"{"to":"bob@local","typing":true}"#;
+    let out = bind_client_payload("alice@local", "jwt", "msg.typing.123", small).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["from"], "alice@local");
+    let big = format!(r#"{{"to":"bob@local","pad":"{}"}}"#, "x".repeat(EPHEMERAL_MAX_BYTES));
+    assert!(bind_client_payload("alice@local", "jwt", "msg.typing.123", &big).is_err());
+    assert!(bind_client_payload("alice@local", "jwt", "presence.123", &big).is_err());
+}
+
+#[test]
+fn pre_auth_requests_are_rate_limited_per_connection() {
+    // GW-06: до входа — своя корзина; всплеск конечен
+    let mut b = pre_auth_bucket();
+    let t0 = Instant::now();
+    let mut ok = 0;
+    for _ in 0..200 {
+        if b.try_take_at(t0) { ok += 1; }
+    }
+    assert!(ok <= 20, "всплеск до входа ограничен: {ok}");
+    assert!(anon_idle_secs() <= 60, "анонимное соединение не живёт сутками");
+}

@@ -50,16 +50,29 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
         .context("неверный JSON в IssueRequest")?;
     req.user = canonical_user(&req.user, &server_domain());
 
-    // Брутфорс-защита: частотный лимит + экспоненциальный лок-аут по логину,
-    // плюс частотный лимит по IP (gateway подмешивает client_ip; пусто при
-    // прямом NATS в dev). Проверяем ДО обращения к БД, чтобы отклонённая
-    // попытка была дёшева.
-    login_gate_check(&req.user)?;
+    // ID-02: логин длиннее любого допустимого адреса отбрасывается ДО любого
+    // учёта — v1-кадр до 4 МиБ не должен оставлять след в памяти лимитеров.
+    // Текст тот же, что у неверного пароля (анти-энумерация).
+    if req.user.len() > LIMITER_KEY_MAX {
+        anyhow::bail!("неверный логин или пароль");
+    }
+    // v1 не проверял device_id вовсе (v2 — проверяет): произвольная строка
+    // уходила в JWT и таблицы устройств.
+    if let Some(d) = req.device_id.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        if !parvane_protocol::address::is_valid_device_id(d) {
+            anyhow::bail!("неверный логин или пароль");
+        }
+    }
+    // Брутфорс-защита: частотный лимит по IP (gateway подмешивает client_ip;
+    // пусто при прямом NATS в dev) идёт ПЕРВЫМ — отклонённая по IP попытка не
+    // заводит корзину логина; затем частотный лимит + экспоненциальный лок-аут
+    // по логину. Всё — до обращения к БД.
     if !req.client_ip.is_empty()
         && !window_rate_ok("login-ip", &req.client_ip, env_u64("PARVANE_LOGIN_RATE_IP", 120) as usize)
     {
         anyhow::bail!("слишком много попыток, попробуйте позже");
     }
+    login_gate_check(&req.user)?;
 
     // Логин: пользователь ОБЯЗАН существовать. Создание аккаунтов — только через
     // identity.user.register (раньше issue молча создавал юзера с любым паролем —
@@ -229,27 +242,28 @@ pub(crate) async fn handle_password_change(nc: &Client, pool: &SqlitePool, decod
 pub(crate) async fn do_password_change(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<String> {
     let req: PasswordChangeRequest =
         serde_json::from_slice(payload).context("неверный JSON в PasswordChangeRequest")?;
-    let username = verify_active_user(pool, decoding, &req.token).await?;
-    login_gate_check(&username)?;
-    if let Err(e) = require_password(pool, &username, Some(&req.old_password)).await {
-        login_record_failure(&username);
-        return Err(e);
-    }
+    let claims = verify_active(pool, decoding, &req.token).await?;
+    let username = claims.sub;
+    // Корзина попыток — внутри require_password (ID-05).
+    require_password(pool, &username, Some(&req.old_password)).await?;
     password_policy_ok(&req.new_password)?;
     if req.new_password == req.old_password {
         anyhow::bail!("новый пароль совпадает со старым");
     }
     let hash = hash_password(&req.new_password)?;
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE users SET password_hash = ? WHERE username = ?")
+    // ID-06: прежние JWT (iat < now) гаснут, кроме токенов этого устройства —
+    // владелец, сменивший пароль после компрометации, выкидывает чужие сессии.
+    sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, password_changed_dev = ? WHERE username = ?")
         .bind(&hash)
+        .bind(now_unix())
+        .bind(claims.dev.as_deref().unwrap_or(""))
         .bind(&username)
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM trusted_devices WHERE username = ?").bind(&username).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM login_links WHERE username = ?").bind(&username).execute(&mut *tx).await?;
     tx.commit().await?;
-    login_record_success(&username);
     Ok(username)
 }
 
@@ -266,8 +280,9 @@ pub(crate) async fn handle_twofa(nc: &Client, pool: &SqlitePool, decoding: &Deco
 /// привязанном Telegram; устройство, включившее 2FA, получает секрет доверия.
 pub(crate) async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload: &[u8]) -> Result<(bool, bool, Option<String>)> {
     let req: TwoFactorRequest = serde_json::from_slice(payload).context("неверный JSON в TwoFactorRequest")?;
-    let data = jwt_decode(decoding, &req.token)?;
-    let username = data.claims.sub;
+    // ID-05: отозванное устройство (и токен до смены пароля) 2FA не трогает.
+    let claims = verify_active(pool, decoding, &req.token).await?;
+    let username = claims.sub;
     let row: Option<(i64, Option<i64>)> =
         sqlx::query_as("SELECT tg_2fa, telegram_id FROM users WHERE username = ?")
             .bind(&username)
@@ -283,10 +298,10 @@ pub(crate) async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload:
     if enabled && !telegram_linked {
         anyhow::bail!("сначала привяжите Telegram (подтверждение через бота)");
     }
-    if !enabled {
-        // P-07: выключить 2FA можно только с паролем.
-        require_password(pool, &username, req.password.as_deref()).await?;
-    }
+    // P-07: переключить 2FA можно только с паролем. Чтение (без `enabled`) —
+    // по одному JWT; повторное «включить» при уже включённой выдавало секрет
+    // доверия любому держателю токена (ID-05) — теперь тоже только с паролем.
+    require_password(pool, &username, req.password.as_deref()).await?;
     sqlx::query("UPDATE users SET tg_2fa = ? WHERE username = ?")
         .bind(enabled as i64)
         .bind(&username)
@@ -299,7 +314,7 @@ pub(crate) async fn do_twofa(pool: &SqlitePool, decoding: &DecodingKey, payload:
     }
     let mut trust_secret = None;
     if enabled {
-        if let Some(dev) = data.claims.dev.as_deref().filter(|d| !d.is_empty()) {
+        if let Some(dev) = claims.dev.as_deref().filter(|d| !d.is_empty()) {
             // Устройство, с которого включили 2FA, уже вошло по паролю — даём ему
             // секрет доверия сразу (иначе десктоп, который переизвлекает JWT при
             // каждом старте, тут же попросил бы подтверждение на том же устройстве)

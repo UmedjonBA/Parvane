@@ -82,7 +82,11 @@ async fn main() -> Result<()> {
 
     // Шина может подняться позже gateway (compose, раннеры тестов) — повторяем
     // первичное подключение вместо немедленного выхода.
-    let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
+    // GW-01: очередь подписки NATS по умолчанию — 65 536 сообщений на подписку;
+    // у нечитающего клиента это неограниченная память. Хватает и малой.
+    let mut opts = async_nats::ConnectOptions::new()
+        .retry_on_initial_connect()
+        .subscription_capacity(env("PARVANE_GATEWAY_SUB_CAPACITY", "1024").parse().unwrap_or(1024));
     if !pass.is_empty() {
         opts = opts.user_and_password(user, pass);
     }

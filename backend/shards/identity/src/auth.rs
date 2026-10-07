@@ -222,10 +222,13 @@ pub(crate) fn password_policy_ok(password: &str) -> Result<()> {
 /// P-07: опасные операции (выключение 2FA, отзыв устройства, смена ключа,
 /// смена пароля) требуют ТЕКУЩИЙ пароль, а не только JWT — украденный
 /// 24-часовой токен не должен снимать второй фактор или выкидывать владельца.
+/// ID-05: та же корзина попыток, что у входа, — иначе украденный JWT давал
+/// онлайн-перебор пароля через `twofa`/`device.revoke` без лок-аута.
 pub(crate) async fn require_password(pool: &SqlitePool, username: &str, password: Option<&str>) -> Result<()> {
     let Some(password) = password.filter(|p| !p.is_empty()) else {
         anyhow::bail!("требуется пароль");
     };
+    login_gate_check(username)?;
     let row: Option<(String,)> =
         sqlx::query_as("SELECT password_hash FROM users WHERE username = ?")
             .bind(username)
@@ -233,11 +236,14 @@ pub(crate) async fn require_password(pool: &SqlitePool, username: &str, password
             .await?;
     let Some((hash,)) = row else {
         let _ = verify_password(password, dummy_password_hash());
+        login_record_failure(username);
         anyhow::bail!("неверный пароль");
     };
     if !verify_password(password, &hash) {
+        login_record_failure(username);
         anyhow::bail!("неверный пароль");
     }
+    login_record_success(username);
     Ok(())
 }
 
@@ -311,12 +317,12 @@ pub(crate) async fn handle_verify(
     };
 
     let resp = match do_verify(decoding, &msg.payload) {
-        Ok(claims) => match is_device_revoked(pool, &claims.sub, claims.dev.as_deref()).await {
-            Ok(false) => VerifyResponse { ok: true, user: Some(claims.sub), error: None, device: claims.dev },
-            Ok(true) => VerifyResponse {
+        Ok(claims) => match token_rejection(pool, &claims).await {
+            Ok(None) => VerifyResponse { ok: true, user: Some(claims.sub), error: None, device: claims.dev },
+            Ok(Some(reason)) => VerifyResponse {
                 ok: false,
                 user: None,
-                error: Some("устройство отозвано".to_string()),
+                error: Some(reason.to_string()),
                 device: None,
             },
             Err(e) => VerifyResponse { ok: false, user: None, error: Some(parvane_db::public_error(&e)), device: None },
@@ -345,10 +351,33 @@ pub(crate) fn do_verify(decoding: &DecodingKey, payload: &[u8]) -> Result<Claims
 /// устройство до 24 ч продолжало менять профиль/ключи/отзывать другие.
 pub(crate) async fn verify_active(pool: &SqlitePool, decoding: &DecodingKey, token: &str) -> Result<Claims> {
     let data = jwt_decode(decoding, token)?;
-    if is_device_revoked(pool, &data.claims.sub, data.claims.dev.as_deref()).await? {
-        anyhow::bail!("устройство отозвано");
+    if let Some(reason) = token_rejection(pool, &data.claims).await? {
+        anyhow::bail!("{reason}");
     }
     Ok(data.claims)
+}
+
+/// Почему живой (по подписи и сроку) токен всё же недействителен: устройство
+/// отозвано (P-06) либо пароль сменён после выдачи токена (ID-06) — кроме
+/// токенов устройства, с которого пароль сменили.
+pub(crate) async fn token_rejection(pool: &SqlitePool, claims: &Claims) -> Result<Option<&'static str>> {
+    if is_device_revoked(pool, &claims.sub, claims.dev.as_deref()).await? {
+        return Ok(Some("устройство отозвано"));
+    }
+    let row: Option<(i64, String)> =
+        sqlx::query_as("SELECT password_changed_at, password_changed_dev FROM users WHERE username = ?")
+            .bind(&claims.sub)
+            .fetch_optional(pool)
+            .await
+            .context("проверка смены пароля")?;
+    if let Some((changed_at, keep_dev)) = row {
+        let issued_before = (claims.iat as i64) < changed_at;
+        let is_keeper = !keep_dev.is_empty() && claims.dev.as_deref() == Some(keep_dev.as_str());
+        if issued_before && !is_keeper {
+            return Ok(Some("пароль сменён — войдите заново"));
+        }
+    }
+    Ok(None)
 }
 
 /// verify_active → username (для обработчиков, не пишущих данные устройства).
