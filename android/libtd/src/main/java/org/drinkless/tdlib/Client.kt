@@ -877,7 +877,9 @@ class Client private constructor(
         if (store.local == null) store.local = ChatLocalState(java.io.File(boundDir))
         store.local?.folders?.let { if (it.all().isNotEmpty()) postUpdate(TdApi.UpdateChatFolders(it.infos(), it.mainPosition, false)) }
         startScheduled()
-        startE2eHook()
+        // NAT-12: хук команд из /data/local/tmp — только в отладочной сборке (как
+        // подмена gateway и флаг v1): в релизе его мог дёргать любой с adb-shell
+        if (org.parvane.libtd.BuildConfig.DEBUG) startE2eHook()
     }
 
     /** Группы с сервера → basic group + чат в UI (idempotent). */

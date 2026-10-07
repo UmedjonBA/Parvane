@@ -40,14 +40,24 @@ inline json textContent(const std::string &text,
     return c;
 }
 
+// "kind" контента ("text"/"voice"/"photo"/… или "" если неизвестно).
+// NAT-01: содержимое задаёт собеседник — `json::value()` бросает при поле
+// другого типа (`{"kind":1}`), и клиент падал; читаем типобезопасно.
+inline std::string contentKind(const json &content) {
+    if (!content.is_object()) return std::string();
+    const auto it = content.find("kind");
+    return (it != content.end() && it->is_string()) ? it->get<std::string>() : std::string();
+}
+
 // Если content — текстовый, вернуть строку; иначе nullopt (медиа/удалённое).
 inline std::optional<std::string> contentText(const json &content) {
     if (!content.is_object()) return std::nullopt;
-    const auto kind = content.value("kind", std::string());
+    const auto kind = contentKind(content);
     // location (внутри E2E-контента) рендерится как сообщение с гео-медиа.
     if (kind == "location") return std::string();
     if (kind != "text") return std::nullopt;
-    return content.value("text", std::string());
+    const auto it = content.find("text");
+    return (it != content.end() && it->is_string()) ? it->get<std::string>() : std::string();
 }
 
 // Entities (форматирование) текстового content — массив (пустой, если нет).
@@ -66,11 +76,6 @@ inline json contentWebpage(const json &content) {
         return content["webpage"];
     }
     return json();
-}
-
-// "kind" контента ("text"/"voice"/"photo"/… или "" если неизвестно).
-inline std::string contentKind(const json &content) {
-    return content.is_object() ? content.value("kind", std::string()) : std::string();
 }
 
 // ── SendPayload (msg.chat.send) ──────────────────────────────────────────────
