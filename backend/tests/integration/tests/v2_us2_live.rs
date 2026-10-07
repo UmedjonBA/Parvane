@@ -62,7 +62,10 @@ impl Drop for Stack {
     fn drop(&mut self) {
         self.stop();
         if !self.keep {
+            // Журналы стека нужны для разбора падения — при панике каталог остаётся
+        if !std::thread::panicking() {
             let _ = std::fs::remove_dir_all(&self.dir);
+        }
         }
     }
 }

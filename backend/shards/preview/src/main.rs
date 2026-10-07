@@ -8,16 +8,13 @@ mod v2;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use async_nats::Client;
 use futures::StreamExt;
 use parvane_types::{
-    ParvaneEvent, MapTileRequest, MapTileResponse, PreviewFetchRequest, PreviewFetchResponse, VerifyRequest, VerifyResponse,
+    PreviewFetchResponse,
     WebPagePreview,
-    topics::{IDENTITY_VERIFY, PREVIEW_FETCH, PREVIEW_MAP_TILE},
 };
 use sqlx::SqlitePool;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // Лимиты (согласованы с desktop-эталоном parvane_client.cpp); редиректы и
 // фильтр адресов — общий parvane-netguard (T106)
@@ -71,25 +68,9 @@ async fn main() -> Result<()> {
     // Протокол v2 (spec 007 T053): preview.link / preview.map_tile из реестра
     v2::run(nc.clone(), pool.clone()).await?;
 
-    let mut fetch_sub = nc.subscribe(PREVIEW_FETCH).await?;
-    let mut tile_sub = nc.subscribe(PREVIEW_MAP_TILE).await?;
-    info!("Preview шард запущен. Слушаю: {}, {}", PREVIEW_FETCH, PREVIEW_MAP_TILE);
-
-    // 4.5/P-30: обработчики в tokio::spawn под семафором + общий дедлайн на
-    // запрос — медленный сайт с редиректами не блокирует превью остальных.
-    let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
-    loop {
-        let (nc2, pool2) = (nc.clone(), pool.clone());
-        let permit = handlers.clone().acquire_owned().await;
-        tokio::select! {
-            Some(msg) = fetch_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_fetch(&nc2, &pool2, msg).await });
-            }
-            Some(msg) = tile_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_map_tile(&nc2, &pool2, msg).await });
-            }
-        }
-    }
+    info!("Preview шард запущен (протокол v2: preview.link, preview.map_tile)");
+    std::future::pending::<()>().await;
+    Ok(())
 }
 
 /// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 16).
@@ -127,94 +108,14 @@ fn preview_rate_ok(user: &str) -> bool {
     true
 }
 
-async fn verify_token(nc: &Client, token: &str) -> Result<String> {
-    let req = serde_json::to_vec(&VerifyRequest { token: token.to_string() })?;
-    let reply = nc.request(IDENTITY_VERIFY, req.into()).await.context("запрос к identity")?;
-    let resp: VerifyResponse =
-        serde_json::from_slice(&reply.payload).context("ответ identity: неверный JSON")?;
-    if resp.ok {
-        resp.user.ok_or_else(|| anyhow::anyhow!("identity вернул ok без user"))
-    } else {
-        anyhow::bail!(resp.error.unwrap_or_else(|| "неизвестная ошибка".into()))
-    }
-}
 
 fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
-async fn handle_fetch(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        warn!("preview: нет reply-топика");
-        return;
-    };
-
-    let resp = async {
-        // Токен — в конверте (его подставляет gateway), url — в payload
-        let event: ParvaneEvent<PreviewFetchRequest> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON preview.link.fetch")?;
-        let user = verify_token(nc, &event.token).await?;
-        if !preview_rate_ok(&user) {
-            anyhow::bail!("слишком много запросов превью");
-        }
-        // CLD-01: длина и фильтр адреса — ДО кэша (путь v2 так и делал): иначе
-        // любая строка до 4 МиБ ложилась в `previews` отрицательным результатом.
-        if event.payload.url.len() > MAX_PREVIEW_URL_BYTES {
-            anyhow::bail!("слишком длинный адрес");
-        }
-        parvane_netguard::check_url(&event.payload.url, &parvane_netguard::UrlPolicy::LINK)
-            .map_err(|_| anyhow::anyhow!("адрес отклонён"))?;
-        // P-42: URL в лог не пишем (это содержимое переписки)
-        debug!("preview fetch для {}", user);
-        let preview = tokio::time::timeout(
-            Duration::from_millis(REQUEST_DEADLINE_MS),
-            resolve_preview(pool, &event.payload.url),
-        )
-        .await
-        .context("превью не уложилось в дедлайн")?;
-        anyhow::Ok(preview)
-    }
-    .await
-    .unwrap_or_else(|e| PreviewFetchResponse {
-        ok: false,
-        webpage: None,
-        error: Some(parvane_db::public_error(&e)),
-    });
-
-    let json = serde_json::to_vec(&resp).unwrap_or_default();
-    let _ = nc.publish(reply, json.into()).await;
-}
 
 // ── preview.map.tile ──────────────────────────────────────────────────────────
 
-async fn handle_map_tile(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        warn!("map tile: нет reply-топика");
-        return;
-    };
-    let resp = async {
-        let event: ParvaneEvent<MapTileRequest> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON preview.map.tile")?;
-        let user = verify_token(nc, &event.token).await?;
-        let MapTileRequest { z, x, y, .. } = event.payload;
-        if !tile_in_range(z, x, y) {
-            anyhow::bail!("тайл вне диапазона");
-        }
-        // P-23: per-user темп (общая корзина с превью), координаты в лог не пишем
-        if !preview_rate_ok(&user) {
-            anyhow::bail!("слишком много запросов тайлов");
-        }
-        let png = resolve_tile(pool, z, x, y).await?;
-        anyhow::Ok(MapTileResponse { ok: true, png_base64: Some(B64.encode(png)), error: None })
-    }
-    .await
-    .unwrap_or_else(|e| {
-        warn!("map tile: {}", e);
-        MapTileResponse { ok: false, png_base64: None, error: Some(parvane_db::public_error(&e)) }
-    });
-    let json = serde_json::to_vec(&resp).unwrap_or_default();
-    let _ = nc.publish(reply, json.into()).await;
-}
 
 /// Координаты тайла допустимы: зум ≤ TILE_MAX_ZOOM, x/y внутри сетки зума.
 fn tile_in_range(z: u32, x: u32, y: u32) -> bool {
@@ -357,8 +258,6 @@ fn preview_cache_max() -> i64 {
     std::env::var("PARVANE_PREVIEW_CACHE_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000)
 }
 
-/// CLD-01: потолок длины URL в v1 (в v2 — `max_len` схемы, 2048).
-const MAX_PREVIEW_URL_BYTES: usize = 2048;
 
 async fn fetch_preview(input_url: &str) -> Result<WebPagePreview> {
     // Схема/порт/хост — общим фильтром (http/https на 80/443, без userinfo)

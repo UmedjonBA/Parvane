@@ -1,21 +1,8 @@
 use anyhow::{Context, Result};
-use async_nats::Client;
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use futures::StreamExt;
-use parvane_types::{
-    topics::{
-        FILE_DELETE, FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST, FILE_UPLOAD_CHUNK,
-        FILE_UPLOAD_COMPLETE, IDENTITY_VERIFY,
-    },
-    DownloadRequest, DownloadResponse, FileDeleteRequest, FileDeleteResponse, FileEntry,
-    FileListPayload, FileListResponse, ParvaneEvent,
-    UploadChunkPayload, UploadCompletePayload, UploadCompleteResponse, VerifyRequest,
-    VerifyResponse,
-};
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 mod v2;
 
@@ -66,16 +53,7 @@ async fn main() -> Result<()> {
     info!("SQLite v2 готов: {}", v2_path);
     v2::run(nc.clone(), std::sync::Arc::new(v2::V2Ctx { pool: pool.clone(), pool_v2 })).await?;
 
-    let mut chunk_sub = nc.subscribe(FILE_UPLOAD_CHUNK).await?;
-    let mut complete_sub = nc.subscribe(FILE_UPLOAD_COMPLETE).await?;
-    let mut download_sub = nc.subscribe(FILE_DOWNLOAD_REQUEST).await?;
-    let mut list_sub = nc.subscribe(FILE_LIST_REQUEST).await?;
-    let mut delete_sub = nc.subscribe(FILE_DELETE).await?;
-
-    info!(
-        "Cloud шард запущен. Слушаю: {}, {}, {}, {}, {}",
-        FILE_UPLOAD_CHUNK, FILE_UPLOAD_COMPLETE, FILE_DOWNLOAD_REQUEST, FILE_LIST_REQUEST, FILE_DELETE
-    );
+    info!("Cloud шард запущен (протокол v2: cloud.blob.*)");
 
     // P-08: чистим брошенные незавершённые аплоады при старте и раз в час.
     match purge_stale_uploads(&pool).await {
@@ -99,31 +77,8 @@ async fn main() -> Result<()> {
         });
     }
 
-    // 4.5/P-28: обработчики — в tokio::spawn под семафором: длинный download
-    // одного клиента не стопорит чанки/списки остальных. Гонки chunk/complete
-    // нет: клиент дожидается ack каждого чанка до отправки complete.
-    let handlers = std::sync::Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
-    loop {
-        let (nc2, pool2) = (nc.clone(), pool.clone());
-        let permit = handlers.clone().acquire_owned().await;
-        tokio::select! {
-            Some(msg) = chunk_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_chunk(&nc2, &pool2, msg).await });
-            }
-            Some(msg) = complete_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_complete(&nc2, &pool2, msg).await });
-            }
-            Some(msg) = download_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_download(&nc2, &pool2, msg).await });
-            }
-            Some(msg) = list_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_list(&nc2, &pool2, msg).await });
-            }
-            Some(msg) = delete_sub.next() => {
-                tokio::spawn(async move { let _p = permit; handle_delete(&nc2, &pool2, msg).await });
-            }
-        }
-    }
+    std::future::pending::<()>().await;
+    Ok(())
 }
 
 /// Параллелизм обработчиков (PARVANE_HANDLER_CONCURRENCY, по умолчанию 32).
@@ -140,23 +95,6 @@ pub(crate) fn max_download_chunks() -> u32 {
 
 // ── auth helper ───────────────────────────────────────────────────────────────
 
-async fn verify_token(nc: &Client, token: &str) -> Result<String> {
-    let req = serde_json::to_vec(&VerifyRequest {
-        token: token.to_string(),
-    })?;
-    let reply = nc
-        .request(IDENTITY_VERIFY, req.into())
-        .await
-        .context("запрос к identity")?;
-    let resp: VerifyResponse =
-        serde_json::from_slice(&reply.payload).context("ответ identity: неверный JSON")?;
-    if resp.ok {
-        resp.user
-            .ok_or_else(|| anyhow::anyhow!("identity вернул ok без user"))
-    } else {
-        anyhow::bail!(resp.error.unwrap_or_else(|| "неизвестная ошибка".into()))
-    }
-}
 
 // ── квоты (защита от заполнения диска шарда) ─────────────────────────────────
 
@@ -229,18 +167,6 @@ fn reject(kind: RejectKind, msg: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(Rejected { kind, msg: msg.into() })
 }
 
-/// Сохранить один чанк файла. Декодирует base64 и пишет BLOB в `chunks`.
-/// Идемпотентно (INSERT OR REPLACE) — повторная доставка чанка безопасна.
-async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> Result<()> {
-    if p.total_chunks == 0 || p.chunk_index >= p.total_chunks {
-        return Err(reject(RejectKind::Invalid, "некорректный индекс чанка"));
-    }
-    if p.total_chunks > max_total_chunks() {
-        return Err(reject(RejectKind::Limit, format!("слишком много чанков (лимит {})", max_total_chunks())));
-    }
-    let raw = B64.decode(&p.data).context("base64 decode")?;
-    store_chunk_raw(pool, owner, &p.file_id.to_string(), p.chunk_index, p.total_chunks, raw).await
-}
 
 /// Общая часть записи чанка (v1 и v2). `total_chunks` — заявленное число
 /// чанков загрузки; 0 — загрузка v2, где число чанков известно только на
@@ -336,13 +262,10 @@ pub(crate) async fn store_chunk_raw(
     Ok(())
 }
 
-/// Завершить файл: проверить что все чанки на месте и записать метаданные.
-/// Возвращает `file_id` при успехе, ошибку — если чанков недостаёт.
-async fn finalize_file(
-    pool: &SqlitePool,
-    owner: &str,
-    p: &UploadCompletePayload,
-) -> Result<uuid::Uuid> {
+
+/// Завершение загрузки в прежней v1-форме — только для тестов общей логики.
+#[cfg(test)]
+async fn finalize_file(pool: &SqlitePool, owner: &str, p: &parvane_types::UploadCompletePayload) -> Result<uuid::Uuid> {
     finalize_upload(
         pool,
         owner,
@@ -361,7 +284,7 @@ async fn finalize_file(
     Ok(p.file_id)
 }
 
-/// Параметры завершения загрузки (общие для v1 и v2).
+/// Параметры завершения загрузки (общие для прежнего v1 и v2).
 pub(crate) struct Finalize<'a> {
     pub file_id: String,
     /// `total_chunks`, с которым загрузка заведена в `uploads` (0 — v2).
@@ -493,6 +416,7 @@ pub(crate) async fn finalize_upload(pool: &SqlitePool, owner: &str, p: &Finalize
 
 /// Собранный файл для отдачи: метаданные + все чанки по порядку.
 #[cfg(test)]
+#[allow(dead_code)]
 struct LoadedFile {
     filename: String,
     mime_type: String,
@@ -629,257 +553,19 @@ async fn load_file_range_for_user(
     }))
 }
 
-/// Список файлов владельца, свежие первыми.
-async fn list_files(pool: &SqlitePool, owner: &str) -> Result<Vec<FileEntry>> {
-    let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
-        "SELECT id, filename, mime_type, size_bytes, created_at FROM files WHERE owner = ? ORDER BY created_at DESC",
-    )
-    .bind(owner)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|(id, filename, mime_type, size_bytes, created_at)| {
-            let file_id = uuid::Uuid::parse_str(&id).ok()?;
-            Some(FileEntry {
-                file_id,
-                filename,
-                mime_type,
-                size_bytes,
-                created_at,
-            })
-        })
-        .collect())
-}
 
 // ── file.upload.chunk ─────────────────────────────────────────────────────────
 
-async fn handle_chunk(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let result = async {
-        let event: ParvaneEvent<UploadChunkPayload> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON в upload.chunk")?;
-
-        let owner = verify_token(nc, &event.token).await?;
-        store_chunk(pool, &owner, &event.payload).await?;
-
-        debug!(
-            "Чанк сохранён: {} [{}/{}] owner={}",
-            event.payload.file_id,
-            event.payload.chunk_index + 1,
-            event.payload.total_chunks,
-            owner
-        );
-        anyhow::Ok(())
-    }
-    .await;
-
-    // Если клиент прислал чанк как request (с reply-топиком) — подтверждаем
-    // сохранение. Это сериализует загрузку: клиент дожидается записи каждого
-    // чанка до отправки complete, исключая гонку chunk/complete в select!.
-    if let Some(reply) = msg.reply {
-        let ack = match &result {
-            Ok(()) => serde_json::json!({ "ok": true }),
-            Err(e) => serde_json::json!({ "ok": false, "error": parvane_db::public_error(e) }),
-        };
-        if let Ok(bytes) = serde_json::to_vec(&ack) {
-            let _ = nc.publish(reply, bytes.into()).await;
-        }
-    }
-
-    if let Err(e) = result {
-        error!("handle_chunk: {}", e);
-    }
-}
 
 // ── file.upload.complete ──────────────────────────────────────────────────────
 
-async fn handle_complete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        warn!("upload.complete: нет reply-топика");
-        return;
-    };
-
-    let reply_err = reply.clone();
-    let result = async {
-        let event: ParvaneEvent<UploadCompletePayload> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON в upload.complete")?;
-
-        let owner = verify_token(nc, &event.token).await?;
-        let file_id = finalize_file(pool, &owner, &event.payload).await?;
-
-        // P-29/P-42: имя файла в лог не пишем (для E2E-вложений клиенты и так
-        // шлют непрозрачное имя), владелец — на уровне debug
-        debug!("Файл завершён: {} ({} байт) owner={}", file_id, event.payload.size_bytes, owner);
-
-        let resp = UploadCompleteResponse {
-            ok: true,
-            file_id: Some(file_id),
-            error: None,
-        };
-        nc.publish(reply, serde_json::to_vec(&resp)?.into()).await?;
-        anyhow::Ok(())
-    }
-    .await;
-
-    if let Err(e) = result {
-        error!("handle_complete: {}", e);
-        let resp = UploadCompleteResponse {
-            ok: false,
-            file_id: None,
-            error: Some(parvane_db::public_error(&e)),
-        };
-        let _ = nc
-            .publish(
-                reply_err,
-                serde_json::to_vec(&resp).unwrap_or_default().into(),
-            )
-            .await;
-    }
-}
 
 // ── file.download.request ─────────────────────────────────────────────────────
 
-async fn handle_download(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        warn!("download.request: нет reply-топика");
-        return;
-    };
-
-    let result = async {
-        let event: ParvaneEvent<DownloadRequest> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON в download.request")?;
-
-        let user = verify_token(nc, &event.token).await?;
-
-        let file_id = event.payload.file_id.to_string();
-        let range = match (event.payload.chunk_from, event.payload.chunk_to) {
-            (Some(from), Some(to)) => Some((from, to)),
-            (Some(from), None) => Some((from, from)),
-            _ => None,
-        };
-        let meta = file_meta_for_user(pool, &file_id, &user)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("файл не найден или доступ запрещён"))?;
-        let total = meta.total_chunks.max(0) as u32;
-        // P-28: диапазон ограничен окном; целый файл — не более окна за запрос
-        let (from, to) = match range {
-            Some((from, to)) => (from, to.max(from)),
-            None => (0, total.saturating_sub(1)),
-        };
-        let to = to.min(total.saturating_sub(1)).min(from.saturating_add(max_download_chunks() - 1));
-
-        // Шлём чанки по одному через reply-топик, читая каждый из БД отдельно —
-        // память ограничена одним чанком, а не размером файла
-        let mut sent = 0u32;
-        for idx in from..=to {
-            let data: Option<Vec<u8>> = sqlx::query_scalar(
-                "SELECT data FROM chunks WHERE file_id = ? AND chunk_index = ?",
-            )
-            .bind(&file_id)
-            .bind(idx as i64)
-            .fetch_optional(pool)
-            .await?;
-            let Some(data) = data else { continue };
-            let resp = DownloadResponse {
-                ok: true,
-                file_id: Some(event.payload.file_id),
-                filename: Some(meta.filename.clone()),
-                mime_type: Some(meta.mime_type.clone()),
-                chunk_index: Some(idx),
-                total_chunks: Some(total),
-                data: Some(B64.encode(&data)),
-                error: None,
-                size_bytes: Some(meta.size_bytes),
-                chunk_bytes: Some(meta.chunk_bytes as u32),
-            };
-            nc.publish(reply.clone(), serde_json::to_vec(&resp)?.into())
-                .await?;
-            sent += 1;
-        }
-
-        debug!("Файл отдан: {} чанков ({}..={} из {})", sent, from, to, total);
-        anyhow::Ok(())
-    }
-    .await;
-
-    if let Err(e) = result {
-        error!("handle_download: {}", e);
-        let resp = DownloadResponse {
-            ok: false,
-            file_id: None,
-            filename: None,
-            mime_type: None,
-            chunk_index: None,
-            total_chunks: None,
-            data: None,
-            error: Some(parvane_db::public_error(&e)),
-            size_bytes: None,
-            chunk_bytes: None,
-        };
-        let _ = nc
-            .publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into())
-            .await;
-    }
-}
 
 // ── file.list.request ─────────────────────────────────────────────────────────
 
-async fn handle_delete(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        warn!("file.delete: нет reply-топика");
-        return;
-    };
-    let result = async {
-        let event: ParvaneEvent<FileDeleteRequest> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON в file.delete")?;
-        let owner = verify_token(nc, &event.token).await?;
-        let deleted = delete_file(pool, &owner, &event.payload.file_id.to_string()).await?;
-        if deleted {
-            info!("Файл удалён owner={} ({})", owner, event.payload.file_id);
-            Ok(FileDeleteResponse { ok: true, error: None })
-        } else {
-            Ok::<_, anyhow::Error>(FileDeleteResponse {
-                ok: false,
-                error: Some("файл не найден или не принадлежит вам".into()),
-            })
-        }
-    }
-    .await;
-    let resp = result.unwrap_or_else(|e| FileDeleteResponse { ok: false, error: Some(parvane_db::public_error(&e)) });
-    let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
-}
 
-async fn handle_list(nc: &Client, pool: &SqlitePool, msg: async_nats::Message) {
-    let Some(reply) = msg.reply.clone() else {
-        warn!("file.list.request: нет reply-топика");
-        return;
-    };
-
-    let result = async {
-        let event: ParvaneEvent<FileListPayload> =
-            serde_json::from_slice(&msg.payload).context("неверный JSON в file.list.request")?;
-
-        let owner = verify_token(nc, &event.token).await?;
-        let files = list_files(pool, &owner).await?;
-
-        let resp = FileListResponse { files };
-        nc.publish(reply, serde_json::to_vec(&resp)?.into()).await?;
-        info!("Список файлов отдан owner={}", owner);
-        anyhow::Ok(())
-    }
-    .await;
-
-    if let Err(e) = result {
-        error!("handle_list: {}", e);
-        if let Some(reply) = msg.reply {
-            let resp = FileListResponse { files: vec![] };
-            let _ = nc
-                .publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into())
-                .await;
-        }
-    }
-}
 
 /// P-08: удалить брошенные незавершённые аплоады (старше upload_ttl_secs) и их
 /// чанки. Вызывается при старте и периодически.
@@ -934,6 +620,21 @@ pub(crate) fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    use parvane_types::{UploadChunkPayload, UploadCompletePayload};
+
+    /// Запись чанка в прежней v1-форме (base64 + индексы) — только для тестов
+    /// общей логики хранилища; боевой путь — `cloud.blob.upload_chunk` (v2).
+    async fn store_chunk(pool: &SqlitePool, owner: &str, p: &UploadChunkPayload) -> Result<()> {
+        if p.total_chunks == 0 || p.chunk_index >= p.total_chunks {
+            return Err(reject(RejectKind::Invalid, "некорректный индекс чанка"));
+        }
+        if p.total_chunks > max_total_chunks() {
+            return Err(reject(RejectKind::Limit, format!("слишком много чанков (лимит {})", max_total_chunks())));
+        }
+        let raw = B64.decode(&p.data).context("base64 decode")?;
+        store_chunk_raw(pool, owner, &p.file_id.to_string(), p.chunk_index, p.total_chunks, raw).await
+    }
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
@@ -1241,40 +942,6 @@ mod tests {
         assert!(got.is_none());
     }
 
-    #[tokio::test]
-    async fn list_files_only_owner_newest_first() {
-        let pool = test_pool().await;
-        // alice: два файла; bob: один
-        let a1 = Uuid::now_v7();
-        store_chunk(&pool, "alice@local", &chunk(a1, 0, 1, b"x"))
-            .await
-            .unwrap();
-        finalize_file(&pool, "alice@local", &complete(a1, 1, 1))
-            .await
-            .unwrap();
-        let a2 = Uuid::now_v7();
-        store_chunk(&pool, "alice@local", &chunk(a2, 0, 1, b"y"))
-            .await
-            .unwrap();
-        finalize_file(&pool, "alice@local", &complete(a2, 1, 1))
-            .await
-            .unwrap();
-        let b1 = Uuid::now_v7();
-        store_chunk(&pool, "bob@local", &chunk(b1, 0, 1, b"z"))
-            .await
-            .unwrap();
-        finalize_file(&pool, "bob@local", &complete(b1, 1, 1))
-            .await
-            .unwrap();
-
-        let alice = list_files(&pool, "alice@local").await.unwrap();
-        assert_eq!(alice.len(), 2, "только файлы alice");
-        assert!(alice.iter().all(|f| f.file_id == a1 || f.file_id == a2));
-
-        let bob = list_files(&pool, "bob@local").await.unwrap();
-        assert_eq!(bob.len(), 1);
-        assert_eq!(bob[0].file_id, b1);
-    }
 
     #[tokio::test]
     async fn delete_file_only_by_owner_and_purges_chunks() {

@@ -14,9 +14,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use parvane_protocol::pb::parvane::core::v2::{frame, Auth, Channel};
-use parvane_types::topics::{IDENTITY_ISSUE, IDENTITY_REGISTER, IDENTITY_SERVER_INFO};
+use parvane_types::topics::IDENTITY_SERVER_INFO;
 use serde_json::{json, Value};
-use v2common::{Conn, PASSWORD};
+use v2common::Conn;
 
 struct Stack {
     children: Vec<Child>,
@@ -29,7 +29,10 @@ impl Drop for Stack {
             let _ = c.kill();
             let _ = c.wait();
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // Журналы стека нужны для разбора падения — при панике каталог остаётся
+        if !std::thread::panicking() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -91,13 +94,6 @@ impl Gw {
     }
 }
 
-async fn req(nc: &async_nats::Client, subject: &str, body: Value) -> Value {
-    let resp = tokio::time::timeout(Duration::from_secs(10), nc.request(subject.to_string(), body.to_string().into()))
-        .await
-        .unwrap_or_else(|_| panic!("{subject}: таймаут"))
-        .unwrap_or_else(|e| panic!("{subject}: {e}"));
-    serde_json::from_slice(&resp.payload).unwrap_or(Value::Null)
-}
 
 /// Рукопожатие v2 на том же TCP-порту: Welcome и AuthOk.
 fn v2_handshake(addr: &str, token: &str) -> bool {
@@ -163,7 +159,7 @@ async fn v1_frames_are_refused_live() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     loop {
-        let r = tokio::time::timeout(Duration::from_millis(300), nc.request(IDENTITY_SERVER_INFO, "{}".into())).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("v2.server.describe", vec![].into())).await;
         if matches!(r, Ok(Ok(_))) {
             break;
         }
@@ -178,10 +174,10 @@ async fn v1_frames_are_refused_live() {
     }
 
     let user = format!("e6u{}@local", free_port());
-    let reg = req(&nc, IDENTITY_REGISTER, json!({"user": user, "password": PASSWORD, "invite": "", "email": "", "client_ip": "127.0.0.1"})).await;
-    assert!(reg["error"].is_null(), "регистрация: {reg}");
-    let issued = req(&nc, IDENTITY_ISSUE, json!({"user": user, "password": PASSWORD, "device_id": "d1"})).await;
-    let token = issued["token"].as_str().unwrap_or_else(|| panic!("issue: {issued}")).to_string();
+    let first = addr.values().next().cloned().unwrap();
+    let (u2, a2) = (user.clone(), first.clone());
+    let token = tokio::task::spawn_blocking(move || v2common::register_token(&a2, &u2, "d1")).await.unwrap();
+    assert!(!token.is_empty(), "session.issue");
 
     let addrs: Vec<String> = addr.values().cloned().collect();
     tokio::task::spawn_blocking(move || {

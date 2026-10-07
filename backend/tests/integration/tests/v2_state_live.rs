@@ -15,12 +15,16 @@ use std::time::{Duration, Instant};
 use parvane_protocol::codec::{self, TcpDecoder, TCP_MAGIC};
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{frame, response, Auth, Channel, ErrorCode, Frame, Hello, Request};
+use parvane_protocol::pb::parvane::group::v2::{GroupKind, Permissions as GroupPermissions};
 use parvane_protocol::pb::parvane::identity::v2::{Audience, PrivacySetRequest, PrivacySettings};
 use parvane_protocol::pb::parvane::state::v1::{peer, state_op::Op, AppendRequest, AppendResponse, BlockEntry, Peer, SyncRequest, SyncResponse};
 use parvane_protocol::pb::parvane::core::v2::UserRef;
 use parvane_protocol::state::{self as st, LamportClock, PersonalState, StateKey};
 use prost::Message;
 use serde_json::{json, Value};
+
+mod v2common;
+use v2common::Device;
 
 const PASSWORD: &str = "e2e-Test-pass-2026";
 
@@ -36,7 +40,10 @@ impl Drop for Stack {
             let _ = c.kill();
             let _ = c.wait();
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // Журналы стека нужны для разбора падения — при панике каталог остаётся
+        if !std::thread::panicking() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -124,7 +131,7 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     loop {
-        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("identity.server.info", "{}".into())).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("v2.server.describe", vec![].into())).await;
         if matches!(r, Ok(Ok(_))) {
             break;
         }
@@ -230,14 +237,14 @@ fn session(addr: &str, token: &str) -> V2 {
     c
 }
 
-async fn register(nc: &async_nats::Client, user: &str) {
-    let r = nreq(nc, "identity.user.register", json!({"user": user, "password": PASSWORD, "invite": "", "email": "", "client_ip": "127.0.0.1"})).await;
-    assert!(r["ok"] == true || r["error"].is_null(), "register {user}: {r}");
+async fn register(addr: &str, user: &str) {
+    let (a, u) = (addr.to_string(), user.to_string());
+    tokio::task::spawn_blocking(move || v2common::register_token(&a, &u, "dev-reg")).await.unwrap();
 }
 
-async fn token(nc: &async_nats::Client, user: &str, dev: &str) -> String {
-    let t = nreq(nc, "identity.token.issue", json!({"user": user, "password": PASSWORD, "device_id": dev})).await;
-    t["token"].as_str().unwrap_or("").to_string()
+async fn token(addr: &str, user: &str, dev: &str) -> String {
+    let (a, u, d) = (addr.to_string(), user.to_string(), dev.to_string());
+    tokio::task::spawn_blocking(move || v2common::register_token(&a, &u, &d)).await.unwrap()
 }
 
 fn append(c: &mut V2, r: &AppendRequest) -> Result<u64, ErrorCode> {
@@ -265,10 +272,10 @@ async fn v2_state_live() {
     let n = free_port();
     let (alice, bob, carol) = (format!("sa{n}@local"), format!("sb{n}@local"), format!("sc{n}@local"));
     for u in [&alice, &bob, &carol] {
-        register(&nc, u).await;
+        register(&stack.gateway_tcp, u).await;
     }
-    let (ta1, ta2, tb) = (token(&nc, &alice, "dev1").await, token(&nc, &alice, "dev2").await, token(&nc, &bob, "devb").await);
-    let tc = token(&nc, &carol, "devc").await;
+    let (ta1, ta2, tb) = (token(&stack.gateway_tcp, &alice, "dev1").await, token(&stack.gateway_tcp, &alice, "dev2").await, token(&stack.gateway_tcp, &bob, "devb").await);
+    let tc = token(&stack.gateway_tcp, &carol, "devc").await;
 
     // ── state.append / state.sync ──
     let addr = stack.gateway_tcp.clone();
@@ -340,19 +347,27 @@ async fn v2_state_live() {
     .unwrap();
     f.0.extend(a.0);
 
-    // ── согласие на добавление в группы: identity.privacy.set → v1 group.addmember ──
-    let g = nreq(&nc, "group.create", json!({"token": tc, "name": "privacy", "kind": "group", "members": []})).await;
-    let gid = g["group_id"].as_str().unwrap_or("").to_string();
-    f.check("group-created", !gid.is_empty(), &g);
-    let add = |member: String| {
-        let (nc, tc, gid) = (nc.clone(), tc.clone(), gid.clone());
-        async move { nreq(&nc, "group.addmember", json!({"token": tc, "group_id": gid, "member": member})).await["ok"] == true }
+    // ── согласие на добавление в группы: identity.privacy.set → группа v2 (MSG-10) ──
+    // Создатель группы — новый пользователь на каждую попытку; участник, запретивший
+    // добавление, делает запись Create недопустимой (FORBIDDEN).
+    let add = |member: String, tag: &'static str| {
+        let addr = stack.gateway_tcp.clone();
+        let creator = format!("sg{n}{tag}@local");
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut d = Device::register(&addr, &creator, "d1");
+                let perms = GroupPermissions { send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true, ..Default::default() };
+                d.op(&mut |c| c.group_create(GroupKind::Group, "privacy", std::slice::from_ref(&member), perms.clone()).map(|(_, r)| vec![r]).map_err(Into::into)).is_ok()
+            })
+            .await
+            .unwrap()
+        }
     };
-    let (addr, t) = (stack.gateway_tcp.clone(), token(&nc, &alice, "dev1").await);
+    let (addr, t) = (stack.gateway_tcp.clone(), token(&stack.gateway_tcp, &alice, "dev1").await);
     let set = tokio::task::spawn_blocking(move || set_group_add(&addr, &t, Audience::Nobody)).await.unwrap();
     f.check("privacy-set-nobody", set, "");
-    f.check("v2-privacy-blocks-add", !add(alice.clone()).await, "");
-    f.check("default-allows-add", add(bob.clone()).await, "");
+    f.check("v2-privacy-blocks-add", !add(alice.clone(), "a").await, "");
+    f.check("default-allows-add", add(bob.clone(), "b").await, "");
     // Блоб настроек v1 (`msg.chat.setnotify`) больше не существует (T110): источник — только v2.
     assert!(f.0.is_empty(), "провалены сценарии state v2: {:?} (логи: {})", f.0, stack.dir.display());
 }

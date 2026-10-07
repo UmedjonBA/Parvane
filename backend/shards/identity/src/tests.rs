@@ -137,47 +137,7 @@ async fn insert_user(pool: &SqlitePool, username: &str) {
         .unwrap();
 }
 
-#[tokio::test]
-async fn pubkey_defaults_empty_then_stores() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-    // По умолчанию ключа нет.
-    let (k0,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-        .bind("alice@local")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(k0, "", "новый пользователь — без pubkey");
-    // Регистрируем ключ.
-    let key = B64.encode([1_u8; 32]);
-    store_pubkey(&pool, "alice@local", &key).await.unwrap();
-    // Читаем тем же SELECT, что использует resolve (display_name, avatar, pubkey).
-    let row: (String, String, String) = sqlx::query_as(
-        "SELECT display_name, avatar_file_id, pubkey FROM users WHERE username = ?",
-    )
-    .bind("alice@local")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(row.2, key, "resolve-путь отдаёт зарегистрированный ключ");
-}
 
-#[tokio::test]
-async fn pubkey_overwrite_replaces() {
-    // Смена устройства/ключа — новый заменяет старый.
-    let pool = test_pool().await;
-    insert_user(&pool, "bob@local").await;
-    let key1 = B64.encode([1_u8; 32]);
-    let key2 = B64_NO_PAD.encode([2_u8; 32]);
-    store_pubkey(&pool, "bob@local", &key1).await.unwrap();
-    store_pubkey(&pool, "bob@local", &key2).await.unwrap();
-    let (k,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-        .bind("bob@local")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(k, key2);
-}
 
 // ── регистрация отделена от логина ──
 
@@ -284,19 +244,6 @@ async fn issue_locks_out_after_repeated_failures() {
     assert!(err.contains("много"), "ожидался лок-аут: {err}");
 }
 
-#[test]
-fn prekey_fetch_rate_limits_per_pair() {
-    // Пара (requester → target) ограничена; другая цель не затронута.
-    let (a, victim, other) = ("rl_a@local", "rl_victim@local", "rl_other@local");
-    let mut ok = 0;
-    for _ in 0..25 {
-        if prekey_fetch_rate_ok(a, victim) {
-            ok += 1;
-        }
-    }
-    assert!(ok <= 20, "лимит пары не превышен: {ok}");
-    assert!(prekey_fetch_rate_ok(a, other), "другая цель — свой лимит");
-}
 
 // ── адреса: ник без домена, правила ников, чужой домен ──
 
@@ -589,178 +536,18 @@ async fn register_rejects_duplicate() {
 
 // ── E2E prekey-каталог (Фаза 2) ──
 
-fn sample_publish(reg: i64, otps: &[(i64, &str)]) -> PublishPrekeysRequest {
-    sample_publish_device("", reg, otps)
-}
 
-fn sample_publish_device(device_id: &str, reg: i64, otps: &[(i64, &str)]) -> PublishPrekeysRequest {
-    PublishPrekeysRequest {
-        token: String::new(),
-        device_id: device_id.into(),
-        signing_key: format!("SK-{device_id}=="),
-        registration_id: reg,
-        identity_key: format!("IK-{reg}=="),
-        signed_prekey_id: 7,
-        signed_prekey: "SPK==".into(),
-        signed_prekey_sig: "SIG==".into(),
-        one_time: otps
-            .iter()
-            .map(|(id, k)| parvane_types::OneTimePrekey { key_id: *id, public_key: (*k).into() })
-            .collect(),
-    }
-}
 
-#[tokio::test]
-async fn prekeys_publish_then_fetch_consumes_one_time() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-    store_prekeys(&pool, "alice@local", &sample_publish(111, &[(1, "OTP1"), (2, "OTP2")]))
-        .await
-        .unwrap();
 
-    // Первый fetch отдаёт бандл + одну one-time, помечает consumed.
-    let b1 = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
-    assert!(b1.ok);
-    assert_eq!(b1.registration_id, Some(111));
-    assert_eq!(b1.identity_key.as_deref(), Some("IK-111=="));
-    assert!(b1.one_time_id.is_some() && b1.one_time.is_some(), "первая one-time выдана");
 
-    // Второй fetch — другая one-time.
-    let b2 = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
-    assert!(b2.one_time_id.is_some());
-    assert_ne!(b1.one_time_id, b2.one_time_id, "разные one-time");
-
-    // Третий — one-time кончились, бандл без них (валидный фолбэк).
-    let b3 = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
-    assert!(b3.ok);
-    assert!(b3.one_time_id.is_none(), "one-time исчерпаны");
-    assert!(b3.identity_key.is_some(), "долгоживущие ключи всё равно есть");
-}
-
-#[tokio::test]
-async fn fetch_bundle_unknown_user() {
-    let pool = test_pool().await;
-    let b = fetch_bundle(&pool, "ghost@local", &[]).await.unwrap();
-    assert!(!b.ok);
-    assert!(b.identity_key.is_none());
-    assert!(b.devices.is_empty());
-}
-
-#[tokio::test]
-async fn publish_prekeys_upsert_replaces_signed() {
-    let pool = test_pool().await;
-    insert_user(&pool, "bob@local").await;
-    store_prekeys(&pool, "bob@local", &sample_publish(1, &[])).await.unwrap();
-    // повторная публикация с другим registration_id заменяет долгоживущие
-    let mut req = sample_publish(999, &[(5, "NEW")]);
-    req.signed_prekey_id = 42;
-    store_prekeys(&pool, "bob@local", &req).await.unwrap();
-    let b = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
-    assert_eq!(b.registration_id, Some(999));
-    assert_eq!(b.signed_prekey_id, Some(42));
-}
 
 // ── мультидевайс: бандлы на устройство ──
 
-#[tokio::test]
-async fn multidevice_bundles_coexist_and_fetch_returns_all() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-    // desktop/legacy — устройство '', web — свой uuid: не перетирают друг друга
-    store_prekeys(&pool, "alice@local", &sample_publish_device("", 1, &[(1, "L1")]))
-        .await
-        .unwrap();
-    store_prekeys(&pool, "alice@local", &sample_publish_device("dev-web", 2, &[(1, "W1")]))
-        .await
-        .unwrap();
 
-    let b = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
-    assert!(b.ok);
-    assert_eq!(b.devices.len(), 2, "оба устройства в списке");
-    // legacy-поля — «primary» ('' приоритетно)
-    assert_eq!(b.registration_id, Some(1));
-    let web = b.devices.iter().find(|d| d.device_id == "dev-web").unwrap();
-    assert_eq!(web.registration_id, 2);
-    assert_eq!(web.one_time.as_deref(), Some("W1"), "one-time нового устройства выдана");
-    assert_eq!(web.signing_key, "SK-dev-web==", "signing-ключ устройства едет в бандле");
-}
 
-#[tokio::test]
-async fn multidevice_known_devices_skip_one_time_consumption() {
-    let pool = test_pool().await;
-    insert_user(&pool, "bob@local").await;
-    store_prekeys(&pool, "bob@local", &sample_publish_device("dev-a", 1, &[(1, "A1")]))
-        .await
-        .unwrap();
-
-    // known: one-time НЕ расходуется
-    let b1 = fetch_bundle(&pool, "bob@local", &["dev-a".to_string()]).await.unwrap();
-    let a1 = b1.devices.iter().find(|d| d.device_id == "dev-a").unwrap();
-    assert!(a1.one_time.is_none(), "известное устройство — без one-time");
-
-    // не known: расходуется та самая одна
-    let b2 = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
-    let a2 = b2.devices.iter().find(|d| d.device_id == "dev-a").unwrap();
-    assert_eq!(a2.one_time.as_deref(), Some("A1"));
-    let b3 = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
-    assert!(b3.devices[0].one_time.is_none(), "one-time исчерпана");
-}
-
-#[tokio::test]
-async fn multidevice_identity_change_wipes_only_own_one_time() {
-    let pool = test_pool().await;
-    insert_user(&pool, "carol@local").await;
-    store_prekeys(&pool, "carol@local", &sample_publish_device("dev-a", 1, &[(1, "A1")]))
-        .await
-        .unwrap();
-    store_prekeys(&pool, "carol@local", &sample_publish_device("dev-b", 2, &[(1, "B1")]))
-        .await
-        .unwrap();
-    // dev-a пере-инициализирован (новый identity_key) — его one-time вычищены
-    store_prekeys(&pool, "carol@local", &sample_publish_device("dev-a", 3, &[(9, "A9")]))
-        .await
-        .unwrap();
-
-    let b = fetch_bundle(&pool, "carol@local", &[]).await.unwrap();
-    let a = b.devices.iter().find(|d| d.device_id == "dev-a").unwrap();
-    let bb = b.devices.iter().find(|d| d.device_id == "dev-b").unwrap();
-    assert_eq!(a.one_time.as_deref(), Some("A9"), "у dev-a только новая пачка");
-    assert_eq!(bb.one_time.as_deref(), Some("B1"), "dev-b не пострадал");
-}
 
 // ── мультидевайс: листинг и отзыв устройств ──
 
-#[tokio::test]
-async fn device_list_counts_one_time_without_consuming() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-    store_prekeys(&pool, "alice@local", &sample_publish_device("", 1, &[(1, "L1")]))
-        .await
-        .unwrap();
-    store_prekeys(
-        &pool,
-        "alice@local",
-        &sample_publish_device("dev-web", 2, &[(1, "W1"), (2, "W2")]),
-    )
-    .await
-    .unwrap();
-
-    let devices = list_devices(&pool, "alice@local").await.unwrap();
-    assert_eq!(devices.len(), 2);
-    assert_eq!(devices[0].device_id, "", "primary первым");
-    assert_eq!(devices[0].one_time_available, 1);
-    let web = devices.iter().find(|d| d.device_id == "dev-web").unwrap();
-    assert_eq!(web.one_time_available, 2);
-    assert_eq!(web.signing_key, "SK-dev-web==");
-
-    // листинг ничего не сжёг: fetch по-прежнему выдаёт one-time обоим
-    let b = fetch_bundle(&pool, "alice@local", &[]).await.unwrap();
-    assert!(b.devices.iter().all(|d| d.one_time.is_some()), "one-time целы");
-    // и остаток в листинге падает только после fetch
-    let after = list_devices(&pool, "alice@local").await.unwrap();
-    let web_after = after.iter().find(|d| d.device_id == "dev-web").unwrap();
-    assert_eq!(web_after.one_time_available, 1);
-}
 
 #[tokio::test]
 async fn revoked_device_token_fails_verify() {
@@ -822,27 +609,6 @@ async fn password_change_requires_old_password_and_resets_trust() {
     assert_eq!(n, 0, "смена пароля сбрасывает доверенные устройства");
 }
 
-#[tokio::test]
-async fn setkey_change_requires_password_republish_does_not() {
-    let pool = test_pool().await;
-    let hash = hash_password("pass-word-1").unwrap();
-    sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
-        .bind("sk@local").bind("sk@local").bind(&hash).execute(&pool).await.unwrap();
-    let k1 = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-    let k2 = base64::engine::general_purpose::STANDARD.encode([2u8; 32]);
-    // первая регистрация — без пароля
-    store_pubkey(&pool, "sk@local", &k1).await.unwrap();
-    let current: (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-        .bind("sk@local").fetch_one(&pool).await.unwrap();
-    assert_eq!(current.0, k1);
-    // логика обработчика: замена ключа требует пароль
-    let need_pw = !current.0.is_empty() && current.0 != k2;
-    assert!(need_pw);
-    assert!(require_password(&pool, "sk@local", None).await.is_err());
-    assert!(require_password(&pool, "sk@local", Some("pass-word-1")).await.is_ok());
-    // повторная публикация того же ключа — пароль не нужен
-    assert!(!(current.0 != k1));
-}
 
 #[tokio::test]
 async fn verify_active_rejects_revoked_and_binds_device() {
@@ -875,52 +641,7 @@ async fn verify_active_rejects_revoked_and_binds_device() {
     assert!(verify_active_device(&pool, &dec, &t1, "dev-1").await.is_err());
 }
 
-#[tokio::test]
-async fn device_revoke_removes_bundle_and_one_time() {
-    let pool = test_pool().await;
-    insert_user(&pool, "bob@local").await;
-    store_prekeys(&pool, "bob@local", &sample_publish_device("", 1, &[(1, "L1")]))
-        .await
-        .unwrap();
-    store_prekeys(&pool, "bob@local", &sample_publish_device("dev-old", 2, &[(1, "O1")]))
-        .await
-        .unwrap();
 
-    assert!(revoke_device(&pool, "bob@local", "dev-old").await.unwrap());
-    // повторный отзыв — «не найдено»
-    assert!(!revoke_device(&pool, "bob@local", "dev-old").await.unwrap());
-
-    // из каталога и fan-out-выдачи устройство исчезло, one-time вычищены
-    let devices = list_devices(&pool, "bob@local").await.unwrap();
-    assert_eq!(devices.len(), 1);
-    assert_eq!(devices[0].device_id, "");
-    let b = fetch_bundle(&pool, "bob@local", &[]).await.unwrap();
-    assert!(b.devices.iter().all(|d| d.device_id != "dev-old"));
-    let (orphans,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM one_time_prekeys WHERE username = ? AND device_id = ?",
-    )
-    .bind("bob@local")
-    .bind("dev-old")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(orphans, 0, "one-time отозванного устройства удалены");
-}
-
-#[tokio::test]
-async fn device_revoke_is_scoped_to_owner() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-    insert_user(&pool, "eve@local").await;
-    store_prekeys(&pool, "alice@local", &sample_publish_device("dev-a", 1, &[(1, "A1")]))
-        .await
-        .unwrap();
-
-    // eve «отзывает» устройство alice — по своему username ничего не найдено
-    assert!(!revoke_device(&pool, "eve@local", "dev-a").await.unwrap());
-    let devices = list_devices(&pool, "alice@local").await.unwrap();
-    assert_eq!(devices.len(), 1, "устройство alice на месте");
-}
 
 // ── линковка: офферы и одноразовые гранты ──
 
@@ -1054,32 +775,7 @@ async fn link_is_scoped_per_user_and_expires() {
     assert!(stale.is_empty(), "просроченный оффер вычищен");
 }
 
-#[tokio::test]
-async fn pubkey_isolated_per_user() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-    insert_user(&pool, "bob@local").await;
-    let alice_key = B64.encode([7_u8; 32]);
-    store_pubkey(&pool, "alice@local", &alice_key).await.unwrap();
-    // ключ bob не задан — остаётся пустым, ключ alice не протёк
-    let (ka,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-        .bind("alice@local").fetch_one(&pool).await.unwrap();
-    let (kb,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-        .bind("bob@local").fetch_one(&pool).await.unwrap();
-    assert_eq!(ka, alice_key);
-    assert_eq!(kb, "", "ключ bob не задан → пусто");
-}
 
-#[tokio::test]
-async fn pubkey_rejects_non_ed25519_values() {
-    let pool = test_pool().await;
-    insert_user(&pool, "alice@local").await;
-
-    assert!(store_pubkey(&pool, "alice@local", "not-a-key").await.is_err());
-    let (stored,): (String,) = sqlx::query_as("SELECT pubkey FROM users WHERE username = ?")
-        .bind("alice@local").fetch_one(&pool).await.unwrap();
-    assert!(stored.is_empty());
-}
 
 // P-37: длинные ключи лимитеров сворачиваются в хэш, выселение работает
 #[test]
@@ -1101,48 +797,11 @@ fn limiter_keys_are_bounded_and_buckets_evicted() {
 }
 
 // P-21: повторный фетч той же парой в окне отдаёт ту же one-time
-#[tokio::test]
-async fn repeated_prekey_fetch_reuses_one_time_key() {
-    let pool = test_pool().await;
-    let (_enc, _dec) = make_keys();
-    insert_user(&pool, "reuse@local").await;
-    store_prekeys(&pool, "reuse@local", &sample_publish_device("dev-r", 1, &[(1, "o1"), (2, "o2"), (3, "o3")])).await.unwrap();
-    let a = fetch_bundle_for(&pool, "asker@local", "dev-1:ik-1", "reuse@local", &[]).await.unwrap();
-    let b = fetch_bundle_for(&pool, "asker@local", "dev-1:ik-1", "reuse@local", &[]).await.unwrap();
-    assert_eq!(a.one_time_id, b.one_time_id, "тот же requester → та же one-time");
-    let (left,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM one_time_prekeys WHERE username = 'reuse@local' AND consumed = 0",
-    ).fetch_one(&pool).await.unwrap();
-    assert_eq!(left, 2, "сожжена одна, не две");
-    let c = fetch_bundle_for(&pool, "other@local", "dev-9:ik-9", "reuse@local", &[]).await.unwrap();
-    assert_ne!(c.one_time_id, a.one_time_id, "другой requester — другая one-time");
-}
 
 // P-21 + одноразовость: one-time, выданную одному Olm-аккаунту запросившего,
 // другой его аккаунт (второе устройство или то же после смены ключей) в окне
 // не получает — цель могла её уже израсходовать, и первое сообщение нового
 // аккаунта не расшифровалось бы. Свежая при этом тоже не сжигается.
-#[tokio::test]
-async fn reused_one_time_key_is_bound_to_requester_account() {
-    let pool = test_pool().await;
-    insert_user(&pool, "bound@local").await;
-    store_prekeys(&pool, "bound@local", &sample_publish_device("dev-b", 1, &[(1, "o1"), (2, "o2"), (3, "o3")])).await.unwrap();
-    let first = fetch_bundle_for(&pool, "sender@local", "dev-1:ik-old", "bound@local", &[]).await.unwrap();
-    assert!(first.one_time.is_some(), "первый аккаунт получает one-time");
-
-    let rekeyed = fetch_bundle_for(&pool, "sender@local", "dev-1:ik-new", "bound@local", &[]).await.unwrap();
-    assert!(rekeyed.ok && rekeyed.signed_prekey.is_some(), "бандл выдан — сессия строится на signed prekey");
-    assert_eq!(rekeyed.one_time, None, "то же устройство с новыми ключами не получает выданную one-time");
-    let sibling = fetch_bundle_for(&pool, "sender@local", "dev-2:ik-2", "bound@local", &[]).await.unwrap();
-    assert_eq!(sibling.one_time, None, "второе устройство запросившего — тоже");
-
-    let again = fetch_bundle_for(&pool, "sender@local", "dev-1:ik-old", "bound@local", &[]).await.unwrap();
-    assert_eq!(again.one_time_id, first.one_time_id, "исходный аккаунт по-прежнему получает свою one-time");
-    let (left,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM one_time_prekeys WHERE username = 'bound@local' AND consumed = 0",
-    ).fetch_one(&pool).await.unwrap();
-    assert_eq!(left, 2, "смена ключей запросившего не сжигает новые one-time (P-21)");
-}
 
 // P-19: LIKE-экранирование и минимальная длина запроса
 #[test]
