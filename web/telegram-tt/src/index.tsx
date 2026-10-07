@@ -19,6 +19,7 @@ import listenOtherClients from './util/browser/listenOtherClients';
 import { requestGlobal, subscribeToMultitabBroadcastChannel } from './util/browser/multitab';
 import { establishMultitabRole, subscribeToMasterChange } from './util/establishMultitabRole';
 import { initGlobal } from './util/init';
+import { applyInterfaceStyle, readStoredInterfaceStyle } from './util/interfaceStyle';
 import { initLocalization } from './util/localization';
 import { MULTITAB_STORAGE_KEY } from './util/multiaccount';
 import { onBeforeUnload } from './util/schedulers';
@@ -30,6 +31,9 @@ import App from './components/App';
 
 import './assets/fonts/roboto.css';
 import './styles/index.scss';
+
+// Parvane (spec 008): оформление применяется до первой отрисовки
+applyInterfaceStyle(readStoredInterfaceStyle(), false);
 
 if (STRICTERDOM_ENABLED) {
   enableStrict();

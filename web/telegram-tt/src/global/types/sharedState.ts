@@ -1,6 +1,6 @@
 import type { ApiLanguage } from '../../api/types';
 import type {
-  AnimationLevel, FoldersPosition, PerformanceType, Point, Size, ThemeKey, TimeFormat,
+  AnimationLevel, FoldersPosition, InterfaceStyle, PerformanceType, Point, Size, ThemeKey, TimeFormat,
 } from '../../types';
 
 export interface SharedState {
@@ -11,6 +11,8 @@ export interface SharedState {
 export interface SharedSettings {
   shouldUseSystemTheme: boolean;
   theme: ThemeKey;
+  // Parvane (spec 008): нет значения — «Панели»
+  interfaceStyle?: InterfaceStyle;
   language: string;
   languages?: ApiLanguage[];
   performance: PerformanceType;

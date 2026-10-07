@@ -173,6 +173,7 @@ log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)
 
 log "Gateway rate limit e2e"
 "$ROOT/scripts/run_gateway_rate_limit_e2e.sh"
+"$ROOT/scripts/run_web_interface_style_e2e.sh"
 
 log "Cross-client features Web <-> desktop e2e (readers, live location, revoke)"
 "$ROOT/scripts/run_web_cross_features_e2e.sh"

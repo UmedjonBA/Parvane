@@ -7,6 +7,7 @@ import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { IS_IOS } from '../../../util/browser/windowEnvironment';
 import { disableDebugConsole, initDebugConsole } from '../../../util/debugConsole';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
+import { applyInterfaceStyle, readStoredInterfaceStyle } from '../../../util/interfaceStyle';
 import { setTimeFormat as setLocalizedTimeFormat } from '../../../util/localization';
 import { oldSetLanguage, setTimeFormat as setLegacyTimeFormat } from '../../../util/oldLangProvider';
 import { applyPerformanceSettings } from '../../../util/perfomanceSettings';
@@ -53,6 +54,15 @@ addCallback((global: GlobalState) => {
   if (sharedSettings.theme !== oldSharedSettings.theme) {
     const withAnimation = document.hasFocus() ? selectCanAnimateInterface(global) : false;
     switchTheme(sharedSettings.theme, withAnimation);
+  }
+
+  if (sharedSettings.interfaceStyle !== oldSharedSettings.interfaceStyle) {
+    if (sharedSettings.interfaceStyle) {
+      applyInterfaceStyle(sharedSettings.interfaceStyle);
+    } else {
+      // Выход сбрасывает общие настройки — оформление остаётся настройкой устройства
+      getActions().setSharedSettingOption({ interfaceStyle: readStoredInterfaceStyle() });
+    }
   }
 
   if (sharedSettings.language !== oldSharedSettings.language) {

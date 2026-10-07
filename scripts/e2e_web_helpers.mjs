@@ -165,7 +165,13 @@ export async function preparePage(context, user, password, options = {}) {
         });
       }
     };
-  }, { gatewayUrl, seed: seedLocalStorage });
+  }, {
+    gatewayUrl,
+    // PARVANE_E2E_INTERFACE_STYLE=classic — весь сценарий в оформлении «Классическое» (spec 008)
+    seed: process.env.PARVANE_E2E_INTERFACE_STYLE
+      ? { 'parvane:interface-style': process.env.PARVANE_E2E_INTERFACE_STYLE, ...seedLocalStorage }
+      : seedLocalStorage,
+  });
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
     await route.fulfill({ contentType: 'application/javascript', body: '' });
   });

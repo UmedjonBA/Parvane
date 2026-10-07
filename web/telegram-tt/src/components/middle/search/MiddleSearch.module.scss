@@ -344,3 +344,15 @@
     padding: 0.375rem 0.75rem !important;
   }
 }
+
+// Parvane (spec 008): «Классическое» — строка поиска занимает место заголовка чата
+:global(html.interface-classic) .header {
+  top: 0;
+  max-width: none;
+  border-bottom: 1px solid var(--color-borders);
+  border-radius: 0;
+
+  @media (min-width: 1276px) {
+    width: 100%;
+  }
+}
