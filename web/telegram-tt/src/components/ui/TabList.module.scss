@@ -144,3 +144,8 @@
     }
   }
 }
+
+// Parvane (spec 008): «Классическое» — плоская полоса вкладок
+:global(html.interface-classic) .container {
+  border-radius: 0;
+}

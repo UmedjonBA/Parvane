@@ -113,6 +113,8 @@ export type ForwardTarget = {
 };
 
 export type ThemeKey = 'light' | 'dark';
+// Parvane (spec 008): оформление интерфейса
+export type InterfaceStyle = 'panels' | 'classic';
 export type AnimationLevel = 0 | 1 | 2;
 export type FoldersPosition = 'top' | 'left';
 export type PerformanceTypeKey = (

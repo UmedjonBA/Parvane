@@ -62,3 +62,8 @@
   padding-bottom: 0.5rem;
   padding-inline: 0.5rem;
 }
+
+// Parvane (spec 008): «Классическое» — блок без тени (скругление снимает токен)
+:global(html.interface-classic) .island {
+  box-shadow: none;
+}

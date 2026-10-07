@@ -258,3 +258,8 @@
     transform: scale(1);
   }
 }
+
+// Parvane (spec 008): подпись над выбором оформления на экранах входа
+.auth-form .auth-interface-style-title {
+  margin: 1rem 0 0.25rem;
+}

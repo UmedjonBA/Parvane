@@ -1,0 +1,104 @@
+// Parvane (spec 008): оформление «Классическое» — плоские колонки вплотную к
+// краям окна и друг к другу, без скруглений и теней (вид прежнего Telegram).
+// Включается классом `interface-classic` на <html> (util/interfaceStyle.ts).
+// «Панели» (вид по умолчанию) этим файлом не затрагиваются: каждое правило
+// начинается с `html.interface-classic`.
+
+html.interface-classic {
+  // ── токены «островов» ────────────────────────────────────────────────────
+  --border-radius-island: 0;
+  --border-radius-pane: 0;
+  --shadow-island: none;
+  --shadow-pane: none;
+  --shadow-footer: none;
+  --shadow-chat-list-panel: none;
+  --border-radius-modal: 0.75rem;
+  --border-radius-toast: 0.5rem;
+  --border-radius-button: 0.5rem;
+  --border-radius-button-tiny: 0.375rem;
+  --border-radius-default: 0.625rem;
+  --border-radius-default-small: 0.375rem;
+
+  // ── геометрия колонок ────────────────────────────────────────────────────
+  --right-column-padding: 0rem;
+  --middle-panel-inline-padding: 0rem;
+  --middle-header-height: 3.5rem;
+  --middle-header-gap: 0rem;
+  --classic-divider: 1px solid var(--color-borders);
+
+  // ── композер: плоская полоса во всю ширину области переписки ────────────
+  --composer-pill-radius: 0;
+  --composer-bottom-gap: 0rem;
+  --composer-bottom-gap-mobile: 0rem;
+  --composer-top-gap: 0rem;
+}
+
+html.interface-classic {
+  #LeftColumn {
+    margin: 0;
+    border-inline-end: var(--classic-divider);
+
+    @media (min-width: 926px) {
+      .folders-sidebar-visible & {
+        margin-left: 0;
+      }
+    }
+
+    @media (min-width: 601px) and (max-width: 925px) {
+      top: 0;
+      left: 0;
+      transform: translate3d(-100%, 0, 0);
+      height: calc(var(--vh, 1vh) * 100);
+    }
+  }
+
+  #RightColumn {
+    top: 0;
+    bottom: 0;
+    border-inline-start: var(--classic-divider);
+  }
+
+  .has-call-header {
+    #FoldersSidebar,
+    #LeftColumn {
+      height: calc(100% - var(--call-header-height));
+      margin-top: var(--call-header-height);
+    }
+  }
+
+  // ── заголовок чата: плоская полоса ───────────────────────────────────────
+  .MiddleHeader {
+    max-width: none;
+    border-bottom: var(--classic-divider);
+    border-radius: 0;
+  }
+
+  // ── композер ─────────────────────────────────────────────────────────────
+  #MiddleColumn .middle-column-footer {
+    max-width: none;
+    padding: 0.125rem 0.5rem;
+    border-top: var(--classic-divider);
+    background: var(--color-background);
+  }
+
+  // ── настройки: блоки во всю ширину колонки, между ними — полосы фона ─────
+  .settings-content {
+    padding-inline: 0;
+  }
+
+  // Широкое окно: правая колонка не перекрывает переписку, а сужает её —
+  // заголовок и поле ввода занимают всю оставшуюся ширину
+  @media (min-width: 1276px) {
+    .MiddleHeader,
+    #MiddleColumn .middle-column-footer {
+      width: 100%;
+    }
+
+    #Main.right-column-open .MiddleHeader,
+    #Main.right-column-open #MiddleColumn .middle-column-footer {
+      transform: none;
+      width: calc(100% - var(--right-column-width));
+      margin-inline: 0 auto;
+    }
+  }
+}

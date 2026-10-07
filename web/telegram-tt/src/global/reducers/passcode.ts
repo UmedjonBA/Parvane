@@ -43,6 +43,7 @@ export function clearSharedStateForLockScreen(sharedState: SharedState): SharedS
     shouldUseSystemTheme,
     animationLevel,
     language,
+    interfaceStyle,
   } = sharedState.settings;
 
   return {
@@ -53,6 +54,7 @@ export function clearSharedStateForLockScreen(sharedState: SharedState): SharedS
       shouldUseSystemTheme,
       animationLevel,
       language,
+      interfaceStyle,
     },
   };
 }

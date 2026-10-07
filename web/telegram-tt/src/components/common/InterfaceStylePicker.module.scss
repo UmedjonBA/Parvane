@@ -1,0 +1,128 @@
+.root {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.option {
+  cursor: pointer;
+
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.375rem;
+  align-items: center;
+
+  max-width: 10rem;
+  padding: 0.5rem;
+  border: 0.125rem solid transparent;
+  border-radius: var(--border-radius-default-small);
+
+  color: var(--color-text-secondary);
+
+  background: none;
+
+  transition: border-color 0.15s, color 0.15s;
+
+  &:hover {
+    background-color: var(--color-chat-hover);
+  }
+}
+
+.selected {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.label {
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25rem;
+}
+
+// Миниатюра окна: список чатов слева, переписка с заголовком и полем ввода
+.preview {
+  overflow: hidden;
+  display: flex;
+
+  aspect-ratio: 16 / 10;
+  width: 100%;
+  border: 1px solid var(--color-borders);
+  border-radius: 0.375rem;
+
+  background-color: var(--color-background-secondary);
+}
+
+.previewList {
+  flex: 0 0 34%;
+  background-color: var(--color-background);
+}
+
+.previewChat {
+  position: relative;
+  flex: 1 1 auto;
+  opacity: 0.35;
+  background-color: var(--color-primary);
+}
+
+.previewHeader,
+.previewComposer {
+  position: absolute;
+  background-color: var(--color-background);
+}
+
+.classic {
+  .previewList {
+    border-inline-end: 1px solid var(--color-borders);
+  }
+
+  .previewHeader {
+    top: 0;
+    right: 0;
+    left: 0;
+
+    height: 16%;
+    border-bottom: 1px solid var(--color-borders);
+  }
+
+  .previewComposer {
+    right: 0;
+    bottom: 0;
+    left: 0;
+
+    height: 16%;
+    border-top: 1px solid var(--color-borders);
+  }
+}
+
+.panels {
+  gap: 4%;
+  padding: 4%;
+
+  .previewList {
+    flex-basis: 32%;
+    border-radius: 0.375rem;
+  }
+
+  .previewChat {
+    border-radius: 0.375rem;
+  }
+
+  .previewHeader {
+    top: 8%;
+    right: 10%;
+    left: 10%;
+
+    height: 14%;
+    border-radius: 1rem;
+  }
+
+  .previewComposer {
+    right: 10%;
+    bottom: 8%;
+    left: 10%;
+
+    height: 14%;
+    border-radius: 1rem;
+  }
+}

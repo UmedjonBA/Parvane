@@ -136,3 +136,8 @@
 .hideMenuButton {
   visibility: hidden;
 }
+
+// Parvane (spec 008): «Классическое» — сплошная полоса во всю высоту окна
+:global(html.interface-classic) .root {
+  margin: 0;
+}
