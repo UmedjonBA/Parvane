@@ -11,7 +11,6 @@ import {
   registerBudgetConsumer,
   totalDecryptedBytes,
 } from '../../util/parvaneMediaBudget';
-import { isV2Enabled } from './v2/engine';
 import {
   blobChunkCount,
   blobChunkOffset,
@@ -21,15 +20,11 @@ import {
   encryptBlob,
   parseBlobHeader,
 } from './blobcrypt';
-import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import { getV2Bridge } from './gateway';
 import {
   buildWireEvent,
   TOPIC_FILE_DELETE,
-  TOPIC_FILE_DOWNLOAD_REQUEST,
-  TOPIC_FILE_UPLOAD_CHUNK,
-  TOPIC_FILE_UPLOAD_COMPLETE,
   TOPIC_PREVIEW_FETCH,
   TOPIC_PREVIEW_MAP_TILE,
   type WireMessageContent,
@@ -54,7 +49,6 @@ type MediaDependencies = {
 
 type CloudUploadOptions = {
   encrypt?: boolean;
-  recipients?: string[];
   publicAccess?: boolean;
   // Чат v2: вместо списка получателей — секрет скачивания (возвращается в
   // `capability`, едет внутри E2E-содержимого). Только вместе с `encrypt`
@@ -64,17 +58,6 @@ type CloudUploadOptions = {
 // Чанков блоба за один запрос скачивания по capability (потолок схемы)
 const CAP_DOWNLOAD_BATCH = 256;
 
-type WireDownloadChunk = {
-  ok: boolean;
-  chunk_index?: number;
-  total_chunks?: number;
-  data?: string;
-  mime_type?: string;
-  error?: string;
-  size_bytes?: number;
-  chunk_bytes?: number;
-};
-
 type CachedMedia = { blob: Blob; mimeType: string } | undefined;
 
 // Ответ провайдера, когда файл не прошёл проверку целостности: mediaLoader не
@@ -83,7 +66,6 @@ export const MEDIA_INTEGRITY_ERROR = 'MEDIA_INTEGRITY';
 type MediaIntegrityFailure = { error: typeof MEDIA_INTEGRITY_ERROR };
 
 const UPLOAD_CHUNK_BYTES = 192 * 1024;
-const MEDIA_TIMEOUT_MS = 30000;
 // `wallpaper<id>` — локальные обои (uploadWallpaper), блоб лежит в cacheByFileId
 const MEDIA_URL_REGEX = /^(?:photo|document|wallpaper)([\w-]+?)(?:\?|$)/;
 const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
@@ -100,7 +82,6 @@ const RANGE_CHUNK_CACHE_LIMIT = 96;
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_RANGE_WINDOW_BYTES = 16 * 1024 * 1024;
-const MAX_CHUNK_BASE64_LENGTH = Math.ceil(MAX_CHUNK_BYTES / 3) * 4 + 4;
 // Бюджеты кэшей: раньше все скачанные блобы, тайлы карт и чанки видео жили
 // в памяти до logout (1 ГБ просмотренного медиа = 1 ГБ resident). Сам потолок
 // теперь общий с `util/mediaLoader.ts` — см. `util/parvaneMediaBudget.ts`
@@ -125,7 +106,6 @@ const THUMB_FRAME_SECONDS = 0.1;
 // Пересъёмка пустого кадра: до 20 попыток через 150 мс (в пределах THUMB_TIMEOUT_MS)
 const THUMB_DRAW_ATTEMPTS = 20;
 const THUMB_DRAW_RETRY_MS = 150;
-const MAP_TILE_TIMEOUT_MS = 15000;
 const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
 
@@ -167,9 +147,8 @@ export function safeBlobMime(mime?: string) {
 }
 
 // Учёт скачанного для сквозных сценариев (`trackDownloadedBytes` в
-// scripts/e2e_web_helpers.mjs): запросы v1 сценарий видит сам (JSON-кадры
-// WebSocket), запросы блобов v2 двоичные — отмечаем их здесь. Вне сценариев
-// журнала нет, и функция ничего не делает
+// scripts/e2e_web_helpers.mjs): запросы блобов v2 двоичные — отмечаем их
+// здесь. Вне сценариев журнала нет, и функция ничего не делает
 type E2eDownloadLog = {
   bytesByFile: Record<string, number>;
   requests: { fileId: string; from: number; to: number; at: number }[];
@@ -203,25 +182,18 @@ export function createMediaService(deps: MediaDependencies) {
     return connection;
   }
 
-  function getCloudRecipients(toAddress: string) {
-    const store = deps.getStore();
-    const groupInfo = store.getGroupInfo(toAddress);
-    if (!groupInfo) return toAddress === store.self ? [] : [toAddress];
-    return getActiveGroupMemberAddresses(groupInfo.members)
-      .filter((address) => address !== store.self);
-  }
-
+  // Блоб в cloud методами v2. Вложение чата (`withCapability`) — под секретом
+  // скачивания (FR-062: сервер хранит SHA-256 секрета, сам секрет знают только
+  // участники чата — он внутри E2E-содержимого); свой или открытый блоб
+  // (аватар, фото группы, блоб линковки) — `cloud.blob.upload` без получателей
   async function uploadBlob(
     blob: Blob,
     filename: string,
     mimeType: string,
     options: CloudUploadOptions = {},
   ) {
-    const {
-      encrypt = false, recipients = [], publicAccess = false, withCapability = false,
-    } = options;
-    const store = deps.getStore();
-    const connection = requireConnection();
+    const { encrypt = false, publicAccess = false, withCapability = false } = options;
+    requireConnection();
     let bytes: Uint8Array = new Uint8Array(await blob.arrayBuffer());
     let mediaKeys: { keyB64: string; nonceB64: string } | undefined;
     if (encrypt) {
@@ -230,73 +202,17 @@ export function createMediaService(deps: MediaDependencies) {
       mediaKeys = { keyB64: encrypted.keyB64, nonceB64: encrypted.nonceB64 };
     }
     const v2 = withCapability && mediaKeys ? deps.getV2?.() : undefined;
-    if (v2?.isReady()) {
-      // FR-062: без гранта получателю — сервер хранит SHA-256 секрета, сам
-      // секрет знают только участники чата (он внутри E2E-содержимого)
+    if (withCapability && !v2?.isReady()) throw new Error('стек v2 не готов — вложение не загружено');
+    let fileId: string;
+    let capabilityB64: string | undefined;
+    if (v2) {
       const capability = crypto.getRandomValues(new Uint8Array(32));
-      const capFileId = await v2.uploadBlob(bytes, capability, UPLOAD_CHUNK_BYTES);
-      const capabilityB64 = encodeBase64(capability);
-      capByFileId.set(capFileId, capabilityB64);
-      keysByFileId.set(capFileId, mediaKeys!);
-      cacheBlob(capFileId, blob, mimeType);
-      mimeByFileId.set(capFileId, mimeType);
-      return {
-        fileId: capFileId, size: blob.size, mediaKeys, capability: capabilityB64 as string | undefined,
-      };
+      fileId = await v2.uploadBlob(bytes, capability, UPLOAD_CHUNK_BYTES);
+      capabilityB64 = encodeBase64(capability);
+      capByFileId.set(fileId, capabilityB64);
+    } else {
+      fileId = await getV2Bridge().control.uploadBlob(bytes, publicAccess);
     }
-    // T134: блоб без получателей (свой либо открытый: аватар, фото группы, блоб
-    // линковки своему устройству) — методами v2; по v1 остаются только блобы с
-    // грантами v1-получателям. При сбое моста — прежний путь, пока v1 жив
-    if (isOwnedViaV2() && recipients.every((address) => address === store.self)) {
-      try {
-        const ownedFileId = await getV2Bridge().control.uploadBlob(bytes, publicAccess);
-        if (mediaKeys) {
-          keysByFileId.set(ownedFileId, mediaKeys);
-          cacheBlob(ownedFileId, blob, mimeType);
-          mimeByFileId.set(ownedFileId, mimeType);
-        }
-        return {
-          fileId: ownedFileId, size: blob.size, mediaKeys, capability: undefined as string | undefined,
-        };
-      } catch (error) {
-        if (isV1Absent()) throw error;
-        diagLog('media', `загрузка по v2 не удалась (${String(error)}) — по v1`);
-      }
-    }
-    const fileId = crypto.randomUUID();
-    const cloudMime = encrypt ? 'application/octet-stream' : mimeType;
-    // P-29: имя E2E-вложения серверу не сообщаем — настоящее имя едет внутри
-    // E2E-контента (fileName), cloud видит только непрозрачное
-    const cloudName = encrypt ? 'blob' : filename;
-    const totalChunks = Math.max(1, Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES));
-    for (let index = 0; index < totalChunks; index++) {
-      const slice = bytes.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
-      const chunkEvent = buildWireEvent(store.self, deps.getToken(), {
-        file_id: fileId,
-        chunk_index: index,
-        total_chunks: totalChunks,
-        data: encodeBase64(slice),
-        filename: cloudName,
-        mime_type: cloudMime,
-      });
-      await connection.request(TOPIC_FILE_UPLOAD_CHUNK, JSON.stringify(chunkEvent), MEDIA_TIMEOUT_MS);
-    }
-    const completeEvent = buildWireEvent(store.self, deps.getToken(), {
-      file_id: fileId,
-      filename: cloudName,
-      total_chunks: totalChunks,
-      size_bytes: bytes.length,
-      mime_type: cloudMime,
-      recipients,
-      public_access: publicAccess,
-    });
-    const raw = await connection.request(
-      TOPIC_FILE_UPLOAD_COMPLETE,
-      JSON.stringify(completeEvent),
-      MEDIA_TIMEOUT_MS,
-    );
-    const response = JSON.parse(raw) as { ok: boolean; error?: string };
-    if (!response.ok) throw new Error(response.error || 'upload.complete отказ');
     if (mediaKeys) {
       keysByFileId.set(fileId, mediaKeys);
       cacheBlob(fileId, blob, mimeType);
@@ -306,7 +222,7 @@ export function createMediaService(deps: MediaDependencies) {
       mimeByFileId.set(fileId, mimeType);
     }
     return {
-      fileId, size: blob.size, mediaKeys, capability: undefined as string | undefined,
+      fileId, size: blob.size, mediaKeys, capability: capabilityB64,
     };
   }
 
@@ -343,8 +259,8 @@ export function createMediaService(deps: MediaDependencies) {
     return fetched.size ? fetched : undefined;
   }
 
-  // T134: блоб без capability — методом v2 `cloud.blob.download` (свой, открытый
-  // либо с v1-грантом); тот же вид ответа, что у скачивания по секрету
+  // Блоб без capability — методом v2 `cloud.blob.download` (свой либо
+  // открытый); тот же вид ответа, что у скачивания по секрету
   const ownedTransport: V2BlobTransport = {
     uploadBlob: () => Promise.reject(new Error('ownedTransport: только скачивание')),
     downloadBlobCap: async (fileId, _capability, firstChunk, chunkCount) => {
@@ -353,15 +269,6 @@ export function createMediaService(deps: MediaDependencies) {
     },
     isReady: () => true,
   };
-
-  // Мост v2 для блобов без capability: только там, где есть стек v2 (провайдер)
-  function isOwnedViaV2() {
-    return Boolean(deps.getV2) && isV2Enabled();
-  }
-
-  function isV1Absent() {
-    return deps.getConnection()?.hasV1 === false;
-  }
 
   // Открытые блобы (аватары, фото групп) не зашифрованы, а MIME в ответе v2 нет
   function sniffImageMime(head: Uint8Array | undefined) {
@@ -496,46 +403,7 @@ export function createMediaService(deps: MediaDependencies) {
   ): Promise<Map<number, Uint8Array> | undefined> {
     const cap = capTransportFor(fileId);
     if (cap) return fetchChunkRangeCap(cap.v2, fileId, cap.capability, from, to);
-    if (isOwnedViaV2()) {
-      try {
-        const viaV2 = await fetchChunkRangeCap(ownedTransport, fileId, '', from, to);
-        if (viaV2 || isV1Absent()) return viaV2;
-      } catch (error) {
-        if (isV1Absent()) throw error;
-      }
-    }
-    const store = deps.getStore();
-    const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId, chunk_from: from, chunk_to: to });
-    const expected = to - from + 1;
-    const replies = await requireConnection().requestMany(
-      TOPIC_FILE_DOWNLOAD_REQUEST, JSON.stringify(event), undefined, undefined,
-      (collected) => collected.length >= expected,
-    );
-    const chunks = replies
-      .map((reply) => JSON.parse(reply) as WireDownloadChunk)
-      .filter((chunk) => chunk.ok && chunk.data !== undefined && chunk.chunk_index !== undefined);
-    const fetched = new Map<number, Uint8Array>();
-    for (const chunk of chunks) {
-      if (chunk.size_bytes && chunk.chunk_bytes && chunk.total_chunks
-        && chunk.size_bytes <= MAX_FILE_BYTES && chunk.chunk_bytes <= MAX_CHUNK_BYTES) {
-        const geometry = {
-          sizeBytes: chunk.size_bytes, chunkBytes: chunk.chunk_bytes, totalChunks: chunk.total_chunks,
-        };
-        if (!metaByFileId.has(fileId)) {
-          metaByFileId.set(fileId, {
-            ...geometry,
-            // MIME — ТОЛЬКО из E2E-обёртки сообщения, не из ответа cloud: иначе
-            // сервер мог бы отдать окно видео как text/html на same-origin URL
-            mimeType: mimeByFileId.get(fileId) || 'application/octet-stream',
-          });
-        }
-      }
-      if (chunk.data!.length > MAX_CHUNK_BASE64_LENGTH) continue;
-      const bytes = decodeBase64(chunk.data!);
-      fetched.set(chunk.chunk_index!, bytes);
-      rememberChunk(fileId, chunk.chunk_index!, bytes);
-    }
-    return fetched.size ? fetched : undefined;
+    return fetchChunkRangeCap(ownedTransport, fileId, '', from, to);
   }
 
   // Файл целиком оказался в кэше окон (короткое видео) — проверяем тег сразу
@@ -690,46 +558,7 @@ export function createMediaService(deps: MediaDependencies) {
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
     const cap = capTransportFor(fileId);
     if (cap) return downloadBlobByCap(cap.v2, fileId, cap.capability);
-    if (isOwnedViaV2()) {
-      try {
-        const viaV2 = await downloadBlobOwned(fileId);
-        if (viaV2 || isV1Absent()) return viaV2;
-      } catch (error) {
-        if (isV1Absent()) throw error;
-      }
-    }
-    const store = deps.getStore();
-    const event = buildWireEvent(store.self, deps.getToken(), { file_id: fileId });
-    // Число чанков известно из первого ответа — завершаем без паузы тишины
-    const replies = await requireConnection().requestMany(
-      TOPIC_FILE_DOWNLOAD_REQUEST,
-      JSON.stringify(event),
-      undefined,
-      undefined,
-      (collected) => {
-        const total = (JSON.parse(collected[0]) as WireDownloadChunk).total_chunks;
-        return Boolean(total) && collected.length >= total;
-      },
-    );
-    const chunks = replies
-      .map((reply) => JSON.parse(reply) as WireDownloadChunk)
-      .filter((chunk) => chunk.ok && chunk.data !== undefined && chunk.chunk_index !== undefined)
-      .sort((left, right) => left.chunk_index! - right.chunk_index!);
-    if (!chunks.length) return undefined;
-    const parts = chunks.map((chunk) => decodeBase64(chunk.data!));
-
-    const keys = keysByFileId.get(fileId);
-    if (keys) {
-      const plain = await decryptBlob(concatBytes(parts), keys.keyB64, keys.nonceB64);
-      if (!plain) {
-        markTampered(fileId, 'GCM-тег файла не сошёлся');
-        return undefined;
-      }
-      const mimeType = safeBlobMime(mimeByFileId.get(fileId));
-      return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
-    }
-    const mimeType = safeBlobMime(chunks[0].mime_type);
-    return { blob: new Blob(parts, { type: mimeType }), mimeType };
+    return downloadBlobOwned(fileId);
   }
 
   function downloadMedia({
@@ -989,7 +818,7 @@ export function createMediaService(deps: MediaDependencies) {
       for (let attempt = 0; attempt < 2; attempt++) {
         const event = buildWireEvent(store.self, deps.getToken(), { z, x, y });
         const raw = await requireConnection()
-          .request(TOPIC_PREVIEW_MAP_TILE, JSON.stringify(event), MAP_TILE_TIMEOUT_MS)
+          .request(TOPIC_PREVIEW_MAP_TILE, JSON.stringify(event))
           .catch((error: unknown) => {
             diagLog('map', `tile ${key}: ${error instanceof Error ? error.message : String(error)}`);
             return undefined;
@@ -1459,7 +1288,6 @@ export function createMediaService(deps: MediaDependencies) {
     getCached: (fileId: string) => cacheByFileId.get(fileId),
     isTampered: (fileId: string) => tamperedFileIds.has(fileId),
     getMediaKeys: (fileId: string) => keysByFileId.get(fileId),
-    getCloudRecipients,
     isPhotoAttachment,
     isVideoAttachment,
     messageToWireContent,

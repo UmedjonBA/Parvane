@@ -6,14 +6,13 @@
 // раздел «Revoked Links» и удаление; обычный участник управления не видит.
 import assert from 'node:assert/strict';
 
-// Сценарий проверяет модель ссылок v1-шарда (токены `#+<hex>`, состояния
-// active/expired/exhausted/revoked, список отозванных, declined, записи
-// group_invites) — клиенты идут по v1. С PARVANE_E2E_PROTO=v2 (раннер
-// run_web_invites_v2_e2e.sh, T179) те же шаги идут по ссылкам группы v2
-// (`/join/<link_id>#<секрет>`, записи журнала группы): вместо таблицы шарда
-// сверяется список ссылок клиента. Заявки группы v2 — scripts/e2e_protocol_groups.mjs
-const IS_V2 = process.env.PARVANE_E2E_PROTO === 'v2';
-if (!IS_V2) process.env.PARVANE_E2E_PROTO = 'v1';
+// Сценарий проверяет ссылки-приглашения группы v2 (`/join/<link_id>#<секрет>`,
+// записи журнала группы): состояния active/expired/exhausted/revoked, список
+// отозванных, declined; сверяется список ссылок клиента. Заявки группы v2 —
+// scripts/e2e_protocol_groups.mjs. Запуск: scripts/run_web_invites_e2e.sh
+// T110: клиенты идут только по v2 — ссылки `/join/<link_id>#<секрет>` из журнала
+// группы; ветки `!IS_V2` (модель v1-шарда) больше не выполняются
+const IS_V2 = true;
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 

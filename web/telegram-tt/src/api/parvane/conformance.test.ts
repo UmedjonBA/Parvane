@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +11,12 @@ import { ParvaneStore, shouldApplyGroupInfo } from './store';
 // вещи: логику веба и то, что константы десктопа не разъехались с документом.
 // Смысл — поймать расхождение реализаций до пользователя: именно так фикс
 // курсора (коммит 23ce150d) уехал в веб и не доехал до десктопа.
+// T110 (7 окт 2026): сервер и web без протокола v1. Пункты правил о v1-пути
+// (курсор синка v1, повтор msg.chat.read, подпись v1-отправки, v1-топики
+// typing/presence, нотис v1 группы, легаси-копии, понижение до v1, перевод
+// групп v1, v1-блоб настроек, виртуальное соединение) для web закрыты удалением
+// кода — тест сторожит, что v1-код в web не вернулся; для desktop и android
+// они действуют до их T110.
 const REPO_ROOT = path.resolve(process.cwd(), '../..');
 const rules = JSON.parse(
   readFileSync(path.join(REPO_ROOT, 'conformance/sync-rules.json'), 'utf8'),
@@ -62,10 +68,10 @@ describe('SYNC-1: дисковый курсор двигается только 
     expect(mayPersist(testCase)).toBe(testCase.persistCursor);
   });
 
-  it('web не пишет курсор без E2E и при пропущенных сообщениях', () => {
+  it('web: курсора синка v1 нет (T110) — история из кэша и журнала, инбокс v2 отдаёт только новое', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(source).toMatch(/!deps\.getE2e\(\)\) return;/);
-    expect(source).toMatch(/if \(!mayAdvanceDiskCursor\(\)\) return;/);
+    expect(source).not.toMatch(/saveSyncCursor|loadSyncCursor|msg\.sync\.request/);
+    expect(source).toMatch(/if \(await restoreFromCache\(\)\) \{/);
   });
 
   it('desktop двигает дисковый курсор только после успешной вставки', () => {
@@ -80,11 +86,10 @@ describe('SYNC-1: дисковый курсор двигается только 
 });
 
 describe('SYNC-2: непрочитанное не держит курсор вечно', () => {
-  it('web REPAIR_ATTEMPTS совпадает с документом', () => {
-    const expected = rule('SYNC-2').maxRepairAttempts;
+  it('web: курсора нет (T110) — нерасшифрованное показывается заглушкой до удачной расшифровки', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    const match = source.match(/const REPAIR_ATTEMPTS = (\d+);/);
-    expect(match?.[1]).toBe(String(expected));
+    expect(source).not.toMatch(/REPAIR_ATTEMPTS|mayAdvanceDiskCursor/);
+    expect(source).toContain('undecryptableUuids.add(stored.id);');
   });
 
   it('desktop kRepairAttempts совпадает с документом', () => {
@@ -137,9 +142,14 @@ describe('READ-1: прочитанное журналируется локаль
     expect(source).toMatch(/NoteReported\(ids\);/);
   });
 
-  it('web повторяет неподтверждённые msg.chat.read', () => {
-    const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(source).toMatch(/retryUnconfirmedReads/);
+  it('web: квитанция прочтения — E2E-содержимое v2, локальный журнал прочитанного сохраняется (T110)', () => {
+    const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
+    expect(sync).not.toMatch(/retryUnconfirmedReads|msg\.chat\.read/);
+    expect(sync).toMatch(
+      /markReportedRead: \(uuid: string\) => \{\s+reportedReadUuids\.add\(uuid\);\s+persistReadUuids\(\);/,
+    );
+    const messages = readFileSync(path.join(process.cwd(), 'src/api/parvane/messages.ts'), 'utf8');
+    expect(messages).toContain('void deps.v2?.tryRead(readAddress, newlyRead)');
   });
 });
 
@@ -213,7 +223,7 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     const idx = webSync.indexOf('verdict === \'unknown\'');
     expect(idx).toBeGreaterThan(0);
     const block = webSync.slice(idx, idx + 800);
-    expect(block).toMatch(/sawUndecryptable = true/);
+    expect(block).toMatch(/undecryptableUuids\.add\(rawStored\.id\)/);
     expect(block).toMatch(/undecryptableUuids\.add/);
     // между началом ветки и её return не должно быть sendAck
     const untilReturn = block.slice(0, block.indexOf('return'));
@@ -477,22 +487,15 @@ describe('SEND-1: подпись отправки, ack без sender, правк
     expect(r.editKeepsKind).toBe(true);
   });
 
-  it('web подписывает каждую E2E-отправку строкой из правила', () => {
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(messages).toContain('engine.signCallData(`send:${messageId}:${ciphertext}`)');
-    // Плюс легаси-копии v1-устройствам от v2-отправителя (`msg.deliver_legacy`)
-    const publishes = messages.match(/publishOrThrow\(TOPIC_MSG_SEND|v2!\.deliverLegacy\(/g) || [];
-    const signed = messages.match(/signature: signSend\(/g) || [];
-    expect(messages).toContain('v2!.deliverLegacy(');
-    expect(publishes.length).toBeGreaterThan(0);
-    expect(signed.length).toBe(publishes.length);
+  it('web: отправок v1 нет (T110) — каждая отправка идёт конвертом движка v2 (OP-SIG)', () => {
+    expect(messages).not.toMatch(/msg\.chat\.send|publishOrThrow|signSend\(|deliverLegacy/);
+    const sends = messages.match(/requireV2\(\)\.trySend\(/g) || [];
+    expect(sends.length).toBeGreaterThan(0);
+    expect(messages).toContain('if (!isSent) throw new E2eSendError(V2_PEER_REQUIRED);');
   });
 
-  it('web: ack без sender', () => {
-    const idx = webSync.indexOf('function sendAck(messageId: string)');
-    expect(idx).toBeGreaterThan(0);
-    expect(webSync.slice(idx, idx + 300)).not.toMatch(/sender:/);
-    expect(webSync).not.toMatch(/sendAck\([^)]*,\s*[^)]+\)/);
+  it('web: ack v1 нет — приём подтверждает движок (курсор инбокса v2)', () => {
+    expect(webSync).not.toMatch(/sendAck|msg\.chat\.ack/);
   });
 
   it('desktop и android подписывают send той же строкой и шлют ack без sender', () => {
@@ -519,26 +522,11 @@ describe('SEND-1: подпись отправки, ack без sender, правк
     expect(androidSigners.length).toBe(androidSends.length);
   });
 
-  it('messenger и gateway: подпись send обязательна, правка не понижает E2E', () => {
-    // 4.7: messenger разбит на модули — подпись в auth.rs, правки в store.rs
-    const messengerAuth = readFileSync(
-      path.join(REPO_ROOT, 'backend/shards/messenger/src/auth.rs'),
-      'utf8',
-    );
-    const messengerStore = readFileSync(
-      path.join(REPO_ROOT, 'backend/shards/messenger/src/store.rs'),
-      'utf8',
-    );
-    expect(messengerAuth).toMatch(/let statement = format!\("send:\{message_id\}:\{ciphertext\}"\);/);
-    expect(messengerStore).toMatch(/content\.kind\(\) != stored_content\.kind\(\)/);
-    expect(messengerStore).toMatch(/AND kind NOT IN \('encrypted', 'group_encrypted'\)/);
-    const gateway = readFileSync(
-      path.join(REPO_ROOT, 'backend/shards/gateway/src/acl.rs'),
-      'utf8',
-    );
-    // 4.10: субъекты — константами из parvane-types, не литералами
-    expect(gateway).toMatch(/subject == MSG_SEND \|\| subject == MSG_EDIT/);
-    expect(gateway).not.toMatch(/"msg\.(chat|typing)\.|"presence\."/);
+  it('сервер: v1-пути отправки нет (T110) — проверка подписи v1 и ACL v1 удалены вместе с модулями', () => {
+    expect(existsSync(path.join(REPO_ROOT, 'backend/shards/messenger/src/auth.rs'))).toBe(false);
+    expect(existsSync(path.join(REPO_ROOT, 'backend/shards/gateway/src/acl.rs'))).toBe(false);
+    // Запись инбокса v2 подписана устройством отправителя (OP-SIG) — проверяет движок
+    expect(readRepo('backend/protocol/src/client.rs')).toContain('fn verify_session_proof');
   });
 });
 
@@ -558,13 +546,14 @@ describe('EPHEMERAL-1: typing только свой/по членству, prese
       const source = readFileSync(path.join(REPO_ROOT, file), 'utf8');
       expect(source, file).not.toMatch(/subscribe\(['"]presence\.\*['"]/);
     });
+    // web (T110): v1-топиков нет — присутствие собеседника слушает движок по
+    // конкретному адресу, своё публикуется эфемерным каналом v2
     const web = readFileSync(path.join(REPO_ROOT, files[0]), 'utf8');
-    expect(web).toMatch(/subscribe\(buildPresenceTopic\(peerId\)/);
-    expect(web).not.toMatch(/subscribe\(`presence\./);
-    // 4.7: ACL gateway живёт в acl.rs
-    const gateway = readFileSync(path.join(REPO_ROOT, 'backend/shards/gateway/src/acl.rs'), 'utf8');
-    expect(gateway).toMatch(/is_own_ephemeral_subject\(user, MSG_TYPING_PREFIX, subject\)/);
-    expect(gateway).toMatch(/async fn group_typing_allowed/);
+    expect(web).not.toMatch(/presence\.|msg\.typing\./);
+    expect(web).toContain('if (address) deps.v2?.watchPresence?.(address);');
+    expect(web).toContain('deps.v2?.publishPresence?.();');
+    // Сервер: ACL v1-топиков удалён вместе с gateway/acl.rs
+    expect(existsSync(path.join(REPO_ROOT, 'backend/shards/gateway/src/acl.rs'))).toBe(false);
   });
 });
 
@@ -763,17 +752,14 @@ describe('GROUP-1: сведения группы применяются по р�
     },
   );
 
-  it('веб: нотис группы — поле `group` в кадре инбокса, применение через applyNotice', () => {
+  it('веб: нотиса v1 нет (T110) — сведения группы приходят из журнала движка и применяются по ревизии', () => {
     expect(group.noticeField).toBe('group');
     const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(sync).toMatch(/\.group;/);
-    expect(sync).toMatch(/deps\.groups\.applyNotice\(group\)/);
+    expect(sync).not.toMatch(/applyNotice|WireGroupNotice/);
+    const provider = readFileSync(path.join(process.cwd(), 'src/api/parvane/provider.ts'), 'utf8');
+    expect(provider).toContain('onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),');
     const groups = readFileSync(path.join(process.cwd(), 'src/api/parvane/groups.ts'), 'utf8');
-    for (const change of group.changes ?? []) {
-      expect(groups, `change ${change}`).toContain(`case '${change}':`);
-    }
-    // неизвестный вид — догон, а не ошибка
-    expect(groups).toMatch(/default: \{\n\s+deps\.log\(`неизвестное изменение группы/);
+    expect(groups).toContain('if (register(info, true)) pushGroupUpdates(info, isNew);');
     const store = readFileSync(path.join(process.cwd(), 'src/api/parvane/store.ts'), 'utf8');
     expect(store).toMatch(
       /if \(!shouldApplyGroupInfo\(this\.groupVersionByAddress\.get\(info\.group_id\), info\.version\)\)/,
@@ -1002,20 +988,11 @@ describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
     expect(isForeign(testCase)).toBe(testCase.skip);
   });
 
-  it('web: список публикуется из каталога, копии — только устройствам списка, чужая копия пропускается', () => {
-    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    expect(controller).toContain('client.legacyDevicesRequest(JSON.stringify(next))');
-    expect(controller).toContain('client.legacyDeliverRequest(uuid, sendPayloadJson)');
-    // Свой журнал запись получает синком, а не при подготовке запроса
-    expect(controller).toMatch(/legacyDevicesRequest[\s\S]{0,300}await checkOwnDevices\(\);/);
+  it('web: легаси-копий нет (T110) — доставить v1-устройствам нечем; чужая копия из LegacyV1 пропускается', () => {
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
-    expect(messages).toContain('fetchPrekeyBundle, undefined, peerLegacy)');
-    expect(messages).toContain('fetchPrekeyBundle, engine.deviceId, ownLegacy)');
-    expect(messages).toContain('signature: signSend(sealed.engine, uuid, \'\')');
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(messages).toContain('signCallData(`edit:${uuid}:`)');
-    const e2e = readRepo('web/telegram-tt/src/api/parvane/e2e.ts');
-    expect(e2e).toContain('if (only && only.get(deviceId) !== device.identity.replace(/=+$/, \'\')) return;');
+    expect(messages).not.toMatch(/sealLegacy|deliverLegacy|legacyDevices/);
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).not.toContain('listOwnV1Devices');
     const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
     expect(sync).toContain('if (!cached && !ownCopy && !content.ciphertext && content.sender_identity) {');
   });
@@ -1059,10 +1036,10 @@ describe('TYPING-1: «печатает» в чате v2 — только эфе�
     expect(client).toContain(`const EPH_MAX_AGE_MS: i64 = ${r.maxAgeMs.toLocaleString('en-US').replace(/,/g, '_')};`);
   });
 
-  it('web: v1-кадр — только если чат не v2; сбой v2 не понижает до v1', () => {
+  it('web: «печатает» — только эфемерным каналом v2 (T110: v1-кадра нет)', () => {
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
-    expect(messages).toMatch(/deps\.v2\.trySendTyping\(toAddress\)\.then\(\(isHandled\) => \{/);
-    expect(messages).toMatch(/if \(!isHandled\) publishV1\(\);\s*\}, \(\) => undefined\);/);
+    expect(messages).toContain('void deps.v2.trySendTyping(toAddress).catch(() => undefined);');
+    expect(messages).not.toMatch(new RegExp(r.v1Topic.replace('.', '\\.')));
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     expect(controller).toContain('if (ev.eventKind === \'ephemeral\') applyEphemeral(ev.body);');
     expect(controller).toContain('if (!l2Gate.ephemeralAllowed(to)) return true;');
@@ -1094,9 +1071,9 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     expect(client).toContain('pub fn rotate_ssk_with_secret(');
     const host = readRepo('backend/protocol/src/host.rs');
     expect(host).toContain(`v["${r.grantRootBackupField}"] = json!(hex::encode(backup));`);
-    // Устройство только из журнала v2: v1-отзыв (пароль, тумбстоун JWT) принят
+    // T110: v1-отзыва на сервере нет — identity.device.revoke только методом v2
     const devices = readRepo('backend/shards/identity/src/devices.rs');
-    expect(devices).toContain('Ok(false) if crate::v2::log_has_device(&username, &req.device_id).await');
+    expect(devices).not.toContain('log_has_device(&username, &req.device_id)');
   });
 
   it('web: список с устройствами журнала v2; v1-отзыв, затем журнал и ротации; SSK — ключом восстановления', () => {
@@ -1209,15 +1186,13 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
     maxChunksPerRequest: number;
   };
 
-  it('web: без гранта получателю в чате v2 без v1-устройств; скачивание анонимным каналом', () => {
+  it('web: вложение всегда без гранта получателю (T110: v1-устройств нет); скачивание анонимным каналом', () => {
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
-    expect(messages).toMatch(
-      /isV2Chat && !v2!\.legacyDevices\(toAddress\)\.size && !v2!\.legacyDevices\(store\(\)\.self\)\.size/,
-    );
+    expect(messages).toContain('function mediaUploadOptions(): { encrypt: true; withCapability: true } {');
     expect(messages).toContain('return { encrypt: true, withCapability: true };');
-    // Старого вызова с грантами в местах отправки не осталось
-    expect(messages.match(/recipients: deps\.media\.getCloudRecipients\(toAddress\)/g) || []).toHaveLength(1);
+    expect(messages).not.toContain('getCloudRecipients');
     const media = readRepo('web/telegram-tt/src/api/parvane/media.ts');
+    expect(media).not.toMatch(/file\.upload\.chunk|file\.download\.request|requestMany/);
     expect(media).toContain(`crypto.getRandomValues(new Uint8Array(${r.capabilityBytes}))`);
     expect(media).toContain(`const CAP_DOWNLOAD_BATCH = ${r.maxChunksPerRequest};`);
     expect(media).toContain(
@@ -1263,7 +1238,7 @@ describe('STATE-2: личное состояние — целиком в жур�
     privacySetMethod: string;
   };
 
-  it('web: виды журнала, v1-блоб без списка заглушённых, приватность читается с сервера', () => {
+  it('web: виды журнала, v1-блоба нет, приватность читается с сервера', () => {
     const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
     const managed = journal.match(/const MANAGED_KINDS: LocalStateKind\[\] = \[([\s\S]*?)\];/)![1];
     r.kinds.forEach((kind) => expect(managed, kind).toContain(`'${kind}'`));
@@ -1273,10 +1248,8 @@ describe('STATE-2: личное состояние — целиком в жур�
     r.notifyFields.forEach((field) => expect(notifyType, field).toContain(`${field}?:`));
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(r.v1BlobWhenJournaled).toEqual(['group_add']);
-    expect(provider).toContain('JSON.stringify(isJournaled ? { group_add: readGroupAddPolicy() } : {');
-    expect(provider).toContain(
-      'const isJournaled = stateJournal.isAttached() && !v2Controller.legacyDevices(store.self).size;',
-    );
+    // T110: v1-блоба настроек web не публикует вовсе — всё в журнале, `group_add` в приватности v2
+    expect(provider).not.toMatch(/pushNotifySettings|msg\.chat\.setnotify/);
     expect(provider).toMatch(/async parvaneGetStrangersPolicy\(\) \{\s+await refreshV2Privacy\(\);/);
     expect(provider).toMatch(/async parvaneGetGroupAddPolicy\(\) \{\s+await refreshV2Privacy\(\);/);
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
@@ -1357,7 +1330,7 @@ describe('GROUP-4: группа v1 переводится в v2, чат оста
     expect(readRepo('backend/protocol/wasm/src/lib.rs')).toContain(`"${r.infoField}": s.${r.createField}`);
   });
 
-  it('web: id чата — от прежнего адреса, сведения v1 переведённой группы не применяются', () => {
+  it('web: id чата — от прежнего адреса; перевод групп не запускается (T110)', () => {
     const store = new ParvaneStore();
     store.self = 'alice@local';
     const members = [{ address: 'alice@local', role: 'owner' }, { address: 'bob@local', role: 'member' }];
@@ -1381,10 +1354,10 @@ describe('GROUP-4: группа v1 переводится в v2, чат оста
       group_id: oldGid, name: 'подмена', kind: 'group', created_by: 'alice@local', members, version: 9,
     })).toBe(false);
     expect(store.getGroupInfo(oldGid)?.name).toBe('G');
-    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    expect(controller).toContain('createGroup(v1.name, others, v1.kind, v1.group_id, v1.default_permissions)');
+    // T110: переводить больше нечего (v1-шарда нет) — web перевод не запускает,
+    // но переведённые группы по-прежнему открываются прежним чатом
     const groups = readRepo('web/telegram-tt/src/api/parvane/groups.ts');
-    expect(groups).toContain('if (store.isMigratedGroup(notice.group_id)) return;');
+    expect(groups).not.toMatch(/migrateToV2|migrateGroup|applyNotice/);
   });
 
   it('desktop: id чата — от прежнего адреса, права — в генезисе, v1-нотис чат не снимает', () => {
@@ -1464,8 +1437,10 @@ describe('E6-1: клиент работоспособен без соедине�
       expect(webBridge, subject).toContain(`case '${subject}':`);
       expect(coreBridge, subject).toContain(`subject == "${subject}"`);
     });
+    // T110: web класса «v1, если жив» не имеет — список и отзыв устройств всегда
+    // методами v2, прекеев и setkey нет; ядро desktop/android — до их T110
+    expect(webBridge).not.toMatch(/bridgePrefersV1|PREFERS_V1|prekeys|setkey/);
     r.prefersV1.forEach((subject) => {
-      expect(webBridge, subject).toContain(`'${subject}'`);
       expect(coreBridge, subject).toContain(`"${subject}"`);
     });
   });
@@ -1483,13 +1458,14 @@ describe('E6-1: клиент работоспособен без соедине�
     });
   });
 
-  it('web: отключённый v1 — виртуальное соединение без диалога и без переподключений', () => {
+  it('web: соединения v1 нет вовсе (T110) — все запросы мостом, запись LegacyV1 подаётся обработчику инбокса', () => {
     const gateway = readRepo('web/telegram-tt/src/api/parvane/gateway.ts');
-    expect(gateway).toContain(`if (frame.error === '${r.v1Frame}') {`);
-    expect(gateway).toMatch(/if \(isV2Enabled\(\)\) \{\s+v1DisabledAt = Date\.now\(\);\s+this\.becomeVirtual\(\);/);
-    expect(gateway).toContain('if (this.isVirtual) return Promise.reject(');
-    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
-    expect(sync).toContain('if (!connection || !isSynced || connection.hasV1 === false) return;');
+    expect(gateway).not.toMatch(/new WebSocket|hasV1|isVirtual|upgrade_required/);
+    expect(gateway).toContain('const viaV2 = await getV2Bridge().request(subject, payload);');
+    const engine = readRepo('web/telegram-tt/src/api/parvane/v2/engine.ts');
+    expect(engine).not.toMatch(/isV2Enabled|parvane:proto|VITE_PARVANE_PROTO_V2/);
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('if (store.self) syncController.handleInboxFrame(frame);');
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
   });
@@ -1504,8 +1480,8 @@ describe('E6-1: клиент работоспособен без соедине�
     expect(desktop).toContain('(upgrade_required) — работаем по v2');
   });
 
-  it('сценарии с отключённым v1 есть у всех клиентов, мост подключён и в JNI', () => {
-    expect(readRepo('scripts/run_protocol_mixed_e2e.sh')).toContain('PARVANE_V1_MODE=disabled');
+  it('сценарии с отключённым v1 есть у desktop и android (web без v1 целиком), мост подключён и в JNI', () => {
+    expect(existsSync(path.join(REPO_ROOT, 'scripts/e2e_protocol_v1_off.mjs'))).toBe(false);
     expect(readRepo('desktop/verify_protocol_v2_v1off.sh')).toContain('PARVANE_V1_MODE=disabled');
     const jni = readRepo('android/jni/parvane_jni.cpp');
     expect(jni).toContain(

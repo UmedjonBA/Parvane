@@ -19,6 +19,23 @@ vi.hoisted(() => {
   window.CSS = { ...(window.CSS || {}), supports: () => false };
 });
 
+// Свой блоб без секрета качается методом v2 `cloud.blob.download` через мост
+// (`getV2Bridge().control.downloadChunks`) — здесь его подменяет сервер теста
+const bridge = vi.hoisted(() => ({
+  downloadChunks: undefined as undefined | ((fileId: string, firstChunk: number, chunkCount: number) => Promise<{
+    size: number; totalChunks: number; parts: Map<number, Uint8Array>;
+  }>),
+}));
+vi.mock('./gateway', () => ({
+  getV2Bridge: () => ({
+    control: {
+      downloadChunks: (fileId: string, firstChunk: number, chunkCount: number) => (
+        bridge.downloadChunks!(fileId, firstChunk, chunkCount)
+      ),
+    },
+  }),
+}));
+
 // `util/mediaLoader.ts` ходит в провайдер за медиа — в этом файле он не нужен:
 // проверяем только его собственные кэши
 vi.mock('../gramjs', () => ({
@@ -71,25 +88,16 @@ async function setup() {
   for (let index = 0; index < TOTAL_CHUNKS; index++) {
     server.chunks.push(ciphertext.slice(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES));
   }
-  const connection = {
-    isOpen: true,
-    requestMany: (_subject: string, payload: string) => {
-      const { payload: body } = JSON.parse(payload) as { payload: { chunk_from: number; chunk_to: number } };
-      server.requested.push([body.chunk_from, body.chunk_to]);
-      const replies: string[] = [];
-      for (let index = body.chunk_from; index <= body.chunk_to; index++) {
-        replies.push(JSON.stringify({
-          ok: true,
-          chunk_index: index,
-          total_chunks: TOTAL_CHUNKS,
-          size_bytes: ciphertext.length,
-          chunk_bytes: CHUNK_BYTES,
-          data: toBase64(server.tampered.get(index) || server.chunks[index]),
-        }));
-      }
-      return Promise.resolve(replies);
-    },
-  } as unknown as GatewayConnection;
+  bridge.downloadChunks = (_fileId: string, firstChunk: number, chunkCount: number) => {
+    const last = Math.min(firstChunk + chunkCount - 1, TOTAL_CHUNKS - 1);
+    server.requested.push([firstChunk, last]);
+    const parts = new Map<number, Uint8Array>();
+    for (let index = firstChunk; index <= last; index++) {
+      parts.set(index, server.tampered.get(index) || server.chunks[index]);
+    }
+    return Promise.resolve({ size: ciphertext.length, totalChunks: TOTAL_CHUNKS, parts });
+  };
+  const connection = {} as unknown as GatewayConnection;
   const service = createMediaService({
     getConnection: () => connection,
     getStore: () => ({ self: 'bob@local' }) as unknown as ParvaneStore,

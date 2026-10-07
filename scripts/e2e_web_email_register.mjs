@@ -197,14 +197,6 @@ try {
   assertNoPageErrors({ bob: resumeSession });
   await resumeContext.close();
 
-  // E6-1: тот же сценарий на сервере с отключённым v1 (`run_web_email_v1off_e2e.sh`) —
-  // регистрация, код и вход прошли методами v2, по v1 не авторизовался никто
-  if (process.env.PARVANE_E2E_V1_OFF === '1') {
-    const gatewayLog = await readFile(path.join(backendLogDir, 'gateway.log'), 'utf8');
-    assert.match(gatewayLog, /v1-путь в режиме Disabled/, 'gateway не в режиме disabled');
-    assert.doesNotMatch(gatewayLog, /gateway::session.*Клиент авторизован/, 'кто-то авторизовался по v1');
-    console.log('OK: подтверждение почты и вход — без соединения v1');
-  }
 } finally {
   await browser.close();
 }

@@ -10,16 +10,9 @@ import { isContentAllowedForMember } from './groups';
 import { readPollFields } from './polls';
 import { buildWebPage, type ParvaneStore } from './store';
 import {
-  buildWireEvent,
-  TOPIC_GROUP_LIST,
   TOPIC_IDENTITY_RESOLVE,
-  TOPIC_MSG_ACK,
-  TOPIC_MSG_READ,
-  TOPIC_MSG_SYNC_REQUEST,
-  TOPIC_PREKEYS_FETCH,
   type WireEvent,
   type WireGroupInfo,
-  type WireGroupNotice,
   type WireMessageContent,
   type WireStoredMessage,
   type WireUserInfo,
@@ -34,14 +27,12 @@ type SyncDependencies = {
     register: (info: WireGroupInfo) => void;
     // Группы v2 из кэша сведений — до разбора истории (сообщения ложатся в их чаты)
     registerCachedV2?: () => void;
-    refreshMemberships: () => Promise<void>;
-    applyNotice: (notice: WireGroupNotice) => Promise<void>;
   };
   localState: {
     readOwnJournal: () => Promise<WireStoredMessage[]>;
     updateOwnJournalEntry: (stored: WireStoredMessage) => void;
-    // Кэш истории (расшифрованные строки) + курсор синка — в шифрованном IDB,
-    // чтобы вход не тянул всю историю с сервера и не расшифровывал её заново
+    // Кэш истории (расшифрованные строки) — в шифрованном IDB: после входа
+    // история показывается без сервера (инбокс v2 отдаёт только новое)
     saveHistoryRecord: (stored: WireStoredMessage) => void;
     deleteHistoryRecord: (uuid: string) => void;
     loadHistoryRecords: () => Promise<WireStoredMessage[]>;
@@ -49,8 +40,6 @@ type SyncDependencies = {
     markChatDeleted: (address: string) => void;
     loadClearedUntil?: () => Record<string, number>;
     removeOwnJournalEntries: (uuids: string[]) => Promise<void>;
-    saveSyncCursor: (cursor: { lastSeenUuid: string; sinceUpdated: number }) => void;
-    loadSyncCursor: () => Promise<{ lastSeenUuid: string; sinceUpdated: number } | undefined>;
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
     isBlocked: (address: string) => boolean;
     loadNotifyExceptions: () => Record<string, Record<string, unknown>>;
@@ -59,8 +48,6 @@ type SyncDependencies = {
     saveNotifyDefaults: (map: Record<string, Record<string, unknown>>) => void;
     loadReadUuids: () => string[];
     saveReadUuids: (uuids: string[]) => void;
-    loadRepairAttempts: () => Record<string, number>;
-    saveRepairAttempts: (map: Record<string, number>) => void;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -81,41 +68,14 @@ type UnsealResult = {
 };
 
 const MS_IN_SECOND = 1000;
-const SYNC_TIMEOUT_MS = 15000;
-// Переносов владения два и больше — у устройства есть цепочка (третье поколение)
-const TRANSFER_CHAIN_MIN = 2;
-const TRANSFER_CHAIN_RESYNC_KEY = 'parvane:transfer-chain-resync';
 
 export function createSyncController(deps: SyncDependencies) {
   let isSynced = false;
   let syncPromise: Promise<void> | undefined;
-  let deltaSyncPromise: Promise<void> | undefined;
-  let lastSeenUuid = '';
-  let sinceUpdated = 0;
   const wireFlagsByUuid = new Map<string, WireFlags>();
   const readOutboxMaxByChatId = new Map<string, number>();
   const reportedReadUuids = new Set<string>();
-  const checkedGroupCandidates = new Set<string>();
   const announcedThreadChatIds = new Set<string>();
-
-  function buildSyncPayload(lastSeenId: string, updatedSince: number) {
-    const e2e = deps.getE2e();
-    const signedPayload = `sync:${lastSeenId}:${updatedSince}`;
-    // Авто-линковка: доказательства владения ключами прежних устройств —
-    // сервер включает в выдачу их sealed-исходящие
-    const extraSigning = e2e?.signExtraSync(signedPayload);
-    // v2 (P-48): переносы владения исходящими прежних устройств
-    const transfers = e2e?.syncTransfers();
-    return {
-      last_seen_id: lastSeenId,
-      since_updated: updatedSince,
-      device_id: e2e?.deviceId || '',
-      sender_signing_key: e2e?.signingKey,
-      signature: e2e?.signCallData(signedPayload),
-      extra_signing: extraSigning?.length ? extraSigning : undefined,
-      transfers: transfers?.length ? transfers : undefined,
-    };
-  }
 
   // FNV-1a 32-бит от полного шифртекста: по нему decCache отличает «тот же ct,
   // что уже расшифрован» от нового ct после правки. Без этого delta-строка
@@ -156,33 +116,17 @@ export function createSyncController(deps: SyncDependencies) {
   function reset() {
     isSynced = false;
     syncPromise = undefined;
-    deltaSyncPromise = undefined;
-    lastSeenUuid = '';
-    sinceUpdated = 0;
     wireFlagsByUuid.clear();
     announcedThreadChatIds.clear();
     inFlightByUuid.clear();
-    sawUndecryptable = false;
     undecryptableUuids.clear();
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
     deps.localState.loadReadUuids().forEach((uuid) => reportedReadUuids.add(uuid));
-    unconfirmedReadUuids.clear();
-    checkedGroupCandidates.clear();
   }
 
   function resetPromise() {
     syncPromise = undefined;
-    deltaSyncPromise = undefined;
-  }
-
-  function trackCursors(stored: WireStoredMessage) {
-    // C1-05: id v2-строки задаёт отправитель — UUIDv7 «из будущего» навсегда
-    // отрезал бы v1-доставку
-    if (stored.origin === 'v2') return;
-    if (stored.id > lastSeenUuid) lastSeenUuid = stored.id;
-    const updatedAt = stored.updated_at || 0;
-    if (updatedAt > sinceUpdated) sinceUpdated = updatedAt;
   }
 
   function unsealStored(rawStored: WireStoredMessage): UnsealResult {
@@ -346,18 +290,12 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
-  // Подтверждение принадлежности sender_identity заявленному отправителю по
-  // каталогу identity (анти-имперсонация). Известные устройства проверяются
-  // синхронно из локального каталога; неизвестные — с дозапросом бандла
-  async function fetchBundleForVerify(user: string) {
-    const engine = deps.getE2e();
-    const raw = await deps.getConnection()!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
-      token: deps.getToken(), user, known_devices: engine?.getKnownDeviceIds(user) || [],
-    }));
-    return JSON.parse(raw) as {
-      ok: boolean; identity_key?: string; signed_prekey?: string;
-      one_time?: string; devices?: WireDeviceBundle[];
-    };
+  // Подтверждение принадлежности sender_identity заявленному отправителю
+  // (анти-имперсонация) для кадров v1, долетающих записями `LegacyV1`: только по
+  // локальному каталогу устройств — серверного каталога прекеев v1 больше нет
+  // (T110), неизвестный ключ подтвердить нельзя (`unknown`)
+  function fetchBundleForVerify(): Promise<{ ok: boolean; devices?: WireDeviceBundle[] }> {
+    return Promise.resolve({ ok: false });
   }
 
   async function verifySender(check: SenderCheck): Promise<'ok' | 'spoofed' | 'unknown'> {
@@ -558,45 +496,31 @@ export function createSyncController(deps: SyncDependencies) {
     }, 500);
   }
 
-  // msg.chat.read уходит без подтверждения (fire-and-forget), поэтому при
-  // обрыве сокета сервер о прочтении не узнаёт и у собеседника не появляется
-  // ✓✓. Повторяем на каждом проходе синка, пока сервер не вернёт read=true.
-  const unconfirmedReadUuids = new Set<string>();
-  const READ_RETRY_PER_PASS = 50;
-
-  function retryUnconfirmedReads() {
-    if (!unconfirmedReadUuids.size) return;
-    const connection = deps.getConnection();
-    if (!connection) return;
+  async function forgetMessages(uuids: string[]) {
     const store = deps.getStore();
-    let sent = 0;
-    for (const uuid of [...unconfirmedReadUuids]) {
-      if (wireFlagsByUuid.get(uuid)?.read) {
-        unconfirmedReadUuids.delete(uuid); // сервер подтвердил
-        continue;
+    const idsByChatId = new Map<string, number[]>();
+    uuids.forEach((uuid) => {
+      wireFlagsByUuid.delete(uuid);
+      deps.localState.deleteHistoryRecord(uuid);
+      const message = store.getMessageByUuid(uuid);
+      if (!message) return;
+      store.removeMessage(message.chatId, message.id);
+      const ids = idsByChatId.get(message.chatId) || [];
+      ids.push(message.id);
+      idsByChatId.set(message.chatId, ids);
+    });
+    idsByChatId.forEach((ids, chatId) => {
+      deps.sendUpdate({ '@type': 'deleteMessages', ids, chatId });
+      if (!store.getMessages(chatId).length) {
+        const address = store.getAddressForId(chatId);
+        if (address && !store.isGroupAddress(address)) deps.localState.markChatDeleted(address);
+        deps.sendUpdate({ '@type': 'deleteHistory', chatId });
       }
-      if (sent >= READ_RETRY_PER_PASS) break;
-      try {
-        connection.publish(TOPIC_MSG_READ, JSON.stringify(
-          buildWireEvent(store.self, deps.getToken(), { message_id: uuid }),
-        ));
-        sent += 1;
-      } catch {
-        return; // сокет снова недоступен — повторим следующим проходом
-      }
-    }
-  }
-
-  // P-05: ack без `sender` — получатель не раскрывает серверу расшифрованного
-  // отправителя; адрес для delivered сервер берёт из своей БД
-  function sendAck(messageId: string) {
-    const store = deps.getStore();
-    const ack = buildWireEvent(store.self, deps.getToken(), { message_id: messageId });
-    try {
-      deps.getConnection()?.publish(TOPIC_MSG_ACK, JSON.stringify(ack));
-    } catch {
-      // Без ACK сервер повторит доставку; UUID-дедупликация погасит повтор.
-    }
+    });
+    // Кэш истории и журнал исходящих — сразу, не по таймеру: reload сразу
+    // после удаления не должен воскресить очищенное из IDB
+    await deps.localState.removeOwnJournalEntries(uuids);
+    await deps.localState.flushHistoryNow();
   }
 
   // Чат очищен «у себя» (T145) позже этого сообщения. Сервер v1 очищенное не
@@ -632,40 +556,6 @@ export function createSyncController(deps: SyncDependencies) {
     return stored.content.kind === 'chat_mode' && origin !== 'v2';
   }
 
-  async function refreshGroupsIfUnknownChat(stored: WireStoredMessage) {
-    const store = deps.getStore();
-    if (!stored.to || stored.to === store.self || stored.from === store.self
-      || store.isGroupAddress(stored.to) || checkedGroupCandidates.has(stored.to)) {
-      return;
-    }
-    checkedGroupCandidates.add(stored.to);
-    if (deps.getConnection()?.hasV1 === false) return;
-    try {
-      const raw = await deps.getConnection()!.request(
-        TOPIC_GROUP_LIST,
-        JSON.stringify({ token: deps.getToken() }),
-      );
-      const groups = (JSON.parse(raw) as { groups?: WireGroupInfo[] }).groups || [];
-      groups.forEach((info) => {
-        const isNew = !store.isGroupAddress(info.group_id);
-        deps.groups.register(info);
-        if (isNew) {
-          const chat = store.buildApiChatForGroup(info);
-          deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
-          ensureMainThread(chat.id);
-        }
-      });
-    } catch {
-      // Список групп догоним следующим синком.
-    }
-    // Если группа так и не нашлась (гонка с фан-аутом членства или сбой
-    // запроса), кандидата нужно проверять снова — иначе чат не появится
-    // до перезахода
-    if (!store.isGroupAddress(stored.to)) {
-      checkedGroupCandidates.delete(stored.to);
-    }
-  }
-
   // Кросс-девайс прочитанное: сообщения, которые я прочитал на другом
   // устройстве (ReadNotice из инбокса или read_message_ids из sync). Помечаем
   // прочитанными и двигаем бейдж непрочитанного затронутых чатов.
@@ -695,7 +585,7 @@ export function createSyncController(deps: SyncDependencies) {
   // ЕДИНЫЙ предикат «входящее не прочитано» — для стартового состояния
   // (provider), пересчёта после кросс-девайс прочтения и упоминаний. Раньше
   // пересчёт считал непрочитанным всё без uuid — записи о звонках и служебные
-  // сообщения (у них нет uuid, msg.chat.read невозможен), и бейдж «1»
+  // сообщения (у них нет uuid, квитанция прочтения невозможна), и бейдж «1»
   // возвращался на чат, где последним был звонок (10 сен 2026).
   function isUnreadIncoming(chatId: string, message: ApiMessage) {
     if (message.isOutgoing || !message.senderId) return false;
@@ -785,13 +675,14 @@ export function createSyncController(deps: SyncDependencies) {
   // сообщение попадало в ленту дважды
   const inFlightByUuid = new Map<string, Promise<void>>();
 
+  // `isLive` — строка пришла сейчас (инбокс v2, кадр `LegacyV1`), а не из кэша
   function applyStoredUpdate(
-    rawStored: WireStoredMessage, shouldAckIncoming: boolean, shouldPersist = shouldAckIncoming,
+    rawStored: WireStoredMessage, isLive: boolean, shouldPersist = isLive,
   ): Promise<void> {
     const previous = inFlightByUuid.get(rawStored.id) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => applyStoredUpdateUnserialized(rawStored, shouldAckIncoming, shouldPersist));
+      .then(() => applyStoredUpdateUnserialized(rawStored, shouldPersist));
     inFlightByUuid.set(rawStored.id, next);
     void next.finally(() => {
       if (inFlightByUuid.get(rawStored.id) === next) inFlightByUuid.delete(rawStored.id);
@@ -799,38 +690,25 @@ export function createSyncController(deps: SyncDependencies) {
     return next;
   }
 
-  async function applyStoredUpdateUnserialized(
-    rawStored: WireStoredMessage, shouldAckIncoming: boolean, shouldPersist = shouldAckIncoming,
-  ) {
-    trackCursors(rawStored);
-    const {
-      stored, hidden, verify, isOwnEnvelope,
-    } = unsealStored(rawStored);
+  async function applyStoredUpdateUnserialized(rawStored: WireStoredMessage, shouldPersist: boolean) {
+    const { stored, hidden, verify } = unsealStored(rawStored);
     const store = deps.getStore();
     if (hidden) {
-      if (shouldAckIncoming && !isOwnEnvelope) sendAck(rawStored.id);
       return;
     }
     if (verify) {
       const verdict = await verifySender(verify);
       if (verdict === 'spoofed') {
         // Подмена отправителя: расшифровалось, но sender_identity не принадлежит
-        // заявленному адресу. НЕ показываем и НЕ роутим в его чат. Подтверждаем
-        // приём (anonymous ack), чтобы сервер не гонял повтор
+        // заявленному адресу. НЕ показываем и НЕ роутим в его чат
         deps.log(`ОТКЛОНЕНО: подмена отправителя ${verify.claimedFrom} в ${rawStored.id}`);
-        if (shouldAckIncoming) sendAck(rawStored.id);
         return;
       }
       if (verdict === 'unknown') {
-        // E2E-1: каталог отправителя недоступен — подтвердить нельзя. НЕ
-        // показываем и НЕ ack'аем; помечаем нерасшифрованным, чтобы sync
-        // повторил, а дисковый курсор не ушёл вперёд (SYNC-1). Ранее сообщение
-        // показывалось без подтверждения — окно для спуфа при недоступном
-        // identity-шарде (P-26).
+        // E2E-1: ключ отправителя подтвердить нельзя — НЕ показываем (P-26)
         deps.log(
           `отправитель ${verify.claimedFrom} в ${rawStored.id} не подтверждён (каталог недоступен) — откладываем`,
         );
-        sawUndecryptable = true;
         undecryptableUuids.add(rawStored.id);
         return;
       } else if (verify.claimedFrom !== store.self) {
@@ -840,23 +718,18 @@ export function createSyncController(deps: SyncDependencies) {
       }
     }
     // Заблокированный контакт: входящее личное сообщение не показываем и не
-    // роутим в его чат (в группах блок участника так не работает — только 1-1).
-    // Приём подтверждаем, чтобы сервер не гонял повтор
+    // роутим в его чат (в группах блок участника так не работает — только 1-1)
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
       && deps.localState.isBlocked(stored.from)) {
-      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     // Права по типу содержимого (spec 003, FR-009): сервер видит шифртекст и
     // тип не проверяет — участник без роли, приславший запрещённый тип в
-    // обход композера, у остальных не показывается. Решение принято —
-    // курсор двигается как за применённым (не сбой расшифровки)
+    // обход композера, у остальных не показывается
     if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, rawStored.origin)) {
-      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
     if (isClearedForMe(stored)) {
-      if (shouldAckIncoming && !isOwnEnvelope) sendAck(rawStored.id);
       return;
     }
     // Если после unseal контент всё ещё зашифрован — расшифровать не удалось
@@ -870,10 +743,8 @@ export function createSyncController(deps: SyncDependencies) {
       // (заглушка прошлой попытки — не содержимое: её повторные попытки идут дальше)
       if (store.getMessageByUuid(stored.id) && !undecryptableUuids.has(stored.id)) {
         deps.log(`сообщение ${stored.id} не расшифровано повторно — оставлено показанное содержимое`);
-        if (shouldAckIncoming) sendAck(rawStored.id);
         return;
       }
-      sawUndecryptable = true;
       undecryptableUuids.add(stored.id);
       deps.log(`сообщение ${stored.id} не расшифровано — показываем заглушку`);
       // Показываем видимую заглушку вместо пустоты: попытки расшифровать
@@ -885,14 +756,9 @@ export function createSyncController(deps: SyncDependencies) {
       deps.sendUpdate({
         '@type': 'newMessage', chatId: placeholder.chatId, id: placeholder.id, message: placeholder,
       });
-      if (shouldAckIncoming) sendAck(rawStored.id);
       return;
     }
-    await refreshGroupsIfUnknownChat(stored);
     if (handlePollContent(stored)) {
-      if (shouldAckIncoming && stored.from !== store.self) {
-        sendAck(rawStored.id);
-      }
       return;
     }
     deps.media.rememberKeys(stored.content);
@@ -916,19 +782,15 @@ export function createSyncController(deps: SyncDependencies) {
         store.removeMessage(existing.chatId, existing.id);
         deps.sendUpdate({ '@type': 'deleteMessages', ids: [existing.id], chatId: existing.chatId });
       }
-      if (shouldAckIncoming && stored.from && stored.from !== store.self) {
-        sendAck(rawStored.id);
-      }
       return;
     }
 
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
-    // Кэш истории: только серверные строки (shouldAck) и строки протокола v2
-    // — восстановление из кэша (shouldPersist=false) не переписывает само себя
+    // Кэш истории: живые строки и строки протокола v2 — восстановление из кэша
+    // (shouldPersist=false) не переписывает само себя
     if (shouldPersist) persistHistory(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
-    if (!message.isOutgoing && shouldAckIncoming) sendAck(stored.id);
 
     if (!isKnown) {
       if (!message.isOutgoing && stored.from) announcePeer(stored.from);
@@ -990,56 +852,14 @@ export function createSyncController(deps: SyncDependencies) {
     deps.localState.saveHistoryRecord(stored);
   }
 
-  // Курсор сохраняем только если этот проход ничего не пропустил: иначе
-  // сообщение, не расшифрованное сейчас (E2E не поднялся, нет ключа), после
-  // рестарта уже не пришло бы дельтой
-  let sawUndecryptable = false;
-  // Какие именно uuid не прочитались за проход (conformance SYNC-2)
+  // Какие именно uuid не прочитались за проход: их заглушки заменяются
+  // содержимым, когда расшифровка удаётся
   const undecryptableUuids = new Set<string>();
-  const REPAIR_ATTEMPTS = 3;
 
-  // Курсор придерживаем, пока непрочитанное не исчерпало попытки (десктоп —
-  // тот же потолок kRepairAttempts=3). Чистый проход очищает очередь.
-  function mayAdvanceDiskCursor(): boolean {
-    if (!sawUndecryptable) {
-      deps.localState.saveRepairAttempts({});
-      return true;
-    }
-    const attempts = deps.localState.loadRepairAttempts();
-    let mayAdvance = true;
-    undecryptableUuids.forEach((uuid) => {
-      const count = (attempts[uuid] || 0) + 1;
-      attempts[uuid] = count;
-      if (count < REPAIR_ATTEMPTS) mayAdvance = false;
-      else deps.log(`сообщение ${uuid} не прочитано за ${REPAIR_ATTEMPTS} попытки — пропускаем`);
-    });
-    deps.localState.saveRepairAttempts(attempts);
-    return mayAdvance;
-  }
-
-  function persistCursor() {
-    if (!lastSeenUuid || !deps.getE2e()) return;
-    if (!mayAdvanceDiskCursor()) return;
-    deps.localState.saveSyncCursor({ lastSeenUuid, sinceUpdated });
-  }
-
-  function needsTransferChainResync(self: string) {
-    if ((deps.getE2e()?.syncTransfers().length || 0) < TRANSFER_CHAIN_MIN) return false;
-    const key = `${TRANSFER_CHAIN_RESYNC_KEY}:${self}`;
-    try {
-      if (localStorage.getItem(key)) return false;
-      localStorage.setItem(key, '1');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  // Быстрый старт из локального кэша: восстановить историю без сервера и
-  // догнать дельтой от сохранённого курсора. false — кэша нет (полный синк)
+  // История — из локального кэша (расшифрованные строки) и журнала исходящих;
+  // сервер v2 хранит только недоставленное, его отдаёт движок (`applyExternal`)
   async function restoreFromCache(): Promise<boolean> {
     if (!deps.getE2e()) return false;
-    const cursor = await deps.localState.loadSyncCursor();
     const records = await deps.localState.loadHistoryRecords();
     if (!records.length) return false;
     // «Избранное» без других устройств живёт ТОЛЬКО в журнале исходящих (на
@@ -1063,106 +883,31 @@ export function createSyncController(deps: SyncDependencies) {
       if (message && !message.isOutgoing) restoredChatIds.add(message.chatId);
     });
     restoredChatIds.forEach((chatId) => pushReadState(chatId));
-    // Протокол v2 (spec 007): переписка только по v2 не двигает v1-курсор —
-    // кэш показан, а v1-история догоняется полным синком
-    if (!cursor?.lastSeenUuid) {
-      deps.log(`история из кэша без v1-курсора: ${records.length} сообщений, полный синк`);
-      return false;
-    }
-    // Сервер раньше не принимал цепочку переносов владения (устройство третьего
-    // поколения не получало свои исходящие первого) — один раз перечитываем всё
-    if (needsTransferChainResync(store.self)) {
-      deps.log('цепочка переносов владения: разовый полный синк');
-      return false;
-    }
-    lastSeenUuid = cursor.lastSeenUuid;
-    sinceUpdated = cursor.sinceUpdated;
     deps.log(`история восстановлена из кэша: ${records.length} сообщений`);
     return true;
   }
 
   async function runFullSync() {
-    sawUndecryptable = false;
     undecryptableUuids.clear();
     const store = deps.getStore();
-    const connection = deps.getConnection()!;
-    const token = deps.getToken();
-    // T134: соединения v1 нет (сервер его отключил) — списка v1-групп и синка v1
-    // нет; история — из локального журнала и инбокса v2 (в т.ч. записи LegacyV1)
-    const hasV1 = connection.hasV1 !== false;
-    const groupsRaw = hasV1 ? await connection.request(TOPIC_GROUP_LIST, JSON.stringify({ token })) : '{}';
-    const groups = (JSON.parse(groupsRaw) as { groups?: WireGroupInfo[] }).groups || [];
-    groups.forEach((info) => deps.groups.register(info));
     deps.groups.registerCachedV2?.();
 
     if (await restoreFromCache()) {
       isSynced = true;
-      // Догнать изменения с момента последнего курсора (правки, пины,
-      // прочтения, новые сообщения) — обычной дельтой
-      await runDeltaSync();
-      const peers = new Set<string>();
-      store.getKnownUserAddresses().forEach((address) => peers.add(address));
-      groups.forEach((group) => group.members.forEach(({ address }) => peers.add(address)));
-      peers.delete(store.self);
-      await resolveDisplayNames(Array.from(peers));
+      await resolveDisplayNames(store.getKnownUserAddresses().filter((address) => address !== store.self));
       return;
     }
 
-    const syncEvent = buildWireEvent(store.self, token, buildSyncPayload('0', 0));
-    const syncRaw = hasV1 ? await connection.request(
-      TOPIC_MSG_SYNC_REQUEST,
-      JSON.stringify(syncEvent),
-      SYNC_TIMEOUT_MS,
-    ) : '{}';
-    const parsed = JSON.parse(syncRaw) as WireEvent<{
-      messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
-    }> & { error?: string };
-    // Отказ messenger'а ({"error"}: отозванное устройство, битый токен) — не
-    // «пусто», а причина; в журнал, дальше как без серверных сообщений
-    if (parsed.error) deps.log(`sync отказ: ${parsed.error}`);
-    const serverMessages = parsed.payload?.messages || [];
-    serverMessages.forEach(trackCursors);
-    const knownIds = new Set(serverMessages.map((message) => message.id));
-    const journal = (await deps.localState.readOwnJournal()).filter((message) => !knownIds.has(message.id));
-    const ordered = serverMessages.concat(journal)
-      .sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
-    deps.log(`полный синк: с сервера ${serverMessages.length}, из журнала ${journal.length}`);
+    // Кэша нет (первый вход на устройстве): история — журнал исходящих; остальное
+    // придёт инбоксом v2 и линковкой
+    const journal = await deps.localState.readOwnJournal();
+    const ordered = journal.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
+    deps.log(`полный синк: из журнала ${journal.length}`);
 
-    ordered.forEach((stored) => {
-      if (stored.content.kind === 'encrypted') unsealStored(stored);
-    });
-    for (const rawStored of ordered) {
-      const { stored, hidden, verify } = unsealStored(rawStored);
-      if (hidden || handlePollContent(stored)) continue;
-      // Заблокированный контакт: как и в live-пути, его личные сообщения не
-      // показываем (раньше после reload вся история блокированного возвращалась)
-      if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
-        && deps.localState.isBlocked(stored.from)) {
-        continue;
-      }
-      if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, rawStored.origin)) continue;
+    for (const stored of ordered) {
+      if (handlePollContent(stored)) continue;
+      if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, stored.origin)) continue;
       if (isClearedForMe(stored)) continue;
-      // Нерасшифрованное (нет ключа этого устройства) не рисуем и в стор не
-      // кладём — как в applyStoredUpdate, вместо «🔒»-заглушки
-      if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
-        sawUndecryptable = true;
-        undecryptableUuids.add(stored.id);
-        deps.log(`сообщение ${stored.id} не расшифровано — пропущено (full sync)`);
-        continue;
-      }
-      if (verify) {
-        const verdict = await verifySender(verify);
-        if (verdict === 'spoofed') {
-          deps.log(`ОТКЛОНЕНО (full sync): подмена отправителя ${verify.claimedFrom} в ${stored.id}`);
-          continue;
-        }
-        if (verdict === 'ok' && verify.claimedFrom !== store.self) {
-          if (deps.getE2e()?.rememberContactIdentity(verify.claimedFrom, verify.senderIdentity)) {
-            announceKeyChange(verify.claimedFrom);
-          }
-        }
-      }
-      // Надгробия в полном синке не рисуем (см. applyStoredUpdate)
       if (stored.deleted) {
         deps.localState.deleteHistoryRecord(stored.id);
         continue;
@@ -1176,30 +921,21 @@ export function createSyncController(deps: SyncDependencies) {
         const current = readOutboxMaxByChatId.get(message.chatId) || 0;
         if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
       }
-      if (!message.isOutgoing && stored.read) reportedReadUuids.add(stored.id);
       if (stored.content.ttl_secs) {
         const remaining = stored.content.ttl_secs - (Math.floor(Date.now() / 1000) - stored.ts);
         deps.localState.scheduleTtlDeletion(message.chatId, message.id, Math.max(0, remaining));
       }
     }
 
-    // Кросс-девайс прочитанное (прочитал на другом устройстве)
-    markUuidsRead(parsed.payload?.read_message_ids || []);
-    if (parsed.payload?.notify_settings) applyNotifySettings(parsed.payload.notify_settings);
-
     const peerAddresses = new Set<string>();
-    serverMessages.concat(journal).forEach((message) => {
-      if (message.from && !store.isGroupAddress(message.from)) peerAddresses.add(message.from);
+    journal.forEach((message) => {
       if (message.to && !store.isGroupAddress(message.to)) peerAddresses.add(message.to);
     });
-    groups.forEach((group) => group.members.forEach(({ address }) => peerAddresses.add(address)));
     peerAddresses.delete(store.self);
     deps.log('полный синк: история применена');
     await resolveDisplayNames(Array.from(peerAddresses));
     isSynced = true;
     deps.log('полный синк завершён');
-    persistCursor();
-    retryUnconfirmedReads();
   }
 
   function ensureSynced() {
@@ -1211,84 +947,6 @@ export function createSyncController(deps: SyncDependencies) {
       });
     }
     return syncPromise;
-  }
-
-  async function runDeltaSync() {
-    const connection = deps.getConnection();
-    if (!connection || !isSynced || connection.hasV1 === false) return;
-    sawUndecryptable = false;
-    undecryptableUuids.clear();
-    await deps.groups.refreshMemberships();
-    let messages: WireStoredMessage[];
-    try {
-      const store = deps.getStore();
-      const syncEvent = buildWireEvent(
-        store.self,
-        deps.getToken(),
-        buildSyncPayload(lastSeenUuid || '0', sinceUpdated),
-      );
-      const raw = await connection.request(
-        TOPIC_MSG_SYNC_REQUEST,
-        JSON.stringify(syncEvent),
-        SYNC_TIMEOUT_MS,
-      );
-      const parsed = JSON.parse(raw) as WireEvent<{
-        messages?: WireStoredMessage[]; read_message_ids?: string[]; notify_settings?: string;
-      }> & { error?: string };
-      if (parsed.error) {
-        deps.log(`sync отказ: ${parsed.error}`);
-        return;
-      }
-      messages = parsed.payload?.messages || [];
-      markUuidsRead(parsed.payload?.read_message_ids || []);
-      if (parsed.payload?.notify_settings) applyNotifySettings(parsed.payload.notify_settings);
-    } catch {
-      return;
-    }
-    const sorted = messages.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
-    for (const stored of sorted) await applyStoredUpdate(stored, true);
-    if (sorted.length) persistCursor();
-    retryUnconfirmedReads();
-  }
-
-  function requestDeltaSync() {
-    if (deltaSyncPromise) return;
-    deltaSyncPromise = runDeltaSync()
-      .catch((error) => deps.log(`дельта-синк не выполнен: ${String(error)}`))
-      .finally(() => {
-        deltaSyncPromise = undefined;
-      });
-  }
-
-  // Очистка истории «для меня» (наша или с другого своего устройства): убрать
-  // сообщения из стора, кэша истории и wire-флагов, сообщить tt. Опустевший
-  // чат снимается из списка как удалённый диалог; новое сообщение вернёт его
-  // (fetchChats показывает чаты с историей)
-  async function forgetMessages(uuids: string[]) {
-    const store = deps.getStore();
-    const idsByChatId = new Map<string, number[]>();
-    uuids.forEach((uuid) => {
-      wireFlagsByUuid.delete(uuid);
-      deps.localState.deleteHistoryRecord(uuid);
-      const message = store.getMessageByUuid(uuid);
-      if (!message) return;
-      store.removeMessage(message.chatId, message.id);
-      const ids = idsByChatId.get(message.chatId) || [];
-      ids.push(message.id);
-      idsByChatId.set(message.chatId, ids);
-    });
-    idsByChatId.forEach((ids, chatId) => {
-      deps.sendUpdate({ '@type': 'deleteMessages', ids, chatId });
-      if (!store.getMessages(chatId).length) {
-        const address = store.getAddressForId(chatId);
-        if (address && !store.isGroupAddress(address)) deps.localState.markChatDeleted(address);
-        deps.sendUpdate({ '@type': 'deleteHistory', chatId });
-      }
-    });
-    // Кэш истории и журнал исходящих — сразу, не по таймеру: reload сразу
-    // после удаления не должен воскресить очищенное из IDB
-    await deps.localState.removeOwnJournalEntries(uuids);
-    await deps.localState.flushHistoryNow();
   }
 
   function handleInboxFrame(payload: string) {
@@ -1313,15 +971,6 @@ export function createSyncController(deps: SyncDependencies) {
     const notify = (event.payload as { notify?: string } | undefined)?.notify;
     if (typeof notify === 'string' && notify) {
       applyNotifySettings(notify);
-      return;
-    }
-    // Изменение группы (spec 003, GROUP-1): фото/описание/права/роли/состав/
-    // ссылки/заявки — применить к открытым экранам без перезагрузки
-    const group = (event.payload as { group?: WireGroupNotice } | undefined)?.group;
-    if (group && typeof group === 'object' && typeof group.group_id === 'string') {
-      void deps.groups.applyNotice(group).catch((error) => {
-        deps.log(`изменение группы не применено: ${String(error)}`);
-      });
       return;
     }
     const stored = event.payload?.message;
@@ -1382,10 +1031,8 @@ export function createSyncController(deps: SyncDependencies) {
     },
     markReportedRead: (uuid: string) => {
       reportedReadUuids.add(uuid);
-      unconfirmedReadUuids.add(uuid);
       persistReadUuids();
     },
-    requestDeltaSync,
     reset,
     resetPromise,
     resolveDisplayNames,

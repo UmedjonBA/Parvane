@@ -12,7 +12,6 @@ import { createConnectionController } from './connectionController';
 import { createMessageController } from './messages';
 import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
-import { buildPresenceTopic, buildTypingTopic } from './wire';
 
 // Режим чата «усиленная приватность» (L2, spec 007 FR-036, правило L2-1):
 // в чате с активным режимом typing/presence не шлются и не показываются, своё
@@ -23,49 +22,23 @@ const PEER = 'bob@local';
 const OTHER = 'carol@local';
 
 const gateway = vi.hoisted(() => {
-  const state = {
-    published: [] as { subject: string; payload: string }[],
-    subscribed: [] as string[],
-    handlers: new Map<string, (payload: string) => void>(),
-  };
   class FakeGateway {
-    isOpen = true;
-
-    onClose?: () => void;
-
-    connect() {
-      return Promise.resolve();
-    }
-
     authorize() {
-      return Promise.resolve();
+      return SELF;
     }
 
     request(subject: string) {
       return Promise.resolve(subject === 'identity.server.info' ? JSON.stringify({ domain: 'local' }) : '{}');
     }
-
-    publish(subject: string, payload: string) {
-      state.published.push({ subject, payload });
-    }
-
-    subscribe(subject: string, handler: (payload: string) => void) {
-      state.subscribed.push(subject);
-      state.handlers.set(subject, handler);
-    }
-
-    close() {
-      this.isOpen = false;
-    }
   }
-  return { state, FakeGateway };
+  return { FakeGateway };
 });
 
 vi.mock('./gateway', () => ({
   GatewayConnection: gateway.FakeGateway,
   getGatewayUrl: () => 'ws://test.invalid/ws',
 }));
-// v1-движок E2E для эфемерных каналов не нужен
+// Движок ключей устройства для эфемерных каналов не нужен
 vi.mock('./e2e', () => ({
   E2eEngine: { create: () => Promise.reject(new Error('E2E в этом тесте не поднимается')) },
 }));
@@ -91,10 +64,9 @@ const OFF: L2State = {
 
 type FakeEngine = { states?: Record<string, L2State>; presence?: boolean; isReady: boolean };
 
-function makeGate(engine: FakeEngine, isEnabled = true) {
+function makeGate(engine: FakeEngine) {
   return createL2Gate({
     getSelf: () => SELF,
-    isEnabled: () => isEnabled,
     readEngine: (address) => (engine.isReady ? engine.states?.[address] || OFF : undefined),
     readEnginePresence: () => (engine.isReady ? engine.presence ?? true : undefined),
   });
@@ -103,9 +75,6 @@ function makeGate(engine: FakeEngine, isEnabled = true) {
 beforeEach(() => {
   vi.stubGlobal('localStorage', testLocalStorage);
   localStorage.clear();
-  gateway.state.published.length = 0;
-  gateway.state.subscribed.length = 0;
-  gateway.state.handlers.clear();
 });
 
 describe('L2: состояние режима по движку', () => {
@@ -153,13 +122,6 @@ describe('L2-1: решение для typing/presence (v2/l2.ts)', () => {
     expect(gate.presenceAllowed()).toBe(true);
   });
 
-  it('без v2-стека режима нет: каналы открыты даже при памяти о режиме', () => {
-    makeGate({ isReady: true, states: { [PEER]: ON } }).state(PEER);
-    const gate = makeGate({ isReady: false }, false);
-    expect(gate.ephemeralAllowed(PEER)).toBe(true);
-    expect(gate.presenceAllowed()).toBe(true);
-  });
-
   it('политика группы: первое знакомство без режима — не изменение, смена — один раз', () => {
     const gate = makeGate({ isReady: true });
     expect(gate.noteGroupPolicy('v2g:aa', false)).toBe(false);
@@ -176,25 +138,24 @@ describe('L2-1: решение для typing/presence (v2/l2.ts)', () => {
   });
 });
 
-describe('L2-1: typing и presence в v1-пути (connectionController)', () => {
+describe('L2-1: typing и presence (connectionController, эфемерные каналы v2)', () => {
   let blocked: Set<string>;
   let isPresenceAllowed: boolean;
   let store: ParvaneStore;
   let updates: ApiUpdate[];
+  let published: number;
+  let watched: string[];
   let controller: ReturnType<typeof createConnectionController>;
 
   async function login() {
     let connection: GatewayConnection | undefined;
     let token = '';
     updates = [];
+    published = 0;
+    watched = [];
     store = new ParvaneStore();
     controller = createConnectionController({
-      calls: {
-        teardown: () => undefined,
-        setup: () => undefined,
-        handleFrame: () => undefined,
-        handleGroupFrame: () => undefined,
-      } as never,
+      calls: { teardown: () => undefined, setup: () => undefined } as never,
       getConnection: () => connection,
       setConnection: (next) => { connection = next; },
       getE2e: () => undefined,
@@ -206,27 +167,22 @@ describe('L2-1: typing и presence в v1-пути (connectionController)', () =>
       setCallIdentityReady: () => undefined,
       polls: { setSelf: () => undefined, setPeerIdResolver: () => undefined } as never,
       onNewSession: () => undefined,
-      isSynced: () => true,
       resetSyncPromise: () => undefined,
-      requestDeltaSync: () => undefined,
-      requestFullSync: () => undefined,
       resolveDisplayNames: () => Promise.resolve(),
-      handleInboxFrame: () => undefined,
       selfId: () => store.getIdForAddress(store.self),
       sendUpdate: (update) => { updates.push(update); },
       log: () => undefined,
       v2: {
         ephemeralAllowed: (address) => !blocked.has(address),
         presenceAllowed: () => isPresenceAllowed,
+        publishPresence: () => { published += 1; },
+        watchPresence: (address) => { watched.push(address); },
       },
     });
     await controller.connectWithToken(SELF, 'jwt');
     updates.length = 0;
   }
 
-  const selfId = () => store.getIdForAddress(SELF);
-  const presenceFrames = () => gateway.state.published
-    .filter(({ subject }) => subject === buildPresenceTopic(selfId()));
   const typingUpdates = () => updates.filter((update) => update['@type'] === 'updateChatTypingStatus');
   const onlineUpdates = () => updates.filter((update) => (
     update['@type'] === 'updateUserStatus' && update.status.type === 'userStatusOnline'
@@ -245,65 +201,63 @@ describe('L2-1: typing и presence в v1-пути (connectionController)', () =>
     isPresenceAllowed = false;
     blocked.add(PEER);
     await login();
-    expect(presenceFrames()).toHaveLength(0);
+    expect(published).toBe(0);
     // Режим сняли — присутствие публикуется сразу
     isPresenceAllowed = true;
     blocked.clear();
     controller.refreshEphemeral(PEER);
-    expect(presenceFrames()).toHaveLength(1);
+    expect(published).toBe(1);
   });
 
   it('без режима присутствие публикуется при входе', async () => {
     await login();
-    expect(presenceFrames()).toHaveLength(1);
+    expect(published).toBe(1);
   });
 
   it('входящий typing L2-чата игнорируется, обычного — показывается', async () => {
     blocked.add(PEER);
     await login();
-    const onTyping = gateway.state.handlers.get(buildTypingTopic(selfId()))!;
-    onTyping(JSON.stringify({ from: PEER, to: SELF }));
+    controller.showV2Typing(PEER, PEER);
     expect(typingUpdates()).toHaveLength(0);
-    onTyping(JSON.stringify({ from: OTHER, to: SELF }));
+    controller.showV2Typing(OTHER, OTHER);
     expect(typingUpdates()).toHaveLength(1);
   });
 
-  it('на presence собеседника L2-чата не подписываемся и «в сети» не показываем', async () => {
+  it('presence собеседника L2-чата не слушаем и «в сети» не показываем', async () => {
     blocked.add(PEER);
     await login();
     const peerId = store.getIdForAddress(PEER);
     const otherId = store.getIdForAddress(OTHER);
     controller.ensurePresence(peerId);
     controller.ensurePresence(otherId);
-    expect(gateway.state.subscribed).not.toContain(buildPresenceTopic(peerId));
-    expect(gateway.state.subscribed).toContain(buildPresenceTopic(otherId));
+    expect(watched).toEqual([OTHER]);
 
-    // Режим включили у уже подписанного собеседника: кадр presence гасится,
+    // Режим включили у уже слушаемого собеседника: кадр presence гасится,
     // показанный статус «в сети» снимается
-    const onOtherPresence = gateway.state.handlers.get(buildPresenceTopic(otherId))!;
-    onOtherPresence(JSON.stringify({ from: OTHER }));
+    controller.showV2Presence(OTHER);
     expect(onlineUpdates()).toHaveLength(1);
     blocked.add(OTHER);
     controller.refreshEphemeral(OTHER);
     expect(updates).toContainEqual({
       '@type': 'updateUserStatus', userId: otherId, status: { type: 'userStatusRecently' },
     });
-    onOtherPresence(JSON.stringify({ from: OTHER }));
+    controller.showV2Presence(OTHER);
     expect(onlineUpdates()).toHaveLength(1);
 
-    // Режим выключили — подписка на presence собеседника появляется
+    // Режим выключили — присутствие собеседника слушается
     blocked.delete(PEER);
     controller.refreshEphemeral(PEER);
-    expect(gateway.state.subscribed).toContain(buildPresenceTopic(peerId));
+    expect(watched).toEqual([OTHER, PEER]);
   });
 });
 
 describe('L2-1: исходящий typing (messages.ts)', () => {
-  it('в чат с активным режимом typing не уходит', async () => {
+  it('в чат с активным режимом typing не уходит; в остальные — только эфемерным каналом v2', async () => {
     const store = new ParvaneStore();
     store.self = SELF;
     const blocked = new Set([PEER]);
     const connection = new gateway.FakeGateway() as unknown as GatewayConnection;
+    const sentV2: string[] = [];
     const controller = createMessageController({
       getConnection: () => connection,
       getStore: () => store,
@@ -311,8 +265,11 @@ describe('L2-1: исходящий typing (messages.ts)', () => {
       v2: {
         ephemeralAllowed: (address: string) => !blocked.has(address),
         isV2GroupAddress: () => false,
-        // Собеседники не на v2 — «печатает» идёт v1-кадром
-        trySendTyping: () => Promise.resolve(false),
+        trySendTyping: (address: string) => {
+          sentV2.push(address);
+          // Сбой канала не понижает ни к чему — «печатает» просто не уходит (TYPING-1)
+          return address === OTHER ? Promise.resolve(true) : Promise.reject(new Error('v2 unavailable'));
+        },
       },
     } as never);
     const peerId = store.getIdForAddress(PEER);
@@ -320,40 +277,7 @@ describe('L2-1: исходящий typing (messages.ts)', () => {
     await controller.methods.sendMessageAction({ peer: { id: peerId }, action: { type: 'typing' } });
     await controller.methods.sendMessageAction({ peer: { id: otherId }, action: { type: 'typing' } });
     await Promise.resolve();
-    expect(gateway.state.published.map(({ subject }) => subject)).toEqual([buildTypingTopic(otherId)]);
-  });
-
-  it('T127: в чат v2 typing v1-кадром не уходит — только эфемерным каналом v2', async () => {
-    const store = new ParvaneStore();
-    store.self = SELF;
-    const connection = new gateway.FakeGateway() as unknown as GatewayConnection;
-    const sentV2: string[] = [];
-    const publishedBefore = gateway.state.published.length;
-    const controller = createMessageController({
-      getConnection: () => connection,
-      getStore: () => store,
-      getToken: () => 'jwt',
-      v2: {
-        ephemeralAllowed: () => true,
-        isV2GroupAddress: () => false,
-        trySendTyping: (address: string) => {
-          sentV2.push(address);
-          // v2-чат: сигнал взят на себя, даже если канала ещё нет
-          return address === PEER ? Promise.resolve(true) : Promise.reject(new Error('v2 unavailable'));
-        },
-      },
-    } as never);
-    await controller.methods.sendMessageAction({
-      peer: { id: store.getIdForAddress(PEER) }, action: { type: 'typing' },
-    });
-    // Сбой v2 у «липкого» v2-собеседника не понижает до v1
-    await controller.methods.sendMessageAction({
-      peer: { id: store.getIdForAddress(OTHER) }, action: { type: 'typing' },
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sentV2).toEqual([PEER, OTHER]);
-    expect(gateway.state.published.slice(publishedBefore)).toEqual([]);
+    expect(sentV2).toEqual([OTHER]);
   });
 });
 
@@ -368,11 +292,7 @@ describe('L2: служебное сообщение о смене режима',
       getE2e: () => undefined,
       getStore: () => store,
       getToken: () => 'jwt',
-      groups: {
-        register: () => undefined,
-        refreshMemberships: () => Promise.resolve(),
-        applyNotice: () => Promise.resolve(),
-      },
+      groups: { register: () => undefined },
       localState: {
         isBlocked: () => false,
         updateOwnJournalEntry: () => undefined,
@@ -448,7 +368,7 @@ describe('L2: служебное сообщение о смене режима',
     expect(sync.isUnreadIncoming(message.chatId, message)).toBe(false);
   });
 
-  it('тот же вид, пришедший v1-путём, — подделка: служебное сообщение не показывается', async () => {
+  it('тот же вид кадром прежнего инбокса (LegacyV1) — подделка: служебное сообщение не показывается', async () => {
     const { sync, saved, newMessages } = makeSync();
     sync.handleInboxFrame(JSON.stringify({
       payload: { message: chatMode('018f0000-0000-7000-8000-000000000005', PEER, SELF, true) },

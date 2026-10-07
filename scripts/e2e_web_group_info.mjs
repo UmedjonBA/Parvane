@@ -342,14 +342,6 @@ try {
   await alicePage.waitForTimeout(5000);
   assert.equal(await findMessage(alicePage, `media-bypass-${suffix}`).count(), 0,
     'media from a member without send_media must be hidden on receive');
-  // В v1 запрет держит приёмный фильтр клиента (сервер видит шифртекст). В v2
-  // права по типу содержимого проверяет движок: у отправителя запись не
-  // собирается вовсе, у получателя отбрасывается до клиента — в журнал
-  // приёмного фильтра она не попадает
-  if (process.env.PARVANE_E2E_PROTO === 'v1') {
-    const hidden = (await readDiagJournal(alicePage)).filter((entry) => entry.k === 'group-perm-hidden' && entry.t >= journalMark - 1000);
-    assert(hidden.length >= 1, 'receiver must journal the hidden message as group-perm-hidden');
-  }
   await togglePermission(alicePage, groupTitle, 'Send Media', { expectChecked: true });
 
   // Участник экрана «Permissions» не видит (нет Edit) — проверено выше
@@ -457,10 +449,9 @@ try {
     'declined requester must not get the group');
   await sessions.grace.page.goto(approvalUrl, { waitUntil: 'domcontentloaded' });
   await acceptInviteModal(sessions.grace.page, /request to join/i);
-  // v1-шард помнит отказ и повторную заявку отклоняет сам. В v2 отказ — снятие
-  // заявки (памяти об отказе нет, как в Telegram): повторная заявка принимается
-  await expectToast(sessions.grace.page, process.env.PARVANE_E2E_PROTO === 'v1'
-    ? 'Your join request was declined' : /approves your request/);
+  // Отказ в v2 — снятие заявки (памяти об отказе нет, как в Telegram): повторная
+  // заявка принимается
+  await expectToast(sessions.grace.page, /approves your request/);
   // Участник (bob — админ без invite_users) заявок не видит
   const bobReqs = await callProviderForChat(sessions.bob.page, 'fetchChatInviteImporters', groupTitle, undefined, { peer: '$chat', isRequested: true });
   // v1-шард запрос отклоняет (null); в v2 клиент без права приглашать сервер не

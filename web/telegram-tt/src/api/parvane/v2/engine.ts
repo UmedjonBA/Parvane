@@ -22,20 +22,6 @@ export function loadProtocol(): Promise<Protocol> {
   return loading;
 }
 
-/**
- * Включён ли протокол v2. По умолчанию включён (T135, FR-055); остаться на v1 —
- * сборка с `VITE_PARVANE_PROTO_V2=0` или localStorage `parvane:proto=v1`
- * (роли v1 в сценариях смешанных пар).
- */
-export function isV2Enabled(): boolean {
-  if (import.meta.env.VITE_PARVANE_PROTO_V2 === '0') return false;
-  try {
-    return localStorage.getItem('parvane:proto') !== 'v1';
-  } catch {
-    return true;
-  }
-}
-
 /** Ошибка движка: {need} (добрать данные) или {error} (вид ProtoError). */
 export type EngineError =
   | { need: { kind: string; user?: string; after?: number; group?: string; epoch?: number } }

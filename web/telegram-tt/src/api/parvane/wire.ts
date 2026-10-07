@@ -1,5 +1,7 @@
-// Wire-типы протокола Parvane (NATS/JSON через gateway). Поля — snake_case,
-// как в `backend/shared/parvane-types`. Контракт бэкенда стабилен, клиент подстраивается.
+// Wire-типы содержимого Parvane (JSON внутри E2E-содержимого и запросов моста
+// v2). Поля — snake_case, как в `backend/shared/parvane-types`. Subject'ы
+// `TOPIC_*` — имена запросов прежней формы, которые мост `v2/bridge.ts`
+// переводит в методы v2.
 
 export type WireTextEntity = {
   type: string;
@@ -169,52 +171,11 @@ export type WireGroupInfo = {
 };
 
 // Инвайт-ссылка группы (group.invite.list / group.invite.create)
-export type WireInviteLink = {
-  token: string;
-  created_by: string;
-  created_at: number;
-  title?: string;
-  expires_at?: number;
-  max_uses?: number;
-  uses?: number;
-  request_needed?: boolean;
-  revoked?: boolean;
-  revoked_at?: number;
-  state?: 'active' | 'revoked' | 'expired' | 'exhausted' | (string & {});
-  is_primary?: boolean;
-  pending_requests?: number;
-};
 
 // Превью ссылки до вступления (group.invite.check)
-export type WireInviteCheck = {
-  ok: boolean;
-  group_id?: string;
-  name?: string;
-  kind?: 'group' | 'channel';
-  avatar?: string;
-  about?: string;
-  members_count?: number;
-  request_needed?: boolean;
-  already_member?: boolean;
-  pending?: boolean;
-  error?: string;
-  error_code?: string;
-};
-
-export type WireJoinRequest = {
-  member: string;
-  invite: string;
-  created_at: number;
-};
 
 // Уведомление об изменении группы в кадре инбокса: поле `group` вместо
 // `message` (как `notify`/`read`/`cleared`); старые клиенты кадр игнорируют
-export type WireGroupNotice = {
-  group_id: string;
-  version: number;
-  change: 'info' | 'perms' | 'members' | 'admin' | 'invites' | 'requests' | 'removed' | 'deleted' | (string & {});
-  info?: WireGroupInfo;
-};
 
 export type WireUserInfo = {
   username: string;
@@ -247,58 +208,17 @@ export const TOPIC_IDENTITY_RESOLVE = 'identity.user.resolve';
 export const TOPIC_IDENTITY_SEARCH = 'identity.user.search';
 export const TOPIC_IDENTITY_SETNAME = 'identity.user.setname';
 export const TOPIC_IDENTITY_SETAVATAR = 'identity.user.setavatar';
-export const TOPIC_IDENTITY_SETKEY = 'identity.user.setkey';
-export const TOPIC_PREKEYS_PUBLISH = 'identity.prekeys.publish';
-export const TOPIC_PREKEYS_FETCH = 'identity.prekeys.fetch';
 export const TOPIC_DEVICE_LIST = 'identity.device.list';
 export const TOPIC_DEVICE_REVOKE = 'identity.device.revoke';
 export const TOPIC_LINK_OFFER = 'identity.link.offer';
 export const TOPIC_LINK_POLL = 'identity.link.poll';
 export const TOPIC_LINK_GRANT = 'identity.link.grant';
 export const TOPIC_LINK_CHALLENGE = 'identity.link.challenge';
-export const TOPIC_MSG_SEND = 'msg.chat.send';
-export const TOPIC_MSG_ACK = 'msg.chat.ack';
-export const TOPIC_MSG_READ = 'msg.chat.read';
-export const TOPIC_MSG_READERS = 'msg.chat.readers';
-export const TOPIC_MSG_EDIT = 'msg.chat.edit';
-export const TOPIC_MSG_DELETE = 'msg.chat.delete';
-export const TOPIC_MSG_REACT = 'msg.chat.react';
-export const TOPIC_MSG_PIN = 'msg.chat.pin';
 // Очистка истории «для меня»: пачка id скрывается из sync только для нас
-export const TOPIC_MSG_CLEAR = 'msg.chat.clear';
-export const TOPIC_MSG_SETNOTIFY = 'msg.chat.setnotify';
 // Максимум id в одном msg.chat.clear (как CLEAR_MAX_IDS на сервере)
-export const CLEAR_MAX_IDS = 500;
-export const TOPIC_MSG_SYNC_REQUEST = 'msg.sync.request';
-export const TOPIC_GROUP_LIST = 'group.list';
-export const TOPIC_GROUP_CREATE = 'group.create';
-export const TOPIC_GROUP_INFO = 'group.info';
-export const TOPIC_GROUP_ADD_MEMBER = 'group.addmember';
-export const TOPIC_GROUP_REMOVE_MEMBER = 'group.removemember';
-export const TOPIC_GROUP_BAN = 'group.ban';
-export const TOPIC_GROUP_UNBAN = 'group.unban';
-export const TOPIC_GROUP_MUTE = 'group.mute';
-export const TOPIC_GROUP_INVITE_CREATE = 'group.invite.create';
-export const TOPIC_GROUP_JOIN = 'group.join';
-export const TOPIC_GROUP_SET_ROLE = 'group.setrole';
-export const TOPIC_GROUP_RENAME = 'group.rename';
-export const TOPIC_GROUP_DELETE = 'group.delete';
-export const TOPIC_GROUP_SETINFO = 'group.setinfo';
-export const TOPIC_GROUP_SETPERMS = 'group.setperms';
-export const TOPIC_GROUP_SETADMIN = 'group.setadmin';
-export const TOPIC_GROUP_INVITE_LIST = 'group.invite.list';
-export const TOPIC_GROUP_INVITE_REVOKE = 'group.invite.revoke';
-export const TOPIC_GROUP_INVITE_DELETE = 'group.invite.delete';
-export const TOPIC_GROUP_INVITE_CHECK = 'group.invite.check';
-export const TOPIC_GROUP_REQUEST_LIST = 'group.request.list';
-export const TOPIC_GROUP_REQUEST_DECIDE = 'group.request.decide';
 export const TOPIC_PREVIEW_FETCH = 'preview.link.fetch';
 export const TOPIC_PREVIEW_MAP_TILE = 'preview.map.tile';
 export const TOPIC_PUSH_VAPID_GET = 'push.vapid.get';
-export const TOPIC_PUSH_REGISTER = 'push.device.register';
-export const TOPIC_PUSH_UNREGISTER = 'push.device.unregister';
-export const TOPIC_CALL_SIGNAL = 'call.signal';
-export const TOPIC_CALL_HISTORY_REQUEST = 'call.history.request';
 export const TOPIC_CALL_ICE_REQUEST = 'call.ice.request';
 
 export type WireIceServer = {
@@ -319,32 +239,7 @@ export type WireCallRecord = {
   is_group?: boolean;
 };
 
-export function buildCallInboxTopic(user: string) {
-  return `call.user.${user}`;
-}
-// Маршрут группового mesh-звонка в `to` сигнала (GROUP_CALL_ROUTE_PREFIX в parvane-types).
-export const GROUP_CALL_ROUTE_PREFIX = 'gcall:';
-export function buildGroupCallRoute(user: string) {
-  return `${GROUP_CALL_ROUTE_PREFIX}${user}`;
-}
-export const TOPIC_FILE_UPLOAD_CHUNK = 'file.upload.chunk';
-export const TOPIC_FILE_UPLOAD_COMPLETE = 'file.upload.complete';
-export const TOPIC_FILE_DOWNLOAD_REQUEST = 'file.download.request';
 export const TOPIC_FILE_DELETE = 'file.delete';
-
-export function buildMsgInboxTopic(user: string) {
-  return `msg.user.${user}`;
-}
-
-// Эфемерные субъекты (P-18): зеркалят msg_typing()/presence() из parvane-types.
-export const TOPIC_MSG_TYPING_PREFIX = 'msg.typing.';
-export const TOPIC_PRESENCE_PREFIX = 'presence.';
-export function buildTypingTopic(id: string | number) {
-  return `${TOPIC_MSG_TYPING_PREFIX}${id}`;
-}
-export function buildPresenceTopic(id: string | number) {
-  return `${TOPIC_PRESENCE_PREFIX}${id}`;
-}
 
 export function buildWireEvent<T>(from: string, token: string, payload: T): WireEvent<T> {
   return {

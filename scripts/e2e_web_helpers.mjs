@@ -74,11 +74,7 @@ export function requireEnv() {
 
 export async function preparePage(context, user, password, options = {}) {
   const { startUrl, beforeLogin } = options;
-  // PARVANE_E2E_PROTO=v1 — весь сценарий на прежнем протоколе (он проверяет
-  // модель v1-шарда: токены ссылок, таблицы messenger.db); явный seed важнее
-  const seedLocalStorage = process.env.PARVANE_E2E_PROTO === 'v1'
-    ? { 'parvane:proto': 'v1', ...options.seedLocalStorage }
-    : options.seedLocalStorage;
+  const { seedLocalStorage } = options;
   const { baseUrl, gatewayUrl } = requireEnv();
   const page = await context.newPage();
   const errors = [];
@@ -173,10 +169,10 @@ export async function preparePage(context, user, password, options = {}) {
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
     await route.fulfill({ contentType: 'application/javascript', body: '' });
   });
-  // Протокол v2 включён по умолчанию (T135): при первом создании корня web
-  // показывает диалог ключа восстановления — в произвольный момент после входа.
-  // Обычные сценарии (без явного `parvane:proto` в seed) закрывают его
-  // автоматически; сценарии протокола читают ключ сами (dismissRecoveryKeyDialog).
+  // При первом создании корня web показывает диалог ключа восстановления — в
+  // произвольный момент после входа. Обычные сценарии закрывают его автоматически;
+  // сценарии протокола (метка `parvane:proto` в seed) читают ключ сами
+  // (dismissRecoveryKeyDialog).
   const isAutoRecoveryDialog = !seedLocalStorage || !('parvane:proto' in seedLocalStorage);
   await page.goto(startUrl || baseUrl, { waitUntil: 'domcontentloaded' });
   // Хук между открытием страницы и вводом ника (например, уйти на другой
@@ -862,9 +858,10 @@ export async function readInvitesScreen(page, title, { keepOpen = false } = {}) 
 }
 
 // Токен из ссылки-приглашения
-// Адрес, который открывает ссылку-приглашение в приложении под тестом: v1 —
-// `#+<токен>`, v2 — путь `/join/<link_id>#<секрет>` (домен ссылки — домен
-// сервера, а приложение сценария живёт на baseUrl)
+// Адрес, который открывает ссылку-приглашение в приложении под тестом: путь
+// `/join/<link_id>#<секрет>` (домен ссылки — домен сервера, а приложение
+// сценария живёт на baseUrl); прежняя форма `#+<токен>` — для ссылок, уже
+// лежащих в тестовых данных
 export function inviteAppUrl(baseUrl, link) {
   const v2 = String(link).match(/\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/);
   if (v2) return `${baseUrl.replace(/\/$/, '')}${v2[0]}`;
@@ -1023,7 +1020,7 @@ export function buildPngBuffer(size = 64, rgb = [0x2a, 0xab, 0xee]) {
 // Протокол v2: звонок (и доставка по ключу доступа, а не по жетону) возможны
 // только между теми, кто уже переписывался в обе стороны, — собеседники
 // обмениваются ключами доступа (D-08). Сценариям звонков нужен этот шаг перед
-// первым вызовом; в v1 он безвреден
+// первым вызовом
 export async function exchangeMessages(aPage, aAddress, bPage, bAddress, tag) {
   const fromA = `hello-from-a-${tag}`;
   const fromB = `hello-from-b-${tag}`;

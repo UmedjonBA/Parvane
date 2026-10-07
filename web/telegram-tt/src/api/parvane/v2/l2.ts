@@ -28,8 +28,6 @@ type L2Memo = {
 
 type L2GateDeps = {
   getSelf: () => string;
-  /** Включён ли v2-стек: без него режима нет. */
-  isEnabled: () => boolean;
   /** Состояние чата по движку; `undefined` — движок ещё не готов. */
   readEngine: (address: string) => L2State | undefined;
   /** Можно ли публиковать присутствие по движку; `undefined` — движок не готов. */
@@ -102,14 +100,12 @@ export function createL2Gate(deps: L2GateDeps) {
 
   /** Можно ли слать и показывать typing/presence в этом чате. */
   function ephemeralAllowed(address: string) {
-    if (!deps.isEnabled()) return true;
     const current = state(address);
     return current ? current.ephemeralAllowed : !loadMemo().blocked.includes(address);
   }
 
   /** Публиковать ли своё присутствие: оно одно на аккаунт. */
   function presenceAllowed() {
-    if (!deps.isEnabled()) return true;
     const byEngine = deps.readEnginePresence();
     return byEngine !== undefined ? byEngine : !loadMemo().blocked.length;
   }
