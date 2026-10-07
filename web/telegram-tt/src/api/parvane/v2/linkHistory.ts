@@ -33,9 +33,7 @@ export function collectV2History(...sources: WireStoredMessage[][]): WireStoredM
   sources.forEach((list) => {
     list.forEach((message) => {
       if (!isExportable(message) || byId.has(message.id)) return;
-      const {
-        origin: _origin, copies: _copies, updated_at: _updatedAt, ...rest
-      } = message;
+      const { origin: _origin, updated_at: _updatedAt, ...rest } = message;
       byId.set(message.id, rest);
     });
   });
@@ -67,7 +65,6 @@ export function parseV2History(stateJson: string): WireStoredMessage[] {
   rows.slice(-V2_HISTORY_LIMIT).forEach((row) => {
     if (!isStoredMessage(row)) return;
     const stored: WireStoredMessage = { ...row, origin: 'v2' };
-    delete stored.copies;
     if (isExportable(stored) && !byId.has(stored.id)) byId.set(stored.id, stored);
   });
   return Array.from(byId.values()).sort(byTime);
