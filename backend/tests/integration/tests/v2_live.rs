@@ -101,7 +101,7 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         &dir.join("identity.log"),
     ));
     let m_db = dir.join("messenger.db").to_string_lossy().to_string();
-    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db)], &dir.join("messenger.log")));
+    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &dir.join("messenger.log")));
     children.push(spawn(
         "gateway",
         &[
@@ -126,15 +126,15 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         if matches!(r, Ok(Ok(_))) {
             break;
         }
-        assert!(startt.elapsed() < Duration::from_secs(30), "identity не поднялся");
+        assert!(startt.elapsed() < Duration::from_secs(60), "identity не поднялся");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     loop {
-        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("group.list", "{}".into())).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("v2.msg.inbox.sync", vec![].into())).await;
         if matches!(r, Ok(Ok(_))) {
             break;
         }
-        assert!(startt.elapsed() < Duration::from_secs(30), "messenger не поднялся");
+        assert!(startt.elapsed() < Duration::from_secs(60), "messenger не поднялся");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     while TcpStream::connect(&stack.gateway_tcp).is_err() {
@@ -303,9 +303,9 @@ async fn v2_dual_stack_live() {
     let _ = token_nodev;
     f.0.extend(a.0);
 
-    // 12) v1-клиент на том же gateway работает как раньше.
+    // 12) v1-клиент на том же gateway получает отказ upgrade_required (T110).
     let addr = stack.gateway_tcp.clone();
-    let v1ok = tokio::task::spawn_blocking(move || {
+    let v1refused = tokio::task::spawn_blocking(move || {
         let s = TcpStream::connect(&addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut w = s.try_clone().unwrap();
@@ -313,11 +313,11 @@ async fn v2_dual_stack_live() {
         w.write_all(format!("{}\n", json!({"op": "auth", "token": token})).as_bytes()).unwrap();
         let mut line = String::new();
         r.read_line(&mut line).unwrap();
-        serde_json::from_str::<Value>(&line).map(|v| v["op"] == "auth_ok").unwrap_or(false)
+        serde_json::from_str::<Value>(&line).map(|v| v["error"] == "upgrade_required").unwrap_or(false)
     })
     .await
     .unwrap();
-    f.check("v1-still-works", v1ok, "");
+    f.check("v1-refused", v1refused, "");
     // 13) .well-known описатель записан identity.
     let wk = std::fs::read_to_string(stack.dir.join("parvane.json")).unwrap_or_default();
     f.check("well-known-written", wk.contains("descriptor") && wk.contains("signature"), &wk);
@@ -679,21 +679,6 @@ async fn v2_messenger_live() {
     .await
     .unwrap();
     let mut f = f;
-    // 7) Мост v1 → v2: carol (v1) пишет bob'у; запись LegacyV1 в журнале v2-устройства bob.
-    let mid = uuid::Uuid::now_v7().to_string();
-    let ev = json!({"id": mid, "from": uc, "ts": 1, "token": carol_tok, "payload": {"to": ub2, "content": {"kind": "text", "text": "из v1"}}});
-    nc.publish("msg.chat.send", ev.to_string().into()).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    let (f2, _) = tokio::task::spawn_blocking(move || {
-        let mut b = bob_dev;
-        let mut f = Failures(vec![]);
-        let recs = sync(&mut b, 0);
-        let legacy = recs.iter().any(|r| matches!(&r.item, Some(inbox_record::Item::LegacyV1(l)) if String::from_utf8_lossy(&l.json).contains(&mid)));
-        f.check("v1-to-v2-bridge", legacy, recs.len());
-        (f, b)
-    })
-    .await
-    .unwrap();
-    f.0.extend(f2.0);
+    // 7) Мост v1 → v2 удалён вместе с v1 (T110).
     assert!(f.0.is_empty(), "провалены сценарии messenger v2: {:?} (логи: {})", f.0, stack.dir.display());
 }

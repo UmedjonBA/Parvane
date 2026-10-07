@@ -4,7 +4,6 @@ use parvane_types::{topic_contract::*, topics::*};
 
 const DEV_NATS: &str = include_str!("../../../infra/nats/server.conf");
 const PROD_NATS: &str = include_str!("../../../infra/nats/server.prod.conf");
-const GATEWAY_SOURCE: &str = include_str!("../../../shards/gateway/src/main.rs");
 
 struct RoleContract {
     name: &'static str,
@@ -44,42 +43,8 @@ const IDENTITY_BINDINGS: &[(&str, &str)] = &[
     ("IDENTITY_LINK_CHALLENGE", IDENTITY_LINK_CHALLENGE),
 ];
 
-const MESSENGER_BINDINGS: &[(&str, &str)] = &[
-    ("MSG_SEND", MSG_SEND),
-    ("MSG_ACK", MSG_ACK),
-    ("MSG_READ", MSG_READ),
-    ("MSG_READERS", MSG_READERS),
-    ("MSG_EDIT", MSG_EDIT),
-    ("MSG_DELETE", MSG_DELETE),
-    ("MSG_REACT", MSG_REACT),
-    ("MSG_PIN", MSG_PIN),
-    ("MSG_CLEAR", MSG_CLEAR),
-    ("MSG_SETNOTIFY", MSG_SETNOTIFY),
-    ("GROUP_CREATE", GROUP_CREATE),
-    ("GROUP_ADD_MEMBER", GROUP_ADD_MEMBER),
-    ("GROUP_REMOVE_MEMBER", GROUP_REMOVE_MEMBER),
-    ("GROUP_SET_ROLE", GROUP_SET_ROLE),
-    ("GROUP_BAN", GROUP_BAN),
-    ("GROUP_UNBAN", GROUP_UNBAN),
-    ("GROUP_MUTE", GROUP_MUTE),
-    ("GROUP_RENAME", GROUP_RENAME),
-    ("GROUP_DELETE", GROUP_DELETE),
-    ("GROUP_INVITE_CREATE", GROUP_INVITE_CREATE),
-    ("GROUP_INVITE_REVOKE", GROUP_INVITE_REVOKE),
-    ("GROUP_JOIN", GROUP_JOIN),
-    ("GROUP_LIST", GROUP_LIST),
-    ("GROUP_INFO", GROUP_INFO),
-    ("GROUP_SETINFO", GROUP_SETINFO),
-    ("GROUP_SETPERMS", GROUP_SETPERMS),
-    ("GROUP_SETADMIN", GROUP_SETADMIN),
-    ("GROUP_INVITE_LIST", GROUP_INVITE_LIST),
-    ("GROUP_INVITE_REVOKE", GROUP_INVITE_REVOKE),
-    ("GROUP_INVITE_DELETE", GROUP_INVITE_DELETE),
-    ("GROUP_INVITE_CHECK", GROUP_INVITE_CHECK),
-    ("GROUP_REQUEST_LIST", GROUP_REQUEST_LIST),
-    ("GROUP_REQUEST_DECIDE", GROUP_REQUEST_DECIDE),
-    ("MSG_SYNC_REQUEST", MSG_SYNC_REQUEST),
-];
+/// Messenger v1-подписок не имеет (T110): методы v2 подключает `parvane_v2rt`.
+const MESSENGER_BINDINGS: &[(&str, &str)] = &[];
 
 const CLOUD_BINDINGS: &[(&str, &str)] = &[
     ("FILE_UPLOAD_CHUNK", FILE_UPLOAD_CHUNK),
@@ -310,21 +275,6 @@ fn subscription_arguments(source: &str) -> BTreeSet<String> {
     arguments
 }
 
-fn acl_covers(permissions: &[&str], subject: &str) -> bool {
-    permissions.iter().any(|permission| {
-        let mut permission_tokens = permission.split('.');
-        let mut subject_tokens = subject.split('.');
-        loop {
-            match (permission_tokens.next(), subject_tokens.next()) {
-                (Some(">"), _) => return true,
-                (Some("*"), Some(_)) => {}
-                (Some(expected), Some(actual)) if expected == actual => {}
-                (None, None) => return true,
-                _ => return false,
-            }
-        }
-    })
-}
 
 #[test]
 fn shard_subscriptions_match_the_contract() {

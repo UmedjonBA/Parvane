@@ -154,7 +154,7 @@ async fn start(keep: Option<PathBuf>, id_extra: &[(&str, &str)], gw_extra: &[(&s
     id_env.extend_from_slice(id_extra);
     children.push(spawn("identity", &id_env, &dir.join("identity.log")));
     let m_db = db("messenger.db");
-    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db)], &dir.join("messenger.log")));
+    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &dir.join("messenger.log")));
     let c_db = db("call.db");
     children.push(spawn("call", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &c_db), ("PARVANE_STUN_URLS", "stun:stun.test:3478"), ("PARVANE_TURN_URL", "turn:turn.test:3478"), ("PARVANE_TURN_SECRET", "turn-secret")], &dir.join("call.log")));
     let cl_db = db("cloud.db");

@@ -76,13 +76,13 @@ const MESSENGER: usize = 2;
 
 fn spawn_messenger(s: &Stack) -> Child {
     let db = s.dir.join("messenger.db").to_string_lossy().to_string();
-    spawn("messenger", &[("PARVANE_NATS_URL", &s.nats_url), ("PARVANE_DB_PATH", &db)], &s.dir.join("messenger.log"))
+    spawn("messenger", &[("PARVANE_NATS_URL", &s.nats_url), ("PARVANE_DB_PATH", &db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &s.dir.join("messenger.log"))
 }
 
 async fn wait_messenger(nc: &async_nats::Client) {
     let t = Instant::now();
     loop {
-        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("group.list", "{}".into())).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("v2.msg.inbox.sync", vec![].into())).await;
         if matches!(r, Ok(Ok(_))) {
             return;
         }

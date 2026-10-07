@@ -133,7 +133,7 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         &dir.join("identity.log"),
     ));
     let m_db = dir.join("messenger.db").to_string_lossy().to_string();
-    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db)], &dir.join("messenger.log")));
+    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &dir.join("messenger.log")));
     // Лимиты частоты подняты: замер идёт подряд, а не с темпом человека.
     let big = "1000000";
     children.push(spawn(

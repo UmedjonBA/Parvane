@@ -173,6 +173,7 @@ pub(crate) async fn privacy_group_add(user: &str) -> Result<Option<bool>> {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
 

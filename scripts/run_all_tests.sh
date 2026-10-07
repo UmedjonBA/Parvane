@@ -2,7 +2,6 @@
 # Parvane: единый регрессионный прогон ВСЕХ уровней тестов.
 # После каждого шага пивота гоняем и текущий, и все предыдущие уровни:
 #   1) Rust unit-тесты всех шардов + parvane-types  (cargo test --workspace)
-#   2) e2e-контракт бэкенда identity+messenger       (scripts/e2e_smoke.py)
 #   3) C++ transport-тесты parvane-core              (parvane_core_tests)
 #   4) C++ messenger-тесты parvane-core              (parvane_messenger_tests)
 #   5) Web lint/unit/build/live browser e2e           (run_web_tests.sh)
@@ -105,8 +104,7 @@ grep -q "NATS подключён" "$TMP/cloud.log"     || fail "cloud не ст�
 grep -q "NATS подключён" "$TMP/call.log"      || fail "call не стартовал"
 
 # ── 2. e2e-контракт бэкенда ──────────────────────────────────────────────────
-log "2. e2e_smoke.py (контракт identity+messenger)"
-if python3 scripts/e2e_smoke.py; then echo "e2e: OK"; else fail "e2e_smoke.py"; fi
+# e2e_smoke.py / e2e_groups.py (контракт v1 identity+messenger) удалены с v1 (T110).
 
 log "2b. e2e_cloud.py (контракт cloud: upload/download/list)"
 if python3 scripts/e2e_cloud.py; then echo "e2e cloud: OK"; else fail "e2e_cloud.py"; fi
