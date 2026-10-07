@@ -45,7 +45,7 @@ fi
 
 # WEB-07: раннер web-e2e собирает в тот же dist диагностическую сборку (хуки
 # window.__parvaneDiagCallApi, loopback в CSP) — её заливать нельзя.
-if grep -rqs '__parvaneDiagCallApi' "$REPO/web/telegram-tt/dist/assets" || grep -qs '127.0.0.1' "$REPO/web/telegram-tt/dist/index.html"; then
+if grep -rqs --include='*.js' '__parvaneDiagCallApi' "$REPO/web/telegram-tt/dist/assets" || grep -qs '127.0.0.1' "$REPO/web/telegram-tt/dist/index.html"; then
   echo "dist — диагностическая сборка (e2e); пересоберите: npm run build:production" >&2
   exit 1
 fi
@@ -55,7 +55,8 @@ log "Заливка конфигов и web-dist (tar over ssh — rsync лок�
 scp -P "$SSH_PORT" -q "$BACKEND/infra/deploy/docker-compose.yml" \
   "$BACKEND/infra/deploy/Caddyfile" "$SSH_DEST:$REMOTE_DIR/"
 scp -P "$SSH_PORT" -q "$BACKEND/infra/nats/server.prod.conf" "$SSH_DEST:$REMOTE_DIR/nats/"
-tar -C "$REPO/web/telegram-tt/dist" -czf - . \
+# OPS-05: source maps и build-stats.json апстрима наружу не отдаём
+tar -C "$REPO/web/telegram-tt/dist" --exclude='*.map' --exclude='build-stats.json' -czf - . \
   | "${SSH[@]}" "rm -rf $REMOTE_DIR/web-dist.new && mkdir -p $REMOTE_DIR/web-dist.new \
       && tar -C $REMOTE_DIR/web-dist.new -xzf - \
       && rm -rf $REMOTE_DIR/web-dist && mv $REMOTE_DIR/web-dist.new $REMOTE_DIR/web-dist"
