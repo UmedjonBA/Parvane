@@ -29,8 +29,10 @@ type GroupCallCallbacks = {
   getIceTransportPolicy: () => RTCIceTransportPolicy | undefined;
   // Сколько ждать соединения с участником, прежде чем закрыть его строку
   getRingTimeoutMs?: () => number;
-  sign: (data: string) => string;
-  verify: (publicKey: string, data: string, signature: string) => boolean;
+  // Подпись SDP (прежний v1-путь); без неё сигнал идёт без `sig` — отправителя
+  // аутентифицирует конверт v2 (`isAuthenticated`)
+  sign?: (data: string) => string;
+  verify?: (publicKey: string, data: string, signature: string) => boolean;
   onPeerState: (peer: string, state: GroupPeerState) => void;
   onPeerStream: (peer: string, stream: MediaStream) => void;
   onEnded: () => void;
@@ -88,7 +90,7 @@ class MeshPeerSession {
       if (this.pc !== pc) return undefined;
       const sdp = offer.sdp || '';
       const sig = this.sign(sdp);
-      if (!sig) return this.fail();
+      if (this.cb.sign && !sig) return this.fail();
       this.cb.sendSignal(this.peer, {
         type: 'invite', call_id: this.callId, media, sdp, sig,
       });
@@ -118,7 +120,7 @@ class MeshPeerSession {
       if (this.pc !== pc) return undefined;
       const sdp = answer.sdp || '';
       const answerSig = this.sign(sdp);
-      if (!answerSig) return this.fail();
+      if (this.cb.sign && !answerSig) return this.fail();
       this.cb.sendSignal(this.peer, {
         type: 'answer', call_id: callId, sdp, sig: answerSig,
       });
@@ -244,7 +246,7 @@ class MeshPeerSession {
 
   private sign(sdp: string) {
     try {
-      return this.callId ? this.cb.sign(buildSignedData(this.callId, sdp)) : '';
+      return this.callId && this.cb.sign ? this.cb.sign(buildSignedData(this.callId, sdp)) : '';
     } catch {
       return '';
     }
@@ -253,7 +255,7 @@ class MeshPeerSession {
   private verify(sdp: string, signature?: string) {
     if (!this.callId || !signature) return false;
     const data = buildSignedData(this.callId, sdp);
-    return this.peerSigningKeys.some((key) => this.cb.verify(key, data, signature));
+    return this.peerSigningKeys.some((key) => this.cb.verify?.(key, data, signature));
   }
 
   private fail() {

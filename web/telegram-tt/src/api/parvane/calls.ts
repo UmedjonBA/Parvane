@@ -1,5 +1,4 @@
 import type { ApiMessage, ApiUpdate } from '../types';
-import type { E2eEngine } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
@@ -16,7 +15,6 @@ import {
 
 type CallDependencies = {
   getConnection: () => GatewayConnection | undefined;
-  getE2e: () => E2eEngine | undefined;
   getStore: () => ParvaneStore;
   getToken: () => string;
   isIdentityReady: () => boolean;
@@ -272,8 +270,7 @@ export function createCallController(deps: CallDependencies) {
       emit();
     };
 
-    const identity = deps.getE2e();
-    if (!identity || !deps.isIdentityReady()) {
+    if (!deps.isIdentityReady()) {
       engine = undefined;
       return;
     }
@@ -286,8 +283,6 @@ export function createCallController(deps: CallDependencies) {
       getIceTransportPolicy,
       getRingTimeoutMs,
       isBusy: () => Boolean(groupEngine?.currentGroupCallId || pendingGroupInvite),
-      sign: (data) => identity.signCallData(data),
-      verify: (publicKey, data, signature) => identity.verifyCallData(publicKey, data, signature),
       onState: (state) => listeners.onState(state),
       onRemoteStream: (stream) => listeners.onRemoteStream(stream),
       onIncoming: (from, callId, media) => listeners.onIncoming(from, callId, media),
@@ -301,8 +296,6 @@ export function createCallController(deps: CallDependencies) {
       getIceServers,
       getIceTransportPolicy,
       getRingTimeoutMs,
-      sign: (data) => identity.signCallData(data),
-      verify: (publicKey, data, signature) => identity.verifyCallData(publicKey, data, signature),
       onPeerState: (peer, state) => {
         const group = callWindow.parvaneCall!.group;
         if (!group) return;

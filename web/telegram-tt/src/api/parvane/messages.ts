@@ -2,7 +2,6 @@ import type { SendMessageParams } from '../../types';
 import type {
   ApiChat, ApiMessage, ApiMessageEntity, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
 } from '../types';
-import type { E2eEngine } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { createLocalState } from './localState';
 import type { createMediaService } from './media';
@@ -13,7 +12,7 @@ import type { createSyncController } from './sync';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
-import { E2E_SEND_ERROR, E2eSendError, requireE2e } from './e2eSendPolicy';
+import { E2E_SEND_ERROR, E2eSendError } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import {
   buildApiVideoFromSavedRecord,
@@ -35,8 +34,6 @@ import { newMessageId, type WireMessageContent, type WirePackRef } from './wire'
 
 type MessageDependencies = {
   getConnection: () => GatewayConnection | undefined;
-  getE2e: () => E2eEngine | undefined;
-  awaitE2e: () => Promise<void>;
   getStore: () => ParvaneStore;
   getToken: () => string;
   localState: ReturnType<typeof createLocalState>;
@@ -182,10 +179,8 @@ export function createMessageController(deps: MessageDependencies) {
     wireContent: Record<string, unknown>,
     uuid = newMessageId(),
   ) {
-    await deps.awaitE2e();
     const currentStore = store();
     const ts = Math.floor(Date.now() / 1000);
-    requireE2e(deps.getE2e());
     // TTL-эфемерное не журналируем — после срока сообщение не должно
     // восстанавливаться из журнала (как desktop)
     const isEphemeral = Boolean(wireContent.ttl_secs);
@@ -264,7 +259,6 @@ export function createMessageController(deps: MessageDependencies) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
-    requireE2e(deps.getE2e());
     const cached = await deps.media.getCached(gif.id);
     const blob = cached?.blob || (
       gif.blobUrl ? await fetch(gif.blobUrl).then((response) => response.blob()) : undefined
@@ -400,7 +394,6 @@ export function createMessageController(deps: MessageDependencies) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
-    requireE2e(deps.getE2e());
     const cached = await deps.media.getCached(sticker.id);
     const blob = cached?.blob;
     if (!blob) return;
@@ -573,15 +566,6 @@ export function createMessageController(deps: MessageDependencies) {
     // Отправка гасит persisted-черновик: tt чистит его только в памяти
     // (clearDraft isLocalOnly), до провайдера это не доходит
     deps.clearPersistedDraft(toAddress);
-
-    let engine: E2eEngine;
-    try {
-      await deps.awaitE2e();
-      engine = requireE2e(deps.getE2e());
-    } catch (error) {
-      reportEncryptionSendFailure(chat.id, localMessage.id, error);
-      return;
-    }
 
     const uuid = uuidBySentLocalKey.get(`${chat.id}:${localMessage.id}`) || newMessageId();
     const replyToMsgId = params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined;
@@ -777,7 +761,6 @@ export function createMessageController(deps: MessageDependencies) {
         reply_to: replyToUuid,
         origin: 'v2',
       });
-      engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
     }
     const sentMessage: ApiMessage = { ...localMessage, content: sentContent, sendingState: undefined };
     currentStore.putMessage(sentMessage);
@@ -801,18 +784,15 @@ export function createMessageController(deps: MessageDependencies) {
     return deps.v2.readers(uuid);
   }
 
-  // Правка содержимого сообщения: мутация v2 и обновление decCache. Общий
-  // путь для правки текста/подписи и для обновлений live-локации
+  // Правка содержимого сообщения: мутация v2. Общий путь для правки
+  // текста/подписи и для обновлений live-локации
   async function publishEditedContent(uuid: string, toAddress: string, plainContent: WireMessageContent) {
     const currentStore = store();
     if (!connection()) return;
-    await deps.awaitE2e();
-    const engine = requireE2e(deps.getE2e());
     // «Избранное» без других устройств — только локально; собеседник не на v2 —
     // править нечем
     const isEdited = await requireV2().tryEdit(toAddress, uuid, plainContent);
     if (!isEdited && toAddress !== currentStore.self) throw new E2eSendError(V2_PEER_REQUIRED);
-    engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
   }
 
   // ── Live-локация ─────────────────────────────────────────────────────────
@@ -948,12 +928,11 @@ export function createMessageController(deps: MessageDependencies) {
       const toAddress = currentStore.getAddressForId(chat.id);
       if (!uuid || !activeConnection || !toAddress) return undefined;
 
-      const engine = requireE2e(deps.getE2e());
       const wireEntities = apiEntitiesToWire(entities);
       // Правка не должна терять форматирование и не должна подменять медиа
-      // текстом: у медиа-сообщения меняем только подпись (по кэшированному
-      // inner), у текстового — текст и entities
-      const previous = engine.getCachedInner(uuid)?.content as WireMessageContent | undefined;
+      // текстом: у медиа-сообщения меняем только подпись (по строке истории
+      // движка), у текстового — текст и entities
+      const previous = (await deps.v2?.storedMessage(uuid))?.content;
       // Правка обязана нести ссылки на паки так же, как отправка и пересылка:
       // без них entity custom_emoji у получателя не резолвится, а десктоп не
       // материализует пак. Ссылки прошлой версии сохраняем — иначе правка

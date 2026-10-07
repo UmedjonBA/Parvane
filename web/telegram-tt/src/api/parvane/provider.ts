@@ -48,10 +48,11 @@ import {
 } from './authStorage';
 import { createCallController } from './calls';
 import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
-import { E2eEngine, fingerprintOf } from './e2e';
+import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
+import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import { langPackMethods } from './langPacks';
 import {
   exportLinkPublicKey,
@@ -252,43 +253,6 @@ let serverInfoPromise: Promise<ServerInfo> | undefined;
 // латиница, цифры, _ . -; первый символ — буква или цифра
 const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-let e2e: E2eEngine | undefined;
-// Готовность E2E: движок создаётся асинхронно ПОСЛЕ авторизации (Olm, прекеи),
-// а UI уже доступен — отправка в это окно падала «Encryption engine is
-// unavailable». Пути отправки ждут готовности (с таймаутом)
-const E2E_READY_TIMEOUT_MS = 20000;
-let e2eReadyResolve: (() => void) | undefined;
-let e2eReady = new Promise<void>((resolve) => {
-  e2eReadyResolve = resolve;
-});
-// Уход со страницы: сбросить отложенную запись E2E-состояния (debounce)
-if (typeof window !== 'undefined') {
-  const flushE2e = () => e2e?.flushOnPageHide();
-  window.addEventListener('pagehide', flushE2e);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushE2e();
-  });
-}
-
-function setE2eEngine(next: E2eEngine | undefined) {
-  e2e = next;
-  if (next) {
-    e2eReadyResolve?.();
-  } else {
-    e2eReady = new Promise<void>((resolve) => {
-      e2eReadyResolve = resolve;
-    });
-  }
-}
-function awaitE2e(): Promise<void> {
-  if (e2e) return Promise.resolve();
-  return Promise.race([
-    e2eReady,
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, E2E_READY_TIMEOUT_MS);
-    }),
-  ]);
-}
 let isCallIdentityReady = false;
 const polls = new PollStore();
 
@@ -320,7 +284,6 @@ const mediaService = createMediaService({
 
 const localState = createLocalState({
   getStore: () => store,
-  getE2e: () => e2e,
   isAuthorized: () => Boolean(token),
   selfId,
   sendUpdate,
@@ -359,7 +322,6 @@ function applyChatCleared(address: string, untilMs: number) {
 
 const callController = createCallController({
   getConnection: () => connection,
-  getE2e: () => e2e,
   getStore: () => store,
   getToken: () => token,
   isIdentityReady: () => isCallIdentityReady,
@@ -409,7 +371,6 @@ if (draftsChannel) {
 
 const syncController = createSyncController({
   getConnection: () => connection,
-  getE2e: () => e2e,
   getStore: () => store,
   getToken: () => token,
   groups: groupController,
@@ -471,11 +432,6 @@ const v2Controller = createV2Controller({
     // Экран «Устройства» покажет код линковки и вход по ключу восстановления
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-needs-linking'));
   },
-  // Запись `LegacyV1` инбокса v2 (кадр прежнего инбокса v1, оставшийся на
-  // сервере) — обработчику инбокса
-  onLegacyFrame: (frame) => {
-    if (store.self) syncController.handleInboxFrame(frame);
-  },
   onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),
   onGroupLeft: (address) => groupController.removeV2Group(address),
   onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
@@ -507,8 +463,6 @@ messageController = createMessageController({
   v2: v2Controller,
   recordChatCleared: (address, untilMs) => stateJournal.recordChatCleared(address, untilMs),
   getConnection: () => connection,
-  getE2e: () => e2e,
-  awaitE2e,
   getStore: () => store,
   getToken: () => token,
   localState,
@@ -532,8 +486,6 @@ const connectionController = createConnectionController({
   calls: callController,
   getConnection: () => connection,
   setConnection: (nextConnection) => { connection = nextConnection; },
-  getE2e: () => e2e,
-  setE2e: setE2eEngine,
   getStore: () => store,
   setStore: (nextStore) => {
     store = nextStore;
@@ -545,7 +497,7 @@ const connectionController = createConnectionController({
   describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
     localState.clearUserData(user);
-    await E2eEngine.clear(user);
+    await SecureE2eStorage.clear(user);
     await clearSecureSession(user).catch(() => undefined);
   },
   getToken: () => token,
@@ -893,12 +845,13 @@ function detectPlatformName() {
   return '';
 }
 
-// ── Авто-линковка истории ────────────────────────────────────────────────────
-// Новое устройство (needsHistoryLink) после логина публикует оффер с
-// эфемерным ECDH-ключом и опрашивает грант; старое устройство в Settings →
-// Devices показывает запрос с SAS-кодом, подтверждение выгружает шифрованный
-// экспорт в cloud и передаёт ECDH-бокс с координатами. Новое устройство
-// сливает decCache и входящие Megolm-сессии (importLinkedHistory) и ресинкается
+// ── Авто-линковка устройства ────────────────────────────────────────────────
+// Новое устройство (не записано в журнал устройств v2) после логина публикует
+// оффер с эфемерным ECDH-ключом и опрашивает грант; старое устройство в
+// Settings → Devices показывает запрос с SAS-кодом, подтверждение выгружает
+// шифрованный экспорт истории v2-эпохи и грант движка в cloud и передаёт
+// ECDH-бокс с координатами. Новое устройство вступает в журнал по гранту
+// (joinV2WithLinkGrant) и применяет историю (applyLinkedV2History)
 
 const LINK_GRANT_POLL_MS = 5000;
 const LINK_OFFER_LIFETIME_MS = 10 * 60 * 1000;
@@ -954,15 +907,15 @@ function stopHistoryLink() {
 // эфемерный ключ и свой signing-ключ; сам ключ раскрываем только после
 // challenge старого устройства, SAS — от обоих ключей. Опрос до гранта или
 // истечения срока.
-// Оффер нужен, пока нет истории v1 ИЛИ устройство не записано в журнал v2
-function needsDeviceLink(engine: { needsHistoryLink: () => boolean }) {
-  return engine.needsHistoryLink() || v2Controller.needsLinking();
+// Id этого устройства: из сессии v2 (claim JWT), до её подъёма — из зеркала localStorage
+function ownDeviceId() {
+  return v2Controller.deviceId() || connectionController.currentDeviceId(store.self);
 }
 
+// Оффер нужен, пока устройство не записано в журнал устройств v2
 async function startHistoryLinkOffer() {
   stopHistoryLink();
-  const engine = e2e;
-  if (!connection || !engine || !needsDeviceLink(engine)) return;
+  if (!connection || !v2Controller.needsLinking()) return;
   const generation = linkRuntime.generation;
   const keyPair = await generateLinkKeyPair();
   const ephPub = await exportLinkPublicKey(keyPair);
@@ -973,7 +926,7 @@ async function startHistoryLinkOffer() {
   linkRuntime.commitment = commitment;
   try {
     const raw = await connection.request(TOPIC_LINK_OFFER, JSON.stringify({
-      token, device_id: engine.deviceId, commitment, signing_key: engine.signingKey,
+      token, device_id: ownDeviceId(), commitment,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
   } catch {
@@ -992,19 +945,18 @@ async function startHistoryLinkOffer() {
 }
 
 async function pollHistoryLinkGrant(generation: number) {
-  const engine = e2e;
   const activeConnection = connection;
   const keyPair = linkRuntime.keyPair;
   const ephPub = linkRuntime.ephPub;
   const commitment = linkRuntime.commitment;
-  if (!engine || !activeConnection || !keyPair || !ephPub || !commitment) return;
-  // История появилась другим путём (живая переписка) — отзываем оффер, чтобы
-  // другие устройства не видели висящий запрос
-  if (!needsDeviceLink(engine)) {
+  if (!activeConnection || !keyPair || !ephPub || !commitment) return;
+  // Устройство попало в журнал другим путём (ключ восстановления) — отзываем
+  // оффер, чтобы другие устройства не видели висящий запрос
+  if (!v2Controller.needsLinking()) {
     stopHistoryLink();
     try {
       await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
-        token, device_id: engine.deviceId, revoke: true,
+        token, device_id: ownDeviceId(), revoke: true,
       }));
     } catch {
       // сервер вычистит по TTL
@@ -1015,7 +967,7 @@ async function pollHistoryLinkGrant(generation: number) {
   let challenge: string | undefined;
   try {
     const raw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
-      token, device_id: engine.deviceId,
+      token, device_id: ownDeviceId(),
     }));
     const response = JSON.parse(raw) as {
       ok: boolean;
@@ -1036,7 +988,7 @@ async function pollHistoryLinkGrant(generation: number) {
   if (challenge && !linkRuntime.challenge) {
     try {
       const raw = await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({
-        token, device_id: engine.deviceId, eph_pub: ephPub, commitment, signing_key: engine.signingKey,
+        token, device_id: ownDeviceId(), eph_pub: ephPub, commitment,
       }));
       if (!(JSON.parse(raw) as { ok?: boolean }).ok) return;
     } catch {
@@ -1074,20 +1026,12 @@ async function pollHistoryLinkGrant(generation: number) {
   }
   let v2History: WireStoredMessage[];
   try {
-    const stateJson = await media.blob.text();
-    engine.importLinkedHistory(stateJson, boxPayload.transfer);
-    await engine.flushStorage();
-    v2History = parseV2History(stateJson);
+    v2History = parseV2History(await media.blob.text());
   } catch (err) {
-    logDebug(`линковка: импорт не удался: ${String(err)}`);
+    logDebug(`линковка: экспорт не прочитан: ${String(err)}`);
     return;
   }
-  // Полный ресинк: пропущенная как нечитаемая история теперь расшифруется
-  // из привезённого decCache/групповых сессий, а исходящие старого устройства
-  // сервер отдаст по подписанному переносу владения (transfers)
-  syncController.reset();
-  sendUpdate({ '@type': 'requestSync' });
-  logDebug('линковка: история получена и импортирована');
+  logDebug(`линковка: экспорт получен (${v2History.length} строк истории)`);
   await joinV2WithLinkGrant(boxPayload.v2);
   // Строки истории — после полного ресинка, а не вперемешку с ним: применённая
   // посреди ресинка строка (замечено на своих исходящих) временами не доходила до UI
@@ -1178,11 +1122,10 @@ async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: stri
   return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub) };
 }
 
-// Отзыв устройства: identity выкидывает его бандл из каталога (fan-out новых
-// сообщений его больше не включает), локально — чистка каталога self и ротация
-// групповых ключей (forgetOwnDevice)
+// Отзыв устройства: пароль проверяет мост (identity.device.revoke), сам отзыв —
+// запись журнала устройств v2 и ротации ключей (T128)
 async function revokeOwnDevice(deviceId: string, password?: string) {
-  if (!connection || !e2e) return undefined;
+  if (!connection) return undefined;
   try {
     // P-07: отзыв устройства требует текущий пароль. P-39: сохранённого
     // пароля нет — только введённый пользователем
@@ -1190,8 +1133,6 @@ async function revokeOwnDevice(deviceId: string, password?: string) {
       token, device_id: deviceId, password,
     }));
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
-    e2e.forgetOwnDevice(deviceId);
-    await e2e.flushStorage();
     // Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и ротации
     // ключей, которые устройство держало (пароль проверил мост выше)
     const isJournaled = await v2Controller.revokeDevice(deviceId).catch((e: unknown) => {
@@ -2058,7 +1999,7 @@ const methods = {
   // ── Settings → Devices: устройства аккаунта = прекей-каталог identity ───────
 
   async fetchAuthorizations() {
-    if (!connection || !e2e) return undefined;
+    if (!connection) return undefined;
     try {
       const raw = await connection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token }));
       const response = JSON.parse(raw) as {
@@ -2066,7 +2007,7 @@ const methods = {
         devices?: DeviceRow[];
       };
       if (!response.ok || !response.devices) return undefined;
-      const currentDeviceId = e2e.deviceId;
+      const currentDeviceId = ownDeviceId();
       const v2Devices = v2Controller.logDevices(store.self);
       const authorizations: Record<string, ApiSession> = {};
       response.devices.forEach((device) => {
@@ -2097,16 +2038,16 @@ const methods = {
   // P-07: сервер отзывает устройство только с текущим паролем — UI спрашивает
   // его перед отзывом (сохранённого пароля нет, P-39)
   async terminateAuthorization(hash: string, password?: string) {
-    if (!e2e || hash === e2e.deviceId) return undefined;
+    if (hash === ownDeviceId()) return undefined;
     return revokeOwnDevice(hash, password);
   },
 
   async terminateAllAuthorizations(password?: string) {
-    if (!connection || !e2e) return undefined;
+    if (!connection) return undefined;
     const list = await methods.fetchAuthorizations();
     if (!list) return undefined;
-    const others = Object.keys(list.authorizations)
-      .filter((deviceId) => deviceId !== e2e!.deviceId);
+    const current = ownDeviceId();
+    const others = Object.keys(list.authorizations).filter((deviceId) => deviceId !== current);
     const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId, password)));
     return results.every(Boolean) ? true : undefined;
   },
@@ -2140,7 +2081,7 @@ const methods = {
   // пользователь сверяет его на старом устройстве перед подтверждением)
   parvaneGetLinkStatus() {
     // v2: код появляется только после challenge старого устройства
-    const isPending = Boolean(linkRuntime.timer && e2e && needsDeviceLink(e2e));
+    const isPending = Boolean(linkRuntime.timer && v2Controller.needsLinking());
     return v2Controller.hasEscrow().then((hasEscrow) => ({
       hasEscrow,
       isPending,
@@ -2176,10 +2117,10 @@ const methods = {
   // каждый оффер v2 отправляем свой challenge; код появляется после раскрытия
   // ключа новым устройством.
   async parvaneListLinkOffers() {
-    if (!connection || !e2e) return undefined;
+    if (!connection) return undefined;
     try {
       const raw = await connection.request(TOPIC_LINK_POLL, JSON.stringify({
-        token, device_id: e2e.deviceId,
+        token, device_id: ownDeviceId(),
       }));
       const response = JSON.parse(raw) as {
         ok: boolean; offers?: LinkOfferWire[]; grant?: { box_payload: string; eph_pub: string };
@@ -2198,17 +2139,16 @@ const methods = {
     }
   },
 
-  // Старое устройство: подтверждённая передача истории целевому устройству.
-  // Экспорт (без приватного Olm-аккаунта, P-48) шифруется случайным ключом и
-  // уезжает в cloud (owner-only); координаты, ключ и подписанный перенос
-  // владения исходящими — в ECDH-боксе под парой эфемерных ключей (P-03).
+  // Старое устройство: подтверждённая передача целевому устройству. Экспорт
+  // истории v2-эпохи шифруется случайным ключом и уезжает в cloud (owner-only);
+  // координаты и ключ — в ECDH-боксе под парой эфемерных ключей (P-03);
+  // материал гранта движка — вторым блобом (LINK-1 v2)
   async parvaneGrantLink({ deviceId }: { deviceId: string }) {
-    const engine = e2e;
     const activeConnection = connection;
-    if (!engine || !activeConnection) return undefined;
+    if (!activeConnection) return undefined;
     try {
       const pollRaw = await activeConnection.request(TOPIC_LINK_POLL, JSON.stringify({
-        token, device_id: engine.deviceId,
+        token, device_id: ownDeviceId(),
       }));
       const poll = JSON.parse(pollRaw) as { ok: boolean; offers?: LinkOfferWire[] };
       const offer = poll.ok ? poll.offers?.find((entry) => entry.device_id === deviceId) : undefined;
@@ -2216,16 +2156,12 @@ const methods = {
       if (!offer || !own || !offer.commitment || !offer.eph_pub || offer.challenge_pub !== own.pub) return undefined;
       if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) return undefined;
 
-      await engine.flushStorage();
       // LINK-1 п. 8: строки v2-эпохи новому устройству сервер не отдаст
       await localState.flushHistoryNow();
-      const historyRecords = await localState.loadHistoryRecords();
-      // Авторы показанной здесь истории могли писать с устройств, которые с тех
-      // пор отозваны: их ключи новое устройство по каталогу уже не подтвердит
-      engine.rememberHistoryIdentities(historyRecords.map((record) => record.id));
-      const exportJson = engine.exportLinkStateJson(collectV2History(
-        historyRecords, await localState.readOwnJournal(),
-      ));
+      const exportJson = JSON.stringify({
+        linkVersion: 2,
+        v2History: collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal()),
+      });
       const upload = await mediaService.uploadBlob(
         new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },
       );
@@ -2242,7 +2178,6 @@ const methods = {
         file_id: upload.fileId,
         file_key: upload.mediaKeys.keyB64,
         file_nonce: upload.mediaKeys.nonceB64,
-        transfer: offer.signing_key ? engine.signLinkTransfer(store.self, offer.signing_key) : undefined,
         v2: v2Upload?.mediaKeys ? {
           file_id: v2Upload.fileId,
           file_key: v2Upload.mediaKeys.keyB64,
@@ -2302,45 +2237,35 @@ const methods = {
     }
   },
 
-  // ── C1: бэкап E2E-ключей (перенос на другое устройство) ─────────────────────
+  // ── C1: ручная копия ключей устройства (перенос на другой браузер) ──────────
 
   async parvaneExportE2eKeys({ password }: { password: string }) {
-    if (!e2e) return undefined;
-    await e2e.flushStorage();
-    // Копия несёт и устройство v2 с историей v2-эпохи: сервер v2 не отдаст её
+    const deviceId = ownDeviceId();
+    if (!store.self || !deviceId) return undefined;
+    // Копия несёт устройство v2 с историей v2-эпохи: сервер v2 не отдаст её
     // заново, а сообщения запечатаны под устройства журнала (T152)
     await localState.flushHistoryNow();
     const v2 = await v2Controller.exportBackup();
-    const v2History = v2 ? collectV2History(
-      await localState.loadHistoryRecords(), await localState.readOwnJournal(),
-    ) : undefined;
-    return { payload: await e2e.exportEncrypted(password, v2 ? { v2, v2History } : undefined) };
+    if (!v2) return undefined;
+    const v2History = collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal());
+    return { payload: await exportEncryptedBackup(password, { deviceId, v2, v2History }) };
   },
 
   async parvaneImportE2eKeys({ payload, password }: { payload: string; password: string }) {
     if (!store.self) return undefined;
     try {
-      let extra: { v2?: V2DeviceBackup; v2History?: unknown } | undefined;
-      const imported = await E2eEngine.importEncrypted(store.self, payload, password, (value) => {
-        extra = value;
-      });
-      setE2eEngine(imported);
-      if (extra?.v2) {
-        // Этот браузер становится тем же устройством v2 (со следующего входа —
-        // JWT выпустят под device_id из копии)
-        v2Controller.reset();
-        await v2Controller.importBackup(extra.v2);
-        // Следующий вход просит JWT под device_id из копии — иначе сессия v2
-        // представилась бы серверу другим устройством
-        connectionController.rememberDeviceId(store.self, imported.deviceId);
-      }
-      // Полный ресинк с восстановленным состоянием: старая sealed-история
-      // расшифруется из привезённого decCache
+      const backup = await importEncryptedBackup(password, payload);
+      // Этот браузер становится тем же устройством v2: следующий вход просит JWT
+      // под device_id из копии — иначе сессия v2 представилась бы серверу другим
+      // устройством
+      v2Controller.reset();
+      await v2Controller.importBackup(backup.v2 as V2DeviceBackup);
+      connectionController.rememberDeviceId(store.self, backup.deviceId);
       syncController.reset();
       resetPackRegistries();
       sendUpdate({ '@type': 'requestSync' });
-      if (extra?.v2History) {
-        await applyLinkedV2History(parseV2History(JSON.stringify({ v2History: extra.v2History })), store.self);
+      if (backup.v2History) {
+        await applyLinkedV2History(parseV2History(JSON.stringify({ v2History: backup.v2History })), store.self);
         await localState.flushHistoryNow();
       }
       return true;
@@ -2526,13 +2451,12 @@ const methods = {
 
   // ── ключи безопасности (отпечатки identity-ключей) ──────────────────────
   async parvaneFetchSecurityInfo({ chatId }: { chatId?: string }) {
-    const engine = e2e;
-    if (!engine) return undefined;
+    if (!store.self) return undefined;
     // v2 (T153): ключ безопасности — отпечаток корня личности из проверенного
     // журнала устройств, один на аккаунт. Свой показываем тем же способом, каким
-    // его увидит собеседник
+    // его увидит собеседник; до подъёма журнала показать нечего
     const ownRoot = v2Controller.isReady() ? v2Controller.logDevices(store.self)?.root : undefined;
-    const own = ownRoot ? await fingerprintOf(ownRoot) : await engine.getOwnFingerprint();
+    const own = ownRoot ? await fingerprintOf(ownRoot) : '';
     const address = chatId ? store.getAddressForId(chatId) : undefined;
     if (!address || address === store.self || store.isGroupAddress(address)) {
       return { own, devices: [] as { deviceId: string; fingerprint: string }[] };
@@ -3064,7 +2988,7 @@ const methods = {
     // Полный выход: устройство убирает себя из аккаунта, пока соединение живо, —
     // иначе у остальных устройств оставался бы «призрак» в списке
     if (!noSessionClear) await v2Controller.leave();
-    const currentE2e = connectionController.shutdown();
+    connectionController.shutdown();
     mediaService.clearCache();
     // Стор прежнего аккаунта не должен отвечать на запросы между logout и
     // следующим входом
@@ -3075,13 +2999,8 @@ const methods = {
     if (!noSessionClear) {
       clearLoginStorage();
       if (user) {
-        try {
-          await currentE2e?.flushStorage();
-        } catch {
-          // Logout всё равно обязан удалить повреждённое/недоступное хранилище.
-        }
         localState.clearUserData(user);
-        await E2eEngine.clear(user);
+        await SecureE2eStorage.clear(user);
         await clearSecureSession(user).catch(() => undefined);
         // Ключи стёрты — следующий вход идёт новым устройством
         connectionController.forgetDeviceId(user);

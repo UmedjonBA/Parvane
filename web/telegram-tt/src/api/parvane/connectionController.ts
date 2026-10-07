@@ -2,7 +2,6 @@ import type { ApiUpdate } from '../types';
 import type { createCallController } from './calls';
 import type { PollStore } from './polls';
 
-import { E2eEngine } from './e2e';
 import { GatewayConnection } from './gateway';
 import { loadTrustSecret, saveTrustSecret } from './secureStorage';
 import { ParvaneStore } from './store';
@@ -21,11 +20,9 @@ type ConnectionDependencies = {
   calls: CallController;
   getConnection: () => GatewayConnection | undefined;
   setConnection: (connection: GatewayConnection | undefined) => void;
-  getE2e: () => E2eEngine | undefined;
-  setE2e: (engine: E2eEngine | undefined) => void;
   getStore: () => ParvaneStore;
   setStore: (store: ParvaneStore) => void;
-  // P-39: хранилище под PIN — разблокировать до открытия E2E
+  // P-39: шифрованное хранилище под PIN — разблокировать до чтения истории
   unlockStorage?: (user: string) => Promise<void>;
   /** Как устройство называет себя на экране «Устройства» («Firefox, Linux»). */
   describeDevice?: () => string;
@@ -36,7 +33,7 @@ type ConnectionDependencies = {
   setCallIdentityReady: (isReady: boolean) => void;
   polls: PollStore;
   onNewSession: () => void;
-  // Сессия полностью поднята (auth + E2E): точка старта движка v2 и фоновых
+  // Сессия поднята (auth + хранилище): точка старта движка v2 и фоновых
   // пост-логин задач (авто-линковка истории)
   onSessionReady?: () => void;
   resetSyncPromise: () => void;
@@ -187,9 +184,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
     activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean, loginToken = '',
   ) {
     const issue = async () => {
-      // device_id — из зеркала (E2eEngine.create), а для свежей установки
-      // генерируется прямо здесь и передаётся движку: уже ПЕРВЫЙ JWT несёт
-      // claim dev, и отзыв устройства гасит его токены сразу
+      // device_id — из зеркала localStorage, а для свежей установки генерируется
+      // прямо здесь: уже ПЕРВЫЙ JWT несёт claim dev, и отзыв устройства гасит его
+      // токены сразу; движок v2 берёт id устройства из JWT
       let deviceId = readDeviceIdMirror(user);
       if (!deviceId) {
         deviceId = crypto.randomUUID();
@@ -404,19 +401,11 @@ export function createConnectionController(deps: ConnectionDependencies) {
       deps.setCallIdentityReady(false);
       try {
         await deps.unlockStorage?.(user);
-        // Локальный движок ключей устройства (device_id, кэш расшифрованного,
-        // ручная копия ключей, история линковки)
-        const nextE2e = await E2eEngine.create(user, readDeviceIdMirror(user));
-        deps.setE2e(nextE2e);
-        writeDeviceIdMirror(user, nextE2e.deviceId);
-        deps.log('E2E готов');
       } catch (error) {
-        deps.setE2e(undefined);
-        deps.log(`E2E недоступен: ${String(error)}`);
+        deps.log(`хранилище не разблокировано: ${String(error)}`);
       }
-
-      // Звонки: сигнал v2 подписывает устройство из журнала (движок)
-      if (deps.getE2e()) deps.setCallIdentityReady(true);
+      // Звонки: сигналы идут запечатанными конвертами v2 — отдельного ключа не нужно
+      deps.setCallIdentityReady(true);
 
       if (generation !== sessionGeneration) throw new Error('Вход прерван новой сессией');
       deps.calls.setup();
@@ -525,19 +514,16 @@ export function createConnectionController(deps: ConnectionDependencies) {
   }
 
   function shutdown() {
-    const currentE2e = deps.getE2e();
     sessionGeneration += 1;
     deps.calls.teardown();
     deps.setConnection(undefined);
     deps.setToken('');
-    deps.setE2e(undefined);
     deps.setCallIdentityReady(false);
     deps.resetSyncPromise();
     window.clearInterval(presenceTimer);
     typingClearTimers.forEach((timer) => window.clearTimeout(timer));
     typingClearTimers.clear();
     watchedPresence.clear();
-    return currentE2e;
   }
 
   return {
@@ -554,6 +540,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     showV2Presence,
     connectWithToken,
     rememberDeviceId: writeDeviceIdMirror,
+    currentDeviceId: readDeviceIdMirror,
     forgetDeviceId,
     shutdown,
   };

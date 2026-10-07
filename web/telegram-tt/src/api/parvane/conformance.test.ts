@@ -86,10 +86,11 @@ describe('SYNC-1: дисковый курсор двигается только 
 });
 
 describe('SYNC-2: непрочитанное не держит курсор вечно', () => {
-  it('web: курсора нет (T110) — нерасшифрованное показывается заглушкой до удачной расшифровки', () => {
+  it('web: курсора нет (T110) — строки приходят расшифрованными, шифртекст v1 пропускается', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(source).not.toMatch(/REPAIR_ATTEMPTS|mayAdvanceDiskCursor/);
-    expect(source).toContain('undecryptableUuids.add(stored.id);');
+    expect(source).not.toMatch(/REPAIR_ATTEMPTS|mayAdvanceDiskCursor|undecryptableUuids/);
+    // Строки приходят расшифрованными (движок v2 / кэш); шифртекст v1 пропускается
+    expect(source).toMatch(/в формате v1 — пропущено/);
   });
 
   it('desktop kRepairAttempts совпадает с документом', () => {
@@ -207,27 +208,11 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     expect(r.unknownVerdict.ack).toBe(false);
   });
 
-  it('web разворачивает Megolm-plaintext, не доверяя inner.from как автору', () => {
-    // Группа берёт автора из wire stored.from, а content — через unwrapMegolmContent
-    expect(webSync).toMatch(/function unwrapMegolmContent/);
-    expect(webSync).toMatch(/const inner = unwrapMegolmContent\(JSON\.parse\(plain\)\)/);
-    // В групповой ветке verify.claimedFrom — это stored.from (wire), не inner.from
-    expect(webSync).toMatch(/claimedFrom: stored\.from, senderIdentity: content\.sender_identity/);
-  });
-
-  it('web: SKDM принимается только при совпадении sender_identity с конвертом', () => {
-    expect(webSync).toMatch(/inner\.content\.sender_identity === content\.sender_identity/);
-  });
-
-  it('web: вердикт unknown не показывает и не ack-ает сообщение (retry)', () => {
-    const idx = webSync.indexOf('verdict === \'unknown\'');
-    expect(idx).toBeGreaterThan(0);
-    const block = webSync.slice(idx, idx + 800);
-    expect(block).toMatch(/undecryptableUuids\.add\(rawStored\.id\)/);
-    expect(block).toMatch(/undecryptableUuids\.add/);
-    // между началом ветки и её return не должно быть sendAck
-    const untilReturn = block.slice(0, block.indexOf('return'));
-    expect(untilReturn).not.toMatch(/sendAck/);
+  it('web: Olm/Megolm-пути нет (T110) — автора и ключи проверяет движок v2, строка приходит расшифрованной', () => {
+    expect(webSync).not.toMatch(/groupDecrypt|decryptFrom|unwrapMegolmContent|skdm|verifySenderIdentity/);
+    // Шифртекст v1 из записи LegacyV1 не показывается и не подтверждается
+    expect(webSync).toMatch(/kind === 'encrypted' \|\| stored\.content\.kind === 'group_encrypted'\) \{/);
+    expect(existsSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'))).toBe(false);
   });
 
   it('desktop: groupSeal шлёт голый content, приём не доверяет inner.from в группе', () => {
@@ -289,8 +274,8 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     const state = JSON.stringify({ [r.v2History.exportField]: [exported] });
     expect(parseV2History(state).map((m) => m.id)).toEqual(['u1']);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
-    expect(provider).toContain('engine.exportLinkStateJson(collectV2History(');
-    expect(provider).toContain('v2History = parseV2History(stateJson)');
+    expect(provider).toMatch(/linkVersion: 2,\s+v2History: collectV2History\(/);
+    expect(provider).toContain('v2History = parseV2History(await media.blob.text())');
     expect(provider).toContain('isV2GroupAddress(stored.to) && !store.isGroupAddress(stored.to)');
     expect(provider).toContain('stored.from === owner ? stored : { ...stored, read: true }');
     // desktop: выдача и приём
@@ -377,18 +362,12 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(await sasCodeV2(r.vectors.newPubB64, r.vectors.oldPubB64)).toBe(r.vectors.sas);
   });
 
-  it('web: экспорт для линковки без приватного материала, transfer по строке из правила', () => {
-    const webE2e = readFileSync(
-      path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'),
-      'utf8',
-    );
-    const idx = webE2e.indexOf('exportLinkStateJson(v2History?: WireStoredMessage[]): string {');
-    expect(idx).toBeGreaterThan(0);
-    const body = webE2e.slice(idx, webE2e.indexOf('signLinkTransfer(', idx));
-    expect(body).toMatch(/linkVersion: 2/);
-    expect(body).not.toMatch(/pickle|account:/);
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(webE2e).toContain('`link-transfer:${self}:${this.signingKey}:${newSigningKey}`');
+  it('web: экспорт для линковки — история v2-эпохи и грант движка (T110: без материала v1)', () => {
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toMatch(/linkVersion: 2,\s+v2History: collectV2History\(/);
+    expect(provider).not.toMatch(/signLinkTransfer|importLinkedHistory|exportLinkStateJson|pickle/);
+    const linking = readRepo('web/telegram-tt/src/api/parvane/linking.ts');
+    expect(linking).not.toContain('transfer?:');
     expect(r.transferStatement).toBe('link-transfer:<user>:<old_signing_key>:<new_signing_key>');
   });
 
@@ -427,14 +406,17 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     keyChangeSource: string; prekeySignatureRequiredInDeviceList: boolean;
     allDevicesRejectedVerdict: string;
   };
-  const webE2e = readFileSync(
-    path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'),
-    'utf8',
-  );
   const core = readFileSync(
     path.join(REPO_ROOT, 'desktop/parvane-core/src/e2e.cpp'),
     'utf8',
   );
+
+  it('web: ключей устройств v1 нет (T110) — смена ключа собеседника = смена корня журнала (RECOVER-1)', () => {
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('onPeerRootChanged: (user) => syncController.announceKeyChange(user),');
+    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
+    expect(sync).toMatch(/function announceKeyChange\(address: string\)/);
+  });
 
   it('правило KEY-1 задокументировано в sync-rules.json', () => {
     expect(r.keyChangeSource).toBe('seenIdentities');
@@ -442,12 +424,7 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     expect(r.allDevicesRejectedVerdict).toBe('unknown');
   });
 
-  it('web и desktop: смена ключа — по множеству виденных, не по кэшу primary', () => {
-    const webIdx = webE2e.indexOf('rememberContactIdentity(contact: string, identity: string): boolean {');
-    expect(webIdx).toBeGreaterThan(0);
-    const webBody = webE2e.slice(webIdx, webIdx + 700);
-    expect(webBody).toMatch(/this\.seenIdentities\.get\(contact\)/);
-    expect(webBody).toMatch(/const changed = Boolean\(seen\?\.size\)/);
+  it('desktop: смена ключа — по множеству виденных, не по кэшу primary', () => {
     const coreIdx = core.indexOf(
       'bool rememberContactIdentity(const std::string &contact, const std::string &identity) {',
     );
@@ -455,14 +432,11 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     expect(core.slice(coreIdx, coreIdx + 700)).toMatch(/auto &seen = g_seenIds\[contact\]/);
   });
 
-  it('web и desktop: каталог засевает виденные только при первом знакомстве', () => {
-    expect(webE2e).toMatch(/if \(!this\.seenIdentities\.get\(contact\)\?\.size\) \{/);
+  it('desktop: каталог засевает виденные только при первом знакомстве', () => {
     expect(core).toMatch(/if \(g_seenIds\[contact\]\.empty\(\)\) \{/);
   });
 
-  it('web и desktop: устройство без валидной подписи SPK пропускается, пустой каталог = unknown', () => {
-    expect(webE2e).toMatch(/if \(!verifyPrekeySignature\(device\)\) \{\s*rejected\+\+;\s*return;/);
-    expect(webE2e).toMatch(/if \(rejected && !Object\.keys\(next\)\.length\) return;/);
+  it('desktop: устройство без валидной подписи SPK пропускается, пустой каталог = unknown', () => {
     expect(core).toMatch(/if \(!prekeySigOk\(d\)\) \{\s*\+\+rejected;\s*continue;/);
     expect(core).toMatch(/if \(rejected && next\.empty\(\)\) \{\s*return;/);
   });
@@ -988,13 +962,14 @@ describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
     expect(isForeign(testCase)).toBe(testCase.skip);
   });
 
-  it('web: легаси-копий нет (T110) — доставить v1-устройствам нечем; чужая копия из LegacyV1 пропускается', () => {
+  it('web: легаси-копий нет (T110) — доставить v1-устройствам нечем; запись LegacyV1 пропускается', () => {
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
     expect(messages).not.toMatch(/sealLegacy|deliverLegacy|legacyDevices/);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).not.toContain('listOwnV1Devices');
-    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
-    expect(sync).toContain('if (!cached && !ownCopy && !content.ciphertext && content.sender_identity) {');
+    // Запись LegacyV1 (кадр v1) целиком пропускается: читать её нечем
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toMatch(/if \(ev\.type === 'legacyV1'\) \{\s+\/\/[^\n]*\n\s+return;/);
   });
 
   it('движок: метод доставки и запись списка из правила; журнал не меняется до подтверждения', () => {
@@ -1458,14 +1433,14 @@ describe('E6-1: клиент работоспособен без соедине�
     });
   });
 
-  it('web: соединения v1 нет вовсе (T110) — все запросы мостом, запись LegacyV1 подаётся обработчику инбокса', () => {
+  it('web: соединения v1 нет вовсе (T110) — все запросы мостом, записи LegacyV1 пропускаются', () => {
     const gateway = readRepo('web/telegram-tt/src/api/parvane/gateway.ts');
     expect(gateway).not.toMatch(/new WebSocket|hasV1|isVirtual|upgrade_required/);
     expect(gateway).toContain('const viaV2 = await getV2Bridge().request(subject, payload);');
     const engine = readRepo('web/telegram-tt/src/api/parvane/v2/engine.ts');
     expect(engine).not.toMatch(/isV2Enabled|parvane:proto|VITE_PARVANE_PROTO_V2/);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
-    expect(provider).toContain('if (store.self) syncController.handleInboxFrame(frame);');
+    expect(provider).not.toMatch(/onLegacyFrame|handleInboxFrame/);
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
   });

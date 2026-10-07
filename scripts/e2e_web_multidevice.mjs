@@ -16,10 +16,6 @@ import assert from 'node:assert/strict';
 // одна на оба устройства; сверяется список ссылок клиента. Запуск:
 // scripts/run_web_multidevice_e2e.sh. Журнал личного состояния v2 —
 // scripts/e2e_protocol_state_sync.mjs (пара state-sync)
-// T110: клиенты идут только по v2 — второе устройство привязывается (LINK-1 v2),
-// ссылка группы — запись журнала группы; ветки `!IS_V2` больше не выполняются
-const IS_V2 = true;
-import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -111,22 +107,11 @@ async function createGroup(page, memberName, title) {
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-function countInvitesCreatedBy(address) {
-  if (IS_V2) return undefined; // ссылки v2 — записи журнала группы, таблицы шарда нет
-  const out = execFileSync('sqlite3', [
-    join(BACKEND_DIR, 'messenger.db'),
-    `SELECT count(*) FROM group_invites WHERE created_by = '${address.replace(/'/g, "''")}'`,
-  ], { encoding: 'utf8' });
-  return Number(out.trim());
-}
-
-// Часть ссылки, по которой её сравнивают: v1 — токен, v2 — `/join/<link_id>#<секрет>`
+// Часть ссылки, по которой её сравнивают: `/join/<link_id>#<секрет>`
 function inviteToken(url) {
-  const match = IS_V2
-    ? url.match(/\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/)
-    : url.match(/#\+([0-9a-f]{32})/);
+  const match = url.match(/\/join\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/);
   assert(match, `no invite token in ${url}`);
-  return match[IS_V2 ? 0 : 1];
+  return match[0];
 }
 
 function membersCountLocator(page, count) {
@@ -234,14 +219,12 @@ try {
     0,
     'old sealed history must stay unreadable on a brand-new device',
   );
-  if (IS_V2) {
-    // v2: непривязанное устройство не получает ничего; после линковки (LINK-1 v2)
-    // история до неё приезжает в экспорте линковки
-    await linkSecondDevice(bobDevice1.page, bobDevice2.page);
-    await openPrivateChat(bobDevice2.page, alice);
-    await findMessage(bobDevice2.page, beforeSecondDevice).first()
-      .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
-  }
+  // Непривязанное устройство не получает ничего; после линковки (LINK-1 v2)
+  // история до неё приезжает в экспорте линковки
+  await linkSecondDevice(bobDevice1.page, bobDevice2.page);
+  await openPrivateChat(bobDevice2.page, alice);
+  await findMessage(bobDevice2.page, beforeSecondDevice).first()
+    .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
 
   // Отправитель обнаруживает новое устройство после истечения TTL кэша списка
   // (v1 — список устройств контакта, v2 — журнал устройств собеседника, 15 с)
@@ -282,9 +265,8 @@ try {
   // ── Инвайт-ссылки: у группы ОДНА основная ссылка, общая для устройств ─────
   // spec 003: источник истины — список сервера (group.invite.list, is_primary),
   // поэтому второе устройство видит ту же ссылку и ничего не создаёт
-  // v1 — число записей в таблице шарда; v2 — число ссылок в списке клиента (журнал группы)
+  // Число ссылок в списке клиента (журнал группы)
   const assertSingleInvite = async (page, message) => {
-    if (!IS_V2) return assert.equal(countInvitesCreatedBy(bob), 1, message);
     const listed = await callProviderForChat(page, 'fetchExportedChatInvites', inviteGroupTitle, undefined, { peer: '$chat' });
     return assert.equal(listed.result?.invites?.length, 1, `${message}: ${JSON.stringify(listed)}`);
   };

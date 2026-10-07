@@ -10,7 +10,6 @@ const SELF = 'history-cache@local';
 function makeLocalState() {
   return createLocalState({
     getStore: () => ({ self: SELF } as never),
-    getE2e: () => undefined,
     isAuthorized: () => true,
     selfId: () => SELF,
     sendUpdate: () => undefined,

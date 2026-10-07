@@ -315,10 +315,8 @@ try {
     return Boolean(user && g.chats.notifyExceptionById?.[user.id]?.mutedUntil === until);
   }, { name: aliceName, until: MUTE_FOREVER }, { timeout: STATE_SYNC_BUDGET_MS });
   console.log(`мьют на втором устройстве через ${Date.now() - muteStarted} мс`);
-  const notifyBlobs = execFileSync('sqlite3', [join(BACKEND_DIR, 'messenger.db'), 'SELECT notify_json FROM user_settings'])
-    .toString();
-  assert.ok(!notifyBlobs.includes(alice) && !notifyBlobs.includes('exceptions'),
-    `v1-блоб настроек на сервере несёт список заглушённых: ${notifyBlobs.slice(0, 200)}`);
+  // Открытого v1-блоба настроек на сервере нет с T110 (таблицы `user_settings`
+  // v1 больше нет) — мьют живёт только в журнале личного состояния
 
   assert.equal(await isBlocked(bob2Page, aliceName), false, 'bob2: alice заблокирована до блокировки');
   await bob1Page.getByRole('button', { name: 'More actions' }).click();

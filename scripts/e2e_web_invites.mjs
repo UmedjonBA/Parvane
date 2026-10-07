@@ -10,10 +10,6 @@ import assert from 'node:assert/strict';
 // записи журнала группы): состояния active/expired/exhausted/revoked, список
 // отозванных, declined; сверяется список ссылок клиента. Заявки группы v2 —
 // scripts/e2e_protocol_groups.mjs. Запуск: scripts/run_web_invites_e2e.sh
-// T110: клиенты идут только по v2 — ссылки `/join/<link_id>#<секрет>` из журнала
-// группы; ветки `!IS_V2` (модель v1-шарда) больше не выполняются
-const IS_V2 = true;
-import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -21,15 +17,12 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   callProviderForChat,
-  clickUntil,
   closeRightColumn,
   createGroupViaUi,
   dumpDiagJournal,
   expectToast,
   findMessage,
   inviteAppUrl,
-  inviteTokenOf,
-  logOut,
   openGroupChatByTitle,
   openGroupManagement,
   openPrivateChatStrict,
@@ -39,7 +32,6 @@ import {
   relogin,
   requireEnv,
   sendText,
-  submitNick,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-invites-e2e-password';
@@ -49,16 +41,7 @@ assert(BACKEND_DIR, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
 const CONVERGENCE_TIMEOUT_MS = 15000;
 // Группа v2: вступление меняет эпоху (не чаще раза в 10 с) — первое сообщение
 // нового состава ждёт её
-const DELIVERY_TIMEOUT_MS = IS_V2 ? 45000 : 10000;
-
-function countInvitesCreatedBy(address) {
-  if (IS_V2) return undefined; // ссылки v2 — записи журнала группы, таблицы шарда нет
-  const out = execFileSync('sqlite3', [
-    join(BACKEND_DIR, 'messenger.db'),
-    `SELECT count(*) FROM group_invites WHERE created_by = '${address.replace(/'/g, "''")}'`,
-  ], { encoding: 'utf8' });
-  return Number(out.trim());
-}
+const DELIVERY_TIMEOUT_MS = 45000;
 
 // Число участников — по состоянию чата: подпись в шапке временно сменяется
 // статусом «is typing», и текст «N members» пропадает
@@ -78,16 +61,15 @@ async function acceptInviteModal(page, buttonName = /join group/i) {
   await modal.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS }).catch(() => {});
 }
 
-// Часть ссылки, по которой её находят в сообщении и сравнивают: v1 — токен,
-// v2 — `/join/<link_id>` (секрет — во фрагменте)
+// Часть ссылки, по которой её находят в сообщении и сравнивают: `/join/<link_id>`
+// (секрет — во фрагменте)
 function linkKeyOf(link) {
-  return IS_V2 ? link.match(/\/join\/[A-Za-z0-9_-]{43}/)?.[0] : `#+${inviteTokenOf(link)}`;
+  return link.match(/\/join\/[A-Za-z0-9_-]{43}/)?.[0];
 }
 
-// Заведомо неверная ссылка той же формы: v1 — перевёрнутый токен, v2 — перевёрнутый секрет
+// Заведомо неверная ссылка той же формы: перевёрнутый секрет
 function brokenLinkOf(link) {
   const flip = (text) => text.split('').reverse().join('');
-  if (!IS_V2) return `https://x/#+${flip(inviteTokenOf(link))}`;
   const [head, secret] = link.split('#');
   return `${head}#${flip(secret)}`;
 }
@@ -144,10 +126,9 @@ try {
   const listInvites = async (page) => (await callProviderForChat(
     page, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' },
   )).result?.invites || [];
-  // v1 — число записей в таблице шарда; v2 — число ссылок в списке клиента (журнал группы)
+  // Число ссылок в списке клиента (журнал группы)
   const assertSingleInvite = async (message) => {
-    if (IS_V2) assert.equal((await listInvites(alicePage)).length, 1, message);
-    else assert.equal(countInvitesCreatedBy(alice), 1, message);
+    assert.equal((await listInvites(alicePage)).length, 1, message);
   };
   await assertSingleInvite('first visit must create exactly one invite');
 
@@ -158,26 +139,6 @@ try {
     assert.equal(again, inviteUrl, `invite link changed after relogin #${round + 1}`);
   }
   await assertSingleInvite('relogins must not create new invites');
-
-  // ── Полный выход и вход заново тоже не плодит ссылки ──────────────────────
-  // Только v1: в v2 полный выход стирает ключи устройства, и новый вход —
-  // новое устройство, которому нужна линковка или ключ восстановления
-  // (RECOVER-1; сценарий — пара recovery), а не продолжение прежней сессии
-  if (!IS_V2) {
-    await logOut(alicePage);
-    await submitNick(alicePage, alice);
-    const passwordScreen = alicePage.locator('.Transition_slide-active > #auth-password-form');
-    await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-    await clickUntil(
-      passwordScreen.getByRole('button', { name: 'Next' }),
-      () => alicePage.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-      { settleMs: 15000 },
-    );
-    const afterLogout = await readInvitesScreen(alicePage, groupTitle);
-    assert.equal(afterLogout, inviteUrl, 'invite link changed after a full logout and sign-in');
-    await assertSingleInvite('logout and sign-in must not create a new invite');
-  }
 
   // ── Обычный участник не видит управления ссылками ─────────────────────────
   await openGroupChatByTitle(sessions.bob.page, groupTitle);
@@ -245,8 +206,7 @@ try {
   // v1 — список сервера; v2 — секрет ссылки владельца передан админу служебной
   // раздачей (общий список у ведущих приглашения), своей основной он не создаёт
   assert.equal(adminInviteUrl, inviteUrl, 'admin must see the same primary link as the owner');
-  if (IS_V2) await assertSingleInvite('admin opening the screen must not mint a link');
-  else assert.equal(countInvitesCreatedBy(bob), 0, 'admin opening the screen must not mint a link');
+  await assertSingleInvite('admin opening the screen must not mint a link');
 
   // ── Дейв (уже вошёл) открывает `#+<токен>` в адресной строке ──────────────
   sessions.dave = await preparePage(contexts.dave, address('dave'), PASSWORD);

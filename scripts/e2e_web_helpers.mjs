@@ -503,14 +503,37 @@ export function assertNoPageErrors(sessions) {
 // обрывает reload с net::ERR_ABORTED («maybe frame was detached») — ждём, пока
 // страница успокоится, и повторяем. Любая другая ошибка пробрасывается
 export async function reloadPage(page) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      return;
-    } catch (err) {
-      if (attempt >= 2 || !/ERR_ABORTED|frame was detached/.test(String(err?.message))) throw err;
-      await page.waitForLoadState('domcontentloaded').catch(() => {});
+  // Разбор зависшего reload: старый документ не выгрузился (маркер жив) или
+  // новый не дошёл до DOMContentLoaded (readyState) + консоль за это время
+  const consoleTail = [];
+  const onConsole = (message) => {
+    consoleTail.push(`${message.type()}: ${message.text().slice(0, 200)}`);
+    if (consoleTail.length > 60) consoleTail.shift();
+  };
+  page.on('console', onConsole);
+  await page.evaluate(() => { globalThis.__parvaneE2eReloadMarker = Date.now(); }).catch(() => undefined);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        return;
+      } catch (err) {
+        if (err?.name === 'TimeoutError') {
+          const state = await page.evaluate(() => ({
+            readyState: document.readyState,
+            oldDocument: Boolean(globalThis.__parvaneE2eReloadMarker),
+            href: location.href,
+            pendingResources: performance.getEntriesByType('resource')
+              .filter((e) => e.responseEnd === 0).map((e) => e.name).slice(0, 10),
+          })).catch((e) => `evaluate failed: ${e.message}`);
+          console.error(`--- reload diag ---\n${JSON.stringify(state)}\n--- console tail ---\n${consoleTail.join('\n')}`);
+        }
+        if (attempt >= 2 || !/ERR_ABORTED|frame was detached/.test(String(err?.message))) throw err;
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+      }
     }
+  } finally {
+    page.off('console', onConsole);
   }
 }
 
