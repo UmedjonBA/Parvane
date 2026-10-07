@@ -85,6 +85,10 @@ pub(crate) fn bind_client_payload(user: &str, token: &str, subject: &str, payloa
     let object = value
         .as_object_mut()
         .ok_or_else(|| anyhow!("payload должен быть JSON-объектом"))?;
+    // GW-04: `client_ip` подставляет только gateway. Клиентское поле уходило
+    // identity как есть (после auth IP подмешивался не во все bootstrap-запросы)
+    // — им выедали лимит настоящего бота или обходили лимит вовсе.
+    object.remove("client_ip");
 
     if GATEWAY_EVENT_SUBJECTS.contains(&subject) {
         // P-22: и отправка, и ПРАВКА принимают только E2E-контент — иначе
@@ -153,6 +157,11 @@ pub(crate) fn bind_client_payload(user: &str, token: &str, subject: &str, payloa
     } else if GATEWAY_TOKEN_REQUEST_SUBJECTS.contains(&subject) {
         object.insert("token".into(), Value::String(token.to_string()));
     } else if subject.starts_with(MSG_TYPING_PREFIX) || subject.starts_with(PRESENCE_PREFIX) {
+        // GW-01: эфемерный кадр — пара коротких полей. Без потолка «печатает» на
+        // 4 МиБ размножался по подпискам и копился у нечитающего клиента.
+        if payload.len() > EPHEMERAL_MAX_BYTES {
+            return Err(anyhow!("эфемерный кадр слишком большой"));
+        }
         object.insert("from".into(), Value::String(user.to_string()));
     }
 

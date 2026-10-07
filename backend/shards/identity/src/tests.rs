@@ -1215,9 +1215,9 @@ async fn twofa_login_requires_linked_telegram_confirmation() {
     do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &reg_token, 42), Some("s3cret")).await.unwrap();
     let jwt = do_issue(&pool, &enc, &issue_bytes("two", "pw-secret-1")).await.unwrap().token().unwrap().to_string();
 
-    // По умолчанию выключено; включаем по JWT
+    // По умолчанию выключено; включение — с паролем (ID-05)
     assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, None)).await.unwrap(); (e, l) }, (false, true));
-    assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes(&jwt, Some(true))).await.unwrap(); (e, l) }, (true, true));
+    assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes_pw(&jwt, Some(true), "pw-secret-1")).await.unwrap(); (e, l) }, (true, true));
     // Устройство, включившее 2FA (JWT с dev), — доверенное: входит без Telegram
     let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw-secret-1", "dev-enabler")).await;
     assert!(dev_jwt.is_ok(), "пока 2FA включено JWT без dev-устройства: {:?}", dev_jwt.as_ref().err());
@@ -1226,7 +1226,7 @@ async fn twofa_login_requires_linked_telegram_confirmation() {
     assert!(do_twofa(&pool, &dec, &twofa_bytes_pw(&jwt, Some(false), "wrong-pass-1")).await.is_err(), "с неверным паролем — отказ");
     assert_eq!({ let (e, l, _) = do_twofa(&pool, &dec, &twofa_bytes_pw(&jwt, Some(false), "pw-secret-1")).await.unwrap(); (e, l) }, (false, true));
     let dev_jwt = do_issue(&pool, &enc, &issue_bytes_with_device("two", "pw-secret-1", "dev-enabler")).await.unwrap().token().unwrap().to_string();
-    let (e, l, secret) = do_twofa(&pool, &dec, &twofa_bytes(&dev_jwt, Some(true))).await.unwrap();
+    let (e, l, secret) = do_twofa(&pool, &dec, &twofa_bytes_pw(&dev_jwt, Some(true), "pw-secret-1")).await.unwrap();
     assert_eq!((e, l), (true, true));
     let secret = secret.expect("устройство, включившее 2FA, получает секрет доверия");
     // device_id публичен (identity.prekeys.fetch отдаёт его любому): без
@@ -1307,4 +1307,97 @@ fn v2_server_descriptor_is_signed_and_key_file_private() {
     parvane_protocol::sign::verify_ctx(&d.server_key, &signed.signature, parvane_protocol::sign::ctx::SERVER_DESCRIPTOR, &[&signed.descriptor]).unwrap();
     assert_eq!(d.proto_major, 2);
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// ── ревью безопасности 7 окт 2026: ID-02, ID-05, ID-06 ───────────────────────
+
+#[test]
+fn login_limiter_does_not_grow_on_unique_logins() {
+    // ID-02: уникальные логины не должны накапливаться в карте навсегда.
+    for i in 0..LIMITER_MAX_ENTRIES + 100 {
+        let _ = login_gate_check(&format!("id02-{i}@local"));
+    }
+    let n = login_limiter().lock().unwrap_or_else(|e| e.into_inner()).len();
+    assert!(n < LIMITER_MAX_ENTRIES, "карта лимитера выселяется: {n}");
+}
+
+#[tokio::test]
+async fn issue_rejects_overlong_login_before_any_accounting() {
+    let pool = test_pool().await;
+    let (enc, _) = make_keys();
+    let long = format!("{}@local", "a".repeat(4000));
+    let err = do_issue(&pool, &enc, &issue_bytes(&long, "whatever-1")).await.unwrap_err().to_string();
+    assert!(err.contains("неверный логин или пароль"), "{err}");
+    let key = limiter_key(&canonical_user(&long, &server_domain()));
+    assert!(!login_limiter().lock().unwrap_or_else(|e| e.into_inner()).contains_key(&key), "следа в лимитере нет");
+    // Негодный device_id в v1 тоже отклоняется до БД
+    let err = do_issue(&pool, &enc, &issue_bytes_with_device("x@local", "whatever-1", "dev id/with spaces"))
+        .await.unwrap_err().to_string();
+    assert!(err.contains("неверный логин или пароль"), "{err}");
+}
+
+#[tokio::test]
+async fn require_password_locks_out_after_repeated_failures() {
+    // ID-05: перебор пароля через операции с JWT упирается в тот же лок-аут, что и вход.
+    let pool = test_pool().await;
+    let hash = hash_password("right-password-1").unwrap();
+    sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
+        .bind("lockpw@local").bind("lockpw@local").bind(&hash).execute(&pool).await.unwrap();
+    for _ in 0..5 {
+        assert!(require_password(&pool, "lockpw@local", Some("wrong-0000")).await.is_err());
+    }
+    let err = require_password(&pool, "lockpw@local", Some("right-password-1")).await.unwrap_err().to_string();
+    assert!(err.contains("много"), "ожидался лок-аут: {err}");
+}
+
+#[tokio::test]
+async fn password_change_invalidates_tokens_of_other_devices() {
+    // ID-06: после смены пароля чужие сессии гаснут, устройство владельца — нет.
+    let pool = test_pool().await;
+    let (enc, dec) = make_keys();
+    let hash = hash_password("old-password-1").unwrap();
+    sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
+        .bind("epoch@local").bind("epoch@local").bind(&hash).execute(&pool).await.unwrap();
+    let before = now_unix() as usize - 10;
+    let mk = |dev: Option<&str>, iat: usize| {
+        jwt_encode(&enc, &Claims { sub: "epoch@local".into(), iat, exp: iat + 86400, dev: dev.map(Into::into) }).unwrap()
+    };
+    let owner = mk(Some("dev-owner"), before);
+    let thief = mk(Some("dev-thief"), before);
+    let no_dev = mk(None, before);
+    let body = serde_json::to_vec(&PasswordChangeRequest {
+        token: owner.clone(), old_password: "old-password-1".into(), new_password: "new-password-9".into(),
+    }).unwrap();
+    do_password_change(&pool, &dec, &body).await.unwrap();
+    assert!(verify_active(&pool, &dec, &owner).await.is_ok(), "сменившее устройство остаётся в сессии");
+    assert!(verify_active(&pool, &dec, &thief).await.is_err(), "чужой токен до смены пароля гаснет");
+    assert!(verify_active(&pool, &dec, &no_dev).await.is_err(), "токен без устройства гаснет");
+    let fresh = mk(Some("dev-thief"), now_unix() as usize);
+    assert!(verify_active(&pool, &dec, &fresh).await.is_ok(), "новый вход после смены действует");
+    // То же видит identity.token.verify (шарды и gateway)
+    let claims = jwt_decode(&dec, &thief).unwrap().claims;
+    assert!(token_rejection(&pool, &claims).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn twofa_toggle_requires_password_in_both_directions() {
+    let pool = test_pool().await;
+    let (enc, dec) = make_keys();
+    let hash = hash_password("pass-word-1").unwrap();
+    sqlx::query("INSERT INTO users (id, username, password_hash, created_at, telegram_id) VALUES (?, ?, ?, 0, 4242)")
+        .bind("tfa@local").bind("tfa@local").bind(&hash).execute(&pool).await.unwrap();
+    let now = now_unix() as usize;
+    let token = jwt_encode(&enc, &Claims { sub: "tfa@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()) }).unwrap();
+    let body = |enabled: Option<bool>, password: Option<&str>| serde_json::to_vec(&TwoFactorRequest {
+        token: token.clone(), enabled, password: password.map(Into::into),
+    }).unwrap();
+    // Чтение — по одному JWT
+    assert_eq!(do_twofa(&pool, &dec, &body(None, None)).await.unwrap().0, false);
+    // Включение без пароля — отказ; с паролем — секрет доверия
+    assert!(do_twofa(&pool, &dec, &body(Some(true), None)).await.is_err());
+    let (on, _, secret) = do_twofa(&pool, &dec, &body(Some(true), Some("pass-word-1"))).await.unwrap();
+    assert!(on && secret.is_some());
+    // Выключение — тоже только с паролем
+    assert!(do_twofa(&pool, &dec, &body(Some(false), Some("nope-nope-1"))).await.is_err());
+    assert!(!do_twofa(&pool, &dec, &body(Some(false), Some("pass-word-1"))).await.unwrap().0);
 }

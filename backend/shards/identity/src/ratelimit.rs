@@ -111,14 +111,34 @@ pub(crate) fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
+/// Выселение корзин логина (ID-02): карта росла на каждый новый логин и
+/// чистилась только при верном пароле — аноним исчерпывал память identity
+/// уникальными логинами. Чистим при превышении порога: сначала корзины без
+/// активного лок-аута и без попыток за последнюю минуту, если всё ещё тесно —
+/// все незаблокированные (теряется только эскалация задержки).
+pub(crate) fn evict_login_buckets(map: &mut std::collections::HashMap<String, LoginBucket>, now: i64) {
+    if map.len() < LIMITER_MAX_ENTRIES {
+        return;
+    }
+    map.retain(|_, b| {
+        b.attempts.retain(|&t| now - t < 60);
+        b.locked_until > now || !b.attempts.is_empty()
+    });
+    if map.len() >= LIMITER_MAX_ENTRIES {
+        map.retain(|_, b| b.locked_until > now);
+    }
+}
+
 /// Пропускает попытку логина или отвергает её: частотный лимит на 60 c
 /// (PARVANE_LOGIN_RATE, по умолчанию 10) и активный лок-аут после серии неудач.
+/// Ключ — через `limiter_key` (длинный логин заменяется хэшем).
 pub(crate) fn login_gate_check(user: &str) -> Result<()> {
     let rate = env_u64("PARVANE_LOGIN_RATE", 10) as usize;
     let now = now_unix();
     let map = login_limiter();
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
-    let bucket = guard.entry(user.to_string()).or_default();
+    evict_login_buckets(&mut guard, now);
+    let bucket = guard.entry(limiter_key(user)).or_default();
     if bucket.locked_until > now {
         anyhow::bail!("слишком много неудачных попыток, попробуйте позже");
     }
@@ -139,7 +159,8 @@ pub(crate) fn login_record_failure(user: &str) {
     let now = now_unix();
     let map = login_limiter();
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
-    let bucket = guard.entry(user.to_string()).or_default();
+    evict_login_buckets(&mut guard, now);
+    let bucket = guard.entry(limiter_key(user)).or_default();
     bucket.fails = bucket.fails.saturating_add(1);
     if bucket.fails >= threshold {
         let over = (bucket.fails - threshold).min(20);
@@ -152,7 +173,7 @@ pub(crate) fn login_record_failure(user: &str) {
 pub(crate) fn login_record_success(user: &str) {
     let map = login_limiter();
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
-    guard.remove(user);
+    guard.remove(&limiter_key(user));
 }
 
 /// Частотный лимит фетча prekey-бандла по паре (запросивший → цель): не даёт

@@ -493,7 +493,15 @@ pub(crate) async fn serve(mut in_rx: mpsc::Receiver<Vec<u8>>, tx: mpsc::Sender<V
     reverify.tick().await;
     loop {
         let need_auth = channel == Channel::Identified && !s.authed();
-        let wait = if need_auth { deadline.saturating_duration_since(Instant::now()) } else { Duration::from_secs(86_400) };
+        // GW-02: анонимный канал без входа не держит слот сутками — только
+        // короткий простой между запросами.
+        let wait = if need_auth {
+            deadline.saturating_duration_since(Instant::now())
+        } else if channel == Channel::AnonymousDelivery {
+            Duration::from_secs(crate::limits::anon_idle_secs())
+        } else {
+            Duration::from_secs(86_400)
+        };
         tokio::select! {
             got = tokio::time::timeout(wait, in_rx.recv()) => {
                 let bytes = match got {
@@ -599,7 +607,7 @@ pub(crate) async fn run_ws<S>(
         let _ = write.close().await;
     });
     serve(in_rx, out_tx, sh, client_ip).await;
-    let _ = writer.await;
+    crate::session::finish_writer(writer).await;
 }
 
 /// TCP: преамбула `PVN2` уже прочитана; `rest` — байты после неё.
@@ -643,5 +651,5 @@ pub(crate) async fn run_tcp(rest: Vec<u8>, mut rd: tokio::net::tcp::OwnedReadHal
         }
     });
     serve(in_rx, out_tx, sh, client_ip).await;
-    let _ = writer.await;
+    crate::session::finish_writer(writer).await;
 }

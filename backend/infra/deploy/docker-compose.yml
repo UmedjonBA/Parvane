@@ -14,6 +14,10 @@ x-shard-common: &shard-common
   restart: unless-stopped
   depends_on:
     - nats
+  # OPS-03 (ревью 7 окт 2026): потолок памяти и процессов — исчерпание памяти
+  # одним шардом перезапускает его, а не роняет 8-гигабайтный хост целиком
+  mem_limit: 768m
+  pids_limit: 256
   read_only: true
   cap_drop:
     - ALL
@@ -47,6 +51,8 @@ services:
     volumes:
       - ./nats/server.prod.conf:/etc/nats/server.prod.conf:ro
     restart: unless-stopped
+    mem_limit: 512m
+    pids_limit: 256
 
   identity:
     <<: *shard-common
@@ -181,10 +187,20 @@ services:
       PARVANE_GATEWAY_MAX_CONNS: "2000"
       PARVANE_GATEWAY_MAX_CONNS_PER_IP: "2000"
       PARVANE_LOG_LEVEL: info
+    mem_limit: 1g
+    pids_limit: 512
 
   caddy:
     image: localhost/parvane-caddy:latest
     restart: unless-stopped
+    mem_limit: 512m
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - gateway
     ports:
