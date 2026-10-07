@@ -2881,8 +2881,36 @@ export function createV2Controller(deps: Deps) {
     return ready;
   }
 
+  /**
+   * ID-01: доказательство владения ключом устройства для `identity.session.issue`
+   * — до входа, по сохранённому состоянию движка этого пользователя. Нет
+   * состояния (первый вход, другое устройство) — нет доказательства: сервер
+   * требует его только от устройства, уже действующего в журнале.
+   */
+  async function sessionProof(user: string, deviceId: string) {
+    try {
+      const pvm = await loadProtocol();
+      const st = await SecureE2eStorage.open(user);
+      const savedKey = await st.loadRecord<string>(KEY_RECORD);
+      const saved = await st.loadRecord<string>(STATE_RECORD);
+      if (!savedKey || !saved) return undefined;
+      const c = pvm.PvClient.importState(unb64(saved), unb64(savedKey));
+      try {
+        // Состояние и зеркало device_id — одного хранилища; при расхождении
+        // сервер отвергнет подпись, и вход пойдёт как с нового устройства
+        const tsMs = Date.now();
+        return { proof: b64(c.sessionProof(tsMs)), tsMs };
+      } finally {
+        c.free();
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
   return {
     start,
+    sessionProof,
     isReady: () => ready,
     needsLinking: () => needsLinking,
     linkGrantMaterial,

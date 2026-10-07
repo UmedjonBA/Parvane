@@ -1236,3 +1236,4 @@ fn ephemeral_typing_and_presence() {
     let ids: Vec<Vec<u8>> = again.iter().flat_map(|r| decode_checked::<mpb::EphemeralSubscribeRequest>(&r.body, Origin::Client).unwrap().channel_ids).collect();
     assert_eq!(ids.len(), 1, "в L2 остаётся только канал присутствия собеседника");
 }
+

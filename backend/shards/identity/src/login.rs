@@ -62,6 +62,12 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
         if !parvane_protocol::address::is_valid_device_id(d) {
             anyhow::bail!("неверный логин или пароль");
         }
+        // ID-01: по v1 доказательство устройства передать нельзя — при включённом
+        // требовании привязанное к журналу v2 устройство входит только через
+        // `identity.session.issue` (мост v2; v1 отключается, E6).
+        if crate::v2::device_proof_required() && crate::v2::log_has_active_device(&req.user, d).await {
+            anyhow::bail!("неверный логин или пароль");
+        }
     }
     // Брутфорс-защита: частотный лимит по IP (gateway подмешивает client_ip;
     // пусто при прямом NATS в dev) идёт ПЕРВЫМ — отклонённая по IP попытка не

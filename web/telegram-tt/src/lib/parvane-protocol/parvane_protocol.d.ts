@@ -309,6 +309,11 @@ export class PvClient {
      * после успеха хост зовёт `forgetRoot()`.
      */
     rotateSsk(): Array<any>;
+    /**
+     * ID-01: доказательство устройства для `identity.session.issue`
+     * (`ts_ms` — миллисекунды Unix, как `Date.now()`).
+     */
+    sessionProof(ts_ms: number): Uint8Array;
     setPeerDeliveryKey(user: string, key: Uint8Array, generation: bigint): void;
     /**
      * Раздать текущий ключ доступа собеседнику (отложенное после отзыва).
@@ -738,6 +743,7 @@ export interface InitOutput {
     readonly pvclient_revokeContactAccess: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_revokeDevice: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_rotateSsk: (a: number, b: number) => void;
+    readonly pvclient_sessionProof: (a: number, b: number, c: number) => void;
     readonly pvclient_setPeerDeliveryKey: (a: number, b: number, c: number, d: number, e: number, f: bigint) => void;
     readonly pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;

@@ -370,6 +370,12 @@ message SessionIssueRequest {
   // Как устройство называет себя («Firefox, Linux») — подпись на экране
   // «Устройства» у владельца аккаунта.
   string client_kind = 6 [(parvane.core.v2.max_len) = 32];
+  // ID-01: доказательство владения ключом устройства — подпись olm_ed25519 над
+  // ("parvane/v2/session-proof\0", адрес, device_id, proof_ts_ms BE). Сервер
+  // требует её для device_id, действующего в журнале устройств: пароль сам по
+  // себе не даёт войти «как» чужое привязанное устройство (окно ±5 минут).
+  bytes device_proof = 7 [(parvane.core.v2.max_len) = 64];
+  int64 proof_ts_ms = 8;
 }
 message SessionIssueResponse {
   string token = 1 [(parvane.core.v2.max_len) = 4096];

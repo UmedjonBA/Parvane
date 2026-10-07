@@ -1401,3 +1401,15 @@ async fn twofa_toggle_requires_password_in_both_directions() {
     assert!(do_twofa(&pool, &dec, &body(Some(false), Some("nope-nope-1"))).await.is_err());
     assert!(!do_twofa(&pool, &dec, &body(Some(false), Some("pass-word-1"))).await.unwrap().0);
 }
+
+#[test]
+fn session_proof_freshness_window() {
+    // ID-01: доказательство устройства действует ±5 минут; нулевое время — нет
+    let now = 1_760_000_000_000;
+    use crate::v2::session_proof_fresh;
+    assert!(session_proof_fresh(now, now));
+    assert!(session_proof_fresh(now - 4 * 60 * 1000, now));
+    assert!(!session_proof_fresh(now - 6 * 60 * 1000, now));
+    assert!(!session_proof_fresh(now + 6 * 60 * 1000, now));
+    assert!(!session_proof_fresh(0, now));
+}

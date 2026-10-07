@@ -94,6 +94,7 @@ export const pvclient_resetIdentity: (a: number, b: number, c: number) => void;
 export const pvclient_revokeContactAccess: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_revokeDevice: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_rotateSsk: (a: number, b: number) => void;
+export const pvclient_sessionProof: (a: number, b: number, c: number) => void;
 export const pvclient_setPeerDeliveryKey: (a: number, b: number, c: number, d: number, e: number, f: bigint) => void;
 export const pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;

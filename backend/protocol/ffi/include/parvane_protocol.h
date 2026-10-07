@@ -230,6 +230,13 @@ char *pv_client_rotate_ssk(struct PvClient *c,
 bool pv_client_own_ssk_exposed(const struct PvClient *c);
 
 /**
+ * ID-01: доказательство устройства для `identity.session.issue` — 64 байта
+ * подписи, base64 в C-строке (освобождать `pv_string_free`); null — нет клиента.
+ */
+char *pv_client_session_proof(const struct PvClient *c,
+                              int64_t ts_ms);
+
+/**
  * Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →
  * JSON-массив запросов `ephemeral.subscribe` (только новые каналы).
  */

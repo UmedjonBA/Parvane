@@ -30,6 +30,8 @@ pub mod ctx {
     pub const DEVICE_CERT: &[u8] = b"parvane/v2/device-cert\0";
     /// C1-01: доказательство владения ключами устройства (подпись olm_ed25519).
     pub const DEVICE_POSSESSION: &[u8] = b"parvane/v2/device-pop\0";
+    /// ID-01: доказательство устройства при выпуске сессии (`identity.session.issue`).
+    pub const SESSION_PROOF: &[u8] = b"parvane/v2/session-proof\0";
     /// C1-06: AAD резервной копии корня под ключом восстановления.
     pub const ROOT_BACKUP: &[u8] = b"parvane/v2/root-backup\0";
     pub const SELF_SIGNING: &[u8] = b"parvane/v2/self-signing\0";
