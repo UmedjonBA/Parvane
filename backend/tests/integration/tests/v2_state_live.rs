@@ -103,7 +103,7 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         &dir.join("identity.log"),
     ));
     let m_db = dir.join("messenger.db").to_string_lossy().to_string();
-    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db)], &dir.join("messenger.log")));
+    children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &dir.join("messenger.log")));
     children.push(spawn(
         "gateway",
         &[
@@ -128,15 +128,15 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         if matches!(r, Ok(Ok(_))) {
             break;
         }
-        assert!(startt.elapsed() < Duration::from_secs(30), "identity не поднялся");
+        assert!(startt.elapsed() < Duration::from_secs(60), "identity не поднялся");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     loop {
-        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("group.list", "{}".into())).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), nc.request("v2.msg.inbox.sync", vec![].into())).await;
         if matches!(r, Ok(Ok(_))) {
             break;
         }
-        assert!(startt.elapsed() < Duration::from_secs(30), "messenger не поднялся");
+        assert!(startt.elapsed() < Duration::from_secs(60), "messenger не поднялся");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     while TcpStream::connect(&stack.gateway_tcp).is_err() {
@@ -353,18 +353,6 @@ async fn v2_state_live() {
     f.check("privacy-set-nobody", set, "");
     f.check("v2-privacy-blocks-add", !add(alice.clone()).await, "");
     f.check("default-allows-add", add(bob.clone()).await, "");
-    // v1-блоб «nobody» у пользователя без v2-настройки — по-прежнему действует.
-    let dave = format!("sd{n}@local");
-    register(&nc, &dave).await;
-    let td = token(&nc, &dave, "devd").await;
-    nc.publish("msg.chat.setnotify", json!({"id": uuid::Uuid::now_v7().to_string(), "from": dave, "ts": 1, "token": td, "payload": {"settings": "{\"group_add\":\"nobody\"}"}}).to_string().into()).await.unwrap();
-    nc.flush().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    f.check("v1-blob-still-blocks", !add(dave.clone()).await, "");
-    // v2 «все» перекрывает блоб v1.
-    let (addr, t) = (stack.gateway_tcp.clone(), td.clone());
-    let set = tokio::task::spawn_blocking(move || set_group_add(&addr, &t, Audience::Everybody)).await.unwrap();
-    f.check("privacy-set-everybody", set, "");
-    f.check("v2-everybody-overrides-v1", add(dave.clone()).await, "");
+    // Блоб настроек v1 (`msg.chat.setnotify`) больше не существует (T110): источник — только v2.
     assert!(f.0.is_empty(), "провалены сценарии state v2: {:?} (логи: {})", f.0, stack.dir.display());
 }

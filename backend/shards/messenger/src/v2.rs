@@ -3,13 +3,12 @@
 //!
 //! - Журнал инбокса устройства (`inbox_log`, курсор `seq`), синхронизация с
 //!   байтовым бюджетом ≤ 716800 и подтверждение без отправителя (T044).
-//! - История v1 отдаётся v2-устройству записями `LegacyV1` (догон при первом
-//!   синке, T045); живые v1-кадры инбокса пользователя мостятся в журналы его
-//!   v2-устройств (T046).
+//! - Мост v1 → v2 (`LegacyV1`: догон истории v1 и живые v1-кадры, T045/T046) и
+//!   `msg.deliver_legacy` удалены вместе с v1 (T110, 7 окт 2026); вид записи
+//!   `LegacyV1` остаётся в схеме, сервер его больше не пишет.
 //! - Sealed-доставка без отправителя: право — ключ доступа (сверка хэша в
 //!   identity) или слепой жетон (одноразовость — здесь), один получатель на
 //!   запрос (D-05), только v2-устройства получателя (T072).
-//! - Легаси-копии v1 от v2-отправителя (`msg.deliver_legacy`) — как v1-send.
 //! - Журнал личного состояния (`state.append/sync`, шифртекст) — `v2_state`.
 
 use crate::*;
@@ -49,7 +48,6 @@ fn inbox_quota() -> (i64, i64) {
 
 pub(crate) struct V2 {
     pub nc: Client,
-    pub pool: SqlitePool,
     pub v2: SqlitePool,
     devices: Mutex<HashMap<String, (Instant, DevicesOfResponse)>>,
     pub groups: crate::v2_groups::GroupCache,
@@ -75,8 +73,8 @@ pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-pub(crate) async fn run(nc: Client, pool: SqlitePool, v2: SqlitePool) -> Result<()> {
-    let ctx = Arc::new(V2 { nc: nc.clone(), pool, v2, devices: Mutex::new(HashMap::new()), groups: Default::default() });
+pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
+    let ctx = Arc::new(V2 { nc: nc.clone(), v2, devices: Mutex::new(HashMap::new()), groups: Default::default() });
     let _ = CTX.set(ctx.clone());
     let c2 = ctx.clone();
     let handler: parvane_v2rt::Handler = Arc::new(move |m: &'static MethodInfo, req: ShardRequest| -> BoxFut {
@@ -107,7 +105,6 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
         "msg.inbox.sync" => {
             let (user, device) = me(&req)?;
             let r: mpb::InboxSyncRequest = body(&req)?;
-            ctx.backfill(&user, &device).await?;
             ctx.sync(&user, &device, r.after_seq, r.max_bytes).await
         }
         "msg.inbox.ack" => {
@@ -150,11 +147,8 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             let r: mpb::DeliverSealedRequest = body(&req)?;
             ctx.deliver_sealed(r).await
         }
-        "msg.deliver_legacy" => {
-            let (user, _) = me(&req)?;
-            let r: mpb::DeliverLegacyRequest = body(&req)?;
-            ctx.deliver_legacy(&user, &req.token, r).await
-        }
+        // T110: легаси-копий v1 больше нет (v1-устройств у аккаунтов не бывает).
+        "msg.deliver_legacy" => Err(ErrorCode::Unavailable),
         "msg.deliver_group" => {
             let r: mpb::DeliverGroupRequest = body(&req)?;
             crate::v2_groups::deliver_group(ctx, r).await
@@ -243,77 +237,6 @@ impl V2 {
         let dev = device_key(user, device)?;
         let (records, more) = sync_page(&self.v2, &dev, after, max_bytes).await?;
         Ok(mpb::InboxSyncResponse { records, more }.encode_to_vec())
-    }
-
-    /// T045: при первом синке устройства — v1-история записями LegacyV1.
-    async fn backfill(&self, user: &str, device: &str) -> Result<(), ErrorCode> {
-        let dev = device_key(user, device)?;
-        let done: Option<(i64,)> = sqlx::query_as("SELECT backfilled FROM inbox_device WHERE device = ?").bind(&dev).fetch_optional(&self.v2).await.map_err(db_err)?;
-        if done.is_some_and(|(b,)| b != 0) {
-            return Ok(());
-        }
-        // Ключ подписи устройства (как в v1-синке) — свои sealed-исходящие.
-        let devs = self.devices_of(user).await?;
-        let signing = devs
-            .v2_device_ids
-            .iter()
-            .position(|d| d == device)
-            .and_then(|i| devs.v2_ed25519.get(i))
-            .map(|k| base64::engine::general_purpose::STANDARD_NO_PAD.encode(k))
-            .unwrap_or_default();
-        let msgs = fetch_missed_with_keys(&self.pool, user, "00000000-0000-0000-0000-000000000000", 0, &signing, device, &[])
-            .await
-            .map_err(db_err)?;
-        let n = msgs.len();
-        for m in msgs {
-            let frame = ParvaneEvent { id: Uuid::now_v7(), from: "messenger".to_string(), ts: now_unix(), token: String::new(), payload: parvane_types::InboxPush { message: m } };
-            let json = serde_json::to_vec(&frame).map_err(db_err)?;
-            self.append(user, device, inbox_record::Item::LegacyV1(mpb::LegacyV1Record { json })).await?;
-        }
-        sqlx::query("INSERT INTO inbox_device (device, backfilled) VALUES (?, 1) ON CONFLICT(device) DO UPDATE SET backfilled = 1")
-            .bind(&dev)
-            .execute(&self.v2)
-            .await
-            .map_err(db_err)?;
-        if n > 0 {
-            info!("v2: история v1 передана устройству ({} сообщений)", n);
-        }
-        Ok(())
-    }
-
-    /// T046: живой v1-кадр инбокса пользователя → журналы его v2-устройств.
-    /// Потолок `LegacyV1Record.json` — `(max_len) = 1048576` в `msg.proto`.
-    pub(crate) async fn bridge_v1_frame(&self, user: &str, bytes: &[u8]) {
-        // Сообщения, созданные легаси-копией v2-отправителя, не мостим.
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
-            if let Some(id) = v["payload"]["message"]["id"].as_str() {
-                let origin: Option<(String,)> = sqlx::query_as("SELECT message_id FROM legacy_origin WHERE message_id = ?").bind(id).fetch_optional(&self.v2).await.unwrap_or(None);
-                if origin.is_some() {
-                    return;
-                }
-            }
-        }
-        // MSG-01: запись LegacyV1 ограничена схемой (json ≤ 1 МиБ); кадр больше
-        // клиент не разберёт, страница синка не применится и курсор встанет
-        // навсегда. Сначала снимаем device-копии (ими и раздувают кадр), если и
-        // без них велико — не мостим вовсе.
-        let mut bytes = bytes.to_vec();
-        if bytes.len() > LEGACY_V1_MAX_BYTES {
-            if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                if let Some(m) = v.pointer_mut("/payload/message").and_then(|m| m.as_object_mut()) {
-                    m.remove("copies");
-                }
-                bytes = serde_json::to_vec(&v).unwrap_or_default();
-            }
-            if bytes.len() > LEGACY_V1_MAX_BYTES {
-                warn!("v2: v1-кадр инбокса {} больше лимита записи LegacyV1 — не мостим", user);
-                return;
-            }
-        }
-        let Ok(devs) = self.devices_of(user).await else { return };
-        for d in &devs.v2_device_ids {
-            let _ = self.append(user, d, inbox_record::Item::LegacyV1(mpb::LegacyV1Record { json: bytes.clone() })).await;
-        }
     }
 
     /// Проверить право доставки. Для жетона возвращает `(spent_id, key_id)` —
@@ -443,40 +366,6 @@ impl V2 {
         Ok(mpb::DeliverSealedResponse { accepted }.encode_to_vec())
     }
 
-    /// Легаси-копия v1 от v2-отправителя: как v1-send (те же правила).
-    async fn deliver_legacy(&self, user: &str, token: &str, r: mpb::DeliverLegacyRequest) -> Reply {
-        let id = Uuid::parse_str(&r.message_id).map_err(|_| ErrorCode::Invalid)?;
-        let payload: SendPayload = serde_json::from_slice(&r.send_payload_json).map_err(|_| ErrorCode::Invalid)?;
-        // Как gateway v1 (P-22): только E2E-виды.
-        let sealed = match &payload.content {
-            MessageContent::Encrypted { .. } => payload.to.contains('@'),
-            MessageContent::GroupEncrypted { .. } => false,
-            _ => return Err(ErrorCode::Invalid),
-        };
-        // MSG-15: отметка «легаси-копия v2-отправителя» ставится только для НОВОГО
-        // id — иначе участник чата метил чужое существующее сообщение, и правки,
-        // удаления и реакции по нему переставали доходить до v2-устройств.
-        let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM messages WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db_err)?;
-        if exists.is_some() {
-            return Err(ErrorCode::Duplicate);
-        }
-        sqlx::query("INSERT OR IGNORE INTO legacy_origin (message_id, created_at) VALUES (?, ?)")
-            .bind(id.to_string())
-            .bind(now_unix())
-            .execute(&self.v2)
-            .await
-            .map_err(db_err)?;
-        let ev = ParvaneEvent { id, from: if sealed { String::new() } else { user.to_string() }, ts: now_unix(), token: token.to_string(), payload };
-        let bytes = serde_json::to_vec(&ev).map_err(db_err)?;
-        let msg = async_nats::Message { subject: MSG_SEND.into(), reply: None, length: bytes.len(), payload: bytes.into(), headers: None, status: None, description: None };
-        handle_send(&self.nc, &self.pool, msg).await;
-        Ok(mpb::DeliverLegacyResponse {}.encode_to_vec())
-    }
-
     async fn gc(&self) -> Result<()> {
         let now = now_unix();
         sqlx::query("DELETE FROM inbox_log WHERE received_at < ?").bind(now - INBOX_TTL_SECS).execute(&self.v2).await?;
@@ -568,13 +457,6 @@ pub(crate) async fn append_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user
         inbox_record::Item::Sealed(_) | inbox_record::Item::Group(_) => parvane_protocol::l2::round_received_ms(now_unix() * 1000),
         _ => now_unix() * 1000,
     };
-    // MSG-01: запись, которую клиент не сможет разобрать по лимитам схемы, в
-    // журнал не попадает (иначе страница синка не применяется никогда).
-    if let inbox_record::Item::LegacyV1(l) = item {
-        if l.json.len() > LEGACY_V1_MAX_BYTES {
-            return Err(ErrorCode::Invalid);
-        }
-    }
     let bytes = InboxRecord { seq: 0, received_ms: 0, item: Some(item.clone()) }.encode_to_vec();
     // C1-07 (D-17): квота на записи, которые задают отправители.
     if matches!(item, inbox_record::Item::Sealed(_) | inbox_record::Item::Group(_)) {
@@ -641,16 +523,6 @@ pub(crate) async fn gc_spent(pool: &SqlitePool, now: i64) -> Result<()> {
     Ok(())
 }
 
-
-/// Хук v1-доставки: кадр инбокса пользователя (T046).
-pub(crate) fn bridge(addr: &str, bytes: &[u8]) {
-    let Some(ctx) = ctx() else { return };
-    if !parvane_types::address::is_valid_address(addr) {
-        return;
-    }
-    let (addr, bytes) = (addr.to_string(), bytes.to_vec());
-    tokio::spawn(async move { ctx.bridge_v1_frame(&addr, &bytes).await });
-}
 
 /// Домен этого сервера (`PARVANE_DOMAIN`, как в identity; по умолчанию `local`).
 pub(crate) fn server_domain() -> String {
@@ -773,7 +645,3 @@ mod spent_tests {
         assert_eq!(n, 4);
     }
 }
-
-/// MSG-01: потолок `LegacyV1Record.json` из схемы (`proto/parvane/msg/v2/msg.proto`,
-/// `max_len = 1048576`): запись больше клиент не разберёт.
-pub(crate) const LEGACY_V1_MAX_BYTES: usize = 1_048_576;

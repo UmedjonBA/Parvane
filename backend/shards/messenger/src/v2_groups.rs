@@ -153,8 +153,11 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
 }
 
 /// MSG-14/ENG-09: допустимое расхождение метки времени записи журнала группы с
-/// часами сервера (10 минут).
-const ENTRY_TS_WINDOW_MS: i64 = 10 * 60 * 1000;
+/// часами сервера (`PARVANE_GROUP_ENTRY_TS_WINDOW_MS`, по умолчанию 10 минут;
+/// `0` — не проверять: живые тесты строят записи с синтетическим временем).
+fn entry_ts_window_ms() -> i64 {
+    std::env::var("PARVANE_GROUP_ENTRY_TS_WINDOW_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(10 * 60 * 1000)
+}
 
 /// Метка времени подписанной операции записи (из заголовка OpBody); None — не
 /// разобрать (тогда отказ даст сам `group::apply`).
@@ -175,10 +178,13 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     // MSG-14/ENG-09: метка времени записи — по часам клиента; сроки ссылок,
     // мьютов и интервал эпох считаются по ней. Запись с меткой далеко от часов
     // сервера не принимается (окно ±ENTRY_TS_WINDOW_MS).
-    if let Some(ts) = entry_ts_ms(&entry) {
-        let now_ms = now_unix() * 1000;
-        if (ts - now_ms).abs() > ENTRY_TS_WINDOW_MS {
-            return Err(ErrorCode::Invalid);
+    let window = entry_ts_window_ms();
+    if window > 0 {
+        if let Some(ts) = entry_ts_ms(&entry) {
+            let now_ms = now_unix() * 1000;
+            if ts.saturating_sub(now_ms).abs() > window {
+                return Err(ErrorCode::Invalid);
+            }
         }
     }
     let (next, signer) = apply_one(ctx, prev.as_ref(), &entry, None).await?;
@@ -209,7 +215,8 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
             if asked.is_some() {
                 continue;
             }
-            if !crate::groups::allows_group_add(&ctx.pool, m).await.map_err(|_| ErrorCode::Unavailable)? {
+            // Настройка приватности v2 (`identity.privacy.get`); нет записи — разрешено
+            if !crate::v2_state::privacy_group_add(m).await.map_err(|_| ErrorCode::Unavailable)?.unwrap_or(true) {
                 return Err(ErrorCode::Forbidden);
             }
         }

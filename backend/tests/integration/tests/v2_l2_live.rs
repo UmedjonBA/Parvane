@@ -106,7 +106,7 @@ async fn start() -> Option<Stack> {
         &s.dir.join("identity.log"),
     );
     s.children.push(c);
-    let m = spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db)], &s.dir.join("messenger.log"));
+    let m = spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &s.dir.join("messenger.log"));
     s.children.push(m);
     let g = spawn(
         "gateway",

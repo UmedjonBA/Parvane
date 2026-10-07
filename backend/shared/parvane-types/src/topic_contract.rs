@@ -35,43 +35,11 @@ pub const IDENTITY_NATS_SUBSCRIBE: &[&str] = &[
 ];
 pub const IDENTITY_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
-pub const MESSENGER_NATS_SUBSCRIBE: &[&str] = &[
-    MSG_SEND,
-    MSG_ACK,
-    MSG_READ,
-    MSG_READERS,
-    MSG_EDIT,
-    MSG_DELETE,
-    MSG_REACT,
-    MSG_PIN,
-    MSG_CLEAR,
-    MSG_SETNOTIFY,
-    MSG_SYNC_REQUEST,
-    GROUP_CREATE,
-    GROUP_ADD_MEMBER,
-    GROUP_REMOVE_MEMBER,
-    GROUP_SET_ROLE,
-    GROUP_BAN,
-    GROUP_UNBAN,
-    GROUP_MUTE,
-    GROUP_INVITE_CREATE,
-    GROUP_JOIN,
-    GROUP_RENAME,
-    GROUP_DELETE,
-    GROUP_LIST,
-    GROUP_INFO,
-    GROUP_SETINFO,
-    GROUP_SETPERMS,
-    GROUP_SETADMIN,
-    GROUP_INVITE_LIST,
-    GROUP_INVITE_REVOKE,
-    GROUP_INVITE_DELETE,
-    GROUP_INVITE_CHECK,
-    GROUP_REQUEST_LIST,
-    GROUP_REQUEST_DECIDE,
-    REQUEST_INBOX,
-];
-pub const MESSENGER_NATS_PUBLISH: &[&str] = &["msg.user.>", IDENTITY_VERIFY, REQUEST_INBOX];
+/// Messenger говорит только методами v2 (ACL — сгенерированные блоки
+/// `# >>> v2 messenger`); v1-subject'ы `msg.chat.*`, `msg.sync.request`,
+/// `group.*` удалены (T110, 7 окт 2026).
+pub const MESSENGER_NATS_SUBSCRIBE: &[&str] = &[REQUEST_INBOX];
+pub const MESSENGER_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
 pub const CLOUD_NATS_SUBSCRIBE: &[&str] = &[
     FILE_UPLOAD_CHUNK,
