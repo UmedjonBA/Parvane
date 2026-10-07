@@ -49,8 +49,6 @@ type Deps = {
   onLegacyFrame?: (frame: string) => void;
   /** Ключ восстановления нового корня — показать пользователю один раз. */
   onRecoveryKey: (recoveryKey: string) => void;
-  /** Включён ли v2-стек (флаг): липкость D-13 действует только при нём. */
-  isEnabled: () => boolean;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
   onUpgradeRequired: () => void;
   /** JWT не принят на соединении v2 — нужен повторный вход. */
@@ -332,7 +330,6 @@ export function createV2Controller(deps: Deps) {
   // Режим «усиленная приватность» (L2-1): решение для typing/presence
   const l2Gate = createL2Gate({
     getSelf: deps.getSelf,
-    isEnabled: deps.isEnabled,
     readEngine: readL2,
     readEnginePresence: () => (ready && client ? client.presenceAllowed() : undefined),
   });
@@ -1397,10 +1394,9 @@ export function createV2Controller(deps: Deps) {
   /** Собеседник на v2? (есть журнал устройств; кэш 10 мин). */
   async function isV2Peer(address: string): Promise<boolean> {
     if (address === deps.getSelf() || isV2GroupAddress(address)) return false;
-    // D-13 (C2-02): собеседник, однажды замеченный на v2, по v1 больше не
-    // получает — иначе сервер, оборвав v2-соединение, увидел бы отправителя.
+    // D-13 (C2-02): собеседник, однажды замеченный на v2, считается v2 и дальше:
     // v2 недоступен → ошибка отправки, а не тихий откат
-    const isSticky = deps.isEnabled() && loadStickyPeers().has(address);
+    const isSticky = loadStickyPeers().has(address);
     // Стек ещё поднимается (сразу после входа) либо переподключается после
     // обрыва — дождаться, а не отказать: мутация, ушедшая по v1, пропала бы
     // (сервер v1 сообщений v2 не знает)
@@ -1732,7 +1728,6 @@ export function createV2Controller(deps: Deps) {
   // v1. Устройство аккаунта v2, ещё не привязанное к журналу устройств (T156),
   // не отправляет вовсе — по v1 собеседники такое сообщение отвергают (D-13)
   async function ensureSendable() {
-    if (!deps.isEnabled()) return;
     if (!ready && starting) await starting.catch(() => undefined);
     if (needsLinking && !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
   }

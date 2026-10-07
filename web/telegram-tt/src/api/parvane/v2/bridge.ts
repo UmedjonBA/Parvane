@@ -1,33 +1,18 @@
 // Протокол v2 (spec 007, T134/T162): мост «запросы клиента → методы v2».
-// Код клиента исторически говорит с сервером запросами v1 (subject + JSON
-// через `GatewayConnection.request`). Мост уводит всё, что НЕ переписка, в
+// Код клиента исторически говорит с сервером запросами прежней формы (subject +
+// JSON через `GatewayConnection.request`). Мост переводит всё, что НЕ переписка
+// (вход, регистрация и подтверждения, профили, поиск, 2FA, смена пароля,
+// устройства, линковка, превью, тайлы карты, ICE, ключ push, удаление файла), в
 // методы v2 (`control.ts`) и возвращает ответ прежнего вида — вызывающий код не
-// меняется, а по проводу v1 для этих запросов не используется. С мостом клиент
-// работает при `PARVANE_V1_MODE=disabled`. Зеркало `parvane-core` `v2_bridge`.
-//
-// Три класса subject'ов:
-//   - «по v2»: вход, регистрация и подтверждения, профили, поиск, 2FA, смена
-//     пароля, линковка, превью, тайлы карты, ICE, ключ push, удаление файла;
-//   - «v1, если жив» (`bridgePrefersV1`): то, что обслуживает v1-шифрование и
-//     каталог v1-устройств — по v1, а без него: список и отзыв устройств —
-//     методами v2, `setkey` и регистрация push v1 — пустой успех;
-//   - остальное (переписка, группы и сигналы звонка v1, присутствие v1) — мост
-//     не обслуживает (`undefined`): только живое соединение v1.
+// меняется. Переписку, группы, звонки и присутствие ведёт движок v2
+// (`controller.ts`); subject без метода v2 мост не обслуживает (`undefined`).
+// Зеркало `parvane-core` `v2_bridge`.
 // Текста ошибок в протоколе v2 нет (только код): мост подставляет в `error`
 // ответа прежние формулировки сервера по методу и коду — на них завязаны
 // экраны входа и настройки.
 
 import { preauth, V2Control, type V2Json } from './control';
 import { V2Error } from './transport';
-
-const PREFERS_V1 = new Set([
-  'identity.prekeys.publish', 'identity.prekeys.fetch', 'identity.user.setkey',
-  'identity.device.list', 'identity.device.revoke', 'push.device.register', 'push.device.unregister',
-]);
-
-export function bridgePrefersV1(subject: string) {
-  return PREFERS_V1.has(subject);
-}
 
 function str(o: V2Json | undefined, ...keys: string[]): string {
   for (const key of keys) {
@@ -190,10 +175,10 @@ export class V2Bridge {
   }
 
   /**
-   * Запрос v1 методами v2. `undefined` — мост этот subject не обслуживает.
+   * Запрос прежней формы методами v2. `undefined` — мост этот subject не обслуживает.
    * Отказ метода — ответ прежнего вида (`ok: false, error`); потеря связи — исключение.
    */
-  async request(subject: string, payload: string, hasV1 = false): Promise<string | undefined> {
+  async request(subject: string, payload: string): Promise<string | undefined> {
     let raw: unknown;
     try {
       raw = JSON.parse(payload);
@@ -203,12 +188,12 @@ export class V2Bridge {
     const p = bodyOf(raw);
     if (typeof p.token === 'string' && p.token && !this.token) this.token = p.token;
     try {
-      const out = await this.viaV2(subject, p, hasV1);
+      const out = await this.viaV2(subject, p);
       return out === undefined ? undefined : JSON.stringify(out);
     } catch (err) {
-      // Потеря связи и «версия v2 клиента ниже минимальной» — исключение: при
-      // живом v1 запрос уйдёт прежним путём (диалог обновления покажет
-      // контроллер v2); отказ самого метода — ответ прежнего вида
+      // Потеря связи и «версия v2 клиента ниже минимальной» — исключение
+      // (диалог обновления покажет контроллер v2); отказ самого метода — ответ
+      // прежнего вида
       if (!(err instanceof V2Error) || err.code === 'ERROR_CODE_UNAVAILABLE'
         || err.code === 'ERROR_CODE_UPGRADE_REQUIRED') {
         throw err;
@@ -217,7 +202,7 @@ export class V2Bridge {
     }
   }
 
-  private async viaV2(subject: string, p: V2Json, hasV1: boolean): Promise<V2Json | undefined> {
+  private async viaV2(subject: string, p: V2Json): Promise<V2Json | undefined> {
     const c = this.control;
     switch (subject) {
       case 'identity.server.info': {
@@ -289,10 +274,8 @@ export class V2Bridge {
           return twofaToV1(await c.call('identity.account.get_2fa', {}));
         }
         // Свежий пароль нужен методу v2 всегда — экран настроек спрашивает его и
-        // при включении, и при выключении 2FA. Запрос без пароля (прежний вызов) —
-        // по v1, пока оно живо; без v1 сервер ответит REAUTH_REQUIRED
+        // при включении, и при выключении 2FA; без пароля сервер ответит REAUTH_REQUIRED
         const password = str(p, 'password');
-        if (!password && hasV1) return undefined;
         await this.reauth(password);
         return twofaToV1(await c.call('identity.account.set_2fa', { enabled: p.enabled, password }));
       }
@@ -324,8 +307,6 @@ export class V2Bridge {
       case 'identity.user.setavatar':
         await c.call('identity.profile.set_avatar', { avatar_file_id: str(p, 'file_id') });
         return { ok: true };
-      case 'identity.user.setkey':
-        return { ok: true }; // ключ подписи v1-звонков: в v2 сигнал подписывает устройство
       case 'identity.device.list': {
         const r = await c.call('identity.device.list', {});
         const devices = list(r, 'devices').filter((d) => !flag(d, 'revoked')).map((d) => ({
@@ -346,9 +327,9 @@ export class V2Bridge {
         try {
           await c.call('identity.device.revoke', { device_id: str(p, 'device_id') });
         } catch (err) {
-          // Метод сервера снимает только v1-устройства; устройство журнала v2
-          // (INVALID) отзывается подписанной записью журнала — её пишет
-          // контроллер движка следом за этим запросом. Пароль уже проверен
+          // Устройство журнала v2 (INVALID) отзывается подписанной записью
+          // журнала — её пишет контроллер движка следом за этим запросом.
+          // Пароль уже проверен
           if (!(err instanceof V2Error) || err.code !== 'ERROR_CODE_INVALID') throw err;
         }
         return { ok: true };
@@ -421,10 +402,6 @@ export class V2Bridge {
         const key = str(r, 'vapidPublicKey', 'vapid_public_key');
         return key ? { ok: true, public_key: toBase64Url(key) } : { ok: false };
       }
-      // Регистрацию устройства в v2 ведёт контроллер (`push.wake.register`)
-      case 'push.device.register':
-      case 'push.device.unregister':
-        return { ok: true };
       case 'file.delete':
         await c.call('cloud.blob.delete', { file_id: str(p, 'file_id') });
         return { ok: true };

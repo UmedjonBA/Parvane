@@ -6,7 +6,6 @@ import type { ParvaneStore } from './store';
 import type { WireGroupInfo } from './wire';
 
 import { createGroupController } from './groups';
-import { TOPIC_GROUP_INFO } from './wire';
 
 const CHAT = { id: '-7' } as ApiChat;
 const INFO: WireGroupInfo = {
@@ -32,20 +31,13 @@ function setup() {
     buildApiUser: (address: string) => ({ id: `id:${address}` }),
     getDisplayName: (address: string) => (address === 'carol@local' ? 'Carol Smith' : address),
   } as unknown as ParvaneStore;
-  const connection = {
-    request: (subject: string) => Promise.resolve(
-      JSON.stringify(subject === TOPIC_GROUP_INFO ? { groups: [INFO] } : {}),
-    ),
-  } as unknown as GatewayConnection;
+  const connection = {} as unknown as GatewayConnection;
   const updates: unknown[] = [];
   const controller = createGroupController({
     getConnection: () => connection,
-    getE2e: () => undefined,
     getStore: () => store,
-    getToken: () => 'jwt',
     selfId: () => 'id:alice@local',
     sendUpdate: (update) => updates.push(update),
-    onGroupRegistered: () => undefined,
     log: () => undefined,
   });
   return { controller, updates };

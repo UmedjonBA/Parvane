@@ -10,6 +10,16 @@
 Правило считается закрытым, только когда на него есть тест В КАЖДОМ клиенте.
 `sync-rules.json` — машиночитаемая версия для тестов.
 
+**T110 (7 окт 2026): сервер и web без протокола v1.** Пункты правил о v1-пути —
+курсор синка v1 (SYNC-1/2), повтор `msg.chat.read` (READ-1), подпись
+v1-отправки и ack (SEND-1), v1-топики typing/presence (EPHEMERAL-1), нотис v1
+группы (GROUP-1), легаси-копии (LEGACY-1), понижение до v1 (TYPING-1), перевод
+групп v1 (GROUP-4), v1-блоб настроек (STATE-2), виртуальное соединение (E6-1) —
+для web закрыты удалением кода: сторож `conformance.test.ts` проверяет, что
+v1-код в web не вернулся. Для desktop и android эти пункты действуют до их T110
+(десктоп и Android остаются совместимы по v2). Поле `clients.web` в
+`sync-rules.json` у таких правил описывает состояние после T110.
+
 ## SYNC-1. Дисковый курсор двигается только по применённому
 
 Курсор, переживающий рестарт, продвигается ТОЛЬКО за сообщения, которые
@@ -753,7 +763,7 @@ desktop не соединялся (ICE оставался в `new`), а авто
 (`syncLegacySet`); tdesktop и Android JNI зовут ядро. Тесты: движок
 `client_flow.rs legacy_device_set_is_signed_and_only_shrinks`, ядро
 `v2_tests.cpp`, `e2e_tests.cpp`, сторож `conformance.test.ts`, сценарий
-`scripts/run_protocol_mixed_e2e.sh mixed-devices`.
+`scripts/run_protocol_mixed_e2e.sh mixed-devices` (пара удалена с T110: web легаси-копий не шлёт).
 
 ## TYPING-1. «Печатает» в чате v2 — только эфемерным каналом v2
 
@@ -1089,7 +1099,7 @@ desktop применял к группе v2 нотис и список v1-шар
 - текста ошибок в протоколе v2 нет: формулировки для экранов входа клиент
   подставляет сам по запросу и коду.
 
-Сценарии: web — пара `v1-off` (`scripts/run_protocol_mixed_e2e.sh`), desktop —
+Сценарии: web — вся матрица (с T110 web без v1 целиком; пара `v1-off` удалена), desktop —
 `desktop/verify_protocol_v2_v1off.sh`, android — блок disabled в
 `android/tgx_protocol_v2_flow.sh desktop2-android2` (мост в `android/jni`
 подключён 4 окт 2026: X отмечает отключение v1, диалога нет, сессия остаётся).
@@ -1120,7 +1130,7 @@ desktop применял к группе v2 нотис и список v1-шар
 Тесты: движок — `create_records_migrated_from` (`backend/protocol/src/group.rs`); desktop —
 `desktop/verify_protocol_v2_group_migrate.sh` (три клиента: перенос, описание, переписка по v2,
 таблица сообщений v1 не растёт, работа после `PARVANE_V1_MODE=disabled`); web —
-`scripts/run_protocol_mixed_e2e.sh group-migrate` (один чат в списке, история обеих эпох, после
+`scripts/run_protocol_mixed_e2e.sh group-migrate` (пара удалена с T110 — переводить нечего; один чат в списке, история обеих эпох, после
 перевода `msg.chat.send` по v1 не уходит); сторож — `conformance.test.ts` (GROUP-4).
 Android — не сделано (T184).
 

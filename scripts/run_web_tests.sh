@@ -95,14 +95,12 @@ log "Two-browser polls e2e (public voters, quiz)"
 
 log "Three-browser invite links e2e"
 "$ROOT/scripts/run_web_invites_e2e.sh"
-"$ROOT/scripts/run_web_invites_v2_e2e.sh"
 
 log "E2E keys backup e2e (C1 device migration)"
 "$ROOT/scripts/run_web_keys_backup_e2e.sh"
 
 log "Three-browser multidevice e2e (one account, two devices)"
 "$ROOT/scripts/run_web_multidevice_e2e.sh"
-"$ROOT/scripts/run_web_multidevice_v2_e2e.sh"
 
 log "Notify (mute) and profile fields across devices e2e"
 "$ROOT/scripts/run_web_notify_profile_e2e.sh"
@@ -121,14 +119,12 @@ log "Three-browser group calls e2e"
 
 log "Cross-client Web <-> desktop e2e"
 "$ROOT/scripts/run_web_cross_client_e2e.sh"
-"$ROOT/scripts/run_web_cross_client_v2_e2e.sh"
 
 log "Cross-client multidevice + linking Web <-> desktop e2e"
 "$ROOT/scripts/run_web_cross_multidevice_e2e.sh"
 
 log "Cross-client profile desktop -> web e2e (bio, phone, name color, personal channel)"
 "$ROOT/scripts/run_web_cross_profile_e2e.sh"
-"$ROOT/scripts/run_web_cross_profile_v2_e2e.sh"
 
 log "Two-browser long video streaming and integrity e2e (thumbnail, seek, tampering)"
 "$ROOT/scripts/run_web_video_stream_e2e.sh"
@@ -160,26 +156,17 @@ log "Language switch e2e"
 log "Email registration e2e"
 "$ROOT/scripts/run_web_email_e2e.sh"
 
-log "Email registration e2e, v1 disabled (E6-1)"
-"$ROOT/scripts/run_web_email_v1off_e2e.sh"
-
 log "Telegram bot registration e2e"
 "$ROOT/scripts/run_web_telegram_e2e.sh"
 
 log "Telegram two-factor login e2e"
 "$ROOT/scripts/run_web_telegram_2fa_e2e.sh"
 
-log "Telegram two-factor login e2e, v1 disabled (E6-1)"
-"$ROOT/scripts/run_web_telegram_2fa_v1off_e2e.sh"
-
-log "v1 history after v1 is switched off: LegacyV1 records (T182)"
-"$ROOT/scripts/run_web_legacy_v1off_e2e.sh"
-
 log "Per-callee ring cap: the caller is told why the call did not go out"
 "$ROOT/scripts/run_web_call_limit_e2e.sh"
 
-log "Rejected saved token without v1: sign-in screen, then back to work (E6-1)"
-"$ROOT/scripts/run_web_auth_reject_v1off_e2e.sh"
+log "Rejected saved token: sign-in screen, then back to work (E6-1)"
+"$ROOT/scripts/run_web_auth_reject_e2e.sh"
 
 log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)"
 "$ROOT/scripts/run_web_honest_ui_e2e.sh"

@@ -1,12 +1,9 @@
 // Протокол v2 (spec 007, T040): переписка двух web-клиентов на v2 (WASM-движок,
-// sealed-доставка). Пара задаётся PARVANE_E2E_PAIR (web2-web2 — оба на v2;
-// web2-web1 — второй на v1: v2-клиент обязан говорить с ним по v1).
-// Проверяет: текст в обе стороны, ответ, реакцию, правку, закреп, удаление;
-// что v2-путь действительно использован (журнал провайдера «v2: готов» и
-// отсутствие v1-отправки для v2-собеседника), фото и голосовое в обе стороны.
-// Пара web2-web2 — ещё и режим чата «усиленная приватность» (L2, FR-036,
-// правило L2-1). Пара web2-web1 — группа из v2- и v1-участника (идёт по v1) и
-// переход второго клиента на v2: история до перехода читается (SC-002).
+// sealed-доставка). Пара — PARVANE_E2E_PAIR=web2-web2 (единственная с T110:
+// роли v1 нет). Проверяет: текст в обе стороны, ответ, реакцию, правку, закреп,
+// удаление; что v2-путь использован (журнал провайдера «v2: готов»), фото и
+// голосовое в обе стороны, режим чата «усиленная приватность» (L2, FR-036,
+// правило L2-1), звонок по v2, историю после перезагрузки.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -37,7 +34,6 @@ const PASSWORD = 'Parvane-v2-e2e-password';
 const PAIR = process.env.PARVANE_E2E_PAIR || 'web2-web2';
 const V2_SEED = { 'parvane:proto': 'v2' };
 // v2 включён по умолчанию (T135) — роль v1 задаётся явно
-const V1_SEED = { 'parvane:proto': 'v1' };
 
 // Фото (T040): те же помощники, что в e2e_web_media_ttl.mjs
 function crc32(bytes) {
@@ -346,10 +342,10 @@ try {
   const suffix = `${Date.now()}-${process.pid}`;
   const alice = `v2a-${suffix}@local`;
   const bob = `v2b-${suffix}@local`;
-  const bobIsV2 = PAIR === 'web2-web2';
+  const bobIsV2 = true; // T110: роли v1 нет
 
   aliceSession = await preparePage(aliceContext, alice, PASSWORD, { seedLocalStorage: V2_SEED });
-  bobSession = await preparePage(bobContext, bob, PASSWORD, { seedLocalStorage: bobIsV2 ? V2_SEED : V1_SEED });
+  bobSession = await preparePage(bobContext, bob, PASSWORD, { seedLocalStorage: V2_SEED });
   await waitLog('alice', 'v2: готов');
   if (bobIsV2) await waitLog('bob', 'v2: готов');
   const aliceRecovery = await dismissRecoveryKeyDialog(aliceSession.page);

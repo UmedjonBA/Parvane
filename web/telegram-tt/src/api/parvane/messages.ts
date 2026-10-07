@@ -2,7 +2,7 @@ import type { SendMessageParams } from '../../types';
 import type {
   ApiChat, ApiMessage, ApiMessageEntity, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
 } from '../types';
-import type { E2eEngine, WireDeviceBundle } from './e2e';
+import type { E2eEngine } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { createLocalState } from './localState';
 import type { createMediaService } from './media';
@@ -13,13 +13,7 @@ import type { createSyncController } from './sync';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
-import {
-  deliverToEveryGroupMember,
-  E2E_SEND_ERROR,
-  getActiveGroupMemberAddresses,
-  requireE2e,
-  requireEncrypted,
-} from './e2eSendPolicy';
+import { E2E_SEND_ERROR, E2eSendError, requireE2e } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import {
   buildApiVideoFromSavedRecord,
@@ -37,24 +31,7 @@ import {
   isEmojiPackSetId,
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
-import {
-  buildTypingTopic,
-  buildWireEvent,
-  CLEAR_MAX_IDS,
-  newMessageId,
-  TOPIC_MSG_CLEAR,
-  TOPIC_MSG_DELETE,
-  TOPIC_MSG_EDIT,
-  TOPIC_MSG_PIN,
-  TOPIC_MSG_REACT,
-  TOPIC_MSG_READ,
-  TOPIC_MSG_READERS,
-  TOPIC_MSG_SEND,
-  TOPIC_PREKEYS_FETCH,
-  type WireDeviceCopy,
-  type WireMessageContent,
-  type WirePackRef,
-} from './wire';
+import { newMessageId, type WireMessageContent, type WirePackRef } from './wire';
 
 type MessageDependencies = {
   getConnection: () => GatewayConnection | undefined;
@@ -75,7 +52,8 @@ type MessageDependencies = {
   // дозагрузка документов эмодзи по docId (заполняет реестр docId → набор)
   resolveCustomPack?: (setId: string) => Promise<{ pack: StoredPack } | undefined>;
   primeCustomEmoji?: (docIds: string[]) => Promise<unknown>;
-  // Протокол v2 (spec 007): стек для собеседников с журналом устройств v2
+  // Протокол v2 (spec 007): переписка идёт только им (T110). Опционален ради
+  // юнит-тестов отдельных функций контроллера
   v2?: ReturnType<typeof createV2Controller>;
   // «Удалить чат у себя» — в журнал личного состояния v2 (T145): остальные свои
   // устройства скрывают сообщения чата не позже границы (мс)
@@ -125,10 +103,20 @@ const LIVE_LOCATION_UPDATE_MS = 15000;
 const EMOJI_PACKS_PER_MESSAGE = 4;
 const LIVE_LOCATION_POSITION_TIMEOUT_MS = 10000;
 
+// Собеседник без журнала устройств v2 (протокол v1 отключён, T110) — доставить нечем
+const V2_PEER_REQUIRED = 'The recipient has no devices on protocol v2.';
+
 export function createMessageController(deps: MessageDependencies) {
-  // Чат, мутации которого может взять v2: личный или группа v2 (v1-группы — v1)
+  // Чат, мутации которого может взять v2: личный или группа v2 (группы v1 —
+  // только история, писать в них нечем)
   function isV2Routable(address: string) {
     return !deps.getStore().isGroupAddress(address) || Boolean(deps.v2?.isV2GroupAddress(address));
+  }
+
+  // Стек v2 обязан принять операцию чата; иначе — отказ (без v1 понижать некуда)
+  function requireV2() {
+    if (!deps.v2) throw new E2eSendError('Protocol v2 stack is unavailable.');
+    return deps.v2;
   }
 
   const uuidBySentLocalKey = new Map<string, string>();
@@ -138,25 +126,6 @@ export function createMessageController(deps: MessageDependencies) {
   const uploadedPackRefs = new Map<string, CachedPackRef[]>();
 
   const connection = () => deps.getConnection();
-
-  // Публикация на шину без исключений: GatewayConnection.publish бросает,
-  // если сокет не открыт (реконнект) — раньше это роняло отправку после
-  // «точки невозврата» (бабл вечно «отправляется»), тайпинг на каждый символ
-  // и цикл read-receipts посередине
-  function publishFrame(subject: string, payload: string): boolean {
-    const activeConnection = connection();
-    if (!activeConnection?.isOpen) return false;
-    try {
-      activeConnection.publish(subject, payload);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function publishOrThrow(subject: string, payload: string) {
-    if (!publishFrame(subject, payload)) throw new Error('Gateway: соединение не открыто');
-  }
 
   // Смена аккаунта / logout: ничего из сессии прежнего пользователя не должно
   // пережить (persist считается от текущего self)
@@ -169,315 +138,23 @@ export function createMessageController(deps: MessageDependencies) {
     liveLocations.clear();
   }
   const store = () => deps.getStore();
-  const token = () => deps.getToken();
 
-  async function fetchPrekeyBundle(user: string) {
-    const engine = deps.getE2e();
-    const raw = await connection()!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
-      token: token(), user, known_devices: engine?.getKnownDeviceIds(user) || [],
-    }));
-    return JSON.parse(raw) as {
-      ok: boolean;
-      identity_key?: string;
-      signed_prekey?: string;
-      one_time?: string;
-      devices?: WireDeviceBundle[];
-    };
-  }
-
-  // Запечатать inner для всех устройств адресата (мультидевайс): основной
-  // шифртекст — копия «primary»-устройства ('' приоритетно, wire-совместимость
-  // с desktop), остальные устройства едут в copies. Плюс best-effort копии для
-  // СВОИХ других устройств (recipient пуст — sealed sender, владельца задаёт
-  // signing_key), чтобы исходящие читались на втором устройстве
-  type SealResult =
-    | { isLocalOnly: true; content?: undefined; copies: WireDeviceCopy[] }
-    | { isLocalOnly: false; content: WireMessageContent; copies: WireDeviceCopy[] };
-
-  // P-10 (SEND-1): подпись отправки — доказательство владения
-  // sender_signing_key: `send:<message_id>:<ciphertext>`. Без неё сервер
-  // отклонит сообщение (чужой публичный ключ давал бы выборку в чужом sync)
-  function signSend(engine: E2eEngine, messageId: string, ciphertext: string) {
-    return engine.signCallData(`send:${messageId}:${ciphertext}`);
-  }
-
-  // Переходный период (FR-054/FR-058): сообщение v2-собеседнику ушло по v2, но
-  // у него (или у нас самих) остались v1-устройства из ПОДПИСАННОГО списка —
-  // им та же запись уходит v1-путём с тем же id. Устройства вне списка не
-  // получают ничего. Основной шифртекст ПУСТ: всё адресное — в copies;
-  // устройство без своей копии (v2 или не из списка) запись молча пропускает
-  async function sealLegacy(toAddress: string, content: WireMessageContent) {
-    const v2 = deps.v2;
-    const engine = deps.getE2e();
-    const self = store().self;
-    if (!v2 || !engine || v2.isV2GroupAddress(toAddress)) return undefined;
-    const peerLegacy = toAddress === self ? new Map<string, string>() : v2.legacyDevices(toAddress);
-    const ownLegacy = v2.legacyDevices(self);
-    if (!peerLegacy.size && !ownLegacy.size) return undefined;
-    const innerJson = JSON.stringify({ from: self, content });
-    const peerSealed = peerLegacy.size
-      ? await engine.encryptForDevices(toAddress, innerJson, fetchPrekeyBundle, undefined, peerLegacy) : undefined;
-    const ownSealed = ownLegacy.size
-      ? await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId, ownLegacy) : undefined;
-    const copies: WireDeviceCopy[] = [
-      ...(peerSealed?.copies || []).map((copy) => ({
-        recipient: toAddress, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
-      })),
-      ...(ownSealed?.copies || []).map((copy) => ({
-        recipient: '',
-        signing_key: copy.deviceSigningKey,
-        device_id: copy.deviceId,
-        ciphertext: copy.ciphertext,
-        ctype: copy.ctype,
-      })),
-    ];
-    if (!copies.length) return undefined;
-    return {
-      engine,
-      copies,
-      content: {
-        kind: 'encrypted',
-        ciphertext: '',
-        ctype: 0,
-        sender_identity: engine.identityKey,
-        sender_signing_key: engine.signingKey,
-      } satisfies WireMessageContent,
-      summary: `собеседника ${peerSealed?.copies.length || 0}, своим ${ownSealed?.copies.length || 0}`,
-    };
-  }
-
-  // Сбой копии не роняет отправку: по v2 сообщение доставлено
-  async function sendLegacyCopies(
-    toAddress: string, content: WireMessageContent, uuid: string, replyTo?: string,
-  ) {
-    try {
-      const sealed = await sealLegacy(toAddress, content);
-      if (!sealed) return;
-      await deps.v2!.deliverLegacy(uuid, JSON.stringify({
-        to: toAddress,
-        content: sealed.content,
-        reply_to: replyTo,
-        copies: sealed.copies,
-        signature: signSend(sealed.engine, uuid, ''),
-      }));
-      deps.log(`v2: легаси-копии v1-устройствам: ${sealed.summary}`);
-    } catch (error) {
-      deps.log(`v2: легаси-копии не отправлены: ${String(error)}`);
-    }
-  }
-
-  // Правка v2-сообщения — и v1-устройствам, получившим его легаси-копией
-  async function editLegacyCopies(toAddress: string, uuid: string, content: WireMessageContent) {
-    try {
-      const sealed = await sealLegacy(toAddress, content);
-      if (!sealed) return;
-      connection()?.publish(TOPIC_MSG_EDIT, JSON.stringify(
-        buildWireEvent(store().self, token(), {
-          message_id: uuid,
-          content: sealed.content,
-          signature: sealed.engine.signCallData(`edit:${uuid}:`),
-          copies: sealed.copies,
-        }),
-      ));
-      deps.log(`v2: правка v1-устройствам: ${sealed.summary}`);
-    } catch (error) {
-      deps.log(`v2: правка v1-устройствам не отправлена: ${String(error)}`);
-    }
-  }
-
-  // Удаление v2-сообщения — и у v1-устройств (надгробие v1 по тому же id)
-  function deleteLegacyCopies(toAddress: string, uuids: string[]) {
-    const v2 = deps.v2;
-    const engine = deps.getE2e();
-    const self = store().self;
-    if (!v2 || !engine || v2.isV2GroupAddress(toAddress)) return;
-    if (!v2.legacyDevices(toAddress).size && !v2.legacyDevices(self).size) return;
-    uuids.forEach((uuid) => {
-      publishFrame(TOPIC_MSG_DELETE, JSON.stringify(
-        buildWireEvent(self, token(), { message_id: uuid, signature: engine.signCallData(`delete:${uuid}`) }),
-      ));
-    });
-    deps.log(`v2: удаление v1-устройствам (${uuids.length})`);
-  }
-
-  async function sealForAddress(toAddress: string, innerJson: string): Promise<SealResult> {
-    const engine = requireE2e(deps.getE2e());
-    const self = store().self;
-
-    if (toAddress === self) {
-      // «Избранное»: Olm-сессии с самим собой нет — сообщение живёт в журнале
-      // исходящих, на сервер уходят только копии для СВОИХ других устройств;
-      // без них публиковать нечего (isLocalOnly)
-      const selfSealed = await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId)
-        .catch(() => undefined);
-      if (!selfSealed?.copies.length) return { isLocalOnly: true, copies: [] };
-      const primary = selfSealed.copies.find((copy) => copy.deviceId === '') || selfSealed.copies[0];
-      return {
-        isLocalOnly: false,
-        content: {
-          kind: 'encrypted',
-          ciphertext: primary.ciphertext,
-          ctype: primary.ctype,
-          sender_identity: selfSealed.senderIdentity,
-          sender_signing_key: engine.signingKey,
-        },
-        copies: selfSealed.copies.map((copy) => ({
-          recipient: '',
-          signing_key: copy.deviceSigningKey,
-          device_id: copy.deviceId,
-          ciphertext: copy.ciphertext,
-          ctype: copy.ctype,
-        })),
-      };
-    }
-
-    const sealed = requireEncrypted(
-      await engine.encryptForDevices(toAddress, innerJson, fetchPrekeyBundle),
-      `No usable prekey/session for ${toAddress}.`,
-    );
-    const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
-    const copies: WireDeviceCopy[] = sealed.copies.map((copy) => ({
-      recipient: toAddress, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
-    }));
-    try {
-      const selfSealed = await engine.encryptForDevices(
-        self, innerJson, fetchPrekeyBundle, engine.deviceId,
-      );
-      selfSealed?.copies.forEach((copy) => {
-        // signing_key ЦЕЛЕВОГО устройства: по нему то устройство заберёт копию
-        // своим подписанным sync (recipient пуст — sealed sender)
-        copies.push({
-          recipient: '',
-          signing_key: copy.deviceSigningKey,
-          device_id: copy.deviceId,
-          ciphertext: copy.ciphertext,
-          ctype: copy.ctype,
-        });
-      });
-    } catch {
-      // Свои устройства догонят историю после экспорта/импорта ключей —
-      // недоставленная self-копия не должна ронять отправку получателю
-    }
-    const content: WireMessageContent = {
-      kind: 'encrypted',
-      ciphertext: primary.ciphertext,
-      ctype: primary.ctype,
-      sender_identity: sealed.senderIdentity,
-      sender_signing_key: engine.signingKey,
-    };
-    return { isLocalOnly: false, content, copies };
-  }
-
-  async function distributeGroupKey(group: string, members: string[]) {
-    const engine = requireE2e(deps.getE2e());
-    const currentStore = store();
-    engine.syncGroupRecipients(group, members, currentStore.self);
-    // Прогрев каталогов устройств ДО выбора ключа: отзыв устройства участника
-    // ротирует группу (rotateGroupsWith), и ключ должен браться уже новый
-    await Promise.all(
-      Array.from(new Set([...members, currentStore.self]))
-        .map((member) => engine.primeContactDevices(member, fetchPrekeyBundle).catch(() => {})),
-    );
-    const { sessionKey, epoch } = engine.getGroupSessionKey(group);
-    const content = {
-      kind: 'skdm', group, session_key: sessionKey, sender_identity: engine.identityKey, epoch,
-    };
-    const innerJson = JSON.stringify({ from: currentStore.self, content });
-
-    await deliverToEveryGroupMember(members, currentStore.self, async (member) => {
-      const sealed = await engine.encryptForDevices(member, innerJson, fetchPrekeyBundle);
-      if (!sealed) return false;
-      const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
-      const id = newMessageId();
-      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id,
-        from: '',
-        ts: Math.floor(Date.now() / 1000),
-        token: token(),
-        payload: {
-          to: member,
-          content: {
-            kind: 'encrypted',
-            ciphertext: primary.ciphertext,
-            ctype: primary.ctype,
-            sender_identity: sealed.senderIdentity,
-            sender_signing_key: engine.signingKey,
-          },
-          copies: sealed.copies.map((copy) => ({
-            recipient: member, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
-          })),
-          signature: signSend(engine, id, primary.ciphertext),
-        },
-      }));
-      return true;
-    });
-    await distributeGroupKeyToOwnDevices(group, innerJson);
-    return epoch;
-  }
-
-  // SKDM своим другим устройствам: без него второе устройство не прочтёт
-  // группу от этого отправителя. Best-effort — их отсутствие не ломает отправку
-  async function distributeGroupKeyToOwnDevices(group: string, innerJson: string) {
-    const engine = requireE2e(deps.getE2e());
-    const self = store().self;
-    try {
-      const sealed = await engine.encryptForDevices(self, innerJson, fetchPrekeyBundle, engine.deviceId);
-      if (!sealed) return;
-      const primary = sealed.copies.find((copy) => copy.deviceId === '') || sealed.copies[0];
-      const id = newMessageId();
-      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id,
-        from: '',
-        ts: Math.floor(Date.now() / 1000),
-        token: token(),
-        payload: {
-          to: self,
-          content: {
-            kind: 'encrypted',
-            ciphertext: primary.ciphertext,
-            ctype: primary.ctype,
-            sender_identity: sealed.senderIdentity,
-            sender_signing_key: engine.signingKey,
-          },
-          copies: sealed.copies.map((copy) => ({
-            recipient: self, device_id: copy.deviceId, ciphertext: copy.ciphertext, ctype: copy.ctype,
-          })),
-          signature: signSend(engine, id, primary.ciphertext),
-        },
-      }));
-    } catch {
-      // Нет других устройств или сеть — группа для них станет читаемой после
-      // следующей успешной раздачи ключа
-    }
+  // Блоб вложения — без per-recipient гранта (CAP-1, FR-062, T131): секрет
+  // скачивания едет внутри E2E-содержимого, получатель качает блоб анонимным
+  // каналом. Чат обязан быть v2 — иначе отправка откажет
+  function mediaUploadOptions(): { encrypt: true; withCapability: true } {
+    return { encrypt: true, withCapability: true };
   }
 
   // Пересылка зашифрованного медиа в другой чат: скачать (или взять из кэша)
-  // Куда и как грузить блоб вложения. Чат v2 (собеседник или группа v2) без
-  // v1-устройств — без per-recipient гранта: секрет скачивания едет внутри
-  // E2E-содержимого, получатель качает блоб анонимным каналом (FR-062, T131).
-  // Есть v1-устройства (LEGACY-1) либо чат v1 — гранты получателям, как раньше
-  async function mediaUploadOptions(toAddress: string): Promise<{
-    encrypt: true; recipients?: string[]; withCapability?: boolean;
-  }> {
-    const v2 = deps.v2;
-    const isV2Chat = Boolean(v2 && isV2Routable(toAddress)
-      && await v2.isV2Chat(toAddress).catch(() => false));
-    if (isV2Chat && !v2!.legacyDevices(toAddress).size && !v2!.legacyDevices(store().self).size) {
-      return { encrypt: true, withCapability: true };
-    }
-    return { encrypt: true, recipients: deps.media.getCloudRecipients(toAddress) };
-  }
-
-  // расшифрованный блоб и выгрузить заново с грантами для получателей
-  // целевого чата. undefined — оставить как есть (блоб недоступен)
+  // расшифрованный блоб и выгрузить заново под новым секретом. undefined —
+  // оставить как есть (блоб недоступен)
   async function reshareMedia(fileId: string, toAddress: string) {
     const cached = await deps.media.getCached(fileId)?.catch(() => undefined)
       || await deps.media.downloadBlob(fileId).catch(() => undefined);
     if (!cached) return undefined;
     const mimeType = cached.mimeType || cached.blob.type || 'application/octet-stream';
-    const upload = await deps.media.uploadBlob(
-      cached.blob, `forward-${fileId}`, mimeType, await mediaUploadOptions(toAddress),
-    );
+    const upload = await deps.media.uploadBlob(cached.blob, `forward-${fileId}`, mimeType, mediaUploadOptions());
     if (!upload.mediaKeys) return undefined;
     deps.media.cacheBlob(upload.fileId, cached.blob, mimeType);
     return {
@@ -508,77 +185,16 @@ export function createMessageController(deps: MessageDependencies) {
     await deps.awaitE2e();
     const currentStore = store();
     const ts = Math.floor(Date.now() / 1000);
-    const engine = requireE2e(deps.getE2e());
-    // Группа v2 — групповым конвертом движка (ниже, как личный v2-чат)
-    const groupInfo = deps.v2?.isV2GroupAddress(toAddress) ? undefined : currentStore.getGroupInfo(toAddress);
-    // TTL-эфемерное не журналируем и не кэшируем — после срока сообщение
-    // не должно восстанавливаться ни из журнала, ни из decCache (как desktop)
+    requireE2e(deps.getE2e());
+    // TTL-эфемерное не журналируем — после срока сообщение не должно
+    // восстанавливаться из журнала (как desktop)
     const isEphemeral = Boolean(wireContent.ttl_secs);
-
-    if (groupInfo) {
-      const groupEpoch = await distributeGroupKey(
-        toAddress,
-        getActiveGroupMemberAddresses(groupInfo.members),
-      );
-      const ciphertext = requireEncrypted(
-        await engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
-        `Group encryption failed for ${toAddress}.`,
-      );
-      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id: uuid,
-        from: currentStore.self,
-        ts,
-        token: token(),
-        payload: {
-          to: toAddress,
-          content: {
-            kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: engine.identityKey,
-            sender_signing_key: engine.signingKey,
-          },
-          signature: signSend(engine, uuid, ciphertext),
-        },
-      }));
-      if (!isEphemeral) {
-        deps.localState.appendOwnJournal({
-          id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
-        });
-        engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
-      }
-      return uuid;
-    }
-
-    if (await deps.v2?.trySend(toAddress, wireContent as unknown as WireMessageContent, uuid)) {
-      await sendLegacyCopies(toAddress, wireContent as unknown as WireMessageContent, uuid);
-      if (!isEphemeral) {
-        deps.localState.appendOwnJournal({
-          id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts, origin: 'v2',
-        });
-      }
-      return uuid;
-    }
-
-    const inner = JSON.stringify({ from: currentStore.self, content: wireContent });
-
-    const sealed = await sealForAddress(toAddress, inner);
-    if (!sealed.isLocalOnly) {
-      publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-        id: uuid,
-        from: '',
-        ts,
-        token: token(),
-        payload: {
-          to: toAddress,
-          content: sealed.content,
-          copies: sealed.copies,
-          signature: signSend(engine, uuid, sealed.content.ciphertext ?? ''),
-        },
-      }));
-    }
+    const isSent = await requireV2().trySend(toAddress, wireContent as unknown as WireMessageContent, uuid);
+    if (!isSent) throw new E2eSendError(V2_PEER_REQUIRED);
     if (!isEphemeral) {
       deps.localState.appendOwnJournal({
-        id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts,
+        id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts, origin: 'v2',
       });
-      engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
     }
     return uuid;
   }
@@ -655,7 +271,7 @@ export function createMessageController(deps: MessageDependencies) {
     );
     if (!blob) return;
     const { fileId, mediaKeys, capability } = await deps.media.uploadBlob(
-      blob, `${gif.id}.webm`, 'video/webm', await mediaUploadOptions(toAddress),
+      blob, `${gif.id}.webm`, 'video/webm', mediaUploadOptions(),
     );
     const mediaCrypto = mediaKeys
       ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
@@ -744,10 +360,9 @@ export function createMessageController(deps: MessageDependencies) {
   async function buildPackRefForSet(setId: string, toAddress: string): Promise<WirePackRef | undefined> {
     const pack = await findPackFiles(setId);
     if (!pack) return undefined;
-    const uploadOptions = await mediaUploadOptions(toAddress);
-    // Ссылка с секретом скачивания годится любому v2-чату; с грантами — только
-    // тем же получателям
-    const recipients = uploadOptions.withCapability ? [PACK_REF_CAPABILITY] : uploadOptions.recipients || [];
+    const uploadOptions = mediaUploadOptions();
+    // Ссылка с секретом скачивания годится любому v2-чату
+    const recipients = [PACK_REF_CAPABILITY];
     const cacheKey = await packRefCacheKey(setId, pack.files);
     const cachedRefs = uploadedPackRefs.get(cacheKey) || [];
     const reusable = cachedRefs.find((entry) => shouldReusePackRef(entry.recipients, recipients));
@@ -795,7 +410,7 @@ export function createMessageController(deps: MessageDependencies) {
       blob,
       `sticker-${sticker.id}.${extension}`,
       mime,
-      await mediaUploadOptions(toAddress),
+      mediaUploadOptions(),
     );
     const mediaCrypto = mediaKeys
       ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
@@ -1001,7 +616,7 @@ export function createMessageController(deps: MessageDependencies) {
           blob,
           attachment.filename,
           attachment.mimeType,
-          await mediaUploadOptions(toAddress),
+          mediaUploadOptions(),
         );
         const mediaCrypto = mediaKeys
           ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
@@ -1140,97 +755,17 @@ export function createMessageController(deps: MessageDependencies) {
       }
     }
 
-    const groupInfo = deps.v2?.isV2GroupAddress(toAddress) ? undefined : currentStore.getGroupInfo(toAddress);
-    if (groupInfo) {
-      try {
-        const groupEpoch = await distributeGroupKey(
-          toAddress,
-          getActiveGroupMemberAddresses(groupInfo.members),
-        );
-        const ciphertext = requireEncrypted(
-          await engine.groupEncrypt(toAddress, JSON.stringify(wireContent), groupEpoch),
-          `Group encryption failed for ${toAddress}.`,
-        );
-        const ts = Math.floor(Date.now() / 1000);
-        publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-          id: uuid,
-          from: currentStore.self,
-          ts,
-          token: token(),
-          payload: {
-            to: toAddress,
-            content: {
-              kind: 'group_encrypted', ciphertext, group: toAddress, sender_identity: engine.identityKey,
-              sender_signing_key: engine.signingKey,
-            },
-            reply_to: replyToUuid,
-            signature: signSend(engine, uuid, ciphertext),
-          },
-        }));
-        if (!ttlSecs) {
-          deps.localState.appendOwnJournal({
-            id: uuid,
-            from: currentStore.self,
-            to: toAddress,
-            content: wireContent as unknown as WireMessageContent,
-            ts,
-            reply_to: replyToUuid,
-          });
-          engine.cacheInner(uuid, { from: currentStore.self, content: wireContent });
-        }
-        const sentMessage: ApiMessage = { ...localMessage, sendingState: undefined };
-        currentStore.putMessage(sentMessage);
-        deps.sendUpdate({
-          '@type': 'updateMessageSendSucceeded', chatId: chat.id, localId: localMessage.id, message: sentMessage,
-        });
-        if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, localMessage.id, ttlSecs);
-        return;
-      } catch (error) {
-        reportEncryptionSendFailure(chat.id, localMessage.id, error);
-        return;
-      }
-    }
-
     const plainContent = wireContent;
-    let sealed: SealResult | undefined;
+    const ts = Math.floor(Date.now() / 1000);
     try {
-      // Протокол v2: собеседник с журналом устройств — sealed v2 (D-13)
-      const isSentViaV2 = await deps.v2?.trySend(
+      // Протокол v2: собеседник или группа с журналом (D-13); иначе отправить нечем
+      const isSentViaV2 = await requireV2().trySend(
         toAddress, wireContent as unknown as WireMessageContent, uuid, replyToUuid,
       );
-      if (!isSentViaV2) {
-        const innerJson = JSON.stringify({ from: currentStore.self, content: wireContent });
-        sealed = await sealForAddress(toAddress, innerJson);
-      } else {
-        await sendLegacyCopies(
-          toAddress, wireContent as unknown as WireMessageContent, uuid, replyToUuid,
-        );
-      }
+      if (!isSentViaV2) throw new E2eSendError(V2_PEER_REQUIRED);
     } catch (error) {
       reportEncryptionSendFailure(chat.id, localMessage.id, error);
       return;
-    }
-
-    const ts = Math.floor(Date.now() / 1000);
-    if (sealed && !sealed.isLocalOnly) {
-      try {
-        publishOrThrow(TOPIC_MSG_SEND, JSON.stringify({
-          id: uuid,
-          from: '',
-          ts,
-          token: token(),
-          payload: {
-            to: toAddress,
-            content: sealed.content,
-            reply_to: replyToUuid,
-            copies: sealed.copies,
-            signature: signSend(engine, uuid, sealed.content.ciphertext ?? ''),
-          },
-        }));
-      } catch (error) {
-        reportEncryptionSendFailure(chat.id, localMessage.id, error);
-        return;
-      }
     }
     if (!ttlSecs) {
       deps.localState.appendOwnJournal({
@@ -1240,6 +775,7 @@ export function createMessageController(deps: MessageDependencies) {
         content: plainContent as unknown as WireMessageContent,
         ts,
         reply_to: replyToUuid,
+        origin: 'v2',
       });
       engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
     }
@@ -1254,83 +790,28 @@ export function createMessageController(deps: MessageDependencies) {
     if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, localMessage.id, ttlSecs);
   }
 
+  // Прочтения — E2E-квитанции, их знает только движок (серверу v2 не видно,
+  // кто что прочитал)
   async function requestReaders(chatId: string, messageId: number) {
     const currentStore = store();
     const uuid = currentStore.getUuidForMessage(chatId, messageId);
-    const conn = connection();
-    if (!uuid || !conn) return undefined;
-    // Чат v2: прочтения — E2E-квитанции, их знает только движок (серверу v2
-    // не видно, кто что прочитал). Сообщения этого чата из времён v1 — у шарда
     const address = currentStore.getAddressForId(chatId);
-    if (address && isV2Routable(address) && await deps.v2?.isV2Chat(address).catch(() => false)) {
-      const v2Readers = deps.v2!.readers(uuid);
-      if (v2Readers?.length) return v2Readers;
-      if (deps.v2!.isV2GroupAddress(address)) return v2Readers;
-    }
-    // Своё sealed-исходящее: сервер не знает автора (from пуст) — участие
-    // доказывает подпись над `readers:<uuid>` (как у delete/react/pin)
-    const signature = deps.getE2e()?.signCallData(`readers:${uuid}`);
-    try {
-      const raw = await conn.request(TOPIC_MSG_READERS, JSON.stringify(
-        buildWireEvent(currentStore.self, token(), { message_id: uuid, signature }),
-      ));
-      const parsed = JSON.parse(raw) as { ok?: boolean; readers?: { address: string; ts: number }[] };
-      return parsed.ok ? (parsed.readers || []) : undefined;
-    } catch {
-      return undefined;
-    }
+    if (!uuid || !address || !deps.v2 || !isV2Routable(address)) return undefined;
+    if (!(await deps.v2.isV2Chat(address).catch(() => false))) return undefined;
+    return deps.v2.readers(uuid);
   }
 
-  // Правка содержимого сообщения на проводе (msg.chat.edit): шифрует новый
-  // inner для группы/лички, подписывает и обновляет decCache. Общий путь для
-  // правки текста/подписи и для обновлений live-локации
+  // Правка содержимого сообщения: мутация v2 и обновление decCache. Общий
+  // путь для правки текста/подписи и для обновлений live-локации
   async function publishEditedContent(uuid: string, toAddress: string, plainContent: WireMessageContent) {
     const currentStore = store();
-    const activeConnection = connection();
-    if (!activeConnection) return;
+    if (!connection()) return;
     await deps.awaitE2e();
     const engine = requireE2e(deps.getE2e());
-    let encryptedContent: WireMessageContent;
-    let editCopies: WireDeviceCopy[] = [];
-    const groupInfo = deps.v2?.isV2GroupAddress(toAddress) ? undefined : currentStore.getGroupInfo(toAddress);
-    if (groupInfo) {
-      const epoch = await distributeGroupKey(
-        toAddress,
-        getActiveGroupMemberAddresses(groupInfo.members),
-      );
-      const ciphertext = requireEncrypted(
-        await engine.groupEncrypt(toAddress, JSON.stringify(plainContent), epoch),
-        `Group encryption failed for ${toAddress}.`,
-      );
-      encryptedContent = {
-        kind: 'group_encrypted',
-        ciphertext,
-        group: toAddress,
-        sender_identity: engine.identityKey,
-        sender_signing_key: engine.signingKey,
-      };
-    } else {
-      if (await deps.v2?.tryEdit(toAddress, uuid, plainContent)) {
-        await editLegacyCopies(toAddress, uuid, plainContent);
-        engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
-        return;
-      }
-      const inner = JSON.stringify({ from: currentStore.self, content: plainContent });
-      const sealed = await sealForAddress(toAddress, inner);
-      if (sealed.isLocalOnly) {
-        // Правка в «Избранном» без других устройств — только локально
-        engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
-        return;
-      }
-      encryptedContent = sealed.content;
-      editCopies = sealed.copies;
-    }
-    const signature = engine.signCallData(`edit:${uuid}:${encryptedContent.ciphertext}`);
-    activeConnection.publish(TOPIC_MSG_EDIT, JSON.stringify(
-      buildWireEvent(currentStore.self, token(), {
-        message_id: uuid, content: encryptedContent, signature, copies: editCopies,
-      }),
-    ));
+    // «Избранное» без других устройств — только локально; собеседник не на v2 —
+    // править нечем
+    const isEdited = await requireV2().tryEdit(toAddress, uuid, plainContent);
+    if (!isEdited && toAddress !== currentStore.self) throw new E2eSendError(V2_PEER_REQUIRED);
     engine.cacheInner(uuid, { from: currentStore.self, content: plainContent });
   }
 
@@ -1504,33 +985,21 @@ export function createMessageController(deps: MessageDependencies) {
       if (!connection()) return undefined;
       const currentStore = store();
       const address = currentStore.getAddressForId(chat.id);
+      const uuids = messageIds.map((id) => currentStore.getUuidForMessage(chat.id, id)).filter(Boolean);
+      // Чат v2 — мутацией v2; чат без v2 (история v1) — только локально
       if (address && isV2Routable(address) && await deps.v2?.isV2Chat(address)) {
-        const uuids = messageIds.map((id) => currentStore.getUuidForMessage(chat.id, id)).filter(Boolean);
         await deps.v2!.tryDelete(address, uuids);
-        deleteLegacyCopies(address, uuids);
-        uuids.forEach((uuid) => deps.sync.markDeleted(uuid));
-        deps.sendUpdate({ '@type': 'deleteMessages', ids: messageIds, chatId: chat.id });
-        return undefined;
       }
-      messageIds.forEach((id) => {
-        const uuid = currentStore.getUuidForMessage(chat.id, id);
-        if (!uuid) return;
-        const signature = requireE2e(deps.getE2e()).signCallData(`delete:${uuid}`);
-        publishFrame(TOPIC_MSG_DELETE, JSON.stringify(
-          buildWireEvent(currentStore.self, token(), { message_id: uuid, signature }),
-        ));
-        deps.sync.markDeleted(uuid);
-      });
+      uuids.forEach((uuid) => deps.sync.markDeleted(uuid));
       deps.sendUpdate({ '@type': 'deleteMessages', ids: messageIds, chatId: chat.id });
       return undefined;
     },
 
-    // «Удалить чат»: вся история чата скрывается «для меня» на сервере
-    // (msg.chat.clear пачками — после полного ресинка не вернётся) и удаляется
-    // локально; собственные устройства узнают из инбокса (`cleared`). Для
-    // «удалить и у собеседника» свои сообщения дополнительно удаляются у всех
-    // штатным msg.chat.delete — чужие у собеседника остаются (Parvane не даёт
-    // удалять чужое). Пустой чат tt снимает из списка по update deleteHistory
+    // «Удалить чат»: история чата удаляется локально, граница очистки едет
+    // журналом личного состояния (T145) — остальные свои устройства скрывают
+    // чат по ней. Для «удалить и у собеседника» свои сообщения дополнительно
+    // удаляются у всех мутацией v2 — чужие у собеседника остаются (Parvane не
+    // даёт удалять чужое). Пустой чат tt снимает из списка по update deleteHistory
     async deleteHistory({ chat, shouldDeleteForAll }: { chat: ApiChat; shouldDeleteForAll?: boolean }) {
       const currentStore = store();
       const uuids: string[] = [];
@@ -1544,35 +1013,17 @@ export function createMessageController(deps: MessageDependencies) {
         if (message.isOutgoing) ownUuids.push(uuid);
       });
       const chatAddress = currentStore.getAddressForId(chat.id);
-      if (shouldDeleteForAll && ownUuids.length) {
-        if (chatAddress && isV2Routable(chatAddress) && await deps.v2?.isV2Chat(chatAddress)) {
-          // Чат v2: удаление у всех — мутацией v2 (сервер v1 этих сообщений не знает),
-          // v1-устройствам из подписанных списков — их копией
-          await deps.v2!.tryDelete(chatAddress, ownUuids);
-          deleteLegacyCopies(chatAddress, ownUuids);
-        } else {
-          const e2e = requireE2e(deps.getE2e());
-          ownUuids.forEach((uuid) => {
-            publishOrThrow(TOPIC_MSG_DELETE, JSON.stringify(buildWireEvent(currentStore.self, token(), {
-              message_id: uuid, signature: e2e.signCallData(`delete:${uuid}`),
-            })));
-          });
-        }
-      }
-      for (let offset = 0; offset < uuids.length; offset += CLEAR_MAX_IDS) {
-        publishOrThrow(TOPIC_MSG_CLEAR, JSON.stringify(buildWireEvent(currentStore.self, token(), {
-          message_ids: uuids.slice(offset, offset + CLEAR_MAX_IDS),
-        })));
+      if (shouldDeleteForAll && ownUuids.length
+        && chatAddress && isV2Routable(chatAddress) && await deps.v2?.isV2Chat(chatAddress)) {
+        await deps.v2!.tryDelete(chatAddress, ownUuids);
       }
       const address = chatAddress;
       if (address && !currentStore.isGroupAddress(address)) {
         deps.localState.markChatDeleted(address);
         deps.localState.saveDraft(address, undefined);
       }
-      // Сообщений v2 сервер v1 не знает — нотис `cleared` до других своих
-      // устройств не дойдёт; граница очистки едет журналом личного состояния.
-      // Ставится ДО локального удаления: эхо своей копии v2, пришедшее следом,
-      // отсеивается по ней (sync.isClearedForMe)
+      // Граница очистки ставится ДО локального удаления: эхо своей копии v2,
+      // пришедшее следом, отсеивается по ней (sync.isClearedForMe)
       if (address) {
         deps.recordChatCleared?.(address, lastDate ? lastDate * MS_IN_SECOND + (MS_IN_SECOND - 1) : Date.now());
       }
@@ -1589,14 +1040,11 @@ export function createMessageController(deps: MessageDependencies) {
       if (!uuid || !connection()) return Promise.resolve(undefined);
       const emoji = reactions?.find((reaction) => reaction.type === 'emoji')?.emoticon || '';
       const reactAddress = currentStore.getAddressForId(chat.id);
-      void (async () => {
-        if (reactAddress && isV2Routable(reactAddress)
-          && await deps.v2?.tryReact(reactAddress, uuid, emoji)) return;
-        const signature = requireE2e(deps.getE2e()).signCallData(`react:${uuid}:${emoji}`);
-        publishFrame(TOPIC_MSG_REACT, JSON.stringify(
-          buildWireEvent(currentStore.self, token(), { message_id: uuid, emoji, signature }),
-        ));
-      })();
+      if (reactAddress && isV2Routable(reactAddress)) {
+        void deps.v2?.tryReact(reactAddress, uuid, emoji).catch((error: unknown) => {
+          deps.log(`реакция не отправлена: ${String(error)}`);
+        });
+      }
       const message = currentStore.getMessages(chat.id).find((candidate) => candidate.id === messageId);
       if (message) {
         let results = (message.reactions?.results || []).map((reaction) => {
@@ -1628,14 +1076,11 @@ export function createMessageController(deps: MessageDependencies) {
       if (!uuid || !connection()) return Promise.resolve(undefined);
       const pin = !isUnpin;
       const pinAddress = currentStore.getAddressForId(chat.id);
-      void (async () => {
-        if (pinAddress && isV2Routable(pinAddress)
-          && await deps.v2?.tryPin(pinAddress, uuid, pin)) return;
-        const signature = requireE2e(deps.getE2e()).signCallData(`pin:${uuid}:${pin}`);
-        publishFrame(TOPIC_MSG_PIN, JSON.stringify(
-          buildWireEvent(currentStore.self, token(), { message_id: uuid, pin, signature }),
-        ));
-      })();
+      if (pinAddress && isV2Routable(pinAddress)) {
+        void deps.v2?.tryPin(pinAddress, uuid, pin).catch((error: unknown) => {
+          deps.log(`закреп не отправлен: ${String(error)}`);
+        });
+      }
       deps.sendUpdate({ '@type': 'updatePinnedIds', chatId: chat.id, isPinned: pin, messageIds: [messageId] });
       return Promise.resolve(undefined);
     },
@@ -1675,18 +1120,11 @@ export function createMessageController(deps: MessageDependencies) {
       if (!toAddress) return Promise.resolve(undefined);
       // L2-1: в чате с режимом «усиленная приватность» typing не шлём
       if (deps.v2 && !deps.v2.ephemeralAllowed(toAddress)) return Promise.resolve(undefined);
-      const publishV1 = () => {
-        publishFrame(buildTypingTopic(peer.id), JSON.stringify({ from: currentStore.self, to: toAddress }));
-      };
-      // Чат v2 — эфемерным каналом v2 (T127): кадр v1 несёт серверу `{from, to}`.
-      // Сбой v2 не понижает до v1 — «печатает» просто не уходит
+      // «Печатает» — только эфемерным каналом v2 (T127, TYPING-1); сбой —
+      // «печатает» просто не уходит
       if (deps.v2 && isV2Routable(toAddress)) {
-        void deps.v2.trySendTyping(toAddress).then((isHandled) => {
-          if (!isHandled) publishV1();
-        }, () => undefined);
-        return Promise.resolve(undefined);
+        void deps.v2.trySendTyping(toAddress).catch(() => undefined);
       }
-      publishV1();
       return Promise.resolve(undefined);
     },
 
@@ -1770,15 +1208,11 @@ export function createMessageController(deps: MessageDependencies) {
         newlyRead.push(uuid);
       });
       // Протокол v2: квитанция прочтения — E2E-содержимое собеседнику (FR-035)
-      void (async () => {
-        if (newlyRead.length && readAddress && isV2Routable(readAddress)
-          && await deps.v2?.tryRead(readAddress, newlyRead)) return;
-        newlyRead.forEach((uuid) => {
-          publishFrame(TOPIC_MSG_READ, JSON.stringify(
-            buildWireEvent(currentStore.self, token(), { message_id: uuid }),
-          ));
+      if (newlyRead.length && readAddress && isV2Routable(readAddress)) {
+        void deps.v2?.tryRead(readAddress, newlyRead).catch((error: unknown) => {
+          deps.log(`квитанция прочтения не отправлена: ${String(error)}`);
         });
-      })();
+      }
       // ВАЖНО: двигаем и ЛОКАЛЬНЫЙ read-state tt. Сам tt в markMessageListRead
       // обновляет lastReadInboxMessageId только при unreadCount>0 (ранний
       // выход), а мы unreadCount вживую не ведём → lastReadInboxMessageId
@@ -1810,16 +1244,19 @@ export function createMessageController(deps: MessageDependencies) {
     },
 
     readAllMentions({ chat }: { chat: ApiChat }) {
-      // Прочитанность у Parvane помессаджная: read по каждому упоминанию
+      // Прочитанность у Parvane помессаджная: квитанция по каждому упоминанию
       const currentStore = store();
+      const readAddress = currentStore.getAddressForId(chat.id);
+      const newlyRead: string[] = [];
       deps.sync.collectUnreadMentions(chat.id).forEach((id) => {
         const uuid = currentStore.getUuidForMessage(chat.id, id);
         if (!uuid || deps.sync.hasReportedRead(uuid)) return;
         deps.sync.markReportedRead(uuid);
-        publishFrame(TOPIC_MSG_READ, JSON.stringify(
-          buildWireEvent(currentStore.self, token(), { message_id: uuid }),
-        ));
+        newlyRead.push(uuid);
       });
+      if (newlyRead.length && readAddress && isV2Routable(readAddress)) {
+        void deps.v2?.tryRead(readAddress, newlyRead).catch(() => undefined);
+      }
       deps.sync.pushMentionState(chat.id);
       return Promise.resolve(true);
     },

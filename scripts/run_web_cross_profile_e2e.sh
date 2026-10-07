@@ -3,8 +3,6 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Сценарий сверяет личный канал — группа v1 (UUID) — закреплён за v1 на обоих клиентах
-# (v2 по умолчанию, T135); пары v2 web ↔ desktop — scripts/run_protocol_mixed_e2e.sh web2-desktop2.
-export PARVANE_E2E_PROTO=v1 PARVANE_PROTO_V2=0
+# Оба клиента — по протоколу v2 (T110): личный канал — группа v2.
 PARVANE_E2E_EXTERNAL_BROWSER_SCRIPT="$ROOT/scripts/e2e_web_cross_profile.mjs" \
   "$ROOT/scripts/run_web_e2e.sh"

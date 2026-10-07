@@ -22,8 +22,7 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-calls-e2e-password';
-// Сценарий идёт на протоколе по умолчанию (v2); PARVANE_E2E_PROTO=v1 — прежний
-const IS_V1 = process.env.PARVANE_E2E_PROTO === 'v1';
+// Сценарий идёт по протоколу v2 (T110: другого нет)
 
 const browser = await chromium.launch({
   args: [
@@ -208,7 +207,7 @@ try {
   await relogin(bobSession.page, PASSWORD);
   await bobSession.page.keyboard.press('Escape');
   // v2: записи о звонках приходят из журнала личного состояния (опрос раз в 8 с)
-  await bobSession.page.waitForTimeout(IS_V1 ? 6000 : 12000);
+  await bobSession.page.waitForTimeout(12000);
   assert.equal(await unreadBadge(aliceSession.page, bob).count(), 0, 'у Алисы бейдж после reload (последний — звонок)');
   if (await unreadBadge(bobSession.page, alice).count()) {
     // Что именно считается непрочитанным: состояние прочтения и хвост чата
@@ -318,46 +317,8 @@ try {
       .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     declined.catch(() => {});
     refused.catch(() => {});
-    await Promise.any(IS_V1 ? [declined] : [declined, refused]);
+    await Promise.any([declined, refused]);
 
-    // Шаг подделывает кадр `call.signal` по соединению v1 — на сервере без v1
-    // (PARVANE_E2E_V1_OFF) такого пути нет: сигналы v2 запечатаны и проверяет их движок
-    if (process.env.PARVANE_E2E_V1_OFF !== '1') {
-      // ── Неверная подпись сигналинга: предложение звонка отвергается ──────────
-      const mallory = `call-mallory-${suffix}@local`;
-      const mallorySession = await preparePage(malloryContext, mallory, PASSWORD);
-      await openPrivateChatStrict(mallorySession.page, bob);
-      await mallorySession.page.waitForTimeout(1000);
-      await mallorySession.page.evaluate(async (to) => {
-        const pc = new RTCPeerConnection();
-        pc.addTransceiver('audio');
-        const offer = await pc.createOffer();
-        pc.close();
-        const sig = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(64))));
-        const envelope = {
-          id: crypto.randomUUID(),
-          from: '',
-          ts: Math.floor(Date.now() / 1000),
-          token: '',
-          payload: {
-            to,
-            signal: {
-              type: 'invite', call_id: crypto.randomUUID(), media: 'audio', sdp: offer.sdp, sig,
-            },
-          },
-        };
-        const socket = [...globalThis.__parvaneE2eSockets.active][0];
-        socket.send(JSON.stringify({ op: 'pub', subject: 'call.signal', payload: JSON.stringify(envelope) }));
-      }, bob);
-      await bobSession.page.getByText('Call security check failed').first()
-        .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-      assert.equal(
-        await bobSession.page.getByText('is calling you...', { exact: true }).count(),
-        0,
-        'forged invite showed an incoming call',
-      );
-      await bobSession.page.getByRole('button', { name: 'End Call' }).click();
-    }
     assert.deepEqual(erinSession.errors, [], `Erin page errors: ${erinSession.errors.join('; ')}`);
     assert.deepEqual(frankSession.errors, [], `Frank page errors: ${frankSession.errors.join('; ')}`);
     console.log('OK: пропущенный звонок, автоотбой заблокированного, отказ при неверной подписи');

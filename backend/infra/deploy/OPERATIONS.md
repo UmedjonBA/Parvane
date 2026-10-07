@@ -220,9 +220,17 @@ identity отказывает после `PARVANE_REGISTER_RATE_IP=30` реги�
 по логину). При прямом NATS (dev без gateway) поле пусто — лимит по IP не
 применяется.
 
-## Отключение v1 (E6)
+## Отключение v1 (E6) — история; с T110 протокола v1 на сервере нет
 
-Протокол v1 (JSON-кадры gateway) выключается оператором по статистике версий
+**T110 (7 окт 2026, вечер; коммиты `29288485`, `723bece1`, `31df2bc2`, деплой — по
+просьбе пользователя).** Код v1 удалён из всех шардов: gateway на любой JSON-кадр
+отвечает `upgrade_required` и закрывает соединение, `PARVANE_V1_MODE` не читается
+(строка в `.env` безвредна), v1-БД (`messenger.db`, таблицы v1 identity/cloud) не
+открываются — лежат на томах как бэкап. Откат на v1 — только откатом образа на
+`prev-20261007` (двойной стек). Текст ниже описывает прежний трёхшаговый порядок
+отключения и оставлен как история.
+
+Протокол v1 (JSON-кадры gateway) выключался оператором по статистике версий
 устройств, в три шага. Режим задаёт переменная gateway `PARVANE_V1_MODE`
 (`environment` сервиса `gateway`, читается при старте — после смены
 `docker compose up -d gateway`). На v2-соединения режим не влияет ни в одном
@@ -265,12 +273,11 @@ identity отказывает после `PARVANE_REGISTER_RATE_IP=30` реги�
 Не путать с `PARVANE_V2_MIN_MINOR` — это нижняя граница минорной версии v2
 (`UPGRADE_REQUIRED` для старых v2-клиентов), к v1 она не относится.
 
-**Удаление кода v1** (v1-обработчики шардов, JSON-путь gateway, libolm в web,
-`e2e.cpp` в parvane-core) — отдельное изменение ПОСЛЕ того, как режим
-`disabled` простоял без обращений пользователей; этим разделом не покрывается.
+**Удаление кода v1** выполнено T110 (см. выше) на сервере и в web; desktop
+(`parvane-core`, мост `v2_bridge.cpp`) и android — после их сборок.
 
-Проверка: `cargo test -p parvane-integration --test v1_mode_live` (три gateway
-в режимах normal/notice/disabled на одном стеке, v1-кадры и рукопожатие v2),
+Проверка: `v1_frames_are_refused_live` (gateway) и `cargo test -p
+parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рукопожатие v2 рядом),
 разбор кадров клиентами — `desktop/parvane-core/tests/gateway_upgrade_tests.cpp`
 (ctest `gateway_upgrade`), android `L2PrivacySeamTest` (тесты `upgrade*`).
 

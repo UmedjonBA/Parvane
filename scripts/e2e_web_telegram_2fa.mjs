@@ -26,10 +26,6 @@ assert(SECRET && BOT, 'PARVANE_TELEGRAM_BOT/SECRET are required');
 const TG_OWNER = 2001;
 const TG_STRANGER = 2002;
 
-// На сервере с отключённым v1 (`run_web_telegram_2fa_v1off_e2e.sh`, E6-1) JSON-
-// соединения gateway нет — «бот» ходит в шину напрямую, как настоящий
-const V1_OFF = process.env.PARVANE_E2E_V1_OFF === '1';
-
 // «Бот»: один запрос подтверждения через gateway по протоколу v2
 // (`identity.account.confirm_telegram`, канал PRE) — как настоящий бот на VPS
 async function botConfirm(token, telegramId) {
@@ -318,12 +314,6 @@ try {
   console.log('OK: после выключения 2FA обычный вход');
 
   assertNoPageErrors({ one: s1, two: s2, three: s3 });
-  if (V1_OFF) {
-    const gatewayLog = readFileSync(join(process.env.PARVANE_E2E_BACKEND_LOG_DIR, 'gateway.log'), 'utf8');
-    assert.match(gatewayLog, /v1-путь в режиме Disabled/, 'gateway не в режиме disabled');
-    assert.doesNotMatch(gatewayLog, /gateway::session.*Клиент авторизован/, 'кто-то авторизовался по v1');
-    console.log('OK: включение, вход и выключение 2FA — без соединения v1');
-  }
   console.log('OK: двухфакторный вход через Telegram');
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR;

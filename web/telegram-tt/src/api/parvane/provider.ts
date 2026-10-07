@@ -22,7 +22,6 @@ import type {
   ApiWallpaper,
   OnApiUpdate } from '../types';
 import type { ServerInfo } from './connectionController';
-import type { WireDeviceBundle } from './e2e';
 import type { GatewayConnection } from './gateway';
 import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireStoredMessage, WireUserInfo } from './wire';
@@ -35,7 +34,6 @@ import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { createV2Controller, isV2GroupAddress, type V2DeviceBackup } from './v2/controller';
-import { isV2Enabled } from './v2/engine';
 import { collectV2History, parseV2History } from './v2/linkHistory';
 import { createStateJournal } from './v2/stateJournal';
 import {
@@ -104,11 +102,8 @@ import { ParvaneStore } from './store';
 import { createSyncController } from './sync';
 import { buildBuiltinWallpapers } from './wallpapers';
 import {
-  buildMsgInboxTopic,
-  buildWireEvent as buildWireEventNotify,
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
-  TOPIC_GROUP_INVITE_REVOKE,
   TOPIC_IDENTITY_PASSWORD_CHANGE,
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
@@ -118,10 +113,6 @@ import {
   TOPIC_LINK_GRANT,
   TOPIC_LINK_OFFER,
   TOPIC_LINK_POLL,
-  TOPIC_MSG_SETNOTIFY,
-  TOPIC_PREKEYS_FETCH,
-  TOPIC_PUSH_REGISTER,
-  TOPIC_PUSH_UNREGISTER,
   TOPIC_PUSH_VAPID_GET,
 } from './wire';
 
@@ -157,7 +148,6 @@ let connection: GatewayConnection | undefined;
 let store = new ParvaneStore();
 let token = '';
 
-// Публикует весь блок настроек уведомлений (умолчания + исключения по чатам,
 // включая мут) на messenger — синхронизация между своими устройствами.
 // P-34: «кто может добавлять меня в группы» — часть блоба настроек
 // (messenger читает `group_add`), хранится локально рядом с остальными
@@ -231,39 +221,15 @@ async function refreshV2Privacy() {
   try {
     const remote = await v2Controller.getPrivacy();
     if (!remote) return;
-    const isGroupAddChanged = remote.groupAdd !== readGroupAddPolicy();
     localStorage.setItem(groupAddPolicyKey(store.self), remote.groupAdd);
     localStorage.setItem(strangersPolicyKey(store.self), remote.strangers ? 'anyone' : 'nobody');
     writeAudience(callsPolicyKey(store.self), remote.callsFrom);
     writeAudience(presencePolicyKey(store.self), remote.presence);
-    // v1-messenger читает `group_add` из блоба настроек — держим его в ногу
-    if (isGroupAddChanged) pushNotifySettings();
   } catch (err) {
     logDebug(`v2: приватность не прочитана: ${String(err)}`);
   }
 }
 
-function pushNotifySettings() {
-  if (!connection) return;
-  // v1-блоб открыт серверу: список заглушённых чатов в нём — утечка. Когда
-  // настройки уведомлений ведёт журнал личного состояния (v2, FR-039) и у
-  // аккаунта нет v1-устройств, в блобе остаётся только то, что сервер обязан
-  // исполнять (`group_add`); иначе блоб полный — для своих v1-устройств
-  const isJournaled = stateJournal.isAttached() && !v2Controller.legacyDevices(store.self).size;
-  const payload = JSON.stringify(isJournaled ? { group_add: readGroupAddPolicy() } : {
-    defaults: localState.loadNotifyDefaults(),
-    exceptions: localState.loadNotifyExceptions(),
-    group_add: readGroupAddPolicy(),
-  });
-  try {
-    connection.publish(
-      TOPIC_MSG_SETNOTIFY,
-      JSON.stringify(buildWireEventNotify(store.self, token, { settings: payload })),
-    );
-  } catch {
-    // не критично — догонит следующий sync
-  }
-}
 let pendingLoginAddress = '';
 // Пароль между экранами регистрации: register (email) и confirm (код) должны
 // повторить логин без повторного ввода
@@ -402,37 +368,22 @@ const callController = createCallController({
   sendUpdate,
   pushReadState: (chatId) => syncController.pushReadState(chatId),
   // v2Controller создаётся ниже; вызывается только во время звонка
-  sendV2Signal: (to, signal, groupCallId) => (
-    isV2Enabled() ? v2Controller.trySendCall(to, signal, groupCallId) : Promise.resolve(false)
-  ),
-  hasLegacyDevices: (peer) => isV2Enabled() && v2Controller.legacyDevices(peer).size > 0,
-  isV2Peer: (peer) => (isV2Enabled() ? v2Controller.isV2Peer(peer).catch(() => false) : Promise.resolve(false)),
+  sendV2Signal: (to, signal, groupCallId) => v2Controller.trySendCall(to, signal, groupCallId),
+  isV2Peer: (peer) => v2Controller.isV2Peer(peer).catch(() => false),
   recordV2Call: (record) => stateJournal.recordCall(record),
   log: logDebug,
 });
 
-// Forward-ref: подписку на групповой typing реализует connectionController,
-// который создаётся ниже. Устанавливается после его создания
-let subscribeGroupTyping: (groupChatId: string) => void = () => {};
+// Forward-ref: присутствие собеседников слушает connectionController, который
+// создаётся ниже. Устанавливается после его создания
 let subscribePresence: (peerId: string) => void = () => {};
 
 const groupController = createGroupController({
   getConnection: () => connection,
-  getE2e: () => e2e,
   getStore: () => store,
-  getToken: () => token,
   selfId,
   sendUpdate,
-  onGroupRegistered: (groupChatId) => subscribeGroupTyping(groupChatId),
   log: logDebug,
-  loadInviteLink: (groupId) => localState.loadInviteLinks()[groupId],
-  saveInviteLink: (groupId, record) => {
-    localState.saveInviteLinks({ ...localState.loadInviteLinks(), [groupId]: record });
-  },
-  forgetInviteLink: (groupId) => {
-    const { [groupId]: _removed, ...rest } = localState.loadInviteLinks();
-    localState.saveInviteLinks(rest);
-  },
   buildAvatarPhoto,
   getV2: () => v2Controller,
   getUnconfirmedTemplate: () => getLangStringByKey('ParvaneGroupUnconfirmedMember'),
@@ -476,25 +427,17 @@ let pendingRecoveryKey: string | undefined;
 // Сервер ответил UPGRADE_REQUIRED (v2) — UI показывает диалог при монтировании
 let isUpgradeRequired = false;
 
-// E6 (spec 007): v1-путь сервера отключён — на экране входа ошибка
-// «обновите приложение» (после входа — диалог в Main)
-// T134: сервер отключил v1 — клиент на v2 продолжает работать методами v2
-window.addEventListener('parvane-v1-disabled', () => {
-  logDebug('соединения v1 нет (сервер отключил v1) — все запросы идут по v2');
-});
-
 window.addEventListener('parvane-upgrade-required', () => {
   sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneUpgradeRequired' } });
 });
 
-// Протокол v2 (spec 007, E2): второй стек для собеседников с журналом
-// устройств v2; включается флагом (`VITE_PARVANE_PROTO_V2` / localStorage)
+// Протокол v2 (spec 007): переписка, группы, звонки, присутствие (T110 —
+// единственный стек)
 const v2Controller = createV2Controller({
   getToken: () => token,
   getSelf: () => store.self,
   gatewayUrl: getGatewayUrl,
   applyExternal: (stored) => syncController.applyExternal(stored),
-  isEnabled: () => isV2Enabled(),
   onInviteCreated: (address, record) => stateJournal.recordGroupInvite({ address, record }),
   onInviteRevoked: (linkId) => stateJournal.removeGroupInvite(linkId),
   onRecoveryKey: (recoveryKey) => {
@@ -503,10 +446,9 @@ const v2Controller = createV2Controller({
     window.dispatchEvent(new CustomEvent('parvane-recovery-key'));
   },
   onAuthRejected: () => {
-    // При живом v1 протухший токен отвергает авторизация gateway, и вход идёт на
-    // экран пароля. Без v1 (E6-1) отказ приходит только отсюда: снимаем сохранённую
-    // сессию и перезагружаемся — запуск без токена спрашивает пароль (ключи и
-    // история остаются)
+    // Протухший/отозванный токен (E6-1): снимаем сохранённую сессию и
+    // перезагружаемся — запуск без токена спрашивает пароль (ключи и история
+    // остаются)
     const self = store.self;
     logDebug('v2: токен не принят сервером — нужен повторный вход');
     void clearSecureSession(self).catch(() => undefined).then(() => window.location.reload());
@@ -523,24 +465,22 @@ const v2Controller = createV2Controller({
     window.dispatchEvent(new CustomEvent('parvane-new-device', { detail: { count: deviceIds.length } }));
   },
   // Журнал устройств v2 у аккаунта есть, а этого устройства в нём нет: оффер
-  // линковки нужен, даже если история v1 на устройстве уже есть
+  // линковки нужен, даже если история на устройстве уже есть
   onNeedsLinking: () => {
     if (!linkRuntime.timer) void startHistoryLinkOffer();
     // Экран «Устройства» покажет код линковки и вход по ключу восстановления
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-needs-linking'));
   },
-  // Пока соединение v1 живо, те же кадры приходят по нему; без него (T134)
-  // запись LegacyV1 — единственный путь: подаём кадр обработчику инбокса
+  // Запись `LegacyV1` инбокса v2 (кадр прежнего инбокса v1, оставшийся на
+  // сервере) — обработчику инбокса
   onLegacyFrame: (frame) => {
-    if (connection?.hasV1 === false && store.self) connection.deliver(buildMsgInboxTopic(store.self), frame);
+    if (store.self) syncController.handleInboxFrame(frame);
   },
   onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),
   onGroupLeft: (address) => groupController.removeV2Group(address),
   onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
   onStateReady: (host, rekey) => {
     void refreshV2Privacy();
-    // Устройство в журнале v2 — его v1-бандл, отвергнутый при входе, пора дослать (T146)
-    if (connection && token) void connectionController.replenishDevicePrekeys(connection, token);
     return stateJournal.attach(host, rekey);
   },
   onL2Changed: (address) => applyL2Change(address),
@@ -553,19 +493,6 @@ const v2Controller = createV2Controller({
   },
   onTyping: (chat, from) => connectionController.showV2Typing(chat, from),
   onPresence: (from) => connectionController.showV2Presence(from),
-  // Каталог своих устройств v1 (без расхода one-time prekeys) — для
-  // подписанного списка v1-устройств (FR-058)
-  listOwnV1Devices: async () => {
-    if (!connection) return [];
-    const raw = await connection.request(TOPIC_DEVICE_LIST, JSON.stringify({ token }));
-    const response = JSON.parse(raw) as {
-      ok: boolean; devices?: { device_id: string; signing_key: string; identity_key: string }[];
-    };
-    if (!response.ok) throw new Error('device list');
-    return (response.devices || []).map((d) => ({
-      deviceId: d.device_id, identity: d.identity_key, signing: d.signing_key,
-    }));
-  },
   recordOwn: (stored) => localState.appendOwnJournal({ ...stored, origin: 'v2' }),
   loadHistory: async () => [
     ...await localState.loadHistoryRecords(),
@@ -578,9 +505,7 @@ getV2Bridge().setSessionProof(v2Controller.sessionProof);
 
 messageController = createMessageController({
   v2: v2Controller,
-  recordChatCleared: (address, untilMs) => {
-    if (isV2Enabled()) stateJournal.recordChatCleared(address, untilMs);
-  },
+  recordChatCleared: (address, untilMs) => stateJournal.recordChatCleared(address, untilMs),
   getConnection: () => connection,
   getE2e: () => e2e,
   awaitE2e,
@@ -638,29 +563,19 @@ const connectionController = createConnectionController({
     localState.reset();
     store.setContacts(localState.loadContacts(), localState.loadNonContacts());
     polls.reset();
-    groupController.reset();
   },
   onSessionReady: () => {
     void startHistoryLinkOffer();
-    if (isV2Enabled()) void v2Controller.start().then(registerV2Wake);
+    void v2Controller.start().then(registerV2Wake);
   },
-  isSynced: syncController.isSynced,
   resetSyncPromise: syncController.resetPromise,
-  requestDeltaSync: syncController.requestDeltaSync,
-  requestFullSync: () => {
-    void syncController.ensureSynced()
-      .then(() => sendUpdate({ '@type': 'requestSync' }))
-      .catch((error: unknown) => logDebug(`повторный синк не удался: ${String(error)}`));
-  },
   resolveDisplayNames: syncController.resolveDisplayNames,
-  handleInboxFrame: syncController.handleInboxFrame,
   selfId,
   sendUpdate,
   log: logDebug,
   v2: v2Controller,
 });
 
-subscribeGroupTyping = connectionController.ensureGroupTyping;
 subscribePresence = connectionController.ensurePresence;
 
 // Режим «усиленная приватность» (L2) чата сменился: typing/presence (правило
@@ -1211,7 +1126,7 @@ async function applyLinkedV2History(rows: WireStoredMessage[], owner: string, at
 // LINK-1 v2: материал гранта движка лежит отдельным блобом; по нему устройство
 // записывает себя в журнал устройств и получает ключ личного состояния
 async function joinV2WithLinkGrant(coords: LinkBoxPayload['v2']) {
-  if (!coords || !isV2Enabled()) return;
+  if (!coords) return;
   // Грант мог прийти раньше, чем запуск v2 выяснил «нужна линковка»
   await v2Controller.start();
   if (!v2Controller.needsLinking()) return;
@@ -1278,18 +1193,16 @@ async function revokeOwnDevice(deviceId: string, password?: string) {
     e2e.forgetOwnDevice(deviceId);
     await e2e.flushStorage();
     // Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и ротации
-    // ключей, которые устройство держало. После v1-отзыва (он проверил пароль):
-    // сбой v2 не возвращает устройство, а оставляет ротации на повтор
+    // ключей, которые устройство держало (пароль проверил мост выше)
     const isJournaled = await v2Controller.revokeDevice(deviceId).catch((e: unknown) => {
       logDebug(`v2: отзыв устройства в журнале не выполнен: ${String(e)}`);
       return false;
     });
-    // Без соединения v1 (E6-1) отзыв — это только запись журнала устройств: мост
-    // отвечает «ok» уже после проверки пароля. Записи нет (это устройство само не
-    // привязано к журналу либо сервер её не принял) — отзыва не было, об успехе не
-    // сообщаем: иначе сеанс «завершён» на экране, а устройство продолжает работать
-    if (connection.hasV1 === false && !isJournaled) return undefined;
-    return true;
+    // Отзыв — это запись журнала устройств: мост отвечает «ok» уже после проверки
+    // пароля. Записи нет (это устройство само не привязано к журналу либо сервер
+    // её не принял) — отзыва не было, об успехе не сообщаем: иначе сеанс
+    // «завершён» на экране, а устройство продолжает работать
+    return isJournaled ? true : undefined;
   } catch {
     return undefined;
   }
@@ -1697,7 +1610,6 @@ const methods = {
       shouldShowPreviews: settings.shouldShowPreviews,
     };
     localState.saveNotifyDefaults(defaults);
-    pushNotifySettings();
     return Promise.resolve(true);
   },
 
@@ -1709,7 +1621,6 @@ const methods = {
     const exceptions = localState.loadNotifyExceptions();
     exceptions[address] = { ...exceptions[address], ...settings };
     localState.saveNotifyExceptions(exceptions);
-    pushNotifySettings();
     sendUpdate({ '@type': 'updateChatNotifySettings', chatId: chat.id, settings: exceptions[address] });
     return Promise.resolve(undefined);
   },
@@ -2364,39 +2275,28 @@ const methods = {
     }
   },
 
-  // token — JSON PushSubscription из notifications.tsx (getDeviceToken)
+  // token — JSON PushSubscription из notifications.tsx (getDeviceToken).
+  // Протокол v2: журнал v2 будит устройство своей регистрацией (`push.wake.register`)
   async registerDevice(deviceToken: string) {
-    if (!connection) return undefined;
+    if (!connection || !v2Controller.isReady()) return undefined;
     try {
       const subscription = JSON.parse(deviceToken) as { endpoint?: string; keys?: unknown };
       if (!subscription.endpoint || !subscription.keys) return undefined;
-      const raw = await connection.request(TOPIC_PUSH_REGISTER, JSON.stringify({
-        token,
-        subscription,
-      }));
-      // Протокол v2: журнал v2 будит устройство своей регистрацией
-      if (v2Controller.isReady()) {
-        void v2Controller.pushRegister(subscription as Parameters<typeof v2Controller.pushRegister>[0])
-          .catch((err: unknown) => logDebug(`v2: push.wake.register не удался: ${String(err)}`));
-      }
-      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
-    } catch {
+      await v2Controller.pushRegister(subscription as Parameters<typeof v2Controller.pushRegister>[0]);
+      return true;
+    } catch (err) {
+      logDebug(`v2: push.wake.register не удался: ${String(err)}`);
       return undefined;
     }
   },
 
   async unregisterDevice(deviceToken: string) {
-    if (!connection) return undefined;
+    if (!connection || !v2Controller.isReady()) return undefined;
     try {
       const subscription = JSON.parse(deviceToken) as { endpoint?: string };
-      const raw = await connection.request(TOPIC_PUSH_UNREGISTER, JSON.stringify({
-        token,
-        endpoint: subscription.endpoint,
-      }));
-      if (v2Controller.isReady() && subscription.endpoint) {
-        void v2Controller.pushUnregister(subscription.endpoint).catch(() => undefined);
-      }
-      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
+      if (!subscription.endpoint) return undefined;
+      await v2Controller.pushUnregister(subscription.endpoint);
+      return true;
     } catch {
       return undefined;
     }
@@ -2410,7 +2310,7 @@ const methods = {
     // Копия несёт и устройство v2 с историей v2-эпохи: сервер v2 не отдаст её
     // заново, а сообщения запечатаны под устройства журнала (T152)
     await localState.flushHistoryNow();
-    const v2 = isV2Enabled() ? await v2Controller.exportBackup() : undefined;
+    const v2 = await v2Controller.exportBackup();
     const v2History = v2 ? collectV2History(
       await localState.loadHistoryRecords(), await localState.readOwnJournal(),
     ) : undefined;
@@ -2425,7 +2325,7 @@ const methods = {
         extra = value;
       });
       setE2eEngine(imported);
-      if (extra?.v2 && isV2Enabled()) {
+      if (extra?.v2) {
         // Этот браузер становится тем же устройством v2 (со следующего входа —
         // JWT выпустят под device_id из копии)
         v2Controller.reset();
@@ -2439,7 +2339,7 @@ const methods = {
       syncController.reset();
       resetPackRegistries();
       sendUpdate({ '@type': 'requestSync' });
-      if (extra?.v2History && isV2Enabled()) {
+      if (extra?.v2History) {
         await applyLinkedV2History(parseV2History(JSON.stringify({ v2History: extra.v2History })), store.self);
         await localState.flushHistoryNow();
       }
@@ -2629,28 +2529,17 @@ const methods = {
     const engine = e2e;
     if (!engine) return undefined;
     // v2 (T153): ключ безопасности — отпечаток корня личности из проверенного
-    // журнала устройств, один на аккаунт (в v1 — отпечаток каждого устройства).
-    // Свой показываем тем же способом, каким его увидит собеседник на v2
-    const ownRoot = isV2Enabled() && v2Controller.isReady() ? v2Controller.logDevices(store.self)?.root : undefined;
+    // журнала устройств, один на аккаунт. Свой показываем тем же способом, каким
+    // его увидит собеседник
+    const ownRoot = v2Controller.isReady() ? v2Controller.logDevices(store.self)?.root : undefined;
     const own = ownRoot ? await fingerprintOf(ownRoot) : await engine.getOwnFingerprint();
     const address = chatId ? store.getAddressForId(chatId) : undefined;
     if (!address || address === store.self || store.isGroupAddress(address)) {
       return { own, devices: [] as { deviceId: string; fingerprint: string }[] };
     }
-    if (ownRoot && await v2Controller.isV2Peer(address).catch(() => false)) {
-      const peerRoot = v2Controller.logDevices(address)?.root;
-      if (peerRoot) return { own, devices: [{ deviceId: 'v2', fingerprint: await fingerprintOf(peerRoot) }] };
-    }
-    const fetchBundle = async (user: string) => {
-      const raw = await connection!.request(TOPIC_PREKEYS_FETCH, JSON.stringify({
-        token, user, known_devices: engine.getKnownDeviceIds(user),
-      }));
-      return JSON.parse(raw) as {
-        ok: boolean; identity_key?: string; signed_prekey?: string; one_time?: string; devices?: WireDeviceBundle[];
-      };
-    };
-    const devices = await engine.getContactFingerprints(address, connection ? fetchBundle : undefined);
-    return { own, devices };
+    const peerRoot = ownRoot && await v2Controller.isV2Peer(address).catch(() => false)
+      ? v2Controller.logDevices(address)?.root : undefined;
+    return { own, devices: peerRoot ? [{ deviceId: 'v2', fingerprint: await fingerprintOf(peerRoot) }] : [] };
   },
 
   // ── двухфакторный вход (Settings → Privacy) ──────────────────────────────
@@ -2691,7 +2580,6 @@ const methods = {
     } catch {
       // приватный режим — настройка не переживёт reload
     }
-    pushNotifySettings();
     pushV2Privacy();
     return Promise.resolve(true);
   },
@@ -2771,19 +2659,6 @@ const methods = {
     } catch (err) {
       logDebug(`v2: режим «усиленная приватность» не изменён: ${String(err)}`);
       return false;
-    }
-  },
-
-  // P-34: отзыв инвайт-ссылки группы (owner/admin)
-  async parvaneRevokeGroupInvite({ groupId, invite }: { groupId: string; invite: string }) {
-    if (!connection) return undefined;
-    try {
-      const raw = await connection.request(TOPIC_GROUP_INVITE_REVOKE, JSON.stringify({
-        token, group_id: groupId, invite,
-      }));
-      return (JSON.parse(raw) as { ok?: boolean }).ok ? true : undefined;
-    } catch {
-      return undefined;
     }
   },
 
