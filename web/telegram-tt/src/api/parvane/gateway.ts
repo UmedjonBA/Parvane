@@ -7,6 +7,7 @@
 // JWT и отдаёт запросы мосту.
 
 import { V2Bridge } from './v2/bridge';
+import { V2Error } from './v2/transport';
 
 const GATEWAY_URL_STORAGE_KEY = 'parvane:gateway';
 
@@ -55,7 +56,17 @@ export class GatewayConnection {
    * прежнего вида; потеря связи — исключение; subject без метода v2 — исключение
    */
   async request(subject: string, payload: string): Promise<string> {
-    const viaV2 = await getV2Bridge().request(subject, payload);
+    let viaV2: string | undefined;
+    try {
+      viaV2 = await getV2Bridge().request(subject, payload);
+    } catch (err) {
+      // Версия клиента ниже min_supported сервера ещё до входа (T042): после
+      // входа это событие шлёт контроллер v2, здесь — за экран входа
+      if (err instanceof V2Error && err.code === 'ERROR_CODE_UPGRADE_REQUIRED') {
+        window.dispatchEvent(new CustomEvent('parvane-upgrade-required'));
+      }
+      throw err;
+    }
     if (viaV2 === undefined) throw new Error(`Gateway: запрос ${subject} не обслуживается протоколом v2`);
     return viaV2;
   }

@@ -212,16 +212,22 @@ export async function submitNick(page, user) {
   const addressInput = addressScreen.getByLabel('Nickname');
   await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const nextButton = addressScreen.getByRole('button', { name: 'Next' });
+  const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await addressInput.fill(user).catch(async (err) => {
+    try {
+      await addressInput.fill(user);
+    } catch (err) {
+      // Экран ника мелькнул после отправки и уступил экрану пароля (повтор
+      // WaitPhoneNumber под нагрузкой) — ник уже принят, вводить заново нечего
+      if (await passwordScreen.isVisible().catch(() => false)) return;
       // Поле ника пропало посреди ввода — снимаем состояние страницы для разбора
       const shot = `web/telegram-tt/test-results/submit-nick-${Date.now()}.png`;
       await page.screenshot({ path: shot }).catch(() => {});
       const text = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch((e) => String(e));
       console.error(`submitNick: поле ника недоступно (${page.url()}); снимок ${shot}; текст страницы: ${text}`);
       throw err;
-    });
+    }
     try {
       await nextButton.waitFor({ state: 'visible', timeout: 3000 });
       break;

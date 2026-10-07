@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  LOGIN_TIMEOUT_MS,
   openApp,
   registerAndSignIn,
   requireGatewayUrl,
@@ -17,7 +18,7 @@ test('registers and signs in through the live production stack', async ({ page }
   await expect(page.locator('#auth-phone-number-form')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 
-  const storage = await page.evaluate(async ({ address, password }) => {
+  const storage = await page.evaluate(async ({ address, password, timeoutMs }) => {
     const localEntries = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)]);
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('parvane-e2e-v2');
@@ -29,10 +30,19 @@ test('registers and signs in through the live production stack', async ({ page }
       request.onsuccess = () => resolve(request.result as T | undefined);
       request.onerror = () => reject(request.error);
     });
-    const [key, state] = await Promise.all([
-      read<CryptoKey>(`key:${address}`),
-      read<{ version: number; ciphertext: ArrayBuffer }>(`state:${address}`),
-    ]);
+    // Состояние движка v2 — именованная запись под non-extractable ключом
+    // (secureStorage.ts: `rec:<адрес>:<имя>`, v2/controller.ts: STATE_RECORD).
+    // Пишется после подъёма движка, уже за экраном входа — ждём её появления
+    const key = await read<CryptoKey>(`key:${address}`);
+    let state: { version: number; ciphertext: ArrayBuffer } | undefined;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      state = await read<{ version: number; ciphertext: ArrayBuffer }>(`rec:${address}:v2-engine`);
+      if (state || Date.now() > deadline) break;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+    }
     db.close();
     return {
       passwordLeaked: JSON.stringify(localEntries).includes(password),
@@ -45,7 +55,7 @@ test('registers and signs in through the live production stack', async ({ page }
         ? new TextDecoder().decode(state.ciphertext).includes(password)
         : true,
     };
-  }, { address: user, password: E2E_PASSWORD });
+  }, { address: user, password: E2E_PASSWORD, timeoutMs: LOGIN_TIMEOUT_MS });
   expect(storage.legacyCredentials).toBeNull();
   expect(storage).toMatchObject({
     passwordLeaked: false,

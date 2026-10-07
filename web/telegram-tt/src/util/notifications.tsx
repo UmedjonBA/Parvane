@@ -211,10 +211,26 @@ async function unsubscribeFromPush(subscription: PushSubscription | null) {
   }
 }
 
+// Parvane: Firefox без доступного push-сервиса отвергает getSubscription()
+// (DOMException «Error retrieving push subscription») — для нас это «подписки
+// нет», а не необработанная ошибка страницы
+async function getPushSubscriptionSafe(registration: ServiceWorkerRegistration) {
+  try {
+    return await registration.pushManager.getSubscription();
+  } catch (error) {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log('[PUSH] Unable to read the push subscription.', error);
+    }
+    // eslint-disable-next-line no-null/no-null
+    return null;
+  }
+}
+
 export async function unsubscribe() {
   if (!checkIfPushSupported()) return;
   const serviceWorkerRegistration = await navigator.serviceWorker.ready;
-  const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+  const subscription = await getPushSubscriptionSafe(serviceWorkerRegistration);
   await unsubscribeFromPush(subscription);
 }
 
@@ -260,7 +276,7 @@ export async function subscribe() {
     return;
   }
   const serviceWorkerRegistration = await navigator.serviceWorker.ready;
-  let subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+  let subscription = await getPushSubscriptionSafe(serviceWorkerRegistration);
   if (!checkIfShouldResubscribe(subscription)) return;
   await unsubscribeFromPush(subscription);
   // Parvane: без VAPID-ключа шарда подписка бессмысленна — честный fallback

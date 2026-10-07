@@ -46,9 +46,6 @@ const SCHEDULED_CHECK_INTERVAL_MS = 5000;
 const SCHEDULED_ID_BASE = 1_000_001;
 const RECORD_SAVE_DELAY_MS = 300;
 const HISTORY_FLUSH_DELAY_MS = 500;
-// v2: курсоры, сохранённые до hotfix AAD (E2E был недоступен, сообщения
-// пропускались), не должны использоваться
-const SYNC_CURSOR_RECORD = 'cursor.v2';
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const JOURNAL_MAX_ENTRIES = 5000;
 
@@ -217,10 +214,11 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
-  // ── кэш истории и курсор синка (шифрованные записи m:<uuid>, cursor) ────
+  // ── кэш истории (шифрованные записи m:<uuid>) ───────────────────────────
+  // Курсора синка v1 здесь больше нет (T110): новое приходит инбоксом v2,
+  // история — из кэша и журнала
   const historyWriteQueue = new Map<string, WireStoredMessage | undefined>();
   let historyFlushTimer: ReturnType<typeof setTimeout> | undefined;
-  let cursorPending: { lastSeenUuid: string; sinceUpdated: number } | undefined;
 
   // Записи идут строго одна пачка за другой: сброс очереди может быть вызван,
   // пока предыдущая пачка ещё пишется (своё исходящее сбрасывается сразу), —
@@ -232,9 +230,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     historyFlushTimer = undefined;
     const batch = Array.from(historyWriteQueue.entries());
     historyWriteQueue.clear();
-    const cursor = cursorPending;
-    cursorPending = undefined;
-    if (!batch.length && !cursor) return historyFlushChain;
+    if (!batch.length) return historyFlushChain;
     const pending = secureStorage();
     if (!pending) return historyFlushChain;
     historyFlushChain = historyFlushChain.then(() => pending).then(async (storage) => {
@@ -249,7 +245,6 @@ export function createLocalState(deps: LocalStateDependencies) {
           console.warn(`[parvane] кэш истории: запись ${uuid} не сохранена: ${String(err)}`);
         }
       }
-      if (cursor) await storage.saveRecord(SYNC_CURSOR_RECORD, cursor);
     }).catch(() => undefined);
     return historyFlushChain;
   }
@@ -354,20 +349,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     return storage.loadRecordsByPrefix<WireStoredMessage>('m:');
   }
 
-  function saveSyncCursor(cursor: { lastSeenUuid: string; sinceUpdated: number }) {
-    cursorPending = cursor;
-    scheduleHistoryFlush();
-  }
-
-  async function loadSyncCursor() {
-    const storage = await secureStorage();
-    if (!storage) return undefined;
-    return storage.loadRecord<{ lastSeenUuid: string; sinceUpdated: number }>(SYNC_CURSOR_RECORD);
-  }
-
   function resetSecureCaches() {
     historyWriteQueue.clear();
-    cursorPending = undefined;
     if (historyFlushTimer) clearTimeout(historyFlushTimer);
     historyFlushTimer = undefined;
     journalCache = undefined;
@@ -956,8 +939,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveHistoryRecord,
     deleteHistoryRecord,
     loadHistoryRecords,
-    saveSyncCursor,
-    loadSyncCursor,
     appendOwnJournal,
     updateOwnJournalEntry,
     clearUserData,
