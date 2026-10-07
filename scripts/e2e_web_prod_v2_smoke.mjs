@@ -25,6 +25,7 @@ import {
   requireEnv,
   sendText,
 } from './e2e_web_helpers.mjs';
+import { botConfirmV2 } from './e2e_tg_confirm_v2.mjs';
 
 const PASSWORD = 'Parvane-prod-smoke-1';
 const SECRET = process.env.PARVANE_TELEGRAM_SECRET;
@@ -33,32 +34,11 @@ assert(SECRET && BOT, 'PARVANE_TELEGRAM_BOT/SECRET are required');
 const V2_START_TIMEOUT_MS = 90000;
 const EPOCH_TIMEOUT_MS = 60000;
 
-// «Бот»: один запрос identity.telegram.confirm через gateway
+// «Бот»: один запрос подтверждения через gateway по протоколу v2
+// (`identity.account.confirm_telegram`, канал PRE) — как настоящий бот на VPS
 async function botConfirm(token, telegramId) {
   const { gatewayUrl } = requireEnv();
-  const ws = new WebSocket(gatewayUrl);
-  await new Promise((resolve, reject) => {
-    ws.addEventListener('open', resolve, { once: true });
-    ws.addEventListener('error', () => reject(new Error('gateway ws error')), { once: true });
-  });
-  const payload = JSON.stringify({
-    secret: SECRET, token, telegram_id: telegramId, telegram_name: `smoke${telegramId}`,
-  });
-  const reply = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('gateway reply timeout')), 15000);
-    ws.addEventListener('message', (event) => {
-      const frame = JSON.parse(String(event.data));
-      if (frame.id !== '1') return;
-      clearTimeout(timer);
-      resolve(frame.op === 'err' ? { ok: false, error: frame.error } : JSON.parse(frame.payload || '{}'));
-    });
-  });
-  ws.send(JSON.stringify({
-    op: 'req', id: '1', subject: 'identity.telegram.confirm', payload, timeout_ms: 8000,
-  }));
-  const result = await reply;
-  ws.close();
-  return result;
+  return botConfirmV2(gatewayUrl, SECRET, token, telegramId, `tg${telegramId}`);
 }
 
 // Регистрация через форму и подтверждение «ботом»; возвращает сессию с журналом провайдера

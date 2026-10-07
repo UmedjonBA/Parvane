@@ -8,7 +8,6 @@
 // браузер (другое устройство) — подтверждение; выключение 2FA требует текущий
 // пароль (P-07), после него — обычный вход.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -18,6 +17,7 @@ import {
   LOGIN_TIMEOUT_MS, assertNoPageErrors, logOut, requireEnv, submitNick,
   autoDismissRecoveryKeyDialog,
 } from './e2e_web_helpers.mjs';
+import { botConfirmV2 } from './e2e_tg_confirm_v2.mjs';
 
 const PASSWORD = 'Parvane-telegram-2fa-password';
 const SECRET = process.env.PARVANE_TELEGRAM_SECRET;
@@ -30,43 +30,11 @@ const TG_STRANGER = 2002;
 // соединения gateway нет — «бот» ходит в шину напрямую, как настоящий
 const V1_OFF = process.env.PARVANE_E2E_V1_OFF === '1';
 
+// «Бот»: один запрос подтверждения через gateway по протоколу v2
+// (`identity.account.confirm_telegram`, канал PRE) — как настоящий бот на VPS
 async function botConfirm(token, telegramId) {
-  if (V1_OFF) {
-    const payload = JSON.stringify({
-      secret: SECRET, token, telegram_id: telegramId, telegram_name: `tg${telegramId}`,
-    });
-    try {
-      const out = execFileSync('nats', [
-        '--server', process.env.PARVANE_E2E_NATS_URL, 'req', 'identity.telegram.confirm', payload,
-        '--raw', '--timeout', '5s',
-      ]).toString();
-      return JSON.parse(out || '{}');
-    } catch (err) {
-      return { ok: false, error: String(err) };
-    }
-  }
   const { gatewayUrl } = requireEnv();
-  const ws = new WebSocket(gatewayUrl);
-  await new Promise((resolve, reject) => {
-    ws.addEventListener('open', resolve, { once: true });
-    ws.addEventListener('error', () => reject(new Error('gateway ws error')), { once: true });
-  });
-  const payload = JSON.stringify({
-    secret: SECRET, token, telegram_id: telegramId, telegram_name: `tg${telegramId}`,
-  });
-  const reply = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('gateway reply timeout')), 10000);
-    ws.addEventListener('message', (event) => {
-      const frame = JSON.parse(String(event.data));
-      if (frame.id !== '1') return;
-      clearTimeout(timer);
-      resolve(frame.op === 'err' ? { ok: false, error: frame.error } : JSON.parse(frame.payload || '{}'));
-    });
-  });
-  ws.send(JSON.stringify({ op: 'req', id: '1', subject: 'identity.telegram.confirm', payload, timeout_ms: 5000 }));
-  const result = await reply;
-  ws.close();
-  return result;
+  return botConfirmV2(gatewayUrl, SECRET, token, telegramId, `tg${telegramId}`);
 }
 
 async function openStartPage(context) {

@@ -185,23 +185,17 @@ pub(crate) fn v1_mode() -> V1Mode {
 
 pub(crate) const V1_UPGRADE_REQUIRED: &str = "upgrade_required";
 
-/// E6: при `PARVANE_V1_MODE=disabled` по v1 проходит только запрос бота
-/// `identity.telegram.confirm` (до входа, с общим секретом в payload).
-pub(crate) fn is_bot_confirm_frame(v: &Value) -> bool {
-    v["op"].as_str() == Some("req") && v["subject"].as_str() == Some(IDENTITY_TELEGRAM_CONFIRM)
-}
-
 pub(crate) async fn serve(
     mut in_rx: mpsc::Receiver<String>,
     tx: mpsc::Sender<String>,
     nats: Arc<Client>,
     client_ip: String,
 ) {
-    // E6: v1 отключён — клиент получает код и показывает «обновите приложение».
-    // Исключение — единственный запрос Telegram-бота `identity.telegram.confirm`
-    // (бот до перевода на v2 говорит v1-кадром; без него регистрация и 2FA
-    // встали бы вместе с v1). Любой другой кадр до входа — upgrade_required.
-    let bot_only = v1_mode() == V1Mode::Disabled;
+    // E6: v1 отключён — клиент получает код и показывает «обновите приложение»
+    if v1_mode() == V1Mode::Disabled {
+        let _ = tx.send(json!({"op":"err","error":V1_UPGRADE_REQUIRED}).to_string()).await;
+        return;
+    }
     // 1) pre-auth: до авторизации разрешены ТОЛЬКО bootstrap-запросы (логин и
     // регистрация — иначе получить токен через gateway было бы невозможно).
     // Всё остальное — после auth с валидным JWT. На всю фазу — idle-timeout:
@@ -219,10 +213,6 @@ pub(crate) async fn serve(
             }
         };
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        if bot_only && !is_bot_confirm_frame(&v) {
-            let _ = tx.send(json!({"op":"err","error":V1_UPGRADE_REQUIRED}).to_string()).await;
-            return;
-        }
         match v["op"].as_str().unwrap_or("") {
             "auth" => match verify_token(&nats, v["token"].as_str().unwrap_or("")).await {
                 Ok(u) => {

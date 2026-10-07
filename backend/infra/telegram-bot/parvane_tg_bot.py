@@ -77,28 +77,146 @@ def tg_call(method: str, **params):
     return body["result"]
 
 
+# ── Протокол v2 (spec 007): минимальный protobuf-кодек без зависимостей ──────
+# Бот шлёт один метод канала PRE — `identity.account.confirm_telegram` — кадрами
+# `Frame{hello}` → `Frame{welcome}` → `Frame{request}` → `Frame{response}`
+# (proto/parvane/core/v2/frame.proto, identity/v2/identity.proto). Номера полей
+# ниже — из схемы; генерировать pb2 не нужно (на VPS старый runtime protobuf).
+PROTO_MAJOR = 2
+PROTO_MINOR = 0
+CHANNEL_IDENTIFIED = 1
+METHOD_CONFIRM_TELEGRAM = "identity.account.confirm_telegram"
+ERROR_TEXT = {
+    1: "неверный запрос", 2: "Telegram уже привязан к другому аккаунту или неверный секрет",
+    3: "ссылка подтверждения не найдена или устарела", 4: "уже подтверждено",
+    5: "слишком много попыток, попробуйте позже", 6: "сервер требует обновления бота",
+    11: "сервер временно недоступен", 12: "ссылка подтверждения устарела",
+}
+
+
+def _varint(n: int) -> bytes:
+    out = bytearray()
+    n &= (1 << 64) - 1
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def _field_varint(num: int, value: int) -> bytes:
+    return _varint((num << 3) | 0) + _varint(value)
+
+
+def _field_bytes(num: int, value: bytes) -> bytes:
+    return _varint((num << 3) | 2) + _varint(len(value)) + value
+
+
+def _field_str(num: int, value: str) -> bytes:
+    return _field_bytes(num, value.encode("utf-8"))
+
+
+def _read_varint(buf: bytes, i: int) -> tuple[int, int]:
+    shift, n = 0, 0
+    while True:
+        b = buf[i]
+        i += 1
+        n |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return n, i
+        shift += 7
+        if shift > 63:
+            raise ValueError("varint")
+
+
+def _fields(buf: bytes) -> dict:
+    """Разобрать сообщение в {номер поля: [значения]}; bytes — для длинных полей."""
+    out: dict = {}
+    i = 0
+    while i < len(buf):
+        key, i = _read_varint(buf, i)
+        num, wt = key >> 3, key & 7
+        if wt == 0:
+            v, i = _read_varint(buf, i)
+        elif wt == 2:
+            ln, i = _read_varint(buf, i)
+            v = buf[i:i + ln]
+            i += ln
+        elif wt == 1:
+            v, i = buf[i:i + 8], i + 8
+        elif wt == 5:
+            v, i = buf[i:i + 4], i + 4
+        else:
+            raise ValueError("wire type")
+        out.setdefault(num, []).append(v)
+    return out
+
+
+def _first(fields: dict, num: int, default=None):
+    vals = fields.get(num)
+    return vals[0] if vals else default
+
+
+def v2_hello_frame() -> bytes:
+    client = _field_str(1, "bot") + _field_str(2, "1")
+    hello = _field_varint(1, PROTO_MINOR) + _field_bytes(3, client) + _field_varint(4, CHANNEL_IDENTIFIED)
+    return _field_varint(1, PROTO_MAJOR) + _field_bytes(10, hello)
+
+
+def v2_request_frame(req_id: int, method: str, body: bytes, timeout_ms: int) -> bytes:
+    request = _field_varint(1, req_id) + _field_str(2, method) + _field_bytes(3, body) + _field_varint(4, timeout_ms)
+    return _field_varint(1, PROTO_MAJOR) + _field_bytes(20, request)
+
+
+def v2_parse_response(frame: bytes, req_id: int):
+    """(ok_body | None, error_code | None) для Frame{response} с нужным id; None — другой кадр."""
+    f = _fields(frame)
+    response = _first(f, 21)
+    if response is None:
+        return None
+    r = _fields(response)
+    if _first(r, 1, 0) != req_id:
+        return None
+    if 2 in r:
+        return (_first(r, 2), None)
+    err = _fields(_first(r, 3, b""))
+    return (None, _first(err, 1, 0))
+
+
+def confirm_request_body(secret: str, token: str, telegram_id: int, telegram_name: str) -> bytes:
+    return (_field_str(1, secret) + _field_str(2, token)
+            + _field_varint(3, telegram_id) + _field_str(4, telegram_name))
+
+
+def parse_confirm_response(body: bytes) -> dict:
+    f = _fields(body)
+    user = _first(f, 1, b"").decode("utf-8", "replace")
+    action = _first(f, 2, b"").decode("utf-8", "replace")
+    return {"ok": True, "user": user, "kind": action or "register"}
+
+
 async def confirm_via_gateway(token: str, telegram_id: int, telegram_name: str) -> dict:
-    payload = json.dumps({
-        "secret": SECRET,
-        "token": token,
-        "telegram_id": telegram_id,
-        "telegram_name": telegram_name,
-    })
-    frame = json.dumps({
-        "op": "req", "id": "1", "subject": "identity.telegram.confirm",
-        "payload": payload, "timeout_ms": 5000,
-    })
-    async with websockets.connect(GATEWAY_URL, open_timeout=GATEWAY_TIMEOUT_S) as ws:
-        await ws.send(frame)
+    body = confirm_request_body(SECRET, token, telegram_id, telegram_name)
+    async with websockets.connect(GATEWAY_URL, open_timeout=GATEWAY_TIMEOUT_S, max_size=8 * 1024 * 1024) as ws:
+        await ws.send(v2_hello_frame())
+        welcome = await asyncio.wait_for(ws.recv(), GATEWAY_TIMEOUT_S)
+        if not isinstance(welcome, (bytes, bytearray)) or 11 not in _fields(bytes(welcome)):
+            return {"ok": False, "error": "gateway не ответил Welcome v2"}
+        await ws.send(v2_request_frame(1, METHOD_CONFIRM_TELEGRAM, body, 5000))
         while True:
             raw = await asyncio.wait_for(ws.recv(), GATEWAY_TIMEOUT_S)
-            reply = json.loads(raw)
-            if reply.get("id") != "1":
+            if not isinstance(raw, (bytes, bytearray)):
                 continue
-            if reply.get("op") == "err":
-                return {"ok": False, "error": reply.get("error", "ошибка gateway")}
-            if reply.get("op") == "reply":
-                return json.loads(reply.get("payload") or "{}")
+            parsed = v2_parse_response(bytes(raw), 1)
+            if parsed is None:
+                continue
+            ok_body, code = parsed
+            if ok_body is not None:
+                return parse_confirm_response(ok_body)
+            return {"ok": False, "code": code, "error": ERROR_TEXT.get(code, f"ошибка сервера (код {code})")}
 
 
 def purge_pending(now: float | None = None) -> None:
