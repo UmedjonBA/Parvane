@@ -50,10 +50,6 @@ export type WireMessageContent = {
   width?: number;
   height?: number;
   caption?: string;
-  ciphertext?: string;
-  ctype?: number;
-  sender_identity?: string;
-  sender_signing_key?: string;
   file_key?: string;
   // Секрет скачивания блоба вложения (v2, FR-062/D-08): сервер хранит только
   // SHA-256, получатель качает блоб анонимным каналом без гранта на себя
@@ -91,16 +87,6 @@ export type WireMessageContent = {
   l2?: boolean;
 };
 
-// Per-device sealed-копия (мультидевайс): recipient пуст у self-копий
-// отправителя — владельца тогда определяет signing_key (как в sync)
-export type WireDeviceCopy = {
-  recipient?: string;
-  signing_key?: string;
-  device_id: string;
-  ciphertext: string;
-  ctype?: number;
-};
-
 export type WireStoredMessage = {
   id: string;
   from: string;
@@ -114,11 +100,8 @@ export type WireStoredMessage = {
   updated_at?: number;
   reactions?: { emoji: string; count: number; mine?: boolean }[];
   pinned?: boolean;
-  // Заполнено только в live-пуше инбокса: копии адресата, устройство выбирает
-  // свою по device_id (в sync-ответах сервер уже подменил ciphertext)
-  copies?: WireDeviceCopy[];
-  // Строка собрана из события движка v2 (spec 007), а не пришла с v1-сервера:
-  // её id выбирает отправитель, поэтому v1-курсор синка по ней не двигается
+  // Строка собрана из события движка v2 (spec 007) или своей отправки — её id
+  // выбирает отправитель; строки кэша без пометки — история прежних сборок
   origin?: 'v2';
 };
 
