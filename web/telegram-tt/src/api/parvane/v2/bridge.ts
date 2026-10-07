@@ -168,6 +168,13 @@ export class V2Bridge {
     this.token = token;
   }
 
+  private sessionProof?: (user: string, deviceId: string) => Promise<{ proof: string; tsMs: number } | undefined>;
+
+  /** ID-01: источник доказательства устройства для входа (контроллер v2). */
+  setSessionProof(fn: typeof this.sessionProof) {
+    this.sessionProof = fn;
+  }
+
   private async describe(): Promise<V2Json> {
     if (!this.described) this.described = await preauth(this.url(), 'server.describe', {});
     return this.described;
@@ -225,6 +232,8 @@ export class V2Bridge {
         };
       }
       case 'identity.token.issue': {
+        // ID-01: устройство, уже привязанное к журналу, доказывает свой ключ
+        const proof = str(p, 'device_id') ? await this.sessionProof?.(str(p, 'user'), str(p, 'device_id')) : undefined;
         const r = await this.pre('identity.session.issue', {
           login: str(p, 'user'),
           password: str(p, 'password'),
@@ -232,6 +241,8 @@ export class V2Bridge {
           login_token: str(p, 'login_token'),
           trust_secret: str(p, 'trust_secret'),
           client_kind: str(p, 'client'),
+          device_proof: proof?.proof,
+          proof_ts_ms: proof ? String(proof.tsMs) : undefined,
         });
         if (flag(r, 'twofaRequired', 'twofa_required')) {
           return {

@@ -10,6 +10,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 parvane-protocol = { path = ".." }
+base64 = "0.22"
 
 [build-dependencies]
 cbindgen = { version = "0.29", default-features = false }

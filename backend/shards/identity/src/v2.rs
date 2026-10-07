@@ -385,6 +385,20 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if r.device_id.is_empty() || !parvane_protocol::address::is_valid_device_id(&r.device_id) {
                 return Err(ErrorCode::Invalid);
             }
+            // ID-01: устройство, действующее в журнале, доказывает владение
+            // своим ключом — иначе знающий пароль входил «как» оно (чистил его
+            // инбокс, затирал копию корня, забирал грант линковки).
+            let login = canonical_user(&r.login, &server_domain());
+            if device_proof_required() && log_has_active_device(&login, &r.device_id).await {
+                let log = load_log(&ctx, &login).await?;
+                let dev = log.active(&r.device_id).ok_or(ErrorCode::Forbidden)?;
+                let ed = dev.olm_ed25519().map_err(|_| ErrorCode::Invalid)?;
+                if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000)
+                    || !parvane_protocol::client::verify_session_proof(&ed, &login, &r.device_id, r.proof_ts_ms, &r.device_proof)
+                {
+                    return Err(ErrorCode::Forbidden);
+                }
+            }
             let mut p = json!({"user": r.login, "password": r.password, "device_id": r.device_id, "client_ip": req.client_ip});
             if !r.login_token.is_empty() {
                 p["login_token"] = json!(r.login_token);
@@ -1343,4 +1357,17 @@ async fn stats_versions(ctx: &V2Ctx) -> Reply {
     let v1: Vec<(String, String)> = sqlx::query_as("SELECT username, device_id FROM device_keys").fetch_all(&ctx.pool).await.map_err(db_err)?;
     let legacy = v1.into_iter().filter(|k| !v2_set.contains(k)).count() as u64;
     Ok(pb::ServerStatsVersionsResponse { versions, legacy_devices: legacy }.encode_to_vec())
+}
+
+/// ID-01: требовать доказательство устройства при входе (`PARVANE_REQUIRE_DEVICE_PROOF`,
+/// по умолчанию выключено, пока его не шлют все клиенты: web — есть, desktop и
+/// android — со своих следующих сборок). Без флага вход прежний.
+pub(crate) fn device_proof_required() -> bool {
+    matches!(std::env::var("PARVANE_REQUIRE_DEVICE_PROOF").ok().as_deref().map(str::trim), Some("1" | "true" | "yes"))
+}
+
+/// ID-01: окно свежести доказательства — ±5 минут от часов сервера.
+pub(crate) const SESSION_PROOF_WINDOW_MS: i64 = 5 * 60 * 1000;
+pub(crate) fn session_proof_fresh(ts_ms: i64, now_ms: i64) -> bool {
+    ts_ms != 0 && (ts_ms - now_ms).abs() <= SESSION_PROOF_WINDOW_MS
 }

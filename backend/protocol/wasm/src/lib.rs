@@ -572,6 +572,13 @@ impl PvClient {
         self.inner.own_ssk_exposed()
     }
 
+    /// ID-01: доказательство устройства для `identity.session.issue`
+    /// (`ts_ms` — миллисекунды Unix, как `Date.now()`).
+    #[wasm_bindgen(js_name = sessionProof)]
+    pub fn session_proof(&self, ts_ms: f64) -> Vec<u8> {
+        self.inner.session_proof(ts_ms as i64)
+    }
+
     // ── эфемерные каналы: «печатает» и присутствие (T127) ──
 
     /// Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →

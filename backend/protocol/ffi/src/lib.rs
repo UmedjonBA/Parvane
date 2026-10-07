@@ -404,6 +404,14 @@ pub unsafe extern "C" fn pv_client_own_ssk_exposed(c: *const PvClient) -> bool {
     c.as_ref().map(|c| c.inner.own_ssk_exposed()).unwrap_or(false)
 }
 
+/// ID-01: доказательство устройства для `identity.session.issue` — 64 байта
+/// подписи, base64 в C-строке (освобождать `pv_string_free`); null — нет клиента.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_session_proof(c: *const PvClient, ts_ms: i64) -> *mut c_char {
+    let Some(c) = c.as_ref() else { return ptr::null_mut() };
+    cstring(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, c.inner.session_proof(ts_ms)))
+}
+
 // ── эфемерные каналы: «печатает» и присутствие (T127) ───────────────────────
 
 /// Подписаться на каналы чатов `{"peers":[адрес…],"groups":[hex…]}` →

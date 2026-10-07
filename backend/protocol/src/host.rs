@@ -707,6 +707,11 @@ impl HostClient {
         self.inner.own_ssk_exposed()
     }
 
+    /// ID-01: доказательство устройства для `identity.session.issue` (64 байта).
+    pub fn session_proof(&self, ts_ms: i64) -> Vec<u8> {
+        self.inner.session_proof(ts_ms)
+    }
+
     pub fn token_count(&self) -> usize {
         self.inner.token_count()
     }

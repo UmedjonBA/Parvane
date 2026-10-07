@@ -1805,6 +1805,14 @@ impl Client {
         self.own_log.ssk_exposed
     }
 
+    /// ID-01: доказательство владения ключом устройства для
+    /// `identity.session.issue` — подпись `olm_ed25519` над (адрес, device_id,
+    /// ts_ms). Сервер требует её от устройства, действующего в журнале: пароль
+    /// сам по себе не даёт войти «как» чужое привязанное устройство.
+    pub fn session_proof(&self, ts_ms: i64) -> Vec<u8> {
+        sign::sign_ctx(&self.acc, sign::ctx::SESSION_PROOF, &session_proof_parts(&self.user, &self.device_id, ts_ms).iter().map(Vec::as_slice).collect::<Vec<_>>())
+    }
+
     /// D-12: у пользователя отозвано устройство, державшее SSK, а SSK ещё не
     /// сменён — показать предупреждение KEY-1 (для себя — напоминание сменить).
     pub fn ssk_pending(&self, user: &str) -> bool {
@@ -3020,4 +3028,39 @@ pub fn verify_server_descriptor(bytes: &[u8]) -> Result<(String, [u8; 32])> {
         return Err(ProtoError::BadAddress);
     }
     Ok((d.domain, k))
+}
+
+/// ID-01: подписываемые части доказательства устройства (общие для клиента и
+/// проверки на сервере).
+pub fn session_proof_parts(user: &str, device_id: &str, ts_ms: i64) -> [Vec<u8>; 3] {
+    [user.as_bytes().to_vec(), device_id.as_bytes().to_vec(), ts_ms.to_be_bytes().to_vec()]
+}
+
+/// ID-01: проверка доказательства устройства ключом `olm_ed25519` из журнала.
+pub fn verify_session_proof(ed25519: &[u8], user: &str, device_id: &str, ts_ms: i64, proof: &[u8]) -> bool {
+    let parts = session_proof_parts(user, device_id, ts_ms);
+    let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+    sign::verify_ctx(ed25519, proof, sign::ctx::SESSION_PROOF, &refs).is_ok()
+}
+
+#[cfg(test)]
+mod session_proof_tests {
+    use super::*;
+
+    #[test]
+    fn session_proof_verifies_only_for_device_key_and_fresh_time() {
+        // ID-01: подпись olm_ed25519 над адресом, device_id и временем;
+        // проверяется ключом устройства из журнала
+        let mut c = Client::new("alice@local", "dev-1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        let ed = c.own_log.devices.get("dev-1").unwrap().cert.olm_ed25519.clone();
+        let ts = 1_760_000_000_000i64;
+        let proof = c.session_proof(ts);
+        assert!(verify_session_proof(&ed, "alice@local", "dev-1", ts, &proof));
+        assert!(!verify_session_proof(&ed, "alice@local", "dev-2", ts, &proof), "другое устройство");
+        assert!(!verify_session_proof(&ed, "mallory@local", "dev-1", ts, &proof), "другой адрес");
+        assert!(!verify_session_proof(&ed, "alice@local", "dev-1", ts + 1, &proof), "другое время");
+        let other = Client::new("alice@local", "dev-2", "local").unwrap();
+        assert!(!verify_session_proof(&ed, "alice@local", "dev-1", ts, &other.session_proof(ts)), "чужой ключ");
+    }
 }

@@ -51,7 +51,7 @@ import {
 import { createCallController } from './calls';
 import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
 import { E2eEngine, fingerprintOf } from './e2e';
-import { getGatewayUrl } from './gateway';
+import { getGatewayUrl, getV2Bridge } from './gateway';
 import { buildBuiltinGifs } from './gifs';
 import { createGroupController } from './groups';
 import { langPackMethods } from './langPacks';
@@ -573,6 +573,8 @@ const v2Controller = createV2Controller({
   ],
   log: logDebug,
 });
+// ID-01: вход привязанного устройства несёт доказательство его ключа
+getV2Bridge().setSessionProof(v2Controller.sessionProof);
 
 messageController = createMessageController({
   v2: v2Controller,

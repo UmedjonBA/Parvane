@@ -1495,6 +1495,25 @@ export class PvClient {
         }
     }
     /**
+     * ID-01: доказательство устройства для `identity.session.issue`
+     * (`ts_ms` — миллисекунды Unix, как `Date.now()`).
+     * @param {number} ts_ms
+     * @returns {Uint8Array}
+     */
+    sessionProof(ts_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_sessionProof(retptr, this.__wbg_ptr, ts_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @param {string} user
      * @param {Uint8Array} key
      * @param {bigint} generation
