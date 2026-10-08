@@ -611,8 +611,10 @@
           "deleted",
           "ttl",
           "encrypted",
-          "group_encrypted"
+          "group_encrypted",
+          "chat_mode without origin v2"
         ],
+        "exportsPreV2Rows": true,
         "incomingRead": true,
         "groupRowsWaitForGroup": true
       },

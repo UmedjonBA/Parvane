@@ -10,14 +10,23 @@ import type { WireStoredMessage } from '../wire';
 // edited?, reactions?, pinned?, read?}`; незнакомые поля игнорируются. `read` у
 // своих исходящих — как знает старое устройство; входящие новое устройство
 // считает прочитанными (это история, а не новые сообщения).
+//
+// С T110 (v1 удалён, 7 окт 2026) в экспорт идут ВСЕ расшифрованные строки кэша,
+// а не только помеченные `origin: 'v2'`: строки эпохи v1 лежат в кэше тем же
+// открытым текстом, а получить их новому устройству больше неоткуда (серверной
+// истории v1 и Olm нет). Без этого второе устройство аккаунта с перепиской
+// до v2 получало после линковки пустой список чатов (прод, ub_test, 8 окт 2026).
+// Исключение — `chat_mode`: такая строка принимается только из v2 (sync.ts
+// `isForgedChatMode`), из эпохи v1 её не переносим.
 
 // Потолок числа строк в экспорте (берутся самые свежие)
 export const V2_HISTORY_LIMIT = 20000;
 
 function isExportable(message: WireStoredMessage) {
-  if (message.origin !== 'v2' || message.deleted || !message.content) return false;
+  if (message.deleted || !message.content) return false;
   if (message.content.ttl_secs) return false;
   const { kind } = message.content;
+  if (kind === 'chat_mode' && message.origin !== 'v2') return false;
   return kind !== 'encrypted' && kind !== 'group_encrypted';
 }
 
