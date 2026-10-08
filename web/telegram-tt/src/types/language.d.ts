@@ -2265,6 +2265,148 @@ export interface LangPair {
   'ParvaneInterfaceStyleClassic': undefined;
   'ParvaneInterfaceStylePanels': undefined;
   'ParvaneInterfaceStyleHint': undefined;
+  'ParvaneSections': undefined;
+  'ParvaneSectionMessenger': undefined;
+  'ParvaneSectionPlanner': undefined;
+  'ParvaneFolderSettings': undefined;
+  'PlannerAdd': undefined;
+  'PlannerAddFood': undefined;
+  'PlannerAddTask': undefined;
+  'PlannerAddTaskForDay': undefined;
+  'PlannerAddTaskToList': undefined;
+  'PlannerAriaLists': undefined;
+  'PlannerBackToDay': undefined;
+  'PlannerBackToMonth': undefined;
+  'PlannerBackToTasks': undefined;
+  'PlannerCreate': undefined;
+  'PlannerCreateList': undefined;
+  'PlannerDayNutrition': undefined;
+  'PlannerDaySchedule': undefined;
+  'PlannerDeleteTask': undefined;
+  'PlannerErrorCompleteEmpty': undefined;
+  'PlannerErrorDayAfterDue': undefined;
+  'PlannerErrorEventRepeat': undefined;
+  'PlannerErrorEventTime': undefined;
+  'PlannerErrorGrams': undefined;
+  'PlannerErrorMinutes': undefined;
+  'PlannerErrorName': undefined;
+  'PlannerErrorNeedDay': undefined;
+  'PlannerErrorNeedMinutes': undefined;
+  'PlannerErrorPastMidnight': undefined;
+  'PlannerErrorStartNeeds': undefined;
+  'PlannerErrorWater': undefined;
+  'PlannerEventOnce': undefined;
+  'PlannerEventRepeatWeekly': undefined;
+  'PlannerFieldDate': undefined;
+  'PlannerFieldDescription': undefined;
+  'PlannerFieldDue': undefined;
+  'PlannerFieldEnd': undefined;
+  'PlannerFieldEventDate': undefined;
+  'PlannerFieldEventName': undefined;
+  'PlannerFieldKind': undefined;
+  'PlannerFieldList': undefined;
+  'PlannerFieldMinutes': undefined;
+  'PlannerFieldStart': undefined;
+  'PlannerFieldStatus': undefined;
+  'PlannerFieldTaskName': undefined;
+  'PlannerFieldWorkDate': undefined;
+  'PlannerFindSlots': undefined;
+  'PlannerFoodAdd': undefined;
+  'PlannerFoodAddTitle': undefined;
+  'PlannerFoodDayComplete': undefined;
+  'PlannerFoodEditTitle': undefined;
+  'PlannerFoodEmpty': undefined;
+  'PlannerFoodExtra': undefined;
+  'PlannerFoodFiberNone': undefined;
+  'PlannerFoodFutureDay': undefined;
+  'PlannerFoodGrams': undefined;
+  'PlannerFoodMeal': undefined;
+  'PlannerFoodMissingNote': undefined;
+  'PlannerFoodName': undefined;
+  'PlannerFoodPer100': undefined;
+  'PlannerFoodPer100Hint': undefined;
+  'PlannerFoodPortionHint': undefined;
+  'PlannerFoodRequired': undefined;
+  'PlannerFoodStatusAbove': undefined;
+  'PlannerFoodStatusBelow': undefined;
+  'PlannerFoodStatusIncomplete': undefined;
+  'PlannerFoodStatusNone': undefined;
+  'PlannerFoodStatusOk': undefined;
+  'PlannerFoodStatusOpen': undefined;
+  'PlannerFoodWater': undefined;
+  'PlannerFree': undefined;
+  'PlannerGoalTolerance': undefined;
+  'PlannerGoalsTitle': undefined;
+  'PlannerGroupDeadlines': undefined;
+  'PlannerGroupEvents': undefined;
+  'PlannerGroupUntimed': undefined;
+  'PlannerKindEvent': undefined;
+  'PlannerKindTask': undefined;
+  'PlannerListEmpty': undefined;
+  'PlannerMealBreakfast': undefined;
+  'PlannerMealDinner': undefined;
+  'PlannerMealLunch': undefined;
+  'PlannerMealOther': undefined;
+  'PlannerMealSnack': undefined;
+  'PlannerMetricCarbs': undefined;
+  'PlannerMetricCarbsShort': undefined;
+  'PlannerMetricFat': undefined;
+  'PlannerMetricFatShort': undefined;
+  'PlannerMetricFiber': undefined;
+  'PlannerMetricKcal': undefined;
+  'PlannerMetricProtein': undefined;
+  'PlannerMetricProteinShort': undefined;
+  'PlannerNewList': undefined;
+  'PlannerNextMonth': undefined;
+  'PlannerNoEstimate': undefined;
+  'PlannerNoList': undefined;
+  'PlannerNoticeEventDeleted': undefined;
+  'PlannerNoticeFoodAdded': undefined;
+  'PlannerNoticeFoodDayClosed': undefined;
+  'PlannerNoticeFoodDayOpened': undefined;
+  'PlannerNoticeFoodDeleted': undefined;
+  'PlannerNoticeFoodUpdated': undefined;
+  'PlannerNoticeGoalsUpdated': undefined;
+  'PlannerNoticeStepAdded': undefined;
+  'PlannerNoticeUndone': undefined;
+  'PlannerNoticeWaterUpdated': undefined;
+  'PlannerPeriodDay': undefined;
+  'PlannerPeriodMonth': undefined;
+  'PlannerPrevMonth': undefined;
+  'PlannerSlotsHint': undefined;
+  'PlannerSlotsNone': undefined;
+  'PlannerStatAverage': undefined;
+  'PlannerStatChartMetric': undefined;
+  'PlannerStatChartNote': undefined;
+  'PlannerStatFiberNone': undefined;
+  'PlannerStatHistory': undefined;
+  'PlannerStatHistoryEmpty': undefined;
+  'PlannerStatInGoal': undefined;
+  'PlannerStatKcalLogged': undefined;
+  'PlannerStatMetric': undefined;
+  'PlannerStatNoCompleteDays': undefined;
+  'PlannerStatNutrition': undefined;
+  'PlannerStatOpenDiary': undefined;
+  'PlannerStatTime': undefined;
+  'PlannerStatTimeEmpty': undefined;
+  'PlannerStatTimeNote': undefined;
+  'PlannerStatWaterNone': undefined;
+  'PlannerStatusActive': undefined;
+  'PlannerStatusDone': undefined;
+  'PlannerStatusLater': undefined;
+  'PlannerStatusQueue': undefined;
+  'PlannerStatusWaiting': undefined;
+  'PlannerStepAdd': undefined;
+  'PlannerStepNew': undefined;
+  'PlannerTimeConflict': undefined;
+  'PlannerTitleNew': undefined;
+  'PlannerToday': undefined;
+  'PlannerUndo': undefined;
+  'PlannerUnitGram': undefined;
+  'PlannerUnitKcal': undefined;
+  'PlannerViewCalendar': undefined;
+  'PlannerViewStatistics': undefined;
+  'PlannerViewTasks': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -3979,6 +4121,164 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneL2Disabled': {
     'user': V;
+  };
+  'PlannerAriaChart': {
+    'name': V;
+  };
+  'PlannerAriaDay': {
+    'date': V;
+    'hours': V;
+    'unrated': V;
+    'conflicts': V;
+  };
+  'PlannerAriaDeleteEvent': {
+    'name': V;
+  };
+  'PlannerAriaDone': {
+    'name': V;
+  };
+  'PlannerAriaEditFood': {
+    'name': V;
+  };
+  'PlannerAriaFreeSlot': {
+    'from': V;
+    'to': V;
+  };
+  'PlannerAriaShowGroup': {
+    'name': V;
+  };
+  'PlannerAriaTimeTotal': {
+    'hours': V;
+  };
+  'PlannerBookingHint': {
+    'date': V;
+    'from': V;
+    'to': V;
+    'duration': V;
+  };
+  'PlannerCompleted': {
+    'count': V;
+  };
+  'PlannerDayOverload': {
+    'minutes': V;
+  };
+  'PlannerDayPlan': {
+    'planned': V;
+    'budget': V;
+  };
+  'PlannerDayUnrated': {
+    'count': V;
+  };
+  'PlannerDayWindows': {
+    'from': V;
+    'to': V;
+    'free': V;
+  };
+  'PlannerDeadlinePreview': {
+    'name': V;
+  };
+  'PlannerDueValue': {
+    'date': V;
+  };
+  'PlannerErrorGoal': {
+    'name': V;
+  };
+  'PlannerErrorNutrient': {
+    'name': V;
+  };
+  'PlannerErrorOutsideWindow': {
+    'from': V;
+    'to': V;
+  };
+  'PlannerEventRepeats': {
+    'days': V;
+  };
+  'PlannerFoodDayResult': {
+    'status': V;
+  };
+  'PlannerFoodFiberValue': {
+    'value': V;
+  };
+  'PlannerGoalTarget': {
+    'name': V;
+    'unit': V;
+  };
+  'PlannerHoursValue': {
+    'hours': V;
+  };
+  'PlannerMinutesValue': {
+    'minutes': V;
+  };
+  'PlannerMore': {
+    'count': V;
+  };
+  'PlannerNoticeAdded': {
+    'name': V;
+  };
+  'PlannerNoticeDone': {
+    'name': V;
+  };
+  'PlannerNoticeDueUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeEstimateUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeListCreated': {
+    'name': V;
+  };
+  'PlannerNoticeListUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeMoved': {
+    'date': V;
+    'name': V;
+  };
+  'PlannerNoticeReopened': {
+    'name': V;
+  };
+  'PlannerNoticeScheduled': {
+    'date': V;
+    'time': V;
+  };
+  'PlannerNoticeStatusUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeStepUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeTaskDeleted': {
+    'name': V;
+  };
+  'PlannerNoticeTimeUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeUnscheduled': {
+    'name': V;
+  };
+  'PlannerStatDays': {
+    'complete': V;
+    'open': V;
+  };
+  'PlannerStatFiber': {
+    'value': V;
+    'days': V;
+  };
+  'PlannerStatKcalGoal': {
+    'sum': V;
+    'low': V;
+    'high': V;
+  };
+  'PlannerStatTimeUnrated': {
+    'count': V;
+  };
+  'PlannerStatWater': {
+    'value': V;
+    'days': V;
+  };
+  'PlannerSteps': {
+    'done': V;
+    'total': V;
   };
 }
 

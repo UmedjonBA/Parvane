@@ -10,13 +10,16 @@ import { selectCurrentLimit } from '../../global/selectors/limits';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
+import { getParvaneSection, setParvaneSection } from '../../util/parvaneSection';
 
+import useDerivedState from '../../hooks/useDerivedState';
 import useFolderTabs from '../../hooks/useFolderTabs';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useResizeObserver from '../../hooks/useResizeObserver';
 import useScrolledState from '../../hooks/useScrolledState';
 
+import Icon from '../common/icons/Icon';
 import MainMenuDropdown from '../common/MainMenuDropdown';
 import Button from '../ui/Button';
 import Folder from '../ui/Folder';
@@ -35,6 +38,8 @@ type StateProps = {
 
 type OwnProps = {
   isActive: boolean;
+  // Parvane (spec 009): панель видна всегда; папки в ней — только при положении «слева»
+  withFolders?: boolean;
 };
 
 const FIRST_FOLDER_INDEX = 0;
@@ -48,6 +53,7 @@ const FoldersSidebar = ({
   folderInvitesById,
   maxFolderInvites,
   isActive,
+  withFolders,
 }: OwnProps & StateProps) => {
   const {
     loadChatFolders,
@@ -114,7 +120,18 @@ const FoldersSidebar = ({
     });
   }, [activeChatFolder, folderTabs]);
 
+  const section = useDerivedState(getParvaneSection);
+
+  const handleSelectMessenger = useLastCallback(() => {
+    setParvaneSection('messenger');
+  });
+
+  const handleSelectPlanner = useLastCallback(() => {
+    setParvaneSection('planner');
+  });
+
   const handleSwitchTab = useLastCallback((index: number) => {
+    setParvaneSection('messenger');
     openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
     openSettingsScreen({ screen: undefined });
     setActiveChatFolder({ activeChatFolder: index }, { forceOnHeavyAnimation: true });
@@ -126,6 +143,7 @@ const FoldersSidebar = ({
   });
 
   const handleSettingsClick = useLastCallback(() => {
+    setParvaneSection('messenger');
     openLeftColumnContent({ contentKey: LeftColumnContent.Settings });
     openSettingsScreen({ screen: SettingsScreens.Folders });
   });
@@ -163,42 +181,72 @@ const FoldersSidebar = ({
       className={styles.root}
       id="FoldersSidebar"
     >
-      <MainMenuDropdown
-        trigger={MainButton}
-        className={buildClassName(IS_TAURI && IS_MAC_OS && styles.hideMenuButton)}
-      />
-      {!isAtBeginning && <div className={styles.divider} />}
-      <div
-        ref={tabsRef}
-        className={buildClassName(styles.tabs, 'custom-scroll', 'no-scrollbar')}
-        onScroll={handleScroll}
-      >
-        {folderTabs?.map((tab, i) => (
-          <Folder
-            key={tab.id}
-            title={tab.title}
-            isActive={i === activeChatFolder}
-            isBlocked={tab.isBlocked}
-            badgeCount={tab.badgeCount}
-            isBadgeActive={tab.isBadgeActive}
-            onClick={handleSwitchTab}
-            clickArg={i}
-            contextActions={tab.contextActions}
-            contextRootElementSelector="#FoldersSidebar"
-            icon={tab.emoticon}
-            className={styles.tab}
-          />
-        ))}
-        <div ref={pillRef} className={styles.pill} />
+      <div className={buildClassName(styles.foldersZone, !withFolders && styles.foldersZoneEmpty)}>
+        {withFolders && (
+          <>
+            <MainMenuDropdown
+              trigger={MainButton}
+              className={buildClassName(IS_TAURI && IS_MAC_OS && styles.hideMenuButton)}
+            />
+            {!isAtBeginning && <div className={styles.divider} />}
+            <div
+              ref={tabsRef}
+              className={buildClassName(styles.tabs, 'custom-scroll', 'no-scrollbar')}
+              onScroll={handleScroll}
+            >
+              {folderTabs?.map((tab, i) => (
+                <Folder
+                  key={tab.id}
+                  title={tab.title}
+                  isActive={i === activeChatFolder}
+                  isBlocked={tab.isBlocked}
+                  badgeCount={tab.badgeCount}
+                  isBadgeActive={tab.isBadgeActive}
+                  onClick={handleSwitchTab}
+                  clickArg={i}
+                  contextActions={tab.contextActions}
+                  contextRootElementSelector="#FoldersSidebar"
+                  icon={tab.emoticon}
+                  className={styles.tab}
+                />
+              ))}
+              <div ref={pillRef} className={styles.pill} />
+            </div>
+            {!isAtEnd && <div className={styles.divider} />}
+            <Button
+              color="translucent"
+              className={buildClassName(styles.menuButton, styles.settingsButton)}
+              onClick={handleSettingsClick}
+              ariaLabel={lang('ParvaneFolderSettings')}
+              iconName="tools"
+              iconClassName={styles.icon}
+            />
+          </>
+        )}
       </div>
-      {!isAtEnd && <div className={styles.divider} />}
-      <Button
-        color="translucent"
-        className={buildClassName(styles.menuButton, styles.settingsButton)}
-        onClick={handleSettingsClick}
-        iconName="tools"
-        iconClassName={styles.icon}
-      />
+      <div className={styles.sectionsZone} role="tablist" aria-label={lang('ParvaneSections')}>
+        <div className={styles.divider} />
+        <button
+          type="button"
+          role="tab"
+          aria-selected={section === 'messenger'}
+          className={buildClassName(styles.section, section === 'messenger' && styles.sectionActive)}
+          onClick={handleSelectMessenger}
+        >
+          <Icon name="folder-tabs-chats" className={styles.icon} />
+          <span className={styles.sectionTitle}>{lang('ParvaneSectionMessenger')}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={section === 'planner'}
+          className={buildClassName(styles.section, section === 'planner' && styles.sectionActive)}
+          onClick={handleSelectPlanner}
+        >
+          <Icon name="calendar" className={styles.icon} />
+          <span className={styles.sectionTitle}>{lang('ParvaneSectionPlanner')}</span>
+        </button>
+      </div>
     </div>
   );
 };

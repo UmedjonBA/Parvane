@@ -119,6 +119,7 @@ import {
 
 const LOGIN_HASH_PREFIX = '#parvane=';
 // Свой фон чата — в шифрованном хранилище, а не открытым блобом в Cache Storage
+const PLANNER_RECORD = 'planner';
 const BACKGROUND_RECORD_PREFIX = 'background:';
 const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
 const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
@@ -1878,6 +1879,23 @@ const methods = {
     if (!bytes) return { status: 'empty' as const };
     const mimeType = await storage.loadRecord<string>(`${name}:mime`);
     return { status: 'ok' as const, blob: new Blob([bytes as BlobPart], { type: mimeType || 'image/jpeg' }) };
+  },
+
+  // Планировщик (spec 009): состояние целиком одной шифрованной записью устройства.
+  // `not-ready` — провайдер ещё не знает пользователя, вызывающий повторяет
+  async parvaneLoadPlanner() {
+    if (!store.self) return { status: 'not-ready' as const };
+    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+    if (!storage) return { status: 'not-ready' as const };
+    return { status: 'ok' as const, state: await storage.loadRecord<unknown>(PLANNER_RECORD) };
+  },
+
+  async parvaneSavePlanner({ state }: { state: unknown }) {
+    if (!store.self) return false;
+    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+    if (!storage) return false;
+    await storage.saveRecord(PLANNER_RECORD, state);
+    return true;
   },
 
   async fetchWallpapers() {

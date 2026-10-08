@@ -1,0 +1,922 @@
+// Parvane (spec 009): раздел «План». Цвета, шрифты и скругления — токены
+// мессенджера; свои только цвета серий статистики и загрузки дня.
+
+.root {
+  --planner-series-1: var(--color-primary);
+  --planner-series-2: var(--color-green);
+  --planner-series-3: var(--color-orange);
+  --planner-series-4: var(--color-yellow);
+  --planner-series-5: var(--color-text-secondary);
+  --planner-panel-width: 23rem;
+
+  position: relative;
+  z-index: 1;
+
+  overflow: hidden;
+  display: flex;
+  grid-column: 2 / -1;
+  flex-direction: column;
+
+  min-width: 0;
+  margin: 1rem;
+  border-radius: var(--border-radius-island);
+
+  color: var(--color-text);
+
+  background: var(--color-background);
+  outline: none;
+  box-shadow: var(--shadow-island);
+
+  @media (max-width: 600px) {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    border-radius: 0;
+  }
+}
+
+.header {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+
+  min-height: var(--column-header-height);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-borders);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5rem;
+}
+
+.viewTabs {
+  flex: 0 1 auto;
+}
+
+.headerButtons {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+  margin-inline-start: auto;
+}
+
+.content {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--planner-panel-width);
+  min-height: 100%;
+
+  @media (max-width: 925px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.main {
+  min-width: 0;
+  padding: 1rem;
+
+  @media (max-width: 925px) {
+    .panelOpen & {
+      display: none;
+    }
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  min-width: 0;
+  padding: 1rem;
+  border-inline-start: 1px solid var(--color-borders);
+
+  background: var(--color-background-secondary);
+
+  @media (max-width: 925px) {
+    display: none;
+    border-inline-start: none;
+
+    .panelOpen & {
+      display: flex;
+    }
+  }
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.backToMain {
+  display: none;
+  align-self: flex-start;
+
+  @media (max-width: 925px) {
+    display: flex;
+  }
+}
+
+// ── месяц ────────────────────────────────────────────────────────────────────
+
+.month {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.375rem;
+}
+
+.weekday {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.blank {
+  min-height: 1px;
+}
+
+.day {
+  cursor: var(--custom-cursor, pointer);
+
+  position: relative;
+
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+  min-height: 6.5rem;
+  padding: 0.375rem 0.5rem 0.625rem;
+  border: 0.125rem solid transparent;
+  border-radius: var(--border-radius-default-small);
+
+  // Загрузка дня: зелёный → жёлтый → красный по доле дневного бюджета
+  background: color-mix(in srgb, hsl(var(--planner-load-hue) 55% 50%) 14%, var(--color-background));
+
+  transition: border-color 0.15s;
+
+  &:hover {
+    border-color: var(--color-borders);
+  }
+}
+
+.dayWeekend {
+  background: color-mix(in srgb, hsl(var(--planner-load-hue) 55% 50%) 9%, var(--color-background-secondary));
+}
+
+.daySelected,
+.daySelected:hover {
+  border-color: var(--color-primary);
+}
+
+.dayHead {
+  display: flex;
+  gap: 0.25rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.dayNumber {
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5rem;
+
+  .dayToday & {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+
+    color: var(--color-white);
+
+    background: var(--color-primary);
+  }
+}
+
+.dayHours {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+}
+
+.preview {
+  overflow: hidden;
+  display: block;
+
+  width: 100%;
+  padding: 0 0.125rem;
+  border: none;
+  border-radius: 0.25rem;
+
+  font-size: 0.6875rem;
+  line-height: 1.125rem;
+  color: var(--color-text);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: none;
+}
+
+.previewTask {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+}
+
+.previewDue {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-error);
+}
+
+.loadBar {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.25rem;
+  left: 0.5rem;
+
+  overflow: hidden;
+
+  height: 0.1875rem;
+  border-radius: 0.125rem;
+
+  background: var(--color-borders);
+}
+
+.loadFill {
+  display: block;
+  width: var(--planner-load);
+  height: 100%;
+  background: hsl(var(--planner-load-hue) 55% 50%);
+}
+
+// ── общее ────────────────────────────────────────────────────────────────────
+
+.small {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-text-secondary);
+}
+
+.warning {
+  font-size: 0.75rem;
+  color: var(--color-error);
+}
+
+.error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--color-error);
+}
+
+.summary {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+.group {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.inlineAdd {
+  align-self: flex-start;
+}
+
+.fold {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+// ── поля и формы ─────────────────────────────────────────────────────────────
+
+.field {
+  display: block;
+  min-width: 0;
+}
+
+.fieldLabel {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.fieldInput {
+  height: 2.5rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1rem;
+
+  .panel & {
+    max-width: none;
+    padding: 0;
+  }
+}
+
+.weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+}
+
+.stepForm {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+
+  > .field {
+    flex: 1 1 auto;
+  }
+}
+
+.goalPair {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 0.375rem;
+}
+
+// ── задача ───────────────────────────────────────────────────────────────────
+
+.task {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  min-width: 0;
+  padding: 0.25rem 0;
+}
+
+.taskCheck {
+  flex-shrink: 0;
+
+  width: 1.125rem;
+  height: 1.125rem;
+  margin-top: 0.1875rem;
+
+  accent-color: var(--color-primary);
+}
+
+.taskButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+  padding: 0.125rem 0.375rem;
+  border: none;
+  border-radius: var(--border-radius-default-tiny);
+
+  color: var(--color-text);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+}
+
+.taskName {
+  overflow: hidden;
+
+  min-width: 0;
+
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+
+  .taskDone & {
+    color: var(--color-text-secondary);
+    text-decoration: line-through;
+  }
+}
+
+// ── расписание дня ───────────────────────────────────────────────────────────
+
+.dayList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.clock {
+  flex: 0 0 5.5rem;
+  font-size: 0.75rem;
+  line-height: 1.5rem;
+  color: var(--color-text-secondary);
+}
+
+.free {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.5rem;
+
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: var(--border-radius-default-small);
+
+  color: var(--color-text);
+  text-align: start;
+
+  background: color-mix(in srgb, var(--color-green) 12%, var(--color-background));
+
+  &:hover {
+    background: color-mix(in srgb, var(--color-green) 20%, var(--color-background));
+  }
+}
+
+.freeBody {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.875rem;
+}
+
+.busy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--border-radius-default-small);
+
+  background: var(--color-background);
+}
+
+.busyCollision {
+  background: color-mix(in srgb, var(--color-orange) 16%, var(--color-background));
+}
+
+.busyRow {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.eventBody {
+  position: relative;
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+  padding-inline-end: 2rem;
+}
+
+.eventDelete {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 0;
+}
+
+// ── редактор ─────────────────────────────────────────────────────────────────
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.back {
+  align-self: flex-start;
+
+  @media (max-width: 925px) {
+    display: none;
+  }
+}
+
+.editorTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.slot {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: var(--border-radius-default-small);
+
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  text-align: start;
+
+  background: var(--color-background);
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+}
+
+// ── списки задач ─────────────────────────────────────────────────────────────
+
+.lists {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  gap: 1.5rem;
+
+  @media (max-width: 600px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.listNav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.listButton {
+  cursor: var(--custom-cursor, pointer);
+
+  overflow: hidden;
+
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: var(--border-radius-default-small);
+
+  font-size: 0.875rem;
+  color: var(--color-text);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: none;
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+}
+
+.listButtonActive,
+.listButtonActive:hover {
+  color: var(--color-white);
+  background: var(--color-primary);
+}
+
+.listBody {
+  min-width: 0;
+}
+
+.listTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: var(--font-weight-medium);
+}
+
+// ── питание ──────────────────────────────────────────────────────────────────
+
+.nutrients {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nutrient {
+  font-size: 0.8125rem;
+}
+
+.nutrientHead {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.1875rem;
+}
+
+.track {
+  overflow: hidden;
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+  background: var(--color-borders);
+
+  > span {
+    display: block;
+    width: var(--planner-progress);
+    height: 100%;
+    background: var(--color-primary);
+  }
+}
+
+.mealHead {
+  display: flex;
+  justify-content: space-between;
+}
+
+.mealEntry {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex-direction: column;
+
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: none;
+  border-radius: var(--border-radius-default-tiny);
+
+  color: var(--color-text);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+}
+
+.mealEntryTop {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  font-size: 0.875rem;
+}
+
+// ── статистика ───────────────────────────────────────────────────────────────
+
+.statistics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.statHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.timeStat {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.donut {
+  position: relative;
+
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+
+  width: 11rem;
+  height: 11rem;
+  border-radius: 50%;
+
+  background: var(--color-borders);
+
+  &::before {
+    content: "";
+
+    position: absolute;
+    inset: 1.75rem;
+
+    border-radius: 50%;
+
+    background: var(--color-background);
+  }
+}
+
+.donutTotal {
+  position: relative;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.legend {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  min-width: 0;
+}
+
+.legendRow {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  font-size: 0.875rem;
+
+  > .taskName {
+    flex: 1 1 auto;
+  }
+}
+
+.legendDot {
+  flex-shrink: 0;
+
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+
+  background: var(--planner-series);
+}
+
+.foodStat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.foodTotal {
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.8125rem;
+
+  th,
+  td {
+    padding: 0.375rem 0.5rem;
+    border-bottom: 1px solid var(--color-borders);
+    text-align: start;
+  }
+
+  th {
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+  }
+}
+
+.chart {
+  display: flex;
+  gap: 0.5rem;
+  height: 10rem;
+  padding-bottom: 1.25rem;
+}
+
+.chartAxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+}
+
+.chartBars {
+  position: relative;
+
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.125rem;
+  align-items: flex-end;
+
+  border-bottom: 1px solid var(--color-borders);
+}
+
+.chartGoal {
+  pointer-events: none;
+
+  position: absolute;
+  right: 0;
+  bottom: var(--planner-goal);
+  left: 0;
+
+  border-top: 1px dashed var(--color-text-secondary);
+}
+
+.bar {
+  position: relative;
+
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+
+  height: 100%;
+}
+
+.barFill {
+  display: block;
+
+  width: 100%;
+  height: var(--planner-height);
+  border-radius: 0.125rem 0.125rem 0 0;
+
+  background: var(--color-primary);
+
+  .barOpen & {
+    opacity: 0.45;
+  }
+
+  .barEmpty & {
+    height: 0;
+  }
+}
+
+.barLabel {
+  position: absolute;
+  bottom: -1.125rem;
+  left: 50%;
+  transform: translateX(-50%);
+
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+}
+
+// ── строка уведомления с «Отменить» ──────────────────────────────────────────
+
+.notice {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 2.25rem;
+  padding: 0.25rem 1rem;
+  border-top: 1px solid var(--color-borders);
+
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+// Кнопки мессенджера по умолчанию растягиваются на всю ширину и пишутся
+// прописными — в планировщике они по содержимому и обычным регистром
+.root :global(.Button) {
+  flex-shrink: 0;
+  width: auto;
+  padding-inline: 0.875rem;
+  text-transform: none;
+}
+
+.root :global(.Button.round) {
+  width: 2.5rem;
+}
+
+.root :global(.input-group) {
+  margin-bottom: 0;
+}
+
+// «Классическое» (spec 008): раздел вплотную к краям, без скругления и тени
+:global(html.interface-classic) .root {
+  margin: 0;
+  border-inline-start: 1px solid var(--color-borders);
+  border-radius: 0;
+  box-shadow: none;
+}

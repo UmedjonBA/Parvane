@@ -47,13 +47,21 @@ async function expectStyle(page, style, label) {
     { timeout: 5000 },
   );
   const left = await measure(page, '#LeftColumn');
+  const sidebar = await measure(page, '#FoldersSidebar');
+  const sidebarWidth = await page.evaluate(() => Math.round(document.querySelector('#FoldersSidebar').getBoundingClientRect().width));
   const header = await measure(page, '.MiddleHeader');
   const footer = await measure(page, '#MiddleColumn .middle-column-footer');
   if (style === 'classic') {
+    // Слева всегда стоит панель разделов (spec 009): она у края окна, список чатов — вплотную к ней
+    assert.deepEqual(
+      { left: sidebar.left, top: sidebar.top, bottom: sidebar.bottom, radius: sidebar.radius },
+      { left: 0, top: 0, bottom: 0, radius: 0 },
+      `${label}: панель разделов не вплотную к краям: ${JSON.stringify(sidebar)}`,
+    );
     assert.deepEqual(
       { left: left.left, top: left.top, bottom: left.bottom, radius: left.radius, hasShadow: left.hasShadow },
-      { left: 0, top: 0, bottom: 0, radius: 0, hasShadow: false },
-      `${label}: левая колонка не вплотную к краям: ${JSON.stringify(left)}`,
+      { left: sidebarWidth, top: 0, bottom: 0, radius: 0, hasShadow: false },
+      `${label}: левая колонка не вплотную к панели и краям: ${JSON.stringify(left)}`,
     );
     assert.equal(header.top, 0, `${label}: заголовок чата не у верхнего края: ${JSON.stringify(header)}`);
     assert.equal(header.right, 0, `${label}: заголовок чата не до правого края: ${JSON.stringify(header)}`);
@@ -86,10 +94,16 @@ async function expectStyle(page, style, label) {
   } else {
     // «Панели» — вид до фичи: отступ 1rem, скругление 1.5rem, тень
     assert.deepEqual(
-      { left: left.left, top: left.top, bottom: left.bottom, radius: left.radius, hasShadow: left.hasShadow },
-      { left: 16, top: 16, bottom: 16, radius: 24, hasShadow: true },
+      { left: sidebar.left, top: sidebar.top, bottom: sidebar.bottom, radius: sidebar.radius },
+      { left: 16, top: 16, bottom: 16, radius: 24 },
+      `${label}: панель разделов «Панелей» изменилась: ${JSON.stringify(sidebar)}`,
+    );
+    assert.deepEqual(
+      { top: left.top, bottom: left.bottom, radius: left.radius, hasShadow: left.hasShadow },
+      { top: 16, bottom: 16, radius: 24, hasShadow: true },
       `${label}: «Панели» изменились: ${JSON.stringify(left)}`,
     );
+    assert.ok(left.left > 16 + sidebarWidth, `${label}: между панелью и списком чатов нет зазора: ${JSON.stringify(left)}`);
     assert.ok(header.top >= 16 && header.radius > 0, `${label}: заголовок «Панелей» изменился: ${JSON.stringify(header)}`);
     assert.ok(footer.bottom >= 0 && footer.right > 0, `${label}: поле ввода «Панелей» изменилось`);
   }

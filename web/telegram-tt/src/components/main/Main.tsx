@@ -49,6 +49,7 @@ import { oldTranslate } from '../../util/oldLangProvider';
 import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
+import { getParvaneSection } from '../../util/parvaneSection';
 import {
   consumePendingInvite,
   getInitialLocationHash,
@@ -65,6 +66,7 @@ import useTimeout from '../../hooks/schedulers/useTimeout';
 import useTauriEvent from '../../hooks/tauri/useTauriEvent';
 import useAppLayout from '../../hooks/useAppLayout';
 import useCustomBackground from '../../hooks/useCustomBackground';
+import useDerivedState from '../../hooks/useDerivedState';
 import useForceUpdate from '../../hooks/useForceUpdate';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
@@ -90,6 +92,7 @@ import MessageListHistoryHandler from '../middle/MessageListHistoryHandler';
 import MiddleColumn from '../middle/MiddleColumn';
 import AudioPlayer from '../middle/panes/AudioPlayer';
 import ModalContainer from '../modals/ModalContainer';
+import Planner from '../parvane/planner/Planner';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
 import RightColumn from '../right/RightColumn';
@@ -841,13 +844,18 @@ const Main = ({
     isRightColumnOpen && backgroundStyles.withRightColumn,
   );
 
+  // Parvane (spec 009): боковая панель видна всегда (кроме телефона), раздел выбирается в её нижней части
+  const isAppSidebarShown = !isMobile;
+  const isPlannerOpen = useDerivedState(getParvaneSection) === 'planner';
+
   const className = buildClassName(
     willAnimateLeftColumnRef.current && 'left-column-animating',
     willAnimateRightColumnRef.current && 'right-column-animating',
     isNarrowMessageList && 'narrow-message-list',
     shouldSkipHistoryAnimations && 'history-animation-disabled',
     isFullscreen && 'is-fullscreen',
-    isFoldersSidebarShown && 'folders-sidebar-visible',
+    isAppSidebarShown && 'folders-sidebar-visible',
+    isPlannerOpen && 'section-planner',
   );
 
   const handleBlur = useLastCallback(() => {
@@ -894,7 +902,8 @@ const Main = ({
       {IS_TAURI && IS_MAC_OS && (
         <div className="tauri-drag-region" data-tauri-drag-region />
       )}
-      <FoldersSidebar isMobile={isMobile} isActive={isFoldersSidebarShown} />
+      <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
+      {isPlannerOpen && <Planner isMobile={isMobile} />}
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
       <MiddleColumn leftColumnRef={leftColumnRef} isMobile={isMobile} />
       <RightColumn isMobile={isMobile} />
