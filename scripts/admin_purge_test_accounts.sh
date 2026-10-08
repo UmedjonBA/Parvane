@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Чистка прода от тестовых аккаунтов дыма (`scripts/e2e_web_prod_v2_smoke.mjs` заводит
-# по два на прогон: smoke-a-<суффикс>, smoke-b-<суффикс>). Удаляет ТОЛЬКО аккаунты с
+# по два на прогон: smoke-a-<суффикс>, smoke-b-<суффикс>; проверка «Плана» на проде —
+# smoke-plan-a/b-<суффикс>). Удаляет ТОЛЬКО аккаунты с
 # именем строго такого вида и всё, что им принадлежит, во всех базах шардов: учётные
 # записи и устройства (identity v1/v2), инбоксы и личное состояние, группы, в которых
 # нет никого, кроме них, их файлы, подписки push.
@@ -16,14 +17,14 @@ source "$ROOT/backend/infra/deploy/.deploy.env"
 : "${PARVANE_DEPLOY_SSH_DEST:?}" "${PARVANE_DEPLOY_PUBLIC_HOST:?}"
 SSH=(ssh -p "${PARVANE_DEPLOY_SSH_PORT:-22}" -o BatchMode=yes "$PARVANE_DEPLOY_SSH_DEST")
 DOMAIN="${PARVANE_PURGE_DOMAIN:-$PARVANE_DEPLOY_PUBLIC_HOST}"
-NAME_RE="^smoke-[ab]-[a-z0-9]{6,12}@${DOMAIN//./\\.}$"
+NAME_RE="^smoke-(plan-)?[ab]-[a-z0-9]{6,12}@${DOMAIN//./\\.}$"
 
 # SQL со стандартного ввода в базу шарда
 sql() {  # sql <шард> <файл базы>
   "${SSH[@]}" "docker run --rm -i -v parvane_db-$1:/data alpine sh -c 'apk add -q sqlite && sqlite3 -cmd \".timeout 15000\" /data/$2'"
 }
 
-USERS="$(printf "SELECT username FROM users WHERE username LIKE 'smoke-a-%%@%s' OR username LIKE 'smoke-b-%%@%s';\n" "$DOMAIN" "$DOMAIN" | sql identity identity.db)"
+USERS="$(printf "SELECT username FROM users WHERE username LIKE 'smoke-a-%%@%s' OR username LIKE 'smoke-b-%%@%s' OR username LIKE 'smoke-plan-a-%%@%s' OR username LIKE 'smoke-plan-b-%%@%s';\n" "$DOMAIN" "$DOMAIN" "$DOMAIN" "$DOMAIN" | sql identity identity.db)"
 if [[ -z "$USERS" ]]; then echo "тестовых аккаунтов нет"; exit 0; fi
 while IFS= read -r user; do
   [[ "$user" =~ $NAME_RE ]] || { echo "ОТКАЗ: «$user» не похож на аккаунт дыма — ничего не удалено" >&2; exit 1; }
