@@ -1,4 +1,4 @@
-import { useEffect, useState } from '../../../lib/teact/teact';
+import { useEffect, useRef, useState } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
 
@@ -18,8 +18,9 @@ type OwnProps = {
   maxLength?: number;
   disabled?: boolean;
   className?: string;
-  // Значение отдаётся по завершении ввода (потеря фокуса, Enter; дата и время — сразу)
-  onCommit?: (value: string) => void;
+  // Значение отдаётся по завершении ввода (потеря фокуса, Enter; дата и время — сразу).
+  // `false` в ответ — значение отвергнуто: поле возвращает прежнее
+  onCommit?: (value: string) => boolean | void;
   // Значение на каждое изменение — для форм, которые читают поля при отправке
   onInput?: (value: string) => void;
 };
@@ -29,6 +30,8 @@ type OwnProps = {
 const PlannerField = ({
   id, label, type, value, placeholder, min, max, step, maxLength, disabled, className, onCommit, onInput,
 }: OwnProps) => {
+  const inputRef = useRef<HTMLInputElement>();
+
   const [draft, setDraft] = useState(value || '');
 
   useEffect(() => {
@@ -36,7 +39,12 @@ const PlannerField = ({
   }, [value]);
 
   const commit = useLastCallback((next: string) => {
-    if (next !== (value || '')) onCommit?.(next);
+    if (next === (value || '') || !onCommit) return;
+    if (onCommit(next) !== false) return;
+    // Отказ проверки: состояние не изменилось, и повторная отрисовка не придёт —
+    // прежнее значение возвращается прямо в элемент (иначе в поле остаётся набранное)
+    setDraft(value || '');
+    if (inputRef.current) inputRef.current.value = value || '';
   });
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -61,6 +69,7 @@ const PlannerField = ({
     <label className={buildClassName(styles.field, className)}>
       <span className={styles.fieldLabel}>{label}</span>
       <input
+        ref={inputRef}
         id={id}
         className={buildClassName('form-control', styles.fieldInput)}
         type={type}

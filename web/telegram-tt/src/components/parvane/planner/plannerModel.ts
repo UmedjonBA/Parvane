@@ -68,6 +68,17 @@ export type PlannerNutritionDay = {
   waterMl?: number;
 };
 
+// Настройки дня (T014): окна дня, перерыв и запас при поиске времени — минуты от полуночи
+export type PlannerSettings = {
+  dayStart: number;
+  dayEnd: number;
+  // Перерыв (обед) внутри окон дня; `lunchEnd <= lunchStart` — без перерыва
+  lunchStart: number;
+  lunchEnd: number;
+  // Запас до и после каждого дела при поиске окна, минут
+  margin: number;
+};
+
 export type PlannerState = {
   version: 1;
   tasks: PlannerTask[];
@@ -79,6 +90,7 @@ export type PlannerState = {
   macroGoals: PlannerMacroGoals;
   // Дневной бюджет времени, минут
   budget: number;
+  settings: PlannerSettings;
 };
 
 export type PlannerTimed = {
@@ -93,12 +105,14 @@ export type PlannerSlot = { start: number; end: number };
 export type PlannerBusyGroup = PlannerSlot & { items: PlannerTimed[] };
 export type PlannerNutrientStatus = 'none' | 'incomplete' | 'open' | 'below' | 'above' | 'ok';
 
-export const DAY_WINDOW_START = 540;
-export const DAY_WINDOW_END = 1260;
 export const MINUTES_IN_DAY = 1440;
 export const MIN_TASK_MINUTES = 5;
-const LUNCH_BREAK: [number, number] = [780, 840];
-const SLOT_MARGIN = 15;
+export const MIN_BUDGET_MINUTES = 60;
+export const MAX_SLOT_MARGIN = 180;
+// Значения макета: окна 09–21, обед 13–14, запас 15 минут
+export const DEFAULT_PLANNER_SETTINGS: PlannerSettings = {
+  dayStart: 540, dayEnd: 1260, lunchStart: 780, lunchEnd: 840, margin: 15,
+};
 const SLOT_SEARCH_DAYS = 7;
 const SLOT_ANSWERS = 3;
 const DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -120,7 +134,12 @@ export function createEmptyPlannerState(): PlannerState {
       carbs: { target: 230, tolerance: 30 },
     },
     budget: 600,
+    settings: { ...DEFAULT_PLANNER_SETTINGS },
   };
+}
+
+export function hasLunchBreak(settings: PlannerSettings) {
+  return settings.lunchEnd > settings.lunchStart;
 }
 
 // ── даты и время ─────────────────────────────────────────────────────────────
@@ -219,12 +238,13 @@ export function getLoadFraction(state: PlannerState, minutes: number) {
 }
 
 export function getDayAvailability(state: PlannerState, day: string) {
+  const { dayStart, dayEnd } = state.settings;
   const timed = getTimedForDay(state, day);
   const busy: PlannerSlot[] = [];
   timed
     .map((item) => ({
-      start: Math.max(DAY_WINDOW_START, toMinutes(item.start)),
-      end: Math.min(DAY_WINDOW_END, toMinutes(item.end)),
+      start: Math.max(dayStart, toMinutes(item.start)),
+      end: Math.min(dayEnd, toMinutes(item.end)),
     }))
     .filter((slot) => slot.start < slot.end)
     .sort((a, b) => a.start - b.start)
@@ -235,12 +255,12 @@ export function getDayAvailability(state: PlannerState, day: string) {
     });
 
   const free: PlannerSlot[] = [];
-  let cursor = DAY_WINDOW_START;
+  let cursor = dayStart;
   busy.forEach((slot) => {
     if (slot.start > cursor) free.push({ start: cursor, end: slot.start });
     cursor = Math.max(cursor, slot.end);
   });
-  if (cursor < DAY_WINDOW_END) free.push({ start: cursor, end: DAY_WINDOW_END });
+  if (cursor < dayEnd) free.push({ start: cursor, end: dayEnd });
 
   // Пересекающиеся дела показываются одной группой с предупреждением
   const groups: PlannerBusyGroup[] = [];
@@ -261,10 +281,14 @@ export function getDayAvailability(state: PlannerState, day: string) {
   };
 }
 
-// Ближайшие свободные окна под задачу: 09–21, обед 13–14, запас 15 минут
+// Ближайшие свободные окна под задачу: в окнах дня, мимо перерыва, с запасом (settings)
 export function findSlots(state: PlannerState, task: PlannerTask, today: string, picked: string) {
   if (!task.minutes) return [];
   const minutes = task.minutes;
+  const {
+    dayStart, dayEnd, lunchStart, lunchEnd, margin,
+  } = state.settings;
+  const lunch: [number, number][] = hasLunchBreak(state.settings) ? [[lunchStart, lunchEnd]] : [];
   const base = task.day && task.day >= today ? task.day : (picked >= today ? picked : today);
   const answers: { day: string; start: string; end: string }[] = [];
   for (let offset = 0; offset < SLOT_SEARCH_DAYS && answers.length < SLOT_ANSWERS; offset++) {
@@ -272,12 +296,12 @@ export function findSlots(state: PlannerState, task: PlannerTask, today: string,
     if (task.due && day > task.due) break;
     const ownLoad = task.day === day ? minutes : 0;
     if (getDayLoad(state, day) - ownLoad + minutes > state.budget) continue;
-    const busy = [LUNCH_BREAK, ...getTimedForDay(state, day, task.id).map((item): [number, number] => [
-      Math.max(DAY_WINDOW_START, toMinutes(item.start) - SLOT_MARGIN),
-      Math.min(DAY_WINDOW_END, toMinutes(item.end) + SLOT_MARGIN),
+    const busy = [...lunch, ...getTimedForDay(state, day, task.id).map((item): [number, number] => [
+      Math.max(dayStart, toMinutes(item.start) - margin),
+      Math.min(dayEnd, toMinutes(item.end) + margin),
     ])].filter(([from, until]) => from < until).sort((a, b) => a[0] - b[0]);
-    let cursor = DAY_WINDOW_START;
-    for (const [from, until] of [...busy, [DAY_WINDOW_END, DAY_WINDOW_END]]) {
+    let cursor = dayStart;
+    for (const [from, until] of [...busy, [dayEnd, dayEnd]]) {
       if (from - cursor >= minutes) {
         answers.push({ day, start: toTime(cursor), end: toTime(cursor + minutes) });
         break;
@@ -297,6 +321,31 @@ export function getEligibleTasks(state: PlannerState) {
 
 export function getCompletedTasks(state: PlannerState) {
   return state.tasks.filter((task) => !task.due && task.status === 'done');
+}
+
+// Соседи задачи по порядку — незавершённые задачи того же списка и статуса
+export function getOrderedGroup(state: PlannerState, task: PlannerTask) {
+  return getEligibleTasks(state)
+    .filter((item) => item.project === task.project && item.status === task.status)
+    .sort((a, b) => a.rank - b.rank || a.id - b.id);
+}
+
+// Порядок в очереди (↑↓ из макета): задача меняется местами с соседом;
+// у края группы ничего не происходит
+export function moveTask(state: PlannerState, taskId: number, direction: -1 | 1) {
+  const task = state.tasks.find(({ id }) => id === taskId);
+  if (!task) return false;
+  const group = getOrderedGroup(state, task);
+  const index = group.indexOf(task);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= group.length) return false;
+  // Ранги группы делаются различными, иначе обмен равных рангов ничего не меняет
+  group.forEach((item, i) => {
+    item.rank = i;
+  });
+  group[index].rank = target;
+  group[target].rank = index;
+  return true;
 }
 
 // ── проверки ввода ───────────────────────────────────────────────────────────
@@ -326,6 +375,24 @@ export function fitsBookingWindow(
   const until = from + task.minutes;
   if (from < window.start || until > window.end) return false;
   return getDayAvailability(state, window.day).free.some((slot) => from >= slot.start && until <= slot.end);
+}
+
+export type PlannerSettingsError = 'window' | 'lunch' | 'margin';
+
+export function validateSettings(settings: PlannerSettings): PlannerSettingsError | undefined {
+  const {
+    dayStart, dayEnd, lunchStart, lunchEnd, margin,
+  } = settings;
+  const isMinute = (value: number) => Number.isInteger(value) && value >= 0 && value <= MINUTES_IN_DAY;
+  if (!isMinute(dayStart) || !isMinute(dayEnd) || dayStart >= dayEnd) return 'window';
+  if (!isMinute(lunchStart) || !isMinute(lunchEnd)) return 'lunch';
+  if (hasLunchBreak(settings) && (lunchStart < dayStart || lunchEnd > dayEnd)) return 'lunch';
+  if (!Number.isInteger(margin) || margin < 0 || margin > MAX_SLOT_MARGIN) return 'margin';
+  return undefined;
+}
+
+export function validateBudget(budget: number) {
+  return Number.isInteger(budget) && budget >= MIN_BUDGET_MINUTES && budget <= MINUTES_IN_DAY;
 }
 
 export type PlannerEventError = 'name' | 'time' | 'repeat';
@@ -546,7 +613,21 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     nutrition,
     calorieGoal: saved.calorieGoal && validateGoal(saved.calorieGoal, true) ? saved.calorieGoal : empty.calorieGoal,
     macroGoals,
-    budget: isKnownNumber(saved.budget) && saved.budget >= 60 && saved.budget <= MINUTES_IN_DAY
-      ? saved.budget : empty.budget,
+    budget: isKnownNumber(saved.budget) && validateBudget(saved.budget) ? saved.budget : empty.budget,
+    settings: normalizeSettings(saved.settings),
   };
+}
+
+// Настройки до T014 не сохранялись — отсутствие или негодные значения дают макетные
+function normalizeSettings(raw: unknown): PlannerSettings {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_PLANNER_SETTINGS };
+  const saved = raw as Partial<PlannerSettings>;
+  const settings: PlannerSettings = {
+    dayStart: isKnownNumber(saved.dayStart) ? saved.dayStart : DEFAULT_PLANNER_SETTINGS.dayStart,
+    dayEnd: isKnownNumber(saved.dayEnd) ? saved.dayEnd : DEFAULT_PLANNER_SETTINGS.dayEnd,
+    lunchStart: isKnownNumber(saved.lunchStart) ? saved.lunchStart : DEFAULT_PLANNER_SETTINGS.lunchStart,
+    lunchEnd: isKnownNumber(saved.lunchEnd) ? saved.lunchEnd : DEFAULT_PLANNER_SETTINGS.lunchEnd,
+    margin: isKnownNumber(saved.margin) ? saved.margin : DEFAULT_PLANNER_SETTINGS.margin,
+  };
+  return validateSettings(settings) ? { ...DEFAULT_PLANNER_SETTINGS } : settings;
 }

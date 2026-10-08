@@ -2,9 +2,11 @@ import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerState, PlannerStatus, PlannerTask } from './plannerModel';
 
-import { formatDay, formatProject, formatStatus } from './plannerFormat';
 import {
-  findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES, toMinutes,
+  formatClock, formatDay, formatProject, formatStatus,
+} from './plannerFormat';
+import {
+  findSlots, hasLunchBreak, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES, toMinutes,
 } from './plannerModel';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
@@ -61,10 +63,17 @@ const PlannerTaskEditor = ({
   });
 
   const handleStart = useLastCallback((value: string) => {
-    if (value && !task.day) return showPlannerNotice(lang('PlannerErrorNeedDay'));
-    if (value && !task.minutes) return showPlannerNotice(lang('PlannerErrorNeedMinutes'));
+    if (value && !task.day) {
+      showPlannerNotice(lang('PlannerErrorNeedDay'));
+      return false;
+    }
+    if (value && !task.minutes) {
+      showPlannerNotice(lang('PlannerErrorNeedMinutes'));
+      return false;
+    }
     if (value && toMinutes(value) + task.minutes! > MINUTES_IN_DAY) {
-      return showPlannerNotice(lang('PlannerErrorPastMidnight'));
+      showPlannerNotice(lang('PlannerErrorPastMidnight'));
+      return false;
     }
     return patch({ start: value || undefined }, lang('PlannerNoticeTimeUpdated', { name: task.name }));
   });
@@ -73,10 +82,12 @@ const PlannerTaskEditor = ({
     const minutes = value === '' ? undefined : Number(value);
     if (minutes !== undefined
       && (!Number.isFinite(minutes) || minutes < MIN_TASK_MINUTES || minutes > MINUTES_IN_DAY)) {
-      return showPlannerNotice(lang('PlannerErrorMinutes'));
+      showPlannerNotice(lang('PlannerErrorMinutes'));
+      return false;
     }
     if (task.start && minutes && toMinutes(task.start) + minutes > MINUTES_IN_DAY) {
-      return showPlannerNotice(lang('PlannerErrorPastMidnight'));
+      showPlannerNotice(lang('PlannerErrorPastMidnight'));
+      return false;
     }
     return patch(
       { minutes, start: minutes === undefined ? undefined : task.start },
@@ -125,7 +136,14 @@ const PlannerTaskEditor = ({
     }
     const found = findSlots(state, task, today, picked);
     setSlots(found);
-    setSlotHint(found.length ? lang('PlannerSlotsHint') : lang('PlannerSlotsNone'));
+    const { settings } = state;
+    const window = `${formatClock(settings.dayStart)}–${formatClock(settings.dayEnd)}`;
+    const hint = hasLunchBreak(settings)
+      ? lang('PlannerSlotsHint', {
+        window, lunch: `${formatClock(settings.lunchStart)}–${formatClock(settings.lunchEnd)}`, margin: settings.margin,
+      })
+      : lang('PlannerSlotsHintNoBreak', { window, margin: settings.margin });
+    setSlotHint(found.length ? hint : lang('PlannerSlotsNone'));
   });
 
   const handleSlotClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {

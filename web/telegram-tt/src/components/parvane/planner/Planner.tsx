@@ -23,6 +23,7 @@ import TabList from '../../ui/TabList';
 import PlannerDay from './PlannerDay';
 import PlannerMonth from './PlannerMonth';
 import PlannerNutrition from './PlannerNutrition';
+import PlannerSettings from './PlannerSettings';
 import PlannerStatistics from './PlannerStatistics';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
@@ -64,6 +65,7 @@ const Planner = ({ isMobile }: OwnProps) => {
   const [selectedProject, setSelectedProject] = useState('');
   // Узкое окно: виден либо месяц, либо панель дня/задачи
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const currentUserId = useSelector(selectCurrentUserId);
 
@@ -137,6 +139,16 @@ const Planner = ({ isMobile }: OwnProps) => {
     setFormParams(undefined);
     setEditorId(undefined);
     setIsPanelOpen(false);
+    setIsSettingsOpen(false);
+  });
+
+  const handleOpenSettings = useLastCallback(() => {
+    setFormParams(undefined);
+    setIsSettingsOpen(true);
+  });
+
+  const handleCloseSettings = useLastCallback(() => {
+    setIsSettingsOpen(false);
   });
 
   const changeMonth = useLastCallback((delta: number) => {
@@ -190,6 +202,8 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const editedTask = editorId === undefined ? undefined : state.tasks.find(({ id }) => id === editorId);
   const isCreating = Boolean(formParams);
+  // Форма создания и настройки занимают всё содержимое — кнопки месяца и добавления прячутся
+  const isOverlay = isCreating || isSettingsOpen;
   const isFood = view === VIEW_CALENDAR && dayContent === DAY_NUTRITION;
   const viewTabs = [
     { title: lang('PlannerViewCalendar') },
@@ -197,7 +211,7 @@ const Planner = ({ isMobile }: OwnProps) => {
     { title: lang('PlannerViewStatistics') },
   ];
   const dayTabs = [{ title: lang('PlannerDaySchedule') }, { title: lang('PlannerDayNutrition') }];
-  const title = isCreating
+  const title = isSettingsOpen ? lang('PlannerSettings') : isCreating
     ? lang('PlannerTitleNew')
     : (view === VIEW_TASKS ? lang('PlannerViewTasks')
       : view === VIEW_STATISTICS ? lang('PlannerViewStatistics') : formatMonth(lang, month));
@@ -223,7 +237,17 @@ const Planner = ({ isMobile }: OwnProps) => {
         <h1 className={styles.title}>{title}</h1>
         <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
         <div className={styles.headerButtons}>
-          {!isCreating && view !== VIEW_TASKS && (
+          {!isOverlay && (
+            <Button
+              round
+              size="smaller"
+              color="translucent"
+              iconName="settings"
+              ariaLabel={lang('PlannerSettings')}
+              onClick={handleOpenSettings}
+            />
+          )}
+          {!isOverlay && view !== VIEW_TASKS && (
             <>
               <Button
                 round
@@ -244,7 +268,7 @@ const Planner = ({ isMobile }: OwnProps) => {
               />
             </>
           )}
-          {!isCreating && view !== VIEW_STATISTICS && (
+          {!isOverlay && view !== VIEW_STATISTICS && (
             <Button size="smaller" disabled={isFood && picked > today} onClick={handleAdd}>
               {lang(isFood ? 'PlannerAddFood' : 'PlannerAddTask')}
             </Button>
@@ -252,7 +276,9 @@ const Planner = ({ isMobile }: OwnProps) => {
         </div>
       </header>
       <div className={buildClassName(styles.content, 'custom-scroll')}>
-        {!isLoaded ? <Loading /> : isCreating ? (
+        {!isLoaded ? <Loading /> : isSettingsOpen ? (
+          <PlannerSettings state={state} onBack={handleCloseSettings} />
+        ) : isCreating ? (
           <PlannerTaskForm
             state={state}
             params={formParams}

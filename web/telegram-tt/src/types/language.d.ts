@@ -2373,7 +2373,6 @@ export interface LangPair {
   'PlannerPeriodDay': undefined;
   'PlannerPeriodMonth': undefined;
   'PlannerPrevMonth': undefined;
-  'PlannerSlotsHint': undefined;
   'PlannerSlotsNone': undefined;
   'PlannerStatAverage': undefined;
   'PlannerStatChartMetric': undefined;
@@ -2407,6 +2406,22 @@ export interface LangPair {
   'PlannerViewCalendar': undefined;
   'PlannerViewStatistics': undefined;
   'PlannerViewTasks': undefined;
+  'PlannerSettings': undefined;
+  'PlannerSettingsHint': undefined;
+  'PlannerSettingsBudget': undefined;
+  'PlannerSettingsMargin': undefined;
+  'PlannerSettingsDayStart': undefined;
+  'PlannerSettingsDayEnd': undefined;
+  'PlannerSettingsLunchStart': undefined;
+  'PlannerSettingsLunchEnd': undefined;
+  'PlannerSettingsLunchHint': undefined;
+  'PlannerSettingsReset': undefined;
+  'PlannerNoticeSettingsSaved': undefined;
+  'PlannerErrorSettingsWindow': undefined;
+  'PlannerErrorSettingsLunch': undefined;
+  'PlannerErrorSettingsMargin': undefined;
+  'PlannerErrorSettingsBudget': undefined;
+  'PlannerNoticeReordered': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4256,6 +4271,11 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerNoticeUnscheduled': {
     'name': V;
   };
+  'PlannerSlotsHint': {
+    'window': V;
+    'lunch': V;
+    'margin': V;
+  };
   'PlannerStatDays': {
     'complete': V;
     'open': V;
@@ -4279,6 +4299,16 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerSteps': {
     'done': V;
     'total': V;
+  };
+  'PlannerSlotsHintNoBreak': {
+    'window': V;
+    'margin': V;
+  };
+  'PlannerAriaMoveUp': {
+    'name': V;
+  };
+  'PlannerAriaMoveDown': {
+    'name': V;
   };
 }
 

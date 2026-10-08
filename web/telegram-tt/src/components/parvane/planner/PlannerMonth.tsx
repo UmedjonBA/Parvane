@@ -151,7 +151,9 @@ const PlannerMonth = ({
               <span key={entry.key} className={styles.preview} title={entry.label}>{entry.label}</span>
             )))}
             {entries.length > PREVIEW_COUNT && (
-              <span className={styles.small}>{lang('PlannerMore', { count: entries.length - PREVIEW_COUNT })}</span>
+              <span className={buildClassName(styles.small, styles.previewMore)}>
+                {lang('PlannerMore', { count: entries.length - PREVIEW_COUNT })}
+              </span>
             )}
             {!entries.length && <span className={styles.small}>{lang('PlannerFree')}</span>}
             {Boolean(unrated) && <span className={styles.warning}>{`+${unrated} ?`}</span>}

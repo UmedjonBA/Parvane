@@ -3,10 +3,11 @@ import { memo } from '../../../lib/teact/teact';
 import type { PlannerEvent, PlannerSlot, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDuration, formatHours, formatWeekday } from './plannerFormat';
 import {
-  countUnrated, DAY_WINDOW_END, DAY_WINDOW_START, getDayAvailability, getDayLoad, getDeadlines, getTasksForDay,
-  toTime,
+  formatClock, formatDuration, formatHours, formatWeekday,
+} from './plannerFormat';
+import {
+  countUnrated, getDayAvailability, getDayLoad, getDeadlines, getTasksForDay, toTime,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -61,8 +62,8 @@ const PlannerDay = ({
     lang('PlannerDayPlan', { planned: formatHours(lang, minutes), budget: formatHours(lang, state.budget) }),
     isOver ? lang('PlannerDayOverload', { minutes: minutes - state.budget }) : undefined,
     lang('PlannerDayWindows', {
-      from: toTime(DAY_WINDOW_START).slice(0, 2),
-      to: toTime(DAY_WINDOW_END).slice(0, 2),
+      from: formatClock(state.settings.dayStart),
+      to: formatClock(state.settings.dayEnd),
       free: formatDuration(lang, availability.freeMinutes),
     }),
     unrated ? lang('PlannerDayUnrated', { count: unrated }) : undefined,

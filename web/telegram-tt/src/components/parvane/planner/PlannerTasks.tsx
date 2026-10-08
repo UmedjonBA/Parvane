@@ -4,7 +4,7 @@ import type { PlannerState, PlannerStatus } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatProject, formatStatus } from './plannerFormat';
-import { getCompletedTasks, getEligibleTasks } from './plannerModel';
+import { getCompletedTasks, getEligibleTasks, moveTask } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -50,9 +50,16 @@ const PlannerTasks = ({
     setNewList('');
   });
 
+  const handleReorder = useLastCallback((taskId: number, direction: -1 | 1) => {
+    updatePlanner((draft) => {
+      moveTask(draft, taskId, direction);
+    }, lang('PlannerNoticeReordered'));
+  });
+
+  // Порядок — как в `getOrderedGroup`: по рангу, при равных — по id
   const subset = getEligibleTasks(state)
     .filter((task) => task.project === selectedProject)
-    .sort((a, b) => a.rank - b.rank);
+    .sort((a, b) => a.rank - b.rank || a.id - b.id);
   const completed = getCompletedTasks(state);
 
   return (
@@ -90,7 +97,17 @@ const PlannerTasks = ({
           return (
             <div key={status}>
               <h3 className={styles.group}>{formatStatus(lang, status)}</h3>
-              {group.map((task) => <PlannerTaskRow key={task.id} task={task} context="all" onOpen={onOpenTask} />)}
+              {group.map((task, index) => (
+                <PlannerTaskRow
+                  key={task.id}
+                  task={task}
+                  context="all"
+                  canMoveUp={index > 0}
+                  canMoveDown={index < group.length - 1}
+                  onOpen={onOpenTask}
+                  onReorder={handleReorder}
+                />
+              ))}
             </div>
           );
         })}

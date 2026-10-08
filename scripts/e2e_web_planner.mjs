@@ -134,6 +134,37 @@ try {
   await planner.getByText('Подготовить макет').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: списки задач');
 
+  // ── Порядок в очереди стрелками (T014) ────────────────────────────────────
+  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await page.locator('#planner-new-name').fill('Вторая задача');
+  await planner.getByRole('button', { name: 'Create' }).click();
+  await planner.getByRole('heading', { name: 'Вторая задача' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByRole('button', { name: 'To tasks' }).first().click();
+  const queueNames = async () => planner.locator('section').first().locator('[data-task-id]').allInnerTexts();
+  await planner.getByRole('button', { name: 'Move down: Вторая задача' }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  assert.match((await queueNames()).join('|'), /^Вторая задача.*\|Подготовить макет/s, 'новая задача — первой в очереди');
+  assert.ok(await planner.getByRole('button', { name: 'Move up: Вторая задача' }).isDisabled(), 'у края стрелка вверх неактивна');
+  await planner.getByRole('button', { name: 'Move down: Вторая задача' }).click();
+  await planner.getByText('Order changed').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.match((await queueNames()).join('|'), /^Подготовить макет.*\|Вторая задача/s, 'задача опустилась на строку ниже');
+  console.log('OK: порядок задач в очереди');
+
+  // ── Настройки дня (T014): начало дня и перерыв ────────────────────────────
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await planner.getByLabel('Day starts').fill('08:00');
+  await planner.getByText('Settings saved').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByLabel('Day ends').fill('07:00');
+  await planner.getByText('The day must end after it starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await planner.getByLabel('Day ends').inputValue(), '21:00', 'негодное значение не применяется');
+  await planner.getByRole('button', { name: 'Back', exact: true }).click();
+  await planner.getByText('Calendar', { exact: true }).first().click();
+  await todayCell.click({ position: { x: 10, y: 10 } });
+  // После шага питания у панели дня открыта вкладка «Питание»
+  await planner.getByText('Schedule', { exact: true }).first().click();
+  await planner.getByText(/free 08–21/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByRole('button', { name: /free slot 08:00–14:00/ }).waitFor({ timeout: STEP_TIMEOUT_MS });
+  console.log('OK: настройки дня применяются к окнам');
+
   // ── Данные переживают перезагрузку; возврат в мессенджер ──────────────────
   await page.waitForTimeout(1000);
   await reloadPage(page);
@@ -142,6 +173,10 @@ try {
   assert.equal(await isShown(page, '#LeftColumn'), true, 'после перезагрузки открыт мессенджер');
   await sidebar.getByRole('tab', { name: 'Planner' }).click();
   await todayCell.getByText('14:00 Подготовить макет').waitFor({ state: 'visible', timeout: 30000 });
+  // Настройки тоже сохранены
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  assert.equal(await planner.getByLabel('Day starts').inputValue(), '08:00', 'начало дня после перезагрузки');
+  await planner.getByRole('button', { name: 'Back', exact: true }).click();
   await sidebar.getByRole('tab', { name: 'Chats' }).click();
   await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   assert.equal(await isShown(page, '#LeftColumn'), true, 'список чатов вернулся');
@@ -161,6 +196,14 @@ try {
   console.log('OK: телефон — вход из меню и возврат');
 
   console.log('e2e_web_planner: OK');
+} catch (error) {
+  const dir = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+  if (dir) {
+    const [page] = context.pages();
+    await page?.screenshot({ path: `${dir}/planner-failure.png` }).catch(() => {});
+    console.log(`--- планировщик при сбое ---\n${await page?.locator('#ParvanePlanner').innerText().catch(() => '')}`);
+  }
+  throw error;
 } finally {
   await browser.close();
 }

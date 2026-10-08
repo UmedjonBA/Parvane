@@ -9,6 +9,8 @@ import { updatePlanner } from './plannerStore';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import Button from '../../ui/Button';
+
 import styles from './Planner.module.scss';
 
 export const TASK_DRAG_TYPE = 'application/x-parvane-planner-task';
@@ -17,13 +19,27 @@ type OwnProps = {
   task: PlannerTask;
   // `all` — строка в списках (дата или список в подписи), `day` — в расписании дня
   context: 'all' | 'day';
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
   onOpen: (taskId: number) => void;
+  // Стрелки порядка в очереди (T014) — только там, где передан обработчик
+  onReorder?: (taskId: number, direction: -1 | 1) => void;
 };
 
-const PlannerTaskRow = ({ task, context, onOpen }: OwnProps) => {
+const PlannerTaskRow = ({
+  task, context, canMoveUp, canMoveDown, onOpen, onReorder,
+}: OwnProps) => {
   const lang = useLang();
 
   const isDone = task.status === 'done';
+
+  const handleMoveUp = useLastCallback(() => {
+    onReorder!(task.id, -1);
+  });
+
+  const handleMoveDown = useLastCallback(() => {
+    onReorder!(task.id, 1);
+  });
 
   const handleToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const status = e.currentTarget.checked ? 'done' : 'queue';
@@ -67,6 +83,28 @@ const PlannerTaskRow = ({ task, context, onOpen }: OwnProps) => {
         <span className={styles.taskName}>{task.name}</span>
         <span className={styles.small}>{meta.join(' · ')}</span>
       </button>
+      {onReorder && (
+        <div className={styles.taskReorder}>
+          <Button
+            round
+            size="tiny"
+            color="translucent"
+            iconName="up"
+            disabled={!canMoveUp}
+            ariaLabel={lang('PlannerAriaMoveUp', { name: task.name })}
+            onClick={handleMoveUp}
+          />
+          <Button
+            round
+            size="tiny"
+            color="translucent"
+            iconName="down"
+            disabled={!canMoveDown}
+            ariaLabel={lang('PlannerAriaMoveDown', { name: task.name })}
+            onClick={handleMoveDown}
+          />
+        </div>
+      )}
     </div>
   );
 };
