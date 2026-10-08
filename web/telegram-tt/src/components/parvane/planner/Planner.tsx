@@ -9,7 +9,8 @@ import { setParvaneSection } from '../../../util/parvaneSection';
 import { formatDay, formatDayLong, formatMonth } from './plannerFormat';
 import { fromDayKey, toDayKey } from './plannerModel';
 import {
-  getIsPlannerLoaded, getPlannerNotice, getPlannerState, loadPlanner, undoPlanner, updatePlanner,
+  getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus, loadPlanner,
+  undoPlanner, updatePlanner,
 } from './plannerStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -39,6 +40,8 @@ function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
 }
 
+// 75 % потолка открытого текста снимка контейнера (1 МиБ, spec 010 R5)
+const SNAPSHOT_WARN_BYTES = 786432;
 const VIEW_CALENDAR = 0;
 const VIEW_TASKS = 1;
 const VIEW_STATISTICS = 2;
@@ -53,12 +56,14 @@ const Planner = ({ isMobile }: OwnProps) => {
   const state = useDerivedState(getPlannerState);
   const isLoaded = useDerivedState(getIsPlannerLoaded);
   const notice = useDerivedState(getPlannerNotice);
+  const syncStatus = useDerivedState(getPlannerStatus);
+  const sizeBytes = useDerivedState(getPlannerSizeBytes);
 
   const [today] = useState(() => toDayKey(new Date()));
   const [view, setView] = useState(VIEW_CALENDAR);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [picked, setPicked] = useState(today);
-  const [editorId, setEditorId] = useState<number>();
+  const [editorId, setEditorId] = useState<string>();
   const [formParams, setFormParams] = useState<PlannerFormParams>();
   const [dayContent, setDayContent] = useState(DAY_SCHEDULE);
   const [foodAddRequest, setFoodAddRequest] = useState(0);
@@ -85,7 +90,7 @@ const Planner = ({ isMobile }: OwnProps) => {
     setIsPanelOpen(true);
   });
 
-  const handleOpenTask = useLastCallback((taskId: number, day?: string) => {
+  const handleOpenTask = useLastCallback((taskId: string, day?: string) => {
     const task = state.tasks.find(({ id }) => id === taskId);
     const target = day || task?.day;
     if (target && view === VIEW_CALENDAR) pickDay(target);
@@ -93,7 +98,7 @@ const Planner = ({ isMobile }: OwnProps) => {
     setIsPanelOpen(true);
   });
 
-  const handleMoveTask = useLastCallback((taskId: number, day: string) => {
+  const handleMoveTask = useLastCallback((taskId: string, day: string) => {
     const task = state.tasks.find(({ id }) => id === taskId);
     if (!task || task.day === day) return;
     updatePlanner((draft) => {
@@ -124,7 +129,7 @@ const Planner = ({ isMobile }: OwnProps) => {
     setFormParams(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
   });
 
-  const handleCreated = useLastCallback((taskId?: number) => {
+  const handleCreated = useLastCallback((taskId?: string) => {
     setFormParams(undefined);
     if (taskId !== undefined) handleOpenTask(taskId);
     else setEditorId(undefined);
@@ -205,6 +210,11 @@ const Planner = ({ isMobile }: OwnProps) => {
   // Форма создания и настройки занимают всё содержимое — кнопки месяца и добавления прячутся
   const isOverlay = isCreating || isSettingsOpen;
   const isFood = view === VIEW_CALENDAR && dayContent === DAY_NUTRITION;
+  // spec 010: строка состояния синхронизации — только когда есть что сказать
+  const syncNoticeKey = syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
+    : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
+      : syncStatus === 'no-key' ? 'PlannerSyncPending'
+        : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
   const viewTabs = [
     { title: lang('PlannerViewCalendar') },
     { title: lang('PlannerViewTasks') },
@@ -220,6 +230,8 @@ const Planner = ({ isMobile }: OwnProps) => {
     <div
       id="ParvanePlanner"
       className={buildClassName(styles.root, isPanelOpen && styles.panelOpen)}
+      data-sync-status={syncStatus}
+      data-loaded={isLoaded ? '1' : '0'}
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
@@ -275,6 +287,14 @@ const Planner = ({ isMobile }: OwnProps) => {
           )}
         </div>
       </header>
+      {syncNoticeKey && (
+        <div
+          className={buildClassName(styles.syncNotice, syncStatus === 'needs-linking' && styles.syncNoticeBlocking)}
+          role="status"
+        >
+          {lang(syncNoticeKey)}
+        </div>
+      )}
       <div className={buildClassName(styles.content, 'custom-scroll')}>
         {!isLoaded ? <Loading /> : isSettingsOpen ? (
           <PlannerSettings state={state} onBack={handleCloseSettings} />

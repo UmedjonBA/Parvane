@@ -255,6 +255,65 @@ export class PvClient {
      */
     ownSskExposed(): boolean;
     /**
+     * Повторно применить помеченную операцию из очереди отправки (после перезапуска).
+     */
+    plannerApplyLocal(op: Uint8Array): number;
+    /**
+     * Подключить контейнер: ответы `domain.container.get` и `domain.grant.list`.
+     */
+    plannerAttach(get_response: Uint8Array, grants_response: Uint8Array): void;
+    /**
+     * Контейнер планировщика → {domain, id(hex)} | undefined.
+     */
+    plannerContainer(): any;
+    /**
+     * Создать контейнер → запрос `domain.container.create`.
+     */
+    plannerCreate(ts_ms: number): any;
+    plannerHasKey(): boolean;
+    plannerHeadSeq(): number;
+    /**
+     * Догнать журнал грантов (смена эпохи) → версия журнала грантов.
+     */
+    plannerIngestGrants(grants_response: Uint8Array): number;
+    /**
+     * Снимок `domain.snapshot.get` → курсор после слияния.
+     */
+    plannerIngestSnapshot(snapshot_response: Uint8Array): number;
+    /**
+     * Страница `domain.op.sync` → {applied, headSeq, more, missingEpoch?, grantsBehind}.
+     */
+    plannerIngestSync(sync_response: Uint8Array): any;
+    plannerIsAttached(): boolean;
+    /**
+     * Ключи контейнера для экспорта линковки (JSON) | undefined.
+     */
+    plannerKeysExport(): string | undefined;
+    /**
+     * Ключи контейнера из экспорта линковки своего устройства.
+     */
+    plannerKeysImport(json: string): void;
+    /**
+     * Локальная правка (JSON изменений) → {opId(hex), op(Uint8Array), applied}.
+     */
+    plannerPrepareLocal(changes_json: string): any;
+    /**
+     * Зашифровать операцию → запрос `domain.op.append` (тот же opId при повторе).
+     */
+    plannerSeal(op: Uint8Array, op_id_hex: string, ts_ms: number): any;
+    /**
+     * Размер открытого текста снимка (байты).
+     */
+    plannerSize(): number;
+    /**
+     * Снимок по порогу → запрос `domain.snapshot.put` | undefined.
+     */
+    plannerSnapshotRequest(ts_ms: number): any;
+    /**
+     * Сведённое состояние (JSON, только живые объекты) | undefined.
+     */
+    plannerStateJson(): string | undefined;
+    /**
      * Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
      * `call.v2.CallSignal`; оффер уходит методом `call.ring_sealed`, остальное —
      * `call.signal_sealed`, оба анонимным каналом.
@@ -326,6 +385,10 @@ export class PvClient {
      */
     shareInviteLinks(group_hex: string, links_json: string, recipients_json: string): Array<any>;
     /**
+     * Ключ текущей эпохи — своим устройствам (`msg.deliver_sealed`).
+     */
+    sharePlannerWithOwnDevices(): Array<any>;
+    /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      */
     stateSession(): PvState | undefined;
@@ -360,10 +423,6 @@ export class PvState {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
-    /**
-     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
-     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
-     */
     callSet(record_json: string): Array<any>;
     /**
      * Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
@@ -403,6 +462,12 @@ export class PvState {
      * Первый запуск: локальные данные (StateSnapshot) → начальные операции.
      */
     migrate(local_json: string): Array<any>;
+    /**
+     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+     * Контейнер планировщика (spec 010): домен и hex id → тела `state.append`.
+     */
+    plannerContainerSet(domain: string, id_hex: string): Array<any>;
     /**
      * Локальный журнал уже отправленных этим устройством (hex; хранит хост).
      */
@@ -595,6 +660,23 @@ export interface InitOutput {
     readonly pvclient_openRecord: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_otkRequest: (a: number, b: number) => number;
     readonly pvclient_ownSskExposed: (a: number) => number;
+    readonly pvclient_plannerApplyLocal: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_plannerAttach: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_plannerContainer: (a: number) => number;
+    readonly pvclient_plannerCreate: (a: number, b: number, c: number) => void;
+    readonly pvclient_plannerHasKey: (a: number) => number;
+    readonly pvclient_plannerHeadSeq: (a: number) => number;
+    readonly pvclient_plannerIngestGrants: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_plannerIngestSnapshot: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_plannerIngestSync: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_plannerIsAttached: (a: number) => number;
+    readonly pvclient_plannerKeysExport: (a: number, b: number) => void;
+    readonly pvclient_plannerKeysImport: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_plannerPrepareLocal: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_plannerSeal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly pvclient_plannerSize: (a: number) => number;
+    readonly pvclient_plannerSnapshotRequest: (a: number, b: number, c: number) => void;
+    readonly pvclient_plannerStateJson: (a: number, b: number) => void;
     readonly pvclient_prepareCall: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_prepareDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_prepareGroup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
@@ -610,6 +692,7 @@ export interface InitOutput {
     readonly pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_shareInviteLinks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly pvclient_sharePlannerWithOwnDevices: (a: number, b: number) => void;
     readonly pvclient_stateSession: (a: number) => number;
     readonly pvclient_syncRequest: (a: number) => number;
     readonly pvclient_takeSharedInvites: (a: number, b: number) => void;
@@ -628,6 +711,7 @@ export interface InitOutput {
     readonly pvstate_loadSentGuard: (a: number, b: number, c: number) => void;
     readonly pvstate_markSent: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_migrate: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstate_plannerContainerSet: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvstate_sentGuard: (a: number, b: number) => void;
     readonly pvstate_snapshot: (a: number, b: number) => void;
     readonly pvstate_syncRequest: (a: number, b: number) => void;

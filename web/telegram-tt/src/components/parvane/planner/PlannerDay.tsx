@@ -22,7 +22,7 @@ import styles from './Planner.module.scss';
 type OwnProps = {
   state: PlannerState;
   day: string;
-  onOpenTask: (taskId: number) => void;
+  onOpenTask: (taskId: string) => void;
   onCreateTask: (slot?: PlannerSlot) => void;
 };
 
@@ -41,7 +41,7 @@ const PlannerDay = ({
   });
 
   const handleDeleteEvent = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const eventId = Number(e.currentTarget.dataset.eventId);
+    const eventId = e.currentTarget.dataset.eventId!;
     updatePlanner((draft) => {
       draft.events = draft.events.filter(({ id }) => id !== eventId);
     }, lang('PlannerNoticeEventDeleted'));

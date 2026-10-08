@@ -586,6 +586,8 @@ mod spent_tests {
     /// бюджета не читаются; дочитывается следующей страницей.
     #[tokio::test]
     async fn sync_page_respects_byte_budget() {
+        // Десять записей не влезают в квоту «3», которую ставят тесты ниже
+        let _env = QUOTA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let p = pool().await;
         let mut tx = p.begin().await.unwrap();
         for _ in 0..10 {
@@ -607,9 +609,14 @@ mod spent_tests {
     }
 
     /// C1-07 (D-17): квота журнала устройства на записи отправителей.
+    // Оба теста квоты правят одну переменную окружения, а тесты идут параллельно:
+    // без замка один снимал переменную посреди другого (плавало в `cargo test --workspace`)
+    static QUOTA_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[tokio::test]
     async fn inbox_quota_counts_only_unacked_records() {
         // MSG-09: подтверждённые записи (acked_seq) квоту не занимают
+        let _env = QUOTA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let p = pool().await;
         std::env::set_var("PARVANE_V2_INBOX_MAX_RECORDS", "3");
         let mut tx = p.begin().await.unwrap();
@@ -626,6 +633,7 @@ mod spent_tests {
 
     #[tokio::test]
     async fn inbox_quota_limits_sender_records() {
+        let _env = QUOTA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let p = pool().await;
         std::env::set_var("PARVANE_V2_INBOX_MAX_RECORDS", "3");
         let mut tx = p.begin().await.unwrap();

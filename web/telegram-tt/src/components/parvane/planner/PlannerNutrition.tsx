@@ -173,6 +173,7 @@ const PlannerNutrition = ({
     if (isPer100 && (!isKnownNumber(grams) || grams <= 0)) return setError(lang('PlannerErrorGrams'));
 
     const entry = makeFoodEntry({
+      id: editedIndex === undefined ? undefined : record.entries[editedIndex]?.id,
       name, meal, isPer100, grams, values: parsed,
     });
     const index = editedIndex;

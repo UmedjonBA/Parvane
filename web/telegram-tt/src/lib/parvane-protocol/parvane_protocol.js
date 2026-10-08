@@ -1234,6 +1234,300 @@ export class PvClient {
         return ret !== 0;
     }
     /**
+     * Повторно применить помеченную операцию из очереди отправки (после перезапуска).
+     * @param {Uint8Array} op
+     * @returns {number}
+     */
+    plannerApplyLocal(op) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(op, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerApplyLocal(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Подключить контейнер: ответы `domain.container.get` и `domain.grant.list`.
+     * @param {Uint8Array} get_response
+     * @param {Uint8Array} grants_response
+     */
+    plannerAttach(get_response, grants_response) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(get_response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(grants_response, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerAttach(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Контейнер планировщика → {domain, id(hex)} | undefined.
+     * @returns {any}
+     */
+    plannerContainer() {
+        const ret = wasm.pvclient_plannerContainer(this.__wbg_ptr);
+        return takeObject(ret);
+    }
+    /**
+     * Создать контейнер → запрос `domain.container.create`.
+     * @param {number} ts_ms
+     * @returns {any}
+     */
+    plannerCreate(ts_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_plannerCreate(retptr, this.__wbg_ptr, ts_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {boolean}
+     */
+    plannerHasKey() {
+        const ret = wasm.pvclient_plannerHasKey(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * @returns {number}
+     */
+    plannerHeadSeq() {
+        const ret = wasm.pvclient_plannerHeadSeq(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Догнать журнал грантов (смена эпохи) → версия журнала грантов.
+     * @param {Uint8Array} grants_response
+     * @returns {number}
+     */
+    plannerIngestGrants(grants_response) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(grants_response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerIngestGrants(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getFloat64(retptr + 8 * 0, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            return r0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Снимок `domain.snapshot.get` → курсор после слияния.
+     * @param {Uint8Array} snapshot_response
+     * @returns {number}
+     */
+    plannerIngestSnapshot(snapshot_response) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(snapshot_response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerIngestSnapshot(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getFloat64(retptr + 8 * 0, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            return r0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Страница `domain.op.sync` → {applied, headSeq, more, missingEpoch?, grantsBehind}.
+     * @param {Uint8Array} sync_response
+     * @returns {any}
+     */
+    plannerIngestSync(sync_response) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(sync_response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerIngestSync(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {boolean}
+     */
+    plannerIsAttached() {
+        const ret = wasm.pvclient_plannerIsAttached(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Ключи контейнера для экспорта линковки (JSON) | undefined.
+     * @returns {string | undefined}
+     */
+    plannerKeysExport() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_plannerKeysExport(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            let v1;
+            if (r0 !== 0) {
+                v1 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Ключи контейнера из экспорта линковки своего устройства.
+     * @param {string} json
+     */
+    plannerKeysImport(json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerKeysImport(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Локальная правка (JSON изменений) → {opId(hex), op(Uint8Array), applied}.
+     * @param {string} changes_json
+     * @returns {any}
+     */
+    plannerPrepareLocal(changes_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(changes_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerPrepareLocal(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Зашифровать операцию → запрос `domain.op.append` (тот же opId при повторе).
+     * @param {Uint8Array} op
+     * @param {string} op_id_hex
+     * @param {number} ts_ms
+     * @returns {any}
+     */
+    plannerSeal(op, op_id_hex, ts_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(op, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(op_id_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_plannerSeal(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ts_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Размер открытого текста снимка (байты).
+     * @returns {number}
+     */
+    plannerSize() {
+        const ret = wasm.pvclient_plannerSize(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Снимок по порогу → запрос `domain.snapshot.put` | undefined.
+     * @param {number} ts_ms
+     * @returns {any}
+     */
+    plannerSnapshotRequest(ts_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_plannerSnapshotRequest(retptr, this.__wbg_ptr, ts_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Сведённое состояние (JSON, только живые объекты) | undefined.
+     * @returns {string | undefined}
+     */
+    plannerStateJson() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_plannerStateJson(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            let v1;
+            if (r0 !== 0) {
+                v1 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Сигнал звонка собеседнику (D-08): `signal_json` — proto3-JSON
      * `call.v2.CallSignal`; оффер уходит методом `call.ring_sealed`, остальное —
      * `call.signal_sealed`, оба анонимным каналом.
@@ -1578,6 +1872,25 @@ export class PvClient {
         }
     }
     /**
+     * Ключ текущей эпохи — своим устройствам (`msg.deliver_sealed`).
+     * @returns {Array<any>}
+     */
+    sharePlannerWithOwnDevices() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_sharePlannerWithOwnDevices(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      * @returns {PvState | undefined}
      */
@@ -1709,8 +2022,6 @@ export class PvState {
         wasm.__wbg_pvstate_free(ptr, 0);
     }
     /**
-     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
-     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
      * @param {string} record_json
      * @returns {Array<any>}
      */
@@ -1920,6 +2231,33 @@ export class PvState {
             const ptr0 = passStringToWasm0(local_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.pvstate_migrate(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
+     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+     * Контейнер планировщика (spec 010): домен и hex id → тела `state.append`.
+     * @param {string} domain
+     * @param {string} id_hex
+     * @returns {Array<any>}
+     */
+    plannerContainerSet(domain, id_hex) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(id_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvstate_plannerContainerSet(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);

@@ -34,7 +34,7 @@ import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { createV2Controller, isV2GroupAddress, type V2DeviceBackup } from './v2/controller';
-import { collectV2History, parseV2History } from './v2/linkHistory';
+import { collectV2History, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
 import { createStateJournal } from './v2/stateJournal';
 import {
   clearLoginStorage,
@@ -120,6 +120,27 @@ import {
 const LOGIN_HASH_PREFIX = '#parvane=';
 // Свой фон чата — в шифрованном хранилище, а не открытым блобом в Cache Storage
 const PLANNER_RECORD = 'planner';
+// Подключение контейнера планировщика запускается один раз за сессию (spec 010)
+let plannerEnsureStarted = false;
+
+function readPlannerState() {
+  const { planner } = v2Controller;
+  const status = planner.status();
+  // Подключение и опрос — один раз; дальше синк идёт по таймеру модуля (8 с),
+  // иначе опрос состояния из UI раз в секунду даёт шторм запросов (RATE_LIMITED)
+  if (status !== 'needs-linking' && status !== 'loading' && !plannerEnsureStarted) {
+    plannerEnsureStarted = true;
+    void planner.ensure();
+  }
+  const json = planner.stateJson();
+  return {
+    status,
+    state: json ? JSON.parse(json) as unknown : undefined,
+    sizeBytes: planner.sizeBytes(),
+    hasPending: planner.hasPending(),
+    error: planner.lastError(),
+  };
+}
 const BACKGROUND_RECORD_PREFIX = 'background:';
 const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
 const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
@@ -447,6 +468,12 @@ const v2Controller = createV2Controller({
   onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),
   onGroupLeft: (address) => groupController.removeV2Group(address),
   onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
+  // Планировщик на сервере (spec 010): контейнер объявляется в журнале состояния
+  plannerContainerFromState: () => stateJournal.plannerContainer(),
+  recordPlannerContainer: (ref) => stateJournal.recordPlannerContainer(ref),
+  onPlannerChanged: () => {
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-planner-changed'));
+  },
   onStateReady: (host, rekey) => {
     void refreshV2Privacy();
     return stateJournal.attach(host, rekey);
@@ -1038,14 +1065,19 @@ async function pollHistoryLinkGrant(generation: number) {
     return;
   }
   let v2History: WireStoredMessage[];
+  let plannerKeys: string | undefined;
   try {
-    v2History = parseV2History(await media.blob.text());
+    const exportText = await media.blob.text();
+    v2History = parseV2History(exportText);
+    plannerKeys = parseLinkPlannerKeys(exportText);
   } catch (err) {
     logDebug(`линковка: экспорт не прочитан: ${String(err)}`);
     return;
   }
   logDebug(`линковка: экспорт получен (${v2History.length} строк истории)`);
   await joinV2WithLinkGrant(boxPayload.v2);
+  // spec 010: ключи контейнера планировщика старого устройства
+  if (plannerKeys) v2Controller.planner.keysImport(plannerKeys);
   // Строки истории — после полного ресинка, а не вперемешку с ним: применённая
   // посреди ресинка строка (замечено на своих исходящих) временами не доходила до UI
   await syncController.ensureSynced()
@@ -1898,6 +1930,44 @@ const methods = {
     return true;
   },
 
+  // Планировщик на сервере (spec 010): состояние — из движка (контейнер домена);
+  // первый вызов запускает подключение контейнера и синхронизацию, итог —
+  // событием `parvane-planner-changed`
+  // Методы планировщика — всегда Promise: вызывающие ждут `.catch` у результата
+  async parvanePlannerState() {
+    try {
+      return readPlannerState();
+    } catch (err) {
+      logDebug(`планировщик: состояние не прочитано: ${String(err)}`);
+      return { status: 'offline' as const, sizeBytes: 0, hasPending: false, error: String(err) };
+    }
+  },
+
+  /** Явный синк (раздел открыт заново): не чаще, чем позволяет модуль. */
+  async parvanePlannerSync() {
+    await v2Controller.planner.syncNow();
+    return true;
+  },
+
+  async parvanePlannerApply({ changes }: { changes: unknown[] }) {
+    v2Controller.planner.apply(changes);
+    return true;
+  },
+
+  async parvanePlannerFlush() {
+    await v2Controller.planner.flush();
+    return true;
+  },
+
+  /** Данные этапа 1 перенесены в контейнер: запись устройства — маркер (FR-008). */
+  async parvanePlannerMarkMigrated({ count }: { count: number }) {
+    if (!store.self) return false;
+    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+    if (!storage) return false;
+    await storage.saveRecord(PLANNER_RECORD, { migrated: true, at: Date.now(), count });
+    return true;
+  },
+
   async fetchWallpapers() {
     const wallpapers = await buildBuiltinWallpapers(mediaService.cacheBlob);
     return { wallpapers };
@@ -2191,6 +2261,8 @@ const methods = {
       const exportJson = JSON.stringify({
         linkVersion: 2,
         v2History: collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal()),
+        // spec 010: ключи контейнера планировщика — чтобы раздел открылся сразу после привязки
+        planner: v2Controller.planner.keysExport(),
       });
       const upload = await mediaService.uploadBlob(
         new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },

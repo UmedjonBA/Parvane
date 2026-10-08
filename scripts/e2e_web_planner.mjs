@@ -32,10 +32,12 @@ async function isShown(page, selector) {
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: WIDE });
+let session;
 
 try {
   const user = `planner-${Date.now().toString(36)}@local`;
-  const { page } = await preparePage(context, user, PASSWORD);
+  session = await preparePage(context, user, PASSWORD);
+  const { page } = session;
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
   const planner = page.locator('#ParvanePlanner');
   const sidebar = page.locator('#FoldersSidebar');
@@ -202,6 +204,12 @@ try {
     const [page] = context.pages();
     await page?.screenshot({ path: `${dir}/planner-failure.png` }).catch(() => {});
     console.log(`--- планировщик при сбое ---\n${await page?.locator('#ParvanePlanner').innerText().catch(() => '')}`);
+    const attrs = await page?.evaluate(() => {
+      const el = document.querySelector('#ParvanePlanner');
+      return el ? `sync=${el.getAttribute('data-sync-status')} loaded=${el.getAttribute('data-loaded')}` : 'нет планировщика';
+    }).catch(() => '');
+    console.log(`--- атрибуты: ${attrs}`);
+    console.log(`--- журнал провайдера ---\n${(session?.logs || []).slice(-60).join('\n')}`);
   }
   throw error;
 } finally {

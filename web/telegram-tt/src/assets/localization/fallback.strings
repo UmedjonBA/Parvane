@@ -3303,3 +3303,7 @@
 "PlannerAriaMoveUp" = "Move up: {name}";
 "PlannerAriaMoveDown" = "Move down: {name}";
 "PlannerNoticeReordered" = "Order changed";
+"PlannerNeedsLinking" = "Planner data will appear after this device is linked to your account from another device.";
+"PlannerSyncUnavailable" = "Planner sync is unavailable right now. Changes are saved on this device and will be sent later.";
+"PlannerSyncPending" = "Waiting for the planner key from your other device. Some data has not arrived yet.";
+"PlannerNearLimit" = "The planner is close to its size limit. Delete old entries to keep syncing.";

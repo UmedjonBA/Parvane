@@ -23,8 +23,8 @@ type OwnProps = {
   today: string;
   onPickDay: (day: string) => void;
   onCreateForDay: (day: string) => void;
-  onOpenTask: (taskId: number, day: string) => void;
-  onMoveTask: (taskId: number, day: string) => void;
+  onOpenTask: (taskId: string, day: string) => void;
+  onMoveTask: (taskId: string, day: string) => void;
 };
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
@@ -45,7 +45,7 @@ const PlannerMonth = ({
     const target = e.target as HTMLElement;
     const taskId = target.closest<HTMLElement>('[data-preview-task]')?.dataset.previewTask;
     const day = e.currentTarget.dataset.day!;
-    if (taskId) onOpenTask(Number(taskId), day);
+    if (taskId) onOpenTask(taskId, day);
     else onPickDay(day);
   });
 
@@ -61,7 +61,7 @@ const PlannerMonth = ({
   });
 
   const handleDrop = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
-    const taskId = Number(e.dataTransfer.getData(TASK_DRAG_TYPE));
+    const taskId = e.dataTransfer.getData(TASK_DRAG_TYPE);
     if (!taskId) return;
     e.preventDefault();
     onMoveTask(taskId, e.currentTarget.dataset.day!);

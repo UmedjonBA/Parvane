@@ -279,7 +279,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(collectV2History([{ ...row, id: 'pre-v2', origin: undefined }]).map((m) => m.id)).toEqual(['pre-v2']);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toMatch(/linkVersion: 2,\s+v2History: collectV2History\(/);
-    expect(provider).toContain('v2History = parseV2History(await media.blob.text())');
+    expect(provider).toContain('v2History = parseV2History(exportText);');
     expect(provider).toContain('isV2GroupAddress(stored.to) && !store.isGroupAddress(stored.to)');
     expect(provider).toContain('stored.from === owner ? stored : { ...stored, read: true }');
     // desktop: выдача и приём
@@ -1469,5 +1469,37 @@ describe('E6-1: клиент работоспособен без соедине�
     expect(jni).toContain(`if (type == "${r.legacyEvent}") {`);
     expect(readRepo('android/tgx_protocol_v2_flow.sh')).toContain('PARVANE_V1_MODE=disabled');
     expect(r.clients.android).toContain('BridgeTransport');
+  });
+});
+
+describe('DOMAIN-1: планировщик parvane.planner.v1 — ключи контейнера своим устройствам, чужой домен мимо', () => {
+  const r = rule('DOMAIN-1') as unknown as {
+    domain: string; keyShareKind: string; linkExportField: string; rotateMethod: string; snapshotEvery: number;
+  };
+
+  it('движок: домен, вид ключа, смена эпохи и порог снимка — из правила', () => {
+    const planner = readRepo('backend/protocol/src/domain/planner.rs');
+    expect(planner).toContain(`pub const DOMAIN_NAME: &str = "${r.domain}";`);
+    expect(planner).toContain(`pub const SNAPSHOT_EVERY: u64 = ${r.snapshotEvery};`);
+    const client = readRepo('backend/protocol/src/client_planner.rs');
+    expect(client).toContain(`OutRequest::id("${r.rotateMethod}"`);
+    expect(client).toContain('fn planner_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64)');
+    expect(client).toContain('if sender != self.user || share.domain != planner::DOMAIN_NAME {');
+    const core = readRepo('backend/protocol/src/client.rs');
+    const kind = r.keyShareKind.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase());
+    expect(core).toContain(`Some(content::Kind::${kind}(share)) => {`);
+    expect(core).toContain('match self.planner_rotate_on_revoke(now_ms()) {');
+  });
+
+  it('web: контейнер, очередь и ключи в экспорте линковки', () => {
+    const sync = readRepo('web/telegram-tt/src/api/parvane/v2/planner.ts');
+    expect(sync).toContain(`export const PLANNER_DOMAIN = '${r.domain}';`);
+    expect(sync).toContain('\'domain.op.sync\'');
+    expect(sync).toContain('\'domain.snapshot.get\'');
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain(`${r.linkExportField}: v2Controller.planner.keysExport(),`);
+    expect(provider).toContain('if (plannerKeys) v2Controller.planner.keysImport(plannerKeys);');
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('if (ev.type === \'plannerChanged\') planner.onEngineEvent();');
   });
 });

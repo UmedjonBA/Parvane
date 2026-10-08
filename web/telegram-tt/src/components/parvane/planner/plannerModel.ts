@@ -7,8 +7,10 @@ export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'later', 'w
 
 export type PlannerStep = { text: string; isDone: boolean };
 
+// Идентификаторы объектов — строки, уникальные между устройствами (spec 010:
+// UUID на устройстве-создателе, `legacy-<устройство>-<n>` у перенесённых)
 export type PlannerTask = {
-  id: number;
+  id: string;
   name: string;
   description: string;
   steps: PlannerStep[];
@@ -26,7 +28,7 @@ export type PlannerTask = {
 };
 
 export type PlannerEvent = {
-  id: number;
+  id: string;
   name: string;
   start: string;
   end: string;
@@ -44,6 +46,7 @@ export type PlannerMeal = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'other';
 export const PLANNER_MEALS: PlannerMeal[] = ['breakfast', 'lunch', 'dinner', 'snack', 'other'];
 
 export type PlannerFoodEntry = {
+  id: string;
   name: string;
   meal: PlannerMeal;
   kcal: number;
@@ -79,12 +82,16 @@ export type PlannerSettings = {
   margin: number;
 };
 
+// Список задач: `projects` (имена, '' — «Без списка») — вид для экранов,
+// `lists` — сущности с id для синхронизации (spec 010); `projects` строится из `lists`
+export type PlannerList = { id: string; name: string; order: number };
+
 export type PlannerState = {
   version: 1;
   tasks: PlannerTask[];
   events: PlannerEvent[];
   projects: string[];
-  nextId: number;
+  lists: PlannerList[];
   nutrition: Record<string, PlannerNutritionDay>;
   calorieGoal: PlannerGoal;
   macroGoals: PlannerMacroGoals;
@@ -125,7 +132,7 @@ export function createEmptyPlannerState(): PlannerState {
     tasks: [],
     events: [],
     projects: [''],
-    nextId: 1,
+    lists: [],
     nutrition: {},
     calorieGoal: { target: 2000, tolerance: 100 },
     macroGoals: {
@@ -136,6 +143,22 @@ export function createEmptyPlannerState(): PlannerState {
     budget: 600,
     settings: { ...DEFAULT_PLANNER_SETTINGS },
   };
+}
+
+/** Новый идентификатор объекта (UUID v4; движок принимает `[A-Za-z0-9_-]`). */
+export function newId() {
+  return crypto.randomUUID();
+}
+
+/** Список по имени; создаёт запись `lists`, если её ещё нет. */
+export function ensureList(state: PlannerState, name: string): PlannerList | undefined {
+  if (!name) return undefined;
+  const existing = state.lists.find((list) => list.name === name);
+  if (existing) return existing;
+  const created = { id: newId(), name, order: state.lists.length };
+  state.lists.push(created);
+  if (!state.projects.includes(name)) state.projects.push(name);
+  return created;
 }
 
 export function hasLunchBreak(settings: PlannerSettings) {
@@ -208,7 +231,7 @@ export function getDayLoad(state: PlannerState, day: string) {
   return events + tasks;
 }
 
-export function getTimedForDay(state: PlannerState, day: string, excludedTaskId?: number): PlannerTimed[] {
+export function getTimedForDay(state: PlannerState, day: string, excludedTaskId?: string): PlannerTimed[] {
   const events: PlannerTimed[] = getEventsForDay(state, day)
     .map((event) => ({ name: event.name, start: event.start, end: event.end, event }));
   const tasks: PlannerTimed[] = getTasksForDay(state, day)
@@ -327,12 +350,12 @@ export function getCompletedTasks(state: PlannerState) {
 export function getOrderedGroup(state: PlannerState, task: PlannerTask) {
   return getEligibleTasks(state)
     .filter((item) => item.project === task.project && item.status === task.status)
-    .sort((a, b) => a.rank - b.rank || a.id - b.id);
+    .sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1));
 }
 
 // Порядок в очереди (↑↓ из макета): задача меняется местами с соседом;
 // у края группы ничего не происходит
-export function moveTask(state: PlannerState, taskId: number, direction: -1 | 1) {
+export function moveTask(state: PlannerState, taskId: string, direction: -1 | 1) {
   const task = state.tasks.find(({ id }) => id === taskId);
   if (!task) return false;
   const group = getOrderedGroup(state, task);
@@ -415,6 +438,7 @@ function roundNutrient(value: number) {
 }
 
 export function makeFoodEntry(raw: {
+  id?: string;
   name: string;
   meal: PlannerMeal;
   isPer100: boolean;
@@ -428,6 +452,7 @@ export function makeFoodEntry(raw: {
     if (isKnownNumber(value)) scaled[nutrient] = roundNutrient(value * factor);
   });
   return {
+    id: raw.id || newId(),
     name: raw.name.trim(),
     meal: raw.meal,
     kcal: scaled.kcal || 0,
@@ -542,10 +567,13 @@ export function normalizePlannerState(raw: unknown): PlannerState {
   const isDay = (value: unknown): value is string => typeof value === 'string' && DAY_KEY_PATTERN.test(value);
   const isTime = (value: unknown): value is string => typeof value === 'string' && TIME_PATTERN.test(value);
 
+  const isId = (value: unknown): value is string | number => (
+    (typeof value === 'string' && value.length > 0 && value.length <= 64) || Number.isInteger(value)
+  );
   const tasks = saved.tasks
-    .filter((task) => task && Number.isInteger(task.id) && typeof task.name === 'string')
+    .filter((task) => task && isId(task.id) && typeof task.name === 'string')
     .map((task, index): PlannerTask => ({
-      id: task.id,
+      id: String(task.id),
       name: task.name,
       description: typeof task.description === 'string' ? task.description : '',
       steps: Array.isArray(task.steps)
@@ -562,10 +590,10 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     }));
 
   const events = (Array.isArray(saved.events) ? saved.events : [])
-    .filter((event) => event && Number.isInteger(event.id) && typeof event.name === 'string'
+    .filter((event) => event && isId(event.id) && typeof event.name === 'string'
       && isTime(event.start) && isTime(event.end))
     .map((event): PlannerEvent => ({
-      id: event.id,
+      id: String(event.id),
       name: event.name,
       start: event.start,
       end: event.end,
@@ -581,6 +609,13 @@ export function normalizePlannerState(raw: unknown): PlannerState {
   tasks.forEach((task) => {
     if (!projects.includes(task.project)) projects.push(task.project);
   });
+  const savedLists = Array.isArray(saved.lists) ? saved.lists : [];
+  const lists: PlannerList[] = savedLists
+    .filter((list) => list && typeof list.id === 'string' && typeof list.name === 'string' && list.name)
+    .map((list, index) => ({ id: list.id, name: list.name, order: Number.isFinite(list.order) ? list.order : index }));
+  projects.filter(Boolean).forEach((name) => {
+    if (!lists.some((list) => list.name === name)) lists.push({ id: newId(), name, order: lists.length });
+  });
 
   const nutrition: Record<string, PlannerNutritionDay> = {};
   if (saved.nutrition && typeof saved.nutrition === 'object') {
@@ -589,7 +624,11 @@ export function normalizePlannerState(raw: unknown): PlannerState {
       nutrition[day] = {
         entries: record.entries
           .filter((entry) => entry && typeof entry.name === 'string' && isKnownNumber(entry.kcal))
-          .map((entry) => ({ ...entry, meal: PLANNER_MEALS.includes(entry.meal) ? entry.meal : 'other' })),
+          .map((entry) => ({
+            ...entry,
+            id: typeof entry.id === 'string' && entry.id ? entry.id : newId(),
+            meal: PLANNER_MEALS.includes(entry.meal) ? entry.meal : 'other',
+          })),
         isComplete: Boolean(record.isComplete),
         goal: record.goal && validateGoal(record.goal, true) ? record.goal : undefined,
         macroGoals: record.macroGoals,
@@ -598,7 +637,6 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     });
   }
 
-  const ids = [...tasks.map((task) => task.id), ...events.map((event) => event.id)];
   const macroGoals = saved.macroGoals
     && (['protein', 'fat', 'carbs'] as const).every((metric) => (
       saved.macroGoals![metric] && validateGoal(saved.macroGoals![metric], false)
@@ -609,7 +647,7 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     tasks,
     events,
     projects,
-    nextId: Math.max(1, ...ids.map((id) => id + 1)),
+    lists,
     nutrition,
     calorieGoal: saved.calorieGoal && validateGoal(saved.calorieGoal, true) ? saved.calorieGoal : empty.calorieGoal,
     macroGoals,
