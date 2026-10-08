@@ -302,3 +302,13 @@
     }
   }
 }
+
+// Parvane (spec 009): раздел «План» занимает место колонок мессенджера; сами
+// колонки остаются смонтированными (звонки, синхронизация), но скрыты
+#Main.section-planner {
+  > #LeftColumn,
+  > #MiddleColumn,
+  > #RightColumn-wrapper {
+    display: none;
+  }
+}
