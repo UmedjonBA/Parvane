@@ -1,7 +1,7 @@
 import type { LangFn } from '../../../util/localization';
 import type { PlannerStatus } from './plannerModel';
 
-import { fromDayKey } from './plannerModel';
+import { fromDayKey, toTime } from './plannerModel';
 
 // Parvane (spec 009): подписи планировщика — даты и длительности в языке интерфейса
 
@@ -33,6 +33,12 @@ export function formatDuration(lang: LangFn, minutes: number) {
   if (minutes < 60) return lang('PlannerMinutesValue', { minutes });
   const hours = lang('PlannerHoursValue', { hours: Math.floor(minutes / 60) });
   return minutes % 60 ? `${hours} ${lang('PlannerMinutesValue', { minutes: minutes % 60 })}` : hours;
+}
+
+// Граница окна: ровный час — «09», иначе «08:30»
+export function formatClock(minutes: number) {
+  const clock = toTime(minutes);
+  return minutes % 60 ? clock : clock.slice(0, 2);
 }
 
 export function formatDay(lang: LangFn, day: string) {

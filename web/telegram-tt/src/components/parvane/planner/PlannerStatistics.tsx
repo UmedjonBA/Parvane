@@ -348,7 +348,7 @@ const PlannerStatistics = ({
         value={readGoal(metric, part)}
         min={0}
         step={metric === 'kcal' ? 1 : 'any'}
-        onInput={(value) => setGoalDrafts({ ...goalDrafts, [`${metric}.${part}`]: value })}
+        onInput={(value) => setGoalDrafts((previous) => ({ ...previous, [`${metric}.${part}`]: value }))}
       />
     );
   }

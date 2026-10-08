@@ -68,8 +68,10 @@ export function undoPlanner(noticeText: string) {
   scheduleSave();
 }
 
+// Уведомление без изменения состояния (ошибка ввода): «Отменить» к нему не
+// относится — кнопка предлагала бы откатить предыдущее успешное действие
 export function showPlannerNotice(text: string) {
-  setPlannerNotice({ text, canUndo: Boolean(stateBeforeLastChange) });
+  setPlannerNotice({ text, canUndo: false });
 }
 
 function resetPlanner() {

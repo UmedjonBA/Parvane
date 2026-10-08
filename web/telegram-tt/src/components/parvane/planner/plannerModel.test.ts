@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
-  countConflicts, createEmptyPlannerState, findSlots, fitsBookingWindow, getDayAvailability, getDayLoad,
-  getEventsForDay, getNutrientStatistics, getNutrientStatus, getNutrientTotal, getTimeStatistics, makeFoodEntry,
-  normalizePlannerState, validateEvent, validateTask,
+  countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, findSlots, fitsBookingWindow,
+  getDayAvailability, getDayLoad, getEventsForDay, getNutrientStatistics, getNutrientStatus, getNutrientTotal,
+  getOrderedGroup, getTimeStatistics, makeFoodEntry, moveTask, normalizePlannerState, validateEvent,
+  validateSettings, validateTask,
 } from './plannerModel';
 
 // 8 октября 2026 — четверг
@@ -100,6 +101,65 @@ describe('планировщик: поиск окна и проверки вво
     expect(fitsBookingWindow(state, window, { day: TODAY, start: '10:00', minutes: 60 })).toBe(true);
     expect(fitsBookingWindow(state, window, { day: TODAY, start: '10:30', minutes: 60 })).toBe(false);
     expect(fitsBookingWindow(state, window, { day: '2026-10-09', start: '10:00', minutes: 30 })).toBe(false);
+  });
+});
+
+describe('планировщик: настройки дня и порядок очереди (T014)', () => {
+  it('окна дня, перерыв и запас берутся из настроек', () => {
+    const state = stateWith({
+      settings: {
+        dayStart: 480, dayEnd: 1080, lunchStart: 0, lunchEnd: 0, margin: 0,
+      },
+      tasks: [task({ id: 1, day: TODAY, start: '08:00', minutes: 60 }), task({ id: 2, minutes: 120 })],
+    });
+    expect(getDayAvailability(state, TODAY).free).toEqual([{ start: 540, end: 1080 }]);
+    // Без перерыва и запаса окно начинается сразу после задачи
+    expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '09:00', end: '11:00' });
+    state.settings = {
+      dayStart: 480, dayEnd: 1080, lunchStart: 540, lunchEnd: 600, margin: 30,
+    };
+    expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '10:00', end: '12:00' });
+  });
+
+  it('проверки настроек', () => {
+    expect(validateSettings(DEFAULT_PLANNER_SETTINGS)).toBeUndefined();
+    expect(validateSettings({ ...DEFAULT_PLANNER_SETTINGS, dayStart: 1260 })).toBe('window');
+    expect(validateSettings({ ...DEFAULT_PLANNER_SETTINGS, lunchStart: 480, lunchEnd: 600 })).toBe('lunch');
+    expect(validateSettings({ ...DEFAULT_PLANNER_SETTINGS, lunchStart: 0, lunchEnd: 0 })).toBeUndefined();
+    expect(validateSettings({ ...DEFAULT_PLANNER_SETTINGS, margin: 181 })).toBe('margin');
+  });
+
+  it('сохранённое без настроек или с негодными получает значения макета', () => {
+    expect(normalizePlannerState({ version: 1, tasks: [] }).settings).toEqual(DEFAULT_PLANNER_SETTINGS);
+    const restored = normalizePlannerState({
+      version: 1, tasks: [], settings: { dayStart: 600, dayEnd: 1200, lunchStart: 0, lunchEnd: 0, margin: 10 },
+    });
+    expect(restored.settings).toEqual({
+      dayStart: 600, dayEnd: 1200, lunchStart: 0, lunchEnd: 0, margin: 10,
+    });
+    expect(normalizePlannerState({ version: 1, tasks: [], settings: { dayStart: 'x' } }).settings)
+      .toEqual(DEFAULT_PLANNER_SETTINGS);
+    expect(normalizePlannerState({ version: 1, tasks: [], settings: { dayStart: 1300 } }).settings)
+      .toEqual(DEFAULT_PLANNER_SETTINGS);
+  });
+
+  it('стрелки меняют задачу местами с соседом того же списка и статуса, у края — ничего', () => {
+    const state = stateWith({
+      tasks: [
+        task({ id: 1, rank: 0 }),
+        task({ id: 2, rank: 0 }),
+        task({ id: 3, rank: 0, status: 'active' }),
+        task({ id: 4, rank: 0, project: 'Дом' }),
+      ],
+    });
+    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual([1, 2]);
+    expect(moveTask(state, 1, -1)).toBe(false);
+    expect(moveTask(state, 2, -1)).toBe(true);
+    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual([2, 1]);
+    expect(moveTask(state, 2, 1)).toBe(true);
+    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual([1, 2]);
+    expect(moveTask(state, 3, 1)).toBe(false);
+    expect(moveTask(state, 99, 1)).toBe(false);
   });
 });
 

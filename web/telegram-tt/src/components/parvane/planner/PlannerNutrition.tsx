@@ -143,8 +143,11 @@ const PlannerNutrition = ({
     setMeal(e.currentTarget.value as PlannerMeal);
   });
 
+  // Обновление от прежнего состояния: два поля, заполненные между отрисовками
+  // (быстрый ввод, автозаполнение), иначе затирали друг друга — калории
+  // «пустые» при видимом значении (плавающий шаг питания в e2e, 8 окт 2026)
   const setValue = useLastCallback((key: PlannerNutrient | 'grams', value: string) => {
-    setValues({ ...values, [key]: value });
+    setValues((previous) => ({ ...previous, [key]: value }));
   });
 
   const changeDay = useLastCallback((mutate: (target: typeof record) => void, notice: string) => {

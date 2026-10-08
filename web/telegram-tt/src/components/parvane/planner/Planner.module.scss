@@ -240,9 +240,32 @@
   }
 }
 
+.previewMore {
+  display: block;
+}
+
 .previewDue {
   font-weight: var(--font-weight-medium);
   color: var(--color-error);
+}
+
+// Телефон: ячейка ~2.5rem шириной — часы и превью не помещаются (переполнение
+// на 390 px, снимки T015); остаются число, «!» пересечения и полоса загрузки
+@media (max-width: 600px) {
+  .day {
+    min-height: 3.5rem;
+    padding: 0.25rem 0.25rem 0.5rem;
+  }
+
+  .dayHead {
+    justify-content: center;
+  }
+
+  .dayHours,
+  .preview,
+  .previewMore {
+    display: none;
+  }
 }
 
 .loadBar {
@@ -421,6 +444,13 @@
   }
 }
 
+.taskReorder {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.125rem;
+  align-items: center;
+}
+
 .taskName {
   overflow: hidden;
 
@@ -529,6 +559,18 @@
   @media (max-width: 925px) {
     display: none;
   }
+}
+
+// ── настройки (T014) ─────────────────────────────────────────────────────────
+
+.settings {
+  max-width: 44rem;
+  padding: 1rem;
+}
+
+.settingsBack,
+.settingsReset {
+  align-self: flex-start;
 }
 
 .editorTitle {
@@ -919,4 +961,18 @@
   border-inline-start: 1px solid var(--color-borders);
   border-radius: 0;
   box-shadow: none;
+}
+
+// RTL: интервалы времени и числа с единицами — всегда слева направо, иначе
+// bidi переставляет «09:00–09:30» и «30 min» (снимки T015)
+.clock,
+.dayHours,
+.preview,
+.small,
+.summary {
+  unicode-bidi: plaintext;
+}
+
+.clock {
+  direction: ltr;
 }
