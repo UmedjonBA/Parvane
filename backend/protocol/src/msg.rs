@@ -349,6 +349,8 @@ pub fn is_trackable(c: &Content) -> bool {
             | Some(content::Kind::Location(_))
             | Some(content::Kind::Poll(_))
             | Some(content::Kind::Contact(_))
+            | Some(content::Kind::TaskOffer(_))
+            | Some(content::Kind::TaskResponse(_))
     )
 }
 

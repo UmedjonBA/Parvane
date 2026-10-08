@@ -6,7 +6,7 @@ import buildClassName from '../../../util/buildClassName';
 import { formatDay, formatHours, formatWeekday } from './plannerFormat';
 import {
   countConflicts, countUnrated, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getLoadFraction,
-  getMonthKeys, getMonthOffset, getTasksForDay,
+  getMonthKeys, getMonthOffset, getTasksForDay, instanceKey,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -24,7 +24,8 @@ type OwnProps = {
   onPickDay: (day: string) => void;
   onCreateForDay: (day: string) => void;
   onOpenTask: (taskId: string, day: string) => void;
-  onMoveTask: (taskId: string, day: string) => void;
+  // `taskKey` — id задачи либо `id@день` экземпляра ряда
+  onMoveTask: (taskKey: string, day: string) => void;
 };
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
@@ -43,9 +44,9 @@ const PlannerMonth = ({
 
   const handleDayClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    const taskId = target.closest<HTMLElement>('[data-preview-task]')?.dataset.previewTask;
+    const taskKey = target.closest<HTMLElement>('[data-preview-task]')?.dataset.previewTask;
     const day = e.currentTarget.dataset.day!;
-    if (taskId) onOpenTask(taskId, day);
+    if (taskKey) onOpenTask(taskKey.split('@')[0], day);
     else onPickDay(day);
   });
 
@@ -96,13 +97,13 @@ const PlannerMonth = ({
             isDue: true,
           })),
           ...getTasksForDay(state, day).filter((task) => !deadlines.includes(task)).map((task) => ({
-            key: `task${task.id}`,
-            taskId: task.id,
+            key: `task${instanceKey(task)}`,
+            taskId: instanceKey(task),
             label: `${task.start ? `${task.start} ` : ''}${task.name}`,
             isDue: false,
           })),
           ...getEventsForDay(state, day).map((event) => ({
-            key: `event${event.id}`, taskId: undefined, label: `${event.start} ${event.name}`, isDue: false,
+            key: `event${instanceKey(event)}`, taskId: undefined, label: `${event.start} ${event.name}`, isDue: false,
           })),
         ];
         const weekday = fromDayKey(day).getDay();

@@ -7,7 +7,9 @@ import type { PlannerFormParams } from './PlannerTaskForm';
 import buildClassName from '../../../util/buildClassName';
 import { setParvaneSection } from '../../../util/parvaneSection';
 import { formatDay, formatDayLong, formatMonth } from './plannerFormat';
-import { fromDayKey, toDayKey } from './plannerModel';
+import {
+  detachInstance, eventInstance, fromDayKey, taskInstance, toDayKey,
+} from './plannerModel';
 import {
   getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus, loadPlanner,
   undoPlanner, updatePlanner,
@@ -22,6 +24,7 @@ import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
 import PlannerDay from './PlannerDay';
+import PlannerEventEditor from './PlannerEventEditor';
 import PlannerMonth from './PlannerMonth';
 import PlannerNutrition from './PlannerNutrition';
 import PlannerSettings from './PlannerSettings';
@@ -63,7 +66,9 @@ const Planner = ({ isMobile }: OwnProps) => {
   const [view, setView] = useState(VIEW_CALENDAR);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [picked, setPicked] = useState(today);
-  const [editorId, setEditorId] = useState<string>();
+  // Редактор задачи: id и день экземпляра ряда (spec 011); редактор события — то же
+  const [editor, setEditor] = useState<{ id: string; day?: string }>();
+  const [eventEditor, setEventEditor] = useState<{ id: string; day: string }>();
   const [formParams, setFormParams] = useState<PlannerFormParams>();
   const [dayContent, setDayContent] = useState(DAY_SCHEDULE);
   const [foodAddRequest, setFoodAddRequest] = useState(0);
@@ -84,9 +89,14 @@ const Planner = ({ isMobile }: OwnProps) => {
     setMonth(new Date(date.getFullYear(), date.getMonth(), 1));
   });
 
+  const closeEditors = useLastCallback(() => {
+    setEditor(undefined);
+    setEventEditor(undefined);
+  });
+
   const handlePickDay = useLastCallback((day: string) => {
     pickDay(day);
-    setEditorId(undefined);
+    closeEditors();
     setIsPanelOpen(true);
   });
 
@@ -94,15 +104,25 @@ const Planner = ({ isMobile }: OwnProps) => {
     const task = state.tasks.find(({ id }) => id === taskId);
     const target = day || task?.day;
     if (target && view === VIEW_CALENDAR) pickDay(target);
-    setEditorId(taskId);
+    setEventEditor(undefined);
+    setEditor({ id: taskId, day: task?.repeat ? day : undefined });
     setIsPanelOpen(true);
   });
 
-  const handleMoveTask = useLastCallback((taskId: string, day: string) => {
+  const handleOpenEvent = useLastCallback((eventId: string, day: string) => {
+    setEditor(undefined);
+    setEventEditor({ id: eventId, day });
+    setIsPanelOpen(true);
+  });
+
+  // Перетаскивание экземпляра ряда на другой день — «только это» (отделение)
+  const handleMoveTask = useLastCallback((taskKey: string, day: string) => {
+    const [taskId, fromDay] = taskKey.split('@');
     const task = state.tasks.find(({ id }) => id === taskId);
-    if (!task || task.day === day) return;
+    if (!task || task.day === day || (task.repeat && !fromDay) || fromDay === day) return;
     updatePlanner((draft) => {
-      draft.tasks.find(({ id }) => id === taskId)!.day = day;
+      if (task.repeat) detachInstance(draft, 'task', taskId, fromDay, { day });
+      else draft.tasks.find(({ id }) => id === taskId)!.day = day;
     }, lang('PlannerNoticeMoved', { date: formatDay(lang, day), name: task.name }));
   });
 
@@ -121,7 +141,7 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handleAdd = useLastCallback(() => {
     if (view === VIEW_CALENDAR && dayContent === DAY_NUTRITION) {
-      setEditorId(undefined);
+      closeEditors();
       setIsPanelOpen(true);
       setFoodAddRequest(foodAddRequest + 1);
       return;
@@ -129,10 +149,10 @@ const Planner = ({ isMobile }: OwnProps) => {
     setFormParams(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
   });
 
-  const handleCreated = useLastCallback((taskId?: string) => {
+  const handleCreated = useLastCallback((taskId?: string, day?: string) => {
     setFormParams(undefined);
-    if (taskId !== undefined) handleOpenTask(taskId);
-    else setEditorId(undefined);
+    if (taskId !== undefined) handleOpenTask(taskId, day);
+    else closeEditors();
   });
 
   const handleCancelCreate = useLastCallback(() => {
@@ -142,7 +162,7 @@ const Planner = ({ isMobile }: OwnProps) => {
   const handleSwitchView = useLastCallback((index: number) => {
     setView(index);
     setFormParams(undefined);
-    setEditorId(undefined);
+    closeEditors();
     setIsPanelOpen(false);
     setIsSettingsOpen(false);
   });
@@ -160,7 +180,7 @@ const Planner = ({ isMobile }: OwnProps) => {
     const next = new Date(month.getFullYear(), month.getMonth() + delta, 1);
     setMonth(next);
     setPicked(toDayKey(next));
-    setEditorId(undefined);
+    closeEditors();
     setIsPanelOpen(false);
   });
 
@@ -169,22 +189,22 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handleToday = useLastCallback(() => {
     pickDay(today);
-    setEditorId(undefined);
+    closeEditors();
   });
 
   const handleCloseEditor = useLastCallback(() => {
-    setEditorId(undefined);
+    closeEditors();
   });
 
   const handleClosePanel = useLastCallback(() => {
-    setEditorId(undefined);
+    closeEditors();
     setIsPanelOpen(false);
   });
 
   const handleOpenFoodDay = useLastCallback((day: string) => {
     setView(VIEW_CALENDAR);
     pickDay(day);
-    setEditorId(undefined);
+    closeEditors();
     setDayContent(DAY_NUTRITION);
     setIsPanelOpen(true);
   });
@@ -205,7 +225,12 @@ const Planner = ({ isMobile }: OwnProps) => {
     setParvaneSection('messenger');
   });
 
-  const editedTask = editorId === undefined ? undefined : state.tasks.find(({ id }) => id === editorId);
+  const editedTemplate = editor && state.tasks.find(({ id }) => id === editor.id);
+  const editedTask = editedTemplate && editor.day && editedTemplate.repeat
+    ? taskInstance(editedTemplate, editor.day) : editedTemplate;
+  const editedEventTemplate = eventEditor && state.events.find(({ id }) => id === eventEditor.id);
+  const editedEvent = editedEventTemplate && editedEventTemplate.repeat
+    ? eventInstance(editedEventTemplate, eventEditor.day) : editedEventTemplate;
   const isCreating = Boolean(formParams);
   // Форма создания и настройки занимают всё содержимое — кнопки месяца и добавления прячутся
   const isOverlay = isCreating || isSettingsOpen;
@@ -331,6 +356,7 @@ const Planner = ({ isMobile }: OwnProps) => {
               ) : (
                 <PlannerTasks
                   state={state}
+                  today={today}
                   selectedProject={state.projects.includes(selectedProject) ? selectedProject : ''}
                   onSelectProject={setSelectedProject}
                   onOpenTask={handleOpenTask}
@@ -338,7 +364,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                 />
               )}
             </div>
-            {(view === VIEW_CALENDAR || editedTask) && (
+            {(view === VIEW_CALENDAR || editedTask || editedEvent) && (
               <aside className={styles.panel}>
                 <Button
                   isText
@@ -351,7 +377,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                 </Button>
                 {editedTask ? (
                   <PlannerTaskEditor
-                    key={editedTask.id}
+                    key={`${editedTask.id}@${editedTask.instanceDay || ''}`}
                     state={state}
                     task={editedTask}
                     today={today}
@@ -359,6 +385,15 @@ const Planner = ({ isMobile }: OwnProps) => {
                     backLabel={lang(view === VIEW_TASKS ? 'PlannerBackToTasks' : 'PlannerBackToDay')}
                     onBack={handleCloseEditor}
                     onPickDay={pickDay}
+                    onOpenTask={handleOpenTask}
+                  />
+                ) : editedEvent ? (
+                  <PlannerEventEditor
+                    key={`${editedEvent.id}@${editedEvent.instanceDay || ''}`}
+                    state={state}
+                    event={editedEvent}
+                    backLabel={lang('PlannerBackToDay')}
+                    onBack={handleCloseEditor}
                   />
                 ) : (
                   <>
@@ -369,6 +404,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                         state={state}
                         day={picked}
                         onOpenTask={handleOpenTask}
+                        onOpenEvent={handleOpenEvent}
                         onCreateTask={handleCreateInDay}
                       />
                     ) : (

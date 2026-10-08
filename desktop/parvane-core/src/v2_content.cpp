@@ -453,7 +453,7 @@ std::string v2Kind(const json &v2) {
     static const char *kinds[] = {"text", "media", "sticker", "location", "poll", "poll_vote",
                                   "poll_close", "receipt", "edit", "delete", "reaction", "pin",
                                   "call", "group_key", "delivery_key", "contact", "container_key",
-                                  "state_key", "chat_mode"};
+                                  "state_key", "chat_mode", "task_offer", "task_response"};
     if (!v2.is_object()) return {};
     for (const char *k : kinds) {
         if (v2.contains(k) && !v2[k].is_null()) return k;
@@ -620,6 +620,14 @@ std::optional<json> fromV2(const json &c) {
     } else if (c.contains("chat_mode") && c["chat_mode"].is_object()) {
         // Режим L2 личного чата: видимое служебное сообщение (без ttl/пересылки).
         return chatModeContent(c["chat_mode"].value("l2", false));
+    } else if (c.contains("task_offer") || c.contains("task_response")) {
+        // Задание в чат (spec 011, TASK-1): раздела «План» у desktop нет —
+        // показываем текстовое представление, которое заполнил отправитель
+        const auto &t = c.contains("task_offer") ? c["task_offer"] : c["task_response"];
+        std::string text = t.is_object() ? str(t, "text") : std::string();
+        if (text.empty() && t.is_object() && !str(t, "name").empty()) text = "📋 " + str(t, "name");
+        if (text.empty()) text = c.contains("task_offer") ? "📋 Задание" : "📋 Ответ на задание";
+        out = json{{"kind", "text"}, {"text", text}};
     } else {
         return std::nullopt;
     }

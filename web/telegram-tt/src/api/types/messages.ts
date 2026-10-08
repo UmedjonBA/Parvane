@@ -398,6 +398,22 @@ export interface ApiMediaTodo {
   completions?: ApiTodoCompletion[];
 }
 
+// Parvane (spec 011): задание в чат — карточка с решениями участников
+export interface ApiTaskOffer {
+  mediaType: 'taskOffer';
+  id: string;
+  name: string;
+  description: string;
+  steps: string[];
+  day?: string;
+  start?: string;
+  minutes?: number;
+  due?: string;
+  isOwn: boolean;
+  responses: { userId: string; isAccepted: boolean }[];
+  myDecision?: boolean;
+}
+
 export type ApiNewMediaTodo = {
   todo: ApiTodoList;
 };
@@ -723,6 +739,7 @@ export type MediaContent = {
   contact?: ApiContact;
   pollId?: string;
   todo?: ApiMediaTodo;
+  taskOffer?: ApiTaskOffer;
   action?: ApiMessageAction;
   webPage?: ApiMessageWebPage;
   audio?: ApiAudio;

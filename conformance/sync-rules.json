@@ -1214,6 +1214,20 @@
         "desktop": "движок общий (backend/protocol/src/client_planner.rs): ключ контейнера принимается и хранится, раздела «План» нет; тест client_flow.rs planner_container_shared_with_own_devices_and_rotated_on_revoke, planner_key_from_stranger_is_ignored",
         "android": "движок общий (тот же тест); раздела «План» нет"
       }
+    },
+    {
+      "id": "TASK-1",
+      "title": "Задание в чат: task_offer/task_response — видимые сообщения; клиент без планировщика показывает text, принятие создаёт задачу один раз на аккаунт",
+      "kinds": ["task_offer", "task_response"],
+      "fieldNumbers": { "task_offer": 20, "task_response": 21 },
+      "vectors": ["task-offer", "task-response-accepted", "task-response-declined"],
+      "fallbackField": "text",
+      "sourceField": "source",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (task_offer/task_response), taskOffers.ts (TaskOfferStore), sync.ts (handleTaskOfferContent), messages.ts (parvaneSendTaskOffer, parvaneRespondTaskOffer, addTaskOfferToPlan); тесты taskOffers.test.ts, protocol.vectors.test.ts; сценарий scripts/e2e_web_task_offer.mjs",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (v2Kind: task_offer/task_response; fromV2 → kind text из поля text); тест tests/v2_tests.cpp (task_offer ← v2: текст); без сборки tdesktop — проверить при следующей сборке очереди desktop",
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: task_offer, task_response → MessageText); тест ProtocolV2SeamTest.kt taskOfferShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
+      }
     }
   ]
 }

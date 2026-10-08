@@ -1023,6 +1023,95 @@
     },
     {
       "client": {
+        "class": "message",
+        "v1": {
+          "day": "2026-10-20",
+          "kind": "task_offer",
+          "minutes": 60,
+          "name": "Отчёт",
+          "start": "10:00",
+          "text": "Задание: Отчёт, 2026-10-20 10:00"
+        }
+      },
+      "expect": {
+        "content": {
+          "task_offer": {
+            "day": "2026-10-20",
+            "description": "за неделю",
+            "due": "2026-10-21",
+            "minutes": 60,
+            "name": "Отчёт",
+            "start": "10:00",
+            "steps": [
+              {
+                "text": "собрать цифры"
+              }
+            ],
+            "text": "Задание: Отчёт, 2026-10-20 10:00"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "a2018b010a0ad09ed182d187d191d1821211d0b7d0b020d0bdd0b5d0b4d0b5d0bbd18e1a1b0a19d181d0bed0b1d180d0b0d182d18c20d186d0b8d184d180d18b220a323032362d31302d32302a0531303a3030303c3a0a323032362d31302d3231422cd097d0b0d0b4d0b0d0bdd0b8d0b53a20d09ed182d187d191d1822c20323032362d31302d32302031303a3030"
+      },
+      "name": "task-offer"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
+          "accepted": true,
+          "kind": "task_response",
+          "text": "Принял задание «Отчёт»"
+        }
+      },
+      "expect": {
+        "content": {
+          "task_response": {
+            "decision": "TASK_DECISION_ACCEPTED",
+            "offer": {
+              "op_id": "AQIDBAUGBwgJCgsMDQ4PEA=="
+            },
+            "text": "Принял задание «Отчёт»"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "aa01420a120a100102030405060708090a0b0c0d0e0f1010011a2ad09fd180d0b8d0bdd18fd0bb20d0b7d0b0d0b4d0b0d0bdd0b8d0b520c2abd09ed182d187d191d182c2bb"
+      },
+      "name": "task-response-accepted"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
+          "accepted": false,
+          "kind": "task_response"
+        }
+      },
+      "expect": {
+        "content": {
+          "task_response": {
+            "decision": "TASK_DECISION_DECLINED",
+            "offer": {
+              "op_id": "AQIDBAUGBwgJCgsMDQ4PEA=="
+            }
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "aa01160a120a100102030405060708090a0b0c0d0e0f101002"
+      },
+      "name": "task-response-declined"
+    },
+    {
+      "client": {
         "class": "stub"
       },
       "expect": {
@@ -1141,6 +1230,15 @@
         "content_hex": "52150a130a110101010101010101010101010101010101"
       },
       "name": "limit-op-id-17"
+    },
+    {
+      "expect": {
+        "error": "FieldLimit"
+      },
+      "input": {
+        "content_hex": "a201f9031a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a01731a030a0173"
+      },
+      "name": "limit-task-offer-101-steps"
     },
     {
       "expect": {

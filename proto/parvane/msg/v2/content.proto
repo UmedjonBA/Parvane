@@ -42,6 +42,10 @@ message Content {
     // Режим «усиленная приватность» (L2, FR-036) личного чата: предпочтение
     // подписавшего участника. Видимое служебное сообщение чата.
     ChatMode chat_mode = 19;
+    // Задание в чат (spec 011, TASK-1): карточка задачи с «принять/отклонить»
+    // и ответ-решение. Клиент без планировщика показывает поле `text`.
+    TaskOffer task_offer = 20;
+    TaskResponse task_response = 21;
   }
   // D-09: LegacyV1 не может быть содержимым v2-конверта — v1-записи приходят
   // только записью журнала LegacyV1Record (msg.proto).
@@ -243,6 +247,40 @@ message PollVote {
 
 message PollClose {
   MessageRef poll = 1;
+}
+
+message TaskStep {
+  string text = 1 [(parvane.core.v2.max_len) = 160];
+}
+
+// Задание: что и когда. Поля — как у задачи планировщика (spec 009/010):
+// пусто/0 — не задано. `text` — текстовое представление («Задание: <name>,
+// <day> <start>»), которое заполняет отправитель; клиент без раздела «План»
+// показывает его как обычный текст и не ломает синк (TASK-1).
+message TaskOffer {
+  string name = 1 [(parvane.core.v2.max_len) = 200];
+  string description = 2 [(parvane.core.v2.max_len) = 4000];
+  repeated TaskStep steps = 3 [(parvane.core.v2.max_items) = 100];
+  // YYYY-MM-DD, HH:MM, минуты оценки, YYYY-MM-DD дедлайна
+  string day = 4 [(parvane.core.v2.max_len) = 10];
+  string start = 5 [(parvane.core.v2.max_len) = 5];
+  uint32 minutes = 6;
+  string due = 7 [(parvane.core.v2.max_len) = 10];
+  string text = 8 [(parvane.core.v2.max_len) = 600];
+}
+
+enum TaskDecision {
+  TASK_DECISION_UNSPECIFIED = 0;
+  TASK_DECISION_ACCEPTED = 1;
+  TASK_DECISION_DECLINED = 2;
+}
+
+// Решение получателя по заданию — видимое сообщение со ссылкой на карточку;
+// `text` — «<имя> принял(а) задание „<name>“» для клиентов без планировщика.
+message TaskResponse {
+  MessageRef offer = 1;
+  TaskDecision decision = 2;
+  string text = 3 [(parvane.core.v2.max_len) = 300];
 }
 
 enum ReceiptKind {

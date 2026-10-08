@@ -214,6 +214,7 @@ import RoundVideo from './RoundVideo';
 import Sticker from './Sticker';
 import Story from './Story';
 import StoryMention from './StoryMention';
+import TaskOffer from './TaskOffer';
 import TodoList from './TodoList';
 import Video from './Video';
 import WebPage from './WebPage';
@@ -603,7 +604,7 @@ const Message = ({
     voice, document, sticker, contact,
     invoice, location,
     action, game, storyData, giveaway,
-    giveawayResults, todo, dice,
+    giveawayResults, todo, dice, taskOffer,
   } = getMessageContent(message);
 
   const messageReplyInfo = getMessageReplyInfo(message);
@@ -1488,6 +1489,9 @@ const Message = ({
         )}
         {todo && (
           <TodoList message={message} todoList={todo} />
+        )}
+        {taskOffer && (
+          <TaskOffer message={message} taskOffer={taskOffer} />
         )}
         {(giveaway || giveawayResults) && (
           <Giveaway message={message} />

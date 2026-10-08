@@ -2282,21 +2282,33 @@ export interface LangPair {
   'PlannerCreateList': undefined;
   'PlannerDayNutrition': undefined;
   'PlannerDaySchedule': undefined;
+  'PlannerDeleteEvent': undefined;
   'PlannerDeleteTask': undefined;
   'PlannerErrorCompleteEmpty': undefined;
   'PlannerErrorDayAfterDue': undefined;
   'PlannerErrorEventRepeat': undefined;
   'PlannerErrorEventTime': undefined;
+  'PlannerErrorGoalDates': undefined;
+  'PlannerErrorGoalEmpty': undefined;
   'PlannerErrorGrams': undefined;
   'PlannerErrorMinutes': undefined;
   'PlannerErrorName': undefined;
   'PlannerErrorNeedDay': undefined;
   'PlannerErrorNeedMinutes': undefined;
   'PlannerErrorPastMidnight': undefined;
+  'PlannerErrorRepeatCount': undefined;
+  'PlannerErrorRepeatEnd': undefined;
+  'PlannerErrorRepeatInterval': undefined;
+  'PlannerErrorRepeatMonthDay': undefined;
+  'PlannerErrorRepeatStart': undefined;
+  'PlannerErrorRepeatWeekdays': undefined;
+  'PlannerErrorSettingsBudget': undefined;
+  'PlannerErrorSettingsLunch': undefined;
+  'PlannerErrorSettingsMargin': undefined;
+  'PlannerErrorSettingsWindow': undefined;
   'PlannerErrorStartNeeds': undefined;
   'PlannerErrorWater': undefined;
   'PlannerEventOnce': undefined;
-  'PlannerEventRepeatWeekly': undefined;
   'PlannerFieldDate': undefined;
   'PlannerFieldDescription': undefined;
   'PlannerFieldDue': undefined;
@@ -2330,11 +2342,26 @@ export interface LangPair {
   'PlannerFoodStatusAbove': undefined;
   'PlannerFoodStatusBelow': undefined;
   'PlannerFoodStatusIncomplete': undefined;
+  'PlannerFoodStatusNoGoal': undefined;
   'PlannerFoodStatusNone': undefined;
   'PlannerFoodStatusOk': undefined;
   'PlannerFoodStatusOpen': undefined;
   'PlannerFoodWater': undefined;
   'PlannerFree': undefined;
+  'PlannerGoalActive': undefined;
+  'PlannerGoalAdd': undefined;
+  'PlannerGoalBaseHint': undefined;
+  'PlannerGoalEditTitle': undefined;
+  'PlannerGoalEndKind': undefined;
+  'PlannerGoalEndOpen': undefined;
+  'PlannerGoalEndSingle': undefined;
+  'PlannerGoalEndUntil': undefined;
+  'PlannerGoalFrom': undefined;
+  'PlannerGoalFromStart': undefined;
+  'PlannerGoalMetricsHint': undefined;
+  'PlannerGoalNewTitle': undefined;
+  'PlannerGoalNoGoal': undefined;
+  'PlannerGoalTo': undefined;
   'PlannerGoalTolerance': undefined;
   'PlannerGoalsTitle': undefined;
   'PlannerGroupDeadlines': undefined;
@@ -2356,6 +2383,9 @@ export interface LangPair {
   'PlannerMetricKcal': undefined;
   'PlannerMetricProtein': undefined;
   'PlannerMetricProteinShort': undefined;
+  'PlannerMetricWater': undefined;
+  'PlannerNearLimit': undefined;
+  'PlannerNeedsLinking': undefined;
   'PlannerNewList': undefined;
   'PlannerNextMonth': undefined;
   'PlannerNoEstimate': undefined;
@@ -2366,13 +2396,52 @@ export interface LangPair {
   'PlannerNoticeFoodDayOpened': undefined;
   'PlannerNoticeFoodDeleted': undefined;
   'PlannerNoticeFoodUpdated': undefined;
+  'PlannerNoticeGoalDeleted': undefined;
   'PlannerNoticeGoalsUpdated': undefined;
+  'PlannerNoticeReordered': undefined;
+  'PlannerNoticeSettingsSaved': undefined;
   'PlannerNoticeStepAdded': undefined;
   'PlannerNoticeUndone': undefined;
   'PlannerNoticeWaterUpdated': undefined;
   'PlannerPeriodDay': undefined;
   'PlannerPeriodMonth': undefined;
   'PlannerPrevMonth': undefined;
+  'PlannerRepeatCount': undefined;
+  'PlannerRepeatDaily': undefined;
+  'PlannerRepeatEnd': undefined;
+  'PlannerRepeatEndCount': undefined;
+  'PlannerRepeatEndDate': undefined;
+  'PlannerRepeatEndNever': undefined;
+  'PlannerRepeatEndUntil': undefined;
+  'PlannerRepeatInterval': undefined;
+  'PlannerRepeatKindDaily': undefined;
+  'PlannerRepeatKindMonthly': undefined;
+  'PlannerRepeatKindNone': undefined;
+  'PlannerRepeatKindWeekly': undefined;
+  'PlannerRepeatKindYearly': undefined;
+  'PlannerRepeatLabel': undefined;
+  'PlannerRepeatMark': undefined;
+  'PlannerRepeatMonthDay': undefined;
+  'PlannerRepeatMonthDayFromStart': undefined;
+  'PlannerRepeatSave': undefined;
+  'PlannerRepeatStart': undefined;
+  'PlannerSeriesAll': undefined;
+  'PlannerSeriesDeleteTitle': undefined;
+  'PlannerSeriesDetachedHint': undefined;
+  'PlannerSeriesEditTitle': undefined;
+  'PlannerSeriesFollowing': undefined;
+  'PlannerSeriesOnlyThis': undefined;
+  'PlannerSeriesOpen': undefined;
+  'PlannerSettings': undefined;
+  'PlannerSettingsBudget': undefined;
+  'PlannerSettingsDayEnd': undefined;
+  'PlannerSettingsDayStart': undefined;
+  'PlannerSettingsHint': undefined;
+  'PlannerSettingsLunchEnd': undefined;
+  'PlannerSettingsLunchHint': undefined;
+  'PlannerSettingsLunchStart': undefined;
+  'PlannerSettingsMargin': undefined;
+  'PlannerSettingsReset': undefined;
   'PlannerSlotsNone': undefined;
   'PlannerStatAverage': undefined;
   'PlannerStatChartMetric': undefined;
@@ -2397,35 +2466,33 @@ export interface LangPair {
   'PlannerStatusWaiting': undefined;
   'PlannerStepAdd': undefined;
   'PlannerStepNew': undefined;
+  'PlannerSyncPending': undefined;
+  'PlannerSyncUnavailable': undefined;
   'PlannerTimeConflict': undefined;
   'PlannerTitleNew': undefined;
   'PlannerToday': undefined;
   'PlannerUndo': undefined;
   'PlannerUnitGram': undefined;
   'PlannerUnitKcal': undefined;
+  'PlannerUnitMl': undefined;
   'PlannerViewCalendar': undefined;
   'PlannerViewStatistics': undefined;
   'PlannerViewTasks': undefined;
-  'PlannerSettings': undefined;
-  'PlannerSettingsHint': undefined;
-  'PlannerSettingsBudget': undefined;
-  'PlannerSettingsMargin': undefined;
-  'PlannerSettingsDayStart': undefined;
-  'PlannerSettingsDayEnd': undefined;
-  'PlannerSettingsLunchStart': undefined;
-  'PlannerSettingsLunchEnd': undefined;
-  'PlannerSettingsLunchHint': undefined;
-  'PlannerSettingsReset': undefined;
-  'PlannerNoticeSettingsSaved': undefined;
-  'PlannerErrorSettingsWindow': undefined;
-  'PlannerErrorSettingsLunch': undefined;
-  'PlannerErrorSettingsMargin': undefined;
-  'PlannerErrorSettingsBudget': undefined;
-  'PlannerNoticeReordered': undefined;
-  'PlannerNeedsLinking': undefined;
-  'PlannerSyncUnavailable': undefined;
-  'PlannerSyncPending': undefined;
-  'PlannerNearLimit': undefined;
+  'TaskOfferAccept': undefined;
+  'TaskOfferAccepted': undefined;
+  'TaskOfferAddToPlan': undefined;
+  'TaskOfferAddedToPlan': undefined;
+  'TaskOfferAlreadyInPlan': undefined;
+  'TaskOfferDecline': undefined;
+  'TaskOfferDeclined': undefined;
+  'TaskOfferLabel': undefined;
+  'TaskOfferMenuItem': undefined;
+  'TaskOfferNeedsPlanner': undefined;
+  'TaskOfferOpenPlan': undefined;
+  'TaskOfferSend': undefined;
+  'TaskOfferSteps': undefined;
+  'TaskOfferTitle': undefined;
+  'TaskOfferUnavailable': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4156,12 +4223,21 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerAriaDone': {
     'name': V;
   };
+  'PlannerAriaEditEvent': {
+    'name': V;
+  };
   'PlannerAriaEditFood': {
     'name': V;
   };
   'PlannerAriaFreeSlot': {
     'from': V;
     'to': V;
+  };
+  'PlannerAriaMoveDown': {
+    'name': V;
+  };
+  'PlannerAriaMoveUp': {
+    'name': V;
   };
   'PlannerAriaShowGroup': {
     'name': V;
@@ -4209,14 +4285,21 @@ export interface LangPairWithVariables<V = LangVariable> {
     'from': V;
     'to': V;
   };
-  'PlannerEventRepeats': {
-    'days': V;
-  };
   'PlannerFoodDayResult': {
     'status': V;
   };
   'PlannerFoodFiberValue': {
     'value': V;
+  };
+  'PlannerGoalPeriodOpen': {
+    'from': V;
+  };
+  'PlannerGoalPeriodRange': {
+    'from': V;
+    'to': V;
+  };
+  'PlannerGoalPeriodSingle': {
+    'date': V;
   };
   'PlannerGoalTarget': {
     'name': V;
@@ -4243,6 +4326,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerNoticeEstimateUpdated': {
     'name': V;
   };
+  'PlannerNoticeEventUpdated': {
+    'name': V;
+  };
   'PlannerNoticeListCreated': {
     'name': V;
   };
@@ -4254,6 +4340,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'PlannerNoticeReopened': {
+    'name': V;
+  };
+  'PlannerNoticeRepeatUpdated': {
     'name': V;
   };
   'PlannerNoticeScheduled': {
@@ -4275,9 +4364,49 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerNoticeUnscheduled': {
     'name': V;
   };
+  'PlannerRepeatEveryDays': {
+    'n': V;
+  };
+  'PlannerRepeatEveryMonths': {
+    'n': V;
+    'day': V;
+  };
+  'PlannerRepeatEveryWeeks': {
+    'n': V;
+    'days': V;
+  };
+  'PlannerRepeatEveryYears': {
+    'n': V;
+    'date': V;
+  };
+  'PlannerRepeatMonthly': {
+    'day': V;
+  };
+  'PlannerRepeatTimes': {
+    'count': V;
+  };
+  'PlannerRepeatUntil': {
+    'date': V;
+  };
+  'PlannerRepeatWeekly': {
+    'days': V;
+  };
+  'PlannerRepeatYearly': {
+    'date': V;
+  };
+  'PlannerSeriesInstanceHint': {
+    'rule': V;
+  };
+  'PlannerSeriesTemplateHint': {
+    'rule': V;
+  };
   'PlannerSlotsHint': {
     'window': V;
     'lunch': V;
+    'margin': V;
+  };
+  'PlannerSlotsHintNoBreak': {
+    'window': V;
     'margin': V;
   };
   'PlannerStatDays': {
@@ -4304,14 +4433,13 @@ export interface LangPairWithVariables<V = LangVariable> {
     'done': V;
     'total': V;
   };
-  'PlannerSlotsHintNoBreak': {
-    'window': V;
-    'margin': V;
+  'TaskOfferAcceptedBy': {
+    'names': V;
   };
-  'PlannerAriaMoveUp': {
-    'name': V;
+  'TaskOfferDeclinedBy': {
+    'names': V;
   };
-  'PlannerAriaMoveDown': {
+  'TaskOfferSummary': {
     'name': V;
   };
 }

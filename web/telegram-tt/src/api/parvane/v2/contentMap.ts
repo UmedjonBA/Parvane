@@ -51,6 +51,10 @@ export type V2Location = {
   title?: string; address?: string;
 };
 export type V2MessageRef = { op_id?: string };
+export type V2TaskOffer = {
+  name?: string; description?: string; steps?: { text?: string }[]; day?: string; start?: string;
+  minutes?: number; due?: string; text?: string;
+};
 export type V2Content = {
   text?: V2Text;
   media?: V2Media;
@@ -68,6 +72,9 @@ export type V2Content = {
   reaction?: { target?: V2MessageRef; emoji?: string; remove?: boolean };
   pin?: { target?: V2MessageRef; unpin?: boolean; silent?: boolean };
   contact?: { first_name?: string; last_name?: string; phone?: string; user?: { address: string } };
+  // spec 011 (TASK-1): задание в чат и решение по нему
+  task_offer?: V2TaskOffer;
+  task_response?: { offer?: V2MessageRef; decision?: string; text?: string };
   // Режим «усиленная приватность» (L2, FR-036): предпочтение участника
   // личного чата; proto3-JSON опускает `l2: false`
   chat_mode?: { l2?: boolean };
@@ -316,6 +323,29 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
     case 'poll_close':
       out = { poll_close: { poll: c.poll ? ref(c.poll) : undefined } };
       break;
+    case 'task_offer':
+      out = {
+        task_offer: {
+          name: c.name,
+          description: c.description || undefined,
+          steps: c.steps?.map((text) => ({ text })),
+          day: c.day || undefined,
+          start: c.start || undefined,
+          minutes: c.minutes || undefined,
+          due: c.due || undefined,
+          text: c.text || undefined,
+        },
+      };
+      break;
+    case 'task_response':
+      out = {
+        task_response: {
+          offer: c.offer ? ref(c.offer) : undefined,
+          decision: c.accepted ? 'TASK_DECISION_ACCEPTED' : 'TASK_DECISION_DECLINED',
+          text: c.text || undefined,
+        },
+      };
+      break;
     default:
       throw new Error(`v2: вид содержимого ${c.kind} не поддерживается`);
   }
@@ -381,6 +411,25 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
   } else if (c.chat_mode) {
     // Служебное сообщение чата; `l2: false` значимо (режим выключен)
     out = { kind: 'chat_mode', l2: Boolean(c.chat_mode.l2) };
+  } else if (c.task_offer) {
+    out = {
+      kind: 'task_offer',
+      name: c.task_offer.name || '',
+      description: c.task_offer.description || undefined,
+      steps: c.task_offer.steps?.map((s) => s.text || '').filter(Boolean),
+      day: c.task_offer.day || undefined,
+      start: c.task_offer.start || undefined,
+      minutes: c.task_offer.minutes || undefined,
+      due: c.task_offer.due || undefined,
+      text: c.task_offer.text || undefined,
+    };
+  } else if (c.task_response) {
+    out = {
+      kind: 'task_response',
+      offer: b64ToUuid(c.task_response.offer?.op_id),
+      accepted: c.task_response.decision === 'TASK_DECISION_ACCEPTED',
+      text: c.task_response.text || undefined,
+    };
   }
   if (!out) return undefined;
   if (c.ttl_secs) out.ttl_secs = c.ttl_secs;

@@ -133,6 +133,16 @@ class ProtocolV2SeamTest {
     }
 
     @Test
+    fun taskOfferShowsAsText() {
+        // TASK-1 (spec 011): задание и ответ — обычный текст из поля text, не заглушка
+        val s = store()
+        val offer = s.contentFrom(JSONObject("""{"kind":"task_offer","name":"Отчёт","text":"📋 Задание: Отчёт"}"""))
+        assertTrue(offer is TdApi.MessageText)
+        assertEquals("📋 Задание: Отчёт", (offer as TdApi.MessageText).text.text)
+        assertTrue(s.contentFrom(JSONObject("""{"kind":"task_response","accepted":true,"text":"✅ Принято"}""")) is TdApi.MessageText)
+    }
+
+    @Test
     fun storeMapsUnknownKindsToUnsupportedButKeepsLegacyText() {
         val s = store()
         assertTrue(s.contentFrom(JSONObject("""{"kind":"unsupported"}""")) is TdApi.MessageUnsupported)

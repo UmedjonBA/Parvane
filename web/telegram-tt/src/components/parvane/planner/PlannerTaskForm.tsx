@@ -1,14 +1,15 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type {
-  PlannerEventError, PlannerSlot, PlannerState, PlannerStatus, PlannerTaskError,
+  PlannerEventError, PlannerRepeatError, PlannerSlot, PlannerState, PlannerStatus, PlannerTaskError,
 } from './plannerModel';
+import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 
 import {
-  formatDay, formatDuration, formatProject, formatStatus, formatWeekday,
+  formatDay, formatDuration, formatProject, formatStatus,
 } from './plannerFormat';
 import {
-  ensureList, fitsBookingWindow, newId, PLANNER_STATUSES, toTime, validateEvent, validateTask,
+  ensureList, fitsBookingWindow, newId, PLANNER_STATUSES, toTime, validateEvent, validateRepeat, validateTask,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -16,11 +17,11 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
-import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import PlannerField from './PlannerField';
+import PlannerRepeatFields, { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
 
 import styles from './Planner.module.scss';
 
@@ -35,7 +36,7 @@ export type PlannerFormParams = {
 type OwnProps = {
   state: PlannerState;
   params: PlannerFormParams;
-  onCreated: (taskId?: string) => void;
+  onCreated: (taskId?: string, day?: string) => void;
   onCancel: NoneToVoidFunction;
 };
 
@@ -47,18 +48,26 @@ const TASK_ERROR_KEYS = {
   dayAfterDue: 'PlannerErrorDayAfterDue',
 } as const satisfies Record<PlannerTaskError, string>;
 
+export const REPEAT_ERROR_KEYS = {
+  interval: 'PlannerErrorRepeatInterval',
+  weekdays: 'PlannerErrorRepeatWeekdays',
+  monthDay: 'PlannerErrorRepeatMonthDay',
+  startDay: 'PlannerErrorRepeatStart',
+  endDay: 'PlannerErrorRepeatEnd',
+  count: 'PlannerErrorRepeatCount',
+} as const satisfies Record<PlannerRepeatError, string>;
+
 const EVENT_ERROR_KEYS = {
   name: 'PlannerErrorName',
   time: 'PlannerErrorEventTime',
   repeat: 'PlannerErrorEventRepeat',
+  ...REPEAT_ERROR_KEYS,
 } as const satisfies Record<PlannerEventError, string>;
 
 const DEFAULT_SLOT_MINUTES = 30;
 const NAME_MAX_LENGTH = 160;
-// Понедельник — первым; значения — как `Date.getDay`
-const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 
-// Новая задача либо событие (разовое или повторяющееся по дням недели)
+// Новая задача либо событие — разовое или ряд по правилу повтора (spec 011)
 const PlannerTaskForm = ({
   state, params, onCreated, onCancel,
 }: OwnProps) => {
@@ -77,8 +86,7 @@ const PlannerTaskForm = ({
   const [due, setDue] = useState('');
   const [status, setStatus] = useState<PlannerStatus>(params.status || 'queue');
   const [project, setProject] = useState(params.project || '');
-  const [isRepeating, setIsRepeating] = useState(false);
-  const [weekdays, setWeekdays] = useState<number[]>([]);
+  const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(() => emptyRepeatDraft(params.day || ''));
   const [error, setError] = useState<string>();
 
   const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -102,20 +110,16 @@ const PlannerTaskForm = ({
     setProject(e.currentTarget.value);
   });
 
-  const handleWeekdayToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const weekday = Number(e.currentTarget.value);
-    setWeekdays(e.currentTarget.checked ? [...weekdays, weekday] : weekdays.filter((item) => item !== weekday));
-  });
-
   const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const repeat = draftToRepeat(repeatDraft);
     if (kind === 'event') {
       const event = {
         name: name.trim(),
         start,
         end,
-        weekdays: isRepeating ? weekdays : undefined,
-        day: isRepeating ? undefined : (day || undefined),
+        repeat,
+        day: repeat ? undefined : (day || undefined),
       };
       const eventError = validateEvent(event);
       if (eventError) {
@@ -129,16 +133,22 @@ const PlannerTaskForm = ({
       return;
     }
 
+    // Задача-ряд: дата работы — у правила (`startDay`), у шаблона её нет
     const task = {
       name: name.trim(),
       minutes: minutes === '' ? undefined : Number(minutes),
-      day: day || undefined,
+      day: repeat ? undefined : (day || undefined),
       start: start || undefined,
-      due: due || undefined,
+      due: repeat ? undefined : (due || undefined),
     };
-    const taskError = validateTask(task);
+    const taskError = validateTask(repeat && start ? { ...task, day: repeat.startDay || day } : task);
     if (taskError) {
       setError(lang(TASK_ERROR_KEYS[taskError]));
+      return;
+    }
+    const repeatError = repeat && validateRepeat(repeat);
+    if (repeatError) {
+      setError(lang(REPEAT_ERROR_KEYS[repeatError]));
       return;
     }
     if (slot && !fitsBookingWindow(state, slot, task)) {
@@ -155,11 +165,12 @@ const PlannerTaskForm = ({
         steps: [],
         status,
         project,
+        repeat,
         // Новая задача — первой в очереди
         rank: Math.min(0, ...draft.tasks.map(({ rank }) => rank)) - 1,
       });
     }, lang('PlannerNoticeAdded', { name: task.name }));
-    onCreated(taskId);
+    onCreated(taskId, repeat?.startDay || undefined);
   });
 
   return (
@@ -195,7 +206,9 @@ const PlannerTaskForm = ({
             noReplaceNewlines
           />
           <div className={styles.fields}>
-            <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={day} onInput={setDay} />
+            {repeatDraft.kind === 'none' && (
+              <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={day} onInput={setDay} />
+            )}
             <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
             <PlannerField
               label={lang('PlannerFieldMinutes')}
@@ -207,8 +220,11 @@ const PlannerTaskForm = ({
               placeholder={lang('PlannerNoEstimate')}
               onInput={setMinutes}
             />
-            <PlannerField label={lang('PlannerFieldDue')} type="date" value={due} onInput={setDue} />
+            {repeatDraft.kind === 'none' && (
+              <PlannerField label={lang('PlannerFieldDue')} type="date" value={due} onInput={setDue} />
+            )}
           </div>
+          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
           <div className={styles.fields}>
             <Select label={lang('PlannerFieldStatus')} value={status} hasArrow onChange={handleStatusChange}>
               {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
@@ -224,22 +240,10 @@ const PlannerTaskForm = ({
             <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
             <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />
           </div>
-          <Checkbox label={lang('PlannerEventRepeatWeekly')} checked={isRepeating} onCheck={setIsRepeating} />
-          {isRepeating ? (
-            <div className={styles.weekdays}>
-              {WEEKDAYS.map((weekday) => (
-                <Checkbox
-                  key={weekday}
-                  value={String(weekday)}
-                  label={formatWeekday(lang, (weekday + 6) % 7)}
-                  checked={weekdays.includes(weekday)}
-                  onChange={handleWeekdayToggle}
-                />
-              ))}
-            </div>
-          ) : (
+          {repeatDraft.kind === 'none' && (
             <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
           )}
+          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
         </>
       )}
       {error && <p className={styles.error} role="alert">{error}</p>}

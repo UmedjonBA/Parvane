@@ -1,6 +1,7 @@
 import type { ApiMessage, ApiUpdate, ApiVideo } from '../types';
 import type { GatewayConnection } from './gateway';
 import type { PollStore } from './polls';
+import type { TaskOfferStore } from './taskOffers';
 import { MAIN_THREAD_ID } from '../types';
 
 import { getLangStringByKey } from '../../util/localization';
@@ -49,6 +50,9 @@ type SyncDependencies = {
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
   refreshPollMessage: (uuid: string) => void;
+  // spec 011: задания в чат — карточки и решения (восстанавливаются из кэша истории)
+  taskOffers: TaskOfferStore;
+  refreshTaskOfferMessage: (uuid: string) => void;
   rememberSavedGif: (gif: ApiVideo) => void;
   sendUpdate: (update: ApiUpdate) => void;
   log: (message: string) => void;
@@ -131,6 +135,20 @@ export function createSyncController(deps: SyncDependencies) {
       return true;
     }
     return false;
+  }
+
+  // Задание в чат (spec 011): карточка регистрируется, решение применяется к ней;
+  // обе строки дальше идут обычным конвейером сообщений (в кэш истории тоже)
+  function handleTaskOfferContent(stored: WireStoredMessage) {
+    const content = stored.content;
+    if (content.kind === 'task_offer') {
+      deps.taskOffers.register(stored.id, pollChatIdOf(stored), content, stored.from);
+      return;
+    }
+    if (content.kind === 'task_response' && content.offer && stored.from) {
+      deps.taskOffers.applyResponse(content.offer, stored.from, Boolean(content.accepted), stored.ts);
+      deps.refreshTaskOfferMessage(content.offer);
+    }
   }
 
   // Чат, к которому относится сообщение (для опросов: группа или 1-1 собеседник)
@@ -443,6 +461,7 @@ export function createSyncController(deps: SyncDependencies) {
     if (handlePollContent(stored)) {
       return;
     }
+    handleTaskOfferContent(stored);
     deps.media.rememberKeys(stored.content);
     const previousFlags = wireFlagsByUuid.get(stored.id);
     const flags = buildWireFlags(stored);
@@ -582,6 +601,7 @@ export function createSyncController(deps: SyncDependencies) {
 
     for (const stored of ordered) {
       if (handlePollContent(stored)) continue;
+      handleTaskOfferContent(stored);
       if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, stored.origin)) continue;
       if (isClearedForMe(stored)) continue;
       if (stored.deleted) {

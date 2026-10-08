@@ -2,14 +2,14 @@ import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { LangFn } from '../../../util/localization';
 import type {
-  PlannerFoodEntry, PlannerMeal, PlannerMetric, PlannerNutrient, PlannerState,
+  PlannerFoodEntry, PlannerGoalMetric, PlannerMeal, PlannerNutrient, PlannerState,
 } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatNumber } from './plannerFormat';
 import {
-  getNutrientGoal, getNutrientStatus, getNutrientTotal, isKnownNumber, makeFoodEntry, PLANNER_MEALS,
-  PLANNER_METRICS, PLANNER_NUTRIENTS,
+  getGoalRecordForDay, getNutrientGoal, getNutrientStatus, getNutrientTotal, isKnownNumber, makeFoodEntry,
+  PLANNER_GOAL_METRICS, PLANNER_MEALS, PLANNER_METRICS, PLANNER_NUTRIENTS,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -38,7 +38,8 @@ const METRIC_KEYS = {
   fat: 'PlannerMetricFat',
   carbs: 'PlannerMetricCarbs',
   fiber: 'PlannerMetricFiber',
-} as const satisfies Record<PlannerNutrient, string>;
+  water: 'PlannerMetricWater',
+} as const satisfies Record<PlannerGoalMetric, string>;
 
 const SHORT_KEYS = {
   protein: 'PlannerMetricProteinShort',
@@ -56,6 +57,7 @@ const MEAL_KEYS = {
 
 const STATUS_KEYS = {
   none: 'PlannerFoodStatusNone',
+  nogoal: 'PlannerFoodStatusNoGoal',
   incomplete: 'PlannerFoodStatusIncomplete',
   open: 'PlannerFoodStatusOpen',
   below: 'PlannerFoodStatusBelow',
@@ -68,15 +70,15 @@ const EMPTY_VALUES: Record<PlannerNutrient | 'grams', string> = {
   kcal: '', protein: '', fat: '', carbs: '', fiber: '', grams: '100',
 };
 
-export function formatMetric(lang: LangFn, metric: PlannerNutrient) {
+export function formatMetric(lang: LangFn, metric: PlannerGoalMetric) {
   return lang(METRIC_KEYS[metric]);
 }
 
-export function formatMetricUnit(lang: LangFn, metric: PlannerNutrient) {
-  return lang(metric === 'kcal' ? 'PlannerUnitKcal' : 'PlannerUnitGram');
+export function formatMetricUnit(lang: LangFn, metric: PlannerGoalMetric) {
+  return lang(metric === 'kcal' ? 'PlannerUnitKcal' : metric === 'water' ? 'PlannerUnitMl' : 'PlannerUnitGram');
 }
 
-export function formatFoodStatus(lang: LangFn, state: PlannerState, day: string, metric: PlannerMetric = 'kcal') {
+export function formatFoodStatus(lang: LangFn, state: PlannerState, day: string, metric: PlannerGoalMetric = 'kcal') {
   return lang(STATUS_KEYS[getNutrientStatus(state, day, metric)]);
 }
 
@@ -203,15 +205,14 @@ const PlannerNutrition = ({
     }, lang('PlannerNoticeWaterUpdated'));
   });
 
+  // Завершение дня фиксирует все шесть целей дня (FR-012) — смена целей задним числом его не переоценивает
   const handleComplete = useLastCallback((isComplete: boolean) => {
     if (isFuture || !record.entries.length) return setError(lang('PlannerErrorCompleteEmpty'));
     setError(undefined);
+    const goals = structuredClone(getGoalRecordForDay(state, day)?.goals || {});
     return changeDay((target) => {
       target.isComplete = isComplete;
-      if (isComplete) {
-        target.goal = { ...state.calorieGoal };
-        target.macroGoals = structuredClone(state.macroGoals);
-      }
+      if (isComplete) target.fixedGoals = goals;
     }, lang(isComplete ? 'PlannerNoticeFoodDayClosed' : 'PlannerNoticeFoodDayOpened'));
   });
 
@@ -221,28 +222,34 @@ const PlannerNutrition = ({
   return (
     <div className={styles.dayList}>
       <div className={styles.nutrients}>
-        {PLANNER_METRICS.map((metric) => {
+        {PLANNER_GOAL_METRICS.map((metric) => {
           const total = getNutrientTotal(state, day, metric);
           const goal = getNutrientGoal(state, day, metric);
+          const status = getNutrientStatus(state, day, metric);
           const shown = total.count ? `${formatNumber(lang, total.value)}${total.missing ? ' + ?' : ''}` : '—';
           return (
-            <div key={metric} className={styles.nutrient}>
+            <div key={metric} className={styles.nutrient} data-metric={metric} data-status={status}>
               <div className={styles.nutrientHead}>
                 <span>{formatMetric(lang, metric)}</span>
                 <span>
                   {shown}
                   <small className={styles.small}>
-                    {` / ${formatNumber(lang, goal.target)} ${formatMetricUnit(lang, metric)}`}
+                    {goal
+                      ? ` / ${formatNumber(lang, goal.target)} ${formatMetricUnit(lang, metric)}`
+                      : ` ${formatMetricUnit(lang, metric)} · ${lang('PlannerFoodStatusNoGoal')}`}
                   </small>
                 </span>
               </div>
               <div
                 className={styles.track}
-                style={`--planner-progress: ${Math.min(100, (total.value / goal.target) * 100)}%`}
+                style={`--planner-progress: ${goal ? Math.min(100, (total.value / goal.target) * 100) : 0}%`}
                 aria-hidden="true"
               >
                 <span />
               </div>
+              {status !== 'none' && status !== 'nogoal' && (
+                <span className={styles.small}>{lang(STATUS_KEYS[status])}</span>
+              )}
             </div>
           );
         })}

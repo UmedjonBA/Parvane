@@ -7,6 +7,40 @@ export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'later', 'w
 
 export type PlannerStep = { text: string; isDone: boolean };
 
+// ── повторы (spec 011) ───────────────────────────────────────────────────────
+
+export type PlannerRepeatKind = 'daily' | 'weekly' | 'monthly' | 'yearly';
+export const PLANNER_REPEAT_KINDS: PlannerRepeatKind[] = ['daily', 'weekly', 'monthly', 'yearly'];
+export const MAX_REPEAT_INTERVAL = 99;
+export const MAX_REPEAT_COUNT = 999;
+// Горизонт поиска ближайшего экземпляра, дней
+export const REPEAT_HORIZON_DAYS = 366;
+
+// Правило повтора: хранится правило, экземпляры разворачиваются при показе
+export type PlannerRepeat = {
+  kind: PlannerRepeatKind;
+  // каждые N дней/недель/месяцев/лет, 1..99
+  interval: number;
+  // weekly: дни недели (0 — воскресенье, как `Date.getDay`)
+  weekdays?: number[];
+  // monthly: число месяца 1..31; нет — число даты начала; в коротком месяце — последний день
+  monthDay?: number;
+  // первый возможный экземпляр; пустая строка — без нижней границы (только унаследованные ряды по дням недели)
+  startDay: string;
+  // конец ряда: до даты включительно и/или после count повторов
+  endDay?: string;
+  count?: number;
+};
+
+// Состояние экземпляра ряда в день: исключён (удалён «только это» или отделён), выполнен, отмеченные шаги
+export type PlannerOccurrence = { day: string; excluded?: boolean; done?: boolean; doneSteps?: number[] };
+
+// Откуда отделён экземпляр («изменить только это») — информационно
+export type PlannerOrigin = { seriesId: string; day: string };
+
+// Из какого задания чата создана задача (US3): защита от дубля и переход «карточка → задача»
+export type PlannerSource = { chat: string; opId: string };
+
 // Идентификаторы объектов — строки, уникальные между устройствами (spec 010:
 // UUID на устройстве-создателе, `legacy-<устройство>-<n>` у перенесённых)
 export type PlannerTask = {
@@ -25,6 +59,12 @@ export type PlannerTask = {
   due?: string;
   // Нет значения — «Без оценки»
   minutes?: number;
+  repeat?: PlannerRepeat;
+  occurrences?: PlannerOccurrence[];
+  origin?: PlannerOrigin;
+  source?: PlannerSource;
+  // У экземпляра ряда (результат разворачивания, не хранится): день экземпляра
+  instanceDay?: string;
 };
 
 export type PlannerEvent = {
@@ -32,10 +72,15 @@ export type PlannerEvent = {
   name: string;
   start: string;
   end: string;
-  // Повтор по дням недели (0 — воскресенье, как `Date.getDay`) либо разовая дата
-  weekdays?: number[];
+  // Разовая дата либо правило повтора (события «по дням недели» этапов 1–2 читаются как еженедельный ряд)
   day?: string;
+  repeat?: PlannerRepeat;
+  occurrences?: PlannerOccurrence[];
+  origin?: PlannerOrigin;
+  instanceDay?: string;
 };
+
+export type PlannerSeriesItem = PlannerTask | PlannerEvent;
 
 export type PlannerMetric = 'kcal' | 'protein' | 'fat' | 'carbs';
 export type PlannerNutrient = PlannerMetric | 'fiber';
@@ -60,14 +105,20 @@ export type PlannerFoodEntry = {
 };
 
 export type PlannerGoal = { target: number; tolerance: number };
-export type PlannerMacroGoals = Record<Exclude<PlannerMetric, 'kcal'>, PlannerGoal>;
+// Показатели с целью (spec 011): питательные вещества и вода (мл)
+export type PlannerGoalMetric = PlannerNutrient | 'water';
+export const PLANNER_GOAL_METRICS: PlannerGoalMetric[] = [...PLANNER_NUTRIENTS, 'water'];
+export type PlannerGoalValues = Partial<Record<PlannerGoalMetric, PlannerGoal>>;
+
+// Запись цели с датами: один день (`endDay === startDay`), промежуток или бессрочно (`endDay === ''`);
+// пустой `startDay` — «с самого начала». Для дня действует накрывающая запись (getGoalRecordForDay)
+export type PlannerGoalRecord = { id: string; startDay: string; endDay: string; goals: PlannerGoalValues };
 
 export type PlannerNutritionDay = {
   entries: PlannerFoodEntry[];
   isComplete: boolean;
   // Цели на момент завершения дня — чтобы смена целей не переписывала историю
-  goal?: PlannerGoal;
-  macroGoals?: PlannerMacroGoals;
+  fixedGoals?: PlannerGoalValues;
   waterMl?: number;
 };
 
@@ -93,8 +144,10 @@ export type PlannerState = {
   projects: string[];
   lists: PlannerList[];
   nutrition: Record<string, PlannerNutritionDay>;
-  calorieGoal: PlannerGoal;
-  macroGoals: PlannerMacroGoals;
+  // Цели «с самого начала» (этапы 1–2) — запись с самым низким приоритетом
+  goals: PlannerGoalValues;
+  // Записи целей с датами (spec 011)
+  goalPeriods: PlannerGoalRecord[];
   // Дневной бюджет времени, минут
   budget: number;
   settings: PlannerSettings;
@@ -110,7 +163,8 @@ export type PlannerTimed = {
 
 export type PlannerSlot = { start: number; end: number };
 export type PlannerBusyGroup = PlannerSlot & { items: PlannerTimed[] };
-export type PlannerNutrientStatus = 'none' | 'incomplete' | 'open' | 'below' | 'above' | 'ok';
+// `nogoal` — факт есть, цели по показателю нет (spec 011, FR-011)
+export type PlannerNutrientStatus = 'none' | 'nogoal' | 'incomplete' | 'open' | 'below' | 'above' | 'ok';
 
 export const MINUTES_IN_DAY = 1440;
 export const MIN_TASK_MINUTES = 5;
@@ -134,12 +188,13 @@ export function createEmptyPlannerState(): PlannerState {
     projects: [''],
     lists: [],
     nutrition: {},
-    calorieGoal: { target: 2000, tolerance: 100 },
-    macroGoals: {
+    goals: {
+      kcal: { target: 2000, tolerance: 100 },
       protein: { target: 120, tolerance: 20 },
       fat: { target: 70, tolerance: 15 },
       carbs: { target: 230, tolerance: 30 },
     },
+    goalPeriods: [],
     budget: 600,
     settings: { ...DEFAULT_PLANNER_SETTINGS },
   };
@@ -203,21 +258,337 @@ export function getMonthOffset(month: Date) {
   return (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;
 }
 
+// ── повторы: разворачивание ряда ─────────────────────────────────────────────
+
+// Дни от эпохи без влияния часового пояса и перевода часов
+function epochDays(day: string) {
+  const [year, month, date] = day.split('-').map(Number);
+  return Math.floor(Date.UTC(year, month - 1, date) / 86400000);
+}
+
+// Номер недели с понедельника (1970-01-01 — четверг)
+function weekIndex(day: string) {
+  return Math.floor((epochDays(day) + 3) / 7);
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function parts(day: string) {
+  const [year, month, date] = day.split('-').map(Number);
+  return { year, month, date };
+}
+
+function weekdayOf(day: string) {
+  const d = parts(day);
+  return new Date(Date.UTC(d.year, d.month - 1, d.date)).getUTCDay();
+}
+
+// Позиция дня недели при неделе с понедельника
+function mondayBased(weekday: number) {
+  return (weekday + 6) % 7;
+}
+
+export function isRepeating(item: PlannerSeriesItem) {
+  return Boolean(item.repeat);
+}
+
+export function getOccurrence(item: PlannerSeriesItem, day: string) {
+  return item.occurrences?.find((o) => o.day === day);
+}
+
+// Порядковый номер экземпляра (с 1) по правилу — без учёта исключений; `undefined` — ряд в этот день не даёт экземпляра
+function ordinalOf(repeat: PlannerRepeat, day: string): number | undefined {
+  const { kind, interval } = repeat;
+  if (!DAY_KEY_PATTERN.test(day) || !Number.isInteger(interval) || interval < 1) return undefined;
+  if (repeat.startDay && day < repeat.startDay) return undefined;
+  if (repeat.endDay && day > repeat.endDay) return undefined;
+  const d = parts(day);
+  if (kind === 'weekly') {
+    const weekdays = [...(repeat.weekdays || [])].sort((a, b) => mondayBased(a) - mondayBased(b));
+    const index = weekdays.indexOf(weekdayOf(day));
+    if (index < 0) return undefined;
+    if (!repeat.startDay) return 1;
+    const weeks = weekIndex(day) - weekIndex(repeat.startDay);
+    if (weeks % interval !== 0) return undefined;
+    // Дни первой недели до даты начала не порождаются и в счёт не идут
+    const startPosition = mondayBased(weekdayOf(repeat.startDay));
+    const skippedInFirstWeek = weekdays.filter((w) => mondayBased(w) < startPosition).length;
+    return (weeks / interval) * weekdays.length + index + 1 - skippedInFirstWeek;
+  }
+  if (!repeat.startDay) return undefined;
+  const start = parts(repeat.startDay);
+  if (kind === 'daily') {
+    const diff = epochDays(day) - epochDays(repeat.startDay);
+    return diff % interval === 0 ? diff / interval + 1 : undefined;
+  }
+  if (kind === 'monthly') {
+    const months = (d.year * 12 + d.month) - (start.year * 12 + start.month);
+    if (months % interval !== 0) return undefined;
+    const wanted = Math.min(repeat.monthDay || start.date, daysInMonth(d.year, d.month));
+    return d.date === wanted ? months / interval + 1 : undefined;
+  }
+  const years = d.year - start.year;
+  if (years % interval !== 0 || d.month !== start.month) return undefined;
+  const wanted = Math.min(start.date, daysInMonth(d.year, d.month));
+  return d.date === wanted ? years / interval + 1 : undefined;
+}
+
+/** Даёт ли правило экземпляр в этот день (исключения не учитываются). */
+export function occursOn(repeat: PlannerRepeat, day: string) {
+  const ordinal = ordinalOf(repeat, day);
+  if (ordinal === undefined) return false;
+  return !repeat.count || ordinal <= repeat.count;
+}
+
+/** Дни ряда в промежутке включительно (исключения не учитываются). */
+export function expandRepeat(repeat: PlannerRepeat, fromDay: string, toDay: string) {
+  const days: string[] = [];
+  for (let day = fromDay; day <= toDay; day = addDays(day, 1)) {
+    if (occursOn(repeat, day)) days.push(day);
+  }
+  return days;
+}
+
+/** Есть ли у ряда экземпляр в день (с учётом исключений). */
+export function hasInstanceOn(item: PlannerSeriesItem, day: string) {
+  if (!item.repeat) return false;
+  return occursOn(item.repeat, day) && !getOccurrence(item, day)?.excluded;
+}
+
+export function instanceKey(item: PlannerSeriesItem) {
+  return item.instanceDay ? `${item.id}@${item.instanceDay}` : item.id;
+}
+
+/** Экземпляр задачи-ряда на день: выполнение и шаги — из состояния экземпляра. */
+export function taskInstance(task: PlannerTask, day: string): PlannerTask {
+  const occurrence = getOccurrence(task, day);
+  const doneSteps = new Set(occurrence?.doneSteps || []);
+  return {
+    ...task,
+    day,
+    due: undefined,
+    status: occurrence?.done ? 'done' : (task.status === 'done' ? 'queue' : task.status),
+    steps: task.steps.map((step, index) => ({ text: step.text, isDone: doneSteps.has(index) })),
+    instanceDay: day,
+  };
+}
+
+export function eventInstance(event: PlannerEvent, day: string): PlannerEvent {
+  return { ...event, day, instanceDay: day };
+}
+
+export function isInstanceDone(task: PlannerTask, day: string) {
+  return Boolean(getOccurrence(task, day)?.done);
+}
+
+/** Ближайший невыполненный экземпляр задачи-ряда с `today` (горизонт года). */
+export function nextOpenInstance(task: PlannerTask, today: string): PlannerTask | undefined {
+  if (!task.repeat) return undefined;
+  for (let i = 0; i < REPEAT_HORIZON_DAYS; i++) {
+    const day = addDays(today, i);
+    if (hasInstanceOn(task, day) && !isInstanceDone(task, day)) return taskInstance(task, day);
+  }
+  return undefined;
+}
+
+export type PlannerRepeatError = 'interval' | 'weekdays' | 'monthDay' | 'startDay' | 'endDay' | 'count';
+
+export function validateRepeat(repeat: PlannerRepeat): PlannerRepeatError | undefined {
+  if (!Number.isInteger(repeat.interval) || repeat.interval < 1 || repeat.interval > MAX_REPEAT_INTERVAL) {
+    return 'interval';
+  }
+  if (repeat.kind === 'weekly') {
+    const days = repeat.weekdays || [];
+    const isWeekday = (d: number) => Number.isInteger(d) && d >= 0 && d <= 6;
+    if (!days.length || !days.every(isWeekday) || new Set(days).size !== days.length) {
+      return 'weekdays';
+    }
+  }
+  if (repeat.monthDay !== undefined
+    && (!Number.isInteger(repeat.monthDay) || repeat.monthDay < 1 || repeat.monthDay > 31)) return 'monthDay';
+  if (repeat.startDay ? !DAY_KEY_PATTERN.test(repeat.startDay) : repeat.kind !== 'weekly') return 'startDay';
+  if (repeat.endDay && (!DAY_KEY_PATTERN.test(repeat.endDay) || (repeat.startDay && repeat.endDay < repeat.startDay))) {
+    return 'endDay';
+  }
+  if (repeat.count !== undefined
+    && (!Number.isInteger(repeat.count) || repeat.count < 1 || repeat.count > MAX_REPEAT_COUNT)) return 'count';
+  return undefined;
+}
+
+// ── повторы: правки экземпляров и ряда ───────────────────────────────────────
+
+function seriesOf(state: PlannerState, kind: 'task' | 'event', id: string): PlannerSeriesItem | undefined {
+  return kind === 'task' ? state.tasks.find((t) => t.id === id) : state.events.find((e) => e.id === id);
+}
+
+/** Записать состояние экземпляра на день (слияние по дню у движка). */
+export function setOccurrence(
+  state: PlannerState, kind: 'task' | 'event', id: string, day: string, patch: Omit<PlannerOccurrence, 'day'>,
+) {
+  const item = seriesOf(state, kind, id);
+  if (!item) return false;
+  const occurrences = item.occurrences || [];
+  const index = occurrences.findIndex((o) => o.day === day);
+  const next: PlannerOccurrence = { ...(index >= 0 ? occurrences[index] : {}), day, ...patch };
+  if (index >= 0) occurrences[index] = next;
+  else occurrences.push(next);
+  item.occurrences = occurrences.sort((a, b) => a.day.localeCompare(b.day));
+  return true;
+}
+
+/** «Удалить только это»: исключить день из ряда. */
+export function excludeInstance(state: PlannerState, kind: 'task' | 'event', id: string, day: string) {
+  return setOccurrence(state, kind, id, day, { excluded: true });
+}
+
+function stripSeries<T extends PlannerSeriesItem>(item: T): T {
+  const copy = { ...item };
+  delete copy.repeat;
+  delete copy.occurrences;
+  delete copy.instanceDay;
+  return copy;
+}
+
+/** «Изменить только это»: самостоятельная копия экземпляра с полями `patch` и исключение дня у ряда. */
+export function detachInstance(
+  state: PlannerState, kind: 'task' | 'event', id: string, day: string, patch: Partial<PlannerTask & PlannerEvent>,
+) {
+  const item = seriesOf(state, kind, id);
+  if (!item) return undefined;
+  const origin: PlannerOrigin = { seriesId: id, day };
+  if (kind === 'task') {
+    const instance = taskInstance(item as PlannerTask, day);
+    const detached: PlannerTask = { ...stripSeries(instance), ...patch, id: newId(), origin, day: patch.day ?? day };
+    state.tasks.push(detached);
+    excludeInstance(state, kind, id, day);
+    return detached;
+  }
+  const detached: PlannerEvent = {
+    ...stripSeries(item as PlannerEvent), ...patch, id: newId(), origin, day: patch.day ?? day,
+  };
+  state.events.push(detached);
+  excludeInstance(state, kind, id, day);
+  return detached;
+}
+
+// Число экземпляров ряда до дня (для переноса `count` при разделении)
+function instancesBefore(repeat: PlannerRepeat, day: string) {
+  if (!repeat.startDay) return 0;
+  return expandRepeat(repeat, repeat.startDay, addDays(day, -1)).length;
+}
+
+/** «Это и последующие»: старый ряд заканчивается днём раньше, новый ряд с этого дня с полями `patch`. */
+export function splitSeries(
+  state: PlannerState, kind: 'task' | 'event', id: string, day: string, patch: Partial<PlannerTask & PlannerEvent>,
+) {
+  const item = seriesOf(state, kind, id);
+  if (!item?.repeat) return undefined;
+  const repeat = item.repeat;
+  const before = instancesBefore(repeat, day);
+  const nextRepeat: PlannerRepeat = {
+    ...repeat,
+    startDay: day,
+    count: repeat.count !== undefined ? Math.max(1, repeat.count - before) : undefined,
+    ...(patch.repeat || {}),
+  };
+  if (!repeat.startDay || day <= repeat.startDay) {
+    // Разделять нечего — правка всего ряда
+    Object.assign(item, patch, { repeat: { ...nextRepeat, startDay: repeat.startDay || day } });
+    return item;
+  }
+  item.repeat = {
+    ...repeat, endDay: addDays(day, -1), count: repeat.count !== undefined ? Math.max(1, before) : undefined,
+  };
+  item.occurrences = item.occurrences?.filter((o) => o.day < day);
+  if (kind === 'task') {
+    const base = stripSeries(item as PlannerTask);
+    const created: PlannerTask = {
+      ...base, ...patch, id: newId(), repeat: nextRepeat, status: 'queue', day: undefined, occurrences: [],
+    };
+    state.tasks.push(created);
+    return created;
+  }
+  const created: PlannerEvent = {
+    ...stripSeries(item as PlannerEvent), ...patch, id: newId(), repeat: nextRepeat, occurrences: [],
+  };
+  state.events.push(created);
+  return created;
+}
+
+/** «Удалить это и последующие»: ряд заканчивается днём раньше; если раньше начала — ряд удаляется. */
+export function truncateSeries(state: PlannerState, kind: 'task' | 'event', id: string, day: string) {
+  const item = seriesOf(state, kind, id);
+  if (!item?.repeat) return false;
+  if (!item.repeat.startDay || day <= item.repeat.startDay) {
+    removeSeries(state, kind, id);
+    return true;
+  }
+  const before = instancesBefore(item.repeat, day);
+  item.repeat = {
+    ...item.repeat, endDay: addDays(day, -1), count: item.repeat.count !== undefined ? Math.max(1, before) : undefined,
+  };
+  item.occurrences = item.occurrences?.filter((o) => o.day < day);
+  return true;
+}
+
+/** Удалить ряд целиком (отделённые экземпляры остаются). */
+export function removeSeries(state: PlannerState, kind: 'task' | 'event', id: string) {
+  if (kind === 'task') state.tasks = state.tasks.filter((t) => t.id !== id);
+  else state.events = state.events.filter((e) => e.id !== id);
+}
+
+/** Отметить задачу (или экземпляр ряда) выполненной. */
+export function setTaskDone(state: PlannerState, task: PlannerTask, isDone: boolean) {
+  if (task.repeat && task.instanceDay) {
+    return setOccurrence(state, 'task', task.id, task.instanceDay, { done: isDone });
+  }
+  const target = state.tasks.find((t) => t.id === task.id);
+  if (!target) return false;
+  target.status = isDone ? 'done' : 'queue';
+  return true;
+}
+
+/** Отметить шаг задачи (или экземпляра ряда — по дню). */
+export function setTaskStepDone(state: PlannerState, task: PlannerTask, index: number, isDone: boolean) {
+  if (task.repeat && task.instanceDay) {
+    const current = new Set(getOccurrence(task, task.instanceDay)?.doneSteps || []);
+    if (isDone) current.add(index);
+    else current.delete(index);
+    return setOccurrence(state, 'task', task.id, task.instanceDay, { doneSteps: [...current].sort((a, b) => a - b) });
+  }
+  const target = state.tasks.find((t) => t.id === task.id);
+  if (!target?.steps[index]) return false;
+  target.steps[index].isDone = isDone;
+  return true;
+}
+
 // ── задачи и события дня ─────────────────────────────────────────────────────
 
-export function getTasksForDay(state: PlannerState, day: string) {
-  return state.tasks.filter((task) => task.day === day);
+/** Задачи дня: разовые с датой и экземпляры рядов. */
+export function getTasksForDay(state: PlannerState, day: string): PlannerTask[] {
+  const result: PlannerTask[] = [];
+  state.tasks.forEach((task) => {
+    if (task.repeat) {
+      if (hasInstanceOn(task, day)) result.push(taskInstance(task, day));
+    } else if (task.day === day) result.push(task);
+  });
+  return result;
 }
 
 export function getDeadlines(state: PlannerState, day: string) {
-  return state.tasks.filter((task) => task.due === day && task.status !== 'done');
+  return state.tasks.filter((task) => !task.repeat && task.due === day && task.status !== 'done');
 }
 
-export function getEventsForDay(state: PlannerState, day: string) {
-  const weekday = fromDayKey(day).getDay();
-  return state.events
-    .filter((event) => (event.day ? event.day === day : Boolean(event.weekdays?.includes(weekday))))
-    .sort((a, b) => a.start.localeCompare(b.start));
+export function getEventsForDay(state: PlannerState, day: string): PlannerEvent[] {
+  const result: PlannerEvent[] = [];
+  state.events.forEach((event) => {
+    if (event.repeat) {
+      if (hasInstanceOn(event, day)) result.push(eventInstance(event, day));
+    } else if (event.day === day) result.push(event);
+  });
+  return result.sort((a, b) => a.start.localeCompare(b.start));
 }
 
 export function countUnrated(state: PlannerState, day: string) {
@@ -235,7 +606,7 @@ export function getTimedForDay(state: PlannerState, day: string, excludedTaskId?
   const events: PlannerTimed[] = getEventsForDay(state, day)
     .map((event) => ({ name: event.name, start: event.start, end: event.end, event }));
   const tasks: PlannerTimed[] = getTasksForDay(state, day)
-    .filter((task) => task.start && task.minutes !== undefined && task.id !== excludedTaskId)
+    .filter((task) => task.start && task.minutes !== undefined && instanceKey(task) !== excludedTaskId)
     .map((task) => ({
       name: task.name, start: task.start!, end: toTime(toMinutes(task.start!) + task.minutes!), task,
     }));
@@ -319,7 +690,7 @@ export function findSlots(state: PlannerState, task: PlannerTask, today: string,
     if (task.due && day > task.due) break;
     const ownLoad = task.day === day ? minutes : 0;
     if (getDayLoad(state, day) - ownLoad + minutes > state.budget) continue;
-    const busy = [...lunch, ...getTimedForDay(state, day, task.id).map((item): [number, number] => [
+    const busy = [...lunch, ...getTimedForDay(state, day, instanceKey(task)).map((item): [number, number] => [
       Math.max(dayStart, toMinutes(item.start) - margin),
       Math.min(dayEnd, toMinutes(item.end) + margin),
     ])].filter(([from, until]) => from < until).sort((a, b) => a[0] - b[0]);
@@ -337,28 +708,36 @@ export function findSlots(state: PlannerState, task: PlannerTask, today: string,
 
 // ── списки задач ─────────────────────────────────────────────────────────────
 
-// Задачи с дедлайном живут в календаре; в списках — остальные незавершённые
-export function getEligibleTasks(state: PlannerState) {
-  return state.tasks.filter((task) => !task.due && task.status !== 'done');
+// Задачи с дедлайном живут в календаре; в списках — остальные незавершённые.
+// Задача-ряд — одной строкой: ближайший невыполненный экземпляр (решение пользователя 8 окт 2026)
+export function getEligibleTasks(state: PlannerState, today?: string) {
+  const result: PlannerTask[] = [];
+  state.tasks.forEach((task) => {
+    if (task.repeat) {
+      const next = nextOpenInstance(task, today || toDayKey(new Date()));
+      if (next) result.push(next);
+    } else if (!task.due && task.status !== 'done') result.push(task);
+  });
+  return result;
 }
 
 export function getCompletedTasks(state: PlannerState) {
-  return state.tasks.filter((task) => !task.due && task.status === 'done');
+  return state.tasks.filter((task) => !task.repeat && !task.due && task.status === 'done');
 }
 
 // Соседи задачи по порядку — незавершённые задачи того же списка и статуса
-export function getOrderedGroup(state: PlannerState, task: PlannerTask) {
-  return getEligibleTasks(state)
+export function getOrderedGroup(state: PlannerState, task: PlannerTask, today?: string) {
+  return getEligibleTasks(state, today)
     .filter((item) => item.project === task.project && item.status === task.status)
     .sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1));
 }
 
 // Порядок в очереди (↑↓ из макета): задача меняется местами с соседом;
 // у края группы ничего не происходит
-export function moveTask(state: PlannerState, taskId: string, direction: -1 | 1) {
+export function moveTask(state: PlannerState, taskId: string, direction: -1 | 1, today?: string) {
   const task = state.tasks.find(({ id }) => id === taskId);
   if (!task) return false;
-  const group = getOrderedGroup(state, task);
+  const group = getOrderedGroup(state, task, today).map((item) => state.tasks.find((t) => t.id === item.id)!);
   const index = group.indexOf(task);
   const target = index + direction;
   if (index < 0 || target < 0 || target >= group.length) return false;
@@ -418,12 +797,13 @@ export function validateBudget(budget: number) {
   return Number.isInteger(budget) && budget >= MIN_BUDGET_MINUTES && budget <= MINUTES_IN_DAY;
 }
 
-export type PlannerEventError = 'name' | 'time' | 'repeat';
+export type PlannerEventError = 'name' | 'time' | 'repeat' | PlannerRepeatError;
 
 export function validateEvent(event: Omit<PlannerEvent, 'id'>): PlannerEventError | undefined {
   if (!event.name.trim()) return 'name';
   if (!TIME_PATTERN.test(event.start) || !TIME_PATTERN.test(event.end) || event.start >= event.end) return 'time';
-  if (!event.day && !event.weekdays?.length) return 'repeat';
+  if (event.repeat) return validateRepeat(event.repeat);
+  if (!event.day) return 'repeat';
   return undefined;
 }
 
@@ -465,8 +845,14 @@ export function makeFoodEntry(raw: {
   };
 }
 
-export function getNutrientTotal(state: PlannerState, day: string, nutrient: PlannerNutrient) {
-  const entries = state.nutrition[day]?.entries || [];
+/** Факт дня по показателю: сумма записей; вода — `waterMl` (одно число, пропусков нет). */
+export function getNutrientTotal(state: PlannerState, day: string, nutrient: PlannerGoalMetric) {
+  const record = state.nutrition[day];
+  if (nutrient === 'water') {
+    const known = isKnownNumber(record?.waterMl);
+    return { value: known ? record.waterMl! : 0, missing: 0, count: known ? 1 : 0 };
+  }
+  const entries = record?.entries || [];
   let value = 0;
   let missing = 0;
   entries.forEach((entry) => {
@@ -477,28 +863,50 @@ export function getNutrientTotal(state: PlannerState, day: string, nutrient: Pla
   return { value: roundNutrient(value), missing, count: entries.length };
 }
 
-export function getNutrientGoal(state: PlannerState, day: string, metric: PlannerMetric): PlannerGoal {
-  const record = state.nutrition[day];
-  if (metric === 'kcal') return (record?.isComplete && record.goal) || state.calorieGoal;
-  return (record?.isComplete && record.macroGoals?.[metric]) || state.macroGoals[metric];
+/** Запись цели, действующая в день (FR-010): накрывающая, затем позже начатая, короче, позже в списке. */
+export function getGoalRecordForDay(state: PlannerState, day: string): PlannerGoalRecord | undefined {
+  const length = (r: PlannerGoalRecord) => (r.endDay && r.startDay
+    ? epochDays(r.endDay) - epochDays(r.startDay) : Number.POSITIVE_INFINITY);
+  let best: PlannerGoalRecord | undefined;
+  state.goalPeriods.forEach((record) => {
+    if ((record.startDay && day < record.startDay) || (record.endDay && day > record.endDay)) return;
+    if (!best || record.startDay > best.startDay
+      || (record.startDay === best.startDay && length(record) <= length(best))) best = record;
+  });
+  if (best) return best;
+  return Object.keys(state.goals).length ? { id: '', startDay: '', endDay: '', goals: state.goals } : undefined;
 }
 
-export function getNutrientStatus(state: PlannerState, day: string, metric: PlannerMetric): PlannerNutrientStatus {
+/** Цели, действующие в день: у завершённого дня — зафиксированные, иначе — по записи. */
+export function getGoalsForDay(state: PlannerState, day: string): PlannerGoalValues {
+  const record = state.nutrition[day];
+  if (record?.isComplete && record.fixedGoals) return record.fixedGoals;
+  return getGoalRecordForDay(state, day)?.goals || {};
+}
+
+export function getNutrientGoal(state: PlannerState, day: string, metric: PlannerGoalMetric): PlannerGoal | undefined {
+  return getGoalsForDay(state, day)[metric];
+}
+
+export function getNutrientStatus(state: PlannerState, day: string, metric: PlannerGoalMetric): PlannerNutrientStatus {
   const record = state.nutrition[day];
   const total = getNutrientTotal(state, day, metric);
   if (!record || !total.count) return 'none';
+  const goal = getNutrientGoal(state, day, metric);
+  if (!goal) return 'nogoal';
   if (total.missing) return 'incomplete';
   if (!record.isComplete) return 'open';
-  const goal = getNutrientGoal(state, day, metric);
   if (total.value < goal.target - goal.tolerance) return 'below';
   if (total.value > goal.target + goal.tolerance) return 'above';
   return 'ok';
 }
 
-export function getNutrientStatistics(state: PlannerState, days: string[], metric: PlannerMetric, today: string) {
-  const recorded = days.filter((day) => day <= today && state.nutrition[day]?.entries.length);
+export function getNutrientStatistics(state: PlannerState, days: string[], metric: PlannerGoalMetric, today: string) {
+  const recorded = days.filter((day) => day <= today && getNutrientTotal(state, day, metric).count);
   const complete = recorded
     .filter((day) => state.nutrition[day].isComplete && !getNutrientTotal(state, day, metric).missing);
+  // Дни «в норме» считаются по собственной цели каждого дня; дни без цели в норму не входят
+  const withGoal = complete.filter((day) => getNutrientGoal(state, day, metric));
   const sum = roundNutrient(recorded.reduce((total, day) => total + getNutrientTotal(state, day, metric).value, 0));
   const completeSum = roundNutrient(
     complete.reduce((total, day) => total + getNutrientTotal(state, day, metric).value, 0),
@@ -506,19 +914,33 @@ export function getNutrientStatistics(state: PlannerState, days: string[], metri
   return {
     recorded,
     complete,
+    withGoal,
     sum,
     completeSum,
-    inGoal: complete.filter((day) => getNutrientStatus(state, day, metric) === 'ok').length,
+    inGoal: withGoal.filter((day) => getNutrientStatus(state, day, metric) === 'ok').length,
     average: complete.length ? roundNutrient(completeSum / complete.length) : undefined,
-    goalLow: complete.reduce((total, day) => {
-      const goal = getNutrientGoal(state, day, metric);
+    goalLow: withGoal.reduce((total, day) => {
+      const goal = getNutrientGoal(state, day, metric)!;
       return total + goal.target - goal.tolerance;
     }, 0),
-    goalHigh: complete.reduce((total, day) => {
-      const goal = getNutrientGoal(state, day, metric);
+    goalHigh: withGoal.reduce((total, day) => {
+      const goal = getNutrientGoal(state, day, metric)!;
       return total + goal.target + goal.tolerance;
     }, 0),
   };
+}
+
+export type PlannerGoalRecordError = 'startDay' | 'endDay' | 'empty' | PlannerGoalMetric;
+
+/** Запись цели: даты, конец не раньше начала, хотя бы один показатель, каждая цель годна. */
+export function validateGoalRecord(record: Omit<PlannerGoalRecord, 'id'>): PlannerGoalRecordError | undefined {
+  if (record.startDay && !DAY_KEY_PATTERN.test(record.startDay)) return 'startDay';
+  if (record.endDay && (!DAY_KEY_PATTERN.test(record.endDay) || (record.startDay && record.endDay < record.startDay))) {
+    return 'endDay';
+  }
+  const metrics = PLANNER_GOAL_METRICS.filter((metric) => record.goals[metric]);
+  if (!metrics.length) return 'empty';
+  return metrics.find((metric) => !validateGoal(record.goals[metric]!, metric === 'kcal' || metric === 'water'));
 }
 
 export function validateGoal(goal: PlannerGoal, isInteger: boolean) {
@@ -587,21 +1009,33 @@ export function normalizePlannerState(raw: unknown): PlannerState {
       start: isTime(task.start) ? task.start : undefined,
       due: isDay(task.due) ? task.due : undefined,
       minutes: isKnownNumber(task.minutes) && task.minutes >= MIN_TASK_MINUTES ? task.minutes : undefined,
+      ...normalizeSeries(task),
     }));
 
   const events = (Array.isArray(saved.events) ? saved.events : [])
     .filter((event) => event && isId(event.id) && typeof event.name === 'string'
       && isTime(event.start) && isTime(event.end))
-    .map((event): PlannerEvent => ({
-      id: String(event.id),
-      name: event.name,
-      start: event.start,
-      end: event.end,
-      weekdays: Array.isArray(event.weekdays)
-        ? event.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
-        : undefined,
-      day: isDay(event.day) ? event.day : undefined,
-    }));
+    .map((event): PlannerEvent => {
+      // События «по дням недели» этапов 1–2 — еженедельный ряд без нижней границы (research R5)
+      const rawWeekdays = (event as unknown as { weekdays?: unknown }).weekdays;
+      const legacyWeekdays = Array.isArray(rawWeekdays)
+        ? rawWeekdays.filter((day): day is number => (
+          Number.isInteger(day) && (day as number) >= 0 && (day as number) <= 6
+        ))
+        : [];
+      const series = normalizeSeries(event);
+      const repeat = series.repeat || (legacyWeekdays.length
+        ? { kind: 'weekly' as const, interval: 1, weekdays: legacyWeekdays, startDay: '' } : undefined);
+      return {
+        id: String(event.id),
+        name: event.name,
+        start: event.start,
+        end: event.end,
+        day: !repeat && isDay(event.day) ? event.day : undefined,
+        ...series,
+        repeat,
+      };
+    });
 
   const projects = Array.isArray(saved.projects)
     ? Array.from(new Set(['', ...saved.projects.filter((name) => typeof name === 'string')]))
@@ -621,6 +1055,10 @@ export function normalizePlannerState(raw: unknown): PlannerState {
   if (saved.nutrition && typeof saved.nutrition === 'object') {
     Object.entries(saved.nutrition).forEach(([day, record]) => {
       if (!isDay(day) || !record || !Array.isArray(record.entries)) return;
+      // Этап 1 хранил цели завершённого дня как `goal` (ккал) и `macroGoals` — сводятся в `fixedGoals`
+      const legacy = record as { goal?: PlannerGoal; macroGoals?: Partial<Record<PlannerMetric, PlannerGoal>> };
+      const fixedGoals = normalizeGoalValues(record.fixedGoals
+        || (legacy.goal || legacy.macroGoals ? { kcal: legacy.goal, ...legacy.macroGoals } : undefined));
       nutrition[day] = {
         entries: record.entries
           .filter((entry) => entry && typeof entry.name === 'string' && isKnownNumber(entry.kcal))
@@ -630,17 +1068,26 @@ export function normalizePlannerState(raw: unknown): PlannerState {
             meal: PLANNER_MEALS.includes(entry.meal) ? entry.meal : 'other',
           })),
         isComplete: Boolean(record.isComplete),
-        goal: record.goal && validateGoal(record.goal, true) ? record.goal : undefined,
-        macroGoals: record.macroGoals,
+        fixedGoals: fixedGoals && Object.keys(fixedGoals).length ? fixedGoals : undefined,
         waterMl: isKnownNumber(record.waterMl) ? record.waterMl : undefined,
       };
     });
   }
 
-  const macroGoals = saved.macroGoals
-    && (['protein', 'fat', 'carbs'] as const).every((metric) => (
-      saved.macroGoals![metric] && validateGoal(saved.macroGoals![metric], false)
-    )) ? saved.macroGoals : empty.macroGoals;
+  // Этап 1: `calorieGoal` + `macroGoals`; spec 011: `goals` целиком
+  const legacyGoals = saved as { calorieGoal?: PlannerGoal; macroGoals?: Partial<Record<PlannerMetric, PlannerGoal>> };
+  const goals = normalizeGoalValues(saved.goals
+    || (legacyGoals.calorieGoal || legacyGoals.macroGoals
+      ? { kcal: legacyGoals.calorieGoal, ...legacyGoals.macroGoals } : undefined)) || empty.goals;
+  const goalPeriods: PlannerGoalRecord[] = (Array.isArray(saved.goalPeriods) ? saved.goalPeriods : [])
+    .filter((record) => record && typeof record.id === 'string' && record.id && record.goals)
+    .map((record) => ({
+      id: record.id,
+      startDay: isDay(record.startDay) ? record.startDay : '',
+      endDay: isDay(record.endDay) ? record.endDay : '',
+      goals: normalizeGoalValues(record.goals) || {},
+    }))
+    .filter((record) => !validateGoalRecord(record));
 
   return {
     version: 1,
@@ -649,11 +1096,62 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     projects,
     lists,
     nutrition,
-    calorieGoal: saved.calorieGoal && validateGoal(saved.calorieGoal, true) ? saved.calorieGoal : empty.calorieGoal,
-    macroGoals,
+    goals,
+    goalPeriods,
     budget: isKnownNumber(saved.budget) && validateBudget(saved.budget) ? saved.budget : empty.budget,
     settings: normalizeSettings(saved.settings),
   };
+}
+
+// Правило повтора, экземпляры и происхождение из сохранённого объекта (негодное отбрасывается)
+function normalizeSeries(raw: Partial<PlannerTask & PlannerEvent>) {
+  const isDay = (value: unknown): value is string => typeof value === 'string' && DAY_KEY_PATTERN.test(value);
+  const out: Pick<PlannerTask, 'repeat' | 'occurrences' | 'origin' | 'source'> = {};
+  const r = raw.repeat;
+  if (r && typeof r === 'object' && PLANNER_REPEAT_KINDS.includes(r.kind)) {
+    const repeat: PlannerRepeat = {
+      kind: r.kind,
+      interval: isKnownNumber(r.interval) ? r.interval : 1,
+      weekdays: Array.isArray(r.weekdays)
+        ? r.weekdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : undefined,
+      monthDay: isKnownNumber(r.monthDay) && r.monthDay > 0 ? r.monthDay : undefined,
+      startDay: isDay(r.startDay) ? r.startDay : '',
+      endDay: isDay(r.endDay) ? r.endDay : undefined,
+      count: isKnownNumber(r.count) && r.count > 0 ? r.count : undefined,
+    };
+    if (!validateRepeat(repeat)) out.repeat = repeat;
+  }
+  if (Array.isArray(raw.occurrences)) {
+    const occurrences = raw.occurrences
+      .filter((o) => o && isDay(o.day))
+      .map((o): PlannerOccurrence => ({
+        day: o.day,
+        excluded: Boolean(o.excluded),
+        done: Boolean(o.done),
+        doneSteps: Array.isArray(o.doneSteps) ? o.doneSteps.filter((i) => Number.isInteger(i) && i >= 0) : [],
+      }));
+    if (occurrences.length) out.occurrences = occurrences;
+  }
+  if (raw.origin && typeof raw.origin.seriesId === 'string' && raw.origin.seriesId) {
+    out.origin = { seriesId: raw.origin.seriesId, day: isDay(raw.origin.day) ? raw.origin.day : '' };
+  }
+  if (raw.source && typeof raw.source.opId === 'string' && raw.source.opId) {
+    out.source = { chat: typeof raw.source.chat === 'string' ? raw.source.chat : '', opId: raw.source.opId };
+  }
+  return out;
+}
+
+function normalizeGoalValues(raw: unknown): PlannerGoalValues | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const values = raw as Partial<Record<PlannerGoalMetric, PlannerGoal | undefined>>;
+  const out: PlannerGoalValues = {};
+  PLANNER_GOAL_METRICS.forEach((metric) => {
+    const goal = values[metric];
+    if (goal && validateGoal(goal, metric === 'kcal' || metric === 'water')) {
+      out[metric] = { target: goal.target, tolerance: goal.tolerance };
+    }
+  });
+  return out;
 }
 
 // Настройки до T014 не сохранялись — отсутствие или негодные значения дают макетные

@@ -1503,3 +1503,50 @@ describe('DOMAIN-1: планировщик parvane.planner.v1 — ключи к�
     expect(controller).toContain('if (ev.type === \'plannerChanged\') planner.onEngineEvent();');
   });
 });
+
+describe('TASK-1: задание в чат — видимые сообщения, клиент без планировщика показывает текст', () => {
+  const r = rule('TASK-1') as unknown as {
+    kinds: string[];
+    fieldNumbers: Record<string, number>;
+    vectors: string[];
+    fallbackField: string;
+    sourceField: string;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема и вектора: поля 20/21, случаи в content/kinds.json', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain(`TaskOffer task_offer = ${r.fieldNumbers.task_offer};`);
+    expect(proto).toContain(`TaskResponse task_response = ${r.fieldNumbers.task_response};`);
+    expect(proto).toContain(`string ${r.fallbackField} = 8 [(parvane.core.v2.max_len) = 600];`);
+    const vectors = readRepo('proto/parvane/vectors/content/kinds.json');
+    r.vectors.forEach((name) => expect(vectors).toContain(`"name": "${name}"`));
+    const planner = readRepo('proto/parvane/planner/v1/planner.proto');
+    expect(planner).toContain(`Source ${r.sourceField} = 16;`);
+  });
+
+  it('web: разбор обоих видов, хранилище решений, принятие один раз на аккаунт', () => {
+    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
+    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
+    expect(sync).toContain('function handleTaskOfferContent(stored: WireStoredMessage) {');
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages)
+      .toContain(`if (state?.tasks?.some((task) => task.${r.sourceField}?.opId === opId)) return 'exists';`);
+    expect(messages).toContain("const opId = uuid.replace(/-/g, '');");
+    expect(messages).toContain('async parvaneRespondTaskOffer(');
+  });
+
+  it('desktop и android: оба вида показываются текстом из поля text', () => {
+    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
+    r.kinds.forEach((kind) => expect(core).toContain(`"${kind}"`));
+    expect(core).toContain('c.contains("task_offer") || c.contains("task_response")');
+    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('task_offer ← v2');
+    expect(r.clients.desktop).toContain('v2_tests.cpp');
+    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
+    expect(store).toContain('"task_offer", "task_response" -> textContent(c)');
+    expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
+      .toContain('taskOfferShowsAsText');
+    expect(r.clients.android).toContain('taskOfferShowsAsText');
+  });
+});
