@@ -1,0 +1,583 @@
+//! Домен планировщика `parvane.planner.v1` (spec 010, R2/R3): сведённое
+//! состояние контейнера и применение операций.
+//!
+//! Объекты — задачи, события, списки, дни питания; у каждого поля своя метка
+//! `LwwStamp`, побеждает большая метка `(lamport, device_id)`, при равных —
+//! большие байты значения (полный порядок → сведение коммутативно, ассоциативно
+//! и идемпотентно, любой порядок применения даёт один снимок). Удаление —
+//! метка `deleted`: объект виден, пока самая свежая правка его полей новее
+//! надгробия (старая правка после удаления ничего не воскрешает, новая —
+//! воскрешает). Запись питания сливается целиком по `stamp`. Настройки и цели —
+//! регистры под одной меткой.
+//!
+//! Инварианты значений проверяются при применении; негодное изменение
+//! пропускается, остальные изменения операции применяются (FR-004). Метки
+//! операции обязаны нести устройство автора (подпись `SignedOp`), иначе отказ
+//! на всю операцию (D-16); `LamportGuard` проверяется в порядке `seq`.
+
+use std::collections::BTreeMap;
+
+use prost::Message;
+
+use super::{LamportGuard, Stamp};
+use crate::codec::decode_checked;
+use crate::error::{ProtoError, Result};
+use crate::limits::Origin;
+use crate::pb::parvane::core::v2::LwwStamp;
+use crate::pb::parvane::planner::v1::{
+    change, Bool, Change, Event, FoodEntry, GoalSet, List, NutritionDay, PlannerOp, PlannerSnapshot, Settings, Steps, Str,
+    Task, Weekdays, I32, U32,
+};
+
+pub const DOMAIN_NAME: &str = "parvane.planner.v1";
+/// Снимок пишется после операции с `seq`, кратным этому числу (R5).
+pub const SNAPSHOT_EVERY: u64 = 200;
+/// Потолок открытого текста снимка — как у каркаса; предупреждение с 75 % (R5).
+pub const SNAPSHOT_WARN_BYTES: usize = super::MAX_SNAPSHOT_PLAINTEXT / 4 * 3;
+
+pub const MIN_TASK_MINUTES: u32 = 5;
+pub const MINUTES_IN_DAY: u32 = 1440;
+pub const MIN_BUDGET: u32 = 60;
+pub const MAX_MARGIN: u32 = 180;
+pub const STATUSES: [&str; 5] = ["queue", "active", "later", "waiting", "done"];
+pub const MEALS: [&str; 5] = ["breakfast", "lunch", "dinner", "snack", "other"];
+const MAX_ID: usize = 64;
+const MAX_NAME: usize = 200;
+const MAX_DESCRIPTION: usize = 4000;
+const MAX_LIST_NAME: usize = 60;
+const MAX_FOOD_NAME: usize = 120;
+
+pub fn decode_op(bytes: &[u8]) -> Result<PlannerOp> {
+    decode_checked(bytes, Origin::Client)
+}
+
+pub fn decode_snapshot(bytes: &[u8]) -> Result<PlannerSnapshot> {
+    decode_checked(bytes, Origin::Client)
+}
+
+// ── порядок меток ───────────────────────────────────────────────────────────
+
+/// Полный порядок правок: метка, затем байты значения.
+fn is_newer(incoming: Option<&LwwStamp>, incoming_bytes: &[u8], current: Option<&LwwStamp>, current_bytes: &[u8]) -> bool {
+    let Some(i) = incoming else { return false };
+    let Some(c) = current else { return true };
+    (i.lamport, i.device_id.as_str(), incoming_bytes) > (c.lamport, c.device_id.as_str(), current_bytes)
+}
+
+fn stamp_key(s: Option<&LwwStamp>) -> (u64, &str) {
+    s.map(|s| (s.lamport, s.device_id.as_str())).unwrap_or((0, ""))
+}
+
+macro_rules! merge_reg {
+    ($cur:expr, $inc:expr, $ty:ty) => {{
+        if let Some(inc) = $inc.as_ref() {
+            let inc_bytes = <$ty as Message>::encode_to_vec(inc);
+            let cur_bytes = $cur.as_ref().map(<$ty as Message>::encode_to_vec).unwrap_or_default();
+            let cur_stamp = $cur.as_ref().and_then(|c| c.stamp.as_ref());
+            if is_newer(inc.stamp.as_ref(), &inc_bytes, cur_stamp, &cur_bytes) {
+                $cur = Some(inc.clone());
+            }
+        }
+    }};
+}
+
+fn merge_deleted(cur: &mut Option<LwwStamp>, inc: Option<&LwwStamp>) {
+    if let Some(i) = inc {
+        if stamp_key(Some(i)) > stamp_key(cur.as_ref()) {
+            *cur = Some(i.clone());
+        }
+    }
+}
+
+// ── проверки значений ───────────────────────────────────────────────────────
+
+fn is_day(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() })
+        && (1..=12).contains(&s[5..7].parse::<u32>().unwrap_or(0))
+        && (1..=31).contains(&s[8..10].parse::<u32>().unwrap_or(0))
+}
+
+fn is_time(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 5
+        && b[2] == b':'
+        && b.iter().enumerate().all(|(i, c)| i == 2 || c.is_ascii_digit())
+        && s[0..2].parse::<u32>().unwrap_or(99) < 24
+        && s[3..5].parse::<u32>().unwrap_or(99) < 60
+}
+
+fn is_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= MAX_ID && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn check_str(v: &Option<Str>, max: usize, ok: impl Fn(&str) -> bool) -> Result<()> {
+    match v {
+        Some(s) if s.value.len() > max || !ok(&s.value) => Err(ProtoError::InvalidField("value")),
+        _ => Ok(()),
+    }
+}
+
+fn check_task(t: &Task) -> Result<()> {
+    if !is_id(&t.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    check_str(&t.name, MAX_NAME, |s| !s.trim().is_empty())?;
+    check_str(&t.description, MAX_DESCRIPTION, |_| true)?;
+    check_str(&t.status, 16, |s| STATUSES.contains(&s))?;
+    check_str(&t.list_id, MAX_ID, |s| s.is_empty() || is_id(s))?;
+    check_str(&t.day, 10, |s| s.is_empty() || is_day(s))?;
+    check_str(&t.due, 10, |s| s.is_empty() || is_day(s))?;
+    check_str(&t.start, 5, |s| s.is_empty() || is_time(s))?;
+    if let Some(m) = &t.minutes {
+        if !m.unset && !(MIN_TASK_MINUTES..=MINUTES_IN_DAY).contains(&m.value) {
+            return Err(ProtoError::InvalidField("minutes"));
+        }
+    }
+    if let Some(steps) = &t.steps {
+        if steps.items.len() > 100 || steps.items.iter().any(|s| s.text.is_empty() || s.text.len() > 160) {
+            return Err(ProtoError::InvalidField("steps"));
+        }
+    }
+    Ok(())
+}
+
+fn check_event(e: &Event) -> Result<()> {
+    if !is_id(&e.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    check_str(&e.name, MAX_NAME, |s| !s.trim().is_empty())?;
+    check_str(&e.start, 5, is_time)?;
+    check_str(&e.end, 5, is_time)?;
+    check_str(&e.day, 10, |s| s.is_empty() || is_day(s))?;
+    if let Some(w) = &e.weekdays {
+        if w.days.len() > 7 || w.days.iter().any(|d| *d > 6) {
+            return Err(ProtoError::InvalidField("weekdays"));
+        }
+    }
+    Ok(())
+}
+
+fn check_list(l: &List) -> Result<()> {
+    if !is_id(&l.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    check_str(&l.name, MAX_LIST_NAME, |s| !s.trim().is_empty())
+}
+
+fn check_entry(e: &FoodEntry) -> Result<()> {
+    if !is_id(&e.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    // Надгробие без содержимого — только id и метка удаления.
+    if e.stamp.is_none() && e.deleted.is_some() {
+        return Ok(());
+    }
+    if e.name.len() > MAX_FOOD_NAME || !MEALS.contains(&e.meal.as_str()) {
+        return Err(ProtoError::InvalidField("entry"));
+    }
+    if [e.kcal, e.protein, e.fat, e.carbs, e.fiber, e.grams].iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err(ProtoError::InvalidField("nutrient"));
+    }
+    Ok(())
+}
+
+fn check_day(d: &NutritionDay) -> Result<()> {
+    if !is_day(&d.day) {
+        return Err(ProtoError::InvalidField("day"));
+    }
+    if d.entries.len() > 200 {
+        return Err(ProtoError::InvalidField("entries"));
+    }
+    d.entries.iter().try_for_each(check_entry)?;
+    if let Some(g) = &d.fixed_goals {
+        check_goals(g)?;
+    }
+    Ok(())
+}
+
+fn check_goals(g: &GoalSet) -> Result<()> {
+    for goal in [&g.kcal, &g.protein, &g.fat, &g.carbs].into_iter().flatten() {
+        if goal.target == 0 || goal.tolerance > goal.target {
+            return Err(ProtoError::InvalidField("goal"));
+        }
+    }
+    Ok(())
+}
+
+pub fn check_settings(s: &Settings) -> Result<()> {
+    let m = |v: u32| v <= MINUTES_IN_DAY;
+    if !m(s.day_start) || !m(s.day_end) || s.day_start >= s.day_end {
+        return Err(ProtoError::InvalidField("day_window"));
+    }
+    if !m(s.lunch_start) || !m(s.lunch_end) {
+        return Err(ProtoError::InvalidField("lunch"));
+    }
+    if s.lunch_end > s.lunch_start && (s.lunch_start < s.day_start || s.lunch_end > s.day_end) {
+        return Err(ProtoError::InvalidField("lunch"));
+    }
+    if s.margin > MAX_MARGIN || !(MIN_BUDGET..=MINUTES_IN_DAY).contains(&s.budget) {
+        return Err(ProtoError::InvalidField("margin"));
+    }
+    Ok(())
+}
+
+// ── состояние ───────────────────────────────────────────────────────────────
+
+/// Сведённое состояние контейнера планировщика (ключи — id объектов).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlannerState {
+    pub tasks: BTreeMap<String, Task>,
+    pub events: BTreeMap<String, Event>,
+    pub lists: BTreeMap<String, List>,
+    pub nutrition: BTreeMap<String, NutritionDay>,
+    pub settings: Option<Settings>,
+    pub goals: Option<GoalSet>,
+}
+
+/// Самая свежая метка среди полей объекта.
+fn task_edit_stamp(t: &Task) -> (u64, String) {
+    let mut best = (0u64, String::new());
+    let mut see = |s: Option<&LwwStamp>| {
+        let k = stamp_key(s);
+        if (k.0, k.1) > (best.0, best.1.as_str()) {
+            best = (k.0, k.1.to_string());
+        }
+    };
+    see(t.name.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.description.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.steps.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.status.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.list_id.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.rank.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.day.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.start.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.due.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.minutes.as_ref().and_then(|f| f.stamp.as_ref()));
+    best
+}
+
+fn is_alive(edit: (u64, String), deleted: Option<&LwwStamp>) -> bool {
+    let d = stamp_key(deleted);
+    (edit.0, edit.1.as_str()) > d
+}
+
+impl PlannerState {
+    pub fn is_task_alive(t: &Task) -> bool {
+        is_alive(task_edit_stamp(t), t.deleted.as_ref())
+    }
+
+    pub fn is_event_alive(e: &Event) -> bool {
+        let mut best = (0u64, String::new());
+        for s in [&e.name, &e.start, &e.end, &e.day].into_iter().flatten().filter_map(|f| f.stamp.as_ref()).chain(e.weekdays.as_ref().and_then(|w| w.stamp.as_ref())) {
+            if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
+                best = (s.lamport, s.device_id.clone());
+            }
+        }
+        is_alive(best, e.deleted.as_ref())
+    }
+
+    pub fn is_list_alive(l: &List) -> bool {
+        let mut best = (0u64, String::new());
+        for s in l.name.as_ref().and_then(|f| f.stamp.as_ref()).into_iter().chain(l.order.as_ref().and_then(|f| f.stamp.as_ref())) {
+            if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
+                best = (s.lamport, s.device_id.clone());
+            }
+        }
+        is_alive(best, l.deleted.as_ref())
+    }
+
+    pub fn is_entry_alive(e: &FoodEntry) -> bool {
+        stamp_key(e.stamp.as_ref()) > stamp_key(e.deleted.as_ref())
+    }
+
+    fn merge_task(&mut self, inc: &Task) {
+        let cur = self.tasks.entry(inc.id.clone()).or_insert_with(|| Task { id: inc.id.clone(), ..Default::default() });
+        merge_reg!(cur.name, inc.name, Str);
+        merge_reg!(cur.description, inc.description, Str);
+        merge_reg!(cur.steps, inc.steps, Steps);
+        merge_reg!(cur.status, inc.status, Str);
+        merge_reg!(cur.list_id, inc.list_id, Str);
+        merge_reg!(cur.rank, inc.rank, I32);
+        merge_reg!(cur.day, inc.day, Str);
+        merge_reg!(cur.start, inc.start, Str);
+        merge_reg!(cur.due, inc.due, Str);
+        merge_reg!(cur.minutes, inc.minutes, U32);
+        merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
+    }
+
+    fn merge_event(&mut self, inc: &Event) {
+        let cur = self.events.entry(inc.id.clone()).or_insert_with(|| Event { id: inc.id.clone(), ..Default::default() });
+        merge_reg!(cur.name, inc.name, Str);
+        merge_reg!(cur.start, inc.start, Str);
+        merge_reg!(cur.end, inc.end, Str);
+        merge_reg!(cur.weekdays, inc.weekdays, Weekdays);
+        merge_reg!(cur.day, inc.day, Str);
+        merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
+    }
+
+    fn merge_list(&mut self, inc: &List) {
+        let cur = self.lists.entry(inc.id.clone()).or_insert_with(|| List { id: inc.id.clone(), ..Default::default() });
+        merge_reg!(cur.name, inc.name, Str);
+        merge_reg!(cur.order, inc.order, I32);
+        merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
+    }
+
+    fn merge_day(&mut self, inc: &NutritionDay) {
+        let cur = self.nutrition.entry(inc.day.clone()).or_insert_with(|| NutritionDay { day: inc.day.clone(), ..Default::default() });
+        merge_reg!(cur.is_complete, inc.is_complete, Bool);
+        merge_reg!(cur.fixed_goals, inc.fixed_goals, GoalSet);
+        merge_reg!(cur.water_ml, inc.water_ml, U32);
+        for e in &inc.entries {
+            match cur.entries.iter_mut().find(|c| c.id == e.id) {
+                Some(c) => {
+                    let inc_bytes = e.encode_to_vec();
+                    let cur_bytes = c.encode_to_vec();
+                    let deleted = c.deleted.clone();
+                    if is_newer(e.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
+                        *c = e.clone();
+                        c.deleted = deleted;
+                    }
+                    merge_deleted(&mut c.deleted, e.deleted.as_ref());
+                }
+                None => cur.entries.push(e.clone()),
+            }
+        }
+        cur.entries.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    /// Применить одно изменение (проверка значений внутри).
+    pub fn apply_change(&mut self, c: &Change) -> Result<()> {
+        match &c.change {
+            Some(change::Change::Task(t)) => {
+                check_task(t)?;
+                self.merge_task(t);
+            }
+            Some(change::Change::Event(e)) => {
+                check_event(e)?;
+                self.merge_event(e);
+            }
+            Some(change::Change::List(l)) => {
+                check_list(l)?;
+                self.merge_list(l);
+            }
+            Some(change::Change::NutritionDay(d)) => {
+                check_day(d)?;
+                self.merge_day(d);
+            }
+            Some(change::Change::Settings(s)) => {
+                check_settings(s)?;
+                merge_reg!(self.settings, Some(s.clone()), Settings);
+            }
+            Some(change::Change::Goals(g)) => {
+                check_goals(g)?;
+                merge_reg!(self.goals, Some(g.clone()), GoalSet);
+            }
+            Some(change::Change::Migration(_)) | None => {}
+        }
+        Ok(())
+    }
+
+    /// Применить операцию автора `author_device`: метки обязаны нести его
+    /// устройство (D-16), иначе отказ на всю операцию. Негодные изменения
+    /// пропускаются; возвращается число применённых.
+    pub fn apply_op(&mut self, op: &PlannerOp, author_device: &str) -> Result<usize> {
+        let stamps = op_stamps(op)?;
+        if stamps.iter().any(|s| s.device_id != author_device) {
+            return Err(ProtoError::ContextMismatch);
+        }
+        let mut applied = 0;
+        for c in &op.changes {
+            if self.apply_change(c).is_ok() {
+                applied += 1;
+            }
+        }
+        Ok(applied)
+    }
+
+    /// Слить снимок (идемпотентно).
+    pub fn merge_snapshot(&mut self, s: &PlannerSnapshot) -> Result<()> {
+        for t in &s.tasks {
+            check_task(t)?;
+            self.merge_task(t);
+        }
+        for e in &s.events {
+            check_event(e)?;
+            self.merge_event(e);
+        }
+        for l in &s.lists {
+            check_list(l)?;
+            self.merge_list(l);
+        }
+        for d in &s.nutrition {
+            check_day(d)?;
+            self.merge_day(d);
+        }
+        if let Some(st) = &s.settings {
+            check_settings(st)?;
+            merge_reg!(self.settings, Some(st.clone()), Settings);
+        }
+        if let Some(g) = &s.goals {
+            check_goals(g)?;
+            merge_reg!(self.goals, Some(g.clone()), GoalSet);
+        }
+        Ok(())
+    }
+
+    /// Снимок: все объекты с метками, включая надгробия.
+    pub fn to_snapshot(&self) -> PlannerSnapshot {
+        PlannerSnapshot {
+            tasks: self.tasks.values().cloned().collect(),
+            events: self.events.values().cloned().collect(),
+            lists: self.lists.values().cloned().collect(),
+            nutrition: self.nutrition.values().cloned().collect(),
+            settings: self.settings.clone(),
+            goals: self.goals.clone(),
+        }
+    }
+
+    pub fn from_snapshot(s: &PlannerSnapshot) -> Result<Self> {
+        let mut st = Self::default();
+        st.merge_snapshot(s)?;
+        Ok(st)
+    }
+
+    /// Размер открытого текста снимка (для предупреждения о потолке).
+    pub fn size_estimate(&self) -> usize {
+        self.to_snapshot().encoded_len()
+    }
+}
+
+/// Все метки операции (для проверки автора и LamportGuard).
+pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
+    let mut out = Vec::new();
+    let mut push = |s: Option<&LwwStamp>| -> Result<()> {
+        if let Some(s) = s {
+            out.push(Stamp::from_pb(Some(s))?);
+        }
+        Ok(())
+    };
+    for c in &op.changes {
+        match &c.change {
+            Some(change::Change::Task(t)) => {
+                for s in [&t.name, &t.description, &t.status, &t.list_id, &t.day, &t.start, &t.due].into_iter().flatten() {
+                    push(s.stamp.as_ref())?;
+                }
+                push(t.steps.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.rank.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.minutes.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.deleted.as_ref())?;
+            }
+            Some(change::Change::Event(e)) => {
+                for s in [&e.name, &e.start, &e.end, &e.day].into_iter().flatten() {
+                    push(s.stamp.as_ref())?;
+                }
+                push(e.weekdays.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.deleted.as_ref())?;
+            }
+            Some(change::Change::List(l)) => {
+                push(l.name.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(l.order.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(l.deleted.as_ref())?;
+            }
+            Some(change::Change::NutritionDay(d)) => {
+                push(d.is_complete.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(d.fixed_goals.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(d.water_ml.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                for e in &d.entries {
+                    push(e.stamp.as_ref())?;
+                    push(e.deleted.as_ref())?;
+                }
+            }
+            Some(change::Change::Settings(s)) => push(s.stamp.as_ref())?,
+            Some(change::Change::Goals(g)) => push(g.stamp.as_ref())?,
+            Some(change::Change::Migration(_)) | None => {}
+        }
+    }
+    if out.is_empty() {
+        return Err(ProtoError::InvalidField("changes"));
+    }
+    Ok(out)
+}
+
+/// Проверить метки операции в порядке журнала (D-16).
+pub fn guard_op(guard: &mut LamportGuard, op: &PlannerOp) -> Result<()> {
+    for s in op_stamps(op)? {
+        guard.check(&s)?;
+    }
+    Ok(())
+}
+
+/// Проставить одну метку всем присутствующим регистрам операции (локальная
+/// правка: web присылает изменения без меток).
+pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
+    let pb = stamp.to_pb();
+    let st = |s: &mut Option<Str>| {
+        if let Some(f) = s {
+            f.stamp = Some(pb.clone());
+        }
+    };
+    for c in &mut op.changes {
+        match &mut c.change {
+            Some(change::Change::Task(t)) => {
+                for f in [&mut t.name, &mut t.description, &mut t.status, &mut t.list_id, &mut t.day, &mut t.start, &mut t.due] {
+                    st(f);
+                }
+                if let Some(f) = &mut t.steps {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut t.rank {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut t.minutes {
+                    f.stamp = Some(pb.clone());
+                }
+                if t.deleted.is_some() {
+                    t.deleted = Some(pb.clone());
+                }
+            }
+            Some(change::Change::Event(e)) => {
+                for f in [&mut e.name, &mut e.start, &mut e.end, &mut e.day] {
+                    st(f);
+                }
+                if let Some(f) = &mut e.weekdays {
+                    f.stamp = Some(pb.clone());
+                }
+                if e.deleted.is_some() {
+                    e.deleted = Some(pb.clone());
+                }
+            }
+            Some(change::Change::List(l)) => {
+                st(&mut l.name);
+                if let Some(f) = &mut l.order {
+                    f.stamp = Some(pb.clone());
+                }
+                if l.deleted.is_some() {
+                    l.deleted = Some(pb.clone());
+                }
+            }
+            Some(change::Change::NutritionDay(d)) => {
+                if let Some(f) = &mut d.is_complete {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut d.fixed_goals {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut d.water_ml {
+                    f.stamp = Some(pb.clone());
+                }
+                for e in &mut d.entries {
+                    if e.deleted.is_some() {
+                        e.deleted = Some(pb.clone());
+                    } else {
+                        e.stamp = Some(pb.clone());
+                    }
+                }
+            }
+            Some(change::Change::Settings(s)) => s.stamp = Some(pb.clone()),
+            Some(change::Change::Goals(g)) => g.stamp = Some(pb.clone()),
+            Some(change::Change::Migration(_)) | None => {}
+        }
+    }
+}

@@ -40,6 +40,7 @@ services:
       PARVANE_CALL_PASS: ${PARVANE_CALL_PASS}
       PARVANE_PREVIEW_PASS: ${PARVANE_PREVIEW_PASS}
       PARVANE_PUSH_PASS: ${PARVANE_PUSH_PASS}
+      PARVANE_DOMAINS_PASS: ${PARVANE_DOMAINS_PASS}
       PARVANE_GATEWAY_PASS: ${PARVANE_GATEWAY_PASS}
     read_only: true
     cap_drop:
@@ -164,6 +165,21 @@ services:
       PARVANE_VAPID_KEY_FILE: /data/push-vapid-p256.pem
       PARVANE_LOG_LEVEL: info
 
+  # Каркас доменов v2 (spec 010 — планировщик): журналы контейнеров, гранты,
+  # снимки; только шифртекст
+  domains:
+    <<: *shard-common
+    command: ["/usr/local/bin/domains"]
+    volumes:
+      - db-domains:/data
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: domains
+      PARVANE_NATS_PASS: ${PARVANE_DOMAINS_PASS}
+      PARVANE_DB_PATH: /data/domains.db
+      PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
+      PARVANE_LOG_LEVEL: info
+
   gateway:
     image: localhost/parvane-shards:latest
     command: ["/usr/local/bin/gateway"]
@@ -234,6 +250,7 @@ volumes:
   db-call:
   db-preview:
   db-push:
+  db-domains:
   caddy-data:
   caddy-config:
   well-known:

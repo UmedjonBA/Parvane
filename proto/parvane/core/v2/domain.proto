@@ -103,6 +103,29 @@ service DomainService {
       shard: "domains"
     };
   }
+  // Смена эпохи ключа без отзыва гранта (spec 010, R6): запись журнала грантов
+  // вида "rotate" от админа; нужна владельцу без грантов при отзыве его
+  // устройства (REVOKE-1) — иначе отозванное устройство читало бы новые операции.
+  rpc DomainKeyRotate(DomainKeyRotateRequest) returns (DomainKeyRotateResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.key.rotate"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
+  // Контейнеры домена, доступные вызывающему (владелец или получатель гранта):
+  // новое устройство находит контейнер планировщика (spec 010).
+  rpc DomainContainerList(DomainContainerListRequest) returns (DomainContainerListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.container.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
 }
 
 // Уровень доступа к контейнеру. Владелец — всегда ADMIN.
@@ -277,4 +300,23 @@ message DomainSnapshotGetRequest {
 message DomainSnapshotGetResponse {
   // Пусто, если снимка нет.
   Snapshot snapshot = 1;
+}
+
+// Смена эпохи (spec 010): `rotate` — SignedOp "rotate" с payload Grant без
+// grantee, key_epoch = текущая + 1, version/prev_hash — как у записи гранта.
+message DomainKeyRotateRequest {
+  SignedOp rotate = 1;
+}
+
+message DomainKeyRotateResponse {
+  uint64 version = 1;
+  uint64 key_epoch = 2;
+}
+
+message DomainContainerListRequest {
+  string domain = 1 [(max_len) = 32];
+}
+
+message DomainContainerListResponse {
+  repeated Container containers = 1 [(max_items) = 100];
 }

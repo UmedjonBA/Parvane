@@ -113,6 +113,7 @@ fn event_json(e: &Event) -> Value {
             "signal": serde_json::to_value(signal).unwrap_or(Value::Null)
         }),
         Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
+        Event::PlannerChanged { seq, head_seq } => json!({"type": "plannerChanged", "seq": seq, "headSeq": head_seq}),
         Event::Typing { .. } | Event::Presence { .. } => parvane_protocol::host::eph_event_json(e),
         Event::Internal { seq } => json!({"type": "internal", "seq": seq}),
         Event::Skipped { seq } => json!({"type": "skipped", "seq": seq}),
@@ -526,6 +527,137 @@ impl PvClient {
         self.inner.share_groups_with_own_devices(&devices).map(|r| reqs_js(&r)).map_err(err_client)
     }
 
+    // ── планировщик (spec 010): контейнер домена parvane.planner.v1 ─────────
+
+    /// Контейнер планировщика → {domain, id(hex)} | undefined.
+    #[wasm_bindgen(js_name = plannerContainer)]
+    pub fn planner_container(&self) -> JsValue {
+        match self.inner.planner_container() {
+            Some(r) => {
+                let o = Object::new();
+                set(&o, "domain", &JsValue::from_str(&r.domain));
+                set(&o, "id", &JsValue::from_str(&hex::encode(&r.id)));
+                o.into()
+            }
+            None => JsValue::UNDEFINED,
+        }
+    }
+
+    #[wasm_bindgen(js_name = plannerIsAttached)]
+    pub fn planner_is_attached(&self) -> bool {
+        self.inner.planner_is_attached()
+    }
+
+    #[wasm_bindgen(js_name = plannerHasKey)]
+    pub fn planner_has_key(&self) -> bool {
+        self.inner.planner_has_key()
+    }
+
+    #[wasm_bindgen(js_name = plannerHeadSeq)]
+    pub fn planner_head_seq(&self) -> f64 {
+        self.inner.planner_head_seq() as f64
+    }
+
+    /// Сведённое состояние (JSON, только живые объекты) | undefined.
+    #[wasm_bindgen(js_name = plannerStateJson)]
+    pub fn planner_state_json(&self) -> Option<String> {
+        self.inner.planner_state_json()
+    }
+
+    /// Создать контейнер → запрос `domain.container.create`.
+    #[wasm_bindgen(js_name = plannerCreate)]
+    pub fn planner_create(&mut self, ts_ms: f64) -> Result<JsValue, JsValue> {
+        self.inner.planner_create(ts_ms as i64).map(|r| req_js(&r)).map_err(err_client)
+    }
+
+    /// Подключить контейнер: ответы `domain.container.get` и `domain.grant.list`.
+    #[wasm_bindgen(js_name = plannerAttach)]
+    pub fn planner_attach(&mut self, get_response: &[u8], grants_response: &[u8]) -> Result<(), JsValue> {
+        self.inner.planner_attach(get_response, grants_response).map_err(err_client)
+    }
+
+    /// Догнать журнал грантов (смена эпохи) → версия журнала грантов.
+    #[wasm_bindgen(js_name = plannerIngestGrants)]
+    pub fn planner_ingest_grants(&mut self, grants_response: &[u8]) -> Result<f64, JsValue> {
+        self.inner.planner_ingest_grants(grants_response).map(|v| v as f64).map_err(err_client)
+    }
+
+    /// Страница `domain.op.sync` → {applied, headSeq, more, missingEpoch?, grantsBehind}.
+    #[wasm_bindgen(js_name = plannerIngestSync)]
+    pub fn planner_ingest_sync(&mut self, sync_response: &[u8]) -> Result<JsValue, JsValue> {
+        let r = self.inner.planner_ingest_sync(sync_response).map_err(err_client)?;
+        let o = Object::new();
+        set(&o, "applied", &JsValue::from_f64(r.applied as f64));
+        set(&o, "headSeq", &JsValue::from_f64(r.head_seq as f64));
+        set(&o, "more", &JsValue::from_bool(r.more));
+        set(&o, "grantsBehind", &JsValue::from_bool(r.grants_behind));
+        if let Some(e) = r.missing_epoch {
+            set(&o, "missingEpoch", &JsValue::from_f64(e as f64));
+        }
+        Ok(o.into())
+    }
+
+    /// Снимок `domain.snapshot.get` → курсор после слияния.
+    #[wasm_bindgen(js_name = plannerIngestSnapshot)]
+    pub fn planner_ingest_snapshot(&mut self, snapshot_response: &[u8]) -> Result<f64, JsValue> {
+        self.inner.planner_ingest_snapshot(snapshot_response).map(|v| v as f64).map_err(err_client)
+    }
+
+    /// Локальная правка (JSON изменений) → {opId(hex), op(Uint8Array), applied}.
+    #[wasm_bindgen(js_name = plannerPrepareLocal)]
+    pub fn planner_prepare_local(&mut self, changes_json: &str) -> Result<JsValue, JsValue> {
+        let r = self.inner.planner_prepare_local(changes_json).map_err(err_client)?;
+        let o = Object::new();
+        set(&o, "opId", &JsValue::from_str(&hex::encode(&r.op_id)));
+        set(&o, "op", &Uint8Array::from(r.op.as_slice()).into());
+        set(&o, "applied", &JsValue::from_f64(r.applied as f64));
+        Ok(o.into())
+    }
+
+    /// Повторно применить помеченную операцию из очереди отправки (после перезапуска).
+    #[wasm_bindgen(js_name = plannerApplyLocal)]
+    pub fn planner_apply_local(&mut self, op: &[u8]) -> Result<u32, JsValue> {
+        self.inner.planner_apply_local(op).map(|n| n as u32).map_err(err_client)
+    }
+
+    /// Зашифровать операцию → запрос `domain.op.append` (тот же opId при повторе).
+    #[wasm_bindgen(js_name = plannerSeal)]
+    pub fn planner_seal(&mut self, op: &[u8], op_id_hex: &str, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let id = hex::decode(op_id_hex).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.planner_seal(op, &id, ts_ms as i64).map(|r| req_js(&r)).map_err(err_client)
+    }
+
+    /// Снимок по порогу → запрос `domain.snapshot.put` | undefined.
+    #[wasm_bindgen(js_name = plannerSnapshotRequest)]
+    pub fn planner_snapshot_request(&mut self, ts_ms: f64) -> Result<JsValue, JsValue> {
+        Ok(self.inner.planner_snapshot_request(ts_ms as i64).map_err(err_client)?.map(|r| req_js(&r)).unwrap_or(JsValue::UNDEFINED))
+    }
+
+    /// Размер открытого текста снимка (байты).
+    #[wasm_bindgen(js_name = plannerSize)]
+    pub fn planner_size(&self) -> f64 {
+        self.inner.planner_size() as f64
+    }
+
+    /// Ключ текущей эпохи — своим устройствам (`msg.deliver_sealed`).
+    #[wasm_bindgen(js_name = sharePlannerWithOwnDevices)]
+    pub fn share_planner_with_own_devices(&mut self) -> Result<Array, JsValue> {
+        self.inner.share_planner_with_own_devices().map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Ключи контейнера для экспорта линковки (JSON) | undefined.
+    #[wasm_bindgen(js_name = plannerKeysExport)]
+    pub fn planner_keys_export(&self) -> Option<String> {
+        self.inner.planner_keys_export().and_then(|e| serde_json::to_string(&e).ok())
+    }
+
+    /// Ключи контейнера из экспорта линковки своего устройства.
+    #[wasm_bindgen(js_name = plannerKeysImport)]
+    pub fn planner_keys_import(&mut self, json: &str) -> Result<(), JsValue> {
+        let e: parvane_protocol::client::PlannerKeysExport = serde_json::from_str(json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.planner_keys_import(&e).map_err(err_proto)
+    }
+
     /// Секреты своих ссылок-приглашений — другим ведущим приглашения группы:
     /// `links_json`, `recipients_json` — JSON-массивы ссылок и адресов.
     #[wasm_bindgen(js_name = shareInviteLinks)]
@@ -913,6 +1045,16 @@ impl PvState {
 
     /// Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
     /// `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
+    /// Контейнер планировщика (spec 010): домен и hex id → тела `state.append`.
+    #[wasm_bindgen(js_name = plannerContainerSet)]
+    pub fn planner_container_set(&mut self, domain: &str, id_hex: &str) -> Result<Array, JsValue> {
+        let id = hex::decode(id_hex).map_err(|_| err_proto(ProtoError::Malformed))?;
+        let c = parvane_protocol::pb::parvane::state::v1::PlannerContainer {
+            r#ref: Some(Ref { domain: domain.into(), id }),
+        };
+        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::PlannerContainerSet(c)])
+    }
+
     #[wasm_bindgen(js_name = callSet)]
     pub fn call_set(&mut self, record_json: &str) -> Result<Array, JsValue> {
         let rec: parvane_protocol::pb::parvane::state::v1::CallRecord =

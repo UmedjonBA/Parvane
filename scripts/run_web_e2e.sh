@@ -53,6 +53,7 @@ CALENDAR_PASS="parvane-e2e-calendar"
 CALL_PASS="parvane-e2e-call"
 PREVIEW_PASS="parvane-e2e-preview"
 PUSH_PASS="parvane-e2e-push"
+DOMAINS_PASS="parvane-e2e-domains"
 GATEWAY_PASS="parvane-e2e-gateway"
 
 log() {
@@ -145,7 +146,7 @@ start_shard() {
 }
 
 log "Build backend binaries"
-cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
+cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway
 
 log "Start isolated production-like NATS"
 env \
@@ -157,6 +158,7 @@ env \
   PARVANE_CALL_PASS="$CALL_PASS" \
   PARVANE_PREVIEW_PASS="$PREVIEW_PASS" \
   PARVANE_PUSH_PASS="$PUSH_PASS" \
+  PARVANE_DOMAINS_PASS="$DOMAINS_PASS" \
   PARVANE_GATEWAY_PASS="$GATEWAY_PASS" \
   nats-server -c "$ROOT/backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
   >"$TEMP_ROOT/nats.log" 2>&1 &
@@ -199,13 +201,15 @@ fi
 start_shard call "$CALL_PASS"
 start_shard preview "$PREVIEW_PASS"
 start_shard push "$PUSH_PASS"
+start_shard domains "$DOMAINS_PASS"
 
-wait_for_log identity 'Identity шард запущен' "${PIDS[-6]}"
-wait_for_log messenger 'Messenger шард запущен' "${PIDS[-5]}"
-wait_for_log cloud 'Cloud шард запущен' "${PIDS[-4]}"
-wait_for_log call 'Call шард запущен' "${PIDS[-3]}"
-wait_for_log preview 'Preview шард запущен' "${PIDS[-2]}"
-wait_for_log push 'Push шард запущен' "${PIDS[-1]}"
+wait_for_log identity 'Identity шард запущен' "${PIDS[-7]}"
+wait_for_log messenger 'Messenger шард запущен' "${PIDS[-6]}"
+wait_for_log cloud 'Cloud шард запущен' "${PIDS[-5]}"
+wait_for_log call 'Call шард запущен' "${PIDS[-4]}"
+wait_for_log preview 'Preview шард запущен' "${PIDS[-3]}"
+wait_for_log push 'Push шард запущен' "${PIDS[-2]}"
+wait_for_log domains 'Domains шард запущен' "${PIDS[-1]}"
 
 if rg -n 'Permissions Violation|authorization violation' "$TEMP_ROOT"/*.log; then
   printf 'Production ACL rejected a shard subscription\n' >&2

@@ -40,7 +40,7 @@ PIDS=()
 # Не по имени процесса (`pkill -x identity`) — рядом могут идти web-e2e со своими
 # шардами из тех же бинарей на других портах.
 stack_pids() { # stack_pids <имя-шарда|все>
-  local p names="${1:-identity|messenger|cloud|call|gateway|preview|push}"
+  local p names="${1:-identity|messenger|cloud|call|gateway|preview|push|domains}"
   for p in $(pgrep -x "$names" 2>/dev/null); do
     tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null \
       | grep -qx 'PARVANE_NATS_URL=nats://127.0.0.1:4222' && echo "$p"
@@ -84,7 +84,10 @@ stack_up() {
     PARVANE_REGISTER_RATE=100000 PARVANE_REGISTER_RATE_IP=100000 PARVANE_REGISTER_RATE_GLOBAL=100000 \
     "$@" PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/identity.db" \
     PARVANE_LOG_LEVEL=info "$SHARD/identity" >"$SB/identity.log" 2>&1 & PIDS+=($!)
-  for s in messenger cloud call; do
+  # domains (каркас доменов, spec 010) — если собран: desktop его не использует,
+  # но стек должен совпадать с web-e2e и продом
+  for s in messenger cloud call domains; do
+    [ "$s" = domains ] && [ ! -x "$SHARD/$s" ] && continue
     PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/$s.db" \
       PARVANE_LOG_LEVEL=info "$SHARD/$s" >"$SB/$s.log" 2>&1 & PIDS+=($!)
   done
