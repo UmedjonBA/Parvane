@@ -1237,3 +1237,237 @@ fn ephemeral_typing_and_presence() {
     assert_eq!(ids.len(), 1, "в L2 остаётся только канал присутствия собеседника");
 }
 
+
+// ── контейнер планировщика (spec 010) ───────────────────────────────────────
+
+/// Мини-шард `domains`: журнал операций контейнера и журнал грантов.
+#[derive(Default)]
+struct MiniDomains {
+    genesis: Option<SignedOp>,
+    container: Option<parvane_protocol::pb::parvane::core::v2::Container>,
+    grants: Vec<SignedOp>,
+    ops: Vec<parvane_protocol::pb::parvane::core::v2::ContainerOp>,
+    snapshot: Option<parvane_protocol::pb::parvane::core::v2::Snapshot>,
+}
+
+impl MiniDomains {
+    /// Запрос клиента к `domains`; остальное — мини-серверу мессенджера.
+    fn handle(&mut self, srv: &mut Server, user: &str, device: &str, r: &OutRequest) {
+        use parvane_protocol::pb::parvane::core::v2 as c2;
+        match r.method {
+            "domain.container.create" => {
+                let q: c2::DomainContainerCreateRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let g = q.genesis.unwrap();
+                let (c, _) = parvane_protocol::domain::verify_genesis(&g).unwrap();
+                self.container = Some(c);
+                self.genesis = Some(g);
+            }
+            "domain.op.append" => {
+                let q: c2::DomainOpAppendRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let mut op = q.op.unwrap();
+                let c = self.container.as_ref().unwrap();
+                assert_eq!(op.key_epoch, c.key_epoch, "операция не текущей эпохи");
+                parvane_protocol::domain::verify_op_seal(&op).unwrap();
+                op.seq = self.ops.len() as u64 + 1;
+                self.ops.push(op);
+            }
+            "domain.key.rotate" => {
+                let q: c2::DomainKeyRotateRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let e = q.rotate.unwrap();
+                let c = self.container.as_mut().unwrap();
+                eprintln!("mini-domains: rotate от {user}/{device}, эпоха {} → {}", c.key_epoch, c.key_epoch + 1);
+                c.key_epoch += 1;
+                self.grants.push(e);
+            }
+            "domain.snapshot.put" => {
+                let q: c2::DomainSnapshotPutRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                self.snapshot = Some(q.snapshot.unwrap());
+            }
+            _ => srv.handle(user, device, r),
+        }
+    }
+
+    fn get_response(&self) -> Vec<u8> {
+        parvane_protocol::pb::parvane::core::v2::DomainContainerGetResponse {
+            container: self.container.clone(),
+            genesis: self.genesis.clone(),
+            level: 3,
+            head_seq: self.ops.len() as u64,
+            grant_version: self.grants.len() as u64,
+        }
+        .encode_to_vec()
+    }
+
+    fn grants_response(&self, after: usize) -> Vec<u8> {
+        parvane_protocol::pb::parvane::core::v2::DomainGrantListResponse { genesis: self.genesis.clone(), entries: self.grants[after.min(self.grants.len())..].to_vec(), more: false }
+            .encode_to_vec()
+    }
+
+    fn sync_response(&self, after: u64) -> Vec<u8> {
+        parvane_protocol::pb::parvane::core::v2::DomainOpSyncResponse { ops: self.ops.iter().filter(|o| o.seq > after).cloned().collect(), more: false }.encode_to_vec()
+    }
+}
+
+fn run_planner(dom: &mut MiniDomains, srv: &mut Server, c: &mut Client, op: &mut dyn FnMut(&mut Client) -> Result<Vec<OutRequest>, ClientError>) {
+    for _ in 0..8 {
+        match op(c) {
+            Ok(reqs) => {
+                for r in reqs {
+                    dom.handle(srv, &c.user.clone(), &c.device_id.clone(), &r);
+                }
+                return;
+            }
+            Err(ClientError::Need(n)) => {
+                eprintln!("run_planner: need {n:?}");
+                satisfy(srv, c, n)
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    panic!("не сошлось");
+}
+
+fn planner_tasks(c: &Client) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(&c.planner_state_json().unwrap()).unwrap();
+    v["tasks"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+}
+
+/// Локальная правка → в очередь → отправка (как делает хост web).
+fn planner_edit(dom: &mut MiniDomains, srv: &mut Server, c: &mut Client, changes: &str) {
+    let local = c.planner_prepare_local(changes).unwrap();
+    let req = c.planner_seal(&local.op, &local.op_id, 1).unwrap();
+    dom.handle(srv, &c.user.clone(), &c.device_id.clone(), &req);
+}
+
+#[test]
+fn planner_container_shared_with_own_devices_and_rotated_on_revoke() {
+    let mut srv = Server::default();
+    let mut dom = MiniDomains::default();
+    let mut alice = setup(&mut srv, "alice@local");
+
+    // Создание и первая правка на d1.
+    let create = alice.planner_create(1).unwrap();
+    dom.handle(&mut srv, "alice@local", "d1", &create);
+    assert!(alice.planner_has_key());
+    assert_eq!(alice.planner_create(1).unwrap_err(), ClientError::Proto(parvane_protocol::ProtoError::Duplicate));
+    planner_edit(&mut dom, &mut srv, &mut alice, r#"{"changes":[{"task":{"id":"t1","name":"Первая","status":"queue","day":"2026-10-08","minutes":60}}]}"#);
+    assert_eq!(planner_tasks(&alice), vec!["Первая"]);
+    // Эхо своей операции идемпотентно.
+    let r = alice.planner_ingest_sync(&dom.sync_response(0)).unwrap();
+    assert_eq!((r.head_seq, r.grants_behind), (1, false));
+    assert_eq!(planner_tasks(&alice), vec!["Первая"]);
+
+    // Второе устройство по гранту: ключ контейнера — вместе с группами (T142).
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
+    assert_eq!(shared.len(), 1, "ключ контейнера без групп: {}", shared.len());
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(ev.iter().any(|e| matches!(e, Event::PlannerChanged { head_seq: 0, .. })), "{ev:?}");
+    assert!(!alice2.planner_is_attached());
+    // Хост подключает контейнер (container.get + grant.list) — ключ принимается из ожидающих.
+    alice2.planner_attach(&dom.get_response(), &dom.grants_response(0)).unwrap();
+    assert!(alice2.planner_has_key());
+    let r = alice2.planner_ingest_sync(&dom.sync_response(0)).unwrap();
+    assert_eq!((r.applied, r.head_seq), (1, 1));
+    assert_eq!(planner_tasks(&alice2), vec!["Первая"]);
+
+    // Правка со второго устройства видна первому; поле другого устройства не затёрто.
+    planner_edit(&mut dom, &mut srv, &mut alice2, r#"{"changes":[{"task":{"id":"t1","status":"active"}},{"task":{"id":"t2","name":"Вторая"}}]}"#);
+    let r = alice.planner_ingest_sync(&dom.sync_response(alice.planner_head_seq())).unwrap();
+    assert_eq!((r.applied, r.head_seq), (2, 2));
+    assert_eq!(planner_tasks(&alice), vec!["Первая", "Вторая"]);
+    let v: serde_json::Value = serde_json::from_str(&alice.planner_state_json().unwrap()).unwrap();
+    let t1 = v["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "t1").unwrap();
+    assert_eq!((t1["status"].as_str(), t1["minutes"].as_u64()), (Some("active"), Some(60)));
+
+    // Персист: состояние и ключ переживают export/import.
+    let key = [7u8; 32];
+    let blob = alice.export(&key).unwrap();
+    let restored = Client::import(&blob, &key).unwrap();
+    assert!(restored.planner_has_key());
+    assert_eq!(restored.planner_state_json(), alice.planner_state_json());
+    assert_eq!(restored.planner_head_seq(), 2);
+
+    // Третье устройство — ключи из экспорта линковки, без container_key.
+    let mut alice3 = Client::new("alice@local", "d3", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice3.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d3", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let export = alice.planner_keys_export().unwrap();
+    assert_eq!(export.keys.len(), 1);
+    alice3.planner_keys_import(&export).unwrap();
+    alice3.planner_attach(&dom.get_response(), &dom.grants_response(0)).unwrap();
+    assert!(alice3.planner_has_key());
+    assert_eq!(alice3.planner_ingest_sync(&dom.sync_response(0)).unwrap().applied, 3, "три изменения в двух операциях");
+    assert_eq!(planner_tasks(&alice3), vec!["Первая", "Вторая"]);
+
+    // Отзыв d2 → запись rotate, новая эпоха, ключ — оставшимся (d3).
+    let mut outcome = None;
+    run_planner(&mut dom, &mut srv, &mut alice, &mut |c| {
+        let o = c.revoke_device("d2")?;
+        outcome = Some(o.clone());
+        Ok(o.requests)
+    });
+    let o = outcome.unwrap();
+    assert!(o.requests.iter().any(|r| r.method == "domain.key.rotate"), "{:?}", o.requests.iter().map(|r| r.method).collect::<Vec<_>>());
+    assert_eq!(dom.container.as_ref().unwrap().key_epoch, 2);
+    assert!(alice.planner_has_key());
+    planner_edit(&mut dom, &mut srv, &mut alice, r#"{"changes":[{"task":{"id":"t3","name":"После отзыва"}}]}"#);
+
+    // d3 получает ключ эпохи 2 по E2E и читает; журнал грантов догоняет.
+    alice3.ingest_log("alice@local", srv.logs["alice@local"][alice3.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let ev = drain(&mut srv, &mut alice3);
+    assert!(ev.iter().any(|e| matches!(e, Event::PlannerChanged { .. })), "{ev:?} {:?}", alice3.last_error);
+    let r = alice3.planner_ingest_sync(&dom.sync_response(alice3.planner_head_seq())).unwrap();
+    assert!(r.grants_behind, "эпоха операции новее журнала грантов: {r:?}");
+    assert_eq!(alice3.planner_ingest_grants(&dom.grants_response(0)).unwrap(), 1);
+    let r = alice3.planner_ingest_sync(&dom.sync_response(alice3.planner_head_seq())).unwrap();
+    assert_eq!((r.applied, r.missing_epoch), (1, None), "{r:?} {:?}", alice3.last_error);
+    assert_eq!(planner_tasks(&alice3), vec!["Первая", "Вторая", "После отзыва"]);
+
+    // Отозванное d2: журнал грантов догнать может, ключа эпохи 2 нет — операция ждёт ключа, которого не будет.
+    assert_eq!(alice2.planner_ingest_grants(&dom.grants_response(0)).unwrap(), 1);
+    // (эхо своей операции эпохи 1 — два идемпотентных изменения; операция эпохи 2 ждёт ключа)
+    let r = alice2.planner_ingest_sync(&dom.sync_response(alice2.planner_head_seq())).unwrap();
+    assert_eq!((r.applied, r.missing_epoch), (2, Some(2)));
+    assert_eq!(planner_tasks(&alice2), vec!["Первая", "Вторая"]);
+
+    // Снимок по порогу: до 200 операций запроса нет.
+    assert!(alice.planner_snapshot_request(1).unwrap().is_none());
+}
+
+#[test]
+fn planner_key_from_stranger_is_ignored() {
+    let mut srv = Server::default();
+    let mut dom = MiniDomains::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    // У Боба свой контейнер; его ключ Алисе — чужой домен-владелец, игнорируется.
+    let create = bob.planner_create(1).unwrap();
+    dom.handle(&mut srv, "bob@local", "d1", &create);
+    let share = bob.planner_keys_export().unwrap();
+    let c = Content {
+        kind: Some(content::Kind::ContainerKey(parvane_protocol::pb::parvane::core::v2::ContainerKeyShare {
+            container: bob.planner_container(),
+            domain: share.domain.clone(),
+            key_epoch: 1,
+            key: vec![1; 32],
+            grant_version: 0,
+            grant_head_hash: vec![0; 32],
+        })),
+        ..Default::default()
+    };
+    run(&mut srv, &mut bob, &mut |cl| cl.prepare_direct("alice@local", &c));
+    let ev = drain(&mut srv, &mut alice);
+    assert!(ev.iter().any(|e| matches!(e, Event::Skipped { .. })), "{ev:?}");
+    assert!(!alice.planner_is_attached());
+}

@@ -21,7 +21,7 @@ use parvane_protocol::domain::{self, no_groups, Author, ContainerAccess, Grantee
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{
     Container, ContainerOp, DomainContainerCreateRequest, DomainContainerCreateResponse, DomainContainerGetRequest,
-    DomainContainerGetResponse, DomainGrantListRequest, DomainGrantListResponse, DomainGrantRevokeRequest,
+    DomainContainerGetResponse, DomainGrantListRequest, DomainKeyRotateRequest, DomainKeyRotateResponse, DomainContainerListRequest, DomainContainerListResponse, DomainGrantListResponse, DomainGrantRevokeRequest,
     DomainGrantRevokeResponse, DomainGrantSetRequest, DomainGrantSetResponse, DomainOpAppendRequest, DomainOpAppendResponse,
     DomainOpSyncRequest, DomainOpSyncResponse, DomainSnapshotGetRequest, DomainSnapshotGetResponse, DomainSnapshotPutRequest,
     DomainSnapshotPutResponse, ErrorCode, GrantLevel, KeyOwnerRequest, KeyOwnerResponse, OpBody, Ref, ShardRequest, SignedOp,
@@ -238,14 +238,20 @@ impl Domains {
             "domain.op.sync" => self.sync(user, body(&req)?).await,
             "domain.grant.set" => {
                 let r: DomainGrantSetRequest = body(&req)?;
-                let ev = self.grant_write(user, r.grant.ok_or(ErrorCode::Invalid)?, false).await?;
+                let ev = self.grant_write(user, r.grant.ok_or(ErrorCode::Invalid)?, domain::OP_GRANT).await?;
                 Ok(DomainGrantSetResponse { version: ev.version }.encode_to_vec())
             }
             "domain.grant.revoke" => {
                 let r: DomainGrantRevokeRequest = body(&req)?;
-                let ev = self.grant_write(user, r.grant.ok_or(ErrorCode::Invalid)?, true).await?;
+                let ev = self.grant_write(user, r.grant.ok_or(ErrorCode::Invalid)?, domain::OP_REVOKE).await?;
                 Ok(DomainGrantRevokeResponse { version: ev.version, key_epoch: ev.key_epoch }.encode_to_vec())
             }
+            "domain.key.rotate" => {
+                let r: DomainKeyRotateRequest = body(&req)?;
+                let ev = self.grant_write(user, r.rotate.ok_or(ErrorCode::Invalid)?, domain::OP_ROTATE).await?;
+                Ok(DomainKeyRotateResponse { version: ev.version, key_epoch: ev.key_epoch }.encode_to_vec())
+            }
+            "domain.container.list" => self.container_list(user, body(&req)?).await,
             "domain.grant.list" => self.grant_list(user, body(&req)?).await,
             "domain.snapshot.put" => self.snapshot_put(user, body(&req)?).await,
             "domain.snapshot.get" => self.snapshot_get(user, body(&req)?).await,
@@ -378,10 +384,11 @@ impl Domains {
     }
 
     /// grant.set / grant.revoke: проверка движком по всему журналу грантов.
-    async fn grant_write(&self, user: &str, op: SignedOp, revoke: bool) -> Result<GrantEvent, ErrorCode> {
+    /// Запись журнала грантов: `expected` — "grant", "revoke" или "rotate"
+    /// (spec 010: смена эпохи без грантов).
+    async fn grant_write(&self, user: &str, op: SignedOp, expected: &str) -> Result<GrantEvent, ErrorCode> {
         let b: OpBody = decode_checked(&op.body, Origin::Client).map_err(code)?;
         let h = b.header.ok_or(ErrorCode::Invalid)?;
-        let expected = if revoke { domain::OP_REVOKE } else { domain::OP_GRANT };
         if h.domain != domain::DOMAIN || h.op_type != expected {
             return Err(ErrorCode::Invalid);
         }
@@ -444,6 +451,8 @@ impl Domains {
             .await
             .map_err(|_| ErrorCode::Duplicate)?;
         match ev.level {
+            // Смена эпохи: гранты не менялись
+            _ if ev.rotate => {}
             Some(level) => {
                 sqlx::query("INSERT INTO container_grants (container, kind, grantee, level) VALUES (?, ?, ?, ?) ON CONFLICT(container, kind, grantee) DO UPDATE SET level = excluded.level")
                     .bind(&id)
@@ -467,6 +476,33 @@ impl Domains {
         tx.commit().await.map_err(db_err)?;
         debug!("domains: журнал грантов {} → v{}, эпоха {}", hex(&id), ev.version, ev.key_epoch);
         Ok(ev)
+    }
+
+    /// Контейнеры домена, доступные пользователю: свои и по прямым грантам
+    /// (групповые гранты каркас пока не раздаёт — `no_groups`).
+    async fn container_list(&self, user: &str, r: DomainContainerListRequest) -> Reply {
+        domain::check_domain_name(&r.domain).map_err(code)?;
+        let rows: Vec<(Vec<u8>, String, i64)> = sqlx::query_as(
+            "SELECT c.id, c.owner, c.key_epoch FROM containers c WHERE c.domain = ?1 AND (c.owner = ?2 \
+             OR EXISTS (SELECT 1 FROM container_grants g WHERE g.container = c.id AND g.kind = 0 AND g.grantee = ?2)) \
+             ORDER BY c.created_at LIMIT ?3",
+        )
+        .bind(&r.domain)
+        .bind(user)
+        .bind(PAGE_ITEMS as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let containers = rows
+            .into_iter()
+            .map(|(id, owner, key_epoch)| Container {
+                r#ref: Some(self.container_ref(&id)),
+                domain: r.domain.clone(),
+                owner: Some(UserRef { address: owner }),
+                key_epoch: key_epoch as u64,
+            })
+            .collect();
+        Ok(DomainContainerListResponse { containers }.encode_to_vec())
     }
 
     async fn grant_list(&self, user: &str, r: DomainGrantListRequest) -> Reply {

@@ -33,6 +33,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
     peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, GroupInvite, NotifyDefaults, Peer,
+    PlannerContainer,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -290,6 +291,8 @@ pub struct PersonalState {
     cleared: BTreeMap<String, ChatCleared>,
     // Ссылки-приглашения групп v2 по link_id (T160).
     invites: BTreeMap<Vec<u8>, Lww<GroupInvite>>,
+    // Контейнер планировщика (spec 010): один на пользователя, LWW-регистр.
+    planner_container: Option<Lww<PlannerContainer>>,
     max_lamport: u64,
 }
 
@@ -474,6 +477,11 @@ impl PersonalState {
                 let id = link_id32(&r.link_id)?;
                 put(&mut self.invites, id, &stamp, None);
             }
+            Some(Op::PlannerContainerSet(c)) => {
+                let r = c.r#ref.as_ref().ok_or(ProtoError::InvalidField("planner_container"))?;
+                crate::address::check_ref(r)?;
+                put_reg(&mut self.planner_container, &stamp, c.clone());
+            }
             Some(Op::ChatCleared(c)) => {
                 let k = opt_peer_key(&c.peer)?;
                 if c.cleared_until_ms <= 0 {
@@ -512,7 +520,13 @@ impl PersonalState {
             calls: live(&self.calls),
             cleared: self.cleared.values().cloned().collect(),
             invites: live(&self.invites),
+            planner_container: self.planner_container.as_ref().and_then(|e| e.value.clone()),
         }
+    }
+
+    /// Контейнер планировщика пользователя (spec 010), если объявлен.
+    pub fn planner_container(&self) -> Option<&crate::pb::parvane::core::v2::Ref> {
+        self.planner_container.as_ref().and_then(|e| e.value.as_ref()).and_then(|c| c.r#ref.as_ref())
     }
 
     /// Отложенные, ещё не отмеченные отправленными.
@@ -618,6 +632,7 @@ pub fn migrate_snapshot_with(
     kinds.extend(snapshot.calls.iter().cloned().map(Op::CallSet));
     kinds.extend(snapshot.cleared.iter().cloned().map(Op::ChatCleared));
     kinds.extend(snapshot.invites.iter().cloned().map(Op::GroupInviteSet));
+    kinds.extend(snapshot.planner_container.clone().map(Op::PlannerContainerSet));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());

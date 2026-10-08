@@ -1,0 +1,190 @@
+// Домен планировщика (spec 010, R2/R3): контейнер `parvane.planner.v1` — один на
+// пользователя, содержимое — открытый текст операций и снимков каркаса доменов
+// (core/v2/domain.proto), AEAD ключа эпохи; сервер видит только шифртекст.
+//
+// Сведение — «последняя правка побеждает» по полям объекта: у каждого поля своя
+// метка LwwStamp (lamport, device_id); при равных метках порядок добивается
+// хэшем байтов изменения (backend/protocol/src/domain/planner.rs). Удаление —
+// надгробие `deleted` с меткой: правка со старшей меткой воскрешает объект,
+// с младшей — игнорируется. Запись питания (FoodEntry) сливается целиком по
+// `stamp`. Метка не может обогнать виденный максимум больше чем на 2^20 (D-16).
+syntax = "proto3";
+
+package parvane.planner.v1;
+
+import "parvane/core/v2/domain.proto";
+import "parvane/core/v2/options.proto";
+
+// ── LWW-регистры полей ──────────────────────────────────────────────────────
+
+// Строковое поле; пустая строка — «не задано» (дата, время, список).
+message Str {
+  parvane.core.v2.LwwStamp stamp = 1;
+  string value = 2 [(parvane.core.v2.max_len) = 4000];
+}
+
+// Беззнаковое поле; `unset` — значения нет (оценка задачи «без оценки»).
+message U32 {
+  parvane.core.v2.LwwStamp stamp = 1;
+  uint32 value = 2;
+  bool unset = 3;
+}
+
+message I32 {
+  parvane.core.v2.LwwStamp stamp = 1;
+  int32 value = 2;
+}
+
+message Bool {
+  parvane.core.v2.LwwStamp stamp = 1;
+  bool value = 2;
+}
+
+message Step {
+  string text = 1 [(parvane.core.v2.max_len) = 160];
+  bool is_done = 2;
+}
+
+// Шаги задачи — список целиком под одной меткой.
+message Steps {
+  parvane.core.v2.LwwStamp stamp = 1;
+  repeated Step items = 2 [(parvane.core.v2.max_items) = 100];
+}
+
+// Дни недели повтора события (0 — воскресенье, как Date.getDay).
+message Weekdays {
+  parvane.core.v2.LwwStamp stamp = 1;
+  repeated uint32 days = 2 [(parvane.core.v2.max_items) = 7];
+}
+
+// ── объекты ─────────────────────────────────────────────────────────────────
+
+// Идентификаторы объектов — UUIDv7 в hex либо `legacy-<устройство>-<n>` для
+// переноса данных этапа 1 (R3); уникальны между устройствами.
+message Task {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  Str name = 2;
+  Str description = 3;
+  Steps steps = 4;
+  // queue | active | later | waiting | done
+  Str status = 5;
+  // id списка; пустая строка — «без списка»
+  Str list_id = 6;
+  I32 rank = 7;
+  // YYYY-MM-DD, HH:MM, YYYY-MM-DD; пустая строка — не задано
+  Str day = 8;
+  Str start = 9;
+  Str due = 10;
+  // минуты оценки; unset — без оценки
+  U32 minutes = 11;
+  // надгробие
+  parvane.core.v2.LwwStamp deleted = 12;
+}
+
+message Event {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  Str name = 2;
+  Str start = 3;
+  Str end = 4;
+  Weekdays weekdays = 5;
+  // разовая дата YYYY-MM-DD; пусто — повтор по дням недели
+  Str day = 6;
+  parvane.core.v2.LwwStamp deleted = 7;
+}
+
+message List {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  Str name = 2;
+  I32 order = 3;
+  parvane.core.v2.LwwStamp deleted = 4;
+}
+
+message Goal {
+  uint32 target = 1;
+  uint32 tolerance = 2;
+}
+
+// Цели по калориям и БЖУ — под одной меткой.
+message GoalSet {
+  parvane.core.v2.LwwStamp stamp = 1;
+  Goal kcal = 2;
+  Goal protein = 3;
+  Goal fat = 4;
+  Goal carbs = 5;
+}
+
+// Запись дневника питания — LWW-регистр целиком.
+message FoodEntry {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  string name = 3 [(parvane.core.v2.max_len) = 120];
+  // breakfast | lunch | dinner | snack | other
+  string meal = 4 [(parvane.core.v2.max_len) = 16];
+  double kcal = 5;
+  double protein = 6;
+  double fat = 7;
+  double carbs = 8;
+  double fiber = 9;
+  double grams = 10;
+  // Битовая маска известных значений: 1 kcal, 2 protein, 4 fat, 8 carbs,
+  // 16 fiber, 32 grams. Неизвестное не равно нулю.
+  uint32 known = 11;
+  bool per100 = 12;
+  parvane.core.v2.LwwStamp deleted = 13;
+}
+
+message NutritionDay {
+  string day = 1 [(parvane.core.v2.max_len) = 10];
+  repeated FoodEntry entries = 2 [(parvane.core.v2.max_items) = 200];
+  Bool is_complete = 3;
+  // цели на момент завершения дня
+  GoalSet fixed_goals = 4;
+  U32 water_ml = 5;
+}
+
+// Настройки дня (минуты от полуночи) и дневной бюджет — под одной меткой.
+message Settings {
+  parvane.core.v2.LwwStamp stamp = 1;
+  uint32 day_start = 2;
+  uint32 day_end = 3;
+  uint32 lunch_start = 4;
+  uint32 lunch_end = 5;
+  uint32 margin = 6;
+  uint32 budget = 7;
+}
+
+// Отметка переноса данных этапа 1 (информационная).
+message Migration {
+  string source_device = 1 [(parvane.core.v2.max_len) = 64];
+  uint32 count = 2;
+}
+
+// ── операция и снимок ───────────────────────────────────────────────────────
+
+message Change {
+  oneof change {
+    Task task = 1;
+    Event event = 2;
+    List list = 3;
+    // слияние по полям дня и по записям
+    NutritionDay nutrition_day = 4;
+    Settings settings = 5;
+    GoalSet goals = 6;
+    Migration migration = 7;
+  }
+}
+
+// Открытый текст ContainerOp: пакет изменений одного устройства.
+message PlannerOp {
+  repeated Change changes = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// Открытый текст Snapshot: сведённое состояние на момент upto_seq.
+message PlannerSnapshot {
+  repeated Task tasks = 1 [(parvane.core.v2.max_items) = 20000];
+  repeated Event events = 2 [(parvane.core.v2.max_items) = 5000];
+  repeated List lists = 3 [(parvane.core.v2.max_items) = 100];
+  repeated NutritionDay nutrition = 4 [(parvane.core.v2.max_items) = 4000];
+  Settings settings = 5;
+  GoalSet goals = 6;
+}

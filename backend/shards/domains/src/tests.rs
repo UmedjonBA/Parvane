@@ -209,9 +209,60 @@ async fn session_required() {
     assert_eq!(d.dispatch("domain.op.sync", req).await, Err(ErrorCode::Forbidden));
     // Все методы реестра роли "domains" обслуживаются.
     let names: Vec<&str> = parvane_v2rt::methods_of("domains").iter().map(|m| m.name).collect();
-    assert_eq!(names.len(), 9, "{names:?}");
+    assert_eq!(names.len(), 11, "{names:?}");
     for n in names {
         let req = ShardRequest { method: n.into(), user: "alice@local".into(), device_id: "d1".into(), body: vec![], ..Default::default() };
         assert_ne!(d.dispatch(n, req).await, Err(ErrorCode::Unavailable), "{n}");
     }
+}
+
+#[tokio::test]
+async fn key_rotate_and_container_list() {
+    use parvane_protocol::pb::parvane::core::v2::{DomainContainerListRequest, DomainContainerListResponse, DomainKeyRotateRequest, DomainKeyRotateResponse};
+    let d = setup().await;
+    let alice = device(&d, "alice@local", "a1");
+    let bob = device(&d, "bob@local", "b1");
+    let (c, genesis) = domain::new_container(&alice, "local", "parvane.planner.v1", "alice@local", 1).unwrap();
+    let cref = c.r#ref.clone().unwrap();
+    call(&d, "alice@local", "domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }).await.unwrap();
+    let k1 = domain::new_epoch_key();
+    assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 1, "a1", "v1")).await, Ok(1));
+
+    // Список: владельцу виден, чужому — пусто, другой домен — пусто, негодное имя — INVALID.
+    let list = |user: &'static str, dom: &'static str| {
+        let d = &d;
+        async move {
+            let r: DomainContainerListResponse = resp(call(d, user, "domain.container.list", &DomainContainerListRequest { domain: dom.into() }).await.unwrap());
+            r.containers
+        }
+    };
+    let mine = list("alice@local", "parvane.planner.v1").await;
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].r#ref.as_ref(), Some(&cref));
+    assert_eq!(mine[0].key_epoch, 1);
+    assert!(list("bob@local", "parvane.planner.v1").await.is_empty());
+    assert!(list("alice@local", "sample.v1").await.is_empty());
+    assert_eq!(call(&d, "alice@local", "domain.container.list", &DomainContainerListRequest { domain: "Bad Name".into() }).await, Err(ErrorCode::Invalid));
+
+    // Смена эпохи без грантов: только админ; старая эпоха закрыта для новых операций.
+    let acc = access_of(&d, "alice@local", &cref, &[(&alice, "alice@local")]).await;
+    let bad = domain::sign_rotate(&bob, &acc, 2).unwrap();
+    assert_eq!(call(&d, "bob@local", "domain.key.rotate", &DomainKeyRotateRequest { rotate: Some(bad) }).await, Err(ErrorCode::NotFound));
+    // Запись «rotate» через grant.set — отказ (не тот вид).
+    let rot = domain::sign_rotate(&alice, &acc, 2).unwrap();
+    assert_eq!(call(&d, "alice@local", "domain.grant.set", &DomainGrantSetRequest { grant: Some(rot.clone()) }).await, Err(ErrorCode::Invalid));
+    let r: DomainKeyRotateResponse = resp(call(&d, "alice@local", "domain.key.rotate", &DomainKeyRotateRequest { rotate: Some(rot.clone()) }).await.unwrap());
+    assert_eq!((r.version, r.key_epoch), (1, 2));
+    // Повтор той же записи — цепочка ушла вперёд.
+    assert_eq!(call(&d, "alice@local", "domain.key.rotate", &DomainKeyRotateRequest { rotate: Some(rot) }).await, Err(ErrorCode::Invalid));
+    assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 2, "a1", "old")).await, Err(ErrorCode::Expired));
+    let k2 = domain::new_epoch_key();
+    assert_eq!(append(&d, "alice@local", &op(&alice, &c, 2, &k2, 2, "a1", "new")).await, Ok(2));
+    // Журнал грантов с сервера сводится клиентом в ту же эпоху; грантов по-прежнему нет; владелец читает обе эпохи.
+    let acc = access_of(&d, "alice@local", &cref, &[(&alice, "alice@local")]).await;
+    assert_eq!((acc.version, acc.epoch), (1, 2));
+    assert!(acc.grants.is_empty());
+    assert!(acc.could_write_at("alice@local", 1, &no_groups) && acc.could_write_at("alice@local", 2, &no_groups));
+    // Список отражает новую эпоху.
+    assert_eq!(list("alice@local", "parvane.planner.v1").await[0].key_epoch, 2);
 }

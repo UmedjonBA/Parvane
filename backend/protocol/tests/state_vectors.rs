@@ -466,6 +466,7 @@ fn gen_migration() -> Value {
         calls: vec![CallRecord { call_id: vec![0xc1; 16], peer: Some(user("bob@x")), outgoing: true, video: false, reason: HangupReason::Normal as i32, started_ms: 1, duration_s: 60 }],
         cleared: vec![],
         invites: vec![],
+            planner_container: None,
     };
     let mut clock = LamportClock::new(10);
     let ops = state::migrate_snapshot_with(&local, "dev-m", &mut clock, 0, counter_ids()).unwrap();

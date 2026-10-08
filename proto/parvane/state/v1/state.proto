@@ -225,6 +225,11 @@ message GroupInviteRef {
   bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
 }
 
+// Ссылка на контейнер домена планировщика (spec 010).
+message PlannerContainer {
+  parvane.core.v2.Ref ref = 1;
+}
+
 // Операция журнала личного состояния — открытый текст записи StateRecord.
 // op_id совпадает с op_id записи (входит в AAD).
 message StateOp {
@@ -257,6 +262,9 @@ message StateOp {
     ChatCleared chat_cleared = 28;
     GroupInvite group_invite_set = 29;
     GroupInviteRef group_invite_remove = 30;
+    // Контейнер планировщика пользователя (spec 010): новое устройство узнаёт
+    // его из журнала состояния, не перебирая контейнеры.
+    PlannerContainer planner_container_set = 31;
   }
 }
 
@@ -279,4 +287,5 @@ message StateSnapshot {
   repeated CallRecord calls = 11 [(parvane.core.v2.max_items) = 10000];
   repeated ChatCleared cleared = 12 [(parvane.core.v2.max_items) = 100000];
   repeated GroupInvite invites = 13 [(parvane.core.v2.max_items) = 10000];
+  PlannerContainer planner_container = 14;
 }

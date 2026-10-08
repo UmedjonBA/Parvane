@@ -140,6 +140,7 @@ fn event_json(e: &Event) -> Value {
             "signal": serde_json::to_value(signal).unwrap_or(Value::Null)
         }),
         Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
+        Event::PlannerChanged { seq, head_seq } => json!({"type": "plannerChanged", "seq": seq, "headSeq": head_seq}),
         Event::Typing { .. } | Event::Presence { .. } => eph_event_json(e),
         Event::Internal { seq } => json!({"type": "internal", "seq": seq}),
         Event::Skipped { seq } => json!({"type": "skipped", "seq": seq}),
@@ -879,6 +880,16 @@ impl HostState {
         let r: crate::pb::parvane::state::v1::GroupInviteRef =
             serde_json::from_value(json!({ "link_id": link_id_b64 })).map_err(|_| err(ProtoError::Malformed))?;
         self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::GroupInviteRemove(r)])
+    }
+
+    /// Контейнер планировщика пользователя (spec 010): `domain` и hex id
+    /// ссылки → тела `state.append`. LWW-регистр, один на пользователя.
+    pub fn planner_container_set(&mut self, domain: &str, id_hex: &str) -> Result<String, String> {
+        let id = hex::decode(id_hex).map_err(|_| err(ProtoError::Malformed))?;
+        let c = crate::pb::parvane::state::v1::PlannerContainer {
+            r#ref: Some(crate::pb::parvane::core::v2::Ref { domain: domain.into(), id }),
+        };
+        self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::PlannerContainerSet(c)])
     }
 
     /// Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`

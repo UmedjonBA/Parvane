@@ -50,6 +50,8 @@ pub const OP_OP: &str = "op";
 pub const OP_SNAPSHOT: &str = "snapshot";
 pub const OP_GRANT: &str = "grant";
 pub const OP_REVOKE: &str = "revoke";
+/// Смена эпохи без отзыва гранта (spec 010, R6): запись журнала грантов без grantee.
+pub const OP_ROTATE: &str = "rotate";
 
 /// Первая эпоха ключа (генезис).
 pub const FIRST_EPOCH: u64 = 1;
@@ -76,7 +78,7 @@ pub fn new_epoch_key() -> EpochKey {
 }
 
 /// Связка ключей контейнера по эпохам (старые нужны для чтения истории).
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct KeyRing {
     keys: BTreeMap<u64, EpochKey>,
 }
@@ -110,11 +112,15 @@ fn container_ref(c: &Container) -> Result<&Ref> {
 }
 
 fn header(op_type: &str, target: &Ref, ts_ms: i64) -> OpHeader {
+    header_with(op_type, target, ts_ms, sign::new_op_id())
+}
+
+fn header_with(op_type: &str, target: &Ref, ts_ms: i64, op_id: Vec<u8>) -> OpHeader {
     OpHeader {
         domain: DOMAIN.into(),
         op_type: op_type.into(),
         proto_minor: crate::PROTO_MINOR,
-        op_id: sign::new_op_id(),
+        op_id,
         target: Some(target.clone()),
         ts_ms,
         ..Default::default()
@@ -224,12 +230,31 @@ fn seal_signed(
     plaintext: &[u8],
     ts_ms: i64,
 ) -> Result<Sealed> {
+    seal_signed_with(signer, op_type, aad_ctx, container, epoch, key, upto, plaintext, ts_ms, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_signed_with(
+    signer: &dyn OpSigner,
+    op_type: &str,
+    aad_ctx: &[u8],
+    container: &Container,
+    epoch: u64,
+    key: &[u8; KEY_LEN],
+    upto: Option<u64>,
+    plaintext: &[u8],
+    ts_ms: i64,
+    op_id: Option<Vec<u8>>,
+) -> Result<Sealed> {
     let r = container_ref(container)?;
     check_domain_name(&container.domain)?;
     if epoch == 0 {
         return Err(ProtoError::InvalidField("key_epoch"));
     }
-    let h = header(op_type, r, ts_ms);
+    let h = match op_id {
+        Some(id) => header_with(op_type, r, ts_ms, id),
+        None => header(op_type, r, ts_ms),
+    };
     let aad = seal_aad(aad_ctx, r, &container.domain, epoch, upto, &h.op_id);
     let ciphertext = aead_seal(key, &aad, plaintext)?;
     let digest = SealDigest { key_epoch: epoch, ciphertext_sha256: Sha256::digest(&ciphertext).to_vec(), upto_seq: upto.unwrap_or(0) };
@@ -274,6 +299,20 @@ pub fn seal_op(signer: &dyn OpSigner, container: &Container, epoch: u64, key: &[
         return Err(ProtoError::FieldLimit("plaintext"));
     }
     let s = seal_signed(signer, OP_OP, ctx::DOMAIN_OP_AAD, container, epoch, key, None, plaintext, ts_ms)?;
+    Ok(ContainerOp { container: container.r#ref.clone(), key_epoch: epoch, aead_ciphertext: s.ciphertext, author: Some(s.author), seq: 0 })
+}
+
+/// То же с заданным `op_id` (16 байт UUIDv7): повтор отправки той же
+/// операции после обрыва получает тот же id — сервер отвечает DUPLICATE,
+/// а не пишет вторую копию (spec 010, FR-006).
+pub fn seal_op_with_id(signer: &dyn OpSigner, container: &Container, epoch: u64, key: &[u8; KEY_LEN], plaintext: &[u8], ts_ms: i64, op_id: &[u8]) -> Result<ContainerOp> {
+    if plaintext.len() > MAX_OP_PLAINTEXT {
+        return Err(ProtoError::FieldLimit("plaintext"));
+    }
+    if op_id.len() != 16 {
+        return Err(ProtoError::InvalidField("op_id"));
+    }
+    let s = seal_signed_with(signer, OP_OP, ctx::DOMAIN_OP_AAD, container, epoch, key, None, plaintext, ts_ms, Some(op_id.to_vec()))?;
     Ok(ContainerOp { container: container.r#ref.clone(), key_epoch: epoch, aead_ciphertext: s.ciphertext, author: Some(s.author), seq: 0 })
 }
 
@@ -379,9 +418,12 @@ pub struct GrantEvent {
     pub version: u64,
     pub key_epoch: u64,
     pub grantee: Grantee,
-    /// `None` — отзыв.
+    /// `None` — отзыв либо смена эпохи.
     pub level: Option<GrantLevel>,
     pub signer: Author,
+    /// Запись "rotate": гранты не менялись, поднята только эпоха; `grantee` —
+    /// владелец (формально), в таблицы грантов не пишется.
+    pub rotate: bool,
 }
 
 /// Подписать грант (выдача/смена уровня) от имени админа.
@@ -389,21 +431,29 @@ pub fn sign_grant(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Gra
     if level == GrantLevel::Unspecified {
         return Err(ProtoError::InvalidField("level"));
     }
-    sign_grant_entry(signer, access, OP_GRANT, grantee, level, access.epoch, ts_ms)
+    sign_grant_entry(signer, access, OP_GRANT, Some(grantee), level, access.epoch, ts_ms)
 }
 
 /// Подписать отзыв: новая эпоха `epoch + 1` (ключ новой эпохи раздаётся всем,
 /// кроме отозванного).
 pub fn sign_revoke(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Grantee, ts_ms: i64) -> Result<SignedOp> {
     let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
-    sign_grant_entry(signer, access, OP_REVOKE, grantee, GrantLevel::Unspecified, next, ts_ms)
+    sign_grant_entry(signer, access, OP_REVOKE, Some(grantee), GrantLevel::Unspecified, next, ts_ms)
 }
 
-fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: &Grantee, level: GrantLevel, key_epoch: u64, ts_ms: i64) -> Result<SignedOp> {
+/// Подписать смену эпохи (spec 010): `epoch + 1`, гранты прежние; новый ключ
+/// раздаётся всем получателям ключа (кроме отозванных устройств владельца —
+/// у них его больше нет по E2E).
+pub fn sign_rotate(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64) -> Result<SignedOp> {
+    let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
+    sign_grant_entry(signer, access, OP_ROTATE, None, GrantLevel::Unspecified, next, ts_ms)
+}
+
+fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: Option<&Grantee>, level: GrantLevel, key_epoch: u64, ts_ms: i64) -> Result<SignedOp> {
     let r = access.container_ref()?.clone();
     let g = Grant {
         container: Some(r.clone()),
-        grantee: Some(grantee.to_pb()),
+        grantee: grantee.map(Grantee::to_pb),
         level: level as i32,
         key_epoch,
         version: access.version + 1,
@@ -500,16 +550,18 @@ impl ContainerAccess {
         v
     }
 
-    /// Применить запись журнала грантов ("grant" или "revoke").
+    /// Применить запись журнала грантов ("grant", "revoke" или "rotate").
     pub fn apply(&mut self, op: &SignedOp, resolve: KeyResolver, groups: Membership) -> Result<GrantEvent> {
         // op_type — из присланного тела; verify_op сверит его с подписью.
         let body: OpBody = decode_checked(&op.body, Origin::Client)?;
-        let revoke = match body.header.as_ref().map(|h| h.op_type.as_str()) {
-            Some(OP_GRANT) => false,
-            Some(OP_REVOKE) => true,
+        let op_type = match body.header.as_ref().map(|h| h.op_type.as_str()) {
+            Some(OP_GRANT) => OP_GRANT,
+            Some(OP_REVOKE) => OP_REVOKE,
+            Some(OP_ROTATE) => OP_ROTATE,
             _ => return Err(ProtoError::ContextMismatch),
         };
-        let op_type = if revoke { OP_REVOKE } else { OP_GRANT };
+        let revoke = op_type == OP_REVOKE;
+        let rotate = op_type == OP_ROTATE;
         let v = sign::verify_op(op, DOMAIN, op_type, None)?;
         let cref = self.container_ref()?.clone();
         v.require_target(&cref)?;
@@ -523,6 +575,21 @@ impl ContainerAccess {
         let signer = resolve(&v.signer).ok_or(ProtoError::Forbidden)?;
         if !self.can_admin(&signer.user, groups) {
             return Err(ProtoError::Forbidden);
+        }
+        if rotate {
+            // Смена эпохи: без grantee и уровня, key_epoch = текущая + 1; состав
+            // писателей новой эпохи — прежний.
+            let next = self.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
+            if g.grantee.is_some() || g.level != GrantLevel::Unspecified as i32 || g.key_epoch != next {
+                return Err(ProtoError::InvalidField("key_epoch"));
+            }
+            self.epoch = next;
+            let w: BTreeSet<Grantee> = self.grants.iter().filter(|(_, l)| **l >= GrantLevel::Write).map(|(g, _)| g.clone()).collect();
+            self.writers.insert(next, w);
+            self.version += 1;
+            self.hashes.push(entry_hash(op));
+            self.container.key_epoch = self.epoch;
+            return Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee: Grantee::User(self.owner.clone()), level: None, signer, rotate: true });
         }
         let grantee = Grantee::from_pb(g.grantee.as_ref())?;
         if grantee == Grantee::User(self.owner.clone()) {
@@ -557,7 +624,7 @@ impl ContainerAccess {
         self.version += 1;
         self.hashes.push(entry_hash(op));
         self.container.key_epoch = self.epoch;
-        Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee, level: event_level, signer })
+        Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee, level: event_level, signer, rotate: false })
     }
 
     /// Клиент: проверить автора операции — подпись, дайджест, эпоха известна,
@@ -672,7 +739,7 @@ impl Stamp {
 /// Часы Лэмпорта устройства и защита от «вечного победителя» (D-16):
 /// метка не выше виденного максимума + 2^20. Применяется в порядке `seq`
 /// журнала — у всех клиентов одинаково, поэтому детерминировано.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LamportGuard {
     max_seen: u64,
 }
@@ -753,6 +820,11 @@ impl LwwMap {
         self.cells.iter().filter(|(_, c)| !c.deleted).map(|(k, c)| (k.clone(), c.value.clone())).collect()
     }
 }
+
+/// Домен планировщика `parvane.planner.v1` (spec 010).
+pub mod planner;
+/// JSON планировщика для хостов (web): сведённое состояние и изменения.
+pub mod planner_json;
 
 /// Тестовый домен `sample.v1` (SC-005): LWW-карта.
 pub mod sample {

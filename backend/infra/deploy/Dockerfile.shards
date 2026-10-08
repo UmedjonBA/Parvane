@@ -18,7 +18,7 @@ COPY backend/protocol ./backend/protocol
 COPY backend/tests ./backend/tests
 WORKDIR /src/backend
 RUN cargo build --release --locked \
-    -p identity -p messenger -p cloud -p call -p preview -p push -p gateway
+    -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -34,5 +34,6 @@ COPY --from=builder /src/backend/target/release/cloud /usr/local/bin/cloud
 COPY --from=builder /src/backend/target/release/call /usr/local/bin/call
 COPY --from=builder /src/backend/target/release/preview /usr/local/bin/preview
 COPY --from=builder /src/backend/target/release/push /usr/local/bin/push
+COPY --from=builder /src/backend/target/release/domains /usr/local/bin/domains
 COPY --from=builder /src/backend/target/release/gateway /usr/local/bin/gateway
 USER parvane

@@ -87,12 +87,18 @@ PARVANE_CALENDAR_PASS=$(gen)
 PARVANE_CALL_PASS=$(gen)
 PARVANE_PREVIEW_PASS=$(gen)
 PARVANE_PUSH_PASS=$(gen)
+PARVANE_DOMAINS_PASS=$(gen)
 PARVANE_GATEWAY_PASS=$(gen)
 PARVANE_TURN_SECRET=$(gen)
 PARVANE_TURN_STATIC_PASS=$(gen)
 EOF
   chmod 600 .env
   echo ".env создан"
+fi
+# spec 010: шард domains появился позже первого деплоя — пароль дописывается в существующий .env
+if ! grep -q '^PARVANE_DOMAINS_PASS=' .env; then
+  printf 'PARVANE_DOMAINS_PASS=%s\n' "$(openssl rand -hex 24)" >> .env
+  echo "PARVANE_DOMAINS_PASS добавлен в .env"
 fi
 # NATS перечитывает ACL только по сигналу: без этого шарды, стартующие с новыми
 # топиками, ловят Subscription Violation (подписка молча отброшена) — HUP ДО up

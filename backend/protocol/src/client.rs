@@ -143,6 +143,9 @@ pub enum Event {
     Typing { chat: String, group: Option<Vec<u8>>, from: String, action: i32, ts_ms: i64 },
     /// Присутствие собеседника по эфемерному каналу v2.
     Presence { from: String, online: bool, last_seen_ms: i64, ts_ms: i64 },
+    /// Контейнер планировщика (spec 010): принят ключ эпохи, применены
+    /// ожидавшие операции либо контейнер ещё надо подключить (`head_seq` 0).
+    PlannerChanged { seq: u64, head_seq: u64 },
     /// Служебное (ключи) — применено внутри, показывать нечего.
     Internal { seq: u64 },
     /// Запись пропущена (неизвестный вид/не расшифровалась после попыток).
@@ -321,6 +324,13 @@ pub struct Client {
     l2_group_pref: BTreeMap<Vec<u8>, L2Pref>,
     /// Подписанные эфемерные каналы этого соединения (T127; не сохраняется).
     eph: BTreeMap<[u8; ephemeral::CHANNEL_ID_LEN], (EphChannel, EphTarget)>,
+    /// Контейнер планировщика (spec 010) и ключи, ждущие его подключения.
+    planner: Option<PlannerLocal>,
+    planner_pending_keys: Vec<ContainerKeyShare>,
+    /// Ключи из экспорта линковки: (домен, id контейнера, эпоха, ключ).
+    planner_trusted_keys: Vec<(String, Vec<u8>, u64, [u8; 32])>,
+    /// Ключ подписи устройства → device_id (включая уже отозванные).
+    planner_authors: BTreeMap<[u8; 32], String>,
     /// Последняя ошибка разбора записи (диагностика хоста; клиенту не показывается).
     pub last_error: Option<ProtoError>,
 }
@@ -400,6 +410,10 @@ impl Client {
             l2_direct: BTreeMap::new(),
             l2_group_pref: BTreeMap::new(),
             eph: BTreeMap::new(),
+            planner: None,
+            planner_pending_keys: vec![],
+            planner_trusted_keys: vec![],
+            planner_authors: BTreeMap::new(),
             last_error: None,
         })
     }
@@ -1711,6 +1725,12 @@ impl Client {
             o.requests.extend(self.seal_to_own_devices(&c)?);
             o.state_key_version = Some(v);
         }
+        // Контейнер планировщика (spec 010, REVOKE-1): новая эпоха ключа.
+        match self.planner_rotate_on_revoke(now_ms()) {
+            Ok(r) => o.requests.extend(r),
+            Err(ClientError::Proto(e)) => self.last_error = Some(e),
+            Err(ClientError::Need(_)) => {}
+        }
         // Собеседники.
         for p in targets {
             match self.share_delivery_key(&p) {
@@ -2040,6 +2060,10 @@ impl Client {
                     }
                 }
                 return Ok(vec![Event::Internal { seq }]);
+            }
+            Some(content::Kind::ContainerKey(share)) => {
+                let share = share.clone();
+                return Ok(self.planner_accept_key(&sender, &share, seq));
             }
             Some(content::Kind::GroupKey(gk)) => {
                 let gk = gk.clone();
@@ -2517,6 +2541,14 @@ impl Client {
             let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
             out.push(OutRequest::anon("msg.deliver_sealed", &r));
         }
+        // Ключ контейнера планировщика (spec 010) — тем же устройствам.
+        if let Some(c) = self.planner_key_content() {
+            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: self.direct_must_pad(&me) };
+            let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
+            if !r.envelopes.is_empty() {
+                out.push(OutRequest::anon("msg.deliver_sealed", &r));
+            }
+        }
         Ok(out)
     }
 
@@ -2797,6 +2829,10 @@ impl Client {
             group_behind: self.groups.iter().filter_map(|(id, g)| g.behind.map(|v| (b(id), v))).collect(),
             l2_direct: self.l2_direct.iter().map(|(chat, s)| (chat.clone(), s.prefs().map(|(u, p)| (u.to_string(), p.enabled, p.ts_ms)).collect())).collect(),
             l2_group_pref: self.l2_group_pref.iter().map(|(g, p)| (b(g), p.enabled, p.ts_ms)).collect(),
+            planner: self.planner_persist(),
+            planner_pending_keys: self.planner_pending_keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
+            planner_trusted_keys: self.planner_trusted_keys.iter().map(|(d, id, e, k)| (d.clone(), b(id), *e, b(k))).collect(),
+            planner_authors: self.planner_authors.iter().map(|(k, d)| (b(k), d.clone())).collect(),
         };
         let json = Zeroizing::new(serde_json::to_vec(&p).map_err(|_| ProtoError::Crypto)?);
         let mut nonce = [0u8; 12];
@@ -2922,6 +2958,20 @@ impl Client {
         for (g, enabled, ts_ms) in p.l2_group_pref {
             c.l2_group_pref.insert(d(&g)?, L2Pref { enabled, ts_ms });
         }
+        for (k, dev) in &p.planner_authors {
+            c.planner_authors.insert(d32(k)?, dev.clone());
+        }
+        for (dom_name, id, epoch, key) in &p.planner_trusted_keys {
+            c.planner_trusted_keys.push((dom_name.clone(), d(id)?, *epoch, d32(key)?));
+        }
+        for k in &p.planner_pending_keys {
+            if let Ok(share) = ContainerKeyShare::decode(d(k)?.as_slice()) {
+                c.planner_pending_keys.push(share);
+            }
+        }
+        if let Some(pp) = &p.planner {
+            c.planner_restore(pp)?;
+        }
         Ok(c)
     }
 }
@@ -3013,6 +3063,15 @@ struct Persisted {
     /// Личное предпочтение L2 в группах (ключ — id группы).
     #[serde(default)]
     l2_group_pref: Vec<PersistedL2Pref>,
+    /// Контейнер планировщика (spec 010).
+    #[serde(default)]
+    planner: Option<PersistedPlanner>,
+    #[serde(default)]
+    planner_pending_keys: Vec<String>,
+    #[serde(default)]
+    planner_trusted_keys: Vec<(String, String, u64, String)>,
+    #[serde(default)]
+    planner_authors: Vec<(String, String)>,
 }
 
 /// Предпочтение L2: (участник или id группы, включено, метка времени).
@@ -3064,3 +3123,6 @@ mod session_proof_tests {
         assert!(!verify_session_proof(&ed, "alice@local", "dev-1", ts, &other.session_proof(ts)), "чужой ключ");
     }
 }
+
+// Контейнер планировщика (spec 010) — отдельный файл той же области видимости.
+include!("client_planner.rs");
