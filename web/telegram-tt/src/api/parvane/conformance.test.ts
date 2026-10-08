@@ -254,7 +254,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     v2Grant: { boxField: string; boxCoords: string[]; materialKeys: string[]; secondDeviceCreatesRoot: boolean };
     v2History: {
       exportField: string; rowKeys: string[]; limit: number; skips: string[];
-      incomingRead: boolean; groupRowsWaitForGroup: boolean;
+      exportsPreV2Rows: boolean; incomingRead: boolean; groupRowsWaitForGroup: boolean;
     };
     vectors: { newPubB64: string; oldPubB64: string; commitmentOfNew: string; sas: string };
   };
@@ -273,6 +273,10 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     r.v2History.rowKeys.forEach((key) => expect(exported).toHaveProperty(key));
     const state = JSON.stringify({ [r.v2History.exportField]: [exported] });
     expect(parseV2History(state).map((m) => m.id)).toEqual(['u1']);
+    // С T110 строки эпохи v1 (без origin) тоже едут в экспорте — иначе второе
+    // устройство аккаунта с перепиской до v2 остаётся с пустым списком чатов
+    expect(r.v2History.exportsPreV2Rows).toBe(true);
+    expect(collectV2History([{ ...row, id: 'pre-v2', origin: undefined }]).map((m) => m.id)).toEqual(['pre-v2']);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toMatch(/linkVersion: 2,\s+v2History: collectV2History\(/);
     expect(provider).toContain('v2History = parseV2History(await media.blob.text())');

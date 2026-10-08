@@ -144,6 +144,9 @@ log "Two-browser live location e2e"
 log "Saved Messages e2e"
 "$ROOT/scripts/run_web_saved_messages_e2e.sh"
 
+log "Saved Messages on a second linked device e2e"
+"$ROOT/scripts/run_web_saved_second_device_e2e.sh"
+
 log "Offline device catch-up e2e (conformance: device was absent)"
 "$ROOT/scripts/run_web_offline_device_e2e.sh"
 

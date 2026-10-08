@@ -11,21 +11,27 @@ function row(id: string, ts: number, extra: Partial<WireStoredMessage> = {}): Wi
 }
 
 describe('LINK-1 п. 8: история v2-эпохи в экспорте линковки (T138)', () => {
-  it('в экспорт идут только строки v2 — без дублей, удалённых, шифртекста и TTL', () => {
+  it('в экспорт идут все расшифрованные строки кэша — без дублей, удалённых, шифртекста и TTL', () => {
     const history = [
       row('b', 20),
+      // строка эпохи v1 (без origin): с T110 переносится — иначе ей неоткуда взяться
       row('v1', 5, { origin: undefined }),
       row('gone', 6, { deleted: true }),
       row('enc', 7, { content: { kind: 'encrypted' } }),
+      row('genc', 7, { origin: undefined, content: { kind: 'group_encrypted' } }),
       row('ttl', 8, { content: { kind: 'text', text: 't', ttl_secs: 5 } }),
+      // режим чата принимается только из v2 (isForgedChatMode) — из v1 не переносим
+      row('mode-v1', 9, { origin: undefined, content: { kind: 'chat_mode', mode: 'plain' } as never }),
+      row('mode-v2', 11, { content: { kind: 'chat_mode', mode: 'plain' } as never }),
     ];
     const journal = [row('a', 10, { read: true, updated_at: 3 }), row('b', 20)];
     const out = collectV2History(history, journal);
-    expect(out.map((m) => m.id)).toEqual(['a', 'b']);
+    expect(out.map((m) => m.id)).toEqual(['v1', 'a', 'mode-v2', 'b']);
     // служебные поля устройства в экспорт не уезжают
+    expect(out[1]).not.toHaveProperty('origin');
+    expect(out[1].read).toBe(true);
+    expect(out[1]).not.toHaveProperty('updated_at');
     expect(out[0]).not.toHaveProperty('origin');
-    expect(out[0].read).toBe(true);
-    expect(out[0]).not.toHaveProperty('updated_at');
   });
 
   it('экспорт режется до потолка, остаются самые свежие', () => {
