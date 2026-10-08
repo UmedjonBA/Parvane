@@ -99,8 +99,9 @@ import {
 import {
   buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getBuiltinLegacyEmojiIds, getStickerBlobMime,
 } from './stickers';
-import { ParvaneStore } from './store';
+import { ParvaneStore, setTaskOfferResolver } from './store';
 import { createSyncController } from './sync';
+import { TaskOfferStore } from './taskOffers';
 import { buildBuiltinWallpapers } from './wallpapers';
 import {
   TOPIC_DEVICE_LIST,
@@ -277,6 +278,8 @@ const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 let isCallIdentityReady = false;
 const polls = new PollStore();
+const taskOffers = new TaskOfferStore();
+setTaskOfferResolver((uuid) => taskOffers.build(uuid));
 
 const reportedMissingMethods = new Set<string>();
 
@@ -286,6 +289,10 @@ let messageController: ReturnType<typeof createMessageController>;
 
 function refreshPollMessageFromSync(uuid: string) {
   messageController.refreshPollMessage(uuid);
+}
+
+function refreshTaskOfferMessageFromSync(uuid: string) {
+  messageController.refreshTaskOfferMessage(uuid);
 }
 
 function rememberSavedGifFromSync(gif: ApiVideo) {
@@ -400,6 +407,8 @@ const syncController = createSyncController({
   media: mediaService,
   polls,
   refreshPollMessage: refreshPollMessageFromSync,
+  taskOffers,
+  refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
   sendUpdate,
   log: logDebug,
@@ -507,6 +516,7 @@ messageController = createMessageController({
   localState,
   media: mediaService,
   polls,
+  taskOffers,
   sync: syncController,
   selfId,
   sendUpdate,
@@ -543,6 +553,7 @@ const connectionController = createConnectionController({
   setToken: (nextToken) => { token = nextToken; },
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
   polls,
+  taskOffers,
   onNewSession: () => {
     stateJournal.reset();
     v2Controller.reset();
@@ -554,6 +565,7 @@ const connectionController = createConnectionController({
     localState.reset();
     store.setContacts(localState.loadContacts(), localState.loadNonContacts());
     polls.reset();
+    taskOffers.reset();
   },
   onSessionReady: () => {
     void startHistoryLinkOffer();
@@ -3099,6 +3111,7 @@ const methods = {
     messageController.reset();
     localState.reset();
     polls.reset();
+    taskOffers.reset();
     if (!noSessionClear) {
       clearLoginStorage();
       if (user) {

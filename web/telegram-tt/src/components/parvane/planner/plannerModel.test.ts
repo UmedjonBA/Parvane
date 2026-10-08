@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
-  countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, findSlots, fitsBookingWindow,
-  getDayAvailability, getDayLoad, getEventsForDay, getNutrientStatistics, getNutrientStatus, getNutrientTotal,
-  getOrderedGroup, getTimeStatistics, makeFoodEntry, moveTask, normalizePlannerState, validateEvent,
-  validateSettings, validateTask,
+  countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance, expandRepeat,
+  findSlots, fitsBookingWindow, getDayAvailability, getDayLoad, getEligibleTasks, getEventsForDay,
+  getGoalRecordForDay, getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay,
+  getTimeStatistics, makeFoodEntry, moveTask, nextOpenInstance, normalizePlannerState, occursOn, removeSeries,
+  setOccurrence, setTaskDone, setTaskStepDone, splitSeries, truncateSeries, validateEvent, validateGoalRecord,
+  validateRepeat, validateSettings, validateTask,
 } from './plannerModel';
 
 // 8 октября 2026 — четверг
@@ -25,7 +27,13 @@ function stateWith(patch: Partial<PlannerState>): PlannerState {
 describe('планировщик: события и загрузка дня', () => {
   const state = stateWith({
     events: [
-      { id: '10', name: 'Созвон', start: '10:00', end: '10:30', weekdays: [1, 2, 3, 4, 5] },
+      {
+        id: '10',
+        name: 'Созвон',
+        start: '10:00',
+        end: '10:30',
+        repeat: { kind: 'weekly', interval: 1, weekdays: [1, 2, 3, 4, 5], startDay: '' },
+      },
       { id: '11', name: 'Ужин', start: '20:30', end: '22:00', day: '2026-10-22' },
     ],
     tasks: [
@@ -92,7 +100,12 @@ describe('планировщик: поиск окна и проверки вво
   it('проверки события', () => {
     expect(validateEvent({ name: 'a', start: '11:00', end: '10:00', day: TODAY })).toBe('time');
     expect(validateEvent({ name: 'a', start: '10:00', end: '11:00' })).toBe('repeat');
-    expect(validateEvent({ name: 'a', start: '10:00', end: '11:00', weekdays: [1] })).toBeUndefined();
+    expect(validateEvent({
+      name: 'a', start: '10:00', end: '11:00', repeat: { kind: 'weekly', interval: 1, weekdays: [1], startDay: '' },
+    })).toBeUndefined();
+    expect(validateEvent({
+      name: 'a', start: '10:00', end: '11:00', repeat: { kind: 'daily', interval: 1, startDay: '' },
+    })).toBe('startDay');
   });
 
   it('задача из свободного окна обязана в него поместиться', () => {
@@ -199,14 +212,200 @@ describe('планировщик: питание', () => {
         [TODAY]: {
           entries: [{ id: 'a', name: 'a', meal: 'other', kcal: 2000 }],
           isComplete: true,
-          goal: { target: 2000, tolerance: 100 },
+          fixedGoals: { kcal: { target: 2000, tolerance: 100 } },
         },
       },
-      calorieGoal: { target: 3000, tolerance: 100 },
+      goals: { kcal: { target: 3000, tolerance: 100 } },
     });
     expect(getNutrientStatus(state, TODAY, 'kcal')).toBe('ok');
     const stat = getNutrientStatistics(state, [TODAY, '2026-10-09'], 'kcal', TODAY);
     expect(stat).toMatchObject({ sum: 2000, inGoal: 1, average: 2000, goalLow: 1900, goalHigh: 2100 });
+    // SC-005: правка списка целей задним числом завершённый день не переоценивает
+    state.goalPeriods.push({
+      id: 'g', startDay: TODAY, endDay: TODAY, goals: { kcal: { target: 1000, tolerance: 50 } },
+    });
+    expect(getNutrientStatus(state, TODAY, 'kcal')).toBe('ok');
+  });
+});
+
+// ── spec 011: повторы ────────────────────────────────────────────────────────
+
+describe('планировщик: повторяющиеся события и задачи (spec 011)', () => {
+  const weekly = (weekdays: number[], startDay: string, extra = {}) => ({
+    kind: 'weekly' as const, interval: 1, weekdays, startDay, ...extra,
+  });
+
+  it('SC-001: еженедельный ряд по понедельникам и средам — весь ноябрь, до начала ряда ничего', () => {
+    const repeat = weekly([1, 3], '2026-10-12');
+    expect(expandRepeat(repeat, '2026-11-01', '2026-11-30')).toEqual([
+      '2026-11-02', '2026-11-04', '2026-11-09', '2026-11-11', '2026-11-16', '2026-11-18',
+      '2026-11-23', '2026-11-25', '2026-11-30',
+    ]);
+    expect(expandRepeat(repeat, '2026-10-01', '2026-10-11')).toEqual([]);
+    // Ряд с середины недели: понедельник той же недели не порождается, счёт идёт с первого экземпляра
+    expect(expandRepeat(weekly([1, 3], '2026-10-14', { count: 2 }), '2026-10-01', '2026-10-31'))
+      .toEqual(['2026-10-14', '2026-10-19']);
+    // Шаг две недели
+    expect(expandRepeat({ ...weekly([1], '2026-10-12'), interval: 2 }, '2026-10-01', '2026-11-30'))
+      .toEqual(['2026-10-12', '2026-10-26', '2026-11-09', '2026-11-23']);
+  });
+
+  it('SC-001: ежемесячно 31-го — в коротком месяце последний день; ежегодно 29 февраля — 28-го', () => {
+    const monthly = { kind: 'monthly' as const, interval: 1, startDay: '2026-10-31' };
+    expect(expandRepeat(monthly, '2026-11-01', '2027-03-31')).toEqual([
+      '2026-11-30', '2026-12-31', '2027-01-31', '2027-02-28', '2027-03-31',
+    ]);
+    expect(occursOn(monthly, '2028-02-29')).toBe(true);
+    expect(occursOn({ ...monthly, monthDay: 20, startDay: '2026-10-01' }, '2026-11-20')).toBe(true);
+    expect(occursOn({ ...monthly, interval: 3 }, '2027-01-31')).toBe(true);
+    expect(occursOn({ ...monthly, interval: 3 }, '2026-12-31')).toBe(false);
+    const yearly = { kind: 'yearly' as const, interval: 1, startDay: '2028-02-29' };
+    expect(expandRepeat(yearly, '2028-01-01', '2030-12-31')).toEqual(['2028-02-29', '2029-02-28', '2030-02-28']);
+  });
+
+  it('SC-001: ежедневно с числом повторов и датой конца; исключённые считаются в K', () => {
+    const daily = { kind: 'daily' as const, interval: 1, startDay: '2026-10-01', count: 10 };
+    expect(expandRepeat(daily, '2026-09-01', '2026-12-31')).toHaveLength(10);
+    expect(occursOn(daily, '2026-10-10')).toBe(true);
+    expect(occursOn(daily, '2026-10-11')).toBe(false);
+    expect(expandRepeat({ ...daily, interval: 3, count: undefined, endDay: '2026-10-10' }, '2026-09-01', '2026-12-31'))
+      .toEqual(['2026-10-01', '2026-10-04', '2026-10-07', '2026-10-10']);
+    expect(validateRepeat({ ...daily, interval: 0 })).toBe('interval');
+    expect(validateRepeat({ ...daily, endDay: '2026-09-01' })).toBe('endDay');
+    expect(validateRepeat(weekly([], TODAY))).toBe('weekdays');
+    expect(validateRepeat({ ...daily, count: 1000 })).toBe('count');
+  });
+
+  it('экземпляры задачи-ряда: выполнение одного дня не трогает следующий, шаги по дню, ближайший невыполненный', () => {
+    const state = stateWith({
+      tasks: [task({
+        id: 's', name: 'Зарядка', minutes: 15, steps: [{ text: 'а', isDone: false }, { text: 'б', isDone: false }],
+        repeat: { kind: 'daily', interval: 1, startDay: '2026-10-01', count: 10 },
+      })],
+    });
+    expect(getTasksForDay(state, TODAY)).toHaveLength(1);
+    expect(getTasksForDay(state, '2026-10-20')).toHaveLength(0);
+    const instance = getTasksForDay(state, TODAY)[0];
+    expect(instance).toMatchObject({ id: 's', instanceDay: TODAY, day: TODAY, status: 'queue' });
+    setTaskDone(state, instance, true);
+    setTaskStepDone(state, instance, 1, true);
+    expect(getTasksForDay(state, TODAY)[0])
+      .toMatchObject({ status: 'done', steps: [{ isDone: false }, { isDone: true }] });
+    expect(getTasksForDay(state, '2026-10-09')[0])
+      .toMatchObject({ status: 'queue', steps: [{ isDone: false }, { isDone: false }] });
+    expect(nextOpenInstance(state.tasks[0], TODAY)?.instanceDay).toBe('2026-10-09');
+    // В списке задач — одна строка, ближайший невыполненный экземпляр
+    expect(getEligibleTasks(state, TODAY).map((t) => t.instanceDay)).toEqual(['2026-10-09']);
+    setTaskDone(state, getTasksForDay(state, TODAY)[0], false);
+    expect(getTasksForDay(state, TODAY)[0].status).toBe('queue');
+    // Загрузка и поиск окна учитывают экземпляры
+    expect(getDayLoad(state, '2026-10-09')).toBe(15);
+  });
+
+  it('«только это»: отделённая копия с происхождением, день исключён у ряда; удаление ряда её не трогает', () => {
+    const state = stateWith({
+      events: [{ id: 'e', name: 'Бассейн', start: '19:00', end: '20:00', repeat: weekly([1, 3], '2026-10-12') }],
+    });
+    const detached = detachInstance(
+      state, 'event', 'e', '2026-10-14', { start: '20:00', end: '21:00', day: '2026-10-15' },
+    )!;
+    expect(detached).toMatchObject({ origin: { seriesId: 'e', day: '2026-10-14' }, day: '2026-10-15', start: '20:00' });
+    expect(detached.repeat).toBeUndefined();
+    expect(getEventsForDay(state, '2026-10-14')).toEqual([]);
+    expect(getEventsForDay(state, '2026-10-15').map((e) => e.id)).toEqual([detached.id]);
+    expect(getEventsForDay(state, '2026-10-19').map((e) => e.id)).toEqual(['e']);
+    excludeInstance(state, 'event', 'e', '2026-10-19');
+    expect(getEventsForDay(state, '2026-10-19')).toEqual([]);
+    removeSeries(state, 'event', 'e');
+    expect(state.events.map((e) => e.id)).toEqual([detached.id]);
+  });
+
+  it('«это и последующие»: старый ряд заканчивается днём раньше с прежними отметками, новый — с этого дня', () => {
+    const state = stateWith({
+      tasks: [task({
+        id: 's', name: 'Бассейн', start: '19:00', minutes: 60, repeat: weekly([1], '2026-10-12', { count: 6 }),
+      })],
+    });
+    setOccurrence(state, 'task', 's', '2026-10-19', { done: true });
+    setOccurrence(state, 'task', 's', '2026-11-09', { done: true });
+    const created = splitSeries(state, 'task', 's', '2026-11-02', { start: '20:00' })!;
+    expect(state.tasks[0].repeat).toMatchObject({ endDay: '2026-11-01', count: 3 });
+    expect(state.tasks[0].occurrences).toEqual([{ day: '2026-10-19', done: true }]);
+    expect(created.repeat).toMatchObject({ kind: 'weekly', startDay: '2026-11-02', count: 3 });
+    expect(created.start).toBe('20:00');
+    expect(getTasksForDay(state, '2026-10-26')[0]).toMatchObject({ id: 's', start: '19:00' });
+    expect(getTasksForDay(state, '2026-11-02')[0]).toMatchObject({ id: created.id, start: '20:00' });
+    expect(getTasksForDay(state, '2026-11-09')[0]).toMatchObject({ id: created.id, status: 'queue' });
+    // «Удалить это и последующие» — только обрезание
+    truncateSeries(state, 'task', created.id, '2026-11-16');
+    expect(getTasksForDay(state, '2026-11-16')).toEqual([]);
+    expect(getTasksForDay(state, '2026-11-09')).toHaveLength(1);
+    // Разделение на первом дне ряда — правка всего ряда
+    const whole = splitSeries(state, 'task', 's', '2026-10-12', { name: 'Плавание' })!;
+    expect(whole.id).toBe('s');
+    expect(state.tasks.find((t) => t.id === 's'))
+      .toMatchObject({ name: 'Плавание', repeat: { startDay: '2026-10-12' } });
+  });
+});
+
+// ── spec 011: цели по датам ──────────────────────────────────────────────────
+
+describe('планировщик: цели питания по датам (spec 011)', () => {
+  const base = { kcal: { target: 2000, tolerance: 100 }, water: { target: 2000, tolerance: 300 } };
+  const state = stateWith({
+    goals: base,
+    goalPeriods: [
+      { id: 'week', startDay: '2026-10-20', endDay: '2026-10-27', goals: { kcal: { target: 2500, tolerance: 100 } } },
+      { id: 'day', startDay: '2026-10-15', endDay: '2026-10-15', goals: { kcal: { target: 1500, tolerance: 100 } } },
+      { id: 'inside', startDay: '2026-10-25', endDay: '2026-10-25', goals: { kcal: { target: 1200, tolerance: 100 } } },
+      { id: 'long', startDay: '2026-11-01', endDay: '', goals: { kcal: { target: 2200, tolerance: 100 } } },
+      { id: 'short', startDay: '2026-11-01', endDay: '2026-11-03', goals: { kcal: { target: 1800, tolerance: 100 } } },
+    ],
+  });
+
+  it('SC-004: накрывающая запись — позже начатая, затем короче; иначе цели «с самого начала»', () => {
+    expect(getGoalRecordForDay(state, '2026-10-14')?.id).toBe('');
+    expect(getGoalRecordForDay(state, '2026-10-15')?.id).toBe('day');
+    expect(getGoalRecordForDay(state, '2026-10-16')?.id).toBe('');
+    expect(getGoalRecordForDay(state, '2026-10-22')?.id).toBe('week');
+    expect(getGoalRecordForDay(state, '2026-10-25')?.id).toBe('inside');
+    expect(getGoalRecordForDay(state, '2026-10-28')?.id).toBe('');
+    expect(getGoalRecordForDay(state, '2026-11-02')?.id).toBe('short');
+    expect(getGoalRecordForDay(state, '2026-11-10')?.id).toBe('long');
+    expect(getGoalRecordForDay(stateWith({ goals: {} }), TODAY)).toBeUndefined();
+    expect(validateGoalRecord({ startDay: '2026-11-05', endDay: '2026-11-01', goals: base })).toBe('endDay');
+    expect(validateGoalRecord({ startDay: '2026-11-05', endDay: '', goals: {} })).toBe('empty');
+    expect(validateGoalRecord({ startDay: '', endDay: '', goals: { fiber: { target: 10, tolerance: 20 } } }))
+      .toBe('fiber');
+  });
+
+  it('статусы по воде и клетчатке; показатель без цели — только факт', () => {
+    const food = stateWith({
+      goals: { ...base, fiber: { target: 30, tolerance: 5 } },
+      nutrition: {
+        [TODAY]: {
+          entries: [{ id: 'a', name: 'a', meal: 'lunch', kcal: 2000, fiber: 20 }],
+          isComplete: true,
+          fixedGoals: { ...base, fiber: { target: 30, tolerance: 5 } },
+          waterMl: 1500,
+        },
+        '2026-10-07': {
+          entries: [{ id: 'b', name: 'b', meal: 'lunch', kcal: 1000 }],
+          isComplete: true,
+          fixedGoals: { kcal: { target: 1000, tolerance: 100 } },
+          waterMl: 2000,
+        },
+      },
+    });
+    expect(getNutrientTotal(food, TODAY, 'water')).toEqual({ value: 1500, missing: 0, count: 1 });
+    expect(getNutrientStatus(food, TODAY, 'water')).toBe('below');
+    expect(getNutrientStatus(food, TODAY, 'fiber')).toBe('below');
+    expect(getNutrientStatus(food, TODAY, 'protein')).toBe('nogoal');
+    expect(getNutrientStatus(food, '2026-10-07', 'water')).toBe('nogoal');
+    expect(getNutrientStatus(food, '2026-10-07', 'fiber')).toBe('nogoal');
+    expect(getNutrientStatus(food, '2026-10-06', 'water')).toBe('none');
+    const stat = getNutrientStatistics(food, ['2026-10-07', TODAY], 'water', TODAY);
+    expect(stat).toMatchObject({ recorded: ['2026-10-07', TODAY], withGoal: [TODAY], inGoal: 0, average: 1750 });
   });
 });
 

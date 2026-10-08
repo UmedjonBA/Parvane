@@ -1223,3 +1223,38 @@ web `v2/planner.ts`, `controller.ts`, `provider.ts`, `plannerSync.ts`,
 (ключ своим устройствам, смена эпохи, чужой ключ игнорируется), шард
 `tests.rs key_rotate_and_container_list`; web `plannerSync.test.ts`, сторож
 `conformance.test.ts`, сценарий `scripts/e2e_web_planner_sync.mjs`.
+
+## TASK-1. Задание в чат (`task_offer` / `task_response`)
+
+**Spec 011 (8 окт 2026).** Задание — вложение сообщения v2 по образцу
+геолокации и опроса: `Content.task_offer` (поле 20; название, описание, шаги,
+дата, время, оценка в минутах, дедлайн и `text` — текстовое представление) и
+`Content.task_response` (поле 21; ссылка `offer` на карточку, решение
+`TASK_DECISION_ACCEPTED|DECLINED`, `text`). Оба — обычные сообщения класса
+`message` (вектора `content/kinds.json`: `task-offer`, `task-response-*`),
+трекаются доставкой/прочтением как текст.
+
+1. **Клиент с планировщиком (web)** рисует карточку с полями и кнопками
+   «Принять»/«Отклонить» у получателя, «В мой план» у автора; решения
+   участников показываются на карточке; решение — отдельным сообщением
+   `task_response` со ссылкой на карточку (в «Избранном» ответ не шлётся).
+2. **Принятие создаёт задачу один раз на аккаунт**: у задачи планировщика
+   поле `source {chat, op_id}`; второе устройство того же аккаунта, увидев
+   задачу с тем же `source` в контейнере, задачи не создаёт.
+3. **Клиент без планировщика (desktop, android)** показывает поле `text`
+   обоих видов как обычный текст — не заглушку «не поддерживается» — и
+   продолжает синхронизацию (следующие сообщения доставляются). Принять он
+   не может; `text` формирует отправитель.
+4. Карточка и ответы восстанавливаются из кэша истории (в отличие от
+   голосов опросов): обе строки проходят обычным конвейером сообщений.
+
+Реализации: движок `msg.rs` (`is_trackable`), вектора
+`backend/protocol/tests/vectors_content.rs`; web `v2/contentMap.ts`,
+`taskOffers.ts`, `sync.ts` (`handleTaskOfferContent`), `store.ts`,
+`messages.ts` (`parvaneSendTaskOffer`, `parvaneRespondTaskOffer`),
+`components/middle/message/TaskOffer.tsx`, `TaskOfferModal.tsx`; desktop
+`parvane-core/src/v2_content.cpp` (`v2Kind`, `fromV2` → `kind: text`);
+android `ParvaneStore.kt` (`contentFrom` → `MessageText`). Тесты: web
+`taskOffers.test.ts`, `protocol.vectors.test.ts`, сторож `conformance.test.ts`,
+сценарий `scripts/e2e_web_task_offer.mjs`; desktop `tests/v2_tests.cpp`;
+android `ProtocolV2SeamTest.kt`.

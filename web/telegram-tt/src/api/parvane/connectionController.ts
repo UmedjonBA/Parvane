@@ -1,6 +1,7 @@
 import type { ApiUpdate } from '../types';
 import type { createCallController } from './calls';
 import type { PollStore } from './polls';
+import type { TaskOfferStore } from './taskOffers';
 
 import { GatewayConnection } from './gateway';
 import { loadTrustSecret, saveTrustSecret } from './secureStorage';
@@ -32,6 +33,7 @@ type ConnectionDependencies = {
   setToken: (token: string) => void;
   setCallIdentityReady: (isReady: boolean) => void;
   polls: PollStore;
+  taskOffers: TaskOfferStore;
   onNewSession: () => void;
   // Сессия поднята (auth + хранилище): точка старта движка v2 и фоновых
   // пост-логин задач (авто-линковка истории)
@@ -396,6 +398,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
       deps.setStore(store);
       deps.polls.setSelf(user);
       deps.polls.setPeerIdResolver((address) => deps.getStore().getIdForAddress(address));
+      deps.taskOffers.setSelf(user);
+      deps.taskOffers.setPeerIdResolver((address) => deps.getStore().getIdForAddress(address));
       deps.onNewSession();
 
       deps.setCallIdentityReady(false);

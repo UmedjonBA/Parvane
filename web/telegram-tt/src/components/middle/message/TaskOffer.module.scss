@@ -1,0 +1,78 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 14rem;
+  max-width: 24rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.label {
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--accent-color);
+  text-transform: uppercase;
+}
+
+.name {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.description {
+  margin: 0;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.steps {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  font-size: 0.875rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+
+  :global(.Button) {
+    width: auto;
+  }
+}
+
+.status {
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.statusAccepted {
+  color: var(--color-green);
+}
+
+.statusDeclined {
+  color: var(--color-text-secondary);
+}
+
+.responses {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}

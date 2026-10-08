@@ -161,6 +161,7 @@ function getSummaryDescription(
     todo,
     dice,
     richMessage,
+    taskOffer,
   } = mediaContent;
   const { poll } = statefulContent || {};
 
@@ -267,6 +268,10 @@ function getSummaryDescription(
 
   if (dice) {
     summary = dice.emoticon;
+  }
+
+  if (taskOffer) {
+    summary = lang('TaskOfferSummary', { name: taskOffer.name });
   }
 
   if (richMessage) {

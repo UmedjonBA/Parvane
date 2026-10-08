@@ -33,9 +33,13 @@ const PlannerField = ({
   const inputRef = useRef<HTMLInputElement>();
 
   const [draft, setDraft] = useState(value || '');
+  // Набранное — ещё и в ref: Enter или уход фокуса сразу после ввода (быстрый набор, автозаполнение,
+  // e2e) приходили до перерисовки и применяли устаревший черновик
+  const draftRef = useRef(value || '');
 
   useEffect(() => {
     setDraft(value || '');
+    draftRef.current = value || '';
   }, [value]);
 
   const commit = useLastCallback((next: string) => {
@@ -49,19 +53,20 @@ const PlannerField = ({
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const next = e.currentTarget.value;
+    draftRef.current = next;
     setDraft(next);
     onInput?.(next);
     if (type === 'date' || type === 'time') commit(next);
   });
 
   const handleBlur = useLastCallback(() => {
-    commit(draft);
+    commit(draftRef.current);
   });
 
   const handleKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && onCommit) {
       e.preventDefault();
-      commit(draft);
+      commit(draftRef.current);
     }
   });
 

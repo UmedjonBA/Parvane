@@ -399,6 +399,45 @@
   gap: 0 0.5rem;
 }
 
+// ── повторы и цели (spec 011) ────────────────────────────────────────────────
+
+.repeat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.repeatBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--color-borders);
+}
+
+.seriesPrompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 0.75rem;
+  border-radius: var(--border-radius-default);
+
+  background: var(--color-background-secondary);
+}
+
+.goals {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.goalActive {
+  border-inline-start: 0.1875rem solid var(--color-primary);
+}
+
 .stepForm {
   display: flex;
   gap: 0.5rem;

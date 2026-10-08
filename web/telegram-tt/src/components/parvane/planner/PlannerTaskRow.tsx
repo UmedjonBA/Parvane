@@ -4,6 +4,7 @@ import type { PlannerTask } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatDay, formatProject } from './plannerFormat';
+import { instanceKey, setTaskDone } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -21,7 +22,8 @@ type OwnProps = {
   context: 'all' | 'day';
   canMoveUp?: boolean;
   canMoveDown?: boolean;
-  onOpen: (taskId: string) => void;
+  // `day` — день экземпляра ряда (spec 011)
+  onOpen: (taskId: string, day?: string) => void;
   // Стрелки порядка в очереди (T014) — только там, где передан обработчик
   onReorder?: (taskId: string, direction: -1 | 1) => void;
 };
@@ -42,19 +44,18 @@ const PlannerTaskRow = ({
   });
 
   const handleToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const status = e.currentTarget.checked ? 'done' : 'queue';
+    const checked = e.currentTarget.checked;
     updatePlanner((draft) => {
-      const target = draft.tasks.find(({ id }) => id === task.id);
-      if (target) target.status = status;
-    }, lang(status === 'done' ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
+      setTaskDone(draft, task, checked);
+    }, lang(checked ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
   });
 
   const handleOpen = useLastCallback(() => {
-    onOpen(task.id);
+    onOpen(task.id, task.instanceDay);
   });
 
   const handleDragStart = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.dataTransfer.setData(TASK_DRAG_TYPE, String(task.id));
+    e.dataTransfer.setData(TASK_DRAG_TYPE, instanceKey(task));
     e.dataTransfer.effectAllowed = 'move';
   });
 
@@ -64,12 +65,14 @@ const PlannerTaskRow = ({
   if (context === 'all') meta.push(task.day ? formatDay(lang, task.day) : formatProject(lang, task.project));
   if (task.due) meta.push(lang('PlannerDueValue', { date: formatDay(lang, task.due) }));
   if (task.steps.length) meta.push(`${task.steps.filter((step) => step.isDone).length}/${task.steps.length}`);
+  if (task.repeat) meta.push(lang('PlannerRepeatMark'));
 
   return (
     <div
       className={buildClassName(styles.task, isDone && styles.taskDone)}
       draggable
       data-task-id={task.id}
+      data-instance-day={task.instanceDay}
       onDragStart={handleDragStart}
     >
       <input

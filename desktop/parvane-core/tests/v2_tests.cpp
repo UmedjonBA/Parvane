@@ -219,6 +219,18 @@ int main() {
     }
     check(!v2::toV2(json{{"kind", "skdm"}}).has_value(), "служебный v1-вид (skdm) в v2 не уходит");
     check(!v2::fromV2(json{{"contact", {{"first_name", "A"}}}}).has_value(), "contact ← v2: нет v1-вида");
+    {
+        // TASK-1 (spec 011): задание и ответ — текст из поля text, не заглушка
+        const auto offer = v2::fromV2(json{{"task_offer", {{"name", "Отчёт"}, {"day", "2026-10-20"},
+                                                            {"text", "📋 Задание: Отчёт · 2026-10-20"}}}});
+        check(offer && (*offer)["kind"] == "text" && (*offer)["text"] == "📋 Задание: Отчёт · 2026-10-20",
+              "task_offer ← v2: текст");
+        const auto noText = v2::fromV2(json{{"task_offer", {{"name", "Отчёт"}}}});
+        check(noText && (*noText)["kind"] == "text" && (*noText)["text"] == "📋 Отчёт", "task_offer без text — имя");
+        const auto resp = v2::fromV2(json{{"task_response", {{"decision", "TASK_DECISION_ACCEPTED"}, {"text", "✅ Принято"}}}});
+        check(resp && (*resp)["kind"] == "text" && (*resp)["text"] == "✅ Принято", "task_response ← v2: текст");
+        check(v2::v2Kind(json{{"task_offer", json::object()}}) == "task_offer", "v2Kind: task_offer");
+    }
 
     // ── события "direct" ───────────────────────────────────────────────────
     {

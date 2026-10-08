@@ -167,6 +167,151 @@ try {
   await planner.getByRole('button', { name: /free slot 08:00–14:00/ }).waitFor({ timeout: STEP_TIMEOUT_MS });
   console.log('OK: настройки дня применяются к окнам');
 
+  // ── Повторы (spec 011, US1) ───────────────────────────────────────────────
+  const addDays = (key, delta) => {
+    const [y, m, d] = key.split('-').map(Number);
+    const date = new Date(y, m - 1, d + delta);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+  const weekdayShort = new Date().toLocaleDateString('en-US', { weekday: 'short' });
+  const repeatSelect = () => planner.locator('[data-repeat-kind] select').first();
+  const openDay = async (day) => {
+    await planner.getByText('Calendar', { exact: true }).first().click();
+    const cell = planner.locator(`[data-day="${day}"]`);
+    if (!(await cell.count())) {
+      // День в соседнем месяце — листаем вперёд
+      await planner.getByRole('button', { name: 'Next month' }).click();
+      await cell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    }
+    await cell.click({ position: { x: 10, y: 10 } });
+    await planner.getByText('Schedule', { exact: true }).first().click();
+    return planner.locator('aside');
+  };
+  const backToThisMonth = async () => {
+    await planner.getByRole('button', { name: 'Today' }).click();
+  };
+  // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
+  await planner.getByText('Calendar', { exact: true }).first().click();
+  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await planner.locator('select').first().selectOption('event');
+  await page.locator('#planner-new-name').fill('Йога');
+  await planner.getByLabel('Start', { exact: true }).fill('18:00');
+  await planner.getByLabel('End', { exact: true }).fill('19:00');
+  await repeatSelect().selectOption('weekly');
+  // Чекбокс форка перехватывает клик своей подписью — кликаем по подписи
+  await planner.getByText(weekdayShort, { exact: true }).click();
+  await planner.getByRole('button', { name: 'Create' }).click();
+  await planner.getByText('Added: Йога').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  let aside = await openDay(addDays(today, 7));
+  await aside.getByText('18:00–19:00').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.match(await aside.innerText(), /Йога/, 'еженедельное событие стоит через неделю');
+  await backToThisMonth();
+  aside = await openDay(addDays(today, 1));
+  assert.doesNotMatch(await aside.innerText(), /Йога/, 'завтра еженедельного события нет');
+  // Ежемесячно 31-го — в коротком месяце последний день
+  const [year, month] = today.split('-').map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+  const lastKey = `${today.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
+  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await planner.locator('select').first().selectOption('event');
+  await page.locator('#planner-new-name').fill('Аренда');
+  await planner.getByLabel('Start', { exact: true }).fill('12:00');
+  await planner.getByLabel('End', { exact: true }).fill('12:30');
+  await repeatSelect().selectOption('monthly');
+  await planner.getByLabel('Day of month').fill('31');
+  await planner.getByLabel('Starts on').fill(`${today.slice(0, 7)}-01`);
+  await planner.getByRole('button', { name: 'Create' }).click();
+  await planner.getByText('Added: Аренда').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  aside = await openDay(lastKey);
+  assert.match(await aside.innerText(), /Аренда/, `ежемесячное событие 31-го стоит в последний день (${lastKey})`);
+  console.log('OK: еженедельный и ежемесячный ряды событий');
+
+  // Задача-ряд: выполнение одного экземпляра, «только это», «это и последующие».
+  // Дата начала ряда берётся из выбранного дня — возвращаемся к сегодняшнему
+  await backToThisMonth();
+  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await page.locator('#planner-new-name').fill('Зарядка');
+  await planner.getByLabel('Duration, min').fill('15');
+  // Внутри окон дня (после шага настроек — с 08:00), иначе задача в панели дня не показывается
+  await planner.getByLabel('Start', { exact: true }).fill('10:00');
+  await repeatSelect().selectOption('daily');
+  await planner.getByRole('button', { name: 'Create' }).click();
+  await planner.getByRole('heading', { name: 'Зарядка' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByRole('button', { name: 'To the day' }).first().click();
+  aside = await openDay(today);
+  await aside.getByLabel('Done: Зарядка').check();
+  await planner.getByText('Зарядка · Done').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  aside = await openDay(addDays(today, 1));
+  assert.equal(await aside.getByLabel('Done: Зарядка').isChecked(), false, 'завтрашний экземпляр не выполнен');
+  // «Только это»: время завтрашнего экземпляра
+  await aside.getByRole('button', { name: /Зарядка/ }).first().click();
+  await planner.getByLabel('Start', { exact: true }).fill('10:30');
+  await planner.getByRole('button', { name: 'Only this' }).click();
+  await planner.getByText('Detached from a series').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  aside = await openDay(addDays(today, 1));
+  await aside.getByText('10:30–10:45').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await aside.getByRole('button', { name: /Зарядка/ }).count(), 1, 'отделённый экземпляр — один');
+  aside = await openDay(today);
+  await aside.getByText('10:00–10:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Это и последующие»: с послезавтра — 09:00
+  aside = await openDay(addDays(today, 2));
+  await aside.getByRole('button', { name: /Зарядка/ }).first().click();
+  await planner.getByLabel('Start', { exact: true }).fill('11:00');
+  await planner.getByRole('button', { name: 'This and following' }).click();
+  aside = await openDay(addDays(today, 3));
+  await aside.getByText('11:00–11:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  aside = await openDay(today);
+  await aside.getByText('10:00–10:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backToThisMonth();
+  // В списке задач ряд — одной строкой с пометкой повтора
+  await planner.getByText('Tasks', { exact: true }).first().click();
+  await planner.getByRole('button', { name: 'No list', exact: true }).click();
+  const seriesRows = planner.locator('[data-task-id]').filter({ hasText: 'Зарядка' }).filter({ hasText: 'repeats' });
+  await seriesRows.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await seriesRows.count(), 1, 'задача-ряд в списке — одной строкой');
+  console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», одна строка в списке');
+
+  // ── Цели питания по датам (spec 011, US2) ─────────────────────────────────
+  await planner.getByText('Statistics', { exact: true }).first().click();
+  await planner.getByText('Nutrition', { exact: true }).first().click();
+  await planner.getByRole('button', { name: '+ Goal for a day or a period' }).click();
+  await planner.getByLabel('From').fill(today);
+  await planner.locator('form select').first().selectOption('single');
+  await planner.getByLabel('Calories, kcal').fill('1500');
+  await planner.getByLabel('Tolerance ±').first().fill('100');
+  await planner.getByLabel('Water, ml').fill('2000');
+  await planner.getByRole('button', { name: 'Save', exact: true }).click();
+  await planner.getByText('Applies to the selected day').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Calendar', { exact: true }).first().click();
+  await todayCell.click({ position: { x: 10, y: 10 } });
+  await planner.getByText('Nutrition', { exact: true }).first().click();
+  const metric = (name) => planner.locator(`[data-metric="${name}"]`);
+  await metric('kcal').getByText('/ 1,500 kcal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await metric('fiber').getByText('No goal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.locator('details > summary').first().click();
+  // Числовые поля планировщика применяются по Enter или уходу фокуса
+  await planner.getByLabel('Water for the day, ml').fill('1500');
+  await planner.getByLabel('Water for the day, ml').press('Enter');
+  await planner.getByText('Water updated').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Day is filled in', { exact: true }).click();
+  await planner.getByText('Nutrition day completed').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await metric('water').getAttribute('data-status'), 'below', 'вода ниже цели дня');
+  assert.equal(await metric('kcal').getAttribute('data-status'), 'below', '390 ккал ниже цели 1500');
+  // Смена цели задним числом не переоценивает завершённый день (SC-005)
+  await planner.getByText('Statistics', { exact: true }).first().click();
+  await planner.getByText('Nutrition', { exact: true }).first().click();
+  await planner.locator('button').filter({ hasText: 'Applies to the selected day' }).first().click();
+  await planner.getByLabel('Calories, kcal').fill('400');
+  await planner.getByRole('button', { name: 'Save', exact: true }).click();
+  await planner.getByText('Nutrition goals updated').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Calendar', { exact: true }).first().click();
+  await todayCell.click({ position: { x: 10, y: 10 } });
+  await planner.getByText('Nutrition', { exact: true }).first().click();
+  assert.equal(await metric('kcal').getAttribute('data-status'), 'below', 'оценка завершённого дня не изменилась');
+  await metric('kcal').getByText('/ 1,500 kcal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Schedule', { exact: true }).first().click();
+  console.log('OK: цель на день, статусы воды и клетчатки, завершённый день не переоценивается');
+
   // ── Данные переживают перезагрузку; возврат в мессенджер ──────────────────
   await page.waitForTimeout(1000);
   await reloadPage(page);

@@ -1,12 +1,15 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerState, PlannerStatus, PlannerTask } from './plannerModel';
+import type { PlannerRepeatDraft } from './PlannerRepeatFields';
+import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
 import {
-  formatClock, formatDay, formatProject, formatStatus,
+  formatClock, formatDay, formatProject, formatRepeat, formatStatus,
 } from './plannerFormat';
 import {
-  findSlots, hasLunchBreak, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES, toMinutes,
+  detachInstance, excludeInstance, findSlots, hasLunchBreak, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
+  removeSeries, setTaskStepDone, splitSeries, toMinutes, truncateSeries, validateRepeat,
 } from './plannerModel';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
@@ -18,38 +21,94 @@ import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import PlannerField from './PlannerField';
+import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
+import PlannerSeriesPrompt from './PlannerSeriesPrompt';
+import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
+  // Задача, шаблон ряда либо экземпляр ряда (`instanceDay`, spec 011)
   task: PlannerTask;
   today: string;
   picked: string;
   backLabel: string;
   onBack: NoneToVoidFunction;
   onPickDay: (day: string) => void;
+  onOpenTask: (taskId: string, day?: string) => void;
 };
 
 type Slot = { day: string; start: string; end: string };
+type Pending = { kind: 'patch'; changes: Partial<PlannerTask>; notice: string } | { kind: 'delete' };
 
 const STEP_MAX_LENGTH = 160;
 
 const PlannerTaskEditor = ({
-  state, task, today, picked, backLabel, onBack, onPickDay,
+  state, task, today, picked, backLabel, onBack, onPickDay, onOpenTask,
 }: OwnProps) => {
   const lang = useLang();
 
   const [stepText, setStepText] = useState('');
   const [slots, setSlots] = useState<Slot[]>();
   const [slotHint, setSlotHint] = useState<string>();
+  const [pending, setPending] = useState<Pending>();
+  const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
+    () => repeatToDraft(task.repeat, task.day || today),
+  );
+  const [repeatError, setRepeatError] = useState<string>();
 
-  const patch = useLastCallback((changes: Partial<PlannerTask>, notice: string) => {
+  const isInstance = Boolean(task.repeat && task.instanceDay);
+
+  const patchTemplate = useLastCallback((changes: Partial<PlannerTask>, notice: string) => {
     updatePlanner((draft) => {
       const target = draft.tasks.find(({ id }) => id === task.id);
       if (target) Object.assign(target, changes);
     }, notice);
     setSlots(undefined);
+  });
+
+  // У экземпляра ряда правка полей требует выбора объёма (FR-004)
+  const patch = useLastCallback((changes: Partial<PlannerTask>, notice: string) => {
+    if (isInstance) {
+      setPending({ kind: 'patch', changes, notice });
+      return true;
+    }
+    patchTemplate(changes, notice);
+    return true;
+  });
+
+  const handleScope = useLastCallback((scope: PlannerSeriesScope) => {
+    const action = pending!;
+    const instanceDay = task.instanceDay!;
+    setPending(undefined);
+    if (action.kind === 'delete') {
+      updatePlanner((draft) => {
+        if (scope === 'one') excludeInstance(draft, 'task', task.id, instanceDay);
+        else if (scope === 'following') truncateSeries(draft, 'task', task.id, instanceDay);
+        else removeSeries(draft, 'task', task.id);
+      }, lang('PlannerNoticeTaskDeleted', { name: task.name }));
+      onBack();
+      return;
+    }
+    let detachedId: string | undefined;
+    let createdId: string | undefined;
+    updatePlanner((draft) => {
+      if (scope === 'one') {
+        detachedId = detachInstance(draft, 'task', task.id, instanceDay, action.changes)?.id;
+      } else if (scope === 'following') {
+        createdId = splitSeries(draft, 'task', task.id, instanceDay, action.changes)?.id;
+      } else {
+        const target = draft.tasks.find(({ id }) => id === task.id);
+        if (target) Object.assign(target, action.changes);
+      }
+    }, action.notice);
+    if (detachedId) onOpenTask(detachedId);
+    else if (createdId) onOpenTask(createdId, action.changes.day || instanceDay);
+  });
+
+  const handleCancelPrompt = useLastCallback(() => {
+    setPending(undefined);
   });
 
   const handleDay = useLastCallback((value: string) => {
@@ -63,7 +122,7 @@ const PlannerTaskEditor = ({
   });
 
   const handleStart = useLastCallback((value: string) => {
-    if (value && !task.day) {
+    if (value && !task.day && !task.repeat) {
       showPlannerNotice(lang('PlannerErrorNeedDay'));
       return false;
     }
@@ -97,26 +156,31 @@ const PlannerTaskEditor = ({
 
   const handleDescription = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const description = e.currentTarget.value;
+    if (isInstance) return;
     updatePlanner((draft) => {
       const target = draft.tasks.find(({ id }) => id === task.id);
       if (target) target.description = description;
     });
   });
 
+  // Шаги экземпляра отмечаются по дню, без выбора объёма (FR-005)
   const handleStepToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const index = Number(e.currentTarget.value);
     const isDone = e.currentTarget.checked;
-    patch(
-      { steps: task.steps.map((step, i) => (i === index ? { ...step, isDone } : step)) },
-      lang('PlannerNoticeStepUpdated', { name: task.steps[index].text }),
-    );
+    updatePlanner((draft) => {
+      setTaskStepDone(draft, task, index, isDone);
+    }, lang('PlannerNoticeStepUpdated', { name: task.steps[index].text }));
   });
 
   const handleStepSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const text = stepText.trim();
     if (!text) return;
-    patch({ steps: [...task.steps, { text, isDone: false }] }, lang('PlannerNoticeStepAdded'));
+    const steps = [
+      ...task.steps.map((step) => ({ text: step.text, isDone: isInstance ? false : step.isDone })),
+      { text, isDone: false },
+    ];
+    patch({ steps }, lang('PlannerNoticeStepAdded'));
     setStepText('');
   });
 
@@ -155,7 +219,38 @@ const PlannerTaskEditor = ({
     );
   });
 
+  // Правило повтора правится у всего ряда (без выбора объёма); у экземпляра — только просмотр
+  const handleRepeatSave = useLastCallback(() => {
+    const repeat = draftToRepeat(repeatDraft);
+    const problem = repeat && validateRepeat(repeat);
+    if (problem) {
+      setRepeatError(lang(REPEAT_ERROR_KEYS[problem]));
+      return;
+    }
+    setRepeatError(undefined);
+    updatePlanner((draft) => {
+      const target = draft.tasks.find(({ id }) => id === task.id);
+      if (!target) return;
+      target.repeat = repeat;
+      if (repeat) {
+        target.day = undefined;
+        target.due = undefined;
+        if (target.status === 'done') target.status = 'queue';
+      } else {
+        target.occurrences = undefined;
+      }
+    }, lang('PlannerNoticeRepeatUpdated', { name: task.name }));
+  });
+
+  const handleOpenSeries = useLastCallback(() => {
+    onOpenTask(task.id);
+  });
+
   const handleDelete = useLastCallback(() => {
+    if (isInstance) {
+      setPending({ kind: 'delete' });
+      return;
+    }
     updatePlanner((draft) => {
       draft.tasks = draft.tasks.filter(({ id }) => id !== task.id);
     }, lang('PlannerNoticeTaskDeleted', { name: task.name }));
@@ -170,9 +265,24 @@ const PlannerTaskEditor = ({
         {backLabel}
       </Button>
       <h2 className={styles.editorTitle}>{task.name}</h2>
+      {task.repeat && (
+        <p className={styles.small}>
+          {isInstance
+            ? lang('PlannerSeriesInstanceHint', { rule: formatRepeat(lang, task.repeat) })
+            : lang('PlannerSeriesTemplateHint', { rule: formatRepeat(lang, task.repeat) })}
+          {isInstance && (
+            <Button isText size="tiny" onClick={handleOpenSeries}>{lang('PlannerSeriesOpen')}</Button>
+          )}
+        </p>
+      )}
+      {task.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
       <div className={styles.fields}>
-        <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={task.day} onCommit={handleDay} />
-        <PlannerField label={lang('PlannerFieldDue')} type="date" value={task.due} onCommit={handleDue} />
+        {(!task.repeat || isInstance) && (
+          <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={task.day} onCommit={handleDay} />
+        )}
+        {!task.repeat && (
+          <PlannerField label={lang('PlannerFieldDue')} type="date" value={task.due} onCommit={handleDue} />
+        )}
         <PlannerField label={lang('PlannerFieldStart')} type="time" value={task.start} onCommit={handleStart} />
         <PlannerField
           label={lang('PlannerFieldMinutes')}
@@ -188,8 +298,8 @@ const PlannerTaskEditor = ({
       <TextArea
         label={lang('PlannerFieldDescription')}
         value={task.description}
+        disabled={isInstance}
         onChange={handleDescription}
-        noReplaceNewlines
       />
       <h3 className={styles.group}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
       {task.steps.map((step, index) => (
@@ -219,6 +329,13 @@ const PlannerTaskEditor = ({
           {state.projects.map((item) => <option key={item} value={item}>{formatProject(lang, item)}</option>)}
         </Select>
       </div>
+      {!isInstance && (
+        <div className={styles.repeatBlock}>
+          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
+          {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
+          <Button size="smaller" color="translucent" onClick={handleRepeatSave}>{lang('PlannerRepeatSave')}</Button>
+        </div>
+      )}
       <Button size="smaller" color="translucent" onClick={handleFindSlots}>{lang('PlannerFindSlots')}</Button>
       <div className={styles.slots} aria-live="polite">
         {slotHint && <span className={styles.small}>{slotHint}</span>}
@@ -234,7 +351,15 @@ const PlannerTaskEditor = ({
           </button>
         ))}
       </div>
-      <Button isText size="smaller" color="danger" onClick={handleDelete}>{lang('PlannerDeleteTask')}</Button>
+      {pending ? (
+        <PlannerSeriesPrompt
+          title={lang(pending.kind === 'delete' ? 'PlannerSeriesDeleteTitle' : 'PlannerSeriesEditTitle')}
+          onChoose={handleScope}
+          onCancel={handleCancelPrompt}
+        />
+      ) : (
+        <Button isText size="smaller" color="danger" onClick={handleDelete}>{lang('PlannerDeleteTask')}</Button>
+      )}
     </div>
   );
 };

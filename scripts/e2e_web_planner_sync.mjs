@@ -212,6 +212,54 @@ try {
   await closePlanner(sessions.bob1.page);
   console.log('OK: офлайн-правки обоих устройств слились, удалённая задача не воскресла');
 
+  // ── spec 011 (SC-002): ряд с A, отметка экземпляра с B, правка ряда с A ───
+  const seriesName = `Ряд-${suffix}`;
+  await sessions.bob1.page.evaluate(async ({ name, day }) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [{
+        task: {
+          id: `series-${day}`, name, description: '', steps: [], status: 'queue', listId: '', rank: 5,
+          day: '', start: '16:00', due: '', minutes: 20,
+          repeat: { kind: 'daily', interval: 1, weekdays: [], monthDay: 0, startDay: day, endDay: '', count: 0 },
+        },
+      }],
+    });
+    await window.__parvaneDiagCallApi('parvanePlannerFlush');
+  }, { name: seriesName, day: todayKey() });
+  await expectTaskInDay(sessions.bob2.page, seriesName, true);
+  const planner2s = await openPlanner(sessions.bob2.page);
+  await planner2s.locator('aside').getByLabel(`Done: ${seriesName}`).check();
+  await planner2s.getByText(`${seriesName} · Done`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closePlanner(sessions.bob2.page);
+  await sessions.bob1.page.evaluate(async ({ day }) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [{ task: { id: `series-${day}`, start: '17:00' } }],
+    });
+    await window.__parvaneDiagCallApi('parvanePlannerFlush');
+  }, { day: todayKey() });
+  await waitFor(async () => {
+    const state = await sessions.bob1.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+    const task = state?.state?.tasks?.find((t) => t.name === seriesName);
+    return task?.start === '17:00' && task?.occurrences?.some((o) => o.day === todayKey() && o.done);
+  }, SYNC_TIMEOUT_MS, 'на A — новое время ряда и отметка экземпляра с B');
+  await waitFor(async () => {
+    const state = await sessions.bob2.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+    const task = state?.state?.tasks?.find((t) => t.name === seriesName);
+    return task?.start === '17:00' && task?.occurrences?.some((o) => o.day === todayKey() && o.done);
+  }, SYNC_TIMEOUT_MS, 'на B — новое время ряда и своя отметка');
+  // Запись цели с A видна на B
+  await sessions.bob1.page.evaluate(async ({ day }) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [{ goalPeriod: { id: `goal-${day}`, startDay: day, endDay: day, kcal: { target: 1500, tolerance: 100 }, water: { target: 2000, tolerance: 300 } } }],
+    });
+    await window.__parvaneDiagCallApi('parvanePlannerFlush');
+  }, { day: todayKey() });
+  await waitFor(async () => {
+    const state = await sessions.bob2.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+    return state?.state?.goalPeriods?.some((g) => g.id === `goal-${todayKey()}` && g.water?.target === 2000);
+  }, SYNC_TIMEOUT_MS, 'запись цели с A на B');
+  console.log('OK: ряд, отметка экземпляра и правка ряда сходятся; запись цели синхронизируется');
+
   // ── FR-006: очередь переживает перезагрузку ───────────────────────────────
   await bob2Context.setOffline(true);
   await createTask(sessions.bob2.page, taskE, '14:00');

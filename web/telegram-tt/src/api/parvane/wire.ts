@@ -85,6 +85,18 @@ export type WireMessageContent = {
   // kind=chat_mode (протокол v2, FR-036): участник включил/выключил режим
   // «усиленная приватность» (L2) — служебное сообщение чата
   l2?: boolean;
+  // kind=task_offer (spec 011, TASK-1): задание в чат — поля задачи
+  // планировщика; `text` — представление для клиентов без планировщика.
+  // kind=task_response: `offer` (uuid карточки), `accepted`, `text`
+  name?: string;
+  description?: string;
+  steps?: string[];
+  day?: string;
+  start?: string;
+  minutes?: number;
+  due?: string;
+  offer?: string;
+  accepted?: boolean;
 };
 
 export type WireStoredMessage = {

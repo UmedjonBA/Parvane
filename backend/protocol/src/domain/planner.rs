@@ -25,8 +25,8 @@ use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::LwwStamp;
 use crate::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, GoalSet, List, NutritionDay, PlannerOp, PlannerSnapshot, Settings, Steps, Str,
-    Task, Weekdays, I32, U32,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, List, NutritionDay, Occurrence, Origin as TaskOrigin,
+    PlannerOp, PlannerSnapshot, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
 };
 
 pub const DOMAIN_NAME: &str = "parvane.planner.v1";
@@ -46,6 +46,11 @@ const MAX_NAME: usize = 200;
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_LIST_NAME: usize = 60;
 const MAX_FOOD_NAME: usize = 120;
+/// spec 011: повторы и цели по датам.
+pub const MAX_OCCURRENCES: usize = 2000;
+pub const MAX_REPEAT_INTERVAL: u32 = 99;
+pub const MAX_REPEAT_COUNT: u32 = 999;
+const MAX_CHAT: usize = 128;
 
 pub fn decode_op(bytes: &[u8]) -> Result<PlannerOp> {
     decode_checked(bytes, Origin::Client)
@@ -140,6 +145,91 @@ fn check_task(t: &Task) -> Result<()> {
             return Err(ProtoError::InvalidField("steps"));
         }
     }
+    if let Some(r) = &t.repeat {
+        check_repeat(r)?;
+    }
+    check_occurrences(&t.occurrences)?;
+    if let Some(o) = &t.origin {
+        check_origin(o)?;
+    }
+    if let Some(src) = &t.source {
+        if src.chat.len() > MAX_CHAT || src.op_id.len() > 32 || (!src.op_id.is_empty() && !src.op_id.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(ProtoError::InvalidField("source"));
+        }
+    }
+    Ok(())
+}
+
+/// Правило повтора (spec 011, data-model «Инварианты правила»).
+fn check_repeat(r: &Repeat) -> Result<()> {
+    let kind = RepeatKind::try_from(r.kind).map_err(|_| ProtoError::InvalidField("repeat"))?;
+    if kind == RepeatKind::Unspecified {
+        return Ok(());
+    }
+    if !(1..=MAX_REPEAT_INTERVAL).contains(&r.interval) {
+        return Err(ProtoError::InvalidField("interval"));
+    }
+    if r.weekdays.len() > 7 || r.weekdays.iter().any(|d| *d > 6) || r.weekdays.iter().enumerate().any(|(i, d)| r.weekdays[..i].contains(d)) {
+        return Err(ProtoError::InvalidField("weekdays"));
+    }
+    if kind == RepeatKind::Weekly && r.weekdays.is_empty() {
+        return Err(ProtoError::InvalidField("weekdays"));
+    }
+    if r.month_day > 31 || r.count > MAX_REPEAT_COUNT {
+        return Err(ProtoError::InvalidField("repeat"));
+    }
+    if !(r.start_day.is_empty() || is_day(&r.start_day)) || !(r.end_day.is_empty() || is_day(&r.end_day)) {
+        return Err(ProtoError::InvalidField("repeat_day"));
+    }
+    if !r.start_day.is_empty() && !r.end_day.is_empty() && r.end_day < r.start_day {
+        return Err(ProtoError::InvalidField("end_day"));
+    }
+    Ok(())
+}
+
+fn check_occurrences(items: &[Occurrence]) -> Result<()> {
+    if items.len() > MAX_OCCURRENCES {
+        return Err(ProtoError::InvalidField("occurrences"));
+    }
+    for o in items {
+        if !is_day(&o.day) || o.done_steps.len() > 100 || o.done_steps.iter().any(|i| *i >= 100) {
+            return Err(ProtoError::InvalidField("occurrence"));
+        }
+    }
+    Ok(())
+}
+
+fn check_origin(o: &TaskOrigin) -> Result<()> {
+    if o.series_id.len() > MAX_ID || !(o.day.is_empty() || is_day(&o.day)) {
+        return Err(ProtoError::InvalidField("origin"));
+    }
+    Ok(())
+}
+
+fn check_goal(g: &Goal) -> Result<()> {
+    if g.target == 0 || g.tolerance > g.target {
+        return Err(ProtoError::InvalidField("goal"));
+    }
+    Ok(())
+}
+
+/// Запись цели с датами: заданные показатели (`set`) — как в GoalSet.
+fn check_goal_period(p: &GoalPeriod) -> Result<()> {
+    if !is_id(&p.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    if p.stamp.is_none() && p.deleted.is_some() {
+        return Ok(());
+    }
+    if !(p.start_day.is_empty() || is_day(&p.start_day)) || !(p.end_day.is_empty() || is_day(&p.end_day)) {
+        return Err(ProtoError::InvalidField("period_day"));
+    }
+    if !p.start_day.is_empty() && !p.end_day.is_empty() && p.end_day < p.start_day {
+        return Err(ProtoError::InvalidField("end_day"));
+    }
+    for g in [&p.kcal, &p.protein, &p.fat, &p.carbs, &p.fiber, &p.water].into_iter().flatten().filter(|g| g.set) {
+        check_goal(g)?;
+    }
     Ok(())
 }
 
@@ -155,6 +245,13 @@ fn check_event(e: &Event) -> Result<()> {
         if w.days.len() > 7 || w.days.iter().any(|d| *d > 6) {
             return Err(ProtoError::InvalidField("weekdays"));
         }
+    }
+    if let Some(r) = &e.repeat {
+        check_repeat(r)?;
+    }
+    check_occurrences(&e.occurrences)?;
+    if let Some(o) = &e.origin {
+        check_origin(o)?;
     }
     Ok(())
 }
@@ -198,10 +295,8 @@ fn check_day(d: &NutritionDay) -> Result<()> {
 }
 
 fn check_goals(g: &GoalSet) -> Result<()> {
-    for goal in [&g.kcal, &g.protein, &g.fat, &g.carbs].into_iter().flatten() {
-        if goal.target == 0 || goal.tolerance > goal.target {
-            return Err(ProtoError::InvalidField("goal"));
-        }
+    for goal in [&g.kcal, &g.protein, &g.fat, &g.carbs, &g.fiber, &g.water].into_iter().flatten() {
+        check_goal(goal)?;
     }
     Ok(())
 }
@@ -234,6 +329,8 @@ pub struct PlannerState {
     pub nutrition: BTreeMap<String, NutritionDay>,
     pub settings: Option<Settings>,
     pub goals: Option<GoalSet>,
+    /// spec 011: записи целей с датами (ключ — id).
+    pub goal_periods: BTreeMap<String, GoalPeriod>,
 }
 
 /// Самая свежая метка среди полей объекта.
@@ -255,7 +352,30 @@ fn task_edit_stamp(t: &Task) -> (u64, String) {
     see(t.start.as_ref().and_then(|f| f.stamp.as_ref()));
     see(t.due.as_ref().and_then(|f| f.stamp.as_ref()));
     see(t.minutes.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.repeat.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.origin.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.source.as_ref().and_then(|f| f.stamp.as_ref()));
+    for o in &t.occurrences {
+        see(o.stamp.as_ref());
+    }
     best
+}
+
+/// Слить состояния экземпляров по дню: регистр дня целиком по метке (R2).
+fn merge_occurrences(cur: &mut Vec<Occurrence>, inc: &[Occurrence]) {
+    for o in inc {
+        match cur.iter_mut().find(|c| c.day == o.day) {
+            Some(c) => {
+                let inc_bytes = o.encode_to_vec();
+                let cur_bytes = c.encode_to_vec();
+                if is_newer(o.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
+                    *c = o.clone();
+                }
+            }
+            None => cur.push(o.clone()),
+        }
+    }
+    cur.sort_by(|a, b| a.day.cmp(&b.day));
 }
 
 fn is_alive(edit: (u64, String), deleted: Option<&LwwStamp>) -> bool {
@@ -270,12 +390,24 @@ impl PlannerState {
 
     pub fn is_event_alive(e: &Event) -> bool {
         let mut best = (0u64, String::new());
-        for s in [&e.name, &e.start, &e.end, &e.day].into_iter().flatten().filter_map(|f| f.stamp.as_ref()).chain(e.weekdays.as_ref().and_then(|w| w.stamp.as_ref())) {
+        for s in [&e.name, &e.start, &e.end, &e.day]
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f.stamp.as_ref())
+            .chain(e.weekdays.as_ref().and_then(|w| w.stamp.as_ref()))
+            .chain(e.repeat.as_ref().and_then(|r| r.stamp.as_ref()))
+            .chain(e.origin.as_ref().and_then(|o| o.stamp.as_ref()))
+            .chain(e.occurrences.iter().filter_map(|o| o.stamp.as_ref()))
+        {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
                 best = (s.lamport, s.device_id.clone());
             }
         }
         is_alive(best, e.deleted.as_ref())
+    }
+
+    pub fn is_goal_period_alive(p: &GoalPeriod) -> bool {
+        stamp_key(p.stamp.as_ref()) > stamp_key(p.deleted.as_ref())
     }
 
     pub fn is_list_alive(l: &List) -> bool {
@@ -304,6 +436,10 @@ impl PlannerState {
         merge_reg!(cur.start, inc.start, Str);
         merge_reg!(cur.due, inc.due, Str);
         merge_reg!(cur.minutes, inc.minutes, U32);
+        merge_reg!(cur.repeat, inc.repeat, Repeat);
+        merge_reg!(cur.origin, inc.origin, TaskOrigin);
+        merge_reg!(cur.source, inc.source, Source);
+        merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
 
@@ -314,7 +450,31 @@ impl PlannerState {
         merge_reg!(cur.end, inc.end, Str);
         merge_reg!(cur.weekdays, inc.weekdays, Weekdays);
         merge_reg!(cur.day, inc.day, Str);
+        merge_reg!(cur.repeat, inc.repeat, Repeat);
+        merge_reg!(cur.origin, inc.origin, TaskOrigin);
+        merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
+    }
+
+    fn merge_goal_period(&mut self, inc: &GoalPeriod) {
+        match self.goal_periods.get_mut(&inc.id) {
+            Some(c) => {
+                let inc_bytes = inc.encode_to_vec();
+                let cur_bytes = c.encode_to_vec();
+                let deleted = c.deleted.clone();
+                if is_newer(inc.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
+                    *c = inc.clone();
+                    c.deleted = deleted;
+                }
+                merge_deleted(&mut c.deleted, inc.deleted.as_ref());
+            }
+            None => {
+                // Надгробие без метки — только id и `deleted`, иначе его
+                // «попутные» поля зависели бы от порядка применения.
+                let fresh = if inc.stamp.is_none() { GoalPeriod { id: inc.id.clone(), deleted: inc.deleted.clone(), ..Default::default() } } else { inc.clone() };
+                self.goal_periods.insert(inc.id.clone(), fresh);
+            }
+        }
     }
 
     fn merge_list(&mut self, inc: &List) {
@@ -341,7 +501,7 @@ impl PlannerState {
                     }
                     merge_deleted(&mut c.deleted, e.deleted.as_ref());
                 }
-                None => cur.entries.push(e.clone()),
+                None => cur.entries.push(if e.stamp.is_none() { FoodEntry { id: e.id.clone(), deleted: e.deleted.clone(), ..Default::default() } } else { e.clone() }),
             }
         }
         cur.entries.sort_by(|a, b| a.id.cmp(&b.id));
@@ -373,6 +533,10 @@ impl PlannerState {
             Some(change::Change::Goals(g)) => {
                 check_goals(g)?;
                 merge_reg!(self.goals, Some(g.clone()), GoalSet);
+            }
+            Some(change::Change::GoalPeriod(p)) => {
+                check_goal_period(p)?;
+                self.merge_goal_period(p);
             }
             Some(change::Change::Migration(_)) | None => {}
         }
@@ -422,6 +586,10 @@ impl PlannerState {
             check_goals(g)?;
             merge_reg!(self.goals, Some(g.clone()), GoalSet);
         }
+        for p in &s.goal_periods {
+            check_goal_period(p)?;
+            self.merge_goal_period(p);
+        }
         Ok(())
     }
 
@@ -434,6 +602,7 @@ impl PlannerState {
             nutrition: self.nutrition.values().cloned().collect(),
             settings: self.settings.clone(),
             goals: self.goals.clone(),
+            goal_periods: self.goal_periods.values().cloned().collect(),
         }
     }
 
@@ -467,6 +636,12 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(t.steps.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(t.rank.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(t.minutes.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.repeat.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.origin.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.source.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                for o in &t.occurrences {
+                    push(o.stamp.as_ref())?;
+                }
                 push(t.deleted.as_ref())?;
             }
             Some(change::Change::Event(e)) => {
@@ -474,6 +649,11 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                     push(s.stamp.as_ref())?;
                 }
                 push(e.weekdays.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.repeat.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.origin.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                for o in &e.occurrences {
+                    push(o.stamp.as_ref())?;
+                }
                 push(e.deleted.as_ref())?;
             }
             Some(change::Change::List(l)) => {
@@ -492,6 +672,10 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
             }
             Some(change::Change::Settings(s)) => push(s.stamp.as_ref())?,
             Some(change::Change::Goals(g)) => push(g.stamp.as_ref())?,
+            Some(change::Change::GoalPeriod(p)) => {
+                push(p.stamp.as_ref())?;
+                push(p.deleted.as_ref())?;
+            }
             Some(change::Change::Migration(_)) | None => {}
         }
     }
@@ -533,6 +717,18 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                 if let Some(f) = &mut t.minutes {
                     f.stamp = Some(pb.clone());
                 }
+                if let Some(f) = &mut t.repeat {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut t.origin {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut t.source {
+                    f.stamp = Some(pb.clone());
+                }
+                for o in &mut t.occurrences {
+                    o.stamp = Some(pb.clone());
+                }
                 if t.deleted.is_some() {
                     t.deleted = Some(pb.clone());
                 }
@@ -543,6 +739,15 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                 }
                 if let Some(f) = &mut e.weekdays {
                     f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.repeat {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.origin {
+                    f.stamp = Some(pb.clone());
+                }
+                for o in &mut e.occurrences {
+                    o.stamp = Some(pb.clone());
                 }
                 if e.deleted.is_some() {
                     e.deleted = Some(pb.clone());
@@ -577,6 +782,13 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
             }
             Some(change::Change::Settings(s)) => s.stamp = Some(pb.clone()),
             Some(change::Change::Goals(g)) => g.stamp = Some(pb.clone()),
+            Some(change::Change::GoalPeriod(p)) => {
+                if p.deleted.is_some() {
+                    p.deleted = Some(pb.clone());
+                } else {
+                    p.stamp = Some(pb.clone());
+                }
+            }
             Some(change::Change::Migration(_)) | None => {}
         }
     }

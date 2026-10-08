@@ -161,6 +161,25 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
         // служебным сообщением («… включил(а)/выключил(а) усиленную приватность»).
         ("chat-mode-on", json!({"chat_mode": {"l2": true}}), msg(json!({"kind": "chat_mode", "l2": true}))),
         ("chat-mode-off", json!({"chat_mode": {}}), msg(json!({"kind": "chat_mode", "l2": false}))),
+        // Задание в чат (spec 011, TASK-1): видимое сообщение; клиент без
+        // планировщика показывает поле `text`.
+        (
+            "task-offer",
+            json!({"task_offer": {"name": "Отчёт", "description": "за неделю", "steps": [{"text": "собрать цифры"}],
+                "day": "2026-10-20", "start": "10:00", "minutes": 60, "due": "2026-10-21", "text": "Задание: Отчёт, 2026-10-20 10:00"}}),
+            msg(json!({"kind": "task_offer", "name": "Отчёт", "day": "2026-10-20", "start": "10:00", "minutes": 60,
+                "text": "Задание: Отчёт, 2026-10-20 10:00"})),
+        ),
+        (
+            "task-response-accepted",
+            json!({"task_response": {"offer": {"op_id": OP}, "decision": "TASK_DECISION_ACCEPTED", "text": "Принял задание «Отчёт»"}}),
+            msg(json!({"kind": "task_response", "accepted": true, "text": "Принял задание «Отчёт»"})),
+        ),
+        (
+            "task-response-declined",
+            json!({"task_response": {"offer": {"op_id": OP}, "decision": "TASK_DECISION_DECLINED"}}),
+            msg(json!({"kind": "task_response", "accepted": false})),
+        ),
     ]
 }
 
@@ -230,12 +249,18 @@ fn generate() -> Value {
     let poll = wrap(0x2a, thirteen);
     let reaction = wrap(0x5a, field(0x12, 65, b'e'));
     let op_id = wrap(0x52, wrap(0x0a, field(0x0a, 17, 1)));
+    // task_offer = поле 20: тег (20 << 3) | 2 = 0xa2 0x01 (varint)
+    let hundred_one: Vec<u8> = (0..101).flat_map(|_| wrap(0x1a, field(0x0a, 1, b's'))).collect();
+    let mut task_offer = vec![0xa2, 0x01];
+    task_offer.extend(varint(hundred_one.len()));
+    task_offer.extend(hundred_one);
     for (name, bytes) in [
         ("limit-text-65537", too_long_text),
         ("limit-waveform-257", waveform),
         ("limit-poll-13-options", poll),
         ("limit-reaction-emoji-65", reaction),
         ("limit-op-id-17", op_id),
+        ("limit-task-offer-101-steps", task_offer),
     ] {
         cases.push(json!({"name": name, "input": {"content_hex": hexs(&bytes)}, "expect": err("FieldLimit")}));
     }

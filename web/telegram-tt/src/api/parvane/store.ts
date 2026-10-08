@@ -495,6 +495,14 @@ function buildReactions(stored: WireStoredMessage): ApiMessage['reactions'] {
   };
 }
 
+// Карточка задания (spec 011) собирается из хранилища решений, которое
+// живёт в провайдере; стор получает только функцию сборки
+let resolveTaskOffer: (uuid: string) => ApiMessage['content']['taskOffer'] = () => undefined;
+
+export function setTaskOfferResolver(resolve: typeof resolveTaskOffer) {
+  resolveTaskOffer = resolve;
+}
+
 function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
   const { content, deleted, ts } = stored;
   if (deleted) {
@@ -596,6 +604,13 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       };
     case 'poll':
       return { pollId: stored.id };
+    // spec 011 (TASK-1): карточка задания; ответ — текст со ссылкой на карточку
+    case 'task_offer': {
+      const taskOffer = resolveTaskOffer(stored.id);
+      return taskOffer ? { taskOffer } : { text: { text: content.text || `📋 ${content.name || ''}` } };
+    }
+    case 'task_response':
+      return { text: { text: content.text || (content.accepted ? '✅' : '❌') } };
     case 'location': {
       const geo = {
         lat: content.lat || 0, long: content.long || 0, accessHash: '0', accuracyRadius: content.accuracy,

@@ -9,6 +9,7 @@ import type { PollStore } from './polls';
 import type { StoredPack } from './stickerPacks';
 import type { ParvaneStore } from './store';
 import type { createSyncController } from './sync';
+import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
@@ -30,6 +31,7 @@ import {
   isEmojiPackSetId,
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
+import { taskOfferText, taskResponseText } from './taskOffers';
 import { newMessageId, type WireMessageContent, type WirePackRef } from './wire';
 
 type MessageDependencies = {
@@ -39,6 +41,8 @@ type MessageDependencies = {
   localState: ReturnType<typeof createLocalState>;
   media: ReturnType<typeof createMediaService>;
   polls: PollStore;
+  // spec 011: задания в чат
+  taskOffers: TaskOfferStore;
   sync: ReturnType<typeof createSyncController>;
   selfId: () => string;
   sendUpdate: (update: ApiUpdate) => void;
@@ -178,17 +182,24 @@ export function createMessageController(deps: MessageDependencies) {
     toAddress: string,
     wireContent: Record<string, unknown>,
     uuid = newMessageId(),
+    replyTo?: string,
   ) {
     const currentStore = store();
     const ts = Math.floor(Date.now() / 1000);
     // TTL-эфемерное не журналируем — после срока сообщение не должно
     // восстанавливаться из журнала (как desktop)
     const isEphemeral = Boolean(wireContent.ttl_secs);
-    const isSent = await requireV2().trySend(toAddress, wireContent as unknown as WireMessageContent, uuid);
+    const isSent = await requireV2().trySend(toAddress, wireContent as unknown as WireMessageContent, uuid, replyTo);
     if (!isSent) throw new E2eSendError(V2_PEER_REQUIRED);
     if (!isEphemeral) {
       deps.localState.appendOwnJournal({
-        id: uuid, from: currentStore.self, to: toAddress, content: wireContent as never, ts, origin: 'v2',
+        id: uuid,
+        from: currentStore.self,
+        to: toAddress,
+        content: wireContent as never,
+        ts,
+        reply_to: replyTo,
+        origin: 'v2',
       });
     }
     return uuid;
@@ -437,6 +448,58 @@ export function createMessageController(deps: MessageDependencies) {
     currentStore.putMessage(message);
     deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
     if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
+  }
+
+  // Карточка задания обновляется как опрос: тот же `updateMessage` с полным содержимым
+  function refreshTaskOfferMessage(uuid: string) {
+    const chatId = deps.taskOffers.getChatId(uuid);
+    if (!chatId) return;
+    const currentStore = store();
+    const messageId = currentStore.allocateMessageId(chatId, uuid);
+    const taskOffer = deps.taskOffers.build(uuid);
+    const message = currentStore.getMessages(chatId).find((candidate) => candidate.id === messageId);
+    if (taskOffer && message) {
+      // В стор тоже: чат, открытый позже (после восстановления из кэша), берёт сообщения из стора,
+      // и без этого карточка показывала бы решения, какими они были на момент сборки строки
+      const updated: ApiMessage = { ...message, content: { taskOffer } };
+      currentStore.putMessage(updated);
+      deps.sendUpdate({ '@type': 'updateMessage', chatId, id: messageId, isFull: true, message: updated });
+    }
+  }
+
+  // Принятое задание — задача в планировщике получателя (spec 011, FR-019): один
+  // раз на аккаунт (поле `source` задачи), на других устройствах — через контейнер
+  type TaskOfferPlanResult = 'ok' | 'exists' | 'needs-linking' | 'no-key' | 'unavailable';
+
+  function addTaskOfferToPlan(uuid: string, toAddress: string): TaskOfferPlanResult {
+    const entry = deps.taskOffers.get(uuid);
+    const planner = deps.v2?.planner;
+    if (!entry || !planner) return 'unavailable';
+    const status = planner.status();
+    if (status === 'needs-linking' || status === 'no-key') return status;
+    const json = planner.stateJson();
+    const state = json ? JSON.parse(json) as { tasks?: { source?: { opId?: string } | null }[] } : undefined;
+    // `Source.op_id` домена — hex без дефисов (движок отвергает иные символы)
+    const opId = uuid.replace(/-/g, '');
+    if (state?.tasks?.some((task) => task.source?.opId === opId)) return 'exists';
+    planner.apply([{
+      task: {
+        id: newMessageId(),
+        name: entry.name,
+        description: entry.description,
+        steps: entry.steps.map((text) => ({ text, isDone: false })),
+        status: 'queue',
+        listId: '',
+        rank: 0,
+        day: entry.day || '',
+        start: entry.start || '',
+        due: entry.due || '',
+        // eslint-disable-next-line no-null/no-null -- JSON движка: null = «без оценки»
+        minutes: entry.minutes ?? null,
+        source: { chat: toAddress, opId },
+      },
+    }]);
+    return 'ok';
   }
 
   function refreshPollMessage(uuid: string) {
@@ -1311,6 +1374,83 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
+    // Задание в чат (spec 011, US3): карточка с полями задачи; `text` — для
+    // клиентов без планировщика (TASK-1)
+    async parvaneSendTaskOffer({ chat, offer }: {
+      chat: ApiChat;
+      offer: {
+        name: string;
+        description?: string;
+        steps?: string[];
+        day?: string;
+        start?: string;
+        minutes?: number;
+        due?: string;
+      };
+    }) {
+      const currentStore = store();
+      const toAddress = currentStore.getAddressForId(chat.id);
+      if (!toAddress) return undefined;
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+      const uuid = newMessageId();
+      const content: WireMessageContent = {
+        kind: 'task_offer',
+        name: offer.name.trim().slice(0, 200),
+        description: offer.description?.trim() || undefined,
+        steps: offer.steps?.map((step) => step.trim()).filter(Boolean).slice(0, 100),
+        day: offer.day || undefined,
+        start: offer.start || undefined,
+        minutes: offer.minutes || undefined,
+        due: offer.due || undefined,
+        text: taskOfferText(offer),
+        ttl_secs: ttlSecs || undefined,
+      };
+      deps.taskOffers.register(uuid, chat.id, content, currentStore.self);
+      await publishInner(toAddress, content, uuid);
+      // v2 свою операцию назад не присылает: строка идёт обычным конвейером сама
+      // (как `chat_mode`) — так карточка попадает в кэш истории и переживает reload
+      await deps.sync.applyExternal({
+        id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
+    },
+
+    // Решение по заданию: «принять» создаёт задачу в плане и шлёт ответ-статус;
+    // «отклонить» — только ответ. В «Избранном» ответ не публикуется (FR-022)
+    async parvaneRespondTaskOffer({ chat, messageId, isAccepted }: {
+      chat: ApiChat; messageId: number; isAccepted: boolean;
+    }): Promise<TaskOfferPlanResult> {
+      const currentStore = store();
+      const uuid = currentStore.getUuidForMessage(chat.id, messageId);
+      const toAddress = currentStore.getAddressForId(chat.id);
+      const entry = uuid ? deps.taskOffers.get(uuid) : undefined;
+      if (!uuid || !toAddress || !entry) return 'unavailable';
+      if (isAccepted) {
+        const result = addTaskOfferToPlan(uuid, toAddress);
+        if (result !== 'ok' && result !== 'exists') return result;
+      }
+      const isSelfChat = toAddress === currentStore.self;
+      if (entry.author === currentStore.self || isSelfChat) {
+        refreshTaskOfferMessage(uuid);
+        return 'ok';
+      }
+      deps.taskOffers.applyResponse(uuid, currentStore.self, isAccepted, Math.floor(Date.now() / 1000));
+      refreshTaskOfferMessage(uuid);
+      const text = taskResponseText(entry.name, isAccepted);
+      const content: WireMessageContent = { kind: 'task_response', offer: uuid, accepted: isAccepted, text };
+      const responseUuid = await publishInner(toAddress, content, undefined, uuid);
+      await deps.sync.applyExternal({
+        id: responseUuid,
+        from: currentStore.self,
+        to: toAddress,
+        content,
+        ts: Math.floor(Date.now() / 1000),
+        reply_to: uuid,
+        origin: 'v2',
+      });
+      return 'ok';
+    },
+
     // Геолокация: статичная точка или live (period в секундах) — тогда позиция
     // обновляется правками этого же сообщения (см. startLiveLocation)
     async parvaneSendLocation({
@@ -1415,5 +1555,6 @@ export function createMessageController(deps: MessageDependencies) {
     rememberSavedGif,
     resetSavedGifs,
     refreshPollMessage,
+    refreshTaskOfferMessage,
   };
 }

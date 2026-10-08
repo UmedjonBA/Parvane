@@ -32,6 +32,7 @@ import useMouseInside from '../../../hooks/useMouseInside';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Icon from '../../common/icons/Icon';
+import TaskOfferModal from '../../parvane/taskOffer/TaskOfferModal';
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
 import NestedMenuItem from '../../ui/NestedMenuItem';
@@ -108,6 +109,8 @@ const AttachMenu = ({
   const [isAttachMenuOpen, openAttachMenu, closeAttachMenu] = useFlag();
   const [handleMouseEnter, handleMouseLeave, markMouseInside] = useMouseInside(isAttachMenuOpen, closeAttachMenu);
   const [isDateModalOpen, openDateModal, closeDateModal] = useFlag();
+  // Parvane (spec 011): задание в чат — форма открывается из меню вложений
+  const [isTaskOfferOpen, openTaskOffer, closeTaskOffer] = useFlag();
 
   const canSendVideoAndPhoto = canSendPhotos && canSendVideos;
   const canSendVideoOrPhoto = canSendPhotos || canSendVideos;
@@ -224,7 +227,12 @@ const AttachMenu = ({
     openPollModal({ chatId, threadId, messageListType });
   });
 
-  if (!isButtonVisible && !isDateModalOpen) {
+  const handleTaskOfferCreate = useLastCallback(() => {
+    closeAttachMenu();
+    openTaskOffer();
+  });
+
+  if (!isButtonVisible && !isDateModalOpen && !isTaskOfferOpen) {
     return undefined;
   }
 
@@ -331,6 +339,9 @@ const AttachMenu = ({
             {canAttachToDoLists && !editingMessage && (
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
             )}
+            {!editingMessage && !isScheduled && (
+              <MenuItem icon="check" onClick={handleTaskOfferCreate}>{lang('TaskOfferMenuItem')}</MenuItem>
+            )}
             {canInsertDate && !editingMessage && (
               <MenuItem icon="calendar" onClick={handleDateMenuClick}>{lang('GiftInfoDate')}</MenuItem>
             )}
@@ -353,6 +364,7 @@ const AttachMenu = ({
         onClose={closeDateModal}
         onSubmit={onDateInsert}
       />
+      <TaskOfferModal isOpen={isTaskOfferOpen} chatId={chatId} onClose={closeTaskOffer} />
     </div>
   );
 };

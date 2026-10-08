@@ -52,9 +52,71 @@ message Steps {
 }
 
 // Дни недели повтора события (0 — воскресенье, как Date.getDay).
+// Унаследованный вид повтора (этапы 1–2): при чтении без `repeat` трактуется как
+// еженедельный ряд без нижней границы (spec 011, R5); новые правки пишут `repeat`.
 message Weekdays {
   parvane.core.v2.LwwStamp stamp = 1;
   repeated uint32 days = 2 [(parvane.core.v2.max_items) = 7];
+}
+
+// ── повторы (spec 011) ──────────────────────────────────────────────────────
+
+enum RepeatKind {
+  REPEAT_KIND_UNSPECIFIED = 0;
+  REPEAT_KIND_DAILY = 1;
+  REPEAT_KIND_WEEKLY = 2;
+  REPEAT_KIND_MONTHLY = 3;
+  REPEAT_KIND_YEARLY = 4;
+}
+
+// Правило повтора — регистр целиком под одной меткой. Хранится правило, а не
+// экземпляры: даты разворачивает клиент (research R1/R4). `kind = NONE` или
+// отсутствие регистра — разовое дело.
+message Repeat {
+  parvane.core.v2.LwwStamp stamp = 1;
+  RepeatKind kind = 2;
+  // шаг: каждые N дней/недель/месяцев/лет, 1..99
+  uint32 interval = 3;
+  // WEEKLY: дни недели (0 — воскресенье)
+  repeated uint32 weekdays = 4 [(parvane.core.v2.max_items) = 7];
+  // MONTHLY: число месяца 1..31; 0 — число start_day; в коротком месяце —
+  // последний день
+  uint32 month_day = 5;
+  // первый возможный экземпляр YYYY-MM-DD; пусто — без нижней границы
+  // (только унаследованные ряды по дням недели)
+  string start_day = 6 [(parvane.core.v2.max_len) = 10];
+  // конец ряда: до даты включительно и/или после count повторов; 0/пусто — нет
+  string end_day = 7 [(parvane.core.v2.max_len) = 10];
+  uint32 count = 8;
+}
+
+// Состояние экземпляра ряда в день `day` — регистр дня целиком: отметки разных
+// дней с двух устройств объединяются, внутри дня побеждает поздняя (R2).
+message Occurrence {
+  string day = 1 [(parvane.core.v2.max_len) = 10];
+  parvane.core.v2.LwwStamp stamp = 2;
+  // экземпляра в этот день нет (удалён «только это» или отделён)
+  bool excluded = 3;
+  // задача-ряд выполнена в этот день
+  bool done = 4;
+  // индексы отмеченных шагов в этот день
+  repeated uint32 done_steps = 5 [(parvane.core.v2.max_items) = 100];
+}
+
+// Откуда отделён экземпляр («изменить только это»): информационно, у ряда на
+// этот день стоит `excluded`.
+message Origin {
+  parvane.core.v2.LwwStamp stamp = 1;
+  string series_id = 2 [(parvane.core.v2.max_len) = 64];
+  string day = 3 [(parvane.core.v2.max_len) = 10];
+}
+
+// Задание из чата, из которого создана задача (защита от дубля на втором
+// устройстве и переход «карточка → задача»): адрес чата и op_id сообщения.
+message Source {
+  parvane.core.v2.LwwStamp stamp = 1;
+  string chat = 2 [(parvane.core.v2.max_len) = 128];
+  string op_id = 3 [(parvane.core.v2.max_len) = 32];
 }
 
 // ── объекты ─────────────────────────────────────────────────────────────────
@@ -79,6 +141,11 @@ message Task {
   U32 minutes = 11;
   // надгробие
   parvane.core.v2.LwwStamp deleted = 12;
+  // spec 011: повтор, состояние экземпляров, откуда отделена, из какого задания
+  Repeat repeat = 13;
+  repeated Occurrence occurrences = 14 [(parvane.core.v2.max_items) = 2000];
+  Origin origin = 15;
+  Source source = 16;
 }
 
 message Event {
@@ -90,6 +157,10 @@ message Event {
   // разовая дата YYYY-MM-DD; пусто — повтор по дням недели
   Str day = 6;
   parvane.core.v2.LwwStamp deleted = 7;
+  // spec 011: у события используется только `excluded` экземпляров
+  Repeat repeat = 8;
+  repeated Occurrence occurrences = 9 [(parvane.core.v2.max_items) = 2000];
+  Origin origin = 10;
 }
 
 message List {
@@ -102,15 +173,38 @@ message List {
 message Goal {
   uint32 target = 1;
   uint32 tolerance = 2;
+  // цель по показателю задана (GoalPeriod); в GoalSet задана ⇔ target > 0
+  bool set = 3;
 }
 
-// Цели по калориям и БЖУ — под одной меткой.
+// Цели по калориям, БЖУ, клетчатке и воде — под одной меткой. С spec 011 —
+// запись «с самого начала» с самым низким приоритетом (research R6).
 message GoalSet {
   parvane.core.v2.LwwStamp stamp = 1;
   Goal kcal = 2;
   Goal protein = 3;
   Goal fat = 4;
   Goal carbs = 5;
+  Goal fiber = 6;
+  // вода — мл
+  Goal water = 7;
+}
+
+// Запись цели с датами (spec 011): регистр целиком по `stamp`, надгробие.
+// Для дня действует накрывающая запись: позже начатая, затем короче, затем
+// позже изменённая; пусто в end_day — бессрочно, пусто в start_day — с начала.
+message GoalPeriod {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  string start_day = 3 [(parvane.core.v2.max_len) = 10];
+  string end_day = 4 [(parvane.core.v2.max_len) = 10];
+  Goal kcal = 5;
+  Goal protein = 6;
+  Goal fat = 7;
+  Goal carbs = 8;
+  Goal fiber = 9;
+  Goal water = 10;
+  parvane.core.v2.LwwStamp deleted = 11;
 }
 
 // Запись дневника питания — LWW-регистр целиком.
@@ -171,6 +265,7 @@ message Change {
     Settings settings = 5;
     GoalSet goals = 6;
     Migration migration = 7;
+    GoalPeriod goal_period = 8;
   }
 }
 
@@ -187,4 +282,5 @@ message PlannerSnapshot {
   repeated NutritionDay nutrition = 4 [(parvane.core.v2.max_items) = 4000];
   Settings settings = 5;
   GoalSet goals = 6;
+  repeated GoalPeriod goal_periods = 7 [(parvane.core.v2.max_items) = 1000];
 }

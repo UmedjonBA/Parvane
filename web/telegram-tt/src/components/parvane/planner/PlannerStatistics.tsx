@@ -1,16 +1,15 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
-import type { PlannerGoal, PlannerMetric, PlannerState } from './plannerModel';
+import type { PlannerGoalMetric, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
   formatDay, formatDayLong, formatHours, formatMonth, formatNumber, formatProject,
 } from './plannerFormat';
 import {
-  EVENTS_GROUP, fromDayKey, getMonthKeys, getNutrientStatistics, getNutrientTotal, getTimeStatistics, isKnownNumber,
-  PLANNER_METRICS, validateGoal,
+  EVENTS_GROUP, fromDayKey, getMonthKeys, getNutrientGoal, getNutrientStatistics, getNutrientTotal,
+  getTimeStatistics, isKnownNumber, PLANNER_GOAL_METRICS,
 } from './plannerModel';
-import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -19,6 +18,7 @@ import Button from '../../ui/Button';
 import Select from '../../ui/Select';
 import TabList from '../../ui/TabList';
 import PlannerField from './PlannerField';
+import PlannerGoals from './PlannerGoals';
 import { formatFoodStatus, formatMetric, formatMetricUnit } from './PlannerNutrition';
 
 import styles from './Planner.module.scss';
@@ -35,6 +35,7 @@ type OwnProps = {
 const CHART_LABEL_INDEXES = new Set([0, 7, 14, 21]);
 const KCAL_AXIS_STEP = 500;
 const MACRO_AXIS_STEP = 50;
+const WATER_AXIS_STEP = 500;
 
 // Статистика за месяц или день: время по спискам и питание по целям
 const PlannerStatistics = ({
@@ -45,9 +46,7 @@ const PlannerStatistics = ({
   const [content, setContent] = useState(0);
   const [isDayPeriod, setIsDayPeriod] = useState(false);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
-  const [chartMetric, setChartMetric] = useState<PlannerMetric>('kcal');
-  const [goalDrafts, setGoalDrafts] = useState<Record<string, string>>({});
-  const [goalError, setGoalError] = useState<string>();
+  const [chartMetric, setChartMetric] = useState<PlannerGoalMetric>('kcal');
 
   const days = isDayPeriod ? [picked] : getMonthKeys(month);
 
@@ -62,7 +61,7 @@ const PlannerStatistics = ({
   });
 
   const handleChartMetric = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setChartMetric(e.currentTarget.value as PlannerMetric);
+    setChartMetric(e.currentTarget.value as PlannerGoalMetric);
   });
 
   const handleHistoryClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -71,28 +70,6 @@ const PlannerStatistics = ({
 
   const handleOpenPicked = useLastCallback(() => {
     onOpenFoodDay(picked);
-  });
-
-  const handleGoalsSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const next = {} as Record<PlannerMetric, PlannerGoal>;
-    for (const metric of PLANNER_METRICS) {
-      const goal = {
-        target: Number(readGoal(metric, 'target')),
-        tolerance: Number(readGoal(metric, 'tolerance')),
-      };
-      if (!validateGoal(goal, metric === 'kcal')) {
-        setGoalError(lang('PlannerErrorGoal', { name: formatMetric(lang, metric) }));
-        return;
-      }
-      next[metric] = goal;
-    }
-    setGoalError(undefined);
-    setGoalDrafts({});
-    updatePlanner((draft) => {
-      draft.calorieGoal = next.kcal;
-      draft.macroGoals = { protein: next.protein, fat: next.fat, carbs: next.carbs };
-    }, lang('PlannerNoticeGoalsUpdated'));
   });
 
   const tabs = [{ title: lang('PlannerStatTime') }, { title: lang('PlannerStatNutrition') }];
@@ -176,11 +153,12 @@ const PlannerStatistics = ({
 
   function renderNutrition() {
     const kcal = getNutrientStatistics(state, days, 'kcal', today);
-    const goal = chartMetric === 'kcal' ? state.calorieGoal : state.macroGoals[chartMetric];
+    // Линия цели на графике — по цели выбранного дня (или сегодняшнего для месяца)
+    const goal = getNutrientGoal(state, isDayPeriod ? picked : today, chartMetric);
     const maximum = Math.max(
-      goal.target + goal.tolerance, ...days.map((day) => getNutrientTotal(state, day, chartMetric).value), 1,
+      goal ? goal.target + goal.tolerance : 0, ...days.map((day) => getNutrientTotal(state, day, chartMetric).value), 1,
     );
-    const step = chartMetric === 'kcal' ? KCAL_AXIS_STEP : MACRO_AXIS_STEP;
+    const step = chartMetric === 'kcal' ? KCAL_AXIS_STEP : chartMetric === 'water' ? WATER_AXIS_STEP : MACRO_AXIS_STEP;
     const ceiling = Math.ceil(maximum / step) * step;
     const fiberDays = days.filter((day) => {
       const total = getNutrientTotal(state, day, 'fiber');
@@ -220,10 +198,10 @@ const PlannerStatistics = ({
             </tr>
           </thead>
           <tbody>
-            {PLANNER_METRICS.map((metric) => {
+            {PLANNER_GOAL_METRICS.map((metric) => {
               const stat = getNutrientStatistics(state, days, metric, today);
               return (
-                <tr key={metric}>
+                <tr key={metric} data-metric={metric}>
                   <td>{formatMetric(lang, metric)}</td>
                   <td>
                     {stat.average === undefined
@@ -231,8 +209,8 @@ const PlannerStatistics = ({
                       : `${formatNumber(lang, stat.average)} ${formatMetricUnit(lang, metric)}`}
                   </td>
                   <td>
-                    {stat.complete.length
-                      ? `${stat.inGoal} / ${stat.complete.length} · ${toPercent(stat.inGoal, stat.complete.length)}%`
+                    {stat.withGoal.length
+                      ? `${stat.inGoal} / ${stat.withGoal.length} · ${toPercent(stat.inGoal, stat.withGoal.length)}%`
                       : '—'}
                   </td>
                 </tr>
@@ -241,7 +219,9 @@ const PlannerStatistics = ({
           </tbody>
         </table>
         <Select label={lang('PlannerStatChartMetric')} value={chartMetric} hasArrow onChange={handleChartMetric}>
-          {PLANNER_METRICS.map((metric) => <option key={metric} value={metric}>{formatMetric(lang, metric)}</option>)}
+          {PLANNER_GOAL_METRICS.map((metric) => (
+            <option key={metric} value={metric}>{formatMetric(lang, metric)}</option>
+          ))}
         </Select>
         <div
           className={styles.chart}
@@ -252,8 +232,8 @@ const PlannerStatistics = ({
             <span>{formatNumber(lang, ceiling)}</span>
             <span>0</span>
           </div>
-          <div className={styles.chartBars} style={`--planner-goal: ${(goal.target / ceiling) * 100}%`}>
-            <span className={styles.chartGoal} />
+          <div className={styles.chartBars} style={`--planner-goal: ${goal ? (goal.target / ceiling) * 100 : 0}%`}>
+            {goal && <span className={styles.chartGoal} />}
             {days.map((day, index) => {
               const total = getNutrientTotal(state, day, chartMetric);
               const isEmpty = !total.count || total.missing === total.count;
@@ -278,21 +258,7 @@ const PlannerStatistics = ({
           </div>
         </div>
         <p className={styles.small}>{lang('PlannerStatChartNote')}</p>
-        <form className={styles.form} onSubmit={handleGoalsSubmit}>
-          <h3 className={styles.group}>{lang('PlannerGoalsTitle')}</h3>
-          <div className={styles.fields}>
-            {PLANNER_METRICS.map((metric) => (
-              <div key={metric} className={styles.goalPair}>
-                {renderGoal(metric, 'target', lang('PlannerGoalTarget', {
-                  name: formatMetric(lang, metric), unit: formatMetricUnit(lang, metric),
-                }))}
-                {renderGoal(metric, 'tolerance', lang('PlannerGoalTolerance'))}
-              </div>
-            ))}
-          </div>
-          {goalError && <p className={styles.error} role="alert">{goalError}</p>}
-          <Button type="submit" size="smaller">{lang('Save')}</Button>
-        </form>
+        <PlannerGoals state={state} picked={isDayPeriod ? picked : today} />
         <p className={styles.small}>
           {fiberDays.length
             ? lang('PlannerStatFiber', {
@@ -331,25 +297,6 @@ const PlannerStatistics = ({
           {lang('PlannerStatOpenDiary')}
         </Button>
       </div>
-    );
-  }
-
-  function readGoal(metric: PlannerMetric, part: 'target' | 'tolerance') {
-    const draft = goalDrafts[`${metric}.${part}`];
-    if (draft !== undefined) return draft;
-    return String((metric === 'kcal' ? state.calorieGoal : state.macroGoals[metric])[part]);
-  }
-
-  function renderGoal(metric: PlannerMetric, part: 'target' | 'tolerance', label: string) {
-    return (
-      <PlannerField
-        label={label}
-        type="number"
-        value={readGoal(metric, part)}
-        min={0}
-        step={metric === 'kcal' ? 1 : 'any'}
-        onInput={(value) => setGoalDrafts((previous) => ({ ...previous, [`${metric}.${part}`]: value }))}
-      />
     );
   }
 };

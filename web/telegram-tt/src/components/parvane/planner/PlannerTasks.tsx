@@ -5,7 +5,7 @@ import type { PlannerState, PlannerStatus } from './plannerModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatProject, formatStatus } from './plannerFormat';
 import {
-  ensureList, getCompletedTasks, getEligibleTasks, moveTask,
+  ensureList, getCompletedTasks, getEligibleTasks, instanceKey, moveTask,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -20,9 +20,10 @@ import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
+  today: string;
   selectedProject: string;
   onSelectProject: (project: string) => void;
-  onOpenTask: (taskId: string) => void;
+  onOpenTask: (taskId: string, day?: string) => void;
   onCreateTask: NoneToVoidFunction;
 };
 
@@ -31,7 +32,7 @@ const LIST_NAME_MAX_LENGTH = 60;
 
 // Задачи без дедлайна по спискам; задачи с дедлайном живут в календаре
 const PlannerTasks = ({
-  state, selectedProject, onSelectProject, onOpenTask, onCreateTask,
+  state, today, selectedProject, onSelectProject, onOpenTask, onCreateTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -54,12 +55,12 @@ const PlannerTasks = ({
 
   const handleReorder = useLastCallback((taskId: string, direction: -1 | 1) => {
     updatePlanner((draft) => {
-      moveTask(draft, taskId, direction);
+      moveTask(draft, taskId, direction, today);
     }, lang('PlannerNoticeReordered'));
   });
 
-  // Порядок — как в `getOrderedGroup`: по рангу, при равных — по id
-  const subset = getEligibleTasks(state)
+  // Порядок — как в `getOrderedGroup`: по рангу, при равных — по id; задача-ряд — ближайшим экземпляром
+  const subset = getEligibleTasks(state, today)
     .filter((task) => task.project === selectedProject)
     .sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1));
   const completed = getCompletedTasks(state);
@@ -101,7 +102,7 @@ const PlannerTasks = ({
               <h3 className={styles.group}>{formatStatus(lang, status)}</h3>
               {group.map((task, index) => (
                 <PlannerTaskRow
-                  key={task.id}
+                  key={instanceKey(task)}
                   task={task}
                   context="all"
                   canMoveUp={index > 0}
