@@ -2422,6 +2422,10 @@ export interface LangPair {
   'PlannerErrorSettingsMargin': undefined;
   'PlannerErrorSettingsBudget': undefined;
   'PlannerNoticeReordered': undefined;
+  'PlannerNeedsLinking': undefined;
+  'PlannerSyncUnavailable': undefined;
+  'PlannerSyncPending': undefined;
+  'PlannerNearLimit': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

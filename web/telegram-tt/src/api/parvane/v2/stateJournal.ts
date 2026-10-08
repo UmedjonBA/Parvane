@@ -364,6 +364,24 @@ export function createStateJournal(deps: Deps) {
   // ── история звонков (D-08): явная запись, не разница снимков ──────────────
 
   /** Завершённый звонок по v2 — в журнал: виден на всех своих устройствах и после reload. */
+  // ── контейнер планировщика (spec 010) ──────────────────────────────────────
+
+  /** Контейнер планировщика, объявленный любым своим устройством: {domain, id(hex)}. */
+  function plannerContainer(): { domain: string; id: string } | undefined {
+    const ref = (readSnapshot().planner_container as { ref?: { domain?: string; id?: string } } | undefined)?.ref;
+    if (!ref?.domain || !ref.id) return undefined;
+    return { domain: ref.domain, id: b64ToHex(ref.id) };
+  }
+
+  /** Объявить свой контейнер планировщика (LWW-регистр, один на пользователя). */
+  function recordPlannerContainer(ref: { domain: string; id: string }) {
+    void serial(async () => {
+      if (!session) return;
+      pendingAppends.push(...session.plannerContainerSet(ref.domain, ref.id));
+      await pushAppends();
+    }).catch((e: unknown) => deps.log(`v2: запись контейнера планировщика в журнал состояния: ${String(e)}`));
+  }
+
   function recordCall(record: WireCallRecord) {
     void serial(async () => {
       if (!session) return;
@@ -802,6 +820,8 @@ export function createStateJournal(deps: Deps) {
     recordChatCleared,
     recordGroupInvite,
     removeGroupInvite,
+    plannerContainer,
+    recordPlannerContainer,
     reset: detach,
     syncNow,
   };

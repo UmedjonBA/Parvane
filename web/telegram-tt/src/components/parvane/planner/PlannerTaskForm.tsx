@@ -8,7 +8,7 @@ import {
   formatDay, formatDuration, formatProject, formatStatus, formatWeekday,
 } from './plannerFormat';
 import {
-  fitsBookingWindow, PLANNER_STATUSES, toTime, validateEvent, validateTask,
+  ensureList, fitsBookingWindow, newId, PLANNER_STATUSES, toTime, validateEvent, validateTask,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -35,7 +35,7 @@ export type PlannerFormParams = {
 type OwnProps = {
   state: PlannerState;
   params: PlannerFormParams;
-  onCreated: (taskId?: number) => void;
+  onCreated: (taskId?: string) => void;
   onCancel: NoneToVoidFunction;
 };
 
@@ -123,7 +123,7 @@ const PlannerTaskForm = ({
         return;
       }
       updatePlanner((draft) => {
-        draft.events.push({ ...event, id: draft.nextId++ });
+        draft.events.push({ ...event, id: newId() });
       }, lang('PlannerNoticeAdded', { name: event.name }));
       onCreated();
       return;
@@ -145,11 +145,12 @@ const PlannerTaskForm = ({
       setError(lang('PlannerErrorOutsideWindow', { from: toTime(slot.start), to: toTime(slot.end) }));
       return;
     }
-    const taskId = state.nextId;
+    const taskId = newId();
     updatePlanner((draft) => {
+      ensureList(draft, project);
       draft.tasks.push({
         ...task,
-        id: draft.nextId++,
+        id: taskId,
         description: description.trim(),
         steps: [],
         status,

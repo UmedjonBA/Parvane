@@ -282,3 +282,22 @@ proptest! {
         prop_assert_eq!(apply_all(&forward), apply_all(&twice));
     }
 }
+
+#[test]
+fn five_thousand_ops_apply_and_snapshot_fast() {
+    // US4 (T029): чистое устройство проигрывает длинную историю быстро.
+    let mut st = PlannerState::default();
+    let started = std::time::Instant::now();
+    for i in 0..5000u64 {
+        let id = format!("t{}", i % 500);
+        let t = Task { id: id.clone(), name: s(&format!("Задача {i}"), i + 1, "d1"), status: s(if i % 7 == 0 { "done" } else { "queue" }, i + 1, "d1"), ..Default::default() };
+        st.apply_op(&op(vec![change::Change::Task(t)]), "d1").unwrap();
+    }
+    let snapshot = st.to_snapshot();
+    let bytes = snapshot.encode_to_vec();
+    let restored = PlannerState::from_snapshot(&snapshot).unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(restored.tasks.len(), 500);
+    assert!(bytes.len() < SNAPSHOT_WARN_BYTES, "снимок {} байт", bytes.len());
+    assert!(elapsed.as_secs_f64() < 1.0, "5000 операций и снимок заняли {elapsed:?}");
+}

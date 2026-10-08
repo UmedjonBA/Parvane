@@ -78,6 +78,21 @@ basic_auth в Caddyfile (архив в README, раздел «Регистрац
 - Вручную: `~/parvane/backup.sh`
 - Проверить снимок: `docker run --rm -v ~/parvane/backups:/bak alpine sh -c 'apk add -q sqlite; sqlite3 /bak/messenger-<дата>.sqlite "PRAGMA integrity_check"'`
 
+## Шард `domains` (spec 010, планировщик на сервере; с 8 окт 2026)
+
+- Сервис `domains` в compose (образ тот же `parvane-shards`), том `parvane_db-domains`, база только v2 —
+  `/data/domains.db-v2.db` (журналы контейнеров `container_log`, гранты, снимки; содержимое — шифртекст).
+  NATS-пользователь `domains`, пароль `PARVANE_DOMAINS_PASS`: `deploy.sh` дописывает его в существующий
+  `.env` при первом деплое с этим шардом; `server.prod.conf` содержит блоки `>>> v2 domains` (gen_registry).
+- Первый деплой с шардом: образ собран с `-p domains`, `server.prod.conf` с пользователем `domains`, compose с
+  сервисом; `deploy.sh` делает HUP NATS до `up` (иначе Subscription Violation). Проверка:
+  `docker compose logs domains` → «Domains шард запущен. Методы v2: domain.container.create, …».
+- Бэкап: цикл `backup.sh` на сервере включает `domains` (см. выше; при обновлении скрипта на сервере — добавить
+  в список). Откат: сервис можно остановить (`docker compose stop domains`) — web покажет «синхронизация
+  планировщика недоступна» и продолжит работать с локальной очередью; данные в томе не теряются.
+- Потолки каркаса: операция ≤ 256 КБ, снимок ≤ 1 МБ, журнал грантов ≤ `MAX_GRANT_LOG`; страница синка —
+  `SYNC_MAX_BYTES` (716 800).
+
 ## Ключи подписи (P-11)
 
 Ключ подписи JWT и приватный VAPID-ключ больше НЕ лежат в SQLite:
@@ -99,7 +114,7 @@ basic_auth в Caddyfile (архив в README, раздел «Регистрац
 ```bash
 D=2026-09-01                                # нужная дата
 docker compose stop identity messenger cloud call preview push
-for s in identity messenger cloud call preview push; do
+for s in identity messenger cloud call preview push domains; do
   docker run --rm -v parvane_db:/data -v ~/parvane/backups:/bak alpine \
     sh -c "cp /bak/$s-$D.sqlite /data/$s.db && rm -f /data/$s.db-wal /data/$s.db-shm"
 done
@@ -343,7 +358,7 @@ parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рук
 
   ```bash
   docker compose stop identity messenger cloud call preview push
-  for s in identity messenger cloud call preview push; do
+  for s in identity messenger cloud call preview push domains; do
     docker run --rm -v parvane_db:/old -v parvane_db-$s:/data alpine sh -c \
       "cp -a /old/$s.db* /data/ 2>/dev/null; cp -a /old/$s-* /data/ 2>/dev/null; \
        chown -R 10001:10001 /data"

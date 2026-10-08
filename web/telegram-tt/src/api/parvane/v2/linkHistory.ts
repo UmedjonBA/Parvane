@@ -78,3 +78,17 @@ export function parseV2History(stateJson: string): WireStoredMessage[] {
   });
   return Array.from(byId.values()).sort(byTime);
 }
+
+/** Ключи контейнера планировщика из экспорта линковки (spec 010) — JSON для
+ * движка (`plannerKeysImport`); нет поля или мусор — undefined. */
+export function parseLinkPlannerKeys(stateJson: string): string | undefined {
+  try {
+    const planner = (JSON.parse(stateJson) as { planner?: unknown }).planner;
+    if (!planner || typeof planner !== 'object') return undefined;
+    const p = planner as { domain?: unknown; id?: unknown; keys?: unknown };
+    if (typeof p.domain !== 'string' || typeof p.id !== 'string' || !Array.isArray(p.keys)) return undefined;
+    return JSON.stringify({ domain: p.domain, id: p.id, keys: p.keys });
+  } catch {
+    return undefined;
+  }
+}

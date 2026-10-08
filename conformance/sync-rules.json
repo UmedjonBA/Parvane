@@ -1199,6 +1199,21 @@
         "android": "android/jni/parvane_jni.cpp (makeTransport → BridgeTransport, v1Absent, legacyV1, presence); сценарий — блок disabled в android/tgx_protocol_v2_flow.sh desktop2-android2 (X отмечает отключение v1, диалога нет, сессия остаётся); переписка X при отключённом v1 отдельным сценарием не покрыта"
       },
       "prefersV1Note": "класс «v1, если жив» — только у ядра desktop/android до их T110; web список и отзыв устройств ведёт методами v2 всегда"
+    },
+    {
+      "id": "DOMAIN-1",
+      "title": "Домены протокола v2 (планировщик parvane.planner.v1): чужой домен игнорируется, ключи контейнеров едут своим устройствам",
+      "domain": "parvane.planner.v1",
+      "keyShareKind": "container_key",
+      "linkExportField": "planner",
+      "rotateMethod": "domain.key.rotate",
+      "snapshotEvery": 200,
+      "ignoreUnknownDomain": true,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/planner.ts (жизненный цикл контейнера, очередь), controller.ts (событие plannerChanged, planner), provider.ts (экспорт/импорт ключей в линковке); сценарий scripts/e2e_web_planner_sync.mjs",
+        "desktop": "движок общий (backend/protocol/src/client_planner.rs): ключ контейнера принимается и хранится, раздела «План» нет; тест client_flow.rs planner_container_shared_with_own_devices_and_rotated_on_revoke, planner_key_from_stranger_is_ignored",
+        "android": "движок общий (тот же тест); раздела «План» нет"
+      }
     }
   ]
 }

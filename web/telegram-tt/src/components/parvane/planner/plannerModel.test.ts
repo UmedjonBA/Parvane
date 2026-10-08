@@ -14,7 +14,7 @@ const TODAY = '2026-10-08';
 
 function task(patch: Partial<PlannerTask>): PlannerTask {
   return {
-    id: 1, name: 'Задача', description: '', steps: [], status: 'queue', project: '', rank: 1, ...patch,
+    id: '1', name: 'Задача', description: '', steps: [], status: 'queue', project: '', rank: 1, ...patch,
   };
 }
 
@@ -25,20 +25,20 @@ function stateWith(patch: Partial<PlannerState>): PlannerState {
 describe('планировщик: события и загрузка дня', () => {
   const state = stateWith({
     events: [
-      { id: 10, name: 'Созвон', start: '10:00', end: '10:30', weekdays: [1, 2, 3, 4, 5] },
-      { id: 11, name: 'Ужин', start: '20:30', end: '22:00', day: '2026-10-22' },
+      { id: '10', name: 'Созвон', start: '10:00', end: '10:30', weekdays: [1, 2, 3, 4, 5] },
+      { id: '11', name: 'Ужин', start: '20:30', end: '22:00', day: '2026-10-22' },
     ],
     tasks: [
-      task({ id: 1, day: TODAY, start: '10:15', minutes: 30 }),
-      task({ id: 2, day: TODAY, minutes: 90 }),
-      task({ id: 3, day: TODAY }),
+      task({ id: '1', day: TODAY, start: '10:15', minutes: 30 }),
+      task({ id: '2', day: TODAY, minutes: 90 }),
+      task({ id: '3', day: TODAY }),
     ],
   });
 
   it('повтор по дням недели и разовая дата', () => {
-    expect(getEventsForDay(state, TODAY).map(({ id }) => id)).toEqual([10]);
+    expect(getEventsForDay(state, TODAY).map(({ id }) => id)).toEqual(['10']);
     expect(getEventsForDay(state, '2026-10-10')).toEqual([]);
-    expect(getEventsForDay(state, '2026-10-22').map(({ id }) => id)).toEqual([10, 11]);
+    expect(getEventsForDay(state, '2026-10-22').map(({ id }) => id)).toEqual(['10', '11']);
   });
 
   it('загрузка — события плюс оценки задач, без оценки не считается', () => {
@@ -62,7 +62,7 @@ describe('планировщик: события и загрузка дня', ()
 describe('планировщик: поиск окна и проверки ввода', () => {
   it('окно ищется с запасом 15 минут и мимо обеда', () => {
     const state = stateWith({
-      tasks: [task({ id: 1, day: TODAY, start: '09:00', minutes: 60 }), task({ id: 2, minutes: 120 })],
+      tasks: [task({ id: '1', day: TODAY, start: '09:00', minutes: 60 }), task({ id: '2', minutes: 120 })],
     });
     const [first] = findSlots(state, state.tasks[1], TODAY, TODAY);
     expect(first).toEqual({ day: TODAY, start: '10:15', end: '12:15' });
@@ -71,7 +71,7 @@ describe('планировщик: поиск окна и проверки вво
   it('день сверх бюджета пропускается, дедлайн ограничивает поиск', () => {
     const state = stateWith({
       budget: 120,
-      tasks: [task({ id: 1, day: TODAY, minutes: 100 }), task({ id: 2, minutes: 60, due: '2026-10-09' })],
+      tasks: [task({ id: '1', day: TODAY, minutes: 100 }), task({ id: '2', minutes: 60, due: '2026-10-09' })],
     });
     expect(findSlots(state, state.tasks[1], TODAY, TODAY).map(({ day }) => day)).toEqual(['2026-10-09']);
   });
@@ -110,7 +110,7 @@ describe('планировщик: настройки дня и порядок о
       settings: {
         dayStart: 480, dayEnd: 1080, lunchStart: 0, lunchEnd: 0, margin: 0,
       },
-      tasks: [task({ id: 1, day: TODAY, start: '08:00', minutes: 60 }), task({ id: 2, minutes: 120 })],
+      tasks: [task({ id: '1', day: TODAY, start: '08:00', minutes: 60 }), task({ id: '2', minutes: 120 })],
     });
     expect(getDayAvailability(state, TODAY).free).toEqual([{ start: 540, end: 1080 }]);
     // Без перерыва и запаса окно начинается сразу после задачи
@@ -146,20 +146,20 @@ describe('планировщик: настройки дня и порядок о
   it('стрелки меняют задачу местами с соседом того же списка и статуса, у края — ничего', () => {
     const state = stateWith({
       tasks: [
-        task({ id: 1, rank: 0 }),
-        task({ id: 2, rank: 0 }),
-        task({ id: 3, rank: 0, status: 'active' }),
-        task({ id: 4, rank: 0, project: 'Дом' }),
+        task({ id: '1', rank: 0 }),
+        task({ id: '2', rank: 0 }),
+        task({ id: '3', rank: 0, status: 'active' }),
+        task({ id: '4', rank: 0, project: 'Дом' }),
       ],
     });
-    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual([1, 2]);
-    expect(moveTask(state, 1, -1)).toBe(false);
-    expect(moveTask(state, 2, -1)).toBe(true);
-    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual([2, 1]);
-    expect(moveTask(state, 2, 1)).toBe(true);
-    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual([1, 2]);
-    expect(moveTask(state, 3, 1)).toBe(false);
-    expect(moveTask(state, 99, 1)).toBe(false);
+    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual(['1', '2']);
+    expect(moveTask(state, '1', -1)).toBe(false);
+    expect(moveTask(state, '2', -1)).toBe(true);
+    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual(['2', '1']);
+    expect(moveTask(state, '2', 1)).toBe(true);
+    expect(getOrderedGroup(state, state.tasks[0]).map(({ id }) => id)).toEqual(['1', '2']);
+    expect(moveTask(state, '3', 1)).toBe(false);
+    expect(moveTask(state, '99', 1)).toBe(false);
   });
 });
 
@@ -178,8 +178,8 @@ describe('планировщик: питание', () => {
       nutrition: {
         [TODAY]: {
           entries: [
-            { name: 'a', meal: 'lunch', kcal: 1000, protein: 60 },
-            { name: 'b', meal: 'dinner', kcal: 1050 },
+            { id: 'a', name: 'a', meal: 'lunch', kcal: 1000, protein: 60 },
+            { id: 'b', name: 'b', meal: 'dinner', kcal: 1050 },
           ],
           isComplete: true,
         },
@@ -197,7 +197,7 @@ describe('планировщик: питание', () => {
     const state = stateWith({
       nutrition: {
         [TODAY]: {
-          entries: [{ name: 'a', meal: 'other', kcal: 2000 }],
+          entries: [{ id: 'a', name: 'a', meal: 'other', kcal: 2000 }],
           isComplete: true,
           goal: { target: 2000, tolerance: 100 },
         },
@@ -214,11 +214,11 @@ describe('планировщик: статистика времени и хра�
   it('время по спискам и событиям; скрытая группа не входит в сумму', () => {
     const state = stateWith({
       projects: ['', 'Учёба'],
-      events: [{ id: 5, name: 'e', start: '10:00', end: '11:00', day: TODAY }],
+      events: [{ id: '5', name: 'e', start: '10:00', end: '11:00', day: TODAY }],
       tasks: [
-        task({ id: 1, day: TODAY, minutes: 30, project: 'Учёба' }),
-        task({ id: 2, day: TODAY }),
-        task({ id: 3, minutes: 500 }),
+        task({ id: '1', day: TODAY, minutes: 30, project: 'Учёба' }),
+        task({ id: '2', day: TODAY }),
+        task({ id: '3', minutes: 500 }),
       ],
     });
     const all = getTimeStatistics(state, [TODAY], new Set());
@@ -232,15 +232,15 @@ describe('планировщик: статистика времени и хра�
     expect(normalizePlannerState({ version: 2, tasks: [] })).toEqual(createEmptyPlannerState());
     const restored = normalizePlannerState({
       version: 1,
-      tasks: [{ id: 7, name: 'x', status: 'nonsense', project: 'Дом', day: 'вчера', minutes: 2 }],
-      events: [{ id: 9, name: 'e', start: '25:00', end: '26:00' }],
+      tasks: [{ id: '7', name: 'x', status: 'nonsense', project: 'Дом', day: 'вчера', minutes: 2 }],
+      events: [{ id: '9', name: 'e', start: '25:00', end: '26:00' }],
       projects: ['Работа'],
     });
-    expect(restored.tasks[0]).toMatchObject({ id: 7, status: 'queue', project: 'Дом', description: '', steps: [] });
+    expect(restored.tasks[0]).toMatchObject({ id: '7', status: 'queue', project: 'Дом', description: '', steps: [] });
     expect(restored.tasks[0].day).toBeUndefined();
     expect(restored.tasks[0].minutes).toBeUndefined();
     expect(restored.events).toEqual([]);
     expect(restored.projects).toEqual(['', 'Работа', 'Дом']);
-    expect(restored.nextId).toBe(8);
+    expect(restored.lists.map((list) => list.name)).toEqual(['Работа', 'Дом']);
   });
 });

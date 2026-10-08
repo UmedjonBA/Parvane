@@ -4,7 +4,9 @@ import type { PlannerState, PlannerStatus } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatProject, formatStatus } from './plannerFormat';
-import { getCompletedTasks, getEligibleTasks, moveTask } from './plannerModel';
+import {
+  ensureList, getCompletedTasks, getEligibleTasks, moveTask,
+} from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -20,7 +22,7 @@ type OwnProps = {
   state: PlannerState;
   selectedProject: string;
   onSelectProject: (project: string) => void;
-  onOpenTask: (taskId: number) => void;
+  onOpenTask: (taskId: string) => void;
   onCreateTask: NoneToVoidFunction;
 };
 
@@ -44,13 +46,13 @@ const PlannerTasks = ({
     const name = newList.trim();
     if (!name || state.projects.includes(name)) return;
     updatePlanner((draft) => {
-      draft.projects.push(name);
+      ensureList(draft, name);
     }, lang('PlannerNoticeListCreated', { name }));
     onSelectProject(name);
     setNewList('');
   });
 
-  const handleReorder = useLastCallback((taskId: number, direction: -1 | 1) => {
+  const handleReorder = useLastCallback((taskId: string, direction: -1 | 1) => {
     updatePlanner((draft) => {
       moveTask(draft, taskId, direction);
     }, lang('PlannerNoticeReordered'));
@@ -59,7 +61,7 @@ const PlannerTasks = ({
   // Порядок — как в `getOrderedGroup`: по рангу, при равных — по id
   const subset = getEligibleTasks(state)
     .filter((task) => task.project === selectedProject)
-    .sort((a, b) => a.rank - b.rank || a.id - b.id);
+    .sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1));
   const completed = getCompletedTasks(state);
 
   return (

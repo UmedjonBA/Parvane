@@ -27,6 +27,7 @@ import {
 import { preauth } from './control';
 import { loadProtocol, parseEngineError } from './engine';
 import { createL2Gate, type L2State, parseL2State } from './l2';
+import { createPlannerSync } from './planner';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
 type Deps = {
@@ -58,6 +59,11 @@ type Deps = {
   onUnconfirmedMembers: (address: string, members: string[]) => void;
   /** Стек поднят: журнал личного состояния (T098) можно читать. */
   onStateReady?: (host: StateJournalHost, rekey?: 'self' | 'peer') => void;
+  /** Планировщик (spec 010): контейнер из журнала личного состояния и его объявление. */
+  plannerContainerFromState?: () => { domain: string; id: string } | undefined;
+  recordPlannerContainer?: (ref: { domain: string; id: string }) => void;
+  /** Состояние или статус планировщика изменились — UI перечитает. */
+  onPlannerChanged?: () => void;
   /** Ссылка-приглашение создана/отозвана здесь — остальным своим устройствам (T160). */
   onInviteCreated?: (address: string, record: V2InviteRecord) => void;
   onInviteRevoked?: (linkId: string) => void;
@@ -734,6 +740,28 @@ export function createV2Controller(deps: Deps) {
     return Array.from(counts, ([emoji, c]) => ({ emoji, count: c.count, mine: c.mine }));
   }
 
+  // Планировщик на сервере (spec 010): жизненный цикл контейнера и очередь — `./planner`
+  const planner = createPlannerSync({
+    log: deps.log,
+    pv: () => pv,
+    client: () => client,
+    isReady: () => ready,
+    needsLinking: () => needsLinking,
+    call,
+    withNeeds,
+    persist,
+    loadRecord: async (key) => storage?.loadRecord(key),
+    saveRecord: async (key, value) => {
+      await storage?.saveRecord(key, value);
+    },
+    deleteRecord: async (key) => {
+      await storage?.deleteRecord(key);
+    },
+    stateContainer: () => deps.plannerContainerFromState?.(),
+    recordContainer: (container) => deps.recordPlannerContainer?.(container),
+    onChanged: () => deps.onPlannerChanged?.(),
+  });
+
   async function applyEvent(ev: EngineEvent) {
     if (ev.type === 'legacyV1') {
       // Кадр прежнего инбокса v1, оставшийся на сервере: читать его нечем (T110)
@@ -868,6 +896,8 @@ export function createV2Controller(deps: Deps) {
     if (ev.type === 'deviceAdded') {
       await checkOwnDevices();
     }
+    // Ключ контейнера планировщика принят или контейнер надо подключить (spec 010)
+    if (ev.type === 'plannerChanged') planner.onEngineEvent();
     // Отозвано своё устройство (другим своим устройством): журнал — заново;
     // ротации ключей делает отзывавшее устройство и раздаёт по E2E
     if (ev.type === 'deviceRevoked') {
@@ -2803,6 +2833,8 @@ export function createV2Controller(deps: Deps) {
     deviceId: () => ownDeviceId,
     /** Строка истории по id (своя отправка либо кэш истории) — для правки. */
     storedMessage: knownMessage,
+    /** Планировщик на сервере (spec 010). */
+    planner,
     linkGrantMaterial,
     joinWithGrant,
     revokeDevice,
@@ -2873,6 +2905,7 @@ export function createV2Controller(deps: Deps) {
       receipt: { kind: 'RECEIPT_KIND_READ', messages: uuids.map(ref) },
     }),
     reset() {
+      planner.reset();
       ready = false;
       starting = undefined;
       needsLinking = false;

@@ -21,9 +21,9 @@ type OwnProps = {
   context: 'all' | 'day';
   canMoveUp?: boolean;
   canMoveDown?: boolean;
-  onOpen: (taskId: number) => void;
+  onOpen: (taskId: string) => void;
   // Стрелки порядка в очереди (T014) — только там, где передан обработчик
-  onReorder?: (taskId: number, direction: -1 | 1) => void;
+  onReorder?: (taskId: string, direction: -1 | 1) => void;
 };
 
 const PlannerTaskRow = ({
