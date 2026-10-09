@@ -77,7 +77,6 @@ async function expectTaskInPlan(page, name, timeout = SYNC_TIMEOUT_MS) {
   const planner = await openPlanner(page);
   await planner.getByText('Calendar', { exact: true }).first().click();
   await planner.locator(`[data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: 'visible', timeout })
     .catch(() => assert.fail(`${name}: ожидалось в расписании дня`));
