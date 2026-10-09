@@ -515,7 +515,18 @@ try {
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   // Телефон: заголовка и кнопки «+ Задача» нет, шестерёнка — в строке периода; расписание дня —
   // горизонтальная лента под календарём, календарь остаётся на виду
-  await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
+  // Переключателя вида над календарём нет — вид выбирается в настройках (шестерёнка)
+  assert.equal(await planner.getByRole('group', { name: 'Calendar view' }).count(), 0, 'на телефоне переключатель вида — в настройках');
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  const viewSelect = page.locator('#planner-settings-view');
+  await viewSelect.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await viewSelect.locator('option').count(), 5, 'в настройках пять видов календаря');
+  await viewSelect.selectOption('week');
+  await sidePane.getByRole('button', { name: 'Close' }).first().click();
+  await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await viewSelect.selectOption('month');
+  await sidePane.getByRole('button', { name: 'Close' }).first().click();
   assert.equal(await planner.getByRole('button', { name: '+ Task', exact: true }).count(), 0, 'на телефоне кнопки «+ Задача» нет');
   assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
   await todayCell.click({ position: { x: 10, y: 10 } });
@@ -548,6 +559,20 @@ try {
   await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
   await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await strip.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  // Отдельной кнопки «+ Задача на этот день» в ленте нет, пока есть свободные окна
+  assert.equal(await strip.getByRole('button', { name: '+ Task for this day' }).count(), 0, 'лишняя кнопка добавления в ленте');
+  // Запись питания на телефоне тоже раскрывается на месте, без отдельного экрана
+  await planner.getByText('Nutrition', { exact: true }).first().click();
+  await dayPane.getByRole('button', { name: '+ Add entry' }).click();
+  const foodForm = dayPane.locator('[data-inline-food-form]');
+  await foodForm.locator('#planner-food-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await sidePane.count(), 0, 'на телефоне форма записи питания не должна открываться отдельным экраном');
+  await foodForm.locator('#planner-food-name').fill('Чай');
+  await foodForm.getByLabel('Calories, kcal').fill('5');
+  await foodForm.getByRole('button', { name: 'Add', exact: true }).click();
+  await foodForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await dayPane.getByText('Чай').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Schedule', { exact: true }).first().click();
   // Шестерёнка — в строке периода
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

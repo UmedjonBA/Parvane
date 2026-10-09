@@ -317,11 +317,14 @@ const Planner = ({ isMobile }: OwnProps) => {
   // На телефоне трёх колонок нет: новая задача из календаря пишется прямо в расписании дня (на месте
   // свободного окна), а не на отдельном экране
   const isInlineForm = isCreating && isNarrow && view === VIEW_CALENDAR && !isSettingsOpen;
+  // То же для записи питания: форма раскрывается в дневнике дня
+  const isInlineFood = Boolean(foodEditor) && isNarrow && view === VIEW_CALENDAR && !isSettingsOpen
+    && dayContent === DAY_NUTRITION && foodEditor.day === picked;
   // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
   const side = !isLoaded ? undefined
     : isSettingsOpen ? 'settings' : isCreating && !isInlineForm ? 'form' : editedTask ? 'task'
       : editedEvent ? 'event'
-        : foodEditor ? 'food' : undefined;
+        : foodEditor && !isInlineFood ? 'food' : undefined;
   const isCalendar = view === VIEW_CALENDAR;
   const isFood = isCalendar && dayContent === DAY_NUTRITION;
   const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
@@ -419,7 +422,13 @@ const Planner = ({ isMobile }: OwnProps) => {
                   />
                 </div>
                 {side === 'settings' ? (
-                  <PlannerSettings state={state} onBack={handleCloseSide} />
+                  <PlannerSettings
+                    state={state}
+                    viewOptions={isNarrow ? calendarSegments : undefined}
+                    activeView={calendarView}
+                    onSwitchView={handleSwitchCalendarView}
+                    onBack={handleCloseSide}
+                  />
                 ) : side === 'form' ? (
                   <PlannerTaskForm
                     state={state}
@@ -466,7 +475,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                   prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
                   nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
                   picked={picked}
-                  segments={calendarSegments}
+                  segments={isNarrow ? undefined : calendarSegments}
                   activeSegment={calendarView}
                   segmentsLabel={lang('PlannerCalView')}
                   trailing={isNarrow ? settingsButton : undefined}
@@ -568,7 +577,22 @@ const Planner = ({ isMobile }: OwnProps) => {
                     onCreateTask={handleCreateInDay}
                   />
                 ) : (
-                  <PlannerNutrition state={state} day={picked} today={today} onOpenFood={handleOpenFood} />
+                  <PlannerNutrition
+                    state={state}
+                    day={picked}
+                    today={today}
+                    inlineForm={isInlineFood ? (
+                      <PlannerFoodForm
+                        key={`${foodEditor.day}:${foodEditor.entryId || ''}`}
+                        state={state}
+                        day={foodEditor.day}
+                        today={today}
+                        entryId={foodEditor.entryId}
+                        onClose={handleCloseEditor}
+                      />
+                    ) : undefined}
+                    onOpenFood={handleOpenFood}
+                  />
                 )}
               </aside>
             )}

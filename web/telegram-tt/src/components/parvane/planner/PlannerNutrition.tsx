@@ -1,3 +1,4 @@
+import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type { LangFn } from '../../../util/localization';
@@ -27,6 +28,8 @@ type OwnProps = {
   today: string;
   // Открыть форму записи в левой колонке: без id — новая запись
   onOpenFood: (entryId?: string) => void;
+  // Узкий экран: форма записи раскрывается здесь же, на месте кнопки добавления
+  inlineForm?: TeactNode;
 };
 
 const METRIC_KEYS = {
@@ -76,7 +79,7 @@ export function formatFoodStatus(lang: LangFn, state: PlannerState, day: string,
 
 // Дневник питания дня: прогресс по калориям и БЖУ, записи по приёмам пищи, вода
 const PlannerNutrition = ({
-  state, day, today, onOpenFood,
+  state, day, today, inlineForm, onOpenFood,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -186,9 +189,11 @@ const PlannerNutrition = ({
           </div>
         );
       })}
-      <Button isText size="smaller" className={styles.inlineAdd} disabled={isFuture} onClick={handleAddClick}>
-        {lang('PlannerFoodAdd')}
-      </Button>
+      {inlineForm ? <div className={styles.inlineForm} data-inline-food-form>{inlineForm}</div> : (
+        <Button isText size="smaller" className={styles.inlineAdd} disabled={isFuture} onClick={handleAddClick}>
+          {lang('PlannerFoodAdd')}
+        </Button>
+      )}
       <details className={styles.fold}>
         <summary>{lang('PlannerFoodExtra')}</summary>
         <p className={styles.small}>

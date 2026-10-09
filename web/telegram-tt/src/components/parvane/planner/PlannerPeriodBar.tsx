@@ -18,7 +18,8 @@ type OwnProps = {
   prevLabel: string;
   nextLabel: string;
   picked: string;
-  segments: { value: string; label: string }[];
+  // Нет — переключателя нет (узкий экран: вид календаря выбирается в настройках)
+  segments?: { value: string; label: string }[];
   activeSegment: string;
   segmentsLabel: string;
   // Справа от навигации (узкий экран — шестерёнка настроек)
@@ -126,20 +127,22 @@ const PlannerPeriodBar = ({
           </div>
         )}
       </div>
-      <div className={styles.segments} role="group" aria-label={segmentsLabel}>
-        {segments.map((segment) => (
-          <button
-            key={segment.value}
-            type="button"
-            className={buildClassName(styles.segment, segment.value === activeSegment && styles.segmentActive)}
-            aria-pressed={segment.value === activeSegment}
-            data-value={segment.value}
-            onClick={handleSegmentClick}
-          >
-            {segment.label}
-          </button>
-        ))}
-      </div>
+      {segments && (
+        <div className={styles.segments} role="group" aria-label={segmentsLabel}>
+          {segments.map((segment) => (
+            <button
+              key={segment.value}
+              type="button"
+              className={buildClassName(styles.segment, segment.value === activeSegment && styles.segmentActive)}
+              aria-pressed={segment.value === activeSegment}
+              data-value={segment.value}
+              onClick={handleSegmentClick}
+            >
+              {segment.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
