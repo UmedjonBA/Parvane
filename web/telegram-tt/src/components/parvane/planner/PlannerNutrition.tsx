@@ -30,6 +30,9 @@ type OwnProps = {
   onOpenFood: (entryId?: string) => void;
   // Узкий экран: форма записи раскрывается здесь же, на месте кнопки добавления
   inlineForm?: TeactNode;
+  // Узкий экран: дневник — горизонтальная лента карточек под календарём, листается вбок
+  isStrip?: boolean;
+  leading?: TeactNode;
 };
 
 const METRIC_KEYS = {
@@ -79,7 +82,7 @@ export function formatFoodStatus(lang: LangFn, state: PlannerState, day: string,
 
 // Дневник питания дня: прогресс по калориям и БЖУ, записи по приёмам пищи, вода
 const PlannerNutrition = ({
-  state, day, today, inlineForm, onOpenFood,
+  state, day, today, inlineForm, isStrip, leading, onOpenFood,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -118,6 +121,8 @@ const PlannerNutrition = ({
 
   const hasMissingMacros = PLANNER_METRICS.slice(1).some((metric) => getNutrientTotal(state, day, metric).missing);
   const fiber = getNutrientTotal(state, day, 'fiber');
+
+  if (isStrip) return renderStrip();
 
   return (
     <div className={styles.dayList}>
@@ -221,6 +226,81 @@ const PlannerNutrition = ({
       )}
     </div>
   );
+
+  // Лента: переключатель, «+ запись», показатели, записи по приёмам пищи, вода — по карточке на каждое
+  function renderStrip() {
+    return (
+      <div className={styles.dayList}>
+        <div className={buildClassName(styles.dayItems, styles.dayStrip, 'no-scrollbar')} data-day-strip="food">
+          {leading}
+          <button
+            type="button"
+            className={buildClassName(styles.stripCard, styles.stripAdd)}
+            disabled={isFuture}
+            onClick={handleAddClick}
+          >
+            {lang('PlannerFoodAdd')}
+          </button>
+          {PLANNER_GOAL_METRICS.map((metric) => {
+            const total = getNutrientTotal(state, day, metric);
+            const goal = getNutrientGoal(state, day, metric);
+            const status = getNutrientStatus(state, day, metric);
+            return (
+              <div key={metric} className={styles.stripCard} data-metric={metric} data-status={status}>
+                <span className={styles.small}>{formatMetric(lang, metric)}</span>
+                <span className={styles.stripValue}>
+                  {total.count ? `${formatNumber(lang, total.value)}${total.missing ? ' + ?' : ''}` : '—'}
+                </span>
+                <span className={styles.small}>
+                  {goal
+                    ? `/ ${formatNumber(lang, goal.target)} ${formatMetricUnit(lang, metric)}`
+                    : `${formatMetricUnit(lang, metric)} · ${lang('PlannerFoodStatusNoGoal')}`}
+                </span>
+                <div
+                  className={styles.track}
+                  style={`--planner-progress: ${goal ? Math.min(100, (total.value / goal.target) * 100) : 0}%`}
+                  aria-hidden="true"
+                >
+                  <span />
+                </div>
+                {status !== 'none' && status !== 'nogoal' && (
+                  <span className={styles.small}>{lang(STATUS_KEYS[status])}</span>
+                )}
+              </div>
+            );
+          })}
+          {record.entries.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className={styles.stripCard}
+              data-entry-id={entry.id}
+              aria-label={lang('PlannerAriaEditFood', { name: entry.name })}
+              onClick={handleEntryClick}
+            >
+              <span className={styles.small}>{lang(MEAL_KEYS[entry.meal])}</span>
+              <span className={styles.taskName}>{entry.name}</span>
+              <span>{`${formatNumber(lang, entry.kcal)} ${lang('PlannerUnitKcal')}`}</span>
+              <span className={styles.small}>{formatMacros(entry)}</span>
+            </button>
+          ))}
+          <div className={styles.stripCard}>
+            <PlannerField
+              label={lang('PlannerFoodWater')}
+              type="number"
+              value={toInput(record.waterMl)}
+              min={0}
+              step="any"
+              disabled={isFuture}
+              onCommit={handleWater}
+            />
+          </div>
+        </div>
+        {Boolean(inlineForm) && <div className={styles.inlineForm} data-inline-food-form>{inlineForm}</div>}
+        {error && <p className={styles.error} role="alert">{error}</p>}
+      </div>
+    );
+  }
 
   function formatMacros(entry: PlannerFoodEntry) {
     const parts = (['protein', 'fat', 'carbs'] as const).map((metric) => {
