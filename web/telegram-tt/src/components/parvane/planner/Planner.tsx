@@ -27,6 +27,7 @@ import TabList from '../../ui/TabList';
 import PlannerAgenda from './PlannerAgenda';
 import PlannerDay from './PlannerDay';
 import PlannerEventEditor from './PlannerEventEditor';
+import PlannerFoodForm from './PlannerFoodForm';
 import PlannerMonth from './PlannerMonth';
 import PlannerNutrition from './PlannerNutrition';
 import PlannerPeriodBar from './PlannerPeriodBar';
@@ -109,7 +110,8 @@ const Planner = ({ isMobile }: OwnProps) => {
   const [eventEditor, setEventEditor] = useState<{ id: string; day: string }>();
   const [formParams, setFormParams] = useState<PlannerFormParams>();
   const [dayContent, setDayContent] = useState(DAY_SCHEDULE);
-  const [foodAddRequest, setFoodAddRequest] = useState(0);
+  // Форма записи питания в левой колонке: день и id записи (нет id — новая)
+  const [foodEditor, setFoodEditor] = useState<{ day: string; entryId?: string }>();
   const [selectedProject, setSelectedProject] = useState('');
   // Узкое окно: виден либо месяц, либо панель дня/задачи
   const [isPanelOpen, setIsPanelOpen] = useState(false);
@@ -131,11 +133,14 @@ const Planner = ({ isMobile }: OwnProps) => {
     setPicked(day);
     // Открытая форма создания следует за выбранным днём
     if (formParams) setFormParams({ ...formParams, day, slot: undefined });
+    // Новая запись питания следует за выбранным днём; правка записи другого дня закрывается
+    if (foodEditor && foodEditor.day !== day) setFoodEditor(foodEditor.entryId ? undefined : { day });
   });
 
   const closeEditors = useLastCallback(() => {
     setEditor(undefined);
     setEventEditor(undefined);
+    setFoodEditor(undefined);
   });
 
   const handlePickDay = useLastCallback((day: string) => {
@@ -148,6 +153,7 @@ const Planner = ({ isMobile }: OwnProps) => {
     const target = day || task?.day;
     if (target && view === VIEW_CALENDAR) pickDay(target);
     setEventEditor(undefined);
+    setFoodEditor(undefined);
     setFormParams(undefined);
     setIsSettingsOpen(false);
     setEditor({ id: taskId, day: task?.repeat ? day : undefined });
@@ -155,6 +161,7 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handleOpenEvent = useLastCallback((eventId: string, day: string) => {
     setEditor(undefined);
+    setFoodEditor(undefined);
     setFormParams(undefined);
     setIsSettingsOpen(false);
     setEventEditor({ id: eventId, day });
@@ -192,11 +199,17 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handleAdd = useLastCallback(() => {
     if (view === VIEW_CALENDAR && dayContent === DAY_NUTRITION) {
-      setIsPanelOpen(true);
-      setFoodAddRequest(foodAddRequest + 1);
+      handleOpenFood();
       return;
     }
     openForm(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
+  });
+
+  const handleOpenFood = useLastCallback((entryId?: string) => {
+    closeEditors();
+    setFormParams(undefined);
+    setIsSettingsOpen(false);
+    setFoodEditor({ day: picked, entryId });
   });
 
   const handleCreated = useLastCallback((taskId?: string, day?: string) => {
@@ -288,7 +301,8 @@ const Planner = ({ isMobile }: OwnProps) => {
   const isCreating = Boolean(formParams);
   // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
   const side = !isLoaded ? undefined
-    : isSettingsOpen ? 'settings' : isCreating ? 'form' : editedTask ? 'task' : editedEvent ? 'event' : undefined;
+    : isSettingsOpen ? 'settings' : isCreating ? 'form' : editedTask ? 'task' : editedEvent ? 'event'
+      : foodEditor ? 'food' : undefined;
   const isCalendar = view === VIEW_CALENDAR;
   const isFood = isCalendar && dayContent === DAY_NUTRITION;
   const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
@@ -306,7 +320,8 @@ const Planner = ({ isMobile }: OwnProps) => {
   const title = view === VIEW_TASKS ? lang('PlannerViewTasks')
     : view === VIEW_STATISTICS ? lang('PlannerViewStatistics') : lang('ParvaneSectionPlanner');
   const sideTitle = side === 'settings' ? lang('PlannerSettings') : side === 'form' ? lang('PlannerTitleNew')
-    : side === 'task' ? lang('PlannerTitleTask') : lang('PlannerTitleEvent');
+    : side === 'task' ? lang('PlannerTitleTask') : side === 'event' ? lang('PlannerTitleEvent')
+      : lang(foodEditor?.entryId ? 'PlannerFoodEditTitle' : 'PlannerFoodAddTitle');
   const calendarSegments = PLANNER_CALENDAR_VIEWS
     .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) }));
   const isMonthView = calendarView === 'month';
@@ -398,13 +413,22 @@ const Planner = ({ isMobile }: OwnProps) => {
                     onPickDay={pickDay}
                     onOpenTask={handleOpenTask}
                   />
-                ) : (
+                ) : side === 'event' ? (
                   <PlannerEventEditor
                     key={`${editedEvent!.id}@${editedEvent!.instanceDay || ''}`}
                     state={state}
                     event={editedEvent!}
                     backLabel={lang('Close')}
                     onBack={handleCloseEditor}
+                  />
+                ) : (
+                  <PlannerFoodForm
+                    key={`${foodEditor!.day}:${foodEditor!.entryId || ''}`}
+                    state={state}
+                    day={foodEditor!.day}
+                    today={today}
+                    entryId={foodEditor!.entryId}
+                    onClose={handleCloseEditor}
                   />
                 )}
               </aside>
@@ -506,7 +530,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                     onCreateTask={handleCreateInDay}
                   />
                 ) : (
-                  <PlannerNutrition state={state} day={picked} today={today} addRequest={foodAddRequest} />
+                  <PlannerNutrition state={state} day={picked} today={today} onOpenFood={handleOpenFood} />
                 )}
               </aside>
             )}

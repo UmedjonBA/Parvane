@@ -9,6 +9,9 @@
   --planner-series-5: var(--color-text-secondary);
   --planner-panel-width: 23rem;
   --planner-side-width: 22rem;
+  // Клетки дат — нежный бежевый поверх фона раздела: без заливки по загрузке календарь сливался с фоном
+  --planner-cell: color-mix(in srgb, #f3e6cf 55%, var(--color-background));
+  --planner-cell-weekend: color-mix(in srgb, #e9d5b4 55%, var(--color-background));
 
   position: relative;
   z-index: 1;
@@ -233,8 +236,8 @@
   border: 0.125rem solid transparent;
   border-radius: var(--border-radius-default-small);
 
-  // Загрузка дня — только полоской внизу клетки (spec 013), фон обычный
-  background: var(--color-background);
+  // Загрузка дня — только полоской внизу клетки (spec 013); фон клетки — мягкий бежевый
+  background: var(--planner-cell);
 
   transition: border-color 0.15s;
 
@@ -244,7 +247,7 @@
 }
 
 .dayWeekend {
-  background: var(--color-background-secondary);
+  background: var(--planner-cell-weekend);
 }
 
 // День соседнего месяца
@@ -1671,4 +1674,10 @@
   .previewMore {
     display: none;
   }
+}
+
+// Тёмная тема: тот же тёплый оттенок, но едва заметный — клетки светлее фона раздела
+:global(html.theme-dark) .root {
+  --planner-cell: color-mix(in srgb, #fff1d6 9%, var(--color-background));
+  --planner-cell-weekend: color-mix(in srgb, #fff1d6 4%, var(--color-background));
 }

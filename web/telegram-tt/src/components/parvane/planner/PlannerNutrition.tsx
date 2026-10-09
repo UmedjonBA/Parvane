@@ -1,15 +1,15 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { memo, useState } from '../../../lib/teact/teact';
 
 import type { LangFn } from '../../../util/localization';
 import type {
-  PlannerFoodEntry, PlannerGoalMetric, PlannerMeal, PlannerNutrient, PlannerState,
+  PlannerFoodEntry, PlannerGoalMetric, PlannerMeal, PlannerState,
 } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatNumber } from './plannerFormat';
 import {
-  getNutrientGoal, getNutrientStatus, getNutrientTotal, isDayClosed, isKnownNumber, makeFoodEntry,
-  PLANNER_GOAL_METRICS, PLANNER_MEALS, PLANNER_METRICS, PLANNER_NUTRIENTS,
+  getNutrientGoal, getNutrientStatus, getNutrientTotal, isDayClosed, isKnownNumber,
+  PLANNER_GOAL_METRICS, PLANNER_MEALS, PLANNER_METRICS,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -17,9 +17,6 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
-import Checkbox from '../../ui/Checkbox';
-import InputText from '../../ui/InputText';
-import Select from '../../ui/Select';
 import PlannerField from './PlannerField';
 
 import styles from './Planner.module.scss';
@@ -28,8 +25,8 @@ type OwnProps = {
   state: PlannerState;
   day: string;
   today: string;
-  // Счётчик запросов «+ Запись» из шапки планировщика
-  addRequest: number;
+  // Открыть форму записи в левой колонке: без id — новая запись
+  onOpenFood: (entryId?: string) => void;
 };
 
 const METRIC_KEYS = {
@@ -47,7 +44,7 @@ const SHORT_KEYS = {
   carbs: 'PlannerMetricCarbsShort',
 } as const;
 
-const MEAL_KEYS = {
+export const MEAL_KEYS = {
   breakfast: 'PlannerMealBreakfast',
   lunch: 'PlannerMealLunch',
   dinner: 'PlannerMealDinner',
@@ -65,11 +62,6 @@ const STATUS_KEYS = {
   ok: 'PlannerFoodStatusOk',
 } as const;
 
-const FOOD_NAME_MAX_LENGTH = 100;
-const EMPTY_VALUES: Record<PlannerNutrient | 'grams', string> = {
-  kcal: '', protein: '', fat: '', carbs: '', fiber: '', grams: '100',
-};
-
 export function formatMetric(lang: LangFn, metric: PlannerGoalMetric) {
   return lang(METRIC_KEYS[metric]);
 }
@@ -84,16 +76,10 @@ export function formatFoodStatus(lang: LangFn, state: PlannerState, day: string,
 
 // Дневник питания дня: прогресс по калориям и БЖУ, записи по приёмам пищи, вода
 const PlannerNutrition = ({
-  state, day, today, addRequest,
+  state, day, today, onOpenFood,
 }: OwnProps) => {
   const lang = useLang();
 
-  const [editedIndex, setEditedIndex] = useState<number>();
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [meal, setMeal] = useState<PlannerMeal>('breakfast');
-  const [isPer100, setIsPer100] = useState(false);
-  const [values, setValues] = useState(EMPTY_VALUES);
   const [error, setError] = useState<string>();
 
   const record = state.nutrition[day] || { entries: [], isComplete: false };
@@ -102,57 +88,13 @@ const PlannerNutrition = ({
   // Прошедший день завершён сам (spec 013), кнопки завершения нет
   const isClosed = isDayClosed(state, day, today);
 
-  const openForm = useLastCallback((index?: number) => {
-    const entry = index === undefined ? undefined : record.entries[index];
-    const base = entry?.per100 || entry;
-    setEditedIndex(index);
-    setName(entry?.name || '');
-    setMeal(entry?.meal || 'breakfast');
-    setIsPer100(Boolean(entry?.per100));
-    setValues({
-      kcal: toInput(base?.kcal),
-      protein: toInput(base?.protein),
-      fat: toInput(base?.fat),
-      carbs: toInput(base?.carbs),
-      fiber: toInput(base?.fiber),
-      grams: toInput(entry?.grams) || '100',
-    });
-    setError(undefined);
-    setIsFormOpen(true);
-  });
-
-  const closeForm = useLastCallback(() => {
-    setIsFormOpen(false);
-    setEditedIndex(undefined);
-  });
-
-  // Другой день либо «+ Запись» из шапки
-  useEffect(closeForm, [day, closeForm]);
-  useEffect(() => {
-    if (addRequest && !isFuture) openForm();
-  }, [addRequest, isFuture, openForm]);
-
+  // Форма записи открывается левой колонкой «Плана» (как форма задачи), дневник остаётся на месте
   const handleEntryClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    openForm(Number(e.currentTarget.dataset.index));
+    onOpenFood(e.currentTarget.dataset.entryId);
   });
 
   const handleAddClick = useLastCallback(() => {
-    openForm();
-  });
-
-  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setName(e.currentTarget.value);
-  });
-
-  const handleMealChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setMeal(e.currentTarget.value as PlannerMeal);
-  });
-
-  // Обновление от прежнего состояния: два поля, заполненные между отрисовками
-  // (быстрый ввод, автозаполнение), иначе затирали друг друга — калории
-  // «пустые» при видимом значении (плавающий шаг питания в e2e, 8 окт 2026)
-  const setValue = useLastCallback((key: PlannerNutrient | 'grams', value: string) => {
-    setValues((previous) => ({ ...previous, [key]: value }));
+    onOpenFood();
   });
 
   const changeDay = useLastCallback((mutate: (target: typeof record) => void, notice: string) => {
@@ -160,43 +102,6 @@ const PlannerNutrition = ({
       draft.nutrition[day] ??= { entries: [], isComplete: false };
       mutate(draft.nutrition[day]);
     }, notice);
-  });
-
-  const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!name.trim()) return setError(lang('PlannerErrorName'));
-    const parsed: Partial<Record<PlannerNutrient, number>> = {};
-    for (const nutrient of PLANNER_NUTRIENTS) {
-      const raw = values[nutrient];
-      const value = raw === '' ? undefined : Number(raw);
-      if ((nutrient === 'kcal' && raw === '') || (raw !== '' && !isKnownNumber(value))) {
-        return setError(lang('PlannerErrorNutrient', { name: formatMetric(lang, nutrient) }));
-      }
-      parsed[nutrient] = value;
-    }
-    const grams = Number(values.grams);
-    if (isPer100 && (!isKnownNumber(grams) || grams <= 0)) return setError(lang('PlannerErrorGrams'));
-
-    const entry = makeFoodEntry({
-      id: editedIndex === undefined ? undefined : record.entries[editedIndex]?.id,
-      name, meal, isPer100, grams, values: parsed,
-    });
-    const index = editedIndex;
-    changeDay((target) => {
-      if (index === undefined) target.entries.push(entry);
-      else target.entries[index] = entry;
-      if (!isPast) target.isComplete = false;
-    }, lang(index === undefined ? 'PlannerNoticeFoodAdded' : 'PlannerNoticeFoodUpdated'));
-    return closeForm();
-  });
-
-  const handleDelete = useLastCallback(() => {
-    const index = editedIndex!;
-    changeDay((target) => {
-      target.entries.splice(index, 1);
-      if (!isPast) target.isComplete = false;
-    }, lang('PlannerNoticeFoodDeleted'));
-    closeForm();
   });
 
   const handleWater = useLastCallback((value: string) => {
@@ -267,7 +172,7 @@ const PlannerNutrition = ({
                 key={`${index}${entry.name}`}
                 type="button"
                 className={styles.mealEntry}
-                data-index={index}
+                data-entry-id={entry.id}
                 aria-label={lang('PlannerAriaEditFood', { name: entry.name })}
                 onClick={handleEntryClick}
               >
@@ -281,51 +186,9 @@ const PlannerNutrition = ({
           </div>
         );
       })}
-      {!isFormOpen && (
-        <Button isText size="smaller" className={styles.inlineAdd} disabled={isFuture} onClick={handleAddClick}>
-          {lang('PlannerFoodAdd')}
-        </Button>
-      )}
-      {isFormOpen && (
-        <form className={styles.form} onSubmit={handleSubmit}>
-          <h3 className={styles.group}>
-            {lang(editedIndex === undefined ? 'PlannerFoodAddTitle' : 'PlannerFoodEditTitle')}
-          </h3>
-          <InputText
-            id="planner-food-name"
-            label={lang('PlannerFoodName')}
-            value={name}
-            maxLength={FOOD_NAME_MAX_LENGTH}
-            autoFocus
-            onChange={handleNameChange}
-          />
-          <Select
-            id="planner-food-meal"
-            label={lang('PlannerFoodMeal')}
-            value={meal}
-            hasArrow
-            onChange={handleMealChange}
-          >
-            {PLANNER_MEALS.map((item) => <option key={item} value={item}>{lang(MEAL_KEYS[item])}</option>)}
-          </Select>
-          <Checkbox label={lang('PlannerFoodPer100')} checked={isPer100} onCheck={setIsPer100} />
-          <p className={styles.small}>{lang(isPer100 ? 'PlannerFoodPer100Hint' : 'PlannerFoodPortionHint')}</p>
-          {isPer100 && renderNumber('grams', lang('PlannerFoodGrams'))}
-          <div className={styles.fields}>
-            {PLANNER_NUTRIENTS.map((nutrient) => renderNumber(
-              nutrient, `${formatMetric(lang, nutrient)}, ${formatMetricUnit(lang, nutrient)}`,
-            ))}
-          </div>
-          {error && <p className={styles.error} role="alert">{error}</p>}
-          <div className={styles.actions}>
-            <Button type="submit" size="smaller">{lang(editedIndex === undefined ? 'PlannerAdd' : 'Save')}</Button>
-            <Button isText size="smaller" onClick={closeForm}>{lang('Cancel')}</Button>
-            {editedIndex !== undefined && (
-              <Button isText size="smaller" color="danger" onClick={handleDelete}>{lang('Delete')}</Button>
-            )}
-          </div>
-        </form>
-      )}
+      <Button isText size="smaller" className={styles.inlineAdd} disabled={isFuture} onClick={handleAddClick}>
+        {lang('PlannerFoodAdd')}
+      </Button>
       <details className={styles.fold}>
         <summary>{lang('PlannerFoodExtra')}</summary>
         <p className={styles.small}>
@@ -345,7 +208,7 @@ const PlannerNutrition = ({
           onCommit={handleWater}
         />
       </details>
-      {!isFormOpen && error && <p className={styles.error} role="alert">{error}</p>}
+      {error && <p className={styles.error} role="alert">{error}</p>}
       {isClosed && Boolean(record.entries.length) && (
         <p className={styles.small}>
           {lang('PlannerFoodDayResult', { status: formatFoodStatus(lang, state, day) })}
@@ -353,21 +216,6 @@ const PlannerNutrition = ({
       )}
     </div>
   );
-
-  function renderNumber(key: PlannerNutrient | 'grams', label: string) {
-    return (
-      <PlannerField
-        key={key}
-        label={label}
-        type="number"
-        value={values[key]}
-        min={0}
-        step="any"
-        placeholder={key === 'kcal' ? lang('PlannerFoodRequired') : undefined}
-        onInput={(value) => setValue(key, value)}
-      />
-    );
-  }
 
   function formatMacros(entry: PlannerFoodEntry) {
     const parts = (['protein', 'fat', 'carbs'] as const).map((metric) => {
