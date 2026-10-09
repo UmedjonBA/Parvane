@@ -270,6 +270,10 @@ const Planner = ({ isMobile }: OwnProps) => {
     handleSwitchCalendarView('month');
   });
 
+  const handleDaySwitch = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setDayContent(Number(e.currentTarget.dataset.index));
+  });
+
   const handleCloseSide = useLastCallback(() => {
     setIsSettingsOpen(false);
     setFormParams(undefined);
@@ -347,6 +351,24 @@ const Planner = ({ isMobile }: OwnProps) => {
   const calendarSegments = PLANNER_CALENDAR_VIEWS
     .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) }));
   const isMonthView = calendarView === 'month';
+  // Узкий экран: переключатель «Расписание / Питание» — первая карточка ленты под календарём
+  const daySwitch = (
+    <div className={styles.stripSwitch} role="tablist" aria-label={formatDayLong(lang, picked)}>
+      {dayTabs.map((tab, index) => (
+        <button
+          key={tab.title}
+          type="button"
+          role="tab"
+          className={buildClassName(styles.stripSwitchButton, index === dayContent && styles.stripSwitchActive)}
+          aria-selected={index === dayContent}
+          data-index={index}
+          onClick={handleDaySwitch}
+        >
+          {tab.title}
+        </button>
+      ))}
+    </div>
+  );
   const settingsButton = (
     <Button
       round
@@ -556,13 +578,14 @@ const Planner = ({ isMobile }: OwnProps) => {
                 >
                   {lang('PlannerBackToCalendar')}
                 </Button>
-                <h2 className={styles.panelTitle}>{formatDayLong(lang, picked)}</h2>
-                <TabList tabs={dayTabs} activeTab={dayContent} onSwitchTab={setDayContent} />
+                {!isNarrow && <h2 className={styles.panelTitle}>{formatDayLong(lang, picked)}</h2>}
+                {!isNarrow && <TabList tabs={dayTabs} activeTab={dayContent} onSwitchTab={setDayContent} />}
                 {dayContent === DAY_SCHEDULE ? (
                   <PlannerDay
                     state={state}
                     day={picked}
                     isStrip={isNarrow}
+                    leading={isNarrow ? daySwitch : undefined}
                     inlineForm={isInlineForm ? (
                       <PlannerTaskForm
                         state={state}
@@ -581,6 +604,8 @@ const Planner = ({ isMobile }: OwnProps) => {
                     state={state}
                     day={picked}
                     today={today}
+                    isStrip={isNarrow}
+                    leading={isNarrow ? daySwitch : undefined}
                     inlineForm={isInlineFood ? (
                       <PlannerFoodForm
                         key={`${foodEditor.day}:${foodEditor.entryId || ''}`}
