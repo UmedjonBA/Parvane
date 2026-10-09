@@ -133,6 +133,9 @@ services:
       PARVANE_NATS_PASS: ${PARVANE_CALL_PASS}
       PARVANE_DB_PATH: /data/call.db
       PARVANE_LOG_LEVEL: info
+      # Домен сервера: без него шард считает домен `local` и отклоняет ВСЕ сигналы
+      # звонков v2 как «чужой домен» (прод, 5–10 окт 2026: звонки не доходили)
+      PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
       # Внешний TURN (VPS с публичным IP) переопределяется в .env:
       # PARVANE_TURN_URL=turn:host:3478?transport=udp,turn:host:3478?transport=tcp
       PARVANE_STUN_URLS: ${PARVANE_STUN_URLS:-stun:${PARVANE_PUBLIC_HOST}:${PARVANE_TURN_PUBLIC_PORT}}
