@@ -20,6 +20,7 @@ import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
@@ -65,6 +66,8 @@ const CALENDAR_VIEW_LABELS = {
   agenda: 'PlannerCalAgenda',
 } as const satisfies Record<PlannerCalendarView, string>;
 const MS_IN_SECOND = 1000;
+// Ширина, до которой раскладка — одна колонка (`Planner.module.scss`, 925px)
+const NARROW_WIDTH = 925;
 
 // Вид календаря — настройка устройства; хранилище может быть недоступно
 function readCalendarView(): PlannerCalendarView {
@@ -118,6 +121,8 @@ const Planner = ({ isMobile }: OwnProps) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const currentUserId = useSelector(selectCurrentUserId);
+  const { width: windowWidth } = useWindowSize();
+  const isNarrow = windowWidth <= NARROW_WIDTH;
 
   useEffect(() => {
     void loadPlanner(currentUserId);
@@ -182,6 +187,11 @@ const Planner = ({ isMobile }: OwnProps) => {
     closeEditors();
     setIsSettingsOpen(false);
     setFormParams(params);
+    // Узкий экран: форма раскрывается в расписании дня, а не на весь экран
+    if (isNarrow && view === VIEW_CALENDAR) {
+      setDayContent(DAY_SCHEDULE);
+      setIsPanelOpen(true);
+    }
   });
 
   const handleCreateForDay = useLastCallback((day: string) => {
@@ -216,6 +226,11 @@ const Planner = ({ isMobile }: OwnProps) => {
     setFormParams(undefined);
     if (taskId !== undefined) handleOpenTask(taskId, day);
     else closeEditors();
+  });
+
+  // После создания из расписания редактор не открывается: задача сразу видна в расписании
+  const handleCreatedInline = useLastCallback(() => {
+    setFormParams(undefined);
   });
 
   const handleCancelCreate = useLastCallback(() => {
@@ -299,10 +314,14 @@ const Planner = ({ isMobile }: OwnProps) => {
   const editedEvent = editedEventTemplate && editedEventTemplate.repeat
     ? eventInstance(editedEventTemplate, eventEditor.day) : editedEventTemplate;
   const isCreating = Boolean(formParams);
+  // На телефоне трёх колонок нет: новая задача из календаря пишется прямо в расписании дня (на месте
+  // свободного окна), а не на отдельном экране
+  const isInlineForm = isCreating && isNarrow && view === VIEW_CALENDAR && !isSettingsOpen;
   // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
   const side = !isLoaded ? undefined
-    : isSettingsOpen ? 'settings' : isCreating ? 'form' : editedTask ? 'task' : editedEvent ? 'event'
-      : foodEditor ? 'food' : undefined;
+    : isSettingsOpen ? 'settings' : isCreating && !isInlineForm ? 'form' : editedTask ? 'task'
+      : editedEvent ? 'event'
+        : foodEditor ? 'food' : undefined;
   const isCalendar = view === VIEW_CALENDAR;
   const isFood = isCalendar && dayContent === DAY_NUTRITION;
   const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
@@ -525,6 +544,15 @@ const Planner = ({ isMobile }: OwnProps) => {
                   <PlannerDay
                     state={state}
                     day={picked}
+                    inlineForm={isInlineForm ? (
+                      <PlannerTaskForm
+                        state={state}
+                        params={formParams}
+                        onCreated={handleCreatedInline}
+                        onCancel={handleCancelCreate}
+                      />
+                    ) : undefined}
+                    inlineFormStart={isInlineForm ? formParams.slot?.start : undefined}
                     onOpenTask={handleOpenTask}
                     onOpenEvent={handleOpenEvent}
                     onCreateTask={handleCreateInDay}

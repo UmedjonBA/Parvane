@@ -1697,3 +1697,22 @@
   --planner-cell: color-mix(in srgb, #fff1d6 9%, var(--color-background));
   --planner-cell-weekend: color-mix(in srgb, #fff1d6 4%, var(--color-background));
 }
+
+// Узкий экран: форма новой задачи раскрыта в расписании дня на месте свободного окна
+.inlineForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 0.75rem;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--border-radius-default);
+
+  background: var(--color-background);
+}
+
+.inlineForm .form {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}

@@ -1,4 +1,5 @@
-import { memo } from '../../../lib/teact/teact';
+import type { TeactNode } from '../../../lib/teact/teact';
+import { memo, useEffect, useRef } from '../../../lib/teact/teact';
 
 import type { PlannerEvent, PlannerSlot, PlannerState } from './plannerModel';
 
@@ -27,13 +28,26 @@ type OwnProps = {
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
   onCreateTask: (slot?: PlannerSlot) => void;
+  // Узкий экран: форма новой задачи раскрывается прямо в расписании — на месте свободного окна
+  // с началом `inlineFormStart` либо в конце списка
+  inlineForm?: TeactNode;
+  inlineFormStart?: number;
 };
 
 // Расписание дня: свободные окна 09–21 и занятые отрезки, дела без времени, дедлайны
 const PlannerDay = ({
-  state, day, onOpenTask, onOpenEvent, onCreateTask,
+  state, day, inlineForm, inlineFormStart, onOpenTask, onOpenEvent, onCreateTask,
 }: OwnProps) => {
   const lang = useLang();
+
+  const rootRef = useRef<HTMLDivElement>();
+  const hasInlineForm = Boolean(inlineForm);
+
+  // Раскрытая форма должна быть на виду: свободное окно могло стоять у нижнего края экрана
+  useEffect(() => {
+    if (!hasInlineForm) return;
+    rootRef.current?.querySelector('[data-inline-form]')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [hasInlineForm, inlineFormStart]);
 
   const handleFreeClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onCreateTask({ start: Number(e.currentTarget.dataset.start), end: Number(e.currentTarget.dataset.end) });
@@ -67,6 +81,7 @@ const PlannerDay = ({
   ].sort((a, b) => a.start - b.start);
   // События на весь день — отдельной строкой сверху: в окна и загрузку дня они не входят
   const allDay = getEventsForDay(state, day).filter((event) => event.isAllDay);
+  const hasInlineSlot = Boolean(inlineForm) && chunks.some((chunk) => !chunk.items && chunk.start === inlineFormStart);
   const untimed = getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined);
   const deadlines = getDeadlines(state, day);
 
@@ -82,7 +97,7 @@ const PlannerDay = ({
   ].filter(Boolean).join(' · ');
 
   return (
-    <div className={styles.dayList}>
+    <div ref={rootRef} className={styles.dayList}>
       <p className={buildClassName(styles.summary, isOver && styles.warning)}>{summary}</p>
       {allDay.map((event) => (
         <div key={`allday${instanceKey(event)}`} className={styles.busyRow} data-all-day={event.id}>
@@ -113,6 +128,10 @@ const PlannerDay = ({
           ))}
           {chunk.items.length > 1 && <div className={styles.warning}>{lang('PlannerTimeConflict')}</div>}
         </section>
+      ) : inlineForm && chunk.start === inlineFormStart ? (
+        <div key={`form${chunk.start}`} className={styles.inlineForm} data-inline-form>
+          {inlineForm}
+        </div>
       ) : (
         <button
           key={`free${chunk.start}`}
@@ -142,9 +161,13 @@ const PlannerDay = ({
       ))}
       {Boolean(deadlines.length) && <h3 className={styles.group}>{lang('PlannerGroupDeadlines')}</h3>}
       {deadlines.map((task) => <PlannerTaskRow key={`due${task.id}`} task={task} context="day" onOpen={onOpenTask} />)}
-      <Button isText size="smaller" className={styles.inlineAdd} onClick={handleAdd}>
-        {lang('PlannerAddTaskForDay')}
-      </Button>
+      {inlineForm && !hasInlineSlot ? (
+        <div className={styles.inlineForm} data-inline-form>{inlineForm}</div>
+      ) : (
+        <Button isText size="smaller" className={styles.inlineAdd} onClick={handleAdd}>
+          {lang('PlannerAddTaskForDay')}
+        </Button>
+      )}
     </div>
   );
 
