@@ -56,13 +56,13 @@ async function createTask(page, name, start) {
   }
   await planner.getByRole('button', { name: 'Create' }).click();
   await planner.getByRole('heading', { name }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByRole('button', { name: 'To the day' }).first().click();
+  await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
 }
 
 async function deleteTask(page, name) {
   const planner = await openPlanner(page);
   await planner.getByText('Calendar', { exact: true }).first().click();
-  await planner.locator(`[data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
+  await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
   await planner.getByText('Schedule', { exact: true }).first().click();
   await planner.getByRole('button', { name }).first().click();
   await planner.getByRole('button', { name: 'Delete task' }).click();
@@ -74,9 +74,9 @@ async function deleteTask(page, name) {
 async function expectTaskInDay(page, name, isPresent, timeout = SYNC_TIMEOUT_MS) {
   const planner = await openPlanner(page);
   await planner.getByText('Calendar', { exact: true }).first().click();
-  await planner.locator(`[data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
+  await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
   await planner.getByText('Schedule', { exact: true }).first().click();
-  await planner.locator('aside').getByRole('button', { name, exact: false }).first()
+  await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: isPresent ? 'visible' : 'detached', timeout })
     .catch(() => {
       assert.fail(`${name}: ожидалось ${isPresent ? 'видно' : 'нет'} в расписании дня`);
@@ -158,7 +158,7 @@ try {
   await planner1.getByRole('button', { name: 'Planner settings' }).click();
   await planner1.getByLabel('Day starts').fill('08:00');
   await planner1.getByText('Settings saved').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner1.getByRole('button', { name: 'Back', exact: true }).click();
+  await planner1.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
   await closePlanner(sessions.bob1.page);
   console.log('OK: планировщик первого устройства заполнен');
 
@@ -182,7 +182,7 @@ try {
     () => document.querySelector('#ParvanePlanner input[type="time"]')?.value === '08:00',
     undefined, { timeout: SYNC_TIMEOUT_MS },
   );
-  await planner2b.getByRole('button', { name: 'Back', exact: true }).click();
+  await planner2b.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
   await closePlanner(sessions.bob2.page);
   console.log('OK: после привязки второе устройство видит планировщик и настройки');
 
@@ -228,7 +228,7 @@ try {
   }, { name: seriesName, day: todayKey() });
   await expectTaskInDay(sessions.bob2.page, seriesName, true);
   const planner2s = await openPlanner(sessions.bob2.page);
-  await planner2s.locator('aside').getByLabel(`Done: ${seriesName}`).check();
+  await planner2s.locator('[data-planner-day]').getByLabel(`Done: ${seriesName}`).check();
   await planner2s.getByText(`${seriesName} · Done`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closePlanner(sessions.bob2.page);
   await sessions.bob1.page.evaluate(async ({ day }) => {
@@ -247,6 +247,27 @@ try {
     const task = state?.state?.tasks?.find((t) => t.name === seriesName);
     return task?.start === '17:00' && task?.occurrences?.some((o) => o.day === todayKey() && o.done);
   }, SYNC_TIMEOUT_MS, 'на B — новое время ряда и своя отметка');
+  // spec 013: цвет списка, «весь день» и «праздник» с A видны на B
+  await sessions.bob1.page.evaluate(async ({ day }) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [
+        { list: { id: `list-${day}`, name: 'Цветной', order: 9, color: 5 } },
+        {
+          event: {
+            id: `holiday-${day}`, name: 'Праздник двора', start: '00:00', end: '23:59', weekdays: null, day,
+            allDay: true, isHoliday: true,
+          },
+        },
+      ],
+    });
+    await window.__parvaneDiagCallApi('parvanePlannerFlush');
+  }, { day: todayKey() });
+  await waitFor(async () => {
+    const state = await sessions.bob2.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+    const list = state?.state?.lists?.find((l) => l.name === 'Цветной');
+    const event = state?.state?.events?.find((e) => e.name === 'Праздник двора');
+    return list?.color === 5 && event?.allDay === true && event?.isHoliday === true;
+  }, SYNC_TIMEOUT_MS, 'на B — цвет списка и событие-праздник на весь день');
   // Запись цели с A видна на B
   await sessions.bob1.page.evaluate(async ({ day }) => {
     await window.__parvaneDiagCallApi('parvanePlannerApply', {

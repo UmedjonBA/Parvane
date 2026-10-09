@@ -5,7 +5,7 @@ import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
 import {
-  formatClock, formatDay, formatProject, formatRepeat, formatStatus,
+  formatClock, formatDay, formatRepeat, formatStatus,
 } from './plannerFormat';
 import {
   detachInstance, excludeInstance, findSlots, hasLunchBreak, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
@@ -21,6 +21,7 @@ import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import PlannerField from './PlannerField';
+import PlannerListPicker from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
@@ -188,8 +189,8 @@ const PlannerTaskEditor = ({
     patch({ status: e.currentTarget.value as PlannerStatus }, lang('PlannerNoticeStatusUpdated', { name: task.name }));
   });
 
-  const handleProject = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    patch({ project: e.currentTarget.value }, lang('PlannerNoticeListUpdated', { name: task.name }));
+  const handleProject = useLastCallback((project: string) => {
+    patch({ project }, lang('PlannerNoticeListUpdated', { name: task.name }));
   });
 
   const handleFindSlots = useLastCallback(() => {
@@ -322,13 +323,17 @@ const PlannerTaskEditor = ({
         <Button type="submit" round size="smaller" iconName="add" ariaLabel={lang('PlannerStepAdd')} />
       </form>
       <div className={styles.fields}>
-        <Select label={lang('PlannerFieldStatus')} value={task.status} hasArrow onChange={handleStatus}>
+        <Select
+          id="planner-task-status"
+          label={lang('PlannerFieldStatus')}
+          value={task.status}
+          hasArrow
+          onChange={handleStatus}
+        >
           {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
         </Select>
-        <Select label={lang('PlannerFieldList')} value={task.project} hasArrow onChange={handleProject}>
-          {state.projects.map((item) => <option key={item} value={item}>{formatProject(lang, item)}</option>)}
-        </Select>
       </div>
+      <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
       {!isInstance && (
         <div className={styles.repeatBlock}>
           <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />

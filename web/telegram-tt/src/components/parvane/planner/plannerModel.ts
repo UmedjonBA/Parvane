@@ -728,6 +728,40 @@ export function getTimedForDay(state: PlannerState, day: string, excludedTaskId?
   return [...events, ...tasks].sort((a, b) => a.start.localeCompare(b.start));
 }
 
+export type PlannerTimedLayout = { item: PlannerTimed; lane: number; lanes: number };
+
+/**
+ * Раскладка дел дня по колонкам для сетки часов: пересекающиеся дела стоят рядом,
+ * `lanes` — число колонок в группе пересечений.
+ */
+export function layoutTimed(timed: PlannerTimed[]): PlannerTimedLayout[] {
+  const result: PlannerTimedLayout[] = [];
+  let cluster: PlannerTimedLayout[] = [];
+  let clusterEnd = -1;
+  let laneEnds: number[] = [];
+  const closeCluster = () => {
+    cluster.forEach((entry) => {
+      entry.lanes = laneEnds.length;
+    });
+    cluster = [];
+    laneEnds = [];
+  };
+  [...timed].sort((a, b) => toMinutes(a.start) - toMinutes(b.start)).forEach((item) => {
+    const start = toMinutes(item.start);
+    const end = Math.max(toMinutes(item.end), start + 1);
+    if (start >= clusterEnd) closeCluster();
+    let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+    if (lane < 0) lane = laneEnds.length;
+    laneEnds[lane] = end;
+    clusterEnd = Math.max(clusterEnd, end);
+    const entry = { item, lane, lanes: 1 };
+    cluster.push(entry);
+    result.push(entry);
+  });
+  closeCluster();
+  return result;
+}
+
 export function countConflicts(state: PlannerState, day: string) {
   const timed = getTimedForDay(state, day);
   let count = 0;

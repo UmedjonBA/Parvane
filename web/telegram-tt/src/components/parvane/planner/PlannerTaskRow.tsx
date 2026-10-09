@@ -3,7 +3,7 @@ import { memo } from '../../../lib/teact/teact';
 import type { PlannerTask } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDay, formatProject } from './plannerFormat';
+import { formatDay, formatProject, listColorStyle } from './plannerFormat';
 import { instanceKey, setTaskDone } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -20,6 +20,10 @@ type OwnProps = {
   task: PlannerTask;
   // `all` — строка в списках (дата или список в подписи), `day` — в расписании дня
   context: 'all' | 'day';
+  // Цвет списка задачи (0 — нет) — полоска слева
+  color?: number;
+  // Строка стоит на экране своего списка — список в подписи не повторяется
+  noProject?: boolean;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
   // `day` — день экземпляра ряда (spec 011)
@@ -29,7 +33,7 @@ type OwnProps = {
 };
 
 const PlannerTaskRow = ({
-  task, context, canMoveUp, canMoveDown, onOpen, onReorder,
+  task, context, color, noProject, canMoveUp, canMoveDown, onOpen, onReorder,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -62,14 +66,18 @@ const PlannerTaskRow = ({
   const meta = [task.minutes === undefined ? lang('PlannerNoEstimate') : lang('PlannerMinutesValue', {
     minutes: task.minutes,
   })];
-  if (context === 'all') meta.push(task.day ? formatDay(lang, task.day) : formatProject(lang, task.project));
+  if (context === 'all') {
+    if (task.day) meta.push(formatDay(lang, task.day));
+    else if (!noProject) meta.push(formatProject(lang, task.project));
+  }
   if (task.due) meta.push(lang('PlannerDueValue', { date: formatDay(lang, task.due) }));
   if (task.steps.length) meta.push(`${task.steps.filter((step) => step.isDone).length}/${task.steps.length}`);
   if (task.repeat) meta.push(lang('PlannerRepeatMark'));
 
   return (
     <div
-      className={buildClassName(styles.task, isDone && styles.taskDone)}
+      className={buildClassName(styles.task, isDone && styles.taskDone, Boolean(color) && styles.taskColored)}
+      style={listColorStyle(color)}
       draggable
       data-task-id={task.id}
       data-instance-day={task.instanceDay}

@@ -7,7 +7,7 @@ import type {
 import buildClassName from '../../../util/buildClassName';
 import { formatDay, formatNumber } from './plannerFormat';
 import {
-  getGoalRecordForDay, newId, PLANNER_GOAL_METRICS, validateGoalRecord,
+  freezePastGoals, getGoalRecordForDay, newId, PLANNER_GOAL_METRICS, validateGoalRecord,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -109,6 +109,8 @@ const PlannerGoals = ({ state, picked }: OwnProps) => {
     setError(undefined);
     const id = editedId === 'new' ? newId() : editedId!;
     updatePlanner((draft) => {
+      // Прошедшие дни оцениваются по целям, действовавшим до правки
+      freezePastGoals(draft);
       if (isBase) {
         draft.goals = goals;
         return;
@@ -124,6 +126,7 @@ const PlannerGoals = ({ state, picked }: OwnProps) => {
   const handleDelete = useLastCallback(() => {
     const id = editedId!;
     updatePlanner((draft) => {
+      freezePastGoals(draft);
       draft.goalPeriods = draft.goalPeriods.filter((item) => item.id !== id);
     }, lang('PlannerNoticeGoalDeleted'));
     closeForm();
@@ -162,7 +165,13 @@ const PlannerGoals = ({ state, picked }: OwnProps) => {
           ) : (
             <div className={styles.fields}>
               <PlannerField label={lang('PlannerGoalFrom')} type="date" value={startDay} onInput={setStartDay} />
-              <Select label={lang('PlannerGoalEndKind')} value={endKind} hasArrow onChange={handleEndKind}>
+              <Select
+                id="planner-goal-end"
+                label={lang('PlannerGoalEndKind')}
+                value={endKind}
+                hasArrow
+                onChange={handleEndKind}
+              >
                 <option value="open">{lang('PlannerGoalEndOpen')}</option>
                 <option value="single">{lang('PlannerGoalEndSingle')}</option>
                 <option value="until">{lang('PlannerGoalEndUntil')}</option>

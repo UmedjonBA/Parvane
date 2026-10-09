@@ -6,7 +6,8 @@ import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
 import { formatRepeat } from './plannerFormat';
 import {
-  detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, validateEvent,
+  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries,
+  validateEvent,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -14,6 +15,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
+import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
 import PlannerField from './PlannerField';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
@@ -55,6 +57,8 @@ const PlannerEventEditor = ({
   const [start, setStart] = useState(event.start);
   const [end, setEnd] = useState(event.end);
   const [day, setDay] = useState(event.instanceDay || event.day || '');
+  const [isAllDay, setIsAllDay] = useState(Boolean(event.isAllDay));
+  const [isHoliday, setIsHoliday] = useState(Boolean(event.isHoliday));
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(event.repeat, event.day || ''),
   );
@@ -95,8 +99,20 @@ const PlannerEventEditor = ({
   const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const repeat = draftToRepeat(repeatDraft);
+    // Событие, бывшее «весь день», получает обычное время заново
+    const wasAllDay = event.isAllDay && !isAllDay && start === ALL_DAY_START && end === ALL_DAY_END;
+    if (wasAllDay) {
+      setError(lang('PlannerErrorEventTime'));
+      return;
+    }
     const next = {
-      name: name.trim(), start, end, repeat, day: repeat ? undefined : (day || undefined),
+      name: name.trim(),
+      start: isAllDay ? ALL_DAY_START : start,
+      end: isAllDay ? ALL_DAY_END : end,
+      repeat,
+      day: repeat ? undefined : (day || undefined),
+      isAllDay: isAllDay || undefined,
+      isHoliday: isHoliday || undefined,
     };
     const eventError = validateEvent(next);
     if (eventError) {
@@ -106,7 +122,12 @@ const PlannerEventEditor = ({
     setError(undefined);
     if (isInstance) {
       // Правило повтора у экземпляра не правится — объём правки спрашивается для остальных полей
-      setPending({ kind: 'save', patch: { name: next.name, start: next.start, end: next.end } });
+      setPending({
+        kind: 'save',
+        patch: {
+          name: next.name, start: next.start, end: next.end, isAllDay: next.isAllDay, isHoliday: next.isHoliday,
+        },
+      });
       return;
     }
     updatePlanner((draft) => {
@@ -160,9 +181,13 @@ const PlannerEventEditor = ({
         maxLength={NAME_MAX_LENGTH}
         onChange={handleNameChange}
       />
+      <div className={styles.checks}>
+        <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
+        <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
+      </div>
       <div className={styles.fields}>
-        <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
-        <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />
+        {!isAllDay && <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />}
+        {!isAllDay && <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />}
         {(!event.repeat || isInstance) && (
           <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
         )}

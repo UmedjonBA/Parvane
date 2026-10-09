@@ -3,14 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
-  countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance, expandRepeat,
-  findSlots, fitsBookingWindow, getDayAvailability, getDayLoad, getEligibleTasks, getEventsForDay,
-  getGoalRecordForDay, getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay,
-  getTimeStatistics, makeFoodEntry, moveTask, nextOpenInstance, normalizePlannerState, occursOn, removeSeries,
-  setOccurrence, setTaskDone, setTaskStepDone, splitSeries, truncateSeries, validateEvent, validateGoalRecord,
-  validateRepeat, validateSettings, validateTask,
-  buildDayIndex, freezePastGoals, getDefaultEventEnd, getGoalsForDay, getListColor, getMonthGridKeys, getWeekKeys,
-  getYearKeys, isDayClosed, isHolidayOn, shiftPeriod,
+  buildDayIndex, countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance,
+  expandRepeat, findSlots, fitsBookingWindow, freezePastGoals, getDayAvailability, getDayLoad, getDefaultEventEnd,
+  getEligibleTasks, getEventsForDay, getGoalRecordForDay, getGoalsForDay, getListColor, getMonthGridKeys,
+  getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
+  getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, makeFoodEntry, moveTask, nextOpenInstance,
+  normalizePlannerState, occursOn, removeSeries, setOccurrence, setTaskDone, setTaskStepDone, shiftPeriod,
+  splitSeries, truncateSeries, validateEvent, validateGoalRecord, validateRepeat, validateSettings, validateTask,
 } from './plannerModel';
 
 // 8 октября 2026 — четверг

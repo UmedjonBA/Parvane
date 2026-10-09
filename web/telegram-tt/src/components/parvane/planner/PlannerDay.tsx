@@ -7,7 +7,9 @@ import {
   formatClock, formatDuration, formatHours, formatRepeat,
 } from './plannerFormat';
 import {
-  countUnrated, excludeInstance, getDayAvailability, getDayLoad, getDeadlines, getTasksForDay, instanceKey, toTime,
+  countUnrated, excludeInstance, getDayAvailability, getDayLoad, getDeadlines, getEventsForDay, getListColor,
+  getTasksForDay,
+  instanceKey, toTime,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -63,6 +65,8 @@ const PlannerDay = ({
     ...availability.free.map((slot) => ({ ...slot, items: undefined })),
     ...availability.groups,
   ].sort((a, b) => a.start - b.start);
+  // События на весь день — отдельной строкой сверху: в окна и загрузку дня они не входят
+  const allDay = getEventsForDay(state, day).filter((event) => event.isAllDay);
   const untimed = getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined);
   const deadlines = getDeadlines(state, day);
 
@@ -80,6 +84,12 @@ const PlannerDay = ({
   return (
     <div className={styles.dayList}>
       <p className={buildClassName(styles.summary, isOver && styles.warning)}>{summary}</p>
+      {allDay.map((event) => (
+        <div key={`allday${instanceKey(event)}`} className={styles.busyRow} data-all-day={event.id}>
+          <span className={styles.clock}>{lang('PlannerAllDayShort')}</span>
+          {renderEvent(event)}
+        </div>
+      ))}
       {chunks.map((chunk) => (chunk.items ? (
         <section
           key={`busy${chunk.start}`}
@@ -92,31 +102,13 @@ const PlannerDay = ({
             >
               <span className={styles.clock}>{`${item.start}–${item.end}`}</span>
               {item.task ? (
-                <PlannerTaskRow task={item.task} context="day" onOpen={onOpenTask} />
-              ) : (
-                <div className={styles.eventBody}>
-                  <button
-                    type="button"
-                    className={styles.taskButton}
-                    data-event-id={item.event!.id}
-                    aria-label={lang('PlannerAriaEditEvent', { name: item.name })}
-                    onClick={handleOpenEvent}
-                  >
-                    <span className={styles.taskName}>{item.name}</span>
-                    <span className={styles.small}>{formatEventRepeat(item.event!)}</span>
-                  </button>
-                  <Button
-                    round
-                    size="tiny"
-                    color="translucent"
-                    className={styles.eventDelete}
-                    iconName="delete"
-                    ariaLabel={lang('PlannerAriaDeleteEvent', { name: item.name })}
-                    data-event-id={item.event!.id}
-                    onClick={handleDeleteEvent}
-                  />
-                </div>
-              )}
+                <PlannerTaskRow
+                  task={item.task}
+                  context="day"
+                  color={getListColor(state, item.task.project)}
+                  onOpen={onOpenTask}
+                />
+              ) : renderEvent(item.event!)}
             </div>
           ))}
           {chunk.items.length > 1 && <div className={styles.warning}>{lang('PlannerTimeConflict')}</div>}
@@ -140,7 +132,13 @@ const PlannerDay = ({
       )))}
       {Boolean(untimed.length) && <h3 className={styles.group}>{lang('PlannerGroupUntimed')}</h3>}
       {untimed.map((task) => (
-        <PlannerTaskRow key={instanceKey(task)} task={task} context="day" onOpen={onOpenTask} />
+        <PlannerTaskRow
+          key={instanceKey(task)}
+          task={task}
+          context="day"
+          color={getListColor(state, task.project)}
+          onOpen={onOpenTask}
+        />
       ))}
       {Boolean(deadlines.length) && <h3 className={styles.group}>{lang('PlannerGroupDeadlines')}</h3>}
       {deadlines.map((task) => <PlannerTaskRow key={`due${task.id}`} task={task} context="day" onOpen={onOpenTask} />)}
@@ -152,6 +150,34 @@ const PlannerDay = ({
 
   function formatEventRepeat(event: PlannerEvent) {
     return event.repeat ? formatRepeat(lang, event.repeat) : lang('PlannerEventOnce');
+  }
+
+  function renderEvent(event: PlannerEvent) {
+    const details = [event.isHoliday ? lang('PlannerHoliday') : undefined, formatEventRepeat(event)].filter(Boolean);
+    return (
+      <div className={styles.eventBody}>
+        <button
+          type="button"
+          className={styles.taskButton}
+          data-event-id={event.id}
+          aria-label={lang('PlannerAriaEditEvent', { name: event.name })}
+          onClick={handleOpenEvent}
+        >
+          <span className={styles.taskName}>{event.name}</span>
+          <span className={styles.small}>{details.join(' · ')}</span>
+        </button>
+        <Button
+          round
+          size="tiny"
+          color="translucent"
+          className={styles.eventDelete}
+          iconName="delete"
+          ariaLabel={lang('PlannerAriaDeleteEvent', { name: event.name })}
+          data-event-id={event.id}
+          onClick={handleDeleteEvent}
+        />
+      </div>
+    );
   }
 };
 

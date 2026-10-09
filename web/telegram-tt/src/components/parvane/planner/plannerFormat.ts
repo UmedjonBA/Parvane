@@ -1,7 +1,9 @@
 import type { LangFn } from '../../../util/localization';
-import type { PlannerRepeat, PlannerStatus } from './plannerModel';
+import type { PlannerCalendarView, PlannerRepeat, PlannerStatus } from './plannerModel';
 
-import { fromDayKey, toTime } from './plannerModel';
+import {
+  addDays, AGENDA_DAYS, fromDayKey, getWeekKeys, toTime,
+} from './plannerModel';
 
 // Parvane (spec 009): подписи планировщика — даты и длительности в языке интерфейса
 
@@ -49,6 +51,34 @@ export function formatDayLong(lang: LangFn, day: string) {
 
 export function formatMonth(lang: LangFn, month: Date) {
   return capitalize(month.toLocaleDateString(lang.code, { month: 'long', year: 'numeric' }).replace(/ г\.$/, ''));
+}
+
+export function formatMonthShort(lang: LangFn, month: Date) {
+  return capitalize(month.toLocaleDateString(lang.code, { month: 'short' }).replace(/\.$/, ''));
+}
+
+export function formatMonthName(lang: LangFn, month: Date) {
+  return capitalize(month.toLocaleDateString(lang.code, { month: 'long' }));
+}
+
+// Заголовок периода вида: год, месяц, «5–11 окт. 2026», день
+export function formatPeriod(lang: LangFn, view: PlannerCalendarView, day: string) {
+  const date = fromDayKey(day);
+  if (view === 'year') return String(date.getFullYear());
+  if (view === 'month') return formatMonth(lang, new Date(date.getFullYear(), date.getMonth(), 1));
+  if (view === 'day') return formatDayLong(lang, day);
+  const days = view === 'week' ? getWeekKeys(day) : [day, addDays(day, AGENDA_DAYS - 1)];
+  const from = fromDayKey(days[0]);
+  const to = fromDayKey(days[days.length - 1]);
+  const short = (value: Date, withYear: boolean) => value.toLocaleDateString(lang.code, {
+    day: 'numeric', month: 'short', year: withYear ? 'numeric' : undefined,
+  }).replace(/ г\.$/, '');
+  return `${short(from, from.getFullYear() !== to.getFullYear())} – ${short(to, true)}`;
+}
+
+// Цвет списка — переменная палитры собеседников (`--color-peer-0…7`)
+export function listColorStyle(color?: number) {
+  return color ? `--planner-list-color: var(--color-peer-${color - 1})` : undefined;
 }
 
 // Понедельник — первым; `index` 0…6

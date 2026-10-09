@@ -1,14 +1,15 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
-import type { PlannerGoalMetric, PlannerState } from './plannerModel';
+import type { PlannerCalendarView, PlannerGoalMetric, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatDayLong, formatHours, formatMonth, formatNumber, formatProject,
+  formatDay, formatHours, formatMonthShort, formatNumber, formatPeriod, formatProject,
 } from './plannerFormat';
 import {
   EVENTS_GROUP, fromDayKey, getMonthKeys, getNutrientGoal, getNutrientStatistics, getNutrientTotal,
-  getTimeStatistics, isKnownNumber, PLANNER_GOAL_METRICS,
+  getTimeStatistics, getWeekKeys, getYearKeys, getYearMonths, isDayClosed, isKnownNumber, PLANNER_GOAL_METRICS,
+  shiftPeriod,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -17,41 +18,56 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Button from '../../ui/Button';
 import Select from '../../ui/Select';
 import TabList from '../../ui/TabList';
-import PlannerField from './PlannerField';
 import PlannerGoals from './PlannerGoals';
 import { formatFoodStatus, formatMetric, formatMetricUnit } from './PlannerNutrition';
+import PlannerPeriodBar from './PlannerPeriodBar';
 
 import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
-  month: Date;
   picked: string;
   today: string;
   onPickDay: (day: string) => void;
   onOpenFoodDay: (day: string) => void;
 };
 
+type Period = Exclude<PlannerCalendarView, 'agenda'>;
+
 const CHART_LABEL_INDEXES = new Set([0, 7, 14, 21]);
+const PERIODS: Period[] = ['day', 'week', 'month', 'year'];
+const PERIOD_LABELS = {
+  day: 'PlannerPeriodDay',
+  week: 'PlannerPeriodWeek',
+  month: 'PlannerPeriodMonth',
+  year: 'PlannerPeriodYear',
+} as const satisfies Record<Period, string>;
 const KCAL_AXIS_STEP = 500;
 const MACRO_AXIS_STEP = 50;
 const WATER_AXIS_STEP = 500;
 
-// Статистика за месяц или день: время по спискам и питание по целям
+// Статистика за день, неделю, месяц или год: время по спискам и питание по целям
 const PlannerStatistics = ({
-  state, month, picked, today, onPickDay, onOpenFoodDay,
+  state, picked, today, onPickDay, onOpenFoodDay,
 }: OwnProps) => {
   const lang = useLang();
 
   const [content, setContent] = useState(0);
-  const [isDayPeriod, setIsDayPeriod] = useState(false);
+  const [period, setPeriod] = useState<Period>('month');
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const [chartMetric, setChartMetric] = useState<PlannerGoalMetric>('kcal');
 
-  const days = isDayPeriod ? [picked] : getMonthKeys(month);
+  const isDayPeriod = period === 'day';
+  const pickedDate = fromDayKey(picked);
+  const days = isDayPeriod ? [picked]
+    : period === 'week' ? getWeekKeys(picked)
+      : period === 'year' ? getYearKeys(pickedDate.getFullYear())
+        : getMonthKeys(new Date(pickedDate.getFullYear(), pickedDate.getMonth(), 1));
 
-  const handleMonthPeriod = useLastCallback(() => setIsDayPeriod(false));
-  const handleDayPeriod = useLastCallback(() => setIsDayPeriod(true));
+  const handleSwitchPeriod = useLastCallback((next: string) => setPeriod(next as Period));
+  const handlePrev = useLastCallback(() => onPickDay(shiftPeriod(period, picked, -1)));
+  const handleNext = useLastCallback(() => onPickDay(shiftPeriod(period, picked, 1)));
+  const handleToday = useLastCallback(() => onPickDay(today));
 
   const handleGroupToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const next = new Set(hidden);
@@ -74,23 +90,25 @@ const PlannerStatistics = ({
 
   const tabs = [{ title: lang('PlannerStatTime') }, { title: lang('PlannerStatNutrition') }];
 
+  const segments = PERIODS.map((item) => ({ value: item, label: lang(PERIOD_LABELS[item]) }));
+
   return (
     <div className={styles.statistics}>
-      <div className={styles.statHead}>
-        <TabList tabs={tabs} activeTab={content} onSwitchTab={setContent} />
-        <div className={styles.actions}>
-          <Button size="smaller" color={isDayPeriod ? 'translucent' : 'primary'} onClick={handleMonthPeriod}>
-            {lang('PlannerPeriodMonth')}
-          </Button>
-          <Button size="smaller" color={isDayPeriod ? 'primary' : 'translucent'} onClick={handleDayPeriod}>
-            {lang('PlannerPeriodDay')}
-          </Button>
-          {isDayPeriod && (
-            <PlannerField label={lang('PlannerFieldDate')} type="date" value={picked} onCommit={onPickDay} />
-          )}
-        </div>
-      </div>
-      <p className={styles.summary}>{isDayPeriod ? formatDayLong(lang, picked) : formatMonth(lang, month)}</p>
+      <PlannerPeriodBar
+        title={formatPeriod(lang, period, picked)}
+        prevLabel={lang('PlannerPrevPeriod')}
+        nextLabel={lang('PlannerNextPeriod')}
+        picked={picked}
+        segments={segments}
+        activeSegment={period}
+        segmentsLabel={lang('PlannerStatPeriod')}
+        onPrev={handlePrev}
+        onNext={handleNext}
+        onToday={handleToday}
+        onPickDay={onPickDay}
+        onSwitchSegment={handleSwitchPeriod}
+      />
+      <TabList tabs={tabs} activeTab={content} onSwitchTab={setContent} />
       {content === 0 ? renderTime() : renderNutrition()}
     </div>
   );
@@ -154,18 +172,44 @@ const PlannerStatistics = ({
   function renderNutrition() {
     const kcal = getNutrientStatistics(state, days, 'kcal', today);
     // Линия цели на графике — по цели выбранного дня (или сегодняшнего для месяца)
-    const goal = getNutrientGoal(state, isDayPeriod ? picked : today, chartMetric);
-    const maximum = Math.max(
-      goal ? goal.target + goal.tolerance : 0, ...days.map((day) => getNutrientTotal(state, day, chartMetric).value), 1,
-    );
+    const goal = getNutrientGoal(state, isDayPeriod ? picked : today, chartMetric, today);
+    // Столбики: день — столбик; за год — месяц со средним по дням с записями
+    const bars = period === 'year'
+      ? getYearMonths(pickedDate.getFullYear()).map((monthDate) => {
+        const totals = getMonthKeys(monthDate).map((day) => getNutrientTotal(state, day, chartMetric))
+          .filter((total) => total.count && total.missing !== total.count);
+        const value = totals.length ? totals.reduce((sum, total) => sum + total.value, 0) / totals.length : 0;
+        return {
+          key: String(monthDate.getMonth()),
+          label: formatMonthShort(lang, monthDate),
+          name: formatMonthShort(lang, monthDate),
+          value,
+          isEmpty: !totals.length,
+          isComplete: true,
+          hasLabel: true,
+        };
+      })
+      : days.map((day, index) => {
+        const total = getNutrientTotal(state, day, chartMetric);
+        return {
+          key: day,
+          label: String(fromDayKey(day).getDate()),
+          name: formatDay(lang, day),
+          value: total.value,
+          isEmpty: !total.count || total.missing === total.count,
+          isComplete: isDayClosed(state, day, today) && !total.missing,
+          hasLabel: days.length <= 7 || CHART_LABEL_INDEXES.has(index) || index === days.length - 1,
+        };
+      });
+    const maximum = Math.max(goal ? goal.target + goal.tolerance : 0, ...bars.map((bar) => bar.value), 1);
     const step = chartMetric === 'kcal' ? KCAL_AXIS_STEP : chartMetric === 'water' ? WATER_AXIS_STEP : MACRO_AXIS_STEP;
     const ceiling = Math.ceil(maximum / step) * step;
     const fiberDays = days.filter((day) => {
       const total = getNutrientTotal(state, day, 'fiber');
-      return day <= today && state.nutrition[day]?.isComplete && total.count && !total.missing;
+      return day <= today && isDayClosed(state, day, today) && total.count && !total.missing;
     });
     const waterDays = days
-      .filter((day) => day <= today && state.nutrition[day]?.isComplete && isKnownNumber(state.nutrition[day].waterMl));
+      .filter((day) => day <= today && isDayClosed(state, day, today) && isKnownNumber(state.nutrition[day]?.waterMl));
 
     return (
       <div className={styles.foodStat}>
@@ -218,7 +262,13 @@ const PlannerStatistics = ({
             })}
           </tbody>
         </table>
-        <Select label={lang('PlannerStatChartMetric')} value={chartMetric} hasArrow onChange={handleChartMetric}>
+        <Select
+          id="planner-chart-metric"
+          label={lang('PlannerStatChartMetric')}
+          value={chartMetric}
+          hasArrow
+          onChange={handleChartMetric}
+        >
           {PLANNER_GOAL_METRICS.map((metric) => (
             <option key={metric} value={metric}>{formatMetric(lang, metric)}</option>
           ))}
@@ -234,27 +284,21 @@ const PlannerStatistics = ({
           </div>
           <div className={styles.chartBars} style={`--planner-goal: ${goal ? (goal.target / ceiling) * 100 : 0}%`}>
             {goal && <span className={styles.chartGoal} />}
-            {days.map((day, index) => {
-              const total = getNutrientTotal(state, day, chartMetric);
-              const isEmpty = !total.count || total.missing === total.count;
-              const isComplete = Boolean(state.nutrition[day]?.isComplete) && !total.missing;
-              const title = `${formatDay(lang, day)}: ${total.count
-                ? `${formatNumber(lang, total.value)} ${formatMetricUnit(lang, chartMetric)}`
-                : lang('PlannerFoodStatusNone')}`;
-              return (
-                <span
-                  key={day}
-                  className={buildClassName(styles.bar, isEmpty && styles.barEmpty, !isComplete && styles.barOpen)}
-                  style={`--planner-height: ${Math.min(100, (total.value / ceiling) * 100)}%`}
-                  title={title}
-                >
-                  <span className={styles.barFill} />
-                  {(days.length === 1 || CHART_LABEL_INDEXES.has(index) || index === days.length - 1) && (
-                    <span className={styles.barLabel}>{fromDayKey(day).getDate()}</span>
-                  )}
-                </span>
-              );
-            })}
+            {bars.map((bar) => (
+              <span
+                key={bar.key}
+                className={buildClassName(
+                  styles.bar, bar.isEmpty && styles.barEmpty, !bar.isComplete && styles.barOpen,
+                )}
+                style={`--planner-height: ${Math.min(100, (bar.value / ceiling) * 100)}%`}
+                title={`${bar.name}: ${bar.isEmpty
+                  ? lang('PlannerFoodStatusNone')
+                  : `${formatNumber(lang, bar.value)} ${formatMetricUnit(lang, chartMetric)}`}`}
+              >
+                <span className={styles.barFill} />
+                {bar.hasLabel && <span className={styles.barLabel}>{bar.label}</span>}
+              </span>
+            ))}
           </div>
         </div>
         <p className={styles.small}>{lang('PlannerStatChartNote')}</p>

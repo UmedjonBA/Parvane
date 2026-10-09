@@ -1,15 +1,14 @@
-import { memo, useState } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type {
   PlannerEventError, PlannerRepeatError, PlannerSlot, PlannerState, PlannerStatus, PlannerTaskError,
 } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 
+import { formatDay, formatDuration, formatStatus } from './plannerFormat';
 import {
-  formatDay, formatDuration, formatProject, formatStatus,
-} from './plannerFormat';
-import {
-  ensureList, fitsBookingWindow, newId, PLANNER_STATUSES, toTime, validateEvent, validateRepeat, validateTask,
+  ALL_DAY_END, ALL_DAY_START, ensureList, fitsBookingWindow, getDefaultEventEnd, newId, PLANNER_STATUSES, toTime,
+  validateEvent, validateRepeat, validateTask,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -17,10 +16,12 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
+import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import PlannerField from './PlannerField';
+import PlannerListPicker from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
 
 import styles from './Planner.module.scss';
@@ -87,7 +88,26 @@ const PlannerTaskForm = ({
   const [status, setStatus] = useState<PlannerStatus>(params.status || 'queue');
   const [project, setProject] = useState(params.project || '');
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(() => emptyRepeatDraft(params.day || ''));
+  const [isAllDay, setIsAllDay] = useState(false);
+  const [isHoliday, setIsHoliday] = useState(false);
+  // Конец события следует за началом (+1 ч), пока пользователь не задал его сам
+  const [isEndTouched, setIsEndTouched] = useState(Boolean(slot));
   const [error, setError] = useState<string>();
+
+  // Выбор дня в календаре при открытой форме меняет дату формы
+  useEffect(() => {
+    if (params.day) setDay(params.day);
+  }, [params.day]);
+
+  const handleStart = useLastCallback((value: string) => {
+    setStart(value);
+    if (kind === 'event' && !isEndTouched && value) setEnd(getDefaultEventEnd(value));
+  });
+
+  const handleEnd = useLastCallback((value: string) => {
+    setEnd(value);
+    setIsEndTouched(true);
+  });
 
   const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setName(e.currentTarget.value);
@@ -98,16 +118,14 @@ const PlannerTaskForm = ({
   });
 
   const handleKindChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setKind(e.currentTarget.value as 'task' | 'event');
+    const next = e.currentTarget.value as 'task' | 'event';
+    setKind(next);
+    if (next === 'event' && start && !isEndTouched) setEnd(getDefaultEventEnd(start));
     setError(undefined);
   });
 
   const handleStatusChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     setStatus(e.currentTarget.value as PlannerStatus);
-  });
-
-  const handleProjectChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setProject(e.currentTarget.value);
   });
 
   const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
@@ -116,10 +134,12 @@ const PlannerTaskForm = ({
     if (kind === 'event') {
       const event = {
         name: name.trim(),
-        start,
-        end,
+        start: isAllDay ? ALL_DAY_START : start,
+        end: isAllDay ? ALL_DAY_END : (end || (start ? getDefaultEventEnd(start) : '')),
         repeat,
         day: repeat ? undefined : (day || undefined),
+        isAllDay: isAllDay || undefined,
+        isHoliday: isHoliday || undefined,
       };
       const eventError = validateEvent(event);
       if (eventError) {
@@ -185,7 +205,13 @@ const PlannerTaskForm = ({
           })}
         </p>
       )}
-      <Select label={lang('PlannerFieldKind')} value={kind} hasArrow onChange={handleKindChange}>
+      <Select
+        id="planner-new-kind"
+        label={lang('PlannerFieldKind')}
+        value={kind}
+        hasArrow
+        onChange={handleKindChange}
+      >
         <option value="task">{lang('PlannerKindTask')}</option>
         <option value="event">{lang('PlannerKindEvent')}</option>
       </Select>
@@ -226,20 +252,30 @@ const PlannerTaskForm = ({
           </div>
           <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
           <div className={styles.fields}>
-            <Select label={lang('PlannerFieldStatus')} value={status} hasArrow onChange={handleStatusChange}>
+            <Select
+              id="planner-new-status"
+              label={lang('PlannerFieldStatus')}
+              value={status}
+              hasArrow
+              onChange={handleStatusChange}
+            >
               {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
             </Select>
-            <Select label={lang('PlannerFieldList')} value={project} hasArrow onChange={handleProjectChange}>
-              {state.projects.map((item) => <option key={item} value={item}>{formatProject(lang, item)}</option>)}
-            </Select>
           </div>
+          <PlannerListPicker id="planner-new-list" state={state} value={project} onChange={setProject} />
         </>
       ) : (
         <>
-          <div className={styles.fields}>
-            <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
-            <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />
+          <div className={styles.checks}>
+            <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
+            <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
           </div>
+          {!isAllDay && (
+            <div className={styles.fields}>
+              <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={handleStart} />
+              <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={handleEnd} />
+            </div>
+          )}
           {repeatDraft.kind === 'none' && (
             <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
           )}
