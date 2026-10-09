@@ -9,6 +9,8 @@ import {
   getTimeStatistics, makeFoodEntry, moveTask, nextOpenInstance, normalizePlannerState, occursOn, removeSeries,
   setOccurrence, setTaskDone, setTaskStepDone, splitSeries, truncateSeries, validateEvent, validateGoalRecord,
   validateRepeat, validateSettings, validateTask,
+  buildDayIndex, freezePastGoals, getDefaultEventEnd, getGoalsForDay, getListColor, getMonthGridKeys, getWeekKeys,
+  getYearKeys, isDayClosed, isHolidayOn, shiftPeriod,
 } from './plannerModel';
 
 // 8 октября 2026 — четверг
@@ -203,7 +205,9 @@ describe('планировщик: питание', () => {
     expect(getNutrientStatus(state, TODAY, 'protein')).toBe('incomplete');
     expect(getNutrientStatus(state, '2026-10-07', 'kcal')).toBe('none');
     state.nutrition[TODAY].isComplete = false;
-    expect(getNutrientStatus(state, TODAY, 'kcal')).toBe('open');
+    expect(getNutrientStatus(state, TODAY, 'kcal', TODAY)).toBe('open');
+    // spec 013: прошедший день завершён сам, без отметки
+    expect(getNutrientStatus(state, TODAY, 'kcal', '2026-10-09')).toBe('ok');
   });
 
   it('цели завершённого дня не меняются при смене текущих целей', () => {
@@ -441,5 +445,146 @@ describe('планировщик: статистика времени и хра�
     expect(restored.events).toEqual([]);
     expect(restored.projects).toEqual(['', 'Работа', 'Дом']);
     expect(restored.lists.map((list) => list.name)).toEqual(['Работа', 'Дом']);
+  });
+});
+
+describe('планировщик: виды календаря и навигация (spec 013)', () => {
+  it('неделя с понедельника, сетка месяца полными неделями, год', () => {
+    expect(getWeekKeys(TODAY)).toEqual([
+      '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11',
+    ]);
+    // Октябрь 2026 начинается в четверг: три дня сентября в начале, один день ноября в конце
+    const grid = getMonthGridKeys(new Date(2026, 9, 1));
+    expect(grid).toHaveLength(35);
+    expect(grid[0]).toBe('2026-09-28');
+    expect(grid[3]).toBe('2026-10-01');
+    expect(grid[34]).toBe('2026-11-01');
+    expect(getYearKeys(2028)).toHaveLength(366);
+    expect(getYearKeys(2026)[0]).toBe('2026-01-01');
+  });
+
+  it('стрелки листают период вида', () => {
+    expect(shiftPeriod('day', TODAY, 1)).toBe('2026-10-09');
+    expect(shiftPeriod('week', TODAY, -1)).toBe('2026-10-01');
+    expect(shiftPeriod('agenda', TODAY, 1)).toBe('2026-10-15');
+    expect(shiftPeriod('month', '2026-12-31', 2)).toBe('2027-02-28');
+    expect(shiftPeriod('month', '2026-01-15', -1)).toBe('2025-12-15');
+    expect(shiftPeriod('year', '2028-02-29', 1)).toBe('2029-02-28');
+  });
+
+  it('индекс дней совпадает с функциями дня и развёрнут по рядам', () => {
+    const state = stateWith({
+      events: [
+        {
+          id: 'e1', name: 'Созвон', start: '10:00', end: '10:30',
+          repeat: { kind: 'weekly', interval: 1, weekdays: [4], startDay: '2026-10-01' },
+          occurrences: [{ day: '2026-10-15', excluded: true }],
+        },
+        {
+          id: 'e2', name: 'Праздник', start: '00:00', end: '23:59', day: TODAY, isAllDay: true, isHoliday: true,
+        },
+      ],
+      tasks: [
+        task({ id: 't1', day: TODAY, minutes: 45 }),
+        task({ id: 't2', due: '2026-10-09' }),
+        task({ id: 't3', minutes: 20, repeat: { kind: 'daily', interval: 2, startDay: '2026-10-07' } }),
+      ],
+    });
+    const index = buildDayIndex(state, '2026-10-01', '2026-10-31');
+    expect(index.get(TODAY)!.events.map(({ id }) => id)).toEqual(['e2', 'e1']);
+    expect(index.get(TODAY)!.isHoliday).toBe(true);
+    // Весь день в минуты не входит: созвон 30 + задача 45
+    expect(index.get(TODAY)!.minutes).toBe(75);
+    expect(index.get(TODAY)!.minutes).toBe(getDayLoad(state, TODAY));
+    expect(index.has('2026-10-15')).toBe(true);
+    expect(index.get('2026-10-15')!.events).toEqual([]);
+    expect(index.get('2026-10-09')!.deadlines.map(({ id }) => id)).toEqual(['t2']);
+    expect(index.get('2026-10-09')!.tasks.map(({ id }) => id)).toEqual(['t3']);
+    expect(index.get('2026-10-09')!.tasks[0].instanceDay).toBe('2026-10-09');
+    expect(isHolidayOn(state, TODAY)).toBe(true);
+    expect(isHolidayOn(state, '2026-10-09')).toBe(false);
+  });
+
+  it('год с 500 делами индексируется быстро (SC-003)', () => {
+    const tasks = Array.from({ length: 400 }, (_, i) => task({
+      id: `t${i}`, day: `2026-${String((i % 12) + 1).padStart(2, '0')}-${String((i % 28) + 1).padStart(2, '0')}`,
+    }));
+    const events = Array.from({ length: 100 }, (_, i) => ({
+      id: `e${i}`, name: 'Ряд', start: '10:00', end: '11:00',
+      repeat: { kind: 'weekly' as const, interval: 1, weekdays: [i % 7], startDay: '2026-01-01' },
+    }));
+    const started = performance.now();
+    const index = buildDayIndex(stateWith({ tasks, events }), '2026-01-01', '2026-12-31');
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(index.size).toBe(365);
+  });
+});
+
+describe('планировщик: событие на весь день, цвет списка, статусы (spec 013)', () => {
+  it('весь день не требует времени и не занимает день', () => {
+    const allDay = {
+      name: 'Отпуск', start: '00:00', end: '23:59', day: TODAY, isAllDay: true,
+    };
+    expect(validateEvent(allDay)).toBeUndefined();
+    expect(validateEvent({ ...allDay, start: '', end: '' })).toBeUndefined();
+    expect(validateEvent({ ...allDay, isAllDay: false, start: '12:00', end: '11:00' })).toBe('time');
+    const state = stateWith({
+      events: [{ id: 'e', ...allDay }], tasks: [task({ day: TODAY, start: '10:00', minutes: 60 })],
+    });
+    expect(getDayLoad(state, TODAY)).toBe(60);
+    expect(countConflicts(state, TODAY)).toBe(0);
+    expect(getDayAvailability(state, TODAY).free.length).toBeGreaterThan(0);
+    expect(getTimeStatistics(state, [TODAY], new Set()).total).toBe(60);
+  });
+
+  it('конец события по умолчанию — через час, не позже конца суток', () => {
+    expect(getDefaultEventEnd('14:00')).toBe('15:00');
+    expect(getDefaultEventEnd('23:30')).toBe('23:59');
+  });
+
+  it('прежние статусы «позже» и «жду» читаются как «в очереди», цвет списка в пределах палитры', () => {
+    const state = normalizePlannerState({
+      version: 1,
+      tasks: [
+        task({ id: 'a', status: 'later' as never }), task({ id: 'b', status: 'waiting' as never, project: 'Дом' }),
+      ],
+      projects: ['', 'Дом'],
+      lists: [{ id: 'l1', name: 'Дом', order: 0, color: 3 }, { id: 'l2', name: 'Работа', order: 1, color: 12 }],
+    });
+    expect(state.tasks.map(({ status }) => status)).toEqual(['queue', 'queue']);
+    expect(getListColor(state, 'Дом')).toBe(3);
+    expect(getListColor(state, 'Работа')).toBe(0);
+    expect(getListColor(state, '')).toBe(0);
+  });
+});
+
+describe('планировщик: день питания завершается сам (spec 013)', () => {
+  const dayBefore = '2026-10-07';
+  const make = () => stateWith({
+    nutrition: {
+      [dayBefore]: { entries: [{ id: 'a', name: 'a', meal: 'other', kcal: 2000 }], isComplete: false },
+      [TODAY]: { entries: [{ id: 'b', name: 'b', meal: 'other', kcal: 2000 }], isComplete: false },
+    },
+    goals: { kcal: { target: 2000, tolerance: 100 } },
+  });
+
+  it('прошедший день закрыт, сегодняшний открыт', () => {
+    const state = make();
+    expect(isDayClosed(state, dayBefore, TODAY)).toBe(true);
+    expect(isDayClosed(state, TODAY, TODAY)).toBe(false);
+    expect(getNutrientStatus(state, dayBefore, 'kcal', TODAY)).toBe('ok');
+    expect(getNutrientStatus(state, TODAY, 'kcal', TODAY)).toBe('open');
+  });
+
+  it('правка цели не переоценивает прошедшие дни', () => {
+    const state = make();
+    expect(freezePastGoals(state, TODAY)).toBe(1);
+    state.goals = { kcal: { target: 1000, tolerance: 50 } };
+    expect(getGoalsForDay(state, dayBefore, TODAY).kcal!.target).toBe(2000);
+    expect(getNutrientStatus(state, dayBefore, 'kcal', TODAY)).toBe('ok');
+    expect(getGoalsForDay(state, TODAY, TODAY).kcal!.target).toBe(1000);
+    // Повторная заморозка уже зафиксированное не трогает
+    expect(freezePastGoals(state, TODAY)).toBe(0);
+    expect(state.nutrition[TODAY].fixedGoals).toBeUndefined();
   });
 });

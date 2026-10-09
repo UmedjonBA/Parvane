@@ -214,6 +214,36 @@ describe('планировщик ↔ движок (spec 010)', () => {
     });
   });
 
+  it('spec 013: цвет списка, «весь день», «праздник»; одноимённые списки — одним; прежние статусы', () => {
+    const engine: EngineState = {
+      ...ENGINE,
+      tasks: [
+        { ...ENGINE.tasks[0], status: 'later', listId: 'l2' },
+        { ...ENGINE.tasks[1], status: 'waiting' },
+      ],
+      events: [{
+        id: 'e3', name: 'Новый год', start: '00:00', end: '23:59', weekdays: null, day: '2027-01-01', allDay: true,
+        isHoliday: true,
+      }],
+      lists: [{ id: 'l1', name: 'Работа', order: 0, color: 4 }, { id: 'l2', name: 'Работа', order: 1, color: 2 }],
+    };
+    const state = fromEngineState(engine);
+    expect(state.lists).toEqual([{ id: 'l1', name: 'Работа', order: 0, color: 4 }]);
+    expect(state.projects).toEqual(['', 'Работа']);
+    // Задача второго одноимённого списка остаётся в «Работе»
+    expect(state.tasks.map(({ status, project }) => [status, project])).toEqual([['queue', 'Работа'], ['queue', '']]);
+    expect(state.events[0]).toMatchObject({ isAllDay: true, isHoliday: true });
+
+    const next = structuredClone(state);
+    next.lists[0].color = 7;
+    next.events[0].isHoliday = false;
+    const changes = diffChanges(state, next) as {
+      list?: { color: number }; event?: { allDay: boolean; isHoliday: boolean };
+    }[];
+    expect(changes.find((c) => c.list)!.list!.color).toBe(7);
+    expect(changes.find((c) => c.event)!.event).toMatchObject({ allDay: true, isHoliday: false });
+  });
+
   it('перенос этапа 1: числовые id получают префикс устройства, последним — отметка переноса', () => {
     const legacy = createEmptyPlannerState();
     legacy.tasks.push({

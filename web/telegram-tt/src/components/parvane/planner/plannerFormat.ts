@@ -8,8 +8,6 @@ import { fromDayKey, toTime } from './plannerModel';
 const STATUS_KEYS = {
   queue: 'PlannerStatusQueue',
   active: 'PlannerStatusActive',
-  later: 'PlannerStatusLater',
-  waiting: 'PlannerStatusWaiting',
   done: 'PlannerStatusDone',
 } as const satisfies Record<PlannerStatus, string>;
 

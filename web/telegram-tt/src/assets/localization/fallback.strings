@@ -3357,9 +3357,7 @@
 "PlannerStatWaterNone" = "Water: no completed days with data";
 "PlannerStatusActive" = "In progress";
 "PlannerStatusDone" = "Done";
-"PlannerStatusLater" = "Later";
 "PlannerStatusQueue" = "Queue";
-"PlannerStatusWaiting" = "Waiting";
 "PlannerStepAdd" = "Add step";
 "PlannerStepNew" = "New step";
 "PlannerSteps" = "Steps · {done}/{total}";

@@ -42,8 +42,9 @@ type EngineTask = {
 type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
+  allDay?: boolean; isHoliday?: boolean;
 };
-type EngineList = { id: string; name: string; order: number };
+type EngineList = { id: string; name: string; order: number; color?: number };
 type EngineGoal = { target: number; tolerance: number } | null;
 type EngineGoals = {
   kcal: EngineGoal; protein: EngineGoal; fat: EngineGoal; carbs: EngineGoal; fiber?: EngineGoal; water?: EngineGoal;
@@ -141,8 +142,15 @@ function entryFrom(e: EngineEntry): PlannerFoodEntry {
 /** JSON движка → состояние для экранов. */
 export function fromEngineState(engine: EngineState): PlannerState {
   const empty = createEmptyPlannerState();
-  const lists: PlannerList[] = [...engine.lists].sort((a, b) => a.order - b.order || (a.name < b.name ? -1 : 1));
-  const nameById = new Map(lists.map((list) => [list.id, list.name]));
+  const sorted = [...engine.lists].sort((a, b) => a.order - b.order || (a.name < b.name ? -1 : 1));
+  // Задачи находят список по id, поэтому одноимённые списки (созданы на двух устройствах
+  // без связи) показываются одним: в перечне остаётся первый
+  const nameById = new Map(sorted.map((list) => [list.id, list.name]));
+  const seenNames = new Set<string>();
+  const lists: PlannerList[] = sorted.filter((list) => !seenNames.has(list.name) && seenNames.add(list.name))
+    .map((list) => ({
+      id: list.id, name: list.name, order: list.order, color: list.color || undefined,
+    }));
   const tasks: PlannerTask[] = engine.tasks.map((t) => ({
     id: t.id,
     name: t.name,
@@ -187,6 +195,8 @@ export function fromEngineState(engine: EngineState): PlannerState {
         repeat,
         occurrences: occurrencesFrom(e.occurrences),
         origin: e.origin ? { seriesId: e.origin.seriesId, day: e.origin.day } : undefined,
+        isAllDay: e.allDay || undefined,
+        isHoliday: e.isHoliday || undefined,
       };
     }),
     projects: ['', ...lists.map((list) => list.name)],
@@ -267,12 +277,18 @@ function eventChange(e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
       weekdays: null,
       day: e.day || '',
       ...seriesFields(e, previous),
+      allDay: Boolean(e.isAllDay),
+      isHoliday: Boolean(e.isHoliday),
     },
   };
 }
 
 function listChange(l: PlannerList): PlannerChange {
-  return { list: { id: l.id, name: l.name, order: l.order } };
+  return {
+    list: {
+      id: l.id, name: l.name, order: l.order, color: l.color || 0,
+    },
+  };
 }
 
 function goalsOf(goals: PlannerGoalValues) {

@@ -2,8 +2,18 @@
 // питание и статистика. Чистые функции над `PlannerState`, без UI и хранилища.
 // Референс возможностей — макет пользователя planner.html (вариант «списки»).
 
-export type PlannerStatus = 'queue' | 'active' | 'later' | 'waiting' | 'done';
-export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'later', 'waiting', 'done'];
+// Три статуса (spec 013); прежние `later` и `waiting` читаются как `queue`
+export type PlannerStatus = 'queue' | 'active' | 'done';
+export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'done'];
+
+export type PlannerCalendarView = 'year' | 'month' | 'week' | 'day' | 'agenda';
+export const PLANNER_CALENDAR_VIEWS: PlannerCalendarView[] = ['year', 'month', 'week', 'day', 'agenda'];
+// Цвет списка: 0 — нет, 1…8 — индекс палитры
+export const LIST_COLOR_COUNT = 8;
+export const ALL_DAY_START = '00:00';
+export const ALL_DAY_END = '23:59';
+export const DEFAULT_EVENT_MINUTES = 60;
+export const AGENDA_DAYS = 30;
 
 export type PlannerStep = { text: string; isDone: boolean };
 
@@ -78,6 +88,10 @@ export type PlannerEvent = {
   occurrences?: PlannerOccurrence[];
   origin?: PlannerOrigin;
   instanceDay?: string;
+  // Весь день: времени нет (хранится 00:00–23:59), в загрузку и окна дня не входит
+  isAllDay?: boolean;
+  // Праздник: день события отмечается в календаре
+  isHoliday?: boolean;
 };
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
@@ -135,7 +149,7 @@ export type PlannerSettings = {
 
 // Список задач: `projects` (имена, '' — «Без списка») — вид для экранов,
 // `lists` — сущности с id для синхронизации (spec 010); `projects` строится из `lists`
-export type PlannerList = { id: string; name: string; order: number };
+export type PlannerList = { id: string; name: string; order: number; color?: number };
 
 export type PlannerState = {
   version: 1;
@@ -216,6 +230,10 @@ export function ensureList(state: PlannerState, name: string): PlannerList | und
   return created;
 }
 
+export function getListColor(state: PlannerState, name: string) {
+  return (name && state.lists.find((list) => list.name === name)?.color) || 0;
+}
+
 export function hasLunchBreak(settings: PlannerSettings) {
   return settings.lunchEnd > settings.lunchStart;
 }
@@ -256,6 +274,45 @@ export function getMonthKeys(month: Date) {
 // Смещение первого дня месяца при неделе с понедельника
 export function getMonthOffset(month: Date) {
   return (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;
+}
+
+/** Неделя дня с понедельника по воскресенье. */
+export function getWeekKeys(day: string) {
+  const monday = addDays(day, -mondayBased(weekdayOf(day)));
+  return Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+}
+
+export function getYearMonths(year: number) {
+  return Array.from({ length: 12 }, (_, i) => new Date(year, i, 1));
+}
+
+export function getYearKeys(year: number) {
+  return getYearMonths(year).flatMap(getMonthKeys);
+}
+
+/** Сетка месяца полными неделями: дни соседних месяцев в начале и в конце. */
+export function getMonthGridKeys(month: Date) {
+  const days = getMonthKeys(month);
+  const first = addDays(days[0], -getMonthOffset(month));
+  const count = Math.ceil((getMonthOffset(month) + days.length) / 7) * 7;
+  return Array.from({ length: count }, (_, i) => addDays(first, i));
+}
+
+/** Сдвиг якоря на период вида: год, месяц, неделя, день; расписание листается неделями. */
+export function shiftPeriod(view: PlannerCalendarView, day: string, delta: number) {
+  if (view === 'day') return addDays(day, delta);
+  if (view === 'week' || view === 'agenda') return addDays(day, delta * 7);
+  const d = parts(day);
+  const target = view === 'year'
+    ? { year: d.year + delta, month: d.month }
+    : { year: d.year + Math.floor((d.month - 1 + delta) / 12), month: ((d.month - 1 + delta) % 12 + 12) % 12 + 1 };
+  const date = Math.min(d.date, daysInMonth(target.year, target.month));
+  return `${target.year}-${String(target.month).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
+}
+
+/** Конец события по умолчанию: через час после начала, но не позже конца суток. */
+export function getDefaultEventEnd(start: string) {
+  return toTime(Math.min(toMinutes(start) + DEFAULT_EVENT_MINUTES, MINUTES_IN_DAY - 1));
 }
 
 // ── повторы: разворачивание ряда ─────────────────────────────────────────────
@@ -588,7 +645,64 @@ export function getEventsForDay(state: PlannerState, day: string): PlannerEvent[
       if (hasInstanceOn(event, day)) result.push(eventInstance(event, day));
     } else if (event.day === day) result.push(event);
   });
-  return result.sort((a, b) => a.start.localeCompare(b.start));
+  return result.sort(compareEvents);
+}
+
+export type PlannerDayIndexEntry = {
+  tasks: PlannerTask[];
+  events: PlannerEvent[];
+  deadlines: PlannerTask[];
+  isHoliday: boolean;
+  minutes: number;
+};
+
+/**
+ * Дела по дням промежутка за один проход по задачам и событиям — для видов «Год» и
+ * «Расписание», где вызов функций дня на каждый день слишком дорог.
+ */
+export function buildDayIndex(state: PlannerState, fromDay: string, toDay: string) {
+  const index = new Map<string, PlannerDayIndexEntry>();
+  const entryOf = (day: string) => {
+    let entry = index.get(day);
+    if (!entry) {
+      entry = {
+        tasks: [], events: [], deadlines: [], isHoliday: false, minutes: 0,
+      };
+      index.set(day, entry);
+    }
+    return entry;
+  };
+  const isInside = (day?: string): day is string => Boolean(day && day >= fromDay && day <= toDay);
+  const daysOf = (item: PlannerSeriesItem) => (item.repeat
+    ? expandRepeat(item.repeat, fromDay, toDay).filter((day) => !getOccurrence(item, day)?.excluded)
+    : (isInside(item.day) ? [item.day] : []));
+  state.tasks.forEach((task) => {
+    daysOf(task).forEach((day) => {
+      const entry = entryOf(day);
+      entry.tasks.push(task.repeat ? taskInstance(task, day) : task);
+      entry.minutes += task.minutes || 0;
+    });
+    if (!task.repeat && task.status !== 'done' && isInside(task.due)) entryOf(task.due).deadlines.push(task);
+  });
+  state.events.forEach((event) => {
+    daysOf(event).forEach((day) => {
+      const entry = entryOf(day);
+      entry.events.push(event.repeat ? eventInstance(event, day) : event);
+      if (event.isHoliday) entry.isHoliday = true;
+      if (!event.isAllDay) entry.minutes += toMinutes(event.end) - toMinutes(event.start);
+    });
+  });
+  index.forEach((entry) => entry.events.sort(compareEvents));
+  return index;
+}
+
+// События на весь день — первыми, остальные — по началу
+function compareEvents(a: PlannerEvent, b: PlannerEvent) {
+  return Number(Boolean(b.isAllDay)) - Number(Boolean(a.isAllDay)) || a.start.localeCompare(b.start);
+}
+
+export function isHolidayOn(state: PlannerState, day: string) {
+  return getEventsForDay(state, day).some((event) => event.isHoliday);
 }
 
 export function countUnrated(state: PlannerState, day: string) {
@@ -597,13 +711,14 @@ export function countUnrated(state: PlannerState, day: string) {
 
 export function getDayLoad(state: PlannerState, day: string) {
   const events = getEventsForDay(state, day)
-    .reduce((sum, event) => sum + toMinutes(event.end) - toMinutes(event.start), 0);
+    .reduce((sum, event) => sum + (event.isAllDay ? 0 : toMinutes(event.end) - toMinutes(event.start)), 0);
   const tasks = getTasksForDay(state, day).reduce((sum, task) => sum + (task.minutes || 0), 0);
   return events + tasks;
 }
 
 export function getTimedForDay(state: PlannerState, day: string, excludedTaskId?: string): PlannerTimed[] {
   const events: PlannerTimed[] = getEventsForDay(state, day)
+    .filter((event) => !event.isAllDay)
     .map((event) => ({ name: event.name, start: event.start, end: event.end, event }));
   const tasks: PlannerTimed[] = getTasksForDay(state, day)
     .filter((task) => task.start && task.minutes !== undefined && instanceKey(task) !== excludedTaskId)
@@ -801,7 +916,8 @@ export type PlannerEventError = 'name' | 'time' | 'repeat' | PlannerRepeatError;
 
 export function validateEvent(event: Omit<PlannerEvent, 'id'>): PlannerEventError | undefined {
   if (!event.name.trim()) return 'name';
-  if (!TIME_PATTERN.test(event.start) || !TIME_PATTERN.test(event.end) || event.start >= event.end) return 'time';
+  if (!event.isAllDay
+    && (!TIME_PATTERN.test(event.start) || !TIME_PATTERN.test(event.end) || event.start >= event.end)) return 'time';
   if (event.repeat) return validateRepeat(event.repeat);
   if (!event.day) return 'repeat';
   return undefined;
@@ -877,25 +993,52 @@ export function getGoalRecordForDay(state: PlannerState, day: string): PlannerGo
   return Object.keys(state.goals).length ? { id: '', startDay: '', endDay: '', goals: state.goals } : undefined;
 }
 
+/**
+ * День питания завершён (spec 013): прошедший — сам, без действия пользователя; отметка
+ * `isComplete` прежних версий тоже учитывается.
+ */
+export function isDayClosed(state: PlannerState, day: string, today = toDayKey(new Date())) {
+  return day < today || Boolean(state.nutrition[day]?.isComplete);
+}
+
 /** Цели, действующие в день: у завершённого дня — зафиксированные, иначе — по записи. */
-export function getGoalsForDay(state: PlannerState, day: string): PlannerGoalValues {
+export function getGoalsForDay(state: PlannerState, day: string, today?: string): PlannerGoalValues {
   const record = state.nutrition[day];
-  if (record?.isComplete && record.fixedGoals) return record.fixedGoals;
+  if (record?.fixedGoals && isDayClosed(state, day, today)) return record.fixedGoals;
   return getGoalRecordForDay(state, day)?.goals || {};
 }
 
-export function getNutrientGoal(state: PlannerState, day: string, metric: PlannerGoalMetric): PlannerGoal | undefined {
-  return getGoalsForDay(state, day)[metric];
+/**
+ * Перед правкой целей: прошедшим дням с записями фиксируются цели, действовавшие до правки, —
+ * иначе смена цели переоценила бы историю. Возвращает число затронутых дней.
+ */
+export function freezePastGoals(state: PlannerState, today = toDayKey(new Date())) {
+  let count = 0;
+  Object.entries(state.nutrition).forEach(([day, record]) => {
+    if (day >= today || record.fixedGoals || !(record.entries.length || record.waterMl)) return;
+    record.fixedGoals = structuredClone(getGoalRecordForDay(state, day)?.goals || {});
+    record.isComplete = true;
+    count++;
+  });
+  return count;
 }
 
-export function getNutrientStatus(state: PlannerState, day: string, metric: PlannerGoalMetric): PlannerNutrientStatus {
+export function getNutrientGoal(
+  state: PlannerState, day: string, metric: PlannerGoalMetric, today?: string,
+): PlannerGoal | undefined {
+  return getGoalsForDay(state, day, today)[metric];
+}
+
+export function getNutrientStatus(
+  state: PlannerState, day: string, metric: PlannerGoalMetric, today?: string,
+): PlannerNutrientStatus {
   const record = state.nutrition[day];
   const total = getNutrientTotal(state, day, metric);
   if (!record || !total.count) return 'none';
-  const goal = getNutrientGoal(state, day, metric);
+  const goal = getNutrientGoal(state, day, metric, today);
   if (!goal) return 'nogoal';
   if (total.missing) return 'incomplete';
-  if (!record.isComplete) return 'open';
+  if (!isDayClosed(state, day, today)) return 'open';
   if (total.value < goal.target - goal.tolerance) return 'below';
   if (total.value > goal.target + goal.tolerance) return 'above';
   return 'ok';
@@ -904,9 +1047,9 @@ export function getNutrientStatus(state: PlannerState, day: string, metric: Plan
 export function getNutrientStatistics(state: PlannerState, days: string[], metric: PlannerGoalMetric, today: string) {
   const recorded = days.filter((day) => day <= today && getNutrientTotal(state, day, metric).count);
   const complete = recorded
-    .filter((day) => state.nutrition[day].isComplete && !getNutrientTotal(state, day, metric).missing);
+    .filter((day) => isDayClosed(state, day, today) && !getNutrientTotal(state, day, metric).missing);
   // Дни «в норме» считаются по собственной цели каждого дня; дни без цели в норму не входят
-  const withGoal = complete.filter((day) => getNutrientGoal(state, day, metric));
+  const withGoal = complete.filter((day) => getNutrientGoal(state, day, metric, today));
   const sum = roundNutrient(recorded.reduce((total, day) => total + getNutrientTotal(state, day, metric).value, 0));
   const completeSum = roundNutrient(
     complete.reduce((total, day) => total + getNutrientTotal(state, day, metric).value, 0),
@@ -917,14 +1060,14 @@ export function getNutrientStatistics(state: PlannerState, days: string[], metri
     withGoal,
     sum,
     completeSum,
-    inGoal: withGoal.filter((day) => getNutrientStatus(state, day, metric) === 'ok').length,
+    inGoal: withGoal.filter((day) => getNutrientStatus(state, day, metric, today) === 'ok').length,
     average: complete.length ? roundNutrient(completeSum / complete.length) : undefined,
     goalLow: withGoal.reduce((total, day) => {
-      const goal = getNutrientGoal(state, day, metric)!;
+      const goal = getNutrientGoal(state, day, metric, today)!;
       return total + goal.target - goal.tolerance;
     }, 0),
     goalHigh: withGoal.reduce((total, day) => {
-      const goal = getNutrientGoal(state, day, metric)!;
+      const goal = getNutrientGoal(state, day, metric, today)!;
       return total + goal.target + goal.tolerance;
     }, 0),
   };
@@ -961,7 +1104,8 @@ export function getTimeStatistics(state: PlannerState, days: string[], hidden: R
       if (task.minutes === undefined) unrated++;
       else add(task.project, task.minutes);
     });
-    getEventsForDay(state, day).forEach((event) => add(EVENTS_GROUP, toMinutes(event.end) - toMinutes(event.start)));
+    getEventsForDay(state, day).filter((event) => !event.isAllDay)
+      .forEach((event) => add(EVENTS_GROUP, toMinutes(event.end) - toMinutes(event.start)));
   });
   const rows = [...groups]
     .filter(([, minutes]) => minutes > 0)
@@ -1034,6 +1178,8 @@ export function normalizePlannerState(raw: unknown): PlannerState {
         day: !repeat && isDay(event.day) ? event.day : undefined,
         ...series,
         repeat,
+        isAllDay: event.isAllDay ? true : undefined,
+        isHoliday: event.isHoliday ? true : undefined,
       };
     });
 
@@ -1046,7 +1192,13 @@ export function normalizePlannerState(raw: unknown): PlannerState {
   const savedLists = Array.isArray(saved.lists) ? saved.lists : [];
   const lists: PlannerList[] = savedLists
     .filter((list) => list && typeof list.id === 'string' && typeof list.name === 'string' && list.name)
-    .map((list, index) => ({ id: list.id, name: list.name, order: Number.isFinite(list.order) ? list.order : index }));
+    .map((list, index) => ({
+      id: list.id,
+      name: list.name,
+      order: Number.isFinite(list.order) ? list.order : index,
+      color: Number.isInteger(list.color) && list.color! >= 1 && list.color! <= LIST_COLOR_COUNT
+        ? list.color : undefined,
+    }));
   projects.filter(Boolean).forEach((name) => {
     if (!lists.some((list) => list.name === name)) lists.push({ id: newId(), name, order: lists.length });
   });
