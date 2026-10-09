@@ -1399,9 +1399,7 @@
 "PlannerStatWaterNone" = "Вода: нет завершённых дней с данными";
 "PlannerStatusActive" = "В работе";
 "PlannerStatusDone" = "Готово";
-"PlannerStatusLater" = "Позже";
 "PlannerStatusQueue" = "Очередь";
-"PlannerStatusWaiting" = "Жду";
 "PlannerStepAdd" = "Добавить шаг";
 "PlannerStepNew" = "Новый шаг";
 "PlannerSteps" = "Шаги · {done}/{total}";

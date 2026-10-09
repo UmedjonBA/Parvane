@@ -27,7 +27,7 @@ type OwnProps = {
   onCreateTask: NoneToVoidFunction;
 };
 
-const GROUP_ORDER: PlannerStatus[] = ['active', 'queue', 'waiting', 'later'];
+const GROUP_ORDER: PlannerStatus[] = ['active', 'queue'];
 const LIST_NAME_MAX_LENGTH = 60;
 
 // Задачи без дедлайна по спискам; задачи с дедлайном живут в календаре

@@ -2461,9 +2461,7 @@ export interface LangPair {
   'PlannerStatWaterNone': undefined;
   'PlannerStatusActive': undefined;
   'PlannerStatusDone': undefined;
-  'PlannerStatusLater': undefined;
   'PlannerStatusQueue': undefined;
-  'PlannerStatusWaiting': undefined;
   'PlannerStepAdd': undefined;
   'PlannerStepNew': undefined;
   'PlannerSyncPending': undefined;
