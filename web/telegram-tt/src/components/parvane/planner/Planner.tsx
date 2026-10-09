@@ -344,6 +344,16 @@ const Planner = ({ isMobile }: OwnProps) => {
   const calendarSegments = PLANNER_CALENDAR_VIEWS
     .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) }));
   const isMonthView = calendarView === 'month';
+  const settingsButton = (
+    <Button
+      round
+      size="smaller"
+      color="translucent"
+      iconName="settings"
+      ariaLabel={lang('PlannerSettings')}
+      onClick={handleOpenSettings}
+    />
+  );
 
   return (
     <div
@@ -365,23 +375,20 @@ const Planner = ({ isMobile }: OwnProps) => {
             onClick={handleBackToMessenger}
           />
         )}
-        <h1 className={styles.title}>{title}</h1>
+        {/* Узкий экран: заголовка и кнопки добавления нет — вкладки стоят в строке со стрелкой,
+            шестерёнка — в строке периода, задача добавляется из расписания дня */}
+        {!isNarrow && <h1 className={styles.title}>{title}</h1>}
         <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
-        <div className={styles.headerButtons}>
-          <Button
-            round
-            size="smaller"
-            color="translucent"
-            iconName="settings"
-            ariaLabel={lang('PlannerSettings')}
-            onClick={handleOpenSettings}
-          />
-          {view !== VIEW_STATISTICS && (
-            <Button size="smaller" disabled={isFood && picked > today} onClick={handleAdd}>
-              {lang(isFood ? 'PlannerAddFood' : 'PlannerAddTask')}
-            </Button>
-          )}
-        </div>
+        {(!isNarrow || view === VIEW_TASKS) && (
+          <div className={styles.headerButtons}>
+            {settingsButton}
+            {!isNarrow && view !== VIEW_STATISTICS && (
+              <Button size="smaller" disabled={isFood && picked > today} onClick={handleAdd}>
+                {lang(isFood ? 'PlannerAddFood' : 'PlannerAddTask')}
+              </Button>
+            )}
+          </div>
+        )}
       </header>
       {syncNoticeKey && (
         <div
@@ -462,6 +469,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                   segments={calendarSegments}
                   activeSegment={calendarView}
                   segmentsLabel={lang('PlannerCalView')}
+                  trailing={isNarrow ? settingsButton : undefined}
                   onPrev={handlePrevPeriod}
                   onNext={handleNextPeriod}
                   onToday={handleToday}
@@ -474,6 +482,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                   state={state}
                   picked={picked}
                   today={today}
+                  trailing={isNarrow ? settingsButton : undefined}
                   onPickDay={pickDay}
                   onOpenFoodDay={handleOpenFoodDay}
                 />
@@ -544,6 +553,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                   <PlannerDay
                     state={state}
                     day={picked}
+                    isStrip={isNarrow}
                     inlineForm={isInlineForm ? (
                       <PlannerTaskForm
                         state={state}

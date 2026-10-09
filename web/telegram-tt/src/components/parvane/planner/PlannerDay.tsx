@@ -32,11 +32,14 @@ type OwnProps = {
   // с началом `inlineFormStart` либо в конце списка
   inlineForm?: TeactNode;
   inlineFormStart?: number;
+  // Узкий экран: расписание — горизонтальная лента под календарём, листается вбок; форма новой
+  // задачи раскрывается под лентой
+  isStrip?: boolean;
 };
 
 // Расписание дня: свободные окна 09–21 и занятые отрезки, дела без времени, дедлайны
 const PlannerDay = ({
-  state, day, inlineForm, inlineFormStart, onOpenTask, onOpenEvent, onCreateTask,
+  state, day, inlineForm, inlineFormStart, isStrip, onOpenTask, onOpenEvent, onCreateTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -99,74 +102,82 @@ const PlannerDay = ({
   return (
     <div ref={rootRef} className={styles.dayList}>
       <p className={buildClassName(styles.summary, isOver && styles.warning)}>{summary}</p>
-      {allDay.map((event) => (
-        <div key={`allday${instanceKey(event)}`} className={styles.busyRow} data-all-day={event.id}>
-          <span className={styles.clock}>{lang('PlannerAllDayShort')}</span>
-          {renderEvent(event)}
-        </div>
-      ))}
-      {chunks.map((chunk) => (chunk.items ? (
-        <section
-          key={`busy${chunk.start}`}
-          className={buildClassName(styles.busy, chunk.items.length > 1 && styles.busyCollision)}
-        >
-          {chunk.items.map((item) => (
-            <div
-              key={item.task ? `task${instanceKey(item.task)}` : `event${instanceKey(item.event!)}`}
-              className={styles.busyRow}
-            >
-              <span className={styles.clock}>{`${item.start}–${item.end}`}</span>
-              {item.task ? (
-                <PlannerTaskRow
-                  task={item.task}
-                  context="day"
-                  color={getListColor(state, item.task.project)}
-                  onOpen={onOpenTask}
-                />
-              ) : renderEvent(item.event!)}
-            </div>
-          ))}
-          {chunk.items.length > 1 && <div className={styles.warning}>{lang('PlannerTimeConflict')}</div>}
-        </section>
-      ) : inlineForm && chunk.start === inlineFormStart ? (
-        <div key={`form${chunk.start}`} className={styles.inlineForm} data-inline-form>
-          {inlineForm}
-        </div>
-      ) : (
-        <button
-          key={`free${chunk.start}`}
-          type="button"
-          className={styles.free}
-          data-start={chunk.start}
-          data-end={chunk.end}
-          aria-label={lang('PlannerAriaFreeSlot', { from: toTime(chunk.start), to: toTime(chunk.end) })}
-          onClick={handleFreeClick}
-        >
-          <span className={styles.clock}>{`${toTime(chunk.start)}–${toTime(chunk.end)}`}</span>
-          <span className={styles.freeBody}>
-            <span>{lang('PlannerFree')}</span>
-            <span className={styles.small}>{`${formatDuration(lang, chunk.end - chunk.start)} · +`}</span>
-          </span>
-        </button>
-      )))}
-      {Boolean(untimed.length) && <h3 className={styles.group}>{lang('PlannerGroupUntimed')}</h3>}
-      {untimed.map((task) => (
-        <PlannerTaskRow
-          key={instanceKey(task)}
-          task={task}
-          context="day"
-          color={getListColor(state, task.project)}
-          onOpen={onOpenTask}
-        />
-      ))}
-      {Boolean(deadlines.length) && <h3 className={styles.group}>{lang('PlannerGroupDeadlines')}</h3>}
-      {deadlines.map((task) => <PlannerTaskRow key={`due${task.id}`} task={task} context="day" onOpen={onOpenTask} />)}
-      {inlineForm && !hasInlineSlot ? (
+      <div
+        className={buildClassName(styles.dayItems, isStrip && styles.dayStrip, isStrip && 'no-scrollbar')}
+        data-day-strip={isStrip ? '1' : undefined}
+      >
+        {allDay.map((event) => (
+          <div key={`allday${instanceKey(event)}`} className={styles.busyRow} data-all-day={event.id}>
+            <span className={styles.clock}>{lang('PlannerAllDayShort')}</span>
+            {renderEvent(event)}
+          </div>
+        ))}
+        {chunks.map((chunk) => (chunk.items ? (
+          <section
+            key={`busy${chunk.start}`}
+            className={buildClassName(styles.busy, chunk.items.length > 1 && styles.busyCollision)}
+          >
+            {chunk.items.map((item) => (
+              <div
+                key={item.task ? `task${instanceKey(item.task)}` : `event${instanceKey(item.event!)}`}
+                className={styles.busyRow}
+              >
+                <span className={styles.clock}>{`${item.start}–${item.end}`}</span>
+                {item.task ? (
+                  <PlannerTaskRow
+                    task={item.task}
+                    context="day"
+                    color={getListColor(state, item.task.project)}
+                    onOpen={onOpenTask}
+                  />
+                ) : renderEvent(item.event!)}
+              </div>
+            ))}
+            {chunk.items.length > 1 && <div className={styles.warning}>{lang('PlannerTimeConflict')}</div>}
+          </section>
+        ) : inlineForm && !isStrip && chunk.start === inlineFormStart ? (
+          <div key={`form${chunk.start}`} className={styles.inlineForm} data-inline-form>
+            {inlineForm}
+          </div>
+        ) : (
+          <button
+            key={`free${chunk.start}`}
+            type="button"
+            className={styles.free}
+            data-start={chunk.start}
+            data-end={chunk.end}
+            aria-label={lang('PlannerAriaFreeSlot', { from: toTime(chunk.start), to: toTime(chunk.end) })}
+            onClick={handleFreeClick}
+          >
+            <span className={styles.clock}>{`${toTime(chunk.start)}–${toTime(chunk.end)}`}</span>
+            <span className={styles.freeBody}>
+              <span>{lang('PlannerFree')}</span>
+              <span className={styles.small}>{`${formatDuration(lang, chunk.end - chunk.start)} · +`}</span>
+            </span>
+          </button>
+        )))}
+        {Boolean(untimed.length) && <h3 className={styles.group}>{lang('PlannerGroupUntimed')}</h3>}
+        {untimed.map((task) => (
+          <PlannerTaskRow
+            key={instanceKey(task)}
+            task={task}
+            context="day"
+            color={getListColor(state, task.project)}
+            onOpen={onOpenTask}
+          />
+        ))}
+        {Boolean(deadlines.length) && <h3 className={styles.group}>{lang('PlannerGroupDeadlines')}</h3>}
+        {deadlines.map((task) => (
+          <PlannerTaskRow key={`due${task.id}`} task={task} context="day" onOpen={onOpenTask} />
+        ))}
+        {(!inlineForm || isStrip || hasInlineSlot) && (
+          <Button isText size="smaller" className={styles.inlineAdd} onClick={handleAdd}>
+            {lang('PlannerAddTaskForDay')}
+          </Button>
+        )}
+      </div>
+      {Boolean(inlineForm) && (isStrip || !hasInlineSlot) && (
         <div className={styles.inlineForm} data-inline-form>{inlineForm}</div>
-      ) : (
-        <Button isText size="smaller" className={styles.inlineAdd} onClick={handleAdd}>
-          {lang('PlannerAddTaskForDay')}
-        </Button>
       )}
     </div>
   );

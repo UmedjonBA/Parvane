@@ -513,24 +513,46 @@ try {
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
-  // Телефон: новая задача пишется прямо в расписании дня, на месте свободного окна, а не на весь экран
+  // Телефон: заголовка и кнопки «+ Задача» нет, шестерёнка — в строке периода; расписание дня —
+  // горизонтальная лента под календарём, календарь остаётся на виду
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
+  assert.equal(await planner.getByRole('button', { name: '+ Task', exact: true }).count(), 0, 'на телефоне кнопки «+ Задача» нет');
+  assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
   await todayCell.click({ position: { x: 10, y: 10 } });
   await planner.getByText('Schedule', { exact: true }).first().click();
-  const freeSlot = dayPane.getByRole('button', { name: /free slot/ }).first();
-  await freeSlot.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const slotsBefore = await dayPane.getByRole('button', { name: /free slot/ }).count();
-  await freeSlot.click();
+  const strip = dayPane.locator('[data-day-strip]');
+  await strip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const layout = await page.evaluate(() => {
+    const cell = document.querySelector('#ParvanePlanner [role="gridcell"]').getBoundingClientRect();
+    const stripEl = document.querySelector('#ParvanePlanner [data-day-strip]');
+    const cards = [...stripEl.children].map((el) => el.getBoundingClientRect());
+    return {
+      cellTop: cell.top,
+      stripTop: stripEl.getBoundingClientRect().top,
+      isRow: cards.length > 1 && Math.abs(cards[0].top - cards[1].top) < 4 && cards[1].left > cards[0].left,
+      canScroll: stripEl.scrollWidth > stripEl.clientWidth,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  assert.ok(layout.stripTop > layout.cellTop, `расписание дня должно стоять под календарём: ${JSON.stringify(layout)}`);
+  assert.ok(layout.isRow, `расписание дня должно быть горизонтальной лентой: ${JSON.stringify(layout)}`);
+  assert.ok(layout.canScroll, `лента должна листаться вбок: ${JSON.stringify(layout)}`);
+  assert.ok(layout.overflow <= 0, `страница не должна листаться вбок: ${JSON.stringify(layout)}`);
+  assert.ok(await todayCell.isVisible(), 'календарь остаётся на виду');
+  // Новая задача: нажатие на свободное время раскрывает форму под лентой, без отдельного экрана
+  await strip.getByRole('button', { name: /free slot/ }).first().click();
   const inlineForm = dayPane.locator('[data-inline-form]');
   await inlineForm.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await sidePane.count(), 0, 'на телефоне форма задачи не должна открываться отдельным экраном');
-  assert.equal(await dayPane.getByRole('button', { name: /free slot/ }).count(), slotsBefore - 1, 'форма стоит на месте свободного окна');
   await inlineForm.locator('#planner-new-name').fill('С телефона');
   await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
   await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await dayPane.getByText('С телефона').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByRole('button', { name: 'To the calendar' }).click();
-  console.log('OK: телефон — новая задача раскрывается в расписании дня');
+  await strip.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  // Шестерёнка — в строке периода
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sidePane.getByRole('button', { name: 'Close' }).first().click();
+  console.log('OK: телефон — компактная шапка, расписание лентой под календарём, новая задача под лентой');
   await planner.getByRole('button', { name: 'Chats' }).click();
   await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — вход из меню и возврат');

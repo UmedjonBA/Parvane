@@ -1,3 +1,4 @@
+import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerCalendarView, PlannerGoalMetric, PlannerState } from './plannerModel';
@@ -28,6 +29,7 @@ type OwnProps = {
   state: PlannerState;
   picked: string;
   today: string;
+  trailing?: TeactNode;
   onPickDay: (day: string) => void;
   onOpenFoodDay: (day: string) => void;
 };
@@ -48,7 +50,7 @@ const WATER_AXIS_STEP = 500;
 
 // Статистика за день, неделю, месяц или год: время по спискам и питание по целям
 const PlannerStatistics = ({
-  state, picked, today, onPickDay, onOpenFoodDay,
+  state, picked, today, trailing, onPickDay, onOpenFoodDay,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -102,6 +104,7 @@ const PlannerStatistics = ({
         segments={segments}
         activeSegment={period}
         segmentsLabel={lang('PlannerStatPeriod')}
+        trailing={trailing}
         onPrev={handlePrev}
         onNext={handleNext}
         onToday={handleToday}
