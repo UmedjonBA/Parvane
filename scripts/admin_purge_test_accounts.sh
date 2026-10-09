@@ -51,7 +51,12 @@ print(",".join(keys) or "\x27\x27")
 # Группы v2, где нет никого, кроме аккаунтов дыма
 GROUPS_V2="SELECT group_id FROM group_members_v2 GROUP BY group_id HAVING SUM(member NOT IN (SELECT u FROM t)) = 0"
 # Группы v1, созданные аккаунтом дыма и без посторонних участников
-GROUPS_V1="SELECT id FROM groups WHERE created_by IN (SELECT u FROM t) AND id NOT IN (SELECT group_id FROM group_members WHERE member NOT IN (SELECT u FROM t))"
+# База, созданная после удаления v1 (чистый деплой 10 окт 2026), таблиц групп v1 не имеет
+if [[ "$(echo "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='groups';" | sql messenger messenger.db)" == 1 ]]; then
+  GROUPS_V1="SELECT id FROM groups WHERE created_by IN (SELECT u FROM t) AND id NOT IN (SELECT group_id FROM group_members WHERE member NOT IN (SELECT u FROM t))"
+else
+  GROUPS_V1="SELECT NULL WHERE 0"
+fi
 FILES="SELECT id FROM files WHERE owner IN (SELECT u FROM t)"
 
 IDENTITY_V1=(
@@ -119,7 +124,14 @@ batch() {  # batch <пролог> <таблица|условие>…
 run() {  # run <шард> <база> <пролог> <пункты…>
   local shard="$1" db="$2" prologue="$3"; shift 3
   echo "== $db"
-  batch "$prologue" "$@" | sql "$shard" "$db" | awk -F'|' '$2 != 0 { printf "  %-24s %s\n", $1, $2 }'
+  # Только существующие таблицы: в свежей базе таблиц прежних версий нет
+  local tables items=() item
+  tables="$(echo "SELECT name FROM sqlite_master WHERE type='table';" | sql "$shard" "$db")"
+  for item in "$@"; do
+    grep -qx -- "${item%%|*}" <<<"$tables" && items+=("$item")
+  done
+  (( ${#items[@]} )) || return 0
+  batch "$prologue" "${items[@]}" | sql "$shard" "$db" | awk -F'|' '$2 != 0 { printf "  %-24s %s\n", $1, $2 }'
 }
 
 if (( APPLY )); then
