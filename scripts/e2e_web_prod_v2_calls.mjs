@@ -8,6 +8,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   autoDismissRecoveryKeyDialog,
+  callMediaStats,
   expectMediaFlowing,
   findMessage,
   LOGIN_TIMEOUT_MS,
@@ -33,6 +34,20 @@ async function botConfirm(token, telegramId) {
 // Регистрация через форму и подтверждение «ботом»; возвращает сессию с журналом провайдера
 async function register(context, nick, telegramId) {
   const { baseUrl, gatewayUrl } = requireEnv();
+  // Прод-сборка не ведёт список соединений WebRTC для сценариев — ведём его сами
+  // PARVANE_E2E_FORCE_RELAY=1 — медиа только через TURN: так звонят из разных сетей за NAT
+  await context.addInitScript((isRelayOnly) => {
+    const Original = window.RTCPeerConnection;
+    if (!Original || window.__parvaneE2ePeers) return;
+    window.__parvaneE2ePeers = [];
+    window.RTCPeerConnection = function PeerConnection(config, ...rest) {
+      const pc = new Original(isRelayOnly ? { ...config, iceTransportPolicy: 'relay' } : config, ...rest);
+      window.__parvaneE2ePeers.push(pc);
+      return pc;
+    };
+    window.RTCPeerConnection.prototype = Original.prototype;
+    Object.assign(window.RTCPeerConnection, { generateCertificate: Original.generateCertificate });
+  }, process.env.PARVANE_E2E_FORCE_RELAY === '1');
   const page = await context.newPage();
   await autoDismissRecoveryKeyDialog(page);
   const errors = [];
@@ -129,6 +144,7 @@ try {
   await expectMediaFlowing(alice.page, { audio: true });
   await expectMediaFlowing(bob.page, { audio: true });
   console.log('OK: аудиозвонок соединён, звук идёт в обе стороны');
+  console.log(`   путь медиа: ${(await callMediaStats(alice.page)).map((p) => `${p.connectionState}/${p.candidateType}`).join(', ')}`);
   await alice.page.getByRole('button', { name: 'End Call' }).click();
   await bob.page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: CALL_TIMEOUT_MS });
 
