@@ -101,6 +101,10 @@ try {
   await aliceSession.page.getByRole('menuitem', { name: 'Schedule Message' }).click();
   const calendar = aliceSession.page.locator('.CalendarModal');
   await calendar.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Дни недели и месяц — словами, а не ключами `lng_weekdayN` / `lng_monthN` (spec 012, A3)
+  const calendarText = await calendar.innerText();
+  assert.ok(!/lng_/.test(calendarText), `в календаре сырые ключи строк: ${calendarText.slice(0, 200)}`);
+  assert.match(calendarText, /Mon/, 'в календаре нет дней недели');
   // Ближайший доступный слот: подтверждаем предложенное время
   await calendar.locator('.footer .Button, .footer button').first().click();
   await calendar.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });

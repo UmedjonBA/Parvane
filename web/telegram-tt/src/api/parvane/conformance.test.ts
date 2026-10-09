@@ -1550,3 +1550,29 @@ describe('TASK-1: задание в чат — видимые сообщения
     expect(r.clients.android).toContain('taskOfferShowsAsText');
   });
 });
+
+describe('ORDER-1: живое сообщение встаёт после всего, что уже есть в чате', () => {
+  const r = rule('ORDER-1') as unknown as {
+    liveWindowSecs: number;
+    orderField: string;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('web: окно «живого», сохранение места и порядок восстановления', () => {
+    const store = readRepo('web/telegram-tt/src/api/parvane/store.ts');
+    expect(store).toContain(`const LIVE_ORDER_WINDOW_SECS = ${r.liveWindowSecs};`);
+    expect(store).toContain('export function compareStoredOrder(');
+    const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
+    expect(sync).toContain(`{ ...stored, ${r.orderField}: message.id }`);
+    expect(sync).toContain('records.concat(savedNotes).sort(compareStoredOrder)');
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toContain(`${r.orderField}: localMessage.id,`);
+    expect(readRepo('web/telegram-tt/src/api/parvane/wire.ts')).toContain(`${r.orderField}?: number;`);
+  });
+
+  // Правило открыто, пока desktop и android упорядочивают по времени отправителя
+  it('desktop и android отмечены открытыми', () => {
+    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+});

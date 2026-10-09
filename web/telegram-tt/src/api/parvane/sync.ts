@@ -8,7 +8,7 @@ import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { isContentAllowedForMember } from './groups';
 import { readPollFields } from './polls';
-import { buildWebPage, type ParvaneStore } from './store';
+import { buildWebPage, compareStoredOrder, type ParvaneStore } from './store';
 import {
   TOPIC_IDENTITY_RESOLVE,
   type WireGroupInfo,
@@ -490,7 +490,7 @@ export function createSyncController(deps: SyncDependencies) {
     store.putMessage(message);
     // Кэш истории: живые строки и строки протокола v2 — восстановление из кэша
     // (shouldPersist=false) не переписывает само себя
-    if (shouldPersist) persistHistory(stored);
+    if (shouldPersist) persistHistory(stored.order ? stored : { ...stored, order: message.id });
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
 
     if (!isKnown) {
@@ -564,8 +564,7 @@ export function createSyncController(deps: SyncDependencies) {
     const knownIds = new Set(records.map((record) => record.id));
     const savedNotes = (await deps.localState.readOwnJournal())
       .filter((message) => message.to === store.self && !knownIds.has(message.id));
-    const ordered = records.concat(savedNotes)
-      .sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
+    const ordered = records.concat(savedNotes).sort(compareStoredOrder);
     for (const stored of ordered) {
       await applyStoredUpdate(stored, false);
     }
@@ -596,7 +595,7 @@ export function createSyncController(deps: SyncDependencies) {
     // Кэша нет (первый вход на устройстве): история — журнал исходящих; остальное
     // придёт инбоксом v2 и линковкой
     const journal = await deps.localState.readOwnJournal();
-    const ordered = journal.sort((left, right) => left.ts - right.ts || (left.id < right.id ? -1 : 1));
+    const ordered = journal.sort(compareStoredOrder);
     deps.log(`полный синк: из журнала ${journal.length}`);
 
     for (const stored of ordered) {

@@ -67,6 +67,8 @@ export function updatePeerColors(
   setPeerColor('4', ['#5CAFFA']);
   setPeerColor('5', ['#408ACF']);
   setPeerColor('6', ['#D95574']);
+  // Parvane: выбор цвета имени предлагает 1–7, а с сервера палитра не приходит
+  setPeerColor('7', ['#3CA5B9']);
 
   Object.entries(peerColors).forEach(([key, value]) => {
     if (!value.colors) return;

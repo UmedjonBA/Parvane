@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildLangPackFromText, hashLangPackText, langPackMethods } from './langPacks';
-import { OLD_LANG_PACK_EN, OLD_LANG_PACK_RU } from './oldLangPack';
+import { buildOldLangPack, OLD_LANG_PACK_EN, OLD_LANG_PACK_RU } from './oldLangPack';
 
 import enText from '../../assets/localization/fallback.strings?raw';
 import ruText from '../../assets/localization/ru.strings?raw';
@@ -20,6 +20,22 @@ const FORK_KEYS = [
 function isForkKey(key: string) {
   return FORK_KEY_PREFIXES.some((prefix) => key.startsWith(prefix)) || FORK_KEYS.includes(key);
 }
+
+// Экраны настроек: каждая строка, которую они называют, обязана быть переведена.
+// Исходники читаем как текст — ключи лежат и в вызовах `lang('Key')`, и в константах
+const SETTINGS_SOURCES = import.meta.glob<string>('../../components/left/settings/**/*.tsx', {
+  query: '?raw', import: 'default', eager: true,
+});
+// Экраны функций, которых в Parvane нет (подарки, passkey Telegram, сайты ботов)
+const EXCLUDED_SETTINGS_FILES
+  = /(SettingsAcceptedGift|SettingsPasskeys|SettingsActiveWebsites?|PremiumStatusItem)\.tsx$/;
+// Строки тех же функций на общих экранах — не показываются
+const EXCLUDED_SETTINGS_KEYS = new Set([
+  'ExceptionTitlePrivacyChargeForMessages', 'PrivacyChargeForMessages', 'PrivacyDescriptionChargeForMessages',
+  'PrivacyDescriptionMessagesContactsAndPremium', 'RemoveFeeTitle', 'PrivacyDisplayGift',
+  'PrivacyDisplayGiftIconInChats', 'PrivacyDisplayGiftsButton', 'PrivacyGifts', 'PrivacyGiftsInfo',
+  'PrivacyGiftsTitle', 'PrivacyValueBots', 'PrivacySubscribeToTelegramPremium', 'SettingsPasskeyTitle',
+]);
 
 function placeholdersOf(text: string) {
   return new Set(text.match(/\{[A-Za-z0-9_]+\}/g) || []);
@@ -107,7 +123,50 @@ describe('Русский языковой пакет', () => {
   });
 });
 
+describe('Перевод экранов настроек', () => {
+  const en = buildLangPackFromText('en', enText);
+  const ru = buildLangPackFromText('ru', ruText);
+
+  it('не оставляет английских строк', () => {
+    const sources = Object.entries(SETTINGS_SOURCES).filter(([path]) => !EXCLUDED_SETTINGS_FILES.test(path));
+    expect(sources.length).toBeGreaterThan(30);
+    const untranslated = new Set<string>();
+    sources.forEach(([, source]) => {
+      (source.match(/'[A-Za-z][A-Za-z0-9_.]*'/g) || []).forEach((literal) => {
+        const key = literal.slice(1, -1);
+        if (key in en.strings && !(key in ru.strings) && !EXCLUDED_SETTINGS_KEYS.has(key)) untranslated.add(key);
+      });
+    });
+    expect([...untranslated].sort()).toEqual([]);
+  });
+
+  it('заглушка неподдерживаемого сообщения не советует обновить приложение', () => {
+    expect(en.strings.MessageUnsupported).toMatch(/not supported in this version of Parvane/);
+    expect(en.strings.MessageUnsupported).not.toMatch(/update/i);
+    expect(ru.strings.MessageUnsupported).toMatch(/в этой версии Parvane/);
+    expect(ru.strings.MessageUnsupported).not.toMatch(/обновите/i);
+  });
+});
+
 describe('Старый лангпак (useOldLang)', () => {
+  it('несёт дни недели и месяцы календаря на обоих языках', () => {
+    const ru = buildOldLangPack('ru');
+    const en = buildOldLangPack('en');
+    for (let day = 1; day <= 7; day++) {
+      expect(ru[`lng_weekday${day}`]).toBeTruthy();
+      expect(en[`lng_weekday${day}`]).toBeTruthy();
+    }
+    for (let month = 1; month <= 12; month++) {
+      expect(ru[`lng_month${month}`]).toBeTruthy();
+      expect(en[`lng_month${month}`]).toBeTruthy();
+    }
+    expect(en.lng_weekday1).toBe('Mon');
+    expect(en.lng_weekday7).toBe('Sun');
+    expect(ru.lng_weekday1).toBe('Пн');
+    expect(ru.lng_month10).toBe('Октябрь');
+    expect(en.lng_month10).toBe('October');
+  });
+
   it('русский словарь покрывает все английские ключи с теми же подстановками', () => {
     const missing = Object.keys(OLD_LANG_PACK_EN).filter((key) => !(key in OLD_LANG_PACK_RU));
     expect(missing).toEqual([]);

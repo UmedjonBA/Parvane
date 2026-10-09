@@ -379,9 +379,7 @@ const Profile = ({
 
   const tabs = useMemo(() => {
     const arr: LocalTabProps[] = [];
-    if (isGeneralSavedMessages) {
-      arr.push({ type: 'dialogs', key: 'ProfileTabSavedDialogs' });
-    }
+    // Parvane: вкладки «Чаты» у «Избранного» нет — сохранённых диалогов Telegram у нас не бывает
 
     if (hasStoriesTab) {
       arr.push({ type: 'stories', key: 'ProfileTabStories' });
@@ -456,7 +454,7 @@ const Profile = ({
       } satisfies TabWithPropertiesAndType;
     });
   }, [
-    isGeneralSavedMessages, hasStoriesTab, hasGiftsTab, hasMembersTab, hasPreviewMediaTab, isTopicInfo,
+    hasStoriesTab, hasGiftsTab, hasMembersTab, hasPreviewMediaTab, isTopicInfo,
     hasCommonChatsTab, isChannel, isBot, similarChannels?.length, similarBots?.length, lang, isOwnProfile,
     mainTab, chatId, canUpdateMainTab, validMainTabTypes,
   ]);

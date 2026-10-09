@@ -40,6 +40,27 @@ function measure(page, selector) {
   }, selector);
 }
 
+// Палитра собеседников задана всегда (spec 012, A6/A7): без неё аватар без фото и кружки
+// цвета папки брали цвет текста — в тёмной теме белый круг с белой буквой
+async function expectPeerColors(page, label) {
+  const colors = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const avatar = document.querySelector('#LeftColumn .Avatar.no-photo[class*="peer-color-"]');
+    return {
+      palette: [0, 1, 2, 3, 4, 5, 6, 7].map((index) => root.getPropertyValue(`--color-peer-${index}`).trim()),
+      text: root.getPropertyValue('--color-text').trim(),
+      avatar: avatar ? getComputedStyle(avatar).getPropertyValue('--color-user').trim() : undefined,
+      letter: avatar ? avatar.textContent.trim() : undefined,
+    };
+  });
+  assert.equal(colors.palette.filter(Boolean).length, 8, `${label}: палитра не задана: ${JSON.stringify(colors)}`);
+  assert.equal(new Set(colors.palette).size, 8, `${label}: цвета палитры совпадают: ${JSON.stringify(colors)}`);
+  assert.ok(colors.avatar, `${label}: в списке чатов нет аватара без фото: ${JSON.stringify(colors)}`);
+  assert.ok(colors.palette.includes(colors.avatar), `${label}: цвет аватара не из палитры: ${JSON.stringify(colors)}`);
+  assert.notEqual(colors.avatar, colors.text, `${label}: аватар цвета текста`);
+  assert.ok(colors.letter, `${label}: в аватаре нет буквы`);
+}
+
 async function expectStyle(page, style, label) {
   await page.waitForFunction(
     (expected) => document.documentElement.classList.contains('interface-classic') === (expected === 'classic'),
@@ -182,6 +203,8 @@ try {
   await closeSettings(page);
   await openPrivateChatStrict(page, bob);
   await expectStyle(page, 'classic', 'тёмная тема');
+  await expectPeerColors(page, 'тёмная тема, «Классическое»');
+  await expectPeerColors(bobSession.page, 'светлая тема, «Панели»');
   await page.locator('.MiddleHeader .ChatInfo').first().click();
   await page.locator('#RightColumn .profile-info').first().waitFor({ state: 'visible', timeout: 15000 });
   await page.waitForTimeout(600);

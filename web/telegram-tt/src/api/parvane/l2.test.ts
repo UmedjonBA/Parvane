@@ -354,7 +354,7 @@ describe('L2: служебное сообщение о смене режима',
     expect(message.content.action).toMatchObject({ type: 'customAction' });
     expect(message.content.text).toBeUndefined();
     // Переживает перезагрузку: строка с `origin: 'v2'` лежит в кэше истории
-    expect(saved).toEqual([{ ...stored, origin: 'v2' }]);
+    expect(saved).toEqual([{ ...stored, origin: 'v2', order: stored.ts * 1000 }]);
     // Служебное сообщение не остаётся «непрочитанным» на чате
     expect(updates).toContainEqual(expect.objectContaining({
       '@type': 'updateThreadReadState',

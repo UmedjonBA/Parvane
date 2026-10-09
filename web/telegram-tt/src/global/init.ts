@@ -135,9 +135,8 @@ addActionHandler('init', (global, actions, payload): ActionReturnType => {
     setGlobal(global);
   });
 
-  if (global.peerColors) {
-    updatePeerColors(global.peerColors.general);
-  }
+  // Parvane: палитру собеседников сервер не присылает — базовые цвета ставим всегда
+  updatePeerColors(global.peerColors?.general || {});
 
   return updateTabState(global, {
     messageLists: parsedMessageList ? [parsedMessageList] : initialTabState.messageLists,

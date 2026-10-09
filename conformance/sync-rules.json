@@ -1228,6 +1228,17 @@
         "desktop": "desktop/parvane-core/src/v2_content.cpp (v2Kind: task_offer/task_response; fromV2 → kind text из поля text); тест tests/v2_tests.cpp (task_offer ← v2: текст); без сборки tdesktop — проверить при следующей сборке очереди desktop",
         "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: task_offer, task_response → MessageText); тест ProtocolV2SeamTest.kt taskOfferShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
       }
+    },
+    {
+      "id": "ORDER-1",
+      "title": "Порядок сообщений в ленте: живое сообщение встаёт после всего, что уже есть в чате; место сохраняется; старое — по времени отправителя",
+      "liveWindowSecs": 300,
+      "orderField": "order",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/store.ts (allocateMessageId, LIVE_ORDER_WINDOW_SECS, compareStoredOrder), sync.ts (persistHistory с order, restoreFromCache), messages.ts (appendOwnJournal: время нажатия и order); тест store.test.ts; сценарий scripts/e2e_web_saved_messages.mjs (часы собеседника −30 с)",
+        "desktop": "ОТКРЫТО (spec 012, 9 окт 2026): порядок по времени отправителя; правка ядра — в очереди desktop",
+        "android": "ОТКРЫТО (spec 012, 9 окт 2026): порядок по времени отправителя; правка — в очереди android"
+      }
     }
   ]
 }

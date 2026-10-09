@@ -114,9 +114,7 @@ const RightColumn: FC<OwnProps & StateProps> = ({
   const containerRef = useRef<HTMLDivElement>();
 
   const { width: windowWidth } = useWindowSize();
-  const [profileState, setProfileState] = useState<ProfileState>(
-    isSavedMessages && !isSavedDialog ? ProfileState.SavedDialogs : ProfileState.Profile,
-  );
+  const [profileState, setProfileState] = useState<ProfileState>(ProfileState.Profile);
   const [managementScreen, setManagementScreen] = useState<ManagementScreens>(ManagementScreens.Initial);
   const [selectedChatMemberId, setSelectedChatMemberId] = useState<string | undefined>();
   const [isPromotedByCurrentUser, setIsPromotedByCurrentUser] = useState<boolean | undefined>();
@@ -325,9 +323,7 @@ const RightColumn: FC<OwnProps & StateProps> = ({
   // We need to clear profile state and management screen state, when changing chats
   useLayoutEffectWithPrevDeps(([prevChatId, prevThreadId]) => {
     if (prevChatId !== chatId || prevThreadId !== threadId) {
-      setProfileState(
-        isSavedMessages && !isSavedDialog ? ProfileState.SavedDialogs : ProfileState.Profile,
-      );
+      setProfileState(ProfileState.Profile);
       setManagementScreen(ManagementScreens.Initial);
     }
   }, [chatId, threadId, isSavedDialog, isSavedMessages]);

@@ -92,7 +92,7 @@
 "PremiumLimitAccountsNoPremium" = "You have reached your current limit of connected accounts. You can free one more place by subscribing to Telegram Premium.";
 "PremiumLimitAccounts" = "You have reached your current limit of connected accounts. You can free one more place by subscribing to Telegram Premium with one of these connected accounts.";
 "SendMessage" = "Send Message";
-"MessageUnsupported" = "This message is not supported by your version of Parvane. Update the app to see it";
+"MessageUnsupported" = "This kind of message is not supported in this version of Parvane";
 "PageContentUnsupported" = "Unsupported content";
 "PageContentEmbed" = "Embedded content";
 "ConversationDefaultRestrictedMedia" = "Sending media isn't allowed in this group.";

@@ -28,6 +28,47 @@ async function openSettings(page) {
   await page.getByRole('menuitem', { name: /^(Settings|Настройки)$/ }).click();
 }
 
+const RAW_KEY = /^(lng_\w+|[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+|[A-Z][a-z]+([A-Z][a-z0-9]+){2,})$/;
+// Латиница без кириллицы, хотя бы два слова: подпись, оставшаяся на английском
+const ENGLISH_LINE = /^[A-Za-z][A-Za-z'’,.!?:()-]*( [A-Za-z'’,.!?:()-]+)+$/;
+// Имена собственные и то, что по-русски пишется так же
+const ENGLISH_ALLOWED = /Parvane|Telegram|GIF|Ctrl|Cmd|Enter|Wi-Fi|Web|Linux|Chrome|Firefox|Playwright|@local/;
+// Пункты, которые не открывают экран настроек или уводят из них
+const SKIPPED_ITEMS = /Выйти|Log Out|Сообщить|Report|Вопрос|Ask/i;
+
+function classifyTexts(text, found) {
+  text.split('\n').map((line) => line.trim()).filter(Boolean).forEach((line) => {
+    if (RAW_KEY.test(line)) found.rawKeys.add(line);
+    else if (ENGLISH_LINE.test(line) && !ENGLISH_ALLOWED.test(line)) found.english.add(line);
+  });
+}
+
+// Обход: каждый пункт главного экрана настроек и пункты экранов первого уровня
+async function walkSettingsScreens(page) {
+  const found = { rawKeys: new Set(), english: new Set() };
+  const settings = page.locator('#Settings');
+  const labelsOf = async () => (await settings.locator('.ListItem:visible').allInnerTexts())
+    .map((text) => text.split('\n')[0].trim()).filter(Boolean);
+  classifyTexts(await settings.innerText(), found);
+  const mainLabels = (await labelsOf()).filter((label) => !SKIPPED_ITEMS.test(label));
+  assert.ok(mainLabels.length >= 6, `главный экран настроек не распознан: ${mainLabels.join(' | ')}`);
+  const mainItem = (label) => settings.locator('.ListItem:visible').filter({ hasText: label }).first();
+  const backToMain = async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await mainItem(mainLabels[1]).isVisible().catch(() => false)) return;
+      await page.getByRole('button', { name: /Назад|Go back|Back/ }).first().click();
+      await page.waitForTimeout(700);
+    }
+  };
+  for (const label of mainLabels) {
+    await mainItem(label).click();
+    await page.waitForTimeout(900);
+    classifyTexts(await settings.innerText(), found);
+    await backToMain();
+  }
+  return { rawKeys: [...found.rawKeys].sort(), english: [...found.english].sort() };
+}
+
 async function pickLanguage(page, nativeName) {
   await page.getByRole('button', { name: /^(Language|Язык)/ }).click();
   // ItemPicker рендерит пункты как div[role=button] с названием языка
@@ -60,6 +101,13 @@ try {
   await page.locator('#LeftColumn').getByText('Настройки').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: интерфейс переключился на русский');
+
+  // ── Экраны настроек на русском: ни сырых ключей, ни английских подписей (spec 012, A8) ──
+  const { rawKeys, english } = await walkSettingsScreens(page);
+  if (english.length) console.log(`английские строки на экранах настроек:\n  ${english.join('\n  ')}`);
+  assert.deepEqual(rawKeys, [], `сырые ключи строк на экранах настроек: ${rawKeys.join(', ')}`);
+  assert.deepEqual(english, [], 'на экранах настроек остались английские строки');
+  console.log('OK: экраны настроек переведены');
 
   // ── Reload: выбор сохранён, старый lang-провайдер тоже на русском ────────
   // Персист sharedState в IDB троттлится (1 с, global/cache.ts) — даём записаться
