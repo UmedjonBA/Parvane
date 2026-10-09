@@ -1,0 +1,28 @@
+// Маскот Parvane: лист из 16 кадров 24×24 в ряд, показывается покадрово
+.root {
+  --mascot-size: 3rem;
+
+  flex: 0 0 auto;
+
+  width: var(--mascot-size);
+  height: var(--mascot-size);
+
+  background-image: url("../../assets/parvane/mascot-ghost.png");
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: calc(var(--mascot-size) * 16) var(--mascot-size);
+
+  image-rendering: pixelated;
+
+  animation: mascot-dance 2s steps(16) infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+@keyframes mascot-dance {
+  to {
+    background-position: calc(var(--mascot-size) * -16) 0;
+  }
+}
