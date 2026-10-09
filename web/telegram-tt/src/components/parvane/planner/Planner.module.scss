@@ -1716,3 +1716,92 @@
   margin: 0;
   padding: 0;
 }
+
+// ── узкий экран: расписание дня лентой под календарём (отзыв 9 окт 2026) ─────
+
+.periodTrailing {
+  display: inline-flex;
+  margin-inline-start: auto;
+}
+
+.dayItems {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+// Лента: карточки дел и свободных окон в ряд, листается вбок; календарь остаётся на виду
+.dayStrip {
+  scroll-snap-type: x proximity;
+
+  overflow-x: auto;
+  flex-direction: row;
+  align-items: stretch;
+
+  padding-bottom: 0.25rem;
+
+  > * {
+    scroll-snap-align: start;
+    flex: 0 0 11.5rem;
+    min-width: 0;
+  }
+
+  .group {
+    display: none;
+  }
+
+  .free,
+  .busyRow {
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .clock {
+    flex: 0 0 auto;
+  }
+
+  .inlineAdd {
+    align-self: center;
+  }
+}
+
+@media (max-width: 925px) {
+  // Календарь и день — друг под другом, оба видны; отдельного экрана дня нет
+  .panelOpen .main,
+  .main {
+    display: block;
+    padding-bottom: 0.5rem;
+  }
+
+  .sideOpen .main {
+    display: none;
+  }
+
+  .panel,
+  .panelOpen .panel {
+    display: flex;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--color-borders);
+  }
+
+  .sideOpen .panel,
+  .backToMain {
+    display: none;
+  }
+
+  .periodNav {
+    flex: 1 1 100%;
+  }
+
+  // В клетке месяца на телефоне — только число и полоса загрузки
+  .day .small {
+    display: none;
+  }
+
+  .header {
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+    min-height: 0;
+    padding: 0.375rem 0.5rem;
+  }
+}

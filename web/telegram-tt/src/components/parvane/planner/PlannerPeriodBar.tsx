@@ -1,3 +1,4 @@
+import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useState } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
@@ -20,6 +21,8 @@ type OwnProps = {
   segments: { value: string; label: string }[];
   activeSegment: string;
   segmentsLabel: string;
+  // Справа от навигации (узкий экран — шестерёнка настроек)
+  trailing?: TeactNode;
   onPrev: NoneToVoidFunction;
   onNext: NoneToVoidFunction;
   onToday: NoneToVoidFunction;
@@ -29,7 +32,7 @@ type OwnProps = {
 
 // Панель периода: заголовок-кнопка с выбором месяца и года, стрелки, «Сегодня», переключатель
 const PlannerPeriodBar = ({
-  title, prevLabel, nextLabel, picked, segments, activeSegment, segmentsLabel,
+  title, prevLabel, nextLabel, picked, segments, activeSegment, segmentsLabel, trailing,
   onPrev, onNext, onToday, onPickDay, onSwitchSegment,
 }: OwnProps) => {
   const lang = useLang();
@@ -81,6 +84,7 @@ const PlannerPeriodBar = ({
         <Button round size="tiny" color="translucent" iconName="previous" ariaLabel={prevLabel} onClick={onPrev} />
         <Button size="tiny" color="translucent" onClick={onToday}>{lang('PlannerToday')}</Button>
         <Button round size="tiny" color="translucent" iconName="next" ariaLabel={nextLabel} onClick={onNext} />
+        {Boolean(trailing) && <span className={styles.periodTrailing}>{trailing}</span>}
         {isPickerOpen && (
           <div className={styles.periodPicker} role="dialog" aria-label={lang('PlannerPickPeriod')}>
             <div className={styles.periodPickerYear}>
