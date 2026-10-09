@@ -464,7 +464,9 @@ try {
   await closeSide();
   const colorRow = dayPane.locator('[data-task-id]').filter({ hasText: 'Цветная задача' });
   await colorRow.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.notEqual(await colorRow.evaluate((el) => getComputedStyle(el).boxShadow), 'none', 'у задачи списка с цветом нет полоски');
+  // Полоска — псевдоэлемент строки, окрашенный цветом списка
+  const stripe = await colorRow.evaluate((el) => getComputedStyle(el, '::before').backgroundColor);
+  assert.ok(stripe && stripe !== 'rgba(0, 0, 0, 0)', `у задачи списка с цветом нет полоски: ${stripe}`);
   // Статусов три
   assert.deepEqual(
     await (async () => {
