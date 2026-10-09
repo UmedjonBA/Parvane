@@ -84,6 +84,9 @@ const PlannerDay = ({
   ].sort((a, b) => a.start - b.start);
   // События на весь день — отдельной строкой сверху: в окна и загрузку дня они не входят
   const allDay = getEventsForDay(state, day).filter((event) => event.isAllDay);
+  // Узкий экран: задача добавляется нажатием на свободное окно — отдельная кнопка нужна, только
+  // когда свободных окон в дне нет
+  const hasFreeSlot = chunks.some((chunk) => !chunk.items);
   const hasInlineSlot = Boolean(inlineForm) && chunks.some((chunk) => !chunk.items && chunk.start === inlineFormStart);
   const untimed = getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined);
   const deadlines = getDeadlines(state, day);
@@ -170,7 +173,7 @@ const PlannerDay = ({
         {deadlines.map((task) => (
           <PlannerTaskRow key={`due${task.id}`} task={task} context="day" onOpen={onOpenTask} />
         ))}
-        {(!inlineForm || isStrip || hasInlineSlot) && (
+        {(isStrip ? !hasFreeSlot : (!inlineForm || hasInlineSlot)) && (
           <Button isText size="smaller" className={styles.inlineAdd} onClick={handleAdd}>
             {lang('PlannerAddTaskForDay')}
           </Button>
