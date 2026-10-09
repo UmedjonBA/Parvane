@@ -642,7 +642,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.root.backup_set" => {
             require_user(&req)?;
             let r: pb::RootBackupSetRequest = body(&req)?;
-            if r.backup.is_empty() && r.escrow.is_empty() {
+            if r.backup.is_empty() && r.escrow.is_empty() && r.key_bundle.is_empty() {
                 return Err(ErrorCode::Invalid);
             }
             // Пишет только активное устройство журнала: сессия без устройства
@@ -667,7 +667,14 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                     .map_err(db_err)?;
             }
             if !r.backup.is_empty() {
-                sqlx::query("INSERT OR REPLACE INTO root_backup (user, backup, updated_at) VALUES (?, ?, ?)")
+                // Копия ключей аккаунта привязана к ключу восстановления, а не к
+                // блобу копии корня: при повторной записи той же копии остаётся.
+                sqlx::query(
+                    "INSERT INTO root_backup (user, backup, updated_at) VALUES (?, ?, ?) \
+                     ON CONFLICT(user) DO UPDATE SET \
+                       key_bundle = CASE WHEN backup = excluded.backup THEN key_bundle ELSE NULL END, \
+                       backup = excluded.backup, updated_at = excluded.updated_at",
+                )
                     .bind(&req.user)
                     .bind(&r.backup)
                     .bind(now_unix())
@@ -675,12 +682,24 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                     .await
                     .map_err(db_err)?;
             }
+            if !r.key_bundle.is_empty() {
+                // Копия ключей — только рядом с копией корня (тот же ключ восстановления)
+                let done = sqlx::query("UPDATE root_backup SET key_bundle = ? WHERE user = ?")
+                    .bind(&r.key_bundle)
+                    .bind(&req.user)
+                    .execute(&ctx.v2)
+                    .await
+                    .map_err(db_err)?;
+                if done.rows_affected() == 0 {
+                    return Err(ErrorCode::NotFound);
+                }
+            }
             Ok(pb::RootBackupSetResponse {}.encode_to_vec())
         }
         "identity.root.backup_get" => {
             require_user(&req)?;
             let _: pb::RootBackupGetRequest = body(&req)?;
-            let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT backup FROM root_backup WHERE user = ?")
+            let row: Option<(Vec<u8>, Option<Vec<u8>>)> = sqlx::query_as("SELECT backup, key_bundle FROM root_backup WHERE user = ?")
                 .bind(&req.user)
                 .fetch_optional(&ctx.v2)
                 .await
@@ -690,7 +709,94 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 .fetch_optional(&ctx.v2)
                 .await
                 .map_err(db_err)?;
-            Ok(pb::RootBackupGetResponse { backup: row.map(|(b,)| b).unwrap_or_default(), has_escrow: escrow.is_some() }.encode_to_vec())
+            let (backup, key_bundle) = row.map(|(b, k)| (b, k.unwrap_or_default())).unwrap_or_default();
+            let telegram = telegram_secret().is_some() && telegram_id_of(ctx, &req.user).await?.is_some();
+            Ok(pb::RootBackupGetResponse { backup, has_escrow: escrow.is_some(), key_bundle, telegram }.encode_to_vec())
+        }
+
+        // ── ключ восстановления через Telegram-бота (spec 015) ──
+        "identity.recovery.tg_send" => {
+            require_user(&req)?;
+            let r: pb::RecoveryTgSendRequest = body(&req)?;
+            // Шлёт только действующее устройство журнала: вошедший по одному
+            // паролю не должен слать владельцу подложный «ключ»
+            let log = load_log(ctx, &req.user).await?;
+            if log.active(&req.device_id).is_none() {
+                return Err(ErrorCode::Forbidden);
+            }
+            let telegram_id = recovery_telegram_id(ctx, &req.user).await?;
+            if !ratelimit::window_rate_ok("tg-key-send", &req.user, 5) {
+                return Err(ErrorCode::RateLimited);
+            }
+            let key = verified_recovery_key(ctx, &req.user, &r.recovery_key, &log).await?.ok_or(ErrorCode::Invalid)?;
+            if !recovery_tg::send_key(telegram_id, &req.user, &key, now_unix()) {
+                return Err(ErrorCode::Unavailable);
+            }
+            info!("Ключ восстановления {} поставлен в очередь бота", req.user);
+            Ok(pb::RecoveryTgSendResponse {}.encode_to_vec())
+        }
+        "identity.recovery.tg_request" => {
+            require_user(&req)?;
+            let r: pb::RecoveryTgRequestRequest = body(&req)?;
+            let telegram_id = recovery_telegram_id(ctx, &req.user).await?;
+            let has_backup: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM root_backup WHERE user = ?")
+                .bind(&req.user)
+                .fetch_optional(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            if has_backup.is_none() {
+                return Err(ErrorCode::NotFound);
+            }
+            // Знающий пароль не должен засыпать владельца сообщениями бота
+            if !ratelimit::window_rate_ok("tg-key-ask", &req.user, 6) {
+                return Err(ErrorCode::RateLimited);
+            }
+            if !recovery_tg::request_key(telegram_id, &req.user, &req.device_id, r.client.trim(), r.again, now_unix()) {
+                return Err(ErrorCode::Unavailable);
+            }
+            info!("Устройство '{}' пользователя {} просит ключ восстановления через Telegram", req.device_id, req.user);
+            Ok(pb::RecoveryTgRequestResponse {}.encode_to_vec())
+        }
+        "identity.recovery.tg_poll" => {
+            require_user(&req)?;
+            let r: pb::RecoveryTgPollRequest = body(&req)?;
+            let (mut recovery_key, pending) = recovery_tg::poll(&req.user, &req.device_id, r.done, now_unix());
+            // Действующее устройство без копии ключей аккаунта забирает ответ
+            // владельца, чтобы завести копию (см. `peek_reply`)
+            if recovery_key.is_empty() && !pending && !r.done && load_log(ctx, &req.user).await?.active(&req.device_id).is_some() {
+                recovery_key = recovery_tg::peek_reply(&req.user, now_unix());
+            }
+            Ok(pb::RecoveryTgPollResponse { recovery_key, pending }.encode_to_vec())
+        }
+        "identity.telegram.pull" => {
+            let r: pb::TelegramPullRequest = body(&req)?;
+            bot_secret_ok(&r.secret, &req.client_ip)?;
+            let messages = recovery_tg::pull(&r.ack, u64::from(r.wait_ms.min(8000)), now_unix()).await;
+            Ok(pb::TelegramPullResponse { messages }.encode_to_vec())
+        }
+        "identity.telegram.reply" => {
+            let r: pb::TelegramReplyRequest = body(&req)?;
+            bot_secret_ok(&r.secret, &req.client_ip)?;
+            let reply = |result: &str, user: &str| Ok(pb::TelegramReplyResponse { result: result.into(), user: user.into() }.encode_to_vec());
+            let owner: Option<(String,)> = sqlx::query_as("SELECT username FROM users WHERE telegram_id = ?")
+                .bind(r.telegram_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(db_err)?;
+            let Some((user,)) = owner else { return reply("no_account", "") };
+            if !recovery_tg::has_request(&user, now_unix()) {
+                return reply("no_request", &user);
+            }
+            if !ratelimit::window_rate_ok("tg-key-reply", &r.telegram_id.to_string(), 10) {
+                return Err(ErrorCode::RateLimited);
+            }
+            let log = load_log(ctx, &user).await?;
+            let Some(key) = verified_recovery_key(ctx, &user, &r.text, &log).await? else { return reply("bad_key", &user) };
+            if !recovery_tg::store_reply(&user, &key, now_unix()) {
+                return reply("no_request", &user);
+            }
+            info!("Владелец {} ответил боту ключом восстановления", user);
+            reply("ok", &user)
         }
 
         // ── доступ к доставке, жетоны, приватность ──
@@ -1172,6 +1278,60 @@ async fn device_revoke(ctx: &V2Ctx, user: &str, device_id: &str) -> Reply {
     }
     revoke_effects(ctx, user, device_id).await;
     Ok(pb::DeviceRevokeResponse {}.encode_to_vec())
+}
+
+/// Telegram, привязанный к аккаунту (подтверждение регистрации).
+async fn telegram_id_of(ctx: &V2Ctx, user: &str) -> Result<Option<i64>, ErrorCode> {
+    let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT telegram_id FROM users WHERE username = ?")
+        .bind(user)
+        .fetch_optional(&ctx.pool)
+        .await
+        .map_err(db_err)?;
+    Ok(row.and_then(|(id,)| id))
+}
+
+/// Telegram владельца для ключа восстановления: нужен и бот у сервера, и привязка.
+async fn recovery_telegram_id(ctx: &V2Ctx, user: &str) -> Result<i64, ErrorCode> {
+    if telegram_secret().is_none() {
+        return Err(ErrorCode::NotFound);
+    }
+    telegram_id_of(ctx, user).await?.ok_or(ErrorCode::NotFound)
+}
+
+/// Запрос бота: общий секрет и лимит по IP (pre-auth метод — перебор секрета).
+fn bot_secret_ok(secret: &str, client_ip: &str) -> Result<(), ErrorCode> {
+    let Some(expected) = telegram_secret() else { return Err(ErrorCode::Forbidden) };
+    if !client_ip.is_empty() && !ratelimit::window_rate_ok("tg-bot-ip", client_ip, ratelimit::env_u64("PARVANE_TG_BOT_RATE_IP", 240) as usize) {
+        return Err(ErrorCode::RateLimited);
+    }
+    if !register::secret_matches(secret, &expected) {
+        return Err(ErrorCode::Forbidden);
+    }
+    Ok(())
+}
+
+/// Ключ восстановления, проверенный копией корня на сервере: открывает копию,
+/// и корень в ней — действующий корень журнала устройств. Возвращает ключ в
+/// каноничной записи (`XXXX-XXXX-…`); `None` — ключ не подошёл.
+async fn verified_recovery_key(ctx: &V2Ctx, user: &str, text: &str, log: &DeviceLog) -> Result<Option<String>, ErrorCode> {
+    let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT backup FROM root_backup WHERE user = ?")
+        .bind(user)
+        .fetch_optional(&ctx.v2)
+        .await
+        .map_err(db_err)?;
+    let Some((backup,)) = row else { return Err(ErrorCode::NotFound) };
+    // Текст целиком, затем места в нём, похожие на ключ (владелец мог прислать
+    // ключ вместе с куском сообщения или с длинным тире вместо дефиса)
+    let mut candidates = vec![text.trim().to_string()];
+    candidates.extend(recovery_tg::key_candidates(text));
+    for candidate in candidates.iter().take(8) {
+        let Ok(key) = parvane_protocol::recovery::RecoveryKey::parse(candidate) else { continue };
+        let Ok(root) = parvane_protocol::recovery::import_root_backup(&backup, user, &key) else { continue };
+        if ed25519_dalek::SigningKey::from_bytes(&root).verifying_key().to_bytes() == log.root_key {
+            return Ok(Some(key.to_display().to_string()));
+        }
+    }
+    Ok(None)
 }
 
 async fn root_rotate(ctx: &V2Ctx, user: &str, device: &str, genesis: &SignedOp) -> Reply {

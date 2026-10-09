@@ -208,14 +208,31 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   // Заголовок экрана Settings → Devices (SettingsHeader)
   SessionsTitle: 'Devices',
   // Авто-линковка истории (Settings → Devices)
-  ParvaneLinkPendingTitle: 'History transfer',
+  ParvaneLinkPendingTitle: 'Or confirm on another device',
   ParvaneLinkPendingText: 'Waiting for your other device. Open Settings → Devices there and confirm code %@.',
   ParvaneLinkPendingWait: 'Waiting for your other device. Open Settings → Devices there — '
     + 'the verification code will appear on both devices.',
   // Новое устройство без других устройств аккаунта (ключ восстановления / сброс)
   ParvaneRecoverTitle: 'No other device?',
-  ParvaneRecoverText: 'If your other devices are gone, sign this device in with your recovery key. '
-    + 'Your old devices will be removed from the account.',
+  ParvaneRecoverText: 'Enter your recovery key to sign this device in: your chats and planner will appear here '
+    + 'and your other devices stay signed in.',
+  // Ключ восстановления через Telegram-бота (spec 015)
+  ParvaneTgRecoverTitle: 'Confirm in Telegram',
+  ParvaneTgRecoverWaiting: 'The Parvane bot has sent you a message in Telegram. Reply to it with your recovery key '
+    + '(the bot sent the key to the same chat earlier) — your chats and planner will appear on this device.',
+  ParvaneTgRecoverJoining: 'Key received. Connecting this device…',
+  ParvaneTgRecoverDone: 'This device is connected. Your chats and planner are loading.',
+  ParvaneTgRecoverFailed: 'Could not connect this device. Check your connection and try again.',
+  ParvaneTgRecoverLimit: 'Too many requests. Wait a minute and try again.',
+  ParvaneTgRecoverExpired: 'The request has expired. Ask the bot to send the message again.',
+  ParvaneTgRecoverAgain: 'Send the message again',
+  ParvaneTgSendTitle: 'Recovery key in Telegram',
+  ParvaneTgSendText: 'Enter your recovery key once — we will send it to your Telegram chat with the Parvane bot. '
+    + 'After that, a new device can be signed in by replying to the bot with this key, and your chats and '
+    + 'planner will appear there.',
+  ParvaneTgSendAction: 'Send key to Telegram',
+  ParvaneTgSendDone: 'The recovery key has been sent to your Telegram.',
+  ParvaneTgSendNoTelegram: 'Telegram is not linked to this account.',
   ParvaneLostKeyAdmin: 'Lost the recovery key? Ask the server administrator for a new one.',
   ParvaneEscrowTitle: 'Recovery key safety copy',
   ParvaneEscrowText: 'If you lose your recovery key, the server administrator can issue a new one — but only '
@@ -259,8 +276,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   lng_sure_logout: 'Are you sure you want to log out?',
   ParvaneLogoutLastDevice: 'This is the only device signed in to your account. Signing out erases its keys: to read '
     + 'your chats again you will need your recovery key. Make sure you have saved it. Sign out?',
-  ParvaneNeedsLinkingNotice: 'This device is not linked to your account yet. Confirm it on another device or enter '
-    + 'your recovery key',
+  ParvaneNeedsLinkingNotice: 'This device is not linked to your account yet. Reply to the Parvane bot in Telegram '
+    + 'with your recovery key or confirm this device on another one',
   'AccountSettings.Logout': 'Log Out',
   AccDescrGoBack: 'Go back',
 
@@ -808,13 +825,29 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneExportKeys: 'Экспорт ключей E2E',
   ParvaneImportKeys: 'Импорт ключей E2E',
   SessionsTitle: 'Устройства',
-  ParvaneLinkPendingTitle: 'Перенос истории',
+  ParvaneLinkPendingTitle: 'Или подтвердите на другом устройстве',
   ParvaneLinkPendingText: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код %@.',
   ParvaneLinkPendingWait: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства — '
     + 'код сверки появится на обоих устройствах.',
   ParvaneRecoverTitle: 'Нет другого устройства?',
-  ParvaneRecoverText: 'Если других устройств не осталось, войдите на этом устройстве по ключу восстановления. '
-    + 'Прежние устройства будут удалены из аккаунта.',
+  ParvaneRecoverText: 'Введите ключ восстановления, чтобы подключить это устройство: здесь появятся ваши чаты и '
+    + 'план, а другие устройства останутся подключены.',
+  ParvaneTgRecoverTitle: 'Подтвердите вход в Telegram',
+  ParvaneTgRecoverWaiting: 'Бот Parvane отправил вам сообщение в Telegram. Ответьте на него ключом восстановления '
+    + '(бот присылал ключ в этот же чат) — на этом устройстве появятся ваши чаты и план.',
+  ParvaneTgRecoverJoining: 'Ключ получен. Подключаем устройство…',
+  ParvaneTgRecoverDone: 'Устройство подключено. Чаты и план загружаются.',
+  ParvaneTgRecoverFailed: 'Не удалось подключить устройство. Проверьте связь и попробуйте ещё раз.',
+  ParvaneTgRecoverLimit: 'Слишком много запросов. Подождите минуту и попробуйте ещё раз.',
+  ParvaneTgRecoverExpired: 'Запрос устарел. Попросите бота прислать сообщение ещё раз.',
+  ParvaneTgRecoverAgain: 'Прислать сообщение ещё раз',
+  ParvaneTgSendTitle: 'Ключ восстановления в Telegram',
+  ParvaneTgSendText: 'Введите ключ восстановления один раз — мы отправим его вам в Telegram, в чат с ботом Parvane. '
+    + 'После этого новое устройство можно будет подключить, ответив боту этим ключом, и на нём появятся ваши '
+    + 'чаты и план.',
+  ParvaneTgSendAction: 'Отправить ключ в Telegram',
+  ParvaneTgSendDone: 'Ключ восстановления отправлен вам в Telegram.',
+  ParvaneTgSendNoTelegram: 'К этому аккаунту не привязан Telegram.',
   ParvaneLostKeyAdmin: 'Ключ восстановления утерян? Напишите администратору сервера — он выдаст новый.',
   ParvaneEscrowTitle: 'Страховка ключа восстановления',
   ParvaneEscrowText: 'Если вы потеряете ключ восстановления, администратор сервера сможет выдать новый — но '
@@ -858,8 +891,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   lng_sure_logout: 'Вы действительно хотите выйти?',
   ParvaneLogoutLastDevice: 'Это единственное устройство вашего аккаунта. Выход сотрёт его ключи: чтобы снова читать '
     + 'переписку, понадобится ключ восстановления. Убедитесь, что он сохранён. Выйти?',
-  ParvaneNeedsLinkingNotice: 'Это устройство ещё не привязано к аккаунту. Подтвердите его на другом устройстве или '
-    + 'введите ключ восстановления',
+  ParvaneNeedsLinkingNotice: 'Это устройство ещё не привязано к аккаунту. Ответьте боту Parvane в Telegram ключом '
+    + 'восстановления или подтвердите устройство на другом',
   'AccountSettings.Logout': 'Выйти',
   AccDescrGoBack: 'Назад',
 

@@ -33,7 +33,10 @@ import {
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { DEFAULT_APP_CONFIG } from '../../limits';
-import { createV2Controller, isV2GroupAddress, type V2DeviceBackup } from './v2/controller';
+import {
+  createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
+} from './v2/controller';
+import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
 import { collectV2History, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
 import { createStateJournal } from './v2/stateJournal';
 import {
@@ -463,6 +466,14 @@ const v2Controller = createV2Controller({
     pendingRecoveryKey = recoveryKey;
     window.dispatchEvent(new CustomEvent('parvane-recovery-key'));
   },
+  describeDevice: describeThisDevice,
+  bundleHistory: (previous, force) => buildBundleHistory(previous, force),
+  dropBundleHistory: (replaced) => {
+    void mediaService.deleteFile(replaced.fileId).catch(() => undefined);
+  },
+  onBundleReady: () => {
+    void syncFromKeyBundle();
+  },
   onAuthRejected: () => {
     // Протухший/отозванный токен (E6-1): снимаем сохранённую сессию и
     // перезагружаемся — запуск без токена спрашивает пароль (ключи и история
@@ -481,11 +492,15 @@ const v2Controller = createV2Controller({
   },
   onNewOwnDevices: (deviceIds) => {
     window.dispatchEvent(new CustomEvent('parvane-new-device', { detail: { count: deviceIds.length } }));
+    // Новому устройству — свежий снимок истории в копии ключей аккаунта (spec 015)
+    void v2Controller.refreshKeyBundle(true);
   },
   // Журнал устройств v2 у аккаунта есть, а этого устройства в нём нет: оффер
   // линковки нужен, даже если история на устройстве уже есть
   onNeedsLinking: () => {
     if (!linkRuntime.timer) void startHistoryLinkOffer();
+    // Бот спросит у владельца ключ восстановления в Telegram (spec 015)
+    void startTelegramRecovery(false);
     // Экран «Устройства» покажет код линковки и вход по ключу восстановления
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-needs-linking'));
   },
@@ -573,6 +588,7 @@ const connectionController = createConnectionController({
     stateJournal.reset();
     v2Controller.reset();
     stopHistoryLink();
+    stopTelegramRecovery('idle');
     syncController.reset();
     resetPackRegistries();
     messageController.resetSavedGifs();
@@ -856,6 +872,183 @@ async function registerV2Wake() {
   } catch (err) {
     logDebug(`v2: пробуждение не зарегистрировано: ${String(err)}`);
   }
+}
+
+// ── Копия ключей аккаунта и ключ восстановления через Telegram (spec 015) ────
+
+// Снимок истории в копии ключей аккаунта — вся расшифрованная история одним
+// блобом: небольшой перезаливается, как только изменился (проверка раз в минуту),
+// большой — не чаще раза в полчаса (кроме появления нового своего устройства)
+const BUNDLE_HISTORY_SMALL_BYTES = 512 * 1024;
+const BUNDLE_HISTORY_MIN_MS = 30 * 60 * 1000;
+// Новое устройство перечитывает копию: прежнее устройство, увидев его в журнале,
+// кладёт туда свежий снимок истории
+const BUNDLE_RECHECK_DELAYS_MS = [60 * 1000, 5 * 60 * 1000];
+const BUNDLE_APPLIED_KEY = 'parvane:bundle-history:';
+const TELEGRAM_KEY_POLL_MS = 3000;
+const TELEGRAM_KEY_WAIT_MS = 15 * 60 * 1000;
+
+type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
+const telegramRecovery: { state: TelegramRecoveryState; timer?: number; generation: number } = {
+  state: 'idle', generation: 0,
+};
+
+function readAppliedBundleMark(owner: string) {
+  try {
+    return localStorage.getItem(BUNDLE_APPLIED_KEY + owner) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberAppliedBundleMark(owner: string, mark: string) {
+  try {
+    localStorage.setItem(BUNDLE_APPLIED_KEY + owner, mark);
+  } catch {
+    // без localStorage снимок просто применится ещё раз (строки не дублируются)
+  }
+}
+
+// Устройство с ключом копии: снимок расшифрованной истории — блобом в cloud
+// (случайный ключ, координаты — в копии ключей под ключом восстановления)
+async function buildBundleHistory(previous: KeyBundleHistory | undefined, force: boolean) {
+  const isLarge = (previous?.size || 0) > BUNDLE_HISTORY_SMALL_BYTES;
+  if (previous && !force && isLarge && Date.now() - previous.at < BUNDLE_HISTORY_MIN_MS) return previous;
+  const owner = store.self;
+  await localState.flushHistoryNow();
+  const rows = collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal());
+  if (!rows.length) return previous;
+  const exportJson = JSON.stringify({ linkVersion: 2, v2History: rows });
+  const mark = await digestHex(exportJson);
+  if (previous?.mark === mark) return previous;
+  const upload = await mediaService.uploadBlob(
+    new Blob([exportJson]), 'account-history', 'application/octet-stream', { encrypt: true },
+  );
+  if (!upload.mediaKeys || store.self !== owner) return previous;
+  rememberAppliedBundleMark(owner, mark);
+  logDebug(`копия ключей: снимок истории загружен (${rows.length} строк)`);
+  return {
+    fileId: upload.fileId,
+    fileKey: upload.mediaKeys.keyB64,
+    fileNonce: upload.mediaKeys.nonceB64,
+    at: Date.now(),
+    mark,
+    size: exportJson.length,
+  };
+}
+
+async function applyBundleHistory(history: KeyBundleHistory | undefined, owner: string) {
+  if (!history || store.self !== owner || readAppliedBundleMark(owner) === history.mark) return;
+  mediaService.rememberKeys({
+    kind: 'file', file_id: history.fileId, file_key: history.fileKey, file_nonce: history.fileNonce,
+  });
+  const media = await mediaService.downloadBlob(history.fileId);
+  if (!media) {
+    logDebug('копия ключей: снимок истории не скачался из cloud');
+    return;
+  }
+  const rows = parseV2History(await media.blob.text());
+  if (store.self !== owner) return;
+  // Строки — после ресинка, как при привязке с другого устройства
+  await syncController.ensureSynced()
+    .catch((err: unknown) => logDebug(`копия ключей: ресинк перед историей не выполнен: ${String(err)}`));
+  await applyLinkedV2History(rows, owner);
+  rememberAppliedBundleMark(owner, history.mark);
+  logDebug(`копия ключей: снимок истории применён (${rows.length} строк)`);
+}
+
+// Свериться с копией ключей аккаунта на сервере: ключи планировщика и снимок
+// истории свежее применённого (его мог положить другое своё устройство)
+async function syncFromKeyBundle() {
+  const owner = store.self;
+  const bundle = await v2Controller.fetchKeyBundle();
+  if (!bundle || store.self !== owner) return;
+  if (bundle.planner) v2Controller.planner.keysImport(bundle.planner);
+  await applyBundleHistory(bundle.history, owner)
+    .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
+}
+
+// Устройство вошло в журнал по ключу восстановления: ключи планировщика и
+// история — из копии ключей аккаунта, без участия других устройств
+async function completeKeyJoin(outcome: KeyJoinOutcome) {
+  const owner = store.self;
+  void registerV2Wake();
+  if (outcome.planner) v2Controller.planner.keysImport(outcome.planner);
+  await applyBundleHistory(outcome.history, owner)
+    .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
+  BUNDLE_RECHECK_DELAYS_MS.forEach((delay) => {
+    window.setTimeout(() => {
+      if (store.self === owner) void syncFromKeyBundle();
+    }, delay);
+  });
+  window.dispatchEvent(new CustomEvent('parvane-devices-changed'));
+}
+
+function setTelegramRecoveryState(state: TelegramRecoveryState) {
+  telegramRecovery.state = state;
+  window.dispatchEvent(new CustomEvent('parvane-telegram-recovery'));
+}
+
+function stopTelegramRecovery(state: TelegramRecoveryState) {
+  telegramRecovery.generation++;
+  window.clearInterval(telegramRecovery.timer);
+  telegramRecovery.timer = undefined;
+  setTelegramRecoveryState(state);
+}
+
+// Новое устройство: бот просит владельца ответить ключом восстановления, ответ
+// забираем опросом. `again` — владелец попросил прислать сообщение ещё раз
+async function startTelegramRecovery(again: boolean) {
+  if (!v2Controller.needsLinking()) return;
+  if (telegramRecovery.state === 'joining' || (telegramRecovery.state === 'waiting' && !again)) return;
+  stopTelegramRecovery('idle');
+  const generation = telegramRecovery.generation;
+  const requested = await v2Controller.requestTelegramKey(again);
+  if (generation !== telegramRecovery.generation) return;
+  if (requested !== 'sent') {
+    setTelegramRecoveryState(requested === 'no_telegram' ? 'unavailable' : requested);
+    return;
+  }
+  logDebug('ключ восстановления: бот спросит владельца в Telegram');
+  const startedAt = Date.now();
+  setTelegramRecoveryState('waiting');
+  telegramRecovery.timer = window.setInterval(() => {
+    void pollTelegramRecovery(generation, startedAt);
+  }, TELEGRAM_KEY_POLL_MS);
+}
+
+async function pollTelegramRecovery(generation: number, startedAt: number) {
+  if (generation !== telegramRecovery.generation || telegramRecovery.state !== 'waiting') return;
+  // Устройство привязано другим путём (подтверждение с другого устройства)
+  if (!v2Controller.needsLinking()) {
+    stopTelegramRecovery('idle');
+    return;
+  }
+  if (Date.now() - startedAt > TELEGRAM_KEY_WAIT_MS) {
+    stopTelegramRecovery('expired');
+    return;
+  }
+  const reply = await v2Controller.pollTelegramKey(false);
+  if (generation !== telegramRecovery.generation || telegramRecovery.state !== 'waiting' || !reply) return;
+  if (!reply.recovery_key) {
+    // Сервер запроса не помнит (перезапуск) — просим заново, без нового сообщения
+    if (!reply.pending) void v2Controller.requestTelegramKey(false);
+    return;
+  }
+  window.clearInterval(telegramRecovery.timer);
+  telegramRecovery.timer = undefined;
+  setTelegramRecoveryState('joining');
+  logDebug('ключ восстановления: получен ответ владельца из Telegram');
+  const outcome = await v2Controller.joinWithRecoveryKey(reply.recovery_key, true);
+  if (generation !== telegramRecovery.generation) return;
+  if (outcome.result !== 'ok') {
+    logDebug(`ключ восстановления: вход не удался (${outcome.result})`);
+    setTelegramRecoveryState('failed');
+    return;
+  }
+  void v2Controller.pollTelegramKey(true);
+  setTelegramRecoveryState('done');
+  await completeKeyJoin(outcome);
 }
 
 // Устройство каталога: `label` и `login_at` — как оно назвало себя при входе
@@ -2199,16 +2392,21 @@ const methods = {
   },
 
   async parvaneGetSskState() {
-    return { ...v2Controller.sskState(), isEscrowCopyMissing: await v2Controller.isEscrowCopyMissing() };
+    return {
+      ...v2Controller.sskState(),
+      isEscrowCopyMissing: await v2Controller.isEscrowCopyMissing(),
+      // spec 015: ключ восстановления ещё можно отправить владельцу в Telegram
+      canSendKeyToTelegram: await v2Controller.canSendKeyToTelegram(),
+    };
   },
 
   // Копия корня для администратора у аккаунта, созданного до включения страховки
   parvaneStoreEscrowCopy({ recoveryKey }: { recoveryKey: string }) {
-    return v2Controller.storeEscrowCopy(recoveryKey);
+    return v2Controller.storeEscrowCopy(pickRecoveryKey(recoveryKey));
   },
 
   parvaneRotateSsk({ recoveryKey }: { recoveryKey: string }) {
-    return v2Controller.rotateSsk(recoveryKey);
+    return v2Controller.rotateSsk(pickRecoveryKey(recoveryKey));
   },
 
   // ── Авто-линковка истории: методы для Settings → Devices ────────────────────
@@ -2221,6 +2419,8 @@ const methods = {
     return v2Controller.hasEscrow().then((hasEscrow) => ({
       hasEscrow,
       isPending,
+      // spec 015: бот спрашивает ключ восстановления у владельца в Telegram
+      telegram: telegramRecovery.state,
       code: isPending ? linkRuntime.code : undefined,
       // v2: у аккаунта есть журнал устройств, а это устройство в него не входит —
       // кроме линковки, есть вход по ключу восстановления и сброс личности
@@ -2239,8 +2439,25 @@ const methods = {
 
   // Корень — из копии на сервере под ключом восстановления; прежние устройства
   // отзываются
-  parvaneRecoverWithKey({ recoveryKey }: { recoveryKey: string }) {
-    return v2Controller.recoverWithKey(recoveryKey);
+  async parvaneRecoverWithKey({ recoveryKey }: { recoveryKey: string }) {
+    const outcome = await v2Controller.joinWithRecoveryKey(pickRecoveryKey(recoveryKey), false);
+    if (outcome.result === 'ok') {
+      stopTelegramRecovery('done');
+      await completeKeyJoin(outcome);
+    }
+    return outcome.result;
+  },
+
+  // spec 015: попросить бота прислать просьбу о ключе ещё раз
+  async parvaneRequestTelegramKey() {
+    await startTelegramRecovery(true);
+    return telegramRecovery.state;
+  },
+
+  // spec 015: действующее устройство — отправить ключ восстановления владельцу в
+  // Telegram (аккаунт создан до того, как ключ стал уходить туда сам)
+  parvaneSendKeyToTelegram({ recoveryKey }: { recoveryKey: string }) {
+    return v2Controller.sendKeyToTelegram(pickRecoveryKey(recoveryKey));
   },
 
   // Новый корень взамен прежнего (нужен пароль): собеседники увидят смену
@@ -2656,7 +2873,11 @@ const methods = {
     const recoveryKey = pendingRecoveryKey;
     pendingRecoveryKey = undefined;
     if (!recoveryKey) return undefined;
-    return { recoveryKey, hasEscrow: await v2Controller.hasEscrow() };
+    return {
+      recoveryKey,
+      hasEscrow: await v2Controller.hasEscrow(),
+      hasTelegram: await v2Controller.hasTelegram(),
+    };
   },
 
   async parvaneGetCallPresencePolicy() {

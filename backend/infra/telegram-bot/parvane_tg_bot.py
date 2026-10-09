@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Telegram-бот подтверждения регистрации и входа Parvane.
+"""Telegram-бот Parvane: подтверждение регистрации и входа, ключ восстановления.
 
 Клиент показывает deep link t.me/<bot>?start=<token>; пользователь жмёт Start,
 бот получает `/start <token>` и показывает ЯВНЫЙ запрос подтверждения с кнопками
@@ -10,6 +10,12 @@ identity.telegram.confirm с общим секретом; identity привяз�
 атакующий, знающий пароль, мог прислать жертве ссылку и получить второй фактор
 одним её нажатием (находка P-15).
 
+Ключ восстановления (spec 015): бот забирает у сервера сообщения для владельцев
+(`identity.telegram.pull`) — сам ключ сразу после создания аккаунта и просьбу
+прислать его при входе с нового устройства; ответ владельца с ключом передаёт
+серверу (`identity.telegram.reply`), тот проверяет ключ и отдаёт новому
+устройству. Ключ в журнал бота не пишется.
+
 Живёт на хосте с доступом к api.telegram.org (с прод-сервера Parvane Telegram
 недоступен). Зависимости: python3 + websockets (apt: python3-websockets).
 
@@ -18,6 +24,8 @@ identity.telegram.confirm с общим секретом; identity привяз�
   PARVANE_TELEGRAM_SECRET   общий секрет с identity (PARVANE_TELEGRAM_SECRET)
   PARVANE_GATEWAY_URL       wss://<host>:<port>/ws прод-сервера Parvane
   PARVANE_TG_APP_NAME       название для текстов (по умолчанию Parvane)
+  PARVANE_TG_API_BASE       адрес Bot API (по умолчанию https://api.telegram.org;
+                            подменяется в проверке бота на локальном стенде)
 """
 
 import asyncio
@@ -39,7 +47,8 @@ SECRET = os.environ.get("PARVANE_TELEGRAM_SECRET", "").strip()
 GATEWAY_URL = os.environ.get("PARVANE_GATEWAY_URL", "").strip()
 APP_NAME = os.environ.get("PARVANE_TG_APP_NAME", "Parvane").strip() or "Parvane"
 
-API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+API_BASE = os.environ.get("PARVANE_TG_API_BASE", "").strip().rstrip("/") or "https://api.telegram.org"
+API = f"{API_BASE}/bot{BOT_TOKEN}"
 POLL_TIMEOUT_S = 50
 GATEWAY_TIMEOUT_S = 15
 # Сколько ждём нажатия кнопки; токены identity живут 10–15 мин, берём меньше.
@@ -62,6 +71,30 @@ TEXT_REJECTED = "Отклонено. Если вы не запрашивали �
 TEXT_EXPIRED = "Запрос устарел. Начните заново в " + APP_NAME + " и нажмите Start по новой ссылке."
 TEXT_FAIL = "Не получилось подтвердить: {error}\nНачните регистрацию в " + APP_NAME + " заново и нажмите Start по новой ссылке."
 TEXT_DOWN = "Сервер " + APP_NAME + " сейчас недоступен, попробуйте через минуту."
+
+TEXT_KEY = (
+    "🔑 Ключ восстановления аккаунта {user} в " + APP_NAME + ":\n\n"
+    "<code>{key}</code>\n\n"
+    "Не удаляйте это сообщение. Когда вы войдёте в " + APP_NAME + " с нового устройства, "
+    "я попрошу прислать этот ключ — после этого на устройстве появятся ваши чаты и план.\n\n"
+    "Никому его не пересылайте: с этим ключом и паролем можно войти в ваш аккаунт."
+)
+TEXT_KEY_ASK = (
+    "Вход в аккаунт {user} в " + APP_NAME + " с нового устройства{client}.\n\n"
+    "Если это вы — ответьте на это сообщение ключом восстановления (я присылал его "
+    "сюда, в этот чат). После этого на новом устройстве появятся ваши чаты и план.\n\n"
+    "Если входите не вы — ничего не присылайте и смените пароль в " + APP_NAME + "."
+)
+TEXT_KEY_OK = "Ключ принят ✅\nВозвращайтесь в " + APP_NAME + " — устройство подключится само."
+TEXT_KEY_BAD = (
+    "Этот ключ не подошёл. Скопируйте ключ целиком из моего сообщения "
+    "«Ключ восстановления аккаунта…» и пришлите ещё раз."
+)
+TEXT_KEY_LIMIT = "Слишком много попыток. Подождите минуту и пришлите ключ ещё раз."
+
+# Опрос сервера: сколько сервер держит запрос в ожидании сообщений и пауза после сбоя
+PULL_WAIT_MS = 7000
+PULL_RETRY_S = 5
 
 # pending_id → {token, chat_id, tg_id, name, created}
 PENDING: dict[str, dict] = {}
@@ -86,6 +119,9 @@ PROTO_MAJOR = 2
 PROTO_MINOR = 0
 CHANNEL_IDENTIFIED = 1
 METHOD_CONFIRM_TELEGRAM = "identity.account.confirm_telegram"
+METHOD_TELEGRAM_PULL = "identity.telegram.pull"
+METHOD_TELEGRAM_REPLY = "identity.telegram.reply"
+ERROR_RATE_LIMITED = 5
 ERROR_TEXT = {
     1: "неверный запрос", 2: "Telegram уже привязан к другому аккаунту или неверный секрет",
     3: "ссылка подтверждения не найдена или устарела", 4: "уже подтверждено",
@@ -198,25 +234,143 @@ def parse_confirm_response(body: bytes) -> dict:
     return {"ok": True, "user": user, "kind": action or "register"}
 
 
-async def confirm_via_gateway(token: str, telegram_id: int, telegram_name: str) -> dict:
-    body = confirm_request_body(SECRET, token, telegram_id, telegram_name)
+async def gateway_call(method: str, body: bytes, timeout_ms: int = 5000):
+    """Один запрос канала PRE: (тело ответа | None, код ошибки | None)."""
+    wait_s = max(GATEWAY_TIMEOUT_S, timeout_ms / 1000 + 5)
     async with websockets.connect(GATEWAY_URL, open_timeout=GATEWAY_TIMEOUT_S, max_size=8 * 1024 * 1024) as ws:
         await ws.send(v2_hello_frame())
         welcome = await asyncio.wait_for(ws.recv(), GATEWAY_TIMEOUT_S)
         if not isinstance(welcome, (bytes, bytearray)) or 11 not in _fields(bytes(welcome)):
-            return {"ok": False, "error": "gateway не ответил Welcome v2"}
-        await ws.send(v2_request_frame(1, METHOD_CONFIRM_TELEGRAM, body, 5000))
+            raise RuntimeError("gateway не ответил Welcome v2")
+        await ws.send(v2_request_frame(1, method, body, timeout_ms))
         while True:
-            raw = await asyncio.wait_for(ws.recv(), GATEWAY_TIMEOUT_S)
+            raw = await asyncio.wait_for(ws.recv(), wait_s)
             if not isinstance(raw, (bytes, bytearray)):
                 continue
             parsed = v2_parse_response(bytes(raw), 1)
-            if parsed is None:
+            if parsed is not None:
+                return parsed
+
+
+async def confirm_via_gateway(token: str, telegram_id: int, telegram_name: str) -> dict:
+    body = confirm_request_body(SECRET, token, telegram_id, telegram_name)
+    try:
+        ok_body, code = await gateway_call(METHOD_CONFIRM_TELEGRAM, body)
+    except RuntimeError as error:
+        return {"ok": False, "error": str(error)}
+    if ok_body is not None:
+        return parse_confirm_response(ok_body)
+    return {"ok": False, "code": code, "error": ERROR_TEXT.get(code, f"ошибка сервера (код {code})")}
+
+
+# ── Ключ восстановления (spec 015) ──────────────────────────────────────────
+
+def pull_request_body(secret: str, acks: list[int], wait_ms: int) -> bytes:
+    return (_field_str(1, secret) + b"".join(_field_varint(2, ack) for ack in acks)
+            + _field_varint(3, wait_ms))
+
+
+def parse_pull_response(body: bytes) -> list[dict]:
+    out = []
+    for raw in _fields(body).get(1, []):
+        f = _fields(raw)
+        text = lambda num: _first(f, num, b"").decode("utf-8", "replace")  # noqa: E731
+        out.append({
+            "id": _first(f, 1, 0), "telegram_id": _first(f, 2, 0), "kind": text(3),
+            "user": text(4), "recovery_key": text(5), "client": text(6),
+        })
+    return out
+
+
+def reply_request_body(secret: str, telegram_id: int, text: str) -> bytes:
+    return _field_str(1, secret) + _field_varint(2, telegram_id) + _field_str(3, text)
+
+
+def parse_reply_response(body: bytes) -> dict:
+    f = _fields(body)
+    return {
+        "result": _first(f, 1, b"").decode("utf-8", "replace"),
+        "user": _first(f, 2, b"").decode("utf-8", "replace"),
+    }
+
+
+def nick_of(user: str) -> str:
+    return "@" + (user.split("@")[0] if user else "?")
+
+
+def html_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def deliver(message: dict) -> None:
+    """Сообщение сервера — в чат владельца (личный чат: chat_id = telegram_id)."""
+    chat_id = message["telegram_id"]
+    user = html_escape(nick_of(message["user"]))
+    if message["kind"] == "key":
+        tg_call("sendMessage", chat_id=chat_id, parse_mode="HTML",
+                text=TEXT_KEY.format(user=user, key=html_escape(message["recovery_key"])))
+    elif message["kind"] == "ask":
+        client = f" ({html_escape(message['client'])})" if message["client"] else ""
+        tg_call("sendMessage", chat_id=chat_id, parse_mode="HTML",
+                text=TEXT_KEY_ASK.format(user=user, client=client),
+                reply_markup=json.dumps({
+                    "force_reply": True, "input_field_placeholder": "Ключ восстановления",
+                }))
+    else:
+        log.warning("неизвестный вид сообщения сервера: %s", message["kind"])
+
+
+async def pull_loop():
+    """Забирать у сервера сообщения для владельцев и слать их в Telegram."""
+    loop = asyncio.get_running_loop()
+    acks: list[int] = []
+    while True:
+        try:
+            body = pull_request_body(SECRET, acks, PULL_WAIT_MS)
+            ok_body, code = await gateway_call(METHOD_TELEGRAM_PULL, body, PULL_WAIT_MS + 2000)
+        except Exception as error:  # noqa: BLE001 — сервер недоступен: повторим
+            log.warning("опрос сервера: %s", error)
+            await asyncio.sleep(PULL_RETRY_S)
+            continue
+        if ok_body is None:
+            log.warning("опрос сервера: код ошибки %s", code)
+            await asyncio.sleep(PULL_RETRY_S)
+            continue
+        acks = []
+        for message in parse_pull_response(ok_body):
+            try:
+                await loop.run_in_executor(None, deliver, message)
+                log.info("сообщение %s (%s) доставлено tg %s", message["id"], message["kind"], message["telegram_id"])
+            except Exception as error:  # noqa: BLE001
+                # Владелец мог заблокировать бота — сервер повторит и снимет по сроку
+                log.warning("сообщение %s не доставлено tg %s: %s", message["id"], message["telegram_id"], error)
                 continue
-            ok_body, code = parsed
-            if ok_body is not None:
-                return parse_confirm_response(ok_body)
-            return {"ok": False, "code": code, "error": ERROR_TEXT.get(code, f"ошибка сервера (код {code})")}
+            acks.append(message["id"])
+
+
+async def handle_key_reply(chat_id: int, telegram_id: int, text: str) -> bool:
+    """Текст владельца — ключ восстановления? True — сервер ждал ключ (ответ боту дан)."""
+    try:
+        ok_body, code = await gateway_call(METHOD_TELEGRAM_REPLY, reply_request_body(SECRET, telegram_id, text))
+    except Exception as error:  # noqa: BLE001
+        log.error("gateway недоступен: %s", error)
+        tg_call("sendMessage", chat_id=chat_id, text=TEXT_DOWN)
+        return True
+    if ok_body is None:
+        if code == ERROR_RATE_LIMITED:
+            tg_call("sendMessage", chat_id=chat_id, text=TEXT_KEY_LIMIT)
+            return True
+        log.warning("ответ с ключом tg %s: код ошибки %s", telegram_id, code)
+        return False
+    result = parse_reply_response(ok_body)["result"]
+    if result == "ok":
+        log.info("ключ восстановления принят от tg %s", telegram_id)
+        tg_call("sendMessage", chat_id=chat_id, text=TEXT_KEY_OK)
+        return True
+    if result == "bad_key":
+        tg_call("sendMessage", chat_id=chat_id, text=TEXT_KEY_BAD)
+        return True
+    return False
 
 
 def purge_pending(now: float | None = None) -> None:
@@ -236,6 +390,9 @@ async def handle_message(message: dict):
     sender = message.get("from") or {}
     text = (message.get("text") or "").strip()
     if not text.startswith("/start"):
+        # Не команда: возможно, это ключ восстановления в ответ на просьбу бота
+        if text and await handle_key_reply(chat_id, int(sender.get("id", 0)), text):
+            return
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_HELP)
         return
     parts = text.split(maxsplit=1)
@@ -321,6 +478,7 @@ async def main():
     log.info("бот @%s запущен, gateway %s", me.get("username"), GATEWAY_URL)
     offset = None
     loop = asyncio.get_running_loop()
+    puller = asyncio.create_task(pull_loop())  # noqa: F841 — ссылка держит задачу
     while True:
         try:
             updates = await loop.run_in_executor(

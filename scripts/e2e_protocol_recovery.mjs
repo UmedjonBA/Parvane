@@ -4,9 +4,9 @@
 // ему), затем «потеряно».
 // (1) bob2 — новое устройство: журнал устройств у аккаунта есть, других
 //     устройств нет. Settings → Devices → «Use recovery key»: неверный ключ
-//     отклоняется; верный — корень из копии на сервере, новый SSK, прежнее
-//     устройство отозвано, bob2 в журнале. alice продолжает переписку БЕЗ
-//     предупреждения (корень прежний);
+//     отклоняется; верный — bob2 входит в журнал по копии ключей аккаунта
+//     (spec 015, RECOVER-2: прежние устройства не отзываются) и видит прежнюю
+//     переписку. alice продолжает переписку БЕЗ предупреждения (корень прежний);
 // (2) bob3 — ещё одно новое устройство без ключа восстановления: «Reset secure
 //     identity» (нужен пароль) — новый корень и журнал, показан новый ключ
 //     восстановления. alice при следующей отправке видит служебное сообщение
@@ -121,8 +121,19 @@ try {
   const answer = `rc-answer-${suffix}`;
   await sendText(sessions.bob1.page, answer);
   await findMessage(alicePage, answer).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Копия корня под ключом восстановления должна быть на сервере до потери устройства
-  await sessions.bob1.page.waitForTimeout(3000);
+  // Копия корня и копия ключей аккаунта (со снимком истории) должны быть на сервере
+  // до потери устройства
+  // (снимок, сделанный до этих сообщений, не годится — ждём следующий: проверка раз в минуту)
+  const countLog = (needle) => logs.bob1.filter((l) => l.includes(needle)).length;
+  const snapshotsBefore = countLog('снимок истории загружен');
+  const writesBefore = countLog('копия ключей аккаунта обновлена');
+  for (let waited = 0; waited < 150; waited++) {
+    if (countLog('снимок истории загружен') > snapshotsBefore
+      && countLog('копия ключей аккаунта обновлена') > writesBefore) break;
+    // eslint-disable-next-line no-await-in-loop
+    await sessions.bob1.page.waitForTimeout(1000);
+  }
+  assert.ok(countLog('копия ключей аккаунта обновлена') > writesBefore, 'bob1: копия ключей с историей не ушла на сервер');
   assert.ok(!logs.bob1.some((l) => l.includes('копия корня на сервер не ушла')), logs.bob1.slice(-20).join(' | '));
 
   // ── bob1 потеряно ───────────────────────────────────────────────────────────
@@ -139,7 +150,7 @@ try {
   await submitDialog(bob2Page, dev2, 'Use recovery key', 'Recovery key', wrongKey, 'Use recovery key');
   await expectToast(bob2Page, 'This recovery key does not match');
   await submitDialog(bob2Page, dev2, 'Use recovery key', 'Recovery key', recoveryKey, 'Use recovery key');
-  await waitLog('bob2', 'v2: устройство восстановлено ключом восстановления');
+  await waitLog('bob2', 'v2: устройство привязано ключом восстановления (прежние устройства остались)');
   await waitLog('bob2', 'v2: готов');
   await dev2.getByText('No other device?').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await dismissRecoveryKeyDialog(bob2Page, 3000), undefined,
@@ -151,6 +162,9 @@ try {
   await sendText(alicePage, afterRecovery);
   await openPrivateChatStrict(bob2Page, alice);
   await findMessage(bob2Page, afterRecovery).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Прежняя переписка — из снимка истории в копии ключей, без других устройств
+  await findMessage(bob2Page, before).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findMessage(bob2Page, answer).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const fromRecovered = `rc-from-recovered-${suffix}`;
   await sendText(bob2Page, fromRecovered);
   await findMessage(alicePage, fromRecovered).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

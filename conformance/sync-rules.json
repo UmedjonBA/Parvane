@@ -1239,6 +1239,20 @@
         "desktop": "ОТКРЫТО (spec 012, 9 окт 2026): порядок по времени отправителя; правка ядра — в очереди desktop",
         "android": "ОТКРЫТО (spec 012, 9 окт 2026): порядок по времени отправителя; правка — в очереди android"
       }
+    },
+    {
+      "id": "RECOVER-2",
+      "title": "Новое устройство по ключу восстановления входит в журнал устройств через копию ключей аккаунта: прежние устройства остаются, история и планировщик приходят без других устройств; ключ можно получить ответом Telegram-боту",
+      "bundleField": "key_bundle",
+      "bundleMagic": "PVKB",
+      "bundleKdfSalt": "parvane/v2/key-bundle",
+      "grantBundleKeyField": "bk",
+      "methods": ["identity.recovery.tg_send", "identity.recovery.tg_request", "identity.recovery.tg_poll", "identity.telegram.pull", "identity.telegram.reply"],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/keyBundle.ts (формат копии), v2/controller.ts (refreshKeyBundle, joinWithRecoveryKey, finishJoin — привязка переживает обрыв), provider.ts (buildBundleHistory, startTelegramRecovery); тесты v2/keyBundle.test.ts, v2Link.test.ts; сценарии scripts/e2e_web_telegram_recovery.mjs, scripts/e2e_web_telegram_bot.mjs",
+        "desktop": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу — прежним путём RECOVER-1 (корень, отзыв прежних устройств); копию ключей не пишет и не читает",
+        "android": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу не сделан; копию ключей не пишет и не читает"
+      }
     }
   ]
 }

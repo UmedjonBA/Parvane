@@ -26,6 +26,10 @@ import {
 } from './contentMap';
 import { preauth } from './control';
 import { loadProtocol, parseEngineError } from './engine';
+import {
+  buildBundleMark, deriveBundleKey, type KeyBundleHistory, openKeyBundle, readGrantBundleKey, sealKeyBundle,
+  withBundleKey, withFreshLog,
+} from './keyBundle';
 import { createL2Gate, type L2State, parseL2State } from './l2';
 import { createPlannerSync } from './planner';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
@@ -47,6 +51,15 @@ type Deps = {
   onNeedsLinking?: () => void;
   /** Ключ восстановления нового корня — показать пользователю один раз. */
   onRecoveryKey: (recoveryKey: string) => void;
+  /** Снимок истории для копии ключей аккаунта (spec 015): прежний указатель,
+   * если история не менялась, либо указатель на свежий снимок. */
+  bundleHistory?: (previous: KeyBundleHistory | undefined, force: boolean) => Promise<KeyBundleHistory | undefined>;
+  /** Прежний снимок истории заменён в копии на сервере — его блоб больше не нужен. */
+  dropBundleHistory?: (replaced: KeyBundleHistory) => void;
+  /** Стек поднят на устройстве с ключом копии ключей аккаунта: можно свериться с копией. */
+  onBundleReady?: () => void;
+  /** Подпись этого устройства («Chrome, Android») — для сообщения бота. */
+  describeDevice?: () => string;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
   onUpgradeRequired: () => void;
   /** JWT не принят на соединении v2 — нужен повторный вход. */
@@ -163,6 +176,18 @@ export type V2JoinResult =
 
 type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array };
+type PendingJoin = {
+  state: string;
+  requests: { chan: Chan; method: string; body: string }[];
+  rootBackup?: string;
+  bundleKey?: string;
+};
+export type KeyJoinOutcome = {
+  result: SskRotationResult;
+  planner?: string;
+  history?: KeyBundleHistory;
+};
+export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'failed';
 // Итог отзыва устройства (движок: `revokeDevice`)
 type RevokeOutcome = {
   requests: OutReq[];
@@ -267,6 +292,30 @@ const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
 const ROOT_ESCROW_RECORD = 'v2-root-escrow';
 const ESCROW_CHECK_TTL_MS = 60000;
 const KEY_RECORD = 'v2-storage-key';
+// Копия ключей аккаунта под ключом восстановления (spec 015): ключ копии (сам
+// ключ восстановления устройство не хранит), отпечаток отправленной копии и
+// указатель на снимок истории в ней
+const BUNDLE_KEY_RECORD = 'v2-bundle-key';
+const BUNDLE_SENT_RECORD = 'v2-bundle-sent';
+const BUNDLE_HISTORY_RECORD = 'v2-bundle-history';
+const BUNDLE_FIRST_DELAY_MS = 8000;
+const BUNDLE_REFRESH_MS = 60 * 1000;
+const BUNDLE_MAX_BYTES = 250000;
+// Аккаунт без копии ключей (создан до spec 015): его действующее устройство
+// ждёт ответ владельца боту, чтобы завести копию; новое устройство даёт ему на
+// это время, прежде чем входить прежним путём (с отзывом прежних устройств)
+const LEGACY_KEY_POLL_MS = 15000;
+const LEGACY_BUNDLE_WAIT_MS = 45000;
+const LEGACY_BUNDLE_POLL_MS = 3000;
+// Привязка устройства переживает обрыв связи и перезагрузку: материал гранта
+// (до запроса) и состояние движка с запросом вступления (после) лежат в
+// хранилище устройства, пока сервер не подтвердит запись в журнале
+const PENDING_GRANT_RECORD = 'v2-pending-grant';
+const PENDING_JOIN_RECORD = 'v2-pending-join';
+// Отказы, после которых повтор того же запроса имеет смысл (связь, частота)
+const TRANSIENT_CODES = new Set([
+  'ERROR_CODE_UNAVAILABLE', 'ERROR_CODE_RATE_LIMITED', 'ERROR_CODE_UNSPECIFIED', 'ERROR_CODE_EXPIRED',
+]);
 const OTK_COUNT = 50;
 // «Не на v2» кэшируется на 10 мин; у собеседника на v2 журнал устройств
 // перечитывается раз в 15 с (как каталог устройств v1): иначе его новое
@@ -309,7 +358,13 @@ export function createV2Controller(deps: Deps) {
   let rootBackupB64: string | undefined;
   let escrowKey: Promise<Uint8Array | undefined> | undefined;
   let escrowCheck: { at: number; isMissing: boolean } | undefined;
+  let telegramCheck: { at: number; isLinked: boolean } | undefined;
   let linkMaterial: Uint8Array | undefined;
+  let bundleKeyB64: string | undefined;
+  let bundleTimer: ReturnType<typeof setInterval> | undefined;
+  let legacyKeyTimer: ReturnType<typeof setInterval> | undefined;
+  // Ключ восстановления нового корня ждёт отправки владельцу в Telegram
+  let telegramKey: string | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const peers = new Map<string, { v2: boolean; at: number }>();
   // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение)
@@ -550,7 +605,18 @@ export function createV2Controller(deps: Deps) {
           'parvane.identity.v2.DeviceLogSyncRequest',
           JSON.stringify({ user: { address: self }, after_version: '0' }),
         ));
-        if (pv.deviceLogEntries(ownLog) > 0) {
+        const pendingJoin = await storage.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
+        if (pendingJoin) {
+          // Запрос вступления уже строился: состояние движка с ключами устройства
+          // сохранено — повторяем тот же запрос, а не выпускаем новые ключи
+          client.free();
+          client = pv.PvClient.importState(unb64(pendingJoin.state), storageKey);
+          if (!(await finishJoin(pendingJoin))) return;
+        } else if (pv.deviceLogEntries(ownLog) > 0) {
+          if (!linkMaterial) {
+            const savedGrant = await storage.loadRecord<string>(PENDING_GRANT_RECORD);
+            if (savedGrant) linkMaterial = unb64(savedGrant);
+          }
           if (!linkMaterial) {
             deps.log('v2: у аккаунта уже есть журнал устройств — нужна линковка этого устройства');
             client.free();
@@ -559,25 +625,33 @@ export function createV2Controller(deps: Deps) {
             deps.onNeedsLinking?.();
             return;
           }
-          // Грант от своего устройства: SSK, журнал, ключ доставки и ключ личного
-          // состояния — устройство сертифицирует себя записью журнала (D-11)
+          // Грант от своего устройства (или копия ключей аккаунта): SSK, журнал,
+          // ключ доставки и ключ личного состояния — устройство сертифицирует
+          // себя записью журнала (D-11)
           const material = linkMaterial;
           linkMaterial = undefined;
+          let join: PendingJoin;
           try {
-            await run(client.joinWithGrant(material, OTK_COUNT) as OutReq[]);
+            const requests = client.joinWithGrant(material, OTK_COUNT) as OutReq[];
             // Копия корня под ключом восстановления (поле `rb`): с ней и это
             // устройство сможет сменить SSK после отзыва другого (D-12)
             const rootBackup = pv.grantRootBackup(material);
-            if (rootBackup) {
-              rootBackupB64 = b64(rootBackup);
-              await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
-            }
+            join = {
+              state: b64(client.export(storageKey)),
+              requests: requests.map((r) => ({ chan: r.chan, method: r.method, body: b64(r.body) })),
+              rootBackup: rootBackup ? b64(rootBackup) : undefined,
+              bundleKey: readGrantBundleKey(material),
+            };
+          } catch (e) {
+            deps.log(`v2: материал привязки не годится: ${String(e)}`);
+            await abandonJoin();
+            return;
           } finally {
             material.fill(0);
           }
-          needsLinking = false;
-          await persist();
-          deps.log('v2: устройство привязано грантом линковки');
+          await storage.saveRecord(PENDING_JOIN_RECORD, join);
+          await storage.deleteRecord(PENDING_GRANT_RECORD).catch(() => undefined);
+          if (!(await finishJoin(join))) return;
         } else {
           const created = client.createIdentity(OTK_COUNT) as { requests: OutReq[]; rootSecret: Uint8Array };
           await run(created.requests);
@@ -591,6 +665,8 @@ export function createV2Controller(deps: Deps) {
           await sealRootEscrow(client);
           client.forgetRoot();
           created.rootSecret.fill(0);
+          await rememberBundleKey(recoveryKey);
+          telegramKey = recoveryKey;
           deps.onRecoveryKey(recoveryKey);
           await persist();
         }
@@ -615,10 +691,18 @@ export function createV2Controller(deps: Deps) {
       void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
       deps.onStateReady?.(stateHost);
       void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
-      void uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
+      void startRecoveryUpkeep();
     })().catch((e: unknown) => {
       starting = undefined;
       deps.log(`v2: запуск не удался: ${String(e)}`);
+      // Вступление в журнал не завершено из-за связи — повторяем сами: соединение
+      // могло остаться открытым, и повтор по его закрытию тогда не случится
+      if (joinRetry) {
+        joinRetry = false;
+        setTimeout(() => {
+          void start().catch(() => undefined);
+        }, RECONNECT_MS);
+      }
       // Сервер больше не принимает эту версию протокола (Welcome не пришёл)
       if (e instanceof V2Error && e.code === 'ERROR_CODE_UPGRADE_REQUIRED') deps.onUpgradeRequired();
       // Сервер не принял JWT (истёк, отозван). Без соединения v1 отказ виден только
@@ -626,6 +710,72 @@ export function createV2Controller(deps: Deps) {
       if (e instanceof V2Error && e.code === 'ERROR_CODE_REVOKED') deps.onAuthRejected?.();
     });
     return starting;
+  }
+
+  // ── привязка устройства: вступление в журнал (spec 015) ────────────────────
+
+  let joinRetry = false;
+  let isJustJoined = false;
+
+  function isRejection(e: unknown) {
+    return e instanceof V2Error && !TRANSIENT_CODES.has(e.code);
+  }
+
+  /** Материал привязки не подошёл или сервер не принял запись: устройство
+   * остаётся непривязанным и снова показывает способы привязки. */
+  async function abandonJoin() {
+    await storage?.deleteRecord(PENDING_JOIN_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(PENDING_GRANT_RECORD).catch(() => undefined);
+    client?.free();
+    client = undefined;
+    needsLinking = true;
+    deps.onNeedsLinking?.();
+  }
+
+  /** Отправить запрос вступления (или повторить после обрыва). Обрыв связи —
+   * исключение: запуск повторится с тем же запросом. Отказ сервера на повторе
+   * мог значить «запись уже принята, ответ потерялся» — проверяем запросом,
+   * который сервер примет только от устройства, действующего в журнале. */
+  async function finishJoin(join: PendingJoin): Promise<boolean> {
+    if (!client || !storage) return false;
+    try {
+      await run(join.requests.map((r) => ({ chan: r.chan, method: r.method, body: unb64(r.body) })));
+    } catch (e) {
+      if (!isRejection(e)) {
+        joinRetry = true;
+        throw e;
+      }
+      let isJoined = false;
+      try {
+        const probe = client.otkRequest(OTK_COUNT) as OutReq;
+        await call(probe.chan, probe.method, probe.body);
+        isJoined = true;
+      } catch (probeError) {
+        if (!isRejection(probeError)) {
+          joinRetry = true;
+          throw probeError;
+        }
+      }
+      if (!isJoined) {
+        deps.log(`v2: сервер не принял запись устройства в журнал: ${String(e)}`);
+        await abandonJoin();
+        return false;
+      }
+    }
+    if (join.rootBackup) {
+      rootBackupB64 = join.rootBackup;
+      await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+    }
+    if (join.bundleKey) {
+      bundleKeyB64 = join.bundleKey;
+      await storage.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
+    }
+    needsLinking = false;
+    isJustJoined = true;
+    await persist();
+    await storage.deleteRecord(PENDING_JOIN_RECORD).catch(() => undefined);
+    deps.log('v2: устройство привязано грантом линковки');
+    return true;
   }
 
   async function syncAll() {
@@ -960,6 +1110,10 @@ export function createV2Controller(deps: Deps) {
     await storage?.deleteRecord(STATE_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_BACKUP_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_ESCROW_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(BUNDLE_KEY_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(BUNDLE_HISTORY_RECORD).catch(() => undefined);
+    bundleKeyB64 = undefined;
     rootBackupB64 = undefined;
     client?.free();
     client = undefined;
@@ -1068,7 +1222,260 @@ export function createV2Controller(deps: Deps) {
     return JSON.parse(pv.decodeMessage(
       'parvane.identity.v2.RootBackupGetResponse',
       await call('id', 'identity.root.backup_get', new Uint8Array()),
-    )) as { backup?: string; has_escrow?: boolean };
+    )) as { backup?: string; has_escrow?: boolean; key_bundle?: string; telegram?: boolean };
+  }
+
+  // ── копия ключей аккаунта под ключом восстановления (spec 015) ─────────────
+
+  /** Ключ копии — из ключа восстановления, пока тот в руках (создание и сброс
+   * личности, ввод ключа): сам ключ восстановления устройство не хранит. */
+  async function rememberBundleKey(recoveryKey: string) {
+    try {
+      const key = await deriveBundleKey(recoveryKey, deps.getSelf());
+      if (!key || !storage) return;
+      bundleKeyB64 = b64(key);
+      await storage.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
+    } catch (e) {
+      deps.log(`v2: ключ копии ключей аккаунта не получен: ${String(e)}`);
+    }
+  }
+
+  /** Обновить копию ключей аккаунта на сервере: материал привязки устройства,
+   * ключи планировщика и указатель на снимок истории. Пишет только устройство,
+   * держащее ключ копии и ключ подписи устройств; неизменившуюся копию не шлёт. */
+  async function refreshKeyBundle(force: boolean) {
+    if (!ready || !client || !pv || !storage || !bundleKeyB64) return;
+    try {
+      // Без перечитки журнала с сервера (проверка идёт раз в минуту): журнал в
+      // материале новое устройство всё равно заменит свежим
+      const material = buildGrantMaterial();
+      if (!material) return;
+      const previous = await storage.loadRecord<KeyBundleHistory>(BUNDLE_HISTORY_RECORD);
+      const history = deps.bundleHistory
+        ? await deps.bundleHistory(previous, force).catch(() => previous)
+        : previous;
+      const payload = { grant: b64(material), planner: planner.keysExport(), history };
+      material.fill(0);
+      const mark = await buildBundleMark(payload);
+      if (await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
+      const sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), payload);
+      if (sealed.length > BUNDLE_MAX_BYTES) {
+        deps.log(`v2: копия ключей аккаунта слишком велика (${sealed.length} байт) — не отправлена`);
+        return;
+      }
+      await call('id', 'identity.root.backup_set', pv.encodeMessage(
+        'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ key_bundle: b64(sealed) }),
+      ));
+      await storage.saveRecord(BUNDLE_SENT_RECORD, mark);
+      if (history) await storage.saveRecord(BUNDLE_HISTORY_RECORD, history);
+      if (previous && history && previous.fileId !== history.fileId) deps.dropBundleHistory?.(previous);
+      deps.log('v2: копия ключей аккаунта обновлена на сервере');
+    } catch (e) {
+      deps.log(`v2: копия ключей аккаунта не обновлена: ${String(e)}`);
+    }
+  }
+
+  /** После запуска: копия корня на сервер, ключ восстановления — владельцу в
+   * Telegram, копия ключей аккаунта — сразу и по таймеру. */
+  async function startRecoveryUpkeep() {
+    bundleKeyB64 = bundleKeyB64 || await storage?.loadRecord<string>(BUNDLE_KEY_RECORD);
+    await uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
+    await flushTelegramKey();
+    bundleTimer = bundleTimer || setInterval(() => {
+      void flushTelegramKey().then(() => refreshKeyBundle(false));
+    }, BUNDLE_REFRESH_MS);
+    legacyKeyTimer = legacyKeyTimer || setInterval(() => void adoptTelegramKey(), LEGACY_KEY_POLL_MS);
+    if (bundleKeyB64) deps.onBundleReady?.();
+    // Только что привязанное устройство сначала забирает историю из копии
+    // (иначе его неполный снимок встал бы на место снимка прежнего устройства)
+    if (isJustJoined) {
+      isJustJoined = false;
+      return;
+    }
+    setTimeout(() => void refreshKeyBundle(false), BUNDLE_FIRST_DELAY_MS);
+  }
+
+  /** Устройство аккаунта без копии ключей (создан до spec 015): владелец
+   * ответил боту ключом при входе с нового устройства — берём ключ с сервера и
+   * заводим копию, чтобы новое устройство вошло по ней (а не отзывом этого). */
+  async function adoptTelegramKey() {
+    if (!ready || bundleKeyB64 || !rootBackupB64 || !client) {
+      if (bundleKeyB64 && legacyKeyTimer) {
+        clearInterval(legacyKeyTimer);
+        legacyKeyTimer = undefined;
+      }
+      return;
+    }
+    if (!(await hasTelegram())) return;
+    const key = (await pollTelegramKey(false))?.recovery_key;
+    if (!key || bundleKeyB64) return;
+    try {
+      client.importRootBackup(unb64(rootBackupB64), key).fill(0);
+    } catch {
+      return;
+    } finally {
+      client?.forgetRoot();
+    }
+    await rememberBundleKey(key);
+    deps.log('v2: ключ восстановления получен из ответа владельца боту — заводим копию ключей аккаунта');
+    await refreshKeyBundle(true);
+  }
+
+  /** Копия ключей аккаунта с сервера, открытая ключом копии этого устройства
+   * (новое устройство перечитывает её ради свежего снимка истории). */
+  async function fetchKeyBundle() {
+    if (!ready || !bundleKeyB64) return undefined;
+    try {
+      const bundle = (await fetchRootBackupState())?.key_bundle;
+      return bundle ? await openKeyBundle(unb64(bundleKeyB64), deps.getSelf(), unb64(bundle)) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // ── ключ восстановления через Telegram (spec 015) ──────────────────────────
+
+  /** Отправить ключ восстановления владельцу в чат с ботом. Сервер проверяет
+   * ключ копией корня; `no_telegram` — Telegram к аккаунту не привязан. */
+  async function sendKeyToTelegram(recoveryKey: string): Promise<SskRotationResult | 'no_telegram'> {
+    if (!pv || !ready) return 'failed';
+    try {
+      await call('id', 'identity.recovery.tg_send', pv.encodeMessage(
+        'parvane.identity.v2.RecoveryTgSendRequest', JSON.stringify({ recovery_key: recoveryKey.trim() }),
+      ));
+      // Ключ в руках — заодно заводим копию ключей аккаунта (аккаунт до spec 015)
+      if (!bundleKeyB64) {
+        await rememberBundleKey(recoveryKey);
+        void refreshKeyBundle(true);
+      }
+      return 'ok';
+    } catch (e) {
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_NOT_FOUND') return 'no_telegram';
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_INVALID') return 'bad_key';
+      deps.log(`v2: ключ восстановления в Telegram не отправлен: ${String(e)}`);
+      return 'failed';
+    }
+  }
+
+  async function flushTelegramKey() {
+    if (!telegramKey) return;
+    const result = await sendKeyToTelegram(telegramKey);
+    // Сбой связи — повторим по таймеру; остальное повтор не исправит
+    if (result !== 'failed') telegramKey = undefined;
+    if (result === 'ok') deps.log('v2: ключ восстановления отправлен владельцу в Telegram');
+  }
+
+  /** К аккаунту привязан Telegram и сервер работает с ботом. Экран «Устройства»
+   * спрашивает по таймеру — сервер дёргаем не чаще раза в минуту. */
+  async function hasTelegram() {
+    if (telegramCheck && Date.now() - telegramCheck.at < ESCROW_CHECK_TTL_MS) return telegramCheck.isLinked;
+    try {
+      telegramCheck = { at: Date.now(), isLinked: Boolean((await fetchRootBackupState())?.telegram) };
+      return telegramCheck.isLinked;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Ключ восстановления этого аккаунта в Telegram ещё не уходил (аккаунт создан
+   * до spec 015): его отправит ввод ключа на экране «Устройства». */
+  async function canSendKeyToTelegram() {
+    return Boolean(ready && rootBackupB64 && !bundleKeyB64 && await hasTelegram());
+  }
+
+  /** Новое устройство: попросить бота спросить ключ восстановления у владельца. */
+  async function requestTelegramKey(again: boolean): Promise<TelegramKeyRequest> {
+    if (starting) await starting.catch(() => undefined);
+    if (!pv || !needsLinking || ready) return 'failed';
+    try {
+      await call('id', 'identity.recovery.tg_request', pv.encodeMessage(
+        'parvane.identity.v2.RecoveryTgRequestRequest',
+        JSON.stringify({ client: deps.describeDevice?.() || '', again }),
+      ));
+      return 'sent';
+    } catch (e) {
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_NOT_FOUND') return 'no_telegram';
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_RATE_LIMITED') return 'limit';
+      deps.log(`v2: запрос ключа через Telegram не отправлен: ${String(e)}`);
+      return 'failed';
+    }
+  }
+
+  /** Ответ владельца боту: ключ (если уже есть) и жив ли запрос. `done` —
+   * ключ применён, сервер его стирает. */
+  async function pollTelegramKey(done: boolean) {
+    if (!pv) return undefined;
+    try {
+      return JSON.parse(pv.decodeMessage(
+        'parvane.identity.v2.RecoveryTgPollResponse',
+        await call('id', 'identity.recovery.tg_poll', pv.encodeMessage(
+          'parvane.identity.v2.RecoveryTgPollRequest', JSON.stringify({ done }),
+        )),
+      )) as { recovery_key?: string; pending?: boolean };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Новое устройство входит в журнал по ключу восстановления: материал
+   * привязки — из копии ключей аккаунта на сервере, прежние устройства
+   * остаются. У аккаунта без копии (создан до spec 015) — прежний путь
+   * `recoverWithKey`: корень назначает новый SSK, прежние устройства отзываются.
+   * `viaTelegram` — ключ пришёл ответом боту: действующее устройство такого
+   * аккаунта, если оно в сети, заведёт копию само — ждём её. */
+  async function joinWithRecoveryKey(recoveryKey: string, viaTelegram: boolean): Promise<KeyJoinOutcome> {
+    if (starting) await starting.catch(() => undefined);
+    if (!pv || !storage || !storageKey || !needsLinking || ready || !ownDeviceId) return { result: 'failed' };
+    const self = deps.getSelf();
+    let state: Awaited<ReturnType<typeof fetchRootBackupState>>;
+    try {
+      state = await fetchRootBackupState();
+    } catch (e) {
+      deps.log(`v2: копия корня не получена: ${String(e)}`);
+      return { result: 'failed' };
+    }
+    if (!state?.backup) return { result: 'no_backup' };
+    const probe = new pv.PvClient(self, ownDeviceId, serverDomain);
+    try {
+      probe.importRootBackupFor(unb64(state.backup), recoveryKey.trim());
+    } catch {
+      return { result: 'bad_key' };
+    } finally {
+      probe.forgetRoot();
+      probe.free();
+    }
+    const bundleKey = await deriveBundleKey(recoveryKey, self).catch(() => undefined);
+    let payload = bundleKey && state.key_bundle
+      ? await openKeyBundle(bundleKey, self, unb64(state.key_bundle))
+      : undefined;
+    if (bundleKey && !payload && viaTelegram) {
+      deps.log('v2: копии ключей аккаунта на сервере нет — ждём, заведёт ли её другое устройство');
+      const deadline = Date.now() + LEGACY_BUNDLE_WAIT_MS;
+      while (!payload && Date.now() < deadline) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, LEGACY_BUNDLE_POLL_MS);
+        });
+        const bundle = (await fetchRootBackupState().catch(() => undefined))?.key_bundle;
+        payload = bundle ? await openKeyBundle(bundleKey, self, unb64(bundle)) : undefined;
+      }
+    }
+    if (!bundleKey || !payload) {
+      deps.log('v2: копии ключей аккаунта на сервере нет — восстановление корнем');
+      return { result: await recoverWithKey(recoveryKey) };
+    }
+    try {
+      const ownLog = await call('id', 'identity.device.log_sync', pv.encodeMessage(
+        'parvane.identity.v2.DeviceLogSyncRequest',
+        JSON.stringify({ user: { address: self }, after_version: '0' }),
+      ));
+      const material = withBundleKey(withFreshLog(unb64(payload.grant), ownLog), b64(bundleKey));
+      if (!(await joinWithGrant(material))) return { result: 'failed' };
+    } catch (e) {
+      deps.log(`v2: вход по ключу восстановления не удался: ${String(e)}`);
+      return { result: 'failed' };
+    }
+    deps.log('v2: устройство привязано ключом восстановления (прежние устройства остались)');
+    return { result: 'ok', planner: payload.planner, history: payload.history };
   }
 
   /** Сервер держит копии корня для администратора, а у этого аккаунта её нет
@@ -1142,6 +1549,7 @@ export function createV2Controller(deps: Deps) {
       rootBackupB64 = b64(backup);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
       needsLinking = false;
+      await rememberBundleKey(recoveryKey);
       deps.log('v2: устройство восстановлено ключом восстановления (прежние устройства отозваны)');
     } catch (e) {
       deps.log(`v2: восстановление по ключу не удалось: ${String(e)}`);
@@ -1179,6 +1587,9 @@ export function createV2Controller(deps: Deps) {
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
       await storage.saveRecord(STATE_RECORD, b64(fresh.export(storageKey)));
       needsLinking = false;
+      await storage.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+      await rememberBundleKey(recoveryKey);
+      telegramKey = recoveryKey;
       deps.log('v2: личность сброшена — новый корень и журнал устройств');
     } catch (e) {
       deps.log(`v2: сброс личности не удался: ${String(e)}`);
@@ -1306,6 +1717,9 @@ export function createV2Controller(deps: Deps) {
         created.rootSecret.fill(0);
         await persist();
       });
+      await target.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+      await rememberBundleKey(recoveryKey);
+      telegramKey = recoveryKey;
       deps.log('v2: личность сброшена на работающем устройстве — новый корень и журнал устройств');
     } catch (e) {
       deps.log(`v2: сброс личности не удался: ${String(e)}`);
@@ -1387,6 +1801,9 @@ export function createV2Controller(deps: Deps) {
         await persist();
       });
       deps.log('v2: SSK сменён корнем');
+      // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
+      await rememberBundleKey(recoveryKey);
+      void refreshKeyBundle(true);
       void uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
       return 'ok';
     } catch (e) {
@@ -2768,17 +3185,30 @@ export function createV2Controller(deps: Deps) {
       // Грант несёт журнал устройств: если другое своё устройство только что
       // вышло само, без перечитки новое записалось бы поверх его записи (отказ)
       await serial(checkOwnDevices).catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
-      if (!client) return undefined;
-      const material = client.linkGrantMaterial();
-      if (!rootBackupB64 || !pv) return material;
-      // Копия корня под ключом восстановления — вместе с грантом (поле `rb`)
-      const withBackup = pv.grantWithRootBackup(material, unb64(rootBackupB64));
-      material.fill(0);
-      return withBackup;
+      return buildGrantMaterial();
     } catch (e) {
       deps.log(`v2: грант линковки недоступен: ${String(e)}`);
       return undefined;
     }
+  }
+
+  /** Материал гранта по текущему состоянию движка; undefined — устройство без SSK. */
+  function buildGrantMaterial(): Uint8Array | undefined {
+    if (!client) return undefined;
+    let material: Uint8Array;
+    try {
+      material = client.linkGrantMaterial();
+    } catch {
+      return undefined;
+    }
+    // Ключ копии ключей аккаунта — вместе с грантом (поле `bk`)
+    const keyed = bundleKeyB64 ? withBundleKey(material, bundleKeyB64) : material;
+    if (keyed !== material) material.fill(0);
+    if (!rootBackupB64 || !pv) return keyed;
+    // Копия корня под ключом восстановления — вместе с грантом (поле `rb`)
+    const withBackup = pv.grantWithRootBackup(keyed, unb64(rootBackupB64));
+    keyed.fill(0);
+    return withBackup;
   }
 
   /** Новое устройство: вступить в журнал устройств по гранту и поднять стек. */
@@ -2787,6 +3217,8 @@ export function createV2Controller(deps: Deps) {
     if (starting) await starting.catch(() => undefined);
     if (!needsLinking || ready) return false;
     linkMaterial = material;
+    // Материал — в хранилище: обрыв связи или перезагрузка привязку не отменяют
+    await storage?.saveRecord(PENDING_GRANT_RECORD, b64(material)).catch(() => undefined);
     // Соединение прошлой попытки закрываем без автоповтора: запуск — ниже
     if (idConn) {
       idConn.onClose = undefined;
@@ -2843,6 +3275,14 @@ export function createV2Controller(deps: Deps) {
     sskState,
     rotateSsk,
     recoverWithKey,
+    joinWithRecoveryKey,
+    refreshKeyBundle,
+    fetchKeyBundle,
+    sendKeyToTelegram,
+    hasTelegram,
+    canSendKeyToTelegram,
+    requestTelegramKey,
+    pollTelegramKey,
     resetIdentity,
     leave,
     pollOwnDevices,
@@ -2930,6 +3370,13 @@ export function createV2Controller(deps: Deps) {
       groupResyncTimers.clear();
       if (tokenTimer) clearInterval(tokenTimer);
       tokenTimer = undefined;
+      if (bundleTimer) clearInterval(bundleTimer);
+      bundleTimer = undefined;
+      if (legacyKeyTimer) clearInterval(legacyKeyTimer);
+      legacyKeyTimer = undefined;
+      bundleKeyB64 = undefined;
+      telegramKey = undefined;
+      telegramCheck = undefined;
       warnedUnconfirmed.clear();
     },
   };
