@@ -161,6 +161,10 @@ message Event {
   Repeat repeat = 8;
   repeated Occurrence occurrences = 9 [(parvane.core.v2.max_items) = 2000];
   Origin origin = 10;
+  // spec 013: событие на весь день (время хранится 00:00–23:59, клиент его не показывает)
+  Bool all_day = 11;
+  // spec 013: праздник — день события отмечается в календаре
+  Bool is_holiday = 12;
 }
 
 message List {
@@ -168,6 +172,8 @@ message List {
   Str name = 2;
   I32 order = 3;
   parvane.core.v2.LwwStamp deleted = 4;
+  // spec 013: цвет списка — 0 нет, 1…8 индекс палитры клиента
+  U32 color = 5;
 }
 
 message Goal {
