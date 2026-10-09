@@ -161,6 +161,10 @@ try {
   // ── Питание и статистика ──────────────────────────────────────────────────
   await planner.getByText('Nutrition', { exact: true }).first().click();
   await planner.getByRole('button', { name: '+ Add entry' }).click();
+  // Форма записи питания открывается левой колонкой, дневник дня остаётся справа
+  await sidePane.locator('[data-food-form]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await dayPane.locator('[data-food-form]').count(), 0, 'форма записи питания не должна стоять в панели дня');
+  assert.ok(await dayPane.getByText('Calories', { exact: false }).first().isVisible(), 'дневник дня должен оставаться виден');
   await page.locator('#planner-food-name').fill('Овсянка');
   await planner.getByLabel('Calories, kcal').fill('390');
   await planner.getByLabel('Protein, g').fill('20');
@@ -485,7 +489,10 @@ try {
   // Вид «Неделя» запомнен устройством
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: 30000 });
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
-  await todayCell.getByText('14:00 Подготовить макет').waitFor({ state: 'visible', timeout: 30000 });
+  // В клетке месяца только два превью, а порядок задач дня после перезагрузки не закреплён — смотрим панель дня
+  await todayCell.click({ position: { x: 10, y: 10 } });
+  await planner.getByText('Schedule', { exact: true }).first().click();
+  await dayPane.getByText('Подготовить макет').first().waitFor({ state: 'visible', timeout: 30000 });
   // Настройки тоже сохранены
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   assert.equal(await planner.getByLabel('Day starts').inputValue(), '08:00', 'начало дня после перезагрузки');
