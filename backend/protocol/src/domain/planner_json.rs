@@ -7,7 +7,8 @@
 //! Состояние:
 //! `{tasks:[{id,name,description,steps:[{text,isDone}],status,listId,rank,day,start,due,minutes|null,
 //!     repeat|null,occurrences:[{day,excluded,done,doneSteps}],origin|null,source|null}],
-//!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null}], lists:[{id,name,order}],
+//!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null,allDay,isHoliday}],
+//!   lists:[{id,name,order,color}],
 //!   nutrition:[{day,entries:[{id,name,meal,kcal,protein|null,fat|null,carbs|null,fiber|null,grams|null,per100}],
 //!     isComplete,fixedGoals|null,waterMl|null}], settings|null, goals|null,
 //!   goalPeriods:[{id,startDay,endDay,kcal|null,protein|null,fat|null,carbs|null,fiber|null,water|null}]}`
@@ -126,6 +127,8 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "id": e.id, "name": sv(&e.name), "start": sv(&e.start), "end": sv(&e.end),
                 "weekdays": e.weekdays.as_ref().map(|w| json!(w.days)).unwrap_or(Value::Null), "day": sv(&e.day),
                 "repeat": repeat_json(&e.repeat), "occurrences": occurrences_json(&e.occurrences), "origin": origin_json(&e.origin),
+                "allDay": e.all_day.as_ref().map(|b| b.value).unwrap_or(false),
+                "isHoliday": e.is_holiday.as_ref().map(|b| b.value).unwrap_or(false),
             })
         })
         .collect();
@@ -133,7 +136,12 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
         .lists
         .values()
         .filter(|l| PlannerState::is_list_alive(l))
-        .map(|l| json!({"id": l.id, "name": sv(&l.name), "order": l.order.as_ref().map(|o| o.value).unwrap_or(0)}))
+        .map(|l| {
+            json!({
+                "id": l.id, "name": sv(&l.name), "order": l.order.as_ref().map(|o| o.value).unwrap_or(0),
+                "color": l.color.as_ref().filter(|c| !c.unset).map(|c| c.value).unwrap_or(0),
+            })
+        })
         .collect();
     let nutrition: Vec<Value> = state
         .nutrition
@@ -402,11 +410,20 @@ fn event_of(o: &Map<String, Value>) -> Result<Event> {
         repeat: repeat_of(o)?,
         occurrences: occurrences_of(o)?,
         origin: origin_of(o)?,
+        all_day: bool_field(o, "allDay")?,
+        is_holiday: bool_field(o, "isHoliday")?,
     })
 }
 
+fn bool_field(o: &Map<String, Value>, key: &str) -> Result<Option<Bool>> {
+    match o.get(key) {
+        None => Ok(None),
+        Some(v) => Ok(Some(Bool { stamp: None, value: v.as_bool().ok_or(ProtoError::Malformed)? })),
+    }
+}
+
 fn list_of(o: &Map<String, Value>) -> Result<List> {
-    Ok(List { id: id_of(o)?, name: str_field(o, "name")?, order: i32_field(o, "order")?, deleted: deleted_of(o) })
+    Ok(List { id: id_of(o)?, name: str_field(o, "name")?, order: i32_field(o, "order")?, deleted: deleted_of(o), color: u32_field(o, "color")? })
 }
 
 fn entry_of(o: &Map<String, Value>) -> Result<FoodEntry> {
@@ -455,10 +472,7 @@ fn day_of(o: &Map<String, Value>) -> Result<NutritionDay> {
         Some(Value::Array(items)) => items.iter().map(|i| i.as_object().ok_or(ProtoError::Malformed).and_then(entry_of)).collect::<Result<Vec<_>>>()?,
         Some(_) => return Err(ProtoError::Malformed),
     };
-    let is_complete = match o.get("isComplete") {
-        None => None,
-        Some(v) => Some(Bool { stamp: None, value: v.as_bool().ok_or(ProtoError::Malformed)? }),
-    };
+    let is_complete = bool_field(o, "isComplete")?;
     let fixed_goals = match o.get("fixedGoals") {
         None => None,
         Some(Value::Null) => Some(GoalSet { stamp: None, ..Default::default() }),
@@ -522,7 +536,8 @@ mod tests {
           {"task":{"id":"t1","name":"Задача","status":"queue","listId":"","rank":0,"day":"2026-10-08","start":"10:00","minutes":60,"steps":[{"text":"a","isDone":true}]}},
           {"task":{"id":"t2","name":"Без оценки","minutes":null}},
           {"event":{"id":"e1","name":"Стендап","start":"09:30","end":"09:45","weekdays":[1,2,3,4,5],"day":""}},
-          {"list":{"id":"l1","name":"Работа","order":1}},
+          {"list":{"id":"l1","name":"Работа","order":1,"color":4}},
+          {"event":{"id":"e3","name":"Новый год","start":"00:00","end":"23:59","day":"2027-01-01","allDay":true,"isHoliday":true}},
           {"nutritionDay":{"day":"2026-10-08","entries":[{"id":"f1","name":"Суп","meal":"lunch","kcal":300,"protein":12}],"isComplete":true,"waterMl":500}},
           {"settings":{"dayStart":480,"dayEnd":1200,"lunchStart":0,"lunchEnd":0,"margin":10,"budget":480}},
           {"goals":{"kcal":{"target":2000,"tolerance":100},"protein":{"target":120,"tolerance":20},"water":{"target":2000,"tolerance":300}}},
@@ -535,7 +550,14 @@ mod tests {
         let mut op = op_from_json(text).unwrap();
         planner::stamp_op(&mut op, &Stamp::new(1, "d1"));
         let mut st = PlannerState::default();
-        assert_eq!(st.apply_op(&op, "d1").unwrap(), 10);
+        assert_eq!(st.apply_op(&op, "d1").unwrap(), 11);
+        let parsed: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();
+        assert_eq!(parsed["lists"][0]["color"], json!(4));
+        let e3 = parsed["events"].as_array().unwrap().iter().find(|e| e["id"] == "e3").unwrap();
+        assert_eq!(e3["allDay"], json!(true));
+        assert_eq!(e3["isHoliday"], json!(true));
+        let e1 = parsed["events"].as_array().unwrap().iter().find(|e| e["id"] == "e1").unwrap();
+        assert_eq!(e1["allDay"], json!(false));
         let out: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();
         assert_eq!(out["tasks"].as_array().unwrap().len(), 3);
         let t2 = out["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "t2").unwrap();

@@ -303,16 +303,72 @@ fn nutrition_entries_merge_whole_and_day_fields_by_stamp() {
     assert!(!PlannerState::is_entry_alive(e2));
 }
 
+// spec 013: цвет списка, «весь день» и «праздник» сводятся как отдельные регистры,
+// правка одного не трогает остальные; цвет вне палитры отвергается
+#[test]
+fn list_color_and_event_flags_merge_per_field() {
+    let mut a = PlannerState::default();
+    let list = |lamport: u64, dev: &str, color: Option<u32>, name: Option<&str>| {
+        change::Change::List(List {
+            id: "l".into(),
+            name: name.map(|n| Str { stamp: st(lamport, dev), value: n.into() }),
+            color: color.map(|c| U32 { stamp: st(lamport, dev), value: c, unset: false }),
+            ..Default::default()
+        })
+    };
+    a.apply_op(&op(vec![list(1, "d1", Some(2), Some("Дом"))]), "d1").unwrap();
+    a.apply_op(&op(vec![list(3, "d2", None, Some("Быт"))]), "d2").unwrap();
+    a.apply_op(&op(vec![list(2, "d1", Some(5), None)]), "d1").unwrap();
+    assert_eq!(a.lists["l"].color.as_ref().unwrap().value, 5);
+    assert_eq!(a.lists["l"].name.as_ref().unwrap().value, "Быт");
+    // Негодное изменение не применяется
+    let _ = a.apply_op(&op(vec![list(4, "d1", Some(9), None)]), "d1");
+    assert_eq!(a.lists["l"].color.as_ref().unwrap().value, 5);
+
+    let event = |lamport: u64, all_day: Option<bool>, holiday: Option<bool>| {
+        change::Change::Event(Event {
+            id: "e".into(),
+            name: Some(Str { stamp: st(lamport, "d1"), value: "Новый год".into() }),
+            start: Some(Str { stamp: st(lamport, "d1"), value: "00:00".into() }),
+            end: Some(Str { stamp: st(lamport, "d1"), value: "23:59".into() }),
+            all_day: all_day.map(|v| Bool { stamp: st(lamport, "d1"), value: v }),
+            is_holiday: holiday.map(|v| Bool { stamp: st(lamport, "d1"), value: v }),
+            ..Default::default()
+        })
+    };
+    a.apply_op(&op(vec![event(1, Some(true), Some(true))]), "d1").unwrap();
+    a.apply_op(&op(vec![event(2, None, Some(false))]), "d1").unwrap();
+    assert!(a.events["e"].all_day.as_ref().unwrap().value);
+    assert!(!a.events["e"].is_holiday.as_ref().unwrap().value);
+    // Снимок несёт новые поля
+    let mut b = PlannerState::default();
+    b.merge_snapshot(&a.to_snapshot()).unwrap();
+    assert_eq!(b.lists["l"].color.as_ref().unwrap().value, 5);
+    assert!(b.events["e"].all_day.as_ref().unwrap().value);
+}
+
 #[test]
 fn stamp_op_marks_every_present_register() {
     let mut o = op(vec![
         change::Change::Task(Task { id: "t".into(), name: Some(Str { stamp: None, value: "x".into() }), deleted: Some(LwwStamp::default()), ..Default::default() }),
-        change::Change::Event(Event { id: "e".into(), start: Some(Str { stamp: None, value: "10:00".into() }), ..Default::default() }),
-        change::Change::List(List { id: "l".into(), name: Some(Str { stamp: None, value: "Дом".into() }), ..Default::default() }),
+        change::Change::Event(Event {
+            id: "e".into(),
+            start: Some(Str { stamp: None, value: "10:00".into() }),
+            // spec 013: «весь день» и «праздник» — отдельные регистры
+            all_day: Some(Bool { stamp: None, value: true }),
+            is_holiday: Some(Bool { stamp: None, value: true }),
+            ..Default::default()
+        }),
+        change::Change::List(List {
+            id: "l".into(),
+            name: Some(Str { stamp: None, value: "Дом".into() }),
+            color: Some(U32 { stamp: None, value: 3, unset: false }),
+            ..Default::default()
+        }),
     ]);
     planner::stamp_op(&mut o, &Stamp::new(9, "d1"));
     let stamps = planner::op_stamps(&o).unwrap();
-    assert_eq!(stamps.len(), 4);
+    assert_eq!(stamps.len(), 7);
     assert!(stamps.iter().all(|s| s.lamport == 9 && s.device_id == "d1"));
     // spec 011: правило, экземпляры, источник и запись цели тоже получают метку.
     let mut o = op(vec![
@@ -372,8 +428,22 @@ fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
             0 => change::Change::Task(Task { id: id.clone(), name: field("имя"), ..Default::default() }),
             1 => change::Change::Task(Task { id: id.clone(), status: field("done"), minutes: Some(U32 { stamp: st(lamport, &dev), value: 30, unset: false }), ..Default::default() }),
             2 => change::Change::Task(Task { id: id.clone(), deleted: del.map(|l| LwwStamp { lamport: l, device_id: dev.clone() }).or(st(lamport, &dev)), ..Default::default() }),
-            3 => change::Change::Event(Event { id: id.clone(), name: field("событие"), start: field("10:00"), end: field("11:00"), ..Default::default() }),
-            4 => change::Change::List(List { id: id.clone(), name: field("список"), order: Some(I32 { stamp: st(lamport, &dev), value: lamport as i32 }), ..Default::default() }),
+            3 => change::Change::Event(Event {
+                id: id.clone(),
+                name: field("событие"),
+                start: field("10:00"),
+                end: field("11:00"),
+                all_day: Some(Bool { stamp: st(lamport, &dev), value: lamport % 2 == 0 }),
+                is_holiday: Some(Bool { stamp: st(lamport, &dev), value: lamport % 3 == 0 }),
+                ..Default::default()
+            }),
+            4 => change::Change::List(List {
+                id: id.clone(),
+                name: field("список"),
+                order: Some(I32 { stamp: st(lamport, &dev), value: lamport as i32 }),
+                color: Some(U32 { stamp: st(lamport, &dev), value: (lamport % 9) as u32, unset: false }),
+                ..Default::default()
+            }),
             5 => change::Change::Task(Task {
                 id: id.clone(),
                 repeat: Some(Repeat { stamp: st(lamport, &dev), kind: RepeatKind::Daily as i32, interval: 1 + (lamport % 3) as u32, start_day: "2026-10-01".into(), count: lamport as u32, ..Default::default() }),

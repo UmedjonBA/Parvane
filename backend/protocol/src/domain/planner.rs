@@ -45,6 +45,8 @@ const MAX_ID: usize = 64;
 const MAX_NAME: usize = 200;
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_LIST_NAME: usize = 60;
+/// Цвет списка: 0 — нет, 1…8 — индекс палитры клиента (spec 013).
+pub const MAX_LIST_COLOR: u32 = 8;
 const MAX_FOOD_NAME: usize = 120;
 /// spec 011: повторы и цели по датам.
 pub const MAX_OCCURRENCES: usize = 2000;
@@ -260,7 +262,11 @@ fn check_list(l: &List) -> Result<()> {
     if !is_id(&l.id) {
         return Err(ProtoError::InvalidField("id"));
     }
-    check_str(&l.name, MAX_LIST_NAME, |s| !s.trim().is_empty())
+    check_str(&l.name, MAX_LIST_NAME, |s| !s.trim().is_empty())?;
+    if l.color.as_ref().is_some_and(|c| c.value > MAX_LIST_COLOR) {
+        return Err(ProtoError::InvalidField("color"));
+    }
+    Ok(())
 }
 
 fn check_entry(e: &FoodEntry) -> Result<()> {
@@ -397,6 +403,8 @@ impl PlannerState {
             .chain(e.weekdays.as_ref().and_then(|w| w.stamp.as_ref()))
             .chain(e.repeat.as_ref().and_then(|r| r.stamp.as_ref()))
             .chain(e.origin.as_ref().and_then(|o| o.stamp.as_ref()))
+            .chain(e.all_day.as_ref().and_then(|f| f.stamp.as_ref()))
+            .chain(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.occurrences.iter().filter_map(|o| o.stamp.as_ref()))
         {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
@@ -412,7 +420,14 @@ impl PlannerState {
 
     pub fn is_list_alive(l: &List) -> bool {
         let mut best = (0u64, String::new());
-        for s in l.name.as_ref().and_then(|f| f.stamp.as_ref()).into_iter().chain(l.order.as_ref().and_then(|f| f.stamp.as_ref())) {
+        for s in l
+            .name
+            .as_ref()
+            .and_then(|f| f.stamp.as_ref())
+            .into_iter()
+            .chain(l.order.as_ref().and_then(|f| f.stamp.as_ref()))
+            .chain(l.color.as_ref().and_then(|f| f.stamp.as_ref()))
+        {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
                 best = (s.lamport, s.device_id.clone());
             }
@@ -452,6 +467,8 @@ impl PlannerState {
         merge_reg!(cur.day, inc.day, Str);
         merge_reg!(cur.repeat, inc.repeat, Repeat);
         merge_reg!(cur.origin, inc.origin, TaskOrigin);
+        merge_reg!(cur.all_day, inc.all_day, Bool);
+        merge_reg!(cur.is_holiday, inc.is_holiday, Bool);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
@@ -481,6 +498,7 @@ impl PlannerState {
         let cur = self.lists.entry(inc.id.clone()).or_insert_with(|| List { id: inc.id.clone(), ..Default::default() });
         merge_reg!(cur.name, inc.name, Str);
         merge_reg!(cur.order, inc.order, I32);
+        merge_reg!(cur.color, inc.color, U32);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
 
@@ -651,6 +669,8 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(e.weekdays.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.repeat.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.origin.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.all_day.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 for o in &e.occurrences {
                     push(o.stamp.as_ref())?;
                 }
@@ -659,6 +679,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
             Some(change::Change::List(l)) => {
                 push(l.name.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(l.order.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(l.color.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(l.deleted.as_ref())?;
             }
             Some(change::Change::NutritionDay(d)) => {
@@ -746,6 +767,12 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                 if let Some(f) = &mut e.origin {
                     f.stamp = Some(pb.clone());
                 }
+                if let Some(f) = &mut e.all_day {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.is_holiday {
+                    f.stamp = Some(pb.clone());
+                }
                 for o in &mut e.occurrences {
                     o.stamp = Some(pb.clone());
                 }
@@ -756,6 +783,9 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
             Some(change::Change::List(l)) => {
                 st(&mut l.name);
                 if let Some(f) = &mut l.order {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut l.color {
                     f.stamp = Some(pb.clone());
                 }
                 if l.deleted.is_some() {
