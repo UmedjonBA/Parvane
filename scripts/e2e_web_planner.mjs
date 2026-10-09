@@ -513,6 +513,24 @@ try {
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
+  // Телефон: новая задача пишется прямо в расписании дня, на месте свободного окна, а не на весь экран
+  await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
+  await todayCell.click({ position: { x: 10, y: 10 } });
+  await planner.getByText('Schedule', { exact: true }).first().click();
+  const freeSlot = dayPane.getByRole('button', { name: /free slot/ }).first();
+  await freeSlot.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const slotsBefore = await dayPane.getByRole('button', { name: /free slot/ }).count();
+  await freeSlot.click();
+  const inlineForm = dayPane.locator('[data-inline-form]');
+  await inlineForm.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await sidePane.count(), 0, 'на телефоне форма задачи не должна открываться отдельным экраном');
+  assert.equal(await dayPane.getByRole('button', { name: /free slot/ }).count(), slotsBefore - 1, 'форма стоит на месте свободного окна');
+  await inlineForm.locator('#planner-new-name').fill('С телефона');
+  await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
+  await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await dayPane.getByText('С телефона').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByRole('button', { name: 'To the calendar' }).click();
+  console.log('OK: телефон — новая задача раскрывается в расписании дня');
   await planner.getByRole('button', { name: 'Chats' }).click();
   await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — вход из меню и возврат');
