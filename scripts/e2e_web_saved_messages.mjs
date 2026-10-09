@@ -8,6 +8,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  closeRightColumn,
   findMessage,
   findMessageContainer,
   openPrivateChatStrict,
@@ -31,6 +32,30 @@ async function openSavedMessages(page) {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
+// Порядок пузырей в ленте открытого чата (ORDER-1): первое выше второго
+async function expectOrder(page, first, second, label) {
+  const top = async (text) => (await findMessage(page, text).boundingBox()).y;
+  assert.ok(await top(first) < await top(second), `${label}: «${second}» стоит выше «${first}»`);
+}
+
+// Профиль «Избранного» (spec 012, A2): вкладки «Чаты» нет, пустые вкладки не крутят загрузку
+async function expectSavedProfileTabs(page) {
+  await page.locator('.MiddleHeader .ChatInfo').first().click();
+  const right = page.locator('#RightColumn');
+  const tabs = right.locator('.shared-media-tabs .TabList > div:not([aria-hidden])');
+  await tabs.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const titles = (await tabs.allInnerTexts()).map((text) => text.split('\n')[0].trim());
+  assert.ok(!titles.includes('Chats'), `в профиле Избранного есть вкладка Chats: ${titles.join(', ')}`);
+  assert.ok(titles.length >= 3, `в профиле Избранного мало вкладок: ${titles.join(', ')}`);
+  for (let index = 0; index < titles.length; index++) {
+    await tabs.nth(index).click();
+    await page.waitForTimeout(2000);
+    const busy = await right.locator('.Spinner:visible, .Loading:visible').count();
+    assert.equal(busy, 0, `вкладка «${titles[index]}» Избранного всё ещё грузится через 2 с`);
+  }
+  await closeRightColumn(page);
+}
+
 async function expectSent(page, text) {
   await findMessage(page, text).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const container = findMessageContainer(page, text);
@@ -47,6 +72,11 @@ try {
   const m2 = `note-two-${suffix}`;
 
   const bob = `saved-bob-${suffix}@local`;
+  // Часы Боба отстают на 30 с: его ответ всё равно должен встать ниже сообщения Алисы (ORDER-1)
+  await bobContext.addInitScript(() => {
+    const realNow = Date.now.bind(Date);
+    Date.now = () => realNow() - 30000;
+  });
   aliceSession = await preparePage(aliceContext, alice);
   bobSession = await preparePage(bobContext, bob);
   const { page } = aliceSession;
@@ -59,6 +89,9 @@ try {
   await findMessage(bobSession.page, `hello-${suffix}`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await sendText(bobSession.page, `reply-${suffix}`);
   await findMessage(page, `reply-${suffix}`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectOrder(page, `hello-${suffix}`, `reply-${suffix}`, 'у Алисы');
+  await expectOrder(bobSession.page, `hello-${suffix}`, `reply-${suffix}`, 'у Боба');
+  console.log('OK: ответ собеседника с отстающими часами стоит ниже сообщения');
 
   await openSavedMessages(page);
   await sendText(page, m1);
@@ -66,6 +99,8 @@ try {
   await sendText(page, m2);
   await expectSent(page, m2);
   console.log('OK: два сообщения в Избранном отправлены без ошибки');
+  await expectSavedProfileTabs(page);
+  console.log('OK: профиль Избранного — без вкладки «Чаты», пустые вкладки без загрузки');
 
   // Журнал исходящих пишется в IDB с задержкой (localState) — даём записаться
   await page.waitForTimeout(1500);
@@ -76,6 +111,10 @@ try {
   await expectSent(page, m1);
   await expectSent(page, m2);
   console.log('OK: Избранное пережило reload');
+  await openPrivateChatStrict(page, bob);
+  await findMessage(page, `reply-${suffix}`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectOrder(page, `hello-${suffix}`, `reply-${suffix}`, 'у Алисы после reload');
+  console.log('OK: порядок сообщений пережил reload');
 
   assertNoPageErrors({ alice: aliceSession, bob: bobSession });
   console.log('OK: Избранное — отправка и persist');

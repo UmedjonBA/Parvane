@@ -1196,6 +1196,10 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneBackgroundFailed: 'Не удалось сохранить фон чата',
 };
 
+function capitalize(text: string) {
+  return text.charAt(0).toLocaleUpperCase() + text.slice(1);
+}
+
 function isRussian(langCode: string) {
   return /^ru\b/i.test(langCode);
 }
@@ -1213,6 +1217,8 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     const date = new Date(Date.UTC(2024, 8, 1 + day, 12));
     pack[`Weekday.${key}`] = longWeekday.format(date);
     pack[`Weekday.Short${key}`] = shortWeekday.format(date);
+    // Ключи календаря (`CalendarModal`): 1 — понедельник … 7 — воскресенье
+    pack[`lng_weekday${day || 7}`] = capitalize(shortWeekday.format(date));
   });
 
   const longMonth = new Intl.DateTimeFormat(langCode, { month: 'long' });
@@ -1223,6 +1229,7 @@ export function buildOldLangPack(langCode: string): ApiOldLangPack {
     const date = new Date(Date.UTC(2024, month, 15, 12));
     pack[`Month.${key}`] = longMonth.format(date);
     pack[`Month.Short${key}`] = shortMonth.format(date);
+    pack[`lng_month${month + 1}`] = capitalize(longMonth.format(date));
     const genitive = genitiveMonth.formatToParts(date).find((part) => part.type === 'month')?.value;
     pack[`Month.Gen${key}`] = genitive || longMonth.format(date);
   });

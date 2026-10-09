@@ -11,7 +11,6 @@ import { ManagementScreens } from '../../types';
 import { COCOON_EMOJI_ID } from '../../config';
 import { requestMeasure, requestNextMutation } from '../../lib/fasterdom/fasterdom';
 import {
-  getHasAdminRight,
   getIsSavedDialog,
   isAnonymousForwardsChat,
   isChatBasicGroup, isChatChannel, isChatSuperGroup,
@@ -573,9 +572,9 @@ export default memo(withGlobal<OwnProps>(
       && (chat.adminRights?.manageCall || (chat.isCreator && isChatBasicGroup(chat))) && !chat.isMonoforum;
     const canViewStatistics = isMainThread && chatFullInfo?.canViewStatistics;
     const canViewMonetization = isMainThread && chatFullInfo?.canViewMonetization;
-    const canViewBoosts = isMainThread && !chat.isMonoforum
-      && (isSuperGroup || isChannel) && (canViewStatistics || getHasAdminRight(chat, 'postStories'));
-    const canShowBoostModal = !canViewBoosts && (isSuperGroup || isChannel) && !chat.isMonoforum;
+    // Parvane: бустов нет
+    const canViewBoosts = false;
+    const canShowBoostModal = false;
     const pendingJoinRequests = isMainThread ? chatFullInfo?.requestsPending : undefined;
     const shouldJoinToSend = Boolean(chat?.isNotJoined && chat.isJoinToSend);
     const shouldSendJoinRequest = Boolean(chat?.isNotJoined && chat.isJoinRequest);

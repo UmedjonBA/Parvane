@@ -112,6 +112,9 @@ export type WireStoredMessage = {
   updated_at?: number;
   reactions?: { emoji: string; count: number; mine?: boolean }[];
   pinned?: boolean;
+  // Место в ленте на этом устройстве (правило ORDER-1): числовой id сообщения,
+  // выбранный при появлении; строки без поля упорядочены по `ts`
+  order?: number;
   // Строка собрана из события движка v2 (spec 007) или своей отправки — её id
   // выбирает отправитель; строки кэша без пометки — история прежних сборок
   origin?: 'v2';

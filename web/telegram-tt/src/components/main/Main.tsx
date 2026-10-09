@@ -297,7 +297,6 @@ const Main = ({
     loadPaidReactionPrivacy,
     loadPasswordInfo,
     loadBotFreezeAppeal,
-    loadAllChats,
     loadAllStories,
     loadAllHiddenStories,
     loadContentSettings,
@@ -363,7 +362,6 @@ const Main = ({
   // Initial API calls
   useEffect(() => {
     if (isMasterTab && isSynced && isAppConfigLoaded && !isAccountFrozen) {
-      loadAllChats({ listType: 'saved' });
       loadAllStories();
       loadAllHiddenStories();
       loadPromoData();

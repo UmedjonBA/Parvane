@@ -155,6 +155,8 @@ try {
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await planner.getByLabel('Day starts').fill('08:00');
   await planner.getByText('Settings saved').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Полоска уведомления уходит сама через 3 с (spec 012, A9)
+  await planner.getByText('Settings saved').waitFor({ state: 'hidden', timeout: 5000 });
   await planner.getByLabel('Day ends').fill('07:00');
   await planner.getByText('The day must end after it starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await planner.getByLabel('Day ends').inputValue(), '21:00', 'негодное значение не применяется');

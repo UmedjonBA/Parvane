@@ -183,6 +183,16 @@ try {
 
   // ── Управление каналом ────────────────────────────────────────────────────
   await openChatByTitle(page, channelTitle);
+  // Меню шапки канала: бустов нет, сырых ключей строк нет (spec 012, A5)
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const channelMenu = await page.getByRole('menuitem').allInnerTexts();
+  assert.deepEqual(
+    channelMenu.filter((text) => /Boost|^lng_|^[A-Z][a-z]+[A-Z][A-Za-z]+$/.test(text.trim())), [],
+    `channel menu: boost or raw key items: ${JSON.stringify(channelMenu)}`,
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
   await page.locator('.MiddleHeader .ChatInfo').click();
   await right.getByRole('button', { name: 'Edit' }).click();
   await right.locator('.Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -209,6 +219,13 @@ try {
   assert.equal(await page.getByRole('menuitem', { name: /Translate/ }).count(), 0, 'header: Translate must be hidden');
   assert.equal(await page.getByRole('menuitem', { name: 'Report' }).count(), 0, 'header: Report must be hidden');
   await page.keyboard.press('Escape');
+  // Меню вложений: списка задач Telegram нет, «Задание» есть (spec 012, A4)
+  await page.waitForTimeout(400);
+  await page.getByRole('button', { name: 'Add an attachment' }).click();
+  await page.getByRole('menuitem', { name: 'Task', exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await page.getByRole('menuitem', { name: /Checklist|To-?Do/i }).count(), 0, 'attach: Checklist must be hidden');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
   const message = page.locator('.Transition_slide-active > .MessageList .Message').filter({ hasText: `hello-${suffix}` }).first();
   await message.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Reply' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

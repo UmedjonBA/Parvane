@@ -26,6 +26,15 @@ function buildHashedId(value: string): string {
 
 // Ключи локализации служебного сообщения о режиме «усиленная приватность»
 // (L2) и тексты на случай, когда языковой пакет ещё не загружен
+// ORDER-1: сообщение с временем в этих пределах от «сейчас» считается живым
+const LIVE_ORDER_WINDOW_SECS = 300;
+
+// Порядок восстановления: сохранённое место в ленте (ORDER-1), у строк без него — время
+export function compareStoredOrder(left: WireStoredMessage, right: WireStoredMessage) {
+  return (left.order || left.ts * 1000) - (right.order || right.ts * 1000)
+    || left.ts - right.ts || (left.id < right.id ? -1 : 1);
+}
+
 const CHAT_MODE_KEYS = {
   own: { on: 'ParvaneL2EnabledYou', off: 'ParvaneL2DisabledYou' },
   peer: { on: 'ParvaneL2Enabled', off: 'ParvaneL2Disabled' },
@@ -80,6 +89,8 @@ export class ParvaneStore {
   private uuidByMsgKey = new Map<string, string>();
 
   private usedMsgIdsByChatId = new Map<string, Set<number>>();
+
+  private lastMsgIdByChatId = new Map<string, number>();
 
   // uuid сообщений, реально положенных в стор (putMessage). Раньше hasMessage
   // отвечал по msgKeyByUuid, который заполняет allocateMessageId — и локальное
@@ -256,14 +267,29 @@ export class ParvaneStore {
   // isViewportNewest → стрелка ↓). id — целые (tt считает локальными только
   // дробные), уникальны в пределах чата, стабильны по uuid; всё in-memory и
   // пересоздаётся из sync на каждом входе, поэтому смена схемы безопасна.
-  allocateMessageId(chatId: string, uuid: string, dateSecs?: number): number {
+  //
+  // Правило ORDER-1: время отправителя идёт по ЕГО часам, общего времени нет.
+  // «Живое» сообщение (своя отправка или входящее с временем около «сейчас»)
+  // встаёт после всего, что уже есть в чате, — иначе ответ собеседника с
+  // отстающими часами оказывался выше сообщения, на которое отвечает.
+  // Выбранное место сохраняется в строке истории (`order`) и при восстановлении
+  // берётся оттуда. Старое (догон после офлайна, перенос истории) — по времени.
+  allocateMessageId(chatId: string, uuid: string, dateSecs?: number, order?: number): number {
     const known = this.msgKeyByUuid.get(uuid);
     if (known) return known.id;
-    const base = Math.floor((dateSecs || Math.floor(Date.now() / 1000)) * 1000);
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const secs = dateSecs || nowSecs;
     const used = this.usedMsgIdsByChatId.get(chatId) || new Set<number>();
-    let id = base;
+    const last = this.lastMsgIdByChatId.get(chatId) || 0;
+    let id = Math.floor(secs * 1000);
+    if (order) {
+      id = order;
+    } else if (Math.abs(nowSecs - secs) <= LIVE_ORDER_WINDOW_SECS && id <= last) {
+      id = last + 1;
+    }
     while (used.has(id)) id++;
     used.add(id);
+    if (id > last) this.lastMsgIdByChatId.set(chatId, id);
     this.usedMsgIdsByChatId.set(chatId, used);
     this.msgKeyByUuid.set(uuid, { chatId, id });
     this.uuidByMsgKey.set(`${chatId}:${id}`, uuid);
@@ -412,7 +438,7 @@ export class ParvaneStore {
     const chatAddress = this.resolveChatAddress(stored);
     const chatKind = this.kindByAddress.get(chatAddress) || 'user';
     const chatId = this.getIdForAddress(chatAddress, chatKind);
-    const id = this.allocateMessageId(chatId, stored.id, stored.ts);
+    const id = this.allocateMessageId(chatId, stored.id, stored.ts, stored.order);
     const isOutgoing = stored.from === this.self;
 
     const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;

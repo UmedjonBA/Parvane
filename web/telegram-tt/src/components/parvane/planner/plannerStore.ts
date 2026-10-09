@@ -43,6 +43,8 @@ let isMigrating = false;
 // Пока устройство не привязано, стек планировщика не запускается — опрашиваем до готовности
 let linkingTimer: number | undefined;
 const LINKING_POLL_MS = 3000;
+const NOTICE_HIDE_MS = 3000;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 export {
   getPlannerState, getIsPlannerLoaded, getPlannerStatus, getPlannerNotice, getPlannerSizeBytes,
@@ -156,7 +158,7 @@ export function updatePlanner(mutate: (draft: PlannerState) => void, noticeText?
   mutate(draft);
   stateBeforeLastChange = previous;
   setPlannerState(draft);
-  if (noticeText) setPlannerNotice({ text: noticeText, canUndo: true });
+  if (noticeText) publishNotice({ text: noticeText, canUndo: true });
   sendChanges(diffChanges(previous, draft));
 }
 
@@ -166,14 +168,26 @@ export function undoPlanner(noticeText: string) {
   const target = stateBeforeLastChange;
   stateBeforeLastChange = undefined;
   setPlannerState(target);
-  setPlannerNotice({ text: noticeText, canUndo: false });
+  publishNotice({ text: noticeText, canUndo: false });
   sendChanges(diffChanges(current, target));
 }
 
 // Уведомление без изменения состояния (ошибка ввода): «Отменить» к нему не
 // относится — кнопка предлагала бы откатить предыдущее успешное действие
 export function showPlannerNotice(text: string) {
-  setPlannerNotice({ text, canUndo: false });
+  publishNotice({ text, canUndo: false });
+}
+
+// Полоска уходит сама; новое уведомление начинает отсчёт заново
+function publishNotice(notice?: PlannerNotice) {
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+  noticeTimer = undefined;
+  setPlannerNotice(notice);
+  if (!notice) return;
+  noticeTimer = setTimeout(() => {
+    noticeTimer = undefined;
+    setPlannerNotice(undefined);
+  }, NOTICE_HIDE_MS);
 }
 
 function resetPlanner() {
@@ -183,7 +197,7 @@ function resetPlanner() {
   stateBeforeLastChange = undefined;
   setIsPlannerLoaded(false);
   setPlannerStatus('loading');
-  setPlannerNotice(undefined);
+  publishNotice(undefined);
   setPlannerSizeBytes(0);
   setPlannerState(createEmptyPlannerState());
 }

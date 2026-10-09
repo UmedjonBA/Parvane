@@ -803,7 +803,8 @@ export function createMessageController(deps: MessageDependencies) {
     }
 
     const plainContent = wireContent;
-    const ts = Math.floor(Date.now() / 1000);
+    // Время и место в ленте — момент нажатия (ORDER-1), а не конец отправки
+    const ts = localMessage.date;
     try {
       // Протокол v2: собеседник или группа с журналом (D-13); иначе отправить нечем
       const isSentViaV2 = await requireV2().trySend(
@@ -822,6 +823,7 @@ export function createMessageController(deps: MessageDependencies) {
         content: plainContent as unknown as WireMessageContent,
         ts,
         reply_to: replyToUuid,
+        order: localMessage.id,
         origin: 'v2',
       });
     }
