@@ -409,25 +409,23 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
               error={state.error && state.error === ERROR_NO_TITLE ? ERROR_NO_TITLE : undefined}
             />
 
-            {!isMobile && (
-              <div className="settings-folders-icon-picker" dir={lang.isRtl ? 'rtl' : undefined}>
-                <div
-                  className="settings-folders-icon-picker-button"
-                  onClick={handleIconPickerOpen}
-                >
-                  <FolderIcon
-                    emoji={state.folder.emoticon}
-                    customEmojiId={currentCustomEmoji?.documentId}
-                    shouldAnimate={state.folder.noTitleAnimations}
-                  />
-                </div>
-                <FolderIconPickerMenu
-                  isOpen={isIconPickerMenuOpen}
-                  onEmojiSelect={handleEmojiSelect}
-                  onClose={handleIconPickerClose}
+            <div className="settings-folders-icon-picker" dir={lang.isRtl ? 'rtl' : undefined}>
+              <div
+                className="settings-folders-icon-picker-button"
+                onClick={handleIconPickerOpen}
+              >
+                <FolderIcon
+                  emoji={state.folder.emoticon}
+                  customEmojiId={currentCustomEmoji?.documentId}
+                  shouldAnimate={state.folder.noTitleAnimations}
                 />
               </div>
-            )}
+              <FolderIconPickerMenu
+                isOpen={isIconPickerMenuOpen}
+                onEmojiSelect={handleEmojiSelect}
+                onClose={handleIconPickerClose}
+              />
+            </div>
           </Island>
         </IslandOutside>
 

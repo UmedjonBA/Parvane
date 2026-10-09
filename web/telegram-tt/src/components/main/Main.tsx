@@ -50,6 +50,7 @@ import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
 import { getParvaneSection } from '../../util/parvaneSection';
+import { isUploadedWallpaper } from '../../util/parvaneWallpaper';
 import {
   consumePendingInvite,
   getInitialLocationHash,
@@ -838,7 +839,7 @@ const Main = ({
     !noRightColumnAnimation && backgroundStyles.withTransition,
     customBackground && backgroundStyles.customBgImage,
     backgroundColor && backgroundStyles.customBgColor,
-    customBackground && isBackgroundBlurred && backgroundStyles.blurred,
+    isUploadedWallpaper(customBackground) && isBackgroundBlurred && backgroundStyles.blurred,
     isRightColumnOpen && backgroundStyles.withRightColumn,
   );
 

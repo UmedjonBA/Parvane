@@ -915,7 +915,8 @@ export function inviteTokenOf(link) {
 }
 
 // Создать группу через нативный пикер «New Group» (участники — по никам)
-export async function createGroupViaUi(page, title, memberNames) {
+// `options.isJoinRequestNeeded` — отметить «Join by request» (spec 014): основная ссылка с одобрением
+export async function createGroupViaUi(page, title, memberNames, options = {}) {
   await page.mouse.move(800, 360);
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
@@ -937,9 +938,19 @@ export async function createGroupViaUi(page, title, memberNames) {
     assert(selected, `picker row for ${name} is never selected`);
   }
   await page.getByRole('button', { name: 'Continue To Group Info' }).click();
-  const nameInput = page.getByLabel('Group name');
+  // При повторном создании в DOM остаётся и прежний экран мастера — берём видимое поле
+  const nameInput = page.getByLabel('Group name').locator('visible=true').first();
   await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await nameInput.fill(title);
+  if (options.isJoinRequestNeeded) {
+    // Чекбокс форка перехватывает клик своей подписью — кликаем по подписи
+    await page.getByText('Join by request', { exact: true }).locator('visible=true').first().click();
+  }
+  // Форма подставляет название по участникам, пока поле «не тронуто», — введённое может стереться
+  for (let attempt = 0; attempt < 5 && await nameInput.inputValue() !== title; attempt++) {
+    await nameInput.fill(title);
+    await page.waitForTimeout(300);
+  }
   await page.getByRole('button', { name: 'Create Group' }).click();
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }

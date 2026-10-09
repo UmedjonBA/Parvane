@@ -102,7 +102,7 @@ import {
 import { ParvaneStore, setTaskOfferResolver } from './store';
 import { createSyncController } from './sync';
 import { TaskOfferStore } from './taskOffers';
-import { buildBuiltinWallpapers } from './wallpapers';
+import { buildBuiltinWallpapers, buildThumbnailDataUri, UPLOADED_SLUG_PREFIX } from './wallpapers';
 import {
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
@@ -143,6 +143,21 @@ function readPlannerState() {
   };
 }
 const BACKGROUND_RECORD_PREFIX = 'background:';
+
+async function buildUploadedWallpaper(slug: string, blob: Blob, fileName: string): Promise<ApiWallpaper> {
+  const dataUri = await buildThumbnailDataUri(blob);
+  return {
+    slug,
+    document: {
+      mediaType: 'document',
+      id: slug,
+      fileName,
+      mimeType: blob.type || 'image/jpeg',
+      size: blob.size,
+      thumbnail: dataUri ? { dataUri, width: 32, height: 32 } : undefined,
+    },
+  };
+}
 const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
 const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
   '👍', '❤️', '🔥', '😂', '👏', '🎉', '🤔',
@@ -1899,8 +1914,10 @@ const methods = {
   // Картинка хранится БАЙТАМИ (`saveBytesRecord`), а не base64 в JSON: тот же
   // довод, что и для архивов паков — base64 раздувает файл на треть, а обои
   // бывают многомегабайтными. Мим-тип лежит отдельной маленькой записью
-  async saveChatBackground({ theme, bytes, mimeType }: {
-    theme: string; bytes: ArrayBuffer; mimeType: string;
+  async saveChatBackground({
+    theme, bytes, mimeType, slug,
+  }: {
+    theme: string; bytes: ArrayBuffer; mimeType: string; slug?: string;
   }) {
     if (!store.self) return { status: 'not-ready' as const };
     const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
@@ -1908,6 +1925,7 @@ const methods = {
     const name = `${BACKGROUND_RECORD_PREFIX}${theme}`;
     await storage.saveBytesRecord(name, new Uint8Array(bytes));
     await storage.saveRecord(`${name}:mime`, mimeType);
+    await storage.saveRecord(`${name}:slug`, slug || '');
     return { status: 'ok' as const };
   },
 
@@ -1981,25 +1999,31 @@ const methods = {
   },
 
   async fetchWallpapers() {
-    const wallpapers = await buildBuiltinWallpapers(mediaService.cacheBlob);
-    return { wallpapers };
+    const builtin = await buildBuiltinWallpapers(mediaService.cacheBlob);
+    // Картинка пользователя живёт в шифрованном хранилище (по одной на тему) — возвращаем её плитку,
+    // иначе после перезагрузки фон есть, а в галерее его нет
+    const uploaded: ApiWallpaper[] = [];
+    const storage = store.self ? await SecureE2eStorage.open(store.self).catch(() => undefined) : undefined;
+    if (storage) {
+      for (const theme of ['light', 'dark']) {
+        const name = `${BACKGROUND_RECORD_PREFIX}${theme}`;
+        const slug = await storage.loadRecord<string>(`${name}:slug`);
+        if (!slug?.startsWith(UPLOADED_SLUG_PREFIX) || uploaded.some((item) => item.slug === slug)) continue;
+        const bytes = await storage.loadBytesRecord(name);
+        if (!bytes) continue;
+        const mimeType = await storage.loadRecord<string>(`${name}:mime`) || 'image/jpeg';
+        const blob = new Blob([bytes as BlobPart], { type: mimeType });
+        mediaService.cacheBlob(slug, blob, mimeType);
+        uploaded.push(await buildUploadedWallpaper(slug, blob, 'wallpaper.jpg'));
+      }
+    }
+    return { wallpapers: [...uploaded, ...builtin] };
   },
 
-  uploadWallpaper(file: File) {
-    const id = `wp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    const mimeType = file.type || 'image/jpeg';
-    mediaService.cacheBlob(id, file, mimeType);
-    const wallpaper: ApiWallpaper = {
-      slug: id,
-      document: {
-        mediaType: 'document',
-        id,
-        fileName: file.name || 'wallpaper.jpg',
-        mimeType,
-        size: file.size,
-      },
-    };
-    return Promise.resolve({ wallpaper });
+  async uploadWallpaper(file: File) {
+    const id = `${UPLOADED_SLUG_PREFIX}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    mediaService.cacheBlob(id, file, file.type || 'image/jpeg');
+    return { wallpaper: await buildUploadedWallpaper(id, file, file.name || 'wallpaper.jpg') };
   },
 
   // Просмотр фото профиля (MediaViewer): у пользователя одно фото — аватар

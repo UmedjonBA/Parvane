@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { WireGroupInfo, WireMessageContent } from './wire';
 
-import { isContentAllowedForMember } from './groups';
+import { isContentAllowedForMember, pickPrimaryInvite } from './groups';
 import {
   DEFAULT_GROUP_PERMISSIONS, fromBannedRights, ParvaneStore, shouldApplyGroupInfo, toAdminRights, toBannedRights,
   toWireAdminRights,
@@ -189,5 +189,26 @@ describe('isContentAllowedForMember (FR-009, только на клиентах)
     expect(isContentAllowedForMember({ embed_links: false }, text({
       entities: [{ type: 'MessageEntityBold', offset: 0, length: 2 }],
     }))).toBe(true);
+  });
+});
+
+// Вступление по заявке (spec 014): основная ссылка группы
+describe('pickPrimaryInvite', () => {
+  const open = { id: 'open' };
+  const byRequest = { id: 'request', isRequestNeeded: true };
+  const titled = { id: 'titled', title: 'Для друзей' };
+  const limited = { id: 'limited', usageLimit: 5 };
+
+  it('открытая ссылка без параметров — основная', () => {
+    expect(pickPrimaryInvite([titled, byRequest, open])).toBe(open);
+  });
+
+  it('в группе по заявке основная — ссылка с одобрением, открытая не нужна', () => {
+    expect(pickPrimaryInvite([titled, limited, byRequest])).toBe(byRequest);
+  });
+
+  it('ссылки с названием, сроком или лимитом основными не бывают', () => {
+    expect(pickPrimaryInvite([titled, limited, { id: 'expiring', expiresAt: 1 }])).toBeUndefined();
+    expect(pickPrimaryInvite([])).toBeUndefined();
   });
 });
