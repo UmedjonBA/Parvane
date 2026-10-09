@@ -804,6 +804,8 @@ export interface ActionPayloads {
     photo?: File;
     memberIds?: string[];
     discussionChannelId?: string;
+    // Parvane: вступление по заявке — основная ссылка с одобрением администратора
+    isJoinRequestNeeded?: boolean;
   } & (
     { isChannel: true } | { isSuperGroup: true }
   ) & WithTabId;
@@ -811,6 +813,7 @@ export interface ActionPayloads {
     title: string;
     memberIds: string[];
     photo?: File;
+    isJoinRequestNeeded?: boolean;
   } & WithTabId;
   resetChatCreation: WithTabId | undefined;
 

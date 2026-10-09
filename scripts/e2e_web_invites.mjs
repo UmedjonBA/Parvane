@@ -334,6 +334,34 @@ try {
   await openLinkInAddressBar(sessions.grace.page, baseUrl, inviteUrl);
   await expectToast(sessions.grace.page, 'This invite link is invalid');
 
+  // ── Группа «по заявке» (spec 014): основная ссылка с одобрением, открытая сама не появляется ──
+  const requestTitle = `Заявки-${suffix.slice(-6)}`;
+  await createGroupViaUi(alicePage, requestTitle, [bob.split('@')[0]], { isJoinRequestNeeded: true });
+  let lastRequestAnswer;
+  const readRequestInvites = async () => {
+    lastRequestAnswer = await callProviderForChat(
+      alicePage, 'fetchExportedChatInvites', requestTitle, undefined, { peer: '$chat' },
+    );
+    return lastRequestAnswer?.result?.invites || [];
+  };
+  let requestInvites = [];
+  for (let attempt = 0; attempt < 120; attempt++) {
+    requestInvites = await readRequestInvites();
+    if (requestInvites.length) break;
+    await alicePage.waitForTimeout(500);
+  }
+  if (requestInvites.length !== 1) {
+    const titles = await alicePage.evaluate(() => Object.values(window.__parvaneGetGlobal().chats.byId).map((chat) => chat.title));
+    console.error(`--- чаты Алисы: ${JSON.stringify(titles)}; ждали «${requestTitle}»`);
+  }
+  assert.equal(requestInvites.length, 1, `у группы по заявке должна быть одна ссылка: ${JSON.stringify(lastRequestAnswer)}`);
+  assert.equal(requestInvites[0].isRequestNeeded, true, 'основная ссылка группы по заявке требует одобрения');
+  assert.equal(requestInvites[0].isPermanent, true, 'ссылка с одобрением — основная');
+  // Повторное чтение (как при открытии профиля и экрана ссылок) открытую ссылку не создаёт
+  const again = await readRequestInvites();
+  assert.deepEqual(again.map((invite) => invite.link), requestInvites.map((invite) => invite.link), 'появилась вторая ссылка');
+  console.log('OK: группа по заявке — одна основная ссылка с одобрением');
+
   Object.entries(sessions).forEach(([name, session]) => {
     assert.deepEqual(session.errors, [], `${name} page errors: ${session.errors.join('; ')}`);
   });

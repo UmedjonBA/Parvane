@@ -1,28 +1,29 @@
-import { memo, useCallback } from '@teact';
+import { memo } from '@teact';
 
-import type { ApiSticker } from '../../../../api/types';
+import { FOLDER_ICON_EMOJIS } from '../../../../util/folderIconMap';
 
-import { folderIconMap } from '../../../../util/folderIconMap';
+import useLastCallback from '../../../../hooks/useLastCallback';
 
-import CustomEmojiPicker from '../../../common/CustomEmojiPicker';
-import Icon from '../../../common/icons/Icon';
+import FolderIcon from '../../../common/FolderIcon';
 import Menu from '../../../ui/Menu';
 
 export type OwnProps = {
   isOpen: boolean;
-  onEmojiSelect: (emoji: string | ApiSticker) => void;
+  onEmojiSelect: (emoji: string) => void;
   onClose: () => void;
 };
 
+// Parvane: сетка значков Telegram Desktop. Собственных эмодзи в выборе нет: в личном состоянии у папки
+// есть только `emoticon`, и собственный эмодзи не доехал бы до других устройств
 const FolderIconPickerMenu = ({
   isOpen,
   onEmojiSelect,
   onClose,
 }: OwnProps) => {
-  const handleEmojiSelect = useCallback((sticker: string | ApiSticker) => {
-    onEmojiSelect(sticker);
+  const handleClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    onEmojiSelect(e.currentTarget.dataset.emoji!);
     onClose();
-  }, [onClose, onEmojiSelect]);
+  });
 
   return (
     <Menu
@@ -30,25 +31,21 @@ const FolderIconPickerMenu = ({
       positionX="left"
       onClose={onClose}
       withPortal
-      className="settings-folders-icon-picker-menu SymbolMenu"
+      className="settings-folders-icon-picker-menu"
     >
-      <div className="SymbolMenu-main">
-        <div className="settings-folders-icon-picker-menu-folders">
-          {
-            Object.keys(folderIconMap).map((emoji) => (
-              <div className="EmojiButton" onClick={() => handleEmojiSelect(emoji)}>
-                <Icon name={folderIconMap[emoji]} />
-              </div>
-            ))
-          }
-        </div>
-        <CustomEmojiPicker
-          idPrefix="folder-emoji-set-"
-          loadAndPlay={isOpen}
-          isHidden={!isOpen}
-          onCustomEmojiSelect={(emoji) => handleEmojiSelect(emoji)}
-          onDismiss={onClose}
-        />
+      <div className="settings-folders-icon-picker-menu-folders" role="listbox">
+        {FOLDER_ICON_EMOJIS.map((emoji) => (
+          <div
+            key={emoji}
+            className="EmojiButton"
+            role="option"
+            aria-label={emoji}
+            data-emoji={emoji}
+            onClick={handleClick}
+          >
+            <FolderIcon emoji={emoji} />
+          </div>
+        ))}
       </div>
     </Menu>
   );

@@ -124,6 +124,12 @@ try {
   const folderNameInput = aliceSession.page.getByRole('textbox', { name: 'Folder name' });
   await folderNameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await folderNameInput.fill(folderName);
+  // Значок папки из набора Telegram Desktop (spec 014): 30 значков, выбор сохраняется
+  await aliceSession.page.locator('.settings-folders-icon-picker-button').click();
+  const iconOptions = aliceSession.page.locator('.settings-folders-icon-picker-menu-folders [role="option"]');
+  await iconOptions.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await iconOptions.count(), 30, 'в выборе значка папки должно быть 30 значков');
+  await aliceSession.page.locator('.settings-folders-icon-picker-menu-folders [data-emoji="💼"]').click();
   await aliceSession.page.getByRole('button', { name: 'Add Chats' }).first().click();
   // Пикер переиспользует поиск new-group-picker-search; строка чата — не
   // кнопка, отмечаем через чекбокс отфильтрованной строки
@@ -153,6 +159,10 @@ try {
 
   await relogin(aliceSession.page, PASSWORD);
   await folderTab.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const folderIcon = await aliceSession.page.evaluate((title) => Object.values(
+    window.__parvaneGetGlobal().chatFolders.byId,
+  ).find((folder) => folder.title.text === title)?.emoticon, folderName);
+  assert.equal(folderIcon, '💼', 'значок папки не сохранился после перезагрузки');
 
   // ── Блокировка: список переживает reload ───────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Open menu' }).first().click();

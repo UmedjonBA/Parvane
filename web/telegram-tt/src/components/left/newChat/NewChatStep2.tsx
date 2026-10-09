@@ -16,6 +16,7 @@ import useOldLang from '../../../hooks/useOldLang';
 import PrivateChatInfo from '../../common/PrivateChatInfo';
 import AvatarEditable from '../../ui/AvatarEditable';
 import Button from '../../ui/Button';
+import Checkbox from '../../ui/Checkbox';
 import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
@@ -62,6 +63,8 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
   // подгружается асинхронно), и группа создавалась с чужим названием
   const isTitleTouchedRef = useRef(false);
   const [about, setAbout] = useState('');
+  // Parvane: как вступают в новую группу или канал — по ссылке сразу либо по заявке
+  const [isJoinRequestNeeded, setIsJoinRequestNeeded] = useState(false);
   const [photo, setPhoto] = useState<File | undefined>();
   const [error, setError] = useState<string | undefined>();
 
@@ -124,8 +127,9 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
       title,
       photo,
       memberIds,
+      isJoinRequestNeeded,
     });
-  }, [title, memberIds, maxGroupSize, createGroupChat, photo]);
+  }, [title, memberIds, maxGroupSize, createGroupChat, photo, isJoinRequestNeeded]);
 
   const handleCreateChannel = useCallback(() => {
     if (!title.length) {
@@ -139,8 +143,9 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
       photo,
       memberIds,
       isChannel: true,
+      isJoinRequestNeeded,
     });
-  }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError]);
+  }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError, isJoinRequestNeeded]);
 
   useEffect(() => {
     if (creationProgress === ChatCreationProgress.Complete) {
@@ -189,6 +194,13 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
             <p className="note">{lang('DescriptionInfo')}</p>
           </>
         )}
+
+        <Checkbox
+          label={lang('ParvaneJoinByRequest')}
+          subLabel={lang('ParvaneJoinByRequestInfo')}
+          checked={isJoinRequestNeeded}
+          onCheck={setIsJoinRequestNeeded}
+        />
 
         {renderedError && (
           <p className="error">{renderedError}</p>

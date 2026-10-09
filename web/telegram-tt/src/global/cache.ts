@@ -56,6 +56,8 @@ import { getIsMobile } from '../hooks/useAppLayout';
 
 const UPDATE_THROTTLE = 5000;
 const PARVANE_SETTINGS_CACHE_KEY = 'parvane-account-settings';
+// Фон чата, его цвет и размытие по темам (spec 014): без записи выбранный фон терялся при перезагрузке
+const PARVANE_THEMES_CACHE_KEY = 'parvane-theme-settings';
 
 const updateCacheThrottled = throttle(() => onFullyIdle(() => updateCache()), UPDATE_THROTTLE, false);
 const updateCacheForced = () => updateCache(true);
@@ -68,19 +70,27 @@ const persistParvaneSettingsThrottled = throttle(() => {
   const global = getGlobal();
   void cacheSharedState(reduceSharedState(global.sharedState));
   void MAIN_IDB_STORE.set(PARVANE_SETTINGS_CACHE_KEY, global.settings.byKey);
+  void MAIN_IDB_STORE.set(PARVANE_THEMES_CACHE_KEY, global.settings.themes);
 }, 1000, false);
 
 let prevParvaneSharedState: SharedState | undefined;
 let prevParvaneSettings: GlobalState['settings']['byKey'] | undefined;
+let prevParvaneThemes: GlobalState['settings']['themes'] | undefined;
 
 function watchParvaneSettings(global: GlobalState) {
   if (isCaching) return; // полный кэш активен — он персистит сам
-  if (global.sharedState === prevParvaneSharedState && global.settings.byKey === prevParvaneSettings) {
+  if (global.sharedState === prevParvaneSharedState && global.settings.byKey === prevParvaneSettings
+    && global.settings.themes === prevParvaneThemes) {
     return;
   }
+  prevParvaneThemes = global.settings.themes;
   prevParvaneSharedState = global.sharedState;
   prevParvaneSettings = global.settings.byKey;
   persistParvaneSettingsThrottled();
+}
+
+export function loadCachedParvaneThemes() {
+  return MAIN_IDB_STORE.get<GlobalState['settings']['themes']>(PARVANE_THEMES_CACHE_KEY);
 }
 
 export function loadCachedParvaneSettings() {

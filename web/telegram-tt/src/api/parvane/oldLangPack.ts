@@ -566,6 +566,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneInviteOffline: 'No connection — the invite link will open after reconnecting',
   ParvaneInviteLinkFailed: 'Could not get the group invite link',
   ParvaneBackgroundFailed: 'Could not save the chat background',
+  ParvaneJoinByRequest: 'Join by request',
+  ParvaneJoinByRequestInfo: 'People who open the main invite link send a request that an admin approves',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -1194,6 +1196,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneInviteOffline: 'Нет соединения — ссылка-приглашение откроется после переподключения',
   ParvaneInviteLinkFailed: 'Не удалось получить ссылку-приглашение группы',
   ParvaneBackgroundFailed: 'Не удалось сохранить фон чата',
+  ParvaneJoinByRequest: 'Вступление по заявке',
+  ParvaneJoinByRequestInfo: 'По основной ссылке новый участник отправляет заявку, её одобряет администратор',
 };
 
 function capitalize(text: string) {

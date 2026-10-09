@@ -12,6 +12,7 @@ import { DARK_THEME_PATTERN_COLOR, DEFAULT_PATTERN_COLOR } from '../../../config
 import { selectTheme, selectThemeValues } from '../../../global/selectors';
 import { getAverageColor, getPatternColor } from '../../../util/colors';
 import { validateFiles } from '../../../util/files';
+import { isUploadedWallpaper } from '../../../util/parvaneWallpaper';
 import { throttle } from '../../../util/schedulers';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 
@@ -120,6 +121,9 @@ const SettingsGeneralBackground: FC<OwnProps & StateProps> = ({
     onBack: onReset,
   });
 
+  // Parvane: размывать есть смысл только свою картинку — на градиенте и узоре размытие либо не видно,
+  // либо портит рисунок
+  const canBlur = isUploadedWallpaper(background);
   const isUploading = loadedWallpapers?.[0] && loadedWallpapers[0].slug === UPLOADING_WALLPAPER_SLUG;
 
   return (
@@ -148,7 +152,8 @@ const SettingsGeneralBackground: FC<OwnProps & StateProps> = ({
 
         <Checkbox
           label={lang('BackgroundBlurred')}
-          checked={Boolean(isBlurred)}
+          checked={Boolean(isBlurred) && canBlur}
+          disabled={!canBlur}
           onChange={handleWallPaperBlurChange}
         />
       </Island>

@@ -77,6 +77,17 @@ const MS_IN_SECOND = 1000;
 // Предел описания группы в символах (как у прежнего шарда messenger)
 const GROUP_ABOUT_MAX_CHARS = 255;
 
+/**
+ * Основная ссылка группы: первая без названия, срока и лимита. Открытая — в приоритете; если её нет,
+ * а есть такая же с одобрением, основная — она (группа «по заявке», spec 014), и открытая не создаётся.
+ */
+export function pickPrimaryInvite<T extends {
+  title?: string; expiresAt?: number; usageLimit?: number; isRequestNeeded?: boolean;
+}>(links: T[]): T | undefined {
+  const plain = links.filter((link) => !link.title && !link.expiresAt && !link.usageLimit);
+  return plain.find((link) => !link.isRequestNeeded) || plain[0];
+}
+
 export function createGroupController(deps: GroupDependencies) {
   // Незавершённые запросы основной ссылки — по одному на группу
   const v2PrimaryRequests = new Map<string, Promise<V2InviteRecord | undefined>>();
@@ -174,7 +185,11 @@ export function createGroupController(deps: GroupDependencies) {
   }
 
   // Группа с подписанным журналом (v2); все участники — v2-собеседники
-  async function createGroupKind(title: string, users: ApiUser[], kind: 'group' | 'channel') {
+  // `about` — описание из мастера канала; `isJoinRequestNeeded` — вступление по заявке (spec 014):
+  // основная ссылка сразу создаётся с одобрением, открытая сама не появляется (`ensureV2Primary`)
+  async function createGroupKind(
+    title: string, users: ApiUser[], kind: 'group' | 'channel', about?: string, isJoinRequestNeeded?: boolean,
+  ) {
     const v2 = deps.getV2?.();
     if (!deps.getConnection() || !v2?.isReady()) return undefined;
     const store = deps.getStore();
@@ -183,8 +198,22 @@ export function createGroupController(deps: GroupDependencies) {
       const v2Info = await v2.createGroup(title, members, kind);
       if (!v2Info) return undefined;
       register(v2Info, true);
+      if (about?.trim()) {
+        await v2.setGroupInfo(v2Info.group_id, { about: about.trim() })
+          .catch((error) => deps.log(`описание новой группы не сохранено: ${String(error)}`));
+      }
       const v2Chat = store.buildApiChatForGroup(v2Info);
       deps.sendUpdate({ '@type': 'updateChat', id: v2Chat.id, chat: v2Chat });
+      if (isJoinRequestNeeded) {
+        // Создание занимает секунды; запрос основной ссылки (`ensureV2Primary`), пришедший в это
+        // время, обязан дождаться его, а не создать открытую ссылку
+        const address = v2Info.group_id;
+        const request = v2.createInvite(address, { isRequestNeeded: true })
+          .catch(() => undefined)
+          .finally(() => v2PrimaryRequests.delete(address));
+        v2PrimaryRequests.set(address, request);
+        if (!(await request)) deps.log('ссылка с одобрением для новой группы не создана');
+      }
       return v2Chat;
     } catch (error) {
       deps.log(`группа v2 не создана: ${error instanceof Error ? error.message : String(error)}`);
@@ -192,13 +221,17 @@ export function createGroupController(deps: GroupDependencies) {
     }
   }
 
-  async function createGroupChat({ title, users }: { title: string; users: ApiUser[] }) {
-    const chat = await createGroupKind(title, users, 'group');
+  async function createGroupChat({ title, users, isJoinRequestNeeded }: {
+    title: string; users: ApiUser[]; isJoinRequestNeeded?: boolean;
+  }) {
+    const chat = await createGroupKind(title, users, 'group', undefined, isJoinRequestNeeded);
     return chat ? { chat, missingUsers: [] } : undefined;
   }
 
-  async function createChannel({ title, users }: { title: string; users?: ApiUser[] }) {
-    const channel = await createGroupKind(title, users || [], 'channel');
+  async function createChannel({
+    title, about, users, isJoinRequestNeeded,
+  }: { title: string; about?: string; users?: ApiUser[]; isJoinRequestNeeded?: boolean }) {
+    const channel = await createGroupKind(title, users || [], 'channel', about, isJoinRequestNeeded);
     return channel ? { channel, missingUsers: [] } : undefined;
   }
 
@@ -340,8 +373,7 @@ export function createGroupController(deps: GroupDependencies) {
   async function ensureV2Primary(v2: V2Groups, address: string) {
     const inFlight = v2PrimaryRequests.get(address);
     if (inFlight) return inFlight;
-    const findPrimary = async () => (await v2.listInvites(address))
-      .find((link) => !link.title && !link.expiresAt && !link.usageLimit && !link.isRequestNeeded);
+    const findPrimary = async () => pickPrimaryInvite(await v2.listInvites(address));
     const request = (async () => {
       let primary = await findPrimary();
       // Основную ссылку уже создал другой ведущий приглашения, а её секрет ещё в

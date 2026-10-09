@@ -1,7 +1,9 @@
 import type { GlobalState } from '../global/types';
 
 import { IS_MOCKED_CLIENT } from '../config';
-import { loadCache, loadCachedParvaneSettings, loadCachedSharedState } from '../global/cache';
+import {
+  loadCache, loadCachedParvaneSettings, loadCachedParvaneThemes, loadCachedSharedState,
+} from '../global/cache';
 import {
   getGlobal, setGlobal,
 } from '../global/index';
@@ -45,6 +47,17 @@ export async function initGlobal(force: boolean = false, prevGlobal?: GlobalStat
       global.settings = {
         ...global.settings,
         byKey: { ...global.settings.byKey, ...storedSettings },
+      };
+    }
+    // Фон чата по темам: настройка устройства, как и сама картинка в шифрованном хранилище
+    const storedThemes = await loadCachedParvaneThemes();
+    if (storedThemes) {
+      global.settings = {
+        ...global.settings,
+        themes: {
+          light: { ...global.settings.themes.light, ...storedThemes.light },
+          dark: { ...global.settings.themes.dark, ...storedThemes.dark },
+        },
       };
     }
   }

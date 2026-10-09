@@ -72,9 +72,9 @@ const WallpaperTile: FC<OwnProps> = ({
       // base64 раздул бы многомегабайтный файл на треть
       const bytes = await blob.arrayBuffer();
       const result = await (callApi as unknown as (
-        name: string, args: { theme: string; bytes: ArrayBuffer; mimeType: string },
+        name: string, args: { theme: string; bytes: ArrayBuffer; mimeType: string; slug: string },
       ) => Promise<{ status: string } | undefined>)('saveChatBackground', {
-        theme: cacheKeyRef.current!, bytes, mimeType: blob.type || 'image/jpeg',
+        theme: cacheKeyRef.current!, bytes, mimeType: blob.type || 'image/jpeg', slug,
       });
       // Молчаливого отказа быть не должно: иначе настройка выставлена, а
       // картинки нигде нет

@@ -2258,7 +2258,8 @@ export function createV2Controller(deps: Deps) {
     if (!client || !isV2GroupAddress(address)) return false;
     const known = new Set(((await loadInvites())[address] || []).map(({ linkId }) => linkId));
     return (readGroup(groupHex(address))?.invites || []).some((meta) => !known.has(meta.id)
-      && !meta.title && !meta.expiresMs && !meta.usageLimit && !meta.requiresApproval);
+      // Ссылка с одобрением тоже может быть основной (группа «по заявке», spec 014)
+      && !meta.title && !meta.expiresMs && !meta.usageLimit);
   }
 
   // Ведущие приглашения группы (владелец и админы с правом приглашать), кроме меня
