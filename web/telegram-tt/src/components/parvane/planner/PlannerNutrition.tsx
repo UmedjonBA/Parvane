@@ -245,27 +245,30 @@ const PlannerNutrition = ({
             const total = getNutrientTotal(state, day, metric);
             const goal = getNutrientGoal(state, day, metric);
             const status = getNutrientStatus(state, day, metric);
+            const progress = goal ? Math.min(100, (total.value / goal.target) * 100) : 0;
             return (
-              <div key={metric} className={styles.stripCard} data-metric={metric} data-status={status}>
-                <span className={styles.small}>{formatMetric(lang, metric)}</span>
-                <span className={styles.stripValue}>
-                  {total.count ? `${formatNumber(lang, total.value)}${total.missing ? ' + ?' : ''}` : '—'}
+              <div
+                key={metric}
+                className={buildClassName(styles.stripCard, styles.stripMetric)}
+                data-metric={metric}
+                data-status={status}
+                title={status !== 'none' && status !== 'nogoal' ? lang(STATUS_KEYS[status]) : undefined}
+              >
+                <span className={styles.stripMetricValue}>
+                  {!total.count ? '—' : total.missing === total.count ? '?'
+                    : `${formatNumber(lang, total.value)}${total.missing ? '+?' : ''}`}
                 </span>
-                <span className={styles.small}>
-                  {goal
-                    ? `/ ${formatNumber(lang, goal.target)} ${formatMetricUnit(lang, metric)}`
-                    : `${formatMetricUnit(lang, metric)} · ${lang('PlannerFoodStatusNoGoal')}`}
+                <span className={styles.stripMetricGoal}>
+                  {goal ? `/ ${formatNumber(lang, goal.target)}` : lang('PlannerFoodStatusNoGoal')}
                 </span>
-                <div
-                  className={styles.track}
-                  style={`--planner-progress: ${goal ? Math.min(100, (total.value / goal.target) * 100) : 0}%`}
-                  aria-hidden="true"
-                >
-                  <span />
+                <div className={styles.stripMetricBody}>
+                  <div className={styles.stripTrack} style={`--planner-progress: ${progress}%`} aria-hidden="true">
+                    <span />
+                  </div>
+                  <span className={styles.stripMetricName}>
+                    {`${formatMetric(lang, metric)}, ${formatMetricUnit(lang, metric)}`}
+                  </span>
                 </div>
-                {status !== 'none' && status !== 'nogoal' && (
-                  <span className={styles.small}>{lang(STATUS_KEYS[status])}</span>
-                )}
               </div>
             );
           })}
