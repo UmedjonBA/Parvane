@@ -1627,3 +1627,20 @@ describe('RECOVER-2: новое устройство по ключу восст�
     expect(r.clients.android).toContain('ОТКРЫТО');
   });
 });
+
+// Прод, 5–10 окт 2026: шард call читал PARVANE_DOMAIN, а compose его не задавал — шард считал домен
+// `local` и отклонял все сигналы звонков v2 (FEDERATION_UNAVAILABLE); локально домен и есть `local`,
+// поэтому сценарии были зелёными
+describe('деплой: каждый шард, читающий домен сервера, получает его в compose', () => {
+  it.each(['identity', 'messenger', 'call', 'domains'])('%s', (shard) => {
+    const sources = shard === 'identity' ? ['main.rs'] : shard === 'domains' ? ['store.rs'] : ['v2.rs'];
+    expect(sources.some((file) => readRepo(`backend/shards/${shard}/src/${file}`).includes('"PARVANE_DOMAIN"')))
+      .toBe(true);
+    const compose = readRepo('backend/infra/deploy/docker-compose.yml');
+    const start = compose.indexOf(`\n  ${shard}:\n`);
+    expect(start).toBeGreaterThan(0);
+    const next = compose.slice(start + 1).search(/\n {2}[a-z-]+:\n/);
+    const service = compose.slice(start, next < 0 ? undefined : start + 1 + next);
+    expect(service, `сервис ${shard} в docker-compose.yml`).toContain('PARVANE_DOMAIN:');
+  });
+});
