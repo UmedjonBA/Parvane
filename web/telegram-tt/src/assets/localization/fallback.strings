@@ -276,6 +276,7 @@
 "ParvaneInviteDeclined" = "Your join request was declined";
 "ParvaneUpgradeRequired" = "This version of Parvane is no longer supported by the server. Update the app to keep chatting.";
 "ParvaneRecoveryKey" = "Save your recovery key: {key}\nIt restores your account keys on a new device. It is shown only once and nobody else has it, not even the server — keep it somewhere safe.";
+"ParvaneRecoveryKeyTelegram" = "Your recovery key: {key}\nWe have also sent it to your Telegram chat with the Parvane bot — keep that message. When you sign in on a new device, the bot will ask you to reply with this key, and your chats and planner will appear there.";
 "ParvaneRecoveryKeyAdmin" = "Save your recovery key: {key}\nIt restores your account keys on a new device. It is shown only once — keep it somewhere safe. If you lose it, ask the server administrator for a new one.";
 "ParvaneDeviceLegacy" = "(old version)";
 "ParvaneInviteEditUnsupported" = "Links cannot be edited — revoke it and create a new one";
@@ -3242,7 +3243,7 @@
 "PlannerMinutesValue" = "{minutes} min";
 "PlannerMore" = "+{count} more";
 "PlannerNearLimit" = "The planner is close to its size limit. Delete old entries to keep syncing.";
-"PlannerNeedsLinking" = "Planner data will appear after this device is linked to your account from another device.";
+"PlannerNeedsLinking" = "Planner data will appear after this device is linked to your account: reply to the Parvane bot in Telegram with your recovery key or confirm this device on another one.";
 "PlannerNewList" = "New list";
 "PlannerNextMonth" = "Next month";
 "PlannerNoEstimate" = "No estimate";

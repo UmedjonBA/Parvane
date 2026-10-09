@@ -35,12 +35,34 @@ type StateProps = GlobalState['activeSessions'];
 
 // Parvane: авто-линковка истории — статус собственного оффера и запросы
 // других устройств опрашиваются, пока экран открыт
-type LinkStatus = { isPending: boolean; code?: string; canRecover?: boolean; hasEscrow?: boolean };
+type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
+type LinkStatus = {
+  isPending: boolean; code?: string; canRecover?: boolean; hasEscrow?: boolean; telegram?: TelegramRecoveryState;
+};
+// Parvane (spec 015): бот просит владельца ответить ключом восстановления в Telegram
+const TELEGRAM_RECOVERY_TEXT: Partial<Record<TelegramRecoveryState, string>> = {
+  waiting: 'ParvaneTgRecoverWaiting',
+  joining: 'ParvaneTgRecoverJoining',
+  done: 'ParvaneTgRecoverDone',
+  failed: 'ParvaneTgRecoverFailed',
+  limit: 'ParvaneTgRecoverLimit',
+  expired: 'ParvaneTgRecoverExpired',
+};
 type LinkOffer = { deviceId: string; code?: string };
 // Parvane (T128, D-12): отозвано устройство, державшее ключ подписи устройств —
 // ключ обновляется корнем из копии под ключом восстановления
-type SskState = { isRotationNeeded: boolean; hasBackup: boolean; isEscrowCopyMissing?: boolean };
+type SskState = {
+  isRotationNeeded: boolean; hasBackup: boolean; isEscrowCopyMissing?: boolean; canSendKeyToTelegram?: boolean;
+};
 type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
+type TelegramSendResult = SskRotationResult | 'no_telegram';
+const TELEGRAM_SEND_RESULT_KEYS: Record<TelegramSendResult, string> = {
+  ok: 'ParvaneTgSendDone',
+  bad_key: 'ParvaneSskRotationBadKey',
+  no_backup: 'ParvaneSskRotationNoBackup',
+  failed: 'ParvaneSskRotationFailed',
+  no_telegram: 'ParvaneTgSendNoTelegram',
+};
 const SSK_RESULT_KEYS: Record<SskRotationResult, string> = {
   ok: 'ParvaneSskRotationDone',
   bad_key: 'ParvaneSskRotationBadKey',
@@ -55,16 +77,18 @@ const ESCROW_RESULT_KEYS: Record<SskRotationResult, string> = {
   no_backup: 'ParvaneSskRotationNoBackup',
   failed: 'ParvaneSskRotationFailed',
 };
-type KeyDialogMode = 'rotate' | 'recover' | 'escrow';
+type KeyDialogMode = 'rotate' | 'recover' | 'escrow' | 'telegram';
 const KEY_DIALOG_TEXT: Record<KeyDialogMode, string> = {
   rotate: 'ParvaneSskRotationText',
   recover: 'ParvaneRecoverText',
   escrow: 'ParvaneEscrowText',
+  telegram: 'ParvaneTgSendText',
 };
 const KEY_DIALOG_ACTION: Record<KeyDialogMode, string> = {
   rotate: 'ParvaneSskRotationAction',
   recover: 'ParvaneRecoverAction',
   escrow: 'ParvaneEscrowAction',
+  telegram: 'ParvaneTgSendAction',
 };
 const RECOVER_RESULT_KEYS: Record<SskRotationResult, string> = {
   ok: 'ParvaneRecoverDone',
@@ -148,6 +172,16 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     openSskDialog();
   });
 
+  const handleOpenTelegramSend = useLastCallback(() => {
+    setKeyDialogMode('telegram');
+    openSskDialog();
+  });
+
+  const handleRequestTelegramKey = useLastCallback(async () => {
+    await callParvane('parvaneRequestTelegramKey');
+    void refreshLinkState();
+  });
+
   const handleResetPasswordChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setResetPassword(e.currentTarget.value);
   });
@@ -173,6 +207,16 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
       if (!key) return;
       const result = await callParvane('parvaneRecoverWithKey', { recoveryKey: key }) as SskRotationResult | undefined;
       showNotification({ message: oldLang(RECOVER_RESULT_KEYS[result || 'failed']) });
+      void refreshLinkState();
+      return;
+    }
+    if (keyDialogMode === 'telegram') {
+      const key = recoveryKey;
+      handleCloseSskDialog();
+      if (!key) return;
+      const result = await callParvane('parvaneSendKeyToTelegram', { recoveryKey: key }) as
+        TelegramSendResult | undefined;
+      showNotification({ message: oldLang(TELEGRAM_SEND_RESULT_KEYS[result || 'failed']) });
       void refreshLinkState();
       return;
     }
@@ -397,6 +441,46 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     );
   }
 
+  // Parvane (spec 015): бот ждёт ответа владельца с ключом восстановления
+  function renderTelegramRecovery(state: TelegramRecoveryState) {
+    const textKey = TELEGRAM_RECOVERY_TEXT[state];
+    if (!textKey) return undefined;
+    return (
+      <>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {oldLang('ParvaneTgRecoverTitle')}
+        </IslandTitle>
+        <Island>
+          <p className="settings-item-description-larger" data-telegram-recovery={state}>
+            {oldLang(textKey)}
+          </p>
+          {state !== 'joining' && state !== 'done' && (
+            <ListItem icon="send" narrow ripple onClick={handleRequestTelegramKey}>
+              {oldLang('ParvaneTgRecoverAgain')}
+            </ListItem>
+          )}
+        </Island>
+      </>
+    );
+  }
+
+  // Parvane (spec 015): ключ восстановления этого аккаунта в Telegram ещё не уходил
+  function renderTelegramSend() {
+    return (
+      <>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {oldLang('ParvaneTgSendTitle')}
+        </IslandTitle>
+        <Island>
+          <p className="settings-item-description-larger">{oldLang('ParvaneTgSendText')}</p>
+          <ListItem icon="send" narrow ripple onClick={handleOpenTelegramSend}>
+            {oldLang('ParvaneTgSendAction')}
+          </ListItem>
+        </Island>
+      </>
+    );
+  }
+
   // Parvane: других устройств не осталось — ключ восстановления или сброс
   function renderRecover() {
     return (
@@ -537,11 +621,14 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   return (
     <div className="settings-content custom-scroll SettingsActiveSessions">
       {currentSession && renderCurrentSession(currentSession)}
+      {Boolean(linkStatus?.telegram) && (linkStatus.canRecover || linkStatus.telegram === 'done')
+        && renderTelegramRecovery(linkStatus.telegram)}
       {Boolean(linkStatus?.isPending) && renderLinkPending(linkStatus.code)}
       {Boolean(linkStatus?.canRecover) && renderRecover()}
       {Boolean(linkOffers.length) && renderLinkOffers()}
       {Boolean(sskState?.isRotationNeeded) && renderSskRotation(Boolean(sskState?.hasBackup))}
       {Boolean(sskState?.isEscrowCopyMissing) && !sskState?.isRotationNeeded && renderEscrowMissing()}
+      {Boolean(sskState?.canSendKeyToTelegram) && !sskState?.isRotationNeeded && renderTelegramSend()}
       {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
       {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
           показывается только когда бэкенд отдал ttlDays */}

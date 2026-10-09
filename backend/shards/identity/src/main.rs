@@ -25,6 +25,7 @@ pub(crate) use prekeys::*;
 mod devices;
 mod link;
 mod login;
+mod recovery_tg;
 mod register;
 mod server_key;
 mod v2;

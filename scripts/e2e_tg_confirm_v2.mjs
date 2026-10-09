@@ -159,3 +159,39 @@ export async function v2RequestWithoutAuth(gatewayUrl, method, body, timeoutMs =
     ws.close();
   }
 }
+
+// ── Ключ восстановления через бота (spec 015) ───────────────────────────────
+
+/** «Бот» забирает сообщения для владельцев (`identity.telegram.pull`): массив
+ * `{ id, telegramId, kind, user, recoveryKey, client }`; `acks` — уже доставленные. */
+export async function botPullV2(gatewayUrl, secret, acks = [], waitMs = 0) {
+  const body = cat([...fStr(1, secret)], ...acks.map((id) => [...fVarint(2, id)]), [...fVarint(3, waitMs)]);
+  const parsed = await v2RequestWithoutAuth(gatewayUrl, 'identity.telegram.pull', body, waitMs + 3000);
+  if (!parsed.ok) throw new Error(`identity.telegram.pull: код ${parsed.code}`);
+  const dec = new TextDecoder();
+  const text = (f, num) => (f.has(num) ? dec.decode(first(f, num)) : '');
+  return (fields(parsed.ok).get(1) || []).map((raw) => {
+    const f = fields(raw);
+    return {
+      id: Number(first(f, 1) ?? 0n),
+      telegramId: Number(first(f, 2) ?? 0n),
+      kind: text(f, 3),
+      user: text(f, 4),
+      recoveryKey: text(f, 5),
+      client: text(f, 6),
+    };
+  });
+}
+
+/** «Бот» передаёт ответ владельца (`identity.telegram.reply`): `{ result, user }` | `{ code }`. */
+export async function botReplyV2(gatewayUrl, secret, telegramId, text) {
+  const body = cat([...fStr(1, secret)], [...fVarint(2, telegramId)], [...fStr(3, text)]);
+  const parsed = await v2RequestWithoutAuth(gatewayUrl, 'identity.telegram.reply', body);
+  if (!parsed.ok) return { code: parsed.code };
+  const f = fields(parsed.ok);
+  const dec = new TextDecoder();
+  return {
+    result: f.has(1) ? dec.decode(first(f, 1)) : '',
+    user: f.has(2) ? dec.decode(first(f, 2)) : '',
+  };
+}

@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 jsonwebtoken = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
+zeroize = "1"
 argon2 = "0.5"
 rand = { workspace = true }
 uuid = { workspace = true }

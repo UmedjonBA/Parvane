@@ -1065,7 +1065,7 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     expect(controller).toMatch(/await call\(entry\.chan[\s\S]{0,400}idConn\?\.close\(\);\s*throw e;/);
     expect(controller).toContain('client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);');
     expect(controller).toContain('client?.forgetRoot();');
-    expect(controller).toContain('pv.grantWithRootBackup(material, unb64(rootBackupB64))');
+    expect(controller).toContain('pv.grantWithRootBackup(keyed, unb64(rootBackupB64))');
     expect(controller).toContain('pv.grantRootBackup(material)');
     r.sskResults.forEach((result) => expect(controller, result).toContain(`'${result}'`));
     // Смена ключа состояния: отзывавшее устройство переносит состояние, прочие ждут
@@ -1571,6 +1571,57 @@ describe('ORDER-1: живое сообщение встаёт после все�
   });
 
   // Правило открыто, пока desktop и android упорядочивают по времени отправителя
+  it('desktop и android отмечены открытыми', () => {
+    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+});
+
+describe('RECOVER-2: новое устройство по ключу восстановления входит без других устройств', () => {
+  const r = rule('RECOVER-2') as unknown as {
+    bundleField: string;
+    bundleMagic: string;
+    bundleKdfSalt: string;
+    grantBundleKeyField: string;
+    methods: string[];
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('web: формат копии ключей и вход по ней', () => {
+    const bundle = readRepo('web/telegram-tt/src/api/parvane/v2/keyBundle.ts');
+    const magic = Array.from(r.bundleMagic, (char) => `0x${char.charCodeAt(0).toString(16)}`).join(', ');
+    expect(bundle).toContain(`const MAGIC = [${magic}];`);
+    expect(bundle).toContain(`const SALT = '${r.bundleKdfSalt}';`);
+    expect(bundle).toContain(`material.${r.grantBundleKeyField} = bundleKeyB64;`);
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain(`JSON.stringify({ ${r.bundleField}: b64(sealed) })`);
+    // Вход по ключу — материалом привязки из копии, а не отзывом прежних устройств
+    expect(controller).toContain('withBundleKey(withFreshLog(unb64(payload.grant), ownLog), b64(bundleKey))');
+    // Привязка переживает обрыв: состояние движка с запросом — в хранилище до ответа сервера
+    expect(controller).toContain('await storage.saveRecord(PENDING_JOIN_RECORD, join);');
+    expect(controller).toContain('const probe = client.otkRequest(OTK_COUNT) as OutReq;');
+  });
+
+  it('методы ключа восстановления через Telegram есть в схеме, сервере, боте и web', () => {
+    const proto = readRepo('proto/parvane/identity/v2/identity.proto');
+    const identity = readRepo('backend/shards/identity/src/v2.rs');
+    r.methods.forEach((method) => {
+      expect(proto, method).toContain(`name: "${method}"`);
+      expect(identity, method).toContain(`"${method}" =>`);
+    });
+    expect(proto).toContain(`bytes ${r.bundleField} = 3`);
+    const bot = readRepo('backend/infra/telegram-bot/parvane_tg_bot.py');
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    r.methods.forEach((method) => {
+      if (method.startsWith('identity.telegram.')) expect(bot, method).toContain(`"${method}"`);
+      else expect(controller, method).toContain(`'${method}'`);
+    });
+    // Ключ восстановления в базу identity не пишется: очередь бота и ответы — в памяти
+    const queue = readRepo('backend/shards/identity/src/recovery_tg.rs');
+    expect(queue).not.toMatch(/sqlx::|INSERT |SqlitePool/);
+  });
+
+  // Правило открыто, пока desktop и android входят по ключу прежним путём
   it('desktop и android отмечены открытыми', () => {
     expect(r.clients.desktop).toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('ОТКРЫТО');

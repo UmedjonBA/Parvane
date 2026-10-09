@@ -184,6 +184,57 @@ service IdentityService {
       shard: "identity"
     };
   }
+  // spec 015: ключ восстановления через Telegram-бота. Сервер и Telegram видят
+  // ключ открытым текстом (решение пользователя 9 окт 2026: удобство важнее —
+  // ключ лежит у человека в чате с ботом). Ключ в базе не хранится: очередь
+  // бота и ответ пользователя — только в памяти identity, с коротким сроком.
+  rpc RecoveryTgSend(RecoveryTgSendRequest) returns (RecoveryTgSendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.recovery.tg_send"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc RecoveryTgRequest(RecoveryTgRequestRequest) returns (RecoveryTgRequestResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.recovery.tg_request"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc RecoveryTgPoll(RecoveryTgPollRequest) returns (RecoveryTgPollResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.recovery.tg_poll"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  // Вызывает бот (общий секрет): забрать сообщения для Telegram.
+  rpc TelegramPull(TelegramPullRequest) returns (TelegramPullResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.telegram.pull"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  // Вызывает бот (общий секрет): ответ пользователя с ключом восстановления.
+  rpc TelegramReply(TelegramReplyRequest) returns (TelegramReplyResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.telegram.reply"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
 
   // ── аккаунт ──
   rpc AccountSet2fa(AccountSet2faRequest) returns (AccountSet2faResponse) {
@@ -570,6 +621,12 @@ message RootBackupSetRequest {
   // устройства, и ключ восстановления. Сервер без закрытого ключа администратора
   // её не читает. Пусто — прежняя копия у сервера не меняется.
   bytes escrow = 2 [(parvane.core.v2.max_len) = 256];
+  // spec 015: копия ключей аккаунта под ключом восстановления (материал
+  // привязки устройства, ключи планировщика, указатель на снимок истории) —
+  // шифртекст клиента. С ней новое устройство входит в журнал устройств по
+  // одному ключу восстановления, прежние устройства остаются. Можно слать без
+  // `backup`; пусто — прежняя копия у сервера не меняется.
+  bytes key_bundle = 3 [(parvane.core.v2.max_len) = 262144];
 }
 message RootBackupSetResponse {}
 message RootBackupGetRequest {}
@@ -579,6 +636,69 @@ message RootBackupGetResponse {
   // У сервера есть копия корня для администратора (RootBackupSet.escrow) —
   // потерянный ключ восстановления можно выписать заново.
   bool has_escrow = 2;
+  // Копия ключей аккаунта (RootBackupSet.key_bundle); пусто — нет.
+  bytes key_bundle = 3 [(parvane.core.v2.max_len) = 262144];
+  // К аккаунту привязан Telegram и сервер работает с ботом: ключ восстановления
+  // можно отправить в чат с ботом и ввести ответом боту.
+  bool telegram = 4;
+}
+
+// Действующее устройство: отправить ключ восстановления в Telegram владельца.
+message RecoveryTgSendRequest {
+  string recovery_key = 1 [(parvane.core.v2.max_len) = 64];
+}
+message RecoveryTgSendResponse {}
+
+// Новое устройство (вход по паролю, в журнале его ещё нет): попросить бота
+// спросить ключ восстановления у владельца.
+message RecoveryTgRequestRequest {
+  // Подпись устройства для текста бота («Chrome, Android»).
+  string client = 1 [(parvane.core.v2.max_len) = 64];
+  // Владелец просит прислать сообщение ещё раз. Без этого повторный запрос
+  // того же устройства, пока прежний ждёт ответа, новое сообщение не шлёт.
+  bool again = 2;
+}
+message RecoveryTgRequestResponse {}
+
+message RecoveryTgPollRequest {
+  // Ключ получен и применён — стереть его на сервере.
+  bool done = 1;
+}
+message RecoveryTgPollResponse {
+  // Пусто — владелец ещё не ответил боту.
+  string recovery_key = 1 [(parvane.core.v2.max_len) = 64];
+  // Запрос ещё ждёт ответа (false — истёк или не создавался).
+  bool pending = 2;
+}
+
+message TelegramOutMessage {
+  uint64 id = 1;
+  int64 telegram_id = 2;
+  // "key" — сообщение с ключом восстановления; "ask" — просьба ответить ключом.
+  string kind = 3 [(parvane.core.v2.max_len) = 16];
+  string user = 4 [(parvane.core.v2.max_len) = 255];
+  string recovery_key = 5 [(parvane.core.v2.max_len) = 64];
+  string client = 6 [(parvane.core.v2.max_len) = 64];
+}
+message TelegramPullRequest {
+  string secret = 1 [(parvane.core.v2.max_len) = 256];
+  // Сообщения, уже доставленные в Telegram (id из прошлого ответа).
+  repeated uint64 ack = 2 [(parvane.core.v2.max_items) = 64];
+  // Сколько ждать появления сообщений, мс (не больше 8000).
+  uint32 wait_ms = 3;
+}
+message TelegramPullResponse {
+  repeated TelegramOutMessage messages = 1 [(parvane.core.v2.max_items) = 64];
+}
+message TelegramReplyRequest {
+  string secret = 1 [(parvane.core.v2.max_len) = 256];
+  int64 telegram_id = 2;
+  string text = 3 [(parvane.core.v2.max_len) = 256];
+}
+message TelegramReplyResponse {
+  // "ok" | "bad_key" | "no_request" | "no_account"
+  string result = 1 [(parvane.core.v2.max_len) = 16];
+  string user = 2 [(parvane.core.v2.max_len) = 255];
 }
 
 // ── аккаунт ─────────────────────────────────────────────────────────────────

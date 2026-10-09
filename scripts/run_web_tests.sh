@@ -171,6 +171,17 @@ log "Telegram bot registration e2e"
 log "Telegram two-factor login e2e"
 "$ROOT/scripts/run_web_telegram_2fa_e2e.sh"
 
+log "Recovery key via Telegram: a new device joins by replying to the bot"
+"$ROOT/scripts/run_web_telegram_recovery_e2e.sh"
+
+# Настоящий бот против поддельного Bot API — нужен python с websockets (см. раннер)
+if [[ -x "${PARVANE_E2E_BOT_PYTHON:-$ROOT/local-workdirs/tg-bot-venv/bin/python}" ]]; then
+  log "Telegram bot (real bot, fake Bot API)"
+  "$ROOT/scripts/run_web_telegram_bot_e2e.sh"
+else
+  log "Telegram bot e2e SKIPPED: no python with websockets (local-workdirs/tg-bot-venv)"
+fi
+
 log "Per-callee ring cap: the caller is told why the call did not go out"
 "$ROOT/scripts/run_web_call_limit_e2e.sh"
 
