@@ -1,6 +1,6 @@
 // Боковая панель разделов и планировщик (spec 009). Панель видна всегда: без папок
 // слева — только разделы «Чаты» и «План»; раздел «План» занимает место колонок
-// мессенджера. Планировщик: задача, отмена, событие с пересечением, питание,
+// мессенджера. Планировщик: задача, отмена, событие с пересечением,
 // статистика, сохранение после перезагрузки, вход с телефона из меню.
 // Запуск: scripts/run_web_planner_e2e.sh
 import assert from 'node:assert/strict';
@@ -158,24 +158,12 @@ try {
   await planner.getByRole('button', { name: /free slot 15:30–21:00/ }).waitFor({ timeout: STEP_TIMEOUT_MS });
   console.log('OK: событие, пересечение времени и свободные окна дня');
 
-  // ── Питание и статистика ──────────────────────────────────────────────────
-  await planner.getByText('Nutrition', { exact: true }).first().click();
-  await planner.getByRole('button', { name: '+ Add entry' }).click();
-  // Форма записи питания открывается левой колонкой, дневник дня остаётся справа
-  await sidePane.locator('[data-food-form]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await dayPane.locator('[data-food-form]').count(), 0, 'форма записи питания не должна стоять в панели дня');
-  assert.ok(await dayPane.getByText('Calories', { exact: false }).first().isVisible(), 'дневник дня должен оставаться виден');
-  await page.locator('#planner-food-name').fill('Овсянка');
-  await planner.getByLabel('Calories, kcal').fill('390');
-  await planner.getByLabel('Protein, g').fill('20');
-  await planner.getByRole('button', { name: 'Add', exact: true }).click();
-  await planner.getByText('390 kcal').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByText('some entries have no macros').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // ── Статистика; питания в «Плане» нет (убрано 10 окт 2026, будет сделано заново) ──
+  assert.equal(await planner.getByText('Nutrition', { exact: true }).count(), 0, 'вкладки «Питание» быть не должно');
   await planner.getByText('Statistics', { exact: true }).first().click();
   await planner.getByRole('img', { name: 'Planned: 2 h' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByText('Nutrition', { exact: true }).first().click();
-  await planner.getByText('kcal logged').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: дневник питания и статистика времени и питания');
+  assert.equal(await planner.getByText('Nutrition', { exact: true }).count(), 0, 'в статистике питания быть не должно');
+  console.log('OK: статистика времени; питания в «Плане» нет');
 
   // ── Задачи по спискам ─────────────────────────────────────────────────────
   await planner.getByText('Tasks', { exact: true }).first().click();
@@ -213,8 +201,6 @@ try {
   await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
   await planner.getByText('Calendar', { exact: true }).first().click();
   await todayCell.click({ position: { x: 10, y: 10 } });
-  // После шага питания у панели дня открыта вкладка «Питание»
-  await planner.getByText('Schedule', { exact: true }).first().click();
   await planner.getByText(/free 08–21/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await planner.getByRole('button', { name: /free slot 08:00–14:00/ }).waitFor({ timeout: STEP_TIMEOUT_MS });
   console.log('OK: настройки дня применяются к окнам');
@@ -236,7 +222,8 @@ try {
       await cell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     }
     await cell.click({ position: { x: 10, y: 10 } });
-    await planner.getByText('Schedule', { exact: true }).first().click();
+    // Панель дня перерисовывается после клика — читать её текст можно, когда она показывает этот день
+    await planner.locator(`[data-planner-day="${day}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     return dayPane;
   };
   const backToThisMonth = async () => {
@@ -328,69 +315,10 @@ try {
   assert.equal(await seriesRows.count(), 1, 'задача-ряд в списке — одной строкой');
   console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», одна строка в списке');
 
-  // ── Цели питания по датам (spec 011, US2) ─────────────────────────────────
-  await planner.getByText('Statistics', { exact: true }).first().click();
-  await planner.getByText('Nutrition', { exact: true }).first().click();
-  await planner.getByRole('button', { name: '+ Goal for a day or a period' }).click();
-  await planner.getByLabel('From').fill(today);
-  await page.locator('#planner-goal-end').selectOption('single');
-  await planner.getByLabel('Calories, kcal').fill('1500');
-  await planner.getByLabel('Tolerance ±').first().fill('100');
-  await planner.getByLabel('Water, ml').fill('2000');
-  await planner.getByRole('button', { name: 'Save', exact: true }).click();
-  await planner.getByText('Applies to the selected day').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByText('Calendar', { exact: true }).first().click();
-  await todayCell.click({ position: { x: 10, y: 10 } });
-  await planner.getByText('Nutrition', { exact: true }).first().click();
-  const metric = (name) => planner.locator(`[data-metric="${name}"]`);
-  // Статус показателя обновляется после прихода правки в экран — ждём, а не читаем сразу
-  const expectStatus = async (name, status, what) => {
-    for (let attempt = 0; attempt < 25 && await metric(name).getAttribute('data-status') !== status; attempt++) {
-      await page.waitForTimeout(200);
-    }
-    assert.equal(await metric(name).getAttribute('data-status'), status, what);
-  };
-  await metric('kcal').getByText('/ 1,500 kcal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await metric('fiber').getByText('No goal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.locator('details > summary').first().click();
-  // Числовые поля планировщика применяются по Enter или уходу фокуса
-  await planner.getByLabel('Water for the day, ml').fill('1500');
-  await planner.getByLabel('Water for the day, ml').press('Enter');
-  await planner.getByText('Water updated').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Кнопки завершения дня нет: сегодняшний день открыт, прошедший завершён сам (spec 013, B10)
-  assert.equal(await planner.getByText('Day is filled in').count(), 0, 'кнопка «День заполнен» должна исчезнуть');
-  await expectStatus('water', 'open', 'сегодняшний день ещё открыт');
-  const yesterdayKey = addDays(today, -1);
-  await page.evaluate(async (day) => {
-    await window.__parvaneDiagCallApi('parvanePlannerApply', {
-      changes: [{ nutritionDay: { day, entries: [{ id: `food-${day}`, name: 'Обед', meal: 'lunch', kcal: 2000 }] } }],
-    });
-  }, yesterdayKey);
-  const openFoodDay = async (day) => {
-    await planner.getByText('Calendar', { exact: true }).first().click();
-    await planner.locator(`[role="gridcell"][data-day="${day}"]`).click({ position: { x: 10, y: 10 } });
-    await planner.getByText('Nutrition', { exact: true }).first().click();
-  };
-  await openFoodDay(yesterdayKey);
-  await metric('kcal').getByText('/ 2,000 kcal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await expectStatus('kcal', 'ok', 'вчерашний день завершён и в норме');
-  // Смена цели по умолчанию не переоценивает прошедший день (SC-005)
-  await planner.getByText('Statistics', { exact: true }).first().click();
-  await planner.getByText('Nutrition', { exact: true }).first().click();
-  await planner.locator('button').filter({ hasText: 'Default goals' }).first().click();
-  await planner.getByLabel('Calories, kcal').fill('1000');
-  await planner.getByRole('button', { name: 'Save', exact: true }).click();
-  await planner.getByText('Nutrition goals updated').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await openFoodDay(yesterdayKey);
-  await metric('kcal').getByText('/ 2,000 kcal').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await expectStatus('kcal', 'ok', 'оценка прошедшего дня не изменилась');
-  await planner.getByRole('button', { name: 'Today' }).click();
-  await planner.getByText('Schedule', { exact: true }).first().click();
-  console.log('OK: цель на день, прошедший день завершён сам и не переоценивается при смене цели');
-
   // ── Виды календаря и выбор месяца и года (spec 013, US2) ──────────────────
   const viewButton = (name) => planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name, exact: true });
   const main = planner.locator('[data-planner-view]');
+  await planner.getByText('Calendar', { exact: true }).first().click();
   await viewButton('Week').click();
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const weekColumn = planner.locator(`[data-planner-view="week"] div[data-day="${today}"]`).last();
@@ -446,7 +374,6 @@ try {
   await sidePane.getByLabel('Start', { exact: true }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByText('Added: День города').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   await dayPane.locator('[data-all-day]').getByText('День города').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await dayPane.locator('[data-all-day]').innerText(), /Holiday/, 'праздник отмечен в панели дня');
   assert.equal((await todayCell.innerText()).match(/[\d.]+ h/)?.[0], loadBefore, 'событие на весь день не входит в загрузку дня');
@@ -493,7 +420,6 @@ try {
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
   // В клетке месяца только два превью, а порядок задач дня после перезагрузки не закреплён — смотрим панель дня
   await todayCell.click({ position: { x: 10, y: 10 } });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   await dayPane.getByText('Подготовить макет').first().waitFor({ state: 'visible', timeout: 30000 });
   // Настройки тоже сохранены
   await planner.getByRole('button', { name: 'Planner settings' }).click();
@@ -530,7 +456,6 @@ try {
   assert.equal(await planner.getByRole('button', { name: '+ Task', exact: true }).count(), 0, 'на телефоне кнопки «+ Задача» нет');
   assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
   await todayCell.click({ position: { x: 10, y: 10 } });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   const strip = dayPane.locator('[data-day-strip]');
   await strip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const layout = await page.evaluate(() => {
@@ -561,18 +486,6 @@ try {
   await strip.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   // Отдельной кнопки «+ Задача на этот день» в ленте нет, пока есть свободные окна
   assert.equal(await strip.getByRole('button', { name: '+ Task for this day' }).count(), 0, 'лишняя кнопка добавления в ленте');
-  // Запись питания на телефоне тоже раскрывается на месте, без отдельного экрана
-  await planner.getByText('Nutrition', { exact: true }).first().click();
-  await dayPane.getByRole('button', { name: '+ Add entry' }).click();
-  const foodForm = dayPane.locator('[data-inline-food-form]');
-  await foodForm.locator('#planner-food-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidePane.count(), 0, 'на телефоне форма записи питания не должна открываться отдельным экраном');
-  await foodForm.locator('#planner-food-name').fill('Чай');
-  await foodForm.getByLabel('Calories, kcal').fill('5');
-  await foodForm.getByRole('button', { name: 'Add', exact: true }).click();
-  await foodForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await dayPane.getByText('Чай').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   // Шестерёнка — в строке периода
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

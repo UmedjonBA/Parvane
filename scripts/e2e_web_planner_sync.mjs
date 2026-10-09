@@ -63,7 +63,6 @@ async function deleteTask(page, name) {
   const planner = await openPlanner(page);
   await planner.getByText('Calendar', { exact: true }).first().click();
   await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   await planner.getByRole('button', { name }).first().click();
   await planner.getByRole('button', { name: 'Delete task' }).click();
   await planner.getByRole('heading', { name }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -75,7 +74,6 @@ async function expectTaskInDay(page, name, isPresent, timeout = SYNC_TIMEOUT_MS)
   const planner = await openPlanner(page);
   await planner.getByText('Calendar', { exact: true }).first().click();
   await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
-  await planner.getByText('Schedule', { exact: true }).first().click();
   await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: isPresent ? 'visible' : 'detached', timeout })
     .catch(() => {

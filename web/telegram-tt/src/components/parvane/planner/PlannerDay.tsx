@@ -35,13 +35,11 @@ type OwnProps = {
   // Узкий экран: расписание — горизонтальная лента под календарём, листается вбок; форма новой
   // задачи раскрывается под лентой
   isStrip?: boolean;
-  // Первая карточка ленты (переключатель «Расписание / Питание»)
-  leading?: TeactNode;
 };
 
 // Расписание дня: свободные окна 09–21 и занятые отрезки, дела без времени, дедлайны
 const PlannerDay = ({
-  state, day, inlineForm, inlineFormStart, isStrip, leading, onOpenTask, onOpenEvent, onCreateTask,
+  state, day, inlineForm, inlineFormStart, isStrip, onOpenTask, onOpenEvent, onCreateTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -111,7 +109,6 @@ const PlannerDay = ({
         className={buildClassName(styles.dayItems, isStrip && styles.dayStrip, isStrip && 'no-scrollbar')}
         data-day-strip={isStrip ? '1' : undefined}
       >
-        {leading}
         {allDay.map((event) => (
           <div key={`allday${instanceKey(event)}`} className={styles.busyRow} data-all-day={event.id}>
             <span className={styles.clock}>{lang('PlannerAllDayShort')}</span>
