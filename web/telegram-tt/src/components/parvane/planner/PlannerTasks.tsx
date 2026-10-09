@@ -5,7 +5,7 @@ import type { PlannerState, PlannerStatus } from './plannerModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatProject, formatStatus } from './plannerFormat';
 import {
-  ensureList, getCompletedTasks, getEligibleTasks, instanceKey, moveTask,
+  ensureList, getCompletedTasks, getEligibleTasks, getListColor, instanceKey, moveTask,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -14,6 +14,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
 import PlannerField from './PlannerField';
+import { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerTaskRow from './PlannerTaskRow';
 
 import styles from './Planner.module.scss';
@@ -53,6 +54,13 @@ const PlannerTasks = ({
     setNewList('');
   });
 
+  const handleListColor = useLastCallback((color: number) => {
+    updatePlanner((draft) => {
+      const list = draft.lists.find(({ name }) => name === selectedProject);
+      if (list) list.color = color || undefined;
+    }, lang('PlannerNoticeListColor', { name: selectedProject }));
+  });
+
   const handleReorder = useLastCallback((taskId: string, direction: -1 | 1) => {
     updatePlanner((draft) => {
       moveTask(draft, taskId, direction, today);
@@ -64,6 +72,7 @@ const PlannerTasks = ({
     .filter((task) => task.project === selectedProject)
     .sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1));
   const completed = getCompletedTasks(state);
+  const selectedList = state.lists.find(({ name }) => name === selectedProject);
 
   return (
     <div className={styles.lists}>
@@ -93,6 +102,7 @@ const PlannerTasks = ({
       </nav>
       <section className={styles.listBody}>
         <h3 className={styles.listTitle}>{formatProject(lang, selectedProject)}</h3>
+        {selectedList && <PlannerColorSwatches value={selectedList.color || 0} onChange={handleListColor} />}
         {!subset.length && <p className={styles.small}>{lang('PlannerListEmpty')}</p>}
         {GROUP_ORDER.map((status) => {
           const group = subset.filter((task) => task.status === status);
@@ -105,6 +115,8 @@ const PlannerTasks = ({
                   key={instanceKey(task)}
                   task={task}
                   context="all"
+                  color={selectedList?.color}
+                  noProject
                   canMoveUp={index > 0}
                   canMoveDown={index < group.length - 1}
                   onOpen={onOpenTask}
@@ -120,7 +132,15 @@ const PlannerTasks = ({
         {Boolean(completed.length) && (
           <details className={styles.fold}>
             <summary>{lang('PlannerCompleted', { count: completed.length })}</summary>
-            {completed.map((task) => <PlannerTaskRow key={task.id} task={task} context="all" onOpen={onOpenTask} />)}
+            {completed.map((task) => (
+              <PlannerTaskRow
+                key={task.id}
+                task={task}
+                context="all"
+                color={getListColor(state, task.project)}
+                onOpen={onOpenTask}
+              />
+            ))}
           </details>
         )}
       </section>

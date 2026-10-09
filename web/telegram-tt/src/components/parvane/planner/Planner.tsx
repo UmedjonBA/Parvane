@@ -1,14 +1,15 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
-import type { PlannerSlot } from './plannerModel';
+import type { PlannerCalendarView, PlannerSlot } from './plannerModel';
 import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
 import { setParvaneSection } from '../../../util/parvaneSection';
-import { formatDay, formatDayLong, formatMonth } from './plannerFormat';
+import { formatDay, formatDayLong, formatPeriod } from './plannerFormat';
 import {
-  detachInstance, eventInstance, fromDayKey, taskInstance, toDayKey,
+  detachInstance, eventInstance, fromDayKey, getWeekKeys, PLANNER_CALENDAR_VIEWS, shiftPeriod, taskInstance,
+  toDayKey,
 } from './plannerModel';
 import {
   getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus, loadPlanner,
@@ -23,15 +24,19 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
+import PlannerAgenda from './PlannerAgenda';
 import PlannerDay from './PlannerDay';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerMonth from './PlannerMonth';
 import PlannerNutrition from './PlannerNutrition';
+import PlannerPeriodBar from './PlannerPeriodBar';
 import PlannerSettings from './PlannerSettings';
 import PlannerStatistics from './PlannerStatistics';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
 import PlannerTasks from './PlannerTasks';
+import PlannerWeek from './PlannerWeek';
+import PlannerYear from './PlannerYear';
 
 import styles from './Planner.module.scss';
 
@@ -50,6 +55,38 @@ const VIEW_TASKS = 1;
 const VIEW_STATISTICS = 2;
 const DAY_SCHEDULE = 0;
 const DAY_NUTRITION = 1;
+const CALENDAR_VIEW_KEY = 'parvane:planner-view';
+const CALENDAR_VIEW_LABELS = {
+  year: 'PlannerCalYear',
+  month: 'PlannerCalMonth',
+  week: 'PlannerCalWeek',
+  day: 'PlannerCalDay',
+  agenda: 'PlannerCalAgenda',
+} as const satisfies Record<PlannerCalendarView, string>;
+const MS_IN_SECOND = 1000;
+
+// Вид календаря — настройка устройства; хранилище может быть недоступно
+function readCalendarView(): PlannerCalendarView {
+  try {
+    const saved = localStorage.getItem(CALENDAR_VIEW_KEY) as PlannerCalendarView;
+    return PLANNER_CALENDAR_VIEWS.includes(saved) ? saved : 'month';
+  } catch (err) {
+    return 'month';
+  }
+}
+
+function saveCalendarView(view: PlannerCalendarView) {
+  try {
+    localStorage.setItem(CALENDAR_VIEW_KEY, view);
+  } catch (err) {
+    // Вид просто не запомнится
+  }
+}
+
+function msUntilTomorrow() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() + MS_IN_SECOND;
+}
 
 // Parvane (spec 009): раздел «План» — календарь с загрузкой дней, задачи по
 // спискам, статистика времени и питания. Данные — запись устройства (plannerStore)
@@ -62,9 +99,10 @@ const Planner = ({ isMobile }: OwnProps) => {
   const syncStatus = useDerivedState(getPlannerStatus);
   const sizeBytes = useDerivedState(getPlannerSizeBytes);
 
-  const [today] = useState(() => toDayKey(new Date()));
+  const [today, setToday] = useState(() => toDayKey(new Date()));
   const [view, setView] = useState(VIEW_CALENDAR);
-  const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [calendarView, setCalendarView] = useState(readCalendarView);
+  // Якорь периода: выбранный день; месяц, неделя и год берутся от него
   const [picked, setPicked] = useState(today);
   // Редактор задачи: id и день экземпляра ряда (spec 011); редактор события — то же
   const [editor, setEditor] = useState<{ id: string; day?: string }>();
@@ -83,10 +121,16 @@ const Planner = ({ isMobile }: OwnProps) => {
     void loadPlanner(currentUserId);
   }, [currentUserId]);
 
+  // Смена суток при открытом «Плане»: «сегодня» и завершённость вчерашнего дня обновляются сами
+  useEffect(() => {
+    const timer = window.setTimeout(() => setToday(toDayKey(new Date())), msUntilTomorrow());
+    return () => window.clearTimeout(timer);
+  }, [today]);
+
   const pickDay = useLastCallback((day: string) => {
-    const date = fromDayKey(day);
     setPicked(day);
-    setMonth(new Date(date.getFullYear(), date.getMonth(), 1));
+    // Открытая форма создания следует за выбранным днём
+    if (formParams) setFormParams({ ...formParams, day, slot: undefined });
   });
 
   const closeEditors = useLastCallback(() => {
@@ -96,7 +140,6 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handlePickDay = useLastCallback((day: string) => {
     pickDay(day);
-    closeEditors();
     setIsPanelOpen(true);
   });
 
@@ -105,14 +148,16 @@ const Planner = ({ isMobile }: OwnProps) => {
     const target = day || task?.day;
     if (target && view === VIEW_CALENDAR) pickDay(target);
     setEventEditor(undefined);
+    setFormParams(undefined);
+    setIsSettingsOpen(false);
     setEditor({ id: taskId, day: task?.repeat ? day : undefined });
-    setIsPanelOpen(true);
   });
 
   const handleOpenEvent = useLastCallback((eventId: string, day: string) => {
     setEditor(undefined);
+    setFormParams(undefined);
+    setIsSettingsOpen(false);
     setEventEditor({ id: eventId, day });
-    setIsPanelOpen(true);
   });
 
   // Перетаскивание экземпляра ряда на другой день — «только это» (отделение)
@@ -126,27 +171,32 @@ const Planner = ({ isMobile }: OwnProps) => {
     }, lang('PlannerNoticeMoved', { date: formatDay(lang, day), name: task.name }));
   });
 
+  const openForm = useLastCallback((params: PlannerFormParams) => {
+    closeEditors();
+    setIsSettingsOpen(false);
+    setFormParams(params);
+  });
+
   const handleCreateForDay = useLastCallback((day: string) => {
-    pickDay(day);
-    setFormParams({ day });
+    setPicked(day);
+    openForm({ day });
   });
 
   const handleCreateInDay = useLastCallback((slot?: PlannerSlot) => {
-    setFormParams({ day: picked, slot: slot ? { ...slot, day: picked } : undefined });
+    openForm({ day: picked, slot: slot ? { ...slot, day: picked } : undefined });
   });
 
   const handleCreateInList = useLastCallback(() => {
-    setFormParams({ project: selectedProject });
+    openForm({ project: selectedProject });
   });
 
   const handleAdd = useLastCallback(() => {
     if (view === VIEW_CALENDAR && dayContent === DAY_NUTRITION) {
-      closeEditors();
       setIsPanelOpen(true);
       setFoodAddRequest(foodAddRequest + 1);
       return;
     }
-    setFormParams(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
+    openForm(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
   });
 
   const handleCreated = useLastCallback((taskId?: string, day?: string) => {
@@ -161,34 +211,40 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handleSwitchView = useLastCallback((index: number) => {
     setView(index);
-    setFormParams(undefined);
-    closeEditors();
     setIsPanelOpen(false);
-    setIsSettingsOpen(false);
   });
 
   const handleOpenSettings = useLastCallback(() => {
-    setFormParams(undefined);
     setIsSettingsOpen(true);
   });
 
-  const handleCloseSettings = useLastCallback(() => {
-    setIsSettingsOpen(false);
-  });
-
-  const changeMonth = useLastCallback((delta: number) => {
-    const next = new Date(month.getFullYear(), month.getMonth() + delta, 1);
-    setMonth(next);
-    setPicked(toDayKey(next));
-    closeEditors();
+  const changePeriod = useLastCallback((delta: number) => {
+    pickDay(shiftPeriod(view === VIEW_STATISTICS ? 'month' : calendarView, picked, delta));
     setIsPanelOpen(false);
   });
 
-  const handlePrevMonth = useLastCallback(() => changeMonth(-1));
-  const handleNextMonth = useLastCallback(() => changeMonth(1));
+  const handlePrevPeriod = useLastCallback(() => changePeriod(-1));
+  const handleNextPeriod = useLastCallback(() => changePeriod(1));
 
   const handleToday = useLastCallback(() => {
     pickDay(today);
+  });
+
+  const handleSwitchCalendarView = useLastCallback((next: string) => {
+    setCalendarView(next as PlannerCalendarView);
+    saveCalendarView(next as PlannerCalendarView);
+    setIsPanelOpen(false);
+  });
+
+  // Нажатие на день в виде «Год» открывает месяц этого дня
+  const handleOpenMonth = useLastCallback((day: string) => {
+    pickDay(day);
+    handleSwitchCalendarView('month');
+  });
+
+  const handleCloseSide = useLastCallback(() => {
+    setIsSettingsOpen(false);
+    setFormParams(undefined);
     closeEditors();
   });
 
@@ -197,14 +253,12 @@ const Planner = ({ isMobile }: OwnProps) => {
   });
 
   const handleClosePanel = useLastCallback(() => {
-    closeEditors();
     setIsPanelOpen(false);
   });
 
   const handleOpenFoodDay = useLastCallback((day: string) => {
     setView(VIEW_CALENDAR);
     pickDay(day);
-    closeEditors();
     setDayContent(DAY_NUTRITION);
     setIsPanelOpen(true);
   });
@@ -232,9 +286,12 @@ const Planner = ({ isMobile }: OwnProps) => {
   const editedEvent = editedEventTemplate && editedEventTemplate.repeat
     ? eventInstance(editedEventTemplate, eventEditor.day) : editedEventTemplate;
   const isCreating = Boolean(formParams);
-  // Форма создания и настройки занимают всё содержимое — кнопки месяца и добавления прячутся
-  const isOverlay = isCreating || isSettingsOpen;
-  const isFood = view === VIEW_CALENDAR && dayContent === DAY_NUTRITION;
+  // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
+  const side = !isLoaded ? undefined
+    : isSettingsOpen ? 'settings' : isCreating ? 'form' : editedTask ? 'task' : editedEvent ? 'event' : undefined;
+  const isCalendar = view === VIEW_CALENDAR;
+  const isFood = isCalendar && dayContent === DAY_NUTRITION;
+  const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
   // spec 010: строка состояния синхронизации — только когда есть что сказать
   const syncNoticeKey = syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
     : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
@@ -246,15 +303,18 @@ const Planner = ({ isMobile }: OwnProps) => {
     { title: lang('PlannerViewStatistics') },
   ];
   const dayTabs = [{ title: lang('PlannerDaySchedule') }, { title: lang('PlannerDayNutrition') }];
-  const title = isSettingsOpen ? lang('PlannerSettings') : isCreating
-    ? lang('PlannerTitleNew')
-    : (view === VIEW_TASKS ? lang('PlannerViewTasks')
-      : view === VIEW_STATISTICS ? lang('PlannerViewStatistics') : formatMonth(lang, month));
+  const title = view === VIEW_TASKS ? lang('PlannerViewTasks')
+    : view === VIEW_STATISTICS ? lang('PlannerViewStatistics') : lang('ParvaneSectionPlanner');
+  const sideTitle = side === 'settings' ? lang('PlannerSettings') : side === 'form' ? lang('PlannerTitleNew')
+    : side === 'task' ? lang('PlannerTitleTask') : lang('PlannerTitleEvent');
+  const calendarSegments = PLANNER_CALENDAR_VIEWS
+    .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) }));
+  const isMonthView = calendarView === 'month';
 
   return (
     <div
       id="ParvanePlanner"
-      className={buildClassName(styles.root, isPanelOpen && styles.panelOpen)}
+      className={buildClassName(styles.root, isPanelOpen && styles.panelOpen, side && styles.sideOpen)}
       data-sync-status={syncStatus}
       data-loaded={isLoaded ? '1' : '0'}
       tabIndex={0}
@@ -274,38 +334,15 @@ const Planner = ({ isMobile }: OwnProps) => {
         <h1 className={styles.title}>{title}</h1>
         <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
         <div className={styles.headerButtons}>
-          {!isOverlay && (
-            <Button
-              round
-              size="smaller"
-              color="translucent"
-              iconName="settings"
-              ariaLabel={lang('PlannerSettings')}
-              onClick={handleOpenSettings}
-            />
-          )}
-          {!isOverlay && view !== VIEW_TASKS && (
-            <>
-              <Button
-                round
-                size="smaller"
-                color="translucent"
-                iconName="previous"
-                ariaLabel={lang('PlannerPrevMonth')}
-                onClick={handlePrevMonth}
-              />
-              <Button size="smaller" color="translucent" onClick={handleToday}>{lang('PlannerToday')}</Button>
-              <Button
-                round
-                size="smaller"
-                color="translucent"
-                iconName="next"
-                ariaLabel={lang('PlannerNextMonth')}
-                onClick={handleNextMonth}
-              />
-            </>
-          )}
-          {!isOverlay && view !== VIEW_STATISTICS && (
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            iconName="settings"
+            ariaLabel={lang('PlannerSettings')}
+            onClick={handleOpenSettings}
+          />
+          {view !== VIEW_STATISTICS && (
             <Button size="smaller" disabled={isFood && picked > today} onClick={handleAdd}>
               {lang(isFood ? 'PlannerAddFood' : 'PlannerAddTask')}
             </Button>
@@ -321,28 +358,109 @@ const Planner = ({ isMobile }: OwnProps) => {
         </div>
       )}
       <div className={buildClassName(styles.content, 'custom-scroll')}>
-        {!isLoaded ? <Loading /> : isSettingsOpen ? (
-          <PlannerSettings state={state} onBack={handleCloseSettings} />
-        ) : isCreating ? (
-          <PlannerTaskForm
-            state={state}
-            params={formParams}
-            onCreated={handleCreated}
-            onCancel={handleCancelCreate}
-          />
-        ) : view === VIEW_STATISTICS ? (
-          <PlannerStatistics
-            state={state}
-            month={month}
-            picked={picked}
-            today={today}
-            onPickDay={pickDay}
-            onOpenFoodDay={handleOpenFoodDay}
-          />
-        ) : (
-          <div className={styles.layout}>
+        {!isLoaded ? <Loading /> : (
+          <div
+            className={buildClassName(
+              styles.layout, side && styles.layoutWithSide, !isCalendar && styles.layoutNoPanel,
+            )}
+          >
+            {side && (
+              <aside className={styles.side} data-planner-side={side}>
+                <div className={styles.sideHead}>
+                  <h2 className={styles.panelTitle}>{sideTitle}</h2>
+                  <Button
+                    round
+                    size="tiny"
+                    color="translucent"
+                    iconName="close"
+                    ariaLabel={lang('Close')}
+                    onClick={handleCloseSide}
+                  />
+                </div>
+                {side === 'settings' ? (
+                  <PlannerSettings state={state} onBack={handleCloseSide} />
+                ) : side === 'form' ? (
+                  <PlannerTaskForm
+                    state={state}
+                    params={formParams!}
+                    onCreated={handleCreated}
+                    onCancel={handleCancelCreate}
+                  />
+                ) : side === 'task' ? (
+                  <PlannerTaskEditor
+                    key={`${editedTask!.id}@${editedTask!.instanceDay || ''}`}
+                    state={state}
+                    task={editedTask!}
+                    today={today}
+                    picked={picked}
+                    backLabel={lang('Close')}
+                    onBack={handleCloseEditor}
+                    onPickDay={pickDay}
+                    onOpenTask={handleOpenTask}
+                  />
+                ) : (
+                  <PlannerEventEditor
+                    key={`${editedEvent!.id}@${editedEvent!.instanceDay || ''}`}
+                    state={state}
+                    event={editedEvent!}
+                    backLabel={lang('Close')}
+                    onBack={handleCloseEditor}
+                  />
+                )}
+              </aside>
+            )}
             <div className={styles.main}>
-              {view === VIEW_CALENDAR ? (
+              {isCalendar && (
+                <PlannerPeriodBar
+                  title={formatPeriod(lang, calendarView, picked)}
+                  prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
+                  nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
+                  picked={picked}
+                  segments={calendarSegments}
+                  activeSegment={calendarView}
+                  segmentsLabel={lang('PlannerCalView')}
+                  onPrev={handlePrevPeriod}
+                  onNext={handleNextPeriod}
+                  onToday={handleToday}
+                  onPickDay={pickDay}
+                  onSwitchSegment={handleSwitchCalendarView}
+                />
+              )}
+              {view === VIEW_STATISTICS ? (
+                <PlannerStatistics
+                  state={state}
+                  picked={picked}
+                  today={today}
+                  onPickDay={pickDay}
+                  onOpenFoodDay={handleOpenFoodDay}
+                />
+              ) : view === VIEW_TASKS ? (
+                <PlannerTasks
+                  state={state}
+                  today={today}
+                  selectedProject={state.projects.includes(selectedProject) ? selectedProject : ''}
+                  onSelectProject={setSelectedProject}
+                  onOpenTask={handleOpenTask}
+                  onCreateTask={handleCreateInList}
+                />
+              ) : calendarView === 'year' ? (
+                <PlannerYear
+                  state={state}
+                  year={month.getFullYear()}
+                  picked={picked}
+                  today={today}
+                  onOpenMonth={handleOpenMonth}
+                />
+              ) : calendarView === 'agenda' ? (
+                <PlannerAgenda
+                  state={state}
+                  fromDay={picked}
+                  today={today}
+                  onPickDay={handlePickDay}
+                  onOpenTask={handleOpenTask}
+                  onOpenEvent={handleOpenEvent}
+                />
+              ) : isMonthView ? (
                 <PlannerMonth
                   state={state}
                   month={month}
@@ -354,18 +472,20 @@ const Planner = ({ isMobile }: OwnProps) => {
                   onMoveTask={handleMoveTask}
                 />
               ) : (
-                <PlannerTasks
+                <PlannerWeek
                   state={state}
+                  days={calendarView === 'week' ? getWeekKeys(picked) : [picked]}
+                  picked={picked}
                   today={today}
-                  selectedProject={state.projects.includes(selectedProject) ? selectedProject : ''}
-                  onSelectProject={setSelectedProject}
+                  onPickDay={handlePickDay}
+                  onCreateForDay={handleCreateForDay}
                   onOpenTask={handleOpenTask}
-                  onCreateTask={handleCreateInList}
+                  onOpenEvent={handleOpenEvent}
                 />
               )}
             </div>
-            {(view === VIEW_CALENDAR || editedTask || editedEvent) && (
-              <aside className={styles.panel}>
+            {isCalendar && (
+              <aside className={styles.panel} data-planner-day={picked}>
                 <Button
                   isText
                   size="smaller"
@@ -373,44 +493,20 @@ const Planner = ({ isMobile }: OwnProps) => {
                   iconName="arrow-left"
                   onClick={handleClosePanel}
                 >
-                  {lang(view === VIEW_CALENDAR ? 'PlannerBackToMonth' : 'PlannerBackToTasks')}
+                  {lang('PlannerBackToCalendar')}
                 </Button>
-                {editedTask ? (
-                  <PlannerTaskEditor
-                    key={`${editedTask.id}@${editedTask.instanceDay || ''}`}
+                <h2 className={styles.panelTitle}>{formatDayLong(lang, picked)}</h2>
+                <TabList tabs={dayTabs} activeTab={dayContent} onSwitchTab={setDayContent} />
+                {dayContent === DAY_SCHEDULE ? (
+                  <PlannerDay
                     state={state}
-                    task={editedTask}
-                    today={today}
-                    picked={picked}
-                    backLabel={lang(view === VIEW_TASKS ? 'PlannerBackToTasks' : 'PlannerBackToDay')}
-                    onBack={handleCloseEditor}
-                    onPickDay={pickDay}
+                    day={picked}
                     onOpenTask={handleOpenTask}
-                  />
-                ) : editedEvent ? (
-                  <PlannerEventEditor
-                    key={`${editedEvent.id}@${editedEvent.instanceDay || ''}`}
-                    state={state}
-                    event={editedEvent}
-                    backLabel={lang('PlannerBackToDay')}
-                    onBack={handleCloseEditor}
+                    onOpenEvent={handleOpenEvent}
+                    onCreateTask={handleCreateInDay}
                   />
                 ) : (
-                  <>
-                    <h2 className={styles.panelTitle}>{formatDayLong(lang, picked)}</h2>
-                    <TabList tabs={dayTabs} activeTab={dayContent} onSwitchTab={setDayContent} />
-                    {dayContent === DAY_SCHEDULE ? (
-                      <PlannerDay
-                        state={state}
-                        day={picked}
-                        onOpenTask={handleOpenTask}
-                        onOpenEvent={handleOpenEvent}
-                        onCreateTask={handleCreateInDay}
-                      />
-                    ) : (
-                      <PlannerNutrition state={state} day={picked} today={today} addRequest={foodAddRequest} />
-                    )}
-                  </>
+                  <PlannerNutrition state={state} day={picked} today={today} addRequest={foodAddRequest} />
                 )}
               </aside>
             )}

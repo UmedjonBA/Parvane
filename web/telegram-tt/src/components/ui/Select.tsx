@@ -1,6 +1,6 @@
 import type { ChangeEvent } from 'react';
 import type { ElementRef } from '../../lib/teact/teact';
-import { memo } from '../../lib/teact/teact';
+import { memo, useLayoutEffect, useRef } from '../../lib/teact/teact';
 
 import buildClassName from '../../util/buildClassName';
 
@@ -28,6 +28,16 @@ const Select = (props: OwnProps) => {
     onChange,
     children,
   } = props;
+  const localRef = useRef<HTMLSelectElement>();
+  const selectRef = ref || localRef;
+
+  // Parvane: значение ставится элементу раньше, чем появляются его пункты, — список, появившийся
+  // заново с уже выбранным значением, показывал первый пункт
+  useLayoutEffect(() => {
+    const select = selectRef.current;
+    if (select && select.value !== (value || '')) select.value = value || '';
+  });
+
   const labelText = error || label;
   const fullClassName = buildClassName(
     'input-group',
@@ -46,7 +56,7 @@ const Select = (props: OwnProps) => {
         value={value || ''}
         onChange={onChange}
         tabIndex={tabIndex}
-        ref={ref}
+        ref={selectRef}
       >
         {children}
       </select>

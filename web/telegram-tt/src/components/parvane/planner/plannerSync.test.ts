@@ -136,7 +136,8 @@ describe('планировщик ↔ движок (spec 010)', () => {
     const kinds = changes.map((c) => Object.keys(c)[0]);
     expect(kinds.sort()).toEqual(['list', 'nutritionDay', 'settings', 'task', 'task', 'task']);
     const taskChange = (id: string) => changes.find((c) => (c.task as { id?: string } | undefined)?.id === id);
-    expect(taskChange('t1')).toMatchObject({ task: { status: 'done', listId: 'l1', minutes: 90 } });
+    // Правка существующей задачи несёт только изменённое поле — остальные не переписываются
+    expect(taskChange('t1')).toEqual({ task: { id: 't1', status: 'done' } });
     expect(taskChange('t2')).toEqual({ task: { id: 't2', deleted: true } });
     expect(taskChange('t3')).toMatchObject({ task: { listId: 'l2', minutes: null, day: '' } });
     const day = changes.find((c) => c.nutritionDay) as { nutritionDay: { entries: unknown[] } };
@@ -180,8 +181,6 @@ describe('планировщик ↔ движок (spec 010)', () => {
           kind: 'monthly', interval: 1, weekdays: [], monthDay: 20, startDay: '2026-10-01', endDay: '', count: 0,
         },
         occurrences: [{ day: '2026-10-20', excluded: false, done: true, doneSteps: [0] }],
-        origin: null,
-        source: null,
       },
     });
     const periods = changes.filter((c) => c.goalPeriod);
@@ -238,10 +237,30 @@ describe('планировщик ↔ движок (spec 010)', () => {
     next.lists[0].color = 7;
     next.events[0].isHoliday = false;
     const changes = diffChanges(state, next) as {
-      list?: { color: number }; event?: { allDay: boolean; isHoliday: boolean };
+      list?: { color: number }; event?: Record<string, unknown>;
     }[];
     expect(changes.find((c) => c.list)!.list!.color).toBe(7);
-    expect(changes.find((c) => c.event)!.event).toMatchObject({ allDay: true, isHoliday: false });
+    // Уходит только изменённое поле: неизменённое «весь день» не переписывается
+    expect(changes.find((c) => c.event)!.event).toEqual({
+      id: 'e3', weekdays: null, repeat: null, isHoliday: false,
+    });
+  });
+
+  it('правка одного поля не переписывает остальные (сведение по полям между устройствами)', () => {
+    const before = fromEngineState(ENGINE);
+    const after: PlannerState = structuredClone(before);
+    after.tasks[0].start = '17:00';
+    after.events[1].name = 'Бассейн 50 м';
+    const changes = diffChanges(before, after);
+    expect(changes[0]).toEqual({ task: { id: 't1', start: '17:00' } });
+    // У события правило повтора уходит всегда (вместе со сбросом правила прежнего формата)
+    expect(Object.keys(changes[1].event as object).sort()).toEqual(['id', 'name', 'repeat', 'weekdays']);
+    // Отметка экземпляра ряда — только день экземпляра, без времени и названия задачи
+    const marked: PlannerState = structuredClone(before);
+    marked.events[1].occurrences!.push({ day: '2026-10-19', excluded: true });
+    const markChange = diffChanges(before, marked)[0].event as Record<string, unknown>;
+    expect(Object.keys(markChange).sort()).toEqual(['id', 'occurrences', 'repeat', 'weekdays']);
+    expect(markChange.occurrences).toEqual([{ day: '2026-10-19', excluded: true, done: false, doneSteps: [] }]);
   });
 
   it('перенос этапа 1: числовые id получают префикс устройства, последним — отметка переноса', () => {

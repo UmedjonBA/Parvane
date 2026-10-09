@@ -3,10 +3,12 @@ import { memo } from '../../../lib/teact/teact';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDay, formatHours, formatWeekday } from './plannerFormat';
 import {
-  countConflicts, countUnrated, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getLoadFraction,
-  getMonthKeys, getMonthOffset, getTasksForDay, instanceKey,
+  formatDay, formatHours, formatWeekday, listColorStyle,
+} from './plannerFormat';
+import {
+  countConflicts, countUnrated, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getListColor,
+  getLoadFraction, getMonthGridKeys, getTasksForDay, instanceKey, toDayKey,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -73,39 +75,46 @@ const PlannerMonth = ({
     e.dataTransfer.effectAllowed = 'move';
   });
 
-  const offset = getMonthOffset(month);
-  const days = getMonthKeys(month);
-  const trailing = (7 - ((offset + days.length) % 7)) % 7;
+  // Полные недели: дни соседних месяцев показаны серым, нажатие переходит к ним
+  const days = getMonthGridKeys(month);
+  const monthPrefix = toDayKey(month).slice(0, 7);
 
   return (
     <div className={styles.month} role="grid">
       {WEEKDAY_INDEXES.map((index) => (
         <span key={`weekday${index}`} className={styles.weekday}>{formatWeekday(lang, index)}</span>
       ))}
-      {Array.from({ length: offset }, (_, i) => <span key={`before${i}`} className={styles.blank} />)}
       {days.map((day) => {
         const minutes = getDayLoad(state, day);
         const deadlines = getDeadlines(state, day);
         const unrated = countUnrated(state, day);
         const conflicts = countConflicts(state, day);
         const fraction = getLoadFraction(state, minutes);
+        const events = getEventsForDay(state, day);
         const entries = [
           ...deadlines.map((task) => ({
             key: `due${task.id}`,
             taskId: task.id,
             label: lang('PlannerDeadlinePreview', { name: task.name }),
             isDue: true,
+            color: getListColor(state, task.project),
           })),
           ...getTasksForDay(state, day).filter((task) => !deadlines.includes(task)).map((task) => ({
             key: `task${instanceKey(task)}`,
             taskId: instanceKey(task),
             label: `${task.start ? `${task.start} ` : ''}${task.name}`,
             isDue: false,
+            color: getListColor(state, task.project),
           })),
-          ...getEventsForDay(state, day).map((event) => ({
-            key: `event${instanceKey(event)}`, taskId: undefined, label: `${event.start} ${event.name}`, isDue: false,
+          ...events.map((event) => ({
+            key: `event${instanceKey(event)}`,
+            taskId: undefined,
+            label: event.isAllDay ? event.name : `${event.start} ${event.name}`,
+            isDue: false,
+            color: 0,
           })),
         ];
+        const isHoliday = events.some((event) => event.isHoliday);
         const weekday = fromDayKey(day).getDay();
 
         return (
@@ -116,6 +125,8 @@ const PlannerMonth = ({
               day === today && styles.dayToday,
               day === picked && styles.daySelected,
               (weekday === 0 || weekday === 6) && styles.dayWeekend,
+              isHoliday && styles.dayHoliday,
+              !day.startsWith(monthPrefix) && styles.dayOutside,
             )}
             style={`--planner-load: ${Math.round(fraction * 100)}%; --planner-load-hue: ${getLoadHue(fraction)}`}
             data-day={day}
@@ -140,7 +151,11 @@ const PlannerMonth = ({
               <button
                 key={entry.key}
                 type="button"
-                className={buildClassName(styles.preview, styles.previewTask, entry.isDue && styles.previewDue)}
+                className={buildClassName(
+                  styles.preview, styles.previewTask, entry.isDue && styles.previewDue,
+                  Boolean(entry.color) && styles.previewColored,
+                )}
+                style={listColorStyle(entry.color)}
                 title={entry.label}
                 draggable
                 data-preview-task={entry.taskId}
@@ -162,7 +177,6 @@ const PlannerMonth = ({
           </div>
         );
       })}
-      {Array.from({ length: trailing }, (_, i) => <span key={`after${i}`} className={styles.blank} />)}
     </div>
   );
 };

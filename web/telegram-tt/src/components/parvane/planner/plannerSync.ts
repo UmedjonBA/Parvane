@@ -342,13 +342,32 @@ function settingsChange(state: PlannerState): PlannerChange {
 }
 
 /** Разница состояний → изменения для движка (объект целиком — LWW по полям у движка). */
+// Правка существующего объекта несёт только изменившиеся поля: движок сводит объект по полям, и
+// «попутная» запись неизменённых полей затирала бы правку тех же полей с другого устройства
+// (правка времени на одном устройстве терялась, когда второе в это время отмечало выполнение)
+function onlyChanged(kind: 'task' | 'event' | 'list', change: PlannerChange, before?: PlannerChange): PlannerChange {
+  if (!before) return change;
+  const next = change[kind] as Record<string, unknown>;
+  const old = before[kind] as Record<string, unknown>;
+  const fields = Object.entries(next).filter(([key, value]) => (
+    // У события правило уходит всегда, парой: `weekdays: null` снимает правило прежнего формата
+    // («по дням недели»), а `repeat` несёт то же правило в новом
+    key === 'id' || (kind === 'event' && (key === 'weekdays' || key === 'repeat'))
+    || (key === 'occurrences'
+      ? (value as unknown[]).length > 0 : JSON.stringify(value) !== JSON.stringify(old[key]))
+  ));
+  return { [kind]: Object.fromEntries(fields) };
+}
+
 export function diffChanges(previous: PlannerState, next: PlannerState): PlannerChange[] {
   const changes: PlannerChange[] = [];
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   next.lists.forEach((list) => {
     const before = previous.lists.find((l) => l.id === list.id);
-    if (!before || !same(before, list)) changes.push(listChange(list));
+    if (!before || !same(before, list)) {
+      changes.push(onlyChanged('list', listChange(list), before && listChange(before)));
+    }
   });
   previous.lists.forEach((list) => {
     if (!next.lists.some((l) => l.id === list.id)) changes.push({ list: { id: list.id, deleted: true } });
@@ -356,7 +375,9 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
 
   next.tasks.forEach((task) => {
     const before = previous.tasks.find((t) => t.id === task.id);
-    if (!before || !same(before, task)) changes.push(taskChange(next, task, before));
+    if (!before || !same(before, task)) {
+      changes.push(onlyChanged('task', taskChange(next, task, before), before && taskChange(previous, before)));
+    }
   });
   previous.tasks.forEach((task) => {
     if (!next.tasks.some((t) => t.id === task.id)) changes.push({ task: { id: task.id, deleted: true } });
@@ -364,7 +385,9 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
 
   next.events.forEach((event) => {
     const before = previous.events.find((e) => e.id === event.id);
-    if (!before || !same(before, event)) changes.push(eventChange(event, before));
+    if (!before || !same(before, event)) {
+      changes.push(onlyChanged('event', eventChange(event, before), before && eventChange(before)));
+    }
   });
   previous.events.forEach((event) => {
     if (!next.events.some((e) => e.id === event.id)) changes.push({ event: { id: event.id, deleted: true } });

@@ -2,11 +2,14 @@ import { memo } from '../../../lib/teact/teact';
 
 import type { PlannerRepeat, PlannerRepeatKind } from './plannerModel';
 
-import { formatWeekday } from './plannerFormat';
-import { MAX_REPEAT_COUNT, MAX_REPEAT_INTERVAL, PLANNER_REPEAT_KINDS } from './plannerModel';
+import { formatRepeat, formatWeekday } from './plannerFormat';
+import {
+  MAX_REPEAT_COUNT, MAX_REPEAT_INTERVAL, PLANNER_REPEAT_KINDS, validateRepeat,
+} from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useUniqueId from '../../../hooks/useUniqueId';
 
 import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
@@ -38,6 +41,15 @@ const KIND_KEYS = {
   monthly: 'PlannerRepeatKindMonthly',
   yearly: 'PlannerRepeatKindYearly',
 } as const satisfies Record<PlannerRepeatKind, string>;
+
+// Подпись шага называет единицу: «Повторять каждые (недель)»
+const INTERVAL_KEYS = {
+  none: 'PlannerRepeatIntervalDays',
+  daily: 'PlannerRepeatIntervalDays',
+  weekly: 'PlannerRepeatIntervalWeeks',
+  monthly: 'PlannerRepeatIntervalMonths',
+  yearly: 'PlannerRepeatIntervalYears',
+} as const satisfies Record<PlannerRepeatDraft['kind'], string>;
 
 // Понедельник — первым; значения — как `Date.getDay`
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
@@ -80,6 +92,11 @@ export function draftToRepeat(draft: PlannerRepeatDraft): PlannerRepeat | undefi
 const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
   const lang = useLang();
 
+  const selectId = useUniqueId();
+  // Правило словами — как оно будет показано у дела; негодный черновик не описывается
+  const repeat = draftToRepeat(value);
+  const summary = repeat && !validateRepeat(repeat) ? formatRepeat(lang, repeat) : undefined;
+
   const set = useLastCallback((patch: Partial<PlannerRepeatDraft>) => {
     onChange((previous) => ({ ...previous, ...patch }));
   });
@@ -108,7 +125,13 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
 
   return (
     <div className={styles.repeat} data-repeat-kind={value.kind}>
-      <Select label={lang('PlannerRepeatLabel')} value={value.kind} hasArrow onChange={handleKind}>
+      <Select
+        id={`planner-repeat-kind-${selectId}`}
+        label={lang('PlannerRepeatLabel')}
+        value={value.kind}
+        hasArrow
+        onChange={handleKind}
+      >
         <option value="none">{lang('PlannerRepeatKindNone')}</option>
         {PLANNER_REPEAT_KINDS.map((kind) => <option key={kind} value={kind}>{lang(KIND_KEYS[kind])}</option>)}
       </Select>
@@ -116,7 +139,7 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
         <>
           <div className={styles.fields}>
             <PlannerField
-              label={lang('PlannerRepeatInterval')}
+              label={lang(INTERVAL_KEYS[value.kind])}
               type="number"
               value={value.interval}
               min={1}
@@ -162,6 +185,7 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
           )}
           <div className={styles.fields}>
             <Select
+              id={`planner-repeat-end-${selectId}`}
               label={lang('PlannerRepeatEnd')}
               value={value.endKind}
               hasArrow
@@ -194,6 +218,7 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
               />
             )}
           </div>
+          {summary && <p className={styles.small} data-repeat-summary>{summary}</p>}
         </>
       )}
     </div>

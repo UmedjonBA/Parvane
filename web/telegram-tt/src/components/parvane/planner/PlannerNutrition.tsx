@@ -8,7 +8,7 @@ import type {
 import buildClassName from '../../../util/buildClassName';
 import { formatNumber } from './plannerFormat';
 import {
-  getGoalRecordForDay, getNutrientGoal, getNutrientStatus, getNutrientTotal, isKnownNumber, makeFoodEntry,
+  getNutrientGoal, getNutrientStatus, getNutrientTotal, isDayClosed, isKnownNumber, makeFoodEntry,
   PLANNER_GOAL_METRICS, PLANNER_MEALS, PLANNER_METRICS, PLANNER_NUTRIENTS,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
@@ -98,6 +98,9 @@ const PlannerNutrition = ({
 
   const record = state.nutrition[day] || { entries: [], isComplete: false };
   const isFuture = day > today;
+  const isPast = day < today;
+  // Прошедший день завершён сам (spec 013), кнопки завершения нет
+  const isClosed = isDayClosed(state, day, today);
 
   const openForm = useLastCallback((index?: number) => {
     const entry = index === undefined ? undefined : record.entries[index];
@@ -182,7 +185,7 @@ const PlannerNutrition = ({
     changeDay((target) => {
       if (index === undefined) target.entries.push(entry);
       else target.entries[index] = entry;
-      target.isComplete = false;
+      if (!isPast) target.isComplete = false;
     }, lang(index === undefined ? 'PlannerNoticeFoodAdded' : 'PlannerNoticeFoodUpdated'));
     return closeForm();
   });
@@ -191,7 +194,7 @@ const PlannerNutrition = ({
     const index = editedIndex!;
     changeDay((target) => {
       target.entries.splice(index, 1);
-      target.isComplete = false;
+      if (!isPast) target.isComplete = false;
     }, lang('PlannerNoticeFoodDeleted'));
     closeForm();
   });
@@ -201,19 +204,8 @@ const PlannerNutrition = ({
     if (waterMl !== undefined && !isKnownNumber(waterMl)) return setError(lang('PlannerErrorWater'));
     return changeDay((target) => {
       target.waterMl = waterMl;
-      target.isComplete = false;
+      if (!isPast) target.isComplete = false;
     }, lang('PlannerNoticeWaterUpdated'));
-  });
-
-  // Завершение дня фиксирует все шесть целей дня (FR-012) — смена целей задним числом его не переоценивает
-  const handleComplete = useLastCallback((isComplete: boolean) => {
-    if (isFuture || !record.entries.length) return setError(lang('PlannerErrorCompleteEmpty'));
-    setError(undefined);
-    const goals = structuredClone(getGoalRecordForDay(state, day)?.goals || {});
-    return changeDay((target) => {
-      target.isComplete = isComplete;
-      if (isComplete) target.fixedGoals = goals;
-    }, lang(isComplete ? 'PlannerNoticeFoodDayClosed' : 'PlannerNoticeFoodDayOpened'));
   });
 
   const hasMissingMacros = PLANNER_METRICS.slice(1).some((metric) => getNutrientTotal(state, day, metric).missing);
@@ -307,7 +299,13 @@ const PlannerNutrition = ({
             autoFocus
             onChange={handleNameChange}
           />
-          <Select label={lang('PlannerFoodMeal')} value={meal} hasArrow onChange={handleMealChange}>
+          <Select
+            id="planner-food-meal"
+            label={lang('PlannerFoodMeal')}
+            value={meal}
+            hasArrow
+            onChange={handleMealChange}
+          >
             {PLANNER_MEALS.map((item) => <option key={item} value={item}>{lang(MEAL_KEYS[item])}</option>)}
           </Select>
           <Checkbox label={lang('PlannerFoodPer100')} checked={isPer100} onCheck={setIsPer100} />
@@ -347,14 +345,8 @@ const PlannerNutrition = ({
           onCommit={handleWater}
         />
       </details>
-      <Checkbox
-        label={lang('PlannerFoodDayComplete')}
-        checked={record.isComplete}
-        disabled={isFuture}
-        onCheck={handleComplete}
-      />
       {!isFormOpen && error && <p className={styles.error} role="alert">{error}</p>}
-      {record.isComplete && (
+      {isClosed && Boolean(record.entries.length) && (
         <p className={styles.small}>
           {lang('PlannerFoodDayResult', { status: formatFoodStatus(lang, state, day) })}
         </p>

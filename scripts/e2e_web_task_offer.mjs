@@ -78,10 +78,10 @@ async function expectTaskInPlan(page, name, timeout = SYNC_TIMEOUT_MS) {
   await planner.getByText('Calendar', { exact: true }).first().click();
   await planner.locator(`[data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
   await planner.getByText('Schedule', { exact: true }).first().click();
-  await planner.locator('aside').getByRole('button', { name, exact: false }).first()
+  await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: 'visible', timeout })
     .catch(() => assert.fail(`${name}: ожидалось в расписании дня`));
-  const rows = await planner.locator('aside').getByRole('button', { name, exact: false }).count();
+  const rows = await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).count();
   assert.equal(rows, 1, `${name}: задача должна быть в плане ровно один раз`);
   await closePlanner(page);
 }
