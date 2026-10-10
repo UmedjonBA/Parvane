@@ -108,11 +108,12 @@ async function register(context, nick, telegramId) {
   const confirm = await botConfirmV2(gatewayUrl, SECRET, token, telegramId, `tg${telegramId}`);
   assert.equal(confirm.ok, true, `подтверждение: ${JSON.stringify(confirm)}`);
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const dialogText = await dismissRecoveryKeyDialog(page, STEP_TIMEOUT_MS);
-  assert(dialogText, `${nick}: диалог ключа восстановления не показан`);
-  const key = KEY_PATTERN.exec(dialogText)?.[1];
-  assert(key, `${nick}: ключ в диалоге не найден: ${dialogText}`);
-  return { ...session, key, dialogText, address: `${nick}@local` };
+  // Ключ уходит владельцу в Telegram — окна с ключом в приложении нет
+  const [message] = await pullFor(telegramId, 'key');
+  assert.equal(message.user, `${nick}@local`);
+  assert.match(message.recoveryKey, KEY_PATTERN, `${nick}: бот получил не ключ`);
+  assert.equal(await dismissRecoveryKeyDialog(page, 2500), undefined, `${nick}: окно с ключом показано, хотя ключ ушёл в Telegram`);
+  return { ...session, key: message.recoveryKey, address: `${nick}@local` };
 }
 
 /** Вход по нику и паролю на новом устройстве (без регистрации). */
@@ -215,18 +216,13 @@ try {
   const aliceContext1 = await browser.newContext({ viewport: WIDE });
   const alice1 = await register(aliceContext1, aliceNick, TG_ALICE);
   sessions.alice1 = alice1;
-  assert.match(alice1.dialogText, /Telegram/, 'диалог ключа говорит про Telegram');
-  const [keyMessage] = await pullFor(TG_ALICE, 'key');
-  assert.equal(keyMessage.user, alice1.address);
-  assert.equal(keyMessage.recoveryKey, alice1.key, 'в Telegram ушёл тот же ключ, что в диалоге');
   await new Promise((resolve) => { setTimeout(resolve, 3000); });
   const repeated = (await botPullV2(gatewayUrl, SECRET, [], 0)).filter((m) => m.telegramId === TG_ALICE);
   assert.equal(repeated.length, 0, 'доставленный ключ повторно не шлётся');
-  console.log('OK: ключ восстановления ушёл владельцу в Telegram — тот же, что в диалоге');
+  console.log('OK: ключ восстановления ушёл владельцу в Telegram, окна с ключом в приложении нет');
 
   const bobContext = await browser.newContext({ viewport: WIDE });
   const bob = await register(bobContext, bobNick, TG_BOB);
-  await pullFor(TG_BOB, 'key');
 
   // ── Переписка и задача планировщика на первом устройстве ──
   const fromAlice = `from-alice-${suffix}`;
@@ -385,7 +381,6 @@ try {
     const carolContext1 = await browser.newContext({ viewport: WIDE });
     const carol1 = await register(carolContext1, carolNick, TG_CAROL);
     sessions.carol1 = carol1;
-    await pullFor(TG_CAROL, 'key');
     const fromCarol = `from-carol-${suffix}`;
     await openPrivateChatStrict(carol1.page, bob.address);
     await sendText(carol1.page, fromCarol);

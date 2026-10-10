@@ -1,4 +1,6 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useMemo, useState,
+} from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
 import type { PlannerCalendarView, PlannerSlot } from './plannerModel';
@@ -25,8 +27,7 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
-import PlannerAgenda from './PlannerAgenda';
-import PlannerDay from './PlannerDay';
+import PlannerDay, { buildDaySummary } from './PlannerDay';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerMonth from './PlannerMonth';
 import PlannerPeriodBar from './PlannerPeriodBar';
@@ -62,6 +63,7 @@ const CALENDAR_VIEW_LABELS = {
   agenda: 'PlannerCalAgenda',
 } as const satisfies Record<PlannerCalendarView, string>;
 const MS_IN_SECOND = 1000;
+const MINUTES_IN_HOUR = 60;
 // Ширина, до которой раскладка — одна колонка (`Planner.module.scss`, 925px)
 const NARROW_WIDTH = 925;
 
@@ -182,6 +184,15 @@ const Planner = ({ isMobile }: OwnProps) => {
   const handleCreateForDay = useLastCallback((day: string) => {
     setPicked(day);
     openForm({ day });
+  });
+
+  // Нажатие на свободное время в сетке дня: новое дело с этого времени на час
+  const handleCreateAt = useLastCallback((day: string, start: number) => {
+    openForm({ day, slot: { day, start, end: start + MINUTES_IN_HOUR } });
+  });
+
+  const handleAddToDay = useLastCallback(() => {
+    openForm({ day: picked });
   });
 
   const handleCreateInDay = useLastCallback((slot?: PlannerSlot) => {
@@ -307,6 +318,8 @@ const Planner = ({ isMobile }: OwnProps) => {
   const calendarSegments = PLANNER_CALENDAR_VIEWS
     .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) }));
   const isMonthView = calendarView === 'month';
+  const daySummary = buildDaySummary(lang, state, picked);
+  const pickedDays = useMemo(() => [picked], [picked]);
   const settingsButton = (
     <Button
       round
@@ -460,15 +473,6 @@ const Planner = ({ isMobile }: OwnProps) => {
                   today={today}
                   onOpenMonth={handleOpenMonth}
                 />
-              ) : calendarView === 'agenda' ? (
-                <PlannerAgenda
-                  state={state}
-                  fromDay={picked}
-                  today={today}
-                  onPickDay={handlePickDay}
-                  onOpenTask={handleOpenTask}
-                  onOpenEvent={handleOpenEvent}
-                />
               ) : isMonthView ? (
                 <PlannerMonth
                   state={state}
@@ -483,7 +487,7 @@ const Planner = ({ isMobile }: OwnProps) => {
               ) : (
                 <PlannerWeek
                   state={state}
-                  days={calendarView === 'week' ? getWeekKeys(picked) : [picked]}
+                  days={getWeekKeys(picked)}
                   picked={picked}
                   today={today}
                   onPickDay={handlePickDay}
@@ -504,24 +508,55 @@ const Planner = ({ isMobile }: OwnProps) => {
                 >
                   {lang('PlannerBackToCalendar')}
                 </Button>
-                {!isNarrow && <h2 className={styles.panelTitle}>{formatDayLong(lang, picked)}</h2>}
-                <PlannerDay
-                  state={state}
-                  day={picked}
-                  isStrip={isNarrow}
-                  inlineForm={isInlineForm ? (
-                    <PlannerTaskForm
+                {isNarrow ? (
+                  <PlannerDay
+                    state={state}
+                    day={picked}
+                    isStrip={isNarrow}
+                    inlineForm={isInlineForm ? (
+                      <PlannerTaskForm
+                        state={state}
+                        params={formParams}
+                        onCreated={handleCreatedInline}
+                        onCancel={handleCancelCreate}
+                      />
+                    ) : undefined}
+                    inlineFormStart={isInlineForm ? formParams.slot?.start : undefined}
+                    onOpenTask={handleOpenTask}
+                    onOpenEvent={handleOpenEvent}
+                    onCreateTask={handleCreateInDay}
+                  />
+                ) : (
+                  <>
+                    <div className={styles.panelHead}>
+                      <h2 className={styles.panelTitle}>{formatDayLong(lang, picked)}</h2>
+                      <Button
+                        round
+                        size="tiny"
+                        color="translucent"
+                        className={styles.panelAdd}
+                        iconName="add"
+                        ariaLabel={lang('PlannerAddTaskForDay')}
+                        onClick={handleAddToDay}
+                      />
+                    </div>
+                    <p className={buildClassName(styles.summary, daySummary.isOver && styles.warning)}>
+                      {daySummary.text}
+                    </p>
+                    <PlannerWeek
                       state={state}
-                      params={formParams}
-                      onCreated={handleCreatedInline}
-                      onCancel={handleCancelCreate}
+                      days={pickedDays}
+                      picked={picked}
+                      today={today}
+                      isPanel
+                      onPickDay={pickDay}
+                      onCreateForDay={handleCreateForDay}
+                      onCreateAt={handleCreateAt}
+                      onOpenTask={handleOpenTask}
+                      onOpenEvent={handleOpenEvent}
                     />
-                  ) : undefined}
-                  inlineFormStart={isInlineForm ? formParams.slot?.start : undefined}
-                  onOpenTask={handleOpenTask}
-                  onOpenEvent={handleOpenEvent}
-                  onCreateTask={handleCreateInDay}
-                />
+                  </>
+                )}
               </aside>
             )}
           </div>

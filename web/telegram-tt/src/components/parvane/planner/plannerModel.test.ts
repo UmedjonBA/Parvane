@@ -4,7 +4,7 @@ import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
   buildDayIndex, countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance,
-  expandRepeat, findSlots, fitsBookingWindow, freezePastGoals, getDayAvailability, getDayLoad, getDefaultEventEnd,
+  expandRepeat, findSlots, freezePastGoals, getDayAvailability, getDayLoad, getDefaultEventEnd,
   getEligibleTasks, getEventsForDay, getGoalRecordForDay, getGoalsForDay, getListColor, getMonthGridKeys,
   getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
   getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, makeFoodEntry, moveTask, nextOpenInstance,
@@ -107,14 +107,6 @@ describe('планировщик: поиск окна и проверки вво
     expect(validateEvent({
       name: 'a', start: '10:00', end: '11:00', repeat: { kind: 'daily', interval: 1, startDay: '' },
     })).toBe('startDay');
-  });
-
-  it('задача из свободного окна обязана в него поместиться', () => {
-    const state = createEmptyPlannerState();
-    const window = { day: TODAY, start: 600, end: 660 };
-    expect(fitsBookingWindow(state, window, { day: TODAY, start: '10:00', minutes: 60 })).toBe(true);
-    expect(fitsBookingWindow(state, window, { day: TODAY, start: '10:30', minutes: 60 })).toBe(false);
-    expect(fitsBookingWindow(state, window, { day: '2026-10-09', start: '10:00', minutes: 30 })).toBe(false);
   });
 });
 
