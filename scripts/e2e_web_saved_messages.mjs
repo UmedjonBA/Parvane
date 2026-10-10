@@ -94,6 +94,9 @@ try {
   console.log('OK: ответ собеседника с отстающими часами стоит ниже сообщения');
 
   await openSavedMessages(page);
+  // Пустое «Избранное» нового аккаунта: вкладки профиля показывают пустое состояние, а не загрузку
+  await expectSavedProfileTabs(page);
+  console.log('OK: вкладки пустого Избранного не крутят загрузку');
   await sendText(page, m1);
   await expectSent(page, m1);
   await sendText(page, m2);

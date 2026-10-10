@@ -880,7 +880,8 @@
 "MenuMore" = "Ещё";
 "MenuNightMode" = "Ночной режим";
 "AriaSettingsEditProfilePhoto" = "Изменить фото профиля";
-"MenuUIFeaturesSwitch" = "Функции интерфейса";
+"MenuUIFeaturesSwitch" = "Анимации";
+"MenuReportBug" = "Сообщить об ошибке";
 "RemoveEffect" = "Убрать эффект";
 "ReplyInPrivateMessage" = "Ответить в личных сообщениях";
 "ProfileMenuSetMainTab" = "Сделать основной вкладкой";

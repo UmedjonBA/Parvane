@@ -224,7 +224,7 @@ const LeftSideMenuItems = ({
               icon="bug"
               onClick={openBugReport}
             >
-              Report a Bug
+              {lang('MenuReportBug')}
             </MenuItem>
             {IS_BETA && (
               <MenuItem

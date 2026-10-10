@@ -210,6 +210,7 @@ const TABS: LocalTabProps[] = [
   { type: 'gif', key: 'ProfileTabGifs' },
 ];
 
+const NO_MESSAGES: Record<number, ApiMessage> = {};
 const CONTENT_PANEL_SHOW_DELAY = 300;
 const HIDDEN_RENDER_DELAY = 1000;
 const INTERSECTION_THROTTLE = 500;
@@ -1404,7 +1405,9 @@ export default memo(withGlobal<OwnProps>(
     const chat = selectChat(global, chatId);
     const chatFullInfo = selectChatFullInfo(global, chatId);
     const userFullInfo = selectUserFullInfo(global, chatId);
-    const messagesById = selectChatMessages(global, chatId);
+    // Parvane: у чата без единого сообщения (новое «Избранное») записи сообщений нет вовсе —
+    // вкладки медиа ждали её и бесконечно крутили загрузку вместо пустого состояния
+    const messagesById = selectChatMessages(global, chatId) || NO_MESSAGES;
 
     const tabState = selectTabState(global);
     const { chatInfo, savedGifts } = tabState;

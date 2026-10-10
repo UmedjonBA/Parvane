@@ -195,6 +195,8 @@ const RightHeader: FC<OwnProps & StateProps> = ({
     openEditTopicPanel,
     updateGiftProfileFilter,
     openSettingsScreen,
+    openChat,
+    toggleChatInfo,
   } = getActions();
 
   const [isDeleteDialogOpen, openDeleteDialog, closeDeleteDialog] = useFlag();
@@ -249,6 +251,12 @@ const RightHeader: FC<OwnProps & StateProps> = ({
   });
 
   const handleEditProfile = useLastCallback(() => {
+    // Parvane: настройки живут в левой колонке, на телефоне она скрыта под
+    // профилем и чатом «Избранное» — закрываем их, иначе экран не виден
+    if (isMobile) {
+      toggleChatInfo({ force: false });
+      openChat({ id: undefined });
+    }
     openSettingsScreen({ screen: SettingsScreens.EditProfile });
   });
 
