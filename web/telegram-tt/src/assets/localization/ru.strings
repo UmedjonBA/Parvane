@@ -560,7 +560,7 @@
 "ChannelSignMessages" = "Подписывать сообщения";
 "ChannelAdministrators" = "Администраторы";
 "ChannelSubscribers" = "Подписчики";
-"ChannelBlockedUsers" = "Удалённые пользователи";
+"ChannelBlockedUsers" = "Чёрный список";
 "ChannelDelete" = "Удалить канал";
 "ChannelLeave" = "Покинуть канал";
 "ChannelDeleteAlert" = "При удалении канала будут удалены все подписчики, а все публикации будут потеряны. Всё равно удалить канал?";

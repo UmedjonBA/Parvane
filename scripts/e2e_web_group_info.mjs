@@ -462,6 +462,58 @@ try {
   Object.entries(sessions).forEach(([name, session]) => {
     assert.deepEqual(session.errors, [], `${name} page errors: ${session.errors.join('; ')}`);
   });
+  // ── Режим вступления после создания: переключатель «по заявке» меняет основную ссылку ──
+  const pollUntil = async (check, message) => {
+    for (let waited = 0; waited < 30_000; waited += 500) {
+      if (await check().catch(() => false)) return;
+      await alicePage.waitForTimeout(500);
+    }
+    assert.fail(message);
+  };
+  const primaryOf = async () => {
+    const list = await callProviderForChat(alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' });
+    return list.result?.invites?.find((item) => item.isPermanent);
+  };
+  const toggleJoinMode = async (expected) => {
+    const rightMode = await openGroupManagement(alicePage, groupTitle);
+    const row = rightMode.locator('.ListItem', { hasText: 'Join by request' }).first();
+    await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await rightMode.getByText('Choose photo').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await pollUntil(async () => !(await row.getAttribute('class')).includes('disabled'), 'переключатель режима недоступен');
+    await row.locator('.ListItem-button').click();
+    await alicePage.locator('.Modal .modal-dialog').getByRole('button', { name: 'Confirm' }).click();
+    await pollUntil(async () => Boolean((await primaryOf())?.isRequestNeeded) === expected, 'основная ссылка не сменила режим');
+    await pollUntil(async () => (await row.locator('input').isChecked()) === expected, 'переключатель не показывает новый режим');
+    if (process.env.PARVANE_E2E_SHOT_DIR) {
+      await alicePage.setViewportSize({ width: 390, height: 844 });
+      await alicePage.waitForTimeout(800);
+      // Смена ширины возвращает колонку к профилю — открываем управление заново
+      if (!(await alicePage.locator('#RightColumn .Management').isVisible())) {
+        await alicePage.locator('#RightColumn').getByRole('button', { name: 'Edit' }).click();
+        await alicePage.locator('#RightColumn .Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+        await alicePage.waitForTimeout(800);
+      }
+      const iconDisplay = await alicePage.evaluate(() => getComputedStyle(
+        document.querySelector('#RightColumn .AvatarEditable label:not(.action) .icon'),
+      ).display);
+      assert.notEqual(iconDisplay, 'none', 'значок камеры в круге фото группы скрыт');
+      await alicePage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/manage-group-${expected ? 'request' : 'open'}.png` });
+      await alicePage.setViewportSize({ width: 1280, height: 720 });
+      await alicePage.waitForTimeout(500);
+    }
+    await closeRightColumn(alicePage);
+  };
+  const openPrimary = await primaryOf();
+  assert.ok(openPrimary && !openPrimary.isRequestNeeded, `основная ссылка до смены режима: ${JSON.stringify(openPrimary)}`);
+  await toggleJoinMode(true);
+  const requestPrimary = await primaryOf();
+  assert.notEqual(requestPrimary.link, openPrimary.link, 'основная ссылка не заменена');
+  const revokedList = await callProviderForChat(alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat', isRevoked: true });
+  assert.ok(revokedList.result.invites.some((item) => item.link.split('#')[0] === openPrimary.link.split('#')[0]),
+    'прежняя основная ссылка не отозвана');
+  await toggleJoinMode(false);
+  console.log('OK: режим вступления меняется после создания (по заявке ↔ по ссылке), прежняя основная ссылка отозвана');
+
   console.log('OK: фото и описание группы, права по умолчанию (композер, вложения, сервер, приёмный фильтр), '
     + 'живые изменения открытых экранов, догон отсутствовавшего устройства, заявки на вступление');
 } catch (err) {

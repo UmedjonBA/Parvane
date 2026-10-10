@@ -29,6 +29,7 @@ import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
+import ManageJoinMode from './ManageJoinMode';
 
 import './Management.scss';
 
@@ -255,6 +256,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
             currentAvatarBlobUrl={currentAvatarBlobUrl}
             onChange={handleSetPhoto}
             disabled={!canChangeInfo}
+            actionLabel={lang('ParvaneChoosePhoto')}
           />
         )}
         <Island>
@@ -297,19 +299,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               <span className="subtitle">{hasLinkedChat ? lang('DiscussionUnlink') : lang('Add')}</span>
             </ListItem>
           )}
-          {canInvite && (
-            <ListItem
-              icon="link"
-              onClick={handleClickInvites}
-              multiline
-              disabled={!exportedInvites}
-            >
-              <span className="title">{lang('GroupInfo.InviteLinks')}</span>
-              <span className="subtitle">
-                {exportedInvites ? formatInteger(exportedInvites.length) : lang('Loading')}
-              </span>
-            </ListItem>
-          )}
+          {canInvite && <ManageJoinMode chatId={chatId} exportedInvites={exportedInvites} />}
           {IS_CHANNEL_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"
@@ -370,6 +360,19 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
             <span className="title" dir="auto">{lang('ChannelSubscribers')}</span>
             <span className="subtitle" dir="auto">{formatInteger(chat.membersCount!)}</span>
           </ListItem>
+          {canInvite && (
+            <ListItem
+              icon="link"
+              onClick={handleClickInvites}
+              multiline
+              disabled={!exportedInvites}
+            >
+              <span className="title">{lang('GroupInfo.InviteLinks')}</span>
+              <span className="subtitle">
+                {exportedInvites ? formatInteger(exportedInvites.length) : lang('Loading')}
+              </span>
+            </ListItem>
+          )}
           <ListItem
             icon="delete-user"
             multiline

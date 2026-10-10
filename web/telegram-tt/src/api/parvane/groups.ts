@@ -616,6 +616,27 @@ export function createGroupController(deps: GroupDependencies) {
     };
   }
 
+  // Режим вступления после создания (соглашение web, spec 014): режим — это вид основной ссылки.
+  // Смена режима выпускает новую основную ссылку и отзывает прежние простые ссылки другого вида —
+  // прежняя основная ссылка перестаёт работать
+  async function setJoinByRequest({ chatId, isEnabled }: { chatId: string; isEnabled: boolean }) {
+    const groupId = deps.getStore().getAddressForId(chatId);
+    const v2 = groupId ? v2Of(groupId) : undefined;
+    if (!v2 || !groupId || !isInviteManager(await getSelfMember(groupId))) return false;
+    const primary = await ensureV2Primary(v2, groupId);
+    if (!primary) return false;
+    if (Boolean(primary.isRequestNeeded) === isEnabled) return true;
+    const next = await v2.createInvite(groupId, isEnabled ? { isRequestNeeded: true } : {});
+    if (!next) return false;
+    const links = await v2.listInvites(groupId);
+    for (const link of links) {
+      const isPlain = !link.title && !link.expiresAt && !link.usageLimit;
+      if (!isPlain || Boolean(link.isRequestNeeded) === isEnabled) continue;
+      await v2.revokeInvite(groupId, link.url);
+    }
+    return true;
+  }
+
   // Сервер не правит параметры ссылки — экран tt зовёт это для отзыва
   // (`isRevoked: true`); остальные правки — «отзови и создай новую»
   async function editExportedChatInvite({ peer, link, isRevoked }: {
@@ -803,6 +824,7 @@ export function createGroupController(deps: GroupDependencies) {
     refresh,
     register,
     setGroupInfo,
+    setJoinByRequest,
     updateChatAbout,
     updateChatAdmin,
     updateChatDefaultBannedRights,
