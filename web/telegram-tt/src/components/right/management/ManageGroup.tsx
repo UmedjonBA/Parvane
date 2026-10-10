@@ -38,6 +38,7 @@ import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
+import ManageJoinMode from './ManageJoinMode';
 
 import './Management.scss';
 
@@ -358,6 +359,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
             currentAvatarBlobUrl={currentAvatarBlobUrl}
             onChange={handleSetPhoto}
             disabled={!canChangeInfo}
+            actionLabel={lang('ParvaneChoosePhoto')}
           />
         )}
         <Island>
@@ -448,6 +450,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
+          {canInvite && <ManageJoinMode chatId={chatId} exportedInvites={exportedInvites} />}
           {IS_GROUP_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"

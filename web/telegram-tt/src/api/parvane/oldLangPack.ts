@@ -108,7 +108,7 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   EditAdminPromotedBy: 'Promoted by',
   GroupMembers: 'Members',
   ChannelSubscribers: 'Subscribers',
-  ChannelBlockedUsers: 'Removed users',
+  ChannelBlockedUsers: 'Blacklist',
   ChannelPermissions: 'Permissions',
   GroupType: 'Group Type',
   ChannelType: 'Channel Type',
@@ -585,6 +585,9 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneBackgroundFailed: 'Could not save the chat background',
   ParvaneJoinByRequest: 'Join by request',
   ParvaneJoinByRequestInfo: 'People who open the main invite link send a request that an admin approves',
+  ParvaneJoinModeConfirm: 'The main invite link will be replaced with a new one. The current main link will stop working.',
+  ParvaneJoinModeFailed: 'Could not change how people join. Try again.',
+  ParvaneChoosePhoto: 'Choose photo',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -717,7 +720,7 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   EditAdminPromotedBy: 'Назначил(а)',
   GroupMembers: 'Участники',
   ChannelSubscribers: 'Подписчики',
-  ChannelBlockedUsers: 'Удалённые пользователи',
+  ChannelBlockedUsers: 'Чёрный список',
   ChannelPermissions: 'Разрешения',
   GroupType: 'Тип группы',
   ChannelType: 'Тип канала',
@@ -1231,6 +1234,9 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneBackgroundFailed: 'Не удалось сохранить фон чата',
   ParvaneJoinByRequest: 'Вступление по заявке',
   ParvaneJoinByRequestInfo: 'По основной ссылке новый участник отправляет заявку, её одобряет администратор',
+  ParvaneJoinModeConfirm: 'Основная ссылка-приглашение будет заменена новой. Прежняя основная ссылка перестанет работать.',
+  ParvaneJoinModeFailed: 'Не удалось изменить способ вступления. Попробуйте ещё раз.',
+  ParvaneChoosePhoto: 'Выбрать фотографию',
 };
 
 function capitalize(text: string) {

@@ -1048,7 +1048,7 @@
 "ChannelSignMessages" = "Sign Messages";
 "ChannelAdministrators" = "Administrators";
 "ChannelSubscribers" = "Subscribers";
-"ChannelBlockedUsers" = "Removed users";
+"ChannelBlockedUsers" = "Blacklist";
 "ChannelDelete" = "Delete Channel";
 "ChannelLeave" = "Leave Channel";
 "ChannelDeleteAlert" = "Deleting this channel will remove all subscribers and all posts will be lost. Delete the channel anyway?";

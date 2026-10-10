@@ -7,6 +7,7 @@ import {
 import buildClassName from '../../util/buildClassName';
 
 import useLang from '../../hooks/useLang';
+import useUniqueId from '../../hooks/useUniqueId';
 
 import Icon from '../common/icons/Icon';
 import CropModal from './CropModal';
@@ -18,6 +19,8 @@ interface OwnProps {
   disabled?: boolean;
   isForForum?: boolean;
   currentAvatarBlobUrl?: string;
+  // Parvane: подпись-кнопка под кругом — без неё не видно, что круг нажимается
+  actionLabel?: string;
   onChange: (file: File) => void;
 }
 
@@ -26,8 +29,10 @@ const AvatarEditable: FC<OwnProps> = ({
   disabled,
   isForForum,
   currentAvatarBlobUrl,
+  actionLabel,
   onChange,
 }) => {
+  const inputId = useUniqueId();
   const [selectedFile, setSelectedFile] = useState<File | undefined>();
   const [croppedBlobUrl, setCroppedBlobUrl] = useState<string | undefined>(currentAvatarBlobUrl);
 
@@ -77,6 +82,7 @@ const AvatarEditable: FC<OwnProps> = ({
         title={title || lang('ChangeYourProfilePicture')}
       >
         <input
+          id={inputId}
           type="file"
           onChange={handleSelectFile}
           accept="image/png, image/jpeg"
@@ -84,6 +90,12 @@ const AvatarEditable: FC<OwnProps> = ({
         <Icon name="camera-add" />
         {croppedBlobUrl && <img src={croppedBlobUrl} draggable={false} alt="" />}
       </label>
+      {actionLabel && !disabled && (
+        <label className="action" htmlFor={inputId} role="button" tabIndex={0}>
+          <Icon name="camera-add" />
+          {actionLabel}
+        </label>
+      )}
       <CropModal file={selectedFile} onClose={handleModalClose} onChange={handleAvatarCrop} />
     </div>
   );

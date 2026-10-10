@@ -1728,6 +1728,7 @@ const methods = {
   updateChatAbout: groupController.updateChatAbout,
   updateChatDefaultBannedRights: groupController.updateChatDefaultBannedRights,
   editExportedChatInvite: groupController.editExportedChatInvite,
+  parvaneSetJoinByRequest: groupController.setJoinByRequest,
   deleteExportedChatInvite: groupController.deleteExportedChatInvite,
   deleteRevokedExportedChatInvites: groupController.deleteRevokedExportedChatInvites,
   fetchChatInviteImporters: groupController.fetchChatInviteImporters,
