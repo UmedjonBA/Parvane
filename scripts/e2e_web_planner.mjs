@@ -153,8 +153,7 @@ try {
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByText('Added: Созвон команды').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await todayCell.innerText(), /! 2 h/, 'в ячейке дня — отметка пересечения и 2 часа');
-  // Панель дня — сетка по часам; пересекающиеся дела лежат каскадом: второе сдвинуто вправо и
-  // накрывает первое, начало первого с названием остаётся на виду
+  // Панель дня — сетка по часам; пересекающиеся дела не закрывают названия друг друга
   const dayGrid = dayPane.locator('[data-day-grid]');
   const gridColumn = dayGrid.locator(`div[data-day="${today}"]`).last();
   const cascade = await gridColumn.locator('[data-block]').evaluateAll((items) => items.map((el) => {
@@ -163,8 +162,9 @@ try {
   }));
   assert.equal(cascade.length, 2, `в сетке дня должны быть задача и событие: ${JSON.stringify(cascade)}`);
   const [lower, upper] = cascade[0].z < cascade[1].z ? cascade : [cascade[1], cascade[0]];
+  // Начинаются с разницей в полчаса — стоят рядом, названия обоих видны целиком
   assert.ok(upper.left - lower.left > 10, `второе дело должно быть сдвинуто вправо: ${JSON.stringify(cascade)}`);
-  assert.ok(upper.left < lower.right, `дела должны наслаиваться, а не стоять рядом: ${JSON.stringify(cascade)}`);
+  assert.ok(upper.left >= lower.right - 1, `дела с близким началом должны стоять рядом: ${JSON.stringify(cascade)}`);
   assert.match(lower.text, /14:00–15:30/, 'в блоке — время дела');
   // Вкладок «День» и «Расписание» нет: день всегда в панели справа
   const viewGroup = planner.getByRole('group', { name: 'Calendar view' });
@@ -184,9 +184,48 @@ try {
   await planner.getByText('Added: Внахлёст').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await planner.getByRole('alert').count(), 0, 'пересечение не должно быть ошибкой');
   assert.equal(await gridColumn.locator('[data-block]').count(), 3, 'третье дело встало внахлёст');
+  // Дело, начавшееся заметно позже (через час), ложится поверх раннего со сдвигом: раннее идёт до
+  // правого края, позднее начинается правее и ниже его названия
+  await page.evaluate(async (day) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [
+        {
+          task: {
+            id: 'layer-long', name: 'Долгое', description: '', steps: [], status: 'queue', listId: '', rank: 50,
+            day, start: '17:00', due: '', minutes: 180,
+          },
+        },
+        {
+          task: {
+            id: 'layer-late', name: 'Позднее', description: '', steps: [], status: 'queue', listId: '', rank: 51,
+            day, start: '18:00', due: '', minutes: 60,
+          },
+        },
+      ],
+    });
+  }, today);
+  const layered = async () => gridColumn.locator('[data-block]').evaluateAll((items) => items
+    .filter((el) => /Долгое|Позднее/.test(el.textContent))
+    .map((el) => {
+      const box = el.getBoundingClientRect();
+      return { text: el.textContent, left: box.left, right: box.right, top: box.top };
+    }));
+  for (let attempt = 0; attempt < 25 && (await layered()).length < 2; attempt++) await page.waitForTimeout(200);
+  const pair = await layered();
+  const longBlock = pair.find((block) => block.text.includes('Долгое'));
+  const lateBlock = pair.find((block) => block.text.includes('Позднее'));
+  assert.ok(longBlock && lateBlock, `в сетке нет дел для проверки наслоения: ${JSON.stringify(pair)}`);
+  assert.ok(lateBlock.left > longBlock.left + 10 && lateBlock.left < longBlock.right - 10 && lateBlock.top > longBlock.top + 10,
+    `позднее дело должно лежать поверх раннего со сдвигом: ${JSON.stringify(pair)}`);
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-day-panel.png` });
   await planner.getByRole('button', { name: 'Undo' }).click();
-  await gridColumn.locator('[data-block]').nth(2).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await gridColumn.locator('[data-block]').filter({ hasText: 'Внахлёст' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await page.evaluate(async () => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [{ task: { id: 'layer-long', deleted: true } }, { task: { id: 'layer-late', deleted: true } }],
+    });
+  });
+  await gridColumn.locator('[data-block]').filter({ hasText: 'Долгое' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   if (await sidePane.count()) await sidePane.getByRole('button', { name: 'Close' }).first().click();
   console.log('OK: событие; пересечения разрешены и лежат каскадом; «+» и нажатие на свободное время');
 
@@ -483,41 +522,55 @@ try {
   assert.equal(await planner.getByRole('button', { name: '+ Task', exact: true }).count(), 0, 'на телефоне кнопки «+ Задача» нет');
   assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
   await todayCell.click({ position: { x: 10, y: 10 } });
-  const strip = dayPane.locator('[data-day-strip]');
-  await strip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // День — горизонтальной шкалой времени НАД календарём: часы по оси X, шкала листается вбок
+  const timeline = dayPane.locator('[data-day-timeline]');
+  await timeline.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const layout = await page.evaluate(() => {
     const cell = document.querySelector('#ParvanePlanner [role="gridcell"]').getBoundingClientRect();
-    const stripEl = document.querySelector('#ParvanePlanner [data-day-strip]');
-    const cards = [...stripEl.children].map((el) => el.getBoundingClientRect());
+    const root = document.querySelector('#ParvanePlanner [data-day-timeline]');
+    const hours = [...root.querySelectorAll('[data-hour]')].map((el) => el.getBoundingClientRect());
+    const scroller = root.querySelector('[data-hour]').parentElement.parentElement;
+    const blocks = [...root.querySelectorAll('[data-block]')].map((el) => {
+      const box = el.getBoundingClientRect();
+      return { text: el.textContent, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+    });
     return {
       cellTop: cell.top,
-      stripTop: stripEl.getBoundingClientRect().top,
-      isRow: cards.length > 1 && Math.abs(cards[0].top - cards[1].top) < 4 && cards[1].left > cards[0].left,
-      canScroll: stripEl.scrollWidth > stripEl.clientWidth,
+      timelineBottom: root.getBoundingClientRect().bottom,
+      isHorizontal: hours.length > 1 && Math.abs(hours[0].top - hours[1].top) < 2 && hours[1].left > hours[0].left,
+      canScroll: scroller.scrollWidth > scroller.clientWidth,
       overflow: document.documentElement.scrollWidth - window.innerWidth,
+      blocks,
     };
   });
-  assert.ok(layout.stripTop > layout.cellTop, `расписание дня должно стоять под календарём: ${JSON.stringify(layout)}`);
-  assert.ok(layout.isRow, `расписание дня должно быть горизонтальной лентой: ${JSON.stringify(layout)}`);
-  assert.ok(layout.canScroll, `лента должна листаться вбок: ${JSON.stringify(layout)}`);
+  assert.ok(layout.timelineBottom <= layout.cellTop + 1, `день должен стоять над календарём: ${JSON.stringify(layout)}`);
+  assert.ok(layout.isHorizontal, `часы должны идти по оси X: ${JSON.stringify(layout)}`);
+  assert.ok(layout.canScroll, `шкала должна листаться вбок: ${JSON.stringify(layout)}`);
   assert.ok(layout.overflow <= 0, `страница не должна листаться вбок: ${JSON.stringify(layout)}`);
+  // Пересекающиеся задача и событие — в разных строках, друг друга не закрывают
+  const taskBlock = layout.blocks.find((block) => block.text.includes('Подготовить макет'));
+  const eventBlock = layout.blocks.find((block) => block.text.includes('Созвон команды'));
+  assert.ok(taskBlock && eventBlock, `на шкале должны быть задача и событие: ${JSON.stringify(layout.blocks)}`);
+  assert.ok(
+    eventBlock.top >= taskBlock.bottom - 1 || taskBlock.top >= eventBlock.bottom - 1,
+    `пересекающиеся дела должны стоять в разных строках: ${JSON.stringify(layout.blocks)}`,
+  );
   assert.ok(await todayCell.isVisible(), 'календарь остаётся на виду');
-  // Новая задача: нажатие на свободное время раскрывает форму под лентой, без отдельного экрана
-  await strip.getByRole('button', { name: /free slot/ }).first().click();
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone.png` });
+  // Новое дело: «+» раскрывает форму под шкалой, без отдельного экрана
+  await timeline.getByRole('button', { name: '+ Task for this day' }).click();
   const inlineForm = dayPane.locator('[data-inline-form]');
   await inlineForm.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await sidePane.count(), 0, 'на телефоне форма задачи не должна открываться отдельным экраном');
   await inlineForm.locator('#planner-new-name').fill('С телефона');
   await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
   await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await strip.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
-  // Отдельной кнопки «+ Задача на этот день» в ленте нет, пока есть свободные окна
-  assert.equal(await strip.getByRole('button', { name: '+ Task for this day' }).count(), 0, 'лишняя кнопка добавления в ленте');
+  await timeline.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   // Шестерёнка — в строке периода
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await sidePane.getByRole('button', { name: 'Close' }).first().click();
-  console.log('OK: телефон — компактная шапка, расписание лентой под календарём, новая задача под лентой');
+  console.log('OK: телефон — день шкалой времени над календарём, пересечения в разных строках, новое дело под шкалой');
   await planner.getByRole('button', { name: 'Chats' }).click();
   await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — вход из меню и возврат');
