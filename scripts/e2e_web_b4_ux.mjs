@@ -158,6 +158,48 @@ try {
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   assert.equal(hasOverflow, false, 'mobile layout must not overflow horizontally');
+
+  // ── «Мой профиль» на телефоне: «назад» ведёт в список чатов, а не в
+  // «Избранное»; карандаш открывает редактирование профиля, откуда «назад»
+  // (системная кнопка) идёт в настройки и затем в список чатов
+  const mobilePage = mobileSession.page;
+  // Что лежит под пальцем в середине экрана: колонка и открытый чат (hash)
+  const topColumn = () => mobilePage.evaluate(() => {
+    const el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+    const column = el?.closest('#LeftColumn, #MiddleColumn, #RightColumn');
+    return `${column?.id}|${Boolean(document.querySelector('#Settings'))}|${window.location.hash}`;
+  });
+  const waitTop = async (expected, message) => {
+    await mobilePage.waitForFunction((want) => {
+      const el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+      const column = el?.closest('#LeftColumn, #MiddleColumn, #RightColumn');
+      return `${column?.id}|${Boolean(document.querySelector('#Settings'))}|${window.location.hash}` === want;
+    }, expected, { timeout: 10_000 }).catch(async () => {
+      assert.fail(`${message}: ожидалось ${expected}, на экране ${await topColumn()}`);
+    });
+  };
+  const openMyProfile = async () => {
+    await mobilePage.getByRole('button', { name: 'Open menu' }).first().click();
+    await mobilePage.getByRole('menuitem', { name: 'My Profile' }).click();
+    await mobilePage.locator('#RightColumn .RightHeader').getByText('My Profile')
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  };
+  await openMyProfile();
+  await mobilePage.locator('#RightColumn .RightHeader .close-button').click();
+  await waitTop('LeftColumn|false|', '«назад» из «Моего профиля»');
+
+  await openMyProfile();
+  await mobilePage.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit' }).click();
+  await waitTop('LeftColumn|true|', 'карандаш в «Моём профиле»');
+  await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'visible', timeout: 10_000 });
+  await mobilePage.waitForTimeout(600);
+  await mobilePage.goBack();
+  await waitTop('LeftColumn|true|', '«назад» из редактирования профиля');
+  await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'hidden', timeout: 10_000 });
+  await mobilePage.waitForTimeout(600);
+  await mobilePage.goBack();
+  await waitTop('LeftColumn|false|', '«назад» из настроек');
+
   await openPrivateChat(mobileSession.page, alice);
   await sendText(mobileSession.page, `mobile-${suffix}`);
   await findMessage(mobileSession.page, `mobile-${suffix}`).first()

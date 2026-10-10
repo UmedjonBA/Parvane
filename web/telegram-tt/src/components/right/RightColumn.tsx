@@ -91,6 +91,7 @@ const RightColumn: FC<OwnProps & StateProps> = ({
   hasProfileBackground,
 }) => {
   const {
+    openChat,
     toggleChatInfo,
     toggleManagement,
     setStickerSearchQuery,
@@ -204,6 +205,9 @@ const RightColumn: FC<OwnProps & StateProps> = ({
           break;
         }
         toggleChatInfo({ force: false }, { forceSyncOnIOs: true });
+        // Parvane: «Мой профиль» открыт поверх «Избранного»; на телефоне «назад»
+        // из него ведёт в список чатов, а не в этот чат
+        if (isMobile && isOwnProfile) openChat({ id: undefined }, { forceSyncOnIOs: true });
         break;
       case RightColumnContent.Management: {
         switch (managementScreen) {
