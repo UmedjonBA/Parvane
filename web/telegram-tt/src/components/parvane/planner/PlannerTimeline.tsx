@@ -33,6 +33,8 @@ const MINUTES_IN_HOUR = 60;
 // Ширина часа и высота строки шкалы, rem
 const HOUR_REM = 5;
 const ROW_REM = 2.75;
+// Шкала занимает свободное место экрана, но строка не выше этого
+const MAX_ROW_REM = 6;
 const MIN_ROWS = 2;
 // Короткое дело рисуется не уже этого — иначе название не прочесть
 const MIN_BLOCK_MINUTES = 45;
@@ -170,15 +172,16 @@ const PlannerTimeline = ({
         </div>
         <div
           className={styles.timelineTrack}
-          style={`width: ${hours.length * HOUR_REM}rem; height: ${rows * ROW_REM}rem; --planner-hour: ${HOUR_REM}rem`}
+          style={`width: ${hours.length * HOUR_REM}rem; min-height: ${rows * ROW_REM}rem; `
+            + `max-height: ${rows * MAX_ROW_REM}rem; --planner-hour: ${HOUR_REM}rem`}
           onClick={handleTrackClick}
         >
           {layout.map(({ item, lane }) => {
             const start = toMinutes(item.start);
             const left = ((start - gridStart) / MINUTES_IN_HOUR) * HOUR_REM;
             const width = ((toMinutes(item.end) - start) / MINUTES_IN_HOUR) * HOUR_REM;
-            const position = `inset-inline-start: ${left}rem; width: ${width}rem; top: ${lane * ROW_REM}rem; `
-              + `height: ${ROW_REM}rem`;
+            const position = `inset-inline-start: ${left}rem; width: ${width}rem; `
+              + `top: ${(lane / rows) * 100}%; height: ${100 / rows}%`;
             const color = item.task ? listColorStyle(getListColor(state, item.task.project)) : undefined;
             const source = timed.find((candidate) => (
               candidate.task ? candidate.task === item.task : candidate.event === item.event
