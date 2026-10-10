@@ -1,11 +1,12 @@
 import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useEffect, useRef } from '../../../lib/teact/teact';
 
+import type { LangFn } from '../../../util/localization';
 import type { PlannerEvent, PlannerSlot, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatClock, formatDuration, formatHours, formatRepeat,
+  formatDuration, formatHours, formatRepeat,
 } from './plannerFormat';
 import {
   countUnrated, excludeInstance, getDayAvailability, getDayLoad, getDeadlines, getEventsForDay, getListColor,
@@ -75,7 +76,6 @@ const PlannerDay = ({
   });
 
   const minutes = getDayLoad(state, day);
-  const unrated = countUnrated(state, day);
   const availability = getDayAvailability(state, day);
   const isOver = minutes > state.budget;
   const chunks = [
@@ -91,16 +91,7 @@ const PlannerDay = ({
   const untimed = getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined);
   const deadlines = getDeadlines(state, day);
 
-  const summary = [
-    lang('PlannerDayPlan', { planned: formatHours(lang, minutes), budget: formatHours(lang, state.budget) }),
-    isOver ? lang('PlannerDayOverload', { minutes: minutes - state.budget }) : undefined,
-    lang('PlannerDayWindows', {
-      from: formatClock(state.settings.dayStart),
-      to: formatClock(state.settings.dayEnd),
-      free: formatDuration(lang, availability.freeMinutes),
-    }),
-    unrated ? lang('PlannerDayUnrated', { count: unrated }) : undefined,
-  ].filter(Boolean).join(' · ');
+  const { text: summary } = buildDaySummary(lang, state, day);
 
   return (
     <div ref={rootRef} className={styles.dayList}>
@@ -217,5 +208,18 @@ const PlannerDay = ({
     );
   }
 };
+
+// Строка сводки дня: запланировано из бюджета, перегруз, неоценённые задачи
+export function buildDaySummary(lang: LangFn, state: PlannerState, day: string) {
+  const minutes = getDayLoad(state, day);
+  const unrated = countUnrated(state, day);
+  const isOver = minutes > state.budget;
+  const text = [
+    lang('PlannerDayPlan', { planned: formatHours(lang, minutes), budget: formatHours(lang, state.budget) }),
+    isOver ? lang('PlannerDayOverload', { minutes: minutes - state.budget }) : undefined,
+    unrated ? lang('PlannerDayUnrated', { count: unrated }) : undefined,
+  ].filter(Boolean).join(' · ');
+  return { text, isOver };
+}
 
 export default memo(PlannerDay);

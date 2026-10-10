@@ -535,16 +535,20 @@ const Main = ({
   useEffect(() => {
     const handleRecoveryKey = async () => {
       const result = await (callApi as unknown as (name: string) => Promise<{
-        recoveryKey: string; hasEscrow?: boolean; hasTelegram?: boolean;
+        recoveryKey: string; hasEscrow?: boolean;
       } | undefined>)('parvaneTakeRecoveryKey');
       if (!result) return;
-      // Ключ уходит владельцу в Telegram (spec 015); иначе, если сервер держит копию
-      // корня для администратора, потерянный ключ выпишут заново
+      // Окно показывается, только когда ключ не ушёл владельцу в Telegram (spec 015). Сервер
+      // держит копию корня для администратора — потерянный ключ выпишут заново
       const variables = { key: result.recoveryKey };
-      const text = result.hasTelegram ? { key: 'ParvaneRecoveryKeyTelegram' as const, variables }
-        : result.hasEscrow ? { key: 'ParvaneRecoveryKeyAdmin' as const, variables }
-          : { key: 'ParvaneRecoveryKey' as const, variables };
-      showDialog({ data: { type: 'localized', text } });
+      showDialog({
+        data: {
+          type: 'localized',
+          text: result.hasEscrow
+            ? { key: 'ParvaneRecoveryKeyAdmin', variables }
+            : { key: 'ParvaneRecoveryKey', variables },
+        },
+      });
     };
     // Ключ мог появиться до монтирования Main
     void handleRecoveryKey();

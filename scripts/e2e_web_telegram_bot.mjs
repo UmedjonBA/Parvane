@@ -197,14 +197,14 @@ try {
   console.log('OK: бот подтвердил регистрацию по кнопке, клиент вошёл сам');
 
   // ── 2. Ключ восстановления — в чат владельца ──
-  const dialogText = await dismissRecoveryKeyDialog(first.page, STEP_TIMEOUT_MS);
-  const key = KEY_PATTERN.exec(dialogText || '')?.[1];
-  assert(key, `ключ в диалоге не найден: ${dialogText}`);
   const keyMessage = await botSays(TG_ALICE, (m) => m.method === 'sendMessage' && m.text.includes('<code>'));
   assert.equal(keyMessage.parseMode, 'HTML');
-  assert.equal(/<code>([^<]+)<\/code>/.exec(keyMessage.text)[1], key, 'бот прислал тот же ключ, что в диалоге');
+  const key = KEY_PATTERN.exec(/<code>([^<]+)<\/code>/.exec(keyMessage.text)[1])?.[1];
+  assert(key, `в сообщении бота нет ключа: ${keyMessage.text}`);
   assert(keyMessage.text.includes(`@${nick}`), 'в сообщении назван аккаунт');
-  console.log('OK: бот прислал владельцу ключ восстановления — тот же, что в диалоге');
+  // Окна с ключом в приложении нет: ключ хранится в чате с ботом
+  assert.equal(await dismissRecoveryKeyDialog(first.page, 2500), undefined, 'окно с ключом показано');
+  console.log('OK: бот прислал владельцу ключ восстановления, окна с ключом в приложении нет');
 
   // Копия ключей аккаунта должна успеть уйти на сервер
   const hasBundle = () => first.logs.some((line) => line.includes('копия ключей аккаунта обновлена на сервере'));

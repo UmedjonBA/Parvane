@@ -6,8 +6,9 @@ import buildClassName from '../../../util/buildClassName';
 import { formatDay, formatWeekday, listColorStyle } from './plannerFormat';
 import {
   fromDayKey, getDeadlines, getEventsForDay, getListColor, getTasksForDay, getTimedForDay, instanceKey, isHolidayOn,
-  layoutTimed, toMinutes, toTime,
+  layoutTimed, setTaskDone, toMinutes, toTime,
 } from './plannerModel';
+import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -22,6 +23,9 @@ type OwnProps = {
   today: string;
   onPickDay: (day: string) => void;
   onCreateForDay: (day: string) => void;
+  // Панель дня: шапки с днём нет, нажатие на свободное время создаёт дело с этого времени
+  isPanel?: boolean;
+  onCreateAt?: (day: string, start: number) => void;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
 };
@@ -30,11 +34,18 @@ const MINUTES_IN_HOUR = 60;
 // Высота часа в сетке, rem
 const HOUR_REM = 3;
 const MIN_BLOCK_REM = 1.25;
+// Пересекающиеся дела лежат каскадом: каждое следующее сдвинуто вправо и накрывает предыдущее,
+// оставляя на виду его начало с названием. Сдвиг, % ширины колонки; все сдвиги группы — не больше SPREAD
+const CASCADE_STEP = 30;
+const CASCADE_SPREAD = 60;
+// Новое дело из сетки начинается с получаса и длится час
+const CREATE_STEP = 30;
+const CREATE_MINUTES = 60;
 
-// Виды «Неделя» и «День»: сетка по часам; дела без времени, события на весь день и
-// дедлайны — строкой над сеткой. Пересекающиеся дела стоят рядом
+// Сетка по часам для недели и для панели дня; дела без времени, события на весь день и
+// дедлайны — строкой над сеткой
 const PlannerWeek = ({
-  state, days, picked, today, onPickDay, onCreateForDay, onOpenTask, onOpenEvent,
+  state, days, picked, today, isPanel, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -45,6 +56,30 @@ const PlannerWeek = ({
   const handleColumnDoubleClick = useLastCallback((e: React.MouseEvent<HTMLElement>) => {
     if ((e.target as HTMLElement).closest('[data-kind]')) return;
     onCreateForDay(e.currentTarget.dataset.day!);
+  });
+
+  const handleColumnClick = useLastCallback((e: React.MouseEvent<HTMLElement>) => {
+    const { day } = e.currentTarget.dataset;
+    if (!isPanel || !onCreateAt) {
+      onPickDay(day!);
+      return;
+    }
+    if ((e.target as HTMLElement).closest('[data-block]')) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const minutes = gridStart + ((e.clientY - rect.top) / rect.height) * hours.length * MINUTES_IN_HOUR;
+    const start = Math.floor(minutes / CREATE_STEP) * CREATE_STEP;
+    onCreateAt(day!, Math.max(0, Math.min(start, hours.length * MINUTES_IN_HOUR + gridStart - CREATE_MINUTES)));
+  });
+
+  // Галочка в блоке задачи (панель дня): экземпляр ряда отмечается в своём дне
+  const handleToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const { id, day } = e.currentTarget.dataset;
+    const { checked } = e.currentTarget;
+    const task = getTasksForDay(state, day!).find((candidate) => candidate.id === id);
+    if (!task) return;
+    updatePlanner((draft) => {
+      setTaskDone(draft, task, checked);
+    }, lang(checked ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
   });
 
   const handleItemClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -75,11 +110,12 @@ const PlannerWeek = ({
 
   return (
     <div
-      className={buildClassName(styles.week, days.length === 1 && styles.weekSingle)}
+      className={buildClassName(styles.week, days.length === 1 && styles.weekSingle, isPanel && styles.weekPanel)}
       style={`--planner-week-days: ${days.length}; --planner-hour: ${HOUR_REM}rem`}
-      data-planner-view={days.length === 1 ? 'day' : 'week'}
+      data-planner-view={isPanel ? undefined : 'week'}
+      data-day-grid={isPanel ? '1' : undefined}
     >
-      <div className={styles.weekHead}>
+      <div className={buildClassName(styles.weekHead, isPanel && styles.weekHeadHidden)}>
         <span className={styles.weekCorner} />
         {columns.map(({ day, isHoliday }) => {
           const date = fromDayKey(day);
@@ -116,6 +152,8 @@ const PlannerWeek = ({
                 className={buildClassName(styles.weekChip, event.isHoliday && styles.weekChipHoliday)}
                 title={event.name}
                 data-kind="event"
+                data-all-day={event.id}
+                data-holiday={event.isHoliday ? '1' : undefined}
                 data-id={event.id}
                 data-day={day}
                 onClick={handleItemClick}
@@ -166,35 +204,56 @@ const PlannerWeek = ({
             className={buildClassName(styles.weekColumn, day === picked && styles.weekColumnPicked)}
             style={`height: ${hours.length * HOUR_REM}rem`}
             data-day={day}
-            onClick={handleDayClick}
-            onDoubleClick={handleColumnDoubleClick}
+            onClick={handleColumnClick}
+            onDoubleClick={isPanel ? undefined : handleColumnDoubleClick}
           >
             {layout.map(({ item, lane, lanes }) => {
               const start = toMinutes(item.start);
               const top = ((start - gridStart) / MINUTES_IN_HOUR) * HOUR_REM;
               const height = Math.max(MIN_BLOCK_REM, ((toMinutes(item.end) - start) / MINUTES_IN_HOUR) * HOUR_REM);
-              const position = `top: ${top}rem; height: ${height}rem; `
-                + `inset-inline-start: ${(lane / lanes) * 100}%; width: ${100 / lanes}%`;
+              const step = lanes > 1 ? Math.min(CASCADE_STEP, CASCADE_SPREAD / (lanes - 1)) : 0;
+              const position = `top: ${top}rem; height: ${height}rem; z-index: ${lane + 1}; `
+                + `inset-inline-start: ${lane * step}%; width: ${100 - (lanes - 1) * step}%`;
               const color = item.task ? listColorStyle(getListColor(state, item.task.project)) : undefined;
+              const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
               return (
-                <button
-                  key={item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`}
-                  type="button"
+                <div
+                  key={itemKey}
                   className={buildClassName(
                     styles.weekBlock,
                     item.event && styles.weekBlockEvent,
                     item.task?.status === 'done' && styles.agendaDone,
                   )}
                   style={color ? `${position}; ${color}` : position}
-                  title={`${item.start}–${item.end} ${item.name}`}
-                  data-kind={item.task ? 'task' : 'event'}
-                  data-id={item.task ? item.task.id : item.event!.id}
-                  data-day={day}
-                  onClick={handleItemClick}
+                  data-block={itemKey}
+                  data-lane={lane}
                 >
-                  <span className={styles.weekBlockTime}>{item.start}</span>
-                  {item.name}
-                </button>
+                  {isPanel && item.task && (
+                    <input
+                      type="checkbox"
+                      className={styles.weekBlockCheck}
+                      checked={item.task.status === 'done'}
+                      aria-label={lang('PlannerAriaDone', { name: item.task.name })}
+                      data-id={item.task.id}
+                      data-day={day}
+                      onChange={handleToggle}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className={styles.weekBlockOpen}
+                    title={`${item.start}–${item.end} ${item.name}`}
+                    data-kind={item.task ? 'task' : 'event'}
+                    data-id={item.task ? item.task.id : item.event!.id}
+                    data-day={day}
+                    onClick={handleItemClick}
+                  >
+                    <span className={styles.weekBlockTime}>
+                      {isPanel ? `${item.start}–${item.end}` : item.start}
+                    </span>
+                    {item.name}
+                  </button>
+                </div>
               );
             })}
           </div>

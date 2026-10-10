@@ -7,7 +7,9 @@ export type PlannerStatus = 'queue' | 'active' | 'done';
 export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'done'];
 
 export type PlannerCalendarView = 'year' | 'month' | 'week' | 'day' | 'agenda';
-export const PLANNER_CALENDAR_VIEWS: PlannerCalendarView[] = ['year', 'month', 'week', 'day', 'agenda'];
+// Виды календаря в переключателе: день всегда показан панелью справа, отдельных видов «День» и
+// «Расписание» нет (10 окт 2026)
+export const PLANNER_CALENDAR_VIEWS: PlannerCalendarView[] = ['year', 'month', 'week'];
 // Цвет списка: 0 — нет, 1…8 — индекс палитры
 export const LIST_COLOR_COUNT = 8;
 export const ALL_DAY_START = '00:00';
@@ -916,16 +918,6 @@ export function validateTask(
   if (task.start && toMinutes(task.start) + task.minutes! > MINUTES_IN_DAY) return 'pastMidnight';
   if (task.day && task.due && task.day > task.due) return 'dayAfterDue';
   return undefined;
-}
-
-export function fitsBookingWindow(
-  state: PlannerState, window: PlannerSlot & { day: string }, task: Pick<PlannerTask, 'day' | 'start' | 'minutes'>,
-) {
-  if (task.day !== window.day || !task.minutes || !task.start) return false;
-  const from = toMinutes(task.start);
-  const until = from + task.minutes;
-  if (from < window.start || until > window.end) return false;
-  return getDayAvailability(state, window.day).free.some((slot) => from >= slot.start && until <= slot.end);
 }
 
 export type PlannerSettingsError = 'window' | 'lunch' | 'margin';

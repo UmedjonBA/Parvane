@@ -2873,11 +2873,7 @@ const methods = {
     const recoveryKey = pendingRecoveryKey;
     pendingRecoveryKey = undefined;
     if (!recoveryKey) return undefined;
-    return {
-      recoveryKey,
-      hasEscrow: await v2Controller.hasEscrow(),
-      hasTelegram: await v2Controller.hasTelegram(),
-    };
+    return { recoveryKey, hasEscrow: await v2Controller.hasEscrow() };
   },
 
   async parvaneGetCallPresencePolicy() {

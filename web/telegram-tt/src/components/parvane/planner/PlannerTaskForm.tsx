@@ -5,9 +5,9 @@ import type {
 } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 
-import { formatDay, formatDuration, formatStatus } from './plannerFormat';
+import { formatStatus } from './plannerFormat';
 import {
-  ALL_DAY_END, ALL_DAY_START, ensureList, fitsBookingWindow, getDefaultEventEnd, newId, PLANNER_STATUSES, toTime,
+  ALL_DAY_END, ALL_DAY_START, ensureList, getDefaultEventEnd, newId, PLANNER_STATUSES, toTime,
   validateEvent, validateRepeat, validateTask,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
@@ -171,10 +171,6 @@ const PlannerTaskForm = ({
       setError(lang(REPEAT_ERROR_KEYS[repeatError]));
       return;
     }
-    if (slot && !fitsBookingWindow(state, slot, task)) {
-      setError(lang('PlannerErrorOutsideWindow', { from: toTime(slot.start), to: toTime(slot.end) }));
-      return;
-    }
     const taskId = newId();
     updatePlanner((draft) => {
       ensureList(draft, project);
@@ -195,16 +191,6 @@ const PlannerTaskForm = ({
 
   return (
     <form className={styles.form} onSubmit={handleSubmit}>
-      {slot && (
-        <p className={styles.summary}>
-          {lang('PlannerBookingHint', {
-            date: formatDay(lang, slot.day),
-            from: toTime(slot.start),
-            to: toTime(slot.end),
-            duration: formatDuration(lang, slot.end - slot.start),
-          })}
-        </p>
-      )}
       <Select
         id="planner-new-kind"
         label={lang('PlannerFieldKind')}

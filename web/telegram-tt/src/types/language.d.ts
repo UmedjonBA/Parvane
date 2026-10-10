@@ -2638,9 +2638,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneRecoveryKey': {
     'key': V;
   };
-  'ParvaneRecoveryKeyTelegram': {
-    'key': V;
-  };
   'ParvaneRecoveryKeyAdmin': {
     'key': V;
   };

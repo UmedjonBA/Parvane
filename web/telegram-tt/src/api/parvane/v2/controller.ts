@@ -365,6 +365,8 @@ export function createV2Controller(deps: Deps) {
   let legacyKeyTimer: ReturnType<typeof setInterval> | undefined;
   // Ключ восстановления нового корня ждёт отправки владельцу в Telegram
   let telegramKey: string | undefined;
+  let isRecoveryKeyShown = false;
+  let telegramBotCheck: Promise<boolean> | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const peers = new Map<string, { v2: boolean; at: number }>();
   // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение)
@@ -666,8 +668,7 @@ export function createV2Controller(deps: Deps) {
           client.forgetRoot();
           created.rootSecret.fill(0);
           await rememberBundleKey(recoveryKey);
-          telegramKey = recoveryKey;
-          deps.onRecoveryKey(recoveryKey);
+          await queueRecoveryKey(recoveryKey);
           await persist();
         }
       }
@@ -1357,12 +1358,48 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
+  /** Ключ восстановления нового корня: уходит владельцу в Telegram после запуска
+   * (`flushTelegramKey`); окно с ключом показывается, только если туда он не ушёл. */
+  async function queueRecoveryKey(recoveryKey: string) {
+    isRecoveryKeyShown = false;
+    // Сервер без Telegram-бота: ключу некуда уйти — окно сразу, как раньше
+    if (!(await hasTelegramBot())) {
+      isRecoveryKeyShown = true;
+      deps.onRecoveryKey(recoveryKey);
+      return;
+    }
+    telegramKey = recoveryKey;
+  }
+
+  /** Сервер подтверждает регистрацию через Telegram-бота (`server.describe`). */
+  function hasTelegramBot() {
+    if (!telegramBotCheck) {
+      telegramBotCheck = preauth(deps.gatewayUrl(), 'server.describe', {})
+        .then((described) => typeof described.telegram_bot === 'string' && described.telegram_bot.length > 0)
+        .catch(() => {
+          telegramBotCheck = undefined;
+          return false;
+        });
+    }
+    return telegramBotCheck;
+  }
+
   async function flushTelegramKey() {
     if (!telegramKey) return;
-    const result = await sendKeyToTelegram(telegramKey);
-    // Сбой связи — повторим по таймеру; остальное повтор не исправит
+    const key = telegramKey;
+    const result = await sendKeyToTelegram(key);
+    if (result === 'ok') {
+      telegramKey = undefined;
+      deps.log('v2: ключ восстановления отправлен владельцу в Telegram');
+      return;
+    }
+    // В Telegram ключ не ушёл (Telegram не привязан, сбой связи) — показываем его
+    // окном, иначе он пропал бы; при сбое связи отправку ещё повторим по таймеру
+    if (!isRecoveryKeyShown) {
+      isRecoveryKeyShown = true;
+      deps.onRecoveryKey(key);
+    }
     if (result !== 'failed') telegramKey = undefined;
-    if (result === 'ok') deps.log('v2: ключ восстановления отправлен владельцу в Telegram');
   }
 
   /** К аккаунту привязан Telegram и сервер работает с ботом. Экран «Устройства»
@@ -1589,7 +1626,7 @@ export function createV2Controller(deps: Deps) {
       needsLinking = false;
       await storage.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
       await rememberBundleKey(recoveryKey);
-      telegramKey = recoveryKey;
+      await queueRecoveryKey(recoveryKey);
       deps.log('v2: личность сброшена — новый корень и журнал устройств');
     } catch (e) {
       deps.log(`v2: сброс личности не удался: ${String(e)}`);
@@ -1598,7 +1635,6 @@ export function createV2Controller(deps: Deps) {
       fresh.free();
     }
     if (!(await restart())) return 'failed';
-    deps.onRecoveryKey(recoveryKey);
     return 'ok';
   }
 
@@ -1719,7 +1755,7 @@ export function createV2Controller(deps: Deps) {
       });
       await target.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
       await rememberBundleKey(recoveryKey);
-      telegramKey = recoveryKey;
+      await queueRecoveryKey(recoveryKey);
       deps.log('v2: личность сброшена на работающем устройстве — новый корень и журнал устройств');
     } catch (e) {
       deps.log(`v2: сброс личности не удался: ${String(e)}`);
@@ -1728,7 +1764,6 @@ export function createV2Controller(deps: Deps) {
       return 'failed';
     }
     if (!(await restart())) return 'failed';
-    deps.onRecoveryKey(recoveryKey);
     return 'ok';
   }
 
