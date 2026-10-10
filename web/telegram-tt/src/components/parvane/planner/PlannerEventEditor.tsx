@@ -18,6 +18,7 @@ import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
 import PlannerField from './PlannerField';
+import { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 
@@ -59,6 +60,7 @@ const PlannerEventEditor = ({
   const [day, setDay] = useState(event.instanceDay || event.day || '');
   const [isAllDay, setIsAllDay] = useState(Boolean(event.isAllDay));
   const [isHoliday, setIsHoliday] = useState(Boolean(event.isHoliday));
+  const [color, setColor] = useState(event.color || 0);
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(event.repeat, event.day || ''),
   );
@@ -113,6 +115,7 @@ const PlannerEventEditor = ({
       day: repeat ? undefined : (day || undefined),
       isAllDay: isAllDay || undefined,
       isHoliday: isHoliday || undefined,
+      color: color || undefined,
     };
     const eventError = validateEvent(next);
     if (eventError) {
@@ -125,7 +128,12 @@ const PlannerEventEditor = ({
       setPending({
         kind: 'save',
         patch: {
-          name: next.name, start: next.start, end: next.end, isAllDay: next.isAllDay, isHoliday: next.isHoliday,
+          name: next.name,
+          start: next.start,
+          end: next.end,
+          isAllDay: next.isAllDay,
+          isHoliday: next.isHoliday,
+          color: next.color,
         },
       });
       return;
@@ -185,6 +193,7 @@ const PlannerEventEditor = ({
         <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
         <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
       </div>
+      <PlannerColorSwatches value={color} onChange={setColor} />
       <div className={styles.fields}>
         {!isAllDay && <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />}
         {!isAllDay && <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />}

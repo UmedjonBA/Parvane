@@ -267,8 +267,32 @@
   opacity: 0.45;
 }
 
-.dayHoliday .dayNumber {
-  color: var(--color-error);
+// Праздник — заливкой клетки (цвет события, без цвета — красный)
+.dayHoliday {
+  --planner-holiday: var(--planner-holiday-color, var(--color-error));
+
+  background: color-mix(in srgb, var(--planner-holiday) 26%, var(--planner-cell, var(--color-background)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--planner-holiday) 45%, transparent);
+}
+
+// События на весь день — цветные метки у числа
+.dayMarks {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.1875rem;
+  align-items: center;
+
+  min-width: 0;
+}
+
+.dayMark {
+  flex: 0 0 auto;
+
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+
+  background: var(--planner-list-color, var(--color-text-secondary));
 }
 
 .daySelected,
@@ -2152,6 +2176,18 @@
 
 .timelineBlock {
   align-items: center;
+}
+
+// Событие на весь день — полоса во всю шкалу; подпись остаётся на виду при прокрутке вбок
+.timelineAllDay {
+  overflow: visible;
+}
+
+.timelineAllDayLabel {
+  position: sticky;
+  inset-inline-start: 0.5rem;
+  flex: 0 1 auto;
+  max-width: 16rem;
 }
 
 @media (max-width: 925px) {

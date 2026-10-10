@@ -32,6 +32,7 @@ type OwnProps = {
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
 const PREVIEW_COUNT = 2;
+const MARK_COUNT = 3;
 // Оттенок HSL: 140 — зелёный (день свободен), 0 — красный (бюджет исчерпан)
 const FREE_DAY_HUE = 140;
 
@@ -111,10 +112,12 @@ const PlannerMonth = ({
             taskId: undefined,
             label: event.isAllDay ? event.name : `${event.start} ${event.name}`,
             isDue: false,
-            color: 0,
+            color: event.color || 0,
           })),
         ];
-        const isHoliday = events.some((event) => event.isHoliday);
+        const holiday = events.find((event) => event.isHoliday);
+        // События на весь день — цветными метками у числа: в клетке на телефоне подписей нет
+        const allDayMarks = events.filter((event) => event.isAllDay).slice(0, MARK_COUNT);
         const weekday = fromDayKey(day).getDay();
 
         return (
@@ -125,11 +128,16 @@ const PlannerMonth = ({
               day === today && styles.dayToday,
               day === picked && styles.daySelected,
               (weekday === 0 || weekday === 6) && styles.dayWeekend,
-              isHoliday && styles.dayHoliday,
+              holiday && styles.dayHoliday,
               !day.startsWith(monthPrefix) && styles.dayOutside,
             )}
-            style={`--planner-load: ${Math.round(fraction * 100)}%; --planner-load-hue: ${getLoadHue(fraction)}`}
+            style={[
+              `--planner-load: ${Math.round(fraction * 100)}%`,
+              `--planner-load-hue: ${getLoadHue(fraction)}`,
+              holiday?.color ? `--planner-holiday-color: var(--color-peer-${holiday.color - 1})` : undefined,
+            ].filter(Boolean).join('; ')}
             data-day={day}
+            data-holiday={holiday ? '1' : undefined}
             role="gridcell"
             aria-selected={day === picked}
             aria-label={lang('PlannerAriaDay', {
@@ -142,6 +150,18 @@ const PlannerMonth = ({
           >
             <span className={styles.dayHead}>
               <span className={styles.dayNumber}>{fromDayKey(day).getDate()}</span>
+              {Boolean(allDayMarks.length) && (
+                <span className={styles.dayMarks} data-all-day-marks={allDayMarks.length}>
+                  {allDayMarks.map((event) => (
+                    <span
+                      key={instanceKey(event)}
+                      className={styles.dayMark}
+                      style={listColorStyle(event.color)}
+                      title={event.name}
+                    />
+                  ))}
+                </span>
+              )}
               <span className={styles.dayHours}>
                 {conflicts ? '! ' : ''}
                 {formatHours(lang, minutes)}
@@ -164,7 +184,14 @@ const PlannerMonth = ({
                 {entry.label}
               </button>
             ) : (
-              <span key={entry.key} className={styles.preview} title={entry.label}>{entry.label}</span>
+              <span
+                key={entry.key}
+                className={buildClassName(styles.preview, Boolean(entry.color) && styles.previewColored)}
+                style={listColorStyle(entry.color)}
+                title={entry.label}
+              >
+                {entry.label}
+              </span>
             )))}
             {entries.length > PREVIEW_COUNT && (
               <span className={buildClassName(styles.small, styles.previewMore)}>

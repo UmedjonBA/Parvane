@@ -64,11 +64,13 @@ const PlannerTimeline = ({
   const lastHour = Math.ceil(Math.max(state.settings.dayEnd, ...ends) / MINUTES_IN_HOUR);
   const hours = Array.from({ length: lastHour - firstHour }, (_, i) => firstHour + i);
   const gridStart = firstHour * MINUTES_IN_HOUR;
-  const rows = Math.max(MIN_ROWS, ...layout.map(({ lane }) => lane + 1));
+  const allDay = getEventsForDay(state, day).filter((event) => event.isAllDay);
+  // События на весь день — полосами во всю шкалу, над делами со временем
+  const timedRows = Math.max(...layout.map(({ lane }) => lane + 1), allDay.length ? 1 : MIN_ROWS);
+  const rows = allDay.length + timedRows;
   // Шкала открывается на первом деле дня, а без дел — на начале дня из настроек
   const focusHour = Math.floor((starts.length ? Math.min(...starts) : state.settings.dayStart) / MINUTES_IN_HOUR);
 
-  const allDay = getEventsForDay(state, day).filter((event) => event.isAllDay);
   const untimed = getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined);
   const deadlines = getDeadlines(state, day);
 
@@ -120,20 +122,6 @@ const PlannerTimeline = ({
           ariaLabel={lang('PlannerAddTaskForDay')}
           onClick={onAdd}
         />
-        {allDay.map((event) => (
-          <button
-            key={`e${instanceKey(event)}`}
-            type="button"
-            className={buildClassName(styles.weekChip, styles.timelineChip, event.isHoliday && styles.weekChipHoliday)}
-            data-kind="event"
-            data-all-day={event.id}
-            data-holiday={event.isHoliday ? '1' : undefined}
-            data-id={event.id}
-            onClick={handleItemClick}
-          >
-            {event.name}
-          </button>
-        ))}
         {untimed.map((task) => (
           <button
             key={`t${instanceKey(task)}`}
@@ -176,13 +164,41 @@ const PlannerTimeline = ({
             + `max-height: ${rows * MAX_ROW_REM}rem; --planner-hour: ${HOUR_REM}rem`}
           onClick={handleTrackClick}
         >
+          {allDay.map((event, index) => (
+            <div
+              key={`e${instanceKey(event)}`}
+              className={buildClassName(
+                styles.weekBlock, styles.timelineBlock, styles.timelineAllDay, !event.color && styles.weekBlockEvent,
+              )}
+              style={[
+                `inset-inline-start: 0; width: 100%; top: ${(index / rows) * 100}%; height: ${100 / rows}%`,
+                listColorStyle(event.color),
+              ].filter(Boolean).join('; ')}
+              data-block={`e${instanceKey(event)}`}
+              data-all-day={event.id}
+              data-holiday={event.isHoliday ? '1' : undefined}
+            >
+              <button
+                type="button"
+                className={buildClassName(styles.weekBlockOpen, styles.timelineAllDayLabel)}
+                data-kind="event"
+                data-id={event.id}
+                onClick={handleItemClick}
+              >
+                <span className={styles.weekBlockName}>{event.name}</span>
+                <span className={styles.weekBlockTime}>
+                  {lang(event.isHoliday ? 'PlannerHoliday' : 'PlannerAllDay')}
+                </span>
+              </button>
+            </div>
+          ))}
           {layout.map(({ item, lane }) => {
             const start = toMinutes(item.start);
             const left = ((start - gridStart) / MINUTES_IN_HOUR) * HOUR_REM;
             const width = ((toMinutes(item.end) - start) / MINUTES_IN_HOUR) * HOUR_REM;
             const position = `inset-inline-start: ${left}rem; width: ${width}rem; `
-              + `top: ${(lane / rows) * 100}%; height: ${100 / rows}%`;
-            const color = item.task ? listColorStyle(getListColor(state, item.task.project)) : undefined;
+              + `top: ${((allDay.length + lane) / rows) * 100}%; height: ${100 / rows}%`;
+            const color = listColorStyle(item.task ? getListColor(state, item.task.project) : item.event!.color);
             const source = timed.find((candidate) => (
               candidate.task ? candidate.task === item.task : candidate.event === item.event
             ))!;
@@ -193,7 +209,7 @@ const PlannerTimeline = ({
                 className={buildClassName(
                   styles.weekBlock,
                   styles.timelineBlock,
-                  item.event && styles.weekBlockEvent,
+                  item.event && !item.event.color && styles.weekBlockEvent,
                   item.task?.status === 'done' && styles.agendaDone,
                 )}
                 style={color ? `${position}; ${color}` : position}
