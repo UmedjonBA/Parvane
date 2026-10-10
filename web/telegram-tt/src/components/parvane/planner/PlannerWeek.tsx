@@ -34,10 +34,6 @@ const MINUTES_IN_HOUR = 60;
 // Высота часа в сетке, rem
 const HOUR_REM = 3;
 const MIN_BLOCK_REM = 1.25;
-// Пересекающиеся дела лежат каскадом: каждое следующее сдвинуто вправо и накрывает предыдущее,
-// оставляя на виду его начало с названием. Сдвиг, % ширины колонки; все сдвиги группы — не больше SPREAD
-const CASCADE_STEP = 30;
-const CASCADE_SPREAD = 60;
 // Новое дело из сетки начинается с получаса и длится час
 const CREATE_STEP = 30;
 const CREATE_MINUTES = 60;
@@ -207,13 +203,15 @@ const PlannerWeek = ({
             onClick={handleColumnClick}
             onDoubleClick={isPanel ? undefined : handleColumnDoubleClick}
           >
-            {layout.map(({ item, lane, lanes }) => {
+            {layout.map(({
+              item, lane, lanes, right,
+            }) => {
               const start = toMinutes(item.start);
               const top = ((start - gridStart) / MINUTES_IN_HOUR) * HOUR_REM;
               const height = Math.max(MIN_BLOCK_REM, ((toMinutes(item.end) - start) / MINUTES_IN_HOUR) * HOUR_REM);
-              const step = lanes > 1 ? Math.min(CASCADE_STEP, CASCADE_SPREAD / (lanes - 1)) : 0;
+              // Колонки пересечения; блок тянется вправо, пока не закрыл бы чужой заголовок (`layoutTimed`)
               const position = `top: ${top}rem; height: ${height}rem; z-index: ${lane + 1}; `
-                + `inset-inline-start: ${lane * step}%; width: ${100 - (lanes - 1) * step}%`;
+                + `inset-inline-start: ${(lane / lanes) * 100}%; width: ${((right - lane) / lanes) * 100}%`;
               const color = item.task ? listColorStyle(getListColor(state, item.task.project)) : undefined;
               const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
               return (
@@ -248,10 +246,10 @@ const PlannerWeek = ({
                     data-day={day}
                     onClick={handleItemClick}
                   >
+                    <span className={styles.weekBlockName}>{item.name}</span>
                     <span className={styles.weekBlockTime}>
                       {isPanel ? `${item.start}–${item.end}` : item.start}
                     </span>
-                    {item.name}
                   </button>
                 </div>
               );

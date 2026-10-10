@@ -1,8 +1,10 @@
 import type { LangFn } from '../../../util/localization';
-import type { PlannerCalendarView, PlannerRepeat, PlannerStatus } from './plannerModel';
+import type {
+  PlannerCalendarView, PlannerRepeat, PlannerState, PlannerStatus,
+} from './plannerModel';
 
 import {
-  addDays, AGENDA_DAYS, fromDayKey, getWeekKeys, toTime,
+  addDays, AGENDA_DAYS, countUnrated, fromDayKey, getDayLoad, getWeekKeys, toTime,
 } from './plannerModel';
 
 // Parvane (spec 009): подписи планировщика — даты и длительности в языке интерфейса
@@ -114,4 +116,17 @@ export function formatRepeat(lang: LangFn, repeat: PlannerRepeat) {
     repeat.count ? lang('PlannerRepeatTimes', { count: repeat.count }) : undefined,
   ].filter(Boolean);
   return [base, ...tail].join(' · ');
+}
+
+// Строка сводки дня: запланировано из бюджета, перегруз, неоценённые задачи
+export function buildDaySummary(lang: LangFn, state: PlannerState, day: string) {
+  const minutes = getDayLoad(state, day);
+  const unrated = countUnrated(state, day);
+  const isOver = minutes > state.budget;
+  const text = [
+    lang('PlannerDayPlan', { planned: formatHours(lang, minutes), budget: formatHours(lang, state.budget) }),
+    isOver ? lang('PlannerDayOverload', { minutes: minutes - state.budget }) : undefined,
+    unrated ? lang('PlannerDayUnrated', { count: unrated }) : undefined,
+  ].filter(Boolean).join(' · ');
+  return { text, isOver };
 }

@@ -3,12 +3,14 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
-import type { PlannerCalendarView, PlannerSlot } from './plannerModel';
+import type { PlannerCalendarView } from './plannerModel';
 import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
 import { setParvaneSection } from '../../../util/parvaneSection';
-import { formatDay, formatDayLong, formatPeriod } from './plannerFormat';
+import {
+  buildDaySummary, formatDay, formatDayLong, formatPeriod,
+} from './plannerFormat';
 import {
   detachInstance, eventInstance, fromDayKey, getWeekKeys, PLANNER_CALENDAR_VIEWS, shiftPeriod, taskInstance,
   toDayKey,
@@ -27,7 +29,6 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
-import PlannerDay, { buildDaySummary } from './PlannerDay';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerMonth from './PlannerMonth';
 import PlannerPeriodBar from './PlannerPeriodBar';
@@ -36,6 +37,7 @@ import PlannerStatistics from './PlannerStatistics';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
 import PlannerTasks from './PlannerTasks';
+import PlannerTimeline from './PlannerTimeline';
 import PlannerWeek from './PlannerWeek';
 import PlannerYear from './PlannerYear';
 
@@ -193,10 +195,6 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   const handleAddToDay = useLastCallback(() => {
     openForm({ day: picked });
-  });
-
-  const handleCreateInDay = useLastCallback((slot?: PlannerSlot) => {
-    openForm({ day: picked, slot: slot ? { ...slot, day: picked } : undefined });
   });
 
   const handleCreateInList = useLastCallback(() => {
@@ -509,10 +507,9 @@ const Planner = ({ isMobile }: OwnProps) => {
                   {lang('PlannerBackToCalendar')}
                 </Button>
                 {isNarrow ? (
-                  <PlannerDay
+                  <PlannerTimeline
                     state={state}
                     day={picked}
-                    isStrip={isNarrow}
                     inlineForm={isInlineForm ? (
                       <PlannerTaskForm
                         state={state}
@@ -521,10 +518,10 @@ const Planner = ({ isMobile }: OwnProps) => {
                         onCancel={handleCancelCreate}
                       />
                     ) : undefined}
-                    inlineFormStart={isInlineForm ? formParams.slot?.start : undefined}
+                    onAdd={handleAddToDay}
+                    onCreateAt={handleCreateAt}
                     onOpenTask={handleOpenTask}
                     onOpenEvent={handleOpenEvent}
-                    onCreateTask={handleCreateInDay}
                   />
                 ) : (
                   <>

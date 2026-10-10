@@ -730,11 +730,17 @@ export function getTimedForDay(state: PlannerState, day: string, excludedTaskId?
   return [...events, ...tasks].sort((a, b) => a.start.localeCompare(b.start));
 }
 
-export type PlannerTimedLayout = { item: PlannerTimed; lane: number; lanes: number };
+// `right` — колонка, до которой тянется блок (не дальше `lanes`): см. `layoutTimed`
+export type PlannerTimedLayout = { item: PlannerTimed; lane: number; lanes: number; right: number };
+// Высота заголовка блока в минутах сетки: дело, начавшееся в этих пределах, заголовок перекрыло бы
+const TITLE_MINUTES = 40;
 
 /**
- * Раскладка дел дня по колонкам для сетки часов: пересекающиеся дела стоят рядом,
- * `lanes` — число колонок в группе пересечений.
+ * Раскладка дел дня для сетки часов. Пересекающиеся дела получают колонки (`lane` из `lanes`).
+ * Дела, начинающиеся почти одновременно, стоят рядом: блок тянется вправо только до колонки
+ * (`right`) ближайшего дела, которое закрыло бы его заголовок. Если такого нет, блок идёт до
+ * правого края, а дела, начавшиеся заметно позже, ложатся поверх него со сдвигом — заголовок
+ * остаётся на виду.
  */
 export function layoutTimed(timed: PlannerTimed[]): PlannerTimedLayout[] {
   const result: PlannerTimedLayout[] = [];
@@ -756,11 +762,22 @@ export function layoutTimed(timed: PlannerTimed[]): PlannerTimedLayout[] {
     if (lane < 0) lane = laneEnds.length;
     laneEnds[lane] = end;
     clusterEnd = Math.max(clusterEnd, end);
-    const entry = { item, lane, lanes: 1 };
+    const entry = { item, lane, lanes: 1, right: 1 };
     cluster.push(entry);
     result.push(entry);
   });
   closeCluster();
+  result.forEach((entry) => {
+    const start = toMinutes(entry.item.start);
+    const end = Math.max(toMinutes(entry.item.end), start + 1);
+    entry.right = entry.lanes;
+    result.forEach((other) => {
+      if (other.lane <= entry.lane) return;
+      const otherStart = toMinutes(other.item.start);
+      const isOverlapping = otherStart < end && start < Math.max(toMinutes(other.item.end), otherStart + 1);
+      if (isOverlapping && otherStart < start + TITLE_MINUTES) entry.right = Math.min(entry.right, other.lane);
+    });
+  });
   return result;
 }
 

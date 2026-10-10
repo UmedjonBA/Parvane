@@ -7,7 +7,7 @@ import {
   expandRepeat, findSlots, freezePastGoals, getDayAvailability, getDayLoad, getDefaultEventEnd,
   getEligibleTasks, getEventsForDay, getGoalRecordForDay, getGoalsForDay, getListColor, getMonthGridKeys,
   getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
-  getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, makeFoodEntry, moveTask, nextOpenInstance,
+  getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, layoutTimed, makeFoodEntry, moveTask, nextOpenInstance,
   normalizePlannerState, occursOn, removeSeries, setOccurrence, setTaskDone, setTaskStepDone, shiftPeriod,
   splitSeries, truncateSeries, validateEvent, validateGoalRecord, validateRepeat, validateSettings, validateTask,
 } from './plannerModel';
@@ -577,5 +577,42 @@ describe('планировщик: день питания завершается
     // Повторная заморозка уже зафиксированное не трогает
     expect(freezePastGoals(state, TODAY)).toBe(0);
     expect(state.nutrition[TODAY].fixedGoals).toBeUndefined();
+  });
+});
+
+describe('раскладка пересечений в сетке часов', () => {
+  const timed = (name: string, start: string, end: string) => ({ name, start, end });
+  const byName = (items: ReturnType<typeof layoutTimed>) => Object.fromEntries(
+    items.map(({
+      item, lane, lanes, right,
+    }) => [item.name, [lane, right, lanes]]),
+  );
+
+  it('дела без пересечений занимают всю ширину', () => {
+    expect(byName(layoutTimed([timed('a', '09:00', '10:00'), timed('b', '10:00', '11:00')])))
+      .toEqual({ a: [0, 1, 1], b: [0, 1, 1] });
+  });
+
+  it('начавшиеся почти одновременно стоят рядом, начавшееся позже ложится поверх со сдвигом', () => {
+    // Случай со скриншота пользователя (10 окт 2026)
+    const layout = byName(layoutTimed([
+      timed('тест', '02:40', '03:40'),
+      timed('йц', '02:50', '03:50'),
+      timed('долгое', '03:00', '09:00'),
+      timed('тт', '04:00', '05:00'),
+      timed('позже', '04:30', '05:00'),
+    ]));
+    // Три первых начинаются в пределах заголовка друг друга — три колонки рядом
+    expect(layout['тест']).toEqual([0, 1, 3]);
+    expect(layout['йц']).toEqual([1, 2, 3]);
+    expect(layout['долгое']).toEqual([2, 3, 3]);
+    // «позже» начинается через полчаса после «тт» — закрыло бы его заголовок, поэтому они рядом
+    expect(layout['тт']).toEqual([0, 1, 3]);
+    expect(layout['позже']).toEqual([1, 2, 3]);
+  });
+
+  it('дело, начавшееся заметно позже, не сужает раннее', () => {
+    expect(byName(layoutTimed([timed('раннее', '09:00', '12:00'), timed('позднее', '10:00', '11:00')])))
+      .toEqual({ раннее: [0, 2, 2], позднее: [1, 2, 2] });
   });
 });
