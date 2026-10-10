@@ -21,7 +21,7 @@ import InputText from '../../ui/InputText';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import PlannerField from './PlannerField';
-import PlannerListPicker from './PlannerListPicker';
+import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
 
 import styles from './Planner.module.scss';
@@ -90,6 +90,7 @@ const PlannerTaskForm = ({
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(() => emptyRepeatDraft(params.day || ''));
   const [isAllDay, setIsAllDay] = useState(false);
   const [isHoliday, setIsHoliday] = useState(false);
+  const [eventColor, setEventColor] = useState(0);
   // Конец события следует за началом (+1 ч), пока пользователь не задал его сам
   const [isEndTouched, setIsEndTouched] = useState(Boolean(slot));
   const [error, setError] = useState<string>();
@@ -140,6 +141,7 @@ const PlannerTaskForm = ({
         day: repeat ? undefined : (day || undefined),
         isAllDay: isAllDay || undefined,
         isHoliday: isHoliday || undefined,
+        color: eventColor || undefined,
       };
       const eventError = validateEvent(event);
       if (eventError) {
@@ -256,6 +258,7 @@ const PlannerTaskForm = ({
             <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
             <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
           </div>
+          <PlannerColorSwatches value={eventColor} onChange={setEventColor} />
           {!isAllDay && (
             <div className={styles.fields}>
               <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={handleStart} />

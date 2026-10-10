@@ -255,6 +255,9 @@ fn check_event(e: &Event) -> Result<()> {
     if let Some(o) = &e.origin {
         check_origin(o)?;
     }
+    if e.color.as_ref().is_some_and(|c| c.value > MAX_LIST_COLOR) {
+        return Err(ProtoError::InvalidField("color"));
+    }
     Ok(())
 }
 
@@ -405,6 +408,7 @@ impl PlannerState {
             .chain(e.origin.as_ref().and_then(|o| o.stamp.as_ref()))
             .chain(e.all_day.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))
+            .chain(e.color.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.occurrences.iter().filter_map(|o| o.stamp.as_ref()))
         {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
@@ -469,6 +473,7 @@ impl PlannerState {
         merge_reg!(cur.origin, inc.origin, TaskOrigin);
         merge_reg!(cur.all_day, inc.all_day, Bool);
         merge_reg!(cur.is_holiday, inc.is_holiday, Bool);
+        merge_reg!(cur.color, inc.color, U32);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
@@ -671,6 +676,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(e.origin.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.all_day.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.color.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 for o in &e.occurrences {
                     push(o.stamp.as_ref())?;
                 }
@@ -771,6 +777,9 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     f.stamp = Some(pb.clone());
                 }
                 if let Some(f) = &mut e.is_holiday {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.color {
                     f.stamp = Some(pb.clone());
                 }
                 for o in &mut e.occurrences {

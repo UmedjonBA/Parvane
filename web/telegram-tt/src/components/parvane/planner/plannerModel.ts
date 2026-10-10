@@ -92,8 +92,10 @@ export type PlannerEvent = {
   instanceDay?: string;
   // Весь день: времени нет (хранится 00:00–23:59), в загрузку и окна дня не входит
   isAllDay?: boolean;
-  // Праздник: день события отмечается в календаре
+  // Праздник: день события заливается в календаре
   isHoliday?: boolean;
+  // Цвет из палитры списков (0 или нет — без цвета): событие в список не входит
+  color?: number;
 };
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
@@ -1223,6 +1225,8 @@ export function normalizePlannerState(raw: unknown): PlannerState {
         repeat,
         isAllDay: event.isAllDay ? true : undefined,
         isHoliday: event.isHoliday ? true : undefined,
+        color: Number.isInteger(event.color) && event.color! > 0 && event.color! <= LIST_COLOR_COUNT
+          ? event.color : undefined,
       };
     });
 

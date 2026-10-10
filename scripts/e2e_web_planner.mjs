@@ -436,12 +436,24 @@ try {
   await page.locator('#planner-new-name').fill('День города');
   await sidePane.getByText('All day', { exact: true }).click();
   await sidePane.getByText('Holiday', { exact: true }).click();
+  // У события свой цвет (в список его не добавить)
+  await sidePane.getByRole('radio', { name: 'Color 2' }).click();
   await sidePane.getByLabel('Start', { exact: true }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByText('Added: День города').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const cityDay = dayPane.locator('[data-all-day]').filter({ hasText: 'День города' });
   await cityDay.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await cityDay.getAttribute('data-holiday'), '1', 'праздник отмечен в панели дня');
+  // Праздник заливает клетку календаря цветом события (а не красит число), событие на весь день —
+  // метка у числа
+  assert.equal(await todayCell.getAttribute('data-holiday'), '1', 'клетка праздника не отмечена');
+  const cellColors = await page.evaluate(([holidayDay, plainDay]) => [holidayDay, plainDay].map((day) => getComputedStyle(
+    document.querySelector(`#ParvanePlanner [role="gridcell"][data-day="${day}"]`),
+  ).backgroundColor), [today, tomorrowKey]);
+  assert.notEqual(cellColors[0], cellColors[1], 'клетка праздника должна быть залита иначе, чем обычная');
+  assert.equal(await todayCell.locator('[data-all-day-marks]').getAttribute('data-all-day-marks'), '1', 'метка события на весь день');
+  const chipColor = await cityDay.evaluate((el) => getComputedStyle(el).getPropertyValue('--planner-list-color').trim());
+  assert.ok(chipColor, 'у события с цветом нет цвета в панели дня');
   assert.equal((await todayCell.innerText()).match(/[\d.]+ h/)?.[0], loadBefore, 'событие на весь день не входит в загрузку дня');
   await planner.getByRole('button', { name: '+ Task', exact: true }).click();
   await page.locator('#planner-new-name').fill('Цветная задача');
@@ -556,6 +568,11 @@ try {
     `пересекающиеся дела должны стоять в разных строках: ${JSON.stringify(layout.blocks)}`,
   );
   assert.ok(await todayCell.isVisible(), 'календарь остаётся на виду');
+  // Событие на весь день — полосой во всю шкалу
+  const allDayBar = timeline.locator('[data-block][data-all-day]').filter({ hasText: 'День города' });
+  await allDayBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const barWidth = await allDayBar.evaluate((el) => el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width);
+  assert.ok(barWidth > 0.98, `событие на весь день должно занимать всю шкалу: ${barWidth}`);
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone.png` });
   // Новое дело: «+» раскрывает форму под шкалой, без отдельного экрана
   await timeline.getByRole('button', { name: '+ Task for this day' }).click();

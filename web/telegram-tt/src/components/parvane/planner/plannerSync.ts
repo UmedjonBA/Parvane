@@ -42,7 +42,7 @@ type EngineTask = {
 type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
-  allDay?: boolean; isHoliday?: boolean;
+  allDay?: boolean; isHoliday?: boolean; color?: number;
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
 type EngineGoal = { target: number; tolerance: number } | null;
@@ -197,6 +197,7 @@ export function fromEngineState(engine: EngineState): PlannerState {
         origin: e.origin ? { seriesId: e.origin.seriesId, day: e.origin.day } : undefined,
         isAllDay: e.allDay || undefined,
         isHoliday: e.isHoliday || undefined,
+        color: e.color || undefined,
       };
     }),
     projects: ['', ...lists.map((list) => list.name)],
@@ -279,6 +280,7 @@ function eventChange(e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
       ...seriesFields(e, previous),
       allDay: Boolean(e.isAllDay),
       isHoliday: Boolean(e.isHoliday),
+      color: e.color || 0,
     },
   };
 }

@@ -7,7 +7,7 @@
 //! Состояние:
 //! `{tasks:[{id,name,description,steps:[{text,isDone}],status,listId,rank,day,start,due,minutes|null,
 //!     repeat|null,occurrences:[{day,excluded,done,doneSteps}],origin|null,source|null}],
-//!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null,allDay,isHoliday}],
+//!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null,allDay,isHoliday,color}],
 //!   lists:[{id,name,order,color}],
 //!   nutrition:[{day,entries:[{id,name,meal,kcal,protein|null,fat|null,carbs|null,fiber|null,grams|null,per100}],
 //!     isComplete,fixedGoals|null,waterMl|null}], settings|null, goals|null,
@@ -129,6 +129,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "repeat": repeat_json(&e.repeat), "occurrences": occurrences_json(&e.occurrences), "origin": origin_json(&e.origin),
                 "allDay": e.all_day.as_ref().map(|b| b.value).unwrap_or(false),
                 "isHoliday": e.is_holiday.as_ref().map(|b| b.value).unwrap_or(false),
+                "color": e.color.as_ref().filter(|c| !c.unset).map(|c| c.value).unwrap_or(0),
             })
         })
         .collect();
@@ -412,6 +413,7 @@ fn event_of(o: &Map<String, Value>) -> Result<Event> {
         origin: origin_of(o)?,
         all_day: bool_field(o, "allDay")?,
         is_holiday: bool_field(o, "isHoliday")?,
+        color: u32_field(o, "color")?,
     })
 }
 
@@ -537,7 +539,7 @@ mod tests {
           {"task":{"id":"t2","name":"Без оценки","minutes":null}},
           {"event":{"id":"e1","name":"Стендап","start":"09:30","end":"09:45","weekdays":[1,2,3,4,5],"day":""}},
           {"list":{"id":"l1","name":"Работа","order":1,"color":4}},
-          {"event":{"id":"e3","name":"Новый год","start":"00:00","end":"23:59","day":"2027-01-01","allDay":true,"isHoliday":true}},
+          {"event":{"id":"e3","name":"Новый год","start":"00:00","end":"23:59","day":"2027-01-01","allDay":true,"isHoliday":true,"color":3}},
           {"nutritionDay":{"day":"2026-10-08","entries":[{"id":"f1","name":"Суп","meal":"lunch","kcal":300,"protein":12}],"isComplete":true,"waterMl":500}},
           {"settings":{"dayStart":480,"dayEnd":1200,"lunchStart":0,"lunchEnd":0,"margin":10,"budget":480}},
           {"goals":{"kcal":{"target":2000,"tolerance":100},"protein":{"target":120,"tolerance":20},"water":{"target":2000,"tolerance":300}}},
@@ -556,6 +558,7 @@ mod tests {
         let e3 = parsed["events"].as_array().unwrap().iter().find(|e| e["id"] == "e3").unwrap();
         assert_eq!(e3["allDay"], json!(true));
         assert_eq!(e3["isHoliday"], json!(true));
+        assert_eq!(e3["color"], json!(3));
         let e1 = parsed["events"].as_array().unwrap().iter().find(|e| e["id"] == "e1").unwrap();
         assert_eq!(e1["allDay"], json!(false));
         let out: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();

@@ -157,7 +157,8 @@ const PlannerWeek = ({
               <button
                 key={`e${instanceKey(event)}`}
                 type="button"
-                className={buildClassName(styles.weekChip, event.isHoliday && styles.weekChipHoliday)}
+                className={buildClassName(styles.weekChip, event.isHoliday && !event.color && styles.weekChipHoliday)}
+                style={listColorStyle(event.color)}
                 title={event.name}
                 data-kind="event"
                 data-all-day={event.id}
@@ -224,14 +225,14 @@ const PlannerWeek = ({
               // Колонки пересечения; блок тянется вправо, пока не закрыл бы чужой заголовок (`layoutTimed`)
               const position = `top: ${top}rem; height: ${height}rem; z-index: ${lane + 1}; `
                 + `inset-inline-start: ${(lane / lanes) * 100}%; width: ${((right - lane) / lanes) * 100}%`;
-              const color = item.task ? listColorStyle(getListColor(state, item.task.project)) : undefined;
+              const color = listColorStyle(item.task ? getListColor(state, item.task.project) : item.event!.color);
               const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
               return (
                 <div
                   key={itemKey}
                   className={buildClassName(
                     styles.weekBlock,
-                    item.event && styles.weekBlockEvent,
+                    item.event && !item.event.color && styles.weekBlockEvent,
                     item.task?.status === 'done' && styles.agendaDone,
                   )}
                   style={color ? `${position}; ${color}` : position}
