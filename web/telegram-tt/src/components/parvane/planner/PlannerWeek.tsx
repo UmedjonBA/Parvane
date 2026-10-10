@@ -1,4 +1,4 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useEffect, useRef } from '../../../lib/teact/teact';
 
 import type { PlannerState } from './plannerModel';
 
@@ -25,6 +25,8 @@ type OwnProps = {
   onCreateForDay: (day: string) => void;
   // Панель дня: шапки с днём нет, нажатие на свободное время создаёт дело с этого времени
   isPanel?: boolean;
+  // Вид «Неделя»: нажатие на свободное время создаёт дело в этом дне с этого времени
+  isTapCreate?: boolean;
   onCreateAt?: (day: string, start: number) => void;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
@@ -41,9 +43,18 @@ const CREATE_MINUTES = 60;
 // Сетка по часам для недели и для панели дня; дела без времени, события на весь день и
 // дедлайны — строкой над сеткой
 const PlannerWeek = ({
-  state, days, picked, today, isPanel, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent,
+  state, days, picked, today, isPanel, isTapCreate, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent,
 }: OwnProps) => {
   const lang = useLang();
+
+  const rootRef = useRef<HTMLDivElement>();
+
+  // Неделя шире экрана (телефон): выбранный день должен быть на виду
+  useEffect(() => {
+    if (isPanel) return;
+    rootRef.current?.querySelector(`button[data-day="${picked}"]`)
+      ?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [isPanel, picked]);
 
   const handleDayClick = useLastCallback((e: React.MouseEvent<HTMLElement>) => {
     onPickDay(e.currentTarget.dataset.day!);
@@ -56,7 +67,7 @@ const PlannerWeek = ({
 
   const handleColumnClick = useLastCallback((e: React.MouseEvent<HTMLElement>) => {
     const { day } = e.currentTarget.dataset;
-    if (!isPanel || !onCreateAt) {
+    if (!(isPanel || isTapCreate) || !onCreateAt) {
       onPickDay(day!);
       return;
     }
@@ -106,6 +117,7 @@ const PlannerWeek = ({
 
   return (
     <div
+      ref={rootRef}
       className={buildClassName(styles.week, days.length === 1 && styles.weekSingle, isPanel && styles.weekPanel)}
       style={`--planner-week-days: ${days.length}; --planner-hour: ${HOUR_REM}rem`}
       data-planner-view={isPanel ? undefined : 'week'}
