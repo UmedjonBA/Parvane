@@ -15,7 +15,7 @@ import LinkField from '../../common/LinkField';
 import PrivateChatInfo from '../../common/PrivateChatInfo';
 import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
 import ListItem from '../../ui/ListItem';
-import Spinner from '../../ui/Spinner';
+import ParvaneMascot from '../../ui/ParvaneMascot';
 
 type OwnProps = {
   chatId: string;
@@ -69,7 +69,7 @@ const ManageInviteInfo = ({
 
   const renderImporters = () => {
     if (!importers?.length && requesters?.length) return undefined;
-    if (!importers) return <Spinner />;
+    if (!importers) return <ParvaneMascot />;
     return (
       <>
         <IslandTitle>{importers.length ? lang('PeopleJoined', usage) : lang('NoOneJoined')}</IslandTitle>
@@ -103,7 +103,7 @@ const ManageInviteInfo = ({
 
   const renderRequesters = () => {
     if (invite?.isRevoked) return undefined;
-    if (!requesters && importers) return <Spinner />;
+    if (!requesters && importers) return <ParvaneMascot />;
     if (!requesters?.length) return undefined;
     return (
       <>

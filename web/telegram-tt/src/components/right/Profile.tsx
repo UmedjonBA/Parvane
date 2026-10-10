@@ -119,7 +119,7 @@ import FloatingActionButton from '../ui/FloatingActionButton';
 import InfiniteScroll from '../ui/InfiniteScroll';
 import Link from '../ui/Link';
 import ListItem, { type MenuItemContextAction } from '../ui/ListItem';
-import Spinner from '../ui/Spinner';
+import ParvaneMascot from '../ui/ParvaneMascot';
 import TabList, { type TabWithProperties } from '../ui/TabList';
 import Transition from '../ui/Transition';
 import DeleteMemberModal from './DeleteMemberModal';
@@ -973,7 +973,7 @@ const Profile = ({
         <div
           className={buildClassName(styles.content, styles.emptyList)}
         >
-          {!noSpinner && !forceRenderHiddenMembers && <Spinner />}
+          {!noSpinner && !forceRenderHiddenMembers && <ParvaneMascot />}
           {forceRenderHiddenMembers && <NothingFound text={lang('ChatMemberListNoAccess')} />}
         </div>
       );

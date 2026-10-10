@@ -183,9 +183,18 @@ try {
     await mobilePage.getByRole('menuitem', { name: 'My Profile' }).click();
     await mobilePage.locator('#RightColumn .RightHeader').getByText('My Profile')
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    // Чат «Избранное» под профилем не рисуется — иначе он мелькает при возврате в список чатов
+    const middleVisibility = await mobilePage.evaluate(
+      () => getComputedStyle(document.querySelector('#MiddleColumn')).visibility,
+    );
+    assert.equal(middleVisibility, 'hidden', 'под «Моим профилем» на телефоне виден чат «Избранное»');
   };
   await openMyProfile();
   await mobilePage.locator('#RightColumn .RightHeader .close-button').click();
+  // Сразу после нажатия (профиль ещё уезжает) чат по-прежнему скрыт
+  assert.equal(await mobilePage.evaluate(
+    () => getComputedStyle(document.querySelector('#MiddleColumn')).visibility,
+  ), 'hidden', 'чат «Избранное» показался во время закрытия «Моего профиля»');
   await waitTop('LeftColumn|false|', '«назад» из «Моего профиля»');
 
   await openMyProfile();

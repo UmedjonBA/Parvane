@@ -14,7 +14,7 @@ import useOldLang from '../../hooks/useOldLang';
 
 import StickerButton from '../common/StickerButton';
 import Button from '../ui/Button';
-import Spinner from '../ui/Spinner';
+import ParvaneMascot from '../ui/ParvaneMascot';
 
 type OwnProps = {
   stickerSetId: string;
@@ -101,7 +101,7 @@ const StickerSetResult: FC<OwnProps & StateProps> = ({
       </div>
       <div className="sticker-set-main shared-canvas-container">
         <canvas ref={sharedCanvasRef} className="shared-canvas" />
-        {!canRenderStickers && <Spinner />}
+        {!canRenderStickers && <ParvaneMascot />}
         {canRenderStickers && displayedStickers.map((sticker) => (
           <StickerButton
             sticker={sticker}

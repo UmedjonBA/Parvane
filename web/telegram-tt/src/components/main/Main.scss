@@ -275,6 +275,10 @@
     #Main.right-column-open & {
       transform: translate3d(-20vw, 0, 0);
     }
+
+    #Main.own-profile-shown & {
+      visibility: hidden;
+    }
   }
 }
 

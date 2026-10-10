@@ -71,6 +71,7 @@ import useDerivedState from '../../hooks/useDerivedState';
 import useForceUpdate from '../../hooks/useForceUpdate';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
+import usePrevDuringAnimation from '../../hooks/usePrevDuringAnimation';
 import usePreventPinchZoomGesture from '../../hooks/usePreventPinchZoomGesture';
 import useShowTransition from '../../hooks/useShowTransition';
 import useSyncEffect from '../../hooks/useSyncEffect';
@@ -131,6 +132,7 @@ type StateProps = {
   isLeftColumnOpen: boolean;
   isMiddleColumnOpen: boolean;
   isRightColumnOpen: boolean;
+  isOwnProfileOpen: boolean;
   isMediaViewerOpen: boolean;
   isStoryViewerOpen: boolean;
   isForwardModalOpen: boolean;
@@ -184,6 +186,7 @@ type StateProps = {
 const INVITE_OFFLINE_NOTICE_MS = 15000;
 const APP_OUTDATED_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
+const OWN_PROFILE_CLOSE_DURATION = 450;
 
 let DEBUG_isLogged = false;
 
@@ -192,6 +195,7 @@ const Main = ({
   isLeftColumnOpen,
   isMiddleColumnOpen,
   isRightColumnOpen,
+  isOwnProfileOpen,
   isMediaViewerOpen,
   isStoryViewerOpen,
   isForwardModalOpen,
@@ -848,7 +852,12 @@ const Main = ({
   const isAppSidebarShown = !isMobile;
   const isPlannerOpen = useDerivedState(getParvaneSection) === 'planner';
 
+  // Parvane: «Мой профиль» на телефоне открыт поверх чата «Избранное». Пока профиль показан и пока он
+  // закрывается, сам чат скрыт — иначе при возврате в список чатов он мелькал под уезжающим профилем
+  const isMiddleColumnHidden = usePrevDuringAnimation(isOwnProfileOpen || undefined, OWN_PROFILE_CLOSE_DURATION);
+
   const className = buildClassName(
+    isMiddleColumnHidden && 'own-profile-shown',
     willAnimateLeftColumnRef.current && 'left-column-animating',
     willAnimateRightColumnRef.current && 'right-column-animating',
     isNarrowMessageList && 'narrow-message-list',
@@ -1012,6 +1021,9 @@ export default memo(withGlobal<OwnProps>(
       isLeftColumnOpen: isLeftColumnShown,
       isMiddleColumnOpen: Boolean(chatId),
       isRightColumnOpen: selectIsRightColumnShown(global, isMobile),
+      isOwnProfileOpen: Boolean(
+        isMobile && selectIsRightColumnShown(global, isMobile) && selectTabState(global).chatInfo.isOwnProfile,
+      ),
       isMediaViewerOpen: selectIsMediaViewerOpen(global),
       isStoryViewerOpen: selectIsStoryViewerOpen(global),
       isForwardModalOpen: selectIsForwardModalOpen(global),

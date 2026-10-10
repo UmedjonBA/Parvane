@@ -18,7 +18,7 @@ import AnimatedIconWithPreview from '../../common/AnimatedIconWithPreview';
 import Island, { IslandDescription } from '../../gili/layout/Island';
 import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import Spinner from '../../ui/Spinner';
+import ParvaneMascot from '../../ui/ParvaneMascot';
 import JoinRequest from './JoinRequest';
 
 type OwnProps = {
@@ -98,7 +98,7 @@ const ManageJoinRequests: FC<OwnProps & StateProps> = ({
               ? lang('JoinRequests', chat.joinRequests.length) : lang('NoMemberRequests')}
           </p>
           {!chat?.joinRequests && (
-            <Spinner key="loading" />
+            <ParvaneMascot key="loading" />
           )}
           {chat?.joinRequests?.length === 0 && (
             <IslandDescription key="empty">

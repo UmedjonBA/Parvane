@@ -495,10 +495,11 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   'UserInfo.NotificationsEnabled': 'Enabled',
   'UserInfo.NotificationsDisabled': 'Disabled',
   DeleteContact: 'Delete Contact',
-  ParvaneTwoFactorTitle: 'Two-factor authentication',
+  ParvaneTwoFactorTitle: 'Sign-in protection',
   ParvaneTwoFactorToggle: 'Confirm sign-in in Telegram',
-  ParvaneTwoFactorInfo: 'After the password, each new device must be confirmed in the Telegram account '
-    + 'linked to this profile.',
+  ParvaneTwoFactorInfo: 'Protects the account if someone learns your password. Without it, they can sign in on a '
+    + 'new device: they cannot read your messages (that needs the recovery key), but they can change the password '
+    + 'or reset your identity. With it, every sign-in on a new device must also be confirmed in Telegram.',
   ParvaneTwoFactorNoTelegram: 'Link Telegram first: it is done when confirming the account via the bot.',
   ParvaneTwoFactorFailed: 'Could not change the two-factor setting',
   ParvanePasswordConfirm: 'Current password',
@@ -585,7 +586,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneBackgroundFailed: 'Could not save the chat background',
   ParvaneJoinByRequest: 'Join by request',
   ParvaneJoinByRequestInfo: 'People who open the main invite link send a request that an admin approves',
-  ParvaneJoinModeConfirm: 'The main invite link will be replaced with a new one. The current main link will stop working.',
+  ParvaneJoinModeConfirm: 'The main invite link will be replaced with a new one. '
+    + 'The current main link will stop working.',
   ParvaneJoinModeFailed: 'Could not change how people join. Try again.',
   ParvaneChoosePhoto: 'Choose photo',
 };
@@ -1144,10 +1146,11 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'UserInfo.NotificationsEnabled': 'Включены',
   'UserInfo.NotificationsDisabled': 'Выключены',
   DeleteContact: 'Удалить контакт',
-  ParvaneTwoFactorTitle: 'Двухфакторная аутентификация',
+  ParvaneTwoFactorTitle: 'Защита входа',
   ParvaneTwoFactorToggle: 'Подтверждать вход в Telegram',
-  ParvaneTwoFactorInfo: 'После пароля каждое новое устройство нужно подтвердить в Telegram-аккаунте, '
-    + 'привязанном к профилю.',
+  ParvaneTwoFactorInfo: 'Защищает аккаунт, если кто-то узнал пароль. Без неё он войдёт с нового устройства: '
+    + 'переписку не прочитает (для неё нужен ключ восстановления), но сможет сменить пароль или сбросить личность. '
+    + 'С ней каждый вход с нового устройства нужно ещё подтвердить в Telegram.',
   ParvaneTwoFactorNoTelegram: 'Сначала привяжите Telegram: это происходит при подтверждении аккаунта через бота.',
   ParvaneTwoFactorFailed: 'Не удалось изменить настройку двухфакторного входа',
   ParvanePasswordConfirm: 'Текущий пароль',
@@ -1234,7 +1237,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneBackgroundFailed: 'Не удалось сохранить фон чата',
   ParvaneJoinByRequest: 'Вступление по заявке',
   ParvaneJoinByRequestInfo: 'По основной ссылке новый участник отправляет заявку, её одобряет администратор',
-  ParvaneJoinModeConfirm: 'Основная ссылка-приглашение будет заменена новой. Прежняя основная ссылка перестанет работать.',
+  ParvaneJoinModeConfirm: 'Основная ссылка-приглашение будет заменена новой. '
+    + 'Прежняя основная ссылка перестанет работать.',
   ParvaneJoinModeFailed: 'Не удалось изменить способ вступления. Попробуйте ещё раз.',
   ParvaneChoosePhoto: 'Выбрать фотографию',
 };
