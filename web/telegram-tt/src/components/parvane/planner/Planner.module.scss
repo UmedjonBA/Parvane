@@ -1342,7 +1342,28 @@
 .weekAllDay,
 .weekBody {
   display: grid;
-  grid-template-columns: var(--planner-week-gutter) repeat(var(--planner-week-days), minmax(5.5rem, 1fr));
+  grid-template-columns:
+    var(--planner-week-gutter)
+    repeat(var(--planner-week-days), minmax(var(--planner-week-column, 5.5rem), 1fr));
+  // Ряд — во всю ширину сетки, а не окна: иначе закреплённая колонка часов уезжала бы при прокрутке
+  width: max-content;
+  min-width: 100%;
+}
+
+// Оси остаются на месте при прокрутке: дни — сверху, часы — слева
+.weekHead {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  background: var(--planner-week-surface, var(--color-background));
+}
+
+.weekCorner,
+.weekHours {
+  position: sticky;
+  z-index: 25;
+  inset-inline-start: 0;
+  background: var(--planner-week-surface, var(--color-background));
 }
 
 .weekSingle {
@@ -1360,6 +1381,7 @@
 // Сетка дня в правой панели: узкая колонка часов, без горизонтальной прокрутки
 .weekPanel {
   --planner-week-gutter: 2.5rem;
+  --planner-week-surface: var(--color-background-secondary);
 
   overflow-x: hidden;
 
@@ -2164,5 +2186,29 @@
     padding: 0.5rem 0.75rem;
     border-top: none;
     border-bottom: 1px solid var(--color-borders);
+  }
+}
+
+@media (max-width: 925px) {
+  // Вид «Неделя» на телефоне: панели дня нет, сетка недели — на весь экран и листается сама
+  // (в обе стороны), оси закреплены; колонки шире
+  .layoutWeek {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .layoutWeek .main {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .layoutWeek .week {
+    --planner-week-column: 7.5rem;
+
+    overflow: auto;
+    flex: 1 1 auto;
+    min-height: 0;
   }
 }

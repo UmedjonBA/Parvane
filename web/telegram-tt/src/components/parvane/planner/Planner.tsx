@@ -190,6 +190,7 @@ const Planner = ({ isMobile }: OwnProps) => {
 
   // Нажатие на свободное время в сетке дня: новое дело с этого времени на час
   const handleCreateAt = useLastCallback((day: string, start: number) => {
+    setPicked(day);
     openForm({ day, slot: { day, start, end: start + MINUTES_IN_HOUR } });
   });
 
@@ -292,7 +293,9 @@ const Planner = ({ isMobile }: OwnProps) => {
   const isCreating = Boolean(formParams);
   // На телефоне трёх колонок нет: новая задача из календаря пишется прямо в расписании дня (на месте
   // свободного окна), а не на отдельном экране
-  const isInlineForm = isCreating && isNarrow && view === VIEW_CALENDAR && !isSettingsOpen;
+  // Телефон, вид «Неделя»: день и так виден в сетке недели — панель дня не показывается
+  const isNarrowWeek = isNarrow && view === VIEW_CALENDAR && calendarView === 'week';
+  const isInlineForm = isCreating && isNarrow && view === VIEW_CALENDAR && !isSettingsOpen && !isNarrowWeek;
   // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
   const side = !isLoaded ? undefined
     : isSettingsOpen ? 'settings' : isCreating && !isInlineForm ? 'form' : editedTask ? 'task'
@@ -375,6 +378,7 @@ const Planner = ({ isMobile }: OwnProps) => {
           <div
             className={buildClassName(
               styles.layout, side && styles.layoutWithSide, !isCalendar && styles.layoutNoPanel,
+              isNarrowWeek && styles.layoutWeek,
             )}
           >
             {side && (
@@ -488,6 +492,8 @@ const Planner = ({ isMobile }: OwnProps) => {
                   days={getWeekKeys(picked)}
                   picked={picked}
                   today={today}
+                  isTapCreate
+                  onCreateAt={handleCreateAt}
                   onPickDay={handlePickDay}
                   onCreateForDay={handleCreateForDay}
                   onOpenTask={handleOpenTask}
@@ -495,7 +501,7 @@ const Planner = ({ isMobile }: OwnProps) => {
                 />
               )}
             </div>
-            {isCalendar && (
+            {isCalendar && !isNarrowWeek && (
               <aside className={styles.panel} data-planner-day={picked}>
                 <Button
                   isText

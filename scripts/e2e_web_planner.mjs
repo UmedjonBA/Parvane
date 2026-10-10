@@ -566,6 +566,40 @@ try {
   await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
   await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await timeline.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  // Вид «Неделя» на телефоне: панели дня нет (она дублировала бы сетку), оси закреплены при прокрутке,
+  // нажатие на свободное время создаёт дело
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await viewSelect.selectOption('week');
+  await sidePane.getByRole('button', { name: 'Close' }).first().click();
+  const phoneWeek = planner.locator('[data-planner-view="week"]');
+  await phoneWeek.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await timeline.count(), 0, 'в виде «Неделя» на телефоне шкалы дня быть не должно');
+  const axes = await phoneWeek.evaluate(async (week) => {
+    const box = week.getBoundingClientRect();
+    week.scrollTo(week.scrollWidth, week.scrollHeight);
+    await new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); });
+    const head = week.firstElementChild.getBoundingClientRect();
+    const hours = week.lastElementChild.firstElementChild.getBoundingClientRect();
+    const column = week.querySelector('[data-day]').getBoundingClientRect();
+    const result = {
+      scrolledX: week.scrollLeft, scrolledY: week.scrollTop,
+      headTop: head.top - box.top, hoursLeft: hours.left - box.left, columnWidth: column.width,
+    };
+    week.scrollTo(0, 0);
+    return result;
+  });
+  assert.ok(axes.scrolledX > 50 && axes.scrolledY > 50, `сетка недели должна листаться в обе стороны: ${JSON.stringify(axes)}`);
+  assert.ok(Math.abs(axes.headTop) < 2, `строка дней должна оставаться сверху: ${JSON.stringify(axes)}`);
+  assert.ok(Math.abs(axes.hoursLeft) < 2, `колонка часов должна оставаться слева: ${JSON.stringify(axes)}`);
+  assert.ok(axes.columnWidth >= 110, `колонки недели на телефоне должны быть шире: ${JSON.stringify(axes)}`);
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone-week.png` });
+  await phoneWeek.locator('div[data-day]').last().click({ position: { x: 30, y: 8 } });
+  await sidePane.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.ok(await sidePane.getByLabel('Start', { exact: true }).inputValue(), 'нажатие на свободное время недели задаёт начало');
+  await planner.getByRole('button', { name: 'Cancel' }).click();
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await viewSelect.selectOption('month');
+  await sidePane.getByRole('button', { name: 'Close' }).first().click();
   // Шестерёнка — в строке периода
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
