@@ -2133,10 +2133,32 @@
 }
 
 @media (max-width: 925px) {
-  // День — над календарём
+  // День — над календарём и забирает всё место, что осталось от календаря
+  .timeline,
+  .timelineScroll {
+    flex: 1 1 auto;
+  }
+
+  .timelineScroll {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .timelineTrack {
+    flex: 1 1 auto;
+  }
+
+  .timelineBlock {
+    font-size: 0.8125rem;
+
+    .weekBlockName {
+      white-space: normal;
+    }
+  }
+
   .panel,
   .panelOpen .panel {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     order: -1;
 
     padding: 0.5rem 0.75rem;
