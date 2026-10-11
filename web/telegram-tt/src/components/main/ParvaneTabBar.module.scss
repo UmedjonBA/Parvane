@@ -1,0 +1,116 @@
+// Parvane: нижняя панель разделов на телефоне. Высота задаётся в `Main.scss`
+// (`--parvane-tab-bar-height`): на неё же поднимаются колонки и разделы
+
+.root {
+  position: fixed;
+  z-index: var(--z-chat-float-button);
+  right: 0;
+  bottom: 0;
+  left: 0;
+
+  display: flex;
+  align-items: center;
+
+  height: var(--parvane-tab-bar-height);
+  padding: 0 0.25rem env(safe-area-inset-bottom);
+  border-top: 1px solid var(--color-borders);
+
+  background: var(--color-background);
+}
+
+.tab {
+  cursor: pointer;
+
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+
+  color: var(--color-text-secondary);
+
+  background: none;
+  outline: none;
+
+  &:focus-visible {
+    color: var(--color-text);
+  }
+}
+
+.tabActive {
+  color: var(--color-primary);
+}
+
+.iconWrap {
+  position: relative;
+  display: flex;
+}
+
+.icon {
+  font-size: 1.5rem;
+}
+
+.title {
+  overflow: hidden;
+
+  max-width: 100%;
+
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  position: absolute;
+  top: -0.25rem;
+  left: 1rem;
+
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.3125rem;
+  border-radius: 0.5625rem;
+
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.125rem;
+  color: var(--color-white);
+  text-align: center;
+
+  background: var(--color-primary);
+}
+
+.addButton {
+  cursor: pointer;
+
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+
+  width: 3.5rem;
+  height: 2.75rem;
+  margin: 0 0.375rem;
+  border: none;
+  border-radius: 0.875rem;
+
+  color: var(--color-white);
+
+  background: var(--color-primary);
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-text);
+  }
+}
+
+.addIcon {
+  font-size: 1.75rem;
+}

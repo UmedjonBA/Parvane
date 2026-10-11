@@ -11,7 +11,6 @@ import type { CloudTab } from './cloudStore';
 
 import { MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
-import { setParvaneSection } from '../../../util/parvaneSection';
 import { formatFileSize } from '../../../util/textFormat';
 import {
   childrenOf, pathOf, searchNodes, sizeOf, sortNodes, usageOf,
@@ -157,10 +156,6 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const selectedEntries = entries.filter((e) => selected.includes(keyOf(e)));
   const path = useMemo(() => pathOf(nodes, place.folder), [nodes, place.folder]);
   const sizes = useMemo(() => usageOf(getNodes(data?.rootId, data)), [data]);
-
-  const handleBackToMessenger = useLastCallback(() => {
-    setParvaneSection('messenger');
-  });
 
   const handleSwitchTab = useLastCallback((index: number) => {
     setQuery('');
@@ -437,16 +432,6 @@ const Cloud = ({ isMobile }: OwnProps) => {
       onDrop={handleDrop}
     >
       <header className={styles.header}>
-        {isMobile && (
-          <Button
-            round
-            size="smaller"
-            color="translucent"
-            iconName="arrow-left"
-            ariaLabel={lang('ParvaneSectionMessenger')}
-            onClick={handleBackToMessenger}
-          />
-        )}
         {!isMobile && <h1 className={styles.title}>{lang('ParvaneSectionCloud')}</h1>}
         <TabList
           className={styles.tabs}

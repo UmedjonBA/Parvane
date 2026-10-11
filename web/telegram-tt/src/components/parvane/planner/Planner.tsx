@@ -7,7 +7,7 @@ import type { PlannerCalendarView } from './plannerModel';
 import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
-import { setParvaneSection } from '../../../util/parvaneSection';
+import { consumePlannerAddRequest, getPlannerAddRequest } from '../../../util/parvaneSection';
 import {
   buildDaySummary, formatDay, formatDayLong, formatPeriod,
 } from './plannerFormat';
@@ -42,10 +42,6 @@ import PlannerWeek from './PlannerWeek';
 import PlannerYear from './PlannerYear';
 
 import styles from './Planner.module.scss';
-
-type OwnProps = {
-  isMobile?: boolean;
-};
 
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
@@ -94,7 +90,7 @@ function msUntilTomorrow() {
 
 // Parvane (spec 009): раздел «План» — календарь с загрузкой дней, задачи по
 // спискам, статистика времени и питания. Данные — запись устройства (plannerStore)
-const Planner = ({ isMobile }: OwnProps) => {
+const Planner = () => {
   const lang = useLang();
 
   const state = useDerivedState(getPlannerState);
@@ -206,6 +202,8 @@ const Planner = ({ isMobile }: OwnProps) => {
     openForm(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
   });
 
+  // Кнопка «+» нижней панели телефона: форма новой записи, как у кнопки «+ Задача»
+
   const handleCreated = useLastCallback((taskId?: string, day?: string) => {
     setFormParams(undefined);
     if (taskId !== undefined) handleOpenTask(taskId, day);
@@ -280,10 +278,6 @@ const Planner = ({ isMobile }: OwnProps) => {
     }
   });
 
-  const handleBackToMessenger = useLastCallback(() => {
-    setParvaneSection('messenger');
-  });
-
   const editedTemplate = editor && state.tasks.find(({ id }) => id === editor.id);
   const editedTask = editedTemplate && editor.day && editedTemplate.repeat
     ? taskInstance(editedTemplate, editor.day) : editedTemplate;
@@ -321,6 +315,14 @@ const Planner = ({ isMobile }: OwnProps) => {
   const isMonthView = calendarView === 'month';
   const daySummary = buildDaySummary(lang, state, picked);
   const pickedDays = useMemo(() => [picked], [picked]);
+
+  // Кнопка «+» нижней панели телефона: форма новой записи, как у кнопки «+ Задача»
+  const addRequest = useDerivedState(getPlannerAddRequest);
+  useEffect(() => {
+    if (!addRequest || !isLoaded) return;
+    consumePlannerAddRequest();
+    handleAdd();
+  }, [addRequest, isLoaded]);
   const settingsButton = (
     <Button
       round
@@ -342,16 +344,6 @@ const Planner = ({ isMobile }: OwnProps) => {
       onKeyDown={handleKeyDown}
     >
       <header className={styles.header}>
-        {isMobile && (
-          <Button
-            round
-            size="smaller"
-            color="translucent"
-            iconName="arrow-left"
-            ariaLabel={lang('ParvaneSectionMessenger')}
-            onClick={handleBackToMessenger}
-          />
-        )}
         {/* Узкий экран: заголовка и кнопки добавления нет — вкладки стоят в строке со стрелкой,
             шестерёнка — в строке периода, задача добавляется из расписания дня */}
         {!isNarrow && <h1 className={styles.title}>{title}</h1>}

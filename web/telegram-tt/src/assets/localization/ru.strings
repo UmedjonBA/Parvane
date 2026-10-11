@@ -1144,6 +1144,8 @@
 "ParvaneSectionPlanner" = "План";
 "ParvaneFolderSettings" = "Настройка папок";
 "ParvaneSectionCloud" = "Облако";
+"ParvaneTabBarAdd" = "Новая запись";
+"ParvaneTabBarProfile" = "Профиль";
 "ParvaneCloudTabDrive" = "Мои файлы";
 "ParvaneCloudTabShared" = "Доступные мне";
 "ParvaneCloudTabTrash" = "Корзина";

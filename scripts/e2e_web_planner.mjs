@@ -1,7 +1,7 @@
 // Боковая панель разделов и планировщик (spec 009). Панель видна всегда: без папок
 // слева — только разделы «Чаты» и «План»; раздел «План» занимает место колонок
 // мессенджера. Планировщик: задача, отмена, событие с пересечением,
-// статистика, сохранение после перезагрузки, вход с телефона из меню.
+// статистика, сохранение после перезагрузки, на телефоне — нижняя панель разделов.
 // Запуск: scripts/run_web_planner_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -508,13 +508,25 @@ try {
   assert.equal(await isShown(page, '#LeftColumn'), true, 'список чатов вернулся');
   console.log('OK: данные планировщика пережили перезагрузку, мессенджер возвращается');
 
-  // ── Телефон: панели нет, вход в «План» из меню, возврат стрелкой ──────────
+  // ── Телефон: боковой панели нет, разделы — в нижней панели ────────────────
   await page.setViewportSize({ width: 390, height: 800 });
   await page.waitForTimeout(800);
-  assert.equal(await isShown(page, '#FoldersSidebar'), false, 'на телефоне панели нет');
-  await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Planner' }).click();
+  assert.equal(await isShown(page, '#FoldersSidebar'), false, 'на телефоне боковой панели нет');
+  const tabBar = page.getByRole('navigation', { name: 'Sections' });
+  await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const barGeometry = await page.evaluate(() => {
+    const bar = document.querySelector('nav[aria-label="Sections"]').getBoundingClientRect();
+    const list = document.querySelector('#LeftColumn').getBoundingClientRect();
+    return { barTop: bar.top, barBottom: bar.bottom, listBottom: list.bottom, height: window.innerHeight };
+  });
+  assert.ok(Math.abs(barGeometry.barBottom - barGeometry.height) < 2, `панель должна стоять внизу: ${JSON.stringify(barGeometry)}`);
+  assert.ok(barGeometry.listBottom <= barGeometry.barTop + 1, `список чатов не должен уходить под панель: ${JSON.stringify(barGeometry)}`);
+  assert.equal(await tabBar.getByRole('button', { name: 'Chats' }).getAttribute('aria-current'), 'page');
+  await tabBar.getByRole('button', { name: 'Planner' }).click();
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await tabBar.getByRole('button', { name: 'Planner' }).getAttribute('aria-current'), 'page');
+  const plannerBottom = await planner.evaluate((el) => el.getBoundingClientRect().bottom);
+  assert.ok(plannerBottom <= barGeometry.barTop + 1, `«План» не должен уходить под панель: ${plannerBottom}`);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   // Телефон: заголовка и кнопки «+ Задача» нет, шестерёнка — в строке периода; расписание дня —
@@ -622,9 +634,17 @@ try {
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await sidePane.getByRole('button', { name: 'Close' }).first().click();
   console.log('OK: телефон — день шкалой времени над календарём, пересечения в разных строках, новое дело под шкалой');
-  await planner.getByRole('button', { name: 'Chats' }).click();
+  // «+» нижней панели открывает форму новой записи прямо в «Плане»
+  await tabBar.getByRole('button', { name: 'New entry' }).click();
+  await planner.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape').catch(() => undefined);
+  // «Профиль» — главный экран настроек; во вложенном экране и в открытом чате панели нет
+  await tabBar.getByRole('button', { name: 'Profile' }).click();
   await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: телефон — вход из меню и возврат');
+  assert.equal(await tabBar.getByRole('button', { name: 'Profile' }).getAttribute('aria-current'), 'page');
+  await tabBar.getByRole('button', { name: 'Chats' }).click();
+  assert.ok(await isShown(page, '#LeftColumn'), '«Чаты» возвращают к списку');
+  console.log('OK: телефон — нижняя панель: разделы, «+» и «Профиль»');
 
   console.log('e2e_web_planner: OK');
 } catch (error) {

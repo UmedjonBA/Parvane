@@ -23,10 +23,8 @@ import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironment';
 import { getPromptInstall } from '../../../util/installPrompt';
 import { openBugReport } from '../../../util/parvaneDiag';
-import { setParvaneSection } from '../../../util/parvaneSection';
 import { getSystemTheme } from '../../../util/systemTheme';
 
-import useAppLayout from '../../../hooks/useAppLayout';
 import { useFolderManagerForUnreadCounters } from '../../../hooks/useFolderManager';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -120,17 +118,6 @@ const LeftSideMenuItems = ({
     updatePerformanceSettings(performanceSettings);
   });
 
-  // Parvane (spec 009): на телефоне боковой панели разделов нет — вход в «План» из меню
-  const { isMobile } = useAppLayout();
-
-  const handleOpenPlanner = useLastCallback(() => {
-    setParvaneSection('planner');
-  });
-
-  const handleOpenCloud = useLastCallback(() => {
-    setParvaneSection('cloud');
-  });
-
   const handleChangelogClick = useLastCallback(() => {
     window.open(BETA_CHANGELOG_URL, '_blank', 'noopener,noreferrer');
   });
@@ -176,16 +163,6 @@ const LeftSideMenuItems = ({
       >
         {lang('MenuContacts')}
       </MenuItem>
-      {isMobile && (
-        <MenuItem icon="calendar" onClick={handleOpenPlanner}>
-          {lang('ParvaneSectionPlanner')}
-        </MenuItem>
-      )}
-      {isMobile && (
-        <MenuItem icon="folder" onClick={handleOpenCloud}>
-          {lang('ParvaneSectionCloud')}
-        </MenuItem>
-      )}
       {bots.map((bot) => (
         <AttachBotItem
           bot={bot}

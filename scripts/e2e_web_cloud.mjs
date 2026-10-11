@@ -360,23 +360,23 @@ try {
   assert.deepEqual(leaks, [], 'в базах сервера найден открытый текст');
   console.log('OK: в базах сервера нет имён файлов и содержимого открытым текстом');
 
-  // ── Телефон: вход из меню, возврат стрелкой, без горизонтальной прокрутки ─
+  // ── Телефон: вход и возврат нижней панелью, без горизонтальной прокрутки ─
   await sidebar.getByRole('tab', { name: 'Chats' }).click();
   await page.setViewportSize({ width: 390, height: 800 });
   await page.waitForTimeout(800);
-  assert.equal(await isShown(page, '#FoldersSidebar'), false, 'на телефоне панели нет');
-  await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Cloud' }).click();
+  assert.equal(await isShown(page, '#FoldersSidebar'), false, 'на телефоне боковой панели нет');
+  const tabBar = page.getByRole('navigation', { name: 'Sections' });
+  await tabBar.getByRole('button', { name: 'Cloud' }).click();
   await cloud.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await item('снимок.png').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   const box = await cloud.boundingBox();
   assert.ok(box.width >= 389 && box.x <= 1, `раздел должен занимать экран: ${JSON.stringify(box)}`);
-  await cloud.getByRole('button', { name: 'Chats' }).click();
+  await tabBar.getByRole('button', { name: 'Chats' }).click();
   await cloud.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  assert.ok(await isShown(page, '#LeftColumn'), 'стрелка назад возвращает к чатам');
-  console.log('OK: телефон — вход из меню и возврат');
+  assert.ok(await isShown(page, '#LeftColumn'), '«Чаты» нижней панели возвращают к списку');
+  console.log('OK: телефон — вход и возврат нижней панелью');
 
   // Встроенный просмотрщик PDF браузера живёт в своём кадре (blob:) и сам жалуется на
   // localStorage — это не код приложения

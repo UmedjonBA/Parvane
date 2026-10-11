@@ -11,7 +11,7 @@ import { getActions, getGlobal, withGlobal } from '../../global';
 import type { ApiChatFolder, ApiLimitTypeWithModal, ApiStarGiftAuctionState, ApiUser } from '../../api/types';
 import type { TabState } from '../../global/types';
 import type { ThemeKey } from '../../types';
-import { SettingsScreens } from '../../types';
+import { LeftColumnContent, SettingsScreens } from '../../types';
 
 import { BASE_EMOJI_KEYWORD_LANG, DEBUG, FOLDERS_POSITION_LEFT, INACTIVE_MARKER } from '../../config';
 import { requestNextMutation } from '../../lib/fasterdom/fasterdom';
@@ -29,7 +29,9 @@ import {
   selectIsRightColumnShown,
   selectIsServiceChatReady,
   selectIsStoryViewerOpen,
+  selectLeftColumnContentKey,
   selectPerformanceSettingsValue,
+  selectSettingsScreen,
   selectTabSelectedGiftAuction,
   selectTabState,
   selectTheme,
@@ -113,6 +115,7 @@ import GameModal from './GameModal';
 import HistoryCalendar from './HistoryCalendar.async';
 import NewContactModal from './NewContactModal.async';
 import ParvaneBugReportModal from './ParvaneBugReportModal';
+import ParvaneTabBar from './ParvaneTabBar';
 import PremiumLimitReachedModal from './premium/common/PremiumLimitReachedModal.async';
 import GiveawayModal from './premium/GiveawayModal.async';
 import PremiumMainModal from './premium/PremiumMainModal.async';
@@ -174,6 +177,8 @@ type StateProps = {
   isAccountFrozen?: boolean;
   isAppConfigLoaded?: boolean;
   isFoldersSidebarShown: boolean;
+  leftColumnContentKey: LeftColumnContent;
+  settingsScreen: SettingsScreens;
   diceEmojies?: string[];
   selectedGiftAuction?: ApiStarGiftAuctionState;
   theme: ThemeKey;
@@ -239,6 +244,8 @@ const Main = ({
   isAccountFrozen,
   isAppConfigLoaded,
   isFoldersSidebarShown,
+  leftColumnContentKey,
+  settingsScreen,
   diceEmojies,
   selectedGiftAuction,
   theme,
@@ -855,6 +862,12 @@ const Main = ({
   const parvaneSection = useDerivedState(getParvaneSection);
   const isPlannerOpen = parvaneSection === 'planner';
   const isCloudOpen = parvaneSection === 'cloud';
+  // Parvane: на телефоне разделы переключаются нижней панелью. В мессенджере она видна на списке чатов
+  // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
+  const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
+    && settingsScreen === SettingsScreens.Main;
+  const isTabBarShown = Boolean(isMobile) && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
+    && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen)));
 
   // Parvane: «Мой профиль» на телефоне открыт поверх чата «Избранное». Пока профиль показан и пока он
   // закрывается, сам чат скрыт — иначе при возврате в список чатов он мелькал под уезжающим профилем
@@ -870,6 +883,7 @@ const Main = ({
     isAppSidebarShown && 'folders-sidebar-visible',
     isPlannerOpen && 'section-planner',
     isCloudOpen && 'section-cloud',
+    isTabBarShown && 'parvane-tab-bar-shown',
   );
 
   const handleBlur = useLastCallback(() => {
@@ -917,8 +931,9 @@ const Main = ({
         <div className="tauri-drag-region" data-tauri-drag-region />
       )}
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
-      {isPlannerOpen && <Planner isMobile={isMobile} />}
+      {isPlannerOpen && <Planner />}
       {isCloudOpen && <Cloud isMobile={isMobile} />}
+      {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
       <MiddleColumn leftColumnRef={leftColumnRef} isMobile={isMobile} />
@@ -1071,6 +1086,8 @@ export default memo(withGlobal<OwnProps>(
       isAccountFrozen,
       isAppConfigLoaded: global.isAppConfigLoaded,
       isFoldersSidebarShown: foldersPosition === FOLDERS_POSITION_LEFT && !isMobile && selectAreFoldersPresent(global),
+      leftColumnContentKey: selectLeftColumnContentKey(global),
+      settingsScreen: selectSettingsScreen(global),
       diceEmojies: global.appConfig?.diceEmojies,
       selectedGiftAuction,
       theme,

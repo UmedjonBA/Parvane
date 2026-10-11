@@ -3101,6 +3101,8 @@
 "ParvaneSectionPlanner" = "Planner";
 "ParvaneFolderSettings" = "Folder settings";
 "ParvaneSectionCloud" = "Cloud";
+"ParvaneTabBarAdd" = "New entry";
+"ParvaneTabBarProfile" = "Profile";
 "ParvaneCloudTabDrive" = "My files";
 "ParvaneCloudTabShared" = "Shared with me";
 "ParvaneCloudTabTrash" = "Trash";

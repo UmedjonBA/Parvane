@@ -307,6 +307,20 @@
   }
 }
 
+// Parvane: нижняя панель разделов на телефоне (`ParvaneTabBar`) — список чатов, «План» и «Облако»
+// заканчиваются над ней
+#Main {
+  --parvane-tab-bar-height: calc(3.5rem + env(safe-area-inset-bottom));
+}
+
+#Main.parvane-tab-bar-shown {
+  > #LeftColumn,
+  > #ParvanePlanner,
+  > #ParvaneCloud {
+    bottom: var(--parvane-tab-bar-height);
+  }
+}
+
 // Parvane (spec 009, 016): разделы «План» и «Облако» занимают место колонок
 // мессенджера; сами колонки остаются смонтированными (звонки, синхронизация),
 // но скрыты
