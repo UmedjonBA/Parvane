@@ -25,7 +25,7 @@ use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::LwwStamp;
 use crate::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, List, NutritionDay, Occurrence, Origin as TaskOrigin,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, List, NutritionDay, Occurrence, Origin as TaskOrigin,
     PlannerOp, PlannerSnapshot, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
 };
 
@@ -53,6 +53,9 @@ pub const MAX_OCCURRENCES: usize = 2000;
 pub const MAX_REPEAT_INTERVAL: u32 = 99;
 pub const MAX_REPEAT_COUNT: u32 = 999;
 const MAX_CHAT: usize = 128;
+/// spec 020: записи здоровья.
+const MAX_HEALTH_KIND: usize = 16;
+const MAX_HEALTH_DETAILS: usize = 4000;
 
 pub fn decode_op(bytes: &[u8]) -> Result<PlannerOp> {
     decode_checked(bytes, Origin::Client)
@@ -283,8 +286,38 @@ fn check_entry(e: &FoodEntry) -> Result<()> {
     if e.name.len() > MAX_FOOD_NAME || !MEALS.contains(&e.meal.as_str()) {
         return Err(ProtoError::InvalidField("entry"));
     }
-    if [e.kcal, e.protein, e.fat, e.carbs, e.fiber, e.grams].iter().any(|v| !v.is_finite() || *v < 0.0) {
+    if [e.kcal, e.protein, e.fat, e.carbs, e.fiber, e.grams, e.sugar, e.salt].iter().any(|v| !v.is_finite() || *v < 0.0) {
         return Err(ProtoError::InvalidField("nutrient"));
+    }
+    if !(e.time.is_empty() || is_time(&e.time)) {
+        return Err(ProtoError::InvalidField("entry_time"));
+    }
+    Ok(())
+}
+
+/// Запись здоровья (spec 020): вид — непустая строка из строчных латинских букв; числа конечны и не
+/// отрицательны; `details` движок не разбирает.
+fn check_health(r: &HealthRecord) -> Result<()> {
+    if !is_id(&r.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    if r.stamp.is_none() && r.deleted.is_some() {
+        return Ok(());
+    }
+    if !is_day(&r.day) {
+        return Err(ProtoError::InvalidField("health_day"));
+    }
+    if r.kind.is_empty() || r.kind.len() > MAX_HEALTH_KIND || !r.kind.bytes().all(|b| b.is_ascii_lowercase()) {
+        return Err(ProtoError::InvalidField("health_kind"));
+    }
+    if !(r.time.is_empty() || is_time(&r.time)) || !(r.end_time.is_empty() || is_time(&r.end_time)) {
+        return Err(ProtoError::InvalidField("health_time"));
+    }
+    if [r.value, r.value2].iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err(ProtoError::InvalidField("health_value"));
+    }
+    if r.name.len() > MAX_FOOD_NAME || r.details.len() > MAX_HEALTH_DETAILS {
+        return Err(ProtoError::InvalidField("health_text"));
     }
     Ok(())
 }
@@ -340,6 +373,8 @@ pub struct PlannerState {
     pub goals: Option<GoalSet>,
     /// spec 011: записи целей с датами (ключ — id).
     pub goal_periods: BTreeMap<String, GoalPeriod>,
+    /// spec 020: записи здоровья (ключ — id).
+    pub health: BTreeMap<String, HealthRecord>,
 }
 
 /// Самая свежая метка среди полей объекта.
@@ -422,6 +457,10 @@ impl PlannerState {
         stamp_key(p.stamp.as_ref()) > stamp_key(p.deleted.as_ref())
     }
 
+    pub fn is_health_alive(r: &HealthRecord) -> bool {
+        stamp_key(r.stamp.as_ref()) > stamp_key(r.deleted.as_ref())
+    }
+
     pub fn is_list_alive(l: &List) -> bool {
         let mut best = (0u64, String::new());
         for s in l
@@ -499,6 +538,27 @@ impl PlannerState {
         }
     }
 
+    fn merge_health(&mut self, inc: &HealthRecord) {
+        match self.health.get_mut(&inc.id) {
+            Some(c) => {
+                let inc_bytes = inc.encode_to_vec();
+                let cur_bytes = c.encode_to_vec();
+                let deleted = c.deleted.clone();
+                if is_newer(inc.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
+                    *c = inc.clone();
+                    c.deleted = deleted;
+                }
+                merge_deleted(&mut c.deleted, inc.deleted.as_ref());
+            }
+            None => {
+                // Надгробие без метки — только id и `deleted`, иначе его
+                // «попутные» поля зависели бы от порядка применения.
+                let fresh = if inc.stamp.is_none() { HealthRecord { id: inc.id.clone(), deleted: inc.deleted.clone(), ..Default::default() } } else { inc.clone() };
+                self.health.insert(inc.id.clone(), fresh);
+            }
+        }
+    }
+
     fn merge_list(&mut self, inc: &List) {
         let cur = self.lists.entry(inc.id.clone()).or_insert_with(|| List { id: inc.id.clone(), ..Default::default() });
         merge_reg!(cur.name, inc.name, Str);
@@ -561,6 +621,10 @@ impl PlannerState {
                 check_goal_period(p)?;
                 self.merge_goal_period(p);
             }
+            Some(change::Change::Health(r)) => {
+                check_health(r)?;
+                self.merge_health(r);
+            }
             Some(change::Change::Migration(_)) | None => {}
         }
         Ok(())
@@ -613,6 +677,10 @@ impl PlannerState {
             check_goal_period(p)?;
             self.merge_goal_period(p);
         }
+        for r in &s.health {
+            check_health(r)?;
+            self.merge_health(r);
+        }
         Ok(())
     }
 
@@ -626,6 +694,7 @@ impl PlannerState {
             settings: self.settings.clone(),
             goals: self.goals.clone(),
             goal_periods: self.goal_periods.values().cloned().collect(),
+            health: self.health.values().cloned().collect(),
         }
     }
 
@@ -702,6 +771,10 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
             Some(change::Change::GoalPeriod(p)) => {
                 push(p.stamp.as_ref())?;
                 push(p.deleted.as_ref())?;
+            }
+            Some(change::Change::Health(r)) => {
+                push(r.stamp.as_ref())?;
+                push(r.deleted.as_ref())?;
             }
             Some(change::Change::Migration(_)) | None => {}
         }
@@ -826,6 +899,13 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     p.deleted = Some(pb.clone());
                 } else {
                     p.stamp = Some(pb.clone());
+                }
+            }
+            Some(change::Change::Health(r)) => {
+                if r.deleted.is_some() {
+                    r.deleted = Some(pb.clone());
+                } else {
+                    r.stamp = Some(pb.clone());
                 }
             }
             Some(change::Change::Migration(_)) | None => {}

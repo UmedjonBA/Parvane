@@ -280,3 +280,64 @@ describe('планировщик ↔ движок (spec 010)', () => {
     expect(isLegacyPlannerRecord({ migrated: true, at: 1 })).toBe(false);
   });
 });
+
+describe('планировщик ↔ движок: здоровье (spec 020)', () => {
+  const ENGINE_EMPTY: EngineState = {
+    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,
+  };
+
+  it('записи здоровья, цели здоровья и новые поля питания уходят изменениями', () => {
+    const empty = createEmptyPlannerState();
+    const next: PlannerState = {
+      ...empty,
+      health: [
+        { id: 'weight-2026-10-11', day: '2026-10-11', kind: 'weight', value: 74.7 },
+        {
+          id: 'w1', day: '2026-10-11', kind: 'workout', time: '19:00', value: 60, name: 'Зал',
+          exercises: [{ name: 'присед', sets: 4, reps: 8, weight: 80 }],
+        },
+      ],
+      healthGoals: { ...empty.healthGoals, steps: 10000 },
+      nutrition: {
+        '2026-10-11': {
+          entries: [{ id: 'f1', name: 'Обед', meal: 'lunch', kcal: 520, sugar: 14, time: '13:30' }], isComplete: false,
+        },
+      },
+    };
+    const changes = diffChanges(empty, next);
+    const health = changes.filter((change) => 'health' in change).map((change) => change.health as Record<string, unknown>);
+    expect(health.map(({ id }) => id)).toEqual(['weight-2026-10-11', 'w1', 'health-goals']);
+    expect(health[1].details).toBe('{"ex":[{"name":"присед","sets":4,"reps":8,"weight":80}]}');
+    expect(JSON.parse(health[2].details as string).steps).toBe(10000);
+    const day = changes.find((change) => 'nutritionDay' in change)!.nutritionDay as { entries: Record<string, unknown>[] };
+    expect(day.entries[0]).toMatchObject({ sugar: 14, salt: null, time: '13:30' });
+    // Удаление записи — надгробие
+    expect(diffChanges(next, { ...next, health: [next.health[1]] }))
+      .toEqual([{ health: { id: 'weight-2026-10-11', deleted: true } }]);
+  });
+
+  it('состояние строится из записей движка; цели здоровья — из записи вида goals', () => {
+    const state = fromEngineState({
+      ...ENGINE_EMPTY,
+      health: [
+        {
+          id: 'w1', day: '2026-10-11', kind: 'workout', time: '19:00', endTime: '', value: 60, value2: 0, name: 'Зал',
+          details: '{"ex":[{"name":"жим","sets":3,"reps":10,"weight":60}]}',
+        },
+        {
+          id: 'health-goals', day: '2000-01-01', kind: 'goals', time: '', endTime: '', value: 0, value2: 0, name: '',
+          details: '{"steps":9000,"sleepMinutes":450}',
+        },
+        {
+          id: 'x', day: '2026-10-11', kind: 'pulse', time: '', endTime: '', value: 64, value2: 0, name: '', details: 'не JSON',
+        },
+      ],
+    });
+    expect(state.health.map(({ id }) => id)).toEqual(['w1', 'x']);
+    expect(state.health[0].exercises).toEqual([{ name: 'жим', sets: 3, reps: 10, weight: 60 }]);
+    expect(state.health[1].exercises).toBeUndefined();
+    expect(state.healthGoals).toEqual({ steps: 9000, sleepMinutes: 450 });
+    // Без записи целей — цели по умолчанию
+    expect(fromEngineState(ENGINE_EMPTY).healthGoals.activeMinutes).toBe(150);
+  });
+});

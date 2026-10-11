@@ -1,7 +1,8 @@
 /* eslint-disable no-null/no-null -- контракт JSON движка (planner_json.rs): null = «не задано», отсутствие поля = «без изменений» */
 import type {
-  PlannerEvent, PlannerFoodEntry, PlannerGoal, PlannerGoalRecord, PlannerGoalValues, PlannerList, PlannerNutrient,
-  PlannerNutritionDay, PlannerOccurrence, PlannerRepeat, PlannerState, PlannerTask,
+  PlannerEvent, PlannerExercise, PlannerFoodEntry, PlannerGoal, PlannerGoalRecord, PlannerGoalValues,
+  PlannerHealthGoals, PlannerHealthRecord, PlannerList, PlannerNutrient, PlannerNutritionDay, PlannerOccurrence,
+  PlannerRepeat, PlannerState, PlannerTask,
 } from './plannerModel';
 
 import {
@@ -64,6 +65,14 @@ type EngineEntry = {
   fiber: number | null;
   grams: number | null;
   per100: boolean;
+  sugar?: number | null;
+  salt?: number | null;
+  time?: string;
+};
+// spec 020: запись здоровья; `details` — JSON (упражнения тренировки либо цели здоровья)
+type EngineHealth = {
+  id: string; day: string; kind: string; time: string; endTime: string; value: number; value2: number;
+  name: string; details: string;
 };
 type EngineDay = {
   day: string; entries: EngineEntry[]; isComplete: boolean; fixedGoals: EngineGoals; waterMl: number | null;
@@ -73,12 +82,17 @@ type EngineSettings = {
 } | null;
 export type EngineState = {
   tasks: EngineTask[]; events: EngineEvent[]; lists: EngineList[]; nutrition: EngineDay[];
-  settings: EngineSettings; goals: EngineGoals; goalPeriods?: EngineGoalPeriod[]; headSeq: number; sizeBytes: number;
+  settings: EngineSettings; goals: EngineGoals; goalPeriods?: EngineGoalPeriod[]; health?: EngineHealth[];
+  headSeq: number; sizeBytes: number;
 };
 
 export type PlannerChange = Record<string, unknown>;
 
 const NUTRIENTS: PlannerNutrient[] = ['kcal', 'protein', 'fat', 'carbs', 'fiber'];
+// Цели здоровья — одна запись здоровья с известным id; день у неё условный (движок требует дату)
+const HEALTH_GOALS_ID = 'health-goals';
+const HEALTH_GOALS_KIND = 'goals';
+const HEALTH_GOALS_DAY = '2000-01-01';
 
 // ── движок → состояние ───────────────────────────────────────────────────────
 
@@ -129,6 +143,9 @@ function entryFrom(e: EngineEntry): PlannerFoodEntry {
     fiber: value(e.fiber),
     grams,
     per100,
+    sugar: value(e.sugar ?? null),
+    salt: value(e.salt ?? null),
+    time: e.time || undefined,
   };
   if (per100 && grams) {
     NUTRIENTS.forEach((nutrient) => {
@@ -137,6 +154,55 @@ function entryFrom(e: EngineEntry): PlannerFoodEntry {
     });
   }
   return entry;
+}
+
+function parseDetails<T>(details: string): T | undefined {
+  if (!details) return undefined;
+  try {
+    return JSON.parse(details) as T;
+  } catch {
+    // Негодные подробности — запись остаётся без них
+    return undefined;
+  }
+}
+
+function healthFrom(record: EngineHealth): PlannerHealthRecord {
+  const exercises = parseDetails<{ ex?: PlannerExercise[] }>(record.details)?.ex;
+  return {
+    id: record.id,
+    day: record.day,
+    kind: record.kind,
+    time: record.time || undefined,
+    endTime: record.endTime || undefined,
+    value: record.value,
+    value2: record.value2 || undefined,
+    name: record.name || undefined,
+    exercises: Array.isArray(exercises) && exercises.length ? exercises : undefined,
+  };
+}
+
+function healthChange(record: PlannerHealthRecord): PlannerChange {
+  return {
+    health: {
+      id: record.id,
+      day: record.day,
+      kind: record.kind,
+      time: record.time || '',
+      endTime: record.endTime || '',
+      value: record.value,
+      value2: record.value2 || 0,
+      name: record.name || '',
+      details: record.exercises?.length ? JSON.stringify({ ex: record.exercises }) : '',
+    },
+  };
+}
+
+function healthGoalsChange(goals: PlannerHealthGoals): PlannerChange {
+  return {
+    health: {
+      id: HEALTH_GOALS_ID, day: HEALTH_GOALS_DAY, kind: HEALTH_GOALS_KIND, value: 0, details: JSON.stringify(goals),
+    },
+  };
 }
 
 /** JSON движка → состояние для экранов. */
@@ -181,6 +247,7 @@ export function fromEngineState(engine: EngineState): PlannerState {
   });
   const s = engine.settings;
   const goals = goalValuesFrom(engine.goals);
+  const healthGoalsRecord = engine.health?.find((record) => record.id === HEALTH_GOALS_ID);
   return {
     version: 1,
     tasks,
@@ -211,6 +278,9 @@ export function fromEngineState(engine: EngineState): PlannerState {
     settings: s ? {
       dayStart: s.dayStart, dayEnd: s.dayEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd, margin: s.margin,
     } : { ...DEFAULT_PLANNER_SETTINGS },
+    health: (engine.health || []).filter((record) => record.kind !== HEALTH_GOALS_KIND).map(healthFrom),
+    healthGoals: (healthGoalsRecord && parseDetails<PlannerHealthGoals>(healthGoalsRecord.details))
+      || empty.healthGoals,
   };
 }
 
@@ -318,6 +388,9 @@ function entryOf(e: PlannerFoodEntry) {
     fiber: num(e.fiber),
     grams: num(e.grams),
     per100: Boolean(e.per100),
+    sugar: num(e.sugar),
+    salt: num(e.salt),
+    time: e.time || '',
   };
 }
 
@@ -417,6 +490,15 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
       changes.push({ goalPeriod: { id: record.id, deleted: true } });
     }
   });
+
+  next.health.forEach((record) => {
+    const before = previous.health.find((r) => r.id === record.id);
+    if (!before || !same(before, record)) changes.push(healthChange(record));
+  });
+  previous.health.forEach((record) => {
+    if (!next.health.some((r) => r.id === record.id)) changes.push({ health: { id: record.id, deleted: true } });
+  });
+  if (!same(previous.healthGoals, next.healthGoals)) changes.push(healthGoalsChange(next.healthGoals));
   return changes;
 }
 

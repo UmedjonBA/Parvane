@@ -11,7 +11,9 @@
 //!   lists:[{id,name,order,color}],
 //!   nutrition:[{day,entries:[{id,name,meal,kcal,protein|null,fat|null,carbs|null,fiber|null,grams|null,per100}],
 //!     isComplete,fixedGoals|null,waterMl|null}], settings|null, goals|null,
-//!   goalPeriods:[{id,startDay,endDay,kcal|null,protein|null,fat|null,carbs|null,fiber|null,water|null}]}`
+//!   goalPeriods:[{id,startDay,endDay,kcal|null,protein|null,fat|null,carbs|null,fiber|null,water|null}],
+//!   health:[{id,day,kind,time,endTime,value,value2,name,details}]}` (spec 020; у записи питания ещё
+//! `sugar|null,salt|null,time`),
 //! где `repeat = {kind:"daily|weekly|monthly|yearly",interval,weekdays,monthDay,startDay,endDay,count}`,
 //! `origin = {seriesId,day}`, `source = {chat,opId}` (spec 011).
 //! Изменения: `{changes:[{task:{…}}|{event:{…}}|{list:{…}}|{nutritionDay:{…}}|{settings:{…}}|{goals:{…}}|
@@ -22,7 +24,7 @@ use serde_json::{json, Map, Value};
 use super::planner::PlannerState;
 use crate::error::{ProtoError, Result};
 use crate::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, List, Migration, NutritionDay, Occurrence, Origin,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, List, Migration, NutritionDay, Occurrence, Origin,
     PlannerOp, Repeat, RepeatKind, Settings, Source, Step, Steps, Str, Task, Weekdays, I32, U32,
 };
 
@@ -32,6 +34,8 @@ const KNOWN_FAT: u32 = 4;
 const KNOWN_CARBS: u32 = 8;
 const KNOWN_FIBER: u32 = 16;
 const KNOWN_GRAMS: u32 = 32;
+const KNOWN_SUGAR: u32 = 64;
+const KNOWN_SALT: u32 = 128;
 
 // ── состояние → JSON ────────────────────────────────────────────────────────
 
@@ -96,6 +100,7 @@ fn entry_json(e: &FoodEntry) -> Value {
         "kcal": if e.known & KNOWN_KCAL != 0 { e.kcal } else { 0.0 },
         "protein": num(KNOWN_PROTEIN, e.protein), "fat": num(KNOWN_FAT, e.fat), "carbs": num(KNOWN_CARBS, e.carbs),
         "fiber": num(KNOWN_FIBER, e.fiber), "grams": num(KNOWN_GRAMS, e.grams), "per100": e.per100,
+        "sugar": num(KNOWN_SUGAR, e.sugar), "salt": num(KNOWN_SALT, e.salt), "time": e.time,
     })
 }
 
@@ -172,10 +177,21 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
             })
         })
         .collect();
+    let health: Vec<Value> = state
+        .health
+        .values()
+        .filter(|r| PlannerState::is_health_alive(r))
+        .map(|r| {
+            json!({
+                "id": r.id, "day": r.day, "kind": r.kind, "time": r.time, "endTime": r.end_time,
+                "value": r.value, "value2": r.value2, "name": r.name, "details": r.details,
+            })
+        })
+        .collect();
     json!({
         "tasks": tasks, "events": events, "lists": lists, "nutrition": nutrition,
         "settings": settings.unwrap_or(Value::Null), "goals": state.goals.as_ref().map(goals_json).unwrap_or(Value::Null),
-        "goalPeriods": goal_periods,
+        "goalPeriods": goal_periods, "health": health,
         "headSeq": head_seq, "sizeBytes": state.size_estimate(),
     })
     .to_string()
@@ -450,6 +466,8 @@ fn entry_of(o: &Map<String, Value>) -> Result<FoodEntry> {
     let carbs = num("carbs", KNOWN_CARBS)?;
     let fiber = num("fiber", KNOWN_FIBER)?;
     let grams = num("grams", KNOWN_GRAMS)?;
+    let sugar = num("sugar", KNOWN_SUGAR)?;
+    let salt = num("salt", KNOWN_SALT)?;
     Ok(FoodEntry {
         id,
         stamp: Some(Default::default()),
@@ -463,6 +481,37 @@ fn entry_of(o: &Map<String, Value>) -> Result<FoodEntry> {
         grams,
         known,
         per100: o.get("per100").and_then(Value::as_bool).unwrap_or(false),
+        deleted: None,
+        sugar,
+        salt,
+        time: o.get("time").and_then(Value::as_str).unwrap_or_default().to_string(),
+    })
+}
+
+/// Запись здоровья (spec 020): строки и числа как есть, отсутствующее — пусто или ноль.
+fn health_of(o: &Map<String, Value>) -> Result<HealthRecord> {
+    let id = id_of(o)?;
+    if let Some(d) = deleted_of(o) {
+        return Ok(HealthRecord { id, deleted: Some(d), ..Default::default() });
+    }
+    let text = |key: &str| o.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+    let num = |key: &str| -> Result<f64> {
+        match o.get(key) {
+            None | Some(Value::Null) => Ok(0.0),
+            Some(v) => v.as_f64().filter(|n| n.is_finite() && *n >= 0.0).ok_or(ProtoError::Malformed),
+        }
+    };
+    Ok(HealthRecord {
+        id,
+        stamp: Some(Default::default()),
+        day: text("day"),
+        kind: text("kind"),
+        time: text("time"),
+        end_time: text("endTime"),
+        value: num("value")?,
+        value2: num("value2")?,
+        name: text("name"),
+        details: text("details"),
         deleted: None,
     })
 }
@@ -515,6 +564,7 @@ pub fn op_from_json(text: &str) -> Result<PlannerOp> {
             "settings" => change::Change::Settings(settings_of(body)?),
             "goals" => change::Change::Goals(goals_of(body)?),
             "goalPeriod" => change::Change::GoalPeriod(goal_period_of(obj()?)?),
+            "health" => change::Change::Health(health_of(obj()?)?),
             "migration" => change::Change::Migration(Migration {
                 source_device: body.get("sourceDevice").and_then(Value::as_str).unwrap_or_default().to_string(),
                 count: body.get("count").and_then(Value::as_u64).unwrap_or(0) as u32,
@@ -597,6 +647,63 @@ mod tests {
         assert_eq!(out["goalPeriods"].as_array().unwrap().len(), 0);
         let t3 = out["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "t3").unwrap();
         assert!(t3["repeat"].is_null());
+    }
+
+    /// spec 020: записи здоровья и новые поля записи питания проходят через состояние; запись здоровья —
+    /// регистр целиком (побеждает поздняя метка), надгробие убирает её из вывода.
+    #[test]
+    fn health_records_and_food_extras_roundtrip() {
+        let text = r#"{"changes":[
+          {"health":{"id":"h1","day":"2026-10-11","kind":"weight","value":74.7}},
+          {"health":{"id":"h2","day":"2026-10-11","kind":"pressure","time":"08:10","value":121,"value2":78}},
+          {"health":{"id":"h3","day":"2026-10-11","kind":"workout","time":"19:00","endTime":"20:00","value":60,"name":"Зал","details":"{\"ex\":[]}"}},
+          {"nutritionDay":{"day":"2026-10-11","entries":[{"id":"f1","name":"Обед","meal":"lunch","kcal":520,"sugar":14,"time":"13:30"}]}}
+        ]}"#;
+        let mut op = op_from_json(text).unwrap();
+        planner::stamp_op(&mut op, &Stamp::new(1, "d1"));
+        let mut st = PlannerState::default();
+        st.apply_op(&op, "d1").unwrap();
+        let out: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();
+        assert_eq!(out["health"].as_array().unwrap().len(), 3);
+        let h2 = out["health"].as_array().unwrap().iter().find(|h| h["id"] == "h2").unwrap();
+        assert_eq!(h2["value2"], json!(78.0));
+        assert_eq!(h2["time"], json!("08:10"));
+        let h3 = out["health"].as_array().unwrap().iter().find(|h| h["id"] == "h3").unwrap();
+        assert_eq!(h3["details"], json!("{\"ex\":[]}"));
+        let f = &out["nutrition"][0]["entries"][0];
+        assert_eq!(f["sugar"], json!(14.0));
+        assert!(f["salt"].is_null());
+        assert_eq!(f["time"], json!("13:30"));
+
+        // Поздняя правка заменяет запись целиком, ранняя — не действует.
+        let mut newer = op_from_json(r#"{"changes":[{"health":{"id":"h1","day":"2026-10-11","kind":"weight","value":74.2}}]}"#).unwrap();
+        planner::stamp_op(&mut newer, &Stamp::new(3, "d2"));
+        st.apply_op(&newer, "d2").unwrap();
+        let mut older = op_from_json(r#"{"changes":[{"health":{"id":"h1","day":"2026-10-11","kind":"weight","value":80}}]}"#).unwrap();
+        planner::stamp_op(&mut older, &Stamp::new(2, "d1"));
+        st.apply_op(&older, "d1").unwrap();
+        let out: Value = serde_json::from_str(&state_json(&st, 3)).unwrap();
+        let h1 = out["health"].as_array().unwrap().iter().find(|h| h["id"] == "h1").unwrap();
+        assert_eq!(h1["value"], json!(74.2));
+
+        // Надгробие и снимок.
+        let mut del = op_from_json(r#"{"changes":[{"health":{"id":"h2","deleted":true}}]}"#).unwrap();
+        planner::stamp_op(&mut del, &Stamp::new(4, "d1"));
+        st.apply_op(&del, "d1").unwrap();
+        let restored = PlannerState::from_snapshot(&st.to_snapshot()).unwrap();
+        let out: Value = serde_json::from_str(&state_json(&restored, 4)).unwrap();
+        assert_eq!(out["health"].as_array().unwrap().len(), 2);
+
+        // Негодные записи пропускаются.
+        for bad in [
+            r#"{"changes":[{"health":{"id":"x","day":"2026-10-11","kind":"Weight","value":1}}]}"#,
+            r#"{"changes":[{"health":{"id":"x","day":"11.10","kind":"weight","value":1}}]}"#,
+            r#"{"changes":[{"health":{"id":"x","day":"2026-10-11","kind":"sleep","time":"25:00"}}]}"#,
+        ] {
+            let mut op = op_from_json(bad).unwrap();
+            planner::stamp_op(&mut op, &Stamp::new(9, "d1"));
+            assert_eq!(PlannerState::default().apply_op(&op, "d1").unwrap(), 0, "{bad}");
+        }
     }
 
     #[test]

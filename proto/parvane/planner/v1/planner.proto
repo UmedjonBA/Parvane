@@ -234,6 +234,29 @@ message FoodEntry {
   uint32 known = 11;
   bool per100 = 12;
   parvane.core.v2.LwwStamp deleted = 13;
+  // spec 020: сахар и соль (граммы; биты `known` 64 и 128) и время приёма `HH:MM` (пусто — не задано).
+  double sugar = 14;
+  double salt = 15;
+  string time = 16 [(parvane.core.v2.max_len) = 5];
+}
+
+// Запись здоровья (spec 020): регистр целиком по `stamp`, надгробие. Вид записи — строка, чтобы новый
+// показатель не требовал смены схемы: weight (value — кг), pressure (value / value2 — верхнее и нижнее),
+// pulse, steps, mood (1…5), sleep (time — лёг, end_time — встал, value — минуты), workout (time, value —
+// минуты, value2 — километры, name, details — упражнения), goals (одна запись с целями здоровья в details).
+// Незнакомый вид клиент хранит и не показывает. `details` — JSON, движок его не разбирает.
+message HealthRecord {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  string day = 3 [(parvane.core.v2.max_len) = 10];
+  string kind = 4 [(parvane.core.v2.max_len) = 16];
+  string time = 5 [(parvane.core.v2.max_len) = 5];
+  string end_time = 6 [(parvane.core.v2.max_len) = 5];
+  double value = 7;
+  double value2 = 8;
+  string name = 9 [(parvane.core.v2.max_len) = 120];
+  string details = 10 [(parvane.core.v2.max_len) = 4000];
+  parvane.core.v2.LwwStamp deleted = 11;
 }
 
 message NutritionDay {
@@ -275,6 +298,7 @@ message Change {
     GoalSet goals = 6;
     Migration migration = 7;
     GoalPeriod goal_period = 8;
+    HealthRecord health = 9;
   }
 }
 
@@ -292,4 +316,5 @@ message PlannerSnapshot {
   Settings settings = 5;
   GoalSet goals = 6;
   repeated GoalPeriod goal_periods = 7 [(parvane.core.v2.max_items) = 1000];
+  repeated HealthRecord health = 8 [(parvane.core.v2.max_items) = 20000];
 }

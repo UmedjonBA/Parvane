@@ -120,6 +120,46 @@ export type PlannerFoodEntry = {
   fiber?: number;
   grams?: number;
   per100?: Partial<Record<PlannerNutrient, number>>;
+  // spec 020: сахар и соль, граммы (у них не цель, а предел «не больше»); время приёма `HH:MM`
+  sugar?: number;
+  salt?: number;
+  time?: string;
+};
+
+// Запись здоровья (spec 020). Вид — строка: незнакомый вид хранится и не показывается.
+// weight — `value` кг; pressure — `value` / `value2`; pulse, steps, mood (1…5) — `value`;
+// sleep — `time` лёг, `endTime` встал, `value` минут; workout — `time`, `value` минут, `value2` км, `name`
+export type PlannerHealthKind = 'weight' | 'pressure' | 'pulse' | 'steps' | 'mood' | 'sleep' | 'workout';
+export const PLANNER_HEALTH_KINDS: PlannerHealthKind[] = [
+  'weight', 'pressure', 'pulse', 'steps', 'mood', 'sleep', 'workout',
+];
+// Упражнение силовой тренировки: подходы × повторы × вес
+export type PlannerExercise = { name: string; sets?: number; reps?: number; weight?: number };
+export type PlannerHealthRecord = {
+  id: string;
+  day: string;
+  kind: string;
+  time?: string;
+  endTime?: string;
+  value: number;
+  value2?: number;
+  name?: string;
+  exercises?: PlannerExercise[];
+};
+// Цели здоровья: пределы сахара и соли (г), сон (мин), вес (кг), шаги за день, активные минуты и
+// тренировки за 7 дней
+export type PlannerHealthGoals = {
+  sugarMax?: number;
+  saltMax?: number;
+  sleepMinutes?: number;
+  weight?: number;
+  steps?: number;
+  activeMinutes?: number;
+  workouts?: number;
+};
+// 150 активных минут в неделю — норма ВОЗ
+export const DEFAULT_HEALTH_GOALS: PlannerHealthGoals = {
+  sugarMax: 50, saltMax: 5, sleepMinutes: 480, steps: 8000, activeMinutes: 150, workouts: 3,
 };
 
 export type PlannerGoal = { target: number; tolerance: number };
@@ -169,6 +209,9 @@ export type PlannerState = {
   // Дневной бюджет времени, минут
   budget: number;
   settings: PlannerSettings;
+  // spec 020: записи здоровья и цели здоровья
+  health: PlannerHealthRecord[];
+  healthGoals: PlannerHealthGoals;
 };
 
 export type PlannerTimed = {
@@ -215,6 +258,8 @@ export function createEmptyPlannerState(): PlannerState {
     goalPeriods: [],
     budget: 600,
     settings: { ...DEFAULT_PLANNER_SETTINGS },
+    health: [],
+    healthGoals: { ...DEFAULT_HEALTH_GOALS },
   };
 }
 
@@ -1306,6 +1351,11 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     goalPeriods,
     budget: isKnownNumber(saved.budget) && validateBudget(saved.budget) ? saved.budget : empty.budget,
     settings: normalizeSettings(saved.settings),
+    health: (Array.isArray(saved.health) ? saved.health : [])
+      .filter((record) => record && typeof record.id === 'string' && isDay(record.day)
+        && typeof record.kind === 'string' && isKnownNumber(record.value)),
+    healthGoals: saved.healthGoals && typeof saved.healthGoals === 'object'
+      ? { ...saved.healthGoals } : empty.healthGoals,
   };
 }
 
