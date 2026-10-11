@@ -90,6 +90,7 @@ const THUMB_QUALITY = 0.8;
 const THUMB_SOURCE_MAX_BYTES = 40 * 1024 * 1024;
 const THUMB_CACHE = 300;
 const PREVIEW_CACHE = 6;
+const TEXT_MIME = 'text/markdown';
 const USAGE_TTL_MS = 1500;
 const DRIVE_BUCKET = 'BLOB_BUCKET_DRIVE';
 const MEDIA_BUCKET = 'BLOB_BUCKET_UNSPECIFIED';
@@ -566,6 +567,71 @@ export function createCloudDrive(deps: Deps) {
       const { blob, mime } = found;
       return remember(previews, blob.fileId, PREVIEW_CACHE, () => loadBlob(blob, mime || 'application/octet-stream'))
         .catch(() => undefined);
+    },
+
+    /** Текстовый файл (заметка, холст): создать либо заменить содержимое существующего узла.
+     * `expectedFileId` — содержимое, от которого шла правка: если узел с тех пор изменился (другое
+     * устройство), запись не делается и возвращается `conflict` с текущим содержимым — сводит вызывающий. */
+    async parvaneCloudWriteText(args: {
+      container: string; parent?: string; node?: string; name: string; text: string; mime?: string;
+      expectedFileId?: string;
+    }): Promise<CloudResult<{ container: string; node: string; fileId: string; conflict?: string }>> {
+      try {
+        const existing = args.node ? findNode(args.container, args.node) : undefined;
+        if (args.node && !existing) return { ok: false, error: 'not-found' };
+        if (existing?.blob && args.expectedFileId && existing.blob.fileId !== args.expectedFileId) {
+          const current = await loadBlob(existing.blob, existing.mime || TEXT_MIME);
+          if (!current) return { ok: false, error: 'offline' };
+          return {
+            ok: true,
+            container: args.container,
+            node: args.node!,
+            fileId: existing.blob.fileId,
+            conflict: await current.text(),
+          };
+        }
+        const mime = args.mime || TEXT_MIME;
+        const uploaded = await uploadCloudBlob(deps.transport(), new Blob([args.text], { type: mime }));
+        const blob = {
+          fileId: uploaded.fileId,
+          key: uploaded.key,
+          nonce: uploaded.nonce,
+          capability: uploaded.capability,
+          size: uploaded.size,
+          chunks: uploaded.chunks,
+          mime,
+          uploader: deps.self() || '',
+        };
+        const node = args.node || newCloudNodeId();
+        const mtime = Date.now();
+        const container = await deps.cloud().apply(args.container, [existing
+          ? { op: 'setBlob', id: node, blob, mtime }
+          : {
+            op: 'create', id: node, kind: 'file', parent: args.parent, name: args.name, mtime, blob,
+          }]);
+        usage = undefined;
+        return {
+          ok: true, container, node, fileId: uploaded.fileId,
+        };
+      } catch (e) {
+        deps.log(`облако: текст не записан: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    /** Содержимое текстового файла и идентификатор его версии (для `expectedFileId`). */
+    async parvaneCloudReadText(
+      { container, node }: { container: string; node: string },
+    ): Promise<{ text: string; fileId: string } | undefined> {
+      const found = findNode(container, node);
+      if (!found?.blob) return undefined;
+      try {
+        const blob = await loadBlob(found.blob, found.mime || TEXT_MIME);
+        return blob ? { text: await blob.text(), fileId: found.blob.fileId } : undefined;
+      } catch (e) {
+        deps.log(`облако: текст не прочитан: ${String(e)}`);
+        return undefined;
+      }
     },
 
     /** Миниатюра файла → blob-URL (кэш на сессию). */
