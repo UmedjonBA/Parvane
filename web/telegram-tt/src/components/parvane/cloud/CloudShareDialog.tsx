@@ -9,7 +9,7 @@ import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
 import { validateName } from './cloudModel';
 import {
-  getCloudData, getCloudPlace, getContainer, setCloudPlace, showCloudNotice,
+  getCloudData, getCloudPlace, getContainer, setCloudPlace, showCloudNotice, unshareCloudFolder,
 } from './cloudStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -56,7 +56,7 @@ const CloudShareDialog = ({
   const [newRole, setNewRole] = useState<ShareRole>('reader');
   const [isBusy, markBusy, unmarkBusy] = useFlag();
   const [isPickerOpen, openPicker, closePicker] = useFlag();
-  const [confirm, setConfirm] = useState<'remove' | 'leave'>();
+  const [confirm, setConfirm] = useState<'remove' | 'leave' | 'private'>();
   const nameRef = useRef<HTMLInputElement>();
 
   useEffect(() => {
@@ -134,6 +134,13 @@ const CloudShareDialog = ({
   };
 
   const handleConfirm = useLastCallback(async () => {
+    if (confirm === 'private') {
+      setConfirm(undefined);
+      if (getCloudPlace().container === id) setCloudPlace({ tab: getCloudPlace().tab });
+      onClose();
+      void unshareCloudFolder(id!, lang('ParvaneCloudSharedFolder'));
+      return;
+    }
     const method = confirm === 'remove' ? 'parvaneCloudRemoveShared' : 'parvaneCloudLeave';
     setConfirm(undefined);
     const result = await run(method, { container: id });
@@ -264,6 +271,16 @@ const CloudShareDialog = ({
                 <Button
                   className="confirm-dialog-button"
                   isText
+                  disabled={isBusy}
+                  onClick={() => setConfirm('private')}
+                >
+                  {lang('ParvaneCloudMakePrivate')}
+                </Button>
+              )}
+              {isOwner && (
+                <Button
+                  className="confirm-dialog-button"
+                  isText
                   color="danger"
                   disabled={isBusy}
                   onClick={() => setConfirm('remove')}
@@ -298,10 +315,19 @@ const CloudShareDialog = ({
       />
       <ConfirmDialog
         isOpen={Boolean(confirm)}
-        title={lang(confirm === 'remove' ? 'ParvaneCloudStopSharing' : 'ParvaneCloudLeave')}
-        text={lang(confirm === 'remove' ? 'ParvaneCloudStopSharingConfirm' : 'ParvaneCloudLeaveConfirm')}
-        confirmLabel={lang(confirm === 'remove' ? 'ParvaneCloudDelete' : 'ParvaneCloudLeave')}
-        confirmIsDestructive
+        title={lang(
+          confirm === 'private' ? 'ParvaneCloudMakePrivate'
+            : confirm === 'remove' ? 'ParvaneCloudStopSharing' : 'ParvaneCloudLeave',
+        )}
+        text={lang(
+          confirm === 'private' ? 'ParvaneCloudMakePrivateConfirm'
+            : confirm === 'remove' ? 'ParvaneCloudStopSharingConfirm' : 'ParvaneCloudLeaveConfirm',
+        )}
+        confirmLabel={lang(
+          confirm === 'private' ? 'ParvaneCloudMakePrivate'
+            : confirm === 'remove' ? 'ParvaneCloudDelete' : 'ParvaneCloudLeave',
+        )}
+        confirmIsDestructive={confirm !== 'private'}
         confirmHandler={handleConfirm}
         onClose={() => setConfirm(undefined)}
       />

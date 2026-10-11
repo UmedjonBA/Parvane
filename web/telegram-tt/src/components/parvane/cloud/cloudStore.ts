@@ -6,7 +6,7 @@ import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import {
-  type CloudNode, type CloudSort, freeName, namesIn, sizeOf, subtreeOf, trashOf,
+  type CloudNode, type CloudSort, freeName, namesIn, sizeOf, subtreeOf, trashOf, usageOf,
 } from './cloudModel';
 
 // Parvane (spec 016): состояние раздела «Облако» — сигналы поверх контейнеров
@@ -313,6 +313,22 @@ export async function shareCloudFolder(container: string, node: CloudNode) {
   await refreshCloud();
   void refreshCloudUsage();
   return result?.ok ? result.container : undefined;
+}
+
+/** Сделать свою совместную папку обычной папкой личного диска. */
+export async function unshareCloudFolder(container: string, fallbackName: string) {
+  const data = getCloudData();
+  const name = freeName(namesIn(getNodes(data?.rootId, data)), getContainer(container, data)?.name || fallbackName);
+  const nodes = getNodes(container, data);
+  const id = `move-${Date.now()}-${++transferSeq}`;
+  setCloudTransfers([...getCloudTransfers(), {
+    id, kind: 'move', name, done: 0, total: usageOf(nodes).total - usageOf(nodes).trash, state: 'active',
+  }]);
+  const result = await callParvane('parvaneCloudUnshareFolder', { container, name, transferId: id })
+    .catch(() => undefined) as CloudResult | undefined;
+  await refreshCloud();
+  void refreshCloudUsage();
+  return Boolean(result?.ok);
 }
 
 export function trashCloudNodes(container: string, nodes: CloudNode[]) {

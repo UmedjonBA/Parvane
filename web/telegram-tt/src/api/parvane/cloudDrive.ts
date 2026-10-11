@@ -413,6 +413,14 @@ export function createCloudDrive(deps: Deps) {
     return total;
   }
 
+  async function removeShared(container: string) {
+    const top = (readTree(container)?.nodes || []).filter((n) => !n.parent);
+    const at = Date.now();
+    if (top.length) await deps.cloud().apply(container, top.map((n) => ({ op: 'purge', id: n.id, at })));
+    await deps.cloud().removeFolder(container);
+    usage = undefined;
+  }
+
   /** Перенос с ходом и отменой (события `parvane-cloud-transfer`, вид `move`). */
   async function runMove(
     transferId: string,
@@ -765,15 +773,33 @@ export function createCloudDrive(deps: Deps) {
     /** Удалить свою совместную папку: стереть содержимое, убрать участников. */
     async parvaneCloudRemoveShared({ container }: { container: string }): Promise<CloudResult> {
       try {
-        const top = (readTree(container)?.nodes || []).filter((n) => !n.parent);
-        const at = Date.now();
-        if (top.length) await deps.cloud().apply(container, top.map((n) => ({ op: 'purge', id: n.id, at })));
-        await deps.cloud().removeFolder(container);
-        usage = undefined;
+        await removeShared(container);
         return { ok: true };
       } catch (e) {
         return { ok: false, error: errorOf(e) };
       }
+    },
+
+    /** Сделать свою совместную папку обычной: содержимое — в новую папку личного
+     * диска (`name`), участники теряют доступ, контейнер удаляется. */
+    async parvaneCloudUnshareFolder({ container, name, transferId }: {
+      container: string; name: string; transferId: string;
+    }): Promise<CloudResult> {
+      const error = await runMove(transferId, async (signal, onProgress) => {
+        const folder = newCloudNodeId();
+        const root = await deps.cloud().apply('root', [{
+          op: 'create', id: folder, kind: 'folder', name,
+        }]);
+        const items = (readTree(container)?.nodes || [])
+          .filter((n) => !n.parent && !n.trashed)
+          .map((n) => ({ id: n.id, name: n.name }));
+        const total = await moveNodes({
+          from: container, items, to: root, parent: folder, signal, onProgress,
+        });
+        await removeShared(container);
+        return total;
+      });
+      return error ? { ok: false, error } : { ok: true };
     },
   };
 }

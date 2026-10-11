@@ -2346,6 +2346,8 @@ export interface LangPair {
   'ParvaneCloudNewShared': undefined;
   'ParvaneCloudShare': undefined;
   'ParvaneCloudShareFolderAction': undefined;
+  'ParvaneCloudMakePrivate': undefined;
+  'ParvaneCloudMakePrivateConfirm': undefined;
   'ParvaneCloudShareAdd': undefined;
   'ParvaneCloudRoleOwner': undefined;
   'ParvaneCloudRoleEditor': undefined;

@@ -259,6 +259,25 @@ try {
   );
   console.log('OK: перенос между личным диском и совместной папкой в обе стороны, лишних блобов нет');
 
+  // ── Совместная папка снова становится обычной: содержимое на диске, участник теряет доступ ──
+  await ac.folderRow(ARCHIVE).getByRole('button', { name: 'Sharing', exact: true }).click();
+  await archiveDialog.getByRole('button', { name: 'Make private', exact: true }).click();
+  await a.locator('.Modal').filter({ hasText: 'becomes a regular folder' })
+    .getByRole('button', { name: 'Make private', exact: true }).click();
+  await ac.item(ARCHIVE).waitFor({ state: 'visible', timeout: SYNC });
+  await ac.folderRow(ARCHIVE).waitFor({ state: 'detached', timeout: SYNC });
+  await ac.item(ARCHIVE).click();
+  assert.equal((await ac.download('личный.txt')).toString(), 'с личного диска', 'файл на месте в обычной папке');
+  await ac.item('Вложенная').click();
+  assert.equal((await ac.download('глубоко.txt')).toString(), 'файл в глубине', 'вложенный файл на месте');
+  await toMyFiles();
+  await bc.cloud.getByText('No one has shared a folder with you yet').waitFor({ state: 'visible', timeout: SYNC });
+  await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'грант не снят после закрытия доступа');
+  await waitFor(
+    () => Promise.resolve(driveBlobs(alice) - blobsBefore), (n) => n === 3, 'после закрытия доступа остались лишние блобы',
+  );
+  console.log('OK: совместная папка снова обычная — содержимое на диске, участник потерял доступ');
+
   // ── Сервер видит состав, но не имена и не содержимое ──────────────────────
   assert.deepEqual(serverView().leaks, [], 'в базе сервера найден открытый текст');
   console.log('OK: в базе сервера нет имён папок, файлов и содержимого');

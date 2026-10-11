@@ -1224,6 +1224,8 @@
 "ParvaneCloudShare" = "Общий доступ";
 "ParvaneCloudShareFolderConfirm" = "Открыть доступ к папке «{name}»? Она станет совместной и встанет в начало раздела «Мои файлы» вместе со всем содержимым.";
 "ParvaneCloudShareFolderAction" = "Сделать совместной";
+"ParvaneCloudMakePrivate" = "Закрыть доступ";
+"ParvaneCloudMakePrivateConfirm" = "Папка станет обычной папкой в «Моих файлах». Остальные участники потеряют доступ, корзина папки будет очищена.";
 "ParvaneCloudShareTitle" = "Доступ к папке «{name}»";
 "ParvaneCloudShareAdd" = "Добавить людей";
 "ParvaneCloudRoleOwner" = "Владелец";

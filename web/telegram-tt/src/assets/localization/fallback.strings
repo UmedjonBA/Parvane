@@ -3181,6 +3181,8 @@
 "ParvaneCloudShare" = "Sharing";
 "ParvaneCloudShareFolderConfirm" = "Share “{name}”? It becomes a shared folder at the top of My files, with everything inside it.";
 "ParvaneCloudShareFolderAction" = "Make shared";
+"ParvaneCloudMakePrivate" = "Make private";
+"ParvaneCloudMakePrivateConfirm" = "The folder becomes a regular folder in My files. Everyone else loses access, and its trash is emptied.";
 "ParvaneCloudShareTitle" = "Access to “{name}”";
 "ParvaneCloudShareAdd" = "Add people";
 "ParvaneCloudRoleOwner" = "Owner";
