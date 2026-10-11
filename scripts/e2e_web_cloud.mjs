@@ -144,7 +144,7 @@ try {
   };
 
   // ── Раздел: кнопка в панели, вместо колонок мессенджера, пустое состояние ──
-  assert.equal(await sidebar.getByRole('tab').count(), 3, 'в панели три раздела');
+  assert.equal(await sidebar.getByRole('tab').count(), 4, 'в панели четыре раздела');
   await openCloud();
   assert.equal(await isShown(page, '#LeftColumn'), false, 'список чатов должен быть скрыт');
   assert.equal(await isShown(page, '#MiddleColumn'), false, 'переписка должна быть скрыта');

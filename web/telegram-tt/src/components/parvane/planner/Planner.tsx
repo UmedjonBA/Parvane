@@ -7,7 +7,9 @@ import type { PlannerCalendarView } from './plannerModel';
 import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
-import { consumePlannerAddRequest, getPlannerAddRequest } from '../../../util/parvaneSection';
+import {
+  consumePlannerAddRequest, getPlannerAddRequest, getPlannerView, setPlannerView,
+} from '../../../util/parvaneSection';
 import {
   buildDaySummary, formatDay, formatDayLong, formatPeriod,
 } from './plannerFormat';
@@ -53,7 +55,6 @@ function selectCurrentUserId(global: GlobalState) {
 const SNAPSHOT_WARN_BYTES = 786432;
 const VIEW_TODAY = 0;
 const VIEW_CALENDAR = 1;
-const VIEW_KEY = 'parvane:planner-tab';
 const CALENDAR_VIEW_KEY = 'parvane:planner-view';
 const CALENDAR_VIEW_LABELS = {
   year: 'PlannerCalYear',
@@ -74,15 +75,6 @@ function readCalendarView(): PlannerCalendarView {
     return PLANNER_CALENDAR_VIEWS.includes(saved) ? saved : 'month';
   } catch (err) {
     return 'month';
-  }
-}
-
-// Вкладка «Плана», на которой пользователь был в последний раз
-function readView() {
-  try {
-    return localStorage.getItem(VIEW_KEY) === String(VIEW_CALENDAR) ? VIEW_CALENDAR : VIEW_TODAY;
-  } catch (err) {
-    return VIEW_TODAY;
   }
 }
 
@@ -111,7 +103,8 @@ const Planner = () => {
   const sizeBytes = useDerivedState(getPlannerSizeBytes);
 
   const [today, setToday] = useState(() => toDayKey(new Date()));
-  const [view, setView] = useState(readView);
+  // Экран раздела общий с боковой панелью (`util/parvaneSection.ts`)
+  const view = useDerivedState(getPlannerView) === 'calendar' ? VIEW_CALENDAR : VIEW_TODAY;
   const [calendarView, setCalendarView] = useState(readCalendarView);
   // Якорь периода: выбранный день; месяц, неделя и год берутся от него
   const [picked, setPicked] = useState(today);
@@ -226,13 +219,8 @@ const Planner = () => {
   });
 
   const handleSwitchView = useLastCallback((index: number) => {
-    setView(index);
+    setPlannerView(index === VIEW_CALENDAR ? 'calendar' : 'today');
     setIsPanelOpen(false);
-    try {
-      localStorage.setItem(VIEW_KEY, String(index));
-    } catch (err) {
-      // Вкладка просто не запомнится
-    }
   });
 
   const handleOpenCalendar = useLastCallback(() => {
@@ -319,8 +307,8 @@ const Planner = () => {
     { title: lang('PlannerToday') },
     { title: lang('PlannerViewCalendar') },
   ];
-  const title = lang('ParvaneSectionPlanner');
   const isToday = view === VIEW_TODAY;
+  const title = lang(isToday ? 'PlannerToday' : 'PlannerViewCalendar');
   // «Сегодня» на узком экране: расписание дня стоит внутри экрана, отдельной панели нет
   const hasPanel = isToday ? !isNarrow : !isNarrowWeek;
   const sideTitle = side === 'settings' ? lang('PlannerSettings') : side === 'form' ? lang('PlannerTitleNew')
@@ -391,7 +379,10 @@ const Planner = () => {
         {/* Узкий экран: заголовка и кнопки добавления нет — вкладки стоят в строке со стрелкой,
             шестерёнка — в строке периода, задача добавляется из расписания дня */}
         {!isNarrow && <h1 className={styles.title}>{title}</h1>}
-        <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
+        {/* Компьютер: экраны «Плана» — кнопки боковой панели, вкладок в шапке нет */}
+        {isNarrow && (
+          <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
+        )}
         {!isNarrow && (
           <div className={styles.headerButtons}>
             {settingsButton}

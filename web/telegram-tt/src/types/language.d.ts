@@ -2633,6 +2633,7 @@ export interface LangPair {
   'PlannerMarkDone': undefined;
   'ParvaneColorScheme': undefined;
   'ParvaneColorSchemeHint': undefined;
+  'ParvaneTabBarPlanEntry': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

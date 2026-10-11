@@ -10,7 +10,9 @@ import { selectCurrentLimit } from '../../global/selectors/limits';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
-import { getParvaneSection, setParvaneSection } from '../../util/parvaneSection';
+import {
+  getParvaneSection, getPlannerView, openPlannerView, setParvaneSection,
+} from '../../util/parvaneSection';
 
 import useDerivedState from '../../hooks/useDerivedState';
 import useFolderTabs from '../../hooks/useFolderTabs';
@@ -126,8 +128,22 @@ const FoldersSidebar = ({
     setParvaneSection('messenger');
   });
 
-  const handleSelectPlanner = useLastCallback(() => {
-    setParvaneSection('planner');
+  const plannerView = useDerivedState(getPlannerView);
+  const isTodayOpen = section === 'planner' && plannerView === 'today';
+  const isCalendarOpen = section === 'planner' && plannerView === 'calendar';
+
+  const handleSelectToday = useLastCallback(() => {
+    openPlannerView('today');
+  });
+
+  const handleSelectCalendar = useLastCallback(() => {
+    openPlannerView('calendar');
+  });
+
+  const handleSelectProfile = useLastCallback(() => {
+    setParvaneSection('messenger');
+    openLeftColumnContent({ contentKey: LeftColumnContent.Settings });
+    openSettingsScreen({ screen: SettingsScreens.Main });
   });
 
   const handleSelectCloud = useLastCallback(() => {
@@ -243,12 +259,22 @@ const FoldersSidebar = ({
         <button
           type="button"
           role="tab"
-          aria-selected={section === 'planner'}
-          className={buildClassName(styles.section, section === 'planner' && styles.sectionActive)}
-          onClick={handleSelectPlanner}
+          aria-selected={isTodayOpen}
+          className={buildClassName(styles.section, isTodayOpen && styles.sectionActive)}
+          onClick={handleSelectToday}
+        >
+          <Icon name="recent" className={styles.icon} />
+          <span className={styles.sectionTitle}>{lang('PlannerToday')}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isCalendarOpen}
+          className={buildClassName(styles.section, isCalendarOpen && styles.sectionActive)}
+          onClick={handleSelectCalendar}
         >
           <Icon name="calendar" className={styles.icon} />
-          <span className={styles.sectionTitle}>{lang('ParvaneSectionPlanner')}</span>
+          <span className={styles.sectionTitle}>{lang('PlannerViewCalendar')}</span>
         </button>
         <button
           type="button"
@@ -259,6 +285,10 @@ const FoldersSidebar = ({
         >
           <Icon name="folder" className={styles.icon} />
           <span className={styles.sectionTitle}>{lang('ParvaneSectionCloud')}</span>
+        </button>
+        <button type="button" className={styles.section} onClick={handleSelectProfile}>
+          <Icon name="user" className={styles.icon} />
+          <span className={styles.sectionTitle}>{lang('ParvaneTabBarProfile')}</span>
         </button>
       </div>
     </div>

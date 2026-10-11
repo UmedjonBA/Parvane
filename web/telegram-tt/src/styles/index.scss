@@ -14,14 +14,14 @@
 
 html,
 body {
-  --font-family: "Roboto", -apple-system, BlinkMacSystemFont, "Apple Color Emoji", "Segoe UI", Oxygen, Ubuntu,
-  Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
-  --font-family-monospace: "Cascadia Mono", "Roboto Mono", "Droid Sans Mono", 'SF Mono', "Menlo", "Ubuntu Mono",
-  "Consolas", monospace;
+  --font-family: "IBM Plex Sans", "Roboto", -apple-system, BlinkMacSystemFont, "Apple Color Emoji", "Segoe UI",
+  Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  --font-family-monospace: "JetBrains Mono", "Cascadia Mono", "Roboto Mono", "Droid Sans Mono", 'SF Mono', "Menlo",
+  "Ubuntu Mono", "Consolas", monospace;
   --font-family-numbers-rounded: ui-rounded, "Numbers Rounded", "Roboto", "Helvetica Neue", sans-serif;
   --font-family-rounded: "Nunito", "Roboto", "Helvetica Neue", sans-serif;
   --font-family-condensed: "Roboto Condensed", "Roboto", "Helvetica Neue", sans-serif;
-  --font-weight-semibold: 500; // Note: Roboto is naturally quite bold, so 500 works well as default
+  --font-weight-semibold: 600; // Parvane (spec 019): IBM Plex Sans светлее Roboto
 
   user-select: none;
 
@@ -74,8 +74,8 @@ html.theme-dark {
 body.is-ios,
 body.is-macos {
   --font-family-rounded: ui-rounded, "Nunito", "Roboto", "Helvetica Neue", sans-serif;
-  --font-family: system-ui, -apple-system, BlinkMacSystemFont, "Roboto", "Apple Color Emoji", "Helvetica Neue",
-  sans-serif;
+  --font-family: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, "Roboto", "Apple Color Emoji",
+  "Helvetica Neue", sans-serif;
   --font-weight-semibold: 600;
 }
 

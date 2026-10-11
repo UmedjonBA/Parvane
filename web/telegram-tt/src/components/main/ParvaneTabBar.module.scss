@@ -114,3 +114,13 @@
 .addIcon {
   font-size: 1.75rem;
 }
+
+// Меню «+» на списке чатов: над кнопкой, по центру панели
+.addMenu {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+
+  width: 13.5rem;
+}

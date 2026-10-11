@@ -1629,3 +1629,4 @@
 "PlannerMarkDone" = "Отметить выполненной";
 "ParvaneColorScheme" = "Цветовая схема";
 "ParvaneColorSchemeHint" = "Меняются только цвета — в мессенджере и во всех разделах. Светлая или тёмная — по настройке темы выше.";
+"ParvaneTabBarPlanEntry" = "Запись в план";

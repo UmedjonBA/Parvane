@@ -56,14 +56,15 @@ try {
   // ── Панель: видна без папок, в ней только разделы; меню — в шапке списка ──
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 3, 'в панели должны быть три раздела');
+  assert.equal(await sidebar.getByRole('tab').count(), 4, 'в панели четыре раздела: чаты, сегодня, календарь, облако');
+  assert.equal(await sidebar.getByRole('button', { name: 'Profile' }).count(), 1, 'под разделами — «Профиль»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
   assert.equal(await sidebar.getByRole('button', { name: 'Open menu' }).count(), 0, 'без папок слева меню — не в панели');
   assert.ok(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 'меню осталось в шапке');
   // Разделы прижаты к низу панели
   const geometry = await page.evaluate(() => {
     const bar = document.querySelector('#FoldersSidebar').getBoundingClientRect();
-    const tabs = [...document.querySelectorAll('#FoldersSidebar [role="tab"]')].map((el) => el.getBoundingClientRect());
+    const tabs = [...document.querySelectorAll('#FoldersSidebar [role="tablist"] > button')].map((el) => el.getBoundingClientRect());
     return { barBottom: bar.bottom, barTop: bar.top, lastBottom: tabs.at(-1).bottom, firstTop: tabs[0].top };
   });
   assert.ok(geometry.barBottom - geometry.lastBottom < 24, `разделы не у нижнего края: ${JSON.stringify(geometry)}`);
@@ -74,7 +75,7 @@ try {
   console.log('OK: панель видна без папок, разделы в нижней части');
 
   // ── Раздел «План» вместо колонок мессенджера ──────────────────────────────
-  await sidebar.getByRole('tab', { name: 'Planner' }).click();
+  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await isShown(page, '#LeftColumn'), false, 'список чатов должен быть скрыт');
@@ -233,7 +234,7 @@ try {
   // ── «Сегодня»: сводка дня, задачи дня, задачи без даты (spec 018) ─────────
   assert.equal(await planner.getByText('Statistics', { exact: true }).count(), 0, 'вкладки «Статистика» больше нет');
   assert.equal(await planner.getByText('Nutrition', { exact: true }).count(), 0, 'вкладки «Питание» быть не должно');
-  await planner.locator('header').getByText('Today', { exact: true }).first().click();
+  await sidebar.getByRole('tab', { name: 'Today' }).click();
   const todayView = planner.locator(`[data-planner-today="${today}"]`);
   await todayView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await todayView.locator('[data-today-tasks]').getByText('Подготовить макет').first()
@@ -278,7 +279,7 @@ try {
   await planner.getByText('The day must end after it starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await planner.getByLabel('Day ends').inputValue(), '21:00', 'негодное значение не применяется');
   await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   await todayCell.click({ position: { x: 10, y: 10 } });
   await dayPane.locator('[data-day-grid]').getByText('08:00', { exact: true })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -293,7 +294,7 @@ try {
   const weekdayShort = new Date().toLocaleDateString('en-US', { weekday: 'short' });
   const repeatSelect = () => planner.locator('[data-repeat-kind] select').first();
   const openDay = async (day) => {
-    await planner.getByText('Calendar', { exact: true }).first().click();
+    await sidebar.getByRole('tab', { name: 'Calendar' }).click();
     const cell = planner.locator(`[role="gridcell"][data-day="${day}"]`);
     if (!(await cell.count())) {
       // День в соседнем месяце — листаем вперёд
@@ -309,7 +310,7 @@ try {
     await planner.getByRole('button', { name: 'Today' }).click();
   };
   // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   await planner.getByRole('button', { name: '+ Task', exact: true }).click();
   await page.locator('#planner-new-kind').selectOption('event');
   await page.locator('#planner-new-name').fill('Йога');
@@ -391,7 +392,7 @@ try {
   // ── Виды календаря и выбор месяца и года (spec 013, US2) ──────────────────
   const viewButton = (name) => planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name, exact: true });
   const main = planner.locator('[data-planner-view]');
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   await viewButton('Week').click();
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const weekColumn = planner.locator(`[data-planner-view="week"] div[data-day="${today}"]`).last();
@@ -512,7 +513,7 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
   assert.equal(await isShown(page, '#LeftColumn'), true, 'после перезагрузки открыт мессенджер');
-  await sidebar.getByRole('tab', { name: 'Planner' }).click();
+  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   // Вид «Неделя» запомнен устройством
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: 30000 });
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
@@ -624,9 +625,10 @@ try {
   await phoneWeek.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await timeline.count(), 0, 'в виде «Неделя» на телефоне шкалы дня быть не должно');
   const axes = await phoneWeek.evaluate(async (week) => {
-    const box = week.getBoundingClientRect();
     week.scrollTo(week.scrollWidth, week.scrollHeight);
     await new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); });
+    // Рамка меряется после прокрутки: панель настроек ещё может закрываться и сдвигать сетку
+    const box = week.getBoundingClientRect();
     const head = week.firstElementChild.getBoundingClientRect();
     const hours = week.lastElementChild.firstElementChild.getBoundingClientRect();
     const column = week.querySelector('[data-day]').getBoundingClientRect();
@@ -665,6 +667,22 @@ try {
   assert.equal(await tabBar.getByRole('button', { name: 'Profile' }).getAttribute('aria-current'), 'page');
   await tabBar.getByRole('button', { name: 'Chats' }).click();
   assert.ok(await isShown(page, '#LeftColumn'), '«Чаты» возвращают к списку');
+  await tabBar.locator('button[aria-current="page"]', { hasText: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // На списке чатов «+» — меню: новое сообщение, группа, канал, запись в план; карандаша Telegram нет
+  await tabBar.getByRole('button', { name: 'New entry' }).click();
+  const addMenu = tabBar;
+  for (const item of ['New Message', 'New Group', 'New Channel', 'Planner entry']) {
+    await addMenu.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  assert.equal(await page.locator('#LeftColumn .NewChatButton button:visible').count(), 0, 'карандаша на телефоне нет');
+  // Меню помещается в экран
+  const menuBox = await addMenu.getByRole('menuitem', { name: 'Planner entry' }).boundingBox();
+  assert.ok(menuBox.x >= 0 && menuBox.x + menuBox.width <= 390, `меню «+» выходит за экран: ${JSON.stringify(menuBox)}`);
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/plus-menu-phone.png` });
+  await addMenu.getByRole('menuitem', { name: 'Planner entry' }).click();
+  await page.locator('#planner-quick-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await tabBar.getByRole('button', { name: 'Chats' }).click();
   console.log('OK: телефон — нижняя панель: разделы, «+» и «Профиль»');
 
   console.log('e2e_web_planner: OK');

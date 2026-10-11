@@ -177,7 +177,7 @@ async function pullFor(telegramId, kind, timeout = STEP_TIMEOUT_MS) {
 
 async function openPlanner(page) {
   const planner = page.locator('#ParvanePlanner');
-  if (!(await planner.count())) await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Planner' }).click();
+  if (!(await planner.count())) await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   return planner;
 }
@@ -189,7 +189,7 @@ async function closePlanner(page) {
 
 async function createTask(page, name) {
   const planner = await openPlanner(page);
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
   await planner.getByRole('button', { name: '+ Task', exact: true }).click();
   await page.locator('#planner-new-name').fill(name);
   await planner.getByRole('button', { name: 'Create' }).click();
@@ -199,7 +199,7 @@ async function createTask(page, name) {
 
 async function expectTask(page, name, timeout = JOIN_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await planner.locator('header').getByText('Today', { exact: true }).first().click();
+  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Today' }).click();
   await planner.getByRole('button', { name, exact: false }).first().waitFor({ state: 'visible', timeout });
 }
 

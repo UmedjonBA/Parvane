@@ -71,7 +71,10 @@ try {
 
   // ── «+» из списка чатов открывает «План» и строку ввода ───────────────────
   await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await openQuick();
+  // На списке чатов «+» открывает меню, запись в план — его пункт
+  await tabBar.getByRole('button', { name: 'New entry' }).click();
+  await tabBar.getByRole('menuitem', { name: 'Planner entry' }).click();
+  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await addButton.isDisabled(), true, 'пустую строку добавить нельзя');
   console.log('OK: «+» нижней панели открывает ввод текстом в «Плане»');
@@ -157,17 +160,14 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   const sidebar = page.locator('#FoldersSidebar');
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
-  await sidebar.getByRole('tab', { name: 'Planner' }).click();
+  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // «План» помнит вкладку, на которой пользователь был в последний раз
-  await planner.locator('[data-planner-today]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.locator('header').getByText('Calendar', { exact: true }).first().click();
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
   await planner.locator(`[role="gridcell"][data-day="${dayKey(1)}"]`).click({ position: { x: 10, y: 10 } });
   await planner.locator('[data-planner-day]').getByText('Быстрый созвон').first()
     .waitFor({ state: 'visible', timeout: 30000 });
   // Задачи без даты — в шторке «Без даты» экрана «Сегодня»
-  await planner.locator('header').getByText('Today', { exact: true }).first().click();
+  await sidebar.getByRole('tab', { name: 'Today' }).click();
   await planner.locator('[data-today-undated]').click();
   const undatedSheet = page.locator('[data-planner-undated]');
   await undatedSheet.getByText('сдать отчёт').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

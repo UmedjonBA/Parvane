@@ -8,11 +8,14 @@ import { ALL_FOLDER_ID } from '../../config';
 import buildClassName from '../../util/buildClassName';
 import { requestPlannerAdd, setParvaneSection } from '../../util/parvaneSection';
 
+import useFlag from '../../hooks/useFlag';
 import { useFolderManagerForUnreadCounters } from '../../hooks/useFolderManager';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import Icon from '../common/icons/Icon';
+import Menu from '../ui/Menu';
+import MenuItem from '../ui/MenuItem';
 
 import styles from './ParvaneTabBar.module.scss';
 
@@ -51,6 +54,27 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   });
 
   const isChatsActive = section === 'messenger' && !isSettingsOpen;
+  // «+» на списке чатов — меню «новое сообщение / группа / канал / запись в план» (вместо карандаша
+  // Telegram); в остальных разделах — сразу запись в «План»
+  const [isAddMenuOpen, openAddMenu, closeAddMenu] = useFlag();
+
+  const handleAddClick = useLastCallback(() => {
+    if (isChatsActive) openAddMenu();
+    else requestPlannerAdd();
+  });
+
+  const handleNewMessage = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
+  });
+
+  const handleNewGroup = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
+  });
+
+  const handleNewChannel = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
+  });
+
   const isProfileActive = section === 'messenger' && isSettingsOpen;
 
   return (
@@ -84,10 +108,24 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         type="button"
         className={styles.addButton}
         aria-label={lang('ParvaneTabBarAdd')}
-        onClick={requestPlannerAdd}
+        aria-haspopup={isChatsActive ? 'menu' : undefined}
+        onClick={handleAddClick}
       >
         <Icon name="add" className={styles.addIcon} />
       </button>
+      <Menu
+        isOpen={isAddMenuOpen}
+        className={styles.addMenu}
+        positionX="left"
+        positionY="bottom"
+        autoClose
+        onClose={closeAddMenu}
+      >
+        <MenuItem icon="user" onClick={handleNewMessage}>{lang('NewMessageTitle')}</MenuItem>
+        <MenuItem icon="group" onClick={handleNewGroup}>{lang('NewGroup')}</MenuItem>
+        <MenuItem icon="channel" onClick={handleNewChannel}>{lang('NewChannel')}</MenuItem>
+        <MenuItem icon="calendar" onClick={requestPlannerAdd}>{lang('ParvaneTabBarPlanEntry')}</MenuItem>
+      </Menu>
       <button
         type="button"
         className={buildClassName(styles.tab, section === 'cloud' && styles.tabActive)}

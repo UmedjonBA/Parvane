@@ -34,7 +34,7 @@ function todayKey() {
 async function openPlanner(page) {
   const planner = page.locator('#ParvanePlanner');
   if (!(await planner.count())) {
-    await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Planner' }).click();
+    await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
   }
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   return planner;
@@ -47,7 +47,7 @@ async function closePlanner(page) {
 
 async function createTask(page, name, start) {
   const planner = await openPlanner(page);
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
   await planner.getByRole('button', { name: '+ Task', exact: true }).click();
   await page.locator('#planner-new-name').fill(name);
   if (start) {
@@ -61,7 +61,7 @@ async function createTask(page, name, start) {
 
 async function deleteTask(page, name) {
   const planner = await openPlanner(page);
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
   await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
   await planner.getByRole('button', { name }).first().click();
   await planner.getByRole('button', { name: 'Delete task' }).click();
@@ -72,7 +72,7 @@ async function deleteTask(page, name) {
  * Смотрим панель дня, а не ячейку месяца: в ячейке только два превью и «+N». */
 async function expectTaskInDay(page, name, isPresent, timeout = SYNC_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await planner.getByText('Calendar', { exact: true }).first().click();
+  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
   await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
   await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: isPresent ? 'visible' : 'detached', timeout })
@@ -328,7 +328,7 @@ try {
   // Панель дня тоже показывает задачу — считаем в заново открытом разделе
   await closePlanner(sessions.carol.page);
   const planner3 = await openPlanner(sessions.carol.page);
-  await planner3.locator('header').getByText('Today', { exact: true }).first().click();
+  await planner3.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Today' }).click();
   const todayTasks = planner3.locator('[data-today-tasks]');
   await todayTasks.getByText(legacyTask).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await todayTasks.getByText(legacyTask).count(), 1, 'после перезагрузки задача не продублирована');

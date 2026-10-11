@@ -14,6 +14,7 @@ import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
+import useAppLayout from '../../../hooks/useAppLayout';
 import useForumPanelRender from '../../../hooks/useForumPanelRender';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -179,6 +180,7 @@ const LeftMain: FC<OwnProps> = ({
   );
 
   const lang = useLang();
+  const { isMobile } = useAppLayout();
 
   return (
     <div
@@ -251,13 +253,16 @@ const LeftMain: FC<OwnProps> = ({
           onCloseAnimationEnd={handleForumPanelAnimationEnd}
         />
       )}
-      <NewChatButton
-        isShown={isNewChatButtonShown}
-        onNewPrivateChat={handleSelectContacts}
-        onNewChannel={handleSelectNewChannel}
-        onNewGroup={handleSelectNewGroup}
-        isAccountFrozen={isAccountFrozen}
-      />
+      {/* Parvane: на телефоне карандаша нет — новое сообщение, группа и канал в меню «+» нижней панели */}
+      {!isMobile && (
+        <NewChatButton
+          isShown={isNewChatButtonShown}
+          onNewPrivateChat={handleSelectContacts}
+          onNewChannel={handleSelectNewChannel}
+          onNewGroup={handleSelectNewGroup}
+          isAccountFrozen={isAccountFrozen}
+        />
+      )}
     </div>
   );
 };

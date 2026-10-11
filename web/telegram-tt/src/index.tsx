@@ -31,6 +31,7 @@ import updateWebmanifest from './util/updateWebmanifest';
 import App from './components/App';
 
 import './assets/fonts/roboto.css';
+import './assets/fonts/parvane.css';
 import './styles/index.scss';
 
 // Parvane (spec 008): оформление применяется до первой отрисовки
