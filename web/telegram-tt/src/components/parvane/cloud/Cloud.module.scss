@@ -833,11 +833,3 @@
   width: auto;
   text-transform: none;
 }
-
-// «Классическое» (spec 008): раздел вплотную к краям, без скругления и тени
-:global(html.interface-classic) .root {
-  margin: 0;
-  border-inline-start: 1px solid var(--color-borders);
-  border-radius: 0;
-  box-shadow: none;
-}
