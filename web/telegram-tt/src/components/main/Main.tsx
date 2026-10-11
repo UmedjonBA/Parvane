@@ -13,7 +13,10 @@ import type { TabState } from '../../global/types';
 import type { ThemeKey } from '../../types';
 import { LeftColumnContent, SettingsScreens } from '../../types';
 
-import { BASE_EMOJI_KEYWORD_LANG, DEBUG, FOLDERS_POSITION_LEFT, INACTIVE_MARKER } from '../../config';
+import {
+  BASE_EMOJI_KEYWORD_LANG, DARK_THEME_PATTERN_COLOR, DEBUG, DEFAULT_PATTERN_COLOR, FOLDERS_POSITION_LEFT,
+  INACTIVE_MARKER,
+} from '../../config';
 import { requestNextMutation } from '../../lib/fasterdom/fasterdom';
 import {
   selectAreFoldersPresent,
@@ -43,6 +46,7 @@ import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_ANDROID, IS_MAC_OS, IS_WAVE_TRANSFORM_SUPPORTED } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import buildStyle from '../../util/buildStyle';
+import { getColorScheme, getSchemeChatColors } from '../../util/colorScheme';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { processDeepLink } from '../../util/deeplink';
 import * as mediaLoader from '../../util/mediaLoader';
@@ -860,6 +864,12 @@ const Main = ({
   // Parvane (spec 009): боковая панель видна всегда (кроме телефона), раздел выбирается в её нижней части
   const isAppSidebarShown = !isMobile;
   const parvaneSection = useDerivedState(getParvaneSection);
+  // Parvane (spec 019): фон чата и узор берутся из цветовой схемы, пока пользователь не выбрал свои
+  const schemeChatColors = getSchemeChatColors(useDerivedState(getColorScheme), theme);
+  const hasOwnPattern = Boolean(patternColor) && patternColor !== DEFAULT_PATTERN_COLOR
+    && patternColor !== DARK_THEME_PATTERN_COLOR;
+  const chatPatternColor = schemeChatColors && !hasOwnPattern ? schemeChatColors.pattern : patternColor;
+  const chatBackgroundColor = backgroundColor || schemeChatColors?.background;
   const isPlannerOpen = parvaneSection === 'planner';
   const isCloudOpen = parvaneSection === 'cloud';
   // Parvane: на телефоне разделы переключаются нижней панелью. В мессенджере она видна на списке чатов
@@ -919,8 +929,8 @@ const Main = ({
       id="Main"
       className={className}
       style={buildStyle(
-        patternColor && `--pattern-color: ${patternColor}`,
-        backgroundColor && `--theme-background-color: ${backgroundColor}`,
+        chatPatternColor && `--pattern-color: ${chatPatternColor}`,
+        chatBackgroundColor && `--theme-background-color: ${chatBackgroundColor}`,
       )}
     >
       <div

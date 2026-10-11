@@ -17,6 +17,7 @@ import { betterView } from './util/betterView';
 import { IS_TAURI } from './util/browser/globalEnvironment';
 import listenOtherClients from './util/browser/listenOtherClients';
 import { requestGlobal, subscribeToMultitabBroadcastChannel } from './util/browser/multitab';
+import { applyColorSchemeClass, readStoredColorScheme } from './util/colorScheme';
 import { establishMultitabRole, subscribeToMasterChange } from './util/establishMultitabRole';
 import { initGlobal } from './util/init';
 import { applyInterfaceStyle, readStoredInterfaceStyle } from './util/interfaceStyle';
@@ -34,6 +35,8 @@ import './styles/index.scss';
 
 // Parvane (spec 008): оформление применяется до первой отрисовки
 applyInterfaceStyle(readStoredInterfaceStyle(), false);
+// Parvane (spec 019): то же — с цветовой схемой
+applyColorSchemeClass(readStoredColorScheme());
 
 if (STRICTERDOM_ENABLED) {
   enableStrict();

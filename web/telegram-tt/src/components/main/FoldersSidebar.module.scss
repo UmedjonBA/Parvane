@@ -231,3 +231,50 @@
 :global(html.interface-classic.theme-dark) .root {
   background-color: var(--color-background-sidebar);
 }
+
+// Parvane (spec 019): у цветовой схемы панель лежит прямо на фоне приложения — без затемнённого стекла,
+// значки и подписи цветом текста, выбранный раздел — плашкой цвета панелей
+:global(html.color-scheme-flat:not(.interface-classic)) {
+  .root::before {
+    background: none;
+  }
+
+  .root::after {
+    backdrop-filter: none;
+  }
+
+  .icon,
+  .section,
+  .tab {
+    color: var(--color-text-secondary);
+  }
+
+  .section:hover,
+  .section:focus-visible {
+    background: var(--color-chat-hover);
+  }
+
+  .sectionActive,
+  .sectionActive:hover {
+    color: var(--color-primary);
+    background: var(--color-background);
+  }
+
+  .sectionActive .icon {
+    color: var(--color-primary);
+  }
+
+  .pill {
+    background: var(--color-background);
+  }
+
+  .divider {
+    background-color: var(--color-borders);
+  }
+
+  .menuButton {
+    --ripple-color: var(--color-chat-hover);
+    --button-active-background-color: var(--color-chat-hover);
+    --button-no-ripple-background-color: var(--color-chat-hover);
+  }
+}

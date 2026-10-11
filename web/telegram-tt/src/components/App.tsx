@@ -11,6 +11,7 @@ import { selectActionMessageBg, selectTabState, selectTheme } from '../global/se
 import { IS_TAURI } from '../util/browser/globalEnvironment';
 import { IS_INSTALL_PROMPT_SUPPORTED, PLATFORM_ENV } from '../util/browser/windowEnvironment';
 import buildClassName from '../util/buildClassName';
+import { getColorScheme, getSchemeChatColors } from '../util/colorScheme';
 import { setupBeforeInstallPrompt } from '../util/installPrompt';
 import { ACCOUNT_SLOT, getAccountSlotUrl, getFirstLoggedInAccountSlot } from '../util/multiaccount';
 import { hasEncryptedSession } from '../util/passcode';
@@ -20,6 +21,7 @@ import { updateSizes } from '../util/windowSize';
 
 import useTauriDrag from '../hooks/tauri/useTauriDrag';
 import useAppLayout from '../hooks/useAppLayout';
+import useDerivedState from '../hooks/useDerivedState';
 import usePrevious from '../hooks/usePrevious';
 import { useSignalEffect } from '../hooks/useSignalEffect';
 import { getIsInBackground } from '../hooks/window/useBackgroundMode';
@@ -211,6 +213,8 @@ const App = ({
 
   useTauriDrag();
 
+  const colorScheme = useDerivedState(getColorScheme);
+
   useLayoutEffect(() => {
     document.body.classList.add(styles.bg);
   }, []);
@@ -218,9 +222,10 @@ const App = ({
   useLayoutEffect(() => {
     document.body.style.setProperty(
       '--theme-background-color',
-      theme === 'dark' ? DARK_THEME_BG_COLOR : LIGHT_THEME_BG_COLOR,
+      getSchemeChatColors(colorScheme, theme)?.background
+      || (theme === 'dark' ? DARK_THEME_BG_COLOR : LIGHT_THEME_BG_COLOR),
     );
-  }, [theme]);
+  }, [theme, colorScheme]);
 
   useLayoutEffect(() => {
     if (actionMessageBg) {

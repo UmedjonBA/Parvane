@@ -1,11 +1,13 @@
 import Color from 'colorjs.io';
 
 import type { ThemeKey } from '../types';
+import type { ColorScheme } from './colorScheme';
 
 import { requestMutation } from '../lib/fasterdom/fasterdom';
 import themeColors from '../styles/themes.json';
 import { animate } from './animation';
 import { convertSrgbChannel } from './colors.ts';
+import { buildSchemeColors, getSchemeChatColors, readStoredColorScheme, storeColorScheme } from './colorScheme';
 
 let isInitialized = false;
 
@@ -25,10 +27,35 @@ const DISABLE_ANIMATION_CSS = `
   transition: none !important;
 }`;
 
-const colors = (Object.keys(themeColors) as Array<keyof typeof themeColors>).map((property) => ({
-  property,
-  colors: [new Color(themeColors[property][0]), new Color(themeColors[property][1])],
-}));
+// Parvane (spec 019): цвета темы — `themes.json` с заменами выбранной цветовой схемы
+function buildColors(scheme: ColorScheme) {
+  const overrides = buildSchemeColors(scheme);
+  return (Object.keys(themeColors) as Array<keyof typeof themeColors>).map((property) => {
+    const [light, dark] = overrides[property] || themeColors[property];
+    return { property, colors: [new Color(light), new Color(dark)] };
+  });
+}
+
+let currentScheme = readStoredColorScheme();
+let colors = buildColors(currentScheme);
+
+function getThemeColor(isDarkTheme: boolean) {
+  return getSchemeChatColors(currentScheme, isDarkTheme ? 'dark' : 'light')?.panel
+    || (isDarkTheme ? '#212121' : '#fff');
+}
+
+/** Смена цветовой схемы: цвета текущей темы применяются сразу, выбор запоминается устройством. */
+export function applyColorScheme(scheme: ColorScheme) {
+  currentScheme = scheme;
+  colors = buildColors(scheme);
+  storeColorScheme(scheme);
+  const isDarkTheme = document.documentElement.classList.contains('theme-dark');
+  const index = isDarkTheme ? 1 : 0;
+  requestMutation(() => {
+    applyColorAnimationStep(index, index);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getThemeColor(isDarkTheme));
+  });
+}
 
 const injectCss = (css: string) => {
   const style = document.createElement('style');
@@ -60,7 +87,7 @@ const switchTheme = (theme: ThemeKey, withAnimation: boolean) => {
     }
     document.documentElement.classList.add(themeClassName);
     if (themeColorTag) {
-      themeColorTag.setAttribute('content', isDarkTheme ? '#212121' : '#fff');
+      themeColorTag.setAttribute('content', getThemeColor(isDarkTheme));
     }
 
     setTimeout(() => {

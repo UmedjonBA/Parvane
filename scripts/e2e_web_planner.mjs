@@ -54,6 +54,7 @@ try {
   };
 
   // ── Панель: видна без папок, в ней только разделы; меню — в шапке списка ──
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await sidebar.getByRole('tab').count(), 3, 'в панели должны быть три раздела');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');

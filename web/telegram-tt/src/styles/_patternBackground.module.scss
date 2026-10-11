@@ -30,6 +30,11 @@
     background-image: url('../assets/chat-bg-br.png');
   }
 
+  // Parvane (spec 019): у цветовой схемы фон чата — её ровный цвет
+  :global(html.color-scheme-flat) &:not(.customBgImage)::before {
+    background-image: none;
+  }
+
   &:not(.customBgImage).customBgColor::before {
     display: none;
   }

@@ -56,6 +56,19 @@ try {
     await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   };
 
+  // ── Цветовая схема по умолчанию — Gruvbox (spec 019): панели окрашены её цветом ──
+  const panelColor = await page.evaluate(() => {
+    const probe = document.createElement('div');
+    probe.style.backgroundColor = 'var(--color-background)';
+    document.body.appendChild(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  });
+  assert.ok(['rgb(251, 241, 199)', 'rgb(40, 40, 40)'].includes(panelColor), `панель не в цветах Gruvbox: ${panelColor}`);
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-phone.png` });
+  console.log('OK: цветовая схема Gruvbox применена');
+
   // ── «+» из списка чатов открывает «План» и строку ввода ───────────────────
   await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await openQuick();
