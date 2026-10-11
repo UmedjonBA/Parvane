@@ -11,7 +11,7 @@ import {
 } from './plannerFormat';
 import { applyQuickDraft, formatPace } from './plannerHealth';
 import { toTime } from './plannerModel';
-import { parseQuickInput } from './plannerQuick';
+import { getQuickLang, parseQuickInput } from './plannerQuick';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -97,6 +97,7 @@ const PlannerQuickInput = ({
       dayEnd: settings.dayEnd,
       kind: choice === 'auto' ? undefined : choice,
       skip,
+      lang: getQuickLang(lang.code),
     });
   });
 

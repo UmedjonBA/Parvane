@@ -2669,6 +2669,7 @@ export interface LangPair {
   'PlannerHealthNoWorkouts': undefined;
   'PlannerHealthHintTitle': undefined;
   'PlannerHealthHint': undefined;
+  'PlannerHealthExamples': undefined;
   'PlannerHealthGoalsText': undefined;
   'PlannerHealthGoalsPlaceholder': undefined;
   'PlannerHealthGoalsApply': undefined;

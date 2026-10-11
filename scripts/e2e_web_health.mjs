@@ -55,9 +55,9 @@ try {
   for (const name of ['hint', 'nutrition', 'water', 'body', 'sleep', 'activity', 'goals']) {
     assert.equal(await card(name).count(), 1, `нет блока ${name}`);
   }
-  await card('hint').getByRole('button', { name: 'вес 72,4' }).click();
+  await card('hint').getByRole('button', { name: 'weight 72.4' }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.waitForFunction(() => document.querySelector('#planner-quick-input')?.value === 'вес 72,4', undefined, {
+  await page.waitForFunction(() => document.querySelector('#planner-quick-input')?.value === 'weight 72.4', undefined, {
     timeout: STEP_TIMEOUT_MS,
   }).catch(() => assert.fail('пример не подставился в строку ввода'));
   await expectKind('metric');
