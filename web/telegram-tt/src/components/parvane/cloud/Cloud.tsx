@@ -4,6 +4,7 @@ import {
 
 import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import type { GlobalState } from '../../../global/types';
+import type { CloudMovePlace } from './CloudDialogs';
 import type { CloudItemAction } from './CloudItem';
 import type { CloudNode, CloudSortKey } from './cloudModel';
 import type { CloudTab } from './cloudStore';
@@ -18,8 +19,9 @@ import {
 import {
   canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId, getCloudData,
   getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudTransfers, getCloudUsage, getContainer,
-  getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, loadCloud, moveCloudNodes, purgeCloudNodes, refreshCloud,
-  renameCloudNode, restoreCloudNodes, setCloudActive, setCloudPlace, setCloudPrefs, trashCloudNodes, uploadCloudFiles,
+  getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, loadCloud, moveCloudNodes, moveCloudNodesAcross,
+  purgeCloudNodes, refreshCloud, renameCloudNode, restoreCloudNodes, setCloudActive, setCloudPlace, setCloudPrefs,
+  shareCloudFolder, trashCloudNodes, uploadCloudFiles,
 } from './cloudStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -56,6 +58,7 @@ type Dialog =
   | { type: 'purge'; entries: Entry[] }
   | { type: 'emptyTrash' }
   | { type: 'share'; container: string }
+  | { type: 'shareFolder'; entry: Entry }
   | { type: 'send'; entries: Entry[] };
 
 const TABS: CloudTab[] = ['drive', 'shared', 'trash'];
@@ -139,6 +142,18 @@ const Cloud = ({ isMobile }: OwnProps) => {
     (data?.containers || []).filter((c) => c.kind === 'invite')
   ), [data]);
 
+  // Куда можно переносить: личный диск и совместные папки с правом записи
+  const movePlaces: CloudMovePlace[] = useMemo(() => (
+    (data?.containers || [])
+      .filter((c) => c.kind !== 'invite' && (c.role === 'owner' || c.role === 'editor'))
+      .map((c) => ({
+        id: c.id,
+        name: c.kind === 'root' ? lang('ParvaneCloudTabDrive') : c.name || lang('ParvaneCloudSharedFolder'),
+        isShared: c.kind !== 'root',
+        nodes: getNodes(c.id, data),
+      }))
+  ), [data, lang]);
+
   const selectedEntries = entries.filter((e) => selected.includes(keyOf(e)));
   const path = useMemo(() => pathOf(nodes, place.folder), [nodes, place.folder]);
   const sizes = useMemo(() => usageOf(getNodes(data?.rootId, data)), [data]);
@@ -195,6 +210,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (action === 'restore') void restoreCloudNodes(entryContainer, [node]);
     if (action === 'purge') setDialog({ type: 'purge', entries: [entry] });
     if (action === 'send') setDialog({ type: 'send', entries: [entry] });
+    if (action === 'share') setDialog({ type: 'shareFolder', entry });
   });
 
   const handleClearSelection = useLastCallback(() => setSelected([]));
@@ -247,10 +263,25 @@ const Cloud = ({ isMobile }: OwnProps) => {
     setDialog(undefined);
   });
 
-  const handleSubmitMove = useLastCallback((target?: string) => {
-    if (dialog?.type === 'move') void moveCloudNodes(dialog.container, dialog.nodes, target);
+  const handleSubmitMove = useLastCallback((target?: string, placeId?: string) => {
+    if (dialog?.type === 'move') {
+      if (placeId && placeId !== dialog.container) {
+        void moveCloudNodesAcross(dialog.container, dialog.nodes, placeId, target);
+      } else {
+        void moveCloudNodes(dialog.container, dialog.nodes, target);
+      }
+    }
     setSelected([]);
     setDialog(undefined);
+  });
+
+  const handleConfirmShareFolder = useLastCallback(() => {
+    if (dialog?.type !== 'shareFolder') return;
+    const { entry } = dialog;
+    setDialog(undefined);
+    void shareCloudFolder(entry.container, entry.node).then((created) => {
+      if (created) setDialog({ type: 'share', container: created });
+    });
   });
 
   const handlePickFiles = useLastCallback(() => {
@@ -584,6 +615,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
                 isSelected={selected.includes(keyOf(entry))}
                 isTrash={isTrash}
                 canEdit={canEdit}
+                canShare={canEdit && entry.container === data?.rootId}
                 onOpen={handleOpen}
                 onToggle={handleToggle}
                 onAction={handleAction}
@@ -655,6 +687,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
         nodes={dialog?.type === 'move' ? getNodes(dialog.container, data) : nodes}
         movedIds={dialog?.type === 'move' ? dialog.nodes.map((n) => n.id) : []}
         startFolder={place.folder}
+        places={movePlaces}
+        sourcePlace={dialog?.type === 'move' ? dialog.container : undefined}
         onSubmit={handleSubmitMove}
         onClose={handleCloseDialog}
       />
@@ -667,6 +701,16 @@ const Cloud = ({ isMobile }: OwnProps) => {
         confirmLabel={lang('ParvaneCloudDeleteForever')}
         confirmIsDestructive
         confirmHandler={handleConfirmPurge}
+        onClose={handleCloseDialog}
+      />
+      <ConfirmDialog
+        isOpen={dialog?.type === 'shareFolder'}
+        title={lang('ParvaneCloudShare')}
+        text={lang('ParvaneCloudShareFolderConfirm', {
+          name: dialog?.type === 'shareFolder' ? dialog.entry.node.name : '',
+        })}
+        confirmLabel={lang('ParvaneCloudShareFolderAction')}
+        confirmHandler={handleConfirmShareFolder}
         onClose={handleCloseDialog}
       />
       <CloudShareDialog

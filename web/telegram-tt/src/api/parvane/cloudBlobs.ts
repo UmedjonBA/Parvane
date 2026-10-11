@@ -105,7 +105,7 @@ function isRetryable(e: unknown) {
 }
 
 /** Повторять запрос при недоступности и ограничении частоты (ждать `retry_after`). */
-async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     checkAborted(signal);
     try {

@@ -6,7 +6,7 @@ import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import {
-  type CloudNode, type CloudSort, freeName, namesIn, subtreeOf, trashOf,
+  type CloudNode, type CloudSort, freeName, namesIn, sizeOf, subtreeOf, trashOf,
 } from './cloudModel';
 
 // Parvane (spec 016): состояние раздела «Облако» — сигналы поверх контейнеров
@@ -23,7 +23,7 @@ export type CloudViewMode = 'list' | 'grid';
 export type CloudPrefs = { view: CloudViewMode; sort: CloudSort };
 export type CloudTransfer = {
   id: string;
-  kind: 'upload' | 'download';
+  kind: 'upload' | 'download' | 'move';
   name: string;
   done: number;
   total: number;
@@ -279,6 +279,42 @@ export function moveCloudNodes(container: string, nodes: CloudNode[], target?: s
   return applyOps(container, ops);
 }
 
+function addMoveTransfer(container: string, nodes: CloudNode[]) {
+  const id = `move-${Date.now()}-${++transferSeq}`;
+  const all = getNodes(container);
+  const name = nodes.length > 1 ? `${nodes[0].name} +${nodes.length - 1}` : nodes[0].name;
+  setCloudTransfers([...getCloudTransfers(), {
+    id, kind: 'move', name, done: 0, total: nodes.reduce((sum, n) => sum + sizeOf(all, n.id), 0), state: 'active',
+  }]);
+  return id;
+}
+
+/** Переместить узлы в папку другого контейнера: личный диск ↔ совместная папка. */
+export async function moveCloudNodesAcross(from: string, nodes: CloudNode[], to: string, target?: string) {
+  if (!nodes.length) return;
+  const taken = new Set(namesIn(getNodes(to), target));
+  const items = nodes.map((n) => {
+    const name = freeName(taken, n.name);
+    taken.add(name);
+    return { id: n.id, name };
+  });
+  await callParvane('parvaneCloudMove', {
+    from, items, to, parent: target, transferId: addMoveTransfer(from, nodes),
+  }).catch(() => undefined);
+  await refreshCloud();
+  void refreshCloudUsage();
+}
+
+/** Сделать папку личного диска совместной; возвращает id новой совместной папки. */
+export async function shareCloudFolder(container: string, node: CloudNode) {
+  const result = await callParvane('parvaneCloudShareFolder', {
+    container, node: node.id, transferId: addMoveTransfer(container, [node]),
+  }).catch(() => undefined) as CloudResult<{ container: string }> | undefined;
+  await refreshCloud();
+  void refreshCloudUsage();
+  return result?.ok ? result.container : undefined;
+}
+
 export function trashCloudNodes(container: string, nodes: CloudNode[]) {
   const at = Date.now();
   return applyOps(container, nodes.map((n) => ({
@@ -412,7 +448,8 @@ export function cancelCloudTransfer(transfer: CloudTransfer) {
     void callParvane('parvaneCloudCancelUpload', { uploadId: transfer.id }).catch(() => undefined);
     return;
   }
-  const method = transfer.kind === 'upload' ? 'parvaneCloudCancelUpload' : 'parvaneCloudCancelDownload';
+  const method = transfer.kind === 'upload' ? 'parvaneCloudCancelUpload'
+    : transfer.kind === 'move' ? 'parvaneCloudCancelMove' : 'parvaneCloudCancelDownload';
   const args = transfer.kind === 'upload' ? { uploadId: transfer.id } : { transferId: transfer.id };
   void callParvane(method, args).catch(() => undefined);
 }

@@ -27,6 +27,7 @@ assert.ok(BACKEND_DIR, 'нужен PARVANE_E2E_BACKEND_LOG_DIR (каталог �
 
 const FOLDER = 'Общий проект';
 const CONTENT = 'Содержимое общего файла a71b';
+const ARCHIVE = 'Архив b93c';
 
 function serverView() {
   const db = new DatabaseSync(`${BACKEND_DIR}/domains.db-v2.db`, { readOnly: true });
@@ -40,7 +41,17 @@ function serverView() {
         texts.push(bytes.toString('latin1'), bytes.toString('utf8'));
       }
     }
-    return { grants, leaks: [FOLDER, CONTENT, 'план.txt', 'от Боба'].filter((w) => texts.some((t) => t.includes(w))) };
+    return { grants, leaks: [FOLDER, CONTENT, 'план.txt', 'от Боба', ARCHIVE, 'отчёт.txt', 'глубоко'].filter((w) => texts.some((t) => t.includes(w))) };
+  } finally {
+    db.close();
+  }
+}
+
+// Блобы облака владельца на сервере (bucket 1): перенос не должен оставлять лишних копий
+function driveBlobs(owner) {
+  const db = new DatabaseSync(`${BACKEND_DIR}/cloud.db`, { readOnly: true });
+  try {
+    return db.prepare('SELECT COUNT(*) AS n FROM files WHERE owner = ? AND bucket = 1').get(owner).n;
   } finally {
     db.close();
   }
@@ -180,6 +191,73 @@ try {
     (address) => !document.querySelector(`[data-member="${address}"]`), bob, { timeout: SYNC },
   );
   console.log('OK: участник покинул папку сам, владелец это видит');
+
+  // ── Обычная папка личного диска становится совместной со всем содержимым ──
+  const createFolder = async (name) => {
+    await ac.add('New folder');
+    await a.locator('#parvane-cloud-name').fill(name);
+    await a.getByRole('button', { name: 'Create', exact: true }).click();
+    await ac.item(name).waitFor({ state: 'visible', timeout: STEP });
+  };
+  const toMyFiles = () => ac.cloud.locator('nav').getByRole('button', { name: 'My files' }).first().click();
+  const moveTo = async (name, placeName) => {
+    await ac.menu(name, 'Move');
+    const dialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Move to' });
+    await dialog.getByRole('button', { name: 'Cloud', exact: true }).click();
+    await dialog.getByRole('listitem').filter({ hasText: placeName }).click();
+    await dialog.getByRole('button', { name: 'Move here', exact: true }).click();
+    await ac.item(name).waitFor({ state: 'detached', timeout: SYNC });
+  };
+  await a.locator('.Modal.open').getByRole('button', { name: 'Close', exact: true }).last().click().catch(() => undefined);
+  await toMyFiles();
+  const blobsBefore = driveBlobs(alice);
+  await createFolder(ARCHIVE);
+  await ac.item(ARCHIVE).click();
+  await ac.upload('отчёт.txt', 'данные архива');
+  await createFolder('Вложенная');
+  await ac.item('Вложенная').click();
+  await ac.upload('глубоко.txt', 'файл в глубине');
+  await toMyFiles();
+  await ac.menu(ARCHIVE, 'Sharing');
+  await a.locator('.Modal').getByRole('button', { name: 'Make shared', exact: true }).click();
+  const archiveDialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' }).filter({ hasText: ARCHIVE });
+  await archiveDialog.waitFor({ state: 'visible', timeout: SYNC });
+  await archiveDialog.locator('[role="radiogroup"][aria-label="Add people"]').getByRole('radio', { name: 'Reader' }).click();
+  await archiveDialog.getByRole('button', { name: 'Add people', exact: true }).click();
+  await a.locator('.Modal .ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
+  await archiveDialog.locator(`[data-member="${bob}"]`).waitFor({ state: 'visible', timeout: STEP });
+  await archiveDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
+  assert.equal(await ac.item(ARCHIVE).count(), 0, 'обычной папки на диске больше нет');
+  assert.equal(await ac.folderRow(ARCHIVE).getAttribute('data-container-kind'), 'owned', 'папка стала совместной');
+  await ac.folderRow(ARCHIVE).click();
+  assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл папки цел у владельца');
+  const archiveInvite = bc.folderRow(ARCHIVE);
+  await archiveInvite.waitFor({ state: 'visible', timeout: SYNC });
+  await archiveInvite.getByRole('button', { name: 'Open', exact: true }).click();
+  await b.locator('.Modal').getByRole('button', { name: 'Accept', exact: true }).click();
+  await bc.item('отчёт.txt').waitFor({ state: 'visible', timeout: SYNC });
+  await bc.item('Вложенная').click();
+  assert.equal((await bc.download('глубоко.txt')).toString(), 'файл в глубине', 'участник читает вложенный файл');
+  await bc.cloud.locator('nav').getByRole('button', { name: ARCHIVE }).click();
+  console.log('OK: обычная папка стала совместной вместе с вложенным, участник читает файлы');
+
+  // ── Перенос между личным диском и совместной папкой в обе стороны ─────────
+  await toMyFiles();
+  await ac.upload('личный.txt', 'с личного диска');
+  await moveTo('личный.txt', ARCHIVE);
+  await bc.item('личный.txt').waitFor({ state: 'visible', timeout: SYNC });
+  assert.equal((await bc.download('личный.txt')).toString(), 'с личного диска', 'участник читает перенесённый файл');
+  await ac.folderRow(ARCHIVE).click();
+  await ac.item('личный.txt').waitFor({ state: 'visible', timeout: STEP });
+  await moveTo('отчёт.txt', 'My files');
+  await bc.item('отчёт.txt').waitFor({ state: 'detached', timeout: SYNC });
+  await toMyFiles();
+  assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл вернулся на личный диск целым');
+  // Три файла — три блоба: копии источника стёрты
+  await waitFor(
+    () => Promise.resolve(driveBlobs(alice) - blobsBefore), (n) => n === 3, 'после переноса остались лишние блобы',
+  );
+  console.log('OK: перенос между личным диском и совместной папкой в обе стороны, лишних блобов нет');
 
   // ── Сервер видит состав, но не имена и не содержимое ──────────────────────
   assert.deepEqual(serverView().leaks, [], 'в базе сервера найден открытый текст');

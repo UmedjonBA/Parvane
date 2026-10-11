@@ -1222,6 +1222,8 @@
 "ParvaneCloudSentToChat" = "Отправлено";
 "ParvaneCloudNewShared" = "Новая совместная папка";
 "ParvaneCloudShare" = "Общий доступ";
+"ParvaneCloudShareFolderConfirm" = "Открыть доступ к папке «{name}»? Она станет совместной и встанет в начало раздела «Мои файлы» вместе со всем содержимым.";
+"ParvaneCloudShareFolderAction" = "Сделать совместной";
 "ParvaneCloudShareTitle" = "Доступ к папке «{name}»";
 "ParvaneCloudShareAdd" = "Добавить людей";
 "ParvaneCloudRoleOwner" = "Владелец";

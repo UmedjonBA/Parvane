@@ -51,7 +51,10 @@ const CloudTransfers = ({ transfers }: OwnProps) => {
             data-transfer-state={t.state}
             data-name={t.name}
           >
-            <Icon name={t.kind === 'upload' ? 'up' : 'download'} className={styles.transferIcon} />
+            <Icon
+              name={t.kind === 'upload' ? 'up' : t.kind === 'move' ? 'folder' : 'download'}
+              className={styles.transferIcon}
+            />
             <div className={styles.transferText}>
               <div className={styles.transferName} dir="auto">{t.name}</div>
               <div className={styles.transferState}>{stateText}</div>

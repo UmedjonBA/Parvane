@@ -421,13 +421,15 @@ export function createCloudSync(deps: Deps) {
     }
   }
 
-  async function sendOutbox(id: string) {
+  /** Отправить очередь правок; возвращает число правок, отвергнутых сервером. */
+  async function sendOutbox(id: string): Promise<number> {
     const client = deps.client();
-    if (!client?.cloudIsAttached(id)) return;
+    if (!client?.cloudIsAttached(id)) return 0;
     const outbox = await loadOutbox(id);
+    let rejected = 0;
     while (outbox.length) {
       const item = outbox[0];
-      if (!client.cloudHasKey(id)) return;
+      if (!client.cloudHasKey(id)) return rejected;
       try {
         const req = client.cloudSeal(id, b64ToBytes(item.op), item.opId, Date.now()) as OutReq;
         await call(req.chan, req.method, req.body);
@@ -437,12 +439,13 @@ export function createCloudSync(deps: Deps) {
           // Эпоха сменилась: догнать гранты, ключ придёт по E2E
           const before = client.cloudGrantVersion(id);
           await pullGrants(id);
-          if (client.cloudGrantVersion(id) === before || !client.cloudHasKey(id)) return;
+          if (client.cloudGrantVersion(id) === before || !client.cloudHasKey(id)) return rejected;
           continue;
         }
         if (code === 'ERROR_CODE_FORBIDDEN' || code === 'ERROR_CODE_NOT_FOUND' || code === 'ERROR_CODE_INVALID') {
           // Права записи больше нет (роль понижена, доступ отозван): правка не будет принята
           deps.log(`облако: правка отвергнута сервером (${code})`);
+          rejected += 1;
         } else if (code !== 'ERROR_CODE_DUPLICATE') {
           throw e;
         }
@@ -450,6 +453,7 @@ export function createCloudSync(deps: Deps) {
       outbox.shift();
       await saveOutbox(id);
     }
+    return rejected;
   }
 
   /** Блобы окончательно удалённых файлов, загруженные этим аккаунтом, — стереть на сервере. */
@@ -600,6 +604,15 @@ export function createCloudSync(deps: Deps) {
         }
       })).then(() => deps.onChanged());
       return id;
+    });
+  }
+
+  /** Дослать очередь контейнера и стереть блобы удалённого; `true` — сервер принял всё. */
+  function flush(id: string): Promise<boolean> {
+    return serial(async () => {
+      const rejected = await sendOutbox(id);
+      await collectGarbage(id).catch(() => undefined);
+      return !rejected && !outboxes.get(id)?.length;
     });
   }
 
@@ -798,6 +811,7 @@ export function createCloudSync(deps: Deps) {
     ensure,
     setActive,
     apply,
+    flush,
     syncNow,
     containers,
     stateJson,

@@ -3179,6 +3179,8 @@
 "ParvaneCloudSentToChat" = "Sent";
 "ParvaneCloudNewShared" = "New shared folder";
 "ParvaneCloudShare" = "Sharing";
+"ParvaneCloudShareFolderConfirm" = "Share “{name}”? It becomes a shared folder at the top of My files, with everything inside it.";
+"ParvaneCloudShareFolderAction" = "Make shared";
 "ParvaneCloudShareTitle" = "Access to “{name}”";
 "ParvaneCloudShareAdd" = "Add people";
 "ParvaneCloudRoleOwner" = "Owner";

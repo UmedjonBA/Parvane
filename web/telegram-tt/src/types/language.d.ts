@@ -2345,6 +2345,7 @@ export interface LangPair {
   'ParvaneCloudSentToChat': undefined;
   'ParvaneCloudNewShared': undefined;
   'ParvaneCloudShare': undefined;
+  'ParvaneCloudShareFolderAction': undefined;
   'ParvaneCloudShareAdd': undefined;
   'ParvaneCloudRoleOwner': undefined;
   'ParvaneCloudRoleEditor': undefined;
@@ -4334,6 +4335,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneCloudUsageTrash': {
     'size': V;
+  };
+  'ParvaneCloudShareFolderConfirm': {
+    'name': V;
   };
   'ParvaneCloudShareTitle': {
     'name': V;

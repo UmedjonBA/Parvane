@@ -5,7 +5,7 @@ import { V2Error } from './v2/transport';
 import { decryptBlob } from './blobcrypt';
 import {
   CloudAbortError, cloudCipherSize, cloudPlainSize, createBlobSink, createFileSink, downloadCloudBlob,
-  uploadCloudBlob,
+  uploadCloudBlob, withRetry,
 } from './cloudBlobs';
 
 // Parvane (spec 016): методы провайдера раздела «Облако». Дерево и доступ — в
@@ -45,7 +45,7 @@ export type CloudDriveState = {
 export type CloudUsage = { used: number; quota: number; maxFile: number };
 export type CloudTransferEvent = {
   id: string;
-  kind: 'upload' | 'download';
+  kind: 'upload' | 'download' | 'move';
   done: number;
   total: number;
   state: 'active' | 'done' | 'failed' | 'canceled';
@@ -55,6 +55,7 @@ export type CloudErrorCode = 'offline' | 'no-space' | 'too-large' | 'forbidden' 
   | 'too-many';
 export type CloudResult<T = object> = ({ ok: true } & T) | { ok: false; error: CloudErrorCode };
 
+export type CloudMoveItem = { id: string; name: string };
 export type CloudChatFile = { fileId: string; name: string; mime: string; size: number };
 type SentFile = CloudBlobKeys & { fileId: string; name: string; mime: string; size: number };
 
@@ -94,6 +95,11 @@ const DRIVE_BUCKET = 'BLOB_BUCKET_DRIVE';
 const MEDIA_BUCKET = 'BLOB_BUCKET_UNSPECIFIED';
 const CAPABILITY_BYTES = 32;
 const NODE_ID_BYTES = 16;
+// Перенос между контейнерами идёт порциями: копия блобов, узлы в назначении,
+// удаление в источнике — лишнее место занято не дольше одной порции
+const MOVE_CHUNK_FILES = 20;
+const MOVE_CHUNK_BYTES = 64 * 1024 * 1024;
+const MAX_NODES = 8000;
 
 export function newCloudNodeId() {
   const bytes = crypto.getRandomValues(new Uint8Array(NODE_ID_BYTES));
@@ -131,6 +137,7 @@ function emit(event: CloudTransferEvent) {
 export function createCloudDrive(deps: Deps) {
   const uploads = new Map<string, UploadJob>();
   const downloads = new Map<string, AbortController>();
+  const moves = new Map<string, AbortController>();
   const thumbs = new Map<string, Promise<string | undefined>>();
   const previews = new Map<string, Promise<Blob | undefined>>();
   let isEnsureStarted = false;
@@ -278,6 +285,166 @@ export function createCloudDrive(deps: Deps) {
     return hit;
   }
 
+  /** Независимая копия блоба в облаке под новым секретом доступа (без перекачки). */
+  async function copyDriveBlob(fileId: string, capability: string, signal?: AbortSignal) {
+    const fresh = await newCapability();
+    const copy = await withRetry(() => deps.transport().blobCall<CopyReply>('cloud.blob.copy', {
+      file_id: fileId, capability, bucket: DRIVE_BUCKET, capability_hash: fresh.hash,
+    }), signal);
+    const copyId = copy.fileId || copy.file_id;
+    if (!copyId) throw new V2Error('ERROR_CODE_INVALID');
+    return { fileId: copyId, capability: fresh.capability };
+  }
+
+  function dropBlobs(ids: string[]) {
+    ids.forEach((id) => {
+      void deps.transport().blobCall('cloud.blob.delete', { file_id: id }).catch(() => undefined);
+    });
+  }
+
+  /** Перенести узлы со всем вложенным в другой контейнер: копия в назначение,
+   * удаление в источнике (FR-032). `wrapper` — папка источника, чьё содержимое
+   * переносится, а сама она стирается. Блобы копируются на сервере: общий блоб
+   * двух контейнеров стёрло бы устройство, увидевшее удаление в источнике. */
+  async function moveNodes(args: {
+    from: string; items: CloudMoveItem[]; to: string; parent?: string; wrapper?: string;
+    signal?: AbortSignal; onProgress?: (done: number, total: number) => void;
+  }) {
+    const cloud = deps.cloud();
+    const source = readTree(args.from)?.nodes || [];
+    const byId = new Map(source.map((n) => [n.id, n]));
+    const childrenOf = (id: string) => source.filter((n) => n.parent === id);
+    const newIds = new Map<string, string>();
+    const names = new Map(args.items.map((i) => [i.id, i.name]));
+    const folders: CloudNodeJson[] = [];
+    const files: CloudNodeJson[] = [];
+    // Лежащее в корзине остаётся в источнике: поднимается в корень, чтобы не стереться с папкой
+    const rescued: CloudNodeJson[] = args.wrapper ? childrenOf(args.wrapper).filter((n) => n.trashTop) : [];
+    const queue = args.items.map((i) => byId.get(i.id)).filter((n): n is CloudNodeJson => Boolean(n && !n.trashed));
+    const tops = new Set(queue.map((n) => n.id));
+    for (let i = 0; i < queue.length; i++) {
+      const node = queue[i];
+      newIds.set(node.id, newCloudNodeId());
+      if (node.kind === 'file') {
+        if (node.blob) files.push(node);
+        continue;
+      }
+      folders.push(node);
+      childrenOf(node.id).forEach((child) => {
+        if (!child.trashed) queue.push(child);
+        else if (child.trashTop) rescued.push(child);
+      });
+    }
+    if ((readTree(args.to)?.nodes.length || 0) + folders.length + files.length > MAX_NODES) {
+      throw new V2Error('FieldLimit');
+    }
+    const placeOf = (node: CloudNodeJson) => ({
+      id: newIds.get(node.id)!,
+      parent: tops.has(node.id) ? args.parent : newIds.get(node.parent!),
+      name: names.get(node.id) || node.name,
+    });
+    if (folders.length) {
+      await cloud.apply(args.to, folders.map((n) => ({
+        op: 'create', kind: 'folder', mtime: n.mtime || undefined, ...placeOf(n),
+      })));
+    }
+    const total = files.reduce((sum, n) => sum + n.size, 0);
+    let done = 0;
+    args.onProgress?.(0, total);
+    const self = deps.self() || '';
+    for (let start = 0; start < files.length;) {
+      const creates: unknown[] = [];
+      const copied: string[] = [];
+      const purges: unknown[] = [];
+      let bytes = 0;
+      try {
+        while (start < files.length && creates.length < MOVE_CHUNK_FILES && bytes < MOVE_CHUNK_BYTES) {
+          const node = files[start];
+          const blob = node.blob!;
+          const copy = await copyDriveBlob(blob.fileId, blob.capability, args.signal);
+          copied.push(copy.fileId);
+          let thumb: CloudThumbInfo | undefined;
+          if (node.thumb) {
+            try {
+              const thumbCopy = await copyDriveBlob(node.thumb.fileId, node.thumb.capability, args.signal);
+              copied.push(thumbCopy.fileId);
+              thumb = { ...node.thumb, ...thumbCopy };
+            } catch (e) {
+              if (e instanceof CloudAbortError) throw e;
+              deps.log(`облако: миниатюра не перенесена: ${String(e)}`);
+            }
+          }
+          creates.push({
+            op: 'create',
+            kind: 'file',
+            mtime: node.mtime,
+            ...placeOf(node),
+            blob: { ...blob, ...copy, uploader: self },
+            thumb,
+          });
+          purges.push({ op: 'purge', id: node.id, at: Date.now() });
+          bytes += node.size;
+          start += 1;
+        }
+        await cloud.apply(args.to, creates);
+      } catch (e) {
+        // Скопированное, но не попавшее в дерево, место занимать не должно
+        dropBlobs(copied);
+        throw e;
+      }
+      // Источник стирается только после того, как сервер принял узлы назначения
+      if (!await cloud.flush(args.to)) throw new V2Error('ERROR_CODE_FORBIDDEN');
+      await cloud.apply(args.from, purges);
+      await cloud.flush(args.from);
+      usage = undefined;
+      done += bytes;
+      args.onProgress?.(done, total);
+    }
+    const at = Date.now();
+    const tail: unknown[] = rescued.map((n) => ({
+      op: 'move', id: n.id, parent: undefined, name: n.name,
+    }));
+    folders.filter((n) => tops.has(n.id)).forEach((n) => tail.push({ op: 'purge', id: n.id, at }));
+    if (args.wrapper) tail.push({ op: 'purge', id: args.wrapper, at });
+    if (tail.length) {
+      await cloud.apply(args.from, tail);
+      await cloud.flush(args.from);
+    }
+    return total;
+  }
+
+  /** Перенос с ходом и отменой (события `parvane-cloud-transfer`, вид `move`). */
+  async function runMove(
+    transferId: string,
+    run: (signal: AbortSignal, onProgress: (done: number, total: number) => void) => Promise<number>,
+  ): Promise<CloudErrorCode | undefined> {
+    const abort = new AbortController();
+    moves.set(transferId, abort);
+    let total = 0;
+    const report = (state: CloudTransferEvent['state'], done: number, error?: CloudErrorCode) => emit({
+      id: transferId, kind: 'move', done, total, state, error,
+    });
+    try {
+      total = await run(abort.signal, (done, all) => {
+        total = all;
+        report('active', done);
+      });
+      report('done', total);
+      return undefined;
+    } catch (e) {
+      if (e instanceof CloudAbortError) {
+        report('canceled', 0);
+        return 'rejected';
+      }
+      deps.log(`облако: перенос не удался: ${String(e)}`);
+      report('failed', 0, errorOf(e));
+      return errorOf(e);
+    } finally {
+      moves.delete(transferId);
+      usage = undefined;
+    }
+  }
+
   return {
     /** Состояние раздела; первый вызов запускает подключение и синхронизацию. */
     parvaneCloudState(): Promise<CloudDriveState> {
@@ -405,6 +572,42 @@ export function createCloudDrive(deps: Deps) {
         const plain = cipher && await decryptBlob(cipher, blob.key, thumb.nonce);
         return plain ? URL.createObjectURL(new Blob([plain as BlobPart], { type: 'image/jpeg' })) : undefined;
       }).catch(() => undefined);
+    },
+
+    /** Переместить узлы в папку другого контейнера (личный диск ↔ совместная папка). */
+    async parvaneCloudMove({
+      from, items, to, parent, transferId,
+    }: {
+      from: string; items: CloudMoveItem[]; to: string; parent?: string; transferId: string;
+    }): Promise<CloudResult> {
+      const error = await runMove(transferId, (signal, onProgress) => moveNodes({
+        from, items, to, parent, signal, onProgress,
+      }));
+      return error ? { ok: false, error } : { ok: true };
+    },
+
+    parvaneCloudCancelMove({ transferId }: { transferId: string }) {
+      moves.get(transferId)?.abort();
+      return Promise.resolve(true);
+    },
+
+    /** Сделать папку личного диска совместной: новый контейнер с её названием и содержимым. */
+    async parvaneCloudShareFolder({ container, node, transferId }: {
+      container: string; node: string; transferId: string;
+    }): Promise<CloudResult<{ container: string }>> {
+      const folder = findNode(container, node);
+      if (!folder || folder.kind !== 'folder' || folder.trashed) return { ok: false, error: 'not-found' };
+      let created: string | undefined;
+      const error = await runMove(transferId, async (signal, onProgress) => {
+        created = await deps.cloud().createFolder(folder.name);
+        const items = (readTree(container)?.nodes || [])
+          .filter((n) => n.parent === node && !n.trashed)
+          .map((n) => ({ id: n.id, name: n.name }));
+        return moveNodes({
+          from: container, items, to: created, wrapper: node, signal, onProgress,
+        });
+      });
+      return error || !created ? { ok: false, error: error || 'rejected' } : { ok: true, container: created };
     },
 
     async parvaneCloudUsage(): Promise<CloudUsage | undefined> {

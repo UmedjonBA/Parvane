@@ -20,7 +20,8 @@ import MenuItem from '../../ui/MenuItem';
 
 import styles from './Cloud.module.scss';
 
-export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete' | 'restore' | 'purge' | 'send';
+export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete' | 'restore' | 'purge' | 'send'
+  | 'share';
 
 type OwnProps = {
   container: string;
@@ -32,6 +33,8 @@ type OwnProps = {
   isSelected?: boolean;
   isTrash?: boolean;
   canEdit?: boolean;
+  // Папку личного диска можно сделать совместной
+  canShare?: boolean;
   onOpen: (container: string, node: CloudNode) => void;
   onToggle: (node: CloudNode) => void;
   onAction: (action: CloudItemAction, container: string, node: CloudNode) => void;
@@ -48,7 +51,7 @@ const callParvane = callApi as unknown as (method: string, args?: unknown) => Pr
 // Parvane (spec 016): строка либо плитка файла/папки. Нажатие открывает,
 // флажок выделяет, «⋯» — действия.
 const CloudItem = ({
-  container, node, view, hint, folderSize, isSelected, isTrash, canEdit, onOpen, onToggle, onAction,
+  container, node, view, hint, folderSize, isSelected, isTrash, canEdit, canShare, onOpen, onToggle, onAction,
 }: OwnProps) => {
   const lang = useLang();
   const isFolder = node.kind === 'folder';
@@ -169,6 +172,9 @@ const CloudItem = ({
                 <MenuItem icon="download" onClick={run('download')}>{lang('ParvaneCloudDownload')}</MenuItem>
               )}
               {!isFolder && <MenuItem icon="forward" onClick={run('send')}>{lang('ParvaneCloudSendToChat')}</MenuItem>}
+              {canShare && isFolder && (
+                <MenuItem icon="add-user" onClick={run('share')}>{lang('ParvaneCloudShare')}</MenuItem>
+              )}
               {canEdit && <MenuItem icon="edit" onClick={run('rename')}>{lang('ParvaneCloudRename')}</MenuItem>}
               {canEdit && <MenuItem icon="folder" onClick={run('move')}>{lang('ParvaneCloudMove')}</MenuItem>}
               {canEdit && (
