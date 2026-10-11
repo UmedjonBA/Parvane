@@ -1,9 +1,10 @@
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
 import type { PlannerCalendarView } from './plannerModel';
+import type { SwipePoint } from './plannerSwipe';
 import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
@@ -22,6 +23,7 @@ import {
   getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus, loadPlanner,
   undoPlanner, updatePlanner,
 } from './plannerStore';
+import { getSwipeDelta, isSwipeBlocked } from './plannerSwipe';
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -34,6 +36,7 @@ import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
 import PlannerAgenda from './PlannerAgenda';
+import PlannerDayStrip from './PlannerDayStrip';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerHealth from './PlannerHealth';
 import PlannerMonth from './PlannerMonth';
@@ -119,6 +122,8 @@ const Planner = () => {
   // Узкое окно: виден либо месяц, либо панель дня/задачи
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Начатый жест листания (телефон): что листается и где палец коснулся экрана
+  const swipeRef = useRef<{ period: 'day' | 'week'; start: SwipePoint }>();
 
   const currentUserId = useSelector(selectCurrentUserId);
   const { width: windowWidth } = useWindowSize();
@@ -201,12 +206,6 @@ const Planner = () => {
     openForm({ day: picked });
   });
 
-  const handleAdd = useLastCallback(() => {
-    openForm({ day: picked });
-  });
-
-  // Кнопка «+» нижней панели телефона: форма новой записи, как у кнопки «+ Задача»
-
   const handleCreated = useLastCallback((taskId?: string, day?: string) => {
     setFormParams(undefined);
     if (taskId !== undefined) handleOpenTask(taskId, day);
@@ -246,6 +245,24 @@ const Planner = () => {
 
   const handlePrevPeriod = useLastCallback(() => changePeriod(-1));
   const handleNextPeriod = useLastCallback(() => changePeriod(1));
+
+  // Телефон: горизонтальный свайп листает то, что названо в `data-swipe` под пальцем, — дни либо недели
+  const handleTouchStart = useLastCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    swipeRef.current = undefined;
+    const target = e.target as HTMLElement;
+    const period = target.closest<HTMLElement>('[data-swipe]')?.dataset.swipe as 'day' | 'week' | undefined;
+    if (!isNarrow || !period || e.touches.length !== 1 || isSwipeBlocked(target, e.currentTarget)) return;
+    swipeRef.current = { period, start: { x: e.touches[0].clientX, y: e.touches[0].clientY } };
+  });
+
+  const handleTouchEnd = useLastCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const swipe = swipeRef.current;
+    swipeRef.current = undefined;
+    const touch = e.changedTouches[0];
+    if (!swipe || !touch) return;
+    const delta = getSwipeDelta(swipe.start, { x: touch.clientX, y: touch.clientY });
+    if (delta) pickDay(shiftPeriod(swipe.period, picked, delta));
+  });
 
   const handleToday = useLastCallback(() => {
     pickDay(today);
@@ -298,7 +315,7 @@ const Planner = () => {
   const isCreating = Boolean(formParams);
   // На телефоне трёх колонок нет: новая задача из календаря пишется прямо в расписании дня (на месте
   // свободного окна), а не на отдельном экране
-  // Телефон, вид «Неделя»: день и так виден в сетке недели — панель дня не показывается
+  // Телефон, вид «Неделя»: день стоит под полосой дней недели — панель дня не показывается
   const isNarrowWeek = isNarrow && view === VIEW_CALENDAR && calendarView === 'week';
   const isInlineForm = isCreating && isNarrow && !isSettingsOpen && !isNarrowWeek;
   // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
@@ -326,12 +343,14 @@ const Planner = () => {
   const sideTitle = side === 'settings' ? lang('PlannerSettings') : side === 'form' ? lang('PlannerTitleNew')
     : side === 'task' ? lang('PlannerTitleTask') : lang('PlannerTitleEvent');
   const calendarSegments = PLANNER_CALENDAR_VIEWS
-    .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) }));
+    // На телефоне «Неделя» показывает один день с полосой дней недели и называется «День»
+    .map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[isNarrow && item === 'week' ? 'day' : item]) }));
   const isMonthView = calendarView === 'month';
   const daySummary = buildDaySummary(lang, state, picked);
   const pickedDays = useMemo(() => [picked], [picked]);
 
-  // Кнопка «+» нижней панели телефона и «Быстрый ввод»: запись одной строкой (spec 017)
+  // Кнопка «+» нижней панели телефона и «+ Запись» в шапке: запись одной строкой (spec 017).
+  // Полная форма — по «Подробнее» в окне ввода, по «+» у дня и по нажатию на свободное время сетки
   const [isQuickOpen, openQuick, closeQuick] = useFlag();
   const addRequest = useDerivedState(getPlannerAddRequest);
   useEffect(() => {
@@ -368,7 +387,7 @@ const Planner = () => {
 
   const handleQuickMore = useLastCallback(() => {
     closeQuick();
-    handleAdd();
+    handleAddToDay();
   });
   const dayTimeline = (
     <PlannerTimeline
@@ -419,10 +438,7 @@ const Planner = () => {
         {!isNarrow && (
           <div className={styles.headerButtons}>
             {settingsButton}
-            <Button size="smaller" color="translucent" onClick={handleOpenQuick}>
-              {lang('PlannerQuickButton')}
-            </Button>
-            <Button size="smaller" onClick={handleAdd}>{lang('PlannerAddTask')}</Button>
+            <Button size="smaller" onClick={handleOpenQuick}>{lang('PlannerAddEntry')}</Button>
           </div>
         )}
       </header>
@@ -493,7 +509,12 @@ const Planner = () => {
                 )}
               </aside>
             )}
-            <div className={styles.main}>
+            <div
+              className={styles.main}
+              data-swipe={isNarrow && isDayView ? 'day' : undefined}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+            >
               <PlannerPeriodBar
                 title={formatPeriod(lang, isDayView ? 'day' : calendarView, picked)}
                 prevLabel={lang(isMonthView && !isDayView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
@@ -549,6 +570,34 @@ const Planner = () => {
                   onOpenTask={handleOpenTask}
                   onMoveTask={handleMoveTask}
                 />
+              ) : isNarrow ? (
+                // Телефон: неделя — полоса дней и сетка выбранного дня под ней
+                <div className={styles.phoneWeek} data-planner-view="week">
+                  <PlannerDayStrip
+                    state={state}
+                    days={getWeekKeys(picked)}
+                    picked={picked}
+                    today={today}
+                    onPickDay={pickDay}
+                  />
+                  <p className={buildClassName(styles.summary, daySummary.isOver && styles.warning)}>
+                    {daySummary.text}
+                  </p>
+                  <div className={styles.phoneWeekDay} data-swipe="day">
+                    <PlannerWeek
+                      state={state}
+                      days={pickedDays}
+                      picked={picked}
+                      today={today}
+                      isPanel
+                      onPickDay={pickDay}
+                      onCreateForDay={handleCreateForDay}
+                      onCreateAt={handleCreateAt}
+                      onOpenTask={handleOpenTask}
+                      onOpenEvent={handleOpenEvent}
+                    />
+                  </div>
+                </div>
               ) : (
                 <PlannerWeek
                   state={state}

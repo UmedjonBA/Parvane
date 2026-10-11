@@ -630,6 +630,24 @@
   }
 }
 
+// Ссылка на заметку в названии записи (`PlannerName`)
+.nameLink {
+  cursor: var(--custom-cursor, pointer);
+  color: var(--color-links);
+  text-decoration: underline;
+
+  &:focus-visible {
+    border-radius: 0.125rem;
+    outline: 0.125rem solid var(--color-primary);
+  }
+
+  // На цветной плашке и в блоке сетки ссылка — цветом текста: цвет ссылок на заливке не читается
+  .weekChip &,
+  .weekBlock & {
+    color: inherit;
+  }
+}
+
 // ── расписание дня ───────────────────────────────────────────────────────────
 
 .dayList {
@@ -1117,14 +1135,6 @@
 
 .root :global(.input-group) {
   margin-bottom: 0;
-}
-
-// «Классическое» (spec 008): раздел вплотную к краям, без скругления и тени
-:global(html.interface-classic) .root {
-  margin: 0;
-  border-inline-start: 1px solid var(--color-borders);
-  border-radius: 0;
-  box-shadow: none;
 }
 
 // RTL: интервалы времени и числа с единицами — всегда слева направо, иначе
@@ -2225,9 +2235,109 @@
   }
 }
 
+// ── телефон, вид «Неделя»: полоса дней недели и сетка выбранного дня под ней ──
+
+.phoneWeek,
+.phoneWeekDay {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.phoneWeek {
+  gap: 0.5rem;
+
+  .summary {
+    margin: 0;
+  }
+
+  .weekPanel {
+    --planner-week-surface: var(--color-background);
+  }
+}
+
+.dayStrip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.dayStripDay {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0.375rem 0 0.4375rem;
+  border: none;
+  border-radius: var(--border-radius-default-small);
+
+  color: var(--color-text);
+
+  background: none;
+}
+
+.dayStripWeekday {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+.dayStripNumber {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.125rem;
+  height: 2.125rem;
+  border-radius: 50%;
+
+  font-size: 1.0625rem;
+  font-weight: var(--font-weight-semibold);
+
+  .dayStripHoliday & {
+    color: var(--color-error);
+  }
+
+  .dayStripToday & {
+    color: var(--color-primary);
+  }
+
+  .dayStripPicked & {
+    color: var(--color-white);
+    background: var(--color-primary);
+  }
+}
+
+// Загрузка дня: занято от бюджета
+.dayStripLoad {
+  overflow: hidden;
+
+  width: 1.375rem;
+  height: 0.1875rem;
+  border-radius: 0.125rem;
+
+  background: var(--color-borders);
+}
+
+.dayStripLoadFill {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+}
+
+.dayStripLoadOver {
+  background: var(--color-error);
+}
+
 @media (max-width: 925px) {
-  // Вид «Неделя» на телефоне: панели дня нет, сетка недели — на весь экран и листается сама
-  // (в обе стороны), оси закреплены; колонки шире
+  // Вид «Неделя» на телефоне: панели дня нет; полоса дней стоит на месте, сетка дня под ней — на всё
+  // оставшееся место и листается по вертикали (вбок — нет: горизонтальный жест листает дни)
   .layoutWeek {
     height: 100%;
     min-height: 0;
@@ -2241,9 +2351,7 @@
   }
 
   .layoutWeek .week {
-    --planner-week-column: 7.5rem;
-
-    overflow: auto;
+    overflow: hidden auto;
     flex: 1 1 auto;
     min-height: 0;
   }

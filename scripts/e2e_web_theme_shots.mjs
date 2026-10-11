@@ -38,13 +38,13 @@ try {
       await sidebar.getByRole('tab', { name: 'Today' }).click();
       await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       for (const line of ['созвон 16:00 45 мин', 'задача сдать отчёт до пт', 'обед гречка б30 ж10 у60 сахар 60 520 ккал', 'сон 01:00-06:00', 'вес 72,4']) {
-        await planner.getByRole('button', { name: /Entry|Quick entry/ }).first().click();
+        await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
         await page.locator('#planner-quick-input').fill(line);
         await page.locator('#planner-quick-input').press('Enter');
         await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
       }
       await shot('today');
-      await planner.getByRole('button', { name: /Entry|Quick entry/ }).first().click();
+      await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
       await page.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');
       await shot('quick');
       await page.keyboard.press('Escape');

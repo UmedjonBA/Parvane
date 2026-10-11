@@ -2369,8 +2369,8 @@ export interface LangPair {
   'ParvaneCloudTrashNote': undefined;
   'ParvaneCloudTrashExpired': undefined;
   'PlannerAdd': undefined;
+  'PlannerAddEntry': undefined;
   'PlannerAddFood': undefined;
-  'PlannerAddTask': undefined;
   'PlannerAddTaskForDay': undefined;
   'PlannerAddTaskToList': undefined;
   'PlannerAriaLists': undefined;
@@ -2615,7 +2615,6 @@ export interface LangPair {
   'PlannerRepeatIntervalMonths': undefined;
   'PlannerRepeatIntervalYears': undefined;
   'PlannerQuickTitle': undefined;
-  'PlannerQuickButton': undefined;
   'PlannerQuickAuto': undefined;
   'PlannerQuickPlaceholder': undefined;
   'PlannerQuickHint': undefined;

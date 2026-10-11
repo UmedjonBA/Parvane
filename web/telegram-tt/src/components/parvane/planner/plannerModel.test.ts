@@ -10,7 +10,8 @@ import {
   getUndatedTasks,
   getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, layoutTimed, makeFoodEntry, moveTask, nextOpenInstance,
   normalizePlannerState, occursOn, removeSeries, setOccurrence, setTaskDone, setTaskStepDone, shiftPeriod,
-  splitSeries, truncateSeries, validateEvent, validateGoalRecord, validateRepeat, validateSettings, validateTask,
+  splitSeries, truncateSeries, updateSeries, validateEvent, validateGoalRecord, validateRepeat, validateSettings,
+  validateTask,
 } from './plannerModel';
 
 // 8 октября 2026 — четверг
@@ -342,6 +343,197 @@ describe('планировщик: повторяющиеся события и �
     expect(whole.id).toBe('s');
     expect(state.tasks.find((t) => t.id === 's'))
       .toMatchObject({ name: 'Плавание', repeat: { startDay: '2026-10-12' } });
+  });
+});
+
+describe('планировщик: правка «Все в серии»', () => {
+  it('поля уходят в шаблон: время, длительность, название, цвет; день и правило шаблона не трогаются', () => {
+    const state = stateWith({
+      tasks: [task({
+        id: 's', start: '10:00', minutes: 30, repeat: { kind: 'daily', interval: 1, startDay: '2026-10-05' },
+      })],
+      events: [{
+        id: 'e', name: 'Йога', start: '18:00', end: '19:00', repeat: { kind: 'daily', interval: 2, startDay: TODAY },
+      }],
+    });
+    updateSeries(state, 'task', 's', TODAY, {
+      start: '11:00', minutes: 45, name: 'Зарядка', day: TODAY,
+    });
+    expect(state.tasks[0]).toMatchObject({ start: '11:00', minutes: 45, name: 'Зарядка' });
+    expect(state.tasks[0].day).toBeUndefined();
+    expect(state.tasks[0].repeat).toEqual({ kind: 'daily', interval: 1, startDay: '2026-10-05' });
+    updateSeries(state, 'event', 'e', '2026-10-10', {
+      end: '19:30', color: 3, repeat: { kind: 'daily', interval: 1, startDay: TODAY },
+    });
+    expect(state.events[0]).toMatchObject({ end: '19:30', color: 3 });
+    expect(state.events[0].repeat!.interval).toBe(2);
+    expect(updateSeries(state, 'task', 'нет', TODAY, { name: 'x' })).toBeUndefined();
+  });
+
+  it('ежедневный ряд: перенос дня сдвигает начало, конец и отметки на то же число дней', () => {
+    const state = stateWith({
+      tasks: [task({
+        id: 's',
+        repeat: {
+          kind: 'daily', interval: 2, startDay: '2026-10-05', endDay: '2026-10-15', count: 5,
+        },
+        occurrences: [{ day: '2026-10-07', done: true }, { day: '2026-10-09', excluded: true }],
+      })],
+    });
+    // 9 октября → 12 октября: +3 дня
+    updateSeries(state, 'task', 's', '2026-10-09', { day: '2026-10-12' });
+    const series = state.tasks[0];
+    expect(series.repeat).toEqual({
+      kind: 'daily', interval: 2, startDay: '2026-10-08', endDay: '2026-10-18', count: 5,
+    });
+    expect(series.occurrences).toEqual([{ day: '2026-10-10', done: true }, { day: '2026-10-12', excluded: true }]);
+    expect(expandRepeat(series.repeat!, '2026-10-01', '2026-10-31'))
+      .toEqual(['2026-10-08', '2026-10-10', '2026-10-12', '2026-10-14', '2026-10-16']);
+  });
+
+  it('еженедельный ряд: дни недели проворачиваются вместе со сдвигом, в том числе назад через границу недели', () => {
+    const state = stateWith({
+      events: [{
+        id: 'e',
+        name: 'Урок',
+        start: '15:00',
+        end: '16:00',
+        // Понедельник и среда с понедельника 5 октября
+        repeat: {
+          kind: 'weekly', interval: 1, weekdays: [1, 3], startDay: '2026-10-05', count: 4,
+        },
+        occurrences: [{ day: '2026-10-07', excluded: true }],
+      }],
+    });
+    // Среда 14 октября → четверг 15 октября
+    updateSeries(state, 'event', 'e', '2026-10-14', { day: '2026-10-15' });
+    expect(state.events[0].repeat).toMatchObject({ weekdays: [2, 4], startDay: '2026-10-06', count: 4 });
+    expect(state.events[0].occurrences).toEqual([{ day: '2026-10-08', excluded: true }]);
+    expect(expandRepeat(state.events[0].repeat!, '2026-10-01', '2026-11-30'))
+      .toEqual(['2026-10-06', '2026-10-08', '2026-10-13', '2026-10-15']);
+    // Вторник 13 октября → воскресенье 11 октября: −2 дня
+    updateSeries(state, 'event', 'e', '2026-10-13', { day: '2026-10-11' });
+    expect(state.events[0].repeat).toMatchObject({ weekdays: [0, 2], startDay: '2026-10-04' });
+    expect(expandRepeat(state.events[0].repeat!, '2026-10-01', '2026-11-30'))
+      .toEqual(['2026-10-04', '2026-10-06', '2026-10-11', '2026-10-13']);
+    expect(state.events[0].occurrences).toEqual([{ day: '2026-10-06', excluded: true }]);
+  });
+
+  it('ряд «раз в две недели» с одним днём недели остаётся на своих неделях; ряд без даты начала — только дни', () => {
+    const state = stateWith({
+      events: [
+        {
+          id: 'e',
+          name: 'Смена',
+          start: '09:00',
+          end: '10:00',
+          repeat: {
+            kind: 'weekly', interval: 2, weekdays: [1], startDay: '2026-10-05',
+          },
+        },
+        {
+          id: 'old',
+          name: 'Созвон',
+          start: '10:00',
+          end: '10:30',
+          repeat: {
+            kind: 'weekly', interval: 1, weekdays: [1], startDay: '',
+          },
+        },
+      ],
+    });
+    // Понедельник 19 октября → воскресенье 18 октября
+    updateSeries(state, 'event', 'e', '2026-10-19', { day: '2026-10-18' });
+    expect(expandRepeat(state.events[0].repeat!, '2026-10-01', '2026-11-10'))
+      .toEqual(['2026-10-04', '2026-10-18', '2026-11-01']);
+    updateSeries(state, 'event', 'old', '2026-10-19', { day: '2026-10-21' });
+    expect(state.events[1].repeat).toEqual({
+      kind: 'weekly', interval: 1, weekdays: [3], startDay: '',
+    });
+  });
+
+  it('ежемесячный ряд встаёт на число нового дня и едет на столько же месяцев', () => {
+    const state = stateWith({
+      events: [{
+        id: 'e',
+        name: 'Аренда',
+        start: '12:00',
+        end: '12:30',
+        repeat: {
+          kind: 'monthly', interval: 1, monthDay: 31, startDay: '2026-01-01', endDay: '2026-04-30',
+        },
+        occurrences: [{ day: '2026-01-31', excluded: true }],
+      }],
+    });
+    // Экземпляр 28 февраля (в коротком месяце — последний день) → 3 марта
+    updateSeries(state, 'event', 'e', '2026-02-28', { day: '2026-03-03' });
+    const { repeat, occurrences } = state.events[0];
+    expect(repeat).toEqual({
+      kind: 'monthly', interval: 1, monthDay: 3, startDay: '2026-02-03', endDay: '2026-05-03',
+    });
+    expect(expandRepeat(repeat!, '2026-01-01', '2026-12-31'))
+      .toEqual(['2026-02-03', '2026-03-03', '2026-04-03', '2026-05-03']);
+    expect(occurrences).toEqual([{ day: '2026-02-03', excluded: true }]);
+  });
+
+  it('ежемесячный ряд: конец до экземпляра своего месяца не добавляет лишний экземпляр', () => {
+    const state = stateWith({
+      events: [{
+        id: 'e',
+        name: 'Отчёт',
+        start: '12:00',
+        end: '12:30',
+        // Последний экземпляр — 20 марта: конец 10 апреля раньше апрельского
+        repeat: {
+          kind: 'monthly', interval: 1, startDay: '2026-01-20', endDay: '2026-04-10',
+        },
+      }],
+    });
+    updateSeries(state, 'event', 'e', '2026-02-20', { day: '2026-02-05' });
+    expect(state.events[0].repeat).toMatchObject({ monthDay: 5, startDay: '2026-01-05', endDay: '2026-03-31' });
+    expect(expandRepeat(state.events[0].repeat!, '2026-01-01', '2026-12-31'))
+      .toEqual(['2026-01-05', '2026-02-05', '2026-03-05']);
+  });
+
+  it('ежегодный ряд переезжает на новый день и месяц', () => {
+    const state = stateWith({
+      events: [{
+        id: 'e',
+        name: 'День рождения',
+        start: '00:00',
+        end: '23:59',
+        repeat: { kind: 'yearly', interval: 1, startDay: '2024-03-10' },
+      }],
+    });
+    updateSeries(state, 'event', 'e', '2026-03-10', { day: '2026-04-02' });
+    expect(state.events[0].repeat!.startDay).toBe('2024-04-02');
+    expect(occursOn(state.events[0].repeat!, '2026-04-02')).toBe(true);
+    expect(occursOn(state.events[0].repeat!, '2026-03-10')).toBe(false);
+  });
+
+  it('«это и последующие» с новым днём: прежний ряд стоит на месте, продолжение переезжает', () => {
+    const state = stateWith({
+      tasks: [task({ id: 's', repeat: { kind: 'daily', interval: 3, startDay: '2026-10-05' } })],
+    });
+    const created = splitSeries(state, 'task', 's', '2026-10-11', { start: '09:00', minutes: 30 })!;
+    updateSeries(state, 'task', created.id, '2026-10-11', { day: '2026-10-12' });
+    expect(getTasksForDay(state, '2026-10-08').map(({ id }) => id)).toEqual(['s']);
+    expect(getTasksForDay(state, '2026-10-11')).toEqual([]);
+    expect(getTasksForDay(state, '2026-10-12')).toMatchObject([{ id: created.id, start: '09:00' }]);
+    expect(getTasksForDay(state, '2026-10-15')).toMatchObject([{ id: created.id }]);
+  });
+
+  it('отметка, на новый день которой ряд экземпляра не даёт, отбрасывается', () => {
+    const state = stateWith({
+      tasks: [task({
+        id: 's',
+        // Вторая отметка — вне правила (осталась от прежнего правила ряда)
+        repeat: { kind: 'daily', interval: 2, startDay: '2026-10-05' },
+        occurrences: [{ day: '2026-10-07', done: true }, { day: '2026-10-08', done: true }],
+      })],
+    });
+    updateSeries(state, 'task', 's', '2026-10-07', { day: '2026-10-08' });
+    expect(state.tasks[0].occurrences).toEqual([{ day: '2026-10-08', done: true }]);
   });
 });
 

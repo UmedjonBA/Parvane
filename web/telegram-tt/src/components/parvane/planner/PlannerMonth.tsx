@@ -6,6 +6,7 @@ import buildClassName from '../../../util/buildClassName';
 import {
   formatDay, formatHours, formatWeekday, listColorStyle,
 } from './plannerFormat';
+import { formatPlainName } from './plannerLinks';
 import {
   countConflicts, countUnrated, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getListColor,
   getLoadFraction, getMonthGridKeys, getTasksForDay, instanceKey, toDayKey,
@@ -96,21 +97,21 @@ const PlannerMonth = ({
           ...deadlines.map((task) => ({
             key: `due${task.id}`,
             taskId: task.id,
-            label: lang('PlannerDeadlinePreview', { name: task.name }),
+            label: lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) }),
             isDue: true,
             color: getListColor(state, task.project),
           })),
           ...getTasksForDay(state, day).filter((task) => !deadlines.includes(task)).map((task) => ({
             key: `task${instanceKey(task)}`,
             taskId: instanceKey(task),
-            label: `${task.start ? `${task.start} ` : ''}${task.name}`,
+            label: `${task.start ? `${task.start} ` : ''}${formatPlainName(task.name)}`,
             isDue: false,
             color: getListColor(state, task.project),
           })),
           ...events.map((event) => ({
             key: `event${instanceKey(event)}`,
             taskId: undefined,
-            label: event.isAllDay ? event.name : `${event.start} ${event.name}`,
+            label: `${event.isAllDay ? '' : `${event.start} `}${formatPlainName(event.name)}`,
             isDue: false,
             color: event.color || 0,
           })),
@@ -157,7 +158,7 @@ const PlannerMonth = ({
                       key={instanceKey(event)}
                       className={styles.dayMark}
                       style={listColorStyle(event.color)}
-                      title={event.name}
+                      title={formatPlainName(event.name)}
                     />
                   ))}
                 </span>

@@ -48,7 +48,8 @@ async function closePlanner(page) {
 async function createTask(page, name, start) {
   const planner = await openPlanner(page);
   await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
+  await page.getByRole('button', { name: 'More options' }).click();
   await page.locator('#planner-new-name').fill(name);
   if (start) {
     await planner.getByLabel('Duration, min').fill('30');

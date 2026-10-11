@@ -103,7 +103,7 @@ try {
   console.log('OK: заметка дня создаётся с экрана «Сегодня»');
 
   // ── «Запланировано»: событие со ссылкой на заметку ────────────────────────
-  await planner.getByRole('button', { name: 'Quick entry' }).click();
+  await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await page.locator('#planner-quick-input').fill(`созвон завтра 16:00 [[${NOTE}]]`);
   await page.locator('#planner-quick-input').press('Enter');
   await planner.getByText('Added:').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

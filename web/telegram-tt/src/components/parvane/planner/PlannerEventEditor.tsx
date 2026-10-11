@@ -6,7 +6,7 @@ import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
 import { formatRepeat } from './plannerFormat';
 import {
-  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries,
+  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, updateSeries,
   validateEvent,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
@@ -20,6 +20,7 @@ import InputText from '../../ui/InputText';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import { PlannerColorSwatches } from './PlannerListPicker';
+import PlannerName from './PlannerName';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 
@@ -89,12 +90,12 @@ const PlannerEventEditor = ({
     updatePlanner((draft) => {
       if (scope === 'one') {
         detachInstance(draft, 'event', event.id, instanceDay, { ...patch, repeat: undefined, day: day || instanceDay });
-      } else if (scope === 'following') {
-        splitSeries(draft, 'event', event.id, instanceDay, patch);
-      } else {
-        const target = draft.events.find(({ id }) => id === event.id);
-        if (target) Object.assign(target, patch);
+        return;
       }
+      // Новый день экземпляра переносит ряд (весь либо его продолжение)
+      const seriesId = scope === 'following'
+        ? splitSeries(draft, 'event', event.id, instanceDay, patch)?.id || event.id : event.id;
+      updateSeries(draft, 'event', seriesId, instanceDay, { ...patch, day: day || instanceDay });
     }, lang('PlannerNoticeEventUpdated', { name: patch.name || event.name }));
     onBack();
   });
@@ -180,7 +181,7 @@ const PlannerEventEditor = ({
       <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
         {backLabel}
       </Button>
-      <h2 className={styles.editorTitle}>{event.name}</h2>
+      <h2 className={styles.editorTitle}><PlannerName name={event.name} /></h2>
       {event.repeat && (
         <p className={styles.small}>
           {isInstance

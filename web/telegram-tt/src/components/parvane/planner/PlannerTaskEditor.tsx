@@ -9,7 +9,7 @@ import {
 } from './plannerFormat';
 import {
   detachInstance, excludeInstance, findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
-  removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, validateRepeat,
+  removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, updateSeries, validateRepeat,
 } from './plannerModel';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
@@ -23,6 +23,7 @@ import TextArea from '../../ui/TextArea';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import PlannerListPicker from './PlannerListPicker';
+import PlannerName from './PlannerName';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
@@ -94,19 +95,21 @@ const PlannerTaskEditor = ({
       return;
     }
     let detachedId: string | undefined;
-    let createdId: string | undefined;
+    let seriesId = task.id;
     updatePlanner((draft) => {
       if (scope === 'one') {
         detachedId = detachInstance(draft, 'task', task.id, instanceDay, action.changes)?.id;
-      } else if (scope === 'following') {
-        createdId = splitSeries(draft, 'task', task.id, instanceDay, action.changes)?.id;
-      } else {
-        const target = draft.tasks.find(({ id }) => id === task.id);
-        if (target) Object.assign(target, action.changes);
+        return;
       }
+      // Новый день экземпляра переносит ряд (весь либо его продолжение), а не пишется в шаблон
+      if (scope === 'following') {
+        const fields = { ...action.changes, day: undefined };
+        seriesId = splitSeries(draft, 'task', task.id, instanceDay, fields)?.id || seriesId;
+      }
+      updateSeries(draft, 'task', seriesId, instanceDay, action.changes);
     }, action.notice);
     if (detachedId) onOpenTask(detachedId);
-    else if (createdId) onOpenTask(createdId, action.changes.day || instanceDay);
+    else if (seriesId !== task.id || action.changes.day) onOpenTask(seriesId, action.changes.day || instanceDay);
   });
 
   const handleCancelPrompt = useLastCallback(() => {
@@ -274,7 +277,7 @@ const PlannerTaskEditor = ({
       <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
         {backLabel}
       </Button>
-      <h2 className={styles.editorTitle}>{task.name}</h2>
+      <h2 className={styles.editorTitle}><PlannerName name={task.name} /></h2>
       {task.repeat && (
         <p className={styles.small}>
           {isInstance

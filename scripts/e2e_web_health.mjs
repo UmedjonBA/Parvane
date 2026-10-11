@@ -38,7 +38,7 @@ try {
     { timeout: STEP_TIMEOUT_MS },
   );
   const enter = async (line, kind) => {
-    await planner.getByRole('button', { name: 'Quick entry' }).click();
+    await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await input.fill(line);
     await expectKind(kind);

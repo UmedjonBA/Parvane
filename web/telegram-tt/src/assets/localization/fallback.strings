@@ -3213,8 +3213,8 @@
 "ParvaneCloudTrashDaysLeft_other" = "Deleted in {count} days";
 "ParvaneCloudTrashExpired" = "Deleted at the next sync";
 "PlannerAdd" = "Add";
+"PlannerAddEntry" = "+ Entry";
 "PlannerAddFood" = "+ Entry";
-"PlannerAddTask" = "+ Task";
 "PlannerAddTaskForDay" = "+ Task for this day";
 "PlannerAddTaskToList" = "+ Task in this list";
 "PlannerAriaChart" = "{name} by day";
@@ -3416,7 +3416,7 @@
 "PlannerRepeatUntil" = "until {date}";
 "PlannerRepeatWeekly" = "Every week: {days}";
 "PlannerRepeatYearly" = "Yearly on {date}";
-"PlannerSeriesAll" = "Whole series";
+"PlannerSeriesAll" = "All in series";
 "PlannerSeriesDeleteTitle" = "Delete:";
 "PlannerSeriesDetachedHint" = "Detached from a series";
 "PlannerSeriesEditTitle" = "Apply the change to:";
@@ -3532,7 +3532,6 @@
 "PlannerRepeatIntervalYears" = "Repeat every (years)";
 "PlannerNoticeListColor" = "List color changed: {name}";
 "PlannerQuickTitle" = "New entry";
-"PlannerQuickButton" = "Quick entry";
 "PlannerQuickAuto" = "Auto";
 "PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
 "PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised.";
