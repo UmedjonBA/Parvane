@@ -20,7 +20,6 @@ import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 
 import ColorSchemePicker from '../../common/ColorSchemePicker';
-import InterfaceStylePicker from '../../common/InterfaceStylePicker';
 import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
 import ListItem from '../../ui/ListItem';
 import RadioGroup from '../../ui/RadioGroup';
@@ -153,12 +152,6 @@ const SettingsGeneral: FC<OwnProps & StateProps> = ({
         <ColorSchemePicker theme={theme} />
       </Island>
       <IslandDescription>{lang('ParvaneColorSchemeHint')}</IslandDescription>
-
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('ParvaneInterfaceStyle')}</IslandTitle>
-      <Island>
-        <InterfaceStylePicker />
-      </Island>
-      <IslandDescription>{lang('ParvaneInterfaceStyleHint')}</IslandDescription>
 
       <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('SettingsTimeFormat')}</IslandTitle>
       <Island>

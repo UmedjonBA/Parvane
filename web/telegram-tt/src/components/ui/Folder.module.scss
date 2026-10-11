@@ -100,7 +100,7 @@
 }
 
 // Parvane (spec 019): у цветовой схемы панель папок светлая либо тёмная по теме — подписи цветом текста
-:global(html.color-scheme-flat:not(.interface-classic)) {
+:global(html.color-scheme-flat) {
   .title,
   .icon {
     color: var(--color-text-secondary);

@@ -20,7 +20,6 @@ import { requestGlobal, subscribeToMultitabBroadcastChannel } from './util/brows
 import { applyColorSchemeClass, readStoredColorScheme } from './util/colorScheme';
 import { establishMultitabRole, subscribeToMasterChange } from './util/establishMultitabRole';
 import { initGlobal } from './util/init';
-import { applyInterfaceStyle, readStoredInterfaceStyle } from './util/interfaceStyle';
 import { initLocalization } from './util/localization';
 import { MULTITAB_STORAGE_KEY } from './util/multiaccount';
 import { onBeforeUnload } from './util/schedulers';
@@ -34,9 +33,7 @@ import './assets/fonts/roboto.css';
 import './assets/fonts/parvane.css';
 import './styles/index.scss';
 
-// Parvane (spec 008): оформление применяется до первой отрисовки
-applyInterfaceStyle(readStoredInterfaceStyle(), false);
-// Parvane (spec 019): то же — с цветовой схемой
+// Parvane (spec 019): цветовая схема применяется до первой отрисовки
 applyColorSchemeClass(readStoredColorScheme());
 
 if (STRICTERDOM_ENABLED) {

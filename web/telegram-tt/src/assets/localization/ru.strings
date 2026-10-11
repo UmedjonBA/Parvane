@@ -1135,10 +1135,6 @@
 "ParvaneL2Disabled" = "{user} выключил(а) усиленную приватность";
 "ParvaneL2EnabledYou" = "Вы включили усиленную приватность";
 "ParvaneL2DisabledYou" = "Вы выключили усиленную приватность";
-"ParvaneInterfaceStyle" = "Оформление";
-"ParvaneInterfaceStyleClassic" = "Классическое";
-"ParvaneInterfaceStylePanels" = "Панели";
-"ParvaneInterfaceStyleHint" = "Классическое — вид до редизайна: плоские колонки от края до края. Панели — плавающие скруглённые окна.";
 "ParvaneSections" = "Разделы";
 "ParvaneSectionMessenger" = "Чаты";
 "ParvaneSectionPlanner" = "План";

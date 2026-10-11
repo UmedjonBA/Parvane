@@ -9,7 +9,6 @@ import { saveRememberMe } from '../../api/parvane/authStorage';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
-import InterfaceStylePicker from '../common/InterfaceStylePicker';
 import Button from '../ui/Button';
 import Checkbox from '../ui/Checkbox';
 import InputText from '../ui/InputText';
@@ -105,8 +104,6 @@ const AuthParvane = ({ auth }: StateProps) => {
           >
             {lang('ParvaneCreateAccount')}
           </Button>
-          <p className="note auth-interface-style-title">{lang('ParvaneInterfaceStyle')}</p>
-          <InterfaceStylePicker />
         </form>
       </div>
     </div>

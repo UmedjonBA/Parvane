@@ -3092,10 +3092,6 @@
 "ParvaneL2Disabled" = "{user} disabled enhanced privacy";
 "ParvaneL2EnabledYou" = "You enabled enhanced privacy";
 "ParvaneL2DisabledYou" = "You disabled enhanced privacy";
-"ParvaneInterfaceStyle" = "Interface style";
-"ParvaneInterfaceStyleClassic" = "Classic";
-"ParvaneInterfaceStylePanels" = "Panels";
-"ParvaneInterfaceStyleHint" = "Classic is the look before the redesign: flat columns edge to edge. Panels are the floating rounded layout.";
 "ParvaneSections" = "Sections";
 "ParvaneSectionMessenger" = "Chats";
 "ParvaneSectionPlanner" = "Planner";

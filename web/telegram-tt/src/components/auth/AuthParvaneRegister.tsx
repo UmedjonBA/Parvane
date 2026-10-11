@@ -13,7 +13,6 @@ import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import Icon from '../common/icons/Icon';
-import InterfaceStylePicker from '../common/InterfaceStylePicker';
 import Button from '../ui/Button';
 import InputText from '../ui/InputText';
 import { isNickOrAddress } from './AuthParvane';
@@ -177,8 +176,6 @@ const AuthParvaneRegister = ({ auth }: StateProps) => {
           >
             {lang('ParvaneHaveAccount')}
           </Button>
-          <p className="note auth-interface-style-title">{lang('ParvaneInterfaceStyle')}</p>
-          <InterfaceStylePicker />
         </form>
       </div>
     </div>
