@@ -5,7 +5,7 @@ import type { ApiChatFolder, ApiChatlistExportedInvite } from '../../api/types';
 import { LeftColumnContent, SettingsScreens } from '../../types';
 
 import { requestMeasure, requestMutation } from '../../lib/fasterdom/fasterdom';
-import { selectTabState } from '../../global/selectors';
+import { selectLeftColumnContentKey, selectTabState } from '../../global/selectors';
 import { selectCurrentLimit } from '../../global/selectors/limits';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
@@ -35,6 +35,8 @@ type StateProps = {
   activeChatFolder: number;
   maxFolders: number;
   maxChatLists: number;
+  // Открыты настройки: в панели выделен «Профиль», а не «Чаты»
+  isSettingsOpen: boolean;
   maxFolderInvites: number;
 };
 
@@ -56,6 +58,7 @@ const FoldersSidebar = ({
   maxFolderInvites,
   isActive,
   withFolders,
+  isSettingsOpen,
 }: OwnProps & StateProps) => {
   const {
     loadChatFolders,
@@ -132,6 +135,8 @@ const FoldersSidebar = ({
   const isTodayOpen = section === 'planner' && plannerView === 'today';
   const isCalendarOpen = section === 'planner' && plannerView === 'calendar';
   const isHealthOpen = section === 'planner' && plannerView === 'health';
+  const isProfileOpen = section === 'messenger' && isSettingsOpen;
+  const isChatsOpen = section === 'messenger' && !isSettingsOpen;
 
   const handleSelectToday = useLastCallback(() => {
     openPlannerView('today');
@@ -254,8 +259,8 @@ const FoldersSidebar = ({
         <button
           type="button"
           role="tab"
-          aria-selected={section === 'messenger'}
-          className={buildClassName(styles.section, section === 'messenger' && styles.sectionActive)}
+          aria-selected={isChatsOpen}
+          className={buildClassName(styles.section, isChatsOpen && styles.sectionActive)}
           onClick={handleSelectMessenger}
         >
           <Icon name="folder-tabs-chats" className={styles.icon} />
@@ -301,7 +306,12 @@ const FoldersSidebar = ({
           <Icon name="folder" className={styles.icon} />
           <span className={styles.sectionTitle}>{lang('ParvaneSectionKnowledge')}</span>
         </button>
-        <button type="button" className={styles.section} onClick={handleSelectProfile}>
+        <button
+          type="button"
+          className={buildClassName(styles.section, isProfileOpen && styles.sectionActive)}
+          aria-current={isProfileOpen ? 'page' : undefined}
+          onClick={handleSelectProfile}
+        >
           <Icon name="user" className={styles.icon} />
           <span className={styles.sectionTitle}>{lang('ParvaneTabBarProfile')}</span>
         </button>
@@ -329,6 +339,7 @@ export default memo(withGlobal(
       maxFolders: selectCurrentLimit(global, 'dialogFilters'),
       maxFolderInvites: selectCurrentLimit(global, 'chatlistInvites'),
       maxChatLists: selectCurrentLimit(global, 'chatlistJoined'),
+      isSettingsOpen: selectLeftColumnContentKey(global) === LeftColumnContent.Settings,
     };
   },
 )(FoldersSidebar));

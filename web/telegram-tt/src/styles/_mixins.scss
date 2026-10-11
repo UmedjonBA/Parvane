@@ -217,6 +217,13 @@
     mask-position: center;
     mask-size: 430px auto;
   }
+
+  // Parvane (spec 019): у цветовой схемы узор тёмной темы — одним приглушённым тоном схемы, без
+  // фиолетово-розового перелива Telegram
+  :global(html.color-scheme-flat.theme-dark) & {
+    opacity: 0.12;
+    background: var(--color-text-secondary) !important;
+  }
 }
 
 @mixin chat-pattern-background($path) {
