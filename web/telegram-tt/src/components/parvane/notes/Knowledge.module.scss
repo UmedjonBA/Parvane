@@ -1,0 +1,631 @@
+// Parvane: раздел «Знания» — заметки, граф и холст. Цвета, шрифты и скругления — токены мессенджера.
+
+.root {
+  position: relative;
+  z-index: 1;
+
+  overflow: hidden;
+  display: flex;
+  grid-column: 2 / -1;
+  flex-direction: column;
+
+  min-width: 0;
+  margin: 1rem;
+  border-radius: var(--border-radius-island);
+
+  color: var(--color-text);
+
+  background: var(--color-background);
+  outline: none;
+  box-shadow: var(--shadow-island);
+
+  @media (max-width: 600px) {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    border-radius: 0;
+  }
+}
+
+.header {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+
+  min-height: var(--column-header-height);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-borders);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5rem;
+}
+
+.tabs {
+  flex: 0 1 auto;
+}
+
+.headerButtons {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+  margin-inline-start: auto;
+}
+
+.notice {
+  flex-shrink: 0;
+
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-borders);
+
+  font-size: 0.875rem;
+
+  background: var(--color-background-secondary);
+}
+
+.content {
+  overflow-y: auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-height: 0;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 22rem minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+
+  @media (max-width: 925px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 0;
+  padding: 1rem;
+  border-inline-end: 1px solid var(--color-borders);
+
+  @media (max-width: 925px) {
+    border-inline-end: none;
+
+    .layoutNote & {
+      display: none;
+    }
+  }
+}
+
+.pane {
+  overflow-y: auto;
+  min-width: 0;
+  padding: 1rem 1.25rem;
+
+  @media (max-width: 925px) {
+    display: none;
+
+    .layoutNote & {
+      display: block;
+    }
+  }
+}
+
+.search {
+  flex-shrink: 0;
+}
+
+.groupTitle,
+.blockTitle {
+  margin: 0.5rem 0 0.25rem;
+
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.row {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 0;
+  border-radius: var(--border-radius-default-small);
+
+  color: var(--color-text);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    background: var(--color-chat-hover);
+  }
+}
+
+.rowActive {
+  background: var(--color-background-secondary);
+}
+
+.rowTitle {
+  overflow: hidden;
+
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowPreview {
+  overflow: hidden;
+
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.grow {
+  flex: 1 1 auto;
+}
+
+// ── заметка ──────────────────────────────────────────────────────────────────
+
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 46rem;
+}
+
+.noteHead {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.noteTitle {
+  flex: 1 1 auto;
+
+  min-width: 0;
+  padding: 0.25rem 0;
+  border: 0;
+
+  font-size: 1.375rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+
+  background: none;
+  outline: none;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.chip {
+  padding: 0.125rem 0.625rem;
+  border: 1px solid var(--color-borders);
+  border-radius: 1rem;
+
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+
+  background: none;
+}
+
+.editor {
+  resize: vertical;
+
+  min-height: 22rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.body {
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.heading {
+  margin: 0.75rem 0 0.25rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.heading1 {
+  font-size: 1.25rem;
+}
+
+.heading2 {
+  font-size: 1.125rem;
+}
+
+.heading3 {
+  font-size: 1rem;
+}
+
+.paragraph {
+  margin: 0 0 0.25rem;
+}
+
+.gap {
+  height: 0.5rem;
+}
+
+.listLine {
+  position: relative;
+
+  &::before {
+    content: "•";
+    margin-inline-start: -0.875rem;
+    padding-inline-end: 0.375rem;
+    color: var(--color-text-secondary);
+  }
+}
+
+.taskLine {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.taskCheck {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.25rem;
+}
+
+.taskDone {
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+}
+
+.link {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  color: var(--color-links);
+
+  background: none;
+}
+
+.linkMissing {
+  opacity: 0.6;
+}
+
+.tag {
+  color: var(--color-primary);
+}
+
+.code,
+.pre {
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+}
+
+.pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.block {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-borders);
+}
+
+.blockRow {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.125rem 0;
+  font-size: 0.875rem;
+}
+
+.blockWhen {
+  flex: 0 0 auto;
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+.blockLink {
+  cursor: var(--custom-cursor, pointer);
+
+  display: block;
+
+  padding: 0.125rem 0;
+  border: 0;
+
+  font-size: 0.875rem;
+  color: var(--color-links);
+
+  background: none;
+}
+
+// ── граф ─────────────────────────────────────────────────────────────────────
+
+.graph,
+.canvas {
+  position: relative;
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-height: 0;
+  padding: 0.75rem 1rem 1rem;
+}
+
+.graphBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.graphField {
+  touch-action: none;
+  cursor: grab;
+
+  flex: 1 1 auto;
+
+  width: 100%;
+  min-height: 20rem;
+  border-radius: var(--border-radius-default);
+
+  background: var(--color-background-secondary);
+}
+
+.graphEdge {
+  stroke: var(--color-borders-input);
+  stroke-width: 1;
+}
+
+.graphEdgeOn {
+  stroke: var(--color-primary);
+  stroke-width: 1.5;
+}
+
+.graphNode {
+  cursor: var(--custom-cursor, pointer);
+  font-size: 11px;
+  fill: var(--color-primary);
+}
+
+.graphNode text {
+  pointer-events: none;
+  fill: var(--color-text);
+}
+
+.graph_missing {
+  opacity: 0.45;
+  fill: var(--color-text-secondary);
+}
+
+.graph_day {
+  fill: var(--color-green);
+}
+
+.graph_record {
+  fill: var(--color-links);
+}
+
+.graphDim {
+  opacity: 0.2;
+}
+
+.graphCard {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1.5rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  align-items: flex-start;
+
+  max-width: 16rem;
+  padding: 0.75rem;
+  border-radius: var(--border-radius-default);
+
+  background: var(--color-background);
+  box-shadow: var(--shadow-island);
+}
+
+// ── холст ────────────────────────────────────────────────────────────────────
+
+.canvasEmpty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-start;
+
+  padding: 1rem;
+}
+
+.canvasSelect {
+  max-width: 14rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-borders);
+  border-radius: var(--border-radius-default-small);
+
+  color: var(--color-text);
+
+  background: var(--color-background);
+}
+
+.board {
+  touch-action: none;
+  cursor: grab;
+
+  position: relative;
+
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-height: 22rem;
+  border-radius: var(--border-radius-default);
+
+  background: var(--color-background-secondary);
+}
+
+.boardLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.boardEdges {
+  pointer-events: none;
+
+  position: absolute;
+  top: 0;
+  left: 0;
+
+  overflow: visible;
+
+  width: 1px;
+  height: 1px;
+}
+
+.canvasEdge {
+  pointer-events: stroke;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.5;
+}
+
+.canvasEdgeOn .canvasEdge {
+  stroke: var(--color-primary);
+  stroke-width: 2.5;
+}
+
+.canvasArrow {
+  fill: var(--color-text-secondary);
+}
+
+.canvasEdgeLabel {
+  font-size: 12px;
+  fill: var(--color-text-secondary);
+}
+
+.canvasNode {
+  --canvas-color: var(--color-borders-input);
+
+  cursor: var(--custom-cursor, pointer);
+  user-select: none;
+
+  position: absolute;
+
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  padding: 0.5rem 0.625rem;
+  border: 2px solid var(--canvas-color);
+  border-radius: var(--border-radius-default-small);
+
+  font-size: 0.8125rem;
+
+  background: var(--color-background);
+}
+
+.canvas_group {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--canvas-color) 10%, transparent);
+}
+
+.canvasGroupLabel {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.canvasText,
+.canvasPreview {
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.canvasPreview {
+  color: var(--color-text-secondary);
+}
+
+.canvasSelected {
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+
+.canvasColor1 {
+  --canvas-color: var(--color-error);
+}
+
+.canvasColor2 {
+  --canvas-color: var(--color-orange);
+}
+
+.canvasColor3 {
+  --canvas-color: var(--color-yellow);
+}
+
+.canvasColor4 {
+  --canvas-color: var(--color-green);
+}
+
+.canvasColor5 {
+  --canvas-color: var(--color-links);
+}
+
+.canvasColor6 {
+  --canvas-color: var(--color-primary);
+}
+
+.canvasSwatch {
+  cursor: var(--custom-cursor, pointer);
+
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0;
+  border-radius: 50%;
+
+  background: var(--canvas-color);
+}
+
+.canvasForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.canvasFormText {
+  min-height: 6rem;
+}

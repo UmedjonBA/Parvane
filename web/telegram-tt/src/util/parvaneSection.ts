@@ -56,3 +56,44 @@ export function requestPlannerAdd() {
 export function consumePlannerAddRequest() {
   setPlannerAddRequest(false);
 }
+
+// Вкладка раздела «Знания»: заметки, граф связей, холст либо файлы (прежнее «Облако»)
+export type KnowledgeView = 'notes' | 'graph' | 'canvas' | 'files';
+export const KNOWLEDGE_VIEWS: KnowledgeView[] = ['notes', 'graph', 'canvas', 'files'];
+
+const KNOWLEDGE_VIEW_KEY = 'parvane:knowledge-tab';
+
+function readKnowledgeView(): KnowledgeView {
+  try {
+    const saved = localStorage.getItem(KNOWLEDGE_VIEW_KEY) as KnowledgeView;
+    return KNOWLEDGE_VIEWS.includes(saved) ? saved : 'notes';
+  } catch {
+    return 'notes';
+  }
+}
+
+const [getKnowledgeView, setKnowledgeViewSignal] = createSignal<KnowledgeView>(readKnowledgeView());
+// Заметка, которую раздел должен открыть (ссылка из «Плана», заметка дня)
+const [getNoteRequest, setNoteRequest] = createSignal<string | undefined>(undefined);
+
+export { getKnowledgeView, getNoteRequest };
+
+export function setKnowledgeView(view: KnowledgeView) {
+  setKnowledgeViewSignal(view);
+  try {
+    localStorage.setItem(KNOWLEDGE_VIEW_KEY, view);
+  } catch {
+    // Вкладка просто не запомнится
+  }
+}
+
+/** Открыть «Знания» на заметке с этим названием (нет такой — раздел создаст). */
+export function openNote(title: string) {
+  setNoteRequest(title);
+  setKnowledgeView('notes');
+  setParvaneSection('cloud');
+}
+
+export function consumeNoteRequest() {
+  setNoteRequest(undefined);
+}

@@ -299,7 +299,7 @@ const FoldersSidebar = ({
           onClick={handleSelectCloud}
         >
           <Icon name="folder" className={styles.icon} />
-          <span className={styles.sectionTitle}>{lang('ParvaneSectionCloud')}</span>
+          <span className={styles.sectionTitle}>{lang('ParvaneSectionKnowledge')}</span>
         </button>
         <button type="button" className={styles.section} onClick={handleSelectProfile}>
           <Icon name="user" className={styles.icon} />

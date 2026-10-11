@@ -150,7 +150,7 @@ try {
   };
   const used = () => cloud.locator('footer[data-used]').getAttribute('data-used').then(Number);
   const openCloud = async () => {
-    await sidebar.getByRole('tab', { name: 'Cloud' }).click();
+    await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
     await cloud.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await page.waitForFunction(() => document.querySelector('#ParvaneCloud')?.dataset.loaded === '1', undefined, { timeout: STEP_TIMEOUT_MS });
   };
@@ -160,7 +160,7 @@ try {
   await openCloud();
   assert.equal(await isShown(page, '#LeftColumn'), false, 'список чатов должен быть скрыт');
   assert.equal(await isShown(page, '#MiddleColumn'), false, 'переписка должна быть скрыта');
-  assert.equal(await sidebar.getByRole('tab', { name: 'Cloud' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await sidebar.getByRole('tab', { name: 'Knowledge' }).getAttribute('aria-selected'), 'true');
   await cloud.getByText('No files yet').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await cloud.getByText('Drag files here or press Upload.').waitFor({ state: 'visible' });
   // Один список без вкладок: путь из одного шага, в конце корня — «Доступные мне» и «Корзина»
@@ -409,7 +409,7 @@ try {
   await page.waitForTimeout(800);
   assert.equal(await isShown(page, '#FoldersSidebar'), false, 'на телефоне боковой панели нет');
   const tabBar = page.getByRole('navigation', { name: 'Sections' });
-  await tabBar.getByRole('button', { name: 'Cloud' }).click();
+  await tabBar.getByRole('button', { name: 'Knowledge' }).click();
   await cloud.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await item('снимок.png').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

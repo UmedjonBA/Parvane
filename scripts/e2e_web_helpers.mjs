@@ -98,6 +98,8 @@ export async function preparePage(context, user, password, options = {}) {
     // «План» открывается на вкладке, где пользователь был в последний раз (по умолчанию «Сегодня»);
     // сценарии календаря ждут календарь сразу — вкладку «Сегодня» сценарий открывает сам
     if (!localStorage.getItem('parvane:planner-tab')) localStorage.setItem('parvane:planner-tab', '1');
+    // Раздел «Знания» открывается на вкладке «Файлы»: сценарии облака ждут список файлов сразу
+    if (!localStorage.getItem('parvane:knowledge-tab')) localStorage.setItem('parvane:knowledge-tab', 'files');
     // Блок «Повтор и детали» карточки записи раскрыт: сценарии правят поля внутри него
     if (!localStorage.getItem('parvane:planner-details')) localStorage.setItem('parvane:planner-details', '1');
     Object.entries(seed || {}).forEach(([key, value]) => {

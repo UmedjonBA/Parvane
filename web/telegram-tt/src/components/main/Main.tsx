@@ -55,7 +55,7 @@ import { oldTranslate } from '../../util/oldLangProvider';
 import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
-import { getParvaneSection } from '../../util/parvaneSection';
+import { getKnowledgeView, getParvaneSection } from '../../util/parvaneSection';
 import { isUploadedWallpaper } from '../../util/parvaneWallpaper';
 import {
   consumePendingInvite,
@@ -102,6 +102,7 @@ import AudioPlayer from '../middle/panes/AudioPlayer';
 import ModalContainer from '../modals/ModalContainer';
 import Cloud from '../parvane/cloud/Cloud';
 import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
+import Knowledge from '../parvane/notes/Knowledge';
 import Planner from '../parvane/planner/Planner';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
@@ -872,6 +873,7 @@ const Main = ({
   const chatBackgroundColor = backgroundColor || schemeChatColors?.background;
   const isPlannerOpen = parvaneSection === 'planner';
   const isCloudOpen = parvaneSection === 'cloud';
+  const knowledgeView = useDerivedState(getKnowledgeView);
   // Parvane: на телефоне разделы переключаются нижней панелью. В мессенджере она видна на списке чатов
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
@@ -942,7 +944,8 @@ const Main = ({
       )}
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
       {isPlannerOpen && <Planner />}
-      {isCloudOpen && <Cloud isMobile={isMobile} />}
+      {/* Parvane: раздел «Знания»: «Файлы» рисует прежнее «Облако», остальные вкладки — `Knowledge` */}
+      {isCloudOpen && (knowledgeView === 'files' ? <Cloud isMobile={isMobile} /> : <Knowledge />)}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />

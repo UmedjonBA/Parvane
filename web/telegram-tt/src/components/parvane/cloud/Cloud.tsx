@@ -34,6 +34,7 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import Loading from '../../ui/Loading';
 import MenuItem from '../../ui/MenuItem';
+import KnowledgeTabs from '../notes/KnowledgeTabs';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
 import CloudItem from './CloudItem';
 import CloudPreview from './CloudPreview';
@@ -546,7 +547,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
       onDrop={handleDrop}
     >
       <header className={styles.header}>
-        {!isMobile && <h1 className={styles.title}>{lang('ParvaneSectionCloud')}</h1>}
+        {!isMobile && <h1 className={styles.title}>{lang('ParvaneSectionKnowledge')}</h1>}
+        <KnowledgeTabs />
         {!isBlocked && (
           <label className={styles.search}>
             <Icon name="search" className={styles.searchIcon} />

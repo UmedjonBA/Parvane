@@ -133,7 +133,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         onClick={handleCloudClick}
       >
         <Icon name="folder" className={styles.icon} />
-        <span className={styles.title}>{lang('ParvaneSectionCloud')}</span>
+        <span className={styles.title}>{lang('ParvaneSectionKnowledge')}</span>
       </button>
       <button
         type="button"

@@ -2677,6 +2677,54 @@ export interface LangPair {
   'PlannerNoticeHealthDeleted': undefined;
   'PlannerHealthBudgetReduced': undefined;
   'PlannerHealthFood': undefined;
+  'ParvaneSectionKnowledge': undefined;
+  'KnowledgeNotes': undefined;
+  'KnowledgeGraph': undefined;
+  'KnowledgeCanvas': undefined;
+  'KnowledgeFiles': undefined;
+  'KnowledgeVaultName': undefined;
+  'KnowledgeDailyFolder': undefined;
+  'KnowledgeNewNote': undefined;
+  'KnowledgeNoteTitle': undefined;
+  'KnowledgeSearch': undefined;
+  'KnowledgeEmpty': undefined;
+  'KnowledgeNothingFound': undefined;
+  'KnowledgePickNote': undefined;
+  'KnowledgeRoot': undefined;
+  'KnowledgeEdit': undefined;
+  'KnowledgeSave': undefined;
+  'KnowledgeCancel': undefined;
+  'KnowledgeDelete': undefined;
+  'KnowledgeBack': undefined;
+  'KnowledgeEditorPlaceholder': undefined;
+  'KnowledgePlanned': undefined;
+  'KnowledgePlannedEmpty': undefined;
+  'KnowledgeNoDate': undefined;
+  'KnowledgeBacklinksEmpty': undefined;
+  'KnowledgeMissingNote': undefined;
+  'KnowledgeDaily': undefined;
+  'KnowledgeGraphDays': undefined;
+  'KnowledgeGraphRecords': undefined;
+  'KnowledgeGraphOpen': undefined;
+  'KnowledgeGraphEmpty': undefined;
+  'KnowledgeZoomIn': undefined;
+  'KnowledgeZoomOut': undefined;
+  'KnowledgeZoomFit': undefined;
+  'KnowledgeCanvasNew': undefined;
+  'KnowledgeCanvasEmpty': undefined;
+  'KnowledgeCanvasPick': undefined;
+  'KnowledgeCanvasText': undefined;
+  'KnowledgeCanvasNote': undefined;
+  'KnowledgeCanvasGroup': undefined;
+  'KnowledgeCanvasLink': undefined;
+  'KnowledgeCanvasEdit': undefined;
+  'KnowledgeCanvasRemove': undefined;
+  'KnowledgeCanvasLinkHint': undefined;
+  'KnowledgeCanvasLabel': undefined;
+  'KnowledgeCanvasColor': undefined;
+  'KnowledgeCanvasNoColor': undefined;
+  'KnowledgeCanvasChooseNote': undefined;
+  'KnowledgeCanvasDamaged': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4766,6 +4814,27 @@ export interface LangPairWithVariables<V = LangVariable> {
     'budget': V;
   };
   'PlannerQuickWorkoutSets': {
+    'count': V;
+  };
+  'KnowledgeDeleteConfirm': {
+    'name': V;
+  };
+  'KnowledgeBacklinks': {
+    'count': V;
+  };
+  'KnowledgeNoticeConflict': {
+    'name': V;
+  };
+  'KnowledgeNoticeMerged': {
+    'name': V;
+  };
+  'KnowledgeNoticeFailed': {
+    'name': V;
+  };
+  'KnowledgeGraphNotes': {
+    'count': V;
+  };
+  'KnowledgeCanvasName': {
     'count': V;
   };
 }
