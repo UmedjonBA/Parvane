@@ -637,6 +637,10 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
     }
     case 'task_response':
       return { text: { text: content.text || (content.accepted ? '✅' : '❌') } };
+    // spec 016 (CLOUD-1): приглашение в совместную папку — текстом; принять
+    // его можно в разделе «Облако» («Доступные мне»)
+    case 'cloud_invite':
+      return { text: { text: content.text || `📁 ${content.name || ''}` } };
     case 'location': {
       const geo = {
         lat: content.lat || 0, long: content.long || 0, accessHash: '0', accuracyRadius: content.accuracy,

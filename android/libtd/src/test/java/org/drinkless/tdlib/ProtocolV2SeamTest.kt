@@ -143,6 +143,14 @@ class ProtocolV2SeamTest {
     }
 
     @Test
+    fun cloudInviteShowsAsText() {
+        // CLOUD-1 (spec 016): приглашение в папку облака — обычный текст из поля text
+        val invite = store().contentFrom(JSONObject(""""{"kind":"cloud_invite","name":"Проект","role":2,"text":"Приглашение в папку «Проект» (редактор)"}""""))
+        assertTrue(invite is TdApi.MessageText)
+        assertEquals("Приглашение в папку «Проект» (редактор)", (invite as TdApi.MessageText).text.text)
+    }
+
+    @Test
     fun storeMapsUnknownKindsToUnsupportedButKeepsLegacyText() {
         val s = store()
         assertTrue(s.contentFrom(JSONObject("""{"kind":"unsupported"}""")) is TdApi.MessageUnsupported)

@@ -127,6 +127,10 @@ const LeftSideMenuItems = ({
     setParvaneSection('planner');
   });
 
+  const handleOpenCloud = useLastCallback(() => {
+    setParvaneSection('cloud');
+  });
+
   const handleChangelogClick = useLastCallback(() => {
     window.open(BETA_CHANGELOG_URL, '_blank', 'noopener,noreferrer');
   });
@@ -175,6 +179,11 @@ const LeftSideMenuItems = ({
       {isMobile && (
         <MenuItem icon="calendar" onClick={handleOpenPlanner}>
           {lang('ParvaneSectionPlanner')}
+        </MenuItem>
+      )}
+      {isMobile && (
+        <MenuItem icon="folder" onClick={handleOpenCloud}>
+          {lang('ParvaneSectionCloud')}
         </MenuItem>
       )}
       {bots.map((bot) => (

@@ -1551,6 +1551,99 @@ describe('TASK-1: задание в чат — видимые сообщения
   });
 });
 
+describe('DOMAIN-2: облако cloud.v1 — контейнеры, ключи своим устройствам и участникам, чужой домен мимо', () => {
+  const r = rule('DOMAIN-2') as unknown as {
+    domain: string;
+    keyShareKind: string;
+    linkExportField: string;
+    bundleField: string;
+    leaveMethod: string;
+    snapshotEvery: number;
+    maxNodes: number;
+    snapshotMaxBytes: number;
+    driveBucket: number;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('движок: домен, пределы, выход участника и приём ключа только от админа контейнера', () => {
+    const cloud = readRepo('backend/protocol/src/domain/cloud.rs');
+    expect(cloud).toContain(`pub const DOMAIN_NAME: &str = "${r.domain}";`);
+    expect(cloud).toContain(`pub const SNAPSHOT_EVERY: u64 = ${r.snapshotEvery};`);
+    expect(cloud).toContain(`pub const MAX_NODES: usize = ${r.maxNodes};`);
+    const domain = readRepo('backend/protocol/src/domain.rs');
+    expect(r.snapshotMaxBytes).toBe(3 * 1024 * 1024);
+    expect(domain).toContain('pub const MAX_SNAPSHOT_PLAINTEXT: usize = 3 * 1_048_576;');
+    expect(domain).toContain('pub const OP_LEAVE: &str = "leave";');
+    const client = readRepo('backend/protocol/src/client_cloud.rs');
+    expect(client).toContain(`OutRequest::id("${r.leaveMethod}"`);
+    expect(client).toContain('match c.access.accept_key_share(share, sender, &no_groups) {');
+    expect(client).toContain('if !c.access.can_write(&me, &no_groups) {');
+    const core = readRepo('backend/protocol/src/client.rs');
+    expect(core).toContain('if share.domain == crate::domain::cloud::DOMAIN_NAME {');
+    expect(core).toContain('o.requests.extend(self.cloud_rotate_on_revoke(now_ms()));');
+    const tests = readRepo('backend/protocol/tests/client_flow.rs');
+    expect(tests).toContain('fn cloud_drive_on_own_devices_and_rotated_on_revoke()');
+    expect(tests).toContain('fn cloud_shared_folder_roles_revoke_and_leave()');
+    expect(r.clients.desktop).toContain('cloud_shared_folder_roles_revoke_and_leave');
+  });
+
+  it('шарды: bucket облака со своей квотой, метод выхода участника', () => {
+    const shard = readRepo('backend/shards/cloud/src/main.rs');
+    expect(shard).toContain(`pub(crate) const BUCKET_DRIVE: i64 = ${r.driveBucket};`);
+    expect(shard).toContain('PARVANE_CLOUD_DRIVE_QUOTA_BYTES');
+    expect(readRepo('proto/parvane/cloud/v1/cloud.proto')).toContain(`BLOB_BUCKET_DRIVE = ${r.driveBucket};`);
+    expect(readRepo('backend/shards/domains/src/store.rs')).toContain(`"${r.leaveMethod}" => {`);
+  });
+
+  it('web: контейнеры, ключи в экспорте линковки и в копии ключей аккаунта', () => {
+    const sync = readRepo('web/telegram-tt/src/api/parvane/v2/cloud.ts');
+    expect(sync).toContain(`export const CLOUD_DOMAIN = '${r.domain}';`);
+    expect(sync).toContain('\'domain.op.sync\'');
+    expect(sync).toContain('\'domain.snapshot.get\'');
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain(`${r.linkExportField}: v2Controller.cloud.keysExport(),`);
+    expect(provider).toContain('if (cloudKeys) v2Controller.cloud.keysImport(cloudKeys);');
+    expect(provider).toContain(`if (bundle.${r.bundleField}) v2Controller.cloud.keysImport(bundle.${r.bundleField});`);
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('if (ev.type === \'cloudChanged\' && ev.id) cloud.onEngineEvent(ev.id);');
+    expect(controller).toContain(`${r.bundleField}: cloud.keysExport(),`);
+    expect(readRepo('web/telegram-tt/src/api/parvane/cloudBlobs.ts')).toContain('bucket: \'BLOB_BUCKET_DRIVE\'');
+  });
+});
+
+describe('CLOUD-1: приглашение в папку облака — видимое сообщение, клиент без раздела показывает текст', () => {
+  const r = rule('CLOUD-1') as unknown as {
+    kinds: string[];
+    fieldNumbers: Record<string, number>;
+    vectors: string[];
+    fallbackField: string;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема и вектора: поле 22, случай в content/kinds.json', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain(`CloudInvite cloud_invite = ${r.fieldNumbers.cloud_invite};`);
+    expect(proto).toContain(`string ${r.fallbackField} = 4 [(parvane.core.v2.max_len) = 600];`);
+    const vectors = readRepo('proto/parvane/vectors/content/kinds.json');
+    r.vectors.forEach((name) => expect(vectors).toContain(`"name": "${name}"`));
+  });
+
+  it('web, desktop и android: приглашение разбирается и показывается текстом', () => {
+    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
+    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'cloud_invite\':');
+    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
+    expect(core).toContain('} else if (c.contains("cloud_invite")) {');
+    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('cloud_invite ← v2');
+    expect(r.clients.desktop).toContain('v2_tests.cpp');
+    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
+    expect(store).toContain('"cloud_invite" -> textContent(c)');
+    expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
+      .toContain('cloudInviteShowsAsText');
+    expect(r.clients.android).toContain('cloudInviteShowsAsText');
+  });
+});
+
 describe('ORDER-1: живое сообщение встаёт после всего, что уже есть в чате', () => {
   const r = rule('ORDER-1') as unknown as {
     liveWindowSecs: number;

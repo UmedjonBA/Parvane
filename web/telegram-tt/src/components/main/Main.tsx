@@ -94,6 +94,8 @@ import MessageListHistoryHandler from '../middle/MessageListHistoryHandler';
 import MiddleColumn from '../middle/MiddleColumn';
 import AudioPlayer from '../middle/panes/AudioPlayer';
 import ModalContainer from '../modals/ModalContainer';
+import Cloud from '../parvane/cloud/Cloud';
+import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
 import Planner from '../parvane/planner/Planner';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
@@ -850,7 +852,9 @@ const Main = ({
 
   // Parvane (spec 009): боковая панель видна всегда (кроме телефона), раздел выбирается в её нижней части
   const isAppSidebarShown = !isMobile;
-  const isPlannerOpen = useDerivedState(getParvaneSection) === 'planner';
+  const parvaneSection = useDerivedState(getParvaneSection);
+  const isPlannerOpen = parvaneSection === 'planner';
+  const isCloudOpen = parvaneSection === 'cloud';
 
   // Parvane: «Мой профиль» на телефоне открыт поверх чата «Избранное». Пока профиль показан и пока он
   // закрывается, сам чат скрыт — иначе при возврате в список чатов он мелькал под уезжающим профилем
@@ -865,6 +869,7 @@ const Main = ({
     isFullscreen && 'is-fullscreen',
     isAppSidebarShown && 'folders-sidebar-visible',
     isPlannerOpen && 'section-planner',
+    isCloudOpen && 'section-cloud',
   );
 
   const handleBlur = useLastCallback(() => {
@@ -913,6 +918,8 @@ const Main = ({
       )}
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
       {isPlannerOpen && <Planner isMobile={isMobile} />}
+      {isCloudOpen && <Cloud isMobile={isMobile} />}
+      <CloudChatDialogs />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
       <MiddleColumn leftColumnRef={leftColumnRef} isMobile={isMobile} />
       <RightColumn isMobile={isMobile} />

@@ -3,7 +3,7 @@ import { createSignal } from './signals';
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
 // панели. Мессенджер остаётся смонтированным (звонки, синхронизация) — раздел
 // только решает, что показано справа от панели
-export type ParvaneSection = 'messenger' | 'planner';
+export type ParvaneSection = 'messenger' | 'planner' | 'cloud';
 
 const [getParvaneSection, setSignal] = createSignal<ParvaneSection>('messenger');
 

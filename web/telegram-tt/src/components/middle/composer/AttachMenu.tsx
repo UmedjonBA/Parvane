@@ -24,6 +24,7 @@ import { getDebugLogs } from '../../../util/debugConsole';
 import { validateFiles } from '../../../util/files';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { callApi } from '../../../api/gramjs';
+import { requestCloudAttach } from '../../parvane/cloud/cloudBridge';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -227,6 +228,12 @@ const AttachMenu = ({
     openPollModal({ chatId, threadId, messageListType });
   });
 
+  // Parvane (spec 016): файлы из облака — без загрузки с устройства
+  const handleCloudAttach = useLastCallback(() => {
+    closeAttachMenu();
+    requestCloudAttach(chatId);
+  });
+
   const handleTaskOfferCreate = useLastCallback(() => {
     closeAttachMenu();
     openTaskOffer();
@@ -338,6 +345,9 @@ const AttachMenu = ({
             )}
             {canAttachToDoLists && !editingMessage && (
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
+            )}
+            {!editingMessage && !isScheduled && (
+              <MenuItem icon="folder" onClick={handleCloudAttach}>{lang('ParvaneCloudAttachFromCloud')}</MenuItem>
             )}
             {!editingMessage && !isScheduled && (
               <MenuItem icon="check" onClick={handleTaskOfferCreate}>{lang('TaskOfferMenuItem')}</MenuItem>

@@ -4,7 +4,8 @@ import type { CloudContainerInfo, CloudSync, CloudSyncStatus } from './v2/cloud'
 import { V2Error } from './v2/transport';
 import { decryptBlob } from './blobcrypt';
 import {
-  CloudAbortError, cloudCipherSize, createBlobSink, createFileSink, downloadCloudBlob, uploadCloudBlob,
+  CloudAbortError, cloudCipherSize, cloudPlainSize, createBlobSink, createFileSink, downloadCloudBlob,
+  uploadCloudBlob,
 } from './cloudBlobs';
 
 // Parvane (spec 016): методы провайдера раздела «Облако». Дерево и доступ — в
@@ -54,12 +55,26 @@ export type CloudErrorCode = 'offline' | 'no-space' | 'too-large' | 'forbidden' 
   | 'too-many';
 export type CloudResult<T = object> = ({ ok: true } & T) | { ok: false; error: CloudErrorCode };
 
+export type CloudChatFile = { fileId: string; name: string; mime: string; size: number };
+type SentFile = CloudBlobKeys & { fileId: string; name: string; mime: string; size: number };
+
 type Deps = {
   log: (message: string) => void;
   self: () => string | undefined;
   cloud: () => CloudSync;
   transport: () => CloudBlobTransport;
+  /** Ключи и секрет доступа блоба сообщения чата. */
+  mediaKeys: (fileId: string) => { key: string; nonce: string; capability?: string } | undefined;
+  /** Расшифрованное содержимое блоба сообщения (запасной путь без копии на сервере). */
+  downloadMedia: (fileId: string) => Promise<Blob | undefined>;
+  /** Отправить в чат сообщение-файл со ссылкой на готовый блоб. */
+  sendFile: (chatId: string, file: SentFile) => Promise<boolean>;
+  /** Адрес пользователя по id чата. */
+  addressOf: (chatId: string) => string | undefined;
 };
+
+// Ответ копии блоба: имена полей — как отдаёт кодек реестра (оба написания)
+type CopyReply = { fileId?: string; file_id?: string; size?: string; chunks?: number };
 
 type UploadJob = {
   file: Blob;
@@ -74,8 +89,10 @@ const THUMB_QUALITY = 0.8;
 const THUMB_SOURCE_MAX_BYTES = 40 * 1024 * 1024;
 const THUMB_CACHE = 300;
 const PREVIEW_CACHE = 6;
-const USAGE_TTL_MS = 5000;
+const USAGE_TTL_MS = 1500;
 const DRIVE_BUCKET = 'BLOB_BUCKET_DRIVE';
+const MEDIA_BUCKET = 'BLOB_BUCKET_UNSPECIFIED';
+const CAPABILITY_BYTES = 32;
 const NODE_ID_BYTES = 16;
 
 export function newCloudNodeId() {
@@ -91,6 +108,20 @@ function errorOf(e: unknown): CloudErrorCode {
   if (code.includes('NOT_FOUND') || code.includes('NotFound')) return 'not-found';
   if (code.includes('UNAVAILABLE') || code.includes('RATE_LIMITED')) return 'offline';
   return 'rejected';
+}
+
+function toBase64(bytes: Uint8Array) {
+  let s = '';
+  bytes.forEach((b) => {
+    s += String.fromCharCode(b);
+  });
+  return btoa(s);
+}
+
+async function newCapability() {
+  const capability = crypto.getRandomValues(new Uint8Array(CAPABILITY_BYTES));
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', capability));
+  return { capability: toBase64(capability), hash: toBase64(hash) };
 }
 
 function emit(event: CloudTransferEvent) {
@@ -117,11 +148,15 @@ export function createCloudDrive(deps: Deps) {
   async function fetchUsage(force?: boolean): Promise<CloudUsage> {
     if (!force && usage && Date.now() - usage.at < USAGE_TTL_MS) return usage.value;
     const got = await deps.transport().blobCall<{
-      buckets?: { bucket?: string | number; used?: string; quota?: string; maxFile?: string }[];
+      buckets?: {
+        bucket?: string | number; used?: string; quota?: string; maxFile?: string; max_file?: string;
+      }[];
     }>('cloud.blob.usage', {});
     const drive = got.buckets?.find((b) => b.bucket === DRIVE_BUCKET || b.bucket === 1);
     const value = {
-      used: Number(drive?.used || 0), quota: Number(drive?.quota || 0), maxFile: Number(drive?.maxFile || 0),
+      used: Number(drive?.used || 0),
+      quota: Number(drive?.quota || 0),
+      maxFile: Number(drive?.maxFile || drive?.max_file || 0),
     };
     usage = { at: Date.now(), value };
     return value;
@@ -250,7 +285,8 @@ export function createCloudDrive(deps: Deps) {
       const status = cloud.status();
       if (status !== 'needs-linking' && status !== 'loading' && !isEnsureStarted) {
         isEnsureStarted = true;
-        void cloud.ensure(true);
+        // Частый опрос включает сам раздел (`parvaneCloudSetActive`)
+        void cloud.ensure(false);
       }
       const containers = cloud.containers();
       const trees: Record<string, CloudStateJson> = {};
@@ -373,6 +409,168 @@ export function createCloudDrive(deps: Deps) {
 
     async parvaneCloudUsage(): Promise<CloudUsage | undefined> {
       return fetchUsage().catch(() => undefined);
+    },
+
+    // ── облако и чаты ────────────────────────────────────────────────────────
+
+    /** Файл сообщения чата — в папку облака: копия блоба на сервере, без перекачки. */
+    async parvaneCloudSaveFromChat({ file, container, parent }: {
+      file: CloudChatFile; container: string; parent?: string;
+    }): Promise<CloudResult<{ container: string; node: string }>> {
+      try {
+        const keys = deps.mediaKeys(file.fileId);
+        if (!keys) return { ok: false, error: 'not-found' };
+        const fresh = await newCapability();
+        let blob: CloudBlobInfo;
+        try {
+          const copy = await deps.transport().blobCall<CopyReply>(
+            'cloud.blob.copy',
+            {
+              file_id: file.fileId,
+              capability: keys.capability || '',
+              bucket: DRIVE_BUCKET,
+              capability_hash: fresh.hash,
+            },
+          );
+          const copyId = copy.fileId || copy.file_id;
+          if (!copyId) throw new V2Error('ERROR_CODE_INVALID');
+          blob = {
+            fileId: copyId,
+            key: keys.key,
+            nonce: keys.nonce,
+            capability: fresh.capability,
+            size: cloudPlainSize(Number(copy.size || 0)),
+            chunks: copy.chunks || 1,
+            mime: file.mime,
+            uploader: deps.self() || '',
+          };
+        } catch (e) {
+          if (!(e instanceof V2Error) || e.code !== 'ERROR_CODE_NOT_FOUND') throw e;
+          // Блоб без секрета доступа и не наш: забрать содержимое и загрузить заново
+          const content = await deps.downloadMedia(file.fileId);
+          if (!content) return { ok: false, error: 'not-found' };
+          const up = await uploadCloudBlob(deps.transport(), content);
+          blob = { ...up, mime: file.mime, uploader: deps.self() || '' };
+        }
+        const node = newCloudNodeId();
+        const applied = await deps.cloud().apply(container, [{
+          op: 'create', id: node, kind: 'file', parent, name: file.name, mtime: Date.now(), blob,
+        }]);
+        usage = undefined;
+        return { ok: true, container: applied, node };
+      } catch (e) {
+        deps.log(`облако: файл из чата не сохранён: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    /** Файлы облака — в чат: копия блоба в медиа чатов и сообщение-файл. */
+    async parvaneCloudSendToChat({ container, nodes, chatId }: {
+      container: string; nodes: string[]; chatId: string;
+    }): Promise<CloudResult<{ sent: number }>> {
+      let sent = 0;
+      try {
+        for (const id of nodes) {
+          const found = findNode(container, id);
+          if (!found?.blob) continue;
+          const fresh = await newCapability();
+          const copy = await deps.transport().blobCall<CopyReply>('cloud.blob.copy', {
+            file_id: found.blob.fileId,
+            capability: found.blob.capability,
+            bucket: MEDIA_BUCKET,
+            capability_hash: fresh.hash,
+          });
+          const copyId = copy.fileId || copy.file_id;
+          if (!copyId) throw new V2Error('ERROR_CODE_INVALID');
+          const isSent = await deps.sendFile(chatId, {
+            fileId: copyId,
+            key: found.blob.key,
+            nonce: found.blob.nonce,
+            capability: fresh.capability,
+            name: found.name,
+            mime: found.mime || 'application/octet-stream',
+            size: found.size,
+          });
+          if (!isSent) throw new V2Error('ERROR_CODE_NOT_FOUND');
+          sent += 1;
+        }
+        return { ok: true, sent };
+      } catch (e) {
+        deps.log(`облако: файл в чат не отправлен: ${String(e)}`);
+        // Медиа чатов ограничено своим пределом файла и своей квотой
+        const error = e instanceof V2Error && e.code === 'ERROR_CODE_LIMIT' ? 'too-large' : errorOf(e);
+        return { ok: false, error };
+      }
+    },
+
+    // ── совместные папки ─────────────────────────────────────────────────────
+
+    async parvaneCloudCreateShared({ name }: { name: string }): Promise<CloudResult<{ container: string }>> {
+      try {
+        return { ok: true, container: await deps.cloud().createFolder(name) };
+      } catch (e) {
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    /** Выдать доступ пользователю (по id чата с ним) либо сменить его роль. */
+    async parvaneCloudShare({
+      container, chatId, user, role, inviteText,
+    }: {
+      container: string; chatId?: string; user?: string; role: 'editor' | 'reader'; inviteText: string;
+    }): Promise<CloudResult> {
+      const address = user || (chatId ? deps.addressOf(chatId) : undefined);
+      if (!address) return { ok: false, error: 'not-found' };
+      try {
+        await deps.cloud().share(container, address, role, inviteText);
+        return { ok: true };
+      } catch (e) {
+        deps.log(`облако: доступ не выдан: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    async parvaneCloudUnshare({ container, user }: { container: string; user: string }): Promise<CloudResult> {
+      try {
+        await deps.cloud().unshare(container, user);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    async parvaneCloudAnswerInvite(
+      { container, isAccepted }: { container: string; isAccepted: boolean },
+    ): Promise<CloudResult> {
+      try {
+        await deps.cloud().answerInvite(container, isAccepted);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    async parvaneCloudLeave({ container }: { container: string }): Promise<CloudResult> {
+      try {
+        await deps.cloud().leave(container);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    /** Удалить свою совместную папку: стереть содержимое, убрать участников. */
+    async parvaneCloudRemoveShared({ container }: { container: string }): Promise<CloudResult> {
+      try {
+        const top = (readTree(container)?.nodes || []).filter((n) => !n.parent);
+        const at = Date.now();
+        if (top.length) await deps.cloud().apply(container, top.map((n) => ({ op: 'purge', id: n.id, at })));
+        await deps.cloud().removeFolder(container);
+        usage = undefined;
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: errorOf(e) };
+      }
     },
   };
 }

@@ -96,6 +96,7 @@ type OwnProps = {
   isPrivate?: boolean;
   isCurrentUserPremium?: boolean;
   canDownload?: boolean;
+  canSaveToCloud?: boolean;
   canSaveGif?: boolean;
   canRevote?: boolean;
   canClosePoll?: boolean;
@@ -130,6 +131,7 @@ type OwnProps = {
   onCopyMessages?: (messageIds: number[]) => void;
   onCopyNumber?: NoneToVoidFunction;
   onDownload?: NoneToVoidFunction;
+  onSaveToCloud?: NoneToVoidFunction;
   onSaveGif?: NoneToVoidFunction;
   onCancelVote?: NoneToVoidFunction;
   onClosePoll?: NoneToVoidFunction;
@@ -190,6 +192,7 @@ const MessageContextMenu: FC<OwnProps> = ({
   canCopyLink,
   canSelect,
   canDownload,
+  canSaveToCloud,
   canSaveGif,
   canRevote,
   canClosePoll,
@@ -229,6 +232,7 @@ const MessageContextMenu: FC<OwnProps> = ({
   onCopyLink,
   onCopyNumber,
   onDownload,
+  onSaveToCloud,
   onSaveGif,
   onCancelVote,
   onClosePoll,
@@ -531,6 +535,9 @@ const MessageContextMenu: FC<OwnProps> = ({
           <MenuItem icon="download" onClick={onDownload}>
             {isDownloading ? oldLang('lng_context_cancel_download') : oldLang('lng_media_download')}
           </MenuItem>
+        )}
+        {canSaveToCloud && (
+          <MenuItem icon="folder" onClick={onSaveToCloud}>{lang('ParvaneCloudSaveToCloud')}</MenuItem>
         )}
         {canForward && <MenuItem icon="forward" onClick={onForward}>{oldLang('Forward')}</MenuItem>}
         {canSelect && <MenuItem icon="select" onClick={onSelect}>{oldLang('Common.Select')}</MenuItem>}

@@ -249,6 +249,8 @@ export function createCloudSync(deps: Deps) {
     const entry = liveEntries().find((e) => e.id === id);
     if (entry && entry.role === 'shared') deps.recordEntry({ ...entry, isRemoved: true });
     deps.log(`облако: доступа к контейнеру ${id.slice(0, 8)}… больше нет`);
+    // Папка исчезла — UI перечитает список
+    deps.onChanged();
   }
 
   /** Контейнеры аккаунта на сервере (свои и по грантам) → подключить новые. */
@@ -349,8 +351,24 @@ export function createCloudSync(deps: Deps) {
     if (!client?.cloudIsAttached(id)) return false;
     let changed = false;
     const versionBefore = client.cloudGrantVersion(id);
+    const before = engineContainers().find((c) => c.id === id);
     await pullGrants(id);
-    if (client.cloudGrantVersion(id) !== versionBefore) changed = true;
+    if (client.cloudGrantVersion(id) !== versionBefore) {
+      changed = true;
+      // Участник ушёл сам (состав уменьшился, эпоха прежняя): владелец меняет
+      // эпоху, чтобы ушедший не читал новое
+      const after = engineContainers().find((c) => c.id === id);
+      const hasLeft = before && after && after.role === 'owner'
+        && after.members.length < before.members.length && after.epoch === before.epoch;
+      if (hasLeft && client.cloudHasKey(id)) {
+        try {
+          await run(await deps.withNeeds(() => client.cloudRotate(id, Date.now()) as OutReq[]));
+          deps.log(`облако: участник покинул папку ${id.slice(0, 8)}… — эпоха ключа сменена`);
+        } catch (e) {
+          deps.log(`облако: смена эпохи после выхода участника не удалась: ${String(e)}`);
+        }
+      }
+    }
     if (!snapshotTried.has(id) && client.cloudHeadSeq(id) === 0 && client.cloudHasKey(id)) {
       snapshotTried.add(id);
       const resp = await call('id', 'domain.snapshot.get', encode('domain.snapshot.get', { container: refJson(id) }));
@@ -459,6 +477,8 @@ export function createCloudSync(deps: Deps) {
     if (!hasChanges) return;
     gcDone = gcDone.slice(-GC_KEEP);
     await deps.saveRecord(GC_RECORD, gcDone);
+    // Место освободилось — UI перечитает показатель
+    deps.onChanged();
   }
 
   async function syncContainer(id: string): Promise<boolean> {

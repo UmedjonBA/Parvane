@@ -969,6 +969,13 @@ const cloudDrive = createCloudDrive({
   self: () => store.self,
   cloud: () => v2Controller.cloud,
   transport: () => v2Controller,
+  mediaKeys: (fileId) => {
+    const keys = mediaService.getMediaKeys(fileId);
+    return keys && { key: keys.keyB64, nonce: keys.nonceB64, capability: mediaService.getCapability(fileId) };
+  },
+  downloadMedia: async (fileId) => (await mediaService.downloadBlob(fileId))?.blob,
+  sendFile: (chatId, file) => messageController.methods.parvaneSendCloudFile({ chatId, file }),
+  addressOf: (chatId) => store.getAddressForId(chatId),
 });
 
 // Свериться с копией ключей аккаунта на сервере: ключи планировщика и снимок

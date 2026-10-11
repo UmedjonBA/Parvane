@@ -130,6 +130,10 @@ const FoldersSidebar = ({
     setParvaneSection('planner');
   });
 
+  const handleSelectCloud = useLastCallback(() => {
+    setParvaneSection('cloud');
+  });
+
   const handleSwitchTab = useLastCallback((index: number) => {
     setParvaneSection('messenger');
     openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
@@ -245,6 +249,16 @@ const FoldersSidebar = ({
         >
           <Icon name="calendar" className={styles.icon} />
           <span className={styles.sectionTitle}>{lang('ParvaneSectionPlanner')}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={section === 'cloud'}
+          className={buildClassName(styles.section, section === 'cloud' && styles.sectionActive)}
+          onClick={handleSelectCloud}
+        >
+          <Icon name="folder" className={styles.icon} />
+          <span className={styles.sectionTitle}>{lang('ParvaneSectionCloud')}</span>
         </button>
       </div>
     </div>

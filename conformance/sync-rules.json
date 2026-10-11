@@ -1230,6 +1230,38 @@
       }
     },
     {
+      "id": "DOMAIN-2",
+      "title": "Облако cloud.v1: контейнеры (личный диск и совместные папки) — ключи своим устройствам и участникам, чужой домен игнорируется, блобы облака в отдельном bucket",
+      "domain": "cloud.v1",
+      "keyShareKind": "container_key",
+      "linkExportField": "cloud",
+      "bundleField": "cloud",
+      "leaveMethod": "domain.grant.leave",
+      "snapshotEvery": 200,
+      "maxNodes": 8000,
+      "snapshotMaxBytes": 3145728,
+      "driveBucket": 1,
+      "ignoreUnknownDomain": true,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/cloud.ts (жизненный цикл контейнеров, очереди, доступ), cloudBlobs.ts (потоковые блобы), cloudDrive.ts (методы провайдера), controller.ts (событие cloudChanged, копия ключей), provider.ts (экспорт/импорт ключей в линковке); тесты cloudBlobs.test.ts, cloudModel.test.ts; сценарии scripts/e2e_web_cloud.mjs, e2e_web_cloud_sync.mjs, e2e_web_cloud_chat.mjs, e2e_web_cloud_share.mjs",
+        "desktop": "движок общий (backend/protocol/src/client_cloud.rs): ключи контейнеров принимаются и хранятся, раздела «Облако» нет; тесты client_flow.rs cloud_drive_on_own_devices_and_rotated_on_revoke, cloud_shared_folder_roles_revoke_and_leave",
+        "android": "движок общий (те же тесты); раздела «Облако» нет"
+      }
+    },
+    {
+      "id": "CLOUD-1",
+      "title": "Приглашение в совместную папку облака: cloud_invite — видимое сообщение; клиент без раздела «Облако» показывает text",
+      "kinds": ["cloud_invite"],
+      "fieldNumbers": { "cloud_invite": 22 },
+      "vectors": ["cloud-invite"],
+      "fallbackField": "text",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (cloud_invite), store.ts (текст сообщения), v2/cloud.ts (answerInvite); тест protocol.vectors.test.ts; сценарий scripts/e2e_web_cloud_share.mjs",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (v2Kind: cloud_invite; fromV2 → kind text из поля text); тест tests/v2_tests.cpp (cloud_invite ← v2: текст); без сборки tdesktop — проверить при следующей сборке очереди desktop",
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: cloud_invite → MessageText); тест ProtocolV2SeamTest.kt cloudInviteShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
+      }
+    },
+    {
       "id": "ORDER-1",
       "title": "Порядок сообщений в ленте: живое сообщение встаёт после всего, что уже есть в чате; место сохраняется; старое — по времени отправителя",
       "liveWindowSecs": 300,

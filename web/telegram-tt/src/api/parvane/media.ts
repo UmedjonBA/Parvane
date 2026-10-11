@@ -1288,6 +1288,7 @@ export function createMediaService(deps: MediaDependencies) {
     getCached: (fileId: string) => cacheByFileId.get(fileId),
     isTampered: (fileId: string) => tamperedFileIds.has(fileId),
     getMediaKeys: (fileId: string) => keysByFileId.get(fileId),
+    getCapability: (fileId: string) => capByFileId.get(fileId),
     isPhotoAttachment,
     isVideoAttachment,
     messageToWireContent,

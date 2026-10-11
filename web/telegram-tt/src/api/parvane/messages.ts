@@ -1417,6 +1417,39 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
+    // Файл из облака в чат (spec 016): блоб уже лежит на сервере копией в
+    // bucket медиа — сообщение несёт его ссылку, как после обычной загрузки
+    async parvaneSendCloudFile({ chatId, file }: {
+      chatId: string;
+      file: {
+        fileId: string; key: string; nonce: string; capability: string; name: string; mime: string; size: number;
+      };
+    }) {
+      const currentStore = store();
+      const toAddress = currentStore.getAddressForId(chatId);
+      if (!toAddress) return false;
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+      const uuid = newMessageId();
+      const content: WireMessageContent = {
+        kind: 'file',
+        file_id: file.fileId,
+        filename: file.name,
+        mime: file.mime || 'application/octet-stream',
+        size_bytes: file.size,
+        file_key: file.key,
+        file_nonce: file.nonce,
+        capability: file.capability,
+        ttl_secs: ttlSecs || undefined,
+      };
+      deps.media.rememberKeys(content);
+      await publishInner(toAddress, content, uuid);
+      // v2 свою операцию назад не присылает: строка идёт обычным конвейером сама
+      await deps.sync.applyExternal({
+        id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
+    },
+
     // Решение по заданию: «принять» создаёт задачу в плане и шлёт ответ-статус;
     // «отклонить» — только ответ. В «Избранном» ответ не публикуется (FR-022)
     async parvaneRespondTaskOffer({ chat, messageId, isAccepted }: {

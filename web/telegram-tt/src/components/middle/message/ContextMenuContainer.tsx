@@ -83,6 +83,7 @@ import { copyTextToClipboard } from '../../../util/clipboard';
 import { isUserId } from '../../../util/entities/ids';
 import { getTranslationCacheKey, parseTranslationCacheKey } from '../../../util/keys/translationKey';
 import { callApi } from '../../../api/gramjs';
+import { buildCloudChatFile, requestCloudSave } from '../../parvane/cloud/cloudBridge';
 import { getSelectionAsFormattedText } from './helpers/getSelectionAsFormattedText';
 import { isSelectionRangeInsideMessage } from './helpers/isSelectionRangeInsideMessage';
 
@@ -635,6 +636,17 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
     closeMenu();
   });
 
+  // Parvane (spec 016): файлы сообщения (альбома) — в папку облака
+  const handleSaveToCloud = useLastCallback(() => {
+    const global = getGlobal();
+    const files = (album?.messages || [message]).map((msg) => {
+      const media = selectMessageDownloadableMedia(global, msg);
+      return media ? buildCloudChatFile(media, msg.date) : undefined;
+    }).filter(Boolean);
+    requestCloudSave(files);
+    closeMenu();
+  });
+
   const handleSaveGif = useLastCallback(() => {
     const video = getMessageVideo(message);
     saveGif({ gif: video! });
@@ -768,6 +780,7 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         canCopyLink={canCopyLink}
         canSelect={canSelect}
         canDownload={canDownload}
+        canSaveToCloud={canDownload}
         canSaveGif={canSaveGif}
         canRevote={canRevote}
         canClosePoll={canClosePoll}
@@ -808,6 +821,7 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         onCopyMessages={handleCopyMessages}
         onCopyNumber={handleCopyNumber}
         onDownload={handleDownloadClick}
+        onSaveToCloud={handleSaveToCloud}
         onSaveGif={handleSaveGif}
         onCancelVote={handleCancelVote}
         onClosePoll={openClosePollDialog}

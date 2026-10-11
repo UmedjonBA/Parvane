@@ -55,7 +55,7 @@ try {
 
   // ── Панель: видна без папок, в ней только разделы; меню — в шапке списка ──
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 2, 'в панели должны быть два раздела');
+  assert.equal(await sidebar.getByRole('tab').count(), 3, 'в панели должны быть три раздела');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
   assert.equal(await sidebar.getByRole('button', { name: 'Open menu' }).count(), 0, 'без папок слева меню — не в панели');
   assert.ok(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 'меню осталось в шапке');

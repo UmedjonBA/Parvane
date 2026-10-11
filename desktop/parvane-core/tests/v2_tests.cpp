@@ -230,6 +230,14 @@ int main() {
         const auto resp = v2::fromV2(json{{"task_response", {{"decision", "TASK_DECISION_ACCEPTED"}, {"text", "✅ Принято"}}}});
         check(resp && (*resp)["kind"] == "text" && (*resp)["text"] == "✅ Принято", "task_response ← v2: текст");
         check(v2::v2Kind(json{{"task_offer", json::object()}}) == "task_offer", "v2Kind: task_offer");
+        // Приглашение в папку облака (spec 016, CLOUD-1): текст из поля text
+        const auto invite = v2::fromV2(json{{"cloud_invite", {{"name", "Проект"}, {"role", 2},
+                                                               {"text", "Приглашение в папку «Проект» (редактор)"}}}});
+        check(invite && (*invite)["kind"] == "text" && (*invite)["text"] == "Приглашение в папку «Проект» (редактор)",
+              "cloud_invite ← v2: текст");
+        const auto bare = v2::fromV2(json{{"cloud_invite", {{"name", "Проект"}}}});
+        check(bare && (*bare)["kind"] == "text" && (*bare)["text"] == "📁 Проект", "cloud_invite без text — имя");
+        check(v2::v2Kind(json{{"cloud_invite", json::object()}}) == "cloud_invite", "v2Kind: cloud_invite");
     }
 
     // ── события "direct" ───────────────────────────────────────────────────
