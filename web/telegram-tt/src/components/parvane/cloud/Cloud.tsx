@@ -7,20 +7,20 @@ import type { GlobalState } from '../../../global/types';
 import type { CloudMovePlace } from './CloudDialogs';
 import type { CloudItemAction } from './CloudItem';
 import type { CloudNode, CloudSortKey } from './cloudModel';
-import type { CloudTab } from './cloudStore';
+import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 
 import { MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import {
-  childrenOf, pathOf, searchNodes, sizeOf, sortNodes, usageOf,
+  childrenOf, pathOf, searchNodes, sizeOf, sortNodes, trashDaysLeft, usageOf,
 } from './cloudModel';
 import {
-  canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId, getCloudData,
-  getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudTransfers, getCloudUsage, getContainer,
-  getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, loadCloud, moveCloudNodes, moveCloudNodesAcross,
-  purgeCloudNodes, refreshCloud, renameCloudNode, restoreCloudNodes, setCloudActive, setCloudPlace, setCloudPrefs,
-  shareCloudFolder, trashCloudNodes, uploadCloudFiles,
+  answerCloudInvite, canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId,
+  getCloudData, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudTransfers, getCloudUsage,
+  getContainer, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder, loadCloud, moveCloudNodes,
+  moveCloudNodesAcross, purgeCloudNodes, refreshCloud, renameCloudNode, restoreCloudNodes, setCloudActive,
+  setCloudPlace, setCloudPrefs, shareCloudFolder, trashCloudNodes, uploadCloudFiles,
 } from './cloudStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -34,7 +34,6 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import Loading from '../../ui/Loading';
 import MenuItem from '../../ui/MenuItem';
-import TabList from '../../ui/TabList';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
 import CloudItem from './CloudItem';
 import CloudPreview from './CloudPreview';
@@ -58,9 +57,9 @@ type Dialog =
   | { type: 'emptyTrash' }
   | { type: 'share'; container: string }
   | { type: 'shareFolder'; entry: Entry }
+  | { type: 'leave'; container: string }
   | { type: 'send'; entries: Entry[] };
 
-const TABS: CloudTab[] = ['drive', 'shared', 'trash'];
 const SORT_KEYS: CloudSortKey[] = ['name', 'date', 'size'];
 // Просмотр держит файл в памяти: на телефоне предел ниже
 const PREVIEW_MAX_BYTES_DESKTOP = 256 * 1024 * 1024;
@@ -76,9 +75,15 @@ function keyOf(entry: Entry) {
   return `${entry.container}/${entry.node.id}`;
 }
 
-// Parvane (spec 016): раздел «Облако» — личное файловое хранилище: папки,
-// загрузка и скачивание, корзина, совместные папки. Дерево — контейнеры домена
-// `cloud.v1` (cloudStore), содержимое файлов сервер не видит.
+function nameOf(address: string) {
+  return address.split('@')[0];
+}
+
+// Parvane (spec 016): раздел «Облако» — личное файловое хранилище одним
+// списком: путь сверху, поиск по всем папкам и сортировка в шапке, приглашения
+// строкой вверху корня, в конце корня — строки-папки «Доступные мне» и
+// «Корзина». Дерево — контейнеры домена `cloud.v1` (cloudStore), содержимое
+// файлов сервер не видит.
 const Cloud = ({ isMobile }: OwnProps) => {
   const lang = useLang();
 
@@ -111,39 +116,46 @@ const Cloud = ({ isMobile }: OwnProps) => {
     return () => setCloudActive(false);
   }, []);
 
-  const containerId = getActiveContainerId(place, data);
+  const trimmedQuery = query.trim();
+  const isSearch = Boolean(trimmedQuery);
+  const isVirtual = place.view !== undefined && !place.container;
+  const isTrash = !isSearch && isVirtual && place.view === 'trash';
+  const isSharedList = !isSearch && isVirtual && place.view === 'shared';
+  const isRoot = !isSearch && !place.view && !place.container && !place.folder;
+  const containerId = isVirtual ? undefined : getActiveContainerId(place, data);
   const container = getContainer(place.container, data);
   const nodes = getNodes(containerId, data);
-  const canEdit = place.tab !== 'trash' && canEditContainer(place.container, data);
-  const isTrash = place.tab === 'trash';
-  const isSharedList = place.tab === 'shared' && !place.container;
-  const trimmedQuery = query.trim();
+  // Загружать и создавать можно в открытой папке; строки-папки корня только показывают
+  const canEdit = !isVirtual && canEditContainer(place.container, data);
 
-  // Выделение сбрасывается при смене места
+  // Выделение сбрасывается при смене места и запроса
   useEffect(() => {
     setSelected([]);
-  }, [place]);
+  }, [place, trimmedQuery]);
+
+  const allContainers = data?.containers;
+  const ownedFolders = useMemo(() => (allContainers || []).filter((c) => c.kind === 'owned'), [allContainers]);
+  const sharedFolders = useMemo(() => (allContainers || []).filter((c) => c.kind === 'shared'), [allContainers]);
+  const invites = useMemo(() => (allContainers || []).filter((c) => c.kind === 'invite'), [allContainers]);
+  const trash = useMemo(() => getTrash(data), [data]);
 
   const entries: Entry[] = useMemo(() => {
-    if (isTrash) return getTrash(data);
+    if (trimmedQuery) {
+      // Поиск — по всем папкам: личный диск, свои и принятые совместные; корзина не в счёт
+      const owners = new Map<CloudNode, string>();
+      (allContainers || []).filter((c) => c.kind !== 'invite').forEach((c) => {
+        searchNodes(getNodes(c.id, data), trimmedQuery).forEach((node) => owners.set(node, c.id));
+      });
+      return sortNodes(Array.from(owners.keys()), prefs.sort).map((node) => ({ container: owners.get(node)!, node }));
+    }
+    if (isTrash) return trash;
     if (isSharedList || !containerId) return [];
-    const list = trimmedQuery ? searchNodes(nodes, trimmedQuery) : childrenOf(nodes, place.folder);
-    return sortNodes(list, prefs.sort).map((node) => ({ container: containerId, node }));
-  }, [isTrash, isSharedList, containerId, data, nodes, trimmedQuery, place.folder, prefs.sort]);
-
-  const ownedFolders = useMemo(() => (
-    (data?.containers || []).filter((c) => c.kind === 'owned')
-  ), [data]);
-  const sharedFolders = useMemo(() => (
-    (data?.containers || []).filter((c) => c.kind === 'shared')
-  ), [data]);
-  const invites = useMemo(() => (
-    (data?.containers || []).filter((c) => c.kind === 'invite')
-  ), [data]);
+    return sortNodes(childrenOf(nodes, place.folder), prefs.sort).map((node) => ({ container: containerId, node }));
+  }, [trimmedQuery, allContainers, data, prefs.sort, isTrash, trash, isSharedList, containerId, nodes, place.folder]);
 
   // Куда можно переносить: личный диск и совместные папки с правом записи
   const movePlaces: CloudMovePlace[] = useMemo(() => (
-    (data?.containers || [])
+    (allContainers || [])
       .filter((c) => c.kind !== 'invite' && (c.role === 'owner' || c.role === 'editor'))
       .map((c) => ({
         id: c.id,
@@ -151,34 +163,66 @@ const Cloud = ({ isMobile }: OwnProps) => {
         isShared: c.kind !== 'root',
         nodes: getNodes(c.id, data),
       }))
-  ), [data, lang]);
+  ), [allContainers, data, lang]);
 
   const selectedEntries = entries.filter((e) => selected.includes(keyOf(e)));
   const path = useMemo(() => pathOf(nodes, place.folder), [nodes, place.folder]);
   const sizes = useMemo(() => usageOf(getNodes(data?.rootId, data)), [data]);
+  // Сроки корзины считаются от момента, когда список в последний раз менялся
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+  }, [data, place]);
 
-  const handleSwitchTab = useLastCallback((index: number) => {
+  const canEditEntry = (entry: Entry) => canEditContainer(entry.container, data);
+  const editableSelection = selectedEntries.filter(canEditEntry);
+  // Переносить разом можно только лежащее в одном контейнере
+  const selectionContainer = editableSelection.length === selectedEntries.length
+    && selectedEntries.every((e) => e.container === selectedEntries[0].container)
+    ? selectedEntries[0]?.container : undefined;
+
+  const containerName = (c?: CloudContainerInfo) => c?.name || lang('ParvaneCloudSharedFolder');
+  const virtualName = (view: CloudVirtualFolder) => lang(
+    view === 'shared' ? 'ParvaneCloudTabShared' : 'ParvaneCloudTabTrash',
+  );
+
+  /** Место узла: чужая папка лежит под «Доступными мне», остальное — прямо в корне. */
+  const placeOf = (id: string, folder?: string): CloudPlace => {
+    if (id === data?.rootId) return { folder };
+    return { view: getContainer(id, data)?.kind === 'shared' ? 'shared' : undefined, container: id, folder };
+  };
+
+  /** Путь до папки узла словами — подпись найденного. */
+  const pathText = (entry: Entry) => {
+    const entryPlace = placeOf(entry.container);
+    return [
+      lang('ParvaneSectionCloud'),
+      ...(entryPlace.view ? [virtualName(entryPlace.view)] : []),
+      ...(entryPlace.container ? [containerName(getContainer(entryPlace.container, data))] : []),
+      ...pathOf(getNodes(entry.container, data), entry.node.parent || undefined).map((n) => n.name),
+    ].join(' / ');
+  };
+
+  const goTo = (next: CloudPlace) => {
     setQuery('');
-    setCloudPlace({ tab: TABS[index] });
-  });
+    setCloudPlace(next);
+  };
 
   const handleQueryChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);
   });
 
+  const handleOpenRoot = useLastCallback(() => goTo({}));
+
   const handleOpenFolder = useLastCallback((folder?: string) => {
-    setQuery('');
-    setCloudPlace({ tab: place.tab, container: place.container, folder });
+    goTo({ view: place.view, container: place.container, folder });
   });
 
-  const handleOpenContainer = useLastCallback((id?: string) => {
-    setQuery('');
-    setCloudPlace({ tab: place.tab, container: id });
-  });
+  const handleOpenContainer = useLastCallback((id: string) => goTo(placeOf(id)));
 
   const handleOpen = useLastCallback((entryContainer: string, node: CloudNode) => {
     if (node.kind === 'folder') {
-      handleOpenFolder(node.id);
+      goTo(placeOf(entryContainer, node.id));
       return;
     }
     setPreview({ container: entryContainer, node });
@@ -212,22 +256,6 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const handleCloseDialog = useLastCallback(() => setDialog(undefined));
   const handleClosePreview = useLastCallback(() => setPreview(undefined));
 
-  const handleBulkMove = useLastCallback(() => {
-    if (!containerId || !selectedEntries.length) return;
-    setDialog({ type: 'move', container: containerId, nodes: selectedEntries.map((e) => e.node) });
-  });
-
-  const handleBulkDelete = useLastCallback(() => {
-    if (!containerId) return;
-    void trashCloudNodes(containerId, selectedEntries.map((e) => e.node));
-    setSelected([]);
-  });
-
-  const handleBulkSend = useLastCallback(() => {
-    const files = selectedEntries.filter((e) => e.node.kind === 'file');
-    if (files.length) setDialog({ type: 'send', entries: files });
-  });
-
   const runByContainer = (list: Entry[], run: (id: string, nodes: CloudNode[]) => Promise<unknown>) => {
     const grouped = new Map<string, CloudNode[]>();
     list.forEach((e) => grouped.set(e.container, [...(grouped.get(e.container) || []), e.node]));
@@ -235,6 +263,21 @@ const Cloud = ({ isMobile }: OwnProps) => {
       void run(id, groupNodes);
     });
   };
+
+  const handleBulkMove = useLastCallback(() => {
+    if (!selectionContainer) return;
+    setDialog({ type: 'move', container: selectionContainer, nodes: selectedEntries.map((e) => e.node) });
+  });
+
+  const handleBulkDelete = useLastCallback(() => {
+    runByContainer(editableSelection, trashCloudNodes);
+    setSelected([]);
+  });
+
+  const handleBulkSend = useLastCallback(() => {
+    const files = selectedEntries.filter((e) => e.node.kind === 'file');
+    if (files.length) setDialog({ type: 'send', entries: files });
+  });
 
   const handleBulkRestore = useLastCallback(() => {
     runByContainer(selectedEntries, restoreCloudNodes);
@@ -249,6 +292,11 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (dialog?.type === 'purge') runByContainer(dialog.entries, purgeCloudNodes);
     if (dialog?.type === 'emptyTrash') void emptyCloudTrash();
     setSelected([]);
+    setDialog(undefined);
+  });
+
+  const handleConfirmLeave = useLastCallback(() => {
+    if (dialog?.type === 'leave') void leaveCloudFolder(dialog.container);
     setDialog(undefined);
   });
 
@@ -316,13 +364,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (files.length) uploadCloudFiles(files);
   });
 
-  const handleToggleView = useLastCallback(() => {
-    setCloudPrefs({ ...prefs, view: prefs.view === 'list' ? 'grid' : 'list' });
-  });
-
   const handleSort = (key: CloudSortKey) => () => {
     const isSame = prefs.sort.key === key;
-    setCloudPrefs({ ...prefs, sort: { key, isDescending: isSame ? !prefs.sort.isDescending : false } });
+    setCloudPrefs({ sort: { key, isDescending: isSame ? !prefs.sort.isDescending : false } });
   };
 
   const SortButton = ({ onTrigger, isOpen }: { onTrigger: () => void; isOpen?: boolean }) => (
@@ -352,25 +396,55 @@ const Cloud = ({ isMobile }: OwnProps) => {
     : status === 'offline' ? 'ParvaneCloudSyncUnavailable'
       : status === 'no-key' ? 'ParvaneCloudSyncPending' : undefined;
   const isBlocked = status === 'needs-linking' || status === 'loading';
-  const tabs = [
-    { title: lang('ParvaneCloudTabDrive') },
-    { title: lang('ParvaneCloudTabShared'), badgeCount: invites.length || undefined, isBadgeActive: true },
-    { title: lang('ParvaneCloudTabTrash') },
-  ];
-  const rootName = container ? container.name || lang('ParvaneCloudSharedFolder')
-    : place.tab === 'shared' ? lang('ParvaneCloudTabShared') : lang('ParvaneCloudTabDrive');
   const sortTitles = {
     name: lang('ParvaneCloudSortName'), date: lang('ParvaneCloudSortDate'), size: lang('ParvaneCloudSortSize'),
   };
   const usedShare = usage?.quota ? usage.used / usage.quota : 0;
-  const isEmptyRoot = !place.folder && !place.container && !ownedFolders.length;
-  const emptyKey = isTrash ? 'ParvaneCloudEmptyTrash'
-    : trimmedQuery ? 'ParvaneCloudNothingFound'
-      : isEmptyRoot ? 'ParvaneCloudEmpty' : 'ParvaneCloudEmptyFolder';
-  const showOwnedFolders = place.tab === 'drive' && !place.container && !place.folder && !trimmedQuery;
-  const hasToolbar = !isSharedList && !isBlocked;
+  const emptyKey = isSearch ? 'ParvaneCloudNothingFound'
+    : isTrash ? 'ParvaneCloudEmptyTrash'
+      : isSharedList ? 'ParvaneCloudEmptyShared'
+        : isRoot ? 'ParvaneCloudEmpty' : 'ParvaneCloudEmptyFolder';
+  const moveContainer = dialog?.type === 'move' ? dialog.container : containerId;
+  const moveRootName = !moveContainer || moveContainer === data?.rootId
+    ? lang('ParvaneCloudTabDrive') : containerName(getContainer(moveContainer, data));
+  const listedFolders = isRoot ? ownedFolders : isSharedList ? sharedFolders : undefined;
+  const hasRows = entries.length > 0 || Boolean(listedFolders?.length);
 
-  function renderContainerRow(c: CloudContainerInfo, isInvite?: boolean) {
+  function renderInviteRow(c: CloudContainerInfo) {
+    return (
+      <div
+        key={c.id}
+        className={buildClassName(styles.row, styles.containerRow, styles.inviteRow)}
+        role="listitem"
+        data-container-id={c.id}
+        data-container-kind={c.kind}
+        data-name={c.name}
+      >
+        <div className={buildClassName(styles.itemIcon, styles.itemIconShared)}>
+          <Icon name="group" />
+        </div>
+        <div className={styles.itemText}>
+          <div className={styles.inviteTitle} dir="auto">
+            {lang('ParvaneCloudInviteFrom', { name: nameOf(c.owner), folder: containerName(c) })}
+          </div>
+          <div className={styles.itemHint} dir="auto">
+            {lang(c.role === 'editor' ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader')}
+          </div>
+        </div>
+        <div className={styles.inviteButtons}>
+          <Button size="tiny" isText color="danger" onClick={() => void answerCloudInvite(c.id, false)}>
+            {lang('ParvaneCloudDecline')}
+          </Button>
+          <Button size="tiny" onClick={() => void answerCloudInvite(c.id, true)}>
+            {lang('ParvaneCloudAccept')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderContainerRow(c: CloudContainerInfo) {
+    const isOwned = c.kind === 'owned';
     return (
       <div
         key={c.id}
@@ -380,42 +454,82 @@ const Cloud = ({ isMobile }: OwnProps) => {
         data-container-id={c.id}
         data-container-kind={c.kind}
         data-name={c.name}
-        onClick={isInvite ? undefined : () => handleOpenContainer(c.id)}
+        onClick={() => handleOpenContainer(c.id)}
       >
         <div className={buildClassName(styles.itemIcon, styles.itemIconShared)}>
           <Icon name="group" />
         </div>
         <div className={styles.itemText}>
-          <div className={styles.itemName} dir="auto">{c.name || lang('ParvaneCloudSharedFolder')}</div>
+          <div className={styles.itemName} dir="auto">{containerName(c)}</div>
           <div className={styles.itemHint} dir="auto">
-            {c.kind === 'owned'
-              ? lang('ParvaneCloudSharedFolder')
-              : lang('ParvaneCloudSharedBy', { name: c.owner.split('@')[0] })}
-            {c.role && c.kind !== 'owned' && ` · ${lang(
+            {isOwned ? lang('ParvaneCloudSharedFolder') : lang('ParvaneCloudSharedBy', { name: nameOf(c.owner) })}
+            {c.role && !isOwned && ` · ${lang(
               c.role === 'editor' ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader',
             )}`}
           </div>
         </div>
-        {isInvite ? (
-          <div className={styles.inviteButtons}>
-            <Button size="tiny" onClick={() => setDialog({ type: 'share', container: c.id })}>
-              {lang('ParvaneCloudOpen')}
-            </Button>
-          </div>
-        ) : (
+        {isOwned ? (
           <Button
             round
             size="tiny"
             color="translucent"
-            iconName={c.kind === 'owned' ? 'add-user' : 'info'}
+            iconName="add-user"
             ariaLabel={lang('ParvaneCloudShare')}
             onClick={(e) => {
               e.stopPropagation();
               setDialog({ type: 'share', container: c.id });
             }}
           />
+        ) : (
+          <Button
+            size="tiny"
+            isText
+            color="danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              setDialog({ type: 'leave', container: c.id });
+            }}
+          >
+            {lang('ParvaneCloudLeave')}
+          </Button>
         )}
       </div>
+    );
+  }
+
+  function renderVirtualRow(view: CloudVirtualFolder, count: number) {
+    const hint = view === 'shared'
+      ? (count ? lang('ParvaneCloudSharedCount', { count }) : lang('ParvaneCloudSharedNone'))
+      : (count ? lang('ParvaneCloudTrashCount', { count }) : lang('ParvaneCloudEmptyTrash'));
+    return (
+      <div
+        className={buildClassName(styles.item, styles.row, styles.containerRow)}
+        role="listitem"
+        tabIndex={0}
+        data-virtual={view}
+        data-count={count}
+        onClick={() => goTo({ view })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') goTo({ view });
+        }}
+      >
+        <div className={buildClassName(styles.itemIcon, styles.itemIconVirtual)}>
+          <Icon name={view === 'shared' ? 'group' : 'delete'} />
+        </div>
+        <div className={styles.itemText}>
+          <div className={styles.itemName} dir="auto">{virtualName(view)}</div>
+          <div className={styles.itemHint} dir="auto">{hint}</div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCrumb(key: string, title: string, onClick: NoneToVoidFunction, isFirst?: boolean) {
+    return (
+      <span key={key} className={styles.pathStep}>
+        {!isFirst && <Icon name="next" className={styles.pathArrow} />}
+        <button type="button" className={styles.pathLink} onClick={onClick}>{title}</button>
+      </span>
     );
   }
 
@@ -425,7 +539,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
       className={styles.root}
       data-sync-status={status}
       data-loaded={isLoaded ? '1' : '0'}
-      data-tab={place.tab}
+      data-place={isVirtual ? place.view : 'drive'}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -433,50 +547,22 @@ const Cloud = ({ isMobile }: OwnProps) => {
     >
       <header className={styles.header}>
         {!isMobile && <h1 className={styles.title}>{lang('ParvaneSectionCloud')}</h1>}
-        <TabList
-          className={styles.tabs}
-          tabs={tabs}
-          activeTab={TABS.indexOf(place.tab)}
-          onSwitchTab={handleSwitchTab}
-        />
-      </header>
-      {statusKey && (
-        <div className={buildClassName(styles.syncNotice, isBlocked && styles.syncNoticeBlocking)} role="status">
-          {lang(statusKey)}
-        </div>
-      )}
-      {hasToolbar && (
-        <div className={styles.toolbar}>
-          {!isTrash && (
-            <label className={styles.search}>
-              <Icon name="search" className={styles.searchIcon} />
-              <input
-                className={styles.searchInput}
-                type="search"
-                value={query}
-                placeholder={lang('ParvaneCloudSearch')}
-                aria-label={lang('ParvaneCloudSearch')}
-                onChange={handleQueryChange}
-              />
-            </label>
-          )}
-          <div className={styles.toolbarButtons}>
-            {isTrash && entries.length > 0 && (
-              <Button size="smaller" color="danger" isText onClick={() => setDialog({ type: 'emptyTrash' })}>
-                {lang('ParvaneCloudEmptyTrashAction')}
-              </Button>
-            )}
-            {!isTrash && (
-              <Button
-                round
-                size="smaller"
-                color="translucent"
-                iconName={prefs.view === 'list' ? 'grouped' : 'menu'}
-                ariaLabel={lang(prefs.view === 'list' ? 'ParvaneCloudViewGrid' : 'ParvaneCloudViewList')}
-                onClick={handleToggleView}
-              />
-            )}
-            {!isTrash && (
+        {!isBlocked && (
+          <label className={styles.search}>
+            <Icon name="search" className={styles.searchIcon} />
+            <input
+              className={styles.searchInput}
+              type="search"
+              value={query}
+              placeholder={lang('ParvaneCloudSearch')}
+              aria-label={lang('ParvaneCloudSearch')}
+              onChange={handleQueryChange}
+            />
+          </label>
+        )}
+        {!isBlocked && (
+          <div className={styles.headerButtons}>
+            {!isTrash && !isSharedList && (
               <DropdownMenu trigger={SortButton} positionX="right">
                 {SORT_KEYS.map((key) => (
                   <MenuItem
@@ -489,13 +575,18 @@ const Cloud = ({ isMobile }: OwnProps) => {
                 ))}
               </DropdownMenu>
             )}
+            {isTrash && entries.length > 0 && (
+              <Button size="smaller" color="danger" isText onClick={() => setDialog({ type: 'emptyTrash' })}>
+                {lang('ParvaneCloudEmptyTrashAction')}
+              </Button>
+            )}
             {canEdit && (
               <DropdownMenu trigger={AddButton} positionX="right">
                 <MenuItem icon="document" onClick={handlePickFiles}>{lang('ParvaneCloudUpload')}</MenuItem>
                 <MenuItem icon="folder" onClick={() => setDialog({ type: 'newFolder' })}>
                   {lang('ParvaneCloudNewFolder')}
                 </MenuItem>
-                {place.tab === 'drive' && !place.container && !place.folder && (
+                {!place.container && !place.folder && (
                   <MenuItem icon="group" onClick={() => setDialog({ type: 'newShared' })}>
                     {lang('ParvaneCloudNewShared')}
                   </MenuItem>
@@ -503,23 +594,24 @@ const Cloud = ({ isMobile }: OwnProps) => {
               </DropdownMenu>
             )}
           </div>
+        )}
+      </header>
+      {statusKey && (
+        <div className={buildClassName(styles.syncNotice, isBlocked && styles.syncNoticeBlocking)} role="status">
+          {lang(statusKey)}
         </div>
       )}
-      {hasToolbar && !isTrash && (
-        <nav className={styles.path} aria-label={rootName}>
-          {place.container && (
-            <button type="button" className={styles.pathLink} onClick={() => handleOpenContainer()}>
-              {lang(place.tab === 'shared' ? 'ParvaneCloudTabShared' : 'ParvaneCloudTabDrive')}
-            </button>
-          )}
-          {place.container && <Icon name="next" className={styles.pathArrow} />}
-          <button type="button" className={styles.pathLink} onClick={() => handleOpenFolder()}>{rootName}</button>
-          {path.map((n) => (
-            <span key={n.id} className={styles.pathStep}>
-              <Icon name="next" className={styles.pathArrow} />
-              <button type="button" className={styles.pathLink} onClick={() => handleOpenFolder(n.id)}>{n.name}</button>
-            </span>
-          ))}
+      {!isBlocked && isSearch && (
+        <div className={styles.found} data-found={entries.length}>
+          {lang('ParvaneCloudFound', { count: entries.length })}
+        </div>
+      )}
+      {!isBlocked && !isSearch && (
+        <nav className={styles.path} aria-label={lang('ParvaneSectionCloud')}>
+          {renderCrumb('root', lang('ParvaneSectionCloud'), handleOpenRoot, true)}
+          {place.view && renderCrumb(place.view, virtualName(place.view), () => goTo({ view: place.view }))}
+          {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder())}
+          {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id)))}
           {container && (
             <Button
               className={styles.pathShare}
@@ -557,10 +649,12 @@ const Cloud = ({ isMobile }: OwnProps) => {
               {selectedEntries.some((e) => e.node.kind === 'file') && (
                 <Button size="tiny" isText onClick={handleBulkSend}>{lang('ParvaneCloudSendToChat')}</Button>
               )}
-              {canEdit && <Button size="tiny" isText onClick={handleBulkMove}>{lang('ParvaneCloudMove')}</Button>}
-              {canEdit && (
+              {selectionContainer && (
+                <Button size="tiny" isText onClick={handleBulkMove}>{lang('ParvaneCloudMove')}</Button>
+              )}
+              {editableSelection.length > 0 && (
                 <Button size="tiny" isText color="danger" onClick={handleBulkDelete}>
-                  {lang('ParvaneCloudDelete')}
+                  {lang('ParvaneCloudToTrash')}
                 </Button>
               )}
             </>
@@ -569,51 +663,47 @@ const Cloud = ({ isMobile }: OwnProps) => {
       )}
       <div className={buildClassName(styles.content, 'custom-scroll')}>
         {!isLoaded && !isBlocked && <Loading />}
-        {isLoaded && isSharedList && (
+        {isLoaded && (
           <div className={styles.list} role="list">
-            {invites.length > 0 && <div className={styles.groupTitle}>{lang('ParvaneCloudInvites')}</div>}
-            {invites.map((c) => renderContainerRow(c, true))}
-            {sharedFolders.map((c) => renderContainerRow(c))}
-            {!invites.length && !sharedFolders.length && (
-              <div className={styles.empty}>{lang('ParvaneCloudEmptyShared')}</div>
+            {isRoot && invites.map(renderInviteRow)}
+            {isTrash && entries.length > 0 && (
+              <div className={styles.listNote}>{lang('ParvaneCloudTrashNote')}</div>
             )}
-          </div>
-        )}
-        {isLoaded && !isSharedList && (
-          <div
-            className={buildClassName(styles.list, prefs.view === 'grid' && !isTrash && styles.grid)}
-            role="list"
-            data-view={isTrash ? 'list' : prefs.view}
-          >
-            {showOwnedFolders && ownedFolders.map((c) => renderContainerRow(c))}
-            {entries.map((entry) => (
-              <CloudItem
-                key={keyOf(entry)}
-                container={entry.container}
-                node={entry.node}
-                view={isTrash ? 'list' : prefs.view}
-                hint={trimmedQuery
-                  ? [rootName, ...pathOf(nodes, entry.node.parent || undefined).map((n) => n.name)].join(' / ')
-                  : undefined}
-                folderSize={entry.node.kind === 'folder'
-                  ? sizeOf(getNodes(entry.container, data), entry.node.id) : undefined}
-                isSelected={selected.includes(keyOf(entry))}
-                isTrash={isTrash}
-                canEdit={canEdit}
-                canShare={canEdit && entry.container === data?.rootId}
-                onOpen={handleOpen}
-                onToggle={handleToggle}
-                onAction={handleAction}
-              />
-            ))}
-            {!entries.length && !(showOwnedFolders && ownedFolders.length) && (
-              <div className={styles.empty}>
+            {listedFolders?.map(renderContainerRow)}
+            {entries.map((entry) => {
+              const daysLeft = isTrash ? trashDaysLeft(entry.node, now) : undefined;
+              const canEditThis = canEditEntry(entry);
+              return (
+                <CloudItem
+                  key={keyOf(entry)}
+                  container={entry.container}
+                  node={entry.node}
+                  hint={daysLeft === undefined ? (isSearch ? pathText(entry) : undefined)
+                    : daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
+                      : lang('ParvaneCloudTrashExpired')}
+                  daysLeft={daysLeft}
+                  folderSize={entry.node.kind === 'folder'
+                    ? sizeOf(getNodes(entry.container, data), entry.node.id) : undefined}
+                  isSelected={selected.includes(keyOf(entry))}
+                  isTrash={isTrash}
+                  canEdit={canEditThis}
+                  canShare={canEditThis && entry.container === data?.rootId}
+                  onOpen={handleOpen}
+                  onToggle={handleToggle}
+                  onAction={handleAction}
+                />
+              );
+            })}
+            {!hasRows && (
+              <div className={buildClassName(styles.empty, isRoot && styles.emptyRoot)}>
                 <div className={styles.emptyTitle}>{lang(emptyKey)}</div>
                 {emptyKey === 'ParvaneCloudEmpty' && (
                   <div className={styles.emptyHint}>{lang('ParvaneCloudEmptyHint')}</div>
                 )}
               </div>
             )}
+            {isRoot && renderVirtualRow('shared', sharedFolders.length)}
+            {isRoot && renderVirtualRow('trash', trash.length)}
           </div>
         )}
         {isDragging && <div className={styles.dropZone}>{lang('ParvaneCloudDropHere')}</div>}
@@ -668,10 +758,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
       />
       <CloudFolderDialog
         isOpen={dialog?.type === 'move'}
-        rootName={rootName}
+        rootName={moveRootName}
         nodes={dialog?.type === 'move' ? getNodes(dialog.container, data) : nodes}
         movedIds={dialog?.type === 'move' ? dialog.nodes.map((n) => n.id) : []}
-        startFolder={place.folder}
+        startFolder={moveContainer === containerId ? place.folder : undefined}
         places={movePlaces}
         sourcePlace={dialog?.type === 'move' ? dialog.container : undefined}
         onSubmit={handleSubmitMove}
@@ -696,6 +786,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
         })}
         confirmLabel={lang('ParvaneCloudShareFolderAction')}
         confirmHandler={handleConfirmShareFolder}
+        onClose={handleCloseDialog}
+      />
+      <ConfirmDialog
+        isOpen={dialog?.type === 'leave'}
+        title={lang('ParvaneCloudLeave')}
+        text={lang('ParvaneCloudLeaveConfirm')}
+        confirmLabel={lang('ParvaneCloudLeave')}
+        confirmIsDestructive
+        confirmHandler={handleConfirmLeave}
         onClose={handleCloseDialog}
       />
       <CloudShareDialog

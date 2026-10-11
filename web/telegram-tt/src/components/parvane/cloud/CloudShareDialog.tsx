@@ -42,9 +42,9 @@ function nameOf(address: string) {
   return address.split('@')[0];
 }
 
-// Совместная папка: создание, участники и их роли (владелец), приглашение
-// (принять / отклонить), выход (участник). Сервер видит состав, но не имена
-// и не содержимое файлов.
+// Совместная папка: создание, участники и их роли (владелец), выход
+// (участник). На приглашение отвечают в строке списка. Сервер видит состав,
+// но не имена и не содержимое файлов.
 const CloudShareDialog = ({
   isOpen, containerId, onChanged, onClose,
 }: OwnProps) => {
@@ -71,7 +71,6 @@ const CloudShareDialog = ({
   const id = containerId || createdId;
   const container = getContainer(id, data);
   const isOwner = container?.role === 'owner';
-  const isInvite = container?.kind === 'invite';
   const folderName = container?.name || lang('ParvaneCloudSharedFolder');
   const roleTitle = (role: CloudRole) => lang(
     role === 'owner' ? 'ParvaneCloudRoleOwner'
@@ -126,17 +125,16 @@ const CloudShareDialog = ({
     void run('parvaneCloudUnshare', { container: id, user });
   };
 
-  const handleAnswer = (isAccepted: boolean) => async () => {
-    const result = await run('parvaneCloudAnswerInvite', { container: id, isAccepted });
-    if (!result?.ok) return;
-    if (isAccepted) setCloudPlace({ tab: 'shared', container: id });
-    onClose();
+  // Папки больше нет в списке — подняться из неё
+  const leavePlace = () => {
+    const place = getCloudPlace();
+    if (place.container === id) setCloudPlace(place.view ? { view: place.view } : {});
   };
 
   const handleConfirm = useLastCallback(async () => {
     if (confirm === 'private') {
       setConfirm(undefined);
-      if (getCloudPlace().container === id) setCloudPlace({ tab: getCloudPlace().tab });
+      leavePlace();
       onClose();
       void unshareCloudFolder(id!, lang('ParvaneCloudSharedFolder'));
       return;
@@ -145,7 +143,7 @@ const CloudShareDialog = ({
     setConfirm(undefined);
     const result = await run(method, { container: id });
     if (!result?.ok) return;
-    if (getCloudPlace().container === id) setCloudPlace({ tab: getCloudPlace().tab });
+    leavePlace();
     onClose();
   });
 
@@ -251,22 +249,6 @@ const CloudShareDialog = ({
               </div>
             )}
             <div className="dialog-buttons">
-              {isInvite && (
-                <Button className="confirm-dialog-button" isText disabled={isBusy} onClick={handleAnswer(true)}>
-                  {lang('ParvaneCloudAccept')}
-                </Button>
-              )}
-              {isInvite && (
-                <Button
-                  className="confirm-dialog-button"
-                  isText
-                  color="danger"
-                  disabled={isBusy}
-                  onClick={handleAnswer(false)}
-                >
-                  {lang('ParvaneCloudDecline')}
-                </Button>
-              )}
               {isOwner && (
                 <Button
                   className="confirm-dialog-button"
@@ -288,7 +270,7 @@ const CloudShareDialog = ({
                   {lang('ParvaneCloudStopSharing')}
                 </Button>
               )}
-              {!isOwner && !isInvite && (
+              {!isOwner && (
                 <Button
                   className="confirm-dialog-button"
                   isText

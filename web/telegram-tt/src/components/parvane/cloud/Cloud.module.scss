@@ -3,7 +3,6 @@
 
 .root {
   --cloud-row-height: 3.5rem;
-  --cloud-tile-width: 9.5rem;
 
   position: relative;
   z-index: 1;
@@ -49,12 +48,6 @@
   line-height: 1.5rem;
 }
 
-.tabs {
-  flex: 1 1 auto;
-  min-width: 0;
-  box-shadow: none;
-}
-
 .syncNotice {
   flex-shrink: 0;
 
@@ -71,19 +64,12 @@
   color: var(--color-text);
 }
 
-.toolbar {
+.headerButtons {
   display: flex;
   flex-shrink: 0;
-  gap: 0.5rem;
-  align-items: center;
-
-  padding: 0.5rem 1rem;
-}
-
-.toolbarButtons {
-  display: flex;
   gap: 0.25rem;
   align-items: center;
+
   margin-inline-start: auto;
 }
 
@@ -132,10 +118,21 @@
   gap: 0.125rem;
   align-items: center;
 
-  min-height: 2rem;
-  padding: 0 1rem 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.25rem 0.625rem;
 
   font-size: 0.875rem;
+}
+
+// Вместо пути, пока идёт поиск: сколько найдено и где искали
+.found {
+  flex-shrink: 0;
+
+  min-height: 2.5rem;
+  padding: 0.625rem 1rem 0.25rem;
+
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
 }
 
 .pathStep {
@@ -164,7 +161,7 @@
     background: var(--color-chat-hover);
   }
 
-  &:last-of-type {
+  .pathStep:last-of-type & {
     color: var(--color-text);
   }
 }
@@ -211,17 +208,9 @@
   padding: 0 0.5rem 1rem;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--cloud-tile-width), 1fr));
-  gap: 0.5rem;
-  padding-inline: 1rem;
-}
-
-.groupTitle {
-  padding: 0.75rem 0.5rem 0.25rem;
+.listNote {
+  padding: 0.25rem 0.5rem 0.5rem;
   font-size: 0.8125rem;
-  font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
 }
 
@@ -268,15 +257,22 @@
   }
 }
 
-.tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  align-items: center;
+// Приглашение в чужую папку: строка вверху корня с ответом
+.inviteRow {
+  margin-bottom: 0.25rem;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--color-green) 10%, transparent);
 
-  padding: 0.75rem 0.5rem 0.5rem;
+  @media (max-width: 600px) {
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    padding-inline-start: 0.5rem;
+  }
+}
 
-  text-align: center;
+.inviteTitle {
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
 }
 
 .itemCheck {
@@ -303,12 +299,6 @@
   .item:focus-within &,
   .itemSelected & {
     opacity: 1;
-  }
-
-  .tile & {
-    position: absolute;
-    inset-block-start: 0.375rem;
-    inset-inline-start: 0.375rem;
   }
 
   // На сенсорном экране наведения нет — флажок виден всегда
@@ -339,13 +329,6 @@
   color: var(--color-white);
 
   background: var(--color-primary);
-
-  .tile & {
-    width: 100%;
-    height: 6rem;
-    border-radius: 0.625rem;
-    font-size: 2.25rem;
-  }
 }
 
 .itemIconFolder {
@@ -356,6 +339,11 @@
 .itemIconShared {
   color: var(--color-green);
   background: color-mix(in srgb, var(--color-green) 16%, transparent);
+}
+
+.itemIconVirtual {
+  color: var(--color-text-secondary);
+  background: var(--color-chat-hover);
 }
 
 .itemIcon_default {
@@ -386,26 +374,11 @@
   line-height: 0.75rem;
   text-align: center;
   text-transform: uppercase;
-
-  .tile & {
-    inset-block-end: 0.5rem;
-    font-size: 0.75rem;
-  }
-}
-
-.itemThumb {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 .itemText {
   overflow: hidden;
   min-width: 0;
-
-  .tile & {
-    width: 100%;
-  }
 }
 
 .itemName {
@@ -415,17 +388,6 @@
   line-height: 1.25rem;
   text-overflow: ellipsis;
   white-space: nowrap;
-
-  .tile & {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-
-    font-size: 0.8125rem;
-    line-height: 1.0625rem;
-    overflow-wrap: anywhere;
-    white-space: normal;
-  }
 }
 
 .itemHint {
@@ -446,23 +408,11 @@
   color: var(--color-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
-
-  .tile & {
-    display: none;
-  }
 }
 
 .itemDate {
   @media (max-width: 600px) {
     display: none;
-  }
-}
-
-.itemMenu {
-  .tile & {
-    position: absolute;
-    inset-block-start: 0.25rem;
-    inset-inline-end: 0.25rem;
   }
 }
 
@@ -485,11 +435,6 @@
   &:hover {
     background: var(--color-interactive-element-hover);
   }
-
-  .tile & {
-    color: var(--color-text);
-    background: var(--color-background);
-  }
 }
 
 .itemMoreOpen {
@@ -499,6 +444,11 @@
 .inviteButtons {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
+
+  @media (max-width: 600px) {
+    grid-column: 2;
+  }
 }
 
 .empty {
@@ -512,6 +462,11 @@
 
   color: var(--color-text-secondary);
   text-align: center;
+}
+
+// В корне под пустым списком стоят строки-папки — заглушка ниже
+.emptyRoot {
+  padding-block: 2.5rem;
 }
 
 .emptyTitle {

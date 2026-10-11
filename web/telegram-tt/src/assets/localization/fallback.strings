@@ -3140,8 +3140,6 @@
 "ParvaneCloudErrorNameLong" = "The name is too long.";
 "ParvaneCloudMoveTitle" = "Move to";
 "ParvaneCloudMoveHere" = "Move here";
-"ParvaneCloudViewList" = "List";
-"ParvaneCloudViewGrid" = "Tiles";
 "ParvaneCloudSort" = "Sorting";
 "ParvaneCloudSortName" = "By name";
 "ParvaneCloudSortDate" = "By date";
@@ -3197,7 +3195,6 @@
 "ParvaneCloudStopSharingConfirm" = "The folder and all its files will be deleted for everyone.";
 "ParvaneCloudLeave" = "Leave folder";
 "ParvaneCloudLeaveConfirm" = "You will lose access to the files in this folder.";
-"ParvaneCloudInvites" = "Invitations";
 "ParvaneCloudAccept" = "Accept";
 "ParvaneCloudDecline" = "Decline";
 "ParvaneCloudInviteText" = "Invitation to the folder “{name}” ({role})";
@@ -3208,6 +3205,17 @@
 "ParvaneCloudInviteGone" = "The invitation is no longer valid";
 "ParvaneCloudBack" = "Back";
 "ParvaneCloudSharedFolders" = "Shared folders";
+"ParvaneCloudView" = "View";
+"ParvaneCloudToTrash" = "Move to trash";
+"ParvaneCloudFound" = "Found: {count} · in all folders except the trash";
+"ParvaneCloudInviteFrom" = "{name} invites you to “{folder}”";
+"ParvaneCloudSharedCount" = "Folders: {count}";
+"ParvaneCloudSharedNone" = "Nothing yet";
+"ParvaneCloudTrashCount" = "Items: {count} · kept for 30 days";
+"ParvaneCloudTrashNote" = "Items are deleted forever 30 days after they are moved to the trash. This is done by your device, so they may stay longer while you are offline.";
+"ParvaneCloudTrashDaysLeft_one" = "Deleted in {count} day";
+"ParvaneCloudTrashDaysLeft_other" = "Deleted in {count} days";
+"ParvaneCloudTrashExpired" = "Deleted at the next sync";
 "PlannerAdd" = "Add";
 "PlannerAddFood" = "+ Entry";
 "PlannerAddTask" = "+ Task";
@@ -3511,7 +3519,6 @@
 "PlannerAllDay" = "All day";
 "PlannerAllDayShort" = "all day";
 "PlannerHoliday" = "Holiday";
-"PlannerAgendaEmpty" = "Nothing is planned for the next 30 days";
 "PlannerAgendaNoTime" = "no time";
 "PlannerAgendaDue" = "deadline";
 "PlannerAriaYearDay" = "{date}, items: {count}";

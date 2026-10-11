@@ -2308,8 +2308,6 @@ export interface LangPair {
   'ParvaneCloudErrorNameLong': undefined;
   'ParvaneCloudMoveTitle': undefined;
   'ParvaneCloudMoveHere': undefined;
-  'ParvaneCloudViewList': undefined;
-  'ParvaneCloudViewGrid': undefined;
   'ParvaneCloudSort': undefined;
   'ParvaneCloudSortName': undefined;
   'ParvaneCloudSortDate': undefined;
@@ -2361,7 +2359,6 @@ export interface LangPair {
   'ParvaneCloudStopSharingConfirm': undefined;
   'ParvaneCloudLeave': undefined;
   'ParvaneCloudLeaveConfirm': undefined;
-  'ParvaneCloudInvites': undefined;
   'ParvaneCloudAccept': undefined;
   'ParvaneCloudDecline': undefined;
   'ParvaneCloudInviteOpen': undefined;
@@ -2370,6 +2367,11 @@ export interface LangPair {
   'ParvaneCloudInviteGone': undefined;
   'ParvaneCloudBack': undefined;
   'ParvaneCloudSharedFolders': undefined;
+  'ParvaneCloudView': undefined;
+  'ParvaneCloudToTrash': undefined;
+  'ParvaneCloudSharedNone': undefined;
+  'ParvaneCloudTrashNote': undefined;
+  'ParvaneCloudTrashExpired': undefined;
   'PlannerAdd': undefined;
   'PlannerAddFood': undefined;
   'PlannerAddTask': undefined;
@@ -2603,7 +2605,6 @@ export interface LangPair {
   'PlannerAllDay': undefined;
   'PlannerAllDayShort': undefined;
   'PlannerHoliday': undefined;
-  'PlannerAgendaEmpty': undefined;
   'PlannerAgendaNoTime': undefined;
   'PlannerAgendaDue': undefined;
   'PlannerPeriodWeek': undefined;
@@ -2631,6 +2632,7 @@ export interface LangPair {
   'PlannerTodayOver': undefined;
   'PlannerUndatedTitle': undefined;
   'PlannerUndatedEmpty': undefined;
+  'PlannerAgendaEmpty': undefined;
   'PlannerDetails': undefined;
   'PlannerMarkDone': undefined;
   'ParvaneColorScheme': undefined;
@@ -4413,6 +4415,19 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudSharedBy': {
     'name': V;
   };
+  'ParvaneCloudFound': {
+    'count': V;
+  };
+  'ParvaneCloudInviteFrom': {
+    'name': V;
+    'folder': V;
+  };
+  'ParvaneCloudSharedCount': {
+    'count': V;
+  };
+  'ParvaneCloudTrashCount': {
+    'count': V;
+  };
   'PlannerAriaChart': {
     'name': V;
   };
@@ -5272,6 +5287,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PollModalAddMoreText': {
+    'count': V;
+  };
+  'ParvaneCloudTrashDaysLeft': {
     'count': V;
   };
 }

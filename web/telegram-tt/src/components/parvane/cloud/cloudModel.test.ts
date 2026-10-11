@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  canMoveInto, childrenOf, type CloudNode, freeName, kindOfFile, namesIn, pathOf, searchNodes, sizeOf, sortNodes,
-  subtreeOf, trashOf, usageOf, validateName,
+  canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, expiredTrashOf, freeName, kindOfFile, namesIn,
+  pathOf, searchNodes, sizeOf, sortNodes, subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
 function node(
@@ -92,6 +92,41 @@ describe('облако: модель дерева', () => {
   it('корзина показывает положенное явно, место считает с вложенным', () => {
     expect(trashOf(TREE).map((n) => n.id)).toEqual(['h', 'f']);
     expect(usageOf(TREE)).toEqual({ total: 380, trash: 10 });
+  });
+
+  it('срок корзины: стирается пролежавшее 30 дней, вложенное — вместе с папкой', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const now = 100 * day;
+    const tree = [
+      node('live', 'file', 'живой.txt'),
+      node('old', 'folder', 'Старая', undefined, { trashed: true, trashTop: true, trashedAt: now - 31 * day }),
+      node('inside', 'file', 'внутри.txt', 'old', { trashed: true, trashedAt: now - 31 * day }),
+      node('edge', 'file', 'ровно.txt', undefined, { trashed: true, trashTop: true, trashedAt: now - 30 * day }),
+      node('fresh', 'file', 'свежий.txt', undefined, { trashed: true, trashTop: true, trashedAt: now - 29 * day }),
+      node('later', 'file', 'часы вперёд.txt', undefined, { trashed: true, trashTop: true, trashedAt: now + day }),
+      node('unknown', 'file', 'без времени.txt', undefined, { trashed: true, trashTop: true, trashedAt: 0 }),
+      node('back', 'file', 'восстановлен.txt', undefined, { trashedAt: now - 40 * day }),
+    ];
+    expect(expiredTrashOf(tree, now).map((n) => n.id)).toEqual(['old', 'edge']);
+    expect(expiredTrashOf(tree, now - day).map((n) => n.id)).toEqual(['old']);
+    expect(expiredTrashOf(tree, now, day).map((n) => n.id)).toEqual(['old', 'edge', 'fresh']);
+    expect(CLOUD_TRASH_LIFETIME_MS).toBe(30 * day);
+  });
+
+  it('срок корзины: сколько дней осталось', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const now = 100 * day;
+    const trashedAgo = (ms: number) => node('x', 'file', 'x', undefined, {
+      trashed: true, trashTop: true, trashedAt: now - ms,
+    });
+    expect(trashDaysLeft(trashedAgo(0), now)).toBe(30);
+    expect(trashDaysLeft(trashedAgo(1), now)).toBe(30);
+    expect(trashDaysLeft(trashedAgo(day), now)).toBe(29);
+    expect(trashDaysLeft(trashedAgo(29 * day + 1), now)).toBe(1);
+    expect(trashDaysLeft(trashedAgo(30 * day), now)).toBe(0);
+    expect(trashDaysLeft(trashedAgo(45 * day), now)).toBe(0);
+    expect(trashDaysLeft(trashedAgo(-2 * day), now)).toBe(30);
+    expect(trashDaysLeft(node('y', 'file', 'y', undefined, { trashed: true, trashTop: true }), now)).toBe(30);
   });
 
   it('вид файла по типу и расширению', () => {
