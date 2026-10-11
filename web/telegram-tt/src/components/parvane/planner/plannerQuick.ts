@@ -5,7 +5,8 @@
 // слова в набор на язык, выбирать по языку интерфейса, на каждый язык — своя таблица в тесте.
 
 import type {
-  PlannerEventError, PlannerMeal, PlannerNutrient, PlannerRepeat, PlannerRepeatKind, PlannerTaskError,
+  PlannerEventError, PlannerExercise, PlannerGoalMetric, PlannerHealthGoals, PlannerHealthKind, PlannerMeal,
+  PlannerNutrient, PlannerRepeat, PlannerRepeatKind, PlannerTaskError,
 } from './plannerModel';
 
 import {
@@ -13,9 +14,20 @@ import {
   validateRepeat, validateTask,
 } from './plannerModel';
 
-export type QuickKind = 'task' | 'event' | 'food' | 'water';
+// sleep, workout, metric — записи здоровья (spec 020); goal — правка целей и настроек, записи не создаёт
+export type QuickKind = 'task' | 'event' | 'food' | 'water' | 'sleep' | 'workout' | 'metric' | 'goal';
+export type QuickNutrient = PlannerNutrient | 'sugar' | 'salt';
 export type QuickField =
-  'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | PlannerNutrient;
+  'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | 'health' | QuickNutrient;
+// Показатель здоровья одной строкой: «вес 72,4», «давление 120/80», «пульс 64», «шаги 9500», «самочувствие 4»
+export type QuickMetric = Exclude<PlannerHealthKind, 'sleep' | 'workout'>;
+export type QuickGoalChanges = {
+  goals: Partial<Record<PlannerGoalMetric, number>>;
+  health: PlannerHealthGoals;
+  dayStart?: number;
+  dayEnd?: number;
+  budget?: number;
+};
 export type QuickSpan = { field: QuickField; from: number; to: number };
 export type QuickError = PlannerTaskError | PlannerEventError;
 
@@ -33,8 +45,15 @@ export type QuickDraft = {
   repeat?: PlannerRepeat;
   meal?: PlannerMeal;
   grams?: number;
-  nutrients?: Partial<Record<PlannerNutrient, number>>;
+  nutrients?: Partial<Record<QuickNutrient, number>>;
   waterMl?: number;
+  // Здоровье: показатель и его значения; у тренировки — километры и упражнения
+  metric?: QuickMetric;
+  value?: number;
+  value2?: number;
+  distanceKm?: number;
+  exercises?: PlannerExercise[];
+  goalChanges?: QuickGoalChanges;
   spans: QuickSpan[];
   error?: QuickError;
 };
@@ -66,13 +85,26 @@ const WEEKDAY = 'пн|вт|ср|чт|пт|сб|вс|понедельник(?:а|
 const MONTH = 'январ[ья]|феврал[ья]|марта?|апрел[ья]|ма[йя]|июн[ья]|июл[ья]|августа?|сентябр[ья]|октябр[ья]'
   + '|ноябр[ья]|декабр[ья]';
 const MONTH_STEMS = ['янв', 'фев', 'мар', 'апр', 'ма', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-const DATE = 'сегодня|завтра|послезавтра|через\\s+(?:\\d+\\s+)?(?:день|дня|дней|недел[юиь])'
+const DATE = 'сегодня|завтра|послезавтра|вчера|через\\s+(?:\\d+\\s+)?(?:день|дня|дней|недел[юиь])'
   + `|на\\s+следующей\\s+неделе|\\d{1,2}\\.\\d{2}(?:\\.\\d{4}|\\.\\d{2})?|\\d{1,2}\\s+(?:${MONTH})`
   + `|(?:во?\\s+)?(?:${WEEKDAY})`;
 const MEALS: Record<string, PlannerMeal> = {
   завтрак: 'breakfast', обед: 'lunch', ужин: 'dinner', перекус: 'snack',
 };
 const SMALL_NUMBERS: Record<string, number> = { две: 2, два: 2, три: 3, четыре: 4 };
+const ALL_KINDS: QuickKind[] = ['task', 'event', 'food', 'water', 'sleep', 'workout', 'metric', 'goal'];
+const SEPARATOR = `(?![${ALNUM}])`;
+const SLEEP_LEAD = new RegExp(`^\\s*(?:сон|спал[аи]?)${SEPARATOR}`);
+const WORKOUT_LEAD = new RegExp(
+  `^\\s*(?:зал|бег|тренировк[аиу]|кардио|плавание|йога|велосипед|прогулк[аиу]|спорт)${SEPARATOR}`,
+);
+const METRIC_LEAD = new RegExp(`^\\s*(вес|давление|пульс|шаги|самочувствие)${SEPARATOR}\\s*(.*)$`);
+const GOAL_LEAD = new RegExp(`^\\s*цел[ьи]${SEPARATOR}\\s*`);
+const METRICS: Record<string, QuickMetric> = {
+  вес: 'weight', давление: 'pressure', пульс: 'pulse', шаги: 'steps', самочувствие: 'mood',
+};
+const MAX_MOOD = 5;
+const MAX_STEPS = 200000;
 
 type Groups = (string | undefined)[];
 
@@ -128,6 +160,7 @@ function resolveDate(text: string, today: string): string | undefined {
   if (text === 'сегодня') return today;
   if (text === 'завтра') return addDays(today, 1);
   if (text === 'послезавтра') return addDays(today, 2);
+  if (text === 'вчера') return addDays(today, -1);
   if (text.startsWith('через')) {
     const count = Number(/\d+/.exec(text)?.[0] || 1);
     return addDays(today, /недел/.test(text) ? count * 7 : count);
@@ -182,7 +215,11 @@ export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
   const taken = new Array<boolean>(text.length).fill(false);
   const spans: QuickSpan[] = [];
   const skipped = new Set(ctx.skip);
-  const allowed = new Set<QuickKind>(ctx.kind ? [ctx.kind] : (ctx.kinds || ['task', 'event', 'food', 'water']));
+  const allowed = new Set<QuickKind>(ctx.kind ? [ctx.kind] : (ctx.kinds || ALL_KINDS));
+
+  // Здоровье и цели узнаются по первому слову; тип, выбранный пользователем, сильнее слова
+  const health = parseHealth(text, lower, ctx, allowed);
+  if (health) return health;
 
   const mark = (field: QuickField, from: number, to: number) => {
     for (let i = from; i < to; i++) taken[i] = true;
@@ -224,14 +261,14 @@ export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
   }
 
   // ── числа с единицами: питание и вода ─────────────────────────────────────
-  const nutrients: Partial<Record<PlannerNutrient, number>> = {};
+  const nutrients: Partial<Record<QuickNutrient, number>> = {};
   if (allowed.has('food') && explicitKind !== 'water') {
     scan('kcal', `(${NUM})\\s*(?:ккал|кал)`, (g) => {
       nutrients.kcal = toNumber(g[1]!);
     });
-    const macros: [PlannerNutrient, string][] = [
+    const macros: [QuickNutrient, string][] = [
       ['protein', 'б|белк[иа]|белок'], ['fat', 'ж|жир[ыа]?'], ['carbs', 'у|углевод[ыа]?'],
-      ['fiber', 'кл|клетчатк[аи]'],
+      ['fiber', 'кл|клетчатк[аи]'], ['sugar', 'сахар[а]?'], ['salt', 'сол[ьи]'],
     ];
     macros.forEach(([nutrient, names]) => {
       scan(nutrient, `(?:${names})\\s*(${NUM})(?:\\s*г)?`, (g) => {
@@ -392,7 +429,7 @@ export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
     }
     scan('day', `(?:на\\s+|во?\\s+)?(${DATE})`, (g, from) => {
       const value = g[1]!;
-      const weekday = /^\d|^сегодня|^завтра|^послезавтра|^через|^на /.test(value) ? undefined : weekdayOf(value);
+      const weekday = /^\d|^сегодня|^завтра|^послезавтра|^вчера|^через|^на /.test(value) ? undefined : weekdayOf(value);
       // «1000 Вт» — не вторник: день недели сразу после числа не распознаётся
       if (weekday !== undefined && /\d\s*$/.test(lower.slice(0, from))) return false;
       day = resolveDate(value, ctx.today);
@@ -502,4 +539,165 @@ export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
     name: draft.name, minutes: draft.minutes, day: draft.day, start: draft.start, due: draft.due,
   }) || (draft.repeat && validateRepeat(draft.repeat));
   return draft;
+}
+
+// ── здоровье и цели (spec 020) ───────────────────────────────────────────────
+
+function parseHealth(text: string, lower: string, ctx: QuickContext, allowed: Set<QuickKind>): QuickDraft | undefined {
+  const can = (kind: QuickKind) => allowed.has(kind) && (!ctx.kind || ctx.kind === kind);
+  if (!ctx.skip?.includes('kind')) {
+    if (can('goal') && GOAL_LEAD.test(lower)) return parseGoal(lower.replace(GOAL_LEAD, ''), ctx);
+    const metric = can('metric') && METRIC_LEAD.exec(lower);
+    if (metric) return parseMetric(METRICS[metric[1]], metric[2], ctx);
+    if (can('sleep') && SLEEP_LEAD.test(lower)) return parseSleep(lower.replace(SLEEP_LEAD, ''), ctx);
+  }
+  if (ctx.kind === 'sleep') return parseSleep(lower, ctx);
+  if (can('workout') && (ctx.kind === 'workout' || WORKOUT_LEAD.test(lower))) return parseWorkout(text, lower, ctx);
+  return undefined;
+}
+
+function healthDraft(kind: QuickKind, ctx: QuickContext, patch: Partial<QuickDraft>): QuickDraft {
+  return {
+    kind, name: '', day: ctx.today, spans: [], ...patch,
+  };
+}
+
+function parseMetric(metric: QuickMetric, rest: string, ctx: QuickContext): QuickDraft {
+  const fail = healthDraft('metric', ctx, { metric, error: 'name' });
+  if (metric === 'pressure') {
+    const pair = /^(\d{2,3})\s*(?:\/|на)\s*(\d{2,3})$/.exec(rest.trim());
+    return pair ? healthDraft('metric', ctx, { metric, value: Number(pair[1]), value2: Number(pair[2]) }) : fail;
+  }
+  const number = /^(\d[\d ]*(?:[.,]\d+)?)\s*(?:кг|уд)?$/.exec(rest.trim());
+  if (!number) return fail;
+  const value = toNumber(number[1].replace(/ /g, ''));
+  const isWhole = Number.isInteger(value);
+  const isValid = metric === 'weight' ? value > 0 && value < 500
+    : metric === 'mood' ? isWhole && value >= 1 && value <= MAX_MOOD
+      : metric === 'steps' ? isWhole && value <= MAX_STEPS : isWhole && value > 0 && value < 300;
+  return isValid ? healthDraft('metric', ctx, { metric, value }) : fail;
+}
+
+// «23:40-07:30» — лёг и встал (ночь уходит за полночь); «7,5 ч», «7 ч 30 мин» — только длительность
+function parseSleep(rest: string, ctx: QuickContext): QuickDraft {
+  const range = /(\d{1,2})[:.](\d{2})\s*(?:-|–|—|до)\s*(\d{1,2})[:.](\d{2})/.exec(rest);
+  if (range) {
+    const bed = resolveHour(Number(range[1]), Number(range[2]));
+    const wake = resolveHour(Number(range[3]), Number(range[4]));
+    if (bed === undefined || wake === undefined || bed === wake || bed >= MINUTES_IN_DAY || wake >= MINUTES_IN_DAY) {
+      return healthDraft('sleep', ctx, { error: 'time' });
+    }
+    return healthDraft('sleep', ctx, {
+      start: toTime(bed), end: toTime(wake), minutes: (wake - bed + MINUTES_IN_DAY) % MINUTES_IN_DAY,
+    });
+  }
+  const duration = new RegExp(`(${NUM})\\s*(?:ч|час(?:а|ов)?)(?:\\s*(\\d{1,2})\\s*(?:м|мин|минут[аы]?))?`).exec(rest);
+  const minutes = duration ? Math.round(toNumber(duration[1]) * MINUTES_IN_HOUR) + Number(duration[2] || 0) : 0;
+  return minutes > 0 && minutes < MINUTES_IN_DAY
+    ? healthDraft('sleep', ctx, { minutes }) : healthDraft('sleep', ctx, { error: 'time' });
+}
+
+// Тренировка-запись: «бег 5 км 28 мин», «зал присед 4x8x80, жим 3x10x60», «зал 60 мин». Тренировка с
+// временем начала, на будущий день либо с повтором — запланированное событие календаря, его разбирает
+// основной разбор
+function parseWorkout(text: string, lower: string, ctx: QuickContext): QuickDraft | undefined {
+  const taken = new Array<boolean>(text.length).fill(false);
+  const cut = (from: number, to: number) => {
+    for (let i = from; i < to; i++) taken[i] = true;
+  };
+  let distanceKm: number | undefined;
+  const distance = new RegExp(`(${NUM})\\s*км${SEPARATOR}`).exec(lower);
+  if (distance) {
+    distanceKm = toNumber(distance[1]);
+    cut(distance.index, distance.index + distance[0].length);
+  }
+  const exercises: PlannerExercise[] = [];
+  // Название, затем «подходы × повторы × вес» (вес необязателен); упражнения разделены запятой
+  const sets = new RegExp(
+    '([a-zа-я][a-zа-я ]*?)\\s*(\\d{1,2})\\s*[xх×*]\\s*(\\d{1,3})'
+    + '(?:\\s*[xх×*]\\s*(\\d+(?:[.,]\\d+)?))?\\s*(?:кг)?\\s*(?:,|;|$)',
+    'g',
+  );
+  const lead = WORKOUT_LEAD.exec(lower);
+  sets.lastIndex = lead ? lead[0].length : 0;
+  let match = sets.exec(lower);
+  while (match) {
+    exercises.push({
+      name: text.slice(match.index, match.index + match[1].length).trim(),
+      sets: Number(match[2]),
+      reps: Number(match[3]),
+      weight: match[4] ? toNumber(match[4]) : undefined,
+    });
+    cut(match.index, match.index + match[0].length);
+    match = sets.exec(lower);
+  }
+  const rest = [...text].map((char, i) => (taken[i] ? ' ' : char)).join('');
+  const base = parseQuickInput(rest, { ...ctx, kind: 'event', kinds: undefined });
+  const isRecord = Boolean(distanceKm || exercises.length)
+    || (!base.start && !base.repeat && (base.day || ctx.today) <= ctx.today);
+  if (!isRecord && ctx.kind !== 'workout') return undefined;
+  const hasContent = Boolean(distanceKm || exercises.length || base.minutes);
+  return {
+    kind: 'workout',
+    name: base.name,
+    day: base.day || ctx.today,
+    start: base.start,
+    minutes: base.minutes,
+    distanceKm,
+    exercises: exercises.length ? exercises : undefined,
+    spans: [],
+    error: !base.name ? 'name' : !hasContent ? 'minutes' : undefined,
+  };
+}
+
+// «цель белок 140 вода 2,5л сон 8ч день с 8 до 22» — меняет цели и настройки
+function parseGoal(rest: string, ctx: QuickContext): QuickDraft {
+  const changes: QuickGoalChanges = { goals: {}, health: {} };
+  let found = 0;
+  const take = (body: string, apply: (groups: string[]) => void) => {
+    const match = word(body).exec(rest);
+    if (!match) return;
+    apply(match.slice(2));
+    found += 1;
+  };
+  const goal = (metric: PlannerGoalMetric, names: string) => {
+    take(`(?:${names})\\s*(${NUM})`, (g) => {
+      changes.goals[metric] = toNumber(g[1]);
+    });
+  };
+  goal('kcal', 'ккал|калории|калорий');
+  goal('protein', 'белок|белки|белка');
+  goal('fat', 'жиры|жир');
+  goal('carbs', 'углеводы|углеводов');
+  goal('fiber', 'клетчатка|клетчатки');
+  take(`вод[аыу]\\s*(${NUM})\\s*(л|мл)?`, (g) => {
+    const amount = toNumber(g[1]);
+    changes.goals.water = Math.round(g[2] === 'мл' || (!g[2] && amount > 20) ? amount : amount * 1000);
+  });
+  take(`сахар[а]?\\s*(${NUM})`, (g) => {
+    changes.health.sugarMax = toNumber(g[1]);
+  });
+  take(`сол[ьи]\\s*(${NUM})`, (g) => {
+    changes.health.saltMax = toNumber(g[1]);
+  });
+  take(`сон\\s*(${NUM})\\s*(?:ч|час(?:а|ов)?)?`, (g) => {
+    changes.health.sleepMinutes = Math.round(toNumber(g[1]) * MINUTES_IN_HOUR);
+  });
+  take(`вес\\s*(${NUM})`, (g) => {
+    changes.health.weight = toNumber(g[1]);
+  });
+  take('шаги\\s*(\\d[\\d ]*\\d|\\d)', (g) => {
+    changes.health.steps = Number(g[1].replace(/ /g, ''));
+  });
+  take(`день\\s+с\\s+(${HOUR})(?::([0-5]\\d))?\\s+до\\s+(${HOUR})(?::([0-5]\\d))?`, (g) => {
+    changes.dayStart = Number(g[1]) * MINUTES_IN_HOUR + Number(g[2] || 0);
+    changes.dayEnd = Number(g[3]) * MINUTES_IN_HOUR + Number(g[4] || 0);
+  });
+  take(`бюджет\\s*(${NUM})\\s*(?:ч|час(?:а|ов)?)?`, (g) => {
+    changes.budget = Math.round(toNumber(g[1]) * MINUTES_IN_HOUR);
+  });
+  const isWindowValid = changes.dayStart === undefined || changes.dayStart < changes.dayEnd!;
+  return healthDraft('goal', ctx, {
+    day: undefined, goalChanges: changes, error: !found ? 'name' : !isWindowValid ? 'time' : undefined,
+  });
 }

@@ -66,7 +66,7 @@ describe('ввод текстом: время', () => {
     ['пара 10–12:30', { name: 'пара', start: '10:00', end: '12:30' }],
     ['пара 10:00 — 11:00', { name: 'пара', start: '10:00', end: '11:00' }],
     ['счёт 10-12', { kind: 'task', name: 'счёт 10-12', start: undefined }],
-    ['сон 23:40-07:30', { kind: 'event', error: 'time' }],
+    ['сон 23:40-07:30', { kind: 'event', error: 'time' }, { kinds: ['task', 'event'] }],
     ['созвон 23:30', { start: '23:30', end: undefined, error: 'time' }],
     ['созвон 23:00', { start: '23:00', end: '23:59', error: undefined }],
     ['созвон 25:00', { kind: 'task', name: 'созвон 25:00' }],
@@ -241,6 +241,91 @@ describe('ввод текстом: еда и вода', () => {
     ['купить молоко 2 л', { kind: 'task', name: 'купить молоко 2 л', waterMl: undefined }],
     ['кефир', { kind: 'water', waterMl: undefined }, { kind: 'water' }],
     ['гречка', { kind: 'food', name: 'гречка', nutrients: {} }, { kind: 'food' }],
+  ]);
+});
+
+describe('ввод текстом: здоровье (spec 020)', () => {
+  run([
+    ['сон 23:40-07:30', {
+      kind: 'sleep', start: '23:40', end: '07:30', minutes: 470, day: '2026-10-08', error: undefined,
+    }],
+    ['сон 00:50–07:36', { kind: 'sleep', start: '00:50', end: '07:36', minutes: 406 }],
+    ['спал 7,5 ч', { kind: 'sleep', minutes: 450, start: undefined }],
+    ['сон 7 ч 30 мин', { kind: 'sleep', minutes: 450 }],
+    ['сон', { kind: 'sleep', error: 'time' }],
+    ['сон 25:00-07:00', { kind: 'sleep', error: 'time' }],
+    ['сонная лощина', { kind: 'task', name: 'сонная лощина' }],
+    ['вес 72,4', { kind: 'metric', metric: 'weight', value: 72.4, day: '2026-10-08', error: undefined }],
+    ['Вес 80 кг', { kind: 'metric', metric: 'weight', value: 80 }],
+    ['давление 120/80', { kind: 'metric', metric: 'pressure', value: 120, value2: 80 }],
+    ['давление 130 на 85', { kind: 'metric', metric: 'pressure', value: 130, value2: 85 }],
+    ['давление 120', { kind: 'metric', metric: 'pressure', error: 'name' }],
+    ['пульс 64', { kind: 'metric', metric: 'pulse', value: 64 }],
+    ['шаги 9500', { kind: 'metric', metric: 'steps', value: 9500 }],
+    ['шаги 12 300', { kind: 'metric', metric: 'steps', value: 12300 }],
+    ['самочувствие 4', { kind: 'metric', metric: 'mood', value: 4 }],
+    ['самочувствие 7', { kind: 'metric', metric: 'mood', error: 'name' }],
+    ['вес книги проверить', { kind: 'metric', error: 'name' }],
+    ['вес книги проверить', { kind: 'task', name: 'вес книги проверить' }, { kind: 'task' }],
+    ['бег 5 км 28 мин', {
+      kind: 'workout', name: 'бег', distanceKm: 5, minutes: 28, day: '2026-10-08', error: undefined,
+    }],
+    ['Бег 10,5 км', { kind: 'workout', name: 'Бег', distanceKm: 10.5, minutes: undefined, error: undefined }],
+    ['зал присед 4x8x80, жим 3x10x60', {
+      kind: 'workout',
+      name: 'зал',
+      exercises: [{ name: 'присед', sets: 4, reps: 8, weight: 80 }, { name: 'жим', sets: 3, reps: 10, weight: 60 }],
+      error: undefined,
+    }],
+    ['зал подтягивания 3х8', { kind: 'workout', exercises: [{ name: 'подтягивания', sets: 3, reps: 8 }] }],
+    ['зал 60 мин', { kind: 'workout', name: 'зал', minutes: 60, start: undefined }],
+    ['зал', { kind: 'workout', error: 'minutes' }],
+    ['йога вчера 40 мин', { kind: 'workout', name: 'йога', day: '2026-10-07', minutes: 40 }],
+    ['отчёт вчера', { kind: 'task', name: 'отчёт', day: '2026-10-07' }],
+    // Тренировка с временем, на будущий день либо с повтором — событие календаря
+    ['зал завтра 19:00 60 мин', { kind: 'event', name: 'зал', day: '2026-10-09', start: '19:00', end: '20:00' }],
+    ['зал 19:00', { kind: 'event', name: 'зал', start: '19:00' }],
+    ['бег по вт и чт 7:00', { kind: 'event', name: 'бег' }],
+    ['зал завтра', { kind: 'task', name: 'зал', day: '2026-10-09' }],
+    ['зал завтра 19:00 60 мин', { kind: 'workout', name: 'зал', day: '2026-10-09', start: '19:00', minutes: 60 }, {
+      kind: 'workout',
+    }],
+    ['залить фундамент', { kind: 'task', name: 'залить фундамент' }],
+    ['обед гречка сахар 14 соль 0,5 520 ккал', {
+      kind: 'food', name: 'гречка', nutrients: { kcal: 520, sugar: 14, salt: 0.5 },
+    }],
+    ['цель белок 140 вода 2,5л сон 8ч день с 8 до 22', {
+      kind: 'goal',
+      day: undefined,
+      goalChanges: {
+        goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
+      },
+      error: undefined,
+    }],
+    ['цели ккал 2200 жиры 75 углеводы 260 клетчатка 30', {
+      kind: 'goal',
+      goalChanges: {
+        goals: {
+          kcal: 2200, fat: 75, carbs: 260, fiber: 30,
+        },
+        health: {},
+      },
+    }],
+    ['цель сахар 50 соль 5 вес 72 шаги 8000 бюджет 10 ч', {
+      kind: 'goal',
+      goalChanges: {
+        goals: {},
+        health: {
+          sugarMax: 50, saltMax: 5, weight: 72, steps: 8000,
+        },
+        budget: 600,
+      },
+    }],
+    ['цель вода 2000', { kind: 'goal', goalChanges: { goals: { water: 2000 }, health: {} } }],
+    ['цель день с 22 до 8', { kind: 'goal', error: 'time' }],
+    ['цель выучить язык', { kind: 'goal', error: 'name' }],
+    ['цель выучить язык', { kind: 'task', name: 'цель выучить язык' }, { kinds: ['task', 'event'] }],
+    ['целый день дома', { kind: 'task', name: 'целый день дома' }],
   ]);
 });
 

@@ -305,11 +305,14 @@ describe('планировщик ↔ движок: здоровье (spec 020)',
       },
     };
     const changes = diffChanges(empty, next);
-    const health = changes.filter((change) => 'health' in change).map((change) => change.health as Record<string, unknown>);
+    const health = changes.filter((change) => 'health' in change)
+      .map((change) => change.health as Record<string, unknown>);
     expect(health.map(({ id }) => id)).toEqual(['weight-2026-10-11', 'w1', 'health-goals']);
     expect(health[1].details).toBe('{"ex":[{"name":"присед","sets":4,"reps":8,"weight":80}]}');
     expect(JSON.parse(health[2].details as string).steps).toBe(10000);
-    const day = changes.find((change) => 'nutritionDay' in change)!.nutritionDay as { entries: Record<string, unknown>[] };
+    const day = changes.find((change) => 'nutritionDay' in change)!.nutritionDay as {
+      entries: Record<string, unknown>[];
+    };
     expect(day.entries[0]).toMatchObject({ sugar: 14, salt: null, time: '13:30' });
     // Удаление записи — надгробие
     expect(diffChanges(next, { ...next, health: [next.health[1]] }))
@@ -329,7 +332,8 @@ describe('планировщик ↔ движок: здоровье (spec 020)',
           details: '{"steps":9000,"sleepMinutes":450}',
         },
         {
-          id: 'x', day: '2026-10-11', kind: 'pulse', time: '', endTime: '', value: 64, value2: 0, name: '', details: 'не JSON',
+          id: 'x', day: '2026-10-11', kind: 'pulse', time: '', endTime: '', value: 64, value2: 0, name: '',
+          details: 'не JSON',
         },
       ],
     });
