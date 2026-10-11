@@ -651,35 +651,80 @@ try {
   await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
   await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await timeline.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
-  // Вид «Неделя» на телефоне: панели дня нет (она дублировала бы сетку), оси закреплены при прокрутке,
-  // нажатие на свободное время создаёт дело
+  // Вид «Неделя» на телефоне: полоса из семи дней и сетка выбранного дня под ней (панели дня и широкой
+  // сетки недели нет), вбок ничего не листается; нажатие на свободное время создаёт дело
   await planner.getByRole('button', { name: 'Planner settings' }).click();
+  assert.equal(await viewSelect.locator('option[value="week"]').innerText(), 'Day', 'на телефоне вид недели называется «День»');
   await viewSelect.selectOption('week');
   await sidePane.getByRole('button', { name: 'Close' }).first().click();
   const phoneWeek = planner.locator('[data-planner-view="week"]');
   await phoneWeek.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await timeline.count(), 0, 'в виде «Неделя» на телефоне шкалы дня быть не должно');
-  const axes = await phoneWeek.evaluate(async (week) => {
-    week.scrollTo(week.scrollWidth, week.scrollHeight);
-    await new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); });
-    // Рамка меряется после прокрутки: панель настроек ещё может закрываться и сдвигать сетку
-    const box = week.getBoundingClientRect();
-    const head = week.firstElementChild.getBoundingClientRect();
-    const hours = week.lastElementChild.firstElementChild.getBoundingClientRect();
-    const column = week.querySelector('[data-day]').getBoundingClientRect();
-    const result = {
-      scrolledX: week.scrollLeft, scrolledY: week.scrollTop,
-      headTop: head.top - box.top, hoursLeft: hours.left - box.left, columnWidth: column.width,
+  const stripDays = phoneWeek.locator('[data-day-strip] button');
+  const pickedStripDay = phoneWeek.locator('[data-day-strip] button[aria-pressed="true"]');
+  assert.equal(await stripDays.count(), 7, 'в полосе недели семь дней');
+  assert.equal(await pickedStripDay.getAttribute('data-day'), today, 'в полосе выбран сегодняшний день');
+  assert.equal(await stripDays.locator('[data-load]').count(), 7, 'у каждого дня полосы — полоска загрузки');
+  const phoneDayGrid = phoneWeek.locator('[data-day-grid]');
+  await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await phoneDayGrid.getByText('С телефона').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const weekGeometry = await phoneWeek.evaluate((week) => {
+    const strip = week.querySelector('[data-day-strip]').getBoundingClientRect();
+    const grid = week.querySelector('[data-day-grid]');
+    return {
+      stripLeft: strip.left, stripRight: strip.right, stripBottom: strip.bottom, gridTop: grid.getBoundingClientRect().top,
+      gridOverflow: grid.scrollWidth - grid.clientWidth, columns: grid.querySelectorAll('[style*="height"][data-day]').length,
+      pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
     };
-    week.scrollTo(0, 0);
-    return result;
   });
-  assert.ok(axes.scrolledX > 50 && axes.scrolledY > 50, `сетка недели должна листаться в обе стороны: ${JSON.stringify(axes)}`);
-  assert.ok(Math.abs(axes.headTop) < 2, `строка дней должна оставаться сверху: ${JSON.stringify(axes)}`);
-  assert.ok(Math.abs(axes.hoursLeft) < 2, `колонка часов должна оставаться слева: ${JSON.stringify(axes)}`);
-  assert.ok(axes.columnWidth >= 110, `колонки недели на телефоне должны быть шире: ${JSON.stringify(axes)}`);
+  assert.ok(weekGeometry.stripLeft >= 0 && weekGeometry.stripRight <= 390, `полоса дней должна помещаться в экран: ${JSON.stringify(weekGeometry)}`);
+  assert.ok(weekGeometry.stripBottom <= weekGeometry.gridTop + 1, `сетка дня должна стоять под полосой: ${JSON.stringify(weekGeometry)}`);
+  assert.equal(weekGeometry.columns, 1, `в сетке должен быть один день: ${JSON.stringify(weekGeometry)}`);
+  assert.ok(weekGeometry.gridOverflow <= 1 && weekGeometry.pageOverflow <= 0, `вбок ничего не должно листаться: ${JSON.stringify(weekGeometry)}`);
+  // Нажатие на день полосы выбирает его
+  const otherDay = (await stripDays.evaluateAll((items) => items.map((item) => item.dataset.day))).find((day) => day !== today);
+  await phoneWeek.locator(`[data-day-strip] button[data-day="${otherDay}"]`).click();
+  await phoneDayGrid.locator(`div[data-day="${otherDay}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await pickedStripDay.getAttribute('data-day'), otherDay, 'нажатие на день полосы выбирает его');
+  await phoneWeek.locator(`[data-day-strip] button[data-day="${today}"]`).click();
+  await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Горизонтальный жест по сетке дня листает дни (жест собирается из событий касания: мыши он не слушается)
+  const swipe = (selector, fromX, toX) => page.evaluate(([target, from, to]) => {
+    if (typeof Touch === 'undefined' || typeof TouchEvent === 'undefined') return false;
+    const element = document.querySelector(target);
+    const fire = (type, x) => {
+      const touch = new Touch({ identifier: 1, target: element, clientX: x, clientY: 400 });
+      element.dispatchEvent(new TouchEvent(type, {
+        bubbles: true, cancelable: true, touches: type === 'touchend' ? [] : [touch], changedTouches: [touch],
+      }));
+    };
+    fire('touchstart', from);
+    fire('touchend', to);
+    return true;
+  }, [selector, fromX, toX]);
+  const canSwipe = await swipe('#ParvanePlanner [data-day-grid]', 300, 80);
+  if (canSwipe) {
+    await phoneDayGrid.locator(`div[data-day="${tomorrowKey}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await swipe('#ParvanePlanner [data-day-grid]', 80, 300);
+    await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    // «Сегодня»: жест листает дни, а начатый на шкале дня (она сама листается вбок) — нет
+    await planner.locator('header').getByText('Today').first().click();
+    await planner.locator(`[data-planner-today="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await swipe('#ParvanePlanner [data-day-timeline] [data-hour]', 300, 80);
+    await page.waitForTimeout(300);
+    assert.equal(await planner.locator(`[data-planner-today="${today}"]`).count(), 1, 'жест по шкале дня не должен листать дни');
+    await swipe('#ParvanePlanner [data-today-tasks]', 300, 80);
+    await planner.locator(`[data-planner-today="${tomorrowKey}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await swipe('#ParvanePlanner [data-today-tasks]', 80, 300);
+    await planner.locator(`[data-planner-today="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await planner.locator('header').getByText('Calendar').first().click();
+    await phoneWeek.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    console.log('OK: телефон — жест листает дни на «Сегодня» и в сетке дня');
+  } else {
+    console.log('SKIP: событий касания в этом браузере нет — листание жестом не проверено');
+  }
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone-week.png` });
-  await phoneWeek.locator('div[data-day]').last().click({ position: { x: 30, y: 8 } });
+  await phoneDayGrid.locator('div[data-day]').last().click({ position: { x: 30, y: 8 } });
   await sidePane.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.ok(await sidePane.getByLabel('Start', { exact: true }).inputValue(), 'нажатие на свободное время недели задаёт начало');
   await planner.getByRole('button', { name: 'Cancel' }).click();
