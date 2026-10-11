@@ -2569,20 +2569,22 @@ export interface LangPair {
   'PlannerViewCalendar': undefined;
   'PlannerViewStatistics': undefined;
   'PlannerViewTasks': undefined;
-  'TaskOfferAccept': undefined;
-  'TaskOfferAccepted': undefined;
-  'TaskOfferAddToPlan': undefined;
   'TaskOfferAddedToPlan': undefined;
   'TaskOfferAlreadyInPlan': undefined;
   'TaskOfferDecline': undefined;
   'TaskOfferDeclined': undefined;
+  'TaskOfferEventAddedToPlan': undefined;
+  'TaskOfferEventAlreadyInPlan': undefined;
+  'TaskOfferEventLabel': undefined;
+  'TaskOfferInPlanOpen': undefined;
   'TaskOfferLabel': undefined;
   'TaskOfferMenuItem': undefined;
   'TaskOfferNeedsPlanner': undefined;
-  'TaskOfferOpenPlan': undefined;
   'TaskOfferSend': undefined;
   'TaskOfferSteps': undefined;
   'TaskOfferTitle': undefined;
+  'TaskOfferToCalendar': undefined;
+  'TaskOfferToPlan': undefined;
   'TaskOfferUnavailable': undefined;
   'PlannerCalView': undefined;
   'PlannerCalYear': undefined;
@@ -4602,6 +4604,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'TaskOfferDeclinedBy': {
     'names': V;
+  };
+  'TaskOfferEventSummary': {
+    'name': V;
   };
   'TaskOfferSummary': {
     'name': V;

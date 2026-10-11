@@ -5,12 +5,17 @@ import type { ApiMessage, ApiTaskOffer, ApiUser } from '../../../api/types';
 
 import { getUserFullName } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
-import { setParvaneSection } from '../../../util/parvaneSection';
 import { callApi } from '../../../api/gramjs';
+import { findOfferInPlan, getTaskOfferKind } from '../../../api/parvane/taskOffers';
+import { getPlannerState } from '../../parvane/planner/plannerStore';
+import { formatOfferWhen } from '../../parvane/taskOffer/taskOfferFormat';
+import { openOfferInPlan } from '../../parvane/taskOffer/taskOfferOpen';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
 
 import styles from './TaskOffer.module.scss';
@@ -28,14 +33,24 @@ type RespondResult = 'ok' | 'exists' | 'needs-linking' | 'no-key' | 'unavailable
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
-// Parvane (spec 011, US3): карточка задания в чате — поля задачи, кнопки
-// «Принять»/«Отклонить» у получателя, «В мой план» у автора, решения участников.
+// Parvane (spec 011, US3): карточка в чате — «Задание» либо «Событие» (то же
+// содержимое `task_offer`; событие — с днём и временем начала). Кнопка «В план» /
+// «В календарь» — прежнее «Принять»: запись в плане и ответ-статус автору; после
+// неё — «В плане · открыть». «Отклонить» и решения участников — как раньше.
 // У Telegram такого сообщения нет (обоснование — план спеки, принцип VI)
 const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
 
   const [isBusy, setIsBusy] = useState(false);
+  // Автор ответа себе не шлёт: его «в плане» — запись плана либо нажатие в этом сеансе
+  const [isAdded, setIsAdded] = useState(false);
+  const plannerState = useDerivedState(getPlannerState);
+
+  const kind = getTaskOfferKind(taskOffer);
+  const isEvent = kind === 'event';
+  const planned = findOfferInPlan(plannerState, taskOffer.id);
+  const isInPlan = Boolean(planned) || isAdded || taskOffer.myDecision === true;
 
   const respond = useLastCallback(async (isAccepted: boolean) => {
     const chat = getGlobal().chats.byId[message.chatId];
@@ -50,7 +65,13 @@ const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => 
       } else if (result === 'unavailable') {
         showNotification({ message: lang('TaskOfferUnavailable') });
       } else if (isAccepted) {
-        showNotification({ message: lang(result === 'exists' ? 'TaskOfferAlreadyInPlan' : 'TaskOfferAddedToPlan') });
+        setIsAdded(true);
+        const isKnown = result === 'exists';
+        showNotification({
+          message: isEvent
+            ? lang(isKnown ? 'TaskOfferEventAlreadyInPlan' : 'TaskOfferEventAddedToPlan')
+            : lang(isKnown ? 'TaskOfferAlreadyInPlan' : 'TaskOfferAddedToPlan'),
+        });
       }
     } finally {
       setIsBusy(false);
@@ -61,25 +82,32 @@ const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => 
   const handleDecline = useLastCallback(() => respond(false));
 
   const handleOpenPlan = useLastCallback(() => {
-    setParvaneSection('planner');
+    // Задача, принятая до появления «События», открывается как задача
+    openOfferInPlan(planned?.kind || kind, planned?.day || taskOffer.day);
   });
 
   const accepted = taskOffer.responses.filter((r) => r.isAccepted);
   const declined = taskOffer.responses.filter((r) => !r.isAccepted);
   const nameOf = (userId: string) => getUserFullName(usersById[userId]) || userId;
-  const when = [taskOffer.day, taskOffer.start].filter(Boolean).join(' ');
-  const meta = [
-    when,
-    taskOffer.minutes ? lang('PlannerMinutesValue', { minutes: taskOffer.minutes }) : undefined,
-    taskOffer.due ? lang('PlannerDueValue', { date: taskOffer.due }) : undefined,
-  ].filter(Boolean).join(' · ');
+  const meta = formatOfferWhen(lang, taskOffer);
 
   return (
-    <div className={styles.root} data-task-offer={taskOffer.id} data-decision={String(taskOffer.myDecision)}>
+    <div
+      className={styles.root}
+      data-task-offer={taskOffer.id}
+      data-kind={kind}
+      data-decision={String(taskOffer.myDecision)}
+      data-in-plan={String(isInPlan)}
+    >
       <div className={styles.head}>
-        <span className={styles.label}>{lang('TaskOfferLabel')}</span>
-        <span className={styles.name}>{taskOffer.name}</span>
-        {meta && <span className={styles.meta}>{meta}</span>}
+        <span className={buildClassName(styles.badge, isEvent && styles.badgeEvent)}>
+          <Icon name={isEvent ? 'calendar' : 'check'} />
+        </span>
+        <div className={styles.titles}>
+          <span className={styles.label}>{lang(isEvent ? 'TaskOfferEventLabel' : 'TaskOfferLabel')}</span>
+          <span className={styles.name}>{taskOffer.name}</span>
+          {meta && <span className={styles.meta}>{meta}</span>}
+        </div>
       </div>
       {taskOffer.description && <p className={styles.description}>{taskOffer.description}</p>}
       {Boolean(taskOffer.steps.length) && (
@@ -88,22 +116,25 @@ const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => 
         </ol>
       )}
       <div className={styles.actions}>
-        {taskOffer.isOwn ? (
-          <Button size="tiny" color="translucent" disabled={isBusy} onClick={handleAccept}>
-            {lang('TaskOfferAddToPlan')}
+        {isInPlan ? (
+          <Button
+            className={styles.inPlan}
+            size="tiny"
+            color="translucent"
+            iconName="check"
+            onClick={handleOpenPlan}
+          >
+            {lang('TaskOfferInPlanOpen')}
           </Button>
-        ) : taskOffer.myDecision === true ? (
-          <>
-            <span className={buildClassName(styles.status, styles.statusAccepted)}>{lang('TaskOfferAccepted')}</span>
-            <Button size="tiny" color="translucent" onClick={handleOpenPlan}>{lang('TaskOfferOpenPlan')}</Button>
-          </>
         ) : (
           <>
             {taskOffer.myDecision === false && (
-              <span className={buildClassName(styles.status, styles.statusDeclined)}>{lang('TaskOfferDeclined')}</span>
+              <span className={styles.status}>{lang('TaskOfferDeclined')}</span>
             )}
-            <Button size="tiny" disabled={isBusy} onClick={handleAccept}>{lang('TaskOfferAccept')}</Button>
-            {taskOffer.myDecision === undefined && (
+            <Button size="tiny" iconName="calendar" disabled={isBusy} onClick={handleAccept}>
+              {lang(isEvent ? 'TaskOfferToCalendar' : 'TaskOfferToPlan')}
+            </Button>
+            {!taskOffer.isOwn && taskOffer.myDecision === undefined && (
               <Button size="tiny" color="translucent" disabled={isBusy} onClick={handleDecline}>
                 {lang('TaskOfferDecline')}
               </Button>
