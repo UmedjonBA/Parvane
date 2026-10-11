@@ -1183,8 +1183,6 @@
 "ParvaneCloudErrorNameLong" = "Название слишком длинное.";
 "ParvaneCloudMoveTitle" = "Переместить в";
 "ParvaneCloudMoveHere" = "Переместить сюда";
-"ParvaneCloudViewList" = "Список";
-"ParvaneCloudViewGrid" = "Плитка";
 "ParvaneCloudSort" = "Сортировка";
 "ParvaneCloudSortName" = "По имени";
 "ParvaneCloudSortDate" = "По дате";
@@ -1240,7 +1238,6 @@
 "ParvaneCloudStopSharingConfirm" = "Папка и все файлы в ней будут удалены у всех участников.";
 "ParvaneCloudLeave" = "Покинуть папку";
 "ParvaneCloudLeaveConfirm" = "Вы потеряете доступ к файлам этой папки.";
-"ParvaneCloudInvites" = "Приглашения";
 "ParvaneCloudAccept" = "Принять";
 "ParvaneCloudDecline" = "Отклонить";
 "ParvaneCloudInviteText" = "Приглашение в папку «{name}» ({role})";
@@ -1251,6 +1248,19 @@
 "ParvaneCloudInviteGone" = "Приглашение больше не действует";
 "ParvaneCloudBack" = "Назад";
 "ParvaneCloudSharedFolders" = "Совместные папки";
+"ParvaneCloudView" = "Просмотр";
+"ParvaneCloudToTrash" = "В корзину";
+"ParvaneCloudFound" = "Найдено: {count} · во всех папках, кроме корзины";
+"ParvaneCloudInviteFrom" = "{name} приглашает в «{folder}»";
+"ParvaneCloudSharedCount" = "Папок: {count}";
+"ParvaneCloudSharedNone" = "Пока пусто";
+"ParvaneCloudTrashCount" = "Объектов: {count} · хранится 30 дней";
+"ParvaneCloudTrashNote" = "Через 30 дней после удаления объекты стираются навсегда. Стирает ваше устройство, поэтому без связи они лежат дольше.";
+"ParvaneCloudTrashDaysLeft_one" = "Удалится через {count} день";
+"ParvaneCloudTrashDaysLeft_few" = "Удалится через {count} дня";
+"ParvaneCloudTrashDaysLeft_many" = "Удалится через {count} дней";
+"ParvaneCloudTrashDaysLeft_other" = "Удалится через {count} дней";
+"ParvaneCloudTrashExpired" = "Удалится при следующей синхронизации";
 "PlannerAdd" = "Добавить";
 "PlannerAddFood" = "+ Запись";
 "PlannerAddTask" = "+ Задача";

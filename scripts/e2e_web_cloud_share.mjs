@@ -1,6 +1,7 @@
 // Совместные папки облака (spec 016, US6): владелец создаёт папку и зовёт
-// участника читателем — тот получает сообщение-приглашение, принимает его в
-// разделе, видит и скачивает файлы, но менять не может; редактор загружает и
+// участника читателем — тот получает сообщение-приглашение, принимает его
+// строкой вверху списка раздела, папка появляется в «Доступных мне», он видит и
+// скачивает файлы, но менять не может; поиск идёт по всем папкам; редактор загружает и
 // владелец это видит; понижение снова запрещает запись; удалённый участник
 // теряет папку и не получает новое; участник покидает папку сам; сервер видит
 // состав, но не имена и не содержимое.
@@ -76,6 +77,7 @@ try {
   const alice = `cs-alice-${suffix}@local`;
   const bob = `cs-bob-${suffix}@local`;
   const bobName = bob.split('@')[0];
+  const aliceName = alice.split('@')[0];
   sessions.alice = await preparePage(await browser.newContext({ viewport: WIDE, acceptDownloads: true }), alice, PASSWORD);
   sessions.bob = await preparePage(await browser.newContext({ viewport: WIDE, acceptDownloads: true }), bob, PASSWORD);
   const a = sessions.alice.page;
@@ -114,18 +116,35 @@ try {
   await openPrivateChatStrict(b, alice);
   await findMessageContainer(b, `Invitation to the folder “${FOLDER}” (reader)`).waitFor({ state: 'visible', timeout: SYNC });
   await bc.open();
-  await bc.tab('Shared with me').click();
+  // Приглашение — строкой вверху корня, ответ прямо в ней
   const inviteRow = bc.folderRow(FOLDER);
   await inviteRow.waitFor({ state: 'visible', timeout: SYNC });
   assert.equal(await inviteRow.getAttribute('data-container-kind'), 'invite', 'до принятия — приглашение');
-  await inviteRow.getByRole('button', { name: 'Open', exact: true }).click();
-  await b.locator('.Modal').getByRole('button', { name: 'Accept', exact: true }).click();
+  await inviteRow.getByText(`${aliceName} invites you to “${FOLDER}”`).waitFor({ state: 'visible' });
+  await inviteRow.getByRole('button', { name: 'Decline', exact: true }).waitFor({ state: 'visible' });
+  assert.equal(
+    await bc.cloud.locator('[role="list"] > [role="listitem"]').first().getAttribute('data-container-kind'), 'invite',
+    'приглашение стоит первой строкой',
+  );
+  assert.equal(await bc.virtual('shared').getAttribute('data-count'), '0', 'до принятия в «Доступных мне» пусто');
+  await inviteRow.getByRole('button', { name: 'Accept', exact: true }).click();
   await bc.item('план.txt').waitFor({ state: 'visible', timeout: SYNC });
+  assert.deepEqual(await bc.crumbs(), ['Cloud', 'Shared with me', FOLDER], 'принятая папка лежит в «Доступных мне»');
+  // «Доступные мне» — строка-папка в конце корня
+  await bc.root();
+  assert.equal(await bc.folderRow(FOLDER).count(), 0, 'приглашения в корне больше нет');
+  await bc.virtual('shared').getByText('Folders: 1').waitFor({ state: 'visible', timeout: STEP });
+  await bc.openShared();
+  assert.deepEqual(await bc.crumbs(), ['Cloud', 'Shared with me']);
+  assert.equal(await bc.folderRow(FOLDER).getAttribute('data-container-kind'), 'shared', 'после принятия — чужая папка');
+  await bc.folderRow(FOLDER).getByRole('button', { name: 'Leave folder', exact: true }).waitFor({ state: 'visible' });
+  await bc.folderRow(FOLDER).click();
+  await bc.item('план.txt').waitFor({ state: 'visible', timeout: STEP });
   assert.equal((await bc.download('план.txt')).toString(), CONTENT, 'читатель скачивает файл');
   // Читатель: ни загрузки, ни переименования, ни удаления
   assert.equal(await bc.cloud.getByRole('button', { name: 'Upload', exact: true }).count(), 0, 'у читателя нет загрузки');
   assert.equal(await bc.hasMenuAction('план.txt', 'Rename'), false, 'у читателя нет переименования');
-  assert.equal(await bc.hasMenuAction('план.txt', 'Delete'), false, 'у читателя нет удаления');
+  assert.equal(await bc.hasMenuAction('план.txt', 'Move to trash'), false, 'у читателя нет удаления');
   assert.deepEqual(serverView().grants, ['bob:1'], 'сервер знает состав и уровень чтения');
   console.log('OK: приглашение сообщением, принятие, читатель смотрит и скачивает, но не меняет');
 
@@ -167,7 +186,7 @@ try {
   console.log('OK: удалённый участник теряет папку и не получает новое');
 
   // ── Вторая папка: Боб редактор и уходит сам ───────────────────────────────
-  await ac.cloud.locator('nav').getByRole('button', { name: 'My files' }).click();
+  await ac.root();
   await ac.add('New shared folder');
   await a.locator('#parvane-cloud-shared-name').fill('Фото');
   await a.getByRole('button', { name: 'Create', exact: true }).click();
@@ -177,12 +196,15 @@ try {
   await second.getByRole('button', { name: 'Add people', exact: true }).click();
   await a.locator('.Modal .ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
   await second.locator(`[data-member="${bob}"]`).waitFor({ state: 'visible', timeout: STEP });
+  await bc.root();
   const photoInvite = bc.folderRow('Фото');
   await photoInvite.waitFor({ state: 'visible', timeout: SYNC });
-  await photoInvite.getByRole('button', { name: 'Open', exact: true }).click();
-  await b.locator('.Modal').getByRole('button', { name: 'Accept', exact: true }).click();
-  await bc.cloud.locator('nav').getByRole('button', { name: 'Sharing', exact: true }).click();
-  await b.locator('.Modal').getByRole('button', { name: 'Leave folder', exact: true }).click();
+  await photoInvite.getByRole('button', { name: 'Accept', exact: true }).click();
+  await bc.cloud.locator('nav').getByRole('button', { name: 'Фото', exact: true }).waitFor({ state: 'visible', timeout: SYNC });
+  // «Покинуть папку» — в строке «Доступных мне»
+  await bc.root();
+  await bc.openShared();
+  await bc.folderRow('Фото').getByRole('button', { name: 'Leave folder', exact: true }).click();
   await b.locator('.Modal').filter({ hasText: 'You will lose access' }).getByRole('button', { name: 'Leave folder', exact: true }).click();
   await bc.cloud.getByText('No one has shared a folder with you yet').waitFor({ state: 'visible', timeout: SYNC });
   // Владелец видит, что участников не осталось
@@ -199,7 +221,7 @@ try {
     await a.getByRole('button', { name: 'Create', exact: true }).click();
     await ac.item(name).waitFor({ state: 'visible', timeout: STEP });
   };
-  const toMyFiles = () => ac.cloud.locator('nav').getByRole('button', { name: 'My files' }).first().click();
+  const toMyFiles = () => ac.root();
   const moveTo = async (name, placeName) => {
     await ac.menu(name, 'Move');
     const dialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Move to' });
@@ -231,19 +253,35 @@ try {
   assert.equal(await ac.folderRow(ARCHIVE).getAttribute('data-container-kind'), 'owned', 'папка стала совместной');
   await ac.folderRow(ARCHIVE).click();
   assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл папки цел у владельца');
+  await bc.root();
   const archiveInvite = bc.folderRow(ARCHIVE);
   await archiveInvite.waitFor({ state: 'visible', timeout: SYNC });
-  await archiveInvite.getByRole('button', { name: 'Open', exact: true }).click();
-  await b.locator('.Modal').getByRole('button', { name: 'Accept', exact: true }).click();
+  await archiveInvite.getByRole('button', { name: 'Accept', exact: true }).click();
   await bc.item('отчёт.txt').waitFor({ state: 'visible', timeout: SYNC });
   await bc.item('Вложенная').click();
   assert.equal((await bc.download('глубоко.txt')).toString(), 'файл в глубине', 'участник читает вложенный файл');
   await bc.cloud.locator('nav').getByRole('button', { name: ARCHIVE }).click();
+  // Поиск идёт по всем папкам: участник находит файл чужой папки, владелец — своей совместной
+  const bobSearch = bc.cloud.getByRole('searchbox');
+  await bobSearch.fill('глубоко');
+  await bc.item('глубоко.txt').getByText(`Cloud / Shared with me / ${ARCHIVE} / Вложенная`).waitFor({ state: 'visible', timeout: STEP });
+  await bobSearch.fill('');
+  await bc.item('отчёт.txt').waitFor({ state: 'visible', timeout: STEP });
   console.log('OK: обычная папка стала совместной вместе с вложенным, участник читает файлы');
 
   // ── Перенос между личным диском и совместной папкой в обе стороны ─────────
   await toMyFiles();
   await ac.upload('личный.txt', 'с личного диска');
+  const aliceSearch = ac.cloud.getByRole('searchbox');
+  await aliceSearch.fill('.txt');
+  await ac.item('глубоко.txt').getByText(`Cloud / ${ARCHIVE} / Вложенная`).waitFor({ state: 'visible', timeout: STEP });
+  await ac.item('личный.txt').getByText('Cloud', { exact: true }).waitFor({ state: 'visible' });
+  const found = await ac.names();
+  for (const name of ['глубоко.txt', 'личный.txt', 'отчёт.txt', 'план.txt']) {
+    assert.ok(found.includes(name), `поиск по всем папкам должен найти ${name}: ${found.join(', ')}`);
+  }
+  await aliceSearch.fill('');
+  await ac.item('личный.txt').waitFor({ state: 'visible', timeout: STEP });
   await moveTo('личный.txt', ARCHIVE);
   await bc.item('личный.txt').waitFor({ state: 'visible', timeout: SYNC });
   assert.equal((await bc.download('личный.txt')).toString(), 'с личного диска', 'участник читает перенесённый файл');

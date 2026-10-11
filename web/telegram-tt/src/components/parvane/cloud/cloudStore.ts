@@ -13,14 +13,14 @@ import {
 // домена в движке. Экраны читают дерево (`parvaneCloudState`) и правят его
 // операциями движка (`parvaneCloudApply`); сведённое дерево возвращается
 // событием `parvane-cloud-changed`. Загрузки и скачивания идут в провайдере,
-// ход — событиями `parvane-cloud-transfer`. Вид и сортировка — настройка
-// устройства.
+// ход — событиями `parvane-cloud-transfer`. Сортировка — настройка устройства.
 
 export type CloudStatus = CloudDriveState['status'];
-export type CloudTab = 'drive' | 'shared' | 'trash';
-export type CloudPlace = { tab: CloudTab; container?: string; folder?: string };
-export type CloudViewMode = 'list' | 'grid';
-export type CloudPrefs = { view: CloudViewMode; sort: CloudSort };
+// Строки-папки в конце корня: принятые чужие папки и корзина
+export type CloudVirtualFolder = 'shared' | 'trash';
+// Место в едином списке: корень, строка-папка корня, контейнер (совместная папка), папка внутри
+export type CloudPlace = { view?: CloudVirtualFolder; container?: string; folder?: string };
+export type CloudPrefs = { sort: CloudSort };
 export type CloudTransfer = {
   id: string;
   kind: 'upload' | 'download' | 'move';
@@ -47,13 +47,13 @@ const DONE_HIDE_MS = 4000;
 const USAGE_REFRESH_MS = 1600;
 // Файлы крупнее сохраняются сразу на диск (если браузер умеет), а не через память
 const STREAM_DOWNLOAD_BYTES = 64 * 1024 * 1024;
-const DEFAULT_PREFS: CloudPrefs = { view: 'list', sort: { key: 'name', isDescending: false } };
+const DEFAULT_PREFS: CloudPrefs = { sort: { key: 'name', isDescending: false } };
 const ROOT = 'root';
 
 const [getCloudData, setCloudData] = createSignal<CloudDriveState | undefined>(undefined);
 const [getIsCloudLoaded, setIsCloudLoaded] = createSignal(false);
 const [getCloudStatus, setCloudStatus] = createSignal<CloudStatus>('loading');
-const [getCloudPlace, setCloudPlaceSignal] = createSignal<CloudPlace>({ tab: 'drive' });
+const [getCloudPlace, setCloudPlaceSignal] = createSignal<CloudPlace>({});
 const [getCloudTransfers, setCloudTransfers] = createSignal<CloudTransfer[]>([]);
 const [getCloudUsage, setCloudUsage] = createSignal<CloudUsage | undefined>(undefined);
 const [getCloudPrefs, setCloudPrefsSignal] = createSignal<CloudPrefs>(readPrefs());
@@ -78,7 +78,6 @@ function readPrefs(): CloudPrefs {
     const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null') as Partial<CloudPrefs> | null;
     if (!saved) return DEFAULT_PREFS;
     return {
-      view: saved.view === 'grid' ? 'grid' : 'list',
       sort: {
         key: saved.sort?.key === 'date' || saved.sort?.key === 'size' ? saved.sort.key : 'name',
         isDescending: Boolean(saved.sort?.isDescending),
@@ -156,13 +155,14 @@ export async function refreshCloud(): Promise<CloudDriveState | undefined> {
 function fixPlace(data: CloudDriveState) {
   const place = getCloudPlace();
   if (place.container && !data.containers.some((c) => c.id === place.container)) {
-    setCloudPlaceSignal({ tab: place.tab });
+    // Чужая папка пропала — остаться в «Доступных мне», своя — в корне
+    setCloudPlaceSignal(place.view ? { view: place.view } : {});
     return;
   }
   if (!place.folder) return;
   const id = place.container || data.rootId;
   const folder = id ? data.trees[id]?.nodes.find((n) => n.id === place.folder) : undefined;
-  if (!folder || folder.trashed) setCloudPlaceSignal({ tab: place.tab, container: place.container });
+  if (!folder || folder.trashed) setCloudPlaceSignal({ view: place.view, container: place.container });
 }
 
 // `userId` — текущий аккаунт: при его смене в той же вкладке состояние читается заново
@@ -191,7 +191,7 @@ function resetCloud() {
   setCloudData(undefined);
   setIsCloudLoaded(false);
   setCloudStatus('loading');
-  setCloudPlaceSignal({ tab: 'drive' });
+  setCloudPlaceSignal({});
   setCloudTransfers([]);
   setCloudUsage(undefined);
   uploadSpecs.clear();
@@ -388,6 +388,27 @@ export async function emptyCloudTrash() {
     byContainer.set(container, [...(byContainer.get(container) || []), node]);
   });
   for (const [container, nodes] of byContainer) await purgeCloudNodes(container, nodes);
+}
+
+// ── совместные папки ─────────────────────────────────────────────────────────
+
+async function callShared(method: string, args: Record<string, unknown>) {
+  const result = await callParvane(method, args).catch(() => undefined) as CloudResult | undefined;
+  if (!result?.ok) showCloudNotice(result?.error || 'rejected');
+  await refreshCloud();
+  return Boolean(result?.ok);
+}
+
+/** Ответить на приглашение в чужую папку; принятая сразу открывается. */
+export async function answerCloudInvite(container: string, isAccepted: boolean) {
+  const isDone = await callShared('parvaneCloudAnswerInvite', { container, isAccepted });
+  if (isDone && isAccepted && getContainer(container)) setCloudPlaceSignal({ view: 'shared', container });
+  return isDone;
+}
+
+/** Покинуть чужую совместную папку. */
+export function leaveCloudFolder(container: string) {
+  return callShared('parvaneCloudLeave', { container });
 }
 
 // ── загрузка и скачивание ────────────────────────────────────────────────────

@@ -1,5 +1,7 @@
+import type { CloudNode } from '../../../components/parvane/cloud/cloudModel';
 import type { Protocol, PvClient } from './engine';
 
+import { expiredTrashOf } from '../../../components/parvane/cloud/cloudModel';
 import { V2Error } from './transport';
 
 // Parvane (spec 016): раздел «Облако» — контейнеры домена `cloud.v1` (шард
@@ -485,13 +487,39 @@ export function createCloudSync(deps: Deps) {
     deps.onChanged();
   }
 
+  /** Срок корзины: сервер не знает, что в ней лежит, — пролежавшее дольше срока
+   * стирает устройство владельца (в совместной папке — только владелец). */
+  async function purgeExpiredTrash(id: string): Promise<boolean> {
+    const client = deps.client();
+    const container = engineContainers().find((c) => c.id === id);
+    const isOwner = container?.role === 'owner' || id === rootId();
+    if (!client || !container || !isOwner || !client.cloudHasKey(id)) return false;
+    const json = client.cloudStateJson(id);
+    if (!json) return false;
+    const now = Date.now();
+    const expired = expiredTrashOf((JSON.parse(json) as { nodes?: CloudNode[] }).nodes || [], now);
+    if (!expired.length) return false;
+    deps.log(`облако: срок корзины вышел у ${expired.length} объектов — стираются`);
+    try {
+      await applyNow(id, expired.map((n) => ({ op: 'purge', id: n.id, at: now })));
+    } catch (e) {
+      // Движок правку не принял — синхронизация из-за этого останавливаться не должна
+      deps.log(`облако: корзина не очищена: ${String(e)}`);
+      return false;
+    }
+    await sendOutbox(id);
+    return true;
+  }
+
   async function syncContainer(id: string): Promise<boolean> {
     try {
       await sendOutbox(id);
       const changed = await pull(id);
+      // После журнала: восстановленное на другом устройстве уже не в корзине
+      const purged = await purgeExpiredTrash(id);
       await maybeSnapshot(id);
       await collectGarbage(id);
-      return changed;
+      return changed || purged;
     } catch (e) {
       if (errorCode(e) === 'ERROR_CODE_NOT_FOUND') {
         dropContainer(id);

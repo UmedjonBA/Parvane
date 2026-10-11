@@ -1,5 +1,6 @@
 // Общие шаги сценариев раздела «Облако» (spec 016): вход в раздел, строки
-// дерева, меню действий, загрузка, скачивание.
+// дерева, путь, строки-папки корня («Доступные мне», «Корзина»), меню
+// действий, загрузка, скачивание.
 import { readFileSync } from 'node:fs';
 
 export const CLOUD_STEP_TIMEOUT_MS = 20000;
@@ -8,12 +9,25 @@ export function cloudDriver(page) {
   const cloud = page.locator('#ParvaneCloud');
   const item = (name) => cloud.locator(`[data-node-id][data-name="${name}"]`);
   const folderRow = (name) => cloud.locator(`[data-container-id][data-name="${name}"]`);
-  const tab = (title) => cloud.locator('header').getByText(title, { exact: true }).first();
+  // Строки-папки в конце корня: 'shared' — «Доступные мне», 'trash' — «Корзина»
+  const virtual = (view) => cloud.locator(`[data-virtual="${view}"]`);
+  const openVirtual = async (view) => {
+    await virtual(view).click();
+    await page.locator(`#ParvaneCloud[data-place="${view}"]`).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
+  };
   const api = {
     cloud,
     item,
     folderRow,
-    tab,
+    virtual,
+    // Путь сверху списка (без кнопки доступа к совместной папке)
+    crumbs: () => cloud.locator('nav span > button').allInnerTexts(),
+    root: async () => {
+      await cloud.locator('nav').getByRole('button', { name: 'Cloud', exact: true }).click();
+      await virtual('trash').waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
+    },
+    openShared: () => openVirtual('shared'),
+    openTrash: () => openVirtual('trash'),
     open: async () => {
       if (!(await cloud.isVisible().catch(() => false))) {
         await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Cloud' }).click();
@@ -36,7 +50,7 @@ export function cloudDriver(page) {
     hasMenuAction: async (name, action) => {
       await item(name).hover();
       await item(name).getByRole('button', { name: 'Actions' }).click();
-      await page.getByRole('menuitem', { name: 'Open', exact: true }).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
+      await page.getByRole('menuitem', { name: /^(Open|View)$/ }).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
       const found = await page.getByRole('menuitem', { name: action, exact: true }).count();
       // Меню закрывается нажатием мимо него
       await page.mouse.click(700, 600);

@@ -100,8 +100,8 @@ try {
 
   // ── Копии независимы: Алиса стирает файл из облака навсегда ───────────────
   await ac.open();
-  await ac.menu('договор.txt', 'Delete');
-  await ac.tab('Trash').click();
+  await ac.menu('договор.txt', 'Move to trash');
+  await ac.openTrash();
   await ac.menu('договор.txt', 'Delete forever');
   await a.locator('.Modal').getByRole('button', { name: 'Delete forever', exact: true }).click();
   await ac.item('договор.txt').waitFor({ state: 'detached', timeout: STEP });

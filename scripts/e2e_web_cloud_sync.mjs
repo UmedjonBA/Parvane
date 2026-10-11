@@ -42,8 +42,7 @@ function driver(page) {
       await cloud.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
     },
     root: async () => {
-      await cloud.locator('header').getByText('My files', { exact: true }).first().click();
-      await cloud.locator('nav').getByRole('button', { name: 'My files' }).click();
+      await cloud.locator('nav').getByRole('button', { name: 'Cloud', exact: true }).click();
     },
     names: () => cloud.locator('[role="listitem"][data-node-id]')
       .evaluateAll((els) => els.map((el) => el.dataset.name).sort()),
@@ -193,7 +192,7 @@ try {
   await a.item('Со второго').waitFor({ state: 'visible', timeout: 15000 });
   await a.rename('план.txt', 'план-2.txt');
   await b.item('план-2.txt').waitFor({ state: 'visible', timeout: 15000 });
-  await a.menu('Со второго', 'Delete');
+  await a.menu('Со второго', 'Move to trash');
   await b.item('Со второго').waitFor({ state: 'detached', timeout: 15000 });
   console.log('OK: правки онлайн видны на другом устройстве не позже чем через 15 с');
 

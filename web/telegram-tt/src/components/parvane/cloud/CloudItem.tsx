@@ -1,13 +1,9 @@
-import {
-  memo, useEffect, useRef, useState,
-} from '../../../lib/teact/teact';
+import { memo, useRef } from '../../../lib/teact/teact';
 
 import type { CloudNode } from './cloudModel';
-import type { CloudViewMode } from './cloudStore';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
-import { callApi } from '../../../api/gramjs';
 import { getColorFromExtension } from '../../common/helpers/documentInfo';
 import { getExtension, kindOfFile } from './cloudModel';
 
@@ -26,9 +22,10 @@ export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete'
 type OwnProps = {
   container: string;
   node: CloudNode;
-  view: CloudViewMode;
-  // Подпись под именем: путь (поиск) либо размер папки
+  // Подпись под именем: путь (поиск), срок (корзина)
   hint?: string;
+  // Корзина: сколько дней осталось до стирания
+  daysLeft?: number;
   folderSize?: number;
   isSelected?: boolean;
   isTrash?: boolean;
@@ -46,30 +43,15 @@ function stopEvent(e: React.MouseEvent) {
   e.stopPropagation();
 }
 
-const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
-
-// Parvane (spec 016): строка либо плитка файла/папки. Нажатие открывает,
-// флажок выделяет, «⋯» — действия.
+// Parvane (spec 016): строка файла/папки. Нажатие открывает, флажок выделяет,
+// «⋯» — действия.
 const CloudItem = ({
-  container, node, view, hint, folderSize, isSelected, isTrash, canEdit, canShare, onOpen, onToggle, onAction,
+  container, node, hint, daysLeft, folderSize, isSelected, isTrash, canEdit, canShare, onOpen, onToggle, onAction,
 }: OwnProps) => {
   const lang = useLang();
   const isFolder = node.kind === 'folder';
   const extension = getExtension(node.name);
   const fileKind = isFolder ? undefined : kindOfFile(node.mime, node.name);
-  const [thumbUrl, setThumbUrl] = useState<string>();
-  const hasThumb = Boolean(node.thumb) && view === 'grid';
-
-  useEffect(() => {
-    if (!hasThumb) return undefined;
-    let isActual = true;
-    void callParvane('parvaneCloudThumb', { container, node: node.id }).then((url) => {
-      if (isActual && typeof url === 'string') setThumbUrl(url);
-    }).catch(() => undefined);
-    return () => {
-      isActual = false;
-    };
-  }, [container, node.id, hasThumb]);
 
   // Нажатие мимо открытого меню закрывает его (по mousedown); следующий за ним
   // click браузер отдаёт строке — он не должен ни открыть файл, ни снова открыть меню
@@ -117,12 +99,12 @@ const CloudItem = ({
 
   return (
     <div
-      className={buildClassName(
-        styles.item, view === 'grid' ? styles.tile : styles.row, isSelected && styles.itemSelected,
-      )}
+      className={buildClassName(styles.item, styles.row, isSelected && styles.itemSelected)}
       role="listitem"
       tabIndex={0}
       data-node-id={node.id}
+      data-container={container}
+      data-days-left={daysLeft}
       data-kind={node.kind}
       data-name={node.name}
       onClick={handleOpen}
@@ -144,12 +126,8 @@ const CloudItem = ({
           isFolder ? styles.itemIconFolder : styles[`itemIcon_${getColorFromExtension(extension)}`],
         )}
       >
-        {thumbUrl ? <img className={styles.itemThumb} src={thumbUrl} alt="" draggable={false} /> : (
-          <>
-            <Icon name={iconName} />
-            {!isFolder && extension && <span className={styles.itemExtension}>{extension.slice(0, 4)}</span>}
-          </>
-        )}
+        <Icon name={iconName} />
+        {!isFolder && extension && <span className={styles.itemExtension}>{extension.slice(0, 4)}</span>}
       </div>
       <div className={styles.itemText}>
         <div className={styles.itemName} title={node.name} dir="auto">{node.name}</div>
@@ -167,18 +145,20 @@ const CloudItem = ({
             </>
           ) : (
             <>
-              <MenuItem icon={isFolder ? 'folder' : 'eye'} onClick={run('open')}>{lang('ParvaneCloudOpen')}</MenuItem>
+              <MenuItem icon={isFolder ? 'folder' : 'eye'} onClick={run('open')}>
+                {lang(isFolder ? 'ParvaneCloudOpen' : 'ParvaneCloudView')}
+              </MenuItem>
               {!isFolder && (
                 <MenuItem icon="download" onClick={run('download')}>{lang('ParvaneCloudDownload')}</MenuItem>
               )}
-              {!isFolder && <MenuItem icon="forward" onClick={run('send')}>{lang('ParvaneCloudSendToChat')}</MenuItem>}
               {canShare && isFolder && (
                 <MenuItem icon="add-user" onClick={run('share')}>{lang('ParvaneCloudShare')}</MenuItem>
               )}
-              {canEdit && <MenuItem icon="edit" onClick={run('rename')}>{lang('ParvaneCloudRename')}</MenuItem>}
+              {!isFolder && <MenuItem icon="forward" onClick={run('send')}>{lang('ParvaneCloudSendToChat')}</MenuItem>}
               {canEdit && <MenuItem icon="folder" onClick={run('move')}>{lang('ParvaneCloudMove')}</MenuItem>}
+              {canEdit && <MenuItem icon="edit" onClick={run('rename')}>{lang('ParvaneCloudRename')}</MenuItem>}
               {canEdit && (
-                <MenuItem icon="delete" destructive onClick={run('delete')}>{lang('ParvaneCloudDelete')}</MenuItem>
+                <MenuItem icon="delete" destructive onClick={run('delete')}>{lang('ParvaneCloudToTrash')}</MenuItem>
               )}
             </>
           )}

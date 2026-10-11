@@ -13,6 +13,9 @@ export type CloudNameError = 'empty' | 'too-long' | 'bad-chars' | 'reserved';
 
 export const CLOUD_NAME_MAX_BYTES = 255;
 export const CLOUD_MAX_NODES = 8000;
+// Срок корзины: старше — стирает устройство владельца при синхронизации
+export const CLOUD_TRASH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 // eslint-disable-next-line no-control-regex
 const BAD_NAME_CHARS = /[/\\\u0000-\u001f\u007f]/;
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']);
@@ -120,6 +123,19 @@ export function searchNodes(nodes: CloudNode[], query: string) {
 /** Корзина: то, что положили в неё явно (потомки идут вместе с папкой). */
 export function trashOf(nodes: CloudNode[]) {
   return nodes.filter((n) => n.trashTop).sort((a, b) => b.trashedAt - a.trashedAt);
+}
+
+/** Положенное в корзину и пролежавшее там дольше срока (потомки стираются вместе с папкой). */
+export function expiredTrashOf(nodes: CloudNode[], now: number, lifetimeMs = CLOUD_TRASH_LIFETIME_MS) {
+  return nodes.filter((n) => n.trashTop && n.trashedAt > 0 && now - n.trashedAt >= lifetimeMs);
+}
+
+/** Сколько полных или начатых дней узлу осталось лежать в корзине (0 — срок вышел);
+ * не больше срока, даже если часы положившего в корзину спешат. */
+export function trashDaysLeft(node: CloudNode, now: number, lifetimeMs = CLOUD_TRASH_LIFETIME_MS) {
+  const whole = Math.ceil(lifetimeMs / DAY_MS);
+  if (!node.trashedAt) return whole;
+  return Math.min(whole, Math.max(0, Math.ceil((node.trashedAt + lifetimeMs - now) / DAY_MS)));
 }
 
 /** Размеры: всё содержимое и отдельно корзина (файлы, сами и внутри папок). */
