@@ -629,3 +629,14 @@
 .canvasFormText {
   min-height: 6rem;
 }
+
+// Кнопки мессенджера по умолчанию во всю ширину — в строках раздела они по содержимому
+.noteHead,
+.graphBar,
+.canvasEmpty,
+.graphCard {
+  :global(.Button) {
+    flex: 0 0 auto;
+    width: auto;
+  }
+}

@@ -19,7 +19,7 @@ import {
   buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNote, renameLinks,
 } from './notesModel';
 import {
-  applyNoteTasks, applyPlannerToNote, getNoteTasks, planNoteTasks,
+  applyNoteTasks, applyPlannerToNote, getNoteTasks, markerOfTask, planNoteTasks,
 } from './notesTasks';
 
 export type NoteEntry = NoteSource & {
@@ -97,9 +97,10 @@ async function readText(node: CloudNode): Promise<{ fileId: string; text: string
 }
 
 async function syncFromCloud(data: CloudDriveState | undefined) {
+  // Облако ещё не прочитано — ждём; прочитано, но личного диска нет (создастся первой заметкой) — пусто
+  if (!data) return;
   const rootId = rootIdOf(data);
-  if (!rootId) return;
-  const nodes = getNodes(rootId, data);
+  const nodes = rootId ? getNodes(rootId, data) : [];
   const vault = findVault(nodes);
   const files = !vault ? [] : nodes
     .filter((node) => node.kind === 'file' && !node.trashed)
@@ -134,7 +135,7 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   notes.sort((a, b) => b.updatedAt - a.updatedAt || (a.title < b.title ? -1 : 1));
   canvases.sort((a, b) => (a.title < b.title ? -1 : 1));
   notes.forEach((note) => parseNote(note.text).tasks.forEach((task) => {
-    if (task.marker && getNoteTasks(getPlannerState(), note.id).some((t) => t.source!.opId === task.marker)) {
+    if (task.marker && getNoteTasks(getPlannerState(), note.id).some((t) => markerOfTask(t) === task.marker)) {
       knownMarkers.add(task.marker);
     }
   }));
@@ -247,7 +248,7 @@ function quickContext() {
 
 async function writeNote(note: NoteEntry, text: string, expectedFileId?: string): Promise<WriteResult> {
   return callParvane('parvaneCloudWriteText', {
-    container: ROOT, node: note.id, name: `${note.title}${NOTE_EXTENSION}`, text, expectedFileId,
+    container: rootIdOf() || ROOT, node: note.id, name: `${note.title}${NOTE_EXTENSION}`, text, expectedFileId,
   }).catch(() => undefined) as Promise<WriteResult>;
 }
 
@@ -335,7 +336,7 @@ export async function saveCanvas(title: string, text: string, vaultName: string,
   if (!vault) return undefined;
   const existing = canvasId ? getCanvases().find(({ id }) => id === canvasId) : undefined;
   const result = await callParvane('parvaneCloudWriteText', {
-    container: ROOT,
+    container: rootIdOf() || ROOT,
     parent: vault,
     node: existing?.id,
     name: `${existing?.title || title}${CANVAS_EXTENSION}`,

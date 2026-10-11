@@ -8,6 +8,7 @@ import type { NoteEntry } from './notesStore';
 import buildClassName from '../../../util/buildClassName';
 import { consumeNoteRequest, getKnowledgeView, getNoteRequest } from '../../../util/parvaneSection';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
+import { parseNote } from './notesModel';
 import {
   applyPlannerToNotes, createNote, deleteNote, findNoteByTitle, getCanvases, getNotes, getNotesIndex,
   getNotesNotice, getNotesStatus, loadNotes, renameNote, saveNote,
@@ -30,6 +31,7 @@ import styles from './Knowledge.module.scss';
 
 const NARROW_WIDTH = 925;
 const NOTICE_HIDE_MS = 6000;
+const PREVIEW_MAX = 140;
 const NOTICE_KEYS = {
   conflict: 'KnowledgeNoticeConflict',
   merged: 'KnowledgeNoticeMerged',
@@ -38,6 +40,16 @@ const NOTICE_KEYS = {
 
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
+}
+
+// Строка под названием в списке: первая содержательная строка текста, не повторяющая само название
+function previewOf(note: NoteEntry) {
+  const title = note.title.trim().toLowerCase();
+  const line = parseNote(note.text).body.split('\n')
+    .map((item) => item.replace(/^#+\s*|^[-*+] (\[[ xX]\] )?/, '')
+      .replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, '$1').trim())
+    .find((item) => item && item.toLowerCase() !== title);
+  return (line || '').slice(0, PREVIEW_MAX);
 }
 
 // Parvane: раздел «Знания» — заметки `.md` в зашифрованной папке облака, граф связей и холсты.
@@ -187,7 +199,7 @@ const Knowledge = () => {
                       onClick={handlePick}
                     >
                       <span className={styles.rowTitle}>{note.title}</span>
-                      <span className={styles.rowPreview}>{index.byId(note.id)?.parsed.preview}</span>
+                      <span className={styles.rowPreview}>{previewOf(note)}</span>
                     </button>
                   ))}
                 </section>

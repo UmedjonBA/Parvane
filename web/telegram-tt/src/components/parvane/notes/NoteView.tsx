@@ -116,8 +116,9 @@ const NoteView = ({
     setTitle(e.currentTarget.value);
   });
 
-  const handleTitleBlur = useLastCallback(() => {
-    const next = title.trim();
+  // Значение берётся из самого поля: уход фокуса может прийти раньше перерисовки с набранным текстом
+  const handleTitleBlur = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    const next = e.currentTarget.value.trim();
     if (next && next !== note.title) onRename(note.id, next);
     else setTitle(note.title);
   });

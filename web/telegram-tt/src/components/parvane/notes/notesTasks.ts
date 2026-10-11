@@ -1,6 +1,7 @@
 // Пункты заметки с датой ↔ задачи «Плана» (дизайн, раздел 2): пункт `- [ ]`, в котором есть дата либо срок,
 // становится задачей; связь держит метка в конце строки (`^t7f3a`) — пункт можно двигать и править.
-// Задача помнит заметку и метку в поле источника (`source.chat = note:<id>`, `source.opId = <метка>`).
+// Задача помнит заметку и метку в поле источника: `source.chat = note:<id>`, `source.opId` — метка,
+// записанная шестнадцатеричными кодами её символов (движок принимает в `opId` только такие цифры).
 
 import type { PlannerState, PlannerTask } from '../planner/plannerModel';
 import type { QuickContext } from '../planner/plannerQuick';
@@ -24,6 +25,16 @@ const NOTE_SOURCE_PREFIX = 'note:';
 
 export function noteSourceOf(noteId: string) {
   return `${NOTE_SOURCE_PREFIX}${noteId}`;
+}
+
+function markerToOpId(marker: string) {
+  return Array.from(marker, (char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+}
+
+/** Метка пункта, с которым связана задача. */
+export function markerOfTask(task: PlannerTask) {
+  const opId = task.source?.opId || '';
+  return (opId.match(/../g) || []).map((code) => String.fromCharCode(parseInt(code, 16))).join('');
 }
 
 export function noteTaskId(marker: string) {
@@ -65,7 +76,7 @@ export function applyNoteTasks(state: PlannerState, noteId: string, tasks: NoteT
   const source = noteSourceOf(noteId);
   const markers = new Set(tasks.map(({ marker }) => marker));
   const before = JSON.stringify(state.tasks);
-  state.tasks = state.tasks.filter((task) => task.source?.chat !== source || markers.has(task.source.opId));
+  state.tasks = state.tasks.filter((task) => task.source?.chat !== source || markers.has(markerOfTask(task)));
   tasks.forEach((plan) => {
     const id = noteTaskId(plan.marker);
     const existing = state.tasks.find((task) => task.id === id);
@@ -84,7 +95,7 @@ export function applyNoteTasks(state: PlannerState, noteId: string, tasks: NoteT
       status: plan.isDone ? 'done' : 'queue',
       project: '',
       rank: Math.min(0, ...state.tasks.map(({ rank }) => rank)) - 1,
-      source: { chat: source, opId: plan.marker },
+      source: { chat: source, opId: markerToOpId(plan.marker) },
       ...fields,
       name: plan.name,
     });
@@ -96,7 +107,7 @@ export function applyNoteTasks(state: PlannerState, noteId: string, tasks: NoteT
  * `known` — метки, которые уже были связаны с задачами (иначе новый пункт сочли бы удалённым). */
 export function applyPlannerToNote(text: string, tasks: PlannerTask[], known: ReadonlySet<string>) {
   let next = text;
-  const byMarker = new Map(tasks.map((task) => [task.source!.opId, task]));
+  const byMarker = new Map(tasks.map((task) => [markerOfTask(task), task]));
   parseNote(text).tasks.forEach((item) => {
     if (!item.marker) return;
     const task = byMarker.get(item.marker);

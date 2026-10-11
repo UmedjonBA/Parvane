@@ -4,7 +4,7 @@ import type { QuickContext } from '../planner/plannerQuick';
 
 import { createEmptyPlannerState } from '../planner/plannerModel';
 import {
-  applyNoteTasks, applyPlannerToNote, getNoteTasks, noteTaskId, planNoteTasks,
+  applyNoteTasks, applyPlannerToNote, getNoteTasks, markerOfTask, noteTaskId, planNoteTasks,
 } from './notesTasks';
 
 const CTX: QuickContext = {
@@ -45,7 +45,9 @@ describe('заметки: пункты с датой → задачи плана
     expect(applyNoteTasks(state, 'n1', first.tasks)).toBe(true);
     expect(getNoteTasks(state, 'n1').map(({ id, status }) => [id, status]))
       .toEqual([[noteTaskId('ta001'), 'queue'], [noteTaskId('ta002'), 'done']]);
-    expect(state.tasks[0].source).toEqual({ chat: 'note:n1', opId: 'ta001' });
+    // Метка в источнике — шестнадцатеричными кодами символов
+    expect(state.tasks[0].source).toEqual({ chat: 'note:n1', opId: '7461303031' });
+    expect(markerOfTask(state.tasks[0])).toBe('ta001');
     expect(applyNoteTasks(state, 'n1', first.tasks)).toBe(false);
 
     // Пункт отмечен и перенесён, второй пункт удалён из заметки
