@@ -11,7 +11,7 @@ import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import { parseNote } from './notesModel';
 import {
   applyPlannerToNotes, createNote, deleteNote, findNoteByTitle, getCanvases, getNotes, getNotesIndex,
-  getNotesNotice, getNotesStatus, loadNotes, renameNote, saveNote,
+  getNotesNotice, getNotesStatus, loadNotes, openDailyNote, renameNote, saveNote,
 } from './notesStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -32,6 +32,7 @@ import styles from './Knowledge.module.scss';
 const NARROW_WIDTH = 925;
 const NOTICE_HIDE_MS = 6000;
 const PREVIEW_MAX = 140;
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 const NOTICE_KEYS = {
   conflict: 'KnowledgeNoticeConflict',
   merged: 'KnowledgeNoticeMerged',
@@ -96,7 +97,10 @@ const Knowledge = () => {
   // Ссылка на заметку, которой ещё нет, создаёт её
   const openTitle = useLastCallback(async (title: string) => {
     const existing = findNoteByTitle(title);
-    const id = existing?.id || await createNote(title, vaultName);
+    // Название-дата — заметка дня: создаётся по шаблону в своей папке
+    const id = existing?.id || (DAY_KEY.test(title)
+      ? await openDailyNote(title, vaultName, lang('KnowledgeDailyFolder'))
+      : await createNote(title, vaultName));
     if (id) setOpenId(id);
   });
 

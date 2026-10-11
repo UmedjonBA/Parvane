@@ -38,7 +38,10 @@ const ZOOM_STEP = 1.25;
 const GROUP_WIDTH = 420;
 const GROUP_HEIGHT = 280;
 const NOTE_HEIGHT = 140;
-const NEW_OFFSET = 24;
+// Новая карточка встаёт правее и ниже прежних, а не поверх них
+const NEW_OFFSET_X = 280;
+const NEW_OFFSET_Y = 40;
+const NEW_COLUMNS = 3;
 const PREVIEW_LINES = 6;
 const FILE_SUFFIX = '.md';
 const DRAG_THRESHOLD = 3;
@@ -107,8 +110,9 @@ const NotesCanvas = ({
   const centerPoint = () => {
     const size = viewport();
     return {
-      x: Math.round((size.width / 2 - view.x) / view.scale) + doc.nodes.length * NEW_OFFSET,
-      y: Math.round((size.height / 2 - view.y) / view.scale) + doc.nodes.length * NEW_OFFSET,
+      x: Math.round((size.width / 2 - view.x) / view.scale) + (doc.nodes.length % NEW_COLUMNS) * NEW_OFFSET_X,
+      y: Math.round((size.height / 2 - view.y) / view.scale)
+        + Math.floor(doc.nodes.length / NEW_COLUMNS) * (NOTE_HEIGHT + NEW_OFFSET_Y),
     };
   };
 
@@ -284,8 +288,13 @@ const NotesCanvas = ({
   const renderNode = (node: CanvasNode) => {
     const isSelected = selection?.kind === 'node' && selection.id === node.id;
     const note = node.type === 'file' ? noteByTitle.get(titleOfFile(node.file).toLowerCase()) : undefined;
+    // Начало текста без разметки: заголовок с названием, метки пунктов и скобки ссылок не показываются
     const preview = note
-      ? parseNote(note.text).body.split('\n').filter((line) => line.trim()).slice(0, PREVIEW_LINES).join('\n')
+      ? parseNote(note.text).body.split('\n')
+        .map((line) => line.replace(/^#+\s*/, '').replace(/ \^t[a-z0-9]{4,12}\s*$/, '')
+          .replace(/^(\s*)[-*+] \[[ xX]\] /, '$1• ').replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, '$1'))
+        .filter((line) => line.trim() && line.trim().toLowerCase() !== note.title.toLowerCase())
+        .slice(0, PREVIEW_LINES).join('\n')
       : undefined;
     return (
       <div

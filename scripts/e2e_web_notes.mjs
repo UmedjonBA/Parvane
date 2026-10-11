@@ -91,6 +91,17 @@ try {
   await page.keyboard.press('Escape');
   console.log('OK: пункт со сроком — задача «Плана», галочка ходит в обе стороны');
 
+  // ── Заметка дня: кнопка на «Сегодня» создаёт её по шаблону в папке «Ежедневные» ──
+  await planner.locator('[data-today-daily]').click();
+  const dayKey = await page.evaluate(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
+  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня');
+  await visible(knowledge.locator('[data-folder="Daily"]'), 'папка ежедневных заметок');
+  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  console.log('OK: заметка дня создаётся с экрана «Сегодня»');
+
   // ── «Запланировано»: событие со ссылкой на заметку ────────────────────────
   await planner.getByRole('button', { name: 'Quick entry' }).click();
   await page.locator('#planner-quick-input').fill(`созвон завтра 16:00 [[${NOTE}]]`);
@@ -116,7 +127,7 @@ try {
   await openTab('Graph');
   const graph = knowledge.locator('[data-notes-graph]');
   await visible(graph.locator('[data-node][data-kind="note"]'), 'узлы заметок');
-  assert.equal(await graph.locator('[data-node][data-kind="note"]').count(), 2, 'две заметки на графе');
+  assert.equal(await graph.locator('[data-node][data-kind="note"]').count(), 2, 'две заметки на графе (заметка дня скрыта фильтром)');
   assert.equal(await graph.locator('[data-node][data-kind="record"]').count(), 0, 'записи «Плана» скрыты по умолчанию');
   await graph.getByText('Events and tasks', { exact: true }).click();
   await visible(graph.locator('[data-node][data-kind="record"]'), 'узел записи «Плана»');

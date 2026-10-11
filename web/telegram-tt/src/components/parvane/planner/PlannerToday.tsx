@@ -3,6 +3,7 @@ import { memo, useMemo, useRef } from '../../../lib/teact/teact';
 
 import type { PlannerState } from './plannerModel';
 
+import { openNote } from '../../../util/parvaneSection';
 import { formatHours, formatSpan, formatStatus } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import {
@@ -52,6 +53,10 @@ const PlannerToday = ({
   const sleepGoal = state.healthGoals.sleepMinutes;
   const kcal = getNutrientTotal(state, day, 'kcal').value;
   const kcalGoal = getGoalsForDay(state, day, today).kcal?.target;
+
+  const handleDaily = useLastCallback(() => {
+    openNote(day);
+  });
 
   const handleTasksClick = useLastCallback(() => {
     tasksRef.current?.scrollIntoView({ block: 'start' });
@@ -147,6 +152,10 @@ const PlannerToday = ({
             onOpen={onOpenTask}
           />
         ))}
+        {/* Заметка дня живёт в «Знаниях»: открывается, а если её ещё нет — создаётся по шаблону */}
+        <button type="button" className={styles.todayUndated} data-today-daily onClick={handleDaily}>
+          {lang('KnowledgeDaily')}
+        </button>
         {Boolean(undated.length) && (
           <button type="button" className={styles.todayUndated} data-today-undated onClick={openUndated}>
             {lang('PlannerUndated', { count: undated.length })}
