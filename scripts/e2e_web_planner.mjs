@@ -84,8 +84,15 @@ try {
   console.log('OK: «План» открыт, колонки мессенджера скрыты');
 
   // ── Задача: создание, отмена, повтор ──────────────────────────────────────
+  // «+ Запись» в шапке открывает ввод текстом; полная форма — по «Подробнее» в его окне
+  async function openFullForm() {
+    await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
+    await page.locator('form[data-quick-kind]').getByRole('button', { name: 'More options' }).click();
+    await page.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  }
   async function createTask(name, minutes, start) {
-    await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+    await openFullForm();
     await page.locator('#planner-new-name').fill(name);
     await planner.getByLabel('Duration, min').fill(String(minutes));
     await planner.getByLabel('Start', { exact: true }).fill(start);
@@ -93,7 +100,7 @@ try {
     await planner.getByRole('heading', { name }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   // Форма открывается колонкой слева: календарь и панель дня остаются видны (spec 013, US1)
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await sidePane.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const boxes = {
     side: await sidePane.boundingBox(), cell: await todayCell.boundingBox(), day: await dayPane.boundingBox(),
@@ -138,7 +145,7 @@ try {
   console.log('OK: задача создаётся, отменяется и создаётся снова');
 
   // Ошибка ввода: время без длительности
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-name').fill('Без оценки');
   await planner.getByLabel('Start', { exact: true }).fill('09:00');
   await planner.getByLabel('Duration, min').fill('');
@@ -147,7 +154,7 @@ try {
   await planner.getByRole('button', { name: 'Cancel' }).click();
 
   // ── Событие, пересекающееся с задачей ─────────────────────────────────────
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-kind').selectOption('event');
   await page.locator('#planner-new-name').fill('Созвон команды');
   await planner.getByLabel('Start', { exact: true }).fill('14:30');
@@ -243,7 +250,7 @@ try {
   assert.match(await todayView.locator('[data-today-card="load"]').innerText(), /h \/ 10 h/, 'карточка загрузки — «занято / бюджет»');
   await dayPane.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Задача без даты: строка «Без даты · N», в шторке — по спискам, кнопка назначает день
-  await planner.getByRole('button', { name: 'Quick entry' }).click();
+  await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await page.locator('#planner-quick-input').fill('Вторая задача');
   await page.locator('#planner-quick-input').press('Enter');
   await planner.getByText('Added: Вторая задача').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -311,7 +318,7 @@ try {
   };
   // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
   await sidebar.getByRole('tab', { name: 'Calendar' }).click();
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-kind').selectOption('event');
   await page.locator('#planner-new-name').fill('Йога');
   // Конец не задаётся: по умолчанию — через час после начала (spec 013, B6)
@@ -336,7 +343,7 @@ try {
   const [year, month] = today.split('-').map(Number);
   const lastDay = new Date(year, month, 0).getDate();
   const lastKey = `${today.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-kind').selectOption('event');
   await page.locator('#planner-new-name').fill('Аренда');
   await planner.getByLabel('Start', { exact: true }).fill('12:00');
@@ -353,7 +360,7 @@ try {
   // Задача-ряд: выполнение одного экземпляра, «только это», «это и последующие».
   // Дата начала ряда берётся из выбранного дня — возвращаемся к сегодняшнему
   await backToThisMonth();
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-name').fill('Зарядка');
   await planner.getByLabel('Duration, min').fill('15');
   // Внутри окон дня (после шага настроек — с 08:00), иначе задача в панели дня не показывается
@@ -402,7 +409,7 @@ try {
   console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», «все в серии»');
 
   // Ссылка на заметку в названии записи: на экране — нажимаемая ссылка с подписью, без скобок
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-name').fill('Читать [[Конспект|конспект]]');
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   const linkedTitle = sidePane.getByRole('heading', { name: 'Читать конспект' });
@@ -478,7 +485,7 @@ try {
   console.log('OK: виды год, месяц, неделя, список; соседние дни; выбор месяца и года; «Повтор и детали»');
 
   // ── Событие на весь день и праздник; список с цветом из формы (US3, US4) ──
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await viewButton('Month').click();
   const loadBefore = (await todayCell.innerText()).match(/[\d.]+ h/)?.[0];
   await page.locator('#planner-new-kind').selectOption('event');
@@ -504,7 +511,7 @@ try {
   const chipColor = await cityDay.evaluate((el) => getComputedStyle(el).getPropertyValue('--planner-list-color').trim());
   assert.ok(chipColor, 'у события с цветом нет цвета в панели дня');
   assert.equal((await todayCell.innerText()).match(/[\d.]+ h/)?.[0], loadBefore, 'событие на весь день не входит в загрузку дня');
-  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await openFullForm();
   await page.locator('#planner-new-name').fill('Цветная задача');
   await page.locator('#planner-new-list').selectOption({ label: 'Create a list…' });
   await sidePane.getByLabel('New list').fill('Дом');
@@ -592,7 +599,7 @@ try {
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await viewSelect.selectOption('month');
   await sidePane.getByRole('button', { name: 'Close' }).first().click();
-  assert.equal(await planner.getByRole('button', { name: '+ Task', exact: true }).count(), 0, 'на телефоне кнопки «+ Задача» нет');
+  assert.equal(await planner.getByRole('button', { name: '+ Entry', exact: true }).count(), 0, 'на телефоне кнопки «+ Запись» нет');
   assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
   await todayCell.click({ position: { x: 10, y: 10 } });
   // День — горизонтальной шкалой времени НАД календарём: часы по оси X, шкала листается вбок

@@ -175,11 +175,11 @@ try {
   await page.keyboard.press('Escape');
   await undatedSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // На компьютере ввод открывается кнопкой в шапке
-  await planner.getByRole('button', { name: 'Quick entry' }).click();
+  await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
   await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: записи пережили перезагрузку; на компьютере есть «Быстрый ввод»');
+  console.log('OK: записи пережили перезагрузку; на компьютере ввод открывает «+ Запись»');
 
   console.log('e2e_web_quick_input: OK');
 } catch (error) {

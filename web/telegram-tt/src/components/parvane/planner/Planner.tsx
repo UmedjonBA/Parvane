@@ -201,12 +201,6 @@ const Planner = () => {
     openForm({ day: picked });
   });
 
-  const handleAdd = useLastCallback(() => {
-    openForm({ day: picked });
-  });
-
-  // Кнопка «+» нижней панели телефона: форма новой записи, как у кнопки «+ Задача»
-
   const handleCreated = useLastCallback((taskId?: string, day?: string) => {
     setFormParams(undefined);
     if (taskId !== undefined) handleOpenTask(taskId, day);
@@ -331,7 +325,8 @@ const Planner = () => {
   const daySummary = buildDaySummary(lang, state, picked);
   const pickedDays = useMemo(() => [picked], [picked]);
 
-  // Кнопка «+» нижней панели телефона и «Быстрый ввод»: запись одной строкой (spec 017)
+  // Кнопка «+» нижней панели телефона и «+ Запись» в шапке: запись одной строкой (spec 017).
+  // Полная форма — по «Подробнее» в окне ввода, по «+» у дня и по нажатию на свободное время сетки
   const [isQuickOpen, openQuick, closeQuick] = useFlag();
   const addRequest = useDerivedState(getPlannerAddRequest);
   useEffect(() => {
@@ -368,7 +363,7 @@ const Planner = () => {
 
   const handleQuickMore = useLastCallback(() => {
     closeQuick();
-    handleAdd();
+    handleAddToDay();
   });
   const dayTimeline = (
     <PlannerTimeline
@@ -419,10 +414,7 @@ const Planner = () => {
         {!isNarrow && (
           <div className={styles.headerButtons}>
             {settingsButton}
-            <Button size="smaller" color="translucent" onClick={handleOpenQuick}>
-              {lang('PlannerQuickButton')}
-            </Button>
-            <Button size="smaller" onClick={handleAdd}>{lang('PlannerAddTask')}</Button>
+            <Button size="smaller" onClick={handleOpenQuick}>{lang('PlannerAddEntry')}</Button>
           </div>
         )}
       </header>
