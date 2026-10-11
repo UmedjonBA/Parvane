@@ -193,7 +193,6 @@ log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)
 
 log "Gateway rate limit e2e"
 "$ROOT/scripts/run_gateway_rate_limit_e2e.sh"
-"$ROOT/scripts/run_web_interface_style_e2e.sh"
 "$ROOT/scripts/run_web_chat_background_e2e.sh"
 "$ROOT/scripts/run_web_planner_e2e.sh"
 "$ROOT/scripts/run_web_cloud_e2e.sh"

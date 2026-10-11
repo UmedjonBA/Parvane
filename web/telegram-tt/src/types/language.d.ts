@@ -2261,10 +2261,6 @@ export interface LangPair {
   'ParvaneTelegramLoginExpired': undefined;
   'ParvaneL2EnabledYou': undefined;
   'ParvaneL2DisabledYou': undefined;
-  'ParvaneInterfaceStyle': undefined;
-  'ParvaneInterfaceStyleClassic': undefined;
-  'ParvaneInterfaceStylePanels': undefined;
-  'ParvaneInterfaceStyleHint': undefined;
   'ParvaneSections': undefined;
   'ParvaneSectionMessenger': undefined;
   'ParvaneSectionPlanner': undefined;

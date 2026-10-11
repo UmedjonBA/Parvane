@@ -12,7 +12,6 @@ import {
 } from '../../../util/browser/windowEnvironment';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import generateUniqueId from '../../../util/generateUniqueId';
-import { readStoredInterfaceStyle } from '../../../util/interfaceStyle';
 import { setTimeFormat as setLocalizedTimeFormat } from '../../../util/localization';
 import { subscribe, unsubscribe } from '../../../util/notifications';
 import { oldSetLanguage } from '../../../util/oldLangProvider';
@@ -190,8 +189,7 @@ addCallback((global: GlobalState) => {
 
   switchTheme(theme, canAnimate);
   // Make sure global has the latest theme. Will cause `switchTheme` on change
-  // Parvane (spec 008): оформление — из хранилища устройства (переживает выход)
-  global = updateSharedSettings(global, { theme, interfaceStyle: readStoredInterfaceStyle() });
+  global = updateSharedSettings(global, { theme });
 
   startWebsync();
 
