@@ -630,6 +630,24 @@
   }
 }
 
+// Ссылка на заметку в названии записи (`PlannerName`)
+.nameLink {
+  cursor: var(--custom-cursor, pointer);
+  color: var(--color-links);
+  text-decoration: underline;
+
+  &:focus-visible {
+    border-radius: 0.125rem;
+    outline: 0.125rem solid var(--color-primary);
+  }
+
+  // На цветной плашке и в блоке сетки ссылка — цветом текста: цвет ссылок на заливке не читается
+  .weekChip &,
+  .weekBlock & {
+    color: inherit;
+  }
+}
+
 // ── расписание дня ───────────────────────────────────────────────────────────
 
 .dayList {

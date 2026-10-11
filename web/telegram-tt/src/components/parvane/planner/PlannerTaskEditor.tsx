@@ -23,6 +23,7 @@ import TextArea from '../../ui/TextArea';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import PlannerListPicker from './PlannerListPicker';
+import PlannerName from './PlannerName';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
@@ -276,7 +277,7 @@ const PlannerTaskEditor = ({
       <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
         {backLabel}
       </Button>
-      <h2 className={styles.editorTitle}>{task.name}</h2>
+      <h2 className={styles.editorTitle}><PlannerName name={task.name} /></h2>
       {task.repeat && (
         <p className={styles.small}>
           {isInstance

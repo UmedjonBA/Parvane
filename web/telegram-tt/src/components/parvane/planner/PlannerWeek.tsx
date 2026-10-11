@@ -4,6 +4,7 @@ import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatDay, formatWeekday, listColorStyle } from './plannerFormat';
+import { formatPlainName } from './plannerLinks';
 import {
   fromDayKey, getDeadlines, getEventsForDay, getListColor, getTasksForDay, getTimedForDay, instanceKey, isHolidayOn,
   layoutTimed, setTaskDone, toMinutes, toTime,
@@ -12,6 +13,8 @@ import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+
+import PlannerName from './PlannerName';
 
 import styles from './Planner.module.scss';
 
@@ -159,7 +162,7 @@ const PlannerWeek = ({
                 type="button"
                 className={buildClassName(styles.weekChip, event.isHoliday && !event.color && styles.weekChipHoliday)}
                 style={listColorStyle(event.color)}
-                title={event.name}
+                title={formatPlainName(event.name)}
                 data-kind="event"
                 data-all-day={event.id}
                 data-holiday={event.isHoliday ? '1' : undefined}
@@ -167,7 +170,7 @@ const PlannerWeek = ({
                 data-day={day}
                 onClick={handleItemClick}
               >
-                {event.name}
+                <PlannerName name={event.name} />
               </button>
             ))}
             {untimed.map((task) => (
@@ -176,13 +179,13 @@ const PlannerWeek = ({
                 type="button"
                 className={buildClassName(styles.weekChip, task.status === 'done' && styles.agendaDone)}
                 style={listColorStyle(getListColor(state, task.project))}
-                title={task.name}
+                title={formatPlainName(task.name)}
                 data-kind="task"
                 data-id={task.id}
                 data-day={day}
                 onClick={handleItemClick}
               >
-                {task.name}
+                <PlannerName name={task.name} />
               </button>
             ))}
             {deadlines.map((task) => (
@@ -190,12 +193,12 @@ const PlannerWeek = ({
                 key={`d${task.id}`}
                 type="button"
                 className={buildClassName(styles.weekChip, styles.previewDue)}
-                title={task.name}
+                title={formatPlainName(task.name)}
                 data-kind="task"
                 data-id={task.id}
                 onClick={handleItemClick}
               >
-                {lang('PlannerDeadlinePreview', { name: task.name })}
+                {lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) })}
               </button>
             ))}
           </div>
@@ -253,13 +256,13 @@ const PlannerWeek = ({
                   <button
                     type="button"
                     className={styles.weekBlockOpen}
-                    title={`${item.start}–${item.end} ${item.name}`}
+                    title={`${item.start}–${item.end} ${formatPlainName(item.name)}`}
                     data-kind={item.task ? 'task' : 'event'}
                     data-id={item.task ? item.task.id : item.event!.id}
                     data-day={day}
                     onClick={handleItemClick}
                   >
-                    <span className={styles.weekBlockName}>{item.name}</span>
+                    <span className={styles.weekBlockName}><PlannerName name={item.name} /></span>
                     <span className={styles.weekBlockTime}>
                       {isPanel ? `${item.start}–${item.end}` : item.start}
                     </span>

@@ -20,6 +20,7 @@ import InputText from '../../ui/InputText';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import { PlannerColorSwatches } from './PlannerListPicker';
+import PlannerName from './PlannerName';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 
@@ -180,7 +181,7 @@ const PlannerEventEditor = ({
       <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
         {backLabel}
       </Button>
-      <h2 className={styles.editorTitle}>{event.name}</h2>
+      <h2 className={styles.editorTitle}><PlannerName name={event.name} /></h2>
       {event.repeat && (
         <p className={styles.small}>
           {isInstance

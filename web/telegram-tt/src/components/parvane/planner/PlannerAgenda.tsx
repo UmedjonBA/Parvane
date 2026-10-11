@@ -11,6 +11,7 @@ import {
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import PlannerName from './PlannerName';
 import PlannerTaskRow from './PlannerTaskRow';
 
 import styles from './Planner.module.scss';
@@ -75,7 +76,7 @@ const PlannerAgenda = ({
               <span className={styles.agendaTime}>
                 {event.isAllDay ? lang('PlannerAllDayShort') : `${event.start}–${event.end}`}
               </span>
-              <span className={styles.agendaName}>{event.name}</span>
+              <span className={styles.agendaName}><PlannerName name={event.name} /></span>
             </button>
           ))}
           {[...entry.tasks]

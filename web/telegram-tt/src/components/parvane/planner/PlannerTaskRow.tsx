@@ -11,6 +11,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
+import PlannerName from './PlannerName';
 
 import styles from './Planner.module.scss';
 
@@ -91,7 +92,7 @@ const PlannerTaskRow = ({
         onChange={handleToggle}
       />
       <button type="button" className={styles.taskButton} onClick={handleOpen}>
-        <span className={styles.taskName}>{task.name}</span>
+        <span className={styles.taskName}><PlannerName name={task.name} /></span>
         <span className={styles.small}>{meta.join(' · ')}</span>
       </button>
       {onReorder && (

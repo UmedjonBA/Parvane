@@ -401,6 +401,22 @@ try {
   await backToThisMonth();
   console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», «все в серии»');
 
+  // Ссылка на заметку в названии записи: на экране — нажимаемая ссылка с подписью, без скобок
+  await planner.getByRole('button', { name: '+ Task', exact: true }).click();
+  await page.locator('#planner-new-name').fill('Читать [[Конспект|конспект]]');
+  await planner.getByRole('button', { name: 'Create', exact: true }).click();
+  const linkedTitle = sidePane.getByRole('heading', { name: 'Читать конспект' });
+  await linkedTitle.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(
+    await linkedTitle.getByRole('link', { name: 'конспект' }).getAttribute('data-note-link'), 'Конспект',
+    'ссылка в названии ведёт на заметку',
+  );
+  await dayPane.locator('[data-note-link="Конспект"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await dayPane.getByText('[[').count(), 0, 'скобок ссылки в названии на экране нет');
+  await sidePane.getByRole('button', { name: 'Delete task' }).click();
+  await dayPane.locator('[data-note-link="Конспект"]').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: ссылка на заметку в названии записи');
+
   // ── Виды календаря и выбор месяца и года (spec 013, US2) ──────────────────
   const viewButton = (name) => planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name, exact: true });
   const main = planner.locator('[data-planner-view]');

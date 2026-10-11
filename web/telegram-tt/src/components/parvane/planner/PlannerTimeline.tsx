@@ -5,6 +5,7 @@ import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatDay, listColorStyle } from './plannerFormat';
+import { formatPlainName } from './plannerLinks';
 import {
   getDeadlines, getEventsForDay, getListColor, getTasksForDay, getTimedForDay, instanceKey, layoutTimed, setTaskDone,
   toMinutes, toTime,
@@ -15,6 +16,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
+import PlannerName from './PlannerName';
 
 import styles from './Planner.module.scss';
 
@@ -134,7 +136,7 @@ const PlannerTimeline = ({
             data-id={task.id}
             onClick={handleItemClick}
           >
-            {task.name}
+            <PlannerName name={task.name} />
           </button>
         ))}
         {deadlines.map((task) => (
@@ -146,7 +148,7 @@ const PlannerTimeline = ({
             data-id={task.id}
             onClick={handleItemClick}
           >
-            {lang('PlannerDeadlinePreview', { name: task.name })}
+            {lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) })}
           </button>
         ))}
       </div>
@@ -185,7 +187,7 @@ const PlannerTimeline = ({
                 data-id={event.id}
                 onClick={handleItemClick}
               >
-                <span className={styles.weekBlockName}>{event.name}</span>
+                <span className={styles.weekBlockName}><PlannerName name={event.name} /></span>
                 <span className={styles.weekBlockTime}>
                   {lang(event.isHoliday ? 'PlannerHoliday' : 'PlannerAllDay')}
                 </span>
@@ -228,12 +230,12 @@ const PlannerTimeline = ({
                 <button
                   type="button"
                   className={styles.weekBlockOpen}
-                  title={`${source.start}–${source.end} ${item.name}`}
+                  title={`${source.start}–${source.end} ${formatPlainName(item.name)}`}
                   data-kind={item.task ? 'task' : 'event'}
                   data-id={item.task ? item.task.id : item.event!.id}
                   onClick={handleItemClick}
                 >
-                  <span className={styles.weekBlockName}>{item.name}</span>
+                  <span className={styles.weekBlockName}><PlannerName name={item.name} /></span>
                   <span className={styles.weekBlockTime}>{`${source.start}–${source.end}`}</span>
                 </button>
               </div>
