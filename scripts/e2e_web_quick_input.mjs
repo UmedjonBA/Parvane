@@ -98,6 +98,11 @@ try {
   assert.ok(order.tasks - order.cards > 150, `между карточками и задачами — расписание дня: ${JSON.stringify(order)}`);
   assert.ok(order.width <= 1, `экран не шире телефона: ${JSON.stringify(order)}`);
   assert.equal(await planner.locator('[data-planner-day]').count(), 0, 'отдельной панели дня на телефоне нет');
+  await page.waitForTimeout(700);
+  // Выделение вкладки — вырез, съезжающий на выбранную: после анимации он стоит у левого края («Сегодня»)
+  const clip = await planner.locator('header [aria-hidden="true"]').first().evaluate((el) => el.style.clipPath);
+  const leftInset = Number(/inset\(\S+ \S+ \S+ ([\d.]+)%/.exec(clip)?.[1]);
+  assert.ok(leftInset < 10, `выделена должна быть вкладка «Сегодня»: ${clip}`);
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/today-phone.png` });
   console.log('OK: «Сегодня» на телефоне — карточки, расписание, задачи');
 
