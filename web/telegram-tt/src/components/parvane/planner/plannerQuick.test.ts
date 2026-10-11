@@ -1,21 +1,25 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { QuickContext, QuickDraft } from './plannerQuick';
 
-import { parseQuickInput } from './plannerQuick';
+import { getQuickLang, parseQuickInput } from './plannerQuick';
 
 // 8 октября 2026 — четверг, полдень; окно дня 09:00–21:00
 const CTX: QuickContext = {
   today: '2026-10-08', nowMinutes: 12 * 60, dayStart: 9 * 60, dayEnd: 21 * 60,
 };
+// Тот же день при английском интерфейсе
+const EN: QuickContext = { ...CTX, lang: 'en' };
 const WEEKLY = { kind: 'weekly', interval: 1 } as const;
 
 type Row = [input: string, expected: Partial<QuickDraft>, ctx?: Partial<QuickContext>];
 
-function run(rows: Row[]) {
+function run(rows: Row[], base: QuickContext = CTX) {
   rows.forEach(([input, expected, ctx]) => {
     it(input, () => {
-      const draft = parseQuickInput(input, { ...CTX, ...ctx });
+      const draft = parseQuickInput(input, { ...base, ...ctx });
       // Значение undefined в ожидании — «поля быть не должно»
       const entries = Object.entries(expected);
       expect(draft).toMatchObject(Object.fromEntries(entries.filter(([, value]) => value !== undefined)));
@@ -335,6 +339,398 @@ describe('ввод текстом: участки', () => {
     const { spans } = parseQuickInput(text, CTX);
     expect(spans.map(({ field, from, to }) => [field, text.slice(from, to)])).toEqual([
       ['day', 'завтра'], ['time', '16:00'], ['minutes', '45 мин'],
+    ]);
+  });
+});
+
+// ── английский словарь: те же разделы, что у русской таблицы ─────────────────
+
+describe('quick input (en): kind and name', () => {
+  run([
+    ['buy a power supply', { kind: 'task', name: 'buy a power supply', day: undefined, error: undefined }],
+    ['Call Mom', { kind: 'task', name: 'Call Mom' }],
+    ['task check the papers', { kind: 'task', name: 'check the papers' }],
+    ['Task: check the papers', { kind: 'task', name: 'check the papers' }],
+    ['todo check the papers', { kind: 'task', name: 'check the papers' }],
+    ['tasks for the team', { kind: 'task', name: 'tasks for the team' }],
+    ['eventually fix it', { kind: 'task', name: 'eventually fix it' }],
+    ['event staff meeting', { kind: 'event', name: 'staff meeting', isAllDay: true, day: '2026-10-08' }],
+    ['call 16:00', { kind: 'event', name: 'call', start: '16:00', end: '17:00' }],
+    ['task call 16:00', { kind: 'task', name: 'call', start: '16:00', minutes: 30, day: '2026-10-08' }],
+    ['tomorrow 15:00', { kind: 'event', name: '', error: 'name' }],
+    ['call 16:00', { kind: 'task', name: 'call', start: '16:00', minutes: 30 }, { kind: 'task' }],
+    ['report', { kind: 'event', name: 'report', isAllDay: true }, { kind: 'event' }],
+    ['lunch 520 kcal', { kind: 'task', name: 'lunch 520 kcal' }, { kinds: ['task', 'event'] }],
+    ['water 500 ml', { kind: 'task', name: 'water 500 ml' }, { kinds: ['task', 'event'] }],
+  ], EN);
+});
+
+describe('quick input (en): time', () => {
+  run([
+    ['call 9:05', { start: '09:05', end: '10:05', day: '2026-10-09', isDayAssumed: true }],
+    ['call at 15:30', { name: 'call', start: '15:30', end: '16:30', day: '2026-10-08', isDayAssumed: true }],
+    ['call at 15', { name: 'call', start: '15:00', end: '16:00' }],
+    ['call at 5', { name: 'call', start: '17:00', end: '18:00' }],
+    ['call at 9', { name: 'call', start: '09:00', day: '2026-10-09' }],
+    ['call at 5', { start: '05:00' }, { dayStart: 4 * 60, dayEnd: 12 * 60 }],
+    ['call 5pm', { kind: 'event', name: 'call', start: '17:00' }],
+    ['call 5 pm', { name: 'call', start: '17:00' }],
+    ['call at 5 am', { name: 'call', start: '05:00', day: '2026-10-09' }],
+    ['call at 12am', { name: 'call', start: '00:00', day: '2026-10-09' }],
+    ['call 12pm', { name: 'call', start: '12:00' }],
+    ['call at 7:30 pm', { name: 'call', start: '19:30', end: '20:30' }],
+    ['call 7:30pm', { name: 'call', start: '19:30' }],
+    ['call at 11 at night', { name: 'call', start: '23:00', end: '23:59' }],
+    ['call at 7 in the morning', { name: 'call', start: '07:00' }],
+    ['standup at noon', { kind: 'event', name: 'standup', start: '12:00' }],
+    ['class from 10 to 12', { kind: 'event', name: 'class', start: '10:00', end: '12:00', minutes: 120 }],
+    ['class 10:00-11:30', { name: 'class', start: '10:00', end: '11:30', minutes: 90 }],
+    ['class 10–12:30', { name: 'class', start: '10:00', end: '12:30' }],
+    ['class 5-6pm', { name: 'class', start: '17:00', end: '18:00' }],
+    ['class 10am-2pm', { name: 'class', start: '10:00', end: '14:00' }],
+    ['class 11-1pm', { name: 'class', start: '11:00', end: '13:00' }],
+    ['score 10-12', { kind: 'task', name: 'score 10-12', start: undefined }],
+    ['10 to 12 people', { kind: 'task', name: '10 to 12 people', start: undefined }],
+    ['call 23:30', { start: '23:30', end: undefined, error: 'time' }],
+    ['call 25:00', { kind: 'task', name: 'call 25:00' }],
+    ['call 16:00 and 18:00', { name: 'call and 18:00', start: '16:00' }],
+    ['version 3.5', { kind: 'task', name: 'version 3.5', day: undefined }],
+    ['meeting on 15.10', { kind: 'task', name: 'meeting', day: '2026-10-15', start: undefined }],
+  ], EN);
+});
+
+describe('quick input (en): duration', () => {
+  run([
+    ['call 16:00 45 min', { name: 'call', start: '16:00', end: '16:45', minutes: 45 }],
+    ['call 16:00 1.5 h', { name: 'call', end: '17:30', minutes: 90 }],
+    ['call 16:00 2 hours', { name: 'call', end: '18:00' }],
+    ['call 16:00 1 h 30 min', { name: 'call', end: '17:30', minutes: 90 }],
+    ['call 16:00 1h 30m', { name: 'call', end: '17:30', minutes: 90 }],
+    ['call 16:00 half an hour', { name: 'call', end: '16:30' }],
+    ['call 16:00 an hour and a half', { name: 'call', end: '17:30' }],
+    ['sort the mail 20 minutes', { kind: 'task', name: 'sort the mail', minutes: 20, day: undefined }],
+    ['sort the mail 45m', { kind: 'task', name: 'sort the mail', minutes: 45 }],
+    ['task report tomorrow 18:00 40 min', {
+      kind: 'task', name: 'report', day: '2026-10-09', start: '18:00', minutes: 40,
+    }],
+    ['buy 5 m of cable', { name: 'buy 5 m of cable', minutes: undefined }],
+    ['course 5 months', { name: 'course 5 months', minutes: undefined, repeat: undefined }],
+    ['call 23:00 2 hours', { error: 'time' }],
+  ], EN);
+});
+
+describe('quick input (en): date and deadline', () => {
+  run([
+    ['report today', { kind: 'task', name: 'report', day: '2026-10-08' }],
+    ['report tomorrow', { name: 'report', day: '2026-10-09', isDayAssumed: undefined }],
+    ['report the day after tomorrow', { name: 'report', day: '2026-10-10' }],
+    ['report yesterday', { name: 'report', day: '2026-10-07' }],
+    ['report in 3 days', { name: 'report', day: '2026-10-11' }],
+    ['report in a week', { name: 'report', day: '2026-10-15' }],
+    ['report in 2 weeks', { name: 'report', day: '2026-10-22' }],
+    ['report in 2 months', { name: 'report', day: '2026-12-08' }],
+    ['report next week', { name: 'report', day: '2026-10-12' }],
+    ['report on fri', { name: 'report', day: '2026-10-09' }],
+    ['report friday', { name: 'report', day: '2026-10-09' }],
+    ['report thu', { name: 'report', day: '2026-10-15' }],
+    ['report on Tuesday', { name: 'report', day: '2026-10-13' }],
+    ['report next wednesday', { name: 'report', day: '2026-10-14' }],
+    ['report sun', { name: 'report', day: '2026-10-11' }],
+    ['report 12.10', { name: 'report', day: '2026-10-12' }],
+    ['report 05.03', { name: 'report', day: '2027-03-05' }],
+    ['report Oct 12', { name: 'report', day: '2026-10-12' }],
+    ['report 12 Oct', { name: 'report', day: '2026-10-12' }],
+    ['report October 12', { name: 'report', day: '2026-10-12' }],
+    ['report 12th of October', { name: 'report', day: '2026-10-12' }],
+    ['report May 1', { name: 'report', day: '2027-05-01' }],
+    ['report 3 March', { name: 'report', day: '2027-03-03' }],
+    ['report 31.02', { name: 'report 31.02', day: undefined }],
+    ['report Feb 31', { name: 'report Feb 31', day: undefined }],
+    ['report for tomorrow', { name: 'report', day: '2026-10-09' }],
+    ['call thu 16:00', { kind: 'event', name: 'call', day: '2026-10-15', start: '16:00', end: '17:00' }],
+    ['call at 5 fri', { kind: 'event', name: 'call', day: '2026-10-09', start: '17:00' }],
+    ['task check the papers by fri', { kind: 'task', name: 'check the papers', due: '2026-10-09', day: undefined }],
+    ['report by 20.10', { name: 'report', due: '2026-10-20' }],
+    ['report until tomorrow', { name: 'report', due: '2026-10-09' }],
+    ['report by March', { name: 'report', due: '2027-03-01' }],
+    ['report due Oct 20', { name: 'report', due: '2026-10-20' }],
+    ['report on mon by fri', { name: 'report', day: '2026-10-12', due: '2026-10-09', error: 'dayAfterDue' }],
+    ['stand by me', { name: 'stand by me', due: undefined }],
+    // Ловушки: слова, похожие на дни и месяцы
+    ['power supply 1000 W', { name: 'power supply 1000 W', day: undefined }],
+    ['room 12 fri', { name: 'room 12 fri', day: undefined }],
+    ['march of the penguins', { name: 'march of the penguins', day: undefined, due: undefined }],
+    ['may be later', { name: 'may be later', day: undefined }],
+    ['sat down with the team', { name: 'sat down with the team', day: undefined }],
+    ['sun cream and a hat', { name: 'sun cream and a hat', day: undefined }],
+    ['wed planner review', { name: 'wed planner review', day: undefined }],
+    ['satellite launch', { name: 'satellite launch', day: undefined }],
+    ['monitor stand', { name: 'monitor stand', day: undefined }],
+    ['meeting sat 15:00', { kind: 'event', name: 'meeting', day: '2026-10-10', start: '15:00' }],
+    ['party on sat', { name: 'party', day: '2026-10-10' }],
+    ['dentist wed at 5', { kind: 'event', name: 'dentist', day: '2026-10-14', start: '17:00' }],
+    ['report tomorrow and friday', { name: 'report and friday', day: '2026-10-09' }],
+    ['Submit REPORT Tomorrow', { name: 'Submit REPORT', day: '2026-10-09' }],
+  ], EN);
+});
+
+describe('quick input (en): repeat', () => {
+  run([
+    ['lesson tue 15:00 every week for 5 months', {
+      kind: 'event',
+      name: 'lesson',
+      start: '15:00',
+      end: '16:00',
+      day: '2026-10-13',
+      repeat: {
+        ...WEEKLY, weekdays: [2], startDay: '2026-10-13', endDay: '2027-03-13',
+      },
+      error: undefined,
+    }],
+    ['exercise every day', {
+      kind: 'task', name: 'exercise', repeat: { kind: 'daily', interval: 1, startDay: '2026-10-08' },
+    }],
+    ['exercise daily 8:00 15 min', {
+      kind: 'event', name: 'exercise', start: '08:00', end: '08:15', repeat: { kind: 'daily', startDay: '2026-10-08' },
+    }],
+    ['watering every 3 days', { name: 'watering', repeat: { kind: 'daily', interval: 3 } }],
+    ['watering every other day', { name: 'watering', repeat: { kind: 'daily', interval: 2 } }],
+    ['report every week', { name: 'report', repeat: { ...WEEKLY, weekdays: [4], startDay: '2026-10-08' } }],
+    ['report weekly', { name: 'report', repeat: { ...WEEKLY, weekdays: [4] } }],
+    ['report every 2 weeks', { name: 'report', repeat: { kind: 'weekly', interval: 2, weekdays: [4] } }],
+    ['report once every two weeks', { name: 'report', repeat: { kind: 'weekly', interval: 2 } }],
+    ['report once a week', { name: 'report', repeat: { kind: 'weekly', interval: 1 } }],
+    ['rent every month', { name: 'rent', repeat: { kind: 'monthly', interval: 1, startDay: '2026-10-08' } }],
+    ['rent monthly 20.10', { name: 'rent', repeat: { kind: 'monthly', startDay: '2026-10-20' } }],
+    ['rent every 3 months', { name: 'rent', repeat: { kind: 'monthly', interval: 3 } }],
+    ['insurance every year', { name: 'insurance', repeat: { kind: 'yearly', interval: 1 } }],
+    ['insurance yearly', { name: 'insurance', repeat: { kind: 'yearly' } }],
+    ['gym on weekdays 19:00', {
+      kind: 'event', name: 'gym', repeat: { ...WEEKLY, weekdays: [1, 2, 3, 4, 5], startDay: '2026-10-08' },
+    }],
+    ['cleaning on weekends', { name: 'cleaning', repeat: { ...WEEKLY, weekdays: [0, 6], startDay: '2026-10-10' } }],
+    ['gym on mon, wed and fri 19:00', {
+      name: 'gym', start: '19:00', repeat: { ...WEEKLY, weekdays: [1, 3, 5], startDay: '2026-10-09' },
+    }],
+    ['lesson on tue and thu at 5 pm 45 min', {
+      kind: 'event',
+      name: 'lesson',
+      start: '17:00',
+      end: '17:45',
+      repeat: { ...WEEKLY, weekdays: [2, 4], startDay: '2026-10-08' },
+    }],
+    ['lesson on tuesdays', { name: 'lesson', repeat: { ...WEEKLY, weekdays: [2], startDay: '2026-10-13' } }],
+    ['lesson tuesdays 15:00', { kind: 'event', name: 'lesson', repeat: { ...WEEKLY, weekdays: [2] } }],
+    ['lesson every tuesday 15:00', { name: 'lesson', repeat: { ...WEEKLY, weekdays: [2] } }],
+    ['lesson every friday', { name: 'lesson', repeat: { ...WEEKLY, weekdays: [5], startDay: '2026-10-09' } }],
+    ['lesson every week until 20.12', { name: 'lesson', repeat: { ...WEEKLY, endDay: '2026-12-20' }, due: undefined }],
+    ['lesson every week until March', { name: 'lesson', repeat: { ...WEEKLY, endDay: '2027-03-01' } }],
+    ['lesson every week 10 times', { name: 'lesson', repeat: { ...WEEKLY, count: 10 } }],
+    ['lesson every week for 6 weeks', { name: 'lesson', repeat: { ...WEEKLY, endDay: '2026-11-19' } }],
+    ['lesson every day 2 months', { name: 'lesson', repeat: { kind: 'daily', endDay: '2026-12-08' } }],
+    // Один день после «on» — дата, не повтор
+    ['report on friday', { name: 'report', day: '2026-10-09', repeat: undefined }],
+    ['repeat the exercise 10 times', { name: 'repeat the exercise 10 times', repeat: undefined }],
+    ['weekend trip', { name: 'weekend trip', repeat: undefined }],
+  ], EN);
+});
+
+describe('quick input (en): removed values stay in the name', () => {
+  run([
+    ['call tomorrow 16:00', { kind: 'task', name: 'call 16:00', day: '2026-10-09' }, { skip: ['time'] }],
+    ['call tomorrow 16:00', { name: 'call tomorrow', start: '16:00', day: '2026-10-08' }, { skip: ['day'] }],
+    ['report by fri', { name: 'report by', due: undefined, day: '2026-10-09' }, { skip: ['due'] }],
+    ['lesson every week', { name: 'lesson every week', repeat: undefined }, { skip: ['repeat'] }],
+    ['sort the mail 20 minutes', { name: 'sort the mail 20 minutes', minutes: undefined }, { skip: ['minutes'] }],
+    ['task report', { name: 'task report' }, { skip: ['kind'] }],
+  ], EN);
+});
+
+describe('quick input (en): meal and water', () => {
+  run([
+    ['lunch buckwheat 150g p30 f10 c60 fiber 6 520 kcal', {
+      kind: 'food',
+      name: 'buckwheat',
+      meal: 'lunch',
+      grams: 150,
+      nutrients: {
+        kcal: 520, protein: 30, fat: 10, carbs: 60, fiber: 6,
+      },
+      day: '2026-10-08',
+      error: undefined,
+    }],
+    ['lunch buckwheat 13:00 650 kcal', { kind: 'food', name: 'buckwheat', meal: 'lunch', nutrients: { kcal: 650 } }],
+    ['oatmeal 9:00 300 kcal', { kind: 'food', name: 'oatmeal', meal: 'breakfast' }],
+    ['cottage cheese 200 kcal', { kind: 'food', name: 'cottage cheese', meal: 'lunch' }],
+    ['cottage cheese 200 kcal', { meal: 'dinner' }, { nowMinutes: 19 * 60 }],
+    ['dinner 600 kcal', { kind: 'food', name: 'dinner', meal: 'dinner' }],
+    ['snack nuts 30 g 180 cal', { kind: 'food', name: 'nuts', meal: 'snack', grams: 30 }],
+    ['chicken protein 30 fat 5 carbs 0', {
+      kind: 'food', name: 'chicken', nutrients: { protein: 30, fat: 5, carbs: 0, kcal: 165 },
+    }],
+    ['cheese p 12.5 f 15', { kind: 'food', name: 'cheese', nutrients: { protein: 12.5, fat: 15, kcal: 185 } }],
+    ['lunch buckwheat sugar 14 salt 0.5 520 kcal', {
+      kind: 'food', name: 'buckwheat', nutrients: { kcal: 520, sugar: 14, salt: 0.5 },
+    }],
+    ['520 kcal', { kind: 'food', error: 'name' }],
+    ['lunch tomorrow 700 kcal', { kind: 'food', day: '2026-10-09', meal: 'lunch' }],
+    ['lunch with Pete 13:00', { kind: 'event', name: 'lunch with Pete', start: '13:00' }],
+    // Одна буква с числом — не питание, пока признак один
+    ['watch f1 race 15:00', { kind: 'event', name: 'watch f1 race', start: '15:00' }],
+    ['vitamin c 500', { kind: 'task', name: 'vitamin c 500' }],
+    ['water 500 ml', { kind: 'water', waterMl: 500, name: '', day: '2026-10-08' }],
+    ['2 glasses', { kind: 'water', waterMl: 500 }],
+    ['1.5 l', { kind: 'water', waterMl: 1500 }],
+    ['water 2 liters', { kind: 'water', waterMl: 2000 }],
+    ['glass of water', { kind: 'task', name: 'glass of water' }],
+    ['buy milk 2 l', { kind: 'task', name: 'buy milk 2 l', waterMl: undefined }],
+    ['waterproof jacket 2 l', { kind: 'task', name: 'waterproof jacket 2 l', waterMl: undefined }],
+    ['kefir', { kind: 'water', waterMl: undefined }, { kind: 'water' }],
+    ['buckwheat', { kind: 'food', name: 'buckwheat', nutrients: {} }, { kind: 'food' }],
+  ], EN);
+});
+
+describe('quick input (en): health', () => {
+  run([
+    ['sleep 23:40-07:30', {
+      kind: 'sleep', start: '23:40', end: '07:30', minutes: 470, day: '2026-10-08', error: undefined,
+    }],
+    ['slept 7.5 h', { kind: 'sleep', minutes: 450, start: undefined }],
+    ['sleep 7 hours 30 min', { kind: 'sleep', minutes: 450 }],
+    ['slept', { kind: 'sleep', error: 'time' }],
+    ['sleep 25:00-07:00', { kind: 'sleep', error: 'time' }, { kind: 'sleep' }],
+    ['sleepy hollow', { kind: 'task', name: 'sleepy hollow' }],
+    ['weight 72.4', { kind: 'metric', metric: 'weight', value: 72.4, day: '2026-10-08', error: undefined }],
+    ['Weight 80 kg', { kind: 'metric', metric: 'weight', value: 80 }],
+    ['bp 120/80', { kind: 'metric', metric: 'pressure', value: 120, value2: 80 }],
+    ['blood pressure 130 over 85', { kind: 'metric', metric: 'pressure', value: 130, value2: 85 }],
+    ['bp 120', { kind: 'metric', metric: 'pressure', error: 'name' }],
+    ['pulse 64', { kind: 'metric', metric: 'pulse', value: 64 }],
+    ['hr 64 bpm', { kind: 'metric', metric: 'pulse', value: 64 }],
+    ['steps 9500', { kind: 'metric', metric: 'steps', value: 9500 }],
+    ['steps 12 300', { kind: 'metric', metric: 'steps', value: 12300 }],
+    ['mood 4', { kind: 'metric', metric: 'mood', value: 4 }],
+    ['mood 7', { kind: 'metric', metric: 'mood', error: 'name' }, { kind: 'metric' }],
+    // Обычные слова в начале строки: без значения — название дела
+    ['weight of the book', { kind: 'task', name: 'weight of the book' }],
+    ['weight of the book', { kind: 'metric', error: 'name' }, { kind: 'metric' }],
+    ['steps to reproduce the bug', { kind: 'task', name: 'steps to reproduce the bug' }],
+    ['run tests', { kind: 'task', name: 'run tests' }],
+    ['walk the dog', { kind: 'task', name: 'walk the dog' }],
+    ['running late', { kind: 'task', name: 'running late' }],
+    ['goal learn the language', { kind: 'task', name: 'goal learn the language' }],
+    ['goal learn the language', { kind: 'goal', error: 'name' }, { kind: 'goal' }],
+    ['run 5 km 28 min', {
+      kind: 'workout', name: 'run', distanceKm: 5, minutes: 28, day: '2026-10-08', error: undefined,
+    }],
+    ['Run 10.5 km', { kind: 'workout', name: 'Run', distanceKm: 10.5, minutes: undefined, error: undefined }],
+    ['run 5k', { kind: 'workout', name: 'run', distanceKm: 5 }],
+    ['run 3 mi 30 min', { kind: 'workout', name: 'run', distanceKm: 4.83, minutes: 30 }],
+    ['gym squat 4x8x80, bench press 3x10x60', {
+      kind: 'workout',
+      name: 'gym',
+      exercises: [
+        { name: 'squat', sets: 4, reps: 8, weight: 80 }, { name: 'bench press', sets: 3, reps: 10, weight: 60 },
+      ],
+      error: undefined,
+    }],
+    ['gym pullups 3x8', { kind: 'workout', exercises: [{ name: 'pullups', sets: 3, reps: 8 }] }],
+    ['gym 60 min', { kind: 'workout', name: 'gym', minutes: 60, start: undefined }],
+    ['gym', { kind: 'workout', error: 'minutes' }],
+    ['yoga yesterday 40 min', { kind: 'workout', name: 'yoga', day: '2026-10-07', minutes: 40 }],
+    // Тренировка с временем, на будущий день либо с повтором — событие календаря
+    ['gym tomorrow 19:00 60 min', { kind: 'event', name: 'gym', day: '2026-10-09', start: '19:00', end: '20:00' }],
+    ['gym 7pm', { kind: 'event', name: 'gym', start: '19:00' }],
+    ['run on tue and thu 7:00', { kind: 'event', name: 'run' }],
+    ['gym tomorrow', { kind: 'task', name: 'gym', day: '2026-10-09' }],
+    ['gym tomorrow 19:00 60 min', { kind: 'workout', name: 'gym', day: '2026-10-09', start: '19:00', minutes: 60 }, {
+      kind: 'workout',
+    }],
+    ['goal protein 140 water 2.5l sleep 8h day from 8 to 22', {
+      kind: 'goal',
+      day: undefined,
+      goalChanges: {
+        goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
+      },
+      error: undefined,
+    }],
+    ['goals kcal 2200 fat 75 carbs 260 fiber 30', {
+      kind: 'goal',
+      goalChanges: {
+        goals: {
+          kcal: 2200, fat: 75, carbs: 260, fiber: 30,
+        },
+        health: {},
+      },
+    }],
+    ['goal sugar 50 salt 5 weight 72 steps 8000 budget 10 h', {
+      kind: 'goal',
+      goalChanges: {
+        goals: {},
+        health: {
+          sugarMax: 50, saltMax: 5, weight: 72, steps: 8000,
+        },
+        budget: 600,
+      },
+    }],
+    ['goal water 2000', { kind: 'goal', goalChanges: { goals: { water: 2000 }, health: {} } }],
+    ['goal day from 22 to 8', { kind: 'goal', error: 'time' }],
+    // Поле целей на экране «Здоровье»: тип задан, слова «goal» нет
+    ['protein 140 water 2.5l', { kind: 'goal', goalChanges: { goals: { protein: 140, water: 2500 } } }, {
+      kind: 'goal',
+    }],
+  ], EN);
+});
+
+describe('ввод текстом: язык словаря', () => {
+  run([
+    // Русский интерфейс (по умолчанию), строка латиницей — английский словарь
+    ['call tomorrow 5pm', { kind: 'event', name: 'call', day: '2026-10-09', start: '17:00' }],
+    ['weight 72.4', { kind: 'metric', metric: 'weight', value: 72.4 }],
+    // Смешанные буквы — словарь, распознавший больше; при равенстве — язык интерфейса
+    ['созвон tomorrow 16:00', { kind: 'event', name: 'созвон', day: '2026-10-09', start: '16:00' }],
+    ['созвон Zoom завтра 16:00', { kind: 'event', name: 'созвон Zoom', day: '2026-10-09', start: '16:00' }],
+    ['зал squat 4x8x80', { kind: 'workout', name: 'зал', exercises: [{ name: 'squat', sets: 4, reps: 8 }] }],
+    ['MacBook завтра', { kind: 'task', name: 'MacBook', day: '2026-10-09' }],
+    ['обед sat down', { kind: 'task', name: 'обед sat down', day: undefined }],
+    ['белок 140 вода 2,5л', { kind: 'goal', goalChanges: { goals: { protein: 140, water: 2500 } } }, { kind: 'goal' }],
+  ]);
+  run([
+    // Английский интерфейс, строка кириллицей — русский словарь
+    ['созвон завтра в 5', { kind: 'event', name: 'созвон', day: '2026-10-09', start: '17:00' }],
+    ['вес 72,4', { kind: 'metric', metric: 'weight', value: 72.4 }],
+    ['созвон tomorrow 16:00 ', { kind: 'event', name: 'созвон', day: '2026-10-09', start: '16:00' }],
+    ['call завтра 16:00', { kind: 'event', name: 'call', day: '2026-10-09', start: '16:00' }],
+    ['зал присед 4x8x80, жим 3x10x60', { kind: 'workout', name: 'зал', error: undefined }],
+    ['созвон Zoom 16:00', { kind: 'event', name: 'созвон Zoom', start: '16:00' }],
+  ], EN);
+
+  it('язык словаря по языку интерфейса', () => {
+    expect(['ru', 'ru-RU', 'en', 'de', undefined].map(getQuickLang)).toEqual(['ru', 'ru', 'en', 'en', 'en']);
+  });
+
+  // Примеры и подсказки экранов лежат в строках локализации: каждый обязан разбираться своим словарём
+  it.each([['fallback.strings', 'en'], ['ru.strings', 'ru']] as const)('примеры из %s разбираются', (file, lang) => {
+    const strings = readFileSync(resolve(__dirname, '../../../assets/localization', file), 'utf8');
+    const value = (key: string) => new RegExp(`^"${key}" = "(.*)";$`, 'm').exec(strings)![1];
+    const examples = value('PlannerHealthExamples').split(/\s*\|\s*/);
+    expect(examples).toHaveLength(9);
+    [...examples, value('PlannerQuickPlaceholder')].forEach((line) => {
+      const draft = parseQuickInput(line, { ...CTX, lang });
+      expect(draft.error, line).toBeUndefined();
+      expect(draft.kind === 'task' && !draft.spans.length, line).toBe(false);
+    });
+    const goals = parseQuickInput(value('PlannerHealthGoalsPlaceholder'), { ...CTX, lang, kind: 'goal' });
+    expect(goals.goalChanges).toMatchObject({
+      goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
+    });
+  });
+
+  it('помечает участки английской строки', () => {
+    const text = 'Call tomorrow 16:00 45 min';
+    const { spans } = parseQuickInput(text, EN);
+    expect(spans.map(({ field, from, to }) => [field, text.slice(from, to)])).toEqual([
+      ['day', 'tomorrow'], ['time', '16:00'], ['minutes', '45 min'],
     ]);
   });
 });

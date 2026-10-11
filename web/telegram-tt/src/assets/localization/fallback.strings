@@ -3531,8 +3531,8 @@
 "PlannerQuickTitle" = "New entry";
 "PlannerQuickButton" = "Quick entry";
 "PlannerQuickAuto" = "Auto";
-"PlannerQuickPlaceholder" = "созвон завтра 16:00 45 мин";
-"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. Russian words only for now.";
+"PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised.";
 "PlannerQuickMore" = "More options";
 "PlannerQuickDue" = "due {date}";
 "PlannerQuickRemove" = "Remove: {value}";
@@ -3603,11 +3603,12 @@
 "PlannerHealthNoWorkouts" = "No workouts in the last 7 days";
 "PlannerHealthHintTitle" = "Everything is entered as text";
 "PlannerHealthHint" = "Meals with nutrients, water, weight, pressure, steps and the goals themselves go in as one line via «+». Tap an example to try it.";
+"PlannerHealthExamples" = "lunch buckwheat 150g p30 f10 c60 fiber 6 520 kcal | water 500 ml | weight 72.4 | bp 120/80 | steps 9500 | mood 4 | sleep 23:40-07:30 | run 5 km 28 min | goal protein 140 water 2.5l";
 "PlannerHealthGoalsText" = "Change with text";
-"PlannerHealthGoalsPlaceholder" = "белок 140 вода 2,5л сон 8ч день с 8 до 22";
+"PlannerHealthGoalsPlaceholder" = "protein 140 water 2.5l sleep 8h day from 8 to 22";
 "PlannerHealthGoalsApply" = "Apply";
 "PlannerNoticeGoalsSaved" = "Goals updated";
-"PlannerHealthGoalsBad" = "Nothing recognised. Example: белок 140 вода 2,5л";
+"PlannerHealthGoalsBad" = "Nothing recognised. Example: protein 140 water 2.5l";
 "PlannerHealthDelete" = "Delete entry: {name}";
 "PlannerNoticeHealthDeleted" = "Entry deleted";
 "PlannerHealthBudgetReduced" = "Short sleep: day budget reduced";

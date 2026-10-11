@@ -15,7 +15,7 @@ import {
 import {
   addDays, fromDayKey, getGoalsForDay, getNutrientTotal, toTime,
 } from './plannerModel';
-import { parseQuickInput } from './plannerQuick';
+import { getQuickLang, parseQuickInput } from './plannerQuick';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -33,10 +33,6 @@ type OwnProps = {
   onExample: (text: string) => void;
 };
 
-const EXAMPLES = [
-  'обед гречка 150г б30 ж10 у60 кл6 520 ккал', 'вода 500 мл', 'вес 72,4', 'давление 120/80', 'шаги 9500',
-  'самочувствие 4', 'сон 23:40-07:30', 'бег 5 км 28 мин', 'цель белок 140 вода 2,5л',
-];
 const MACROS: { nutrient: Exclude<PlannerNutrient, 'kcal'>; label: 'PlannerHealthProtein' | 'PlannerHealthFat'
   | 'PlannerHealthCarbs' | 'PlannerHealthFiber'; }[] = [
   { nutrient: 'protein', label: 'PlannerHealthProtein' },
@@ -76,6 +72,8 @@ const PlannerHealth = ({
 
   const lang = useLang();
 
+  // Примеры строк — на языке интерфейса: их разбирает словарь того же языка
+  const examples = useMemo(() => lang('PlannerHealthExamples').split(/\s*\|\s*/).filter(Boolean), [lang]);
   const week = useMemo(() => getLastDays(day), [day]);
   const goals = getGoalsForDay(state, day, today);
   const { healthGoals } = state;
@@ -147,8 +145,13 @@ const PlannerHealth = ({
   // Та же грамматика, что у строки «цель …» в окне ввода
   const handleGoalSubmit = useLastCallback((e: React.FormEvent) => {
     e.preventDefault();
-    const draft = parseQuickInput(`цель ${goalText}`, {
-      today, nowMinutes: 0, dayStart: state.settings.dayStart, dayEnd: state.settings.dayEnd, kind: 'goal',
+    const draft = parseQuickInput(goalText, {
+      today,
+      nowMinutes: 0,
+      dayStart: state.settings.dayStart,
+      dayEnd: state.settings.dayEnd,
+      kind: 'goal',
+      lang: getQuickLang(lang.code),
     });
     if (draft.error) {
       showPlannerNotice(lang('PlannerHealthGoalsBad'));
@@ -260,7 +263,7 @@ const PlannerHealth = ({
         <h3 className={styles.healthTitle}>{lang('PlannerHealthHintTitle')}</h3>
         <p className={styles.small}>{lang('PlannerHealthHint')}</p>
         <div className={styles.quickChips}>
-          {EXAMPLES.map((text) => (
+          {examples.map((text) => (
             <button key={text} type="button" className={styles.healthExample} data-text={text} onClick={handleExample}>
               {text}
             </button>
