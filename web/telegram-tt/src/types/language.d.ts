@@ -2615,6 +2615,14 @@ export interface LangPair {
   'PlannerRepeatIntervalWeeks': undefined;
   'PlannerRepeatIntervalMonths': undefined;
   'PlannerRepeatIntervalYears': undefined;
+  'PlannerQuickTitle': undefined;
+  'PlannerQuickButton': undefined;
+  'PlannerQuickAuto': undefined;
+  'PlannerQuickPlaceholder': undefined;
+  'PlannerQuickHint': undefined;
+  'PlannerQuickMore': undefined;
+  'PlannerQuickNoName': undefined;
+  'PlannerQuickTooLong': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4596,6 +4604,12 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerNoticeListColor': {
     'name': V;
+  };
+  'PlannerQuickDue': {
+    'date': V;
+  };
+  'PlannerQuickRemove': {
+    'value': V;
   };
 }
 

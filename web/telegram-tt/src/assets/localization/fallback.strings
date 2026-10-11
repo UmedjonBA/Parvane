@@ -3525,3 +3525,13 @@
 "PlannerRepeatIntervalMonths" = "Repeat every (months)";
 "PlannerRepeatIntervalYears" = "Repeat every (years)";
 "PlannerNoticeListColor" = "List color changed: {name}";
+"PlannerQuickTitle" = "New entry";
+"PlannerQuickButton" = "Quick entry";
+"PlannerQuickAuto" = "Auto";
+"PlannerQuickPlaceholder" = "созвон завтра 16:00 45 мин";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. Russian words only for now.";
+"PlannerQuickMore" = "More options";
+"PlannerQuickDue" = "due {date}";
+"PlannerQuickRemove" = "Remove: {value}";
+"PlannerQuickNoName" = "No name yet";
+"PlannerQuickTooLong" = "The name is too long.";

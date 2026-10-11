@@ -634,10 +634,11 @@ try {
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await sidePane.getByRole('button', { name: 'Close' }).first().click();
   console.log('OK: телефон — день шкалой времени над календарём, пересечения в разных строках, новое дело под шкалой');
-  // «+» нижней панели открывает форму новой записи прямо в «Плане»
+  // «+» нижней панели открывает ввод текстом прямо в «Плане» (spec 017, сценарий quick_input)
   await tabBar.getByRole('button', { name: 'New entry' }).click();
-  await planner.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.keyboard.press('Escape').catch(() => undefined);
+  await page.locator('#planner-quick-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // «Профиль» — главный экран настроек; во вложенном экране и в открытом чате панели нет
   await tabBar.getByRole('button', { name: 'Profile' }).click();
   await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });

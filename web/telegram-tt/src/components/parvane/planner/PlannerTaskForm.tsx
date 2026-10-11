@@ -41,7 +41,7 @@ type OwnProps = {
   onCancel: NoneToVoidFunction;
 };
 
-const TASK_ERROR_KEYS = {
+export const TASK_ERROR_KEYS = {
   name: 'PlannerErrorName',
   minutes: 'PlannerErrorMinutes',
   startNeedsDayAndMinutes: 'PlannerErrorStartNeeds',
@@ -58,7 +58,7 @@ export const REPEAT_ERROR_KEYS = {
   count: 'PlannerErrorRepeatCount',
 } as const satisfies Record<PlannerRepeatError, string>;
 
-const EVENT_ERROR_KEYS = {
+export const EVENT_ERROR_KEYS = {
   name: 'PlannerErrorName',
   time: 'PlannerErrorEventTime',
   repeat: 'PlannerErrorEventRepeat',

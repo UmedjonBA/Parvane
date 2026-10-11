@@ -22,6 +22,7 @@ import {
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useWindowSize from '../../../hooks/window/useWindowSize';
@@ -32,6 +33,7 @@ import TabList from '../../ui/TabList';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerMonth from './PlannerMonth';
 import PlannerPeriodBar from './PlannerPeriodBar';
+import PlannerQuickInput from './PlannerQuickInput';
 import PlannerSettings from './PlannerSettings';
 import PlannerStatistics from './PlannerStatistics';
 import PlannerTaskEditor from './PlannerTaskEditor';
@@ -316,13 +318,24 @@ const Planner = () => {
   const daySummary = buildDaySummary(lang, state, picked);
   const pickedDays = useMemo(() => [picked], [picked]);
 
-  // Кнопка «+» нижней панели телефона: форма новой записи, как у кнопки «+ Задача»
+  // Кнопка «+» нижней панели телефона и «Быстрый ввод»: запись одной строкой (spec 017)
+  const [isQuickOpen, openQuick, closeQuick] = useFlag();
   const addRequest = useDerivedState(getPlannerAddRequest);
   useEffect(() => {
     if (!addRequest || !isLoaded) return;
     consumePlannerAddRequest();
-    handleAdd();
+    openQuick();
   }, [addRequest, isLoaded]);
+
+  const handleQuickCreated = useLastCallback((day?: string) => {
+    closeQuick();
+    if (day && view === VIEW_CALENDAR) pickDay(day);
+  });
+
+  const handleQuickMore = useLastCallback(() => {
+    closeQuick();
+    handleAdd();
+  });
   const settingsButton = (
     <Button
       round
@@ -351,6 +364,9 @@ const Planner = () => {
         {(!isNarrow || view === VIEW_TASKS) && (
           <div className={styles.headerButtons}>
             {settingsButton}
+            {!isNarrow && view !== VIEW_STATISTICS && (
+              <Button size="smaller" color="translucent" onClick={openQuick}>{lang('PlannerQuickButton')}</Button>
+            )}
             {!isNarrow && view !== VIEW_STATISTICS && (
               <Button size="smaller" onClick={handleAdd}>{lang('PlannerAddTask')}</Button>
             )}
@@ -563,6 +579,14 @@ const Planner = () => {
           {notice.canUndo && <Button isText size="tiny" onClick={handleUndo}>{lang('PlannerUndo')}</Button>}
         </div>
       )}
+      <PlannerQuickInput
+        isOpen={isQuickOpen}
+        today={today}
+        settings={state.settings}
+        onCreated={handleQuickCreated}
+        onMore={handleQuickMore}
+        onClose={closeQuick}
+      />
     </div>
   );
 };

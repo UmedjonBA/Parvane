@@ -1605,3 +1605,13 @@
 "PlannerRepeatIntervalMonths" = "Повторять каждые (месяцев)";
 "PlannerRepeatIntervalYears" = "Повторять каждые (лет)";
 "PlannerNoticeListColor" = "Цвет списка изменён: {name}";
+"PlannerQuickTitle" = "Новая запись";
+"PlannerQuickButton" = "Быстрый ввод";
+"PlannerQuickAuto" = "Авто";
+"PlannerQuickPlaceholder" = "созвон завтра 16:00 45 мин";
+"PlannerQuickHint" = "Пишите как в заметке: дата, время, длительность, срок и повтор распознаются сами.";
+"PlannerQuickMore" = "Подробнее";
+"PlannerQuickDue" = "до {date}";
+"PlannerQuickRemove" = "Убрать: {value}";
+"PlannerQuickNoName" = "Названия пока нет";
+"PlannerQuickTooLong" = "Название слишком длинное.";
