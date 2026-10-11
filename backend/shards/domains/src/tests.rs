@@ -156,6 +156,60 @@ async fn container_grants_and_revoke() {
 }
 
 #[tokio::test]
+async fn member_sees_shared_container_and_leaves() {
+    use parvane_protocol::pb::parvane::core::v2::{
+        DomainContainerListRequest, DomainContainerListResponse, DomainGrantLeaveRequest, DomainGrantLeaveResponse, DomainKeyRotateRequest,
+    };
+    let d = setup().await;
+    let alice = device(&d, "alice@local", "a1");
+    let bob = device(&d, "bob@local", "b1");
+    let carol = device(&d, "carol@local", "c1");
+    let (c, genesis) = domain::new_container(&alice, "local", sample::DOMAIN_NAME, "alice@local", 1).unwrap();
+    let cref = c.r#ref.clone().unwrap();
+    call(&d, "alice@local", "domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }).await.unwrap();
+    let list = |user: &'static str| {
+        let d = &d;
+        async move {
+            let r: DomainContainerListResponse =
+                resp(call(d, user, "domain.container.list", &DomainContainerListRequest { domain: sample::DOMAIN_NAME.into() }).await.unwrap());
+            r.containers.len()
+        }
+    };
+    let keys = [(&alice, "alice@local"), (&bob, "bob@local"), (&carol, "carol@local")];
+    let bob_g = Grantee::User("bob@local".into());
+    let acc = access_of(&d, "alice@local", &cref, &keys).await;
+    let g = domain::sign_grant(&alice, &acc, &bob_g, GrantLevel::Write, 2).unwrap();
+    call(&d, "alice@local", "domain.grant.set", &DomainGrantSetRequest { grant: Some(g) }).await.unwrap();
+    // Получатель гранта находит контейнер в своём списке; посторонний — нет.
+    assert_eq!((list("alice@local").await, list("bob@local").await, list("carol@local").await), (1, 1, 0));
+
+    let acc = access_of(&d, "bob@local", &cref, &keys).await;
+    // Посторонний уйти не может (контейнера для него нет); за другого не уходят — ни админ, ни участник.
+    let stranger = domain::sign_leave(&carol, &acc, &Grantee::User("carol@local".into()), 3).unwrap();
+    assert_eq!(call(&d, "carol@local", "domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(stranger) }).await, Err(ErrorCode::NotFound));
+    let by_admin = domain::sign_leave(&alice, &acc, &bob_g, 3).unwrap();
+    assert_eq!(call(&d, "alice@local", "domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(by_admin) }).await, Err(ErrorCode::Forbidden));
+    // grant-запись через leave не проходит.
+    let as_grant = domain::sign_grant(&alice, &acc, &bob_g, GrantLevel::Read, 3).unwrap();
+    assert_eq!(call(&d, "alice@local", "domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(as_grant) }).await, Err(ErrorCode::Invalid));
+
+    let leave = domain::sign_leave(&bob, &acc, &bob_g, 3).unwrap();
+    let r: DomainGrantLeaveResponse = resp(call(&d, "bob@local", "domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(leave.clone()) }).await.unwrap());
+    assert_eq!(r.version, 2);
+    // После выхода контейнера для участника нет: ни списка, ни чтения, ни повторного выхода.
+    assert_eq!(list("bob@local").await, 0);
+    assert_eq!(sync(&d, "bob@local", &cref, 0, 0).await.err(), Some(ErrorCode::NotFound));
+    assert_eq!(call(&d, "bob@local", "domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(leave) }).await, Err(ErrorCode::NotFound));
+    // Эпоха прежняя; владелец меняет её сам.
+    let acc = access_of(&d, "alice@local", &cref, &keys).await;
+    assert_eq!((acc.version, acc.epoch), (2, 1));
+    assert!(acc.grants.is_empty());
+    let rot = domain::sign_rotate(&alice, &acc, 4).unwrap();
+    call(&d, "alice@local", "domain.key.rotate", &DomainKeyRotateRequest { rotate: Some(rot) }).await.unwrap();
+    assert_eq!(access_of(&d, "alice@local", &cref, &keys).await.epoch, 2);
+}
+
+#[tokio::test]
 async fn sync_budget_and_snapshots() {
     let d = setup().await;
     let alice = device(&d, "alice@local", "a1");
@@ -209,7 +263,7 @@ async fn session_required() {
     assert_eq!(d.dispatch("domain.op.sync", req).await, Err(ErrorCode::Forbidden));
     // Все методы реестра роли "domains" обслуживаются.
     let names: Vec<&str> = parvane_v2rt::methods_of("domains").iter().map(|m| m.name).collect();
-    assert_eq!(names.len(), 11, "{names:?}");
+    assert_eq!(names.len(), 12, "{names:?}");
     for n in names {
         let req = ShardRequest { method: n.into(), user: "alice@local".into(), device_id: "d1".into(), body: vec![], ..Default::default() };
         assert_ne!(d.dispatch(n, req).await, Err(ErrorCode::Unavailable), "{n}");

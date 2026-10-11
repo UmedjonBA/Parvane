@@ -230,6 +230,34 @@ message PlannerContainer {
   parvane.core.v2.Ref ref = 1;
 }
 
+// Контейнер облака, известный пользователю (spec 016): личный диск, своя
+// совместная папка либо чужая папка, в которую его пригласили. Множество по
+// ref, запись целиком по метке операции.
+enum CloudContainerRole {
+  CLOUD_CONTAINER_ROLE_UNSPECIFIED = 0;
+  // Личный диск (один на аккаунт: при двух побеждает меньший id).
+  CLOUD_CONTAINER_ROLE_ROOT = 1;
+  // Совместная папка, которой пользователь владеет.
+  CLOUD_CONTAINER_ROLE_OWNED = 2;
+  // Чужая папка.
+  CLOUD_CONTAINER_ROLE_SHARED = 3;
+}
+enum CloudShareStatus {
+  CLOUD_SHARE_STATUS_UNSPECIFIED = 0;
+  CLOUD_SHARE_STATUS_ACCEPTED = 1;
+  CLOUD_SHARE_STATUS_DECLINED = 2;
+}
+message CloudContainer {
+  parvane.core.v2.Ref ref = 1;
+  CloudContainerRole role = 2;
+  // Только для чужой папки.
+  CloudShareStatus status = 3;
+  // Запись снята (папка удалена, покинута, доступ прекращён).
+  bool removed = 4;
+  // Адрес владельца чужой папки.
+  string owner = 5 [(parvane.core.v2.max_len) = 255];
+}
+
 // Операция журнала личного состояния — открытый текст записи StateRecord.
 // op_id совпадает с op_id записи (входит в AAD).
 message StateOp {
@@ -265,6 +293,7 @@ message StateOp {
     // Контейнер планировщика пользователя (spec 010): новое устройство узнаёт
     // его из журнала состояния, не перебирая контейнеры.
     PlannerContainer planner_container_set = 31;
+    CloudContainer cloud_container_set = 32;
   }
 }
 
@@ -288,4 +317,5 @@ message StateSnapshot {
   repeated ChatCleared cleared = 12 [(parvane.core.v2.max_items) = 100000];
   repeated GroupInvite invites = 13 [(parvane.core.v2.max_items) = 10000];
   PlannerContainer planner_container = 14;
+  repeated CloudContainer cloud_containers = 15 [(parvane.core.v2.max_items) = 300];
 }

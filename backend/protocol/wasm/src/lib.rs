@@ -67,6 +67,10 @@ pub(crate) fn set(o: &Object, k: &str, v: &JsValue) {
     let _ = Reflect::set(o, &JsValue::from_str(k), v);
 }
 
+fn cloud_id(id_hex: &str) -> Result<Vec<u8>, JsValue> {
+    hex::decode(id_hex).map_err(|_| err_proto(ProtoError::Malformed))
+}
+
 fn req_js(r: &OutRequest) -> JsValue {
     let o = Object::new();
     set(&o, "chan", &JsValue::from_str(match r.chan {
@@ -114,6 +118,7 @@ fn event_json(e: &Event) -> Value {
         }),
         Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
         Event::PlannerChanged { seq, head_seq } => json!({"type": "plannerChanged", "seq": seq, "headSeq": head_seq}),
+        Event::CloudChanged { seq, id } => json!({"type": "cloudChanged", "seq": seq, "id": hex::encode(id)}),
         Event::Typing { .. } | Event::Presence { .. } => parvane_protocol::host::eph_event_json(e),
         Event::Internal { seq } => json!({"type": "internal", "seq": seq}),
         Event::Skipped { seq } => json!({"type": "skipped", "seq": seq}),
@@ -658,6 +663,188 @@ impl PvClient {
         self.inner.planner_keys_import(&e).map_err(err_proto)
     }
 
+    // ── контейнеры облака (spec 016); id контейнера — hex ──────────────────
+
+    /// Сводка подключённых контейнеров (JSON):
+    /// `[{id, owner, role, name, hasKey, headSeq, epoch, grantVersion, members:[{user, role}]}]`.
+    #[wasm_bindgen(js_name = cloudContainers)]
+    pub fn cloud_containers(&self) -> String {
+        self.inner.cloud_containers_json()
+    }
+
+    #[wasm_bindgen(js_name = cloudIsAttached)]
+    pub fn cloud_is_attached(&self, id_hex: &str) -> bool {
+        hex::decode(id_hex).is_ok_and(|id| self.inner.cloud_is_attached(&id))
+    }
+
+    #[wasm_bindgen(js_name = cloudHasKey)]
+    pub fn cloud_has_key(&self, id_hex: &str) -> bool {
+        hex::decode(id_hex).is_ok_and(|id| self.inner.cloud_has_key(&id))
+    }
+
+    #[wasm_bindgen(js_name = cloudHeadSeq)]
+    pub fn cloud_head_seq(&self, id_hex: &str) -> f64 {
+        hex::decode(id_hex).map_or(0.0, |id| self.inner.cloud_head_seq(&id) as f64)
+    }
+
+    #[wasm_bindgen(js_name = cloudGrantVersion)]
+    pub fn cloud_grant_version(&self, id_hex: &str) -> f64 {
+        hex::decode(id_hex).map_or(0.0, |id| self.inner.cloud_grant_version(&id) as f64)
+    }
+
+    /// Видимое дерево контейнера (JSON) | undefined.
+    #[wasm_bindgen(js_name = cloudStateJson)]
+    pub fn cloud_state_json(&self, id_hex: &str) -> Option<String> {
+        self.inner.cloud_state_json(&hex::decode(id_hex).ok()?)
+    }
+
+    /// Создать контейнер → {id(hex), request: `domain.container.create`}.
+    #[wasm_bindgen(js_name = cloudCreate)]
+    pub fn cloud_create(&mut self, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let (id, r) = self.inner.cloud_create(ts_ms as i64).map_err(err_client)?;
+        let o = Object::new();
+        set(&o, "id", &JsValue::from_str(&hex::encode(id)));
+        set(&o, "request", &req_js(&r));
+        Ok(o.into())
+    }
+
+    /// Подключить контейнер: ответы `domain.container.get` и `domain.grant.list` → id(hex).
+    #[wasm_bindgen(js_name = cloudAttach)]
+    pub fn cloud_attach(&mut self, get_response: &[u8], grants_response: &[u8]) -> Result<String, JsValue> {
+        self.inner.cloud_attach(get_response, grants_response).map(hex::encode).map_err(err_client)
+    }
+
+    /// Забыть контейнер (покинут, доступ отозван, удалён).
+    #[wasm_bindgen(js_name = cloudForget)]
+    pub fn cloud_forget(&mut self, id_hex: &str) {
+        if let Ok(id) = hex::decode(id_hex) {
+            self.inner.cloud_forget(&id);
+        }
+    }
+
+    /// Догнать журнал грантов → версия журнала грантов.
+    #[wasm_bindgen(js_name = cloudIngestGrants)]
+    pub fn cloud_ingest_grants(&mut self, id_hex: &str, grants_response: &[u8]) -> Result<f64, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_ingest_grants(&id, grants_response).map(|v| v as f64).map_err(err_client)
+    }
+
+    /// Страница `domain.op.sync` →
+    /// {applied, headSeq, more, missingEpoch?, grantsBehind, authorsBehind}.
+    #[wasm_bindgen(js_name = cloudIngestSync)]
+    pub fn cloud_ingest_sync(&mut self, id_hex: &str, sync_response: &[u8], strict: bool) -> Result<JsValue, JsValue> {
+        let id = cloud_id(id_hex)?;
+        let r = self.inner.cloud_ingest_sync(&id, sync_response, strict).map_err(err_client)?;
+        let o = Object::new();
+        set(&o, "applied", &JsValue::from_f64(r.applied as f64));
+        set(&o, "headSeq", &JsValue::from_f64(r.head_seq as f64));
+        set(&o, "more", &JsValue::from_bool(r.more));
+        set(&o, "grantsBehind", &JsValue::from_bool(r.grants_behind));
+        set(&o, "authorsBehind", &JsValue::from_bool(r.authors_behind));
+        if let Some(e) = r.missing_epoch {
+            set(&o, "missingEpoch", &JsValue::from_f64(e as f64));
+        }
+        Ok(o.into())
+    }
+
+    /// Снимок `domain.snapshot.get` → курсор после слияния.
+    #[wasm_bindgen(js_name = cloudIngestSnapshot)]
+    pub fn cloud_ingest_snapshot(&mut self, id_hex: &str, snapshot_response: &[u8]) -> Result<f64, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_ingest_snapshot(&id, snapshot_response).map(|v| v as f64).map_err(err_client)
+    }
+
+    /// Локальная правка (JSON операций) → {opId(hex), op(Uint8Array), applied}.
+    #[wasm_bindgen(js_name = cloudPrepareLocal)]
+    pub fn cloud_prepare_local(&mut self, id_hex: &str, ops_json: &str) -> Result<JsValue, JsValue> {
+        let id = cloud_id(id_hex)?;
+        let r = self.inner.cloud_prepare_local(&id, ops_json).map_err(err_client)?;
+        let o = Object::new();
+        set(&o, "opId", &JsValue::from_str(&hex::encode(&r.op_id)));
+        set(&o, "op", &Uint8Array::from(r.op.as_slice()).into());
+        set(&o, "applied", &JsValue::from_f64(r.applied as f64));
+        Ok(o.into())
+    }
+
+    /// Повторно применить помеченный пакет из очереди отправки (после перезапуска).
+    #[wasm_bindgen(js_name = cloudApplyLocal)]
+    pub fn cloud_apply_local(&mut self, id_hex: &str, op: &[u8]) -> Result<u32, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_apply_local(&id, op).map(|n| n as u32).map_err(err_client)
+    }
+
+    /// Зашифровать пакет → запрос `domain.op.append` (тот же opId при повторе).
+    #[wasm_bindgen(js_name = cloudSeal)]
+    pub fn cloud_seal(&mut self, id_hex: &str, op: &[u8], op_id_hex: &str, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let id = cloud_id(id_hex)?;
+        let op_id = hex::decode(op_id_hex).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.cloud_seal(&id, op, &op_id, ts_ms as i64).map(|r| req_js(&r)).map_err(err_client)
+    }
+
+    /// Снимок по порогу → запрос `domain.snapshot.put` | undefined.
+    #[wasm_bindgen(js_name = cloudSnapshotRequest)]
+    pub fn cloud_snapshot_request(&mut self, id_hex: &str, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let id = cloud_id(id_hex)?;
+        Ok(self.inner.cloud_snapshot_request(&id, ts_ms as i64).map_err(err_client)?.map(|r| req_js(&r)).unwrap_or(JsValue::UNDEFINED))
+    }
+
+    /// Ключ текущей эпохи — своим устройствам (после создания контейнера).
+    #[wasm_bindgen(js_name = cloudShareWithOwnDevices)]
+    pub fn cloud_share_with_own_devices(&mut self, id_hex: &str) -> Result<Array, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_share_with_own_devices(&id).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Ключ текущей эпохи — всем участникам и своим устройствам (повтор раздачи).
+    #[wasm_bindgen(js_name = cloudShareKeys)]
+    pub fn cloud_share_keys(&mut self, id_hex: &str) -> Result<Array, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_share_keys(&id).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Выдать доступ либо сменить роль (`write` — редактор) → запросы: запись
+    /// гранта, ключи участнику, сообщение-приглашение (`invite_text` — его текст
+    /// для клиентов без раздела); при понижении — ещё смена эпохи.
+    #[wasm_bindgen(js_name = cloudGrant)]
+    pub fn cloud_grant(&mut self, id_hex: &str, user: &str, write: bool, invite_text: &str, ts_ms: f64) -> Result<Array, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_grant(&id, user, write, invite_text, ts_ms as i64).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Убрать участника → запросы: отзыв (новая эпоха) и раздача нового ключа.
+    #[wasm_bindgen(js_name = cloudRevoke)]
+    pub fn cloud_revoke(&mut self, id_hex: &str, user: &str, ts_ms: f64) -> Result<Array, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_revoke(&id, user, ts_ms as i64).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Смена эпохи без изменения состава → запросы.
+    #[wasm_bindgen(js_name = cloudRotate)]
+    pub fn cloud_rotate(&mut self, id_hex: &str, ts_ms: f64) -> Result<Array, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_rotate(&id, ts_ms as i64).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
+    /// Покинуть чужой контейнер → запрос `domain.grant.leave`.
+    #[wasm_bindgen(js_name = cloudLeave)]
+    pub fn cloud_leave(&mut self, id_hex: &str, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let id = cloud_id(id_hex)?;
+        self.inner.cloud_leave(&id, ts_ms as i64).map(|r| req_js(&r)).map_err(err_client)
+    }
+
+    /// Ключи всех контейнеров облака для экспорта линковки и копии ключей (JSON-массив).
+    #[wasm_bindgen(js_name = cloudKeysExport)]
+    pub fn cloud_keys_export(&self) -> String {
+        serde_json::to_string(&self.inner.cloud_keys_export()).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Ключи контейнеров облака из экспорта своего устройства.
+    #[wasm_bindgen(js_name = cloudKeysImport)]
+    pub fn cloud_keys_import(&mut self, json: &str) -> Result<(), JsValue> {
+        let e: Vec<parvane_protocol::client::PlannerKeysExport> = serde_json::from_str(json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.cloud_keys_import(&e).map_err(err_proto)
+    }
+
     /// Секреты своих ссылок-приглашений — другим ведущим приглашения группы:
     /// `links_json`, `recipients_json` — JSON-массивы ссылок и адресов.
     #[wasm_bindgen(js_name = shareInviteLinks)]
@@ -1053,6 +1240,15 @@ impl PvState {
             r#ref: Some(Ref { domain: domain.into(), id }),
         };
         self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::PlannerContainerSet(c)])
+    }
+
+    /// Контейнер облака (spec 016): proto3-JSON `state.v1.CloudContainer`
+    /// → тела `state.append`. Множество по ссылке, запись целиком по метке.
+    #[wasm_bindgen(js_name = cloudContainerSet)]
+    pub fn cloud_container_set(&mut self, container_json: &str) -> Result<Array, JsValue> {
+        let c: parvane_protocol::pb::parvane::state::v1::CloudContainer =
+            serde_json::from_str(container_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::CloudContainerSet(c)])
     }
 
     #[wasm_bindgen(js_name = callSet)]

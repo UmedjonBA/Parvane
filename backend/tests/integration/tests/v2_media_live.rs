@@ -436,7 +436,7 @@ fn db_blob(dir: &Path, prefix: &str) -> Vec<u8> {
 fn upload_attachment(c: &mut V2, parts: &[Vec<u8>], cap: &[u8; 32]) -> Result<String, ErrorCode> {
     let mut upload_id = String::new();
     for (i, p) in parts.iter().enumerate() {
-        let r: clpb::UploadChunkResponse = call_ok(c, "cloud.blob.upload_chunk", clpb::UploadChunkRequest { upload_id: upload_id.clone(), index: i as u32, data: p.clone() }.encode_to_vec())?;
+        let r: clpb::UploadChunkResponse = call_ok(c, "cloud.blob.upload_chunk", clpb::UploadChunkRequest { upload_id: upload_id.clone(), index: i as u32, bucket: 0, data: p.clone() }.encode_to_vec())?;
         upload_id = r.upload_id;
     }
     let size = parts.iter().map(|p| p.len() as u64).sum();

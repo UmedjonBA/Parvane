@@ -85,6 +85,11 @@ export type WireMessageContent = {
   // kind=chat_mode (протокол v2, FR-036): участник включил/выключил режим
   // «усиленная приватность» (L2) — служебное сообщение чата
   l2?: boolean;
+  // kind=cloud_invite (spec 016, CLOUD-1): приглашение в совместную папку
+  // облака — `container` (ссылка на контейнер, id в base64), `name`, `role`
+  // (1 — читатель, 2 — редактор), `text` — для клиентов без раздела
+  container?: { domain: string; id: string };
+  role?: number;
   // kind=task_offer (spec 011, TASK-1): задание в чат — поля задачи
   // планировщика; `text` — представление для клиентов без планировщика.
   // kind=task_response: `offer` (uuid карточки), `accepted`, `text`

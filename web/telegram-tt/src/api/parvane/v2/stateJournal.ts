@@ -11,6 +11,7 @@ import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../..
 import type { createLocalState, JournalScheduled, LocalStateKind } from '../localState';
 import type { ParvaneStore } from '../store';
 import type { WireCallRecord } from '../wire';
+import type { CloudStateEntry } from './cloud';
 import type { V2SharedInvite } from './controller';
 import type { PvState } from './engine';
 import { MAIN_THREAD_ID } from '../../types';
@@ -94,6 +95,7 @@ type SSnapshot = {
   calls?: SCall[];
   cleared?: { peer?: SPeer; cleared_until_ms?: string }[];
   invites?: SInvite[];
+  cloud_containers?: unknown[];
   notify?: { peer?: SPeer; settings?: SNotify }[];
   notify_defaults?: { users?: SNotify; groups?: SNotify; channels?: SNotify };
   [key: string]: unknown;
@@ -136,6 +138,22 @@ const SYNC_INTERVAL_MS = 8000;
 const SYNC_PAGES = 1000;
 const V2_GROUP_PREFIX = 'v2g:';
 const UUID_HEX_LENGTH = 32;
+// Контейнеры облака (spec 016): значения перечислений proto3-JSON (имя либо число)
+const CLOUD_ROLE_NAMES = {
+  root: 'CLOUD_CONTAINER_ROLE_ROOT', owned: 'CLOUD_CONTAINER_ROLE_OWNED', shared: 'CLOUD_CONTAINER_ROLE_SHARED',
+} as const;
+const CLOUD_STATUS_NAMES = {
+  accepted: 'CLOUD_SHARE_STATUS_ACCEPTED', declined: 'CLOUD_SHARE_STATUS_DECLINED',
+} as const;
+const CLOUD_ROLES: Record<string, CloudStateEntry['role'] | undefined> = {
+  [CLOUD_ROLE_NAMES.root]: 'root', 1: 'root',
+  [CLOUD_ROLE_NAMES.owned]: 'owned', 2: 'owned',
+  [CLOUD_ROLE_NAMES.shared]: 'shared', 3: 'shared',
+};
+const CLOUD_STATUSES: Record<string, CloudStateEntry['status']> = {
+  [CLOUD_STATUS_NAMES.accepted]: 'accepted', 1: 'accepted',
+  [CLOUD_STATUS_NAMES.declined]: 'declined', 2: 'declined',
+};
 
 export function createStateJournal(deps: Deps) {
   let host: StateJournalHost | undefined;
@@ -380,6 +398,45 @@ export function createStateJournal(deps: Deps) {
       pendingAppends.push(...session.plannerContainerSet(ref.domain, ref.id));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: запись контейнера планировщика в журнал состояния: ${String(e)}`));
+  }
+
+  // ── контейнеры облака (spec 016) ───────────────────────────────────────────
+
+  /** Контейнеры облака из журнала: личный диск, свои и чужие совместные папки. */
+  function cloudEntries(): CloudStateEntry[] {
+    const list = (readSnapshot().cloud_containers || []) as {
+      ref?: { domain?: string; id?: string }; role?: string | number; status?: string | number;
+      removed?: boolean; owner?: string;
+    }[];
+    const out: CloudStateEntry[] = [];
+    list.forEach((c) => {
+      const role = CLOUD_ROLES[String(c.role)];
+      if (!c.ref?.id || !role) return;
+      out.push({
+        id: b64ToHex(c.ref.id),
+        domain: c.ref.domain || '',
+        role,
+        status: CLOUD_STATUSES[String(c.status)],
+        isRemoved: Boolean(c.removed),
+        owner: c.owner || undefined,
+      });
+    });
+    return out;
+  }
+
+  /** Записать контейнер облака (множество по ссылке, запись целиком по метке). */
+  function recordCloudEntry(entry: CloudStateEntry) {
+    void serial(async () => {
+      if (!session) return;
+      pendingAppends.push(...session.cloudContainerSet(JSON.stringify({
+        ref: { domain: entry.domain, id: hexToB64(entry.id) },
+        role: CLOUD_ROLE_NAMES[entry.role],
+        status: entry.status ? CLOUD_STATUS_NAMES[entry.status] : undefined,
+        removed: Boolean(entry.isRemoved),
+        owner: entry.owner || '',
+      })));
+      await pushAppends();
+    }).catch((e: unknown) => deps.log(`v2: запись контейнера облака в журнал состояния: ${String(e)}`));
   }
 
   function recordCall(record: WireCallRecord) {
@@ -822,6 +879,8 @@ export function createStateJournal(deps: Deps) {
     removeGroupInvite,
     plannerContainer,
     recordPlannerContainer,
+    cloudEntries,
+    recordCloudEntry,
     reset: detach,
     syncNow,
   };

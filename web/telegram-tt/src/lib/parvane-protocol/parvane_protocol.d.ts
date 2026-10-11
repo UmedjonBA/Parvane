@@ -41,6 +41,94 @@ export class PvClient {
     acceptRootChange(user: string): boolean;
     ackRequest(): any;
     /**
+     * Повторно применить помеченный пакет из очереди отправки (после перезапуска).
+     */
+    cloudApplyLocal(id_hex: string, op: Uint8Array): number;
+    /**
+     * Подключить контейнер: ответы `domain.container.get` и `domain.grant.list` → id(hex).
+     */
+    cloudAttach(get_response: Uint8Array, grants_response: Uint8Array): string;
+    /**
+     * Сводка подключённых контейнеров (JSON):
+     * `[{id, owner, role, name, hasKey, headSeq, epoch, grantVersion, members:[{user, role}]}]`.
+     */
+    cloudContainers(): string;
+    /**
+     * Создать контейнер → {id(hex), request: `domain.container.create`}.
+     */
+    cloudCreate(ts_ms: number): any;
+    /**
+     * Забыть контейнер (покинут, доступ отозван, удалён).
+     */
+    cloudForget(id_hex: string): void;
+    /**
+     * Выдать доступ либо сменить роль (`write` — редактор) → запросы: запись
+     * гранта, ключи участнику, сообщение-приглашение (`invite_text` — его текст
+     * для клиентов без раздела); при понижении — ещё смена эпохи.
+     */
+    cloudGrant(id_hex: string, user: string, write: boolean, invite_text: string, ts_ms: number): Array<any>;
+    cloudGrantVersion(id_hex: string): number;
+    cloudHasKey(id_hex: string): boolean;
+    cloudHeadSeq(id_hex: string): number;
+    /**
+     * Догнать журнал грантов → версия журнала грантов.
+     */
+    cloudIngestGrants(id_hex: string, grants_response: Uint8Array): number;
+    /**
+     * Снимок `domain.snapshot.get` → курсор после слияния.
+     */
+    cloudIngestSnapshot(id_hex: string, snapshot_response: Uint8Array): number;
+    /**
+     * Страница `domain.op.sync` →
+     * {applied, headSeq, more, missingEpoch?, grantsBehind, authorsBehind}.
+     */
+    cloudIngestSync(id_hex: string, sync_response: Uint8Array, strict: boolean): any;
+    cloudIsAttached(id_hex: string): boolean;
+    /**
+     * Ключи всех контейнеров облака для экспорта линковки и копии ключей (JSON-массив).
+     */
+    cloudKeysExport(): string;
+    /**
+     * Ключи контейнеров облака из экспорта своего устройства.
+     */
+    cloudKeysImport(json: string): void;
+    /**
+     * Покинуть чужой контейнер → запрос `domain.grant.leave`.
+     */
+    cloudLeave(id_hex: string, ts_ms: number): any;
+    /**
+     * Локальная правка (JSON операций) → {opId(hex), op(Uint8Array), applied}.
+     */
+    cloudPrepareLocal(id_hex: string, ops_json: string): any;
+    /**
+     * Убрать участника → запросы: отзыв (новая эпоха) и раздача нового ключа.
+     */
+    cloudRevoke(id_hex: string, user: string, ts_ms: number): Array<any>;
+    /**
+     * Смена эпохи без изменения состава → запросы.
+     */
+    cloudRotate(id_hex: string, ts_ms: number): Array<any>;
+    /**
+     * Зашифровать пакет → запрос `domain.op.append` (тот же opId при повторе).
+     */
+    cloudSeal(id_hex: string, op: Uint8Array, op_id_hex: string, ts_ms: number): any;
+    /**
+     * Ключ текущей эпохи — всем участникам и своим устройствам (повтор раздачи).
+     */
+    cloudShareKeys(id_hex: string): Array<any>;
+    /**
+     * Ключ текущей эпохи — своим устройствам (после создания контейнера).
+     */
+    cloudShareWithOwnDevices(id_hex: string): Array<any>;
+    /**
+     * Снимок по порогу → запрос `domain.snapshot.put` | undefined.
+     */
+    cloudSnapshotRequest(id_hex: string, ts_ms: number): any;
+    /**
+     * Видимое дерево контейнера (JSON) | undefined.
+     */
+    cloudStateJson(id_hex: string): string | undefined;
+    /**
      * Первое устройство: корень, генезис, сертификат, прекеи, ключ доставки.
      * Возвращает {requests, rootSecret} — корень для резервной копии.
      */
@@ -435,6 +523,11 @@ export class PvState {
      */
     claimDue(now_ms: number): string;
     /**
+     * Контейнер облака (spec 016): proto3-JSON `state.v1.CloudContainer`
+     * → тела `state.append`. Множество по ссылке, запись целиком по метке.
+     */
+    cloudContainerSet(container_json: string): Array<any>;
+    /**
      * Хост хочет состояние `desired_json` (StateSnapshot) по видам `kinds`:
      * операции разницы применяются локально, наружу — тела `state.append`.
      */
@@ -609,6 +702,30 @@ export interface InitOutput {
     readonly pvanonplanner_openCount: (a: number) => number;
     readonly pvclient_acceptRootChange: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_ackRequest: (a: number) => number;
+    readonly pvclient_cloudApplyLocal: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_cloudAttach: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_cloudContainers: (a: number, b: number) => void;
+    readonly pvclient_cloudCreate: (a: number, b: number, c: number) => void;
+    readonly pvclient_cloudForget: (a: number, b: number, c: number) => void;
+    readonly pvclient_cloudGrant: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+    readonly pvclient_cloudGrantVersion: (a: number, b: number, c: number) => number;
+    readonly pvclient_cloudHasKey: (a: number, b: number, c: number) => number;
+    readonly pvclient_cloudHeadSeq: (a: number, b: number, c: number) => number;
+    readonly pvclient_cloudIngestGrants: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_cloudIngestSnapshot: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_cloudIngestSync: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly pvclient_cloudIsAttached: (a: number, b: number, c: number) => number;
+    readonly pvclient_cloudKeysExport: (a: number, b: number) => void;
+    readonly pvclient_cloudKeysImport: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_cloudLeave: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvclient_cloudPrepareLocal: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_cloudRevoke: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly pvclient_cloudRotate: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvclient_cloudSeal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly pvclient_cloudShareKeys: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_cloudShareWithOwnDevices: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_cloudSnapshotRequest: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvclient_cloudStateJson: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_createIdentity: (a: number, b: number, c: number) => void;
     readonly pvclient_cursor: (a: number) => bigint;
     readonly pvclient_deliveryKeyRejected: (a: number, b: number, c: number) => number;
@@ -704,6 +821,7 @@ export interface InitOutput {
     readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_claimDue: (a: number, b: number, c: number) => void;
+    readonly pvstate_cloudContainerSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_diff: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvstate_groupInviteRemove: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_groupInviteSet: (a: number, b: number, c: number, d: number) => void;

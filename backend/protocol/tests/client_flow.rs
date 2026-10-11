@@ -1471,3 +1471,391 @@ fn planner_key_from_stranger_is_ignored() {
     assert!(ev.iter().any(|e| matches!(e, Event::Skipped { .. })), "{ev:?}");
     assert!(!alice.planner_is_attached());
 }
+
+// ── контейнеры облака (spec 016) ────────────────────────────────────────────
+
+/// Мини-шард `domains` для нескольких контейнеров облака.
+#[derive(Default)]
+struct MiniCloud {
+    containers: std::collections::BTreeMap<Vec<u8>, MiniDomains>,
+}
+
+impl MiniCloud {
+    fn of(&mut self, r: &Option<Ref>) -> &mut MiniDomains {
+        self.containers.get_mut(&r.as_ref().unwrap().id).expect("контейнер не создан")
+    }
+
+    fn entry_target(op: &SignedOp) -> Option<Ref> {
+        let body: parvane_protocol::pb::parvane::core::v2::OpBody = decode_checked(&op.body, Origin::Client).unwrap();
+        body.header.unwrap().target
+    }
+
+    fn handle(&mut self, srv: &mut Server, user: &str, device: &str, r: &OutRequest) {
+        use parvane_protocol::pb::parvane::core::v2 as c2;
+        match r.method {
+            "domain.container.create" => {
+                let q: c2::DomainContainerCreateRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let g = q.genesis.unwrap();
+                let (c, _) = parvane_protocol::domain::verify_genesis(&g).unwrap();
+                let id = c.r#ref.as_ref().unwrap().id.clone();
+                self.containers.insert(id, MiniDomains { genesis: Some(g), container: Some(c), ..Default::default() });
+            }
+            "domain.op.append" => {
+                let q: c2::DomainOpAppendRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let mut op = q.op.unwrap();
+                let d = self.of(&op.container);
+                assert_eq!(op.key_epoch, d.container.as_ref().unwrap().key_epoch, "операция не текущей эпохи");
+                parvane_protocol::domain::verify_op_seal(&op).unwrap();
+                op.seq = d.ops.len() as u64 + 1;
+                d.ops.push(op);
+            }
+            "domain.grant.set" => {
+                let q: c2::DomainGrantSetRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let e = q.grant.unwrap();
+                self.of(&Self::entry_target(&e)).grants.push(e);
+            }
+            "domain.grant.leave" => {
+                let q: c2::DomainGrantLeaveRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let e = q.leave.unwrap();
+                self.of(&Self::entry_target(&e)).grants.push(e);
+            }
+            "domain.grant.revoke" | "domain.key.rotate" => {
+                let e = if r.method == "domain.key.rotate" {
+                    decode_checked::<c2::DomainKeyRotateRequest>(&r.body, Origin::Client).unwrap().rotate.unwrap()
+                } else {
+                    decode_checked::<c2::DomainGrantRevokeRequest>(&r.body, Origin::Client).unwrap().grant.unwrap()
+                };
+                let d = self.of(&Self::entry_target(&e));
+                d.container.as_mut().unwrap().key_epoch += 1;
+                d.grants.push(e);
+            }
+            "domain.snapshot.put" => {
+                let q: c2::DomainSnapshotPutRequest = decode_checked(&r.body, Origin::Client).unwrap();
+                let s = q.snapshot.unwrap();
+                let target = s.container.clone();
+                self.of(&target).snapshot = Some(s);
+            }
+            _ => srv.handle(user, device, r),
+        }
+    }
+
+    fn get(&self, id: &[u8]) -> &MiniDomains {
+        &self.containers[id]
+    }
+}
+
+fn run_cloud(cloud: &mut MiniCloud, srv: &mut Server, c: &mut Client, op: &mut dyn FnMut(&mut Client) -> Result<Vec<OutRequest>, ClientError>) -> Vec<&'static str> {
+    for _ in 0..8 {
+        match op(c) {
+            Ok(reqs) => {
+                let methods = reqs.iter().map(|r| r.method).collect();
+                for r in reqs {
+                    cloud.handle(srv, &c.user.clone(), &c.device_id.clone(), &r);
+                }
+                return methods;
+            }
+            Err(ClientError::Need(n)) => satisfy(srv, c, n),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    panic!("не сошлось");
+}
+
+fn cloud_names(c: &Client, id: &[u8]) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(&c.cloud_state_json(id).unwrap()).unwrap();
+    let mut names: Vec<String> = v["nodes"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap().to_string()).collect();
+    names.sort();
+    names
+}
+
+/// Локальная правка → отправка (как делает хост web).
+fn cloud_edit(cloud: &mut MiniCloud, srv: &mut Server, c: &mut Client, id: &[u8], ops: serde_json::Value) {
+    let local = c.cloud_prepare_local(id, &serde_json::json!({ "ops": ops }).to_string()).unwrap();
+    let req = c.cloud_seal(id, &local.op, &local.op_id, 1).unwrap();
+    cloud.handle(srv, &c.user.clone(), &c.device_id.clone(), &req);
+}
+
+/// Догнать гранты и журнал операций контейнера (как делает хост web).
+fn cloud_pull(cloud: &MiniCloud, srv: &mut Server, c: &mut Client, id: &[u8]) -> parvane_protocol::client::CloudIngest {
+    for _ in 0..6 {
+        let after = c.cloud_grant_version(id) as usize;
+        match c.cloud_ingest_grants(id, &cloud.get(id).grants_response(after)) {
+            Ok(_) => {}
+            Err(ClientError::Need(n)) => {
+                satisfy(srv, c, n);
+                continue;
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+        let r = c.cloud_ingest_sync(id, &cloud.get(id).sync_response(c.cloud_head_seq(id)), true).unwrap();
+        if r.authors_behind {
+            // Новое устройство участника: обновить журналы устройств и повторить.
+            for u in ["alice@local", "bob@local"] {
+                if u != c.user {
+                    satisfy(srv, c, Need::PeerLog { user: u.into(), after: 0 });
+                }
+            }
+            return c.cloud_ingest_sync(id, &cloud.get(id).sync_response(c.cloud_head_seq(id)), false).unwrap();
+        }
+        if !r.grants_behind {
+            return r;
+        }
+    }
+    panic!("журнал контейнера не догнан");
+}
+
+fn hexid(n: u8) -> String {
+    hex::encode([n; 16])
+}
+
+fn cloud_file(n: u8, parent: Option<u8>, name: &str) -> serde_json::Value {
+    use base64::Engine as _;
+    let b = |x: &[u8]| base64::engine::general_purpose::STANDARD.encode(x);
+    serde_json::json!({"op": "create", "id": hexid(n), "kind": "file", "parent": parent.map(hexid), "name": name, "mtime": 5,
+        "blob": {"fileId": format!("f{n}"), "key": b(&[1; 32]), "nonce": b(&[2; 12]), "capability": b(&[3; 32]), "size": 10, "chunks": 1,
+                 "mime": "text/plain", "uploader": "alice@local"}})
+}
+
+fn cloud_folder(n: u8, parent: Option<u8>, name: &str) -> serde_json::Value {
+    serde_json::json!({"op": "create", "id": hexid(n), "kind": "folder", "parent": parent.map(hexid), "name": name})
+}
+
+#[test]
+fn cloud_drive_on_own_devices_and_rotated_on_revoke() {
+    let mut srv = Server::default();
+    let mut cloud = MiniCloud::default();
+    let mut alice = setup(&mut srv, "alice@local");
+
+    // Личный диск на d1: папка и файл в ней.
+    let (id, create) = alice.cloud_create(1).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d1", &create);
+    assert!(alice.cloud_has_key(&id));
+    assert_eq!(alice.cloud_role(&id), Some(parvane_protocol::client::CloudRole::Owner));
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([cloud_folder(1, None, "Документы"), cloud_file(2, Some(1), "отчёт.pdf")]));
+    assert_eq!(cloud_names(&alice, &id), vec!["Документы", "отчёт.pdf"]);
+    // Негодная правка (в неизвестную папку, цикл) отвергается целиком и состояние не меняет.
+    for bad in [serde_json::json!([cloud_folder(3, Some(9), "x")]), serde_json::json!([{"op": "move", "id": hexid(1), "parent": hexid(1), "name": "Документы"}])] {
+        assert!(alice.cloud_prepare_local(&id, &serde_json::json!({ "ops": bad }).to_string()).is_err());
+    }
+    assert_eq!(cloud_names(&alice, &id).len(), 2);
+    // Эхо своей операции идемпотентно.
+    let r = cloud_pull(&cloud, &mut srv, &mut alice, &id);
+    assert_eq!((r.head_seq, r.applied), (1, 2));
+
+    // Второе устройство по гранту: ключ контейнера — вместе с группами.
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
+    assert_eq!(shared.len(), 1, "ключ контейнера облака");
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(ev.iter().any(|e| matches!(e, Event::CloudChanged { id: i, .. } if *i == id)), "{ev:?}");
+    assert!(!alice2.cloud_is_attached(&id));
+    // Хост подключает контейнер — ключ принимается из ожидающих.
+    assert_eq!(alice2.cloud_attach(&cloud.get(&id).get_response(), &cloud.get(&id).grants_response(0)).unwrap(), id);
+    assert!(alice2.cloud_has_key(&id));
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut alice2, &id).applied, 2);
+    assert_eq!(cloud_names(&alice2, &id), vec!["Документы", "отчёт.pdf"]);
+
+    // Правки со второго устройства видны первому: переименование и корзина.
+    cloud_edit(&mut cloud, &mut srv, &mut alice2, &id, serde_json::json!([
+        {"op": "move", "id": hexid(1), "parent": null, "name": "Архив"},
+        {"op": "trash", "id": hexid(2), "trashed": true, "at": 100},
+    ]));
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut alice, &id).applied, 2);
+    assert_eq!(alice.cloud_state_json(&id), alice2.cloud_state_json(&id));
+    assert_eq!(cloud_names(&alice, &id), vec!["Архив", "отчёт.pdf"]);
+
+    // Персист: дерево, ключ и курсор переживают export/import.
+    let key = [7u8; 32];
+    let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
+    assert!(restored.cloud_has_key(&id));
+    assert_eq!(restored.cloud_state_json(&id), alice.cloud_state_json(&id));
+    assert_eq!(restored.cloud_head_seq(&id), 2);
+
+    // Третье устройство — ключи из экспорта (линковка, копия ключей аккаунта).
+    let mut alice3 = Client::new("alice@local", "d3", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice3.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d3", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let export = alice.cloud_keys_export();
+    assert_eq!((export.len(), export[0].keys.len(), export[0].domain.as_str()), (1, 1, "cloud.v1"));
+    alice3.cloud_keys_import(&export).unwrap();
+    alice3.cloud_attach(&cloud.get(&id).get_response(), &cloud.get(&id).grants_response(0)).unwrap();
+    assert!(alice3.cloud_has_key(&id));
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut alice3, &id).applied, 4);
+    assert_eq!(alice3.cloud_state_json(&id), alice.cloud_state_json(&id));
+
+    // Отзыв d2 → запись rotate, новая эпоха, ключ — оставшимся (d3).
+    let methods = run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| Ok(c.revoke_device("d2")?.requests));
+    assert!(methods.contains(&"domain.key.rotate"), "{methods:?}");
+    assert_eq!(cloud.get(&id).container.as_ref().unwrap().key_epoch, 2);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([cloud_file(4, None, "после отзыва.txt")]));
+
+    // d3 получает ключ эпохи 2 по E2E и читает.
+    alice3.ingest_log("alice@local", srv.logs["alice@local"][alice3.log_version("alice@local") as usize..].to_vec()).unwrap();
+    drain(&mut srv, &mut alice3);
+    let r = cloud_pull(&cloud, &mut srv, &mut alice3, &id);
+    assert_eq!((r.applied, r.missing_epoch), (1, None), "{r:?} {:?}", alice3.last_error);
+    assert!(cloud_names(&alice3, &id).contains(&"после отзыва.txt".to_string()));
+    // Отозванное d2: ключа эпохи 2 нет — операция ждёт ключа, которого не будет.
+    let r = cloud_pull(&cloud, &mut srv, &mut alice2, &id);
+    assert_eq!(r.missing_epoch, Some(2));
+    assert!(!cloud_names(&alice2, &id).contains(&"после отзыва.txt".to_string()));
+    // Снимок по порогу: до 200 операций запроса нет.
+    assert!(alice.cloud_snapshot_request(&id, 1).unwrap().is_none());
+}
+
+#[test]
+fn cloud_shared_folder_roles_revoke_and_leave() {
+    use parvane_protocol::client::CloudRole;
+    let mut srv = Server::default();
+    let mut cloud = MiniCloud::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let mut eve = setup(&mut srv, "eve@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    bob_learn(&mut alice, "bob@local", bob_dk);
+
+    // Алиса заводит совместную папку и зовёт Боба читателем.
+    let (id, create) = alice.cloud_create(1).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d1", &create);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([{"op": "meta", "name": "Проект"}, cloud_file(1, None, "план.txt")]));
+    let methods = run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", false, "Приглашение в папку «Проект»", 2));
+    assert_eq!(methods[0], "domain.grant.set");
+    // Себе и неадресу грант не выдаётся; повтор той же роли — пусто.
+    assert!(alice.cloud_grant(&id, "alice@local", true, "", 2).is_err());
+    assert!(alice.cloud_grant(&id, "bob@local", false, "", 2).unwrap().is_empty());
+
+    // Боб получает ключ и приглашение, подключает контейнер и читает.
+    let ev = drain(&mut srv, &mut bob);
+    assert!(ev.iter().any(|e| matches!(e, Event::CloudChanged { id: i, .. } if *i == id)), "{ev:?}");
+    let invite = ev.iter().find_map(|e| match e {
+        Event::Direct { from, content: Content { kind: Some(content::Kind::CloudInvite(i)), .. }, .. } => Some((from.clone(), i.clone())),
+        _ => None,
+    });
+    let (from, invite) = invite.expect("приглашение сообщением чата");
+    assert_eq!((from.as_str(), invite.name.as_str(), invite.role, invite.container.as_ref().map(|r| r.id.clone())), ("alice@local", "Проект", 1, Some(id.clone())));
+    let (get, grants) = (cloud.get(&id).get_response(), cloud.get(&id).grants_response(0));
+    run_cloud(&mut cloud, &mut srv, &mut bob, &mut |c| c.cloud_attach(&get, &grants).map(|_| vec![]));
+    assert!(bob.cloud_has_key(&id));
+    assert_eq!(bob.cloud_role(&id), Some(CloudRole::Reader));
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut bob, &id).applied, 2);
+    assert_eq!(cloud_names(&bob, &id), vec!["план.txt"]);
+
+    // Читатель не пишет: локально — отказ; операция в обход проверки отвергается остальными.
+    let one = serde_json::json!({ "ops": [cloud_file(2, None, "от читателя.txt")] }).to_string();
+    assert_eq!(bob.cloud_prepare_local(&id, &one).unwrap_err(), ClientError::Proto(parvane_protocol::ProtoError::Forbidden));
+    let forged = {
+        use parvane_protocol::domain::{cloud as dc, cloud_json, LamportGuard};
+        let mut batch = cloud_json::batch_from_json(&one).unwrap();
+        let mut guard = LamportGuard::default();
+        dc::stamp_batch(&mut batch, "d1", &mut guard);
+        batch.encode_to_vec()
+    };
+    cloud_pull(&cloud, &mut srv, &mut alice, &id);
+    let req = bob.cloud_seal(&id, &forged, &parvane_protocol::sign::new_op_id(), 3).unwrap();
+    cloud.handle(&mut srv, "bob@local", "d1", &req);
+    let r = cloud_pull(&cloud, &mut srv, &mut alice, &id);
+    assert_eq!((r.applied, r.head_seq), (0, 2), "операция читателя не применена");
+    assert_eq!(cloud_names(&alice, &id), vec!["план.txt"]);
+
+    // Повышение до редактора: Боб пишет, Алиса видит.
+    run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", true, "", 4));
+    drain(&mut srv, &mut bob);
+    cloud_pull(&cloud, &mut srv, &mut bob, &id);
+    assert_eq!(bob.cloud_role(&id), Some(CloudRole::Editor));
+    cloud_edit(&mut cloud, &mut srv, &mut bob, &id, serde_json::json!([cloud_file(3, None, "от Боба.txt")]));
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut alice, &id).applied, 1);
+    assert_eq!(cloud_names(&alice, &id), vec!["от Боба.txt", "план.txt"]);
+    let v: serde_json::Value = serde_json::from_str(&alice.cloud_containers_json()).unwrap();
+    assert_eq!(v[0]["members"], serde_json::json!([{"user": "bob@local", "role": "editor"}]));
+    assert_eq!((v[0]["role"].as_str(), v[0]["name"].as_str()), (Some("owner"), Some("Проект")));
+
+    // Понижение до читателя = грант + смена эпохи: в новой эпохе Боб читает, но не пишет.
+    let methods = run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", false, "", 5));
+    assert!(methods.contains(&"domain.key.rotate"), "{methods:?}");
+    assert_eq!(cloud.get(&id).container.as_ref().unwrap().key_epoch, 2);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([cloud_file(4, None, "эпоха 2.txt")]));
+    drain(&mut srv, &mut bob);
+    let r = cloud_pull(&cloud, &mut srv, &mut bob, &id);
+    // (эхо своей операции эпохи 1 и операция Алисы эпохи 2)
+    assert_eq!((r.applied, r.missing_epoch), (2, None), "{r:?} {:?}", bob.last_error);
+    assert!(cloud_names(&bob, &id).contains(&"эпоха 2.txt".to_string()));
+    assert_eq!(bob.cloud_role(&id), Some(CloudRole::Reader));
+    assert!(bob.cloud_prepare_local(&id, &one).is_err());
+    let req = bob.cloud_seal(&id, &forged, &parvane_protocol::sign::new_op_id(), 6).unwrap();
+    cloud.handle(&mut srv, "bob@local", "d1", &req);
+    cloud_pull(&cloud, &mut srv, &mut alice, &id);
+    assert!(!cloud_names(&alice, &id).contains(&"от читателя.txt".to_string()), "в новой эпохе запись бывшего редактора отвергнута");
+    assert_eq!(alice.cloud_head_seq(&id), 5);
+
+    // Ключ от постороннего (не админа контейнера) не принимается.
+    let eve_dk = *eve.delivery_key();
+    bob_learn(&mut eve, "bob@local", bob_dk);
+    bob_learn(&mut bob, "eve@local", eve_dk);
+    let fake = Content {
+        kind: Some(content::Kind::ContainerKey(parvane_protocol::pb::parvane::core::v2::ContainerKeyShare {
+            container: Some(Ref { domain: "local".into(), id: id.clone() }),
+            domain: "cloud.v1".into(),
+            key_epoch: 2,
+            key: vec![6; 32],
+            grant_version: 0,
+            grant_head_hash: vec![0; 32],
+        })),
+        ..Default::default()
+    };
+    run(&mut srv, &mut eve, &mut |c| c.prepare_direct("bob@local", &fake));
+    let before = bob.cloud_keys_export();
+    let ev = drain(&mut srv, &mut bob);
+    assert!(ev.iter().all(|e| !matches!(e, Event::CloudChanged { .. })), "{ev:?}");
+    assert_eq!(bob.cloud_keys_export(), before);
+
+    // Алиса убирает Боба: эпоха 3, новое Бобу недоступно, роли у него нет.
+    let methods = run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_revoke(&id, "bob@local", 7));
+    assert_eq!(methods[0], "domain.grant.revoke");
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([cloud_file(5, None, "после удаления.txt")]));
+    drain(&mut srv, &mut bob);
+    let r = cloud_pull(&cloud, &mut srv, &mut bob, &id);
+    assert_eq!(r.missing_epoch, Some(3));
+    assert_eq!(bob.cloud_role(&id), None);
+    assert!(!cloud_names(&bob, &id).contains(&"после удаления.txt".to_string()));
+    bob.cloud_forget(&id);
+    assert!(bob.cloud_ids().is_empty() && bob.cloud_keys_export().is_empty());
+
+    // Вторая папка: Боб — редактор и уходит сам; Алиса видит выход и меняет эпоху.
+    let (id2, create) = alice.cloud_create(8).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d1", &create);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id2, serde_json::json!([{"op": "meta", "name": "Фото"}]));
+    run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id2, "bob@local", true, "", 9));
+    drain(&mut srv, &mut bob);
+    let (get, grants) = (cloud.get(&id2).get_response(), cloud.get(&id2).grants_response(0));
+    run_cloud(&mut cloud, &mut srv, &mut bob, &mut |c| c.cloud_attach(&get, &grants).map(|_| vec![]));
+    cloud_pull(&cloud, &mut srv, &mut bob, &id2);
+    cloud_edit(&mut cloud, &mut srv, &mut bob, &id2, serde_json::json!([cloud_file(1, None, "снимок.jpg")]));
+    let leave = bob.cloud_leave(&id2, 10).unwrap();
+    cloud.handle(&mut srv, "bob@local", "d1", &leave);
+    assert!(!bob.cloud_is_attached(&id2));
+    // Операция Боба до выхода остаётся в силе; участников больше нет.
+    cloud_pull(&cloud, &mut srv, &mut alice, &id2);
+    assert_eq!(cloud_names(&alice, &id2), vec!["снимок.jpg"]);
+    let v: serde_json::Value = serde_json::from_str(&alice.cloud_containers_json()).unwrap();
+    let second = v.as_array().unwrap().iter().find(|c| c["id"] == hex::encode(&id2)).unwrap();
+    assert_eq!(second["members"], serde_json::json!([]));
+    let methods = run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_rotate(&id2, 11));
+    assert_eq!(methods, vec!["domain.key.rotate"], "ключ некому слать, кроме своих устройств (их нет)");
+    // Не-админ эпоху не меняет и участников не убирает.
+    assert!(bob.cloud_rotate(&id2, 12).is_err());
+
+    // Персист совместной папки (журнал грантов с записями двух аккаунтов).
+    let key = [7u8; 32];
+    let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
+    assert_eq!(restored.cloud_containers_json(), alice.cloud_containers_json());
+    assert_eq!(restored.cloud_state_json(&id), alice.cloud_state_json(&id));
+}

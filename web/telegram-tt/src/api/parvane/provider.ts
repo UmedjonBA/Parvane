@@ -37,7 +37,7 @@ import {
   createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
 import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
-import { collectV2History, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
+import { collectV2History, parseLinkCloudKeys, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
 import { createStateJournal } from './v2/stateJournal';
 import {
   clearLoginStorage,
@@ -50,6 +50,7 @@ import {
   touchSessionActivity,
 } from './authStorage';
 import { createCallController } from './calls';
+import { createCloudDrive } from './cloudDrive';
 import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
 import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
@@ -513,6 +514,12 @@ const v2Controller = createV2Controller({
   onPlannerChanged: () => {
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-planner-changed'));
   },
+  // Облако (spec 016): контейнеры объявляются в журнале состояния
+  cloudEntriesFromState: () => stateJournal.cloudEntries(),
+  recordCloudEntry: (entry) => stateJournal.recordCloudEntry(entry),
+  onCloudChanged: () => {
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-cloud-changed'));
+  },
   onStateReady: (host, rekey) => {
     void refreshV2Privacy();
     return stateJournal.attach(host, rekey);
@@ -957,6 +964,13 @@ async function applyBundleHistory(history: KeyBundleHistory | undefined, owner: 
   logDebug(`копия ключей: снимок истории применён (${rows.length} строк)`);
 }
 
+const cloudDrive = createCloudDrive({
+  log: logDebug,
+  self: () => store.self,
+  cloud: () => v2Controller.cloud,
+  transport: () => v2Controller,
+});
+
 // Свериться с копией ключей аккаунта на сервере: ключи планировщика и снимок
 // истории свежее применённого (его мог положить другое своё устройство)
 async function syncFromKeyBundle() {
@@ -964,6 +978,7 @@ async function syncFromKeyBundle() {
   const bundle = await v2Controller.fetchKeyBundle();
   if (!bundle || store.self !== owner) return;
   if (bundle.planner) v2Controller.planner.keysImport(bundle.planner);
+  if (bundle.cloud) v2Controller.cloud.keysImport(bundle.cloud);
   await applyBundleHistory(bundle.history, owner)
     .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
 }
@@ -974,6 +989,7 @@ async function completeKeyJoin(outcome: KeyJoinOutcome) {
   const owner = store.self;
   void registerV2Wake();
   if (outcome.planner) v2Controller.planner.keysImport(outcome.planner);
+  if (outcome.cloud) v2Controller.cloud.keysImport(outcome.cloud);
   await applyBundleHistory(outcome.history, owner)
     .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
   BUNDLE_RECHECK_DELAYS_MS.forEach((delay) => {
@@ -1286,10 +1302,12 @@ async function pollHistoryLinkGrant(generation: number) {
   }
   let v2History: WireStoredMessage[];
   let plannerKeys: string | undefined;
+  let cloudKeys: string | undefined;
   try {
     const exportText = await media.blob.text();
     v2History = parseV2History(exportText);
     plannerKeys = parseLinkPlannerKeys(exportText);
+    cloudKeys = parseLinkCloudKeys(exportText);
   } catch (err) {
     logDebug(`линковка: экспорт не прочитан: ${String(err)}`);
     return;
@@ -1298,6 +1316,8 @@ async function pollHistoryLinkGrant(generation: number) {
   await joinV2WithLinkGrant(boxPayload.v2);
   // spec 010: ключи контейнера планировщика старого устройства
   if (plannerKeys) v2Controller.planner.keysImport(plannerKeys);
+  // spec 016: ключи контейнеров облака старого устройства
+  if (cloudKeys) v2Controller.cloud.keysImport(cloudKeys);
   // Строки истории — после полного ресинка, а не вперемешку с ним: применённая
   // посреди ресинка строка (замечено на своих исходящих) временами не доходила до UI
   await syncController.ensureSynced()
@@ -2192,6 +2212,9 @@ const methods = {
     return true;
   },
 
+  // Облако (spec 016): состояние, загрузка, скачивание, место — `./cloudDrive`
+  ...cloudDrive,
+
   async fetchWallpapers() {
     const builtin = await buildBuiltinWallpapers(mediaService.cacheBlob);
     // Картинка пользователя живёт в шифрованном хранилище (по одной на тему) — возвращаем её плитку,
@@ -2517,6 +2540,8 @@ const methods = {
         v2History: collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal()),
         // spec 010: ключи контейнера планировщика — чтобы раздел открылся сразу после привязки
         planner: v2Controller.planner.keysExport(),
+        // spec 016: ключи контейнеров облака (личный диск, совместные папки)
+        cloud: v2Controller.cloud.keysExport(),
       });
       const upload = await mediaService.uploadBlob(
         new Blob([exportJson]), 'link-transfer', 'application/octet-stream', { encrypt: true },

@@ -75,6 +75,8 @@ export type V2Content = {
   // spec 011 (TASK-1): задание в чат и решение по нему
   task_offer?: V2TaskOffer;
   task_response?: { offer?: V2MessageRef; decision?: string; text?: string };
+  // spec 016 (CLOUD-1): приглашение в совместную папку облака
+  cloud_invite?: { container?: { domain?: string; id?: string }; name?: string; role?: number; text?: string };
   // Режим «усиленная приватность» (L2, FR-036): предпочтение участника
   // личного чата; proto3-JSON опускает `l2: false`
   chat_mode?: { l2?: boolean };
@@ -337,6 +339,16 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
         },
       };
       break;
+    case 'cloud_invite':
+      out = {
+        cloud_invite: {
+          container: c.container,
+          name: c.name,
+          role: c.role || undefined,
+          text: c.text || undefined,
+        },
+      };
+      break;
     case 'task_response':
       out = {
         task_response: {
@@ -422,6 +434,15 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       minutes: c.task_offer.minutes || undefined,
       due: c.task_offer.due || undefined,
       text: c.task_offer.text || undefined,
+    };
+  } else if (c.cloud_invite) {
+    const container = c.cloud_invite.container;
+    out = {
+      kind: 'cloud_invite',
+      container: container?.id ? { domain: container.domain || '', id: container.id } : undefined,
+      name: c.cloud_invite.name || '',
+      role: c.cloud_invite.role || undefined,
+      text: c.cloud_invite.text || undefined,
     };
   } else if (c.task_response) {
     out = {

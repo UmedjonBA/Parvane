@@ -103,6 +103,39 @@ async function importKey(rawKey: Uint8Array, usage: KeyUsage) {
   return crypto.subtle.importKey('raw', toArrayBuffer(rawKey), 'AES-GCM', false, [usage]);
 }
 
+/** Заголовок v2: "PVB2" | u32 chunkSize. */
+export function writeBlobHeader(chunkSize: number): Uint8Array {
+  const out = new Uint8Array(BLOB_HEADER_BYTES);
+  out.set(MAGIC, 0);
+  putU32(new DataView(out.buffer), 4, chunkSize);
+  return out;
+}
+
+const encryptKeys = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+
+/**
+ * Запечатать один кусок v2 (ct || tag): `plain` — байты куска `index` из
+ * `total`. Потоковое шифрование больших файлов (spec 016): куски берутся из
+ * файла по одному, результат побайтно совпадает с `encryptBlobWithKey`.
+ */
+export async function sealBlobChunk(
+  plain: Uint8Array, rawKey: Uint8Array, nonce: Uint8Array, chunkSize: number, index: number, total: number,
+): Promise<Uint8Array> {
+  if (rawKey.length !== KEY_LEN || nonce.length !== NONCE_LEN) throw new Error('blobcrypt: bad key/nonce');
+  if (plain.length > chunkSize || index >= total) throw new Error('blobcrypt: bad chunk');
+  let key = encryptKeys.get(rawKey);
+  if (!key) {
+    key = importKey(rawKey, 'encrypt');
+    encryptKeys.set(rawKey, key);
+  }
+  const sealed = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonceFor(nonce, index), additionalData: aadFor(chunkSize, index, total) },
+    await key,
+    toArrayBuffer(plain),
+  );
+  return new Uint8Array(sealed);
+}
+
 /** Детерминированное шифрование v2 (тесты, кросс-клиентские векторы). */
 export async function encryptBlobWithKey(
   plain: Uint8Array, rawKey: Uint8Array, nonce: Uint8Array, chunkSize = BLOB_DEFAULT_CHUNK,

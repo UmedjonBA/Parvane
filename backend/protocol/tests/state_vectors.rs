@@ -467,6 +467,7 @@ fn gen_migration() -> Value {
         cleared: vec![],
         invites: vec![],
             planner_container: None,
+            cloud_containers: vec![],
     };
     let mut clock = LamportClock::new(10);
     let ops = state::migrate_snapshot_with(&local, "dev-m", &mut clock, 0, counter_ids()).unwrap();

@@ -20,7 +20,7 @@
 //!
 //! Сведение (CRDT) — внутри шифрования по схеме домена. Здесь — общие
 //! LWW-примитивы: метка `(lamport, device_id)`, `LwwMap` (тестовый домен
-//! `sample.v1`) и `cloud::LwwTree` (облако: дерево с LWW-перемещениями).
+//! `sample.v1`); облако — `cloud` (spec 016), планировщик — `planner` (spec 010).
 //! Сведение коммутативно: одинаковый результат при любом порядке применения.
 //! Защита от «вечного победителя» (D-16) — `LamportGuard`, применяемый в
 //! порядке `seq` журнала (одинаковом у всех клиентов).
@@ -52,15 +52,18 @@ pub const OP_GRANT: &str = "grant";
 pub const OP_REVOKE: &str = "revoke";
 /// Смена эпохи без отзыва гранта (spec 010, R6): запись журнала грантов без grantee.
 pub const OP_ROTATE: &str = "rotate";
+/// Выход участника (spec 016): подписывает сам получатель гранта.
+pub const OP_LEAVE: &str = "leave";
 
 /// Первая эпоха ключа (генезис).
 pub const FIRST_EPOCH: u64 = 1;
 pub const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
-/// Открытый текст операции ≤ 256 КиБ (как payload v1); снимка ≤ 1 МиБ.
+/// Открытый текст операции ≤ 256 КиБ (как payload v1); снимка ≤ 3 МиБ
+/// (spec 016: дерево облака до 8 000 узлов; кадр gateway — 4 МиБ).
 pub const MAX_OP_PLAINTEXT: usize = 262_144;
-pub const MAX_SNAPSHOT_PLAINTEXT: usize = 1_048_576;
+pub const MAX_SNAPSHOT_PLAINTEXT: usize = 3 * 1_048_576;
 /// Байтовый бюджет страницы синхронизации журнала контейнера.
 pub const SYNC_MAX_BYTES: u32 = 716_800;
 /// D-16: метка не может обогнать виденный максимум больше чем на 2^20.
@@ -424,6 +427,8 @@ pub struct GrantEvent {
     /// Запись "rotate": гранты не менялись, поднята только эпоха; `grantee` —
     /// владелец (формально), в таблицы грантов не пишется.
     pub rotate: bool,
+    /// Запись "leave": участник ушёл сам, эпоха прежняя.
+    pub leave: bool,
 }
 
 /// Подписать грант (выдача/смена уровня) от имени админа.
@@ -447,6 +452,12 @@ pub fn sign_revoke(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Gr
 pub fn sign_rotate(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64) -> Result<SignedOp> {
     let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
     sign_grant_entry(signer, access, OP_ROTATE, None, GrantLevel::Unspecified, next, ts_ms)
+}
+
+/// Подписать выход участника (spec 016): сам получатель гранта снимает свой
+/// грант; эпоха не меняется — сменить её должен админ, увидев запись.
+pub fn sign_leave(signer: &dyn OpSigner, access: &ContainerAccess, me: &Grantee, ts_ms: i64) -> Result<SignedOp> {
+    sign_grant_entry(signer, access, OP_LEAVE, Some(me), GrantLevel::Unspecified, access.epoch, ts_ms)
 }
 
 fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: Option<&Grantee>, level: GrantLevel, key_epoch: u64, ts_ms: i64) -> Result<SignedOp> {
@@ -550,7 +561,7 @@ impl ContainerAccess {
         v
     }
 
-    /// Применить запись журнала грантов ("grant", "revoke" или "rotate").
+    /// Применить запись журнала грантов ("grant", "revoke", "rotate" или "leave").
     pub fn apply(&mut self, op: &SignedOp, resolve: KeyResolver, groups: Membership) -> Result<GrantEvent> {
         // op_type — из присланного тела; verify_op сверит его с подписью.
         let body: OpBody = decode_checked(&op.body, Origin::Client)?;
@@ -558,6 +569,7 @@ impl ContainerAccess {
             Some(OP_GRANT) => OP_GRANT,
             Some(OP_REVOKE) => OP_REVOKE,
             Some(OP_ROTATE) => OP_ROTATE,
+            Some(OP_LEAVE) => OP_LEAVE,
             _ => return Err(ProtoError::ContextMismatch),
         };
         let revoke = op_type == OP_REVOKE;
@@ -573,6 +585,23 @@ impl ContainerAccess {
             return Err(ProtoError::BrokenChain);
         }
         let signer = resolve(&v.signer).ok_or(ProtoError::Forbidden)?;
+        if op_type == OP_LEAVE {
+            // Выход: подписант — сам получатель действующего гранта; эпоха и
+            // писатели текущей эпохи прежние (его прошлые операции остаются в силе).
+            let grantee = Grantee::from_pb(g.grantee.as_ref())?;
+            if grantee != Grantee::User(signer.user.clone()) || g.level != GrantLevel::Unspecified as i32 {
+                return Err(ProtoError::Forbidden);
+            }
+            if g.key_epoch != self.epoch {
+                return Err(ProtoError::Expired);
+            }
+            if self.grants.remove(&grantee).is_none() {
+                return Err(ProtoError::InvalidField("grantee"));
+            }
+            self.version += 1;
+            self.hashes.push(entry_hash(op));
+            return Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee, level: None, signer, rotate: false, leave: true });
+        }
         if !self.can_admin(&signer.user, groups) {
             return Err(ProtoError::Forbidden);
         }
@@ -589,7 +618,7 @@ impl ContainerAccess {
             self.version += 1;
             self.hashes.push(entry_hash(op));
             self.container.key_epoch = self.epoch;
-            return Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee: Grantee::User(self.owner.clone()), level: None, signer, rotate: true });
+            return Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee: Grantee::User(self.owner.clone()), level: None, signer, rotate: true, leave: false });
         }
         let grantee = Grantee::from_pb(g.grantee.as_ref())?;
         if grantee == Grantee::User(self.owner.clone()) {
@@ -624,7 +653,7 @@ impl ContainerAccess {
         self.version += 1;
         self.hashes.push(entry_hash(op));
         self.container.key_epoch = self.epoch;
-        Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee, level: event_level, signer, rotate: false })
+        Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee, level: event_level, signer, rotate: false, leave: false })
     }
 
     /// Клиент: проверить автора операции — подпись, дайджест, эпоха известна,
@@ -898,197 +927,14 @@ pub mod sample {
     }
 }
 
-/// Облако как домен `cloud.v1` (T094): дерево с LWW-перемещениями. Только
-/// движок сведения — продуктовая реализация отдельной фичей.
-pub mod cloud {
-    use super::*;
-    use crate::pb::parvane::cloud::v1::{cloud_op, CloudBlobRef, CloudNodeKind, CloudOp};
-
-    pub const DOMAIN_NAME: &str = "cloud.v1";
-    pub type NodeId = [u8; 16];
-
-    /// Узел после сведения.
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct Node {
-        pub kind: CloudNodeKind,
-        /// `None` — корень контейнера.
-        pub parent: Option<NodeId>,
-        pub name: String,
-        pub blob: Option<CloudBlobRef>,
-        pub deleted: bool,
-    }
-
-    /// Множество операций дерева; состояние — детерминированная функция
-    /// множества (порядок применения не важен): перемещения проигрываются по
-    /// возрастанию меток, перемещение, создающее цикл или ведущее в
-    /// неизвестный/файловый узел, пропускается.
-    #[derive(Debug, Clone, Default)]
-    pub struct LwwTree {
-        /// Вид узла; при конфликте id побеждает создание с меньшей меткой.
-        kinds: BTreeMap<NodeId, (Stamp, CloudNodeKind)>,
-        /// (метка, узел) → (родитель, имя).
-        moves: BTreeMap<(Stamp, NodeId), (Option<NodeId>, String)>,
-        blobs: BTreeMap<NodeId, (Stamp, Vec<u8>)>,
-        tombstones: BTreeMap<NodeId, Stamp>,
-    }
-
-    fn node_id(b: &[u8]) -> Result<NodeId> {
-        b.try_into().map_err(|_| ProtoError::InvalidField("node_id"))
-    }
-
-    fn parent_id(b: &[u8]) -> Result<Option<NodeId>> {
-        if b.is_empty() {
-            Ok(None)
-        } else {
-            node_id(b).map(Some)
-        }
-    }
-
-    fn check_name(n: &str) -> Result<()> {
-        if n.is_empty() || n.contains('/') || n.contains('\0') || n == "." || n == ".." {
-            return Err(ProtoError::InvalidField("name"));
-        }
-        Ok(())
-    }
-
-    impl LwwTree {
-        fn add_move(&mut self, stamp: Stamp, node: NodeId, parent: Option<NodeId>, name: String) {
-            let key = (stamp, node);
-            let val = (parent, name);
-            // Повтор метки с другим содержимым (сломанное устройство) — берём
-            // большее, чтобы не зависеть от порядка.
-            match self.moves.get(&key) {
-                Some(cur) if *cur >= val => {}
-                _ => {
-                    self.moves.insert(key, val);
-                }
-            }
-        }
-
-        /// Применить операцию облака (открытый текст ContainerOp).
-        pub fn apply(&mut self, op: &CloudOp) -> Result<()> {
-            match op.op.as_ref().ok_or(ProtoError::InvalidField("op"))? {
-                cloud_op::Op::Create(c) => {
-                    let id = node_id(&c.node_id)?;
-                    let parent = parent_id(&c.parent_id)?;
-                    check_name(&c.name)?;
-                    let stamp = Stamp::from_pb(c.stamp.as_ref())?;
-                    let kind = CloudNodeKind::try_from(c.kind).map_err(|_| ProtoError::InvalidField("kind"))?;
-                    if kind == CloudNodeKind::Unspecified {
-                        return Err(ProtoError::InvalidField("kind"));
-                    }
-                    match self.kinds.get(&id) {
-                        Some((s, k)) if (s, *k) <= (&stamp, kind) => {}
-                        _ => {
-                            self.kinds.insert(id, (stamp.clone(), kind));
-                        }
-                    }
-                    if let Some(b) = &c.blob {
-                        self.set_blob(id, stamp.clone(), b);
-                    }
-                    self.add_move(stamp, id, parent, c.name.clone());
-                }
-                cloud_op::Op::Move(m) => {
-                    let id = node_id(&m.node_id)?;
-                    let parent = parent_id(&m.parent_id)?;
-                    check_name(&m.name)?;
-                    self.add_move(Stamp::from_pb(m.stamp.as_ref())?, id, parent, m.name.clone());
-                }
-                cloud_op::Op::SetBlob(s) => {
-                    let id = node_id(&s.node_id)?;
-                    let b = s.blob.as_ref().ok_or(ProtoError::InvalidField("blob"))?;
-                    self.set_blob(id, Stamp::from_pb(s.stamp.as_ref())?, b);
-                }
-                cloud_op::Op::Delete(d) => {
-                    let id = node_id(&d.node_id)?;
-                    let stamp = Stamp::from_pb(d.stamp.as_ref())?;
-                    match self.tombstones.get(&id) {
-                        Some(cur) if *cur >= stamp => {}
-                        _ => {
-                            self.tombstones.insert(id, stamp);
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        fn set_blob(&mut self, id: NodeId, stamp: Stamp, b: &CloudBlobRef) {
-            let bytes = b.encode_to_vec();
-            match self.blobs.get(&id) {
-                Some((s, cur)) if (s, cur) >= (&stamp, &bytes) => {}
-                _ => {
-                    self.blobs.insert(id, (stamp, bytes));
-                }
-            }
-        }
-
-        /// `ancestor` — предок `node` (или сам узел) в текущем состоянии.
-        fn is_ancestor(parents: &BTreeMap<NodeId, (Option<NodeId>, String, Stamp)>, ancestor: &NodeId, node: &NodeId) -> bool {
-            let mut cur = Some(*node);
-            // Циклов нет по построению; ограничение шагов — защита.
-            for _ in 0..=parents.len() {
-                match cur {
-                    Some(c) if &c == ancestor => return true,
-                    Some(c) => cur = parents.get(&c).and_then(|(p, _, _)| *p),
-                    None => return false,
-                }
-            }
-            false
-        }
-
-        /// Итоговое дерево.
-        pub fn state(&self) -> BTreeMap<NodeId, Node> {
-            let mut parents: BTreeMap<NodeId, (Option<NodeId>, String, Stamp)> = BTreeMap::new();
-            for ((stamp, node), (parent, name)) in &self.moves {
-                if !self.kinds.contains_key(node) {
-                    continue;
-                }
-                if let Some(p) = parent {
-                    let folder = matches!(self.kinds.get(p), Some((_, CloudNodeKind::Folder)));
-                    if !folder || !parents.contains_key(p) || Self::is_ancestor(&parents, node, p) {
-                        continue;
-                    }
-                }
-                parents.insert(*node, (*parent, name.clone(), stamp.clone()));
-            }
-            parents
-                .into_iter()
-                .filter_map(|(id, (parent, name, move_stamp))| {
-                    let (_, kind) = self.kinds.get(&id)?;
-                    let blob = self.blobs.get(&id).and_then(|(_, b)| CloudBlobRef::decode(b.as_slice()).ok());
-                    let deleted = self.tombstones.get(&id).is_some_and(|t| *t > move_stamp);
-                    Some((id, Node { kind: *kind, parent, name, blob, deleted }))
-                })
-                .collect()
-        }
-
-        /// Путь узла от корня (имена), `None` — узла нет.
-        pub fn path(state: &BTreeMap<NodeId, Node>, id: &NodeId) -> Option<Vec<String>> {
-            let mut out = Vec::new();
-            let mut cur = Some(*id);
-            for _ in 0..=state.len() {
-                match cur {
-                    Some(c) => {
-                        let n = state.get(&c)?;
-                        out.push(n.name.clone());
-                        cur = n.parent;
-                    }
-                    None => {
-                        out.reverse();
-                        return Some(out);
-                    }
-                }
-            }
-            None
-        }
-    }
-}
+/// Домен облака `cloud.v1` (spec 016): дерево файлов и папок.
+pub mod cloud;
+/// JSON облака для хостов (web): видимое дерево и правки.
+pub mod cloud_json;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::parvane::cloud::v1::{cloud_op, CloudCreate, CloudMove, CloudNodeKind, CloudOp};
     use ed25519_dalek::SigningKey;
     use std::collections::HashMap;
 
@@ -1189,6 +1035,41 @@ mod tests {
     }
 
     #[test]
+    fn member_leaves_by_own_entry() {
+        let mut w = World::new();
+        let a = w.device("alice@local", "a1");
+        let b = w.device("bob@local", "b1");
+        let c = w.device("carol@local", "c1");
+        let (_, genesis) = new_container(&a, "local", sample::DOMAIN_NAME, "alice@local", 1).unwrap();
+        let res = w.resolve();
+        let mut acc = ContainerAccess::from_genesis(&genesis, &res).unwrap();
+        let bob = Grantee::User("bob@local".into());
+        let g = sign_grant(&a, &acc, &bob, GrantLevel::Write, 2).unwrap();
+        acc.apply(&g, &res, &no_groups).unwrap();
+        // Чужой (и даже админ) не может «выйти» за участника; посторонний без гранта — тоже.
+        let by_carol = sign_leave(&c, &acc, &bob, 3).unwrap();
+        assert_eq!(acc.clone().apply(&by_carol, &res, &no_groups).err(), Some(ProtoError::Forbidden));
+        let by_alice = sign_leave(&a, &acc, &bob, 3).unwrap();
+        assert_eq!(acc.clone().apply(&by_alice, &res, &no_groups).err(), Some(ProtoError::Forbidden));
+        let stranger = sign_leave(&c, &acc, &Grantee::User("carol@local".into()), 3).unwrap();
+        assert!(acc.clone().apply(&stranger, &res, &no_groups).is_err());
+        // Сам участник выходит: гранта нет, эпоха прежняя, прошлые операции эпохи в силе.
+        let leave = sign_leave(&b, &acc, &bob, 3).unwrap();
+        let ev = acc.apply(&leave, &res, &no_groups).unwrap();
+        assert!(ev.leave && !ev.rotate);
+        assert_eq!((ev.key_epoch, ev.level), (1, None));
+        assert!(!acc.can_read("bob@local", &no_groups));
+        assert!(acc.could_write_at("bob@local", 1, &no_groups));
+        assert!(!acc.key_recipients().contains(&bob));
+        // Повторный выход — отказ; владелец меняет эпоху.
+        let again = sign_leave(&b, &acc, &bob, 4).unwrap();
+        assert!(acc.clone().apply(&again, &res, &no_groups).is_err());
+        let rot = sign_rotate(&a, &acc, 5).unwrap();
+        assert_eq!(acc.apply(&rot, &res, &no_groups).unwrap().key_epoch, 2);
+        assert!(!acc.could_write_at("bob@local", 2, &no_groups));
+    }
+
+    #[test]
     fn group_grantee() {
         let mut w = World::new();
         let a = w.device("alice@local", "a1");
@@ -1226,53 +1107,5 @@ mod tests {
         g.check(&Stamp::new(5, "a")).unwrap();
         assert!(g.check(&Stamp::new(u64::MAX, "b")).is_err());
         assert!(g.check(&Stamp::new(5 + LAMPORT_MAX_JUMP, "b")).is_ok());
-    }
-
-    fn create(id: u8, parent: Option<u8>, name: &str, kind: CloudNodeKind, l: u64) -> CloudOp {
-        CloudOp {
-            op: Some(cloud_op::Op::Create(CloudCreate {
-                node_id: vec![id; 16],
-                kind: kind as i32,
-                parent_id: parent.map(|p| vec![p; 16]).unwrap_or_default(),
-                name: name.into(),
-                blob: None,
-                stamp: Some(Stamp::new(l, "d").to_pb()),
-            })),
-        }
-    }
-
-    fn mv(id: u8, parent: Option<u8>, name: &str, l: u64, dev: &str) -> CloudOp {
-        CloudOp {
-            op: Some(cloud_op::Op::Move(CloudMove {
-                node_id: vec![id; 16],
-                parent_id: parent.map(|p| vec![p; 16]).unwrap_or_default(),
-                name: name.into(),
-                stamp: Some(Stamp::new(l, dev).to_pb()),
-            })),
-        }
-    }
-
-    #[test]
-    fn tree_concurrent_moves_no_cycle() {
-        let base = [
-            create(1, None, "A", CloudNodeKind::Folder, 1),
-            create(2, None, "B", CloudNodeKind::Folder, 2),
-        ];
-        // Одновременно: A → внутрь B и B → внутрь A.
-        let x = mv(1, Some(2), "A", 3, "d1");
-        let y = mv(2, Some(1), "B", 3, "d2");
-        let mut t1 = cloud::LwwTree::default();
-        let mut t2 = cloud::LwwTree::default();
-        for o in base.iter().chain([&x, &y]) {
-            t1.apply(o).unwrap();
-        }
-        for o in base.iter().chain([&y, &x]).rev() {
-            t2.apply(o).unwrap();
-        }
-        let s1 = t1.state();
-        assert_eq!(s1, t2.state());
-        // Метка (3,"d1") < (3,"d2"): A уехал в B, перемещение B в A создало бы цикл.
-        assert_eq!(s1[&[1u8; 16]].parent, Some([2u8; 16]));
-        assert_eq!(s1[&[2u8; 16]].parent, None);
     }
 }

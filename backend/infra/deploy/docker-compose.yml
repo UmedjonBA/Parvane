@@ -121,6 +121,11 @@ services:
       PARVANE_NATS_PASS: ${PARVANE_CLOUD_PASS}
       PARVANE_DB_PATH: /data/cloud.db
       PARVANE_LOG_LEVEL: info
+      # Раздел «Облако» (spec 016): место на аккаунт и предел одного файла
+      # (шифртекст; 2 ГиБ открытого текста + запас PVB2). Медиа чатов — прежние
+      # пределы шарда (4 ГиБ / 512 МиБ).
+      PARVANE_CLOUD_DRIVE_QUOTA_BYTES: ${PARVANE_CLOUD_DRIVE_QUOTA_BYTES:-10737418240}
+      PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES: ${PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES:-2306867200}
 
   call:
     <<: *shard-common

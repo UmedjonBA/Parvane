@@ -28,8 +28,9 @@ use futures::StreamExt;
 use parvane_protocol::codec::decode_checked;
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::cloud::v1::{
-    DeleteRequest, DeleteResponse, DownloadCapRequest, DownloadCapResponse, DownloadRequest,
-    DownloadResponse, UploadChunkRequest, UploadChunkResponse, UploadCompleteRequest,
+    BlobBucket, BucketUsage, CopyRequest, CopyResponse, DeleteRequest, DeleteResponse, DownloadCapRequest,
+    DownloadCapResponse, DownloadRequest, DownloadResponse, UploadChunkRequest, UploadChunkResponse,
+    UploadCompleteRequest, UploadStatusRequest, UploadStatusResponse, UsageRequest, UsageResponse,
     UploadCompleteResponse, Visibility,
 };
 use parvane_protocol::pb::parvane::core::v2::{Error, ErrorCode, MethodKind, ShardRequest, ShardStreamChunk};
@@ -44,8 +45,12 @@ use tracing::{debug, error, info, warn};
 use super::{
     delete_file, file_meta_any, file_meta_for_user, finalize_upload, handler_concurrency,
     max_chunk_bytes, max_download_chunks, max_file_bytes, max_total_chunks, now_unix,
-    store_chunk_raw, FileMeta, Finalize, RejectKind, Rejected,
+    owner_quota_bytes, release_free_pages, store_chunk_raw, used_bytes, FileMeta, Finalize, RejectKind,
+    Rejected, BUCKETS, BUCKET_DRIVE, BUCKET_MEDIA,
 };
+
+/// Сколько чанков копируется одной транзакцией (`cloud.blob.copy`).
+const COPY_BATCH_CHUNKS: i64 = 64;
 
 /// Предел данных одного кадра потока и чанка загрузки (`max_len` схемы).
 const FRAME_DATA_MAX: usize = 716_800;
@@ -138,6 +143,9 @@ async fn call(ctx: &V2Ctx, m: &'static MethodInfo, req: &ShardRequest) -> Result
         "cloud.blob.upload_chunk" => upload_chunk(ctx, req).await,
         "cloud.blob.upload_complete" => upload_complete(ctx, req).await,
         "cloud.blob.delete" => delete(ctx, req).await,
+        "cloud.blob.usage" => usage(ctx, req).await,
+        "cloud.blob.upload_status" => upload_status(ctx, req).await,
+        "cloud.blob.copy" => copy(ctx, req).await,
         _ => Err(ErrorCode::Unavailable),
     }
 }
@@ -203,6 +211,7 @@ async fn upload_chunk(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorC
     if r.index >= max_total_chunks() {
         return Err(ErrorCode::Limit);
     }
+    let bucket = bucket_of(r.bucket)?;
     let upload_id = if r.upload_id.is_empty() {
         // Новая загрузка начинается с нулевого чанка; id выдаёт сервер.
         if r.index != 0 {
@@ -223,22 +232,10 @@ async fn upload_chunk(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorC
             Some((o, 0)) if o == owner => {}
             _ => return Err(ErrorCode::NotFound),
         }
-        // Размер файла ограничен уже при загрузке: total у v2 неизвестен до
-        // complete, и без этой проверки одна загрузка росла бы до квоты.
-        let (others,): (i64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM chunks WHERE file_id = ? AND chunk_index != ?",
-        )
-        .bind(&id)
-        .bind(r.index)
-        .fetch_one(&ctx.pool)
-        .await
-        .map_err(db_code("upload_chunk"))?;
-        if others + r.data.len() as i64 > max_file_bytes() {
-            return Err(ErrorCode::Limit);
-        }
         id
     };
-    store_chunk_raw(&ctx.pool, owner, &upload_id, r.index, 0, r.data)
+    // Bucket существующей загрузки задан её первым чанком; здесь он не меняется.
+    store_chunk_raw(&ctx.pool, owner, &upload_id, r.index, 0, r.data, bucket)
         .await
         .map_err(|e| store_code("upload_chunk", e))?;
     Ok(UploadChunkResponse { upload_id }.encode_to_vec())
@@ -336,7 +333,199 @@ async fn delete(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
     {
         error!("v2 delete: capability не удалена: {e}");
     }
+    release_free_pages(&ctx.pool).await;
     Ok(DeleteResponse {}.encode_to_vec())
+}
+
+// ── cloud.blob.usage / upload_status / copy (spec 016) ───────────────────────
+
+fn bucket_of(raw: i32) -> Result<i64, ErrorCode> {
+    match BlobBucket::try_from(raw) {
+        Ok(BlobBucket::Unspecified) => Ok(BUCKET_MEDIA),
+        Ok(BlobBucket::Drive) => Ok(BUCKET_DRIVE),
+        Err(_) => Err(ErrorCode::Invalid),
+    }
+}
+
+async fn usage(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
+    let owner = owner(req)?;
+    let _: UsageRequest = body(req)?;
+    let mut buckets = Vec::new();
+    for bucket in BUCKETS {
+        let used = used_bytes(&ctx.pool, owner, bucket).await.map_err(db_code("usage"))?;
+        buckets.push(BucketUsage {
+            bucket: bucket as i32,
+            used: used.max(0) as u64,
+            quota: owner_quota_bytes(bucket).max(0) as u64,
+            max_file: max_file_bytes(bucket).max(0) as u64,
+        });
+    }
+    Ok(UsageResponse { buckets }.encode_to_vec())
+}
+
+async fn upload_status(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
+    let owner = owner(req)?;
+    let r: UploadStatusRequest = body(req)?;
+    let id = parse_id(&r.upload_id)?;
+    // Только своя незавершённая v2-загрузка; иначе NOT_FOUND.
+    let claim: Option<(String, i64, i64)> =
+        sqlx::query_as("SELECT owner, total_chunks, chunks FROM uploads WHERE file_id = ?")
+            .bind(&id)
+            .fetch_optional(&ctx.pool)
+            .await
+            .map_err(db_code("upload_status"))?;
+    let count = match claim {
+        Some((o, 0, count)) if o == owner => count,
+        _ => return Err(ErrorCode::NotFound),
+    };
+    // Клиент шлёт чанки окном, поэтому в середине возможны пропуски: отдаём
+    // длину непрерывного начала 0..n-1.
+    let (max_index,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(chunk_index), -1) FROM chunks WHERE file_id = ?")
+        .bind(&id)
+        .fetch_one(&ctx.pool)
+        .await
+        .map_err(db_code("upload_status"))?;
+    let contiguous = if max_index + 1 == count {
+        count
+    } else {
+        let first_gap: Option<i64> = sqlx::query_scalar(
+            "SELECT MIN(c.chunk_index + 1) FROM chunks c WHERE c.file_id = ?1
+             AND NOT EXISTS (SELECT 1 FROM chunks d WHERE d.file_id = ?1 AND d.chunk_index = c.chunk_index + 1)",
+        )
+        .bind(&id)
+        .fetch_one(&ctx.pool)
+        .await
+        .map_err(db_code("upload_status"))?;
+        let has_zero: Option<i64> = sqlx::query_scalar("SELECT 1 FROM chunks WHERE file_id = ? AND chunk_index = 0")
+            .bind(&id)
+            .fetch_optional(&ctx.pool)
+            .await
+            .map_err(db_code("upload_status"))?;
+        if has_zero.is_some() { first_gap.unwrap_or(0) } else { 0 }
+    };
+    let (bytes,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(SUM(LENGTH(data)), 0) FROM chunks WHERE file_id = ? AND chunk_index < ?")
+            .bind(&id)
+            .bind(contiguous)
+            .fetch_one(&ctx.pool)
+            .await
+            .map_err(db_code("upload_status"))?;
+    Ok(UploadStatusResponse { chunks: u32::try_from(contiguous).unwrap_or(0), bytes: bytes.max(0) as u64 }.encode_to_vec())
+}
+
+/// Копия блоба: новый блоб вызывающего с тем же шифртекстом (ключ и nonce у
+/// клиента прежние) и своим секретом доступа. Источник — свой файл либо любой
+/// файл, к которому предъявлен секрет. Копия заводится как незавершённая
+/// загрузка (место в квоте занято сразу, брошенная — уберётся сборщиком) и
+/// завершается обычным путём.
+async fn copy(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
+    let owner = owner(req)?;
+    let r: CopyRequest = body(req)?;
+    let source = parse_id(&r.file_id)?;
+    let bucket = bucket_of(r.bucket)?;
+    if r.capability_hash.len() != CAP_LEN {
+        return Err(ErrorCode::Invalid);
+    }
+    let meta = if r.capability.is_empty() {
+        let own: Option<(i64, i64)> =
+            sqlx::query_as("SELECT size_bytes, total_chunks FROM files WHERE id = ? AND owner = ?")
+                .bind(&source)
+                .bind(owner)
+                .fetch_optional(&ctx.pool)
+                .await
+                .map_err(db_code("copy"))?;
+        own.ok_or(ErrorCode::NotFound)?
+    } else {
+        if r.capability.len() != CAP_LEN {
+            return Err(ErrorCode::Invalid);
+        }
+        if !cap_matches(&ctx.pool_v2, &source, &r.capability).await.map_err(db_code("copy"))? {
+            return Err(ErrorCode::NotFound);
+        }
+        let m = file_meta_any(&ctx.pool, &source).await.map_err(|e| store_code("copy", e))?.ok_or(ErrorCode::NotFound)?;
+        (m.size_bytes, m.total_chunks)
+    };
+    let (size, total) = meta;
+    if size > max_file_bytes(bucket) {
+        return Err(ErrorCode::Limit);
+    }
+    let quota = owner_quota_bytes(bucket);
+    let file_id = uuid::Uuid::now_v7().to_string();
+    {
+        let mut tx = ctx.pool.begin().await.map_err(db_code("copy"))?;
+        if quota > 0 && used_bytes(&mut *tx, owner, bucket).await.map_err(db_code("copy"))? + size > quota {
+            return Err(ErrorCode::Limit);
+        }
+        sqlx::query(
+            "INSERT INTO uploads (file_id, owner, total_chunks, created_at, bucket, bytes, chunks, updated_at)
+             VALUES (?, ?, 0, ?, ?, ?, ?, ?)",
+        )
+        .bind(&file_id)
+        .bind(owner)
+        .bind(now_unix())
+        .bind(bucket)
+        .bind(size)
+        .bind(total)
+        .bind(now_unix())
+        .execute(&mut *tx)
+        .await
+        .map_err(db_code("copy"))?;
+        tx.commit().await.map_err(db_code("copy"))?;
+    }
+    let done = copy_chunks(ctx, owner, &source, &file_id, size, total, &r.capability_hash).await;
+    if let Err(code) = done {
+        // Источник удалили посреди копии либо сбой базы: недокопированное убираем.
+        for sql in ["DELETE FROM chunks WHERE file_id = ?", "DELETE FROM uploads WHERE file_id = ?"] {
+            if let Err(e) = sqlx::query(sql).bind(&file_id).execute(&ctx.pool).await {
+                error!("v2 copy: откат не удался: {e}");
+            }
+        }
+        return Err(code);
+    }
+    debug!("v2: файл {source} скопирован в {file_id} ({size} байт)");
+    Ok(CopyResponse { file_id, size: size.max(0) as u64, chunks: u32::try_from(total).unwrap_or(0) }.encode_to_vec())
+}
+
+async fn copy_chunks(ctx: &V2Ctx, owner: &str, source: &str, file_id: &str, size: i64, total: i64, cap_hash: &[u8]) -> Result<(), ErrorCode> {
+    let mut from = 0;
+    while from < total {
+        sqlx::query(
+            "INSERT INTO chunks (file_id, chunk_index, data)
+             SELECT ?, chunk_index, data FROM chunks WHERE file_id = ? AND chunk_index >= ? AND chunk_index < ?",
+        )
+        .bind(file_id)
+        .bind(source)
+        .bind(from)
+        .bind(from + COPY_BATCH_CHUNKS)
+        .execute(&ctx.pool)
+        .await
+        .map_err(db_code("copy"))?;
+        from += COPY_BATCH_CHUNKS;
+    }
+    finalize_upload(
+        &ctx.pool,
+        owner,
+        &Finalize {
+            file_id: file_id.to_string(),
+            claimed_total: 0,
+            total_chunks: u32::try_from(total).map_err(|_| ErrorCode::Invalid)?,
+            size_bytes: size.max(0) as u64,
+            filename: "",
+            mime_type: V2_MIME,
+            recipients: &[],
+            public_access: false,
+        },
+    )
+    .await
+    .map_err(|e| store_code("copy", e))?;
+    if let Err(e) = put_cap(&ctx.pool_v2, file_id, cap_hash).await {
+        error!("v2 copy: capability не сохранена: {e}");
+        if let Err(e) = delete_file(&ctx.pool, owner, file_id).await {
+            error!("v2 copy: откат файла не удался: {e:#}");
+        }
+        return Err(ErrorCode::Unavailable);
+    }
+    Ok(())
 }
 
 // ── cloud.blob.download / cloud.blob.download_cap (STREAM) ───────────────────
@@ -485,7 +674,7 @@ mod tests {
         let r = req(
             "cloud.blob.upload_chunk",
             user,
-            UploadChunkRequest { upload_id: upload_id.into(), index, data: data.to_vec() },
+            UploadChunkRequest { upload_id: upload_id.into(), index, data: data.to_vec(), bucket: 0 },
         );
         upload_chunk(c, &r).await.map(|b| UploadChunkResponse::decode(b.as_slice()).unwrap().upload_id)
     }
@@ -567,6 +756,9 @@ mod tests {
             "cloud.blob.download",
             "cloud.blob.download_cap",
             "cloud.blob.delete",
+            "cloud.blob.usage",
+            "cloud.blob.upload_status",
+            "cloud.blob.copy",
         ] {
             assert!(names.contains(&n), "{n} нет в реестре");
         }
@@ -671,7 +863,7 @@ mod tests {
         assert_eq!(up_chunk(&c, "alice@local", &id, 0, b"z").await.unwrap_err(), ErrorCode::NotFound);
         // v1-загрузка (total ≠ 0) через v2 не продолжается.
         let v1_id = uuid::Uuid::now_v7().to_string();
-        store_chunk_raw(&c.pool, "alice@local", &v1_id, 0, 2, b"v1".to_vec()).await.unwrap();
+        store_chunk_raw(&c.pool, "alice@local", &v1_id, 0, 2, b"v1".to_vec(), BUCKET_MEDIA).await.unwrap();
         assert_eq!(up_chunk(&c, "alice@local", &v1_id, 1, b"x").await.unwrap_err(), ErrorCode::NotFound);
     }
 
@@ -700,6 +892,171 @@ mod tests {
         super::super::tests::QUOTA_OVERRIDE.with(|q| q.set(None));
         assert!(done.is_ok());
         assert_eq!(second.unwrap_err(), ErrorCode::Limit, "незавершённые чанки в квоте");
+    }
+
+    async fn up_drive(c: &V2Ctx, user: &str, upload_id: &str, index: u32, data: &[u8]) -> Result<String, ErrorCode> {
+        let r = req(
+            "cloud.blob.upload_chunk",
+            user,
+            UploadChunkRequest { upload_id: upload_id.into(), index, data: data.to_vec(), bucket: BlobBucket::Drive as i32 },
+        );
+        upload_chunk(c, &r).await.map(|b| UploadChunkResponse::decode(b.as_slice()).unwrap().upload_id)
+    }
+
+    async fn usage_of(c: &V2Ctx, user: &str) -> Vec<(i32, u64, u64, u64)> {
+        let b = usage(c, &req("cloud.blob.usage", user, UsageRequest {})).await.unwrap();
+        UsageResponse::decode(b.as_slice()).unwrap().buckets.iter().map(|u| (u.bucket, u.used, u.quota, u.max_file)).collect()
+    }
+
+    async fn status_of(c: &V2Ctx, user: &str, id: &str) -> Result<(u32, u64), ErrorCode> {
+        let r = req("cloud.blob.upload_status", user, UploadStatusRequest { upload_id: id.into() });
+        upload_status(c, &r).await.map(|b| {
+            let s = UploadStatusResponse::decode(b.as_slice()).unwrap();
+            (s.chunks, s.bytes)
+        })
+    }
+
+    async fn copy_of(c: &V2Ctx, user: &str, source: &str, cap: &[u8], bucket: BlobBucket, new_hash: &[u8]) -> Result<CopyResponse, ErrorCode> {
+        let r = req(
+            "cloud.blob.copy",
+            user,
+            CopyRequest { file_id: source.into(), capability: cap.to_vec(), bucket: bucket as i32, capability_hash: new_hash.to_vec() },
+        );
+        copy(c, &r).await.map(|b| CopyResponse::decode(b.as_slice()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn buckets_have_separate_quotas_and_usage() {
+        super::super::tests::QUOTA_OVERRIDE.with(|q| q.set(Some(10)));
+        let c = ctx().await;
+        // По 6 байт в каждом bucket'е проходят (квота 10 на каждый), вторые 6 в облаке — нет.
+        let media = up_chunk(&c, "q@local", "", 0, b"mmmmmm").await;
+        let drive = up_drive(&c, "q@local", "", 0, b"dddddd").await;
+        let over = up_drive(&c, "q@local", "", 0, b"dddddd").await;
+        let done = match &drive {
+            Ok(id) => complete(&c, "q@local", id, 1, 6, Visibility::Private, &[]).await,
+            Err(e) => Err(*e),
+        };
+        let used = usage_of(&c, "q@local").await;
+        // Удаление освобождает квоту.
+        let freed = match &done {
+            Ok(id) => delete(&c, &req("cloud.blob.delete", "q@local", DeleteRequest { file_id: id.clone() })).await.map(|_| ()),
+            Err(e) => Err(*e),
+        };
+        let again = up_drive(&c, "q@local", "", 0, b"dddddd").await;
+        super::super::tests::QUOTA_OVERRIDE.with(|q| q.set(None));
+        assert!(media.is_ok() && done.is_ok() && freed.is_ok() && again.is_ok());
+        assert_eq!(over.unwrap_err(), ErrorCode::Limit);
+        // Готовый файл облака и незавершённая загрузка медиа — в счёте своих bucket'ов.
+        assert_eq!(used.iter().map(|u| (u.0, u.1, u.2)).collect::<Vec<_>>(), vec![(0, 6, 10), (1, 6, 10)]);
+        let real = usage_of(&c, "nobody@local").await;
+        assert_eq!(real[1].2, 10 * 1024 * 1024 * 1024);
+        assert!(real[1].3 > real[0].3, "предел файла облака выше предела медиа");
+        // Bucket не из схемы — отказ.
+        let bad = req("cloud.blob.upload_chunk", "q@local", UploadChunkRequest { upload_id: String::new(), index: 0, data: vec![1], bucket: 9 });
+        assert_eq!(upload_chunk(&c, &bad).await.unwrap_err(), ErrorCode::Invalid);
+    }
+
+    #[tokio::test]
+    async fn file_limit_counts_running_bytes_and_repeat_does_not_double() {
+        super::super::tests::FILE_MAX_OVERRIDE.with(|q| q.set(Some(10)));
+        let c = ctx().await;
+        let id = up_drive(&c, "a@local", "", 0, b"aaaa").await.unwrap();
+        // Повтор того же чанка (и замена на более длинный) счёт не удваивает.
+        let repeat = up_drive(&c, "a@local", &id, 0, b"aaaa").await;
+        let longer = up_drive(&c, "a@local", &id, 0, b"aaaaaa").await;
+        let second = up_drive(&c, "a@local", &id, 1, b"bbbb").await;
+        let over = up_drive(&c, "a@local", &id, 2, b"c").await;
+        let status = status_of(&c, "a@local", &id).await;
+        let used = usage_of(&c, "a@local").await;
+        super::super::tests::FILE_MAX_OVERRIDE.with(|q| q.set(None));
+        assert!(repeat.is_ok() && longer.is_ok() && second.is_ok());
+        assert_eq!(over.unwrap_err(), ErrorCode::Limit);
+        assert_eq!(status.unwrap(), (2, 10));
+        assert_eq!(used[1].1, 10);
+    }
+
+    #[tokio::test]
+    async fn upload_status_reports_contiguous_prefix() {
+        let c = ctx().await;
+        let id = up_drive(&c, "a@local", "", 0, b"00").await.unwrap();
+        // Чанки пришли окном: 0, 1, 3, 4 — принято подряд два.
+        for i in [1u32, 3, 4] {
+            up_drive(&c, "a@local", &id, i, b"xx").await.unwrap();
+        }
+        assert_eq!(status_of(&c, "a@local", &id).await.unwrap(), (2, 4));
+        up_drive(&c, "a@local", &id, 2, b"xx").await.unwrap();
+        assert_eq!(status_of(&c, "a@local", &id).await.unwrap(), (5, 10));
+        // Чужая, неизвестная и завершённая загрузка — NOT_FOUND.
+        assert_eq!(status_of(&c, "bob@local", &id).await.unwrap_err(), ErrorCode::NotFound);
+        assert_eq!(status_of(&c, "a@local", &uuid::Uuid::now_v7().to_string()).await.unwrap_err(), ErrorCode::NotFound);
+        complete(&c, "a@local", &id, 5, 10, Visibility::Private, &[]).await.unwrap();
+        assert_eq!(status_of(&c, "a@local", &id).await.unwrap_err(), ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn stale_upload_is_measured_from_last_activity() {
+        let c = ctx().await;
+        let id = up_drive(&c, "a@local", "", 0, b"00").await.unwrap();
+        let old = now_unix() - 48 * 3600;
+        // Начата давно, но чанк приходил недавно — живёт.
+        sqlx::query("UPDATE uploads SET created_at = ? WHERE file_id = ?").bind(old).bind(&id).execute(&c.pool).await.unwrap();
+        assert_eq!(super::super::purge_stale_uploads(&c.pool).await.unwrap(), 0);
+        sqlx::query("UPDATE uploads SET updated_at = ? WHERE file_id = ?").bind(old).bind(&id).execute(&c.pool).await.unwrap();
+        assert_eq!(super::super::purge_stale_uploads(&c.pool).await.unwrap(), 1);
+        assert_eq!(usage_of(&c, "a@local").await[1].1, 0);
+    }
+
+    #[tokio::test]
+    async fn copy_makes_an_independent_blob() {
+        let c = ctx().await;
+        let cap = [7u8; 32];
+        let hash = Sha256::digest(cap);
+        let parts: Vec<Vec<u8>> = (0..150u32).map(|i| format!("part-{i:03}").into_bytes()).collect();
+        let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+        let all: Vec<u8> = parts.concat();
+        let source = upload(&c, "alice@local", &refs, Visibility::Private, &hash).await;
+        // Боб знает секрет: копия в его облако, со своим секретом.
+        let cap_b = [9u8; 32];
+        let hash_b = Sha256::digest(cap_b);
+        let made = copy_of(&c, "bob@local", &source, &cap, BlobBucket::Drive, &hash_b).await.unwrap();
+        assert_eq!((made.size, made.chunks), (all.len() as u64, 150));
+        assert_ne!(made.file_id, source);
+        assert_eq!(usage_of(&c, "bob@local").await[1].1, all.len() as u64);
+        assert_eq!(usage_of(&c, "bob@local").await[0].1, 0);
+        // Источник удалён — копия читается (и секретом, и владельцем).
+        delete(&c, &req("cloud.blob.delete", "alice@local", DeleteRequest { file_id: source.clone() })).await.unwrap();
+        let (head, chunks) = run_stream(&c, "cloud.blob.download_cap", dl_cap(&made.file_id, &cap_b, 0, 0)).await;
+        assert!(head.is_ok());
+        assert_eq!(chunks.iter().flat_map(|c| c.data.clone()).collect::<Vec<_>>(), all);
+        let (head, _) = run_stream(&c, "cloud.blob.download_cap", dl_cap(&made.file_id, &cap, 0, 0)).await;
+        assert_eq!(head.unwrap_err(), ErrorCode::NotFound as i32, "секрет источника к копии не подходит");
+        // Свой файл копируется без секрета (в медиа — для отправки в чат).
+        let own = copy_of(&c, "bob@local", &made.file_id, &[], BlobBucket::Unspecified, &hash).await.unwrap();
+        assert_eq!(usage_of(&c, "bob@local").await[0].1, all.len() as u64);
+        let (head, _) = run_stream(&c, "cloud.blob.download_cap", dl_cap(&own.file_id, &cap, 0, 1)).await;
+        assert!(head.is_ok());
+        // Отказы: чужой файл без секрета, неверный секрет, нет хэша нового секрета, удалённый источник.
+        assert_eq!(copy_of(&c, "carol@local", &made.file_id, &[], BlobBucket::Drive, &hash).await.unwrap_err(), ErrorCode::NotFound);
+        assert_eq!(copy_of(&c, "carol@local", &made.file_id, &[1u8; 32], BlobBucket::Drive, &hash).await.unwrap_err(), ErrorCode::NotFound);
+        assert_eq!(copy_of(&c, "bob@local", &made.file_id, &[], BlobBucket::Drive, &[]).await.unwrap_err(), ErrorCode::Invalid);
+        assert_eq!(copy_of(&c, "alice@local", &source, &[], BlobBucket::Drive, &hash).await.unwrap_err(), ErrorCode::NotFound);
+        // Незавершённых загрузок копии не оставляют.
+        let (pending,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM uploads").fetch_one(&c.pool).await.unwrap();
+        assert_eq!(pending, 0);
+    }
+
+    #[tokio::test]
+    async fn copy_respects_destination_quota() {
+        let c = ctx().await;
+        let cap = [7u8; 32];
+        let source = upload(&c, "alice@local", &[b"0123456789ab"], Visibility::Private, &Sha256::digest(cap)).await;
+        super::super::tests::QUOTA_OVERRIDE.with(|q| q.set(Some(10)));
+        let refused = copy_of(&c, "bob@local", &source, &cap, BlobBucket::Drive, &[1u8; 32]).await;
+        super::super::tests::QUOTA_OVERRIDE.with(|q| q.set(None));
+        assert_eq!(refused.unwrap_err(), ErrorCode::Limit);
+        let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks").fetch_one(&c.pool).await.unwrap();
+        assert_eq!(rows, 1, "отказанная копия чанков не оставила");
     }
 
     #[tokio::test]

@@ -1,7 +1,9 @@
-// Блобы (PVB2, BLOB-1) и — позднее — облако как домен каркаса (T094).
-// Лимиты v1 сохраняются: чанк ≤ 716800, файл ≤ 512 МиБ, ≤ 100 000 чанков,
-// квота 4 ГиБ на владельца, ≤ 32 незавершённых загрузок (TTL 24 ч),
-// скачивание ≤ 256 чанков за запрос.
+// Блобы (PVB2, BLOB-1) и облако как домен каркаса (spec 016).
+// Лимиты по умолчанию: чанк ≤ 716800, ≤ 100 000 чанков, ≤ 32 незавершённых
+// загрузок (24 ч без активности), скачивание ≤ 256 чанков за запрос.
+// Блобы делятся на bucket'ы со своими пределами: медиа чатов (файл ≤ 512 МиБ,
+// квота 4 ГиБ на владельца) и облако (файл ≤ 2 ГиБ открытого текста, квота
+// 10 ГиБ) — задаются окружением шарда.
 syntax = "proto3";
 
 package parvane.cloud.v1;
@@ -58,6 +60,44 @@ service BlobService {
       shard: "cloud"
     };
   }
+  // Занятое место и пределы вызывающего по bucket'ам (spec 016).
+  rpc Usage(UsageRequest) returns (UsageResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.blob.usage"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Сколько чанков незавершённой загрузки принято подряд (продолжение).
+  rpc UploadStatus(UploadStatusRequest) returns (UploadStatusResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.blob.upload_status"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Копия блоба на сервере: новый блоб вызывающего с тем же шифртекстом.
+  rpc Copy(CopyRequest) returns (CopyResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.blob.copy"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+}
+
+// К какому пределу и квоте относится блоб.
+enum BlobBucket {
+  // Не задан = медиа чатов, аватары, служебные блобы.
+  BLOB_BUCKET_UNSPECIFIED = 0;
+  // Файлы раздела «Облако».
+  BLOB_BUCKET_DRIVE = 1;
 }
 
 enum Visibility {
@@ -73,6 +113,8 @@ message UploadChunkRequest {
   string upload_id = 1 [(parvane.core.v2.max_len) = 64];
   uint32 index = 2;
   bytes data = 3 [(parvane.core.v2.max_len) = 716800];
+  // Учитывается только на первом чанке (index = 0).
+  BlobBucket bucket = 4;
 }
 message UploadChunkResponse {
   string upload_id = 1 [(parvane.core.v2.max_len) = 64];
@@ -119,15 +161,54 @@ message DeleteRequest {
 }
 message DeleteResponse {}
 
-// ── облако как домен каркаса (T094; только схема) ───────────────────────────
-// Контейнер с domain = "cloud.v1" (папка верхнего уровня / диск). Открытый
-// текст ContainerOp — CloudOp, открытый текст Snapshot — CloudSnapshot.
-// Файл = объект со ссылкой на PVB2-блоб (file_id + ключ блоба), сам блоб —
-// BlobService выше без изменений (BLOB-1). Папки — дерево: у каждого узла
-// LWW-регистр «родитель + имя» с меткой (lamport, device_id); перемещения
-// применяются по порядку меток, перемещение, создающее цикл, пропускается —
-// сведение детерминировано (backend/protocol/src/domain.rs, LwwTree).
-// Продуктовая реализация — отдельная фича.
+message UsageRequest {}
+message BucketUsage {
+  BlobBucket bucket = 1;
+  // Байты шифртекста: готовые файлы и незавершённые загрузки.
+  uint64 used = 2;
+  // 0 — без предела.
+  uint64 quota = 3;
+  // Предел одного файла (шифртекст).
+  uint64 max_file = 4;
+}
+message UsageResponse {
+  repeated BucketUsage buckets = 1 [(parvane.core.v2.max_items) = 4];
+}
+
+message UploadStatusRequest {
+  string upload_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message UploadStatusResponse {
+  // Чанки 0..chunks-1 приняты без пропусков.
+  uint32 chunks = 1;
+  uint64 bytes = 2;
+}
+
+message CopyRequest {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  // Секрет доступа к источнику; пусто — источник принадлежит вызывающему.
+  bytes capability = 2 [(parvane.core.v2.max_len) = 32];
+  BlobBucket bucket = 3;
+  // SHA-256 секрета доступа нового блоба.
+  bytes capability_hash = 4 [(parvane.core.v2.max_len) = 32];
+}
+message CopyResponse {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  uint64 size = 2;
+  uint32 chunks = 3;
+}
+
+// ── облако как домен каркаса (spec 016) ─────────────────────────────────────
+// Контейнер с domain = "cloud.v1": личный диск пользователя либо совместная
+// папка. Открытый текст ContainerOp — CloudBatch, открытый текст Snapshot —
+// CloudSnapshot. Файл = узел со ссылкой на PVB2-блоб; сам блоб — BlobService
+// выше (BLOB-1), bucket DRIVE.
+// Сведение (backend/protocol/src/domain/cloud.rs) зависит только от итоговых
+// регистров узлов, поэтому снимок ему достаточен: у узла LWW-регистры
+// «родитель + имя», «содержимое», «корзина» с меткой (lamport, device_id) и
+// необратимое надгробие purge. Узел, чья цепочка родителей не приходит в
+// корень, показывается в корне, если его метка перемещения — наибольшая в
+// цикле (либо родитель неизвестен).
 
 enum CloudNodeKind {
   CLOUD_NODE_KIND_UNSPECIFIED = 0;
@@ -140,11 +221,26 @@ message CloudBlobRef {
   string file_id = 1 [(parvane.core.v2.max_len) = 64];
   // Ключ blobcrypt/PVB2 блоба (32 байта).
   bytes key = 2 [(parvane.core.v2.max_len) = 32];
+  // Размер открытого файла.
   uint64 size = 3;
   uint32 chunks = 4;
   string mime = 5 [(parvane.core.v2.max_len) = 128];
-  // SHA-256 открытого файла (дедупликация и проверка у клиента).
+  // SHA-256 открытого файла (проверка у клиента).
   bytes sha256 = 6 [(parvane.core.v2.max_len) = 32];
+  bytes nonce = 7 [(parvane.core.v2.max_len) = 12];
+  // Секрет доступа к блобу (cloud.blob.download_cap).
+  bytes capability = 8 [(parvane.core.v2.max_len) = 32];
+  // Адрес владельца блоба: его устройство стирает блоб после purge узла.
+  string uploader = 9 [(parvane.core.v2.max_len) = 255];
+}
+
+// Миниатюра: отдельный блоб, зашифрованный ключом файла.
+message CloudThumb {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  bytes nonce = 2 [(parvane.core.v2.max_len) = 12];
+  bytes capability = 3 [(parvane.core.v2.max_len) = 32];
+  uint32 width = 4;
+  uint32 height = 5;
 }
 
 // Создание узла (id — 16 случайных байт, уникален в контейнере).
@@ -157,6 +253,9 @@ message CloudCreate {
   // Только для файла.
   CloudBlobRef blob = 5;
   parvane.core.v2.LwwStamp stamp = 6;
+  CloudThumb thumb = 7;
+  // Время изменения файла на устройстве, мс.
+  uint64 mtime_ms = 8;
 }
 
 // Перемещение/переименование: LWW-регистр (parent_id, name) узла.
@@ -167,14 +266,37 @@ message CloudMove {
   parvane.core.v2.LwwStamp stamp = 4;
 }
 
-// Новая версия содержимого файла: LWW-регистр блоба.
+// Новое содержимое файла: LWW-регистр (blob, thumb, mtime).
 message CloudSetBlob {
   bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
   CloudBlobRef blob = 2;
   parvane.core.v2.LwwStamp stamp = 3;
+  CloudThumb thumb = 4;
+  uint64 mtime_ms = 5;
 }
 
-// Удаление = перемещение в корзину (parent_id = trash_id) либо надгробие.
+// Корзина: LWW-регистр (trashed, at_ms). Восстановление — trashed = false.
+message CloudTrash {
+  bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
+  bool trashed = 2;
+  uint64 at_ms = 3;
+  parvane.core.v2.LwwStamp stamp = 4;
+}
+
+// Окончательное удаление узла со всеми потомками. Необратимо.
+message CloudPurge {
+  bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
+  uint64 at_ms = 2;
+  parvane.core.v2.LwwStamp stamp = 3;
+}
+
+// Название контейнера (совместной папки): LWW-регистр.
+message CloudMeta {
+  string name = 1 [(parvane.core.v2.max_len) = 255];
+  parvane.core.v2.LwwStamp stamp = 2;
+}
+
+// Черновик T094, не используется (удаление — CloudTrash и CloudPurge).
 message CloudDelete {
   bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
   parvane.core.v2.LwwStamp stamp = 2;
@@ -185,11 +307,20 @@ message CloudOp {
     CloudCreate create = 1;
     CloudMove move = 2;
     CloudSetBlob set_blob = 3;
+    // Не используется; движок пропускает.
     CloudDelete delete = 4;
+    CloudTrash trash = 5;
+    CloudPurge purge = 6;
+    CloudMeta meta = 7;
   }
 }
 
-// Узел в снимке: итоговое состояние регистров.
+// Открытый текст одной операции журнала контейнера.
+message CloudBatch {
+  repeated CloudOp ops = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// Черновик T094, не используется (узел снимка — CloudEntry).
 message CloudNode {
   bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
   CloudNodeKind kind = 2;
@@ -201,6 +332,37 @@ message CloudNode {
   parvane.core.v2.LwwStamp blob_stamp = 8;
 }
 
+// Узел в снимке: итоговое состояние регистров. Устройства меток — индексы
+// в CloudSnapshot.devices.
+message CloudEntry {
+  bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
+  CloudNodeKind kind = 2;
+  bytes parent_id = 3 [(parvane.core.v2.max_len) = 16];
+  string name = 4 [(parvane.core.v2.max_len) = 255];
+  CloudBlobRef blob = 5;
+  CloudThumb thumb = 6;
+  uint64 mtime_ms = 7;
+  bool trashed = 8;
+  uint64 trashed_at_ms = 9;
+  bool purged = 10;
+  uint64 purged_at_ms = 11;
+  uint64 create_lamport = 12;
+  uint32 create_dev = 13;
+  uint64 move_lamport = 14;
+  uint32 move_dev = 15;
+  uint64 blob_lamport = 16;
+  uint32 blob_dev = 17;
+  uint64 trash_lamport = 18;
+  uint32 trash_dev = 19;
+}
+
 message CloudSnapshot {
+  // Не используется (черновик T094).
   repeated CloudNode nodes = 1 [(parvane.core.v2.max_items) = 16384];
+  repeated string devices = 2 [
+    (parvane.core.v2.max_items) = 1024,
+    (parvane.core.v2.max_len) = 64
+  ];
+  CloudMeta meta = 3;
+  repeated CloudEntry entries = 4 [(parvane.core.v2.max_items) = 16384];
 }

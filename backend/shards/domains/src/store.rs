@@ -21,7 +21,7 @@ use parvane_protocol::domain::{self, no_groups, Author, ContainerAccess, Grantee
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{
     Container, ContainerOp, DomainContainerCreateRequest, DomainContainerCreateResponse, DomainContainerGetRequest,
-    DomainContainerGetResponse, DomainGrantListRequest, DomainKeyRotateRequest, DomainKeyRotateResponse, DomainContainerListRequest, DomainContainerListResponse, DomainGrantListResponse, DomainGrantRevokeRequest,
+    DomainContainerGetResponse, DomainGrantLeaveRequest, DomainGrantLeaveResponse, DomainGrantListRequest, DomainKeyRotateRequest, DomainKeyRotateResponse, DomainContainerListRequest, DomainContainerListResponse, DomainGrantListResponse, DomainGrantRevokeRequest,
     DomainGrantRevokeResponse, DomainGrantSetRequest, DomainGrantSetResponse, DomainOpAppendRequest, DomainOpAppendResponse,
     DomainOpSyncRequest, DomainOpSyncResponse, DomainSnapshotGetRequest, DomainSnapshotGetResponse, DomainSnapshotPutRequest,
     DomainSnapshotPutResponse, ErrorCode, GrantLevel, KeyOwnerRequest, KeyOwnerResponse, OpBody, Ref, ShardRequest, SignedOp,
@@ -251,6 +251,11 @@ impl Domains {
                 let ev = self.grant_write(user, r.rotate.ok_or(ErrorCode::Invalid)?, domain::OP_ROTATE).await?;
                 Ok(DomainKeyRotateResponse { version: ev.version, key_epoch: ev.key_epoch }.encode_to_vec())
             }
+            "domain.grant.leave" => {
+                let r: DomainGrantLeaveRequest = body(&req)?;
+                let ev = self.grant_write(user, r.leave.ok_or(ErrorCode::Invalid)?, domain::OP_LEAVE).await?;
+                Ok(DomainGrantLeaveResponse { version: ev.version }.encode_to_vec())
+            }
             "domain.container.list" => self.container_list(user, body(&req)?).await,
             "domain.grant.list" => self.grant_list(user, body(&req)?).await,
             "domain.snapshot.put" => self.snapshot_put(user, body(&req)?).await,
@@ -384,8 +389,10 @@ impl Domains {
     }
 
     /// grant.set / grant.revoke: проверка движком по всему журналу грантов.
-    /// Запись журнала грантов: `expected` — "grant", "revoke" или "rotate"
-    /// (spec 010: смена эпохи без грантов).
+    /// Запись журнала грантов: `expected` — "grant", "revoke", "rotate"
+    /// (spec 010: смена эпохи без грантов) или "leave" (spec 016: участник
+    /// снимает свой грант сам — ему достаточно уровня чтения; что подписант
+    /// и есть получатель гранта, проверяет движок).
     async fn grant_write(&self, user: &str, op: SignedOp, expected: &str) -> Result<GrantEvent, ErrorCode> {
         let b: OpBody = decode_checked(&op.body, Origin::Client).map_err(code)?;
         let h = b.header.ok_or(ErrorCode::Invalid)?;
@@ -393,7 +400,8 @@ impl Domains {
             return Err(ErrorCode::Invalid);
         }
         let id = self.container_id(h.target.as_ref())?;
-        let (m, _) = self.require(&id, user, GrantLevel::Admin).await?;
+        let need = if expected == domain::OP_LEAVE { GrantLevel::Read } else { GrantLevel::Admin };
+        let (m, _) = self.require(&id, user, need).await?;
         if m.grant_version >= MAX_GRANT_LOG {
             return Err(ErrorCode::Limit);
         }

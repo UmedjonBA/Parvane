@@ -139,10 +139,23 @@ docker run --rm -v parvane_db:/data alpine sh -c \
 `docker compose start <шарды>` (пересоздадут пустые).
 
 ## Диск / рост
-Медиа копится в `cloud.db` (том `parvane_db`). Смотреть:
+Медиа чатов и файлы раздела «Облако» копятся в `cloud.db` (том `parvane_db-cloud`). Смотреть:
 ```bash
-docker run --rm -v parvane_db:/data alpine sh -c 'ls -lh /data/*.db'
+docker run --rm -v parvane_db-cloud:/data alpine sh -c 'ls -lh /data/*.db'
 df -h /                                     # свободно на хосте
+```
+Пределы на аккаунт: медиа чатов — `PARVANE_CLOUD_OWNER_QUOTA_BYTES` (4 ГиБ), облако —
+`PARVANE_CLOUD_DRIVE_QUOTA_BYTES` (10 ГиБ, задан в compose); предел файла облака —
+`PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES`. Худший случай по диску — число аккаунтов × 14 ГиБ.
+
+Место удалённых файлов возвращается диску (`auto_vacuum = INCREMENTAL`; шард вызывает
+`incremental_vacuum` после удаления и раз в час). Режим действует для базы, созданной новым шардом;
+базе, созданной раньше, нужен разовый `VACUUM` при остановленном шарде:
+```bash
+docker compose stop cloud
+docker run --rm -v parvane_db-cloud:/data alpine sh -c \
+  'apk add -q sqlite && sqlite3 /data/cloud.db "PRAGMA auto_vacuum=INCREMENTAL; VACUUM; PRAGMA auto_vacuum;"'   # → 2
+docker compose start cloud
 ```
 
 ## Обновление кода (с рабочей машины, НЕ на сервере)

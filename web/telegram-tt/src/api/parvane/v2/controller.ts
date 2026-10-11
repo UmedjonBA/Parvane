@@ -13,6 +13,7 @@ import type { WireGroupInvite } from '../groupcall';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
+import type { CloudStateEntry } from './cloud';
 import type { V2Content } from './contentMap';
 import type { Protocol, PvClient } from './engine';
 import type { StateJournalHost } from './stateJournal';
@@ -21,6 +22,7 @@ import { SecureE2eStorage } from '../secureStorage';
 import {
   callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
 } from './callMap';
+import { createCloudSync } from './cloud';
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
@@ -77,6 +79,11 @@ type Deps = {
   recordPlannerContainer?: (ref: { domain: string; id: string }) => void;
   /** Состояние или статус планировщика изменились — UI перечитает. */
   onPlannerChanged?: () => void;
+  /** Облако (spec 016): контейнеры из журнала личного состояния и их запись. */
+  cloudEntriesFromState?: () => CloudStateEntry[];
+  recordCloudEntry?: (entry: CloudStateEntry) => void;
+  /** Дерево, состав или статус облака изменились — UI перечитает. */
+  onCloudChanged?: () => void;
   /** Ссылка-приглашение создана/отозвана здесь — остальным своим устройствам (T160). */
   onInviteCreated?: (address: string, record: V2InviteRecord) => void;
   onInviteRevoked?: (linkId: string) => void;
@@ -185,6 +192,7 @@ type PendingJoin = {
 export type KeyJoinOutcome = {
   result: SskRotationResult;
   planner?: string;
+  cloud?: string;
   history?: KeyBundleHistory;
 };
 export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'failed';
@@ -225,6 +233,8 @@ type EngineEvent = {
   group?: { domain: string; id: string };
   json?: string;
   signal?: V2CallSignal;
+  // `cloudChanged`: id контейнера облака (hex)
+  id?: string;
 };
 
 const STATE_RECORD = 'v2-engine';
@@ -913,6 +923,51 @@ export function createV2Controller(deps: Deps) {
     onChanged: () => deps.onPlannerChanged?.(),
   });
 
+  // Облако (spec 016): контейнеры домена `cloud.v1`, очереди и доступ — `./cloud`
+  const cloud = createCloudSync({
+    log: deps.log,
+    pv: () => pv,
+    client: () => client,
+    isReady: () => ready,
+    needsLinking: () => needsLinking,
+    self: () => deps.getSelf(),
+    serverDomain: () => serverDomain,
+    call,
+    withNeeds,
+    refreshPeerLog,
+    persist,
+    loadRecord: async (key) => storage?.loadRecord(key),
+    saveRecord: async (key, value) => {
+      await storage?.saveRecord(key, value);
+    },
+    deleteRecord: async (key) => {
+      await storage?.deleteRecord(key);
+    },
+    stateEntries: () => deps.cloudEntriesFromState?.() || [],
+    recordEntry: (entry) => deps.recordCloudEntry?.(entry),
+    deleteBlob: async (fileId) => {
+      await blobCall('cloud.blob.delete', { file_id: fileId });
+    },
+    onChanged: () => deps.onCloudChanged?.(),
+  });
+
+  /** Перечитать журнал устройств собеседника (новое устройство участника папки). */
+  async function refreshPeerLog(user: string) {
+    if (!pv || !client) return;
+    const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
+      'parvane.identity.v2.DeviceLogSyncAnonRequest',
+      JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
+    ));
+    if (client.ingestLog(user, resp) === 'rootChanged') await acceptPeerRoot(user);
+  }
+
+  /** Метод блобов шарда cloud по имени метода реестра: proto3-JSON → proto3-JSON. */
+  async function blobCall<T>(method: string, request: unknown): Promise<T> {
+    if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const resp = await call('id', method, pv.encodeMethodRequest(method, JSON.stringify(request)));
+    return JSON.parse(pv.decodeMethodResponse(method, resp)) as T;
+  }
+
   async function applyEvent(ev: EngineEvent) {
     if (ev.type === 'legacyV1') {
       // Кадр прежнего инбокса v1, оставшийся на сервере: читать его нечем (T110)
@@ -1049,6 +1104,7 @@ export function createV2Controller(deps: Deps) {
     }
     // Ключ контейнера планировщика принят или контейнер надо подключить (spec 010)
     if (ev.type === 'plannerChanged') planner.onEngineEvent();
+    if (ev.type === 'cloudChanged' && ev.id) cloud.onEngineEvent(ev.id);
     // Отозвано своё устройство (другим своим устройством): журнал — заново;
     // ротации ключей делает отзывавшее устройство и раздаёт по E2E
     if (ev.type === 'deviceRevoked') {
@@ -1255,7 +1311,9 @@ export function createV2Controller(deps: Deps) {
       const history = deps.bundleHistory
         ? await deps.bundleHistory(previous, force).catch(() => previous)
         : previous;
-      const payload = { grant: b64(material), planner: planner.keysExport(), history };
+      const payload = {
+        grant: b64(material), planner: planner.keysExport(), cloud: cloud.keysExport(), history,
+      };
       material.fill(0);
       const mark = await buildBundleMark(payload);
       if (await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
@@ -1512,7 +1570,9 @@ export function createV2Controller(deps: Deps) {
       return { result: 'failed' };
     }
     deps.log('v2: устройство привязано ключом восстановления (прежние устройства остались)');
-    return { result: 'ok', planner: payload.planner, history: payload.history };
+    return {
+      result: 'ok', planner: payload.planner, cloud: payload.cloud, history: payload.history,
+    };
   }
 
   /** Сервер держит копии корня для администратора, а у этого аккаунта её нет
@@ -3303,6 +3363,8 @@ export function createV2Controller(deps: Deps) {
     storedMessage: knownMessage,
     /** Планировщик на сервере (spec 010). */
     planner,
+    cloud,
+    blobCall,
     linkGrantMaterial,
     joinWithGrant,
     revokeDevice,
@@ -3382,6 +3444,7 @@ export function createV2Controller(deps: Deps) {
     }),
     reset() {
       planner.reset();
+      cloud.reset();
       ready = false;
       starting = undefined;
       needsLinking = false;

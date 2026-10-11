@@ -1112,6 +1112,36 @@
     },
     {
       "client": {
+        "class": "message",
+        "v1": {
+          "kind": "cloud_invite",
+          "name": "Проект",
+          "role": 2,
+          "text": "Приглашение в папку «Проект» (редактор)"
+        }
+      },
+      "expect": {
+        "content": {
+          "cloud_invite": {
+            "container": {
+              "domain": "local",
+              "id": "AQIDBAUGBwgJCgsMDQ4PEA=="
+            },
+            "name": "Проект",
+            "role": 2,
+            "text": "Приглашение в папку «Проект» (редактор)"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "b201750a190a056c6f63616c12100102030405060708090a0b0c0d0e0f10120cd09fd180d0bed0b5d0bad18218022248d09fd180d0b8d0b3d0bbd0b0d188d0b5d0bdd0b8d0b520d0b220d0bfd0b0d0bfd0bad18320c2abd09fd180d0bed0b5d0bad182c2bb2028d180d0b5d0b4d0b0d0bad182d0bed18029"
+      },
+      "name": "cloud-invite"
+    },
+    {
+      "client": {
         "class": "stub"
       },
       "expect": {

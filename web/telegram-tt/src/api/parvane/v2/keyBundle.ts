@@ -35,6 +35,8 @@ export type KeyBundlePayload = {
   grant: string;
   // Ключи контейнера планировщика (`plannerKeysExport`)
   planner?: string;
+  // Ключи контейнеров облака (`cloudKeysExport`, JSON-массив)
+  cloud?: string;
   history?: KeyBundleHistory;
 };
 
@@ -128,6 +130,7 @@ export async function openKeyBundle(
     return {
       grant: payload.grant,
       planner: typeof payload.planner === 'string' ? payload.planner : undefined,
+      cloud: typeof payload.cloud === 'string' ? payload.cloud : undefined,
       history: isHistory(payload.history) ? payload.history : undefined,
     };
   } catch {

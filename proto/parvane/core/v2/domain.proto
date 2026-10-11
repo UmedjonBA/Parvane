@@ -126,6 +126,18 @@ service DomainService {
       shard: "domains"
     };
   }
+  // Участник сам покидает контейнер (spec 016): запись журнала грантов вида
+  // "leave", подписанная самим получателем гранта; эпоха ключа не меняется
+  // (сменить её — дело админа, увидевшего запись).
+  rpc DomainGrantLeave(DomainGrantLeaveRequest) returns (DomainGrantLeaveResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.grant.leave"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+    };
+  }
 }
 
 // Уровень доступа к контейнеру. Владелец — всегда ADMIN.
@@ -195,7 +207,7 @@ message Snapshot {
   Ref container = 1;
   uint64 upto_seq = 2;
   uint64 key_epoch = 3;
-  bytes aead_ciphertext = 4 [(max_len) = 1048604];
+  bytes aead_ciphertext = 4 [(max_len) = 3145756];
   SignedOp author = 5;
 }
 
@@ -319,4 +331,15 @@ message DomainContainerListRequest {
 
 message DomainContainerListResponse {
   repeated Container containers = 1 [(max_items) = 100];
+}
+
+// Выход участника (spec 016): `leave` — SignedOp "leave" с payload Grant, где
+// grantee — сам подписант, level не задан, key_epoch — текущая;
+// version/prev_hash — как у записи гранта.
+message DomainGrantLeaveRequest {
+  SignedOp leave = 1;
+}
+
+message DomainGrantLeaveResponse {
+  uint64 version = 1;
 }

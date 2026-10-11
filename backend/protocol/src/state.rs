@@ -33,7 +33,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
     peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, GroupInvite, NotifyDefaults, Peer,
-    PlannerContainer,
+    CloudContainer, CloudContainerRole, PlannerContainer,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -293,6 +293,8 @@ pub struct PersonalState {
     invites: BTreeMap<Vec<u8>, Lww<GroupInvite>>,
     // Контейнер планировщика (spec 010): один на пользователя, LWW-регистр.
     planner_container: Option<Lww<PlannerContainer>>,
+    // Контейнеры облака (spec 016) по (домен сервера, id): запись целиком по метке.
+    cloud_containers: BTreeMap<(String, Vec<u8>), Lww<CloudContainer>>,
     max_lamport: u64,
 }
 
@@ -482,6 +484,14 @@ impl PersonalState {
                 crate::address::check_ref(r)?;
                 put_reg(&mut self.planner_container, &stamp, c.clone());
             }
+            Some(Op::CloudContainerSet(c)) => {
+                let r = c.r#ref.as_ref().ok_or(ProtoError::InvalidField("cloud_container"))?;
+                crate::address::check_ref(r)?;
+                if CloudContainerRole::try_from(c.role).map_or(true, |role| role == CloudContainerRole::Unspecified) {
+                    return Err(ProtoError::InvalidField("cloud_container"));
+                }
+                put(&mut self.cloud_containers, (r.domain.clone(), r.id.clone()), &stamp, Some(c.clone()));
+            }
             Some(Op::ChatCleared(c)) => {
                 let k = opt_peer_key(&c.peer)?;
                 if c.cleared_until_ms <= 0 {
@@ -521,7 +531,13 @@ impl PersonalState {
             cleared: self.cleared.values().cloned().collect(),
             invites: live(&self.invites),
             planner_container: self.planner_container.as_ref().and_then(|e| e.value.clone()),
+            cloud_containers: live(&self.cloud_containers),
         }
+    }
+
+    /// Контейнеры облака пользователя (spec 016), включая снятые записи.
+    pub fn cloud_containers(&self) -> impl Iterator<Item = &CloudContainer> {
+        self.cloud_containers.values().filter_map(|e| e.value.as_ref())
     }
 
     /// Контейнер планировщика пользователя (spec 010), если объявлен.
@@ -633,6 +649,7 @@ pub fn migrate_snapshot_with(
     kinds.extend(snapshot.cleared.iter().cloned().map(Op::ChatCleared));
     kinds.extend(snapshot.invites.iter().cloned().map(Op::GroupInviteSet));
     kinds.extend(snapshot.planner_container.clone().map(Op::PlannerContainerSet));
+    kinds.extend(snapshot.cloud_containers.iter().cloned().map(Op::CloudContainerSet));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());
@@ -864,6 +881,44 @@ mod tests {
         assert!(PersonalState::new().apply(&bad).is_err());
         let empty = make_op(&mut c2, "d1", 0, Op::GroupInviteSet(GroupInvite { url: String::new(), ..invite })).unwrap();
         assert!(PersonalState::new().apply(&empty).is_err());
+    }
+
+    #[test]
+    fn cloud_containers_merge_by_ref() {
+        use crate::pb::parvane::core::v2::Ref;
+        use crate::pb::parvane::state::v1::CloudShareStatus;
+        let share = |status: CloudShareStatus, removed: bool| CloudContainer {
+            r#ref: Some(Ref { domain: "local".into(), id: vec![7; 16] }),
+            role: CloudContainerRole::Shared as i32,
+            status: status as i32,
+            removed,
+            owner: "alice@local".into(),
+        };
+        let root = CloudContainer {
+            r#ref: Some(Ref { domain: "local".into(), id: vec![1; 16] }),
+            role: CloudContainerRole::Root as i32,
+            ..Default::default()
+        };
+        let mut c1 = LamportClock::default();
+        let ops = [
+            make_op(&mut c1, "d1", 0, Op::CloudContainerSet(root.clone())).unwrap(),
+            make_op(&mut c1, "d1", 0, Op::CloudContainerSet(share(CloudShareStatus::Accepted, false))).unwrap(),
+            make_op(&mut c1, "d1", 0, Op::CloudContainerSet(share(CloudShareStatus::Accepted, true))).unwrap(),
+        ];
+        // Порядок применения не важен: побеждает последняя запись по ссылке.
+        let mut a = PersonalState::new();
+        ops.iter().for_each(|op| a.apply(op).unwrap());
+        let mut b = PersonalState::new();
+        ops.iter().rev().for_each(|op| b.apply(op).unwrap());
+        assert_eq!(a.snapshot(), b.snapshot());
+        assert_eq!(a.snapshot().cloud_containers, vec![root.clone(), share(CloudShareStatus::Accepted, true)]);
+        assert_eq!(a.cloud_containers().count(), 2);
+        // Запись без ссылки и без роли отклоняется.
+        let mut c2 = LamportClock::default();
+        let no_ref = make_op(&mut c2, "d1", 0, Op::CloudContainerSet(CloudContainer { r#ref: None, ..root.clone() })).unwrap();
+        assert!(PersonalState::new().apply(&no_ref).is_err());
+        let no_role = make_op(&mut c2, "d1", 0, Op::CloudContainerSet(CloudContainer { role: 0, ..root })).unwrap();
+        assert!(PersonalState::new().apply(&no_role).is_err());
     }
 
     #[test]

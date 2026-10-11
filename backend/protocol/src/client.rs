@@ -146,6 +146,9 @@ pub enum Event {
     /// Контейнер планировщика (spec 010): принят ключ эпохи, применены
     /// ожидавшие операции либо контейнер ещё надо подключить (`head_seq` 0).
     PlannerChanged { seq: u64, head_seq: u64 },
+    /// Контейнер облака (spec 016): принят ключ эпохи и применены ожидавшие
+    /// операции либо контейнер ещё надо подключить (ключ ждёт).
+    CloudChanged { seq: u64, id: Vec<u8> },
     /// Служебное (ключи) — применено внутри, показывать нечего.
     Internal { seq: u64 },
     /// Запись пропущена (неизвестный вид/не расшифровалась после попыток).
@@ -331,6 +334,14 @@ pub struct Client {
     planner_trusted_keys: Vec<(String, Vec<u8>, u64, [u8; 32])>,
     /// Ключ подписи устройства → device_id (включая уже отозванные).
     planner_authors: BTreeMap<[u8; 32], String>,
+    /// Контейнеры облака (spec 016) по id: личный диск и совместные папки.
+    cloud: BTreeMap<Vec<u8>, CloudLocal>,
+    /// Ключи, ждущие подключения контейнера или журнала грантов: (отправитель, раздача).
+    cloud_pending_keys: Vec<(String, ContainerKeyShare)>,
+    /// Ключи из экспорта своего устройства: (id контейнера, эпоха, ключ).
+    cloud_trusted_keys: Vec<(Vec<u8>, u64, [u8; 32])>,
+    /// Ключ подписи устройства → (пользователь, device_id), включая уже отозванные.
+    cloud_authors: BTreeMap<[u8; 32], (String, String)>,
     /// Последняя ошибка разбора записи (диагностика хоста; клиенту не показывается).
     pub last_error: Option<ProtoError>,
 }
@@ -414,6 +425,10 @@ impl Client {
             planner_pending_keys: vec![],
             planner_trusted_keys: vec![],
             planner_authors: BTreeMap::new(),
+            cloud: BTreeMap::new(),
+            cloud_pending_keys: vec![],
+            cloud_trusted_keys: vec![],
+            cloud_authors: BTreeMap::new(),
             last_error: None,
         })
     }
@@ -1731,6 +1746,8 @@ impl Client {
             Err(ClientError::Proto(e)) => self.last_error = Some(e),
             Err(ClientError::Need(_)) => {}
         }
+        // Контейнеры облака (spec 016), где пользователь админ: новая эпоха ключа.
+        o.requests.extend(self.cloud_rotate_on_revoke(now_ms()));
         // Собеседники.
         for p in targets {
             match self.share_delivery_key(&p) {
@@ -2063,6 +2080,9 @@ impl Client {
             }
             Some(content::Kind::ContainerKey(share)) => {
                 let share = share.clone();
+                if share.domain == crate::domain::cloud::DOMAIN_NAME {
+                    return Ok(self.cloud_accept_key(&sender, &share, seq));
+                }
                 return Ok(self.planner_accept_key(&sender, &share, seq));
             }
             Some(content::Kind::GroupKey(gk)) => {
@@ -2542,7 +2562,8 @@ impl Client {
             out.push(OutRequest::anon("msg.deliver_sealed", &r));
         }
         // Ключ контейнера планировщика (spec 010) — тем же устройствам.
-        if let Some(c) = self.planner_key_content() {
+        // … и ключи контейнеров облака (spec 016).
+        for c in self.planner_key_content().into_iter().chain(self.cloud_key_contents_for_own_devices()) {
             let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: self.direct_must_pad(&me) };
             let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
             if !r.envelopes.is_empty() {
@@ -2833,6 +2854,10 @@ impl Client {
             planner_pending_keys: self.planner_pending_keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
             planner_trusted_keys: self.planner_trusted_keys.iter().map(|(d, id, e, k)| (d.clone(), b(id), *e, b(k))).collect(),
             planner_authors: self.planner_authors.iter().map(|(k, d)| (b(k), d.clone())).collect(),
+            cloud: self.cloud_persist(),
+            cloud_pending_keys: self.cloud_pending_keys.iter().map(|(u, k)| (u.clone(), b(&k.encode_to_vec()))).collect(),
+            cloud_trusted_keys: self.cloud_trusted_keys.iter().map(|(id, e, k)| (b(id), *e, b(k))).collect(),
+            cloud_authors: self.cloud_authors.iter().map(|(k, (u, d))| (b(k), u.clone(), d.clone())).collect(),
         };
         let json = Zeroizing::new(serde_json::to_vec(&p).map_err(|_| ProtoError::Crypto)?);
         let mut nonce = [0u8; 12];
@@ -2972,6 +2997,23 @@ impl Client {
         if let Some(pp) = &p.planner {
             c.planner_restore(pp)?;
         }
+        for (k, user, dev) in &p.cloud_authors {
+            c.cloud_authors.insert(d32(k)?, (user.clone(), dev.clone()));
+        }
+        for (id, epoch, key) in &p.cloud_trusted_keys {
+            c.cloud_trusted_keys.push((d(id)?, *epoch, d32(key)?));
+        }
+        for (sender, k) in &p.cloud_pending_keys {
+            if let Ok(share) = ContainerKeyShare::decode(d(k)?.as_slice()) {
+                c.cloud_pending_keys.push((sender.clone(), share));
+            }
+        }
+        for pc in &p.cloud {
+            // Контейнер, который не удалось восстановить, хост подключит заново с сервера.
+            if let Err(e) = c.cloud_restore(pc) {
+                c.last_error = Some(e);
+            }
+        }
         Ok(c)
     }
 }
@@ -3072,6 +3114,15 @@ struct Persisted {
     planner_trusted_keys: Vec<(String, String, u64, String)>,
     #[serde(default)]
     planner_authors: Vec<(String, String)>,
+    /// Контейнеры облака (spec 016).
+    #[serde(default)]
+    cloud: Vec<PersistedCloud>,
+    #[serde(default)]
+    cloud_pending_keys: Vec<(String, String)>,
+    #[serde(default)]
+    cloud_trusted_keys: Vec<(String, u64, String)>,
+    #[serde(default)]
+    cloud_authors: Vec<(String, String, String)>,
 }
 
 /// Предпочтение L2: (участник или id группы, включено, метка времени).
@@ -3126,3 +3177,4 @@ mod session_proof_tests {
 
 // Контейнер планировщика (spec 010) — отдельный файл той же области видимости.
 include!("client_planner.rs");
+include!("client_cloud.rs");

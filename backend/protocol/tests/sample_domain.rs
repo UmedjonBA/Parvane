@@ -9,9 +9,8 @@ use std::collections::HashMap;
 
 use ed25519_dalek::SigningKey;
 use parvane_protocol::domain::{
-    self, cloud, no_groups, sample, Author, ContainerAccess, Grantee, KeyRing, LamportGuard, LwwMap, Stamp,
+    self, no_groups, sample, Author, ContainerAccess, Grantee, KeyRing, LamportGuard, LwwMap, Stamp,
 };
-use parvane_protocol::pb::parvane::cloud::v1::{cloud_op, CloudCreate, CloudMove, CloudNodeKind, CloudOp};
 use parvane_protocol::pb::parvane::core::v2::{Container, ContainerOp, GrantLevel};
 use parvane_protocol::pb::parvane::sample::v1::{SampleEntry, SampleOp};
 use parvane_protocol::sign;
@@ -233,66 +232,4 @@ proptest! {
         let back = sample::from_snapshot(&sample::snapshot(&m1)).unwrap();
         prop_assert_eq!(back, m1);
     }
-
-    /// Дерево облака: состояние не зависит от порядка операций, циклов нет.
-    #[test]
-    fn cloud_moves_are_order_independent(moves in prop::collection::vec((0u8..6, prop::option::of(0u8..6), 1u64..20, 0usize..3), 0..30).prop_flat_map(|v| {
-        let n = v.len() + 6;
-        (Just(v), Just((0..n).collect::<Vec<_>>()).prop_shuffle())
-    })) {
-        let (moves, perm) = moves;
-        let mut ops: Vec<CloudOp> = (0u8..6)
-            .map(|i| CloudOp { op: Some(cloud_op::Op::Create(CloudCreate {
-                node_id: vec![i; 16],
-                kind: (if i == 5 { CloudNodeKind::File } else { CloudNodeKind::Folder }) as i32,
-                parent_id: vec![],
-                name: format!("n{i}"),
-                blob: None,
-                stamp: Some(Stamp::new(1, "c").to_pb()),
-            })) })
-            .collect();
-        for (node, parent, l, dev) in &moves {
-            ops.push(CloudOp { op: Some(cloud_op::Op::Move(CloudMove {
-                node_id: vec![*node; 16],
-                parent_id: parent.map(|p| vec![p; 16]).unwrap_or_default(),
-                name: format!("m{node}"),
-                stamp: Some(Stamp::new(*l + 1, ["x", "y", "z"][*dev]).to_pb()),
-            })) });
-        }
-        let mut t1 = cloud::LwwTree::default();
-        for o in &ops {
-            t1.apply(o).unwrap();
-        }
-        let mut t2 = cloud::LwwTree::default();
-        for i in &perm {
-            t2.apply(&ops[*i]).unwrap();
-        }
-        let s1 = t1.state();
-        prop_assert_eq!(&s1, &t2.state());
-        for id in s1.keys() {
-            // У каждого узла конечный путь от корня (циклов нет).
-            prop_assert!(cloud::LwwTree::path(&s1, id).is_some());
-            // Родитель — только папка.
-            if let Some(p) = s1[id].parent {
-                prop_assert_eq!(s1[&p].kind, CloudNodeKind::Folder);
-            }
-        }
-    }
-}
-
-#[test]
-fn cloud_file_references_blob() {
-    use parvane_protocol::pb::parvane::cloud::v1::{CloudBlobRef, CloudSetBlob};
-    let blob = |id: &str| CloudBlobRef { file_id: id.into(), key: vec![1; 32], size: 10, chunks: 1, mime: "text/plain".into(), sha256: vec![2; 32] };
-    let mut t = cloud::LwwTree::default();
-    t.apply(&CloudOp { op: Some(cloud_op::Op::Create(CloudCreate {
-        node_id: vec![1; 16], kind: CloudNodeKind::File as i32, parent_id: vec![], name: "a.txt".into(), blob: Some(blob("f1")), stamp: Some(Stamp::new(1, "d").to_pb()),
-    })) }).unwrap();
-    t.apply(&CloudOp { op: Some(cloud_op::Op::SetBlob(CloudSetBlob { node_id: vec![1; 16], blob: Some(blob("f2")), stamp: Some(Stamp::new(2, "d").to_pb()) })) }).unwrap();
-    t.apply(&CloudOp { op: Some(cloud_op::Op::SetBlob(CloudSetBlob { node_id: vec![1; 16], blob: Some(blob("f0")), stamp: Some(Stamp::new(1, "e").to_pb()) })) }).unwrap();
-    let s = t.state();
-    assert_eq!(s[&[1u8; 16]].blob.as_ref().map(|b| b.file_id.as_str()), Some("f2"));
-    // Имя с '/' — отказ.
-    let bad = CloudOp { op: Some(cloud_op::Op::Move(CloudMove { node_id: vec![1; 16], parent_id: vec![], name: "a/b".into(), stamp: Some(Stamp::new(3, "d").to_pb()) })) };
-    assert!(t.apply(&bad).is_err());
 }

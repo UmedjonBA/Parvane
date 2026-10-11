@@ -351,6 +351,7 @@ pub fn is_trackable(c: &Content) -> bool {
             | Some(content::Kind::Contact(_))
             | Some(content::Kind::TaskOffer(_))
             | Some(content::Kind::TaskResponse(_))
+            | Some(content::Kind::CloudInvite(_))
     )
 }
 

@@ -180,6 +180,14 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
             json!({"task_response": {"offer": {"op_id": OP}, "decision": "TASK_DECISION_DECLINED"}}),
             msg(json!({"kind": "task_response", "accepted": false})),
         ),
+        // Приглашение в совместную папку облака (spec 016, CLOUD-1): видимое
+        // сообщение; клиент без раздела «Облако» показывает поле `text`.
+        (
+            "cloud-invite",
+            json!({"cloud_invite": {"container": {"domain": "local", "id": OP}, "name": "Проект", "role": 2,
+                "text": "Приглашение в папку «Проект» (редактор)"}}),
+            msg(json!({"kind": "cloud_invite", "name": "Проект", "role": 2, "text": "Приглашение в папку «Проект» (редактор)"})),
+        ),
     ]
 }
 

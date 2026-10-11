@@ -46,6 +46,7 @@ message Content {
     // и ответ-решение. Клиент без планировщика показывает поле `text`.
     TaskOffer task_offer = 20;
     TaskResponse task_response = 21;
+    CloudInvite cloud_invite = 22;
   }
   // D-09: LegacyV1 не может быть содержимым v2-конверта — v1-записи приходят
   // только записью журнала LegacyV1Record (msg.proto).
@@ -351,4 +352,14 @@ message DeliveryKeyShare {
   bytes delivery_key = 1 [(parvane.core.v2.max_len) = 32];
   // Растёт при ротации; устаревший ключ заменяется.
   uint64 generation = 2;
+}
+
+// Приглашение в совместную папку облака (spec 016). Ключ контейнера идёт
+// отдельным сообщением container_key; `text` — для клиентов без раздела.
+message CloudInvite {
+  parvane.core.v2.Ref container = 1;
+  string name = 2 [(parvane.core.v2.max_len) = 255];
+  // 1 — читатель, 2 — редактор.
+  uint32 role = 3;
+  string text = 4 [(parvane.core.v2.max_len) = 600];
 }
