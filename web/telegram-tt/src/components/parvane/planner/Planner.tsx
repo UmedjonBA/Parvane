@@ -10,6 +10,7 @@ import buildClassName from '../../../util/buildClassName';
 import {
   consumePlannerAddRequest, getPlannerAddRequest, getPlannerView, setPlannerView,
 } from '../../../util/parvaneSection';
+import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
   buildDaySummary, formatDay, formatDayLong, formatPeriod,
 } from './plannerFormat';
@@ -338,6 +339,14 @@ const Planner = () => {
     consumePlannerAddRequest();
     handleOpenQuick();
   }, [addRequest, isLoaded]);
+
+  // «В плане · открыть» на карточке в чате: «План» открывается на дне записи
+  const dayRequest = useDerivedState(getPlannerDayRequest);
+  useEffect(() => {
+    if (!dayRequest) return;
+    consumePlannerDayRequest();
+    pickDay(dayRequest);
+  }, [dayRequest]);
 
   const [quickText, setQuickText] = useState('');
 

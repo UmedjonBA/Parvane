@@ -1,8 +1,10 @@
-// Задание в чат (spec 011, US3, правило TASK-1). Личный чат: карточка задания у
-// обоих, «Принять» на втором устройстве создаёт задачу в «Плане» и шлёт
-// ответ-статус; привязанное второе устройство получателя видит задачу и
-// «принято»; «Отклонить», затем «Принять»; группа из трёх — решения каждого на
-// карточке автора; «В мой план» у автора; базы шардов без открытого текста
+// Задание в чат (spec 011, US3, правило TASK-1). Личный чат: карточка «Задание» у
+// обоих, «В план» на втором устройстве создаёт задачу в «Плане» и шлёт
+// ответ-статус, карточка показывает «В плане · открыть», и «открыть» ведёт в
+// «План» на день задачи; привязанное второе устройство получателя видит задачу и
+// «в плане»; карточка со временем начала — «Событие»: «Отклонить», затем
+// «В календарь» создаёт событие календаря; группа из трёх — решения каждого на
+// карточке автора; «В план» у автора; базы шардов без открытого текста
 // задания; решения на месте после перезагрузки.
 // Запуск: scripts/run_web_task_offer_e2e.sh
 import assert from 'node:assert/strict';
@@ -85,6 +87,34 @@ async function expectTaskInPlan(page, name, timeout = SYNC_TIMEOUT_MS) {
   await closePlanner(page);
 }
 
+/**
+ * «В плане · открыть» на карточке: раздел «План» на дне записи — задание на экране
+ * «Сегодня», событие в «Календаре» (в расписании дня — блоком события с id карточки).
+ */
+async function openPlanFromCard(page, card, name, kind) {
+  const offerId = await card.getAttribute('data-task-offer');
+  await card.getByRole('button', { name: 'In plan · open' }).click();
+  const planner = page.locator('#ParvanePlanner');
+  await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (kind === 'event') {
+    await planner.locator(`[data-planner-day="${todayKey()}"] button[data-kind="event"][data-id="${offerId}"]`)
+      .waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS })
+      .catch(() => assert.fail(`${name}: «открыть» должно показать событие в расписании его дня`));
+    assert.equal(await planner.locator('[data-planner-today]').count(), 0, 'событие открывается в «Календаре»');
+  } else {
+    const today = planner.locator(`[data-planner-today="${todayKey()}"]`);
+    await today.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+      .catch(() => assert.fail(`${name}: «открыть» должно показать экран «Сегодня» на дне задачи`));
+    await today.getByText(name).first().waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS })
+      .catch(() => assert.fail(`${name}: задача должна быть на экране «Сегодня»`));
+  }
+  await closePlanner(page);
+}
+
+function inPlanButton(card) {
+  return card.getByRole('button', { name: 'In plan · open' });
+}
+
 function plaintextLeaks(words) {
   const leaks = new Set();
   for (const file of readdirSync(BACKEND_DIR)) {
@@ -140,21 +170,30 @@ try {
   const aliceCardA = await sendTaskOffer(sessions.alice.page, offerA, {
     day: today, start: '10:00', minutes: 60, steps: [stepText, 'второй шаг'],
   });
-  await aliceCardA.getByRole('button', { name: 'To my plan' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Шаги есть только у задачи: карточка со временем и шагами остаётся «Заданием»
+  assert.equal(await aliceCardA.getAttribute('data-kind'), 'task');
+  await aliceCardA.getByText('Task', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await aliceCardA.getByRole('button', { name: 'To plan' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const bobCardA = cardOf(sessions.bob.page, offerA);
   await bobCardA.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await bobCardA.innerText(), new RegExp(stepText), 'шаги задания видны получателю');
-  await bobCardA.getByRole('button', { name: 'Accept' }).click();
-  await bobCardA.getByText('In your plan').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await bobCardA.getByRole('button', { name: 'To plan' }).click();
+  await inPlanButton(bobCardA).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await findMessageContainers(sessions.bob.page, 'Принято: задание').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await aliceCardA.getByText(`Accepted: ${bobName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await findMessageContainers(sessions.alice.page, 'Принято: задание').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob.page, offerA);
-  // Повторное принятие не делает второй задачи: кнопка уже заменена статусом
-  assert.equal(await bobCardA.getByRole('button', { name: 'Accept' }).count(), 0);
-  console.log('OK: задание в личном чате принято — задача в плане, решение у отправителя');
+  // Повторное добавление не делает второй задачи: кнопка уже заменена на «В плане · открыть»
+  assert.equal(await bobCardA.getByRole('button', { name: 'To plan' }).count(), 0);
+  assert.equal(await bobCardA.getByRole('button', { name: 'Decline' }).count(), 0);
+  console.log('OK: задание в личном чате добавлено — задача в плане, решение у отправителя');
+
+  // ── «В плане · открыть» ведёт в «План» на день задачи ────────────────────
+  await openPlanFromCard(sessions.bob.page, bobCardA, offerA, 'task');
+  await bobCardA.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «В плане · открыть» открывает «Сегодня» с задачей');
 
   // ── Второе устройство получателя: задача и «принято» после привязки ──────
   sessions.bob2 = await preparePage(bob2Context, bob, PASSWORD);
@@ -163,24 +202,32 @@ try {
   await openPrivateChat(sessions.bob2.page, alice);
   const bob2CardA = cardOf(sessions.bob2.page, offerA);
   await bob2CardA.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
-  await bob2CardA.getByText('In your plan').waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await inPlanButton(bob2CardA).waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob2.page, offerA);
-  console.log('OK: второе устройство получателя видит задачу в плане и «принято»');
+  console.log('OK: второе устройство получателя видит задачу в плане и «В плане»');
 
-  // ── Отклонить, потом всё же принять ──────────────────────────────────────
+  // ── Карточка со временем начала — «Событие»: отклонить, потом в календарь ─
   await openPrivateChat(sessions.alice.page, bob);
   const aliceCardB = await sendTaskOffer(sessions.alice.page, offerB, { day: today, start: '12:00', minutes: 30 });
   await openPrivateChat(sessions.bob.page, alice);
   const bobCardB = cardOf(sessions.bob.page, offerB);
   await bobCardB.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await bobCardB.getAttribute('data-kind'), 'event');
+  await bobCardB.getByText('Event', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await bobCardB.getByRole('button', { name: 'To plan' }).count(), 0, 'у события кнопка «В календарь»');
+  await bobCardB.getByRole('button', { name: 'To calendar' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await bobCardB.getByRole('button', { name: 'Decline' }).click();
   await bobCardB.getByText('Declined', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await aliceCardB.getByText(`Declined: ${bobName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await bobCardB.getByRole('button', { name: 'Accept' }).click();
-  await bobCardB.getByText('In your plan').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await bobCardB.getByRole('button', { name: 'To calendar' }).click();
+  await inPlanButton(bobCardB).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await aliceCardB.getByText(`Accepted: ${bobName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await findMessageContainers(sessions.bob.page, 'Принято: событие').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob.page, offerB);
-  console.log('OK: отклонённое задание можно принять позже');
+  // В плане — событие календаря, а не задача
+  await openPlanFromCard(sessions.bob.page, bobCardB, offerB, 'event');
+  console.log('OK: отклонённое событие можно добавить позже — событие в календаре, «открыть» ведёт к нему');
 
   // ── Группа: каждый решает сам, автор видит решения; «В мой план» ─────────
   const groupTitle = `Tasks ${suffix}`;
@@ -191,17 +238,18 @@ try {
   const aliceCardG = await sendTaskOffer(sessions.alice.page, offerG, { day: today, minutes: 45 });
   const bobCardG = cardOf(sessions.bob.page, offerG);
   await bobCardG.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await bobCardG.getByRole('button', { name: 'Accept' }).click();
+  await bobCardG.getByRole('button', { name: 'To plan' }).click();
   const carolCardG = cardOf(sessions.carol.page, offerG);
   await carolCardG.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await carolCardG.getByRole('button', { name: 'Decline' }).click();
   await aliceCardG.getByText(`Accepted: ${bobName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await aliceCardG.getByText(`Declined: ${carolName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await aliceCardG.getByRole('button', { name: 'To my plan' }).click();
+  await aliceCardG.getByRole('button', { name: 'To plan' }).click();
   await sessions.alice.page.getByText('The task is in your plan').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await inPlanButton(aliceCardG).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.alice.page, offerG);
   await expectTaskInPlan(sessions.bob.page, offerG);
-  console.log('OK: групповое задание — решения на карточке автора, «В мой план»');
+  console.log('OK: групповое задание — решения на карточке автора, «В план» у автора');
 
   // ── SC-007: базы шардов без открытого текста задания ─────────────────────
   const leaks = plaintextLeaks([offerA, offerB, offerG, stepText]);
@@ -212,7 +260,8 @@ try {
   await relogin(sessions.bob.page, PASSWORD).catch(() => undefined);
   await sessions.bob.page.locator('#FoldersSidebar').waitFor({ state: 'visible', timeout: 60000 });
   await openPrivateChat(sessions.bob.page, alice);
-  await cardOf(sessions.bob.page, offerA).getByText('In your plan').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await inPlanButton(cardOf(sessions.bob.page, offerA)).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await inPlanButton(cardOf(sessions.bob.page, offerB)).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await relogin(sessions.alice.page, PASSWORD).catch(() => undefined);
   await sessions.alice.page.locator('#FoldersSidebar').waitFor({ state: 'visible', timeout: 60000 });
   await openGroupChatByTitle(sessions.alice.page, groupTitle);

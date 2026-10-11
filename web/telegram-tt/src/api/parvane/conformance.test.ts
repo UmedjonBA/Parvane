@@ -1531,9 +1531,11 @@ describe('TASK-1: задание в чат — видимые сообщения
     const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
     expect(sync).toContain('function handleTaskOfferContent(stored: WireStoredMessage) {');
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
-    expect(messages)
-      .toContain(`if (state?.tasks?.some((task) => task.${r.sourceField}?.opId === opId)) return 'exists';`);
-    expect(messages).toContain("const opId = uuid.replace(/-/g, '');");
+    // Дубль ищет общая функция: задача — по `source`, событие (карточка со временем) — по id карточки
+    expect(messages).toContain('if (findOfferInPlan(json ? JSON.parse(json) : undefined, uuid)) return \'exists\';');
+    expect(readRepo('web/telegram-tt/src/api/parvane/taskOffers.ts'))
+      .toContain(`find((candidate) => candidate.${r.sourceField}?.opId === opId);`);
+    expect(messages).toContain('const opId = uuid.replace(/-/g, \'\');');
     expect(messages).toContain('async parvaneRespondTaskOffer(');
   });
 

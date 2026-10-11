@@ -7,6 +7,7 @@ import { ApiMessageEntityTypes } from '../../api/types';
 
 import { type LangFn } from '../../util/localization';
 import trimText from '../../util/trimText';
+import { getTaskOfferKind } from '../../api/parvane/taskOffers';
 import { renderTextWithEntities } from '../../components/common/helpers/renderTextWithEntities';
 import {
   getMessageTextWithFallback, getMessageTranscription,
@@ -271,7 +272,9 @@ function getSummaryDescription(
   }
 
   if (taskOffer) {
-    summary = lang('TaskOfferSummary', { name: taskOffer.name });
+    summary = lang(getTaskOfferKind(taskOffer) === 'event' ? 'TaskOfferEventSummary' : 'TaskOfferSummary', {
+      name: taskOffer.name,
+    });
   }
 
   if (richMessage) {

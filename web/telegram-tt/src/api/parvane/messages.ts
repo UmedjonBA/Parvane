@@ -31,7 +31,9 @@ import {
   isEmojiPackSetId,
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
-import { taskOfferText, taskResponseText } from './taskOffers';
+import {
+  buildOfferEvent, findOfferInPlan, getTaskOfferKind, taskOfferText, taskResponseText,
+} from './taskOffers';
 import { newMessageId, type WireMessageContent, type WirePackRef } from './wire';
 
 type MessageDependencies = {
@@ -478,10 +480,15 @@ export function createMessageController(deps: MessageDependencies) {
     const status = planner.status();
     if (status === 'needs-linking' || status === 'no-key') return status;
     const json = planner.stateJson();
-    const state = json ? JSON.parse(json) as { tasks?: { source?: { opId?: string } | null }[] } : undefined;
+    // Дубль не создаётся: задача ищется по `source`, событие — по id карточки
+    if (findOfferInPlan(json ? JSON.parse(json) : undefined, uuid)) return 'exists';
+    const event = buildOfferEvent(uuid, entry);
+    if (event) {
+      planner.apply([{ event }]);
+      return 'ok';
+    }
     // `Source.op_id` домена — hex без дефисов (движок отвергает иные символы)
     const opId = uuid.replace(/-/g, '');
-    if (state?.tasks?.some((task) => task.source?.opId === opId)) return 'exists';
     planner.apply([{
       task: {
         id: newMessageId(),
@@ -1471,7 +1478,7 @@ export function createMessageController(deps: MessageDependencies) {
       }
       deps.taskOffers.applyResponse(uuid, currentStore.self, isAccepted, Math.floor(Date.now() / 1000));
       refreshTaskOfferMessage(uuid);
-      const text = taskResponseText(entry.name, isAccepted);
+      const text = taskResponseText(entry.name, isAccepted, getTaskOfferKind(entry));
       const content: WireMessageContent = { kind: 'task_response', offer: uuid, accepted: isAccepted, text };
       const responseUuid = await publishInner(toAddress, content, undefined, uuid);
       await deps.sync.applyExternal({

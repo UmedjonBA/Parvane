@@ -10,15 +10,40 @@
 
 .head {
   display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+}
+
+.badge {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+
+  font-size: 1.25rem;
+  color: var(--color-white);
+
+  background: var(--color-primary);
+}
+
+.badgeEvent {
+  background: var(--color-green);
+}
+
+.titles {
+  display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  min-width: 0;
 }
 
 .label {
   font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--accent-color);
-  text-transform: uppercase;
+  color: var(--color-text-secondary);
 }
 
 .name {
@@ -58,14 +83,11 @@
 .status {
   font-size: 0.875rem;
   font-weight: var(--font-weight-medium);
-}
-
-.statusAccepted {
-  color: var(--color-green);
-}
-
-.statusDeclined {
   color: var(--color-text-secondary);
+}
+
+.inPlan {
+  color: var(--color-green) !important;
 }
 
 .responses {
